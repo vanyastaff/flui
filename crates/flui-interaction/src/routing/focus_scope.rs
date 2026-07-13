@@ -101,8 +101,9 @@ pub type KeyEventHandler = Rc<dyn Fn(&KeyEvent) -> KeyEventResult>;
 /// Installed by the widget layer, which owns the render geometry the
 /// reading-order traversal sorts by (the traversal-geometry gap ADR-0022 records):
 /// the node itself cannot reach a render tree. `None` while the widget has no
-/// committed layout to measure.
-pub type RectProvider = Arc<dyn Fn() -> Option<Rect<Pixels>> + Send + Sync>;
+/// committed layout to measure. This is owner-local under ADR-0027, matching
+/// [`KeyEventHandler`].
+pub type RectProvider = Rc<dyn Fn() -> Option<Rect<Pixels>>>;
 
 /// Result of key event processing — Flutter's `KeyEventResult`
 /// (`focus_manager.dart:73-88`), consumed by the leaf→root dispatch walk
@@ -1221,12 +1222,36 @@ impl ReadingOrderPolicy {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
+
     use super::*;
 
     /// Tests that drive the process-global [`FocusManager`] serialize here —
     /// nextest isolates test *binaries*, not the threads inside one, and a
     /// concurrent test would see (or clobber) this one's primary focus.
     static GLOBAL_FOCUS_LOCK: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
+
+    #[test]
+    fn rect_provider_accepts_owner_local_rc_state() {
+        let node = FocusNode::new();
+        let calls = Rc::new(Cell::new(0));
+        let calls_for_provider = Rc::clone(&calls);
+        node.set_rect_provider(Rc::new(move || {
+            calls_for_provider.set(calls_for_provider.get() + 1);
+            Some(Rect::from_xywh(
+                Pixels(1.0),
+                Pixels(2.0),
+                Pixels(3.0),
+                Pixels(4.0),
+            ))
+        }));
+
+        assert_eq!(
+            node.rect(),
+            Rect::from_xywh(Pixels(1.0), Pixels(2.0), Pixels(3.0), Pixels(4.0))
+        );
+        assert_eq!(calls.get(), 1);
+    }
 
     /// ADR-0022: `adopt_node` is a **move**, not a remove-plus-insert —
     /// the primary focus survives the reparent, the new scope's history learns

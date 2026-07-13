@@ -19,8 +19,8 @@ Flutter semantics. This file is the durable source of truth. Status: ☐ todo ·
 | 4 | Atomically owner-localize `GestureBinding`, arena members, recognizers, and gesture callback storage, including the minimum View/State bound ripple. | No gesture callback remains behind `Arc<Mutex<_>>` or `Send + Sync`; no gesture-detail token/queue bridge; long-press, double-tap, tap, and pan retain Flutter ordering through real `HeadlessBinding`; render data remains `Send + Sync`. | `systems-perf-lead` | 3 | ☑ done |
 | 5 | Atomically migrate `MouseRegion` and mouse tracking to data-only targets with owner-local strong annotations. | Enter/hover/exit are local callbacks; previous annotations survive long enough to emit Exit after removal; new/current annotation diffing and panic/drop behavior are covered without executable closures in render storage. | `api-design-lead` | 4 | ☑ done |
 | 6 | Complete ADR-0027 step 2c with a realm-local `NavigatorHandle` and `UiCommandSender` as the only cross-thread navigation ingress. | Navigation mutations are owner-thread capabilities; no generic UI-thread executor or cross-thread closure API; wrong/dead realm behavior is typed and tested. | `api-design-lead` | 2 | ☑ done |
-| 7 | Finish the workspace View/State/callback bound wave and prove local authoring with `Rc<Cell<_>>` while preserving the Send data plane. | Public `Listener`, gesture, mouse, and navigation authoring accepts owner-local captures; render objects, hit entries, targets, route tokens, scene/frame data, and approved cross-thread commands retain required auto-traits. | `api-design-lead` | 4, 5, 6 | ◐ in-progress |
-| 8 | Verify Flutter parity, destruction/reentrancy safety, public API shape, and measured routing cost across the completed slice. | Cached/direct parity; unmount/rebuild/stale-route/realm teardown cases; `DropProbe` owner-thread/outside-borrow coverage; nested/reentrant and panic cleanup; Criterion 1/4/16-target baselines and common-Move allocation evidence; semver/API review. | `qa-lead` | 7 | ☐ todo |
+| 7 | Finish the workspace View/State/callback bound wave and prove local authoring with `Rc<Cell<_>>` while preserving the Send data plane. | Public `Listener`, gesture, mouse, and navigation authoring accepts owner-local captures; render objects, hit entries, targets, route tokens, scene/frame data, and approved cross-thread commands retain required auto-traits. | `api-design-lead` | 4, 5, 6 | ☑ done |
+| 8 | Verify Flutter parity, destruction/reentrancy safety, public API shape, and measured routing cost across the completed slice. | Cached/direct parity; unmount/rebuild/stale-route/realm teardown cases; `DropProbe` owner-thread/outside-borrow coverage; nested/reentrant and panic cleanup; Criterion 1/4/16-target baselines and common-Move allocation evidence; semver/API review. | `qa-lead` | 7 | ◐ in-progress |
 | 9 | Reconcile ADR-0027 and project documentation with the implementation, run final gates, and complete `/spec-verify`. | ADR status and consequences match shipped ownership; architecture/API docs contain no obsolete closure path; format, inventory, port-check, clippy, tests, doctests, docs, and applicable platform/render gates pass with evidence. | `chief-architect` | 8 | ☐ todo |
 
 ## Critical path
@@ -231,6 +231,53 @@ and navigation ownership contract are complete.
   mouse/focus global trackers, or an async task. Evidence: `cargo check -p
   flui-widgets --tests` and `cargo test -p flui-widgets --test scroll
   refresh_indicator` pass.
+- 2026-07-12 shader-mask owner-lane checkpoint: `RenderShaderMask` no longer
+  stores `ShaderCallback = Arc<dyn Fn(Rect) -> Shader + Send + Sync>`.
+  Bounds-dependent shader factories live in `InteractionLane` as owner-local
+  `Rc<dyn Fn(Rect<Pixels>) -> Shader>` cells and render objects carry only the
+  data-plane `ShaderMaskTarget` plus a static fallback `Shader`. The harness
+  still proves the factory receives the local `Offset.zero & size` bounds by
+  running paint inside an active lane. Evidence: `cargo test -p
+  flui-interaction shader_mask_factory_accepts_owner_local_rc_state --lib`,
+  `cargo test -p flui-objects shader_mask --lib`, `cargo test -p
+  flui-objects harness_shader_mask_callback_receives_local_not_offset_rect
+  --test render_object_harness`, and `cargo check -p flui-interaction -p
+  flui-rendering -p flui-view -p flui-objects --tests` pass.
+- 2026-07-12 custom-clipper owner-lane checkpoint: `RenderClip<S>` no longer
+  stores `CustomClipper<S> = Arc<dyn Fn(Size) -> S + Send + Sync>`.
+  `RenderClipRRect` carries data-only `BorderRadius`, `RenderClipPath` keeps
+  the existing data-plane `PathClipTarget`, and `RenderPhysicalShape` now
+  carries `PathClipTarget` instead of a mandatory render-stored closure.
+  The feature-gated `flui-rendering::delegates::CustomClipper` trait also no
+  longer requires `Send + Sync`; production render objects do not store it.
+  Evidence: `cargo check -p flui-objects -p flui-widgets -p flui-rendering
+  --tests`, `cargo test -p flui-objects clip --lib`, `cargo test -p
+  flui-objects physical_model --lib`, `cargo test -p flui-objects
+  harness_clip_rrect_data_clip_source_sets_custom_clipper_flag --test
+  render_object_harness`, `cargo test -p flui-objects harness_physical_shape
+  --test render_object_harness`, and `cargo test -p flui-rendering
+  test_inset_clipper --lib --features experimental-delegates` pass.
+- 2026-07-12 focus-rect-provider hardening checkpoint: `RectProvider` moved
+  from `Arc<dyn Fn() -> Option<Rect<Pixels>> + Send + Sync>` to owner-local
+  `Rc<dyn Fn() -> Option<Rect<Pixels>>>`. `FocusNode` was already owner-local
+  through `KeyEventHandler = Rc<dyn Fn>`, so requiring thread-safe geometry
+  providers was an obsolete bound. Evidence: `cargo test -p flui-interaction
+  rect_provider_accepts_owner_local_rc_state --lib` and `cargo check -p
+  flui-interaction -p flui-widgets --tests` pass.
+- 2026-07-12 Task 7 closure audit: public widget/view authoring callbacks now
+  accept owner-local captures. A scan of `flui-widgets`/`flui-view` callback
+  APIs finds `Rc<dyn Fn>` / unbounded `impl Fn + 'static` for listener,
+  gesture, mouse, focus, shortcuts/actions, async builders, layout builders,
+  lazy sliver builders, navigator builders/hooks, overlays, refresh, clip path,
+  shader mask, and path clipper authoring. Remaining `Send + Sync` callable
+  seams are classified outside the owner-authored UI callback plane:
+  frame/pipeline wake callbacks, viewport/semantics/listenable data listeners,
+  deferred render-object mutation updaters, `Curve`/`Animatable` data strategy
+  objects, and `RenderSliverListLazy::child_source`, a low-level render-owned
+  factory that directly creates `Box<dyn RenderObject>` for render tests/benches;
+  the production `ListView::builder`/`SliverList` path is element-owned and
+  uses an owner-local `Rc` builder. Task 8 owns the broader verification/API
+  review rather than expanding Task 7 with another behavior migration.
 - 2026-07-12 mouse-region owner-lane checkpoint: `MouseRegion` callbacks moved
   from `Arc<dyn Fn + Send + Sync>` to owner-local `Rc<dyn Fn>`, and
   `RenderMouseRegion` no longer stores executable enter/hover/exit callbacks.

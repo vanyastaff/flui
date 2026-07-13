@@ -90,7 +90,7 @@ use std::{any::Any, cell::Cell, collections::HashMap, rc::Rc, sync::Arc, time::D
 
 use flui_animation::curve::ArcCurve;
 use flui_animation::{AnimationController, Curves, Scheduler};
-use flui_interaction::MouseTracker;
+use flui_interaction::{InteractionLane, MouseTracker};
 use flui_objects::*;
 use flui_painting::{Canvas, Paint};
 use flui_rendering::{
@@ -2138,19 +2138,16 @@ fn harness_clip_rect_self_describes() {
 }
 
 #[test]
-fn harness_clip_rect_custom_clipper_flag() {
+fn harness_clip_rrect_data_clip_source_sets_custom_clipper_flag() {
     let run = RenderTester::mount(
-        box_node(
-            RenderClipRect::anti_alias()
-                .with_clipper(|size| Rect::from_origin_size(Point::ZERO, size)),
-        )
-        .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
+        box_node(RenderClipRRect::anti_alias().with_border_radius(BorderRadius::circular(px(8.0))))
+            .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
     )
     .with_constraints(loose(200.0))
     .run_layout();
 
     assert!(
-        run.descendant_property("RenderClipRect", "custom_clipper")
+        run.descendant_property("RenderClipRRect", "custom_clipper")
             .is_some()
     );
 }
@@ -2198,16 +2195,16 @@ fn harness_clip_path_wraps_child() {
 // RenderShaderMask / RenderBackdropFilter
 // ============================================================================
 
-/// A trivial shader callback for tests that don't care about the produced
-/// shader itself, only that the mask machinery ran.
-fn solid_white_shader(_bounds: Rect) -> Shader {
+/// A trivial shader for tests that don't care about the produced shader itself,
+/// only that the mask machinery ran.
+fn solid_white_shader() -> Shader {
     Shader::solid(Color::WHITE)
 }
 
 #[test]
 fn harness_shader_mask_layout_passes_through_to_child() {
     let run = RenderTester::mount(
-        box_node(RenderShaderMask::new(solid_white_shader))
+        box_node(RenderShaderMask::new(solid_white_shader()))
             .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
     )
     .with_constraints(loose(200.0))
@@ -2218,7 +2215,7 @@ fn harness_shader_mask_layout_passes_through_to_child() {
 
 #[test]
 fn harness_shader_mask_no_child_paints_nothing() {
-    let run = RenderTester::mount(box_node(RenderShaderMask::new(solid_white_shader)))
+    let run = RenderTester::mount(box_node(RenderShaderMask::new(solid_white_shader())))
         .with_constraints(loose(200.0))
         .run_frame();
 
@@ -2232,7 +2229,7 @@ fn harness_shader_mask_no_child_paints_nothing() {
 #[test]
 fn harness_shader_mask_paints_with_shader_mask_layer() {
     let run = RenderTester::mount(
-        box_node(RenderShaderMask::new(solid_white_shader))
+        box_node(RenderShaderMask::new(solid_white_shader()))
             .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
     )
     .with_constraints(loose(200.0))
@@ -2245,36 +2242,43 @@ fn harness_shader_mask_paints_with_shader_mask_layer() {
 #[test]
 fn harness_shader_mask_callback_receives_local_not_offset_rect() {
     // Regression test for the highest-risk trap in the design research
-    // plan: the shader callback must see the node's LOCAL bounds
+    // plan: the shader factory must see the node's LOCAL bounds
     // rect even when the ShaderMask itself sits at a non-zero origin
     // within its parent — nesting under RenderPadding gives the
     // ShaderMask a non-zero accumulated origin (20, 20) so a bug that
     // passed the origin-shifted (global) rect to the callback instead of
     // the local one would be caught here.
-    let captured: Arc<std::sync::Mutex<Option<Rect>>> = Arc::new(std::sync::Mutex::new(None));
-    let captured_write = Arc::clone(&captured);
+    let lane = InteractionLane::try_new().expect("interaction lane");
+    let handle = lane.dispatch_handle();
+    let captured: Rc<std::cell::RefCell<Option<Rect>>> = Rc::new(std::cell::RefCell::new(None));
 
-    let run = RenderTester::mount(
-        box_node(RenderPadding::all(20.0)).child(
-            box_node(RenderShaderMask::new(move |bounds: Rect| {
-                *captured_write.lock().expect("mutex poisoned") = Some(bounds);
+    let run = lane.enter(|| {
+        let captured_write = Rc::clone(&captured);
+        let target = handle
+            .register_shader_mask(move |bounds: Rect| {
+                *captured_write.borrow_mut() = Some(bounds);
                 Shader::solid(Color::WHITE)
-            }))
-            .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
-        ),
-    )
-    .with_constraints(loose(200.0))
-    .run_frame();
+            })
+            .expect("register shader mask target");
+
+        RenderTester::mount(
+            box_node(RenderPadding::all(20.0)).child(
+                box_node(RenderShaderMask::new(solid_white_shader()).with_shader_target(target))
+                    .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
+            ),
+        )
+        .with_constraints(loose(200.0))
+        .run_frame()
+    });
 
     assert!(run.painted());
     let bounds = captured
-        .lock()
-        .expect("mutex poisoned")
-        .expect("shader callback must have been invoked during paint");
+        .borrow()
+        .expect("shader target must have been invoked during paint");
     assert_eq!(
         bounds,
         Rect::from_origin_size(Point::ZERO, Size::new(px(40.0), px(40.0))),
-        "shader callback must receive the LOCAL bounds rect, not the \
+        "shader factory must receive the LOCAL bounds rect, not the \
          parent-origin-shifted global rect",
     );
 }
@@ -2282,7 +2286,7 @@ fn harness_shader_mask_callback_receives_local_not_offset_rect() {
 #[test]
 fn harness_shader_mask_layer_field_round_trip() {
     let run = RenderTester::mount(
-        box_node(RenderShaderMask::new(solid_white_shader).with_blend_mode(BlendMode::Multiply))
+        box_node(RenderShaderMask::new(solid_white_shader()).with_blend_mode(BlendMode::Multiply))
             .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
     )
     .with_constraints(loose(200.0))
@@ -2304,7 +2308,7 @@ fn harness_shader_mask_layer_field_round_trip() {
 #[test]
 fn harness_shader_mask_hit_tests_through_to_child() {
     let run = RenderTester::mount(
-        box_node(RenderShaderMask::new(solid_white_shader))
+        box_node(RenderShaderMask::new(solid_white_shader()))
             .child(box_node(RenderColoredBox::red(100.0, 100.0)).label("child")),
     )
     .with_size(Size::new(px(100.0), px(100.0)))
@@ -2316,7 +2320,7 @@ fn harness_shader_mask_hit_tests_through_to_child() {
 #[test]
 fn harness_shader_mask_self_describes() {
     let run = RenderTester::mount(
-        box_node(RenderShaderMask::new(solid_white_shader).with_blend_mode(BlendMode::Screen))
+        box_node(RenderShaderMask::new(solid_white_shader()).with_blend_mode(BlendMode::Screen))
             .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
     )
     .with_constraints(loose(200.0))
@@ -2996,33 +3000,37 @@ fn harness_physical_model_hit_test_always_tests_circle_shape_excludes_bbox_corne
 
 #[test]
 fn harness_physical_shape_hit_test_triangular_clipper() {
-    let run = RenderTester::mount(
-        box_node(RenderPhysicalShape::new(
-            |size: Size| {
+    let lane = InteractionLane::try_new().expect("interaction lane");
+    let handle = lane.dispatch_handle();
+    let run = lane.enter(|| {
+        let target = handle
+            .register_path_clipper(|size: Size| {
                 let mut p = Path::new();
                 p.move_to(Point::new(size.width * 0.5, px(0.0)));
                 p.line_to(Point::new(size.width, size.height));
                 p.line_to(Point::new(px(0.0), size.height));
                 p.close();
                 p
-            },
-            Color::WHITE,
-        ))
-        .child(box_node(RenderColoredBox::red(100.0, 100.0)).label("child")),
-    )
-    .with_size(Size::new(px(100.0), px(100.0)))
-    .run_layout();
+            })
+            .expect("register triangle path target");
+        RenderTester::mount(
+            box_node(RenderPhysicalShape::new(Color::WHITE).with_path_clip_target(target))
+                .child(box_node(RenderColoredBox::red(100.0, 100.0)).label("child")),
+        )
+        .with_size(Size::new(px(100.0), px(100.0)))
+        .run_layout()
+    });
 
     // The oracle and the "always test shape" convention already agree for
     // `RenderPhysicalShape` (it always has a clipper), so this is a plain
     // shape hit-test, not a divergence test.
     assert_eq!(
-        run.hit_first(1.0, 1.0),
+        lane.enter(|| run.hit_first(1.0, 1.0)),
         None,
         "top-left bounding-box corner is outside the triangle"
     );
     assert_eq!(
-        run.hit_first(50.0, 90.0),
+        lane.enter(|| run.hit_first(50.0, 90.0)),
         Some(run.id("child")),
         "near the base midpoint must be inside the triangle"
     );
@@ -3030,9 +3038,11 @@ fn harness_physical_shape_hit_test_triangular_clipper() {
 
 #[test]
 fn harness_physical_shape_falls_back_to_whole_rect_when_clipper_cleared() {
-    let mut run = RenderTester::mount(
-        box_node(RenderPhysicalShape::new(
-            |size: Size| {
+    let lane = InteractionLane::try_new().expect("interaction lane");
+    let handle = lane.dispatch_handle();
+    let target = lane.enter(|| {
+        handle
+            .register_path_clipper(|size: Size| {
                 // A clipper covering only the top-left quadrant.
                 let mut p = Path::new();
                 p.add_rect(Rect::from_origin_size(
@@ -3040,24 +3050,29 @@ fn harness_physical_shape_falls_back_to_whole_rect_when_clipper_cleared() {
                     Size::new(size.width * 0.5, size.height * 0.5),
                 ));
                 p
-            },
-            Color::WHITE,
-        ))
-        .label("shape")
-        .child(box_node(RenderColoredBox::red(100.0, 100.0)).label("child")),
-    )
-    .with_size(Size::new(px(100.0), px(100.0)))
-    .run_layout();
+            })
+            .expect("register quadrant path target")
+    });
+    let mut run = lane.enter(|| {
+        RenderTester::mount(
+            box_node(RenderPhysicalShape::new(Color::WHITE).with_path_clip_target(target))
+                .label("shape")
+                .child(box_node(RenderColoredBox::red(100.0, 100.0)).label("child")),
+        )
+        .with_size(Size::new(px(100.0), px(100.0)))
+        .run_layout()
+    });
 
     // Before clearing: outside the top-left-quadrant clip, no hit.
-    assert_eq!(run.hit_first(90.0, 90.0), None);
+    let first_hit = lane.enter(|| run.hit_first(90.0, 90.0));
+    assert_eq!(first_hit, None);
     assert!(
         run.descendant_property("RenderPhysicalShape", "custom_clipper")
             .is_some()
     );
 
     run.update::<RenderPhysicalShape>(run.id("shape"), |node| {
-        assert!(node.set_clipper::<fn(Size) -> Path>(None));
+        assert!(node.set_path_clip_target(None));
     });
     run.relayout();
 
@@ -3111,19 +3126,23 @@ fn harness_physical_model_self_describes_shape_border_radius_and_colors() {
 
 #[test]
 fn harness_physical_shape_self_describes_custom_clipper_and_colors() {
-    let run = RenderTester::mount(
-        box_node(RenderPhysicalShape::new(
-            |size: Size| {
+    let lane = InteractionLane::try_new().expect("interaction lane");
+    let handle = lane.dispatch_handle();
+    let run = lane.enter(|| {
+        let target = handle
+            .register_path_clipper(|size: Size| {
                 let mut p = Path::new();
                 p.add_rect(Rect::from_origin_size(Point::ZERO, size));
                 p
-            },
-            Color::WHITE,
-        ))
-        .child(box_node(RenderColoredBox::red(40.0, 40.0))),
-    )
-    .with_constraints(loose(200.0))
-    .run_layout();
+            })
+            .expect("register physical shape path target");
+        RenderTester::mount(
+            box_node(RenderPhysicalShape::new(Color::WHITE).with_path_clip_target(target))
+                .child(box_node(RenderColoredBox::red(40.0, 40.0))),
+        )
+        .with_constraints(loose(200.0))
+        .run_layout()
+    });
 
     assert_descendant_properties(
         &run.diagnostics(),

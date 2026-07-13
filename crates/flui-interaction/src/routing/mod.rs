@@ -43,7 +43,7 @@ pub use interaction_lane::{
     InteractionDispatchError, InteractionDispatchHandle, InteractionLane, MouseEnterCallback,
     MouseExitCallback, MouseHoverCallback, MouseRegionCallbacks, MouseRegionTarget, PathClipTarget,
     PointerTarget, ResolvedRouteToken, RoutePanic, RouteResolution, RouteResolutionMiss,
-    ScrollTarget, resolve_path_clip_target,
+    ScrollTarget, ShaderMaskTarget, resolve_path_clip_target, resolve_shader_mask_target,
 };
 pub use mouse_tracker::{CursorChangeCallback, DeviceId, MouseTracker, MouseTrackerAnnotation};
 pub use pointer_router::{GlobalPointerHandler, PointerRouteHandler, PointerRouter};

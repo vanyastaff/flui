@@ -17,8 +17,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread::{self, ThreadId};
 
 use flui_types::geometry::Matrix4;
-use flui_types::painting::Path;
-use flui_types::{Offset, Pixels, Size};
+use flui_types::painting::{Path, Shader};
+use flui_types::{Offset, Pixels, Rect, Size};
 
 use super::hit_test::{EventPropagation, HitTestEntry, transform_pointer_event};
 use crate::events::{DeviceId, PointerEvent, ScrollEventData};
@@ -149,6 +149,23 @@ impl fmt::Debug for PathClipTarget {
     }
 }
 
+/// Opaque data-plane identity for an owner-local shader-mask factory.
+///
+/// Render objects store this value instead of storing a `Fn(Rect) -> Shader`
+/// callback. The executable factory remains in the owner lane and is resolved
+/// synchronously when the render object paints with its local bounds.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ShaderMaskTarget {
+    lane_id: LaneId,
+    target_id: TargetId,
+}
+
+impl fmt::Debug for ShaderMaskTarget {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ShaderMaskTarget").finish_non_exhaustive()
+    }
+}
+
 /// Opaque key for an owner-local resolved route.
 ///
 /// It carries its minting lane identity, so realm recreation cannot make an old
@@ -247,6 +264,7 @@ fn try_mint_lane_id(source: &AtomicU64) -> Result<LaneId, InteractionDispatchErr
 type PointerHandler = Rc<dyn Fn(&PointerEvent) + 'static>;
 type ScrollHandler = Rc<dyn Fn(&ScrollEventData) -> EventPropagation + 'static>;
 type PathClipper = Rc<dyn Fn(Size) -> Path + 'static>;
+type ShaderMaskFactory = Rc<dyn Fn(Rect<Pixels>) -> Shader + 'static>;
 
 /// Callback for mouse enter events.
 pub type MouseEnterCallback = Rc<dyn Fn(DeviceId, Offset<Pixels>) + 'static>;
@@ -359,6 +377,26 @@ impl PathClipCell {
     }
 }
 
+struct ShaderMaskCell {
+    current: RefCell<ShaderMaskFactory>,
+}
+
+impl ShaderMaskCell {
+    fn new(factory: ShaderMaskFactory) -> Self {
+        Self {
+            current: RefCell::new(factory),
+        }
+    }
+
+    fn snapshot(&self) -> ShaderMaskFactory {
+        Rc::clone(&self.current.borrow())
+    }
+
+    fn replace(&self, factory: ShaderMaskFactory) -> ShaderMaskFactory {
+        std::mem::replace(&mut *self.current.borrow_mut(), factory)
+    }
+}
+
 /// How a resolved entry maps the dispatched global event into its local space.
 enum LocalEventTransform {
     /// The entry captured no transform; it receives the global event.
@@ -462,6 +500,7 @@ struct LocalLaneInner {
     mouse_targets: RefCell<HashMap<TargetId, Rc<MouseRegionCell>>>,
     scroll_targets: RefCell<HashMap<TargetId, Rc<ScrollCell>>>,
     path_clip_targets: RefCell<HashMap<TargetId, Rc<PathClipCell>>>,
+    shader_mask_targets: RefCell<HashMap<TargetId, Rc<ShaderMaskCell>>>,
     routes: RefCell<HashMap<RouteId, Rc<ResolvedHitRoute>>>,
 }
 
@@ -501,6 +540,7 @@ impl InteractionLane {
             mouse_targets: RefCell::new(HashMap::new()),
             scroll_targets: RefCell::new(HashMap::new()),
             path_clip_targets: RefCell::new(HashMap::new()),
+            shader_mask_targets: RefCell::new(HashMap::new()),
             routes: RefCell::new(HashMap::new()),
         });
         LOCAL_LANES.with(|registry| {
@@ -547,6 +587,7 @@ impl Drop for InteractionLane {
         let mouse_targets = self.inner.mouse_targets.take();
         let scroll_targets = self.inner.scroll_targets.take();
         let path_clip_targets = self.inner.path_clip_targets.take();
+        let shader_mask_targets = self.inner.shader_mask_targets.take();
 
         let mut routes: Vec<_> = routes.into_iter().collect();
         routes.sort_unstable_by_key(|(id, _)| *id);
@@ -567,6 +608,10 @@ impl Drop for InteractionLane {
         let mut path_clip_targets: Vec<_> = path_clip_targets.into_iter().collect();
         path_clip_targets.sort_unstable_by_key(|(id, _)| *id);
         drop(path_clip_targets);
+
+        let mut shader_mask_targets: Vec<_> = shader_mask_targets.into_iter().collect();
+        shader_mask_targets.sort_unstable_by_key(|(id, _)| *id);
+        drop(shader_mask_targets);
     }
 }
 
@@ -880,6 +925,77 @@ impl InteractionDispatchHandle {
         Ok(path)
     }
 
+    /// Register a shader-mask factory in the active owner lane.
+    pub fn register_shader_mask(
+        &self,
+        factory: impl Fn(Rect<Pixels>) -> Shader + 'static,
+    ) -> Result<ShaderMaskTarget, InteractionDispatchError> {
+        let lane = self.active_lane()?;
+        let target_id = TargetId(lane.target_ids.try_next()?);
+        lane.shader_mask_targets
+            .borrow_mut()
+            .insert(target_id, Rc::new(ShaderMaskCell::new(Rc::new(factory))));
+        Ok(ShaderMaskTarget {
+            lane_id: self.ticket.lane_id,
+            target_id,
+        })
+    }
+
+    /// Replace a shader-mask factory without changing its data-plane identity.
+    pub fn replace_shader_mask(
+        &self,
+        target: ShaderMaskTarget,
+        factory: impl Fn(Rect<Pixels>) -> Shader + 'static,
+    ) -> Result<(), InteractionDispatchError> {
+        let lane = self.active_lane()?;
+        self.validate_lane(target.lane_id)?;
+        let cell = lane
+            .shader_mask_targets
+            .borrow()
+            .get(&target.target_id)
+            .cloned()
+            .ok_or(InteractionDispatchError::TargetGone)?;
+        let old_factory = cell.replace(Rc::new(factory));
+        drop(old_factory);
+        Ok(())
+    }
+
+    /// Remove a shader-mask factory from future resolution.
+    pub fn unregister_shader_mask(
+        &self,
+        target: ShaderMaskTarget,
+    ) -> Result<(), InteractionDispatchError> {
+        let lane = self.active_lane()?;
+        self.validate_lane(target.lane_id)?;
+        let removed = lane
+            .shader_mask_targets
+            .borrow_mut()
+            .remove(&target.target_id)
+            .ok_or(InteractionDispatchError::TargetGone)?;
+        drop(removed);
+        Ok(())
+    }
+
+    /// Invoke a registered shader-mask factory synchronously.
+    pub fn invoke_shader_mask(
+        &self,
+        target: ShaderMaskTarget,
+        bounds: Rect<Pixels>,
+    ) -> Result<Shader, InteractionDispatchError> {
+        let lane = self.active_lane()?;
+        self.validate_lane(target.lane_id)?;
+        let cell = lane
+            .shader_mask_targets
+            .borrow()
+            .get(&target.target_id)
+            .cloned()
+            .ok_or(InteractionDispatchError::TargetGone)?;
+        let factory = cell.snapshot();
+        let shader = factory(bounds);
+        drop(factory);
+        Ok(shader)
+    }
+
     /// Resolve the target-bearing entries of a hit path into one ordered
     /// owner-local route, capturing each entry's local transform.
     ///
@@ -1003,6 +1119,18 @@ pub fn resolve_path_clip_target(
     active_dispatch_handle()?.invoke_path_clipper(target, size)
 }
 
+/// Resolve a shader-mask target through the currently active owner lane.
+///
+/// Render objects use this narrow function to keep executable shader factories
+/// out of render storage while still resolving a bounds-dependent shader at
+/// paint time.
+pub fn resolve_shader_mask_target(
+    target: ShaderMaskTarget,
+    bounds: Rect<Pixels>,
+) -> Result<Shader, InteractionDispatchError> {
+    active_dispatch_handle()?.invoke_shader_mask(target, bounds)
+}
+
 #[cfg(test)]
 mod tests {
     use std::cell::Cell;
@@ -1015,11 +1143,12 @@ mod tests {
 
     use super::*;
     use crate::events::{PointerType, make_down_event};
-    use flui_types::Offset;
+    use flui_types::{Offset, Point};
 
     assert_not_impl_any!(HandlerCell: Send, Sync);
     assert_not_impl_any!(ScrollCell: Send, Sync);
     assert_not_impl_any!(PathClipCell: Send, Sync);
+    assert_not_impl_any!(ShaderMaskCell: Send, Sync);
     assert_not_impl_any!(ResolvedHitEntry: Send, Sync);
     assert_not_impl_any!(ResolvedHitRoute: Send, Sync);
 
@@ -1428,6 +1557,35 @@ mod tests {
                 .expect("resolve path clipper");
 
             assert!(path.contains(flui_types::Point::new(Pixels(5.0), Pixels(5.0),)));
+        });
+        assert_eq!(calls.get(), 1);
+    }
+
+    #[test]
+    fn shader_mask_factory_accepts_owner_local_rc_state() {
+        let lane = InteractionLane::try_new().expect("lane");
+        let handle = lane.dispatch_handle();
+        let calls = Rc::new(Cell::new(0));
+        lane.enter(|| {
+            let calls_for_factory = Rc::clone(&calls);
+            let target = handle
+                .register_shader_mask(move |bounds| {
+                    calls_for_factory.set(calls_for_factory.get() + 1);
+                    assert_eq!(
+                        bounds,
+                        Rect::from_origin_size(Point::ZERO, Size::new(Pixels(10.0), Pixels(20.0)))
+                    );
+                    Shader::solid(flui_types::styling::Color::WHITE)
+                })
+                .expect("register shader mask factory");
+
+            let shader = resolve_shader_mask_target(
+                target,
+                Rect::from_origin_size(Point::ZERO, Size::new(Pixels(10.0), Pixels(20.0))),
+            )
+            .expect("resolve shader mask factory");
+
+            assert_eq!(shader, Shader::solid(flui_types::styling::Color::WHITE));
         });
         assert_eq!(calls.get(), 1);
     }

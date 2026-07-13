@@ -269,7 +269,8 @@ pub use routing::{
     KeyEventHandler, KeyEventResult, MouseRegionCallbacks, MouseRegionTarget, PathClipTarget,
     PointerRouteHandler, PointerRouter, PointerTarget, ReadingOrderPolicy, RectProvider, RenderId,
     ResolvedRouteToken, ResolvedStep, RoutePanic, RouteResolution, RouteResolutionMiss,
-    ScrollTarget, TransformGuard, TraversalEdgeBehavior, resolve_path_clip_target,
+    ScrollTarget, ShaderMaskTarget, TransformGuard, TraversalEdgeBehavior,
+    resolve_path_clip_target, resolve_shader_mask_target,
 };
 pub use sealed::{CustomGestureRecognizer, CustomHitTestable};
 pub use settings::{
@@ -370,6 +371,7 @@ mod static_assertions {
     impl AssertSendSync for HandlerId {}
     impl AssertSendSync for ScrollTarget {}
     impl AssertSendSync for PathClipTarget {}
+    impl AssertSendSync for ShaderMaskTarget {}
 
     // Data-path types should be Send + Sync
     impl AssertSendSync for HitTestResult {}

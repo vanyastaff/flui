@@ -11,9 +11,10 @@
 //! Not built on [`super::clip::ClipGeometry`] or shared with
 //! [`super::backdrop_filter::RenderBackdropFilter`] via a generic body —
 //! the two proxy effects have categorically different config types
-//! (`Arc<dyn Fn>` vs. a plain `ImageFilter` value), different default
-//! `blend_mode`s, and different gating logic (`RenderBackdropFilter` has
-//! an independent `enabled` bypass; `RenderShaderMask` has none). The
+//! (an owner-lane shader target plus fallback shader vs. a plain
+//! `ImageFilter` value), different default `blend_mode`s, and different
+//! gating logic (`RenderBackdropFilter` has an independent `enabled` bypass;
+//! `RenderShaderMask` has none). The
 //! shared shape — single-child proxy, draws nothing of its own, wraps
 //! `paint_child()` in one closure-scoped effect — is about four lines,
 //! not worth a generic parameter (see the design research doc,
@@ -30,7 +31,7 @@
 //! `RenderPhysicalModel` — surfaces all of its fields), not a silent
 //! divergence.
 
-use std::{fmt, sync::Arc};
+use std::fmt;
 
 use flui_tree::Single;
 use flui_types::{
@@ -40,26 +41,18 @@ use flui_types::{
 
 use flui_rendering::{
     context::{BoxHitTestContext, BoxLayoutContext, PaintCx},
+    hit_testing::{ShaderMaskTarget, resolve_shader_mask_target},
     parent_data::BoxParentData,
     traits::RenderBox,
 };
 
-/// A type-erased function that produces a mask [`Shader`] for a given
-/// bounds rect.
-///
-/// The Rust analog of Flutter's `ShaderCallback` typedef
-/// (`ui.Shader Function(Rect bounds)`). Stored as `Arc` — same shape as
-/// [`super::clip::CustomClipper`], the closest existing precedent in this
-/// crate for a stored Flutter-callback field — so [`RenderShaderMask`]
-/// can be cheaply cloned.
-pub type ShaderCallback = Arc<dyn Fn(Rect<Pixels>) -> Shader + Send + Sync + 'static>;
-
 /// A render object that masks its child with a GPU shader.
 ///
-/// The shader is resolved once per paint by calling the stored
-/// [`ShaderCallback`] with the node's LOCAL bounds rect (oracle:
-/// `Offset.zero & size`) — matching Flutter's `RenderShaderMask.paint`
-/// exactly. Draws nothing of its own; see [`RenderBox::paint`] below.
+/// The shader is resolved once per paint. Static masks use the stored fallback
+/// [`Shader`]. Bounds-dependent masks store a data-only [`ShaderMaskTarget`]
+/// and resolve the executable factory through the active owner interaction
+/// lane with the node's LOCAL bounds rect (oracle: `Offset.zero & size`).
+/// Draws nothing of its own; see [`RenderBox::paint`] below.
 ///
 /// # Engine note
 ///
@@ -73,7 +66,8 @@ pub type ShaderCallback = Arc<dyn Fn(Rect<Pixels>) -> Shader + Send + Sync + 'st
 /// or closed by this type). Do not infer on-screen masking from this
 /// type existing.
 pub struct RenderShaderMask {
-    shader_callback: ShaderCallback,
+    shader: Shader,
+    shader_target: Option<ShaderMaskTarget>,
     /// Blend mode used when compositing the masked result.
     /// Default `BlendMode::Modulate` — oracle `proxy_box.dart:1133`,
     /// **not** `SrcOver` (contrast [`super::backdrop_filter::RenderBackdropFilter`]'s
@@ -85,15 +79,16 @@ pub struct RenderShaderMask {
 }
 
 impl RenderShaderMask {
-    /// Creates a shader mask with the given callback and the oracle's
-    /// default blend mode (`BlendMode::Modulate`).
+    /// Creates a shader mask with the given static fallback shader and the
+    /// oracle's default blend mode (`BlendMode::Modulate`).
     ///
-    /// Accepts a plain closure (ergonomic parity with
-    /// [`super::clip::RenderClip::with_clipper`]) and wraps it in an
-    /// `Arc` internally.
-    pub fn new(shader_callback: impl Fn(Rect<Pixels>) -> Shader + Send + Sync + 'static) -> Self {
+    /// Bounds-dependent shader factories are registered in the owner runtime
+    /// and connected with [`with_shader_target`](Self::with_shader_target);
+    /// this render object never stores executable shader callbacks.
+    pub fn new(shader: Shader) -> Self {
         Self {
-            shader_callback: Arc::new(shader_callback),
+            shader,
+            shader_target: None,
             blend_mode: BlendMode::Modulate,
             has_child: false,
         }
@@ -104,6 +99,44 @@ impl RenderShaderMask {
     pub fn with_blend_mode(mut self, blend_mode: BlendMode) -> Self {
         self.blend_mode = blend_mode;
         self
+    }
+
+    /// Builder: resolves the shader through an owner-local shader target.
+    #[must_use]
+    pub fn with_shader_target(mut self, target: ShaderMaskTarget) -> Self {
+        self.shader_target = Some(target);
+        self
+    }
+
+    /// The static fallback shader.
+    #[inline]
+    pub const fn shader(&self) -> &Shader {
+        &self.shader
+    }
+
+    /// Replaces the static fallback shader; returns `true` if the value changed.
+    pub fn set_shader(&mut self, shader: Shader) -> bool {
+        if self.shader == shader {
+            return false;
+        }
+        self.shader = shader;
+        true
+    }
+
+    /// Owner-lane shader target used for bounds-dependent masks.
+    #[inline]
+    pub const fn shader_target(&self) -> Option<ShaderMaskTarget> {
+        self.shader_target
+    }
+
+    /// Replaces the owner-lane shader target; returns `true` if the value
+    /// changed.
+    pub fn set_shader_target(&mut self, target: Option<ShaderMaskTarget>) -> bool {
+        if self.shader_target == target {
+            return false;
+        }
+        self.shader_target = target;
+        true
     }
 
     /// The current blend mode.
@@ -122,30 +155,27 @@ impl RenderShaderMask {
         true
     }
 
-    /// Replaces the shader callback; returns `true` if the value changed.
-    ///
-    /// `shader_callback` is a mandatory field (unlike `RenderClip`'s
-    /// optional `clipper`), so "changed" can't be a presence check —
-    /// takes an already-`Arc`'d [`ShaderCallback`] and compares by
-    /// pointer identity (`Arc::ptr_eq`), the direct Rust analog of the
-    /// oracle's own reference-equality guard (`proxy_box.dart:1150-1153`,
-    /// `if (_shaderCallback == shaderCallback) return;` — Dart closures
-    /// compare by reference unless captured as the same tear-off).
-    /// Passing a freshly-constructed closure (a new `Arc` allocation)
-    /// always reports a change, matching the oracle's own acknowledged
-    /// inability to detect a value-equal-but-distinct closure (the
-    /// `:1148-1149` TODO this port does not attempt to fix).
-    pub fn set_shader_callback(&mut self, shader_callback: ShaderCallback) -> bool {
-        let changed = !Arc::ptr_eq(&self.shader_callback, &shader_callback);
-        self.shader_callback = shader_callback;
-        changed
+    fn resolve_shader(&self, bounds: Rect<Pixels>) -> Shader {
+        if let Some(target) = self.shader_target {
+            match resolve_shader_mask_target(target, bounds) {
+                Ok(shader) => return shader,
+                Err(error) => {
+                    tracing::warn!(
+                        ?error,
+                        "RenderShaderMask shader target resolution failed; using fallback shader"
+                    );
+                }
+            }
+        }
+        self.shader.clone()
     }
 }
 
 impl Clone for RenderShaderMask {
     fn clone(&self) -> Self {
         Self {
-            shader_callback: self.shader_callback.clone(),
+            shader: self.shader.clone(),
+            shader_target: self.shader_target,
             blend_mode: self.blend_mode,
             has_child: self.has_child,
         }
@@ -154,8 +184,9 @@ impl Clone for RenderShaderMask {
 
 impl fmt::Debug for RenderShaderMask {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // `shader_callback` is an opaque closure with no useful `Debug` form.
         f.debug_struct("RenderShaderMask")
+            .field("shader", &self.shader)
+            .field("has_shader_target", &self.shader_target.is_some())
             .field("blend_mode", &self.blend_mode)
             .field("has_child", &self.has_child)
             .finish_non_exhaustive()
@@ -168,6 +199,11 @@ impl flui_foundation::Diagnosticable for RenderShaderMask {
         // `blend_mode` is a deliberate FLUI-side addition, not a
         // transcription.
         builder.add_enum("blend_mode", self.blend_mode);
+        builder.add_flag(
+            "shader_target",
+            self.shader_target.is_some(),
+            "shader_target",
+        );
     }
 }
 
@@ -214,7 +250,7 @@ impl RenderBox for RenderShaderMask {
         // `PaintCx::with_shader_mask`'s doc and the design research
         // plan's trap §4.3).
         let bounds = Rect::from_origin_size(Point::ZERO, ctx.size());
-        let shader = (self.shader_callback)(bounds);
+        let shader = self.resolve_shader(bounds);
         ctx.with_shader_mask(shader, self.blend_mode, |ctx| ctx.paint_child());
     }
 
@@ -245,54 +281,52 @@ mod tests {
 
     use super::*;
 
-    fn solid_shader(_bounds: Rect<Pixels>) -> Shader {
+    fn solid_shader() -> Shader {
         Shader::solid(Color::WHITE)
     }
 
     #[test]
     fn default_blend_mode_is_modulate() {
-        let node = RenderShaderMask::new(solid_shader);
+        let node = RenderShaderMask::new(solid_shader());
         assert_eq!(node.blend_mode(), BlendMode::Modulate);
     }
 
     #[test]
     fn with_blend_mode_overrides_default() {
-        let node = RenderShaderMask::new(solid_shader).with_blend_mode(BlendMode::Multiply);
+        let node = RenderShaderMask::new(solid_shader()).with_blend_mode(BlendMode::Multiply);
         assert_eq!(node.blend_mode(), BlendMode::Multiply);
     }
 
     #[test]
     fn set_blend_mode_returns_change_flag() {
-        let mut node = RenderShaderMask::new(solid_shader);
+        let mut node = RenderShaderMask::new(solid_shader());
         assert!(node.set_blend_mode(BlendMode::Screen));
         assert!(!node.set_blend_mode(BlendMode::Screen));
     }
 
     #[test]
-    fn set_shader_callback_reports_identity_change() {
-        let shared: ShaderCallback = Arc::new(solid_shader);
-        let mut node = RenderShaderMask::new(solid_shader);
+    fn set_shader_returns_change_flag() {
+        let mut node = RenderShaderMask::new(solid_shader());
 
-        // Installing a distinct Arc always reports a change (fresh
-        // allocation, can't be pointer-equal to the constructor's own
-        // internally-wrapped Arc).
-        assert!(node.set_shader_callback(shared.clone()));
-        // Re-installing the SAME Arc reports no change (true identity).
-        assert!(!node.set_shader_callback(shared));
+        assert!(!node.set_shader(solid_shader()));
+        assert!(node.set_shader(Shader::solid(Color::BLACK)));
+        assert!(!node.set_shader(Shader::solid(Color::BLACK)));
     }
 
     #[test]
     fn debug_format_hides_closure_internals() {
-        let node = RenderShaderMask::new(solid_shader);
+        let node = RenderShaderMask::new(solid_shader());
         let dbg = format!("{node:?}");
         assert!(dbg.contains("RenderShaderMask"));
+        assert!(dbg.contains("shader"));
+        assert!(dbg.contains("has_shader_target"));
         assert!(dbg.contains("blend_mode"));
         assert!(dbg.contains("has_child"));
     }
 
     #[test]
     fn always_needs_compositing_tracks_has_child() {
-        let mut node = RenderShaderMask::new(solid_shader);
+        let mut node = RenderShaderMask::new(solid_shader());
         assert!(!node.always_needs_compositing(), "no child yet");
         node.has_child = true;
         assert!(node.always_needs_compositing(), "oracle: child != null");
@@ -303,7 +337,7 @@ mod tests {
     #[test]
     fn debug_fill_properties_surfaces_blend_mode() {
         use flui_foundation::{Diagnosticable, DiagnosticsBuilder};
-        let node = RenderShaderMask::new(solid_shader).with_blend_mode(BlendMode::Screen);
+        let node = RenderShaderMask::new(solid_shader()).with_blend_mode(BlendMode::Screen);
         let mut builder = DiagnosticsBuilder::new();
         node.debug_fill_properties(&mut builder);
         let names: Vec<String> = builder

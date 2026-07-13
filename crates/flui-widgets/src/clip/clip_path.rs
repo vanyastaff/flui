@@ -16,10 +16,10 @@ type PathClipper = Rc<dyn Fn(Size) -> Path>;
 
 /// Clips its child to a custom [`Path`] derived from the child's size.
 ///
-/// Flutter parity: `widgets/basic.dart` `ClipPath` over `RenderClipPath`, with a
-/// `CustomClipper<Path>` supplied as a closure `Fn(Size) -> Path`. Layout is a
-/// pass-through — only painting is clipped. `clip_behavior` defaults to
-/// [`Clip::AntiAlias`] (Flutter's `ClipPath` default).
+/// Flutter parity: `widgets/basic.dart` `ClipPath` over `RenderClipPath`, with
+/// an owner-local path factory supplied as a closure `Fn(Size) -> Path`.
+/// Layout is a pass-through — only painting is clipped. `clip_behavior`
+/// defaults to [`Clip::AntiAlias`] (Flutter's `ClipPath` default).
 #[derive(Clone)]
 pub struct ClipPath {
     clipper: PathClipper,

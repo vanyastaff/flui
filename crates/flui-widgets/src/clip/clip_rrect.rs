@@ -2,10 +2,9 @@
 
 use flui_objects::RenderClipRRect;
 use flui_rendering::protocol::BoxProtocol;
-use flui_types::geometry::{RRect, Radius};
+use flui_types::geometry::Radius;
 use flui_types::painting::Clip;
 use flui_types::styling::BorderRadius;
-use flui_types::{Point, Rect, Size};
 use flui_view::{Child, IntoView, RenderView, View, impl_render_view};
 
 /// Clips its child to a rounded rectangle whose corners follow `border_radius`.
@@ -76,20 +75,9 @@ impl ClipRRect {
         self
     }
 
-    /// The `Fn(Size) -> RRect` clipper this widget installs on its render
-    /// object: the laid-out box rect rounded by the configured corner radii.
-    fn clipper(&self) -> impl Fn(Size) -> RRect + Send + Sync + 'static {
-        let radius = self.border_radius;
-        move |size| {
-            let bounds = Rect::from_origin_size(Point::ZERO, size);
-            RRect::from_rect_and_corners(
-                bounds,
-                radius.top_left,
-                radius.top_right,
-                radius.bottom_right,
-                radius.bottom_left,
-            )
-        }
+    /// The data-only border radius this widget installs on its render object.
+    fn clip_source(&self) -> BorderRadius {
+        self.border_radius
     }
 }
 
@@ -101,7 +89,7 @@ impl RenderView for ClipRRect {
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,
     ) -> Self::RenderObject {
-        RenderClipRRect::new(self.clip_behavior).with_clipper(self.clipper())
+        RenderClipRRect::new(self.clip_behavior).with_border_radius(self.clip_source())
     }
 
     fn update_render_object(
@@ -110,7 +98,7 @@ impl RenderView for ClipRRect {
         render_object: &mut Self::RenderObject,
     ) {
         render_object.set_clip_behavior(self.clip_behavior);
-        render_object.set_clipper(Some(self.clipper()));
+        render_object.set_border_radius(Some(self.clip_source()));
     }
 
     fn has_children(&self) -> bool {

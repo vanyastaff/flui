@@ -198,6 +198,52 @@ impl<'a> RenderObjectContext<'a> {
     ) -> Result<(), RenderObjectContextError> {
         Ok(self.dispatch_handle()?.unregister_path_clipper(target)?)
     }
+
+    /// Register a shader-mask factory in the active owner lane.
+    ///
+    /// The returned target is data-only and may be stored in a render object;
+    /// the executable `Fn(Rect) -> Shader` remains owner-local.
+    ///
+    /// # Errors
+    ///
+    /// Returns the lane's typed dispatch error when no owner lane is active,
+    /// the element was mounted detached, or the owner is gone.
+    pub fn register_shader_mask(
+        &self,
+        factory: impl Fn(flui_types::Rect<flui_types::Pixels>) -> flui_types::painting::Shader + 'static,
+    ) -> Result<flui_interaction::ShaderMaskTarget, RenderObjectContextError> {
+        Ok(self.dispatch_handle()?.register_shader_mask(factory)?)
+    }
+
+    /// Replace an existing shader-mask factory without changing its data-plane
+    /// identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns the lane's typed dispatch error for wrong/detached owner state
+    /// or for a target that no longer belongs to the active owner lane.
+    pub fn replace_shader_mask(
+        &self,
+        target: flui_interaction::ShaderMaskTarget,
+        factory: impl Fn(flui_types::Rect<flui_types::Pixels>) -> flui_types::painting::Shader + 'static,
+    ) -> Result<(), RenderObjectContextError> {
+        Ok(self
+            .dispatch_handle()?
+            .replace_shader_mask(target, factory)?)
+    }
+
+    /// Remove a shader-mask factory from future owner-lane resolution.
+    ///
+    /// # Errors
+    ///
+    /// Returns the lane's typed dispatch error for wrong/detached owner state
+    /// or for a target already removed from the active owner lane.
+    pub fn unregister_shader_mask(
+        &self,
+        target: flui_interaction::ShaderMaskTarget,
+    ) -> Result<(), RenderObjectContextError> {
+        Ok(self.dispatch_handle()?.unregister_shader_mask(target)?)
+    }
 }
 
 // ============================================================================

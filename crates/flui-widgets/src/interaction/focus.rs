@@ -445,7 +445,7 @@ pub(crate) fn install_rect_provider(
 ) {
     let anchor = anchor.clone();
     let owner = ctx.pipeline_owner();
-    node.set_rect_provider(Arc::new(move || {
+    node.set_rect_provider(Rc::new(move || {
         let render_id = anchor.get()?;
         let owner = owner.as_ref()?.read();
         let size = owner.box_size(render_id)?;
