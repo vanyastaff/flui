@@ -266,10 +266,10 @@ pub use routing::{
     EventPropagation, EventRouter, FocusManager, FocusNode, FocusScopeNode, FocusTraversalPolicy,
     GlobalPointerHandler, HitTestBehavior, HitTestEntry, HitTestResult, HitTestable,
     InteractionDispatchError, InteractionDispatchHandle, InteractionLane, KeyEventCallback,
-    KeyEventHandler, KeyEventResult, MouseRegionCallbacks, MouseRegionTarget, PointerRouteHandler,
-    PointerRouter, PointerTarget, ReadingOrderPolicy, RectProvider, RenderId, ResolvedRouteToken,
-    ResolvedStep, RoutePanic, RouteResolution, RouteResolutionMiss, ScrollEventHandler,
-    TransformGuard, TraversalEdgeBehavior,
+    KeyEventHandler, KeyEventResult, MouseRegionCallbacks, MouseRegionTarget, PathClipTarget,
+    PointerRouteHandler, PointerRouter, PointerTarget, ReadingOrderPolicy, RectProvider, RenderId,
+    ResolvedRouteToken, ResolvedStep, RoutePanic, RouteResolution, RouteResolutionMiss,
+    ScrollTarget, TransformGuard, TraversalEdgeBehavior, resolve_path_clip_target,
 };
 pub use sealed::{CustomGestureRecognizer, CustomHitTestable};
 pub use settings::{
@@ -368,10 +368,11 @@ mod static_assertions {
     impl AssertSendSync for PointerId {}
     impl AssertSendSync for FocusNodeId {}
     impl AssertSendSync for HandlerId {}
+    impl AssertSendSync for ScrollTarget {}
+    impl AssertSendSync for PathClipTarget {}
 
     // Data-path types should be Send + Sync
     impl AssertSendSync for HitTestResult {}
     impl AssertSendSync for HitTestEntry {}
     impl AssertSendSync for PointerEventResampler {}
-    impl AssertSendSync for PointerSignalResolver {}
 }

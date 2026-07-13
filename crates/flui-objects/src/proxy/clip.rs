@@ -61,6 +61,7 @@ use flui_types::{
 
 use flui_rendering::{
     context::{BoxHitTestContext, BoxLayoutContext},
+    hit_testing::{PathClipTarget, resolve_path_clip_target},
     parent_data::BoxParentData,
     traits::RenderBox,
 };
@@ -152,6 +153,15 @@ pub trait ClipGeometry: sealed::Sealed + Clone + fmt::Debug + Send + Sync + 'sta
     /// clip region. Used for hit testing: anything outside the clip
     /// shape is unreachable.
     fn contains(&self, position: Point<Pixels>) -> bool;
+
+    /// Resolves an owner-local path clip target for this geometry, when the
+    /// shape supports it.
+    ///
+    /// Only [`Path`] implements this; other clip geometries remain pure data
+    /// and ignore owner-lane path targets.
+    fn resolve_path_clip_target(_target: PathClipTarget, _size: Size) -> Option<Self> {
+        None
+    }
 
     /// Opens this clip as a layer scope on the paint context — the
     /// clip covers everything recorded inside `f`, child subtrees
@@ -324,6 +334,16 @@ impl ClipGeometry for Path {
         self.contains(position)
     }
 
+    fn resolve_path_clip_target(target: PathClipTarget, size: Size) -> Option<Self> {
+        match resolve_path_clip_target(target, size) {
+            Ok(path) => Some(path),
+            Err(error) => {
+                tracing::debug!(?error, "path clip target resolution failed");
+                None
+            }
+        }
+    }
+
     fn with_clip_scope(
         &self,
         ctx: &mut flui_rendering::context::PaintCx<'_, Single>,
@@ -342,6 +362,9 @@ impl ClipGeometry for Path {
 ///
 /// This is the Rust analog of Flutter's `CustomClipper<T>.getClip(size)`.
 /// Stored as `Arc` so the containing `RenderClip<S>` remains `Clone`.
+/// This is a low-level render-object API; widget authoring should prefer
+/// owner-lane path clip targets instead of storing executable callbacks in
+/// render state.
 pub type CustomClipper<S> = Arc<dyn Fn(Size) -> S + Send + Sync + 'static>;
 
 // =============================================================================
@@ -370,6 +393,9 @@ pub struct RenderClip<S: ClipGeometry> {
     clip_behavior: Clip,
     /// Optional custom clipper closure (`None` = use `S::default_for_size`).
     clipper: Option<CustomClipper<S>>,
+    /// Optional owner-local path clip target. Only meaningful for
+    /// `RenderClipPath`; other `RenderClip<S>` instantiations ignore it.
+    path_clip_target: Option<PathClipTarget>,
     /// Whether we have a child (tracked for hit testing).
     has_child: bool,
 }
@@ -381,6 +407,7 @@ impl<S: ClipGeometry> RenderClip<S> {
         Self {
             clip_behavior,
             clipper: None,
+            path_clip_target: None,
             has_child: false,
         }
     }
@@ -413,7 +440,7 @@ impl<S: ClipGeometry> RenderClip<S> {
     /// Returns whether a custom clipper has been installed.
     #[inline]
     pub fn has_custom_clipper(&self) -> bool {
-        self.clipper.is_some()
+        self.clipper.is_some() || self.path_clip_target.is_some()
     }
 
     /// Sets a custom clipper closure (builder).
@@ -447,8 +474,24 @@ impl<S: ClipGeometry> RenderClip<S> {
     fn resolve_clip(&self, size: Size) -> S {
         match &self.clipper {
             Some(c) => (c)(size),
-            None => S::default_for_size(size),
+            None => self
+                .path_clip_target
+                .and_then(|target| S::resolve_path_clip_target(target, size))
+                .unwrap_or_else(|| S::default_for_size(size)),
         }
+    }
+}
+
+impl RenderClip<Path> {
+    /// Returns the owner-local path clip target, if one is installed.
+    #[must_use]
+    pub const fn path_clip_target(&self) -> Option<PathClipTarget> {
+        self.path_clip_target
+    }
+
+    /// Sets the owner-local path clip target.
+    pub fn set_path_clip_target(&mut self, target: Option<PathClipTarget>) {
+        self.path_clip_target = target;
     }
 }
 
@@ -458,6 +501,7 @@ impl<S: ClipGeometry> Clone for RenderClip<S> {
         Self {
             clip_behavior: self.clip_behavior,
             clipper: self.clipper.clone(),
+            path_clip_target: self.path_clip_target,
             has_child: self.has_child,
         }
     }
@@ -468,6 +512,7 @@ impl<S: ClipGeometry> fmt::Debug for RenderClip<S> {
         f.debug_struct("RenderClip")
             .field("clip_behavior", &self.clip_behavior)
             .field("has_custom_clipper", &self.clipper.is_some())
+            .field("has_path_clip_target", &self.path_clip_target.is_some())
             .field("has_child", &self.has_child)
             .finish()
     }
@@ -492,7 +537,7 @@ impl<S: ClipGeometry> flui_foundation::Diagnosticable for RenderClip<S> {
         builder.add_enum("clip_behavior", self.clip_behavior);
         builder.add_flag(
             "custom_clipper",
-            self.clipper.is_some(),
+            self.clipper.is_some() || self.path_clip_target.is_some(),
             "has custom clipper",
         );
     }
@@ -728,6 +773,39 @@ mod tests {
             "point far outside bounding box must not be inside the path \
              (before fix: Path::contains always returns true)"
         );
+    }
+
+    #[test]
+    fn render_clip_path_resolves_owner_local_path_target() {
+        use std::cell::Cell;
+        use std::rc::Rc;
+
+        use flui_interaction::InteractionLane;
+
+        let lane = InteractionLane::try_new().expect("lane");
+        let handle = lane.dispatch_handle();
+        let calls = Rc::new(Cell::new(0));
+        lane.enter(|| {
+            let calls_for_clipper = Rc::clone(&calls);
+            let target = handle
+                .register_path_clipper(move |size| {
+                    calls_for_clipper.set(calls_for_clipper.get() + 1);
+                    let mut path = Path::new();
+                    path.add_rect(Rect::from_origin_size(Point::ZERO, size));
+                    path
+                })
+                .expect("register path clipper");
+
+            let mut node = RenderClipPath::anti_alias();
+            node.set_path_clip_target(Some(target));
+            assert!(node.has_custom_clipper());
+
+            let path = node.resolve_clip(Size::new(px(20.0), px(30.0)));
+
+            assert!(path.contains(Point::new(px(10.0), px(10.0))));
+        });
+
+        assert_eq!(calls.get(), 1);
     }
 
     // ---------- RenderClip<S> generic ------------------------------------

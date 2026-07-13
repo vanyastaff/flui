@@ -220,8 +220,8 @@ fn calc_cache_offset(c: &SliverConstraints, from: f32, to: f32) -> f32 {
 ///   ([`OffBandDisposal::ElementOwned`]).
 /// - `on_dispose(logical_i)`: called for each off-band child **after**
 ///   `ctx.dispose_box_child` enqueues the deferred removal (only fires for
-///   `RenderOwned`).  Use this to fire caller-side cleanup hooks (e.g.
-///   `dispose_hook` in `RenderSliverListLazy`).
+///   `RenderOwned`). Use this for data bookkeeping inside the render/layout
+///   layer, not for owner-plane UI callbacks.
 ///
 /// ## Returns
 ///

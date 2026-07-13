@@ -346,7 +346,7 @@ fn snapshot_lazy_sliver_visible_band() {
                 as Box<dyn RenderObject<BoxProtocol>>)
         });
 
-    let lazy = RenderSliverListLazy::new(n_items, item_height, Arc::clone(&source), None);
+    let lazy = RenderSliverListLazy::new(n_items, item_height, Arc::clone(&source));
 
     let mut run = RenderTester::mount(
         box_node(RenderViewport::new(AxisDirection::TopToBottom)).child(sliver_node(lazy)),

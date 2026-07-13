@@ -17,10 +17,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread::{self, ThreadId};
 
 use flui_types::geometry::Matrix4;
-use flui_types::{Offset, Pixels};
+use flui_types::painting::Path;
+use flui_types::{Offset, Pixels, Size};
 
-use super::hit_test::{HitTestEntry, transform_pointer_event};
-use crate::events::{DeviceId, PointerEvent};
+use super::hit_test::{EventPropagation, HitTestEntry, transform_pointer_event};
+use crate::events::{DeviceId, PointerEvent, ScrollEventData};
 
 static NEXT_LANE_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -111,6 +112,40 @@ pub struct MouseRegionTarget {
 impl fmt::Debug for MouseRegionTarget {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("MouseRegionTarget").finish_non_exhaustive()
+    }
+}
+
+/// Opaque data-plane identity for an owner-local scroll/pointer-signal target.
+///
+/// Hit-test entries store this value instead of storing executable scroll
+/// callbacks in the data plane. The callback itself remains in the active
+/// owner lane and is invoked synchronously during scroll dispatch.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ScrollTarget {
+    lane_id: LaneId,
+    target_id: TargetId,
+}
+
+impl fmt::Debug for ScrollTarget {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ScrollTarget").finish_non_exhaustive()
+    }
+}
+
+/// Opaque data-plane identity for an owner-local path clipper.
+///
+/// Render objects store this value instead of storing a `Fn(Size) -> Path`
+/// callback. The executable clipper remains in the owner lane and is resolved
+/// synchronously when the render object needs the path for paint or hit-test.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct PathClipTarget {
+    lane_id: LaneId,
+    target_id: TargetId,
+}
+
+impl fmt::Debug for PathClipTarget {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PathClipTarget").finish_non_exhaustive()
     }
 }
 
@@ -210,6 +245,8 @@ fn try_mint_lane_id(source: &AtomicU64) -> Result<LaneId, InteractionDispatchErr
 }
 
 type PointerHandler = Rc<dyn Fn(&PointerEvent) + 'static>;
+type ScrollHandler = Rc<dyn Fn(&ScrollEventData) -> EventPropagation + 'static>;
+type PathClipper = Rc<dyn Fn(Size) -> Path + 'static>;
 
 /// Callback for mouse enter events.
 pub type MouseEnterCallback = Rc<dyn Fn(DeviceId, Offset<Pixels>) + 'static>;
@@ -279,6 +316,46 @@ impl MouseRegionCell {
 
     fn replace(&self, callbacks: MouseRegionCallbacks) -> MouseRegionCallbacks {
         std::mem::replace(&mut *self.current.borrow_mut(), callbacks)
+    }
+}
+
+struct ScrollCell {
+    current: RefCell<ScrollHandler>,
+}
+
+impl ScrollCell {
+    fn new(handler: ScrollHandler) -> Self {
+        Self {
+            current: RefCell::new(handler),
+        }
+    }
+
+    fn snapshot(&self) -> ScrollHandler {
+        Rc::clone(&self.current.borrow())
+    }
+
+    fn replace(&self, handler: ScrollHandler) -> ScrollHandler {
+        std::mem::replace(&mut *self.current.borrow_mut(), handler)
+    }
+}
+
+struct PathClipCell {
+    current: RefCell<PathClipper>,
+}
+
+impl PathClipCell {
+    fn new(clipper: PathClipper) -> Self {
+        Self {
+            current: RefCell::new(clipper),
+        }
+    }
+
+    fn snapshot(&self) -> PathClipper {
+        Rc::clone(&self.current.borrow())
+    }
+
+    fn replace(&self, clipper: PathClipper) -> PathClipper {
+        std::mem::replace(&mut *self.current.borrow_mut(), clipper)
     }
 }
 
@@ -383,6 +460,8 @@ struct LocalLaneInner {
     route_ids: MonotonicIdSource,
     targets: RefCell<HashMap<TargetId, Rc<HandlerCell>>>,
     mouse_targets: RefCell<HashMap<TargetId, Rc<MouseRegionCell>>>,
+    scroll_targets: RefCell<HashMap<TargetId, Rc<ScrollCell>>>,
+    path_clip_targets: RefCell<HashMap<TargetId, Rc<PathClipCell>>>,
     routes: RefCell<HashMap<RouteId, Rc<ResolvedHitRoute>>>,
 }
 
@@ -420,6 +499,8 @@ impl InteractionLane {
             route_ids: MonotonicIdSource::new(),
             targets: RefCell::new(HashMap::new()),
             mouse_targets: RefCell::new(HashMap::new()),
+            scroll_targets: RefCell::new(HashMap::new()),
+            path_clip_targets: RefCell::new(HashMap::new()),
             routes: RefCell::new(HashMap::new()),
         });
         LOCAL_LANES.with(|registry| {
@@ -464,6 +545,8 @@ impl Drop for InteractionLane {
         let routes = self.inner.routes.take();
         let targets = self.inner.targets.take();
         let mouse_targets = self.inner.mouse_targets.take();
+        let scroll_targets = self.inner.scroll_targets.take();
+        let path_clip_targets = self.inner.path_clip_targets.take();
 
         let mut routes: Vec<_> = routes.into_iter().collect();
         routes.sort_unstable_by_key(|(id, _)| *id);
@@ -476,6 +559,14 @@ impl Drop for InteractionLane {
         let mut mouse_targets: Vec<_> = mouse_targets.into_iter().collect();
         mouse_targets.sort_unstable_by_key(|(id, _)| *id);
         drop(mouse_targets);
+
+        let mut scroll_targets: Vec<_> = scroll_targets.into_iter().collect();
+        scroll_targets.sort_unstable_by_key(|(id, _)| *id);
+        drop(scroll_targets);
+
+        let mut path_clip_targets: Vec<_> = path_clip_targets.into_iter().collect();
+        path_clip_targets.sort_unstable_by_key(|(id, _)| *id);
+        drop(path_clip_targets);
     }
 }
 
@@ -650,6 +741,145 @@ impl InteractionDispatchHandle {
             .ok_or(InteractionDispatchError::TargetGone)
     }
 
+    /// Register a scroll/pointer-signal handler in the active owner lane.
+    pub fn register_scroll(
+        &self,
+        handler: impl Fn(&ScrollEventData) -> EventPropagation + 'static,
+    ) -> Result<ScrollTarget, InteractionDispatchError> {
+        let lane = self.active_lane()?;
+        let target_id = TargetId(lane.target_ids.try_next()?);
+        lane.scroll_targets
+            .borrow_mut()
+            .insert(target_id, Rc::new(ScrollCell::new(Rc::new(handler))));
+        Ok(ScrollTarget {
+            lane_id: self.ticket.lane_id,
+            target_id,
+        })
+    }
+
+    /// Replace a scroll target's current handler without changing identity.
+    pub fn replace_scroll(
+        &self,
+        target: ScrollTarget,
+        handler: impl Fn(&ScrollEventData) -> EventPropagation + 'static,
+    ) -> Result<(), InteractionDispatchError> {
+        let lane = self.active_lane()?;
+        self.validate_lane(target.lane_id)?;
+        let cell = lane
+            .scroll_targets
+            .borrow()
+            .get(&target.target_id)
+            .cloned()
+            .ok_or(InteractionDispatchError::TargetGone)?;
+        let old_handler = cell.replace(Rc::new(handler));
+        drop(old_handler);
+        Ok(())
+    }
+
+    /// Remove a scroll target from future dispatch.
+    pub fn unregister_scroll(&self, target: ScrollTarget) -> Result<(), InteractionDispatchError> {
+        let lane = self.active_lane()?;
+        self.validate_lane(target.lane_id)?;
+        let removed = lane
+            .scroll_targets
+            .borrow_mut()
+            .remove(&target.target_id)
+            .ok_or(InteractionDispatchError::TargetGone)?;
+        drop(removed);
+        Ok(())
+    }
+
+    /// Invoke one registered scroll target synchronously.
+    pub fn invoke_scroll_target(
+        &self,
+        target: ScrollTarget,
+        event: &ScrollEventData,
+    ) -> Result<EventPropagation, InteractionDispatchError> {
+        let lane = self.active_lane()?;
+        self.validate_lane(target.lane_id)?;
+        let cell = lane
+            .scroll_targets
+            .borrow()
+            .get(&target.target_id)
+            .cloned()
+            .ok_or(InteractionDispatchError::TargetGone)?;
+        let handler = cell.snapshot();
+        let result = handler(event);
+        drop(handler);
+        Ok(result)
+    }
+
+    /// Register a path clipper in the active owner lane.
+    pub fn register_path_clipper(
+        &self,
+        clipper: impl Fn(Size) -> Path + 'static,
+    ) -> Result<PathClipTarget, InteractionDispatchError> {
+        let lane = self.active_lane()?;
+        let target_id = TargetId(lane.target_ids.try_next()?);
+        lane.path_clip_targets
+            .borrow_mut()
+            .insert(target_id, Rc::new(PathClipCell::new(Rc::new(clipper))));
+        Ok(PathClipTarget {
+            lane_id: self.ticket.lane_id,
+            target_id,
+        })
+    }
+
+    /// Replace a path clipper without changing its data-plane identity.
+    pub fn replace_path_clipper(
+        &self,
+        target: PathClipTarget,
+        clipper: impl Fn(Size) -> Path + 'static,
+    ) -> Result<(), InteractionDispatchError> {
+        let lane = self.active_lane()?;
+        self.validate_lane(target.lane_id)?;
+        let cell = lane
+            .path_clip_targets
+            .borrow()
+            .get(&target.target_id)
+            .cloned()
+            .ok_or(InteractionDispatchError::TargetGone)?;
+        let old_clipper = cell.replace(Rc::new(clipper));
+        drop(old_clipper);
+        Ok(())
+    }
+
+    /// Remove a path clipper from future resolution.
+    pub fn unregister_path_clipper(
+        &self,
+        target: PathClipTarget,
+    ) -> Result<(), InteractionDispatchError> {
+        let lane = self.active_lane()?;
+        self.validate_lane(target.lane_id)?;
+        let removed = lane
+            .path_clip_targets
+            .borrow_mut()
+            .remove(&target.target_id)
+            .ok_or(InteractionDispatchError::TargetGone)?;
+        drop(removed);
+        Ok(())
+    }
+
+    /// Invoke a registered path clipper synchronously.
+    pub fn invoke_path_clipper(
+        &self,
+        target: PathClipTarget,
+        size: Size,
+    ) -> Result<Path, InteractionDispatchError> {
+        let lane = self.active_lane()?;
+        self.validate_lane(target.lane_id)?;
+        let cell = lane
+            .path_clip_targets
+            .borrow()
+            .get(&target.target_id)
+            .cloned()
+            .ok_or(InteractionDispatchError::TargetGone)?;
+        let clipper = cell.snapshot();
+        let path = clipper(size);
+        drop(clipper);
+        Ok(path)
+    }
+
     /// Resolve the target-bearing entries of a hit path into one ordered
     /// owner-local route, capturing each entry's local transform.
     ///
@@ -761,6 +991,18 @@ pub(crate) fn active_dispatch_handle() -> Result<InteractionDispatchHandle, Inte
         .ok_or(InteractionDispatchError::InactiveRealm)
 }
 
+/// Resolve a path clipper target through the currently active owner lane.
+///
+/// Render objects use this narrow function to keep executable clipper closures
+/// out of render storage while still resolving a size-dependent clip path at
+/// paint/hit-test time.
+pub fn resolve_path_clip_target(
+    target: PathClipTarget,
+    size: Size,
+) -> Result<Path, InteractionDispatchError> {
+    active_dispatch_handle()?.invoke_path_clipper(target, size)
+}
+
 #[cfg(test)]
 mod tests {
     use std::cell::Cell;
@@ -776,6 +1018,8 @@ mod tests {
     use flui_types::Offset;
 
     assert_not_impl_any!(HandlerCell: Send, Sync);
+    assert_not_impl_any!(ScrollCell: Send, Sync);
+    assert_not_impl_any!(PathClipCell: Send, Sync);
     assert_not_impl_any!(ResolvedHitEntry: Send, Sync);
     assert_not_impl_any!(ResolvedHitRoute: Send, Sync);
 
@@ -1159,5 +1403,32 @@ mod tests {
         });
         drop(lane);
         assert_eq!(&*log.borrow(), &[1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn path_clipper_accepts_owner_local_rc_state() {
+        let lane = InteractionLane::try_new().expect("lane");
+        let handle = lane.dispatch_handle();
+        let calls = Rc::new(Cell::new(0));
+        lane.enter(|| {
+            let calls_for_clipper = Rc::clone(&calls);
+            let target = handle
+                .register_path_clipper(move |size| {
+                    calls_for_clipper.set(calls_for_clipper.get() + 1);
+                    let mut path = Path::new();
+                    path.add_rect(flui_types::Rect::from_origin_size(
+                        flui_types::Point::ZERO,
+                        size,
+                    ));
+                    path
+                })
+                .expect("register path clipper");
+
+            let path = resolve_path_clip_target(target, Size::new(Pixels(10.0), Pixels(20.0)))
+                .expect("resolve path clipper");
+
+            assert!(path.contains(flui_types::Point::new(Pixels(5.0), Pixels(5.0),)));
+        });
+        assert_eq!(calls.get(), 1);
     }
 }

@@ -36,13 +36,14 @@ pub use focus_scope::{
 };
 pub use hit_test::{
     EventPropagation, HitTestBehavior, HitTestEntry, HitTestResult, HitTestable, RenderId,
-    ScrollEventHandler, TransformGuard,
+    TransformGuard,
 };
 pub(crate) use interaction_lane::active_dispatch_handle;
 pub use interaction_lane::{
     InteractionDispatchError, InteractionDispatchHandle, InteractionLane, MouseEnterCallback,
-    MouseExitCallback, MouseHoverCallback, MouseRegionCallbacks, MouseRegionTarget, PointerTarget,
-    ResolvedRouteToken, RoutePanic, RouteResolution, RouteResolutionMiss,
+    MouseExitCallback, MouseHoverCallback, MouseRegionCallbacks, MouseRegionTarget, PathClipTarget,
+    PointerTarget, ResolvedRouteToken, RoutePanic, RouteResolution, RouteResolutionMiss,
+    ScrollTarget, resolve_path_clip_target,
 };
 pub use mouse_tracker::{CursorChangeCallback, DeviceId, MouseTracker, MouseTrackerAnnotation};
 pub use pointer_router::{GlobalPointerHandler, PointerRouteHandler, PointerRouter};

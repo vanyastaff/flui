@@ -36,16 +36,13 @@
 //! ```
 
 use std::{
+    cell::{Cell, RefCell},
     collections::HashMap,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
+    rc::Rc,
     time::Instant,
 };
 
 use flui_types::geometry::{Offset, PixelDelta, Pixels, px};
-use parking_lot::Mutex;
 
 use crate::{
     events::{PointerEvent, PointerType},
@@ -201,7 +198,7 @@ impl RawPointerEvent {
 // ============================================================================
 
 /// Callback type for raw input events.
-pub type RawInputCallback = Arc<dyn Fn(RawPointerEvent) + Send + Sync>;
+pub type RawInputCallback = Rc<dyn Fn(RawPointerEvent)>;
 
 // ============================================================================
 // PointerTrackingState
@@ -228,9 +225,10 @@ struct PointerTrackingState {
 /// Converts standard `PointerEvent` to `RawPointerEvent` with additional
 /// computed information (deltas, timestamps) and invokes callbacks.
 ///
-/// # Thread Safety
+/// # Thread affinity
 ///
-/// `RawInputHandler` is thread-safe and can be shared across threads.
+/// `RawInputHandler` is owner-local under ADR-0027. It stores executable raw
+/// input callbacks as `Rc` and should be driven by the owning UI runtime.
 ///
 /// # Example
 ///
@@ -247,11 +245,11 @@ struct PointerTrackingState {
 #[derive(Clone)]
 pub struct RawInputHandler {
     /// Tracking state for each pointer.
-    tracking: Arc<Mutex<HashMap<PointerId, PointerTrackingState>>>,
+    tracking: Rc<RefCell<HashMap<PointerId, PointerTrackingState>>>,
     /// Callback for raw events.
-    callback: Arc<Mutex<Option<RawInputCallback>>>,
-    /// Whether raw mode is enabled (lock-free atomic flag).
-    enabled: Arc<AtomicBool>,
+    callback: Rc<RefCell<Option<RawInputCallback>>>,
+    /// Whether raw mode is enabled.
+    enabled: Rc<Cell<bool>>,
 }
 
 impl Default for RawInputHandler {
@@ -264,46 +262,45 @@ impl RawInputHandler {
     /// Create a new raw input handler.
     pub fn new() -> Self {
         Self {
-            tracking: Arc::new(Mutex::new(HashMap::new())),
-            callback: Arc::new(Mutex::new(None)),
-            enabled: Arc::new(AtomicBool::new(true)),
+            tracking: Rc::new(RefCell::new(HashMap::new())),
+            callback: Rc::new(RefCell::new(None)),
+            enabled: Rc::new(Cell::new(true)),
         }
     }
 
     /// Set the callback for raw input events.
-    pub fn set_callback(&self, callback: impl Fn(RawPointerEvent) + Send + Sync + 'static) {
-        *self.callback.lock() = Some(Arc::new(callback));
+    pub fn set_callback(&self, callback: impl Fn(RawPointerEvent) + 'static) {
+        *self.callback.borrow_mut() = Some(Rc::new(callback));
     }
 
     /// Clear the callback.
     pub fn clear_callback(&self) {
-        *self.callback.lock() = None;
+        *self.callback.borrow_mut() = None;
     }
 
     /// Enable or disable raw input handling.
     pub fn set_enabled(&self, enabled: bool) {
-        self.enabled.store(enabled, Ordering::Release);
+        self.enabled.set(enabled);
     }
 
     /// Check if raw input is enabled.
     #[inline]
     pub fn is_enabled(&self) -> bool {
-        self.enabled.load(Ordering::Acquire)
+        self.enabled.get()
     }
 
     /// Handle a pointer event, converting to raw event and invoking callback.
     ///
     /// Returns the generated `RawPointerEvent` if one was created.
     pub fn handle_event(&self, event: &PointerEvent) -> Option<RawPointerEvent> {
-        // Lock-free enabled check via AtomicBool
-        if !self.enabled.load(Ordering::Acquire) {
+        if !self.enabled.get() {
             return None;
         }
 
         let raw_event = self.convert_event(event);
 
         if let Some(ref raw) = raw_event
-            && let Some(callback) = self.callback.lock().clone()
+            && let Some(callback) = self.callback.borrow().clone()
         {
             callback(raw.clone());
         }
@@ -329,7 +326,7 @@ impl RawInputHandler {
                 let device_kind = data.pointer.pointer_type;
 
                 // Start tracking
-                self.tracking.lock().insert(
+                self.tracking.borrow_mut().insert(
                     pointer,
                     PointerTrackingState {
                         last_position: position,
@@ -352,7 +349,7 @@ impl RawInputHandler {
                 let device_kind = data.pointer.pointer_type;
 
                 let delta = {
-                    let mut tracking = self.tracking.lock();
+                    let mut tracking = self.tracking.borrow_mut();
                     if let Some(state) = tracking.get_mut(&pointer) {
                         let delta = position - state.last_position;
                         state.last_position = position;
@@ -386,7 +383,7 @@ impl RawInputHandler {
                 let device_kind = data.pointer.pointer_type;
 
                 let delta = {
-                    let mut tracking = self.tracking.lock();
+                    let mut tracking = self.tracking.borrow_mut();
                     if let Some(state) = tracking.remove(&pointer) {
                         position - state.last_position
                     } else {
@@ -408,7 +405,7 @@ impl RawInputHandler {
 
                 // Single lock: get last position and remove in one acquisition
                 let position = {
-                    let mut tracking = self.tracking.lock();
+                    let mut tracking = self.tracking.borrow_mut();
                     tracking
                         .remove(&pointer)
                         .map_or(Offset::ZERO, |s| s.last_position)
@@ -429,30 +426,37 @@ impl RawInputHandler {
 
     /// Get the number of pointers currently being tracked.
     pub fn tracked_pointer_count(&self) -> usize {
-        self.tracking.lock().len()
+        self.tracking.borrow().len()
     }
 
     /// Get the number of pointers currently down.
     pub fn active_pointer_count(&self) -> usize {
-        self.tracking.lock().values().filter(|s| s.is_down).count()
+        self.tracking
+            .borrow()
+            .values()
+            .filter(|s| s.is_down)
+            .count()
     }
 
     /// Check if a specific pointer is currently down.
     pub fn is_pointer_down(&self, pointer: PointerId) -> bool {
         self.tracking
-            .lock()
+            .borrow()
             .get(&pointer)
             .is_some_and(|s| s.is_down)
     }
 
     /// Get the last known position of a pointer.
     pub fn pointer_position(&self, pointer: PointerId) -> Option<Offset<Pixels>> {
-        self.tracking.lock().get(&pointer).map(|s| s.last_position)
+        self.tracking
+            .borrow()
+            .get(&pointer)
+            .map(|s| s.last_position)
     }
 
     /// Clear all tracking state.
     pub fn reset(&self) {
-        self.tracking.lock().clear();
+        self.tracking.borrow_mut().clear();
     }
 }
 
@@ -577,11 +581,11 @@ mod tests {
     #[test]
     fn test_raw_handler_callback() {
         let handler = RawInputHandler::new();
-        let called = Arc::new(Mutex::new(false));
+        let called = Rc::new(Cell::new(false));
         let called_clone = called.clone();
 
         handler.set_callback(move |_event| {
-            *called_clone.lock() = true;
+            called_clone.set(true);
         });
 
         let down = make_down_event(
@@ -590,7 +594,26 @@ mod tests {
         );
         handler.handle_event(&down);
 
-        assert!(*called.lock());
+        assert!(called.get());
+    }
+
+    #[test]
+    fn raw_input_callback_accepts_owner_local_rc_state() {
+        let handler = RawInputHandler::new();
+        let total = Rc::new(Cell::new(0));
+        let captured = Rc::clone(&total);
+
+        handler.set_callback(move |_event| {
+            captured.set(captured.get() + 1);
+        });
+
+        let down = make_down_event(
+            Offset::new(Pixels(100.0), Pixels(100.0)),
+            PointerType::Touch,
+        );
+        handler.handle_event(&down);
+
+        assert_eq!(total.get(), 1);
     }
 
     #[test]

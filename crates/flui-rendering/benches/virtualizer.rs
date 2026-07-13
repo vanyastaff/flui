@@ -410,7 +410,7 @@ fn build_settled_lazy(
         }) as Box<dyn RenderObject<BoxProtocol>>)
     });
 
-    let lazy = RenderSliverListLazy::new(n_items, BENCH_ITEM_HEIGHT, Arc::clone(&source), None);
+    let lazy = RenderSliverListLazy::new(n_items, BENCH_ITEM_HEIGHT, Arc::clone(&source));
 
     let mut owner = PipelineOwner::new();
     let root_id = owner

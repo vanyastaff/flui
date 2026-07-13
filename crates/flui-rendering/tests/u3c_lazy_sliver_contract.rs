@@ -143,7 +143,7 @@ fn build_and_pump(
         Some(Box::new(FixedBox::new(item_height)) as Box<dyn RenderObject<BoxProtocol>>)
     });
 
-    let lazy = RenderSliverListLazy::new(n_items, item_height, Arc::clone(&source), None);
+    let lazy = RenderSliverListLazy::new(n_items, item_height, Arc::clone(&source));
 
     let mut owner = PipelineOwner::new();
     let root_id =
@@ -430,7 +430,7 @@ fn u3c_9b_bounded_child_count_after_scroll() {
         Some(Box::new(FixedBox::new(item_height)) as Box<dyn RenderObject<BoxProtocol>>)
     });
 
-    let lazy = RenderSliverListLazy::new(n_items, item_height, Arc::clone(&source), None);
+    let lazy = RenderSliverListLazy::new(n_items, item_height, Arc::clone(&source));
 
     let initial_constraints = vertical(0.0, viewport_height);
     let mut owner = PipelineOwner::new();
@@ -548,7 +548,7 @@ fn u3c_9c_full_range_scroll_reaches_tail_with_bounded_children() {
         Some(Box::new(FixedBox::new(item_height)) as Box<dyn RenderObject<BoxProtocol>>)
     });
 
-    let lazy = RenderSliverListLazy::new(n_items, item_height, Arc::clone(&source), None);
+    let lazy = RenderSliverListLazy::new(n_items, item_height, Arc::clone(&source));
 
     let initial_constraints = vertical(0.0, viewport_height);
     let mut owner = PipelineOwner::new();
@@ -691,7 +691,7 @@ fn p1_dispose_targets_sliver_not_walk_root() {
         Some(Box::new(FixedBox::new(item_height)) as Box<dyn RenderObject<BoxProtocol>>)
     });
 
-    let lazy = RenderSliverListLazy::new(n_items, item_height, Arc::clone(&source), None);
+    let lazy = RenderSliverListLazy::new(n_items, item_height, Arc::clone(&source));
 
     let initial_constraints = vertical(0.0, viewport_height);
     let mut owner = PipelineOwner::new();
@@ -789,7 +789,7 @@ fn nochild_clamps_item_count_to_real_source_length() {
             .then(|| Box::new(FixedBox::new(item_height)) as Box<dyn RenderObject<BoxProtocol>>)
     });
 
-    let lazy = RenderSliverListLazy::new(declared, item_height, Arc::clone(&source), None);
+    let lazy = RenderSliverListLazy::new(declared, item_height, Arc::clone(&source));
 
     let mut owner = PipelineOwner::new();
     let root_id =
@@ -904,7 +904,7 @@ fn anchor_correction_fires_when_item_above_viewport_remeasured() {
         Some(Box::new(VarBox::new(h)) as Box<dyn RenderObject<BoxProtocol>>)
     });
 
-    let lazy = RenderSliverListLazy::new(20, estimate, Arc::clone(&source), None);
+    let lazy = RenderSliverListLazy::new(20, estimate, Arc::clone(&source));
 
     let constraints = vertical(scroll_offset, 300.0);
     let mut owner = PipelineOwner::new();
@@ -1059,7 +1059,7 @@ fn no_panic_on_source_shrink_mid_scroll() {
             .then(|| Box::new(FixedBox::new(item_height)) as Box<dyn RenderObject<BoxProtocol>>)
     });
 
-    let lazy = RenderSliverListLazy::new(initial_count, item_height, Arc::clone(&source), None);
+    let lazy = RenderSliverListLazy::new(initial_count, item_height, Arc::clone(&source));
 
     let (host, constraint_handle) =
         SharedConstraintSliverHost::new(vertical(phase_a_scroll, viewport_height));

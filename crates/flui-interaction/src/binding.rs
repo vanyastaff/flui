@@ -1,4 +1,4 @@
-//! Gesture Binding - Singleton coordinator for pointer event handling
+//! Gesture Binding - owner-runtime coordinator for pointer event handling
 //!
 //! GestureBinding is the main entry point for handling pointer events in the
 //! gesture system. It coordinates hit testing, event routing, arena management,
@@ -29,7 +29,7 @@
 //!         │
 //!         ▼
 //! ┌─────────────────────┐
-//! │   GestureBinding    │ (singleton)
+//! │   GestureBinding    │ (owned by UiRealm/HeadlessBinding)
 //! │  ┌───────────────┐  │
 //! │  │ Hit Test Cache│  │  (DashMap<PointerId, HitTestResult>)
 //! │  └───────────────┘  │
@@ -129,7 +129,7 @@ const fn px_f32(v: f64) -> Pixels {
     Pixels(v as f32)
 }
 
-/// Central coordinator for gesture event handling (singleton).
+/// Central coordinator for gesture event handling.
 ///
 /// GestureBinding manages the complete lifecycle of pointer events:
 /// - Performs hit testing on pointer down
@@ -139,14 +139,11 @@ const fn px_f32(v: f64) -> Pixels {
 /// - Routes events through the PointerRouter
 /// - Manages arena lifecycle (close on down, sweep on up)
 ///
-/// # Singleton Pattern
+/// # Ownership
 ///
-/// Access via `GestureBinding::instance()`:
-///
-/// ```rust,ignore
-/// let binding = GestureBinding::instance();
-/// binding.handle_pointer_event(&event, hit_test_fn);
-/// ```
+/// A UI runtime owns one `GestureBinding`. Prefer accessing the binding through
+/// the active `HeadlessBinding` / `UiRealm`; process-global gesture ownership is
+/// intentionally not part of ADR-0027.
 ///
 /// # Event Coalescing
 ///
@@ -155,10 +152,11 @@ const fn px_f32(v: f64) -> Pixels {
 /// per pointer. Call `flush_pending_moves()` once per frame to process
 /// the coalesced events.
 ///
-/// # Thread Safety
+/// # Thread affinity
 ///
-/// GestureBinding is fully thread-safe and can be shared across threads.
-/// All internal state is protected by appropriate synchronization primitives.
+/// `GestureBinding` is owner-local. Its pointer router and executable gesture
+/// callbacks are not `Send + Sync`; render hit-test entries and route tokens
+/// remain on the separate data plane.
 pub struct GestureBinding {
     /// Cached hit paths and resolved routes per pointer.
     /// Down resolves once; move/up events reuse the cached route.
@@ -334,7 +332,7 @@ impl GestureBinding {
     /// # Example
     ///
     /// ```rust,ignore
-    /// GestureBinding::instance().handle_pointer_event(&event, |position| {
+    /// binding.handle_pointer_event(&event, |position| {
     ///     render_tree.hit_test(position)
     /// });
     /// ```
@@ -562,7 +560,7 @@ impl GestureBinding {
     /// // In your frame loop:
     /// fn on_frame(&mut self) {
     ///     // Process coalesced move events
-    ///     GestureBinding::instance().flush_pending_moves();
+    ///     self.binding.flush_pending_moves();
     ///
     ///     // Then do layout, paint, etc.
     /// }

@@ -90,7 +90,8 @@ pub use flui_interaction::routing::HitTestBehavior;
 pub use flui_interaction::events::{CursorIcon, InputEvent, PointerEvent, PointerEventExt};
 pub use flui_interaction::routing::{
     DeviceId, EventPropagation, MouseEnterCallback, MouseExitCallback, MouseHoverCallback,
-    MouseRegionCallbacks, MouseRegionTarget, MouseTrackerAnnotation, PointerTarget,
+    MouseRegionCallbacks, MouseRegionTarget, MouseTrackerAnnotation, PathClipTarget, PointerTarget,
+    resolve_path_clip_target,
 };
 pub use result::HitTestResult;
 pub use transform::MatrixTransformPart;

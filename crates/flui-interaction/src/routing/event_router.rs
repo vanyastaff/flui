@@ -209,7 +209,7 @@ impl EventRouter {
         tracing::trace!(
             position = ?position,
             hit_count = result.len(),
-            scroll_handlers = result.entries_with_scroll_handlers().count(),
+            scroll_targets = result.entries_with_scroll_targets().count(),
             "Scroll event routing"
         );
 

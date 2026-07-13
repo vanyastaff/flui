@@ -373,6 +373,82 @@ and navigation ownership contract are complete.
   `cargo fmt -p flui-objects -p flui-widgets -p flui-view -- --check`,
   `git diff --check`, and `cargo clippy -p flui-objects -p flui-widgets
   --all-targets -- -D warnings` pass.
+- 2026-07-12 lazy-sliver disposal checkpoint (Task 7): the render-side
+  `RenderSliverListLazy::dispose_hook` executable callback was removed instead
+  of kept as a compatibility shim. Off-band render-owned children are still
+  disposed through `SliverLayoutContext::dispose_box_child`; any owner-plane
+  lifecycle work must happen above the render object boundary. The shared
+  `walk_virtualizer_band` `on_dispose` hook remains internal data bookkeeping,
+  explicitly not a UI callback seam. Evidence: `cargo check -p flui-objects
+  --tests`, `cargo test -p flui-objects sliver_list_lazy --lib`, `cargo test
+  -p flui-objects --test render_object_harness
+  harness_sliver_list_lazy_zero_items_reports_zero_geometry`, `cargo test -p
+  flui-objects --test harness_snapshot snapshot_lazy_sliver_visible_band`, and
+  stale-pattern `rg` for `dispose_hook` / `Arc<dyn Fn(usize) + Send + Sync>`
+  pass.
+- 2026-07-12 pointer-router owner-local checkpoint (Task 7):
+  `PointerRouteHandler` and `GlobalPointerHandler` moved from
+  `Arc<dyn Fn(&PointerEvent) + Send + Sync>` to owner-local
+  `Rc<dyn Fn(&PointerEvent)>`, and `PointerRouter` storage moved from
+  `RwLock` to `RefCell`. `PointerRouter::global()` was removed because
+  gesture routing is owned by the `GestureBinding` inside the active
+  `UiRealm`/`HeadlessBinding`, not by a process-global singleton. Snapshot
+  before dispatch, per-pointer-before-global ordering, and reentrant add/remove
+  semantics are preserved. Evidence: `cargo check -p flui-interaction --tests`,
+  `cargo test -p flui-interaction pointer_route_handler_accepts_owner_local_rc_state
+  --lib`, `cargo test -p flui-interaction pointer_router --lib`, and stale-doc/API
+  `rg` for `PointerRouter::global` / `GestureBinding::instance` /
+  thread-safe pointer-router callback aliases pass.
+- 2026-07-12 pointer-signal resolver owner-local checkpoint (Task 7):
+  `SignalCallback` moved from `Arc<dyn Fn(PointerEvent) + Send + Sync>` to
+  owner-local `Rc<dyn Fn(PointerEvent)>`, and `PointerSignalResolver` storage
+  moved from `Arc<Mutex<_>>` to `Rc<RefCell<_>>`. The resolver is no longer
+  asserted as data-plane `Send + Sync`; pointer signal callbacks execute on the
+  owner lane. Priority ordering, last-registered-wins tie breaking, unregister,
+  clear, and `resolve_and_accept` semantics are preserved. Evidence:
+  `cargo check -p flui-interaction --tests`, `cargo test -p flui-interaction
+  signal_resolver --lib`, `cargo test -p flui-interaction
+  signal_callback_accepts_owner_local_rc_state --lib`, and stale-pattern `rg`
+  for signal callback `Arc`/`Send + Sync` storage pass.
+- 2026-07-12 raw-input owner-local checkpoint (Task 7): `RawInputCallback`
+  moved from `Arc<dyn Fn(RawPointerEvent) + Send + Sync>` to owner-local
+  `Rc<dyn Fn(RawPointerEvent)>`, and `RawInputHandler` internal state moved
+  from `Arc<Mutex<_>>` / `Arc<AtomicBool>` to `Rc<RefCell<_>>` / `Rc<Cell<_>>`.
+  Raw input is now an owner-runtime direct-input facility instead of a
+  thread-safe callback container. Event conversion, delta tracking,
+  enable/disable behavior, reset, and pointer-position queries are preserved.
+  Evidence: `cargo check -p flui-interaction --tests`, `cargo test -p
+  flui-interaction raw_input --lib`, and stale-pattern `rg` for raw input
+  callback `Arc`/`Send + Sync` storage pass.
+- 2026-07-12 scroll-target owner-local checkpoint (Task 7):
+  `ScrollEventHandler` was removed from `HitTestEntry`. Hit-test entries now
+  store only the data-plane `ScrollTarget` identity, while the executable
+  scroll callback lives in the active `InteractionLane` as owner-local `Rc`
+  state. `dispatch_scroll` still applies each entry's local transform and
+  preserves leaf-first `EventPropagation::Stop` bubbling semantics; unavailable
+  targets are skipped with diagnostics rather than putting closures back into
+  render/hit-test data. Evidence: `cargo check -p flui-interaction --tests`,
+  `cargo test -p flui-interaction dispatch_scroll --lib`, `cargo test -p
+  flui-interaction interaction_lane --lib`, and stale-pattern `rg` for
+  `ScrollEventHandler` / `scroll_handler` / scroll callback `Arc + Send + Sync`
+  storage pass.
+- 2026-07-12 ClipPath owner-lane bridge checkpoint (Task 7):
+  `flui-widgets::ClipPath::new` no longer requires `Send + Sync` and stores
+  the user `Fn(Size) -> Path` as owner-local `Rc`. The executable clipper is
+  registered in `InteractionLane` as a `PathClipTarget`; `RenderClipPath`
+  stores only that data-plane token and resolves it through the active owner
+  lane during paint/hit-test. Detached render-object construction intentionally
+  does not install or invoke the user closure. Low-level render-only
+  `RenderClip::with_clipper` remains as a `Send + Sync` strategy API, and
+  `ClipRRect`'s private closure remains pure data derived from radius fields.
+  Evidence: `cargo check -p flui-interaction -p flui-rendering -p flui-view
+  -p flui-objects -p flui-widgets --tests`, `cargo test -p flui-interaction
+  path_clipper_accepts_owner_local_rc_state --lib`, `cargo test -p
+  flui-objects render_clip_path_resolves_owner_local_path_target --lib`,
+  `cargo test -p flui-objects clip --lib`, `cargo test -p flui-widgets
+  clip_path --lib`, `cargo test -p flui-widgets --test clip`, and stale-pattern
+  `rg` for public `ClipPath` `Send + Sync` / render-storage clipper bridge
+  pass.
 - Tasks 3–5 must check the corresponding `.flutter/` sources before claiming parity.
   A green gate without behavioral evidence does not satisfy their acceptance slices.
 - No task may introduce a generic UI-thread executor, queue the current pointer event,

@@ -152,6 +152,52 @@ impl<'a> RenderObjectContext<'a> {
     ) -> Result<(), RenderObjectContextError> {
         Ok(self.dispatch_handle()?.unregister_mouse_region(target)?)
     }
+
+    /// Register a path clipper in the active owner lane.
+    ///
+    /// The returned target is data-only and may be stored in a render object;
+    /// the executable `Fn(Size) -> Path` remains owner-local.
+    ///
+    /// # Errors
+    ///
+    /// Returns the lane's typed dispatch error when no owner lane is active,
+    /// the element was mounted detached, or the owner is gone.
+    pub fn register_path_clipper(
+        &self,
+        clipper: impl Fn(flui_types::Size) -> flui_types::painting::Path + 'static,
+    ) -> Result<flui_interaction::PathClipTarget, RenderObjectContextError> {
+        Ok(self.dispatch_handle()?.register_path_clipper(clipper)?)
+    }
+
+    /// Replace an existing path clipper without changing its data-plane
+    /// identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns the lane's typed dispatch error for wrong/detached owner state
+    /// or for a target that no longer belongs to the active owner lane.
+    pub fn replace_path_clipper(
+        &self,
+        target: flui_interaction::PathClipTarget,
+        clipper: impl Fn(flui_types::Size) -> flui_types::painting::Path + 'static,
+    ) -> Result<(), RenderObjectContextError> {
+        Ok(self
+            .dispatch_handle()?
+            .replace_path_clipper(target, clipper)?)
+    }
+
+    /// Remove a path clipper from future owner-lane resolution.
+    ///
+    /// # Errors
+    ///
+    /// Returns the lane's typed dispatch error for wrong/detached owner state
+    /// or for a target already removed from the active owner lane.
+    pub fn unregister_path_clipper(
+        &self,
+        target: flui_interaction::PathClipTarget,
+    ) -> Result<(), RenderObjectContextError> {
+        Ok(self.dispatch_handle()?.unregister_path_clipper(target)?)
+    }
 }
 
 // ============================================================================

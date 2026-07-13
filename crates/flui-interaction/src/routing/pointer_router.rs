@@ -1,6 +1,6 @@
 //! Centralized pointer event routing
 //!
-//! PointerRouter is a global registry for pointer event handlers.
+//! PointerRouter is an owner-local registry for pointer event handlers.
 //! Unlike hit testing (spatial routing), PointerRouter allows any handler
 //! to receive events for a specific pointer regardless of position.
 //!
@@ -15,13 +15,13 @@
 //!
 //! ```rust,ignore
 //! use flui_interaction::{PointerRouter, PointerId};
-//! use std::sync::Arc;
+//! use std::rc::Rc;
 //!
 //! let router = PointerRouter::new();
 //!
 //! // Register a handler for a specific pointer
-//! let handler = Arc::new(|event: &PointerEvent| {
-//!     println!("Pointer event: {:?}", event);
+//! let handler = Rc::new(|event: &PointerEvent| {
+//!     tracing::trace!(?event, "pointer event");
 //! });
 //! router.add_route(pointer_id, handler);
 //!
@@ -32,9 +32,8 @@
 //! router.remove_route(pointer_id, handler);
 //! ```
 
-use std::{collections::HashMap, sync::Arc};
+use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
-use parking_lot::RwLock;
 use smallvec::SmallVec;
 
 use crate::{events::PointerEvent, ids::PointerId};
@@ -43,10 +42,10 @@ use crate::{events::PointerEvent, ids::PointerId};
 ///
 /// Unlike hit test handlers, these don't return propagation control -
 /// all registered handlers always receive the event.
-pub type PointerRouteHandler = Arc<dyn Fn(&PointerEvent) + Send + Sync>;
+pub type PointerRouteHandler = Rc<dyn Fn(&PointerEvent)>;
 
 /// Global handler that receives all pointer events.
-pub type GlobalPointerHandler = Arc<dyn Fn(&PointerEvent) + Send + Sync>;
+pub type GlobalPointerHandler = Rc<dyn Fn(&PointerEvent)>;
 
 /// Centralized pointer event router.
 ///
@@ -54,11 +53,12 @@ pub type GlobalPointerHandler = Arc<dyn Fn(&PointerEvent) + Send + Sync>;
 /// regardless of spatial position. Events are delivered to all
 /// registered handlers for that pointer.
 ///
-/// # Thread Safety
+/// # Thread affinity
 ///
-/// PointerRouter uses `parking_lot::RwLock` for efficient concurrent access.
-/// Multiple readers can check routes simultaneously, while writes are
-/// exclusive.
+/// `PointerRouter` is owner-local under ADR-0027. It deliberately stores
+/// executable callbacks in `Rc`/`RefCell` rather than thread-safe shared
+/// storage; render hit-test data stays on the separate `Send + Sync` data
+/// plane.
 ///
 /// # Example
 ///
@@ -66,7 +66,7 @@ pub type GlobalPointerHandler = Arc<dyn Fn(&PointerEvent) + Send + Sync>;
 /// let router = PointerRouter::new();
 ///
 /// // Gesture recognizer registers for pointer events
-/// let recognizer_handler = Arc::new(|event| {
+/// let recognizer_handler = Rc::new(|event| {
 ///     // Handle drag updates even when pointer leaves original target
 /// });
 /// router.add_route(pointer_id, recognizer_handler);
@@ -76,16 +76,16 @@ pub type GlobalPointerHandler = Arc<dyn Fn(&PointerEvent) + Send + Sync>;
 /// ```
 pub struct PointerRouter {
     /// Routes per pointer ID
-    routes: RwLock<HashMap<PointerId, Vec<PointerRouteHandler>>>,
+    routes: RefCell<HashMap<PointerId, Vec<PointerRouteHandler>>>,
 
     /// Global handlers (receive all events)
-    global_handlers: RwLock<Vec<GlobalPointerHandler>>,
+    global_handlers: RefCell<Vec<GlobalPointerHandler>>,
 }
 
 impl std::fmt::Debug for PointerRouter {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let routes = self.routes.read();
-        let global_count = self.global_handlers.read().len();
+        let routes = self.routes.borrow();
+        let global_count = self.global_handlers.borrow().len();
         f.debug_struct("PointerRouter")
             .field("pointer_count", &routes.len())
             .field("global_handler_count", &global_count)
@@ -103,17 +103,9 @@ impl PointerRouter {
     /// Create a new pointer router.
     pub fn new() -> Self {
         Self {
-            routes: RwLock::new(HashMap::new()),
-            global_handlers: RwLock::new(Vec::new()),
+            routes: RefCell::new(HashMap::new()),
+            global_handlers: RefCell::new(Vec::new()),
         }
-    }
-
-    /// Get the global pointer router instance.
-    ///
-    /// This is a singleton - the same instance is returned every time.
-    pub fn global() -> &'static PointerRouter {
-        static INSTANCE: std::sync::OnceLock<PointerRouter> = std::sync::OnceLock::new();
-        INSTANCE.get_or_init(PointerRouter::new)
     }
 
     /// Add a route handler for a specific pointer.
@@ -124,13 +116,13 @@ impl PointerRouter {
     /// # Example
     ///
     /// ```rust,ignore
-    /// let handler = Arc::new(|event: &PointerEvent| {
-    ///     println!("Received: {:?}", event);
+    /// let handler = Rc::new(|event: &PointerEvent| {
+    ///     tracing::trace!(?event, "received pointer event");
     /// });
     /// router.add_route(pointer_id, handler);
     /// ```
     pub fn add_route(&self, pointer: PointerId, handler: PointerRouteHandler) {
-        let mut routes = self.routes.write();
+        let mut routes = self.routes.borrow_mut();
         routes.entry(pointer).or_default().push(handler);
 
         tracing::trace!(?pointer, "Added pointer route");
@@ -138,14 +130,14 @@ impl PointerRouter {
 
     /// Remove a route handler for a specific pointer.
     ///
-    /// Uses Arc pointer equality to find and remove the handler.
+    /// Uses `Rc` pointer equality to find and remove the handler.
     /// Returns `true` if the handler was found and removed.
     pub fn remove_route(&self, pointer: PointerId, handler: &PointerRouteHandler) -> bool {
-        let mut routes = self.routes.write();
+        let mut routes = self.routes.borrow_mut();
 
         if let Some(handlers) = routes.get_mut(&pointer) {
             let initial_len = handlers.len();
-            handlers.retain(|h| !Arc::ptr_eq(h, handler));
+            handlers.retain(|h| !Rc::ptr_eq(h, handler));
 
             let removed = handlers.len() < initial_len;
 
@@ -168,7 +160,7 @@ impl PointerRouter {
     ///
     /// Call this when a pointer is released or cancelled.
     pub fn remove_all_routes(&self, pointer: PointerId) {
-        let mut routes = self.routes.write();
+        let mut routes = self.routes.borrow_mut();
         if routes.remove(&pointer).is_some() {
             tracing::trace!(?pointer, "Removed all routes for pointer");
         }
@@ -179,7 +171,7 @@ impl PointerRouter {
     /// Global handlers are called before per-pointer handlers.
     /// Useful for logging, debugging, or modal event capture.
     pub fn add_global_handler(&self, handler: GlobalPointerHandler) {
-        self.global_handlers.write().push(handler);
+        self.global_handlers.borrow_mut().push(handler);
         tracing::trace!("Added global pointer handler");
     }
 
@@ -187,9 +179,9 @@ impl PointerRouter {
     ///
     /// Returns `true` if the handler was found and removed.
     pub fn remove_global_handler(&self, handler: &GlobalPointerHandler) -> bool {
-        let mut handlers = self.global_handlers.write();
+        let mut handlers = self.global_handlers.borrow_mut();
         let initial_len = handlers.len();
-        handlers.retain(|h| !Arc::ptr_eq(h, handler));
+        handlers.retain(|h| !Rc::ptr_eq(h, handler));
         let removed = handlers.len() < initial_len;
 
         if removed {
@@ -201,7 +193,7 @@ impl PointerRouter {
 
     /// Clear all global handlers.
     pub fn clear_global_handlers(&self) {
-        self.global_handlers.write().clear();
+        self.global_handlers.borrow_mut().clear();
     }
 
     /// Route a pointer event to all registered handlers.
@@ -218,8 +210,7 @@ impl PointerRouter {
     /// event — current dispatch sees a snapshot of registration state taken
     /// before the first handler fires. This matches Flutter
     /// [`pointer_router.dart::route`](https://github.com/flutter/flutter/blob/master/packages/flutter/lib/src/gestures/pointer_router.dart)
-    /// behavior and eliminates the prior 2+N+M `RwLock::read()` count per
-    /// event (linear Arc::ptr_eq re-checks).
+    /// behavior and eliminates the prior 2+N+M registration checks per event.
     ///
     /// Dispatch order is **per-pointer handlers first, then global handlers**
     /// matching Flutter `pointer_router.dart:124` ordering. Per-pointer
@@ -231,12 +222,12 @@ impl PointerRouter {
     pub fn route(&self, event: &PointerEvent) {
         let pointer = get_pointer_id(event);
 
-        // Snapshot per-pointer handlers (clone the `Arc`s) so the lock is
+        // Snapshot per-pointer handlers (clone the `Rc`s) so the borrow is
         // released before dispatch — a handler may re-enter the router. A
         // `SmallVec` keeps the common ≤4-handler case off the heap.
         let pointer_handlers: SmallVec<[PointerRouteHandler; 4]> = self
             .routes
-            .read()
+            .borrow()
             .get(&pointer)
             .map(|h| h.iter().cloned().collect())
             .unwrap_or_default();
@@ -248,7 +239,7 @@ impl PointerRouter {
 
         // Snapshot global handlers likewise.
         let global_handlers: SmallVec<[GlobalPointerHandler; 4]> =
-            self.global_handlers.read().iter().cloned().collect();
+            self.global_handlers.borrow().iter().cloned().collect();
 
         // Global handlers after per-pointer.
         for handler in &global_handlers {
@@ -259,7 +250,7 @@ impl PointerRouter {
     /// Check if any handlers are registered for a pointer.
     pub fn has_routes(&self, pointer: PointerId) -> bool {
         self.routes
-            .read()
+            .borrow()
             .get(&pointer)
             .is_some_and(|h| !h.is_empty())
     }
@@ -267,20 +258,20 @@ impl PointerRouter {
     /// Get the number of handlers registered for a pointer.
     pub fn route_count(&self, pointer: PointerId) -> usize {
         self.routes
-            .read()
+            .borrow()
             .get(&pointer)
             .map_or(0, std::vec::Vec::len)
     }
 
     /// Get the total number of pointers with registered handlers.
     pub fn pointer_count(&self) -> usize {
-        self.routes.read().len()
+        self.routes.borrow().len()
     }
 
     /// Clear all routes (for testing or cleanup).
     pub fn clear(&self) {
-        self.routes.write().clear();
-        self.global_handlers.write().clear();
+        self.routes.borrow_mut().clear();
+        self.global_handlers.borrow_mut().clear();
     }
 }
 
@@ -292,10 +283,10 @@ fn get_pointer_id(event: &PointerEvent) -> PointerId {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::{cell::Cell, rc::Rc};
 
     use flui_types::geometry::{Offset, Pixels};
-    use parking_lot::Mutex;
+    use std::cell::RefCell;
 
     use super::*;
     use crate::events::{PointerType, make_move_event};
@@ -318,7 +309,7 @@ mod tests {
         let router = PointerRouter::new();
         let pointer = PointerId::new(2).expect("nonzero pointer id");
 
-        let handler = Arc::new(|_: &PointerEvent| {});
+        let handler = Rc::new(|_: &PointerEvent| {});
         router.add_route(pointer, handler);
 
         assert!(router.has_routes(pointer));
@@ -330,7 +321,7 @@ mod tests {
         let router = PointerRouter::new();
         let pointer = PointerId::new(2).expect("nonzero pointer id");
 
-        let handler: PointerRouteHandler = Arc::new(|_: &PointerEvent| {});
+        let handler: PointerRouteHandler = Rc::new(|_: &PointerEvent| {});
         router.add_route(pointer, handler.clone());
         assert!(router.has_routes(pointer));
 
@@ -344,8 +335,8 @@ mod tests {
         let router = PointerRouter::new();
         let pointer = PointerId::new(2).expect("nonzero pointer id");
 
-        let handler1: PointerRouteHandler = Arc::new(|_: &PointerEvent| {});
-        let handler2: PointerRouteHandler = Arc::new(|_: &PointerEvent| {});
+        let handler1: PointerRouteHandler = Rc::new(|_: &PointerEvent| {});
+        let handler2: PointerRouteHandler = Rc::new(|_: &PointerEvent| {});
 
         router.add_route(pointer, handler1.clone());
         router.add_route(pointer, handler2.clone());
@@ -361,11 +352,11 @@ mod tests {
         let router = PointerRouter::new();
         let pointer = PointerId::PRIMARY; // PRIMARY pointer
 
-        let call_count = Arc::new(AtomicUsize::new(0));
+        let call_count = Rc::new(Cell::new(0));
         let count_clone = call_count.clone();
 
-        let handler = Arc::new(move |_: &PointerEvent| {
-            count_clone.fetch_add(1, Ordering::Relaxed);
+        let handler = Rc::new(move |_: &PointerEvent| {
+            count_clone.set(count_clone.get() + 1);
         });
 
         router.add_route(pointer, handler);
@@ -373,7 +364,7 @@ mod tests {
         let event = make_event(0, Offset::new(Pixels(50.0), Pixels(50.0)));
         router.route(&event);
 
-        assert_eq!(call_count.load(Ordering::Relaxed), 1);
+        assert_eq!(call_count.get(), 1);
     }
 
     #[test]
@@ -381,16 +372,16 @@ mod tests {
         let router = PointerRouter::new();
         let pointer = PointerId::PRIMARY; // PRIMARY pointer
 
-        let call_count = Arc::new(AtomicUsize::new(0));
+        let call_count = Rc::new(Cell::new(0));
 
         let count1 = call_count.clone();
-        let handler1 = Arc::new(move |_: &PointerEvent| {
-            count1.fetch_add(1, Ordering::Relaxed);
+        let handler1 = Rc::new(move |_: &PointerEvent| {
+            count1.set(count1.get() + 1);
         });
 
         let count2 = call_count.clone();
-        let handler2 = Arc::new(move |_: &PointerEvent| {
-            count2.fetch_add(1, Ordering::Relaxed);
+        let handler2 = Rc::new(move |_: &PointerEvent| {
+            count2.set(count2.get() + 1);
         });
 
         router.add_route(pointer, handler1);
@@ -400,18 +391,18 @@ mod tests {
         router.route(&event);
 
         // Both handlers should be called
-        assert_eq!(call_count.load(Ordering::Relaxed), 2);
+        assert_eq!(call_count.get(), 2);
     }
 
     #[test]
     fn test_global_handler() {
         let router = PointerRouter::new();
 
-        let call_count = Arc::new(AtomicUsize::new(0));
+        let call_count = Rc::new(Cell::new(0));
         let count_clone = call_count.clone();
 
-        let handler = Arc::new(move |_: &PointerEvent| {
-            count_clone.fetch_add(1, Ordering::Relaxed);
+        let handler = Rc::new(move |_: &PointerEvent| {
+            count_clone.set(count_clone.get() + 1);
         });
 
         router.add_global_handler(handler);
@@ -420,7 +411,7 @@ mod tests {
         let event = make_event(42, Offset::new(Pixels(50.0), Pixels(50.0)));
         router.route(&event);
 
-        assert_eq!(call_count.load(Ordering::Relaxed), 1);
+        assert_eq!(call_count.get(), 1);
     }
 
     #[test]
@@ -431,16 +422,16 @@ mod tests {
         let router = PointerRouter::new();
         let pointer = PointerId::PRIMARY; // PRIMARY pointer
 
-        let order = Arc::new(Mutex::new(Vec::new()));
+        let order = Rc::new(RefCell::new(Vec::new()));
 
         let order1 = order.clone();
-        let global_handler = Arc::new(move |_: &PointerEvent| {
-            order1.lock().push("global");
+        let global_handler = Rc::new(move |_: &PointerEvent| {
+            order1.borrow_mut().push("global");
         });
 
         let order2 = order.clone();
-        let pointer_handler = Arc::new(move |_: &PointerEvent| {
-            order2.lock().push("pointer");
+        let pointer_handler = Rc::new(move |_: &PointerEvent| {
+            order2.borrow_mut().push("pointer");
         });
 
         router.add_global_handler(global_handler);
@@ -449,7 +440,7 @@ mod tests {
         let event = make_event(0, Offset::new(Pixels(50.0), Pixels(50.0)));
         router.route(&event);
 
-        let calls = order.lock();
+        let calls = order.borrow();
         assert_eq!(*calls, vec!["pointer", "global"]);
     }
 
@@ -458,8 +449,8 @@ mod tests {
         let router = PointerRouter::new();
         let pointer = PointerId::new(2).expect("nonzero pointer id");
 
-        let handler1 = Arc::new(|_: &PointerEvent| {});
-        let handler2 = Arc::new(|_: &PointerEvent| {});
+        let handler1 = Rc::new(|_: &PointerEvent| {});
+        let handler2 = Rc::new(|_: &PointerEvent| {});
 
         router.add_route(pointer, handler1);
         router.add_route(pointer, handler2);
@@ -474,13 +465,13 @@ mod tests {
     fn test_clear() {
         let router = PointerRouter::new();
 
-        let handler = Arc::new(|_: &PointerEvent| {});
+        let handler = Rc::new(|_: &PointerEvent| {});
         router.add_route(
             PointerId::new(2).expect("nonzero pointer id"),
             handler.clone(),
         );
         router.add_route(PointerId::new(3).expect("nonzero pointer id"), handler);
-        router.add_global_handler(Arc::new(|_: &PointerEvent| {}));
+        router.add_global_handler(Rc::new(|_: &PointerEvent| {}));
 
         router.clear();
 
@@ -493,11 +484,11 @@ mod tests {
         let pointer1 = PointerId::new(2).expect("nonzero pointer id");
         let pointer2 = PointerId::new(3).expect("nonzero pointer id");
 
-        let called = Arc::new(AtomicUsize::new(0));
+        let called = Rc::new(Cell::new(0));
         let called_clone = called.clone();
 
-        let handler = Arc::new(move |_: &PointerEvent| {
-            called_clone.fetch_add(1, Ordering::Relaxed);
+        let handler = Rc::new(move |_: &PointerEvent| {
+            called_clone.set(called_clone.get() + 1);
         });
 
         // Register for pointer 1
@@ -508,32 +499,25 @@ mod tests {
         router.route(&event);
 
         // Handler should NOT be called (registered for pointer1, event is for pointer0)
-        assert_eq!(called.load(Ordering::Relaxed), 0);
+        assert_eq!(called.get(), 0);
 
         let _ = pointer2; // silence unused warning
     }
 
     #[test]
-    fn test_global_singleton() {
-        let router1 = PointerRouter::global();
-        let router2 = PointerRouter::global();
-        assert!(std::ptr::eq(router1, router2));
-    }
-
-    #[test]
     fn test_reentrancy_remove_self() {
         // Test that a handler can remove itself during dispatch
-        let router = Arc::new(PointerRouter::new());
+        let router = Rc::new(PointerRouter::new());
         let pointer = PointerId::PRIMARY;
 
-        let call_count = Arc::new(AtomicUsize::new(0));
+        let call_count = Rc::new(Cell::new(0));
         let count_clone = call_count.clone();
 
         let router_clone = router.clone();
-        let handler: PointerRouteHandler = Arc::new(move |_: &PointerEvent| {
-            count_clone.fetch_add(1, Ordering::Relaxed);
+        let handler: PointerRouteHandler = Rc::new(move |_: &PointerEvent| {
+            count_clone.set(count_clone.get() + 1);
             // Remove self during dispatch - this should work without deadlock
-            // Note: We can't easily remove self here because we don't have the handler Arc
+            // Note: We can't easily remove self here because we don't have the handler Rc
             // But we can remove all routes which exercises the same code path
             router_clone.remove_all_routes(PointerId::PRIMARY);
         });
@@ -543,25 +527,25 @@ mod tests {
         let event = make_event(0, Offset::new(Pixels(50.0), Pixels(50.0)));
         router.route(&event); // Should not deadlock
 
-        assert_eq!(call_count.load(Ordering::Relaxed), 1);
+        assert_eq!(call_count.get(), 1);
         assert!(!router.has_routes(pointer));
     }
 
     #[test]
     fn test_reentrancy_add_handler() {
         // Test that a handler can add new handlers during dispatch
-        let router = Arc::new(PointerRouter::new());
+        let router = Rc::new(PointerRouter::new());
         let pointer = PointerId::PRIMARY;
 
-        let second_called = Arc::new(AtomicUsize::new(0));
+        let second_called = Rc::new(Cell::new(0));
         let second_called_clone = second_called.clone();
 
         let router_clone = router.clone();
-        let handler1: PointerRouteHandler = Arc::new(move |_: &PointerEvent| {
+        let handler1: PointerRouteHandler = Rc::new(move |_: &PointerEvent| {
             // Add a new handler during dispatch
             let called = second_called_clone.clone();
-            let new_handler: PointerRouteHandler = Arc::new(move |_: &PointerEvent| {
-                called.fetch_add(1, Ordering::Relaxed);
+            let new_handler: PointerRouteHandler = Rc::new(move |_: &PointerEvent| {
+                called.set(called.get() + 1);
             });
             router_clone.add_route(PointerId::PRIMARY, new_handler);
         });
@@ -573,29 +557,29 @@ mod tests {
 
         // The new handler should NOT be called during this dispatch
         // (it takes effect on the next event)
-        assert_eq!(second_called.load(Ordering::Relaxed), 0);
+        assert_eq!(second_called.get(), 0);
 
         // But should be called on the next event
         router.route(&event);
-        assert_eq!(second_called.load(Ordering::Relaxed), 1);
+        assert_eq!(second_called.get(), 1);
     }
 
     #[test]
     fn test_reentrancy_remove_other_handler() {
         // Test that a handler can remove another handler during dispatch
-        let router = Arc::new(PointerRouter::new());
+        let router = Rc::new(PointerRouter::new());
         let pointer = PointerId::PRIMARY;
 
-        let handler2_called = Arc::new(AtomicUsize::new(0));
+        let handler2_called = Rc::new(Cell::new(0));
         let handler2_called_clone = handler2_called.clone();
 
-        let handler2: PointerRouteHandler = Arc::new(move |_: &PointerEvent| {
-            handler2_called_clone.fetch_add(1, Ordering::Relaxed);
+        let handler2: PointerRouteHandler = Rc::new(move |_: &PointerEvent| {
+            handler2_called_clone.set(handler2_called_clone.get() + 1);
         });
         let handler2_for_remove = handler2.clone();
 
         let router_clone = router.clone();
-        let handler1: PointerRouteHandler = Arc::new(move |_: &PointerEvent| {
+        let handler1: PointerRouteHandler = Rc::new(move |_: &PointerEvent| {
             // Remove handler2 during dispatch
             router_clone.remove_route(PointerId::PRIMARY, &handler2_for_remove);
         });
@@ -612,11 +596,29 @@ mod tests {
         // any handler fired. Removal takes effect on the next event.
         // Previously FLUI checked still-registered per-handler at 2+N+M
         // lock count; that contract removed for perf parity with Flutter.
-        assert_eq!(handler2_called.load(Ordering::Relaxed), 1);
+        assert_eq!(handler2_called.get(), 1);
 
         // Second dispatch sees post-removal snapshot — handler2 not called.
         let event2 = make_event(0, Offset::new(Pixels(50.0), Pixels(50.0)));
         router.route(&event2);
-        assert_eq!(handler2_called.load(Ordering::Relaxed), 1);
+        assert_eq!(handler2_called.get(), 1);
+    }
+
+    #[test]
+    fn pointer_route_handler_accepts_owner_local_rc_state() {
+        let router = PointerRouter::new();
+        let pointer = PointerId::PRIMARY;
+        let total = Rc::new(Cell::new(0));
+        let captured = Rc::clone(&total);
+
+        router.add_route(
+            pointer,
+            Rc::new(move |_: &PointerEvent| captured.set(captured.get() + 1)),
+        );
+
+        let event = make_event(0, Offset::new(Pixels(50.0), Pixels(50.0)));
+        router.route(&event);
+
+        assert_eq!(total.get(), 1);
     }
 }

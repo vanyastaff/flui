@@ -4611,7 +4611,7 @@ fn harness_sliver_list_anchor_correction_forward_emits_backward_suppresses() {
 fn harness_sliver_list_lazy_zero_items_reports_zero_geometry() {
     // Empty source — build closure always returns None, so perform_layout
     // produces zero scroll_extent and self-describes via diagnostics.
-    let list = RenderSliverListLazy::new(0, 48.0, std::sync::Arc::new(|_| None), None);
+    let list = RenderSliverListLazy::new(0, 48.0, std::sync::Arc::new(|_| None));
     let run = RenderTester::mount(viewport(sliver_node(list).label("lazy")))
         .with_size(Size::new(px(300.0), px(400.0)))
         .run_layout();
