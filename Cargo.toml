@@ -320,9 +320,13 @@ flui-app = { path = "crates/flui-app", version = "0.2.0" }
 # === Core Layer ===
 flui-layer = { path = "crates/flui-layer", version = "0.2.0" }
 flui-painting = { path = "crates/flui-painting", version = "0.2.0" }
-# === Rendering Layer (colored_box_app / animated_box_app examples) ===
-flui-rendering = { path = "crates/flui-rendering", version = "0.2.0" }
+# === Rendering Layer (colored_box_app / animated_box_app examples; "testing"
+# for the vertical_slice_demo acceptance test's render-tree inspection) ===
+flui-rendering = { path = "crates/flui-rendering", version = "0.2.0", features = ["testing"] }
 flui-objects = { path = "crates/flui-objects", version = "0.2.0" }
+# === Interaction Layer ("testing" for the vertical_slice_demo acceptance
+# test's synthetic pointer events) ===
+flui-interaction = { path = "crates/flui-interaction", version = "0.2.0", features = ["testing"] }
 
 # === Reactive Layer (animated_box_app example) ===
 flui-scheduler = { path = "crates/flui-scheduler", version = "0.2.0" }
@@ -332,6 +336,10 @@ flui-platform = { path = "crates/flui-platform", version = "0.2.0" }
 
 # === Hot-Reload (for examples) ===
 flui-hot-reload = { path = "crates/flui-hot-reload", version = "0.2.0" }
+
+# === Headless Binding (for the vertical_slice_demo acceptance test) ===
+flui-binding = { path = "crates/flui-binding", version = "0.2.0" }
+parking_lot.workspace = true
 
 # === Engine Layer (for GPU examples) ===
 flui-engine = { path = "crates/flui-engine", version = "0.2.0", features = ["dx12"] }

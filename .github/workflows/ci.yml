@@ -49,7 +49,7 @@ jobs:
         with:
           # Pin versions — unpinned tools surface unrelated breakage on
           # release day. Bump deliberately. `ripgrep` is required by
-          # scripts/port-check.sh (the 21 refusal triggers + FR-033 all
+          # scripts/port-check.sh (the 22 refusal triggers + FR-033 all
           # run through `rg`).
           tool: typos-cli@1.28,taplo-cli@0.10,ripgrep@14
 
@@ -65,7 +65,7 @@ jobs:
       - name: workspace inventory drift check
         run: bash scripts/check-workspace-inventory.sh
 
-      - name: scripts/port-check.sh (21 refusal triggers + FR-033)
+      - name: scripts/port-check.sh (22 refusal triggers + FR-033)
         run: bash scripts/port-check.sh -v
 
   # ─────────────────────────────────────────────────────────────────────────

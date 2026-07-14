@@ -23,6 +23,14 @@ use flui_widgets::{
     SizedBox, SliverFixedExtentList, VsyncScope,
 };
 
+/// Flutter parity (tag `3.44.0`):
+/// `packages/flutter/test/widgets/single_child_scroll_view_test.dart:53`
+/// `'SingleChildScrollView overflow and clipRect test'` — the geometry half of
+/// that test (a child taller than the viewport lays out unbounded on the
+/// scroll axis and overflows) is what this asserts; the paint-clip-behavior
+/// half is out of scope because the headless harness asserts committed
+/// geometry, not paint output — `parity/container_test.rs` documents the same
+/// limitation for its paint assertions.
 #[test]
 fn single_child_scroll_view_lays_child_out_unbounded_on_scroll_axis() {
     // Viewport bounded to 200×300; a 200×600 child is taller than the viewport.
@@ -44,6 +52,11 @@ fn single_child_scroll_view_lays_child_out_unbounded_on_scroll_axis() {
     assert_eq!(laid.size(child), size(200.0, 600.0));
 }
 
+/// Flutter parity (tag `3.44.0`):
+/// `packages/flutter/test/widgets/single_child_scroll_view_test.dart:53`
+/// `'SingleChildScrollView overflow and clipRect test'`, 4th/5th sub-cases
+/// (horizontal width-overflow) — geometry half only, see the citation on
+/// `single_child_scroll_view_lays_child_out_unbounded_on_scroll_axis` above.
 #[test]
 fn single_child_scroll_view_horizontal_lays_child_unbounded_on_width() {
     use flui_widgets::prelude::Axis;
