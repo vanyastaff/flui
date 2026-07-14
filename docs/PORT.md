@@ -22,7 +22,7 @@ The translation manual draws inspiration from Bun's [oven-sh/bun#PORTING.md](htt
 
 **Governance layer** (write-time refusal rules, lock-decision matrix, per-crate documentation shape):
 
-- [§Refusal triggers](#refusal-triggers) — 20 anti-patterns the maintainer refuses to introduce, with grep regexes
+- [§Refusal triggers](#refusal-triggers) — 22 anti-patterns the maintainer refuses to introduce, with grep regexes
 - [§Lock decisions](#lock-decisions) — allowed vs forbidden `RwLock`/`Mutex` placements
 - [§Mapping rules](#mapping-rules) — Flutter behaviour primacy + binding-deletion carve-out + compile-time-over-runtime + sync-hot-path
 - [§Per-crate `ARCHITECTURE.md` template](#per-crate-architecturemd-template) — required and optional sections per crate
@@ -340,6 +340,20 @@ The two sentinel patterns are `"is not supported by the"` and `"rendering as Src
 - **Non-panic + non-zero-output witness:** GPU test GI7 (`crates/flui-engine/src/wgpu/gradient_image_blend_tests.rs`) verifies all 15 modes × gradient + image produce valid RGBA output. GI7 does not verify routing (pixel equality alone cannot distinguish an `AdvancedShape` from a lucky SrcOver result); the routing witnesses above provide that guarantee. GI8 covers the atlas producer.
 
 **Back-references:** advanced-blend PR-5 (gradient + image + atlas diversion); `crates/flui-engine/src/wgpu/batches/gradients.rs` §dispatch_shader_rect advanced diversion; `crates/flui-engine/src/wgpu/batches/images.rs` §draw_image/draw_image_repeat/draw_image_nine_slice/draw_atlas advanced diversion; `crates/flui-engine/src/wgpu/gradient_image_blend_tests.rs` I1-I5 (routing), GI7 (non-panic + non-zero), GI8 (atlas GPU output).
+
+### 21. `lyon` code used outside `wgpu/tessellator.rs` (RasterBackend seam)
+
+**The rendering-backend swap seam (`CommandRenderer` + the `RasterBackend` driver trait) only stays non-breaking if `lyon` tessellation is an internal detail of the wgpu backend, not a dependency the rest of the engine reaches into.** All `lyon` code use (`lyon::…`, `use lyon …`) must live in `crates/flui-engine/src/wgpu/tessellator.rs`. A future Vello/software backend does not tessellate to triangles at all; any `lyon::` reference outside the tessellator couples the codebase to one rasterization strategy and breaks the seam.
+
+Doc-comment mentions ("…tessellated by lyon…") are fine and filtered out by the shared doc-comment filter in `check`; only real code constructs (`lyon::`, `use lyon`) match.
+
+**Regex:** `lyon::|use\s+lyon\b`, `--type rust --glob '!**/tessellator.rs'`, scoped to `crates/flui-engine/src`.
+
+**Scope:** `crates/flui-engine/src`, excluding `crates/flui-engine/src/wgpu/tessellator.rs`.
+
+**Allowlist:** none — if a second site ever legitimately needs `lyon`, widen this trigger's glob in the same PR with a documented reason.
+
+**Back-references:** [`docs/designs/2026-06-30-rasterbackend-seam.md`](designs/2026-06-30-rasterbackend-seam.md); `crates/flui-engine/src/wgpu/tessellator.rs`.
 
 ### 22. A **lifecycle-only frame capability** acquired inside a `build` / layout / paint body
 
