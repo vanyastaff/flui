@@ -1,7 +1,8 @@
 //! Winit-based platform implementation
 //!
-//! Cross-platform implementation using winit for window management.
-//! This implementation covers Windows, macOS, and Linux desktop platforms.
+//! Cross-platform implementation using winit for window management — the
+//! primary desktop backend on Linux until a native Wayland/X11 backend lands
+//! (roadmap Cross.P); also covers Windows and macOS as a fallback.
 //!
 //! # Architecture
 //!
@@ -13,10 +14,26 @@
 //!
 //! The architecture uses winit 0.30's `ApplicationHandler` trait to manage
 //! the event loop without consuming ownership.
+//!
+//! # Same-thread window creation during `on_ready`
+//!
+//! winit 0.30 requires a live `ActiveEventLoop` to create a window, and that
+//! is only reachable from inside an `ApplicationHandler` callback running on
+//! the event-loop thread. `Platform::run`'s `on_ready` callback is invoked
+//! synchronously from [`WinitApp::resumed`] — one such callback — so a call
+//! to `open_window` made from inside `on_ready` cannot go through the
+//! cross-thread [`WindowRequestQueue`] path: that queue's only consumer,
+//! `about_to_wait`, is a *later* dispatch on the same thread and cannot run
+//! until `resumed` (and therefore `on_ready`) returns, which would deadlock
+//! forever. [`ACTIVE_EVENT_LOOP`] publishes the live `ActiveEventLoop` for
+//! the exact duration of the `on_ready` call so `open_window` can create the
+//! window directly instead.
 
 use std::{
+    cell::Cell,
     collections::HashMap,
     path::{Path, PathBuf},
+    ptr::NonNull,
     sync::Arc,
 };
 
@@ -40,7 +57,8 @@ use crate::{
     shared::PlatformHandlers,
     traits::{
         Clipboard, DesktopCapabilities, Platform, PlatformCapabilities, PlatformDisplay,
-        PlatformExecutor, PlatformWindow, WindowEvent, WindowId, WindowOptions, WinitWindow,
+        PlatformExecutor, PlatformReadyCallback, PlatformWindow, WindowEvent, WindowId,
+        WindowOptions, WinitWindow,
     },
 };
 
@@ -53,19 +71,35 @@ use crate::{
 ///
 /// ```rust,ignore
 /// let platform = WinitPlatform::new();
-/// platform.run(Box::new(|| {
-///     println!("Platform ready!");
+/// platform.run(Box::new(|platform| {
+///     // `open_window` is safe to call here — see the module-level doc on
+///     // same-thread window creation.
+///     let _window = platform.open_window(Default::default());
 /// }));
 /// ```
 pub struct WinitPlatform {
+    /// Platform capabilities descriptor. `DesktopCapabilities` is a
+    /// zero-sized, immutable-after-construction marker, so it lives directly
+    /// on `WinitPlatform` (not inside the `Mutex`-guarded state) — that lets
+    /// `capabilities()` return `&dyn PlatformCapabilities` borrowed straight
+    /// from `&self` instead of from a `MutexGuard` temporary.
+    capabilities: DesktopCapabilities,
+
     state: Arc<Mutex<WinitPlatformState>>,
+}
+
+impl std::fmt::Debug for WinitPlatform {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // `WinitPlatformState` holds boxed callbacks and channel endpoints
+        // that don't implement `Debug`; print the immutable descriptor only.
+        f.debug_struct("WinitPlatform")
+            .field("capabilities", &self.capabilities)
+            .finish_non_exhaustive()
+    }
 }
 
 /// Internal state for WinitPlatform
 struct WinitPlatformState {
-    /// Platform capabilities
-    capabilities: DesktopCapabilities,
-
     /// Callback handlers
     handlers: PlatformHandlers,
 
@@ -112,13 +146,15 @@ struct WinitPlatformState {
 impl WinitPlatformState {
     fn new() -> Self {
         // Initialize clipboard (may fail in headless environments)
-        let clipboard = ArboardClipboard::new().map(Arc::new).unwrap_or_else(|err| {
-            tracing::warn!(?err, "Failed to initialize clipboard, using fallback");
-            Arc::new(ArboardClipboard::default())
-        });
+        let clipboard = ArboardClipboard::new().map_or_else(
+            |err| {
+                tracing::warn!(?err, "Failed to initialize clipboard, using fallback");
+                Arc::new(ArboardClipboard::default())
+            },
+            Arc::new,
+        );
 
         Self {
-            capabilities: DesktopCapabilities,
             handlers: PlatformHandlers::new(),
             background_executor: Arc::new(SimpleExecutor::new("background")),
             foreground_executor: Arc::new(SimpleExecutor::new("foreground")),
@@ -170,8 +206,7 @@ impl WinitPlatformState {
             .map(|(idx, monitor)| {
                 let is_primary = primary_monitor
                     .as_ref()
-                    .map(|pm| pm.name() == monitor.name())
-                    .unwrap_or(idx == 0);
+                    .map_or(idx == 0, |pm| pm.name() == monitor.name());
 
                 Arc::new(WinitDisplay::new(monitor, idx as u64, is_primary))
             })
@@ -191,6 +226,7 @@ impl WinitPlatform {
     /// Create a new winit platform
     pub fn new() -> Self {
         Self {
+            capabilities: DesktopCapabilities,
             state: Arc::new(Mutex::new(WinitPlatformState::new())),
         }
     }
@@ -208,7 +244,7 @@ impl WinitPlatform {
     ///
     /// This is the main entry point for the platform. It creates the event
     /// loop, initializes the platform, and runs until quit is requested.
-    pub fn run_event_loop(self: Arc<Self>, on_ready: Box<dyn FnOnce()>) -> Result<()> {
+    pub fn run_event_loop(self: Arc<Self>, on_ready: PlatformReadyCallback) -> Result<()> {
         tracing::info!("Creating winit event loop");
 
         let event_loop = EventLoop::builder().build()?;
@@ -222,6 +258,99 @@ impl WinitPlatform {
 
         Ok(())
     }
+
+    /// Create a winit window immediately using a live `ActiveEventLoop` and
+    /// register it in platform state. Shared by the cross-thread queued path
+    /// (`WinitApp::process_window_requests`) and `open_window`'s same-thread
+    /// fast path (see the module-level doc on same-thread window creation).
+    fn create_window_now(
+        &self,
+        event_loop: &ActiveEventLoop,
+        options: WindowOptions,
+    ) -> Result<WindowId> {
+        let mut attributes = WindowAttributes::default()
+            .with_title(options.title)
+            .with_inner_size(winit::dpi::LogicalSize::new(
+                options.size.width.0,
+                options.size.height.0,
+            ))
+            .with_resizable(options.resizable)
+            .with_decorations(options.decorated)
+            .with_visible(options.visible);
+
+        if let Some(min) = options.min_size {
+            attributes = attributes
+                .with_min_inner_size(winit::dpi::LogicalSize::new(min.width.0, min.height.0));
+        }
+        if let Some(max) = options.max_size {
+            attributes = attributes
+                .with_max_inner_size(winit::dpi::LogicalSize::new(max.width.0, max.height.0));
+        }
+
+        let raw_window = Arc::new(event_loop.create_window(attributes)?);
+        let winit_id = raw_window.id();
+        let winit_window = Arc::new(WinitWindow::new(raw_window));
+
+        let platform_id = self.with_state(|state| {
+            let id = state.allocate_window_id();
+            state.register_window(winit_id, id, winit_window.clone());
+            id
+        });
+
+        tracing::info!(?platform_id, "Created window");
+
+        Ok(platform_id)
+    }
+
+    /// Look up a previously-created window by [`WindowId`] and wrap it as a
+    /// `PlatformWindow` handle for the caller. Named `window_by_id` (not
+    /// `window_handle`) to avoid colliding with
+    /// `PlatformWindow::window_handle` — the unrelated `raw_window_handle`
+    /// accessor `WinitWindowHandle` implements below for GPU surface
+    /// creation.
+    fn window_by_id(&self, window_id: WindowId) -> Result<Box<dyn PlatformWindow>> {
+        self.with_state(|state| {
+            state
+                .windows
+                .get(&window_id)
+                .ok_or_else(|| anyhow::anyhow!("Window not found in state"))
+                .map(|win| {
+                    Box::new(WinitWindowHandle { inner: win.clone() }) as Box<dyn PlatformWindow>
+                })
+        })
+    }
+}
+
+thread_local! {
+    /// Published only while `on_ready` executes synchronously inside
+    /// [`WinitApp::resumed`], on the winit event-loop thread. See the
+    /// module-level doc on same-thread window creation.
+    static ACTIVE_EVENT_LOOP: Cell<Option<NonNull<ActiveEventLoop>>> = const { Cell::new(None) };
+}
+
+/// Publishes `event_loop` to [`ACTIVE_EVENT_LOOP`] for the duration of `f`,
+/// then un-publishes it unconditionally (including if `f` panics), so a
+/// publication never outlives the call that set it.
+///
+/// Callers must only pass an `event_loop` that stays valid for the entire
+/// call to `f` — `resumed`'s `&ActiveEventLoop` parameter satisfies this
+/// because it outlives the whole `resumed` call, which fully contains `f`.
+fn with_active_event_loop<R>(event_loop: &ActiveEventLoop, f: impl FnOnce() -> R) -> R {
+    // Save/restore rather than unconditionally clearing to `None`: today
+    // `on_ready` is the only caller and never nests, but restoring whatever
+    // was published before this call (instead of clobbering it to `None`)
+    // keeps a hypothetical future nested publication on this thread correct
+    // for free.
+    struct RestoreOnDrop(Option<NonNull<ActiveEventLoop>>);
+    impl Drop for RestoreOnDrop {
+        fn drop(&mut self) {
+            ACTIVE_EVENT_LOOP.with(|cell| cell.set(self.0));
+        }
+    }
+
+    let previous = ACTIVE_EVENT_LOOP.with(|cell| cell.replace(Some(NonNull::from(event_loop))));
+    let _restore = RestoreOnDrop(previous);
+    f()
 }
 
 /// Application handler for winit event loop
@@ -230,7 +359,7 @@ impl WinitPlatform {
 /// consuming the event loop.
 struct WinitApp {
     platform: Arc<WinitPlatform>,
-    on_ready: Option<Box<dyn FnOnce()>>,
+    on_ready: Option<PlatformReadyCallback>,
 }
 
 impl ApplicationHandler for WinitApp {
@@ -244,10 +373,14 @@ impl ApplicationHandler for WinitApp {
             }
         });
 
-        // Call on_ready callback once
+        // Call on_ready callback once. `ACTIVE_EVENT_LOOP` is published for
+        // this exact nested call so `open_window` can create windows
+        // directly instead of deadlocking on the cross-thread queue (see the
+        // module-level doc).
         if let Some(on_ready) = self.on_ready.take() {
             tracing::info!("Calling on_ready callback");
-            on_ready();
+            let platform = Arc::clone(&self.platform);
+            with_active_event_loop(event_loop, || on_ready(&*platform));
 
             self.platform.with_state(|state| {
                 state.is_running = true;
@@ -500,7 +633,7 @@ impl WinitApp {
         for request in requests {
             tracing::debug!("Processing window creation request");
 
-            let result = self.create_window(event_loop, request.options);
+            let result = self.platform.create_window_now(event_loop, request.options);
 
             // Send response back
             if let Err(err) = request.response.send(result) {
@@ -519,7 +652,7 @@ impl Platform for WinitPlatform {
         self.with_state(|state| state.foreground_executor.clone())
     }
 
-    fn run(self: Box<Self>, on_ready: Box<dyn FnOnce()>) {
+    fn run(self: Box<Self>, on_ready: PlatformReadyCallback) {
         tracing::info!("Starting winit event loop via Platform::run()");
 
         let event_loop = match EventLoop::builder().build() {
@@ -553,13 +686,45 @@ impl Platform for WinitPlatform {
     fn open_window(&self, options: WindowOptions) -> Result<Box<dyn PlatformWindow>> {
         tracing::info!(?options, "Requesting window creation");
 
-        // Create a oneshot channel for the response
+        // Same-thread fast path: called synchronously from inside `on_ready`
+        // (see `WinitApp::resumed`), where a live `ActiveEventLoop` is
+        // published for exactly this nested call. Create the window
+        // directly instead of enqueuing — the queue's only consumer,
+        // `about_to_wait`, cannot run until this call returns, and would
+        // deadlock forever otherwise (see the module-level doc).
+        if let Some(event_loop_ptr) = ACTIVE_EVENT_LOOP.with(Cell::get) {
+            tracing::debug!("Creating window on event-loop thread (same-thread fast path)");
+            // SAFETY: `event_loop_ptr` is non-null only while
+            // `with_active_event_loop` has published it on THIS thread, for
+            // the exact nested `on_ready` call currently executing (see
+            // `WinitApp::resumed`). The referent is `resumed`'s live
+            // `&ActiveEventLoop` parameter, which outlives that whole call —
+            // and this call is strictly nested inside it — so the reference
+            // constructed here is valid for the borrow's entire duration.
+            let event_loop = unsafe { event_loop_ptr.as_ref() };
+            let window_id = self.create_window_now(event_loop, options)?;
+            return self.window_by_id(window_id);
+        }
+
+        // Fail fast instead of deadlocking: the cross-thread path below
+        // blocks on a response that only `about_to_wait` can send, and
+        // `about_to_wait` cannot run until the event loop has started
+        // pumping — i.e. until `on_ready` has returned and set
+        // `is_running`. Calling `open_window` before `Platform::run` (or
+        // synchronously from something other than `on_ready`, which hits
+        // this same window) used to hang forever; reject it instead.
+        let is_running = self.with_state(|state| state.is_running);
+        if !is_running {
+            anyhow::bail!(
+                "open_window called before Platform::run — on the winit backend, \
+                 create windows inside run()'s on_ready callback"
+            );
+        }
+
+        // Cross-thread path: enqueue a request and block until the event
+        // loop's `about_to_wait` dispatch drains it and creates the window.
         let (response_tx, response_rx) = std::sync::mpsc::sync_channel(1);
-
-        // Get the window request sender
         let request_sender = self.with_state(|state| state.window_requests.sender());
-
-        // Send the window creation request
         let request = WindowRequest {
             options,
             response: response_tx,
@@ -571,26 +736,12 @@ impl Platform for WinitPlatform {
 
         tracing::debug!("Waiting for window creation response");
 
-        // Wait for the response (this will block until the event loop processes the
-        // request)
         let window_id = response_rx
             .recv()
             .map_err(|_| anyhow::anyhow!("Failed to receive window creation response"))??;
 
         tracing::info!(?window_id, "Window created successfully");
-
-        // Get the window from state
-        self.with_state(|state| {
-            state
-                .windows
-                .get(&window_id)
-                .ok_or_else(|| anyhow::anyhow!("Window not found in state"))
-                .map(|win| {
-                    // Return an Arc<WinitWindow> wrapped in WinitWindowHandle
-                    // so the caller gets a Box<dyn PlatformWindow>
-                    Box::new(WinitWindowHandle { inner: win.clone() }) as Box<dyn PlatformWindow>
-                })
-        })
+        self.window_by_id(window_id)
     }
 
     fn active_window(&self) -> Option<WindowId> {
@@ -601,6 +752,9 @@ impl Platform for WinitPlatform {
         None // Not easily supported by winit
     }
 
+    // Empty until `WinitApp::resumed` runs `init_displays` on first resume —
+    // callers that need real display info must call this from `on_ready` (or
+    // later), never before `Platform::run` starts the event loop.
     fn displays(&self) -> Vec<Arc<dyn PlatformDisplay>> {
         self.with_state(|state| {
             state
@@ -626,9 +780,7 @@ impl Platform for WinitPlatform {
     }
 
     fn capabilities(&self) -> &dyn PlatformCapabilities {
-        // SAFETY: capabilities field is immutable after initialization
-        // and lives as long as the platform
-        unsafe { &*(&self.with_state(|state| state.capabilities) as *const _) }
+        &self.capabilities
     }
 
     fn name(&self) -> &'static str {
@@ -716,51 +868,6 @@ impl Platform for WinitPlatform {
 
     fn app_path(&self) -> Result<PathBuf> {
         std::env::current_exe().map_err(Into::into)
-    }
-}
-
-// ==================== Helper implementations ====================
-
-impl WinitApp {
-    /// Create a window within the event loop
-    #[allow(dead_code)]
-    fn create_window(
-        &mut self,
-        event_loop: &ActiveEventLoop,
-        options: WindowOptions,
-    ) -> Result<WindowId> {
-        let mut attributes = WindowAttributes::default()
-            .with_title(options.title)
-            .with_inner_size(winit::dpi::LogicalSize::new(
-                options.size.width.0,
-                options.size.height.0,
-            ))
-            .with_resizable(options.resizable)
-            .with_decorations(options.decorated)
-            .with_visible(options.visible);
-
-        if let Some(min) = options.min_size {
-            attributes = attributes
-                .with_min_inner_size(winit::dpi::LogicalSize::new(min.width.0, min.height.0));
-        }
-        if let Some(max) = options.max_size {
-            attributes = attributes
-                .with_max_inner_size(winit::dpi::LogicalSize::new(max.width.0, max.height.0));
-        }
-
-        let raw_window = Arc::new(event_loop.create_window(attributes)?);
-        let winit_id = raw_window.id();
-        let winit_window = Arc::new(WinitWindow::new(raw_window));
-
-        let platform_id = self.platform.with_state(|state| {
-            let id = state.allocate_window_id();
-            state.register_window(winit_id, id, winit_window.clone());
-            id
-        });
-
-        tracing::info!(?platform_id, "Created window");
-
-        Ok(platform_id)
     }
 }
 
@@ -891,6 +998,22 @@ impl PlatformWindow for WinitWindowHandle {
 
     fn on_appearance_changed(&self, callback: Box<dyn FnMut() + Send>) {
         self.inner.on_appearance_changed(callback);
+    }
+
+    // Delegate to `WinitWindow`'s own overrides — without these, GPU surface
+    // creation (`Renderer::new`) falls through to the `PlatformWindow` trait
+    // defaults (`Err(HandleError::Unavailable)`) even though the underlying
+    // `winit::window::Window` supports both handles directly.
+    fn window_handle(
+        &self,
+    ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
+        self.inner.window_handle()
+    }
+
+    fn display_handle(
+        &self,
+    ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
+        self.inner.display_handle()
     }
 
     #[cfg(feature = "winit-backend")]

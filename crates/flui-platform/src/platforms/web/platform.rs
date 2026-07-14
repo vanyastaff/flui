@@ -120,13 +120,13 @@ impl Platform for WebPlatform {
         self.with_state(|s| s.foreground_executor.clone())
     }
 
-    fn run(self: Box<Self>, on_ready: Box<dyn FnOnce()>) {
+    fn run(self: Box<Self>, on_ready: Box<dyn FnOnce(&dyn Platform)>) {
         tracing::info!("Starting web platform");
 
         self.with_state(|s| s.is_running = true);
 
         // Call on_ready synchronously — browser event loop is already running
-        on_ready();
+        on_ready(&*self);
 
         // Start the RAF loop
         self.start_raf_loop();

@@ -85,6 +85,16 @@ pub fn run_direct(
     let platform = flui_platform::current_platform()?;
 
     // 1. Open window
+    //
+    // NOTE: like the pre-fix `run_desktop`, this opens the window before
+    // `run()` starts the event loop. On the winit backend (Linux) that no
+    // longer hangs — `WinitPlatform::open_window` now fails fast with a
+    // clear error when called before the event loop is running — but it
+    // still can't work: this `?` will bubble that error out of `run_direct`
+    // immediately, before any window ever opens. Known, deliberately
+    // out-of-scope follow-up: `run_direct` needs the same on_ready-driven
+    // reorder `run_desktop` received (see `runner.rs`'s `run_desktop`), not
+    // attempted here.
     let options: WindowOptions = (&config).into();
     let window = platform
         .open_window(options)
@@ -204,7 +214,7 @@ pub fn run_direct(
     tracing::info!("Direct render mode initialized, entering event loop");
 
     // 9. Run event loop (takes ownership of platform)
-    platform.run(Box::new(|| {
+    platform.run(Box::new(|_platform| {
         tracing::info!("FLUI direct render mode ready");
     }));
 

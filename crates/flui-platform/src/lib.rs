@@ -46,8 +46,8 @@
 //! ```rust,ignore
 //! use flui_platform::current_platform;
 //!
-//! let platform = current_platform();
-//! platform.run(Box::new(|| {
+//! let platform = current_platform()?;
+//! platform.run(Box::new(|platform| {
 //!     println!("Platform ready: {}", platform.name());
 //! }));
 //! ```
@@ -191,7 +191,8 @@ pub use platforms::WebPlatform;
 // Desktop platforms
 #[cfg(windows)]
 pub use platforms::WindowsPlatform;
-// Legacy backend
+// winit fallback backend — primary on Linux until native Wayland/X11 lands
+// (roadmap Cross.P)
 #[cfg(feature = "winit-backend")]
 pub use platforms::WinitPlatform;
 // Re-export shared infrastructure
@@ -203,8 +204,8 @@ pub use traits::{
     Clipboard, ClipboardItem, DefaultLifecycle, DesktopCapabilities, DispatchEventResult,
     DisplayId, LifecycleEvent, LifecycleState, MobileCapabilities, PathPromptOptions, Platform,
     PlatformCapabilities, PlatformDisplay, PlatformEmbedder, PlatformExecutor, PlatformLifecycle,
-    PlatformWindow, WebCapabilities, WindowAppearance, WindowBackgroundAppearance, WindowBounds,
-    WindowEvent, WindowId, WindowMode, WindowOptions,
+    PlatformReadyCallback, PlatformWindow, WebCapabilities, WindowAppearance,
+    WindowBackgroundAppearance, WindowBounds, WindowEvent, WindowId, WindowMode, WindowOptions,
 };
 
 /// Get the current platform implementation
@@ -247,8 +248,10 @@ pub use traits::{
 /// - **Windows**: Returns `WindowsPlatform` - fully implemented with Win32 API
 /// - **macOS**: Returns `MacOSPlatform` - stub (unimplemented, roadmap
 ///   available)
-/// - **Linux**: Returns `LinuxPlatform` - stub (unimplemented, roadmap
-///   available)
+/// - **Linux**: Returns `WinitPlatform` if the `winit-backend` feature is
+///   enabled (native Wayland/X11 — `LinuxPlatform` — is not implemented yet,
+///   roadmap Cross.P); otherwise returns an error. `flui-app` enables
+///   `winit-backend` for Linux builds.
 /// - **Android**: Returns `AndroidPlatform` - stub (unimplemented, roadmap
 ///   available)
 /// - **iOS**: Returns `IOSPlatform` - stub (unimplemented, roadmap available)
@@ -261,7 +264,7 @@ pub use traits::{
 /// |----------|--------|---------|----------|
 /// | Windows | ✅ Production | 10/10 | Full featured |
 /// | macOS | 📋 Stub | 2/10 | Roadmap complete |
-/// | Linux | 📋 Stub | 2/10 | Roadmap complete |
+/// | Linux | 🪟 winit fallback (`winit-backend`) | 5/10 | Windowing + input; native Wayland/X11 still a stub |
 /// | Android | 📋 Stub | 2/10 | Roadmap complete |
 /// | iOS | 📋 Stub | 2/10 | Roadmap complete |
 /// | Web | 📋 Stub | 2/10 | Roadmap complete |
@@ -271,7 +274,8 @@ pub use traits::{
 /// Returns an error if:
 /// - Platform initialization fails (e.g., COM failure on Windows)
 /// - Platform is not supported (should not happen with cfg guards)
-/// - Platform stub is called (macOS, Linux, Android, iOS, Web)
+/// - Platform stub is called (macOS, Android, iOS, Web)
+/// - Linux is reached without the `winit-backend` feature enabled
 ///
 /// # Examples
 ///
@@ -282,7 +286,7 @@ pub use traits::{
 /// let platform = current_platform()?;
 /// println!("Running on: {}", platform.name());
 ///
-/// platform.run(Box::new(|| {
+/// platform.run(Box::new(|_platform| {
 ///     println!("Platform ready!");
 /// }));
 /// ```
@@ -331,7 +335,21 @@ pub fn current_platform() -> anyhow::Result<Box<dyn Platform>> {
 
     #[cfg(all(target_os = "linux", not(any(windows, target_os = "macos"))))]
     {
-        Ok(Box::new(LinuxPlatform::new()?))
+        // Native Wayland/X11 is not implemented yet (`LinuxPlatform` is a
+        // stub — roadmap Cross.P); the winit fallback backend is the Linux
+        // path until then. It is opt-in via `winit-backend` because it pulls
+        // in `arboard` (clipboard); `flui-app` enables it for Linux builds.
+        #[cfg(feature = "winit-backend")]
+        {
+            Ok(Box::new(WinitPlatform::new()))
+        }
+
+        #[cfg(not(feature = "winit-backend"))]
+        {
+            Err(anyhow::anyhow!(
+                "no Linux windowing backend enabled — flui-app enables `winit-backend` on Linux"
+            ))
+        }
     }
 
     #[cfg(all(

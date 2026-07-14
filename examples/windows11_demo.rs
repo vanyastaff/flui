@@ -68,7 +68,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!();
 
     // Run the platform event loop
-    platform.run(Box::new(|| {}));
+    platform.run(Box::new(|_platform| {}));
 
     Ok(())
 }

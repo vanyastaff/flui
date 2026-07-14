@@ -835,11 +835,11 @@ impl Platform for WindowsPlatform {
 
     // ==================== Lifecycle ====================
 
-    fn run(self: Box<Self>, on_ready: Box<dyn FnOnce()>) {
+    fn run(self: Box<Self>, on_ready: Box<dyn FnOnce(&dyn Platform)>) {
         tracing::info!("Running Windows platform");
 
         // Call ready callback
-        on_ready();
+        on_ready(&*self);
 
         // Run message loop
         if let Err(e) = self.run_message_loop() {

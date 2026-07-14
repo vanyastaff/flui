@@ -273,7 +273,7 @@ fn main() {
 
     tracing::info!("filter demo ready — left=sharp, right=blurred (σ=8)");
 
-    platform.run(Box::new(move || {
+    platform.run(Box::new(move |_platform| {
         // Keep resources alive through the event loop.
         let _window = &window;
         let _renderer = &renderer;

@@ -136,6 +136,11 @@ impl WindowMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct WindowId(pub u64); // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
 
+/// [`Platform::run`]'s ready callback: invoked once, synchronously, with a
+/// platform handle. Named to keep `Box<dyn FnOnce(&dyn Platform)>` out of
+/// every call site's signature.
+pub type PlatformReadyCallback = Box<dyn FnOnce(&dyn Platform)>;
+
 /// Core platform abstraction trait
 ///
 /// This trait provides the complete interface for platform-specific operations.
@@ -159,8 +164,8 @@ pub struct WindowId(pub u64); // PORT-CHECK-OK-SP3: pre-existing parallel defini
 /// use flui_platform::{Platform, current_platform};
 ///
 /// let platform = current_platform();
-/// platform.run(Box::new(|| {
-///     println!("Platform ready!");
+/// platform.run(Box::new(|platform| {
+///     println!("Platform ready: {}", platform.name());
 /// }));
 /// ```
 pub trait Platform: Send + Sync + 'static {
@@ -182,13 +187,16 @@ pub trait Platform: Send + Sync + 'static {
     ///
     /// This function takes ownership of the platform and the current thread,
     /// running the platform's event loop. The `on_ready` callback is invoked
-    /// once the platform is initialized and ready to create windows.
+    /// once the platform is initialized and ready to create windows, and is
+    /// passed a platform handle so it can call `open_window`, `on_quit`, and
+    /// other `&self` methods — the outer `Box<dyn Platform>` binding is no
+    /// longer reachable once `run` has taken ownership of it.
     ///
     /// Takes `self: Box<Self>` because some backends (e.g. winit) require
     /// ownership of the event loop to run it.
     ///
     /// This function only returns when the application quits.
-    fn run(self: Box<Self>, on_ready: Box<dyn FnOnce()>);
+    fn run(self: Box<Self>, on_ready: PlatformReadyCallback);
 
     /// Request the application to quit
     ///

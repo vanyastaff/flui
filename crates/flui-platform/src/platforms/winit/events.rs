@@ -10,8 +10,8 @@ use ui_events::{
     ScrollDelta,
     keyboard::{Code, KeyState, KeyboardEvent, Location},
     pointer::{
-        PointerButton, PointerButtonEvent, PointerEvent, PointerId, PointerInfo, PointerState,
-        PointerType, PointerUpdate,
+        PointerButton, PointerButtonEvent, PointerButtons, PointerEvent, PointerId, PointerInfo,
+        PointerOrientation, PointerState, PointerType, PointerUpdate,
     },
 };
 use winit::event::{ElementState, MouseButton, MouseScrollDelta};
@@ -50,11 +50,11 @@ fn pointer_state(
     PointerState {
         time: event_timestamp_ms(),
         position: PhysicalPosition::new(logical_x, logical_y),
-        buttons: Default::default(),
+        buttons: PointerButtons::default(),
         modifiers,
         count: 1,
         contact_geometry: PhysicalSize::new(1.0, 1.0),
-        orientation: Default::default(),
+        orientation: PointerOrientation::default(),
         pressure,
         tangential_pressure: 0.0,
         scale_factor,
@@ -64,12 +64,13 @@ fn pointer_state(
 /// Convert winit MouseButton to W3C PointerButton
 fn convert_mouse_button(button: MouseButton) -> PointerButton {
     match button {
-        MouseButton::Left => PointerButton::Primary,
+        // `Other` carries a vendor-specific button id ui-events has no slot
+        // for; treat it as the primary button like an unrecognized click.
+        MouseButton::Left | MouseButton::Other(_) => PointerButton::Primary,
         MouseButton::Right => PointerButton::Secondary,
         MouseButton::Middle => PointerButton::Auxiliary,
         MouseButton::Back => PointerButton::X1,
         MouseButton::Forward => PointerButton::X2,
-        MouseButton::Other(_) => PointerButton::Primary,
     }
 }
 
@@ -216,8 +217,9 @@ fn convert_winit_key(key: &winit::keyboard::Key) -> keyboard_types::Key {
             K::Named(nk)
         }
         winit::keyboard::Key::Character(c) => K::Character(c.to_string()),
-        winit::keyboard::Key::Dead(_) => K::Named(keyboard_types::NamedKey::Unidentified),
-        winit::keyboard::Key::Unidentified(_) => K::Named(keyboard_types::NamedKey::Unidentified),
+        winit::keyboard::Key::Dead(_) | winit::keyboard::Key::Unidentified(_) => {
+            K::Named(keyboard_types::NamedKey::Unidentified)
+        }
     }
 }
 
@@ -335,7 +337,7 @@ fn convert_location(key: winit::keyboard::PhysicalKey) -> Location {
             | KeyCode::NumpadDecimal => Location::Numpad,
             _ => Location::Standard,
         },
-        _ => Location::Standard,
+        PhysicalKey::Unidentified(_) => Location::Standard,
     }
 }
 

@@ -104,7 +104,7 @@ pub fn start() {
 
     web_sys::console::log_1(&"FLUI Web Demo ready! Try clicking and typing on the canvas.".into());
 
-    platform.run(Box::new(move || {
+    platform.run(Box::new(move |_platform| {
         // Keep window alive via closure capture
         let _window = window;
     }));

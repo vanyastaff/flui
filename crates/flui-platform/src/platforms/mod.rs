@@ -25,7 +25,9 @@ pub mod ios;
 #[cfg(target_arch = "wasm32")]
 pub mod web;
 
-// Legacy winit backend (deprecated, optional)
+// winit fallback backend — primary on Linux until native Wayland/X11 lands
+// (roadmap Cross.P); optional on Windows/macOS behind the `winit-backend`
+// feature.
 #[cfg(feature = "winit-backend")]
 pub mod winit;
 
@@ -44,4 +46,4 @@ pub use web::WebPlatform;
 #[cfg(windows)]
 pub use windows::WindowsPlatform;
 #[cfg(feature = "winit-backend")]
-pub use winit::WinitPlatform;
+pub use winit::WinitPlatform; // winit fallback backend — see `platforms::winit` docs
