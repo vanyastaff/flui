@@ -119,7 +119,7 @@ mod tests {
         for i in 0..5 {
             let (response_tx, _response_rx) = std::sync::mpsc::sync_channel(1);
             let options = WindowOptions {
-                title: format!("Window {}", i),
+                title: format!("Window {i}"),
                 size: Size::new(px(800.0), px(600.0)),
                 ..Default::default()
             };

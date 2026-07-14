@@ -68,6 +68,21 @@ wasm-bindgen-futures = "0.4"
 [target.'cfg(target_os = "android")'.dependencies]
 android-activity = { version = "0.6", features = ["native-activity"] }
 
+# Linux desktop: native Wayland/X11 (`LinuxPlatform`) is a stub (roadmap
+# Cross.P), so enable flui-platform's winit fallback backend here. Additive
+# `features` on a target-scoped re-declaration of an existing dependency —
+# Windows/macOS builds stay on their native backends and never pull in
+# `winit-backend`'s `arboard` (clipboard) dependency.
+#
+# Same pattern for flui-engine: `Renderer::select_backend()` picks Vulkan on
+# Linux, but wgpu compiles only the GPU API backends named in flui-engine's
+# Cargo features — nothing else in flui-app's closure requests `vulkan`, so
+# without this the surface never gets a usable adapter (`SurfaceCreation`
+# fails at GPU init).
+[target.'cfg(target_os = "linux")'.dependencies]
+flui-platform = { path = "../flui-platform", version = "0.2.0", features = ["winit-backend"] }
+flui-engine = { path = "../flui-engine", version = "0.2.0", features = ["vulkan"] }
+
 [dev-dependencies]
 static_assertions.workspace = true
 # Enable flui-interaction's `testing` feature in test builds so tests can

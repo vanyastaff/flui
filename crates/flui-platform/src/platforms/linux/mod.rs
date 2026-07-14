@@ -80,8 +80,8 @@ use anyhow::Result;
 pub use window_ext::*;
 
 use crate::traits::{
-    Clipboard, Platform, PlatformCapabilities, PlatformDisplay, PlatformExecutor, PlatformWindow,
-    WindowEvent, WindowId, WindowOptions,
+    Clipboard, Platform, PlatformCapabilities, PlatformDisplay, PlatformExecutor,
+    PlatformReadyCallback, PlatformWindow, WindowEvent, WindowId, WindowOptions,
 };
 
 /// Linux platform implementation (stub)
@@ -142,7 +142,7 @@ impl Platform for LinuxPlatform {
         unimplemented!("Linux main thread executor not implemented")
     }
 
-    fn run(self: Box<Self>, _on_finish_launching: Box<dyn FnOnce()>) {
+    fn run(self: Box<Self>, _on_finish_launching: PlatformReadyCallback) {
         unimplemented!("Linux event loop (Wayland/X11) not implemented")
     }
 

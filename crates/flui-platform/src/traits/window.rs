@@ -57,6 +57,8 @@ pub enum WindowBounds {
 }
 
 #[cfg(feature = "winit-backend")]
+use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
+#[cfg(feature = "winit-backend")]
 use winit::window::Window;
 
 /// Trait for platform window abstraction
@@ -318,6 +320,18 @@ pub struct WinitWindow {
 }
 
 #[cfg(feature = "winit-backend")]
+impl std::fmt::Debug for WinitWindow {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // `WindowCallbacks` holds boxed closures that don't implement
+        // `Debug`; print the focus/visibility flags only.
+        f.debug_struct("WinitWindow")
+            .field("is_focused", &*self.is_focused.lock())
+            .field("is_visible", &*self.is_visible.lock())
+            .finish_non_exhaustive()
+    }
+}
+
+#[cfg(feature = "winit-backend")]
 impl WinitWindow {
     /// Create a new WinitWindow wrapper
     pub fn new(window: Arc<Window>) -> Self {
@@ -329,7 +343,7 @@ impl WinitWindow {
         }
     }
 
-    /// Get the underlying Arc<Window>
+    /// Get the underlying `Arc<Window>`
     pub fn inner(&self) -> &Arc<Window> {
         &self.window
     }
@@ -453,6 +467,23 @@ impl PlatformWindow for WinitWindow {
 
     fn on_appearance_changed(&self, callback: Box<dyn FnMut() + Send>) {
         *self.callbacks.on_appearance_changed.lock() = Some(callback);
+    }
+
+    // GPU integration: `winit::window::Window` implements `HasWindowHandle`/
+    // `HasDisplayHandle` directly — without these overrides both fall through
+    // to the trait defaults (`Err(HandleError::Unavailable)`), which is what
+    // made every wgpu surface creation on this backend fail regardless of
+    // which GPU backend was compiled in.
+    fn window_handle(
+        &self,
+    ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
+        self.window.window_handle()
+    }
+
+    fn display_handle(
+        &self,
+    ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
+        self.window.display_handle()
     }
 
     fn as_winit(&self) -> Option<&Arc<Window>> {

@@ -17,7 +17,8 @@ use crate::{
     shared::PlatformHandlers,
     traits::{
         Clipboard, DesktopCapabilities, Platform, PlatformCapabilities, PlatformDisplay,
-        PlatformExecutor, PlatformWindow, WindowEvent, WindowId, WindowOptions,
+        PlatformExecutor, PlatformReadyCallback, PlatformWindow, WindowEvent, WindowId,
+        WindowOptions,
     },
 };
 
@@ -107,13 +108,15 @@ impl Platform for MacOSPlatform {
         Arc::clone(&self.foreground_executor) as Arc<dyn PlatformExecutor>
     }
 
-    fn run(self: Box<Self>, on_finish_launching: Box<dyn FnOnce()>) {
+    fn run(self: Box<Self>, on_finish_launching: PlatformReadyCallback) {
+        // Call the launch callback. This is an ordinary (safe) call — keep it
+        // outside the `unsafe` block below rather than widening that block's
+        // scope to cover code that needs no unsafe justification.
+        on_finish_launching(&*self);
+
         // SAFETY: runs on the main thread; `self.app` is the live
         // NSApplication singleton.
         unsafe {
-            // Call the launch callback
-            on_finish_launching();
-
             // Activate the app (bring to foreground)
             self.app.activateIgnoringOtherApps_(YES);
 

@@ -14,9 +14,9 @@ use crate::{
     shared::{PlatformHandlers, WindowCallbacks},
     traits::{
         Clipboard, ClipboardItem, DesktopCapabilities, DispatchEventResult, Platform,
-        PlatformCapabilities, PlatformDisplay, PlatformExecutor, PlatformInput, PlatformWindow,
-        WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowEvent, WindowId,
-        WindowOptions,
+        PlatformCapabilities, PlatformDisplay, PlatformExecutor, PlatformInput,
+        PlatformReadyCallback, PlatformWindow, WindowAppearance, WindowBackgroundAppearance,
+        WindowBounds, WindowEvent, WindowId, WindowOptions,
     },
 };
 
@@ -100,7 +100,7 @@ impl Platform for HeadlessPlatform {
         self.with_state(|state| state.foreground_executor.clone())
     }
 
-    fn run(self: Box<Self>, on_ready: Box<dyn FnOnce()>) {
+    fn run(self: Box<Self>, on_ready: PlatformReadyCallback) {
         tracing::info!("Starting headless platform (no event loop)");
 
         self.with_state(|state| {
@@ -108,7 +108,7 @@ impl Platform for HeadlessPlatform {
         });
 
         // In headless mode, just call on_ready and return immediately
-        on_ready();
+        on_ready(&*self);
 
         tracing::info!("Headless platform ready");
     }

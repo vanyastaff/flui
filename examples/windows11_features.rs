@@ -131,7 +131,7 @@ fn main() -> anyhow::Result<()> {
     println!();
     println!("Hover over the maximize button to see Snap Layouts!");
 
-    platform.run(Box::new(move || {
+    platform.run(Box::new(move |_platform| {
         // Keep window alive via closure capture
         let _window = window;
     }));

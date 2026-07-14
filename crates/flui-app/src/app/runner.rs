@@ -542,15 +542,16 @@ fn run_desktop<V>(root: V, config: AppConfig)
 where
     V: View + StatelessView + Clone + 'static,
 {
-    use std::sync::Arc;
+    use std::{cell::RefCell, rc::Rc, sync::Arc};
 
     use flui_engine::wgpu::Renderer;
     use flui_foundation::HasInstance;
     use flui_hot_reload::{
-        HotReloadTier, WorkerPollOutcome, WorkerReloadDriver, engine::env, register_request_rebuild,
+        HotReloadTier, RebuildHookRegistration, WorkerPollOutcome, WorkerReloadDriver, engine::env,
+        register_request_rebuild,
     };
     use flui_platform::{
-        WindowOptions,
+        Platform, WindowOptions,
         traits::{DispatchEventResult, LifecycleEvent, PlatformInput},
     };
     use flui_scheduler::Scheduler;
@@ -570,128 +571,176 @@ where
 
     let platform = flui_platform::current_platform().expect("Failed to initialize platform");
 
-    // 1. Open window before run() since run() takes ownership
-    let options: WindowOptions = (&config).into();
-    let window = platform
-        .open_window(options)
-        .expect("Failed to create window");
+    // `rebuild_registration`'s `Drop` detaches the hot-reload hook and must
+    // stay alive until the event loop exits — but it (like the window and
+    // every callback below) can only be created from inside `on_ready`, so
+    // it is threaded back out through this cell instead of a plain local.
+    let rebuild_registration: Rc<RefCell<Option<RebuildHookRegistration>>> =
+        Rc::new(RefCell::new(None));
+    let rebuild_registration_slot = Rc::clone(&rebuild_registration);
 
-    // 2. Create GPU renderer directly (no DesktopEmbedder)
-    let phys_size = window.physical_size();
-    let renderer = pollster::block_on(async {
-        let handle = PlatformWindowHandle(window.as_ref());
-        Renderer::new(&handle).await
-    });
-    let mut renderer = match renderer {
-        Ok(r) => r,
-        Err(e) => {
-            tracing::error!("GPU init failed: {:?}", e);
-            return;
-        }
-    };
-    renderer.resize(phys_size.width.0 as u32, phys_size.height.0 as u32);
+    // Bootstrap can fail fatally (GPU init, `UiRealm` construction, root
+    // widget attach) from inside `on_ready`, which has no return path back
+    // to this function's caller — thread the failure out through this cell
+    // instead, same pattern as `rebuild_registration`.
+    let bootstrap_error: Rc<RefCell<Option<anyhow::Error>>> = Rc::new(RefCell::new(None));
+    let bootstrap_error_slot = Rc::clone(&bootstrap_error);
 
-    // 3. Mount root widget at the LOGICAL size; the framework lays out
-    // in logical pixels and the paint root's DPR transform maps to the
-    // physical surface. Set the DPR BEFORE attach so the RenderView
-    // configuration and the first frame agree on the scale.
-    let scale_factor = window.scale_factor() as f32;
-    AppBinding::instance()
-        .render_pipeline_mut()
-        .set_device_pixel_ratio(scale_factor);
-    let ui_realm = match super::ui_realm::UiRealm::new(AppBinding::instance().frame_wake_callback())
+    /// The actual desktop bootstrap: opens the window, initializes the GPU
+    /// renderer, mounts the widget tree, and wires every platform/window
+    /// callback. Runs exactly once, synchronously, inside `on_ready` (see
+    /// `Platform::run`'s doc) — never before, since the winit backend can
+    /// only create a window from inside a running event loop
+    /// (`ActiveEventLoop` is unreachable beforehand, and `open_window` fails
+    /// fast rather than deadlock if called too early).
+    ///
+    /// Pulled out of the `on_ready` closure into a named fn so rustfmt
+    /// actually formats it — rustfmt does not reliably reformat very large
+    /// closure literals passed as call arguments.
+    fn bootstrap_desktop<V>(
+        platform: &dyn Platform,
+        root: V,
+        config: AppConfig,
+        has_worker_driver: bool,
+        worker_driver: Arc<Mutex<Option<WorkerReloadDriver>>>,
+        rebuild_registration_slot: Rc<RefCell<Option<RebuildHookRegistration>>>,
+        bootstrap_error_slot: Rc<RefCell<Option<anyhow::Error>>>,
+    ) where
+        V: View + StatelessView + Clone + 'static,
     {
-        Ok(realm) => realm,
-        Err(e) => {
-            tracing::error!(error = %e, "UiRealm construction failed");
-            return;
-        }
-    };
-    ui_realm.bind_to_app(AppBinding::instance());
-    let logical = window.logical_size();
-    let attach = ui_realm.enter(|realm| {
-        AppBinding::instance().attach_root_widget_with_size(
-            realm,
-            &root,
-            logical.width.0 as f32,
-            logical.height.0 as f32,
-        )
-    });
-    if let Err(e) = attach {
-        tracing::error!("Root widget attach failed: {:?}", e);
-        return;
-    }
-    register_hit_test_render_view();
+        tracing::info!("Platform ready");
 
-    // 3b. Wire the wake chain (E0a).
-    //
-    // `on_need_frame` fires whenever `handle_build_scheduled` determines a new
-    // frame is required (e.g. after setState).  The closure calls `wake_frame`
-    // which sets `needs_redraw` atomically AND calls `PlatformWindow::
-    // request_redraw()` so the winit event loop wakes from idle.
-    //
-    // Deadlock analysis:
-    // * `wake_frame` acquires only `active_window` (leaf Mutex).
-    // * The closure is called from `handle_build_scheduled`, which holds no
-    //   `inner`/`widgets` lock (see `WidgetsBinding::handle_build_scheduled`
-    //   doc).
-    // * `on_need_frame` itself is a separate `RwLock` on `WidgetsBinding`,
-    //   never held across any `inner` critical section.
-    // Therefore: no lock ordering conflict.
-    {
-        let widgets = ui_realm.widgets();
-        let wake = AppBinding::instance().frame_wake_callback();
-        widgets.set_on_need_frame(move || wake());
-    }
+        // 1. Open window now that the event loop is running.
+        let options: WindowOptions = (&config).into();
+        let window = platform
+            .open_window(options)
+            .expect("Failed to create window");
 
-    // Wire `on_build_scheduled` on the BuildOwner so a dirty-element
-    // registration (e.g. from setState inside an element build) wakes the
-    // platform loop. The callback fires from inside `schedule_build_for`,
-    // which runs during a build while the AppBinding `widgets` write lock is
-    // held — so it must NOT re-lock `widgets`. It calls `wake_frame`
-    // directly (the same effect as the `on_need_frame` callback above),
-    // which touches only the `active_window` leaf lock. The callback must not
-    // re-enter widget state while `BuildOwner` is scheduling; realm entry is
-    // reserved for the outer event/frame dispatch boundary.
-    {
-        let widgets = ui_realm.widgets();
-        widgets.with_build_owner_mut(|build_owner| {
-            let wake = AppBinding::instance().frame_wake_callback();
-            build_owner.set_on_build_scheduled(move || wake());
+        // 2. Create GPU renderer directly (no DesktopEmbedder)
+        let phys_size = window.physical_size();
+        let renderer = pollster::block_on(async {
+            let handle = PlatformWindowHandle(window.as_ref());
+            Renderer::new(&handle).await
         });
-    }
+        let mut renderer = match renderer {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::error!("GPU init failed: {:?}", e);
+                *bootstrap_error_slot.borrow_mut() =
+                    Some(anyhow::anyhow!(e).context("GPU init failed"));
+                platform.quit();
+                return;
+            }
+        };
+        renderer.resize(phys_size.width.0 as u32, phys_size.height.0 as u32);
 
-    // 3c. Construct the per-window owner and its bounded command inbox.
-    // The wake is the existing chain: `wake_frame` sets
-    // `needs_redraw` and queues a `RedrawRequested`, so a command sent to an
-    // idle loop produces the frame whose drain observes it.
-    //
-    tracing::info!(
-        realm_id = ?ui_realm.realm_id(),
-        inbox_capacity = ui_realm.command_sender().capacity(),
-        "UiRealm constructed"
-    );
-    let hot_reload_sender = ui_realm.command_sender();
-    let realm_dispatch = install_platform_realm(ui_realm);
-    let rebuild_registration = has_worker_driver
-        .then(|| register_request_rebuild(queued_hot_reload_hook(hot_reload_sender)));
+        // 3. Mount root widget at the LOGICAL size; the framework lays out
+        // in logical pixels and the paint root's DPR transform maps to the
+        // physical surface. Set the DPR BEFORE attach so the RenderView
+        // configuration and the first frame agree on the scale.
+        let scale_factor = window.scale_factor() as f32;
+        AppBinding::instance()
+            .render_pipeline_mut()
+            .set_device_pixel_ratio(scale_factor);
+        let ui_realm =
+            match super::ui_realm::UiRealm::new(AppBinding::instance().frame_wake_callback()) {
+                Ok(realm) => realm,
+                Err(e) => {
+                    tracing::error!(error = %e, "UiRealm construction failed");
+                    *bootstrap_error_slot.borrow_mut() =
+                        Some(anyhow::anyhow!(e).context("UiRealm construction failed"));
+                    platform.quit();
+                    return;
+                }
+            };
+        ui_realm.bind_to_app(AppBinding::instance());
+        let logical = window.logical_size();
+        let attach = ui_realm.enter(|realm| {
+            AppBinding::instance().attach_root_widget_with_size(
+                realm,
+                &root,
+                logical.width.0,
+                logical.height.0,
+            )
+        });
+        if let Err(e) = attach {
+            tracing::error!("Root widget attach failed: {:?}", e);
+            *bootstrap_error_slot.borrow_mut() =
+                Some(anyhow::anyhow!(e).context("Root widget attach failed"));
+            platform.quit();
+            return;
+        }
+        register_hit_test_render_view();
 
-    // 4. Wrap renderer for callback sharing
-    let renderer = Arc::new(Mutex::new(renderer));
+        // 3b. Wire the wake chain (E0a).
+        //
+        // `on_need_frame` fires whenever `handle_build_scheduled` determines a new
+        // frame is required (e.g. after setState).  The closure calls `wake_frame`
+        // which sets `needs_redraw` atomically AND calls `PlatformWindow::
+        // request_redraw()` so the winit event loop wakes from idle.
+        //
+        // Deadlock analysis:
+        // * `wake_frame` acquires only `active_window` (leaf Mutex).
+        // * The closure is called from `handle_build_scheduled`, which holds no
+        //   `inner`/`widgets` lock (see `WidgetsBinding::handle_build_scheduled`
+        //   doc).
+        // * `on_need_frame` itself is a separate `RwLock` on `WidgetsBinding`,
+        //   never held across any `inner` critical section.
+        // Therefore: no lock ordering conflict.
+        {
+            let widgets = ui_realm.widgets();
+            let wake = AppBinding::instance().frame_wake_callback();
+            widgets.set_on_need_frame(move || wake());
+        }
 
-    // 5. Register input callback -> AppBinding::handle_input()
-    window.on_input(Box::new(move |input: PlatformInput| {
-        let _ = dispatch_platform_realm(realm_dispatch, RealmEvent::Input(input));
-        DispatchEventResult::resolved(false, true)
-    }));
+        // Wire `on_build_scheduled` on the BuildOwner so a dirty-element
+        // registration (e.g. from setState inside an element build) wakes the
+        // platform loop. The callback fires from inside `schedule_build_for`,
+        // which runs during a build while the AppBinding `widgets` write lock is
+        // held — so it must NOT re-lock `widgets`. It calls `wake_frame`
+        // directly (the same effect as the `on_need_frame` callback above),
+        // which touches only the `active_window` leaf lock. The callback must not
+        // re-enter widget state while `BuildOwner` is scheduling; realm entry is
+        // reserved for the outer event/frame dispatch boundary.
+        {
+            let widgets = ui_realm.widgets();
+            widgets.with_build_owner_mut(|build_owner| {
+                let wake = AppBinding::instance().frame_wake_callback();
+                build_owner.set_on_build_scheduled(move || wake());
+            });
+        }
 
-    // 6. Register frame callback -> scheduler + AppBinding::render_frame()
-    let renderer_frame = Arc::clone(&renderer);
-    let worker_driver_frame = Arc::clone(&worker_driver);
-    let frame_budget =
-        std::time::Duration::from_secs_f64(1.0 / f64::from(config.target_fps.max(1)));
-    let last_frame_started = Arc::new(Mutex::new(None::<web_time::Instant>));
-    window.on_request_frame(Box::new(move || {
+        // 3c. Construct the per-window owner and its bounded command inbox.
+        // The wake is the existing chain: `wake_frame` sets
+        // `needs_redraw` and queues a `RedrawRequested`, so a command sent to an
+        // idle loop produces the frame whose drain observes it.
+        //
+        tracing::info!(
+            realm_id = ?ui_realm.realm_id(),
+            inbox_capacity = ui_realm.command_sender().capacity(),
+            "UiRealm constructed"
+        );
+        let hot_reload_sender = ui_realm.command_sender();
+        let realm_dispatch = install_platform_realm(ui_realm);
+        *rebuild_registration_slot.borrow_mut() = has_worker_driver
+            .then(|| register_request_rebuild(queued_hot_reload_hook(hot_reload_sender)));
+
+        // 4. Wrap renderer for callback sharing
+        let renderer = Arc::new(Mutex::new(renderer));
+
+        // 5. Register input callback -> AppBinding::handle_input()
+        window.on_input(Box::new(move |input: PlatformInput| {
+            let _ = dispatch_platform_realm(realm_dispatch, RealmEvent::Input(input));
+            DispatchEventResult::resolved(false, true)
+        }));
+
+        // 6. Register frame callback -> scheduler + AppBinding::render_frame()
+        let renderer_frame = Arc::clone(&renderer);
+        let worker_driver_frame = Arc::clone(&worker_driver);
+        let frame_budget =
+            std::time::Duration::from_secs_f64(1.0 / f64::from(config.target_fps.max(1)));
+        let last_frame_started = Arc::new(Mutex::new(None::<web_time::Instant>));
+        window.on_request_frame(Box::new(move || {
         let renderer_frame = Arc::clone(&renderer_frame);
         let worker_driver_frame = Arc::clone(&worker_driver_frame);
         let last_frame_started = Arc::clone(&last_frame_started);
@@ -800,77 +849,100 @@ where
         })));
     }));
 
-    // 7. Register resize callback -> renderer.resize()
-    let renderer_resize = Arc::clone(&renderer);
-    window.on_resize(Box::new(move |size, scale_factor| {
-        let apply_size = size;
-        let renderer_resize = Arc::clone(&renderer_resize);
+        // 7. Register resize callback -> renderer.resize()
+        let renderer_resize = Arc::clone(&renderer);
+        window.on_resize(Box::new(move |size, scale_factor| {
+            let apply_size = size;
+            let renderer_resize = Arc::clone(&renderer_resize);
+            let _ = dispatch_platform_realm(
+                realm_dispatch,
+                RealmEvent::Resize {
+                    size,
+                    scale_factor,
+                    apply_surface: Box::new(move || {
+                        let w = (apply_size.width.0 * scale_factor) as u32;
+                        let h = (apply_size.height.0 * scale_factor) as u32;
+                        renderer_resize.lock().resize(w, h);
+                    }),
+                },
+            );
+        }));
+
+        // 8. Lifecycle callbacks
+
+        // Platform quit -> transition to Terminating
+        platform.on_quit(Box::new(move || {
+            tracing::info!("Platform quit");
+            let _ = dispatch_platform_realm(
+                realm_dispatch,
+                RealmEvent::Lifecycle(LifecycleEvent::Terminating),
+            );
+        }));
+
+        // Window close -> log and let the platform handle quit
+        // (Windows window proc already calls PostQuitMessage on WM_DESTROY)
+        window.on_close(Box::new(move || {
+            tracing::info!("Window closed");
+        }));
+
+        // Window should-close -> allow by default
+        window.on_should_close(Box::new(|| {
+            tracing::debug!("Window close requested, allowing");
+            true
+        }));
+
+        // Window active status -> lifecycle Activated/Deactivated
+        window.on_active_status_change(Box::new(move |active| {
+            let _ = dispatch_platform_realm(realm_dispatch, RealmEvent::Active(active));
+        }));
+
+        // Mark lifecycle as started
         let _ = dispatch_platform_realm(
             realm_dispatch,
-            RealmEvent::Resize {
-                size,
-                scale_factor,
-                apply_surface: Box::new(move || {
-                    let w = (apply_size.width.0 * scale_factor) as u32;
-                    let h = (apply_size.height.0 * scale_factor) as u32;
-                    renderer_resize.lock().resize(w, h);
-                }),
-            },
+            RealmEvent::Lifecycle(LifecycleEvent::Started),
         );
-    }));
 
-    // 8. Lifecycle callbacks
+        // 9. Request initial redraw
+        window.request_redraw();
 
-    // Platform quit -> transition to Terminating
-    platform.on_quit(Box::new(move || {
-        tracing::info!("Platform quit");
-        let _ = dispatch_platform_realm(
-            realm_dispatch,
-            RealmEvent::Lifecycle(LifecycleEvent::Terminating),
+        // 10. Store window in AppBinding for runtime access
+        AppBinding::instance().set_window(window);
+
+        tracing::info!("Desktop platform initialized with callbacks");
+    }
+
+    // Window creation, GPU/renderer setup, and callback wiring all run
+    // inside `on_ready` rather than before `run()`. The winit backend can
+    // only create a window from inside a running event loop (`ActiveEventLoop`
+    // is unreachable beforehand); opening it earlier would deadlock forever
+    // waiting for a pump that never started. `on_ready` runs exactly once,
+    // synchronously, on this same thread — see `Platform::run`'s doc.
+    platform.run(Box::new(move |platform: &dyn Platform| {
+        bootstrap_desktop(
+            platform,
+            root,
+            config,
+            has_worker_driver,
+            worker_driver,
+            rebuild_registration_slot,
+            bootstrap_error_slot,
         );
-    }));
-
-    // Window close -> log and let the platform handle quit
-    // (Windows window proc already calls PostQuitMessage on WM_DESTROY)
-    window.on_close(Box::new(move || {
-        tracing::info!("Window closed");
-    }));
-
-    // Window should-close -> allow by default
-    window.on_should_close(Box::new(|| {
-        tracing::debug!("Window close requested, allowing");
-        true
-    }));
-
-    // Window active status -> lifecycle Activated/Deactivated
-    window.on_active_status_change(Box::new(move |active| {
-        let _ = dispatch_platform_realm(realm_dispatch, RealmEvent::Active(active));
-    }));
-
-    // Mark lifecycle as started
-    let _ = dispatch_platform_realm(
-        realm_dispatch,
-        RealmEvent::Lifecycle(LifecycleEvent::Started),
-    );
-
-    // 9. Request initial redraw
-    window.request_redraw();
-
-    // 10. Store window in AppBinding for runtime access
-    AppBinding::instance().set_window(window);
-
-    tracing::info!("Desktop platform initialized with callbacks");
-
-    // Run the event loop (takes ownership of the platform)
-    platform.run(Box::new(|| {
-        tracing::info!("Platform ready");
     }));
 
     // Event loop exited: drop the runtime now (releases the at-most-one
     // claim; outstanding senders turn `OwnerGone`) instead of at thread
     // death.
-    drop(rebuild_registration);
+    drop(rebuild_registration.borrow_mut().take());
     teardown_platform_realm();
+
+    // Surface a fatal bootstrap failure (GPU init, `UiRealm` construction,
+    // root widget attach) now that the event loop has exited — those
+    // failures happen inside `on_ready`, with no return path back here
+    // except through `bootstrap_error`, and quitting the platform on them
+    // (see `bootstrap_desktop`) must not look like a clean exit.
+    if let Some(err) = bootstrap_error.borrow_mut().take() {
+        panic!("desktop bootstrap failed: {err:?}");
+    }
 }
 
 /// Register the hit-test root `RenderView` with the `RendererBinding`
@@ -1153,7 +1225,7 @@ where
     tracing::info!("Android platform initialized with callbacks (hot-reload enabled)");
 
     // Run the event loop (takes ownership of the platform)
-    platform.run(Box::new(|| {
+    platform.run(Box::new(|_platform| {
         tracing::info!("Android platform ready");
     }));
     teardown_platform_realm();
@@ -1368,7 +1440,7 @@ where
     tracing::info!("Web platform initialized with callbacks");
 
     // Run the event loop (takes ownership of the platform)
-    platform.run(Box::new(|| {
+    platform.run(Box::new(|_platform| {
         tracing::info!("Web platform ready");
     }));
     // `WebPlatform::run` installs the RAF callback and returns immediately;

@@ -249,7 +249,7 @@ fn main() {
 
     tracing::info!("Setup complete - starting event loop with wgpu rendering");
 
-    platform.run(Box::new(move || {
+    platform.run(Box::new(move |_platform| {
         tracing::info!("Platform ready");
         // Keep window and gpu alive via closure capture
         let _window = &window;
