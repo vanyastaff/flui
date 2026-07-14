@@ -14,27 +14,30 @@
 //! `PipelineOwner` -> set root constraints -> run one frame -> `bind_tree`).
 //!
 //! Honesty notes (Definition of Done):
-//! - The counter and animated-box assertions are fully gesture-driven
-//!   (synthetic pointer taps through the mounted tree) — the same path a
-//!   real user would exercise.
-//! - `ListView` (the widget this demo composes) has no drag-to-scroll
-//!   gesture wired in `flui-widgets` yet — it is a `Viewport` over a sliver
-//!   with a purely programmatic `offset`. Dragging
-//!   through it fires no scroll. The scroll assertion therefore falls back
-//!   to the documented alternative: mutate `DemoRoot::scroll_offset`
-//!   directly and force a rebuild, then assert the resulting layout
-//!   (paint offset) actually moved — still a real behavioral assertion on
-//!   the render tree, not a tautology, just not drag-driven.
+//! - All three acceptance assertions (counter, drag-to-scroll, animated box)
+//!   are fully gesture-driven (synthetic pointer down/move/up through the
+//!   mounted tree) — the same path a real user's fingers would exercise.
+//! - The list's drag-to-scroll is demo-local wiring: a `GestureDetector`
+//!   feeding a `ScrollController` directly, NOT the `Scrollable` widget.
+//!   `Scrollable` hardwires a `SingleChildScrollView` with no offset
+//!   feed-through (`scrollable.rs`), and nesting `ListView` inside it would
+//!   produce a degenerate viewport — the framework-level fix (a `Scrollable`
+//!   that accepts an arbitrary scrollable child) is out of scope here; see
+//!   `tree.rs`'s module doc.
+//! - Drag-only: there is no fling/ballistic simulation. `on_pan_end`'s
+//!   release velocity is intentionally unused — hand-rolling ballistics in
+//!   the demo was ruled out; a real fling awaits the same framework-level
+//!   item.
 
 #[path = "../examples/vertical_slice_demo/tree.rs"]
 mod tree;
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use flui_binding::HeadlessBinding;
-use flui_foundation::{ElementId, RenderId};
-use flui_interaction::events::{PointerType, make_down_event, make_up_event};
+use flui_foundation::RenderId;
+use flui_interaction::events::{PointerType, make_down_event, make_move_event, make_up_event};
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::hit_testing::HitTestResult;
 use flui_rendering::pipeline::PipelineOwner;
@@ -56,12 +59,6 @@ fn root_constraints() -> BoxConstraints {
 /// Everything the test needs to drive and inspect the mounted demo tree.
 struct MountedDemo {
     binding: HeadlessBinding,
-    /// The `Rc<Cell<_>>` handles from the exact `DemoRoot` that was mounted
-    /// (cloned before it was wrapped and moved into the tree), so the test
-    /// can read/mutate the same cells `DemoRootState::build` reads.
-    handles: tree::DemoRoot,
-    /// The tree's mounted root element (the outermost `VsyncScope`).
-    root_element: ElementId,
     pipeline_owner: Arc<RwLock<PipelineOwner>>,
 }
 
@@ -79,7 +76,6 @@ impl MountedDemo {
         let mut binding = HeadlessBinding::new();
 
         let root_view = tree::demo_root();
-        let handles = root_view.clone();
 
         let mut build_owner = BuildOwner::new();
         let mut tree = ElementTree::new();
@@ -93,7 +89,7 @@ impl MountedDemo {
 
         let scoped_root = VsyncScope::new(binding.vsync().clone(), root_view);
 
-        let root_element = binding.enter_owner_scope(|| {
+        binding.enter_owner_scope(|| {
             let root_element = tree.mount_root_with_pipeline_owner(
                 &scoped_root,
                 Some(Arc::clone(&pipeline_owner)),
@@ -101,7 +97,6 @@ impl MountedDemo {
             );
             build_owner.schedule_build_for(root_element, 0);
             build_owner.build_scope(&mut tree);
-            root_element
         });
 
         let root_render_id = {
@@ -137,8 +132,6 @@ impl MountedDemo {
 
         Self {
             binding,
-            handles,
-            root_element,
             pipeline_owner,
         }
     }
@@ -146,19 +139,6 @@ impl MountedDemo {
     /// Drive one deterministic frame.
     fn pump(&mut self, dt: Duration) {
         self.binding.pump_frame(dt);
-    }
-
-    /// Force the root element to rebuild on the next [`pump`](Self::pump) —
-    /// the headless equivalent of an external `setState`. Used only for the
-    /// list's scroll offset, which (unlike the counter/animated box) has no
-    /// gesture path scheduling its own rebuild.
-    fn mark_root_dirty(&mut self) {
-        if let Some(node) = self.binding.tree_mut().get_mut(self.root_element) {
-            node.element_mut().mark_needs_build();
-        }
-        self.binding
-            .build_owner_mut()
-            .schedule_build_for(self.root_element, 0);
     }
 
     /// Hit-test at root-local `(x, y)` and dispatch a synthetic pointer-down.
@@ -185,6 +165,31 @@ impl MountedDemo {
     fn tap(&self, x: f32, y: f32) {
         self.tap_down(x, y);
         self.tap_up(x, y);
+    }
+
+    /// Hit-test at root-local `(x, y)` and dispatch a synthetic pointer-down,
+    /// advancing the gesture clock first so the drag recognizer's first
+    /// velocity-tracker sample gets a fresh timestamp (see
+    /// [`advance_gesture_clock`]). Distinct from [`tap_down`](Self::tap_down):
+    /// only drag sequences need the clock advance, and `tap_down` is shared by
+    /// unrelated tests this change must not perturb.
+    fn drag_down(&self, x: f32, y: f32) {
+        advance_gesture_clock();
+        self.dispatch_at(make_down_event(offset(x, y), PointerType::Mouse), x, y);
+    }
+
+    /// Hit-test at root-local `(x, y)` and dispatch a synthetic pointer-move,
+    /// advancing the gesture clock first (see [`advance_gesture_clock`]).
+    fn drag_move(&self, x: f32, y: f32) {
+        advance_gesture_clock();
+        self.dispatch_at(make_move_event(offset(x, y), PointerType::Mouse), x, y);
+    }
+
+    /// Hit-test at root-local `(x, y)` and dispatch a synthetic pointer-up —
+    /// pairs with [`drag_down`](Self::drag_down)/[`drag_move`](Self::drag_move)
+    /// to complete a drag gesture.
+    fn drag_up(&self, x: f32, y: f32) {
+        self.dispatch_at(make_up_event(offset(x, y), PointerType::Mouse), x, y);
     }
 
     fn find_all_by_render_type(&self, render_type_name: &str) -> Vec<RenderId> {
@@ -261,6 +266,55 @@ impl MountedDemo {
         }
     }
 
+    /// The list's fixed-height `SizedBox` wrapper.
+    ///
+    /// Same disambiguation problem as [`animated_box_render_id`]'s doc
+    /// explains: several `RenderConstrainedBox` nodes exist in this tree.
+    /// This one is the unique node whose committed height equals
+    /// [`tree::LIST_BOX_HEIGHT`] (200px) — distinct by construction from the
+    /// counter spacer and the animated box's collapsed/expanded height range
+    /// (64/140px).
+    ///
+    /// # Panics
+    /// Panics when zero or more than one candidate matches.
+    fn list_box_render_id(&self) -> RenderId {
+        let owner = self.pipeline_owner.read();
+        let matches: Vec<RenderId> = self
+            .find_all_by_render_type("RenderConstrainedBox")
+            .into_iter()
+            .filter(|&id| {
+                inspect::box_geometry(&owner, id)
+                    .is_some_and(|size| (size.height.get() - tree::LIST_BOX_HEIGHT).abs() < 1.0)
+            })
+            .collect();
+        match matches.as_slice() {
+            [id] => *id,
+            [] => panic!(
+                "no RenderConstrainedBox matches the list box height ({})",
+                tree::LIST_BOX_HEIGHT
+            ),
+            _ => panic!(
+                "{} RenderConstrainedBox nodes match the list box height; expected exactly one",
+                matches.len()
+            ),
+        }
+    }
+
+    /// The list box's root-local center — a safe drag anchor: enough headroom
+    /// above and below to cross the slop and keep moving without the pointer
+    /// leaving the box (which would hit-test a different render path on the
+    /// next move).
+    fn list_box_center(&self) -> (f32, f32) {
+        let list_box = self.list_box_render_id();
+        let size = inspect::box_geometry(&self.pipeline_owner.read(), list_box)
+            .expect("the list box must have box geometry after the bootstrap frame");
+        let top_left = self.absolute_position(list_box);
+        (
+            top_left.dx.get() + size.width.get() / 2.0,
+            top_left.dy.get() + size.height.get() / 2.0,
+        )
+    }
+
     /// The screen-space (root-local) top-left of `id`, by summing paint
     /// offsets up the render-tree ancestry — every node between the root and
     /// `id` in this tree only translates (no scale/rotation), so a plain sum
@@ -287,6 +341,26 @@ impl MountedDemo {
 
 fn offset(x: f32, y: f32) -> Offset {
     Offset::new(px(x), px(y))
+}
+
+/// Spin until `Instant::now()` returns a value strictly greater than the one
+/// returned by the immediately preceding call.
+///
+/// Mirrors `flui-widgets/tests/common/mod.rs`'s
+/// `LaidOutScoped::advance_gesture_clock` (unreachable from this crate — that
+/// harness lives in a private integration-test module of a different crate,
+/// same reason `MountedDemo` re-bootstraps its own mount sequence instead of
+/// reusing it). `DragGestureRecognizer::handle_move` timestamps every
+/// velocity-tracker sample with `Instant::now()`; two dispatches landing in
+/// the same OS timer tick make the least-squares velocity fit singular
+/// (NaN). Calling this before each down/move dispatch that should count
+/// toward velocity guarantees consecutive samples get strictly increasing
+/// timestamps.
+fn advance_gesture_clock() {
+    let t0 = Instant::now();
+    while Instant::now() == t0 {
+        std::hint::spin_loop();
+    }
 }
 
 // ============================================================================
@@ -333,42 +407,102 @@ fn tapping_the_plus_button_updates_the_rendered_counter_text() {
 }
 
 // ============================================================================
-// (b) scrolling changes visible content — programmatic-offset fallback
+// (b) dragging inside the list box scrolls it — real gesture-driven, no
+//     programmatic fallback
 // ============================================================================
 
+/// Real per-move drag threshold for `GestureDetector`'s pan recognizer
+/// (`DragAxis::Free`).
+///
+/// `GestureDetector` constructs its `DragGestureRecognizer` once in
+/// `init_state` with `GestureSettings::default()`
+/// (`flui-interaction/src/recognizers/drag.rs`) and never adapts it to the
+/// dispatched pointer's device kind — so the operative slop is the *touch*
+/// default (`DEFAULT_PAN_SLOP` = 18px), not the mouse default, even though
+/// these events dispatch as `PointerType::Mouse`. This matches the identical
+/// "50 px > 18 px" comment on `flui-widgets/tests/scroll.rs`'s
+/// `scrollable_drag_up_increases_scroll_offset`, which exercises the same
+/// recognizer through `Scrollable`.
+const DRAG_SLOP: f32 = 18.0;
+
 #[test]
-fn changing_the_list_scroll_offset_moves_its_items() {
+fn dragging_inside_the_list_box_scrolls_its_items() {
     let mut demo = MountedDemo::mount();
 
     let item0 = demo
         .find_text("Item 0")
         .expect("the static list must render its first item");
     let offset_before = demo.absolute_position(item0);
+    let (anchor_x, anchor_y) = demo.list_box_center();
 
-    // `ListView` (this composition) has no drag-to-scroll gesture wired in
-    // flui-widgets yet — it is a `Viewport` over a sliver with a purely
-    // programmatic `offset`, no `Scrollable` ancestor. A pointer drag
-    // through the list area would therefore fire no scroll at all, so this
-    // asserts the documented fallback instead: mutate the shared offset cell
-    // directly and force a rebuild, then check the resulting layout moved.
-    let scroll_delta = 3.0 * tree::LIST_ITEM_EXTENT;
-    demo.handles.scroll_offset.set(scroll_delta);
-    demo.mark_root_dirty();
+    // The slop-crossing move (> DRAG_SLOP) fires on_pan_start; per
+    // `DragGestureRecognizer::handle_move`, that move's own delta is
+    // swallowed (used only to fix the drag's start position), so it must not
+    // count toward the expected scroll delta. Only the two subsequent moves,
+    // each already in the `Started` phase, fire on_pan_update.
+    const SLOP_CROSSING_DELTA: f32 = DRAG_SLOP + 7.0; // 25.0, safely > 18.0
+    const UPDATE_DELTA_1: f32 = 20.0;
+    const UPDATE_DELTA_2: f32 = 25.0;
+    let expected_scroll_delta = UPDATE_DELTA_1 + UPDATE_DELTA_2;
+
+    demo.drag_down(anchor_x, anchor_y);
+    demo.drag_move(anchor_x, anchor_y - SLOP_CROSSING_DELTA);
+    demo.drag_move(anchor_x, anchor_y - SLOP_CROSSING_DELTA - UPDATE_DELTA_1);
+    demo.drag_move(
+        anchor_x,
+        anchor_y - SLOP_CROSSING_DELTA - UPDATE_DELTA_1 - UPDATE_DELTA_2,
+    );
+    demo.drag_up(
+        anchor_x,
+        anchor_y - SLOP_CROSSING_DELTA - UPDATE_DELTA_1 - UPDATE_DELTA_2,
+    );
+    demo.pump(Duration::ZERO);
+
+    let offset_after = demo.absolute_position(item0);
+    // A `Viewport` translates its sliver content by `-offset` along the
+    // scroll axis, so an increasing offset must move content UP (a smaller
+    // `dy`) — the standard scroll convention, matching `Scrollable`'s own
+    // pan-update wiring in `scrollable.rs`.
+    let moved_up_by = offset_before.dy.get() - offset_after.dy.get();
+
+    assert!(
+        (moved_up_by - expected_scroll_delta).abs() < 1.0,
+        "dragging up {expected_scroll_delta}px worth of post-slop deltas must move item 0's \
+         paint position up by the same amount (the slop-crossing move's delta is swallowed): \
+         before={offset_before:?}, after={offset_after:?}, moved_up_by={moved_up_by}"
+    );
+}
+
+/// At the top of the list (offset 0, the fresh-mount default) a downward drag
+/// proposes a *negative* pixel value (`pixels() - delta.dy` with `delta.dy >
+/// 0`) — `ScrollController::jump_to`'s lower clamp must hold it at 0 through
+/// the real gesture path, not just in `scroll_controller.rs`'s unit tests.
+#[test]
+fn dragging_down_at_the_top_of_the_list_does_not_scroll_past_zero() {
+    let mut demo = MountedDemo::mount();
+
+    let item0 = demo
+        .find_text("Item 0")
+        .expect("the static list must render its first item");
+    let offset_before = demo.absolute_position(item0);
+    let (anchor_x, anchor_y) = demo.list_box_center();
+
+    // Post-slop deltas toward positive dy (finger moving down) — the mirror
+    // image of the upward drag above.
+    const SLOP_CROSSING_DELTA: f32 = DRAG_SLOP + 7.0; // 25.0, safely > 18.0
+    const UPDATE_DELTA: f32 = 20.0;
+
+    demo.drag_down(anchor_x, anchor_y);
+    demo.drag_move(anchor_x, anchor_y + SLOP_CROSSING_DELTA);
+    demo.drag_move(anchor_x, anchor_y + SLOP_CROSSING_DELTA + UPDATE_DELTA);
+    demo.drag_up(anchor_x, anchor_y + SLOP_CROSSING_DELTA + UPDATE_DELTA);
     demo.pump(Duration::ZERO);
 
     let offset_after = demo.absolute_position(item0);
     assert!(
-        (offset_after.dy.get() - offset_before.dy.get()).abs() > 1.0,
-        "changing the list's scroll offset must move its items' paint \
-         position: before={offset_before:?}, after={offset_after:?}"
-    );
-    // A `Viewport` translates its sliver content by `-offset` along the
-    // scroll axis: increasing the offset must move content UP (a smaller
-    // or more negative `dy`), matching the standard scroll convention.
-    assert!(
-        offset_after.dy.get() < offset_before.dy.get(),
-        "increasing the scroll offset must move item 0 upward: \
-         before={offset_before:?}, after={offset_after:?}"
+        (offset_after.dy.get() - offset_before.dy.get()).abs() < 1.0,
+        "dragging down at the top of the list (offset already 0) must not move item 0 at all — \
+         jump_to's lower clamp must hold: before={offset_before:?}, after={offset_after:?}"
     );
 }
 
