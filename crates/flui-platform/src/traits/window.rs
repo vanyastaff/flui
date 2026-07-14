@@ -343,7 +343,7 @@ impl WinitWindow {
         }
     }
 
-    /// Get the underlying Arc<Window>
+    /// Get the underlying `Arc<Window>`
     pub fn inner(&self) -> &Arc<Window> {
         &self.window
     }
