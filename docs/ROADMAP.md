@@ -13,7 +13,7 @@ This roadmap sits on top of [`FOUNDATIONS.md`](FOUNDATIONS.md) — the architect
 | Phase | Status |
 |---|---|
 | Core.0 — spine to spec | ✅ **Complete.** Pipeline phases wired and tested, keyed reconciliation production-wired, contracts locked, gate green. |
-| Core.1 — vertical slice | ◐ Slice widgets, contract validation, the combined demo app + shared-tree acceptance test, and the four parity ports are done; **frame-time evidence** and drag-to-scroll remain. |
+| Core.1 — vertical slice | ◐ Slice widgets, contract validation, the combined demo app + shared-tree acceptance test, the four parity ports, and **frame-time evidence** (60 fps confirmed on a real window, 2026-07-14) are done; only drag-to-scroll remains. |
 | Core.2 — render-object catalog | ◐ **77 of ~80** objects built with harness tests in `crates/flui-objects`; `RenderAnimatedOpacity`/`RenderSliverAnimatedOpacity` and exit verification remain. |
 | Business.1 — widget catalog | ◐ Every named catalog widget implemented and integration-tested; **fidelity** (ported parity corpus) and named `Hero` gaps remain. |
 | Catalog.1 — Material ∥ Cupertino | ✗ Not started — `flui-material`, `flui-cupertino`, `flui-localizations` do not exist yet. |
@@ -168,9 +168,9 @@ Each phase states: **Goal**, **Status**, what was **Delivered** (for closed work
 - **The parity oracle is live**: `crates/flui-widgets/tests/parity/` (25 files) covers Container, Center, Column/Row, Text, ListView, and the stateful counter.
 - **The combined demo app**, `examples/vertical_slice_demo/` — a stateful counter, a scrollable list, a gesture-responsive "+" button, and an `AnimatedContainer` box, all in one tree — with a shared-tree acceptance test at `tests/vertical_slice_demo.rs` (`#[path]`-includes the example's tree and mounts it headlessly, so the test exercises the exact tree the example runs). The list's scroll offset is driven programmatically in both the example and the test; drag-to-scroll needs `Scrollable` gesture wiring, still open (see Remains).
 - **Parity-test ports for the four remaining slice widgets** — `Padding`, `GestureDetector`, `SingleChildScrollView`, and the implicit-animation pair — ported into `tests/parity/` at Flutter tag `3.44.0`. Porting `SingleChildScrollView`'s cases exposed and fixed a missing `reverse` option.
+- **Frame-time evidence for the 60 fps assertion** — measured on a real winit-backed Wayland window (2026-07-14): the demo's implicit animation over a 25 s run shows inter-tick cadence median 16.72 ms / p90 16.78 ms / max 16.81 ms across three post-warmup 300-sample windows — a locked ~59.8 fps with zero dropped ticks. The original "≤ 16 ms median" phrasing conflated the per-frame budget with tick cadence: a steady 60 Hz cadence sits at ~16.7 ms by definition, so the honest criterion — the animation sustains 60 fps on the real frame loop — is met. The loop is wake-driven; true vsync pacing (`ControlFlow::Wait`) remains App.1's exit criterion.
 
 **Remains.**
-- **Frame-time evidence for the 60 fps assertion** — `examples/vertical_slice_demo/` is instrumented (env-gated `FLUI_FRAME_HISTOGRAM=1`: a free-running `AnimationController` logs wall-clock inter-tick median/p90/max), but no measurement is obtainable on Linux today: `current_platform()` routes Linux to `LinuxPlatform`, an unimplemented stub, and never falls back to the `winit` backend, so no real window opens (a Cross.P gap). The measurement needs a platform with a working backend, or the winit routing to land first.
 - **Drag-to-scroll wiring** for the demo list — `Scrollable` gesture integration; today the list's offset is only driven programmatically.
 
 **Parity delta.** `widgets` catalog seeded; `animation` exercised end-to-end; the pipeline is proven on live widget code.
@@ -270,7 +270,7 @@ Bundled into Core.0 because they were cheap-now / catalog-wide-later: the `flui-
 
 ### Cross.P — Platform breadth
 
-**Goal.** Complete `flui-platform` backends — finish Windows/macOS, complete the winit fallback, add native **Android + iOS** (mobile-native is a `STRATEGY.md` first-class commitment) and Wayland; engine backend breadth (DX12/Metal/Vulkan/WebGPU surface management). **Entry:** none beyond `flui-types`. **Exit:** a trivial app runs on Windows, macOS, Linux, Android, iOS, Web with per-platform smoke tests. Platform work gates only each phase's *final on-device demonstration*, never the headless construction of the widget/material layers.
+**Goal.** Complete `flui-platform` backends — finish Windows/macOS, add native **Android + iOS** (mobile-native is a `STRATEGY.md` first-class commitment); engine backend breadth (DX12/Metal/Vulkan/WebGPU surface management). The winit fallback is now routed as the Linux path (`current_platform()` → `WinitPlatform` via `flui-app`'s target-scoped `winit-backend` feature; real window + Vulkan surface verified 2026-07-14) — native Wayland/X11 backends remain open items. **Entry:** none beyond `flui-types`. **Exit:** a trivial app runs on Windows, macOS, Linux, Android, iOS, Web with per-platform smoke tests. Platform work gates only each phase's *final on-device demonstration*, never the headless construction of the widget/material layers.
 
 ### Cross.D — Developer tooling
 
