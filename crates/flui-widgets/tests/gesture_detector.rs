@@ -126,6 +126,14 @@ fn gesture_detector_cancel_aborts_the_tap_without_wedging_the_detector() {
     );
 }
 
+/// Flutter parity (tag `3.44.0`): `packages/flutter/lib/src/gestures/arena.dart`
+/// `GestureArenaManager` — "The first member to accept or the last member to
+/// not reject wins" (line 110). A drag past the slop makes the tap recognizer
+/// reject itself, leaving the pan recognizer as the last remaining (and thus
+/// winning) member. The upstream Flutter case asserts exactly this
+/// arena-elimination behavior, and this test already covers it end to end, so
+/// the citation lives here instead of duplicating the case in the parity
+/// corpus.
 #[test]
 fn gesture_detector_recognizes_a_pan_and_suppresses_the_tap() {
     let taps = Arc::new(AtomicUsize::new(0));
@@ -189,6 +197,12 @@ fn gesture_detector_recognizes_a_pan_and_suppresses_the_tap() {
     );
 }
 
+/// Flutter parity (tag `3.44.0`): `packages/flutter/lib/src/gestures/arena.dart`
+/// `GestureArenaManager` (line 110, see the citation on
+/// `gesture_detector_recognizes_a_pan_and_suppresses_the_tap` above) — with
+/// no movement, the tap recognizer is the arena's front (first-added, and
+/// here only remaining) member on sweep, so it wins without waiting for the
+/// pan recognizer to reject itself.
 #[test]
 fn gesture_detector_quick_tap_beats_the_pan_recognizer() {
     let taps = Arc::new(AtomicUsize::new(0));

@@ -49,3 +49,10 @@ mod flow_test;
 
 // ── Core.2 — RenderTable / Table ─────────────────────────────────────────────
 mod table_test;
+
+// ── Core.1 exit gate — slice-widget parity ports (padding, gestures, scroll,
+//    implicit animations) ─────────────────────────────────────────────────
+mod gesture_detector_test;
+mod implicit_animations_test;
+mod padding_test;
+mod single_child_scroll_view_test;
