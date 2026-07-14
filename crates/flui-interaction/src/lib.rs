@@ -5,7 +5,7 @@
 //!
 //! - **EventRouter**: Routes pointer/keyboard events via hit testing
 //! - **HitTest**: Determines which UI elements are under cursor/touch
-//! - **FocusManager**: Manages keyboard focus (global singleton)
+//! - **FocusManager**: Manages keyboard focus for the current owner thread via TLS
 //! - **FocusScope**: Groups focusable elements for keyboard navigation
 //! - **FocusTraversalPolicy**: Determines Tab/Shift+Tab navigation order
 //! - **GestureRecognizers**: High-level gesture detection (Tap, Drag, Scale,

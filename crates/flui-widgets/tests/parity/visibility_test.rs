@@ -31,12 +31,18 @@
 //! - `Visibility(visible=true)`  → child's render object directly
 //! - `Visibility(visible=false)` → `RenderConstrainedBox` (replacement `SizedBox::shrink`)
 //! - `Visibility(visible=false, maintain_state=true)`
-//!   → `RenderOffstage(offstage=true)` wrapping the child's `RenderConstrainedBox`
+//!   → `RenderOffstage(offstage=true)` → `RenderSubtreeAnchor` → the child's
+//!   `RenderConstrainedBox`
 //! - `Visibility(visible=true, maintain_state=true)`
-//!   → `RenderOffstage(offstage=false)` wrapping the child's `RenderConstrainedBox`
+//!   → `RenderOffstage(offstage=false)` → `RenderSubtreeAnchor` → the child's
+//!   `RenderConstrainedBox`
 //!
 //! Divergences:
-//! - `maintainAnimation` and `maintainSize` are deferred (need `TickerMode`).
+//! - `maintainAnimation` matches Flutter for descendants registered through an
+//!   ambient `VsyncScope`, including production `AppBinding` roots. With no
+//!   ambient scope, FLUI's `TickerMode` intentionally passes the child through
+//!   to preserve wall-clock fallback behavior.
+//! - `maintainSize` is deferred.
 //! - `maintain_interactivity` is accepted but is a no-op until `maintainSize`
 //!   lands. Tested to confirm it does not panic or break the tree.
 //! - Flutter wraps in `_VisibilityScope`; FLUI omits that scope widget.
@@ -114,15 +120,18 @@ fn visibility_false_maintain_state_wraps_child_in_offstage() {
         loose(200.0),
     );
 
-    // RenderOffstage must be present (panics if absent).
-    let _offstage_id = laid.find_by_render_type("RenderOffstage");
-    // RenderConstrainedBox (the child) is also present, inside RenderOffstage.
+    let offstage_id = laid.find_by_render_type("RenderOffstage");
+    let anchor_id = laid.find_by_render_type("RenderSubtreeAnchor");
     assert_eq!(
         laid.render_node_count(),
-        2,
-        "visible=false + maintain_state=true: 2 render nodes expected \
-         (1 RenderOffstage + 1 RenderConstrainedBox for the preserved child)"
+        3,
+        "visible=false + maintain_state=true: Offstage, focus anchor, and child"
     );
+    assert_eq!(laid.only_child(offstage_id), anchor_id);
+    let child_id = laid.find_by_render_type("RenderConstrainedBox");
+    assert_eq!(laid.only_child(anchor_id), child_id);
+    assert_eq!(laid.size(anchor_id), size(100.0, 100.0));
+    assert_eq!(laid.size(child_id), size(100.0, 100.0));
 }
 
 /// `Visibility(visible=true, maintain_state=true)` wraps the child in
@@ -137,14 +146,17 @@ fn visibility_true_maintain_state_child_paints_normally_via_offstage() {
         loose(200.0),
     );
 
-    // Both RenderOffstage (offstage=false) and the child are present.
+    let offstage_id = laid.find_by_render_type("RenderOffstage");
+    let anchor_id = laid.find_by_render_type("RenderSubtreeAnchor");
     assert_eq!(
         laid.render_node_count(),
-        2,
-        "visible=true + maintain_state=true: 2 render nodes \
-         (RenderOffstage(offstage=false) + RenderConstrainedBox child)"
+        3,
+        "visible=true + maintain_state=true: Offstage, focus anchor, and child"
     );
     let child_id = laid.find_by_render_type("RenderConstrainedBox");
+    assert_eq!(laid.only_child(offstage_id), anchor_id);
+    assert_eq!(laid.only_child(anchor_id), child_id);
+    assert_eq!(laid.size(anchor_id), size(100.0, 100.0));
     assert_eq!(
         laid.size(child_id),
         size(100.0, 100.0),
