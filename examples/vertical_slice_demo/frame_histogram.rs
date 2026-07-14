@@ -1,8 +1,8 @@
 //! Frame-time evidence for Core.1's 60 fps criterion (env-gated, off by
 //! default so the interactive demo is unaffected).
 //!
-//! Set `FLUI_FRAME_HISTOGRAM=1` before `cargo run --example
-//! vertical_slice_demo` to attach a free-running [`AnimationController`]
+//! Set `FLUI_FRAME_HISTOGRAM` to any value (e.g. `=1`) before `cargo run
+//! --example vertical_slice_demo` to attach a free-running [`AnimationController`]
 //! (same pattern as `examples/animated_box_app.rs`) whose ticks are paced by
 //! the real scheduler's wake-driven frame loop. Its listener records the
 //! wall-clock [`Instant`] delta since the previous tick; every

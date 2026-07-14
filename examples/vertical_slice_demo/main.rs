@@ -8,7 +8,7 @@
 //!
 //! Run with: cargo run --example vertical_slice_demo
 //!
-//! Set `FLUI_FRAME_HISTOGRAM=1` to additionally drive a free-running
+//! Set `FLUI_FRAME_HISTOGRAM` (any value) to additionally drive a free-running
 //! [`AnimationController`] and log wall-clock inter-tick histograms — see
 //! [`frame_histogram`] for what this measures and why.
 //!

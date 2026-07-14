@@ -28,8 +28,9 @@ use flui_widgets::{
 /// `'SingleChildScrollView overflow and clipRect test'` — the geometry half of
 /// that test (a child taller than the viewport lays out unbounded on the
 /// scroll axis and overflows) is what this asserts; the paint-clip-behavior
-/// half is out of scope (paint assertions deferred to Phase 3, see
-/// `parity/container_test.rs`).
+/// half is out of scope because the headless harness asserts committed
+/// geometry, not paint output — `parity/container_test.rs` documents the same
+/// limitation for its paint assertions.
 #[test]
 fn single_child_scroll_view_lays_child_out_unbounded_on_scroll_axis() {
     // Viewport bounded to 200×300; a 200×600 child is taller than the viewport.
