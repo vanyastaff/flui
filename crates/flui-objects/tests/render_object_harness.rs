@@ -91,7 +91,7 @@
 use std::{any::Any, cell::Cell, collections::HashMap, rc::Rc, sync::Arc, time::Duration};
 
 use flui_animation::curve::ArcCurve;
-use flui_animation::{AnimationController, Curves, Scheduler};
+use flui_animation::{Animation, AnimationController, Curves, ProxyAnimation, Scheduler};
 use flui_interaction::{InteractionLane, MouseTracker};
 use flui_objects::*;
 use flui_painting::{Canvas, Paint};
@@ -1808,13 +1808,22 @@ fn ticking_controller(ms: u64, value: f32) -> AnimationController {
     controller
 }
 
+/// Wraps `controller` in a [`ProxyAnimation<f32>`] — the composed-animation
+/// shape `RenderAnimatedOpacity::new` now takes. `controller` is an
+/// `Arc`-backed shared handle, so the caller's own clone keeps driving the
+/// SAME underlying state the proxy wraps (`controller.set_value` after this
+/// call is still observed).
+fn animation_from(controller: &AnimationController) -> ProxyAnimation<f32> {
+    let parent: Arc<dyn Animation<f32>> = Arc::new(controller.clone());
+    ProxyAnimation::new(parent)
+}
+
 #[test]
 fn harness_animated_opacity_layout_passthrough_matches_child_size() {
     let controller = ticking_controller(100, 0.5);
     let run = RenderTester::mount(
         box_node(RenderAnimatedOpacity::new(
-            controller,
-            ArcCurve::new(Curves::Linear),
+            animation_from(&controller),
             false,
         ))
         .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
@@ -1835,8 +1844,7 @@ fn harness_animated_opacity_paint_alpha_tracks_controller_value_at_0_partial_255
         let controller = ticking_controller(100, value);
         let run = RenderTester::mount(
             box_node(RenderAnimatedOpacity::new(
-                controller,
-                ArcCurve::new(Curves::Linear),
+                animation_from(&controller),
                 false,
             ))
             .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
@@ -1865,8 +1873,7 @@ fn harness_animated_opacity_tick_marks_needs_paint() {
     let controller = ticking_controller(100, 0.0);
     let mut run = RenderTester::mount(
         box_node(RenderAnimatedOpacity::new(
-            controller.clone(),
-            ArcCurve::new(Curves::Linear),
+            animation_from(&controller),
             false,
         ))
         .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
@@ -1894,8 +1901,7 @@ fn harness_animated_opacity_boundary_crossing_tick_marks_compositing_bits() {
     let controller = ticking_controller(100, 0.0); // alpha=0, not layered
     let mut run = RenderTester::mount(
         box_node(RenderAnimatedOpacity::new(
-            controller.clone(),
-            ArcCurve::new(Curves::Linear),
+            animation_from(&controller),
             false,
         ))
         .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
@@ -5074,8 +5080,7 @@ fn harness_sliver_opacity_always_needs_compositing_reaches_pipeline() {
 
 fn animated_opacity_sliver_spec(controller: AnimationController) -> TreeNode {
     sliver_node(RenderSliverAnimatedOpacity::new(
-        controller,
-        ArcCurve::new(Curves::Linear),
+        animation_from(&controller),
         false,
     ))
     .label("opacity")

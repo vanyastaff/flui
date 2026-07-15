@@ -21,7 +21,7 @@ use flui_interaction::events::{
     PointerEvent, PointerType, make_cancel_event_for_id, make_down_event_for_id,
     make_move_event_for_id, make_up_event_for_id,
 };
-use flui_objects::{RenderOpacity, RenderTransform};
+use flui_objects::{RenderAnimatedOpacity, RenderOpacity, RenderTransform};
 use flui_rendering::constraints::{BoxConstraints, SliverGeometry};
 use flui_rendering::pipeline::PipelineOwner;
 use flui_rendering::testing::inspect;
@@ -302,15 +302,25 @@ impl LaidOut {
     }
 
     /// The committed opacity of a [`RenderOpacity`] node (e.g. the one a
-    /// `FadeTransition` builds). Panics if `id` is not a `RenderOpacity`.
+    /// `FadeTransition` builds) or a [`RenderAnimatedOpacity`] node (the one
+    /// `AnimatedOpacity` builds). The latter reads the composed animation's
+    /// raw `f32` value (`RenderAnimatedOpacity::opacity_value`), not the
+    /// quantized `u8` alpha cache — the `1/255` rounding would blow the
+    /// implicit-animation tests' `< 1e-4` tolerance. Panics if `id` is
+    /// neither.
     pub fn opacity(&self, id: RenderId) -> f32 {
         let mut owner = self.pipeline_owner.write();
-        owner
+        let node = owner
             .render_tree_mut()
             .get_mut(id)
-            .and_then(|node| node.downcast_render_object_mut::<RenderOpacity>())
-            .map(|render| render.opacity())
-            .expect("render node should be a RenderOpacity")
+            .expect("render node should exist");
+        if let Some(render) = node.downcast_render_object_mut::<RenderOpacity>() {
+            return render.opacity();
+        }
+        if let Some(render) = node.downcast_render_object_mut::<RenderAnimatedOpacity>() {
+            return render.opacity_value();
+        }
+        panic!("render node should be a RenderOpacity or RenderAnimatedOpacity");
     }
 
     /// The x-scale (matrix `[0][0]`) of a [`RenderTransform`] node — the factor a

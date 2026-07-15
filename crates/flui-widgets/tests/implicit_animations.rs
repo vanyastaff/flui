@@ -12,6 +12,7 @@
 mod common;
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use common::{lay_out_animated, loose, tight};
@@ -177,6 +178,130 @@ fn animated_opacity_retargets_from_the_current_value_midflight() {
     assert!(
         laid.opacity(laid.current_root()) < 0.1,
         "the reverse run settles near 0.0, got {}",
+        laid.opacity(laid.current_root()),
+    );
+}
+
+/// A child whose `build()` increments a shared counter — the RED-anchor probe
+/// for the no-rebuild contract below.
+#[derive(Clone, StatefulView)]
+struct CountingChild {
+    build_count: Arc<AtomicUsize>,
+}
+
+struct CountingChildState {
+    build_count: Arc<AtomicUsize>,
+}
+
+impl StatefulView for CountingChild {
+    type State = CountingChildState;
+
+    fn create_state(&self) -> Self::State {
+        CountingChildState {
+            build_count: Arc::clone(&self.build_count),
+        }
+    }
+}
+
+impl ViewState<CountingChild> for CountingChildState {
+    fn build(&self, _view: &CountingChild, _ctx: &dyn BuildContext) -> impl IntoView {
+        self.build_count.fetch_add(1, Ordering::SeqCst);
+        SizedBox::new(20.0, 20.0)
+    }
+}
+
+#[derive(Clone, StatefulView)]
+struct OpacityRebuildProbe {
+    vsync: Vsync,
+    target: Arc<Mutex<f32>>,
+    child_builds: Arc<AtomicUsize>,
+}
+
+struct OpacityRebuildProbeState {
+    vsync: Vsync,
+    target: Arc<Mutex<f32>>,
+    child_builds: Arc<AtomicUsize>,
+}
+
+impl StatefulView for OpacityRebuildProbe {
+    type State = OpacityRebuildProbeState;
+
+    fn create_state(&self) -> Self::State {
+        OpacityRebuildProbeState {
+            vsync: self.vsync.clone(),
+            target: Arc::clone(&self.target),
+            child_builds: Arc::clone(&self.child_builds),
+        }
+    }
+}
+
+impl ViewState<OpacityRebuildProbe> for OpacityRebuildProbeState {
+    fn build(&self, _view: &OpacityRebuildProbe, _ctx: &dyn BuildContext) -> impl IntoView {
+        VsyncScope::new(
+            self.vsync.clone(),
+            AnimatedOpacity::new(
+                *self.target.lock(),
+                CountingChild {
+                    build_count: Arc::clone(&self.child_builds),
+                },
+            )
+            .duration(RUN),
+        )
+    }
+}
+
+/// The whole point of routing `AnimatedOpacity` onto `RenderAnimatedOpacity`:
+/// an animation TICK updates the opacity the render tree paints WITHOUT
+/// rebuilding the child subtree. Before the rewire, `AnimatedOpacity` drives
+/// its child through an `AnimatedBuilder` closure that re-runs on every tick,
+/// rebuilding (and therefore re-`build()`ing) the child each frame — this
+/// test fails against that path and only passes once the child sits under a
+/// persistent render object that mutates its own alpha on tick instead.
+///
+/// The baseline is captured AFTER the retarget's `laid.pump()` — a genuine
+/// widget-tree reconfiguration (a new `opacity` target reaching
+/// `did_update_view`) legitimately rebuilds the child once, exactly as
+/// Flutter's own `Element.update` always re-runs `State.build()` on a
+/// reconfigure regardless of value equality. What must NOT happen is a
+/// rebuild on each subsequent `pump_for` TICK, while the painted opacity
+/// keeps moving toward the new target.
+#[test]
+fn animated_opacity_ticks_do_not_rebuild_the_child_subtree() {
+    let vsync = Vsync::new();
+    let target = Arc::new(Mutex::new(0.0));
+    let child_builds = Arc::new(AtomicUsize::new(0));
+    let probe = OpacityRebuildProbe {
+        vsync: vsync.clone(),
+        target: Arc::clone(&target),
+        child_builds: Arc::clone(&child_builds),
+    };
+    let mut laid = lay_out_animated(probe, tight(100.0, 50.0), vsync);
+    assert!(
+        child_builds.load(Ordering::SeqCst) >= 1,
+        "the child must build at least once on mount"
+    );
+
+    *target.lock() = 1.0;
+    laid.pump(); // the retarget reconfigure — the child may legitimately rebuild here
+    laid.pump_for(FRAME); // detection frame (still ~0.0)
+
+    let builds_before_ticks = child_builds.load(Ordering::SeqCst);
+    let opacity_before_ticks = laid.opacity(laid.current_root());
+
+    for _ in 0..5 {
+        laid.pump_for(FRAME);
+    }
+
+    assert_eq!(
+        child_builds.load(Ordering::SeqCst),
+        builds_before_ticks,
+        "animation ticks must update opacity via the render object, not by \
+         rebuilding the child subtree"
+    );
+    assert!(
+        laid.opacity(laid.current_root()) - opacity_before_ticks > 0.5,
+        "the opacity must still have visibly progressed toward the new \
+         target across those same ticks (from {opacity_before_ticks}, got {})",
         laid.opacity(laid.current_root()),
     );
 }
