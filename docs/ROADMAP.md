@@ -13,7 +13,7 @@ This roadmap sits on top of [`FOUNDATIONS.md`](FOUNDATIONS.md) — the architect
 | Phase | Status |
 |---|---|
 | Core.0 — spine to spec | ✅ **Complete.** Pipeline phases wired and tested, keyed reconciliation production-wired, contracts locked, gate green. |
-| Core.1 — vertical slice | ◐ Slice widgets, contract validation, the combined demo app + shared-tree acceptance test, the four parity ports, and **frame-time evidence** (60 fps confirmed on a real window, 2026-07-14) are done; only drag-to-scroll remains. |
+| Core.1 — vertical slice | ✅ Slice widgets, contract validation, combined demo app + acceptance tests, parity ports, frame evidence, drag-to-scroll — all delivered. |
 | Core.2 — render-object catalog | ◐ **77 of ~80** objects built with harness tests in `crates/flui-objects`; `RenderAnimatedOpacity`/`RenderSliverAnimatedOpacity` and exit verification remain. |
 | Business.1 — widget catalog | ◐ Every named catalog widget implemented and integration-tested; **fidelity** (ported parity corpus) and named `Hero` gaps remain. |
 | Catalog.1 — Material ∥ Cupertino | ✗ Not started — `flui-material`, `flui-cupertino`, `flui-localizations` do not exist yet. |
@@ -44,7 +44,7 @@ The target is **full parity with released Flutter** — every framework package,
 
 The shape of the work: the machinery and framework catalog are largely landed; the remaining mass is **fidelity** (the ported Flutter test corpus) **and the design-system catalog.** `material` alone (210k LOC) is the terminal node and the single largest body of work in the entire port — roughly twice the rest of the catalog combined.
 
-**The critical path:** close Core.1/Business.1 fidelity residues → `flui-localizations` + theming → `flui-material`. Everything else is a parallel tributary or hangs off the end.
+**The critical path:** close Business.1 fidelity residues → `flui-localizations` + theming → `flui-material`. Everything else is a parallel tributary or hangs off the end.
 
 ---
 
@@ -158,7 +158,7 @@ Each phase states: **Goal**, **Status**, what was **Delivered** (for closed work
 
 ---
 
-## Core.1 — Vertical slice (Core × Business integration)  *(was Phase 1)* — ◐ MOSTLY COMPLETE
+## Core.1 — Vertical slice (Core × Business integration)  *(was Phase 1)* — ✅ COMPLETE
 
 **Goal.** Prove the locked contracts and the full pipeline on live widget code: ~8–12 widgets — one per render-object family — end-to-end, into a running demo app.
 
@@ -166,12 +166,10 @@ Each phase states: **Goal**, **Status**, what was **Delivered** (for closed work
 - **All slice widgets implemented and integration-tested** in `flui-widgets`: `Container`/`Padding`/`Center` (box layout), `Column`/`Row` (flex, generic over children with `Vec<BoxedView>` as the default type parameter — the mandatory dynamic path), `Text` (`RenderParagraph` over the cosmic-text stack), `GestureDetector` (input/hit-testing), `SingleChildScrollView` (viewport/offset), dynamic `ListView` (keyed reconciliation on reorder; `tests/lazy_list.rs`), `AnimatedContainer` + `AnimatedOpacity` (`flui-animation` + the `memoize`/`can_update` short-circuit), and a `StatefulView` counter (C1 `setState`).
 - **Contract-validation report** at [`research/2026-06-30-phase1-contract-validation.md`](research/2026-06-30-phase1-contract-validation.md), listing per contract the test that proved it. C8 (async edges) and C9 (type-erasure boundary) are framework invariants — validated by `port-check.sh` triggers, not per-widget tests.
 - **The parity oracle is live**: `crates/flui-widgets/tests/parity/` (25 files) covers Container, Center, Column/Row, Text, ListView, and the stateful counter.
-- **The combined demo app**, `examples/vertical_slice_demo/` — a stateful counter, a scrollable list, a gesture-responsive "+" button, and an `AnimatedContainer` box, all in one tree — with a shared-tree acceptance test at `tests/vertical_slice_demo.rs` (`#[path]`-includes the example's tree and mounts it headlessly, so the test exercises the exact tree the example runs). The list's scroll offset is driven programmatically in both the example and the test; drag-to-scroll needs `Scrollable` gesture wiring, still open (see Remains).
+- **The combined demo app**, `examples/vertical_slice_demo/` — a stateful counter, a scrollable list, a gesture-responsive "+" button, and an `AnimatedContainer` box, all in one tree — with a shared-tree acceptance test at `tests/vertical_slice_demo.rs` (`#[path]`-includes the example's tree and mounts it headlessly, so the test exercises the exact tree the example runs).
 - **Parity-test ports for the four remaining slice widgets** — `Padding`, `GestureDetector`, `SingleChildScrollView`, and the implicit-animation pair — ported into `tests/parity/` at Flutter tag `3.44.0`. Porting `SingleChildScrollView`'s cases exposed and fixed a missing `reverse` option.
 - **Frame-time evidence for the 60 fps assertion** — measured on a real winit-backed Wayland window (2026-07-14): the demo's implicit animation over a 25 s run shows inter-tick cadence median 16.72 ms / p90 16.78 ms / max 16.81 ms across three post-warmup 300-sample windows — a locked ~59.8 fps with zero dropped ticks. The original "≤ 16 ms median" phrasing conflated the per-frame budget with tick cadence: a steady 60 Hz cadence sits at ~16.7 ms by definition, so the honest criterion — the animation sustains 60 fps on the real frame loop — is met. The loop is wake-driven; true vsync pacing (`ControlFlow::Wait`) remains App.1's exit criterion.
-
-**Remains.**
-- **Drag-to-scroll wiring** for the demo list — `Scrollable` gesture integration; today the list's offset is only driven programmatically.
+- **Drag-to-scroll for the demo list** (2026-07-14): pointer drags over the `ListView` scroll it through `GestureDetector` pan → `ScrollController`, with clamped extents, proven by a red→green drag acceptance test against the shared demo tree. The demo feeds content extents manually — framework-level `Scrollable`↔viewport composition and `ViewportOffset`→`ScrollController` content-dimension feedback are Business.1 work (see below).
 
 **Parity delta.** `widgets` catalog seeded; `animation` exercised end-to-end; the pipeline is proven on live widget code.
 
@@ -206,6 +204,7 @@ Each phase states: **Goal**, **Status**, what was **Delivered** (for closed work
 **Remains.**
 - **Fidelity** — porting the Flutter `_test.dart` corpus for the catalog into `tests/parity/`. This is the bulk of what separates "built" from "at parity."
 - **Named `Hero` gaps** — user-gesture flights and cross-navigator flights, tracked in `ROADMAP-TRACKER.md` B1.4 / ADR-0021.
+- **Scrollable composition + content-dimension feedback** — `Scrollable` currently hardwires `SingleChildScrollView` with no offset feed-through to viewport widgets (`ListView`/`GridView`), and nothing feeds `ViewportOffset` content dimensions back to `ScrollController`, so every consumer must hand-wire extents. The scroll family needs the builder-style composition and the extent feedback loop before the catalog can claim scroll parity.
 - **`flui-assets` ↔ `Image` integration verification** — the crate is an active workspace member; confirm network + asset image and font loading through the `Image` widget end-to-end.
 - Exit criteria to demonstrate: a non-trivial sample app built entirely from `flui-widgets` (no raw render objects) with a scrolling list, gesture button, implicit animation, and navigated route; `flui-widgets` coverage ≥ 85% via `just coverage`.
 
@@ -278,7 +277,7 @@ Bundled into Core.0 because they were cheap-now / catalog-wide-later: the `flui-
 
 ### Cross.H — Foundation hardening
 
-**Goal.** The standing quality discipline — close the remaining systemic defects as the owning crates are next touched: the layer lifecycle protocol (gates App.1), parallel-type collapses, the `BuildContext` inherited-data hole (**gates Catalog.1** — `Theme` depends on it), the `TreeWrite::remove` cascade, Ticker lifecycle, and feature-gating of speculative scaffolding. Focus/tab navigation — originally on this list — has since landed in `flui-widgets` (`Focus`/`FocusScope`/`Actions`/`Shortcuts`, with tests). **Entry:** continuous from Core.0. **Exit:** the foundation is declared stable — all critical-tier defects closed, second-tier addressed opportunistically. This is the audit-and-repair methodology as permanent discipline, not a bounded effort.
+**Goal.** The standing quality discipline — close the remaining systemic defects as the owning crates are next touched: the layer lifecycle protocol (gates App.1), parallel-type collapses, the `BuildContext` inherited-data hole (**gates Catalog.1** — `Theme` depends on it), the `TreeWrite::remove` cascade, Ticker lifecycle, and feature-gating of speculative scaffolding. Focus/tab navigation — originally on this list — has since landed in `flui-widgets` (`Focus`/`FocusScope`/`Actions`/`Shortcuts`, with tests). **Known gap:** gesture settings do not adapt to pointer type — `DragGestureRecognizer` always uses touch slop (18px) even for mouse input, where Flutter differentiates precise-pointer slop (surfaced by Core.1's drag-to-scroll work, 2026-07-14). **Entry:** continuous from Core.0. **Exit:** the foundation is declared stable — all critical-tier defects closed, second-tier addressed opportunistically. This is the audit-and-repair methodology as permanent discipline, not a bounded effort.
 
 ---
 
@@ -286,11 +285,11 @@ Bundled into Core.0 because they were cheap-now / catalog-wide-later: the `flui-
 
 ```
 MAIN VERTICAL (sequential — Core → Business → Catalog → App):
-  Core.0 ✅ ── Core.1 ◐ ── Core.2 ◐ ── Business.1 ◐ ── Catalog.1 ✗ ── App.1 ◐
-              (slice:      (77/~80      (built;        (Material ∥     (partial:
-               demo app     objects;     fidelity +     Cupertino —     vsync, IME,
-               + parity     2 named      Hero gaps)     not started)    facade left)
-               ports left)  gaps)
+  Core.0 ✅ ── Core.1 ✅ ── Core.2 ◐ ── Business.1 ◐ ── Catalog.1 ✗ ── App.1 ◐
+                            (77/~80      (built;        (Material ∥     (partial:
+                             objects;     fidelity +     Cupertino —     vsync, IME,
+                             2 named      Hero gaps)     not started)    facade left)
+                             gaps)
 
 CROSS layer — continuous, with cross-track gates marked:
   Cross.P (platform)  ═════════════════════════════════════► joins App.1

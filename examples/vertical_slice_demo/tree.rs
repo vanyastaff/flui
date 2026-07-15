@@ -13,9 +13,32 @@
 //! builds a `Column` of:
 //! - a counter row: `Text` showing the count, plus a `GestureDetector` "+"
 //!   button that increments it;
-//! - a fixed-height `ListView` with enough rows to overflow its box;
+//! - a fixed-height, drag-to-scroll `ListView` with enough rows to overflow
+//!   its box;
 //! - a `GestureDetector`-wrapped `AnimatedContainer` that toggles its
 //!   width/height/color between a collapsed and an expanded target.
+//!
+//! # Drag-to-scroll wiring (demo-local, not `Scrollable`)
+//!
+//! The list is wrapped in a plain `GestureDetector` feeding a
+//! `ScrollController` directly, deliberately NOT the `Scrollable` widget:
+//! `Scrollable` hardwires a `SingleChildScrollView` as its layout/paint host
+//! with no offset feed-through to an arbitrary scrollable child
+//! (`scrollable.rs`), so nesting this `ListView` inside it would produce a
+//! degenerate viewport. Making `Scrollable` accept an arbitrary scrollable
+//! child is a framework-level fix, out of scope here (tracked as a Business.1
+//! item).
+//!
+//! Nothing in the framework yet propagates a `Viewport`'s committed
+//! content/viewport extents back to a `ScrollController`
+//! (`ViewportOffset` → `ScrollController` feedback is the same Business.1
+//! item), so [`DemoRootState::create_state`] feeds `update_dimensions` the
+//! same fixed constants the tree renders with, once, up front.
+//!
+//! Drag-only: there is no fling/ballistic simulation. The pan gesture's
+//! release velocity (`on_pan_end`) is intentionally left unwired — hand-
+//! rolling ballistics in the demo was ruled out, and a real fling belongs to
+//! the same Business.1 item.
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -54,19 +77,26 @@ const BACKGROUND_COLOR: Color = Color::rgb(18, 18, 24);
 /// The vertical-slice demo root.
 ///
 /// `count`/`expanded`/`scroll_offset` are `Rc<Cell<_>>` so a caller (the
-/// acceptance test) can keep a clone from before mounting: the counter and
-/// the animated box are driven the same way the running example drives them
-/// — by dispatching a pointer tap through the mounted `GestureDetector`s —
-/// but the list here has no drag-to-scroll gesture wired yet, so its offset
-/// is driven by mutating `scroll_offset` directly and forcing a rebuild
-/// (documented, honest fallback; see the acceptance test).
+/// acceptance test) can keep a clone from before mounting. All three are
+/// driven the same way the running example drives them — by dispatching
+/// synthetic pointer gestures through the mounted `GestureDetector`s: taps
+/// for the counter and the animated box, a drag for the list. `scroll_offset`
+/// is kept in sync with [`DemoRootState`]'s internal `ScrollController` by
+/// the drag's `on_pan_update` callback (see the module doc's drag-to-scroll
+/// wiring section above) — `ListView::offset` only accepts a plain `f32`, so
+/// the cell is still the value it reads each build.
 #[derive(Clone, StatefulView)]
 pub struct DemoRoot {
     /// Tap count, shown by the counter row and incremented by its "+" button.
     pub count: Rc<Cell<i32>>,
     /// Whether the animated box currently targets its expanded size/color.
     pub expanded: Rc<Cell<bool>>,
-    /// The list's programmatic scroll offset, in logical pixels.
+    /// The list's scroll offset, in logical pixels — driven by the drag
+    /// gesture wired in [`DemoRootState::build`], and read by `ListView`'s
+    /// `.offset(...)` each build. Also the seed value
+    /// [`DemoRootState::create_state`] jump-starts the internal
+    /// `ScrollController` from, so constructing a `DemoRoot` with a nonzero
+    /// offset does not snap back to zero on the first drag.
     pub scroll_offset: Rc<Cell<f32>>,
 }
 
@@ -97,6 +127,11 @@ pub struct DemoRootState {
     count: Rc<Cell<i32>>,
     expanded: Rc<Cell<bool>>,
     scroll_offset: Rc<Cell<f32>>,
+    /// The list's drag position, clamped to `[0, max_scroll_extent]` by
+    /// `jump_to`. Owned by the state (not `DemoRoot`) because it is pure
+    /// wiring, not app-visible data — `scroll_offset` above is what `build`
+    /// actually reads.
+    scroll_controller: ScrollController,
     /// `None` only before `init_state` has run; every `build` call happens
     /// after it (`ViewState` lifecycle order), so it is always `Some` there.
     rebuild: Option<RebuildHandle>,
@@ -106,10 +141,26 @@ impl StatefulView for DemoRoot {
     type State = DemoRootState;
 
     fn create_state(&self) -> Self::State {
+        let scroll_controller = ScrollController::new();
+        // Manual extent feed (see the module doc's Drag-to-scroll wiring
+        // section): these are the same fixed constants `build` renders the
+        // list with, so computing them once here — rather than from a real
+        // `Viewport` layout callback, which doesn't exist yet — is exact, not
+        // an approximation.
+        let max_scroll_extent =
+            (LIST_ITEM_EXTENT * LIST_ITEM_COUNT as f32 - LIST_BOX_HEIGHT).max(0.0);
+        scroll_controller.update_dimensions(LIST_BOX_HEIGHT, 0.0, max_scroll_extent);
+        // Seed from the pub cell (clamped through the extents just set) so a
+        // `DemoRoot` constructed with a nonzero `scroll_offset` doesn't snap
+        // back to 0 on the first drag — `jump_to` is the same clamp path the
+        // drag callback below uses.
+        scroll_controller.jump_to(self.scroll_offset.get());
+
         DemoRootState {
             count: Rc::clone(&self.count),
             expanded: Rc::clone(&self.expanded),
             scroll_offset: Rc::clone(&self.scroll_offset),
+            scroll_controller,
             rebuild: None,
         }
     }
@@ -153,21 +204,43 @@ impl ViewState<DemoRoot> for DemoRootState {
                 ),
         ]);
 
-        // -- fixed-height scrollable list --------------------------------------
-        let list_area = SizedBox::height(LIST_BOX_HEIGHT).child(
-            ListView::new(
-                LIST_ITEM_EXTENT,
-                (0..LIST_ITEM_COUNT)
-                    .map(|index| {
-                        Container::new()
-                            .padding(EdgeInsets::all(px(4.0)))
-                            .child(Text::new(format!("Item {index}")))
-                            .boxed()
-                    })
-                    .collect::<Vec<_>>(),
-            )
-            .offset(scroll_offset),
-        );
+        // -- fixed-height, drag-to-scroll list ---------------------------------
+        let scroll_offset_for_drag = Rc::clone(&self.scroll_offset);
+        let scroll_controller_for_drag = self.scroll_controller.clone();
+        let rebuild_for_drag = rebuild.clone();
+        let list_area = GestureDetector::new()
+            // Opaque: the drag must fire from anywhere in the list's box, not
+            // only where a hit-testable descendant (an item's `Text`/padding)
+            // happens to sit — same reasoning as the "+" button above.
+            .behavior(HitTestBehavior::Opaque)
+            .on_pan_update(move |details: DragUpdateDetails| {
+                // Flutter convention (matches `Scrollable`'s own pan-update
+                // wiring in `scrollable.rs`): a downward finger drag (positive
+                // delta on the scroll axis) moves the viewport toward the
+                // START of the content, so the offset DECREASES; dragging up
+                // increases it. `jump_to` clamps to the extents fed in
+                // `create_state` (see the module doc).
+                let proposed = scroll_controller_for_drag.pixels() - details.delta.dy.get();
+                scroll_controller_for_drag.jump_to(proposed);
+                scroll_offset_for_drag.set(scroll_controller_for_drag.pixels());
+                rebuild_for_drag.schedule();
+            })
+            .child(
+                SizedBox::height(LIST_BOX_HEIGHT).child(
+                    ListView::new(
+                        LIST_ITEM_EXTENT,
+                        (0..LIST_ITEM_COUNT)
+                            .map(|index| {
+                                Container::new()
+                                    .padding(EdgeInsets::all(px(4.0)))
+                                    .child(Text::new(format!("Item {index}")))
+                                    .boxed()
+                            })
+                            .collect::<Vec<_>>(),
+                    )
+                    .offset(scroll_offset),
+                ),
+            );
 
         // -- animated box: tap toggles expanded, AnimatedContainer eases to it -
         let expanded_for_tap = Rc::clone(&self.expanded);
