@@ -73,9 +73,13 @@
 //! `HeroHandle`, `HeroFlightManifest`, and the flight machinery are `pub(crate)`, and
 //! `navigator_tests::public_no_internal_route_stack_exports` fails if any is exported.
 //!
-//! Full nested-navigator flight parity remains deferred. `HeroControllerScope::none`
-//! isolates nested navigators by default, and a nested navigator can host its own
-//! controller, but cross-navigator hero matching is still out of scope.
+//! Cross-navigator hero matching is live: [`MeasurementPass::collect_manifests`]
+//! matches against [`ModalHandle::all_heroes`](super::modal_route::ModalHandle::all_heroes),
+//! which pulls in a nested `Navigator`'s current `PageRoute` heroes recursively —
+//! `Hero._allHeroesFor`'s nested-`Navigator` branch (`heroes.dart:317-333`).
+//! `HeroControllerScope::none` still stops a nested navigator from auto-attaching
+//! its *own* controller (so it drives no flights of its own), but does not gate
+//! this matching — Flutter's predicate does not consult it either.
 //!
 //! No `userGestureInProgress` either: FLUI has no back-swipe, so
 //! `isUserGestureTransition` is always `false`. That collapses `didStartUserGesture`
@@ -104,7 +108,6 @@ use flui_geometry::{Matrix4, Rect};
 use flui_types::Size;
 use parking_lot::Mutex;
 
-use super::binding::TransitionGroup;
 use super::hero::{HeroHandle, HeroTag, RectTweenFactory};
 use super::hero_flight::{FlightManager, FlightPlan};
 use super::modal_route::ModalHandle;
@@ -310,10 +313,7 @@ impl HeroController {
         // `if (toRoute == fromRoute || toRoute is! PageRoute || fromRoute is! PageRoute)`
         // (`:916-920`). `TransitionGroup::Page` already encodes `is PageRoute`,
         // because FLUI's routes name each other by id.
-        if from == to
-            || !Self::is_page_route(&navigator, from)
-            || !Self::is_page_route(&navigator, to)
-        {
+        if from == to || !navigator.is_page_route(from) || !navigator.is_page_route(to) {
             return;
         }
 
@@ -382,16 +382,6 @@ impl HeroController {
         // to be queued. A failed local-lane registration must never strand it.
         destination.set_offstage(to_animation.value() == 0.0);
         self.scheduled.fetch_add(1, Ordering::SeqCst);
-    }
-
-    /// Flutter tests `nextRoute is PageRoute` on the Dart type; FLUI's routes name
-    /// each other by id, so the family travels with the published `TransitionPeer`
-    /// (`binding.rs`, `TransitionGroup`). A route that is not a `TransitionRoute` at
-    /// all publishes no peer, and is not a `PageRoute` either.
-    fn is_page_route(navigator: &NavigatorHandle, route: RouteId) -> bool {
-        navigator
-            .route_peer(route)
-            .is_some_and(|peer| peer.group == TransitionGroup::Page)
     }
 }
 
@@ -557,7 +547,10 @@ impl MeasurementPass<'_> {
     ///
     /// Flutter walks `fromHeroes.entries` and looks each tag up in `toHeroes`; a tag
     /// on only one side has no flight (`:1044-1046` — `toHero == null` ⇒ `endFlight`).
-    /// Nothing here depends on iteration order.
+    /// Nothing here depends on iteration order. Both sides are gathered through
+    /// [`ModalHandle::all_heroes`], so a tag registered inside a nested `Navigator`'s
+    /// current `PageRoute` matches exactly as one registered directly on `from`/`to`
+    /// — Flutter's nested-`Navigator` branch of `_allHeroesFor` (`heroes.dart:317-333`).
     fn collect_manifests(&self) -> Vec<(HeroFlightManifest, HeroHandle, HeroHandle)> {
         let Some(from_subtree) = self.navigator.route_subtree(self.from) else {
             return Vec::new();
@@ -566,13 +559,12 @@ impl MeasurementPass<'_> {
             return Vec::new();
         };
 
-        let from_heroes = self.source.heroes();
-        let to_heroes = self.destination.heroes();
+        let from_heroes = self.source.all_heroes();
+        let to_heroes = self.destination.all_heroes();
 
         let mut manifests = Vec::new();
-        for tag in from_heroes.tags() {
-            let (Some(from_hero), Some(to_hero)) = (from_heroes.get(&tag), to_heroes.get(&tag))
-            else {
+        for (tag, from_hero) in &from_heroes {
+            let Some(to_hero) = to_heroes.get(tag) else {
                 continue; // A tag on only one route is not a flight.
             };
 
@@ -601,15 +593,15 @@ impl MeasurementPass<'_> {
 
             manifests.push((
                 HeroFlightManifest {
-                    tag,
+                    tag: tag.clone(),
                     direction: self.direction,
                     from_route: self.from,
                     to_route: self.to,
                     from_rect,
                     to_rect,
                 },
-                from_hero,
-                to_hero,
+                from_hero.clone(),
+                to_hero.clone(),
             ));
         }
         manifests

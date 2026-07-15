@@ -66,6 +66,7 @@
 // consumers and do not surface every knob. `ModalHandle::set_offstage` in
 // particular has no public caller until `Hero` drives it.
 
+use std::collections::HashMap;
 use std::fmt;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -82,7 +83,7 @@ use flui_view::{AnimatedView, BoxedView, ViewExt, impl_animated_view};
 use parking_lot::Mutex;
 
 use super::binding::{RouteBindingSlot, TransitionGroup};
-use super::hero::{HeroRegistry, HeroScope};
+use super::hero::{HeroHandle, HeroRegistry, HeroScope, HeroTag};
 use super::local_history::{LocalHistoryHandle, LocalHistoryRegistry, LocalHistoryScope};
 use super::navigator::NavigatorHandle;
 use super::overlay_route::{
@@ -699,6 +700,15 @@ impl ModalHandle {
     /// (`heroes.dart:279`), as a registry rather than an element walk.
     pub(crate) fn heroes(&self) -> HeroRegistry {
         self.inner.heroes.clone()
+    }
+
+    /// Every hero visible for a flight through this route: this route's own,
+    /// plus — recursively — whatever each nested `Navigator` mounted inside it
+    /// publishes for its own current top `PageRoute`. FLUI's
+    /// `Hero._allHeroesFor(route.subtreeContext, …, navigator)`
+    /// (`heroes.dart:279-333`), including the nested-navigator branch.
+    pub(crate) fn all_heroes(&self) -> HashMap<HeroTag, HeroHandle> {
+        self.inner.heroes.all_heroes()
     }
 
     /// There is no `maintainState` setter in Flutter — it is an abstract getter a
