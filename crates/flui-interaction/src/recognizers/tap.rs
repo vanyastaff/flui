@@ -156,6 +156,24 @@ pub struct TapGestureRecognizer {
     /// `Some(true)` = won, `Some(false)` = lost, `None` = pending.
     /// Reset to None on each new add_pointer cycle.
     accepted: Arc<Mutex<Option<bool>>>,
+
+    /// The pointer identity that `pending_down` / `pending_up` / `accepted`
+    /// currently belong to. Set once per gesture sequence in `add_pointer`
+    /// and read by `accept_gesture` / `reject_gesture` / `resolve_pointer`
+    /// to tell a *stale* arena resolution (for a pointer this recognizer has
+    /// already abandoned) apart from the current sequence's own resolution.
+    ///
+    /// Flutter parity: `recognizer.dart:668 PrimaryPointerGestureRecognizer._primaryPointer`
+    /// — deliberately does *not* clear when tracking stops (unlike
+    /// [`RecognizerBase::primary_pointer`], which `stop_tracking` resets to
+    /// `None` the moment the pointer's up event is processed), specifically
+    /// so a held gesture's late win/loss can still be compared against the
+    /// pointer that produced it. `BaseTapGestureRecognizer::acceptGesture`
+    /// / `::rejectGesture` (`tap.dart:348-368`) both guard on
+    /// `pointer == primaryPointer` before touching `_down`/`_up`/
+    /// `_wonArenaForPrimaryPointer` — this field plus the guards in
+    /// `accept_gesture`/`reject_gesture`/`resolve_pointer` port that check.
+    sequence_pointer: Arc<Mutex<Option<PointerId>>>,
 }
 
 impl std::fmt::Debug for TapGestureRecognizer {
@@ -261,6 +279,7 @@ impl TapGestureRecognizer {
             pending_down: Arc::new(Mutex::new(None)),
             pending_up: Arc::new(Mutex::new(None)),
             accepted: Arc::new(Mutex::new(None)),
+            sequence_pointer: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -277,6 +296,7 @@ impl TapGestureRecognizer {
             pending_down: Arc::new(Mutex::new(None)),
             pending_up: Arc::new(Mutex::new(None)),
             accepted: Arc::new(Mutex::new(None)),
+            sequence_pointer: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -634,9 +654,21 @@ impl GestureRecognizer for TapGestureRecognizer {
             return;
         }
         // Reset accepted flag + pending_up for the new sequence (flags
-        // from a prior gesture must not bleed into the new one).
+        // from a prior gesture must not bleed into the new one), and adopt
+        // `pointer` as the sequence this recognizer now tracks. Flutter
+        // parity: `tap.dart:277-298 addAllowedPointer` resets `_down`/`_up`
+        // and reassigns `_primaryPointer` the moment `state == ready` — which
+        // for FLUI holds on every `add_pointer` call, since the previous
+        // pointer's own `stop_tracking()` already cleared
+        // `RecognizerBase::primary_pointer`. A pointer whose down+up were
+        // both seen but whose arena entry is still held open (e.g. a
+        // double-tap's inter-tap window) is abandoned here exactly as
+        // Flutter abandons it — see `accept_gesture`/`reject_gesture` below
+        // for how that pointer's late resolution is then ignored rather
+        // than corrupting this new sequence.
         *self.accepted.lock() = None;
         *self.pending_up.lock() = None;
+        *self.sequence_pointer.lock() = Some(pointer);
         // Start tracking this pointer
         // Create Arc from self for arena tracking
         let recognizer = Arc::new(self.clone());
@@ -730,6 +762,7 @@ impl GestureRecognizer for TapGestureRecognizer {
         callbacks.on_tertiary_tap_cancel = None;
         *self.pending_down.lock() = None;
         *self.pending_up.lock() = None;
+        *self.sequence_pointer.lock() = None;
     }
 
     fn primary_pointer(&self) -> Option<PointerId> {
@@ -753,7 +786,13 @@ impl crate::recognizers::OneSequenceGestureRecognizer for TapGestureRecognizer {
             .unwrap_or_default()
     }
 
-    fn resolve_pointer(&self, _pointer: PointerId, disposition: crate::arena::GestureDisposition) {
+    fn resolve_pointer(&self, pointer: PointerId, disposition: crate::arena::GestureDisposition) {
+        // Ignore a resolution for a pointer this recognizer has already
+        // abandoned in favour of a newer sequence (see `sequence_pointer`
+        // doc comment / `accept_gesture` below).
+        if *self.sequence_pointer.lock() != Some(pointer) {
+            return;
+        }
         match disposition {
             crate::arena::GestureDisposition::Accepted => {
                 // Arena accepted us — same path as accept_gesture below.
@@ -784,7 +823,19 @@ impl crate::recognizers::PrimaryPointerGestureRecognizer for TapGestureRecognize
 }
 
 impl GestureArenaMember for TapGestureRecognizer {
-    fn accept_gesture(&self, _pointer: PointerId) {
+    fn accept_gesture(&self, pointer: PointerId) {
+        // A held gesture (e.g. a double-tap's inter-tap window) can resolve
+        // *after* this recognizer has already moved on to a newer pointer's
+        // sequence (`add_pointer` reassigns `sequence_pointer` the moment a
+        // new pointer arrives — see its doc comment). Flutter parity:
+        // `tap.dart:348-355 BaseTapGestureRecognizer.acceptGesture` guards
+        // `pointer == primaryPointer` before touching `_down`/`_up`/
+        // `_wonArenaForPrimaryPointer`; a late win for an already-abandoned
+        // pointer is silently dropped there too, rather than resurrecting
+        // stale state or corrupting whatever sequence is now current.
+        if *self.sequence_pointer.lock() != Some(pointer) {
+            return;
+        }
         // The arena dispatches `accept_gesture` from `dispatch_pending` AFTER
         // releasing both the per-entry mutex and the DashMap shard guard, so
         // firing user callbacks here holds no arena lock (the same guarantee
@@ -796,7 +847,13 @@ impl GestureArenaMember for TapGestureRecognizer {
         self.fire_won_tap();
     }
 
-    fn reject_gesture(&self, _pointer: PointerId) {
+    fn reject_gesture(&self, pointer: PointerId) {
+        // Same stale-pointer guard as `accept_gesture` — a late rejection
+        // for an abandoned pointer must not clear a newer sequence's
+        // `pending_down`/`pending_up`.
+        if *self.sequence_pointer.lock() != Some(pointer) {
+            return;
+        }
         // Same lock-during-callback concern as accept_gesture. Record
         // rejection; let the gesture-up / dispose path fire on_tap_cancel
         // outside the arena lock.
@@ -1116,5 +1173,146 @@ mod tests {
 
         assert!(*secondary_cancelled.lock());
         assert!(!*primary_cancelled.lock());
+    }
+
+    fn down_for(id: PointerId, p: Offset<Pixels>) -> PointerEvent {
+        crate::events::make_down_event_for_id(id, p, PointerType::Touch)
+    }
+    fn up_for(id: PointerId, p: Offset<Pixels>) -> PointerEvent {
+        crate::events::make_up_event_for_id(id, p, PointerType::Touch)
+    }
+
+    // ========================================================================
+    // `sequence_pointer` — stale arena resolution for an abandoned pointer.
+    //
+    // Mirrors the double-tap-hold overlap: pointer A's up is recorded but
+    // its arena entry is still held (e.g. `DoubleTapGestureRecognizer`'s
+    // inter-tap window) when pointer B starts a new, unrelated sequence on
+    // the SAME shared `TapGestureRecognizer`. Flutter parity: `tap.dart:
+    // 348-368 acceptGesture`/`rejectGesture` guard on `pointer ==
+    // primaryPointer`; a pointer whose down+up were both seen but whose
+    // arena entry never resolved before a newer pointer took over is
+    // abandoned, and its late resolution is a no-op rather than resurrected
+    // or left to clobber the newer sequence's state.
+    // ========================================================================
+
+    /// Normal (non-overlapping) path: a win for the pointer that is still
+    /// the current sequence fires the pending tap exactly once, whether it
+    /// arrives via the arena's own self-driven sweep or a direct call.
+    #[test]
+    fn accept_gesture_for_the_current_sequences_pointer_fires_the_pending_tap() {
+        let arena = GestureArena::new();
+        let taps = Arc::new(Mutex::new(0u32));
+        let taps_clone = taps.clone();
+
+        let recognizer = TapGestureRecognizer::new(arena).with_on_tap(move |_| {
+            *taps_clone.lock() += 1;
+        });
+
+        let pointer = PointerId::PRIMARY;
+        let position = pos(30.0, 30.0);
+
+        // Held, so the up doesn't self-sweep-resolve immediately — mirrors
+        // the shape of the overlapping-contact tests below.
+        recognizer.add_pointer(pointer, position);
+        recognizer.state.arena().hold(pointer);
+        recognizer.handle_event(&primary_down(position));
+        recognizer.handle_event(&primary_up(position));
+        assert_eq!(*taps.lock(), 0, "held: resolution not yet delivered");
+
+        recognizer.accept_gesture(pointer);
+        assert_eq!(*taps.lock(), 1);
+    }
+
+    /// The clobber sequence: down A, down B (B replaces A as the tracked
+    /// sequence before A resolves), resolve B, resolve A. B's tap fires
+    /// once; A's late win is ignored rather than firing a phantom second
+    /// tap.
+    ///
+    /// Mirrors the double-tap-hold overlap this fix targets: pointer A's
+    /// arena entry is held (a double-tap recognizer's inter-tap window),
+    /// and a second, unrelated pointer B starts and finishes its own tap on
+    /// the same shared recognizer before A's hold releases.
+    #[test]
+    fn stale_arena_win_for_an_abandoned_pointer_does_not_fire_a_newer_sequences_tap() {
+        let arena = GestureArena::new();
+        let taps = Arc::new(Mutex::new(0u32));
+        let taps_clone = taps.clone();
+
+        let recognizer = TapGestureRecognizer::new(arena).with_on_tap(move |_| {
+            *taps_clone.lock() += 1;
+        });
+
+        let pointer_a = PointerId::new(1).expect("nonzero");
+        let pointer_b = PointerId::new(2).expect("nonzero");
+        let pos_a = pos(10.0, 10.0);
+        let pos_b = pos(200.0, 200.0);
+
+        // Pointer A: down + up, held — its arena entry never resolves here,
+        // simulating a double-tap's inter-tap window.
+        recognizer.add_pointer(pointer_a, pos_a);
+        recognizer.state.arena().hold(pointer_a);
+        recognizer.handle_event(&down_for(pointer_a, pos_a));
+        recognizer.handle_event(&up_for(pointer_a, pos_a));
+        assert_eq!(*taps.lock(), 0, "A's win is held, resolution deferred");
+
+        // Pointer B replaces A as the tracked sequence before A resolves.
+        // B's own (unheld, sole-member) arena entry self-sweep-resolves on
+        // its own up.
+        recognizer.add_pointer(pointer_b, pos_b);
+        recognizer.handle_event(&down_for(pointer_b, pos_b));
+        recognizer.handle_event(&up_for(pointer_b, pos_b));
+        assert_eq!(*taps.lock(), 1, "B's tap fires exactly once");
+
+        // A's held win eventually arrives — ignored, not fired as a
+        // phantom second tap, because `add_pointer(pointer_b, ..)` already
+        // reassigned `sequence_pointer` away from A.
+        recognizer.accept_gesture(pointer_a);
+        assert_eq!(
+            *taps.lock(),
+            1,
+            "a stale win for the abandoned pointer A must not fire on_tap"
+        );
+    }
+
+    /// Same clobber shape for rejection: a stale `reject_gesture` for the
+    /// abandoned pointer A must not wipe pointer B's still-pending
+    /// (in-flight, down-only) state.
+    #[test]
+    fn stale_arena_rejection_for_an_abandoned_pointer_does_not_clear_a_newer_sequence() {
+        let arena = GestureArena::new();
+        let taps = Arc::new(Mutex::new(0u32));
+        let taps_clone = taps.clone();
+
+        let recognizer = TapGestureRecognizer::new(arena).with_on_tap(move |_| {
+            *taps_clone.lock() += 1;
+        });
+
+        let pointer_a = PointerId::new(1).expect("nonzero");
+        let pointer_b = PointerId::new(2).expect("nonzero");
+        let pos_a = pos(10.0, 10.0);
+        let pos_b = pos(200.0, 200.0);
+
+        // Pointer A: down + up, held.
+        recognizer.add_pointer(pointer_a, pos_a);
+        recognizer.state.arena().hold(pointer_a);
+        recognizer.handle_event(&down_for(pointer_a, pos_a));
+        recognizer.handle_event(&up_for(pointer_a, pos_a));
+
+        // Pointer B replaces A before A resolves, and is still mid-sequence
+        // (down only) when A's stale rejection arrives.
+        recognizer.add_pointer(pointer_b, pos_b);
+        recognizer.handle_event(&down_for(pointer_b, pos_b));
+
+        // Stale rejection for the abandoned pointer A must not wipe B's
+        // in-flight `pending_down`.
+        recognizer.reject_gesture(pointer_a);
+
+        recognizer.handle_event(&up_for(pointer_b, pos_b));
+        assert_eq!(
+            *taps.lock(),
+            1,
+            "B's tap still fires after a stale reject for A"
+        );
     }
 }

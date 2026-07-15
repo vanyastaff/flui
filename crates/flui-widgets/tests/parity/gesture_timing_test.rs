@@ -338,9 +338,10 @@ fn double_tap_window_boundary_second_tap_inside_fires_double_outside_fires_two_s
 /// `kDoubleTapSlop` (100 logical px) from the first is not part of a double
 /// tap (matches the upstream assertions exactly: no `on_double_tap`; this
 /// file wires only `on_double_tap`, not `on_tap` — see
-/// `double_tap_recognizer_hold_can_silently_drop_an_overlapping_contacts_tap`
-/// below for why combining both here would assert past a real, separately
-/// tracked bug rather than this case's own behavior).
+/// `overlapping_contact_replacing_the_held_primary_pointer_drops_its_late_win`
+/// below for why combining both here would assert past this case's own
+/// behavior — an out-of-slop second contact replaces the held first tap as
+/// the shared recognizer's primary pointer rather than coexisting with it).
 #[test]
 fn double_tap_second_tap_far_from_first_is_not_a_double_tap() {
     let double_taps = Arc::new(AtomicUsize::new(0));
@@ -371,45 +372,51 @@ fn double_tap_second_tap_far_from_first_is_not_a_double_tap() {
     );
 }
 
-/// A genuine bug, not a test bug: too deep for a localized fix, so it is
-/// `#[ignore]`d with the mechanism documented and tracked in the roadmap
-/// rather than silently dropped from the corpus.
+/// Verified Flutter parity, not a bug: a second, unrelated contact that
+/// lands on the same shared `TapGestureRecognizer` while the first tap is
+/// still held (`DoubleTapGestureRecognizer`'s inter-tap window) *replaces*
+/// the first as the tracked primary pointer — the first tap's late win is
+/// then silently dropped, exactly as it is in Flutter.
 ///
 /// `crates/flui-widgets/src/interaction/gesture_detector.rs` shares ONE
 /// `TapGestureRecognizer` instance across every contact a detector ever
-/// sees. `crates/flui-interaction/src/recognizers/double_tap.rs`'s
-/// `arena.hold`/`release` (module doc at the top of this file) legitimately
-/// keeps a first tap's `on_tap` pending — not yet delivered, because the
-/// double-tap window has not lapsed — while a second, unrelated contact can
-/// land, complete, and win its own arena entry in the meantime (exactly the
-/// non-overlapping version of this already works:
+/// sees, matching Flutter's `RawGestureDetectorState`, which also builds its
+/// recognizers once and reuses them. This test was originally filed as a
+/// "single-slot state clobber" bug expecting the held first tap to still
+/// fire once its window lapsed (`taps == 2`). Tracing Flutter 3.44.0's own
+/// state machine shows that expectation does not hold:
+///
+/// - `PrimaryPointerGestureRecognizer.didStopTrackingLastPointer`
+///   (`recognizer.dart:768-774`) resets `_state` to `ready` the instant the
+///   tracked pointer count reaches zero — i.e. synchronously on the first
+///   tap's up event, *regardless* of whether its arena entry is still held
+///   open by `DoubleTapGestureRecognizer._registerFirstTap`'s
+///   `gestureArena.hold` (`multitap.dart:328-330`).
+/// - `BaseTapGestureRecognizer.addAllowedPointer` (`tap.dart:276-299`): when
+///   a new pointer's down arrives with `state == ready` and a stale,
+///   unresolved `_down`/`_up` pair is still recorded, it calls `_reset()`
+///   and adopts the new pointer as `_primaryPointer` — abandoning the held
+///   pointer's sequence outright (comment there: "If there is no result in
+///   the previous gesture arena, we ignore them and prepare to accept a new
+///   pointer").
+/// - `BaseTapGestureRecognizer.acceptGesture` / `.rejectGesture`
+///   (`tap.dart:348-368`) both guard on `pointer == primaryPointer` before
+///   touching `_down`/`_up`/`_wonArenaForPrimaryPointer`; the abandoned
+///   pointer's late win therefore arrives, finds `pointer != primaryPointer`,
+///   and is silently ignored.
+///
+/// So a genuinely new, unrelated contact on a shared tap recognizer does not
+/// coexist with a still-held earlier one — it evicts it. FLUI's
+/// `TapGestureRecognizer` now ports this contract explicitly via a
+/// `sequence_pointer` field compared in `accept_gesture`/`reject_gesture`/
+/// `resolve_pointer` (`crates/flui-interaction/src/recognizers/tap.rs`),
+/// rather than relying on it as an accidental side effect of an unconditional
+/// state reset. The non-overlapping case — no second contact arrives before
+/// the window lapses — is unaffected and still fires normally:
 /// `lone_tap_is_held_until_the_double_tap_window_closes_then_fires_tap` in
-/// `gesture_detector_advanced.rs`).
-///
-/// The bug: `TapGestureRecognizer` keeps its "pending up" state in a single
-/// `Mutex<Option<PendingDown>>` slot
-/// (`crates/flui-interaction/src/recognizers/tap.rs`), not keyed by pointer.
-/// The second contact's `handle_tap_up` overwrites that slot with its own
-/// data before the first contact's hold releases. When the first tap's hold
-/// then gives up and the arena auto-resolves it as the sole remaining
-/// member, `fire_won_tap` finds `pending_up` already consumed by the second
-/// contact and silently drops the first tap's `on_tap` callback — it never
-/// fires.
-///
-/// This is a `TapGestureRecognizer` reentrancy gap (single-slot state can't
-/// track two contacts overlapping on one shared recognizer instance), not a
-/// double-tap-specific bug. Fixing it means threading per-pointer state
-/// through `tap.rs`'s `TapState`/`pending_down`/`pending_up`/`accepted`
-/// fields — recognizer-internals surgery beyond this task's scope (porting
-/// parity tests), so it is tracked here rather than fixed inline.
+/// `gesture_detector_advanced.rs`.
 #[test]
-#[ignore = "known bug: TapGestureRecognizer's single-slot pending_up is not reentrant \
-            across two contacts overlapping on one shared recognizer instance \
-            (crates/flui-interaction/src/recognizers/tap.rs) — a held tap's \
-            on_tap can be silently dropped when a second contact resolves \
-            first. Needs per-pointer state in tap.rs; out of scope for a \
-            parity-test port."]
-fn double_tap_recognizer_hold_can_silently_drop_an_overlapping_contacts_tap() {
+fn overlapping_contact_replacing_the_held_primary_pointer_drops_its_late_win() {
     let taps = Arc::new(AtomicUsize::new(0));
     let double_taps = Arc::new(AtomicUsize::new(0));
     let (tap_cb, double_cb) = (Arc::clone(&taps), Arc::clone(&double_taps));
@@ -432,8 +439,8 @@ fn double_tap_recognizer_hold_can_silently_drop_an_overlapping_contacts_tap() {
     scoped.dispatch_pointer_up(50.0, 50.0);
 
     // A second, unrelated contact far enough away to never combine into a
-    // double tap: it resolves as its own standalone tap while the first is
-    // still held.
+    // double tap: it becomes the new tracked primary pointer and resolves as
+    // its own standalone tap while the first is still held.
     scoped.dispatch_pointer_down(250.0, 250.0);
     scoped.dispatch_pointer_up(250.0, 250.0);
     assert_eq!(
@@ -442,14 +449,17 @@ fn double_tap_recognizer_hold_can_silently_drop_an_overlapping_contacts_tap() {
         "the second, unrelated tap fires"
     );
 
-    // The first tap's window lapses — it is now the sole remaining arena
-    // member and should ALSO fire once. It does not: the second contact
-    // clobbered the shared `pending_up` slot.
+    // The first tap's window lapses. Its arena entry is now the sole
+    // remaining member and resolves as accepted, but `TapGestureRecognizer`
+    // already abandoned that pointer's sequence when the second contact took
+    // over — Flutter parity: the held pointer's late win is dropped, not
+    // fired as a second `on_tap`.
     scoped.pump(Duration::from_millis(301));
     assert_eq!(
         taps.load(Ordering::SeqCst),
-        2,
-        "the held first tap's on_tap must still fire once its window lapses",
+        1,
+        "the held first tap's late win is dropped once a newer contact has \
+         taken over the shared recognizer's primary pointer — Flutter parity",
     );
     assert_eq!(double_taps.load(Ordering::SeqCst), 0);
 }
