@@ -5,6 +5,8 @@
 //! Flutter's full `RenderViewport`: center/anchor reverse-side layout,
 //! shrink-wrap, `showOnScreen`, and lazy child creation stay out of this PR.
 
+use std::sync::Arc;
+
 use flui_foundation::Diagnosticable;
 use flui_tree::Variable;
 use flui_types::{
@@ -21,6 +23,7 @@ use flui_rendering::{
     constraints::{BoxConstraints, GrowthDirection, SliverConstraints, SliverGeometry},
     context::{BoxHitTestContext, BoxLayoutContext, PaintCx},
     parent_data::BoxParentData,
+    pipeline::{DirtySendError, RepaintHandle},
     traits::RenderBox,
     view::{CacheExtentStyle, ScrollableViewportOffset, SliverPaintOrder, ViewportOffset},
 };
@@ -29,6 +32,76 @@ const MAX_LAYOUT_CYCLES_PER_CHILD: usize = 10;
 const DEFAULT_CACHE_EXTENT: f32 = 250.0;
 /// Scroll correction returned when layout accepts the current offset unchanged.
 const NO_SCROLL_CORRECTION: f32 = 0.0;
+
+/// A registered [`ViewportOffset`] listener [`Arc`], wrapped so
+/// [`RenderViewport`]/[`RenderShrinkWrappingViewport`]'s `#[derive(Debug)]`
+/// doesn't need a hand-written `Debug` impl for a value that is fundamentally
+/// an opaque closure — `Debug` just reports that a listener is registered,
+/// not what it does.
+struct OffsetListener(Arc<dyn Fn() + Send + Sync>);
+
+impl std::fmt::Debug for OffsetListener {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("OffsetListener(..)")
+    }
+}
+
+/// Builds the render-side [`ViewportOffset`] listener that `attach` (and any
+/// later `set_offset` re-registration) installs: a self-mark that requests a
+/// re-layout of the node bound to `handle` whenever the offset's `pixels`
+/// changes out-of-band — a gesture's `set_pixels`, a
+/// `ScrollController::jump_to`, or the post-frame content-dimension flush.
+/// Flutter parity: `RenderViewport`/`RenderShrinkWrappingViewport` share this
+/// exact shape (`rendering/viewport.dart`'s `offset.addListener(markNeedsLayout)`
+/// wiring in `attach`).
+///
+/// `apply_viewport_dimension`/`apply_content_dimensions`/`correct_by` never
+/// notify synchronously — that is `ViewportOffset`'s own contract (see the
+/// `scroll_position` module docs) — so this listener can only ever fire from
+/// OUTSIDE `perform_layout`; there is no synchronous mark-during-layout
+/// re-entrancy to guard against here.
+fn offset_relayout_listener(handle: RepaintHandle) -> Arc<dyn Fn() + Send + Sync> {
+    Arc::new(move || {
+        // `SendError::OwnerGone` (pipeline owner torn down — node/tree gone,
+        // this is teardown, not a fault) and any future variant (`SendError`
+        // is `#[non_exhaustive]`) get the same silent treatment: nothing
+        // left to mark, nothing to warn about — the conservative default for
+        // a background mark. Only `ChannelFull` earns a debug line.
+        if let Err(error @ DirtySendError::ChannelFull { .. }) = handle.mark_needs_layout() {
+            // The dirty channel is bounded (cap 256): a full channel under
+            // an offset-notification storm means this SAME node's own
+            // layout mark is already queued somewhere in it — dropping the
+            // duplicate costs nothing.
+            tracing::debug!(
+                %error,
+                "viewport offset listener: mark_needs_layout channel full; \
+                 this node's mark is already queued, dropping the duplicate"
+            );
+        }
+    })
+}
+
+/// Removes `*listener` (if any) from `offset`, via the trait's ptr-eq removal
+/// contract — the SAME `Arc` that was registered.
+fn unregister_offset_listener<O: ViewportOffset>(
+    offset: &O,
+    listener: &mut Option<OffsetListener>,
+) {
+    if let Some(listener) = listener.take() {
+        offset.remove_listener(&listener.0);
+    }
+}
+
+/// Registers a fresh [`offset_relayout_listener`] on `offset`, bound to
+/// `handle`.
+fn register_offset_listener<O: ViewportOffset>(
+    offset: &O,
+    handle: RepaintHandle,
+) -> OffsetListener {
+    let listener = offset_relayout_listener(handle);
+    offset.add_listener(listener.clone());
+    OffsetListener(listener)
+}
 
 /// Parameters for one forward or reverse child walk inside [`RenderViewport`].
 #[derive(Debug, Clone, Copy)]
@@ -78,6 +151,15 @@ pub struct RenderViewport<O = ScrollableViewportOffset> {
     max_scroll_obstruction_extent: f32,
     sliver_obstruction_extents: Vec<f32>,
     has_visual_overflow: bool,
+    /// The repaint handle this node was bound to in [`attach`](RenderBox::attach),
+    /// `None` before attach / after [`detach`](RenderBox::detach). `set_offset`
+    /// clones it to re-register `offset_listener` on a swapped-in offset while
+    /// the node is live in a pipeline.
+    repaint_handle: Option<RepaintHandle>,
+    /// The listener `attach` (or a live `set_offset`) registered on `offset` —
+    /// retained so `detach`/`set_offset` can remove the SAME `Arc` via
+    /// [`ViewportOffset::remove_listener`]'s ptr-eq contract.
+    offset_listener: Option<OffsetListener>,
 }
 
 impl RenderViewport<ScrollableViewportOffset> {
@@ -116,6 +198,8 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
             max_scroll_obstruction_extent: 0.0,
             sliver_obstruction_extents: Vec::new(),
             has_visual_overflow: false,
+            repaint_handle: None,
+            offset_listener: None,
         }
     }
 
@@ -141,9 +225,21 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
     /// — swapping in a same-identity offset would discard layout-committed
     /// extents (`min_scroll_extent`/`max_scroll_extent`/`viewport_dimension`)
     /// for no reason.
+    ///
+    /// If this node is currently attached (a [`RepaintHandle`] was handed to
+    /// [`attach`](RenderBox::attach) and no matching
+    /// [`detach`](RenderBox::detach) has run since), the offset-relayout
+    /// listener moves with the swap: it is removed from the OLD offset first
+    /// (same `Arc`, per the ptr-eq removal contract), then a fresh one is
+    /// registered on the new offset. Not attached yet — the listener is left
+    /// for `attach` to install once the node actually enters a pipeline.
     #[inline]
     pub fn set_offset(&mut self, offset: O) {
+        unregister_offset_listener(&self.offset, &mut self.offset_listener);
         self.offset = offset;
+        if let Some(handle) = self.repaint_handle.clone() {
+            self.offset_listener = Some(register_offset_listener(&self.offset, handle));
+        }
     }
 
     /// Sets the sliver paint order. Hit testing uses the opposite order.
@@ -545,6 +641,20 @@ impl<O: ViewportOffset + 'static> RenderBox for RenderViewport<O> {
     type Arity = Variable;
     type ParentData = BoxParentData;
 
+    // Flutter parity: `RenderViewport`/`RenderAbstractViewport` subscribes to
+    // its `ViewportOffset` in `attach` and tears the subscription down in
+    // `detach` (`rendering/viewport.dart`). See `offset_relayout_listener`'s
+    // docs for what fires the mark and why it can never re-enter `perform_layout`.
+    fn attach(&mut self, handle: RepaintHandle) {
+        self.offset_listener = Some(register_offset_listener(&self.offset, handle.clone()));
+        self.repaint_handle = Some(handle);
+    }
+
+    fn detach(&mut self) {
+        unregister_offset_listener(&self.offset, &mut self.offset_listener);
+        self.repaint_handle = None;
+    }
+
     fn perform_layout(
         &mut self,
         ctx: &mut BoxLayoutContext<'_, Variable, Self::ParentData>,
@@ -670,6 +780,10 @@ pub struct RenderShrinkWrappingViewport<O = ScrollableViewportOffset> {
     max_scroll_extent: f32,
     shrink_wrap_extent: f32,
     has_visual_overflow: bool,
+    /// See [`RenderViewport::repaint_handle`]'s matching field docs.
+    repaint_handle: Option<RepaintHandle>,
+    /// See [`RenderViewport::offset_listener`]'s matching field docs.
+    offset_listener: Option<OffsetListener>,
 }
 
 impl RenderShrinkWrappingViewport<ScrollableViewportOffset> {
@@ -705,6 +819,8 @@ impl<O: ViewportOffset + 'static> RenderShrinkWrappingViewport<O> {
             max_scroll_extent: 0.0,
             shrink_wrap_extent: 0.0,
             has_visual_overflow: false,
+            repaint_handle: None,
+            offset_listener: None,
         }
     }
 
@@ -724,10 +840,15 @@ impl<O: ViewportOffset + 'static> RenderShrinkWrappingViewport<O> {
 
     /// Replaces the viewport offset object wholesale. See
     /// [`RenderViewport::set_offset`] for the identity-check contract a
-    /// caller injecting an external offset must follow.
+    /// caller injecting an external offset must follow, and for the
+    /// attached-listener re-registration this mirrors exactly.
     #[inline]
     pub fn set_offset(&mut self, offset: O) {
+        unregister_offset_listener(&self.offset, &mut self.offset_listener);
         self.offset = offset;
+        if let Some(handle) = self.repaint_handle.clone() {
+            self.offset_listener = Some(register_offset_listener(&self.offset, handle));
+        }
     }
 
     /// Sets the sliver paint order. Hit testing uses the opposite order.
@@ -1050,6 +1171,18 @@ impl<O: ViewportOffset + 'static> RenderBox for RenderShrinkWrappingViewport<O> 
     type Arity = Variable;
     type ParentData = BoxParentData;
 
+    // See `RenderViewport::attach`/`detach`'s matching docs — identical
+    // shape over `RenderShrinkWrappingViewport`'s own `offset`.
+    fn attach(&mut self, handle: RepaintHandle) {
+        self.offset_listener = Some(register_offset_listener(&self.offset, handle.clone()));
+        self.repaint_handle = Some(handle);
+    }
+
+    fn detach(&mut self) {
+        unregister_offset_listener(&self.offset, &mut self.offset_listener);
+        self.repaint_handle = None;
+    }
+
     fn perform_layout(
         &mut self,
         ctx: &mut BoxLayoutContext<'_, Variable, Self::ParentData>,
@@ -1216,5 +1349,152 @@ fn cached_clean_sliver_geometry(
         Some(cached_geometry)
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod offset_listener_tests {
+    use super::*;
+    use flui_rendering::pipeline::PipelineOwner;
+    use flui_rendering::protocol::BoxProtocol;
+    use flui_rendering::traits::RenderObject;
+    use flui_rendering::view::ScrollPosition;
+
+    /// Mints a real [`RepaintHandle`] by inserting a throwaway anchor node,
+    /// rooting it, and running one frame — `RepaintHandle::new` is
+    /// `pub(super)` to `flui_rendering::pipeline`, so a real one can only
+    /// come from a live `PipelineOwner`. The one-frame run is the part
+    /// `RenderAnimatedOpacity`'s own `anchor_handle` helper
+    /// (`proxy/animated_opacity.rs`) doesn't need: every freshly-inserted
+    /// node starts on the layout-dirty list ("every new node needs its
+    /// first layout" — see `animated_size.rs`'s
+    /// `attach_on_changed_state_immediately_marks_needs_layout` doc), so
+    /// without running that first layout, a behavior test asserting "the
+    /// listener marked this node dirty" could never fail — the baseline
+    /// dirty entry would already satisfy it regardless of the listener.
+    fn anchor_handle() -> (PipelineOwner, RepaintHandle) {
+        let mut owner = PipelineOwner::new();
+        let anchor =
+            owner
+                .insert(Box::new(RenderViewport::new(TopToBottom))
+                    as Box<dyn RenderObject<BoxProtocol>>);
+        owner.set_root_id(Some(anchor));
+        owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(100.0), px(100.0)))));
+        let (owner, result) = owner.run_frame();
+        result.expect("the anchor's first frame must not error");
+        let handle = owner
+            .repaint_handle(anchor)
+            .expect("the rooted anchor id must still be live after its first frame");
+        (owner, handle)
+    }
+
+    // attach must register a listener and detach must clear it — a
+    // white-box assertion on the private `offset_listener`/`repaint_handle`
+    // fields is the most direct proof available, mirroring
+    // `RenderAnimatedOpacity::attach_registers_listener_and_detach_clears_it`.
+    #[test]
+    fn attach_registers_a_relayout_listener_and_detach_clears_it() {
+        let (_owner, handle) = anchor_handle();
+        let mut viewport = RenderViewport::new(TopToBottom);
+        assert!(
+            viewport.offset_listener.is_none(),
+            "no listener before attach"
+        );
+
+        RenderBox::attach(&mut viewport, handle);
+        assert!(
+            viewport.offset_listener.is_some(),
+            "attach must register a listener"
+        );
+        assert!(
+            viewport.repaint_handle.is_some(),
+            "attach must retain the handle for a later set_offset re-registration"
+        );
+
+        RenderBox::detach(&mut viewport);
+        assert!(
+            viewport.offset_listener.is_none(),
+            "detach must clear the listener"
+        );
+        assert!(
+            viewport.repaint_handle.is_none(),
+            "detach must clear the retained handle"
+        );
+    }
+
+    /// Pin (a)-adjacent, at the pipeline level rather than the widget level:
+    /// after `attach`, mutating the offset OUTSIDE `perform_layout` (no
+    /// layout call, no widget rebuild) must mark the bound node needing
+    /// layout — this is the render-side listener the whole change adds.
+    /// `anchor_handle` already ran the anchor's first frame, so the
+    /// layout-dirty list starts clean: every assertion below is on the
+    /// listener's marginal effect, not insert's baseline "needs first
+    /// layout" mark.
+    #[test]
+    fn external_offset_mutation_after_attach_marks_the_bound_node_needing_layout() {
+        let (mut owner, handle) = anchor_handle();
+        let anchor = handle.id();
+        assert!(
+            owner.nodes_needing_layout().iter().all(|d| d.id != anchor),
+            "the fixture must start with a clean layout-dirty baseline"
+        );
+
+        let position = ScrollPosition::new(0.0);
+        let mut viewport = RenderViewport::with_offset(TopToBottom, LeftToRight, position.clone());
+        RenderBox::attach(&mut viewport, handle);
+
+        owner.drain_pending_dirty();
+        assert!(
+            owner.nodes_needing_layout().iter().all(|d| d.id != anchor),
+            "attach alone (registering the listener) must not itself mark the node dirty"
+        );
+
+        // External mutation: no perform_layout, no rebuild — only the
+        // listener `attach` registered on `position`'s shared state.
+        position.set_pixels(50.0);
+
+        owner.drain_pending_dirty();
+        assert!(
+            owner.nodes_needing_layout().iter().any(|d| d.id == anchor),
+            "an external ScrollPosition mutation after attach must mark the bound node \
+             needing layout via the offset listener"
+        );
+    }
+
+    /// Pin (b): `set_offset` while attached must move the listener, not
+    /// duplicate or drop it — removing the SAME `Arc` from the OLD offset
+    /// (F1's ptr-eq removal contract) and registering a fresh one on the
+    /// NEW offset, both bound to the same retained handle.
+    #[test]
+    fn set_offset_while_attached_moves_the_relayout_listener_to_the_new_offset() {
+        let (mut owner, handle) = anchor_handle();
+        let anchor = handle.id();
+        let old_position = ScrollPosition::new(0.0);
+        let new_position = ScrollPosition::new(0.0);
+        let mut viewport =
+            RenderViewport::with_offset(TopToBottom, LeftToRight, old_position.clone());
+
+        RenderBox::attach(&mut viewport, handle);
+        viewport.set_offset(new_position.clone());
+        owner.drain_pending_dirty();
+        assert!(
+            owner.nodes_needing_layout().iter().all(|d| d.id != anchor),
+            "attach + set_offset alone must not mark the node dirty"
+        );
+
+        old_position.set_pixels(10.0);
+        owner.drain_pending_dirty();
+        assert!(
+            owner.nodes_needing_layout().iter().all(|d| d.id != anchor),
+            "the OLD offset's listener must be removed by set_offset — mutating the old \
+             offset after the swap must not mark layout"
+        );
+
+        new_position.set_pixels(10.0);
+        owner.drain_pending_dirty();
+        assert!(
+            owner.nodes_needing_layout().iter().any(|d| d.id == anchor),
+            "the NEW offset must carry the relayout listener after set_offset while attached"
+        );
     }
 }
