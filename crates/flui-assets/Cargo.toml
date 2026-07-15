@@ -39,7 +39,9 @@ image = { workspace = true, optional = true }
 reqwest = { workspace = true, optional = true }
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+# "time" backs `tokio::time::timeout` — the hermetic network-loader test's
+# hang guard (a wedged exchange must fail the test, not wedge CI).
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
 
 [features]
 default = []

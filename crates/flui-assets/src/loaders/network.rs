@@ -282,17 +282,29 @@ mod tests {
     /// does not imply anything about, `flui-widgets`' `network-images`
     /// feature, whose `NetworkImage` provider never issues a request at all
     /// (see `crates/flui-widgets/src/image/provider.rs`).
+    ///
+    /// The `load_url` call is wrapped in a bounded [`tokio::time::timeout`]:
+    /// `NetworkLoader::new()` builds a `reqwest::Client` with no request
+    /// timeout of its own, so a wedged exchange (a server that accepts but
+    /// never writes) would otherwise hang this test — and CI — forever.
     #[tokio::test]
     #[cfg(feature = "network")]
     async fn load_url_round_trips_bytes_from_a_hermetic_local_server() {
-        const FIXTURE_BODY: &[u8] = b"flui-assets network loader hermetic test payload";
-        let addr = spawn_single_response_server(FIXTURE_BODY);
+        use std::time::Duration;
 
+        const FIXTURE_BODY: &[u8] = b"flui-assets network loader hermetic test payload";
+        const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+
+        let addr = spawn_single_response_server(FIXTURE_BODY);
         let loader = NetworkLoader::new();
-        let bytes = loader
-            .load_url(&format!("http://{addr}/asset.bin"))
-            .await
-            .expect("a local hermetic server's 200 response must load successfully");
+
+        let bytes = tokio::time::timeout(
+            REQUEST_TIMEOUT,
+            loader.load_url(&format!("http://{addr}/asset.bin")),
+        )
+        .await
+        .expect("the hermetic local server must respond within the timeout, not hang")
+        .expect("a local hermetic server's 200 response must load successfully");
 
         assert_eq!(
             bytes, FIXTURE_BODY,

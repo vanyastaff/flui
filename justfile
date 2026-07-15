@@ -112,6 +112,12 @@ test-release:
 test-doc:
     cargo test --workspace --exclude flui-platform --doc
 
+[group("test")]
+[doc("Run the flui-assets/Image feature-gated tests CI also runs (default = [] hides them otherwise)")]
+test-assets:
+    cargo nextest run -p flui-assets --features full
+    cargo nextest run -p flui-widgets --features images --test image
+
 [group("quality")]
 [doc("Dependency audit: advisories, bans, licenses, sources (requires cargo-deny)")]
 deny:
