@@ -23,6 +23,7 @@
 //! | `RenderLimitedBox` | `harness_limited_box_*` | yes | — | — | yes | — |
 //! | `RenderOffstage` | `harness_offstage_*` | yes | yes | — | yes | — |
 //! | `RenderOpacity` | `harness_opacity_*` | yes | — | yes | yes | queries |
+//! | `RenderAnimatedOpacity` | `harness_animated_opacity_*` | yes | yes | yes | yes | tick dirty-marking |
 //! | `RenderTransform` | `harness_transform_*` | yes | — | yes | yes | paint transform |
 //! | `RenderFittedBox` | `harness_fitted_box_*` | yes | — | — | yes | paint transform |
 //! | `RenderFractionallySizedBox` | `harness_fractionally_sized_box_*` | yes | — | — | yes | — |
@@ -69,6 +70,7 @@
 //! | `RenderSliverListLazy` | `harness_sliver_list_lazy_*` | yes | — | — | yes | — |
 //! | `RenderSliverOffstage` | `harness_sliver_offstage_*` | yes | — | — | yes | — |
 //! | `RenderSliverOpacity` | `harness_sliver_opacity_*` | yes | — | yes | yes | compositing |
+//! | `RenderSliverAnimatedOpacity` | `harness_sliver_animated_opacity_*` | yes | yes | yes | yes | tick dirty-marking |
 //! | `RenderViewport` | `harness_viewport_*` | yes | — | — | yes | — |
 //! | `RenderShrinkWrappingViewport` | `harness_shrink_wrapping_viewport_*` | yes | — | — | yes | — |
 //! | `RenderWrap` | `harness_render_wrap_*` | yes | yes | — | yes | — |
@@ -119,7 +121,8 @@ use flui_types::{
     Alignment, EdgeInsets, Matrix4, Offset, Point, Rect, Size,
     geometry::px,
     layout::{
-        AxisDirection, BoxFit, BoxShape, StackFit, TableCellVerticalAlignment, TableColumnWidth,
+        Axis, AxisDirection, BoxFit, BoxShape, StackFit, TableCellVerticalAlignment,
+        TableColumnWidth,
     },
     painting::{BlendMode, Clip, ImageFilter, Path, Shader},
     styling::{
@@ -148,6 +151,7 @@ const RENDER_OBJECT_TYPES: &[&str] = &[
     "RenderLimitedBox",
     "RenderOffstage",
     "RenderOpacity",
+    "RenderAnimatedOpacity",
     "RenderTransform",
     "RenderFittedBox",
     "RenderFractionallySizedBox",
@@ -194,6 +198,7 @@ const RENDER_OBJECT_TYPES: &[&str] = &[
     "RenderSliverListLazy",
     "RenderSliverOffstage",
     "RenderSliverOpacity",
+    "RenderSliverAnimatedOpacity",
     "RenderViewport",
     "RenderShrinkWrappingViewport",
     "RenderWrap",
@@ -1792,6 +1797,124 @@ fn harness_opacity_paints_with_alpha_layer() {
 
     assert!(run.painted());
     assert!(run.structure().contains(&"Opacity"));
+}
+
+// ── RenderAnimatedOpacity ────────────────────────────────────────────────
+
+fn ticking_controller(ms: u64, value: f32) -> AnimationController {
+    let controller =
+        AnimationController::new(Duration::from_millis(ms), Arc::new(Scheduler::new()));
+    controller.set_value(value);
+    controller
+}
+
+#[test]
+fn harness_animated_opacity_layout_passthrough_matches_child_size() {
+    let controller = ticking_controller(100, 0.5);
+    let run = RenderTester::mount(
+        box_node(RenderAnimatedOpacity::new(
+            controller,
+            ArcCurve::new(Curves::Linear),
+            false,
+        ))
+        .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
+    )
+    .with_constraints(loose(200.0))
+    .run_layout();
+
+    assert_eq!(
+        run.box_geometry(run.root()),
+        Size::new(px(40.0), px(40.0)),
+        "opacity does not affect layout — a pure passthrough of the child's size"
+    );
+}
+
+#[test]
+fn harness_animated_opacity_paint_alpha_tracks_controller_value_at_0_partial_255() {
+    for (value, expect_layer) in [(0.0, false), (0.5, true), (1.0, false)] {
+        let controller = ticking_controller(100, value);
+        let run = RenderTester::mount(
+            box_node(RenderAnimatedOpacity::new(
+                controller,
+                ArcCurve::new(Curves::Linear),
+                false,
+            ))
+            .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
+        )
+        .with_constraints(loose(200.0))
+        .run_frame();
+
+        assert_eq!(
+            run.structure().contains(&"Opacity"),
+            expect_layer,
+            "opacity={value} must {}emit an OpacityLayer (Flutter: alpha 0/255 -> \
+             layer=null): {:?}",
+            if expect_layer { "" } else { "NOT " },
+            run.structure(),
+        );
+    }
+}
+
+// This test fails if the attach-registered controller listener never fires:
+// a settled frame followed by an external controller tick would leave the
+// pipeline idle (`report.painted == false`) unless `attach`
+// (proxy/animated_opacity.rs) wires the listener to `mark_needs_paint` and
+// the tick actually reaches the owner's paint-dirty set through `RepaintHandle`.
+#[test]
+fn harness_animated_opacity_tick_marks_needs_paint() {
+    let controller = ticking_controller(100, 0.0);
+    let mut run = RenderTester::mount(
+        box_node(RenderAnimatedOpacity::new(
+            controller.clone(),
+            ArcCurve::new(Curves::Linear),
+            false,
+        ))
+        .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
+    )
+    .with_constraints(loose(200.0))
+    .run_frame();
+    assert!(
+        run.is_clean(),
+        "a settled first frame must leave nothing pending"
+    );
+
+    controller.set_value(0.5);
+    let report = run.pump();
+
+    assert!(
+        report.painted,
+        "a controller tick that changes the effective alpha must reach the \
+         pipeline through the attach()-registered listener and trigger a \
+         repaint: {report}"
+    );
+}
+
+#[test]
+fn harness_animated_opacity_boundary_crossing_tick_marks_compositing_bits() {
+    let controller = ticking_controller(100, 0.0); // alpha=0, not layered
+    let mut run = RenderTester::mount(
+        box_node(RenderAnimatedOpacity::new(
+            controller.clone(),
+            ArcCurve::new(Curves::Linear),
+            false,
+        ))
+        .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
+    )
+    .with_constraints(loose(200.0))
+    .run_frame();
+    let id = run.root();
+
+    controller.set_value(0.5); // crosses into the layered (0, 255) range
+    run.owner_mut().drain_pending_dirty();
+
+    assert!(
+        run.owner()
+            .nodes_needing_compositing_bits_update()
+            .iter()
+            .any(|dirty| dirty.id == id),
+        "crossing the layered/unlayered alpha threshold must mark compositing \
+         bits dirty (RepaintHandle::mark_needs_compositing_bits_update)"
+    );
 }
 
 #[test]
@@ -3544,6 +3667,54 @@ fn harness_wrap_max_intrinsic_width_omits_spacing() {
     assert_eq!(run.max_intrinsic_width(run.root(), 100.0), 120.0);
 }
 
+/// `compute_min_intrinsic_width` for a horizontal wrap is the WORST case —
+/// every child forced onto its own row — so it is the MAX of child min
+/// widths, never their sum. Distinguishes it from `compute_max_intrinsic_width`
+/// (the sum, best-case, all-on-one-row formula tested above); swapping the
+/// two formulas would still compile and is exactly the kind of regression
+/// this pins.
+#[test]
+fn harness_wrap_min_intrinsic_width_is_the_max_child_width_not_the_sum() {
+    let mut run = RenderTester::mount(
+        box_node(RenderWrap::new())
+            .child(box_node(RenderColoredBox::red(30.0, 20.0)).label("a"))
+            .child(box_node(RenderColoredBox::green(50.0, 20.0)).label("b")),
+    )
+    .with_size(Size::new(px(200.0), px(100.0)))
+    .run_layout();
+
+    assert_eq!(
+        run.min_intrinsic_width(run.root(), 100.0),
+        50.0,
+        "min intrinsic width must be the max child width (50), not the sum (80)",
+    );
+}
+
+/// `compute_max_intrinsic_height` for a VERTICAL wrap is the best case —
+/// all children in one column — so it sums child max heights with NO
+/// `run_spacing` term, mirroring the horizontal max-width path
+/// (`harness_wrap_max_intrinsic_width_omits_spacing`) on the other axis.
+#[test]
+fn harness_wrap_max_intrinsic_height_vertical_omits_run_spacing() {
+    let mut run = RenderTester::mount(
+        box_node(
+            RenderWrap::new()
+                .with_direction(Axis::Vertical)
+                .with_run_spacing(10.0),
+        )
+        .child(box_node(RenderColoredBox::red(20.0, 20.0)).label("a"))
+        .child(box_node(RenderColoredBox::green(20.0, 30.0)).label("b")),
+    )
+    .with_size(Size::new(px(100.0), px(200.0)))
+    .run_layout();
+
+    assert_eq!(
+        run.max_intrinsic_height(run.root(), 100.0),
+        50.0,
+        "vertical max intrinsic height sums child heights (20+30=50) with no run_spacing term",
+    );
+}
+
 #[test]
 fn harness_stack_hit_tests_top_child_first() {
     let run = RenderTester::mount(
@@ -3815,6 +3986,70 @@ fn harness_list_body_dry_layout_and_baseline_follow_oracle_order() {
     assert!(
         (dry - 15.0).abs() < 0.01,
         "vertical down dry baseline must skip the first non-baseline child and add its height; got {dry}",
+    );
+}
+
+/// Oracle quirk (`list_body.dart:288-333`): `computeMinIntrinsicWidth` AND
+/// `computeMinIntrinsicHeight` key off the SAME `mainAxis` switch with the
+/// SAME sum/max mapping (`Axis.horizontal => sum, Axis.vertical => max`) —
+/// height's formula does not independently reason about "is height the main
+/// or the cross axis"; it mirrors width's axis-keyed switch verbatim. For a
+/// default (vertical, `TopToBottom`) list body this means BOTH width and
+/// height intrinsics take the max-across-children branch, not just width.
+/// Confirmed against the oracle before writing this pair — the naive
+/// "sum along main axis, max across cross axis" mental model this test's
+/// name might suggest is WRONG for `RenderListBody`; `horizontal_intrinsic`
+/// and `vertical_intrinsic` are (correctly) byte-identical in this crate.
+#[test]
+fn harness_list_body_min_intrinsic_width_takes_the_max_across_children() {
+    let mut run = RenderTester::mount(
+        box_node(RenderListBody::new())
+            .child(box_node(RenderSizedBox::fixed(px(20.0), px(10.0))))
+            .child(box_node(RenderSizedBox::fixed(px(30.0), px(15.0)))),
+    )
+    .with_constraints(BoxConstraints::new(
+        px(0.0),
+        px(100.0),
+        px(0.0),
+        px(f32::INFINITY),
+    ))
+    .run_layout();
+
+    assert_eq!(
+        run.min_intrinsic_width(run.root(), 100.0),
+        30.0,
+        "cross-axis (width) intrinsic must be the max child width (30), not the sum (50)",
+    );
+}
+
+/// The height-side mirror of the test above, pinning the SAME oracle quirk
+/// (`list_body.dart:312-321`) from the other dimension: at a default
+/// (vertical) main axis, `computeMaxIntrinsicHeight` ALSO takes the
+/// `_getIntrinsicCrossAxis` (max) branch, not `_getIntrinsicMainAxis` (sum)
+/// — despite height being the main-stacking axis here. Without this test,
+/// a "fix" that made `vertical_intrinsic` swap its match arms to the
+/// intuitive-but-wrong sum-on-main-axis mapping would look like a bugfix
+/// and silently diverge from Flutter.
+#[test]
+fn harness_list_body_max_intrinsic_height_at_vertical_main_axis_takes_the_max_not_sum() {
+    let mut run = RenderTester::mount(
+        box_node(RenderListBody::new())
+            .child(box_node(RenderSizedBox::fixed(px(20.0), px(10.0))))
+            .child(box_node(RenderSizedBox::fixed(px(30.0), px(15.0)))),
+    )
+    .with_constraints(BoxConstraints::new(
+        px(0.0),
+        px(100.0),
+        px(0.0),
+        px(f32::INFINITY),
+    ))
+    .run_layout();
+
+    assert_eq!(
+        run.max_intrinsic_height(run.root(), 100.0),
+        15.0,
+        "oracle quirk: height intrinsic at a vertical main axis is the max \
+         child height (15), NOT the sum (25) — see list_body.dart:312-321",
     );
 }
 
@@ -4832,6 +5067,101 @@ fn harness_sliver_opacity_always_needs_compositing_reaches_pipeline() {
          always_needs_compositing=true through RenderNode (the pipeline \
          compositing-bits walk path); blanket impl must forward via UFCS \
          (Flutter parity: alwaysNeedsCompositing = child != null && alpha > 0)"
+    );
+}
+
+// ── RenderSliverAnimatedOpacity ──────────────────────────────────────────
+
+fn animated_opacity_sliver_spec(controller: AnimationController) -> TreeNode {
+    sliver_node(RenderSliverAnimatedOpacity::new(
+        controller,
+        ArcCurve::new(Curves::Linear),
+        false,
+    ))
+    .label("opacity")
+    .child(
+        sliver_node(RenderSliverFixedExtentList::new(30.0))
+            .child(box_node(RenderColoredBox::red(300.0, 1000.0))),
+    )
+}
+
+#[test]
+fn harness_sliver_animated_opacity_passes_geometry() {
+    let run = RenderTester::mount(viewport(animated_opacity_sliver_spec(ticking_controller(
+        100, 0.5,
+    ))))
+    .with_size(Size::new(px(300.0), px(100.0)))
+    .run_layout();
+
+    assert_eq!(
+        run.sliver_geometry(run.id("opacity")).scroll_extent,
+        30.0,
+        "opacity does not affect layout — a pure passthrough of the child's geometry"
+    );
+}
+
+#[test]
+fn harness_sliver_animated_opacity_paint_alpha_tracks_controller_value_at_0_partial_255() {
+    for (value, expect_layer) in [(0.0, false), (0.5, true), (1.0, false)] {
+        let run = RenderTester::mount(viewport(animated_opacity_sliver_spec(ticking_controller(
+            100, value,
+        ))))
+        .with_size(Size::new(px(300.0), px(100.0)))
+        .run_frame();
+
+        assert_eq!(
+            run.structure().contains(&"Opacity"),
+            expect_layer,
+            "opacity={value} must {}emit an OpacityLayer: {:?}",
+            if expect_layer { "" } else { "NOT " },
+            run.structure(),
+        );
+    }
+}
+
+// Sliver mirror of `harness_animated_opacity_tick_marks_needs_paint` above:
+// this test fails the same way if the sliver's attach-registered listener
+// never fires.
+#[test]
+fn harness_sliver_animated_opacity_tick_marks_needs_paint() {
+    let controller = ticking_controller(100, 0.0);
+    let mut run = RenderTester::mount(viewport(animated_opacity_sliver_spec(controller.clone())))
+        .with_size(Size::new(px(300.0), px(100.0)))
+        .run_frame();
+    assert!(
+        run.is_clean(),
+        "a settled first frame must leave nothing pending"
+    );
+
+    controller.set_value(0.5);
+    let report = run.pump();
+
+    assert!(
+        report.painted,
+        "a controller tick that changes the effective alpha must reach the \
+         pipeline through the attach()-registered listener and trigger a \
+         repaint: {report}"
+    );
+}
+
+#[test]
+fn harness_sliver_animated_opacity_boundary_crossing_tick_marks_compositing_bits() {
+    let controller = ticking_controller(100, 0.0); // alpha=0, not layered
+    let mut run = RenderTester::mount(viewport(animated_opacity_sliver_spec(controller.clone())))
+        .with_size(Size::new(px(300.0), px(100.0)))
+        .run_frame();
+    let id = run.id("opacity");
+
+    controller.set_value(0.5); // crosses into the layered (0, 255) range
+    run.owner_mut().drain_pending_dirty();
+
+    assert!(
+        run.owner()
+            .nodes_needing_compositing_bits_update()
+            .iter()
+            .any(|dirty| dirty.id == id),
+        "crossing the layered/unlayered alpha threshold must mark compositing \
+         bits dirty (RepaintHandle::mark_needs_compositing_bits_update)"
     );
 }
 
@@ -6661,6 +6991,41 @@ fn harness_table_dry_baseline_matches_the_committed_first_row_baseline() {
         Some(30.0),
         "table dry baseline must equal the committed first-row baseline \
          (max of the row's cell baselines 30 and 10)",
+    );
+}
+
+/// Pins the oracle's own documented quirk (`table.dart:1023-1026`,
+/// restated at `RenderTable::compute_max_intrinsic_height`'s call site):
+/// `computeMaxIntrinsicHeight` returns `computeMinIntrinsicHeight` VERBATIM
+/// — not a typo. `compute_min_intrinsic_height` itself is genuinely
+/// non-trivial (resolve column widths at the query width, take each row's
+/// tallest cell, sum the rows) and had zero coverage anywhere in this crate.
+///
+/// 2 columns x 2 rows, row 0 cell heights (10, 15) -> row max 15; row 1 cell
+/// heights (25, 5) -> row max 25; summed = 40.
+#[test]
+fn harness_table_min_and_max_intrinsic_height_both_equal_the_row_summed_value() {
+    let mut run = RenderTester::mount(
+        box_node(RenderTable::new(2))
+            .child(box_node(RenderColoredBox::red(20.0, 10.0)))
+            .child(box_node(RenderColoredBox::green(30.0, 15.0)))
+            .child(box_node(RenderColoredBox::blue(20.0, 25.0)))
+            .child(box_node(RenderColoredBox::red(30.0, 5.0))),
+    )
+    .with_size(Size::new(px(100.0), px(100.0)))
+    .run_layout();
+
+    let min_h = run.min_intrinsic_height(run.root(), 100.0);
+    let max_h = run.max_intrinsic_height(run.root(), 100.0);
+
+    assert_eq!(
+        min_h, 40.0,
+        "row 0 max-height 15 + row 1 max-height 25 = 40 (per-row max, summed)",
+    );
+    assert_eq!(
+        max_h, min_h,
+        "table.dart quirk: computeMaxIntrinsicHeight returns \
+         computeMinIntrinsicHeight verbatim, not an independent formula",
     );
 }
 

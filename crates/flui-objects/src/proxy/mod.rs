@@ -1,3 +1,4 @@
+mod animated_opacity;
 mod backdrop_filter;
 mod clip;
 mod colored_box;
@@ -12,6 +13,7 @@ mod semantics;
 mod shader_mask;
 mod subtree_anchor;
 
+pub use animated_opacity::*;
 pub use backdrop_filter::*;
 pub use clip::*;
 pub use colored_box::*;
