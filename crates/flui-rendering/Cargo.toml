@@ -20,6 +20,12 @@ flui-foundation = { path = "../flui-foundation", version = "0.2.0" }
 flui-tree = { path = "../flui-tree", version = "0.2.0" }
 flui-layer = { path = "../flui-layer", version = "0.2.0" }
 flui-semantics = { path = "../flui-semantics", version = "0.2.0" }
+# `ScrollPosition`'s coalesced post-frame flush (view/scroll_position.rs) names
+# `PostFrameHandle` — promoted from dev-dependency (integration tests only) to a
+# real production edge. flui-scheduler sits below flui-rendering in the layer
+# graph already (flui-view/-widgets/-app all depend on both), so this is not a
+# new direction, just a new consumer.
+flui-scheduler = { path = "../flui-scheduler", version = "0.2.0" }
 
 parking_lot = { workspace = true }
 thiserror = { workspace = true }
@@ -79,9 +85,9 @@ proptest = "1.5"
 # Snapshot testing for render-harness paint-phase (sub-project A).
 insta.workspace = true
 # Animation -> render-pipeline integration scenarios (tests only; no
-# production dependency between the layers).
+# production dependency between the layers). flui-scheduler moved to
+# `[dependencies]` above — `ScrollPosition` names it in production now.
 flui-animation = { path = "../flui-animation", version = "0.2.0" }
-flui-scheduler = { path = "../flui-scheduler", version = "0.2.0" }
 # Self dev-dependency that turns the off-by-default `testing` feature on
 # for this crate's own integration tests (`tests/*.rs`), benches, and
 # examples. Unit tests reach the harness via `cfg(test)`; the separate

@@ -1045,10 +1045,21 @@ impl fmt::Display for DiagnosticsNode {
 pub trait Diagnosticable: fmt::Debug {
     /// Create a diagnostics node for this object.
     fn to_diagnostics_node(&self) -> DiagnosticsNode {
-        // Strip the module path, keeping only the final type segment.
-        // "flui_rendering::objects::RenderPadding" -> "RenderPadding".
+        // Strip generic arguments, then the module path, keeping only the
+        // final type segment: "flui_rendering::objects::RenderPadding" ->
+        // "RenderPadding", and — the case a bare `rsplit("::")` gets wrong —
+        // "flui_objects::sliver::viewport::RenderViewport<flui_rendering::
+        // view::scroll_position::ScrollPosition>" -> "RenderViewport", not
+        // "ScrollPosition>". `type_name` only appends `<...>` when the
+        // generic argument differs from the type's default (e.g.
+        // `RenderViewport<ScrollPosition>` vs the default-elided
+        // `RenderViewport`), so this must handle both forms.
         let full = std::any::type_name::<Self>();
-        let type_name = full.rsplit("::").next().unwrap_or(full);
+        let without_generics = full.split('<').next().unwrap_or(full);
+        let type_name = without_generics
+            .rsplit("::")
+            .next()
+            .unwrap_or(without_generics);
         let mut node = DiagnosticsNode::new(type_name);
         let mut builder = DiagnosticsBuilder::new();
         self.debug_fill_properties(&mut builder);
@@ -1569,6 +1580,33 @@ mod tests {
             node.name(),
             Some("MyWidget"),
             "type_name should be short (no module path), got: {:?}",
+            node.name()
+        );
+    }
+
+    #[test]
+    fn to_diagnostics_node_strips_generic_arguments_not_just_the_module_path() {
+        // Regression: `type_name` appends `<...>` only when a generic
+        // argument differs from the type's declared default (elided
+        // otherwise), and that argument's own module path can contain
+        // "::" — a bare `rsplit("::")` then returns a fragment of the
+        // generic argument's name instead of the outer type's name.
+        #[derive(Debug)]
+        struct NonDefaultArg;
+        #[derive(Debug)]
+        struct GenericWidget<T = ()> {
+            _marker: std::marker::PhantomData<T>,
+        }
+        impl<T: fmt::Debug> Diagnosticable for GenericWidget<T> {}
+
+        let node = GenericWidget::<NonDefaultArg> {
+            _marker: std::marker::PhantomData,
+        }
+        .to_diagnostics_node();
+        assert_eq!(
+            node.name(),
+            Some("GenericWidget"),
+            "a non-default generic argument must not leak into the short name, got: {:?}",
             node.name()
         );
     }

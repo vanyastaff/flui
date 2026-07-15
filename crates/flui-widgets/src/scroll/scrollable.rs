@@ -32,13 +32,19 @@ use std::time::Duration;
 use flui_animation::{Animation, AnimationController, Scheduler, Vsync, VsyncRegistration};
 use flui_foundation::{Listenable, ListenerId};
 use flui_rendering::hit_testing::HitTestBehavior;
+use flui_rendering::view::ScrollPosition;
 use flui_types::layout::Axis;
 use flui_view::prelude::StatefulView;
-use flui_view::{BuildContext, BuildContextExt, Child, IntoView, ViewState};
+use flui_view::{BoxedView, BuildContext, BuildContextExt, Child, IntoView, ViewExt, ViewState};
 
 use crate::animated::VsyncScope;
 use crate::scroll::{ClampingScrollPhysics, ScrollController, SharedScrollPhysics};
 use crate::{AnimatedBuilder, GestureDetector, SingleChildScrollView};
+
+/// A caller-supplied composition of the scrollable content, receiving the
+/// [`Scrollable`]'s shared [`ScrollPosition`] and returning the view to
+/// scroll. See [`Scrollable::viewport_builder`].
+pub type ViewportBuilder = Arc<dyn Fn(ScrollPosition) -> BoxedView + Send + Sync>;
 
 // ---------------------------------------------------------------------------
 // View (configuration)
@@ -83,6 +89,10 @@ pub struct Scrollable {
     scroll_direction: Axis,
     /// The content to make scrollable.
     child: Child,
+    /// Overrides the scrollable content's composition entirely; `None`
+    /// keeps the `SingleChildScrollView`-over-`child` fast path. See
+    /// [`Scrollable::viewport_builder`].
+    viewport_builder: Option<ViewportBuilder>,
 }
 
 impl std::fmt::Debug for Scrollable {
@@ -91,6 +101,7 @@ impl std::fmt::Debug for Scrollable {
             .field("scroll_direction", &self.scroll_direction)
             .field("controller", &self.controller)
             .field("physics", &self.physics)
+            .field("has_viewport_builder", &self.viewport_builder.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -102,6 +113,7 @@ impl Default for Scrollable {
             physics: Arc::new(ClampingScrollPhysics::new()),
             scroll_direction: Axis::Vertical,
             child: Child::empty(),
+            viewport_builder: None,
         }
     }
 }
@@ -139,9 +151,34 @@ impl Scrollable {
     }
 
     /// The scrollable content.
+    ///
+    /// Ignored when [`Scrollable::viewport_builder`] is set — the builder
+    /// closure is responsible for its own content in that case.
     #[must_use]
     pub fn child(mut self, child: impl IntoView) -> Self {
         self.child = Child::some(child.into_view());
+        self
+    }
+
+    /// Override the scrollable content's composition entirely.
+    ///
+    /// By default (`None`) `Scrollable` composes a [`SingleChildScrollView`]
+    /// wrapping [`Scrollable::child`] — the fast path most callers want. Set
+    /// this to compose an arbitrary scrollable widget instead — e.g. a
+    /// [`Viewport`](super::Viewport) over several slivers, a `ListView`, or a
+    /// `CustomScrollView` — when a single child in a `SingleChildScrollView`
+    /// isn't the right shape.
+    ///
+    /// The closure receives this `Scrollable`'s controller's shared
+    /// [`ScrollPosition`] and must inject it into whatever it builds
+    /// (typically via that widget's own `.position(...)`) so the drag/fling
+    /// gesture wiring above still drives it, and `RenderViewport`'s
+    /// committed content extents still flush back into the same controller.
+    ///
+    /// When this is `Some`, [`Scrollable::child`] is ignored.
+    #[must_use]
+    pub fn viewport_builder(mut self, builder: ViewportBuilder) -> Self {
+        self.viewport_builder = Some(builder);
         self
     }
 }
@@ -218,8 +255,28 @@ impl StatefulView for Scrollable {
     }
 }
 
+impl ScrollableState {
+    /// Installs the binding's post-frame capability on the scroll
+    /// controller's shared `ScrollPosition`, so `RenderViewport::
+    /// perform_layout`'s committed content extents (`apply_viewport_dimension`/
+    /// `apply_content_dimensions`) can flush a coalesced notification after
+    /// layout instead of never notifying at all.
+    ///
+    /// Lifecycle-only (ADR-0021, port-check trigger #22): called from
+    /// `init_state`/`did_change_dependencies`, never from `build`. A no-op
+    /// when no handle is available yet — `set_flush_handle` is idempotent, so
+    /// a later call (e.g. from `did_change_dependencies`) still installs it.
+    fn install_flush_handle(&self, ctx: &dyn BuildContext) {
+        if let Some(handle) = ctx.post_frame_handle() {
+            self.scroll_controller.position().set_flush_handle(handle);
+        }
+    }
+}
+
 impl ViewState<Scrollable> for ScrollableState {
     fn init_state(&mut self, ctx: &dyn BuildContext) {
+        self.install_flush_handle(ctx);
+
         // Attach the value listener that pushes the fling simulation's current
         // pixel position into the scroll controller each tick. The listener
         // holds `Arc`-backed clones, so it survives across widget rebuilds.
@@ -243,16 +300,19 @@ impl ViewState<Scrollable> for ScrollableState {
         // display, they simply cannot be driven deterministically in tests.
     }
 
+    fn did_change_dependencies(&mut self, ctx: &dyn BuildContext) {
+        self.install_flush_handle(ctx);
+    }
+
     fn build(&self, view: &Scrollable, _ctx: &dyn BuildContext) -> impl IntoView {
         let scroll_controller = view.controller.clone();
         let physics = view.physics.clone();
         let scroll_direction = view.scroll_direction;
         let child = view.child.clone();
+        let viewport_builder = view.viewport_builder.clone();
         let fling_controller = self.fling_controller.clone();
 
         AnimatedBuilder::new(scroll_controller.as_listenable(), move || {
-            let pixels = scroll_controller.pixels();
-
             // Clones for the gesture callbacks; each closure needs its own
             // `Arc`-counted handle (no refcount bump at call time).
             let fling_stop = fling_controller.clone();
@@ -262,12 +322,25 @@ impl ViewState<Scrollable> for ScrollableState {
             let phys_fling = physics.clone();
             let ctrl_fling = scroll_controller.clone();
 
-            let mut scroll_view = SingleChildScrollView::new()
-                .scroll_direction(scroll_direction)
-                .offset(pixels);
-            if let Some(content) = child.clone().into_inner() {
-                scroll_view = scroll_view.child(content);
-            }
+            // Position mode, not `.offset(pixels)`: the composed viewport's
+            // offset IS this controller's shared `ScrollPosition`, so a
+            // gesture write is observed directly (no push from this rebuild)
+            // and `RenderViewport::perform_layout`'s committed content
+            // extents flush back into the same position — see
+            // `ScrollPosition`'s docs and `Viewport::position`.
+            let scroll_view: BoxedView = if let Some(build_viewport) = &viewport_builder {
+                // Custom composition: the closure owns injecting the shared
+                // position into whatever it builds.
+                build_viewport(scroll_controller.position())
+            } else {
+                let mut scsv = SingleChildScrollView::new()
+                    .scroll_direction(scroll_direction)
+                    .position(scroll_controller.position());
+                if let Some(content) = child.clone().into_inner() {
+                    scsv = scsv.child(content);
+                }
+                scsv.boxed()
+            };
 
             // Flutter parity: Scrollable uses HitTestBehavior::Opaque so the
             // gesture area fires regardless of whether the child content is

@@ -133,6 +133,19 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
         &mut self.offset
     }
 
+    /// Replaces the viewport offset object wholesale.
+    ///
+    /// For a widget that injects an external offset (e.g. a shared
+    /// `ScrollPosition`), reconciliation compares the new offset's identity
+    /// against the current one and calls this only when it actually changed
+    /// — swapping in a same-identity offset would discard layout-committed
+    /// extents (`min_scroll_extent`/`max_scroll_extent`/`viewport_dimension`)
+    /// for no reason.
+    #[inline]
+    pub fn set_offset(&mut self, offset: O) {
+        self.offset = offset;
+    }
+
     /// Sets the sliver paint order. Hit testing uses the opposite order.
     #[inline]
     pub const fn set_paint_order(&mut self, paint_order: SliverPaintOrder) {
@@ -707,6 +720,14 @@ impl<O: ViewportOffset + 'static> RenderShrinkWrappingViewport<O> {
     #[must_use]
     pub const fn offset_mut(&mut self) -> &mut O {
         &mut self.offset
+    }
+
+    /// Replaces the viewport offset object wholesale. See
+    /// [`RenderViewport::set_offset`] for the identity-check contract a
+    /// caller injecting an external offset must follow.
+    #[inline]
+    pub fn set_offset(&mut self, offset: O) {
+        self.offset = offset;
     }
 
     /// Sets the sliver paint order. Hit testing uses the opposite order.

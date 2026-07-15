@@ -217,6 +217,81 @@ fn sliver_padding_insets_its_sliver_child() {
 }
 
 // ============================================================================
+// Viewport — Position/Pixels mode switching
+// ============================================================================
+
+/// Regression: a `Viewport` reused across a Position-mode build (offset
+/// injected from a `ScrollController`) followed by a Pixels-mode rebuild
+/// (`.offset(constant)`) must not keep pushing that constant into the
+/// PRIOR build's shared, controller-owned `ScrollPosition` — `update_render_object`
+/// only ever sees the new build's config, not the old one's, so the render
+/// object must detect that the currently-installed offset is foreign
+/// (`ScrollPosition::is_uniquely_held` is false — the controller also holds
+/// a clone) and swap in a fresh, privately-owned position before pushing.
+///
+/// Without the fix, the Pixels arm called `set_pixels` on whatever offset
+/// was already installed — after a prior Position-mode build that is the
+/// controller's shared position, so this test's `controller.pixels()`
+/// assertion catches the stomp, and the widget's own geometry check catches
+/// the case where the switch is detected but the constant is never actually
+/// applied.
+#[test]
+fn viewport_position_to_pixels_mode_switch_does_not_stomp_the_shared_controller_position() {
+    use flui_widgets::Viewport;
+
+    // 10 rows at 50px = 500px content in a 120px viewport -> real
+    // max_scroll_extent = 380, comfortably above the 200 seeded below (no
+    // incidental clamp from the first layout's own apply_content_dimensions
+    // muddying the mode-switch assertion).
+    let controller = ScrollController::new();
+    controller.set_pixels(200.0);
+
+    fn rows() -> Vec<flui_view::BoxedView> {
+        (0..10)
+            .map(|_| SizedBox::new(200.0, 50.0).boxed())
+            .collect()
+    }
+
+    // First build: Position mode, injecting the controller's shared
+    // position (currently at pixels=200).
+    let position_widget =
+        Viewport::new((SliverFixedExtentList::new(50.0, rows()),)).position(controller.position());
+    let mut laid = lay_out(position_widget, tight(200.0, 120.0));
+
+    // Second build, same tree position — the element/render object is
+    // REUSED (not remounted), so this exercises the mode-switch path:
+    // Pixels mode at a constant (42.0) distinct from the controller's 200.
+    let pixels_widget = Viewport::new((SliverFixedExtentList::new(50.0, rows()),)).offset(42.0);
+    laid.pump_widget(pixels_widget);
+
+    assert_eq!(
+        controller.pixels(),
+        200.0,
+        "a Position-to-Pixels mode switch must not push into the controller's shared \
+         ScrollPosition; got {:.1}",
+        controller.pixels()
+    );
+
+    // And the widget must genuinely be scrolled to its OWN 42px constant
+    // (not stuck at 200, and not silently reset to 0): compare its item
+    // geometry against a widget built fresh, directly in Pixels mode, at
+    // the same 42.0 constant — a correct mode switch makes these identical.
+    let switched_sliver = laid.only_child(laid.root());
+    let switched_item_offset = laid.absolute_offset(laid.child(switched_sliver, 0));
+
+    let fresh_widget = Viewport::new((SliverFixedExtentList::new(50.0, rows()),)).offset(42.0);
+    let fresh_laid = lay_out(fresh_widget, tight(200.0, 120.0));
+    let fresh_sliver = fresh_laid.only_child(fresh_laid.root());
+    let fresh_item_offset = fresh_laid.absolute_offset(fresh_laid.child(fresh_sliver, 0));
+
+    assert_eq!(
+        switched_item_offset, fresh_item_offset,
+        "after the mode switch the widget must be scrolled to its own 42px constant, matching \
+         a viewport built fresh directly in Pixels mode at the same offset"
+    );
+}
+
+// ============================================================================
 // ScrollController — thumb geometry helpers
 // ============================================================================
 
@@ -395,6 +470,187 @@ fn scrollable_drag_up_at_max_extent_is_clamped_by_physics() {
         controller.pixels() <= 500.0,
         "clamping physics must not allow the offset to exceed max_scroll_extent (500); \
          got {:.1}",
+        controller.pixels()
+    );
+}
+
+/// Pins that Position-mode scrolling rides `RenderBehavior::on_update`'s
+/// UNCONDITIONAL relayout mark (`flui-view/src/element/behavior.rs`, the
+/// `mark_render_needs_layout_and_paint` call that follows every
+/// `update_render_object`, regardless of whether anything about the widget's
+/// own configuration changed), not a value comparison inside
+/// `Viewport::update_render_object` — in Position mode that method never
+/// pushes pixels at all (the injected `ScrollPosition`'s `Arc` identity is
+/// unchanged between rebuilds, so its `ptr_eq` guard skips `set_offset` too).
+///
+/// The mutation below goes through `ScrollController::set_pixels` directly —
+/// deliberately NOT through this widget's own `on_pan_update` gesture
+/// callback — to prove the relayout does not depend on that code path
+/// either: it is driven purely by the unconditional dirty-mark that fires
+/// whenever `AnimatedBuilder`'s listenable-driven rebuild re-diffs the
+/// (structurally unchanged) `Viewport` view against the mounted render
+/// object.
+///
+/// A future compare-and-mark memoization — e.g. skipping
+/// `mark_render_needs_layout_and_paint` when the `Viewport` view "looks
+/// unchanged" between rebuilds — would leave the render tree at its
+/// pre-mutation offset here, and this test FAILS.
+#[test]
+fn scrollable_position_mode_relayouts_from_external_mutation_with_no_pixels_push() {
+    let controller = ScrollController::new();
+    controller.update_dimensions(300.0, 0.0, 500.0);
+
+    let widget = Scrollable::new()
+        .controller(controller.clone())
+        .child(SizedBox::new(300.0, 800.0));
+
+    let mut scoped = lay_out_with_arena(widget, tight(300.0, 300.0));
+    let box_before = scoped.laid().find_by_render_type("RenderConstrainedBox");
+    let offset_before = scoped.laid().absolute_offset(box_before);
+
+    // External mutation of the shared `ScrollPosition` — no gesture, no
+    // `update_render_object` pixels push.
+    controller.set_pixels(120.0);
+
+    // `AnimatedBuilder`'s subscription to the same listenable schedules a
+    // rebuild when `set_pixels` notifies; this drains it and re-runs layout.
+    scoped.pump(Duration::ZERO);
+
+    let box_after = scoped.laid().find_by_render_type("RenderConstrainedBox");
+    let offset_after = scoped.laid().absolute_offset(box_after);
+
+    assert_ne!(
+        offset_before, offset_after,
+        "an external ScrollPosition mutation with no gesture and no pixels push from \
+         update_render_object must still relayout the child to the new offset"
+    );
+}
+
+/// Pins the content-dimension feedback loop end-to-end, with **zero**
+/// `update_dimensions` calls anywhere in this test — every existing
+/// `update_dimensions`-seeded test in this file (and `scroll_controller.rs`'s
+/// unit tests) exercises the legacy explicit-feed path, which would keep
+/// passing even if the feedback loop itself were dead. This test is the one
+/// that would catch that: extents must arrive purely from
+/// `RenderViewport::perform_layout`'s `apply_viewport_dimension`/
+/// `apply_content_dimensions` writing into the controller's shared
+/// `ScrollPosition`, and a listener must observe the coalesced post-frame
+/// flush `ScrollableState::init_state` installs.
+///
+/// FAILS if `apply_content_dimensions` stops writing through to the shared
+/// position (the `max_scroll_extent` assertion), or if the coalesced flush
+/// never fires (the listener-count assertion) — e.g. a flush handle that
+/// silently isn't installed, or a flush that never calls `notify()`.
+#[test]
+fn scrollable_content_dimension_feedback_supplies_extents_and_notifies_a_listener() {
+    let controller = ScrollController::new();
+    let listener_fired = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counter = Arc::clone(&listener_fired);
+    controller.as_listenable().add_listener(Arc::new(move || {
+        counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }));
+
+    // 300px viewport, 800px content — the exact geometry
+    // `scrollable_drag_up_increases_scroll_offset` seeds by hand via
+    // `update_dimensions(300.0, 0.0, 500.0)`. Here nothing seeds it.
+    let widget = Scrollable::new()
+        .controller(controller.clone())
+        .child(SizedBox::new(300.0, 800.0));
+
+    let mut scoped = lay_out_with_arena(widget, tight(300.0, 300.0));
+
+    // Extents write through to the shared state SYNCHRONOUSLY during layout
+    // (only the listener notification is deferred) — readable immediately,
+    // no pump required.
+    assert!(
+        controller.max_scroll_extent() > 0.0,
+        "RenderViewport::perform_layout must commit a nonzero max_scroll_extent (300px \
+         viewport, 800px content -> 500px scroll extent) into the shared ScrollPosition with \
+         zero update_dimensions calls; got {:.1}",
+        controller.max_scroll_extent()
+    );
+    assert_eq!(
+        listener_fired.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "the coalesced flush must not have run before any frame completed"
+    );
+
+    // Drive a completed frame: drains the scheduler's post-frame queue,
+    // firing the coalesced flush.
+    scoped.pump(Duration::ZERO);
+
+    assert!(
+        listener_fired.load(std::sync::atomic::Ordering::SeqCst) >= 1,
+        "a listener registered via ScrollController::as_listenable() must observe the \
+         content-dimension feedback loop's coalesced post-frame flush after a completed frame"
+    );
+
+    // The extents the feedback loop supplied are real clamp bounds, not just
+    // readable numbers: a drag past them must still clamp, purely off this
+    // loop's output (again, no update_dimensions in this test).
+    scoped.dispatch_pointer_down(150.0, 250.0);
+    scoped.dispatch_pointer_move(150.0, 180.0); // slop-crossing: 70 px upward
+    scoped.dispatch_pointer_move(150.0, 10.0); // 170 px more upward: on_pan_update
+    scoped.dispatch_pointer_up(150.0, 10.0);
+
+    assert!(
+        controller.pixels() <= controller.max_scroll_extent() + 0.01,
+        "a drag past the feedback-loop-supplied max_scroll_extent ({:.1}) must clamp there, \
+         not exceed it; got {:.1}",
+        controller.max_scroll_extent(),
+        controller.pixels()
+    );
+    assert!(
+        controller.pixels() > 0.0,
+        "the drag must have moved the scroll position at all; got {:.1}",
+        controller.pixels()
+    );
+}
+
+/// `Scrollable::viewport_builder` composes an ARBITRARY scrollable widget
+/// (here: a `Viewport` over a `SliverFixedExtentList`, bypassing
+/// `SingleChildScrollView` entirely) instead of the default single-child
+/// fast path — and the drag/fling gesture wiring and content-dimension
+/// feedback loop must still drive it, because the closure was handed the
+/// controller's own shared `ScrollPosition` to inject.
+#[test]
+fn scrollable_viewport_builder_composes_a_custom_viewport_with_working_drag_and_feedback() {
+    use flui_widgets::Viewport;
+
+    let controller = ScrollController::new();
+    let widget = Scrollable::new()
+        .controller(controller.clone())
+        .viewport_builder(Arc::new(|position: flui_widgets::ScrollPosition| {
+            let rows: Vec<_> = (0..12)
+                .map(|_| SizedBox::new(300.0, 50.0).boxed())
+                .collect();
+            Viewport::new((SliverFixedExtentList::new(50.0, rows),))
+                .position(position)
+                .boxed()
+        }));
+
+    let scoped = lay_out_with_arena(widget, tight(300.0, 300.0));
+
+    // No update_dimensions anywhere: extents must arrive from the custom
+    // viewport's own layout — the same feedback loop the SCSV fast path
+    // uses, proving the builder path isn't a separate, unwired mechanism.
+    // 12 rows * 50px = 600px content in a 300px viewport -> 300px extent.
+    assert!(
+        controller.max_scroll_extent() > 0.0,
+        "the custom viewport_builder composition must feed extents back into the controller \
+         via the same content-dimension feedback loop; got {:.1}",
+        controller.max_scroll_extent()
+    );
+
+    scoped.dispatch_pointer_down(150.0, 250.0);
+    scoped.dispatch_pointer_move(150.0, 180.0); // slop-crossing: 70 px upward
+    scoped.dispatch_pointer_move(150.0, 140.0); // 40 px more: on_pan_update
+    scoped.dispatch_pointer_up(150.0, 140.0);
+
+    assert!(
+        controller.pixels() > 0.0,
+        "dragging through a Scrollable composed via viewport_builder must move the scroll \
+         position; got {:.1}",
         controller.pixels()
     );
 }
