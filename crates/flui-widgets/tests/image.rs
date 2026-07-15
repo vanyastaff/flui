@@ -96,6 +96,28 @@ fn image_failed_provider_renders_zero_size() {
 }
 
 #[test]
+#[cfg(feature = "images")]
+fn image_file_provider_decodes_a_committed_png_fixture_to_its_real_dimensions() {
+    // `tests/fixtures/tiny.png` is a real, committed 5x3 RGBA PNG (not a
+    // synthetic in-memory buffer) — this is the closest thing to a true
+    // "load a real asset file through the Image widget" test that the
+    // current architecture supports. `Image::file` decodes it via
+    // `flui-widgets`' OWN `image`-crate dependency (`ImageProvider::resolve`
+    // in `src/image/provider.rs`); it does NOT go through `flui-assets` —
+    // `flui-widgets` has no dependency on that crate at all, so there is no
+    // "asset image via flui-assets into the Image widget" path to exercise
+    // yet (see `docs/ROADMAP.md`'s Business.1 flui-assets item).
+    let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/tiny.png");
+    let laid = lay_out(Image::file(fixture), loose(1000.0));
+    assert_eq!(
+        laid.size(laid.root()),
+        size(5.0, 3.0),
+        "a 5x3 real PNG file must decode to its true pixel dimensions, not a \
+         0x0 placeholder from a swallowed decode failure",
+    );
+}
+
+#[test]
 fn image_fit_and_alignment_accessors_are_chainable() {
     // Builder chain smoke test: `fit` and `alignment` calls preserve the
     // underlying image and produce the correct layout size.
