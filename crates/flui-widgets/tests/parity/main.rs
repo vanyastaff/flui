@@ -53,6 +53,7 @@ mod table_test;
 // ── Core.1 exit gate — slice-widget parity ports (padding, gestures, scroll,
 //    implicit animations) ─────────────────────────────────────────────────
 mod gesture_detector_test;
+mod gesture_timing_test;
 mod implicit_animations_test;
 mod padding_test;
 mod scroll_controller_test;
