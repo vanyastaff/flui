@@ -1127,7 +1127,7 @@ impl Curves {
 /// an erased `dyn Curve`. This deliberately mirrors Dart's unoverridden
 /// `Curve.==` (identity), which is what lets Flutter's own implicit-animation
 /// staleness check (`ImplicitlyAnimatedWidgetState.didUpdateWidget`,
-/// `implicit_animations.dart:298-303` at tag `3.44.0`) compare a repeated
+/// `implicit_animations.dart` `didUpdateWidget` (curve swap via `_createCurve`) at tag `3.44.0`) compare a repeated
 /// `Curves.easeInOut` reference as unchanged: the Dart compiler canonicalizes
 /// repeated `const` expressions to one object. Two `ArcCurve`s built from
 /// separate `ArcCurve::new(...)` calls compare unequal even when they wrap the

@@ -198,14 +198,14 @@ impl ViewState<AnimatedContainer> for AnimatedContainerState {
     fn did_update_view(&mut self, _old_view: &AnimatedContainer, new_view: &AnimatedContainer) {
         self.child = new_view.child.clone();
         // Oracle: `controller.duration = widget.duration;` is unconditional
-        // (`implicit_animations.dart:305`).
+        // (`implicit_animations.dart` `didUpdateWidget` (`controller.duration` set unconditionally)).
         self.controller.set_duration(new_view.duration);
         // Oracle: a curve-only change swaps the `CurvedAnimation` without
-        // restarting (`implicit_animations.dart:298-303`). The swap must
+        // restarting (`implicit_animations.dart` `didUpdateWidget` (curve swap via `_createCurve`)). The swap must
         // happen BEFORE `t` is sampled below so a target-changed anchor
         // reads the already-updated curve — matches
         // `tween.evaluate(_animation)` reading the just-rebuilt `_animation`
-        // at `implicit_animations.dart:310`. `build()` re-captures
+        // at `implicit_animations.dart` `didUpdateWidget` (`tween.evaluate(_animation)` after the curve swap). `build()` re-captures
         // `controller.curved()` fresh on every reconfigure (this widget
         // rebuilds via `AnimatedBuilder`), so there is no downstream
         // recompute to gate on the swap itself — only on a genuine target
@@ -224,7 +224,7 @@ impl ViewState<AnimatedContainer> for AnimatedContainerState {
         if any_target_changed {
             // Oracle: `controller.forward(from: 0.0)`, gated strictly on
             // `_constructTweens()` (a target change) — a curve-only change
-            // never restarts (`implicit_animations.dart:311-317`).
+            // never restarts (`implicit_animations.dart` `didUpdateWidget` (`_constructTweens` gating `forward(from: 0.0)`)).
             self.controller.restart_from_zero();
         }
     }

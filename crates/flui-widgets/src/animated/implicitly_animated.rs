@@ -116,7 +116,7 @@ impl ImplicitController {
     ///
     /// Oracle: `controller.duration = widget.duration;` is unconditional on
     /// every `didUpdateWidget`, independent of whether a target or curve
-    /// actually changed (`implicit_animations.dart:305` at tag `3.44.0`).
+    /// actually changed (`implicit_animations.dart` `didUpdateWidget` (`controller.duration` set unconditionally) at tag `3.44.0`).
     /// Never retimes a run already in flight — see
     /// `AnimationController::set_duration`'s own doc.
     pub(crate) fn set_duration(&mut self, duration: Duration) {
@@ -133,7 +133,7 @@ impl ImplicitController {
     ///
     /// Oracle: a curve-only change disposes the old `CurvedAnimation` and
     /// builds a fresh one over the same `controller` — `_createCurve`,
-    /// `implicit_animations.dart:298-303,320-322`. The controller is never
+    /// `implicit_animations.dart` `didUpdateWidget`/`_createCurve`. The controller is never
     /// restarted for a curve-only change; see
     /// [`restart_from_zero`](Self::restart_from_zero)'s doc for what is.
     pub(crate) fn set_curve(&mut self, curve: ArcCurve) -> bool {
@@ -151,7 +151,7 @@ impl ImplicitController {
     /// change), so the curved progress sweeps `0`→`1` afresh.
     ///
     /// Oracle: `controller.forward(from: 0.0)`, gated on `_constructTweens()`
-    /// returning `true` (`implicit_animations.dart:311-317`) — a curve-only
+    /// returning `true` (`implicit_animations.dart` `didUpdateWidget` (`_constructTweens` gating `forward(from: 0.0)`)) — a curve-only
     /// change never reaches this restart.
     pub(crate) fn restart_from_zero(&mut self) {
         // Owned, freshly registered controller: `forward_from` only errors when
@@ -242,7 +242,7 @@ impl<T: Lerp + Clone + PartialEq + Send + Sync + 'static> ImplicitAnimation<T> {
     ///
     /// `duration` is pushed to the controller unconditionally, matching the
     /// oracle's unconditional `controller.duration = widget.duration;`
-    /// (`implicit_animations.dart:305`). Only a genuine TARGET change
+    /// (`implicit_animations.dart` `didUpdateWidget` (`controller.duration` set unconditionally)). Only a genuine TARGET change
     /// restarts the run from `0`; a curve-only change swaps the easing
     /// applied to the run already in flight — see
     /// [`ImplicitController::set_curve`]/[`ImplicitController::restart_from_zero`]
@@ -250,7 +250,7 @@ impl<T: Lerp + Clone + PartialEq + Send + Sync + 'static> ImplicitAnimation<T> {
     /// target-changed anchor (`current_value()`, used as the new tween's
     /// `begin`) reads the already-updated curve, matching
     /// `tween.evaluate(_animation)` reading the just-rebuilt `_animation` at
-    /// `implicit_animations.dart:310`.
+    /// `implicit_animations.dart` `didUpdateWidget` (`tween.evaluate(_animation)` after the curve swap).
     pub(crate) fn retarget(&mut self, new_target: T, duration: Duration, curve: ArcCurve) -> bool {
         self.controller.set_duration(duration);
         let curve_changed = self.controller.set_curve(curve);

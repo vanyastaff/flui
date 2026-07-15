@@ -566,7 +566,7 @@ fn animated_container_interpolates_size_over_frames() {
 // captured at construction.
 //
 // Flutter parity: `ImplicitlyAnimatedWidgetState.didUpdateWidget`
-// (`implicit_animations.dart:298-322` at tag `3.44.0`) swaps in a fresh
+// (`implicit_animations.dart` `didUpdateWidget`/`_createCurve` at tag `3.44.0`) swaps in a fresh
 // `CurvedAnimation` over the SAME controller on a curve change, without
 // restarting it (`controller.forward(from: 0.0)` is strictly gated on
 // `_constructTweens()`, i.e. a genuine target change). Both probes below
