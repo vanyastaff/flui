@@ -5374,6 +5374,59 @@ fn harness_shrink_wrapping_viewport_clamps_to_bounded_max_extent() {
     );
 }
 
+/// `RenderShrinkWrappingViewport<ScrollPosition>` must write its committed
+/// content extents through to an injected `ScrollPosition` the same way
+/// `RenderViewport<ScrollPosition>` does — the render-side half of the
+/// widget-level `ShrinkWrappingViewport::position` passthrough
+/// (`crates/flui-widgets/src/scroll/viewport.rs`). `position` is held here
+/// independently of the mounted render object (both are clones of the same
+/// `Arc`-backed state), mirroring how a `ScrollController` observes a
+/// `RenderViewport`/`RenderShrinkWrappingViewport` it was injected into.
+#[test]
+fn harness_shrink_wrapping_viewport_flushes_content_extents_into_an_injected_scroll_position() {
+    use flui_rendering::view::ScrollPosition;
+
+    let position = ScrollPosition::new(0.0);
+    let node = box_node(RenderShrinkWrappingViewport::with_offset(
+        AxisDirection::TopToBottom,
+        AxisDirection::LeftToRight,
+        position.clone(),
+    ))
+    .label("shrink_viewport")
+    .child(
+        sliver_node(RenderSliverFixedExtentList::new(50.0))
+            .label("list")
+            .child(box_node(RenderColoredBox::red(300.0, 1000.0)))
+            .child(box_node(RenderColoredBox::green(300.0, 1000.0)))
+            .child(box_node(RenderColoredBox::blue(300.0, 1000.0)))
+            .child(box_node(RenderColoredBox::red(300.0, 1000.0))),
+    );
+
+    // 4 rows at 50px = 200px content, bounded to a 120px main-axis max —
+    // clamped exactly like `harness_shrink_wrapping_viewport_clamps_to_bounded_max_extent`.
+    let _run = RenderTester::mount(node)
+        .with_constraints(BoxConstraints::new(
+            px(300.0),
+            px(300.0),
+            px(0.0),
+            px(120.0),
+        ))
+        .run_layout();
+
+    assert_eq!(
+        position.viewport_dimension(),
+        120.0,
+        "apply_viewport_dimension must commit the clamped 120px extent into the injected \
+         ScrollPosition"
+    );
+    assert_eq!(
+        position.max_scroll_extent(),
+        80.0,
+        "apply_content_dimensions must commit max_scroll_extent = content(200) - viewport(120) \
+         into the injected ScrollPosition, with zero manual update_dimensions calls"
+    );
+}
+
 // ============================================================================
 // RenderAlign harness tests
 // ============================================================================

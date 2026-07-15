@@ -3,7 +3,7 @@
 use std::fmt;
 use std::rc::Rc;
 
-use flui_rendering::view::{ScrollPosition, ViewportOffset};
+use flui_rendering::view::ScrollPosition;
 use flui_types::layout::{Axis, AxisDirection};
 use flui_view::prelude::StatelessView;
 use flui_view::seq::ViewSeq;
@@ -136,19 +136,13 @@ impl ListView {
         self
     }
 
-    /// Inject a shared [`ScrollPosition`] as the composed [`Viewport`]'s
-    /// offset — see [`Viewport::position`] for the full contract. Mutually
+    /// Inject a shared [`ScrollPosition`] as the composed [`Viewport`]'s (or
+    /// [`ShrinkWrappingViewport`]'s, under [`ListView::shrink_wrap`]) offset
+    /// — see [`Viewport::position`] for the full contract, including under
+    /// shrink-wrap: [`ShrinkWrappingViewport::position`] mirrors it exactly,
+    /// so `RenderShrinkWrappingViewport`'s committed content extents flush
+    /// back into `position` the same way `RenderViewport`'s do. Mutually
     /// exclusive with [`ListView::offset`] — whichever is called last wins.
-    ///
-    /// **Shrink-wrap limitation:** under [`ListView::shrink_wrap`],
-    /// [`ShrinkWrappingViewport`] has no `.position(...)` passthrough (a
-    /// separate, currently-open remainder — see `docs/ROADMAP.md`
-    /// Business.1). A shrink-wrapped list still lays out at `position`'s
-    /// current pixel value (snapshotted once per rebuild), but does not join
-    /// the live content-dimension feedback loop: gesture/controller writes
-    /// after that snapshot are not reflected until the next rebuild, and
-    /// `RenderShrinkWrappingViewport`'s committed extents never flush back
-    /// into `position`.
     #[must_use]
     pub fn position(mut self, position: ScrollPosition) -> Self {
         self.offset_source = OffsetSource::Position(position);
@@ -209,18 +203,12 @@ impl StatelessView for ListView {
             SliverFixedExtentList::new(self.item_extent, self.children.clone()).boxed()
         };
         if self.shrink_wrap {
-            // ShrinkWrappingViewport has no `.position(...)` passthrough (see
-            // `ListView::position`'s doc for the honest limitation) — snapshot
-            // the current pixel value from either offset source and push it
-            // as a one-time constant.
-            let offset = match &self.offset_source {
-                OffsetSource::Pixels(pixels) => *pixels,
-                OffsetSource::Position(position) => position.pixels(),
-            };
-            ShrinkWrappingViewport::new((sliver,))
-                .axis_direction(axis_direction)
-                .offset(offset)
-                .boxed()
+            let viewport = ShrinkWrappingViewport::new((sliver,)).axis_direction(axis_direction);
+            match &self.offset_source {
+                OffsetSource::Pixels(pixels) => viewport.offset(*pixels),
+                OffsetSource::Position(position) => viewport.position(position.clone()),
+            }
+            .boxed()
         } else {
             let viewport = Viewport::new((sliver,)).axis_direction(axis_direction);
             match &self.offset_source {
