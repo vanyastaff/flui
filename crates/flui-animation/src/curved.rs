@@ -8,6 +8,25 @@ use parking_lot::Mutex;
 use std::fmt;
 use std::sync::Arc;
 
+/// Flutter's `CurvedAnimation._updateCurveDirection` (`animations.dart`,
+/// 3.44.0): `_curveDirection = status.isAnimating ? _curveDirection ??
+/// status : null`. Reads only the reported `AnimationStatus` — no separate
+/// "is a ticker literally running" check. Shared by the constructor's seed
+/// call and the status-listener callback so both apply the identical rule.
+fn update_curve_direction(direction: &Mutex<Option<AnimationStatus>>, status: AnimationStatus) {
+    let mut direction = direction.lock();
+    match status {
+        // At rest the lock is released; the next transition re-captures.
+        AnimationStatus::Dismissed | AnimationStatus::Completed => *direction = None,
+        // First transition into a running status wins; a same-run direction
+        // flip (or a directional report from `set_value` that isn't a fresh
+        // run) keeps the entry curve.
+        AnimationStatus::Forward | AnimationStatus::Reverse => {
+            direction.get_or_insert(status);
+        }
+    }
+}
+
 /// An animation that applies a curve to another animation.
 ///
 /// Takes an `Animation<f32>` (typically an `AnimationController`) and applies
@@ -64,26 +83,22 @@ impl<C: Curve + Clone + Send + Sync> CurvedAnimation<C> {
         let parent_sub = link_parent(&parent, &notifier);
 
         let curve_direction = Arc::new(Mutex::new(None));
+        // Flutter's `CurvedAnimation` constructor (`animations.dart`, 3.44.0):
+        // `_updateCurveDirection(parent.status); parent.addStatusListener(...)`
+        // — the seed runs BEFORE the listener is registered. A
+        // `CurvedAnimation` built while the parent is already mid-run (e.g.
+        // constructed against a controller some other code already called
+        // `forward()` on) captures the run's entering direction immediately;
+        // without this seed, `curve_direction` stays `None` until the
+        // listener observes its first transition — and if that first
+        // transition is a mid-run *flip* (`reverse()` right after
+        // construction), the flip itself would be wrongly recorded as the
+        // entering direction instead of preserved as a flip.
+        update_curve_direction(&curve_direction, parent.status());
         let weak_direction = Arc::downgrade(&curve_direction);
         let status_id = parent.add_status_listener(Arc::new(move |status| {
             if let Some(direction) = weak_direction.upgrade() {
-                let mut direction = direction.lock();
-                match status {
-                    // At rest the lock is released; the next transition re-captures.
-                    AnimationStatus::Dismissed | AnimationStatus::Completed => *direction = None,
-                    // First transition into a running status wins; a same-run
-                    // direction flip (or a directional report from `set_value`
-                    // that isn't a fresh run) keeps the entry curve, matching
-                    // Flutter `CurvedAnimation._updateCurveDirection`: it reads
-                    // only the reported `AnimationStatus`, with no separate
-                    // "is a ticker literally running" check — the controller's
-                    // own change-detected status emission (`_checkStatusChanged`)
-                    // is what makes `get_or_insert` fire exactly once per real
-                    // transition.
-                    AnimationStatus::Forward | AnimationStatus::Reverse => {
-                        direction.get_or_insert(status);
-                    }
-                }
+                update_curve_direction(&direction, status);
             }
         }));
         let status_parent = Arc::clone(&parent);
@@ -368,6 +383,43 @@ mod tests {
             (value - expected).abs() < 1e-3,
             "a run entered in Reverse after settling to Completed must use \
              the reverse curve ({value} vs {expected})"
+        );
+
+        controller.dispose();
+    }
+
+    #[test]
+    fn constructor_seeds_curve_direction_from_the_parents_current_status() {
+        // Flutter's `CurvedAnimation` constructor (`animations.dart`, 3.44.0):
+        // `_updateCurveDirection(parent.status); parent.addStatusListener(...)`
+        // — the seed runs BEFORE the listener is registered, so a
+        // `CurvedAnimation` built while the parent is ALREADY mid-run captures
+        // the run's entering direction immediately.
+        let scheduler = Arc::new(Scheduler::new());
+        let controller = Arc::new(AnimationController::new(
+            Duration::from_millis(100),
+            scheduler,
+        ));
+        controller.set_value(0.5);
+        let _ = controller.forward(); // already Forward before CurvedAnimation exists
+
+        let curved = CurvedAnimation::new(
+            controller.clone() as Arc<dyn Animation<f32>>,
+            Cubic::new(0.0, 0.0, 1.0, 1.0), // y(x) = x
+        )
+        .with_reverse_curve(Curves::EaseInQuint);
+
+        // The FIRST transition the listener ever observes is this flip to
+        // Reverse. Without the constructor seed, curve_direction would still
+        // be `None` at this point and would wrongly lock onto Reverse here
+        // instead of preserving the already-Forward entering direction.
+        let _ = controller.reverse();
+        let value = curved.value();
+        let expected = 0.5; // forward curve is the identity cubic — must stay pinned
+        assert!(
+            (value - expected).abs() < 1e-3,
+            "the seeded Forward direction must survive the first observed \
+             flip ({value} vs {expected})"
         );
 
         controller.dispose();

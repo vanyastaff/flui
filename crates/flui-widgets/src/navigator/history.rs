@@ -591,6 +591,24 @@ impl RouteHistory {
             .map(|entry| entry.route.will_handle_pop_internally())
     }
 
+    /// `id`'s own `Route::vetoes_pop` — a registered `PopScope` with
+    /// `can_pop = false` on **this** route specifically. `None` if `id`
+    /// names no entry.
+    ///
+    /// This is *not* `pop_disposition_of_top`: Flutter's
+    /// `ModalRoute.popDisposition` (`routes.dart`) walks `this` route's own
+    /// `_popEntries`, then falls back to `Route.popDisposition`'s `isFirst ?
+    /// bubble : pop` (`navigator.dart`) — which never itself yields
+    /// `doNotPop`. So `popDisposition == RoutePopDisposition.doNotPop` in
+    /// `popGestureEnabled` collapses to exactly this route's own veto check,
+    /// for *this* route, not necessarily the top of the stack.
+    pub(crate) fn vetoes_pop(&self, id: RouteId) -> Option<bool> {
+        self.entries
+            .iter()
+            .find(|entry| entry.id() == id)
+            .map(|entry| entry.route.vetoes_pop())
+    }
+
     /// The bottom-most **present** route — Flutter's `Route.isFirst`
     /// (`navigator.dart:601-611`): `_firstRouteEntryWhereOrNull(isPresentPredicate)`.
     /// Read by `NavigatorHandle::pop_gesture_enabled`'s `isFirst` check.

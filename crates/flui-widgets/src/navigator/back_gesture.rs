@@ -192,11 +192,6 @@ struct BackGestureRuntime {
     /// reading `widget.enabledCallback()` fresh each time.
     enabled: Rc<dyn Fn() -> bool>,
     direction: TextDirection,
-    /// The width a drag fraction is normalized against — Flutter's
-    /// `context.size!.width`. Refreshed every `build` from the incoming
-    /// `BoxConstraints` (`LayoutBuilder`), since FLUI has no
-    /// "my own rendered size" query off `BuildContext`.
-    width: Cell<f32>,
     /// The in-flight gesture, if a drag has started. `None` both before the
     /// first pointer down and after `drag_end`/`drag_cancel`/`dispose` have
     /// consumed it — the multi-touch guard (`Some` blocks a second pointer
@@ -301,15 +296,34 @@ impl BackGestureRuntime {
     /// bookkeeping expects a gesture-stop from), and only if the navigator is
     /// still mounted.
     ///
-    /// A gesture that already reached `drag_end`/`drag_cancel` before this
-    /// runs is not in `self.gesture` anymore (mutually exclusive with
-    /// `finish_drag`'s `take`), so this can never double-report a stop that
-    /// `drag_end`'s own path (immediate or `poll_settle`) already reported.
+    /// Two, not one, cases owe a deferred report here — both leave the
+    /// navigator's gesture count still incremented:
+    ///
+    /// 1. A live drag (finger still down, `self.gesture` is `Some`) that
+    ///    never reached `drag_end`/`drag_cancel` at all.
+    /// 2. A *released* drag whose settle animation is still running
+    ///    (`drag_end` returned `true`, `self.gesture` is already `None` —
+    ///    `finish_drag` always takes it — but `awaiting_settle` is `true`):
+    ///    the route was swept away (e.g. by `push_and_remove_until`) or lost
+    ///    the race between the pop's own settle and this detector's final
+    ///    rebuild before `poll_settle` ever got to observe
+    ///    `!controller.is_animating()`. Checking only `self.gesture` misses
+    ///    this case entirely and leaks the count forever — caught by
+    ///    `dispose_while_awaiting_settle_after_release_returns_the_counter_to_zero`.
+    ///
+    /// Either owes the same deferred `did_stop_user_gesture` Flutter's
+    /// `_CupertinoBackGestureDetectorState.dispose` posts unconditionally
+    /// whenever `_backGestureController != null` — its `null` check happens
+    /// to conflate both cases because `_backGestureController` is not
+    /// separately tracked from "is a release animation still owed a stop"
+    /// there; this port keeps them as two flags (`gesture`/`awaiting_settle`)
+    /// so `poll_settle`'s cheap common case doesn't need a live controller.
     fn dispose_safety_net(&self) {
-        let Some(_gesture) = self.gesture.borrow_mut().take() else {
+        let had_live_gesture = self.gesture.borrow_mut().take().is_some();
+        let was_awaiting_settle = self.awaiting_settle.replace(false);
+        if !had_live_gesture && !was_awaiting_settle {
             return;
-        };
-        self.awaiting_settle.set(false);
+        }
         let navigator = self.navigator.clone();
         match navigator.post_frame_handle() {
             Some(post_frame) => {
@@ -333,10 +347,25 @@ impl BackGestureRuntime {
         }
     }
 
-    /// `self.width`, floored so a zero/negative/unmeasured width never
-    /// divides a finite delta into infinity or NaN.
+    /// The route's own laid-out width — Flutter's `context.size!.width`,
+    /// read straight off `context` in `_handleDragUpdate`/`_handleDragEnd`.
+    /// FLUI has no "my own rendered size" query off `BuildContext`, so this
+    /// reads the page's committed geometry the same way
+    /// `hero_controller.rs`'s `MeasurementPass::run` does: through the
+    /// route's registered subtree and the navigator's render tree, live on
+    /// every call — never cached, so it cannot go stale mid-gesture (e.g.
+    /// across an orientation change). Floored to 1.0 so a genuinely
+    /// unmeasured width (before the very first layout — a state a drag
+    /// cannot start from, since hit-testing itself requires laid-out
+    /// geometry) never divides a delta into infinity or NaN.
     fn normalized_width(&self) -> f32 {
-        self.width.get().max(1.0)
+        let width = self
+            .navigator
+            .route_subtree(self.route)
+            .zip(self.navigator.render_tree())
+            .and_then(|(subtree, owner)| owner.read().box_size(subtree.render_id))
+            .map_or(BACK_GESTURE_WIDTH, |size| size.width.0);
+        width.max(1.0)
     }
 }
 
@@ -409,7 +438,6 @@ impl StatefulView for BackGestureDetector {
                 enabled: Rc::clone(&self.enabled),
                 // No ambient `Directionality` — see the module docs.
                 direction: TextDirection::Ltr,
-                width: Cell::new(BACK_GESTURE_WIDTH.max(1.0)),
                 gesture: RefCell::new(None),
                 awaiting_settle: Cell::new(false),
             }),
@@ -738,7 +766,6 @@ mod tests {
             controller: c,
             enabled: Rc::new(|| true),
             direction: TextDirection::Ltr,
-            width: Cell::new(BACK_GESTURE_WIDTH),
             gesture: RefCell::new(None),
             awaiting_settle: Cell::new(false),
         };
@@ -776,6 +803,137 @@ mod tests {
         );
     }
 
+    /// A one-shot observer that counts `did_stop_user_gesture` calls.
+    #[derive(Default)]
+    struct GestureStopObserver {
+        stops: AtomicUsize,
+    }
+    impl super::super::NavigatorObserver for GestureStopObserver {
+        fn did_stop_user_gesture(&self) {
+            self.stops.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    // ---- full settle after release: did_stop fires, counter clears ----
+
+    /// A released drag settled by genuinely ticking the run out (not
+    /// `set_value`) must report `did_stop_user_gesture` to observers exactly
+    /// once and leave `user_gesture_in_progress()` false — Flutter's
+    /// trailing `AnimationStatusListener` in `dragEnd` firing on the run's
+    /// real terminal status.
+    ///
+    /// Red-check: drop `poll_settle`'s call entirely — `awaiting_settle`
+    /// stays `true` forever and this test hangs on the final assertion
+    /// (never becomes `false`).
+    #[test]
+    fn full_settle_after_release_reports_did_stop_and_clears_the_counter() {
+        let (navigator, _harness, top, c) = mounted_with_transition_route();
+        let observer = Arc::new(GestureStopObserver::default());
+        navigator.add_observer(Arc::clone(&observer) as Arc<dyn super::super::NavigatorObserver>);
+
+        c.set_value(0.49); // <= 0.5, no fling: dragEnd's pop branch
+        let runtime = BackGestureRuntime {
+            navigator: navigator.clone(),
+            route: top,
+            controller: c.clone(),
+            enabled: Rc::new(|| true),
+            direction: TextDirection::Ltr,
+            gesture: RefCell::new(Some(BackGestureController::new(
+                navigator.clone(),
+                top,
+                c.clone(),
+            ))),
+            awaiting_settle: Cell::new(false),
+        };
+
+        runtime.finish_drag(0.0);
+        assert!(
+            runtime.awaiting_settle.get(),
+            "the 350ms reverse run is still going"
+        );
+        assert!(navigator.user_gesture_in_progress());
+
+        // Genuinely tick the run out (not `set_value`) — mid-flight polls
+        // must not report early.
+        c.tick_at(0.10);
+        runtime.poll_settle();
+        assert!(
+            navigator.user_gesture_in_progress(),
+            "must not report stopped before the run actually settles"
+        );
+        assert_eq!(observer.stops.load(Ordering::SeqCst), 0);
+
+        c.tick_at(0.35); // >= the 350ms pacing -> settles to Dismissed
+        assert_eq!(c.status(), flui_animation::AnimationStatus::Dismissed);
+        runtime.poll_settle();
+
+        assert!(
+            !navigator.user_gesture_in_progress(),
+            "the counter must clear once the run genuinely settles"
+        );
+        assert_eq!(
+            observer.stops.load(Ordering::SeqCst),
+            1,
+            "did_stop_user_gesture must fire exactly once"
+        );
+    }
+
+    // ---- dispose while awaiting settle (post-release, pre-poll): counter clears ----
+
+    /// Blocker: `dispose_safety_net` must own the deferred report for a
+    /// gesture that already *released* (so `self.gesture` is `None` —
+    /// `finish_drag` always takes it) but whose settle animation is still
+    /// running when the detector unmounts — e.g. the route was swept away by
+    /// a `push_and_remove_until` mid-settle, or lost the race between the
+    /// pop's own settle and this detector's final rebuild. Checking only
+    /// `self.gesture` (as if a live drag were the only case that owes a
+    /// report) leaks the counter forever.
+    ///
+    /// Red-check: guard `dispose_safety_net` on `self.gesture` alone (drop
+    /// the `awaiting_settle` check) — this test's final assertion fails,
+    /// `user_gesture_in_progress()` stays `true` forever.
+    #[test]
+    fn dispose_while_awaiting_settle_after_release_returns_the_counter_to_zero() {
+        let (navigator, mut harness, top, c) = mounted_with_transition_route();
+        c.set_value(0.49);
+        let runtime = BackGestureRuntime {
+            navigator: navigator.clone(),
+            route: top,
+            controller: c.clone(),
+            enabled: Rc::new(|| true),
+            direction: TextDirection::Ltr,
+            gesture: RefCell::new(Some(BackGestureController::new(
+                navigator.clone(),
+                top,
+                c.clone(),
+            ))),
+            awaiting_settle: Cell::new(false),
+        };
+
+        runtime.finish_drag(0.0);
+        assert!(
+            runtime.gesture.borrow().is_none(),
+            "finish_drag always takes it"
+        );
+        assert!(
+            runtime.awaiting_settle.get(),
+            "the release animation is still running"
+        );
+        assert!(navigator.user_gesture_in_progress());
+
+        // The detector unmounts before the settle run's next poll — no
+        // `poll_settle` call ever ran.
+        assert!(navigator.is_mounted());
+        harness.enter_owner_scope(|| runtime.dispose_safety_net());
+        harness.tick();
+
+        assert!(
+            !navigator.user_gesture_in_progress(),
+            "dispose must clear the counter for a release still awaiting \
+             settle, not only for a still-dragging gesture"
+        );
+    }
+
     // ---- second pointer mid-drag ignored ----
 
     #[test]
@@ -793,7 +951,6 @@ mod tests {
                 true
             }),
             direction: TextDirection::Ltr,
-            width: Cell::new(BACK_GESTURE_WIDTH),
             gesture: RefCell::new(None),
             awaiting_settle: Cell::new(false),
         };
@@ -845,7 +1002,6 @@ mod tests {
             controller: c,
             enabled: Rc::new(move || allow_for_closure.get()),
             direction: TextDirection::Ltr,
-            width: Cell::new(BACK_GESTURE_WIDTH),
             gesture: RefCell::new(None),
             awaiting_settle: Cell::new(false),
         };

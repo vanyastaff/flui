@@ -361,9 +361,18 @@ impl NavigatorShared {
     /// Flutter's `NavigatorState.didStopUserGesture` (`navigator.dart:5847-5855`).
     /// Only the 1→0 transition notifies observers.
     fn did_stop_user_gesture(&self) {
+        // Saturating, not `fetch_sub`: `fetch_sub` on an unmatched call at 0
+        // wraps to `u32::MAX` in release (the debug_assert below is compiled
+        // out there), which would make every later `user_gesture_in_progress()`
+        // read `true` forever. `fetch_update` with `saturating_sub` makes an
+        // unmatched call a true no-op in release, exactly as the debug-only
+        // assert already documents it should be.
         let count_before = self
             .user_gestures_in_progress
-            .fetch_sub(1, Ordering::AcqRel);
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+                Some(count.saturating_sub(1))
+            })
+            .expect("BUG: the update closure always returns Some, fetch_update cannot fail");
         debug_assert!(
             count_before > 0,
             "BUG: did_stop_user_gesture called without a matching did_start_user_gesture"
@@ -1209,15 +1218,19 @@ impl NavigatorHandle {
         if self.user_gesture_in_progress() {
             return false;
         }
-        let (is_first, will_handle_pop_internally, veto) = {
+        // `popDisposition == RoutePopDisposition.doNotPop` in the oracle
+        // reads *this* route's own `popDisposition` (`ModalRoute
+        // .popDisposition`, `routes.dart`), not the top of the stack —
+        // `RouteHistory::vetoes_pop` is that per-route check. See its doc.
+        let (is_first, will_handle_pop_internally, vetoes_pop) = {
             let history = self.shared.history.lock();
             (
                 history.first_present() == Some(route),
                 history.will_handle_pop_internally(route),
-                history.pop_disposition_of_top() == Some(RoutePopDisposition::DoNotPop),
+                history.vetoes_pop(route),
             )
         };
-        if is_first || will_handle_pop_internally != Some(false) || veto {
+        if is_first || will_handle_pop_internally != Some(false) || vetoes_pop != Some(false) {
             return false;
         }
         self.route_modal(route)
