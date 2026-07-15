@@ -64,18 +64,29 @@ fn offset_relayout_listener(handle: RepaintHandle) -> Arc<dyn Fn() + Send + Sync
     Arc::new(move || {
         // `SendError::OwnerGone` (pipeline owner torn down — node/tree gone,
         // this is teardown, not a fault) and any future variant (`SendError`
-        // is `#[non_exhaustive]`) get the same silent treatment: nothing
-        // left to mark, nothing to warn about — the conservative default for
-        // a background mark. Only `ChannelFull` earns a debug line.
+        // is `#[non_exhaustive]`) get silent treatment: nothing left to
+        // mark, nothing to warn about. `ChannelFull` gets a `warn!` below —
+        // see its comment for why this is a real, unmitigated staleness
+        // risk, not routine backpressure noise.
         if let Err(error @ DirtySendError::ChannelFull { .. }) = handle.mark_needs_layout() {
-            // The dirty channel is bounded (cap 256): a full channel under
-            // an offset-notification storm means this SAME node's own
-            // layout mark is already queued somewhere in it — dropping the
-            // duplicate costs nothing.
-            tracing::debug!(
+            // A full channel does NOT mean this node's own mark is already
+            // queued in it — 256 unrelated marks from elsewhere in the tree
+            // fill it just as easily, so this send can be dropped for a
+            // node that has no other pending mark at all. There is no
+            // retry available: this closure has no way back into the
+            // render object to set a retry flag, and neither
+            // `perform_layout` nor `paint` runs for a node that isn't
+            // already on some dirty list, so nothing revisits it later on
+            // its own. Continuous scrolling self-heals (the very next
+            // offset mutation fires this listener again and retries the
+            // send), but a single one-shot `jump_to` under backpressure can
+            // leave this viewport showing a stale frame until some
+            // UNRELATED mutation elsewhere happens to mark it dirty.
+            tracing::warn!(
                 %error,
-                "viewport offset listener: mark_needs_layout channel full; \
-                 this node's mark is already queued, dropping the duplicate"
+                "viewport offset listener: mark_needs_layout dropped under backpressure; \
+                 this viewport may keep showing a stale frame until another offset mutation \
+                 or an unrelated dirty mark triggers a retry"
             );
         }
     })
@@ -1422,11 +1433,11 @@ mod offset_listener_tests {
         );
     }
 
-    /// Pin (a)-adjacent, at the pipeline level rather than the widget level:
-    /// after `attach`, mutating the offset OUTSIDE `perform_layout` (no
-    /// layout call, no widget rebuild) must mark the bound node needing
-    /// layout — this is the render-side listener the whole change adds.
-    /// `anchor_handle` already ran the anchor's first frame, so the
+    /// At the pipeline level rather than the widget level: after `attach`,
+    /// mutating the offset OUTSIDE `perform_layout` (no layout call, no
+    /// widget rebuild) must mark the bound node needing layout — this is
+    /// the render-side listener the whole change adds. `anchor_handle`
+    /// already ran the anchor's first frame, so the
     /// layout-dirty list starts clean: every assertion below is on the
     /// listener's marginal effect, not insert's baseline "needs first
     /// layout" mark.
@@ -1461,10 +1472,11 @@ mod offset_listener_tests {
         );
     }
 
-    /// Pin (b): `set_offset` while attached must move the listener, not
-    /// duplicate or drop it — removing the SAME `Arc` from the OLD offset
-    /// (F1's ptr-eq removal contract) and registering a fresh one on the
-    /// NEW offset, both bound to the same retained handle.
+    /// `set_offset` while attached must move the listener, not duplicate or
+    /// drop it — removing the SAME `Arc` from the OLD offset (the ptr-eq
+    /// removal contract `ViewportOffset::add_listener`/`remove_listener`
+    /// document) and registering a fresh one on the NEW offset, both bound
+    /// to the same retained handle.
     #[test]
     fn set_offset_while_attached_moves_the_relayout_listener_to_the_new_offset() {
         let (mut owner, handle) = anchor_handle();
@@ -1495,6 +1507,58 @@ mod offset_listener_tests {
         assert!(
             owner.nodes_needing_layout().iter().any(|d| d.id == anchor),
             "the NEW offset must carry the relayout listener after set_offset while attached"
+        );
+    }
+
+    /// Documents the known limitation `offset_relayout_listener`'s
+    /// `ChannelFull` comment describes: a full dirty channel does not mean
+    /// THIS node's own mark is already queued — an unrelated request from
+    /// elsewhere in the tree can fill the last slot just as easily, and
+    /// there is no retry mechanism, so the send is dropped and the node
+    /// stays off the layout-dirty list until something else marks it.
+    #[test]
+    fn channel_full_backpressure_drops_the_mark_and_the_node_stays_off_the_dirty_list() {
+        // Capacity 1 makes a single UNRELATED request enough to saturate
+        // the channel, isolating the scenario without an elaborate fill loop.
+        let mut owner = PipelineOwner::new_with_capacity(1);
+        let anchor =
+            owner
+                .insert(Box::new(RenderViewport::new(TopToBottom))
+                    as Box<dyn RenderObject<BoxProtocol>>);
+        owner.set_root_id(Some(anchor));
+        owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(100.0), px(100.0)))));
+        let (mut owner, result) = owner.run_frame();
+        result.expect("the anchor's first frame must not error");
+        let handle = owner
+            .repaint_handle(anchor)
+            .expect("the rooted anchor id must still be live after its first frame");
+
+        let position = ScrollPosition::new(0.0);
+        let mut viewport = RenderViewport::with_offset(TopToBottom, LeftToRight, position.clone());
+        RenderBox::attach(&mut viewport, handle);
+
+        // Saturate the 1-slot channel with a request for a DIFFERENT,
+        // never-inserted id — the drain silently ignores it once processed,
+        // it only needs to exist to occupy the slot the listener wants.
+        owner
+            .handle()
+            .request_mark_dirty(
+                flui_foundation::RenderId::new(999_999),
+                0,
+                flui_rendering::pipeline::DirtyKind::Paint,
+            )
+            .expect("the first send into a freshly-drained 1-capacity channel must fit");
+
+        // The offset listener now tries to send and gets ChannelFull —
+        // dropped, per the honest comment on `offset_relayout_listener`.
+        position.set_pixels(50.0);
+
+        owner.drain_pending_dirty();
+        assert!(
+            owner.nodes_needing_layout().iter().all(|d| d.id != anchor),
+            "under channel backpressure the offset listener's mark is dropped, not queued — \
+             the node must stay off the layout-dirty list until an unrelated mutation frees \
+             a slot and retries it"
         );
     }
 }
