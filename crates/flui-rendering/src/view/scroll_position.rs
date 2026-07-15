@@ -96,9 +96,16 @@ impl Inner {
         self.notifier.notify_listeners();
         // Snapshot-then-fire: a listener that calls `add_listener`/
         // `remove_listener` on this same position must not deadlock on
-        // `offset_listeners`. Unlike `ScrollableViewportOffset`, this list is
-        // not expected to see reentrant notification traffic in this crate's
-        // call sites, so no pending-pass bookkeeping is needed.
+        // `offset_listeners`. This list has a real, load-bearing consumer:
+        // `RenderViewport`/`RenderShrinkWrappingViewport` (`flui-objects`)
+        // register their render-side relayout listener here in `attach`
+        // (and re-register it on `set_offset` while attached). That listener
+        // only sends a cross-thread `RepaintHandle::mark_needs_layout()`
+        // request — it never calls back into `notify()`/`add_listener`/
+        // `remove_listener` synchronously — so unlike `ScrollableViewportOffset`,
+        // this list still doesn't need `ScrollableViewportOffset`-style
+        // pending-pass bookkeeping for a REENTRANT notify pass; the snapshot
+        // above is only guarding the add/remove-during-iteration case.
         let listeners = self.offset_listeners.lock().clone();
         for listener in &listeners {
             listener();

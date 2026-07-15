@@ -230,7 +230,7 @@ mod tests {
     /// its `ArcCurve` compares reference-equal across the two `new()` calls
     /// below) must leave that `Arc` pointer untouched.
     #[test]
-    fn unrelated_rebuild_does_not_swap_the_proxys_parent() {
+    fn unrelated_rebuild_does_not_swap_the_proxy_parent() {
         let view = probe(0.5);
         let mut state = view.create_state();
         let parent_before = state.proxy.parent();
@@ -250,7 +250,7 @@ mod tests {
     /// parent, or the render object would keep observing the stale
     /// tween/curve composition.
     #[test]
-    fn opacity_retarget_swaps_the_proxys_parent() {
+    fn opacity_retarget_swaps_the_proxy_parent() {
         let view = probe(0.5);
         let mut state = view.create_state();
         let parent_before = state.proxy.parent();
@@ -269,7 +269,7 @@ mod tests {
     /// the proxy's parent — the render object must observe the new curve,
     /// not the stale one baked into the old composition.
     #[test]
-    fn curve_only_change_swaps_the_proxys_parent() {
+    fn curve_only_change_swaps_the_proxy_parent() {
         use flui_animation::Curves;
 
         let view = probe(0.5);

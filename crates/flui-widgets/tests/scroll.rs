@@ -291,6 +291,60 @@ fn viewport_position_to_pixels_mode_switch_does_not_stomp_the_shared_controller_
     );
 }
 
+/// The render-side counterpart to
+/// `scrollable_position_mode_relayouts_from_external_mutation_with_no_pixels_push`:
+/// that test's relayout rides `Scrollable`'s `AnimatedBuilder` subscription,
+/// which schedules a widget rebuild when the shared `ScrollPosition`
+/// notifies. A BARE `Viewport::position(...)` — no `Scrollable`, no
+/// `AnimatedBuilder`, nothing subscribed to the position at the widget layer
+/// at all — has no such rebuild path: [`LaidOut::tick`] drives a frame
+/// WITHOUT marking anything dirty at the widget level (the headless
+/// equivalent of an idle event loop with no `setState` anywhere), so before
+/// `RenderViewport` listened to its own `ViewportOffset`, an external
+/// `position.set_pixels(...)` here was dead on arrival — nothing observed
+/// it, and committed paint never moved. `RenderViewport::attach` (Flutter
+/// parity: `rendering/viewport.dart`'s `offset.addListener(markNeedsLayout)`)
+/// closes that gap: the render object marks its OWN layout dirty straight
+/// off the offset's notification, no widget rebuild required.
+#[test]
+fn bare_viewport_position_mode_relayouts_via_the_render_side_listener_with_no_widget_rebuild_path()
+{
+    use flui_rendering::view::ScrollPosition;
+    use flui_widgets::Viewport;
+
+    fn rows() -> Vec<flui_view::BoxedView> {
+        (0..10)
+            .map(|_| SizedBox::new(200.0, 50.0).boxed())
+            .collect()
+    }
+
+    // 10 rows at 50px = 500px content in a 120px viewport -> 380px of real
+    // scroll range, comfortably above the 120px jump below.
+    let position = ScrollPosition::new(0.0);
+    let widget =
+        Viewport::new((SliverFixedExtentList::new(50.0, rows()),)).position(position.clone());
+    let mut laid = lay_out(widget, tight(200.0, 120.0));
+
+    let sliver = laid.only_child(laid.root());
+    let offset_before = laid.absolute_offset(laid.child(sliver, 0));
+
+    // External mutation: no gesture, no `Scrollable`, no widget anywhere
+    // subscribed to `position` — nothing schedules a rebuild.
+    position.set_pixels(120.0);
+
+    // `tick()` (unlike `pump()`) does NOT mark the root needing build — only
+    // a render-object-level self-mark can move committed paint here.
+    laid.tick();
+
+    let offset_after = laid.absolute_offset(laid.child(sliver, 0));
+    assert_ne!(
+        offset_before, offset_after,
+        "a bare Viewport in Position mode (no Scrollable/AnimatedBuilder anywhere) must \
+         relayout on an external ScrollPosition mutation via the render-side offset \
+         listener alone, with zero widget-level rebuild path involved"
+    );
+}
+
 // ============================================================================
 // ListView / GridView — `.position()` passthrough
 // ============================================================================
@@ -301,10 +355,14 @@ fn viewport_position_to_pixels_mode_switch_does_not_stomp_the_shared_controller_
 /// straight through to the composed `Viewport`, so
 /// `RenderViewport::perform_layout`'s committed content extents land in the
 /// SAME controller a caller reads — no manual extent feed anywhere in this
-/// test — and a subsequent `set_pixels` must move the committed paint once
-/// picked up by a rebuild (today's relayout path: the ordinary widget-rebuild
-/// dirty-mark, not a render-object-level subscription — see `docs/ROADMAP.md`
-/// Business.1's "no listener-driven markNeedsLayout" remainder).
+/// test — and a subsequent `set_pixels` must move the committed paint. This
+/// widget's own tree wraps a `ListView` bare (no `Scrollable`, so the
+/// `AnimatedBuilder` rebuild path isn't in play here) and drives the
+/// relayout via `.pump()` (root-dirty), so it exercises the ordinary
+/// widget-rebuild path rather than `RenderViewport`'s render-side offset
+/// listener specifically —
+/// `bare_viewport_position_mode_relayouts_via_the_render_side_listener_with_no_widget_rebuild_path`
+/// isolates that listener on its own with `.tick()` (no root-dirty).
 #[test]
 fn list_view_position_passthrough_feeds_the_content_dimension_feedback_loop() {
     let controller = ScrollController::new();
@@ -700,6 +758,56 @@ fn scrollable_position_mode_relayouts_from_external_mutation_with_no_pixels_push
         offset_before, offset_after,
         "an external ScrollPosition mutation with no gesture and no pixels push from \
          update_render_object must still relayout the child to the new offset"
+    );
+}
+
+/// Loop-termination pin: the post-frame content-dimension flush now has TWO
+/// listeners on the same shared `ScrollPosition` — the pre-existing
+/// `AnimatedBuilder` widget-rebuild subscription `Scrollable` installs, and
+/// `RenderViewport`'s own render-side offset listener (this change). Both
+/// can fire off the SAME coalesced flush; this proves they don't keep
+/// re-triggering each other into an unbounded relayout loop.
+///
+/// Mechanism (why this terminates): `ViewportOffset::apply_content_dimensions`
+/// only marks the position's metrics dirty — and so only schedules another
+/// flush — on a REAL extent change (`scroll_position.rs`'s epsilon guards).
+/// Once a relayout re-commits the SAME extents, nothing schedules a further
+/// flush, nothing notifies, and the render listener has nothing left to
+/// fire — matching `set_pixels`'s own epsilon guard against no-op writes.
+#[test]
+fn scrollable_offset_listener_settles_within_a_bounded_number_of_ticks_after_external_mutation() {
+    let controller = ScrollController::new();
+    let widget = Scrollable::new()
+        .controller(controller.clone())
+        .child(SizedBox::new(300.0, 800.0));
+
+    let mut laid = lay_out(widget, tight(300.0, 300.0));
+    let box_before = laid.find_by_render_type("RenderConstrainedBox");
+    let offset_before = laid.absolute_offset(box_before);
+
+    // External mutation — same shape as
+    // `scrollable_position_mode_relayouts_from_external_mutation_with_no_pixels_push`.
+    controller.set_pixels(120.0);
+
+    const SETTLE_BUDGET: usize = 5;
+    let mut offsets = Vec::with_capacity(SETTLE_BUDGET);
+    for _ in 0..SETTLE_BUDGET {
+        laid.tick();
+        let box_now = laid.find_by_render_type("RenderConstrainedBox");
+        offsets.push(laid.absolute_offset(box_now));
+    }
+
+    assert_ne!(
+        offsets[0], offset_before,
+        "the mutation must actually move committed paint within the settle budget"
+    );
+    assert_eq!(
+        offsets[SETTLE_BUDGET - 1],
+        offsets[SETTLE_BUDGET - 2],
+        "geometry must settle to a fixed point well within {SETTLE_BUDGET} idle ticks after \
+         the external mutation — a still-changing value here would mean the post-frame flush \
+         and the render-side offset listener are re-triggering each other in an unbounded \
+         relayout loop instead of going quiescent"
     );
 }
 
