@@ -880,7 +880,7 @@ mod tests {
 
     // ---- dispose while awaiting settle (post-release, pre-poll): counter clears ----
 
-    /// Blocker: `dispose_safety_net` must own the deferred report for a
+    /// `dispose_safety_net` must own the deferred report for a
     /// gesture that already *released* (so `self.gesture` is `None` —
     /// `finish_drag` always takes it) but whose settle animation is still
     /// running when the detector unmounts — e.g. the route was swept away by
