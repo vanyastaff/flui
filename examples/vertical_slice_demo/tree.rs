@@ -129,6 +129,15 @@ pub struct DemoRoot {
     /// first layout, so constructing a `DemoRoot` with a nonzero offset does
     /// not start the list at zero.
     pub scroll_offset: Rc<Cell<f32>>,
+    /// How many times [`DemoHomeState::create_state`] has run — a discriminator,
+    /// not app-visible data. `count`/`expanded`/`scroll_offset` are `Rc<Cell<_>>`
+    /// shared with the seed closure below, so they read back correctly whether
+    /// `DemoHomeState` survives a navigation round trip or is torn down and
+    /// rebuilt from the same closure-captured cells; a display assertion on
+    /// them alone cannot tell those two cases apart. This counter can, because
+    /// `create_state` runs once per element lifetime — the acceptance test
+    /// reads it, not the running app.
+    pub home_create_count: Rc<Cell<u32>>,
 }
 
 impl DemoRoot {
@@ -139,6 +148,7 @@ impl DemoRoot {
             count: Rc::new(Cell::new(0)),
             expanded: Rc::new(Cell::new(false)),
             scroll_offset: Rc::new(Cell::new(0.0)),
+            home_create_count: Rc::new(Cell::new(0)),
         }
     }
 }
@@ -169,6 +179,7 @@ impl StatefulView for DemoRoot {
         let count = Rc::clone(&self.count);
         let expanded = Rc::clone(&self.expanded);
         let scroll_offset = Rc::clone(&self.scroll_offset);
+        let home_create_count = Rc::clone(&self.home_create_count);
         let navigator_for_home = navigator.clone();
         // `SimpleRoute`, not `PageRoute`: the home route is the navigator's
         // first entry, with nothing beneath it to transition over — an
@@ -180,6 +191,7 @@ impl StatefulView for DemoRoot {
                     expanded: Rc::clone(&expanded),
                     scroll_offset: Rc::clone(&scroll_offset),
                     navigator: navigator_for_home.clone(),
+                    create_count: Rc::clone(&home_create_count),
                 }
                 .into_view()
                 .boxed()
@@ -208,6 +220,10 @@ struct DemoHome {
     expanded: Rc<Cell<bool>>,
     scroll_offset: Rc<Cell<f32>>,
     navigator: NavigatorHandle,
+    /// Incremented once per [`DemoHomeState::create_state`] call — see the
+    /// field doc on [`DemoRoot::home_create_count`], which owns the `Rc` this
+    /// clones.
+    create_count: Rc<Cell<u32>>,
 }
 
 /// Persistent state for [`DemoHome`].
@@ -244,6 +260,12 @@ impl StatefulView for DemoHome {
         // extents once they're known — the same clamp path `jump_to` uses,
         // just deferred to when it's actually meaningful.
         scroll_controller.set_pixels(self.scroll_offset.get());
+
+        // The discriminator itself: every real `create_state` call — mount,
+        // or a teardown-and-rebuild after a covering route unmounts this
+        // element — increments it. `count`/`expanded`/`scroll_offset` can't
+        // tell those two apart (see `DemoRoot::home_create_count`'s doc); this can.
+        self.create_count.set(self.create_count.get() + 1);
 
         DemoHomeState {
             count: Rc::clone(&self.count),

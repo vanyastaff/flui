@@ -32,6 +32,8 @@
 #[path = "../examples/vertical_slice_demo/tree.rs"]
 mod tree;
 
+use std::cell::Cell;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -60,6 +62,10 @@ fn root_constraints() -> BoxConstraints {
 struct MountedDemo {
     binding: HeadlessBinding,
     pipeline_owner: Arc<RwLock<PipelineOwner>>,
+    /// Clone of the mounted [`tree::DemoRoot`]'s `home_create_count` — how many
+    /// times `DemoHomeState::create_state` has run. See that field's doc for
+    /// why this, and not a display assertion, is what proves state survival.
+    home_create_count: Rc<Cell<u32>>,
 }
 
 impl MountedDemo {
@@ -76,6 +82,7 @@ impl MountedDemo {
         let mut binding = HeadlessBinding::new();
 
         let root_view = tree::demo_root();
+        let home_create_count = Rc::clone(&root_view.home_create_count);
 
         let mut build_owner = BuildOwner::new();
         let mut tree = ElementTree::new();
@@ -133,7 +140,13 @@ impl MountedDemo {
         Self {
             binding,
             pipeline_owner,
+            home_create_count,
         }
+    }
+
+    /// How many times `DemoHomeState::create_state` has run so far.
+    fn home_create_count(&self) -> u32 {
+        self.home_create_count.get()
     }
 
     /// Drive one deterministic frame.
@@ -688,11 +701,28 @@ fn tapping_back_pops_the_details_route_and_preserves_counter_state() {
         demo.find_text(tree::DETAILS_ROUTE_TEXT).is_none(),
         "the details route must be gone once popped"
     );
+    // The discriminating assertion: `count`/`expanded`/`scroll_offset` are
+    // `Rc<Cell<_>>`s captured once by the seed closure in `DemoRootState`
+    // (`tree.rs`), so a display check on them alone reads back correctly
+    // whether `DemoHomeState` survived the round trip or was torn down and
+    // rebuilt from those same closure-held cells — it cannot tell the two
+    // apart. `home_create_count` can: it is incremented once per real
+    // `DemoHomeState::create_state` call. A value of `2` here would mean the
+    // covering `PageRoute` unmounted the home route while it was covered
+    // (Flutter's `maintainState == false` path) and popping rebuilt it from
+    // scratch; `1` is the only value consistent with the state object itself
+    // having survived the whole push+pop round trip.
+    assert_eq!(
+        demo.home_create_count(),
+        1,
+        "DemoHomeState::create_state must have run exactly once — across the whole \
+         mount, push, and pop — proving the home route's state survived being \
+         covered rather than being torn down and rebuilt"
+    );
     assert!(
         demo.find_text("Count: 2").is_some(),
-        "the counter must show the pre-navigation count, not a reset one — the same \
-         DemoHomeState (and its Rc<Cell<i32>>) survived the round trip because the \
-         home route stayed mounted (maintain_state) rather than being torn down"
+        "and, now that create_state's single run is pinned above, the counter \
+         correctly shows the pre-navigation count rather than a reset one"
     );
 
     // The home route's own hit-testing must be restored, too.
