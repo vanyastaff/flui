@@ -9,59 +9,32 @@
 //! # Flutter parity
 //!
 //! Corresponds to `ScrollController` + `ScrollPosition` in
-//! `widgets/scroll_controller.dart`. FLUI merges the two into one struct
-//! because the one-position-per-controller restriction holds everywhere in v1
-//! (multiple-position support is deferred).
+//! `widgets/scroll_controller.dart`. FLUI keeps the split as two types —
+//! `ScrollController` (this one) as the user-facing handle, and
+//! [`flui_rendering::view::ScrollPosition`] as the shared, `RenderViewport`-
+//! consumable state it wraps — but restricts a controller to exactly one
+//! position (Flutter's multi-position attach/detach is deferred).
 //!
 //! # Deferred (v1)
 //!
 //! - Multiple attached positions (one controller → many scrollables).
 //! - `animateTo` (driven animation to a target offset) — `set_pixels` is the
 //!   only way to move the position in v1; animated-to requires ticking.
-//! - `notifyListeners` on `update_dimensions` — listeners are notified on
-//!   every `update_dimensions` call so widgets (e.g. `Scrollbar`) always
-//!   reflect the latest extent even before a gesture fires.
+//!
+//! # Content-dimension feedback
+//!
+//! `update_dimensions` is the explicit, out-of-frame extent write a caller
+//! (typically a test, or code running outside the render pipeline) uses to
+//! seed extents before anything has laid out. When a `Scrollable`/`Viewport`
+//! is wired with [`ScrollController::position`] instead, `RenderViewport`'s
+//! own layout writes extents into the *same* shared [`ScrollPosition`]
+//! directly — see that type's docs for the coalesced post-frame flush that
+//! replaces a synchronous notify from inside layout.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
-use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback, ListenerId};
-
-// ---------------------------------------------------------------------------
-// Inner state (heap-allocated, shared across all clones)
-// ---------------------------------------------------------------------------
-
-/// The heap-allocated scroll state shared by all clones of a `ScrollController`.
-struct ScrollPositionState {
-    /// Current scroll offset in logical pixels. Grows positive toward the
-    /// content end (matches Flutter's pixel convention).
-    pixels: Mutex<f32>,
-    /// The smallest pixel value reachable without overscroll. Typically 0.0.
-    min_scroll_extent: Mutex<f32>,
-    /// The largest pixel value reachable without overscroll.
-    /// `max - min` = the total scrollable range.
-    max_scroll_extent: Mutex<f32>,
-    /// The length of the visible window along the scroll axis (set from
-    /// layout; 0.0 until `update_dimensions` is called).
-    viewport_dimension_pixels: Mutex<f32>,
-    /// Notifier whose listeners are fired whenever any of the above fields
-    /// changes. `AnimatedView` subscribes here so position changes trigger
-    /// rebuilds.
-    notifier: ChangeNotifier,
-}
-
-impl Listenable for ScrollPositionState {
-    fn add_listener(&self, listener: ListenerCallback) -> ListenerId {
-        self.notifier.add_listener(listener)
-    }
-
-    fn remove_listener(&self, id: ListenerId) {
-        self.notifier.remove_listener(id);
-    }
-
-    fn remove_all_listeners(&self) {
-        self.notifier.remove_all_listeners();
-    }
-}
+use flui_foundation::Listenable;
+use flui_rendering::view::{ScrollPosition, ViewportOffset};
 
 // ---------------------------------------------------------------------------
 // Public handle
@@ -91,19 +64,13 @@ impl Listenable for ScrollPositionState {
 /// ```
 #[derive(Clone)]
 pub struct ScrollController {
-    inner: Arc<ScrollPositionState>,
+    position: ScrollPosition,
 }
 
 impl std::fmt::Debug for ScrollController {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ScrollController")
-            .field("pixels", &self.pixels())
-            .field("min_scroll_extent", &self.min_scroll_extent())
-            .field("max_scroll_extent", &self.max_scroll_extent())
-            .field(
-                "viewport_dimension_pixels",
-                &self.viewport_dimension_pixels(),
-            )
+            .field("position", &self.position)
             .finish()
     }
 }
@@ -118,17 +85,13 @@ impl ScrollController {
     /// Create a new controller at pixel offset 0.0 with no known extents.
     ///
     /// Call [`update_dimensions`](Self::update_dimensions) once the viewport's
-    /// layout is known (typically done by the enclosing `Scrollable`).
+    /// layout is known (typically done by the enclosing `Scrollable`), or
+    /// wire [`position`](Self::position) into a `Scrollable`/`Viewport` so
+    /// `RenderViewport`'s own layout feeds extents back automatically.
     #[must_use]
     pub fn new() -> Self {
         Self {
-            inner: Arc::new(ScrollPositionState {
-                pixels: Mutex::new(0.0),
-                min_scroll_extent: Mutex::new(0.0),
-                max_scroll_extent: Mutex::new(0.0),
-                viewport_dimension_pixels: Mutex::new(0.0),
-                notifier: ChangeNotifier::new(),
-            }),
+            position: ScrollPosition::zero(),
         }
     }
 
@@ -137,42 +100,27 @@ impl ScrollController {
     /// Current scroll offset in logical pixels.
     #[must_use]
     pub fn pixels(&self) -> f32 {
-        *self
-            .inner
-            .pixels
-            .lock()
-            .expect("scroll position mutex poisoned")
+        self.position.pixels()
     }
 
     /// The minimum allowed pixel value (typically 0.0).
     #[must_use]
     pub fn min_scroll_extent(&self) -> f32 {
-        *self
-            .inner
-            .min_scroll_extent
-            .lock()
-            .expect("scroll position mutex poisoned")
+        self.position.min_scroll_extent()
     }
 
     /// The maximum allowed pixel value (content length − viewport length).
     #[must_use]
     pub fn max_scroll_extent(&self) -> f32 {
-        *self
-            .inner
-            .max_scroll_extent
-            .lock()
-            .expect("scroll position mutex poisoned")
+        self.position.max_scroll_extent()
     }
 
     /// Length of the visible window along the scroll axis in logical pixels.
-    /// `0.0` until [`update_dimensions`](Self::update_dimensions) is called.
+    /// `0.0` until [`update_dimensions`](Self::update_dimensions) is called
+    /// (or, in `position` mode, until the first layout commits it).
     #[must_use]
     pub fn viewport_dimension_pixels(&self) -> f32 {
-        *self
-            .inner
-            .viewport_dimension_pixels
-            .lock()
-            .expect("scroll position mutex poisoned")
+        self.position.viewport_dimension()
     }
 
     /// Total scrollable range = `max_scroll_extent - min_scroll_extent`.
@@ -183,7 +131,8 @@ impl ScrollController {
 
     // -- Writes --------------------------------------------------------------
 
-    /// Set the scroll offset to `pixels` and notify all listeners.
+    /// Set the scroll offset to `pixels` and notify listeners if it actually
+    /// changed (epsilon-guarded — a same-value write does not re-notify).
     ///
     /// No clamping is applied here; the caller is responsible for running the
     /// value through `ScrollPhysics::apply_boundary_conditions` first when
@@ -191,31 +140,36 @@ impl ScrollController {
     /// physics-agnostic (it is equally useful for programmatic jumps, physics
     /// updates, and animation-driven ticks).
     pub fn set_pixels(&self, pixels: f32) {
-        *self
-            .inner
-            .pixels
-            .lock()
-            .expect("scroll position mutex poisoned") = pixels;
-        self.inner.notifier.notify_listeners();
+        self.position.set_pixels(pixels);
     }
 
     /// Jump the scroll position to `pixels`, clamped to
     /// `[min_scroll_extent, max_scroll_extent]`.
     ///
-    /// Notifies listeners; does not animate. Use this for programmatic jumps
-    /// (e.g. `jump_to(0.0)` to scroll to the top).
+    /// Notifies listeners on a real change; does not animate. Use this for
+    /// programmatic jumps (e.g. `jump_to(0.0)` to scroll to the top).
     pub fn jump_to(&self, pixels: f32) {
         let clamped = pixels.clamp(self.min_scroll_extent(), self.max_scroll_extent());
-        self.set_pixels(clamped);
+        self.position.set_pixels(clamped);
     }
 
-    /// Update the scroll extents and viewport dimension after layout, then
-    /// notify listeners.
+    /// Update the scroll extents and viewport dimension, then unconditionally
+    /// notify listeners exactly once.
     ///
-    /// This should be called once the enclosing viewport has determined its
-    /// own size and the size of its content. The `Scrollable` widget calls
-    /// this during `build` when those values are known; a `Scrollbar`
-    /// subscribes as a listener so it can redraw its thumb.
+    /// This is the explicit, out-of-frame extent write for callers that
+    /// don't route through `RenderViewport`'s own layout (tests, and manual
+    /// wiring). When this controller's [`position`](Self::position) is
+    /// injected into a `Scrollable`/`Viewport`, layout reports extents
+    /// through the same shared position directly — see [`ScrollPosition`]'s
+    /// docs for that coalesced-flush path.
+    ///
+    /// This method's own `apply_viewport_dimension`/`apply_content_dimensions`
+    /// calls can themselves mark the position dirty and queue a coalesced
+    /// flush (if a flush handle happens to be installed — e.g. this
+    /// controller is also wired into a `Scrollable`). Notifying via
+    /// [`ScrollPosition::flush_now`] rather than a plain `notify` consumes
+    /// that queued flush's dirty state first, so it becomes a no-op instead
+    /// of firing a second, redundant notification once the frame completes.
     ///
     /// # Arguments
     ///
@@ -230,44 +184,35 @@ impl ScrollController {
         min_scroll_extent: f32,
         max_scroll_extent: f32,
     ) {
-        *self
-            .inner
-            .viewport_dimension_pixels
-            .lock()
-            .expect("scroll position mutex poisoned") = viewport_dimension_pixels;
-        *self
-            .inner
-            .min_scroll_extent
-            .lock()
-            .expect("scroll position mutex poisoned") = min_scroll_extent;
-        *self
-            .inner
-            .max_scroll_extent
-            .lock()
-            .expect("scroll position mutex poisoned") = max_scroll_extent;
-        // Keep pixels in range after an extent update.
-        let current = self.pixels();
-        let clamped = current.clamp(min_scroll_extent, max_scroll_extent);
-        if (clamped - current).abs() > f32::EPSILON {
-            *self
-                .inner
-                .pixels
-                .lock()
-                .expect("scroll position mutex poisoned") = clamped;
-        }
-        self.inner.notifier.notify_listeners();
+        let mut position = self.position.clone();
+        // Both write straight into the shared state (and clamp `pixels` to
+        // the new range, same as before); `flush_now` below is what makes
+        // this synchronous instead of the coalesced layout flush.
+        let _ = position.apply_viewport_dimension(viewport_dimension_pixels);
+        let _ = position.apply_content_dimensions(min_scroll_extent, max_scroll_extent);
+        self.position.flush_now();
+    }
+
+    /// The shared [`ScrollPosition`] backing this controller.
+    ///
+    /// Inject this into a `Scrollable`/`Viewport`'s `.position(...)` builder
+    /// so gestures and `RenderViewport`'s committed content extents observe
+    /// (and write) the same state this controller reads.
+    #[must_use]
+    pub fn position(&self) -> ScrollPosition {
+        self.position.clone()
     }
 
     // -- Listenable bridge ---------------------------------------------------
 
-    /// Return an `Arc<dyn Listenable>` pointing at the same inner state.
+    /// Return an `Arc<dyn Listenable>` pointing at the same shared position.
     ///
     /// Used by `Scrollable` when implementing `AnimatedView::listenable()` —
     /// the `Arc` upcast avoids an extra allocation and keeps all clones
     /// sharing a single notifier.
     #[must_use]
     pub fn as_listenable(&self) -> Arc<dyn Listenable> {
-        Arc::clone(&self.inner) as Arc<dyn Listenable>
+        self.position.as_listenable()
     }
 
     // -- Scrollbar helpers ---------------------------------------------------
@@ -326,7 +271,7 @@ mod tests {
         let controller = ScrollController::new();
         let notified = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let flag = std::sync::Arc::clone(&notified);
-        controller.inner.notifier.add_listener(Arc::new(move || {
+        controller.as_listenable().add_listener(Arc::new(move || {
             flag.store(true, std::sync::atomic::Ordering::SeqCst);
         }));
 
@@ -336,6 +281,77 @@ mod tests {
         assert!(
             notified.load(std::sync::atomic::Ordering::SeqCst),
             "set_pixels should notify listeners"
+        );
+    }
+
+    #[test]
+    fn same_value_set_pixels_does_not_re_notify() {
+        // A no-op `set_pixels` no longer re-notifies, because
+        // `ScrollPosition::set_pixels` is epsilon-guarded. This test pins
+        // that behavior explicitly so a future regression toward "always
+        // notify" is visible here, not just inferred from the absence of a
+        // pin.
+        let controller = ScrollController::new();
+        controller.set_pixels(10.0);
+
+        let notified = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = std::sync::Arc::clone(&notified);
+        controller.as_listenable().add_listener(Arc::new(move || {
+            counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }));
+
+        controller.set_pixels(10.0); // same value
+        assert_eq!(
+            notified.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "writing the same pixel value must not notify"
+        );
+
+        controller.set_pixels(11.0); // real change
+        assert_eq!(
+            notified.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "writing a different pixel value must notify"
+        );
+    }
+
+    /// Regression: `update_dimensions`'s own `apply_viewport_dimension`/
+    /// `apply_content_dimensions` calls can mark the shared position dirty
+    /// and queue a coalesced post-frame flush (whenever a flush handle is
+    /// installed — e.g. this controller is also wired into a `Scrollable`).
+    /// Before `flush_now` existed, `update_dimensions` notified via a plain
+    /// `notify()` that did not consume that queued flush's dirty state, so
+    /// the SAME mutation notified twice: once synchronously here, once again
+    /// when the frame completed and the flush ran.
+    #[test]
+    fn update_dimensions_with_a_flush_handle_installed_notifies_exactly_once() {
+        let scheduler = flui_scheduler::Scheduler::new();
+        let handle = flui_scheduler::PostFrameHandle::new(&scheduler);
+
+        let controller = ScrollController::new();
+        controller.position().set_flush_handle(handle);
+
+        let notified = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = std::sync::Arc::clone(&notified);
+        controller.as_listenable().add_listener(Arc::new(move || {
+            counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }));
+
+        controller.update_dimensions(300.0, 0.0, 500.0);
+        assert_eq!(
+            notified.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "update_dimensions must notify synchronously exactly once"
+        );
+
+        // The coalesced flush apply_content_dimensions queued is still
+        // sitting on the scheduler; running the frame must not add a
+        // second notification for the same update_dimensions call.
+        scheduler.execute_frame();
+        assert_eq!(
+            notified.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "the frame completing afterward must not double-notify for the same mutation"
         );
     }
 

@@ -202,6 +202,7 @@ graph TD
     rendering --> layer
     rendering --> semantics
     rendering --> tree
+    rendering --> scheduler
     objects --> rendering
     objects --> painting
     view --> rendering
@@ -226,6 +227,8 @@ graph TD
     facade --> material
     facade --> widgets
 ```
+
+`rendering --> scheduler` (added 2026-07-14): `flui-rendering::view::ScrollPosition` names `flui_scheduler::PostFrameHandle` for its coalesced content-dimension-flush notify (a post-frame callback that fires a scroll listener after `RenderViewport::perform_layout` commits extents, instead of notifying mid-layout). `flui-scheduler` is L2 (Substrate) and depends only on `flui-foundation`, so this is a same-direction extension of the existing `animation --> scheduler` (L3) edge, not a new direction — `flui-rendering` (L4) gains a second, lower-layer dependency, no cycle.
 
 The DAG is acyclic and downward-correct. The Constitution **v2.3.0** layer table reflects the pre-PR-C-2 layering snapshot (geometry was in `flui-types`; since [PR #138](https://github.com/vanyastaff/flui/pull/138) it lives in the dedicated `flui-geometry` crate and is re-exported via `flui_types::geometry::*` for compatibility — edition 2024 / Rust 1.96, accurate workspace member list otherwise); the **target graph above** is the forward-looking Part IV decomposition that Part V's roadmap migrates the workspace toward. The constitution remains "current state, locked"; this document is "target state, in progress." Full reasoning and the ordered migration delta: [`research/2026-05-22-crate-decomposition-redesign.md`](research/2026-05-22-crate-decomposition-redesign.md).
 

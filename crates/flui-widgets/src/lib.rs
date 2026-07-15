@@ -217,6 +217,11 @@ pub use flui_rendering::delegates::{
 pub use flui_rendering::hit_testing::{
     CursorIcon, DeviceId, EventPropagation, HitTestBehavior, PointerEvent,
 };
+// The shared scroll state `ScrollController::position()` returns and
+// `Viewport`/`SingleChildScrollView::position()` accept — a widget author
+// composing a custom scrollable directly on `Viewport` needs to name this
+// type without reaching past `flui-widgets` into `flui-rendering`.
+pub use flui_rendering::view::ScrollPosition;
 // Drag details surfaced by `GestureDetector`'s `on_pan_*` callbacks.
 pub use flui_interaction::{
     DragEndDetails, DragStartDetails, DragUpdateDetails, PointerPanZoomEvent,
@@ -283,6 +288,7 @@ pub mod prelude {
     pub use flui_rendering::hit_testing::{
         CursorIcon, DeviceId, EventPropagation, HitTestBehavior, PointerEvent,
     };
+    pub use flui_rendering::view::ScrollPosition;
     pub use flui_types::layout::{Axis, AxisDirection, BoxFit};
     pub use flui_types::painting::Clip;
     pub use flui_types::typography::TextBaseline;

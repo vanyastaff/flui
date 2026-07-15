@@ -1,10 +1,20 @@
 //! [`SingleChildScrollView`] — makes a single child scrollable along one axis.
 
+use flui_rendering::view::ScrollPosition;
 use flui_types::layout::{Axis, AxisDirection};
 use flui_view::prelude::StatelessView;
 use flui_view::{BuildContext, Child, IntoView};
 
 use crate::scroll::{SliverToBoxAdapter, Viewport};
+
+/// Where the composed [`Viewport`] gets its scroll offset from — mirrors
+/// [`Viewport`]'s own `OffsetSource`, since this widget is a thin
+/// pixels-or-position passthrough onto it.
+#[derive(Clone, Debug)]
+enum OffsetSource {
+    Pixels(f32),
+    Position(ScrollPosition),
+}
 
 /// A box that lets its single child be larger than the available space along
 /// `scroll_direction`, showing a scrollable window into it.
@@ -25,7 +35,7 @@ use crate::scroll::{SliverToBoxAdapter, Viewport};
 pub struct SingleChildScrollView {
     scroll_direction: Axis,
     reverse: bool,
-    offset: f32,
+    offset_source: OffsetSource,
     child: Child,
 }
 
@@ -34,7 +44,7 @@ impl Default for SingleChildScrollView {
         Self {
             scroll_direction: Axis::Vertical,
             reverse: false,
-            offset: 0.0,
+            offset_source: OffsetSource::Pixels(0.0),
             child: Child::empty(),
         }
     }
@@ -63,9 +73,24 @@ impl SingleChildScrollView {
     }
 
     /// Set the programmatic scroll offset in logical pixels.
+    ///
+    /// Pixels mode: the composed [`Viewport`] owns a private `ScrollPosition`
+    /// and this value is pushed into it on every rebuild. Mutually exclusive
+    /// with [`SingleChildScrollView::position`] — whichever is called last
+    /// wins.
     #[must_use]
     pub fn offset(mut self, offset: f32) -> Self {
-        self.offset = offset;
+        self.offset_source = OffsetSource::Pixels(offset);
+        self
+    }
+
+    /// Inject a shared [`ScrollPosition`] as the composed [`Viewport`]'s
+    /// offset — see [`Viewport::position`] for the full contract. Mutually
+    /// exclusive with [`SingleChildScrollView::offset`] — whichever is
+    /// called last wins.
+    #[must_use]
+    pub fn position(mut self, position: ScrollPosition) -> Self {
+        self.offset_source = OffsetSource::Position(position);
         self
     }
 
@@ -89,8 +114,10 @@ impl StatelessView for SingleChildScrollView {
             Some(boxed) => SliverToBoxAdapter::new().child(boxed),
             None => SliverToBoxAdapter::new(),
         };
-        Viewport::new((adapter,))
-            .axis_direction(axis_direction)
-            .offset(self.offset)
+        let viewport = Viewport::new((adapter,)).axis_direction(axis_direction);
+        match &self.offset_source {
+            OffsetSource::Pixels(pixels) => viewport.offset(*pixels),
+            OffsetSource::Position(position) => viewport.position(position.clone()),
+        }
     }
 }
