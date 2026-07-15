@@ -58,11 +58,11 @@ pub use layout::{
 
 // --- flat re-exports (proxy) ---
 pub use proxy::{
-    ClipGeometry, DecorationPosition, Oval, RenderBackdropFilter, RenderClip, RenderClipOval,
-    RenderClipPath, RenderClipRRect, RenderClipRect, RenderColoredBox, RenderCustomPaint,
-    RenderDecoratedBox, RenderFollowerLayer, RenderLeaderLayer, RenderOpacity, RenderPhysicalModel,
-    RenderPhysicalShape, RenderRepaintBoundary, RenderSemanticsAnnotations, RenderShaderMask,
-    RenderSubtreeAnchor, SubtreeAnchor,
+    ClipGeometry, DecorationPosition, Oval, RenderAnimatedOpacity, RenderBackdropFilter,
+    RenderClip, RenderClipOval, RenderClipPath, RenderClipRRect, RenderClipRect, RenderColoredBox,
+    RenderCustomPaint, RenderDecoratedBox, RenderFollowerLayer, RenderLeaderLayer, RenderOpacity,
+    RenderPhysicalModel, RenderPhysicalShape, RenderRepaintBoundary, RenderSemanticsAnnotations,
+    RenderShaderMask, RenderSubtreeAnchor, SubtreeAnchor,
 };
 pub use proxy::{RenderExcludeSemantics, RenderMergeSemantics};
 
@@ -81,7 +81,7 @@ pub use image::{ImageAlignment, ImageFit, RenderImage};
 // --- flat re-exports (sliver) ---
 pub use sliver::{
     FloatingHeaderSnapConfiguration, OverScrollHeaderStretchConfiguration,
-    RenderShrinkWrappingViewport, RenderSliverFillRemaining,
+    RenderShrinkWrappingViewport, RenderSliverAnimatedOpacity, RenderSliverFillRemaining,
     RenderSliverFillRemainingAndOverscroll, RenderSliverFillRemainingWithScrollable,
     RenderSliverFillViewport, RenderSliverFixedExtentList, RenderSliverFloatingPersistentHeader,
     RenderSliverFloatingPinnedPersistentHeader, RenderSliverGrid, RenderSliverGridLazy,

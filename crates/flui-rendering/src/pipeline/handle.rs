@@ -263,6 +263,25 @@ impl RepaintHandle {
         self.handle
             .request_mark_dirty(self.id, self.depth, DirtyKind::Layout)
     }
+
+    /// Requests a compositing-bits update of the bound node on the next
+    /// frame and wakes the platform. Callable from any thread.
+    ///
+    /// This is the verb an object whose compositing requirement depends on
+    /// out-of-band state (e.g. an animated alpha crossing the
+    /// layered/unlayered threshold) calls when that threshold crosses, so
+    /// the owner's compositing-bits walk revisits this node on the next
+    /// frame.
+    ///
+    /// # Errors
+    ///
+    /// [`SendError::ChannelFull`] under backpressure (back off and
+    /// retry), [`SendError::OwnerGone`] once the pipeline owner is
+    /// dropped.
+    pub fn mark_needs_compositing_bits_update(&self) -> Result<(), SendError> {
+        self.handle
+            .request_mark_dirty(self.id, self.depth, DirtyKind::Compositing)
+    }
 }
 
 #[cfg(test)]
@@ -303,6 +322,21 @@ mod tests {
         assert_eq!(req.id, id(7));
         assert_eq!(req.depth, 3);
         assert_eq!(req.kind, DirtyKind::Layout);
+    }
+
+    #[test]
+    fn repaint_handle_mark_needs_compositing_bits_update_round_trips_as_compositing_kind() {
+        let (pipeline_handle, rx) = pair(4);
+        let repaint_handle = RepaintHandle::new(pipeline_handle, id(9), 5);
+
+        repaint_handle
+            .mark_needs_compositing_bits_update()
+            .expect("first send must succeed");
+
+        let req = rx.try_recv().expect("receiver should observe the request");
+        assert_eq!(req.id, id(9));
+        assert_eq!(req.depth, 5);
+        assert_eq!(req.kind, DirtyKind::Compositing);
     }
 
     #[test]
