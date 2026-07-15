@@ -61,3 +61,6 @@ mod single_child_scroll_view_test;
 
 // ── Business.1 fidelity front — flex/stack parity (family 2) ────────────────
 mod stack_test;
+
+// ── Business.1 fidelity front — Navigator/routes parity (family 3) ──────────
+mod navigator_test;
