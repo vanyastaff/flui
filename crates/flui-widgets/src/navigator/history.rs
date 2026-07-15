@@ -731,11 +731,11 @@ impl RouteHistory {
 
     /// The push half of `NavigatorHandle::push_and_remove_until`, split from
     /// the removal-completion half so the caller can evaluate `keep` with
-    /// the history lock **released** (ADR-0025's reentrancy rule: a
-    /// `RoutePredicate` that queries the handle back — Flutter's
-    /// `route.isFirst` / `ModalRoute.withName` shape — must not run inside
-    /// this module's locked section, or it deadlocks the owner thread
-    /// against its own non-reentrant `parking_lot::Mutex`).
+    /// the history lock **released**: a `RoutePredicate` that queries the
+    /// handle back — Flutter's `route.isFirst` / `ModalRoute.withName`
+    /// shape — must not run inside this module's locked section, or it
+    /// deadlocks the owner thread against its own non-reentrant
+    /// `parking_lot::Mutex`.
     ///
     /// Appends the new route in `Push`, **without** flushing or evaluating
     /// any predicate, and hands back every existing entry's id, top-to-

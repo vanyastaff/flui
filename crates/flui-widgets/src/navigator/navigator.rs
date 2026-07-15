@@ -681,7 +681,7 @@ impl NavigatorHandle {
     /// beneath the new route. Flutter's `RoutePredicate` is handed the `Route`
     /// object itself — FLUI routes name each other by id (ADR-0019).
     ///
-    /// `keep` runs with the history lock **released** (ADR-0025): a
+    /// `keep` runs with the history lock **released**: a
     /// predicate that queries the handle back (`|id| handle.route_ids().first()
     /// == Some(&id)`, the Rust shape of Flutter's `route.isFirst` /
     /// `ModalRoute.withName`) would otherwise re-enter `NavigatorShared`'s
