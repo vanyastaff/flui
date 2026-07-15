@@ -292,6 +292,90 @@ fn viewport_position_to_pixels_mode_switch_does_not_stomp_the_shared_controller_
 }
 
 // ============================================================================
+// ListView / GridView — `.position()` passthrough
+// ============================================================================
+
+/// Mirrors `scrollable_content_dimension_feedback_supplies_extents_and_notifies_a_listener`'s
+/// zero-`update_dimensions` pin, for `ListView` itself rather than
+/// `Scrollable`: `ListView::position` must hand the injected `ScrollPosition`
+/// straight through to the composed `Viewport`, so
+/// `RenderViewport::perform_layout`'s committed content extents land in the
+/// SAME controller a caller reads — no manual extent feed anywhere in this
+/// test — and a subsequent `set_pixels` must move the committed paint once
+/// picked up by a rebuild (today's relayout path: the ordinary widget-rebuild
+/// dirty-mark, not a render-object-level subscription — see `docs/ROADMAP.md`
+/// Business.1's "no listener-driven markNeedsLayout" remainder).
+#[test]
+fn list_view_position_passthrough_feeds_the_content_dimension_feedback_loop() {
+    let controller = ScrollController::new();
+    // 12 rows at 50px = 600px content in a 120px viewport -> 480px scroll extent.
+    let rows: Vec<_> = (0..12)
+        .map(|_| SizedBox::new(200.0, 50.0).boxed())
+        .collect();
+    let widget = ListView::new(50.0, rows).position(controller.position());
+
+    let mut laid = lay_out(widget, tight(200.0, 120.0));
+    laid.pump();
+
+    assert!(
+        controller.max_scroll_extent() > 0.0,
+        "ListView::position must feed RenderViewport::perform_layout's committed content \
+         extents into the injected ScrollPosition with zero update_dimensions calls; got {:.1}",
+        controller.max_scroll_extent()
+    );
+
+    let viewport = laid.root();
+    let sliver = laid.only_child(viewport);
+    let offset_before = laid.absolute_offset(laid.child(sliver, 0));
+
+    controller.set_pixels(100.0);
+    laid.pump();
+
+    let offset_after = laid.absolute_offset(laid.child(sliver, 0));
+    assert_ne!(
+        offset_before, offset_after,
+        "controller.set_pixels must move ListView's committed paint after the next rebuild \
+         picks up the shared ScrollPosition; got {offset_before:?} both before and after"
+    );
+}
+
+/// Same pin as
+/// `list_view_position_passthrough_feeds_the_content_dimension_feedback_loop`,
+/// for `GridView`.
+#[test]
+fn grid_view_position_passthrough_feeds_the_content_dimension_feedback_loop() {
+    let controller = ScrollController::new();
+    // 8 square tiles in 2 columns = 4 rows; 200px viewport width / 2 columns =
+    // 100px tiles -> 400px content in a 200px viewport -> 200px scroll extent.
+    let tiles: Vec<_> = (0..8).map(|_| SizedBox::shrink().boxed()).collect();
+    let widget = GridView::count(2, tiles).position(controller.position());
+
+    let mut laid = lay_out(widget, tight(200.0, 200.0));
+    laid.pump();
+
+    assert!(
+        controller.max_scroll_extent() > 0.0,
+        "GridView::position must feed RenderViewport::perform_layout's committed content \
+         extents into the injected ScrollPosition with zero update_dimensions calls; got {:.1}",
+        controller.max_scroll_extent()
+    );
+
+    let viewport = laid.root();
+    let sliver = laid.only_child(viewport);
+    let offset_before = laid.absolute_offset(laid.child(sliver, 0));
+
+    controller.set_pixels(80.0);
+    laid.pump();
+
+    let offset_after = laid.absolute_offset(laid.child(sliver, 0));
+    assert_ne!(
+        offset_before, offset_after,
+        "controller.set_pixels must move GridView's committed paint after the next rebuild \
+         picks up the shared ScrollPosition; got {offset_before:?} both before and after"
+    );
+}
+
+// ============================================================================
 // ScrollController — thumb geometry helpers
 // ============================================================================
 
