@@ -1,6 +1,6 @@
 //! `RenderSliverAnimatedOpacity` — applies a continuously-animated
-//! transparency to a single sliver child, driven by an injected
-//! [`AnimationController`].
+//! transparency to a single sliver child, driven by an injected,
+//! hot-swappable [`ProxyAnimation<f32>`].
 //!
 //! # Flutter equivalence
 //!
@@ -12,24 +12,26 @@
 //! See [`RenderAnimatedOpacity`](crate::RenderAnimatedOpacity)'s module docs
 //! for the full ported-mechanism writeup (alpha caching, the
 //! paint/compositing-bits marking rule, the documented
-//! no-composited-layer-update divergence, and the `is_layered` predicate
-//! both variants use for `always_needs_compositing`) — this module only
-//! restates the sliver-specific contract surface (`RenderSliverOpacity`'s
-//! layout/hit-test passthrough) that the mixin's host class supplies.
+//! no-composited-layer-update divergence, the `is_layered` predicate both
+//! variants use for `always_needs_compositing`, and the *Retargeting*
+//! section explaining why `didUpdateAnimation` is unreachable here — the
+//! proxy absorbs it on the widget side) — this module only restates the
+//! sliver-specific contract surface (`RenderSliverOpacity`'s layout/hit-test
+//! passthrough) that the mixin's host class supplies.
 //!
 //! # Zero-consumer honesty
 //!
 //! No widget in `flui-widgets` constructs this render object yet; wiring a
 //! sliver-flavored `AnimatedOpacity` to it is a deferred follow-up, same as
-//! the box variant.
+//! before this change — only the box variant's constructor signature and its
+//! widget were rewired in this unit.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
 
 use flui_tree::Single;
 
-use flui_animation::curve::ArcCurve;
-use flui_animation::{Animation, AnimationController, CurvedAnimation};
+use flui_animation::{Animation, ProxyAnimation};
 use flui_foundation::{Listenable, ListenerId};
 
 use flui_rendering::{
@@ -47,13 +49,12 @@ use flui_rendering::{
 /// [`RenderSliverOpacity`](crate::RenderSliverOpacity)'s contract instead of
 /// `RenderOpacity`'s. See the module docs.
 pub struct RenderSliverAnimatedOpacity {
-    /// The controller driving [`animation`](Self::animation).
-    /// Constructor-injected only — see
-    /// [`RenderAnimatedOpacity`](crate::RenderAnimatedOpacity)'s field
-    /// doc for why no post-construction swap setter exists.
-    controller: AnimationController,
-    /// The eased view of `controller`'s value in `[0.0, 1.0]`.
-    animation: CurvedAnimation<ArcCurve>,
+    /// The composed animation driving alpha. Constructor-injected only —
+    /// see [`RenderAnimatedOpacity`](crate::RenderAnimatedOpacity)'s field
+    /// doc for why no post-construction swap setter exists (a
+    /// [`ProxyAnimation<f32>`] absorbs retargeting on the widget side
+    /// instead).
+    animation: ProxyAnimation<f32>,
     /// Alpha cache (`0..=255`), shared with the tick listener closure.
     /// See [`RenderAnimatedOpacity`](crate::RenderAnimatedOpacity)'s
     /// field doc for why this is an `AtomicU8`, not a `Cell`/`Mutex`, and
@@ -63,25 +64,18 @@ pub struct RenderSliverAnimatedOpacity {
     alpha: Arc<AtomicU8>,
     /// Whether child semantics are included regardless of alpha.
     always_include_semantics: bool,
-    /// Tick-listener subscription on `controller`, torn down in `detach`.
+    /// Tick-listener subscription on `animation`, torn down in `detach`.
     listener_id: Option<ListenerId>,
 }
 
 impl RenderSliverAnimatedOpacity {
-    /// Creates a render object driven by an **already-built** `controller`
-    /// (never constructs one itself — see
+    /// Creates a render object driven by `animation`, an already-composed
+    /// [`ProxyAnimation<f32>`] (never constructs one itself — see
     /// [`RenderAnimatedOpacity::new`](crate::RenderAnimatedOpacity::new)).
     #[must_use]
-    pub fn new(
-        controller: AnimationController,
-        curve: ArcCurve,
-        always_include_semantics: bool,
-    ) -> Self {
-        let parent: Arc<dyn Animation<f32>> = Arc::new(controller.clone());
-        let animation = CurvedAnimation::new(parent, curve);
+    pub fn new(animation: ProxyAnimation<f32>, always_include_semantics: bool) -> Self {
         let alpha = Arc::new(AtomicU8::new(Self::opacity_to_alpha(animation.value())));
         Self {
-            controller,
             animation,
             alpha,
             always_include_semantics,
@@ -94,6 +88,16 @@ impl RenderSliverAnimatedOpacity {
     #[must_use]
     pub fn alpha(&self) -> u8 {
         self.alpha.load(Ordering::Relaxed)
+    }
+
+    /// The composed animation's raw `f32` value, bypassing the `u8` alpha
+    /// cache's `1/255` quantization. See
+    /// [`RenderAnimatedOpacity::opacity_value`](crate::RenderAnimatedOpacity::opacity_value)
+    /// for why this exists.
+    #[inline]
+    #[must_use]
+    pub fn opacity_value(&self) -> f32 {
+        self.animation.value()
     }
 
     /// Whether child semantics are included regardless of alpha.
@@ -124,7 +128,7 @@ impl RenderSliverAnimatedOpacity {
     /// succeeds. Returns `true` iff alpha changed AND every required mark
     /// was sent successfully.
     fn recompute_alpha(
-        animation: &CurvedAnimation<ArcCurve>,
+        animation: &ProxyAnimation<f32>,
         alpha: &AtomicU8,
         handle: &RepaintHandle,
     ) -> bool {
@@ -239,7 +243,7 @@ impl RenderSliver for RenderSliverAnimatedOpacity {
         let animation = self.animation.clone();
         let alpha = self.alpha.clone();
         let mark_handle = handle.clone();
-        self.listener_id = Some(self.controller.add_listener(Arc::new(move || {
+        self.listener_id = Some(self.animation.add_listener(Arc::new(move || {
             Self::recompute_alpha(&animation, &alpha, &mark_handle);
         })));
         Self::recompute_alpha(&self.animation, &self.alpha, &handle);
@@ -247,7 +251,7 @@ impl RenderSliver for RenderSliverAnimatedOpacity {
 
     fn detach(&mut self) {
         if let Some(id) = self.listener_id.take() {
-            self.controller.remove_listener(id);
+            self.animation.remove_listener(id);
         }
     }
 }
@@ -255,7 +259,7 @@ impl RenderSliver for RenderSliverAnimatedOpacity {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_animation::{Curves, Scheduler};
+    use flui_animation::{AnimationController, Scheduler};
     use flui_rendering::pipeline::PipelineOwner;
     use flui_rendering::protocol::SliverProtocol;
     use std::time::Duration;
@@ -265,16 +269,14 @@ mod tests {
     }
 
     fn render_at(opacity: f32) -> RenderSliverAnimatedOpacity {
-        let c = controller(100);
-        c.set_value(opacity);
-        RenderSliverAnimatedOpacity::new(c, ArcCurve::new(Curves::Linear), false)
+        RenderSliverAnimatedOpacity::new(proxy_at(opacity), false)
     }
 
-    fn curved_at(opacity: f32) -> CurvedAnimation<ArcCurve> {
+    fn proxy_at(opacity: f32) -> ProxyAnimation<f32> {
         let c = controller(100);
         c.set_value(opacity);
         let parent: Arc<dyn Animation<f32>> = Arc::new(c);
-        CurvedAnimation::new(parent, ArcCurve::new(Curves::Linear))
+        ProxyAnimation::new(parent)
     }
 
     fn anchor_handle() -> (PipelineOwner, RepaintHandle) {
@@ -326,8 +328,7 @@ mod tests {
         owner.drain_pending_dirty();
         let paint_dirty_before = owner.nodes_needing_paint().len();
 
-        let changed =
-            RenderSliverAnimatedOpacity::recompute_alpha(&curved_at(0.5), &cache, &handle);
+        let changed = RenderSliverAnimatedOpacity::recompute_alpha(&proxy_at(0.5), &cache, &handle);
 
         assert!(!changed);
         owner.drain_pending_dirty();
@@ -350,8 +351,7 @@ mod tests {
         drop(owner);
 
         let cache = AtomicU8::new(0);
-        let changed =
-            RenderSliverAnimatedOpacity::recompute_alpha(&curved_at(0.5), &cache, &handle);
+        let changed = RenderSliverAnimatedOpacity::recompute_alpha(&proxy_at(0.5), &cache, &handle);
 
         assert!(
             !changed,
@@ -370,8 +370,7 @@ mod tests {
         let anchor = handle.id();
         let cache = AtomicU8::new(0);
 
-        let changed =
-            RenderSliverAnimatedOpacity::recompute_alpha(&curved_at(0.5), &cache, &handle);
+        let changed = RenderSliverAnimatedOpacity::recompute_alpha(&proxy_at(0.5), &cache, &handle);
         assert!(changed);
 
         owner.drain_pending_dirty();
@@ -396,8 +395,7 @@ mod tests {
         let anchor = handle.id();
         let cache = AtomicU8::new(RenderSliverAnimatedOpacity::opacity_to_alpha(0.4));
 
-        let changed =
-            RenderSliverAnimatedOpacity::recompute_alpha(&curved_at(0.6), &cache, &handle);
+        let changed = RenderSliverAnimatedOpacity::recompute_alpha(&proxy_at(0.6), &cache, &handle);
         assert!(changed);
 
         owner.drain_pending_dirty();

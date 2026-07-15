@@ -1,5 +1,6 @@
 //! `RenderAnimatedOpacity` — applies a continuously-animated transparency to
-//! a single child, driven by an injected [`AnimationController`].
+//! a single child, driven by an injected, hot-swappable
+//! [`ProxyAnimation<f32>`].
 //!
 //! # Flutter equivalence
 //!
@@ -28,15 +29,21 @@
 //! here; a tick costs a full repaint of the subtree instead of a blend-only
 //! update.
 //!
-//! # Zero-consumer honesty
+//! # Retargeting — the proxy absorbs `didUpdateAnimation`
 //!
-//! The `AnimatedOpacity` widget (`flui-widgets/src/animated/animated_opacity.rs`)
-//! still drives its `Opacity` child through an `AnimatedBuilder` rebuild loop,
-//! not through this render object. Wiring the widget to a persistent
-//! render-view wrapper around `RenderAnimatedOpacity` — the pattern
-//! `AnimatedSizeRenderView` establishes at
-//! `flui-widgets/src/animated/animated_size.rs:239-272` — is a deliberately
-//! deferred follow-up, not part of this unit.
+//! Flutter's mixin exposes a settable `opacity` (an `Animation<double>`); a
+//! configuration change that swaps to a new controller/curve calls
+//! `didUpdateAnimation`, which re-subscribes the tick listener to the new
+//! animation. This render object never sees that swap: it is handed a
+//! [`ProxyAnimation<f32>`] once, at construction, and listens to that SAME
+//! proxy for its entire lifetime. The `AnimatedOpacity` widget's state (`
+//! flui-widgets/src/animated/animated_opacity.rs`) owns the proxy and, on
+//! retarget, swaps its *parent* animation (`ProxyAnimation::set_parent`) —
+//! the proxy re-fires this render object's listener with the new parent's
+//! curve/tween composition, and no field or subscription here ever changes.
+//! `didUpdateAnimation` is unreachable by construction not because no
+//! retarget path exists, but because the proxy absorbs it entirely on the
+//! widget side; this render object never bakes a curve of its own.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -44,8 +51,7 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use flui_tree::Single;
 use flui_types::{Offset, Size};
 
-use flui_animation::curve::ArcCurve;
-use flui_animation::{Animation, AnimationController, CurvedAnimation};
+use flui_animation::{Animation, ProxyAnimation};
 use flui_foundation::{Listenable, ListenerId};
 
 use flui_rendering::{
@@ -59,11 +65,13 @@ use flui_rendering::{
 /// child.
 ///
 /// Unlike [`RenderOpacity`](crate::RenderOpacity), the alpha is not set
-/// directly — it tracks an injected [`AnimationController`] (optionally
-/// eased through a [`Curve`](flui_animation::curve::Curve)) and updates
-/// itself on every animation tick via a listener registered in
+/// directly — it tracks an injected, composed [`ProxyAnimation<f32>`] (curve
+/// and retarget algebra owned by the calling widget) and updates itself on
+/// every animation tick via a listener registered in
 /// [`attach`](RenderBox::attach). See the module docs for the exact
-/// dirty-marking rule ported from Flutter's `RenderAnimatedOpacityMixin`.
+/// dirty-marking rule ported from Flutter's `RenderAnimatedOpacityMixin`, and
+/// the *Retargeting* section for how a configuration change reaches this
+/// object without ever replacing it.
 ///
 /// # Performance
 ///
@@ -71,16 +79,12 @@ use flui_rendering::{
 /// costs a full repaint of the subtree (FLUI has no retained-layer
 /// alpha-blend update yet), not just a compositor re-blend.
 pub struct RenderAnimatedOpacity {
-    /// The controller driving [`animation`](Self::animation). Kept alive
-    /// (and listened to in `attach`) as the sole source of opacity change —
-    /// constructor-injected only, matching
-    /// [`RenderAnimatedSize`](crate::RenderAnimatedSize)'s shape;
-    /// there is no setter to swap it post-construction, so Flutter's
-    /// `didUpdateAnimation` equivalent (`set opacity` on a live mixin) is
-    /// unreachable here by construction.
-    controller: AnimationController,
-    /// The eased view of `controller`'s value in `[0.0, 1.0]`.
-    animation: CurvedAnimation<ArcCurve>,
+    /// The composed animation driving alpha, injected at construction and
+    /// listened to for this object's entire lifetime. A
+    /// [`ProxyAnimation<f32>`] so the owning widget can hot-swap the
+    /// *parent* it wraps (retarget) without this render object ever seeing a
+    /// new listenable — see the module docs' *Retargeting* section.
+    animation: ProxyAnimation<f32>,
     /// Alpha cache (`0..=255`), shared with the tick listener closure via
     /// `Arc` so both the listener (running off the owning thread, per
     /// [`RepaintHandle`]'s cross-thread contract) and `paint_alpha`/
@@ -99,27 +103,21 @@ pub struct RenderAnimatedOpacity {
     /// this port does not yet gate `visitChildrenForSemantics` on it (no
     /// semantics-tree visitor override exists on this proxy today).
     always_include_semantics: bool,
-    /// Tick-listener subscription on `controller`, torn down in `detach`.
+    /// Tick-listener subscription on `animation`, torn down in `detach`.
     listener_id: Option<ListenerId>,
 }
 
 impl RenderAnimatedOpacity {
-    /// Creates a render object driven by an **already-built** `controller`
-    /// (this object never constructs a controller and never sees a
-    /// `Vsync`/`Scheduler` — the owning view builds and registers the
-    /// controller and passes it in here, matching
-    /// [`RenderAnimatedSize::new`](crate::RenderAnimatedSize::new)).
+    /// Creates a render object driven by `animation`, an already-composed
+    /// [`ProxyAnimation<f32>`] (curve and controller ownership live entirely
+    /// on the widget side — this object never constructs either, matching
+    /// [`RenderAnimatedSize::new`](crate::RenderAnimatedSize::new)'s
+    /// already-built-controller shape one level further: it does not even
+    /// see the controller, only the composed value stream).
     #[must_use]
-    pub fn new(
-        controller: AnimationController,
-        curve: ArcCurve,
-        always_include_semantics: bool,
-    ) -> Self {
-        let parent: Arc<dyn Animation<f32>> = Arc::new(controller.clone());
-        let animation = CurvedAnimation::new(parent, curve);
+    pub fn new(animation: ProxyAnimation<f32>, always_include_semantics: bool) -> Self {
         let alpha = Arc::new(AtomicU8::new(Self::opacity_to_alpha(animation.value())));
         Self {
-            controller,
             animation,
             alpha,
             always_include_semantics,
@@ -133,6 +131,18 @@ impl RenderAnimatedOpacity {
     #[must_use]
     pub fn alpha(&self) -> u8 {
         self.alpha.load(Ordering::Relaxed)
+    }
+
+    /// The composed animation's raw `f32` value, bypassing the `u8` alpha
+    /// cache's `1/255` quantization. Test/harness accessor — production
+    /// paint/compositing decisions read [`alpha`](Self::alpha)/
+    /// [`paint_alpha`](RenderBox::paint_alpha), which are correctly
+    /// quantized; this exists only because harness assertions pinned to
+    /// sub-`1/255` tolerances need the un-rounded value.
+    #[inline]
+    #[must_use]
+    pub fn opacity_value(&self) -> f32 {
+        self.animation.value()
     }
 
     /// Whether child semantics are included regardless of alpha.
@@ -181,7 +191,7 @@ impl RenderAnimatedOpacity {
     /// listener closure (called with cloned copies, since the closure must
     /// be `'static` and cannot borrow `self`) share one implementation.
     fn recompute_alpha(
-        animation: &CurvedAnimation<ArcCurve>,
+        animation: &ProxyAnimation<f32>,
         alpha: &AtomicU8,
         handle: &RepaintHandle,
     ) -> bool {
@@ -318,7 +328,11 @@ impl RenderBox for RenderAnimatedOpacity {
         let animation = self.animation.clone();
         let alpha = self.alpha.clone();
         let mark_handle = handle.clone();
-        self.listener_id = Some(self.controller.add_listener(Arc::new(move || {
+        // Registered on the proxy itself, not on whatever it currently wraps
+        // — see the module docs' *Retargeting* section: a widget-side
+        // `set_parent` swap re-fires this same subscription with the new
+        // parent's values, so it never needs to move.
+        self.listener_id = Some(self.animation.add_listener(Arc::new(move || {
             Self::recompute_alpha(&animation, &alpha, &mark_handle);
         })));
 
@@ -330,7 +344,7 @@ impl RenderBox for RenderAnimatedOpacity {
 
     fn detach(&mut self) {
         if let Some(id) = self.listener_id.take() {
-            self.controller.remove_listener(id);
+            self.animation.remove_listener(id);
         }
     }
 }
@@ -338,7 +352,7 @@ impl RenderBox for RenderAnimatedOpacity {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_animation::{Curves, Scheduler};
+    use flui_animation::{AnimationController, Scheduler};
     use flui_rendering::pipeline::PipelineOwner;
     use flui_rendering::protocol::BoxProtocol;
     use std::time::Duration;
@@ -348,16 +362,14 @@ mod tests {
     }
 
     fn render_at(opacity: f32) -> RenderAnimatedOpacity {
-        let c = controller(100);
-        c.set_value(opacity);
-        RenderAnimatedOpacity::new(c, ArcCurve::new(Curves::Linear), false)
+        RenderAnimatedOpacity::new(proxy_at(opacity), false)
     }
 
-    fn curved_at(opacity: f32) -> CurvedAnimation<ArcCurve> {
+    fn proxy_at(opacity: f32) -> ProxyAnimation<f32> {
         let c = controller(100);
         c.set_value(opacity);
         let parent: Arc<dyn Animation<f32>> = Arc::new(c);
-        CurvedAnimation::new(parent, ArcCurve::new(Curves::Linear))
+        ProxyAnimation::new(parent)
     }
 
     /// Mints a real [`RepaintHandle`] by inserting a throwaway anchor node —
@@ -424,7 +436,7 @@ mod tests {
         owner.drain_pending_dirty();
         let paint_dirty_before = owner.nodes_needing_paint().len();
 
-        let changed = RenderAnimatedOpacity::recompute_alpha(&curved_at(0.5), &cache, &handle);
+        let changed = RenderAnimatedOpacity::recompute_alpha(&proxy_at(0.5), &cache, &handle);
 
         assert!(
             !changed,
@@ -456,7 +468,7 @@ mod tests {
         // the function must return before ever touching the cache or
         // attempting the paint-mark send.
         let cache = AtomicU8::new(0);
-        let changed = RenderAnimatedOpacity::recompute_alpha(&curved_at(0.5), &cache, &handle);
+        let changed = RenderAnimatedOpacity::recompute_alpha(&proxy_at(0.5), &cache, &handle);
 
         assert!(
             !changed,
@@ -479,7 +491,7 @@ mod tests {
 
         // 0.4 -> 0.6: both land in the open (0, 255) layered range, so no
         // repaint-boundary threshold is crossed.
-        let changed = RenderAnimatedOpacity::recompute_alpha(&curved_at(0.6), &cache, &handle);
+        let changed = RenderAnimatedOpacity::recompute_alpha(&proxy_at(0.6), &cache, &handle);
         assert!(changed);
 
         owner.drain_pending_dirty();
@@ -506,7 +518,7 @@ mod tests {
         let cache = AtomicU8::new(0); // starts fully transparent — not layered
 
         // 0 -> 0.5 (alpha 128): crosses into the layered range.
-        let changed = RenderAnimatedOpacity::recompute_alpha(&curved_at(0.5), &cache, &handle);
+        let changed = RenderAnimatedOpacity::recompute_alpha(&proxy_at(0.5), &cache, &handle);
         assert!(changed);
 
         owner.drain_pending_dirty();

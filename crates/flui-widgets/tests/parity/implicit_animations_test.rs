@@ -21,16 +21,18 @@
 //! - `AnimatedContainer` → `Container` (rebuilt each tick) →
 //!   `RenderConstrainedBox`/`RenderPadding` chain
 //!   (`crates/flui-widgets/src/animated/animated_container.rs`).
-//! - `AnimatedOpacity` → `Opacity` → `RenderOpacity`
-//!   (`crates/flui-widgets/src/animated/animated_opacity.rs`,
-//!   `crates/flui-objects/src/proxy/opacity.rs:160-171`).
+//! - `AnimatedOpacity` → `RenderAnimatedOpacity` directly (no per-tick
+//!   `Opacity` rebuild; `crates/flui-widgets/src/animated/animated_opacity.rs`,
+//!   `crates/flui-objects/src/proxy/animated_opacity.rs`).
 //!
 //! Divergence: none for either case — FLUI's `AnimatedContainer` evaluates
 //! every `OptTween` at the same `curved.value()` per build
 //! (`crates/flui-widgets/src/animated/animated_container.rs:162-193`), and
-//! `RenderOpacity::hit_test`
-//! (`crates/flui-objects/src/proxy/opacity.rs:160-171`) hit-tests its child
-//! unconditionally (gated only by `is_within_own_size`), never by `opacity`.
+//! `RenderAnimatedOpacity::hit_test`
+//! (`crates/flui-objects/src/proxy/animated_opacity.rs`) hit-tests its child
+//! unconditionally (gated only by `is_within_own_size`), never by opacity —
+//! same as Flutter's `RenderAnimatedOpacityMixin`, which never overrides
+//! `hitTest`.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
