@@ -14,7 +14,7 @@ This roadmap sits on top of [`FOUNDATIONS.md`](FOUNDATIONS.md) — the architect
 |---|---|
 | Core.0 — spine to spec | ✅ **Complete.** Pipeline phases wired and tested, keyed reconciliation production-wired, contracts locked, gate green. |
 | Core.1 — vertical slice | ✅ Slice widgets, contract validation, combined demo app + acceptance tests, parity ports, frame evidence, drag-to-scroll — all delivered. |
-| Core.2 — render-object catalog | ◐ **77 of ~80** objects built with harness tests in `crates/flui-objects`; `RenderAnimatedOpacity`/`RenderSliverAnimatedOpacity` and exit verification remain. |
+| Core.2 — render-object catalog | ✅ **79 of ~80** objects built with harness tests in `crates/flui-objects`, incl. `RenderAnimatedOpacity`/`RenderSliverAnimatedOpacity`; exit verification (scrolling test, intrinsics audit, coverage ≥80%) met. |
 | Business.1 — widget catalog | ◐ Every named catalog widget implemented and integration-tested; **fidelity** (ported parity corpus) and named `Hero` gaps remain. |
 | Catalog.1 — Material ∥ Cupertino | ✗ Not started — `flui-material`, `flui-cupertino`, `flui-localizations` do not exist yet. |
 | App.1 — application integration | ◐ `run_app`, both bindings, and a wake-driven frame loop exist; true vsync pacing, IME, and the facade crate remain. |
@@ -36,7 +36,7 @@ The target is **full parity with released Flutter** — every framework package,
 | `semantics` | 7.9k | ~70% | Cross.H |
 | `animation` | 5.3k | ~85% | Core.1 (active workspace member) |
 | `painting` | 24.9k | ~60% | Core.0 → Core.2 |
-| `rendering` | 52.1k | machine ~90%; catalog **77/~80 harness-tested** (`crates/flui-objects`) | Core.2 (near-complete) |
+| `rendering` | 52.1k | machine ~90%; catalog **79/~80 harness-tested** (`crates/flui-objects`) | Core.2 ✅ |
 | `widgets` | 157.4k | spine ~85%; catalog built (est. ~70% coverage), **fidelity partial** | Business.1 (fidelity) |
 | `services` | 30.2k | ~40% | App.1 + Cross.P (dissolved into `flui-platform`) |
 | `material` | 210.8k | ~1% | Catalog.1 |
@@ -175,23 +175,29 @@ Each phase states: **Goal**, **Status**, what was **Delivered** (for closed work
 
 ---
 
-## Core.2 — Render-object catalog  *(was Phase 2)* — ◐ NEAR-COMPLETE
+## Core.2 — Render-object catalog  *(was Phase 2)* — ✅ COMPLETE
 
 **Goal.** Build the ~80-object render catalog. Every widget is a thin configuration object over a render object — this was the hidden bottleneck under the widget catalog, and it has been substantially cleared.
 
 **Where it lives.** The catalog is the dedicated **`crates/flui-objects`** crate (extracted out of `flui-rendering` — the machine and the catalog are now separate crates). `flui-rendering` keeps only machine types (`RenderTree`, `RenderState`, `RenderView`, `RenderTester`, …).
 
-**Delivered.** **77 exported render-object types** (72 concrete structs plus type aliases such as the `RenderClipRect`/`RRect`/`Oval`/`Path` family over a generic clip base), enumerated in the `RENDER_OBJECT_TYPES` harness catalog (`crates/flui-objects/tests/render_object_harness.rs`) whose CI guard asserts the list matches the crate's `pub use` exports, with per-type `harness_*` tests. Every family the phase named is implemented:
+**Delivered.** **79 exported render-object types** (74 concrete structs plus type aliases such as the `RenderClipRect`/`RRect`/`Oval`/`Path` family over a generic clip base), enumerated in the `RENDER_OBJECT_TYPES` harness catalog (`crates/flui-objects/tests/render_object_harness.rs`) whose CI guard asserts the list matches the crate's `pub use` exports, with per-type `harness_*` tests. Every family the phase named is implemented:
 - **Box layout** — `RenderStack`/`RenderIndexedStack`, `RenderConstrainedBox`/`RenderLimitedBox`, `RenderAspectRatio`, `RenderBaseline`, `RenderWrap`, `RenderFlow`, `RenderTable`, `RenderFractionallySizedBox`. (Flutter's `Positioned` is a `ParentDataWidget` over `RenderStack`, not a render object — nothing is missing there.)
-- **Paint effects** — the clip family, `RenderDecoratedBox`, `RenderOpacity` (+ `RenderSliverOpacity`), the `RenderTransform` family (+ `RenderFractionalTranslation`, `RenderRotatedBox`), `RenderCustomPaint`, `RenderRepaintBoundary`, `RenderPhysicalModel`/`Shape`.
-- **Slivers** — `RenderViewport` + `RenderShrinkWrappingViewport`, `RenderSliverList`/`Grid` (each with lazy variants), `Padding`/`FillViewport`/`ToBoxAdapter`, `RenderSliverFixedExtentList`, three `FillRemaining` variants, four persistent-header variants, `Offstage`/`Opacity`/`IgnorePointer`.
+- **Paint effects** — the clip family, `RenderDecoratedBox`, `RenderOpacity` (+ `RenderSliverOpacity`), `RenderAnimatedOpacity` (+ `RenderSliverAnimatedOpacity`), the `RenderTransform` family (+ `RenderFractionalTranslation`, `RenderRotatedBox`), `RenderCustomPaint`, `RenderRepaintBoundary`, `RenderPhysicalModel`/`Shape`.
+- **Slivers** — `RenderViewport` + `RenderShrinkWrappingViewport`, `RenderSliverList`/`Grid` (each with lazy variants), `Padding`/`FillViewport`/`ToBoxAdapter`, `RenderSliverFixedExtentList`, three `FillRemaining` variants, four persistent-header variants, `Offstage`/`Opacity`/`AnimatedOpacity`/`IgnorePointer`.
 - **Input / leaf** — `RenderParagraph` + `RenderEditable`, `RenderImage`, `RenderMouseRegion`, `RenderListBody`, and Flutter's `RenderPointerListener` ported as **`RenderListener`**.
+- **`RenderAnimatedOpacity`/`RenderSliverAnimatedOpacity`** (the last named gap) ported the mixin's alpha-caching/dirty-marking contract with one **documented divergence**: Flutter's mixin is a retained-layer node — a tick calls `updateCompositedLayer` to blend the existing `OpacityLayer` in place, so it never repaints the child subtree, only re-composites. FLUI has no composited-layer-update machinery (`updateCompositedLayer`/`markNeedsCompositedLayerUpdate` do not exist anywhere in `flui-rendering`/`flui-objects`), so a tick here marks a full repaint whenever the effective alpha changes, plus a compositing-bits mark when it crosses the layered/unlayered boundary. This is a real, currently-open pipeline gap, not a hidden shortcut — tracked as a named Cross.H item below, not swept back into Core.2.
 
-**Remains.**
-- `RenderAnimatedOpacity` and `RenderSliverAnimatedOpacity` (the only named gaps found by audit).
-- Exit verification: a sliver integration test scrolling a 1,000-item list with correct lazy layout; intrinsic-size tests where applicable across the catalog; `flui-objects`/`flui-rendering` coverage ≥ 80% via `just coverage`.
+**Exit verification (all met).**
+- **Scrolling.** `scrolling_lazy_sliver_keeps_materialized_band_bounded_and_windowed` (`crates/flui-objects/tests/harness_snapshot.rs`) scrolls a 1 000-item `RenderSliverListLazy` from the head to a mid offset (~item 500) to the tail, asserting at each stop that the materialized child band is both bounded (laziness — distant items are never attached) and correctly windowed (the band tracks the scroll position). Companion to the existing offset-0-only `snapshot_lazy_sliver_visible_band`.
+- **Intrinsics audit.** Catalog families with non-trivial intrinsic-size logic: `flex` (harness-covered), `table` (column-width unit tests covered width; **added** a min/max-intrinsic-height test that also pins the oracle's own documented quirk — `computeMaxIntrinsicHeight` returns `computeMinIntrinsicHeight` verbatim), `wrap` (harness covered max-width only; **added** min-width and vertical-axis max-height tests), `aspect_ratio` (already covered by in-file unit tests), `list_body` (had zero intrinsic coverage; **added** width and height tests — the height test also pins a second oracle quirk: `computeMaxIntrinsicHeight`/`computeMinIntrinsicWidth` share the identical axis-keyed sum/max switch, so height does not independently reason about "am I the main or cross axis"), `paragraph` (already covered by in-file unit tests). 5 tests added (audit cap), 0 skipped as low-value.
+- **Coverage** (`cargo llvm-cov --summary-only -p flui-objects -p flui-rendering`, 2026-07-14): `flui-objects` **81.41%** line coverage, `flui-rendering` **83.27%** line coverage — both ≥ the 80% Core threshold.
 
-**Parity delta.** `rendering` catalog → ~95% coverage (mechanical count 77/~80); `painting` advanced correspondingly.
+**Deliberately deferred (named, not silently dropped):**
+- **Composited-layer pipeline gap** (no `updateCompositedLayer`/retained-layer alpha-blend-without-repaint path) — tracked under Cross.H below; it is a `flui-rendering` machine capability, not specific to the opacity pair, and would benefit any future retained-layer effect.
+- **`AnimatedOpacity` widget rewiring** — the `flui-widgets` `AnimatedOpacity` widget still drives its child through an `AnimatedBuilder` rebuild loop, not through `RenderAnimatedOpacity`; tracked under Business.1 below (the render-view-wrapper pattern `AnimatedSizeRenderView` already establishes is the intended shape).
+
+**Parity delta.** `rendering` catalog → ~95% coverage (mechanical count 79/~80); `painting` advanced correspondingly.
 
 ---
 
@@ -206,6 +212,7 @@ Each phase states: **Goal**, **Status**, what was **Delivered** (for closed work
 - **Named `Hero` gaps** — user-gesture flights and cross-navigator flights, tracked in `ROADMAP-TRACKER.md` B1.4 / ADR-0021.
 - **Scrollable composition + content-dimension feedback** — `Scrollable` currently hardwires `SingleChildScrollView` with no offset feed-through to viewport widgets (`ListView`/`GridView`), and nothing feeds `ViewportOffset` content dimensions back to `ScrollController`, so every consumer must hand-wire extents. The scroll family needs the builder-style composition and the extent feedback loop before the catalog can claim scroll parity.
 - **`flui-assets` ↔ `Image` integration verification** — the crate is an active workspace member; confirm network + asset image and font loading through the `Image` widget end-to-end.
+- **`AnimatedOpacity` render-object rewiring** — the widget still drives its `Opacity` child through an `AnimatedBuilder` rebuild loop rather than the persistent `RenderAnimatedOpacity` Core.2 delivered; adopt the `AnimatedSizeRenderView` render-view-wrapper pattern (`crates/flui-widgets/src/animated/animated_size.rs:239-272`) to wire it through directly.
 - Exit criteria to demonstrate: a non-trivial sample app built entirely from `flui-widgets` (no raw render objects) with a scrolling list, gesture button, implicit animation, and navigated route; `flui-widgets` coverage ≥ 85% via `just coverage`.
 
 **Parity delta.** `widgets` catalog coverage largely in place; parity completes when the ported corpus passes.
@@ -277,7 +284,7 @@ Bundled into Core.0 because they were cheap-now / catalog-wide-later: the `flui-
 
 ### Cross.H — Foundation hardening
 
-**Goal.** The standing quality discipline — close the remaining systemic defects as the owning crates are next touched: the layer lifecycle protocol (gates App.1), parallel-type collapses, the `BuildContext` inherited-data hole (**gates Catalog.1** — `Theme` depends on it), the `TreeWrite::remove` cascade, Ticker lifecycle, and feature-gating of speculative scaffolding. Focus/tab navigation — originally on this list — has since landed in `flui-widgets` (`Focus`/`FocusScope`/`Actions`/`Shortcuts`, with tests). **Known gap:** gesture settings do not adapt to pointer type — `DragGestureRecognizer` always uses touch slop (18px) even for mouse input, where Flutter differentiates precise-pointer slop (surfaced by Core.1's drag-to-scroll work, 2026-07-14). **Entry:** continuous from Core.0. **Exit:** the foundation is declared stable — all critical-tier defects closed, second-tier addressed opportunistically. This is the audit-and-repair methodology as permanent discipline, not a bounded effort.
+**Goal.** The standing quality discipline — close the remaining systemic defects as the owning crates are next touched: the layer lifecycle protocol (gates App.1), parallel-type collapses, the `BuildContext` inherited-data hole (**gates Catalog.1** — `Theme` depends on it), the `TreeWrite::remove` cascade, Ticker lifecycle, and feature-gating of speculative scaffolding. Focus/tab navigation — originally on this list — has since landed in `flui-widgets` (`Focus`/`FocusScope`/`Actions`/`Shortcuts`, with tests). **Known gap:** gesture settings do not adapt to pointer type — `DragGestureRecognizer` always uses touch slop (18px) even for mouse input, where Flutter differentiates precise-pointer slop (surfaced by Core.1's drag-to-scroll work, 2026-07-14). **Known gap:** no composited-layer-update pipeline path — Flutter's `RenderObject.updateCompositedLayer`/`markNeedsCompositedLayerUpdate` let a retained layer (e.g. `OpacityLayer`) re-blend in place on a tick without repainting its subtree; FLUI has no equivalent anywhere in `flui-rendering`/`flui-objects`, so every such tick (currently `RenderAnimatedOpacity`/`RenderSliverAnimatedOpacity`, Core.2, 2026-07-14) pays a full repaint instead of a compositor-only blend — a documented, currently-accepted performance divergence, not a correctness one. **Entry:** continuous from Core.0. **Exit:** the foundation is declared stable — all critical-tier defects closed, second-tier addressed opportunistically. This is the audit-and-repair methodology as permanent discipline, not a bounded effort.
 
 ---
 
@@ -285,11 +292,10 @@ Bundled into Core.0 because they were cheap-now / catalog-wide-later: the `flui-
 
 ```
 MAIN VERTICAL (sequential — Core → Business → Catalog → App):
-  Core.0 ✅ ── Core.1 ✅ ── Core.2 ◐ ── Business.1 ◐ ── Catalog.1 ✗ ── App.1 ◐
-                            (77/~80      (built;        (Material ∥     (partial:
+  Core.0 ✅ ── Core.1 ✅ ── Core.2 ✅ ── Business.1 ◐ ── Catalog.1 ✗ ── App.1 ◐
+                            (79/~80      (built;        (Material ∥     (partial:
                              objects;     fidelity +     Cupertino —     vsync, IME,
-                             2 named      Hero gaps)     not started)    facade left)
-                             gaps)
+                             exit met)    Hero gaps)     not started)    facade left)
 
 CROSS layer — continuous, with cross-track gates marked:
   Cross.P (platform)  ═════════════════════════════════════► joins App.1
@@ -315,7 +321,7 @@ Within phases: Core.2's render-object families parallelize (box / sliver / paint
 | # | Risk | Mitigation |
 |---|---|---|
 | R1 | Widget catalog built on a spine not yet at target spec — defects compound across ~80 widgets, silently | **Realized as designed:** Core.0 was a hard gate with objective exit tests and is met; Core.1's vertical slice re-proved the spine under live load before breadth |
-| R2 | Render-object catalog under-scoped — Business.1 stalls mid-widget on a missing render object | The widget → render-object checklist ([`research/widget-renderobject-map.md`](research/widget-renderobject-map.md)) was built before the catalog; 77/~80 objects now exist with harness tests |
+| R2 | Render-object catalog under-scoped — Business.1 stalls mid-widget on a missing render object | The widget → render-object checklist ([`research/widget-renderobject-map.md`](research/widget-renderobject-map.md)) was built before the catalog; Core.2 is complete — 79/~80 objects exist with harness tests |
 | R3 | A contract flaw discovered inside `flui-material` (210k LOC) = catastrophic rework | Core.1's slice exercised every contract on live code; Catalog.1 starts only after the contract-validation report ([`research/2026-06-30-phase1-contract-validation.md`](research/2026-06-30-phase1-contract-validation.md)) is clean and Core.1's residues close |
 | R4 | `flui-material` is one monolithic terminal phase | Phased internally by component family (theming → buttons → inputs → navigation → data); ships in increments; runs ∥ `flui-cupertino` |
 | R5 | `Scene`/`DrawCommand` contract drift breaks the parallel engine track | The contract is frozen with a documented change protocol (`docs/designs/2026-06-30-scene-drawcommand-contract.md`); any later change is a coordinated cross-track change |
