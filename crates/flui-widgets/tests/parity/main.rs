@@ -58,3 +58,6 @@ mod padding_test;
 mod scroll_controller_test;
 mod scrollable_test;
 mod single_child_scroll_view_test;
+
+// ── Business.1 fidelity front — flex/stack parity (family 2) ────────────────
+mod stack_test;
