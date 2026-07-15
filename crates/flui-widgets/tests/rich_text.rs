@@ -93,3 +93,30 @@ fn max_lines_one_produces_a_shorter_box_than_unlimited_lines_for_wrapped_spans()
          capped={capped_height}, unlimited={unlimited_height}",
     );
 }
+
+/// Two spans covering more text than one must measure wider, under loose
+/// constraints wide enough that neither wraps.
+///
+/// Flutter parity: the general span-tree-composition contract
+/// `rich_text_test.dart` and `text_test.dart`'s `'Text can be created from
+/// TextSpans and uses defaultTextStyle'` both rely on (a `TextSpan` tree's
+/// children all contribute to the shaped run, not just the root span) —
+/// ported here as the direct geometry consequence: appending a child span
+/// widens the measured box past the parent-only baseline.
+#[test]
+fn two_child_spans_measure_wider_than_a_single_span_sharing_the_same_first_words() {
+    let one_span = lay_out(RichText::new(TextSpan::new("hello")), loose(1000.0));
+    let two_spans = lay_out(
+        RichText::new(TextSpan::new("hello").with_child(TextSpan::new(" world"))),
+        loose(1000.0),
+    );
+
+    let one_span_width = one_span.size(one_span.root()).width.get();
+    let two_span_width = two_spans.size(two_spans.root()).width.get();
+
+    assert!(
+        two_span_width > one_span_width,
+        "two spans covering more text must measure wider than a single span \
+         sharing the same first words: two_spans={two_span_width}, one_span={one_span_width}",
+    );
+}

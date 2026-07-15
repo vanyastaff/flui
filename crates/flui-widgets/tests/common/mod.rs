@@ -21,7 +21,7 @@ use flui_interaction::events::{
     PointerEvent, PointerType, make_cancel_event_for_id, make_down_event_for_id,
     make_move_event_for_id, make_up_event_for_id,
 };
-use flui_objects::{RenderAnimatedOpacity, RenderOpacity, RenderTransform};
+use flui_objects::{RenderAnimatedOpacity, RenderOpacity, RenderParagraph, RenderTransform};
 use flui_rendering::constraints::{BoxConstraints, SliverGeometry};
 use flui_rendering::pipeline::PipelineOwner;
 use flui_rendering::testing::inspect;
@@ -377,6 +377,39 @@ impl LaidOut {
                 matrix.get(1, 0).atan2(matrix.get(0, 0))
             })
             .expect("render node should be a RenderTransform")
+    }
+
+    /// The paint-space left edge of a `RenderParagraph` node's first laid-out
+    /// line — where `TextAlign` actually shifts the glyph run, as opposed to
+    /// the node's own box (which stays whatever size layout constrained it
+    /// to, regardless of alignment).
+    ///
+    /// Backed by [`TextPainter::get_boxes_for_selection`], which folds in
+    /// the alignment-driven paint offset (unlike `get_line_metrics`, whose
+    /// `left` is the pre-alignment layout-local value). Panics if `id` is
+    /// not a `RenderParagraph`, carries no text, or has no laid-out line —
+    /// all of which indicate the paragraph was queried before layout ran.
+    pub fn paragraph_first_line_left(&self, id: RenderId) -> f32 {
+        let mut owner = self.pipeline_owner.write();
+        let node = owner
+            .render_tree_mut()
+            .get_mut(id)
+            .expect("render node should exist");
+        let paragraph = node
+            .downcast_render_object_mut::<RenderParagraph>()
+            .expect("render node should be a RenderParagraph");
+        let text_len = paragraph
+            .painter()
+            .text()
+            .expect("a laid-out RenderParagraph carries a text span")
+            .to_plain_text()
+            .len();
+        paragraph
+            .painter()
+            .get_boxes_for_selection(0, text_len)
+            .first()
+            .map(|text_box| text_box.rect.left().get())
+            .expect("a laid-out non-empty paragraph has at least one selection box")
     }
 
     /// Replace the root widget with `new_root` and drive a frame — Flutter's
