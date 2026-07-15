@@ -81,11 +81,19 @@
 //! its *own* controller (so it drives no flights of its own), but does not gate
 //! this matching — Flutter's predicate does not consult it either.
 //!
-//! No `userGestureInProgress` either: FLUI has no back-swipe, so
-//! `isUserGestureTransition` is always `false`. That collapses `didStartUserGesture`
-//! / `didStopUserGesture` (`heroes.dart:871-889`) and the `hasValidSize` fast path
-//! (`:952-960`) — which only ever runs for a gesture-driven pop — out of this port.
-//! Both are recorded as absent, not as done.
+//! **Gesture suppression substrate landed, per-hero opt-in still pending.**
+//! [`NavigatorHandle::user_gesture_in_progress`] mirrors Flutter's
+//! `NavigatorState.userGestureInProgress`, and [`did_change_top`](HeroController::did_change_top)
+//! consults it exactly where Flutter's `HeroController.didChangeTop` does
+//! (`heroes.dart:861`): a route change committed by a finger-driven pop starts no
+//! flight. What is still absent is the *other* half — `didStartUserGesture` calling
+//! `_maybeStartHeroTransition(isUserGestureTransition: true)` for immediate visual
+//! feedback the instant a drag begins (`heroes.dart:871-880`), the `hasValidSize`
+//! fast path that lets that flight measure without waiting a frame
+//! (`:952-960`), and `Hero.transitionOnUserGestures` itself — with no per-hero
+//! opt-in field, every FLUI hero behaves as `transitionOnUserGestures = false`,
+//! so a gesture-driven transition suppresses every hero's flight, never just the
+//! non-opted-in ones (`heroes.dart:281-311`'s `_allHeroesFor` filter).
 //!
 //! [`ModalHandle::set_offstage`]: super::modal_route::ModalHandle::set_offstage
 //! [`PostFrameHandle`]: flui_scheduler::PostFrameHandle
@@ -657,6 +665,27 @@ impl NavigatorObserver for HeroController {
         // `top` transiently not-current by the time this fires. The flight path is
         // guarded downstream anyway (`route_peer`/`route_modal` return `None` for a
         // superseded route), so a stale top simply measures nothing.
+        //
+        // `didChangeTop`'s own guard (`heroes.dart:861`): "Don't trigger another
+        // flight when a pop is committed as a user gesture back swipe is snapped."
+        // A finger-driven pop still fires `did_change_top` (the swipe's own commit
+        // pops the route), but a user gesture stays "in progress" until the
+        // settling controller reports its final status (see `back_gesture.rs`), so
+        // this still observes `user_gesture_in_progress() == true` at that instant
+        // and suppresses the flight — matching Flutter's default
+        // `Hero.transitionOnUserGestures = false` with no per-hero opt-in wired yet
+        // (`heroes.dart:281-311`'s `_allHeroesFor` filter, not yet threaded through
+        // this controller's measurement pass). Flutter's *other* gesture-driven
+        // path — `didStartUserGesture` calling `_maybeStartHeroTransition` with
+        // `isUserGestureTransition: true` for immediate visual feedback the instant
+        // a drag begins — is out of scope here: it only ever produces a flight for
+        // an opted-in hero, which does not exist in FLUI yet.
+        if self
+            .navigator()
+            .is_some_and(|navigator| navigator.user_gesture_in_progress())
+        {
+            return;
+        }
         self.maybe_start(previous_top, Some(top));
     }
 }

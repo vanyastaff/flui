@@ -82,6 +82,7 @@ use flui_view::prelude::*;
 use flui_view::{AnimatedView, BoxedView, ViewExt, impl_animated_view};
 use parking_lot::Mutex;
 
+use super::back_gesture::BackGestureDetector;
 use super::binding::{RouteBindingSlot, TransitionGroup};
 use super::hero::{HeroHandle, HeroRegistry, HeroScope, HeroTag};
 use super::local_history::{LocalHistoryHandle, LocalHistoryRegistry, LocalHistoryScope};
@@ -120,6 +121,14 @@ struct ModalInner {
     /// with the content builder from the moment the route is constructed, so a
     /// `.barrier_dismissible(true)` builder cannot reach it through `&mut`.
     barrier_dismissible: AtomicBool,
+    /// Whether this route opts into the edge-swipe-back gesture substrate
+    /// (`back_gesture.rs`). Default `false` — see `PageRoute::back_gesture`'s
+    /// doc for why. Set only before the route is pushed, exactly like
+    /// `maintain_state`/`barrier_dismissible`: toggling it mid-life is not a
+    /// supported path, so the detector wrapper's presence in the built tree
+    /// never flips (`ModalScopeState::build` reads it once per build, but the
+    /// value itself never changes after construction).
+    back_gesture_enabled: AtomicBool,
     /// `barrierColor` (`:1774`). `None` means an invisible barrier that still
     /// absorbs pointers — Flutter's `ModalBarrier` with no colour.
     barrier_color: Mutex<Option<Color>>,
@@ -258,6 +267,7 @@ impl ModalInner {
                 heroes: self.heroes.clone(),
                 pop_entries: self.pop_entries.clone(),
                 local_history: self.local_history_handle(),
+                back_gesture_enabled: self.back_gesture_enabled.load(Ordering::Relaxed),
             }
             .boxed(),
             // Unreachable in a pushed route: `install()` seeds the `OnceLock`
@@ -410,6 +420,10 @@ struct ModalScope {
     /// The route's local-history handle, provided to the page as an ambient
     /// (ADR-0025).
     local_history: LocalHistoryHandle,
+    /// Whether this route opted into `back_gesture.rs`'s edge-swipe-back
+    /// detector — a per-route, construction-time flag (`ModalRoute::back_gesture`),
+    /// never toggled mid-life.
+    back_gesture_enabled: bool,
 }
 
 impl_animated_view!(ModalScope);
@@ -460,6 +474,36 @@ impl ViewState<ModalScope> for ModalScopeState {
             ),
         )
         .boxed();
+        // The wrapper's presence never depends on anything read here besides
+        // `back_gesture_enabled` itself (a construction-time flag) — the page
+        // subtree's identity does not flip across builds. `maybe_of`/`binding`/
+        // `controller` are all `Some` for any route that reached this `build`
+        // through the normal push → install → mount path; the `None` arm only
+        // guards the same "unreachable in a pushed route" bootstrapping window
+        // `build_scope`'s own `None` arm documents.
+        let anchored = if view.back_gesture_enabled {
+            match (
+                NavigatorHandle::maybe_of(ctx),
+                view.transition.binding(),
+                view.transition.controller(),
+            ) {
+                (Some(navigator), Some(binding), Some(controller)) => {
+                    let route = binding.route_id();
+                    let enabled_navigator = navigator.clone();
+                    BackGestureDetector::new(
+                        navigator,
+                        route,
+                        controller,
+                        Rc::new(move || enabled_navigator.pop_gesture_enabled(route)),
+                        anchored,
+                    )
+                    .boxed()
+                }
+                _ => anchored,
+            }
+        } else {
+            anchored
+        };
         (view.transitions)(ctx, &primary, &secondary, anchored)
     }
 }
@@ -484,6 +528,7 @@ impl<T: Send + Clone + 'static> ModalRoute<T> {
             offstage: AtomicBool::new(false),
             maintain_state: AtomicBool::new(true),
             barrier_dismissible: AtomicBool::new(false),
+            back_gesture_enabled: AtomicBool::new(false),
             barrier_color: Mutex::new(None),
             page,
             transitions: Mutex::new(default_transitions_builder()),
@@ -578,6 +623,15 @@ impl<T: Send + Clone + 'static> ModalRoute<T> {
         self.inner
             .barrier_dismissible
             .store(dismissible, Ordering::Relaxed);
+        self
+    }
+
+    /// Opt into the edge-swipe-back gesture substrate (`back_gesture.rs`).
+    /// See `PageRoute::back_gesture`'s doc for the full contract.
+    pub(crate) fn back_gesture(self, enabled: bool) -> Self {
+        self.inner
+            .back_gesture_enabled
+            .store(enabled, Ordering::Relaxed);
         self
     }
 

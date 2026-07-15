@@ -16,7 +16,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use flui_animation::{Animation, AnimationStatus};
+use flui_rendering::hit_testing::HitTestResult;
 use flui_types::Color;
+use flui_types::geometry::{Offset, px};
 use flui_view::prelude::*;
 use flui_view::{BoxedView, BuildContext};
 
@@ -524,5 +526,208 @@ fn page_and_transitions_builders_receive_both_animations_and_rebuild_on_tick() {
     assert!(
         (samples.last().expect("a build").0 - 0.5).abs() < 1e-6,
         "the page builder sees the current animation value, got {samples:?}"
+    );
+}
+
+// ============================================================================
+// back_gesture — the swipe-back detector substrate (back_gesture.rs)
+// ============================================================================
+
+/// `PageRoute::back_gesture(true)` wraps the page in the edge-swipe-back
+/// detector (`ModalScopeState::build`, `back_gesture.rs`'s `Stack` +
+/// `Positioned` + `Listener` + arena-fed recognizer). Mounting, laying out
+/// and painting it end to end must not panic, and once the entrance settles
+/// the route reports itself gesture-eligible.
+#[test]
+fn back_gesture_enabled_route_mounts_and_becomes_pop_gesture_eligible() {
+    let (navigator, mut harness, _bottom) = navigator_with_seed();
+
+    let route = PageRoute::<i32>::new(leaf).back_gesture(true);
+    let transition = route.transition_handle();
+    let _pushed = harness.enter_owner_scope(|| navigator.push(route));
+    complete_entrance(&transition, &mut harness);
+
+    let top = *navigator.route_ids().last().expect("pushed");
+    assert!(
+        navigator.pop_gesture_enabled(top),
+        "a settled, non-first, unvetoed route with back_gesture(true) is eligible"
+    );
+}
+
+/// Dispatches a synthetic pointer event at `(x, y)` through the harness's
+/// **real** hit-testing pipeline (`PipelineOwner::hit_test` +
+/// `HitTestResult::dispatch`) — the same path `Listener::on_pointer_*`
+/// callbacks fire from in production, so this actually exercises
+/// `back_gesture.rs`'s `Listener` → `DragGestureRecognizer` →
+/// `BackGestureRuntime` wiring, not a bypass of it.
+///
+/// This harness's dispatch re-hit-tests at each call's position (no
+/// pointer-id capture, unlike the real `EventRouter`), so every position in
+/// one gesture must land on the *same* hit-testable target throughout —
+/// see the caller for why that keeps every position inside the 20px-wide
+/// edge strip.
+fn dispatch_pointer_event(
+    harness: &Harness,
+    x: f32,
+    y: f32,
+    make_event: fn(
+        Offset<flui_types::Pixels>,
+        flui_interaction::events::PointerType,
+    ) -> flui_interaction::PointerEvent,
+) {
+    let position = Offset::new(px(x), px(y));
+    let owner = harness.pipeline_owner();
+    let mut result = HitTestResult::new();
+    owner.read().hit_test(position, &mut result);
+    let event = make_event(position, flui_interaction::events::PointerType::Mouse);
+    harness.enter_owner_scope(|| result.dispatch(&event));
+}
+
+/// A real, hit-tested horizontal drag through the mounted tree must move the
+/// controller's value by `delta / route_width` — the harness's fixed 800px
+/// screen (`test_harness.rs`), which the route's page fills
+/// (`Stack(fit: expand)`) — never by `delta / BACK_GESTURE_WIDTH` (20px).
+/// This is exactly the path that would have caught
+/// `BackGestureRuntime::normalized_width` never reading the route's real
+/// laid-out size and silently normalizing against the 20px hit strip
+/// instead.
+///
+/// Every dispatched position stays inside the 20px-wide, full-height edge
+/// strip on purpose: `dispatch_pointer_event` re-hit-tests at each call (no
+/// pointer-id capture), so a position outside the strip's own bounds would
+/// simply stop reaching the detector's `Listener` — the same constraint
+/// `gesture_detector_recognizes_a_pan_and_suppresses_the_tap`
+/// (`tests/gesture_detector.rs`) documents for that harness. The
+/// recognizer's own delta reporting (`DragGestureRecognizer::handle_move`)
+/// is a clean *incremental* delta since the last update once the run has
+/// started, not "total move minus slop" — so a sub-pixel post-slop move is
+/// still a clean, exact signal, not a fragile one.
+///
+/// Red-check: put back `width: Cell::new(BACK_GESTURE_WIDTH)` with no
+/// refresh — the observed value drop becomes ~40x larger (0.4/20 instead of
+/// 0.4/800) and the `< 0.01` assertion fails.
+#[test]
+fn back_gesture_edge_drag_normalizes_against_the_routes_real_width_not_the_hit_strip() {
+    let (navigator, mut harness, _bottom) = navigator_with_seed();
+
+    let route = PageRoute::<i32>::new(leaf).back_gesture(true);
+    let transition = route.transition_handle();
+    let _pushed = harness.enter_owner_scope(|| navigator.push(route));
+    complete_entrance(&transition, &mut harness);
+    let controller = transition.controller().expect("installed");
+    assert_eq!(controller.value(), 1.0);
+
+    // Down at x=1 (inside [0, 20)); the first move crosses the recognizer's
+    // 18px horizontal slop (`DEFAULT_PAN_SLOP_HORIZONTAL`) and fires
+    // `on_start` with no reported delta (`DragStartBehavior::Start`); the
+    // second, 0.4px further, fires `on_update` with a clean incremental
+    // `primary_delta` of 0.4px — both moves stay inside the 20px strip.
+    dispatch_pointer_event(
+        &harness,
+        1.0,
+        300.0,
+        flui_interaction::events::make_down_event,
+    );
+    dispatch_pointer_event(
+        &harness,
+        19.5,
+        300.0,
+        flui_interaction::events::make_move_event,
+    );
+    dispatch_pointer_event(
+        &harness,
+        19.9,
+        300.0,
+        flui_interaction::events::make_move_event,
+    );
+
+    let dropped = 1.0 - controller.value();
+    assert!(
+        dropped > 0.0,
+        "the drag must have moved the controller at all through real hit-testing \
+         — got value={}",
+        controller.value()
+    );
+    assert!(
+        dropped < 0.01,
+        "0.4px over an 800px-wide route should barely move the value \
+         (expected ~0.0005); got a drop of {dropped}, consistent with \
+         normalizing against the 20px hit strip instead (0.4/20 = 0.02)"
+    );
+
+    dispatch_pointer_event(
+        &harness,
+        19.9,
+        300.0,
+        flui_interaction::events::make_up_event,
+    );
+}
+
+/// The detector wrapper's presence must not flip the page subtree's
+/// identity: a `StatefulView` inside the page keeps its state (here, its
+/// `create_state` call count stays at 1) across the rebuilds a released-but-
+/// cancelled gesture ("stay": the finger let go before crossing halfway, so
+/// the route animates back to fully on top rather than popping) drives.
+///
+/// Red-check: wrap the page in a *freshly constructed* detector view each
+/// build instead of the same stable shape — `Probe::create_state` would then
+/// fire more than once as the element tree treats the page as a new subtree.
+#[test]
+fn back_gesture_enabled_preserves_page_state_across_a_cancelled_gesture() {
+    let created = Arc::new(AtomicUsize::new(0));
+    let probe = Probe(Arc::clone(&created));
+
+    let (navigator, mut harness, _bottom) = navigator_with_seed();
+    let route = PageRoute::<i32>::new(move |_ctx, _animation, _secondary| {
+        probe.clone().into_view().boxed()
+    })
+    .back_gesture(true);
+    let transition = route.transition_handle();
+    let _pushed = harness.enter_owner_scope(|| navigator.push(route));
+    complete_entrance(&transition, &mut harness);
+    assert_eq!(
+        created.load(Ordering::Relaxed),
+        1,
+        "one initial create_state"
+    );
+
+    let top = *navigator.route_ids().last().expect("pushed");
+    let controller = transition.controller().expect("installed");
+
+    // Simulate a released-but-cancelled drag: partway back, then released
+    // with no fling and value > 0.5, so the oracle's `dragEnd` "stay" branch
+    // animates forward to 1.0 rather than popping.
+    let gesture =
+        super::back_gesture::BackGestureController::new(navigator.clone(), top, controller.clone());
+    gesture.drag_update(0.2); // value -> 0.8
+    let still_settling = gesture.drag_end(0.0);
+    assert!(still_settling, "the stay animation keeps running");
+    assert_eq!(controller.status(), AnimationStatus::Forward);
+
+    // Genuinely tick the 350ms stay run out through the controller's own
+    // tick mechanism — not a `set_value(1.0)` shortcut, which would settle
+    // it inline without ever exercising the mid-run rebuilds this test
+    // exists to check. Safe to drive directly: this route's controller was
+    // built with its own standalone `Scheduler` (no ambient `VsyncScope` in
+    // this fixture), so `harness.tick()` — which drives the *harness's*
+    // separate binding/scheduler — never independently re-ticks it; nothing
+    // races the explicit `tick_at` calls below.
+    controller.tick_at(0.10); // mid-flight
+    harness.tick(); // rebuilds ModalScope, and therefore the detector-wrapped page
+    controller.tick_at(0.25); // still mid-flight
+    harness.tick();
+    controller.tick_at(0.35); // >= the 350ms stay duration -> settles to Completed
+    harness.tick();
+
+    assert_eq!(
+        controller.status(),
+        AnimationStatus::Completed,
+        "the stay run must have genuinely settled, not been forced"
+    );
+    assert_eq!(
+        created.load(Ordering::Relaxed),
+        1,
+        "the page's StatefulView must not be recreated across the cancelled \
+         gesture's rebuilds"
     );
 }

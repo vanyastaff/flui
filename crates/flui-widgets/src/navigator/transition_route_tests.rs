@@ -16,7 +16,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use flui_animation::{Animation, AnimationStatus, Vsync};
+use flui_animation::{Animation, AnimationStatus, Curve, Curves, Vsync};
 use flui_view::prelude::*;
 use parking_lot::Mutex;
 
@@ -591,7 +591,14 @@ fn a_stale_train_does_not_clobber_a_newer_parent() {
     harness.tick();
     let middle_controller = middle_animation.controller().expect("installed");
     middle_controller.set_value(0.2);
-    assert!(middle_controller.is_animating());
+    // `update_secondary_animation`'s "is this train moving" check reads
+    // `status()` (Forward|Reverse), not `is_animating()` — see the divergence
+    // note at `transition_route.rs`'s `update_secondary_animation`
+    // (`routes.dart:438-439`). `is_animating()` is ticker-based
+    // (`AnimationController::is_animating` doc), and `set_value` now stops
+    // the ticker like Flutter's `value=` setter, so it is no longer a stand-in
+    // for "moving" here.
+    assert!(middle_controller.status().is_running());
 
     // `top` is settled, so `can_remove_or_add` is true and removals actually
     // dispose. Without this, nothing below is ever disposed.
@@ -742,4 +749,132 @@ fn status_listener_does_not_hold_a_lock_across_the_binding_call() {
     harness.tick();
     assert_eq!(navigator_handle.route_ids().len(), 1);
     let _ = Arc::new(Mutex::new(()));
+}
+
+// ============================================================================
+// `pop_paced` — gesture pacing rides the pop command, no stored field
+// ============================================================================
+
+/// `pop_paced` reaches `TransitionRoute::did_pop`, which eases through the
+/// given curve/duration instead of the route's own plain `reverse()` —
+/// Flutter's `_CupertinoBackGestureController.dragEnd` calling
+/// `_controller.animateBack(target, duration: ..., curve: ...)`
+/// (`cupertino/route.dart`, 3.44.0).
+///
+/// Red-check: drop the `take_pop_pacing()` branch from `TransitionRoute::did_pop`
+/// — the eased-value assertion fails (a plain `reverse()` lands at 0.75, not
+/// `EaseInQuint`'s ~0.945 at t=0.5 reversed).
+#[test]
+fn pop_paced_drives_the_controller_with_the_given_duration_and_curve() {
+    let (navigator_handle, mut harness) = navigator();
+    let (route, animation) = transition("only");
+    navigator_handle.push(route);
+    complete(&animation);
+    harness.tick();
+
+    let route_id = navigator_handle
+        .route_ids()
+        .last()
+        .copied()
+        .expect("pushed");
+    let controller = animation.controller().expect("installed");
+
+    let curve: Arc<dyn Curve + Send + Sync> = Arc::new(Curves::EaseInQuint); // PORT-CHECK-OK-DYN: see `PopPacing`'s doc (binding.rs) — same erased easing-curve boundary
+    assert!(navigator_handle.pop_paced(route_id, Duration::from_millis(100), curve));
+    assert_eq!(controller.status(), AnimationStatus::Reverse);
+
+    controller.tick_at(0.05); // 50ms of the 100ms paced duration
+    let expected = 1.0 - Curves::EaseInQuint.transform(0.5);
+    assert!(
+        (controller.value() - expected).abs() < 1e-3,
+        "got {}, want {expected} (eased through the given curve over the given \
+         duration, not the route's own linear reverse)",
+        controller.value()
+    );
+}
+
+/// Flutter's `!route.isCurrent` branch in `dragEnd`: a route swept away by
+/// something else between the gesture's last frame and the drag's completion
+/// must not have a stale drag finish it.
+///
+/// Red-check: drop the `self.current() != Some(route)` guard from `pop_paced`
+/// — it pops "top" instead of refusing, and this test's `!popped` assertion
+/// fails.
+#[test]
+fn pop_paced_no_ops_when_the_route_is_no_longer_current() {
+    let (navigator_handle, mut harness) = navigator();
+    let (bottom, bottom_animation) = transition("bottom");
+    navigator_handle.push(bottom);
+    complete(&bottom_animation);
+    harness.tick();
+    let bottom_id = navigator_handle
+        .route_ids()
+        .last()
+        .copied()
+        .expect("pushed");
+
+    let (top, top_animation) = transition("top");
+    navigator_handle.push(top);
+    complete(&top_animation);
+    harness.tick();
+
+    let curve: Arc<dyn Curve + Send + Sync> = Arc::new(Curves::EaseInQuint); // PORT-CHECK-OK-DYN: see `PopPacing`'s doc (binding.rs) — same erased easing-curve boundary
+    let popped = navigator_handle.pop_paced(bottom_id, Duration::from_millis(100), curve);
+    assert!(
+        !popped,
+        "bottom is covered by top — the gesture's pop must no-op"
+    );
+
+    let bottom_controller = bottom_animation.controller().expect("installed");
+    assert_eq!(
+        bottom_controller.status(),
+        AnimationStatus::Completed,
+        "bottom's controller must be untouched by the refused pop"
+    );
+    assert!(!bottom_controller.is_animating());
+}
+
+/// A `pop_paced` call that no-ops (the target route was not current) must not
+/// leave its pacing override behind for a *later, unrelated* pop to pick up —
+/// the whole reason `PopPacing` lives in a one-shot registry entry rather
+/// than a field on the route: no route to go stale on.
+///
+/// Red-check: remove the cleanup `self.shared.registries.pop_pacing.lock().remove(&route)`
+/// from `NavigatorHandle::pop_paced` — the plain `pop()` below picks up
+/// `bottom`'s leftover 999ms eased pacing instead of `top`'s own linear one.
+#[test]
+fn a_refused_pop_paced_does_not_leak_pacing_into_a_later_unrelated_pop() {
+    let (navigator_handle, mut harness) = navigator();
+    let (bottom, bottom_animation) = transition("bottom");
+    navigator_handle.push(bottom);
+    complete(&bottom_animation);
+    harness.tick();
+    let bottom_id = navigator_handle
+        .route_ids()
+        .last()
+        .copied()
+        .expect("pushed");
+
+    let (top, top_animation) = transition("top");
+    navigator_handle.push(top);
+    complete(&top_animation);
+    harness.tick();
+
+    let curve: Arc<dyn Curve + Send + Sync> = Arc::new(Curves::EaseInQuint); // PORT-CHECK-OK-DYN: see `PopPacing`'s doc (binding.rs) — same erased easing-curve boundary
+    assert!(!navigator_handle.pop_paced(bottom_id, Duration::from_millis(999), curve));
+
+    // A plain pop of the real current route ("top") must use ITS OWN linear
+    // 300ms pacing, not bottom's stale override.
+    assert!(navigator_handle.pop());
+    harness.tick();
+
+    let top_controller = top_animation.controller().expect("installed");
+    assert_eq!(top_controller.status(), AnimationStatus::Reverse);
+    top_controller.tick_at(0.15); // 150ms of the route's own 300ms duration
+    assert!(
+        (top_controller.value() - 0.5).abs() < 1e-3,
+        "a plain pop must use the route's own linear pacing, not a leftover \
+         pop_paced override meant for a different route: got {}",
+        top_controller.value()
+    );
 }

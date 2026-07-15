@@ -282,6 +282,29 @@ impl<T: Send + Clone + 'static> PageRoute<T> {
         self.modal = self.modal.with_current_result(result);
         self
     }
+
+    /// Opt into an iOS-style edge-swipe-back gesture. Default `false`.
+    ///
+    /// Flutter's `CupertinoPageRoute`/`CupertinoRouteTransitionMixin` wire this
+    /// on automatically under the Cupertino theme; FLUI has no platform-theme
+    /// selection yet, so it is an explicit opt-in per route instead. Ports
+    /// `PageRoute.popGestureEnabled` ∘ `ModalRoute.popGestureEnabled`
+    /// (`pages.dart:63-66`, `routes.dart:1908-1930`, 3.44.0) minus the
+    /// `!fullscreenDialog` half — FLUI has no `fullscreenDialog` flag, so
+    /// this opt-in itself is the substitute gate.
+    ///
+    /// **Not a mid-life toggle.** Set it once, before pushing the route:
+    /// `ModalScopeState::build` reads the flag on every build to decide
+    /// whether to wrap the page in the detector, and flipping it after the
+    /// route is live would change the page subtree's identity out from under
+    /// any `StatefulView` inside it, discarding its state (a cancelled
+    /// mid-gesture drag must not do this — see
+    /// `back_gesture_enabled_preserves_page_state_across_a_cancelled_gesture`).
+    #[must_use]
+    pub fn back_gesture(mut self, enabled: bool) -> Self {
+        self.modal = self.modal.back_gesture(enabled);
+        self
+    }
 }
 
 impl<T: Send + Clone + 'static> PageRoute<T> {
