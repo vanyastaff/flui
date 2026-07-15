@@ -680,14 +680,36 @@ impl NavigatorHandle {
     /// `keep` receives each route's [`RouteId`]; `|_| false` clears everything
     /// beneath the new route. Flutter's `RoutePredicate` is handed the `Route`
     /// object itself — FLUI routes name each other by id (ADR-0019).
+    ///
+    /// `keep` runs with the history lock **released** (ADR-0025): a
+    /// predicate that queries the handle back (`|id| handle.route_ids().first()
+    /// == Some(&id)`, the Rust shape of Flutter's `route.isFirst` /
+    /// `ModalRoute.withName`) would otherwise re-enter `NavigatorShared`'s
+    /// non-reentrant `parking_lot::Mutex` and deadlock the owner thread
+    /// against itself. The push and the removal-completion are two separate
+    /// locked sections around that unlocked evaluation; `NavigatorHandle` is
+    /// owner-thread-bound, so nothing else can interleave between them.
     pub fn push_and_remove_until<R: NavigatorRoute>(
         &self,
         route: R,
         keep: impl Fn(RouteId) -> bool,
     ) -> RouteResult<R::Output> {
-        self.push_prepared(route, |history, id, route| {
-            history.push_and_remove_until_with_id(id, route, keep).1
-        })
+        let (result, below_top_to_bottom) = self.push_prepared(route, |history, id, route| {
+            history.push_for_remove_until_with_id(id, route)
+        });
+
+        let mut remove_ids = Vec::new();
+        for candidate in below_top_to_bottom {
+            if keep(candidate) {
+                break;
+            }
+            remove_ids.push(candidate);
+        }
+
+        self.shared
+            .mutate(|history| history.complete_removed_and_flush(&remove_ids));
+
+        result
     }
 
     /// The shared push shape: mint the id, fill the route's binding slot, insert
@@ -782,17 +804,20 @@ impl NavigatorHandle {
     ///
     /// `keep` receives each candidate's [`RouteId`]; same shape as
     /// [`push_and_remove_until`](Self::push_and_remove_until)'s `keep`.
+    ///
+    /// `keep` runs with the history lock **released** — see
+    /// [`push_and_remove_until`](Self::push_and_remove_until)'s doc for why a
+    /// predicate that queries the handle back needs this. The candidate is
+    /// read in one lock acquisition ([`current`](Self::current)), `keep`
+    /// evaluates it unlocked, and a genuine pop is a second, independent
+    /// acquisition ([`pop`](Self::pop)) — never the same critical section.
     pub fn pop_until(&self, keep: impl Fn(RouteId) -> bool) {
-        while self.shared.mutate(|history| {
-            let Some(candidate) = history.current() else {
-                return false;
-            };
+        while let Some(candidate) = self.current() {
             if keep(candidate) {
-                return false;
+                break;
             }
-            history.pop(None);
-            true
-        }) {}
+            self.pop();
+        }
     }
 
     /// Flutter's `NavigatorState.canPop` (`:5551-5566`).
