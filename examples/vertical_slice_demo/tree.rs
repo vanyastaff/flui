@@ -28,11 +28,11 @@
 //! would produce a degenerate viewport. Making `Scrollable` accept one is a
 //! framework-level fix, out of scope here (tracked as a Business.1 item).
 //!
-//! The list is composed directly on `Viewport` + `SliverFixedExtentList`
-//! (`flui-widgets/src/scroll/viewport.rs`, `sliver_fixed_extent_list.rs`)
-//! rather than through the `ListView` convenience wrapper, because
-//! `ListView::offset` only accepts a plain `f32` — it has no passthrough for
-//! an injected `ScrollPosition`. `Viewport::position` does: it hands the
+//! The list is the ordinary `ListView` convenience widget
+//! (`flui-widgets/src/scroll/list_view.rs`), driven through its
+//! `.position(ScrollPosition)` passthrough — added to close a Business.1
+//! named remainder that used to force this demo onto a hand-composed
+//! `Viewport` + `SliverFixedExtentList` tree. `ListView::position` hands the
 //! render object the controller's own shared `ScrollPosition`
 //! (`ScrollController::position`), so `RenderViewport::perform_layout`'s
 //! committed content extents flush straight back into the same controller
@@ -89,7 +89,7 @@ const BACKGROUND_COLOR: Color = Color::rgb(18, 18, 24);
 /// is kept in sync with [`DemoRootState`]'s internal `ScrollController` by
 /// the drag's `on_pan_update` callback (see the module doc's drag-to-scroll
 /// wiring section above) — the render path itself reads the controller's
-/// live `ScrollPosition` directly (`Viewport::position`), not this cell; the
+/// live `ScrollPosition` directly (`ListView::position`), not this cell; the
 /// cell exists as a `pub` read/seed escape hatch for callers that construct a
 /// `DemoRoot` directly (see the field doc below).
 #[derive(Clone, StatefulView)]
@@ -134,8 +134,8 @@ pub struct DemoRootState {
     count: Rc<Cell<i32>>,
     expanded: Rc<Cell<bool>>,
     scroll_offset: Rc<Cell<f32>>,
-    /// The list's live scroll position — injected directly into the composed
-    /// `Viewport` (`Viewport::position`), so `RenderViewport`'s own layout
+    /// The list's live scroll position — injected directly into the
+    /// `ListView` (`ListView::position`), so `RenderViewport`'s own layout
     /// feeds committed content extents back into this same controller (the
     /// content-dimension feedback loop). Owned by the state (not `DemoRoot`)
     /// because it is pure wiring, not app-visible data — `scroll_offset`
@@ -242,12 +242,15 @@ impl ViewState<DemoRoot> for DemoRootState {
             })
             .child(
                 SizedBox::height(LIST_BOX_HEIGHT).child(
-                    // Directly on `Viewport` + `SliverFixedExtentList`, not
-                    // `ListView` — see the module doc's drag-to-scroll wiring
-                    // section for why: `ListView::offset` has no `ScrollPosition`
-                    // passthrough, and this list needs one so the feedback
-                    // loop above has somewhere to write.
-                    Viewport::new((SliverFixedExtentList::new(
+                    // `ListView::position` (Business.1's now-delivered
+                    // `.position(ScrollPosition)` passthrough) hands the
+                    // controller's own shared `ScrollPosition` straight
+                    // through to the composed `Viewport` — the same
+                    // content-dimension feedback loop this demo relied on
+                    // when it was hand-composed on `Viewport` +
+                    // `SliverFixedExtentList` directly, now behind the
+                    // ordinary widget.
+                    ListView::new(
                         LIST_ITEM_EXTENT,
                         (0..LIST_ITEM_COUNT)
                             .map(|index| {
@@ -257,8 +260,7 @@ impl ViewState<DemoRoot> for DemoRootState {
                                     .boxed()
                             })
                             .collect::<Vec<_>>(),
-                    ),))
-                    .axis_direction(AxisDirection::TopToBottom)
+                    )
                     .position(self.scroll_controller.position()),
                 ),
             );

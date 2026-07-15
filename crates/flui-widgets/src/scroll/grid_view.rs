@@ -8,6 +8,7 @@ use flui_rendering::delegates::{
     SliverGridDelegate, SliverGridDelegateWithFixedCrossAxisCount,
     SliverGridDelegateWithMaxCrossAxisExtent,
 };
+use flui_rendering::view::{ScrollPosition, ViewportOffset};
 use flui_types::layout::{Axis, AxisDirection};
 use flui_view::prelude::StatelessView;
 use flui_view::seq::ViewSeq;
@@ -16,6 +17,17 @@ use flui_view::{BoxedView, BuildContext, IntoView, ViewExt};
 use crate::scroll::{
     ShrinkWrappingViewport, SliverChildBuilderDelegate, SliverGrid, SliverGridLazy, Viewport,
 };
+
+/// Where the composed [`Viewport`] gets its scroll offset from — mirrors
+/// [`Viewport`]'s own `OffsetSource`, since this widget is a thin
+/// pixels-or-position passthrough onto it. Not shared with `Viewport`'s
+/// private enum of the same name; duplicated per composing widget, matching
+/// [`crate::SingleChildScrollView`]'s template.
+#[derive(Clone, Debug)]
+enum OffsetSource {
+    Pixels(f32),
+    Position(ScrollPosition),
+}
 
 /// A scrollable 2-D grid.
 ///
@@ -48,7 +60,7 @@ use crate::scroll::{
 #[derive(Clone, StatelessView)]
 pub struct GridView {
     scroll_direction: Axis,
-    offset: f32,
+    offset_source: OffsetSource,
     shrink_wrap: bool,
     grid_delegate: Arc<dyn SliverGridDelegate>,
     /// Children for the eager variants.  Empty in the lazy variant.
@@ -68,7 +80,7 @@ impl GridView {
         let delegate = SliverGridDelegateWithFixedCrossAxisCount::new(cross_axis_count);
         Self {
             scroll_direction: Axis::Vertical,
-            offset: 0.0,
+            offset_source: OffsetSource::Pixels(0.0),
             shrink_wrap: false,
             grid_delegate: Arc::new(delegate),
             children: children.into_boxed_vec(),
@@ -88,7 +100,7 @@ impl GridView {
         let delegate = SliverGridDelegateWithMaxCrossAxisExtent::new(max_cross_axis_extent);
         Self {
             scroll_direction: Axis::Vertical,
-            offset: 0.0,
+            offset_source: OffsetSource::Pixels(0.0),
             shrink_wrap: false,
             grid_delegate: Arc::new(delegate),
             children: children.into_boxed_vec(),
@@ -115,7 +127,7 @@ impl GridView {
     {
         Self {
             scroll_direction: Axis::Vertical,
-            offset: 0.0,
+            offset_source: OffsetSource::Pixels(0.0),
             shrink_wrap: false,
             grid_delegate,
             children: Vec::new(),
@@ -131,9 +143,33 @@ impl GridView {
     }
 
     /// Set the programmatic scroll offset in logical pixels.
+    ///
+    /// Pixels mode: the composed [`Viewport`] (or [`ShrinkWrappingViewport`]
+    /// under [`GridView::shrink_wrap`]) owns a private `ScrollPosition` and
+    /// this value is pushed into it on every rebuild. Mutually exclusive with
+    /// [`GridView::position`] — whichever is called last wins.
     #[must_use]
     pub fn offset(mut self, offset: f32) -> Self {
-        self.offset = offset;
+        self.offset_source = OffsetSource::Pixels(offset);
+        self
+    }
+
+    /// Inject a shared [`ScrollPosition`] as the composed [`Viewport`]'s
+    /// offset — see [`Viewport::position`] for the full contract. Mutually
+    /// exclusive with [`GridView::offset`] — whichever is called last wins.
+    ///
+    /// **Shrink-wrap limitation:** under [`GridView::shrink_wrap`],
+    /// [`ShrinkWrappingViewport`] has no `.position(...)` passthrough (a
+    /// separate, currently-open remainder — see `docs/ROADMAP.md`
+    /// Business.1). A shrink-wrapped grid still lays out at `position`'s
+    /// current pixel value (snapshotted once per rebuild), but does not join
+    /// the live content-dimension feedback loop: gesture/controller writes
+    /// after that snapshot are not reflected until the next rebuild, and
+    /// `RenderShrinkWrappingViewport`'s committed extents never flush back
+    /// into `position`.
+    #[must_use]
+    pub fn position(mut self, position: ScrollPosition) -> Self {
+        self.offset_source = OffsetSource::Position(position);
         self
     }
 
@@ -153,7 +189,7 @@ impl fmt::Debug for GridView {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut s = f.debug_struct("GridView");
         s.field("scroll_direction", &self.scroll_direction)
-            .field("offset", &self.offset)
+            .field("offset_source", &self.offset_source)
             .field("shrink_wrap", &self.shrink_wrap);
         if self.builder_source.is_some() {
             s.field("builder_source", &self.builder_source);
@@ -186,15 +222,25 @@ impl StatelessView for GridView {
         };
 
         if self.shrink_wrap {
+            // ShrinkWrappingViewport has no `.position(...)` passthrough (see
+            // `GridView::position`'s doc for the honest limitation) — snapshot
+            // the current pixel value from either offset source and push it
+            // as a one-time constant.
+            let offset = match &self.offset_source {
+                OffsetSource::Pixels(pixels) => *pixels,
+                OffsetSource::Position(position) => position.pixels(),
+            };
             ShrinkWrappingViewport::new((sliver,))
                 .axis_direction(axis_direction)
-                .offset(self.offset)
+                .offset(offset)
                 .boxed()
         } else {
-            Viewport::new((sliver,))
-                .axis_direction(axis_direction)
-                .offset(self.offset)
-                .boxed()
+            let viewport = Viewport::new((sliver,)).axis_direction(axis_direction);
+            match &self.offset_source {
+                OffsetSource::Pixels(pixels) => viewport.offset(*pixels),
+                OffsetSource::Position(position) => viewport.position(position.clone()),
+            }
+            .boxed()
         }
     }
 }
