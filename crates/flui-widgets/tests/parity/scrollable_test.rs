@@ -73,7 +73,10 @@ fn fling_scoped(widget: Scrollable, vsync: Vsync, constraints: BoxConstraints) -
 fn scrollable_drag_down_at_min_extent_is_clamped_by_physics() {
     let controller = ScrollController::new();
     controller.update_dimensions(300.0, 0.0, 500.0);
-    // Already at the top (pixels = 0, the default) — no jump_to needed.
+    // Pre-scroll away from the top so a passing run must OBSERVE the gesture
+    // moving pixels before the clamp engages — an expected value equal to the
+    // initial state could not distinguish "clamped" from "gesture never ran".
+    controller.set_pixels(20.0);
 
     let physics: SharedScrollPhysics = Arc::new(ClampingScrollPhysics::default());
     let widget = Scrollable::new()
@@ -84,18 +87,18 @@ fn scrollable_drag_down_at_min_extent_is_clamped_by_physics() {
     let scoped = lay_out_with_arena(widget, tight(300.0, 300.0));
 
     // Downward drag: first move crosses slop (fires on_pan_start), second
-    // fires on_pan_update — proposes -10 (past the 0 minimum) -> clamped
-    // physics holds at 0.
+    // fires on_pan_update — proposes 20 − 60 = −40 (past the 0 minimum) ->
+    // clamping physics holds at exactly 0, having demonstrably moved from 20.
     scoped.dispatch_pointer_down(150.0, 100.0);
     scoped.dispatch_pointer_move(150.0, 160.0); // 60 px downward: slop-crossing
-    scoped.dispatch_pointer_move(150.0, 170.0); // 10 px more: fires on_update
-    scoped.dispatch_pointer_up(150.0, 170.0);
+    scoped.dispatch_pointer_move(150.0, 220.0); // 60 px more: fires on_update
+    scoped.dispatch_pointer_up(150.0, 220.0);
 
     assert_eq!(
         controller.pixels(),
         0.0,
         "clamping physics must hold the offset at the minimum (0) when a downward \
-         drag at the top proposes a negative offset; got {:.1}",
+         drag from 20 proposes a negative offset; got {:.1}",
         controller.pixels()
     );
 }
@@ -133,6 +136,16 @@ fn bouncing_physics_top_overscroll_springs_back_to_min_extent() {
     scoped.dispatch_pointer_move(150.0, 230.0); // 60 px more: fires on_update
     scoped.dispatch_pointer_up(150.0, 230.0);
 
+    // The overscroll must be OBSERVED before the spring settles — otherwise a
+    // dead gesture path (pixels stuck at the 20.0 seed) would pass the settle
+    // assertion below.
+    let overscrolled = controller.pixels();
+    assert!(
+        overscrolled < 0.0,
+        "the damped drag must carry pixels below the minimum before release \
+         (expected ≈ −20.8); got {overscrolled:.3}"
+    );
+
     // Pump 100 frames (1.6 s) — sufficient for the critically-damped spring
     // (SpringDescription with damping_ratio ≥ 0.75) to settle.
     for _ in 0..100 {
@@ -141,7 +154,7 @@ fn bouncing_physics_top_overscroll_springs_back_to_min_extent() {
 
     let final_pixels = controller.pixels();
     assert!(
-        final_pixels >= -1.0,
+        (-1.0..=1.0).contains(&final_pixels),
         "bouncing spring-back must return scroll to within 1 px of the minimum (0); \
          got {final_pixels:.3}"
     );
