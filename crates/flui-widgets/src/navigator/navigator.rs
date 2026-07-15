@@ -692,7 +692,7 @@ impl NavigatorHandle {
     pub fn push_and_remove_until<R: NavigatorRoute>(
         &self,
         route: R,
-        keep: impl Fn(RouteId) -> bool,
+        mut keep: impl FnMut(RouteId) -> bool,
     ) -> RouteResult<R::Output> {
         let (result, below_top_to_bottom) = self.push_prepared(route, |history, id, route| {
             history.push_for_remove_until_with_id(id, route)
@@ -811,7 +811,7 @@ impl NavigatorHandle {
     /// read in one lock acquisition ([`current`](Self::current)), `keep`
     /// evaluates it unlocked, and a genuine pop is a second, independent
     /// acquisition ([`pop`](Self::pop)) — never the same critical section.
-    pub fn pop_until(&self, keep: impl Fn(RouteId) -> bool) {
+    pub fn pop_until(&self, mut keep: impl FnMut(RouteId) -> bool) {
         while let Some(candidate) = self.current() {
             if keep(candidate) {
                 break;

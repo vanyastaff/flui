@@ -85,11 +85,8 @@ impl RouteId {
 /// `MetaDataPayload` (`interaction/meta_data.rs`): cloning a route's
 /// settings must not deep-copy the payload, and that boundary is the
 /// established precedent for a type-erased user value crossing FLUI's
-/// public surface.
-///
-/// This is exactly the shape ADR-0024 §4.1 named for this field — see the
-/// ADR's "Update" note for what has and has not landed of that document's
-/// wider named-routes proposal.
+/// public surface. This is exactly the shape ADR-0024 §4.1 named for this
+/// field.
 pub type RouteArguments = Arc<dyn Any + Send + Sync>;
 
 /// Flutter's `RouteSettings` (`navigator.dart:670-687`).
@@ -135,12 +132,8 @@ impl RouteSettings {
     /// type. Returns `None` if there is no payload or its type doesn't match.
     ///
     /// Named `argument`, singular, per ADR-0024 §4.1's `settings.argument::<T>()`.
-    ///
-    /// **Gate status:** this downcast is the second `dyn Any` boundary
-    /// `flui-widgets` exposes publicly. ADR-0024 §4 reserves it for the
-    /// repository owner's explicit sign-off; §6 records that it landed on
-    /// direct task authorization instead, not a recorded gate decision. See
-    /// `docs/PORT.md`'s FR-033/widgets entry.
+    /// The typed counterpart to [`arguments`](Self::arguments) — the same role
+    /// `RenderMetaData::metadata_as` plays for its own erased payload.
     #[must_use]
     pub fn argument<T: Any + Send + Sync + 'static>(&self) -> Option<&T> {
         self.arguments.as_ref()?.downcast_ref::<T>() // PORT-CHECK-OK-DOWNCAST: RouteSettings.arguments erasure per ADR-0024 §4.1; Gate sign-off still outstanding, see ADR-0024 §6
