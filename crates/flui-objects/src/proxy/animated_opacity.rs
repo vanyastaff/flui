@@ -169,7 +169,7 @@ impl RenderAnimatedOpacity {
     /// The cache commits (`alpha.store`) only after every mark this
     /// recompute owes has been sent successfully — never before. `handle`'s
     /// send can fail under backpressure or once the pipeline owner is gone
-    /// ([`SendError`]); committing first would make that failure invisible,
+    /// (`SendError`); committing first would make that failure invisible,
     /// since the next tick would then compare its new value against an
     /// already-updated cache and see no change, permanently losing the mark
     /// for whatever the animation settles on. Leaving the cache at
