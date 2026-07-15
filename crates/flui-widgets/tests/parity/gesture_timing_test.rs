@@ -371,9 +371,9 @@ fn double_tap_second_tap_far_from_first_is_not_a_double_tap() {
     );
 }
 
-/// RED — genuine divergence, not a test bug (see the studio's RED rule: a
-/// real bug too deep for a localized fix is `#[ignore]`d with a reason and
-/// reported, not silently dropped from the corpus).
+/// A genuine bug, not a test bug: too deep for a localized fix, so it is
+/// `#[ignore]`d with the mechanism documented and tracked in the roadmap
+/// rather than silently dropped from the corpus.
 ///
 /// `crates/flui-widgets/src/interaction/gesture_detector.rs` shares ONE
 /// `TapGestureRecognizer` instance across every contact a detector ever
@@ -403,7 +403,7 @@ fn double_tap_second_tap_far_from_first_is_not_a_double_tap() {
 /// fields — recognizer-internals surgery beyond this task's scope (porting
 /// parity tests), so it is tracked here rather than fixed inline.
 #[test]
-#[ignore = "RED: TapGestureRecognizer's single-slot pending_up is not reentrant \
+#[ignore = "known bug: TapGestureRecognizer's single-slot pending_up is not reentrant \
             across two contacts overlapping on one shared recognizer instance \
             (crates/flui-interaction/src/recognizers/tap.rs) — a held tap's \
             on_tap can be silently dropped when a second contact resolves \
