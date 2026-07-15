@@ -1,7 +1,7 @@
 //! ## Test parity notes
 //!
 //! Flutter source: `packages/flutter/lib/src/widgets/implicit_animations.dart`
-//! (tag `3.44.0`) `AnimatedWidgetBaseState` (lines 553-567) —
+//! (tag `3.44.0`) `AnimatedWidgetBaseState` —
 //! `ImplicitlyAnimatedWidgetState`'s single `controller` drives every
 //! `forEachTween` entry (`AnimatedContainer`'s `_widthTween`, `_heightTween`,
 //! `_decorationTween`, ...) from the SAME `CurvedAnimation` value each build;
@@ -95,7 +95,7 @@ impl ViewState<SizeProbe> for SizeProbeState {
 /// properties at exactly the same progress fraction on every frame — one
 /// controller/curve drives every tween, not one timer per property.
 ///
-/// Flutter parity: `AnimatedWidgetBaseState` (`implicit_animations.dart:553-567`)
+/// Flutter parity: `AnimatedWidgetBaseState` (`implicit_animations.dart`, single shared curved animation driving all tweens)
 /// — see the module-level citation above.
 #[test]
 fn animated_container_width_and_height_stay_in_lockstep_progress() {

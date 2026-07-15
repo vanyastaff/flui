@@ -244,3 +244,43 @@ impl StatelessView for GridView {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Mirrors `ListView`'s `position_overrides_a_prior_offset_and_offset_overrides_a_prior_position`
+    /// (`crates/flui-widgets/src/scroll/list_view.rs`) — `GridView` shares the
+    /// same `OffsetSource` last-call-wins mechanism, but had no pinned test of
+    /// its own.
+    #[test]
+    fn position_overrides_a_prior_offset_and_offset_overrides_a_prior_position() {
+        use flui_rendering::view::ScrollPosition;
+
+        let position = ScrollPosition::new(30.0);
+        let position_debug = format!(
+            "{:?}",
+            GridView::count(2, Vec::<BoxedView>::new())
+                .offset(12.5)
+                .position(position)
+        );
+        assert!(
+            position_debug.contains("offset_source: Position(")
+                && !position_debug.contains("Pixels("),
+            "the last call (.position) must win over an earlier .offset call, got: \
+             {position_debug}",
+        );
+
+        let offset_debug = format!(
+            "{:?}",
+            GridView::count(2, Vec::<BoxedView>::new())
+                .position(ScrollPosition::new(30.0))
+                .offset(12.5)
+        );
+        assert!(
+            offset_debug.contains("offset_source: Pixels(12.5)"),
+            "the last call (.offset) must win over an earlier .position call, got: \
+             {offset_debug}",
+        );
+    }
+}

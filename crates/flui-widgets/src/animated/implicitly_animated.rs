@@ -16,13 +16,13 @@
 //! - [`OptTween`] — one optional property of a multi-property widget
 //!   (`AnimatedContainer`), animated only while both old and new values are set.
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use flui_animation::curve::ArcCurve;
 use flui_animation::{
-    Animatable, Animation, AnimationController, AnimationStatus, CurvedAnimation, Scheduler, Tween,
-    Vsync, VsyncRegistration,
+    Animatable, Animation, AnimationController, AnimationStatus, CurvedAnimation, Curves,
+    Scheduler, Tween, Vsync, VsyncRegistration,
 };
 use flui_foundation::Listenable;
 use flui_types::geometry::Lerp;
@@ -33,12 +33,36 @@ use flui_types::geometry::Lerp;
 /// enough to read as motion, short enough to feel responsive.
 pub(crate) const DEFAULT_DURATION: Duration = Duration::from_millis(200);
 
+/// The default implicit-animation curve (`Curves::EaseInOut`), cached behind
+/// one process-wide handle so every widget built *without* an explicit
+/// `.curve(...)` override compares curve-**unchanged**
+/// (see [`ArcCurve`]'s `PartialEq`) across an unrelated rebuild.
+///
+/// Without this cache, `ArcCurve::new(Curves::EaseInOut)` would heap-allocate
+/// a fresh, distinct handle every time a widget default-constructs its curve
+/// — which, under `ArcCurve`'s reference-equality comparison, would make
+/// every single reconfigure look like a curve change, defeating
+/// [`ImplicitController::set_curve`]'s no-op gate. This is the Rust-native
+/// equivalent of the `const` canonicalization Dart's compiler gives
+/// `Curves.easeInOut` for free — see `ArcCurve`'s doc for the full citation.
+pub(crate) fn default_curve() -> ArcCurve {
+    static DEFAULT: OnceLock<ArcCurve> = OnceLock::new();
+    DEFAULT
+        .get_or_init(|| ArcCurve::new(Curves::EaseInOut))
+        .clone()
+}
+
 /// The persistent 0→1 driver behind an implicitly-animated widget: an
 /// [`AnimationController`], the curve applied to it, and its `VsyncScope`
 /// registration. Holds no tween — `value()` is the curved progress its owner
 /// feeds to one or more tweens.
 pub(crate) struct ImplicitController {
     controller: AnimationController,
+    /// The curve currently baked into `curved`, kept alongside it so
+    /// [`set_curve`](Self::set_curve) can detect a no-op reconfigure
+    /// (`ArcCurve`'s `PartialEq` is reference equality — see its doc) without
+    /// re-deriving it from the `CurvedAnimation`, which exposes no getter.
+    curve: ArcCurve,
     curved: CurvedAnimation<ArcCurve>,
     vsync: Option<Vsync>,
     vsync_registration: Option<VsyncRegistration>,
@@ -53,9 +77,10 @@ impl ImplicitController {
         // pumped), so the two paths never double-advance the controller.
         let controller = AnimationController::new(duration, Arc::new(Scheduler::new()));
         let parent: Arc<dyn Animation<f32>> = Arc::new(controller.clone());
-        let curved = CurvedAnimation::new(parent, curve);
+        let curved = CurvedAnimation::new(parent, curve.clone());
         Self {
             controller,
+            curve,
             curved,
             vsync: None,
             vsync_registration: None,
@@ -87,10 +112,48 @@ impl ImplicitController {
         self.curved.clone()
     }
 
-    /// Restart the run from `0` over `duration` — called after the owner's
-    /// tween(s) were re-anchored, so the curved progress sweeps `0`→`1` afresh.
-    pub(crate) fn restart(&mut self, duration: Duration) {
+    /// Update the controller's base forward duration.
+    ///
+    /// Oracle: `controller.duration = widget.duration;` is unconditional on
+    /// every `didUpdateWidget`, independent of whether a target or curve
+    /// actually changed (`implicit_animations.dart` `didUpdateWidget` (`controller.duration` set unconditionally) at tag `3.44.0`).
+    /// Never retimes a run already in flight — see
+    /// `AnimationController::set_duration`'s own doc.
+    pub(crate) fn set_duration(&mut self, duration: Duration) {
         self.controller.set_duration(duration);
+    }
+
+    /// Swap in `curve`, rebuilding the `CurvedAnimation` over the SAME
+    /// controller — the run in flight, if any, is untouched; only the easing
+    /// function applied to its current position changes. A no-op (`curve`
+    /// reference-equal to the one already installed) skips the rebuild
+    /// entirely, so an unrelated widget reconfigure does not drop and re-add
+    /// the controller's value subscription. Returns whether the curve
+    /// actually changed.
+    ///
+    /// Oracle: a curve-only change disposes the old `CurvedAnimation` and
+    /// builds a fresh one over the same `controller` — `_createCurve`,
+    /// `implicit_animations.dart` `didUpdateWidget`/`_createCurve`. The controller is never
+    /// restarted for a curve-only change; see
+    /// [`restart_from_zero`](Self::restart_from_zero)'s doc for what is.
+    pub(crate) fn set_curve(&mut self, curve: ArcCurve) -> bool {
+        if self.curve == curve {
+            return false;
+        }
+        let parent: Arc<dyn Animation<f32>> = Arc::new(self.controller.clone());
+        self.curved = CurvedAnimation::new(parent, curve.clone());
+        self.curve = curve;
+        true
+    }
+
+    /// Restart the run from `0` over the currently-set duration — called
+    /// after the owner's tween(s) were re-anchored (a genuine target
+    /// change), so the curved progress sweeps `0`→`1` afresh.
+    ///
+    /// Oracle: `controller.forward(from: 0.0)`, gated on `_constructTweens()`
+    /// returning `true` (`implicit_animations.dart` `didUpdateWidget` (`_constructTweens` gating `forward(from: 0.0)`)) — a curve-only
+    /// change never reaches this restart.
+    pub(crate) fn restart_from_zero(&mut self) {
         // Owned, freshly registered controller: `forward_from` only errors when
         // disposed, which cannot happen before `dispose`.
         let _ = self.controller.forward_from(Some(0.0));
@@ -169,20 +232,37 @@ impl<T: Lerp + Clone + PartialEq + Send + Sync + 'static> ImplicitAnimation<T> {
         self.tween.clone()
     }
 
-    /// Retarget to `new_target` over `duration`: if the target changed, set
-    /// `begin` to the currently displayed value and `end` to the new target,
-    /// then restart the controller from `0`. A no-op when the target is
-    /// unchanged, so an unrelated rebuild does not restart the animation.
+    /// Retarget to `new_target` over `duration` along `curve`, reporting
+    /// whether the tween/curve chain a caller composes over
+    /// (`curved()`/`tween()`) was invalidated — i.e. the target changed OR
+    /// the curve changed. Callers that recompute a downstream composition
+    /// (e.g. `AnimatedOpacity`'s `ProxyAnimation::set_parent`) gate that
+    /// recompute on this report so an unrelated rebuild does not reallocate
+    /// it.
     ///
-    /// Flutter's `_constructTweens` + `forEachTween` + `forward(from: 0)`,
-    /// collapsed for one property.
-    pub(crate) fn retarget(&mut self, new_target: T, duration: Duration) {
-        if self.tween.end == new_target {
-            return;
+    /// `duration` is pushed to the controller unconditionally, matching the
+    /// oracle's unconditional `controller.duration = widget.duration;`
+    /// (`implicit_animations.dart` `didUpdateWidget` (`controller.duration` set unconditionally)). Only a genuine TARGET change
+    /// restarts the run from `0`; a curve-only change swaps the easing
+    /// applied to the run already in flight — see
+    /// [`ImplicitController::set_curve`]/[`ImplicitController::restart_from_zero`]
+    /// for the oracle citations. The curve swap happens FIRST so a
+    /// target-changed anchor (`current_value()`, used as the new tween's
+    /// `begin`) reads the already-updated curve, matching
+    /// `tween.evaluate(_animation)` reading the just-rebuilt `_animation` at
+    /// `implicit_animations.dart` `didUpdateWidget` (`tween.evaluate(_animation)` after the curve swap).
+    pub(crate) fn retarget(&mut self, new_target: T, duration: Duration, curve: ArcCurve) -> bool {
+        self.controller.set_duration(duration);
+        let curve_changed = self.controller.set_curve(curve);
+
+        let target_changed = self.tween.end != new_target;
+        if target_changed {
+            let from = self.current_value();
+            self.tween = Tween::new(from, new_target);
+            self.controller.restart_from_zero();
         }
-        let from = self.current_value();
-        self.tween = Tween::new(from, new_target);
-        self.controller.restart(duration);
+
+        target_changed || curve_changed
     }
 
     /// Unregister from the binding and dispose the controller.
