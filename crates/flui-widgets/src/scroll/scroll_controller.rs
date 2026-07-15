@@ -95,6 +95,23 @@ impl ScrollController {
         }
     }
 
+    /// Create a new controller pre-seeded at `initial_scroll_offset` pixels,
+    /// before any layout has committed extents.
+    ///
+    /// Flutter parity: `ScrollController(initialScrollOffset: ...)`
+    /// (`widgets/scroll_controller.dart`). The value is **not** clamped here —
+    /// extents are unknown until the first layout — so it is clamped exactly
+    /// like a value set via [`set_pixels`](Self::set_pixels) before mount: the
+    /// first `apply_content_dimensions` call a `Scrollable`/`Viewport` in
+    /// [`position`](Self::position) mode commits during layout brings it into
+    /// `[min_scroll_extent, max_scroll_extent]`.
+    #[must_use]
+    pub fn with_initial_scroll_offset(initial_scroll_offset: f32) -> Self {
+        let controller = Self::new();
+        controller.set_pixels(initial_scroll_offset);
+        controller
+    }
+
     // -- Reads ---------------------------------------------------------------
 
     /// Current scroll offset in logical pixels.
@@ -352,6 +369,28 @@ mod tests {
             notified.load(std::sync::atomic::Ordering::SeqCst),
             1,
             "the frame completing afterward must not double-notify for the same mutation"
+        );
+    }
+
+    #[test]
+    fn with_initial_scroll_offset_seeds_pixels_before_any_layout() {
+        let controller = ScrollController::with_initial_scroll_offset(209.0);
+        assert_eq!(
+            controller.pixels(),
+            209.0,
+            "with_initial_scroll_offset must seed pixels immediately, before any \
+             update_dimensions/layout call establishes real extents"
+        );
+
+        // The seed is unclamped (extents are unknown yet, both 0.0) — the same
+        // contract as `set_pixels` before mount; a subsequent `update_dimensions`
+        // brings it into range.
+        controller.update_dimensions(300.0, 0.0, 150.0);
+        assert_eq!(
+            controller.pixels(),
+            150.0,
+            "the deferred clamp must apply once real extents arrive, same as any \
+             other pre-layout pixel write"
         );
     }
 
