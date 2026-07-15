@@ -55,4 +55,6 @@ mod table_test;
 mod gesture_detector_test;
 mod implicit_animations_test;
 mod padding_test;
+mod scroll_controller_test;
+mod scrollable_test;
 mod single_child_scroll_view_test;
