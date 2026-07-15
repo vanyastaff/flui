@@ -892,6 +892,52 @@ fn a_covered_nested_route_does_not_contribute_its_heroes_to_an_outer_flight() {
     );
 }
 
+/// **Two-deep nesting composes recursively.** A hero inside the INNERMOST of two
+/// nested `Navigator`s (outer → middle → innermost) flies to a route pushed on the
+/// OUTERMOST navigator — `HeroRegistry::all_heroes` must resolve the middle
+/// navigator's `NestedHeroSource`, then recurse into *that* registry's own nested
+/// list to reach the innermost navigator's, exactly as `Hero._allHeroesFor`'s walk
+/// keeps descending through however many `Navigator`s separate the hero from the
+/// transitioning one (`heroes.dart:317-333`).
+///
+/// Red-check: change `HeroRegistry::all_heroes`'s recursive call
+/// (`registry.all_heroes()`) to a single non-recursive `registry.tags()`/`.get()`
+/// pass — the one-level case above still passes (`max == 1`), but this test drops
+/// to `max == 0` because the middle registry's own nested list is never visited.
+#[test]
+fn a_hero_flies_from_two_levels_of_nested_navigators_to_the_outermost() {
+    let vsync = Vsync::new();
+    let innermost = NavigatorHandle::new();
+    innermost.seed_initial(hero_page());
+    let innermost_for_page = innermost.clone();
+
+    let middle = NavigatorHandle::new();
+    middle.seed_initial(PageRoute::<i32>::new(move |_ctx, _p, _s| {
+        Navigator::new(innermost_for_page.clone())
+            .into_view()
+            .boxed()
+    }));
+    let middle_for_page = middle.clone();
+
+    let outer = NavigatorHandle::new();
+    outer.seed_initial(PageRoute::<i32>::new(move |_ctx, _p, _s| {
+        Navigator::new(middle_for_page.clone()).into_view().boxed()
+    }));
+
+    let mut laid = lay_out_animated(app(&vsync, &outer), tight(400.0, 400.0), vsync);
+    let owner = laid.pipeline_owner();
+    laid.pump_for(FRAME);
+
+    let _outer_push = laid.enter_owner_scope(|| outer.push(hero_page()));
+    let (max, end) = run(&mut laid, &owner, SETTLE);
+
+    assert_eq!(
+        max, 1,
+        "the hero flies from two levels of nested navigators to the outermost push"
+    );
+    assert_eq!(end, 0, "and it lands");
+}
+
 /// **`HeroMode` grounds a subtree, through the public API** (`heroes.dart:1124-1152`).
 /// A destination hero under `HeroMode::new(…).enabled(false)` never raises a shuttle;
 /// the transition still runs and settles.

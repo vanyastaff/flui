@@ -153,7 +153,8 @@ struct NavigatorShared {
     auto_hero_observer: Mutex<Option<Arc<dyn NavigatorObserver>>>,
 
     /// This navigator's cross-flight visibility hook, published to the nearest
-    /// enclosing route's `HeroScope` in `init_state` — Flutter's
+    /// enclosing route's `HeroScope` from every `build` (see
+    /// `NavigatorState::sync_nested_hero_registration`) — Flutter's
     /// nested-`Navigator` branch of `Hero._allHeroesFor` (`heroes.dart:317-333`).
     /// `None` for a top-level navigator, which has no enclosing route to publish
     /// to. Cleared in `dispose`, together with the registry it was registered
@@ -986,8 +987,8 @@ impl NavigatorHandle {
 /// about *this* navigator's stack. Cross-navigator flights still work: a hero inside
 /// a nested `Navigator`'s current `PageRoute` is reachable through a
 /// `NestedHeroSource`, which this navigator publishes on the nearest enclosing route
-/// in `init_state` (`heroes.dart:317-333`'s nested-`Navigator` branch), not through
-/// anything read here.
+/// from every `build` (`heroes.dart:317-333`'s nested-`Navigator` branch), not
+/// through anything read here.
 impl NavigatorHandle {
     /// Whether `id` names a [`TransitionGroup::Page`] route — Flutter's
     /// `route is PageRoute` (`heroes.dart:331`, `:941-948`). Shared by
@@ -1161,6 +1162,96 @@ impl NavigatorState {
             _owner_affine: PhantomData,
         }
     }
+
+    /// Keep this navigator's cross-flight visibility hook pointed at the nearest
+    /// enclosing route's `HeroScope` — the nested-`Navigator` branch of Flutter's
+    /// `Hero._allHeroesFor` (`heroes.dart:317-333`): a hero inside this navigator
+    /// is still invited into an *outer* flight when this navigator's own current
+    /// route is a `PageRoute`. Independent of `HeroControllerScope`: Flutter's
+    /// predicate does not consult it either, only `Route.isCurrent` and
+    /// `is PageRoute`.
+    ///
+    /// Called from `build`, **not** `init_state`. `init_state` runs exactly once
+    /// and never again on a `GlobalKey` reparent (`ElementBase::activate` reuses
+    /// the same state without re-running it), so a registration made there would
+    /// go stale the moment this `Navigator` moves to sit under a different route
+    /// — a hook left pointing at the OLD enclosing `HeroScope`, invisible to the
+    /// route that now actually contains it. `build`, by contrast, reliably reruns
+    /// after a reparent: `ElementTree::insert`'s `try_retake_global_key` path
+    /// calls `element.update(view)` right after `activate()`, which
+    /// unconditionally marks the element dirty, and `recompute_inherited_subtree`
+    /// has by then already rebuilt the moved subtree's ambient-lookup map against
+    /// the *new* ancestor chain — so `ctx.get::<HeroScope, _>` here resolves
+    /// correctly on the very next build. A cheap identity check keeps the common
+    /// case (an ordinary rebuild with the same enclosing route) a no-op.
+    ///
+    /// **Verification limit, recorded rather than hidden.** A single-reparent
+    /// scenario was traced through by hand — instrumenting this method's own
+    /// `current`/`slot` identities showed the hook correctly re-pointing at the
+    /// new route immediately after `try_retake_global_key` runs. Building a
+    /// `flui_widgets`-level regression test on top of that (a `GlobalKey`-pinned
+    /// wrapper reparented between two routes, then a *further* route pushed over
+    /// the new one to drive a flight measurement) surfaced a **separate, transient
+    /// mis-resolution**: on some builds *during that second, immediately-following
+    /// cover transition*, `ctx.get::<HeroScope, _>` here briefly answered with an
+    /// unrelated route's registry before the churn settled — a symptom that shows
+    /// up with or without this fix (a plain, non-reparented three-route chain
+    /// with the same double-cover shape did not reproduce it, so it looks tied to
+    /// covering a route that itself just finished migrating a child, not to
+    /// `GlobalKey` specifically). That looks like a pre-existing timing gap in
+    /// how the inherited-ambient lookup interacts with a rapidly-transitioning,
+    /// covered route — outside `flui-widgets` and outside this fix's diff — not
+    /// something to patch blind here. No widgets-level `GlobalKey`-reparent test
+    /// ships with this change as a result; `crates/flui-widgets/src/navigator/hero.rs`'s
+    /// module docs and `docs/ROADMAP-TRACKER.md` B1.4 both name this honestly.
+    fn sync_nested_hero_registration(&self, ctx: &dyn BuildContext) {
+        let current = ctx.get::<HeroScope, _>(HeroScope::registry);
+        let mut slot = self.shared.nested_hero_registration.lock();
+        let unchanged = match (&current, slot.as_ref()) {
+            (Some(new_registry), Some((old_registry, _))) => new_registry.is_same(old_registry),
+            (None, None) => true,
+            _ => false,
+        };
+        if unchanged {
+            return;
+        }
+        if let Some((old_registry, old_source)) = slot.take() {
+            old_registry.deregister_nested(&old_source);
+        }
+        let Some(new_registry) = current else {
+            return;
+        };
+        // A `Weak` — never a strong `NavigatorHandle` — so this closure cannot
+        // keep `NavigatorShared` alive through its own `nested_hero_registration`
+        // field: a strong capture would be a self-cycle (`shared` ->
+        // `nested_hero_registration` -> this closure -> `shared`), leaking the
+        // navigator's whole state on every reparent-without-dispose. Reading
+        // `shared`'s fields directly (rather than reconstructing a
+        // `NavigatorHandle`) needs no `command_target`, which the affine handle
+        // carries but this hook never uses.
+        let weak_shared = Arc::downgrade(&self.shared);
+        let source = NestedHeroSource::new(move || {
+            let shared = weak_shared.upgrade()?;
+            let top = shared.history.lock().current()?;
+            let is_page = shared
+                .registries
+                .peers
+                .lock()
+                .get(&top)
+                .is_some_and(|peer| peer.group == TransitionGroup::Page);
+            if !is_page {
+                return None;
+            }
+            shared
+                .registries
+                .modals
+                .lock()
+                .get(&top)
+                .map(ModalHandle::heroes)
+        });
+        new_registry.register_nested(source.clone());
+        *slot = Some((new_registry, source));
+    }
 }
 
 impl ViewState<Navigator> for NavigatorState {
@@ -1210,28 +1301,6 @@ impl ViewState<Navigator> for NavigatorState {
             }
         }
 
-        // Publish this navigator's cross-flight visibility hook on the nearest
-        // enclosing route, if any — the nested-`Navigator` branch of Flutter's
-        // `Hero._allHeroesFor` (`heroes.dart:317-333`): a hero inside this
-        // navigator is still invited into an *outer* flight when this
-        // navigator's own current route is a `PageRoute`. A top-level
-        // navigator resolves no `HeroScope` and publishes nothing — there is no
-        // outer route for it to be nested inside of. Independent of
-        // `HeroControllerScope`: Flutter's predicate does not consult it either,
-        // only `Route.isCurrent` and `is PageRoute`.
-        if let Some(registry) = ctx.get::<HeroScope, _>(HeroScope::registry) {
-            let handle = self.handle();
-            let source = NestedHeroSource::new(move || {
-                let top = handle.current()?;
-                if !handle.is_page_route(top) {
-                    return None;
-                }
-                handle.route_modal(top).map(|modal| modal.heroes())
-            });
-            registry.register_nested(source.clone());
-            *self.shared.nested_hero_registration.lock() = Some((registry, source));
-        }
-
         // Before the seeded flush, so the first `did_push` an observer sees is
         // already one it can act on — Flutter attaches at `:3834-3837` and only
         // then calls `restoreState` → `_flushHistoryUpdates` (`:3922-3934`).
@@ -1251,7 +1320,11 @@ impl ViewState<Navigator> for NavigatorState {
     /// matters here (`navigator.dart:5984-5990`); its `HeroControllerScope`,
     /// `NavigationNotification` listener, pointer-cancelling `Listener` and
     /// `FocusTraversalGroup` all belong to features deferred for now.
-    fn build(&self, _view: &Navigator, _ctx: &dyn BuildContext) -> impl IntoView {
+    fn build(&self, _view: &Navigator, ctx: &dyn BuildContext) -> impl IntoView {
+        // Re-resolved every build, not just once at mount — see
+        // `sync_nested_hero_registration`'s doc for why `init_state` cannot do this.
+        self.sync_nested_hero_registration(ctx);
+
         // `HeroControllerScope.none` (`navigator.dart:5955`): a nested navigator under
         // this one must not pick up this navigator's controller. It resolves the
         // `.none` in its own `init_state` and attaches nothing.
@@ -1281,8 +1354,8 @@ impl ViewState<Navigator> for NavigatorState {
         // outlives its navigator schedules nothing and measures nothing.
         *self.shared.post_frame.lock() = None;
         *self.shared.render_tree.lock() = None;
-        // The mirror of the `init_state` publish: a disposed navigator's heroes
-        // must never be visited by an outer flight again.
+        // The mirror of `sync_nested_hero_registration`'s publish: a disposed
+        // navigator's heroes must never be visited by an outer flight again.
         if let Some((registry, source)) = self.shared.nested_hero_registration.lock().take() {
             registry.deregister_nested(&source);
         }

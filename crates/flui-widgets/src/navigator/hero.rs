@@ -36,13 +36,29 @@
 //!   `Navigator.of(hero) == navigator` (`:322`) plus a `ModalRoute.of` fallback
 //!   (`:330-333`) — `heroRoute.isCurrent && heroRoute is PageRoute`. FLUI ports that
 //!   fallback as [`NestedHeroSource`]: a nested `Navigator` publishes it on the
-//!   nearest enclosing route in its own `init_state`, and
+//!   nearest enclosing route from its own `build` (resynced every time, so a
+//!   `GlobalKey` reparent under a different route is never missed), and
 //!   [`HeroRegistry::all_heroes`] resolves it recursively, so a hero inside a nested
 //!   `Navigator`'s current `PageRoute` is visible to an outer flight without an
 //!   element walk. `HeroControllerScope::none` still blocks a nested navigator's own
 //!   *auto-default controller* (so it flies no heroes on its own pushes/pops), but it
 //!   does not gate this visibility hook — Flutter's predicate does not consult it
 //!   either. `transitionOnUserGestures` stays out of scope.
+//!
+//! **A `GlobalKey`-reparented nested `Navigator`'s re-sync is verified in
+//! isolation, not end-to-end.** `NavigatorState::sync_nested_hero_registration`
+//! (`navigator.rs`) re-resolves and republishes on every `build`, and hand-traced
+//! instrumentation confirmed it re-points at the new route immediately after a
+//! reparent. A `flui_widgets`-level regression test built on top of that (reparent,
+//! then push a further route to force a flight measurement) surfaced what looks
+//! like a **pre-existing, separate** timing gap: `ctx.get::<HeroScope, _>` can
+//! transiently answer with the wrong route's registry across a few builds while a
+//! *recently-migrated* route is itself being covered by yet another push — a
+//! symptom a plain (non-reparented) three-route chain with the same double-cover
+//! shape did not reproduce, so it reads as an inherited-ambient-resolution timing
+//! issue in `flui-view`, not a defect in this fix's own diff. No end-to-end
+//! `GlobalKey`-reparent-with-a-hero test ships as a result — see the fuller note on
+//! `NavigatorState::sync_nested_hero_registration` (`navigator.rs`).
 //!
 //! # Duplicate tags
 //!
@@ -169,15 +185,17 @@ impl HeroRegistry {
     }
 
     /// Publish a nested `Navigator`'s cross-flight visibility hook. Called from
-    /// that `Navigator`'s own `init_state`; the hook is stored, not invoked, so
-    /// registering does not itself resolve anything about the nested stack.
+    /// that `Navigator`'s own `build` (re-synced every time, so a `GlobalKey`
+    /// reparent under a different route is not missed); the hook is stored, not
+    /// invoked, so registering does not itself resolve anything about the nested
+    /// stack.
     pub(crate) fn register_nested(&self, source: NestedHeroSource) {
         self.nested.lock().push(source);
     }
 
     /// Withdraw a nested `Navigator`'s hook, matched by identity — the mirror of
     /// [`register_nested`](Self::register_nested), called from that
-    /// `Navigator`'s `dispose`.
+    /// `Navigator`'s `dispose` and whenever it re-publishes elsewhere.
     pub(crate) fn deregister_nested(&self, source: &NestedHeroSource) {
         self.nested.lock().retain(|existing| !existing.is(source));
     }
@@ -197,9 +215,18 @@ impl HeroRegistry {
     /// same first-registered-wins call [`register`](Self::register) makes
     /// locally, extended across the registry boundary since there is no
     /// cross-registry visit order to arbitrate by instead.
+    ///
+    /// The nested sources are snapshotted out of the lock **before** any of them
+    /// is resolved: `resolve` runs a caller-supplied closure that reads a
+    /// `NavigatorHandle`'s own locks (history, route registries), and a nested
+    /// `Navigator` could — through a future recursive shape or a caller-supplied
+    /// hook — resolve back into this same registry. Holding `self.nested`'s lock
+    /// across that call would risk exactly the lock-held-over-a-handle-querying-
+    /// closure deadlock class the `pop_until`/`push_and_remove_until` fix closed.
     pub(crate) fn all_heroes(&self) -> HashMap<HeroTag, HeroHandle> {
         let mut all = self.heroes.lock().clone();
-        for nested in self.nested.lock().iter() {
+        let nested_sources: Vec<NestedHeroSource> = self.nested.lock().clone();
+        for nested in &nested_sources {
             let Some(registry) = nested.resolve() else {
                 continue;
             };
@@ -260,6 +287,14 @@ impl HeroRegistry {
     pub(crate) fn len(&self) -> usize {
         self.heroes.lock().len()
     }
+
+    /// Whether both handles name the same registry — the identity
+    /// `NavigatorState::sync_nested_hero_registration` checks each build, so an
+    /// unchanged enclosing route costs one `Arc::ptr_eq` instead of a
+    /// deregister/register round trip.
+    pub(crate) fn is_same(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.heroes, &other.heroes)
+    }
 }
 
 impl fmt::Debug for HeroRegistry {
@@ -271,7 +306,8 @@ impl fmt::Debug for HeroRegistry {
 }
 
 /// A nested `Navigator`'s cross-flight visibility hook, registered with the
-/// nearest enclosing route's [`HeroScope`] in that `Navigator`'s `init_state`.
+/// nearest enclosing route's [`HeroScope`] from that `Navigator`'s own `build`,
+/// resynced every time so a `GlobalKey` reparent is never missed.
 ///
 /// Flutter's `_allHeroesFor` reaches a hero inside a nested `Navigator` by
 /// walking the element tree straight through it (`heroes.dart:317-333`); FLUI
@@ -335,8 +371,8 @@ impl HeroScope {
     }
 
     /// The registry heroes below this scope register with — what a nested
-    /// `Navigator` reads, in its own `init_state`, to publish a
-    /// [`NestedHeroSource`] on the route hosting it.
+    /// `Navigator` reads, from its own `build`, to publish a [`NestedHeroSource`]
+    /// on the route hosting it.
     pub(crate) fn registry(&self) -> HeroRegistry {
         self.registry.clone()
     }
