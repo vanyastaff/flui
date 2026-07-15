@@ -51,7 +51,8 @@ use flui_view::element::ElementKind;
 use flui_view::prelude::*;
 use parking_lot::Mutex;
 
-use super::binding::{RouteBinding, RouteRegistries, RouteVsync, TransitionPeer};
+use super::binding::{RouteBinding, RouteRegistries, RouteVsync, TransitionGroup, TransitionPeer};
+use super::hero::{HeroRegistry, HeroScope, NestedHeroSource};
 use super::hero_controller::HeroController;
 use super::hero_controller_scope::HeroControllerScope;
 use super::history::{DeferredEffect, FlushOutcome, RouteHistory};
@@ -150,6 +151,14 @@ struct NavigatorShared {
     /// present. Kept separate so a later hand-attached `HeroController` can replace
     /// it instead of doubling the flight observer count.
     auto_hero_observer: Mutex<Option<Arc<dyn NavigatorObserver>>>,
+
+    /// This navigator's cross-flight visibility hook, published to the nearest
+    /// enclosing route's `HeroScope` in `init_state` — Flutter's
+    /// nested-`Navigator` branch of `Hero._allHeroesFor` (`heroes.dart:317-333`).
+    /// `None` for a top-level navigator, which has no enclosing route to publish
+    /// to. Cleared in `dispose`, together with the registry it was registered
+    /// on, so a disposed navigator's heroes are never visited again.
+    nested_hero_registration: Mutex<Option<(HeroRegistry, NestedHeroSource)>>,
 }
 
 impl NavigatorShared {
@@ -506,6 +515,7 @@ impl NavigatorHandle {
             observers: Mutex::new(Vec::new()),
             auto_hero_observer: Mutex::new(None),
             observers_attached: AtomicBool::new(false),
+            nested_hero_registration: Mutex::new(None),
         });
         let command_target = register_command_target(&shared);
         Self {
@@ -971,13 +981,24 @@ impl NavigatorHandle {
 /// hands out a borrow into the trees, and nothing takes a second lock under a
 /// first.
 ///
-/// **Cross-navigator hero flights remain out of scope.** A Flutter `HeroController` is
-/// attached to exactly one navigator and only ever sees that navigator's routes;
-/// a nested navigator needs its own, hosted by a `HeroControllerScope`
-/// (`navigator.dart:3995-4046`). FLUI has `HeroControllerScope` for isolation/custom
-/// controllers, but these methods still answer only about *this* navigator's stack,
-/// and no test claims otherwise.
+/// A `HeroController` is attached to exactly one navigator and drives flights only
+/// between *that* navigator's own route changes — these methods still answer only
+/// about *this* navigator's stack. Cross-navigator flights still work: a hero inside
+/// a nested `Navigator`'s current `PageRoute` is reachable through a
+/// `NestedHeroSource`, which this navigator publishes on the nearest enclosing route
+/// in `init_state` (`heroes.dart:317-333`'s nested-`Navigator` branch), not through
+/// anything read here.
 impl NavigatorHandle {
+    /// Whether `id` names a [`TransitionGroup::Page`] route — Flutter's
+    /// `route is PageRoute` (`heroes.dart:331`, `:941-948`). Shared by
+    /// `HeroController::maybe_start`'s own eligibility test and by a nested
+    /// `Navigator`'s [`NestedHeroSource`] hook, which asks the identical question
+    /// about its own current top route.
+    pub(crate) fn is_page_route(&self, id: RouteId) -> bool {
+        self.route_peer(id)
+            .is_some_and(|peer| peer.group == TransitionGroup::Page)
+    }
+
     /// This navigator's overlay — Flutter's `NavigatorState.overlay`, read by
     /// `HeroController._startHeroTransition` (`heroes.dart:990`) to insert the
     /// flight's `OverlayEntry`.
@@ -1189,6 +1210,28 @@ impl ViewState<Navigator> for NavigatorState {
             }
         }
 
+        // Publish this navigator's cross-flight visibility hook on the nearest
+        // enclosing route, if any — the nested-`Navigator` branch of Flutter's
+        // `Hero._allHeroesFor` (`heroes.dart:317-333`): a hero inside this
+        // navigator is still invited into an *outer* flight when this
+        // navigator's own current route is a `PageRoute`. A top-level
+        // navigator resolves no `HeroScope` and publishes nothing — there is no
+        // outer route for it to be nested inside of. Independent of
+        // `HeroControllerScope`: Flutter's predicate does not consult it either,
+        // only `Route.isCurrent` and `is PageRoute`.
+        if let Some(registry) = ctx.get::<HeroScope, _>(HeroScope::registry) {
+            let handle = self.handle();
+            let source = NestedHeroSource::new(move || {
+                let top = handle.current()?;
+                if !handle.is_page_route(top) {
+                    return None;
+                }
+                handle.route_modal(top).map(|modal| modal.heroes())
+            });
+            registry.register_nested(source.clone());
+            *self.shared.nested_hero_registration.lock() = Some((registry, source));
+        }
+
         // Before the seeded flush, so the first `did_push` an observer sees is
         // already one it can act on — Flutter attaches at `:3834-3837` and only
         // then calls `restoreState` → `_flushHistoryUpdates` (`:3922-3934`).
@@ -1238,5 +1281,10 @@ impl ViewState<Navigator> for NavigatorState {
         // outlives its navigator schedules nothing and measures nothing.
         *self.shared.post_frame.lock() = None;
         *self.shared.render_tree.lock() = None;
+        // The mirror of the `init_state` publish: a disposed navigator's heroes
+        // must never be visited by an outer flight again.
+        if let Some((registry, source)) = self.shared.nested_hero_registration.lock().take() {
+            registry.deregister_nested(&source);
+        }
     }
 }

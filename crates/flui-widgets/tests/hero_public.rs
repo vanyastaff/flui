@@ -777,9 +777,12 @@ fn a_controller_from_a_scope_flies_heroes() {
 
 /// A **nested** navigator does not inherit the outer navigator's controller.
 /// `Navigator::build` wraps its overlay in `HeroControllerScope::none`, so a navigator
-/// mounted inside an outer route resolves `Some(None)` — no controller, no auto-default
-/// — and its heroes do not fly (matching Flutter's `:5955`; nested flights need an
-/// explicit scope, which stays deferred).
+/// mounted inside an outer route resolves `Some(None)` — no controller, no
+/// auto-default — and a push **on the inner navigator itself** flies nothing
+/// (matching Flutter's `:5955`). This is about the *auto-default controller*, not
+/// cross-navigator visibility: see
+/// `a_hero_flies_from_a_nested_navigators_current_route_to_the_outer_navigator` for a
+/// flight the OUTER navigator's own controller drives through the nested route.
 ///
 /// Red-check: drop the `HeroControllerScope::none(...)` wrap from `Navigator::build` —
 /// the inner navigator then auto-defaults and its heroes fly, so `max == 1`.
@@ -808,6 +811,85 @@ fn a_nested_navigator_does_not_fly_heroes_by_default() {
         "the nested navigator is isolated — its heroes do not fly on the outer controller"
     );
     assert_eq!(inner.route_ids().len(), 2, "though the inner push happened");
+}
+
+/// **Cross-navigator flight.** A hero sitting in a nested `Navigator`'s current
+/// route flies to a route pushed on the OUTER navigator, driven by the outer's own
+/// controller — Flutter's nested-`Navigator` branch of `Hero._allHeroesFor`
+/// (`heroes.dart:317-333`): the walk from `fromRoute.subtreeContext` does not stop at
+/// the nested `Navigator`, and invites a hero found there because its own route
+/// (`ModalRoute.of(hero)`) `isCurrent` and `is PageRoute`.
+///
+/// Red-check (this is the new behavior): before this change, `MeasurementPass`
+/// matched only `ModalHandle::heroes()` — the FROM route's own registry, which never
+/// contains a hero registered on a *different* (nested) route. `max` was `0`.
+#[test]
+fn a_hero_flies_from_a_nested_navigators_current_route_to_the_outer_navigator() {
+    let vsync = Vsync::new();
+    let inner = NavigatorHandle::new();
+    inner.seed_initial(hero_page());
+    let inner_for_page = inner.clone();
+
+    let outer = NavigatorHandle::new();
+    outer.seed_initial(PageRoute::<i32>::new(move |_ctx, _p, _s| {
+        Navigator::new(inner_for_page.clone()).into_view().boxed()
+    }));
+
+    let mut laid = lay_out_animated(app(&vsync, &outer), tight(400.0, 400.0), vsync);
+    let owner = laid.pipeline_owner();
+    laid.pump_for(FRAME);
+
+    // Push a matching hero page onto the OUTER navigator — the outer's own default
+    // controller drives this flight.
+    let _outer_push = laid.enter_owner_scope(|| outer.push(hero_page()));
+    let (max, end) = run(&mut laid, &owner, SETTLE);
+
+    assert_eq!(
+        max, 1,
+        "the hero flies from the nested navigator's current route to the outer push"
+    );
+    assert_eq!(end, 0, "and it lands");
+}
+
+/// **Isolation counter-case, faithful to the oracle.** A hero whose own route is
+/// covered inside its nested `Navigator` (no longer `isCurrent` there) does not fly,
+/// even though it is still mounted offstage and reachable in the subtree —
+/// `Hero._allHeroesFor`'s guard is `heroRoute.isCurrent && heroRoute is PageRoute`
+/// (`heroes.dart:330-333`), not whether the nested navigator has its own
+/// `HeroController`: that scope is never consulted by the walk at all.
+///
+/// Red-check: drop the `is_page_route`/`current()` guard from the
+/// `NestedHeroSource` closure (resolve unconditionally to the inner navigator's
+/// registry) — the covered hero would then match and `max` would read `1`.
+#[test]
+fn a_covered_nested_route_does_not_contribute_its_heroes_to_an_outer_flight() {
+    let vsync = Vsync::new();
+    let inner = NavigatorHandle::new();
+    inner.seed_initial(hero_page());
+    // Cover the hero-bearing route inside the INNER navigator: it is still mounted
+    // (`maintain_state` defaults to `true`) but is no longer `isCurrent` there.
+    inner.push(
+        PageRoute::<i32>::new(|_ctx, _p, _s| Center::new().into_view().boxed())
+            .transition_duration(TRANSITION),
+    );
+    let inner_for_page = inner.clone();
+
+    let outer = NavigatorHandle::new();
+    outer.seed_initial(PageRoute::<i32>::new(move |_ctx, _p, _s| {
+        Navigator::new(inner_for_page.clone()).into_view().boxed()
+    }));
+
+    let mut laid = lay_out_animated(app(&vsync, &outer), tight(400.0, 400.0), vsync);
+    let owner = laid.pipeline_owner();
+    laid.pump_for(FRAME);
+
+    let _outer_push = laid.enter_owner_scope(|| outer.push(hero_page()));
+    let (max, _end) = run(&mut laid, &owner, SETTLE);
+
+    assert_eq!(
+        max, 0,
+        "a hero covered inside its own nested navigator does not join an outer flight"
+    );
 }
 
 /// **`HeroMode` grounds a subtree, through the public API** (`heroes.dart:1124-1152`).
