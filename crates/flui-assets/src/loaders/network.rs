@@ -238,4 +238,65 @@ mod tests {
         }
         // If it fails, it's likely a network issue, not a code issue
     }
+
+    /// A single-request, single-response HTTP/1.1 server bound to an
+    /// ephemeral loopback port — hermetic, no external network. Accepts
+    /// exactly one connection, discards the request, writes `body` as a
+    /// `200 OK` response, then the listener thread exits.
+    #[cfg(feature = "network")]
+    fn spawn_single_response_server(body: &'static [u8]) -> std::net::SocketAddr {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let listener =
+            TcpListener::bind("127.0.0.1:0").expect("binding an ephemeral port must succeed");
+        let addr = listener
+            .local_addr()
+            .expect("a bound listener must report its local address");
+
+        std::thread::spawn(move || {
+            let Ok((mut stream, _)) = listener.accept() else {
+                return;
+            };
+            // Drain enough of the request to know the client is done sending
+            // headers; the exact request line/headers are irrelevant here.
+            let mut buf = [0u8; 1024];
+            let _ = stream.read(&mut buf);
+
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            let _ = stream.write_all(response.as_bytes());
+            let _ = stream.write_all(body);
+            let _ = stream.flush();
+        });
+
+        addr
+    }
+
+    /// `NetworkLoader::load_url` against a real, hermetic local HTTP server:
+    /// no external network, no mocking library — proves `flui-assets`' own
+    /// network-loading code path (the `network` feature's `reqwest` client)
+    /// genuinely round-trips bytes over HTTP. This is independent of, and
+    /// does not imply anything about, `flui-widgets`' `network-images`
+    /// feature, whose `NetworkImage` provider never issues a request at all
+    /// (see `crates/flui-widgets/src/image/provider.rs`).
+    #[tokio::test]
+    #[cfg(feature = "network")]
+    async fn load_url_round_trips_bytes_from_a_hermetic_local_server() {
+        const FIXTURE_BODY: &[u8] = b"flui-assets network loader hermetic test payload";
+        let addr = spawn_single_response_server(FIXTURE_BODY);
+
+        let loader = NetworkLoader::new();
+        let bytes = loader
+            .load_url(&format!("http://{addr}/asset.bin"))
+            .await
+            .expect("a local hermetic server's 200 response must load successfully");
+
+        assert_eq!(
+            bytes, FIXTURE_BODY,
+            "load_url must return exactly the server's response body",
+        );
+    }
 }
