@@ -44,6 +44,19 @@
 //! release velocity (`on_pan_end`) is intentionally left unwired — hand-
 //! rolling ballistics in the demo was ruled out, and a real fling belongs to
 //! the same Business.1 item.
+//!
+//! # Navigation
+//!
+//! [`DemoRoot`] is the `Navigator` shell: its [`DemoRootState`] owns a
+//! [`NavigatorHandle`] and seeds it, once, with a home route whose content is
+//! [`DemoHome`] — the counter row, the drag-to-scroll list, and the animated
+//! box described above, unchanged. `DemoHome`'s own "View details" button
+//! pushes a [`PageRoute`] (opaque by default, per `page_route.rs`), so once
+//! that frame's `OverlayState::build` recomputes its `skip_count`, the home
+//! route is dropped from layout, paint and hit-test (`overlay/mod.rs`'s
+//! `onstage_plan`) — it stays mounted (`maintain_state` defaults to `true`),
+//! which is what lets the "Back" button on the details route pop back to the
+//! exact same counter/scroll/expanded state, not a freshly reset one.
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -78,15 +91,26 @@ const COLLAPSED_COLOR: Color = Color::rgb(64, 64, 90);
 const EXPANDED_COLOR: Color = Color::rgb(230, 126, 34);
 const PLUS_BUTTON_COLOR: Color = Color::rgb(33, 150, 243);
 const BACKGROUND_COLOR: Color = Color::rgb(18, 18, 24);
+const DETAILS_BUTTON_COLOR: Color = Color::rgb(76, 175, 80);
+const BACK_BUTTON_COLOR: Color = Color::rgb(158, 158, 158);
+const DETAILS_BACKGROUND_COLOR: Color = Color::rgb(24, 18, 24);
 
-/// The vertical-slice demo root.
+/// Label of [`DemoHome`]'s button that pushes the details route.
+pub const DETAILS_BUTTON_LABEL: &str = "View details";
+/// The details route's own heading — distinct from every home-route text so
+/// tests can tell the two routes apart by rendered content alone.
+pub const DETAILS_ROUTE_TEXT: &str = "Details route";
+/// Label of the details route's button that pops back to the home route.
+pub const BACK_BUTTON_LABEL: &str = "< Back";
+
+/// The vertical-slice demo root: a [`Navigator`] shell over the home route.
 ///
 /// `count`/`expanded`/`scroll_offset` are `Rc<Cell<_>>` so a caller (the
 /// acceptance test) can keep a clone from before mounting. All three are
 /// driven the same way the running example drives them — by dispatching
 /// synthetic pointer gestures through the mounted `GestureDetector`s: taps
 /// for the counter and the animated box, a drag for the list. `scroll_offset`
-/// is kept in sync with [`DemoRootState`]'s internal `ScrollController` by
+/// is kept in sync with [`DemoHomeState`]'s internal `ScrollController` by
 /// the drag's `on_pan_update` callback (see the module doc's drag-to-scroll
 /// wiring section above) — the render path itself reads the controller's
 /// live `ScrollPosition` directly (`ListView::position`), not this cell; the
@@ -100,11 +124,20 @@ pub struct DemoRoot {
     pub expanded: Rc<Cell<bool>>,
     /// The list's scroll offset, in logical pixels — mirrored from the
     /// internal `ScrollController` by the drag gesture wired in
-    /// [`DemoRootState::build`]. Also the seed value
-    /// [`DemoRootState::create_state`] writes into that controller before the
+    /// [`DemoHomeState::build`]. Also the seed value
+    /// [`DemoHomeState::create_state`] writes into that controller before the
     /// first layout, so constructing a `DemoRoot` with a nonzero offset does
     /// not start the list at zero.
     pub scroll_offset: Rc<Cell<f32>>,
+    /// How many times [`DemoHomeState::create_state`] has run — a discriminator,
+    /// not app-visible data. `count`/`expanded`/`scroll_offset` are `Rc<Cell<_>>`
+    /// shared with the seed closure below, so they read back correctly whether
+    /// `DemoHomeState` survives a navigation round trip or is torn down and
+    /// rebuilt from the same closure-captured cells; a display assertion on
+    /// them alone cannot tell those two cases apart. This counter can, because
+    /// `create_state` runs once per element lifetime — the acceptance test
+    /// reads it, not the running app.
+    pub home_create_count: Rc<Cell<u32>>,
 }
 
 impl DemoRoot {
@@ -115,6 +148,7 @@ impl DemoRoot {
             count: Rc::new(Cell::new(0)),
             expanded: Rc::new(Cell::new(false)),
             scroll_offset: Rc::new(Cell::new(0.0)),
+            home_create_count: Rc::new(Cell::new(0)),
         }
     }
 }
@@ -125,15 +159,83 @@ impl Default for DemoRoot {
     }
 }
 
-/// Persistent state for [`DemoRoot`].
+/// Persistent state for [`DemoRoot`]: owns the [`NavigatorHandle`] and seeds
+/// its one home route, once, in `create_state`.
+///
+/// [`NavigatorHandle::seed_initial`] must run exactly once per navigator —
+/// re-seeding on every `build` (as a naive port of the pre-navigation `build`
+/// body would) would re-push the home route on every rebuild. `create_state`
+/// is the framework's own once-per-element hook, so seeding there is the
+/// smallest correct fix; `build` then only ever returns `Navigator::new`.
+pub struct DemoRootState {
+    navigator: NavigatorHandle,
+}
+
+impl StatefulView for DemoRoot {
+    type State = DemoRootState;
+
+    fn create_state(&self) -> Self::State {
+        let navigator = NavigatorHandle::new();
+        let count = Rc::clone(&self.count);
+        let expanded = Rc::clone(&self.expanded);
+        let scroll_offset = Rc::clone(&self.scroll_offset);
+        let home_create_count = Rc::clone(&self.home_create_count);
+        let navigator_for_home = navigator.clone();
+        // `SimpleRoute`, not `PageRoute`: the home route is the navigator's
+        // first entry, with nothing beneath it to transition over — an
+        // instant, unanimated route is the accurate shape, not a simplification.
+        navigator.seed_initial(
+            SimpleRoute::<()>::new(move |_ctx| {
+                DemoHome {
+                    count: Rc::clone(&count),
+                    expanded: Rc::clone(&expanded),
+                    scroll_offset: Rc::clone(&scroll_offset),
+                    navigator: navigator_for_home.clone(),
+                    create_count: Rc::clone(&home_create_count),
+                }
+                .into_view()
+                .boxed()
+            })
+            .named("/"),
+        );
+        DemoRootState { navigator }
+    }
+}
+
+impl ViewState<DemoRoot> for DemoRootState {
+    fn build(&self, _view: &DemoRoot, _ctx: &dyn BuildContext) -> impl IntoView {
+        Navigator::new(self.navigator.clone())
+    }
+}
+
+/// The home route's content: the counter row, the drag-to-scroll list, the
+/// animated box, and the button that pushes the details route.
+///
+/// Split out of [`DemoRoot`] so the navigator shell above can seed it as a
+/// route once, in `create_state`, rather than reconstructing it (and losing
+/// its persistent state) on every `Navigator` rebuild.
+#[derive(Clone, StatefulView)]
+struct DemoHome {
+    count: Rc<Cell<i32>>,
+    expanded: Rc<Cell<bool>>,
+    scroll_offset: Rc<Cell<f32>>,
+    navigator: NavigatorHandle,
+    /// Incremented once per [`DemoHomeState::create_state`] call — see the
+    /// field doc on [`DemoRoot::home_create_count`], which owns the `Rc` this
+    /// clones.
+    create_count: Rc<Cell<u32>>,
+}
+
+/// Persistent state for [`DemoHome`].
 ///
 /// Captures a [`RebuildHandle`] in `init_state` (ADR-0018) so a tap callback
 /// — which runs outside `build`/layout/paint — can schedule the next frame's
 /// rebuild without touching the tree itself.
-pub struct DemoRootState {
+struct DemoHomeState {
     count: Rc<Cell<i32>>,
     expanded: Rc<Cell<bool>>,
     scroll_offset: Rc<Cell<f32>>,
+    navigator: NavigatorHandle,
     /// The list's live scroll position — injected directly into the
     /// `ListView` (`ListView::position`), so `RenderViewport`'s own layout
     /// feeds committed content extents back into this same controller (the
@@ -146,8 +248,8 @@ pub struct DemoRootState {
     rebuild: Option<RebuildHandle>,
 }
 
-impl StatefulView for DemoRoot {
-    type State = DemoRootState;
+impl StatefulView for DemoHome {
+    type State = DemoHomeState;
 
     fn create_state(&self) -> Self::State {
         let scroll_controller = ScrollController::new();
@@ -159,17 +261,24 @@ impl StatefulView for DemoRoot {
         // just deferred to when it's actually meaningful.
         scroll_controller.set_pixels(self.scroll_offset.get());
 
-        DemoRootState {
+        // The discriminator itself: every real `create_state` call — mount,
+        // or a teardown-and-rebuild after a covering route unmounts this
+        // element — increments it. `count`/`expanded`/`scroll_offset` can't
+        // tell those two apart (see `DemoRoot::home_create_count`'s doc); this can.
+        self.create_count.set(self.create_count.get() + 1);
+
+        DemoHomeState {
             count: Rc::clone(&self.count),
             expanded: Rc::clone(&self.expanded),
             scroll_offset: Rc::clone(&self.scroll_offset),
+            navigator: self.navigator.clone(),
             scroll_controller,
             rebuild: None,
         }
     }
 }
 
-impl ViewState<DemoRoot> for DemoRootState {
+impl ViewState<DemoHome> for DemoHomeState {
     fn init_state(&mut self, ctx: &dyn BuildContext) {
         self.rebuild = Some(ctx.rebuild_handle());
         // Lifecycle-only acquisition (ADR-0021, port-check trigger #22): lets
@@ -185,7 +294,7 @@ impl ViewState<DemoRoot> for DemoRootState {
         }
     }
 
-    fn build(&self, _view: &DemoRoot, _ctx: &dyn BuildContext) -> impl IntoView {
+    fn build(&self, _view: &DemoHome, _ctx: &dyn BuildContext) -> impl IntoView {
         let rebuild = self
             .rebuild
             .clone()
@@ -216,6 +325,21 @@ impl ViewState<DemoRoot> for DemoRootState {
                         .child(Text::new("+")),
                 ),
         ]);
+
+        // -- details row: a button that pushes the details route ---------------
+        let navigator_for_details = self.navigator.clone();
+        let details_row = GestureDetector::new()
+            // Opaque: same reasoning as the "+" button above.
+            .behavior(HitTestBehavior::Opaque)
+            .on_tap(move || {
+                navigator_for_details.push(details_route(navigator_for_details.clone()));
+            })
+            .child(
+                Container::new()
+                    .padding(EdgeInsets::all(px(8.0)))
+                    .color(DETAILS_BUTTON_COLOR)
+                    .child(Text::new(DETAILS_BUTTON_LABEL)),
+            );
 
         // -- fixed-height, drag-to-scroll list ---------------------------------
         let scroll_offset_for_drag = Rc::clone(&self.scroll_offset);
@@ -302,8 +426,48 @@ impl ViewState<DemoRoot> for DemoRootState {
             .color(BACKGROUND_COLOR)
             .padding(EdgeInsets::all(px(16.0)))
             .alignment(Alignment::TOP_LEFT)
-            .child(Column::new(column![counter_row, list_area, animated_area]))
+            .child(Column::new(column![
+                counter_row,
+                details_row,
+                list_area,
+                animated_area
+            ]))
     }
+}
+
+/// The details route: an opaque [`PageRoute`], pushed by [`DemoHome`]'s "View
+/// details" button. A distinct heading plus a "Back" button that pops back to
+/// the home route via `navigator`.
+///
+/// `PageRoute` defaults to a jump-cut transition (`page_route.rs`'s doc), so
+/// the content is laid out and hit-testable as soon as the push's frame
+/// completes — no animation to wait out.
+fn details_route(navigator: NavigatorHandle) -> PageRoute<()> {
+    PageRoute::new(move |_ctx, _animation, _secondary| {
+        let navigator_for_back = navigator.clone();
+        Container::new()
+            .color(DETAILS_BACKGROUND_COLOR)
+            .padding(EdgeInsets::all(px(16.0)))
+            .alignment(Alignment::TOP_LEFT)
+            .child(Column::new(column![
+                Text::new(DETAILS_ROUTE_TEXT),
+                SizedBox::height(16.0),
+                GestureDetector::new()
+                    .behavior(HitTestBehavior::Opaque)
+                    .on_tap(move || {
+                        navigator_for_back.pop();
+                    })
+                    .child(
+                        Container::new()
+                            .padding(EdgeInsets::all(px(8.0)))
+                            .color(BACK_BUTTON_COLOR)
+                            .child(Text::new(BACK_BUTTON_LABEL)),
+                    ),
+            ]))
+            .into_view()
+            .boxed()
+    })
+    .named("details")
 }
 
 /// Build a fresh demo tree, ready to mount.
