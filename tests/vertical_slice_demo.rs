@@ -192,14 +192,23 @@ impl MountedDemo {
         self.dispatch_at(make_up_event(offset(x, y), PointerType::Mouse), x, y);
     }
 
+    /// Compares base names (before any `<...>`) on both sides — a
+    /// diagnostics node's own name keeps full generic fidelity (e.g.
+    /// `"RenderViewport<ScrollPosition>"`), but a caller querying "by render
+    /// type" wants the base name regardless of which generic argument a
+    /// render object happens to be monomorphized over. See the identical
+    /// helper (and its rationale) in `flui-widgets/tests/common/mod.rs`,
+    /// which this test cannot import (its own `common` module lives in a
+    /// different crate — see the module doc's re-bootstrapping note).
     fn find_all_by_render_type(&self, render_type_name: &str) -> Vec<RenderId> {
         let owner = self.pipeline_owner.read();
+        let queried = base_type_name(render_type_name);
         owner
             .render_tree()
             .iter()
             .filter_map(|(id, _node)| {
                 let diagnostics = owner.debug_node_diagnostics(id)?;
-                (diagnostics.name() == Some(render_type_name)).then_some(id)
+                (diagnostics.name().map(base_type_name) == Some(queried)).then_some(id)
             })
             .collect()
     }
@@ -341,6 +350,13 @@ impl MountedDemo {
 
 fn offset(x: f32, y: f32) -> Offset {
     Offset::new(px(x), px(y))
+}
+
+/// The part of `type_name` before its first `<`, if any — the base name
+/// ignoring generic parameters ("RenderViewport<ScrollPosition>" ->
+/// "RenderViewport"; a non-generic name passes through unchanged).
+fn base_type_name(type_name: &str) -> &str {
+    type_name.split('<').next().unwrap_or(type_name)
 }
 
 /// Spin until `Instant::now()` returns a value strictly greater than the one

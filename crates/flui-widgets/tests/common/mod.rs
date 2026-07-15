@@ -397,14 +397,22 @@ impl LaidOut {
     /// `render_type_name` (the short, crate-unqualified type name such as
     /// `"RenderConstrainedBox"` or `"RenderCenter"`). Returns all matching ids
     /// in slab-iteration order (not geometry order).
+    ///
+    /// Compares **base** names — the part before any `<...>` — on both
+    /// sides: `Diagnosticable::to_diagnostics_node`'s short name keeps full
+    /// generic fidelity (a `RenderViewport<ScrollPosition>` node names
+    /// itself exactly that), but a caller querying "by render type" wants
+    /// the base name regardless of which generic argument a render object
+    /// happens to be monomorphized over.
     pub fn find_all_by_render_type(&self, render_type_name: &str) -> Vec<RenderId> {
         let owner = self.pipeline_owner.read();
+        let queried = base_type_name(render_type_name);
         owner
             .render_tree()
             .iter()
             .filter_map(|(id, _node)| {
                 let diagnostics = owner.debug_node_diagnostics(id)?;
-                (diagnostics.name() == Some(render_type_name)).then_some(id)
+                (diagnostics.name().map(base_type_name) == Some(queried)).then_some(id)
             })
             .collect()
     }
@@ -751,4 +759,14 @@ pub fn size(width: f32, height: f32) -> Size {
 /// Convenience: an `Offset` in logical pixels.
 pub fn offset(dx: f32, dy: f32) -> Offset {
     Offset::new(px(dx), px(dy))
+}
+
+/// The part of `type_name` before its first `<`, if any — the base name
+/// ignoring generic parameters ("RenderViewport<ScrollPosition>" ->
+/// "RenderViewport"; "RenderConstrainedBox" -> "RenderConstrainedBox"
+/// unchanged). Mirrors `flui_foundation::debug`'s private helper of the
+/// same name (not public — this harness has its own tiny copy rather than
+/// growing the library's public surface for a test-only concern).
+fn base_type_name(type_name: &str) -> &str {
+    type_name.split('<').next().unwrap_or(type_name)
 }
