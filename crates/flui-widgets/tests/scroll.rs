@@ -375,6 +375,99 @@ fn grid_view_position_passthrough_feeds_the_content_dimension_feedback_loop() {
     );
 }
 
+/// Same pin as `list_view_position_passthrough_feeds_the_content_dimension_feedback_loop`,
+/// under [`ListView::shrink_wrap`] — the Business.1 remainder this closes.
+/// Before the fix, the shrink_wrap arm snapshotted `position.pixels()` once
+/// per rebuild into a private `ShrinkWrappingViewport::offset(f32)`, so
+/// `RenderShrinkWrappingViewport`'s committed content extents never flushed
+/// back into `controller` (`max_scroll_extent()` stayed `0.0`) and a
+/// subsequent `set_pixels` never moved committed paint until the next
+/// rebuild happened to re-snapshot. Content (600px) exceeds the 120px main-
+/// axis bound, so the shrink-wrapped viewport clamps to 120px and genuinely
+/// scrolls — same shape as the non-shrink-wrap pin above.
+#[test]
+fn list_view_shrink_wrap_position_passthrough_feeds_the_content_dimension_feedback_loop() {
+    let controller = ScrollController::new();
+    // 12 rows at 50px = 600px content, bounded to a 120px main-axis max.
+    let rows: Vec<_> = (0..12)
+        .map(|_| SizedBox::new(200.0, 50.0).boxed())
+        .collect();
+    let widget = ListView::new(50.0, rows)
+        .shrink_wrap(true)
+        .position(controller.position());
+
+    let mut laid = lay_out(
+        widget,
+        BoxConstraints::new(px(200.0), px(200.0), px(0.0), px(120.0)),
+    );
+    laid.pump();
+
+    assert!(
+        controller.max_scroll_extent() > 0.0,
+        "ListView::shrink_wrap(true).position must feed \
+         RenderShrinkWrappingViewport::perform_layout's committed content extents into the \
+         injected ScrollPosition with zero update_dimensions calls; got {:.1}",
+        controller.max_scroll_extent()
+    );
+
+    let viewport = laid.find_by_render_type("RenderShrinkWrappingViewport");
+    let sliver = laid.only_child(viewport);
+    let offset_before = laid.absolute_offset(laid.child(sliver, 0));
+
+    controller.set_pixels(100.0);
+    laid.pump();
+
+    let offset_after = laid.absolute_offset(laid.child(sliver, 0));
+    assert_ne!(
+        offset_before, offset_after,
+        "controller.set_pixels must move a shrink-wrapped ListView's committed paint after the \
+         next rebuild picks up the shared ScrollPosition; got {offset_before:?} both before and \
+         after"
+    );
+}
+
+/// Same pin as `list_view_shrink_wrap_position_passthrough_feeds_the_content_dimension_feedback_loop`,
+/// for `GridView`.
+#[test]
+fn grid_view_shrink_wrap_position_passthrough_feeds_the_content_dimension_feedback_loop() {
+    let controller = ScrollController::new();
+    // 8 square tiles in 2 columns = 4 rows at 100px each = 400px content,
+    // bounded to a 200px main-axis max.
+    let tiles: Vec<_> = (0..8).map(|_| SizedBox::shrink().boxed()).collect();
+    let widget = GridView::count(2, tiles)
+        .shrink_wrap(true)
+        .position(controller.position());
+
+    let mut laid = lay_out(
+        widget,
+        BoxConstraints::new(px(200.0), px(200.0), px(0.0), px(200.0)),
+    );
+    laid.pump();
+
+    assert!(
+        controller.max_scroll_extent() > 0.0,
+        "GridView::shrink_wrap(true).position must feed \
+         RenderShrinkWrappingViewport::perform_layout's committed content extents into the \
+         injected ScrollPosition with zero update_dimensions calls; got {:.1}",
+        controller.max_scroll_extent()
+    );
+
+    let viewport = laid.find_by_render_type("RenderShrinkWrappingViewport");
+    let sliver = laid.only_child(viewport);
+    let offset_before = laid.absolute_offset(laid.child(sliver, 0));
+
+    controller.set_pixels(80.0);
+    laid.pump();
+
+    let offset_after = laid.absolute_offset(laid.child(sliver, 0));
+    assert_ne!(
+        offset_before, offset_after,
+        "controller.set_pixels must move a shrink-wrapped GridView's committed paint after the \
+         next rebuild picks up the shared ScrollPosition; got {offset_before:?} both before and \
+         after"
+    );
+}
+
 // ============================================================================
 // ScrollController — thumb geometry helpers
 // ============================================================================

@@ -12,15 +12,20 @@ use flui_view::seq::ViewSeq;
 
 use crate::support::generic_render_view_element;
 
-/// Where a [`Viewport`]'s render object gets its scroll offset from.
+/// Where a [`Viewport`] or [`ShrinkWrappingViewport`]'s render object gets
+/// its scroll offset from. Shared by both widgets — they're two `RenderBox`
+/// front ends over the same `ViewportOffset` injection mechanics, just with
+/// different `RenderObject`s (`RenderViewport` vs
+/// `RenderShrinkWrappingViewport`) underneath.
 ///
 /// - `Pixels`: the widget owns a private `ScrollPosition` and pushes this
 ///   value into it on every rebuild — today's programmatic-offset behavior,
 ///   with no external subscriber.
 /// - `Position`: an external `ScrollPosition` (typically a
-///   `ScrollController`'s) is injected directly. Gestures write it, and
-///   `RenderViewport::perform_layout`'s committed content extents flush back
-///   into it — the content-dimension feedback loop.
+///   `ScrollController`'s) is injected directly. Gestures write it, and the
+///   render object's committed content extents (`RenderViewport` or
+///   `RenderShrinkWrappingViewport::perform_layout`) flush back into it — the
+///   content-dimension feedback loop.
 #[derive(Clone, Debug)]
 enum OffsetSource {
     Pixels(f32),
@@ -194,10 +199,13 @@ generic_render_view_element!(Viewport);
 /// `RenderShrinkWrappingViewport`. It expands in the cross axis but takes its
 /// main-axis size from the accumulated sliver content, constrained by its
 /// parent.
+///
+/// Mirrors [`Viewport`]'s `Pixels`-vs-`Position` `offset_source` mechanics —
+/// see [`ShrinkWrappingViewport::position`] for the injection contract.
 #[derive(Clone)]
 pub struct ShrinkWrappingViewport<C = Vec<BoxedView>> {
     axis_direction: AxisDirection,
-    offset: f32,
+    offset_source: OffsetSource,
     children: C,
 }
 
@@ -206,7 +214,7 @@ impl<C> ShrinkWrappingViewport<C> {
     pub fn new(children: C) -> Self {
         Self {
             axis_direction: AxisDirection::TopToBottom,
-            offset: 0.0,
+            offset_source: OffsetSource::Pixels(0.0),
             children,
         }
     }
@@ -219,16 +227,42 @@ impl<C> ShrinkWrappingViewport<C> {
     }
 
     /// Set the programmatic scroll offset in logical pixels.
+    ///
+    /// Pixels mode: the render object's offset is a private `ScrollPosition`
+    /// this widget owns and pushes `offset` into on every rebuild. Mutually
+    /// exclusive with [`ShrinkWrappingViewport::position`] — whichever is
+    /// called last wins.
     #[must_use]
     pub fn offset(mut self, offset: f32) -> Self {
-        self.offset = offset;
+        self.offset_source = OffsetSource::Pixels(offset);
         self
     }
 
-    fn build_render_object(&self) -> RenderShrinkWrappingViewport {
-        let mut render_object = RenderShrinkWrappingViewport::new(self.axis_direction);
-        render_object.offset_mut().set_pixels(self.offset);
-        render_object
+    /// Inject a shared [`ScrollPosition`] as the render object's offset.
+    ///
+    /// Position mode: the render object's offset IS `position` — a gesture
+    /// handler or `ScrollController` writing to the same `ScrollPosition` is
+    /// observed directly (no push from this widget), and
+    /// `RenderShrinkWrappingViewport::perform_layout`'s committed content
+    /// extents flush back into it. Mutually exclusive with
+    /// [`ShrinkWrappingViewport::offset`] — whichever is called last wins.
+    #[must_use]
+    pub fn position(mut self, position: ScrollPosition) -> Self {
+        self.offset_source = OffsetSource::Position(position);
+        self
+    }
+
+    fn build_render_object(&self) -> RenderShrinkWrappingViewport<ScrollPosition> {
+        let cross_axis_direction = default_cross_axis_direction(self.axis_direction);
+        let position = match &self.offset_source {
+            OffsetSource::Pixels(pixels) => ScrollPosition::new(*pixels),
+            OffsetSource::Position(position) => position.clone(),
+        };
+        RenderShrinkWrappingViewport::with_offset(
+            self.axis_direction,
+            cross_axis_direction,
+            position,
+        )
     }
 }
 
@@ -236,7 +270,7 @@ impl<C: ViewSeq> fmt::Debug for ShrinkWrappingViewport<C> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ShrinkWrappingViewport")
             .field("axis_direction", &self.axis_direction)
-            .field("offset", &self.offset)
+            .field("offset_source", &self.offset_source)
             .field("children", &self.children.len())
             .finish()
     }
@@ -247,7 +281,7 @@ where
     C: ViewSeq + Clone + 'static,
 {
     type Protocol = BoxProtocol;
-    type RenderObject = RenderShrinkWrappingViewport;
+    type RenderObject = RenderShrinkWrappingViewport<ScrollPosition>;
 
     fn create_render_object(
         &self,
@@ -266,7 +300,27 @@ where
         // (not just the scroll offset) — otherwise layout keeps the stale axis
         // from construction.
         render_object.set_axis_direction(self.axis_direction);
-        render_object.offset_mut().set_pixels(self.offset);
+        match &self.offset_source {
+            OffsetSource::Pixels(pixels) => {
+                // See `Viewport::update_render_object`'s matching arm for the
+                // full rationale: only push into the installed offset when it
+                // is still privately (uniquely) held, otherwise a mode switch
+                // away from a prior Position-mode build would stomp the
+                // foreign, externally shared `ScrollPosition`.
+                if render_object.offset().is_uniquely_held() {
+                    render_object.offset().set_pixels(*pixels);
+                } else {
+                    render_object.set_offset(ScrollPosition::new(*pixels));
+                }
+            }
+            OffsetSource::Position(position) => {
+                // Swap in the injected position only on an actual identity
+                // change — see `Viewport::update_render_object`'s matching arm.
+                if !render_object.offset().ptr_eq(position) {
+                    render_object.set_offset(position.clone());
+                }
+            }
+        }
     }
 
     fn has_children(&self) -> bool {
