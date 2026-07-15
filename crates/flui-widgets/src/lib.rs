@@ -162,8 +162,8 @@ pub use navigator::{
     NavigatorCommand, NavigatorCommandError, NavigatorCommandOutcome, NavigatorCommandTarget,
     NavigatorHandle, NavigatorObserver, NavigatorRoute, NavigatorState, PageRoute,
     PopInvokedCallback, PopScope, PopupRoute, PushCompletion, Route, RouteAnimation,
-    RouteBindingSlot, RouteContentBuilder, RouteId, RoutePageBuilder, RouteResult, RouteSettings,
-    RouteTransitionsBuilder, SimpleRoute,
+    RouteArguments, RouteBindingSlot, RouteContentBuilder, RouteId, RoutePageBuilder, RouteResult,
+    RouteSettings, RouteTransitionsBuilder, SimpleRoute,
 };
 pub use paint::{ColoredBox, CustomPaint, DecoratedBox, Opacity, RepaintBoundary};
 pub use scroll::{

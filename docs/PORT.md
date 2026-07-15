@@ -147,9 +147,12 @@ The *funnel* signatures (`tree.rs::insert_box`, view → render `From` impls) ac
 
 **Every `downcast::<…>` / `downcast_ref::<…>` / `downcast_mut::<…>` in `crates/flui-widgets/src` must carry a `// PORT-CHECK-OK-DOWNCAST: <reason>` marker on the same line.**
 
-There is exactly one sanctioned site: `RouteRecord::did_complete` in `crates/flui-widgets/src/navigator/route.rs`, where a pop result crosses the `Box<dyn Any + Send>` boundary and is downcast back to the owning route's `Output`.
+Two marked sites exist, and they are not on the same footing:
 
-Why the boundary exists: `Navigator::pop(result)` is called from deep inside a route's subtree, which knows its result type; the navigator, holding `Vec<Box<dyn ErasedRoute>>`, does not. Flutter has the same runtime failure mode (`Route<dynamic>` plus an unchecked `pop<T>`), but Rust would not otherwise need it. **The public shape is signed off in [`ADR-0019`](adr/ADR-0019-navigator-routing-seam.md) *Public API and sign-off (U4)*.**
+- `RouteRecord::did_complete` (`crates/flui-widgets/src/navigator/route.rs`), where a pop result crosses the `Box<dyn Any + Send>` boundary and is downcast back to the owning route's `Output`. **Signed off** in [`ADR-0019`](adr/ADR-0019-navigator-routing-seam.md) *Public API and sign-off (U4)* — the repository owner ruled on this exact boundary.
+- `RouteSettings::argument` (`crates/flui-widgets/src/navigator/route.rs`), downcasting the `arguments` payload named in [`ADR-0024`](adr/ADR-0024-named-routes-seam.md) §4.1. **Not yet signed off** — ADR-0024 §4 reserves this for the repository owner's explicit Gate decision, and §6 records that it landed on direct task authorization instead. The marker exists so port-check's mechanical scope check does not silently miss it; it is not a claim that the Gate ran.
+
+Why the U4 boundary exists: `Navigator::pop(result)` is called from deep inside a route's subtree, which knows its result type; the navigator, holding `Vec<Box<dyn ErasedRoute>>`, does not. Flutter has the same runtime failure mode (`Route<dynamic>` plus an unchecked `pop<T>`), but Rust would not otherwise need it.
 
 Why the guard exists: before U4, `flui-widgets` was outside both FR-036 (trigger 9) and FR-033, so this erasure — the first in the public catalog — would have landed with **no gate at all**. On a type mismatch FLUI logs via `tracing::error!` and completes the future with `None`; Flutter throws a cast error. Per [`PANIC-POLICY.md`](PANIC-POLICY.md), a wrong `pop` type is caller error, not a framework invariant, so it must not panic.
 

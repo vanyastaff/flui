@@ -693,8 +693,17 @@ impl RouteHistory {
         self.push_and_remove_until_with_id(RouteId::next(), route, keep)
     }
 
-    /// `push_and_remove_until`, under an id the
-    /// caller minted — the [`push_with_id`](Self::push_with_id) split.
+    /// `push_and_remove_until`, under an id the caller minted — the
+    /// [`push_with_id`](Self::push_with_id) split.
+    ///
+    /// Test-only. Production (`NavigatorHandle::push_and_remove_until`) uses
+    /// the split [`push_for_remove_until_with_id`](Self::push_for_remove_until_with_id)
+    /// and [`complete_removed_and_flush`](Self::complete_removed_and_flush)
+    /// pair instead, so `keep` never runs inside this module's lock. This
+    /// single-locked-section shape stays for the `RouteHistory`-direct
+    /// harness in `tests.rs`, which targets flush ordering, not the
+    /// `NavigatorHandle` locking concern.
+    #[cfg(test)]
     pub(crate) fn push_and_remove_until_with_id<R: Route>(
         &mut self,
         id: RouteId,
@@ -718,6 +727,52 @@ impl RouteHistory {
 
         self.flush(true);
         (id, result)
+    }
+
+    /// The push half of `NavigatorHandle::push_and_remove_until`, split from
+    /// the removal-completion half so the caller can evaluate `keep` with
+    /// the history lock **released**: a `RoutePredicate` that queries the
+    /// handle back — Flutter's `route.isFirst` / `ModalRoute.withName`
+    /// shape — must not run inside this module's locked section, or it
+    /// deadlocks the owner thread against its own non-reentrant
+    /// `parking_lot::Mutex`.
+    ///
+    /// Appends the new route in `Push`, **without** flushing or evaluating
+    /// any predicate, and hands back every existing entry's id, top-to-
+    /// bottom, exactly as they stood immediately before the push — the same
+    /// walk order the test-only, single-locked-section `push_and_remove_until_with_id`
+    /// used to compute inline. [`complete_removed_and_flush`](Self::complete_removed_and_flush)
+    /// is the second half, run under a second, separate lock acquisition.
+    pub(crate) fn push_for_remove_until_with_id<R: Route>(
+        &mut self,
+        id: RouteId,
+        route: R,
+    ) -> (RouteResult<R::Output>, Vec<RouteId>) {
+        let below_top_to_bottom: Vec<RouteId> =
+            self.entries.iter().rev().map(RouteEntry::id).collect();
+
+        let (erased, result) = RouteRecord::erase_with_id(id, route);
+        self.entries
+            .push(RouteEntry::new(erased, RouteLifecycle::Push));
+
+        (result, below_top_to_bottom)
+    }
+
+    /// The removal half of `push_and_remove_until`: complete every present
+    /// entry named in `remove_ids` — Flutter's `entry.remove()` — then flush
+    /// **once**, so the push and every removal the caller's `keep` decided
+    /// on land in a single flush (`navigator.dart:5347-5371`), exactly as
+    /// `push_and_remove_until_with_id`'s single-locked-section version did.
+    pub(crate) fn complete_removed_and_flush(&mut self, remove_ids: &[RouteId]) {
+        for &target in remove_ids {
+            if let Some(entry) = self.entry_mut(target)
+                && entry.state.is_present()
+            {
+                // Removed routes complete with `None` (`navigator.dart:5360`).
+                entry.arm_complete(None, false);
+            }
+        }
+        self.flush(true);
     }
 
     /// Flutter's `NavigatorState.pop` (`:5642-5675`). Returns whether a present
