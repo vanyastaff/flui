@@ -69,7 +69,7 @@ pub use overlay_route::{
 pub use page_route::{PageRoute, PopupRoute};
 pub use pop_scope::{PopInvokedCallback, PopScope};
 pub use result::RouteResult;
-pub use route::{PushCompletion, Route, RouteId, RouteSettings};
+pub use route::{PushCompletion, Route, RouteArguments, RouteId, RouteSettings};
 pub(crate) use subtree::AnchoredBox;
 
 #[cfg(test)]

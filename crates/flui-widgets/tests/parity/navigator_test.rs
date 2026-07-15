@@ -46,6 +46,19 @@
 //! - `'Route settings'` (routes_test.dart) — a named `RouteSettings` carries
 //!   its name through a one-line `Debug` description —
 //!   [`route_settings_named_exposes_the_name_through_debug`].
+//! - `'Route settings arguments'` (routes_test.dart) — a `RouteSettings`
+//!   arguments payload round-trips through the erased-and-downcast boundary
+//!   FLUI's `Arc<dyn Any + Send + Sync>` shape uses in place of Dart's
+//!   `Object?` —
+//!   [`route_settings_arguments_round_trip_via_downcast`].
+//! - `NavigatorState.popUntil` (`navigator.dart:5651-5660`), exercised
+//!   inline by `'pushReplacement correctly reports didReplace to the
+//!   observer'` and directly by `'Able to pop all routes'`
+//!   (navigator_test.dart) — the kept route survives, every route above it
+//!   runs its full per-route lifecycle on the way out, and a predicate that
+//!   never matches empties the stack instead of panicking —
+//!   [`pop_until_stops_at_the_kept_route_without_popping_it`],
+//!   [`pop_until_with_a_never_satisfied_predicate_empties_the_stack_without_panicking`].
 //! - `'remove route below an other one whose value is awaited'`
 //!   (navigator_test.dart) — removing a non-top route still completes its
 //!   future, and leaves the top route undisturbed —
@@ -61,15 +74,15 @@
 //!   [`pop_observer_reports_the_popped_route_and_its_predecessor`].
 //!
 //! ## Not ported
-//! - `popUntil`/`popUntilWithResult`/`'Able to pop all routes'` — FLUI's
-//!   `NavigatorHandle` exposes only single-step `pop`/`maybe_pop`; there is no
-//!   `pop_until` to port these onto.
+//! - `popUntilWithResult` — FLUI's `pop_until` mirrors Flutter's `popUntil`
+//!   (no-result) shape only; the result-delivering variant, which requires
+//!   deciding *which* popped route receives the caller's value, is deferred
+//!   alongside named-route generation below.
 //! - `onGenerateRoute`, named-route generation, and `'arguments for named
-//!   routes on Navigator'` / `'Route settings arguments'` — FLUI's
-//!   `RouteSettings` deliberately has no `arguments` field yet (`route.rs`:
-//!   "deferred with named-route generation... a second erased `dyn Any` field
-//!   before the sign-off gate has ruled on the first"), and there is no
-//!   route-table / `onGenerateRoute` mechanism to generate a route from a name.
+//!   routes on Navigator'` — there is no route-table / `onGenerateRoute`
+//!   mechanism to generate a route from a name; `RouteSettings.arguments`
+//!   itself is now ported (see *Ported cases*), but nothing yet consumes it
+//!   to build a route.
 //! - `'Navigator.of rootNavigator finds root Navigator'` and nested-navigator
 //!   scoping generally — already ported in `navigator_public.rs`'s
 //!   `public_nested_navigator_lookup_nearest_and_root` and
@@ -408,6 +421,11 @@ fn push_replacement_disposes_the_old_route_and_reports_did_replace() {
         "the displaced route is disposed, not merely popped: {:?}",
         log.all()
     );
+    assert!(
+        !log.all().contains(&("root", RouteEvent::Pop)),
+        "disposed, not merely popped: root must never receive a Pop event: {:?}",
+        log.all()
+    );
     assert_eq!(
         spy.replacements(),
         vec![(Some(new_top), Some(root_id))],
@@ -459,12 +477,110 @@ fn push_and_remove_until_removes_every_route_above_the_kept_one() {
     );
 }
 
+/// `pop_until` pops one route at a time until the predicate accepts the
+/// route now on top; the accepted route is never popped, and every route
+/// above it runs its full per-route lifecycle on the way out (matching
+/// [`sequential_pops_call_did_pop_then_propagate_did_pop_next`], repeated
+/// once per popped route rather than batched).
+///
+/// Oracle: `NavigatorState.popUntil` (`navigator.dart:5651-5660`) — exercised
+/// inline by `'pushReplacement correctly reports didReplace to the
+/// observer'` (`Navigator.of(context).popUntil((route) => route.isFirst)`),
+/// which this crate ports without the `popUntil` setup (see the module doc's
+/// *Ported cases*). This test targets the `popUntil` contract itself.
+///
+/// Red-check: this test was written and run against a `pop_until` that
+/// called `history.pop(None)` **before** checking `keep(candidate)` — an
+/// off-by-one that pops one route too many. On this three-route stack it
+/// popped `root` too (the kept route), which the assertions below caught:
+/// the final stack was empty instead of `[root_id]`, and `log.all()`
+/// contained a `("root", RouteEvent::Pop)` entry. Fixed by checking `keep`
+/// before popping, as written now.
+#[test]
+fn pop_until_stops_at_the_kept_route_without_popping_it() {
+    let log = Log::default();
+    let handle = NavigatorHandle::new();
+    handle.seed_initial(probe(&log, "root"));
+    let mut laid = lay_out(Navigator::new(handle.clone()), loose(400.0));
+    let root_id = handle.current().expect("root seeded");
+
+    handle.push(probe(&log, "mid"));
+    laid.tick();
+    let mid_id = handle.current().expect("mid pushed");
+
+    handle.push(probe(&log, "top"));
+    laid.tick();
+    let top_id = handle.current().expect("top pushed");
+
+    let start = log.len();
+    handle.pop_until(|id| id == root_id);
+    laid.tick();
+
+    assert_eq!(
+        handle.route_ids(),
+        vec![root_id],
+        "everything above root is gone; root itself remains"
+    );
+    assert_eq!(
+        log.since(start),
+        vec![
+            ("top", RouteEvent::Pop),
+            ("top", RouteEvent::Complete(None)),
+            ("mid", RouteEvent::PopNext(top_id)),
+            ("top", RouteEvent::Dispose),
+            ("mid", RouteEvent::Pop),
+            ("mid", RouteEvent::Complete(None)),
+            ("root", RouteEvent::PopNext(mid_id)),
+            ("mid", RouteEvent::Dispose),
+        ],
+        "each popped route runs its full didPop/didComplete/didPopNext/dispose \
+         sequence, in its own flush, before the next candidate is read"
+    );
+    assert!(
+        !log.all().contains(&("root", RouteEvent::Pop)),
+        "the kept route is never popped: {:?}",
+        log.all()
+    );
+}
+
+/// A predicate that never accepts empties the whole stack instead of
+/// looping forever or panicking.
+///
+/// Oracle: `'Able to pop all routes'` (navigator_test.dart) —
+/// `Navigator.of(context).popUntil((route) => false)`, asserting
+/// `tester.takeException()` is `null`. FLUI has no exception channel to
+/// assert against; a clean return (no panic) plus an emptied stack is the
+/// Rust-shaped equivalent.
+///
+/// Red-check: make `pop_until`'s loop condition ignore `history.current()`
+/// returning `None` (e.g. `.unwrap_or(true)` instead of an early `false`) —
+/// it would spin forever popping nothing once the stack is empty, and this
+/// test would hang instead of completing.
+#[test]
+fn pop_until_with_a_never_satisfied_predicate_empties_the_stack_without_panicking() {
+    let handle = NavigatorHandle::new();
+    handle.seed_initial(named_page("root"));
+    let mut laid = lay_out(Navigator::new(handle.clone()), loose(400.0));
+
+    handle.push(named_page("mid"));
+    laid.tick();
+    handle.push(named_page("top"));
+    laid.tick();
+
+    handle.pop_until(|_| false);
+    laid.tick();
+
+    assert!(
+        handle.route_ids().is_empty(),
+        "a predicate that never matches pops every route: {:?}",
+        handle.route_ids()
+    );
+}
+
 /// A named [`RouteSettings`] carries its name through a one-line `Debug`
 /// description.
 ///
 /// Oracle: `'Route settings'` (routes_test.dart) — `hasOneLineDescription`.
-/// FLUI's `RouteSettings` has no `arguments` field (see the module doc's *Not
-/// ported*), so only the name half of `'Route settings arguments'` applies.
 ///
 /// Red-check: derive `Debug` with `#[derive(Debug)]`'s multi-field default
 /// intact but rename the `name` field without updating this assertion — a
@@ -480,6 +596,35 @@ fn route_settings_named_exposes_the_name_through_debug() {
         "a description carrying the type and the name: {rendered}"
     );
     assert!(!rendered.contains('\n'), "one line: {rendered}");
+}
+
+/// `RouteSettings` with no `with_arguments` call reports no payload; one
+/// built with it reports the exact value back through a downcast.
+///
+/// Oracle: `'Route settings arguments'` (routes_test.dart) —
+/// `settings.arguments` is `null` by default, and `same(arguments)` for a
+/// settings built with one. FLUI's arguments payload is an owned value
+/// behind an `Arc`, not a reference cell, so "the exact object" is checked
+/// by downcasting and comparing the value rather than Dart's `same()`
+/// identity matcher.
+///
+/// Red-check: swap `argument`'s `downcast_ref::<T>()` for a call that always
+/// returns `None` — this test's `Some(&Marker(7))` assertion would fail
+/// where a type-confused stub would still pass a bare `is_some()` check.
+#[test]
+fn route_settings_arguments_round_trip_via_downcast() {
+    let settings = RouteSettings::named("A");
+    assert!(settings.arguments().is_none());
+
+    #[derive(Debug, PartialEq)]
+    struct Marker(u32);
+
+    let settings = RouteSettings::named("A").with_arguments(Marker(7));
+    assert_eq!(settings.argument::<Marker>(), Some(&Marker(7)));
+    assert!(
+        settings.argument::<String>().is_none(),
+        "a type-mismatched downcast finds nothing, it does not panic"
+    );
 }
 
 /// Removing a route that sits *below* the top completes its future, and

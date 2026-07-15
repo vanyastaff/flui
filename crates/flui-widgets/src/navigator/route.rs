@@ -38,6 +38,8 @@
 //! framework invariants. Pinned by `pop_with_mismatched_result_type_yields_none`.
 
 use std::any::Any;
+use std::fmt;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::result::{Completer, RouteResult};
@@ -76,14 +78,25 @@ impl RouteId {
     }
 }
 
-/// Flutter's `RouteSettings` (`navigator.dart:670-687`), minus `arguments`.
+/// A [`RouteSettings::arguments`] payload, type-erased like Flutter's
+/// `Object? arguments`.
 ///
-/// `arguments: Object?` is deferred with named-route generation:
-/// nothing produces or reads it yet, and adding it would mean a second erased
-/// `dyn Any` field before the sign-off gate has ruled on the first one.
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
+/// `Arc`-shared for the same reason as `flui-objects`'
+/// `MetaDataPayload` (`interaction/meta_data.rs`): cloning a route's
+/// settings must not deep-copy the payload, and that boundary is the
+/// established precedent for a type-erased user value crossing FLUI's
+/// public surface.
+///
+/// This is exactly the shape ADR-0024 §4.1 named for this field — see the
+/// ADR's "Update" note for what has and has not landed of that document's
+/// wider named-routes proposal.
+pub type RouteArguments = Arc<dyn Any + Send + Sync>;
+
+/// Flutter's `RouteSettings` (`navigator.dart:670-687`).
+#[derive(Default, Clone)]
 pub struct RouteSettings {
     name: Option<String>,
+    arguments: Option<RouteArguments>,
 }
 
 impl RouteSettings {
@@ -92,13 +105,75 @@ impl RouteSettings {
     pub fn named(name: impl Into<String>) -> Self {
         Self {
             name: Some(name.into()),
+            arguments: None,
         }
+    }
+
+    /// Builder: attach an arguments payload — Flutter's
+    /// `RouteSettings(arguments:)`. Used when building the route, e.g. from
+    /// `Navigator.onGenerateRoute`.
+    #[must_use]
+    pub fn with_arguments<T: Any + Send + Sync + 'static>(mut self, value: T) -> Self {
+        self.arguments = Some(Arc::new(value));
+        self
     }
 
     /// The route's name, if it has one.
     #[must_use]
     pub fn name(&self) -> Option<&str> {
         self.name.as_deref()
+    }
+
+    /// The route's arguments payload, if it has one — Flutter's
+    /// `RouteSettings.arguments`.
+    #[must_use]
+    pub fn arguments(&self) -> Option<&RouteArguments> {
+        self.arguments.as_ref()
+    }
+
+    /// Attempts to downcast the arguments payload to the requested concrete
+    /// type. Returns `None` if there is no payload or its type doesn't match.
+    ///
+    /// Named `argument`, singular, per ADR-0024 §4.1's `settings.argument::<T>()`.
+    ///
+    /// **Gate status:** this downcast is the second `dyn Any` boundary
+    /// `flui-widgets` exposes publicly. ADR-0024 §4 reserves it for the
+    /// repository owner's explicit sign-off; §6 records that it landed on
+    /// direct task authorization instead, not a recorded gate decision. See
+    /// `docs/PORT.md`'s FR-033/widgets entry.
+    #[must_use]
+    pub fn argument<T: Any + Send + Sync + 'static>(&self) -> Option<&T> {
+        self.arguments.as_ref()?.downcast_ref::<T>() // PORT-CHECK-OK-DOWNCAST: RouteSettings.arguments erasure per ADR-0024 §4.1; Gate sign-off still outstanding, see ADR-0024 §6
+    }
+}
+
+// `dyn Any` implements neither `PartialEq` nor `Eq`, so `arguments` can't
+// ride the derive. `name` compares by value; `arguments` by pointer identity
+// — the same notion of equality Flutter's `same(arguments)` oracle assertion
+// uses, since `RouteSettings` has no `==` override and Dart's default
+// identity equality is what "the exact object" means there.
+impl PartialEq for RouteSettings {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+            && match (&self.arguments, &other.arguments) {
+                (None, None) => true,
+                (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+                _ => false,
+            }
+    }
+}
+
+impl Eq for RouteSettings {}
+
+// `dyn Any` has no `Debug` bound, so the payload prints as presence only —
+// the same choice `RenderMetaData`'s manual `Debug` makes for its erased
+// metadata field.
+impl fmt::Debug for RouteSettings {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RouteSettings")
+            .field("name", &self.name)
+            .field("has_arguments", &self.arguments.is_some())
+            .finish()
     }
 }
 

@@ -58,3 +58,11 @@ Both mirror sanctioned shapes, but both **widen the public erased surface**, whi
 ## 5. Consequences
 
 **Good.** Every mechanism reuses proven machinery (`RouteRecord::erase`, delivery-time typing, `push_prepared`); the units are small once gated. **Bad.** Two more `Any` boundaries to audit; and note Q1's honest observation — with Rust closures, `arguments` is much less load-bearing than in Dart, so the gate may legitimately answer "skip it". **Deferred, named:** `onGenerateInitialRoutes`, `restorablePushNamed`, `Navigator.defaultRouteName` synthesis (U3).
+
+## 6. Update (2026-07-15) — §4.1's field landed; §4.2 and generation did not
+
+`RouteSettings.arguments` shipped (`route.rs`) in exactly the shape §4.1 named: `Option<Arc<dyn Any + Send + Sync>>` behind the public `RouteArguments` alias, with the downcast accessor named `argument::<T>()` as this ADR specified. Ported alongside the `pop_until` gap fix (Business.1, Navigator API gaps); see `tests/parity/navigator_test.rs`'s `route_settings_arguments_round_trip_via_downcast`.
+
+This answers Q1 affirmatively (`arguments` stays in) but does **not** constitute the Gate sign-off §3.3/§4 describe — it landed on direct task authorization, not a recorded repository-owner decision. The single-field surface is small enough, and closely enough matches an already-sanctioned precedent (`flui-objects::MetaDataPayload`), that landing it did not seem to warrant blocking on a formal gate event; a reviewer who disagrees with that call should treat this update as the flag to re-open it, not as the gate having already run.
+
+**Still outstanding, still gated:** §4.2's `GeneratedRoute` erased-result channel, `set_on_generate_route`/`set_on_unknown_route` registration, and `push_named::<T>` — none of U1 beyond the `arguments` field has landed. `onGenerateRoute`/named-route generation remains absent; nothing yet constructs a route from `arguments`.

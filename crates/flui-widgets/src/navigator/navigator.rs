@@ -768,6 +768,33 @@ impl NavigatorHandle {
         self.remove_route_erased(id, Some(Box::new(result)))
     }
 
+    /// Pop routes one at a time until `keep` accepts the route now on top —
+    /// Flutter's `NavigatorState.popUntil` (`navigator.dart:5651-5660`).
+    ///
+    /// The route `keep` accepts is **not** popped. Unlike
+    /// [`push_and_remove_until`](Self::push_and_remove_until), which removes
+    /// its whole sweep in one flush, this is a bare loop over
+    /// [`pop`](Self::pop): every popped route runs its full lifecycle
+    /// (`did_pop`/`did_complete`/`did_pop_next`/`dispose`) and gets its own
+    /// flush before the next candidate is read, exactly as repeated calls to
+    /// `pop()` would. A predicate that never accepts empties the stack with
+    /// no error — Flutter's `'Able to pop all routes'` regression.
+    ///
+    /// `keep` receives each candidate's [`RouteId`]; same shape as
+    /// [`push_and_remove_until`](Self::push_and_remove_until)'s `keep`.
+    pub fn pop_until(&self, keep: impl Fn(RouteId) -> bool) {
+        while self.shared.mutate(|history| {
+            let Some(candidate) = history.current() else {
+                return false;
+            };
+            if keep(candidate) {
+                return false;
+            }
+            history.pop(None);
+            true
+        }) {}
+    }
+
     /// Flutter's `NavigatorState.canPop` (`:5551-5566`).
     #[must_use]
     pub fn can_pop(&self) -> bool {

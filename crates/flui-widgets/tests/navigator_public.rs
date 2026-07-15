@@ -30,8 +30,8 @@ use parking_lot::Mutex;
 // Exercise the public prelude import path.
 use flui_widgets::prelude::*;
 use flui_widgets::{
-    NavigatorObserver, NavigatorRoute, PushCompletion, Route, RouteContentBuilder, RouteId,
-    RouteSettings,
+    NavigatorObserver, NavigatorRoute, PushCompletion, Route, RouteArguments, RouteContentBuilder,
+    RouteId, RouteSettings,
 };
 
 // ============================================================================
@@ -555,4 +555,6 @@ fn public_prelude_exports_exact_approved_surface() {
     let _: fn(NavigatorHandle) -> Navigator = Navigator::new;
     let _ = PushCompletion::Immediate;
     let _ = RouteSettings::named("x");
+    let _: fn(&RouteSettings) -> Option<&RouteArguments> = RouteSettings::arguments;
+    let _: fn(&NavigatorHandle, fn(RouteId) -> bool) = NavigatorHandle::pop_until;
 }
