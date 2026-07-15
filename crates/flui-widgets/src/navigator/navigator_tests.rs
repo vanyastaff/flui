@@ -1300,7 +1300,7 @@ mod local_history {
 
     /// A modal page whose content captures the route's [`LocalHistoryHandle`]
     /// on mount.
-    fn page_with_handle(
+    pub(super) fn page_with_handle(
         sink: &Arc<Mutex<Option<LocalHistoryHandle>>>,
         duration: Duration,
     ) -> PageRoute<i32> {
@@ -1722,4 +1722,172 @@ fn a_focus_listener_may_call_back_into_the_navigator_during_a_transition() {
     );
 
     manager.unfocus();
+}
+
+// ============================================================================
+// User gestures (navigator.dart:5803-5860)
+// ============================================================================
+
+mod user_gesture {
+    use super::*;
+    use crate::navigator::observer::NavigatorObserver;
+    use crate::navigator::route::RouteId;
+
+    /// Records every `did_start_user_gesture`/`did_stop_user_gesture` call, in order.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    enum Note {
+        Start(RouteId, Option<RouteId>),
+        Stop,
+    }
+
+    #[derive(Default)]
+    struct Spy {
+        notes: Mutex<Vec<Note>>,
+    }
+
+    impl Spy {
+        fn notes(&self) -> Vec<Note> {
+            self.notes.lock().clone()
+        }
+    }
+
+    impl NavigatorObserver for Spy {
+        fn did_start_user_gesture(&self, route: RouteId, previous: Option<RouteId>) {
+            self.notes.lock().push(Note::Start(route, previous));
+        }
+        fn did_stop_user_gesture(&self) {
+            self.notes.lock().push(Note::Stop);
+        }
+    }
+
+    /// Flutter's `didStartUserGesture` resolves `route`/`previousRoute` from the
+    /// live history, so a two-route stack reports the top and the route beneath.
+    ///
+    /// Red-check: don't release the history lock before firing observers — a
+    /// `did_start_user_gesture` observer that reads `handle.route_ids()` back
+    /// deadlocks instead of failing this assertion.
+    #[test]
+    fn did_start_user_gesture_reports_the_current_and_previous_route() {
+        let built = Built::default();
+        let handle = NavigatorHandle::new();
+        handle.seed_initial(page(&built, "/"));
+        let root = handle.route_ids()[0];
+        let spy = Arc::new(Spy::default());
+        handle.add_observer(Arc::clone(&spy) as Arc<dyn NavigatorObserver>);
+
+        let _pushed = handle.push(page(&built, "/next"));
+        let top_id = *handle.route_ids().last().expect("pushed route present");
+
+        assert!(!handle.user_gesture_in_progress());
+        handle.did_start_user_gesture();
+        assert!(handle.user_gesture_in_progress());
+        assert_eq!(spy.notes(), vec![Note::Start(top_id, Some(root))]);
+
+        handle.did_stop_user_gesture();
+        assert!(!handle.user_gesture_in_progress());
+        assert_eq!(
+            spy.notes(),
+            vec![Note::Start(top_id, Some(root)), Note::Stop]
+        );
+    }
+
+    /// The first (bottom) route has nothing beneath it — Flutter's `routeIndex
+    /// > 0` guard in `didStartUserGesture`.
+    #[test]
+    fn did_start_user_gesture_on_the_first_route_reports_no_previous() {
+        let built = Built::default();
+        let handle = NavigatorHandle::new();
+        handle.seed_initial(page(&built, "/"));
+        let root = handle.route_ids()[0];
+        let spy = Arc::new(Spy::default());
+        handle.add_observer(Arc::clone(&spy) as Arc<dyn NavigatorObserver>);
+
+        handle.did_start_user_gesture();
+        assert_eq!(spy.notes(), vec![Note::Start(root, None)]);
+        handle.did_stop_user_gesture();
+    }
+
+    /// Nested/overlapping gestures on the same navigator collapse to one
+    /// notification pair — only the 0→1 and 1→0 transitions fire.
+    #[test]
+    fn nested_user_gestures_notify_observers_exactly_once() {
+        let built = Built::default();
+        let handle = NavigatorHandle::new();
+        handle.seed_initial(page(&built, "/"));
+        let spy = Arc::new(Spy::default());
+        handle.add_observer(Arc::clone(&spy) as Arc<dyn NavigatorObserver>);
+
+        handle.did_start_user_gesture();
+        handle.did_start_user_gesture();
+        assert_eq!(spy.notes().len(), 1, "second start must not re-notify");
+        assert!(handle.user_gesture_in_progress());
+
+        handle.did_stop_user_gesture();
+        assert_eq!(spy.notes().len(), 1, "still one gesture outstanding");
+        assert!(handle.user_gesture_in_progress());
+
+        handle.did_stop_user_gesture();
+        assert_eq!(spy.notes().len(), 2, "the last stop notifies");
+        assert!(!handle.user_gesture_in_progress());
+    }
+
+    /// A route with a `LocalHistoryEntry` handles its own pop, so Flutter's
+    /// `!route.willHandlePopInternally` guard reports no previous route even
+    /// with a route beneath it.
+    #[test]
+    fn did_start_user_gesture_reports_no_previous_when_the_top_handles_its_own_pop() {
+        use std::time::Duration;
+
+        use crate::navigator::local_history::{LocalHistoryEntry, LocalHistoryHandle};
+
+        let built = Built::default();
+        let (handle, mut harness) = navigator_with(&built);
+        let sink: Arc<Mutex<Option<LocalHistoryHandle>>> = Arc::new(Mutex::new(None));
+        let _pushed = handle.push(super::local_history::page_with_handle(
+            &sink,
+            Duration::ZERO,
+        ));
+        harness.tick();
+        let local = sink.lock().clone().expect("the page captured its handle");
+        let _entry = local.add(LocalHistoryEntry::new());
+
+        let top_id = *handle.route_ids().last().expect("pushed route present");
+        let spy = Arc::new(Spy::default());
+        handle.add_observer(Arc::clone(&spy) as Arc<dyn NavigatorObserver>);
+
+        handle.did_start_user_gesture();
+        assert_eq!(spy.notes(), vec![Note::Start(top_id, None)]);
+        handle.did_stop_user_gesture();
+    }
+
+    /// A `NavigatorObserver::did_start_user_gesture` callback that calls back
+    /// into the navigator (e.g. `can_pop`) must not deadlock — the history
+    /// lock is released before observers run (the same lock-hazard class the
+    /// `PopScope` fan-out and the focus-listener path were fixed for).
+    #[test]
+    fn an_observer_may_call_back_into_the_navigator_from_did_start_user_gesture() {
+        struct ReentrantObserver {
+            handle: NavigatorHandle,
+            calls_seen: AtomicUsize,
+        }
+        impl NavigatorObserver for ReentrantObserver {
+            fn did_start_user_gesture(&self, _route: RouteId, _previous: Option<RouteId>) {
+                let _ = self.handle.can_pop();
+                self.calls_seen.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        let built = Built::default();
+        let handle = NavigatorHandle::new();
+        handle.seed_initial(page(&built, "/"));
+        let observer = Arc::new(ReentrantObserver {
+            handle: handle.clone(),
+            calls_seen: AtomicUsize::new(0),
+        });
+        handle.add_observer(Arc::clone(&observer) as Arc<dyn NavigatorObserver>);
+
+        handle.did_start_user_gesture();
+        assert_eq!(observer.calls_seen.load(Ordering::SeqCst), 1);
+        handle.did_stop_user_gesture();
+    }
 }

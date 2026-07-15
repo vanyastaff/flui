@@ -526,3 +526,85 @@ fn page_and_transitions_builders_receive_both_animations_and_rebuild_on_tick() {
         "the page builder sees the current animation value, got {samples:?}"
     );
 }
+
+// ============================================================================
+// back_gesture — the swipe-back detector substrate (back_gesture.rs)
+// ============================================================================
+
+/// `PageRoute::back_gesture(true)` wraps the page in the edge-swipe-back
+/// detector (`ModalScopeState::build`, `back_gesture.rs`'s `Stack` +
+/// `Positioned` + `Listener` + arena-fed recognizer). Mounting, laying out
+/// and painting it end to end must not panic, and once the entrance settles
+/// the route reports itself gesture-eligible.
+#[test]
+fn back_gesture_enabled_route_mounts_and_becomes_pop_gesture_eligible() {
+    let (navigator, mut harness, _bottom) = navigator_with_seed();
+
+    let route = PageRoute::<i32>::new(leaf).back_gesture(true);
+    let transition = route.transition_handle();
+    let _pushed = harness.enter_owner_scope(|| navigator.push(route));
+    complete_entrance(&transition, &mut harness);
+
+    let top = *navigator.route_ids().last().expect("pushed");
+    assert!(
+        navigator.pop_gesture_enabled(top),
+        "a settled, non-first, unvetoed route with back_gesture(true) is eligible"
+    );
+}
+
+/// The detector wrapper's presence must not flip the page subtree's
+/// identity: a `StatefulView` inside the page keeps its state (here, its
+/// `create_state` call count stays at 1) across the rebuilds a released-but-
+/// cancelled gesture ("stay": the finger let go before crossing halfway, so
+/// the route animates back to fully on top rather than popping) drives.
+///
+/// Red-check: wrap the page in a *freshly constructed* detector view each
+/// build instead of the same stable shape — `Probe::create_state` would then
+/// fire more than once as the element tree treats the page as a new subtree.
+#[test]
+fn back_gesture_enabled_preserves_page_state_across_a_cancelled_gesture() {
+    let created = Arc::new(AtomicUsize::new(0));
+    let probe = Probe(Arc::clone(&created));
+
+    let (navigator, mut harness, _bottom) = navigator_with_seed();
+    let route = PageRoute::<i32>::new(move |_ctx, _animation, _secondary| {
+        probe.clone().into_view().boxed()
+    })
+    .back_gesture(true);
+    let transition = route.transition_handle();
+    let _pushed = harness.enter_owner_scope(|| navigator.push(route));
+    complete_entrance(&transition, &mut harness);
+    assert_eq!(
+        created.load(Ordering::Relaxed),
+        1,
+        "one initial create_state"
+    );
+
+    let top = *navigator.route_ids().last().expect("pushed");
+    let controller = transition.controller().expect("installed");
+
+    // Simulate a released-but-cancelled drag: partway back, then released
+    // with no fling and value > 0.5, so the oracle's `dragEnd` "stay" branch
+    // animates forward to 1.0 rather than popping.
+    let gesture =
+        super::back_gesture::BackGestureController::new(navigator.clone(), top, controller.clone());
+    gesture.drag_update(0.2); // value -> 0.8
+    let still_settling = gesture.drag_end(0.0);
+    assert!(still_settling, "the stay animation keeps running");
+    assert_eq!(controller.status(), AnimationStatus::Forward);
+
+    // Drive the stay animation to completion across several ticks — each one
+    // rebuilds `ModalScope`, and therefore the detector-wrapped page.
+    for _ in 0..4 {
+        harness.tick();
+    }
+    controller.set_value(1.0);
+    harness.tick();
+
+    assert_eq!(
+        created.load(Ordering::Relaxed),
+        1,
+        "the page's StatefulView must not be recreated across the cancelled \
+         gesture's rebuilds"
+    );
+}

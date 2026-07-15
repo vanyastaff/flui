@@ -126,6 +126,20 @@ pub trait NavigatorObserver {
     fn did_replace(&self, new_route: Option<RouteId>, old_route: Option<RouteId>) {}
     /// The topmost present route changed.
     fn did_change_top(&self, top: RouteId, previous_top: Option<RouteId>) {}
+
+    /// A user gesture (e.g. an edge swipe-back) started manipulating `route`.
+    /// Flutter's `NavigatorObserver.didStartUserGesture` (`navigator.dart:811`).
+    ///
+    /// Fires once per navigator when the in-progress gesture count goes from
+    /// zero to one — [`NavigatorHandle::did_start_user_gesture`] paired with
+    /// [`NavigatorHandle::did_stop_user_gesture`] tracks that count, not this
+    /// callback directly, so a nested/overlapping gesture on the same
+    /// navigator does not re-fire.
+    fn did_start_user_gesture(&self, route: RouteId, previous: Option<RouteId>) {}
+    /// The user gesture reported by the most recent
+    /// [`did_start_user_gesture`](Self::did_start_user_gesture) finished.
+    /// Flutter's `NavigatorObserver.didStopUserGesture` (`navigator.dart:816`).
+    fn did_stop_user_gesture(&self) {}
 }
 
 /// One queued notification. Flutter's `_NavigatorObservation` hierarchy

@@ -1247,6 +1247,7 @@ fn binding_for(history: &RouteHistory, id: RouteId) -> RouteBinding {
             entries: Arc::new(Mutex::new(std::collections::HashMap::new())),
             subtrees: Arc::new(Mutex::new(std::collections::HashMap::new())),
             modals: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            pop_pacing: Arc::new(Mutex::new(std::collections::HashMap::new())),
         },
     )
 }
@@ -1267,6 +1268,7 @@ fn route_binding_wake_accepts_owner_local_rc_state() {
             entries: Arc::new(Mutex::new(std::collections::HashMap::new())),
             subtrees: Arc::new(Mutex::new(std::collections::HashMap::new())),
             modals: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            pop_pacing: Arc::new(Mutex::new(std::collections::HashMap::new())),
         },
     );
 

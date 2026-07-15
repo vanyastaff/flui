@@ -33,6 +33,7 @@
 //! 2.0, restoration, named-route generation, `PopScope`, `LocalHistoryRoute`,
 //! per-route focus scope, and gesture-driven (`transitionOnUserGestures`) flights.
 
+mod back_gesture;
 mod binding;
 mod hero;
 mod hero_controller;

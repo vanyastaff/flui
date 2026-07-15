@@ -571,12 +571,67 @@ impl RouteHistory {
             .map(RouteEntry::state)
     }
 
+    /// Whether `id` names a route that is both in this stack and present —
+    /// Flutter's `Route.isActive` (`navigator.dart:584-643`: `navigator!
+    /// .contains(this) && entry.isPresent`, collapsed into one lookup since a
+    /// route not in this navigator's stack cannot be found at all).
+    pub(crate) fn is_present(&self, id: RouteId) -> bool {
+        self.entries
+            .iter()
+            .any(|entry| entry.id() == id && entry.state.is_present())
+    }
+
+    /// `id`'s own `Route::will_handle_pop_internally` — e.g. a non-empty
+    /// `LocalHistoryRoute` claims the pop. `None` if `id` names no entry
+    /// (already disposed and dropped, or never existed).
+    pub(crate) fn will_handle_pop_internally(&self, id: RouteId) -> Option<bool> {
+        self.entries
+            .iter()
+            .find(|entry| entry.id() == id)
+            .map(|entry| entry.route.will_handle_pop_internally())
+    }
+
+    /// The bottom-most **present** route — Flutter's `Route.isFirst`
+    /// (`navigator.dart:601-611`): `_firstRouteEntryWhereOrNull(isPresentPredicate)`.
+    /// Read by `NavigatorHandle::pop_gesture_enabled`'s `isFirst` check.
+    pub(crate) fn first_present(&self) -> Option<RouteId> {
+        self.entries
+            .iter()
+            .find(|entry| entry.state.is_present())
+            .map(RouteEntry::id)
+    }
+
     /// The topmost present route. Flutter's `_lastRouteEntryWhereOrNull(isPresent)`.
     pub(crate) fn current(&self) -> Option<RouteId> {
         self.entries
             .iter()
             .rfind(|entry| entry.state.is_present())
             .map(RouteEntry::id)
+    }
+
+    /// The route a user gesture (e.g. an edge swipe-back) is manipulating,
+    /// and the route beneath it a completed pop would reveal — Flutter's
+    /// inline resolution inside `NavigatorState.didStartUserGesture`
+    /// (`navigator.dart:5826-5841`): scans with `willBePresentPredicate`
+    /// (a route mid-push counts, unlike `current`'s `isPresent`), and leaves
+    /// `previous` `None` when the top route handles its own pop (a
+    /// `LocalHistoryRoute` swallows it internally, so there is nothing
+    /// "beneath" from the gesture's point of view).
+    pub(crate) fn top_and_previous_for_gesture(&self) -> Option<(RouteId, Option<RouteId>)> {
+        let route_index = self
+            .entries
+            .iter()
+            .rposition(|entry| entry.state.will_be_present())?;
+        let top_entry = &self.entries[route_index];
+        let top = top_entry.id();
+        let previous = if top_entry.route.will_handle_pop_internally() || route_index == 0 {
+            None
+        } else {
+            // Safety of the cast: `route_index > 0` here, and `entries.len()`
+            // is bounded well under `isize::MAX` for any real route stack.
+            self.route_before((route_index - 1) as isize, RouteLifecycle::will_be_present)
+        };
+        Some((top, previous))
     }
 
     // ── Public mutations (each ends in a flush, as in Flutter) ───────────────

@@ -65,25 +65,23 @@ impl<C: Curve + Clone + Send + Sync> CurvedAnimation<C> {
 
         let curve_direction = Arc::new(Mutex::new(None));
         let weak_direction = Arc::downgrade(&curve_direction);
-        let weak_parent = Arc::downgrade(&parent);
         let status_id = parent.add_status_listener(Arc::new(move |status| {
             if let Some(direction) = weak_direction.upgrade() {
                 let mut direction = direction.lock();
                 match status {
-                    // At rest the lock is released; the next run re-captures.
+                    // At rest the lock is released; the next transition re-captures.
                     AnimationStatus::Dismissed | AnimationStatus::Completed => *direction = None,
-                    // First running transition wins; mid-run flips keep it.
+                    // First transition into a running status wins; a same-run
+                    // direction flip (or a directional report from `set_value`
+                    // that isn't a fresh run) keeps the entry curve, matching
+                    // Flutter `CurvedAnimation._updateCurveDirection`: it reads
+                    // only the reported `AnimationStatus`, with no separate
+                    // "is a ticker literally running" check — the controller's
+                    // own change-detected status emission (`_checkStatusChanged`)
+                    // is what makes `get_or_insert` fire exactly once per real
+                    // transition.
                     AnimationStatus::Forward | AnimationStatus::Reverse => {
-                        // Only capture from a LIVE run: a stopped controller's
-                        // set_value at an interior value also reports a
-                        // directional status (Flutter `_internalSetValue`),
-                        // and caching that would pin the wrong curve for the
-                        // next real run (e.g. position at 0.5, then
-                        // reverse()).
-                        let running = weak_parent.upgrade().is_some_and(|p| p.is_animating());
-                        if running {
-                            direction.get_or_insert(status);
-                        }
+                        direction.get_or_insert(status);
                     }
                 }
             }
@@ -309,11 +307,14 @@ mod tests {
     }
 
     #[test]
-    fn interior_set_value_does_not_pin_curve_direction() {
-        // A stopped controller positioned mid-range reports a directional
-        // status (Flutter `_internalSetValue`); that must NOT be captured as
-        // the run direction, or a subsequent reverse() would run on the
-        // forward curve.
+    fn interior_set_value_pins_curve_direction_like_a_live_run() {
+        // Flutter `CurvedAnimation._updateCurveDirection` (3.44.0) reads only
+        // the reported `AnimationStatus` — it has no separate check for
+        // whether a ticker is literally running. So the FIRST transition
+        // into a directional status, even one reported by the `value=`
+        // setter's own `_internalSetValue`, pins the entry direction; a
+        // same-run flip (here, `reverse()` with no intervening Dismissed/
+        // Completed) keeps that pinned curve to avoid a visual discontinuity.
         let scheduler = Arc::new(Scheduler::new());
         let controller = Arc::new(AnimationController::new(
             Duration::from_millis(100),
@@ -325,15 +326,47 @@ mod tests {
         )
         .with_reverse_curve(Curves::EaseInQuint);
 
-        // Position while stopped: fires a Forward status with no live run.
+        // Dismissed -> Forward: the FIRST directional transition, pinning
+        // the forward curve.
         controller.set_value(0.5);
-        // Now genuinely start in reverse: the reverse curve must apply.
+        // reverse() flips the running direction but not the pinned curve.
         let _ = controller.reverse();
+        let value = curved.value();
+        let expected = 0.5; // forward curve is the identity cubic
+        assert!(
+            (value - expected).abs() < 1e-3,
+            "reverse() right after the first set_value keeps the forward \
+             curve pinned from that first transition ({value} vs {expected})"
+        );
+
+        controller.dispose();
+    }
+
+    #[test]
+    fn settling_to_rest_releases_the_curve_direction_pin() {
+        // Flutter `_updateCurveDirection` resets `_curveDirection` to null on
+        // Dismissed/Completed, so a run that genuinely starts fresh after
+        // settling picks its own curve rather than inheriting a stale pin.
+        let scheduler = Arc::new(Scheduler::new());
+        let controller = Arc::new(AnimationController::new(
+            Duration::from_millis(100),
+            scheduler,
+        ));
+        let curved = CurvedAnimation::new(
+            controller.clone() as Arc<dyn Animation<f32>>,
+            Cubic::new(0.0, 0.0, 1.0, 1.0), // y(x) = x
+        )
+        .with_reverse_curve(Curves::EaseInQuint);
+
+        controller.set_value(0.5); // pins forward
+        controller.set_value(1.0); // Completed -> pin released
+        let _ = controller.reverse(); // fresh entry, genuinely Reverse
+        controller.set_value(0.5);
         let value = curved.value();
         let expected = Curves::EaseInQuint.transform(0.5);
         assert!(
             (value - expected).abs() < 1e-3,
-            "a run entered in Reverse after an interior set_value must use \
+            "a run entered in Reverse after settling to Completed must use \
              the reverse curve ({value} vs {expected})"
         );
 

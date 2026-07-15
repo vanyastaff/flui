@@ -1,6 +1,7 @@
 //! `AnimationController` - The primary animation driver.
 
 use crate::animation::{Animation, AnimationDirection, StatusCallback};
+use crate::curve::Curve;
 use crate::error::AnimationError;
 use crate::simulation::{Simulation, SpringDescription, SpringSimulation, SpringType, Tolerance};
 use crate::status::AnimationStatus;
@@ -187,6 +188,22 @@ struct AnimationControllerInner {
 
     /// Active physics simulation (if using fling/animate_with).
     simulation: Option<Box<dyn Simulation>>,
+
+    /// Per-run easing curve for a time-based `animate_to_curved`/
+    /// `animate_back_curved` run (`None` = linear). Cleared by
+    /// [`clear_run_modes`](AnimationControllerInner::clear_run_modes) so a
+    /// later plain `forward`/`reverse`/`animate_to` run does not inherit a
+    /// stale curve. Flutter parity: `AnimationController._animateToInternal`
+    /// threads `curve` straight into `_InterpolationSimulation`.
+    run_curve: Option<Arc<dyn Curve + Send + Sync>>,
+
+    /// Status most recently delivered to status listeners. The emission seam
+    /// ([`take_status_change`](AnimationControllerInner::take_status_change))
+    /// compares against this before firing, so a call that leaves `status`
+    /// unchanged (e.g. `set_value` re-asserting the same directional status
+    /// every frame of a gesture drag) does not re-notify. Flutter parity:
+    /// `AnimationController._lastReportedStatus` / `_checkStatusChanged`.
+    last_reported_status: AnimationStatus,
 }
 
 impl AnimationController {
@@ -276,6 +293,8 @@ impl AnimationController {
             repeat_count: None,
             repeat_done: 0,
             simulation: None,
+            run_curve: None,
+            last_reported_status: AnimationStatus::Dismissed,
         };
 
         Ok(Self {
@@ -422,10 +441,7 @@ impl AnimationController {
         let mut inner = self.inner.lock();
         Self::check_disposed(&inner)?;
 
-        inner.clear_run_modes();
-        if let Some(ticker) = &mut inner.ticker {
-            ticker.stop();
-        }
+        inner.stop_running();
 
         let status = inner.settled_status_directed();
         inner.status = status;
@@ -452,10 +468,12 @@ impl AnimationController {
             ticker.stop();
         }
 
-        let callbacks = Self::snapshot_status_listeners(&inner);
+        let callbacks = inner.take_status_change();
         drop(inner);
         self.notifier.notify_listeners();
-        Self::fire_status(&callbacks, AnimationStatus::Dismissed);
+        if let Some(callbacks) = callbacks {
+            Self::fire_status(&callbacks, AnimationStatus::Dismissed);
+        }
         Ok(())
     }
 
@@ -480,7 +498,7 @@ impl AnimationController {
         target: f32,
         duration: Option<Duration>,
     ) -> Result<(), AnimationError> {
-        self.drive_to(target, duration, false)
+        self.drive_to(target, duration, false, None)
     }
 
     /// Animate back to a specific value, defaulting to the reverse duration.
@@ -497,12 +515,46 @@ impl AnimationController {
         target: f32,
         duration: Option<Duration>,
     ) -> Result<(), AnimationError> {
-        self.drive_to(target, duration, true)
+        self.drive_to(target, duration, true, None)
     }
 
-    /// Shared driver for [`animate_to`](Self::animate_to)/[`animate_back`](Self::animate_back):
-    /// linearly interpolate from the current value to `target`, picking
-    /// direction from their order. `prefer_reverse_duration` makes the
+    /// Like [`animate_to`](Self::animate_to), but eases the run through
+    /// `curve` instead of running linearly. Flutter parity:
+    /// `AnimationController.animateTo(target, duration: ..., curve: ...)`,
+    /// which threads `curve` into `_InterpolationSimulation`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AnimationError::Disposed`] if the controller has been disposed.
+    pub fn animate_to_curved(
+        &self,
+        target: f32,
+        duration: Option<Duration>,
+        curve: Arc<dyn Curve + Send + Sync>,
+    ) -> Result<(), AnimationError> {
+        self.drive_to(target, duration, false, Some(curve))
+    }
+
+    /// Like [`animate_back`](Self::animate_back), but eases the run through
+    /// `curve` instead of running linearly. Flutter parity:
+    /// `AnimationController.animateBack(target, duration: ..., curve: ...)`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AnimationError::Disposed`] if the controller has been disposed.
+    pub fn animate_back_curved(
+        &self,
+        target: f32,
+        duration: Option<Duration>,
+        curve: Arc<dyn Curve + Send + Sync>,
+    ) -> Result<(), AnimationError> {
+        self.drive_to(target, duration, true, Some(curve))
+    }
+
+    /// Shared driver for [`animate_to`](Self::animate_to)/[`animate_back`](Self::animate_back)
+    /// and their `_curved` variants: interpolate from the current value to
+    /// `target`, picking direction from their order and easing through
+    /// `curve` (`None` = linear). `prefer_reverse_duration` makes the
     /// `None`-duration default the reverse duration regardless of the run's
     /// direction (the `animate_back` contract).
     fn drive_to(
@@ -510,12 +562,14 @@ impl AnimationController {
         target: f32,
         duration: Option<Duration>,
         prefer_reverse_duration: bool,
+        curve: Option<Arc<dyn Curve + Send + Sync>>,
     ) -> Result<(), AnimationError> {
         let mut inner = self.inner.lock();
         Self::check_disposed(&inner)?;
 
         let target = target.clamp(inner.lower_bound, inner.upper_bound);
         inner.clear_run_modes();
+        inner.run_curve = curve;
         inner.start_value = inner.value;
         inner.target_value = target;
         inner.direction = if target >= inner.value {
@@ -567,10 +621,12 @@ impl AnimationController {
         }
         let status = inner.settled_status_directed();
         inner.status = status;
-        let callbacks = Self::snapshot_status_listeners(&inner);
+        let callbacks = inner.take_status_change();
         drop(inner);
         self.notifier.notify_listeners();
-        Self::fire_status(&callbacks, status);
+        if let Some(callbacks) = callbacks {
+            Self::fire_status(&callbacks, status);
+        }
     }
 
     /// Repeat the animation, bouncing if `reverse` is true. Repeats forever.
@@ -874,10 +930,12 @@ impl AnimationController {
             }
             let status = inner.settled_status_directed();
             inner.status = status;
-            let callbacks = Self::snapshot_status_listeners(&inner);
+            let callbacks = inner.take_status_change();
             drop(inner);
             self.notifier.notify_listeners();
-            Self::fire_status(&callbacks, status);
+            if let Some(callbacks) = callbacks {
+                Self::fire_status(&callbacks, status);
+            }
         } else {
             drop(inner);
             self.notifier.notify_listeners();
@@ -898,7 +956,17 @@ impl AnimationController {
             narrow_f32((cycle / duration.as_secs_f64()).clamp(0.0, 1.0))
         };
         let range = inner.target_value - inner.start_value;
-        inner.value = inner.start_value + range * t;
+        // Flutter parity: `_InterpolationSimulation.x` special-cases the
+        // endpoints to the exact begin/end value and only runs the curve
+        // through the interior, so a curve that overshoots slightly at its
+        // bounds (e.g. an elastic curve) never reports outside [start, target].
+        let eased_t = match (&inner.run_curve, t) {
+            (_, 0.0) => 0.0,
+            (_, t) if t >= 1.0 => 1.0,
+            (Some(curve), t) => curve.transform(t),
+            (None, t) => t,
+        };
+        inner.value = inner.start_value + range * eased_t;
 
         if t < 1.0 {
             drop(inner);
@@ -963,10 +1031,12 @@ impl AnimationController {
                 inner.is_repeating = false;
                 let status = inner.settled_status_directed();
                 inner.status = status;
-                let callbacks = Self::snapshot_status_listeners(&inner);
+                let callbacks = inner.take_status_change();
                 drop(inner);
                 self.notifier.notify_listeners();
-                Self::fire_status(&callbacks, status);
+                if let Some(callbacks) = callbacks {
+                    Self::fire_status(&callbacks, status);
+                }
                 return;
             }
 
@@ -977,14 +1047,18 @@ impl AnimationController {
             // `begin_next_repeat_cycle` is an idempotent reset in restart mode
             // and a pure direction flip in bounce mode, so only the parity of the
             // retired-cycle count matters — collapse N cycles to at most one
-            // transition rather than looping.
-            let status_changed = if inner.repeat_reverse {
-                cycles % 2 == 1 && inner.begin_next_repeat_cycle()
+            // transition rather than looping. In bounce mode an even retired
+            // count cancels out (net no flip), so the cycle-begin step is
+            // skipped entirely rather than calling it twice.
+            if inner.repeat_reverse {
+                if cycles % 2 == 1 {
+                    inner.begin_next_repeat_cycle();
+                }
             } else {
-                inner.begin_next_repeat_cycle()
-            };
+                inner.begin_next_repeat_cycle();
+            }
             let status = inner.status;
-            let callbacks = status_changed.then(|| Self::snapshot_status_listeners(&inner));
+            let callbacks = inner.take_status_change();
             drop(inner);
             self.notifier.notify_listeners();
             if let Some(callbacks) = callbacks {
@@ -999,19 +1073,28 @@ impl AnimationController {
         }
         let status = inner.settled_status_keep_direction();
         inner.status = status;
-        let callbacks = Self::snapshot_status_listeners(&inner);
+        let callbacks = inner.take_status_change();
         drop(inner);
         self.notifier.notify_listeners();
-        Self::fire_status(&callbacks, status);
+        if let Some(callbacks) = callbacks {
+            Self::fire_status(&callbacks, status);
+        }
     }
 
     /// Set the value directly without animating; recomputes status and notifies.
+    ///
+    /// Stops any active run first (Flutter parity: `AnimationController`'s
+    /// `value=` setter calls `stop()` before `_internalSetValue`) — otherwise
+    /// a live ticker keeps re-registering itself with the scheduler and the
+    /// next frame recomputes the value from the stale run's `start_value`/
+    /// `target_value`, silently overwriting what was just set.
     ///
     /// A `NaN` input is canonicalized to the lower bound: Rust's `clamp`
     /// propagates `NaN`, which would otherwise poison every downstream
     /// curve/tween evaluation for the rest of the controller's life.
     pub fn set_value(&self, value: f32) {
         let mut inner = self.inner.lock();
+        inner.stop_running();
         let value = if value.is_nan() {
             tracing::warn!(
                 "set_value(NaN) canonicalized to lower bound; drive the controller with finite values"
@@ -1023,10 +1106,12 @@ impl AnimationController {
         inner.value = value.clamp(inner.lower_bound, inner.upper_bound);
         let status = inner.settled_status_keep_direction();
         inner.status = status;
-        let callbacks = Self::snapshot_status_listeners(&inner);
+        let callbacks = inner.take_status_change();
         drop(inner);
         self.notifier.notify_listeners();
-        Self::fire_status(&callbacks, status);
+        if let Some(callbacks) = callbacks {
+            Self::fire_status(&callbacks, status);
+        }
     }
 
     /// **CRITICAL:** Dispose when done to prevent leaks.
@@ -1088,17 +1173,6 @@ impl AnimationController {
         }
     }
 
-    /// Snapshot status callbacks so they can be fired after the lock is dropped.
-    fn snapshot_status_listeners(
-        inner: &AnimationControllerInner,
-    ) -> SmallVec<[StatusCallback; 4]> {
-        inner
-            .status_listeners
-            .iter()
-            .map(|(_, cb)| Arc::clone(cb))
-            .collect()
-    }
-
     /// Fire status callbacks. MUST be called with no controller lock held.
     fn fire_status(callbacks: &[StatusCallback], status: AnimationStatus) {
         for cb in callbacks {
@@ -1110,22 +1184,55 @@ impl AnimationController {
     ///
     /// Used by the run-start methods, which change status but not value.
     fn emit_status_after_unlock(
-        inner: parking_lot::MutexGuard<'_, AnimationControllerInner>,
+        mut inner: parking_lot::MutexGuard<'_, AnimationControllerInner>,
         status: AnimationStatus,
     ) {
-        let callbacks = Self::snapshot_status_listeners(&inner);
+        let callbacks = inner.take_status_change();
         drop(inner);
-        Self::fire_status(&callbacks, status);
+        if let Some(callbacks) = callbacks {
+            Self::fire_status(&callbacks, status);
+        }
     }
 }
 
 impl AnimationControllerInner {
-    /// Clear repeat/simulation/per-run-duration modes (used when a new explicit
-    /// run begins).
+    /// Clear repeat/simulation/per-run-duration/curve modes (used when a new
+    /// explicit run begins).
     fn clear_run_modes(&mut self) {
         self.is_repeating = false;
         self.run_duration = None;
         self.simulation = None;
+        self.run_curve = None;
+    }
+
+    /// Halt any active run at the current value: stop the ticker and clear
+    /// simulation/repeat/curve state, without touching `status` or emitting
+    /// any notification. Flutter parity: the raw `AnimationController.stop()`
+    /// that the `value=` setter calls before `_internalSetValue` — it only
+    /// clears `_simulation`/`_lastElapsedDuration` and stops the ticker, it
+    /// does not recompute status (the caller does that separately).
+    fn stop_running(&mut self) {
+        self.clear_run_modes();
+        if let Some(ticker) = &mut self.ticker {
+            ticker.stop();
+        }
+    }
+
+    /// Snapshot the callbacks to fire **iff** `self.status` differs from the
+    /// last-reported status, updating the marker so a later same-status
+    /// emission is suppressed. Every status-emission site in this file
+    /// funnels through this seam — Flutter parity: `_checkStatusChanged`.
+    fn take_status_change(&mut self) -> Option<SmallVec<[StatusCallback; 4]>> {
+        if self.status == self.last_reported_status {
+            return None;
+        }
+        self.last_reported_status = self.status;
+        Some(
+            self.status_listeners
+                .iter()
+                .map(|(_, cb)| Arc::clone(cb))
+                .collect(),
+        )
     }
 
     /// Effective duration for the current run: per-run override, else repeat
@@ -1218,9 +1325,10 @@ impl AnimationControllerInner {
         }
     }
 
-    /// Set up the next repeat cycle; returns whether the status changed (only
-    /// the bounce path flips Forward<->Reverse).
-    fn begin_next_repeat_cycle(&mut self) -> bool {
+    /// Set up the next repeat cycle: flips direction in bounce mode, restarts
+    /// at `repeat_min` otherwise. Status change detection is the caller's
+    /// job, via [`take_status_change`](Self::take_status_change).
+    fn begin_next_repeat_cycle(&mut self) {
         if self.repeat_reverse {
             let was_forward = self.direction == AnimationDirection::Forward;
             self.direction = if was_forward {
@@ -1236,14 +1344,12 @@ impl AnimationControllerInner {
                 self.start_value = self.repeat_min;
                 self.target_value = self.repeat_max;
             }
-            true
         } else {
             self.direction = AnimationDirection::Forward;
             self.status = AnimationStatus::Forward;
             self.value = self.repeat_min;
             self.start_value = self.repeat_min;
             self.target_value = self.repeat_max;
-            false
         }
     }
 }
@@ -1778,5 +1884,176 @@ mod tests {
         let value = c.value();
         c.dispose();
         assert!((value - 0.5).abs() < 1e-3, "value={value}");
+    }
+
+    // ---- set_value parity: stops an active run, change-detects status ----
+
+    #[test]
+    fn set_value_stops_the_ticker_so_a_later_frame_does_not_clobber_it() {
+        // Flutter parity: `AnimationController`'s `value=` setter calls
+        // `stop()` before `_internalSetValue`. Drive a REAL frame through the
+        // scheduler (not a direct `tick_at` call) so this exercises the same
+        // path production code does: an auto-scheduling ticker re-registers
+        // itself with the scheduler every frame while active, and only
+        // `ticker.stop()` deregisters it.
+        let _serial = serial();
+        let scheduler = Arc::new(Scheduler::new());
+        let c = AnimationController::new(Duration::from_millis(100), scheduler.clone());
+
+        c.forward().unwrap();
+        scheduler.execute_frame();
+        assert!(
+            c.value() > 0.0,
+            "sanity: the ticker actually drove a frame, got value={}",
+            c.value()
+        );
+
+        c.set_value(0.5);
+        assert!(
+            !c.is_animating(),
+            "set_value must stop the ticker like Flutter's value= setter"
+        );
+
+        // The "next vsync": if the ticker were still registered, this frame
+        // would recompute the value from the stale run and clobber 0.5.
+        scheduler.execute_frame();
+        assert_eq!(
+            c.value(),
+            0.5,
+            "a frame after set_value must not overwrite the value that was just set"
+        );
+        c.dispose();
+    }
+
+    #[test]
+    fn set_value_reports_completed_status_at_upper_bound() {
+        let _serial = serial();
+        let c = controller(100);
+        c.forward().unwrap();
+        c.set_value(1.0);
+        assert_eq!(c.value(), 1.0);
+        assert_eq!(c.status(), AnimationStatus::Completed);
+        assert!(!c.is_animating(), "set_value stops the run before settling");
+        c.dispose();
+    }
+
+    #[test]
+    fn status_listener_is_not_refired_for_an_unchanged_status() {
+        // Flutter parity: `AnimationController._checkStatusChanged` only
+        // notifies status listeners when `status` actually differs from
+        // `_lastReportedStatus`. Without this, a 120Hz gesture-driven
+        // `set_value` loop (or an interior set_value immediately followed by
+        // `forward()` in the same direction) would re-fire `Forward` every
+        // frame and a one-shot status listener would misfire repeatedly.
+        let _serial = serial();
+        let c = controller(100);
+        let fire_count = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&fire_count);
+        c.add_status_listener(Arc::new(move |_status| {
+            counter.fetch_add(1, Ordering::SeqCst);
+        }));
+
+        // set_value(0.5) is the FIRST transition (Dismissed -> Forward): fires once.
+        c.set_value(0.5);
+        assert_eq!(fire_count.load(Ordering::SeqCst), 1);
+
+        // forward() keeps the same Forward status (direction was already
+        // Forward, value already interior) — must NOT re-fire.
+        c.forward().unwrap();
+        assert_eq!(
+            fire_count.load(Ordering::SeqCst),
+            1,
+            "forward() after an already-Forward set_value must not re-fire the same status"
+        );
+
+        // A second set_value that keeps the status Forward must also not re-fire.
+        c.set_value(0.6);
+        assert_eq!(
+            fire_count.load(Ordering::SeqCst),
+            1,
+            "a same-status set_value must not re-fire (mirrors a 120Hz gesture drag)"
+        );
+
+        // A genuine status change (interior -> Completed) DOES fire.
+        c.set_value(1.0);
+        assert_eq!(fire_count.load(Ordering::SeqCst), 2);
+        c.dispose();
+    }
+
+    // ---- animate_to_curved / animate_back_curved thread a curve through the run ----
+
+    #[test]
+    fn animate_to_curved_eases_through_the_given_curve() {
+        use crate::curve::Curves;
+        let _serial = serial();
+        let c = controller(100);
+        c.animate_to_curved(
+            1.0,
+            Some(Duration::from_millis(100)),
+            Arc::new(Curves::EaseInQuint),
+        )
+        .unwrap();
+        c.tick_at(0.05); // t=0.5 raw
+        let expected = Curves::EaseInQuint.transform(0.5);
+        assert!(
+            (c.value() - expected).abs() < 1e-3,
+            "expected the curve applied at t=0.5: got {}, want {expected}",
+            c.value()
+        );
+        c.tick_at(0.10);
+        assert_eq!(
+            c.value(),
+            1.0,
+            "the curve must land exactly on the target at t=1.0"
+        );
+        assert_eq!(c.status(), AnimationStatus::Completed);
+        c.dispose();
+    }
+
+    #[test]
+    fn plain_animate_to_after_a_curved_run_is_linear_again() {
+        // The per-run curve must not leak into a later plain (linear) run.
+        use crate::curve::Curves;
+        let _serial = serial();
+        let c = controller(100);
+        c.animate_to_curved(
+            1.0,
+            Some(Duration::from_millis(100)),
+            Arc::new(Curves::EaseInQuint),
+        )
+        .unwrap();
+        c.tick_at(0.10);
+        c.reset().unwrap();
+
+        c.animate_to(1.0, Some(Duration::from_millis(100))).unwrap();
+        c.tick_at(0.05);
+        assert!(
+            (c.value() - 0.5).abs() < 1e-3,
+            "a plain animate_to after a curved run must be linear again: got {}",
+            c.value()
+        );
+        c.dispose();
+    }
+
+    #[test]
+    fn animate_back_curved_eases_toward_the_lower_bound() {
+        use crate::curve::Curves;
+        let _serial = serial();
+        let c = controller(100);
+        c.set_value(1.0);
+        c.animate_back_curved(
+            0.0,
+            Some(Duration::from_millis(100)),
+            Arc::new(Curves::EaseInQuint),
+        )
+        .unwrap();
+        c.tick_at(0.05);
+        let expected = 1.0 - Curves::EaseInQuint.transform(0.5);
+        assert!(
+            (c.value() - expected).abs() < 1e-3,
+            "got {}, want {expected}",
+            c.value()
+        );
+        c.dispose();
     }
 }

@@ -677,10 +677,29 @@ impl<T: Send + Clone + 'static> Route for TransitionRoute<T> {
     /// `didPop(result)` (`routes.dart:376-391`): drive the controller in reverse
     /// and consent. The route's `RouteResult` completes **now**, via
     /// `RouteRecord::did_pop`; only its disposal waits for `dismissed`.
+    ///
+    /// A gesture-driven pop rides its own pacing in here: `pop_paced` (see
+    /// `navigator.rs`) publishes a one-shot [`PopPacing`](super::binding::PopPacing)
+    /// for exactly this route immediately before triggering the pop, and this
+    /// is where it is consumed — Flutter's
+    /// `_CupertinoBackGestureController.dragEnd` calling `_controller.animateBack`
+    /// with its own duration/curve instead of the route's plain `reverse()`
+    /// (`cupertino/route.dart`, 3.44.0). No pacing published (the ordinary,
+    /// programmatic pop) falls back to the plain reverse.
     fn did_pop(&mut self) -> bool {
         self.inner.popped.store(true, Ordering::Release);
+        let pacing = self
+            .inner
+            .binding
+            .get()
+            .and_then(|binding| binding.take_pop_pacing());
         if let Some(controller) = self.inner.controller.lock().as_ref() {
-            let _ = controller.reverse();
+            let _ = match pacing {
+                Some(pacing) => {
+                    controller.animate_back_curved(0.0, Some(pacing.duration), pacing.curve)
+                }
+                None => controller.reverse(),
+            };
         }
         true
     }

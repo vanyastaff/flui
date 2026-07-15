@@ -42,16 +42,20 @@ use std::fmt;
 use std::marker::PhantomData;
 use std::num::NonZeroU64;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
 use std::thread::{self, ThreadId};
+use std::time::Duration;
 
+use flui_animation::Curve;
 use flui_view::BuildContextExt;
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
 use parking_lot::Mutex;
 
-use super::binding::{RouteBinding, RouteRegistries, RouteVsync, TransitionGroup, TransitionPeer};
+use super::binding::{
+    PopPacing, RouteBinding, RouteRegistries, RouteVsync, TransitionGroup, TransitionPeer,
+};
 use super::hero::{HeroRegistry, HeroScope, NestedHeroSource};
 use super::hero_controller::HeroController;
 use super::hero_controller_scope::HeroControllerScope;
@@ -160,6 +164,13 @@ struct NavigatorShared {
     /// to. Cleared in `dispose`, together with the registry it was registered
     /// on, so a disposed navigator's heroes are never visited again.
     nested_hero_registration: Mutex<Option<(HeroRegistry, NestedHeroSource)>>,
+
+    /// How many overlapping user gestures (e.g. edge swipe-backs) are
+    /// currently manipulating this navigator. Flutter's
+    /// `NavigatorState._userGesturesInProgress` (`navigator.dart:5803`) — only
+    /// the 0→1 and 1→0 transitions notify observers, so nested gestures on
+    /// the same navigator collapse to one notification pair.
+    user_gestures_in_progress: AtomicU32,
 }
 
 impl NavigatorShared {
@@ -323,6 +334,53 @@ impl NavigatorShared {
         for observer in self.observers() {
             observer.did_detach();
         }
+    }
+
+    /// Flutter's `NavigatorState.didStartUserGesture` (`navigator.dart:5826-5841`).
+    ///
+    /// Only the 0→1 transition resolves the current route and notifies
+    /// observers — a nested/overlapping gesture on the same navigator just
+    /// bumps the count. The history lock is **released before** observers run:
+    /// `did_start_user_gesture` hands out a `NavigatorHandle`, and an observer
+    /// reading the stack back through it would deadlock on the same thread.
+    fn did_start_user_gesture(&self) {
+        let count_before = self
+            .user_gestures_in_progress
+            .fetch_add(1, Ordering::AcqRel);
+        if count_before != 0 {
+            return;
+        }
+        let Some((route, previous)) = self.history.lock().top_and_previous_for_gesture() else {
+            return;
+        };
+        for observer in self.observers() {
+            observer.did_start_user_gesture(route, previous);
+        }
+    }
+
+    /// Flutter's `NavigatorState.didStopUserGesture` (`navigator.dart:5847-5855`).
+    /// Only the 1→0 transition notifies observers.
+    fn did_stop_user_gesture(&self) {
+        let count_before = self
+            .user_gestures_in_progress
+            .fetch_sub(1, Ordering::AcqRel);
+        debug_assert!(
+            count_before > 0,
+            "BUG: did_stop_user_gesture called without a matching did_start_user_gesture"
+        );
+        if count_before != 1 {
+            return;
+        }
+        for observer in self.observers() {
+            observer.did_stop_user_gesture();
+        }
+    }
+
+    /// Whether at least one user gesture is currently in progress on this
+    /// navigator. Flutter's `NavigatorState.userGestureInProgress`
+    /// (`navigator.dart:5816`).
+    fn user_gesture_in_progress(&self) -> bool {
+        self.user_gestures_in_progress.load(Ordering::Acquire) > 0
     }
 
     /// Run `mutate` against the stack, then apply whatever it flushed.
@@ -510,6 +568,7 @@ impl NavigatorHandle {
                 entries: Arc::new(Mutex::new(HashMap::new())),
                 subtrees: Arc::new(Mutex::new(HashMap::new())),
                 modals: Arc::new(Mutex::new(HashMap::new())),
+                pop_pacing: Arc::new(Mutex::new(HashMap::new())),
             },
             post_frame: Mutex::new(None),
             render_tree: Mutex::new(None),
@@ -517,6 +576,7 @@ impl NavigatorHandle {
             auto_hero_observer: Mutex::new(None),
             observers_attached: AtomicBool::new(false),
             nested_hero_registration: Mutex::new(None),
+            user_gestures_in_progress: AtomicU32::new(0),
         });
         let command_target = register_command_target(&shared);
         Self {
@@ -571,6 +631,40 @@ impl NavigatorHandle {
     #[must_use]
     pub fn is_mounted(&self) -> bool {
         self.shared.overlay.is_mounted()
+    }
+
+    /// Report that a user gesture (e.g. an edge swipe-back) started
+    /// manipulating this navigator. Flutter's
+    /// `NavigatorState.didStartUserGesture` (`navigator.dart:5826-5841`).
+    ///
+    /// Pair with a matching [`did_stop_user_gesture`](Self::did_stop_user_gesture)
+    /// once the gesture settles. Calls nest: only the first call (0→1) resolves
+    /// the current route and notifies [`NavigatorObserver::did_start_user_gesture`];
+    /// an overlapping second call just bumps the count.
+    pub fn did_start_user_gesture(&self) {
+        self.shared.did_start_user_gesture();
+    }
+
+    /// Report that the gesture reported by a matching
+    /// [`did_start_user_gesture`](Self::did_start_user_gesture) has finished.
+    /// Flutter's `NavigatorState.didStopUserGesture` (`navigator.dart:5847-5855`).
+    ///
+    /// # Panics (debug only)
+    ///
+    /// Debug-asserts it is never called more often than
+    /// [`did_start_user_gesture`](Self::did_start_user_gesture) — an unmatched
+    /// call is a caller bug (mirrors Flutter's `assert(_userGesturesInProgress
+    /// > 0)`).
+    pub fn did_stop_user_gesture(&self) {
+        self.shared.did_stop_user_gesture();
+    }
+
+    /// Whether at least one user gesture is currently in progress on this
+    /// navigator. Flutter's `NavigatorState.userGestureInProgress`
+    /// (`navigator.dart:5816`).
+    #[must_use]
+    pub fn user_gesture_in_progress(&self) -> bool {
+        self.shared.user_gesture_in_progress()
     }
 
     /// Whether both handles name the same navigator — an `Arc` identity check, for the
@@ -785,6 +879,42 @@ impl NavigatorHandle {
         self.pop_erased(Some(Box::new(result)))
     }
 
+    /// Pop `route`, but drive its exit transition with `duration`/`curve`
+    /// instead of its own default reverse pacing — for a gesture-driven pop
+    /// whose pacing comes from the drag itself (fling velocity, or the flat
+    /// "stay" pacing), not the route's static configuration. Flutter's
+    /// `_CupertinoBackGestureController.dragEnd` calling
+    /// `route.navigator!.pop()` while overriding `_controller.animateBack`'s
+    /// duration/curve (`cupertino/route.dart`, 3.44.0).
+    ///
+    /// Returns `false` and pops nothing if `route` is no longer the current
+    /// top route — Flutter's `!route.isCurrent` branch: a route swept away by
+    /// something else between the gesture's last frame and this call must not
+    /// have a stale drag finish it. Only a [`TransitionRoute`](super::transition_route::TransitionRoute)
+    /// (directly, or via `ModalRoute`/`PageRoute`) consumes the pacing; a plain
+    /// route's `did_pop` never asks for it.
+    pub(crate) fn pop_paced(
+        &self,
+        route: RouteId,
+        duration: Duration,
+        curve: Arc<dyn Curve + Send + Sync>, // PORT-CHECK-OK-DYN: see `PopPacing`'s marker (binding.rs) — same erased-easing-curve boundary
+    ) -> bool {
+        if self.current() != Some(route) {
+            return false;
+        }
+        self.shared
+            .registries
+            .pop_pacing
+            .lock()
+            .insert(route, PopPacing { duration, curve });
+        let popped = self.pop_erased(None);
+        // `did_pop` consumes this on a successful pop; a refused pop (or one
+        // that somehow never reached `route`) must not leave a stale override
+        // for a later, unrelated pop of the same route.
+        self.shared.registries.pop_pacing.lock().remove(&route);
+        popped
+    }
+
     /// Remove `id` without popping it — Flutter's `Navigator.removeRoute`
     /// (`:5733-5751`).
     ///
@@ -898,6 +1028,15 @@ impl NavigatorHandle {
     #[must_use]
     pub fn route_ids(&self) -> Vec<RouteId> {
         self.shared.history.lock().ids()
+    }
+
+    /// Whether `route` is present in this navigator's stack — Flutter's
+    /// `Route.isActive`. Used by a gesture's `!isCurrent` fallback
+    /// (`back_gesture.rs`): a route that has been swept off the stack
+    /// entirely (not just covered) animates forward rather than trying to
+    /// pop again.
+    pub(crate) fn route_is_active(&self, route: RouteId) -> bool {
+        self.shared.history.lock().is_present(route)
     }
 
     /// The lifecycle state of `id`'s entry. Test-facing.
@@ -1051,6 +1190,38 @@ impl NavigatorHandle {
     /// `None` for a route that is not a `ModalRoute`, or one already disposed.
     pub(crate) fn route_modal(&self, id: RouteId) -> Option<ModalHandle> {
         self.shared.registries.modals.lock().get(&id).cloned()
+    }
+
+    /// Whether `route` may start an edge-swipe-back gesture right now.
+    /// Flutter's `PageRoute.popGestureEnabled` (`pages.dart:63-66`) composed
+    /// with `super.popGestureEnabled` = `ModalRoute.popGestureEnabled`
+    /// (`routes.dart:1908-1930`): not the first (present) route, does not
+    /// handle its own pop, the pop disposition allows it (no `PopScope` veto,
+    /// no `WillPopScope` — FLUI has none, so that half is vacuously clear),
+    /// and the primary animation has finished (`animation!.isCompleted`).
+    /// `fullscreenDialog` is not ported (see `PageRoute::back_gesture`'s
+    /// doc), so that half of `PageRoute`'s own override is skipped.
+    ///
+    /// **FLUI addition, not in the oracle text:** also `false` while a user
+    /// gesture is already in progress on this navigator — the per-pointer-down
+    /// predicate must not admit a second, overlapping gesture start.
+    pub(crate) fn pop_gesture_enabled(&self, route: RouteId) -> bool {
+        if self.user_gesture_in_progress() {
+            return false;
+        }
+        let (is_first, will_handle_pop_internally, veto) = {
+            let history = self.shared.history.lock();
+            (
+                history.first_present() == Some(route),
+                history.will_handle_pop_internally(route),
+                history.pop_disposition_of_top() == Some(RoutePopDisposition::DoNotPop),
+            )
+        };
+        if is_first || will_handle_pop_internally != Some(false) || veto {
+            return false;
+        }
+        self.route_modal(route)
+            .is_some_and(|modal| modal.primary_animation().status().is_completed())
     }
 
     /// The binding's post-frame capability — `WidgetsBinding.instance

@@ -67,8 +67,9 @@ use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::Duration;
 
-use flui_animation::{Animation, Vsync};
+use flui_animation::{Animation, Curve, Vsync};
 use parking_lot::Mutex;
 
 use super::modal_route::ModalHandle;
@@ -218,15 +219,46 @@ pub(crate) type RouteSubtrees = Arc<Mutex<HashMap<RouteId, RouteSubtreeCell>>>;
 /// `ModalRoute` publishes its handle here at `install()`.
 pub(crate) type RouteModals = Arc<Mutex<HashMap<RouteId, ModalHandle>>>;
 
+/// How a route's exit transition should run, overriding its own default
+/// reverse pacing for exactly one pop.
+///
+/// Flutter's `_CupertinoBackGestureController.dragEnd` (`cupertino/route.dart`,
+/// 3.44.0) calls `_controller.animateBack(...)` with a duration/curve it
+/// computed from the drag (the fling velocity, or the flat 350ms/
+/// `Curves.fastEaseInToSlowEaseOut` "stay" pacing) — never the route's plain
+/// `reverse()`. FLUI has no `Route` object a gesture controller can reach to
+/// override, so the navigator publishes the override here, keyed by the one
+/// route it applies to, and [`RouteBinding::take_pop_pacing`] consumes it
+/// exactly once, from that route's own `did_pop`.
+/// A gesture-supplied easing curve is a value-only, `Send + Sync` transform
+/// (no tree/element access) carried from `back_gesture.rs`'s controller
+/// through the pop command to `AnimationController::animate_back_curved` —
+/// the same erased-`Animatable`-transform shape ADR-0021 §7n already
+/// sanctions for `Hero::create_rect_tween`.
+#[derive(Clone)]
+pub(crate) struct PopPacing {
+    pub(crate) duration: Duration,
+    pub(crate) curve: Arc<dyn Curve + Send + Sync>, // PORT-CHECK-OK-DYN: see the struct doc — erased easing-curve transform, ADR-0021 §7n shape
+}
+
+/// `RouteId -> PopPacing`, a one-shot override the navigator sets immediately
+/// before popping a specific route and every path removes on the way out —
+/// consumed by a successful pop, and swept by the setter itself if the pop
+/// never reaches that route's `did_pop` (a veto, or the route was no longer
+/// current). Never a field on the route: a stored field would go stale on a
+/// veto or apply to the wrong pop if a *different* route reached `did_pop`
+/// first (see `navigator.rs`'s `pop_paced`).
+pub(crate) type PopPacingRegistry = Arc<Mutex<HashMap<RouteId, PopPacing>>>;
+
 /// The queue a [`RouteBinding`] writes to and a `RouteHistory` drains.
 ///
 /// Its own mutex, deliberately: it must be lockable while the history's mutex is
 /// held by an in-progress flush.
 pub(crate) type RouteCommandQueue = Arc<Mutex<VecDeque<RouteCommand>>>;
 
-/// The four `RouteId`-keyed maps a navigator owns and every binding shares.
+/// The `RouteId`-keyed maps a navigator owns and every binding shares.
 ///
-/// A bundle rather than four parameters: they are created together in
+/// A bundle rather than five parameters: they are created together in
 /// `NavigatorHandle::new`, cloned together into every binding, and each is a
 /// `RouteId -> _` map Flutter reads straight off the `Route` object.
 #[derive(Clone)]
@@ -240,6 +272,8 @@ pub(crate) struct RouteRegistries {
     pub(crate) subtrees: RouteSubtrees,
     /// `RouteId -> ModalHandle`.
     pub(crate) modals: RouteModals,
+    /// `RouteId -> PopPacing`, a one-shot override for the next `did_pop`.
+    pub(crate) pop_pacing: PopPacingRegistry,
 }
 
 /// An owned, `'static` capability, pre-bound to one [`RouteId`].
@@ -363,9 +397,17 @@ impl RouteBinding {
         self.registries.modals.lock().remove(&self.route);
     }
 
-    /// The route this binding drives. Test-facing: production code never needs it,
-    /// because every capability is already pre-bound to this id.
-    #[cfg(test)]
+    /// Consume this route's one-shot [`PopPacing`] override, if the navigator
+    /// set one immediately before this pop — see `navigator.rs`'s `pop_paced`.
+    /// `None` means "pop normally": the route's own default reverse pacing.
+    pub(crate) fn take_pop_pacing(&self) -> Option<PopPacing> {
+        self.registries.pop_pacing.lock().remove(&self.route)
+    }
+
+    /// The route this binding drives. Every other capability on this type is
+    /// already pre-bound to this id; a back-gesture detector needs the id
+    /// itself, to bind a drag to the specific route it started on
+    /// (`navigator.rs`'s `pop_paced`, `back_gesture.rs`).
     pub(crate) fn route_id(&self) -> RouteId {
         self.route
     }

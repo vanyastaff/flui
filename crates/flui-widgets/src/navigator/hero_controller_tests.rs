@@ -646,6 +646,67 @@ fn controller_collects_matching_tags_and_records_one_manifest() {
     assert!(manifest.to_rect.min.x.0 > 0.0 && manifest.to_rect.min.y.0 > 0.0);
 }
 
+/// `HeroController.didChangeTop`'s own guard (`heroes.dart:861`): "Don't
+/// trigger another flight when a pop is committed as a user gesture back
+/// swipe is snapped." A pop that lands while `user_gesture_in_progress()` is
+/// still true starts no flight, even with a matching hero tag on both
+/// routes; the identical pop with no gesture in progress does.
+///
+/// Red-check: drop the `user_gesture_in_progress()` guard from
+/// `HeroController::did_change_top` — the gesture-pop assertion (zero
+/// manifests) fails.
+#[test]
+fn a_gesture_driven_pop_starts_no_flight_but_a_programmatic_pop_does() {
+    let navigator = seeded_navigator();
+    let controller = install(&navigator);
+    let mut harness = mount_navigator(&navigator);
+
+    let _first =
+        harness.enter_owner_scope(|| navigator.push(hero_page_route("shared", 30.0, 20.0)));
+    harness.tick();
+    let _second =
+        harness.enter_owner_scope(|| navigator.push(hero_page_route("shared", 60.0, 45.0)));
+    harness.tick();
+
+    // `manifests()` is cumulative over the controller's life, and the setup
+    // push above already flew once (both routes share the tag) — a baseline,
+    // not zero.
+    let manifests_before_gesture_pop = controller.manifests().len();
+    assert_eq!(manifests_before_gesture_pop, 1, "the setup push flew once");
+    let scheduled_before_gesture_pop = controller.scheduled_count();
+
+    // A finger-driven pop: the gesture is still "in progress" (it settles
+    // asynchronously, see `back_gesture.rs`) at the instant the pop commits and
+    // fires `did_change_top`.
+    navigator.did_start_user_gesture();
+    assert!(harness.enter_owner_scope(|| navigator.pop()));
+    harness.tick();
+    navigator.did_stop_user_gesture();
+
+    assert_eq!(
+        controller.manifests().len(),
+        manifests_before_gesture_pop,
+        "no flight starts while a user gesture is in progress"
+    );
+    assert_eq!(
+        controller.scheduled_count(),
+        scheduled_before_gesture_pop,
+        "no measurement is even scheduled while a user gesture is in progress"
+    );
+
+    // The same push/pop shape, but programmatic: now it flies.
+    let _third =
+        harness.enter_owner_scope(|| navigator.push(hero_page_route("shared", 60.0, 45.0)));
+    harness.tick();
+    assert!(harness.enter_owner_scope(|| navigator.pop()));
+    harness.tick();
+
+    assert!(
+        controller.manifests().len() > manifests_before_gesture_pop,
+        "a programmatic pop with no gesture in progress still starts a flight"
+    );
+}
+
 /// `final toHero = toHeroes[tag]; if (toHero == null) …` (`heroes.dart:1044-1046`) — a
 /// tag on only one route is not a flight.
 ///
