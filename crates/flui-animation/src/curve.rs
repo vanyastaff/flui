@@ -1122,6 +1122,18 @@ impl Curves {
 /// `Curve` does not require `Debug`; use a concrete named type when the type
 /// name is load-bearing.
 ///
+/// `PartialEq`/`Eq` are reference equality (`Arc::ptr_eq`) — `Curve` carries
+/// no structural-equality bound, so this is the only comparison available for
+/// an erased `dyn Curve`. This deliberately mirrors Dart's unoverridden
+/// `Curve.==` (identity), which is what lets Flutter's own implicit-animation
+/// staleness check (`ImplicitlyAnimatedWidgetState.didUpdateWidget`,
+/// `implicit_animations.dart:298-303` at tag `3.44.0`) compare a repeated
+/// `Curves.easeInOut` reference as unchanged: the Dart compiler canonicalizes
+/// repeated `const` expressions to one object. Two `ArcCurve`s built from
+/// separate `ArcCurve::new(...)` calls compare unequal even when they wrap the
+/// same curve *value* — callers who want a stable comparison across rebuilds
+/// must reuse the same `ArcCurve` handle (clone it), not reconstruct it.
+///
 /// # Examples
 ///
 /// ```
@@ -1135,6 +1147,15 @@ impl Curves {
 /// [`CurvedAnimation`]: crate::CurvedAnimation
 #[derive(Clone)]
 pub struct ArcCurve(Arc<dyn Curve + Send + Sync>);
+
+impl PartialEq for ArcCurve {
+    /// Reference equality (`Arc::ptr_eq`) — see the type doc's *why*.
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for ArcCurve {}
 
 impl ArcCurve {
     /// Wrap `curve` in a reference-counted erased handle.

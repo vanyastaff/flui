@@ -17,7 +17,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use flui_animation::curve::{ArcCurve, Curve};
-use flui_animation::{AnimatableExt, Animation, Curves, ProxyAnimation};
+use flui_animation::{AnimatableExt, Animation, ProxyAnimation};
 use flui_objects::RenderAnimatedOpacity;
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::prelude::{BuildContext, StatefulView};
@@ -26,7 +26,7 @@ use flui_view::{
     ViewState, impl_render_view,
 };
 
-use crate::animated::implicitly_animated::{DEFAULT_DURATION, ImplicitAnimation};
+use crate::animated::implicitly_animated::{DEFAULT_DURATION, ImplicitAnimation, default_curve};
 use crate::animated::vsync_scope::VsyncScope;
 
 /// Animates the opacity of its child whenever a new `opacity` is given.
@@ -55,7 +55,7 @@ impl AnimatedOpacity {
         Self {
             opacity,
             duration: DEFAULT_DURATION,
-            curve: ArcCurve::new(Curves::EaseInOut),
+            curve: default_curve(),
             child: child.into_view().boxed(),
         }
     }
@@ -138,15 +138,23 @@ impl ViewState<AnimatedOpacity> for AnimatedOpacityState {
 
     fn did_update_view(&mut self, _old_view: &AnimatedOpacity, new_view: &AnimatedOpacity) {
         self.child = new_view.child.clone();
-        // Current-value-as-new-start retarget algebra + restart-from-0 live
-        // entirely in `ImplicitAnimation::retarget` (a no-op when the target
-        // is unchanged, so an unrelated rebuild does not restart the run).
-        self.animation.retarget(new_view.opacity, new_view.duration);
+        // Current-value-as-new-start retarget algebra + restart-from-0, plus
+        // the curve-swap-without-restart path, live entirely in
+        // `ImplicitAnimation::retarget` (a no-op on both fronts when neither
+        // the target nor the curve changed, so an unrelated rebuild does
+        // nothing to the run in flight).
+        let changed =
+            self.animation
+                .retarget(new_view.opacity, new_view.duration, new_view.curve.clone());
         // Recompose over the (possibly just-retargeted) tween/curve and hand
         // the render object's proxy its new parent — this is the ENTIRE
         // retarget path the render object observes; it never sees the
-        // controller, tween, or curve directly.
-        self.proxy.set_parent(compose_animation(&self.animation));
+        // controller, tween, or curve directly. Gated on `changed` so a
+        // child-only rebuild does not reallocate the tween/curved chain and
+        // drop/re-add the proxy's controller subscription for nothing.
+        if changed {
+            self.proxy.set_parent(compose_animation(&self.animation));
+        }
     }
 
     fn dispose(&mut self) {
@@ -202,6 +210,80 @@ impl RenderView for AnimatedOpacityRenderView {
 
     fn visit_child_views(&self, visitor: &mut dyn FnMut(&dyn View)) {
         visitor(&self.child);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::SizedBox;
+
+    fn probe(opacity: f32) -> AnimatedOpacity {
+        AnimatedOpacity::new(opacity, SizedBox::shrink())
+    }
+
+    /// The gating this test pins: `did_update_view` must only call
+    /// `ProxyAnimation::set_parent` when `ImplicitAnimation::retarget`
+    /// reports an actual change. `parent()` returns the proxy's CURRENT
+    /// parent `Arc`; an unrelated reconfigure (same opacity, duration, and
+    /// curve as construction — the default, cached via `default_curve()` so
+    /// its `ArcCurve` compares reference-equal across the two `new()` calls
+    /// below) must leave that `Arc` pointer untouched.
+    #[test]
+    fn unrelated_rebuild_does_not_swap_the_proxys_parent() {
+        let view = probe(0.5);
+        let mut state = view.create_state();
+        let parent_before = state.proxy.parent();
+
+        let unchanged = probe(0.5);
+        state.did_update_view(&view, &unchanged);
+
+        let parent_after = state.proxy.parent();
+        assert!(
+            Arc::ptr_eq(&parent_before, &parent_after),
+            "an unrelated rebuild (same opacity/duration/curve) must not \
+             hot-swap the proxy's parent animation",
+        );
+    }
+
+    /// The flip side: a genuine opacity retarget MUST swap the proxy's
+    /// parent, or the render object would keep observing the stale
+    /// tween/curve composition.
+    #[test]
+    fn opacity_retarget_swaps_the_proxys_parent() {
+        let view = probe(0.5);
+        let mut state = view.create_state();
+        let parent_before = state.proxy.parent();
+
+        let retargeted = probe(0.9);
+        state.did_update_view(&view, &retargeted);
+
+        let parent_after = state.proxy.parent();
+        assert!(
+            !Arc::ptr_eq(&parent_before, &parent_after),
+            "a genuine opacity retarget must swap the proxy's parent animation",
+        );
+    }
+
+    /// And a curve-only change (opacity/duration unchanged) must ALSO swap
+    /// the proxy's parent — the render object must observe the new curve,
+    /// not the stale one baked into the old composition.
+    #[test]
+    fn curve_only_change_swaps_the_proxys_parent() {
+        use flui_animation::Curves;
+
+        let view = probe(0.5);
+        let mut state = view.create_state();
+        let parent_before = state.proxy.parent();
+
+        let recurved = AnimatedOpacity::new(0.5, SizedBox::shrink()).curve(Curves::Linear);
+        state.did_update_view(&view, &recurved);
+
+        let parent_after = state.proxy.parent();
+        assert!(
+            !Arc::ptr_eq(&parent_before, &parent_after),
+            "a curve-only change must swap the proxy's parent animation",
+        );
     }
 }
 

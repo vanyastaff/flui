@@ -3,12 +3,12 @@
 use std::time::Duration;
 
 use flui_animation::curve::{ArcCurve, Curve};
-use flui_animation::{Animatable, Animation, Curves};
+use flui_animation::{Animatable, Animation};
 use flui_geometry::EdgeInsets;
 use flui_view::prelude::{BuildContext, StatefulView};
 use flui_view::{BoxedView, BuildContextExt, IntoView, ViewExt, ViewState};
 
-use crate::animated::implicitly_animated::{DEFAULT_DURATION, ImplicitAnimation};
+use crate::animated::implicitly_animated::{DEFAULT_DURATION, ImplicitAnimation, default_curve};
 use crate::animated::vsync_scope::VsyncScope;
 use crate::{AnimatedBuilder, Padding};
 
@@ -34,7 +34,7 @@ impl AnimatedPadding {
         Self {
             padding,
             duration: DEFAULT_DURATION,
-            curve: ArcCurve::new(Curves::EaseInOut),
+            curve: default_curve(),
             child: child.into_view().boxed(),
         }
     }
@@ -100,7 +100,13 @@ impl ViewState<AnimatedPadding> for AnimatedPaddingState {
 
     fn did_update_view(&mut self, _old_view: &AnimatedPadding, new_view: &AnimatedPadding) {
         self.child = new_view.child.clone();
-        self.animation.retarget(new_view.padding, new_view.duration);
+        // `build()` re-captures `curved()`/`tween()` fresh on every genuine
+        // reconfigure (this widget rebuilds via `AnimatedBuilder`, unlike
+        // `AnimatedOpacity`), so there is no downstream recompute to gate —
+        // the changed/unchanged report is intentionally discarded here.
+        let _ =
+            self.animation
+                .retarget(new_view.padding, new_view.duration, new_view.curve.clone());
     }
 
     fn dispose(&mut self) {

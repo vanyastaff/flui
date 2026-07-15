@@ -2,14 +2,16 @@
 
 use std::time::Duration;
 
+use flui_animation::Animation;
 use flui_animation::curve::{ArcCurve, Curve};
-use flui_animation::{Animation, Curves};
 use flui_geometry::EdgeInsets;
 use flui_types::{Alignment, Color};
 use flui_view::prelude::{BuildContext, StatefulView};
 use flui_view::{BoxedView, BuildContextExt, IntoView, ViewExt, ViewState};
 
-use crate::animated::implicitly_animated::{DEFAULT_DURATION, ImplicitController, OptTween};
+use crate::animated::implicitly_animated::{
+    DEFAULT_DURATION, ImplicitController, OptTween, default_curve,
+};
 use crate::animated::vsync_scope::VsyncScope;
 use crate::{AnimatedBuilder, Container};
 
@@ -50,7 +52,7 @@ impl AnimatedContainer {
             height: None,
             margin: None,
             duration: DEFAULT_DURATION,
-            curve: ArcCurve::new(Curves::EaseInOut),
+            curve: default_curve(),
             child: child.into_view().boxed(),
         }
     }
@@ -195,18 +197,35 @@ impl ViewState<AnimatedContainer> for AnimatedContainerState {
 
     fn did_update_view(&mut self, _old_view: &AnimatedContainer, new_view: &AnimatedContainer) {
         self.child = new_view.child.clone();
+        // Oracle: `controller.duration = widget.duration;` is unconditional
+        // (`implicit_animations.dart:305`).
+        self.controller.set_duration(new_view.duration);
+        // Oracle: a curve-only change swaps the `CurvedAnimation` without
+        // restarting (`implicit_animations.dart:298-303`). The swap must
+        // happen BEFORE `t` is sampled below so a target-changed anchor
+        // reads the already-updated curve — matches
+        // `tween.evaluate(_animation)` reading the just-rebuilt `_animation`
+        // at `implicit_animations.dart:310`. `build()` re-captures
+        // `controller.curved()` fresh on every reconfigure (this widget
+        // rebuilds via `AnimatedBuilder`), so there is no downstream
+        // recompute to gate on the swap itself — only on a genuine target
+        // change, which decides whether to restart below.
+        self.controller.set_curve(new_view.curve.clone());
         let t = self.controller.value();
         // Re-anchor every property at the same instant; `|=` (not `||`) so each
         // property's tween is updated even after an earlier one already changed.
-        let mut any_changed = false;
-        any_changed |= self.alignment.retarget(new_view.alignment, t);
-        any_changed |= self.padding.retarget(new_view.padding, t);
-        any_changed |= self.color.retarget(new_view.color, t);
-        any_changed |= self.width.retarget(new_view.width, t);
-        any_changed |= self.height.retarget(new_view.height, t);
-        any_changed |= self.margin.retarget(new_view.margin, t);
-        if any_changed {
-            self.controller.restart(new_view.duration);
+        let mut any_target_changed = false;
+        any_target_changed |= self.alignment.retarget(new_view.alignment, t);
+        any_target_changed |= self.padding.retarget(new_view.padding, t);
+        any_target_changed |= self.color.retarget(new_view.color, t);
+        any_target_changed |= self.width.retarget(new_view.width, t);
+        any_target_changed |= self.height.retarget(new_view.height, t);
+        any_target_changed |= self.margin.retarget(new_view.margin, t);
+        if any_target_changed {
+            // Oracle: `controller.forward(from: 0.0)`, gated strictly on
+            // `_constructTweens()` (a target change) — a curve-only change
+            // never restarts (`implicit_animations.dart:311-317`).
+            self.controller.restart_from_zero();
         }
     }
 

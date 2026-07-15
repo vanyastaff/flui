@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use common::{lay_out_animated, loose, tight};
-use flui_animation::{ElasticOutCurve, Vsync};
+use flui_animation::{Curves, ElasticOutCurve, Threshold, Vsync};
 use flui_geometry::{EdgeInsets, px};
 use flui_types::{Alignment, Offset};
 use flui_view::prelude::{BuildContext, StatefulView};
@@ -557,6 +557,202 @@ fn animated_container_interpolates_size_over_frames() {
         samples[1] > 21.0 && samples[1] < 99.0,
         "an intermediate frame shows a partial width, got {}",
         samples[1],
+    );
+}
+
+// ----------------------------------------------------------------------------
+// Curve-only retarget — a rebuild that changes ONLY `curve` (not the target)
+// must re-ease the run already in flight, not keep coasting on the curve
+// captured at construction.
+//
+// Flutter parity: `ImplicitlyAnimatedWidgetState.didUpdateWidget`
+// (`implicit_animations.dart:298-322` at tag `3.44.0`) swaps in a fresh
+// `CurvedAnimation` over the SAME controller on a curve change, without
+// restarting it (`controller.forward(from: 0.0)` is strictly gated on
+// `_constructTweens()`, i.e. a genuine target change). Both probes below
+// start a genuine 0->target run under `Curves::Linear`, advance it to raw
+// progress `0.4`, then swap ONLY the curve to `Threshold(0.5)` (target held
+// fixed) — a run-restart would also produce a value change, so the "target
+// unchanged" half of each probe's second `pump()` is what isolates a curve
+// swap from a retarget. Under Linear at `0.4` the eased value tracks the raw
+// progress; the instant `Threshold(0.5)` applies at that SAME raw progress
+// (still `< 0.5`), the value must snap back to the run's `begin`.
+// ----------------------------------------------------------------------------
+
+#[derive(Clone, StatefulView)]
+struct CurveSwapOpacityProbe {
+    vsync: Vsync,
+    target: Arc<Mutex<f32>>,
+    use_threshold_curve: Arc<Mutex<bool>>,
+}
+
+struct CurveSwapOpacityProbeState {
+    vsync: Vsync,
+    target: Arc<Mutex<f32>>,
+    use_threshold_curve: Arc<Mutex<bool>>,
+}
+
+impl StatefulView for CurveSwapOpacityProbe {
+    type State = CurveSwapOpacityProbeState;
+
+    fn create_state(&self) -> Self::State {
+        CurveSwapOpacityProbeState {
+            vsync: self.vsync.clone(),
+            target: Arc::clone(&self.target),
+            use_threshold_curve: Arc::clone(&self.use_threshold_curve),
+        }
+    }
+}
+
+impl ViewState<CurveSwapOpacityProbe> for CurveSwapOpacityProbeState {
+    fn build(&self, _view: &CurveSwapOpacityProbe, _ctx: &dyn BuildContext) -> impl IntoView {
+        let widget =
+            AnimatedOpacity::new(*self.target.lock(), SizedBox::new(100.0, 50.0)).duration(RUN);
+        let widget = if *self.use_threshold_curve.lock() {
+            widget.curve(Threshold::new(0.5))
+        } else {
+            widget.curve(Curves::Linear)
+        };
+        VsyncScope::new(self.vsync.clone(), widget)
+    }
+}
+
+/// Swapping only the curve mid-flight must re-ease the run in flight, not
+/// keep the curve captured at construction.
+#[test]
+fn animated_opacity_curve_only_change_reapplies_the_new_curve_mid_flight() {
+    let vsync = Vsync::new();
+    let target = Arc::new(Mutex::new(0.0));
+    let use_threshold_curve = Arc::new(Mutex::new(false));
+    let probe = CurveSwapOpacityProbe {
+        vsync: vsync.clone(),
+        target: Arc::clone(&target),
+        use_threshold_curve: Arc::clone(&use_threshold_curve),
+    };
+    let mut laid = lay_out_animated(probe, tight(100.0, 50.0), vsync);
+
+    // Start a genuine 0 -> 1 run under the Linear curve.
+    *target.lock() = 1.0;
+    laid.pump();
+    laid.pump_for(FRAME); // detection frame (still ~0.0), see other tests in this file
+
+    // Two more 20 ms frames over the 100 ms run: raw progress 0.4, and under
+    // Linear the curved value tracks it exactly.
+    laid.pump_for(FRAME);
+    laid.pump_for(FRAME);
+    let before_swap = laid.opacity(laid.current_root());
+    assert!(
+        (before_swap - 0.4).abs() < 0.05,
+        "sanity: Linear curve at raw progress 0.4 should read ~0.4, got {before_swap}",
+    );
+
+    // Swap ONLY the curve (target still 1.0, unchanged) — no time elapses,
+    // so the controller's raw progress stays at 0.4; Threshold(0.5) reads
+    // 0.0 there, snapping the eased value back to the run's begin (0.0). A
+    // `pump()` with no intervening `pump_for` isolates the curve swap from
+    // any controller advancement.
+    *use_threshold_curve.lock() = true;
+    laid.pump();
+
+    let after_swap = laid.opacity(laid.current_root());
+    assert!(
+        after_swap < 0.05,
+        "the new Threshold(0.5) curve must apply to the run already in \
+         flight (raw progress 0.4, below the threshold): expected ~0.0 (the \
+         run's begin), got {after_swap} (this fails against the pre-fix \
+         code, which keeps easing on the curve captured at construction and \
+         would still read ~{before_swap})",
+    );
+}
+
+#[derive(Clone, StatefulView)]
+struct CurveSwapContainerProbe {
+    vsync: Vsync,
+    side: Arc<Mutex<f32>>,
+    use_threshold_curve: Arc<Mutex<bool>>,
+}
+
+struct CurveSwapContainerProbeState {
+    vsync: Vsync,
+    side: Arc<Mutex<f32>>,
+    use_threshold_curve: Arc<Mutex<bool>>,
+}
+
+impl StatefulView for CurveSwapContainerProbe {
+    type State = CurveSwapContainerProbeState;
+
+    fn create_state(&self) -> Self::State {
+        CurveSwapContainerProbeState {
+            vsync: self.vsync.clone(),
+            side: Arc::clone(&self.side),
+            use_threshold_curve: Arc::clone(&self.use_threshold_curve),
+        }
+    }
+}
+
+impl ViewState<CurveSwapContainerProbe> for CurveSwapContainerProbeState {
+    fn build(&self, _view: &CurveSwapContainerProbe, _ctx: &dyn BuildContext) -> impl IntoView {
+        let side = *self.side.lock();
+        let widget = AnimatedContainer::new(SizedBox::new(10.0, 10.0))
+            .width(side)
+            .height(side)
+            .duration(RUN);
+        let widget = if *self.use_threshold_curve.lock() {
+            widget.curve(Threshold::new(0.5))
+        } else {
+            widget.curve(Curves::Linear)
+        };
+        VsyncScope::new(self.vsync.clone(), widget)
+    }
+}
+
+/// The `AnimatedBuilder`-path sibling of the `AnimatedOpacity` curve-swap
+/// test above: `AnimatedContainer` rebuilds its child every tick, so this
+/// also proves the curve threads through `ImplicitController::set_curve`
+/// (shared by every multi-property `OptTween`), not just `ImplicitAnimation`.
+#[test]
+fn animated_container_curve_only_change_reapplies_the_new_curve_mid_flight() {
+    let vsync = Vsync::new();
+    let side = Arc::new(Mutex::new(20.0));
+    let use_threshold_curve = Arc::new(Mutex::new(false));
+    let probe = CurveSwapContainerProbe {
+        vsync: vsync.clone(),
+        side: Arc::clone(&side),
+        use_threshold_curve: Arc::clone(&use_threshold_curve),
+    };
+    let mut laid = lay_out_animated(probe, loose(200.0), vsync);
+    let width = |laid: &common::LaidOut| -> f32 { laid.size(laid.current_root()).width.get() };
+    assert!(
+        (width(&laid) - 20.0).abs() < 1e-3,
+        "starts at the initial 20px width"
+    );
+
+    // Start a genuine 20 -> 100 run under the Linear curve.
+    *side.lock() = 100.0;
+    laid.pump();
+    laid.pump_for(FRAME); // detection frame (still ~20px), see other tests in this file
+
+    laid.pump_for(FRAME);
+    laid.pump_for(FRAME);
+    let before_swap = width(&laid);
+    assert!(
+        (before_swap - 52.0).abs() < 5.0,
+        "sanity: Linear curve at raw progress 0.4 over a 20px -> 100px span \
+         should read ~52px, got {before_swap}",
+    );
+
+    // Swap ONLY the curve (side still 100.0, unchanged).
+    *use_threshold_curve.lock() = true;
+    laid.pump();
+
+    let after_swap = width(&laid);
+    assert!(
+        (after_swap - 20.0).abs() < 5.0,
+        "the new Threshold(0.5) curve must apply to the run already in \
+         flight (raw progress 0.4, below the threshold): expected ~20px \
+         (the run's begin), got {after_swap} (this fails against the \
+         pre-fix code, which keeps easing on the curve captured at \
+         construction and would still read ~{before_swap})",
     );
 }
 
