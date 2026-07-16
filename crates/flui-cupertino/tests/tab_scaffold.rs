@@ -7,15 +7,25 @@ mod common;
 
 use std::cell::Cell;
 use std::rc::Rc;
+use std::sync::Arc;
+use std::time::Duration;
 
-use common::{lay_out, tight};
+use common::{lay_out, lay_out_animated, tight};
+use flui_animation::{Animation, AnimationController, Vsync, VsyncRegistration};
 use flui_cupertino::{
     CupertinoTabBar, CupertinoTabBarItem, CupertinoTabController, CupertinoTabScaffold,
 };
+use flui_scheduler::Scheduler;
+use flui_types::Color;
 use flui_types::geometry::px;
 use flui_view::prelude::*;
 use flui_widgets::prelude::EdgeInsets;
-use flui_widgets::{Icon, IconData, MediaQuery, MediaQueryData, SizedBox};
+use flui_widgets::{Icon, IconData, MediaQuery, MediaQueryData, SizedBox, VsyncScope};
+
+/// Per-pump virtual-time step for the `TickerMode` animation test — half the
+/// probe `AnimationController`'s own 1s duration, matching
+/// `flui-widgets/tests/visibility.rs`'s identical animation-probe pattern.
+const FRAME: Duration = Duration::from_millis(300);
 
 fn two_tab_bar() -> CupertinoTabBar {
     CupertinoTabBar::new(vec![
@@ -148,17 +158,128 @@ fn an_inactive_tabs_state_survives_switching_away_and_back() {
     );
 }
 
-/// Content is pushed up by exactly the tab bar's `preferred_size().height`
-/// plus `MediaQuery.padding.bottom` — `tab_scaffold.dart`'s `bottomPadding`
-/// (oracle tag `3.44.0`).
+/// Registers `controller` against the ambient `VsyncScope` in `init_state`
+/// and unregisters it in `dispose` — mirrors
+/// `flui-widgets/tests/visibility.rs`'s identical `AnimationProbe` fixture,
+/// used there to prove `Visibility`'s own `TickerMode` wiring mutes a hidden
+/// subtree's animation.
+#[derive(Clone, StatefulView)]
+struct AnimationProbe {
+    controller: AnimationController,
+}
+
+struct AnimationProbeState {
+    controller: AnimationController,
+    registration: Option<(Vsync, VsyncRegistration)>,
+}
+
+impl StatefulView for AnimationProbe {
+    type State = AnimationProbeState;
+
+    fn create_state(&self) -> Self::State {
+        AnimationProbeState {
+            controller: self.controller.clone(),
+            registration: None,
+        }
+    }
+}
+
+impl ViewState<AnimationProbe> for AnimationProbeState {
+    fn init_state(&mut self, ctx: &dyn BuildContext) {
+        if let Some(vsync) = ctx.get::<VsyncScope, _>(|scope| scope.vsync().clone()) {
+            let registration = vsync.register(self.controller.clone());
+            self.registration = Some((vsync, registration));
+        }
+    }
+
+    fn dispose(&mut self) {
+        if let Some((vsync, registration)) = self.registration.take() {
+            vsync.unregister(registration);
+        }
+    }
+
+    fn build(&self, _view: &AnimationProbe, _ctx: &dyn BuildContext) -> impl IntoView {
+        SizedBox::new(10.0, 10.0)
+    }
+}
+
+/// An inactive tab's animation genuinely stops advancing — Flutter's own
+/// doc comment on `_TabSwitchingView`: "Off stage tabs' animations are
+/// stopped" (`tab_scaffold.dart`, oracle tag `3.44.0`). Proven by registering
+/// a real `AnimationController` against the ambient `VsyncScope` from inside
+/// tab 0's content, then switching to tab 1 and confirming the controller's
+/// value freezes.
+///
+/// Red-check: drop the `TickerMode::new(content).enabled(active)` wrap in
+/// `tab_scaffold.rs`'s `build` (go back to `Offstage` alone) — this test's
+/// final `assert_eq!` fails, since the controller keeps advancing while tab 0
+/// is merely offstage, not ticker-muted.
 #[test]
-fn content_is_padded_above_the_tab_bar_plus_the_bottom_inset() {
+fn an_inactive_tabs_animation_is_muted_by_ticker_mode() {
+    let vsync = Vsync::new();
+    let controller = AnimationController::new(Duration::from_secs(1), Arc::new(Scheduler::new()));
+    let tab_controller = CupertinoTabController::new(0);
+
+    let probe_controller = controller.clone();
+    let scaffold =
+        CupertinoTabScaffold::new(two_tab_bar(), tab_controller.clone(), move |_ctx, index| {
+            if index == 0 {
+                AnimationProbe {
+                    controller: probe_controller.clone(),
+                }
+                .into_view()
+                .boxed()
+            } else {
+                SizedBox::new(10.0, 10.0).into_view().boxed()
+            }
+        });
+    let root = VsyncScope::new(
+        vsync.clone(),
+        MediaQuery::new(MediaQueryData::default(), scaffold),
+    );
+    let mut laid = lay_out_animated(root, tight(400.0, 800.0), vsync);
+
+    controller.forward().expect("animation should start");
+    laid.pump_for(FRAME);
+    laid.pump_for(FRAME);
+    assert!(
+        controller.value() > 0.0,
+        "tab 0 is active on mount; its registered animation must advance"
+    );
+
+    tab_controller.set_index(1);
+    laid.tick();
+    let value_when_switched_away = controller.value();
+
+    laid.pump_for(FRAME);
+    laid.pump_for(FRAME);
+    assert_eq!(
+        controller.value(),
+        value_when_switched_away,
+        "an inactive tab's animation must not advance once TickerMode disables it"
+    );
+    controller.dispose();
+}
+
+/// With an **opaque** tab bar background, content is pushed up by exactly
+/// the tab bar's `preferred_size().height` plus `MediaQuery.padding.bottom`
+/// — `tab_scaffold.dart`'s `bottomPadding`, the `tabBar.opaque(context)`
+/// branch (oracle tag `3.44.0`).
+///
+/// Red-check: hardcode the `opaque(ctx)` branch to always take the "opaque"
+/// arm in `tab_scaffold.rs` — this test still passes (nothing distinguishes
+/// it from the always-opaque bug the previous version of this code had),
+/// but [`translucent_tab_bar_does_not_pad_content_and_hints_via_media_query`]
+/// below then fails, since it specifically requires the *translucent* arm.
+#[test]
+fn opaque_tab_bar_pads_content_above_it_plus_the_bottom_inset() {
     let media = MediaQueryData {
         padding: EdgeInsets::new(px(0.0), px(0.0), px(20.0), px(0.0)),
         ..MediaQueryData::default()
     };
     let controller = CupertinoTabController::new(0);
-    let scaffold = CupertinoTabScaffold::new(two_tab_bar(), controller, |_ctx, _index| {
+    let opaque_bar = two_tab_bar().background_color(Color::rgba(0, 0, 0, 255));
+    let scaffold = CupertinoTabScaffold::new(opaque_bar, controller, |_ctx, _index| {
         SizedBox::new(60.0, 30.0).into_view().boxed()
     });
 
@@ -175,6 +296,94 @@ fn content_is_padded_above_the_tab_bar_plus_the_bottom_inset() {
     assert!(
         matching_padding.is_some(),
         "some Padding must carry the content's 50.0 tab bar height + 20.0 bottom inset = 70.0"
+    );
+}
+
+/// With the **default, translucent** tab bar background (the oracle's own
+/// default `barBackgroundColor` is `0xF0`-alpha, not fully opaque), content
+/// is **not** shifted — it may draw behind the bar — and the obstruction is
+/// hinted via the republished `MediaQuery.padding.bottom` instead
+/// (`tab_scaffold.dart`'s `else` branch, oracle tag `3.44.0`).
+///
+/// Red-check: flip the `if view.tab_bar.opaque(ctx)` condition in
+/// `tab_scaffold.rs` — this test's "no Padding carries 70px" assertion fails.
+#[test]
+fn translucent_tab_bar_does_not_pad_content_and_hints_via_media_query() {
+    let controller = CupertinoTabController::new(0);
+    // `two_tab_bar()`'s default background resolves to the theme's
+    // `bar_background_color`, whose default alpha is `0xF0` — translucent.
+    // `MediaQueryData::default()` has `padding.bottom == 0`, so the wrong
+    // (mutated) behavior would pad content by exactly `tab_bar_height` —
+    // 50px, not 0 — which is what the assertion below pins.
+    let scaffold = CupertinoTabScaffold::new(two_tab_bar(), controller, |_ctx, _index| {
+        SizedBox::new(60.0, 30.0).into_view().boxed()
+    });
+
+    let laid = lay_out(
+        MediaQuery::new(MediaQueryData::default(), scaffold),
+        tight(400.0, 800.0),
+    );
+
+    let has_50px_padding = laid
+        .find_all_by_render_type("RenderPadding")
+        .into_iter()
+        .filter_map(|id| laid.render_property(id, "padding"))
+        .any(|padding| padding.contains("bottom: 50px"));
+    assert!(
+        !has_50px_padding,
+        "a translucent tab bar must not shift content by its own height"
+    );
+}
+
+/// When the on-screen keyboard (`view_insets.bottom`) is already taller than
+/// the tab bar itself, content is padded by the **keyboard inset alone** —
+/// the tab-bar-height contribution is skipped entirely, not added on top
+/// (`tab_scaffold.dart`'s `tabBar.preferredSize.height >
+/// existingMediaQuery.viewInsets.bottom` guard, oracle tag `3.44.0`; "don't
+/// double pad" is a real edge case here, not a simplification).
+///
+/// Red-check: flip `tab_bar_height > media.view_insets.bottom` to `<` in
+/// `tab_scaffold.rs` — the "no 50px contribution" assertion below fails
+/// (the tab-bar-height branch would wrongly trigger despite the keyboard
+/// already being taller).
+#[test]
+fn keyboard_taller_than_the_tab_bar_pads_content_by_the_keyboard_inset_alone() {
+    let media = MediaQueryData {
+        view_insets: EdgeInsets::new(px(0.0), px(0.0), px(300.0), px(0.0)),
+        ..MediaQueryData::default()
+    };
+    let controller = CupertinoTabController::new(0);
+    // Opaque, matching `opaque_tab_bar_pads_content_above_it_plus_the_bottom_inset`:
+    // this test exercises the tab-bar-height-vs-keyboard-inset guard itself,
+    // not the opaque/translucent branch `opaque(ctx)` already covers above —
+    // a translucent bar would route this same 300px value through
+    // `reduced.padding.bottom` instead of `content_padding_bottom`, which
+    // would defeat this test's `RenderPadding` probe regardless of the guard.
+    let opaque_bar = two_tab_bar().background_color(Color::rgba(0, 0, 0, 255));
+    let scaffold = CupertinoTabScaffold::new(opaque_bar, controller, |_ctx, _index| {
+        SizedBox::new(60.0, 30.0).into_view().boxed()
+    });
+
+    let laid = lay_out(MediaQuery::new(media, scaffold), tight(400.0, 800.0));
+    let paddings: Vec<String> = laid
+        .find_all_by_render_type("RenderPadding")
+        .into_iter()
+        .filter_map(|id| laid.render_property(id, "padding"))
+        .collect();
+
+    assert!(
+        paddings
+            .iter()
+            .any(|padding| padding.contains("bottom: 300px")),
+        "the 300px keyboard inset (taller than the 50px tab bar) must become content padding \
+         directly: {paddings:?}"
+    );
+    assert!(
+        !paddings
+            .iter()
+            .any(|padding| padding.contains("bottom: 50px")),
+        "the tab-bar-height contribution must be skipped entirely when the keyboard is \
+         already taller than it: {paddings:?}"
     );
 }
 

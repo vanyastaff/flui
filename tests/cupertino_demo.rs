@@ -560,6 +560,17 @@ fn edge_swipe_from_the_left_pops_the_details_route() {
         .expect("the Home tab's content must render again once swiped back to it");
 }
 
+/// `CupertinoDemoApp` — the thin `StatelessView` entry point
+/// `flui_app::run_app` requires — is exercised at *runtime* only by
+/// `examples/cupertino_demo/main.rs`, not this headless test: every
+/// acceptance test above mounts `demo_root()` directly instead, so it can
+/// capture the root's `controller`/`settings_count` handles *before*
+/// mounting (`CupertinoDemoApp` itself is a unit struct with no fields to
+/// read them back from). This is therefore a **compile pin, not a mount
+/// proof** — referencing the symbol here keeps both `#[path]` consumers of
+/// `tree.rs` compiling the same symbol set, so a signature change that
+/// breaks the example's entry point fails `cargo test` too, matching
+/// `tests/material_demo.rs`'s identical `demo_app_entry_point_constructs`.
 #[test]
 fn demo_app_entry_point_constructs() {
     let _ = tree::CupertinoDemoApp;

@@ -9,7 +9,7 @@ mod common;
 use std::time::Duration;
 
 use common::{lay_out_animated, tight};
-use flui_animation::Vsync;
+use flui_animation::{Curve, Curves, Vsync};
 use flui_cupertino::cupertino_page_route;
 use flui_types::Color;
 use flui_view::prelude::*;
@@ -97,12 +97,19 @@ fn primary_slide_dx(laid: &common::LaidOut) -> f32 {
 
 /// The pushed page slides in from fully off the right edge of the viewport
 /// to flush with it, over the oracle's 500ms `kTransitionDuration` — not a
-/// jump cut, and not settled before the duration elapses.
+/// jump cut, and not settled before the duration elapses. The midpoint value
+/// is pinned against `Curves::FastEaseInToSlowEaseOut`'s own math (the exact
+/// curve `route.dart`'s `_setupAnimation` applies to the primary position),
+/// not a loose "still mid-flight" range a plain linear interpolation would
+/// also satisfy.
 ///
 /// Red-check: replace `cupertino_page_transitions` with the framework
-/// default (jump-cut) `transitions` builder — the "still mid-flight at the
-/// transition's midpoint" assertion below fails, since a jump cut is already
-/// at rest the instant it mounts.
+/// default (jump-cut) `transitions` builder — the exact-midpoint assertion
+/// below fails, since a jump cut is already at rest the instant it mounts.
+/// Red-check 2: swap the primary curve for `Curves::Linear` in
+/// `route.rs` — `midpoint_dx` reads `0.5` (linear at `t=0.5`), which is
+/// `> 0.05` away from `FastEaseInToSlowEaseOut`'s real value asserted below,
+/// so the tight-tolerance assertion fails.
 #[test]
 fn cupertino_page_route_slides_in_from_off_the_right_edge_over_500ms() {
     let vsync = Vsync::new();
@@ -120,12 +127,23 @@ fn cupertino_page_route_slides_in_from_off_the_right_edge_over_500ms() {
         "the page must start fully off-screen to the right (dx == 1.0): {start_dx}"
     );
 
-    // Halfway through the 500ms transition: still animating, not settled.
+    // Halfway through the 500ms transition: still animating, not settled,
+    // and at the exact value `FastEaseInToSlowEaseOut` (not linear) predicts.
     laid.pump_for(TRANSITION / 2);
     let midpoint_dx = primary_slide_dx(&laid);
+    let curved_progress = Curves::FastEaseInToSlowEaseOut.transform(0.5);
+    let expected_midpoint_dx = 1.0 - curved_progress;
     assert!(
-        (0.05..0.95).contains(&midpoint_dx),
-        "the page must still be sliding at the transition's midpoint: {midpoint_dx}"
+        (midpoint_dx - expected_midpoint_dx).abs() < 0.01,
+        "at raw progress 0.5, FastEaseInToSlowEaseOut.transform(0.5) = {curved_progress}, so \
+         dx must read {expected_midpoint_dx} (1.0 - curved progress), not linear's 0.5: \
+         got {midpoint_dx}"
+    );
+    assert!(
+        (midpoint_dx - 0.5).abs() > 0.05,
+        "sanity: the curved midpoint must be measurably different from a plain linear \
+         interpolation's 0.5, or this assertion isn't actually distinguishing the two: \
+         midpoint_dx={midpoint_dx}"
     );
 
     for _ in 0..PUMPS {
@@ -136,6 +154,72 @@ fn cupertino_page_route_slides_in_from_off_the_right_edge_over_500ms() {
         settled_dx.abs() < 0.01,
         "the page must settle flush with the viewport's left edge (dx == 0.0) \
          once the transition completes: {settled_dx}"
+    );
+}
+
+/// The secondary (covered-page) slide drifts toward `dx = -1/3` once a
+/// second route is pushed on top — `_kMiddleLeftTween` (`route.dart`, oracle
+/// tag `3.44.0`) — exercised here for the first time: every other test in
+/// this file pushes only one route, so its secondary animation stays pinned
+/// at its `kAlwaysDismissedAnimation` rest value (`dx == 0`) the whole time.
+///
+/// Red-check: change `middle_left_tween()`'s end value in `route.rs` from
+/// `-1.0 / 3.0` to `0.0` (a no-op parallax) — this test's assertion fails,
+/// since no node then settles anywhere near `-1/3`.
+#[test]
+fn a_covered_pages_secondary_slide_drifts_toward_negative_one_third() {
+    let vsync = Vsync::new();
+    let navigator = seeded_navigator();
+    let mut laid = lay_out_animated(app(&vsync, &navigator), tight(400.0, 800.0), vsync);
+
+    // Push route A and let its own entrance fully settle.
+    let _a = navigator.push(cupertino_page_route::<(), _>(
+        |_ctx, _primary, _secondary| ColoredBox::new(Color::rgb(10, 20, 30)).into_view().boxed(),
+    ));
+    for _ in 0..PUMPS {
+        laid.pump_for(FRAME);
+    }
+
+    // Push route B on top of A, and let ITS entrance fully settle too — this
+    // is what drives A's secondary animation via `did_change_next`.
+    let _b = navigator.push(cupertino_page_route::<(), _>(
+        |_ctx, _primary, _secondary| ColoredBox::new(Color::rgb(40, 50, 60)).into_view().boxed(),
+    ));
+    for _ in 0..PUMPS {
+        laid.pump_for(FRAME);
+    }
+
+    let nodes = laid.find_all_by_render_type("RenderFractionalTranslation");
+    assert_eq!(
+        nodes.len(),
+        4,
+        "two pushed cupertino_page_routes each mount a primary + secondary FractionalTranslation"
+    );
+    let dxs: Vec<f32> = nodes
+        .iter()
+        .map(|&id| {
+            parse_translation(
+                &laid
+                    .render_property(id, "translation")
+                    .expect("FractionalTranslation always reports its translation"),
+            )
+            .0
+        })
+        .collect();
+
+    let closest_to_negative_third = dxs
+        .iter()
+        .copied()
+        .min_by(|a, b| {
+            (a - (-1.0_f32 / 3.0))
+                .abs()
+                .total_cmp(&(b - (-1.0_f32 / 3.0)).abs())
+        })
+        .expect("four FractionalTranslation nodes exist");
+    assert!(
+        (closest_to_negative_third - (-1.0 / 3.0)).abs() < 0.02,
+        "route A's covered secondary must settle at dx ≈ -1/3 once route B fully covers it: \
+         all dxs = {dxs:?}"
     );
 }
 

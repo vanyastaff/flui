@@ -13,9 +13,14 @@
 //!   a tab's content is only ever *built* the first time it becomes active
 //!   (`should_build_tab`, tracked per index and never reset — "once
 //!   visited, stays built"), and every non-active tab is
-//!   [`HeroMode`]-disabled + [`Offstage`]-hidden rather than unmounted —
-//!   so an inactive tab's own state (a counter, a scroll position, a nested
-//!   `Navigator` stack) survives a switch away and back.
+//!   [`HeroMode`]-disabled + [`Offstage`]-hidden + [`TickerMode`]-disabled
+//!   rather than unmounted — so an inactive tab's own state (a counter, a
+//!   scroll position, a nested `Navigator` stack) survives a switch away and
+//!   back, and its animations genuinely stop advancing while hidden
+//!   ("Off stage tabs' animations are stopped", `tab_scaffold.dart`'s own
+//!   doc comment on `_TabSwitchingView`) — nested in oracle order,
+//!   `HeroMode(enabled: active, child: Offstage(offstage: !active, child:
+//!   TickerMode(enabled: active, child: …)))`.
 //! - The content-padding contract: content is pushed up by exactly
 //!   [`preferred_size`](PreferredSizeView::preferred_size)'s height
 //!   *plus* `MediaQuery.padding.bottom`, unless the on-screen keyboard
@@ -46,9 +51,6 @@
 //! - **Per-tab `FocusScope`** (`_TabSwitchingViewState`'s
 //!   `tabFocusNodes`/`_focusActiveTab`) — no per-tab focus-scope wiring;
 //!   [`Offstage`] alone governs visibility.
-//! - **The translucent-tab-bar content-behind-the-bar branch** — same
-//!   "V1 always takes the oracle's opaque branch" posture
-//!   [`crate::CupertinoPageScaffold`] documents for its own nav bar slot.
 //! - **Text-scaling suppression on the tab bar**
 //!   (`MediaQuery.withNoTextScaling`) — `MediaQueryData` has no
 //!   no-scaling variant to apply yet.
@@ -66,7 +68,7 @@ use flui_view::prelude::*;
 use flui_view::{AnimatedView, impl_animated_view};
 use flui_widgets::{
     DecoratedBox, HeroMode, MediaQuery, Offstage, Padding, Positioned, PreferredSizeView, SizedBox,
-    Stack, StackFit,
+    Stack, StackFit, TickerMode,
 };
 
 use crate::bottom_tab_bar::CupertinoTabBar;
@@ -279,9 +281,13 @@ impl ViewState<CupertinoTabScaffold> for CupertinoTabScaffoldState {
                     } else {
                         SizedBox::shrink().boxed()
                     };
-                    HeroMode::new(Offstage::new().offstage(!active).child(content))
-                        .enabled(active)
-                        .boxed()
+                    HeroMode::new(
+                        Offstage::new()
+                            .offstage(!active)
+                            .child(TickerMode::new(content).enabled(active)),
+                    )
+                    .enabled(active)
+                    .boxed()
                 })
                 .collect()
         };
@@ -303,10 +309,16 @@ impl ViewState<CupertinoTabScaffold> for CupertinoTabScaffoldState {
         // `3.44.0`), not a simplification: don't double-pad.
         if !view.resize_to_avoid_bottom_inset || tab_bar_height > media.view_insets.bottom {
             let bottom_padding = tab_bar_height + media.padding.bottom;
-            // V1: the tab bar always takes the "opaque" branch — see the
-            // module docs' deferred list.
-            content_padding_bottom = bottom_padding;
-            reduced.padding.bottom = px(0.0);
+            if view.tab_bar.opaque(ctx) {
+                // Opaque: directly stop content higher, and the bar's own
+                // height is fully consumed out of the republished padding.
+                content_padding_bottom = bottom_padding;
+                reduced.padding.bottom = px(0.0);
+            } else {
+                // Translucent: content may draw behind the bar; hint the
+                // obstructed area via padding instead of shifting content.
+                reduced.padding.bottom = bottom_padding;
+            }
         }
 
         let content = MediaQuery::new(

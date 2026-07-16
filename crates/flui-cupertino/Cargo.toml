@@ -55,6 +55,11 @@ tracing = { workspace = true }
 flui-rendering = { path = "../flui-rendering", version = "0.2.0", features = ["testing"] }
 flui-objects = { path = "../flui-objects", version = "0.2.0", features = ["testing"] }
 flui-binding = { path = "../flui-binding", version = "0.2.0" }
+# `Scheduler` — a bare `AnimationController` fixture in
+# `tests/tab_scaffold.rs`'s `TickerMode`-muting test needs one to construct,
+# matching `flui-widgets/tests/visibility.rs`'s identical animation-probe
+# fixture.
+flui-scheduler = { path = "../flui-scheduler", version = "0.2.0" }
 # Synthetic pointer events (`make_down_event`/`make_up_event`) — `tests/common`
 # dispatches these to drive `CupertinoButton`'s tap handling at the widget
 # level. No `flui-interaction` usage in `src/` (no `FocusNode` wiring yet —

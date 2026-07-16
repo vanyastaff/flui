@@ -21,7 +21,11 @@
 //!   row's bottom padding) — mirroring `_kNavBarPersistentHeight`'s
 //!   top-inset self-padding on [`crate::CupertinoNavigationBar`].
 //! - `opaque(ctx)`: whether the resolved background is fully opaque —
-//!   consumed by [`crate::CupertinoTabScaffold`]'s content-padding math.
+//!   consumed by [`crate::CupertinoTabScaffold`]'s content-padding math (the
+//!   opaque/translucent branch, both ported).
+//! - Per-item `Semantics(selected: active)`, and
+//!   `Semantics(explicitChildNodes: true)` around the item row so each item
+//!   keeps its own semantics node rather than merging into one.
 //!
 //! ## `CupertinoTabBarItem`, not `BottomNavigationBarItem`
 //!
@@ -39,8 +43,14 @@
 //! ## Deferred, named
 //!
 //! - **Blur** (`BackdropFilter` on a translucent background) — same gap
-//!   `CupertinoNavigationBar` documents: no `BackdropFilter` primitive, and
-//!   moot while V1 always resolves an opaque background.
+//!   `CupertinoNavigationBar` documents: no `BackdropFilter` primitive in
+//!   `flui-widgets` yet. A caller-supplied translucent `background_color`
+//!   does reach the opaque/translucent branch (`opaque(ctx)` is wired), it
+//!   just paints with no blur behind it.
+//! - **The localized `Semantics.hint`**
+//!   (`localizations.tabSemanticsLabel(tabIndex:, tabCount:)`) — no
+//!   `CupertinoLocalizations`-equivalent in this crate; `selected` is ported,
+//!   the hint is not.
 //! - **`copyWith`** — Flutter's manual clone-with-overrides method.
 //!   `CupertinoTabBar: Clone` plus its own builder methods (`.current_index(...)`,
 //!   `.on_tap(...)`) already give [`crate::CupertinoTabScaffold`] the same
@@ -58,10 +68,10 @@ use flui_view::prelude::*;
 use flui_widgets::{
     Column, CrossAxisAlignment, DecoratedBox, DefaultTextStyle, Expanded, GestureDetector,
     HitTestBehavior, IconTheme, IconThemeData, MainAxisAlignment, MediaQuery, Padding,
-    PreferredSizeView, Row, SizedBox, Text,
+    PreferredSizeView, Row, Semantics, SizedBox, Text,
 };
 
-use crate::colors::{CupertinoColor, CupertinoColors};
+use crate::colors::{CupertinoColor, CupertinoColors, CupertinoDynamicColor};
 use crate::theme::CupertinoTheme;
 
 /// `_kTabBarHeight` (`bottom_tab_bar.dart`, oracle tag `3.44.0`) — standard
@@ -73,22 +83,16 @@ pub const TAB_BAR_HEIGHT: f32 = 50.0;
 /// `width: 0.0` cannot be ported verbatim.
 pub const HAIRLINE_BORDER_WIDTH: f32 = crate::nav_bar::HAIRLINE_BORDER_WIDTH;
 
-/// `_kDefaultTabBarBorderColor`'s light variant (`bottom_tab_bar.dart`,
-/// oracle tag `3.44.0`).
-const DEFAULT_TAB_BAR_BORDER_COLOR: Color = Color::from_argb(0x4D00_0000);
-
-/// `_kDefaultTabBarBorder` (`bottom_tab_bar.dart`, oracle tag `3.44.0`): a
-/// top-only hairline.
-fn default_border() -> Border<flui_types::geometry::Pixels> {
-    Border::new(
-        Some(BorderSide::new(
-            DEFAULT_TAB_BAR_BORDER_COLOR,
-            px(HAIRLINE_BORDER_WIDTH),
-            BorderStyle::Solid,
-        )),
-        None,
-        None,
-        None,
+/// `_kDefaultTabBarBorderColor` (`bottom_tab_bar.dart`, oracle tag `3.44.0`):
+/// `CupertinoDynamicColor.withBrightness(color: 0x4D000000, darkColor:
+/// 0x29000000)` — genuinely brightness-dependent, unlike
+/// [`crate::CupertinoNavigationBar`]'s own hairline border color (a plain,
+/// non-dynamic `Color` in the oracle). Resolved fresh in `build` against the
+/// ambient brightness, not baked into a `const` at construction time.
+fn default_border_color() -> CupertinoDynamicColor {
+    CupertinoDynamicColor::with_brightness(
+        Color::from_argb(0x4D00_0000),
+        Color::from_argb(0x2900_0000),
     )
 }
 
@@ -175,6 +179,13 @@ pub struct CupertinoTabBar {
     icon_size: f32,
     height: f32,
     border: Option<Border<flui_types::geometry::Pixels>>,
+    /// Whether `border` still holds the un-overridden default. If so,
+    /// `build` resolves [`default_border_color`]'s light/dark variant fresh
+    /// against the ambient brightness every time, rather than using a color
+    /// baked in once at construction — see that function's doc for why this
+    /// component's default border (unlike `CupertinoNavigationBar`'s) is
+    /// genuinely brightness-dependent in the oracle.
+    border_is_default: bool,
 }
 
 impl CupertinoTabBar {
@@ -199,7 +210,8 @@ impl CupertinoTabBar {
             inactive_color: CupertinoColor::Dynamic(CupertinoColors::INACTIVE_GRAY),
             icon_size: 30.0,
             height: TAB_BAR_HEIGHT,
-            border: Some(default_border()),
+            border: None,
+            border_is_default: true,
         }
     }
 
@@ -279,6 +291,7 @@ impl CupertinoTabBar {
     #[must_use]
     pub fn border(mut self, border: Option<Border<flui_types::geometry::Pixels>>) -> Self {
         self.border = border;
+        self.border_is_default = false;
         self
     }
 
@@ -371,14 +384,47 @@ impl StatelessView for CupertinoTabBar {
                     detector = detector.on_tap(move || on_tap(index));
                 }
 
-                Expanded::new(detector.child(content)).boxed()
+                // `Semantics(selected: active, hint: localizations.tabSemanticsLabel(...), …)`
+                // (`bottom_tab_bar.dart`, oracle tag `3.44.0`) — `selected`
+                // ported; the localized `hint` is deferred (no
+                // `CupertinoLocalizations`-equivalent `tabSemanticsLabel` in
+                // this crate).
+                Expanded::new(
+                    Semantics::new()
+                        .selected(is_active)
+                        .child(detector.child(content)),
+                )
+                .boxed()
             })
             .collect();
 
+        // `Padding(bottom: bottomPadding, child: Semantics(explicitChildNodes:
+        // true, child: Row(...)))` (`bottom_tab_bar.dart`, oracle tag
+        // `3.44.0`) — each item owns its own semantics node rather than
+        // merging into one.
         let toolbar = Padding::new(flui_types::geometry::EdgeInsets::only_bottom(bottom_inset))
-            .child(Row::new(item_views).cross_axis_alignment(CrossAxisAlignment::End));
+            .child(
+                Semantics::new()
+                    .explicit_child_nodes(true)
+                    .child(Row::new(item_views).cross_axis_alignment(CrossAxisAlignment::End)),
+            );
 
-        DecoratedBox::new(BoxDecoration::with_color(background).set_border(self.border))
+        let resolved_border = if self.border_is_default {
+            Some(Border::new(
+                Some(BorderSide::new(
+                    CupertinoColor::Dynamic(default_border_color()).resolve(ctx),
+                    px(HAIRLINE_BORDER_WIDTH),
+                    BorderStyle::Solid,
+                )),
+                None,
+                None,
+                None,
+            ))
+        } else {
+            self.border
+        };
+
+        DecoratedBox::new(BoxDecoration::with_color(background).set_border(resolved_border))
             .child(SizedBox::height(self.height + bottom_inset.get()).child(toolbar))
     }
 }
