@@ -337,7 +337,39 @@ impl std::fmt::Debug for CupertinoButton {
 }
 
 /// Resolves the background fill, per `_CupertinoButtonState.build`'s
-/// `backgroundColor` computation (`button.dart`, oracle tag `3.44.0`).
+/// `backgroundColor` computation (`button.dart`, oracle tag `3.44.0`):
+///
+/// ```dart
+/// final Color? backgroundColor =
+///     (widget.color == null ? ... : CupertinoDynamicColor.maybeResolve(widget.color, context))
+///         ?.withOpacity(widget._style == tinted ? ... : widget.color?.opacity ?? 1.0);
+/// ```
+///
+/// ## Why the `Plain`/`Filled` alpha comes from `view.color`, not the resolved color
+///
+/// For `Tinted`, the multiplier is a fixed light/dark constant — no
+/// surprises. For `Plain`/`Filled`, the oracle multiplies by `widget.color?.opacity`,
+/// which reads the **original, never-resolved** `widget.color` — not the
+/// `CupertinoDynamicColor.maybeResolve` result assigned to `backgroundColor`
+/// two lines above. `CupertinoDynamicColor.opacity` forwards to its private
+/// `_effectiveColor`, which every public constructor seeds with `color` (the
+/// light/normal variant) and which is only ever replaced by calling
+/// `resolveFrom` — a call that returns a **new** instance, leaving the
+/// original `widget.color` untouched. So this multiplier is always the
+/// color's light-variant alpha, even when `backgroundColor` itself resolved
+/// to the dark variant.
+///
+/// This looks like a bug (a dark-mode background painted with the light
+/// alpha) but is the oracle's real, verified behavior: `CupertinoColors.separator`
+/// is alpha 73 light / 153 dark (`colors.dart`, oracle tag `3.44.0`), and a
+/// `.separator`-colored `Plain`/`Filled` button under a Dark theme really
+/// does render at alpha 73 in real Flutter — see
+/// `background_dynamic_color_keeps_the_light_variants_alpha_under_a_dark_theme`
+/// in `tests/button.rs`, which mounts a `.separator`-colored button under a
+/// Dark theme and pins this exact (surprising but oracle-faithful) value.
+/// Ported here as a direct alpha-channel copy (`Color::with_alpha`, `u8`)
+/// rather than the oracle's `opacity` (`f64`) round trip through
+/// `with_opacity` — same source byte, no float-precision risk.
 fn resolve_background_color(
     view: &CupertinoButton,
     ctx: &dyn BuildContext,
@@ -351,22 +383,23 @@ fn resolve_background_color(
         },
     };
 
-    base.map(|base_color| {
-        let opacity = match view.style {
-            ButtonFillStyle::Tinted => {
-                if CupertinoTheme::brightness_of(ctx) == Brightness::Light {
-                    K_TINTED_OPACITY_LIGHT
-                } else {
-                    K_TINTED_OPACITY_DARK
-                }
-            }
-            ButtonFillStyle::Plain | ButtonFillStyle::Filled => match view.color {
-                Some(CupertinoColor::Static(color)) => color.opacity(),
-                Some(CupertinoColor::Dynamic(dynamic)) => dynamic.color.opacity(),
-                None => 1.0,
-            },
-        };
-        base_color.with_opacity(opacity)
+    base.map(|base_color| match view.style {
+        ButtonFillStyle::Tinted => {
+            let opacity = if CupertinoTheme::brightness_of(ctx) == Brightness::Light {
+                K_TINTED_OPACITY_LIGHT
+            } else {
+                K_TINTED_OPACITY_DARK
+            };
+            base_color.with_opacity(opacity)
+        }
+        ButtonFillStyle::Plain | ButtonFillStyle::Filled => {
+            let alpha = match view.color {
+                Some(CupertinoColor::Static(color)) => color.a,
+                Some(CupertinoColor::Dynamic(dynamic)) => dynamic.color.a,
+                None => 255,
+            };
+            base_color.with_alpha(alpha)
+        }
     })
 }
 
@@ -387,6 +420,41 @@ fn resolve_foreground_color(
         (_, true) => primary_color,
         (_, false) => CupertinoColors::TERTIARY_LABEL.resolve_from(ctx),
     }
+}
+
+/// Starts the press-in fade on tap — `true` if it actually started a run.
+/// Extracted from the `on_tap` closure so "does a tap with `pressed_opacity:
+/// None` actually start the controller" is unit-testable without mounting a
+/// render tree (see the tests below).
+///
+/// `pressed_opacity: None` means [`CupertinoButton::pressed_opacity`]'s
+/// contract — "disables the fade animation entirely" — a stronger,
+/// FLUI-authored promise than the oracle's own doc ("opacity will not change
+/// on pressed"); the oracle's `_animate()` has no such guard and always
+/// drives the `AnimationController` on tap, even when `pressedOpacity` is
+/// `null` (the tween's begin/end both collapse to `1.0`, so the run ticks
+/// invisibly). Skipping the run here has no observable paint difference —
+/// `build`'s `opacity` `FloatTween` also collapses to `1.0..=1.0` in that
+/// case — it only removes wasted ticking, rebuild-scheduling, and
+/// status-listener work, so this does not diverge from the oracle's visible
+/// behavior, only from its incidental cost.
+fn start_press_fade(
+    controller: &AnimationController,
+    pressed_opacity: Option<f32>,
+    rebuild: Option<&RebuildHandle>,
+) -> bool {
+    if pressed_opacity.is_none() {
+        return false;
+    }
+    let curve: Arc<dyn flui_animation::Curve + Send + Sync> =
+        Arc::new(Curves::EaseInOutCubicEmphasized);
+    if let Err(error) = controller.animate_to_curved(1.0, Some(K_FADE_OUT_DURATION), curve) {
+        tracing::debug!(?error, "CupertinoButton press fade failed to start");
+    }
+    if let Some(rebuild) = rebuild {
+        rebuild.schedule();
+    }
+    true
 }
 
 /// Persistent state behind [`CupertinoButton`] — see [`StatefulView`]/
@@ -542,18 +610,10 @@ impl ViewState<CupertinoButton> for CupertinoButtonState {
             if let Some(on_pressed) = view.on_pressed.clone() {
                 let controller = self.controller.clone();
                 let rebuild = self.rebuild.clone();
+                let pressed_opacity = view.pressed_opacity;
                 gesture_detector = gesture_detector.on_tap(move || {
                     if let Some(controller) = &controller {
-                        let curve: Arc<dyn flui_animation::Curve + Send + Sync> =
-                            Arc::new(Curves::EaseInOutCubicEmphasized);
-                        if let Err(error) =
-                            controller.animate_to_curved(1.0, Some(K_FADE_OUT_DURATION), curve)
-                        {
-                            tracing::debug!(?error, "CupertinoButton press fade failed to start");
-                        }
-                        if let Some(rebuild) = &rebuild {
-                            rebuild.schedule();
-                        }
+                        start_press_fade(controller, pressed_opacity, rebuild.as_ref());
                     }
                     on_pressed();
                 });
@@ -691,5 +751,43 @@ mod tests {
         );
         assert!(debug.contains("Filled"));
         assert!(debug.contains("enabled: true"));
+    }
+
+    // ---- start_press_fade (pressed_opacity(None) truly starts no run) ----
+
+    fn fresh_controller() -> AnimationController {
+        AnimationController::new(Duration::from_millis(200), Arc::new(Scheduler::new()))
+    }
+
+    /// Red-check: delete the `pressed_opacity.is_none()` guard in
+    /// `start_press_fade` (call `animate_to_curved` unconditionally, as the
+    /// oracle's own `_animate()` does) — this assertion fails because the
+    /// controller starts animating.
+    #[test]
+    fn pressed_opacity_none_starts_no_controller_run() {
+        let controller = fresh_controller();
+        let started = start_press_fade(&controller, None, None);
+        assert!(
+            !started,
+            "pressed_opacity(None) must not start the press-fade run"
+        );
+        assert!(
+            !controller.is_animating(),
+            "the controller must never begin animating when pressed_opacity is None"
+        );
+    }
+
+    #[test]
+    fn pressed_opacity_some_starts_the_controller_run() {
+        let controller = fresh_controller();
+        let started = start_press_fade(&controller, Some(0.4), None);
+        assert!(
+            started,
+            "pressed_opacity(Some(_)) must start the press-fade run"
+        );
+        assert!(
+            controller.is_animating(),
+            "animate_to_curved should leave the controller animating immediately after starting"
+        );
     }
 }

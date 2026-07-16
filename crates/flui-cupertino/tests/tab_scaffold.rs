@@ -421,3 +421,42 @@ fn tapping_a_tab_item_switches_the_active_tab() {
         "tapping the second tab item must advance the controller to index 1"
     );
 }
+
+/// An out-of-range controller index must fail loudly, not silently render
+/// every tab `Offstage` with `tab_builder` never invoked. Flutter parity:
+/// `_onCurrentIndexChange`'s `assert(_controller.index >= 0 &&
+/// _controller.index < widget.tabBar.items.length, ...)` (`tab_scaffold.dart`,
+/// oracle tag `3.44.0`) — a debug-only `assert`, matched here by the
+/// `debug_assert!` in `tab_scaffold.rs`'s `build` (test binaries build in
+/// debug profile, so it is live).
+///
+/// This test asserts the panic message from `lay_out`'s own "the mounted
+/// subtree should have a render root" check, **not** the `debug_assert!`'s
+/// own message: this crate's build-error boundary
+/// (`flui_view::element::behavior_commons::build_or_recover`) catches a
+/// panicking `build()` and substitutes a render-less `ErrorView` for the
+/// whole subtree — the same recovery `flui-material/tests/theme.rs` and
+/// `flui-widgets/tests/visibility.rs` document for exactly this reason
+/// ("a panic inside build() is caught by the framework's build-error
+/// boundary... so #[should_panic] around the harness would not observe
+/// it"). With `CupertinoTabScaffold` mounted as the sole root here, that
+/// substitution leaves nothing at all to render, so `lay_out` itself panics
+/// — a loud, unmistakable mount failure, not the old silent
+/// every-tab-hidden mis-render.
+///
+/// Red-check: delete the `debug_assert!` in `CupertinoTabScaffoldState::build`
+/// — this test stops panicking entirely (the scaffold instead mounts
+/// successfully with every tab hidden and `tab_builder` uncalled for index 5).
+#[test]
+#[should_panic(expected = "render root")]
+fn out_of_range_controller_index_panics_instead_of_silently_hiding_every_tab() {
+    let controller = CupertinoTabController::new(5);
+    let scaffold = CupertinoTabScaffold::new(two_tab_bar(), controller, |_ctx, _index| {
+        SizedBox::new(10.0, 10.0).into_view().boxed()
+    });
+
+    let _ = lay_out(
+        MediaQuery::new(MediaQueryData::default(), scaffold),
+        tight(400.0, 800.0),
+    );
+}
