@@ -73,11 +73,9 @@ impl ImageProvider for NetworkImage {
 
         Box::pin(decode_cache::load_coalesced(key, move || async move {
             registry
-                .load_network_image_bridged(url)
+                .load_network_image_bridged(url.clone())
                 .await
-                .map_err(|error| ImageProviderError::DecodeFailed {
-                    reason: error.to_string(),
-                })
+                .map_err(|error| ImageProviderError::from_asset_error(url, error))
         }))
     }
 
@@ -133,5 +131,41 @@ mod tests {
             ImageCacheKey::Asset("shared.png".to_string()),
             ImageCacheKey::Network("shared.png".to_string()),
         );
+    }
+
+    /// A refused connection must never be reported as a decode failure — no
+    /// bytes ever arrive for a decoder to fail on. Hermetic: binds an
+    /// ephemeral loopback port and closes it immediately, so the connection
+    /// attempt is refused deterministically with no external network
+    /// involved.
+    #[tokio::test]
+    async fn network_image_connection_refused_is_not_reported_as_a_decode_failure() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0")
+            .expect("binding an ephemeral port must succeed");
+        let addr = listener
+            .local_addr()
+            .expect("a bound listener must report its local address");
+        drop(listener); // nothing is listening on `addr` from here on.
+
+        let registry = Arc::new(AssetRegistry::default());
+        let provider = NetworkImage::new(registry, format!("http://{addr}/unreachable.png"));
+
+        let result = provider.resolve_async().await;
+
+        assert!(
+            !matches!(result, Err(ImageProviderError::DecodeFailed { .. })),
+            "a refused connection never reaches a decoder, so it must never \
+             be reported as DecodeFailed; got {result:?}",
+        );
+        match result {
+            Err(ImageProviderError::AssetLoadFailed { reason }) => {
+                assert!(
+                    !reason.to_lowercase().contains("decode"),
+                    "the honest failure reason must not claim a decode \
+                     failure that never happened: {reason:?}",
+                );
+            }
+            other => panic!("expected AssetLoadFailed for a refused connection, got {other:?}"),
+        }
     }
 }

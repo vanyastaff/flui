@@ -5,8 +5,6 @@
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::sync::Arc;
-#[cfg(feature = "images")]
-use std::sync::OnceLock;
 
 use parking_lot::RwLock;
 
@@ -51,14 +49,13 @@ pub struct AssetRegistry {
     /// A host-supplied runtime handle for [`load_image_bridged`](Self::load_image_bridged)
     /// to spawn onto, set at construction via
     /// [`AssetRegistryBuilder::with_runtime_handle`]. `None` defers to an
-    /// ambient runtime, then an owned one — see [`bridge::resolve`].
+    /// ambient runtime, then an owned one — see [`BridgeRuntime::resolve`].
     #[cfg(feature = "images")]
     injected_runtime_handle: Option<tokio::runtime::Handle>,
 
-    /// The runtime [`load_image_bridged`](Self::load_image_bridged) has
-    /// resolved to, memoized on first use.
+    /// Backs bridged loads' runtime resolution — see [`BridgeRuntime`].
     #[cfg(feature = "images")]
-    bridge_runtime: OnceLock<BridgeRuntime>,
+    bridge_runtime: BridgeRuntime,
 }
 
 impl std::fmt::Debug for AssetRegistry {
@@ -100,7 +97,7 @@ impl AssetRegistry {
             #[cfg(feature = "images")]
             injected_runtime_handle: None,
             #[cfg(feature = "images")]
-            bridge_runtime: OnceLock::new(),
+            bridge_runtime: BridgeRuntime::new(),
         }
     }
 
@@ -115,7 +112,7 @@ impl AssetRegistry {
             caches: Arc::new(RwLock::new(HashMap::new())),
             default_capacity,
             injected_runtime_handle,
-            bridge_runtime: OnceLock::new(),
+            bridge_runtime: BridgeRuntime::new(),
         }
     }
 
@@ -125,11 +122,14 @@ impl AssetRegistry {
     ///
     /// Spawns onto [`AssetRegistryBuilder::with_runtime_handle`]'s injected
     /// handle if one was supplied at construction; otherwise an ambient tokio
-    /// runtime already running on the calling thread
-    /// (`tokio::runtime::Handle::try_current`); otherwise a dedicated
-    /// single-worker runtime started on first use and kept alive for the
-    /// registry's lifetime. Misconfiguration is impossible: every path
-    /// resolves to a working handle.
+    /// runtime already running on the calling thread right now
+    /// (`tokio::runtime::Handle::try_current`, re-checked on **every** call —
+    /// never memoized, since an ambient runtime can shut down and restart
+    /// between calls); otherwise a dedicated single-worker runtime, started
+    /// on first need and reused (this one, unlike an ambient handle, is safe
+    /// to memoize: this registry controls its lifetime completely).
+    /// Misconfiguration is impossible: every call resolves to a working
+    /// handle, never a stale one.
     ///
     /// The returned future is reactor-free: it only awaits a
     /// [`tokio::sync::oneshot`] receiver, so *polling* it never requires an
@@ -146,16 +146,19 @@ impl AssetRegistry {
     /// # Errors
     ///
     /// Returns [`AssetError::LoadFailed`] if the file cannot be read or
-    /// decoded, or if the loading task is dropped before completing (an
-    /// internal invariant violation, not a normal failure mode — it would
-    /// mean the spawned task panicked).
+    /// decoded, or if the loading task is dropped before completing — most
+    /// often because it panicked, but also possible if the runtime it was
+    /// spawned on (an injected or ambient one this registry does not own)
+    /// shuts down while the task is still in flight.
     #[cfg(feature = "images")]
     pub fn load_image_bridged(
         &self,
         path: impl Into<String>,
     ) -> impl std::future::Future<Output = Result<crate::Image>> + Send + 'static {
         let path = path.into();
-        let handle = bridge::resolve(&self.bridge_runtime, self.injected_runtime_handle.as_ref());
+        let handle = self
+            .bridge_runtime
+            .resolve(self.injected_runtime_handle.as_ref());
         let (tx, rx) = tokio::sync::oneshot::channel();
 
         let spawn_path = path.clone();
@@ -189,14 +192,18 @@ impl AssetRegistry {
     ///
     /// Returns [`AssetError::LoadFailed`]/[`AssetError::NetworkError`] on a
     /// failed request or a failed decode of the response body, or if the
-    /// loading task is dropped before completing.
+    /// loading task is dropped before completing — see
+    /// [`load_image_bridged`](Self::load_image_bridged)'s `# Errors` for the
+    /// same contract.
     #[cfg(all(feature = "images", feature = "network"))]
     pub fn load_network_image_bridged(
         &self,
         url: impl Into<String>,
     ) -> impl std::future::Future<Output = Result<crate::Image>> + Send + 'static {
         let url = url.into();
-        let handle = bridge::resolve(&self.bridge_runtime, self.injected_runtime_handle.as_ref());
+        let handle = self
+            .bridge_runtime
+            .resolve(self.injected_runtime_handle.as_ref());
         let (tx, rx) = tokio::sync::oneshot::channel();
 
         let spawn_url = url.clone();

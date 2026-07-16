@@ -22,14 +22,33 @@
 //! [`ImageCacheKey`]: the second caller for a key already loading receives
 //! the SAME shared future rather than starting a second load. This is what
 //! makes two `Image` widgets mounted with the same provider key issue exactly
-//! one load between them (test: `two_images_same_key_share_one_load` in
-//! `tests/image.rs`).
+//! one load between them (test:
+//! `two_images_same_key_both_decode_through_the_shared_cache` in
+//! `tests/image_async.rs`).
+//!
+//! # Abandoned loads do not leak
+//!
+//! A [`Shared`] future alone is not enough: if the map held a permanent
+//! strong clone, a load whose only subscriber unmounts before completion
+//! (its `Image` widget removed from the tree, and the key never requested
+//! again) would pin that entry — and everything its `start` closure
+//! captured, e.g. an `Arc<AssetRegistry>` and its background runtime —
+//! in the map forever, because the in-future cleanup that removes a
+//! completed entry only runs if something polls the future to completion,
+//! which nobody does for an abandoned load. Flutter's `ImageCache` guards
+//! against exactly this by removing `_pendingImages[key]` when the last
+//! listener detaches, not only on completion. [`CoalescedLoad`] reproduces
+//! that: the map's own reference does not count as a subscriber, and the
+//! LAST outstanding [`CoalescedLoad`] handle removes the entry on `Drop`,
+//! whether or not the load ever finished.
 
 use std::collections::HashMap;
 use std::future::Future;
 use std::num::NonZeroUsize;
 use std::pin::Pin;
-use std::sync::LazyLock;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, LazyLock};
+use std::task::{Context, Poll};
 
 use flui_types::painting::Image as PixelImage;
 use futures_util::FutureExt;
@@ -48,12 +67,20 @@ use super::provider::ImageProviderError;
 /// [`DirectImageProvider`](super::DirectImageProvider) instead.
 const DEFAULT_CAPACITY: usize = 100;
 
-type PendingLoad =
+type SharedLoad =
     Shared<Pin<Box<dyn Future<Output = Result<PixelImage, ImageProviderError>> + Send>>>;
+
+/// A `pending` map slot: the shared future plus a count of outstanding
+/// [`CoalescedLoad`] handles subscribed to it. The map's own clone of
+/// `future` does not itself count as a subscriber.
+struct PendingSlot {
+    future: SharedLoad,
+    live_subscribers: Arc<AtomicUsize>,
+}
 
 struct DecodedImageCache {
     entries: Mutex<lru::LruCache<ImageCacheKey, PixelImage>>,
-    pending: Mutex<HashMap<ImageCacheKey, PendingLoad>>,
+    pending: Mutex<HashMap<ImageCacheKey, PendingSlot>>,
 }
 
 impl DecodedImageCache {
@@ -76,15 +103,51 @@ pub(crate) fn cached(key: &ImageCacheKey) -> Option<PixelImage> {
     CACHE.entries.lock().get(key).cloned()
 }
 
+/// A handle to an in-flight (or already-resolved) coalesced load.
+///
+/// Polling delegates to the underlying [`Shared`] clone. On `Drop`, if this
+/// was the LAST live handle for `key` — regardless of whether the load ever
+/// completed — the `pending` map entry is removed. See the module doc,
+/// "Abandoned loads do not leak".
+struct CoalescedLoad {
+    key: ImageCacheKey,
+    future: SharedLoad,
+    live_subscribers: Arc<AtomicUsize>,
+}
+
+impl Future for CoalescedLoad {
+    type Output = Result<PixelImage, ImageProviderError>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        Pin::new(&mut self.future).poll(cx)
+    }
+}
+
+impl Drop for CoalescedLoad {
+    fn drop(&mut self) {
+        // Decrement and remove-if-last under the SAME lock `load_coalesced`
+        // takes to increment-or-insert: without that, a decrement to zero
+        // here could race a concurrent `load_coalesced` call that just
+        // found (and is about to revive) this same slot, deleting an entry
+        // a brand-new subscriber just claimed.
+        let mut pending = CACHE.pending.lock();
+        if self.live_subscribers.fetch_sub(1, Ordering::AcqRel) == 1 {
+            pending.remove(&self.key);
+        }
+    }
+}
+
 /// Loads `key` via `start` (invoked at most once per in-flight key),
 /// coalescing concurrent callers onto the same load and caching the result on
 /// success.
 ///
-/// A second caller for a key already loading receives the same underlying
-/// future (cloned cheaply via [`Shared`]) rather than invoking `start` again
-/// — Flutter's `_pendingImages` de-duplication. The decoded image is written
-/// to the sync cache before the future resolves, so a [`cached`] probe made
-/// immediately after any awaiter observes completion already sees the hit.
+/// A second caller for a key already loading receives a handle to the same
+/// underlying load (a cheap [`Shared`] clone) rather than invoking `start`
+/// again — Flutter's `_pendingImages` de-duplication. The decoded image is
+/// written to the sync cache before the future resolves, so a [`cached`]
+/// probe made immediately after any awaiter observes completion already sees
+/// the hit. An abandoned load (every subscriber dropped before completion) is
+/// removed from the pending map immediately — see the module doc.
 pub(crate) fn load_coalesced<F>(
     key: ImageCacheKey,
     start: impl FnOnce() -> F + Send + 'static,
@@ -93,12 +156,16 @@ where
     F: Future<Output = Result<PixelImage, ImageProviderError>> + Send + 'static,
 {
     let mut pending = CACHE.pending.lock();
-    if let Some(existing) = pending.get(&key) {
-        return existing.clone();
+    if let Some(slot) = pending.get(&key) {
+        slot.live_subscribers.fetch_add(1, Ordering::AcqRel);
+        return CoalescedLoad {
+            key,
+            future: slot.future.clone(),
+            live_subscribers: Arc::clone(&slot.live_subscribers),
+        };
     }
 
     let cache_key_for_success = key.clone();
-    let pending_key_for_cleanup = key.clone();
     let boxed: Pin<Box<dyn Future<Output = Result<PixelImage, ImageProviderError>> + Send>> =
         Box::pin(async move {
             let outcome = start().await;
@@ -108,19 +175,27 @@ where
                     .lock()
                     .put(cache_key_for_success, image.clone());
             }
-            CACHE.pending.lock().remove(&pending_key_for_cleanup);
             outcome
         });
     let shared = boxed.shared();
-    pending.insert(key, shared.clone());
-    shared
+    let live_subscribers = Arc::new(AtomicUsize::new(1));
+    pending.insert(
+        key.clone(),
+        PendingSlot {
+            future: shared.clone(),
+            live_subscribers: Arc::clone(&live_subscribers),
+        },
+    );
+
+    CoalescedLoad {
+        key,
+        future: shared,
+        live_subscribers,
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
     use super::*;
 
     fn solid(width: u32, height: u32) -> PixelImage {
@@ -148,6 +223,11 @@ mod tests {
             .expect("the load succeeds");
 
         assert_eq!(cached(&key), Some(expected));
+        assert!(
+            !CACHE.pending.lock().contains_key(&key),
+            "a completed load's sole subscriber dropping (right after `.await` \
+             returns Ready) must remove the pending entry",
+        );
     }
 
     #[tokio::test]
@@ -163,6 +243,88 @@ mod tests {
 
         assert!(result.is_err());
         assert_eq!(cached(&key), None);
+        assert!(!CACHE.pending.lock().contains_key(&key));
+    }
+
+    /// Abandoning the only subscriber to a load BEFORE it completes (the
+    /// `Image` widget unmounts, the key is never requested again) must
+    /// remove the pending entry immediately — not leave it pinned in the map
+    /// forever waiting for a completion nobody will ever observe. This is
+    /// the leak Flutter's `ImageCache` avoids by removing `_pendingImages`
+    /// entries when the last listener detaches, not only on completion.
+    #[test]
+    fn abandoning_the_only_subscriber_before_completion_removes_the_pending_entry() {
+        let key = fresh_key("abandoned-before-completion");
+        let (_release_tx, release_rx) = tokio::sync::oneshot::channel::<()>();
+
+        let mut future = Box::pin(load_coalesced(key.clone(), move || async move {
+            // Never resolves within this test: `_release_tx` is held (never
+            // sent to, dropped at test end), so `.await` would be Pending
+            // forever if this were ever actually driven to completion -- it
+            // isn't, `future` is dropped first below. `Poll::Pending` from a
+            // genuine unresolved `.await`, not a blocking call, is what lets
+            // the single manual poll below return without hanging the
+            // (synchronous, non-tokio) test thread.
+            let _ = release_rx.await;
+            Ok(solid(1, 1))
+        }));
+
+        // Poll once so the load has genuinely started (proving it is really
+        // in flight, not merely constructed) before abandoning it.
+        let waker = std::task::Waker::noop();
+        let mut cx = Context::from_waker(waker);
+        assert!(matches!(future.as_mut().poll(&mut cx), Poll::Pending));
+
+        assert!(
+            CACHE.pending.lock().contains_key(&key),
+            "the entry must be registered while the sole subscriber is in flight",
+        );
+
+        drop(future); // abandon: the only subscriber goes away before completion.
+
+        assert!(
+            !CACHE.pending.lock().contains_key(&key),
+            "abandoning the last subscriber before completion must remove the \
+             pending entry immediately -- otherwise it, and everything the \
+             load captured, is pinned in the map forever",
+        );
+    }
+
+    /// While at least one OTHER subscriber remains, dropping one of several
+    /// concurrent subscribers must NOT remove the entry — only the LAST one
+    /// leaving does.
+    #[tokio::test]
+    async fn dropping_one_of_two_subscribers_keeps_the_entry_alive_for_the_other() {
+        let key = fresh_key("one-of-two-abandoned");
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel::<()>();
+        // `Image`'s `PartialEq` is `Arc::ptr_eq` (documented: dimensions plus
+        // same backing buffer, not pixel-by-pixel), so the expectation must
+        // be a clone of the SAME instance the closure resolves to, not a
+        // separately-constructed `solid(1, 1)`.
+        let resolved_image = solid(1, 1);
+        let expected_image = resolved_image.clone();
+
+        let first = Box::pin(load_coalesced(key.clone(), move || async move {
+            let _ = release_rx.await;
+            Ok(resolved_image)
+        }));
+        let second = load_coalesced(key.clone(), || async {
+            unreachable!("coalesced -- the second subscriber must never invoke start")
+        });
+
+        drop(first); // one of two subscribers leaves early.
+
+        assert!(
+            CACHE.pending.lock().contains_key(&key),
+            "the entry must survive while a second subscriber is still live",
+        );
+
+        release_tx
+            .send(())
+            .expect("the loader task is still awaiting release");
+        let result = second.await;
+        assert_eq!(result.unwrap(), expected_image);
+        assert!(!CACHE.pending.lock().contains_key(&key));
     }
 
     /// Two concurrent callers for the same key must invoke `start` exactly

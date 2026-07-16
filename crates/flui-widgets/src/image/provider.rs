@@ -161,6 +161,59 @@ pub enum ImageProviderError {
         /// Name of the async-only provider.
         provider_name: &'static str,
     },
+
+    /// The image source (an asset path or a URL) could not be found.
+    ///
+    /// Distinct from [`FileNotFound`](Self::FileNotFound): this variant
+    /// covers `AssetImage`/`NetworkImage`'s asynchronous sources, backed by
+    /// a `flui-assets::AssetError::NotFound`. `path` may be a URL, not
+    /// necessarily a filesystem path, so a `PathBuf` would misrepresent it.
+    #[error("image source not found: {path}")]
+    SourceNotFound {
+        /// The asset path or URL that could not be found.
+        path: String,
+    },
+
+    /// The underlying `flui-assets` load failed for a reason other than "not
+    /// found" — a read error, a failed HTTP request, an unsupported format,
+    /// or any other asset-loading failure surfaced by `flui-assets`.
+    ///
+    /// Distinct from [`DecodeFailed`](Self::DecodeFailed): this means the
+    /// load itself failed, so bytes may never have reached a decoder at all
+    /// — reporting it as a decode failure would misdiagnose the cause (e.g.
+    /// a refused network connection is not a decode problem).
+    #[error("failed to load image source: {reason}")]
+    AssetLoadFailed {
+        /// The underlying `flui-assets::AssetError`'s message.
+        reason: String,
+    },
+}
+
+/// Maps a `flui-assets::AssetError` onto the closest honest
+/// [`ImageProviderError`] — never [`DecodeFailed`](ImageProviderError::DecodeFailed),
+/// since a `flui-assets` load failure (missing file, refused connection,
+/// unsupported format, …) happens before any bytes reach a decoder. Shared by
+/// `AssetImage` and `NetworkImage`.
+///
+/// As of `flui-assets` 0.2, `ImageAsset::load`'s file-read branch wraps I/O
+/// errors — including "not found" — as `AssetError::LoadFailed`, not
+/// `AssetError::NotFound`, so [`SourceNotFound`](ImageProviderError::SourceNotFound)
+/// is not reachable through a missing local file today; a missing file
+/// currently surfaces as [`AssetLoadFailed`](ImageProviderError::AssetLoadFailed)
+/// with the underlying I/O message preserved. The match here still handles
+/// `NotFound` correctly so this stays honest if that upstream distinction is
+/// added later — the important, load-bearing guarantee this function makes
+/// today is only "never mislabel a load failure as `DecodeFailed`".
+#[cfg(feature = "asset-images")]
+impl ImageProviderError {
+    pub(crate) fn from_asset_error(source: String, error: flui_assets::AssetError) -> Self {
+        if matches!(error, flui_assets::AssetError::NotFound { .. }) {
+            return Self::SourceNotFound { path: source };
+        }
+        Self::AssetLoadFailed {
+            reason: error.to_string(),
+        }
+    }
 }
 
 /// An [`ImageProvider`] backed by an already-decoded [`PixelImage`].

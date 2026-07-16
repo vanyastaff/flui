@@ -79,11 +79,10 @@ impl ImageProvider for AssetImage {
         let path = self.path.clone();
 
         Box::pin(decode_cache::load_coalesced(key, move || async move {
-            registry.load_image_bridged(path).await.map_err(|error| {
-                ImageProviderError::DecodeFailed {
-                    reason: error.to_string(),
-                }
-            })
+            registry
+                .load_image_bridged(path.clone())
+                .await
+                .map_err(|error| ImageProviderError::from_asset_error(path, error))
         }))
     }
 
@@ -127,5 +126,40 @@ mod tests {
             "a cache miss must report RequiresAsyncResolve, not silently succeed \
              or panic; got {result:?}",
         );
+    }
+
+    /// A missing file must never be reported as a decode failure — decoding
+    /// never happens because the load itself fails first. Distinguishing
+    /// this honestly (not flattening every `flui-assets` error into
+    /// `DecodeFailed`) is what lets a caller tell "the file doesn't exist"
+    /// apart from "the file exists but isn't a valid image".
+    #[tokio::test]
+    async fn asset_image_missing_file_is_not_reported_as_a_decode_failure() {
+        let registry = Arc::new(AssetRegistry::default());
+        let missing_path = "flui-widgets-test-this-file-does-not-exist-anywhere.png";
+        let provider = AssetImage::new(registry, missing_path);
+
+        let result = provider.resolve_async().await;
+
+        assert!(
+            !matches!(result, Err(ImageProviderError::DecodeFailed { .. })),
+            "a missing file never reaches a decoder, so it must never be \
+             reported as DecodeFailed; got {result:?}",
+        );
+        match result {
+            Err(ImageProviderError::AssetLoadFailed { reason }) => {
+                assert!(
+                    !reason.to_lowercase().contains("decode"),
+                    "the honest failure reason must not claim a decode \
+                     failure that never happened: {reason:?}",
+                );
+            }
+            Err(ImageProviderError::SourceNotFound { path }) => {
+                assert_eq!(path, missing_path);
+            }
+            other => panic!(
+                "expected AssetLoadFailed or SourceNotFound for a missing file, got {other:?}",
+            ),
+        }
     }
 }

@@ -19,7 +19,7 @@ mod common;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use common::{lay_out, loose, size};
@@ -60,8 +60,8 @@ fn pump_until(laid: &mut common::LaidOut, mut check: impl FnMut(&mut common::Lai
     }
 }
 
-/// Item 2: an `AssetImage`-backed `Image` shows the empty-box placeholder on
-/// the first frame (the eager inline poll of `resolve_async` cannot
+/// An `AssetImage`-backed `Image` shows the empty-box placeholder on the
+/// first frame (the eager inline poll of `resolve_async` cannot
 /// synchronously complete a real background file read), then decodes to the
 /// fixture's true 5×3 dimensions once the bridged load lands as a scheduled
 /// rebuild.
@@ -84,9 +84,9 @@ fn asset_image_placeholder_then_decodes_across_pumped_frames() {
     });
 }
 
-/// Item 3: unmounting and remounting an `Image` with the SAME cache key
-/// after the decode has already completed and been cached must decode
-/// IMMEDIATELY — no placeholder frame at all.
+/// Unmounting and remounting an `Image` with the SAME cache key after the
+/// decode has already completed and been cached must decode IMMEDIATELY —
+/// no placeholder frame at all.
 #[test]
 fn asset_image_remount_hits_the_decode_cache_with_no_placeholder_frame() {
     let path = fixture("tiny-remount.png");
@@ -139,8 +139,8 @@ impl ImageProvider for CountingAssetImage {
     }
 }
 
-/// Item 4: rebuilding the SAME mounted `Image` (same provider key) several
-/// times while a load is in flight must not spawn additional loads —
+/// Rebuilding the SAME mounted `Image` (same provider key) several times
+/// while a load is in flight must not spawn additional loads —
 /// `FutureBuilder`'s key-based dedup means the factory (and therefore
 /// `resolve_async`) is invoked exactly once per subscription, regardless of
 /// how many times the parent `Image` view is rebuilt in between.
@@ -188,9 +188,9 @@ fn asset_image_rebuild_spawns_exactly_one_load() {
     );
 }
 
-/// Item 5: two `Image` widgets mounted together with the SAME provider key
-/// both decode correctly through the shared decode cache / in-flight
-/// coalescing path (`image::decode_cache::load_coalesced`).
+/// Two `Image` widgets mounted together with the SAME provider key both
+/// decode correctly through the shared decode cache / in-flight coalescing
+/// path (`image::decode_cache::load_coalesced`).
 ///
 /// The "exactly one underlying load" guarantee itself is proven
 /// deterministically at the white-box level by
@@ -222,4 +222,87 @@ fn two_images_same_key_both_decode_through_the_shared_cache() {
             && laid.size(laid.child(root, 0)) == size(5.0, 3.0)
             && laid.size(laid.child(root, 1)) == size(5.0, 3.0)
     });
+}
+
+/// A test double that observes when [`ImageProvider::resolve_async`]'s
+/// returned future actually settles (`Ready`, whichever way), and whether it
+/// settled as an error — a signal the `Image`/`FutureBuilder` pipeline gives
+/// no other externally-observable way to detect, since an unresolved
+/// (`Waiting`) box and an error-resolved (`Done` + error) box render
+/// identically (an empty box).
+#[derive(Debug)]
+struct SettleObservingProvider {
+    inner: AssetImage,
+    settled: Arc<AtomicBool>,
+    settled_as_error: Arc<AtomicBool>,
+}
+
+impl ImageProvider for SettleObservingProvider {
+    fn resolve(&self) -> Result<PixelImage, ImageProviderError> {
+        self.inner.resolve()
+    }
+
+    fn resolve_async(
+        &self,
+    ) -> Pin<Box<dyn Future<Output = Result<PixelImage, ImageProviderError>> + Send + 'static>>
+    {
+        let inner_future = self.inner.resolve_async();
+        let settled = Arc::clone(&self.settled);
+        let settled_as_error = Arc::clone(&self.settled_as_error);
+        Box::pin(async move {
+            let result = inner_future.await;
+            settled_as_error.store(result.is_err(), Ordering::SeqCst);
+            settled.store(true, Ordering::SeqCst);
+            result
+        })
+    }
+
+    fn cache_key(&self) -> Option<flui_widgets::ImageCacheKey> {
+        self.inner.cache_key()
+    }
+}
+
+/// An `AssetImage` pointed at a path that will never exist must settle on
+/// the empty box within a bounded number of frames — not hang forever
+/// waiting on a load that never completes, and not silently keep showing the
+/// `Waiting` placeholder as if nothing happened. The error arm genuinely ran
+/// (observed via [`SettleObservingProvider`], not inferred from the render
+/// size alone, since `Waiting` and `Done`-with-error both render as an empty
+/// box).
+#[test]
+fn asset_image_missing_path_settles_on_the_empty_box_not_a_hang() {
+    let settled = Arc::new(AtomicBool::new(false));
+    let settled_as_error = Arc::new(AtomicBool::new(false));
+
+    let provider = SettleObservingProvider {
+        inner: AssetImage::new(
+            registry(),
+            "flui-widgets-test-image-async-this-path-never-exists.png",
+        ),
+        settled: Arc::clone(&settled),
+        settled_as_error: Arc::clone(&settled_as_error),
+    };
+
+    let mut laid = lay_out(Image::new(provider), loose(1000.0));
+
+    assert_eq!(
+        laid.size(laid.current_root()),
+        size(0.0, 0.0),
+        "the first frame must show the empty-box placeholder while the \
+         (doomed) load is in flight",
+    );
+
+    pump_until(&mut laid, |_laid| settled.load(Ordering::SeqCst));
+
+    assert!(
+        settled_as_error.load(Ordering::SeqCst),
+        "a load against a path that never exists must settle as an error, \
+         not silently succeed",
+    );
+    assert_eq!(
+        laid.size(laid.current_root()),
+        size(0.0, 0.0),
+        "an error must settle on the empty box permanently, not hang and \
+         not show a phantom decoded size",
+    );
 }
