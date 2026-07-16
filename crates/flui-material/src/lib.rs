@@ -75,6 +75,7 @@ pub mod filled_button;
 pub mod floating_action_button;
 pub mod icon_button;
 pub mod ink_well;
+pub mod input_decorator;
 pub mod material;
 pub mod outlined_button;
 pub mod scaffold;
@@ -96,6 +97,7 @@ pub use filled_button::FilledButton;
 pub use floating_action_button::FloatingActionButton;
 pub use icon_button::IconButton;
 pub use ink_well::{InkWell, InkWellState};
+pub use input_decorator::{InputDecoration, InputDecorator, InputDecoratorState};
 pub use material::Material;
 pub use outlined_button::OutlinedButton;
 pub use scaffold::Scaffold;
@@ -105,7 +107,7 @@ pub use text_theme::TextTheme;
 pub use theme::Theme;
 pub use theme_data::{
     AppBarThemeData, CardThemeData, DialogThemeData, ElevatedButtonThemeData, FabThemeData,
-    FilledButtonThemeData, IconButtonThemeData, OutlinedButtonThemeData, TextButtonThemeData,
-    ThemeData, ThemeDataOverrides,
+    FilledButtonThemeData, IconButtonThemeData, InputDecorationThemeData, OutlinedButtonThemeData,
+    TextButtonThemeData, ThemeData, ThemeDataOverrides,
 };
 pub use typography::english_like_2021;

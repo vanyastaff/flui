@@ -4,9 +4,11 @@
 //! `3.44.0`).
 
 use flui_types::EdgeInsets;
+use flui_types::Pixels;
 use flui_types::platform::Brightness;
-use flui_types::styling::Color;
+use flui_types::styling::{BorderSide, Color};
 use flui_types::typography::TextStyle;
+use flui_widgets::WidgetStateProperty;
 
 use crate::button_style::ButtonStyle;
 use crate::color_scheme::ColorScheme;
@@ -239,6 +241,57 @@ pub struct FabThemeData {
     pub elevation: Option<f32>,
 }
 
+/// Overrides [`InputDecorator`](crate::input_decorator::InputDecorator)'s
+/// `_InputDecoratorDefaultsM3` token defaults, one field at a time — an unset
+/// field here still falls through to the M3 default table for that field
+/// (see `input_decorator.rs`'s `default_*` functions), it does not blank the
+/// whole slot.
+///
+/// Flutter parity: `InputDecorationThemeData` (`material/input_decorator.dart`,
+/// oracle tag `3.44.0`), narrowed to the fields FLUI's `InputDecorator`
+/// actually consumes: [`fill_color`](Self::fill_color),
+/// [`active_indicator`](Self::active_indicator), [`hint_style`](Self::hint_style),
+/// [`label_style`](Self::label_style), [`helper_style`](Self::helper_style),
+/// [`error_style`](Self::error_style), [`content_padding`](Self::content_padding).
+/// Named deferrals (no consumer in FLUI's `InputDecorator` yet — see that
+/// module's docs for the full named-divergence list): `outlineBorder` (no
+/// `OutlineInputBorder` variant in V1), `iconColor`/`prefixIconColor`/
+/// `suffixIconColor` (no icon slots), `floatingLabelStyle` (V1's snap float
+/// reuses [`label_style`](Self::label_style) for both positions — the oracle
+/// itself resolves both through an identical state table), `isDense`,
+/// `isCollapsed`, `border`, `focusColor`/`hoverColor` (the container's hover
+/// blend is a fixed `ThemeData.hoverColor`-shaped constant in V1, not yet a
+/// themeable slot), and every constraint/alignment/behavior field.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct InputDecorationThemeData {
+    /// Overrides the filled container's fill color, per state. `None` falls
+    /// through to the M3 default (disabled: `onSurface@4%`; otherwise
+    /// `surfaceContainerHighest`) — see `input_decorator.rs`'s
+    /// `default_fill_color`.
+    pub fill_color: Option<WidgetStateProperty<Option<Color>>>,
+    /// Overrides the bottom underline indicator's color/width, per state.
+    /// `None` falls through to the M3 default state table — see
+    /// `input_decorator.rs`'s `default_active_indicator`.
+    pub active_indicator: Option<WidgetStateProperty<Option<BorderSide<Pixels>>>>,
+    /// Overrides the hint text style, per state. `None` falls through to the
+    /// M3 default (disabled/enabled `onSurfaceVariant`).
+    pub hint_style: Option<WidgetStateProperty<Option<TextStyle>>>,
+    /// Overrides the label text style (both the floating and inline
+    /// positions — see the struct doc's `floatingLabelStyle` note), per
+    /// state. `None` falls through to the M3 default state table.
+    pub label_style: Option<WidgetStateProperty<Option<TextStyle>>>,
+    /// Overrides the helper line's text style, per state. `None` falls
+    /// through to the M3 default (disabled/enabled `onSurfaceVariant`).
+    pub helper_style: Option<WidgetStateProperty<Option<TextStyle>>>,
+    /// Overrides the error line's text style, per state. `None` falls
+    /// through to the M3 default (`error`, unconditionally).
+    pub error_style: Option<WidgetStateProperty<Option<TextStyle>>>,
+    /// Overrides the container's content padding. `None` falls through to
+    /// the M3 filled-non-outline default (`EdgeInsets.fromLTRB(12, 8, 12,
+    /// 8)`, `input_decorator.dart`'s `contentPadding` doc, tag `3.44.0`).
+    pub content_padding: Option<EdgeInsets>,
+}
+
 /// Visual-style configuration provided to descendants by a
 /// [`Theme`](crate::Theme) ancestor.
 ///
@@ -317,6 +370,11 @@ pub struct ThemeData {
     /// token defaults, per field. Flutter parity:
     /// `ThemeData.floatingActionButtonTheme`.
     pub floating_action_button_theme: Option<FabThemeData>,
+
+    /// Overrides [`InputDecorator`](crate::input_decorator::InputDecorator)'s
+    /// M3 token defaults, per field. Flutter parity:
+    /// `ThemeData.inputDecorationTheme`.
+    pub input_decoration_theme: Option<InputDecorationThemeData>,
 }
 
 impl ThemeData {
@@ -338,6 +396,7 @@ impl ThemeData {
             card_theme: None,
             dialog_theme: None,
             floating_action_button_theme: None,
+            input_decoration_theme: None,
         }
     }
 
@@ -359,6 +418,7 @@ impl ThemeData {
             card_theme: None,
             dialog_theme: None,
             floating_action_button_theme: None,
+            input_decoration_theme: None,
         }
     }
 
@@ -435,6 +495,9 @@ impl ThemeData {
             floating_action_button_theme: overrides
                 .floating_action_button_theme
                 .or_else(|| self.floating_action_button_theme.clone()),
+            input_decoration_theme: overrides
+                .input_decoration_theme
+                .or_else(|| self.input_decoration_theme.clone()),
         }
     }
 }
@@ -481,6 +544,8 @@ pub struct ThemeDataOverrides {
     /// Replaces [`ThemeData::floating_action_button_theme`] wholesale when
     /// `Some`.
     pub floating_action_button_theme: Option<FabThemeData>,
+    /// Replaces [`ThemeData::input_decoration_theme`] wholesale when `Some`.
+    pub input_decoration_theme: Option<InputDecorationThemeData>,
 }
 
 impl Default for ThemeData {
@@ -581,6 +646,7 @@ mod tests {
             assert!(theme.card_theme.is_none());
             assert!(theme.dialog_theme.is_none());
             assert!(theme.floating_action_button_theme.is_none());
+            assert!(theme.input_decoration_theme.is_none());
         }
     }
 
