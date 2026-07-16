@@ -262,12 +262,21 @@ fn a_non_opted_heroes_placeholder_is_cleared_when_a_gesture_transition_starts() 
 /// — dragging back to zero mid-gesture must not tear the flight down with the
 /// finger still down, and dragging forward again must keep tracking it.
 ///
+/// **The tick between each drag and its assertion is load-bearing, not
+/// incidental.** A terminal status only ever tears the flight down once the
+/// shuttle's own `build` drains `settled_status` (`FlightInner`'s data-plane
+/// listener never calls `finish` itself); nothing about `drag_update` runs a
+/// build synchronously. Asserting right after `drag_update`, with no tick,
+/// would pass whether or not the deferral guard exists — there would be
+/// nothing yet to drain either way, guard or no guard.
+///
 /// Red-check: delete the `gesture_signal.in_progress()` guard from the status
-/// listener in `FlightManager::start` — the flight tears down (`get` returns
-/// `None`) the instant the drag reaches zero.
+/// listener in `FlightManager::start` — after the tick following the full
+/// swipe to zero, `flights().get(&tag)` returns `None`.
 #[test]
 fn a_full_swipe_to_zero_mid_gesture_does_not_tear_down_the_flight() {
-    let (navigator, _harness, controller, _to, from, from_controller) = gesture_fixture(true, true);
+    let (navigator, mut harness, controller, _to, from, from_controller) =
+        gesture_fixture(true, true);
 
     let gesture = BackGestureController::new(navigator, from, from_controller.clone());
     assert!(
@@ -280,6 +289,9 @@ fn a_full_swipe_to_zero_mid_gesture_does_not_tear_down_the_flight() {
     gesture.drag_update(1.0);
     assert_eq!(from_controller.value(), 0.0);
     assert_eq!(from_controller.status(), AnimationStatus::Dismissed);
+    // Give the shuttle the build that would drain a terminal status and call
+    // `finish` if the deferral guard were missing.
+    harness.tick();
     assert!(
         controller.flights().get(&hero_tag()).is_some(),
         "the flight must not tear down while the user gesture is still in progress"
@@ -288,6 +300,7 @@ fn a_full_swipe_to_zero_mid_gesture_does_not_tear_down_the_flight() {
     // Drag forward again: still airborne, still tracked.
     gesture.drag_update(-0.6);
     assert!(from_controller.value() > 0.0);
+    harness.tick();
     assert!(
         controller.flights().get(&hero_tag()).is_some(),
         "still airborne after dragging forward again"
@@ -299,14 +312,32 @@ fn a_full_swipe_to_zero_mid_gesture_does_not_tear_down_the_flight() {
 // ============================================================================
 
 /// A cancelled gesture (release with no fling, past the halfway point) stays
-/// on the `from` page, and the hero's child state must survive the whole
-/// round trip — not a vacuous pin: a real `StatefulView` `create_state`
-/// counter proves no reparenting happened.
+/// on the `from` page — and the *page's* state must survive the whole round
+/// trip, not just its stack position: a real `StatefulView` `create_state`
+/// counter, on a plain sibling of the hero (not the hero's own child), proves
+/// the page was never torn down and rebuilt from scratch while the flight was
+/// airborne and then aborted.
 ///
-/// Red-check: reparent the hero's child on `HeroHandle::start_flight`/
-/// `end_flight` instead of freezing it offstage — `creations` reads `2`.
+/// A sibling, deliberately, not the hero's own child: the hero *itself* is
+/// this flight's `from_hero`, always classified `Pop`
+/// (`FlightDirection::classify`), which Flutter starts with
+/// `shouldIncludeChildInPlaceholder: false` (`heroes.dart:721-724`, ported by
+/// `HeroFlight::start`'s `direction == Push` check) — so the hero's own child
+/// is legitimately *not* preserved in place while airborne (same as
+/// Flutter's own pop-source hero); pinning that non-preservation is not this
+/// test's concern. What must hold regardless is that the surrounding page —
+/// the route we stayed on — keeps everything else alive.
+///
+/// **The tick between the cancel and the assertion is load-bearing.** A
+/// route rebuild is not synchronous with `drag_end`; checking `creations`
+/// with no tick in between would pass even if the page were torn down and
+/// rebuilt, because the rebuild that would prove it never runs.
+///
+/// Red-check: have `ModalScope` unconditionally discard and rebuild its page
+/// subtree on every primary-animation notify instead of diffing it — after
+/// the tick, `creations` reads more than `1`.
 #[test]
-fn cancel_release_preserves_the_from_pages_hero_state() {
+fn cancel_release_preserves_the_from_pages_sibling_state() {
     #[derive(Clone)]
     struct Counter(Arc<AtomicUsize>);
     impl View for Counter {
@@ -324,7 +355,7 @@ fn cancel_release_preserves_the_from_pages_hero_state() {
     struct CounterState;
     impl ViewState<Counter> for CounterState {
         fn build(&self, _v: &Counter, _c: &dyn BuildContext) -> impl IntoView {
-            SizedBox::new(30.0, 18.0)
+            SizedBox::new(1.0, 1.0)
         }
     }
 
@@ -344,16 +375,15 @@ fn cancel_release_preserves_the_from_pages_hero_state() {
 
     let creations_for_page = Arc::clone(&creations);
     let from_route = PageRoute::<i32>::new(move |_ctx, _p, _s| {
-        Center::new()
-            .child(
-                Hero::new(
-                    ValueKey::new("shared"),
-                    Counter(Arc::clone(&creations_for_page)),
-                )
-                .transition_on_user_gestures(true),
-            )
-            .into_view()
-            .boxed()
+        crate::Stack::new(vec![
+            Hero::new(ValueKey::new("shared"), SizedBox::new(30.0, 18.0))
+                .transition_on_user_gestures(true)
+                .into_view()
+                .boxed(),
+            Counter(Arc::clone(&creations_for_page)).into_view().boxed(),
+        ])
+        .into_view()
+        .boxed()
     })
     .transition_duration(TRANSITION);
     let transition = from_route.transition_handle();
@@ -372,6 +402,8 @@ fn cancel_release_preserves_the_from_pages_hero_state() {
     let gesture = BackGestureController::new(navigator.clone(), from, from_controller.clone());
     gesture.drag_update(0.3); // Partway: value 0.7, past the halfway "stay" threshold.
     let _still_settling = gesture.drag_end(0.0); // No fling: value > 0.5 => cancel.
+    // Let the cancel's return-to-normal shape actually build.
+    harness.tick();
 
     assert_eq!(
         navigator.current(),
@@ -381,7 +413,7 @@ fn cancel_release_preserves_the_from_pages_hero_state() {
     assert_eq!(
         creations.load(Ordering::SeqCst),
         1,
-        "the hero's child state survived the cancelled gesture — no rebuild"
+        "the page's sibling state survived the cancelled gesture — no rebuild"
     );
 }
 
@@ -390,19 +422,58 @@ fn cancel_release_preserves_the_from_pages_hero_state() {
 // ============================================================================
 
 /// A completed gesture (release with no fling, past the halfway point toward
-/// zero) pops through to the destination route.
+/// zero) pops through to the destination route — synchronously, since the
+/// stack mutation itself does not wait for the release animation. Once the
+/// release's own 350ms pacing run actually settles (driven here by
+/// `AnimationController::tick_at`, matching `back_gesture.rs`'s own
+/// `full_settle_after_release_reports_did_stop_and_clears_the_counter`) and
+/// the navigator reports the gesture stopped, the parked terminal status
+/// replays and the flight lands: `finish`'s `Completed` arm keeps the
+/// (now-gone) from-hero's placeholder rather than clearing it
+/// (`from_hero.end_flight(status.is_completed())`, `heroes.dart:614`).
 #[test]
-fn complete_release_pops_to_the_destination_route() {
-    let (navigator, _harness, _controller, to, from, from_controller) = gesture_fixture(true, true);
+fn complete_release_pops_to_the_destination_route_and_the_flight_lands() {
+    let (navigator, mut harness, controller, to, from, from_controller) =
+        gesture_fixture(true, true);
+
+    let from_modal = navigator
+        .route_modal(from)
+        .expect("a PageRoute publishes a ModalHandle");
+    let from_hero = from_modal
+        .all_heroes()
+        .get(&hero_tag())
+        .cloned()
+        .expect("the from-hero registered with its route");
 
     let gesture = BackGestureController::new(navigator.clone(), from, from_controller.clone());
     gesture.drag_update(0.7); // value 0.3: drag_end's pop branch.
-    let _still_settling = gesture.drag_end(0.0);
+    let still_settling = gesture.drag_end(0.0);
 
     assert_eq!(
         navigator.current(),
         Some(to),
         "a completed gesture pops through to the destination route"
+    );
+
+    // Drive the release's own pacing run (350ms) to completion, then report
+    // the gesture stopped — mirrors `BackGestureDetectorState::poll_settle`
+    // once `!controller.is_animating()`.
+    from_controller.tick_at(0.35);
+    if still_settling {
+        navigator.did_stop_user_gesture();
+    }
+    // The parked terminal status was just replayed (written + the shuttle
+    // woken); this tick is what actually drains it and calls `finish`.
+    harness.tick();
+
+    assert!(
+        controller.flights().get(&hero_tag()).is_none(),
+        "the flight lands once the release genuinely settles"
+    );
+    assert!(
+        from_hero.placeholder_size().is_some(),
+        "a Completed pop keeps the from-hero's placeholder (heroes.dart:614) — \
+         its route is gone, so its child must not reappear"
     );
 }
 

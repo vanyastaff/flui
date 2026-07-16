@@ -142,11 +142,22 @@ struct FlightInner {
     /// The forwarding subscription feeding [`wake`](Self::wake) from
     /// [`gesture_signal`](Self::gesture_signal)'s notifier — the same
     /// listener that replays a terminal status parked mid-gesture. Registered
-    /// once at [`FlightManager::start`] and removed in [`HeroFlight::finish`]
-    /// — never re-registered, unlike Flutter's reactive
+    /// once at [`FlightManager::start`] and removed in [`HeroFlight::finish`],
+    /// or — if this flight is ever dropped without going through `finish` —
+    /// in `FlightInner`'s own `Drop` impl below. Never re-registered, unlike
+    /// Flutter's reactive
     /// `_scheduledPerformAnimationUpdate` add/remove dance, because one
     /// listener for the flight's whole life costs nothing and needs no extra
     /// "already scheduled" bookkeeping.
+    ///
+    /// **Why this one specifically needs the `Drop` backstop and the others
+    /// on this struct do not:** it is registered on
+    /// [`gesture_signal`](Self::gesture_signal)'s notifier, which is owned by
+    /// the *navigator*, not by this flight — so it outlives any one flight by
+    /// construction. Every other subscription here targets `self.proxy`
+    /// (owned by this same struct), which simply drops the registry along
+    /// with itself; only a registration on someone else's longer-lived
+    /// notifier can leak a closure this way.
     gesture_wake_subscription: Mutex<Option<ListenerId>>,
     /// Terminal status reported by the data-plane animation listener.
     ///
@@ -243,6 +254,36 @@ impl FlightInner {
             1 => Some(AnimationStatus::Dismissed),
             2 => Some(AnimationStatus::Completed),
             _ => None,
+        }
+    }
+}
+
+impl Drop for FlightInner {
+    /// A flight normally tears down through [`HeroFlight::finish`], which
+    /// removes every subscription this struct opened. But nothing guarantees
+    /// `finish` ever runs before the last `Arc<FlightInner>` drops — a
+    /// `FlightManager` torn down with a flight still airborne, or every
+    /// `HeroController`/observer holding one detached mid-flight, both drop
+    /// this struct directly. Without this, [`gesture_wake_subscription`]'s
+    /// closure (and everything it captured — a clone of this very `Arc`'s
+    /// dependencies) would stay registered in the *navigator's* longer-lived
+    /// notifier forever: a leak, not merely a stale listener, because nothing
+    /// else will ever remove it.
+    ///
+    /// Idempotent with `finish`, in either order: each subscription is an
+    /// `Option` a prior teardown already took, so a second attempt here (or
+    /// there) finds `None` and does nothing.
+    ///
+    /// [`gesture_wake_subscription`]: FlightInner::gesture_wake_subscription
+    fn drop(&mut self) {
+        if let Some(status_id) = self.subscriptions.lock().take() {
+            self.proxy.remove_status_listener(status_id);
+        }
+        if let Some(id) = self.proxy_wake_subscription.lock().take() {
+            self.proxy.remove_listener(id);
+        }
+        if let Some(id) = self.gesture_wake_subscription.lock().take() {
+            self.gesture_signal.notifier().remove_listener(id);
         }
     }
 }

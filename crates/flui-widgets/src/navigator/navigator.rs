@@ -409,11 +409,16 @@ impl NavigatorShared {
         }
         // Same ordering as `did_start_user_gesture`: the notifier fires
         // before the observer loop (`navigator.dart:5806`, `:5848-5855`),
-        // with no navigator lock held. A `HeroFlight` parked on this
-        // notifier replays its terminal status here, *before*
-        // `HeroController::did_stop_user_gesture` below sweeps whatever
-        // flights are still airborne — so a flight this notify just finished
-        // is already gone from that sweep, not double-handled.
+        // with no navigator lock held. A `HeroFlight` parked on this notifier
+        // fires here, *before* `HeroController::did_stop_user_gesture` below
+        // sweeps whatever flights are still airborne — but that reply only
+        // writes the flight's terminal-status flag and wakes its shuttle
+        // (`FlightInner::wake`); the actual `HeroFlight::finish` call still
+        // waits for that shuttle's next `build`. So the same flight can still
+        // be a live candidate for the sweep below, and may have `finish`
+        // called on it twice in one turn — safe only because
+        // `HeroFlight::finish` is idempotent (guarded by its own `ended`
+        // flag), not because the two paths are mutually exclusive.
         self.user_gesture_in_progress_notifier.notify_listeners();
         for observer in self.observers() {
             observer.did_stop_user_gesture();
