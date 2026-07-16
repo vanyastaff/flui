@@ -35,8 +35,13 @@
 //! if-chain. For the regular M3 FAB every tier but hover happens to share the
 //! same `6.0` value (`elevation: 6.0, focusElevation: 6.0, hoverElevation:
 //! 8.0, highlightElevation: 6.0`, and `disabledElevation` is never
-//! overridden by `_FABDefaultsM3`, so `RawMaterialButton`'s constructor-level
-//! `disabledElevation ?? elevation` fallback resolves it to `6.0` too) — so
+//! overridden by `_FABDefaultsM3`, so `FloatingActionButton.build`'s own
+//! `disabledElevation ?? floatingActionButtonTheme.disabledElevation ??
+//! defaults.disabledElevation ?? elevation` fallback resolves it to `6.0`
+//! too — **not** `RawMaterialButton`'s constructor, whose own
+//! `disabledElevation` parameter defaults flatly to `0.0` with no fallback
+//! chain at all; `FloatingActionButton.build` always passes an explicit,
+//! already-resolved value, overriding that flat default) — so
 //! *values* rarely distinguish the branches, but the *order* still does: a
 //! combined pressed+hovered state must resolve through the pressed branch
 //! (still `6.0`), not fall through past it to hover's `8.0`. This doubles as
@@ -118,9 +123,11 @@ const ELEVATION_HOVERED: f32 = 8.0;
 /// The pressed elevation — Flutter's `highlightElevation`. Flutter parity:
 /// `_FABDefaultsM3`'s `highlightElevation: 6.0`.
 const ELEVATION_PRESSED: f32 = 6.0;
-/// Flutter parity: `RawMaterialButton`'s constructor-level `disabledElevation
-/// ?? elevation` fallback — `_FABDefaultsM3` never overrides
-/// `disabledElevation`, so it resolves to the enabled default.
+/// Flutter parity: `FloatingActionButton.build`'s own `disabledElevation ??
+/// … ?? elevation` fallback chain (NOT `RawMaterialButton`'s constructor,
+/// whose own `disabledElevation` parameter flatly defaults to `0.0` — see
+/// the module docs' "The elevation chain" section) — `_FABDefaultsM3` never
+/// overrides `disabledElevation`, so it resolves to the enabled default.
 const ELEVATION_DISABLED: f32 = ELEVATION_DEFAULT;
 
 /// The regular M3 FAB's shape: a rectangle with a 16dp corner radius —
@@ -246,6 +253,19 @@ impl ViewState<FloatingActionButton> for FloatingActionButtonState {
         self.rebuild = Some(rebuild);
     }
 
+    /// Re-syncs `WidgetState::Disabled` when `on_pressed` presence changes
+    /// across a swap — mirroring `ButtonStyleButtonCoreState::did_update_view`.
+    /// **Currently unobservable through any wired consumer**: the inner
+    /// `InkWell`'s tap gating derives from `view.on_pressed` directly (read
+    /// fresh every `build`), not from this shared bit, and `resolve_elevation`'s
+    /// `disabled` branch resolves the SAME value as the enabled default (see
+    /// the module docs' "The elevation chain" section) — so nothing
+    /// currently distinguishes this resync having run from it never running.
+    /// Kept for structural parity with the oracle's own `didUpdateWidget`
+    /// and in case a future consumer of this states controller needs it.
+    /// See `tests/floating_action_button.rs`'s
+    /// `removing_the_press_handler_via_swap_makes_a_later_tap_a_no_op` for
+    /// the mutation run that established this.
     fn did_update_view(
         &mut self,
         old_view: &FloatingActionButton,

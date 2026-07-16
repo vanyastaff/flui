@@ -53,18 +53,39 @@
 //! The oracle's M3 path folds `iconSize` into `ButtonStyle.iconSize` (a
 //! slot [`ButtonStyle`] does not carry — a named crate-wide omission, see
 //! that module's docs) and `foregroundColor` into `ButtonStyle.iconColor`
-//! (ditto). Neither slot exists yet, so this type wraps `icon` in an
-//! [`IconTheme`] *before* handing it to `ButtonStyleButtonCore` — the same
-//! technique [`crate::app_bar::AppBar`] already uses to color its own
-//! icon/title content. This is exact, not an approximation: standard
-//! `IconButton`'s `foreground_color` depends only on `disabled` (see above),
-//! which this type's own `on_pressed.is_some()` already determines at
-//! `build` time — the *same* boolean `ButtonStyleButtonCore`'s internal
-//! `WidgetStatesController` would sync into `WidgetState::Disabled` on its
-//! first build, just read one level up instead of through a live state
-//! resolution. `icon_size` is always the M3 default (`24.0`); no per-call
-//! override exists yet (`IconButton::icon_size` is a natural, additive V1+
-//! follow-up).
+//! (ditto), then `IconTheme.merge`s `iconColor ?? resolvedForegroundColor`
+//! around the child (`button_style_button.dart`'s `_ButtonStyleState.build`).
+//! Neither slot exists yet, so this type wraps `icon` in an [`IconTheme`]
+//! *before* handing it to `ButtonStyleButtonCore` — the same technique
+//! [`crate::app_bar::AppBar`] already uses to color its own icon/title
+//! content.
+//!
+//! **Not an approximation of the resolved color — a real coalesce.** A
+//! naive port would hardcode `default_style`'s own foreground table here,
+//! silently dropping a caller's `.style(ButtonStyle { foreground_color: ...
+//! })` override (it would still reach `ButtonStyleButtonCore`'s
+//! `DefaultTextStyle`, but an `Icon` child reads `IconTheme`, not
+//! `DefaultTextStyle` — so the override would visibly do nothing to the
+//! icon). Instead, `build` resolves `self.style`'s `foreground_color`
+//! against `default_style`'s own, through the identical widget-then-default
+//! coalesce `crate::button_style_button::resolve_property` performs inside
+//! `ButtonStyleButtonCore` — both tiers are already in hand at `build` time,
+//! so no extra plumbing is needed to get the SAME answer
+//! `ButtonStyleButtonCore` would fold into `DefaultTextStyle`, just also fed
+//! into the icon's `IconTheme`.
+//!
+//! The coalesce is resolved against a states set built from `disabled` only
+//! (never a live, hover/press/focus-tracking one): standard `IconButton`'s
+//! `foreground_color` — whether the caller's override or the default table
+//! — depends only on `disabled`/`selected` (see above; `selected` is a named
+//! deferral), so a static enabled-or-disabled snapshot is sufficient here.
+//! A caller whose override varies `foreground_color` by `Pressed`/`Hovered`/
+//! `Focused` would see that live variation reach `ButtonStyleButtonCore`'s
+//! `DefaultTextStyle` (for a `Text` child) but NOT this icon's `IconTheme`,
+//! which only re-resolves on `IconButton`'s own rebuilds — a named
+//! divergence, not silently dropped. `icon_size` is always the M3 default
+//! (`24.0`); no per-call override exists yet (`IconButton::icon_size` is a
+//! natural, additive V1+ follow-up).
 //!
 //! # Deferred, and named
 //!
@@ -83,11 +104,11 @@
 use flui_types::geometry::px;
 use flui_types::{Color, EdgeInsets, Size};
 use flui_view::prelude::*;
-use flui_widgets::{IconTheme, IconThemeData, WidgetStateProperty};
+use flui_widgets::{IconTheme, IconThemeData, WidgetState, WidgetStateProperty, WidgetStates};
 
 use crate::ThemeData;
 use crate::button_style::ButtonStyle;
-use crate::button_style_button::{ButtonStyleButtonCore, PressCallback};
+use crate::button_style_button::{ButtonStyleButtonCore, PressCallback, resolve_property};
 use crate::elevated_button::pressed_hovered_focused_overlay;
 use crate::shape::MaterialShape;
 use crate::theme::Theme;
@@ -159,18 +180,34 @@ impl IconButton {
 impl StatelessView for IconButton {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
         let theme = Theme::of(ctx);
-        let colors = theme.color_scheme;
+        let default = default_style(&theme);
 
-        // Exact for the standard variant: `foreground_color` depends only on
-        // `disabled` (no `selected` state ever asserted — see the module
-        // docs), so the same enabled/disabled split
-        // `ButtonStyleButtonCore`'s own `WidgetStatesController` would
-        // resolve is computed directly here.
-        let icon_color = if self.is_interactive() {
-            colors.on_surface_variant
+        // A static enabled-or-disabled snapshot — see the module docs'
+        // "Icon color and size" section for why that's sufficient for
+        // `foreground_color` specifically, and where it stops being exact.
+        let states = if self.is_interactive() {
+            WidgetStates::NONE
         } else {
-            colors.on_surface.with_opacity(0.38)
+            WidgetStates::from(WidgetState::Disabled)
         };
+
+        // The SAME widget-then-default coalesce `ButtonStyleButtonCore`
+        // performs internally (`resolve_property`) — computed here too so a
+        // caller's `.style(ButtonStyle { foreground_color: .. })` override
+        // reaches the icon's `IconTheme`, not just `DefaultTextStyle`. The
+        // `unwrap_or` fallback is unreachable in practice: `default_style`
+        // always sets `foreground_color`, so the coalesce always resolves
+        // `Some` — kept only because `resolve_property` returns `Option`.
+        let icon_color = resolve_property(
+            &states,
+            self.style
+                .as_ref()
+                .and_then(|style| style.foreground_color.as_ref()),
+            None,
+            default.foreground_color.as_ref(),
+        )
+        .unwrap_or(Color::TRANSPARENT);
+
         let themed_icon = IconTheme::new(
             IconThemeData {
                 color: Some(icon_color),
@@ -180,7 +217,7 @@ impl StatelessView for IconButton {
             self.icon.clone(),
         );
 
-        let mut core = ButtonStyleButtonCore::new(default_style(&theme), themed_icon.boxed())
+        let mut core = ButtonStyleButtonCore::new(default, themed_icon.boxed())
             .style(self.style.clone().unwrap_or_default());
         if let Some(on_pressed) = self.on_pressed.clone() {
             core = core.on_pressed(on_pressed);
@@ -198,13 +235,11 @@ fn default_style(theme: &ThemeData) -> ButtonStyle {
     ButtonStyle {
         background_color: Some(WidgetStateProperty::all(Some(Color::TRANSPARENT))),
         foreground_color: Some(WidgetStateProperty::resolve_with(move |states| {
-            Some(
-                if states.contains_state(flui_widgets::WidgetState::Disabled) {
-                    colors.on_surface.with_opacity(0.38)
-                } else {
-                    colors.on_surface_variant
-                },
-            )
+            Some(if states.contains_state(WidgetState::Disabled) {
+                colors.on_surface.with_opacity(0.38)
+            } else {
+                colors.on_surface_variant
+            })
         })),
         overlay_color: Some(WidgetStateProperty::resolve_with(move |states| {
             pressed_hovered_focused_overlay(states, colors.on_surface_variant)
@@ -336,8 +371,8 @@ mod tests {
 
     /// Mutation-honest ordered-chain coverage: a combined pressed+hovered
     /// state must resolve through the pressed branch (10%), not hover's
-    /// lower 8% — the same combined-state pin the button-family review
-    /// requires of every token table in this crate.
+    /// lower 8% — the combined-state pin every token table in this crate
+    /// carries.
     #[test]
     fn overlay_color_checks_pressed_before_hovered() {
         let theme = ThemeData::light();

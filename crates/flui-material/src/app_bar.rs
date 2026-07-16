@@ -86,15 +86,35 @@
 //! their own `AppBar` are simultaneously mounted (see
 //! `tests/app_bar.rs`'s `implied_leading_appears_once_the_navigator_can_pop`
 //! for exactly that case, documented rather than hidden).
+//!
+//! ## The leading slot is a fixed `LEADING_WIDTH`, not the leading widget's own intrinsic size
+//!
+//! Whatever `leading` resolves to (explicit or implied) is wrapped in
+//! `ConstrainedBox(BoxConstraints.tightFor(width: LEADING_WIDTH))` around
+//! `Center` before it reaches the toolbar `Row` — Flutter parity:
+//! `_AppBarState.build`'s own `leading = ConstrainedBox(constraints:
+//! BoxConstraints.tightFor(width: widget.leadingWidth ?? appBarTheme.leadingWidth
+//! ?? _kLeadingWidth), child: leading)` (`app_bar.dart`, tag `3.44.0`;
+//! `_kLeadingWidth = kToolbarHeight`, "so the leading button is square").
+//! Simplified from the oracle in one way: Flutter only wraps in `Center`
+//! `when leading is IconButton`; this substrate does it unconditionally
+//! (harmless for any leading widget that already fills its own bounds).
+//! **Without this wrap**, a bare 40×40 `IconButton` (this crate's
+//! `_IconButtonDefaultsM3.minimumSize`) would collapse the slot to 40px
+//! wide in the `Row` instead of the M3-specified 56px — `LEADING_WIDTH`'s
+//! `ConstrainedBox` is what prevents that. No `leadingWidth`/
+//! `AppBarTheme.leadingWidth` override exists yet (named V1 deferral), so
+//! `LEADING_WIDTH` is the only width this slot ever takes.
 
+use flui_rendering::constraints::BoxConstraints;
 use flui_types::geometry::px;
 use flui_types::styling::Color;
 use flui_types::typography::TextStyle;
-use flui_types::{Alignment, Size};
+use flui_types::{Alignment, Pixels, Size};
 use flui_view::prelude::*;
 use flui_widgets::{
-    Align, CrossAxisAlignment, DefaultTextStyle, Expanded, IconTheme, IconThemeData,
-    NavigatorHandle, PreferredSizeView, Row, SafeArea, SizedBox,
+    Align, Center, ConstrainedBox, CrossAxisAlignment, DefaultTextStyle, Expanded, IconTheme,
+    IconThemeData, NavigatorHandle, PreferredSizeView, Row, SafeArea, SizedBox,
 };
 
 use crate::back_button::BackButton;
@@ -107,6 +127,13 @@ use crate::theme_data::ThemeData;
 /// Flutter parity: `material/constants.dart`'s `kToolbarHeight` (oracle tag
 /// `3.44.0`).
 pub const DEFAULT_TOOLBAR_HEIGHT: f32 = 56.0;
+
+/// The leading slot's fixed width — Flutter parity: `_AppBarState.build`'s
+/// `_kLeadingWidth` (`app_bar.dart:43`, `= kToolbarHeight`, "so the leading
+/// button is square"). No `widget.leadingWidth`/`AppBarTheme.leadingWidth`
+/// override exists yet in this V1 (see the module docs' deferred list), so
+/// this constant is the only width the slot ever takes.
+const LEADING_WIDTH: f32 = DEFAULT_TOOLBAR_HEIGHT;
 
 /// A Material app bar: a `leading` / `title` / `actions` toolbar painted on a
 /// [`Material`] surface, sized to [`toolbar_height`](Self::toolbar_height) and
@@ -349,7 +376,25 @@ impl StatelessView for AppBar {
 
         let mut toolbar_children: Vec<BoxedView> = Vec::new();
         if let Some(leading) = &leading {
-            toolbar_children.push(leading.clone());
+            // Flutter parity: `_AppBarState.build` wraps `leading` in
+            // `Center` (when it `is IconButton`; simplified here to
+            // unconditional — see the module docs' "Implied leading"
+            // section) then `ConstrainedBox(BoxConstraints.tightFor(width:
+            // _kLeadingWidth))`, pinning the slot to a fixed 56px width
+            // regardless of the leading widget's own intrinsic size —
+            // NOT the 40px `IconButton` minimum size a bare, unwrapped
+            // leading would otherwise collapse to in this `Row`.
+            let leading_constraints = BoxConstraints::new(
+                px(LEADING_WIDTH),
+                px(LEADING_WIDTH),
+                px(0.0),
+                Pixels::INFINITY,
+            );
+            toolbar_children.push(
+                ConstrainedBox::new(leading_constraints)
+                    .child(Center::new().child(leading.clone()))
+                    .boxed(),
+            );
         }
         if let Some(title) = &self.title {
             // Always start-aligned — see the module docs' `centerTitle` note.

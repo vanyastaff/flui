@@ -148,6 +148,80 @@ fn enabled_fab_resolves_the_m3_default_background_and_elevation() {
     );
 }
 
+/// A press handler removed via root swap (same element identity, so
+/// `FloatingActionButtonState::did_update_view` runs, not a fresh
+/// `init_state`) must stop firing on tap.
+///
+/// **Read the mechanism honestly before trusting this as
+/// `did_update_view`-specific coverage — it is NOT.** Verified by an actual
+/// mutation run (delete `did_update_view`'s body entirely): this test still
+/// passes. The reason is structural, not a test gap to close later: the
+/// inner `InkWell`'s own `on_tap` is attached fresh every `build()` from
+/// `view.on_pressed` directly (`if let Some(on_pressed) = view.on_pressed.clone()
+/// { ink_well = ink_well.on_tap(...) }`), and `InkWell::is_interactive`
+/// derives from that same per-build `on_tap` field — NEVER from the shared
+/// `WidgetStatesController`'s `Disabled` bit `did_update_view` resyncs. So a
+/// tap genuinely cannot observe whether that resync ran at all.
+///
+/// That resync's ONLY consumer is `resolve_elevation`'s `disabled` branch,
+/// which (see `floating_action_button.rs`'s module docs) resolves the SAME
+/// `6.0` as the enabled default — also verified unobservable by mutation
+/// (skip the resync call, or skip `init_state`'s equivalent sync: the
+/// elevation assertions in `disabled_fab_still_resolves_the_m3_default_background_and_elevation`
+/// above still pass, because `WidgetStates::NONE`'s `resolve_elevation`
+/// branch happens to be `6.0` too).
+///
+/// So, honestly: **no test in this file can currently distinguish "the
+/// `Disabled` resync ran" from "it never did"** for this button — every
+/// wired consumer of that bit is either state-independent
+/// (`background_color`) or numerically coincidental with the unsynced
+/// default (`elevation`). This test instead guards the behavior a caller
+/// actually observes — tapping a button whose handler was removed does
+/// nothing — which happens to be driven by a different, already-correct
+/// mechanism (`view.on_pressed`, read fresh every build).
+#[test]
+fn removing_the_press_handler_via_swap_makes_a_later_tap_a_no_op() {
+    let taps = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&taps);
+    let mut laid = lay_out(
+        Theme::new(
+            ThemeData::light(),
+            FloatingActionButton::new(
+                Some(move || {
+                    counted.fetch_add(1, Ordering::SeqCst);
+                }),
+                SizedBox::square(24.0),
+            ),
+        ),
+        tight(56.0, 56.0),
+    );
+
+    laid.dispatch_pointer_down(28.0, 28.0);
+    laid.dispatch_pointer_up(28.0, 28.0);
+    assert_eq!(
+        taps.load(Ordering::SeqCst),
+        1,
+        "the enabled button must fire once before the swap",
+    );
+
+    // Root swap to the SAME widget shape minus the press handler:
+    // reconciliation keeps element/render identity, so this exercises
+    // `did_update_view`, not a fresh `init_state` — matching
+    // `tests/elevated_button.rs`'s identical swap pattern.
+    laid.pump_widget(Theme::new(
+        ThemeData::light(),
+        FloatingActionButton::new(None::<fn()>, SizedBox::square(24.0)),
+    ));
+
+    laid.dispatch_pointer_down(28.0, 28.0);
+    laid.dispatch_pointer_up(28.0, 28.0);
+    assert_eq!(
+        taps.load(Ordering::SeqCst),
+        1,
+        "a tap dispatched after the swap must NOT fire the removed (now-stale) closure again",
+    );
+}
+
 #[test]
 fn mounted_geometry_in_a_scaffold_slot_is_exactly_56_by_56_at_the_end_float_position() {
     // Mirrors `tests/scaffold.rs`'s own FAB-slot geometry tests, but with a

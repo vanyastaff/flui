@@ -8,10 +8,10 @@
 //! the parts unique to `IconButton` — the 40×40 minimum-size constraint
 //! actually reaching a mounted button, a real tap, and (the part
 //! `icon_button.rs`'s unit tests structurally cannot reach, since
-//! `IconButton::build` computes `icon_color` directly from
-//! `self.on_pressed.is_some()`, not from `ButtonStyleButtonCore`'s own
-//! `WidgetStatesController`) that the disabled/enabled icon color actually
-//! reaches the `IconTheme` ancestor the icon child reads.
+//! `IconButton::build` resolves `icon_color` against a `WidgetStates`
+//! snapshot it builds itself, not `ButtonStyleButtonCore`'s own
+//! `WidgetStatesController`) that the disabled/enabled/overridden icon color
+//! actually reaches the `IconTheme` ancestor the icon child reads.
 
 mod common;
 
@@ -21,9 +21,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use common::{lay_out, loose, tight};
-use flui_material::{IconButton, Theme, ThemeData};
+use flui_material::{ButtonStyle, IconButton, Theme, ThemeData};
+use flui_types::Color;
 use flui_view::prelude::*;
-use flui_widgets::{IconTheme, IconThemeData, SizedBox};
+use flui_widgets::{IconTheme, IconThemeData, SizedBox, WidgetStateProperty};
 
 /// Captures the ambient [`IconThemeData`] its parent publishes at build
 /// time — the same probe shape `tests/scaffold.rs`'s `MediaQueryProbe` uses
@@ -114,10 +115,11 @@ fn an_unconstrained_icon_button_collapses_to_the_40_by_40_m3_minimum_size() {
     );
 }
 
-/// The "through the mount" pattern the button-family review requires: an
-/// `IconButton` with no press handler must resolve the disabled foreground
-/// color (`onSurface@38%`) all the way down to the `IconTheme` its icon
-/// child actually reads — not merely inside `default_style`'s own
+/// The "through the mount" pattern this crate's button family relies on for
+/// state-lifecycle correctness (see `tests/elevated_button.rs`'s own such
+/// tests): an `IconButton` with no press handler must resolve the disabled
+/// foreground color (`onSurface@38%`) all the way down to the `IconTheme`
+/// its icon child actually reads — not merely inside `default_style`'s own
 /// `WidgetStateProperty`, which `icon_button.rs`'s unit tests already
 /// exercise directly.
 #[test]
@@ -167,5 +169,46 @@ fn enabled_icon_button_resolves_the_on_surface_variant_color_through_the_real_mo
         Some(colors.on_surface_variant),
         "an enabled IconButton must publish _IconButtonDefaultsM3's onSurfaceVariant foreground \
          color to its icon child's IconTheme",
+    );
+}
+
+/// The regression this test guards against: a naive port hardcodes
+/// `default_style`'s own foreground table straight into the icon's
+/// `IconTheme`, so a caller's `.style(ButtonStyle { foreground_color: .. })`
+/// override reaches `ButtonStyleButtonCore`'s `DefaultTextStyle` (for a
+/// `Text` child) but silently never reaches an `Icon` child at all — the
+/// override would visibly do nothing. `IconButton::build` instead coalesces
+/// `self.style`'s `foreground_color` with `default_style`'s own (the SAME
+/// widget-then-default cascade `ButtonStyleButtonCore` performs internally)
+/// before feeding the icon's `IconTheme` — this test mounts exactly that
+/// override and asserts it actually reaches the icon.
+#[test]
+fn a_style_foreground_color_override_reaches_the_icons_icon_theme() {
+    let overridden = Color::rgb(200, 10, 90);
+    let captured = Rc::new(RefCell::new(None));
+    let probe = IconThemeProbe {
+        captured: Rc::clone(&captured),
+    };
+
+    let _laid = lay_out(
+        Theme::new(
+            ThemeData::light(),
+            IconButton::new(probe).on_pressed(|| {}).style(ButtonStyle {
+                foreground_color: Some(WidgetStateProperty::all(Some(overridden))),
+                ..ButtonStyle::default()
+            }),
+        ),
+        tight(40.0, 40.0),
+    );
+
+    let resolved = captured
+        .borrow()
+        .clone()
+        .expect("IconThemeProbe must have built at least once");
+    assert_eq!(
+        resolved.color,
+        Some(overridden),
+        "a widget-level ButtonStyle.foreground_color override must reach the icon's ambient \
+         IconTheme, not just ButtonStyleButtonCore's DefaultTextStyle",
     );
 }

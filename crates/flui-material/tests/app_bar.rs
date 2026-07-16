@@ -14,7 +14,9 @@ use flui_material::{AppBar, Theme, ThemeData};
 use flui_types::EdgeInsets;
 use flui_types::geometry::px;
 use flui_view::prelude::*;
-use flui_widgets::{MediaQuery, MediaQueryData, Navigator, NavigatorHandle, SimpleRoute, Text};
+use flui_widgets::{
+    MediaQuery, MediaQueryData, Navigator, NavigatorHandle, SimpleRoute, SizedBox, Text,
+};
 
 /// `_ElevatedButtonDefaultsM3`'s sibling formatting helper (see
 /// `tests/elevated_button.rs`'s `color_property`): the exact `Debug` string
@@ -128,6 +130,49 @@ fn background_color_override_replaces_the_theme_default() {
         laid.render_property(material, "color"),
         Some(color_property(overridden)),
         "an explicit background_color must win over the theme default",
+    );
+}
+
+/// Flutter parity: `_AppBarState.build` wraps `leading` in
+/// `ConstrainedBox(BoxConstraints.tightFor(width: _kLeadingWidth))` — a
+/// fixed 56px-wide slot, independent of whatever the leading widget's own
+/// intrinsic width is. A 10×10 `SizedBox` as `leading` proves the wrap is
+/// really pinning the SLOT, not just happening to match a same-sized
+/// widget: `SizedBox` and `ConstrainedBox` both mount as
+/// `RenderConstrainedBox` (see `flui-objects`' own `sized_box.rs` module
+/// docs), so finding a 56×56 one distinct from the 10×10 leaf is the
+/// mutation-honest check — deleting the wrap would collapse both to 10×10
+/// and this assertion would find nothing.
+#[test]
+fn explicit_leading_is_pinned_to_the_56px_wide_slot_regardless_of_its_own_size() {
+    let laid = lay_out(
+        Theme::new(
+            ThemeData::light(),
+            MediaQuery::new(
+                MediaQueryData::default(),
+                AppBar::new()
+                    .leading(SizedBox::square(10.0))
+                    .title(Text::new("Title")),
+            ),
+        ),
+        loose(400.0),
+    );
+
+    let candidates = laid.find_all_by_render_type("RenderConstrainedBox");
+    let leaf_present = candidates
+        .iter()
+        .any(|&id| laid.size(id) == common::size(10.0, 10.0));
+    assert!(
+        leaf_present,
+        "the 10x10 leading SizedBox itself must still be present in the tree",
+    );
+    let slot_present = candidates
+        .iter()
+        .any(|&id| laid.size(id) == common::size(56.0, 56.0));
+    assert!(
+        slot_present,
+        "the leading slot's own wrapping ConstrainedBox must report exactly 56x56 \
+         (_kLeadingWidth square), not collapse to the 10x10 leaf it wraps",
     );
 }
 
