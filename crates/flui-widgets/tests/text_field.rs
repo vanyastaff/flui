@@ -471,8 +471,8 @@ fn editable_text_mounts_single_render_editable() {
 /// 4) actually reaches the mounted render tree: requesting focus on the
 /// node the field published via [`TextEditingController::focus_node_id`]
 /// schedules a rebuild that flips `RenderEditable`'s `show_caret` — the
-/// same live-focus-observation seam `flui_material::TextField` (PR-2) reuses
-/// to keep its `InputDecorator` in sync with real focus transitions.
+/// same live-focus-observation seam `flui_material::TextField` reuses to
+/// keep its `InputDecorator` in sync with real focus transitions.
 ///
 /// Previously unproven: every other focus test above asserts on
 /// `FocusManager`/`TextEditingController` state directly, never on whether a

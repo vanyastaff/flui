@@ -45,19 +45,34 @@
 //!   field of its own (`text_field.dart:1196-1201`, narrowed here: the
 //!   oracle's `maxLength`-driven intrinsic error has no FLUI counterpart —
 //!   `maxLength` is not ported).
-//! - **Enabled**: [`TextField::enabled`] is the *single* source of truth,
-//!   written into the effective [`InputDecoration::enabled`] before it
+//! - **Enabled**: resolved exactly like the oracle's `_isEnabled`
+//!   (`widget.enabled ?? widget.decoration?.enabled ?? true`,
+//!   `text_field.dart:1183`), narrowed to two links —
+//!   [`TextField::enabled`] is `Option<bool>`; `Some` wins outright,
+//!   `None` falls through to [`InputDecoration::enabled`] (which already
+//!   defaults `true`, covering the oracle's trailing `?? true`). The
+//!   resolved value is written into the effective decoration before it
 //!   reaches [`InputDecorator`] (mirroring `_getEffectiveDecoration()`'s
 //!   `.copyWith(enabled: _isEnabled)`, `text_field.dart:1206-1213`) and
 //!   passed straight to [`EditableText::enabled`] — both sinks always agree
-//!   because both read the same field. Named divergence: the oracle
-//!   resolves `_isEnabled` from a three-way null-coalescing chain
-//!   (`widget.enabled ?? widget.decoration?.enabled ?? true`,
-//!   `text_field.dart:1183`) since `TextField.enabled` is optional there;
-//!   this substrate has no optional-override slot for a bare `bool` field,
-//!   so `TextField::enabled` always wins outright rather than falling back
-//!   to whatever `enabled` the caller set directly on the
-//!   [`InputDecoration`] passed to [`TextField::decoration`].
+//!   because both are computed from the one resolved value, never read
+//!   from two different fields independently.
+//!
+//! # Controller identity — swapping the controller on a live field is unsupported
+//!
+//! `TextFieldState` (this widget) and `EditableTextState` (the interior)
+//! each pin their *own* clone of the controller at `create_state` time and
+//! read `self.controller` in `build`, never `view.controller`. A parent that
+//! swaps in a different [`TextEditingController`] on an already-mounted
+//! `TextField` (passing a new one through [`TextField::new`] on rebuild)
+//! does **not** retarget either half — both keep driving the ORIGINAL
+//! controller. Reading `view.controller` in just one of the two halves
+//! would be worse: it would silently split-brain the composite (this
+//! widget's own `is_empty`/`focused` tracking the new controller while
+//! `EditableText` keeps typing into the old one) instead of consistently
+//! ignoring the swap. Full re-registration on controller swap (the oracle's
+//! `didUpdateWidget`, `text_field.dart:1303-1311`) is a named deferral at
+//! both layers — see [`EditableText`]'s own module docs.
 //!
 //! # Caret color and text style
 //!
@@ -132,39 +147,41 @@ use crate::theme::Theme;
 pub struct TextField {
     controller: TextEditingController,
     decoration: InputDecoration,
-    enabled: bool,
+    enabled: Option<bool>,
 }
 
 impl TextField {
     /// Create a `TextField` driven by `controller`, with no decoration
     /// (label/hint/helper/error all unset — see [`InputDecoration::default`])
-    /// and enabled.
+    /// and no `enabled` override (falls through to
+    /// [`InputDecoration::enabled`]'s own `true` default — see
+    /// [`Self::enabled`]).
     #[must_use]
     pub fn new(controller: TextEditingController) -> Self {
         Self {
             controller,
             decoration: InputDecoration::default(),
-            enabled: true,
+            enabled: None,
         }
     }
 
     /// Set the field's decoration — label, hint, helper/error text, and
-    /// fill. `decoration.enabled` is overridden by [`Self::enabled`] before
-    /// it reaches [`InputDecorator`] — see the module docs' "Enabled"
-    /// section for why a directly-set `decoration.enabled` never diverges
-    /// from `enabled` here.
+    /// fill. `decoration.enabled` is respected as-is unless [`Self::enabled`]
+    /// is *also* called — see the module docs' "Enabled" section for the
+    /// resolution order.
     #[must_use]
     pub fn decoration(mut self, decoration: InputDecoration) -> Self {
         self.decoration = decoration;
         self
     }
 
-    /// Set whether the field accepts focus and input (default `true`) —
-    /// flows into both [`InputDecoration::enabled`] and
-    /// [`EditableText::enabled`], see the module docs' "Enabled" section.
+    /// Override whether the field accepts focus and input, beating whatever
+    /// [`InputDecoration::enabled`] the decoration carries — see the module
+    /// docs' "Enabled" section for the full resolution chain. Absent this
+    /// call, [`InputDecoration::enabled`] decides.
     #[must_use]
     pub fn enabled(mut self, enabled: bool) -> Self {
-        self.enabled = enabled;
+        self.enabled = Some(enabled);
         self
     }
 }
@@ -252,26 +269,37 @@ impl ViewState<TextField> for TextFieldState {
             colors.primary
         };
 
-        let is_empty = view.controller.text().is_empty();
-        let focused = view
+        // `self.controller`, not `view.controller`: `EditableTextState`
+        // pins its own clone at `create_state` and never re-reads `view` for
+        // it (see the module docs' "Controller identity" section) — reading
+        // `view.controller` here instead would let a parent-driven swap
+        // split-brain the two halves of this composite (this field's own
+        // `is_empty`/`focused` tracking the NEW controller while the actual
+        // `EditableText` interior keeps typing into the OLD one).
+        let is_empty = self.controller.text().is_empty();
+        let focused = self
             .controller
             .focus_node_id()
             .is_some_and(|node_id| FocusManager::global().has_focus(node_id));
 
-        // The single `enabled` source of truth — see the module docs'
-        // "Enabled" section for why this overrides a directly-set
-        // `decoration.enabled` rather than falling back to it.
+        // The oracle's null-coalescing chain (`widget.enabled ??
+        // decoration?.enabled ?? true`, `text_field.dart:1183`), narrowed to
+        // two links since `InputDecoration::enabled` already defaults
+        // `true`: an explicit `TextField::enabled` call wins outright;
+        // absent that, the decoration's own `enabled` (set directly by the
+        // caller, or its `true` default) is respected as-is.
+        let effective_enabled = view.enabled.unwrap_or(view.decoration.enabled);
         let mut decoration = view.decoration.clone();
-        decoration.enabled = view.enabled;
+        decoration.enabled = effective_enabled;
 
-        let mut editable = EditableText::new(view.controller.clone())
-            .enabled(view.enabled)
+        let mut editable = EditableText::new(self.controller.clone())
+            .enabled(effective_enabled)
             .caret_color(caret_color);
         if let Some(text_style) = theme.text_theme.body_large.clone() {
             editable = editable.text_style(text_style);
         }
 
-        let controller_for_tap = view.controller.clone();
+        let controller_for_tap = self.controller.clone();
 
         GestureDetector::new()
             .on_tap(move || focus_field(&controller_for_tap))
@@ -305,10 +333,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn new_decorates_with_default_decoration_and_is_enabled() {
+    fn new_decorates_with_default_decoration_and_no_enabled_override() {
         let field = TextField::new(TextEditingController::new());
         assert_eq!(field.decoration, InputDecoration::default());
-        assert!(field.enabled);
+        assert_eq!(
+            field.enabled, None,
+            "no override set: enabled resolution must fall through to decoration.enabled"
+        );
     }
 
     #[test]
@@ -322,7 +353,7 @@ mod tests {
             .enabled(false);
 
         assert_eq!(field.decoration, decoration);
-        assert!(!field.enabled);
+        assert_eq!(field.enabled, Some(false));
     }
 
     #[test]

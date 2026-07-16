@@ -53,6 +53,18 @@ use crate::text::controller::TextEditingController;
 /// - **`obscureText`** — password masking is not implemented.
 /// - **Input formatters** — no validation or transformation pipeline.
 /// - **Scroll when text overflows** — the rendered text clips without scrolling.
+/// - **Swapping the controller on a live field** — `EditableTextState` pins
+///   its own clone of `EditableText::controller` at `create_state` and reads
+///   `self.controller` in `build`/`init_state`, never `view.controller`
+///   again after mount. A parent rebuilding this widget with a *different*
+///   `TextEditingController` value does not retarget the mounted field's
+///   focus-node registration or key handler — both keep driving the
+///   ORIGINAL controller. Full re-registration on controller swap (the
+///   oracle's `didUpdateWidget`, `text_field.dart:1303-1311`, tag `3.44.0`)
+///   is a named deferral; an enclosing decorated field
+///   (`flui_material::TextField`) pins its own clone the same way for the
+///   same reason — see that type's module docs' "Controller identity"
+///   section.
 #[derive(Clone, Debug, StatefulView)]
 pub struct EditableText {
     /// Controller that owns the text buffer and caret.
@@ -272,13 +284,23 @@ impl ViewState<EditableText> for EditableTextState {
             self.controller
                 .set_focus_node_id(Some(self.focus_node.id()));
         } else {
-            self.controller.set_focus_node_id(None);
             // A field disabled while focused must not keep the caret and
             // keyboard input — mirrors Flutter's `TextField`/`EditableText`
             // unfocusing when `enabled` flips false mid-focus.
+            //
+            // Unfocus BEFORE withdrawing the published node id — load-
+            // bearing order, not incidental. `FocusManager::unfocus` notifies
+            // every registered listener with the (previous, current) pair;
+            // an enclosing decorated field (`flui_material::TextField`)
+            // compares that pair against `controller.focus_node_id()` to
+            // detect ITS OWN focus-loss transition. Clearing the id first
+            // would make that comparison vacuous by the time the
+            // notification fires (the id is already gone), silently masking
+            // the transition from any such listener.
             if self.focus_node.has_primary_focus() {
                 FocusManager::global().unfocus();
             }
+            self.controller.set_focus_node_id(None);
         }
     }
 

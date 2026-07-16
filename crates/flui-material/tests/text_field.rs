@@ -13,18 +13,18 @@
 //! so tests in this file cannot interleave with each other's focus state
 //! even under a parallel test runner.
 //!
-//! # What's proven here that wasn't proven anywhere else
+//! # What's proven here
 //!
-//! `flui-widgets/tests/text_field.rs` already proved that a live
-//! `FocusManager` focus change reaches a mounted `RenderEditable` (its own
-//! `show_caret` flag) through a headless `tick()` — the finding that
-//! de-risked this file's approach; see that test's doc comment. This file
-//! proves the *next* layer: that `TextField`'s own `FocusManager` listener
-//! (registered against the field's own published node, not
-//! `EditableTextState`'s internal one) reaches its composed
-//! `InputDecorator`, and that its controller listener reaches the
-//! decorator's `is_empty`-driven hint visibility — neither of which
-//! `EditableTextState`'s own plumbing would produce on its own, since
+//! A live `FocusManager` focus change reaches a mounted render tree through
+//! a headless `tick()` — `flui-widgets/tests/text_field.rs`'s
+//! `requesting_focus_via_the_controllers_published_node_reveals_the_caret_after_a_tick`
+//! proves this for `EditableTextState`'s own internal listener driving
+//! `RenderEditable`'s `show_caret`. This file proves the *next* layer:
+//! that `TextField`'s own `FocusManager` listener (registered against the
+//! field's own published node, not `EditableTextState`'s internal one)
+//! reaches its composed `InputDecorator`, and that its controller listener
+//! reaches the decorator's `is_empty`-driven hint visibility — neither of
+//! which `EditableTextState`'s own plumbing would produce on its own, since
 //! `InputDecorator`'s `focused`/`is_empty` are `TextField`-level build
 //! inputs, not something `EditableText` itself exposes upward.
 
@@ -179,6 +179,333 @@ fn disabling_the_text_field_disables_both_editable_text_and_the_decorator() {
         FocusManager::global().primary_focus(),
         None,
         "tapping a disabled TextField must not focus anything"
+    );
+}
+
+// ============================================================================
+// enabled resolution chain — decoration-only value respected, override wins
+// ============================================================================
+
+/// `InputDecoration::enabled = false` alone (no `TextField::enabled` call at
+/// all — `None`) disables the field, proving the resolution chain's second
+/// link (`enabled.unwrap_or(decoration.enabled)`) is actually reachable, not
+/// just the `Some` branch the sibling test above exercises.
+#[test]
+fn decoration_only_enabled_false_is_respected_without_a_text_field_level_override() {
+    let _focus_serial = focus_test_guard();
+    let theme = ThemeData::light();
+    let colors = theme.color_scheme;
+    let controller = TextEditingController::new();
+    let decoration = InputDecoration {
+        enabled: false,
+        ..Default::default()
+    };
+
+    let laid = lay_out(
+        Theme::new(
+            theme,
+            TextField::new(controller.clone()).decoration(decoration),
+        ),
+        tight(300.0, 100.0),
+    );
+
+    assert_eq!(
+        controller.focus_node_id(),
+        None,
+        "decoration.enabled=false must disable EditableText with no TextField::enabled override"
+    );
+    let decorated_box = laid
+        .find_by_render_type("RenderDecoratedBox")
+        .expect("TextField must compose an InputDecorator's DecoratedBox");
+    let decoration_debug = laid.render_property(decorated_box, "decoration").unwrap();
+    let disabled_indicator = colors.on_surface.with_opacity(0.38);
+    assert!(
+        decoration_debug.contains(&format!("{disabled_indicator:?}")),
+        "decoration-only enabled=false must reach the decorator's disabled indicator, got: \
+         {decoration_debug}"
+    );
+}
+
+/// `TextField::enabled(true)` overrides a conflicting
+/// `InputDecoration::enabled = false` — the resolution chain's first link
+/// (`Some` wins outright) beats the second, matching the oracle's
+/// `widget.enabled ?? decoration?.enabled ?? true` precedence
+/// (`text_field.dart:1183`, tag `3.44.0`).
+///
+/// Mutation red-check: swap the `unwrap_or` argument order (i.e. resolve
+/// `decoration.enabled` before `view.enabled`) — this field would render
+/// disabled despite the explicit `enabled(true)` override, and the first
+/// assertion below fails.
+#[test]
+fn text_field_enabled_override_wins_over_a_conflicting_decoration_enabled() {
+    let _focus_serial = focus_test_guard();
+    let theme = ThemeData::light();
+    let colors = theme.color_scheme;
+    let controller = TextEditingController::new();
+    let decoration = InputDecoration {
+        enabled: false,
+        ..Default::default()
+    };
+
+    let laid = lay_out(
+        Theme::new(
+            theme,
+            TextField::new(controller.clone())
+                .decoration(decoration)
+                .enabled(true),
+        ),
+        tight(300.0, 100.0),
+    );
+
+    assert!(
+        controller.focus_node_id().is_some(),
+        "TextField::enabled(true) must override a conflicting decoration.enabled=false"
+    );
+    let decorated_box = laid
+        .find_by_render_type("RenderDecoratedBox")
+        .expect("TextField must compose an InputDecorator's DecoratedBox");
+    let decoration_debug = laid.render_property(decorated_box, "decoration").unwrap();
+    let disabled_indicator = colors.on_surface.with_opacity(0.38);
+    assert!(
+        !decoration_debug.contains(&format!("{disabled_indicator:?}")),
+        "the override must actually win, not merely coexist with the disabled default, got: \
+         {decoration_debug}"
+    );
+}
+
+// ============================================================================
+// Unmount — the FocusManager listener must not leak on the singleton
+// ============================================================================
+
+/// Unmounting a `TextField` removes its `FocusManager` listener —
+/// `FocusManager::global()` is a process-wide (per-thread) singleton every
+/// test in this binary shares, so a listener `dispose` fails to remove stays
+/// registered forever and fires on every future focus change for the rest of
+/// the process, including in unrelated later tests. Compares the listener
+/// count as a delta around mount/unmount rather than an absolute value,
+/// since other tests may have left the singleton at a nonzero baseline.
+///
+/// The `TextField` is a `Column` child here, not the mounted root — removing
+/// it from the children list goes through ordinary list reconciliation
+/// (proven elsewhere, e.g. `flui-widgets/src/text/text_field.rs`'s own
+/// `a_tap_focuses_the_fields_own_node_not_the_first_registered`, to
+/// correctly dispose a removed child), unlike swapping the ROOT widget's
+/// type outright via `pump_widget`/`swap_root_view`, which this harness
+/// documents as a same-type configuration replacement, not a full
+/// deactivate-and-remount.
+///
+/// Mutation red-check: delete `TextFieldState::dispose`'s
+/// `FocusManager::global().remove_listener(id)` call — the count after
+/// removal no longer matches the pre-mount baseline and the final assertion
+/// fails.
+#[test]
+fn unmounting_removes_the_focus_listener_from_the_process_wide_manager() {
+    use flui_view::{IntoView, ViewExt};
+    use flui_widgets::Column;
+
+    let _focus_serial = focus_test_guard();
+    let controller = TextEditingController::new();
+
+    let before_mount = FocusManager::global().listener_count();
+    let mut laid = lay_out(
+        Theme::new(
+            ThemeData::light(),
+            Column::new(vec![TextField::new(controller).into_view().boxed()]),
+        ),
+        tight(300.0, 100.0),
+    );
+    let while_mounted = FocusManager::global().listener_count();
+    assert!(
+        while_mounted > before_mount,
+        "mounting a TextField must register its own FocusManager listener"
+    );
+
+    // Remove the TextField from the Column's children — an ordinary child
+    // removal, not a root-type swap.
+    laid.pump_widget(Theme::new(
+        ThemeData::light(),
+        Column::new(Vec::<flui_view::BoxedView>::new()),
+    ));
+
+    let after_removal = FocusManager::global().listener_count();
+    assert_eq!(
+        after_removal, before_mount,
+        "removing a TextField from the tree must remove its FocusManager listener, not leak it"
+    );
+}
+
+// ============================================================================
+// Disable-while-focused: focus is lost, and re-enabling does not restore it
+// ============================================================================
+
+/// Disabling a focused field unfocuses it (`EditableTextState::did_update_view`)
+/// — and re-enabling afterward renders the UNFOCUSED indicator, not a stale
+/// focused one, matching Flutter: a field that loses focus while disabled
+/// does not regain it merely by becoming enabled again.
+///
+/// Behavioral pin only — NOT a discriminator for the listener-ordering fix
+/// below. Every `enabled` flip is itself a `TextField` rebuild that
+/// recomputes `focused` fresh from whatever `controller.focus_node_id()`
+/// resolves to AT THAT MOMENT; by the time this test inspects the render
+/// tree, a fresh build has always already happened, so the end state here
+/// is identical whether or not `TextFieldState`'s own focus listener fired
+/// for the intermediate transition (verified directly: this assertion still
+/// passes even with `did_update_view`'s unfocus/withdraw order reverted).
+/// The next test asserts the ordering itself, which no render-tree
+/// end-state check can distinguish.
+#[test]
+fn disabling_a_focused_field_then_re_enabling_renders_the_unfocused_indicator() {
+    let _focus_serial = focus_test_guard();
+    let theme = ThemeData::light();
+    let colors = theme.color_scheme;
+    let controller = TextEditingController::new();
+
+    let mut laid = lay_out(
+        Theme::new(theme.clone(), TextField::new(controller.clone())),
+        tight(300.0, 100.0),
+    );
+
+    // Focus it via a real tap.
+    laid.dispatch_pointer_down(150.0, 50.0);
+    laid.dispatch_pointer_up(150.0, 50.0);
+    laid.tick();
+    let decorated_box = laid
+        .find_by_render_type("RenderDecoratedBox")
+        .expect("TextField must compose an InputDecorator's DecoratedBox");
+    let focused_decoration = laid.render_property(decorated_box, "decoration").unwrap();
+    assert!(
+        focused_decoration.contains(&format!("{:?}", colors.primary)),
+        "sanity: the field must actually be focused before disabling it, got: {focused_decoration}"
+    );
+
+    // Disable while focused.
+    laid.pump_widget(Theme::new(
+        theme.clone(),
+        TextField::new(controller.clone()).enabled(false),
+    ));
+    assert_eq!(
+        FocusManager::global().primary_focus(),
+        None,
+        "disabling a focused field must unfocus it"
+    );
+
+    // Re-enable: focus must NOT be restored automatically.
+    laid.pump_widget(Theme::new(theme, TextField::new(controller)));
+    let decorated_box = laid
+        .find_by_render_type("RenderDecoratedBox")
+        .expect("TextField must compose an InputDecorator's DecoratedBox");
+    let reenabled_decoration = laid.render_property(decorated_box, "decoration").unwrap();
+    assert!(
+        reenabled_decoration.contains(&format!("{:?}", colors.on_surface_variant)),
+        "re-enabling a field that lost focus while disabled must render the UNFOCUSED \
+         indicator, got: {reenabled_decoration}"
+    );
+    assert!(
+        !reenabled_decoration.contains(&format!("{:?}", colors.primary)),
+        "the re-enabled field must not still show the focused indicator, got: \
+         {reenabled_decoration}"
+    );
+}
+
+/// Disabling a focused field notifies `FocusManager` listeners of the
+/// unfocus WHILE the field's node id is still published on the controller —
+/// proving `EditableTextState::did_update_view` calls `FocusManager::unfocus`
+/// *before* clearing `controller.focus_node_id()`, not after.
+///
+/// This is the ordering `TextFieldState`'s own focus listener depends on: it
+/// compares the unfocus notification's (previous, current) pair against
+/// `controller.focus_node_id()` to detect ITS OWN focus-loss transition
+/// (`text_field.rs`, `init_state`). Were the id cleared first, that
+/// comparison would already read `None` by the time the notification fires,
+/// silently no-op-ing the listener for this exact transition — masked, not
+/// caught, by the sibling test above (see its doc comment).
+///
+/// A spy listener stands in for `TextFieldState`'s own — checking `self`'s
+/// actual listener from outside isn't possible (its id is private), but
+/// both listeners observe the exact same notification and the exact same
+/// controller state at that instant, so the spy's observation is exactly
+/// what `TextFieldState`'s listener would see.
+///
+/// Mutation red-check: revert `did_update_view`'s disabled branch to clear
+/// the id before calling `unfocus` — the spy observes `None` instead of
+/// `Some(node_id)` and the assertion below fails (verified directly).
+#[test]
+fn disabling_a_focused_field_notifies_before_withdrawing_its_published_node() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    let _focus_serial = focus_test_guard();
+    let controller = TextEditingController::new();
+
+    let mut laid = lay_out(
+        Theme::new(ThemeData::light(), TextField::new(controller.clone())),
+        tight(300.0, 100.0),
+    );
+    let node_id = controller
+        .focus_node_id()
+        .expect("EditableText publishes its focus node on mount");
+    FocusManager::global().request_focus(node_id);
+    laid.tick();
+    assert_eq!(FocusManager::global().primary_focus(), Some(node_id));
+
+    let observed_at_notify = Rc::new(RefCell::new(None));
+    let observed_for_spy = Rc::clone(&observed_at_notify);
+    let controller_for_spy = controller.clone();
+    let spy_id = FocusManager::global().add_listener(Rc::new(move |previous, _current| {
+        if previous == Some(node_id) {
+            *observed_for_spy.borrow_mut() = controller_for_spy.focus_node_id();
+        }
+    }));
+
+    laid.pump_widget(Theme::new(
+        ThemeData::light(),
+        TextField::new(controller).enabled(false),
+    ));
+
+    FocusManager::global().remove_listener(spy_id);
+
+    assert_eq!(
+        *observed_at_notify.borrow(),
+        Some(node_id),
+        "the unfocus notification for a disable-while-focused transition must fire while the \
+         node id is STILL published, so a listener comparing against it can detect the transition"
+    );
+}
+
+// ============================================================================
+// Whole-area tap — a point clearly outside EditableText's own rect
+// ============================================================================
+
+/// A tap inside the decorator's default content padding — outside
+/// `EditableText`'s own padded content rect entirely — still focuses the
+/// field, proving the tap target really is the whole decorated box, not
+/// just wherever the inner text happens to sit (a center-tap, as the other
+/// focus tests use, would likely land inside `EditableText`'s own rect and
+/// couldn't tell the two apart).
+#[test]
+fn tapping_the_padding_margin_outside_the_text_rect_also_focuses_the_field() {
+    let _focus_serial = focus_test_guard();
+    let controller = TextEditingController::new();
+
+    let laid = lay_out(
+        Theme::new(ThemeData::light(), TextField::new(controller.clone())),
+        tight(300.0, 100.0),
+    );
+
+    // (3, 3) sits inside the decorator's default content padding (8px top /
+    // 12px left, `default_content_padding`) — well outside EditableText's
+    // own padded content rect, but still within the decorator's own
+    // fill/border/`MouseRegion`, which spans the FULL box.
+    laid.dispatch_pointer_down(3.0, 3.0);
+    laid.dispatch_pointer_up(3.0, 3.0);
+
+    let node_id = controller
+        .focus_node_id()
+        .expect("EditableText publishes its focus node on mount");
+    assert_eq!(
+        FocusManager::global().primary_focus(),
+        Some(node_id),
+        "a tap inside the padding margin, outside the inner text rect, must still focus the field"
     );
 }
 
