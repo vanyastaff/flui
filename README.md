@@ -14,7 +14,7 @@ FLUI brings the proven three-tree architecture (View → Element → Render) to 
 
 - ✅ Foundation: `flui-geometry`, `flui-types`, `flui-foundation`, `flui-macros`, `flui-tree`, `flui-platform`
 - ✅ Core: `flui-painting`, `flui-engine`, `flui-rendering`, `flui-scheduler`, `flui-layer`, `flui-semantics`, `flui-interaction`, `flui-hot-reload`
-- ✅ Framework/application: `flui-view`, `flui-objects`, `flui-widgets`, `flui-localizations`, `flui-material`, `flui-binding`, `flui-animation`, `flui-assets`, `flui-app` (migration)
+- ✅ Framework/application: `flui-view`, `flui-objects`, `flui-widgets`, `flui-localizations`, `flui-material`, `flui-cupertino`, `flui-binding`, `flui-animation`, `flui-assets`, `flui-app` (migration)
 - ✅ DX/tooling: `flui-devtools` (partial), `flui-cli`, `flui-build`
 - ⏸️ Disabled until integration completes: `flui-reactivity`
 

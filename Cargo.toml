@@ -26,6 +26,7 @@ members = [
     "crates/flui-localizations", # Global (multi-language) localized resources (ACTIVE — Catalog.1 slice)
     "crates/flui-binding",       # Headless deterministic frame driver (pump_frame) (ACTIVE — Phase 1)
     "crates/flui-material",      # Material Design theming foundation — ColorScheme/TextTheme/ThemeData/Theme (ACTIVE — Catalog.1 slice)
+    "crates/flui-cupertino",     # iOS-style theming foundation — CupertinoDynamicColor/CupertinoTextTheme/CupertinoTheme/CupertinoButton (ACTIVE — Catalog.1 slice)
 
     # === Phase 4: Application Layer ===
     "crates/flui-app",    # Application framework (ACTIVE - Migration)
@@ -90,6 +91,7 @@ default-members = [
     "crates/flui-localizations",
     "crates/flui-binding",
     "crates/flui-material",
+    "crates/flui-cupertino",
     "crates/flui-app",
     "crates/flui-assets",
     "crates/flui-animation",
@@ -362,6 +364,9 @@ parking_lot.workspace = true
 
 # === Material Design Layer (for the material_demo example + acceptance test) ===
 flui-material = { path = "crates/flui-material", version = "0.2.0" }
+
+# === Cupertino Design Layer ===
+flui-cupertino = { path = "crates/flui-cupertino", version = "0.2.0" }
 
 # === Engine Layer (for GPU examples) ===
 flui-engine = { path = "crates/flui-engine", version = "0.2.0", features = ["dx12"] }
