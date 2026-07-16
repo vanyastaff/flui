@@ -499,6 +499,12 @@ impl ViewState<InputDecorator> for InputDecoratorState {
             )
             .unwrap_or_else(BorderSide::none);
 
+        // The 4dp top radius rounds the FILL only (`decoration_rrect` in
+        // `flui-painting`'s `paint_box_decoration`) — the non-uniform
+        // bottom-only border below paints a straight, unrounded line
+        // regardless of `border_radius` (`paint_border`'s non-uniform path
+        // ignores the rrect), exactly matching `UnderlineInputBorder`'s own
+        // rendering: a rounded fill, a straight underline stroke.
         let box_decoration = BoxDecoration::new()
             .set_color(Some(blended_fill))
             .set_border_radius(Some(BorderRadius::top(Radius::circular(px(4.0)))))

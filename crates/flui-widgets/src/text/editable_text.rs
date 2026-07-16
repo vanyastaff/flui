@@ -63,9 +63,16 @@ pub struct EditableText {
     pub(super) caret_color: Color,
     /// Whether this field accepts focus and input. `true` by default.
     ///
-    /// Flutter parity: `EditableText.enabled` narrowed to the two behaviors
-    /// this substrate can actually withhold — see [`enabled`](Self::enabled)'s
-    /// doc comment.
+    /// **Named hoist, not a direct port**: the oracle has no
+    /// `EditableText.enabled` property at this tag — `enabled` lives on
+    /// `TextField` and flows down as `_isEnabled` into
+    /// `_effectiveFocusNode.canRequestFocus`
+    /// (`text_field.dart:1183,1282-1299`, tag `3.44.0`). FLUI's
+    /// [`TextField`](super::text_field::TextField) has no decoration/enabled
+    /// plumbing yet, so this substrate hoists the behavior onto
+    /// `EditableText` itself, one layer lower than the oracle — see
+    /// [`enabled`](Self::enabled)'s doc comment for exactly what it
+    /// withholds.
     pub(super) enabled: bool,
     /// Style applied to the field's [`TextSpan`], flowing through
     /// [`TextSpan::with_style`]. `None` renders with the span's own default.
@@ -100,7 +107,9 @@ impl EditableText {
     }
 
     /// Set whether the field accepts focus and keyboard input (default
-    /// `true`).
+    /// `true`) — see the [`enabled`](Self::enabled) field's doc comment for
+    /// why this is a named hoist of `TextField.enabled`, not a direct
+    /// `EditableText` parity port.
     ///
     /// A disabled field withholds focus acquisition — it stops publishing its
     /// [`FocusNode`] id on [`TextEditingController`], so an enclosing
@@ -109,8 +118,12 @@ impl EditableText {
     /// withdraw-on-unavailable mechanism `dispose` already uses for an
     /// unmounted field — and marks the node
     /// [`FocusNode::set_can_request_focus`]`(false)`, which keyboard-traversal
-    /// (`focus_next`/`focus_previous`) already honors. If the field is
-    /// focused when it becomes disabled, it is unfocused. Its key handler
+    /// (`focus_next`/`focus_previous`) already honors. **Unlike** Flutter's
+    /// `FocusNode.canRequestFocus` setter, FLUI's `set_can_request_focus` is a
+    /// bare atomic store with no side effects — so if the field is focused
+    /// when it becomes disabled, `did_update_view` explicitly calls
+    /// `FocusManager::unfocus` (a step the oracle's setter performs
+    /// implicitly as part of assigning `canRequestFocus`). Its key handler
     /// also stops mutating the controller while disabled, so even a stray
     /// dispatch reaching an already-focused-then-disabled node is a no-op.
     ///
@@ -166,8 +179,11 @@ pub struct EditableTextState {
     focus_listener_id: Option<ListenerId>,
     /// The view's `enabled` at construction time, cached because
     /// `init_state` has no `view` parameter — see [`EditableText::enabled`].
-    /// Every later change is read straight from the view in
-    /// `did_update_view`/`build`, not from this cache.
+    /// Read exactly once, by `init_state`'s initial-publish decision; there
+    /// is no reader afterward, so `did_update_view` deliberately does NOT
+    /// keep this field in sync post-mount (every later change is read
+    /// straight from the view in `did_update_view`/`build` instead, which is
+    /// the only place that still needs it).
     enabled: bool,
 }
 
@@ -251,7 +267,6 @@ impl ViewState<EditableText> for EditableTextState {
     }
 
     fn did_update_view(&mut self, _old_view: &EditableText, new_view: &EditableText) {
-        self.enabled = new_view.enabled;
         self.focus_node.set_can_request_focus(new_view.enabled);
         if new_view.enabled {
             self.controller
@@ -493,6 +508,100 @@ mod tests {
         assert!(
             controller.focus_node_id().is_some(),
             "an enabled field must publish a focus node"
+        );
+    }
+
+    /// Disabling a focused field unfocuses it and withdraws its published
+    /// node. Load-bearing: FLUI's `FocusNode::set_can_request_focus` is a
+    /// bare atomic store with no side effects — unlike Flutter's
+    /// `FocusNode.canRequestFocus` setter, which auto-unfocuses — so nothing
+    /// but `did_update_view`'s explicit `FocusManager::unfocus` call (see
+    /// [`EditableText::enabled`]'s doc comment) does this.
+    ///
+    /// Red-check: delete the `FocusManager::global().unfocus()` call in
+    /// `did_update_view`'s disabled branch — the node stays primary-focused
+    /// and the first assertion fails.
+    #[test]
+    fn disabling_a_focused_field_unfocuses_it_and_withdraws_the_node() {
+        let _guard = crate::test_harness::FOCUS_TEST_LOCK.lock();
+        FocusManager::global().unfocus();
+
+        let controller = TextEditingController::new();
+        let mut harness = crate::test_harness::mount(EditableText::new(controller.clone()));
+
+        let node_id = controller
+            .focus_node_id()
+            .expect("an enabled field publishes its node");
+        FocusManager::global().request_focus(node_id);
+        assert_eq!(FocusManager::global().primary_focus(), Some(node_id));
+
+        harness.swap_root(EditableText::new(controller.clone()).enabled(false));
+
+        assert_ne!(
+            FocusManager::global().primary_focus(),
+            Some(node_id),
+            "disabling a focused field must unfocus it"
+        );
+        assert_eq!(
+            controller.focus_node_id(),
+            None,
+            "disabling must withdraw the published focus node"
+        );
+    }
+
+    /// The contrast case: re-enabling a disabled field republishes its
+    /// node, so it becomes focusable again.
+    #[test]
+    fn re_enabling_a_disabled_field_republishes_its_focus_node() {
+        let _guard = crate::test_harness::FOCUS_TEST_LOCK.lock();
+        FocusManager::global().unfocus();
+
+        let controller = TextEditingController::new();
+        let mut harness =
+            crate::test_harness::mount(EditableText::new(controller.clone()).enabled(false));
+        assert_eq!(controller.focus_node_id(), None);
+
+        harness.swap_root(EditableText::new(controller.clone()));
+
+        assert!(
+            controller.focus_node_id().is_some(),
+            "re-enabling must republish the focus node"
+        );
+    }
+
+    /// The key handler's `can_request_focus` guard, in isolation: invoked
+    /// directly (bypassing `FocusManager::dispatch_key_event`'s own
+    /// primary-focus routing), a disabled node's handler must still refuse
+    /// to mutate the controller.
+    ///
+    /// Red-check: delete the `if !focus_node.can_request_focus() { return
+    /// false; }` guard at the top of `build_key_handler`'s closure — the
+    /// character is inserted and both assertions fail.
+    #[test]
+    fn disabled_key_handler_ignores_input_even_when_invoked_directly() {
+        use flui_interaction::events::Code;
+        use flui_interaction::testing::input::KeyEventBuilder;
+
+        let controller = TextEditingController::new();
+        let focus_node = FocusNode::with_debug_label("test");
+        focus_node.set_can_request_focus(false);
+        let handler = build_key_handler(controller.clone(), Arc::clone(&focus_node));
+
+        let event = KeyEventBuilder::new(Code::KeyA)
+            .with_key(Key::Character("a".to_string()))
+            .with_state(KeyState::Down)
+            .build();
+
+        let consumed = handler(&event);
+
+        assert!(
+            !consumed,
+            "a disabled node's key handler must not consume the event"
+        );
+        assert_eq!(
+            controller.text(),
+            "",
+            "a disabled node's key handler must not mutate the controller"
         );
     }
 

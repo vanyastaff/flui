@@ -693,4 +693,48 @@ mod tests {
         let patched = base.copy_with(ThemeDataOverrides::default());
         assert_eq!(patched.card_theme, Some(card_theme));
     }
+
+    /// `ThemeDataOverrides::input_decoration_theme` round-trips through
+    /// `copy_with` — the new slot's own dedicated proof, distinct from
+    /// `copy_with_sets_the_new_component_theme_slots`'s pre-existing
+    /// coverage of the other slots.
+    #[test]
+    fn copy_with_sets_input_decoration_theme_slot() {
+        use flui_types::geometry::px;
+
+        let base = ThemeData::light();
+        let input_decoration_theme = InputDecorationThemeData {
+            content_padding: Some(EdgeInsets::all(px(9.0))),
+            ..Default::default()
+        };
+
+        let patched = base.copy_with(ThemeDataOverrides {
+            input_decoration_theme: Some(input_decoration_theme.clone()),
+            ..Default::default()
+        });
+
+        assert_eq!(patched.input_decoration_theme, Some(input_decoration_theme));
+        // Untouched slots stay unset, mirroring the base theme.
+        assert!(patched.card_theme.is_none());
+    }
+
+    /// Same already-set-slot-survives-a-`None`-override proof as
+    /// `copy_with_none_preserves_an_already_set_component_theme_slot`, for
+    /// the new `input_decoration_theme` slot specifically.
+    #[test]
+    fn copy_with_none_preserves_an_already_set_input_decoration_theme_slot() {
+        use flui_types::geometry::px;
+
+        let input_decoration_theme = InputDecorationThemeData {
+            content_padding: Some(EdgeInsets::all(px(9.0))),
+            ..Default::default()
+        };
+        let base = ThemeData::light().copy_with(ThemeDataOverrides {
+            input_decoration_theme: Some(input_decoration_theme.clone()),
+            ..Default::default()
+        });
+
+        let patched = base.copy_with(ThemeDataOverrides::default());
+        assert_eq!(patched.input_decoration_theme, Some(input_decoration_theme));
+    }
 }
