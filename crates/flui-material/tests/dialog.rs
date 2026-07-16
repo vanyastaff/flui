@@ -8,8 +8,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use common::{lay_out, tight};
-use flui_material::{AlertDialog, Dialog, Theme, ThemeData};
+use flui_material::{AlertDialog, Dialog, MaterialShape, Theme, ThemeData};
 use flui_types::Color;
+use flui_types::geometry::{Radius, px};
+use flui_types::styling::BorderRadius;
 use flui_view::ViewExt;
 use flui_widgets::{ColoredBox, GestureDetector, SizedBox, Text};
 
@@ -105,6 +107,96 @@ fn default_inset_padding_offsets_the_aligned_content_by_40x24() {
         common::offset(40.0, 24.0),
         "_defaultInsetPadding (40 horizontal / 24 vertical) must inset the Align \
          that centers the dialog"
+    );
+}
+
+/// `_DialogDefaultsM3`'s 28dp corner radius (`dialog.dart`, oracle tag
+/// `3.44.0`), proven against the REAL mounted `RenderPhysicalShape` clip via
+/// hit-testing — not `MaterialShape::to_rrect` computed in isolation.
+///
+/// The probe point `(13, 13)` is chosen empirically (measured directly
+/// against `MaterialShape::to_path`/`Path::contains`, not derived from an
+/// idealized inscribed-circle formula — the corner's actual point-in-path
+/// test lands on the `x + y >= radius` side of a straight diagonal, not a
+/// true arc, at the tolerance these probes sit at): excluded at the 28dp
+/// default (`13 + 13 = 26 < 28`), included once the radius shrinks to 24dp
+/// (companion test
+/// `an_overridden_24dp_corner_radius_includes_the_same_probe_point` below,
+/// `13 + 13 = 26 >= 24`) — i.e. this probe is chosen specifically to flip if
+/// the default drifts from 28.0 to 24.0, the exact drift a prior review
+/// caught this test missing.
+#[test]
+fn default_corner_radius_reaches_the_mounted_material() {
+    let taps = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&taps);
+    let laid = lay_out(
+        Theme::new(
+            ThemeData::light(),
+            Dialog::new(
+                GestureDetector::new()
+                    .on_tap(move || {
+                        counted.fetch_add(1, Ordering::SeqCst);
+                    })
+                    .child(ColoredBox::new(Color::rgb(5, 5, 5)).child(SizedBox::new(50.0, 50.0))),
+            ),
+        ),
+        tight(1000.0, 1000.0),
+    );
+
+    let material = laid
+        .find_by_render_type("RenderPhysicalShape")
+        .expect("Dialog must compose a Material surface");
+    let origin = laid.absolute_offset(material);
+
+    laid.dispatch_pointer_down(origin.dx.get() + 13.0, origin.dy.get() + 13.0);
+    laid.dispatch_pointer_up(origin.dx.get() + 13.0, origin.dy.get() + 13.0);
+
+    assert_eq!(
+        taps.load(Ordering::SeqCst),
+        0,
+        "_DialogDefaultsM3's 28dp corner radius must EXCLUDE a point 13px from the corner \
+         along the diagonal — the mounted Material's actual registered clip, not merely \
+         MaterialShape's geometry computed in isolation"
+    );
+}
+
+/// Companion to `default_corner_radius_reaches_the_mounted_material`: the
+/// SAME probe point, against an explicit 24dp override, must be INCLUDED —
+/// proving the mounted hit-test is actually sensitive to the corner radius
+/// (a 28→24 drift in the default would flip the test above to this result).
+#[test]
+fn an_overridden_24dp_corner_radius_includes_the_same_probe_point() {
+    let taps = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&taps);
+    let laid = lay_out(
+        Theme::new(
+            ThemeData::light(),
+            Dialog::new(
+                GestureDetector::new()
+                    .on_tap(move || {
+                        counted.fetch_add(1, Ordering::SeqCst);
+                    })
+                    .child(ColoredBox::new(Color::rgb(5, 5, 5)).child(SizedBox::new(50.0, 50.0))),
+            )
+            .shape(MaterialShape::RoundedRect(BorderRadius::all(
+                Radius::circular(px(24.0)),
+            ))),
+        ),
+        tight(1000.0, 1000.0),
+    );
+
+    let material = laid
+        .find_by_render_type("RenderPhysicalShape")
+        .expect("Dialog must compose a Material surface");
+    let origin = laid.absolute_offset(material);
+
+    laid.dispatch_pointer_down(origin.dx.get() + 13.0, origin.dy.get() + 13.0);
+    laid.dispatch_pointer_up(origin.dx.get() + 13.0, origin.dy.get() + 13.0);
+
+    assert_eq!(
+        taps.load(Ordering::SeqCst),
+        1,
+        "a 24dp corner radius must INCLUDE the same probe point the 28dp default excludes"
     );
 }
 

@@ -4,11 +4,11 @@
 //!
 //! # Flutter parity
 //!
-//! `material/dialog.dart`'s `Dialog`/`AlertDialog` and
-//! `widgets/routes.dart`'s `showDialog`/`RawDialogRoute` (oracle tag
-//! `3.44.0`).
+//! `material/dialog.dart`'s `Dialog`/`AlertDialog`/`showDialog`/`DialogRoute`
+//! and `widgets/routes.dart`'s `RawDialogRoute` (the generic base
+//! `DialogRoute` extends) (oracle tag `3.44.0`).
 //!
-//! ## `Dialog` — `_DialogDefaultsM3` (`dialog.dart` `:1962-1998`)
+//! ## `Dialog` — `_DialogDefaultsM3` (`dialog.dart`, oracle tag `3.44.0`)
 //!
 //! | Token | Value | Oracle |
 //! |---|---|---|
@@ -37,7 +37,7 @@
 //! `Dialog.fullscreen` (`_fullscreen`, `_DialogFullscreenDefaultsM3`) is not
 //! ported either — no caller yet.
 //!
-//! ## `AlertDialog` (`dialog.dart` `:417-965`)
+//! ## `AlertDialog` (`dialog.dart`, oracle tag `3.44.0`)
 //!
 //! Ported: `title`, `content`, `actions`, composed into the oracle's
 //! `Column(mainAxisSize: min, crossAxisAlignment: stretch)` wrapped in
@@ -45,7 +45,12 @@
 //! `_DialogDefaultsM3` and `AlertDialog.build` compute when `icon`,
 //! `titlePadding`, `contentPadding`, `actionsPadding`, and every alignment
 //! knob are left at their oracle defaults (which is the only configuration
-//! this V1 offers — see below):
+//! this V1 offers — see below). The non-scrollable `columnChildren` branch's
+//! `if (contentWidget != null) Flexible(child: contentWidget)` (`dialog.dart`,
+//! oracle tag `3.44.0`) is ported too — content is wrapped in
+//! [`Flexible`] (the default loose fit, matching the
+//! oracle's own unqualified `Flexible(...)`) so content taller than the
+//! `Dialog`'s available height shrinks instead of overflowing.
 //!
 //! | Slot | Padding (`EdgeInsets`) | Text style |
 //! |---|---|---|
@@ -91,12 +96,13 @@
 //!   wrapper nodes.
 //! - **`AlertDialog.adaptive`** — the Cupertino/Material platform switch.
 //!
-//! ## `show_dialog` (`widgets/routes.dart`'s `showDialog`/`RawDialogRoute`)
+//! ## `show_dialog` (`material/dialog.dart`'s `showDialog`/`DialogRoute`)
 //!
-//! Pushes `builder`'s content as a [`PopupRoute`] with the oracle's
-//! `showDialog` defaults: `barrierDismissible: true`,
-//! `barrierColor: Colors.black54` (`0x8A000000`, `colors.dart`, oracle tag
-//! `3.44.0`).
+//! Pushes `builder`'s content as a [`PopupRoute`] with `showDialog`'s own
+//! defaults (`material/dialog.dart`, oracle tag `3.44.0` — not
+//! `RawDialogRoute`'s generic base default, `0x80000000`, which `showDialog`
+//! overrides): `barrierDismissible: true`, `barrierColor: Colors.black54`
+//! (`0x8A000000`, `colors.dart`, oracle tag `3.44.0`).
 //!
 //! **Takes a [`NavigatorHandle`] directly, not a `BuildContext`.** The
 //! oracle resolves one itself — `Navigator.of(context, rootNavigator:
@@ -114,17 +120,31 @@
 //! `Future<Option<T>>` — which is FLUI's `Future<T?>`, so `show_dialog`
 //! returns it unchanged rather than wrapping or narrowing it.
 //!
-//! **Not ported**, and named: `useSafeArea`, `routeSettings`,
-//! `traversalEdgeBehavior`, `anchorPoint`, `fullscreenDialog`,
-//! `requestFocus`, `animationStyle`, and the oracle's `InheritedTheme`
-//! capture/replay (`CapturedThemes`) that lets a dialog pushed onto a
-//! *different* navigator scope still see the calling context's `Theme`.
-//! FLUI relies on the pushed route's page mounting as a structural
-//! descendant of the app's own `Theme`/`Navigator`/`Overlay` chain (the
-//! common case — a dialog pushed onto the same navigator its caller's
-//! `Theme` ancestor already covers); a dialog pushed onto an unrelated
-//! navigator subtree would not see that `Theme`, which the oracle's capture
-//! step exists specifically to fix.
+//! **Not ported**, and named:
+//!
+//! - `useSafeArea`, `routeSettings`, `traversalEdgeBehavior`, `anchorPoint`,
+//!   `fullscreenDialog`, `requestFocus`, `animationStyle`.
+//! - **The transition itself.** `DialogRoute` runs a 150ms `FadeTransition`
+//!   (`transitionDuration: const Duration(milliseconds: 150)`,
+//!   `transitionBuilder: _buildMaterialDialogTransitions`, `dialog.dart`,
+//!   oracle tag `3.44.0`). `show_dialog` rides [`PopupRoute`]'s plain
+//!   framework default instead — a 300ms jump cut, no fade.
+//! - **No `barrierDismissible`/`barrierColor`/`barrierLabel` knobs.** These
+//!   are `showDialog` *parameters* in the oracle, not internal constants;
+//!   `show_dialog` hardcodes them (see above), so a non-dismissible dialog,
+//!   a custom barrier color, or a custom barrier label is unreachable
+//!   through this function. Construct a [`PopupRoute`] directly (with
+//!   `.barrier_dismissible(false)`/`.barrier_color(...)`, wrapping the same
+//!   [`Dialog`]/[`AlertDialog`] content this function builds) when any of
+//!   those need to vary.
+//! - The oracle's `InheritedTheme` capture/replay (`CapturedThemes`) that
+//!   lets a dialog pushed onto a *different* navigator scope still see the
+//!   calling context's `Theme`. FLUI relies on the pushed route's page
+//!   mounting as a structural descendant of the app's own
+//!   `Theme`/`Navigator`/`Overlay` chain (the common case — a dialog pushed
+//!   onto the same navigator its caller's `Theme` ancestor already covers);
+//!   a dialog pushed onto an unrelated navigator subtree would not see that
+//!   `Theme`, which the oracle's capture step exists specifically to fix.
 
 use flui_rendering::constraints::BoxConstraints;
 use flui_types::geometry::{Radius, px};
@@ -133,7 +153,7 @@ use flui_types::styling::BorderRadius;
 use flui_types::{Alignment, Color, EdgeInsets, Pixels};
 use flui_view::prelude::*;
 use flui_widgets::{
-    Align, Column, ConstrainedBox, CrossAxisAlignment, DefaultTextStyle, IntrinsicWidth,
+    Align, Column, ConstrainedBox, CrossAxisAlignment, DefaultTextStyle, Flexible, IntrinsicWidth,
     MainAxisAlignment, MainAxisSize, NavigatorHandle, Padding, PopupRoute, RouteResult, Row,
     SizedBox,
 };
@@ -388,13 +408,20 @@ impl StatelessView for AlertDialog {
         }
 
         if let Some(content) = &self.content {
+            // `if (contentWidget != null) Flexible(child: contentWidget)`
+            // (`dialog.dart`'s non-scrollable `columnChildren` branch, oracle
+            // tag `3.44.0`): the default loose fit lets content taller than
+            // the Dialog's available height shrink instead of overflowing.
             children.push(
-                Padding::new(EdgeInsets::new(px(16.0), px(24.0), px(24.0), px(24.0)))
-                    .child(DefaultTextStyle::new(
-                        text_theme.body_medium.clone().unwrap_or_default(),
-                        content.clone(),
-                    ))
-                    .boxed(),
+                Flexible::new(
+                    Padding::new(EdgeInsets::new(px(16.0), px(24.0), px(24.0), px(24.0))).child(
+                        DefaultTextStyle::new(
+                            text_theme.body_medium.clone().unwrap_or_default(),
+                            content.clone(),
+                        ),
+                    ),
+                )
+                .boxed(),
             );
         }
 
@@ -483,16 +510,14 @@ mod tests {
     }
 
     /// `_DialogDefaultsM3`'s shape: 28dp corners (`dialog.dart`, oracle tag
-    /// `3.44.0`).
+    /// `3.44.0`). Pins this module's own constant against the oracle's
+    /// literal; it does **not** prove a mounted `Dialog` actually resolves to
+    /// this radius — that end-to-end proof (a corner hit-test through a real
+    /// mount, sensitive to exactly this constant drifting) lives in
+    /// `tests/dialog.rs`'s `default_corner_radius_reaches_the_mounted_material`.
     #[test]
-    fn default_shape_is_a_28dp_rounded_rect() {
-        let expected = MaterialShape::RoundedRect(BorderRadius::all(Radius::circular(px(28.0))));
-        assert_eq!(
-            expected
-                .to_rrect(flui_types::Size::new(px(400.0), px(400.0)))
-                .top_left,
-            Radius::circular(px(28.0))
-        );
+    fn default_corner_radius_constant_matches_the_oracle() {
+        assert_eq!(DEFAULT_CORNER_RADIUS, 28.0);
     }
 
     #[test]

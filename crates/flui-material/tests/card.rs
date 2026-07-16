@@ -8,10 +8,15 @@
 
 mod common;
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
 use common::{lay_out, tight};
-use flui_material::{Card, Theme, ThemeData};
+use flui_material::{Card, MaterialShape, Theme, ThemeData};
 use flui_types::Color;
-use flui_widgets::ColoredBox;
+use flui_types::geometry::{Radius, px};
+use flui_types::styling::BorderRadius;
+use flui_widgets::{ColoredBox, GestureDetector};
 
 /// `_CardDefaultsM3`'s formatted `Debug` string for a resolved
 /// [`Color`](flui_types::Color) — what `RenderPhysicalShape`'s
@@ -58,6 +63,96 @@ fn default_material_matches_card_defaults_m3() {
     assert_eq!(
         clip_behavior, "None",
         "_CardDefaultsM3 constructs with clipBehavior: Clip.none"
+    );
+}
+
+/// `_CardDefaultsM3`'s 12dp corner radius (`card.dart`, oracle tag `3.44.0`),
+/// proven against the REAL mounted `RenderPhysicalShape` clip via
+/// hit-testing — not `MaterialShape::to_rrect` computed in isolation.
+///
+/// The probe point `(10, 10)` is chosen empirically (measured directly
+/// against `MaterialShape::to_path`/`Path::contains`, not derived from an
+/// idealized inscribed-circle formula — the corner's actual point-in-path
+/// test lands on the `x + y >= radius` side of a straight diagonal, not a
+/// true arc, at the tolerance these probes sit at): included at the 12dp
+/// default (`10 + 10 = 20 >= 12`), excluded once the radius grows past `20`
+/// (companion test
+/// `an_overridden_99dp_corner_radius_excludes_the_same_probe_point` below,
+/// `10 + 10 = 20 < 99`) — i.e. this probe is chosen specifically to flip if
+/// the default drifts from 12.0 to 99.0, the exact drift a prior review
+/// caught this test missing.
+#[test]
+fn default_corner_radius_reaches_the_mounted_material() {
+    let taps = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&taps);
+    let laid = lay_out(
+        Theme::new(
+            ThemeData::light(),
+            Card::new(
+                GestureDetector::new()
+                    .on_tap(move || {
+                        counted.fetch_add(1, Ordering::SeqCst);
+                    })
+                    .child(ColoredBox::new(Color::rgb(5, 5, 5))),
+            ),
+        ),
+        tight(400.0, 400.0),
+    );
+
+    let material = laid
+        .find_by_render_type("RenderPhysicalShape")
+        .expect("Card must compose a Material surface");
+    let origin = laid.absolute_offset(material);
+
+    laid.dispatch_pointer_down(origin.dx.get() + 10.0, origin.dy.get() + 10.0);
+    laid.dispatch_pointer_up(origin.dx.get() + 10.0, origin.dy.get() + 10.0);
+
+    assert_eq!(
+        taps.load(Ordering::SeqCst),
+        1,
+        "_CardDefaultsM3's 12dp corner radius must INCLUDE a point 10px from the corner along \
+         the diagonal — the mounted Material's actual registered clip, not merely \
+         MaterialShape's geometry computed in isolation"
+    );
+}
+
+/// Companion to `default_corner_radius_reaches_the_mounted_material`: the
+/// SAME probe point, against an explicit 99dp override, must be EXCLUDED —
+/// proving the mounted hit-test is actually sensitive to the corner radius
+/// (a 12→99 drift in the default would flip the test above to this result).
+#[test]
+fn an_overridden_99dp_corner_radius_excludes_the_same_probe_point() {
+    let taps = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&taps);
+    let laid = lay_out(
+        Theme::new(
+            ThemeData::light(),
+            Card::new(
+                GestureDetector::new()
+                    .on_tap(move || {
+                        counted.fetch_add(1, Ordering::SeqCst);
+                    })
+                    .child(ColoredBox::new(Color::rgb(5, 5, 5))),
+            )
+            .shape(MaterialShape::RoundedRect(BorderRadius::all(
+                Radius::circular(px(99.0)),
+            ))),
+        ),
+        tight(400.0, 400.0),
+    );
+
+    let material = laid
+        .find_by_render_type("RenderPhysicalShape")
+        .expect("Card must compose a Material surface");
+    let origin = laid.absolute_offset(material);
+
+    laid.dispatch_pointer_down(origin.dx.get() + 10.0, origin.dy.get() + 10.0);
+    laid.dispatch_pointer_up(origin.dx.get() + 10.0, origin.dy.get() + 10.0);
+
+    assert_eq!(
+        taps.load(Ordering::SeqCst),
+        0,
+        "a 99dp corner radius must EXCLUDE the same probe point the 12dp default includes"
     );
 }
 

@@ -4,10 +4,10 @@
 //!
 //! # Flutter parity
 //!
-//! `material/card.dart`'s `Card` (oracle tag `3.44.0`), `build` (`:243-262`)
-//! composed with `_CardDefaultsM3` (`:301-318`) — the M3 **elevated** variant
-//! only (Flutter's un-named default constructor; `_CardVariant.elevated`).
-//! `_CardDefaultsM3` sets:
+//! `material/card.dart`'s `Card`, `build` composed with `_CardDefaultsM3`
+//! (oracle tag `3.44.0`) — the M3 **elevated** variant only (Flutter's
+//! un-named default constructor; `_CardVariant.elevated`). `_CardDefaultsM3`
+//! sets:
 //!
 //! | Token | Value | Oracle |
 //! |---|---|---|
@@ -207,17 +207,13 @@ mod tests {
 
     /// `_CardDefaultsM3`'s shape: `RoundedRectangleBorder(borderRadius:
     /// BorderRadius.all(Radius.circular(12.0)))` (`card.dart`, oracle tag
-    /// `3.44.0`).
+    /// `3.44.0`). Pins this module's own constant against the oracle's
+    /// literal; it does **not** prove a mounted `Card` actually resolves to
+    /// this radius — that end-to-end proof (a corner hit-test through a real
+    /// mount, sensitive to exactly this constant drifting) lives in
+    /// `tests/card.rs`'s `default_corner_radius_reaches_the_mounted_material`.
     #[test]
-    fn default_shape_is_a_12dp_rounded_rect() {
-        let expected = MaterialShape::RoundedRect(BorderRadius::all(Radius::circular(px(12.0))));
-        // Constructed independently of `card.rs`'s own constant, so this
-        // would catch the constant itself drifting from the oracle value.
-        assert_eq!(
-            expected
-                .to_rrect(flui_types::Size::new(px(100.0), px(100.0)))
-                .top_left,
-            Radius::circular(px(12.0))
-        );
+    fn default_corner_radius_constant_matches_the_oracle() {
+        assert_eq!(DEFAULT_CORNER_RADIUS, 12.0);
     }
 }

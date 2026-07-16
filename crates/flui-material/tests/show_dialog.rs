@@ -20,12 +20,28 @@ use flui_widgets::{
     ColoredBox, GestureDetector, Navigator, NavigatorHandle, SimpleRoute, Text, VsyncScope,
 };
 
-/// The routes use the framework default, 300 ms — matching
-/// `flui-widgets/tests/routes.rs`'s constants exactly, since `show_dialog`
+/// `PopupRoute`'s framework-default transition — matching
+/// `flui-widgets/tests/routes.rs`'s own constant exactly, since `show_dialog`
 /// pushes the same `PopupRoute` machinery those tests already pump.
 const TRANSITION: Duration = Duration::from_millis(300);
-const PUMPS: usize = 8;
+/// The per-pump virtual-time step.
 const FRAME: Duration = Duration::from_millis(50);
+/// Enough pumps to carry `TRANSITION` past its end, with margin for this
+/// file's tests to settle a *second* transition (a barrier-tap pop's reverse
+/// run) within the same per-phase budget: one whole `TRANSITION / FRAME`,
+/// plus one frame because the first pump after a controller starts only
+/// anchors `t = 0` (Flutter's first ticker tick delivers elapsed 0 — the same
+/// `+ 1` `flui-widgets/tests/routes.rs`'s `PUMPS` documents for this
+/// identical 300ms/50ms pair), plus one more frame for the reverse
+/// transition's post-completion route removal to land. Asserted below rather
+/// than merely hoped: changing either duration keeps this budget correct
+/// instead of silently under-pumping.
+const PUMPS: usize = (TRANSITION.as_millis() / FRAME.as_millis()) as usize + 2;
+
+const _: () = assert!(
+    (PUMPS as u128) * FRAME.as_millis() > TRANSITION.as_millis(),
+    "PUMPS * FRAME must carry the transition past its end"
+);
 
 /// The home page: counts how many times its `State` was created (proving
 /// whether a dialog push/pop tore it down and rebuilt it) and how many taps
@@ -176,8 +192,6 @@ fn dialog_covers_the_page_and_a_barrier_tap_dismisses_it_leaving_page_state_inta
         "the home page's State must survive the dialog's entire push/dismiss lifecycle \
          (PopupRoute.maintainState => true keeps the page mounted throughout)"
     );
-
-    let _ = TRANSITION;
 }
 
 /// An explicit `navigator.pop()` — not a barrier tap — also removes the
