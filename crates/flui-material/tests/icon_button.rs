@@ -26,7 +26,7 @@ use flui_material::{
 };
 use flui_types::Color;
 use flui_view::prelude::*;
-use flui_widgets::{IconTheme, IconThemeData, SizedBox, WidgetStateProperty};
+use flui_widgets::{IconTheme, IconThemeData, SizedBox, WidgetState, WidgetStateProperty};
 
 /// Captures the ambient [`IconThemeData`] its parent publishes at build
 /// time — the same probe shape `tests/scaffold.rs`'s `MediaQueryProbe` uses
@@ -266,6 +266,70 @@ fn icon_button_theme_slot_background_color_reaches_the_mounted_material() {
         "a configured icon_button_theme.style.background_color must reach the mounted \
          Material — proving ButtonStyleButtonCore's own theme_style wiring, not just \
          IconButton::build's separate foreground_color resolve",
+    );
+}
+
+/// Regression lock for the named divergence `icon_button.rs`'s module docs
+/// extend to the theme tier: a state-varying
+/// `icon_button_theme.style.foreground_color` is resolved ONCE, against the
+/// static enabled/disabled snapshot `IconButton::build` builds itself, and
+/// frozen into the icon's `IconTheme` — a REAL hover afterward does not
+/// re-resolve it, even though `ButtonStyleButtonCore`'s own `InkWell` DOES
+/// track that live hover for its own background/overlay. If a future change
+/// starts sharing a live states controller for this icon color, this
+/// assertion's expected value would need to flip to `hovered_color` — that
+/// is the intended, honest failure mode of a regression-locking test for a
+/// named limitation, not a correctness bug this test exists to catch.
+#[test]
+fn a_hover_varying_icon_button_theme_foreground_color_stays_frozen_at_the_initial_snapshot() {
+    let enabled_color = Color::rgb(10, 20, 30);
+    let hovered_color = Color::rgb(200, 210, 220);
+    let captured = Rc::new(RefCell::new(None));
+    let probe = IconThemeProbe {
+        captured: Rc::clone(&captured),
+    };
+    let theme = ThemeData::light().copy_with(ThemeDataOverrides {
+        icon_button_theme: Some(IconButtonThemeData {
+            style: Some(ButtonStyle {
+                foreground_color: Some(WidgetStateProperty::resolve_with(move |states| {
+                    Some(if states.contains_state(WidgetState::Hovered) {
+                        hovered_color
+                    } else {
+                        enabled_color
+                    })
+                })),
+                ..Default::default()
+            }),
+        }),
+        ..Default::default()
+    });
+
+    let laid = lay_out(
+        Theme::new(theme, IconButton::new(probe).on_pressed(|| {})),
+        tight(40.0, 40.0),
+    );
+
+    let before_hover = captured
+        .borrow()
+        .clone()
+        .expect("IconThemeProbe must have built at least once")
+        .color;
+    assert_eq!(
+        before_hover,
+        Some(enabled_color),
+        "the initial (non-hovered) snapshot must resolve the enabled branch",
+    );
+
+    laid.dispatch_pointer_move(20.0, 20.0);
+
+    let after_hover = captured.borrow().clone().unwrap().color;
+    assert_eq!(
+        after_hover,
+        Some(enabled_color),
+        "a real hover must NOT change the icon's IconTheme color — the theme-tier \
+         foreground_color was resolved once against the static enabled/disabled snapshot and \
+         stays frozen, the same named divergence the widget-level style override already \
+         carries (see icon_button.rs's module docs)",
     );
 }
 

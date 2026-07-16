@@ -264,7 +264,7 @@ impl std::fmt::Debug for AppBar {
     }
 }
 
-/// [`AppBar`]'s theme-resolved colors and title style — `_AppBarDefaultsM3`
+/// [`AppBar`]'s theme-resolved colors and text styles — `_AppBarDefaultsM3`
 /// (`app_bar.dart:2521-2570`, oracle tag `3.44.0`) applied to the caller's
 /// overrides, then coalesced. Factored out of [`AppBar::build`] so the
 /// resolution itself (a pure function of a [`ThemeData`] and the three
@@ -274,6 +274,27 @@ struct ResolvedAppBarStyle {
     background_color: Color,
     foreground_color: Color,
     elevation: f32,
+    /// The **toolbar-wide** ambient text style — Flutter parity:
+    /// `defaults.toolbarTextStyle?.copyWith(color: foregroundColor)`
+    /// (`app_bar.dart`, oracle tag `3.44.0`). Always the M3 default recolored
+    /// to `foreground_color`; FLUI has no `toolbarTextStyle` widget/theme
+    /// override slot yet (named deferral — nothing reads one). [`AppBar::build`]
+    /// wraps the WHOLE toolbar in this, so a bare `Text` in `leading`/`actions`
+    /// gets a sane ambient style — this must stay independent of
+    /// [`title_style`](Self::title_style) below, or a themed title style
+    /// leaks into every other toolbar child (the bug this split fixes).
+    toolbar_text_style: TextStyle,
+    /// The **title-only** text style — Flutter parity: `widget.titleTextStyle
+    /// ?? appBarTheme.titleTextStyle ?? defaults.titleTextStyle?.copyWith(
+    /// color: foregroundColor)` (`app_bar.dart`, oracle tag `3.44.0`).
+    /// [`AppBar::build`] wraps ONLY `self.title` in this, never the toolbar
+    /// at large — matching the oracle, where `titleTextStyle` styles the
+    /// title widget specifically, not `leading`/`actions`.
+    ///
+    /// A **verbatim** theme-tier value, not recolored, when
+    /// `app_bar_theme.title_text_style` is set: only the default tier gets
+    /// recolored to the resolved `foreground_color`, because a theme-supplied
+    /// style already carries its own intended color.
     title_style: TextStyle,
 }
 
@@ -286,13 +307,10 @@ struct ResolvedAppBarStyle {
 /// defaults.backgroundColor` (and the `foregroundColor`/`elevation`
 /// equivalents), `app_bar.dart`, oracle tag `3.44.0`.
 ///
-/// The title style is a **verbatim** theme-tier value, not recolored, when
-/// `app_bar_theme.title_text_style` is set — Flutter parity: `widget
-/// .titleTextStyle ?? appBarTheme.titleTextStyle ??
-/// defaults.titleTextStyle?.copyWith(color: foregroundColor)` (`app_bar.dart`,
-/// oracle tag `3.44.0`): only the default tier gets recolored to the
-/// resolved `foreground_color`, because a theme-supplied style already
-/// carries its own intended color.
+/// `title_style` and `toolbar_text_style` are deliberately DIFFERENT values
+/// once a theme configures `title_text_style` — see [`ResolvedAppBarStyle`]'s
+/// own doc comment on why collapsing them back into one shared value would
+/// leak the title's style onto every other toolbar child.
 fn resolve_style(
     theme: &ThemeData,
     background_color: Option<Color>,
@@ -310,21 +328,21 @@ fn resolve_style(
     let elevation = elevation
         .or_else(|| app_bar_theme.and_then(|t| t.elevation))
         .unwrap_or(0.0);
+    let toolbar_text_style = theme
+        .text_theme
+        .title_large
+        .clone()
+        .unwrap_or_default()
+        .with_color(foreground_color);
     let title_style = app_bar_theme
         .and_then(|t| t.title_text_style.clone())
-        .unwrap_or_else(|| {
-            theme
-                .text_theme
-                .title_large
-                .clone()
-                .unwrap_or_default()
-                .with_color(foreground_color)
-        });
+        .unwrap_or_else(|| toolbar_text_style.clone());
 
     ResolvedAppBarStyle {
         background_color,
         foreground_color,
         elevation,
+        toolbar_text_style,
         title_style,
     }
 }
@@ -388,6 +406,7 @@ impl StatelessView for AppBar {
             background_color,
             foreground_color,
             elevation,
+            toolbar_text_style,
             title_style,
         } = resolve_style(
             &theme,
@@ -422,8 +441,18 @@ impl StatelessView for AppBar {
         }
         if let Some(title) = &self.title {
             // Always start-aligned — see the module docs' `centerTitle` note.
+            // `title_style` is scoped to JUST this slot via its own
+            // `DefaultTextStyle` — it must NOT reach the toolbar-wide wrap
+            // below (which carries `toolbar_text_style` instead), or a
+            // themed `title_text_style` would restyle bare `Text` in
+            // `leading`/`actions` too. See `ResolvedAppBarStyle`'s doc
+            // comment.
             toolbar_children.push(
-                Expanded::new(Align::new(Alignment::CENTER_LEFT).child(title.clone())).boxed(),
+                Expanded::new(
+                    Align::new(Alignment::CENTER_LEFT)
+                        .child(DefaultTextStyle::new(title_style, title.clone())),
+                )
+                .boxed(),
             );
         }
         if !self.actions.is_empty() {
@@ -438,7 +467,7 @@ impl StatelessView for AppBar {
                 ..IconThemeData::default()
             },
             DefaultTextStyle::new(
-                title_style,
+                toolbar_text_style,
                 SizedBox::height(self.toolbar_height).child(toolbar),
             ),
         );

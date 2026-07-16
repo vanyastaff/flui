@@ -168,6 +168,97 @@ fn app_bar_theme_slot_reaches_the_mounted_materials_background_color() {
     );
 }
 
+/// Regression guard for a real bug: a theme-configured `title_text_style`
+/// must style ONLY `AppBar::title`, never leak onto other toolbar children
+/// (`leading`/`actions`) — Flutter parity: `titleTextStyle` styles the title
+/// widget specifically (`app_bar.dart`, oracle tag `3.44.0`), not the whole
+/// `NavigationToolbar`. Before the fix, `resolve_style`'s `title_style` fed
+/// the OUTER `DefaultTextStyle` wrapping the entire toolbar, so a bare
+/// `Text` action inherited the themed title style too.
+///
+/// Proven via measured height, not a `TextStyle` equality check — an
+/// ambient style change only visibly reaches a bare `Text` run through
+/// re-layout, so this is the mutation-honest way to prove the scoping
+/// (see `flui-widgets/tests/text.rs`'s identical
+/// `a_larger_font_size_measures_to_a_taller_box` technique).
+#[test]
+fn themed_title_text_style_does_not_leak_into_toolbar_actions() {
+    use flui_types::typography::TextStyle;
+    use flui_widgets::DefaultTextStyle;
+
+    let themed_font_size = 40.0;
+    let theme = ThemeData::light().copy_with(ThemeDataOverrides {
+        app_bar_theme: Some(AppBarThemeData {
+            title_text_style: Some(TextStyle {
+                font_size: Some(themed_font_size),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }),
+        ..Default::default()
+    });
+
+    // Reference heights for the SAME text under each ambient style in
+    // isolation — what the action's Text SHOULD measure as (the unthemed
+    // toolbar ambient) vs. what it WOULD measure as if the bug were still
+    // present (the themed title style leaking in).
+    let default_ambient = theme.text_theme.title_large.clone().unwrap_or_default();
+    let default_reference = lay_out(
+        DefaultTextStyle::new(default_ambient, Text::new("Action")),
+        loose(1000.0),
+    );
+    let themed_reference = lay_out(
+        DefaultTextStyle::new(
+            TextStyle {
+                font_size: Some(themed_font_size),
+                ..Default::default()
+            },
+            Text::new("Action"),
+        ),
+        loose(1000.0),
+    );
+    let default_height = default_reference.size(default_reference.root()).height;
+    let themed_height = themed_reference.size(themed_reference.root()).height;
+    assert_ne!(
+        default_height, themed_height,
+        "the themed font_size must measure differently from the default — otherwise this test \
+         cannot distinguish a leak from no leak",
+    );
+
+    let laid = lay_out(
+        Theme::new(
+            theme,
+            MediaQuery::new(
+                MediaQueryData::default(),
+                AppBar::new()
+                    .title(Text::new("Title"))
+                    .actions(vec![Text::new("Action").boxed()]),
+            ),
+        ),
+        loose(400.0),
+    );
+
+    let paragraphs = laid.find_all_by_render_type("RenderParagraph");
+    assert_eq!(
+        paragraphs.len(),
+        2,
+        "expected exactly one title Text and one action Text"
+    );
+    let heights: Vec<_> = paragraphs.iter().map(|id| laid.size(*id).height).collect();
+
+    assert!(
+        heights.contains(&themed_height),
+        "the title's Text must measure at the THEMED font_size — the theme's \
+         title_text_style must reach the title slot",
+    );
+    assert!(
+        heights.contains(&default_height),
+        "the action's Text must measure at the DEFAULT (unthemed) toolbar ambient, NOT the \
+         theme's title_text_style — a themed title style must not leak into other toolbar \
+         children",
+    );
+}
+
 /// Flutter parity: `_AppBarState.build` wraps `leading` in
 /// `ConstrainedBox(BoxConstraints.tightFor(width: _kLeadingWidth))` — a
 /// fixed 56px-wide slot, independent of whatever the leading widget's own

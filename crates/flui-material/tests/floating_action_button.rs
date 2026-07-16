@@ -184,9 +184,12 @@ fn fab_theme_slot_reaches_the_mounted_materials_color_and_elevation() {
         "a configured floating_action_button_theme.background_color must reach the mounted \
          Material",
     );
+    let elevation = laid
+        .render_property(material, "elevation")
+        .expect("RenderPhysicalShape reports an \"elevation\" diagnostics property");
     assert_eq!(
-        laid.render_property(material, "elevation"),
-        Some("12".to_string()),
+        elevation.parse::<f32>(),
+        Ok(12.0),
         "a configured floating_action_button_theme.elevation must reach the enabled tier",
     );
 }

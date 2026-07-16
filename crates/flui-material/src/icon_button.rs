@@ -87,6 +87,25 @@
 //! (`24.0`); no per-call override exists yet (`IconButton::icon_size` is a
 //! natural, additive V1+ follow-up).
 //!
+//! **This divergence extends verbatim to the theme tier
+//! (`icon_button_theme`).** `theme_style`'s `foreground_color` is folded
+//! into the SAME `resolve_property` call as `self.style`'s, against the
+//! SAME static `disabled`-only snapshot — so a
+//! `Theme.icon_button_theme.style.foreground_color` that varies by
+//! `Pressed`/`Hovered`/`Focused` behaves identically to a state-varying
+//! widget-level override: the live variation reaches
+//! `ButtonStyleButtonCore`'s own `DefaultTextStyle`/`InkWell` (which DO hold
+//! a live, hover/press/focus-tracking `WidgetStatesController` — see
+//! `crate::button_style_button`'s docs) but this icon's `IconTheme` only
+//! ever sees the `disabled`/enabled snapshot, never a live
+//! `Pressed`/`Hovered`/`Focused` re-resolution. Fixing this for real means
+//! sharing `ButtonStyleButtonCoreState`'s own `WidgetStatesController` with
+//! this icon color resolution — that controller is private to
+//! `button_style_button.rs` and created inside `ButtonStyleButtonCore`'s
+//! `create_state`, one layer below where `IconButton::build` runs, so there
+//! is no live states seam to read from at this call site today. A named
+//! divergence, not silently dropped, same as the widget-tier case above.
+//!
 //! # Deferred, and named
 //!
 //! - **`filled`/`filled_tonal`/`outlined` variants** — each is a distinct
