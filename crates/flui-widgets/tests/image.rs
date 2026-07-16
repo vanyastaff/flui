@@ -1,13 +1,17 @@
-//! Layout parity tests for the `Image` widget.
+//! Layout parity tests for the `Image` widget's synchronous path.
 //!
 //! Each test exercises a distinct layout mode and asserts a computed size that
 //! would be wrong if the widget mis-wired its render object, swapped
 //! width/height, dropped the forced dimension, or failed to resolve the
-//! provider correctly. With `network-images` enabled, the
-//! `image_failed_provider_renders_zero_size` test is the only one that asserts
-//! 0×0 — if the placeholder provider is accidentally made to succeed before
-//! async loading is wired, the assertion flips red, which is the desired
-//! sentinel.
+//! provider correctly.
+//!
+//! `AssetImage`/`NetworkImage` (the async providers) are NOT covered here —
+//! `Image::from_image`/`memory`/`file` all resolve synchronously via
+//! `ImageProvider::resolve`, so `Image`'s `StatelessView::build` takes the
+//! `build_sync` path unconditionally and every test below observes the FIRST
+//! (and only) frame. `tests/image_async.rs` covers the async
+//! probe-cache/`FutureBuilder`-wrap/coalescing dispatch that only exists once
+//! a provider's `cache_key()` returns `Some`.
 
 mod common;
 
@@ -84,29 +88,14 @@ fn image_large_intrinsic_shrinks_to_fit_loose_box() {
 }
 
 #[test]
-#[cfg(feature = "network-images")]
-fn image_failed_provider_renders_zero_size() {
-    // `NetworkImage` always returns `ImageProviderError::AsyncNotWired`.
-    // `create_render_object` falls back to `RenderImage::new(Size::ZERO, …)`,
-    // giving `constraints.smallest()` == 0×0 under loose layout. If this
-    // assertion passes with a non-zero size the provider succeeded
-    // unexpectedly — which is equally wrong and caught here.
-    let laid = lay_out(Image::network("https://example.com/img.png"), loose(1000.0));
-    assert_eq!(laid.size(laid.root()), size(0.0, 0.0));
-}
-
-#[test]
 #[cfg(feature = "images")]
 fn image_file_provider_decodes_a_committed_png_fixture_to_its_real_dimensions() {
     // `tests/fixtures/tiny.png` is a real, committed 5x3 RGBA PNG (not a
-    // synthetic in-memory buffer) — this is the closest thing to a true
-    // "load a real asset file through the Image widget" test that the
-    // current architecture supports. `Image::file` decodes it via
+    // synthetic in-memory buffer). `Image::file` decodes it synchronously via
     // `flui-widgets`' OWN `image`-crate dependency (`ImageProvider::resolve`
-    // in `src/image/provider.rs`); it does NOT go through `flui-assets` —
-    // `flui-widgets` has no dependency on that crate at all, so there is no
-    // "asset image via flui-assets into the Image widget" path to exercise
-    // yet (see `docs/ROADMAP.md`'s Business.1 flui-assets item).
+    // in `src/image/provider.rs`) — it does NOT go through `flui-assets`;
+    // `Image::asset` (the `asset-images`-feature, `flui-assets`-backed async
+    // path) is covered separately in `tests/image_async.rs`.
     let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/tiny.png");
     let laid = lay_out(Image::file(fixture), loose(1000.0));
     assert_eq!(
@@ -115,6 +104,28 @@ fn image_file_provider_decodes_a_committed_png_fixture_to_its_real_dimensions() 
         "a 5x3 real PNG file must decode to its true pixel dimensions, not a \
          0x0 placeholder from a swallowed decode failure",
     );
+}
+
+#[test]
+fn image_sync_provider_failure_renders_zero_size() {
+    // A synchronously-failing custom `ImageProvider` (`cache_key` defaults to
+    // `None`, so `Image` never leaves the `build_sync` path) must fall back
+    // to `RenderImage::new(Size::ZERO, …)`, giving `constraints.smallest()`
+    // == 0×0 under loose layout. If this assertion passes with a non-zero
+    // size the provider succeeded unexpectedly — equally wrong, and caught
+    // here.
+    #[derive(Debug)]
+    struct AlwaysFails;
+    impl flui_widgets::ImageProvider for AlwaysFails {
+        fn resolve(&self) -> Result<PixelImage, flui_widgets::ImageProviderError> {
+            Err(flui_widgets::ImageProviderError::DecodeFailed {
+                reason: "synthetic test failure".to_string(),
+            })
+        }
+    }
+
+    let laid = lay_out(Image::new(AlwaysFails), loose(1000.0));
+    assert_eq!(laid.size(laid.root()), size(0.0, 0.0));
 }
 
 #[test]

@@ -201,10 +201,19 @@ jobs:
       # verification tests go CI-dead once. Explicit feature-gated run, same
       # precedent as `cargo clippy -p flui-engine --features
       # enable-wgpu-tests` above.
+      #
+      # `asset-images`/`network-images` extend the same gap to the
+      # flui-assets↔Image ASYNC bridge (`AssetImage`/`NetworkImage`,
+      # `image::decode_cache`): those tests only compile under their own
+      # feature, so they need their own explicit run too, or they are as
+      # CI-dead as the sync path was before this block existed.
       - name: cargo nextest run (flui-assets full, flui-widgets images)
         run: |
           cargo nextest run -p flui-assets --features full
           cargo nextest run -p flui-widgets --features images --test image
+          cargo nextest run -p flui-widgets --features asset-images --lib
+          cargo nextest run -p flui-widgets --features asset-images --test image_async
+          cargo nextest run -p flui-widgets --features network-images --test image_network
 
   # ─────────────────────────────────────────────────────────────────────────
   # gpu-test (PILOT) — actually RUN the `enable-wgpu-tests` readback/oracle

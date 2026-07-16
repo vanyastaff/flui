@@ -131,10 +131,13 @@ pub use container::Container;
 pub use flex::{Column, Expanded, Flex, Flexible, Row, Spacer};
 pub use flui_objects::{ImageAlignment, ImageFit};
 pub use icon::{Icon, IconData, IconTheme, IconThemeData};
+#[cfg(feature = "asset-images")]
+pub use image::AssetImage;
 #[cfg(feature = "network-images")]
 pub use image::NetworkImage;
 pub use image::{
-    DirectImageProvider, FileImage, Image, ImageProvider, ImageProviderError, MemoryImage,
+    DirectImageProvider, FileImage, Image, ImageCacheKey, ImageProvider, ImageProviderError,
+    MemoryImage,
 };
 pub use interaction::{
     AbsorbPointer, Action, ActionOutcome, Actions, CallbackAction, CallbackShortcuts, ExcludeFocus,
