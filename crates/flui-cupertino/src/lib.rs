@@ -20,12 +20,13 @@
 //! ## ADR-0028: no upward or sideways design-system dependency
 //!
 //! This crate depends only on `flui-widgets`/`flui-view`/`flui-types`/
-//! `flui-foundation`/`flui-animation`/`flui-interaction` — **never**
-//! `flui-material` (the sibling design system; the two are independent,
-//! per ADR-0028) and **never** `flui-objects`/`flui-rendering` directly (v1
-//! composes existing `flui-widgets` widgets — `FractionalTranslation`,
-//! `FadeTransition`, `GestureDetector`, `DecoratedBox`, … — it does not paint
-//! its own render objects).
+//! `flui-animation` (plus `tracing`) — **never** `flui-material` (the
+//! sibling design system; the two are independent, per ADR-0028) and
+//! **never** `flui-objects`/`flui-rendering` directly (v1 composes existing
+//! `flui-widgets` widgets — `FadeTransition`, `GestureDetector`,
+//! `DecoratedBox`, … — it does not paint its own render objects).
+//! `flui-foundation`/`flui-interaction` appear only as dev-dependencies,
+//! for the `tests/common` mount harness — no `src/` code references either.
 //!
 //! ## Scope (V1 — constants-first, one component)
 //!

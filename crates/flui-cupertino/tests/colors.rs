@@ -9,11 +9,68 @@
 //! actual tag-3.44.0 value is `(10, 132, 255)`, one digit away from the
 //! superficially-plausible `(9, 132, 255)`.
 
-use flui_cupertino::CupertinoColors;
+#![allow(clippy::unwrap_used)]
+
+mod common;
+
+use std::sync::{Arc, Mutex};
+
+use common::{lay_out, loose};
+use flui_cupertino::{CupertinoColor, CupertinoColors, CupertinoTheme, CupertinoThemeData};
 use flui_types::Color;
+use flui_types::platform::Brightness;
+use flui_view::prelude::*;
+use flui_widgets::SizedBox;
 
 fn channels(color: Color) -> (u8, u8, u8, u8) {
     (color.r, color.g, color.b, color.a)
+}
+
+/// Captures `CupertinoColor::Static(sentinel).resolve(ctx)` during `build()`
+/// — proving `resolve` actually runs against a real mounted `BuildContext`
+/// (not just constructed and equality-checked against itself).
+#[derive(Clone, Debug, StatelessView)]
+struct StaticResolveCapture {
+    sentinel: Color,
+    captured: Arc<Mutex<Option<Color>>>,
+}
+
+impl StatelessView for StaticResolveCapture {
+    fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
+        let resolved = CupertinoColor::Static(self.sentinel).resolve(ctx);
+        *self.captured.lock().unwrap() = Some(resolved);
+        SizedBox::shrink()
+    }
+}
+
+/// `CupertinoColor::Static::resolve` returns its color unchanged, verified
+/// against a real mounted `BuildContext` under a `CupertinoTheme::brightness`
+/// of `Dark` — a mutation that made `Static::resolve` secretly route through
+/// brightness resolution (e.g. treating the sentinel as if it were a
+/// `Dynamic` color's light variant) would still pass a construct-and-compare
+/// unit test but fails here, since a real ambient theme is present and could
+/// have perturbed the result if `resolve` consulted it.
+#[test]
+fn static_color_resolves_to_itself_through_a_real_context() {
+    let sentinel = Color::rgba(11, 22, 33, 200);
+    let captured: Arc<Mutex<Option<Color>>> = Arc::new(Mutex::new(None));
+
+    let _laid = lay_out(
+        CupertinoTheme::new(
+            CupertinoThemeData::default().with_brightness(Brightness::Dark),
+            StaticResolveCapture {
+                sentinel,
+                captured: Arc::clone(&captured),
+            },
+        ),
+        loose(100.0),
+    );
+
+    let resolved = captured
+        .lock()
+        .unwrap()
+        .expect("build should have run and captured a resolved color");
+    assert_eq!(resolved, sentinel);
 }
 
 #[test]

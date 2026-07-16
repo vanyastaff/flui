@@ -83,6 +83,24 @@ fn per_size_minimum_geometry_reaches_the_mounted_render_tree() {
     assert_eq!(large.size(large.root()), common::size(44.0, 44.0));
 }
 
+/// An explicit `minimum_size(0.0, 0.0)` genuinely removes the floor —
+/// matching the oracle's `minimumSize?.width ?? ...` chain, where a
+/// caller-supplied `Size.zero` passes straight through and is never
+/// re-routed to `kCupertinoButtonMinSize`/`kMinInteractiveDimensionCupertino`.
+/// With no floor and an empty child, the button's size collapses to just its
+/// large-style padding (20 horizontal, 16 vertical, each doubled) — well
+/// under the 44×44 the per-size default floor would otherwise force.
+#[test]
+fn explicit_minimum_size_zero_removes_the_floor() {
+    let laid = lay_out(
+        CupertinoButton::new(SizedBox::shrink())
+            .minimum_size(0.0, 0.0)
+            .on_pressed(|| {}),
+        loose(200.0),
+    );
+    assert_eq!(laid.size(laid.root()), common::size(40.0, 32.0));
+}
+
 /// The press-opacity timeline under a real vsync: tapping fades the button
 /// toward `pressed_opacity` over `K_FADE_OUT_DURATION` (120ms), then back to
 /// full opacity over `K_FADE_IN_DURATION` (180ms) — driven through the

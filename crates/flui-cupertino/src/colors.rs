@@ -492,18 +492,12 @@ mod tests {
     use super::*;
 
     // ---- CupertinoColor ------------------------------------------------
-
-    #[test]
-    fn cupertino_color_static_resolves_to_itself_without_a_context() {
-        // `Static` never reads `ctx`, so passing a dangling reference through
-        // `std::ptr` machinery isn't needed — build a real (but ancestor-less)
-        // context via the shared harness used by every resolve test below.
-        let color = CupertinoColor::Static(Color::rgb(1, 2, 3));
-        // `resolve` on `Static` must not touch `ctx` at all; verified by the
-        // dynamic-color tests below actually needing a mounted context while
-        // this one only needs the enum's own match arm.
-        assert_eq!(color, CupertinoColor::Static(Color::rgb(1, 2, 3)));
-    }
+    //
+    // `CupertinoColor::Static::resolve` actually being called against a real
+    // mounted `BuildContext` (not just constructed and equality-checked) is
+    // covered by `tests/colors.rs::static_color_resolves_to_itself_through_a_real_context`
+    // — this crate's unit tests stay to pure data-model behavior with no
+    // mounted context available (see this crate's `AGENTS.md`, "Testing").
 
     #[test]
     fn from_color_and_from_dynamic_color_construct_the_matching_variant() {

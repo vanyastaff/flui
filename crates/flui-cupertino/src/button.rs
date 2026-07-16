@@ -66,7 +66,8 @@ use flui_view::{BoxedView, StatefulView, ViewState};
 use flui_widgets::animated::VsyncScope;
 use flui_widgets::prelude::BoxConstraints;
 use flui_widgets::{
-    Align, ConstrainedBox, DecoratedBox, DefaultTextStyle, FadeTransition, GestureDetector, Padding,
+    Align, ConstrainedBox, DecoratedBox, DefaultTextStyle, FadeTransition, GestureDetector,
+    Padding, Semantics,
 };
 
 use crate::colors::{CupertinoColor, CupertinoColors};
@@ -90,11 +91,6 @@ const K_TINTED_OPACITY_LIGHT: f32 = 0.12;
 /// `kCupertinoButtonTintedOpacityDark` (`constants.dart`, oracle tag
 /// `3.44.0`).
 const K_TINTED_OPACITY_DARK: f32 = 0.26;
-
-/// `kMinInteractiveDimensionCupertino` (`constants.dart`, oracle tag
-/// `3.44.0`) — the fallback minimum tappable dimension; in practice always
-/// shadowed by `size_min_dimension`, which covers every [`CupertinoButtonSize`].
-const K_MIN_INTERACTIVE_DIMENSION_CUPERTINO: f32 = 44.0;
 
 /// The size of a [`CupertinoButton`]. Flutter parity: `CupertinoButtonSize`
 /// (`button.dart`, oracle tag `3.44.0`).
@@ -131,7 +127,15 @@ fn size_border_radius(size: CupertinoButtonSize) -> BorderRadius {
 }
 
 /// `kCupertinoButtonMinSize[sizeStyle]` (`constants.dart`, oracle tag
-/// `3.44.0`).
+/// `3.44.0`) — the fallback `build()` uses only when [`CupertinoButton::minimum_size`]
+/// is unset. The oracle's constraint expression is
+/// `minimumSize?.width ?? kCupertinoButtonMinSize[sizeStyle] ?? kMinInteractiveDimensionCupertino`:
+/// the final `kMinInteractiveDimensionCupertino` (44.0) fallback is
+/// unreachable in practice (`kCupertinoButtonMinSize` covers every
+/// [`CupertinoButtonSize`] variant), so this port omits that dead constant
+/// rather than carry unused code — `minimum_size` passes an explicit value
+/// (including `0.0`, which genuinely removes the floor) straight through
+/// unmodified, exactly as `minimumSize?.width` does.
 fn size_min_dimension(size: CupertinoButtonSize) -> f32 {
     match size {
         CupertinoButtonSize::Small => 28.0,
@@ -490,22 +494,16 @@ impl ViewState<CupertinoButton> for CupertinoButtonState {
             ..BoxDecoration::new()
         };
 
+        // An explicit `minimum_size` (including `(0.0, 0.0)`, which
+        // genuinely removes the floor) passes straight through unmodified —
+        // see `size_min_dimension`'s doc for why no other fallback runs on
+        // top of a caller-supplied value.
         let (min_width, min_height) = view.minimum_size.unwrap_or_else(|| {
             (
                 size_min_dimension(view.size_style),
                 size_min_dimension(view.size_style),
             )
         });
-        let min_width = if min_width > 0.0 {
-            min_width
-        } else {
-            K_MIN_INTERACTIVE_DIMENSION_CUPERTINO
-        };
-        let min_height = if min_height > 0.0 {
-            min_height
-        } else {
-            K_MIN_INTERACTIVE_DIMENSION_CUPERTINO
-        };
         let constraints =
             BoxConstraints::new(px(min_width), Pixels::MAX, px(min_height), Pixels::MAX);
 
@@ -532,7 +530,12 @@ impl ViewState<CupertinoButton> for CupertinoButtonState {
             None => Arc::new(flui_animation::ConstantAnimation::new(1.0)),
         };
 
-        let faded = ConstrainedBox::new(constraints).child(FadeTransition::new(opacity, decorated));
+        // Flutter parity: `Semantics(button: true, child: ConstrainedBox(...))`
+        // — applied unconditionally, not gated on `enabled` (a disabled
+        // button is still announced as a button, just an inert one).
+        let faded = Semantics::new()
+            .button(true)
+            .child(ConstrainedBox::new(constraints).child(FadeTransition::new(opacity, decorated)));
 
         let mut gesture_detector = GestureDetector::new();
         if enabled {
