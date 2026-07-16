@@ -41,9 +41,6 @@
 //! - `scrolledUnder` — no `ScrollNotification` substrate to observe yet.
 //! - `flexibleSpace`, `bottom` (and therefore `PreferredSize`'s bottom-height
 //!   contribution — [`AppBar::preferred_size`] reports `toolbar_height` only).
-//! - Implied leading (a `DrawerButton`/`BackButton` synthesized when
-//!   `leading` is unset) — arrives with the `IconButton`/`Navigator`-aware
-//!   follow-up unit that also ships a real floating action button.
 //! - **Named divergence: no shadow suppression at a nonzero elevation.**
 //!   `_AppBarDefaultsM3` sets `shadowColor: Colors.transparent` AND
 //!   `surfaceTintColor: Colors.transparent` (`app_bar.dart:2541-2545`) — the
@@ -55,17 +52,72 @@
 //!   section for the matching gap), so this substrate cannot suppress it —
 //!   an `AppBar::new().elevation(4.0)` here casts a real shadow the M3
 //!   oracle would not. Revisit once `Material` grows `shadow_color`.
+//!
+//! ## Implied leading: a `BackButton`, no `DrawerButton`
+//!
+//! `_AppBarState.build`'s leading resolution (`app_bar.dart:1009-1014`,
+//! oracle tag `3.44.0`): when `leading` is unset and
+//! `automatically_imply_leading` is set, the oracle synthesizes a
+//! `DrawerButton` if the enclosing `Scaffold` has a drawer, else a
+//! `BackButton`/`CloseButton` if `parentRoute?.impliesAppBarDismissal ??
+//! false` (`willHandlePopInternally || canPop`, from `ModalRoute`). This
+//! substrate has no `Drawer`/`Scaffold.hasDrawer` and no `ModalRoute`
+//! abstraction (routes are plain [`flui_widgets::Route`]s, not modal-aware
+//! ones), so `resolve_leading` narrows the condition to what those two
+//! substrates leave reachable: no leading set, `automatically_imply_leading`
+//! set, a [`NavigatorHandle`] ancestor
+//! exists, and it reports [`NavigatorHandle::can_pop`] — always a
+//! [`crate::BackButton`], never a `CloseButton` (no `fullscreenDialog`
+//! substrate to pick that branch) or `DrawerButton` (no drawer substrate at
+//! all). **Named divergence**, not a silently dropped case.
+//!
+//! **Second named divergence, worth calling out precisely:**
+//! `NavigatorHandle::can_pop` is navigator-global (Flutter's own
+//! `NavigatorState.canPop` is too), but the oracle's `parentRoute` is
+//! resolved via `ModalRoute.of(context)` — the SPECIFIC route this
+//! `AppBar`'s subtree is inside — so a bottom-of-stack route's own
+//! `impliesAppBarDismissal` is `false` even while the navigator as a whole
+//! can pop (a route above it exists). This substrate has no `ModalRoute`
+//! equivalent to ask "which route is this `AppBar` inside, and specifically
+//! is IT poppable" — every mounted `AppBar` under the same navigator sees
+//! the same global answer. In the common case (one route showing an
+//! `AppBar` at a time, which is what an `Overlay`-based navigator is for)
+//! this is unobservable; it only diverges when multiple routes carrying
+//! their own `AppBar` are simultaneously mounted (see
+//! `tests/app_bar.rs`'s `implied_leading_appears_once_the_navigator_can_pop`
+//! for exactly that case, documented rather than hidden).
+//!
+//! ## The leading slot is a fixed `LEADING_WIDTH`, not the leading widget's own intrinsic size
+//!
+//! Whatever `leading` resolves to (explicit or implied) is wrapped in
+//! `ConstrainedBox(BoxConstraints.tightFor(width: LEADING_WIDTH))` around
+//! `Center` before it reaches the toolbar `Row` — Flutter parity:
+//! `_AppBarState.build`'s own `leading = ConstrainedBox(constraints:
+//! BoxConstraints.tightFor(width: widget.leadingWidth ?? appBarTheme.leadingWidth
+//! ?? _kLeadingWidth), child: leading)` (`app_bar.dart`, tag `3.44.0`;
+//! `_kLeadingWidth = kToolbarHeight`, "so the leading button is square").
+//! Simplified from the oracle in one way: Flutter only wraps in `Center`
+//! `when leading is IconButton`; this substrate does it unconditionally
+//! (harmless for any leading widget that already fills its own bounds).
+//! **Without this wrap**, a bare 40×40 `IconButton` (this crate's
+//! `_IconButtonDefaultsM3.minimumSize`) would collapse the slot to 40px
+//! wide in the `Row` instead of the M3-specified 56px — `LEADING_WIDTH`'s
+//! `ConstrainedBox` is what prevents that. No `leadingWidth`/
+//! `AppBarTheme.leadingWidth` override exists yet (named V1 deferral), so
+//! `LEADING_WIDTH` is the only width this slot ever takes.
 
+use flui_rendering::constraints::BoxConstraints;
 use flui_types::geometry::px;
 use flui_types::styling::Color;
 use flui_types::typography::TextStyle;
-use flui_types::{Alignment, Size};
+use flui_types::{Alignment, Pixels, Size};
 use flui_view::prelude::*;
 use flui_widgets::{
-    Align, CrossAxisAlignment, DefaultTextStyle, Expanded, IconTheme, IconThemeData,
-    PreferredSizeView, Row, SafeArea, SizedBox,
+    Align, Center, ConstrainedBox, CrossAxisAlignment, DefaultTextStyle, Expanded, IconTheme,
+    IconThemeData, NavigatorHandle, PreferredSizeView, Row, SafeArea, SizedBox,
 };
 
+use crate::back_button::BackButton;
 use crate::material::Material;
 use crate::theme::Theme;
 use crate::theme_data::ThemeData;
@@ -75,6 +127,13 @@ use crate::theme_data::ThemeData;
 /// Flutter parity: `material/constants.dart`'s `kToolbarHeight` (oracle tag
 /// `3.44.0`).
 pub const DEFAULT_TOOLBAR_HEIGHT: f32 = 56.0;
+
+/// The leading slot's fixed width — Flutter parity: `_AppBarState.build`'s
+/// `_kLeadingWidth` (`app_bar.dart:43`, `= kToolbarHeight`, "so the leading
+/// button is square"). No `widget.leadingWidth`/`AppBarTheme.leadingWidth`
+/// override exists yet in this V1 (see the module docs' deferred list), so
+/// this constant is the only width the slot ever takes.
+const LEADING_WIDTH: f32 = DEFAULT_TOOLBAR_HEIGHT;
 
 /// A Material app bar: a `leading` / `title` / `actions` toolbar painted on a
 /// [`Material`] surface, sized to [`toolbar_height`](Self::toolbar_height) and
@@ -94,6 +153,7 @@ pub const DEFAULT_TOOLBAR_HEIGHT: f32 = 56.0;
 #[derive(Clone, StatelessView)]
 pub struct AppBar {
     leading: Option<BoxedView>,
+    automatically_imply_leading: bool,
     title: Option<BoxedView>,
     actions: Vec<BoxedView>,
     toolbar_height: f32,
@@ -104,12 +164,13 @@ pub struct AppBar {
 
 impl AppBar {
     /// An `AppBar` with no leading/title/actions, the default toolbar height
-    /// ([`DEFAULT_TOOLBAR_HEIGHT`]), and every color/elevation left to the
-    /// M3 theme defaults.
+    /// ([`DEFAULT_TOOLBAR_HEIGHT`]), `automatically_imply_leading: true`, and
+    /// every color/elevation left to the M3 theme defaults.
     #[must_use]
     pub fn new() -> Self {
         Self {
             leading: None,
+            automatically_imply_leading: true,
             title: None,
             actions: Vec::new(),
             toolbar_height: DEFAULT_TOOLBAR_HEIGHT,
@@ -119,10 +180,22 @@ impl AppBar {
         }
     }
 
-    /// Sets the widget in the leading slot (before the title).
+    /// Sets the widget in the leading slot (before the title), overriding
+    /// any implied leading — see [`Self::automatically_imply_leading`].
     #[must_use]
     pub fn leading(mut self, leading: impl IntoView) -> Self {
         self.leading = Some(leading.into_view().boxed());
+        self
+    }
+
+    /// Whether a [`crate::BackButton`] is synthesized into the leading slot
+    /// when [`Self::leading`] is unset and a poppable
+    /// [`NavigatorHandle`] ancestor exists.
+    /// Defaults to `true`. See the module docs' "Implied leading" section
+    /// for the narrowed condition this substrate checks.
+    #[must_use]
+    pub fn automatically_imply_leading(mut self, automatically_imply_leading: bool) -> Self {
+        self.automatically_imply_leading = automatically_imply_leading;
         self
     }
 
@@ -180,6 +253,10 @@ impl std::fmt::Debug for AppBar {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AppBar")
             .field("has_leading", &self.leading.is_some())
+            .field(
+                "automatically_imply_leading",
+                &self.automatically_imply_leading,
+            )
             .field("has_title", &self.title.is_some())
             .field("action_count", &self.actions.len())
             .field("toolbar_height", &self.toolbar_height)
@@ -228,6 +305,58 @@ fn resolve_style(
     }
 }
 
+/// [`leading_short_circuit`]'s verdict: either the leading slot is already
+/// settled with no need to consult a [`NavigatorHandle`] at all, or the
+/// caller must look one up. Not `Option<Option<BoxedView>>` — clippy's
+/// `option_option` lint rightly rejects that shape as ambiguous; this names
+/// the two outcomes instead.
+enum LeadingShortCircuit {
+    /// Neither the explicit-`leading` nor the `automatically_imply_leading:
+    /// false` short-circuit applies — settled state unknown without a
+    /// navigator lookup.
+    ConsultNavigator,
+    /// Already resolved: `Some` (the explicit `leading`) or `None`
+    /// (suppressed by `automatically_imply_leading: false`).
+    Resolved(Option<BoxedView>),
+}
+
+/// The two outcomes `resolve_leading` can settle without ever consulting a
+/// [`NavigatorHandle`]: an explicit `leading` always wins, and
+/// `automatically_imply_leading: false` always suppresses the implied
+/// button. Split out as a pure, `BuildContext`-free function so this half of
+/// `resolve_leading`'s logic is unit-testable without a mounted tree; the
+/// navigator-consulting half needs a real `BuildContext` and is covered
+/// end-to-end by `tests/app_bar.rs`.
+fn leading_short_circuit(
+    leading: Option<&BoxedView>,
+    automatically_imply_leading: bool,
+) -> LeadingShortCircuit {
+    if let Some(leading) = leading {
+        return LeadingShortCircuit::Resolved(Some(leading.clone()));
+    }
+    if !automatically_imply_leading {
+        return LeadingShortCircuit::Resolved(None);
+    }
+    LeadingShortCircuit::ConsultNavigator
+}
+
+/// Resolves the leading slot: `self.leading` verbatim if set, else a
+/// synthesized [`BackButton`] when `automatically_imply_leading` is set and
+/// a poppable navigator ancestor exists — see the module docs' "Implied
+/// leading" section.
+fn resolve_leading(
+    leading: Option<&BoxedView>,
+    automatically_imply_leading: bool,
+    ctx: &dyn BuildContext,
+) -> Option<BoxedView> {
+    match leading_short_circuit(leading, automatically_imply_leading) {
+        LeadingShortCircuit::Resolved(result) => return result,
+        LeadingShortCircuit::ConsultNavigator => {}
+    }
+    let navigator = NavigatorHandle::maybe_of(ctx)?;
+    navigator.can_pop().then(|| BackButton::new().boxed())
+}
+
 impl StatelessView for AppBar {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
         let theme = Theme::of(ctx);
@@ -243,9 +372,29 @@ impl StatelessView for AppBar {
             self.elevation,
         );
 
+        let leading = resolve_leading(self.leading.as_ref(), self.automatically_imply_leading, ctx);
+
         let mut toolbar_children: Vec<BoxedView> = Vec::new();
-        if let Some(leading) = &self.leading {
-            toolbar_children.push(leading.clone());
+        if let Some(leading) = &leading {
+            // Flutter parity: `_AppBarState.build` wraps `leading` in
+            // `Center` (when it `is IconButton`; simplified here to
+            // unconditional — see the module docs' "Implied leading"
+            // section) then `ConstrainedBox(BoxConstraints.tightFor(width:
+            // _kLeadingWidth))`, pinning the slot to a fixed 56px width
+            // regardless of the leading widget's own intrinsic size —
+            // NOT the 40px `IconButton` minimum size a bare, unwrapped
+            // leading would otherwise collapse to in this `Row`.
+            let leading_constraints = BoxConstraints::new(
+                px(LEADING_WIDTH),
+                px(LEADING_WIDTH),
+                px(0.0),
+                Pixels::INFINITY,
+            );
+            toolbar_children.push(
+                ConstrainedBox::new(leading_constraints)
+                    .child(Center::new().child(leading.clone()))
+                    .boxed(),
+            );
         }
         if let Some(title) = &self.title {
             // Always start-aligned — see the module docs' `centerTitle` note.
@@ -370,5 +519,43 @@ mod tests {
         assert_eq!(bar.background_color, Some(Color::rgb(10, 20, 30)));
         assert_eq!(bar.foreground_color, Some(Color::rgb(40, 50, 60)));
         assert_eq!(bar.elevation, Some(4.0));
+    }
+
+    #[test]
+    fn automatically_imply_leading_defaults_to_true() {
+        assert!(AppBar::new().automatically_imply_leading);
+    }
+
+    #[test]
+    fn automatically_imply_leading_builder_overrides_the_default() {
+        let bar = AppBar::new().automatically_imply_leading(false);
+        assert!(!bar.automatically_imply_leading);
+    }
+
+    #[test]
+    fn leading_short_circuit_prefers_an_explicit_leading_regardless_of_the_imply_flag() {
+        let leading = flui_widgets::SizedBox::shrink().boxed();
+        let resolved = leading_short_circuit(Some(&leading), true);
+        assert!(
+            matches!(resolved, LeadingShortCircuit::Resolved(Some(_))),
+            "an explicit leading must short-circuit to itself, never falling through to a \
+             navigator lookup",
+        );
+    }
+
+    #[test]
+    fn leading_short_circuit_suppresses_the_implied_leading_when_the_flag_is_false() {
+        assert!(matches!(
+            leading_short_circuit(None, false),
+            LeadingShortCircuit::Resolved(None)
+        ));
+    }
+
+    #[test]
+    fn leading_short_circuit_defers_to_the_navigator_lookup_when_neither_short_circuit_applies() {
+        assert!(matches!(
+            leading_short_circuit(None, true),
+            LeadingShortCircuit::ConsultNavigator
+        ));
     }
 }

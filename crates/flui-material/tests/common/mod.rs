@@ -282,6 +282,25 @@ impl LaidOut {
         inspect::render_offset(&self.pipeline_owner.read(), id)
             .expect("render node should have an offset after layout")
     }
+
+    /// The paint offset of a render node relative to the render-tree root —
+    /// [`offset`](Self::offset) summed up every ancestor, for locating a
+    /// node buried under several layout-only layers (e.g. a `Navigator`'s
+    /// `Overlay`/`Stack`) where a test cannot cheaply hand-walk each
+    /// intermediate child index.
+    pub fn absolute_offset(&self, id: RenderId) -> Offset {
+        let owner = self.pipeline_owner.read();
+        let mut total = Offset::ZERO;
+        let mut current = id;
+        loop {
+            total += inspect::render_offset(&owner, current)
+                .expect("render node should have an offset after layout");
+            match owner.render_tree().parent(current) {
+                Some(parent) => current = parent,
+                None => return total,
+            }
+        }
+    }
 }
 
 /// Convenience: a `Size` in logical pixels.

@@ -3,9 +3,10 @@
 //! Material Design theming foundation for FLUI: [`ColorScheme`], the M3 2021
 //! type scale ([`typography`]) and [`TextTheme`], [`ThemeData`], the
 //! [`Theme`] inherited widget that publishes it to a subtree, the
-//! [`Material`]/[`InkWell`] surface primitives, and the M3 button family
+//! [`Material`]/[`InkWell`] surface primitives, the M3 button family
 //! ([`ButtonStyle`], [`ElevatedButton`], [`FilledButton`], [`OutlinedButton`],
-//! [`TextButton`]).
+//! [`TextButton`], [`IconButton`], [`FloatingActionButton`], [`BackButton`]),
+//! and [`Scaffold`]/[`AppBar`].
 //!
 //! ## Flutter parity
 //!
@@ -56,11 +57,14 @@
 #![deny(missing_docs)]
 
 pub mod app_bar;
+pub mod back_button;
 pub mod button_style;
 mod button_style_button;
 pub mod color_scheme;
 pub mod elevated_button;
 pub mod filled_button;
+pub mod floating_action_button;
+pub mod icon_button;
 pub mod ink_well;
 pub mod material;
 pub mod outlined_button;
@@ -73,10 +77,13 @@ pub mod theme_data;
 pub mod typography;
 
 pub use app_bar::AppBar;
+pub use back_button::BackButton;
 pub use button_style::ButtonStyle;
 pub use color_scheme::{ColorScheme, ColorSchemeOverrides};
 pub use elevated_button::ElevatedButton;
 pub use filled_button::FilledButton;
+pub use floating_action_button::FloatingActionButton;
+pub use icon_button::IconButton;
 pub use ink_well::{InkWell, InkWellState};
 pub use material::Material;
 pub use outlined_button::OutlinedButton;
