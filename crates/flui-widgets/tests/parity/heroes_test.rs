@@ -60,6 +60,12 @@
 //!   any); opting into neither starts none across the same window —
 //!   [`a_user_gesture_flies_a_hero_pair_when_both_ends_opt_in`],
 //!   [`a_user_gesture_flies_nothing_when_the_heroes_did_not_opt_in`].
+//! - `'Heroes fly on pushReplacement'` — a replaced top route is still a
+//!   top-route *change*, so `HistoryState::flush_inner` fires the same
+//!   `Notification::TopChanged` an ordinary push does, and the hero flies
+//!   unmodified — no dedicated `push_replacement` wiring exists, and none
+//!   was needed —
+//!   [`heroes_fly_on_push_replacement`].
 //!
 //! ## Already covered elsewhere (redundant; citation only, not re-ported)
 //! - `'Can push/pop on outer Navigator if nested Navigator contains Heroes'`
@@ -103,8 +109,13 @@
 //!   is therefore a structural no-op for an already-mounted `Navigator`, and
 //!   an in-flight flight — an independently ticking overlay entry, not owned
 //!   by "whichever controller happens to be ambient" — is never at risk from
-//!   it. There is no code path a swap could reach that would make a port of
-//!   this oracle fail today, and the one internal signal that would
+//!   it. Probed directly (not just inferred from the doc comment): a flight
+//!   sampled `[23.08, 36.87]` mid-push, survived a `pump_widget` root-swap to
+//!   a fresh `HeroControllerScope`/`HeroController` pair, and continued
+//!   `[49.96, 56.18, 59.01, 59.97, 60.0]` to a clean landing with no jump, no
+//!   restart, and no leaked shuttle. There is no code path a swap could
+//!   reach that would make a port of this oracle fail today, and the one
+//!   internal signal that would
 //!   distinguish "still tracked by the old controller" from "silently
 //!   dropped" — `HeroController::flights()` — is `pub(crate)`, unreachable
 //!   from this file. A test with no way to go red is not a test; not ported
@@ -152,16 +163,11 @@
 //!   adaptation above) and no `CupertinoPageRoute`. The single-flight-per-
 //!   gesture invariant the first of these pins is exercised at the drag
 //!   level by `src/navigator/hero_gesture_tests.rs`.
-//! - `'Heroes fly on pushReplacement'`, `'Can add two page with heroes
-//!   simultaneously using page API.'`, `'Can still trigger hero even if page
-//!   underneath changes'` — the first is a **real, named FLUI gap**, not a
-//!   harness limitation: `NavigatorHandle::push_replacement` is not wired
-//!   through the hero flight path (`HeroController` overrides only
-//!   `did_change_top`, and `push_replacement` does not currently fire it),
-//!   so a hero does not fly on a `push_replacement` today. Tracked in
-//!   `docs/ROADMAP.md`'s Business.1 "still owed" list and
-//!   `docs/ROADMAP-TRACKER.md` B1.4, not silently dropped. The other two
-//!   cases are the declarative Page API this crate does not have.
+//! - `'Can add two page with heroes simultaneously using page API.'` and
+//!   `'Can still trigger hero even if page underneath changes'` — both are
+//!   the declarative Page API this crate does not have. (`'Heroes fly on
+//!   pushReplacement'`, the other case originally grouped here, turned out
+//!   to need no port-time adaptation at all — see "Ported cases" above.)
 //! - `'kept alive Hero does not throw when the transition begins'`, `'toHero
 //!   becomes unpaintable after the transition begins'`, `'diverting to a
 //!   keepalive but unpaintable hero'` — all three depend on
@@ -531,4 +537,53 @@ fn a_user_gesture_flies_nothing_when_the_heroes_did_not_opt_in() {
          become observable: {heights:?}"
     );
     laid.enter_owner_scope(|| navigator.did_stop_user_gesture());
+}
+
+/// **A hero flies on `push_replacement`, the same as an ordinary push.**
+///
+/// Oracle: `'Heroes fly on pushReplacement'` — a regression test for
+/// <https://github.com/flutter/flutter/issues/28041>: a replaced top route is
+/// still a top-route *change*, so it still flies its heroes.
+///
+/// `HeroController` overrides only `did_change_top`
+/// (`NavigatorObserver::did_change_top`), not `did_push`/`did_replace`
+/// directly — and `HistoryState::flush_inner` (`history.rs`) computes
+/// `Notification::TopChanged` purely from whether the top route's
+/// *identity* changed (`self.last_topmost != Some(top)`), with no branch on
+/// *how* it changed. `push_replacement` reaches the exact same check as an
+/// ordinary push. There is no dedicated "fly heroes on push_replacement"
+/// wiring, and none is missing — it rides the general mechanism.
+///
+/// Red-check (mutation actually run): comment out the
+/// `notifications.push(Notification::TopChanged { .. })` line in
+/// `HistoryState::flush_inner` — every flight in every test in this file
+/// stops firing, including this one, because there is no
+/// push_replacement-specific code path to selectively break.
+#[test]
+fn heroes_fly_on_push_replacement() {
+    let vsync = Vsync::new();
+    let navigator = NavigatorHandle::new();
+    navigator.seed_initial(sized_hero_page(30.0, 20.0));
+    let mut laid = lay_out_animated(app(&vsync, &navigator), tight(400.0, 400.0), vsync);
+
+    let _replace =
+        laid.enter_owner_scope(|| navigator.push_replacement(sized_hero_page(90.0, 60.0)));
+    let heights = track_heights(&mut laid, SETTLE);
+
+    assert!(
+        heights.len() >= 3,
+        "need several in-flight samples to observe interpolation, got {heights:?}"
+    );
+    assert!(
+        heights.iter().any(|&h| h > 20.5 && h < 59.5),
+        "at least one sample must be strictly between source and destination \
+         — proof of a real flight, not the replacement snapping straight to \
+         the new size: {heights:?}"
+    );
+    assert!(shuttle_height(&laid).is_none(), "the flight landed");
+    assert_eq!(
+        navigator.route_ids().len(),
+        1,
+        "the replacement completed — still one route, now the new one"
+    );
 }
