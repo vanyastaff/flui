@@ -16,7 +16,7 @@ This roadmap sits on top of [`FOUNDATIONS.md`](FOUNDATIONS.md) — the architect
 | Core.1 — vertical slice | ✅ Slice widgets, contract validation, combined demo app + acceptance tests, parity ports, frame evidence, drag-to-scroll — all delivered. |
 | Core.2 — render-object catalog | ✅ **79 of ~80** objects built with harness tests in `crates/flui-objects`, incl. `RenderAnimatedOpacity`/`RenderSliverAnimatedOpacity`; exit verification (scrolling test, intrinsics audit, coverage ≥80%) met. |
 | Business.1 — widget catalog | ◐ Every named catalog widget implemented and integration-tested; named `Hero` gaps are closed (cross-navigator flights + user-gesture flights, `ROADMAP-TRACKER.md` B1.4; `push_replacement` was checked and needs no fix — it already flies heroes with no dedicated wiring). **Fidelity** (ported parity corpus) is the only Business.1 residue remaining. |
-| Catalog.1 — Material ∥ Cupertino | ✗ Not started — `flui-material`, `flui-cupertino`, `flui-localizations` do not exist yet. |
+| Catalog.1 — Material ∥ Cupertino | ◐ `flui-localizations` created; `flui-material` underway (theming foundation, `Material`/`InkWell` substrate, the M3 button family, `Scaffold`+`AppBar`) — still early against the 210.8k LOC oracle. `flui-cupertino` ✗ not started. |
 | App.1 — application integration | ◐ `run_app`, both bindings, and a wake-driven frame loop exist; true vsync pacing, IME, and the facade crate remain. |
 
 ---
@@ -39,7 +39,7 @@ The target is **full parity with released Flutter** — every framework package,
 | `rendering` | 52.1k | machine ~90%; catalog **79/~80 harness-tested** (`crates/flui-objects`) | Core.2 ✅ |
 | `widgets` | 157.4k | catalog built, **89.72% line coverage measured 2026-07-15** (bar ≥85% met), **fidelity partial** | Business.1 (fidelity) |
 | `services` | 30.2k | ~40% | App.1 + Cross.P (dissolved into `flui-platform`) |
-| `material` | 210.8k | ~1% | Catalog.1 |
+| `material` | 210.8k | ~3% — theming foundation (`ColorScheme`/`TextTheme`/`ThemeData`/`Theme`), `Material`/`InkWell`, the M3 button family, `Scaffold`/`AppBar` | Catalog.1 |
 | `cupertino` | 48.3k | ~0% | Catalog.1 |
 
 The shape of the work: the machinery and framework catalog are largely landed; the remaining mass is **fidelity** (the ported Flutter test corpus) **and the design-system catalog.** `material` alone (210k LOC) is the terminal node and the single largest body of work in the entire port — roughly twice the rest of the catalog combined.
@@ -223,14 +223,14 @@ Each phase states: **Goal**, **Status**, what was **Delivered** (for closed work
 
 ---
 
-## Catalog.1 — Material ∥ Cupertino  *(was Phase 4)* — ✗ NOT STARTED
+## Catalog.1 — Material ∥ Cupertino  *(was Phase 4)* — ◐ MATERIAL UNDERWAY, CUPERTINO NOT STARTED
 
 **Goal.** The two design-system component libraries — `flui-material` and `flui-cupertino` — built **in parallel** (independent siblings; neither depends on the other).
 
 **Builds.**
-- **Create `flui-localizations`** — shared l10n infrastructure, a common ancestor both design systems need. (Catalog.1 prerequisite.)
-- **Create `flui-material`** — Material Design 3: `ThemeData`/`ColorScheme`, the button family, `Scaffold`/`AppBar`/tabs, `TextField`, dialogs/sheets, `Card`, `Drawer`, `NavigationBar`, `DataTable`, `Chip`, `ListTile`, selection controls, `InkWell`/ripple. Internally phased by component family — **theming first** (it is the `InheritedWidget` foundation every other component reads), then buttons, inputs, navigation, data display. Material can ship usefully in increments.
-- **Create `flui-cupertino`** — iOS components: `CupertinoApp`, scaffolds, `CupertinoNavigationBar`, buttons, pickers, `CupertinoTextField`, `CupertinoPageRoute` (the iOS swipe-back transition), action sheets.
+- **`flui-localizations`** — ✅ created: shared l10n infrastructure, a common ancestor both design systems need. (Catalog.1 prerequisite.)
+- **`flui-material`** — Material Design 3: `ThemeData`/`ColorScheme`, the button family, `Scaffold`/`AppBar`/tabs, `TextField`, dialogs/sheets, `Card`, `Drawer`, `NavigationBar`, `DataTable`, `Chip`, `ListTile`, selection controls, `InkWell`/ripple. Internally phased by component family — **theming first** (it is the `InheritedWidget` foundation every other component reads), then buttons, inputs, navigation, data display. Material can ship usefully in increments. **Delivered so far:** the theming foundation (`ColorScheme`, `TextTheme`/`typography`, `ThemeData`, `Theme`), the `Material`/`InkWell` surface substrate, the M3 button family (`ButtonStyle`, `ElevatedButton`/`FilledButton`/`OutlinedButton`/`TextButton`), and `Scaffold`+`AppBar` (the `app_bar`/`body`/`floating_action_button` slots of `ScaffoldLayoutDelegate`; `TextField`, dialogs/sheets, `Card`, `Drawer`, `NavigationBar`, `DataTable`, `Chip`, `ListTile`, and selection controls remain).
+- **Create `flui-cupertino`** — iOS components: `CupertinoApp`, scaffolds, `CupertinoNavigationBar`, buttons, pickers, `CupertinoTextField`, `CupertinoPageRoute` (the iOS swipe-back transition), action sheets. Not started.
 
 **Entry.** Business.1 exit (`flui-widgets` complete and stable). The `BuildContext` inherited-data path must be fully wired (the Cross.H hardening item) — `Theme` is an `InheritedWidget`, needed by approximately Material widget #1.
 
@@ -296,7 +296,7 @@ Bundled into Core.0 because they were cheap-now / catalog-wide-later: the `flui-
 
 ```
 MAIN VERTICAL (sequential — Core → Business → Catalog → App):
-  Core.0 ✅ ── Core.1 ✅ ── Core.2 ✅ ── Business.1 ◐ ── Catalog.1 ✗ ── App.1 ◐
+  Core.0 ✅ ── Core.1 ✅ ── Core.2 ✅ ── Business.1 ◐ ── Catalog.1 ◐ ── App.1 ◐
                             (79/~80      (built;        (Material ∥     (partial:
                              objects;     fidelity       Cupertino —     vsync, IME,
                              exit met)    open)          not started)    facade left)

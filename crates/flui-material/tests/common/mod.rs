@@ -17,6 +17,7 @@ use flui_interaction::events::{PointerType, make_down_event, make_move_event, ma
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::hit_testing::HitTestResult;
 use flui_rendering::pipeline::PipelineOwner;
+use flui_rendering::testing::inspect;
 use flui_types::geometry::px;
 use flui_types::{Offset, Size};
 use flui_view::{BuildOwner, ElementTree, View};
@@ -259,6 +260,38 @@ impl LaidOut {
             .find_property(property_name)
             .map(|property| property.value().to_string())
     }
+
+    /// The `i`-th render-tree child of `id`.
+    pub fn child(&self, id: RenderId, index: usize) -> RenderId {
+        self.pipeline_owner.read().render_tree().children(id)[index]
+    }
+
+    /// The first render-tree child of `id`.
+    pub fn only_child(&self, id: RenderId) -> RenderId {
+        self.child(id, 0)
+    }
+
+    /// The laid-out size of a render node.
+    pub fn size(&self, id: RenderId) -> Size {
+        inspect::box_geometry(&self.pipeline_owner.read(), id)
+            .expect("render node should have box geometry after layout")
+    }
+
+    /// The paint offset of a render node relative to its parent.
+    pub fn offset(&self, id: RenderId) -> Offset {
+        inspect::render_offset(&self.pipeline_owner.read(), id)
+            .expect("render node should have an offset after layout")
+    }
+}
+
+/// Convenience: a `Size` in logical pixels.
+pub fn size(width: f32, height: f32) -> Size {
+    Size::new(px(width), px(height))
+}
+
+/// Convenience: an `Offset` in logical pixels.
+pub fn offset(dx: f32, dy: f32) -> Offset {
+    Offset::new(px(dx), px(dy))
 }
 
 /// Strips generic parameters (`Foo<Bar>` → `Foo`) so a diagnostics name

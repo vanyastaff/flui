@@ -164,7 +164,8 @@ pub use layout::{
     Align, AspectRatio, Baseline, Center, ConstrainedBox, CustomMultiChildLayout,
     CustomSingleChildLayout, FittedBox, Flow, FractionalTranslation, FractionallySizedBox,
     IntrinsicHeight, IntrinsicWidth, LayoutBuilder, LayoutId, LimitedBox, ListBody, OverflowBox,
-    Padding, RotatedBox, SizedBox, SizedOverflowBox, Table, TableCell, TableRow, Transform,
+    Padding, PreferredSize, PreferredSizeView, RotatedBox, SizedBox, SizedOverflowBox, Table,
+    TableCell, TableRow, Transform,
 };
 // `OverflowBoxFit` configures `OverflowBox`'s size policy; exposed at crate root
 // so consumers don't need to reach into `flui_objects`.
@@ -282,17 +283,17 @@ pub mod prelude {
         LayoutBuilder, LayoutId, LimitedBox, ListBody, ListView, Listener, Localizations,
         LocalizationsDelegate, MediaQuery, MediaQueryData, MergeSemantics, MouseRegion, Navigator,
         NavigatorHandle, NextFocusAction, NextFocusIntent, Offstage, Opacity, OverflowBox,
-        OverflowBoxFit, Padding, PageRoute, PopScope, PopupRoute, Positioned, PreviousFocusAction,
-        PreviousFocusIntent, RepaintBoundary, RichText, RotatedBox, Row, SafeArea,
-        ScrollController, Scrollable, Scrollbar, Semantics, Shortcuts, ShrinkWrappingViewport,
-        SimpleRoute, SingleActivator, SingleChildScrollView, SizedBox, SizedOverflowBox,
-        SliverChildBuilderDelegate, SliverFillRemaining, SliverFillRemainingAndOverscroll,
-        SliverFillRemainingWithScrollable, SliverFillViewport, SliverFixedExtentList, SliverGrid,
-        SliverIgnorePointer, SliverList, SliverOffstage, SliverOpacity, SliverPadding,
-        SliverToBoxAdapter, Spacer, Stack, StreamBuilder, Table, TableCell, TableRow, Text,
-        TextEditingController, TextField, TickerMode, Transform, Viewport, Visibility, WidgetState,
-        WidgetStateConstraint, WidgetStateProperty, WidgetStates, WidgetStatesController,
-        WidgetsLocalizations, Wrap,
+        OverflowBoxFit, Padding, PageRoute, PopScope, PopupRoute, Positioned, PreferredSize,
+        PreferredSizeView, PreviousFocusAction, PreviousFocusIntent, RepaintBoundary, RichText,
+        RotatedBox, Row, SafeArea, ScrollController, Scrollable, Scrollbar, Semantics, Shortcuts,
+        ShrinkWrappingViewport, SimpleRoute, SingleActivator, SingleChildScrollView, SizedBox,
+        SizedOverflowBox, SliverChildBuilderDelegate, SliverFillRemaining,
+        SliverFillRemainingAndOverscroll, SliverFillRemainingWithScrollable, SliverFillViewport,
+        SliverFixedExtentList, SliverGrid, SliverIgnorePointer, SliverList, SliverOffstage,
+        SliverOpacity, SliverPadding, SliverToBoxAdapter, Spacer, Stack, StreamBuilder, Table,
+        TableCell, TableRow, Text, TextEditingController, TextField, TickerMode, Transform,
+        Viewport, Visibility, WidgetState, WidgetStateConstraint, WidgetStateProperty,
+        WidgetStates, WidgetStatesController, WidgetsLocalizations, Wrap,
     };
 
     // Common configuration value types, so an app author needs only this import.

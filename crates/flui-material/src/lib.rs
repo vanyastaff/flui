@@ -55,6 +55,7 @@
 
 #![deny(missing_docs)]
 
+pub mod app_bar;
 pub mod button_style;
 mod button_style_button;
 pub mod color_scheme;
@@ -63,6 +64,7 @@ pub mod filled_button;
 pub mod ink_well;
 pub mod material;
 pub mod outlined_button;
+pub mod scaffold;
 pub mod shape;
 pub mod text_button;
 pub mod text_theme;
@@ -70,6 +72,7 @@ pub mod theme;
 pub mod theme_data;
 pub mod typography;
 
+pub use app_bar::AppBar;
 pub use button_style::ButtonStyle;
 pub use color_scheme::{ColorScheme, ColorSchemeOverrides};
 pub use elevated_button::ElevatedButton;
@@ -77,6 +80,7 @@ pub use filled_button::FilledButton;
 pub use ink_well::{InkWell, InkWellState};
 pub use material::Material;
 pub use outlined_button::OutlinedButton;
+pub use scaffold::Scaffold;
 pub use shape::MaterialShape;
 pub use text_button::TextButton;
 pub use text_theme::TextTheme;
