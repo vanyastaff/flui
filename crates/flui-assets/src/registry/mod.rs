@@ -5,6 +5,8 @@
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::sync::Arc;
+#[cfg(feature = "images")]
+use std::sync::OnceLock;
 
 use parking_lot::RwLock;
 
@@ -12,6 +14,11 @@ use crate::cache::AssetCache;
 use crate::core::Asset;
 use crate::error::{AssetError, Result};
 use crate::types::AssetHandle;
+
+#[cfg(feature = "images")]
+mod bridge;
+#[cfg(feature = "images")]
+use bridge::BridgeRuntime;
 
 /// Asset registry for central asset management.
 ///
@@ -40,6 +47,18 @@ pub struct AssetRegistry {
 
     /// Default cache capacity in bytes.
     pub(crate) default_capacity: usize,
+
+    /// A host-supplied runtime handle for [`load_image_bridged`](Self::load_image_bridged)
+    /// to spawn onto, set at construction via
+    /// [`AssetRegistryBuilder::with_runtime_handle`]. `None` defers to an
+    /// ambient runtime, then an owned one — see [`bridge::resolve`].
+    #[cfg(feature = "images")]
+    injected_runtime_handle: Option<tokio::runtime::Handle>,
+
+    /// The runtime [`load_image_bridged`](Self::load_image_bridged) has
+    /// resolved to, memoized on first use.
+    #[cfg(feature = "images")]
+    bridge_runtime: OnceLock<BridgeRuntime>,
 }
 
 impl std::fmt::Debug for AssetRegistry {
@@ -47,7 +66,11 @@ impl std::fmt::Debug for AssetRegistry {
         f.debug_struct("AssetRegistry")
             .field("cache_count", &self.caches.read().len())
             .field("default_capacity", &self.default_capacity)
-            .finish()
+            // The bridge-runtime fields (images feature only) are omitted:
+            // a runtime handle's own Debug output is not diagnostically
+            // useful here, and printing whether one has been resolved yet
+            // would make this impl's output depend on load order.
+            .finish_non_exhaustive()
     }
 }
 
@@ -74,6 +97,125 @@ impl AssetRegistry {
         Self {
             caches: Arc::new(RwLock::new(HashMap::new())),
             default_capacity,
+            #[cfg(feature = "images")]
+            injected_runtime_handle: None,
+            #[cfg(feature = "images")]
+            bridge_runtime: OnceLock::new(),
+        }
+    }
+
+    /// As [`new`](Self::new), additionally recording a host-supplied runtime
+    /// handle for bridged image loads to spawn onto.
+    #[cfg(feature = "images")]
+    fn with_injected_handle(
+        default_capacity: usize,
+        injected_runtime_handle: Option<tokio::runtime::Handle>,
+    ) -> Self {
+        Self {
+            caches: Arc::new(RwLock::new(HashMap::new())),
+            default_capacity,
+            injected_runtime_handle,
+            bridge_runtime: OnceLock::new(),
+        }
+    }
+
+    /// Asynchronously loads and decodes the image asset at `path`, running
+    /// the file read and decode on a background tokio runtime this registry
+    /// owns or was handed — never on the caller's thread.
+    ///
+    /// Spawns onto [`AssetRegistryBuilder::with_runtime_handle`]'s injected
+    /// handle if one was supplied at construction; otherwise an ambient tokio
+    /// runtime already running on the calling thread
+    /// (`tokio::runtime::Handle::try_current`); otherwise a dedicated
+    /// single-worker runtime started on first use and kept alive for the
+    /// registry's lifetime. Misconfiguration is impossible: every path
+    /// resolves to a working handle.
+    ///
+    /// The returned future is reactor-free: it only awaits a
+    /// [`tokio::sync::oneshot`] receiver, so *polling* it never requires an
+    /// ambient tokio context — only the spawn (done inside this method, once)
+    /// needs a runtime handle.
+    ///
+    /// This method does not consult or populate [`AssetRegistry::load`]'s own
+    /// cache (`AssetCache<ImageAsset>`, moka-backed with a 5-minute TTL) —
+    /// the decoded-image cache a UI layer probes synchronously before
+    /// spawning a load, and the in-flight load coalescing that lets two
+    /// concurrent subscribers share one load, are both a UI-layer concern
+    /// (`flui_widgets::image`'s decode cache), not this registry's.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AssetError::LoadFailed`] if the file cannot be read or
+    /// decoded, or if the loading task is dropped before completing (an
+    /// internal invariant violation, not a normal failure mode — it would
+    /// mean the spawned task panicked).
+    #[cfg(feature = "images")]
+    pub fn load_image_bridged(
+        &self,
+        path: impl Into<String>,
+    ) -> impl std::future::Future<Output = Result<crate::Image>> + Send + 'static {
+        let path = path.into();
+        let handle = bridge::resolve(&self.bridge_runtime, self.injected_runtime_handle.as_ref());
+        let (tx, rx) = tokio::sync::oneshot::channel();
+
+        let spawn_path = path.clone();
+        handle.spawn(async move {
+            let asset = crate::assets::image::ImageAsset::file(spawn_path);
+            let outcome = Asset::load(&asset).await;
+            // A dropped receiver just means the observer future was abandoned
+            // (e.g. its subscriber unmounted); the load itself still ran to
+            // completion and there is nothing useful to report to.
+            let _ = tx.send(outcome);
+        });
+
+        async move {
+            rx.await.map_err(|_| AssetError::LoadFailed {
+                path,
+                reason: "the asset-loading task was dropped before completing".to_string(),
+            })?
+        }
+    }
+
+    /// Asynchronously fetches and decodes an image over HTTP/HTTPS via
+    /// [`NetworkLoader`](crate::loaders::NetworkLoader), running the request
+    /// and decode on the same background runtime
+    /// [`load_image_bridged`](Self::load_image_bridged) uses — never on the
+    /// caller's thread.
+    ///
+    /// Requires both the `images` (decode) and `network` (HTTP client)
+    /// features.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AssetError::LoadFailed`]/[`AssetError::NetworkError`] on a
+    /// failed request or a failed decode of the response body, or if the
+    /// loading task is dropped before completing.
+    #[cfg(all(feature = "images", feature = "network"))]
+    pub fn load_network_image_bridged(
+        &self,
+        url: impl Into<String>,
+    ) -> impl std::future::Future<Output = Result<crate::Image>> + Send + 'static {
+        let url = url.into();
+        let handle = bridge::resolve(&self.bridge_runtime, self.injected_runtime_handle.as_ref());
+        let (tx, rx) = tokio::sync::oneshot::channel();
+
+        let spawn_url = url.clone();
+        handle.spawn(async move {
+            let outcome = async {
+                let loader = crate::loaders::NetworkLoader::new();
+                let bytes = loader.load_url(&spawn_url).await?;
+                let asset = crate::assets::image::ImageAsset::from_bytes(spawn_url.clone(), bytes);
+                Asset::load(&asset).await
+            }
+            .await;
+            let _ = tx.send(outcome);
+        });
+
+        async move {
+            rx.await.map_err(|_| AssetError::LoadFailed {
+                path: url,
+                reason: "the network-image loading task was dropped before completing".to_string(),
+            })?
         }
     }
 
@@ -321,6 +463,11 @@ pub struct HasCapacity(pub(crate) usize);
 #[derive(Debug)]
 pub struct AssetRegistryBuilder<C = NoCapacity> {
     capacity: C,
+    /// Set via [`with_runtime_handle`](Self::with_runtime_handle); carried
+    /// across capacity-state transitions and consumed by
+    /// [`AssetRegistryBuilder::<HasCapacity>::build`].
+    #[cfg(feature = "images")]
+    runtime_handle: Option<tokio::runtime::Handle>,
 }
 
 // ===== Initial State: NoCapacity =====
@@ -339,6 +486,8 @@ impl AssetRegistryBuilder<NoCapacity> {
     pub fn new() -> Self {
         Self {
             capacity: NoCapacity,
+            #[cfg(feature = "images")]
+            runtime_handle: None,
         }
     }
 
@@ -365,6 +514,8 @@ impl AssetRegistryBuilder<NoCapacity> {
         assert!(capacity_bytes > 0, "Capacity must be greater than 0");
         AssetRegistryBuilder {
             capacity: HasCapacity(capacity_bytes),
+            #[cfg(feature = "images")]
+            runtime_handle: self.runtime_handle,
         }
     }
 
@@ -382,7 +533,41 @@ impl AssetRegistryBuilder<NoCapacity> {
     pub fn with_default_capacity(self) -> AssetRegistryBuilder<HasCapacity> {
         AssetRegistryBuilder {
             capacity: HasCapacity(100 * 1024 * 1024), // 100 MB
+            #[cfg(feature = "images")]
+            runtime_handle: self.runtime_handle,
         }
+    }
+}
+
+impl<C> AssetRegistryBuilder<C> {
+    /// Injects a tokio runtime handle for
+    /// [`AssetRegistry::load_image_bridged`] to spawn onto, instead of
+    /// reusing an ambient runtime or starting an owned background one.
+    ///
+    /// Use this when the host application already runs a tokio runtime whose
+    /// lifecycle it wants bridged asset loads to share — e.g. a
+    /// `#[tokio::main]` binary that wants every background task on one
+    /// runtime.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # #[tokio::main]
+    /// # async fn main() {
+    /// use flui_assets::AssetRegistryBuilder;
+    ///
+    /// let registry = AssetRegistryBuilder::new()
+    ///     .with_capacity(50 * 1024 * 1024)
+    ///     .with_runtime_handle(tokio::runtime::Handle::current())
+    ///     .build();
+    /// # let _ = registry;
+    /// # }
+    /// ```
+    #[cfg(feature = "images")]
+    #[must_use]
+    pub fn with_runtime_handle(mut self, handle: tokio::runtime::Handle) -> Self {
+        self.runtime_handle = Some(handle);
+        self
     }
 }
 
@@ -401,7 +586,14 @@ impl AssetRegistryBuilder<HasCapacity> {
     ///     .build();
     /// ```
     pub fn build(self) -> AssetRegistry {
-        AssetRegistry::new(self.capacity.0)
+        #[cfg(feature = "images")]
+        {
+            AssetRegistry::with_injected_handle(self.capacity.0, self.runtime_handle)
+        }
+        #[cfg(not(feature = "images"))]
+        {
+            AssetRegistry::new(self.capacity.0)
+        }
     }
 
     /// Updates the capacity after it has been set.
@@ -420,6 +612,8 @@ impl AssetRegistryBuilder<HasCapacity> {
         assert!(capacity_bytes > 0, "Capacity must be greater than 0");
         AssetRegistryBuilder {
             capacity: HasCapacity(capacity_bytes),
+            #[cfg(feature = "images")]
+            runtime_handle: self.runtime_handle,
         }
     }
 }

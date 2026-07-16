@@ -52,6 +52,19 @@ tracing = { workspace = true }
 # feature to avoid pulling in the decode library for apps that only use
 # `Image::from_image` (pre-decoded `PixelImage`).
 image = { workspace = true, optional = true }
+# Byte-loading/decode + a background tokio runtime for `AssetImage`/
+# `NetworkImage`'s async resolution (`ImageProvider::resolve_async`).
+# Optional: only the `asset-images`/`network-images` features pull it in.
+flui-assets = { path = "../flui-assets", version = "0.2.0", optional = true }
+# In-flight image-load coalescing (`image::decode_cache`): `Shared` lets two
+# `Image` widgets mounted with the same provider key await ONE load. `alloc`
+# only — no executor, no I/O, no proc-macros (see the workspace-level comment
+# on why this is the one place the `futures-core`-only policy isn't enough).
+futures-util = { workspace = true, optional = true }
+# Count-bounded LRU backing the same decode cache — no time-based eviction,
+# unlike `flui-assets`' own moka byte-loader cache. See
+# `crate::image::decode_cache`'s module doc.
+lru = { workspace = true, optional = true }
 
 [dev-dependencies]
 # Integration tests drive the real layout pipeline through the render harness.
@@ -73,6 +86,9 @@ parking_lot = { workspace = true }
 insta = { workspace = true }
 # Compile-time ownership-boundary assertions for ADR-0027.
 static_assertions = { workspace = true }
+# `#[tokio::test]` for the `image::decode_cache` coalescing unit tests
+# (`asset-images` feature) and the async `Image` widget integration tests.
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 # The parity test suite lives in a subdirectory so `mod harness; mod *_test;`
 # work via Cargo's single-binary test model. Auto-discovery misses subdirectory
@@ -87,10 +103,16 @@ default = []
 # Required by `MemoryImage` and `FileImage`; `DirectImageProvider` compiles
 # without it.
 images = ["dep:image"]
-# Exposes the HTTP/HTTPS image-provider placeholder while async image loading is
-# still being wired through the view layer. Off by default so stable builds do
-# not advertise a constructor that always resolves to `AsyncNotWired`.
-network-images = []
+# Async, `flui-assets`-backed asset-file image loading: `AssetImage` resolves
+# through an injected `Arc<flui_assets::AssetRegistry>` on a background tokio
+# runtime, decoded via the same `image` crate `images` activates. Pulls in
+# `flui-assets` (with its own `images` feature), plus `futures-util`/`lru` for
+# the decode cache and load-coalescing engine (`image::decode_cache`).
+asset-images = ["dep:flui-assets", "flui-assets/images", "images", "dep:futures-util", "dep:lru"]
+# Async network image loading: rewires `NetworkImage::resolve_async` through
+# `flui-assets`' `NetworkLoader` (reqwest). Implies `asset-images` — both
+# share the same decode cache, coalescing engine, and background runtime.
+network-images = ["asset-images", "flui-assets/network"]
 serde = ["flui-types/serde"]
 
 [lints]

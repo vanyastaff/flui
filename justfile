@@ -117,6 +117,9 @@ test-doc:
 test-assets:
     cargo nextest run -p flui-assets --features full
     cargo nextest run -p flui-widgets --features images --test image
+    cargo nextest run -p flui-widgets --features asset-images --lib
+    cargo nextest run -p flui-widgets --features asset-images --test image_async
+    cargo nextest run -p flui-widgets --features network-images --test image_network
 
 [group("quality")]
 [doc("Dependency audit: advisories, bans, licenses, sources (requires cargo-deny)")]

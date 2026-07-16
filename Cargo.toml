@@ -166,6 +166,21 @@ pollster = "0.4"
 # combinators, no proc macros — just the trait `StreamBuilder` polls by hand.
 # Already in the graph via wgpu's `flume`, so it vendors nothing new.
 futures-core = { version = "0.3", default-features = false, features = ["std"] }
+# Used by flui-widgets' image decode cache to coalesce concurrent async image
+# loads: `FutureExt::shared()` lets N `Image` widgets mounted with the same
+# provider key await ONE underlying load instead of starting N. `alloc` only
+# (no `std`/`io`/`channel`/proc-macro features) — this is the one place the
+# `futures-core`-only policy above is deliberately NOT enough, because
+# coalescing genuinely needs the `Shared` combinator, not just the `Future`
+# trait.
+futures-util = { version = "0.3", default-features = false, features = ["alloc"] }
+
+# Count-bounded LRU — flui-widgets' decoded-image cache
+# (`flui_widgets::image`'s sync probe before spawning an async load). No
+# time-based eviction, unlike flui-assets' moka byte-loader cache (TTL
+# 5min/TTI 1min) — see that module's doc for why the two caches serve
+# different roles and neither substitutes for the other.
+lru = "0.18"
 
 # CLIPBOARD - Cross-platform clipboard access
 arboard = "3.4"
