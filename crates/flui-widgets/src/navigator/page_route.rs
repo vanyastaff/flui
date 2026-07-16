@@ -275,6 +275,26 @@ impl<T: Send + Clone + 'static> PageRoute<T> {
         self
     }
 
+    /// `ModalRoute.barrierColor` (`routes.dart:1774`). Absent (the default), the
+    /// barrier is invisible — but still absorbs pointers once this route's entry
+    /// transition has covered the routes below (`PageRoute.opaque => true`).
+    ///
+    /// `PopupRoute` already exposes this; a plain `PageRoute` did not, though
+    /// `ModalRoute` has always carried the field — `CupertinoPageRoute`
+    /// (`cupertino/route.dart`, 3.44.0) is the first `PageRoute` consumer that
+    /// needs its own transition-only dim (`_kCupertinoPageTransitionBarrierColor`),
+    /// so this closes that gap the same way `PopupRoute::barrier_color` already
+    /// does.
+    ///
+    /// **Divergence**, inherited from `ModalRoute`: Flutter drives the colour
+    /// through `barrierCurve` with an `AnimatedModalBarrier`; FLUI paints it flat
+    /// for the barrier's entire visible lifetime, not faded in with the transition.
+    #[must_use]
+    pub fn barrier_color(mut self, color: Color) -> Self {
+        self.modal = self.modal.barrier_color(color);
+        self
+    }
+
     /// The `result ?? currentResult` fallback (`navigator.dart:426`): what a
     /// `pop()` with no value delivers.
     #[must_use]

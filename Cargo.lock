@@ -1578,6 +1578,7 @@ dependencies = [
  "flui-interaction",
  "flui-objects",
  "flui-rendering",
+ "flui-scheduler",
  "flui-types",
  "flui-view",
  "flui-widgets",
