@@ -44,6 +44,17 @@
 //! - Implied leading (a `DrawerButton`/`BackButton` synthesized when
 //!   `leading` is unset) — arrives with the `IconButton`/`Navigator`-aware
 //!   follow-up unit that also ships a real floating action button.
+//! - **Named divergence: no shadow suppression at a nonzero elevation.**
+//!   `_AppBarDefaultsM3` sets `shadowColor: Colors.transparent` AND
+//!   `surfaceTintColor: Colors.transparent` (`app_bar.dart:2541-2545`) — the
+//!   oracle's M3 app bar casts no shadow even when `scrolledUnderElevation`/
+//!   an explicit `elevation` override raises it above `0`; the surface
+//!   communicates elevation through a tonal color shift instead (M3's
+//!   `ElevationOverlay`), not a drop shadow. [`crate::Material`] has no
+//!   `shadow_color` setter yet (see that module's docs' `surfaceTintColor`
+//!   section for the matching gap), so this substrate cannot suppress it —
+//!   an `AppBar::new().elevation(4.0)` here casts a real shadow the M3
+//!   oracle would not. Revisit once `Material` grows `shadow_color`.
 
 use flui_types::geometry::px;
 use flui_types::styling::Color;

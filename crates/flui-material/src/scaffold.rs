@@ -65,6 +65,18 @@
 //! (`app_bar`/`body`/`floating_action_button`) are copied verbatim from
 //! `_ScaffoldLayout`'s branches for those same slots, so adding a slot later
 //! is additive, not a rewrite.
+//!
+//! **Named divergence: no `TextDirection` / RTL.** The oracle's
+//! `_ScaffoldLayout` carries a `textDirection` field, both to mirror
+//! `MediaQuery`/`Directionality` into `shouldRelayout`'s comparison and
+//! because `endFloat` resolves "end" against it (`AxisDirection` — `end` is
+//! `left` under RTL). `ScaffoldLayoutDelegate` hardcodes the FAB to the
+//! right edge and carries no `text_direction` field at all, so an RTL
+//! subtree gets the LTR position and `should_relayout` cannot react to a
+//! direction change. `flui_widgets::Directionality` exists, but neither
+//! `Scaffold` nor `ScaffoldLayoutDelegate` reads it (see [`crate::AppBar`]'s
+//! own centerTitle note for the matching directionality gap there); revisit
+//! together.
 
 use std::any::Any;
 use std::sync::Arc;
@@ -72,7 +84,7 @@ use std::sync::Arc;
 use flui_rendering::constraints::BoxConstraints;
 use flui_types::geometry::px;
 use flui_types::styling::Color;
-use flui_types::{EdgeInsets, Offset, Size};
+use flui_types::{EdgeInsets, Offset, Pixels, Size};
 use flui_view::prelude::*;
 use flui_widgets::{
     ConstrainedBox, CustomMultiChildLayout, LayoutId, MediaQuery, MultiChildLayoutContext,
@@ -264,8 +276,25 @@ impl StatelessView for Scaffold {
             media_query.padding.left,
         );
 
-        let delegate: Arc<dyn MultiChildLayoutDelegate> =
-            Arc::new(ScaffoldLayoutDelegate { min_insets });
+        // Flutter oracle: `minViewPadding = MediaQuery.viewPaddingOf(context)
+        // .copyWith(bottom: resizeToAvoidBottomInset && viewInsetsOf(context)
+        // .bottom != 0.0 ? 0.0 : null)` (`scaffold.dart:3226-3230`) — the raw
+        // safe-area bottom inset (e.g. the home-indicator area on iOS),
+        // zeroed only while the keyboard is actually up and being resized
+        // around. `MediaQueryData` has no `viewPadding` field distinct from
+        // `padding` (both name the same "safe area from the OS" concept
+        // here), so `padding.bottom` is this substrate's `viewPadding.bottom`.
+        let min_view_padding_bottom =
+            if self.resize_to_avoid_bottom_inset && media_query.view_insets.bottom != px(0.0) {
+                px(0.0)
+            } else {
+                media_query.padding.bottom
+            };
+
+        let delegate: Arc<dyn MultiChildLayoutDelegate> = Arc::new(ScaffoldLayoutDelegate {
+            min_insets,
+            min_view_padding_bottom,
+        });
 
         Material::new(background_color).child(CustomMultiChildLayout::new(delegate, children))
     }
@@ -281,8 +310,13 @@ impl StatelessView for Scaffold {
 struct ScaffoldLayoutDelegate {
     /// The safe-area padding on every edge, with the bottom edge swapped for
     /// the keyboard inset when `resize_to_avoid_bottom_inset` is set. See
-    /// [`Scaffold::build`]'s citation of `_ScaffoldLayout`'s `minInsets`.
+    /// `Scaffold::build`'s citation of `_ScaffoldLayout`'s `minInsets`.
     min_insets: EdgeInsets,
+    /// The raw safe-area bottom inset the floating action button must clear
+    /// (e.g. the home-indicator area), zeroed while the keyboard is up and
+    /// being resized around. See `Scaffold::build`'s citation of
+    /// `_ScaffoldState.build`'s `minViewPadding`.
+    min_view_padding_bottom: Pixels,
 }
 
 impl MultiChildLayoutDelegate for ScaffoldLayoutDelegate {
@@ -329,24 +363,28 @@ impl MultiChildLayoutDelegate for ScaffoldLayoutDelegate {
 
             // `FloatingActionButtonLocation.endFloat` (`FabEndOffsetX` +
             // `FabFloatOffsetY`, `floating_action_button_location.dart:517-528,
-            // 554-581`). The `FabFloatOffsetY` `safeMargin` term reduces to
-            // the flat `kFloatingActionButtonMargin` here: it is
-            // `max(margin, minViewPadding.bottom - bottomContentHeight +
-            // margin)`, and `bottomContentHeight` (`scaffoldSize.height -
-            // contentBottom`) always equals `min_insets.bottom` in this
-            // substrate (no bottom-anchored slots to widen the gap), so the
-            // second term is `minViewPadding.bottom - min_insets.bottom +
-            // margin <= margin` whenever `minViewPadding.bottom <=
-            // min_insets.bottom` — which holds because `MediaQueryData` has
-            // no `viewPadding` field to diverge from `padding` (named
-            // divergence: the oracle's `minViewPadding` and `minInsets` can
-            // differ in principle; this substrate has only one padding
-            // source, so they cannot).
+            // 554-581`).
             let fab_x = size.width
                 - px(FLOATING_ACTION_BUTTON_MARGIN)
                 - self.min_insets.right
                 - fab_size.width;
-            let fab_y = content_bottom - fab_size.height - px(FLOATING_ACTION_BUTTON_MARGIN);
+
+            // `FabFloatOffsetY`: `safeMargin = max(margin,
+            // minViewPadding.bottom - bottomContentHeight + margin)`, where
+            // `bottomContentHeight = scaffoldSize.height - contentBottom`
+            // (`:560-568`). This is NOT a flat `margin` in general — with a
+            // nonzero `min_view_padding_bottom` (e.g. a 34px home-indicator
+            // area) and no keyboard, `bottomContentHeight` is `0` and
+            // `safeMargin` grows past `margin` to keep the button clear of
+            // that safe-area edge. It only reduces to the flat `margin` when
+            // `min_view_padding_bottom <= bottom_content_height` — the
+            // ordinary case once the keyboard (which zeroes
+            // `min_view_padding_bottom`, see `Scaffold::build`) is up.
+            let bottom_content_height = size.height - content_bottom;
+            let safe_margin = (self.min_view_padding_bottom - bottom_content_height
+                + px(FLOATING_ACTION_BUTTON_MARGIN))
+            .max(px(FLOATING_ACTION_BUTTON_MARGIN));
+            let fab_y = content_bottom - fab_size.height - safe_margin;
             ctx.position_child(SLOT_FLOATING_ACTION_BUTTON, Offset::new(fab_x, fab_y));
         }
     }
@@ -402,25 +440,98 @@ mod tests {
         assert!(!scaffold.resize_to_avoid_bottom_inset);
     }
 
+    fn zero_insets_delegate() -> ScaffoldLayoutDelegate {
+        ScaffoldLayoutDelegate {
+            min_insets: EdgeInsets::new(px(0.0), px(0.0), px(0.0), px(0.0)),
+            min_view_padding_bottom: px(0.0),
+        }
+    }
+
     #[test]
-    fn should_relayout_is_false_for_equal_min_insets() {
-        let a = ScaffoldLayoutDelegate {
-            min_insets: EdgeInsets::new(px(0.0), px(0.0), px(0.0), px(0.0)),
-        };
-        let b = ScaffoldLayoutDelegate {
-            min_insets: EdgeInsets::new(px(0.0), px(0.0), px(0.0), px(0.0)),
-        };
+    fn should_relayout_is_false_for_equal_delegates() {
+        let a = zero_insets_delegate();
+        let b = zero_insets_delegate();
         assert!(!MultiChildLayoutDelegate::should_relayout(&a, &b));
     }
 
     #[test]
     fn should_relayout_is_true_when_bottom_min_inset_changes() {
-        let a = ScaffoldLayoutDelegate {
-            min_insets: EdgeInsets::new(px(0.0), px(0.0), px(0.0), px(0.0)),
-        };
+        let a = zero_insets_delegate();
         let b = ScaffoldLayoutDelegate {
             min_insets: EdgeInsets::new(px(0.0), px(0.0), px(300.0), px(0.0)),
+            ..zero_insets_delegate()
         };
         assert!(MultiChildLayoutDelegate::should_relayout(&a, &b));
+    }
+
+    #[test]
+    fn should_relayout_is_true_when_min_view_padding_bottom_changes() {
+        let a = zero_insets_delegate();
+        let b = ScaffoldLayoutDelegate {
+            min_view_padding_bottom: px(34.0),
+            ..zero_insets_delegate()
+        };
+        assert!(
+            MultiChildLayoutDelegate::should_relayout(&a, &b),
+            "a min_view_padding_bottom change (e.g. rotating so the home indicator moves) \
+             must trigger relayout even when min_insets is unchanged",
+        );
+    }
+
+    /// Pins `FabFloatOffsetY`'s exact arithmetic
+    /// (`floating_action_button_location.dart:554-581`) directly against the
+    /// delegate's `perform_layout`, independent of the mounted-harness tests
+    /// in `tests/scaffold.rs` — a `MockContext` the way
+    /// `flui-rendering`'s own `MultiChildLayoutDelegate` doctest/unit tests
+    /// do (`crates/flui-rendering/src/delegates/multi_child_layout_delegate.rs`).
+    #[test]
+    fn fab_y_grows_the_safe_margin_for_a_nonzero_min_view_padding_bottom() {
+        use std::collections::HashMap;
+
+        use flui_types::Offset;
+
+        // Mirrors `flui_rendering::delegates::multi_child_layout_delegate`'s
+        // own in-crate `MockContext` test pattern.
+        struct MockContext {
+            children: HashMap<String, Size>,
+            positions: HashMap<String, Offset>,
+        }
+        impl MultiChildLayoutContext for MockContext {
+            fn has_child(&self, child_id: &str) -> bool {
+                self.children.contains_key(child_id)
+            }
+            fn layout_child(&mut self, child_id: &str, _constraints: BoxConstraints) -> Size {
+                self.children[child_id]
+            }
+            fn position_child(&mut self, child_id: &str, offset: Offset) {
+                self.positions.insert(child_id.to_string(), offset);
+            }
+        }
+
+        let delegate = ScaffoldLayoutDelegate {
+            min_insets: EdgeInsets::new(px(0.0), px(0.0), px(0.0), px(0.0)),
+            min_view_padding_bottom: px(34.0),
+        };
+        let mut ctx = MockContext {
+            children: HashMap::from([(
+                SLOT_FLOATING_ACTION_BUTTON.to_string(),
+                Size::new(px(56.0), px(56.0)),
+            )]),
+            positions: HashMap::new(),
+        };
+
+        delegate.perform_layout(&mut ctx, Size::new(px(400.0), px(800.0)));
+
+        // bottom_content_height = 800 - content_bottom = 800 - 800 = 0
+        // (no bottom min_insets, no bottom widgets).
+        // safe_margin = max(16, 34 - 0 + 16) = 50.
+        // fab_y = 800 - 56 - 50 = 694.
+        assert_eq!(
+            ctx.positions[SLOT_FLOATING_ACTION_BUTTON],
+            Offset::new(px(400.0 - 16.0 - 56.0), px(694.0)),
+            "a nonzero min_view_padding_bottom (e.g. the 34px home-indicator area) with no \
+             keyboard must lift the FAB safe_margin above the flat kFloatingActionButtonMargin, \
+             not park it at content_bottom - fab_height - 16",
+        );
     }
 }
