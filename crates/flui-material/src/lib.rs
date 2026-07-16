@@ -6,7 +6,8 @@
 //! [`Material`]/[`InkWell`] surface primitives, the M3 button family
 //! ([`ButtonStyle`], [`ElevatedButton`], [`FilledButton`], [`OutlinedButton`],
 //! [`TextButton`], [`IconButton`], [`FloatingActionButton`], [`BackButton`]),
-//! and [`Scaffold`]/[`AppBar`].
+//! [`Scaffold`]/[`AppBar`], [`Card`], and [`Dialog`]/[`AlertDialog`]/
+//! [`show_dialog`].
 //!
 //! ## Flutter parity
 //!
@@ -60,7 +61,9 @@ pub mod app_bar;
 pub mod back_button;
 pub mod button_style;
 mod button_style_button;
+pub mod card;
 pub mod color_scheme;
+pub mod dialog;
 pub mod elevated_button;
 pub mod filled_button;
 pub mod floating_action_button;
@@ -79,7 +82,9 @@ pub mod typography;
 pub use app_bar::AppBar;
 pub use back_button::BackButton;
 pub use button_style::ButtonStyle;
+pub use card::Card;
 pub use color_scheme::{ColorScheme, ColorSchemeOverrides};
+pub use dialog::{AlertDialog, Dialog, show_dialog};
 pub use elevated_button::ElevatedButton;
 pub use filled_button::FilledButton;
 pub use floating_action_button::FloatingActionButton;
