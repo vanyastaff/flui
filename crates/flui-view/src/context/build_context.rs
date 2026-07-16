@@ -32,8 +32,9 @@ use flui_foundation::ElementId;
 /// ```rust,ignore
 /// impl StatelessView for MyView {
 ///     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
-///         // Access inherited data (registers dependency)
-///         let theme = ctx.depend_on::<ThemeData>();
+///         // Access inherited data (registers dependency) — `MyTheme` here
+///         // is any `InheritedView` ancestor (e.g. `flui_material::Theme`).
+///         let theme = ctx.depend_on::<MyTheme, _>(|t| t.data().clone());
 ///
 ///         // One-time lookup (no dependency)
 ///         let config = ctx.get::<AppConfig>();
@@ -347,10 +348,11 @@ pub trait BuildContextExt: BuildContext {
     /// # Example
     ///
     /// ```rust,ignore
-    /// // Clone the entire data:
-    /// let theme: Option<ThemeData> = ctx.depend_on::<Theme, _>(|t| t.data().clone());
+    /// // Clone the entire data — `MyTheme` here is any `InheritedView`
+    /// // ancestor (e.g. `flui_material::Theme`):
+    /// let theme: Option<MyThemeData> = ctx.depend_on::<MyTheme, _>(|t| t.data().clone());
     /// // Or extract a single field:
-    /// let color: Option<u32> = ctx.depend_on::<Theme, _>(|t| t.primary_color);
+    /// let color: Option<Color> = ctx.depend_on::<MyTheme, _>(|t| t.data().primary_color);
     /// ```
     fn depend_on<T: 'static, R>(&self, f: impl FnOnce(&T) -> R) -> Option<R> {
         let mut result: Option<R> = None;

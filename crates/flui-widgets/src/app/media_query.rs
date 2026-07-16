@@ -74,8 +74,8 @@ pub struct MediaQueryData {
     pub view_insets: EdgeInsets,
 
     /// The OS-level light/dark preference as reported by the platform.
-    /// An app-level [`Theme`](super::theme::Theme) may override this for its
-    /// subtree; this field reflects the platform signal only.
+    /// An app-level `Theme` (e.g. `flui_material::Theme`) may override this
+    /// for its subtree; this field reflects the platform signal only.
     pub platform_brightness: Brightness,
 }
 

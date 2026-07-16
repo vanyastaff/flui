@@ -1720,9 +1720,15 @@ dependencies = [
 name = "flui-material"
 version = "0.2.0"
 dependencies = [
+ "flui-binding",
+ "flui-foundation",
+ "flui-geometry",
+ "flui-objects",
+ "flui-rendering",
  "flui-types",
  "flui-view",
  "flui-widgets",
+ "parking_lot",
 ]
 
 [[package]]

@@ -17,3 +17,4 @@
 //! module docs) — not silently dropped, named here so the gap is visible.
 
 mod color_scheme_test;
+mod theme_data_test;
