@@ -35,11 +35,16 @@ mod common;
 use std::sync::{Arc, Mutex};
 
 use common::{lay_out, loose};
-use flui_material::{ColorSchemeOverrides, Theme, ThemeData, ThemeDataOverrides};
+use flui_material::{
+    AppBar, AppBarThemeData, ButtonStyle, ColorSchemeOverrides, ElevatedButton,
+    ElevatedButtonThemeData, Theme, ThemeData, ThemeDataOverrides,
+};
 use flui_types::platform::Brightness;
 use flui_types::styling::Color;
 use flui_view::prelude::*;
-use flui_widgets::{InheritedTheme, SizedBox};
+use flui_widgets::{
+    InheritedTheme, MediaQuery, MediaQueryData, SizedBox, Text, WidgetStateProperty,
+};
 
 /// Captures whatever [`Theme::maybe_of`] returns during `build()`.
 ///
@@ -126,6 +131,72 @@ fn theme_maybe_of_returns_none_without_ancestor() {
         inner.is_none(),
         "Theme::maybe_of should return None when no Theme ancestor is present, \
          got: {inner:?}"
+    );
+}
+
+/// The task-level proof this crate's component-theme slots exist for: a
+/// SINGLE `Theme`, configured with BOTH a custom `elevated_button_theme`
+/// style AND a custom `app_bar_theme` background, must reach BOTH mounted
+/// widgets simultaneously — not just one slot in isolation (every other
+/// `*_theme_slot_reaches_the_mounted_*` test in this crate proves exactly
+/// one consumer at a time; this one proves the slots are independent,
+/// per-widget reads off the SAME `ThemeData`, not a global "last theme
+/// change wins" shared value).
+#[test]
+fn a_themed_subtree_carries_both_the_elevated_button_and_app_bar_theme_simultaneously() {
+    use flui_widgets::Column;
+
+    let themed_button_background = Color::from_argb(0xFF11_2233);
+    let themed_app_bar_background = Color::from_argb(0xFF44_5566);
+    let theme = ThemeData::light().copy_with(ThemeDataOverrides {
+        elevated_button_theme: Some(ElevatedButtonThemeData {
+            style: Some(ButtonStyle {
+                background_color: Some(WidgetStateProperty::all(Some(themed_button_background))),
+                ..Default::default()
+            }),
+        }),
+        app_bar_theme: Some(AppBarThemeData {
+            background_color: Some(themed_app_bar_background),
+            ..Default::default()
+        }),
+        ..Default::default()
+    });
+
+    let laid = lay_out(
+        Theme::new(
+            theme,
+            MediaQuery::new(
+                MediaQueryData::default(),
+                Column::new(vec![
+                    AppBar::new().title(Text::new("Title")).boxed(),
+                    ElevatedButton::new(Text::new("Save"))
+                        .on_pressed(|| {})
+                        .boxed(),
+                ]),
+            ),
+        ),
+        loose(400.0),
+    );
+
+    let materials = laid.find_all_by_render_type("RenderPhysicalShape");
+    assert_eq!(
+        materials.len(),
+        2,
+        "both the AppBar and the ElevatedButton must compose their own Material surface"
+    );
+    let colors: std::collections::HashSet<String> = materials
+        .iter()
+        .filter_map(|id| laid.render_property(*id, "color"))
+        .collect();
+
+    assert!(
+        colors.contains(&format!("{themed_app_bar_background:?}")),
+        "the AppBar's Material must resolve the theme's app_bar_theme.background_color",
+    );
+    assert!(
+        colors.contains(&format!("{themed_button_background:?}")),
+        "the ElevatedButton's Material must resolve the theme's \
+         elevated_button_theme.style.background_color, from the SAME Theme ancestor",
     );
 }
 

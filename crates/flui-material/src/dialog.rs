@@ -150,6 +150,7 @@ use flui_rendering::constraints::BoxConstraints;
 use flui_types::geometry::{Radius, px};
 use flui_types::painting::Clip;
 use flui_types::styling::BorderRadius;
+use flui_types::typography::TextStyle;
 use flui_types::{Alignment, Color, EdgeInsets, Pixels};
 use flui_view::prelude::*;
 use flui_widgets::{
@@ -160,8 +161,8 @@ use flui_widgets::{
 
 use crate::material::Material;
 use crate::shape::MaterialShape;
-use crate::text_theme::TextTheme;
 use crate::theme::Theme;
+use crate::theme_data::ThemeData;
 
 /// `_DialogDefaultsM3`'s elevation (`dialog.dart`, oracle tag `3.44.0`).
 const DEFAULT_ELEVATION: f32 = 6.0;
@@ -282,9 +283,58 @@ impl Dialog {
     }
 }
 
+/// [`Dialog`]'s theme-resolved surface style — see [`resolve_style`]'s doc
+/// comment for the widget → theme → default cascade. Factored out for the
+/// same reason [`crate::app_bar`]'s `ResolvedAppBarStyle` is.
+struct ResolvedDialogStyle {
+    color: Color,
+    elevation: f32,
+    shape: MaterialShape,
+}
+
+/// Resolve `Dialog`'s M3 defaults through the widget → theme → default
+/// cascade, per field: `color`/`elevation`/`shape` each fall back through
+/// `ThemeData.dialog_theme`'s own field before the `_DialogDefaultsM3`
+/// constant. Flutter parity: `backgroundColor ?? dialogTheme.backgroundColor
+/// ?? defaults.backgroundColor` (and the `elevation`/`shape` equivalents),
+/// `dialog.dart`, oracle tag `3.44.0`.
+fn resolve_style(
+    theme: &ThemeData,
+    color: Option<Color>,
+    elevation: Option<f32>,
+    shape: Option<MaterialShape>,
+) -> ResolvedDialogStyle {
+    let dialog_theme = theme.dialog_theme.as_ref();
+
+    let color = color
+        .or_else(|| dialog_theme.and_then(|t| t.background_color))
+        .unwrap_or(theme.color_scheme.surface_container_high);
+    let elevation = elevation
+        .or_else(|| dialog_theme.and_then(|t| t.elevation))
+        .unwrap_or(DEFAULT_ELEVATION);
+    let shape = shape
+        .or_else(|| dialog_theme.and_then(|t| t.shape))
+        .unwrap_or_else(|| {
+            MaterialShape::RoundedRect(BorderRadius::all(Radius::circular(px(
+                DEFAULT_CORNER_RADIUS,
+            ))))
+        });
+
+    ResolvedDialogStyle {
+        color,
+        elevation,
+        shape,
+    }
+}
+
 impl StatelessView for Dialog {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
-        let colors = Theme::of(ctx).color_scheme;
+        let theme = Theme::of(ctx);
+        let ResolvedDialogStyle {
+            color,
+            elevation,
+            shape,
+        } = resolve_style(&theme, self.color, self.elevation, self.shape);
         let inset_padding = self.inset_padding.unwrap_or_else(|| {
             EdgeInsets::symmetric(px(INSET_PADDING_VERTICAL), px(INSET_PADDING_HORIZONTAL))
         });
@@ -296,17 +346,12 @@ impl StatelessView for Dialog {
                 Pixels::INFINITY,
             )
         });
-        let shape = self.shape.unwrap_or_else(|| {
-            MaterialShape::RoundedRect(BorderRadius::all(Radius::circular(px(
-                DEFAULT_CORNER_RADIUS,
-            ))))
-        });
 
         Padding::new(inset_padding).child(
             Align::new(self.alignment.unwrap_or(Alignment::CENTER)).child(
                 ConstrainedBox::new(constraints).child(
-                    Material::new(self.color.unwrap_or(colors.surface_container_high))
-                        .elevation(self.elevation.unwrap_or(DEFAULT_ELEVATION))
+                    Material::new(color)
+                        .elevation(elevation)
                         .shape(shape)
                         .clip_behavior(self.clip_behavior.unwrap_or(Clip::None))
                         .child(self.child.clone()),
@@ -385,9 +430,36 @@ impl AlertDialog {
     }
 }
 
+/// `AlertDialog`'s title text style, through the theme → default cascade —
+/// no per-instance `AlertDialog::title_style` override exists yet (named V1
+/// deferral, see the module docs), so there is no widget tier here. Flutter
+/// parity: `titleTextStyle ?? dialogTheme.titleTextStyle ??
+/// defaults.titleTextStyle!` (`dialog.dart`, oracle tag `3.44.0`), narrowed
+/// to the theme/default tiers this crate exposes. Factored out as a pure
+/// function (like `Dialog`'s own `resolve_style`) so the cascade is
+/// unit-testable without mounting a widget tree.
+fn resolve_title_style(theme: &ThemeData) -> TextStyle {
+    theme
+        .dialog_theme
+        .as_ref()
+        .and_then(|t| t.title_text_style.clone())
+        .unwrap_or_else(|| theme.text_theme.headline_small.clone().unwrap_or_default())
+}
+
+/// `AlertDialog`'s content text style — same theme → default cascade as
+/// [`resolve_title_style`]. Flutter parity: `contentTextStyle ??
+/// dialogTheme.contentTextStyle ?? defaults.contentTextStyle!`.
+fn resolve_content_style(theme: &ThemeData) -> TextStyle {
+    theme
+        .dialog_theme
+        .as_ref()
+        .and_then(|t| t.content_text_style.clone())
+        .unwrap_or_else(|| theme.text_theme.body_medium.clone().unwrap_or_default())
+}
+
 impl StatelessView for AlertDialog {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
-        let text_theme: TextTheme = Theme::of(ctx).text_theme;
+        let theme = Theme::of(ctx);
         let mut children: Vec<BoxedView> = Vec::new();
 
         if let Some(title) = &self.title {
@@ -400,7 +472,7 @@ impl StatelessView for AlertDialog {
                     px(24.0),
                 ))
                 .child(DefaultTextStyle::new(
-                    text_theme.headline_small.clone().unwrap_or_default(),
+                    resolve_title_style(&theme),
                     title.clone(),
                 ))
                 .boxed(),
@@ -415,10 +487,7 @@ impl StatelessView for AlertDialog {
             children.push(
                 Flexible::new(
                     Padding::new(EdgeInsets::new(px(16.0), px(24.0), px(24.0), px(24.0))).child(
-                        DefaultTextStyle::new(
-                            text_theme.body_medium.clone().unwrap_or_default(),
-                            content.clone(),
-                        ),
+                        DefaultTextStyle::new(resolve_content_style(&theme), content.clone()),
                     ),
                 )
                 .boxed(),
@@ -546,5 +615,83 @@ mod tests {
         assert_eq!(expected, Color::BLACK);
         assert_eq!(BARRIER_COLOR, Color::from_argb(0x8A00_0000));
         assert_eq!(BARRIER_COLOR.with_opacity(1.0), Color::BLACK);
+    }
+
+    #[test]
+    fn resolve_style_falls_through_to_the_dialog_theme_when_no_widget_override_is_set() {
+        let mut theme = ThemeData::light();
+        let themed_color = Color::rgb(5, 6, 7);
+        theme.dialog_theme = Some(crate::theme_data::DialogThemeData {
+            background_color: Some(themed_color),
+            elevation: Some(11.0),
+            ..Default::default()
+        });
+
+        let resolved = resolve_style(&theme, None, None, None);
+
+        assert_eq!(resolved.color, themed_color);
+        assert_eq!(resolved.elevation, 11.0);
+        assert_eq!(
+            resolved.shape,
+            MaterialShape::RoundedRect(BorderRadius::all(Radius::circular(px(
+                DEFAULT_CORNER_RADIUS
+            ))))
+        );
+    }
+
+    #[test]
+    fn resolve_style_widget_override_wins_over_the_dialog_theme() {
+        let mut theme = ThemeData::light();
+        theme.dialog_theme = Some(crate::theme_data::DialogThemeData {
+            background_color: Some(Color::rgb(1, 1, 1)),
+            ..Default::default()
+        });
+        let widget_color = Color::rgb(9, 9, 9);
+
+        let resolved = resolve_style(&theme, Some(widget_color), None, None);
+
+        assert_eq!(resolved.color, widget_color);
+    }
+
+    #[test]
+    fn resolve_title_style_falls_through_to_the_dialog_theme() {
+        let mut theme = ThemeData::light();
+        let themed_style = TextStyle::new().with_color(Color::rgb(1, 2, 3));
+        theme.dialog_theme = Some(crate::theme_data::DialogThemeData {
+            title_text_style: Some(themed_style.clone()),
+            ..Default::default()
+        });
+
+        assert_eq!(resolve_title_style(&theme), themed_style);
+    }
+
+    #[test]
+    fn resolve_title_style_defaults_to_headline_small_when_no_theme_is_set() {
+        let theme = ThemeData::light();
+        assert_eq!(
+            resolve_title_style(&theme),
+            theme.text_theme.headline_small.clone().unwrap_or_default()
+        );
+    }
+
+    #[test]
+    fn resolve_content_style_falls_through_to_the_dialog_theme() {
+        let mut theme = ThemeData::light();
+        let themed_style = TextStyle::new().with_color(Color::rgb(4, 5, 6));
+        theme.dialog_theme = Some(crate::theme_data::DialogThemeData {
+            content_text_style: Some(themed_style.clone()),
+            ..Default::default()
+        });
+
+        assert_eq!(resolve_content_style(&theme), themed_style);
+    }
+
+    #[test]
+    fn resolve_content_style_defaults_to_body_medium_when_no_theme_is_set() {
+        let theme = ThemeData::light();
+        assert_eq!(
+            resolve_content_style(&theme),
+            theme.text_theme.body_medium.clone().unwrap_or_default()
+        );
     }
 }

@@ -10,11 +10,16 @@
 //! inverts the relationship: each concrete button (`elevated_button.rs` etc.)
 //! is a thin [`StatelessView`] that reads
 //! the ambient [`Theme`](crate::Theme), computes its own `default_style`
-//! table, and hands both to this module's [`ButtonStyleButtonCore`] — the
-//! `StatefulView` that owns the interactive-state machinery and the actual
-//! composition. `theme_style_of` has no caller yet (component themes are a
-//! V1 deferral — see below), so it never reaches this type at all rather
-//! than being threaded through as a permanent `None`.
+//! table, reads its own `ThemeData` component-theme slot (`elevated_button_theme`
+//! and friends), and hands all three to this module's [`ButtonStyleButtonCore`]
+//! — the `StatefulView` that owns the interactive-state machinery and the
+//! actual composition. **Named reduction**: the oracle also has a standalone
+//! `ElevatedButtonTheme` `InheritedTheme` widget per button (so a subtree can
+//! override just that button's style without touching the whole
+//! `ThemeData`); FLUI V1 has no per-widget `InheritedTheme` wrappers yet, so
+//! every concrete button reads only its `ThemeData` slot via `Theme::of` —
+//! see each concrete button's own module docs for the simplified
+//! `ElevatedButtonTheme.of(context)?.style` chain this collapses to.
 //!
 //! # The resolve-then-coalesce cascade
 //!
@@ -28,12 +33,12 @@
 //! `option_property_coalesce_chain_mirrors_button_style_button` test
 //! demonstrates for a single tier — here extended to three.
 //!
-//! `theme_style` is always `None` in every call site below: component themes
-//! (`ElevatedButtonTheme` and friends) are a named V1 deferral, not yet
-//! implemented. The three-tier signature stays in [`resolve_property`] (not
-//! collapsed to two) so the seam is visible in the type, not just prose —
-//! wiring a real `theme_style_of` in later is a call-site change, not a
-//! rewrite of this function.
+//! `theme_style` is threaded in via [`ButtonStyleButtonCore::theme_style`] —
+//! each concrete button passes its own `ThemeData` component-theme slot's
+//! `style` (when configured) at the same `Theme::of` read it already
+//! performs to compute `default_style`. A button whose slot is unset passes
+//! nothing, so `theme_style` stays `None` and the cascade falls straight
+//! through to `default_style` — unchanged from before this slot was wired.
 //!
 //! # Composition
 //!
@@ -146,6 +151,7 @@ macro_rules! resolve_field {
 pub(crate) struct ButtonStyleButtonCore {
     on_pressed: Option<PressCallback>,
     style: Option<ButtonStyle>,
+    theme_style: Option<ButtonStyle>,
     default_style: ButtonStyle,
     child: BoxedView,
 }
@@ -159,6 +165,7 @@ impl ButtonStyleButtonCore {
         Self {
             on_pressed: None,
             style: None,
+            theme_style: None,
             default_style,
             child,
         }
@@ -179,6 +186,19 @@ impl ButtonStyleButtonCore {
     #[must_use]
     pub(crate) fn style(mut self, style: ButtonStyle) -> Self {
         self.style = Some(style);
+        self
+    }
+
+    /// Sets the theme-level style — the middle tier in the resolve cascade,
+    /// between [`style`](Self::style) (widget-explicit, highest precedence)
+    /// and `default_style` (lowest). The caller passes its own `ThemeData`
+    /// component-theme slot's `style` here; leaving this unset (the default
+    /// from [`new`](Self::new)) means the cascade skips straight from
+    /// `style` to `default_style`, exactly as it did before this tier
+    /// existed.
+    #[must_use]
+    pub(crate) fn theme_style(mut self, style: ButtonStyle) -> Self {
+        self.theme_style = Some(style);
         self
     }
 
@@ -256,10 +276,9 @@ impl ViewState<ButtonStyleButtonCore> for ButtonStyleButtonCoreState {
         let states = self.states.value();
         let widget_style = view.style.as_ref();
         let default_style = Some(&view.default_style);
-        // Deferred: component themes (`ElevatedButtonTheme` and friends) —
-        // see the module docs. No call site threads a real value through
-        // yet.
-        let theme_style: Option<&ButtonStyle> = None;
+        // Set by the caller via `theme_style` when its `ThemeData`
+        // component-theme slot is configured — see the module docs.
+        let theme_style = view.theme_style.as_ref();
 
         let background_color = resolve_field!(
             &states,
@@ -325,7 +344,11 @@ impl ViewState<ButtonStyleButtonCore> for ButtonStyleButtonCoreState {
 
         let constraints = effective_constraints(minimum_size, maximum_size, fixed_size);
 
-        let overlay_color = overlay_color_property(view.style.clone(), view.default_style.clone());
+        let overlay_color = overlay_color_property(
+            view.style.clone(),
+            view.theme_style.clone(),
+            view.default_style.clone(),
+        );
 
         let mut ink_well = InkWell::new(
             Padding::new(padding).child(DefaultTextStyle::new(text_style, view.child.clone())),
@@ -408,16 +431,20 @@ fn effective_constraints(
 
 /// Builds the live [`WidgetStateProperty`] handed to the inner `InkWell` —
 /// see the module docs on why `overlay_color` is not baked to a single
-/// value like every other property.
+/// value like every other property. Closes over all three cascade tiers
+/// (widget/theme/default), same as [`ButtonStyleButtonCoreState::build`]'s
+/// own per-property resolution, so a theme-configured `overlay_color`
+/// reaches the live property too.
 fn overlay_color_property(
     widget_style: Option<ButtonStyle>,
+    theme_style: Option<ButtonStyle>,
     default_style: ButtonStyle,
 ) -> WidgetStateProperty<Option<Color>> {
     WidgetStateProperty::resolve_with(move |states: &WidgetStates| {
         resolve_field!(
             states,
             widget_style.as_ref(),
-            None::<&ButtonStyle>,
+            theme_style.as_ref(),
             Some(&default_style),
             overlay_color
         )

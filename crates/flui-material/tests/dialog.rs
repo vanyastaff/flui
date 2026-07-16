@@ -8,7 +8,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use common::{lay_out, tight};
-use flui_material::{AlertDialog, Dialog, MaterialShape, Theme, ThemeData};
+use flui_material::{
+    AlertDialog, Dialog, DialogThemeData, MaterialShape, Theme, ThemeData, ThemeDataOverrides,
+};
 use flui_types::Color;
 use flui_types::geometry::{Radius, px};
 use flui_types::styling::BorderRadius;
@@ -65,6 +67,40 @@ fn dialog_material_matches_dialog_defaults_m3() {
         clip_behavior, "None",
         "_DialogDefaultsM3 constructs with clipBehavior: Clip.none"
     );
+}
+
+/// The middle cascade tier, proven end to end: a `ThemeData.dialog_theme`
+/// with a custom `background_color`/`elevation` reaches the mounted
+/// `Material`.
+#[test]
+fn dialog_theme_slot_reaches_the_mounted_materials_color_and_elevation() {
+    let themed_color = Color::rgb(21, 32, 43);
+    let theme = ThemeData::light().copy_with(ThemeDataOverrides {
+        dialog_theme: Some(DialogThemeData {
+            background_color: Some(themed_color),
+            elevation: Some(2.0),
+            ..Default::default()
+        }),
+        ..Default::default()
+    });
+
+    let laid = lay_out(
+        Theme::new(theme, Dialog::new(SizedBox::new(1.0, 1.0))),
+        tight(1000.0, 1000.0),
+    );
+
+    let material = laid
+        .find_by_render_type("RenderPhysicalShape")
+        .expect("Dialog must compose a Material surface");
+    assert_eq!(
+        laid.render_property(material, "color"),
+        Some(color_property(themed_color)),
+        "a configured dialog_theme.background_color must reach the mounted Material",
+    );
+    let elevation = laid
+        .render_property(material, "elevation")
+        .expect("RenderPhysicalShape reports an \"elevation\" diagnostics property");
+    assert_eq!(elevation.parse::<f32>(), Ok(2.0));
 }
 
 /// `Dialog.build`'s fallback `constraints` (`BoxConstraints(minWidth:

@@ -277,25 +277,49 @@ struct ResolvedAppBarStyle {
     title_style: TextStyle,
 }
 
-/// Resolve `AppBar`'s M3 defaults: `background_color` falls back to
-/// `ColorScheme.surface`, `foreground_color` to `ColorScheme.on_surface`,
-/// `elevation` to `0.0`, and the title style to `TextTheme.title_large`
-/// recolored to the resolved foreground.
+/// Resolve `AppBar`'s M3 defaults through the widget → theme → default
+/// cascade: `background_color` falls back to `ThemeData.app_bar_theme`'s own
+/// `background_color`, then `ColorScheme.surface`; `foreground_color`
+/// likewise falls back through `app_bar_theme` to `ColorScheme.on_surface`;
+/// `elevation` through `app_bar_theme` to `0.0`. Flutter parity:
+/// `widget.backgroundColor ?? appBarTheme.backgroundColor ??
+/// defaults.backgroundColor` (and the `foregroundColor`/`elevation`
+/// equivalents), `app_bar.dart`, oracle tag `3.44.0`.
+///
+/// The title style is a **verbatim** theme-tier value, not recolored, when
+/// `app_bar_theme.title_text_style` is set — Flutter parity: `widget
+/// .titleTextStyle ?? appBarTheme.titleTextStyle ??
+/// defaults.titleTextStyle?.copyWith(color: foregroundColor)` (`app_bar.dart`,
+/// oracle tag `3.44.0`): only the default tier gets recolored to the
+/// resolved `foreground_color`, because a theme-supplied style already
+/// carries its own intended color.
 fn resolve_style(
     theme: &ThemeData,
     background_color: Option<Color>,
     foreground_color: Option<Color>,
     elevation: Option<f32>,
 ) -> ResolvedAppBarStyle {
-    let background_color = background_color.unwrap_or(theme.color_scheme.surface);
-    let foreground_color = foreground_color.unwrap_or(theme.color_scheme.on_surface);
-    let elevation = elevation.unwrap_or(0.0);
-    let title_style = theme
-        .text_theme
-        .title_large
-        .clone()
-        .unwrap_or_default()
-        .with_color(foreground_color);
+    let app_bar_theme = theme.app_bar_theme.as_ref();
+
+    let background_color = background_color
+        .or_else(|| app_bar_theme.and_then(|t| t.background_color))
+        .unwrap_or(theme.color_scheme.surface);
+    let foreground_color = foreground_color
+        .or_else(|| app_bar_theme.and_then(|t| t.foreground_color))
+        .unwrap_or(theme.color_scheme.on_surface);
+    let elevation = elevation
+        .or_else(|| app_bar_theme.and_then(|t| t.elevation))
+        .unwrap_or(0.0);
+    let title_style = app_bar_theme
+        .and_then(|t| t.title_text_style.clone())
+        .unwrap_or_else(|| {
+            theme
+                .text_theme
+                .title_large
+                .clone()
+                .unwrap_or_default()
+                .with_color(foreground_color)
+        });
 
     ResolvedAppBarStyle {
         background_color,
@@ -483,6 +507,69 @@ mod tests {
                 .with_color(theme.color_scheme.on_surface),
             "the title style must be TextTheme.title_large recolored to the resolved foreground"
         );
+    }
+
+    /// Middle-tier coverage: with no widget-level override, an
+    /// `app_bar_theme` slot's fields win over the M3 defaults, per field
+    /// (not as an all-or-nothing struct) — a themed `elevation` must not
+    /// force a themed `background_color`/`foreground_color` too.
+    #[test]
+    fn resolve_style_falls_through_to_the_app_bar_theme_when_no_widget_override_is_set() {
+        let mut theme = ThemeData::light();
+        let themed_background = Color::rgb(9, 8, 7);
+        theme.app_bar_theme = Some(crate::theme_data::AppBarThemeData {
+            background_color: Some(themed_background),
+            elevation: Some(5.0),
+            ..Default::default()
+        });
+
+        let resolved = resolve_style(&theme, None, None, None);
+
+        assert_eq!(resolved.background_color, themed_background);
+        assert_eq!(resolved.elevation, 5.0);
+        // `foreground_color` was left unset on the theme slot — falls all
+        // the way through to the M3 default, proving the per-field (not
+        // whole-struct) fallthrough.
+        assert_eq!(resolved.foreground_color, theme.color_scheme.on_surface);
+    }
+
+    /// Highest-tier coverage: an explicit widget-level override still wins
+    /// over a configured `app_bar_theme`, matching Flutter's
+    /// `widget.backgroundColor ?? appBarTheme.backgroundColor ?? …` order.
+    #[test]
+    fn resolve_style_widget_override_wins_over_the_app_bar_theme() {
+        let mut theme = ThemeData::light();
+        theme.app_bar_theme = Some(crate::theme_data::AppBarThemeData {
+            background_color: Some(Color::rgb(1, 1, 1)),
+            ..Default::default()
+        });
+        let widget_background = Color::rgb(2, 2, 2);
+
+        let resolved = resolve_style(&theme, Some(widget_background), None, None);
+
+        assert_eq!(resolved.background_color, widget_background);
+    }
+
+    /// The theme's `title_text_style` is used AS-IS, not recolored to the
+    /// resolved `foreground_color` — unlike the default tier (see the next
+    /// test) — matching the oracle's own
+    /// `titleTextStyle ?? appBarTheme.titleTextStyle ?? defaults….copyWith(…)`
+    /// order.
+    #[test]
+    fn resolve_style_theme_title_text_style_is_used_verbatim_not_recolored() {
+        let mut theme = ThemeData::light();
+        let themed_title_style =
+            flui_types::typography::TextStyle::new().with_color(Color::rgb(3, 3, 3));
+        theme.app_bar_theme = Some(crate::theme_data::AppBarThemeData {
+            title_text_style: Some(themed_title_style.clone()),
+            ..Default::default()
+        });
+        let widget_foreground = Color::rgb(4, 4, 4);
+
+        let resolved = resolve_style(&theme, None, Some(widget_foreground), None);
+
+        assert_eq!(resolved.title_style, themed_title_style);
+        assert_ne!(resolved.title_style.color, Some(widget_foreground));
     }
 
     #[test]

@@ -10,7 +10,7 @@
 mod common;
 
 use common::{lay_out, loose, tight};
-use flui_material::{AppBar, Theme, ThemeData};
+use flui_material::{AppBar, AppBarThemeData, Theme, ThemeData, ThemeDataOverrides};
 use flui_types::EdgeInsets;
 use flui_types::geometry::px;
 use flui_view::prelude::*;
@@ -130,6 +130,41 @@ fn background_color_override_replaces_the_theme_default() {
         laid.render_property(material, "color"),
         Some(color_property(overridden)),
         "an explicit background_color must win over the theme default",
+    );
+}
+
+/// The middle cascade tier, proven end to end: a `ThemeData.app_bar_theme`
+/// with a custom `background_color` reaches the mounted `Material`, with no
+/// widget-level `background_color` in the way.
+#[test]
+fn app_bar_theme_slot_reaches_the_mounted_materials_background_color() {
+    let themed_background = flui_types::Color::rgb(44, 55, 66);
+    let theme = ThemeData::light().copy_with(ThemeDataOverrides {
+        app_bar_theme: Some(AppBarThemeData {
+            background_color: Some(themed_background),
+            ..Default::default()
+        }),
+        ..Default::default()
+    });
+
+    let laid = lay_out(
+        Theme::new(
+            theme,
+            MediaQuery::new(
+                MediaQueryData::default(),
+                AppBar::new().title(Text::new("Title")),
+            ),
+        ),
+        loose(400.0),
+    );
+
+    let material = laid
+        .find_by_render_type("RenderPhysicalShape")
+        .expect("AppBar must compose a Material (RenderPhysicalShape) surface");
+    assert_eq!(
+        laid.render_property(material, "color"),
+        Some(color_property(themed_background)),
+        "a configured app_bar_theme.background_color must reach the mounted Material",
     );
 }
 

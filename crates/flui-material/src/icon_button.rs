@@ -181,6 +181,12 @@ impl StatelessView for IconButton {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
         let theme = Theme::of(ctx);
         let default = default_style(&theme);
+        // Middle cascade tier — see `crate::elevated_button`'s identical
+        // "simplified from `ElevatedButtonTheme.of`" note.
+        let theme_style = theme
+            .icon_button_theme
+            .as_ref()
+            .and_then(|t| t.style.clone());
 
         // A static enabled-or-disabled snapshot — see the module docs'
         // "Icon color and size" section for why that's sufficient for
@@ -191,19 +197,23 @@ impl StatelessView for IconButton {
             WidgetStates::from(WidgetState::Disabled)
         };
 
-        // The SAME widget-then-default coalesce `ButtonStyleButtonCore`
-        // performs internally (`resolve_property`) — computed here too so a
-        // caller's `.style(ButtonStyle { foreground_color: .. })` override
-        // reaches the icon's `IconTheme`, not just `DefaultTextStyle`. The
-        // `unwrap_or` fallback is unreachable in practice: `default_style`
-        // always sets `foreground_color`, so the coalesce always resolves
-        // `Some` — kept only because `resolve_property` returns `Option`.
+        // The SAME widget-then-theme-then-default coalesce
+        // `ButtonStyleButtonCore` performs internally (`resolve_property`)
+        // — computed here too so a caller's `.style(ButtonStyle {
+        // foreground_color: .. })` override, OR a theme-configured
+        // `icon_button_theme`, reaches the icon's `IconTheme`, not just
+        // `DefaultTextStyle`. The `unwrap_or` fallback is unreachable in
+        // practice: `default_style` always sets `foreground_color`, so the
+        // coalesce always resolves `Some` — kept only because
+        // `resolve_property` returns `Option`.
         let icon_color = resolve_property(
             &states,
             self.style
                 .as_ref()
                 .and_then(|style| style.foreground_color.as_ref()),
-            None,
+            theme_style
+                .as_ref()
+                .and_then(|style| style.foreground_color.as_ref()),
             default.foreground_color.as_ref(),
         )
         .unwrap_or(Color::TRANSPARENT);
@@ -219,6 +229,9 @@ impl StatelessView for IconButton {
 
         let mut core = ButtonStyleButtonCore::new(default, themed_icon.boxed())
             .style(self.style.clone().unwrap_or_default());
+        if let Some(theme_style) = theme_style {
+            core = core.theme_style(theme_style);
+        }
         if let Some(on_pressed) = self.on_pressed.clone() {
             core = core.on_pressed(on_pressed);
         }

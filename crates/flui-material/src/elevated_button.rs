@@ -88,6 +88,20 @@ impl StatelessView for ElevatedButton {
         let theme = Theme::of(ctx);
         let mut core = ButtonStyleButtonCore::new(default_style(&theme), self.child.clone())
             .style(self.style.clone().unwrap_or_default());
+        // Middle cascade tier — Flutter parity, simplified: the oracle reads
+        // `ElevatedButtonTheme.of(context)?.style`, a standalone
+        // `InheritedTheme`; FLUI V1 has no per-button `InheritedTheme`
+        // wrapper yet, so this reads the same style off the ambient
+        // `ThemeData`'s `elevated_button_theme` slot instead (see
+        // `crate::button_style_button`'s module docs for this reduction,
+        // shared by every button in this crate).
+        if let Some(theme_style) = theme
+            .elevated_button_theme
+            .as_ref()
+            .and_then(|t| t.style.clone())
+        {
+            core = core.theme_style(theme_style);
+        }
         if let Some(on_pressed) = self.on_pressed.clone() {
             core = core.on_pressed(on_pressed);
         }

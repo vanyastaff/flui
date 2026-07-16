@@ -110,6 +110,18 @@ impl StatelessView for FilledButton {
         let mut core =
             ButtonStyleButtonCore::new(default_style(&theme, self.variant), self.child.clone())
                 .style(self.style.clone().unwrap_or_default());
+        // Middle cascade tier — see `crate::elevated_button`'s identical
+        // "simplified from `ElevatedButtonTheme.of`" note; the `tonal`
+        // variant shares the same `filled_button_theme` slot as the plain
+        // variant, matching the oracle (one `FilledButtonThemeData` for
+        // both `FilledButton` constructors).
+        if let Some(theme_style) = theme
+            .filled_button_theme
+            .as_ref()
+            .and_then(|t| t.style.clone())
+        {
+            core = core.theme_style(theme_style);
+        }
         if let Some(on_pressed) = self.on_pressed.clone() {
             core = core.on_pressed(on_pressed);
         }

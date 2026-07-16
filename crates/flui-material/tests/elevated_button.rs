@@ -20,8 +20,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use common::{lay_out, tight};
-use flui_material::{ElevatedButton, Theme, ThemeData};
-use flui_widgets::Text;
+use flui_material::{
+    ButtonStyle, ElevatedButton, ElevatedButtonThemeData, Theme, ThemeData, ThemeDataOverrides,
+};
+use flui_widgets::{Text, WidgetStateProperty};
 
 /// `_ElevatedButtonDefaultsM3`'s formatted `Debug` string for a given
 /// resolved [`Color`](flui_types::Color) — what `RenderPhysicalShape`'s
@@ -181,5 +183,84 @@ fn did_update_view_resyncs_disabled_when_the_press_handler_is_removed() {
         color_property(colors.on_surface.with_opacity(0.12)),
         "removing the press handler must re-sync WidgetState::Disabled via did_update_view, \
          re-resolving the disabled background color",
+    );
+}
+
+/// The middle cascade tier, proven end to end: a `ThemeData.elevated_button_theme`
+/// with a custom `background_color` must reach the mounted `Material`'s
+/// resolved color — this is the wiring `button_style_button.rs`'s
+/// `theme_style` seam exists for; before it was wired, this exact scenario
+/// silently resolved the M3 default instead (`theme_style` was hardcoded
+/// `None` at every call site).
+#[test]
+fn elevated_button_theme_slot_reaches_the_mounted_materials_background_color() {
+    let themed_background = flui_types::Color::rgb(11, 22, 33);
+    let theme = ThemeData::light().copy_with(ThemeDataOverrides {
+        elevated_button_theme: Some(ElevatedButtonThemeData {
+            style: Some(ButtonStyle {
+                background_color: Some(WidgetStateProperty::all(Some(themed_background))),
+                ..Default::default()
+            }),
+        }),
+        ..Default::default()
+    });
+
+    let laid = lay_out(
+        Theme::new(
+            theme,
+            ElevatedButton::new(Text::new("Save")).on_pressed(|| {}),
+        ),
+        tight(120.0, 48.0),
+    );
+
+    let material = laid
+        .find_by_render_type("RenderPhysicalShape")
+        .expect("ElevatedButton must compose a Material surface");
+    assert_eq!(
+        laid.render_property(material, "color"),
+        Some(color_property(themed_background)),
+        "a configured elevated_button_theme.style.background_color must reach the mounted \
+         Material — the middle (theme) tier of the widget/theme/default cascade",
+    );
+}
+
+/// The highest tier still wins over a configured theme: an explicit
+/// `.style(..)` override on the widget itself must resolve over the theme's
+/// `elevated_button_theme`, matching Flutter's own `getProperty(widgetStyle)
+/// ?? getProperty(themeStyle) ?? …` precedence.
+#[test]
+fn widget_level_style_wins_over_the_elevated_button_theme() {
+    let themed_background = flui_types::Color::rgb(1, 1, 1);
+    let widget_background = flui_types::Color::rgb(9, 9, 9);
+    let theme = ThemeData::light().copy_with(ThemeDataOverrides {
+        elevated_button_theme: Some(ElevatedButtonThemeData {
+            style: Some(ButtonStyle {
+                background_color: Some(WidgetStateProperty::all(Some(themed_background))),
+                ..Default::default()
+            }),
+        }),
+        ..Default::default()
+    });
+
+    let laid = lay_out(
+        Theme::new(
+            theme,
+            ElevatedButton::new(Text::new("Save"))
+                .on_pressed(|| {})
+                .style(ButtonStyle {
+                    background_color: Some(WidgetStateProperty::all(Some(widget_background))),
+                    ..Default::default()
+                }),
+        ),
+        tight(120.0, 48.0),
+    );
+
+    let material = laid
+        .find_by_render_type("RenderPhysicalShape")
+        .expect("ElevatedButton must compose a Material surface");
+    assert_eq!(
+        laid.render_property(material, "color"),
+        Some(color_property(widget_background)),
+        "an explicit widget-level style must win over a configured elevated_button_theme",
     );
 }

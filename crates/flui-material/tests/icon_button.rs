@@ -21,7 +21,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use common::{lay_out, loose, tight};
-use flui_material::{ButtonStyle, IconButton, Theme, ThemeData};
+use flui_material::{
+    ButtonStyle, IconButton, IconButtonThemeData, Theme, ThemeData, ThemeDataOverrides,
+};
 use flui_types::Color;
 use flui_view::prelude::*;
 use flui_widgets::{IconTheme, IconThemeData, SizedBox, WidgetStateProperty};
@@ -182,6 +184,45 @@ fn enabled_icon_button_resolves_the_on_surface_variant_color_through_the_real_mo
 /// widget-then-default cascade `ButtonStyleButtonCore` performs internally)
 /// before feeding the icon's `IconTheme` — this test mounts exactly that
 /// override and asserts it actually reaches the icon.
+/// The middle cascade tier, proven end to end: a configured
+/// `icon_button_theme.style.foreground_color` must reach the icon's
+/// `IconTheme` — the same coalesce `resolve_property` performs for
+/// `IconButton::build`'s widget-level override (see
+/// `a_style_foreground_color_override_reaches_the_icons_icon_theme` below),
+/// now with a theme-tier value and no widget-level override in the way.
+#[test]
+fn icon_button_theme_slot_reaches_the_icons_icon_theme() {
+    let themed_color = Color::rgb(30, 40, 50);
+    let captured = Rc::new(RefCell::new(None));
+    let probe = IconThemeProbe {
+        captured: Rc::clone(&captured),
+    };
+    let theme = ThemeData::light().copy_with(ThemeDataOverrides {
+        icon_button_theme: Some(IconButtonThemeData {
+            style: Some(ButtonStyle {
+                foreground_color: Some(WidgetStateProperty::all(Some(themed_color))),
+                ..Default::default()
+            }),
+        }),
+        ..Default::default()
+    });
+
+    let _laid = lay_out(
+        Theme::new(theme, IconButton::new(probe).on_pressed(|| {})),
+        tight(40.0, 40.0),
+    );
+
+    let resolved = captured
+        .borrow()
+        .clone()
+        .expect("IconThemeProbe must have built at least once");
+    assert_eq!(
+        resolved.color,
+        Some(themed_color),
+        "a configured icon_button_theme.style.foreground_color must reach the icon's IconTheme",
+    );
+}
+
 #[test]
 fn a_style_foreground_color_override_reaches_the_icons_icon_theme() {
     let overridden = Color::rgb(200, 10, 90);
