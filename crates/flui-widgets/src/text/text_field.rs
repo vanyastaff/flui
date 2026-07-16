@@ -1,5 +1,16 @@
-//! [`TextField`] — an [`EditableText`] with border decoration and
-//! tap-to-focus behavior.
+//! [`TextField`] — an [`EditableText`] with a plain border decoration and
+//! tap-to-focus behavior, for callers with no `Theme` ancestor.
+//!
+//! **Not a Flutter-parity port.** Flutter has no widgets-layer text field —
+//! `material/text_field.dart`'s `TextField` is the *only* oracle, and its
+//! parity claim belongs to
+//! [`flui_material::TextField`](https://docs.rs/flui-material) (M3
+//! decoration via `InputDecorator`, live focus/enabled/error plumbing, theme
+//! colors). This type is this crate's own plain stand-in: a fixed 1px
+//! gray-border box with no theming, no label/hint/helper/error slots, and no
+//! state-table colors — for a widgets-only tree with no `Theme` above it to
+//! decorate from. Prefer `flui_material::TextField` whenever a `Theme` is
+//! available.
 
 use flui_geometry::{EdgeInsets, px};
 use flui_types::styling::{Border, BorderSide, BorderStyle, BoxDecoration};
@@ -16,11 +27,11 @@ use crate::text::editable_text::EditableText;
 // TextField
 // ============================================================================
 
-/// A decorated, tap-to-focus single-line text input field.
-///
-/// Flutter parity: `material/text_field.dart` `TextField` — wraps
-/// [`EditableText`] with a [`DecoratedBox`] border and a [`GestureDetector`]
-/// that requests focus on tap.
+/// A plain decorated, tap-to-focus single-line text input field — wraps
+/// [`EditableText`] with a fixed [`DecoratedBox`] border and a
+/// [`GestureDetector`] that requests focus on tap. See the module docs: this
+/// is a theme-free stand-in, not the Material `TextField` — prefer
+/// `flui_material::TextField` whenever a `Theme` ancestor is available.
 ///
 /// # DEFERRED (v1)
 ///
@@ -36,6 +47,7 @@ use crate::text::editable_text::EditableText;
 /// - Focus decoration changes (highlighted border on focus)
 #[derive(Clone, Debug, StatelessView)]
 pub struct TextField {
+    // PORT-CHECK-OK-SP3: deliberate theme-free stand-in for a widgets-only tree; the M3 field is flui_material::TextField — see this module's docs
     /// Controller that owns the text buffer and caret position.
     controller: TextEditingController,
     /// Height of the caret bar, forwarded to [`EditableText`].

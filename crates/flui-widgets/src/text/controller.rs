@@ -287,7 +287,19 @@ impl TextEditingController {
     /// The focus node of the `EditableText` this controller currently drives,
     /// or `None` between mounts. Published by `EditableTextState::init_state`
     /// and cleared by its `dispose`.
-    pub(crate) fn focus_node_id(&self) -> Option<flui_interaction::FocusNodeId> {
+    ///
+    /// `pub`, not `pub(crate)`: this is the seam an enclosing decorated field
+    /// built in another crate (e.g. `flui_material::TextField`) uses to
+    /// resolve *its own* node — for both tap-to-focus
+    /// ([`FocusManager::request_focus`](flui_interaction::routing::FocusManager::request_focus))
+    /// and live focus observation
+    /// ([`FocusManager::has_focus`](flui_interaction::routing::FocusManager::has_focus)
+    /// compared against this id from a
+    /// [`FocusManager::add_listener`](flui_interaction::routing::FocusManager::add_listener)
+    /// callback) — the same pattern
+    /// [`EditableTextState`](super::editable_text::EditableTextState) itself
+    /// uses internally to drive its caret's visibility.
+    pub fn focus_node_id(&self) -> Option<flui_interaction::FocusNodeId> {
         self.inner
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
