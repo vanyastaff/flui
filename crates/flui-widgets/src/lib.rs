@@ -79,6 +79,7 @@ pub mod icon;
 pub mod image;
 pub mod interaction;
 pub mod layout;
+pub mod localization;
 // Headless widget harness shared by the in-crate unit tests of the private
 // `overlay` / `navigator` modules. `tests/common` is an integration-test module
 // and cannot be reached from `src/`.
@@ -109,10 +110,18 @@ pub mod wrap;
 // ============================================================================
 
 // Application-scoped inherited widgets: ambient screen data and theming.
-pub use app::{MediaQuery, MediaQueryData, SafeArea, Theme, ThemeData};
+pub use app::{InheritedTheme, MediaQuery, MediaQueryData, SafeArea, Theme, ThemeData};
 // `Brightness` is the value type shared by `MediaQueryData` and `ThemeData`;
 // re-exported here so callers need only `use flui_widgets::Brightness`.
 pub use flui_types::platform::Brightness;
+// Ambient direction + localized-resource infrastructure — see
+// `localization`'s module docs for the sync-only-v1 divergences from the
+// Flutter oracle.
+pub use localization::{
+    BoxedLocalizationsDelegate, BoxedWidgetsLocalizations, DefaultWidgetsLocalizations,
+    DefaultWidgetsLocalizationsDelegate, Directionality, Localizations, LocalizationsDelegate,
+    WidgetsLocalizations, basic_locale_list_resolution,
+};
 
 pub use animated::{
     AnimatedAlign, AnimatedAlignState, AnimatedContainer, AnimatedContainerState, AnimatedOpacity,
@@ -252,29 +261,33 @@ pub mod prelude {
         AbsorbPointer, Action, ActionOutcome, Actions, Align, AspectRatio, Baseline, Brightness,
         CallbackAction, CallbackShortcuts, Center, ClipOval, ClipPath, ClipRRect, ClipRect,
         ColoredBox, Column, ConstrainedBox, Container, CustomMultiChildLayout, CustomPaint,
-        CustomScrollView, CustomSingleChildLayout, DecoratedBox, DefaultTextStyle, EditableText,
-        EditableTextState, ExcludeFocus, ExcludeSemantics, Expanded, FittedBox, Flex, FlexFit,
-        Flexible, FlightDirection, Flow, Focus, FocusScope, FractionalTranslation,
-        FractionallySizedBox, FutureBuilder, GestureArenaScope, GestureDetector, GridView, Hero,
-        HeroController, HeroMode, Icon, IconData, IconTheme, IconThemeData, IgnorePointer, Image,
-        ImageAlignment, ImageFit, ImageProvider, IndexedStack, Intent, IntrinsicHeight,
-        IntrinsicWidth, LayoutBuilder, LayoutId, LimitedBox, ListBody, ListView, Listener,
-        MediaQuery, MediaQueryData, MergeSemantics, MouseRegion, Navigator, NavigatorHandle,
-        NextFocusAction, NextFocusIntent, Offstage, Opacity, OverflowBox, OverflowBoxFit, Padding,
-        PageRoute, PopScope, PopupRoute, Positioned, PreviousFocusAction, PreviousFocusIntent,
-        RepaintBoundary, RichText, RotatedBox, Row, SafeArea, ScrollController, Scrollable,
-        Scrollbar, Semantics, Shortcuts, ShrinkWrappingViewport, SimpleRoute, SingleActivator,
-        SingleChildScrollView, SizedBox, SizedOverflowBox, SliverChildBuilderDelegate,
-        SliverFillRemaining, SliverFillRemainingAndOverscroll, SliverFillRemainingWithScrollable,
-        SliverFillViewport, SliverFixedExtentList, SliverGrid, SliverIgnorePointer, SliverList,
-        SliverOffstage, SliverOpacity, SliverPadding, SliverToBoxAdapter, Spacer, Stack,
-        StreamBuilder, Table, TableCell, TableRow, Text, TextEditingController, TextField, Theme,
-        ThemeData, TickerMode, Transform, Viewport, Visibility, Wrap,
+        CustomScrollView, CustomSingleChildLayout, DecoratedBox, DefaultTextStyle,
+        DefaultWidgetsLocalizations, Directionality, EditableText, EditableTextState, ExcludeFocus,
+        ExcludeSemantics, Expanded, FittedBox, Flex, FlexFit, Flexible, FlightDirection, Flow,
+        Focus, FocusScope, FractionalTranslation, FractionallySizedBox, FutureBuilder,
+        GestureArenaScope, GestureDetector, GridView, Hero, HeroController, HeroMode, Icon,
+        IconData, IconTheme, IconThemeData, IgnorePointer, Image, ImageAlignment, ImageFit,
+        ImageProvider, IndexedStack, InheritedTheme, Intent, IntrinsicHeight, IntrinsicWidth,
+        LayoutBuilder, LayoutId, LimitedBox, ListBody, ListView, Listener, Localizations,
+        LocalizationsDelegate, MediaQuery, MediaQueryData, MergeSemantics, MouseRegion, Navigator,
+        NavigatorHandle, NextFocusAction, NextFocusIntent, Offstage, Opacity, OverflowBox,
+        OverflowBoxFit, Padding, PageRoute, PopScope, PopupRoute, Positioned, PreviousFocusAction,
+        PreviousFocusIntent, RepaintBoundary, RichText, RotatedBox, Row, SafeArea,
+        ScrollController, Scrollable, Scrollbar, Semantics, Shortcuts, ShrinkWrappingViewport,
+        SimpleRoute, SingleActivator, SingleChildScrollView, SizedBox, SizedOverflowBox,
+        SliverChildBuilderDelegate, SliverFillRemaining, SliverFillRemainingAndOverscroll,
+        SliverFillRemainingWithScrollable, SliverFillViewport, SliverFixedExtentList, SliverGrid,
+        SliverIgnorePointer, SliverList, SliverOffstage, SliverOpacity, SliverPadding,
+        SliverToBoxAdapter, Spacer, Stack, StreamBuilder, Table, TableCell, TableRow, Text,
+        TextEditingController, TextField, Theme, ThemeData, TickerMode, Transform, Viewport,
+        Visibility, WidgetsLocalizations, Wrap,
     };
 
     // Common configuration value types, so an app author needs only this import.
+    pub use crate::basic_locale_list_resolution;
     pub use crate::{
-        AspectRatioDelegate, CenterLayoutDelegate, CustomPainter, FlowDelegate,
+        AspectRatioDelegate, BoxedLocalizationsDelegate, BoxedWidgetsLocalizations,
+        CenterLayoutDelegate, CustomPainter, DefaultWidgetsLocalizationsDelegate, FlowDelegate,
         FlowPaintingContext, MultiChildLayoutContext, MultiChildLayoutDelegate,
         SemanticsConfiguration, SemanticsProperties, SemanticsRole, SemanticsTextDirection,
         SingleChildLayoutDelegate, SliverGridDelegate, SliverGridDelegateWithFixedCrossAxisCount,
@@ -294,6 +307,7 @@ pub mod prelude {
     pub use flui_rendering::view::ScrollPosition;
     pub use flui_types::layout::{Axis, AxisDirection, BoxFit};
     pub use flui_types::painting::Clip;
+    pub use flui_types::platform::Locale;
     pub use flui_types::typography::TextBaseline;
     pub use flui_types::{Alignment, Color};
 }

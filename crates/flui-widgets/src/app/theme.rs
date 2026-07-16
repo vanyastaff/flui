@@ -22,6 +22,8 @@ use flui_types::typography::TextStyle;
 use flui_view::prelude::*;
 use flui_view::{BoxedView, InheritedView, impl_inherited_view};
 
+use crate::app::InheritedTheme;
+
 /// Visual-style configuration provided to descendants by a [`Theme`] ancestor.
 ///
 /// Mirrors Flutter's `ThemeData`. Two ready-made presets are available:
@@ -198,6 +200,12 @@ impl InheritedView for Theme {
 
 impl_inherited_view!(Theme);
 
+impl InheritedTheme for Theme {
+    fn wrap(&self, _ctx: &dyn BuildContext, child: BoxedView) -> BoxedView {
+        Theme::new(self.data.clone(), child).boxed()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -315,5 +323,53 @@ mod tests {
         let theme = Theme::new(ThemeData::dark(), SizedBox::shrink());
         let cloned = theme.clone();
         assert_eq!(cloned.data(), theme.data());
+    }
+
+    // ------------------------------------------------------------------
+    // InheritedTheme::wrap
+    // ------------------------------------------------------------------
+
+    use std::any::TypeId;
+    use std::sync::{Arc, Mutex};
+
+    use crate::test_harness::mount;
+
+    /// `wrap`'s `ctx` argument is unused by every implementation (Flutter's
+    /// own examples ignore it too — the module docs explain why the
+    /// parameter exists anyway), so any live `BuildContext` obtained from a
+    /// mounted probe's `build()` is sufficient to exercise it.
+    #[derive(Clone, StatelessView)]
+    struct WrapProbe {
+        data: ThemeData,
+        wrapped_view_type: Arc<Mutex<Option<TypeId>>>,
+    }
+
+    impl StatelessView for WrapProbe {
+        fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
+            let source = Theme::new(self.data.clone(), SizedBox::shrink());
+            let inner_child = SizedBox::new(3.0, 4.0).boxed();
+            let wrapped = source.wrap(ctx, inner_child);
+            *self.wrapped_view_type.lock().expect("test mutex poisoned") =
+                Some(wrapped.view_type_id());
+            SizedBox::shrink()
+        }
+    }
+
+    #[test]
+    fn theme_wrap_produces_a_theme_view() {
+        let wrapped_view_type = Arc::new(Mutex::new(None));
+        let probe = WrapProbe {
+            data: ThemeData::dark(),
+            wrapped_view_type: Arc::clone(&wrapped_view_type),
+        };
+        let _harness = mount(probe.boxed());
+        assert_eq!(
+            wrapped_view_type
+                .lock()
+                .expect("test mutex poisoned")
+                .clone(),
+            Some(TypeId::of::<Theme>()),
+            "InheritedTheme::wrap must produce a Theme, not the raw child unwrapped"
+        );
     }
 }

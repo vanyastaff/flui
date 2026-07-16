@@ -35,6 +35,9 @@ criterion = { workspace = true }
 # Property-based tests in tests/geometry_property_tests.rs
 proptest = "1.5"
 trybuild = "1.0"
+# `serde` feature round-trip tests (platform::locale's canonicalizing
+# `Deserialize` impl) — a real JSON round-trip, not a hand-built `Value`.
+serde_json = { workspace = true }
 
 [features]
 default = []
