@@ -152,7 +152,7 @@ The workspace is healthier than its crate count suggests: most crates are deep m
 | L4 — Render machine | `flui-engine`, `flui-rendering` |
 | L5 — Framework spine + inspector | `flui-view`, `flui-devtools` |
 | L6 — Catalog + DX tooling | `flui-objects`, `flui-widgets`, `flui-binding`, `flui-localizations`, `flui-hot-reload`, `flui-cli`, `flui-build` |
-| L7 — Design systems | **`flui-material`** (new), **`flui-cupertino`** (new) |
+| L7 — Design systems | `flui-material`, **`flui-cupertino`** (new) |
 | L8 — Application | `flui-app` |
 | Facade | **`flui`** (formalized) |
 
@@ -179,7 +179,7 @@ graph TD
     widgets[flui-widgets]
     binding[flui-binding]
     l10n[flui-localizations]
-    material[flui-material NEW]
+    material[flui-material]
     cupertino[flui-cupertino NEW]
     app[flui-app]
     facade[flui FACADE]

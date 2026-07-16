@@ -1,14 +1,15 @@
 //! Application-level theme system for FLUI applications.
 //!
 //! `AppTheme` is the app-framework's pre-tree configuration object. It is
-//! distinct from `flui_widgets::Theme`, which is the in-tree inherited widget
-//! that provides `ThemeData` to descendants at runtime.
+//! distinct from `flui_material::Theme`, which is the in-tree inherited
+//! widget that provides `flui_material::ThemeData` to descendants at
+//! runtime.
 //!
 //! # Design Philosophy
 //!
 //! - Flat, composable structs
 //! - Builder pattern with sensible defaults
-//! - Type-safe color tokens via [`ColorScheme`]
+//! - Type-safe color tokens via [`AppColorScheme`]
 //! - No runtime reflection
 //!
 //! # Example
@@ -28,5 +29,5 @@
 mod colors;
 mod data;
 
-pub use colors::ColorScheme;
+pub use colors::AppColorScheme;
 pub use data::{AppTheme, AppThemeBuilder, ThemeMode};

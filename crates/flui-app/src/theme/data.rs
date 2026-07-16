@@ -1,6 +1,6 @@
 //! Application-level theme data and builder.
 
-use super::colors::ColorScheme;
+use super::colors::AppColorScheme;
 
 /// Theme mode - light, dark, or follow system.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -17,10 +17,10 @@ pub enum ThemeMode {
 /// Complete application-level theme configuration.
 ///
 /// `AppTheme` is the app-framework's pre-tree configuration object — it lives
-/// outside the widget tree and is distinct from the `flui_widgets::Theme`
-/// inherited widget (which provides `flui_widgets::ThemeData` to descendants
-/// at runtime). Use `AppTheme` to bootstrap application appearance before the
-/// widget tree is mounted.
+/// outside the widget tree and is distinct from the `flui_material::Theme`
+/// inherited widget (which provides `flui_material::ThemeData` to
+/// descendants at runtime). Use `AppTheme` to bootstrap application
+/// appearance before the widget tree is mounted.
 ///
 /// # Example
 ///
@@ -39,7 +39,7 @@ pub struct AppTheme {
     pub mode: ThemeMode,
 
     /// Color scheme.
-    pub colors: ColorScheme,
+    pub colors: AppColorScheme,
 
     /// Default font family.
     pub font_family: String,
@@ -68,7 +68,7 @@ impl AppTheme {
     pub fn light() -> Self {
         Self {
             mode: ThemeMode::Light,
-            colors: ColorScheme::light(),
+            colors: AppColorScheme::light(),
             font_family: "system-ui".to_string(),
             font_size: 14.0,
             border_radius: 4.0,
@@ -81,7 +81,7 @@ impl AppTheme {
     pub fn dark() -> Self {
         Self {
             mode: ThemeMode::Dark,
-            colors: ColorScheme::dark(),
+            colors: AppColorScheme::dark(),
             font_family: "system-ui".to_string(),
             font_size: 14.0,
             border_radius: 4.0,
@@ -100,7 +100,7 @@ impl AppTheme {
 #[derive(Debug, Clone, Default)]
 pub struct AppThemeBuilder {
     mode: Option<ThemeMode>,
-    colors: Option<ColorScheme>,
+    colors: Option<AppColorScheme>,
     font_family: Option<String>,
     font_size: Option<f32>,
     border_radius: Option<f32>,
@@ -116,7 +116,7 @@ impl AppThemeBuilder {
     }
 
     /// Set color scheme.
-    pub fn colors(mut self, colors: ColorScheme) -> Self {
+    pub fn colors(mut self, colors: AppColorScheme) -> Self {
         self.colors = Some(colors);
         self
     }

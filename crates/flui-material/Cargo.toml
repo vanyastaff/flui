@@ -1,0 +1,33 @@
+[package]
+name = "flui-material"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Material Design theming foundation for FLUI — ColorScheme, Typography/TextTheme, ThemeData, and the Theme inherited widget"
+repository.workspace = true
+keywords = ["ui", "material", "theme", "flutter", "flui"]
+categories = ["gui"]
+
+[dependencies]
+# `Theme` is an `InheritedView` that implements `flui-widgets`' `InheritedTheme`
+# trait and wraps `BoxedView`/`IntoView` — the widget-authoring spine.
+flui-widgets = { path = "../flui-widgets", version = "0.2.0" }
+# `InheritedView`, `impl_inherited_view!`, `BuildContext`, `View` — the
+# element-tree primitives `Theme` is built on.
+flui-view = { path = "../flui-view", version = "0.2.0" }
+# `Color`, `Brightness`, `TextStyle` and friends — the value types
+# `ColorScheme`/`TextTheme`/`ThemeData` are built from.
+flui-types = { path = "../flui-types", version = "0.2.0" }
+
+# The parity test suite lives in a subdirectory so `mod *_test;` works via
+# Cargo's single-binary test model (mirrors flui-widgets' `tests/parity/`).
+# Auto-discovery misses subdirectory main files, so the target is declared
+# explicitly.
+[[test]]
+name = "parity"
+path = "tests/parity/main.rs"
+
+[lints]
+workspace = true

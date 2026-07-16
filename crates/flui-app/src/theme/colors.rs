@@ -1,7 +1,7 @@
 //! Semantic color tokens for the theme system.
 //!
 //! `Color` itself is the canonical `flui_types::Color` (packed `u8` RGBA);
-//! this module only owns the `ColorScheme` semantic-token bundle that the
+//! this module only owns the `AppColorScheme` semantic-token bundle that the
 //! theme system layers on top of it.
 
 use flui_types::Color;
@@ -11,7 +11,7 @@ use flui_types::Color;
 /// This provides semantic meaning to colors rather than raw values.
 /// Inspired by Material Design but simplified.
 #[derive(Debug, Clone)]
-pub struct ColorScheme {
+pub struct AppColorScheme {
     /// Primary brand color.
     pub primary: Color,
     /// Color for elements on primary.
@@ -41,7 +41,7 @@ pub struct ColorScheme {
     pub outline: Color,
 }
 
-impl ColorScheme {
+impl AppColorScheme {
     /// Create a light color scheme.
     pub const fn light() -> Self {
         Self {
@@ -77,7 +77,7 @@ impl ColorScheme {
     }
 }
 
-impl Default for ColorScheme {
+impl Default for AppColorScheme {
     fn default() -> Self {
         Self::light()
     }
@@ -88,9 +88,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_color_scheme_light_dark() {
-        let light = ColorScheme::light();
-        let dark = ColorScheme::dark();
+    fn light_background_is_lighter_than_dark_background() {
+        let light = AppColorScheme::light();
+        let dark = AppColorScheme::dark();
 
         // Light background should be lighter than dark
         assert!(light.background.r > dark.background.r);

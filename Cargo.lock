@@ -1717,6 +1717,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "flui-material"
+version = "0.2.0"
+dependencies = [
+ "flui-types",
+ "flui-view",
+ "flui-widgets",
+]
+
+[[package]]
 name = "flui-objects"
 version = "0.2.0"
 dependencies = [
