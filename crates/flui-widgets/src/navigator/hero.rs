@@ -43,7 +43,7 @@
 //!   element walk. `HeroControllerScope::none` still blocks a nested navigator's own
 //!   *auto-default controller* (so it flies no heroes on its own pushes/pops), but it
 //!   does not gate this visibility hook — Flutter's predicate does not consult it
-//!   either. `transitionOnUserGestures` stays out of scope.
+//!   either.
 //!
 //! **A `GlobalKey`-reparented nested `Navigator`'s re-sync is verified in
 //! isolation, not end-to-end.** `NavigatorState::sync_nested_hero_registration`
@@ -450,6 +450,11 @@ struct HeroInner {
     /// Flutter never *visits* a disabled hero (`heroes.dart:335-337`); FLUI registers
     /// it and the measurement pass skips it instead.
     hero_mode_enabled: AtomicBool,
+    /// `Hero.transitionOnUserGestures` (`heroes.dart:264`). Defaults to
+    /// `false`; a pair flies during a gesture-driven transition only when
+    /// **both** ends opt in (`Hero._allHeroesFor`'s `inviteHero`,
+    /// `heroes.dart:308-314`).
+    transition_on_user_gestures: AtomicBool,
 }
 
 /// An owned, `'static` capability to drive one mounted [`Hero`].
@@ -479,6 +484,7 @@ impl HeroHandle {
                 curve: Mutex::new(view.curve.clone()),
                 reverse_curve: Mutex::new(view.reverse_curve.clone()),
                 hero_mode_enabled: AtomicBool::new(true),
+                transition_on_user_gestures: AtomicBool::new(view.transition_on_user_gestures),
             }),
         }
     }
@@ -546,6 +552,15 @@ impl HeroHandle {
     /// Whether the ambient [`HeroMode`] allows this hero to fly.
     pub(crate) fn hero_mode_enabled(&self) -> bool {
         self.inner.hero_mode_enabled.load(Ordering::Relaxed)
+    }
+
+    /// `Hero.transitionOnUserGestures` (`heroes.dart:264`): whether this hero
+    /// opts into a gesture-driven (e.g. edge swipe-back) flight. `false` by
+    /// default, matching Flutter.
+    pub(crate) fn transition_on_user_gestures(&self) -> bool {
+        self.inner
+            .transition_on_user_gestures
+            .load(Ordering::Relaxed)
     }
 
     /// Whether an in-flight hero keeps its child offstage inside the placeholder.
@@ -649,8 +664,8 @@ impl fmt::Debug for HeroHandle {
 /// grounded with [`HeroMode`]. Cross-navigator flights work — a hero inside a nested
 /// `Navigator`'s current `PageRoute` matches an outer route's hero of the same tag,
 /// per `Hero._allHeroesFor`'s nested-navigator branch (`heroes.dart:317-333`).
-/// `transitionOnUserGestures` (gesture-driven flights) remains deferred, blocked on
-/// FLUI having no back-swipe.
+/// [`transition_on_user_gestures`](Self::transition_on_user_gestures) opts a hero
+/// into a gesture-driven (edge swipe-back) flight; `false` by default, as Flutter's is.
 #[derive(Clone)]
 pub struct Hero {
     tag: HeroTag,
@@ -660,6 +675,7 @@ pub struct Hero {
     placeholder: Option<PlaceholderBuilder>,
     curve: ArcCurve,
     reverse_curve: Option<ArcCurve>,
+    transition_on_user_gestures: bool,
 }
 
 impl Hero {
@@ -676,6 +692,7 @@ impl Hero {
             placeholder: None,
             curve: ArcCurve::new(Curves::FastOutSlowIn),
             reverse_curve: None,
+            transition_on_user_gestures: false,
         }
     }
 
@@ -694,6 +711,20 @@ impl Hero {
     #[must_use]
     pub fn reverse_curve(mut self, curve: impl Curve + Send + Sync + 'static) -> Self {
         self.reverse_curve = Some(ArcCurve::new(curve));
+        self
+    }
+
+    /// Whether this hero participates in a **gesture-driven** transition
+    /// (e.g. an edge swipe-back), as opposed to only a programmatic push/pop.
+    /// Flutter's `Hero.transitionOnUserGestures` (`heroes.dart:251-264`).
+    ///
+    /// A pair flies during a gesture-driven transition only when **both**
+    /// ends opt in; a hero left out this way is explicitly un-hidden if a
+    /// prior flight had frozen it (`Hero._allHeroesFor`'s `inviteHero` else
+    /// branch, `heroes.dart:311-314`). Defaults to `false`.
+    #[must_use]
+    pub fn transition_on_user_gestures(mut self, enabled: bool) -> Self {
+        self.transition_on_user_gestures = enabled;
         self
     }
 
@@ -827,6 +858,10 @@ impl ViewState<Hero> for HeroState {
             .reverse_curve
             .lock()
             .clone_from(&new_view.reverse_curve);
+        self.handle
+            .inner
+            .transition_on_user_gestures
+            .store(new_view.transition_on_user_gestures, Ordering::Relaxed);
     }
 
     /// Everything a hero needs from outside itself is acquired **here**, in the one

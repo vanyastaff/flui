@@ -29,9 +29,10 @@
 //!
 //! The public baseline now includes `Navigator`, `PageRoute` / `PopupRoute`,
 //! `Hero` / `HeroController` / `HeroControllerScope` / `HeroMode`, the Hero
-//! customization hooks, and cross-navigator hero flights. Still deferred: Navigator
-//! 2.0, restoration, named-route generation, `PopScope`, `LocalHistoryRoute`,
-//! per-route focus scope, and gesture-driven (`transitionOnUserGestures`) flights.
+//! customization hooks, cross-navigator hero flights, and gesture-driven
+//! (`transitionOnUserGestures`) flights. Still deferred: Navigator 2.0,
+//! restoration, named-route generation, `PopScope`, `LocalHistoryRoute`, and
+//! per-route focus scope.
 
 mod back_gesture;
 mod binding;
@@ -79,6 +80,8 @@ mod export_guard;
 mod hero_controller_tests;
 #[cfg(test)]
 mod hero_flight_tests;
+#[cfg(test)]
+mod hero_gesture_tests;
 #[cfg(test)]
 mod hero_seam_tests;
 #[cfg(test)]
