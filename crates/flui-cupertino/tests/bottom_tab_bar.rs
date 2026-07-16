@@ -4,9 +4,10 @@
 mod common;
 
 use common::{lay_out, tight};
-use flui_cupertino::{CupertinoTabBar, CupertinoTabBarItem};
+use flui_cupertino::{CupertinoTabBar, CupertinoTabBarItem, CupertinoTheme, CupertinoThemeData};
 use flui_types::Size;
 use flui_types::geometry::px;
+use flui_types::platform::Brightness;
 use flui_widgets::{Icon, IconData, MediaQuery, MediaQueryData, PreferredSizeView};
 
 fn two_items() -> Vec<CupertinoTabBarItem> {
@@ -43,6 +44,43 @@ fn default_hairline_border_carries_the_oracles_exact_alpha() {
     assert!(
         decoration.contains("a: 77"),
         "the default border's color must carry the oracle's exact 0x4D (77) alpha: {decoration}"
+    );
+}
+
+/// `_kDefaultTabBarBorderColor`'s **dark** variant (`bottom_tab_bar.dart`,
+/// oracle tag `3.44.0`) is `Color(0x29000000)` — alpha `41` decimal.
+/// `CupertinoNavigationBar`'s own hairline border has no dark variant (a
+/// plain, non-dynamic oracle `Color`) — this component's default border is
+/// genuinely brightness-dependent, and this is its dark-side coverage: the
+/// light case above proved `0x4D`/`77`, this proves the *other* half of
+/// `CupertinoDynamicColor::with_brightness` actually gets read, not just
+/// stored.
+///
+/// Red-check: swap `default_border_color()`'s dark argument for the light
+/// one (`Color::from_argb(0x4D00_0000)` in both positions) — this test's
+/// assertion fails (would read `a: 77`, not `a: 41`).
+#[test]
+fn default_hairline_border_carries_the_oracles_exact_dark_alpha() {
+    let laid = lay_out(
+        MediaQuery::new(
+            MediaQueryData::default(),
+            CupertinoTheme::new(
+                CupertinoThemeData::default().with_brightness(Brightness::Dark),
+                CupertinoTabBar::new(two_items()),
+            ),
+        ),
+        tight(400.0, 50.0),
+    );
+    let decorated = laid
+        .find_by_render_type("RenderDecoratedBox")
+        .expect("the tab bar always paints a DecoratedBox for its background/border");
+    let decoration = laid
+        .render_property(decorated, "decoration")
+        .expect("RenderDecoratedBox always reports its decoration");
+    assert!(
+        decoration.contains("a: 41"),
+        "under dark brightness, the default border's color must carry the oracle's exact \
+         0x29 (41) alpha: {decoration}"
     );
 }
 
