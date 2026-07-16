@@ -32,9 +32,15 @@
 //!
 //! - [`ColorScheme::fromSeed`](https://api.flutter.dev/flutter/material/ColorScheme/ColorScheme.fromSeed.html)
 //!   — dynamic-color generation from a seed. See [`color_scheme`] module docs.
-//! - Component themes (`ButtonThemeData`, `InputDecorationTheme`, …) — these
-//!   land with their owning components; [`ThemeData`] is `#[non_exhaustive]`
-//!   to receive them without a breaking change.
+//! - Component themes for widgets that don't exist yet (`InputDecorationTheme`
+//!   and friends) — the button family's, `AppBar`'s, `Card`'s, `Dialog`'s,
+//!   and `FloatingActionButton`'s own theme slots (`ElevatedButtonThemeData`
+//!   and friends, [`AppBarThemeData`], [`CardThemeData`], [`DialogThemeData`],
+//!   [`FabThemeData`]) have landed, each narrowed to the fields its owning
+//!   widget actually consumes — see `theme_data`'s module docs and each
+//!   type's own doc comment for the ported/deferred field split.
+//!   [`ThemeData`] stays `#[non_exhaustive]` to receive the rest without a
+//!   breaking change.
 //! - `AnimatedTheme` / `ColorScheme`/`TextTheme` lerp — no component consumes
 //!   an interpolated theme yet.
 //! - Dense/tall type-scale geometries (CJK / Farsi-Hindi-Thai) — only
@@ -97,5 +103,9 @@ pub use shape::MaterialShape;
 pub use text_button::TextButton;
 pub use text_theme::TextTheme;
 pub use theme::Theme;
-pub use theme_data::{ThemeData, ThemeDataOverrides};
+pub use theme_data::{
+    AppBarThemeData, CardThemeData, DialogThemeData, ElevatedButtonThemeData, FabThemeData,
+    FilledButtonThemeData, IconButtonThemeData, OutlinedButtonThemeData, TextButtonThemeData,
+    ThemeData, ThemeDataOverrides,
+};
 pub use typography::english_like_2021;

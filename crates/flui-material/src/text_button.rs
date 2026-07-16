@@ -91,6 +91,15 @@ impl StatelessView for TextButton {
         let theme = Theme::of(ctx);
         let mut core = ButtonStyleButtonCore::new(default_style(&theme), self.child.clone())
             .style(self.style.clone().unwrap_or_default());
+        // Middle cascade tier — see `crate::elevated_button`'s identical
+        // "simplified from `ElevatedButtonTheme.of`" note.
+        if let Some(theme_style) = theme
+            .text_button_theme
+            .as_ref()
+            .and_then(|t| t.style.clone())
+        {
+            core = core.theme_style(theme_style);
+        }
         if let Some(on_pressed) = self.on_pressed.clone() {
             core = core.on_pressed(on_pressed);
         }

@@ -3,10 +3,14 @@
 //! Flutter parity: `material/theme_data.dart` `ThemeData` (oracle tag
 //! `3.44.0`).
 
+use flui_types::EdgeInsets;
 use flui_types::platform::Brightness;
 use flui_types::styling::Color;
+use flui_types::typography::TextStyle;
 
+use crate::button_style::ButtonStyle;
 use crate::color_scheme::ColorScheme;
+use crate::shape::MaterialShape;
 use crate::text_theme::TextTheme;
 use crate::typography;
 
@@ -46,20 +50,213 @@ fn default_text_theme(brightness: Brightness, on_surface: Color) -> TextTheme {
     geometry.merge(&color_theme.apply_color(on_surface))
 }
 
+/// Overrides [`ElevatedButton`](crate::ElevatedButton)'s default
+/// [`ButtonStyle`], resolved between the widget's own `style` and
+/// `ElevatedButton::default_style` — see
+/// `crate::button_style_button`'s resolve-then-coalesce docs for how this
+/// slot's `style` participates in the three-tier cascade.
+///
+/// Flutter parity: `ElevatedButtonThemeData` (`material/elevated_button_theme.dart`,
+/// oracle tag `3.44.0`), which carries the identical single `style` field.
+/// **Named reduction**: the oracle also has a standalone `ElevatedButtonTheme`
+/// `InheritedTheme` widget (so a subtree can override the style without
+/// touching the whole [`ThemeData`]); FLUI V1 has no per-widget
+/// `InheritedTheme` wrappers yet, so `ElevatedButton` reads only this
+/// [`ThemeData`] slot via [`Theme::of`](crate::Theme::of).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ElevatedButtonThemeData {
+    /// Overrides for [`ElevatedButton`](crate::ElevatedButton)'s default
+    /// style. `None` means this theme doesn't override anything.
+    pub style: Option<ButtonStyle>,
+}
+
+/// Overrides [`FilledButton`](crate::FilledButton)'s default [`ButtonStyle`]
+/// (both the plain and `tonal` variants share this one slot, matching the
+/// oracle). Flutter parity: `FilledButtonThemeData`
+/// (`material/filled_button_theme.dart`, oracle tag `3.44.0`) — same named
+/// reduction as [`ElevatedButtonThemeData`] (no standalone `InheritedTheme`
+/// wrapper yet).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct FilledButtonThemeData {
+    /// Overrides for [`FilledButton`](crate::FilledButton)'s default style.
+    /// `None` means this theme doesn't override anything.
+    pub style: Option<ButtonStyle>,
+}
+
+/// Overrides [`OutlinedButton`](crate::OutlinedButton)'s default
+/// [`ButtonStyle`]. Flutter parity: `OutlinedButtonThemeData`
+/// (`material/outlined_button_theme.dart`, oracle tag `3.44.0`) — same named
+/// reduction as [`ElevatedButtonThemeData`].
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct OutlinedButtonThemeData {
+    /// Overrides for [`OutlinedButton`](crate::OutlinedButton)'s default
+    /// style. `None` means this theme doesn't override anything.
+    pub style: Option<ButtonStyle>,
+}
+
+/// Overrides [`TextButton`](crate::TextButton)'s default [`ButtonStyle`].
+/// Flutter parity: `TextButtonThemeData` (`material/text_button_theme.dart`,
+/// oracle tag `3.44.0`) — same named reduction as [`ElevatedButtonThemeData`].
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TextButtonThemeData {
+    /// Overrides for [`TextButton`](crate::TextButton)'s default style.
+    /// `None` means this theme doesn't override anything.
+    pub style: Option<ButtonStyle>,
+}
+
+/// Overrides [`IconButton`](crate::IconButton)'s default [`ButtonStyle`].
+/// Flutter parity: `IconButtonThemeData` (`material/icon_button_theme.dart`,
+/// oracle tag `3.44.0`) — same named reduction as [`ElevatedButtonThemeData`].
+/// Not to be confused with [`flui_widgets::IconThemeData`], which colors an
+/// `Icon` child, not an `IconButton`'s own resolved `ButtonStyle`.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct IconButtonThemeData {
+    /// Overrides for [`IconButton`](crate::IconButton)'s default style.
+    /// `None` means this theme doesn't override anything.
+    pub style: Option<ButtonStyle>,
+}
+
+/// Overrides [`AppBar`](crate::AppBar)'s M3 token defaults, one field at a
+/// time — an unset field here still falls through to `AppBar`'s own default
+/// (see that type's `resolve_style`), it does not blank the whole slot.
+///
+/// Flutter parity: `AppBarThemeData` (`material/app_bar_theme.dart`, oracle
+/// tag `3.44.0`), narrowed to the fields FLUI's `AppBar` actually consumes:
+/// [`background_color`](Self::background_color),
+/// [`foreground_color`](Self::foreground_color),
+/// [`elevation`](Self::elevation), [`title_text_style`](Self::title_text_style).
+/// Named deferrals (no consumer in FLUI's `AppBar` yet, so a field here would
+/// have nothing to reach): `scrolled_under_elevation`, `shadow_color`,
+/// `surface_tint_color`, `shape`, `icon_theme`/`actions_icon_theme`,
+/// `center_title`, `title_spacing`, `leading_width`, `toolbar_height`,
+/// `toolbar_text_style`, `system_overlay_style`, `actions_padding`.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct AppBarThemeData {
+    /// Overrides [`AppBar`](crate::AppBar)'s default background color
+    /// (`ColorScheme.surface`).
+    pub background_color: Option<Color>,
+    /// Overrides [`AppBar`](crate::AppBar)'s default icon/title color
+    /// (`ColorScheme.on_surface`).
+    pub foreground_color: Option<Color>,
+    /// Overrides [`AppBar`](crate::AppBar)'s default elevation (`0.0`).
+    pub elevation: Option<f32>,
+    /// Overrides the title's text style verbatim — Flutter parity:
+    /// `widget.titleTextStyle ?? appBarTheme.titleTextStyle ??
+    /// defaults.titleTextStyle?.copyWith(color: foregroundColor)`
+    /// (`app_bar.dart`, oracle tag `3.44.0`): unlike the default tier, a
+    /// theme-supplied style is used as-is, not recolored to the resolved
+    /// [`foreground_color`](Self::foreground_color).
+    pub title_text_style: Option<TextStyle>,
+}
+
+/// Overrides [`Card`](crate::Card)'s `_CardDefaultsM3` token defaults, one
+/// field at a time.
+///
+/// Flutter parity: `CardThemeData` (`material/card_theme.dart`, oracle tag
+/// `3.44.0`), narrowed to the fields FLUI's `Card` actually consumes:
+/// [`color`](Self::color), [`elevation`](Self::elevation),
+/// [`shape`](Self::shape), [`margin`](Self::margin). Named deferrals (no
+/// consumer in FLUI's `Card` yet): `shadow_color`, `surface_tint_color`,
+/// `clip_behavior`.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct CardThemeData {
+    /// Overrides [`Card`](crate::Card)'s default fill color
+    /// (`ColorScheme.surfaceContainerLow`).
+    pub color: Option<Color>,
+    /// Overrides [`Card`](crate::Card)'s default elevation (`1.0`).
+    pub elevation: Option<f32>,
+    /// Overrides [`Card`](crate::Card)'s default shape (a 12dp rounded
+    /// rectangle).
+    pub shape: Option<MaterialShape>,
+    /// Overrides [`Card`](crate::Card)'s default outer margin
+    /// (`EdgeInsets.all(4.0)`).
+    pub margin: Option<EdgeInsets>,
+}
+
+/// Overrides [`Dialog`](crate::Dialog)/[`AlertDialog`](crate::AlertDialog)'s
+/// `_DialogDefaultsM3` token defaults, one field at a time.
+///
+/// Flutter parity: `DialogThemeData` (`material/dialog_theme.dart`, oracle
+/// tag `3.44.0`), narrowed to the fields FLUI's `Dialog`/`AlertDialog`
+/// actually consume: [`background_color`](Self::background_color) (`Dialog`),
+/// [`elevation`](Self::elevation) (`Dialog`), [`shape`](Self::shape)
+/// (`Dialog`), [`title_text_style`](Self::title_text_style) (`AlertDialog`'s
+/// title), [`content_text_style`](Self::content_text_style) (`AlertDialog`'s
+/// content). Named deferrals (no consumer yet): `shadow_color`,
+/// `surface_tint_color`, `alignment`, `icon_color`, `actions_padding`,
+/// `barrier_color`, `inset_padding`, `clip_behavior`, `constraints` (the
+/// oracle's own `Dialog.build` reads `constraints ?? dialogTheme.constraints
+/// ?? const BoxConstraints(minWidth: 280.0)` — FLUI's `Dialog` has a widget
+/// tier for this via [`Dialog::constraints`](crate::Dialog::constraints) but
+/// no theme tier yet).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct DialogThemeData {
+    /// Overrides [`Dialog`](crate::Dialog)'s default background color
+    /// (`ColorScheme.surfaceContainerHigh`).
+    pub background_color: Option<Color>,
+    /// Overrides [`Dialog`](crate::Dialog)'s default elevation (`6.0`).
+    pub elevation: Option<f32>,
+    /// Overrides [`Dialog`](crate::Dialog)'s default shape (a 28dp rounded
+    /// rectangle).
+    pub shape: Option<MaterialShape>,
+    /// Overrides [`AlertDialog`](crate::AlertDialog)'s title text style
+    /// (default: `TextTheme.headlineSmall`).
+    pub title_text_style: Option<TextStyle>,
+    /// Overrides [`AlertDialog`](crate::AlertDialog)'s content text style
+    /// (default: `TextTheme.bodyMedium`).
+    pub content_text_style: Option<TextStyle>,
+}
+
+/// Overrides [`FloatingActionButton`](crate::FloatingActionButton)'s
+/// `_FABDefaultsM3` token defaults, one field at a time.
+///
+/// Flutter parity: `FloatingActionButtonThemeData`
+/// (`material/floating_action_button_theme.dart`, oracle tag `3.44.0`),
+/// narrowed to the fields FLUI's `FloatingActionButton` actually consumes:
+/// [`background_color`](Self::background_color),
+/// [`foreground_color`](Self::foreground_color),
+/// [`elevation`](Self::elevation) (the enabled/disabled tier — see
+/// `floating_action_button.rs`'s `resolve_elevation`). Named deferrals (no
+/// override surface in FLUI's `FloatingActionButton` yet, matching that
+/// module's own deferred list): `focus_color`/`hover_color`/`splash_color`,
+/// `focus_elevation`/`hover_elevation`/`disabled_elevation`/
+/// `highlight_elevation`, `shape`, `enable_feedback`, `icon_size`, every
+/// `*_size_constraints` field, the `extended*` fields, `mouse_cursor`.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct FabThemeData {
+    /// Overrides [`FloatingActionButton`](crate::FloatingActionButton)'s
+    /// default background color (`ColorScheme.primaryContainer`).
+    pub background_color: Option<Color>,
+    /// Overrides [`FloatingActionButton`](crate::FloatingActionButton)'s
+    /// default foreground/icon color (`ColorScheme.onPrimaryContainer`).
+    pub foreground_color: Option<Color>,
+    /// Overrides [`FloatingActionButton`](crate::FloatingActionButton)'s
+    /// enabled-tier elevation (`6.0`) — the same value the `disabled` tier
+    /// falls back to (see `resolve_elevation`'s doc comment); the
+    /// `pressed`/`hovered`/`focused` tiers are unaffected, matching the
+    /// oracle's own independent `highlightElevation`/`hoverElevation`/
+    /// `focusElevation` fields (this crate exposes no override for those).
+    pub elevation: Option<f32>,
+}
+
 /// Visual-style configuration provided to descendants by a
 /// [`Theme`](crate::Theme) ancestor.
 ///
 /// Two ready-made M3 baselines are available: [`ThemeData::light`] and
-/// [`ThemeData::dark`]. `#[non_exhaustive]`: component themes (button, input
-/// decoration, …) land as additional fields alongside their owning widgets,
-/// not in this theming-foundation unit — see the crate root docs' scope
-/// section.
+/// [`ThemeData::dark`]. `#[non_exhaustive]`: further component themes (input
+/// decoration and any future widget's own slot) land as additional fields
+/// alongside their owning widgets, not in this theming-foundation unit — see
+/// the crate root docs' scope section.
 ///
 /// Flutter parity: `ThemeData` (`material/theme_data.dart`, oracle tag
-/// `3.44.0`) — implemented subset: [`color_scheme`](Self::color_scheme) and
-/// [`text_theme`](Self::text_theme). Deferred: component theme slots,
-/// `iconTheme`, `extensions`, `platform`, `useMaterial3` (this crate is
-/// M3-only — there is no M2 mode to switch away from).
+/// `3.44.0`) — implemented subset: [`color_scheme`](Self::color_scheme),
+/// [`text_theme`](Self::text_theme), and the button-family/`AppBar`/`Card`/
+/// `Dialog`/`FloatingActionButton` component-theme slots below (each
+/// narrowed to its owning widget's actually-consumed fields — see that
+/// slot's own doc comment). Deferred: `iconTheme`, `extensions`, `platform`,
+/// `useMaterial3` (this crate is M3-only — there is no M2 mode to switch
+/// away from), and every other widget's component theme (`inputDecorationTheme`
+/// and friends) until that widget lands.
 ///
 /// # Example
 ///
@@ -81,6 +278,45 @@ pub struct ThemeData {
     ///
     /// Flutter parity: `ThemeData.textTheme`.
     pub text_theme: TextTheme,
+
+    /// Overrides [`ElevatedButton`](crate::ElevatedButton)'s default style.
+    /// `None` (the default): no override, `ElevatedButton` uses its own
+    /// M3 token table verbatim. Flutter parity:
+    /// `ThemeData.elevatedButtonTheme`.
+    pub elevated_button_theme: Option<ElevatedButtonThemeData>,
+
+    /// Overrides [`FilledButton`](crate::FilledButton)'s default style.
+    /// Flutter parity: `ThemeData.filledButtonTheme`.
+    pub filled_button_theme: Option<FilledButtonThemeData>,
+
+    /// Overrides [`OutlinedButton`](crate::OutlinedButton)'s default style.
+    /// Flutter parity: `ThemeData.outlinedButtonTheme`.
+    pub outlined_button_theme: Option<OutlinedButtonThemeData>,
+
+    /// Overrides [`TextButton`](crate::TextButton)'s default style. Flutter
+    /// parity: `ThemeData.textButtonTheme`.
+    pub text_button_theme: Option<TextButtonThemeData>,
+
+    /// Overrides [`IconButton`](crate::IconButton)'s default style. Flutter
+    /// parity: `ThemeData.iconButtonTheme`.
+    pub icon_button_theme: Option<IconButtonThemeData>,
+
+    /// Overrides [`AppBar`](crate::AppBar)'s M3 token defaults, per field.
+    /// Flutter parity: `ThemeData.appBarTheme`.
+    pub app_bar_theme: Option<AppBarThemeData>,
+
+    /// Overrides [`Card`](crate::Card)'s M3 token defaults, per field.
+    /// Flutter parity: `ThemeData.cardTheme`.
+    pub card_theme: Option<CardThemeData>,
+
+    /// Overrides [`Dialog`](crate::Dialog)/[`AlertDialog`](crate::AlertDialog)'s
+    /// M3 token defaults, per field. Flutter parity: `ThemeData.dialogTheme`.
+    pub dialog_theme: Option<DialogThemeData>,
+
+    /// Overrides [`FloatingActionButton`](crate::FloatingActionButton)'s M3
+    /// token defaults, per field. Flutter parity:
+    /// `ThemeData.floatingActionButtonTheme`.
+    pub floating_action_button_theme: Option<FabThemeData>,
 }
 
 impl ThemeData {
@@ -93,6 +329,15 @@ impl ThemeData {
         Self {
             color_scheme,
             text_theme,
+            elevated_button_theme: None,
+            filled_button_theme: None,
+            outlined_button_theme: None,
+            text_button_theme: None,
+            icon_button_theme: None,
+            app_bar_theme: None,
+            card_theme: None,
+            dialog_theme: None,
+            floating_action_button_theme: None,
         }
     }
 
@@ -105,6 +350,15 @@ impl ThemeData {
         Self {
             color_scheme,
             text_theme,
+            elevated_button_theme: None,
+            filled_button_theme: None,
+            outlined_button_theme: None,
+            text_button_theme: None,
+            icon_button_theme: None,
+            app_bar_theme: None,
+            card_theme: None,
+            dialog_theme: None,
+            floating_action_button_theme: None,
         }
     }
 
@@ -152,6 +406,35 @@ impl ThemeData {
             text_theme: overrides
                 .text_theme
                 .unwrap_or_else(|| self.text_theme.clone()),
+            // Each component-theme slot is itself already `Option<_>` on
+            // `ThemeData`, so — unlike `color_scheme`/`text_theme` above —
+            // the override field mirrors that `Option<_>` shape directly
+            // rather than doubling it: `Some(_)` replaces the whole slot,
+            // `None` leaves whatever this theme already had (`Some` or
+            // `None`) unchanged. See `ThemeDataOverrides`'s doc comment.
+            elevated_button_theme: overrides
+                .elevated_button_theme
+                .or_else(|| self.elevated_button_theme.clone()),
+            filled_button_theme: overrides
+                .filled_button_theme
+                .or_else(|| self.filled_button_theme.clone()),
+            outlined_button_theme: overrides
+                .outlined_button_theme
+                .or_else(|| self.outlined_button_theme.clone()),
+            text_button_theme: overrides
+                .text_button_theme
+                .or_else(|| self.text_button_theme.clone()),
+            icon_button_theme: overrides
+                .icon_button_theme
+                .or_else(|| self.icon_button_theme.clone()),
+            app_bar_theme: overrides
+                .app_bar_theme
+                .or_else(|| self.app_bar_theme.clone()),
+            card_theme: overrides.card_theme.or_else(|| self.card_theme.clone()),
+            dialog_theme: overrides.dialog_theme.or_else(|| self.dialog_theme.clone()),
+            floating_action_button_theme: overrides
+                .floating_action_button_theme
+                .or_else(|| self.floating_action_button_theme.clone()),
         }
     }
 }
@@ -176,6 +459,28 @@ pub struct ThemeDataOverrides {
     pub color_scheme: Option<ColorScheme>,
     /// Overrides [`ThemeData::text_theme`].
     pub text_theme: Option<TextTheme>,
+    /// Replaces [`ThemeData::elevated_button_theme`] wholesale when `Some`;
+    /// `None` leaves it unchanged (see [`ThemeData::copy_with`]'s doc
+    /// comment on why this mirrors `Option<ElevatedButtonThemeData>`
+    /// directly rather than doubling the `Option`).
+    pub elevated_button_theme: Option<ElevatedButtonThemeData>,
+    /// Replaces [`ThemeData::filled_button_theme`] wholesale when `Some`.
+    pub filled_button_theme: Option<FilledButtonThemeData>,
+    /// Replaces [`ThemeData::outlined_button_theme`] wholesale when `Some`.
+    pub outlined_button_theme: Option<OutlinedButtonThemeData>,
+    /// Replaces [`ThemeData::text_button_theme`] wholesale when `Some`.
+    pub text_button_theme: Option<TextButtonThemeData>,
+    /// Replaces [`ThemeData::icon_button_theme`] wholesale when `Some`.
+    pub icon_button_theme: Option<IconButtonThemeData>,
+    /// Replaces [`ThemeData::app_bar_theme`] wholesale when `Some`.
+    pub app_bar_theme: Option<AppBarThemeData>,
+    /// Replaces [`ThemeData::card_theme`] wholesale when `Some`.
+    pub card_theme: Option<CardThemeData>,
+    /// Replaces [`ThemeData::dialog_theme`] wholesale when `Some`.
+    pub dialog_theme: Option<DialogThemeData>,
+    /// Replaces [`ThemeData::floating_action_button_theme`] wholesale when
+    /// `Some`.
+    pub floating_action_button_theme: Option<FabThemeData>,
 }
 
 impl Default for ThemeData {
@@ -262,5 +567,64 @@ mod tests {
     fn copy_with_no_overrides_is_identity() {
         let base = ThemeData::dark();
         assert_eq!(base.copy_with(ThemeDataOverrides::default()), base);
+    }
+
+    #[test]
+    fn light_and_dark_leave_every_component_theme_slot_unset() {
+        for theme in [ThemeData::light(), ThemeData::dark()] {
+            assert!(theme.elevated_button_theme.is_none());
+            assert!(theme.filled_button_theme.is_none());
+            assert!(theme.outlined_button_theme.is_none());
+            assert!(theme.text_button_theme.is_none());
+            assert!(theme.icon_button_theme.is_none());
+            assert!(theme.app_bar_theme.is_none());
+            assert!(theme.card_theme.is_none());
+            assert!(theme.dialog_theme.is_none());
+            assert!(theme.floating_action_button_theme.is_none());
+        }
+    }
+
+    #[test]
+    fn copy_with_sets_the_new_component_theme_slots() {
+        let base = ThemeData::light();
+        let elevated_button_theme = ElevatedButtonThemeData {
+            style: Some(ButtonStyle {
+                elevation: Some(flui_widgets::WidgetStateProperty::all(Some(42.0))),
+                ..Default::default()
+            }),
+        };
+        let app_bar_theme = AppBarThemeData {
+            elevation: Some(9.0),
+            ..Default::default()
+        };
+
+        let patched = base.copy_with(ThemeDataOverrides {
+            elevated_button_theme: Some(elevated_button_theme.clone()),
+            app_bar_theme: Some(app_bar_theme.clone()),
+            ..Default::default()
+        });
+
+        assert_eq!(patched.elevated_button_theme, Some(elevated_button_theme));
+        assert_eq!(patched.app_bar_theme, Some(app_bar_theme));
+        // Untouched slots stay unset, mirroring the base theme.
+        assert!(patched.card_theme.is_none());
+    }
+
+    /// `None` in the override leaves an ALREADY-SET slot alone — it must not
+    /// be read as "clear this slot back to `None`" (see `copy_with`'s doc
+    /// comment on why the override field mirrors `Option<T>` directly).
+    #[test]
+    fn copy_with_none_preserves_an_already_set_component_theme_slot() {
+        let card_theme = CardThemeData {
+            elevation: Some(3.0),
+            ..Default::default()
+        };
+        let base = ThemeData::light().copy_with(ThemeDataOverrides {
+            card_theme: Some(card_theme.clone()),
+            ..Default::default()
+        });
+
+        let patched = base.copy_with(ThemeDataOverrides::default());
+        assert_eq!(patched.card_theme, Some(card_theme));
     }
 }

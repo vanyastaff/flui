@@ -12,7 +12,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use common::{lay_out, tight};
-use flui_material::{Card, MaterialShape, Theme, ThemeData};
+use flui_material::{Card, CardThemeData, MaterialShape, Theme, ThemeData, ThemeDataOverrides};
 use flui_types::Color;
 use flui_types::geometry::{Radius, px};
 use flui_types::styling::BorderRadius;
@@ -64,6 +64,42 @@ fn default_material_matches_card_defaults_m3() {
         clip_behavior, "None",
         "_CardDefaultsM3 constructs with clipBehavior: Clip.none"
     );
+}
+
+/// The middle cascade tier, proven end to end: a `ThemeData.card_theme` with
+/// custom `color`/`elevation` reaches the mounted `Material`, per field —
+/// an unset `shape` on the same theme slot must still fall through to the
+/// M3 default independently (proven via `card.rs`'s own unit tests; this
+/// mount only needs to prove the theme tier is reachable at all).
+#[test]
+fn card_theme_slot_reaches_the_mounted_materials_color_and_elevation() {
+    let themed_color = Color::rgb(77, 88, 99);
+    let theme = ThemeData::light().copy_with(ThemeDataOverrides {
+        card_theme: Some(CardThemeData {
+            color: Some(themed_color),
+            elevation: Some(15.0),
+            ..Default::default()
+        }),
+        ..Default::default()
+    });
+
+    let laid = lay_out(
+        Theme::new(theme, Card::new(ColoredBox::new(Color::rgb(1, 2, 3)))),
+        tight(200.0, 200.0),
+    );
+
+    let material = laid
+        .find_by_render_type("RenderPhysicalShape")
+        .expect("Card must compose a Material surface");
+    assert_eq!(
+        laid.render_property(material, "color"),
+        Some(color_property(themed_color)),
+        "a configured card_theme.color must reach the mounted Material",
+    );
+    let elevation = laid
+        .render_property(material, "elevation")
+        .expect("RenderPhysicalShape reports an \"elevation\" diagnostics property");
+    assert_eq!(elevation.parse::<f32>(), Ok(15.0));
 }
 
 /// `_CardDefaultsM3`'s 12dp corner radius (`card.dart`, oracle tag `3.44.0`),

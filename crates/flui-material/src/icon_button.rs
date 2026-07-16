@@ -87,6 +87,25 @@
 //! (`24.0`); no per-call override exists yet (`IconButton::icon_size` is a
 //! natural, additive V1+ follow-up).
 //!
+//! **This divergence extends verbatim to the theme tier
+//! (`icon_button_theme`).** `theme_style`'s `foreground_color` is folded
+//! into the SAME `resolve_property` call as `self.style`'s, against the
+//! SAME static `disabled`-only snapshot — so a
+//! `Theme.icon_button_theme.style.foreground_color` that varies by
+//! `Pressed`/`Hovered`/`Focused` behaves identically to a state-varying
+//! widget-level override: the live variation reaches
+//! `ButtonStyleButtonCore`'s own `DefaultTextStyle`/`InkWell` (which DO hold
+//! a live, hover/press/focus-tracking `WidgetStatesController` — see
+//! `crate::button_style_button`'s docs) but this icon's `IconTheme` only
+//! ever sees the `disabled`/enabled snapshot, never a live
+//! `Pressed`/`Hovered`/`Focused` re-resolution. Fixing this for real means
+//! sharing `ButtonStyleButtonCoreState`'s own `WidgetStatesController` with
+//! this icon color resolution — that controller is private to
+//! `button_style_button.rs` and created inside `ButtonStyleButtonCore`'s
+//! `create_state`, one layer below where `IconButton::build` runs, so there
+//! is no live states seam to read from at this call site today. A named
+//! divergence, not silently dropped, same as the widget-tier case above.
+//!
 //! # Deferred, and named
 //!
 //! - **`filled`/`filled_tonal`/`outlined` variants** — each is a distinct
@@ -181,6 +200,12 @@ impl StatelessView for IconButton {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
         let theme = Theme::of(ctx);
         let default = default_style(&theme);
+        // Middle cascade tier — see `crate::elevated_button`'s identical
+        // "simplified from `ElevatedButtonTheme.of`" note.
+        let theme_style = theme
+            .icon_button_theme
+            .as_ref()
+            .and_then(|t| t.style.clone());
 
         // A static enabled-or-disabled snapshot — see the module docs'
         // "Icon color and size" section for why that's sufficient for
@@ -191,19 +216,23 @@ impl StatelessView for IconButton {
             WidgetStates::from(WidgetState::Disabled)
         };
 
-        // The SAME widget-then-default coalesce `ButtonStyleButtonCore`
-        // performs internally (`resolve_property`) — computed here too so a
-        // caller's `.style(ButtonStyle { foreground_color: .. })` override
-        // reaches the icon's `IconTheme`, not just `DefaultTextStyle`. The
-        // `unwrap_or` fallback is unreachable in practice: `default_style`
-        // always sets `foreground_color`, so the coalesce always resolves
-        // `Some` — kept only because `resolve_property` returns `Option`.
+        // The SAME widget-then-theme-then-default coalesce
+        // `ButtonStyleButtonCore` performs internally (`resolve_property`)
+        // — computed here too so a caller's `.style(ButtonStyle {
+        // foreground_color: .. })` override, OR a theme-configured
+        // `icon_button_theme`, reaches the icon's `IconTheme`, not just
+        // `DefaultTextStyle`. The `unwrap_or` fallback is unreachable in
+        // practice: `default_style` always sets `foreground_color`, so the
+        // coalesce always resolves `Some` — kept only because
+        // `resolve_property` returns `Option`.
         let icon_color = resolve_property(
             &states,
             self.style
                 .as_ref()
                 .and_then(|style| style.foreground_color.as_ref()),
-            None,
+            theme_style
+                .as_ref()
+                .and_then(|style| style.foreground_color.as_ref()),
             default.foreground_color.as_ref(),
         )
         .unwrap_or(Color::TRANSPARENT);
@@ -219,6 +248,9 @@ impl StatelessView for IconButton {
 
         let mut core = ButtonStyleButtonCore::new(default, themed_icon.boxed())
             .style(self.style.clone().unwrap_or_default());
+        if let Some(theme_style) = theme_style {
+            core = core.theme_style(theme_style);
+        }
         if let Some(on_pressed) = self.on_pressed.clone() {
             core = core.on_pressed(on_pressed);
         }

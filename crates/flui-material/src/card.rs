@@ -58,6 +58,7 @@ use flui_widgets::Padding;
 use crate::material::Material;
 use crate::shape::MaterialShape;
 use crate::theme::Theme;
+use crate::theme_data::ThemeData;
 
 /// `_CardDefaultsM3`'s corner radius (`card.dart`, oracle tag `3.44.0`).
 const DEFAULT_CORNER_RADIUS: f32 = 12.0;
@@ -153,21 +154,71 @@ impl Card {
     }
 }
 
-impl StatelessView for Card {
-    fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
-        let colors = Theme::of(ctx).color_scheme;
-        let margin = self
-            .margin
-            .unwrap_or_else(|| EdgeInsets::all(px(DEFAULT_MARGIN)));
-        let shape = self.shape.unwrap_or_else(|| {
+/// [`Card`]'s theme-resolved color/elevation/shape/margin — see
+/// [`resolve_style`]'s doc comment for the widget → theme → default cascade.
+/// Factored out for the same reason [`crate::app_bar`]'s
+/// `ResolvedAppBarStyle` is: directly unit-testable without mounting a
+/// widget tree.
+struct ResolvedCardStyle {
+    color: Color,
+    elevation: f32,
+    shape: MaterialShape,
+    margin: EdgeInsets,
+}
+
+/// Resolve `Card`'s M3 defaults through the widget → theme → default
+/// cascade, per field: `color`/`elevation`/`shape`/`margin` each fall back
+/// through `ThemeData.card_theme`'s own field before the `_CardDefaultsM3`
+/// constant. Flutter parity: `color ?? cardTheme.color ?? defaults.color`
+/// (and the `elevation`/`shape`/`margin` equivalents), `card.dart`, oracle
+/// tag `3.44.0`.
+fn resolve_style(
+    theme: &ThemeData,
+    color: Option<Color>,
+    elevation: Option<f32>,
+    shape: Option<MaterialShape>,
+    margin: Option<EdgeInsets>,
+) -> ResolvedCardStyle {
+    let card_theme = theme.card_theme.as_ref();
+
+    let color = color
+        .or_else(|| card_theme.and_then(|t| t.color))
+        .unwrap_or(theme.color_scheme.surface_container_low);
+    let elevation = elevation
+        .or_else(|| card_theme.and_then(|t| t.elevation))
+        .unwrap_or(DEFAULT_ELEVATION);
+    let shape = shape
+        .or_else(|| card_theme.and_then(|t| t.shape))
+        .unwrap_or_else(|| {
             MaterialShape::RoundedRect(BorderRadius::all(Radius::circular(px(
                 DEFAULT_CORNER_RADIUS,
             ))))
         });
+    let margin = margin
+        .or_else(|| card_theme.and_then(|t| t.margin))
+        .unwrap_or_else(|| EdgeInsets::all(px(DEFAULT_MARGIN)));
+
+    ResolvedCardStyle {
+        color,
+        elevation,
+        shape,
+        margin,
+    }
+}
+
+impl StatelessView for Card {
+    fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
+        let theme = Theme::of(ctx);
+        let ResolvedCardStyle {
+            color,
+            elevation,
+            shape,
+            margin,
+        } = resolve_style(&theme, self.color, self.elevation, self.shape, self.margin);
 
         Padding::new(margin).child(
-            Material::new(self.color.unwrap_or(colors.surface_container_low))
-                .elevation(self.elevation.unwrap_or(DEFAULT_ELEVATION))
+            Material::new(color)
+                .elevation(elevation)
                 .shape(shape)
                 .clip_behavior(self.clip_behavior.unwrap_or(Clip::None))
                 .child(self.child.clone()),
@@ -215,5 +266,44 @@ mod tests {
     #[test]
     fn default_corner_radius_constant_matches_the_oracle() {
         assert_eq!(DEFAULT_CORNER_RADIUS, 12.0);
+    }
+
+    #[test]
+    fn resolve_style_falls_through_to_the_card_theme_when_no_widget_override_is_set() {
+        let mut theme = ThemeData::light();
+        let themed_color = Color::rgb(1, 2, 3);
+        theme.card_theme = Some(crate::theme_data::CardThemeData {
+            color: Some(themed_color),
+            elevation: Some(7.0),
+            ..Default::default()
+        });
+
+        let resolved = resolve_style(&theme, None, None, None, None);
+
+        assert_eq!(resolved.color, themed_color);
+        assert_eq!(resolved.elevation, 7.0);
+        // `shape`/`margin` were left unset on the theme slot — each falls
+        // through to its own M3 default independently.
+        assert_eq!(
+            resolved.shape,
+            MaterialShape::RoundedRect(BorderRadius::all(Radius::circular(px(
+                DEFAULT_CORNER_RADIUS
+            ))))
+        );
+        assert_eq!(resolved.margin, EdgeInsets::all(px(DEFAULT_MARGIN)));
+    }
+
+    #[test]
+    fn resolve_style_widget_override_wins_over_the_card_theme() {
+        let mut theme = ThemeData::light();
+        theme.card_theme = Some(crate::theme_data::CardThemeData {
+            color: Some(Color::rgb(1, 1, 1)),
+            ..Default::default()
+        });
+        let widget_color = Color::rgb(9, 9, 9);
+
+        let resolved = resolve_style(&theme, Some(widget_color), None, None, None);
+
+        assert_eq!(resolved.color, widget_color);
     }
 }

@@ -13,7 +13,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use common::{lay_out, tight};
-use flui_material::{FloatingActionButton, Scaffold, Theme, ThemeData};
+use flui_material::{
+    FabThemeData, FloatingActionButton, Scaffold, Theme, ThemeData, ThemeDataOverrides,
+};
 use flui_types::EdgeInsets;
 use flui_types::geometry::px;
 use flui_widgets::{MediaQuery, MediaQueryData, SizedBox};
@@ -145,6 +147,50 @@ fn enabled_fab_resolves_the_m3_default_background_and_elevation() {
     assert_eq!(
         laid.render_property(material, "elevation"),
         Some("6".to_string())
+    );
+}
+
+/// The middle cascade tier, proven end to end: a
+/// `ThemeData.floating_action_button_theme` with a custom
+/// `background_color`/`elevation` reaches the mounted `Material` — both the
+/// enabled-default and (per `resolve_elevation`'s doc comment) the disabled
+/// tier of the elevation state chain.
+#[test]
+fn fab_theme_slot_reaches_the_mounted_materials_color_and_elevation() {
+    let themed_background = flui_types::Color::rgb(70, 80, 90);
+    let theme = ThemeData::light().copy_with(ThemeDataOverrides {
+        floating_action_button_theme: Some(FabThemeData {
+            background_color: Some(themed_background),
+            elevation: Some(12.0),
+            ..Default::default()
+        }),
+        ..Default::default()
+    });
+
+    let laid = lay_out(
+        Theme::new(
+            theme,
+            FloatingActionButton::new(Some(|| {}), SizedBox::square(24.0)),
+        ),
+        tight(56.0, 56.0),
+    );
+
+    let material = laid
+        .find_by_render_type("RenderPhysicalShape")
+        .expect("Material must mount");
+    assert_eq!(
+        laid.render_property(material, "color"),
+        Some(color_property(themed_background)),
+        "a configured floating_action_button_theme.background_color must reach the mounted \
+         Material",
+    );
+    let elevation = laid
+        .render_property(material, "elevation")
+        .expect("RenderPhysicalShape reports an \"elevation\" diagnostics property");
+    assert_eq!(
+        elevation.parse::<f32>(),
+        Ok(12.0),
+        "a configured floating_action_button_theme.elevation must reach the enabled tier",
     );
 }
 
