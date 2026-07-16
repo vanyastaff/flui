@@ -76,12 +76,14 @@
 
 pub mod button;
 pub mod colors;
+pub mod nav_bar;
 pub mod route;
 pub mod text_theme;
 pub mod theme;
 
 pub use button::{CupertinoButton, CupertinoButtonSize, CupertinoButtonState};
 pub use colors::{CupertinoColor, CupertinoColors, CupertinoDynamicColor};
+pub use nav_bar::CupertinoNavigationBar;
 pub use route::cupertino_page_route;
 pub use text_theme::CupertinoTextThemeData;
 pub use theme::{CupertinoTheme, CupertinoThemeData};
