@@ -1720,15 +1720,17 @@ dependencies = [
 name = "flui-material"
 version = "0.2.0"
 dependencies = [
+ "flui-animation",
  "flui-binding",
  "flui-foundation",
- "flui-geometry",
+ "flui-interaction",
  "flui-objects",
  "flui-rendering",
  "flui-types",
  "flui-view",
  "flui-widgets",
  "parking_lot",
+ "tracing",
 ]
 
 [[package]]
@@ -1947,6 +1949,7 @@ dependencies = [
 name = "flui-widgets"
 version = "0.2.0"
 dependencies = [
+ "bitflags 2.13.0",
  "flui-animation",
  "flui-assets",
  "flui-binding",

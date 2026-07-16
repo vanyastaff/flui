@@ -32,6 +32,11 @@ flui-animation = { path = "../flui-animation", version = "0.2.0" }
 flui-scheduler = { path = "../flui-scheduler", version = "0.2.0" }
 # `Listenable` — the subscription `AnimatedView`/`FadeTransition` returns.
 flui-foundation = { path = "../flui-foundation", version = "0.2.0" }
+# `WidgetStates` — the interactive-state bitset `WidgetStateProperty`/
+# `WidgetStatesController` are built on. Already a workspace dependency
+# (flui-rendering's dirty-flag storage); same house style for a small,
+# closed set of boolean flags.
+bitflags = { workspace = true }
 # Gesture recognizers + arena that `GestureDetector` drives.
 flui-interaction = { path = "../flui-interaction", version = "0.2.0" }
 # Styling + typography + layout value types (Alignment, Color, BoxDecoration,
