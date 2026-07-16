@@ -682,8 +682,7 @@ fn back_gesture_edge_drag_normalizes_against_the_routes_real_width_not_the_hit_s
 /// could not distinguish "correctly flipped" from "did nothing at all".
 ///
 /// Oracle: `_CupertinoBackGestureDetectorState._handleDragUpdate`,
-/// `_convertToLogical` (`cupertino/route.dart`, checked-out tag
-/// `3.33.0-0.0.pre`, commit `88e87cd9`).
+/// `_convertToLogical` (`cupertino/route.dart`, oracle tag `3.44.0`).
 #[test]
 fn back_gesture_edge_drag_sign_flips_with_ambient_directionality() {
     /// Pushes a fresh `back_gesture(true)` route under `direction`, drags the

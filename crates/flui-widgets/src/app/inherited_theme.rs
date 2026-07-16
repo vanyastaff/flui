@@ -1,9 +1,7 @@
 //! [`InheritedTheme`] — the `wrap`-only subset of Flutter's contract.
 //!
 //! Flutter parity: `widgets/inherited_theme.dart` `InheritedTheme` (oracle
-//! tag `3.33.0-0.0.pre`, commit `88e87cd9` — the checked-out
-//! `packages/flutter` tree; the plan's requested `3.44.0` tag was not
-//! present in the checkout).
+//! tag `3.44.0`).
 //!
 //! ## Deferred: `capture` / `captureAll`
 //!

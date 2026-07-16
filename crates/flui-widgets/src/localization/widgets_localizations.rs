@@ -2,9 +2,7 @@
 //! resources for the lowest levels of the widget catalog.
 //!
 //! Flutter parity: `widgets/localizations.dart` `WidgetsLocalizations` /
-//! `DefaultWidgetsLocalizations` (oracle tag `3.33.0-0.0.pre`, commit
-//! `88e87cd9` — the checked-out `packages/flutter` tree; the plan's
-//! requested `3.44.0` tag was not present in the checkout).
+//! `DefaultWidgetsLocalizations` (oracle tag `3.44.0`).
 
 use std::any::Any;
 use std::fmt;

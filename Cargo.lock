@@ -1871,6 +1871,7 @@ dependencies = [
  "flui-geometry",
  "proptest",
  "serde",
+ "serde_json",
  "smallvec",
  "trybuild",
 ]

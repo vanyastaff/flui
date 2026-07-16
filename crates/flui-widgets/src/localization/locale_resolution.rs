@@ -2,9 +2,7 @@
 //! algorithm.
 //!
 //! Flutter parity: `basicLocaleListResolution`
-//! (`widgets/app.dart::basicLocaleListResolution`, oracle tag
-//! `3.33.0-0.0.pre`, commit `88e87cd9` — the checked-out `packages/flutter`
-//! tree; the plan's requested `3.44.0` tag was not present in the checkout).
+//! (`widgets/app.dart::basicLocaleListResolution`, oracle tag `3.44.0`).
 //! Ported in full, including the deferred-language-match tie-break and the
 //! country-only fallback.
 
@@ -290,16 +288,30 @@ mod tests {
 
     #[test]
     fn same_language_repeated_defers_to_the_next_iteration() {
-        // The first preferred locale (`pt_BR`) only gets a language-only
-        // match; the *next* preferred locale shares the language (`pt_PT`)
-        // and has no better match either — so the first iteration must NOT
-        // return immediately (next_shares_language == true), and the
-        // deferred match resolves on the second iteration instead.
-        let supported = vec![l("pt", Some("PT"))];
-        let preferred = vec![l("pt", Some("BR")), l("pt", Some("PT"))];
+        // The first preferred locale (`pt_MZ`) only gets a language-only
+        // match — against `pt_PT`, the FIRST supported "pt" entry, since
+        // `index.language` keeps only the first claimant per language. The
+        // *next* preferred locale shares the language (`pt_BR`) and has its
+        // own perfect match, so the first iteration must NOT return
+        // immediately (next_shares_language == true); the deferred match is
+        // superseded by that perfect match on the second iteration instead.
+        //
+        // This is deliberately NOT `preferred = [pt_BR, pt_PT]` against
+        // `supported = [pt_PT]`: with only one supported "pt" entry, the
+        // deferred language-only match and the second iteration's perfect
+        // match resolve to the SAME locale, so a mutant that deletes the
+        // deferral entirely (always returns the language-only match
+        // immediately on the first preferred locale) would still pass. Two
+        // *distinct* supported "pt" entries make the deferral's effect
+        // observable: skipping it returns the wrong one.
+        let supported = vec![l("pt", Some("PT")), l("pt", Some("BR"))];
+        let preferred = vec![l("pt", Some("MZ")), l("pt", Some("BR"))];
         let resolved = basic_locale_list_resolution(Some(&preferred), &supported);
-        // `pt_PT` is a perfect match on the second iteration and wins.
-        assert_eq!(resolved, l("pt", Some("PT")));
+        // Correct (deferred): `pt_BR` wins as a perfect match on the second
+        // iteration. A mutant that returns the first iteration's
+        // language-only match immediately would instead return `pt_PT` (the
+        // first supported "pt" entry) — this assertion catches exactly that.
+        assert_eq!(resolved, l("pt", Some("BR")));
     }
 
     #[test]

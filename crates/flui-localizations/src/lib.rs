@@ -21,9 +21,7 @@
 //! ## Flutter parity
 //!
 //! `package:flutter_localizations`'s `widgets_localizations.dart` /
-//! `l10n/generated_widgets_localizations.dart` (oracle tag `3.33.0-0.0.pre`,
-//! commit `88e87cd9` — the checked-out `packages/flutter_localizations` tree;
-//! the plan's requested `3.44.0` tag was not present in the checkout).
+//! `l10n/generated_widgets_localizations.dart` (oracle tag `3.44.0`).
 //!
 //! ## Example
 //!

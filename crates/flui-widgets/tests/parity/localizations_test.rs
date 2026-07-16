@@ -6,8 +6,7 @@
 //! - `packages/flutter/test/widgets/app_test.dart` (the `basicLocaleListResolution`
 //!   `test(...)` block, line 482) — the default locale-resolution algorithm.
 //!
-//! Oracle checkout tag `3.33.0-0.0.pre`, commit `88e87cd9` (the plan's
-//! requested `3.44.0` tag was not present in the checkout).
+//! Oracle checkout tag `3.44.0`.
 //!
 //! Oracle tests ported:
 //! - `'English translations exist for all WidgetsLocalizations properties'`

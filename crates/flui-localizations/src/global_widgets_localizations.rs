@@ -6,7 +6,7 @@
 //! (`flutter_localizations/lib/src/widgets_localizations.dart`), and the
 //! generated per-language `TextDirection` assignments in
 //! `flutter_localizations/lib/src/l10n/generated_widgets_localizations.dart`
-//! (oracle tag `3.33.0-0.0.pre`, commit `88e87cd9`).
+//! (oracle tag `3.44.0`).
 
 use flui_types::platform::Locale;
 use flui_types::typography::TextDirection;

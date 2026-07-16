@@ -6,11 +6,9 @@ use std::fmt;
 /// replacement.
 ///
 /// Oracle: `dart:ui`'s `Locale._deprecatedLanguageSubtagMap`
-/// (`engine/src/flutter/lib/ui/platform_dispatcher.dart`, checked-out tag
-/// `3.33.0-0.0.pre` / commit `88e87cd9`, table comment "Mappings generated
-/// for language subtag registry as of 2019-02-27" — the plan's requested
-/// `3.44.0` oracle tag was not present in the checkout; this is the actual
-/// tag verified against). The oracle table lists ~90 historical ISO 639-3
+/// (`engine/src/flutter/lib/ui/platform_dispatcher.dart`, oracle tag
+/// `3.44.0`, table comment "Mappings generated for language subtag registry
+/// as of 2019-02-27"). The oracle table lists ~90 historical ISO 639-3
 /// retirements; only the three that are reachable through FLUI's RTL
 /// detection and locale-resolution surfaces today (`iw`/`in`/`ji`, all
 /// three-letter-vs-two-letter Bidi-relevant subtags) are ported. The rest are
@@ -74,6 +72,11 @@ fn canonicalize_region_subtag(code: &str) -> &str {
 /// does not canonicalize scripts.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+// Deserialize is routed through `LocaleShadow` (below) so the derive cannot
+// bypass canonicalization by assigning raw subtags straight into the private
+// fields — see `LocaleShadow`'s doc for why this is load-bearing, not
+// decorative.
+#[cfg_attr(feature = "serde", serde(from = "LocaleShadow"))]
 pub struct Locale {
     /// The language code (e.g., "en", "es", "fr")
     language: String,
@@ -85,10 +88,39 @@ pub struct Locale {
     script: Option<String>,
 }
 
+/// The wire shape `Locale` deserializes through — plain, uncanonicalized
+/// subtags, matching exactly what [`Locale`]'s own (unmodified) `Serialize`
+/// derive produces (same field names, so round-tripping is transparent).
+///
+/// Without this indirection, `#[derive(Deserialize)]` on `Locale` directly
+/// would assign incoming JSON straight into the private `language`/`country`
+/// fields, bypassing [`Locale::canonical`] entirely: deserializing
+/// `{"language":"iw",...}` would produce a `Locale` whose `language()` is
+/// still `"iw"` — silently breaking the `Locale::new("iw") ==
+/// Locale::new("he")` / matching-hash guarantee the type's own docs promise
+/// for every OTHER construction path. Routing through `#[serde(from =
+/// "LocaleShadow")]` keeps `Locale::canonical` the sole construction path,
+/// including for deserialization.
+#[cfg(feature = "serde")]
+#[derive(serde::Deserialize)]
+struct LocaleShadow {
+    language: String,
+    country: Option<String>,
+    script: Option<String>,
+}
+
+#[cfg(feature = "serde")]
+impl From<LocaleShadow> for Locale {
+    fn from(shadow: LocaleShadow) -> Self {
+        Self::canonical(shadow.language, shadow.country, shadow.script)
+    }
+}
+
 impl Locale {
     /// Builds a `Locale` from already-owned subtags, canonicalizing the
     /// language and region against the deprecated-subtag tables. The sole
-    /// construction path every public constructor below routes through, so
+    /// construction path every public constructor below (and, behind the
+    /// `serde` feature, `LocaleShadow`'s `From` impl) routes through, so
     /// canonicalization happens in exactly one place.
     fn canonical(language: String, country: Option<String>, script: Option<String>) -> Self {
         Self {
@@ -378,5 +410,71 @@ mod tests {
         // The oracle canonicalizes language and region subtags only.
         let locale = Locale::with_script("zh", Some("CN"), Some("Hans"));
         assert_eq!(locale.script(), Some("Hans"));
+    }
+
+    // ------------------------------------------------------------------
+    // serde: Deserialize must route through the same canonicalizing
+    // constructor as every other construction path (LocaleShadow).
+    // ------------------------------------------------------------------
+
+    #[cfg(feature = "serde")]
+    mod serde_tests {
+        use super::*;
+
+        #[test]
+        fn deserializing_a_deprecated_subtag_canonicalizes_it() {
+            // Raw JSON, not a value built through `Locale::new` — this is
+            // exactly the path a bare `#[derive(Deserialize)]` on `Locale`
+            // would have bypassed by writing "iw" straight into the private
+            // `language` field.
+            let iw: Locale =
+                serde_json::from_str(r#"{"language":"iw","country":null,"script":null}"#)
+                    .expect("valid Locale JSON");
+            assert_eq!(
+                iw,
+                Locale::new("he", None::<&str>),
+                "deserializing {{language: \"iw\"}} must canonicalize to \"he\", matching \
+                 Locale::new(\"iw\")"
+            );
+            assert_eq!(iw.language(), "he");
+            assert!(
+                iw.is_rtl(),
+                "the deserialized locale must resolve is_rtl() from the canonical \
+                 language, not the raw deprecated spelling"
+            );
+        }
+
+        #[test]
+        fn deserializing_a_deprecated_region_canonicalizes_it() {
+            let dd: Locale =
+                serde_json::from_str(r#"{"language":"de","country":"DD","script":null}"#)
+                    .expect("valid Locale JSON");
+            assert_eq!(dd, Locale::new("de", Some("DE")));
+            assert_eq!(dd.country(), Some("DE"));
+        }
+
+        #[test]
+        fn deserialized_deprecated_alias_hashes_identically_to_the_canonical_form() {
+            let iw: Locale =
+                serde_json::from_str(r#"{"language":"iw","country":null,"script":null}"#)
+                    .expect("valid Locale JSON");
+            let he = Locale::new("he", None::<&str>);
+
+            let mut set = std::collections::HashSet::new();
+            set.insert(iw);
+            assert!(
+                set.contains(&he),
+                "a deserialized deprecated-alias Locale must hash identically to the \
+                 canonical spelling, not just compare equal"
+            );
+        }
+
+        #[test]
+        fn serialize_then_deserialize_round_trips_an_already_canonical_locale() {
+            let original = Locale::with_script("zh", Some("CN"), Some("Hans"));
+            let json = serde_json::to_string(&original).expect("serialize");
+            let round_tripped: Locale = serde_json::from_str(&json).expect("deserialize");
+            assert_eq!(round_tripped, original);
+        }
     }
 }

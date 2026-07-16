@@ -2,8 +2,7 @@
 //! publishes both to the subtree.
 //!
 //! Flutter parity: `widgets/localizations.dart` `Localizations` (oracle tag
-//! `3.33.0-0.0.pre`, commit `88e87cd9` — the checked-out `packages/flutter`
-//! tree; the plan's requested `3.44.0` tag was not present in the checkout).
+//! `3.44.0`).
 //!
 //! ## Sync-only v1 (documented divergences from the oracle)
 //!
@@ -358,9 +357,10 @@ impl Localizations {
     pub fn of<R: Send + Sync + 'static>(ctx: &dyn BuildContext) -> Arc<R> {
         Self::maybe_of::<R>(ctx).unwrap_or_else(|| {
             panic!(
-                "BUG: Localizations::of::<{}> called with no delegate providing this resource \
-                 on the tree — add a LocalizationsDelegate<Resources = {0}> to the ancestor \
-                 Localizations, or use Localizations::maybe_of for a non-panicking lookup",
+                "BUG: Localizations::of::<{0}> found no {0} on the tree — either there is no \
+                 Localizations ancestor at all, or its delegates never produce {0}; add a \
+                 LocalizationsDelegate<Resources = {0}> to the ancestor Localizations, or use \
+                 Localizations::maybe_of for a non-panicking lookup",
                 std::any::type_name::<R>()
             )
         })
