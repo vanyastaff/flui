@@ -55,11 +55,19 @@ impl Theme {
     /// Panics if there is no [`Theme`] ancestor. Use
     /// [`maybe_of`](Self::maybe_of) for a non-panicking variant.
     ///
-    /// Flutter parity: `Theme.of(context)`.
+    /// **Documented divergence from Flutter**: the oracle's `Theme.of`
+    /// (`material/theme.dart`, oracle tag `3.44.0`) never panics — with no
+    /// `Theme` ancestor it falls back to `ThemeData.fallback()` (baked in as
+    /// `_kFallbackTheme`). This crate does not implement `ThemeData::fallback`
+    /// (every FLUI app is expected to wrap its tree in a `Theme`, so a
+    /// themeless default has no consumer yet), so the missing-ancestor case
+    /// panics instead — a defensible choice for surfacing the mistake loudly
+    /// during development, but a deliberate divergence, not a port of the
+    /// oracle's fallback behavior.
     #[must_use]
     pub fn of(ctx: &dyn BuildContext) -> ThemeData {
         Self::maybe_of(ctx).expect(
-            "BUG: Theme::of called with no Theme ancestor in the tree — wrap the subtree in a \
+            "Theme::of called with no Theme ancestor in the tree — wrap the subtree in a \
              Theme, or use Theme::maybe_of with a caller-chosen default",
         )
     }
@@ -67,7 +75,11 @@ impl Theme {
     /// Look up the nearest ancestor [`Theme`]'s data, registering a
     /// dependency. Returns `None` if there is no [`Theme`] ancestor.
     ///
-    /// Flutter parity: `Theme.maybeOf(context)`.
+    /// The oracle's `Theme` has no `maybeOf` — its `Theme.of` never returns
+    /// `null` (see [`of`](Self::of)'s doc comment on the fallback it uses
+    /// instead), so there is no method to port here. `maybe_of` is this
+    /// crate's own non-panicking counterpart to [`of`](Self::of)'s panicking
+    /// behavior, not a parity port.
     #[must_use]
     pub fn maybe_of(ctx: &dyn BuildContext) -> Option<ThemeData> {
         ctx.depend_on::<Self, _>(|t| t.data.clone())

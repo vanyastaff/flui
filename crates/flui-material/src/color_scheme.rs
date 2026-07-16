@@ -462,6 +462,12 @@ impl Default for ColorScheme {
 /// Patch for [`ColorScheme::copy_with`] — every field mirrors a
 /// [`ColorScheme`] role, `None` meaning "leave unchanged".
 ///
+/// Deliberately **not** `#[non_exhaustive]` (unlike [`ColorScheme`] itself):
+/// `#[non_exhaustive]` blocks external-crate struct-literal construction
+/// even via `..Default::default()` functional update, which is the only way
+/// callers build this patch. A future role added to [`ColorScheme`] still
+/// gets a matching field here additively, without needing that ceremony.
+///
 /// Flutter parity: the optional-parameter list of `ColorScheme.copyWith`
 /// (`material/color_scheme.dart`, oracle tag `3.44.0`), reshaped as a
 /// struct because Rust has no optional named parameters.

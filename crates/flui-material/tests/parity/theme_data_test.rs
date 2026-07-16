@@ -40,7 +40,7 @@
 //!   API surface (`useMaterial3` toggle, `fontFamily`, `cursorColor`,
 //!   `colorSchemeSeed`, `Diagnosticable`) this crate does not implement.
 
-use flui_material::ThemeData;
+use flui_material::{ThemeData, ThemeDataOverrides};
 use flui_types::platform::Brightness;
 
 /// Ports `dark == dark.copyWith()` from `'Theme data control test'` and the
@@ -50,10 +50,10 @@ use flui_types::platform::Brightness;
 #[test]
 fn copy_with_no_args_is_identity() {
     let dark = ThemeData::dark();
-    assert_eq!(dark, dark.copy_with(None, None));
+    assert_eq!(dark, dark.copy_with(ThemeDataOverrides::default()));
 
     let light = ThemeData::default();
-    assert_eq!(light, light.copy_with(None, None));
+    assert_eq!(light, light.copy_with(ThemeDataOverrides::default()));
 }
 
 /// Ports the *contract* `'Default text theme contrasts with brightness'`

@@ -51,7 +51,7 @@ AppBinding (transitional host)
   windowing, GPU, and input on desktop (Win32/AppKit/headless via
   flui-platform + wgpu); Android/iOS/Web entry points are feature-gated.
 - **Theme** (`theme`) — `AppTheme` pre-tree configuration with semantic
-  `ColorScheme` tokens; distinct from the in-tree `flui_widgets::Theme`
+  `AppColorScheme` tokens; distinct from the in-tree `flui_material::Theme`
   inherited widget.
 
 ## Known architectural debt

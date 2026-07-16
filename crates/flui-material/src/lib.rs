@@ -13,7 +13,7 @@
 //! (`ColorScheme::light`/`dark`, [`typography::english_like_2021`],
 //! [`TextTheme::black_mountain_view`]/[`white_mountain_view`](TextTheme::white_mountain_view))
 //! is a verbatim, per-value-cited port — see each module's docs for the exact
-//! oracle source and line.
+//! oracle source.
 //!
 //! ## Scope (V1 — constants-first)
 //!
@@ -57,5 +57,5 @@ pub mod typography;
 pub use color_scheme::{ColorScheme, ColorSchemeOverrides};
 pub use text_theme::TextTheme;
 pub use theme::Theme;
-pub use theme_data::ThemeData;
+pub use theme_data::{ThemeData, ThemeDataOverrides};
 pub use typography::english_like_2021;

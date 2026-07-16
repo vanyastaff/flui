@@ -24,7 +24,7 @@ mod common;
 use std::sync::{Arc, Mutex};
 
 use common::{lay_out, loose};
-use flui_material::{ColorSchemeOverrides, Theme, ThemeData};
+use flui_material::{ColorSchemeOverrides, Theme, ThemeData, ThemeDataOverrides};
 use flui_types::platform::Brightness;
 use flui_types::styling::Color;
 use flui_view::prelude::*;
@@ -62,7 +62,10 @@ fn theme_of_panicking_accessor_returns_ancestor_theme_data() {
         primary: Some(sentinel),
         ..Default::default()
     });
-    let provided = base.copy_with(Some(scheme), None);
+    let provided = base.copy_with(ThemeDataOverrides {
+        color_scheme: Some(scheme),
+        ..Default::default()
+    });
 
     let _laid = lay_out(
         Theme::new(

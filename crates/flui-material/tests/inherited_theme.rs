@@ -35,11 +35,11 @@ mod common;
 use std::sync::{Arc, Mutex};
 
 use common::{lay_out, loose};
-use flui_material::{ColorSchemeOverrides, Theme, ThemeData};
+use flui_material::{ColorSchemeOverrides, Theme, ThemeData, ThemeDataOverrides};
 use flui_types::platform::Brightness;
 use flui_types::styling::Color;
 use flui_view::prelude::*;
-use flui_widgets::SizedBox;
+use flui_widgets::{InheritedTheme, SizedBox};
 
 /// Captures whatever [`Theme::maybe_of`] returns during `build()`.
 ///
@@ -73,7 +73,10 @@ fn theme_of_returns_ancestor_theme_data() {
         primary: Some(sentinel),
         ..Default::default()
     });
-    let provided = base.copy_with(Some(scheme), None);
+    let provided = base.copy_with(ThemeDataOverrides {
+        color_scheme: Some(scheme),
+        ..Default::default()
+    });
 
     let _laid = lay_out(
         Theme::new(
@@ -139,5 +142,77 @@ fn theme_data_light_and_dark_presets_are_distinct() {
     assert_ne!(
         light.color_scheme.primary, dark.color_scheme.primary,
         "light and dark presets should have different primary colors"
+    );
+}
+
+// ============================================================================
+// InheritedTheme::wrap
+// ============================================================================
+
+/// A host whose `build()` calls [`InheritedTheme::wrap`] on a throwaway
+/// source `Theme` to re-wrap `ThemeCapture`, then returns the wrapped
+/// subtree — this is the one call site that exercises `wrap`'s actual
+/// contract: the child it wraps must see the *source* `Theme`'s data.
+#[derive(Clone, StatelessView)]
+struct WrapHost {
+    source_data: ThemeData,
+    captured: Arc<Mutex<Option<Option<ThemeData>>>>,
+}
+
+impl StatelessView for WrapHost {
+    fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
+        // The source `Theme`'s own child (`SizedBox::shrink()`) is discarded
+        // by `wrap` — only its `data` carries through to the returned widget.
+        let source = Theme::new(self.source_data.clone(), SizedBox::shrink());
+        source.wrap(
+            ctx,
+            ThemeCapture {
+                captured: Arc::clone(&self.captured),
+            }
+            .boxed(),
+        )
+    }
+}
+
+/// `InheritedTheme::wrap(child)` must yield a widget that provides the
+/// wrapping `Theme`'s data to `child` — the behavior the trait exists for
+/// (a future capture/re-parent mechanism reuses `wrap` to carry a theme
+/// across a subtree boundary; see [`flui_widgets::InheritedTheme`]'s module
+/// docs). The assertion fails if `wrap` drops the data, substitutes a
+/// default, or fails to actually provide `child` with any `Theme` ancestor
+/// at all.
+#[test]
+fn inherited_theme_wrap_provides_the_source_theme_data_to_the_wrapped_child() {
+    let captured: Arc<Mutex<Option<Option<ThemeData>>>> = Arc::new(Mutex::new(None));
+    // Sentinel distinct from both presets so the assertion fails if `wrap`
+    // silently substituted a default theme instead of the source's data.
+    let sentinel = Color::from_argb(0xFF00_AA55);
+    let base = ThemeData::light();
+    let scheme = base.color_scheme.copy_with(ColorSchemeOverrides {
+        primary: Some(sentinel),
+        ..Default::default()
+    });
+    let source_data = base.copy_with(ThemeDataOverrides {
+        color_scheme: Some(scheme),
+        ..Default::default()
+    });
+
+    let _laid = lay_out(
+        WrapHost {
+            source_data: source_data.clone(),
+            captured: Arc::clone(&captured),
+        },
+        loose(100.0),
+    );
+
+    let outer = captured.lock().unwrap().clone();
+    let got = outer
+        .expect("WrapHost::build was never called — the harness did not traverse the subtree")
+        .expect("wrap's returned widget did not provide any Theme ancestor to the wrapped child");
+
+    assert_eq!(
+        got, source_data,
+        "InheritedTheme::wrap should provide the source Theme's data to the \
+         wrapped child, not a default or the wrong scope"
     );
 }
