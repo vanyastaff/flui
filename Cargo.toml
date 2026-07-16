@@ -360,6 +360,9 @@ flui-hot-reload = { path = "crates/flui-hot-reload", version = "0.2.0" }
 flui-binding = { path = "crates/flui-binding", version = "0.2.0" }
 parking_lot.workspace = true
 
+# === Material Design Layer (for the material_demo example + acceptance test) ===
+flui-material = { path = "crates/flui-material", version = "0.2.0" }
+
 # === Engine Layer (for GPU examples) ===
 flui-engine = { path = "crates/flui-engine", version = "0.2.0", features = ["dx12"] }
 pollster = { workspace = true }

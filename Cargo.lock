@@ -1432,6 +1432,7 @@ dependencies = [
  "flui-hot-reload",
  "flui-interaction",
  "flui-layer",
+ "flui-material",
  "flui-objects",
  "flui-painting",
  "flui-platform",
