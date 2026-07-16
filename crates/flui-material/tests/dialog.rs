@@ -123,8 +123,7 @@ fn default_inset_padding_offsets_the_aligned_content_by_40x24() {
 /// (companion test
 /// `an_overridden_24dp_corner_radius_includes_the_same_probe_point` below,
 /// `13 + 13 = 26 >= 24`) — i.e. this probe is chosen specifically to flip if
-/// the default drifts from 28.0 to 24.0, the exact drift a prior review
-/// caught this test missing.
+/// the default drifts from 28.0 to 24.0.
 #[test]
 fn default_corner_radius_reaches_the_mounted_material() {
     let taps = Arc::new(AtomicUsize::new(0));

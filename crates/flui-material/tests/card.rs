@@ -79,8 +79,7 @@ fn default_material_matches_card_defaults_m3() {
 /// (companion test
 /// `an_overridden_99dp_corner_radius_excludes_the_same_probe_point` below,
 /// `10 + 10 = 20 < 99`) — i.e. this probe is chosen specifically to flip if
-/// the default drifts from 12.0 to 99.0, the exact drift a prior review
-/// caught this test missing.
+/// the default drifts from 12.0 to 99.0.
 #[test]
 fn default_corner_radius_reaches_the_mounted_material() {
     let taps = Arc::new(AtomicUsize::new(0));
