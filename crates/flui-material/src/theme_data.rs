@@ -184,7 +184,11 @@ pub struct CardThemeData {
 /// title), [`content_text_style`](Self::content_text_style) (`AlertDialog`'s
 /// content). Named deferrals (no consumer yet): `shadow_color`,
 /// `surface_tint_color`, `alignment`, `icon_color`, `actions_padding`,
-/// `barrier_color`, `inset_padding`, `clip_behavior`.
+/// `barrier_color`, `inset_padding`, `clip_behavior`, `constraints` (the
+/// oracle's own `Dialog.build` reads `constraints ?? dialogTheme.constraints
+/// ?? const BoxConstraints(minWidth: 280.0)` — FLUI's `Dialog` has a widget
+/// tier for this via [`Dialog::constraints`](crate::Dialog::constraints) but
+/// no theme tier yet).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct DialogThemeData {
     /// Overrides [`Dialog`](crate::Dialog)'s default background color

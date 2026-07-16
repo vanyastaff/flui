@@ -174,16 +174,6 @@ fn enabled_icon_button_resolves_the_on_surface_variant_color_through_the_real_mo
     );
 }
 
-/// The regression this test guards against: a naive port hardcodes
-/// `default_style`'s own foreground table straight into the icon's
-/// `IconTheme`, so a caller's `.style(ButtonStyle { foreground_color: .. })`
-/// override reaches `ButtonStyleButtonCore`'s `DefaultTextStyle` (for a
-/// `Text` child) but silently never reaches an `Icon` child at all — the
-/// override would visibly do nothing. `IconButton::build` instead coalesces
-/// `self.style`'s `foreground_color` with `default_style`'s own (the SAME
-/// widget-then-default cascade `ButtonStyleButtonCore` performs internally)
-/// before feeding the icon's `IconTheme` — this test mounts exactly that
-/// override and asserts it actually reaches the icon.
 /// The middle cascade tier, proven end to end: a configured
 /// `icon_button_theme.style.foreground_color` must reach the icon's
 /// `IconTheme` — the same coalesce `resolve_property` performs for
@@ -220,6 +210,62 @@ fn icon_button_theme_slot_reaches_the_icons_icon_theme() {
         resolved.color,
         Some(themed_color),
         "a configured icon_button_theme.style.foreground_color must reach the icon's IconTheme",
+    );
+}
+
+/// The regression this test guards against: a naive port hardcodes
+/// `default_style`'s own foreground table straight into the icon's
+/// `IconTheme`, so a caller's `.style(ButtonStyle { foreground_color: .. })`
+/// override reaches `ButtonStyleButtonCore`'s `DefaultTextStyle` (for a
+/// `Text` child) but silently never reaches an `Icon` child at all — the
+/// override would visibly do nothing. `IconButton::build` instead coalesces
+/// `self.style`'s `foreground_color` with `default_style`'s own (the SAME
+/// widget-then-default cascade `ButtonStyleButtonCore` performs internally)
+/// before feeding the icon's `IconTheme` — this test mounts exactly that
+/// override and asserts it actually reaches the icon.
+/// `core.theme_style(theme_style)` wiring, isolated from
+/// `IconButton::build`'s OWN separate `resolve_property` call (which only
+/// ever reads `foreground_color`, for the icon's `IconTheme` — see
+/// `icon_button_theme_slot_reaches_the_icons_icon_theme` above). A
+/// `background_color` set on `icon_button_theme` has no path to the mounted
+/// `Material` except through `ButtonStyleButtonCoreState::build`'s own
+/// three-tier resolve, which only sees it because `IconButton::build` wired
+/// `theme_style` onto the `ButtonStyleButtonCore` it constructs. Deleting
+/// that `core.theme_style(theme_style)` call leaves this property
+/// permanently `None` at the core's theme tier, so this assertion would
+/// fail (falling through to `_IconButtonDefaultsM3`'s transparent default)
+/// — the two `foreground_color` tests above would NOT catch that deletion,
+/// since they exercise a code path this test does not.
+#[test]
+fn icon_button_theme_slot_background_color_reaches_the_mounted_material() {
+    let themed_background = Color::rgb(60, 70, 80);
+    let theme = ThemeData::light().copy_with(ThemeDataOverrides {
+        icon_button_theme: Some(IconButtonThemeData {
+            style: Some(ButtonStyle {
+                background_color: Some(WidgetStateProperty::all(Some(themed_background))),
+                ..Default::default()
+            }),
+        }),
+        ..Default::default()
+    });
+
+    let laid = lay_out(
+        Theme::new(
+            theme,
+            IconButton::new(SizedBox::square(24.0)).on_pressed(|| {}),
+        ),
+        tight(40.0, 40.0),
+    );
+
+    let material = laid
+        .find_by_render_type("RenderPhysicalShape")
+        .expect("IconButton must compose a Material surface");
+    assert_eq!(
+        laid.render_property(material, "color"),
+        Some(format!("{themed_background:?}")),
+        "a configured icon_button_theme.style.background_color must reach the mounted \
+         Material — proving ButtonStyleButtonCore's own theme_style wiring, not just \
+         IconButton::build's separate foreground_color resolve",
     );
 }
 

@@ -461,6 +461,66 @@ mod tests {
         WidgetStateProperty::all(Some(value))
     }
 
+    /// `overlay_color_property`'s theme tier, resolved for a `Pressed` state
+    /// — the live `WidgetStateProperty` handed to `InkWell` (see the
+    /// function's own doc comment: it closes over all three cascade tiers,
+    /// same as `ButtonStyleButtonCoreState::build`'s per-property
+    /// resolution). Mutation-honest: with no widget-level `overlay_color`
+    /// set, the resolved value must be the THEME tier's color, not the
+    /// default tier's — reverting `theme_style.as_ref()` back to a
+    /// hardcoded `None` (its state before `theme_style` was wired) would
+    /// resolve `default_overlay` here instead of `themed_overlay`, failing
+    /// this assertion.
+    #[test]
+    fn overlay_color_property_resolves_the_theme_tier_for_a_pressed_state() {
+        let themed_overlay = Color::rgb(9, 9, 9);
+        let default_overlay = Color::rgb(1, 1, 1);
+        let theme_style = ButtonStyle {
+            overlay_color: Some(all_property(themed_overlay)),
+            ..Default::default()
+        };
+        let default_style = ButtonStyle {
+            overlay_color: Some(all_property(default_overlay)),
+            ..Default::default()
+        };
+
+        let property = overlay_color_property(None, Some(theme_style), default_style);
+        let resolved = property.resolve(&WidgetStates::from(WidgetState::Pressed));
+
+        assert_eq!(
+            resolved,
+            Some(themed_overlay),
+            "a theme-configured overlay_color, with no widget-level override, must reach the \
+             live WidgetStateProperty handed to InkWell — not fall through to the default tier",
+        );
+    }
+
+    /// Companion coverage: an explicit widget-level `overlay_color` still
+    /// wins over a configured theme tier, matching every other property's
+    /// widget > theme > default precedence.
+    #[test]
+    fn overlay_color_property_widget_tier_wins_over_the_theme_tier() {
+        let widget_overlay = Color::rgb(2, 2, 2);
+        let themed_overlay = Color::rgb(9, 9, 9);
+        let widget_style = ButtonStyle {
+            overlay_color: Some(all_property(widget_overlay)),
+            ..Default::default()
+        };
+        let theme_style = ButtonStyle {
+            overlay_color: Some(all_property(themed_overlay)),
+            ..Default::default()
+        };
+
+        let property = overlay_color_property(
+            Some(widget_style),
+            Some(theme_style),
+            ButtonStyle::default(),
+        );
+        let resolved = property.resolve(&WidgetStates::from(WidgetState::Pressed));
+
+        assert_eq!(resolved, Some(widget_overlay));
+    }
+
     #[test]
     fn widget_tier_wins_when_all_three_are_set() {
         let widget = all_property(1_u32);
