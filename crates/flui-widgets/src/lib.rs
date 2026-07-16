@@ -201,7 +201,8 @@ pub use text::{
 };
 pub use transitions::{
     AnimatedBuilder, AnimatedBuilderState, FadeTransition, FadeTransitionState, RotationTransition,
-    RotationTransitionState, ScaleTransition, ScaleTransitionState,
+    RotationTransitionState, ScaleTransition, ScaleTransitionState, SlideTransition,
+    SlideTransitionState,
 };
 // The interactive-state vocabulary a widget's visual properties can vary
 // over (hover/focus/press/…) — see the module's own docs for Flutter parity

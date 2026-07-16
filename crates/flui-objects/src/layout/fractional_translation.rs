@@ -23,6 +23,7 @@
 //! the docstring.
 
 use flui_tree::Single;
+use flui_types::geometry::Lerp;
 use flui_types::{Matrix4, Offset, Size, geometry::px};
 
 use flui_rendering::{
@@ -71,6 +72,22 @@ impl TranslationFraction {
             px(size.width.get() * self.dx),
             px(size.height.get() * self.dy),
         )
+    }
+}
+
+impl Lerp for TranslationFraction {
+    /// Component-wise linear interpolation — the fraction itself is a plain
+    /// unitless `f32` pair, so this is the same `a + (b - a) * t` every other
+    /// `Lerp` scalar uses. Lets an `Animation<TranslationFraction>` (e.g.
+    /// `flui-widgets`' `SlideTransition`) drive a `Tween<TranslationFraction>`
+    /// directly instead of animating pixel-typed offsets and dividing back
+    /// out by a size that may not be known yet.
+    #[inline]
+    fn lerp_to(&self, other: &Self, t: f32) -> Self {
+        Self {
+            dx: self.dx + (other.dx - self.dx) * t,
+            dy: self.dy + (other.dy - self.dy) * t,
+        }
     }
 }
 
