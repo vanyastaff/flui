@@ -149,16 +149,32 @@ fn default_style(theme: &ThemeData, variant: FilledButtonVariant) -> ButtonStyle
         overlay_color: Some(WidgetStateProperty::resolve_with(move |states| {
             pressed_hovered_focused_overlay(states, foreground)
         })),
+        // Oracle order matters: `disabled` and `pressed` are checked BEFORE
+        // `hovered`, so a state set containing both `Pressed` and `Hovered`
+        // (an ordinary mouse press on an already-hovered button) resolves
+        // the pressed value (0.0), never the hover value (1.0). Early
+        // returns (not an `if`/`else if` chain — clippy rightly flags
+        // adjacent identical `0.0` bodies there) still preserve the
+        // oracle's exact branch order: `disabled` → `pressed` → `hovered` →
+        // `focused` → the unconditional fallback (`_FilledButtonDefaultsM3
+        // .elevation`'s chain, `filled_button.dart`, tag `3.44.0`; same
+        // table shape as `_FilledTonalButtonDefaultsM3.elevation`). A
+        // collapsed `!disabled && hovered` condition already dropped this
+        // exact check once — see the mutation-honest
+        // `elevation_checks_pressed_before_hovered` test below.
         elevation: Some(WidgetStateProperty::resolve_with(move |states| {
-            Some(
-                if !states.contains_state(WidgetState::Disabled)
-                    && states.contains_state(WidgetState::Hovered)
-                {
-                    1.0
-                } else {
-                    0.0
-                },
-            )
+            if states.contains_state(WidgetState::Disabled) {
+                return Some(0.0);
+            }
+            if states.contains_state(WidgetState::Pressed) {
+                return Some(0.0);
+            }
+            if states.contains_state(WidgetState::Hovered) {
+                return Some(1.0);
+            }
+            // Focused, and the oracle's unconditional fallback, both
+            // resolve to 0.0.
+            Some(0.0)
         })),
         padding: Some(WidgetStateProperty::all(Some(scaled_padding_1x()))),
         minimum_size: Some(WidgetStateProperty::all(Some(Size::new(
@@ -243,6 +259,40 @@ mod tests {
             WidgetStates::from(WidgetState::Disabled).with_state(WidgetState::Hovered);
         assert_eq!(
             resolve(style.elevation.as_ref(), &disabled_and_hovered),
+            Some(0.0)
+        );
+    }
+
+    /// Pressed-first resolver order: a state set containing both `Pressed`
+    /// and `Hovered` (an ordinary mouse press on an already-hovered button)
+    /// resolves the pressed elevation (0.0), not hover's (1.0).
+    /// Mutation-honest: this is exactly the case a collapsed
+    /// `!disabled && hovered` condition gets wrong (it checked only
+    /// `hovered`, so `{Pressed, Hovered}` resolved 1.0 instead of 0.0) —
+    /// run that mutation against `default_style` below to see this test
+    /// fail.
+    #[test]
+    fn filled_elevation_checks_pressed_before_hovered() {
+        let theme = ThemeData::light();
+        let style = default_style(&theme, FilledButtonVariant::Filled);
+        let pressed_and_hovered =
+            WidgetStates::from(WidgetState::Pressed).with_state(WidgetState::Hovered);
+        assert_eq!(
+            resolve(style.elevation.as_ref(), &pressed_and_hovered),
+            Some(0.0)
+        );
+    }
+
+    /// Same pressed-before-hovered check for the tonal variant's identical
+    /// elevation table shape.
+    #[test]
+    fn tonal_elevation_checks_pressed_before_hovered() {
+        let theme = ThemeData::light();
+        let style = default_style(&theme, FilledButtonVariant::Tonal);
+        let pressed_and_hovered =
+            WidgetStates::from(WidgetState::Pressed).with_state(WidgetState::Hovered);
+        assert_eq!(
+            resolve(style.elevation.as_ref(), &pressed_and_hovered),
             Some(0.0)
         );
     }

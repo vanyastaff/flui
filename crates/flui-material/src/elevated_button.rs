@@ -259,6 +259,24 @@ mod tests {
         );
     }
 
+    /// Same pressed-before-hovered order for `elevation`'s own chain
+    /// (`disabled` → `pressed` → `hovered` → `focused`/fallback,
+    /// `_ElevatedButtonDefaultsM3.elevation`, `elevated_button.dart`, tag
+    /// `3.44.0`): a state set containing both `Pressed` and `Hovered` must
+    /// resolve the pressed value (1.0), not hover's higher one (3.0).
+    #[test]
+    fn elevation_checks_pressed_before_hovered() {
+        let theme = ThemeData::light();
+        let style = default_style(&theme);
+
+        let pressed_and_hovered =
+            WidgetStates::from(WidgetState::Pressed).with_state(WidgetState::Hovered);
+        assert_eq!(
+            resolve(style.elevation.as_ref(), &pressed_and_hovered),
+            Some(1.0)
+        );
+    }
+
     #[test]
     fn default_style_leaves_fixed_size_and_side_unset() {
         let style = default_style(&ThemeData::light());

@@ -304,9 +304,13 @@ impl ViewState<ButtonStyleButtonCore> for ButtonStyleButtonCoreState {
             maximum_size
         )
         .unwrap_or(flui_types::Size::INFINITY);
-        // Resolved for parity/completeness, but not yet painted — see
-        // `ButtonStyle::side`'s doc comment.
-        let _side = resolve_field!(&states, widget_style, theme_style, default_style, side);
+        // `side` is NOT resolved here: `Material`/`MaterialShape` has no
+        // border-side painting path yet (see `ButtonStyle::side`'s doc
+        // comment), so nothing in this composition would consume it. Each
+        // button's `default_style` (and any widget-level override) still
+        // carries the slot — `OutlinedButton`'s own tests exercise its
+        // resolution directly — this composition step just has nothing to
+        // do with the result yet.
         let shape = resolve_field!(&states, widget_style, theme_style, default_style, shape)
             .unwrap_or_default();
         let text_style = resolve_field!(
@@ -319,22 +323,7 @@ impl ViewState<ButtonStyleButtonCore> for ButtonStyleButtonCoreState {
 
         let text_style = fold_foreground_into_text_style(text_style, foreground_color);
 
-        let mut constraints = BoxConstraints::new(
-            minimum_size.width,
-            maximum_size.width,
-            minimum_size.height,
-            maximum_size.height,
-        );
-        if let Some(fixed) = fixed_size {
-            if fixed.width.is_finite() {
-                constraints.min_width = fixed.width;
-                constraints.max_width = fixed.width;
-            }
-            if fixed.height.is_finite() {
-                constraints.min_height = fixed.height;
-                constraints.max_height = fixed.height;
-            }
-        }
+        let constraints = effective_constraints(minimum_size, maximum_size, fixed_size);
 
         let overlay_color = overlay_color_property(view.style.clone(), view.default_style.clone());
 
@@ -378,6 +367,43 @@ fn fold_foreground_into_text_style(
         Some(color) => text_style.with_color(color),
         None => text_style,
     }
+}
+
+/// Builds the [`BoxConstraints`] the button's `ConstrainedBox` enforces from
+/// its three resolved size slots. Flutter parity:
+/// `_ButtonStyleState.build`'s `effectiveConstraints` construction
+/// (`button_style_button.dart` `:517-533`, oracle tag `3.44.0`), narrowed to
+/// the V1 slots (no `visualDensity` adjustment — see
+/// `crate::button_style`'s module docs).
+///
+/// `minimum`/`maximum` build the base envelope; `fixed`, if present, is
+/// clamped INTO that already-built envelope (`effectiveConstraints.constrain
+/// (resolvedFixedSize)`) before pinning `min == max` on each of its finite
+/// axes — clamping first, not pinning `fixed` directly, is load-bearing: a
+/// `fixed` smaller than `minimum` (or larger than `maximum`) would otherwise
+/// invert `min > max` into a malformed [`BoxConstraints`] instead of
+/// clamping to the envelope's edge, matching the oracle's own behavior.
+fn effective_constraints(
+    minimum: flui_types::Size,
+    maximum: flui_types::Size,
+    fixed: Option<flui_types::Size>,
+) -> BoxConstraints {
+    let mut constraints =
+        BoxConstraints::new(minimum.width, maximum.width, minimum.height, maximum.height);
+    let Some(fixed) = fixed else {
+        return constraints;
+    };
+
+    let clamped = constraints.constrain(fixed);
+    if fixed.width.is_finite() {
+        constraints.min_width = clamped.width;
+        constraints.max_width = clamped.width;
+    }
+    if fixed.height.is_finite() {
+        constraints.min_height = clamped.height;
+        constraints.max_height = clamped.height;
+    }
+    constraints
 }
 
 /// Builds the live [`WidgetStateProperty`] handed to the inner `InkWell` —
@@ -458,5 +484,88 @@ mod tests {
         let base = TextStyle::new().with_color(Color::rgb(1, 1, 1));
         let folded = fold_foreground_into_text_style(Some(base.clone()), None);
         assert_eq!(folded.color, base.color);
+    }
+
+    // ------------------------------------------------------------------
+    // effective_constraints — min/max envelope + fixed-size clamping
+    // ------------------------------------------------------------------
+
+    fn size(width: f32, height: f32) -> flui_types::Size {
+        flui_types::Size::new(
+            flui_types::geometry::px(width),
+            flui_types::geometry::px(height),
+        )
+    }
+
+    #[test]
+    fn no_fixed_size_passes_minimum_and_maximum_through_unpinned() {
+        let constraints = effective_constraints(size(64.0, 40.0), size(200.0, 100.0), None);
+        assert_eq!(constraints.min_width, flui_types::geometry::px(64.0));
+        assert_eq!(constraints.max_width, flui_types::geometry::px(200.0));
+        assert_eq!(constraints.min_height, flui_types::geometry::px(40.0));
+        assert_eq!(constraints.max_height, flui_types::geometry::px(100.0));
+    }
+
+    /// A `fixed_size` inside `[minimum, maximum]` pins `min == max` at
+    /// exactly that value on both axes.
+    #[test]
+    fn fixed_size_inside_the_envelope_pins_min_and_max_to_it() {
+        let constraints =
+            effective_constraints(size(64.0, 40.0), size(200.0, 100.0), Some(size(90.0, 60.0)));
+        assert_eq!(constraints.min_width, flui_types::geometry::px(90.0));
+        assert_eq!(constraints.max_width, flui_types::geometry::px(90.0));
+        assert_eq!(constraints.min_height, flui_types::geometry::px(60.0));
+        assert_eq!(constraints.max_height, flui_types::geometry::px(60.0));
+    }
+
+    /// Mutation-honest — the bug this test would have caught: a
+    /// `fixed_size` (10×10) SMALLER than `minimum` (64×40) must clamp UP to
+    /// the minimum before pinning, not pin directly to 10×10 (which would
+    /// invert `min > max` against a `maximum` of 200×100 anyway, but more
+    /// importantly silently produces a button smaller than its own declared
+    /// minimum — the oracle's `effectiveConstraints.constrain(resolvedFixedSize)`
+    /// step this function ports).
+    #[test]
+    fn fixed_size_smaller_than_minimum_is_clamped_up_to_the_minimum() {
+        let constraints =
+            effective_constraints(size(64.0, 40.0), size(200.0, 100.0), Some(size(10.0, 10.0)));
+        assert_eq!(constraints.min_width, flui_types::geometry::px(64.0));
+        assert_eq!(constraints.max_width, flui_types::geometry::px(64.0));
+        assert_eq!(constraints.min_height, flui_types::geometry::px(40.0));
+        assert_eq!(constraints.max_height, flui_types::geometry::px(40.0));
+    }
+
+    /// Symmetric case: a `fixed_size` LARGER than `maximum` clamps down.
+    #[test]
+    fn fixed_size_larger_than_maximum_is_clamped_down_to_the_maximum() {
+        let constraints = effective_constraints(
+            size(64.0, 40.0),
+            size(200.0, 100.0),
+            Some(size(500.0, 500.0)),
+        );
+        assert_eq!(constraints.min_width, flui_types::geometry::px(200.0));
+        assert_eq!(constraints.max_width, flui_types::geometry::px(200.0));
+        assert_eq!(constraints.min_height, flui_types::geometry::px(100.0));
+        assert_eq!(constraints.max_height, flui_types::geometry::px(100.0));
+    }
+
+    /// An infinite `fixed_size` axis is ignored on that axis (Flutter
+    /// parity: "Fixed size dimensions whose value is double.infinity are
+    /// ignored", `ButtonStyle.fixedSize`'s doc comment) — the other axis
+    /// still pins.
+    #[test]
+    fn an_infinite_fixed_axis_leaves_that_axis_at_the_envelope() {
+        let constraints = effective_constraints(
+            size(64.0, 40.0),
+            size(200.0, 100.0),
+            Some(flui_types::Size::new(
+                flui_types::Pixels::INFINITY,
+                flui_types::geometry::px(60.0),
+            )),
+        );
+        assert_eq!(constraints.min_width, flui_types::geometry::px(64.0));
+        assert_eq!(constraints.max_width, flui_types::geometry::px(200.0));
+        assert_eq!(constraints.min_height, flui_types::geometry::px(60.0));
+        assert_eq!(constraints.max_height, flui_types::geometry::px(60.0));
     }
 }

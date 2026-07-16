@@ -244,6 +244,21 @@ impl LaidOut {
             ),
         }
     }
+
+    /// The string value of a mounted render node's named
+    /// [`Diagnosticable`](flui_foundation::Diagnosticable) property (e.g.
+    /// `"color"` on a `RenderPhysicalShape`) — lets a test assert on a
+    /// resolved value (a `WidgetStateProperty` resolution reaching all the
+    /// way to paint configuration) without downcasting to the concrete
+    /// render-object type, which this harness has no generic support for.
+    /// Returns `None` if `id` is not live or carries no such property.
+    pub fn render_property(&self, id: RenderId, property_name: &str) -> Option<String> {
+        let owner = self.pipeline_owner.read();
+        let diagnostics = owner.debug_node_diagnostics(id)?;
+        diagnostics
+            .find_property(property_name)
+            .map(|property| property.value().to_string())
+    }
 }
 
 /// Strips generic parameters (`Foo<Bar>` → `Foo`) so a diagnostics name

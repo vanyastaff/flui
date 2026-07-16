@@ -23,6 +23,16 @@ use common::{lay_out, tight};
 use flui_material::{ElevatedButton, Theme, ThemeData};
 use flui_widgets::Text;
 
+/// `_ElevatedButtonDefaultsM3`'s formatted `Debug` string for a given
+/// resolved [`Color`](flui_types::Color) — what `RenderPhysicalShape`'s
+/// `Diagnosticable::debug_fill_properties` writes into its `"color"`
+/// property (`add_color("color", format!("{:?}", self.color))`,
+/// `crates/flui-objects/src/proxy/physical_model.rs`), so a test can compare
+/// against it without downcasting the render object.
+fn color_property(color: flui_types::Color) -> String {
+    format!("{color:?}")
+}
+
 #[test]
 fn tap_fires_on_pressed_and_the_button_mounts_a_material_surface() {
     let taps = Arc::new(AtomicUsize::new(0));
@@ -81,5 +91,95 @@ fn a_button_with_no_press_handler_is_disabled_and_a_tap_dispatch_is_a_no_op() {
         material_before, material_after,
         "the disabled button's render tree must not be torn down or rebuilt \
          under a tap dispatch it does not react to",
+    );
+}
+
+/// Mutation-honest coverage for `ButtonStyleButtonCoreState::init_state`'s
+/// `WidgetState::Disabled` sync (`crates/flui-material/src/button_style_button.rs`)
+/// — driven through the REAL `create_state`/`init_state` lifecycle of a
+/// mounted `ElevatedButton`, not a hand-constructed `WidgetStates` value.
+/// Deleting that sync line leaves every unit test in `elevated_button.rs`
+/// green (they all resolve against a states value they construct
+/// themselves), because `_ElevatedButtonDefaultsM3`'s `background_color`
+/// closure only produces a DIFFERENT color for `WidgetState::Disabled` —
+/// only an end-to-end mount, whose `states.value()` is fed by the real
+/// lifecycle hook, can tell whether that bit actually got set.
+#[test]
+fn a_handler_less_button_resolves_the_disabled_background_color_through_the_real_lifecycle() {
+    let theme = ThemeData::light();
+    let colors = theme.color_scheme;
+    let laid = lay_out(
+        Theme::new(theme, ElevatedButton::new(Text::new("Save"))),
+        tight(120.0, 48.0),
+    );
+
+    let material = laid
+        .find_by_render_type("RenderPhysicalShape")
+        .expect("a disabled ElevatedButton must still mount its Material surface");
+    let resolved_color = laid
+        .render_property(material, "color")
+        .expect("RenderPhysicalShape reports a \"color\" diagnostics property");
+
+    assert_eq!(
+        resolved_color,
+        color_property(colors.on_surface.with_opacity(0.12)),
+        "a button with no on_pressed handler must resolve _ElevatedButtonDefaultsM3's disabled \
+         background color (onSurface@12%) — which only happens if init_state actually set \
+         WidgetState::Disabled before the first build; without that sync this resolves to the \
+         enabled default (surfaceContainerLow) instead",
+    );
+}
+
+/// Companion coverage for `did_update_view`'s re-sync branch: an ENABLED
+/// button (real `on_pressed`) resolves the enabled background first, then a
+/// root swap to a handler-less `ElevatedButton` (same element identity,
+/// `did_update_view` fires, not `init_state` again) must re-resolve the
+/// disabled background. Mutation-honest the same way as the test above:
+/// deleting `did_update_view`'s `WidgetState::Disabled` re-sync leaves the
+/// enabled color stuck after the swap.
+#[test]
+fn did_update_view_resyncs_disabled_when_the_press_handler_is_removed() {
+    let theme = ThemeData::light();
+    let colors = theme.color_scheme;
+    let mut laid = lay_out(
+        Theme::new(
+            theme.clone(),
+            ElevatedButton::new(Text::new("Save")).on_pressed(|| {}),
+        ),
+        tight(120.0, 48.0),
+    );
+
+    let material = laid
+        .find_by_render_type("RenderPhysicalShape")
+        .expect("Material must mount");
+    let enabled_color = laid
+        .render_property(material, "color")
+        .expect("RenderPhysicalShape reports a \"color\" diagnostics property");
+    assert_eq!(
+        enabled_color,
+        color_property(colors.surface_container_low),
+        "an enabled button must resolve _ElevatedButtonDefaultsM3's enabled background color",
+    );
+
+    // Root swap to the SAME widget shape minus `.on_pressed(..)`:
+    // reconciliation keeps element/render identity, so this exercises
+    // `did_update_view`, not a fresh `init_state`.
+    laid.pump_widget(Theme::new(theme, ElevatedButton::new(Text::new("Save"))));
+
+    let material_after_swap = laid
+        .find_by_render_type("RenderPhysicalShape")
+        .expect("Material must still be mounted after the swap");
+    assert_eq!(
+        material, material_after_swap,
+        "the swap must reconcile onto the same render node (did_update_view), not remount",
+    );
+    let disabled_color = laid
+        .render_property(material_after_swap, "color")
+        .expect("RenderPhysicalShape reports a \"color\" diagnostics property");
+    assert_eq!(
+        disabled_color,
+        color_property(colors.on_surface.with_opacity(0.12)),
+        "removing the press handler must re-sync WidgetState::Disabled via did_update_view, \
+         re-resolving the disabled background color",
     );
 }
