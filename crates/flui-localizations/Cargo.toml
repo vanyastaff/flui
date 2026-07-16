@@ -1,0 +1,30 @@
+[package]
+name = "flui-localizations"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Global (multi-language) localized resources for FLUI's widget catalog — an analog of Flutter's flutter_localizations package"
+keywords = ["i18n", "l10n", "localization", "locale", "flui"]
+categories = ["gui", "internationalization"]
+
+[dependencies]
+# `WidgetsLocalizations`/`LocalizationsDelegate`/`BoxedWidgetsLocalizations` —
+# the flui-widgets contract this crate's `GlobalWidgetsLocalizations`
+# implements. This is the sanctioned l10n --> widgets edge (FOUNDATIONS.md,
+# amendment 2026-07-16): the target DAG's `l10n --> types`-only edge predates
+# a concrete consumer; `GlobalWidgetsLocalizations` implementing a
+# flui-widgets trait is that consumer.
+flui-widgets = { path = "../flui-widgets", version = "0.2.0" }
+# `Locale` — the value type `GlobalWidgetsLocalizations::for_locale` resolves
+# against.
+flui-types = { path = "../flui-types", version = "0.2.0" }
+
+[lib]
+name = "flui_localizations"
+path = "src/lib.rs"
+
+[lints]
+workspace = true

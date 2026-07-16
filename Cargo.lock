@@ -1699,6 +1699,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "flui-localizations"
+version = "0.2.0"
+dependencies = [
+ "flui-types",
+ "flui-widgets",
+]
+
+[[package]]
 name = "flui-macros"
 version = "0.2.0"
 dependencies = [

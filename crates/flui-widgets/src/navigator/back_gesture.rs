@@ -19,15 +19,14 @@
 //! no such route flag yet; opting a route into `back_gesture` is this port's
 //! substitute gate, not a `!fullscreenDialog` check).
 //!
-//! # No ambient `Directionality`
+//! # Ambient `Directionality`
 //!
-//! FLUI has no `Directionality` inherited widget yet (see `icon.rs`'s and
-//! `single_child_scroll_view.rs`'s own notes on the same gap). Every other
-//! FLUI widget that would read it defaults to left-to-right; this module does
-//! the same, but keeps the sign-normalizing conversion
-//! ([`convert_to_logical`]) as a single, independently testable function
-//! rather than inlining an LTR assumption at each call site — the day
-//! `Directionality::of` exists, only the call site needs to change.
+//! [`BackGestureDetectorState::build`] reads the ambient
+//! [`Directionality::maybe_of`], falling back to [`TextDirection::Ltr`] when
+//! there is no `Directionality` ancestor (matching every other FLUI widget
+//! that reads it). The sign-normalizing conversion
+//! ([`convert_to_logical`]) stays a single, independently testable function
+//! rather than being inlined at each call site.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -49,7 +48,7 @@ use flui_view::{AnimatedView, impl_animated_view};
 
 use super::navigator::NavigatorHandle;
 use super::route::RouteId;
-use crate::{GestureArenaScope, Listener, Positioned, SizedBox, Stack, StackFit};
+use crate::{Directionality, GestureArenaScope, Listener, Positioned, SizedBox, Stack, StackFit};
 
 /// Flutter's `_kBackGestureWidth` (`cupertino/route.dart`, 3.44.0): the
 /// width of the edge-anchored hit region that can start a drag.
@@ -64,7 +63,7 @@ const DROPPED_SWIPE_DURATION: Duration = Duration::from_millis(350);
 /// Flutter's `_CupertinoBackGestureDetectorState._convertToLogical`:
 /// normalizes a horizontal delta/velocity fraction into pop-direction
 /// coordinates (positive = toward revealing the previous route), in exactly
-/// one place — see the module docs on the missing ambient `Directionality`.
+/// one place — see the module docs on the ambient `Directionality` read.
 pub(crate) fn convert_to_logical(value: f32, direction: TextDirection) -> f32 {
     match direction {
         TextDirection::Rtl => -value,
@@ -191,7 +190,11 @@ struct BackGestureRuntime {
     /// Flutter's `_CupertinoBackGestureDetectorState._handlePointerDown`
     /// reading `widget.enabledCallback()` fresh each time.
     enabled: Rc<dyn Fn() -> bool>,
-    direction: TextDirection,
+    /// Refreshed from the ambient `Directionality` on every `build` (see
+    /// `BackGestureDetectorState::build`) — `create_state` has no
+    /// `BuildContext`, so this starts at the LTR fallback and is corrected
+    /// before the detector's first frame is ever interactive.
+    direction: Cell<TextDirection>,
     /// The in-flight gesture, if a drag has started. `None` both before the
     /// first pointer down and after `drag_end`/`drag_cancel`/`dispose` have
     /// consumed it — the multi-touch guard (`Some` blocks a second pointer
@@ -240,7 +243,7 @@ impl BackGestureRuntime {
     fn on_drag_update(&self, details: DragUpdateDetails) {
         let delta = convert_to_logical(
             details.primary_delta / self.normalized_width(),
-            self.direction,
+            self.direction.get(),
         );
         if let Some(gesture) = self.gesture.borrow().as_ref() {
             gesture.drag_update(delta);
@@ -250,7 +253,7 @@ impl BackGestureRuntime {
     fn on_drag_end(&self, details: DragEndDetails) {
         let velocity = convert_to_logical(
             details.primary_velocity / self.normalized_width(),
-            self.direction,
+            self.direction.get(),
         );
         self.finish_drag(velocity);
     }
@@ -436,8 +439,10 @@ impl StatefulView for BackGestureDetector {
                 route: self.route,
                 controller: self.controller.clone(),
                 enabled: Rc::clone(&self.enabled),
-                // No ambient `Directionality` — see the module docs.
-                direction: TextDirection::Ltr,
+                // No `BuildContext` here — refreshed from the ambient
+                // `Directionality` on every `build` instead (see the module
+                // docs and `BackGestureDetectorState::build`).
+                direction: Cell::new(TextDirection::Ltr),
                 gesture: RefCell::new(None),
                 awaiting_settle: Cell::new(false),
             }),
@@ -472,6 +477,14 @@ impl std::fmt::Debug for BackGestureDetectorState {
 impl ViewState<BackGestureDetector> for BackGestureDetectorState {
     fn build(&self, view: &BackGestureDetector, ctx: &dyn BuildContext) -> impl IntoView {
         self.runtime.poll_settle();
+        // Renews the `Directionality` dependency every rebuild (the same
+        // contract every `InheritedView` read follows) and keeps
+        // `on_drag_update`/`on_drag_end` — plain closures with no
+        // `BuildContext` of their own — reading a direction that is at most
+        // one frame stale.
+        self.runtime
+            .direction
+            .set(Directionality::maybe_of(ctx).unwrap_or(TextDirection::Ltr));
 
         if self.recognizer.borrow().is_none() {
             *self.recognizer.borrow_mut() = Some(self.build_recognizer(ctx));
@@ -765,7 +778,7 @@ mod tests {
             route: top,
             controller: c,
             enabled: Rc::new(|| true),
-            direction: TextDirection::Ltr,
+            direction: Cell::new(TextDirection::Ltr),
             gesture: RefCell::new(None),
             awaiting_settle: Cell::new(false),
         };
@@ -837,7 +850,7 @@ mod tests {
             route: top,
             controller: c.clone(),
             enabled: Rc::new(|| true),
-            direction: TextDirection::Ltr,
+            direction: Cell::new(TextDirection::Ltr),
             gesture: RefCell::new(Some(BackGestureController::new(
                 navigator.clone(),
                 top,
@@ -901,7 +914,7 @@ mod tests {
             route: top,
             controller: c.clone(),
             enabled: Rc::new(|| true),
-            direction: TextDirection::Ltr,
+            direction: Cell::new(TextDirection::Ltr),
             gesture: RefCell::new(Some(BackGestureController::new(
                 navigator.clone(),
                 top,
@@ -950,7 +963,7 @@ mod tests {
                 attempts_for_enabled.fetch_add(1, Ordering::SeqCst);
                 true
             }),
-            direction: TextDirection::Ltr,
+            direction: Cell::new(TextDirection::Ltr),
             gesture: RefCell::new(None),
             awaiting_settle: Cell::new(false),
         };
@@ -1001,7 +1014,7 @@ mod tests {
             route: top,
             controller: c,
             enabled: Rc::new(move || allow_for_closure.get()),
-            direction: TextDirection::Ltr,
+            direction: Cell::new(TextDirection::Ltr),
             gesture: RefCell::new(None),
             awaiting_settle: Cell::new(false),
         };

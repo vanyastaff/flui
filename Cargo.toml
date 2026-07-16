@@ -19,11 +19,12 @@ members = [
     "crates/flui-hot-reload",  # Hot-reload scene plugins via dlopen (ACTIVE)
 
     # === Phase 3: Framework Layer ===
-    "crates/flui-rendering", # Render tree / engine (ACTIVE)
-    "crates/flui-objects",   # Concrete RenderBox/RenderSliver catalog (ACTIVE)
-    "crates/flui-view",      # View/Element tree (ACTIVE)
-    "crates/flui-widgets",   # User-facing widget catalog (ACTIVE — Core.1 slice)
-    "crates/flui-binding",   # Headless deterministic frame driver (pump_frame) (ACTIVE — Phase 1)
+    "crates/flui-rendering",     # Render tree / engine (ACTIVE)
+    "crates/flui-objects",       # Concrete RenderBox/RenderSliver catalog (ACTIVE)
+    "crates/flui-view",          # View/Element tree (ACTIVE)
+    "crates/flui-widgets",       # User-facing widget catalog (ACTIVE — Core.1 slice)
+    "crates/flui-localizations", # Global (multi-language) localized resources (ACTIVE — Catalog.1 slice)
+    "crates/flui-binding",       # Headless deterministic frame driver (pump_frame) (ACTIVE — Phase 1)
 
     # === Phase 4: Application Layer ===
     "crates/flui-app",    # Application framework (ACTIVE - Migration)
@@ -85,6 +86,7 @@ default-members = [
     "crates/flui-objects",
     "crates/flui-view",
     "crates/flui-widgets",
+    "crates/flui-localizations",
     "crates/flui-binding",
     "crates/flui-app",
     "crates/flui-assets",

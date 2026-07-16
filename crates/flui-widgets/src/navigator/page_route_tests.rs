@@ -19,8 +19,11 @@ use flui_animation::{Animation, AnimationStatus};
 use flui_rendering::hit_testing::HitTestResult;
 use flui_types::Color;
 use flui_types::geometry::{Offset, px};
+use flui_types::typography::TextDirection;
 use flui_view::prelude::*;
 use flui_view::{BoxedView, BuildContext};
+
+use crate::Directionality;
 
 use super::navigator::{Navigator, NavigatorHandle};
 use super::overlay_route::{RouteAnimation, SimpleRoute};
@@ -660,6 +663,115 @@ fn back_gesture_edge_drag_normalizes_against_the_routes_real_width_not_the_hit_s
         19.9,
         300.0,
         flui_interaction::events::make_up_event,
+    );
+}
+
+/// [`Directionality`] proof for `convert_to_logical`'s sign flip
+/// (`back_gesture.rs`): the entrance-completed controller sits pinned at its
+/// upper clamp bound (`value == 1.0`), so a drag toward the wrong sign has
+/// nothing to move — it stays exactly at `1.0`. Under LTR a *rightward* edge
+/// drag drops the value (the oracle's normal "swipe in from the left edge"
+/// gesture); under RTL `convert_to_logical` flips the sign, so it is the
+/// *leftward* edge drag that drops the value instead, by the same magnitude.
+///
+/// This is deliberately a four-way matrix, not a single before/after
+/// comparison: if the ambient `Directionality` read were broken (e.g. wired
+/// to always report `None`/LTR, the exact vacuous shape called out in
+/// review), `rtl_leftward` would sit at `~0.0` too and the assertions below
+/// would fail — a single "does the RTL case not equal the LTR case" check
+/// could not distinguish "correctly flipped" from "did nothing at all".
+///
+/// Oracle: `_CupertinoBackGestureDetectorState._handleDragUpdate`,
+/// `_convertToLogical` (`cupertino/route.dart`, checked-out tag
+/// `3.33.0-0.0.pre`, commit `88e87cd9`).
+#[test]
+fn back_gesture_edge_drag_sign_flips_with_ambient_directionality() {
+    /// Pushes a fresh `back_gesture(true)` route under `direction`, drags the
+    /// left-edge strip from `from_x` to `to_x`, and returns how much the
+    /// controller's value dropped from its entrance-completed `1.0` (`0.0`
+    /// when the drag's sign pushed toward the clamped-away upper bound
+    /// instead, so nothing was observable).
+    fn drop_for(direction: TextDirection, from_x: f32, to_x: f32) -> f32 {
+        let handle = NavigatorHandle::new();
+        handle.seed_initial(plain_page());
+        let mut harness = mount(Directionality::new(
+            direction,
+            Navigator::new(handle.clone()),
+        ));
+
+        let route = PageRoute::<i32>::new(leaf).back_gesture(true);
+        let transition = route.transition_handle();
+        let _pushed = harness.enter_owner_scope(|| handle.push(route));
+        complete_entrance(&transition, &mut harness);
+        let controller = transition.controller().expect("installed");
+        assert_eq!(controller.value(), 1.0);
+
+        dispatch_pointer_event(
+            &harness,
+            from_x,
+            300.0,
+            flui_interaction::events::make_down_event,
+        );
+        // Cross the recognizer's 18px horizontal slop on the first move (no
+        // reported delta, `on_start`), then a further move to `to_x` for a
+        // clean incremental `primary_delta` — the exact same two-step shape
+        // (18.5px, then 0.4px further) as
+        // `back_gesture_edge_drag_normalizes_against_the_routes_real_width_not_the_hit_strip`,
+        // just mirrored for the leftward direction too.
+        let crossing_x = from_x + (to_x - from_x).signum() * 18.5;
+        dispatch_pointer_event(
+            &harness,
+            crossing_x,
+            300.0,
+            flui_interaction::events::make_move_event,
+        );
+        dispatch_pointer_event(
+            &harness,
+            to_x,
+            300.0,
+            flui_interaction::events::make_move_event,
+        );
+        let dropped = 1.0 - controller.value();
+        dispatch_pointer_event(
+            &harness,
+            to_x,
+            300.0,
+            flui_interaction::events::make_up_event,
+        );
+        dropped
+    }
+
+    let ltr_rightward = drop_for(TextDirection::Ltr, 1.0, 19.9);
+    let ltr_leftward = drop_for(TextDirection::Ltr, 19.9, 1.0);
+    let rtl_rightward = drop_for(TextDirection::Rtl, 1.0, 19.9);
+    let rtl_leftward = drop_for(TextDirection::Rtl, 19.9, 1.0);
+
+    assert!(
+        ltr_rightward > 1e-6,
+        "LTR: a rightward edge-drag must decrease the controller value; got drop={ltr_rightward}"
+    );
+    assert!(
+        ltr_leftward.abs() < 1e-9,
+        "LTR: a leftward edge-drag pushes toward the upper clamp bound — no observable drop; \
+         got drop={ltr_leftward}"
+    );
+
+    assert!(
+        rtl_leftward > 1e-6,
+        "RTL: convert_to_logical flips the sign, so the LEFTWARD edge-drag must be the one that \
+         decreases the controller value; got drop={rtl_leftward}"
+    );
+    assert!(
+        rtl_rightward.abs() < 1e-9,
+        "RTL: the SAME rightward drag that dropped the value under LTR must NOT drop it under \
+         RTL — the sign is flipped, so it pushes toward the clamped-away upper bound instead; \
+         got drop={rtl_rightward}"
+    );
+
+    assert!(
+        (ltr_rightward - rtl_leftward).abs() < 1e-4,
+        "the drop magnitude must match exactly between the two Directionality-flipped-but-\
+         otherwise-identical drags; ltr_rightward={ltr_rightward} rtl_leftward={rtl_leftward}"
     );
 }
 

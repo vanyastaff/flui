@@ -133,6 +133,8 @@ The *funnel* signatures (`tree.rs::insert_box`, view → render `From` impls) ac
 
 **Registry addition (2026-07-10, ADR-0021 §7n):** `Animatable` is registered for `Hero::create_rect_tween`. The hook stores a `Box<dyn Animatable<Rect>>`, matching Flutter's `CreateRectTween` shape while staying value-only: the tween receives two rects, exposes `transform(t)`, and has no tree, scheduler, or render-owner access. This is an animation-transform boundary, not a new widget/render-object boundary; `tests/hero_public.rs::create_rect_tween_shapes_the_public_flight` proves a flight samples it.
 
+**Registry addition (2026-07-16, Catalog.1 theming + localizations substrate):** `ErasedLocalizationsDelegate` and `WidgetsLocalizations` are registered. `BoxedLocalizationsDelegate` holds `Arc<dyn ErasedLocalizationsDelegate>` to erase each `LocalizationsDelegate`'s associated `Resources` type, the same heterogeneous-erasure shape `ErasedRoute` already covers for `Navigator`'s route stack — a `Localizations` widget's delegate list cannot be generic over every delegate's resource type and stay `dyn`-storable. `BoxedWidgetsLocalizations` holds `Box<dyn WidgetsLocalizations>` so `Localizations::of`/`BoxedWidgetsLocalizations::of` retrieve the resource by the abstract trait, not the concrete implementor (`DefaultWidgetsLocalizations` in `flui-widgets`, `GlobalWidgetsLocalizations` in `flui-localizations`) — Flutter parity: `Localizations.of<WidgetsLocalizations>` is keyed by the interface, never the runtime class.
+
 **Allowlist marker:** `// PORT-CHECK-OK-DYN: <one-line justification>` on the same line as the `dyn`-introducing declaration. Multi-line declarations either keep the marker on the `Box<` line (matched by the scan) or refactor to a type alias that fits one line + carries its own marker.
 
 **Sanctioned trait allowlist** (categories per FR-029 #1-#5 + pre-existing framework surfaces): element-storage sub-traits (`ElementBase` / `ElementBehavior` / `StatelessElementBase` / `StatefulElementBase` / `ProxyElementBase` / `InheritedElementBase` / `RenderElementBase` / `RootElementBase` / `ErrorElementBase`), BoxedView (`View` / `BoxedView` / `ViewObject`), pipeline-owner type-erasure (`Any`), error / observer / animation / owned-callback chains (`Error` / `Listenable` / `Animation` / `Animatable` / `WidgetsBindingObserver` / `Fn` / `FnMut` / `FnOnce`), protocol-layout erasure (`BoxLayoutCtxErased` / `SliverLayoutCtxErased` — D-block PR-A1b §U19 / memo D5), and pre-existing surfaces (`ViewKey` / `BuildContext` / `Notification` / `NotifiableElement` / `RenderObject` / `RenderObjectTrait`). Add a trait here when its `dyn` usage is widespread enough that per-site markers become noise; remove only after auditing that the trait's `dyn` surface is genuinely gone.
@@ -147,12 +149,13 @@ The *funnel* signatures (`tree.rs::insert_box`, view → render `From` impls) ac
 
 **Every `downcast::<…>` / `downcast_ref::<…>` / `downcast_mut::<…>` in `crates/flui-widgets/src` must carry a `// PORT-CHECK-OK-DOWNCAST: <reason>` marker on the same line.**
 
-Two marked sites exist, and they are not on the same footing:
+Four marked sites exist, and they are not on the same footing:
 
 - `RouteRecord::did_complete` (`crates/flui-widgets/src/navigator/route.rs`), where a pop result crosses the `Box<dyn Any + Send>` boundary and is downcast back to the owning route's `Output`. **Signed off** in [`ADR-0019`](adr/ADR-0019-navigator-routing-seam.md) *Public API and sign-off (U4)* — the repository owner ruled on this exact boundary.
 - `RouteSettings::argument` (`crates/flui-widgets/src/navigator/route.rs`), downcasting the `arguments` payload named in [`ADR-0024`](adr/ADR-0024-named-routes-seam.md) §4.1. **Signed off 2026-07-15** — ADR-0024 §6 records the repository owner's explicit Gate decision (approve as-is) on exactly this boundary, closing the gap §6's earlier update flagged. §4.2's separate `GeneratedRoute` erased-result boundary remains proposed and ungated.
+- `Localizations::maybe_of` and `Localizations::build` (`crates/flui-widgets/src/localization/localizations.rs`), both downcasting an `Arc<dyn Any + Send + Sync>` resource-map entry back to a `LocalizationsDelegate::Resources` type. **Added 2026-07-16** as part of the Catalog.1 theming + localizations substrate; confined to that one module (the critic-mandated downcast gate for `Localizations::of`/`maybe_of`), same erasure shape as the ADR-0019 U4 boundary above — a `Localizations` widget's delegate list is heterogeneous over each delegate's declared resource type, so it cannot be generic and stay `dyn`-storable.
 
-Why the U4 boundary exists: `Navigator::pop(result)` is called from deep inside a route's subtree, which knows its result type; the navigator, holding `Vec<Box<dyn ErasedRoute>>`, does not. Flutter has the same runtime failure mode (`Route<dynamic>` plus an unchecked `pop<T>`), but Rust would not otherwise need it.
+Why the U4 boundary exists: `Navigator::pop(result)` is called from deep inside a route's subtree, which knows its result type; the navigator, holding `Vec<Box<dyn ErasedRoute>>`, does not. Flutter has the same runtime failure mode (`Route<dynamic>` plus an unchecked `pop<T>`), but Rust would not otherwise need it. `Localizations` has the analogous shape: a `LocalizationsDelegate` list is heterogeneous over `Resources`, so the ambient resource map is `HashMap<TypeId, Arc<dyn Any + Send + Sync>>` and `Localizations::of::<R>` downcasts back to the caller's requested `R`.
 
 Why the guard exists: before U4, `flui-widgets` was outside both FR-036 (trigger 9) and FR-033, so this erasure — the first in the public catalog — would have landed with **no gate at all**. On a type mismatch FLUI logs via `tracing::error!` and completes the future with `None`; Flutter throws a cast error. Per [`PANIC-POLICY.md`](PANIC-POLICY.md), a wrong `pop` type is caller error, not a framework invariant, so it must not panic.
 
@@ -1002,6 +1005,7 @@ This section indexes **crate-level** `ARCHITECTURE.md` template state. For docum
 | `flui-objects` | Not yet templated | Active |
 | `flui-view` | `crates/flui-view/UNIFIED_ELEMENT.md` (companion; not templated) | Active |
 | `flui-widgets` | Not yet templated | Active |
+| `flui-localizations` | Not yet templated | Active |
 | `flui-binding` | Not yet templated | Active |
 | `flui-app` | Not yet templated | Active |
 | `flui-animation` | `crates/flui-animation/docs/ARCHITECTURE.md` (pre-template) | Active |

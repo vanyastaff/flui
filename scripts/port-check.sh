@@ -437,13 +437,21 @@ fi
 # `Navigator::pop(result)` must erase its result through `Box<dyn Any + Send>`,
 # because a heterogeneous route stack cannot carry each route's `Output` type
 # (ADR-0019 §4). The downcast back to `R::Output` in `RouteRecord::did_complete`
-# is the ONE sanctioned site, and it is signed off in ADR-0019's *Public API and
-# sign-off (U4)*.
+# is signed off in ADR-0019's *Public API and sign-off (U4)*.
 #
 # Before U4, `crates/flui-widgets` sat outside both FR-036 and FR-033, so that
 # boundary would have shipped with no gate at all. This grep closes it: any new
 # `downcast`/`downcast_ref`/`downcast_mut` in the catalog must be justified with
 # a `// PORT-CHECK-OK-DOWNCAST: <reason>` marker, i.e. a deliberate act.
+#
+# Registry addition (2026-07-16, Catalog.1 theming + localizations substrate):
+# `Localizations::maybe_of`/`build` (crates/flui-widgets/src/localization/
+# localizations.rs) downcast an `Arc<dyn Any + Send + Sync>` resource-map entry
+# back to the delegate-declared, caller-requested resource type — the same
+# heterogeneous-erasure shape as the ADR-0019 U4 boundary above (a
+# `Localizations` cannot be generic over every `LocalizationsDelegate::Resources`
+# type its delegate list carries and stay `dyn`-storable). Confined to that one
+# module, both call sites marked.
 # -----------------------------------------------------------------------------
 fr033w_hits=$(rg --line-number --column 'downcast(_ref|_mut)?::<' \
   crates/flui-widgets/src 2>/dev/null \
@@ -458,7 +466,7 @@ if [[ -n "${fr033w_hits}" ]]; then
   violations=$((violations + 1))
 else
   if [[ "${verbose}" -eq 1 ]]; then
-    echo "ok    FR-033/widgets: downcast in flui-widgets (Navigator pop-result boundary only)"
+    echo "ok    FR-033/widgets: downcast in flui-widgets (Navigator pop-result + localizations resource-map boundaries only)"
   fi
 fi
 
@@ -1142,7 +1150,19 @@ fi
 #   through at deferred-insert apply, keeping the generic insert path parent-data-
 #   agnostic. Sanctioned by the same FR-029 #6 rationale as the *LayoutCtxErased
 #   erasure traits below.
-fr036_allowed='dyn\s+(\$crate::|[a-zA-Z_][a-zA-Z0-9_]*::)*(View|ViewKey|BuildContext|ElementBase|ElementBehavior|StatelessElementBase|StatefulElementBase|ProxyElementBase|InheritedElementBase|RenderElementBase|RootElementBase|ErrorElementBase|InheritedElementAccess|RenderObjectTrait|RenderObject|Listenable|Notification|NotifiableElement|WidgetsBindingObserver|Animation|Animatable|BoxedView|ViewObject|Any|Error|GestureArenaMember|MonotonicClock|FocusTraversalPolicy|SliverGridDelegate|SingleChildLayoutDelegate|MultiChildLayoutDelegate|MultiChildLayoutContext|FlowDelegate|CustomPainter|ParentData|LogicalIndexParentData|CustomClipper|RendererBinding|HitTestable|Debug|Fn|FnMut|FnOnce|BoxLayoutCtxErased|SliverLayoutCtxErased|ChildManager|Future|Stream|ErasedRoute|NavigatorObserver|Simulation|ScrollPhysics|ImageProvider)\b'
+#   Catalog.1 theming + localizations substrate (2026-07-16):
+#   ErasedLocalizationsDelegate — `Arc<dyn ErasedLocalizationsDelegate>` inside
+#   `BoxedLocalizationsDelegate` erases a `LocalizationsDelegate`'s associated
+#   `Resources` type so a `Localizations` widget's delegate list can be
+#   heterogeneous (same shape as `ErasedRoute` above: a `Localizations` cannot
+#   be generic over every delegate's resource type and stay `dyn`-storable).
+#   WidgetsLocalizations — `Box<dyn WidgetsLocalizations>` inside
+#   `BoxedWidgetsLocalizations` erases the concrete localized-resource
+#   implementor (`DefaultWidgetsLocalizations`, `flui-localizations`'
+#   `GlobalWidgetsLocalizations`) behind the trait every `Localizations::of`
+#   caller depends on — Flutter parity: `Localizations.of<WidgetsLocalizations>`
+#   is keyed by the abstract interface, never the concrete runtime class.
+fr036_allowed='dyn\s+(\$crate::|[a-zA-Z_][a-zA-Z0-9_]*::)*(View|ViewKey|BuildContext|ElementBase|ElementBehavior|StatelessElementBase|StatefulElementBase|ProxyElementBase|InheritedElementBase|RenderElementBase|RootElementBase|ErrorElementBase|InheritedElementAccess|RenderObjectTrait|RenderObject|Listenable|Notification|NotifiableElement|WidgetsBindingObserver|Animation|Animatable|BoxedView|ViewObject|Any|Error|GestureArenaMember|MonotonicClock|FocusTraversalPolicy|SliverGridDelegate|SingleChildLayoutDelegate|MultiChildLayoutDelegate|MultiChildLayoutContext|FlowDelegate|CustomPainter|ParentData|LogicalIndexParentData|CustomClipper|RendererBinding|HitTestable|Debug|Fn|FnMut|FnOnce|BoxLayoutCtxErased|SliverLayoutCtxErased|ChildManager|Future|Stream|ErasedRoute|NavigatorObserver|Simulation|ScrollPhysics|ImageProvider|ErasedLocalizationsDelegate|WidgetsLocalizations)\b'
 
 # Framework crates under enforcement.
 fr036_scope=(

@@ -2,12 +2,77 @@
 
 use std::fmt;
 
+/// Deprecated ISO 639 language subtags mapped to their IANA "preferred value"
+/// replacement.
+///
+/// Oracle: `dart:ui`'s `Locale._deprecatedLanguageSubtagMap`
+/// (`engine/src/flutter/lib/ui/platform_dispatcher.dart`, checked-out tag
+/// `3.33.0-0.0.pre` / commit `88e87cd9`, table comment "Mappings generated
+/// for language subtag registry as of 2019-02-27" — the plan's requested
+/// `3.44.0` oracle tag was not present in the checkout; this is the actual
+/// tag verified against). The oracle table lists ~90 historical ISO 639-3
+/// retirements; only the three that are reachable through FLUI's RTL
+/// detection and locale-resolution surfaces today (`iw`/`in`/`ji`, all
+/// three-letter-vs-two-letter Bidi-relevant subtags) are ported. The rest are
+/// deferred — a future full-CLDR canonicalizer can extend this table without
+/// changing its shape.
+const DEPRECATED_LANGUAGE_SUBTAGS: &[(&str, &str)] = &[
+    ("in", "id"), // Indonesian; deprecated 1989-01-01
+    ("iw", "he"), // Hebrew; deprecated 1989-01-01
+    ("ji", "yi"), // Yiddish; deprecated 1989-01-01
+];
+
+/// Deprecated ISO 3166 region subtags mapped to their IANA "preferred value"
+/// replacement.
+///
+/// Oracle: `dart:ui`'s `Locale._deprecatedRegionSubtagMap` (same file/tag as
+/// [`DEPRECATED_LANGUAGE_SUBTAGS`]). Ported in full — six entries, no scope
+/// cut needed.
+const DEPRECATED_REGION_SUBTAGS: &[(&str, &str)] = &[
+    ("BU", "MM"), // Burma; deprecated 1989-12-05
+    ("DD", "DE"), // German Democratic Republic; deprecated 1990-10-30
+    ("FX", "FR"), // Metropolitan France; deprecated 1997-07-14
+    ("TP", "TL"), // East Timor; deprecated 2002-05-20
+    ("YD", "YE"), // Democratic Yemen; deprecated 1990-08-14
+    ("ZR", "CD"), // Zaire; deprecated 1997-07-14
+];
+
+/// Replaces a deprecated language subtag with its preferred code, if `code`
+/// appears in [`DEPRECATED_LANGUAGE_SUBTAGS`]; otherwise returns `code`
+/// unchanged.
+fn canonicalize_language_subtag(code: &str) -> &str {
+    DEPRECATED_LANGUAGE_SUBTAGS
+        .iter()
+        .find_map(|(deprecated, preferred)| (*deprecated == code).then_some(*preferred))
+        .unwrap_or(code)
+}
+
+/// Replaces a deprecated region subtag with its preferred code, if `code`
+/// appears in [`DEPRECATED_REGION_SUBTAGS`]; otherwise returns `code`
+/// unchanged.
+fn canonicalize_region_subtag(code: &str) -> &str {
+    DEPRECATED_REGION_SUBTAGS
+        .iter()
+        .find_map(|(deprecated, preferred)| (*deprecated == code).then_some(*preferred))
+        .unwrap_or(code)
+}
+
 /// An identifier for a user's language and regional preferences.
 ///
 /// Mirrors Flutter's `Locale`: a language code plus optional country
 /// and script subtags (e.g. `en_US`, `zh_Hans_CN`), used for
 /// localization and text-direction resolution.
-#[derive(Debug)]
+///
+/// ## Canonicalization
+///
+/// Deprecated language/region subtags are canonicalized to their preferred
+/// form at construction time (`Locale::new("iw", None::<&str>).language() ==
+/// "he"`), so two `Locale`s built from different historical spellings of the
+/// same subtag compare equal and hash identically — mirroring `dart:ui`'s
+/// `Locale` (see this module's deprecated-subtag tables for the oracle
+/// citation). The script subtag is passed through unchanged; the oracle
+/// does not canonicalize scripts.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Locale {
     /// The language code (e.g., "en", "es", "fr")
@@ -21,6 +86,18 @@ pub struct Locale {
 }
 
 impl Locale {
+    /// Builds a `Locale` from already-owned subtags, canonicalizing the
+    /// language and region against the deprecated-subtag tables. The sole
+    /// construction path every public constructor below routes through, so
+    /// canonicalization happens in exactly one place.
+    fn canonical(language: String, country: Option<String>, script: Option<String>) -> Self {
+        Self {
+            language: canonicalize_language_subtag(&language).to_owned(),
+            country: country.map(|code| canonicalize_region_subtag(&code).to_owned()),
+            script,
+        }
+    }
+
     /// Creates a new locale
     ///
     /// # Examples
@@ -34,11 +111,7 @@ impl Locale {
     /// ```
     #[inline]
     pub fn new(language: impl Into<String>, country: Option<impl Into<String>>) -> Self {
-        Self {
-            language: language.into(),
-            country: country.map(Into::into),
-            script: None,
-        }
+        Self::canonical(language.into(), country.map(Into::into), None)
     }
 
     /// Creates a new locale with a script code
@@ -59,11 +132,11 @@ impl Locale {
         country: Option<impl Into<String>>,
         script: Option<impl Into<String>>,
     ) -> Self {
-        Self {
-            language: language.into(),
-            country: country.map(Into::into),
-            script: script.map(Into::into),
-        }
+        Self::canonical(
+            language.into(),
+            country.map(Into::into),
+            script.map(Into::into),
+        )
     }
 
     /// Returns the language code (e.g. `"en"`).
@@ -214,5 +287,96 @@ impl Locale {
     #[inline]
     pub fn ja_jp() -> Self {
         Self::new("ja", Some("JP"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn deprecated_language_subtag_canonicalizes_on_construction() {
+        let iw = Locale::new("iw", None::<&str>);
+        assert_eq!(
+            iw.language(),
+            "he",
+            "iw must canonicalize to he on construction, not on read"
+        );
+    }
+
+    #[test]
+    fn deprecated_and_preferred_language_subtags_are_equal_and_hash_equal() {
+        let iw = Locale::new("iw", None::<&str>);
+        let he = Locale::new("he", None::<&str>);
+        assert_eq!(
+            iw, he,
+            "Locale(\"iw\") and Locale(\"he\") must be the same locale"
+        );
+
+        let mut set = std::collections::HashSet::new();
+        set.insert(iw);
+        assert!(
+            set.contains(&he),
+            "canonicalized locales must hash identically, not just compare equal"
+        );
+    }
+
+    #[test]
+    fn deprecated_region_subtag_canonicalizes_on_construction() {
+        // `de_DD` (East Germany) canonicalizes to `de_DE`.
+        let dd = Locale::new("de", Some("DD"));
+        let de = Locale::new("de", Some("DE"));
+        assert_eq!(dd.country(), Some("DE"));
+        assert_eq!(dd, de);
+    }
+
+    #[test]
+    fn all_deprecated_language_subtags_canonicalize() {
+        for (deprecated, preferred) in DEPRECATED_LANGUAGE_SUBTAGS {
+            assert_eq!(
+                Locale::new(*deprecated, None::<&str>).language(),
+                *preferred
+            );
+        }
+    }
+
+    #[test]
+    fn all_deprecated_region_subtags_canonicalize() {
+        for (deprecated, preferred) in DEPRECATED_REGION_SUBTAGS {
+            let locale = Locale::new("en", Some(*deprecated));
+            assert_eq!(locale.country(), Some(*preferred));
+        }
+    }
+
+    #[test]
+    fn unrecognized_subtags_pass_through_unchanged() {
+        let locale = Locale::new("xx", Some("YY"));
+        assert_eq!(locale.language(), "xx");
+        assert_eq!(locale.country(), Some("YY"));
+    }
+
+    #[test]
+    fn rtl_detection_matches_the_deprecated_alias() {
+        // `iw` canonicalizes to `he`, which is in the RTL set — so the alias
+        // must resolve to the same is_rtl() answer as the canonical form,
+        // not require every call site to know about the deprecated spelling.
+        assert!(Locale::new("iw", None::<&str>).is_rtl());
+        assert!(Locale::new("he", None::<&str>).is_rtl());
+    }
+
+    #[test]
+    fn from_language_tag_canonicalizes_deprecated_subtags() {
+        let iw = Locale::from_language_tag("iw").expect("valid single-subtag input");
+        assert_eq!(iw, Locale::new("he", None::<&str>));
+
+        let iw_dd = Locale::from_language_tag("iw_DD").expect("valid two-subtag input");
+        assert_eq!(iw_dd, Locale::new("he", Some("DE")));
+    }
+
+    #[test]
+    fn script_subtag_is_not_canonicalized() {
+        // The oracle canonicalizes language and region subtags only.
+        let locale = Locale::with_script("zh", Some("CN"), Some("Hans"));
+        assert_eq!(locale.script(), Some("Hans"));
     }
 }

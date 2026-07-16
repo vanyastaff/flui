@@ -137,7 +137,7 @@ The workspace is healthier than its crate count suggests: most crates are deep m
 
 - **Formalize the `flui` facade.** Re-enable and re-scope the facade crate to the *public* surface, add `flui-widgets`/`flui-material`/`flui-cupertino` re-exports (feature-flagged), and provide a `flui::prelude` as those crates land. App authors depend on `flui`; framework authors depend on the granular crates.
 - **Create the design-system crates.** `flui-material` and `flui-cupertino` are terminal catalog crates built on top of `flui-widgets`.
-- **Create `flui-localizations`.** The shared l10n crate is a common ancestor both design-system siblings need.
+- **Create `flui-localizations`.** The shared l10n crate is a common ancestor both design-system siblings need; it implements `flui-widgets`' `Localizations`/`WidgetsLocalizations` mechanism (`l10n --> widgets`, added 2026-07-16 — see the amendment below the target graph) rather than defining a parallel one.
 
 **No `flui-physics`** — Flutter's `physics` package is already ported into `flui-types/src/physics/`; this overrides the port-phasing research's proposal of a separate crate (~1k LOC of simulation math folded into `flui-types` is the correct shape — a standalone crate would be shallow). **No `flui-services`** — Flutter's `services` is deliberately dissolved; its residue (IME/text-input, system chrome, haptics) becomes capability traits on `flui-platform` (`PlatformTextInput`, `PlatformSystemChrome`, `PlatformHaptics`).
 
@@ -151,7 +151,7 @@ The workspace is healthier than its crate count suggests: most crates are deep m
 | L3 — Compositing / a11y / animation | `flui-semantics`, `flui-layer`, `flui-animation` |
 | L4 — Render machine | `flui-engine`, `flui-rendering` |
 | L5 — Framework spine + inspector | `flui-view`, `flui-devtools` |
-| L6 — Catalog + DX tooling | `flui-objects`, `flui-widgets`, `flui-binding`, **`flui-localizations`** (new), `flui-hot-reload`, `flui-cli`, `flui-build` |
+| L6 — Catalog + DX tooling | `flui-objects`, `flui-widgets`, `flui-binding`, `flui-localizations`, `flui-hot-reload`, `flui-cli`, `flui-build` |
 | L7 — Design systems | **`flui-material`** (new), **`flui-cupertino`** (new) |
 | L8 — Application | `flui-app` |
 | Facade | **`flui`** (formalized) |
@@ -178,7 +178,7 @@ graph TD
     devtools[flui-devtools]
     widgets[flui-widgets]
     binding[flui-binding]
-    l10n[flui-localizations NEW]
+    l10n[flui-localizations]
     material[flui-material NEW]
     cupertino[flui-cupertino NEW]
     app[flui-app]
@@ -216,6 +216,7 @@ graph TD
     binding --> interaction
     binding --> animation
     l10n --> types
+    l10n --> widgets
     material --> widgets
     material --> l10n
     cupertino --> widgets
@@ -229,6 +230,8 @@ graph TD
 ```
 
 `rendering --> scheduler` (added 2026-07-14): `flui-rendering::view::ScrollPosition` names `flui_scheduler::PostFrameHandle` for its coalesced content-dimension-flush notify (a post-frame callback that fires a scroll listener after `RenderViewport::perform_layout` commits extents, instead of notifying mid-layout). `flui-scheduler` is L2 (Substrate) and depends only on `flui-foundation`, so this is a same-direction extension of the existing `animation --> scheduler` (L3) edge, not a new direction — `flui-rendering` (L4) gains a second, lower-layer dependency, no cycle.
+
+`l10n --> widgets` (added 2026-07-16): the target graph originally drew `l10n --> types` only — `flui-localizations` depending exclusively on the foundation value types, with no concrete consumer yet. Landing the Catalog.1 theming + localizations substrate gave it one: `flui-widgets` now owns the mechanism (`Localizations`, `LocalizationsDelegate`, the `WidgetsLocalizations` trait, `Directionality`) per Flutter's own layering (`widgets/localizations.dart` lives in the `widgets` package, and `flutter_localizations` depends on `widgets`, not the reverse), and `flui-localizations::GlobalWidgetsLocalizations` is a `WidgetsLocalizations` implementor — it must depend on the crate that defines the trait. This is a genuinely new edge (L6 `l10n` gains an L6 sibling dependency on `widgets`, not just its existing L0 `types` dependency), not a same-direction extension like `rendering --> scheduler` above; it does not create a cycle because nothing in `widgets`, `objects`, `view`, `animation`, or `assets` depends on `l10n`. `material`/`cupertino --> l10n` (already in the target graph) still holds: they depend on both `widgets` and `l10n`, and `l10n` itself now depends on `widgets` too — no cycle, since `material`/`cupertino` never appear on `l10n`'s or `widgets`'s dependency side.
 
 The DAG is acyclic and downward-correct. The Constitution **v2.3.0** layer table reflects the pre-PR-C-2 layering snapshot (geometry was in `flui-types`; since [PR #138](https://github.com/vanyastaff/flui/pull/138) it lives in the dedicated `flui-geometry` crate and is re-exported via `flui_types::geometry::*` for compatibility — edition 2024 / Rust 1.96, accurate workspace member list otherwise); the **target graph above** is the forward-looking Part IV decomposition that Part V's roadmap migrates the workspace toward. The constitution remains "current state, locked"; this document is "target state, in progress." Full reasoning and the ordered migration delta: [`research/2026-05-22-crate-decomposition-redesign.md`](research/2026-05-22-crate-decomposition-redesign.md).
 
