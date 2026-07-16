@@ -442,6 +442,41 @@ fn popped_popup_route_finalizes_on_dismissal() {
     assert_eq!(navigator.route_ids().len(), 1);
 }
 
+/// `PageRoute::barrier_color` delegates to the same `ModalRoute` field
+/// `PopupRoute::barrier_color` already exercises above — added so
+/// `CupertinoPageRoute` can set `_kCupertinoPageTransitionBarrierColor`
+/// (`cupertino/route.dart`, 3.44.0), a dim only `PopupRoute` could set before.
+/// This proves the delegate actually reaches the barrier's paint, not just
+/// that the builder compiles.
+///
+/// Red-check: stub `PageRoute::barrier_color` as a no-op (drop the
+/// `self.modal = self.modal.barrier_color(color)` call) — this test's
+/// `RenderDecoratedBox` count assertion fails, since no route below has any
+/// other `DecoratedBox` in its tree.
+#[test]
+fn page_route_barrier_color_reaches_the_modal_barrier() {
+    let (navigator, mut harness, _bottom) = navigator_with_seed();
+    let without_color_names = harness.render_debug_names();
+    assert!(
+        !without_color_names
+            .iter()
+            .any(|name| name.ends_with("RenderDecoratedBox")),
+        "the seed route alone paints no DecoratedBox: {without_color_names:?}"
+    );
+
+    let route = PageRoute::<i32>::new(leaf).barrier_color(Color::RED);
+    let _result = navigator.push(route);
+    harness.tick();
+
+    let names = harness.render_debug_names();
+    assert!(
+        names
+            .iter()
+            .any(|name| name.ends_with("RenderDecoratedBox")),
+        "a set barrier_color must mount a DecoratedBox (`ColoredBox`) to paint it: {names:?}"
+    );
+}
+
 // ============================================================================
 // barrier — routes.dart:2273-2330
 // ============================================================================

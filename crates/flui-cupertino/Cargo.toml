@@ -23,10 +23,17 @@ flui-view = { path = "../flui-view", version = "0.2.0" }
 # `GestureDetector`, `FocusableActionDetector`-equivalent widgets, and
 # `FadeTransition` — `CupertinoButton`'s press-opacity substrate.
 # ADR-0028: this is the ONLY design-system-adjacent dependency allowed —
-# never `flui-material`, and never `flui-objects`/`flui-rendering` directly
-# (v1 composes existing `flui-widgets` widgets, it does not paint its own
-# render objects).
+# never `flui-material`, and never a new `flui-rendering` render object of
+# this crate's own (v1 composes existing `flui-widgets` widgets). The
+# `flui-objects` dependency below is a single value-type exception, not a
+# reversal of that rule — see its own comment.
 flui-widgets = { path = "../flui-widgets", version = "0.2.0" }
+# `TranslationFraction` only — the size-relative-offset newtype
+# `flui_widgets::SlideTransition` (an already-approved ADR-0028 dependency)
+# requires as its `Animation<T>` parameter. `route.rs` composes that existing
+# widget for `CupertinoPageRoute`'s slide transition; it does not construct
+# any `flui-objects` render object of its own.
+flui-objects = { path = "../flui-objects", version = "0.2.0" }
 # `Color`, `Brightness`, `TextStyle`/`FontWeight` — the value types every
 # const table in this crate (`colors.rs`, `text_theme.rs`) is built from.
 flui-types = { path = "../flui-types", version = "0.2.0" }
