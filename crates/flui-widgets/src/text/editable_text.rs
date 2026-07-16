@@ -11,7 +11,7 @@ use flui_objects::RenderEditable;
 use flui_rendering::protocol::BoxProtocol;
 use flui_types::{
     Color,
-    typography::{TextDirection, TextSpan},
+    typography::{TextDirection, TextSpan, TextStyle},
 };
 use flui_view::prelude::*;
 use flui_view::{BoxedView, RenderView, impl_render_view};
@@ -61,6 +61,22 @@ pub struct EditableText {
     pub(super) caret_height: f32,
     /// Color of the caret bar when the field is focused.
     pub(super) caret_color: Color,
+    /// Whether this field accepts focus and input. `true` by default.
+    ///
+    /// **Named hoist, not a direct port**: the oracle has no
+    /// `EditableText.enabled` property at this tag — `enabled` lives on
+    /// `TextField` and flows down as `_isEnabled` into
+    /// `_effectiveFocusNode.canRequestFocus`
+    /// (`text_field.dart:1183,1282-1299`, tag `3.44.0`). FLUI's
+    /// [`TextField`](super::text_field::TextField) has no decoration/enabled
+    /// plumbing yet, so this substrate hoists the behavior onto
+    /// `EditableText` itself, one layer lower than the oracle — see
+    /// [`enabled`](Self::enabled)'s doc comment for exactly what it
+    /// withholds.
+    pub(super) enabled: bool,
+    /// Style applied to the field's [`TextSpan`], flowing through
+    /// [`TextSpan::with_style`]. `None` renders with the span's own default.
+    pub(super) text_style: Option<TextStyle>,
 }
 
 impl EditableText {
@@ -71,6 +87,8 @@ impl EditableText {
             controller,
             caret_height: 18.0,
             caret_color: Color::BLACK,
+            enabled: true,
+            text_style: None,
         }
     }
 
@@ -85,6 +103,44 @@ impl EditableText {
     #[must_use]
     pub fn caret_color(mut self, color: Color) -> Self {
         self.caret_color = color;
+        self
+    }
+
+    /// Set whether the field accepts focus and keyboard input (default
+    /// `true`) — see the [`enabled`](Self::enabled) field's doc comment for
+    /// why this is a named hoist of `TextField.enabled`, not a direct
+    /// `EditableText` parity port.
+    ///
+    /// A disabled field withholds focus acquisition — it stops publishing its
+    /// [`FocusNode`] id on [`TextEditingController`], so an enclosing
+    /// `TextField`'s tap-to-focus (which reads
+    /// `controller.focus_node_id()`) finds nothing to focus, the same
+    /// withdraw-on-unavailable mechanism `dispose` already uses for an
+    /// unmounted field — and marks the node
+    /// [`FocusNode::set_can_request_focus`]`(false)`, which keyboard-traversal
+    /// (`focus_next`/`focus_previous`) already honors. **Unlike** Flutter's
+    /// `FocusNode.canRequestFocus` setter, FLUI's `set_can_request_focus` is a
+    /// bare atomic store with no side effects — so if the field is focused
+    /// when it becomes disabled, `did_update_view` explicitly calls
+    /// `FocusManager::unfocus` (a step the oracle's setter performs
+    /// implicitly as part of assigning `canRequestFocus`). Its key handler
+    /// also stops mutating the controller while disabled, so even a stray
+    /// dispatch reaching an already-focused-then-disabled node is a no-op.
+    ///
+    /// Tap suppression is a decoration-level concern (an enclosing
+    /// `TextField`'s `GestureDetector`), not this primitive's — out of scope
+    /// here, see `TextField`'s own docs.
+    #[must_use]
+    pub fn enabled(mut self, enabled: bool) -> Self {
+        self.enabled = enabled;
+        self
+    }
+
+    /// Apply `style` to the field's rendered [`TextSpan`] via
+    /// [`TextSpan::with_style`].
+    #[must_use]
+    pub fn text_style(mut self, style: TextStyle) -> Self {
+        self.text_style = Some(style);
         self
     }
 }
@@ -121,6 +177,14 @@ pub struct EditableTextState {
     /// ID for the focus-change listener we added to the [`FocusManager`], so
     /// dispose removes exactly ours.
     focus_listener_id: Option<ListenerId>,
+    /// The view's `enabled` at construction time, cached because
+    /// `init_state` has no `view` parameter — see [`EditableText::enabled`].
+    /// Read exactly once, by `init_state`'s initial-publish decision; there
+    /// is no reader afterward, so `did_update_view` deliberately does NOT
+    /// keep this field in sync post-mount (every later change is read
+    /// straight from the view in `did_update_view`/`build` instead, which is
+    /// the only place that still needs it).
+    enabled: bool,
 }
 
 impl std::fmt::Debug for EditableTextState {
@@ -135,14 +199,17 @@ impl StatefulView for EditableText {
     type State = EditableTextState;
 
     fn create_state(&self) -> EditableTextState {
+        let focus_node = FocusNode::with_debug_label("EditableText");
+        focus_node.set_can_request_focus(self.enabled);
         EditableTextState {
-            focus_node: FocusNode::with_debug_label("EditableText"),
+            focus_node,
             anchor: flui_objects::SubtreeAnchor::new(),
             parent: None,
             controller: self.controller.clone(),
             controller_listener_id: None,
             rebuild_notifier: flui_foundation::notifier::ChangeNotifier::new(),
             focus_listener_id: None,
+            enabled: self.enabled,
         }
     }
 }
@@ -156,14 +223,22 @@ impl ViewState<EditableText> for EditableTextState {
         //    focus *this* field.
         let parent = crate::interaction::enclosing_focus_parent(ctx);
         parent.attach_node(&self.focus_node);
-        self.controller
-            .set_focus_node_id(Some(self.focus_node.id()));
+        // Publish the node only while enabled — see `EditableText::enabled`'s
+        // doc comment on why withholding publication is the focus-acquisition
+        // gate (mirrors `dispose`'s withdraw-on-unmount below).
+        if self.enabled {
+            self.controller
+                .set_focus_node_id(Some(self.focus_node.id()));
+        }
         self.parent = Some(parent);
         crate::interaction::install_rect_provider(&self.focus_node, &self.anchor, ctx);
 
         // 2. Register a key handler with the FocusManager.  Only fires when
-        //    this node is the primary-focused node.
-        let key_handler = build_key_handler(self.controller.clone());
+        //    this node is the primary-focused node. Gated on
+        //    `can_request_focus` (kept in sync with `enabled` in
+        //    `did_update_view`) so a stray dispatch to an already-focused
+        //    field that has since been disabled is a no-op.
+        let key_handler = build_key_handler(self.controller.clone(), Arc::clone(&self.focus_node));
         FocusManager::global().register_key_handler(self.focus_node.id(), key_handler);
 
         // 3. Forward controller change events into the rebuild notifier so the
@@ -191,16 +266,41 @@ impl ViewState<EditableText> for EditableTextState {
         )));
     }
 
+    fn did_update_view(&mut self, _old_view: &EditableText, new_view: &EditableText) {
+        self.focus_node.set_can_request_focus(new_view.enabled);
+        if new_view.enabled {
+            self.controller
+                .set_focus_node_id(Some(self.focus_node.id()));
+        } else {
+            self.controller.set_focus_node_id(None);
+            // A field disabled while focused must not keep the caret and
+            // keyboard input — mirrors Flutter's `TextField`/`EditableText`
+            // unfocusing when `enabled` flips false mid-focus.
+            if self.focus_node.has_primary_focus() {
+                FocusManager::global().unfocus();
+            }
+        }
+    }
+
     fn build(&self, view: &EditableText, _ctx: &dyn BuildContext) -> impl IntoView {
         let controller = self.controller.clone();
         let focus_node = Arc::clone(&self.focus_node);
         let caret_height = view.caret_height;
         let caret_color = view.caret_color;
+        let enabled = view.enabled;
+        let text_style = view.text_style.clone();
 
         crate::navigator::AnchoredBox::new(
             self.anchor.clone(),
             AnimatedBuilder::new(Arc::new(self.rebuild_notifier.clone()), move || {
-                build_field_view(&controller, &focus_node, caret_height, caret_color)
+                build_field_view(
+                    &controller,
+                    &focus_node,
+                    caret_height,
+                    caret_color,
+                    enabled,
+                    text_style.clone(),
+                )
             }),
         )
     }
@@ -244,10 +344,19 @@ impl ViewState<EditableText> for EditableTextState {
 
 /// Build the key-event handler closure for `controller`.
 ///
-/// Only `KeyState::Down` events (which cover key-repeat) are acted upon.
-/// Returns `true` when the event is consumed so propagation stops.
-fn build_key_handler(controller: TextEditingController) -> KeyEventCallback {
+/// Only `KeyState::Down` events (which cover key-repeat) are acted upon, and
+/// only while `focus_node` still allows focus — kept in sync with
+/// `EditableText::enabled` by `did_update_view` — so input is ignored on a
+/// field disabled after it was focused. Returns `true` when the event is
+/// consumed so propagation stops.
+fn build_key_handler(
+    controller: TextEditingController,
+    focus_node: Arc<FocusNode>,
+) -> KeyEventCallback {
     Rc::new(move |event| {
+        if !focus_node.can_request_focus() {
+            return false;
+        }
         if event.state != KeyState::Down {
             return false;
         }
@@ -292,11 +401,16 @@ struct EditableTextRenderView {
     show_caret: bool,
     caret_height: f32,
     caret_color: Color,
+    text_style: Option<TextStyle>,
 }
 
 impl EditableTextRenderView {
     fn build_render_object(&self) -> RenderEditable {
-        RenderEditable::new(TextSpan::new(self.text.clone()), TextDirection::Ltr)
+        let mut span = TextSpan::new(self.text.clone());
+        if let Some(style) = self.text_style.clone() {
+            span = span.with_style(style);
+        }
+        RenderEditable::new(span, TextDirection::Ltr)
             .with_caret_byte_offset(self.caret_byte_offset)
             .with_show_caret(self.show_caret)
             .with_caret_width(2.0)
@@ -333,13 +447,209 @@ fn build_field_view(
     focus_node: &Arc<FocusNode>,
     caret_height: f32,
     caret_color: Color,
+    enabled: bool,
+    text_style: Option<TextStyle>,
 ) -> BoxedView {
     EditableTextRenderView {
         text: controller.text(),
         caret_byte_offset: controller.caret_byte_offset(),
-        show_caret: focus_node.has_primary_focus(),
+        // `enabled` is defensive here: `did_update_view` already unfocuses a
+        // field that becomes disabled while focused, so `has_primary_focus`
+        // should already be `false` by the time this runs.
+        show_caret: enabled && focus_node.has_primary_focus(),
         caret_height,
         caret_color,
+        text_style,
     }
     .boxed()
+}
+
+#[cfg(test)]
+mod tests {
+    use flui_interaction::routing::FocusManager;
+
+    use super::*;
+    use crate::text::controller::TextEditingController;
+
+    /// A field constructed disabled never publishes its focus node, so an
+    /// enclosing `TextField`'s tap-to-focus (which reads
+    /// `controller.focus_node_id()`) finds nothing to focus — the
+    /// withhold-acquisition contract [`EditableText::enabled`] documents.
+    ///
+    /// Red-check: drop the `if self.enabled` guard around
+    /// `set_focus_node_id` in `init_state` — the node publishes
+    /// unconditionally and this assertion fails.
+    #[test]
+    fn disabled_field_does_not_publish_its_focus_node() {
+        let _guard = crate::test_harness::FOCUS_TEST_LOCK.lock();
+        FocusManager::global().unfocus();
+
+        let controller = TextEditingController::new();
+        let _harness =
+            crate::test_harness::mount(EditableText::new(controller.clone()).enabled(false));
+
+        assert_eq!(
+            controller.focus_node_id(),
+            None,
+            "a disabled field must not publish a focus node to focus"
+        );
+    }
+
+    /// An enabled field (the default) does publish, so the same field
+    /// re-enabled is focusable again — the contrast case for the test above.
+    #[test]
+    fn enabled_field_publishes_its_focus_node() {
+        let _guard = crate::test_harness::FOCUS_TEST_LOCK.lock();
+        FocusManager::global().unfocus();
+
+        let controller = TextEditingController::new();
+        let _harness = crate::test_harness::mount(EditableText::new(controller.clone()));
+
+        assert!(
+            controller.focus_node_id().is_some(),
+            "an enabled field must publish a focus node"
+        );
+    }
+
+    /// Disabling a focused field unfocuses it and withdraws its published
+    /// node. Load-bearing: FLUI's `FocusNode::set_can_request_focus` is a
+    /// bare atomic store with no side effects — unlike Flutter's
+    /// `FocusNode.canRequestFocus` setter, which auto-unfocuses — so nothing
+    /// but `did_update_view`'s explicit `FocusManager::unfocus` call (see
+    /// [`EditableText::enabled`]'s doc comment) does this.
+    ///
+    /// Red-check: delete the `FocusManager::global().unfocus()` call in
+    /// `did_update_view`'s disabled branch — the node stays primary-focused
+    /// and the first assertion fails.
+    #[test]
+    fn disabling_a_focused_field_unfocuses_it_and_withdraws_the_node() {
+        let _guard = crate::test_harness::FOCUS_TEST_LOCK.lock();
+        FocusManager::global().unfocus();
+
+        let controller = TextEditingController::new();
+        let mut harness = crate::test_harness::mount(EditableText::new(controller.clone()));
+
+        let node_id = controller
+            .focus_node_id()
+            .expect("an enabled field publishes its node");
+        FocusManager::global().request_focus(node_id);
+        assert_eq!(FocusManager::global().primary_focus(), Some(node_id));
+
+        harness.swap_root(EditableText::new(controller.clone()).enabled(false));
+
+        assert_ne!(
+            FocusManager::global().primary_focus(),
+            Some(node_id),
+            "disabling a focused field must unfocus it"
+        );
+        assert_eq!(
+            controller.focus_node_id(),
+            None,
+            "disabling must withdraw the published focus node"
+        );
+    }
+
+    /// The contrast case: re-enabling a disabled field republishes its
+    /// node, so it becomes focusable again.
+    #[test]
+    fn re_enabling_a_disabled_field_republishes_its_focus_node() {
+        let _guard = crate::test_harness::FOCUS_TEST_LOCK.lock();
+        FocusManager::global().unfocus();
+
+        let controller = TextEditingController::new();
+        let mut harness =
+            crate::test_harness::mount(EditableText::new(controller.clone()).enabled(false));
+        assert_eq!(controller.focus_node_id(), None);
+
+        harness.swap_root(EditableText::new(controller.clone()));
+
+        assert!(
+            controller.focus_node_id().is_some(),
+            "re-enabling must republish the focus node"
+        );
+    }
+
+    /// The key handler's `can_request_focus` guard, in isolation: invoked
+    /// directly (bypassing `FocusManager::dispatch_key_event`'s own
+    /// primary-focus routing), a disabled node's handler must still refuse
+    /// to mutate the controller.
+    ///
+    /// Red-check: delete the `if !focus_node.can_request_focus() { return
+    /// false; }` guard at the top of `build_key_handler`'s closure — the
+    /// character is inserted and both assertions fail.
+    #[test]
+    fn disabled_key_handler_ignores_input_even_when_invoked_directly() {
+        use flui_interaction::events::Code;
+        use flui_interaction::testing::input::KeyEventBuilder;
+
+        let controller = TextEditingController::new();
+        let focus_node = FocusNode::with_debug_label("test");
+        focus_node.set_can_request_focus(false);
+        let handler = build_key_handler(controller.clone(), Arc::clone(&focus_node));
+
+        let event = KeyEventBuilder::new(Code::KeyA)
+            .with_key(Key::Character("a".to_string()))
+            .with_state(KeyState::Down)
+            .build();
+
+        let consumed = handler(&event);
+
+        assert!(
+            !consumed,
+            "a disabled node's key handler must not consume the event"
+        );
+        assert_eq!(
+            controller.text(),
+            "",
+            "a disabled node's key handler must not mutate the controller"
+        );
+    }
+
+    /// `EditableText::text_style` flows through to the rendered `TextSpan` —
+    /// the render-view assembly this builder feeds.
+    #[test]
+    fn text_style_reaches_the_rendered_span() {
+        let style = TextStyle::default().with_color(Color::rgb(10, 20, 30));
+        let render_view = EditableTextRenderView {
+            text: "hello".to_string(),
+            caret_byte_offset: 0,
+            show_caret: false,
+            caret_height: 18.0,
+            caret_color: Color::BLACK,
+            text_style: Some(style.clone()),
+        };
+
+        let render_object = render_view.build_render_object();
+        let rendered_style = render_object
+            .painter()
+            .text()
+            .expect("a span was set")
+            .style()
+            .expect("text_style was set");
+        assert_eq!(rendered_style.color, style.color);
+    }
+
+    /// Without `text_style`, the span carries no explicit style — no
+    /// override was silently invented.
+    #[test]
+    fn no_text_style_leaves_the_span_unstyled() {
+        let render_view = EditableTextRenderView {
+            text: "hello".to_string(),
+            caret_byte_offset: 0,
+            show_caret: false,
+            caret_height: 18.0,
+            caret_color: Color::BLACK,
+            text_style: None,
+        };
+
+        let render_object = render_view.build_render_object();
+        assert!(
+            render_object
+                .painter()
+                .text()
+                .expect("a span was set")
+                .style()
+                .is_none()
+        );
+    }
 }
