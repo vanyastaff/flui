@@ -74,18 +74,22 @@
 
 #![deny(missing_docs)]
 
+pub mod bottom_tab_bar;
 pub mod button;
 pub mod colors;
 pub mod nav_bar;
 pub mod page_scaffold;
 pub mod route;
+pub mod tab_scaffold;
 pub mod text_theme;
 pub mod theme;
 
+pub use bottom_tab_bar::{CupertinoTabBar, CupertinoTabBarItem};
 pub use button::{CupertinoButton, CupertinoButtonSize, CupertinoButtonState};
 pub use colors::{CupertinoColor, CupertinoColors, CupertinoDynamicColor};
 pub use nav_bar::CupertinoNavigationBar;
 pub use page_scaffold::CupertinoPageScaffold;
 pub use route::cupertino_page_route;
+pub use tab_scaffold::{CupertinoTabController, CupertinoTabScaffold, CupertinoTabScaffoldState};
 pub use text_theme::CupertinoTextThemeData;
 pub use theme::{CupertinoTheme, CupertinoThemeData};
