@@ -266,6 +266,43 @@ impl ViewState<CupertinoTabScaffold> for CupertinoTabScaffoldState {
         let current_index = view.controller.index();
         let tab_count = view.tab_bar.items().len();
 
+        // Flutter parity: the constructor's own `assert(controller == null ||
+        // controller.index < tabBar.items.length, ...)` plus
+        // `_onCurrentIndexChange`'s identical `assert` on every subsequent
+        // `controller.index` change (`tab_scaffold.dart`, oracle tag
+        // `3.44.0`) — both debug-only, like `debug_assert!`. Unlike a bare
+        // port of just those asserts, the oracle *also* crashes
+        // unconditionally in **release** builds: `_TabSwitchingViewState
+        // ._focusActiveTab` indexes `tabFocusNodes[widget.currentTabIndex]`,
+        // and Dart's `List` bounds-checks on every build profile, so an
+        // out-of-range index throws a `RangeError` there regardless of
+        // `assert` stripping. This port has no `tabFocusNodes` array (see the
+        // module doc's "Deferred, named" — no per-tab `FocusScope` wiring),
+        // so it has no equivalent unconditional check to inherit for free.
+        // Named divergence, not a silent one: release builds (where
+        // `debug_assert!` compiles out) fall through to every tab
+        // `Offstage`-hidden and `tab_builder` never invoked for
+        // `current_index` — the oracle instead crashes hard in every build
+        // mode. Do not "fix" this by silently clamping `current_index`; the
+        // oracle doesn't clamp either, it crashes.
+        //
+        // A panic here is caught by this crate's own build-error boundary
+        // (`build_or_recover`, `flui_view::element::behavior_commons`) and
+        // substitutes an `ErrorView` for this whole subtree rather than
+        // unwinding to the caller — mirroring Flutter's own
+        // `ComponentElement.performRebuild` try/catch → `ErrorWidget.builder`
+        // recovery for a `build()`-phase exception. So this crash is loud
+        // (a rendered error, or — when this scaffold is mounted as the sole
+        // render root, as in a headless test — a panic from having nothing
+        // left to render) rather than silent, but it is not a raw unwind out
+        // of `build`; see `tests/tab_scaffold.rs`'s
+        // `out_of_range_controller_index_panics_instead_of_silently_hiding_every_tab`.
+        debug_assert!(
+            is_valid_tab_index(current_index, tab_count),
+            "CupertinoTabScaffold's current index {current_index} is out of bounds for \
+             the tab bar with {tab_count} tabs"
+        );
+
         let tab_layers: Vec<BoxedView> = {
             let mut should_build = self.should_build_tab.borrow_mut();
             should_build.resize(tab_count, false);
@@ -364,5 +401,39 @@ impl ViewState<CupertinoTabScaffold> for CupertinoTabScaffoldState {
                 .bottom(0.0)
                 .boxed(),
         ]))
+    }
+}
+
+/// Whether `current_index` is a mountable tab index for `tab_count` tabs.
+/// Extracted from `build`'s `debug_assert!` so the exact guard condition is
+/// unit-testable without mounting a render tree — see `build`'s doc comment
+/// for the full oracle-mechanism citation.
+fn is_valid_tab_index(current_index: usize, tab_count: usize) -> bool {
+    current_index < tab_count
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn is_valid_tab_index_accepts_every_in_range_index() {
+        assert!(is_valid_tab_index(0, 2));
+        assert!(is_valid_tab_index(1, 2));
+    }
+
+    /// Red-check: change `is_valid_tab_index` to `current_index <= tab_count`
+    /// (an off-by-one) — this assertion starts passing when it shouldn't.
+    #[test]
+    fn is_valid_tab_index_rejects_the_first_out_of_range_index() {
+        assert!(
+            !is_valid_tab_index(2, 2),
+            "index == tab_count is out of range"
+        );
+    }
+
+    #[test]
+    fn is_valid_tab_index_rejects_a_far_out_of_range_index() {
+        assert!(!is_valid_tab_index(5, 2));
     }
 }

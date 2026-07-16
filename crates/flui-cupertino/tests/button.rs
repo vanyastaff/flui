@@ -12,9 +12,11 @@ use std::time::Duration;
 
 use common::{lay_out, lay_out_animated, loose, tight};
 use flui_animation::Vsync;
-use flui_cupertino::{CupertinoButton, CupertinoButtonSize};
+use flui_cupertino::{CupertinoButton, CupertinoButtonSize, CupertinoColors};
+use flui_types::platform::Brightness;
 use flui_widgets::SizedBox;
 use flui_widgets::animated::VsyncScope;
+use flui_widgets::{MediaQuery, MediaQueryData};
 
 /// A tap on an enabled button reaches `on_pressed` — proving `GestureDetector`
 /// is actually wired, not merely constructed.
@@ -184,5 +186,49 @@ fn press_opacity_fades_out_then_back_in_over_the_oracle_durations() {
         (settled - 1.0).abs() < 1e-2,
         "once both fades complete (400ms total ticked, comfortably past 120ms + 180ms), \
          opacity ({settled}) should have returned to ~1.0"
+    );
+}
+
+/// `resolve_background_color`'s `Plain`/`Filled` alpha multiplier is the
+/// oracle's `widget.color?.opacity` (`button.dart`, oracle tag `3.44.0`) —
+/// read off the ORIGINAL, never-resolved `widget.color`, which for a
+/// `CupertinoDynamicColor` is always its light/normal variant (see
+/// `src/button.rs`'s `resolve_background_color` doc for the full mechanism
+/// citation). `CupertinoColors.separator` is alpha 73 light / 153 dark
+/// (`colors.dart`, oracle tag `3.44.0`): a `.separator`-colored `Plain`
+/// button under a Dark theme resolves its RGB to the dark variant
+/// (`84, 84, 88`) but keeps the LIGHT variant's alpha (`73`), matching real
+/// Flutter exactly.
+///
+/// Red-check: change `resolve_background_color`'s `Plain`/`Filled` branch to
+/// use the RESOLVED color's own alpha (`base_color.a`) instead of
+/// `view.color`'s — this assertion fails with `a: 153`, not `a: 73`.
+#[test]
+fn background_dynamic_color_keeps_the_light_variants_alpha_under_a_dark_theme() {
+    let dark = MediaQueryData {
+        platform_brightness: Brightness::Dark,
+        ..MediaQueryData::default()
+    };
+    let laid = lay_out(
+        MediaQuery::new(
+            dark,
+            CupertinoButton::new(SizedBox::shrink())
+                .color(CupertinoColors::SEPARATOR)
+                .on_pressed(|| {}),
+        ),
+        tight(100.0, 44.0),
+    );
+
+    let decorated = laid
+        .find_by_render_type("RenderDecoratedBox")
+        .expect("CupertinoButton always paints a DecoratedBox background");
+    let decoration = laid
+        .render_property(decorated, "decoration")
+        .expect("RenderDecoratedBox always reports its decoration");
+
+    assert!(
+        decoration.contains("r: 84, g: 84, b: 88, a: 73"),
+        "a Dynamic background under Dark theme must resolve the dark RGB but keep the \
+         light-variant alpha (oracle-faithful, not a bug): {decoration}"
     );
 }
