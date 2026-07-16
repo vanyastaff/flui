@@ -49,12 +49,18 @@
 #![deny(missing_docs)]
 
 pub mod color_scheme;
+pub mod ink_well;
+pub mod material;
+pub mod shape;
 pub mod text_theme;
 pub mod theme;
 pub mod theme_data;
 pub mod typography;
 
 pub use color_scheme::{ColorScheme, ColorSchemeOverrides};
+pub use ink_well::{InkWell, InkWellState};
+pub use material::Material;
+pub use shape::MaterialShape;
 pub use text_theme::TextTheme;
 pub use theme::Theme;
 pub use theme_data::{ThemeData, ThemeDataOverrides};
