@@ -1890,4 +1890,50 @@ mod user_gesture {
         assert_eq!(observer.calls_seen.load(Ordering::SeqCst), 1);
         handle.did_stop_user_gesture();
     }
+
+    /// `userGestureInProgressNotifier` (`navigator.dart:5819`) fires exactly on
+    /// the 0→1 and 1→0 transitions — the same edges that notify
+    /// `NavigatorObserver::did_start_user_gesture`/`did_stop_user_gesture` — and
+    /// never on a nested/overlapping start or stop in between.
+    ///
+    /// **No lock held over the callback is structural here, not merely
+    /// tested**: `ChangeNotifier::add_listener` requires `Send + Sync`
+    /// (`ProxyAnimation::add_status_listener`'s own bound, which a hero
+    /// flight's terminal-status listener relies on), and `NavigatorHandle` is
+    /// deliberately `!Send + !Sync` — so a listener on this notifier cannot
+    /// even *name* the owner-affine handle to read back through it, let alone
+    /// deadlock on a lock it holds. The equivalent reentrancy guarantee for
+    /// `NavigatorObserver` callbacks (which *do* hold a handle) is pinned by
+    /// `an_observer_may_call_back_into_the_navigator_from_did_start_user_gesture`
+    /// above.
+    ///
+    /// Red-check: notify unconditionally on every `did_start_user_gesture`/
+    /// `did_stop_user_gesture` call instead of gating on the 0→1/1→0 count —
+    /// `fires` reads `3` after three nested starts, not `1`.
+    #[test]
+    fn user_gesture_in_progress_notifier_fires_only_on_the_0_1_and_1_0_edges() {
+        use flui_foundation::Listenable;
+
+        let built = Built::default();
+        let handle = NavigatorHandle::new();
+        handle.seed_initial(page(&built, "/"));
+
+        let fires = Arc::new(AtomicUsize::new(0));
+        let fires_for_listener = Arc::clone(&fires);
+        let notifier = handle.user_gesture_in_progress_notifier();
+        notifier.add_listener(Arc::new(move || {
+            fires_for_listener.fetch_add(1, Ordering::SeqCst);
+        }));
+
+        handle.did_start_user_gesture(); // 0 -> 1: fires.
+        handle.did_start_user_gesture(); // 1 -> 2: nested, no fire.
+        handle.did_start_user_gesture(); // 2 -> 3: nested, no fire.
+        assert_eq!(fires.load(Ordering::SeqCst), 1);
+
+        handle.did_stop_user_gesture(); // 3 -> 2: no fire.
+        handle.did_stop_user_gesture(); // 2 -> 1: no fire.
+        assert_eq!(fires.load(Ordering::SeqCst), 1);
+        handle.did_stop_user_gesture(); // 1 -> 0: fires.
+        assert_eq!(fires.load(Ordering::SeqCst), 2);
+    }
 }

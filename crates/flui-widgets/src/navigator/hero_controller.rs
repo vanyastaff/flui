@@ -66,8 +66,7 @@
 //! FLUI's state-preserving `Hero::placeholder` (in place of Flutter's lossy
 //! `placeholderBuilder`), and `Hero::curve` / `Hero::reverse_curve` with Flutter's
 //! `Curves.fastOutSlowIn` default (`heroes.dart:181`). `FlightDirection` is public
-//! for the shuttle builder, and `HeroMode` grounds a subtree. Still absent:
-//! `transitionOnUserGestures`.
+//! for the shuttle builder, and `HeroMode` grounds a subtree.
 //!
 //! The private surface stays private: `HeroTag`, `HeroRegistry`, `HeroScope`,
 //! `HeroHandle`, `HeroFlightManifest`, and the flight machinery are `pub(crate)`, and
@@ -81,19 +80,18 @@
 //! its *own* controller (so it drives no flights of its own), but does not gate
 //! this matching — Flutter's predicate does not consult it either.
 //!
-//! **Gesture suppression substrate landed, per-hero opt-in still pending.**
-//! [`NavigatorHandle::user_gesture_in_progress`] mirrors Flutter's
-//! `NavigatorState.userGestureInProgress`, and [`did_change_top`](HeroController::did_change_top)
-//! consults it exactly where Flutter's `HeroController.didChangeTop` does
-//! (`heroes.dart:861`): a route change committed by a finger-driven pop starts no
-//! flight. What is still absent is the *other* half — `didStartUserGesture` calling
-//! `_maybeStartHeroTransition(isUserGestureTransition: true)` for immediate visual
-//! feedback the instant a drag begins (`heroes.dart:871-880`), the `hasValidSize`
-//! fast path that lets that flight measure without waiting a frame
-//! (`:952-960`), and `Hero.transitionOnUserGestures` itself — with no per-hero
-//! opt-in field, every FLUI hero behaves as `transitionOnUserGestures = false`,
-//! so a gesture-driven transition suppresses every hero's flight, never just the
-//! non-opted-in ones (`heroes.dart:281-311`'s `_allHeroesFor` filter).
+//! **User-gesture hero flights are live**, closing the last Flutter parity gap:
+//! [`did_start_user_gesture`](HeroController::did_start_user_gesture) launches a
+//! flight the instant a drag begins (`heroes.dart:871-880`), with a synchronous
+//! measurement fast path when the destination already has a valid laid-out size
+//! (`_maybeStartHeroTransition`'s `hasValidSize` branch, `:948-959`);
+//! [`did_stop_user_gesture`](HeroController::did_stop_user_gesture) manually
+//! dismisses a flight whose drag never moved (`:882-907`); and
+//! [`Hero::transition_on_user_gestures`](super::hero::Hero::transition_on_user_gestures)
+//! gates per-hero participation (`heroes.dart:281-311`'s `_allHeroesFor` filter) —
+//! a pair flies during a gesture only when both ends opt in. The terminal-status
+//! deferral this all rests on lives in `hero_flight.rs`
+//! (`_HeroFlight._handleAnimationUpdate`, `:622-650`).
 //!
 //! [`ModalHandle::set_offstage`]: super::modal_route::ModalHandle::set_offstage
 //! [`PostFrameHandle`]: flui_scheduler::PostFrameHandle
@@ -107,6 +105,7 @@
 // seam from being deleted and re-derived later, out of step with the design.
 #![allow(dead_code)]
 
+use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -138,11 +137,24 @@ pub enum FlightDirection {
 
 impl FlightDirection {
     /// `switch ((isUserGestureTransition, oldRouteAnimation.status,
-    /// newRouteAnimation.status))` (`heroes.dart:924-932`), minus the gesture arm.
+    /// newRouteAnimation.status))` (`heroes.dart:924-932`).
+    ///
+    /// A user-gesture transition is unconditionally a pop — Flutter's
+    /// `case (true, _, _): flightType = HeroFlightDirection.pop` fires before
+    /// either route's own status is even consulted, since the gesture (an edge
+    /// swipe-back) is definitionally a pop-in-progress regardless of what the
+    /// drag has done to the routes' animation values so far.
     ///
     /// `None` means "neither route is transitioning" — Flutter's `default: flightType
     /// = null`, which does **not** abort: the measurement still runs (`:934-976`).
-    fn classify(from_status: AnimationStatus, to_status: AnimationStatus) -> Option<Self> {
+    fn classify(
+        is_user_gesture_transition: bool,
+        from_status: AnimationStatus,
+        to_status: AnimationStatus,
+    ) -> Option<Self> {
+        if is_user_gesture_transition {
+            return Some(Self::Pop);
+        }
         match (from_status, to_status) {
             (AnimationStatus::Reverse, _) => Some(Self::Pop),
             (_, AnimationStatus::Forward) => Some(Self::Push),
@@ -211,6 +223,9 @@ pub(crate) struct HeroFlightManifest {
     pub(crate) from_rect: Rect,
     /// `toHero`'s bounding box in `toRoute`'s coordinate space (`:520`).
     pub(crate) to_rect: Rect,
+    /// `manifest.isUserGestureTransition` (`heroes.dart:453`): started by
+    /// `didStartUserGesture`, not a programmatic push/pop.
+    pub(crate) is_user_gesture_transition: bool,
 }
 
 /// Watches a navigator, measures where hero flights land, and launches private flights.
@@ -302,15 +317,20 @@ impl HeroController {
         &self.flights
     }
 
-    /// Flutter's `_maybeStartHeroTransition` (`heroes.dart:892-976`), reduced to the
-    /// eligibility test and the offstage-then-schedule move.
+    /// Flutter's `_maybeStartHeroTransition` (`heroes.dart:892-976`): the
+    /// eligibility test, then either the gesture-pop sync fast path or the
+    /// offstage-then-schedule move.
     ///
-    /// Runs **inside an observer callback**, so it does exactly two kinds of work:
-    /// registry lookups behind their own mutexes, and scheduling. No element-tree
-    /// read, no render-tree read, no `history` mutation. (Those would be legal since
-    /// notification is delivered outside the history lock — but they would be
-    /// wrong: nothing has laid out yet.)
-    fn maybe_start(&self, from: Option<RouteId>, to: Option<RouteId>) {
+    /// Runs **inside an observer callback** (`did_change_top` or
+    /// `did_start_user_gesture`), so it does exactly three kinds of work:
+    /// registry lookups behind their own mutexes, a same-frame geometry read
+    /// (the sync fast path only, never `history` mutation), and scheduling.
+    fn maybe_start(
+        &self,
+        from: Option<RouteId>,
+        to: Option<RouteId>,
+        is_user_gesture_transition: bool,
+    ) {
         let Some(navigator) = self.navigator() else {
             return; // Detached. Flutter: `if (navigator == null) return;` (`:970`).
         };
@@ -336,7 +356,11 @@ impl HeroController {
 
         let from_animation = source.primary_animation();
         let to_animation = destination.primary_animation();
-        let direction = FlightDirection::classify(from_animation.status(), to_animation.status());
+        let direction = FlightDirection::classify(
+            is_user_gesture_transition,
+            from_animation.status(),
+            to_animation.status(),
+        );
 
         // `:934-946` — a flight that has already arrived is not a flight. Note the
         // `null` arm falls through: no direction still measures.
@@ -346,8 +370,40 @@ impl HeroController {
             _ => {}
         }
 
-        // `WidgetsBinding.instance.addPostFrameCallback(…)` (`:968`). Acquired from a
-        // handle the navigator captured in `init_state`, never from a frame phase.
+        // `:948-959` — the gesture-pop sync fast path: the destination route
+        // maintains state and is already laid out (its subtree render box has a
+        // valid, finite size), so there is nothing to wait a frame for. No
+        // offstage flip, no post-frame schedule — measure and launch right now,
+        // synchronously, inside this observer callback.
+        if is_user_gesture_transition
+            && direction == Some(FlightDirection::Pop)
+            && destination.maintain_state()
+            && navigator
+                .route_subtree(to)
+                .zip(navigator.render_tree())
+                .and_then(|(subtree, owner)| owner.read().box_size(subtree.render_id))
+                .is_some_and(Size::is_finite)
+        {
+            let pass = MeasurementPass {
+                navigator: &navigator,
+                source: &source,
+                destination: &destination,
+                from,
+                to,
+                direction,
+                is_user_gesture_transition,
+                flights: &self.flights,
+                default_rect_factory: &self.default_rect_factory,
+            };
+            let started = pass.start_transition();
+            self.manifests.lock().extend(started);
+            return;
+        }
+
+        // Otherwise, delay measuring until the end of the next frame
+        // (`:960-973`): `WidgetsBinding.instance.addPostFrameCallback(…)`
+        // (`:968`). Acquired from a handle the navigator captured in
+        // `init_state`, never from a frame phase.
         //
         // **Before the offstage flip, not after.** Flutter's `addPostFrameCallback`
         // cannot fail, so its setter runs first (`:967-968`); FLUI's capability is an
@@ -373,6 +429,7 @@ impl HeroController {
                 from,
                 to,
                 direction,
+                is_user_gesture_transition,
                 flights: &flights,
                 default_rect_factory: &default_rect_factory,
             };
@@ -413,6 +470,11 @@ struct MeasurementPass<'a> {
     from: RouteId,
     to: RouteId,
     direction: Option<FlightDirection>,
+    /// Whether this transition was started by `didStartUserGesture` rather
+    /// than a programmatic push/pop — threaded into every
+    /// [`HeroFlightManifest`] and used to filter heroes that did not opt in
+    /// (`Hero._allHeroesFor`'s `inviteHero`, `heroes.dart:308-314`).
+    is_user_gesture_transition: bool,
     flights: &'a Arc<FlightManager>,
     /// The controller-level `create_rect_tween` fallback (`heroes.dart:847`), used for a
     /// hero that set none of its own.
@@ -431,13 +493,9 @@ impl MeasurementPass<'_> {
             return;
         }
 
-        // Read before restoring: this is the value the frame under measurement
-        // actually laid out with.
+        // Read before `start_transition` restores offstage: this is the value the
+        // frame under measurement actually laid out with.
         let to_animation_while_offstage = self.destination.primary_animation().value();
-
-        // `to.offstage = false;` (`:987`). Geometry stays committed until the next
-        // layout, so measuring after this is safe — and it is what Flutter does.
-        self.destination.set_offstage(false);
 
         let to_subtree = self.navigator.route_subtree(self.to);
         let owner = self.navigator.render_tree();
@@ -464,6 +522,22 @@ impl MeasurementPass<'_> {
             to_animation_while_offstage,
         });
 
+        let started = self.start_transition();
+        manifests.lock().extend(started);
+    }
+
+    /// `_startHeroTransition`'s manifest-collection-and-launch core
+    /// (`heroes.dart:979-1060`, from `to.offstage = false` onward) — shared by
+    /// [`run`](Self::run) (the offstage-then-post-frame path) and
+    /// `HeroController::maybe_start`'s gesture-pop sync fast path, which calls
+    /// this directly with no offstage flip: the destination route is already
+    /// laid out, so there is nothing to restore.
+    fn start_transition(&self) -> Vec<HeroFlightManifest> {
+        // `to.offstage = false;` (`:987`) — a no-op when the sync fast path
+        // never flipped it. Geometry stays committed until the next layout, so
+        // measuring after this is safe either way.
+        self.destination.set_offstage(false);
+
         // Retired flights are dropped here, outside every animation listener — see
         // `FlightManager`'s type docs for why that matters.
         self.flights.drain_retired();
@@ -478,9 +552,7 @@ impl MeasurementPass<'_> {
         for (manifest, from_hero, to_hero) in &started {
             self.launch(manifest, from_hero, to_hero);
         }
-        manifests
-            .lock()
-            .extend(started.into_iter().map(|(manifest, ..)| manifest));
+        started.into_iter().map(|(manifest, ..)| manifest).collect()
     }
 
     /// `_HeroFlight(_handleFlightEnded)..start(manifest)` (`heroes.dart:1054`).
@@ -545,8 +617,40 @@ impl MeasurementPass<'_> {
                 animation,
                 rect_factory,
                 shuttle_builder,
+                is_user_gesture_transition: self.is_user_gesture_transition,
+                gesture_signal: self.navigator.user_gesture_signal(),
             },
         );
+    }
+
+    /// `Hero._allHeroesFor`'s `inviteHero`/else-branch (`heroes.dart:308-314`):
+    /// during a gesture-driven transition, a hero that did not opt into
+    /// [`transition_on_user_gestures`](super::hero::Hero::transition_on_user_gestures)
+    /// is excluded from the match — but not silently. It is told to drop any
+    /// placeholder a *prior* flight left it in, so a gesture transition
+    /// interleaved with a programmatic one never leaves a non-opted-in hero
+    /// hidden. A no-op for a programmatic transition
+    /// (`is_user_gesture_transition == false`), where every hero participates
+    /// unconditionally, exactly as `!isUserGestureTransition` short-circuits
+    /// the oracle's own check.
+    fn filter_for_gesture(
+        &self,
+        heroes: HashMap<HeroTag, HeroHandle>,
+    ) -> HashMap<HeroTag, HeroHandle> {
+        if !self.is_user_gesture_transition {
+            return heroes;
+        }
+        heroes
+            .into_iter()
+            .filter_map(|(tag, hero)| {
+                if hero.transition_on_user_gestures() {
+                    Some((tag, hero))
+                } else {
+                    hero.end_flight(false);
+                    None
+                }
+            })
+            .collect()
     }
 
     /// `_startHeroTransition`'s matching loop (`heroes.dart:1014-1060`), reduced to
@@ -567,8 +671,8 @@ impl MeasurementPass<'_> {
             return Vec::new();
         };
 
-        let from_heroes = self.source.all_heroes();
-        let to_heroes = self.destination.all_heroes();
+        let from_heroes = self.filter_for_gesture(self.source.all_heroes());
+        let to_heroes = self.filter_for_gesture(self.destination.all_heroes());
 
         let mut manifests = Vec::new();
         for (tag, from_hero) in &from_heroes {
@@ -607,6 +711,7 @@ impl MeasurementPass<'_> {
                     to_route: self.to,
                     from_rect,
                     to_rect,
+                    is_user_gesture_transition: self.is_user_gesture_transition,
                 },
                 from_hero.clone(),
                 to_hero.clone(),
@@ -672,20 +777,51 @@ impl NavigatorObserver for HeroController {
         // pops the route), but a user gesture stays "in progress" until the
         // settling controller reports its final status (see `back_gesture.rs`), so
         // this still observes `user_gesture_in_progress() == true` at that instant
-        // and suppresses the flight — matching Flutter's default
-        // `Hero.transitionOnUserGestures = false` with no per-hero opt-in wired yet
-        // (`heroes.dart:281-311`'s `_allHeroesFor` filter, not yet threaded through
-        // this controller's measurement pass). Flutter's *other* gesture-driven
-        // path — `didStartUserGesture` calling `_maybeStartHeroTransition` with
-        // `isUserGestureTransition: true` for immediate visual feedback the instant
-        // a drag begins — is out of scope here: it only ever produces a flight for
-        // an opted-in hero, which does not exist in FLUI yet.
+        // and suppresses the flight — this is not a substitute for
+        // `did_start_user_gesture` below (which already ran its own flight, if any,
+        // the instant the drag began); it is Flutter's own belt-and-braces guard
+        // against a *second*, redundant flight from the programmatic-looking route
+        // change the gesture's commit produces.
         if self
             .navigator()
             .is_some_and(|navigator| navigator.user_gesture_in_progress())
         {
             return;
         }
-        self.maybe_start(previous_top, Some(top));
+        self.maybe_start(previous_top, Some(top), false);
+    }
+
+    /// `HeroController.didStartUserGesture` (`heroes.dart:871-879`): the
+    /// instant a gesture (e.g. an edge swipe-back) begins, run the same
+    /// eligibility-and-launch path `did_change_top` would, but pre-emptively
+    /// and always classified as a pop (`FlightDirection::classify`'s
+    /// `is_user_gesture_transition` arm) — this is what gives the very first
+    /// drag frame a flight already in progress instead of waiting for a route
+    /// change to commit.
+    ///
+    /// Note the argument order: `fromRoute: route, toRoute: previousRoute`
+    /// (`:874-878`) — the route being dragged away from is `from`, the one it
+    /// would reveal is `to`, exactly `maybe_start`'s own `(from, to)` shape.
+    fn did_start_user_gesture(&self, route: RouteId, previous: Option<RouteId>) {
+        self.maybe_start(Some(route), previous, true);
+    }
+
+    /// `HeroController.didStopUserGesture` (`heroes.dart:881-907`).
+    ///
+    /// Early-returns while the navigator still reports a gesture in progress
+    /// — nested/overlapping gestures on the same navigator collapse to one
+    /// stop, matching [`NavigatorHandle::did_stop_user_gesture`]'s own
+    /// 1→0-only observer notification. Once genuinely stopped, sweeps every
+    /// still-airborne, gesture-driven pop flight whose proxy never left
+    /// `Dismissed` — the drag never moved, so no status transition ever fired
+    /// to end it on its own — and manually dismisses each one.
+    fn did_stop_user_gesture(&self) {
+        let Some(navigator) = self.navigator() else {
+            return;
+        };
+        if navigator.user_gesture_in_progress() {
+            return;
+        }
+        self.flights.finish_stalled_gesture_pops();
     }
 }

@@ -48,6 +48,7 @@ use std::thread::{self, ThreadId};
 use std::time::Duration;
 
 use flui_animation::Curve;
+use flui_foundation::ChangeNotifier;
 use flui_view::BuildContextExt;
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
@@ -170,7 +171,28 @@ struct NavigatorShared {
     /// `NavigatorState._userGesturesInProgress` (`navigator.dart:5803`) — only
     /// the 0→1 and 1→0 transitions notify observers, so nested gestures on
     /// the same navigator collapse to one notification pair.
-    user_gestures_in_progress: AtomicU32,
+    ///
+    /// `Arc`-wrapped so [`UserGestureSignal`] can share this exact counter
+    /// with a Send+Sync context (a hero flight's data-plane animation
+    /// listener) without holding the owner-affine [`NavigatorHandle`] itself.
+    user_gestures_in_progress: Arc<AtomicU32>,
+
+    /// Flutter's `userGestureInProgressNotifier` (`ValueNotifier<bool>`,
+    /// `navigator.dart:5819`): fires exactly on the 0→1 and 1→0 transitions
+    /// of [`user_gestures_in_progress`](Self::user_gestures_in_progress) —
+    /// the same edges that notify [`NavigatorObserver::did_start_user_gesture`]
+    /// / [`did_stop_user_gesture`](NavigatorObserver::did_stop_user_gesture).
+    ///
+    /// A pure notification relay rather than a `ValueNotifier<bool>` clone:
+    /// this codebase's `ValueNotifier::clone` shares only the listener
+    /// registry, not the value (each clone owns an independent `value`
+    /// field), which would desync the instant it was cloned into a flight —
+    /// the same [`ChangeNotifier`] idiom `ModalInner::relay` and
+    /// `TransitionRouteInner::status_wake` already use to bridge a Send+Sync
+    /// animation callback back to owner-local code. `HeroFlight` subscribes
+    /// once, for its whole life, to replay a terminal status update parked
+    /// mid-gesture (`_handleAnimationUpdate`, `heroes.dart:622-650`).
+    user_gesture_in_progress_notifier: ChangeNotifier,
 }
 
 impl NavigatorShared {
@@ -350,6 +372,11 @@ impl NavigatorShared {
         if count_before != 0 {
             return;
         }
+        // Flutter's `ValueNotifier` setter fires before the observer loop
+        // (`navigator.dart:5806`, then `:5826-5841`) — no navigator lock is
+        // held at this call, so a listener that reads back through a
+        // `NavigatorHandle` cannot deadlock on it.
+        self.user_gesture_in_progress_notifier.notify_listeners();
         let Some((route, previous)) = self.history.lock().top_and_previous_for_gesture() else {
             return;
         };
@@ -380,6 +407,14 @@ impl NavigatorShared {
         if count_before != 1 {
             return;
         }
+        // Same ordering as `did_start_user_gesture`: the notifier fires
+        // before the observer loop (`navigator.dart:5806`, `:5848-5855`),
+        // with no navigator lock held. A `HeroFlight` parked on this
+        // notifier replays its terminal status here, *before*
+        // `HeroController::did_stop_user_gesture` below sweeps whatever
+        // flights are still airborne — so a flight this notify just finished
+        // is already gone from that sweep, not double-handled.
+        self.user_gesture_in_progress_notifier.notify_listeners();
         for observer in self.observers() {
             observer.did_stop_user_gesture();
         }
@@ -548,6 +583,37 @@ fn resolve_command_target(
     })
 }
 
+/// A Send+Sync-safe view onto a navigator's user-gesture state: the live
+/// in-progress count and its change notifier, bundled.
+///
+/// What a data-plane animation status listener needs to defer a terminal
+/// status update until a gesture ends (`_HeroFlight._handleAnimationUpdate`,
+/// `heroes.dart:622-650`) without capturing the owner-affine
+/// [`NavigatorHandle`] itself — `ProxyAnimation::add_status_listener` requires
+/// `Send + Sync`, which `NavigatorHandle` deliberately is not (see its own
+/// doc). Cloning this is cheap: both fields are `Arc`-backed.
+#[derive(Clone)]
+pub(crate) struct UserGestureSignal {
+    in_progress: Arc<AtomicU32>,
+    notifier: ChangeNotifier,
+}
+
+impl UserGestureSignal {
+    /// Whether a user gesture is in progress right now — Flutter's
+    /// `NavigatorState.userGestureInProgress` (`navigator.dart:5816`), read
+    /// from a Send+Sync context.
+    pub(crate) fn in_progress(&self) -> bool {
+        self.in_progress.load(Ordering::Acquire) > 0
+    }
+
+    /// Fires on the 0→1 and 1→0 transitions of
+    /// [`in_progress`](Self::in_progress). Register a listener once; it is
+    /// cheap to keep for a flight's whole life.
+    pub(crate) fn notifier(&self) -> &ChangeNotifier {
+        &self.notifier
+    }
+}
+
 /// An owned, `'static` capability to drive a [`Navigator`].
 ///
 /// This is what `Navigator::of` returns — never `&mut NavigatorState`, which no
@@ -585,7 +651,8 @@ impl NavigatorHandle {
             auto_hero_observer: Mutex::new(None),
             observers_attached: AtomicBool::new(false),
             nested_hero_registration: Mutex::new(None),
-            user_gestures_in_progress: AtomicU32::new(0),
+            user_gestures_in_progress: Arc::new(AtomicU32::new(0)),
+            user_gesture_in_progress_notifier: ChangeNotifier::new(),
         });
         let command_target = register_command_target(&shared);
         Self {
@@ -674,6 +741,29 @@ impl NavigatorHandle {
     #[must_use]
     pub fn user_gesture_in_progress(&self) -> bool {
         self.shared.user_gesture_in_progress()
+    }
+
+    /// Flutter's `userGestureInProgressNotifier` (`ValueNotifier<bool>`,
+    /// `navigator.dart:5819`): fires on the 0→1 and 1→0 transitions of
+    /// [`user_gesture_in_progress`](Self::user_gesture_in_progress), with no
+    /// navigator lock held. Test-facing: production code reaches the same
+    /// notifier only through [`user_gesture_signal`](Self::user_gesture_signal)'s
+    /// Send+Sync-safe bundle.
+    #[cfg(test)]
+    pub(crate) fn user_gesture_in_progress_notifier(&self) -> ChangeNotifier {
+        self.shared.user_gesture_in_progress_notifier.clone()
+    }
+
+    /// A Send+Sync-safe snapshot of this navigator's user-gesture state — the
+    /// live count and its notifier, bundled — for a data-plane animation
+    /// listener that cannot hold this owner-affine handle. `HeroFlight` uses
+    /// it to defer a terminal status update mid-gesture
+    /// (`_handleAnimationUpdate`, `heroes.dart:622-650`).
+    pub(crate) fn user_gesture_signal(&self) -> UserGestureSignal {
+        UserGestureSignal {
+            in_progress: Arc::clone(&self.shared.user_gestures_in_progress),
+            notifier: self.shared.user_gesture_in_progress_notifier.clone(),
+        }
     }
 
     /// Whether both handles name the same navigator — an `Arc` identity check, for the

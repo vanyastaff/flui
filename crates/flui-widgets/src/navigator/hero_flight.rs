@@ -39,9 +39,11 @@
 //!   `placeholder` hook instead. The animation handed to this flight is already the
 //!   manifest's `CurvedAnimation` (`:472-491`), built by the controller's `launch` —
 //!   `Curves::FastOutSlowIn` by default, as Flutter's is (`:181`).
-//! * **No `userGestureInProgress`.** `_handleAnimationUpdate`'s delay (`:620-648`)
-//!   exists only for the iOS back-swipe. FLUI has none, so the status update is never
-//!   deferred.
+//! * **`userGestureInProgress` deferral is implemented.** `_handleAnimationUpdate`
+//!   (`:622-650`) parks a terminal status update while the navigator's user gesture
+//!   is in progress and replays it once the gesture ends, so dragging a pop back to
+//!   zero mid-gesture does not tear the flight down with the finger still down. See
+//!   `FlightInner::wake`'s doc for the Send+Sync boundary this crosses.
 //! * **No `navigatorSize`.** Flutter converts the rect to a `RelativeRect` against it
 //!   (`:591-592`) because its `Positioned` takes edge insets; FLUI's takes
 //!   `left`/`top`/`width`/`height` directly, so the size is not needed.
@@ -55,7 +57,7 @@ use flui_animation::{
     Animatable, Animation, AnimationStatus, Curve, Interval, ProxyAnimation, RectTween,
     ReverseAnimation, Tween, animate,
 };
-use flui_foundation::{Listenable, ListenerId, RenderId};
+use flui_foundation::{ChangeNotifier, Listenable, ListenerId, RenderId};
 use flui_geometry::Rect;
 use flui_scheduler::PostFrameHandle;
 use flui_view::prelude::*;
@@ -64,6 +66,7 @@ use parking_lot::Mutex;
 
 use super::hero::{HeroHandle, HeroTag, RectTweenFactory, ShuttleBuilder};
 use super::hero_controller::{FlightDirection, HeroFlightManifest};
+use super::navigator::UserGestureSignal;
 use crate::overlay::{InsertPosition, OverlayEntry, OverlayHandle};
 use crate::{IgnorePointer, Opacity, Positioned, Stack, StackFit};
 
@@ -78,6 +81,12 @@ struct FlightState {
     to_hero: HeroHandle,
     /// The destination route's coordinate root, for the per-tick re-measure.
     to_route_subtree: RenderId,
+    /// `manifest.isUserGestureTransition` (`heroes.dart:453`, `:915`): set by
+    /// [`FlightManager::start`] and rewritten by [`HeroFlight::divert`]
+    /// (`manifest = newManifest`, `:815`). Read by
+    /// `HeroController::did_stop_user_gesture`'s manual-dismiss sweep
+    /// (`didStopUserGesture`, `:882-907`).
+    is_user_gesture_transition: bool,
 }
 
 /// Everything one in-flight hero shares between its overlay entry, its animation
@@ -113,12 +122,42 @@ struct FlightInner {
 
     entry: Mutex<Option<OverlayEntry>>,
     subscriptions: Mutex<Option<ListenerId>>,
+    /// A Send+Sync-safe read of this flight's navigator's user-gesture state
+    /// (`_HeroFlight._handleAnimationUpdate`, `heroes.dart:622-650`). Fixed
+    /// for the flight's whole life — every divert stays within the same
+    /// controller, hence the same navigator.
+    gesture_signal: UserGestureSignal,
+    /// What [`Shuttle`] actually subscribes to (`AnimatedView::listenable`),
+    /// in place of [`proxy`](Self::proxy) directly: a relay that forwards
+    /// both `proxy`'s own ticks *and* [`gesture_signal`](Self::gesture_signal)'s
+    /// notifier — the same "merge multiple `Listenable`s into one"
+    /// `ChangeNotifier` idiom `ModalInner::relay` uses. `proxy` alone cannot
+    /// tell the shuttle to rebuild when a gesture ends (nothing about the
+    /// animation itself changed then); this is what gives a status parked
+    /// mid-gesture a rebuild to drain, the moment the gesture ends.
+    wake: Arc<ChangeNotifier>,
+    /// The forwarding subscription feeding [`wake`](Self::wake) from
+    /// [`proxy`](Self::proxy)'s own value changes.
+    proxy_wake_subscription: Mutex<Option<ListenerId>>,
+    /// The forwarding subscription feeding [`wake`](Self::wake) from
+    /// [`gesture_signal`](Self::gesture_signal)'s notifier — the same
+    /// listener that replays a terminal status parked mid-gesture. Registered
+    /// once at [`FlightManager::start`] and removed in [`HeroFlight::finish`]
+    /// — never re-registered, unlike Flutter's reactive
+    /// `_scheduledPerformAnimationUpdate` add/remove dance, because one
+    /// listener for the flight's whole life costs nothing and needs no extra
+    /// "already scheduled" bookkeeping.
+    gesture_wake_subscription: Mutex<Option<ListenerId>>,
     /// Terminal status reported by the data-plane animation listener.
     ///
     /// `0` means "none", `1` means dismissed, and `2` means completed. The
     /// listener that writes this field must stay `Send + Sync`, so it cannot
     /// capture [`FlightInner`] or [`FlightManager`]. The owner-local shuttle
-    /// drains the flag from `build`.
+    /// drains the flag from `build`. Written only while no user gesture is in
+    /// progress on this flight's navigator — a terminal status arriving mid-
+    /// gesture is parked instead (see
+    /// [`gesture_wake_subscription`](Self::gesture_wake_subscription)),
+    /// exactly as `_handleAnimationUpdate` defers `_performAnimationUpdate`.
     settled_status: Arc<AtomicU8>,
     /// The in-flight widget (`:553` / `:571-579`), inflated once at start and rebuilt on
     /// a divert. Either the resolved `flight_shuttle_builder`'s output or, when none is
@@ -281,6 +320,18 @@ impl HeroFlight {
         self.inner.state.lock().direction
     }
 
+    /// Whether this is a gesture-driven pop whose proxy never left
+    /// `Dismissed` — Flutter's `isInvalidFlight` predicate inside
+    /// `HeroController.didStopUserGesture` (`heroes.dart:892-896`): the drag
+    /// never moved, so no status transition ever fired to report it, and
+    /// nothing else will end this flight on its own.
+    fn is_stalled_gesture_pop(&self) -> bool {
+        let state = self.inner.state.lock();
+        state.is_user_gesture_transition
+            && state.direction == FlightDirection::Pop
+            && self.inner.proxy.is_dismissed()
+    }
+
     /// `_HeroFlight._performAnimationUpdate` (`heroes.dart:600-618`), minus the
     /// `onFlightEnded` callback — the manager does that half.
     ///
@@ -293,6 +344,12 @@ impl HeroFlight {
 
         if let Some(status_id) = self.inner.subscriptions.lock().take() {
             self.inner.proxy.remove_status_listener(status_id);
+        }
+        if let Some(id) = self.inner.proxy_wake_subscription.lock().take() {
+            self.inner.proxy.remove_listener(id);
+        }
+        if let Some(id) = self.inner.gesture_wake_subscription.lock().take() {
+            self.inner.gesture_signal.notifier().remove_listener(id);
         }
 
         if let Some(entry) = self.inner.entry.lock().take()
@@ -332,6 +389,11 @@ impl HeroFlight {
             animation: new_anim,
             rect_factory: new_rect_factory,
             shuttle_builder: new_shuttle_builder,
+            is_user_gesture_transition: new_is_user_gesture_transition,
+            // Fixed for the flight's whole life (see `FlightInner::gesture_signal`'s
+            // doc) — every divert stays within the same controller/navigator, so
+            // there is nothing to repoint here.
+            gesture_signal: _,
         } = plan;
 
         let (old_dir, old_from, old_to) = {
@@ -469,6 +531,7 @@ impl HeroFlight {
             state.from_hero = new_from;
             state.to_hero = new_to;
             state.to_route_subtree = new_subtree;
+            state.is_user_gesture_transition = new_is_user_gesture_transition;
         }
 
         // `manifest = newManifest` is the last line of `divert`; the proxy repoint is
@@ -505,6 +568,14 @@ pub(crate) struct FlightPlan {
     /// The resolved `flight_shuttle_builder` (`heroes.dart:1040`): the destination
     /// hero's, else the source hero's, else `None` (default shuttle).
     pub(crate) shuttle_builder: Option<ShuttleBuilder>,
+    /// `manifest.isUserGestureTransition` (`heroes.dart:453`): whether this
+    /// transition was started by `didStartUserGesture` rather than a
+    /// programmatic push/pop.
+    pub(crate) is_user_gesture_transition: bool,
+    /// A Send+Sync-safe read of the navigator's user-gesture state, for the
+    /// terminal-status deferral (`_handleAnimationUpdate`,
+    /// `heroes.dart:622-650`).
+    pub(crate) gesture_signal: UserGestureSignal,
 }
 
 /// `HeroController._flights` (`heroes.dart:850`) plus the deferred-drop discipline
@@ -648,6 +719,8 @@ impl FlightManager {
             animation,
             rect_factory,
             shuttle_builder,
+            is_user_gesture_transition,
+            gesture_signal,
         } = plan;
 
         // The shuttle builder gets `manifest.animation` — the curved route animation, not
@@ -668,6 +741,7 @@ impl FlightManager {
                 from_hero: from_hero.clone(),
                 to_hero: to_hero.clone(),
                 to_route_subtree,
+                is_user_gesture_transition,
             }),
             proxy: Arc::new(ProxyAnimation::new(parent)),
             rect: Mutex::new(RectTween {
@@ -681,6 +755,10 @@ impl FlightManager {
             ended: AtomicBool::new(false),
             entry: Mutex::new(None),
             subscriptions: Mutex::new(None),
+            gesture_signal: gesture_signal.clone(),
+            wake: Arc::new(ChangeNotifier::new()),
+            proxy_wake_subscription: Mutex::new(None),
+            gesture_wake_subscription: Mutex::new(None),
             settled_status: Arc::new(AtomicU8::new(0)),
             shuttle: Mutex::new(None),
             shuttle_builder: Mutex::new(shuttle_builder),
@@ -722,15 +800,33 @@ impl FlightManager {
         // `_proxyAnimation.addListener(onTick)` (`:735`) is served by the shuttle's
         // `AnimatedView` rebuild: every value tick marks the owner-local subtree
         // dirty, and `ShuttleState::build` runs `on_tick` before reading the rect.
-        //
+        // The shuttle listens to `wake`, not `proxy` directly — forward every proxy
+        // tick into it so that stays true.
+        let proxy_to_wake = Arc::clone(&inner.wake);
+        let proxy_wake_id = inner
+            .proxy
+            .add_listener(Arc::new(move || proxy_to_wake.notify_listeners()));
+        *inner.proxy_wake_subscription.lock() = Some(proxy_wake_id);
+
         // The status listener installed in the constructor (`:547`) must remain a
         // data-plane callback. It records only a tiny terminal-status flag; the
         // owner-local shuttle drains the flag and calls back into the manager.
+        //
+        // `_handleAnimationUpdate` (`heroes.dart:622-650`): while a user gesture is
+        // in progress on this flight's navigator, a terminal status is *not*
+        // recorded here — the gesture-notifier listener registered below (armed
+        // once, for the flight's whole life) picks it up when the gesture ends,
+        // reading the proxy's status fresh at that time rather than trusting
+        // whatever it was at the moment it was skipped.
         let settled_status = Arc::clone(&inner.settled_status);
+        let listener_gesture_signal = gesture_signal.clone();
         let status_id = inner.proxy.add_status_listener(Arc::new(move |status| {
             // `if (!status.isAnimating)` (`heroes.dart:601`) — `AnimationStatus` here
             // carries no `is_animating`, and forward/reverse is exactly the complement
             // of dismissed/completed.
+            if listener_gesture_signal.in_progress() {
+                return;
+            }
             match status {
                 AnimationStatus::Dismissed => settled_status.store(1, Ordering::Release),
                 AnimationStatus::Completed => settled_status.store(2, Ordering::Release),
@@ -738,6 +834,33 @@ impl FlightManager {
             }
         }));
         *inner.subscriptions.lock() = Some(status_id);
+
+        // The deferred-replay half of `_handleAnimationUpdate` (`:639-649`): fires
+        // on every 0→1/1→0 transition of the navigator's gesture state, for the
+        // flight's whole life. Must stay `Send + Sync` exactly like the status
+        // listener above — it can only touch the same data-plane primitives
+        // (`proxy`, `settled_status`, `wake`, all `Send + Sync`), never
+        // `Arc<FlightInner>`/`Arc<FlightManager>` as a whole (both hold owner-local,
+        // `Rc`-based view state). Writing `settled_status` alone would not be seen:
+        // nothing about `proxy` itself changed on a gesture-end, so the owner-local
+        // shuttle needs telling to rebuild and drain it — hence also waking.
+        let settled_status = Arc::clone(&inner.settled_status);
+        let proxy_for_replay = Arc::clone(&inner.proxy);
+        let gesture_to_wake = Arc::clone(&inner.wake);
+        let replay_gesture_signal = gesture_signal.clone();
+        let gesture_wake_id = gesture_signal.notifier().add_listener(Arc::new(move || {
+            if !replay_gesture_signal.in_progress() {
+                // `_performAnimationUpdate(_proxyAnimation.status)` (`:644`): read
+                // fresh, not whatever status was skipped when it was parked.
+                match proxy_for_replay.status() {
+                    AnimationStatus::Dismissed => settled_status.store(1, Ordering::Release),
+                    AnimationStatus::Completed => settled_status.store(2, Ordering::Release),
+                    _ => {} // Still animating; nothing to replay.
+                }
+            }
+            gesture_to_wake.notify_listeners();
+        }));
+        *inner.gesture_wake_subscription.lock() = Some(gesture_wake_id);
 
         self.flights.lock().insert(manifest.tag.clone(), flight);
     }
@@ -753,6 +876,29 @@ impl FlightManager {
             // the end of this frame.
             self.retired.lock().push(removed);
             self.schedule_drain();
+        }
+    }
+
+    /// `HeroController.didStopUserGesture`'s manual sweep (`heroes.dart:882-907`):
+    /// every still-airborne, gesture-driven pop flight whose proxy never left
+    /// `Dismissed` (the drag never moved) is fed a synthetic `Dismissed` update
+    /// through the same [`finish`](Self::finish) path a real terminal status
+    /// would use.
+    ///
+    /// Called directly from `HeroController::did_stop_user_gesture` — owner-local,
+    /// never from inside an animation listener — so calling `finish` here (which
+    /// may drop the flight) is unconditionally safe, unlike the data-plane status
+    /// listeners in [`start`](Self::start).
+    pub(crate) fn finish_stalled_gesture_pops(self: &Arc<Self>) {
+        let stalled: Vec<HeroFlight> = self
+            .flights
+            .lock()
+            .values()
+            .filter(|flight| flight.is_stalled_gesture_pop())
+            .cloned()
+            .collect();
+        for flight in stalled {
+            self.finish(&flight, AnimationStatus::Dismissed);
         }
     }
 }
@@ -787,8 +933,12 @@ impl std::fmt::Debug for Shuttle {
 impl_animated_view!(Shuttle);
 
 impl AnimatedView for Shuttle {
+    /// `self.flight.wake`, not `proxy` directly: the relay that also
+    /// forwards the navigator's gesture-notifier, so a flight parked
+    /// mid-gesture (`FlightInner::gesture_wake_subscription`) gets a rebuild
+    /// the moment the gesture ends, to drain the status that was replayed.
     fn listenable(&self) -> Arc<dyn Listenable> {
-        Arc::clone(&self.flight.proxy) as Arc<dyn Listenable>
+        Arc::clone(&self.flight.wake) as Arc<dyn Listenable>
     }
 }
 

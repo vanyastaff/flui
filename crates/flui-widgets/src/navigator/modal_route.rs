@@ -765,6 +765,15 @@ impl ModalHandle {
         self.inner.heroes.all_heroes()
     }
 
+    /// `route.maintainState` (`heroes.dart:957`): whether this route keeps
+    /// its subtree built while covered. Read by
+    /// `HeroController::maybe_start`'s gesture-pop sync fast path — a
+    /// destination that does not maintain state may not be laid out yet, so
+    /// only a `true` here can skip the offstage measurement dance.
+    pub(crate) fn maintain_state(&self) -> bool {
+        self.inner.maintain_state.load(Ordering::Relaxed)
+    }
+
     /// There is no `maintainState` setter in Flutter — it is an abstract getter a
     /// subclass overrides, and `changedInternalState` republishes it. This is the
     /// same thing with a cell behind it, which is what lets a test observe the
