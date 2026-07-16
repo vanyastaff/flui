@@ -213,6 +213,47 @@ for package in workspace_packages:
     if raw_manifest.get("lints") != {"workspace": True}:
         errors.append(f"{rel} must set `[lints] workspace = true` (local or missing lint tables bypass workspace lints)")
 
+# Design-system decoupling contract (ADR-0028): core crates never depend on a
+# design system. `flui-material`/`flui-cupertino` depend downward on the
+# widgets substrate (see docs/FOUNDATIONS.md's layer DAG, L7 --> L6); the
+# reverse edge must never exist, or Flutter's own pre-decoupling coupling
+# (material/cupertino baked into the framework core) reappears in FLUI.
+#
+# This lives here, not in `port-check.sh`'s regex triggers, because it is a
+# `Cargo.toml` dependency-graph fact, not a source-pattern fact — the same
+# reason `port-check.sh`'s own dependency-adjacent checks (N-geom.U16, the
+# sanctioned-dyn-boundary allowlist, ...) grep `.rs` sources: they audit
+# *usage*, whereas this needs the declared dependency edge itself. This
+# script already parses `cargo metadata`'s per-package `dependencies` (see
+# the path/version check above) — the only place in the repo doing that today.
+#
+# `flui-cupertino` does not exist yet; it is guarded pre-emptively so the rule
+# is already live the moment the crate is created, per the owner directive.
+design_system_crates = {"flui-material", "flui-cupertino"}
+# The only crates *allowed* to point at a design system: the design systems
+# themselves (self-deps are nonsensical but harmless to exempt), the
+# application/composition-root crate, and anything outside `crates/`
+# (examples, tools) — matches docs/FOUNDATIONS.md's L7 --> L8/Facade edges.
+design_system_dependents_allowed = design_system_crates | {"flui-app", "flui"}
+
+for package in workspace_packages:
+    manifest = Path(package["manifest_path"]).resolve()
+    rel = manifest.relative_to(root)
+    name = package["name"]
+
+    if name not in active_crate_manifests:
+        continue
+    if name in design_system_dependents_allowed:
+        continue
+
+    for dependency in package["dependencies"]:
+        if dependency["name"] in design_system_crates:
+            errors.append(
+                f"{rel} (core crate `{name}`) declares a dependency on design-system crate "
+                f"`{dependency['name']}` — forbidden by ADR-0028 (design-system decoupling "
+                "contract): core must never depend on flui-material/flui-cupertino"
+            )
+
 if errors:
     print("workspace-inventory: drift detected", file=sys.stderr)
     for error in errors:
