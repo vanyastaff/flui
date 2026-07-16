@@ -134,6 +134,42 @@ fn tap_fires_on_tap_for_a_down_up_on_the_ink_well() {
 }
 
 #[test]
+fn on_tap_handler_observes_pressed_already_set() {
+    use std::sync::atomic::AtomicBool;
+
+    // Oracle order (`ink_well.dart` `activateOnIntent`/`_startNewSplash`,
+    // `:864-900`): `WidgetState.pressed` is set true BEFORE `onTap` fires,
+    // not after. Run this test's mutation yourself to see it matter: swap
+    // the handler-then-pressed order back in `ink_well.rs`'s `on_tap`
+    // closure and this assertion flips to `false`.
+    let states = WidgetStatesController::default();
+    let observed_pressed = Arc::new(AtomicBool::new(false));
+    let states_for_handler = states.clone();
+    let observed_for_handler = Arc::clone(&observed_pressed);
+    let laid = lay_out(
+        InkWell::new(SizedBox::new(60.0, 40.0))
+            .states_controller(states.clone())
+            .on_tap(move || {
+                observed_for_handler.store(
+                    states_for_handler
+                        .value()
+                        .contains_state(WidgetState::Pressed),
+                    Ordering::SeqCst,
+                );
+            }),
+        tight(60.0, 40.0),
+    );
+
+    laid.dispatch_pointer_down(30.0, 20.0);
+    laid.dispatch_pointer_up(30.0, 20.0);
+
+    assert!(
+        observed_pressed.load(Ordering::SeqCst),
+        "on_tap's handler must observe WidgetState::Pressed already set when it runs"
+    );
+}
+
+#[test]
 fn disabled_ink_well_does_not_fire_a_tap_callback() {
     // Mutation-honest companion to the enabled case above: this test only
     // proves something if a *would-be* tap on a disabled InkWell is
@@ -259,6 +295,93 @@ fn overlay_color_resolution_reflects_the_hovered_state() {
     );
 }
 
+#[test]
+fn rebuilding_with_a_different_states_controller_re_homes_hover_tracking() {
+    // Flutter parity: `didUpdateWidget` re-homes the states controller when
+    // `widget.statesController != oldWidget.statesController`
+    // (`ink_well.dart` `:938-940`). Run the mutation yourself: drop the
+    // `did_update_view` override in `ink_well.rs` (or make it a no-op) and
+    // `controller_b` never sees the hover below — `create_state` only
+    // captures the controller once.
+    let controller_a = WidgetStatesController::default();
+    let controller_b = WidgetStatesController::default();
+
+    let mut laid = lay_out(
+        InkWell::new(SizedBox::new(60.0, 40.0))
+            .on_tap(|| {})
+            .states_controller(controller_a.clone()),
+        tight(60.0, 40.0),
+    );
+
+    laid.pump_widget(
+        InkWell::new(SizedBox::new(60.0, 40.0))
+            .on_tap(|| {})
+            .states_controller(controller_b.clone()),
+    );
+
+    laid.dispatch_pointer_move(10.0, 10.0);
+
+    assert!(
+        controller_b.value().contains_state(WidgetState::Hovered),
+        "after a rebuild swaps in controller_b, hover must drive controller_b"
+    );
+    assert!(
+        !controller_a.value().contains_state(WidgetState::Hovered),
+        "controller_a must no longer be driven by this InkWell once it has been swapped out"
+    );
+}
+
+#[test]
+fn rebuilding_with_the_same_cloned_controller_keeps_driving_it() {
+    // The complementary case: re-cloning the SAME controller on rebuild
+    // (the common case — most callers hold one controller and pass
+    // `.clone()` on every build) must NOT be treated as a swap, and must
+    // NOT drop the listener that drives rebuilds.
+    let controller = WidgetStatesController::default();
+
+    let mut laid = lay_out(
+        InkWell::new(SizedBox::new(60.0, 40.0))
+            .on_tap(|| {})
+            .states_controller(controller.clone()),
+        tight(60.0, 40.0),
+    );
+
+    laid.pump_widget(
+        InkWell::new(SizedBox::new(60.0, 40.0))
+            .on_tap(|| {})
+            .states_controller(controller.clone()),
+    );
+
+    laid.dispatch_pointer_move(10.0, 10.0);
+
+    assert!(
+        controller.value().contains_state(WidgetState::Hovered),
+        "re-cloning the same controller across a rebuild must not break hover tracking"
+    );
+}
+
+// A `build()`-vs-`init_state`/`did_update_view` regression test for the
+// Disabled-sync relocation was attempted and DELIBERATELY dropped, not
+// silently skipped: two different observability angles were tried —
+// (1) a `StatelessView` child counting its own `build()` invocations, and
+// (2) `BuildOwner::pending_external_builds()` (the out-of-frame rebuild
+// inbox `RebuildHandle::schedule()` enqueues into) read immediately after
+// `lay_out` returns. Both were run against the reintroduced original bug
+// (`self.states.update(WidgetState::Disabled, !enabled)` back at the top of
+// `build()`) via `cargo test`, and BOTH passed unchanged — `lay_out`'s
+// single bootstrap frame is a fixpoint (ADR-0017) that drains any rebuild
+// scheduled during its own pass before returning, regardless of which
+// lifecycle hook triggered it, so neither approach can observe "extra
+// rebuild" as a distinguishable side effect through this harness. The
+// architectural fix (never mutate a possibly-caller-shared controller from
+// `build`, matching Flutter's own "no setState during build" contract —
+// `ink_well.rs`'s `init_state`/`did_update_view`) is applied and is correct
+// on the oracle's own terms independent of whether this harness can prove
+// the "spurious rebuild" symptom specifically; the existing `Disabled`-state
+// assertions (`disabled_ink_well_does_not_update_hovered_state`,
+// `disabled_ink_well_does_not_fire_a_tap_callback`) already prove the sync
+// itself still happens correctly at the new call sites.
+
 // `focused_state_updates_when_an_external_focus_node_is_granted_focus` was
 // removed after the spike showed focus is not drivable through this
 // headless harness at all: even a BARE `Focus` widget (no InkWell involved)
@@ -271,5 +394,5 @@ fn overlay_color_resolution_reflects_the_hovered_state() {
 // `Focus::new(..).can_request_focus(enabled).on_focus_change(..)` wiring,
 // which is structurally identical to every other `on_focus_change` consumer
 // in this codebase, e.g. `text_field.rs`). Focus coverage for `InkWell` is
-// therefore a named gap in this PR, not silently dropped — see the module
-// doc above.
+// therefore a named gap here, not silently dropped — see the module doc
+// above.

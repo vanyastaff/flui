@@ -29,9 +29,9 @@
 //!
 //! # Named deferrals (not silently dropped)
 //!
-//! - **`WidgetStateProperty::lerp` / `WidgetStateBorderSide::lerp`** — arrive
-//!   with `ButtonStyle.lerp`/`AnimatedTheme` in a later PR; nothing in this
-//!   substrate consumes an interpolated property yet.
+//! - **`WidgetStateProperty::lerp` / `WidgetStateBorderSide::lerp`** —
+//!   arrives when a component first needs `ButtonStyle.lerp`/`AnimatedTheme`;
+//!   nothing in this substrate consumes an interpolated property yet.
 //! - **The Dart typed-subtype trick** (`WidgetStateColor extends Color`,
 //!   `WidgetStateMouseCursor extends MouseCursor`, `WidgetStateBorderSide
 //!   extends BorderSide`, `WidgetStateOutlinedBorder extends OutlinedBorder`,
@@ -39,9 +39,13 @@
 //!   both "the plain value" and "a property that resolves to it" via
 //!   subclassing a concrete value type. Rust has no equivalent (the value
 //!   types here are not open to inheritance, and blanket-implementing both
-//!   roles on one type is not the goal). Call sites that want either a plain
-//!   `Color` or a `WidgetStateProperty<Color>` take an explicit enum/variant
-//!   instead — a documented, permanent divergence, not a deferral.
+//!   roles on one type is not the goal). A call site that wants either a
+//!   plain `Color` or a `WidgetStateProperty<Color>` needs an explicit
+//!   enum/variant of its own — a documented, permanent divergence, not a
+//!   deferral. No such enum ships from this module yet (an earlier
+//!   `ResolveAs<T>`/`resolve_as` pair was removed for having no consumer);
+//!   add one against the first real call site that needs it instead of
+//!   speculating on its shape here.
 //! - **The full `&`/`|`/`~` `WidgetStatesConstraint` algebra** — the oracle's
 //!   `WidgetStatesConstraint` mixin supports arbitrary boolean combinations
 //!   (`WidgetState.focused | WidgetState.hovered`, `~WidgetState.disabled`,
@@ -63,8 +67,8 @@
 //! resolves to `T::default()`. For `T = Option<V>` that default is `None`,
 //! which is exactly the oracle's nullable-fallthrough behavior
 //! (`WidgetStateBorderSide.resolve` returning `null` "to defer to the
-//! default value of the widget or theme"). PR-2's `ButtonStyleButton` reads
-//! a `WidgetStateProperty<Option<Color>>` (or similar) and chains
+//! default value of the widget or theme"). A future button-style consumer
+//! reads a `WidgetStateProperty<Option<Color>>` (or similar) and chains
 //! `widget_style.prop.resolve(&states) ?? theme_value ?? component_default`
 //! — the Rust expression of the oracle's
 //! `widget_style?.prop.resolve(states) ?? theme ?? default` cascade. Callers
@@ -249,7 +253,15 @@ impl From<WidgetState> for WidgetStateConstraint {
 /// See the module doc for the `T: Default` requirement on
 /// [`resolve`](Self::resolve) and the constraint-algebra deferral on
 /// [`Map`](Self::Map).
+///
+/// `#[non_exhaustive]`, matching sibling [`WidgetStateConstraint`]'s
+/// growth story: `WidgetStateProperty::lerp` (a named deferral, see the
+/// module doc) is a likely future fourth variant carrying interpolation
+/// state, and this enum should be free to grow one without a breaking
+/// change. Use the constructors ([`all`](Self::all), [`resolve_with`](Self::resolve_with),
+/// [`from_map`](Self::from_map)) rather than matching variants directly.
 #[derive(Clone)]
+#[non_exhaustive]
 pub enum WidgetStateProperty<T> {
     /// Resolves to the same value regardless of state. Flutter's
     /// `WidgetStatePropertyAll`.
@@ -306,40 +318,6 @@ impl<T: Clone + Default> WidgetStateProperty<T> {
                 .iter()
                 .find(|(constraint, _)| constraint.is_satisfied_by(*states))
                 .map_or_else(T::default, |(_, value)| value.clone()),
-        }
-    }
-}
-
-/// Resolves `value` against `states` if it is a [`WidgetStateProperty<T>`],
-/// otherwise returns `value` unchanged.
-///
-/// Flutter parity: `WidgetStateProperty.resolveAs`. Useful for a parameter
-/// that can optionally vary by state (e.g. a plain `Color` or a
-/// `WidgetStateProperty<Color>`) without the caller branching.
-pub fn resolve_as<T: Clone + Default>(value: &ResolveAs<T>, states: &WidgetStates) -> T {
-    match value {
-        ResolveAs::Fixed(v) => v.clone(),
-        ResolveAs::Property(p) => p.resolve(states),
-    }
-}
-
-/// Either a fixed `T` or a [`WidgetStateProperty<T>`] — the argument shape
-/// [`resolve_as`] accepts. Flutter expresses this as "either a `Color` or a
-/// `WidgetStateProperty<Color>`" via the typed-subtype trick (see the module
-/// doc); this enum is the explicit Rust equivalent.
-#[derive(Clone)]
-pub enum ResolveAs<T> {
-    /// A value that does not vary by state.
-    Fixed(T),
-    /// A value that varies by state.
-    Property(WidgetStateProperty<T>),
-}
-
-impl<T: fmt::Debug> fmt::Debug for ResolveAs<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Fixed(value) => f.debug_tuple("Fixed").field(value).finish(),
-            Self::Property(property) => f.debug_tuple("Property").field(property).finish(),
         }
     }
 }
@@ -418,6 +396,23 @@ impl WidgetStatesController {
     #[must_use]
     pub fn value(&self) -> WidgetStates {
         *self.value.lock()
+    }
+
+    /// Whether `self` and `other` share the same underlying state cell —
+    /// identity, not value equality (two independently-`new`'d controllers
+    /// with the same current value are NOT `is_same`). Mirrors
+    /// [`flui_animation::Vsync::is_same`]'s precedent for the same "same
+    /// ambient registry vs. a fresh clone with equal value" question.
+    ///
+    /// Used to detect "the caller swapped in a different
+    /// `WidgetStatesController` on rebuild" (a `Some` -> `Some` change to a
+    /// *different* controller, as opposed to a rebuild re-cloning the same
+    /// one) — see `flui_material::InkWell`'s `did_update_view`, which
+    /// mirrors Flutter's own `didUpdateWidget` re-homing
+    /// (`widget.statesController != oldWidget.statesController`).
+    #[must_use]
+    pub fn is_same(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.value, &other.value)
     }
 
     /// Adds `state` to the set if `add` is `true`, removes it otherwise.
@@ -560,7 +555,8 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // Option<V> fallthrough (PR-2's resolve-then-coalesce contract)
+    // Option<V> fallthrough (the resolve-then-coalesce contract a future
+    // button-style consumer relies on)
     // ------------------------------------------------------------------
 
     #[test]
@@ -629,22 +625,6 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // resolve_as
-    // ------------------------------------------------------------------
-
-    #[test]
-    fn resolve_as_passes_through_a_fixed_value() {
-        let value: ResolveAs<u32> = ResolveAs::Fixed(5);
-        assert_eq!(resolve_as(&value, &WidgetStates::NONE), 5);
-    }
-
-    #[test]
-    fn resolve_as_resolves_a_property_value() {
-        let value: ResolveAs<u32> = ResolveAs::Property(WidgetStateProperty::all(9));
-        assert_eq!(resolve_as(&value, &WidgetStates::NONE), 9);
-    }
-
-    // ------------------------------------------------------------------
     // WidgetStatesController
     // ------------------------------------------------------------------
 
@@ -702,6 +682,20 @@ mod tests {
         controller.update(WidgetState::Focused, true);
 
         assert!(clone.value().contains_state(WidgetState::Focused));
+    }
+
+    #[test]
+    fn is_same_distinguishes_identity_from_value_equality() {
+        let controller = WidgetStatesController::default();
+        let clone = controller.clone();
+        let independent = WidgetStatesController::default();
+
+        assert!(controller.is_same(&clone), "a clone shares the same cell");
+        assert!(
+            !controller.is_same(&independent),
+            "two independently-constructed controllers are not the same cell, \
+             even though both currently hold the same (empty) value"
+        );
     }
 
     #[test]

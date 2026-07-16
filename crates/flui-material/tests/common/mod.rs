@@ -160,12 +160,29 @@ impl LaidOut {
 
     /// Hit-test at root-local `(x, y)` and dispatch `event` to the entries
     /// hit there — the route step a binding runs before the arena lifecycle.
+    ///
+    /// The hit-test itself, not just the dispatch, runs inside
+    /// `enter_owner_scope`: a render object's `hit_test` can resolve an
+    /// owner-lane target synchronously (e.g. `RenderPhysicalShape` resolving
+    /// its registered `PathClipTarget` via
+    /// `flui_interaction::routing::resolve_path_clip_target`, which reads
+    /// the *currently active* lane off a thread-local — there is no stored
+    /// handle to fall back to). Hit-testing outside the scope silently
+    /// degrades every such resolution to its no-active-lane fallback (here,
+    /// `RenderPhysicalShape`'s whole-box default clip) instead of erroring
+    /// loudly, which made an earlier version of this harness pass shape
+    /// hit-tests that should have failed — the owner scope must wrap the
+    /// whole hit-test + dispatch sequence, matching how a real frame runs
+    /// (`AppBinding::handle_input` executes entirely inside the lane).
     fn route_event(&self, event: &flui_interaction::PointerEvent, x: f32, y: f32) {
         let position = Offset::new(px(x), px(y));
-        let owner = self.pipeline_owner.read();
-        let mut result = HitTestResult::new();
-        owner.hit_test(position, &mut result);
-        self.binding.enter_owner_scope(|| result.dispatch(event));
+        self.binding.enter_owner_scope(|| {
+            let owner = self.pipeline_owner.read();
+            let mut result = HitTestResult::new();
+            owner.hit_test(position, &mut result);
+            drop(owner);
+            result.dispatch(event);
+        });
     }
 
     /// Dispatch a synthetic pointer-down at `(x, y)` — the headless analogue

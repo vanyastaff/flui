@@ -194,9 +194,6 @@ pub use scroll::{
 };
 pub use semantics::{ExcludeSemantics, MergeSemantics, Semantics};
 pub use stack::{IndexedStack, Positioned, Stack};
-// The interactive-state vocabulary a widget's visual properties can vary
-// over (hover/focus/press/…) — see the module's own docs for Flutter parity
-// and named deferrals.
 pub use text::{
     DefaultTextStyle, EditableText, EditableTextState, RichText, Text, TextEditingController,
     TextField,
@@ -205,9 +202,11 @@ pub use transitions::{
     AnimatedBuilder, AnimatedBuilderState, FadeTransition, FadeTransitionState, RotationTransition,
     RotationTransitionState, ScaleTransition, ScaleTransitionState,
 };
+// The interactive-state vocabulary a widget's visual properties can vary
+// over (hover/focus/press/…) — see the module's own docs for Flutter parity
+// and named deferrals.
 pub use widget_state::{
-    ResolveAs, WidgetState, WidgetStateConstraint, WidgetStateProperty, WidgetStates,
-    WidgetStatesController, resolve_as,
+    WidgetState, WidgetStateConstraint, WidgetStateProperty, WidgetStates, WidgetStatesController,
 };
 pub use wrap::Wrap;
 

@@ -7,7 +7,7 @@
 //! (oracle tag `3.44.0`) resolves the default (M3's pill-shaped
 //! `StadiumBorder`, or a rectangle, per `MaterialType`) into a path at paint
 //! time via `ShapeBorder.getOuterPath`. FLUI ships the two concrete shapes
-//! PR-1's `Material` actually needs — a plain/rounded rectangle and the M3
+//! `Material` actually needs today — a plain/rounded rectangle and the M3
 //! stadium (pill) shape — rather than the full `ShapeBorder` hierarchy
 //! (`RoundedRectangleBorder`, `CircleBorder`, `ContinuousRectangleBorder`,
 //! `StarBorder`, a user's own `ShapeBorder` subclass, …). [`MaterialShape`]
@@ -22,7 +22,7 @@
 //! render on top of the fill. [`MaterialShape`] is fill-and-clip-only — no
 //! side is drawn. `Material.shape`'s border painting is deferred to when a
 //! component actually needs an outlined surface (M3's `OutlinedButton`,
-//! PR-2+).
+//! not yet built).
 
 use flui_types::{
     Point, Rect, Size,
@@ -170,12 +170,30 @@ mod tests {
     }
 
     #[test]
-    fn to_path_traces_the_same_shape_as_to_rrect() {
-        let shape = MaterialShape::Stadium;
+    fn to_path_excludes_a_stadium_corner_a_sharp_rectangle_would_include() {
+        // Shape-sensitive, not bounds-only: a bounding-box check (`.bounds()`
+        // vs. `.rect`) is identical for every `MaterialShape` variant at the
+        // same size, so it can never distinguish Stadium from RoundedRect —
+        // confirmed by running the mutation (swap `Stadium` for
+        // `MaterialShape::rectangle()` below): the old bounds-only assertion
+        // still passed. Point-containment near a corner does distinguish
+        // them: for an 80x40 rect the Stadium radius is 20 (shortest_side/2,
+        // centered at (20, 20) in the top-left), so (2, 2) sits outside the
+        // inscribed corner circle (distance ≈ 25.5 > 20) while still inside
+        // the plain bounding rect a sharp-cornered `RoundedRect` would fill.
         let dimensions = size(80.0, 40.0);
-        let rrect = shape.to_rrect(dimensions);
-        let mut path = shape.to_path(dimensions);
-        // A stadium's bounding box matches the rrect's rect exactly.
-        assert_eq!(path.bounds(), rrect.rect);
+        let corner_probe = Point::new(px(2.0), px(2.0));
+
+        let stadium_path = MaterialShape::Stadium.to_path(dimensions);
+        assert!(
+            !stadium_path.contains(corner_probe),
+            "the stadium's rounded top-left corner must exclude a point this close to the corner"
+        );
+
+        let rectangle_path = MaterialShape::rectangle().to_path(dimensions);
+        assert!(
+            rectangle_path.contains(corner_probe),
+            "a sharp-cornered rectangle must include the same point"
+        );
     }
 }

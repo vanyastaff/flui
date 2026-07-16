@@ -23,18 +23,19 @@
 //!
 //! - **No hardcoded opacities.** The oracle's 8%/10%/10% hover/focus/press
 //!   defaults live in per-component `_TokenDefaults` (M3 spec tables) that
-//!   arrive with PR-2's button styles, not here. An `InkWell` with no
-//!   `overlay_color` configured paints nothing beyond its child.
+//!   arrive with a future button family's styles, not here. An `InkWell`
+//!   with no `overlay_color` configured paints nothing beyond its child.
 //! - **`None` resolution = no overlay layer at all**, not a fallback color.
 //!   The oracle falls back through `overlayColor?.resolve(states) ??
 //!   highlightColor/focusColor/hoverColor ?? Theme.of(context).<field>`
 //!   (`ink_well.dart` `updateHighlight`, `:1035-1046`) — FLUI's `ThemeData`
-//!   V1 has no `hoverColor`/`focusColor`/`highlightColor` fields to fall
+//!   has no `hoverColor`/`focusColor`/`highlightColor` fields yet to fall
 //!   back to, so the chain stops at `None`. Named divergence, revisited
 //!   when those theme fields land.
 //! - **No ripple/splash.** M3's real splash is the `InkSparkle` shader,
-//!   miles outside this PR's scope; V1 has no press-triggered ripple
-//!   animation, just the static resolved [`WidgetState::Pressed`] fill.
+//!   well outside this substrate's scope; this `InkWell` has no
+//!   press-triggered ripple animation, just the static resolved
+//!   [`WidgetState::Pressed`] fill.
 //! - **No cross-widget bleed.** Because there is no ink-feature registry, an
 //!   overlay can never paint outside its own `InkWell`'s bounds — see
 //!   `material.rs` for the upgrade path.
@@ -45,8 +46,8 @@
 //! set (`isWidgetEnabled`, `ink_well.dart` `:1292-1303`) — `onTap`,
 //! `onDoubleTap`, `onLongPress`, `onLongPressUp`, `onTapUp`, `onTapDown` (plus
 //! a parallel secondary-button check). This substrate wires only
-//! [`InkWell::on_tap`] (`GestureDetector (tap)` — the plan's stated PR-1
-//! gesture surface), so `enabled` reduces to `on_tap.is_some()`. When
+//! [`InkWell::on_tap`] via `GestureDetector`'s own `on_tap`, so `enabled`
+//! reduces to `on_tap.is_some()`. When
 //! disabled: [`WidgetState::Disabled`] is asserted in the states set, the
 //! `GestureDetector` built has no `on_tap` closure at all (so it never
 //! resolves any gesture and — Flutter parity — "swallows nothing": its
@@ -287,9 +288,35 @@ impl ViewState<InkWell> for InkWellState {
         // listener below) — never called from `build`.
         let rebuild = ctx.rebuild_handle();
 
+        // Flutter parity: `initStatesController` syncs `Disabled` from the
+        // widget's `enabled` BEFORE the first build (never inside `build`
+        // — the oracle's own doc: mutating a possibly-caller-shared
+        // controller and notifying its listeners synchronously mid-build is
+        // exactly the "setState during build" hazard Flutter's lifecycle
+        // exists to prevent; `did_update_view` below handles every later
+        // transition) — AND before `addListener`
+        // (`statesController.update(...)` precedes
+        // `statesController.addListener(handleStatesControllerChange)` in
+        // the oracle body, `ink_well.dart` `:923-924`). That order is load
+        // bearing, not incidental: this very first sync almost always IS a
+        // real change (a freshly-constructed controller starts at
+        // `WidgetStates::NONE`, so an initially-disabled `InkWell` — the
+        // common case, since `on_tap` is often set after construction —
+        // flips `Disabled` on), and updating before a listener exists means
+        // that one certain transition notifies nobody and schedules no
+        // spurious rebuild for an element that hasn't even had its first
+        // build yet; the identical update after `did_update_view` re-homes
+        // a controller is a genuine, listener-visible change instead (see
+        // below). `init_state` has no `view` parameter, but `create_state`
+        // already seeded `tap_slot` from the initial view, so `enabled` is
+        // derivable from it without one.
+        let initially_enabled = self.tap_slot.borrow().is_some();
+        self.states
+            .update(WidgetState::Disabled, !initially_enabled);
+
         // A rebuild is needed whenever the states set actually changes
-        // (hover/focus/press/disabled), so the overlay color is re-resolved.
-        // Mirrors `_InkResponseState.initStatesController`'s
+        // (hover/focus/press/disabled) from here on, so the overlay color
+        // is re-resolved. Mirrors `_InkResponseState.initStatesController`'s
         // `statesController.addListener(handleStatesControllerChange)`,
         // whose Flutter body is `setState(() {})`.
         let rebuild_for_listener = rebuild.clone();
@@ -301,13 +328,54 @@ impl ViewState<InkWell> for InkWellState {
         self.rebuild = Some(rebuild);
     }
 
+    fn did_update_view(&mut self, old_view: &InkWell, new_view: &InkWell) {
+        // Flutter parity: `didUpdateWidget` re-homes the states controller
+        // when the caller swaps in a genuinely different one —
+        // `widget.statesController != oldWidget.statesController`
+        // (`ink_well.dart` `:938-940`). A rebuild that re-clones the SAME
+        // external controller, or leaves both `None` (keeping the private
+        // one this state already owns), is not a swap: `WidgetStatesController`
+        // has no `PartialEq`, so identity is `is_same`, not value equality.
+        let controller_changed = match (&old_view.states_controller, &new_view.states_controller) {
+            (Some(old), Some(new)) => !old.is_same(new),
+            (None, None) => false,
+            _ => true,
+        };
+
+        if controller_changed {
+            if let Some(id) = self.states_listener.take() {
+                self.states.remove_listener(id);
+            }
+
+            self.states = new_view.states_controller.clone().unwrap_or_default();
+
+            // Same order as `init_state`, same reason: sync BEFORE
+            // `add_listener` so re-homing onto a controller that hasn't
+            // seen this `InkWell`'s `enabled` yet (oracle: `initStatesController`
+            // runs again on a controller swap, `ink_well.dart` `:943`)
+            // doesn't self-notify a listener that was only just attached.
+            self.states
+                .update(WidgetState::Disabled, !new_view.is_interactive());
+
+            let rebuild = self
+                .rebuild
+                .clone()
+                .expect("init_state runs before the first did_update_view");
+            self.states_listener = Some(self.states.add_listener(Arc::new(move || {
+                rebuild.schedule();
+            })));
+        } else if new_view.is_interactive() != old_view.is_interactive() {
+            // Flutter parity: `didUpdateWidget`'s `if (enabled !=
+            // isWidgetEnabled(oldWidget))` branch — the controller didn't
+            // change, but `enabled` did, so the existing controller needs a
+            // resync (`ink_well.dart` `:963-964`). Still never from `build`.
+            self.states
+                .update(WidgetState::Disabled, !new_view.is_interactive());
+        }
+    }
+
     fn build(&self, view: &InkWell, _ctx: &dyn BuildContext) -> impl IntoView {
         let enabled = view.is_interactive();
-        // Flutter parity: `didUpdateWidget` keeps `Disabled` in sync with
-        // `enabled` on every change; `update` no-ops when unchanged, so
-        // asserting it every build (not just on a detected transition) is
-        // safe and simpler.
-        self.states.update(WidgetState::Disabled, !enabled);
         self.tap_slot.borrow_mut().clone_from(&view.on_tap);
 
         let resolved_overlay = view.overlay_color.resolve(&self.states.value());
@@ -324,14 +392,21 @@ impl ViewState<InkWell> for InkWellState {
             let vsync = self.vsync.clone();
             let pending_deactivation = Rc::clone(&self.pending_deactivation);
             gesture_detector = gesture_detector.on_tap(move || {
-                // Oracle: `handleTap` fires the user callback, THEN resolves
-                // the highlight — matched here (user code runs before the
-                // pressed-state bookkeeping below, in case it triggers a
-                // rebuild that reads `states`).
+                // Oracle order (`ink_well.dart` `activateOnIntent`, `:864-900`
+                // — the synthetic/no-real-down-up activation path this
+                // substrate's single `on_tap` callback architecturally
+                // matches, per the module doc's "Press-state timing"
+                // section): `_startNewSplash` sets `WidgetState.pressed`
+                // true FIRST, THEN `widget.onTap?.call()` fires, and only
+                // after that does the delayed-clear `_activationTimer`
+                // start. A handler that reads the states set (e.g. to
+                // resolve its own overlay) must observe `Pressed` — the
+                // oracle guarantees it is already set by the time `onTap`
+                // runs, so it is set here before `handler()`, not after.
+                press_states.update(WidgetState::Pressed, true);
                 if let Some(handler) = tap_slot.borrow().clone() {
                     handler();
                 }
-                press_states.update(WidgetState::Pressed, true);
                 InkWellState::cancel_pending_deactivation(&pending_deactivation);
                 begin_press_deactivation(
                     &pending_deactivation,
@@ -354,7 +429,21 @@ impl ViewState<InkWell> for InkWellState {
             // computing a genuine enter transition, which needs the
             // annotation-diffing pass a full `AppBinding` frame pump runs
             // (`MouseTracker::update_with_event`) but a headless pointer
-            // dispatch does not. See the module doc's "Spike outcome".
+            // dispatch does not — see `crates/flui-material/tests/ink_well.rs`'s
+            // module doc ("Spike outcome") for how that was established.
+            //
+            // Named divergence this choice carries: `on_hover` fires only in
+            // response to a `Move` event. A widget that APPEARS under an
+            // already-stationary pointer — mounted there, or scrolled/
+            // animated under it with no pointer motion in between — never
+            // sees `on_hover` fire, so `Hovered` stays unset until the
+            // pointer next moves. The oracle's `MouseTracker` re-hit-tests
+            // after layout changes as well as pointer motion, so it can
+            // catch at least some of this "appeared under the pointer"
+            // class of case that a purely move-driven `on_hover` cannot;
+            // FLUI's `MouseTracker` port has not been audited for whether
+            // it does the same post-layout pass, so this divergence is
+            // stated conservatively rather than bounded precisely.
             .on_hover(move |_device, _position| {
                 // Oracle: `handleMouseEnter`/hover routing gates
                 // `handleHoverChange` (which updates `WidgetState.hovered`)

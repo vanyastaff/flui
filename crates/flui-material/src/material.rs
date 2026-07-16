@@ -5,8 +5,8 @@
 //! `material.dart`'s `Material` widget (oracle tag `3.44.0`). `Material` is
 //! responsible for three things (oracle doc, `material.dart` `:112-118`):
 //! clipping to a shape, elevating on the Z axis with a shadow, and hosting
-//! ink effects (splashes/highlights) below its children. PR-1 ships the
-//! first two; see "Scope" below for the third.
+//! ink effects (splashes/highlights) below its children. This substrate
+//! ships the first two; see "Scope" below for the third.
 //!
 //! # Wraps the existing render object — no new paint code
 //!
@@ -39,11 +39,11 @@
 //! `_TokenDefaults` (a per-component default, not a `Material`-level
 //! retirement). `Material.surfaceTintColor` also requires a `BuildContext`
 //! (`Theme.of(context)`) to resolve `useMaterial3`/elevation opacity, which
-//! this substrate PR does not wire up — `Material` here is a plain
+//! this substrate does not wire up — `Material` here is a plain
 //! color/elevation/shape/clip proxy, no theme lookup. Not implementing
 //! `surfaceTintColor` is therefore a named deferral (not a "this API is
 //! gone" claim): it lands once `Material` reads `Theme::of`, most likely
-//! alongside PR-2's button token defaults.
+//! alongside a future button family's token defaults.
 //!
 //! # Scope: no ink-features registry
 //!
@@ -51,22 +51,23 @@
 //! `_RenderInkFeatures` render object that ink effects (`InkSplash`,
 //! `InkHighlight`) register onto and paint through, so a splash can bleed
 //! outside its originating `InkWell`'s bounds when the `Material` ancestor
-//! is larger. **PR-1 ships no such registry** — [`crate::ink_well`]'s state
-//! overlay paints its own shape-clipped fill locally, with no cross-widget
-//! ink feature list. Consequences:
+//! is larger. **This substrate ships no such registry** — [`crate::ink_well`]'s
+//! state overlay paints its own shape-clipped fill locally, with no
+//! cross-widget ink feature list. Consequences:
 //!
 //! - No `Material::of`/`maybeOf` lookup, no `MaterialInkController` trait.
 //! - An overlay can never visually exceed its own `InkWell`'s bounds (the
 //!   oracle's "ripple crosses into a `Card` above it" effect is out of
-//!   reach in V1).
-//! - M3's real splash shader (`InkSparkle`) is nowhere in scope — V1 has no
-//!   ripple animation at all, just a static resolved-color fill.
+//!   reach here).
+//! - M3's real splash shader (`InkSparkle`) is nowhere in scope — this
+//!   substrate has no ripple animation at all, just a static
+//!   resolved-color fill.
 //!
 //! Upgrade path: introduce `MaterialInkController` as an `InheritedView`
 //! publishing a registry keyed by render-object identity once a component
-//! needs bounds-exceeding ink (unclear PR-2 needs this; buttons clip their
-//! own ink to their own shape in the M3 spec, so the gap may never need
-//! closing for the button family this substrate targets).
+//! needs bounds-exceeding ink (unclear whether the button family this
+//! substrate targets ever needs this; buttons clip their own ink to their
+//! own shape in the M3 spec, so the gap may never need closing).
 //!
 //! # Scope: no implicit shape/elevation animation
 //!
@@ -307,25 +308,50 @@ mod tests {
         assert_eq!(Material::new(Color::WHITE).shape, MaterialShape::default());
     }
 
-    /// "Shape clips" end to end: the exact `Fn(Size) -> Path` expression
-    /// `sync_path_clip_target` registers with the owner lane
-    /// (`shape.to_path(size)`, closing over `self.shape`) traces the
-    /// stadium's shortest-side/2 radius for the widget's *configured*
-    /// shape, not the default. Mutation-honest: swapping `Stadium` for
-    /// `MaterialShape::rectangle()` in `.shape(...)` below, or dropping the
-    /// `.shape(...)` call entirely, changes the resolved radius and fails
-    /// this assertion.
+    /// The `.shape(...)` builder actually reaches the field
+    /// `sync_path_clip_target` closes over (`self.shape`), and that field is
+    /// shape-sensitive at the configured paint size — not merely "some
+    /// path was produced."
+    ///
+    /// Shape-sensitive, not bounds-only: a `.bounds()`/`.rect` comparison is
+    /// identical for every `MaterialShape` at the same size (a bounding box
+    /// doesn't know about corner rounding), so it can't distinguish
+    /// `Stadium` from `MaterialShape::rectangle()` — confirmed by running
+    /// that exact mutation against the old version of this test, which
+    /// passed unchanged. Point-containment near a corner does distinguish
+    /// them (see `shape.rs`'s
+    /// `to_path_excludes_a_stadium_corner_a_sharp_rectangle_would_include`
+    /// for the same probe, unit-tested against `MaterialShape` directly).
+    ///
+    /// This test covers "the field the builder sets is the field
+    /// `sync_path_clip_target` reads." It does NOT exercise the owner-lane
+    /// registration/resolution path itself (`RenderObjectContext::detached`
+    /// has no active interaction lane, so `sync_path_clip_target` no-ops) —
+    /// that end-to-end path is covered by
+    /// `tests/material.rs`'s `stadium_shape_excludes_a_corner_a_sharp_rectangle_would_include`,
+    /// which hit-tests a real mounted `Material` and so resolves the clip
+    /// through the actual registered `PathClipTarget`.
     #[test]
-    fn configured_shape_resolves_to_the_stadium_path_at_paint_size() {
-        let material = Material::new(Color::WHITE).shape(MaterialShape::Stadium);
+    fn configured_shape_field_is_shape_sensitive_at_the_paint_size() {
         let painted_size = flui_types::Size::new(
             flui_types::geometry::px(120.0),
             flui_types::geometry::px(40.0),
         );
+        let corner_probe =
+            flui_types::Point::new(flui_types::geometry::px(2.0), flui_types::geometry::px(2.0));
 
-        let mut resolved_path = material.shape.to_path(painted_size);
-        let expected_rrect = MaterialShape::Stadium.to_rrect(painted_size);
+        let stadium = Material::new(Color::WHITE).shape(MaterialShape::Stadium);
+        let stadium_path = stadium.shape.to_path(painted_size);
+        assert!(
+            !stadium_path.contains(corner_probe),
+            "the configured Stadium shape's rounded corner must exclude this point"
+        );
 
-        assert_eq!(resolved_path.bounds(), expected_rrect.rect);
+        let rectangle = Material::new(Color::WHITE).shape(MaterialShape::rectangle());
+        let rectangle_path = rectangle.shape.to_path(painted_size);
+        assert!(
+            rectangle_path.contains(corner_probe),
+            "the configured plain-rectangle shape must include the same point"
+        );
     }
 }
