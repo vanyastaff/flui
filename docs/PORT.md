@@ -1006,6 +1006,7 @@ This section indexes **crate-level** `ARCHITECTURE.md` template state. For docum
 | `flui-view` | `crates/flui-view/UNIFIED_ELEMENT.md` (companion; not templated) | Active |
 | `flui-widgets` | Not yet templated | Active |
 | `flui-localizations` | Not yet templated | Active |
+| `flui-material` | Not yet templated | Active |
 | `flui-binding` | Not yet templated | Active |
 | `flui-app` | Not yet templated | Active |
 | `flui-animation` | `crates/flui-animation/docs/ARCHITECTURE.md` (pre-template) | Active |

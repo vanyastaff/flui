@@ -109,10 +109,14 @@ pub mod wrap;
 // single-import surface.
 // ============================================================================
 
-// Application-scoped inherited widgets: ambient screen data and theming.
-pub use app::{InheritedTheme, MediaQuery, MediaQueryData, SafeArea, Theme, ThemeData};
-// `Brightness` is the value type shared by `MediaQueryData` and `ThemeData`;
-// re-exported here so callers need only `use flui_widgets::Brightness`.
+// Application-scoped inherited widgets: ambient screen data, and the
+// `InheritedTheme` trait a theme widget (e.g. `flui_material::Theme`)
+// implements. The Material `Theme`/`ThemeData` widget itself lives in
+// `flui-material` — see `app` module docs.
+pub use app::{InheritedTheme, MediaQuery, MediaQueryData, SafeArea};
+// `Brightness` is the value type `MediaQueryData` (and any theme's
+// brightness field) uses; re-exported here so callers need only
+// `use flui_widgets::Brightness`.
 pub use flui_types::platform::Brightness;
 // Ambient direction + localized-resource infrastructure — see
 // `localization`'s module docs for the sync-only-v1 divergences from the
@@ -279,8 +283,8 @@ pub mod prelude {
         SliverFillRemainingWithScrollable, SliverFillViewport, SliverFixedExtentList, SliverGrid,
         SliverIgnorePointer, SliverList, SliverOffstage, SliverOpacity, SliverPadding,
         SliverToBoxAdapter, Spacer, Stack, StreamBuilder, Table, TableCell, TableRow, Text,
-        TextEditingController, TextField, Theme, ThemeData, TickerMode, Transform, Viewport,
-        Visibility, WidgetsLocalizations, Wrap,
+        TextEditingController, TextField, TickerMode, Transform, Viewport, Visibility,
+        WidgetsLocalizations, Wrap,
     };
 
     // Common configuration value types, so an app author needs only this import.

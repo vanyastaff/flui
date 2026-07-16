@@ -25,6 +25,7 @@ members = [
     "crates/flui-widgets",       # User-facing widget catalog (ACTIVE — Core.1 slice)
     "crates/flui-localizations", # Global (multi-language) localized resources (ACTIVE — Catalog.1 slice)
     "crates/flui-binding",       # Headless deterministic frame driver (pump_frame) (ACTIVE — Phase 1)
+    "crates/flui-material",      # Material Design theming foundation — ColorScheme/TextTheme/ThemeData/Theme (ACTIVE — Catalog.1 slice)
 
     # === Phase 4: Application Layer ===
     "crates/flui-app",    # Application framework (ACTIVE - Migration)
@@ -88,6 +89,7 @@ default-members = [
     "crates/flui-widgets",
     "crates/flui-localizations",
     "crates/flui-binding",
+    "crates/flui-material",
     "crates/flui-app",
     "crates/flui-assets",
     "crates/flui-animation",
