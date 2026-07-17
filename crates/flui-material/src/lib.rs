@@ -86,6 +86,7 @@ pub mod scaffold;
 pub mod scaffold_messenger;
 pub mod shape;
 pub mod snack_bar;
+pub mod switch;
 pub mod text_button;
 pub mod text_field;
 pub mod text_theme;
@@ -118,6 +119,7 @@ pub use scaffold_messenger::{
 };
 pub use shape::MaterialShape;
 pub use snack_bar::{SnackBar, SnackBarAction, SnackBarActionState};
+pub use switch::Switch;
 pub use text_button::TextButton;
 pub use text_field::{TextField, TextFieldState};
 pub use text_theme::TextTheme;
@@ -125,7 +127,7 @@ pub use theme::Theme;
 pub use theme_data::{
     AppBarThemeData, CardThemeData, CheckboxThemeData, DialogThemeData, DividerThemeData,
     ElevatedButtonThemeData, FabThemeData, FilledButtonThemeData, IconButtonThemeData,
-    InputDecorationThemeData, ListTileThemeData, OutlinedButtonThemeData, TextButtonThemeData,
-    ThemeData, ThemeDataOverrides,
+    InputDecorationThemeData, ListTileThemeData, OutlinedButtonThemeData, SwitchThemeData,
+    TextButtonThemeData, ThemeData, ThemeDataOverrides,
 };
 pub use typography::english_like_2021;

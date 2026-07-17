@@ -430,6 +430,35 @@ pub struct CheckboxThemeData {
     pub side: Option<WidgetStateProperty<Option<BorderSide<Pixels>>>>,
 }
 
+/// Overrides [`Switch`](crate::Switch)'s `_SwitchDefaultsM3` token defaults,
+/// one field at a time — an unset field here still falls through to
+/// `Switch`'s own M3 default table (see `switch.rs`'s `switch_default_*`
+/// functions), it does not blank the whole slot.
+///
+/// Flutter parity: `SwitchThemeData` (`material/switch_theme.dart`, oracle
+/// tag `3.44.0`), narrowed to the fields FLUI's `Switch` actually consumes:
+/// [`thumb_color`](Self::thumb_color), [`track_color`](Self::track_color),
+/// [`track_outline_color`](Self::track_outline_color),
+/// [`overlay_color`](Self::overlay_color). Named deferrals (no consumer in
+/// FLUI's `Switch` yet — see that module's docs for the full
+/// named-divergence list): `mouse_cursor`, `splash_radius`,
+/// `material_tap_target_size`, `thumb_icon`, `padding`,
+/// `track_outline_width` (all fixed at their M3 defaults).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SwitchThemeData {
+    /// Overrides [`Switch`](crate::Switch)'s default thumb color, per state.
+    pub thumb_color: Option<StateColor>,
+    /// Overrides [`Switch`](crate::Switch)'s default track fill color, per
+    /// state.
+    pub track_color: Option<StateColor>,
+    /// Overrides [`Switch`](crate::Switch)'s default track border color, per
+    /// state.
+    pub track_outline_color: Option<StateColor>,
+    /// Overrides [`Switch`](crate::Switch)'s default state-overlay color
+    /// (the InkWell-shaped hover/focus/press ramp), per state.
+    pub overlay_color: Option<StateColor>,
+}
+
 /// Visual-style configuration provided to descendants by a
 /// [`Theme`](crate::Theme) ancestor.
 ///
@@ -526,6 +555,10 @@ pub struct ThemeData {
     /// Overrides [`Checkbox`](crate::Checkbox)'s M3 token defaults, per
     /// field. Flutter parity: `ThemeData.checkboxTheme`.
     pub checkbox_theme: Option<CheckboxThemeData>,
+
+    /// Overrides [`Switch`](crate::Switch)'s M3 token defaults, per field.
+    /// Flutter parity: `ThemeData.switchTheme`.
+    pub switch_theme: Option<SwitchThemeData>,
 }
 
 impl ThemeData {
@@ -551,6 +584,7 @@ impl ThemeData {
             list_tile_theme: None,
             divider_theme: None,
             checkbox_theme: None,
+            switch_theme: None,
         }
     }
 
@@ -576,6 +610,7 @@ impl ThemeData {
             list_tile_theme: None,
             divider_theme: None,
             checkbox_theme: None,
+            switch_theme: None,
         }
     }
 
@@ -664,6 +699,7 @@ impl ThemeData {
             checkbox_theme: overrides
                 .checkbox_theme
                 .or_else(|| self.checkbox_theme.clone()),
+            switch_theme: overrides.switch_theme.or_else(|| self.switch_theme.clone()),
         }
     }
 }
@@ -718,6 +754,8 @@ pub struct ThemeDataOverrides {
     pub divider_theme: Option<DividerThemeData>,
     /// Replaces [`ThemeData::checkbox_theme`] wholesale when `Some`.
     pub checkbox_theme: Option<CheckboxThemeData>,
+    /// Replaces [`ThemeData::switch_theme`] wholesale when `Some`.
+    pub switch_theme: Option<SwitchThemeData>,
 }
 
 impl Default for ThemeData {
