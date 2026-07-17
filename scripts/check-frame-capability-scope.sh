@@ -3,15 +3,19 @@
 # Port-check trigger #22 — **lifecycle-only frame capabilities** must not be
 # acquired from a build / layout / paint / composite body.
 #
-# A frame capability lets code reach into the *next* frame from outside one. Two
-# exist:
+# A frame capability lets code reach into the *next* frame from outside one.
+# Three exist:
 #
 #   rebuild_handle()    ADR-0018 U1 — `RebuildHandle::schedule()` marks an element
 #                       dirty for the next frame.
 #   post_frame_handle() ADR-0021 U2 — `PostFrameHandle::schedule()` queues work for
 #                       the end of the current frame.
+#   text_input_handle() ADR-0030 — `TextInputHandle::attach()`/`detach()` register
+#                       a client with the binding's IME registry; acquiring it
+#                       from `build`/`layout`/`paint` would attach on every
+#                       rebuild instead of once per focus transition.
 #
-# Both must be acquired in `ViewState::init_state` / `did_change_dependencies`,
+# All three must be acquired in `ViewState::init_state` / `did_change_dependencies`,
 # stored, and fired later from a callback.
 #
 # Acquiring one inside `build` and scheduling from it is an unbounded rebuild loop
@@ -39,7 +43,7 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 guarded_fns='build|build_into_views|perform_layout|layout_node_with_children|paint|paint_raw|run_paint|run_layout|run_compositing|compose|composite'
 
 # The capabilities themselves. Adding one here is the whole cost of guarding it.
-capabilities='rebuild_handle|post_frame_handle'
+capabilities='rebuild_handle|post_frame_handle|text_input_handle'
 
 scan() {
   awk -v guarded="${guarded_fns}" -v caps="${capabilities}" '

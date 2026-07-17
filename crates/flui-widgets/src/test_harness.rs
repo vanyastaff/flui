@@ -43,7 +43,35 @@ pub(crate) static FOCUS_TEST_LOCK: parking_lot::ReentrantMutex<()> =
 
 /// Mount `root` as the render-tree root and drive one frame.
 pub(crate) fn mount(root: impl View) -> Harness {
-    mount_with_capabilities(root, PostFrameCapability::Installed)
+    mount_with_capabilities(
+        root,
+        PostFrameCapability::Installed,
+        TextInputCapability::Absent,
+    )
+}
+
+/// [`mount`], but with a working `BuildContext::text_input_handle()` — the
+/// only capability [`mount`] withholds by default. The installed handle
+/// wraps `flui_interaction::TextInputRegistry::global()` directly (no
+/// `flui-app`/`PlatformWindow` involved, so `set_ime_allowed` toggling is
+/// out of reach here — that half is covered at the `flui-app` layer); it
+/// exists so `EditableText`'s own attach/detach/dispatch wiring is testable
+/// from this crate without standing up a full binding.
+pub(crate) fn mount_with_ime(root: impl View) -> Harness {
+    mount_with_capabilities(
+        root,
+        PostFrameCapability::Installed,
+        TextInputCapability::Installed,
+    )
+}
+
+/// Whether the binding hands `BuildContext` a [`TextInputHandle`] at all.
+///
+/// [`TextInputHandle`]: flui_interaction::TextInputHandle
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TextInputCapability {
+    Installed,
+    Absent,
 }
 
 /// Whether the binding hands `BuildContext` a [`PostFrameHandle`] at all.
@@ -61,8 +89,13 @@ pub(crate) enum PostFrameCapability {
     Absent,
 }
 
-/// [`mount`], but able to withhold the post-frame capability.
-pub(crate) fn mount_with_capabilities(root: impl View, post_frame: PostFrameCapability) -> Harness {
+/// [`mount`], but able to withhold the post-frame and/or text-input
+/// capability.
+pub(crate) fn mount_with_capabilities(
+    root: impl View,
+    post_frame: PostFrameCapability,
+    text_input: TextInputCapability,
+) -> Harness {
     // Conservatively serialize mounted focus fixtures before touching the tree;
     // held until the Harness drops. Each owner has independent TLS focus state,
     // so this is fixture isolation, not cross-owner clobber protection.
@@ -79,6 +112,23 @@ pub(crate) fn mount_with_capabilities(root: impl View, post_frame: PostFrameCapa
         PostFrameCapability::Absent => {
             build_owner.set_async_driver(binding.scheduler().async_driver().clone());
         }
+    }
+    if text_input == TextInputCapability::Installed {
+        // Zero-capture closures: automatically `Send + Sync` regardless of
+        // `TextInputRegistry`'s own `Rc`-based, non-`Send` internals — the
+        // same reasoning `flui-app`'s production `AppBinding::instance()`
+        // closures rely on (see `TextInputHandle`'s doc).
+        build_owner.set_text_input_handle(flui_interaction::TextInputHandle::new(
+            |callback| {
+                Some(
+                    flui_interaction::TextInputRegistry::global()
+                        .attach(flui_interaction::OpaqueWindowHandle::new(()), callback),
+                )
+            },
+            |token| {
+                flui_interaction::TextInputRegistry::global().detach(token);
+            },
+        ));
     }
 
     let root_element = binding.enter_owner_scope(|| {

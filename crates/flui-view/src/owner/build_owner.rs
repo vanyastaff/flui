@@ -262,6 +262,12 @@ pub struct BuildOwner {
     /// absence rather than silently scheduling onto a global.
     pub(crate) post_frame_handle: Option<flui_scheduler::PostFrameHandle>,
 
+    /// The binding's IME/text-input attach-detach capability. `None` when no
+    /// binding installed one, which makes `BuildContext::text_input_handle`
+    /// report the absence rather than a widget silently having no way to
+    /// attach an IME client.
+    pub(crate) text_input_handle: Option<flui_interaction::TextInputHandle>,
+
     /// The binding's owner-local interaction dispatch capability (ADR-0027).
     ///
     /// `None` means the owner was built detached from a runtime interaction lane;
@@ -324,6 +330,7 @@ impl BuildOwner {
             layout_builder_registry: Arc::new(Mutex::new(HashMap::new())),
             async_driver: None,
             post_frame_handle: None,
+            text_input_handle: None,
             interaction_dispatch: None,
         }
     }
@@ -352,6 +359,16 @@ impl BuildOwner {
         self.post_frame_handle = Some(handle);
     }
 
+    /// Install the binding's IME/text-input attach-detach capability.
+    ///
+    /// Called once, at wiring time, by `AppBinding` (via `UiRealm::bind_to_app`).
+    /// `HeadlessBinding` installs none, so headless-tree tests observe
+    /// `BuildContext::text_input_handle() == None` honestly rather than a
+    /// stub that silently accepts attaches nobody delivers events to.
+    pub fn set_text_input_handle(&mut self, handle: flui_interaction::TextInputHandle) {
+        self.text_input_handle = Some(handle);
+    }
+
     /// Install the binding's owner-local interaction dispatch handle (ADR-0027).
     pub fn set_interaction_dispatch_handle(
         &mut self,
@@ -364,6 +381,13 @@ impl BuildOwner {
     #[must_use]
     pub fn post_frame_handle(&self) -> Option<&flui_scheduler::PostFrameHandle> {
         self.post_frame_handle.as_ref()
+    }
+
+    /// The binding's IME/text-input attach-detach capability, if one was
+    /// installed.
+    #[must_use]
+    pub fn text_input_handle(&self) -> Option<&flui_interaction::TextInputHandle> {
+        self.text_input_handle.as_ref()
     }
 
     /// Set the callback for when a build is scheduled.
@@ -472,6 +496,7 @@ impl BuildOwner {
             layout_builder_registry: &self.layout_builder_registry,
             async_driver: &self.async_driver,
             post_frame_handle: &self.post_frame_handle,
+            text_input_handle: &self.text_input_handle,
             interaction_dispatch: &self.interaction_dispatch,
         }
     }
@@ -676,6 +701,7 @@ impl BuildOwner {
                     layout_builder_registry: &self.layout_builder_registry,
                     async_driver: &self.async_driver,
                     post_frame_handle: &self.post_frame_handle,
+                    text_input_handle: &self.text_input_handle,
                     interaction_dispatch: &self.interaction_dispatch,
                 };
                 if needs_did_change {
@@ -728,6 +754,7 @@ impl BuildOwner {
                 layout_builder_registry: &self.layout_builder_registry,
                 async_driver: &self.async_driver,
                 post_frame_handle: &self.post_frame_handle,
+                text_input_handle: &self.text_input_handle,
                 interaction_dispatch: &self.interaction_dispatch,
             };
             crate::tree::id_reconcile::reconcile_children_by_id(
@@ -892,6 +919,7 @@ impl BuildOwner {
                 layout_builder_registry: &self.layout_builder_registry,
                 async_driver: &self.async_driver,
                 post_frame_handle: &self.post_frame_handle,
+                text_input_handle: &self.text_input_handle,
                 interaction_dispatch: &self.interaction_dispatch,
             };
 
@@ -1018,6 +1046,7 @@ impl BuildOwner {
             layout_builder_registry: &self.layout_builder_registry,
             async_driver: &self.async_driver,
             post_frame_handle: &self.post_frame_handle,
+            text_input_handle: &self.text_input_handle,
             interaction_dispatch: &self.interaction_dispatch,
         };
 

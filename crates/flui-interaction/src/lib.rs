@@ -280,7 +280,9 @@ pub use settings::{
     DEFAULT_PAN_SLOP_HORIZONTAL, DEFAULT_PAN_SLOP_VERTICAL, DEFAULT_PEN_SLOP, DEFAULT_SCALE_SLOP,
     DEFAULT_TOUCH_SLOP, GestureSettings,
 };
-pub use text_input::{ClientToken, ImeEventCallback, OpaqueWindowHandle, TextInputRegistry};
+pub use text_input::{
+    ClientToken, ImeEventCallback, OpaqueWindowHandle, TextInputHandle, TextInputRegistry,
+};
 // ============================================================================
 // Re-exports: Testing Utilities (feature-gated)
 // ============================================================================

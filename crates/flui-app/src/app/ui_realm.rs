@@ -546,6 +546,19 @@ impl UiRealm {
             owner.set_async_driver(Scheduler::instance().async_driver().clone());
             owner.set_post_frame_handle(self.local_post_frame.post_frame_handle());
             owner.set_interaction_dispatch_handle(self.interaction_lane.dispatch_handle());
+            // `text_input_platform_bridge()` clones an `Arc` onto `app`'s own
+            // active-window slot rather than closing over `app: &AppBinding`
+            // itself (not `'static`) or re-resolving `AppBinding::instance()`
+            // on every call — the latter would silently attach to the WRONG
+            // binding when `bind_to_app` is called with a standalone test
+            // instance (`UiRealm::for_test`) instead of the process-wide
+            // singleton. See `TextInputPlatformBridge`'s doc.
+            let text_input_bridge = app.text_input_platform_bridge();
+            let text_input_bridge_for_detach = text_input_bridge.clone();
+            owner.set_text_input_handle(flui_interaction::TextInputHandle::new(
+                move |callback| text_input_bridge.attach(callback),
+                move |token| text_input_bridge_for_detach.detach(token),
+            ));
         });
     }
 
