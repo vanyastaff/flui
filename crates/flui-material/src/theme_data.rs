@@ -6,7 +6,7 @@
 use flui_types::EdgeInsets;
 use flui_types::Pixels;
 use flui_types::platform::Brightness;
-use flui_types::styling::{BorderRadius, BorderSide, Color};
+use flui_types::styling::{BorderRadius, BorderSide, BoxDecoration, Color};
 use flui_types::typography::TextStyle;
 use flui_widgets::WidgetStateProperty;
 
@@ -674,6 +674,52 @@ pub struct RadioThemeData {
     pub overlay_color: Option<StateColor>,
 }
 
+/// Overrides [`DataTable`](crate::DataTable)'s M3 token defaults, one field
+/// at a time — an unset field here still falls through to `DataTable`'s own
+/// M3 default table (see `data_table.rs`'s `DEFAULT_*` constants), it does
+/// not blank the whole slot.
+///
+/// Flutter parity: `DataTableThemeData` (`material/data_table_theme.dart`,
+/// oracle tag `3.44.0`), narrowed to the fields FLUI's `DataTable` actually
+/// consumes. Named deferrals (no consumer in FLUI's `DataTable` yet — see
+/// that module's docs for the full named-divergence list): `headingCellCursor`,
+/// `dataRowCursor` (no `sortColumnIndex`/mouse-cursor surface yet),
+/// `headingRowAlignment` (no sort-arrow layout to align around yet).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct DataTableThemeData {
+    /// Overrides the table's background/border decoration. Defaults to no
+    /// decoration.
+    pub decoration: Option<BoxDecoration<Pixels>>,
+    /// Overrides the data rows' background color, per state (`Selected`
+    /// resolves the M3 default: `colorScheme.primary` at 8% opacity).
+    pub data_row_color: Option<StateColor>,
+    /// Overrides each data row's minimum height. Defaults to
+    /// `kMinInteractiveDimension` (`48.0`).
+    pub data_row_min_height: Option<f32>,
+    /// Overrides each data row's maximum height. Defaults to
+    /// `kMinInteractiveDimension` (`48.0`).
+    pub data_row_max_height: Option<f32>,
+    /// Overrides the data cells' text style. Defaults to `TextTheme.bodyMedium`.
+    pub data_text_style: Option<TextStyle>,
+    /// Overrides the heading row's background color, per state.
+    pub heading_row_color: Option<StateColor>,
+    /// Overrides the heading row's height. Defaults to `56.0`.
+    pub heading_row_height: Option<f32>,
+    /// Overrides the heading cells' text style. Defaults to `TextTheme.titleSmall`.
+    pub heading_text_style: Option<TextStyle>,
+    /// Overrides the margin between the table's edges and the first/last
+    /// column's content. Defaults to `24.0`.
+    pub horizontal_margin: Option<f32>,
+    /// Overrides the margin between adjacent data columns. Defaults to `56.0`.
+    pub column_spacing: Option<f32>,
+    /// Overrides the divider painted between rows. Defaults to `1.0`.
+    pub divider_thickness: Option<f32>,
+    /// Overrides the margin around the leading selection checkbox, when
+    /// shown. Defaults to [`Self::horizontal_margin`] (start) and half of it
+    /// (end).
+    pub checkbox_horizontal_margin: Option<f32>,
+}
+
 /// Visual-style configuration provided to descendants by a
 /// [`Theme`](crate::Theme) ancestor.
 ///
@@ -790,6 +836,10 @@ pub struct ThemeData {
     /// Overrides [`TabBar`](crate::TabBar)'s M3 secondary token defaults,
     /// per field. Flutter parity: `ThemeData.tabBarTheme`.
     pub tab_bar_theme: Option<TabBarThemeData>,
+
+    /// Overrides [`DataTable`](crate::DataTable)'s M3 token defaults, per
+    /// field. Flutter parity: `ThemeData.dataTableTheme`.
+    pub data_table_theme: Option<DataTableThemeData>,
 }
 
 impl ThemeData {
@@ -820,6 +870,7 @@ impl ThemeData {
             radio_theme: None,
             navigation_bar_theme: None,
             tab_bar_theme: None,
+            data_table_theme: None,
         }
     }
 
@@ -850,6 +901,7 @@ impl ThemeData {
             radio_theme: None,
             navigation_bar_theme: None,
             tab_bar_theme: None,
+            data_table_theme: None,
         }
     }
 
@@ -947,6 +999,9 @@ impl ThemeData {
             tab_bar_theme: overrides
                 .tab_bar_theme
                 .or_else(|| self.tab_bar_theme.clone()),
+            data_table_theme: overrides
+                .data_table_theme
+                .or_else(|| self.data_table_theme.clone()),
         }
     }
 }
@@ -1011,6 +1066,8 @@ pub struct ThemeDataOverrides {
     pub navigation_bar_theme: Option<NavigationBarThemeData>,
     /// Replaces [`ThemeData::tab_bar_theme`] wholesale when `Some`.
     pub tab_bar_theme: Option<TabBarThemeData>,
+    /// Replaces [`ThemeData::data_table_theme`] wholesale when `Some`.
+    pub data_table_theme: Option<DataTableThemeData>,
 }
 
 impl Default for ThemeData {
