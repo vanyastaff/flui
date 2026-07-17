@@ -2,17 +2,23 @@
 //!
 //! This is the render-object half of Flutter's `RenderEditable`: it owns text
 //! layout, paints the collapsed caret, participates in hit testing, and reports
-//! text metrics. It deliberately does not own keyboard input, focus, IME, or the
-//! editing buffer; those stay in `flui-widgets::EditableText` and
-//! `TextEditingController`, matching Flutter's widget/render split.
+//! text metrics. It deliberately does not own keyboard input, focus, IME
+//! composition state, or the editing buffer; those stay in
+//! `flui-widgets::EditableText` and `TextEditingController` (which does track
+//! an IME composing region — see its "IME composition" doc section), matching
+//! Flutter's widget/render split.
 //!
 //! Scope of this first slice:
 //! - single-line text layout, caret margin, caret paint;
 //! - dry layout, intrinsics, baseline, and hit-test-self;
 //! - collapsed caret only.
 //!
-//! Deferred: selection painting, composing ranges, scroll offset, multiline
-//! viewport behavior, obscured text, and platform IME integration.
+//! Deferred: selection painting, a composing-region underline (the
+//! controller tracks the range; nothing here paints it differently from
+//! committed text), a hidden caret while composing (`ImeEvent::Preedit`'s
+//! `cursor: None` case — the controller collapses the caret to the end of
+//! the composing region instead, since this object has no rendering state to
+//! hide it), scroll offset, multiline viewport behavior, and obscured text.
 
 use flui_foundation::Diagnosticable;
 use flui_painting::{Invalidation, Paint, TextBaseline as PainterBaseline, TextPainter};

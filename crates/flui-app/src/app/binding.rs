@@ -197,6 +197,39 @@ impl ImeBackend {
     }
 }
 
+/// A `'static`, `Arc`-cloneable handle onto exactly the state
+/// [`ImeBackend::attach`]/[`ImeBackend::detach`] need — the active-window
+/// slot — without borrowing `&AppBinding` itself.
+///
+/// [`UiRealm::bind_to_app`](super::ui_realm::UiRealm::bind_to_app) installs
+/// this (via [`AppBinding::text_input_platform_bridge`]) into the
+/// [`flui_interaction::TextInputHandle`] capability, instead of a closure
+/// that re-resolves [`AppBinding::instance`] on every call. That distinction
+/// is load-bearing, not stylistic: `bind_to_app` is also called from test
+/// code with a standalone `AppBinding::new()` instance (`UiRealm::for_test`,
+/// isolated from the process-wide singleton on purpose), and a closure
+/// hard-coding `AppBinding::instance()` would silently attach to the WRONG
+/// binding there — the singleton, which never had `set_window` called on it
+/// in that test — rather than the specific `app` `bind_to_app` was given.
+/// Cloning the `Arc<Mutex<..>>` active-window slot ties the installed handle
+/// to the correct binding either way, production singleton or test instance.
+#[derive(Clone)]
+pub(crate) struct TextInputPlatformBridge {
+    active_window: Arc<Mutex<Option<Arc<dyn PlatformWindow>>>>,
+}
+
+impl TextInputPlatformBridge {
+    pub(crate) fn attach(&self, callback: ImeEventCallback) -> Option<ClientToken> {
+        let window = self.active_window.lock().as_ref().cloned()?;
+        Some(ImeBackend::attach(&window, callback))
+    }
+
+    pub(crate) fn detach(&self, token: ClientToken) {
+        let window = self.active_window.lock().as_ref().cloned();
+        ImeBackend::detach(window.as_ref(), token);
+    }
+}
+
 impl AppBinding {
     /// Create a new AppBinding.
     fn new() -> Self {
@@ -693,8 +726,7 @@ impl AppBinding {
     /// Returns `None` if there is no active window yet (the caller attached
     /// before `set_window`/`set_shared_window` ran).
     pub fn attach_text_input(&self, callback: ImeEventCallback) -> Option<ClientToken> {
-        let window = self.active_window.lock().as_ref().cloned()?;
-        Some(ImeBackend::attach(&window, callback))
+        self.text_input_platform_bridge().attach(callback)
     }
 
     /// Detach the IME client identified by `token`.
@@ -705,8 +737,18 @@ impl AppBinding {
     /// guard is what keeps a replaced field's dispose/blur handler from
     /// disabling IME for the field that replaced it.
     pub fn detach_text_input(&self, token: ClientToken) {
-        let window = self.active_window.lock().as_ref().cloned();
-        ImeBackend::detach(window.as_ref(), token);
+        self.text_input_platform_bridge().detach(token);
+    }
+
+    /// A `'static`, `Arc`-cloneable handle onto this specific binding's
+    /// active-window slot — see [`TextInputPlatformBridge`]'s doc for why
+    /// [`UiRealm::bind_to_app`](super::ui_realm::UiRealm::bind_to_app)
+    /// installs THIS instead of a closure that re-resolves
+    /// [`AppBinding::instance`].
+    pub(crate) fn text_input_platform_bridge(&self) -> TextInputPlatformBridge {
+        TextInputPlatformBridge {
+            active_window: Arc::clone(&self.active_window),
+        }
     }
 
     // ========================================================================
@@ -2478,6 +2520,67 @@ mod tests {
                 fake.ime_allowed_calls(),
                 vec![true, true, false],
                 "the active token's detach still disables IME"
+            );
+        }
+
+        /// End-to-end proof of the literal ADR-0030 claim `flui-widgets`'
+        /// own `editable_text::tests` cannot make on their own (they wire
+        /// `TextInputHandle` straight to `TextInputRegistry::global()`, with
+        /// no `flui-app`/`PlatformWindow` involved — see that module's
+        /// doc): a real, mounted `flui_widgets::EditableText`, focused
+        /// through the same `FocusManager` singleton production keyboard
+        /// routing uses, attaches through `AppBinding::attach_text_input`
+        /// (via the `BuildContext::text_input_handle` capability
+        /// `UiRealm::bind_to_app` installs) and actually toggles the
+        /// platform's `set_ime_allowed` on the `FakeTextInput` — not merely
+        /// the registry.
+        ///
+        /// Red-check: skip `UiRealm::bind_to_app`'s `set_text_input_handle`
+        /// call — `EditableText::init_state`'s `ctx.text_input_handle()`
+        /// then returns `None`, no attach happens, and this test's first
+        /// assertion fails (`fake.last_ime_allowed()` stays `None`).
+        #[test]
+        fn a_mounted_editable_text_toggles_platform_ime_on_focus_and_blur() {
+            let _guard = TEXT_INPUT_TEST_LOCK
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            FocusManager::global().unfocus();
+
+            let (window, text_input) = headless_window_with_ime();
+            let fake = fake_text_input(&text_input);
+
+            let binding = AppBinding::new();
+            binding.set_window(window);
+            let realm = test_realm(&binding);
+
+            let controller = flui_widgets::TextEditingController::new();
+            realm
+                .enter(|realm| {
+                    binding.attach_root_widget(
+                        realm,
+                        &flui_widgets::EditableText::new(controller.clone()),
+                    )
+                })
+                .expect("attach succeeds");
+            let _ = binding.draw_frame(&realm, test_constraints());
+
+            let node_id = controller
+                .focus_node_id()
+                .expect("a mounted, enabled EditableText publishes its focus node");
+
+            FocusManager::global().request_focus(node_id);
+            assert_eq!(
+                fake.last_ime_allowed(),
+                Some(true),
+                "focusing a mounted EditableText must attach through AppBinding \
+                 and enable platform IME composition"
+            );
+
+            FocusManager::global().unfocus();
+            assert_eq!(
+                fake.last_ime_allowed(),
+                Some(false),
+                "blurring the field must detach and disable platform IME composition"
             );
         }
     }

@@ -99,6 +99,7 @@ where
         crate::context::BuildCapabilities {
             async_driver: owner.async_driver.clone(),
             post_frame_handle: owner.post_frame_handle.clone(),
+            text_input_handle: owner.text_input_handle.clone(),
             pipeline_owner: core.pipeline_owner().map(std::sync::Arc::clone),
         },
     ))

@@ -510,6 +510,7 @@ fn without_a_post_frame_capability_the_destination_is_left_onstage() {
             show: true,
         },
         PostFrameCapability::Absent,
+        crate::test_harness::TextInputCapability::Absent,
     );
 
     // The controller attached, so it is not the `navigator == None` path being tested.

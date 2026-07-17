@@ -1,6 +1,7 @@
 //! [`TextEditingController`] — owns the text buffer and caret position for an
 //! [`EditableText`](super::editable_text::EditableText) field.
 
+use std::ops::Range;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use flui_foundation::ListenerId;
@@ -23,6 +24,16 @@ struct ControllerInner {
     /// `dispose`. This is how a tap on the enclosing `TextField` focuses *its
     /// own* field rather than a scope-walk guess.
     focus_node_id: Option<flui_interaction::FocusNodeId>,
+    /// The in-progress IME composition region, as a byte range into `text` —
+    /// `None` when no composition is active. Set by
+    /// [`TextEditingController::set_composing_text`], stripped (slice
+    /// removed) by [`TextEditingController::clear_composing`], and cleared
+    /// (text kept) by [`TextEditingController::commit_text`].
+    ///
+    /// Always char-boundary-clamped — see
+    /// [`TextEditingController::set_composing_text`]'s "Malformed input" doc
+    /// for why a platform-supplied range must never panic this controller.
+    composing: Option<Range<usize>>,
 }
 
 // ============================================================================
@@ -49,6 +60,19 @@ struct ControllerInner {
 /// or by passing [`TextEditingController::listenable`] to
 /// [`AnimatedBuilder`](crate::AnimatedBuilder).
 ///
+/// # IME composition
+///
+/// [`Self::set_composing_text`]/[`Self::commit_text`]/[`Self::clear_composing`]
+/// implement Flutter's `TextEditingValue.composing` model — see each method's
+/// doc for the exact replace-vs-insert and clamping rules. The **hidden
+/// caret** case (`cursor: None` on a preedit event, winit's own semantics for
+/// "the IME wants no caret drawn") collapses the caret to the end of the
+/// composing region in v1 rather than tracking a separate `caret_hidden`
+/// flag: [`flui_objects::RenderEditable`] has no rendering state to hide the
+/// caret while still painting composing text, so a flag with no consumer
+/// would be a lie of completeness. This is a named deferral, not a silent
+/// gap — see `RenderEditable`'s module doc.
+///
 /// # DEFERRED (v1)
 ///
 /// The following behaviors are absent in v1 and must not be faked:
@@ -56,7 +80,10 @@ struct ControllerInner {
 ///   Drag-to-select and selection rendering are not implemented.
 /// - **Clipboard**: copy/paste/cut are not wired.
 /// - **Input formatters**: no validation or transformation pipeline.
-/// - **IME / composing region**: CJK and dead-key composition are not handled.
+/// - **Composing underline / visual distinction**: [`Self::composing_range`]
+///   is tracked, but nothing paints it differently from committed text —
+///   [`flui_objects::RenderEditable`] renders one plain caret, no underline.
+/// - **Hidden caret while composing**: see "IME composition" above.
 #[derive(Clone)]
 pub struct TextEditingController {
     /// Shared text buffer + caret state.
@@ -72,6 +99,7 @@ impl std::fmt::Debug for TextEditingController {
         f.debug_struct("TextEditingController")
             .field("text", &guard.text)
             .field("caret_byte_offset", &guard.caret_byte_offset)
+            .field("composing", &guard.composing)
             // `notifier` is intentionally omitted: its Arc-backed listener list
             // is noise in debug output and has no stable representation.
             .finish_non_exhaustive()
@@ -93,6 +121,7 @@ impl TextEditingController {
                 text: String::new(),
                 caret_byte_offset: 0,
                 focus_node_id: None,
+                composing: None,
             })),
             notifier: ChangeNotifier::new(),
         }
@@ -108,6 +137,7 @@ impl TextEditingController {
                 text,
                 caret_byte_offset,
                 focus_node_id: None,
+                composing: None,
             })),
             notifier: ChangeNotifier::new(),
         }
@@ -281,6 +311,131 @@ impl TextEditingController {
     }
 
     // =========================================================================
+    // IME composing region
+    // =========================================================================
+
+    /// The current composing region, if a composition is active.
+    ///
+    /// A byte range into [`Self::text`], always char-boundary-clamped.
+    #[must_use]
+    pub fn composing_range(&self) -> Option<Range<usize>> {
+        self.inner
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .composing
+            .clone()
+    }
+
+    /// Whether an IME composition is currently in progress.
+    ///
+    /// [`EditableText`](super::EditableText)'s key handler consults this to
+    /// implement the suppression contract
+    /// ([`flui_types::ImeEvent`]'s doc): suppress `Key::Character` insertion
+    /// **only** while this is `true` — a field must not swallow plain
+    /// typing for the rest of a focus session just because IME composition
+    /// happened once.
+    #[must_use]
+    pub fn is_composing(&self) -> bool {
+        self.inner
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .composing
+            .is_some()
+    }
+
+    /// Apply an IME preedit update.
+    ///
+    /// `text` is the full current composition string; `cursor` is a byte
+    /// offset range **into `text`** (not into [`Self::text`]) — matching
+    /// [`flui_types::ImeEvent::Preedit`]'s own convention.
+    ///
+    /// Replaces the existing composing region if one is already active,
+    /// else inserts `text` at the current caret and starts a new composing
+    /// region there. The caret is repositioned to `cursor`'s end,
+    /// translated into the outer buffer; `cursor: None` (the platform wants
+    /// no caret drawn) collapses the caret to the end of the composing
+    /// region instead of hiding it — see the type doc's "IME composition"
+    /// section for why v1 does not track a separate hidden-caret flag.
+    ///
+    /// # Malformed input
+    ///
+    /// `cursor` offsets that land mid-character or past `text`'s end are
+    /// clamped to the nearest valid char boundary — a byte offset from an
+    /// IME is untrusted platform input, not an internal invariant, so this
+    /// never panics (`docs/PANIC-POLICY.md`).
+    pub fn set_composing_text(&self, text: &str, cursor: Option<(usize, usize)>) {
+        {
+            let mut guard = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+            let region = guard
+                .composing
+                .clone()
+                .unwrap_or(guard.caret_byte_offset..guard.caret_byte_offset);
+            guard.text.replace_range(region.clone(), text);
+            guard.composing = Some(region.start..region.start + text.len());
+            let caret_in_preedit = match cursor {
+                Some((_, end)) => clamp_to_char_boundary(text, end),
+                None => text.len(),
+            };
+            guard.caret_byte_offset = region.start + caret_in_preedit;
+        }
+        self.notifier.notify_listeners();
+    }
+
+    /// Apply an IME commit.
+    ///
+    /// Replaces the composing region with `text` if one is active, else
+    /// inserts `text` at the current caret (a direct commit with no
+    /// preceding preedit — winit delivers these too, not every commit is
+    /// composition-terminated). Clears the composing region and positions
+    /// the caret immediately after the committed text.
+    pub fn commit_text(&self, text: &str) {
+        {
+            let mut guard = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+            let insert_at = if let Some(range) = guard.composing.clone() {
+                guard.text.replace_range(range.clone(), text);
+                range.start
+            } else {
+                let caret = guard.caret_byte_offset;
+                guard.text.insert_str(caret, text);
+                caret
+            };
+            guard.composing = None;
+            guard.caret_byte_offset = insert_at + text.len();
+        }
+        self.notifier.notify_listeners();
+    }
+
+    /// Apply an IME `Disabled` notification.
+    ///
+    /// Strips the in-progress composing **slice** from the buffer, not just
+    /// the region marker — winit's own semantics, a documented divergence
+    /// from Flutter's `TextInputConnection.connectionClosed`, which instead
+    /// keeps the uncommitted text (see [`flui_types::ImeEvent`]'s doc).
+    /// No-op (and no listener notification) when no composition is active.
+    ///
+    /// The caret clamps to the stripped region's start when it sat inside
+    /// or past it; a caret positioned strictly before the composing region
+    /// is left untouched.
+    pub fn clear_composing(&self) {
+        let changed = {
+            let mut guard = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+            match guard.composing.take() {
+                Some(range) => {
+                    guard.text.replace_range(range.clone(), "");
+                    if guard.caret_byte_offset > range.start {
+                        guard.caret_byte_offset = range.start;
+                    }
+                    true
+                }
+                None => false,
+            }
+        };
+        if changed {
+            self.notifier.notify_listeners();
+        }
+    }
+
+    // =========================================================================
     // Reactive integration
     // =========================================================================
 
@@ -340,6 +495,25 @@ impl Listenable for TextEditingController {
     fn remove_all_listeners(&self) {
         self.notifier.remove_all_listeners();
     }
+}
+
+/// Clamp `offset` to the nearest valid UTF-8 char boundary in `s`, rounding
+/// forward. Mirrors
+/// [`RenderEditable`](flui_objects::RenderEditable)'s own
+/// `safe_caret_offset` — an untrusted, platform-supplied byte offset (an IME
+/// preedit cursor) must never panic a `str` slice operation.
+fn clamp_to_char_boundary(s: &str, offset: usize) -> usize {
+    if offset >= s.len() {
+        return s.len();
+    }
+    if s.is_char_boundary(offset) {
+        return offset;
+    }
+    s.char_indices()
+        .map(|(idx, _)| idx)
+        .chain(std::iter::once(s.len()))
+        .find(|idx| *idx >= offset)
+        .unwrap_or(s.len())
 }
 
 // ============================================================================
@@ -551,5 +725,231 @@ mod tests {
         controller.remove_listener(id);
         controller.insert_str("x");
         assert_eq!(call_count.load(Ordering::Relaxed), 0);
+    }
+
+    // ------------------------------------------------------------------
+    // IME composing region
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn set_composing_text_inserts_at_the_caret_when_no_composition_is_active() {
+        let controller = TextEditingController::with_text("hello");
+        controller.set_composing_text("ni", Some((0, 2)));
+        assert_eq!(controller.text(), "helloni");
+        assert_eq!(controller.composing_range(), Some(5..7));
+        assert_eq!(controller.caret_byte_offset(), 7);
+        assert!(controller.is_composing());
+    }
+
+    #[test]
+    fn set_composing_text_replaces_the_existing_composing_region_as_preedit_grows() {
+        let controller = TextEditingController::with_text("Hello ");
+        controller.set_composing_text("n", Some((1, 1)));
+        assert_eq!(controller.text(), "Hello n");
+        assert_eq!(controller.composing_range(), Some(6..7));
+
+        controller.set_composing_text("ni", Some((2, 2)));
+        assert_eq!(controller.text(), "Hello ni");
+        assert_eq!(controller.composing_range(), Some(6..8));
+        assert_eq!(controller.caret_byte_offset(), 8);
+
+        controller.set_composing_text("nihao", Some((5, 5)));
+        assert_eq!(controller.text(), "Hello nihao");
+        assert_eq!(controller.composing_range(), Some(6..11));
+    }
+
+    #[test]
+    fn set_composing_text_replaces_the_existing_composing_region_as_preedit_shrinks() {
+        let controller = TextEditingController::with_text("Hello ");
+        controller.set_composing_text("nihao", Some((5, 5)));
+        assert_eq!(controller.text(), "Hello nihao");
+
+        // The user backspaced inside the IME candidate window.
+        controller.set_composing_text("niha", Some((4, 4)));
+        assert_eq!(controller.text(), "Hello niha");
+        assert_eq!(controller.composing_range(), Some(6..10));
+        assert_eq!(controller.caret_byte_offset(), 10);
+    }
+
+    /// The full pinyin-style composition lifecycle: preedit grows, shrinks,
+    /// then a multi-byte CJK commit replaces the whole composing region.
+    #[test]
+    fn cjk_composition_grows_shrinks_then_commits() {
+        let controller = TextEditingController::with_text("Hello ");
+        controller.set_composing_text("n", Some((1, 1)));
+        controller.set_composing_text("ni", Some((2, 2)));
+        controller.set_composing_text("nihao", Some((5, 5)));
+        controller.set_composing_text("niha", Some((4, 4)));
+        assert_eq!(controller.text(), "Hello niha");
+
+        controller.commit_text("你好");
+        assert_eq!(controller.text(), "Hello 你好");
+        assert_eq!(controller.composing_range(), None);
+        assert!(!controller.is_composing());
+        assert_eq!(controller.caret_byte_offset(), "Hello 你好".len());
+    }
+
+    #[test]
+    fn composing_region_growth_with_multibyte_preedit_content_tracks_byte_length() {
+        let controller = TextEditingController::new();
+        // "に" is a 3-byte character; cursor.1 indexes bytes within the
+        // preedit string, not chars.
+        controller.set_composing_text("に", Some((3, 3)));
+        assert_eq!(controller.composing_range(), Some(0..3));
+
+        controller.set_composing_text("にほ", Some((6, 6)));
+        assert_eq!(controller.text(), "にほ");
+        assert_eq!(controller.composing_range(), Some(0..6));
+        assert_eq!(controller.caret_byte_offset(), 6);
+    }
+
+    #[test]
+    fn commit_text_with_no_active_composing_inserts_at_the_caret() {
+        let controller = TextEditingController::with_text("ab");
+        controller.commit_text("X");
+        assert_eq!(controller.text(), "abX");
+        assert_eq!(controller.caret_byte_offset(), 3);
+        assert!(!controller.is_composing());
+    }
+
+    /// Red-check: change `clear_composing`'s `replace_range(range, "")` to
+    /// only clear the `composing` marker (`guard.composing = None`) without
+    /// touching `guard.text` — this test's text assertion fails because the
+    /// composing slice would still be present.
+    #[test]
+    fn clear_composing_strips_exactly_the_composing_slice() {
+        let controller = TextEditingController::with_text("Hello ");
+        controller.set_composing_text("wor", Some((3, 3)));
+        assert_eq!(controller.text(), "Hello wor");
+
+        controller.clear_composing();
+        assert_eq!(
+            controller.text(),
+            "Hello ",
+            "a mid-composition Disabled must strip the composing slice, not \
+             keep it — winit semantics, a documented divergence from \
+             Flutter's TextInputConnection.connectionClosed"
+        );
+        assert!(!controller.is_composing());
+        assert_eq!(controller.caret_byte_offset(), "Hello ".len());
+    }
+
+    #[test]
+    fn clear_composing_with_no_active_composition_is_a_noop() {
+        let controller = TextEditingController::with_text("abc");
+        controller.clear_composing(); // Must not panic or change the buffer.
+        assert_eq!(controller.text(), "abc");
+        assert_eq!(controller.caret_byte_offset(), 3);
+    }
+
+    #[test]
+    fn clear_composing_leaves_a_caret_before_the_region_untouched() {
+        let controller = TextEditingController::with_text("Hello ");
+        controller.set_composing_text("wor", Some((3, 3)));
+        // Simulate Home pressed mid-composition: the caret moves out of the
+        // composing region while the region itself stays active.
+        controller.move_caret_home();
+        assert_eq!(controller.caret_byte_offset(), 0);
+
+        controller.clear_composing();
+        assert_eq!(controller.text(), "Hello ");
+        assert_eq!(
+            controller.caret_byte_offset(),
+            0,
+            "a caret strictly before the composing region must not be pulled forward"
+        );
+    }
+
+    #[test]
+    fn cursor_none_collapses_the_caret_to_the_end_of_the_composing_region() {
+        let controller = TextEditingController::with_text("Hi ");
+        controller.set_composing_text("wor", None);
+        assert_eq!(controller.text(), "Hi wor");
+        assert_eq!(controller.composing_range(), Some(3..6));
+        assert_eq!(
+            controller.caret_byte_offset(),
+            6,
+            "cursor: None (the platform's hidden-caret signal) collapses the \
+             caret to the end of the composing region in v1"
+        );
+    }
+
+    /// Red-check: drop the `clamp_to_char_boundary` call in
+    /// `set_composing_text` (use `cursor.1` raw) — this test panics instead
+    /// of asserting the clamped value.
+    #[test]
+    fn malformed_cursor_offset_past_the_preedit_end_clamps_without_panicking() {
+        let controller = TextEditingController::new();
+        controller.set_composing_text("ni", Some((0, 100)));
+        assert_eq!(controller.composing_range(), Some(0..2));
+        assert_eq!(
+            controller.caret_byte_offset(),
+            2,
+            "an out-of-range cursor offset clamps to the preedit's own length"
+        );
+    }
+
+    #[test]
+    fn malformed_cursor_offset_mid_multibyte_char_clamps_forward_without_panicking() {
+        let controller = TextEditingController::new();
+        // '€' is 3 bytes; a cursor end of 1 lands mid-character.
+        controller.set_composing_text("€", Some((0, 1)));
+        assert_eq!(
+            controller.caret_byte_offset(),
+            3,
+            "a cursor offset landing mid-character rounds forward to the next \
+             boundary rather than panicking"
+        );
+    }
+
+    #[test]
+    fn is_composing_reflects_active_composition_state() {
+        let controller = TextEditingController::new();
+        assert!(!controller.is_composing());
+
+        controller.set_composing_text("a", Some((1, 1)));
+        assert!(controller.is_composing());
+
+        controller.commit_text("a");
+        assert!(!controller.is_composing());
+    }
+
+    #[test]
+    fn listeners_fire_on_composing_updates_and_commit() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let controller = TextEditingController::new();
+        let call_count = Arc::new(AtomicUsize::new(0));
+        let count_clone = Arc::clone(&call_count);
+        controller.add_listener(Arc::new(move || {
+            count_clone.fetch_add(1, Ordering::Relaxed);
+        }));
+
+        controller.set_composing_text("a", Some((1, 1)));
+        assert_eq!(call_count.load(Ordering::Relaxed), 1);
+
+        controller.commit_text("a");
+        assert_eq!(call_count.load(Ordering::Relaxed), 2);
+    }
+
+    #[test]
+    fn clear_composing_notifies_only_when_it_actually_strips_something() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let controller = TextEditingController::new();
+        let call_count = Arc::new(AtomicUsize::new(0));
+        let count_clone = Arc::clone(&call_count);
+        controller.add_listener(Arc::new(move || {
+            count_clone.fetch_add(1, Ordering::Relaxed);
+        }));
+
+        controller.clear_composing(); // No active composition — no notify.
+        assert_eq!(call_count.load(Ordering::Relaxed), 0);
+
+        controller.set_composing_text("a", Some((1, 1)));
+        assert_eq!(call_count.load(Ordering::Relaxed), 1);
+
+        controller.clear_composing();
+        assert_eq!(call_count.load(Ordering::Relaxed), 2);
     }
 }

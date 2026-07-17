@@ -233,6 +233,10 @@ impl BuildContext for ElementBuildContext {
         self.owner.read().post_frame_handle().cloned()
     }
 
+    fn text_input_handle(&self) -> Option<flui_interaction::TextInputHandle> {
+        self.owner.read().text_input_handle().cloned()
+    }
+
     fn depend_on_inherited(&self, type_id: TypeId, callback: &mut dyn FnMut(&dyn Any)) -> bool {
         // Walk ancestors looking for an Element whose view_type_id
         // matches; the first one is the nearest InheritedView<T>.
@@ -626,6 +630,8 @@ pub(crate) struct BuildCapabilities {
     pub(crate) async_driver: Option<flui_scheduler::AsyncDriver>,
     /// The binding's post-frame capability.
     pub(crate) post_frame_handle: Option<flui_scheduler::PostFrameHandle>,
+    /// The binding's IME/text-input attach-detach capability.
+    pub(crate) text_input_handle: Option<flui_interaction::TextInputHandle>,
     /// The render tree this element is mounted in, cloned from its own
     /// `ElementCore` — see `make_build_ctx` for why not from the tree node.
     pub(crate) pipeline_owner:
@@ -728,6 +734,10 @@ impl BuildContext for BuildCtx<'_> {
 
     fn post_frame_handle(&self) -> Option<flui_scheduler::PostFrameHandle> {
         self.capabilities.post_frame_handle.clone()
+    }
+
+    fn text_input_handle(&self) -> Option<flui_interaction::TextInputHandle> {
+        self.capabilities.text_input_handle.clone()
     }
 
     fn depend_on_inherited(&self, type_id: TypeId, callback: &mut dyn FnMut(&dyn Any)) -> bool {

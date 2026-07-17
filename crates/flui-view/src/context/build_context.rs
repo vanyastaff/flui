@@ -115,6 +115,21 @@ pub trait BuildContext {
     /// the same rule `rebuild_handle` follows (port-check trigger #22).
     fn post_frame_handle(&self) -> Option<flui_scheduler::PostFrameHandle>;
 
+    /// The binding's IME/text-input attach-detach capability, if a binding
+    /// installed one.
+    ///
+    /// `flui_interaction::TextInputRegistry` sits below `flui-app`'s
+    /// `AppBinding` in the crate graph (`flui-widgets`, where `EditableText`
+    /// lives, cannot name `AppBinding` directly — see
+    /// `flui_interaction::TextInputHandle`'s doc for why), so a widget that
+    /// needs to attach/detach an IME client reaches through this capability
+    /// instead of a global singleton.
+    ///
+    /// `None` when no binding installed one (a bare `ElementTree` in a unit
+    /// test). Acquire it in a lifecycle hook (`init_state` /
+    /// `did_change_dependencies`), the same rule `post_frame_handle` follows.
+    fn text_input_handle(&self) -> Option<flui_interaction::TextInputHandle>;
+
     // ========================================================================
     // Inherited Data (Dependency Injection)
     // ========================================================================
