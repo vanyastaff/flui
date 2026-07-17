@@ -368,15 +368,18 @@ impl AppBinding {
     // Widgets Binding Access
     // ========================================================================
 
-    // PORT-TARGET: flui-app runner root-bootstrap consolidation — the runner's `mount_root`
-    // hand-rolls its own root-element wiring instead of calling this method. Folding the two
-    // together requires first deciding which of the two coexisting element-tree ownership
-    // models (the by-id `ElementTree` vs. the recursive boxed-child tree the runner actually
-    // drives) is the single source of truth, so consolidation stays deferred until that
-    // ownership question is resolved.
     /// Attach a root widget.
     ///
     /// This creates the root element and schedules the first build.
+    ///
+    /// # Root bootstrap
+    ///
+    /// Forwards to [`flui_view::WidgetsBinding::attach_root_widget`] — the
+    /// single root-bootstrap path. Every runner entry point
+    /// (`runner.rs::run_desktop`/`run_android`/`run_web`) calls
+    /// [`Self::attach_root_widget_with_size`] (this method's sized sibling),
+    /// not a separate hand-rolled wiring; there is exactly one element-tree
+    /// ownership model (the by-id, slab-resident `ElementTree`).
     ///
     /// # Implicit-animation auto-wrap
     ///
@@ -1408,6 +1411,78 @@ mod tests {
             app.shared_pipeline_owner.read().root_id().is_some(),
             "AppBinding must pass its PipelineOwner to the widgets binding so the \
              root render tree bootstraps; without it the window renders nothing",
+        );
+    }
+
+    /// Root-hop parent-link regression: after a standard `AppBinding`
+    /// bootstrap (`attach_root_widget` + a build/layout/paint `draw_frame`),
+    /// the mounted leaf's render node must have a working parent link back
+    /// to the root, not just the root's child-list entry.
+    ///
+    /// The two link directions were previously written asymmetrically:
+    /// `RenderBehavior::on_mount` set both when the leaf mounted, but
+    /// `RootRenderElement`'s `ElementBase::render_id` fell through to the
+    /// trait default (`None`) instead of the struct's own render id (root.rs
+    /// carried a correct *inherent* `render_id()` that the trait method
+    /// never delegated to). `ElementTree::reorder_render_children_after_build`
+    /// reads `render_id()` through `&dyn ElementBase` — the trait method —
+    /// while walking the tree to compute each render node's desired parent;
+    /// seeing `None` for the root, it treated the root as parentless-of-render
+    /// and propagated that past it, corrupting the leaf's desired parent to
+    /// `None` and overwriting the correct link `on_mount` had set. The
+    /// child-list entry was never touched by that bug, so layout/paint/hit-test
+    /// (which only walk downward) rendered fine while every upward walk
+    /// (`transform_to`, `local_to_global`, hero/overlay positioning) silently
+    /// failed at the very first hop.
+    #[test]
+    fn transform_to_resolves_through_the_root_hop_after_standard_bootstrap() {
+        let app = AppBinding::new();
+        let realm = test_realm(&app);
+        realm
+            .enter(|realm| app.attach_root_widget(realm, &LeafView))
+            .expect("attach succeeds");
+        let _ = app.draw_frame(
+            &realm,
+            flui_rendering::constraints::BoxConstraints::tight(flui_types::Size::new(
+                flui_types::geometry::px(800.0),
+                flui_types::geometry::px(600.0),
+            )),
+        );
+
+        let owner = app.shared_pipeline_owner.read();
+        let root_id = owner.root_id().expect("root id set by attach_root_widget");
+        let root_node = owner
+            .render_tree()
+            .get(root_id)
+            .expect("root render node resolves");
+        let leaf_id = *root_node
+            .children()
+            .first()
+            .expect("LeafView must have mounted one render child under the root");
+
+        // The downward link always worked (layout/paint only walk down) —
+        // assert it too, so a regression that breaks BOTH directions still
+        // fails loudly instead of looking like a pass on this half.
+        assert_eq!(
+            owner
+                .render_tree()
+                .get(leaf_id)
+                .and_then(flui_rendering::storage::RenderNode::parent),
+            Some(root_id),
+            "the leaf's render node must carry a parent link back to the root"
+        );
+
+        let transform = owner.transform_to(leaf_id, root_id);
+        assert!(
+            transform.is_some(),
+            "transform_to(leaf, root) must resolve through the root hop; None means the \
+             ancestor walk broke at the very first step (accessors.rs's `parent(current)?`)"
+        );
+        assert_eq!(
+            transform,
+            Some(flui_types::Matrix4::IDENTITY),
+            "LeafView (RenderSizedBox::shrink(), zero offset) composes to the identity \
+             transform into root space"
         );
     }
 
@@ -2660,17 +2735,18 @@ mod tests {
         /// `TextInputPlatformBridge::set_cursor_area` ->
         /// `PlatformTextInput::set_ime_cursor_area`.
         ///
-        /// Deliberately does not mount a widget tree: `AppBinding::
-        /// attach_root_widget`'s `RootRenderElement` bootstrap does not
-        /// connect the mounted subtree's own render root as a child of its
-        /// synthetic `RenderViewAdapter` node (a pre-existing gap tracked by
-        /// the `PORT-TARGET` note on `attach_root_widget`, unrelated to
-        /// ADR-0032) — `transform_to` from a real `EditableText` up to
-        /// `root_id()` would fail structurally here regardless of the IME
-        /// wiring. The widget-level geometry/dedupe/lifecycle tests
-        /// (`flui-widgets`' `editable_text` module) mount through a
-        /// different, connectivity-correct harness instead and carry that
-        /// coverage.
+        /// Deliberately does not mount a widget tree: this test proves the
+        /// bridge FORWARDS an already-computed `Bounds` to the platform, not
+        /// that a real `EditableText` computes the right one — that's the
+        /// widget-level geometry/dedupe/lifecycle coverage
+        /// (`flui-widgets`' `editable_text` module carries it). A bare
+        /// `Bounds::new(...)` exercises the forwarding path with less setup
+        /// and no render-tree dependency. (`AppBinding::attach_root_widget`'s
+        /// `RootRenderElement` bootstrap does correctly connect a mounted
+        /// subtree's render root under its `RenderViewAdapter` node in both
+        /// directions — see `transform_to_resolves_through_the_root_hop_after_standard_bootstrap`
+        /// above — so mounting one here would work; it is simply
+        /// unnecessary for what this test asserts.)
         ///
         /// Red-check: turning `AppBinding::set_ime_cursor_area` into a
         /// no-op (dropping the `text_input_platform_bridge().

@@ -286,6 +286,13 @@ impl<V: View + Clone + 'static> ElementBase for RootRenderElement<V> {
                 // owner is still locked via its outer `Arc<RwLock<PipelineOwner>>`
                 // (shared-infrastructure lock, allowed per `docs/PORT.md`).
                 let mut owner = pipeline_owner.write();
+                // Read the owner's real DPR before re-deriving the config —
+                // `mount` sources the DPR the same way (`device_pixel_ratio()`).
+                // A hard-coded `1.0` here would halve the root's scale on
+                // every update after the first on any HiDPI (2x+) display,
+                // since the config `mount` built with the real DPR would be
+                // silently overwritten by this one.
+                let dpr = owner.device_pixel_ratio();
                 if let Some(node) = owner.render_tree_mut().get_mut(render_id) {
                     // RenderView uses BoxProtocol
                     let render_object = node.box_render_object_mut();
@@ -294,8 +301,8 @@ impl<V: View + Clone + 'static> ElementBase for RootRenderElement<V> {
                         .downcast_mut::<RenderViewObject>()
                     {
                         let (width, height) = self.view.size;
-                        let physical_size = Size::new(px(width), px(height));
-                        let config = ViewConfiguration::from_size(physical_size, 1.0);
+                        let logical_size = Size::new(px(width), px(height));
+                        let config = ViewConfiguration::from_size(logical_size, dpr);
                         render_view.set_configuration(config);
                     }
                 }
@@ -335,6 +342,27 @@ impl<V: View + Clone + 'static> ElementBase for RootRenderElement<V> {
         self.pipeline_owner
             .as_ref()
             .map(|po| Arc::clone(po) as Arc<dyn Any + Send + Sync>)
+    }
+
+    /// The root's own `RenderId`, once `mount` has created its `RenderView`.
+    ///
+    /// The `ElementBase` trait default is `None` — every non-render behavior
+    /// keeps it, but `RootRenderElement` DOES own a render node and must
+    /// override it here (not just the inherent `Self::render_id` at line
+    /// ~147). Without this override, `ElementTree::reorder_render_children_after_build`'s
+    /// depth-first walk reads `node.element().render_id()` through `&dyn
+    /// ElementBase` — which dispatches to the trait method, not the inherent
+    /// one — sees `None` for the root, and propagates `render_ancestor =
+    /// None` past it instead of `Some(root_render_id)`. That corrupts the
+    /// FIRST render descendant's `desired_parent` entry to `None`, and the
+    /// walk's own parent-sync step then calls `set_parent(None)` on it,
+    /// clobbering the correct link `RenderBehavior::on_mount` had just set.
+    /// This was the root-hop parent-link defect: the child→parent render
+    /// edge was `None` from the very first mount even though the parent→child
+    /// edge existed, because the reorder pass silently treated the root as if
+    /// it had no render object at all.
+    fn render_id(&self) -> Option<RenderId> {
+        self.render_id
     }
 
     fn child_render_id(&self) -> Option<RenderId> {
@@ -390,23 +418,15 @@ impl<V: View + Clone + 'static> RenderObjectElement for RootRenderElement<V> {
                 slot
             );
 
-            // Set parent-child relationship in RenderTree
+            // Set parent-child relationship in RenderTree. `adopt_child`
+            // writes both link directions in one call — see
+            // `RenderTree::adopt_child`.
             if let (Some(pipeline_owner), Some(parent_id)) = (&self.pipeline_owner, self.render_id)
             {
-                let mut owner = pipeline_owner.write();
-                let render_tree = owner.render_tree_mut();
-
-                // Update child's parent
-                if let Some(child_node) = render_tree.get_mut(*child_render_id) {
-                    child_node.set_parent(Some(parent_id));
-                }
-
-                // Add child to parent's children list
-                if let Some(parent_node) = render_tree.get_mut(parent_id) {
-                    parent_node.add_child(*child_render_id);
-                    // Parent-child relationships are fully managed by NodeLinks
-                    // No need to notify render objects directly
-                }
+                pipeline_owner
+                    .write()
+                    .render_tree_mut()
+                    .adopt_child(parent_id, *child_render_id);
             }
         }
     }
@@ -432,21 +452,15 @@ impl<V: View + Clone + 'static> RenderObjectElement for RootRenderElement<V> {
                 slot
             );
 
-            // Clear parent-child relationship in RenderTree
+            // Clear parent-child relationship in RenderTree. `drop_child`
+            // clears both link directions in one call — see
+            // `RenderTree::drop_child`.
             if let (Some(pipeline_owner), Some(parent_id)) = (&self.pipeline_owner, self.render_id)
             {
-                let mut owner = pipeline_owner.write();
-                let render_tree = owner.render_tree_mut();
-
-                // Remove child from parent's children list
-                if let Some(parent_node) = render_tree.get_mut(parent_id) {
-                    parent_node.remove_child(*child_render_id);
-                }
-
-                // Clear child's parent
-                if let Some(child_node) = render_tree.get_mut(*child_render_id) {
-                    child_node.set_parent(None);
-                }
+                pipeline_owner
+                    .write()
+                    .render_tree_mut()
+                    .drop_child(parent_id, *child_render_id);
             }
         }
     }

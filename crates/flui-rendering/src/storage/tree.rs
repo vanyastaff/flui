@@ -486,6 +486,122 @@ impl RenderTree {
         Some(child_id)
     }
 
+    /// Adopts `child_id` under `parent_id`: sets the child's parent link AND
+    /// appends it to the parent's children list in one call, so the two
+    /// directions of a render-tree edge can never be written independently.
+    ///
+    /// Flutter equivalence: `RenderObject.adoptChild` (`rendering/object.dart`
+    /// @ tag `3.44.0`), which asserts `child._parent == null` and that
+    /// adopting will not introduce a cycle before wiring `child._parent =
+    /// this` and appending to the child list as one primitive — the same
+    /// two guards this method asserts below.
+    ///
+    /// [`insert_box_child`](Self::insert_box_child) /
+    /// [`insert_sliver_child`](Self::insert_sliver_child) already bake the
+    /// parent link into construction (`RenderNode::new_*_with_parent`), so
+    /// they do not need this. This primitive is for the shape
+    /// `RenderBehavior::on_mount` needs instead: the `RenderObject` is
+    /// minted with [`insert_box`](Self::insert_box) /
+    /// [`insert_sliver`](Self::insert_sliver) — no parent yet, because the
+    /// element does not know its render parent until after the object
+    /// exists — and is adopted under its parent as a second step. Before
+    /// this primitive existed, every such call site wrote `set_parent` and
+    /// `add_child` as two independent statements, which made the
+    /// parent-link / child-link asymmetry representable (and, at the root
+    /// hop, real: see `RootRenderElement`'s `ElementBase::render_id`
+    /// history).
+    ///
+    /// Both ids must resolve for either link to be written: if either is
+    /// stale, this is a no-op on BOTH sides, never just one — a one-sided
+    /// write (child's parent set while the old parent's stale entry stays
+    /// resolvable, or vice versa) would recreate exactly the asymmetry this
+    /// primitive exists to prevent.
+    ///
+    /// # Panics (debug only)
+    ///
+    /// - if `parent_id == child_id` — a self-adoption would write a
+    ///   self-cycle that the ancestor walk below cannot see (it starts at
+    ///   the descendant's parent).
+    /// - if `child_id` already has a parent. Re-parenting through this
+    ///   primitive would leave the OLD parent's children list with a stale
+    ///   entry — the same asymmetry this primitive exists to prevent, just
+    ///   moved to the donor side. A call site that legitimately moves a
+    ///   child must [`drop_child`](Self::drop_child) it from its old parent
+    ///   first, matching Flutter's `assert(child._parent == null)`.
+    /// - if `parent_id` is a descendant of `child_id` — adopting would
+    ///   close a cycle (`child_id` would become its own indirect ancestor),
+    ///   matching Flutter's cycle guard in `adoptChild`.
+    pub fn adopt_child(&mut self, parent_id: RenderId, child_id: RenderId) {
+        // Both must resolve BEFORE either link is written — a stale id on
+        // either side must leave both directions untouched.
+        if self.get(parent_id).is_none() || self.get(child_id).is_none() {
+            return;
+        }
+
+        debug_assert_ne!(
+            parent_id, child_id,
+            "adopt_child: a node cannot adopt itself — the ancestor walk below starts at the \
+             descendant's parent, so this degenerate self-cycle would slip past it"
+        );
+        debug_assert!(
+            self.get(child_id).and_then(RenderNode::parent).is_none(),
+            "adopt_child: {child_id:?} already has a parent — re-parenting through this \
+             primitive would leave the OLD parent's children list with a stale entry; drop it \
+             from its old parent first (see `drop_child`)"
+        );
+        debug_assert!(
+            !self.is_ancestor(child_id, parent_id),
+            "adopt_child: {parent_id:?} is already a descendant of {child_id:?} — adopting would \
+             close a cycle"
+        );
+
+        if let Some(child) = self.get_mut(child_id) {
+            child.set_parent(Some(parent_id));
+        }
+        if let Some(parent) = self.get_mut(parent_id) {
+            parent.add_child(child_id);
+        }
+    }
+
+    /// Drops `child_id` from `parent_id`: removes it from the parent's
+    /// children list AND clears the child's parent link in one call — the
+    /// inverse of [`adopt_child`](Self::adopt_child).
+    ///
+    /// Flutter equivalence: `RenderObject.dropChild` (`rendering/object.dart`
+    /// @ tag `3.44.0`), which asserts `child._parent == this` before clearing
+    /// `child._parent = null` and removing it from the child list as one
+    /// primitive.
+    ///
+    /// Both ids must resolve for either link to be cleared: if either is
+    /// stale, this is a no-op on BOTH sides, for the same reason
+    /// `adopt_child` requires it — a one-sided clear is the asymmetry these
+    /// primitives exist to make unrepresentable.
+    ///
+    /// # Panics (debug only)
+    ///
+    /// If `child_id`'s current parent is not `parent_id` — the caller's
+    /// belief about the tree shape is wrong, matching Flutter's
+    /// `assert(child._parent == this)` in `dropChild`.
+    pub fn drop_child(&mut self, parent_id: RenderId, child_id: RenderId) {
+        if self.get(parent_id).is_none() || self.get(child_id).is_none() {
+            return;
+        }
+
+        debug_assert_eq!(
+            self.get(child_id).and_then(RenderNode::parent),
+            Some(parent_id),
+            "drop_child: {child_id:?}'s current parent does not match {parent_id:?} — the \
+             caller's belief about the tree shape is wrong"
+        );
+
+        if let Some(parent) = self.get_mut(parent_id) {
+            parent.remove_child(child_id);
+        }
+        if let Some(child) = self.get_mut(child_id) {
+            child.set_parent(None);
+        }
+    }
+
     /// Removes a node from the tree.
     ///
     /// Removes a node WITHOUT cascading to descendants.
@@ -1515,5 +1631,183 @@ mod tests {
             count, depth,
             "every chain node must be visited exactly once"
         );
+    }
+
+    // ========================================================================
+    // adopt_child / drop_child
+    // ========================================================================
+
+    /// `adopt_child` must write BOTH edge directions: the child's parent
+    /// link AND the parent's child-list entry. A one-directional write
+    /// (either half alone) is exactly the asymmetry this primitive exists
+    /// to make unrepresentable — an end-to-end test through a full
+    /// element-mount + `draw_frame` pipeline cannot catch a one-directional
+    /// regression here because `reorder_render_children_after_build`
+    /// self-heals the parent link afterwards; only a direct `RenderTree`
+    /// check on the two fields immediately after `adopt_child` returns can.
+    ///
+    /// Red-check (run manually, not committed as a mutant): deleting the
+    /// `child.set_parent(Some(parent_id))` call (leaving only
+    /// `parent.add_child(child_id)`) makes the `parent()` assertion below
+    /// fail — `left: None, right: Some(parent)`.
+    #[test]
+    fn adopt_child_writes_both_edge_directions() {
+        let mut tree = RenderTree::new();
+        let parent = tree.insert_box(make_leaf());
+        let child = tree.insert_box(make_leaf());
+
+        tree.adopt_child(parent, child);
+
+        assert_eq!(
+            tree.get(child).and_then(RenderNode::parent),
+            Some(parent),
+            "adopt_child must set the child's parent link"
+        );
+        assert!(
+            tree.get(parent)
+                .is_some_and(|node| node.children().contains(&child)),
+            "adopt_child must append the child to the parent's children list"
+        );
+    }
+
+    /// A stale id on either side must leave BOTH directions untouched — no
+    /// partial write. Exercises the ordering fix: both ids are checked to
+    /// resolve before either link is written.
+    #[test]
+    fn adopt_child_with_stale_parent_writes_neither_direction() {
+        let mut tree = RenderTree::new();
+        let child = tree.insert_box(make_leaf());
+        let stale_parent = {
+            let doomed = tree.insert_box(make_leaf());
+            tree.remove_shallow(doomed);
+            doomed
+        };
+        assert!(!tree.contains(stale_parent), "precondition: id is stale");
+
+        tree.adopt_child(stale_parent, child);
+
+        assert_eq!(
+            tree.get(child).and_then(RenderNode::parent),
+            None,
+            "a stale parent id must not leave the child's parent link written"
+        );
+    }
+
+    #[test]
+    fn adopt_child_with_stale_child_writes_neither_direction() {
+        let mut tree = RenderTree::new();
+        let parent = tree.insert_box(make_leaf());
+        let stale_child = {
+            let doomed = tree.insert_box(make_leaf());
+            tree.remove_shallow(doomed);
+            doomed
+        };
+        assert!(!tree.contains(stale_child), "precondition: id is stale");
+
+        tree.adopt_child(parent, stale_child);
+
+        assert!(
+            tree.get(parent)
+                .is_some_and(|node| node.children().is_empty()),
+            "a stale child id must not leave the parent's children list written"
+        );
+    }
+
+    /// Re-parenting an already-parented child through `adopt_child` is a
+    /// debug-only contract violation (Flutter's `assert(child._parent ==
+    /// null)`): it would leave the OLD parent's children list stale.
+    #[test]
+    #[should_panic(expected = "already has a parent")]
+    fn adopt_child_rejects_an_already_parented_child() {
+        let mut tree = RenderTree::new();
+        let old_parent = tree.insert_box(make_leaf());
+        let new_parent = tree.insert_box(make_leaf());
+        let child = tree.insert_box(make_leaf());
+        tree.adopt_child(old_parent, child);
+
+        tree.adopt_child(new_parent, child);
+    }
+
+    /// Adopting a node's own ancestor would close a cycle — rejected the
+    /// same way Flutter's `adoptChild` guards against it.
+    #[test]
+    #[should_panic(expected = "close a cycle")]
+    fn adopt_child_rejects_a_cycle() {
+        let mut tree = RenderTree::new();
+        let root = tree.insert_box(make_leaf());
+        let child = tree.insert_box_child(root, make_leaf()).unwrap();
+
+        // `root` is already `child`'s ancestor; adopting `root` under
+        // `child` would close a cycle.
+        tree.adopt_child(child, root);
+    }
+
+    /// `drop_child` must clear BOTH edge directions — the inverse of
+    /// `adopt_child_writes_both_edge_directions`, and for the same reason:
+    /// a one-directional clear would leave a dangling reference on one
+    /// side.
+    ///
+    /// Red-check (run manually, not committed as a mutant): deleting the
+    /// `child.set_parent(None)` call (leaving only
+    /// `parent.remove_child(child_id)`) makes the `parent()` assertion
+    /// below fail — `left: Some(parent), right: None`.
+    #[test]
+    fn drop_child_clears_both_edge_directions() {
+        let mut tree = RenderTree::new();
+        let parent = tree.insert_box(make_leaf());
+        let child = tree.insert_box(make_leaf());
+        tree.adopt_child(parent, child);
+
+        tree.drop_child(parent, child);
+
+        assert_eq!(
+            tree.get(child).and_then(RenderNode::parent),
+            None,
+            "drop_child must clear the child's parent link"
+        );
+        assert!(
+            tree.get(parent)
+                .is_some_and(|node| !node.children().contains(&child)),
+            "drop_child must remove the child from the parent's children list"
+        );
+    }
+
+    /// A stale id on either side must leave BOTH directions untouched.
+    #[test]
+    fn drop_child_with_stale_ids_clears_neither_direction() {
+        let mut tree = RenderTree::new();
+        let parent = tree.insert_box(make_leaf());
+        let child = tree.insert_box_child(parent, make_leaf()).unwrap();
+        let stale = {
+            let doomed = tree.insert_box(make_leaf());
+            tree.remove_shallow(doomed);
+            doomed
+        };
+
+        tree.drop_child(stale, child);
+
+        assert_eq!(
+            tree.get(child).and_then(RenderNode::parent),
+            Some(parent),
+            "a stale parent id must not clear the child's real parent link"
+        );
+        assert!(
+            tree.get(parent)
+                .is_some_and(|node| node.children().contains(&child)),
+            "a stale parent id must not remove the child from its real parent's children list"
+        );
+    }
+
+    /// Calling `drop_child` with the wrong parent is a debug-only contract
+    /// violation (Flutter's `assert(child._parent == this)`).
+    #[test]
+    #[should_panic(expected = "current parent does not match")]
+    fn drop_child_rejects_the_wrong_parent() {
+        let mut tree = RenderTree::new();
+        let real_parent = tree.insert_box(make_leaf());
+        let other = tree.insert_box(make_leaf());
+        let child = tree.insert_box_child(real_parent, make_leaf()).unwrap();
+
+        tree.drop_child(other, child);
     }
 }
