@@ -217,11 +217,11 @@ pub struct EditableTextState {
     /// Publishes the field's `RenderId` while mounted, so the node's rect
     /// provider can measure it for reading-order traversal.
     anchor: flui_objects::SubtreeAnchor,
-    /// Publishes the `RenderId` of exactly the `EditableTextRenderView`
-    /// (ALT-2, ADR-0032) — wrapped directly around it in `build_field_view`,
-    /// so the IME cursor-area loop's `transform_to` starts right at the
-    /// editable instead of walking through `anchor`'s wider subtree (which
-    /// also covers the `AnimatedBuilder` in between).
+    /// Publishes the `RenderId` of exactly the `EditableTextRenderView` —
+    /// the inner anchor (ADR-0032), wrapped directly around it in
+    /// `build_field_view`, so the IME cursor-area loop's `transform_to`
+    /// starts right at the editable instead of walking through `anchor`'s
+    /// wider subtree (which also covers the `AnimatedBuilder` in between).
     inner_anchor: flui_objects::SubtreeAnchor,
     /// The node this field's node hangs under — the nearest enclosing focus
     /// parent at mount, or the root scope's backing node. Detached from in
@@ -620,7 +620,7 @@ fn apply_ime_event(controller: &TextEditingController, event: &ImeEvent) {
 struct CursorAreaLoop {
     post_frame: flui_scheduler::PostFrameHandle,
     pipeline_owner: Option<Arc<RwLock<PipelineOwner>>>,
-    /// The `EditableTextRenderView`'s own anchor (ALT-2) — see
+    /// The `EditableTextRenderView`'s own inner anchor (ADR-0032) — see
     /// `EditableTextState::inner_anchor`'s doc.
     inner_anchor: flui_objects::SubtreeAnchor,
     text_input: TextInputHandle,
@@ -637,18 +637,47 @@ struct CursorAreaLoop {
     last_sent: Rc<Cell<Option<Bounds<Pixels>>>>,
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Test-only probe: counts every successful `PostFrameHandle::
+    /// schedule_local` registration `CursorAreaLoop::schedule` makes.
+    ///
+    /// This exists because "no new `cursor_area_calls`" is NOT sufficient
+    /// evidence that the loop stopped: once `inner_anchor` clears (on
+    /// unmount), `global_caret_rect` returns `None` regardless of whether
+    /// the loop is still alive, so a zombie loop that keeps rescheduling
+    /// itself forever looks send-silent and indistinguishable from a
+    /// correctly-stopped one under a sends-only assertion. Counting actual
+    /// reschedule registrations is what tells them apart — see
+    /// `loop_stops_rescheduling_after_dispose_while_still_focused`.
+    static CURSOR_AREA_RESCHEDULE_COUNT: Cell<usize> = const { Cell::new(0) };
+}
+
+/// The number of `CursorAreaLoop::schedule` registrations made so far on
+/// this thread. Test-only; see `CURSOR_AREA_RESCHEDULE_COUNT`'s doc.
+#[cfg(test)]
+fn cursor_area_reschedule_count() -> usize {
+    CURSOR_AREA_RESCHEDULE_COUNT.with(Cell::get)
+}
+
 impl CursorAreaLoop {
     /// Register the next firing. Every `schedule_local` failure is warned,
     /// never silent: a loop that stops rescheduling without a diagnostic is
     /// a candidate window stuck at (0, 0) with no signal anything is wrong.
     fn schedule(self) {
         let post_frame = self.post_frame.clone();
-        if let Err(error) = post_frame.schedule_local(move |_timing| self.fire()) {
-            tracing::warn!(
-                ?error,
-                "IME cursor-area tick could not be (re)scheduled; the platform \
-                 candidate window will stop following the caret"
-            );
+        match post_frame.schedule_local(move |_timing| self.fire()) {
+            Ok(()) => {
+                #[cfg(test)]
+                CURSOR_AREA_RESCHEDULE_COUNT.with(|count| count.set(count.get() + 1));
+            }
+            Err(error) => {
+                tracing::warn!(
+                    ?error,
+                    "IME cursor-area tick could not be (re)scheduled; the platform \
+                     candidate window will stop following the caret"
+                );
+            }
         }
     }
 
@@ -811,8 +840,8 @@ impl_render_view!(EditableTextRenderView);
 
 /// Assemble the visual render view for the text field interior.
 ///
-/// Wraps `EditableTextRenderView` directly in `inner_anchor` (ALT-2,
-/// ADR-0032): a second, inner `SubtreeAnchor` whose only job is to publish
+/// Wraps `EditableTextRenderView` directly in `inner_anchor` (the inner
+/// anchor, ADR-0032): a second, inner `SubtreeAnchor` whose only job is to publish
 /// exactly the editable's own `RenderId`, so the IME cursor-area loop's
 /// `transform_to` starts right at the editable — not at the outer `anchor`
 /// wrapping this whole field (which also spans the `AnimatedBuilder` between
@@ -1463,6 +1492,52 @@ mod tests {
         );
     }
 
+    /// `ImeEvent::Enabled` clears the current attach's dedupe cache — the
+    /// backend may restart the IME session without any focus change, and
+    /// that restart must not be silently absorbed by `last_sent`: the
+    /// resumed session needs its own first send even at an unchanged caret
+    /// position.
+    ///
+    /// Red-check: drop the `last_sent_for_ime_event.set(None)` call in the
+    /// IME event callback's `ImeEvent::Enabled` arm (`init_state`) — the
+    /// final assertion fails (dedupe suppresses the resend).
+    #[test]
+    fn ime_enabled_event_clears_the_dedupe_cache_and_forces_a_resend() {
+        let _guard = crate::test_harness::FOCUS_TEST_LOCK.lock();
+        FocusManager::global().unfocus();
+
+        let controller = TextEditingController::new();
+        let mut harness =
+            crate::test_harness::mount_with_ime(EditableText::new(controller.clone()));
+        let node_id = controller.focus_node_id().expect("published node");
+
+        harness.enter_owner_scope(|| {
+            FocusManager::global().request_focus(node_id);
+        });
+        harness.tick();
+        assert_eq!(harness.cursor_area_calls().len(), 1);
+
+        // An unchanged frame first, to prove the dedupe cache is actually
+        // populated (not merely empty from a fresh attach) before `Enabled`
+        // clears it.
+        harness.tick();
+        assert_eq!(
+            harness.cursor_area_calls().len(),
+            1,
+            "precondition: an unchanged frame must dedupe before Enabled fires"
+        );
+
+        dispatch_ime(&flui_types::ImeEvent::Enabled);
+        harness.tick();
+
+        assert_eq!(
+            harness.cursor_area_calls().len(),
+            2,
+            "ImeEvent::Enabled must clear the dedupe cache so an unchanged \
+             caret position resends on the next frame"
+        );
+    }
+
     /// Blurring stops the loop: no further sends, even once the controller
     /// keeps changing after the blur.
     ///
@@ -1503,15 +1578,24 @@ mod tests {
         );
     }
 
-    /// Unmounting a still-focused field stops the loop: no post-dispose
-    /// sends, no panic — the ADR-0030 detach-on-dispose contract extended
-    /// to the cursor-area loop.
+    /// Unmounting a still-focused field stops the loop's RESCHEDULING, not
+    /// merely its sends — the ADR-0030 detach-on-dispose contract extended
+    /// to the cursor-area loop, and no panic either.
+    ///
+    /// "No new `cursor_area_calls`" alone is NOT sufficient evidence here:
+    /// `RenderSubtreeAnchor::detach` clears `inner_anchor` on unmount, so
+    /// `global_caret_rect` returns `None` regardless of whether the loop is
+    /// still alive — a zombie loop that kept rescheduling itself forever
+    /// (never sending, but never stopping either — a permanent
+    /// once-per-frame `schedule_local` registration leak) would look
+    /// send-silent and pass a sends-only assertion. This test instead counts
+    /// actual reschedule registrations via `cursor_area_reschedule_count`.
     ///
     /// Red-check: drop the `alive.set(false)` call in `EditableTextState::
-    /// dispose` — this test's final assertion fails (or, depending on the
-    /// harness's teardown order, panics on a dangling anchor read instead).
+    /// dispose` — the reschedule count keeps climbing on every subsequent
+    /// `tick()` instead of holding steady once the dispose frame settles.
     #[test]
-    fn loop_stops_sending_after_dispose_while_still_focused() {
+    fn loop_stops_rescheduling_after_dispose_while_still_focused() {
         let _guard = crate::test_harness::FOCUS_TEST_LOCK.lock();
         FocusManager::global().unfocus();
 
@@ -1528,13 +1612,19 @@ mod tests {
         harness.tick();
         assert_eq!(harness.cursor_area_calls().len(), 1);
 
+        // `swap_root` disposes the old (still-focused) field within its own
+        // pumped frame: dispose runs during that frame's build phase,
+        // before the SAME frame's post-frame phase drains the `fire()`
+        // queued by the `tick()` above — so a correctly stopped loop must
+        // not reschedule even once more here.
         harness.swap_root(ImeUnmountRoot {
             controller: controller.clone(),
             show: false,
         });
         let calls_after_unmount = harness.cursor_area_calls().len();
+        let reschedules_after_dispose_frame = cursor_area_reschedule_count();
 
-        // Must not panic, and must not resurrect the loop.
+        // Further frames must not resurrect scheduling, and must not panic.
         controller.insert_str("y");
         harness.tick();
         harness.tick();
@@ -1542,8 +1632,15 @@ mod tests {
         assert_eq!(
             harness.cursor_area_calls().len(),
             calls_after_unmount,
-            "unmounting a still-focused field must permanently stop its \
-             cursor-area loop"
+            "unmounting a still-focused field must not send further cursor \
+             areas"
+        );
+        assert_eq!(
+            cursor_area_reschedule_count(),
+            reschedules_after_dispose_frame,
+            "a disposed-while-focused field must not keep rescheduling its \
+             cursor-area loop — a zombie loop would reschedule once per \
+             frame forever even though its sends look silent"
         );
     }
 
