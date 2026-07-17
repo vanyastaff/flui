@@ -299,8 +299,7 @@ pub struct InputDecorationThemeData {
 ///
 /// Flutter parity: `ListTileThemeData` (`material/list_tile_theme.dart`,
 /// oracle tag `3.44.0`), narrowed to the fields FLUI's `ListTile` actually
-/// consumes — every field below except [`is_three_line`](Self::is_three_line).
-/// FLUI collapses the oracle's two theme tiers (the ambient `ListTileTheme`
+/// consumes. FLUI collapses the oracle's two theme tiers (the ambient `ListTileTheme`
 /// inherited widget and this [`ThemeData`] slot) into this one slot, the same
 /// "named reduction" every other component-theme type in this crate already
 /// makes (see [`CardThemeData`]'s doc comment) — `list_tile.dart`'s own
@@ -874,5 +873,81 @@ mod tests {
 
         let patched = base.copy_with(ThemeDataOverrides::default());
         assert_eq!(patched.input_decoration_theme, Some(input_decoration_theme));
+    }
+
+    /// Same shape as `copy_with_sets_input_decoration_theme_slot`, for the
+    /// `list_tile_theme` slot.
+    #[test]
+    fn copy_with_sets_list_tile_theme_slot() {
+        let base = ThemeData::light();
+        let list_tile_theme = ListTileThemeData {
+            min_leading_width: Some(30.0),
+            ..Default::default()
+        };
+
+        let patched = base.copy_with(ThemeDataOverrides {
+            list_tile_theme: Some(list_tile_theme.clone()),
+            ..Default::default()
+        });
+
+        assert_eq!(patched.list_tile_theme, Some(list_tile_theme));
+        // Untouched slots stay unset, mirroring the base theme.
+        assert!(patched.divider_theme.is_none());
+    }
+
+    /// Same already-set-slot-survives-a-`None`-override proof as
+    /// `copy_with_none_preserves_an_already_set_input_decoration_theme_slot`,
+    /// for the `list_tile_theme` slot.
+    #[test]
+    fn copy_with_none_preserves_an_already_set_list_tile_theme_slot() {
+        let list_tile_theme = ListTileThemeData {
+            min_leading_width: Some(30.0),
+            ..Default::default()
+        };
+        let base = ThemeData::light().copy_with(ThemeDataOverrides {
+            list_tile_theme: Some(list_tile_theme.clone()),
+            ..Default::default()
+        });
+
+        let patched = base.copy_with(ThemeDataOverrides::default());
+        assert_eq!(patched.list_tile_theme, Some(list_tile_theme));
+    }
+
+    /// Same shape as `copy_with_sets_input_decoration_theme_slot`, for the
+    /// `divider_theme` slot.
+    #[test]
+    fn copy_with_sets_divider_theme_slot() {
+        let base = ThemeData::light();
+        let divider_theme = DividerThemeData {
+            thickness: Some(3.0),
+            ..Default::default()
+        };
+
+        let patched = base.copy_with(ThemeDataOverrides {
+            divider_theme: Some(divider_theme.clone()),
+            ..Default::default()
+        });
+
+        assert_eq!(patched.divider_theme, Some(divider_theme));
+        // Untouched slots stay unset, mirroring the base theme.
+        assert!(patched.list_tile_theme.is_none());
+    }
+
+    /// Same already-set-slot-survives-a-`None`-override proof as
+    /// `copy_with_none_preserves_an_already_set_input_decoration_theme_slot`,
+    /// for the `divider_theme` slot.
+    #[test]
+    fn copy_with_none_preserves_an_already_set_divider_theme_slot() {
+        let divider_theme = DividerThemeData {
+            thickness: Some(3.0),
+            ..Default::default()
+        };
+        let base = ThemeData::light().copy_with(ThemeDataOverrides {
+            divider_theme: Some(divider_theme.clone()),
+            ..Default::default()
+        });
+
+        let patched = base.copy_with(ThemeDataOverrides::default());
+        assert_eq!(patched.divider_theme, Some(divider_theme));
     }
 }

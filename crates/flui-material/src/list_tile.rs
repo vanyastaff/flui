@@ -59,16 +59,29 @@
 //!   (`top`/`center`/`bottom`/`threeLine`/`titleHeight` each compute a
 //!   different y-offset — `list_tile.dart` `:130-165`). `ListTileTitleAlignment`
 //!   itself is not exposed; every tile lays out as the oracle's `threeLine`
-//!   variant (title above subtitle, both left-aligned).
+//!   variant's **`≤2`-line (centered) arm, always** — title above subtitle,
+//!   both left-aligned, `leading`/`trailing` vertically centered via
+//!   `Row`'s `CrossAxisAlignment::Center`. The oracle's `threeLine` variant
+//!   only centers `leading`/`trailing` when `isThreeLine` is `false`; when
+//!   `true`, it TOP-aligns them instead (`listTile.minVerticalPadding` from
+//!   the tile's top edge, `list_tile.dart` `:138-146`, `:161`) so a
+//!   three-line tile's icon sits flush with the title, not centered against
+//!   the full three-line block. This substrate always centers regardless of
+//!   `is_three_line` — a named divergence, not (as an earlier revision of
+//!   these docs claimed) a faithful port of the `threeLine` variant as a
+//!   whole.
 //! - **`trailing`**'s reserved-width floor (`max(trailingSize.width +
 //!   horizontalTitleGap, 32.0)`, `list_tile.dart` `:1611-1613`) is not
 //!   replicated — `Row`'s own intrinsic sizing handles it instead.
 //! - **`isThreeLine`** is ported as the SAME explicit `bool` flag the oracle
 //!   itself uses (`ListTile.isThreeLine`, never a subtitle-line-count
 //!   heuristic) — see [`ListTile::is_three_line`].
-//! - **`dense`** is ported as a plain `bool` switch between the two literal
-//!   height tables above; `VisualDensity`'s finer `baseSizeAdjustment`
-//!   nudge (`list_tile.dart` `:1548`) is a named deferral (no `VisualDensity`
+//! - **`dense`** switches between the two literal height tables above AND
+//!   clamps `title`'s resolved font size to `13.0`/subtitle's to `12.0`
+//!   (`titleStyle.copyWith(fontSize: _isDenseLayout ? 13.0 : null)` and the
+//!   subtitle equivalent, `list_tile.dart` `:923-926`/`:939-942`) — both
+//!   ported. `VisualDensity`'s finer `baseSizeAdjustment` nudge
+//!   (`list_tile.dart` `:1548`) is a named deferral (no `VisualDensity`
 //!   consumer wired to this substrate's `ListTile` yet).
 //! - **Baseline alignment** — every text run in this composition sits by
 //!   `Column`/`Row` box-model layout, not by shared text baseline. The
@@ -114,12 +127,17 @@
 //!   helper; a natural, additive follow-up once a caller list-builds
 //!   `ListTile`s (see [`crate::divider`]'s module docs).
 //! - **The oracle's `SafeArea`/`IconTheme.merge` wrapper layers ARE
-//!   ported** (`SafeArea::new().top(false).bottom(false).minimum(...)`,
-//!   `IconTheme::new(...)`) — only `IconButtonTheme` has no port: FLUI has no
-//!   `IconButtonTheme` ambient/`InheritedWidget` at all yet (`IconButton`
-//!   reads `ThemeData.icon_button_theme` directly — see `crate::icon_button`'s
-//!   module docs), so a nested `IconButton` in `leading`/`trailing` will not
-//!   automatically pick up this tile's resolved icon color the way the
+//!   ported**: `SafeArea::new().top(false).bottom(false).minimum(...)`, and
+//!   `IconTheme::new(IconThemeData { color: .., ..IconTheme::of(ctx) }, ..)`
+//!   — a genuine merge over the ambient `IconTheme::of(ctx)` snapshot (only
+//!   `color` is overridden; `size`/`opacity`/etc. pass through from whatever
+//!   `IconTheme` already wraps this tile), matching `IconTheme.merge`'s own
+//!   contract, not a blanket replacement. Only `IconButtonTheme` has no
+//!   port: FLUI has no `IconButtonTheme` ambient/`InheritedWidget` at all yet
+//!   (`IconButton` reads `ThemeData.icon_button_theme` directly — see
+//!   `crate::icon_button`'s module docs), so a nested `IconButton` in
+//!   `leading`/`trailing` will not automatically pick up this tile's
+//!   resolved icon color the way the
 //!   oracle's does.
 
 use std::rc::Rc;
@@ -198,7 +216,7 @@ pub struct ListTile {
     title: Option<BoxedView>,
     subtitle: Option<BoxedView>,
     trailing: Option<BoxedView>,
-    is_three_line: bool,
+    is_three_line: Option<bool>,
     dense: Option<bool>,
     shape: Option<MaterialShape>,
     selected_color: Option<Color>,
@@ -226,7 +244,7 @@ impl Default for ListTile {
             title: None,
             subtitle: None,
             trailing: None,
-            is_three_line: false,
+            is_three_line: None,
             dense: None,
             shape: None,
             selected_color: None,
@@ -303,9 +321,15 @@ impl ListTile {
     /// Marks this tile as displaying three lines of text. Flutter parity: an
     /// explicit flag, never a subtitle-line-count heuristic — see the module
     /// docs. Only meaningful with [`ListTile::subtitle`] set.
+    ///
+    /// Stored as `Option<bool>` internally (this setter still takes a plain
+    /// `bool`) so an explicit `false` here can still be overridden by a
+    /// theme-level `Some(true)` — mirroring [`ListTile::dense`]'s identical
+    /// widget → theme → default cascade rather than special-casing this one
+    /// field to always win.
     #[must_use]
     pub fn is_three_line(mut self, is_three_line: bool) -> Self {
-        self.is_three_line = is_three_line;
+        self.is_three_line = Some(is_three_line);
         self
     }
 
@@ -556,6 +580,16 @@ fn resolve_style(theme: &ThemeData, view: &ListTile) -> ResolvedListTileStyle {
         Some(color) => title_style.with_color(color),
         None => title_style,
     };
+    // Flutter parity: `titleStyle.copyWith(fontSize: _isDenseLayout ? 13.0 :
+    // null)` (`list_tile.dart` `:923-926`, oracle tag `3.44.0`) — Dart's
+    // `copyWith(fontSize: null)` means "leave the current value alone", not
+    // "clear it", so the non-dense branch intentionally does nothing here
+    // rather than resetting `font_size` to `None`.
+    let title_style = if is_dense {
+        title_style.with_font_size(13.0)
+    } else {
+        title_style
+    };
 
     let subtitle_style = view
         .subtitle_text_style
@@ -572,6 +606,15 @@ fn resolve_style(theme: &ThemeData, view: &ListTile) -> ResolvedListTileStyle {
     let subtitle_style = match text_color {
         Some(color) => subtitle_style.with_color(color),
         None => subtitle_style,
+    };
+    // Flutter parity: `subtitleStyle.copyWith(fontSize: _isDenseLayout ?
+    // 12.0 : null)` (`list_tile.dart` `:939-942`, oracle tag `3.44.0`) — see
+    // `title_style`'s identical clamp above for the `copyWith(fontSize:
+    // null)` = "leave alone" semantics.
+    let subtitle_style = if is_dense {
+        subtitle_style.with_font_size(12.0)
+    } else {
+        subtitle_style
     };
 
     let leading_and_trailing_style = view
@@ -639,16 +682,16 @@ fn resolve_style(theme: &ThemeData, view: &ListTile) -> ResolvedListTileStyle {
         .or_else(|| tile_theme.and_then(|t| t.min_leading_width))
         .unwrap_or(MIN_LEADING_WIDTH);
 
-    // `view.is_three_line` is a plain `bool` (not `Option<bool>` like the
-    // oracle's own `ListTile.isThreeLine`), so unlike the oracle's `??`
-    // cascade, an explicit widget-level `false` cannot override a
-    // theme-level `true` — a named V1 simplification. `debug_assert!` in
-    // `build` already enforces the oracle's `isThreeLine != true ||
-    // subtitle != null` contract against the raw widget flag, matching the
-    // oracle's own assert scope (the constructor parameter, not this
-    // theme-resolved value).
-    let is_three_line =
-        view.is_three_line || tile_theme.and_then(|t| t.is_three_line).unwrap_or(false);
+    // Flutter parity: `isThreeLine ?? tileTheme.isThreeLine ?? false`
+    // (`list_tile.dart` `:1019-1023`, oracle tag `3.44.0`) — the same
+    // widget → theme → default cascade `dense` uses just above, now that
+    // `ListTile::is_three_line` is `Option<bool>` too: an explicit
+    // widget-level `false` short-circuits the cascade and wins over a
+    // theme-level `true`, exactly like the oracle's `??` chain.
+    let is_three_line = view
+        .is_three_line
+        .or_else(|| tile_theme.and_then(|t| t.is_three_line))
+        .unwrap_or(false);
     let tile_height = view
         .min_tile_height
         .or_else(|| tile_theme.and_then(|t| t.min_tile_height))
@@ -734,7 +777,7 @@ fn build_content_row(view: &ListTile, resolved: &ResolvedListTileStyle) -> Row<V
 impl StatelessView for ListTile {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
         debug_assert!(
-            !self.is_three_line || self.subtitle.is_some(),
+            self.is_three_line != Some(true) || self.subtitle.is_some(),
             "ListTile::is_three_line(true) requires ListTile::subtitle to be set — \
              Flutter parity: `assert(isThreeLine != true || subtitle != null)` \
              (list_tile.dart, oracle tag 3.44.0)"
@@ -743,6 +786,15 @@ impl StatelessView for ListTile {
         let theme = Theme::of(ctx);
         let resolved = resolve_style(&theme, self);
 
+        // Flutter parity: `IconTheme.merge(data: iconThemeData, child: ...)`
+        // (`list_tile.dart` `:1008-1009`) — a MERGE over the ambient theme,
+        // not a replacement: only `color` is overridden, every other field
+        // (`size`, `opacity`, …) passes the enclosing `IconTheme::of`
+        // through unchanged. `IconThemeData { color: ..,
+        // ..IconThemeData::default() }` would instead blank every other
+        // field back to `None`, discarding an ambient `size` override an
+        // app-level `IconTheme` set above this tile.
+        let ambient_icon_theme = IconTheme::of(ctx);
         let content = SafeArea::new()
             .top(false)
             .bottom(false)
@@ -750,7 +802,7 @@ impl StatelessView for ListTile {
             .child(IconTheme::new(
                 IconThemeData {
                     color: Some(resolved.icon_color),
-                    ..IconThemeData::default()
+                    ..ambient_icon_theme
                 },
                 build_content_row(self, &resolved),
             ));
@@ -797,7 +849,7 @@ mod tests {
         assert!(tile.title.is_none());
         assert!(tile.subtitle.is_none());
         assert!(tile.trailing.is_none());
-        assert!(!tile.is_three_line);
+        assert!(tile.is_three_line.is_none());
         assert!(tile.dense.is_none());
         assert!(tile.enabled);
         assert!(!tile.selected);
@@ -889,6 +941,50 @@ mod tests {
         assert_eq!(resolved.tile_height, 88.0);
     }
 
+    /// A theme-level `is_three_line: Some(true)` reaches the resolved tile
+    /// height when the widget itself leaves `is_three_line` unset — Flutter
+    /// parity: `isThreeLine ?? tileTheme.isThreeLine ?? false`
+    /// (`list_tile.dart` `:1019-1023`, oracle tag `3.44.0`). This is the
+    /// cascade tier that a plain `bool` field (rather than `Option<bool>`)
+    /// could never reach at all.
+    #[test]
+    fn resolve_style_theme_level_is_three_line_reaches_the_tile_height_when_widget_leaves_it_unset()
+    {
+        let mut theme = ThemeData::light();
+        theme.list_tile_theme = Some(ListTileThemeData {
+            is_three_line: Some(true),
+            ..Default::default()
+        });
+        let tile = ListTile::new().subtitle(flui_widgets::SizedBox::shrink());
+
+        let resolved = resolve_style(&theme, &tile);
+        assert_eq!(resolved.tile_height, 88.0);
+    }
+
+    /// Mutation-honest combined-tier pin: an explicit widget-level
+    /// `is_three_line(false)` must WIN over a theme-level `Some(true)` —
+    /// the exact case a plain `bool` widget field couldn't represent (no way
+    /// to distinguish "unset" from "explicitly false"), and the reason this
+    /// field is `Option<bool>` like `dense`, not `bool`.
+    #[test]
+    fn resolve_style_widget_level_is_three_line_false_overrides_a_theme_level_true() {
+        let mut theme = ThemeData::light();
+        theme.list_tile_theme = Some(ListTileThemeData {
+            is_three_line: Some(true),
+            ..Default::default()
+        });
+        let tile = ListTile::new()
+            .subtitle(flui_widgets::SizedBox::shrink())
+            .is_three_line(false);
+
+        let resolved = resolve_style(&theme, &tile);
+        assert_eq!(
+            resolved.tile_height, 72.0,
+            "an explicit widget-level is_three_line(false) must override the theme's \
+             is_three_line: Some(true), matching the oracle's `??` short-circuit"
+        );
+    }
+
     #[test]
     fn resolve_style_dense_two_line_tile_uses_the_dense_height() {
         let theme = ThemeData::light();
@@ -897,6 +993,36 @@ mod tests {
             .dense(true);
         let resolved = resolve_style(&theme, &tile);
         assert_eq!(resolved.tile_height, 64.0);
+    }
+
+    /// `dense` clamps title to `13.0` and subtitle to `12.0` — Flutter
+    /// parity: `titleStyle.copyWith(fontSize: _isDenseLayout ? 13.0 : null)`
+    /// and the subtitle equivalent (`list_tile.dart` `:923-926`/`:939-942`,
+    /// oracle tag `3.44.0`). Mutation-honest: `13.0`/`12.0` are distinct
+    /// literals, so a resolver that swapped them or clamped only one slot
+    /// would fail this.
+    #[test]
+    fn resolve_style_dense_clamps_title_and_subtitle_font_size() {
+        let theme = ThemeData::light();
+        let tile = ListTile::new()
+            .subtitle(flui_widgets::SizedBox::shrink())
+            .dense(true);
+        let resolved = resolve_style(&theme, &tile);
+        assert_eq!(resolved.title_style.font_size, Some(13.0));
+        assert_eq!(resolved.subtitle_style.font_size, Some(12.0));
+    }
+
+    /// Non-dense leaves each style's own baked-in M3 type-scale size alone
+    /// (`bodyLarge`: `16.0`, `bodyMedium`: `14.0`) — Dart's
+    /// `copyWith(fontSize: null)` means "unchanged", not "clear to null", so
+    /// the non-dense branch must NOT reset `font_size` to `None`.
+    #[test]
+    fn resolve_style_non_dense_leaves_the_type_scale_font_size_untouched() {
+        let theme = ThemeData::light();
+        let tile = ListTile::new().subtitle(flui_widgets::SizedBox::shrink());
+        let resolved = resolve_style(&theme, &tile);
+        assert_eq!(resolved.title_style.font_size, Some(16.0));
+        assert_eq!(resolved.subtitle_style.font_size, Some(14.0));
     }
 
     /// Selected recolors both icon and title text to `ColorScheme.primary` —

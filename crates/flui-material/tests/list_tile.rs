@@ -13,7 +13,7 @@ use common::{lay_out, loose, tight};
 use flui_material::{ListTile, ListTileThemeData, Theme, ThemeData, ThemeDataOverrides};
 use flui_types::Color;
 use flui_view::IntoView;
-use flui_widgets::{MediaQuery, MediaQueryData, Text};
+use flui_widgets::{Icon, IconData, IconTheme, IconThemeData, MediaQuery, MediaQueryData, Text};
 
 /// `ListTile::build` reads `SafeArea`, which panics without an ambient
 /// `MediaQuery` (`tests/app_bar.rs`'s own tests wrap the same way) — every
@@ -156,6 +156,50 @@ fn every_slot_present_mounts_a_two_line_tile() {
         text_runs.len(),
         4,
         "all four slots (leading, title, subtitle, trailing) must mount their own text run"
+    );
+}
+
+/// `ListTile` MERGES its resolved icon color into the ambient `IconTheme`
+/// rather than replacing it — an app-level `IconTheme(size: ..)` above the
+/// tile must still reach a bare `Icon` in `leading`, matching Flutter's
+/// `IconTheme.merge` (`list_tile.dart` `:1008-1009`, oracle tag `3.44.0`).
+/// Probed by comparing the mounted glyph's `RenderParagraph` height across
+/// two distinct ambient sizes (far from `IconThemeData::fallback`'s
+/// `24.0`): if `ListTile` replaced the ambient theme instead of merging
+/// into it, both mounts would collapse to the SAME `24.0` fallback and this
+/// height comparison would fail to distinguish them.
+#[test]
+fn ambient_icon_theme_size_reaches_a_bare_leading_icon_through_the_tile() {
+    fn mounted_glyph_height(ambient_size: f32) -> f32 {
+        let laid = lay_out(
+            themed(
+                ThemeData::light(),
+                IconTheme::new(
+                    IconThemeData {
+                        size: Some(ambient_size),
+                        ..IconThemeData::default()
+                    },
+                    ListTile::new().leading(Icon::new(IconData::new(0xE87D))),
+                ),
+            ),
+            loose(400.0),
+        );
+
+        let glyph = laid
+            .find_by_render_type("RenderParagraph")
+            .expect("the leading Icon must mount its glyph as a RenderParagraph");
+        laid.size(glyph).height.get()
+    }
+
+    let small = mounted_glyph_height(10.0);
+    let large = mounted_glyph_height(80.0);
+
+    assert!(
+        large > small,
+        "a larger ambient IconTheme size (80.0) must mount a taller glyph box than a smaller \
+         one (10.0) — got small={small}, large={large}. Equal heights mean the ambient size \
+         never reached the icon (ListTile replaced the ambient IconTheme instead of merging \
+         into it)."
     );
 }
 
