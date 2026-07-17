@@ -341,6 +341,28 @@ fn convert_location(key: winit::keyboard::PhysicalKey) -> Location {
     }
 }
 
+/// Convert winit's `Ime` event to [`flui_types::ImeEvent`].
+///
+/// A pure, unit-tested mapping: winit's `Ime` enum is already
+/// [`flui_types::ImeEvent`]'s reference shape (see that type's module doc),
+/// so this is a direct variant-for-variant translation with no coordinate
+/// or encoding conversion.
+pub fn ime_event(event: &winit::event::Ime) -> PlatformInput {
+    use winit::event::Ime;
+
+    let ime_event = match event {
+        Ime::Enabled => flui_types::ImeEvent::Enabled,
+        Ime::Preedit(text, cursor) => flui_types::ImeEvent::Preedit {
+            text: text.clone(),
+            cursor: *cursor,
+        },
+        Ime::Commit(text) => flui_types::ImeEvent::Commit(text.clone()),
+        Ime::Disabled => flui_types::ImeEvent::Disabled,
+    };
+
+    PlatformInput::Ime(ime_event)
+}
+
 /// Convert winit KeyboardInput to W3C KeyboardEvent
 pub fn keyboard_event(
     event: &winit::event::KeyEvent,
@@ -365,4 +387,64 @@ pub fn keyboard_event(
     };
 
     PlatformInput::Keyboard(keyboard_event)
+}
+
+#[cfg(test)]
+mod ime_tests {
+    use flui_types::ImeEvent;
+    use winit::event::Ime;
+
+    use super::ime_event;
+    use crate::traits::PlatformInput;
+
+    /// Unwraps the `PlatformInput::Ime` arm `ime_event` always produces,
+    /// asserting the wrapping variant at the same time so a future change
+    /// that wraps IME events in a different `PlatformInput` variant fails
+    /// loudly here instead of silently changing what these tests check.
+    fn convert(event: &Ime) -> ImeEvent {
+        match ime_event(event) {
+            PlatformInput::Ime(inner) => inner,
+            other => panic!("ime_event must return PlatformInput::Ime, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn enabled_maps_to_enabled() {
+        assert_eq!(convert(&Ime::Enabled), ImeEvent::Enabled);
+    }
+
+    #[test]
+    fn disabled_maps_to_disabled() {
+        assert_eq!(convert(&Ime::Disabled), ImeEvent::Disabled);
+    }
+
+    #[test]
+    fn commit_carries_the_delivered_text() {
+        assert_eq!(
+            convert(&Ime::Commit("hello".to_string())),
+            ImeEvent::Commit("hello".to_string())
+        );
+    }
+
+    #[test]
+    fn preedit_with_a_cursor_position_is_preserved() {
+        assert_eq!(
+            convert(&Ime::Preedit("ni".to_string(), Some((1, 2)))),
+            ImeEvent::Preedit {
+                text: "ni".to_string(),
+                cursor: Some((1, 2)),
+            }
+        );
+    }
+
+    #[test]
+    fn preedit_with_no_cursor_hides_the_caret() {
+        assert_eq!(
+            convert(&Ime::Preedit("ni".to_string(), None)),
+            ImeEvent::Preedit {
+                text: "ni".to_string(),
+                cursor: None,
+            }
+        );
+    }
 }

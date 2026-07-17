@@ -123,6 +123,11 @@ pub enum PlatformInput {
 
     /// Keyboard event
     Keyboard(KeyboardEvent),
+
+    /// IME composition/commit event. See [`flui_types::ImeEvent`] for the
+    /// vocabulary and [`crate::traits::PlatformTextInput`] for the
+    /// window-side capability this pairs with.
+    Ime(flui_types::ImeEvent),
 }
 
 impl PlatformInput {
@@ -131,7 +136,7 @@ impl PlatformInput {
     pub fn as_pointer(&self) -> Option<&PointerEvent> {
         match self {
             PlatformInput::Pointer(event) => Some(event),
-            PlatformInput::Keyboard(_) => None,
+            PlatformInput::Keyboard(_) | PlatformInput::Ime(_) => None,
         }
     }
 
@@ -140,7 +145,16 @@ impl PlatformInput {
     pub fn as_keyboard(&self) -> Option<&KeyboardEvent> {
         match self {
             PlatformInput::Keyboard(event) => Some(event),
-            PlatformInput::Pointer(_) => None,
+            PlatformInput::Pointer(_) | PlatformInput::Ime(_) => None,
+        }
+    }
+
+    /// Extract the IME event if this is an IME composition/commit input.
+    #[inline]
+    pub fn as_ime(&self) -> Option<&flui_types::ImeEvent> {
+        match self {
+            PlatformInput::Ime(event) => Some(event),
+            PlatformInput::Pointer(_) | PlatformInput::Keyboard(_) => None,
         }
     }
 }

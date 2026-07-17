@@ -15,8 +15,8 @@ use crate::{
     traits::{
         Clipboard, ClipboardItem, DesktopCapabilities, DispatchEventResult, Platform,
         PlatformCapabilities, PlatformDisplay, PlatformExecutor, PlatformInput,
-        PlatformReadyCallback, PlatformWindow, WindowAppearance, WindowBackgroundAppearance,
-        WindowBounds, WindowEvent, WindowId, WindowOptions,
+        PlatformReadyCallback, PlatformTextInput, PlatformWindow, WindowAppearance,
+        WindowBackgroundAppearance, WindowBounds, WindowEvent, WindowId, WindowOptions,
     },
 };
 
@@ -242,6 +242,7 @@ struct MockWindow {
     id: WindowId,
     state: Arc<Mutex<MockWindowState>>,
     callbacks: Arc<WindowCallbacks>,
+    text_input: Arc<FakeTextInput>,
 }
 
 /// Mutable state for headless MockWindow
@@ -295,6 +296,7 @@ impl MockWindow {
                 appearance: WindowAppearance::default(),
             })),
             callbacks: Arc::new(WindowCallbacks::new()),
+            text_input: Arc::new(FakeTextInput::new()),
         }
     }
 
@@ -420,6 +422,10 @@ impl crate::traits::PlatformWindow for MockWindow {
         Some(Arc::new(MockDisplay::primary()))
     }
 
+    fn text_input(&self) -> Option<Arc<dyn PlatformTextInput>> {
+        Some(Arc::clone(&self.text_input) as Arc<dyn PlatformTextInput>)
+    }
+
     fn get_title(&self) -> String {
         self.state.lock().title.clone()
     }
@@ -508,6 +514,74 @@ impl crate::traits::PlatformWindow for MockWindow {
 
     fn on_appearance_changed(&self, callback: Box<dyn FnMut() + Send>) {
         *self.callbacks.on_appearance_changed.lock() = Some(callback);
+    }
+}
+
+/// Recording fake for [`PlatformTextInput`], backing the headless backend's
+/// [`PlatformWindow::text_input`].
+///
+/// Every `set_ime_allowed`/`set_ime_cursor_area` call is appended to an
+/// in-memory history so a test can assert exactly what the IME bridge
+/// (`flui-app`'s `AppBinding::attach_text_input`/`detach_text_input`) told
+/// the platform to do, rather than only that the call didn't panic.
+#[derive(Default)]
+pub struct FakeTextInput {
+    state: Mutex<FakeTextInputState>,
+}
+
+#[derive(Default, Clone)]
+struct FakeTextInputState {
+    ime_allowed_calls: Vec<bool>,
+    cursor_area_calls: Vec<Bounds<Pixels>>,
+}
+
+impl FakeTextInput {
+    /// Create a fresh recorder with no recorded calls.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Every `set_ime_allowed` call, in delivery order.
+    #[must_use]
+    pub fn ime_allowed_calls(&self) -> Vec<bool> {
+        self.state.lock().ime_allowed_calls.clone()
+    }
+
+    /// The most recent `set_ime_allowed` call, if any.
+    #[must_use]
+    pub fn last_ime_allowed(&self) -> Option<bool> {
+        self.state.lock().ime_allowed_calls.last().copied()
+    }
+
+    /// Every `set_ime_cursor_area` call, in delivery order.
+    #[must_use]
+    pub fn cursor_area_calls(&self) -> Vec<Bounds<Pixels>> {
+        self.state.lock().cursor_area_calls.clone()
+    }
+}
+
+impl std::fmt::Debug for FakeTextInput {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let state = self.state.lock();
+        f.debug_struct("FakeTextInput")
+            .field("ime_allowed_calls", &state.ime_allowed_calls)
+            .field("cursor_area_calls", &state.cursor_area_calls)
+            .finish()
+    }
+}
+
+impl PlatformTextInput for FakeTextInput {
+    fn set_ime_allowed(&self, allowed: bool) {
+        self.state.lock().ime_allowed_calls.push(allowed);
+    }
+
+    fn set_ime_cursor_area(&self, area: Bounds<Pixels>) {
+        self.state.lock().cursor_area_calls.push(area);
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
     }
 }
 
@@ -825,6 +899,32 @@ mod tests {
         let display = window.display();
         assert!(display.is_some());
         assert!(display.unwrap().is_primary());
+    }
+
+    #[test]
+    fn text_input_reaches_the_same_fake_across_calls_and_records_delivered_values() {
+        use flui_types::geometry::{Bounds, Point, Size, px};
+
+        let window = MockWindow::new(WindowId(0), WindowOptions::default());
+        let text_input = window.text_input().expect("headless backend supports IME");
+
+        text_input.set_ime_allowed(true);
+        text_input.set_ime_cursor_area(Bounds::new(
+            Point::new(px(10.0), px(20.0)),
+            Size::new(px(30.0), px(40.0)),
+        ));
+        text_input.set_ime_allowed(false);
+
+        // A second accessor call must reach the SAME fake, not a fresh one —
+        // otherwise every caller would see its own writes disappear.
+        let fake = window
+            .text_input()
+            .expect("headless backend supports IME")
+            .as_any()
+            .downcast_ref::<FakeTextInput>()
+            .expect("headless PlatformTextInput is a FakeTextInput")
+            .ime_allowed_calls();
+        assert_eq!(fake, vec![true, false]);
     }
 
     // ==================== US3 Tests ====================

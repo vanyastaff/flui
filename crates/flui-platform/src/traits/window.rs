@@ -11,6 +11,7 @@ use flui_types::geometry::{Bounds, DevicePixels, Pixels, Point, Size};
 use super::{
     display::PlatformDisplay,
     input::{DispatchEventResult, Modifiers, PlatformInput},
+    text_input::PlatformTextInput,
 };
 
 // ==================== Value Types ====================
@@ -149,6 +150,15 @@ pub trait PlatformWindow: Send + Sync {
 
     /// Get the display this window is currently on
     fn display(&self) -> Option<Arc<dyn PlatformDisplay>> {
+        None
+    }
+
+    /// Get this window's IME text-input capability, if the backend supports
+    /// it. `None` for backends that cannot honor IME composition (returned
+    /// by this trait's default so every non-desktop/no-IME backend does not
+    /// have to inherit unusable `set_ime_allowed`/`set_ime_cursor_area`
+    /// methods directly on `PlatformWindow`).
+    fn text_input(&self) -> Option<Arc<dyn PlatformTextInput>> {
         None
     }
 
@@ -317,6 +327,40 @@ pub struct WinitWindow {
     is_focused: parking_lot::Mutex<bool>,
     is_visible: parking_lot::Mutex<bool>,
     callbacks: crate::shared::WindowCallbacks,
+}
+
+/// [`PlatformTextInput`] for a winit window.
+///
+/// A thin wrapper around `Arc<winit::window::Window>` rather than an impl
+/// directly on `WinitWindow`: `PlatformWindow::text_input` hands back an
+/// `Arc<dyn PlatformTextInput>` from `&self`, and `WinitWindow` itself is
+/// typically boxed (`Platform::open_window` returns `Box<dyn
+/// PlatformWindow>`), not arced — so there is no `Arc<Self>` to clone.
+/// Cloning the inner `Arc<Window>` winit already holds is cheap and gives
+/// each call an independently owned capability handle.
+#[cfg(feature = "winit-backend")]
+pub struct WinitTextInput {
+    window: Arc<Window>,
+}
+
+#[cfg(feature = "winit-backend")]
+impl super::text_input::PlatformTextInput for WinitTextInput {
+    fn set_ime_allowed(&self, allowed: bool) {
+        self.window.set_ime_allowed(allowed);
+    }
+
+    fn set_ime_cursor_area(&self, area: Bounds<Pixels>) {
+        use winit::dpi::{LogicalPosition, LogicalSize};
+
+        self.window.set_ime_cursor_area(
+            LogicalPosition::new(f64::from(area.origin.x.0), f64::from(area.origin.y.0)),
+            LogicalSize::new(f64::from(area.size.width.0), f64::from(area.size.height.0)),
+        );
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 }
 
 #[cfg(feature = "winit-backend")]
@@ -488,6 +532,12 @@ impl PlatformWindow for WinitWindow {
 
     fn as_winit(&self) -> Option<&Arc<Window>> {
         Some(&self.window)
+    }
+
+    fn text_input(&self) -> Option<Arc<dyn PlatformTextInput>> {
+        Some(Arc::new(WinitTextInput {
+            window: Arc::clone(&self.window),
+        }))
     }
 }
 
