@@ -570,7 +570,7 @@ impl ScaffoldState {
         let rebuild = self
             .rebuild
             .clone()
-            .expect("init_state runs before the first build");
+            .expect("BUG: init_state runs before the first build");
         let set_opened: fn(&DrawerHandle, bool) = match alignment {
             DrawerAlignment::Start => DrawerHandle::set_drawer_opened,
             DrawerAlignment::End => DrawerHandle::set_end_drawer_opened,
