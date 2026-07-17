@@ -9,8 +9,9 @@
 //! [`Scaffold`]/[`AppBar`], [`Card`], [`Dialog`]/[`AlertDialog`]/
 //! [`show_dialog`], the input decoration substrate ([`InputDecoration`],
 //! [`InputDecorator`], [`TextField`]), the data-display family
-//! ([`ListTile`], [`Divider`]/[`VerticalDivider`]), and bottom navigation
-//! ([`NavigationBar`]/[`NavigationDestination`]).
+//! ([`ListTile`], [`Divider`]/[`VerticalDivider`]), bottom navigation
+//! ([`NavigationBar`]/[`NavigationDestination`]), and the chip family
+//! ([`Chip`], [`FilterChip`]).
 //!
 //! ## Flutter parity
 //!
@@ -70,6 +71,7 @@ pub mod button_style;
 mod button_style_button;
 pub mod card;
 pub mod checkbox;
+pub mod chip;
 pub mod color_scheme;
 pub mod dialog;
 pub mod divider;
@@ -103,6 +105,7 @@ pub use back_button::BackButton;
 pub use button_style::ButtonStyle;
 pub use card::Card;
 pub use checkbox::{Checkbox, CheckboxState};
+pub use chip::{Chip, FilterChip};
 pub use color_scheme::{ColorScheme, ColorSchemeOverrides};
 pub use dialog::{AlertDialog, Dialog, show_dialog};
 pub use divider::{Divider, VerticalDivider};
@@ -131,9 +134,10 @@ pub use text_field::{TextField, TextFieldState};
 pub use text_theme::TextTheme;
 pub use theme::Theme;
 pub use theme_data::{
-    AppBarThemeData, CardThemeData, CheckboxThemeData, DialogThemeData, DividerThemeData,
-    ElevatedButtonThemeData, FabThemeData, FilledButtonThemeData, IconButtonThemeData,
-    InputDecorationThemeData, ListTileThemeData, NavigationBarThemeData, OutlinedButtonThemeData,
-    RadioThemeData, SwitchThemeData, TextButtonThemeData, ThemeData, ThemeDataOverrides,
+    AppBarThemeData, CardThemeData, CheckboxThemeData, ChipThemeData, DialogThemeData,
+    DividerThemeData, ElevatedButtonThemeData, FabThemeData, FilledButtonThemeData,
+    IconButtonThemeData, InputDecorationThemeData, ListTileThemeData, NavigationBarThemeData,
+    OutlinedButtonThemeData, RadioThemeData, SwitchThemeData, TextButtonThemeData, ThemeData,
+    ThemeDataOverrides,
 };
 pub use typography::english_like_2021;

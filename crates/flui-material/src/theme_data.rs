@@ -430,6 +430,68 @@ pub struct CheckboxThemeData {
     pub side: Option<WidgetStateProperty<Option<BorderSide<Pixels>>>>,
 }
 
+/// Overrides [`Chip`](crate::Chip)/[`FilterChip`](crate::FilterChip)'s
+/// `_ChipDefaultsM3`/`_FilterChipDefaultsM3` token defaults, one field at a
+/// time — an unset field here still falls through to the owning widget's own
+/// M3 default table (see `chip.rs`'s `chip_default_*`/`chip_*_color_default`
+/// functions), it does not blank the whole slot.
+///
+/// Flutter parity: `ChipThemeData` (`material/chip_theme.dart`, oracle tag
+/// `3.44.0`), narrowed to the fields FLUI's [`Chip`](crate::Chip)/
+/// [`FilterChip`](crate::FilterChip) actually consume:
+/// [`label_color`](Self::label_color), [`icon_color`](Self::icon_color),
+/// [`delete_icon_color`](Self::delete_icon_color),
+/// [`checkmark_color`](Self::checkmark_color), [`side`](Self::side),
+/// [`shape`](Self::shape), [`padding`](Self::padding),
+/// [`label_padding`](Self::label_padding). Every field is a **plain**
+/// override rather than a `StateColor`/`WidgetStateProperty` — see
+/// `chip.rs`'s module docs ("`ChipThemeData`: plain overrides") for why this
+/// diverges from [`CheckboxThemeData`]/[`SwitchThemeData`]/
+/// [`RadioThemeData`]/[`NavigationBarThemeData`]'s per-state color slots:
+/// `chip_theme.dart` genuinely types these fields as plain values too (only
+/// `color`, the container fill, is a `WidgetStateProperty` in the oracle,
+/// and that field is a named V1 deferral here — see the same module docs).
+/// Named deferrals (no consumer in FLUI's `Chip`/`FilterChip` yet): `color`/
+/// `background_color`/`disabled_color`/`selected_color`/
+/// `secondary_selected_color` (the container fill — see `chip.rs`'s module
+/// docs), `shadow_color`/`surface_tint_color`/`selected_shadow_color`
+/// (`Material` has no such parameters yet, the same gap every other
+/// `Material`-backed M3 component in this crate already has),
+/// `show_checkmark` (V1 always shows one when selected), `brightness`,
+/// `elevation`/`press_elevation` (V1 is flat-only, elevation fixed `0.0`),
+/// `avatar_box_constraints`/`delete_icon_box_constraints`.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ChipThemeData {
+    /// Overrides the label's resolved text color, per the widget's own
+    /// current state. `None` falls through to the M3 default table (see
+    /// `chip.rs`'s `chip_content_color_default`).
+    pub label_color: Option<Color>,
+    /// Overrides the leading avatar/checkmark icon's color. `None` falls
+    /// through to the M3 default table (see `chip.rs`'s
+    /// `chip_icon_color_default`).
+    pub icon_color: Option<Color>,
+    /// Overrides the trailing delete icon's color. `None` falls through to
+    /// the M3 default table (see `chip.rs`'s `chip_content_color_default`).
+    pub delete_icon_color: Option<Color>,
+    /// Overrides [`FilterChip`](crate::FilterChip)'s selected checkmark
+    /// color. `None` falls through to the M3 default table (see `chip.rs`'s
+    /// `chip_icon_color_default`). No effect on [`Chip`](crate::Chip),
+    /// which never shows a checkmark.
+    pub checkmark_color: Option<Color>,
+    /// Overrides the container's border side. `None` falls through to the
+    /// M3 default (see `chip.rs`'s `chip_default_side`).
+    pub side: Option<BorderSide<Pixels>>,
+    /// Overrides the container's shape. `None` falls through to the M3
+    /// default (an 8dp rounded rectangle).
+    pub shape: Option<MaterialShape>,
+    /// Overrides the container's outer padding. `None` falls through to the
+    /// M3 default (`EdgeInsets.all(8.0)`).
+    pub padding: Option<EdgeInsets>,
+    /// Overrides the label's inner padding. `None` falls through to the M3
+    /// default (`EdgeInsets.symmetric(horizontal: 8.0)`).
+    pub label_padding: Option<EdgeInsets>,
+}
+
 /// Overrides [`Switch`](crate::Switch)'s `_SwitchDefaultsM3` token defaults,
 /// one field at a time — an unset field here still falls through to
 /// `Switch`'s own M3 default table (see `switch.rs`'s `switch_default_*`
@@ -636,6 +698,10 @@ pub struct ThemeData {
     /// field. Flutter parity: `ThemeData.checkboxTheme`.
     pub checkbox_theme: Option<CheckboxThemeData>,
 
+    /// Overrides [`Chip`](crate::Chip)/[`FilterChip`](crate::FilterChip)'s
+    /// M3 token defaults, per field. Flutter parity: `ThemeData.chipTheme`.
+    pub chip_theme: Option<ChipThemeData>,
+
     /// Overrides [`Switch`](crate::Switch)'s M3 token defaults, per field.
     /// Flutter parity: `ThemeData.switchTheme`.
     pub switch_theme: Option<SwitchThemeData>,
@@ -672,6 +738,7 @@ impl ThemeData {
             list_tile_theme: None,
             divider_theme: None,
             checkbox_theme: None,
+            chip_theme: None,
             switch_theme: None,
             radio_theme: None,
             navigation_bar_theme: None,
@@ -700,6 +767,7 @@ impl ThemeData {
             list_tile_theme: None,
             divider_theme: None,
             checkbox_theme: None,
+            chip_theme: None,
             switch_theme: None,
             radio_theme: None,
             navigation_bar_theme: None,
@@ -791,6 +859,7 @@ impl ThemeData {
             checkbox_theme: overrides
                 .checkbox_theme
                 .or_else(|| self.checkbox_theme.clone()),
+            chip_theme: overrides.chip_theme.or_else(|| self.chip_theme.clone()),
             switch_theme: overrides.switch_theme.or_else(|| self.switch_theme.clone()),
             radio_theme: overrides.radio_theme.or_else(|| self.radio_theme.clone()),
             navigation_bar_theme: overrides
@@ -850,6 +919,8 @@ pub struct ThemeDataOverrides {
     pub divider_theme: Option<DividerThemeData>,
     /// Replaces [`ThemeData::checkbox_theme`] wholesale when `Some`.
     pub checkbox_theme: Option<CheckboxThemeData>,
+    /// Replaces [`ThemeData::chip_theme`] wholesale when `Some`.
+    pub chip_theme: Option<ChipThemeData>,
     /// Replaces [`ThemeData::switch_theme`] wholesale when `Some`.
     pub switch_theme: Option<SwitchThemeData>,
     /// Replaces [`ThemeData::radio_theme`] wholesale when `Some`.
@@ -966,6 +1037,7 @@ mod tests {
             assert!(theme.list_tile_theme.is_none());
             assert!(theme.divider_theme.is_none());
             assert!(theme.checkbox_theme.is_none());
+            assert!(theme.chip_theme.is_none());
             assert!(theme.switch_theme.is_none());
             assert!(theme.radio_theme.is_none());
             assert!(theme.navigation_bar_theme.is_none());
@@ -1179,6 +1251,44 @@ mod tests {
 
         let patched = base.copy_with(ThemeDataOverrides::default());
         assert_eq!(patched.checkbox_theme, Some(checkbox_theme));
+    }
+
+    /// Same shape as `copy_with_sets_input_decoration_theme_slot`, for the
+    /// `chip_theme` slot.
+    #[test]
+    fn copy_with_sets_chip_theme_slot() {
+        let base = ThemeData::light();
+        let chip_theme = ChipThemeData {
+            label_color: Some(Color::rgb(1, 2, 3)),
+            ..Default::default()
+        };
+
+        let patched = base.copy_with(ThemeDataOverrides {
+            chip_theme: Some(chip_theme.clone()),
+            ..Default::default()
+        });
+
+        assert_eq!(patched.chip_theme, Some(chip_theme));
+        // Untouched slots stay unset, mirroring the base theme.
+        assert!(patched.switch_theme.is_none());
+    }
+
+    /// Same already-set-slot-survives-a-`None`-override proof as
+    /// `copy_with_none_preserves_an_already_set_input_decoration_theme_slot`,
+    /// for the `chip_theme` slot.
+    #[test]
+    fn copy_with_none_preserves_an_already_set_chip_theme_slot() {
+        let chip_theme = ChipThemeData {
+            label_color: Some(Color::rgb(1, 2, 3)),
+            ..Default::default()
+        };
+        let base = ThemeData::light().copy_with(ThemeDataOverrides {
+            chip_theme: Some(chip_theme.clone()),
+            ..Default::default()
+        });
+
+        let patched = base.copy_with(ThemeDataOverrides::default());
+        assert_eq!(patched.chip_theme, Some(chip_theme));
     }
 
     /// Same shape as `copy_with_sets_input_decoration_theme_slot`, for the
