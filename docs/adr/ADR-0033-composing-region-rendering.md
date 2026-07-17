@@ -84,7 +84,7 @@ This is Flutter's own `_updateComposingRectIfNeeded` order: prefer the composing
 
 ## Evidence
 
-- `cargo nextest run --workspace --exclude flui-platform`, `cargo test -p flui-platform --lib`: all passing (paste exact counts from the PR's gate run).
+- `cargo nextest run --workspace --exclude flui-platform`: 7424 passed, 4 skipped. `cargo test -p flui-platform --lib`: 57 passed.
 - `cargo clippy --workspace --all-targets -- -D warnings`: clean.
 - `just fmt-check port-check inventory-check`, `taplo fmt --check`, `typos`: clean.
 - `RUSTDOCFLAGS="-D warnings" cargo doc -p flui-types -p flui-objects -p flui-widgets -p flui-app --no-deps --document-private-items`: clean.

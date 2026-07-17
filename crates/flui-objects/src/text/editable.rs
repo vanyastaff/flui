@@ -567,4 +567,21 @@ mod tests {
 
         assert_eq!(editable.caret_byte_offset(), 4);
     }
+
+    #[test]
+    fn set_composing_range_dedupes_unchanged_and_invalidates_paint_on_change() {
+        let mut editable = RenderEditable::new(TextSpan::new("abcdef"), TextDirection::Ltr);
+
+        assert_eq!(
+            editable.set_composing_range(Some(1..3)),
+            Invalidation::Paint
+        );
+        assert_eq!(editable.set_composing_range(Some(1..3)), Invalidation::None);
+        assert_eq!(
+            editable.set_composing_range(Some(1..4)),
+            Invalidation::Paint
+        );
+        assert_eq!(editable.set_composing_range(None), Invalidation::Paint);
+        assert_eq!(editable.set_composing_range(None), Invalidation::None);
+    }
 }
