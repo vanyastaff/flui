@@ -41,7 +41,7 @@
 //! ## Controller resolution: explicit, else `DefaultTabController`
 //!
 //! Exactly [`crate::TabBar`]'s own contract: an explicit
-//! [`controller`](Self::controller) wins; otherwise the nearest
+//! [`controller`](TabBarView::controller) wins; otherwise the nearest
 //! [`crate::DefaultTabController`] ancestor's controller is used. Exactly one
 //! must be reachable, or `build` panics (Flutter parity: the oracle's
 //! `_updateTabController`'s `FlutterError`/`assert`). The listener
