@@ -9,8 +9,8 @@
 //! [`Scaffold`]/[`AppBar`], [`Card`], [`Dialog`]/[`AlertDialog`]/
 //! [`show_dialog`], the input decoration substrate ([`InputDecoration`],
 //! [`InputDecorator`], [`TextField`]), the data-display family
-//! ([`ListTile`], [`Divider`]/[`VerticalDivider`]), bottom navigation
-//! ([`NavigationBar`]/[`NavigationDestination`]), the chip family
+//! ([`ListTile`], [`Divider`]/[`VerticalDivider`], [`DataTable`]), bottom
+//! navigation ([`NavigationBar`]/[`NavigationDestination`]), the chip family
 //! ([`Chip`], [`FilterChip`]), and secondary tabs ([`TabController`],
 //! [`DefaultTabController`], [`Tab`], [`TabBar`], [`TabBarView`]).
 //!
@@ -74,6 +74,7 @@ pub mod card;
 pub mod checkbox;
 pub mod chip;
 pub mod color_scheme;
+pub mod data_table;
 pub mod dialog;
 pub mod divider;
 pub mod drawer;
@@ -111,6 +112,7 @@ pub use card::Card;
 pub use checkbox::{Checkbox, CheckboxState};
 pub use chip::{Chip, FilterChip};
 pub use color_scheme::{ColorScheme, ColorSchemeOverrides};
+pub use data_table::{DataCell, DataColumn, DataRow, DataTable};
 pub use dialog::{AlertDialog, Dialog, show_dialog};
 pub use divider::{Divider, VerticalDivider};
 pub use drawer::{Drawer, DrawerAlignment, DrawerController, DrawerControllerState, DrawerHandle};
@@ -141,10 +143,10 @@ pub use text_field::{TextField, TextFieldState};
 pub use text_theme::TextTheme;
 pub use theme::Theme;
 pub use theme_data::{
-    AppBarThemeData, CardThemeData, CheckboxThemeData, ChipThemeData, DialogThemeData,
-    DividerThemeData, ElevatedButtonThemeData, FabThemeData, FilledButtonThemeData,
-    IconButtonThemeData, InputDecorationThemeData, ListTileThemeData, NavigationBarThemeData,
-    OutlinedButtonThemeData, RadioThemeData, SwitchThemeData, TabBarThemeData, TextButtonThemeData,
-    ThemeData, ThemeDataOverrides,
+    AppBarThemeData, CardThemeData, CheckboxThemeData, ChipThemeData, DataTableThemeData,
+    DialogThemeData, DividerThemeData, ElevatedButtonThemeData, FabThemeData,
+    FilledButtonThemeData, IconButtonThemeData, InputDecorationThemeData, ListTileThemeData,
+    NavigationBarThemeData, OutlinedButtonThemeData, RadioThemeData, SwitchThemeData,
+    TabBarThemeData, TextButtonThemeData, ThemeData, ThemeDataOverrides,
 };
 pub use typography::english_like_2021;
