@@ -8,8 +8,9 @@
 //! [`TextButton`], [`IconButton`], [`FloatingActionButton`], [`BackButton`]),
 //! [`Scaffold`]/[`AppBar`], [`Card`], [`Dialog`]/[`AlertDialog`]/
 //! [`show_dialog`], the input decoration substrate ([`InputDecoration`],
-//! [`InputDecorator`], [`TextField`]), and the data-display family
-//! ([`ListTile`], [`Divider`]/[`VerticalDivider`]).
+//! [`InputDecorator`], [`TextField`]), the data-display family
+//! ([`ListTile`], [`Divider`]/[`VerticalDivider`]), and bottom navigation
+//! ([`NavigationBar`]/[`NavigationDestination`]).
 //!
 //! ## Flutter parity
 //!
@@ -81,6 +82,7 @@ pub mod ink_well;
 pub mod input_decorator;
 pub mod list_tile;
 pub mod material;
+pub mod navigation_bar;
 pub mod outlined_button;
 pub mod radio;
 pub mod scaffold;
@@ -113,6 +115,7 @@ pub use ink_well::{InkWell, InkWellState};
 pub use input_decorator::{InputDecoration, InputDecorator, InputDecoratorState};
 pub use list_tile::ListTile;
 pub use material::Material;
+pub use navigation_bar::{NavigationBar, NavigationDestination};
 pub use outlined_button::OutlinedButton;
 pub use radio::{Radio, RadioState};
 pub use scaffold::{Scaffold, ScaffoldScope, ScaffoldState};
@@ -130,7 +133,7 @@ pub use theme::Theme;
 pub use theme_data::{
     AppBarThemeData, CardThemeData, CheckboxThemeData, DialogThemeData, DividerThemeData,
     ElevatedButtonThemeData, FabThemeData, FilledButtonThemeData, IconButtonThemeData,
-    InputDecorationThemeData, ListTileThemeData, OutlinedButtonThemeData, RadioThemeData,
-    SwitchThemeData, TextButtonThemeData, ThemeData, ThemeDataOverrides,
+    InputDecorationThemeData, ListTileThemeData, NavigationBarThemeData, OutlinedButtonThemeData,
+    RadioThemeData, SwitchThemeData, TextButtonThemeData, ThemeData, ThemeDataOverrides,
 };
 pub use typography::english_like_2021;

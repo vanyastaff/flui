@@ -459,6 +459,63 @@ pub struct SwitchThemeData {
     pub overlay_color: Option<StateColor>,
 }
 
+/// Overrides [`NavigationBar`](crate::NavigationBar)'s `_NavigationBarDefaultsM3`
+/// token defaults, one field at a time — an unset field here still falls
+/// through to `NavigationBar`'s own M3 default table (see `navigation_bar.rs`'s
+/// `navigation_bar_default_*`/`navigation_destination_default_*` functions),
+/// it does not blank the whole slot.
+///
+/// Flutter parity: `NavigationBarThemeData` (`material/navigation_bar_theme.dart`,
+/// oracle tag `3.44.0`), narrowed to the fields FLUI's `NavigationBar` actually
+/// consumes: [`height`](Self::height), [`background_color`](Self::background_color),
+/// [`elevation`](Self::elevation), [`indicator_color`](Self::indicator_color),
+/// [`icon_color`](Self::icon_color), [`label_text_style`](Self::label_text_style),
+/// [`overlay_color`](Self::overlay_color). Named deferrals (no consumer in
+/// FLUI's `NavigationBar` yet — see that module's docs for the full
+/// named-divergence list): `shadow_color`/`surface_tint_color` (`Material` has
+/// no such parameters yet — the same gap every other `Material`-backed M3
+/// component in this crate already has), `indicator_shape` (fixed at the M3
+/// `StadiumBorder` default), `label_padding` (fixed at the M3 `EdgeInsets.only(top:
+/// 4)` default), `label_behavior` (V1 always behaves as `alwaysShow` — see the
+/// module docs' "Label behavior" section for why the other two variants are
+/// deferred wholesale rather than as a half-wired enum). [`icon_color`](Self::icon_color)
+/// is itself a further narrowing: the oracle's `iconTheme` is a full
+/// `WidgetStateProperty<IconThemeData?>` (size, color, opacity, the `fill`/
+/// `weight`/`grade`/`optical_size` font-variation axes, shadows); this slot
+/// carries only the color, since `NavigationDestination`'s icon size is
+/// pinned at the M3 default (`NAVIGATION_DESTINATION_ICON_SIZE`, `24.0`) with
+/// no override surface yet.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct NavigationBarThemeData {
+    /// Overrides [`NavigationBar`](crate::NavigationBar)'s default height
+    /// (`80.0`).
+    pub height: Option<f32>,
+    /// Overrides [`NavigationBar`](crate::NavigationBar)'s default background
+    /// color (`ColorScheme.surfaceContainer`).
+    pub background_color: Option<Color>,
+    /// Overrides [`NavigationBar`](crate::NavigationBar)'s default elevation
+    /// (`3.0`).
+    pub elevation: Option<f32>,
+    /// Overrides [`NavigationBar`](crate::NavigationBar)'s default selection
+    /// indicator color (`ColorScheme.secondaryContainer`).
+    pub indicator_color: Option<Color>,
+    /// Overrides each [`NavigationDestination`](crate::NavigationDestination)'s
+    /// default icon color, per state (`Selected`/`Disabled` only — the M3
+    /// default table does not vary by `Hovered`/`Focused`/`Pressed`).
+    pub icon_color: Option<StateColor>,
+    /// Overrides each [`NavigationDestination`](crate::NavigationDestination)'s
+    /// default label text style, per state. `None` for a given state falls
+    /// through to `TextTheme.labelMedium` recolored by the M3 default table.
+    pub label_text_style: Option<WidgetStateProperty<Option<TextStyle>>>,
+    /// Overrides each destination's state-overlay color (the `InkWell`-shaped
+    /// hover/focus/press ramp). `None` (the default, at every tier) means no
+    /// overlay layer at all — see [`crate::ink_well`]'s own "no hardcoded
+    /// opacities" policy, which this component inherits verbatim (the oracle
+    /// itself sets no default `overlayColor` in `_NavigationBarDefaultsM3`
+    /// either).
+    pub overlay_color: Option<StateColor>,
+}
+
 /// Overrides [`Radio`](crate::Radio)'s `_RadioDefaultsM3` token defaults,
 /// one field at a time — an unset field here still falls through to
 /// `Radio`'s own M3 default table (see `radio.rs`'s `radio_default_*`
@@ -586,6 +643,10 @@ pub struct ThemeData {
     /// Overrides [`Radio`](crate::Radio)'s M3 token defaults, per field.
     /// Flutter parity: `ThemeData.radioTheme`.
     pub radio_theme: Option<RadioThemeData>,
+
+    /// Overrides [`NavigationBar`](crate::NavigationBar)'s M3 token defaults,
+    /// per field. Flutter parity: `ThemeData.navigationBarTheme`.
+    pub navigation_bar_theme: Option<NavigationBarThemeData>,
 }
 
 impl ThemeData {
@@ -613,6 +674,7 @@ impl ThemeData {
             checkbox_theme: None,
             switch_theme: None,
             radio_theme: None,
+            navigation_bar_theme: None,
         }
     }
 
@@ -640,6 +702,7 @@ impl ThemeData {
             checkbox_theme: None,
             switch_theme: None,
             radio_theme: None,
+            navigation_bar_theme: None,
         }
     }
 
@@ -730,6 +793,9 @@ impl ThemeData {
                 .or_else(|| self.checkbox_theme.clone()),
             switch_theme: overrides.switch_theme.or_else(|| self.switch_theme.clone()),
             radio_theme: overrides.radio_theme.or_else(|| self.radio_theme.clone()),
+            navigation_bar_theme: overrides
+                .navigation_bar_theme
+                .or_else(|| self.navigation_bar_theme.clone()),
         }
     }
 }
@@ -788,6 +854,8 @@ pub struct ThemeDataOverrides {
     pub switch_theme: Option<SwitchThemeData>,
     /// Replaces [`ThemeData::radio_theme`] wholesale when `Some`.
     pub radio_theme: Option<RadioThemeData>,
+    /// Replaces [`ThemeData::navigation_bar_theme`] wholesale when `Some`.
+    pub navigation_bar_theme: Option<NavigationBarThemeData>,
 }
 
 impl Default for ThemeData {
@@ -900,6 +968,7 @@ mod tests {
             assert!(theme.checkbox_theme.is_none());
             assert!(theme.switch_theme.is_none());
             assert!(theme.radio_theme.is_none());
+            assert!(theme.navigation_bar_theme.is_none());
         }
 
         assert_every_slot_unset(&ThemeData::light());
@@ -1194,5 +1263,43 @@ mod tests {
 
         let patched = base.copy_with(ThemeDataOverrides::default());
         assert_eq!(patched.radio_theme, Some(radio_theme));
+    }
+
+    /// Same shape as `copy_with_sets_input_decoration_theme_slot`, for the
+    /// `navigation_bar_theme` slot.
+    #[test]
+    fn copy_with_sets_navigation_bar_theme_slot() {
+        let base = ThemeData::light();
+        let navigation_bar_theme = NavigationBarThemeData {
+            height: Some(96.0),
+            ..Default::default()
+        };
+
+        let patched = base.copy_with(ThemeDataOverrides {
+            navigation_bar_theme: Some(navigation_bar_theme.clone()),
+            ..Default::default()
+        });
+
+        assert_eq!(patched.navigation_bar_theme, Some(navigation_bar_theme));
+        // Untouched slots stay unset, mirroring the base theme.
+        assert!(patched.radio_theme.is_none());
+    }
+
+    /// Same already-set-slot-survives-a-`None`-override proof as
+    /// `copy_with_none_preserves_an_already_set_input_decoration_theme_slot`,
+    /// for the `navigation_bar_theme` slot.
+    #[test]
+    fn copy_with_none_preserves_an_already_set_navigation_bar_theme_slot() {
+        let navigation_bar_theme = NavigationBarThemeData {
+            height: Some(96.0),
+            ..Default::default()
+        };
+        let base = ThemeData::light().copy_with(ThemeDataOverrides {
+            navigation_bar_theme: Some(navigation_bar_theme.clone()),
+            ..Default::default()
+        });
+
+        let patched = base.copy_with(ThemeDataOverrides::default());
+        assert_eq!(patched.navigation_bar_theme, Some(navigation_bar_theme));
     }
 }
