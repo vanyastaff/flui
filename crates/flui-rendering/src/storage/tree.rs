@@ -519,6 +519,9 @@ impl RenderTree {
     ///
     /// # Panics (debug only)
     ///
+    /// - if `parent_id == child_id` — a self-adoption would write a
+    ///   self-cycle that the ancestor walk below cannot see (it starts at
+    ///   the descendant's parent).
     /// - if `child_id` already has a parent. Re-parenting through this
     ///   primitive would leave the OLD parent's children list with a stale
     ///   entry — the same asymmetry this primitive exists to prevent, just
@@ -535,6 +538,11 @@ impl RenderTree {
             return;
         }
 
+        debug_assert_ne!(
+            parent_id, child_id,
+            "adopt_child: a node cannot adopt itself — the ancestor walk below starts at the \
+             descendant's parent, so this degenerate self-cycle would slip past it"
+        );
         debug_assert!(
             self.get(child_id).and_then(RenderNode::parent).is_none(),
             "adopt_child: {child_id:?} already has a parent — re-parenting through this \
