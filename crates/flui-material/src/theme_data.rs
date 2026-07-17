@@ -459,6 +459,29 @@ pub struct SwitchThemeData {
     pub overlay_color: Option<StateColor>,
 }
 
+/// Overrides [`Radio`](crate::Radio)'s `_RadioDefaultsM3` token defaults,
+/// one field at a time — an unset field here still falls through to
+/// `Radio`'s own M3 default table (see `radio.rs`'s `radio_default_*`
+/// functions), it does not blank the whole slot.
+///
+/// Flutter parity: `RadioThemeData` (`material/radio_theme.dart`, oracle tag
+/// `3.44.0`), narrowed to the fields FLUI's `Radio` actually consumes:
+/// [`fill_color`](Self::fill_color), [`overlay_color`](Self::overlay_color).
+/// Named deferrals (no consumer in FLUI's `Radio` yet — see that module's
+/// docs for the full named-divergence list): `mouse_cursor`,
+/// `splash_radius`, `material_tap_target_size`, `visual_density`, `side`
+/// (defaults to the ring's own resolved `fill_color`, width `2.0`),
+/// `inner_radius`, `background_color` (fixed transparent).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct RadioThemeData {
+    /// Overrides [`Radio`](crate::Radio)'s default ring/inner-dot fill
+    /// color, per state.
+    pub fill_color: Option<StateColor>,
+    /// Overrides [`Radio`](crate::Radio)'s default state-overlay color (the
+    /// InkWell-shaped hover/focus/press ramp), per state.
+    pub overlay_color: Option<StateColor>,
+}
+
 /// Visual-style configuration provided to descendants by a
 /// [`Theme`](crate::Theme) ancestor.
 ///
@@ -559,6 +582,10 @@ pub struct ThemeData {
     /// Overrides [`Switch`](crate::Switch)'s M3 token defaults, per field.
     /// Flutter parity: `ThemeData.switchTheme`.
     pub switch_theme: Option<SwitchThemeData>,
+
+    /// Overrides [`Radio`](crate::Radio)'s M3 token defaults, per field.
+    /// Flutter parity: `ThemeData.radioTheme`.
+    pub radio_theme: Option<RadioThemeData>,
 }
 
 impl ThemeData {
@@ -585,6 +612,7 @@ impl ThemeData {
             divider_theme: None,
             checkbox_theme: None,
             switch_theme: None,
+            radio_theme: None,
         }
     }
 
@@ -611,6 +639,7 @@ impl ThemeData {
             divider_theme: None,
             checkbox_theme: None,
             switch_theme: None,
+            radio_theme: None,
         }
     }
 
@@ -700,6 +729,7 @@ impl ThemeData {
                 .checkbox_theme
                 .or_else(|| self.checkbox_theme.clone()),
             switch_theme: overrides.switch_theme.or_else(|| self.switch_theme.clone()),
+            radio_theme: overrides.radio_theme.or_else(|| self.radio_theme.clone()),
         }
     }
 }
@@ -756,6 +786,8 @@ pub struct ThemeDataOverrides {
     pub checkbox_theme: Option<CheckboxThemeData>,
     /// Replaces [`ThemeData::switch_theme`] wholesale when `Some`.
     pub switch_theme: Option<SwitchThemeData>,
+    /// Replaces [`ThemeData::radio_theme`] wholesale when `Some`.
+    pub radio_theme: Option<RadioThemeData>,
 }
 
 impl Default for ThemeData {

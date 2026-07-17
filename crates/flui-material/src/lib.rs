@@ -82,6 +82,7 @@ pub mod input_decorator;
 pub mod list_tile;
 pub mod material;
 pub mod outlined_button;
+pub mod radio;
 pub mod scaffold;
 pub mod scaffold_messenger;
 pub mod shape;
@@ -112,6 +113,7 @@ pub use input_decorator::{InputDecoration, InputDecorator, InputDecoratorState};
 pub use list_tile::ListTile;
 pub use material::Material;
 pub use outlined_button::OutlinedButton;
+pub use radio::{Radio, RadioState};
 pub use scaffold::{Scaffold, ScaffoldScope, ScaffoldState};
 pub use scaffold_messenger::{
     ScaffoldMessenger, ScaffoldMessengerHandle, ScaffoldMessengerScope, ScaffoldMessengerState,
@@ -127,7 +129,7 @@ pub use theme::Theme;
 pub use theme_data::{
     AppBarThemeData, CardThemeData, CheckboxThemeData, DialogThemeData, DividerThemeData,
     ElevatedButtonThemeData, FabThemeData, FilledButtonThemeData, IconButtonThemeData,
-    InputDecorationThemeData, ListTileThemeData, OutlinedButtonThemeData, SwitchThemeData,
-    TextButtonThemeData, ThemeData, ThemeDataOverrides,
+    InputDecorationThemeData, ListTileThemeData, OutlinedButtonThemeData, RadioThemeData,
+    SwitchThemeData, TextButtonThemeData, ThemeData, ThemeDataOverrides,
 };
 pub use typography::english_like_2021;
