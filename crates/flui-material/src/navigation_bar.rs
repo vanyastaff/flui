@@ -467,18 +467,30 @@ fn resolve_navigation_destination_label_style(
         .unwrap_or_else(|| navigation_destination_default_label_style(base, colors, states))
 }
 
-/// Builds the states set (`Selected`/`Disabled` only — see the module docs
-/// on why `Hovered`/`Focused`/`Pressed` never affect this component's own
-/// icon/label colors) for a destination at `selected`/`enabled`.
+/// Builds the PURE (never-combined) `WidgetStates` query set a destination's
+/// icon/label color resolves against.
+///
+/// Flutter parity: `NavigationDestination.build` resolves its icon/label
+/// themes with three INDEPENDENT constant sets — `selectedState =
+/// {selected}`, `unselectedState = {}`, `disabledState = {disabled}`
+/// (`navigation_bar.dart:427-429`) — never a set containing both `selected`
+/// AND `disabled` together, then picks ONE of the three resolved values via
+/// a plain `enabled ? (selected-branch) : disabledIconTheme` bool check
+/// (`:450-457`, `:498-502`). A combined `{selected, disabled}` query would
+/// let a theme [`WidgetStateProperty::Map`]
+/// ordered `[Is(Selected), Is(Disabled), Any]` resolve the SELECTED entry
+/// for a disabled destination (first-match-wins still matches `Is(Selected)`
+/// against the combined set), instead of the disabled entry the oracle's
+/// pure-set query guarantees — see
+/// `theme_disabled_and_selected_resolves_the_disabled_entry_not_the_selected_one`.
 fn navigation_destination_states(selected: bool, enabled: bool) -> WidgetStates {
-    let mut states = WidgetStates::NONE;
-    if selected {
-        states = states.with_state(WidgetState::Selected);
-    }
     if !enabled {
-        states = states.with_state(WidgetState::Disabled);
+        WidgetStates::from(WidgetState::Disabled)
+    } else if selected {
+        WidgetStates::from(WidgetState::Selected)
+    } else {
+        WidgetStates::NONE
     }
-    states
 }
 
 /// Builds one destination's `Expanded(MergeSemantics(Semantics(InkWell(...))))`
@@ -539,9 +551,25 @@ fn build_destination(
     let column = Column::new(vec![icon_stack.boxed(), label.boxed()])
         .main_axis_alignment(MainAxisAlignment::Center);
 
+    // Flutter parity: `NavigationBar._handleTap` always returns a real
+    // `VoidCallback` — the real callback when `onDestinationSelected` is
+    // set, a no-op closure `() {}` otherwise (`navigation_bar.dart:272-274`)
+    // — and `_IndicatorInkWell.onTap` is `enabled ? info.onTap : null`
+    // (`:606`), never gated on whether a callback was actually supplied. So
+    // `InkResponse.enabled` (`isWidgetEnabled`, any tap-family callback
+    // non-null) is `true` for an enabled destination even with no
+    // `on_destination_selected` at all — it still paints its hover/press
+    // overlay. Wiring `on_tap` only when a callback is present would leave
+    // a callback-less-but-enabled destination reading as disabled to
+    // `InkWell`, silently dropping its overlay.
     let mut ink_well = InkWell::new(column).overlay_color(overlay_color.clone());
-    if enabled && let Some(callback) = on_destination_selected.cloned() {
-        ink_well = ink_well.on_tap(move || callback(index));
+    if enabled {
+        let callback = on_destination_selected.cloned();
+        ink_well = ink_well.on_tap(move || {
+            if let Some(callback) = &callback {
+                callback(index);
+            }
+        });
     }
 
     let semantics = Semantics::new()
@@ -838,5 +866,61 @@ mod tests {
         let states = navigation_destination_states(false, false);
         assert!(!states.contains_state(WidgetState::Selected));
         assert!(states.contains_state(WidgetState::Disabled));
+    }
+
+    /// Regression: a destination that is BOTH selected and disabled (e.g.
+    /// the current tab of a now-locked section) must query with the PURE
+    /// `{disabled}` set, never a combined `{selected, disabled}` one — see
+    /// `navigation_destination_states`'s own doc comment for why the oracle
+    /// never queries a combined set, and
+    /// `theme_disabled_and_selected_resolves_the_disabled_entry_not_the_selected_one`
+    /// for the end-to-end proof this enables.
+    #[test]
+    fn states_selected_and_disabled_carries_only_disabled_not_both() {
+        let states = navigation_destination_states(true, false);
+        assert!(states.contains_state(WidgetState::Disabled));
+        assert!(
+            !states.contains_state(WidgetState::Selected),
+            "a disabled destination's query states must never also carry Selected, even when \
+             the destination is selected — combining them would let a theme Map resolve the \
+             wrong (selected) entry for a disabled destination",
+        );
+    }
+
+    /// Mutation-run: reverting `navigation_destination_states` to its
+    /// pre-fix shape (`Selected` and `Disabled` combined into one query set
+    /// whenever both apply) was confirmed to make this test fail — the
+    /// combined set satisfies `WidgetStateConstraint::Is(Selected)` (the
+    /// first entry in the map below), so the OLD code resolved
+    /// `selected_style` for a disabled+selected destination instead of
+    /// `disabled_style`.
+    #[test]
+    fn theme_disabled_and_selected_resolves_the_disabled_entry_not_the_selected_one() {
+        use flui_widgets::WidgetStateConstraint;
+
+        let selected_style = Color::rgb(1, 1, 1);
+        let disabled_style = Color::rgb(2, 2, 2);
+        let theme: WidgetStateProperty<Option<Color>> = WidgetStateProperty::from_map([
+            (
+                WidgetStateConstraint::Is(WidgetState::Selected),
+                Some(selected_style),
+            ),
+            (
+                WidgetStateConstraint::Is(WidgetState::Disabled),
+                Some(disabled_style),
+            ),
+            (WidgetStateConstraint::Any, None),
+        ]);
+
+        // Selected AND disabled.
+        let states = navigation_destination_states(true, false);
+        let resolved = resolve_navigation_destination_icon_color(Some(&theme), &light(), states);
+
+        assert_eq!(
+            resolved, disabled_style,
+            "a disabled destination must resolve the theme's Disabled entry even when it is \
+             ALSO selected — the oracle never queries a combined {{selected, disabled}} set, so \
+             a theme Map ordered Selected-before-Disabled must still give the disabled result",
+        );
     }
 }

@@ -478,7 +478,13 @@ pub struct SwitchThemeData {
 /// `StadiumBorder` default), `label_padding` (fixed at the M3 `EdgeInsets.only(top:
 /// 4)` default), `label_behavior` (V1 always behaves as `alwaysShow` — see the
 /// module docs' "Label behavior" section for why the other two variants are
-/// deferred wholesale rather than as a half-wired enum).
+/// deferred wholesale rather than as a half-wired enum). [`icon_color`](Self::icon_color)
+/// is itself a further narrowing: the oracle's `iconTheme` is a full
+/// `WidgetStateProperty<IconThemeData?>` (size, color, opacity, the `fill`/
+/// `weight`/`grade`/`optical_size` font-variation axes, shadows); this slot
+/// carries only the color, since `NavigationDestination`'s icon size is
+/// pinned at the M3 default (`NAVIGATION_DESTINATION_ICON_SIZE`, `24.0`) with
+/// no override surface yet.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct NavigationBarThemeData {
     /// Overrides [`NavigationBar`](crate::NavigationBar)'s default height

@@ -23,13 +23,23 @@
 //!
 //! Mirrors the app bar's own contract (see "The inset contract" below): a
 //! [`crate::NavigationBar`] wraps its content in a `SafeArea` and consumes
-//! `MediaQuery.padding.bottom` internally (its own doc: "If this is used in
+//! `MediaQuery.padding` internally (its own doc: "If this is used in
 //! `Scaffold.bottomNavigationBar` ... the safe area padding is also added to
-//! the height automatically"). So the body's own `MediaQuery.padding.bottom`
-//! is zeroed whenever a `bottom_navigation_bar` is set (oracle:
-//! `removeBottomPadding: widget.bottomNavigationBar != null ...`,
-//! `scaffold.dart:3032-3033`) — otherwise a `SafeArea` nested in the body
-//! would double-pad the same bottom inset the nav bar already consumed.
+//! the height automatically"). Two separate insets are involved, and the
+//! oracle zeroes them at two different slots:
+//!
+//! - **The slot's OWN `padding.top` is zeroed** (oracle: `_addIfNonNull(...,
+//!   removeTopPadding: true, ...)` for `_ScaffoldSlot.bottomNavigationBar`,
+//!   `scaffold.dart:3155-3169`) — the bar's internal `SafeArea` honors all
+//!   four sides by default, so a nonzero ambient `padding.top` (e.g. a
+//!   status-bar inset that has nothing to do with a BOTTOM bar) would
+//!   otherwise inflate it to `height + padding.top + padding.bottom` instead
+//!   of the oracle's `height + padding.bottom`.
+//! - **The body's `padding.bottom` is zeroed** (oracle: `removeBottomPadding:
+//!   widget.bottomNavigationBar != null ...`, `scaffold.dart:3032-3033`) —
+//!   the bar already consumes that inset itself; a `SafeArea` nested in the
+//!   body reading the un-reduced value would double-pad.
+//!
 //! `ScaffoldLayoutDelegate` measures the bar first (full width, loose
 //! height, Flutter parity: `_ScaffoldLayout.performLayout`'s
 //! `bottomNavigationBarHeight`/`bottomWidgetsHeight`, `scaffold.dart:1048-1055`)
@@ -577,9 +587,17 @@ impl ViewState<Scaffold> for ScaffoldState {
         }
 
         if let Some(bottom_navigation_bar) = &view.bottom_navigation_bar {
+            // Oracle: `removeTopPadding: true` for `_ScaffoldSlot.bottomNavigationBar`
+            // (`scaffold.dart:3155-3169`) — see the module docs' "pads itself"
+            // section. Only `padding.top` is reduced here; `padding.bottom`
+            // passes through unreduced so the bar's own `SafeArea` can
+            // consume it (that's the whole point of this slot padding
+            // itself).
+            let mut reduced_media_query = media_query.clone();
+            reduced_media_query.padding.top = px(0.0);
             children.push(LayoutId::new(
                 SLOT_BOTTOM_NAV,
-                bottom_navigation_bar.clone(),
+                MediaQuery::new(reduced_media_query, bottom_navigation_bar.clone()),
             ));
         }
 

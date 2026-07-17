@@ -40,7 +40,9 @@ use flui_material::{NavigationBar, NavigationDestination, Theme, ThemeData};
 use flui_rendering::constraints::BoxConstraints;
 use flui_types::geometry::px;
 use flui_widgets::icon::IconData;
-use flui_widgets::{Icon, MediaQuery, MediaQueryData};
+use flui_widgets::{
+    Icon, MediaQuery, MediaQueryData, WidgetState, WidgetStateProperty, WidgetStates,
+};
 
 /// Tight width, loose (`0..height`) height — see the module docs' note on
 /// why a fully-tight root is the wrong shape to mount a `NavigationBar`
@@ -355,5 +357,49 @@ fn bar_height_and_elevation_match_the_m3_defaults() {
             .and_then(|value| value.parse::<f32>().ok()),
         Some(3.0),
         "_NavigationBarDefaultsM3.elevation is 3.0",
+    );
+}
+
+#[test]
+fn a_callback_less_but_enabled_destination_still_paints_the_hover_overlay() {
+    // Flutter parity: `NavigationBar._handleTap` always returns a real
+    // `VoidCallback` (the real callback or a no-op), so `_IndicatorInkWell.onTap`
+    // is non-null whenever the destination is enabled — regardless of
+    // whether `onDestinationSelected` was ever set (`navigation_bar.dart:272-274`,
+    // `:606`). A destination-level `InkWell` that only wires `on_tap` when a
+    // callback is present would read as non-interactive here and never
+    // paint its overlay, even with `overlay_color` configured.
+    let hover_color = flui_types::styling::Color::rgb(9, 9, 9);
+    let mut laid = lay_out(
+        themed(NavigationBar::new(three_destinations()).overlay_color(
+            WidgetStateProperty::resolve_with(move |states: &WidgetStates| {
+                states
+                    .contains_state(WidgetState::Hovered)
+                    .then_some(hover_color)
+            }),
+        )),
+        bar_constraints(300.0, 800.0),
+    );
+
+    // Hover over the first destination's cell (x in [0, 100), y in [0, 80)).
+    // A pump is needed after the dispatch: the states-controller listener
+    // only SCHEDULES a rebuild (see `crate::ink_well`'s own
+    // `overlay_color_resolution_reflects_the_hovered_state` test, same
+    // shape), it doesn't run one synchronously.
+    laid.dispatch_pointer_move(50.0, 40.0);
+    laid.pump();
+
+    let overlays: Vec<_> = laid
+        .find_all_by_render_type("RenderPhysicalShape")
+        .into_iter()
+        .filter(|&id| laid.render_property(id, "color") == Some(format!("{hover_color:?}")))
+        .collect();
+
+    assert_eq!(
+        overlays.len(),
+        1,
+        "a destination with NO on_destination_selected callback must still be interactive \
+         (on_tap wired to a no-op, matching the oracle's _handleTap fallback) — otherwise it \
+         never registers as enabled to InkWell and the hover overlay never paints",
     );
 }

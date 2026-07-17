@@ -16,11 +16,12 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use common::{lay_out, offset, size, tight};
-use flui_material::{AppBar, Scaffold, Theme, ThemeData};
+use flui_material::{AppBar, NavigationBar, NavigationDestination, Scaffold, Theme, ThemeData};
 use flui_types::EdgeInsets;
 use flui_types::geometry::px;
 use flui_view::prelude::*;
-use flui_widgets::{MediaQuery, MediaQueryData, SizedBox, Text};
+use flui_widgets::icon::IconData;
+use flui_widgets::{Icon, MediaQuery, MediaQueryData, SizedBox, Text};
 
 /// The render-tree node for `CustomMultiChildLayout` (the scaffold's own
 /// `Material` surface is the mounted root; this is that root's only child).
@@ -626,5 +627,55 @@ fn body_media_query_has_zero_bottom_padding_under_a_bottom_navigation_bar() {
         "the body's ambient MediaQuery.padding.bottom must be zeroed when a bottom navigation \
          bar is present — the bar already consumes that inset internally (see its own SafeArea \
          wrapping); a SafeArea nested in the body reading the un-reduced 34px would double-pad",
+    );
+}
+
+/// Real (non-stand-in) destinations for a mounted `NavigationBar` — needed
+/// specifically to prove the top-padding leak (finding below): a bare
+/// `SizedBox` stand-in can't exercise `NavigationBar`'s own internal
+/// `SafeArea`, which is exactly the mechanism under test.
+fn two_destinations() -> Vec<NavigationDestination> {
+    vec![
+        NavigationDestination::new(Icon::new(IconData::new(0xE88A)), "Home"),
+        NavigationDestination::new(Icon::new(IconData::new(0xE7FD)), "Profile"),
+    ]
+}
+
+#[test]
+fn bottom_navigation_bar_does_not_leak_the_ambient_top_padding_into_its_own_safe_area() {
+    // A nonzero `padding.top` (e.g. a status-bar inset) that has nothing to
+    // do with a BOTTOM bar. Oracle: `_ScaffoldSlot.bottomNavigationBar` is
+    // added with `removeTopPadding: true` (`scaffold.dart:3155-3169`) — the
+    // bar's own `SafeArea` must never see this inset, or it inflates the
+    // bar past its fixed 80dp height.
+    let media_query = MediaQueryData {
+        padding: EdgeInsets::new(px(24.0), px(0.0), px(0.0), px(0.0)),
+        ..MediaQueryData::default()
+    };
+    let laid = lay_out(
+        Theme::new(
+            ThemeData::light(),
+            MediaQuery::new(
+                media_query,
+                Scaffold::new()
+                    .body(SizedBox::expand())
+                    .bottom_navigation_bar(NavigationBar::new(two_destinations())),
+            ),
+        ),
+        tight(400.0, 800.0),
+    );
+
+    let layout = layout_root(&laid);
+    // No app_bar, no floating_action_button: body is child 0, the bottom
+    // navigation bar is child 1.
+    let bottom_nav = laid.child(layout, 1);
+
+    assert_eq!(
+        laid.size(bottom_nav).height,
+        px(80.0),
+        "the bottom navigation bar's own SafeArea must not ALSO consume the ambient 24px \
+         padding.top on top of its fixed 80dp height — a leaked top inset would inflate the \
+         bar to 104 instead of the oracle's height + padding.bottom (80 here, since \
+         padding.bottom is 0)",
     );
 }
