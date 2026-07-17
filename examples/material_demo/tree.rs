@@ -19,6 +19,11 @@
 //! a home route whose content is [`MaterialDemoHome`] — wrapped once, at the
 //! very root, in `Theme(ThemeData::light())` ([`MaterialDemoApp`]).
 //!
+//! [`MaterialDemoRootState`] wraps its `Navigator` in a [`ScaffoldMessenger`]
+//! (the scope-mount pattern — see that type's own module docs) so every
+//! route's `Scaffold` shares one snack-bar queue for the whole app's life,
+//! the way a real `MaterialApp` mounts one at the root.
+//!
 //! [`MaterialDemoHome`] builds a `Scaffold`:
 //! - `app_bar`: an `AppBar` titled [`APP_TITLE`] with one action — an
 //!   `IconButton` (a settings glyph) that pushes [`settings_route`]. Its
@@ -35,14 +40,16 @@
 //! - `floating_action_button`: a `FloatingActionButton` labeled "+" that
 //!   calls [`show_dialog`] with an `AlertDialog` ("Add item"): `Cancel`
 //!   (`TextButton`) pops with no change, `Add` (`FilledButton`) appends a
-//!   fresh item and pops. `show_dialog` pushes a `PopupRoute`
-//!   (`opaque: false`, `maintain_state: true`), so the home route stays
-//!   mounted, laid out, and painted beneath the dialog's barrier — only its
-//!   hit-testing is blocked (the full-screen barrier sits on top).
+//!   fresh item, pops, and shows [`SNACK_BAR_ADDED_MESSAGE`] via the
+//!   ambient `ScaffoldMessenger` — auto-dismissing after its own default
+//!   4s duration. `show_dialog` pushes a `PopupRoute` (`opaque: false`,
+//!   `maintain_state: true`), so the home route stays mounted, laid out,
+//!   and painted beneath the dialog's barrier — only its hit-testing is
+//!   blocked (the full-screen barrier sits on top).
 //!
 //! # Honest caveats (Catalog.1 exit criterion, Material half)
 //!
-//! This app proves the five named components mount, lay out, and respond to
+//! This app proves the six named components mount, lay out, and respond to
 //! real gesture dispatch. It does **not** exercise:
 //! - **Ink ripple/splash visuals** — `InkWell` here paints only the static
 //!   resolved overlay fill (see `flui_material::ink_well`'s module docs); no
@@ -50,9 +57,12 @@
 //! - **Component themes** (`AppBarTheme`, `CardTheme`, …) — every widget
 //!   resolves the fixed M3 baseline token tables; `ThemeData` carries no
 //!   component-theme overrides yet.
-//! - **`SnackBar`/`Drawer`** — neither has a `Scaffold` slot in this
-//!   substrate (see `flui_material::scaffold`'s module docs' deferred-slot
-//!   list).
+//! - **`Drawer`** — no `Scaffold::drawer` is configured in this demo tree
+//!   (`crates/flui-material/tests/drawer.rs` covers that widget directly).
+//! - **`SnackBar` action/multi-scaffold fan-out** — the "Item added"
+//!   snack bar carries no action button, and this demo has only one
+//!   `Scaffold` registered with its `ScaffoldMessenger` (both covered
+//!   directly by `crates/flui-material/tests/snack_bar.rs`).
 //!
 //! The Cupertino half of the Catalog.1 exit criterion is untouched by this
 //! app.
@@ -62,7 +72,8 @@ use std::rc::Rc;
 
 use flui_material::{
     AlertDialog, AppBar, Card, FilledButton, FloatingActionButton, IconButton, InkWell, Scaffold,
-    TextButton, Theme, ThemeData, show_dialog,
+    ScaffoldMessenger, ScaffoldMessengerHandle, ScaffoldMessengerScope, SnackBar, TextButton,
+    Theme, ThemeData, show_dialog,
 };
 use flui_view::RebuildHandle;
 use flui_widgets::column;
@@ -97,6 +108,9 @@ pub const ADD_DIALOG_CONTENT: &str = "A new item will be appended to the list.";
 pub const CANCEL_LABEL: &str = "Cancel";
 /// The dialog's confirming action label.
 pub const ADD_LABEL: &str = "Add";
+
+/// The [`SnackBar`] message shown once "Add" appends an item.
+pub const SNACK_BAR_ADDED_MESSAGE: &str = "Item added";
 
 /// `Icons.settings`'s codepoint (`icons.dart`'s `settings` constant) — the
 /// app bar action's glyph. Renders as tofu (no bundled icon font; see
@@ -193,7 +207,10 @@ impl StatefulView for MaterialDemoRoot {
 
 impl ViewState<MaterialDemoRoot> for MaterialDemoRootState {
     fn build(&self, _view: &MaterialDemoRoot, _ctx: &dyn BuildContext) -> impl IntoView {
-        Navigator::new(self.navigator.clone())
+        // The scope-mount pattern: one `ScaffoldMessenger` above the whole
+        // `Navigator`, so every route's `Scaffold` shares one snack-bar
+        // queue for the app's life — see the module docs.
+        ScaffoldMessenger::new(Navigator::new(self.navigator.clone()))
     }
 }
 
@@ -261,7 +278,11 @@ impl ViewState<MaterialDemoHome> for MaterialDemoHomeState {
         }
     }
 
-    fn build(&self, _view: &MaterialDemoHome, _ctx: &dyn BuildContext) -> impl IntoView {
+    fn build(&self, _view: &MaterialDemoHome, ctx: &dyn BuildContext) -> impl IntoView {
+        // A plain ambient lookup (`ctx.get`, no dependency registered) —
+        // unlike `rebuild_handle`/`post_frame_handle`, safe to call from
+        // `build` itself; see `ScaffoldMessengerScope::maybe_of`'s own doc.
+        let messenger = ScaffoldMessengerScope::of(ctx);
         let rebuild = self
             .rebuild
             .clone()
@@ -325,12 +346,14 @@ impl ViewState<MaterialDemoHome> for MaterialDemoHomeState {
         let navigator_for_fab = self.navigator.clone();
         let items_for_fab = Rc::clone(&self.items);
         let rebuild_for_fab = rebuild;
+        let messenger_for_fab = messenger;
         let fab = FloatingActionButton::new(
             Some(move || {
                 open_add_item_dialog(
                     &navigator_for_fab,
                     Rc::clone(&items_for_fab),
                     rebuild_for_fab.clone(),
+                    messenger_for_fab.clone(),
                 );
             }),
             Text::new(FAB_LABEL),
@@ -347,7 +370,10 @@ impl ViewState<MaterialDemoHome> for MaterialDemoHomeState {
 }
 
 /// Opens the "Add item" dialog: `Cancel` pops with no change, `Add` appends
-/// a fresh item to `items`, schedules the home route's rebuild, and pops.
+/// a fresh item to `items`, schedules the home route's rebuild, pops, and
+/// shows [`SNACK_BAR_ADDED_MESSAGE`] via `messenger` — the scope-mount
+/// pattern's payoff: one call against the ambient handle, no `Scaffold`
+/// plumbing at this call site.
 ///
 /// `show_dialog` pushes a `PopupRoute` (`opaque: false`) — the home route
 /// stays mounted underneath, so `rebuild`'s `RebuildHandle` (captured from
@@ -357,6 +383,7 @@ fn open_add_item_dialog(
     navigator: &NavigatorHandle,
     items: Rc<RefCell<Vec<String>>>,
     rebuild: RebuildHandle,
+    messenger: ScaffoldMessengerHandle,
 ) {
     let navigator_for_builder = navigator.clone();
     show_dialog::<(), _, _>(navigator, move |_ctx| {
@@ -364,6 +391,7 @@ fn open_add_item_dialog(
         let navigator_for_add = navigator_for_builder.clone();
         let items_for_add = Rc::clone(&items);
         let rebuild_for_add = rebuild.clone();
+        let messenger_for_add = messenger.clone();
 
         AlertDialog::new()
             .title(Text::new(ADD_DIALOG_TITLE))
@@ -382,6 +410,8 @@ fn open_add_item_dialog(
                             .push(format!("{ITEM_LABEL_PREFIX}{next_index}"));
                         navigator_for_add.pop();
                         rebuild_for_add.schedule();
+                        messenger_for_add
+                            .show_snack_bar(SnackBar::new(Text::new(SNACK_BAR_ADDED_MESSAGE)));
                     })
                     .boxed(),
             ])
