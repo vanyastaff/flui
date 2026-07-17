@@ -184,7 +184,7 @@ pub use platforms::IOSPlatform;
 pub use platforms::LinuxPlatform;
 #[cfg(target_os = "macos")]
 pub use platforms::MacOSPlatform;
-pub use platforms::{FakeTextInput, HeadlessPlatform};
+pub use platforms::{FakeHaptics, FakeTextInput, HeadlessPlatform};
 // Web platform
 #[cfg(target_arch = "wasm32")]
 pub use platforms::WebPlatform;
@@ -203,9 +203,10 @@ pub use task::{Priority, Task, TaskLabel};
 pub use traits::{
     Clipboard, ClipboardItem, DefaultLifecycle, DesktopCapabilities, DispatchEventResult,
     DisplayId, LifecycleEvent, LifecycleState, MobileCapabilities, PathPromptOptions, Platform,
-    PlatformCapabilities, PlatformDisplay, PlatformEmbedder, PlatformExecutor, PlatformLifecycle,
-    PlatformReadyCallback, PlatformTextInput, PlatformWindow, WebCapabilities, WindowAppearance,
-    WindowBackgroundAppearance, WindowBounds, WindowEvent, WindowId, WindowMode, WindowOptions,
+    PlatformCapabilities, PlatformDisplay, PlatformEmbedder, PlatformExecutor, PlatformHaptics,
+    PlatformLifecycle, PlatformReadyCallback, PlatformTextInput, PlatformWindow, WebCapabilities,
+    WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowEvent, WindowId, WindowMode,
+    WindowOptions,
 };
 
 /// Get the current platform implementation

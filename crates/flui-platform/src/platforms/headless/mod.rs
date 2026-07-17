@@ -2,4 +2,4 @@
 
 mod platform;
 
-pub use platform::{FakeTextInput, HeadlessPlatform};
+pub use platform::{FakeHaptics, FakeTextInput, HeadlessPlatform};

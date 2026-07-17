@@ -6,7 +6,10 @@
 use std::{path::PathBuf, sync::Arc};
 
 use anyhow::Result;
-use flui_types::geometry::{Bounds, DevicePixels, Pixels, Point, Size};
+use flui_types::{
+    HapticFeedback,
+    geometry::{Bounds, DevicePixels, Pixels, Point, Size},
+};
 use parking_lot::Mutex;
 
 use crate::{
@@ -14,7 +17,7 @@ use crate::{
     shared::{PlatformHandlers, WindowCallbacks},
     traits::{
         Clipboard, ClipboardItem, DesktopCapabilities, DispatchEventResult, Platform,
-        PlatformCapabilities, PlatformDisplay, PlatformExecutor, PlatformInput,
+        PlatformCapabilities, PlatformDisplay, PlatformExecutor, PlatformHaptics, PlatformInput,
         PlatformReadyCallback, PlatformTextInput, PlatformWindow, WindowAppearance,
         WindowBackgroundAppearance, WindowBounds, WindowEvent, WindowId, WindowOptions,
     },
@@ -243,6 +246,7 @@ struct MockWindow {
     state: Arc<Mutex<MockWindowState>>,
     callbacks: Arc<WindowCallbacks>,
     text_input: Arc<FakeTextInput>,
+    haptics: Arc<FakeHaptics>,
 }
 
 /// Mutable state for headless MockWindow
@@ -297,6 +301,7 @@ impl MockWindow {
             })),
             callbacks: Arc::new(WindowCallbacks::new()),
             text_input: Arc::new(FakeTextInput::new()),
+            haptics: Arc::new(FakeHaptics::new()),
         }
     }
 
@@ -424,6 +429,10 @@ impl crate::traits::PlatformWindow for MockWindow {
 
     fn text_input(&self) -> Option<Arc<dyn PlatformTextInput>> {
         Some(Arc::clone(&self.text_input) as Arc<dyn PlatformTextInput>)
+    }
+
+    fn haptics(&self) -> Option<Arc<dyn PlatformHaptics>> {
+        Some(Arc::clone(&self.haptics) as Arc<dyn PlatformHaptics>)
     }
 
     fn get_title(&self) -> String {
@@ -578,6 +587,57 @@ impl PlatformTextInput for FakeTextInput {
 
     fn set_ime_cursor_area(&self, area: Bounds<Pixels>) {
         self.state.lock().cursor_area_calls.push(area);
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+/// Recording fake for [`PlatformHaptics`], backing the headless backend's
+/// [`PlatformWindow::haptics`].
+///
+/// Every `perform` call is appended to an in-memory history so a test can
+/// assert exactly which feedback kinds the haptics bridge
+/// (`flui-app`'s `AppBinding::perform_haptic_feedback`) told the platform
+/// to perform, in delivery order, rather than only that the call didn't
+/// panic.
+#[derive(Default)]
+pub struct FakeHaptics {
+    calls: Mutex<Vec<HapticFeedback>>,
+}
+
+impl FakeHaptics {
+    /// Create a fresh recorder with no recorded calls.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Every `perform` call, in delivery order.
+    #[must_use]
+    pub fn calls(&self) -> Vec<HapticFeedback> {
+        self.calls.lock().clone()
+    }
+
+    /// The most recent `perform` call, if any.
+    #[must_use]
+    pub fn last(&self) -> Option<HapticFeedback> {
+        self.calls.lock().last().copied()
+    }
+}
+
+impl std::fmt::Debug for FakeHaptics {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FakeHaptics")
+            .field("calls", &*self.calls.lock())
+            .finish()
+    }
+}
+
+impl PlatformHaptics for FakeHaptics {
+    fn perform(&self, feedback: HapticFeedback) {
+        self.calls.lock().push(feedback);
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
@@ -925,6 +985,47 @@ mod tests {
             .expect("headless PlatformTextInput is a FakeTextInput")
             .ime_allowed_calls();
         assert_eq!(fake, vec![true, false]);
+    }
+
+    #[test]
+    fn haptics_records_calls_in_delivery_order_and_last_reflects_the_most_recent() {
+        let fake = FakeHaptics::new();
+        assert_eq!(fake.calls(), Vec::new(), "no calls recorded yet");
+        assert_eq!(fake.last(), None);
+
+        fake.perform(HapticFeedback::SelectionClick);
+        fake.perform(HapticFeedback::HeavyImpact);
+        fake.perform(HapticFeedback::ErrorNotification);
+
+        assert_eq!(
+            fake.calls(),
+            vec![
+                HapticFeedback::SelectionClick,
+                HapticFeedback::HeavyImpact,
+                HapticFeedback::ErrorNotification,
+            ]
+        );
+        assert_eq!(fake.last(), Some(HapticFeedback::ErrorNotification));
+    }
+
+    #[test]
+    fn haptics_reaches_the_same_fake_across_calls() {
+        let window = MockWindow::new(WindowId(0), WindowOptions::default());
+        let haptics = window.haptics().expect("headless backend supports haptics");
+
+        haptics.perform(HapticFeedback::LightImpact);
+
+        // A second accessor call must reach the SAME fake, not a fresh one
+        // — otherwise a test driving the binding through `PlatformWindow`
+        // and a test asserting on the fake directly would silently diverge.
+        let calls = window
+            .haptics()
+            .expect("headless backend supports haptics")
+            .as_any()
+            .downcast_ref::<FakeHaptics>()
+            .expect("headless PlatformHaptics is a FakeHaptics")
+            .calls();
+        assert_eq!(calls, vec![HapticFeedback::LightImpact]);
     }
 
     // ==================== US3 Tests ====================
