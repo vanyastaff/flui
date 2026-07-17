@@ -24,23 +24,52 @@ struct ControllerInner {
     /// `dispose`. This is how a tap on the enclosing `TextField` focuses *its
     /// own* field rather than a scope-walk guess.
     focus_node_id: Option<flui_interaction::FocusNodeId>,
-    /// The in-progress IME composition region, as a byte range into `text` —
-    /// `None` when no composition is active. Set by
-    /// [`TextEditingController::set_composing_text`], stripped (slice
-    /// removed) by [`TextEditingController::clear_composing`], and cleared
-    /// (text kept) by [`TextEditingController::commit_text`]. Also cleared
-    /// by every non-IME text mutation ([`TextEditingController::insert_str`]/
-    /// [`TextEditingController::backspace`]/[`TextEditingController::delete_forward`])
-    /// — Flutter parity, `TextEditingController`'s `text` setter resets
-    /// `composing` to empty on every programmatic change.
-    ///
-    /// Always char-boundary-clamped — see
-    /// [`TextEditingController::set_composing_text`]'s "Malformed input" doc.
-    /// Every read site additionally re-clamps against the CURRENT `text`
-    /// before use (`clamp_range_to_text`), so even a stored range that
-    /// somehow outlived a mutation degrades to a wrong-but-in-bounds slice,
-    /// never a `replace_range` panic.
-    composing: Option<Range<usize>>,
+    /// The in-progress IME composition, if any. `None` means no composition
+    /// is active — see [`ComposingState`]'s doc for why its two fields are
+    /// folded into one option rather than a sibling `caret_hidden: bool`
+    /// field tracked independently.
+    composing: Option<ComposingState>,
+}
+
+/// The in-progress IME composition: its byte range into
+/// [`ControllerInner::text`] plus whether the caret should stay hidden while
+/// the IME owns its position.
+///
+/// # Why one option, not a sibling bool
+///
+/// An earlier shape tracked `composing: Option<Range<usize>>` and a
+/// hypothetical `caret_hidden: bool` as two independent fields. That shape is
+/// structurally leak-prone: nothing stops `caret_hidden` from staying `true`
+/// after composition ends unless every single site that clears `composing`
+/// remembers to *also* clear `caret_hidden` — a rule enforced by convention,
+/// not the type system. Folding both into one `Option<ComposingState>` makes
+/// the leak impossible instead of merely disciplined: every `composing =
+/// None` site (both `set_composing_text`'s empty-preedit-cancel path and
+/// every existing mutator-clears site — [`TextEditingController::insert_str`]
+/// /[`backspace`](TextEditingController::backspace)/
+/// [`delete_forward`](TextEditingController::delete_forward)/
+/// [`commit_text`](TextEditingController::commit_text)/
+/// [`clear_composing`](TextEditingController::clear_composing)) drops
+/// `caret_hidden` for free, along with the range it was never meaningful
+/// without.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ComposingState {
+    /// Byte range into `text`. Always char-boundary-clamped — see
+    /// [`TextEditingController::set_composing_text`]'s "Malformed input"
+    /// doc. Every read site additionally re-clamps against the CURRENT
+    /// `text` before use (`clamp_range_to_text`), so even a stored range
+    /// that somehow outlived a mutation degrades to a wrong-but-in-bounds
+    /// slice, never a `replace_range` panic.
+    range: Range<usize>,
+    /// Whether the caret should be hidden because the IME currently owns
+    /// its position — winit's `ImeEvent::Preedit { cursor: None, .. }`
+    /// signal. Cleared (implicitly, by this whole struct going away) on
+    /// commit, on `Disabled`, and on any non-IME edit; explicitly reset to
+    /// `false` by a direct caret-navigation call while composing stays
+    /// active (see [`TextEditingController::move_caret_left`] and its
+    /// siblings) — the user taking the caret back means the IME no longer
+    /// owns its position, even though the composition itself continues.
+    caret_hidden: bool,
 }
 
 // ============================================================================
@@ -73,12 +102,18 @@ struct ControllerInner {
 /// implement Flutter's `TextEditingValue.composing` model — see each method's
 /// doc for the exact replace-vs-insert and clamping rules. The **hidden
 /// caret** case (`cursor: None` on a preedit event, winit's own semantics for
-/// "the IME wants no caret drawn") collapses the caret to the end of the
-/// composing region in v1 rather than tracking a separate `caret_hidden`
-/// flag: [`flui_objects::RenderEditable`] has no rendering state to hide the
-/// caret while still painting composing text, so a flag with no consumer
-/// would be a lie of completeness. This is a named deferral, not a silent
-/// gap — see `RenderEditable`'s module doc.
+/// "the IME wants no caret drawn") is tracked internally and exposed through
+/// [`Self::caret_hidden_by_ime`] — the owning `EditableTextState` consults it
+/// to suppress the painted caret while composition still paints its own
+/// underline (see ADR-0033). Composition end — a commit, `Disabled`, a
+/// non-IME edit, or `Preedit` cancellation (see below) — always drops the
+/// whole internal composing state, so the hidden-caret flag can never
+/// outlive the composition it describes.
+///
+/// **`Preedit` with empty text is composition cancellation, not an
+/// empty-but-active composition.** Winit signals a cancelled composition as
+/// `Preedit { text: "", cursor: None }` with no following `Commit`/`Disabled`
+/// — see [`Self::set_composing_text`]'s doc for the exact handling.
 ///
 /// # DEFERRED (v1)
 ///
@@ -87,10 +122,6 @@ struct ControllerInner {
 ///   Drag-to-select and selection rendering are not implemented.
 /// - **Clipboard**: copy/paste/cut are not wired.
 /// - **Input formatters**: no validation or transformation pipeline.
-/// - **Composing underline / visual distinction**: [`Self::composing_range`]
-///   is tracked, but nothing paints it differently from committed text —
-///   [`flui_objects::RenderEditable`] renders one plain caret, no underline.
-/// - **Hidden caret while composing**: see "IME composition" above.
 #[derive(Clone)]
 pub struct TextEditingController {
     /// Shared text buffer + caret state.
@@ -257,12 +288,15 @@ impl TextEditingController {
 
     /// Move the caret one character to the left.
     ///
-    /// No-op when the caret is at the beginning.
+    /// No-op when the caret is at the beginning. Also clears
+    /// [`Self::caret_hidden_by_ime`] when a composition is active — the user
+    /// taking the caret back means the IME no longer owns its position, even
+    /// though the composition itself keeps running.
     pub fn move_caret_left(&self) {
         let changed = {
             let mut guard = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
             let caret = guard.caret_byte_offset;
-            if caret == 0 {
+            let moved = if caret == 0 {
                 false
             } else {
                 let prev_boundary = guard.text[..caret]
@@ -271,7 +305,13 @@ impl TextEditingController {
                     .map_or(0, |(idx, _)| idx);
                 guard.caret_byte_offset = prev_boundary;
                 true
-            }
+            };
+            // Always invoked (not short-circuited by `moved`): the flag must
+            // clear even when the caret was already at the boundary — a
+            // no-op move at the buffer's edge still means the user reached
+            // for the caret directly.
+            let unhid = clear_caret_hidden(&mut guard);
+            moved || unhid
         };
         if changed {
             self.notifier.notify_listeners();
@@ -280,18 +320,22 @@ impl TextEditingController {
 
     /// Move the caret one character to the right.
     ///
-    /// No-op when the caret is at the end.
+    /// No-op when the caret is at the end. Also clears
+    /// [`Self::caret_hidden_by_ime`] when a composition is active — see
+    /// [`Self::move_caret_left`]'s doc.
     pub fn move_caret_right(&self) {
         let changed = {
             let mut guard = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
             let caret = guard.caret_byte_offset;
-            if caret == guard.text.len() {
+            let moved = if caret == guard.text.len() {
                 false
             } else {
                 let char_width = guard.text[caret..].chars().next().map_or(0, char::len_utf8);
                 guard.caret_byte_offset = caret + char_width;
                 true
-            }
+            };
+            let unhid = clear_caret_hidden(&mut guard);
+            moved || unhid
         };
         if changed {
             self.notifier.notify_listeners();
@@ -300,16 +344,20 @@ impl TextEditingController {
 
     /// Move the caret to the beginning of the buffer (Home).
     ///
-    /// No-op when the caret is already at position 0.
+    /// No-op when the caret is already at position 0. Also clears
+    /// [`Self::caret_hidden_by_ime`] when a composition is active — see
+    /// [`Self::move_caret_left`]'s doc.
     pub fn move_caret_home(&self) {
         let changed = {
             let mut guard = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
-            if guard.caret_byte_offset == 0 {
+            let moved = if guard.caret_byte_offset == 0 {
                 false
             } else {
                 guard.caret_byte_offset = 0;
                 true
-            }
+            };
+            let unhid = clear_caret_hidden(&mut guard);
+            moved || unhid
         };
         if changed {
             self.notifier.notify_listeners();
@@ -318,17 +366,21 @@ impl TextEditingController {
 
     /// Move the caret to the end of the buffer (End).
     ///
-    /// No-op when the caret is already at the end.
+    /// No-op when the caret is already at the end. Also clears
+    /// [`Self::caret_hidden_by_ime`] when a composition is active — see
+    /// [`Self::move_caret_left`]'s doc.
     pub fn move_caret_end(&self) {
         let changed = {
             let mut guard = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
             let end = guard.text.len();
-            if guard.caret_byte_offset == end {
+            let moved = if guard.caret_byte_offset == end {
                 false
             } else {
                 guard.caret_byte_offset = end;
                 true
-            }
+            };
+            let unhid = clear_caret_hidden(&mut guard);
+            moved || unhid
         };
         if changed {
             self.notifier.notify_listeners();
@@ -348,7 +400,8 @@ impl TextEditingController {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .composing
-            .clone()
+            .as_ref()
+            .map(|state| state.range.clone())
     }
 
     /// Whether an IME composition is currently in progress.
@@ -368,6 +421,32 @@ impl TextEditingController {
             .is_some()
     }
 
+    /// Whether the caret should currently be hidden because the IME owns its
+    /// position — `false` whenever no composition is active, so a caller
+    /// never needs to separately check [`Self::is_composing`] first.
+    ///
+    /// Reflects the most recent [`Self::set_composing_text`]'s `cursor`
+    /// argument: `cursor: None` (winit's "hide the caret" signal) sets this
+    /// `true`; a caret-navigation call (
+    /// [`move_caret_left`](Self::move_caret_left)/
+    /// [`move_caret_right`](Self::move_caret_right)/
+    /// [`move_caret_home`](Self::move_caret_home)/
+    /// [`move_caret_end`](Self::move_caret_end)) clears it back to `false`
+    /// without ending the composition — the user took the caret back, so the
+    /// IME no longer owns its position even though composing text is still
+    /// present. [`EditableTextState`](super::EditableTextState) consults this
+    /// to suppress the painted caret while the composing-region underline
+    /// keeps painting (ADR-0033).
+    #[must_use]
+    pub fn caret_hidden_by_ime(&self) -> bool {
+        self.inner
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .composing
+            .as_ref()
+            .is_some_and(|state| state.caret_hidden)
+    }
+
     /// Apply an IME preedit update.
     ///
     /// `text` is the full current composition string; `cursor` is a byte
@@ -376,11 +455,25 @@ impl TextEditingController {
     ///
     /// Replaces the existing composing region if one is already active,
     /// else inserts `text` at the current caret and starts a new composing
-    /// region there. The caret is repositioned to `cursor`'s end,
-    /// translated into the outer buffer; `cursor: None` (the platform wants
-    /// no caret drawn) collapses the caret to the end of the composing
-    /// region instead of hiding it — see the type doc's "IME composition"
-    /// section for why v1 does not track a separate hidden-caret flag.
+    /// region there. The caret is repositioned to `cursor`'s end, translated
+    /// into the outer buffer; `cursor: None` (the platform wants no caret
+    /// drawn) sets [`Self::caret_hidden_by_ime`] and additionally collapses
+    /// the caret to the end of the composing region (both — hiding it is
+    /// not a substitute for tracking where it logically sits).
+    ///
+    /// # `text.is_empty()` is composition cancellation
+    ///
+    /// Winit signals a cancelled composition as `Preedit { text: "", cursor:
+    /// None }`, with **no** following `Commit`/`Disabled` event. Treating
+    /// this the same as any other (non-empty) preedit update would strip the
+    /// composing slice — correct — but then set `composing = Some(empty
+    /// range)` — wrong: [`Self::is_composing`] would report `true` forever
+    /// after, permanently suppressing `Key::Character` insertion for the
+    /// rest of the focus session (the exact failure mode
+    /// [`flui_types::ImeEvent`]'s suppression contract warns against). So an
+    /// empty `text` strips the existing composing slice (if any) the same
+    /// way [`Self::clear_composing`] does, and ends composition — `composing`
+    /// becomes `None`, not `Some` of an empty range.
     ///
     /// # Malformed input
     ///
@@ -393,7 +486,8 @@ impl TextEditingController {
             let mut guard = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
             let region = guard
                 .composing
-                .clone()
+                .as_ref()
+                .map(|state| state.range.clone())
                 .unwrap_or(guard.caret_byte_offset..guard.caret_byte_offset);
             // Defense in depth: every non-IME mutator already clears
             // `composing` on a text edit (see `Self::insert_str`'s doc), so
@@ -401,13 +495,27 @@ impl TextEditingController {
             // re-clamp is what makes a future mutator that forgets that rule
             // degrade to wrong text instead of a `replace_range` panic.
             let region = clamp_range_to_text(&region, &guard.text);
-            guard.text.replace_range(region.clone(), text);
-            guard.composing = Some(region.start..region.start + text.len());
-            let caret_in_preedit = match cursor {
-                Some((_, end)) => clamp_to_char_boundary(text, end),
-                None => text.len(),
-            };
-            guard.caret_byte_offset = region.start + caret_in_preedit;
+            if text.is_empty() {
+                // Composition cancel (see this method's doc) — strip the
+                // slice and END composition, never leave a `Some(empty
+                // range)` marker behind.
+                guard.text.replace_range(region.clone(), "");
+                guard.composing = None;
+                if guard.caret_byte_offset > region.start {
+                    guard.caret_byte_offset = region.start;
+                }
+            } else {
+                guard.text.replace_range(region.clone(), text);
+                guard.composing = Some(ComposingState {
+                    range: region.start..region.start + text.len(),
+                    caret_hidden: cursor.is_none(),
+                });
+                let caret_in_preedit = match cursor {
+                    Some((_, end)) => clamp_to_char_boundary(text, end),
+                    None => text.len(),
+                };
+                guard.caret_byte_offset = region.start + caret_in_preedit;
+            }
         }
         self.notifier.notify_listeners();
     }
@@ -422,9 +530,9 @@ impl TextEditingController {
     pub fn commit_text(&self, text: &str) {
         {
             let mut guard = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
-            let insert_at = if let Some(range) = guard.composing.clone() {
+            let insert_at = if let Some(state) = guard.composing.clone() {
                 // Defense in depth — see `set_composing_text`'s matching comment.
-                let range = clamp_range_to_text(&range, &guard.text);
+                let range = clamp_range_to_text(&state.range, &guard.text);
                 guard.text.replace_range(range.clone(), text);
                 range.start
             } else {
@@ -453,9 +561,9 @@ impl TextEditingController {
         let changed = {
             let mut guard = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
             match guard.composing.take() {
-                Some(range) => {
+                Some(state) => {
                     // Defense in depth — see `set_composing_text`'s matching comment.
-                    let range = clamp_range_to_text(&range, &guard.text);
+                    let range = clamp_range_to_text(&state.range, &guard.text);
                     guard.text.replace_range(range.clone(), "");
                     if guard.caret_byte_offset > range.start {
                         guard.caret_byte_offset = range.start;
@@ -529,6 +637,21 @@ impl Listenable for TextEditingController {
 
     fn remove_all_listeners(&self) {
         self.notifier.remove_all_listeners();
+    }
+}
+
+/// Clears the active composition's `caret_hidden` flag, if one is set.
+/// Returns whether it actually changed (`true` → `false`), for callers that
+/// only want to notify listeners on a real change — see
+/// [`TextEditingController::move_caret_left`]'s doc for why direct caret
+/// navigation takes the caret back from the IME without ending composition.
+fn clear_caret_hidden(guard: &mut ControllerInner) -> bool {
+    match guard.composing.as_mut() {
+        Some(state) if state.caret_hidden => {
+            state.caret_hidden = false;
+            true
+        }
+        _ => false,
     }
 }
 
@@ -924,6 +1047,98 @@ mod tests {
             "cursor: None (the platform's hidden-caret signal) collapses the \
              caret to the end of the composing region in v1"
         );
+        assert!(
+            controller.caret_hidden_by_ime(),
+            "cursor: None must also mark the caret hidden, not just collapse \
+             its position"
+        );
+    }
+
+    #[test]
+    fn cursor_some_leaves_the_caret_visible() {
+        let controller = TextEditingController::with_text("Hi ");
+        controller.set_composing_text("wor", Some((3, 3)));
+        assert!(
+            !controller.caret_hidden_by_ime(),
+            "a cursor: Some preedit must not hide the caret"
+        );
+    }
+
+    #[test]
+    fn caret_hidden_by_ime_is_false_when_no_composition_is_active() {
+        let controller = TextEditingController::with_text("Hi");
+        assert!(!controller.caret_hidden_by_ime());
+    }
+
+    /// The bug this reshape fixes: winit signals a cancelled composition as
+    /// `Preedit { text: "", cursor: None }` with no following
+    /// `Commit`/`Disabled`. Before the fix, `set_composing_text("", _)` left
+    /// `composing = Some(n..n)` (an empty-but-active region), so
+    /// `is_composing()` stayed `true` forever and `Key::Character` insertion
+    /// was permanently suppressed for the rest of the focus session.
+    ///
+    /// Red-check: revert `set_composing_text` to always take the
+    /// `Some(region.start..region.start + text.len())` branch regardless of
+    /// whether `text` is empty — `is_composing()` after the cancel returns
+    /// `true` instead of `false`, and the typed-character assertion below
+    /// fails (the character never reaches the buffer).
+    #[test]
+    fn empty_preedit_ends_composition_instead_of_leaving_an_empty_active_region() {
+        let controller = TextEditingController::new();
+        controller.set_composing_text("nihao", Some((5, 5)));
+        assert_eq!(controller.text(), "nihao");
+        assert!(controller.is_composing());
+
+        // Winit's composition-cancel signal: empty text, no cursor.
+        controller.set_composing_text("", None);
+
+        assert_eq!(
+            controller.text(),
+            "",
+            "the cancelled preedit's slice must be stripped from the buffer"
+        );
+        assert!(
+            !controller.is_composing(),
+            "Preedit(\"\") must end composition, not leave an empty-but-active \
+             region behind"
+        );
+        assert!(!controller.caret_hidden_by_ime());
+
+        // Plain typing must work immediately after the cancel — the exact
+        // suppression-forever failure mode this fix closes.
+        controller.insert_str("x");
+        assert_eq!(controller.text(), "x");
+    }
+
+    /// Direct caret navigation takes the caret back from the IME: the
+    /// composition itself keeps running (the underline still paints), but
+    /// the caret is no longer hidden.
+    ///
+    /// Red-check: remove the `clear_caret_hidden` call from
+    /// `move_caret_home` — `caret_hidden_by_ime()` stays `true` after this
+    /// test's `move_caret_home()` call.
+    #[test]
+    fn caret_navigation_restores_the_caret_while_composing() {
+        let controller = TextEditingController::with_text("abc");
+        controller.set_composing_text("def", None);
+        assert!(controller.caret_hidden_by_ime());
+        let composing_before = controller.composing_range();
+
+        controller.move_caret_home();
+
+        assert!(
+            !controller.caret_hidden_by_ime(),
+            "moving the caret directly must restore its visibility"
+        );
+        assert!(
+            controller.is_composing(),
+            "caret navigation must not end the composition"
+        );
+        assert_eq!(
+            controller.composing_range(),
+            composing_before,
+            "the composing range itself must stay untouched by caret navigation"
+        );
     }
 
     /// Red-check: drop the `clamp_to_char_boundary` call in
@@ -1098,7 +1313,10 @@ mod tests {
             // region that described the text BEFORE it shrank.
             guard.text = "Hello niha".to_string(); // shrank by one byte
             guard.caret_byte_offset = guard.text.len();
-            guard.composing = Some(6..11); // now out of bounds
+            guard.composing = Some(ComposingState {
+                range: 6..11, // now out of bounds
+                caret_hidden: false,
+            });
         }
 
         // Must not panic.

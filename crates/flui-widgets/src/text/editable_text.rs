@@ -3,6 +3,7 @@
 
 use std::{
     cell::{Cell, RefCell},
+    ops::Range,
     rc::Rc,
     sync::Arc,
 };
@@ -67,30 +68,27 @@ use crate::text::controller::TextEditingController;
 ///
 /// While an IME client is attached (focus gain to blur/dispose),
 /// `EditableTextState` also runs a self-rescheduling post-frame loop (ADR-0032)
-/// that reads the caret's current global rect — through the second,
-/// inner [`SubtreeAnchor`](flui_objects::SubtreeAnchor) wrapping the render
-/// view directly (`build_field_view`) and
+/// that reads the composing region's current global rect when one is
+/// active, falling back to the collapsed caret's rect otherwise — through
+/// the second, inner [`SubtreeAnchor`](flui_objects::SubtreeAnchor) wrapping
+/// the render view directly (`build_field_view`) and
+/// [`RenderEditable::rect_for_composing_range`]/
 /// [`RenderEditable::caret_local_rect`] — and forwards it to
 /// [`TextInputHandle::set_cursor_area`] whenever it changes, so the platform
-/// IME candidate window follows the caret. This is a winit single-rect
-/// reduction of Flutter's transform+local-rect protocol
-/// (`editable_text.dart`'s `_updateSizeAndTransform`/
-/// `_updateCaretRectIfNeeded`/`_schedulePeriodicPostFrameCallbacks`, tag
-/// `3.44.0`) — see ADR-0032 for the full rationale, including why the loop
-/// is per-attach (a fresh alive-flag and a fresh last-sent cache each
-/// attach) rather than shared across the field's lifetime.
+/// IME candidate window follows the composing text (or the caret, once
+/// composition ends). This is a winit single-rect reduction of Flutter's
+/// transform+local-rect protocol (`editable_text.dart`'s
+/// `_updateSizeAndTransform`/`_updateComposingRectIfNeeded`/
+/// `_schedulePeriodicPostFrameCallbacks`, tag `3.44.0`) — see ADR-0032 for
+/// the loop mechanics (why it is per-attach: a fresh alive-flag and a fresh
+/// last-sent cache each attach, rather than shared across the field's
+/// lifetime) and ADR-0033 for the composing-rect-over-caret-rect fallback
+/// order this loop now applies.
 ///
 /// # DEFERRED (v1)
 ///
 /// The following are absent in v1; do not use these features and expect them
 /// to work:
-/// - **Composing underline / hidden caret while composing** — see
-///   [`TextEditingController`]'s "IME composition" doc section.
-/// - **Composing-range cursor-area rect** — the cursor-area loop always
-///   reports the collapsed caret's rect, never a per-glyph composing-range
-///   rect (Flutter's `_updateComposingRectIfNeeded`, `3.44.0`, which itself
-///   falls back to the caret rect when no composing-range geometry is
-///   available — the same fallback this substrate uses unconditionally).
 /// - **Text selection by drag** — only a collapsed caret is tracked; drag
 ///   selection, shift-click, and selection rendering are not implemented.
 /// - **Clipboard** — copy / paste / cut (`Ctrl+C/V/X`) are not wired.
@@ -698,9 +696,15 @@ impl CursorAreaLoop {
         self.schedule();
     }
 
-    /// The caret's current rect in window-root-space logical pixels:
-    /// `inner_anchor`'s committed transform to the render root, applied to
-    /// the anchored `RenderEditable` child's local caret rect.
+    /// The IME candidate window's current target rect in window-root-space
+    /// logical pixels: `inner_anchor`'s committed transform to the render
+    /// root, applied to the anchored `RenderEditable` child's composing
+    /// region rect when one is active, falling back to its collapsed caret
+    /// rect otherwise — Flutter's own `_updateComposingRectIfNeeded` order
+    /// (`editable_text.dart`, tag `3.44.0`: prefer the composing rect,
+    /// fall back to the caret rect when none is available). ADR-0033
+    /// upgrades this loop from the caret-rect-only reduction ADR-0032
+    /// originally landed.
     fn global_caret_rect(&self) -> Option<Bounds<Pixels>> {
         let anchor_id = self.inner_anchor.get()?;
         let owner = self.pipeline_owner.as_ref()?.read();
@@ -712,7 +716,9 @@ impl CursorAreaLoop {
             .as_box()?
             .render_object()
             .downcast_ref::<RenderEditable>()?; // PORT-CHECK-OK-DOWNCAST: ADR-0032 IME cursor-area loop reaches the one concrete render object type it knows sits under `inner_anchor` (an `EditableTextRenderView`'s `RenderEditable`) through the storage layer's `&dyn RenderObject<BoxProtocol>` erasure — see docs/PORT.md FR-033/widgets.
-        let local_rect = editable.caret_local_rect();
+        let local_rect = editable
+            .rect_for_composing_range()
+            .unwrap_or_else(|| editable.caret_local_rect());
         let transform = owner.transform_to(anchor_id, root_id)?;
         Some(bounds_from_rect(transform.transform_rect(&local_rect)))
     }
@@ -796,6 +802,12 @@ struct EditableTextRenderView {
     text: String,
     caret_byte_offset: usize,
     show_caret: bool,
+    /// The IME composing region to underline, gated on `enabled &&
+    /// has_primary_focus()` by [`build_field_view`] — the FLUI analog of
+    /// Flutter's `buildTextSpan`'s `withComposing: !widget.readOnly` (plus
+    /// its own focus gating), named rather than a direct port since no
+    /// `readOnly` field exists (see [`EditableText::enabled`]'s doc).
+    composing_range: Option<Range<usize>>,
     caret_height: f32,
     caret_color: Color,
     text_style: Option<TextStyle>,
@@ -813,6 +825,7 @@ impl EditableTextRenderView {
             .with_caret_width(2.0)
             .with_caret_height(self.caret_height)
             .with_caret_color(self.caret_color)
+            .with_composing_range(self.composing_range.clone())
     }
 }
 
@@ -855,16 +868,28 @@ fn build_field_view(
     text_style: Option<TextStyle>,
     inner_anchor: flui_objects::SubtreeAnchor,
 ) -> BoxedView {
+    // `enabled` is defensive here: `did_update_view` already unfocuses a
+    // field that becomes disabled while focused, so `has_primary_focus`
+    // should already be `false` by the time this runs.
+    let focused = enabled && focus_node.has_primary_focus();
     crate::navigator::AnchoredBox::new(
         inner_anchor,
         EditableTextRenderView {
             text: controller.text(),
             caret_byte_offset: controller.caret_byte_offset(),
-            // `enabled` is defensive here: `did_update_view` already
-            // unfocuses a field that becomes disabled while focused, so
-            // `has_primary_focus` should already be `false` by the time
-            // this runs.
-            show_caret: enabled && focus_node.has_primary_focus(),
+            show_caret: focused && !controller.caret_hidden_by_ime(),
+            // Composing-region underline gated on the same `focused` check
+            // as `show_caret` — Flutter's `buildTextSpan`'s
+            // `withComposing: !widget.readOnly` plus its focus gating
+            // (`_EditableTextState.buildTextSpan`, `editable_text.dart`,
+            // tag `3.44.0`): an unfocused field must not keep painting a
+            // stale composing underline for text it no longer owns input
+            // for.
+            composing_range: if focused {
+                controller.composing_range()
+            } else {
+                None
+            },
             caret_height,
             caret_color,
             text_style,
@@ -1023,6 +1048,7 @@ mod tests {
             text: "hello".to_string(),
             caret_byte_offset: 0,
             show_caret: false,
+            composing_range: None,
             caret_height: 18.0,
             caret_color: Color::BLACK,
             text_style: Some(style.clone()),
@@ -1046,6 +1072,7 @@ mod tests {
             text: "hello".to_string(),
             caret_byte_offset: 0,
             show_caret: false,
+            composing_range: None,
             caret_height: 18.0,
             caret_color: Color::BLACK,
             text_style: None,
@@ -1684,6 +1711,388 @@ mod tests {
             1,
             "blur->refocus in one scope must leave exactly one live loop; a \
              leaked stale loop would double this frame's send count"
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // Composing-region underline + hidden caret (ADR-0033)
+    // ------------------------------------------------------------------
+
+    /// Runs `f` against the mounted field's single `RenderEditable`, found
+    /// by downcasting the one render object this widget mounts.
+    fn with_render_editable<T>(
+        harness: &crate::test_harness::Harness,
+        f: impl FnOnce(&RenderEditable) -> T,
+    ) -> Option<T> {
+        let owner = harness.pipeline_owner();
+        let owner = owner.read();
+        let tree = owner.render_tree();
+        let mut f = Some(f);
+        for (_, node) in tree.iter() {
+            let editable = node
+                .as_box()
+                .and_then(|b| b.render_object().downcast_ref::<RenderEditable>()); // PORT-CHECK-OK-DOWNCAST: test-only reach to the one concrete render object type this widget mounts, through the storage layer's `&dyn RenderObject<BoxProtocol>` erasure — same sanctioned boundary as `CursorAreaLoop::global_caret_rect` above; see docs/PORT.md FR-033/widgets.
+            if let Some(editable) = editable {
+                return f.take().map(|f| f(editable));
+            }
+        }
+        None
+    }
+
+    /// Whether the mounted field's caret is currently painted.
+    fn show_caret_flag(harness: &crate::test_harness::Harness) -> bool {
+        with_render_editable(harness, RenderEditable::show_caret).unwrap_or(false)
+    }
+
+    /// The mounted field's composing-region rect, if any — `None` covers
+    /// both "no `RenderEditable` found" and "no composing range active".
+    fn composing_rect(harness: &crate::test_harness::Harness) -> Option<Rect> {
+        with_render_editable(harness, RenderEditable::rect_for_composing_range).flatten()
+    }
+
+    /// The mounted field's collapsed caret rect — always geometry, per
+    /// [`RenderEditable::caret_local_rect`]'s visibility-independence
+    /// contract.
+    fn caret_rect(harness: &crate::test_harness::Harness) -> Rect {
+        with_render_editable(harness, RenderEditable::caret_local_rect)
+            .expect("a mounted EditableText always has a RenderEditable")
+    }
+
+    /// `Preedit { cursor: None }` while focused hides the caret and starts
+    /// painting the composing underline — the FLUI expression of Flutter's
+    /// `buildTextSpan`'s composing-underline three-way split plus its
+    /// hidden-caret case, both now implemented (ADR-0033).
+    ///
+    /// Red-check: drop the `!controller.caret_hidden_by_ime()` term from
+    /// `build_field_view`'s `show_caret` expression — this test's
+    /// `show_caret_flag` assertion fails (stays `true`).
+    #[test]
+    fn preedit_cursor_none_while_focused_hides_the_caret_and_starts_the_underline() {
+        let _guard = crate::test_harness::FOCUS_TEST_LOCK.lock();
+        FocusManager::global().unfocus();
+
+        let controller = TextEditingController::new();
+        let mut harness =
+            crate::test_harness::mount_with_ime(EditableText::new(controller.clone()));
+        let node_id = controller.focus_node_id().expect("published node");
+        harness.enter_owner_scope(|| {
+            FocusManager::global().request_focus(node_id);
+        });
+        harness.tick();
+        assert!(
+            show_caret_flag(&harness),
+            "precondition: the caret paints while focused with no composition"
+        );
+
+        dispatch_ime(&flui_types::ImeEvent::Preedit {
+            text: "ni".to_string(),
+            cursor: None,
+        });
+        harness.tick();
+
+        assert!(
+            !show_caret_flag(&harness),
+            "cursor: None must hide the caret while composing"
+        );
+        assert!(
+            composing_rect(&harness).is_some(),
+            "an active composing range must produce composing geometry"
+        );
+    }
+
+    /// The contrast case: `cursor: Some` keeps the caret visible alongside
+    /// the composing underline.
+    #[test]
+    fn preedit_cursor_some_while_focused_keeps_the_caret_visible() {
+        let _guard = crate::test_harness::FOCUS_TEST_LOCK.lock();
+        FocusManager::global().unfocus();
+
+        let controller = TextEditingController::new();
+        let mut harness =
+            crate::test_harness::mount_with_ime(EditableText::new(controller.clone()));
+        let node_id = controller.focus_node_id().expect("published node");
+        harness.enter_owner_scope(|| {
+            FocusManager::global().request_focus(node_id);
+        });
+        harness.tick();
+
+        dispatch_ime(&flui_types::ImeEvent::Preedit {
+            text: "ni".to_string(),
+            cursor: Some((2, 2)),
+        });
+        harness.tick();
+
+        assert!(
+            show_caret_flag(&harness),
+            "cursor: Some must leave the caret visible"
+        );
+        assert!(composing_rect(&harness).is_some());
+    }
+
+    /// A commit ends composition: the underline disappears and the caret is
+    /// restored.
+    #[test]
+    fn commit_removes_the_underline_and_restores_the_caret() {
+        let _guard = crate::test_harness::FOCUS_TEST_LOCK.lock();
+        FocusManager::global().unfocus();
+
+        let controller = TextEditingController::new();
+        let mut harness =
+            crate::test_harness::mount_with_ime(EditableText::new(controller.clone()));
+        let node_id = controller.focus_node_id().expect("published node");
+        harness.enter_owner_scope(|| {
+            FocusManager::global().request_focus(node_id);
+        });
+        harness.tick();
+
+        dispatch_ime(&flui_types::ImeEvent::Preedit {
+            text: "ni".to_string(),
+            cursor: None,
+        });
+        harness.tick();
+        assert!(
+            !show_caret_flag(&harness),
+            "precondition: caret hidden while composing"
+        );
+
+        dispatch_ime(&flui_types::ImeEvent::Commit("你".to_string()));
+        harness.tick();
+
+        assert!(
+            composing_rect(&harness).is_none(),
+            "a commit must remove the composing underline"
+        );
+        assert!(show_caret_flag(&harness), "a commit must restore the caret");
+    }
+
+    /// `Disabled` mid-composition (winit's connection-closed signal) also
+    /// ends composition: underline gone, caret restored.
+    #[test]
+    fn disabled_removes_the_underline_and_restores_the_caret() {
+        let _guard = crate::test_harness::FOCUS_TEST_LOCK.lock();
+        FocusManager::global().unfocus();
+
+        let controller = TextEditingController::with_text("Hello ");
+        let mut harness =
+            crate::test_harness::mount_with_ime(EditableText::new(controller.clone()));
+        let node_id = controller.focus_node_id().expect("published node");
+        harness.enter_owner_scope(|| {
+            FocusManager::global().request_focus(node_id);
+        });
+        harness.tick();
+
+        dispatch_ime(&flui_types::ImeEvent::Preedit {
+            text: "wor".to_string(),
+            cursor: None,
+        });
+        harness.tick();
+        assert!(!show_caret_flag(&harness));
+
+        dispatch_ime(&flui_types::ImeEvent::Disabled);
+        harness.tick();
+
+        assert!(composing_rect(&harness).is_none());
+        assert!(show_caret_flag(&harness));
+    }
+
+    /// `Preedit("")` — winit's composition-cancel signal — ends composition
+    /// through the full attached-client path: underline gone, caret
+    /// restored, and plain typing works immediately after.
+    #[test]
+    fn empty_preedit_cancels_the_composition_through_the_attached_client() {
+        let _guard = crate::test_harness::FOCUS_TEST_LOCK.lock();
+        FocusManager::global().unfocus();
+
+        let controller = TextEditingController::new();
+        let mut harness =
+            crate::test_harness::mount_with_ime(EditableText::new(controller.clone()));
+        let node_id = controller.focus_node_id().expect("published node");
+        harness.enter_owner_scope(|| {
+            FocusManager::global().request_focus(node_id);
+        });
+        harness.tick();
+
+        dispatch_ime(&flui_types::ImeEvent::Preedit {
+            text: "nihao".to_string(),
+            cursor: Some((5, 5)),
+        });
+        harness.tick();
+        assert_eq!(controller.text(), "nihao");
+
+        dispatch_ime(&flui_types::ImeEvent::Preedit {
+            text: String::new(),
+            cursor: None,
+        });
+        harness.tick();
+
+        assert_eq!(controller.text(), "");
+        assert!(!controller.is_composing());
+        assert!(composing_rect(&harness).is_none());
+        assert!(show_caret_flag(&harness));
+
+        let handled = FocusManager::global().dispatch_key_event(&character_key_event('x'));
+        assert!(handled);
+        assert_eq!(
+            controller.text(),
+            "x",
+            "plain typing must work immediately after the cancel"
+        );
+    }
+
+    /// The gating contract: an unfocused field must not keep passing a
+    /// still-active composing range to the render view, even though blur
+    /// does not itself end the composition (only detaches the IME client —
+    /// see `blur_detaches_the_ime_client`).
+    ///
+    /// Red-check: drop the `if focused { ... } else { None }` gate around
+    /// `composing_range` in `build_field_view` (pass
+    /// `controller.composing_range()` unconditionally) — the final
+    /// assertion's inversion holds: `composing_rect` stays `Some` after
+    /// blur instead of becoming `None`.
+    #[test]
+    fn unfocus_mid_composition_stops_passing_the_composing_range() {
+        let _guard = crate::test_harness::FOCUS_TEST_LOCK.lock();
+        FocusManager::global().unfocus();
+
+        let controller = TextEditingController::new();
+        let mut harness =
+            crate::test_harness::mount_with_ime(EditableText::new(controller.clone()));
+        let node_id = controller.focus_node_id().expect("published node");
+        harness.enter_owner_scope(|| {
+            FocusManager::global().request_focus(node_id);
+        });
+        harness.tick();
+
+        dispatch_ime(&flui_types::ImeEvent::Preedit {
+            text: "ni".to_string(),
+            cursor: Some((2, 2)),
+        });
+        harness.tick();
+        assert!(
+            composing_rect(&harness).is_some(),
+            "precondition: the composing range paints while focused"
+        );
+
+        harness.enter_owner_scope(|| {
+            FocusManager::global().unfocus();
+        });
+        harness.tick();
+
+        assert!(
+            controller.is_composing(),
+            "blur alone must not end the composition itself"
+        );
+        assert!(
+            composing_rect(&harness).is_none(),
+            "an unfocused field must stop painting a stale composing underline"
+        );
+    }
+
+    /// Direct caret navigation (Home, via the ordinary key handler) restores
+    /// the caret while the composition itself keeps running — exercised
+    /// through the full production key-dispatch path, not just the
+    /// controller unit test.
+    #[test]
+    fn caret_navigation_restores_the_caret_through_the_key_handler_while_composing() {
+        let _guard = crate::test_harness::FOCUS_TEST_LOCK.lock();
+        FocusManager::global().unfocus();
+
+        let controller = TextEditingController::with_text("abc");
+        let mut harness =
+            crate::test_harness::mount_with_ime(EditableText::new(controller.clone()));
+        let node_id = controller.focus_node_id().expect("published node");
+        harness.enter_owner_scope(|| {
+            FocusManager::global().request_focus(node_id);
+        });
+        harness.tick();
+
+        dispatch_ime(&flui_types::ImeEvent::Preedit {
+            text: "def".to_string(),
+            cursor: None,
+        });
+        harness.tick();
+        assert!(
+            !show_caret_flag(&harness),
+            "precondition: caret hidden while composing"
+        );
+
+        use flui_interaction::events::{Code, KeyState, NamedKey};
+        use flui_interaction::testing::input::KeyEventBuilder;
+        let home_event = KeyEventBuilder::new(Code::Home)
+            .with_key(Key::Named(NamedKey::Home))
+            .with_state(KeyState::Down)
+            .build();
+        let handled = FocusManager::global().dispatch_key_event(&home_event);
+        assert!(handled);
+        harness.tick();
+
+        assert!(
+            show_caret_flag(&harness),
+            "moving the caret directly must restore its visibility"
+        );
+        assert!(
+            controller.is_composing(),
+            "caret navigation must not end the composition"
+        );
+    }
+
+    /// The cursor-area loop (ADR-0032, upgraded by ADR-0033) prefers the
+    /// composing rect while composing, and falls back to the caret rect
+    /// once composition is cancelled.
+    #[test]
+    fn cursor_area_loop_prefers_the_composing_rect_and_falls_back_to_the_caret_rect_after_cancel() {
+        let _guard = crate::test_harness::FOCUS_TEST_LOCK.lock();
+        FocusManager::global().unfocus();
+
+        let controller = TextEditingController::new();
+        let mut harness =
+            crate::test_harness::mount_with_ime(EditableText::new(controller.clone()));
+        let node_id = controller.focus_node_id().expect("published node");
+
+        harness.enter_owner_scope(|| {
+            FocusManager::global().request_focus(node_id);
+        });
+        harness.tick();
+        assert_eq!(harness.cursor_area_calls().len(), 1);
+
+        dispatch_ime(&flui_types::ImeEvent::Preedit {
+            text: "ni".to_string(),
+            cursor: Some((2, 2)),
+        });
+        harness.tick();
+
+        let composing = composing_rect(&harness).expect("an active composing range");
+        let sent_while_composing = *harness
+            .cursor_area_calls()
+            .last()
+            .expect("a send while composing");
+        assert_eq!(
+            sent_while_composing.origin,
+            Point::new(composing.left(), composing.top()),
+            "the loop must prefer the composing rect while composing"
+        );
+        assert_eq!(
+            sent_while_composing.size,
+            flui_types::Size::new(composing.width(), composing.height())
+        );
+
+        // Cancel the composition — `Preedit("")`, winit's own signal.
+        dispatch_ime(&flui_types::ImeEvent::Preedit {
+            text: String::new(),
+            cursor: None,
+        });
+        harness.tick();
+
+        assert!(composing_rect(&harness).is_none());
+        let caret = caret_rect(&harness);
+        let sent_after_cancel = *harness
+            .cursor_area_calls()
+            .last()
+            .expect("a send after cancel");
+        assert_eq!(
+            sent_after_cancel.origin,
+            Point::new(caret.left(), caret.top()),
+            "the loop must fall back to the caret rect once composition ends"
         );
     }
 }

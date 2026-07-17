@@ -4,7 +4,7 @@
 
 ---
 
-- **Status:** Accepted
+- **Status:** Accepted (amended by [ADR-0033](ADR-0033-composing-region-rendering.md) — closes the hidden-caret-while-composing deferral and fixes the `Preedit("")` empty-preedit contract divergence)
 - **Date:** 2026-07-17
 - **Deciders:** @vanyastaff
 - **Scope:** `crates/flui-types/src/ime.rs`; `crates/flui-platform/src/traits/{text_input.rs,input.rs,window.rs}`, `crates/flui-platform/src/platforms/{winit/{events.rs,platform.rs},headless/platform.rs}`; `crates/flui-interaction/src/text_input.rs`; `crates/flui-app/src/app/binding.rs` (`ImeBackend`, `AppBinding::attach_text_input`/`detach_text_input`, the `PlatformInput::Ime` arm in `handle_input`)
