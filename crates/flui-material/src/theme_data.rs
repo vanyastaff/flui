@@ -16,6 +16,12 @@ use crate::shape::MaterialShape;
 use crate::text_theme::TextTheme;
 use crate::typography;
 
+/// A [`Color`]-valued [`WidgetStateProperty`] that may itself resolve to
+/// "no override" for a given state set — the shape every narrowed
+/// `*ThemeData` color/side slot in this module uses (`fill_color`,
+/// `check_color`, `overlay_color`, and friends).
+type StateColor = WidgetStateProperty<Option<Color>>;
+
 /// Compute the M3 default [`TextTheme`]: `englishLike2021` geometry overlaid
 /// with a color-only theme uniformly recolored to `on_surface`.
 ///
@@ -395,6 +401,87 @@ pub struct DividerThemeData {
     pub radius: Option<BorderRadius>,
 }
 
+/// Overrides [`Checkbox`](crate::Checkbox)'s `_CheckboxDefaultsM3` token
+/// defaults, one field at a time — an unset field here still falls through
+/// to `Checkbox`'s own M3 default table (see `checkbox.rs`'s
+/// `checkbox_default_*` functions), it does not blank the whole slot.
+///
+/// Flutter parity: `CheckboxThemeData` (`material/checkbox_theme.dart`,
+/// oracle tag `3.44.0`), narrowed to the fields FLUI's `Checkbox` actually
+/// consumes: [`fill_color`](Self::fill_color), [`check_color`](Self::check_color),
+/// [`overlay_color`](Self::overlay_color), [`side`](Self::side). Named
+/// deferrals (no consumer in FLUI's `Checkbox` yet — see that module's docs
+/// for the full named-divergence list): `mouse_cursor`, `splash_radius`
+/// (fixed at the M3 default), `material_tap_target_size`, `visual_density`,
+/// `shape` (fixed at the M3 2dp-rounded default).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct CheckboxThemeData {
+    /// Overrides [`Checkbox`](crate::Checkbox)'s default fill color, per
+    /// state. `None` for a given state falls through to the M3 default.
+    pub fill_color: Option<StateColor>,
+    /// Overrides [`Checkbox`](crate::Checkbox)'s default checkmark/dash
+    /// color, per state.
+    pub check_color: Option<StateColor>,
+    /// Overrides [`Checkbox`](crate::Checkbox)'s default state-overlay
+    /// color (the InkWell-shaped hover/focus/press ramp), per state.
+    pub overlay_color: Option<StateColor>,
+    /// Overrides [`Checkbox`](crate::Checkbox)'s default border side, per
+    /// state.
+    pub side: Option<WidgetStateProperty<Option<BorderSide<Pixels>>>>,
+}
+
+/// Overrides [`Switch`](crate::Switch)'s `_SwitchDefaultsM3` token defaults,
+/// one field at a time — an unset field here still falls through to
+/// `Switch`'s own M3 default table (see `switch.rs`'s `switch_default_*`
+/// functions), it does not blank the whole slot.
+///
+/// Flutter parity: `SwitchThemeData` (`material/switch_theme.dart`, oracle
+/// tag `3.44.0`), narrowed to the fields FLUI's `Switch` actually consumes:
+/// [`thumb_color`](Self::thumb_color), [`track_color`](Self::track_color),
+/// [`track_outline_color`](Self::track_outline_color),
+/// [`overlay_color`](Self::overlay_color). Named deferrals (no consumer in
+/// FLUI's `Switch` yet — see that module's docs for the full
+/// named-divergence list): `mouse_cursor`, `splash_radius`,
+/// `material_tap_target_size`, `thumb_icon`, `padding`,
+/// `track_outline_width` (all fixed at their M3 defaults).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SwitchThemeData {
+    /// Overrides [`Switch`](crate::Switch)'s default thumb color, per state.
+    pub thumb_color: Option<StateColor>,
+    /// Overrides [`Switch`](crate::Switch)'s default track fill color, per
+    /// state.
+    pub track_color: Option<StateColor>,
+    /// Overrides [`Switch`](crate::Switch)'s default track border color, per
+    /// state.
+    pub track_outline_color: Option<StateColor>,
+    /// Overrides [`Switch`](crate::Switch)'s default state-overlay color
+    /// (the InkWell-shaped hover/focus/press ramp), per state.
+    pub overlay_color: Option<StateColor>,
+}
+
+/// Overrides [`Radio`](crate::Radio)'s `_RadioDefaultsM3` token defaults,
+/// one field at a time — an unset field here still falls through to
+/// `Radio`'s own M3 default table (see `radio.rs`'s `radio_default_*`
+/// functions), it does not blank the whole slot.
+///
+/// Flutter parity: `RadioThemeData` (`material/radio_theme.dart`, oracle tag
+/// `3.44.0`), narrowed to the fields FLUI's `Radio` actually consumes:
+/// [`fill_color`](Self::fill_color), [`overlay_color`](Self::overlay_color).
+/// Named deferrals (no consumer in FLUI's `Radio` yet — see that module's
+/// docs for the full named-divergence list): `mouse_cursor`,
+/// `splash_radius`, `material_tap_target_size`, `visual_density`, `side`
+/// (defaults to the ring's own resolved `fill_color`, width `2.0`),
+/// `inner_radius`, `background_color` (fixed transparent).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct RadioThemeData {
+    /// Overrides [`Radio`](crate::Radio)'s default ring/inner-dot fill
+    /// color, per state.
+    pub fill_color: Option<StateColor>,
+    /// Overrides [`Radio`](crate::Radio)'s default state-overlay color (the
+    /// InkWell-shaped hover/focus/press ramp), per state.
+    pub overlay_color: Option<StateColor>,
+}
+
 /// Visual-style configuration provided to descendants by a
 /// [`Theme`](crate::Theme) ancestor.
 ///
@@ -487,6 +574,18 @@ pub struct ThemeData {
     /// [`VerticalDivider`](crate::VerticalDivider)'s M3 token defaults, per
     /// field. Flutter parity: `ThemeData.dividerTheme`.
     pub divider_theme: Option<DividerThemeData>,
+
+    /// Overrides [`Checkbox`](crate::Checkbox)'s M3 token defaults, per
+    /// field. Flutter parity: `ThemeData.checkboxTheme`.
+    pub checkbox_theme: Option<CheckboxThemeData>,
+
+    /// Overrides [`Switch`](crate::Switch)'s M3 token defaults, per field.
+    /// Flutter parity: `ThemeData.switchTheme`.
+    pub switch_theme: Option<SwitchThemeData>,
+
+    /// Overrides [`Radio`](crate::Radio)'s M3 token defaults, per field.
+    /// Flutter parity: `ThemeData.radioTheme`.
+    pub radio_theme: Option<RadioThemeData>,
 }
 
 impl ThemeData {
@@ -511,6 +610,9 @@ impl ThemeData {
             input_decoration_theme: None,
             list_tile_theme: None,
             divider_theme: None,
+            checkbox_theme: None,
+            switch_theme: None,
+            radio_theme: None,
         }
     }
 
@@ -535,6 +637,9 @@ impl ThemeData {
             input_decoration_theme: None,
             list_tile_theme: None,
             divider_theme: None,
+            checkbox_theme: None,
+            switch_theme: None,
+            radio_theme: None,
         }
     }
 
@@ -620,6 +725,11 @@ impl ThemeData {
             divider_theme: overrides
                 .divider_theme
                 .or_else(|| self.divider_theme.clone()),
+            checkbox_theme: overrides
+                .checkbox_theme
+                .or_else(|| self.checkbox_theme.clone()),
+            switch_theme: overrides.switch_theme.or_else(|| self.switch_theme.clone()),
+            radio_theme: overrides.radio_theme.or_else(|| self.radio_theme.clone()),
         }
     }
 }
@@ -672,6 +782,12 @@ pub struct ThemeDataOverrides {
     pub list_tile_theme: Option<ListTileThemeData>,
     /// Replaces [`ThemeData::divider_theme`] wholesale when `Some`.
     pub divider_theme: Option<DividerThemeData>,
+    /// Replaces [`ThemeData::checkbox_theme`] wholesale when `Some`.
+    pub checkbox_theme: Option<CheckboxThemeData>,
+    /// Replaces [`ThemeData::switch_theme`] wholesale when `Some`.
+    pub switch_theme: Option<SwitchThemeData>,
+    /// Replaces [`ThemeData::radio_theme`] wholesale when `Some`.
+    pub radio_theme: Option<RadioThemeData>,
 }
 
 impl Default for ThemeData {
@@ -781,6 +897,9 @@ mod tests {
             assert!(theme.input_decoration_theme.is_none());
             assert!(theme.list_tile_theme.is_none());
             assert!(theme.divider_theme.is_none());
+            assert!(theme.checkbox_theme.is_none());
+            assert!(theme.switch_theme.is_none());
+            assert!(theme.radio_theme.is_none());
         }
 
         assert_every_slot_unset(&ThemeData::light());
@@ -949,5 +1068,131 @@ mod tests {
 
         let patched = base.copy_with(ThemeDataOverrides::default());
         assert_eq!(patched.divider_theme, Some(divider_theme));
+    }
+
+    /// Same shape as `copy_with_sets_input_decoration_theme_slot`, for the
+    /// `checkbox_theme` slot.
+    #[test]
+    fn copy_with_sets_checkbox_theme_slot() {
+        let base = ThemeData::light();
+        let checkbox_theme = CheckboxThemeData {
+            fill_color: Some(flui_widgets::WidgetStateProperty::all(Some(Color::rgb(
+                1, 2, 3,
+            )))),
+            ..Default::default()
+        };
+
+        let patched = base.copy_with(ThemeDataOverrides {
+            checkbox_theme: Some(checkbox_theme.clone()),
+            ..Default::default()
+        });
+
+        assert_eq!(patched.checkbox_theme, Some(checkbox_theme));
+        // Untouched slots stay unset, mirroring the base theme.
+        assert!(patched.switch_theme.is_none());
+    }
+
+    /// Same already-set-slot-survives-a-`None`-override proof as
+    /// `copy_with_none_preserves_an_already_set_input_decoration_theme_slot`,
+    /// for the `checkbox_theme` slot.
+    #[test]
+    fn copy_with_none_preserves_an_already_set_checkbox_theme_slot() {
+        let checkbox_theme = CheckboxThemeData {
+            fill_color: Some(flui_widgets::WidgetStateProperty::all(Some(Color::rgb(
+                1, 2, 3,
+            )))),
+            ..Default::default()
+        };
+        let base = ThemeData::light().copy_with(ThemeDataOverrides {
+            checkbox_theme: Some(checkbox_theme.clone()),
+            ..Default::default()
+        });
+
+        let patched = base.copy_with(ThemeDataOverrides::default());
+        assert_eq!(patched.checkbox_theme, Some(checkbox_theme));
+    }
+
+    /// Same shape as `copy_with_sets_input_decoration_theme_slot`, for the
+    /// `switch_theme` slot.
+    #[test]
+    fn copy_with_sets_switch_theme_slot() {
+        let base = ThemeData::light();
+        let switch_theme = SwitchThemeData {
+            thumb_color: Some(flui_widgets::WidgetStateProperty::all(Some(Color::rgb(
+                4, 5, 6,
+            )))),
+            ..Default::default()
+        };
+
+        let patched = base.copy_with(ThemeDataOverrides {
+            switch_theme: Some(switch_theme.clone()),
+            ..Default::default()
+        });
+
+        assert_eq!(patched.switch_theme, Some(switch_theme));
+        // Untouched slots stay unset, mirroring the base theme.
+        assert!(patched.radio_theme.is_none());
+    }
+
+    /// Same already-set-slot-survives-a-`None`-override proof as
+    /// `copy_with_none_preserves_an_already_set_input_decoration_theme_slot`,
+    /// for the `switch_theme` slot.
+    #[test]
+    fn copy_with_none_preserves_an_already_set_switch_theme_slot() {
+        let switch_theme = SwitchThemeData {
+            thumb_color: Some(flui_widgets::WidgetStateProperty::all(Some(Color::rgb(
+                4, 5, 6,
+            )))),
+            ..Default::default()
+        };
+        let base = ThemeData::light().copy_with(ThemeDataOverrides {
+            switch_theme: Some(switch_theme.clone()),
+            ..Default::default()
+        });
+
+        let patched = base.copy_with(ThemeDataOverrides::default());
+        assert_eq!(patched.switch_theme, Some(switch_theme));
+    }
+
+    /// Same shape as `copy_with_sets_input_decoration_theme_slot`, for the
+    /// `radio_theme` slot.
+    #[test]
+    fn copy_with_sets_radio_theme_slot() {
+        let base = ThemeData::light();
+        let radio_theme = RadioThemeData {
+            fill_color: Some(flui_widgets::WidgetStateProperty::all(Some(Color::rgb(
+                7, 8, 9,
+            )))),
+            ..Default::default()
+        };
+
+        let patched = base.copy_with(ThemeDataOverrides {
+            radio_theme: Some(radio_theme.clone()),
+            ..Default::default()
+        });
+
+        assert_eq!(patched.radio_theme, Some(radio_theme));
+        // Untouched slots stay unset, mirroring the base theme.
+        assert!(patched.checkbox_theme.is_none());
+    }
+
+    /// Same already-set-slot-survives-a-`None`-override proof as
+    /// `copy_with_none_preserves_an_already_set_input_decoration_theme_slot`,
+    /// for the `radio_theme` slot.
+    #[test]
+    fn copy_with_none_preserves_an_already_set_radio_theme_slot() {
+        let radio_theme = RadioThemeData {
+            fill_color: Some(flui_widgets::WidgetStateProperty::all(Some(Color::rgb(
+                7, 8, 9,
+            )))),
+            ..Default::default()
+        };
+        let base = ThemeData::light().copy_with(ThemeDataOverrides {
+            radio_theme: Some(radio_theme.clone()),
+            ..Default::default()
+        });
+
+        let patched = base.copy_with(ThemeDataOverrides::default());
+        assert_eq!(patched.radio_theme, Some(radio_theme));
     }
 }

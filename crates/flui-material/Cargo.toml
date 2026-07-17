@@ -47,6 +47,12 @@ tracing = { workspace = true }
 flui-rendering = { path = "../flui-rendering", version = "0.2.0", features = ["testing"] }
 flui-objects = { path = "../flui-objects", version = "0.2.0", features = ["testing"] }
 flui-binding = { path = "../flui-binding", version = "0.2.0" }
+# `DrawCommand` — the selection-controls' painter unit tests
+# (`checkbox`/`switch`/`radio`) record a real paint pass and pattern-match
+# its recorded circle commands; `flui_rendering::pipeline` re-exports
+# `Canvas`/`DisplayList` from this crate but not the `DrawCommand` enum
+# itself.
+flui-painting = { path = "../flui-painting", version = "0.2.0" }
 # `make_down_event`/`make_up_event`/`make_move_event` — synthetic pointer
 # events `tests/common` dispatches to drive `InkWell`'s hover/tap at the
 # widget level.

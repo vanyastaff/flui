@@ -68,6 +68,7 @@ pub mod back_button;
 pub mod button_style;
 mod button_style_button;
 pub mod card;
+pub mod checkbox;
 pub mod color_scheme;
 pub mod dialog;
 pub mod divider;
@@ -81,10 +82,13 @@ pub mod input_decorator;
 pub mod list_tile;
 pub mod material;
 pub mod outlined_button;
+pub mod radio;
 pub mod scaffold;
 pub mod scaffold_messenger;
 pub mod shape;
 pub mod snack_bar;
+mod state_color;
+pub mod switch;
 pub mod text_button;
 pub mod text_field;
 pub mod text_theme;
@@ -96,6 +100,7 @@ pub use app_bar::AppBar;
 pub use back_button::BackButton;
 pub use button_style::ButtonStyle;
 pub use card::Card;
+pub use checkbox::{Checkbox, CheckboxState};
 pub use color_scheme::{ColorScheme, ColorSchemeOverrides};
 pub use dialog::{AlertDialog, Dialog, show_dialog};
 pub use divider::{Divider, VerticalDivider};
@@ -109,6 +114,7 @@ pub use input_decorator::{InputDecoration, InputDecorator, InputDecoratorState};
 pub use list_tile::ListTile;
 pub use material::Material;
 pub use outlined_button::OutlinedButton;
+pub use radio::{Radio, RadioState};
 pub use scaffold::{Scaffold, ScaffoldScope, ScaffoldState};
 pub use scaffold_messenger::{
     ScaffoldMessenger, ScaffoldMessengerHandle, ScaffoldMessengerScope, ScaffoldMessengerState,
@@ -116,13 +122,15 @@ pub use scaffold_messenger::{
 };
 pub use shape::MaterialShape;
 pub use snack_bar::{SnackBar, SnackBarAction, SnackBarActionState};
+pub use switch::{Switch, SwitchState};
 pub use text_button::TextButton;
 pub use text_field::{TextField, TextFieldState};
 pub use text_theme::TextTheme;
 pub use theme::Theme;
 pub use theme_data::{
-    AppBarThemeData, CardThemeData, DialogThemeData, DividerThemeData, ElevatedButtonThemeData,
-    FabThemeData, FilledButtonThemeData, IconButtonThemeData, InputDecorationThemeData,
-    ListTileThemeData, OutlinedButtonThemeData, TextButtonThemeData, ThemeData, ThemeDataOverrides,
+    AppBarThemeData, CardThemeData, CheckboxThemeData, DialogThemeData, DividerThemeData,
+    ElevatedButtonThemeData, FabThemeData, FilledButtonThemeData, IconButtonThemeData,
+    InputDecorationThemeData, ListTileThemeData, OutlinedButtonThemeData, RadioThemeData,
+    SwitchThemeData, TextButtonThemeData, ThemeData, ThemeDataOverrides,
 };
 pub use typography::english_like_2021;
