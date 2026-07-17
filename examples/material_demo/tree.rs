@@ -25,11 +25,12 @@
 //! the way a real `MaterialApp` mounts one at the root.
 //!
 //! [`MaterialDemoHome`] builds a `Scaffold`:
-//! - `app_bar`: an `AppBar` titled [`APP_TITLE`] with one action — an
-//!   `IconButton` (a settings glyph) that pushes [`settings_route`]. Its
-//!   `AppBar` has no explicit `leading`, so on the settings route (a second
-//!   stack entry, `can_pop() == true`) it synthesizes a `BackButton` — proven
-//!   by [`tests`](../../tests/material_demo.rs), not merely asserted.
+//! - `app_bar`: an `AppBar` titled [`APP_TITLE`] with two actions — a "tab"
+//!   glyph `IconButton` that pushes [`tabs_route`], and a settings glyph
+//!   `IconButton` that pushes [`settings_route`]. Its `AppBar` has no
+//!   explicit `leading`, so on either pushed route (a second stack entry,
+//!   `can_pop() == true`) it synthesizes a `BackButton` — proven by
+//!   [`tests`](../../tests/material_demo.rs), not merely asserted.
 //! - `body`: a selected-item `Text`, then a drag-to-scroll `ListView` of
 //!   `Card`s (each `Card(InkWell(Padding(Text)))`, the canonical Material
 //!   tap-target composition). Tapping a card sets the selected-item text.
@@ -46,6 +47,14 @@
 //!   `maintain_state: true`), so the home route stays mounted, laid out,
 //!   and painted beneath the dialog's barrier — only its hit-testing is
 //!   blocked (the full-screen barrier sits on top).
+//!
+//! [`tabs_route`] is a third route (Tabs PR2's own exit criterion): a
+//! `DefaultTabController`-scoped `Scaffold` whose `AppBar.bottom` carries a
+//! secondary `TabBar` and whose body is the matching `TabBarView`, over
+//! three tabs ([`OVERVIEW_TAB_LABEL`], [`COUNTER_TAB_LABEL`],
+//! [`ABOUT_TAB_LABEL`]) — see [`CounterTab`]'s own doc comment for the
+//! stateful-counter tab that demonstrates `TabBarView`'s keep-alive
+//! retention.
 //!
 //! # Honest caveats (Catalog.1 exit criterion, Material half)
 //!
@@ -71,8 +80,9 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use flui_material::{
-    AlertDialog, AppBar, Card, FilledButton, FloatingActionButton, IconButton, InkWell, Scaffold,
-    ScaffoldMessenger, ScaffoldMessengerHandle, ScaffoldMessengerScope, SnackBar, TextButton,
+    AlertDialog, AppBar, Card, DefaultTabController, ElevatedButton, FilledButton,
+    FloatingActionButton, IconButton, InkWell, Scaffold, ScaffoldMessenger,
+    ScaffoldMessengerHandle, ScaffoldMessengerScope, SnackBar, Tab, TabBar, TabBarView, TextButton,
     Theme, ThemeData, show_dialog,
 };
 use flui_view::RebuildHandle;
@@ -97,6 +107,26 @@ pub const APP_TITLE: &str = "Material Demo";
 pub const SETTINGS_ROUTE_TITLE: &str = "Settings";
 /// The settings route's body text.
 pub const SETTINGS_ROUTE_TEXT: &str = "Settings route";
+
+/// The tabbed route's app bar title.
+pub const TABS_ROUTE_TITLE: &str = "Tabs";
+/// The first tab's label — its content builds on mount (index `0` is the
+/// controller's initial index).
+pub const OVERVIEW_TAB_LABEL: &str = "Overview";
+/// The first tab's body text.
+pub const OVERVIEW_TAB_TEXT: &str = "Overview tab";
+/// The second (stateful-counter) tab's label.
+pub const COUNTER_TAB_LABEL: &str = "Counter";
+/// The counter tab's increment button label.
+pub const COUNTER_INCREMENT_LABEL: &str = "Increment";
+/// The prefix on the counter tab's live count display — the acceptance test
+/// reads `"{COUNTER_LABEL_PREFIX}{n}"` after each tap.
+pub const COUNTER_LABEL_PREFIX: &str = "Count: ";
+/// The third tab's label — never built until it's visited (the acceptance
+/// test's lazy-build proof).
+pub const ABOUT_TAB_LABEL: &str = "About";
+/// The third tab's body text.
+pub const ABOUT_TAB_TEXT: &str = "About tab";
 
 /// The FAB's child label.
 pub const FAB_LABEL: &str = "+";
@@ -124,6 +154,14 @@ pub const SNACK_BAR_ADDED_MESSAGE: &str = "Item added";
 #[must_use]
 pub fn settings_icon_data() -> IconData {
     IconData::new(0xE8B8).with_font_family("MaterialIcons")
+}
+
+/// `Icons.tab`'s codepoint (`icons.dart`'s `tab` constant) — the app bar
+/// action that pushes [`tabs_route`]. Same tofu-rendering gap as
+/// [`settings_icon_data`]; `pub` for the identical reason.
+#[must_use]
+pub fn tabs_icon_data() -> IconData {
+    IconData::new(0xE8D2).with_font_family("MaterialIcons")
 }
 
 /// The Material demo root: a `Navigator` shell over the home route.
@@ -323,7 +361,8 @@ impl ViewState<MaterialDemoHome> for MaterialDemoHomeState {
             })
             .child(ListView::new(ITEM_EXTENT, cards).position(self.scroll_controller.position()));
 
-        let navigator_for_action = self.navigator.clone();
+        let navigator_for_settings_action = self.navigator.clone();
+        let navigator_for_tabs_action = self.navigator.clone();
         let app_bar = AppBar::new()
             .title(Text::new(APP_TITLE))
             // The home route is the navigator's root — it never wants an
@@ -336,9 +375,14 @@ impl ViewState<MaterialDemoHome> for MaterialDemoHomeState {
             // synthesize a second, redundant `BackButton` here too.
             .automatically_imply_leading(false)
             .actions(vec![
+                IconButton::new(Icon::new(tabs_icon_data()))
+                    .on_pressed(move || {
+                        navigator_for_tabs_action.push(tabs_route());
+                    })
+                    .boxed(),
                 IconButton::new(Icon::new(settings_icon_data()))
                     .on_pressed(move || {
-                        navigator_for_action.push(settings_route());
+                        navigator_for_settings_action.push(settings_route());
                     })
                     .boxed(),
             ]);
@@ -431,6 +475,95 @@ fn settings_route() -> PageRoute<()> {
             .boxed()
     })
     .named("settings")
+}
+
+/// The `Counter` tab's content: a live count display plus an `Increment`
+/// button. `count` lives in an `Rc<Cell<i32>>` on [`CounterTabState`] (the
+/// same closure-captures-shared-state-then-`rebuild.schedule()` shape
+/// [`open_add_item_dialog`]'s `Add` action and the card-tap handler in
+/// [`MaterialDemoHomeState::build`] already use) — `TabBarView`'s
+/// keep-alive `Offstage` retention (not unmount) is what lets `count`
+/// survive switching to another tab and back, which is exactly the
+/// acceptance criterion this tab exists to demonstrate.
+#[derive(Clone, StatefulView)]
+struct CounterTab;
+
+/// Persistent state for [`CounterTab`].
+struct CounterTabState {
+    count: Rc<Cell<i32>>,
+    /// `None` only before `init_state` has run; every `build` call happens
+    /// after it.
+    rebuild: Option<RebuildHandle>,
+}
+
+impl StatefulView for CounterTab {
+    type State = CounterTabState;
+
+    fn create_state(&self) -> Self::State {
+        CounterTabState {
+            count: Rc::new(Cell::new(0)),
+            rebuild: None,
+        }
+    }
+}
+
+impl ViewState<CounterTab> for CounterTabState {
+    fn init_state(&mut self, ctx: &dyn BuildContext) {
+        self.rebuild = Some(ctx.rebuild_handle());
+    }
+
+    fn build(&self, _view: &CounterTab, _ctx: &dyn BuildContext) -> impl IntoView {
+        let rebuild = self
+            .rebuild
+            .clone()
+            .expect("BUG: init_state runs before build (ViewState lifecycle order)");
+        let displayed_count = self.count.get();
+        let count_for_tap = Rc::clone(&self.count);
+
+        Center::new().child(Column::new(column![
+            Text::new(format!("{COUNTER_LABEL_PREFIX}{displayed_count}")),
+            ElevatedButton::new(Text::new(COUNTER_INCREMENT_LABEL)).on_pressed(move || {
+                count_for_tap.set(count_for_tap.get() + 1);
+                rebuild.schedule();
+            }),
+        ]))
+    }
+}
+
+/// The tabbed route: a [`DefaultTabController`]-scoped `Scaffold` whose
+/// `AppBar.bottom` carries a secondary [`TabBar`] and whose body is the
+/// matching [`TabBarView`] — the Tabs PR2 sample-app exit criterion (see
+/// the module docs). Same "no explicit `leading`" implied-`BackButton`
+/// shape as [`settings_route`]. Tab 0 ([`OVERVIEW_TAB_LABEL`]) is the
+/// controller's initial index, so it alone is built on mount; tab 1
+/// ([`COUNTER_TAB_LABEL`]) carries [`CounterTab`]'s stateful counter; tab 2
+/// ([`ABOUT_TAB_LABEL`]) stays unbuilt until visited.
+fn tabs_route() -> PageRoute<()> {
+    PageRoute::new(|_ctx, _animation, _secondary| {
+        let tabs = vec![
+            Tab::new().text(OVERVIEW_TAB_LABEL),
+            Tab::new().text(COUNTER_TAB_LABEL),
+            Tab::new().text(ABOUT_TAB_LABEL),
+        ];
+        let pages: Vec<flui_view::BoxedView> = vec![
+            Center::new().child(Text::new(OVERVIEW_TAB_TEXT)).boxed(),
+            CounterTab.into_view().boxed(),
+            Center::new().child(Text::new(ABOUT_TAB_TEXT)).boxed(),
+        ];
+        DefaultTabController::new(
+            tabs.len(),
+            Scaffold::new()
+                .app_bar(
+                    AppBar::new()
+                        .title(Text::new(TABS_ROUTE_TITLE))
+                        .bottom(TabBar::secondary(tabs)),
+                )
+                .body(TabBarView::new(pages)),
+        )
+        .into_view()
+        .boxed()
+    })
+    .named("tabs")
 }
 
 /// Build a fresh demo tree, ready to mount.
