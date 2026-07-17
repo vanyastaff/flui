@@ -359,6 +359,19 @@ impl FocusManager {
         self.listeners.write().clear();
     }
 
+    /// The number of focus-change listeners currently registered.
+    ///
+    /// Test-only introspection: proves a `dispose`/teardown path actually
+    /// called [`Self::remove_listener`] rather than leaking a registration on
+    /// this process-wide singleton (a real recurring failure mode across
+    /// this workspace's tests, which all share one `FocusManager` per
+    /// thread).
+    #[cfg(any(test, feature = "testing"))]
+    #[must_use]
+    pub fn listener_count(&self) -> usize {
+        self.listeners.read().len()
+    }
+
     /// Notify all listeners of a focus change.
     fn notify_listeners(&self, previous: Option<FocusNodeId>, new: Option<FocusNodeId>) {
         // Clone the listener Vec so listener invocations can call

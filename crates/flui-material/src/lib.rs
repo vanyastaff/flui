@@ -6,8 +6,9 @@
 //! [`Material`]/[`InkWell`] surface primitives, the M3 button family
 //! ([`ButtonStyle`], [`ElevatedButton`], [`FilledButton`], [`OutlinedButton`],
 //! [`TextButton`], [`IconButton`], [`FloatingActionButton`], [`BackButton`]),
-//! [`Scaffold`]/[`AppBar`], [`Card`], and [`Dialog`]/[`AlertDialog`]/
-//! [`show_dialog`].
+//! [`Scaffold`]/[`AppBar`], [`Card`], [`Dialog`]/[`AlertDialog`]/
+//! [`show_dialog`], and the input decoration substrate
+//! ([`InputDecoration`], [`InputDecorator`], [`TextField`]).
 //!
 //! ## Flutter parity
 //!
@@ -32,15 +33,13 @@
 //!
 //! - [`ColorScheme::fromSeed`](https://api.flutter.dev/flutter/material/ColorScheme/ColorScheme.fromSeed.html)
 //!   — dynamic-color generation from a seed. See [`color_scheme`] module docs.
-//! - Component themes for widgets that don't exist yet (`InputDecorationTheme`
-//!   and friends) — the button family's, `AppBar`'s, `Card`'s, `Dialog`'s,
-//!   and `FloatingActionButton`'s own theme slots (`ElevatedButtonThemeData`
+//! - Every shipped widget's own component theme slot (`ElevatedButtonThemeData`
 //!   and friends, [`AppBarThemeData`], [`CardThemeData`], [`DialogThemeData`],
-//!   [`FabThemeData`]) have landed, each narrowed to the fields its owning
-//!   widget actually consumes — see `theme_data`'s module docs and each
-//!   type's own doc comment for the ported/deferred field split.
-//!   [`ThemeData`] stays `#[non_exhaustive]` to receive the rest without a
-//!   breaking change.
+//!   [`FabThemeData`], [`InputDecorationThemeData`]) is narrowed to the
+//!   fields its owning widget actually consumes — see `theme_data`'s module
+//!   docs and each type's own doc comment for the ported/deferred field
+//!   split. [`ThemeData`] stays `#[non_exhaustive]` to receive the rest
+//!   without a breaking change.
 //! - `AnimatedTheme` / `ColorScheme`/`TextTheme` lerp — no component consumes
 //!   an interpolated theme yet.
 //! - Dense/tall type-scale geometries (CJK / Farsi-Hindi-Thai) — only
@@ -81,6 +80,7 @@ pub mod outlined_button;
 pub mod scaffold;
 pub mod shape;
 pub mod text_button;
+pub mod text_field;
 pub mod text_theme;
 pub mod theme;
 pub mod theme_data;
@@ -103,6 +103,7 @@ pub use outlined_button::OutlinedButton;
 pub use scaffold::Scaffold;
 pub use shape::MaterialShape;
 pub use text_button::TextButton;
+pub use text_field::{TextField, TextFieldState};
 pub use text_theme::TextTheme;
 pub use theme::Theme;
 pub use theme_data::{
