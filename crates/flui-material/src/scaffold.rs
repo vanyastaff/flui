@@ -109,7 +109,7 @@ use flui_types::geometry::px;
 use flui_types::styling::Color;
 use flui_types::{EdgeInsets, Offset, Pixels, Size};
 use flui_view::prelude::*;
-use flui_view::{GlobalKey, impl_inherited_view};
+use flui_view::{GlobalKey, RebuildHandle, impl_inherited_view};
 use flui_widgets::{
     ConstrainedBox, CustomMultiChildLayout, LayoutId, MediaQuery, MultiChildLayoutContext,
     MultiChildLayoutDelegate, PreferredSizeView,
@@ -385,6 +385,16 @@ impl_inherited_view!(ScaffoldScope);
 /// wiring" section.
 pub struct ScaffoldState {
     handle: DrawerHandle,
+    /// Acquired in [`init_state`](ViewState::init_state), per ADR-0018 —
+    /// `build_drawer_controller`'s `on_open_changed` closures capture a
+    /// clone of this stored handle rather than calling `ctx.rebuild_handle()`
+    /// from inside `build()` (trigger #22: a frame-phase-only capability
+    /// must be acquired at `init_state`/`did_change_dependencies`, not
+    /// `build`, even when the call site is laundered through a private
+    /// helper). `None` only in the window between `create_state` and the
+    /// first `init_state` — never observed by `build`, which always runs
+    /// after `init_state`.
+    rebuild: Option<RebuildHandle>,
 }
 
 impl std::fmt::Debug for ScaffoldState {
@@ -402,11 +412,16 @@ impl StatefulView for Scaffold {
     fn create_state(&self) -> Self::State {
         ScaffoldState {
             handle: DrawerHandle::new(),
+            rebuild: None,
         }
     }
 }
 
 impl ViewState<Scaffold> for ScaffoldState {
+    fn init_state(&mut self, ctx: &dyn BuildContext) {
+        self.rebuild = Some(ctx.rebuild_handle());
+    }
+
     fn build(&self, view: &Scaffold, ctx: &dyn BuildContext) -> impl IntoView {
         let theme = Theme::of(ctx);
         let background_color = view.background_color.unwrap_or(theme.color_scheme.surface);
@@ -460,7 +475,6 @@ impl ViewState<Scaffold> for ScaffoldState {
                     self.handle.is_drawer_open(),
                     view.on_drawer_changed.clone(),
                     view,
-                    ctx,
                 ),
             )
         });
@@ -474,7 +488,6 @@ impl ViewState<Scaffold> for ScaffoldState {
                     self.handle.is_end_drawer_open(),
                     view.on_end_drawer_changed.clone(),
                     view,
-                    ctx,
                 ),
             )
         });
@@ -550,10 +563,14 @@ impl ScaffoldState {
         is_open: bool,
         on_changed: Option<Rc<dyn Fn(bool)>>,
         view: &Scaffold,
-        ctx: &dyn BuildContext,
     ) -> DrawerController {
         let handle = self.handle.clone();
-        let rebuild = ctx.rebuild_handle();
+        // Captured in `init_state`, not here — see `ScaffoldState::rebuild`'s
+        // own doc.
+        let rebuild = self
+            .rebuild
+            .clone()
+            .expect("init_state runs before the first build");
         let set_opened: fn(&DrawerHandle, bool) = match alignment {
             DrawerAlignment::Start => DrawerHandle::set_drawer_opened,
             DrawerAlignment::End => DrawerHandle::set_end_drawer_opened,

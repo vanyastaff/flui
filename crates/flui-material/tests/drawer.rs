@@ -1,16 +1,38 @@
 //! `Drawer`/`DrawerController`/`Scaffold` drawer-slot end-to-end coverage —
 //! a real [`Vsync`] clock drives the settle animation, matching
-//! `tests/show_dialog.rs`'s harness. Proves the closed-state edge strip's
-//! translucent hit-testing, the mid-drag panel geometry, the
-//! [`ScaffoldScope`] handle's open/close bridge (mounts at value 0 with no
-//! flash), and the dynamic child order when both drawers are configured.
+//! `tests/show_dialog.rs`'s harness. Sections, in file order: (1) closed-state
+//! edge-strip translucent hit-testing, (2) mid-drag panel geometry, (3) the
+//! scrim's mount, tap-to-close, and settle-to-unmount, (4) the
+//! [`ScaffoldScope`] handle's data surface (`has_drawer`/`is_drawer_open`)
+//! and the no-flash mount timing, (5) `on_drawer_changed`'s forward to the
+//! app author, (6) the dynamic child order when both drawers are configured.
 //!
 //! Pure value/status math (fling threshold, direction factor, the three
-//! `on_drawer_changed` firing paths) is covered at the `DrawerControllerCore`
-//! unit level in `crates/flui-material/src/drawer.rs`'s own test module —
-//! deterministic there (no real-clock-dependent velocity simulation needed);
-//! this file covers what only a real mounted tree can prove: geometry,
-//! hit-testing, and the `GlobalKey` bridge.
+//! `on_drawer_changed` firing paths) is ALSO covered at the
+//! `DrawerControllerCore` unit level in
+//! `crates/flui-material/src/drawer.rs`'s own test module — deterministic
+//! there (no real-clock-dependent velocity simulation needed); this file
+//! additionally covers what only a real mounted tree can prove: geometry,
+//! hit-testing, the `GlobalKey` bridge, and `Scaffold`'s own relay of the
+//! per-drawer callback.
+//!
+//! # `themed` vs `themed_animated` — the `VsyncScope` requirement
+//!
+//! [`DrawerControllerState::init_state`] resolves its `Vsync` via
+//! `ctx.get::<VsyncScope, _>` — an ordinary ANCESTOR-WIDGET lookup, entirely
+//! separate from [`common::lay_out_animated`]'s `vsync` parameter (which
+//! only adopts a `Vsync` onto the *binding*, i.e. what `pump_for`/`tick_all`
+//! iterate). A tree with no `VsyncScope` ancestor leaves
+//! `DrawerControllerCore::vsync` `None`, so nothing ever registers with the
+//! adopted `Vsync`, and `pump_for` ticks precisely zero controllers no
+//! matter how large the budget — a `close()`/`open()` fling then never
+//! progresses past its very first simulated value, and a mount/unmount that
+//! depends on the fling actually *settling* (not just starting) never
+//! happens. [`themed_animated`] wraps `vsync` in [`flui_widgets::VsyncScope`]
+//! so the tree-side registration and the binding-side pump are the SAME
+//! clock; plain [`themed`] (no `VsyncScope`) is for tests that only need
+//! synchronous effects (a bare `set_value`, or a same-tick status flip) and
+//! never call `pump_for`/`tick_all` expecting real animation progress.
 //!
 //! # Harness limitation: no pointer capture
 //!
@@ -44,11 +66,14 @@ use flui_foundation::RenderId;
 use flui_material::{Drawer, DrawerHandle, Scaffold, ScaffoldScope, Theme, ThemeData};
 use flui_types::Color;
 use flui_view::prelude::*;
-use flui_widgets::{ColoredBox, GestureDetector, MediaQuery, MediaQueryData, SizedBox};
+use flui_widgets::{ColoredBox, GestureDetector, MediaQuery, MediaQueryData, SizedBox, VsyncScope};
 
 /// Wraps `scaffold` in the `Theme`/`MediaQuery` ancestors `Scaffold`/
 /// `Drawer`/`Material` all require (`Theme::of`/`MediaQuery::of` panic
-/// without one).
+/// without one). No `VsyncScope` — for tests driven by [`lay_out`] alone,
+/// where nothing needs to tick a real animation forward (a bare `set_value`
+/// drag or a same-tick status flip is synchronous). Tests that pump virtual
+/// frames to settle a fling use [`themed_animated`] instead.
 fn themed(scaffold: Scaffold) -> impl View {
     MediaQuery::new(
         MediaQueryData::default(),
@@ -56,13 +81,45 @@ fn themed(scaffold: Scaffold) -> impl View {
     )
 }
 
-/// `_kBaseSettleDuration` (`drawer.dart`, oracle tag `3.44.0`).
+/// [`themed`], plus a `VsyncScope` wrapping `vsync` — required for
+/// `DrawerControllerState::init_state`'s `ctx.get::<VsyncScope, _>` lookup
+/// to find an ancestor and register the controller at all. Without this,
+/// `LaidOut::pump_for`/`tick` advance virtual time but tick *nothing*: the
+/// controller's fling/spring simulation never progresses, so a `close()`/
+/// `open()` that must actually *settle* (not just flip status) never will,
+/// no matter how large the pump budget — this is exactly the gap
+/// `lay_out_animated` (which only adopts `vsync` onto the *binding*, driving
+/// whatever the tree registers with it) exists to close, and every test
+/// below that calls `lay_out_animated` needs the tree-side registration
+/// `VsyncScope` provides too, not just the binding-side adoption.
+fn themed_animated(scaffold: Scaffold, vsync: &Vsync) -> impl View {
+    VsyncScope::new(vsync.clone(), themed(scaffold))
+}
+
+/// `_kBaseSettleDuration` (`drawer.dart`, oracle tag `3.44.0`) — the
+/// duration a plain `forward()`/`reverse()` run takes. A `fling()` (what
+/// `open()`/`close()` actually call) drives a spring simulation instead,
+/// whose own settling time is independent of this constant and, for a
+/// full-distance run, measurably longer — see [`FLING_SETTLE_PUMPS`].
 const SETTLE: Duration = Duration::from_millis(246);
 /// The per-pump virtual-time step.
 const FRAME: Duration = Duration::from_millis(16);
 /// Enough pumps to carry `SETTLE` past its end — matching
-/// `flui-material/tests/show_dialog.rs`'s identical `+ 2` budget.
+/// `flui-material/tests/show_dialog.rs`'s identical `+ 2` budget. Sufficient
+/// for a fling from a drag-shortened distance (most of this file's tests),
+/// but NOT for a full 1.0 -> 0.0 (or 0.0 -> 1.0) fling — see
+/// [`FLING_SETTLE_PUMPS`].
 const PUMPS: usize = (SETTLE.as_millis() / FRAME.as_millis()) as usize + 2;
+
+/// A fling's settling time depends on the spring simulation, not `SETTLE` —
+/// a full-distance fling (e.g. `close()` from a fully open, fully rested
+/// drawer) measured empirically at 36 `FRAME`-sized ticks (~576ms) to reach
+/// `AnimationStatus::Dismissed`. This budget carries generous margin over
+/// that measurement. Tests that fling across the drawer's *entire* range
+/// (not a drag-shortened one) and need to observe the *settled* result
+/// (mount/unmount, not just the synchronous `on_open_changed` report) use
+/// this instead of [`PUMPS`].
+const FLING_SETTLE_PUMPS: usize = 60;
 
 const _: () = assert!(
     (PUMPS as u128) * FRAME.as_millis() > SETTLE.as_millis(),
@@ -236,30 +293,30 @@ fn mid_drag_panel_offset_follows_the_value_minus_one_times_width_formula() {
 
 /// Flutter parity: the scrim is a tappable `ColoredBox`
 /// (`RenderDecoratedBox`) that closes the drawer on tap
-/// (`drawerBarrierDismissible`, default `true`).
+/// (`drawerBarrierDismissible`, default `true`), and stays gone once the
+/// close fling settles — not just reported as closed via
+/// [`DrawerHandle::is_drawer_open`] (the synchronous half, already pinned at
+/// the `DrawerControllerCore` unit level by
+/// `close_fires_on_open_changed_synchronously`), but actually unmounted, so
+/// a stale alpha-0 scrim can never sit there eating every body tap after the
+/// drawer visually looks closed.
 ///
-/// Pinned via [`DrawerHandle::is_drawer_open`] (updated synchronously inside
-/// `DrawerControllerCore::close`, before any fling animation runs — see
-/// `close_fires_on_open_changed_synchronously` in `src/drawer.rs`'s own test
-/// module) rather than the scrim's mount/unmount, which depends on the
-/// *fling* actually settling: a `close()` fired from a fully-open,
-/// completely-at-rest controller (value 1.0, no preceding drag to shorten
-/// the distance) was found, empirically, to never reach
-/// `AnimationStatus::Dismissed` in this harness within any pump budget
-/// tried (up to 5 real seconds of virtual time) — while the *identical*
-/// `close()` call fired from a drag-shortened distance (this file's
-/// `drag_open_then_close_round_trip_updates_the_handles_tracked_state`,
-/// which passes) settles normally. This is a narrow, currently
-/// unexplained gap between two `close()` call sites that both reach the
-/// same `fling(-1.0)` call — tracked as a known gap in this substrate's
-/// headless-harness settle coverage, not a claim that the underlying
-/// `close()` logic is unverified (it has full deterministic coverage at
-/// the `DrawerControllerCore` unit level).
+/// This requires driving the fling to completion, which needs the
+/// controller's `AnimationController` to actually be ticked — see
+/// [`themed_animated`]'s doc for why a bare [`themed`] tree silently never
+/// ticks it at all (a prior version of this test used exactly that gap to
+/// justify only checking `is_drawer_open`, not the mount; the mount check
+/// below is what would have caught it). [`FLING_SETTLE_PUMPS`] budgets for
+/// the FULL 1.0 -> 0.0 fling distance a close from a fully-open, fully-rested
+/// drawer takes (a `close()` fired from a drag-shortened distance, as in
+/// `drag_open_then_close_round_trip_updates_the_handles_tracked_state`, has
+/// less distance to cover and settles inside the smaller [`PUMPS`] budget;
+/// this test's full-distance close does not).
 ///
 /// Red-check: drop the `.on_tap(move || close_core.close())` wiring from
 /// `open_panel`'s scrim detector in `drawer.rs` — the scrim still mounts
-/// (this test's first assertion still passes) but `is_drawer_open()` stays
-/// `true` after the tap, so the second assertion fails.
+/// (this test's first two assertions still pass) but the tap does nothing,
+/// so the final mount-check assertion fails (the scrim never unmounts).
 #[test]
 fn scrim_mounts_when_open_and_a_tap_closes_the_drawer() {
     let vsync = Vsync::new();
@@ -269,7 +326,7 @@ fn scrim_mounts_when_open_and_a_tap_closes_the_drawer() {
         on_tap: Rc::new(|_handle: &DrawerHandle| {}),
     };
     let mut laid = lay_out_animated(
-        themed(
+        themed_animated(
             Scaffold::new()
                 .drawer(Drawer::new())
                 // Widened so the opening drag stays within the strip's own
@@ -277,6 +334,7 @@ fn scrim_mounts_when_open_and_a_tap_closes_the_drawer() {
                 // limitation" note (no pointer capture in this harness).
                 .drawer_edge_drag_width(400.0)
                 .body(probe),
+            &vsync,
         ),
         tight(400.0, 800.0),
         vsync,
@@ -296,7 +354,7 @@ fn scrim_mounts_when_open_and_a_tap_closes_the_drawer() {
     laid.dispatch_pointer_move(30.0, 400.0);
     laid.dispatch_pointer_move(395.0, 400.0);
     laid.dispatch_pointer_up(395.0, 400.0);
-    for _ in 0..PUMPS {
+    for _ in 0..FLING_SETTLE_PUMPS {
         laid.pump_for(FRAME);
     }
 
@@ -318,6 +376,15 @@ fn scrim_mounts_when_open_and_a_tap_closes_the_drawer() {
         !handle.is_drawer_open(),
         "the scrim tap must call close(), which reports the drawer closed immediately \
          (before any fling animation runs)"
+    );
+
+    for _ in 0..FLING_SETTLE_PUMPS {
+        laid.pump_for(FRAME);
+    }
+    assert!(
+        laid.find_by_render_type("RenderDecoratedBox").is_none(),
+        "once the close fling actually settles, the scrim must unmount — a stuck, \
+         alpha-0-but-still-hit-testable scrim would otherwise eat every body tap forever"
     );
 }
 
@@ -454,7 +521,7 @@ fn drag_open_then_close_round_trip_updates_the_handles_tracked_state() {
     };
 
     let mut laid = lay_out_animated(
-        themed(
+        themed_animated(
             Scaffold::new()
                 .drawer(Drawer::new())
                 // Widened so the opening drag stays within the strip's own
@@ -465,6 +532,7 @@ fn drag_open_then_close_round_trip_updates_the_handles_tracked_state() {
                 // the whole scaffold.
                 .drawer_edge_drag_width(400.0)
                 .body(probe),
+            &vsync,
         ),
         tight(400.0, 800.0),
         vsync,
@@ -474,7 +542,10 @@ fn drag_open_then_close_round_trip_updates_the_handles_tracked_state() {
         .clone()
         .expect("HandleProbe captures the handle on its first build");
 
-    // Open: drag most of the way across, release, let it settle.
+    // Open: drag most of the way across, release, let it settle. Both this
+    // drag and the closing one below leave the fling only a SHORT distance
+    // to cover (the drag itself already carried the value most of the way),
+    // so the smaller `PUMPS` budget — not `FLING_SETTLE_PUMPS` — is enough.
     laid.dispatch_pointer_down(5.0, 400.0);
     laid.dispatch_pointer_move(30.0, 400.0);
     laid.dispatch_pointer_move(395.0, 400.0);
@@ -507,6 +578,72 @@ fn drag_open_then_close_round_trip_updates_the_handles_tracked_state() {
 }
 
 // ============================================================================
+// 5. on_drawer_changed: the app author's callback forwards through Scaffold.
+// ============================================================================
+
+/// Flutter parity: `Scaffold.onDrawerChanged` — `ScaffoldState._drawerOpenedCallback`
+/// forwards to `widget.onDrawerChanged` whenever the drawer's opened bool
+/// actually changes (`build_drawer_controller`'s `on_open_changed` closure,
+/// wired alongside `DrawerHandle::set_drawer_opened` and the rebuild). Only
+/// pinned at the `DrawerControllerCore` unit level until now (the 0.5-crossing
+/// firing path is covered there), never through `Scaffold`'s own relay — a
+/// dropped forward would leave every OTHER assertion in this file green,
+/// since none of them read the app-author callback.
+///
+/// Asserts the recorded VALUES and ORDER, not just "fired at least once":
+/// crossing 0.5 while dragging open must forward `true` exactly once: no
+/// double-fire, no fire-before-crossing.
+///
+/// Red-check: delete the `if let Some(callback) = &on_changed { callback(opened); }`
+/// line from `ScaffoldState::build_drawer_controller`'s `on_open_changed`
+/// closure — `events` stays empty and the first assertion after the drag
+/// fails.
+#[test]
+fn on_drawer_changed_forwards_to_the_app_authors_callback() {
+    let events: Rc<RefCell<Vec<bool>>> = Rc::new(RefCell::new(Vec::new()));
+    let events_for_callback = Rc::clone(&events);
+
+    let laid = lay_out(
+        themed(
+            Scaffold::new()
+                .drawer(Drawer::new())
+                // Widened so the whole drag path stays within the strip's
+                // own hit-test bounds — see the module docs' "harness
+                // limitation" note.
+                .drawer_edge_drag_width(400.0)
+                .on_drawer_changed(move |opened| {
+                    events_for_callback.borrow_mut().push(opened);
+                }),
+        ),
+        tight(400.0, 800.0),
+    );
+
+    assert!(
+        events.borrow().is_empty(),
+        "no callback before any interaction"
+    );
+
+    // Drag past 0.5 (see `mid_drag_panel_offset_follows_the_value_minus_one_times_width_formula`'s
+    // comment for why two moves are needed to report a delta at all).
+    laid.dispatch_pointer_down(5.0, 400.0);
+    laid.dispatch_pointer_move(30.0, 400.0); // crosses slop, no delta yet
+    laid.dispatch_pointer_move(30.0 + 155.0, 400.0); // past 0.5
+    assert_eq!(
+        *events.borrow(),
+        vec![true],
+        "crossing 0.5 while opening must forward on_drawer_changed(true) exactly once"
+    );
+
+    // Drag back below 0.5, same contact still in progress.
+    laid.dispatch_pointer_move(30.0, 400.0);
+    assert_eq!(
+        *events.borrow(),
+        vec![true, false],
+        "crossing back below 0.5 must forward on_drawer_changed(false)"
+    );
+}
+
+// ============================================================================
 // 6. End-drawer mirror + dynamic ordering with both drawers configured.
 // ============================================================================
 
@@ -521,54 +658,90 @@ fn subtree(laid: &common::LaidOut, root: RenderId, out: &mut Vec<RenderId>) {
     }
 }
 
-/// Flutter parity: `Scaffold.build` (`scaffold.dart:3211-3217`) — with the
-/// end drawer open, the start drawer's slot is added to the child list
-/// FIRST and the end drawer's LAST, so the open end drawer paints on top of,
-/// and hit-tests before, the closed start drawer's edge strip. This test
-/// pins the direct-child INDEX ordering under `CustomMultiChildLayoutBox`,
-/// which is what later paint/hit-test order is built from in this rendering
-/// model.
+/// Both drawers' edge-drag width in the ordering tests below — wide enough
+/// that a drag reaching value `> 0.5` (crossing the [`DrawerAlignment`]'s own
+/// direction-mirrored threshold) stays entirely within its OWN strip's
+/// bounds (`0..200` for the start drawer, `200..400` for the end drawer —
+/// disjoint, so the drag can only ever hit the strip it started on). See the
+/// module docs' "harness limitation" note.
+const ORDERING_EDGE_DRAG_WIDTH: f32 = 200.0;
+
+/// Shared by both arms of the dynamic-order pin below: mounts a `Scaffold`
+/// with both `drawer` and `end_drawer` configured, opens whichever side
+/// `open_is_end` selects via a REAL drag past `0.5` on that side's own edge
+/// strip (crossing `0.5` fires `on_open_changed` synchronously — see
+/// `move_by_fires_on_open_changed_exactly_once_when_crossing_half` in
+/// `src/drawer.rs`'s own test module — so no fling/tick is needed to
+/// observe the dynamic-order effect), and asserts that side's slot ends up
+/// LAST among the scaffold's direct children. Flutter parity:
+/// `Scaffold.build`'s `if (_endDrawerOpened.value) { buildDrawer,
+/// buildEndDrawer } else { buildEndDrawer, buildDrawer }`
+/// (`scaffold.dart:3211-3217`) — the LAST-added slot paints on top of, and
+/// hit-tests before, the other (still-closed) drawer's edge strip.
+///
+/// Not driven through [`DrawerHandle::open_drawer`]/`open_end_drawer`
+/// (unlike a prior version of this helper): that path resolves via
+/// `GlobalKey::with_current_state`, which this harness's
+/// `HeadlessBinding` never activates (see
+/// `scaffold_scope_of_reflects_has_drawer_without_a_scaffold_panic`'s
+/// coverage note) — calling it here silently no-ops, leaving both drawers
+/// closed and giving every geometry lookup below nothing genuine to
+/// distinguish (an earlier version of this test passed against exactly that
+/// no-op, because its "any `RenderAlign` present" check could not tell a
+/// still-closed one-`Align` edge strip from a genuinely two-`Align` open
+/// panel — fixed below by requiring the opened side's subtree to carry
+/// TWO `RenderAlign`s, not merely at least one).
+///
+/// Both arms are needed: `ScaffoldState::build`'s actual `is_end_drawer_open`
+/// branch already pushes `[drawer, end_drawer]` whenever the end drawer is
+/// the one open — the SAME order a hardcoded `[drawer, end_drawer]` (i.e.
+/// dropping the `is_end_drawer_open` check entirely) would also produce. A
+/// single "end drawer open" test therefore cannot distinguish the real
+/// branch from that hardcoded mutant; only the *other* arm (start drawer
+/// open, which correctly needs `[end_drawer, drawer]`) does.
 ///
 /// Red-check: hardcode the child-push order in `ScaffoldState::build` to
-/// always be `[drawer, end_drawer]` (drop the `is_end_drawer_open` branch) —
-/// this test's index comparison fails once the end drawer is open.
-#[test]
-fn with_end_drawer_open_its_slot_is_the_last_scaffold_child() {
-    let vsync = Vsync::new();
-    let handle_slot: Rc<RefCell<Option<DrawerHandle>>> = Rc::new(RefCell::new(None));
-
-    let probe = HandleProbe {
-        slot: Rc::clone(&handle_slot),
-        on_tap: Rc::new(|handle: &DrawerHandle| handle.open_end_drawer()),
-    };
-
-    let mut laid = lay_out_animated(
+/// always be `[drawer, end_drawer]` (drop the `is_end_drawer_open` branch
+/// entirely) — `with_end_drawer_open_its_slot_is_the_last_scaffold_child`
+/// (below) keeps passing (that IS the order the hardcoded mutant produces
+/// too), but `with_start_drawer_open_its_slot_is_the_last_scaffold_child`
+/// fails (it needs `[end_drawer, drawer]`, which the mutant never produces).
+fn assert_opened_drawer_slot_is_last(open_is_end: bool) {
+    let laid_width = 400.0_f32;
+    let mut laid = lay_out(
         themed(
             Scaffold::new()
                 .drawer(Drawer::new())
                 .end_drawer(Drawer::new())
-                .body(probe),
+                .drawer_edge_drag_width(ORDERING_EDGE_DRAG_WIDTH),
         ),
-        tight(400.0, 800.0),
-        vsync,
+        tight(laid_width, 800.0),
     );
 
-    // Both closed: exactly two edge-strip `RenderAlign`s — one near the left
-    // edge (start drawer), one near the right (end drawer).
-    let aligns_before = laid.find_all_by_render_type("RenderAlign");
+    // Both closed: exactly two edge-strip `RenderAlign`s, each with exactly
+    // one `RenderAlign` in its subtree (an OPEN panel has two — outer and
+    // inner — see the doc above on why "any `RenderAlign`" isn't enough).
     assert_eq!(
-        aligns_before.len(),
+        laid.find_all_by_render_type("RenderAlign").len(),
         2,
         "both drawers mount a closed edge strip"
     );
-    let start_strip = *aligns_before
-        .iter()
-        .find(|&&id| laid.absolute_offset(id).dx.get() < 200.0)
-        .expect("the start drawer's strip sits near the left edge");
 
-    // Open the end drawer via the handle.
-    laid.dispatch_pointer_down(10.0, 10.0);
-    laid.dispatch_pointer_up(10.0, 10.0);
+    // A drag past 0.5, entirely within the OWN strip's bounds (see
+    // `ORDERING_EDGE_DRAG_WIDTH`'s doc): rightward from the left edge opens
+    // the start drawer; leftward from the right edge opens the end drawer
+    // (direction factor -1 mirrors the sign — see
+    // `settle_fling_direction_is_mirrored_for_an_end_drawer`'s equivalent
+    // pin for `settle`).
+    if open_is_end {
+        laid.dispatch_pointer_down(laid_width - 5.0, 400.0);
+        laid.dispatch_pointer_move(laid_width - 30.0, 400.0); // crosses slop
+        laid.dispatch_pointer_move(laid_width - 30.0 - 155.0, 400.0); // past 0.5
+    } else {
+        laid.dispatch_pointer_down(5.0, 400.0);
+        laid.dispatch_pointer_move(30.0, 400.0); // crosses slop
+        laid.dispatch_pointer_move(30.0 + 155.0, 400.0); // past 0.5
+    }
     laid.tick();
 
     let scaffold_layout = laid
@@ -576,11 +749,10 @@ fn with_end_drawer_open_its_slot_is_the_last_scaffold_child() {
         .expect("Scaffold's own multi-child layout must be mounted");
     let top_level_children = laid.children(scaffold_layout);
 
-    // Each top-level child's full descendant set. The start drawer's slot is
-    // whichever one contains its (still-closed) edge strip; the end
-    // drawer's slot is whichever *other* one contains a `RenderAlign` at
-    // all (its now-open outer/inner `Align` pair) — the body probe's own
-    // slot contains neither, so this cleanly picks out just the two drawers.
+    // Each top-level child's full descendant set: the OPENED drawer's slot
+    // is whichever one now carries TWO `RenderAlign`s (the open panel's
+    // outer + inner `Align`); the still-closed one carries exactly one (its
+    // edge strip).
     let subtrees: Vec<Vec<RenderId>> = top_level_children
         .iter()
         .map(|&top_child| {
@@ -593,23 +765,40 @@ fn with_end_drawer_open_its_slot_is_the_last_scaffold_child() {
         .find_all_by_render_type("RenderAlign")
         .into_iter()
         .collect();
+    let align_counts: Vec<usize> = subtrees
+        .iter()
+        .map(|nodes| nodes.iter().filter(|id| all_aligns.contains(id)).count())
+        .collect();
 
-    let start_index = subtrees
+    let opened_index = align_counts
         .iter()
-        .position(|nodes| nodes.contains(&start_strip))
-        .expect("one top-level child's subtree must contain the start drawer's edge strip");
-    let end_drawer_index = subtrees
+        .position(|&count| count == 2)
+        .unwrap_or_else(|| {
+            panic!(
+                "one top-level child's subtree must carry the opened drawer's two Aligns \
+                 (outer + inner) — align_counts={align_counts:?}; if every count is 1, the \
+                 drag never actually opened anything"
+            )
+        });
+    let closed_index = align_counts
         .iter()
-        .enumerate()
-        .position(|(index, nodes)| {
-            index != start_index && nodes.iter().any(|id| all_aligns.contains(id))
-        })
-        .expect("one top-level child's subtree must contain the open end drawer's Aligns");
+        .position(|&count| count == 1)
+        .expect("one top-level child's subtree must carry the still-closed drawer's one Align");
 
     assert!(
-        end_drawer_index > start_index,
-        "with the end drawer open, its slot must be the LAST scaffold child \
-         (paints on top of, hit-tests before, the closed start drawer): \
-         start_index={start_index}, end_drawer_index={end_drawer_index}"
+        opened_index > closed_index,
+        "the OPENED drawer's slot must be the LAST scaffold child (paints on top of, \
+         hit-tests before, the still-closed drawer): open_is_end={open_is_end}, \
+         closed_index={closed_index}, opened_index={opened_index}, align_counts={align_counts:?}"
     );
+}
+
+#[test]
+fn with_end_drawer_open_its_slot_is_the_last_scaffold_child() {
+    assert_opened_drawer_slot_is_last(true);
+}
+
+#[test]
+fn with_start_drawer_open_its_slot_is_the_last_scaffold_child() {
+    assert_opened_drawer_slot_is_last(false);
 }

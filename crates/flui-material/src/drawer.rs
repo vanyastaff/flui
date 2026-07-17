@@ -34,7 +34,7 @@
 //! not a live render-object measurement
 //!
 //! The oracle's `_width` getter (`DrawerControllerState._width`) reads the
-//! mounted `Drawer` panel's **actual laid-out** `RenderBox.size.width** via
+//! mounted `Drawer` panel's **actual laid-out** `RenderBox.size.width` via
 //! `_drawerKey.currentContext?.findRenderObject()`, falling back to
 //! `_kWidth` only while unmounted. FLUI has no render-object size query for
 //! an arbitrary descendant from event-handling code (no `GlobalKey`
@@ -735,8 +735,9 @@ impl ViewState<DrawerController> for DrawerControllerState {
         // and a status transition (Dismissed -> Forward/Reverse the instant
         // `open()`/`close()`/`fling()` is called) — the latter is what makes
         // the panel mount on the SAME build the animation starts, at value
-        // 0, with no flash (the plan's explicit "no Stack fallback... no
-        // flash" requirement).
+        // 0: the mount gates on `is_dismissed()` (status), not on the value
+        // reaching some threshold, so there is no intermediate frame where
+        // the panel is visible at a stale, already-open-looking position.
         let rebuild_for_value = rebuild.clone();
         self.core.controller.add_listener(Arc::new(move || {
             rebuild_for_value.schedule();
@@ -974,14 +975,15 @@ mod tests {
     // ------------------------------------------------------------------
     // `settle` — fling threshold and low-velocity snap.
     //
-    // Red-check for all three: change `MIN_FLING_VELOCITY` from `365.0` to
-    // `0.0` — `settle_below_the_fling_threshold_and_below_half_closes` would
-    // then take the fling branch instead (10.0 >= 0.0), landing in
-    // `AnimationStatus::Reverse` for the wrong reason (it already asserts
-    // `Reverse`, so this specific case would still pass) — but
-    // `settle_at_exactly_the_fling_threshold_flings` pinned at the boundary
-    // below would newly diverge from `settle_just_under_the_fling_threshold_snaps`
-    // if the threshold moved, since both drive off the same named constant.
+    // Red-check for `settle_below_the_fling_threshold_and_below_half_closes`/
+    // `_and_above_half_opens`: change `MIN_FLING_VELOCITY` from `365.0` to
+    // `0.0` — both take the fling branch instead (`10.0 >= 0.0`), landing in
+    // `Reverse`/`Forward` for the wrong reason (the value-based branch would
+    // have produced the identical status here, so neither test's own
+    // assertion distinguishes the two paths). The boundary is pinned
+    // precisely by `settle_just_under_the_fling_threshold_snaps_by_value_not_velocity_sign`
+    // below instead, which picks a value/velocity-sign combination where the
+    // fling branch and the value-snap branch disagree.
     // ------------------------------------------------------------------
 
     #[test]
@@ -1041,6 +1043,140 @@ mod tests {
             core.controller.status(),
             AnimationStatus::Forward,
             "value >= 0.5 with no qualifying fling must open"
+        );
+    }
+
+    /// Pins the boundary condition to be `< 0.5`, not `<= 0.5`: the oracle's
+    /// `_settle` opens on `value >= 0.5`. Also distinct from
+    /// `settle_below_the_fling_threshold_and_above_half_opens` (`0.6`) — a
+    /// mutation that flipped the comparison to `<=` would still pass that
+    /// test (`0.6 <= 0.5` is false either way) but fails this one.
+    #[test]
+    fn settle_at_exactly_half_with_low_velocity_opens() {
+        let core = test_core();
+        core.controller.set_value(0.5);
+        core.settle(1.0);
+        assert_eq!(
+            core.controller.status(),
+            AnimationStatus::Forward,
+            "value == 0.5 exactly must take the open branch"
+        );
+    }
+
+    /// Pins the exact `>= MIN_FLING_VELOCITY` (365.0) boundary against a
+    /// much lower threshold (e.g. `>= 10.0` — the "clearly below threshold"
+    /// probe every other low-velocity test in this file uses, which by
+    /// itself would not distinguish 365.0 from a materially smaller
+    /// threshold). Picks a value/velocity-sign pair where the two branches
+    /// disagree: value `0.4` (< 0.5) with a *positive* velocity just under
+    /// the threshold. The fling branch (if wrongly taken) would fling
+    /// forward, following the velocity's sign, landing in `Forward`; the
+    /// value-snap branch correctly closes on `value < 0.5`, landing in
+    /// `Reverse`.
+    ///
+    /// Red-check: lower `MIN_FLING_VELOCITY` to `10.0` — this test flips to
+    /// `Forward` and fails.
+    #[test]
+    fn settle_just_under_the_fling_threshold_snaps_by_value_not_velocity_sign() {
+        let core = test_core();
+        core.controller.set_value(0.4);
+        core.settle(MIN_FLING_VELOCITY - 0.5);
+        assert_eq!(
+            core.controller.status(),
+            AnimationStatus::Reverse,
+            "just under the fling threshold must snap-close by value, not fling toward \
+             the positive velocity's direction"
+        );
+    }
+
+    /// A negative raw pixel velocity, for an `End`-aligned drawer (direction
+    /// factor `-1`), must fling TOWARD OPEN — the mirror of what the same
+    /// raw velocity does for a `Start` drawer
+    /// (`settle_at_or_above_the_fling_threshold_flings_toward_close`, which
+    /// pins the un-mirrored case). No prior test in this file flings a
+    /// non-`Start` drawer, so `* self.direction_factor()` being dropped from
+    /// `settle`'s velocity normalization was previously undetected: without
+    /// it, `visual_velocity` keeps the raw velocity's sign regardless of
+    /// alignment, and this test's negative velocity would land in `Reverse`
+    /// instead of `Forward`.
+    ///
+    /// Red-check: delete `* self.direction_factor()` from `settle`'s
+    /// `visual_velocity` computation — this test fails (lands in `Reverse`).
+    #[test]
+    fn settle_fling_direction_is_mirrored_for_an_end_drawer() {
+        let core = test_core();
+        core.alignment.set(DrawerAlignment::End);
+        core.controller.set_value(0.1);
+        core.settle(-MIN_FLING_VELOCITY);
+        assert_eq!(
+            core.controller.status(),
+            AnimationStatus::Forward,
+            "a negative raw velocity must open an End drawer (direction factor negates it)"
+        );
+    }
+
+    /// A `Vsync`-registered [`DrawerControllerCore`] (`test_core` deliberately
+    /// stays unregistered — most tests only need the synchronous
+    /// status/value effects `open`/`close`/`settle` produce immediately, not
+    /// the ticked animation). `width`/`alignment` are the two knobs
+    /// `settle`'s `visual_velocity` formula reads.
+    fn test_core_registered(
+        width: f32,
+        alignment: DrawerAlignment,
+    ) -> (Rc<DrawerControllerCore>, Vsync) {
+        let core = Rc::new(DrawerControllerCore {
+            controller: AnimationController::new(BASE_SETTLE_DURATION, Arc::new(Scheduler::new())),
+            vsync: RefCell::new(None),
+            vsync_registration: RefCell::new(None),
+            rebuild: RefCell::new(None),
+            previously_opened: Cell::new(false),
+            alignment: Cell::new(alignment),
+            panel_width: Cell::new(width),
+            on_open_changed: RefCell::new(None),
+        });
+        let vsync = Vsync::new();
+        vsync.register(core.controller.clone());
+        (core, vsync)
+    }
+
+    /// Pins the `/ width` half of `settle`'s velocity normalization by its
+    /// effect on the actual ticked trajectory, not just the resulting
+    /// status: the SAME raw pixel velocity, applied to a narrower panel,
+    /// normalizes to a LARGER `visual_velocity` (a fraction of `[0, 1]` per
+    /// second, not pixels per second) and so must have travelled measurably
+    /// FARTHER after the same fixed number of ticks. `Forward`-vs-`Reverse`
+    /// alone (as the threshold/direction tests above assert) cannot catch a
+    /// deleted `/ width` — both panels would still fling in the same
+    /// direction, just at the wrong (identical, un-normalized) speed.
+    ///
+    /// Red-check: delete `/ width` from `settle`'s `visual_velocity`
+    /// computation — both panels fling at the SAME raw-velocity-derived
+    /// speed regardless of configured width, and the gap this test requires
+    /// between them collapses to ~0.
+    #[test]
+    fn settle_fling_progress_after_fixed_ticks_scales_inversely_with_panel_width() {
+        let (narrow, vsync_narrow) = test_core_registered(100.0, DrawerAlignment::Start);
+        let (wide, vsync_wide) = test_core_registered(2000.0, DrawerAlignment::Start);
+        // Leave `Dismissed` first (a dismissed controller ignores `settle`).
+        narrow.controller.set_value(0.05);
+        wide.controller.set_value(0.05);
+
+        narrow.settle(MIN_FLING_VELOCITY);
+        wide.settle(MIN_FLING_VELOCITY);
+
+        let mut elapsed = 0.0_f64;
+        for _ in 0..5 {
+            elapsed += 0.016;
+            vsync_narrow.tick_all(elapsed);
+            vsync_wide.tick_all(elapsed);
+        }
+
+        assert!(
+            narrow.controller.value() > wide.controller.value() + 0.05,
+            "the same raw fling velocity must normalize to a larger visual velocity (and so \
+             travel farther in the same tick budget) for a narrower panel: narrow={}, wide={}",
+            narrow.controller.value(),
+            wide.controller.value()
         );
     }
 
@@ -1183,8 +1319,22 @@ mod tests {
         assert_eq!(scale_alpha(BLACK54, -1.0).a, 0);
     }
 
+    /// Pins [`DrawerControllerCore::direction_factor`] directly — the
+    /// method the sign in `move_by`/`settle` actually reads. Renamed from
+    /// this file's earlier `direction_factor_is_positive_for_start_and_negative_for_end`,
+    /// which (despite its name) never called `direction_factor()` at all;
+    /// see `outer_and_inner_alignment_mirror_for_start_and_end` below for
+    /// what that test actually pinned.
     #[test]
     fn direction_factor_is_positive_for_start_and_negative_for_end() {
+        let core = test_core();
+        assert_eq!(core.direction_factor(), 1.0, "Start must be positive");
+        core.alignment.set(DrawerAlignment::End);
+        assert_eq!(core.direction_factor(), -1.0, "End must be negative");
+    }
+
+    #[test]
+    fn outer_and_inner_alignment_mirror_for_start_and_end() {
         assert_eq!(
             outer_alignment(DrawerAlignment::Start),
             Alignment::CENTER_LEFT
