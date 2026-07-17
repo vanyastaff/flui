@@ -604,6 +604,53 @@ pub struct NavigationBarThemeData {
     pub overlay_color: Option<StateColor>,
 }
 
+/// Overrides [`TabBar`](crate::TabBar)'s `_TabsSecondaryDefaultsM3` token
+/// defaults, one field at a time — an unset field still falls through to
+/// `TabBar`'s own M3 secondary default table (see `tabs.rs`'s
+/// `resolve_style`), it does not blank the whole slot.
+///
+/// Flutter parity: `TabBarThemeData` (`material/tab_bar_theme.dart`, oracle
+/// tag `3.44.0`), narrowed to the fields FLUI's `TabBar` actually consumes:
+/// [`indicator_color`](Self::indicator_color), [`label_color`](Self::label_color),
+/// [`unselected_label_color`](Self::unselected_label_color),
+/// [`label_style`](Self::label_style),
+/// [`unselected_label_style`](Self::unselected_label_style),
+/// [`divider_color`](Self::divider_color), [`divider_height`](Self::divider_height),
+/// [`overlay_color`](Self::overlay_color). Named deferrals (no consumer in
+/// FLUI's `TabBar` yet — see that module's docs for the full
+/// named-divergence list): `indicator` (custom `Decoration`), `indicator_size`
+/// (fixed at `TabBarIndicatorSize::Tab`, the only size the secondary-only V1
+/// supports), `label_padding` (fixed at `kTabLabelPadding`), `splash_factory`,
+/// `mouse_cursor`, `tab_alignment` (fixed at the fill/equal-share layout),
+/// `text_scaler`, `indicator_animation` (no `AnimationController` on
+/// `TabController` yet), `splash_border_radius`.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TabBarThemeData {
+    /// Overrides [`TabBar`](crate::TabBar)'s default selected-tab indicator
+    /// color (`ColorScheme.primary`).
+    pub indicator_color: Option<Color>,
+    /// Overrides [`TabBar`](crate::TabBar)'s default selected-label color
+    /// (`ColorScheme.onSurface`).
+    pub label_color: Option<Color>,
+    /// Overrides [`TabBar`](crate::TabBar)'s default unselected-label color
+    /// (`ColorScheme.onSurfaceVariant`).
+    pub unselected_label_color: Option<Color>,
+    /// Overrides [`TabBar`](crate::TabBar)'s default selected-label text
+    /// style (`TextTheme.titleSmall`).
+    pub label_style: Option<TextStyle>,
+    /// Overrides [`TabBar`](crate::TabBar)'s default unselected-label text
+    /// style (`TextTheme.titleSmall`).
+    pub unselected_label_style: Option<TextStyle>,
+    /// Overrides [`TabBar`](crate::TabBar)'s default divider color
+    /// (`ColorScheme.outlineVariant`).
+    pub divider_color: Option<Color>,
+    /// Overrides [`TabBar`](crate::TabBar)'s default divider height (`1.0`).
+    pub divider_height: Option<f32>,
+    /// Overrides each tab's default hover/focus/press overlay color, per
+    /// state.
+    pub overlay_color: Option<StateColor>,
+}
+
 /// Overrides [`Radio`](crate::Radio)'s `_RadioDefaultsM3` token defaults,
 /// one field at a time — an unset field here still falls through to
 /// `Radio`'s own M3 default table (see `radio.rs`'s `radio_default_*`
@@ -739,6 +786,10 @@ pub struct ThemeData {
     /// Overrides [`NavigationBar`](crate::NavigationBar)'s M3 token defaults,
     /// per field. Flutter parity: `ThemeData.navigationBarTheme`.
     pub navigation_bar_theme: Option<NavigationBarThemeData>,
+
+    /// Overrides [`TabBar`](crate::TabBar)'s M3 secondary token defaults,
+    /// per field. Flutter parity: `ThemeData.tabBarTheme`.
+    pub tab_bar_theme: Option<TabBarThemeData>,
 }
 
 impl ThemeData {
@@ -768,6 +819,7 @@ impl ThemeData {
             switch_theme: None,
             radio_theme: None,
             navigation_bar_theme: None,
+            tab_bar_theme: None,
         }
     }
 
@@ -797,6 +849,7 @@ impl ThemeData {
             switch_theme: None,
             radio_theme: None,
             navigation_bar_theme: None,
+            tab_bar_theme: None,
         }
     }
 
@@ -891,6 +944,9 @@ impl ThemeData {
             navigation_bar_theme: overrides
                 .navigation_bar_theme
                 .or_else(|| self.navigation_bar_theme.clone()),
+            tab_bar_theme: overrides
+                .tab_bar_theme
+                .or_else(|| self.tab_bar_theme.clone()),
         }
     }
 }
@@ -953,6 +1009,8 @@ pub struct ThemeDataOverrides {
     pub radio_theme: Option<RadioThemeData>,
     /// Replaces [`ThemeData::navigation_bar_theme`] wholesale when `Some`.
     pub navigation_bar_theme: Option<NavigationBarThemeData>,
+    /// Replaces [`ThemeData::tab_bar_theme`] wholesale when `Some`.
+    pub tab_bar_theme: Option<TabBarThemeData>,
 }
 
 impl Default for ThemeData {
