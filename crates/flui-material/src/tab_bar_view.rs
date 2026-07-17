@@ -47,9 +47,9 @@
 //! `_updateTabController`'s `FlutterError`/`assert`). The listener
 //! subscription is registered the same way `TabBarState` registers its own
 //! (re-resolved every `build`, re-homed on controller-identity change) and
-//! removed in `dispose` — the PR1 lesson: a controller that outlives this
-//! view must not keep a dead `Rc` closure calling
-//! [`flui_view::RebuildHandle::schedule`] on an unmounted element.
+//! removed in `dispose`: a controller that outlives this view must not keep
+//! a dead `Rc` closure calling [`flui_view::RebuildHandle::schedule`] on an
+//! unmounted element.
 //!
 //! ## Length mismatch
 //!
@@ -221,8 +221,11 @@ impl ViewState<TabBarView> for TabBarViewState {
     }
 
     /// Unregisters this view's listener from whatever controller it's
-    /// currently subscribed to — see `crate::tabs::TabBarState::dispose`'s
-    /// doc comment for exactly what leaks without this (the PR1 lesson).
+    /// currently subscribed to — without this, a controller that outlives
+    /// this view keeps firing a dead `Rc` closure that calls
+    /// `rebuild.schedule()` on a `RebuildHandle` whose element no longer
+    /// exists (see `crate::tabs::TabBarState::dispose`'s doc comment for the
+    /// identical leak on `TabBar`'s side).
     fn dispose(&mut self) {
         let controller = self.controller.get_mut().take();
         let listener_id = self.listener_id.get_mut().take();

@@ -762,7 +762,7 @@ fn dragging_inside_the_list_scrolls_its_items() {
 }
 
 // ============================================================================
-// (8) Tabs route — TabBarView + AppBar.bottom (Tabs PR2's own exit criterion)
+// (8) Tabs route — TabBarView + AppBar.bottom
 // ============================================================================
 
 /// Pushes [`tree::tabs_route`] from the home route's app bar action and

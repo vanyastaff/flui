@@ -48,13 +48,13 @@
 //!   and painted beneath the dialog's barrier — only its hit-testing is
 //!   blocked (the full-screen barrier sits on top).
 //!
-//! [`tabs_route`] is a third route (Tabs PR2's own exit criterion): a
-//! `DefaultTabController`-scoped `Scaffold` whose `AppBar.bottom` carries a
-//! secondary `TabBar` and whose body is the matching `TabBarView`, over
-//! three tabs ([`OVERVIEW_TAB_LABEL`], [`COUNTER_TAB_LABEL`],
-//! [`ABOUT_TAB_LABEL`]) — see [`CounterTab`]'s own doc comment for the
-//! stateful-counter tab that demonstrates `TabBarView`'s keep-alive
-//! retention.
+//! [`tabs_route`] is a third route, demonstrating `TabBarView` and
+//! `AppBar.bottom`: a `DefaultTabController`-scoped `Scaffold` whose
+//! `AppBar.bottom` carries a secondary `TabBar` and whose body is the
+//! matching `TabBarView`, over three tabs ([`OVERVIEW_TAB_LABEL`],
+//! [`COUNTER_TAB_LABEL`], [`ABOUT_TAB_LABEL`]) — see [`CounterTab`]'s own
+//! doc comment for the stateful-counter tab that demonstrates
+//! `TabBarView`'s keep-alive retention.
 //!
 //! # Honest caveats (Catalog.1 exit criterion, Material half)
 //!
@@ -156,8 +156,12 @@ pub fn settings_icon_data() -> IconData {
     IconData::new(0xE8B8).with_font_family("MaterialIcons")
 }
 
-/// `Icons.tab`'s codepoint (`icons.dart`'s `tab` constant) — the app bar
-/// action that pushes [`tabs_route`]. Same tofu-rendering gap as
+/// The `tab` glyph's codepoint from the classic `MaterialIcons` font table —
+/// the same numbering convention [`settings_icon_data`]'s `0xE8B8` already
+/// uses, NOT `material/icons.dart`'s current table (oracle tag `3.44.0`
+/// numbers `Icons.tab` as `0xe638`; that codepoint would render the wrong
+/// glyph against the classic font this substrate actually bundles/targets).
+/// The app bar action that pushes [`tabs_route`]. Same tofu-rendering gap as
 /// [`settings_icon_data`]; `pub` for the identical reason.
 #[must_use]
 pub fn tabs_icon_data() -> IconData {
@@ -532,12 +536,13 @@ impl ViewState<CounterTab> for CounterTabState {
 
 /// The tabbed route: a [`DefaultTabController`]-scoped `Scaffold` whose
 /// `AppBar.bottom` carries a secondary [`TabBar`] and whose body is the
-/// matching [`TabBarView`] — the Tabs PR2 sample-app exit criterion (see
-/// the module docs). Same "no explicit `leading`" implied-`BackButton`
-/// shape as [`settings_route`]. Tab 0 ([`OVERVIEW_TAB_LABEL`]) is the
-/// controller's initial index, so it alone is built on mount; tab 1
-/// ([`COUNTER_TAB_LABEL`]) carries [`CounterTab`]'s stateful counter; tab 2
-/// ([`ABOUT_TAB_LABEL`]) stays unbuilt until visited.
+/// matching [`TabBarView`] — this sample app's `TabBarView`/`AppBar.bottom`
+/// demonstration (see the module docs). Same "no explicit `leading`"
+/// implied-`BackButton` shape as [`settings_route`]. Tab 0
+/// ([`OVERVIEW_TAB_LABEL`]) is the controller's initial index, so it alone
+/// is built on mount; tab 1 ([`COUNTER_TAB_LABEL`]) carries [`CounterTab`]'s
+/// stateful counter; tab 2 ([`ABOUT_TAB_LABEL`]) stays unbuilt until
+/// visited.
 fn tabs_route() -> PageRoute<()> {
     PageRoute::new(|_ctx, _animation, _secondary| {
         let tabs = vec![

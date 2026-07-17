@@ -18,10 +18,14 @@ use std::time::Duration;
 
 use common::{lay_out, lay_out_animated, tight};
 use flui_animation::{Animation, AnimationController, Vsync, VsyncRegistration};
-use flui_material::{DefaultTabController, TabBarView, TabController};
+use flui_material::{
+    DefaultTabController, Tab, TabBar, TabBarView, TabController, Theme, ThemeData,
+};
 use flui_scheduler::Scheduler;
 use flui_view::prelude::*;
-use flui_widgets::{MediaQuery, MediaQueryData, SizedBox, VsyncScope};
+use flui_widgets::{
+    Column, CrossAxisAlignment, Expanded, MediaQuery, MediaQueryData, SizedBox, VsyncScope,
+};
 
 /// Per-pump virtual-time step for the `TickerMode` animation test — half the
 /// probe `AnimationController`'s own 1s duration, matching
@@ -250,10 +254,12 @@ fn an_inactive_tabs_animation_is_muted_by_ticker_mode() {
 }
 
 /// Unmounting a `TabBarView` removes its listener from the (outliving)
-/// `TabController` it was subscribed to — same "count seam" pattern as
+/// `TabController` it was subscribed to — a controller that outlives the
+/// view must not keep firing a dead `Rc` closure against an unmounted
+/// element's `RebuildHandle`. Same "count seam" pattern as
 /// `crates/flui-material/tests/tabs.rs`'s
-/// `unmounting_a_tab_bar_removes_its_listener_from_the_controller` — the PR1
-/// lesson, now proven for `TabBarView`'s own `dispose`.
+/// `unmounting_a_tab_bar_removes_its_listener_from_the_controller`, now
+/// proven for `TabBarView`'s own `dispose`.
 #[test]
 fn unmounting_a_tab_bar_view_removes_its_listener_from_the_controller() {
     let controller = TabController::new(2, 0);
@@ -352,39 +358,76 @@ fn is_offstage(laid: &common::LaidOut, id: flui_foundation::RenderId) -> bool {
 }
 
 /// A `DefaultTabController` ancestor is reachable by (and sufficient for) a
-/// descendant `TabBarView` with no explicit controller — the fallback half
+/// descendant `TabBarView` with NO explicit controller — the fallback half
 /// of the "explicit, else `DefaultTabController`" contract
 /// `a_tab_bar_view_with_no_controller_and_no_default_tab_controller_ancestor_panics`
-/// proves the negative of. Also proves a controller-driven switch reaches
-/// the mounted tree (not just the controller's own state): the `Stack`'s
-/// per-tab `Offstage` layers (in `view.children` order) flip which one is
-/// offstage when the controller's index changes.
+/// proves the negative of.
+///
+/// Neither the co-mounted `TabBar` nor the `TabBarView` below is ever given
+/// an explicit `.controller(...)` — an earlier version of this test passed
+/// one to `TabBarView` directly, which (per `resolve_controller`'s "explicit
+/// wins" precedence) made the `DefaultTabController` ancestor inert and
+/// proved nothing about the fallback path. This version drives the switch
+/// the only way that actually exercises `DefaultTabController::maybe_of`:
+/// a real pointer tap on the co-mounted `TabBar`, mirroring
+/// `crates/flui-material/tests/tabs.rs`'s
+/// `default_tab_controller_is_reachable_by_a_descendant_tab_bar_and_drives_its_indicator`.
+/// Both widgets resolving to the SAME ancestor-owned `TabController` is
+/// exactly what makes the tap on one observable through the other's
+/// `Offstage` layers below.
 ///
 /// Sizes are NOT the probe here — `Stack::fit(StackFit::Expand)` (matching
 /// `CupertinoTabScaffold`'s own choice) forces every layer, on- or
 /// off-stage, to the `Stack`'s own tight size, so a size comparison cannot
 /// tell them apart; the `offstage` diagnostics flag can.
+///
+/// Mutation red-check (run and reverted, see the review evidence): remove
+/// the `.or_else(|| DefaultTabController::maybe_of(ctx))` arm from
+/// `tab_bar_view.rs`'s `resolve_controller` — `build` then panics on mount
+/// (no explicit controller, no fallback), and this test fails loudly
+/// instead of silently passing.
 #[test]
 fn default_tab_controller_ancestor_drives_the_active_child_through_offstage() {
-    let controller = TabController::new(2, 0);
+    let tabs = vec![Tab::new().text("One"), Tab::new().text("Two")];
     let mut laid = lay_out(
-        MediaQuery::new(
-            MediaQueryData::default(),
-            DefaultTabController::new(
-                2,
-                TabBarView::new(vec![
-                    SizedBox::new(30.0, 30.0).into_view().boxed(),
-                    SizedBox::new(40.0, 40.0).into_view().boxed(),
-                ])
-                .controller(controller.clone()),
+        Theme::new(
+            ThemeData::light(),
+            MediaQuery::new(
+                MediaQueryData::default(),
+                DefaultTabController::new(
+                    2,
+                    Column::new(vec![
+                        TabBar::secondary(tabs).boxed(),
+                        Expanded::new(TabBarView::new(vec![
+                            SizedBox::new(30.0, 30.0).into_view().boxed(),
+                            SizedBox::new(40.0, 40.0).into_view().boxed(),
+                        ]))
+                        .boxed(),
+                    ])
+                    .cross_axis_alignment(CrossAxisAlignment::Stretch),
+                ),
             ),
         ),
         tight(400.0, 400.0),
     );
     laid.tick();
 
+    // The co-mounted `TabBar` mounts its OWN `RenderStack` internally (the
+    // divider layer + tab row, see `tabs.rs`'s module docs) — disambiguate
+    // `TabBarView`'s own `Stack` structurally, as the one whose direct
+    // children are ALL `RenderOffstage` layers (the `TabBar`'s stack's
+    // children are not).
+    let offstage_ids: std::collections::HashSet<_> = laid
+        .find_all_by_render_type("RenderOffstage")
+        .into_iter()
+        .collect();
     let stack = laid
-        .find_by_render_type("RenderStack")
+        .find_all_by_render_type("RenderStack")
+        .into_iter()
+        .find(|&id| {
+            let kids = laid.children(id);
+            !kids.is_empty() && kids.iter().all(|kid| offstage_ids.contains(kid))
+        })
         .expect("TabBarView must mount a Stack of per-tab Offstage layers");
     let layers = laid.children(stack);
     assert_eq!(layers.len(), 2, "one Offstage layer per tab");
@@ -398,16 +441,21 @@ fn default_tab_controller_ancestor_drives_the_active_child_through_offstage() {
         "tab 1 is inactive on mount — its Offstage layer must be offstage"
     );
 
-    controller.set_index(1);
+    // Tap the second (of two, equal-width) tabs in the co-mounted TabBar —
+    // matching `tests/tabs.rs`'s `tap_sets_the_controller_index_through_real_pointer_dispatch`
+    // geometry, scaled to this test's 400px-wide bar (two 200px cells; the
+    // second spans x in [200, 400), 48px tall).
+    laid.dispatch_pointer_down(300.0, 24.0);
+    laid.dispatch_pointer_up(300.0, 24.0);
     laid.tick();
 
     let layers_after = laid.children(stack);
     assert!(
         is_offstage(&laid, layers_after[0]),
-        "after switching to tab 1, tab 0's Offstage layer must become offstage"
+        "after tapping the TabBar's second tab, TabBarView's tab 0 layer must become offstage"
     );
     assert!(
         !is_offstage(&laid, layers_after[1]),
-        "after switching to tab 1, its Offstage layer must become on-stage"
+        "after tapping the TabBar's second tab, TabBarView's tab 1 layer must become on-stage"
     );
 }
