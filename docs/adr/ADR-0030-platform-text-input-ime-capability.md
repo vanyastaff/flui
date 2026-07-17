@@ -56,6 +56,8 @@ The registry still needs to carry a window identity (see §4), so it accepts an 
 
 `TextInputRegistry` records the attaching window's `OpaqueWindowHandle` but V1 dispatches every event to the single global active client regardless of which window it came from. Real per-window/per-realm routing is deferred until `UiRealm`'s realm-scoped ownership (ADR-0027) reaches this registry; the handle is captured now specifically so that migration is a routing-logic change, not a breaking signature change to `attach()`.
 
+The same deferral covers the detach side: `ImeBackend::attach`/`detach` act on the binding's *current* active window at call time and never consult the registry's recorded attach-time handle — if the active window changes between attach and detach, `set_ime_allowed(false)` lands on the wrong window. Correct within V1's single-window scope; per-window routing must target the recorded handle on both dispatch and detach, with a test when multi-window lands.
+
 ## Evidence
 
 - `cargo nextest run --workspace --exclude flui-platform`: 7359 passed, 4 skipped.
