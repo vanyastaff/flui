@@ -121,10 +121,55 @@
 //! precedent this crate's `checkbox::CheckboxPainter`'s own module docs
 //! describe.
 //!
+//! # Disabled content: steady-state 38% opacity, no fade
+//!
+//! The oracle wraps a chip's avatar (`_paintAvatar`) and separately its
+//! label/delete icon (`_paintChild`) each in their own `pushOpacity` (or an
+//! equivalent `saveLayer`) at `_disabledColor.alpha`, gated on
+//! `!enableAnimation.isCompleted` (`chip.dart` `:2199-2231`/`:2236-2275`,
+//! oracle tag `3.44.0`) — and that gate is true not only *during* an
+//! enable/disable transition but for the entire steady-state lifetime of a
+//! chip that is (and stays) disabled, since `enableController` never runs
+//! `forward()` for it. `_disabledColor.alpha` itself resolves to
+//! `_kDisabledAlpha` (`0x61`, `chip.dart`) whenever `enableAnimation` is not
+//! completed, `0xff` (opaque) once it is. This V1 has no
+//! `enableController`/`AnimationController` to run at all (see the
+//! "Deferred" list below), but the *steady-state* alpha is still real,
+//! observable behavior a disabled chip must show — not merely a transition
+//! artifact safe to snap away. So [`Chip`]/[`FilterChip`] wrap their
+//! composed avatar/label/delete content (never the container fill or
+//! border, which the oracle's `Ink`/`ShapeDecoration` painting never wraps
+//! in this opacity layer either) in one [`flui_widgets::Opacity`] at the
+//! private `DISABLED_CONTENT_ALPHA` when disabled, `1.0` when enabled — a single
+//! group wrap rather than the oracle's three separate `pushOpacity` calls,
+//! which is equivalent here since every one of those three calls uses the
+//! identical alpha value (there is no per-slot variation to preserve by
+//! keeping them separate).
+//!
+//! # Nested tap targets: a local `GestureArenaScope`
+//!
+//! The delete icon's `InkWell` sits nested inside the chip body's own
+//! `InkWell` — two independent tappable regions on one hit-test path. A
+//! bare `GestureDetector` with no ambient `GestureArenaScope` above it
+//! builds its recognizers against a private arena it closes itself, which
+//! is exactly right when it's the only detector in play but means two such
+//! *standalone* detectors on the same path resolve completely
+//! independently: a tap on the delete icon would fire both `on_deleted` and
+//! the chip's own `on_pressed`/`on_selected`. Both [`Chip`] and
+//! [`FilterChip`] close this by wrapping their whole built subtree in a
+//! fresh, local `GestureArenaScope` (see this module's own
+//! `wrap_local_gesture_arena`) so the two `InkWell`s genuinely compete —
+//! confirmed by mounting a real tree and dispatching a real tap (see
+//! `tests/chip.rs`'s delete-vs-chip-tap coverage), not merely inferred from
+//! the tap-vs-long-press precedent `crates/flui-widgets/tests/gesture_detector_advanced.rs`
+//! establishes for a different pair of gesture types.
+//!
 //! # Deferred (named, not silently dropped)
 //!
-//! - **Avatar/delete/selection/enable animation** — every transition snaps;
-//!   see the sections above.
+//! - **Avatar/delete/selection/enable animation** — every transition snaps
+//!   directly to its settled end state (including the disabled-content
+//!   opacity — see the "Disabled content" section above: the *value* is
+//!   ported, the *fade into/out of* it is not); see the sections above.
 //! - **Elevated variants** (`FilterChip.elevated`, and any chip's non-zero
 //!   `elevation`/`pressElevation`) — V1 is flat-only, elevation fixed at
 //!   `0.0`.
@@ -163,7 +208,8 @@ use flui_view::prelude::*;
 use flui_widgets::icon::IconData;
 use flui_widgets::{
     ConstrainedBox, CrossAxisAlignment, CustomPaint, CustomPainter, DefaultTextStyle, Icon,
-    IconTheme, IconThemeData, MainAxisSize, Padding, Row, Semantics, WidgetState, WidgetStates,
+    IconTheme, IconThemeData, MainAxisSize, Opacity, Padding, Row, Semantics, WidgetState,
+    WidgetStates,
 };
 
 use crate::color_scheme::ColorScheme;
@@ -209,6 +255,20 @@ const DELETE_ICON_CANCEL_CODEPOINT: u32 = 0xE139;
 /// (`const Icon(Icons.clear, size: 18)`, `filter_chip.dart`, oracle tag
 /// `3.44.0`).
 const DELETE_ICON_CLEAR_CODEPOINT: u32 = 0xE168;
+
+/// The opacity a disabled chip's avatar/label/delete content settles at.
+/// Flutter parity: `_kDisabledAlpha` (`chip.dart`, `0x61`) — see the module
+/// docs' "Disabled content" section for why this is steady-state behavior,
+/// not merely a transition artifact this V1 is entitled to snap away.
+const DISABLED_CONTENT_ALPHA: f32 = 0x61 as f32 / 255.0;
+
+/// The content opacity for a chip in `enabled`'s state — `1.0` enabled,
+/// [`DISABLED_CONTENT_ALPHA`] disabled. Extracted as its own pure function
+/// (not left inline in `build`) so the two-value table is unit-testable
+/// without mounting a widget tree.
+fn disabled_content_opacity(enabled: bool) -> f32 {
+    if enabled { 1.0 } else { DISABLED_CONTENT_ALPHA }
+}
 
 // Compile-time geometry invariant (not a runtime test — every side is
 // `const`): the default padding must leave room for a positive content
@@ -272,11 +332,17 @@ fn resolve_pure_chip_default(
 }
 
 /// The label and delete-icon color default table. Flutter parity:
-/// `_ChipDefaultsM3.labelStyle`/`.deleteIconColor` and
-/// `_FilterChipDefaultsM3.labelStyle`/`.deleteIconColor` (`chip.dart`/
-/// `filter_chip.dart`, oracle tag `3.44.0`) — both fields resolve to the
-/// identical three colors in both files, so one function serves all four
-/// call sites.
+/// `_FilterChipDefaultsM3.labelStyle`/`.deleteIconColor` (`filter_chip.dart`,
+/// oracle tag `3.44.0`) — the real three-way (`disabled`/`selected`/`else`)
+/// table. `_ChipDefaultsM3.labelStyle`/`.deleteIconColor` (`chip.dart`) has
+/// **no** `isSelected` member at all — it is a plain two-way `isEnabled ?
+/// onSurfaceVariant : onSurface` ternary, since a bare `Chip` is never
+/// selected. That two-way table's `enabled` value is identical to this
+/// function's `unselected` branch, and [`Chip`]'s own [`chip_states`] call
+/// site never sets [`WidgetState::Selected`] (see [`chip_icon_color_default`]'s
+/// doc comment for the same note) — so reusing this one function for both
+/// [`Chip`] and [`FilterChip`] is safe, but is not itself evidence that
+/// `_ChipDefaultsM3` has a selected branch.
 fn chip_content_color_default(states: WidgetStates, colors: &ColorScheme) -> Color {
     resolve_pure_chip_default(
         states,
@@ -287,12 +353,15 @@ fn chip_content_color_default(states: WidgetStates, colors: &ColorScheme) -> Col
 }
 
 /// The avatar and checkmark icon color default table. Flutter parity:
-/// `_ChipDefaultsM3.iconTheme.color` and `_FilterChipDefaultsM3.iconTheme.color`/
-/// `.checkmarkColor` (`chip.dart`/`filter_chip.dart`, oracle tag `3.44.0`) —
-/// all three resolve to the identical three colors, so one function serves
-/// every call site. [`Chip`]'s own states never carry `Selected` (see
-/// [`chip_states`]'s call site in [`Chip`]'s build), so the `selected`
-/// branch is simply unreachable there rather than needing its own function.
+/// `_FilterChipDefaultsM3.iconTheme.color`/`.checkmarkColor`
+/// (`filter_chip.dart`, oracle tag `3.44.0`) — the real three-way
+/// (`disabled`/`selected`/`else`) table. `_ChipDefaultsM3.iconTheme.color`
+/// (`chip.dart`) has **no** `isSelected` member — it is a plain two-way
+/// `isEnabled ? primary : onSurface` ternary. That two-way table's `enabled`
+/// value is identical to this function's `unselected` branch, and
+/// [`Chip`]'s own states never carry `Selected` (see [`chip_states`]'s call
+/// site in [`Chip`]'s build), so the `selected` branch is simply
+/// unreachable there rather than evidence `_ChipDefaultsM3` itself has one.
 fn chip_icon_color_default(states: WidgetStates, colors: &ColorScheme) -> Color {
     resolve_pure_chip_default(
         states,
@@ -303,9 +372,14 @@ fn chip_icon_color_default(states: WidgetStates, colors: &ColorScheme) -> Color 
 }
 
 /// The container border default table. Flutter parity:
-/// `_ChipDefaultsM3.side`/`_FilterChipDefaultsM3.side` (flat variant only —
-/// see the module docs), `chip.dart`/`filter_chip.dart`, oracle tag
-/// `3.44.0`.
+/// `_FilterChipDefaultsM3.side` (flat variant only — see the module docs),
+/// `filter_chip.dart`, oracle tag `3.44.0` — the real `selected`-gated
+/// table. `_ChipDefaultsM3.side` (`chip.dart`) has **no** `isSelected`
+/// member — it is a plain two-way `isEnabled ? outlineVariant :
+/// onSurface@12%` ternary, since a bare `Chip` is never selected; that
+/// two-way table agrees with this function's `enabled`/`disabled`
+/// (unselected) branches, so [`Chip`] safely calls this same function with
+/// `selected` pinned to `false`.
 ///
 /// **Combined-state, not pure**: `selected` is checked FIRST and wins
 /// unconditionally (a selected chip's side is transparent whether or not it
@@ -554,6 +628,7 @@ impl StatelessView for Chip {
             label_padding,
             delete_view,
         );
+        let content = Opacity::new(disabled_content_opacity(self.enabled)).child(content);
 
         let padded_content = Padding::new(padding).child(
             ConstrainedBox::new(chip_content_constraints(padding, label_padding)).child(content),
@@ -575,10 +650,12 @@ impl StatelessView for Chip {
             )
             .child(Material::new(background_color).shape(shape).child(ink_well));
 
-        Semantics::new()
-            .button(self.on_pressed.is_some())
-            .enabled(self.enabled)
-            .child(container)
+        wrap_local_gesture_arena(
+            Semantics::new()
+                .button(self.on_pressed.is_some())
+                .enabled(self.enabled)
+                .child(container),
+        )
     }
 }
 
@@ -831,6 +908,7 @@ impl StatelessView for FilterChip {
             label_padding,
             delete_view,
         );
+        let content = Opacity::new(disabled_content_opacity(enabled)).child(content);
 
         let padded_content = Padding::new(padding).child(
             ConstrainedBox::new(chip_content_constraints(padding, label_padding)).child(content),
@@ -852,11 +930,13 @@ impl StatelessView for FilterChip {
             )
             .child(Material::new(background_color).shape(shape).child(ink_well));
 
-        Semantics::new()
-            .selected(selected)
-            .button(true)
-            .enabled(enabled)
-            .child(container)
+        wrap_local_gesture_arena(
+            Semantics::new()
+                .selected(selected)
+                .button(true)
+                .enabled(enabled)
+                .child(container),
+        )
     }
 }
 
@@ -898,6 +978,43 @@ fn chip_content_constraints(padding: EdgeInsets, label_padding: EdgeInsets) -> B
     )
 }
 
+/// Wraps a chip's whole built subtree in a fresh, local
+/// [`flui_widgets::GestureArenaScope`] so its two nested [`InkWell`]s (the
+/// delete button, inside the outer chip-body [`InkWell`]) genuinely compete
+/// for a tap instead of both firing.
+///
+/// [`flui_widgets::GestureDetector`]'s own module docs document the
+/// fallback this closes a real gap in: with **no** ambient
+/// `GestureArenaScope` above it, a `GestureDetector` builds its recognizers
+/// against a *private* arena it closes itself — correct in isolation, but
+/// when TWO such standalone detectors both sit on the same hit-test path
+/// (exactly what a delete icon nested inside a tappable chip produces), each
+/// resolves its own tap independently, so a tap on the delete icon fires
+/// BOTH `on_deleted` and the chip's own `on_pressed`/`on_selected`. Neither
+/// `flui-app`'s binding nor any ancestor this crate's components mount
+/// installs a `GestureArenaScope` anywhere today — confirmed by grepping the
+/// workspace for it outside `flui-widgets` itself — so a real app has this
+/// exact double-fire bug for any nested tap targets, not just this one.
+/// Fixing that project-wide is out of scope here; this closes it locally,
+/// the same way any composed widget with more than one nested tap target
+/// must.
+///
+/// Constructing a fresh [`flui_interaction::arena::GestureArena::new`] on
+/// every `build()` call is safe despite [`Chip`]/[`FilterChip`] being
+/// stateless (no persistent slot to cache it in): a descendant
+/// `GestureDetector` reads its ambient scope exactly once, in its own
+/// `init_state` (first mount) — see that type's own "Arena acquisition" doc
+/// section — never on a later rebuild. So only the arena captured at first
+/// mount is ever actually used; every subsequent rebuild's
+/// freshly-constructed (and immediately discarded)
+/// [`flui_interaction::arena::GestureArena`] is inert. This mirrors the
+/// same "cheap to reconstruct, only the first read matters" contract
+/// `GestureArenaScope::update_should_notify` documents (always `false`)
+/// already relies on.
+fn wrap_local_gesture_arena(child: impl IntoView) -> flui_widgets::GestureArenaScope {
+    flui_widgets::GestureArenaScope::new(flui_interaction::arena::GestureArena::new(), child)
+}
+
 /// Strokes a chip's resolved [`MaterialShape`] as an inset ring — the same
 /// `Canvas::draw_drrect`-between-two-insets approach the private
 /// `CheckboxPainter` (`checkbox.rs`) uses for its own stroked box, see the
@@ -933,14 +1050,22 @@ impl CustomPainter for ChipBorderPainter {
 
 /// Paints the settled (non-animated) checkmark [`FilterChip`] shows in its
 /// leading slot while selected — a direct port of the oracle's own
-/// relative-coordinate stroke path at its fully-settled shape. Flutter
-/// parity: `_RenderChip._paintCheck` (`chip.dart` `:2125-2172`, oracle tag
-/// `3.44.0`) evaluated at `t == 1.0` (the full `start -> mid -> end`
-/// polyline, no animated partial stroke) — the same "real stroked
-/// geometry, `t == 1.0`" precedent the private `CheckboxPainter`'s
-/// (`checkbox.rs`) own module docs describe, and in fact the identical relative
-/// coordinates (`0.15, 0.45` / `0.4, 0.7` / `0.85, 0.25`) that painter's
-/// own `draw_checkmark` uses.
+/// relative-coordinate stroke path at its fully-settled shape, scaled down
+/// and centered exactly as the oracle does. Flutter parity:
+/// `_RenderChip._paintSelectionOverlay`/`._paintCheck` (`chip.dart`
+/// `:2174-2195`/`:2125-2172`, oracle tag `3.44.0`) evaluated at `t == 1.0`
+/// (the full `start -> mid -> end` polyline, no animated partial stroke) —
+/// the same "real stroked geometry, `t == 1.0`" precedent the private
+/// `CheckboxPainter`'s (`checkbox.rs`) own module docs describe, using the
+/// identical relative coordinates (`0.15, 0.45` / `0.4, 0.7` / `0.85,
+/// 0.25`) that painter's own `draw_checkmark` uses — but, unlike that full-
+/// cell checkmark, scaled to `checkSize = avatar.size.height * 0.75` and
+/// offset by `avatar.size.height * 0.125` on both axes ("a little smaller
+/// than the avatar", `_paintSelectionOverlay`'s own comment, `:2188-2192`):
+/// this painter's `size` is the full leading-slot cell (avatar's own size),
+/// so the checkmark itself must be drawn at 75% of that cell, inset by
+/// 12.5% on each side — drawing at the full cell size would be ~33%
+/// oversized and pinned to the wrong corner.
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct ChipCheckmarkPainter {
     color: Color,
@@ -948,17 +1073,23 @@ struct ChipCheckmarkPainter {
 
 impl CustomPainter for ChipCheckmarkPainter {
     fn paint(&self, canvas: &mut Canvas, size: Size) {
+        let cell = size.height.get();
         // Flutter parity: `_kCheckmarkStrokeWidth * avatar.size.height /
-        // 24.0` (`chip.dart`).
-        let stroke_width = 2.0 * size.height.get() / 24.0;
+        // 24.0` (`chip.dart`) — the FULL cell height, not `check_size`.
+        let stroke_width = 2.0 * cell / 24.0;
         let paint = Paint::stroke(self.color, stroke_width);
 
-        let point = |dx: f32, dy: f32| Point::new(px(dx), px(dy));
-        let edge = size.height.get();
+        // Flutter parity: `checkSize = avatar.size.height * 0.75` and the
+        // `avatar.size.height * 0.125` origin offset on both axes
+        // (`_paintSelectionOverlay`, `chip.dart` `:2188-2192`) — see this
+        // struct's own doc comment.
+        let check_size = cell * 0.75;
+        let origin_offset = cell * 0.125;
+        let point = |dx: f32, dy: f32| Point::new(px(origin_offset + dx), px(origin_offset + dy));
         let mut path = Path::new();
-        path.move_to(point(edge * 0.15, edge * 0.45));
-        path.line_to(point(edge * 0.4, edge * 0.7));
-        path.line_to(point(edge * 0.85, edge * 0.25));
+        path.move_to(point(check_size * 0.15, check_size * 0.45));
+        path.line_to(point(check_size * 0.4, check_size * 0.7));
+        path.line_to(point(check_size * 0.85, check_size * 0.25));
         canvas.draw_path(&path, &paint);
     }
 
@@ -977,7 +1108,6 @@ impl CustomPainter for ChipCheckmarkPainter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::theme_data::ChipThemeData;
 
     fn light() -> ColorScheme {
         ColorScheme::light()
@@ -1300,6 +1430,26 @@ mod tests {
         assert_eq!(height, px(0.0));
     }
 
+    // ------------------------------------------------------------------
+    // disabled_content_opacity — the steady-state 38% alpha, not a fade
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn disabled_content_opacity_enabled_is_fully_opaque() {
+        assert_eq!(disabled_content_opacity(true), 1.0);
+    }
+
+    /// Flutter parity: `_kDisabledAlpha` (`0x61`, `chip.dart`) as a `0.0..=1.0`
+    /// fraction. Mutation-run: hardcoding this to `1.0` (i.e. dropping the
+    /// disabled dimming entirely, the pre-fix shape) was confirmed to make
+    /// this test fail.
+    #[test]
+    fn disabled_content_opacity_disabled_is_the_m3_disabled_alpha() {
+        let opacity = disabled_content_opacity(false);
+        assert!((opacity - 0x61 as f32 / 255.0).abs() < f32::EPSILON);
+        assert_ne!(opacity, 1.0);
+    }
+
     #[test]
     fn default_shape_is_an_8dp_rounded_rectangle() {
         let size = Size::new(px(80.0), px(CHIP_HEIGHT));
@@ -1324,39 +1474,20 @@ mod tests {
         assert_eq!(padding.left, px(LABEL_PADDING_HORIZONTAL));
     }
 
-    // ------------------------------------------------------------------
-    // Theme tier beats default (plain-override cascade)
-    // ------------------------------------------------------------------
-
-    #[test]
-    fn theme_label_color_beats_the_default() {
-        let theme_color = Color::rgb(9, 9, 9);
-        let resolved = Some(theme_color)
-            .or_else(|| Some(chip_content_color_default(WidgetStates::NONE, &light())));
-        assert_eq!(resolved, Some(theme_color));
-    }
-
-    #[test]
-    fn theme_side_beats_the_default() {
-        let theme_side = BorderSide::new(Color::rgb(3, 3, 3), px(2.0), BorderStyle::Solid);
-        let chip_theme = ChipThemeData {
-            side: Some(theme_side),
-            ..Default::default()
-        };
-        let resolved = chip_theme
-            .side
-            .unwrap_or_else(|| chip_default_side(false, true, &light()));
-        assert_eq!(resolved, theme_side);
-    }
-
-    #[test]
-    fn no_theme_falls_through_to_the_default_side() {
-        let chip_theme = ChipThemeData::default();
-        let resolved = chip_theme
-            .side
-            .unwrap_or_else(|| chip_default_side(false, true, &light()));
-        assert_eq!(resolved, chip_default_side(false, true, &light()));
-    }
+    // Theme tier beats default (the widget/theme/default cascade for
+    // `label_color`/`side`) is proven through a REAL mount + `Chip::build`
+    // call in `tests/chip.rs` (`theme_label_color_reaches_the_mounted_paragraph_beating_the_default`/
+    // `theme_side_reaches_the_mounted_border_painter_beating_the_default`,
+    // plus their `no_theme_override_paints_the_m3_default_*` companions),
+    // not here: `ChipThemeData`'s fields are plain overrides (see the
+    // module docs), so a unit-level probe of the cascade can only
+    // re-implement `Option::or_else`/`unwrap_or_else` inline — exercising
+    // `std::option`, not `chip.rs`'s own `build()` wiring. A previous
+    // version of this test module carried exactly that vacuous shape; it
+    // was replaced, not merely supplemented, because it could not fail
+    // against a real wiring bug (confirmed: mutating `Chip::build` to drop
+    // the `chip_theme.label_color`/`.side` read entirely left the old
+    // in-module tests green).
 
     // ------------------------------------------------------------------
     // Painters
@@ -1422,6 +1553,82 @@ mod tests {
                 .iter()
                 .any(|command| matches!(command, DrawCommand::DrawPath { .. }))
         );
+    }
+
+    /// Pins the oracle's `checkSize = avatar.size.height * 0.75` scale-down
+    /// and `avatar.size.height * 0.125` origin offset
+    /// (`_paintSelectionOverlay`, `chip.dart` `:2188-2192`, oracle tag
+    /// `3.44.0`) — the mark must sit strictly inside a `0.125..0.875`
+    /// (75%-wide, centered) window of the full cell, not fill it edge to
+    /// edge. Mutation-run: reverting `ChipCheckmarkPainter::paint` to the
+    /// pre-fix version (`check_size`/`origin_offset` both dropped, the full
+    /// `cell` used directly, matching the original shipped bug) was
+    /// confirmed to make this test fail: `min x: got 2.7, expected 4.275`
+    /// (the mutant's un-scaled `0.15 * 18.0` vs. this test's scaled-and-
+    /// offset expectation) — the first of the four bound assertions below,
+    /// which stops the run before the other three (`max_x = 15.3` vs.
+    /// `13.725`, etc.) are reached, but the same un-scaled arithmetic
+    /// diverges from every one of them identically.
+    #[test]
+    fn checkmark_painter_scales_to_75_percent_and_centers_within_the_cell() {
+        use flui_painting::display_list::DrawCommand;
+
+        let cell = CHIP_ICON_SIZE;
+        let painter = ChipCheckmarkPainter {
+            color: Color::BLACK,
+        };
+        let mut canvas = Canvas::new();
+        painter.paint(&mut canvas, Size::new(px(cell), px(cell)));
+
+        let mut path = canvas
+            .display_list()
+            .iter()
+            .find_map(|command| match command {
+                DrawCommand::DrawPath { path, .. } => Some(path.clone()),
+                _ => None,
+            })
+            .expect("checkmark painter must emit a DrawPath command");
+        let bounds = path.bounds();
+
+        let check_size = cell * 0.75;
+        let origin_offset = cell * 0.125;
+        // The oracle's three stroke points: start (0.15, 0.45), mid (0.4,
+        // 0.7), end (0.85, 0.25) — the tight bounding box over all three is
+        // exactly [start.x, end.x] x [end.y, mid.y] (`0.15`/`0.85` bound x,
+        // `0.25`/`0.7` bound y).
+        let expected_min_x = origin_offset + check_size * 0.15;
+        let expected_max_x = origin_offset + check_size * 0.85;
+        let expected_min_y = origin_offset + check_size * 0.25;
+        let expected_max_y = origin_offset + check_size * 0.7;
+
+        let epsilon = 0.01;
+        assert!(
+            (bounds.min_x().get() - expected_min_x).abs() < epsilon,
+            "min x: got {}, expected {expected_min_x}",
+            bounds.min_x().get()
+        );
+        assert!(
+            (bounds.max_x().get() - expected_max_x).abs() < epsilon,
+            "max x: got {}, expected {expected_max_x}",
+            bounds.max_x().get()
+        );
+        assert!(
+            (bounds.min_y().get() - expected_min_y).abs() < epsilon,
+            "min y: got {}, expected {expected_min_y}",
+            bounds.min_y().get()
+        );
+        assert!(
+            (bounds.max_y().get() - expected_max_y).abs() < epsilon,
+            "max y: got {}, expected {expected_max_y}",
+            bounds.max_y().get()
+        );
+
+        // The whole mark must stay strictly inside the cell — never
+        // touching the full-cell edges the pre-fix version reached.
+        assert!(bounds.max_x().get() < cell);
+        assert!(bounds.max_y().get() < cell);
+        assert!(bounds.min_x().get() > 0.0);
+        assert!(bounds.min_y().get() > 0.0);
     }
 
     #[test]

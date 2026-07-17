@@ -459,7 +459,33 @@ pub struct CheckboxThemeData {
 /// `Material`-backed M3 component in this crate already has),
 /// `show_checkmark` (V1 always shows one when selected), `brightness`,
 /// `elevation`/`press_elevation` (V1 is flat-only, elevation fixed `0.0`),
-/// `avatar_box_constraints`/`delete_icon_box_constraints`.
+/// `avatar_box_constraints`/`delete_icon_box_constraints`. `labelStyle`
+/// (`TextStyle?`) and `secondaryLabelStyle` (`FilterChip`'s selected-state
+/// label style in the oracle) are BOTH narrowed down to
+/// [`label_color`](Self::label_color) alone: every meaningful per-state
+/// difference in `_ChipDefaultsM3.labelStyle`/`_FilterChipDefaultsM3.labelStyle`
+/// is color-only (`_textTheme.labelLarge?.copyWith(color: ...)`, both files)
+/// — the font/size/weight geometry always comes from the ambient
+/// `TextTheme.labelLarge` and is not independently themeable here, and
+/// `secondaryLabelStyle` specifically (a full second `TextStyle` slot for
+/// the selected state) has no separate consumer since the private
+/// `chip_states`-driven color resolution (`chip.rs`) already covers
+/// `Selected` within the one
+/// [`label_color`](Self::label_color) field. `iconTheme`
+/// (`IconThemeData?`) is narrowed the same way [`NavigationBarThemeData::icon_color`]
+/// narrows its own `iconTheme` field — down to
+/// [`icon_color`](Self::icon_color) alone — because [`Chip`](crate::Chip)/
+/// [`FilterChip`](crate::FilterChip)'s avatar/checkmark/delete-icon size is
+/// pinned at the M3 default (`CHIP_ICON_SIZE`, `18.0`, `chip.rs`) with no
+/// override surface yet, so the `size`/`fill`/`weight`/`grade`/`opical_size`
+/// axes `IconThemeData` also carries have nothing to reach. The delete
+/// affordance's `_EnsureMinSemanticsSize`/`MaterialTapTargetSize`-driven
+/// minimum tap target (`chip.dart`'s `_buildDeleteIcon`, padding the visible
+/// 18dp glyph out to a `kMinInteractiveDimension`-or-`-8.0` accessible hit
+/// area) has no analogue here either — `chip.rs`'s delete `InkWell` hit-tests
+/// only its own visible icon bounds, a named accessibility-surface gap
+/// alongside the module docs' other deferred delete-affordance items
+/// (tooltip, custom icon override).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ChipThemeData {
     /// Overrides the label's resolved text color, per the widget's own

@@ -275,6 +275,18 @@ impl flui_foundation::Diagnosticable for RenderCustomPaint {
         );
         properties.add_flag("is_complex", self.is_complex, "is complex");
         properties.add_flag("will_change", self.will_change, "will change");
+        // `CustomPainter: Debug` is already a supertrait bound (every
+        // implementer must derive/implement it), so this reuses an
+        // already-required impl rather than adding a new trait method —
+        // lets a mounted-widget test read a concrete painter's resolved
+        // field values back out (e.g. a themed color reaching the real
+        // painter instance a build produced) without this render object
+        // needing to know anything about what a painter actually paints.
+        properties.add("painter", format!("{:?}", self.painter));
+        properties.add(
+            "foreground_painter",
+            format!("{:?}", self.foreground_painter),
+        );
     }
 }
 
