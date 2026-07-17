@@ -84,7 +84,10 @@ pub struct DragUpdateDetails {
     pub local_position: Offset<Pixels>,
     /// Delta since last update
     pub delta: Offset<PixelDelta>,
-    /// Total delta since drag started
+    /// `delta` projected onto the recognizer's primary axis. Flutter parity:
+    /// `DragUpdateDetails.primaryDelta` — "the amount the pointer has moved
+    /// along the primary axis **since the previous call to onUpdate**", i.e.
+    /// per-event, not cumulative since the drag started.
     pub primary_delta: f32,
     /// Pointer device kind
     pub kind: PointerType,
@@ -203,8 +206,6 @@ struct DragState {
     last_position: Option<Offset<Pixels>>,
     /// Last update time (for velocity calculation)
     last_time: Option<Instant>,
-    /// Total delta since start
-    total_delta: Offset<PixelDelta>,
     /// Velocity tracker
     velocity_tracker: VelocityTracker,
 }
@@ -225,7 +226,6 @@ impl Default for DragState {
             start_position: None,
             last_position: None,
             last_time: None,
-            total_delta: Offset::new(PixelDelta::ZERO, PixelDelta::ZERO),
             velocity_tracker: VelocityTracker::new(),
         }
     }
@@ -362,7 +362,6 @@ impl DragGestureRecognizer {
         state.start_time = Some(Instant::now());
         state.last_position = Some(position);
         state.last_time = Some(Instant::now());
-        state.total_delta = Offset::new(PixelDelta::ZERO, PixelDelta::ZERO);
         state.velocity_tracker.reset();
         state
             .velocity_tracker
@@ -431,14 +430,20 @@ impl DragGestureRecognizer {
                 // Update drag
                 if let Some(last_pos) = state.last_position {
                     let delta = (position - last_pos).to_delta();
-                    state.total_delta += delta;
                     state.last_position = Some(position);
                     state.last_time = Some(Instant::now());
                     state
                         .velocity_tracker
                         .add_position(Instant::now(), position);
 
-                    let primary_delta = self.calculate_primary_delta(state.total_delta.to_pixels());
+                    // Per-event, matching `delta` above — not accumulated
+                    // across the whole drag. Flutter's `primaryDelta` reports
+                    // movement "since the previous call to onUpdate"; an
+                    // earlier revision passed a running total here, making
+                    // every update after the first report the wrong
+                    // magnitude (and, once the drag reverses direction, the
+                    // wrong sign) for any drag with 3+ move events.
+                    let primary_delta = self.calculate_primary_delta(delta.to_pixels());
 
                     drop(state); // Release lock before calling callback
 
@@ -847,6 +852,61 @@ mod tests {
             make_move_event(Offset::new(Pixels(15.0), Pixels(50.0)), PointerType::Touch);
         recognizer.handle_event(&move_event2);
         assert!(*started.lock());
+    }
+
+    #[test]
+    fn primary_delta_is_per_event_not_cumulative_since_drag_start() {
+        // Flutter parity: `DragUpdateDetails.primaryDelta` is the movement
+        // "since the previous call to onUpdate" — per event. A prior
+        // revision of this recognizer instead reported the running total
+        // since the drag started, which is only correct for a drag's first
+        // update; any later update, or a reversal in direction, reported the
+        // wrong magnitude (or wrong sign).
+        let arena = GestureArena::new();
+        let reported = Arc::new(Mutex::new(Vec::<f32>::new()));
+        let reported_clone = reported.clone();
+
+        let recognizer = DragGestureRecognizer::new(arena, DragAxis::Horizontal).with_on_update(
+            move |details| {
+                reported_clone.lock().push(details.primary_delta);
+            },
+        );
+
+        let pointer = PointerId::PRIMARY;
+        recognizer.add_pointer(pointer, Offset::new(Pixels(5.0), Pixels(400.0)));
+
+        // Cross slop (down=5 -> 30, no update fires — start only).
+        recognizer.handle_event(&make_move_event(
+            Offset::new(Pixels(30.0), Pixels(400.0)),
+            PointerType::Touch,
+        ));
+        assert!(
+            reported.lock().is_empty(),
+            "slop-crossing move fires on_start, not on_update"
+        );
+
+        // First real update: 30 -> 185, delta = +155.
+        recognizer.handle_event(&make_move_event(
+            Offset::new(Pixels(185.0), Pixels(400.0)),
+            PointerType::Touch,
+        ));
+        assert_eq!(*reported.lock(), vec![155.0]);
+
+        // Second update reverses direction: 185 -> 150, delta = -35.
+        // Cumulative-since-start would report 150 - 30 = 120 instead.
+        recognizer.handle_event(&make_move_event(
+            Offset::new(Pixels(150.0), Pixels(400.0)),
+            PointerType::Touch,
+        ));
+        assert_eq!(*reported.lock(), vec![155.0, -35.0]);
+
+        // Third update returns to the slop-crossing position: 150 -> 30,
+        // delta = -120. Cumulative-since-start would report 30 - 30 = 0.
+        recognizer.handle_event(&make_move_event(
+            Offset::new(Pixels(30.0), Pixels(400.0)),
+            PointerType::Touch,
+        ));
+        assert_eq!(*reported.lock(), vec![155.0, -35.0, -120.0]);
     }
 
     #[test]

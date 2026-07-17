@@ -266,6 +266,17 @@ impl LaidOut {
         self.pipeline_owner.read().render_tree().children(id)[index]
     }
 
+    /// The full ordered list of `id`'s direct render-tree children — paint
+    /// AND (front-to-back) hit-test order in this rendering model: a LATER
+    /// child paints on top and is hit-tested first.
+    pub fn children(&self, id: RenderId) -> Vec<RenderId> {
+        self.pipeline_owner
+            .read()
+            .render_tree()
+            .children(id)
+            .to_vec()
+    }
+
     /// The first render-tree child of `id`.
     pub fn only_child(&self, id: RenderId) -> RenderId {
         self.child(id, 0)

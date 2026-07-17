@@ -278,6 +278,157 @@ fn secondary_tap_fires_on_secondary_down_up() {
     );
 }
 
+/// Flutter parity (tag `3.44.0`): `widgets/gesture_detector.dart`'s
+/// `onHorizontalDrag*` family — an axis-constrained recognizer distinct from
+/// `onPan*`, exercised end to end (down/start/update/end) here for the first
+/// time in this crate. `DrawerController`'s own `_handleDragDown`/`_move`/
+/// `_settle` (`material/drawer.dart`) is the parity seam this family exists
+/// for.
+///
+/// Red-check: swap `DragAxis::Horizontal` for `DragAxis::Vertical` in
+/// `GestureDetectorState::init_state`'s `horizontal_drag` recognizer — this
+/// test's horizontal move no longer crosses the (now-vertical) slop, and
+/// `starts`/`updates`/`ends` all stay `0`.
+#[test]
+fn horizontal_drag_fires_down_start_update_end_for_horizontal_motion() {
+    let downs = Arc::new(AtomicUsize::new(0));
+    let starts = Arc::new(AtomicUsize::new(0));
+    let updates = Arc::new(AtomicUsize::new(0));
+    let ends = Arc::new(AtomicUsize::new(0));
+    let (down_cb, start_cb, update_cb, end_cb) = (
+        Arc::clone(&downs),
+        Arc::clone(&starts),
+        Arc::clone(&updates),
+        Arc::clone(&ends),
+    );
+
+    let laid = lay_out(
+        GestureDetector::new()
+            .on_horizontal_drag_down(move |_details| {
+                down_cb.fetch_add(1, Ordering::SeqCst);
+            })
+            .on_horizontal_drag_start(move |_details| {
+                start_cb.fetch_add(1, Ordering::SeqCst);
+            })
+            .on_horizontal_drag_update(move |_details| {
+                update_cb.fetch_add(1, Ordering::SeqCst);
+            })
+            .on_horizontal_drag_end(move |_details| {
+                end_cb.fetch_add(1, Ordering::SeqCst);
+            })
+            .child(ColoredBox::new(Color::rgb(10, 20, 30))),
+        tight(200.0, 200.0),
+    );
+
+    assert_eq!(
+        downs.load(Ordering::SeqCst),
+        0,
+        "no down before any pointer"
+    );
+
+    // Down, then a horizontal move well past the drag slop (60px > 18px),
+    // a second move, then up.
+    laid.dispatch_pointer_down(20.0, 100.0);
+    assert_eq!(
+        downs.load(Ordering::SeqCst),
+        1,
+        "on_horizontal_drag_down fires immediately on contact",
+    );
+
+    laid.dispatch_pointer_move(80.0, 100.0);
+    laid.dispatch_pointer_move(150.0, 100.0);
+    laid.dispatch_pointer_up(150.0, 100.0);
+
+    assert_eq!(
+        starts.load(Ordering::SeqCst),
+        1,
+        "the horizontal drag started exactly once"
+    );
+    assert!(
+        updates.load(Ordering::SeqCst) >= 1,
+        "the horizontal drag reported at least one update",
+    );
+    assert_eq!(
+        ends.load(Ordering::SeqCst),
+        1,
+        "the horizontal drag ended exactly once on up"
+    );
+}
+
+/// A purely vertical move must not cross the horizontal recognizer's slop —
+/// `DragGestureRecognizer::calculate_primary_delta` projects onto the
+/// horizontal axis only (`crates/flui-interaction/src/recognizers/drag.rs`).
+///
+/// Red-check: change the recognizer's axis to `DragAxis::Free` — a vertical
+/// move now crosses its (any-direction) slop and `starts` becomes `1`.
+#[test]
+fn horizontal_drag_does_not_fire_for_purely_vertical_motion() {
+    let starts = Arc::new(AtomicUsize::new(0));
+    let start_cb = Arc::clone(&starts);
+
+    let laid = lay_out(
+        GestureDetector::new()
+            .on_horizontal_drag_start(move |_details| {
+                start_cb.fetch_add(1, Ordering::SeqCst);
+            })
+            .child(ColoredBox::new(Color::rgb(10, 20, 30))),
+        tight(200.0, 200.0),
+    );
+
+    laid.dispatch_pointer_down(100.0, 20.0);
+    laid.dispatch_pointer_move(100.0, 90.0);
+    laid.dispatch_pointer_up(100.0, 90.0);
+
+    assert_eq!(
+        starts.load(Ordering::SeqCst),
+        0,
+        "a purely vertical move must not start a horizontal drag",
+    );
+}
+
+/// Flutter parity: a cancelled contact (`onHorizontalDragCancel`) must not
+/// leave the recognizer wedged — the next contact still drags normally.
+/// Mirrors `gesture_detector_cancel_aborts_the_tap_without_wedging_the_detector`
+/// for the horizontal-drag family.
+#[test]
+fn horizontal_drag_cancel_fires_and_does_not_wedge_the_detector() {
+    let cancels = Arc::new(AtomicUsize::new(0));
+    let starts = Arc::new(AtomicUsize::new(0));
+    let (cancel_cb, start_cb) = (Arc::clone(&cancels), Arc::clone(&starts));
+
+    let laid = lay_out(
+        GestureDetector::new()
+            .on_horizontal_drag_start(move |_details| {
+                start_cb.fetch_add(1, Ordering::SeqCst);
+            })
+            .on_horizontal_drag_cancel(move || {
+                cancel_cb.fetch_add(1, Ordering::SeqCst);
+            })
+            .child(ColoredBox::new(Color::rgb(10, 20, 30))),
+        tight(200.0, 200.0),
+    );
+
+    laid.dispatch_pointer_down(20.0, 100.0);
+    laid.dispatch_pointer_move(80.0, 100.0);
+    assert_eq!(starts.load(Ordering::SeqCst), 1, "the drag started");
+
+    laid.dispatch_pointer_cancel(80.0, 100.0);
+    assert_eq!(
+        cancels.load(Ordering::SeqCst),
+        1,
+        "a cancel mid-drag fires on_horizontal_drag_cancel"
+    );
+
+    // A fresh contact afterward still drags normally.
+    laid.dispatch_pointer_down(20.0, 100.0);
+    laid.dispatch_pointer_move(80.0, 100.0);
+    assert_eq!(
+        starts.load(Ordering::SeqCst),
+        2,
+        "a drag after a cancel still starts (the cancel did not wedge the recognizer)",
+    );
+}
+
 #[test]
 fn primary_tap_does_not_fire_on_secondary_tap() {
     let primary_taps = Arc::new(AtomicUsize::new(0));
