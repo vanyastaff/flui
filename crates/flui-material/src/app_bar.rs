@@ -4,8 +4,8 @@
 //! # Flutter parity
 //!
 //! `material/app_bar.dart`'s `AppBar` (oracle tag `3.44.0`). Implemented
-//! subset: `leading`, `title`, `actions`, `toolbar_height`, `background_color`,
-//! `foreground_color`, `elevation`, and the M3 token defaults
+//! subset: `leading`, `title`, `actions`, `toolbar_height`, `bottom`,
+//! `background_color`, `foreground_color`, `elevation`, and the M3 token defaults
 //! (`_AppBarDefaultsM3`, `app_bar.dart:2521-2570`): `background_color` falls
 //! back to `ColorScheme.surface`, `foreground_color` to `ColorScheme.on_surface`,
 //! `elevation` to `0.0`, and the title's text style to `TextTheme.title_large`
@@ -33,14 +33,61 @@
 //! for a platform-adaptive seam; today every platform gets the
 //! Android/Linux/Windows answer.
 //!
+//! ## `bottom`: a fixed-height slot below the toolbar
+//!
+//! [`AppBar::bottom`] accepts anything implementing [`PreferredSizeView`]
+//! (typically a [`crate::TabBar`]) and mounts it directly beneath the
+//! toolbar, inside the same [`SafeArea`]. Flutter parity: `_AppBarState.build`'s
+//! `if (widget.bottom != null)` branch (`app_bar.dart:1164-1183`, oracle tag
+//! `3.44.0`) — ported as the identical shape: a `Column` with
+//! `mainAxisAlignment: spaceBetween` whose first child is the toolbar wrapped
+//! in `Flexible(child: ConstrainedBox(maxHeight: toolbar_height))` and whose
+//! second is `bottom` itself, unwrapped. The whole `Column` is forced to
+//! `toolbar_height + bottom.preferred_size().height` via an outer
+//! [`SizedBox`] (this substrate's equivalent of the oracle's
+//! `_PreferredAppBarSize`-driven ambient sizing — see [`AppBar::preferred_size`]
+//! below), then handed to the same top-inset-consuming `SafeArea` the toolbar
+//! alone already used.
+//!
+//! **Why the toolbar flexes and `bottom` does not**: `Flexible` (not
+//! `Expanded`) with a *loose* fit means the toolbar happily shrinks below
+//! `toolbar_height` when the `Column`'s own available height falls short of
+//! `toolbar_height + bottom_height` (a caller-imposed cap tighter than this
+//! bar's own preferred size, or a `SafeArea` top inset large enough to eat
+//! into it) — `bottom` is the `Column`'s other, non-flexible child, so it
+//! always gets its own natural height first and the toolbar absorbs the
+//! shortfall. This is not a simplification: it's the exact oracle shape,
+//! ported so a `TabBar` mounted as `bottom` never gets silently clipped
+//! by a tight parent while the toolbar above it holds its full height.
+//!
+//! [`Scaffold::app_bar`](crate::Scaffold::app_bar)'s own cap math
+//! (`max_height = view.app_bar_preferred_height + media_query.padding.top`)
+//! is unaffected by `bottom`: `app_bar_preferred_height` already snapshots
+//! [`AppBar::preferred_size`]'s `toolbar_height + bottom_height` sum at
+//! `Scaffold::app_bar`-builder time (see that method's own doc comment for
+//! why the snapshot, not a live re-consult), so the cap this substrate hands
+//! back down already has exactly enough room for both slots plus the top
+//! inset — the `Flexible` shrink path above only fires when a caller
+//! deliberately imposes something tighter than that (or mounts `AppBar`
+//! standalone, with no `Scaffold` reserving room for it at all).
+//!
+//! **Deferred, and named** (this `bottom` slot specifically): `bottomOpacity`
+//! (the oracle's `Opacity`/`Interval`-curve fade as a `SliverAppBar` scrolls
+//! `bottom` toward its collapsed state — no `scrolledUnder`/sliver-collapse
+//! substrate here to drive it) and `PreferredSizeWidget`'s `Scaffold`-side
+//! bottom-height re-consult on data change (see [`PreferredSizeView`]'s own
+//! "Named divergence" doc — this whole substrate resolves it once, at
+//! `.bottom(...)`/`.app_bar(...)` builder time).
+//!
 //! ## Deferred, and named
 //!
 //! - `center_title` / a full `NavigationToolbar` port — the title area here
 //!   is a plain `Expanded` + `Align(center_left)`, not `NavigationToolbar`'s
 //!   overflow-aware middle-widget layout.
 //! - `scrolledUnder` — no `ScrollNotification` substrate to observe yet.
-//! - `flexibleSpace`, `bottom` (and therefore `PreferredSize`'s bottom-height
-//!   contribution — [`AppBar::preferred_size`] reports `toolbar_height` only).
+//! - `flexibleSpace` — stacked behind the toolbar+bottom in the oracle
+//!   (`app_bar.dart`'s trailing `Stack` when `widget.flexibleSpace != null`);
+//!   no consumer or substrate for it here yet.
 //! - **Named divergence: no shadow suppression at a nonzero elevation.**
 //!   `_AppBarDefaultsM3` sets `shadowColor: Colors.transparent` AND
 //!   `surfaceTintColor: Colors.transparent` (`app_bar.dart:2541-2545`) — the
@@ -113,8 +160,9 @@ use flui_types::typography::TextStyle;
 use flui_types::{Alignment, Pixels, Size};
 use flui_view::prelude::*;
 use flui_widgets::{
-    Align, Center, ConstrainedBox, CrossAxisAlignment, DefaultTextStyle, Expanded, IconTheme,
-    IconThemeData, NavigatorHandle, PreferredSizeView, Row, SafeArea, SizedBox,
+    Align, Center, Column, ConstrainedBox, CrossAxisAlignment, DefaultTextStyle, Expanded,
+    Flexible, IconTheme, IconThemeData, MainAxisAlignment, NavigatorHandle, PreferredSizeView, Row,
+    SafeArea, SizedBox,
 };
 
 use crate::back_button::BackButton;
@@ -160,6 +208,13 @@ pub struct AppBar {
     background_color: Option<Color>,
     foreground_color: Option<Color>,
     elevation: Option<f32>,
+    bottom: Option<BoxedView>,
+    /// `bottom`'s [`preferred_size`](PreferredSizeView::preferred_size)
+    /// height, snapshotted at [`Self::bottom`]-builder time — see that
+    /// method's doc comment and [`PreferredSizeView`]'s own "Named
+    /// divergence" note on why this substrate resolves it once rather than
+    /// re-consulting it later.
+    bottom_preferred_height: f32,
 }
 
 impl AppBar {
@@ -177,6 +232,8 @@ impl AppBar {
             background_color: None,
             foreground_color: None,
             elevation: None,
+            bottom: None,
+            bottom_preferred_height: 0.0,
         }
     }
 
@@ -241,6 +298,22 @@ impl AppBar {
         self.elevation = Some(elevation);
         self
     }
+
+    /// Sets a slot rendered directly below the toolbar (typically a
+    /// [`crate::TabBar`]) — see the module docs' `bottom` section for the
+    /// exact Flexible-toolbar/fixed-`bottom` layout this composes and why
+    /// the toolbar (not `bottom`) is what shrinks under a height shortfall.
+    ///
+    /// `bottom`'s [`preferred_size`](PreferredSizeView::preferred_size) is
+    /// resolved once, here, and its height captured — matching
+    /// [`crate::Scaffold::app_bar`]'s identical snapshot-at-builder-time
+    /// contract, for the same reason (see that method's doc comment).
+    #[must_use]
+    pub fn bottom(mut self, bottom: impl PreferredSizeView) -> Self {
+        self.bottom_preferred_height = bottom.preferred_size().height.get();
+        self.bottom = Some(bottom.boxed());
+        self
+    }
 }
 
 impl Default for AppBar {
@@ -260,6 +333,7 @@ impl std::fmt::Debug for AppBar {
             .field("has_title", &self.title.is_some())
             .field("action_count", &self.actions.len())
             .field("toolbar_height", &self.toolbar_height)
+            .field("has_bottom", &self.bottom.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -472,9 +546,31 @@ impl StatelessView for AppBar {
             ),
         );
 
+        // With a `bottom` slot, the toolbar+bottom pair replaces the bare
+        // toolbar as the thing `SafeArea` pads — see the module docs' `bottom`
+        // section for exactly why the toolbar is `Flexible` (shrinks under a
+        // height shortfall) while `bottom` is not.
+        let toolbar_and_bottom: BoxedView = if let Some(bottom) = &self.bottom {
+            let flexible_toolbar = Flexible::new(
+                ConstrainedBox::new(BoxConstraints {
+                    max_height: px(self.toolbar_height),
+                    ..BoxConstraints::UNCONSTRAINED
+                })
+                .child(themed_toolbar),
+            );
+            SizedBox::height(self.toolbar_height + self.bottom_preferred_height)
+                .child(
+                    Column::new(vec![flexible_toolbar.boxed(), bottom.clone()])
+                        .main_axis_alignment(MainAxisAlignment::SpaceBetween),
+                )
+                .boxed()
+        } else {
+            themed_toolbar.boxed()
+        };
+
         // The app bar pads itself against the top safe-area inset — see the
         // module docs' "consumes the top inset itself" section.
-        let safe_toolbar = SafeArea::new().bottom(false).child(themed_toolbar);
+        let safe_toolbar = SafeArea::new().bottom(false).child(toolbar_and_bottom);
 
         Material::new(background_color)
             .elevation(elevation)
@@ -484,10 +580,13 @@ impl StatelessView for AppBar {
 
 impl PreferredSizeView for AppBar {
     fn preferred_size(&self) -> Size {
-        // Flutter oracle: `Size.fromHeight(toolbarHeight)` (`app_bar.dart`'s
-        // `_PreferredAppBarSize`, minus the `bottom` contribution — deferred,
-        // see the module docs).
-        Size::new(px(f32::INFINITY), px(self.toolbar_height))
+        // Flutter oracle: `_PreferredAppBarSize(toolbarHeight, bottom?.preferredSize.height)`
+        // (`app_bar.dart:76-81`, oracle tag `3.44.0`) — `toolbar_height` plus
+        // `bottom`'s own preferred height, `0.0` when there is no `bottom`.
+        Size::new(
+            px(f32::INFINITY),
+            px(self.toolbar_height + self.bottom_preferred_height),
+        )
     }
 }
 
@@ -510,6 +609,29 @@ mod tests {
     fn preferred_size_defaults_to_the_default_toolbar_height() {
         let bar = AppBar::new();
         assert_eq!(bar.preferred_size().height, px(DEFAULT_TOOLBAR_HEIGHT));
+    }
+
+    /// Flutter parity: `_PreferredAppBarSize(toolbarHeight, bottom?.preferredSize.height)`
+    /// — with a `bottom` slot set, `preferred_size` reports `toolbar_height
+    /// + bottom.preferred_size().height`, not `toolbar_height` alone.
+    ///
+    /// Red-check: revert `preferred_size` to `px(self.toolbar_height)` alone
+    /// — this assertion fails (`56.0` instead of `104.0`).
+    #[test]
+    fn preferred_size_adds_the_bottom_slots_height_when_set() {
+        use flui_widgets::layout::PreferredSize;
+
+        let bottom_height = 48.0;
+        let bar = AppBar::new().bottom(PreferredSize::new(
+            Size::new(px(f32::INFINITY), px(bottom_height)),
+            SizedBox::shrink(),
+        ));
+
+        assert_eq!(
+            bar.preferred_size().height,
+            px(DEFAULT_TOOLBAR_HEIGHT + bottom_height),
+            "preferred_size must be toolbar_height + the bottom slot's own preferred height"
+        );
     }
 
     #[test]
@@ -621,13 +743,19 @@ mod tests {
 
     #[test]
     fn builders_set_the_expected_fields() {
+        use flui_widgets::layout::PreferredSize;
+
         let bar = AppBar::new()
             .leading(flui_widgets::SizedBox::shrink())
             .title(flui_widgets::SizedBox::shrink())
             .actions(vec![flui_widgets::SizedBox::shrink().boxed()])
             .background_color(Color::rgb(10, 20, 30))
             .foreground_color(Color::rgb(40, 50, 60))
-            .elevation(4.0);
+            .elevation(4.0)
+            .bottom(PreferredSize::new(
+                Size::new(px(f32::INFINITY), px(48.0)),
+                SizedBox::shrink(),
+            ));
 
         assert!(bar.leading.is_some());
         assert!(bar.title.is_some());
@@ -635,6 +763,8 @@ mod tests {
         assert_eq!(bar.background_color, Some(Color::rgb(10, 20, 30)));
         assert_eq!(bar.foreground_color, Some(Color::rgb(40, 50, 60)));
         assert_eq!(bar.elevation, Some(4.0));
+        assert!(bar.bottom.is_some());
+        assert_eq!(bar.bottom_preferred_height, 48.0);
     }
 
     #[test]
