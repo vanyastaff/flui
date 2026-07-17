@@ -68,6 +68,7 @@ pub mod back_button;
 pub mod button_style;
 mod button_style_button;
 pub mod card;
+pub mod checkbox;
 pub mod color_scheme;
 pub mod dialog;
 pub mod divider;
@@ -96,6 +97,7 @@ pub use app_bar::AppBar;
 pub use back_button::BackButton;
 pub use button_style::ButtonStyle;
 pub use card::Card;
+pub use checkbox::Checkbox;
 pub use color_scheme::{ColorScheme, ColorSchemeOverrides};
 pub use dialog::{AlertDialog, Dialog, show_dialog};
 pub use divider::{Divider, VerticalDivider};
@@ -121,8 +123,9 @@ pub use text_field::{TextField, TextFieldState};
 pub use text_theme::TextTheme;
 pub use theme::Theme;
 pub use theme_data::{
-    AppBarThemeData, CardThemeData, DialogThemeData, DividerThemeData, ElevatedButtonThemeData,
-    FabThemeData, FilledButtonThemeData, IconButtonThemeData, InputDecorationThemeData,
-    ListTileThemeData, OutlinedButtonThemeData, TextButtonThemeData, ThemeData, ThemeDataOverrides,
+    AppBarThemeData, CardThemeData, CheckboxThemeData, DialogThemeData, DividerThemeData,
+    ElevatedButtonThemeData, FabThemeData, FilledButtonThemeData, IconButtonThemeData,
+    InputDecorationThemeData, ListTileThemeData, OutlinedButtonThemeData, TextButtonThemeData,
+    ThemeData, ThemeDataOverrides,
 };
 pub use typography::english_like_2021;

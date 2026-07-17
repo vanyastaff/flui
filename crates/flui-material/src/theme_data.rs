@@ -16,6 +16,12 @@ use crate::shape::MaterialShape;
 use crate::text_theme::TextTheme;
 use crate::typography;
 
+/// A [`Color`]-valued [`WidgetStateProperty`] that may itself resolve to
+/// "no override" for a given state set — the shape every narrowed
+/// `*ThemeData` color/side slot in this module uses (`fill_color`,
+/// `check_color`, `overlay_color`, and friends).
+type StateColor = WidgetStateProperty<Option<Color>>;
+
 /// Compute the M3 default [`TextTheme`]: `englishLike2021` geometry overlaid
 /// with a color-only theme uniformly recolored to `on_surface`.
 ///
@@ -395,6 +401,35 @@ pub struct DividerThemeData {
     pub radius: Option<BorderRadius>,
 }
 
+/// Overrides [`Checkbox`](crate::Checkbox)'s `_CheckboxDefaultsM3` token
+/// defaults, one field at a time — an unset field here still falls through
+/// to `Checkbox`'s own M3 default table (see `checkbox.rs`'s
+/// `checkbox_default_*` functions), it does not blank the whole slot.
+///
+/// Flutter parity: `CheckboxThemeData` (`material/checkbox_theme.dart`,
+/// oracle tag `3.44.0`), narrowed to the fields FLUI's `Checkbox` actually
+/// consumes: [`fill_color`](Self::fill_color), [`check_color`](Self::check_color),
+/// [`overlay_color`](Self::overlay_color), [`side`](Self::side). Named
+/// deferrals (no consumer in FLUI's `Checkbox` yet — see that module's docs
+/// for the full named-divergence list): `mouse_cursor`, `splash_radius`
+/// (fixed at the M3 default), `material_tap_target_size`, `visual_density`,
+/// `shape` (fixed at the M3 2dp-rounded default).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct CheckboxThemeData {
+    /// Overrides [`Checkbox`](crate::Checkbox)'s default fill color, per
+    /// state. `None` for a given state falls through to the M3 default.
+    pub fill_color: Option<StateColor>,
+    /// Overrides [`Checkbox`](crate::Checkbox)'s default checkmark/dash
+    /// color, per state.
+    pub check_color: Option<StateColor>,
+    /// Overrides [`Checkbox`](crate::Checkbox)'s default state-overlay
+    /// color (the InkWell-shaped hover/focus/press ramp), per state.
+    pub overlay_color: Option<StateColor>,
+    /// Overrides [`Checkbox`](crate::Checkbox)'s default border side, per
+    /// state.
+    pub side: Option<WidgetStateProperty<Option<BorderSide<Pixels>>>>,
+}
+
 /// Visual-style configuration provided to descendants by a
 /// [`Theme`](crate::Theme) ancestor.
 ///
@@ -487,6 +522,10 @@ pub struct ThemeData {
     /// [`VerticalDivider`](crate::VerticalDivider)'s M3 token defaults, per
     /// field. Flutter parity: `ThemeData.dividerTheme`.
     pub divider_theme: Option<DividerThemeData>,
+
+    /// Overrides [`Checkbox`](crate::Checkbox)'s M3 token defaults, per
+    /// field. Flutter parity: `ThemeData.checkboxTheme`.
+    pub checkbox_theme: Option<CheckboxThemeData>,
 }
 
 impl ThemeData {
@@ -511,6 +550,7 @@ impl ThemeData {
             input_decoration_theme: None,
             list_tile_theme: None,
             divider_theme: None,
+            checkbox_theme: None,
         }
     }
 
@@ -535,6 +575,7 @@ impl ThemeData {
             input_decoration_theme: None,
             list_tile_theme: None,
             divider_theme: None,
+            checkbox_theme: None,
         }
     }
 
@@ -620,6 +661,9 @@ impl ThemeData {
             divider_theme: overrides
                 .divider_theme
                 .or_else(|| self.divider_theme.clone()),
+            checkbox_theme: overrides
+                .checkbox_theme
+                .or_else(|| self.checkbox_theme.clone()),
         }
     }
 }
@@ -672,6 +716,8 @@ pub struct ThemeDataOverrides {
     pub list_tile_theme: Option<ListTileThemeData>,
     /// Replaces [`ThemeData::divider_theme`] wholesale when `Some`.
     pub divider_theme: Option<DividerThemeData>,
+    /// Replaces [`ThemeData::checkbox_theme`] wholesale when `Some`.
+    pub checkbox_theme: Option<CheckboxThemeData>,
 }
 
 impl Default for ThemeData {
