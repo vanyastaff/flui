@@ -6,7 +6,7 @@
 use flui_types::EdgeInsets;
 use flui_types::Pixels;
 use flui_types::platform::Brightness;
-use flui_types::styling::{BorderSide, Color};
+use flui_types::styling::{BorderRadius, BorderSide, Color};
 use flui_types::typography::TextStyle;
 use flui_widgets::WidgetStateProperty;
 
@@ -292,6 +292,109 @@ pub struct InputDecorationThemeData {
     pub content_padding: Option<EdgeInsets>,
 }
 
+/// Overrides [`ListTile`](crate::ListTile)'s `_LisTileDefaultsM3` token
+/// defaults, one field at a time — an unset field here still falls through to
+/// `ListTile`'s own default (see `list_tile.rs`'s `resolve_*` functions), it
+/// does not blank the whole slot.
+///
+/// Flutter parity: `ListTileThemeData` (`material/list_tile_theme.dart`,
+/// oracle tag `3.44.0`), narrowed to the fields FLUI's `ListTile` actually
+/// consumes. FLUI collapses the oracle's two theme tiers (the ambient `ListTileTheme`
+/// inherited widget and this [`ThemeData`] slot) into this one slot, the same
+/// "named reduction" every other component-theme type in this crate already
+/// makes (see [`CardThemeData`]'s doc comment) — `list_tile.dart`'s own
+/// `ListTile.build` reads both (`tileTheme.iconColor ??
+/// theme.listTileTheme.iconColor`), so this slot stands in for both reads.
+/// Named deferrals (no consumer in FLUI's `ListTile` yet):
+/// `style` (`ListTileStyle` is an M2-only fork this M3-only crate has no use
+/// for), `enable_feedback`, `mouse_cursor`, `visual_density`,
+/// `title_alignment` (baseline-precise top/center/bottom placement — this
+/// substrate's `ListTile` is a `Row`/`Column` composition, not a baseline-aware
+/// `_RenderListTile` port, see that module's docs), `control_affinity` (no
+/// checkbox/switch/radio list-tile variants yet).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ListTileThemeData {
+    /// Overrides [`ListTile`](crate::ListTile)'s dense-layout flag.
+    pub dense: Option<bool>,
+    /// Overrides [`ListTile`](crate::ListTile)'s default shape (a plain
+    /// rectangle).
+    pub shape: Option<MaterialShape>,
+    /// Overrides the color used for icons/text when the tile is selected
+    /// (`ColorScheme.primary`).
+    pub selected_color: Option<Color>,
+    /// Overrides the default `leading`/`trailing` icon color
+    /// (`ColorScheme.onSurfaceVariant`).
+    pub icon_color: Option<Color>,
+    /// Overrides the default `title`/`subtitle`/`leading`/`trailing` text
+    /// color. `None` (the default) leaves each slot's own baked-in default
+    /// color untouched — see `list_tile.rs`'s `resolve_content_color`.
+    pub text_color: Option<Color>,
+    /// Overrides [`ListTile::title`](crate::ListTile::title)'s text style
+    /// (`TextTheme.bodyLarge` colored `onSurface`).
+    pub title_text_style: Option<TextStyle>,
+    /// Overrides [`ListTile::subtitle`](crate::ListTile::subtitle)'s text
+    /// style (`TextTheme.bodyMedium` colored `onSurfaceVariant`).
+    pub subtitle_text_style: Option<TextStyle>,
+    /// Overrides [`ListTile::leading`](crate::ListTile::leading)/
+    /// [`trailing`](crate::ListTile::trailing)'s text style
+    /// (`TextTheme.labelSmall` colored `onSurfaceVariant`).
+    pub leading_and_trailing_text_style: Option<TextStyle>,
+    /// Overrides the tile's internal content padding
+    /// (`EdgeInsetsDirectional.only(start: 16.0, end: 24.0)`).
+    pub content_padding: Option<EdgeInsets>,
+    /// Overrides the tile's background color when
+    /// [`ListTile::selected`](crate::ListTile::selected) is `false`
+    /// (`Colors.transparent`).
+    pub tile_color: Option<Color>,
+    /// Overrides the tile's background color when
+    /// [`ListTile::selected`](crate::ListTile::selected) is `true`
+    /// (`Colors.transparent`).
+    pub selected_tile_color: Option<Color>,
+    /// Overrides the gap between the leading/trailing slots and the title
+    /// column (`16.0` — a bare `list_tile.dart` literal, not part of
+    /// `_LisTileDefaultsM3`).
+    pub horizontal_title_gap: Option<f32>,
+    /// Overrides the minimum padding above/below the title/subtitle column
+    /// (`8.0`).
+    pub min_vertical_padding: Option<f32>,
+    /// Overrides the minimum width reserved for
+    /// [`ListTile::leading`](crate::ListTile::leading) (`24.0`).
+    pub min_leading_width: Option<f32>,
+    /// Overrides the tile's minimum height. `None` (the default) falls
+    /// through to the one/two/three-line table — see `list_tile.rs`'s
+    /// `default_tile_height`.
+    pub min_tile_height: Option<f32>,
+    /// Overrides [`ListTile::is_three_line`](crate::ListTile::is_three_line)
+    /// when the widget itself leaves it unset.
+    pub is_three_line: Option<bool>,
+}
+
+/// Overrides [`Divider`](crate::Divider)/[`VerticalDivider`](crate::VerticalDivider)'s
+/// `_DividerDefaultsM3` token defaults, one field at a time.
+///
+/// Flutter parity: `DividerThemeData` (`material/divider_theme.dart`, oracle
+/// tag `3.44.0`) — every oracle field has a consumer here, so nothing is
+/// narrowed. FLUI collapses the oracle's `DividerTheme` inherited widget into
+/// this one [`ThemeData`] slot, the same named reduction
+/// [`ListTileThemeData`] makes.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct DividerThemeData {
+    /// Overrides the line color (`ColorScheme.outlineVariant`).
+    pub color: Option<Color>,
+    /// Overrides [`Divider`](crate::Divider)'s height /
+    /// [`VerticalDivider`](crate::VerticalDivider)'s width (`16.0`).
+    pub space: Option<f32>,
+    /// Overrides the line's thickness (`1.0`).
+    pub thickness: Option<f32>,
+    /// Overrides the leading-edge indent (`0.0`).
+    pub indent: Option<f32>,
+    /// Overrides the trailing-edge indent (`0.0`).
+    pub end_indent: Option<f32>,
+    /// Overrides the line's corner radius. `None` (the default) paints a
+    /// square-cornered line.
+    pub radius: Option<BorderRadius>,
+}
+
 /// Visual-style configuration provided to descendants by a
 /// [`Theme`](crate::Theme) ancestor.
 ///
@@ -375,6 +478,15 @@ pub struct ThemeData {
     /// M3 token defaults, per field. Flutter parity:
     /// `ThemeData.inputDecorationTheme`.
     pub input_decoration_theme: Option<InputDecorationThemeData>,
+
+    /// Overrides [`ListTile`](crate::ListTile)'s M3 token defaults, per
+    /// field. Flutter parity: `ThemeData.listTileTheme`.
+    pub list_tile_theme: Option<ListTileThemeData>,
+
+    /// Overrides [`Divider`](crate::Divider)/
+    /// [`VerticalDivider`](crate::VerticalDivider)'s M3 token defaults, per
+    /// field. Flutter parity: `ThemeData.dividerTheme`.
+    pub divider_theme: Option<DividerThemeData>,
 }
 
 impl ThemeData {
@@ -397,6 +509,8 @@ impl ThemeData {
             dialog_theme: None,
             floating_action_button_theme: None,
             input_decoration_theme: None,
+            list_tile_theme: None,
+            divider_theme: None,
         }
     }
 
@@ -419,6 +533,8 @@ impl ThemeData {
             dialog_theme: None,
             floating_action_button_theme: None,
             input_decoration_theme: None,
+            list_tile_theme: None,
+            divider_theme: None,
         }
     }
 
@@ -498,6 +614,12 @@ impl ThemeData {
             input_decoration_theme: overrides
                 .input_decoration_theme
                 .or_else(|| self.input_decoration_theme.clone()),
+            list_tile_theme: overrides
+                .list_tile_theme
+                .or_else(|| self.list_tile_theme.clone()),
+            divider_theme: overrides
+                .divider_theme
+                .or_else(|| self.divider_theme.clone()),
         }
     }
 }
@@ -546,6 +668,10 @@ pub struct ThemeDataOverrides {
     pub floating_action_button_theme: Option<FabThemeData>,
     /// Replaces [`ThemeData::input_decoration_theme`] wholesale when `Some`.
     pub input_decoration_theme: Option<InputDecorationThemeData>,
+    /// Replaces [`ThemeData::list_tile_theme`] wholesale when `Some`.
+    pub list_tile_theme: Option<ListTileThemeData>,
+    /// Replaces [`ThemeData::divider_theme`] wholesale when `Some`.
+    pub divider_theme: Option<DividerThemeData>,
 }
 
 impl Default for ThemeData {
@@ -636,7 +762,13 @@ mod tests {
 
     #[test]
     fn light_and_dark_leave_every_component_theme_slot_unset() {
-        for theme in [ThemeData::light(), ThemeData::dark()] {
+        // A helper `fn`, not a `[ThemeData; 2]`/`vec![...]` loop: `ThemeData`
+        // now carries enough `Option<ComponentThemeData>` slots that a
+        // stack-allocated 2-element array trips clippy's
+        // `large_stack_arrays` lint, and a `Vec` of the same trips
+        // `useless_vec` right back (the loop consumes it immediately, so
+        // clippy sees no reason for the heap allocation).
+        fn assert_every_slot_unset(theme: &ThemeData) {
             assert!(theme.elevated_button_theme.is_none());
             assert!(theme.filled_button_theme.is_none());
             assert!(theme.outlined_button_theme.is_none());
@@ -647,7 +779,12 @@ mod tests {
             assert!(theme.dialog_theme.is_none());
             assert!(theme.floating_action_button_theme.is_none());
             assert!(theme.input_decoration_theme.is_none());
+            assert!(theme.list_tile_theme.is_none());
+            assert!(theme.divider_theme.is_none());
         }
+
+        assert_every_slot_unset(&ThemeData::light());
+        assert_every_slot_unset(&ThemeData::dark());
     }
 
     #[test]
@@ -736,5 +873,81 @@ mod tests {
 
         let patched = base.copy_with(ThemeDataOverrides::default());
         assert_eq!(patched.input_decoration_theme, Some(input_decoration_theme));
+    }
+
+    /// Same shape as `copy_with_sets_input_decoration_theme_slot`, for the
+    /// `list_tile_theme` slot.
+    #[test]
+    fn copy_with_sets_list_tile_theme_slot() {
+        let base = ThemeData::light();
+        let list_tile_theme = ListTileThemeData {
+            min_leading_width: Some(30.0),
+            ..Default::default()
+        };
+
+        let patched = base.copy_with(ThemeDataOverrides {
+            list_tile_theme: Some(list_tile_theme.clone()),
+            ..Default::default()
+        });
+
+        assert_eq!(patched.list_tile_theme, Some(list_tile_theme));
+        // Untouched slots stay unset, mirroring the base theme.
+        assert!(patched.divider_theme.is_none());
+    }
+
+    /// Same already-set-slot-survives-a-`None`-override proof as
+    /// `copy_with_none_preserves_an_already_set_input_decoration_theme_slot`,
+    /// for the `list_tile_theme` slot.
+    #[test]
+    fn copy_with_none_preserves_an_already_set_list_tile_theme_slot() {
+        let list_tile_theme = ListTileThemeData {
+            min_leading_width: Some(30.0),
+            ..Default::default()
+        };
+        let base = ThemeData::light().copy_with(ThemeDataOverrides {
+            list_tile_theme: Some(list_tile_theme.clone()),
+            ..Default::default()
+        });
+
+        let patched = base.copy_with(ThemeDataOverrides::default());
+        assert_eq!(patched.list_tile_theme, Some(list_tile_theme));
+    }
+
+    /// Same shape as `copy_with_sets_input_decoration_theme_slot`, for the
+    /// `divider_theme` slot.
+    #[test]
+    fn copy_with_sets_divider_theme_slot() {
+        let base = ThemeData::light();
+        let divider_theme = DividerThemeData {
+            thickness: Some(3.0),
+            ..Default::default()
+        };
+
+        let patched = base.copy_with(ThemeDataOverrides {
+            divider_theme: Some(divider_theme.clone()),
+            ..Default::default()
+        });
+
+        assert_eq!(patched.divider_theme, Some(divider_theme));
+        // Untouched slots stay unset, mirroring the base theme.
+        assert!(patched.list_tile_theme.is_none());
+    }
+
+    /// Same already-set-slot-survives-a-`None`-override proof as
+    /// `copy_with_none_preserves_an_already_set_input_decoration_theme_slot`,
+    /// for the `divider_theme` slot.
+    #[test]
+    fn copy_with_none_preserves_an_already_set_divider_theme_slot() {
+        let divider_theme = DividerThemeData {
+            thickness: Some(3.0),
+            ..Default::default()
+        };
+        let base = ThemeData::light().copy_with(ThemeDataOverrides {
+            divider_theme: Some(divider_theme.clone()),
+            ..Default::default()
+        });
+
+        let patched = base.copy_with(ThemeDataOverrides::default());
+        assert_eq!(patched.divider_theme, Some(divider_theme));
     }
 }
