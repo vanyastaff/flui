@@ -1,8 +1,8 @@
 //! Material sample app — mounts [`tree::MaterialDemoApp`] (a themed
 //! `Scaffold` + `AppBar` + `FloatingActionButton` + a `ListView` of `Card`s +
-//! a `Dialog`, all through `flui-material`'s public API) through the real
-//! platform pipeline: View → Element → RenderObject → layout/paint →
-//! `LayerTree` → `wgpu`.
+//! a `Dialog`, all through the `flui` facade's `flui::material` surface)
+//! through the real platform pipeline: View → Element → RenderObject →
+//! layout/paint → `LayerTree` → `wgpu`.
 //!
 //! `tree.rs` is `#[path]`-included unchanged by `tests/material_demo.rs` at
 //! the workspace root, so the acceptance test exercises the exact tree this
@@ -19,7 +19,7 @@
 #[path = "tree.rs"]
 mod tree;
 
-use flui_app::run_app;
+use flui::run_app;
 
 fn main() {
     run_app(tree::MaterialDemoApp);
