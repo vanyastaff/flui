@@ -6,9 +6,9 @@
 //!
 //! `material/scaffold.dart`'s `Scaffold` (oracle tag `3.44.0`). Implemented
 //! subset: the `app_bar`, `body`, `floating_action_button`, `snack_bar`,
-//! `drawer`, and `end_drawer` slots of `_ScaffoldLayout.performLayout`
-//! (`scaffold.dart:1027-1296`) — the remaining five slots
-//! (`bottomNavigationBar`, `persistentFooter`, `materialBanner`, `bodyScrim`,
+//! `bottom_navigation_bar`, `drawer`, and `end_drawer` slots of
+//! `_ScaffoldLayout.performLayout` (`scaffold.dart:1027-1296`) — the
+//! remaining four slots (`persistentFooter`, `materialBanner`, `bodyScrim`,
 //! `bottomSheet`, `statusBar`) are not ported; a future slot extends
 //! `ScaffoldLayoutDelegate`, it does not restructure it. The `snack_bar` slot
 //! only ever carries `SnackBarBehavior.fixed` content — see
@@ -18,6 +18,26 @@
 //! `themeData.scaffoldBackgroundColor`, which this substrate has not ported
 //! onto [`crate::ThemeData`] yet — `ColorScheme.surface` is the closer M3
 //! analogue in the meantime).
+//!
+//! ## `bottom_navigation_bar` slot: pads itself, like the app bar
+//!
+//! Mirrors the app bar's own contract (see "The inset contract" below): a
+//! [`crate::NavigationBar`] wraps its content in a `SafeArea` and consumes
+//! `MediaQuery.padding.bottom` internally (its own doc: "If this is used in
+//! `Scaffold.bottomNavigationBar` ... the safe area padding is also added to
+//! the height automatically"). So the body's own `MediaQuery.padding.bottom`
+//! is zeroed whenever a `bottom_navigation_bar` is set (oracle:
+//! `removeBottomPadding: widget.bottomNavigationBar != null ...`,
+//! `scaffold.dart:3032-3033`) — otherwise a `SafeArea` nested in the body
+//! would double-pad the same bottom inset the nav bar already consumed.
+//! `ScaffoldLayoutDelegate` measures the bar first (full width, loose
+//! height, Flutter parity: `_ScaffoldLayout.performLayout`'s
+//! `bottomNavigationBarHeight`/`bottomWidgetsHeight`, `scaffold.dart:1048-1055`)
+//! and folds its measured height into `content_bottom` (`max(minInsets.bottom,
+//! bottomWidgetsHeight)` — the greater of the keyboard inset or the bar's
+//! height wins), so the body shrinks above it and the floating action
+//! button's `content_bottom`-relative position (see below) lifts above it
+//! for free, with no separate FAB-specific term.
 //!
 //! ## Drawer wiring
 //!
@@ -74,8 +94,8 @@
 //!
 //! ## Deferred, and named
 //!
-//! `bottomNavigationBar`, `persistentFooterButtons`, `MaterialBanner`,
-//! `bottomSheet`, `extendBody`/`extendBodyBehindAppBar`, non-`endFloat`
+//! `persistentFooterButtons`, `MaterialBanner`, `bottomSheet`,
+//! `extendBody`/`extendBodyBehindAppBar`, non-`endFloat`
 //! `FloatingActionButtonLocation`s. Also deferred, specific to the drawer
 //! slots this update adds: the `AppBar` auto-hamburger (no `AppBar` ↔
 //! `Scaffold` coupling exists yet), per-side `enable_open_drag_gesture`
@@ -84,10 +104,11 @@
 //! both sides), and `drawerDragStartBehavior`/`drawerBarrierDismissible`
 //! overrides at the `Scaffold` level (fixed at
 //! `DrawerController`'s own defaults — see `crate::drawer`). None of these
-//! slots exist in `ScaffoldLayoutDelegate` yet — the six that do
-//! (`app_bar`/`body`/`floating_action_button`/`snack_bar`/`drawer`/`end_drawer`)
-//! are copied verbatim from `_ScaffoldLayout`'s branches for those same
-//! slots, so adding a slot later is additive, not a rewrite.
+//! slots exist in `ScaffoldLayoutDelegate` yet — the seven that do
+//! (`app_bar`/`body`/`floating_action_button`/`snack_bar`/`bottom_navigation_bar`/
+//! `drawer`/`end_drawer`) are copied verbatim from `_ScaffoldLayout`'s
+//! branches for those same slots, so adding a slot later is additive, not a
+//! rewrite.
 //!
 //! ## `ScaffoldMessenger` wiring
 //!
@@ -157,6 +178,8 @@ const SLOT_BODY: &str = "body";
 const SLOT_FLOATING_ACTION_BUTTON: &str = "floating_action_button";
 /// The `snack_bar` slot id — see [`ScaffoldLayoutDelegate`].
 const SLOT_SNACK_BAR: &str = "snack_bar";
+/// The `bottom_navigation_bar` slot id — see [`ScaffoldLayoutDelegate`].
+const SLOT_BOTTOM_NAV: &str = "bottom_navigation_bar";
 /// The `drawer` slot id — see [`ScaffoldLayoutDelegate`].
 const SLOT_DRAWER: &str = "drawer";
 /// The `end_drawer` slot id — see [`ScaffoldLayoutDelegate`].
@@ -191,6 +214,7 @@ pub struct Scaffold {
     app_bar: Option<BoxedView>,
     app_bar_preferred_height: f32,
     floating_action_button: Option<BoxedView>,
+    bottom_navigation_bar: Option<BoxedView>,
     resize_to_avoid_bottom_inset: bool,
     background_color: Option<Color>,
     drawer: Option<Drawer>,
@@ -214,6 +238,7 @@ impl Scaffold {
             app_bar: None,
             app_bar_preferred_height: 0.0,
             floating_action_button: None,
+            bottom_navigation_bar: None,
             resize_to_avoid_bottom_inset: true,
             background_color: None,
             drawer: None,
@@ -253,6 +278,16 @@ impl Scaffold {
     #[must_use]
     pub fn floating_action_button(mut self, floating_action_button: impl IntoView) -> Self {
         self.floating_action_button = Some(floating_action_button.into_view().boxed());
+        self
+    }
+
+    /// Sets the bottom navigation bar (typically a [`crate::NavigationBar`]),
+    /// pinned to the bottom of the scaffold. The body shrinks to make room
+    /// above it, and the floating action button lifts above it — see the
+    /// module docs' "`bottom_navigation_bar` slot" section.
+    #[must_use]
+    pub fn bottom_navigation_bar(mut self, bottom_navigation_bar: impl IntoView) -> Self {
+        self.bottom_navigation_bar = Some(bottom_navigation_bar.into_view().boxed());
         self
     }
 
@@ -341,6 +376,10 @@ impl std::fmt::Debug for Scaffold {
             .field(
                 "has_floating_action_button",
                 &self.floating_action_button.is_some(),
+            )
+            .field(
+                "has_bottom_navigation_bar",
+                &self.bottom_navigation_bar.is_some(),
             )
             .field("has_drawer", &self.drawer.is_some())
             .field("has_end_drawer", &self.end_drawer.is_some())
@@ -501,6 +540,14 @@ impl ViewState<Scaffold> for ScaffoldState {
             if view.app_bar.is_some() {
                 reduced_media_query.padding.top = px(0.0);
             }
+            if view.bottom_navigation_bar.is_some() {
+                // Oracle: `removeBottomPadding: widget.bottomNavigationBar !=
+                // null ...` (`scaffold.dart:3032-3033`) — the nav bar already
+                // consumes `padding.bottom` internally (see the module docs'
+                // "`bottom_navigation_bar` slot" section), so the body must
+                // not also see it.
+                reduced_media_query.padding.bottom = px(0.0);
+            }
             if view.resize_to_avoid_bottom_inset {
                 reduced_media_query.view_insets.bottom = px(0.0);
             }
@@ -526,6 +573,13 @@ impl ViewState<Scaffold> for ScaffoldState {
             children.push(LayoutId::new(
                 SLOT_FLOATING_ACTION_BUTTON,
                 floating_action_button.clone(),
+            ));
+        }
+
+        if let Some(bottom_navigation_bar) = &view.bottom_navigation_bar {
+            children.push(LayoutId::new(
+                SLOT_BOTTOM_NAV,
+                bottom_navigation_bar.clone(),
             ));
         }
 
@@ -706,10 +760,11 @@ impl ScaffoldState {
 }
 
 /// The layout algorithm for [`Scaffold`]'s `app_bar` / `body` /
-/// `floating_action_button` / `snack_bar` / `drawer` / `end_drawer` slots.
+/// `floating_action_button` / `snack_bar` / `bottom_navigation_bar` /
+/// `drawer` / `end_drawer` slots.
 ///
 /// Flutter parity: `_ScaffoldLayout` (`scaffold.dart:991-1308`), narrowed to
-/// the six slots this substrate ports — see the module docs for the full
+/// the seven slots this substrate ports — see the module docs for the full
 /// deferred-slot list and the inset contract this delegate enforces.
 #[derive(Debug, Clone, PartialEq)]
 struct ScaffoldLayoutDelegate {
@@ -744,11 +799,27 @@ impl MultiChildLayoutDelegate for ScaffoldLayoutDelegate {
             ctx.position_child(SLOT_APP_BAR, Offset::ZERO);
         }
 
+        // Oracle: `bottomNavigationBarHeight = layoutChild(bottomNavigationBar,
+        // fullWidthConstraints).height; bottomWidgetsHeight +=
+        // bottomNavigationBarHeight; bottomNavigationBarTop = max(0.0, bottom
+        // - bottomWidgetsHeight)` (`scaffold.dart:1048-1055`) — measured and
+        // bottom-pinned before `content_bottom` is computed, since
+        // `content_bottom` itself depends on this height (below).
+        let mut bottom_widgets_height = px(0.0);
+        if ctx.has_child(SLOT_BOTTOM_NAV) {
+            let bottom_nav_size = ctx.layout_child(SLOT_BOTTOM_NAV, full_width_loose_height);
+            bottom_widgets_height += bottom_nav_size.height;
+            let bottom_nav_top = (size.height - bottom_widgets_height).max(px(0.0));
+            ctx.position_child(SLOT_BOTTOM_NAV, Offset::new(px(0.0), bottom_nav_top));
+        }
+
         // Oracle: `contentBottom = max(0, bottom - max(minInsets.bottom,
-        // bottomWidgetsHeight))` (`:1088-1091`) — `bottomWidgetsHeight` is
-        // always `0.0` here (no `bottomNavigationBar`/persistent-footer
-        // slot in this substrate), so it reduces to `bottom - min_insets.bottom`.
-        let content_bottom = (size.height - self.min_insets.bottom).max(px(0.0));
+        // bottomWidgetsHeight))` (`:1088-1091`) — the greater of the keyboard
+        // inset or the bottom-anchored widgets' height (here, just the
+        // bottom navigation bar — no persistent-footer slot in this
+        // substrate) wins.
+        let content_bottom =
+            (size.height - self.min_insets.bottom.max(bottom_widgets_height)).max(px(0.0));
 
         if ctx.has_child(SLOT_BODY) {
             // Loose constraints, not tight-width — see the module docs.

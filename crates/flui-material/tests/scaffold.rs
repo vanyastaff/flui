@@ -539,3 +539,92 @@ fn body_media_query_keeps_bottom_view_inset_when_not_resizing() {
          itself if it cares to",
     );
 }
+
+#[test]
+fn bottom_navigation_bar_shrinks_the_body_and_lifts_the_floating_action_button() {
+    let laid = lay_out(
+        Theme::new(
+            ThemeData::light(),
+            MediaQuery::new(
+                MediaQueryData::default(),
+                Scaffold::new()
+                    .body(SizedBox::expand())
+                    .floating_action_button(SizedBox::new(56.0, 56.0))
+                    .bottom_navigation_bar(SizedBox::new(400.0, 80.0)),
+            ),
+        ),
+        tight(400.0, 800.0),
+    );
+
+    let layout = layout_root(&laid);
+    let body = laid.child(layout, 0);
+    let fab = laid.child(layout, 1);
+    let bottom_nav = laid.child(layout, 2);
+
+    // content_bottom = scaffold_height(800) - max(min_insets.bottom(0),
+    // bottom_widgets_height(80)) = 720.
+    assert_eq!(
+        laid.size(body),
+        size(400.0, 720.0),
+        "the body must shrink to make room above the bottom navigation bar's measured height, \
+         not fill the full scaffold height",
+    );
+    assert_eq!(
+        laid.offset(bottom_nav),
+        offset(0.0, 720.0),
+        "the bottom navigation bar must be pinned to the bottom of the scaffold, full width",
+    );
+    assert_eq!(
+        laid.size(bottom_nav),
+        size(400.0, 80.0),
+        "the bottom navigation bar is measured at full width, loose height",
+    );
+    // bottom_content_height = scaffold_height(800) - content_bottom(720) = 80.
+    // safe_margin = max(16, 0 - 80 + 16) = 16.
+    // fab_y = content_bottom(720) - fab_height(56) - safe_margin(16) = 648.
+    assert_eq!(
+        laid.offset(fab).dy,
+        px(648.0),
+        "the floating action button must lift above the bottom navigation bar — it is \
+         positioned from content_bottom, which already folds in the bar's measured height; \
+         with no bottom-nav-aware content_bottom the FAB would sit at 800 - 56 - 16 = 728, \
+         underneath the bar",
+    );
+}
+
+#[test]
+fn body_media_query_has_zero_bottom_padding_under_a_bottom_navigation_bar() {
+    let captured = Rc::new(RefCell::new(None));
+    let probe = MediaQueryProbe {
+        captured: Rc::clone(&captured),
+    };
+    let media_query = MediaQueryData {
+        padding: EdgeInsets::new(px(0.0), px(0.0), px(34.0), px(0.0)),
+        ..MediaQueryData::default()
+    };
+
+    let _laid = lay_out(
+        Theme::new(
+            ThemeData::light(),
+            MediaQuery::new(
+                media_query,
+                Scaffold::new()
+                    .body(probe)
+                    .bottom_navigation_bar(SizedBox::new(400.0, 80.0)),
+            ),
+        ),
+        tight(400.0, 800.0),
+    );
+
+    let observed = captured
+        .borrow()
+        .clone()
+        .expect("the body must have built at least once and read an ambient MediaQuery");
+    assert_eq!(
+        observed.padding.bottom,
+        px(0.0),
+        "the body's ambient MediaQuery.padding.bottom must be zeroed when a bottom navigation \
+         bar is present — the bar already consumes that inset internally (see its own SafeArea \
+         wrapping); a SafeArea nested in the body reading the un-reduced 34px would double-pad",
+    );
+}
