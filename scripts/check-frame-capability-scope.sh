@@ -10,7 +10,7 @@
 #                       dirty for the next frame.
 #   post_frame_handle() ADR-0021 U2 — `PostFrameHandle::schedule()` queues work for
 #                       the end of the current frame.
-#   text_input_handle() IME PR2 — `TextInputHandle::attach()`/`detach()` register
+#   text_input_handle() ADR-0030 — `TextInputHandle::attach()`/`detach()` register
 #                       a client with the binding's IME registry; acquiring it
 #                       from `build`/`layout`/`paint` would attach on every
 #                       rebuild instead of once per focus transition.

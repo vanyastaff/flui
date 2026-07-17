@@ -28,11 +28,18 @@ struct ControllerInner {
     /// `None` when no composition is active. Set by
     /// [`TextEditingController::set_composing_text`], stripped (slice
     /// removed) by [`TextEditingController::clear_composing`], and cleared
-    /// (text kept) by [`TextEditingController::commit_text`].
+    /// (text kept) by [`TextEditingController::commit_text`]. Also cleared
+    /// by every non-IME text mutation ([`TextEditingController::insert_str`]/
+    /// [`TextEditingController::backspace`]/[`TextEditingController::delete_forward`])
+    /// — Flutter parity, `TextEditingController`'s `text` setter resets
+    /// `composing` to empty on every programmatic change.
     ///
     /// Always char-boundary-clamped — see
-    /// [`TextEditingController::set_composing_text`]'s "Malformed input" doc
-    /// for why a platform-supplied range must never panic this controller.
+    /// [`TextEditingController::set_composing_text`]'s "Malformed input" doc.
+    /// Every read site additionally re-clamps against the CURRENT `text`
+    /// before use (`clamp_range_to_text`), so even a stored range that
+    /// somehow outlived a mutation degrades to a wrong-but-in-bounds slice,
+    /// never a `replace_range` panic.
     composing: Option<Range<usize>>,
 }
 
@@ -173,6 +180,15 @@ impl TextEditingController {
 
     /// Insert `text` at the current caret position and advance the caret past it.
     ///
+    /// Clears any active composing region — Flutter parity:
+    /// `TextEditingController`'s `text` setter resets `composing` to empty
+    /// on every programmatic change (`editable_text.dart`, tag `3.44.0`).
+    /// A stale composing region left pointing at a now-shifted buffer is
+    /// exactly the "stored range no longer describes the current text" bug
+    /// class this controller must not reintroduce (see
+    /// [`Self::set_composing_text`]'s "Malformed input" doc) — this is a
+    /// non-IME edit, so IME composition state does not survive it.
+    ///
     /// Notifies listeners after the insertion.
     pub fn insert_str(&self, text: &str) {
         {
@@ -180,13 +196,17 @@ impl TextEditingController {
             let caret = guard.caret_byte_offset;
             guard.text.insert_str(caret, text);
             guard.caret_byte_offset = caret + text.len();
+            guard.composing = None;
         }
         self.notifier.notify_listeners();
     }
 
     /// Delete the character immediately to the **left** of the caret (Backspace).
     ///
-    /// No-op when the caret is at the beginning of the buffer.
+    /// No-op when the caret is at the beginning of the buffer. Clears any
+    /// active composing region on an actual deletion — see
+    /// [`Self::insert_str`]'s doc for why a non-IME text edit must not
+    /// leave a stale composing range behind.
     pub fn backspace(&self) {
         let changed = {
             let mut guard = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
@@ -201,6 +221,7 @@ impl TextEditingController {
                     .map_or(0, |(idx, _)| idx);
                 guard.text.drain(prev_boundary..caret);
                 guard.caret_byte_offset = prev_boundary;
+                guard.composing = None;
                 true
             }
         };
@@ -211,7 +232,10 @@ impl TextEditingController {
 
     /// Delete the character immediately to the **right** of the caret (Delete key).
     ///
-    /// No-op when the caret is at the end of the buffer.
+    /// No-op when the caret is at the end of the buffer. Clears any active
+    /// composing region on an actual deletion — see [`Self::insert_str`]'s
+    /// doc for why a non-IME text edit must not leave a stale composing
+    /// range behind.
     pub fn delete_forward(&self) {
         let changed = {
             let mut guard = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
@@ -222,6 +246,7 @@ impl TextEditingController {
                 // Width of the char starting at `caret`.
                 let char_width = guard.text[caret..].chars().next().map_or(0, char::len_utf8);
                 guard.text.drain(caret..caret + char_width);
+                guard.composing = None;
                 true
             }
         };
@@ -370,6 +395,12 @@ impl TextEditingController {
                 .composing
                 .clone()
                 .unwrap_or(guard.caret_byte_offset..guard.caret_byte_offset);
+            // Defense in depth: every non-IME mutator already clears
+            // `composing` on a text edit (see `Self::insert_str`'s doc), so
+            // `region` should always already describe `guard.text` — this
+            // re-clamp is what makes a future mutator that forgets that rule
+            // degrade to wrong text instead of a `replace_range` panic.
+            let region = clamp_range_to_text(&region, &guard.text);
             guard.text.replace_range(region.clone(), text);
             guard.composing = Some(region.start..region.start + text.len());
             let caret_in_preedit = match cursor {
@@ -392,6 +423,8 @@ impl TextEditingController {
         {
             let mut guard = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
             let insert_at = if let Some(range) = guard.composing.clone() {
+                // Defense in depth — see `set_composing_text`'s matching comment.
+                let range = clamp_range_to_text(&range, &guard.text);
                 guard.text.replace_range(range.clone(), text);
                 range.start
             } else {
@@ -421,6 +454,8 @@ impl TextEditingController {
             let mut guard = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
             match guard.composing.take() {
                 Some(range) => {
+                    // Defense in depth — see `set_composing_text`'s matching comment.
+                    let range = clamp_range_to_text(&range, &guard.text);
                     guard.text.replace_range(range.clone(), "");
                     if guard.caret_byte_offset > range.start {
                         guard.caret_byte_offset = range.start;
@@ -514,6 +549,23 @@ fn clamp_to_char_boundary(s: &str, offset: usize) -> usize {
         .chain(std::iter::once(s.len()))
         .find(|idx| *idx >= offset)
         .unwrap_or(s.len())
+}
+
+/// Clamp a stored composing [`Range`] to `text`'s current bounds and char
+/// boundaries, degrading a stale range (one that no longer describes `text`
+/// — e.g. a non-IME edit that should have cleared it but didn't) to a
+/// sane, in-bounds slice instead of a `replace_range` panic. `start > end`
+/// after clamping (the range's start itself outlived the text) collapses to
+/// a zero-width range at the clamped start, matching an empty composing
+/// region rather than reordering the bounds.
+fn clamp_range_to_text(range: &Range<usize>, text: &str) -> Range<usize> {
+    let start = clamp_to_char_boundary(text, range.start);
+    let end = clamp_to_char_boundary(text, range.end);
+    if start > end {
+        start..start
+    } else {
+        start..end
+    }
 }
 
 // ============================================================================
@@ -951,5 +1003,106 @@ mod tests {
 
         controller.clear_composing();
         assert_eq!(call_count.load(Ordering::Relaxed), 2);
+    }
+
+    // ------------------------------------------------------------------
+    // Interleaving a non-IME edit with an active composition
+    //
+    // A real field can receive a plain edit (Backspace/Delete — the
+    // suppression contract only gates `Key::Character`, per ADR-0030) while
+    // an IME composition is in progress. The composing region must not
+    // survive that edit stale: a later `commit_text`/`clear_composing`
+    // trusting the old range against the now-shifted `text` is exactly the
+    // `replace_range` panic class this controller must not reintroduce.
+    // ------------------------------------------------------------------
+
+    /// Red-check: comment out the `guard.composing = None;` line in
+    /// `backspace` — this test panics (`replace_range` end index out of
+    /// bounds) instead of reaching its assertions. Verified by hand before
+    /// this test was written: reverting the fix reproduces exactly this
+    /// panic on `commit_text`.
+    #[test]
+    fn backspace_during_active_composition_clears_it_so_a_later_commit_does_not_panic() {
+        let controller = TextEditingController::with_text("Hello ");
+        controller.set_composing_text("nihao", Some((5, 5)));
+        assert_eq!(controller.text(), "Hello nihao");
+        assert_eq!(controller.composing_range(), Some(6..11));
+
+        // A non-IME edit while composing is active: Backspace is never
+        // suppressed (only `Key::Character` is, per ADR-0030).
+        controller.backspace();
+        assert_eq!(controller.text(), "Hello niha");
+        assert!(
+            !controller.is_composing(),
+            "a non-IME text edit must clear the composing region, not leave \
+             it pointing at a range the backspace already invalidated"
+        );
+
+        // Must not panic: before the fix, `commit_text` trusted the stale
+        // `6..11` range against an 10-byte buffer.
+        controller.commit_text("X");
+        assert_eq!(controller.text(), "Hello nihaX");
+    }
+
+    /// The `insert_str` counterpart of the above, and `clear_composing` as
+    /// the second composing-region consumer (not just `commit_text`).
+    ///
+    /// Red-check: comment out the `guard.composing = None;` line in
+    /// `insert_str` — this test panics on `clear_composing`'s
+    /// `replace_range` instead of reaching its assertions.
+    #[test]
+    fn insert_str_during_active_composition_clears_it_so_a_later_clear_composing_does_not_panic() {
+        let controller = TextEditingController::with_text("Hello ");
+        controller.set_composing_text("nihao", Some((5, 5)));
+        assert_eq!(controller.text(), "Hello nihao");
+
+        // `insert_str` is what the suppression contract exists to prevent
+        // for `Key::Character` specifically, but nothing stops another
+        // caller (a paste, a programmatic edit) from calling it directly
+        // while composing is active.
+        controller.insert_str("Z");
+        assert_eq!(controller.text(), "Hello nihaoZ");
+        assert!(
+            !controller.is_composing(),
+            "a non-IME insert must clear the composing region"
+        );
+
+        // Must not panic: before the fix, `clear_composing` trusted the
+        // stale `6..11` range against a 12-byte buffer that had already
+        // grown past it in the wrong place.
+        controller.clear_composing();
+        assert_eq!(
+            controller.text(),
+            "Hello nihaoZ",
+            "a no-op clear changes nothing"
+        );
+    }
+
+    /// Defense in depth, exercised directly: even if a stale composing range
+    /// somehow survived to reach a use site (bypassing the mutator-clears
+    /// rule the two tests above verify), `clamp_range_to_text` must degrade
+    /// it to an in-bounds slice rather than let `replace_range` panic. This
+    /// reaches into `ControllerInner` directly (test-only) to fabricate
+    /// exactly that otherwise-unreachable state.
+    ///
+    /// Red-check: remove the `clamp_range_to_text` call in `commit_text` —
+    /// this test panics instead of asserting the degraded (wrong but
+    /// in-bounds) outcome.
+    #[test]
+    fn a_stale_composing_range_that_bypasses_the_mutator_guard_still_cannot_panic_commit() {
+        let controller = TextEditingController::with_text("Hello nihao");
+        {
+            let mut guard = controller.inner.lock().unwrap();
+            // Fabricate exactly the otherwise-unreachable state a future
+            // mutator that forgets to clear `composing` could produce: a
+            // region that described the text BEFORE it shrank.
+            guard.text = "Hello niha".to_string(); // shrank by one byte
+            guard.caret_byte_offset = guard.text.len();
+            guard.composing = Some(6..11); // now out of bounds
+        }
+
+        // Must not panic.
+        controller.commit_text("X");
+        assert!(!controller.is_composing());
     }
 }

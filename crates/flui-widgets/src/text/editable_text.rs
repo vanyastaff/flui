@@ -950,7 +950,7 @@ mod tests {
     /// The plain-typing case the suppression guard must not break: IME is
     /// attached (the field is focused, `TextInputRegistry` has a client) but
     /// no preedit is active, so ordinary characters insert exactly as they
-    /// did before IME PR2.
+    /// would with no IME composition involved at all.
     #[test]
     fn character_key_with_ime_attached_but_no_active_preedit_inserts_normally() {
         let _guard = crate::test_harness::FOCUS_TEST_LOCK.lock();
