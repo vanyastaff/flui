@@ -43,7 +43,7 @@ use flui_layer::Scene;
 use flui_platform::traits::{PlatformInput, PlatformWindow};
 use flui_rendering::constraints::BoxConstraints;
 use flui_scheduler::Scheduler;
-use flui_types::{Size, geometry::px};
+use flui_types::{HapticFeedback, Size, geometry::px};
 use flui_view::View;
 use flui_widgets::VsyncScope;
 use parking_lot::{Mutex, RwLock};
@@ -748,6 +748,35 @@ impl AppBinding {
     pub(crate) fn text_input_platform_bridge(&self) -> TextInputPlatformBridge {
         TextInputPlatformBridge {
             active_window: Arc::clone(&self.active_window),
+        }
+    }
+
+    // ========================================================================
+    // Haptics
+    // ========================================================================
+
+    /// Perform haptic feedback on the active window, via
+    /// [`PlatformWindow::haptics`].
+    ///
+    /// Silent no-op — no panic, no error — when there is no active window
+    /// yet, or the active window's backend has no [`PlatformHaptics`]
+    /// capability (desktop winit targets, for instance). This mirrors
+    /// Flutter's own `HapticFeedback` degradation contract: every call is
+    /// fire-and-forget best-effort, with no availability-discovery API to
+    /// check first (see `flui_types::HapticFeedback`'s module doc).
+    ///
+    /// `perform` runs *after* `with_window`'s `active_window` guard is
+    /// dropped — only the cheap `Arc` clone out of `haptics()` happens
+    /// under the lock, matching `TextInputPlatformBridge::attach`'s
+    /// clone-then-release shape. A backend whose `perform` blocks or
+    /// re-enters the binding must not stall every other window accessor
+    /// for the duration of one haptic call.
+    ///
+    /// [`PlatformHaptics`]: flui_platform::traits::PlatformHaptics
+    pub fn perform_haptic_feedback(&self, feedback: HapticFeedback) {
+        let haptics = self.with_window(|window| window.haptics()).flatten();
+        if let Some(haptics) = haptics {
+            haptics.perform(feedback);
         }
     }
 
@@ -2582,6 +2611,117 @@ mod tests {
                 Some(false),
                 "blurring the field must detach and disable platform IME composition"
             );
+        }
+    }
+
+    /// `AppBinding::perform_haptic_feedback` end-to-end against a headless
+    /// window backed by `flui_platform::FakeHaptics`, plus the two silent
+    /// no-op degradation cases (no active window; a window with no
+    /// `PlatformHaptics` capability).
+    mod haptics_binding_bridge {
+        use super::*;
+
+        /// A headless window plus a live handle to the same `FakeHaptics`
+        /// its `PlatformWindow::haptics()` returns, so a test can drive
+        /// the binding and assert exactly what the platform side recorded.
+        fn headless_window_with_haptics() -> (
+            Box<dyn PlatformWindow>,
+            Arc<dyn flui_platform::traits::PlatformHaptics>,
+        ) {
+            let platform = flui_platform::headless_platform();
+            let window = platform
+                .open_window(flui_platform::traits::WindowOptions::default())
+                .expect("headless platform always opens a window");
+            let haptics = window
+                .haptics()
+                .expect("headless backend supports PlatformHaptics");
+            (window, haptics)
+        }
+
+        fn fake_haptics(
+            haptics: &Arc<dyn flui_platform::traits::PlatformHaptics>,
+        ) -> &flui_platform::FakeHaptics {
+            haptics
+                .as_any()
+                .downcast_ref::<flui_platform::FakeHaptics>()
+                .expect("the headless backend's PlatformHaptics is a FakeHaptics")
+        }
+
+        /// A minimal `PlatformWindow` implementing only the trait's
+        /// non-default methods, so `haptics()` falls through to the trait
+        /// default (`None`) — the "backend with no haptics capability"
+        /// case `perform_haptic_feedback` must degrade against silently.
+        struct BareWindow;
+
+        impl PlatformWindow for BareWindow {
+            fn physical_size(
+                &self,
+            ) -> flui_types::geometry::Size<flui_types::geometry::DevicePixels> {
+                flui_types::geometry::Size::default()
+            }
+
+            fn logical_size(&self) -> flui_types::geometry::Size<flui_types::Pixels> {
+                flui_types::geometry::Size::default()
+            }
+
+            fn scale_factor(&self) -> f64 {
+                1.0
+            }
+
+            fn request_redraw(&self) {}
+
+            fn is_focused(&self) -> bool {
+                false
+            }
+
+            fn is_visible(&self) -> bool {
+                true
+            }
+        }
+
+        /// Real-path proof: `perform_haptic_feedback` reads the binding's
+        /// active window and calls through to its `PlatformHaptics`.
+        ///
+        /// Red-check: turning `perform_haptic_feedback` into a no-op
+        /// (dropping the `with_window`/`perform` call) makes this fail —
+        /// `fake.calls()` would stay empty.
+        #[test]
+        fn perform_haptic_feedback_reaches_the_active_windows_platform_capability() {
+            let (window, haptics) = headless_window_with_haptics();
+            let fake = fake_haptics(&haptics);
+
+            let binding = AppBinding::new();
+            binding.set_window(window);
+
+            binding.perform_haptic_feedback(HapticFeedback::SelectionClick);
+
+            assert_eq!(
+                fake.calls(),
+                vec![HapticFeedback::SelectionClick],
+                "perform_haptic_feedback must call through to the active \
+                 window's PlatformHaptics::perform"
+            );
+        }
+
+        /// No active window yet (attached before `set_window` ran) is a
+        /// silent no-op — no panic, nothing recorded anywhere to assert
+        /// against beyond "this returned normally".
+        #[test]
+        fn perform_haptic_feedback_with_no_active_window_is_a_silent_no_op() {
+            let binding = AppBinding::new();
+            binding.perform_haptic_feedback(HapticFeedback::Vibrate);
+        }
+
+        /// An active window whose backend has no `PlatformHaptics`
+        /// capability (desktop winit's shape, reproduced here without a
+        /// real display) is also a silent no-op — Flutter's own
+        /// `HapticFeedback` degradation contract, not a panic.
+        #[test]
+        fn perform_haptic_feedback_on_a_window_without_haptics_is_a_silent_no_op() {
+            let binding = AppBinding::new();
+            binding.set_window(Box::new(BareWindow));
+
+            binding.perform_haptic_feedback(HapticFeedback::MediumImpact);
         }
     }
 }

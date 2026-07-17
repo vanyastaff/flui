@@ -7,6 +7,7 @@
 mod capabilities;
 mod display;
 mod embedder;
+mod haptics;
 mod input;
 mod lifecycle;
 mod platform;
@@ -18,6 +19,7 @@ pub use capabilities::{
 };
 pub use display::{DisplayId, PlatformDisplay};
 pub use embedder::PlatformEmbedder;
+pub use haptics::PlatformHaptics;
 pub use input::{
     // Platform utilities
     BasicVelocityTracker,

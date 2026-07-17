@@ -10,6 +10,7 @@ use flui_types::geometry::{Bounds, DevicePixels, Pixels, Point, Size};
 
 use super::{
     display::PlatformDisplay,
+    haptics::PlatformHaptics,
     input::{DispatchEventResult, Modifiers, PlatformInput},
     text_input::PlatformTextInput,
 };
@@ -159,6 +160,15 @@ pub trait PlatformWindow: Send + Sync {
     /// have to inherit unusable `set_ime_allowed`/`set_ime_cursor_area`
     /// methods directly on `PlatformWindow`).
     fn text_input(&self) -> Option<Arc<dyn PlatformTextInput>> {
+        None
+    }
+
+    /// Get this window's haptic feedback capability, if the backend
+    /// supports it. `None` for backends with no haptic hardware (desktop
+    /// winit targets; a minimal future embedder) — see
+    /// [`PlatformHaptics`]'s module doc for the full per-window-not-global
+    /// rationale.
+    fn haptics(&self) -> Option<Arc<dyn PlatformHaptics>> {
         None
     }
 
@@ -539,6 +549,10 @@ impl PlatformWindow for WinitWindow {
             window: Arc::clone(&self.window),
         }))
     }
+
+    // No `haptics()` override: desktop winit targets have no haptic
+    // hardware to drive, so the `PlatformWindow` trait default (`None`) is
+    // the permanent correct answer here, not a stub awaiting a backend.
 }
 
 #[cfg(test)]

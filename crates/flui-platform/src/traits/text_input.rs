@@ -12,8 +12,9 @@
 //! that cannot support IME (a minimal future embedder; headless without its
 //! `FakeTextInput`) returns `None` from the accessor instead of every
 //! `PlatformWindow` implementor inheriting IME methods it cannot honor.
-//! `PlatformSystemChrome`/`PlatformHaptics` are expected to follow the same
-//! template.
+//! [`PlatformHaptics`](super::haptics::PlatformHaptics) follows the same
+//! template (`PlatformWindow::haptics`, ADR-0031); `PlatformSystemChrome`
+//! is deferred (ADR-0031) with no target date.
 
 use flui_types::geometry::{Bounds, Pixels};
 
