@@ -7,8 +7,9 @@
 //! ([`ButtonStyle`], [`ElevatedButton`], [`FilledButton`], [`OutlinedButton`],
 //! [`TextButton`], [`IconButton`], [`FloatingActionButton`], [`BackButton`]),
 //! [`Scaffold`]/[`AppBar`], [`Card`], [`Dialog`]/[`AlertDialog`]/
-//! [`show_dialog`], and the input decoration substrate
-//! ([`InputDecoration`], [`InputDecorator`], [`TextField`]).
+//! [`show_dialog`], the input decoration substrate ([`InputDecoration`],
+//! [`InputDecorator`], [`TextField`]), and the data-display family
+//! ([`ListTile`], [`Divider`]/[`VerticalDivider`]).
 //!
 //! ## Flutter parity
 //!
@@ -69,12 +70,14 @@ mod button_style_button;
 pub mod card;
 pub mod color_scheme;
 pub mod dialog;
+pub mod divider;
 pub mod elevated_button;
 pub mod filled_button;
 pub mod floating_action_button;
 pub mod icon_button;
 pub mod ink_well;
 pub mod input_decorator;
+pub mod list_tile;
 pub mod material;
 pub mod outlined_button;
 pub mod scaffold;
@@ -92,12 +95,14 @@ pub use button_style::ButtonStyle;
 pub use card::Card;
 pub use color_scheme::{ColorScheme, ColorSchemeOverrides};
 pub use dialog::{AlertDialog, Dialog, show_dialog};
+pub use divider::{Divider, VerticalDivider};
 pub use elevated_button::ElevatedButton;
 pub use filled_button::FilledButton;
 pub use floating_action_button::FloatingActionButton;
 pub use icon_button::IconButton;
 pub use ink_well::{InkWell, InkWellState};
 pub use input_decorator::{InputDecoration, InputDecorator, InputDecoratorState};
+pub use list_tile::ListTile;
 pub use material::Material;
 pub use outlined_button::OutlinedButton;
 pub use scaffold::Scaffold;
@@ -107,8 +112,8 @@ pub use text_field::{TextField, TextFieldState};
 pub use text_theme::TextTheme;
 pub use theme::Theme;
 pub use theme_data::{
-    AppBarThemeData, CardThemeData, DialogThemeData, ElevatedButtonThemeData, FabThemeData,
-    FilledButtonThemeData, IconButtonThemeData, InputDecorationThemeData, OutlinedButtonThemeData,
-    TextButtonThemeData, ThemeData, ThemeDataOverrides,
+    AppBarThemeData, CardThemeData, DialogThemeData, DividerThemeData, ElevatedButtonThemeData,
+    FabThemeData, FilledButtonThemeData, IconButtonThemeData, InputDecorationThemeData,
+    ListTileThemeData, OutlinedButtonThemeData, TextButtonThemeData, ThemeData, ThemeDataOverrides,
 };
 pub use typography::english_like_2021;

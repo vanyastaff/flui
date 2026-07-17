@@ -63,7 +63,11 @@ fn copy_with_no_args_is_identity() {
 /// comment in `src/theme_data.rs` for the derivation.
 #[test]
 fn default_text_theme_role_colors_equal_on_surface() {
-    for theme in [ThemeData::light(), ThemeData::dark()] {
+    // A helper `fn`, not a `[ThemeData; 2]`/`vec![...]` loop — see
+    // `src/theme_data.rs`'s identical fix: a stack array of two
+    // `ThemeData`s trips clippy's `large_stack_arrays` lint, and a `Vec`
+    // consumed immediately by the loop trips `useless_vec` right back.
+    fn assert_role_colors_equal_on_surface(theme: &ThemeData) {
         for role in theme.text_theme.roles() {
             let style = role.expect("every englishLike2021 role is populated");
             assert_eq!(
@@ -74,6 +78,9 @@ fn default_text_theme_role_colors_equal_on_surface() {
             );
         }
     }
+
+    assert_role_colors_equal_on_surface(&ThemeData::light());
+    assert_role_colors_equal_on_surface(&ThemeData::dark());
 }
 
 #[test]
