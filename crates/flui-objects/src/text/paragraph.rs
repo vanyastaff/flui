@@ -151,6 +151,13 @@ impl Diagnosticable for RenderParagraph {
         // content without inspecting the full `InlineSpan` tree.
         if let Some(span) = self.painter.text() {
             properties.add("text", span.to_plain_text());
+            // Lets a mounted-widget test read a resolved text color back out
+            // (e.g. a themed/cascaded color reaching the real paragraph a
+            // build produced) without downcasting or inspecting paint
+            // output — `TextStyle: Debug` is already required for the type
+            // to be usable at all, so this is a pure diagnostics read, not
+            // a new capability.
+            properties.add("style", format!("{:?}", span.style()));
         }
     }
 }
