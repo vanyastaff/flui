@@ -28,7 +28,7 @@
 //! [`RasterOwner`] is generic over [`RasterBackend`] (defined in
 //! [`crate::raster`], unchanged by this module) so the mailbox/channel
 //! protocol is identical for the synchronous in-process baseline this ADR
-//! ships and the threaded raster owner ADR-0028 reserves. [`RasterOwner::pump`]
+//! ships and the planned threaded-raster-owner design reserves. [`RasterOwner::pump`]
 //! is the baseline's per-frame call; [`RasterOwner::run_until_shutdown`] is
 //! the blocking loop a dedicated raster thread (or this module's own
 //! threaded test harness) drives instead.
@@ -181,7 +181,7 @@ pub enum RasterAck {
 
 /// Why a [`RasterAck::Dropped`] frame never presented.
 ///
-/// `#[non_exhaustive]`: ADR-0028's threaded raster owner can abandon a
+/// `#[non_exhaustive]`: the planned threaded raster owner can abandon a
 /// still-pending frame mid-shutdown instead of finishing it — something
 /// this module's synchronous baseline never does (see [`RasterOwner::pump`],
 /// which always finishes a pending frame through the ordinary render path
@@ -526,7 +526,7 @@ impl<B: RasterBackend> RasterOwner<B> {
             // `RasterBackend::render_scene` presented-bool plumbing (added
             // for App.1's frame-pacing fallback throttle, unrelated to this
             // module) and is unchanged here — `RasterOwner` is unwired
-            // scaffolding reserved for ADR-0028's threaded raster owner, not
+            // scaffolding reserved for the planned threaded raster owner, not
             // yet a consumer of any pacing model. Any `Ok` still completes
             // the render attempt with a `Presented` ack.
             Ok(_presented) => {

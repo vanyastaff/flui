@@ -594,6 +594,13 @@ const NO_PRESENT_FALLBACK_PACE: std::time::Duration = std::time::Duration::from_
 /// frame-budget sleep is gone. A presented frame needs no fallback (Fifo
 /// already paced it); an un-presented frame with nothing re-requesting a
 /// wake needs no fallback either (the loop just goes idle).
+///
+/// Occlusion semantics differ by platform: on Wayland, frame callbacks stop
+/// while a window is hidden, so no redraws arrive and tickers freeze (this
+/// fallback never fires); on Windows/X11, redraw requests keep arriving for a
+/// minimized window and this fallback bounds them. Timeout-shaped animations
+/// (e.g. the snack-bar auto-dismiss controller) do not progress while frozen —
+/// a future platform Timer service is the correctness seam for those.
 #[cfg(all(
     not(target_os = "android"),
     not(target_os = "ios"),
@@ -679,7 +686,7 @@ mod desktop_pacing_tests {
         );
     }
 
-    /// Mutation-run target for item 3's FATAL fix: simulates the shape of
+    /// Mutation-run target for the no-present fallback bound: simulates the shape of
     /// `run_desktop`'s frame callback for a window that never presents
     /// (e.g. minimized/occluded) while a repeating ticker keeps
     /// re-requesting a frame every wake — the exact scenario that used to
