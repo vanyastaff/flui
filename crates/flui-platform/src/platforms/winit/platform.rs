@@ -595,6 +595,12 @@ impl ApplicationHandler for WinitApp {
                     win.callbacks().dispatch_input(input);
                 }
             }
+            WinitWindowEvent::Ime(event) => {
+                let input = winit_events::ime_event(&event);
+                if let Some(ref win) = window {
+                    win.callbacks().dispatch_input(input);
+                }
+            }
             WinitWindowEvent::ModifiersChanged(new_modifiers) => {
                 self.platform.with_state(|state| {
                     state.current_modifiers = winit_events::convert_modifiers(new_modifiers);

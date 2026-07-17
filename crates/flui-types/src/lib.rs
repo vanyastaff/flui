@@ -96,6 +96,7 @@
 pub use flui_geometry as geometry;
 
 pub mod gestures;
+pub mod ime;
 pub mod layout;
 // `Lerp` impls for Color/Alignment/BorderRadius (trait impls are globally
 // visible; the module needs no public surface).
@@ -111,6 +112,7 @@ pub mod typography;
 
 // Re-exports for convenience - Most commonly used types
 pub use geometry::{EdgeInsets, Edges, Matrix4, Offset, Pixels, Point, RRect, Rect, Size};
+pub use ime::ImeEvent;
 pub use layout::{Alignment, Axis};
 pub use styling::{Color, Color32, Oklab};
 

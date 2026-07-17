@@ -10,6 +10,7 @@ mod embedder;
 mod input;
 mod lifecycle;
 mod platform;
+mod text_input;
 mod window;
 
 pub use capabilities::{
@@ -49,6 +50,7 @@ pub use platform::{
     Clipboard, ClipboardItem, PathPromptOptions, Platform, PlatformExecutor, PlatformReadyCallback,
     WindowEvent, WindowId, WindowMode, WindowOptions,
 };
+pub use text_input::PlatformTextInput;
 #[cfg(feature = "winit-backend")]
 pub use window::WinitWindow;
 pub use window::{PlatformWindow, WindowAppearance, WindowBackgroundAppearance, WindowBounds};

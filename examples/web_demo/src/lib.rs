@@ -82,6 +82,9 @@ pub fn start() {
                     &format!("Key {:?}: {:?} (code={:?})", ke.state, ke.key, ke.code).into(),
                 );
             }
+            PlatformInput::Ime(ime_event) => {
+                web_sys::console::log_1(&format!("IME: {ime_event:?}").into());
+            }
         }
         DispatchEventResult::resolved(false, true)
     }));

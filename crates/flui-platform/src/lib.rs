@@ -178,13 +178,13 @@ pub use executor::{BackgroundExecutor, ForegroundExecutor};
 #[cfg(target_os = "android")]
 pub use platforms::AndroidPlatform;
 // Re-export platform implementations
-pub use platforms::HeadlessPlatform;
 #[cfg(target_os = "ios")]
 pub use platforms::IOSPlatform;
 #[cfg(target_os = "linux")]
 pub use platforms::LinuxPlatform;
 #[cfg(target_os = "macos")]
 pub use platforms::MacOSPlatform;
+pub use platforms::{FakeTextInput, HeadlessPlatform};
 // Web platform
 #[cfg(target_arch = "wasm32")]
 pub use platforms::WebPlatform;
@@ -204,7 +204,7 @@ pub use traits::{
     Clipboard, ClipboardItem, DefaultLifecycle, DesktopCapabilities, DispatchEventResult,
     DisplayId, LifecycleEvent, LifecycleState, MobileCapabilities, PathPromptOptions, Platform,
     PlatformCapabilities, PlatformDisplay, PlatformEmbedder, PlatformExecutor, PlatformLifecycle,
-    PlatformReadyCallback, PlatformWindow, WebCapabilities, WindowAppearance,
+    PlatformReadyCallback, PlatformTextInput, PlatformWindow, WebCapabilities, WindowAppearance,
     WindowBackgroundAppearance, WindowBounds, WindowEvent, WindowId, WindowMode, WindowOptions,
 };
 

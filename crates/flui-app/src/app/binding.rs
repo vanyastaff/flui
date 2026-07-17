@@ -35,7 +35,10 @@ use std::sync::{
 use flui_animation::Vsync;
 use flui_engine::{EngineError, RasterBackend};
 use flui_foundation::HasInstance;
-use flui_interaction::{binding::GestureBinding, routing::FocusManager};
+use flui_interaction::{
+    ClientToken, ImeEventCallback, OpaqueWindowHandle, TextInputRegistry, binding::GestureBinding,
+    routing::FocusManager,
+};
 use flui_layer::Scene;
 use flui_platform::traits::{PlatformInput, PlatformWindow};
 use flui_rendering::constraints::BoxConstraints;
@@ -158,6 +161,39 @@ impl FrameWakeHandle {
 
     fn into_callback(self) -> Arc<dyn Fn() + Send + Sync> {
         Arc::new(move || self.wake_frame())
+    }
+}
+
+/// Bridges [`TextInputRegistry`] (`flui-interaction`) client attach/detach
+/// to the platform's `PlatformTextInput` capability (`flui-platform`), so
+/// attaching an IME client automatically enables platform IME composition
+/// and detaching automatically disables it. Without this bridge, every call
+/// site (PR2's `EditableText`) would need to re-derive the
+/// enable-on-attach/disable-only-if-still-active rule itself — and could get
+/// the stale-detach guard wrong.
+///
+/// `flui-interaction` cannot depend on `flui-platform` (see
+/// `TextInputRegistry`'s module doc), so `flui-app` — which depends on both
+/// — is where this wiring has to live.
+struct ImeBackend;
+
+impl ImeBackend {
+    fn attach(window: &Arc<dyn PlatformWindow>, callback: ImeEventCallback) -> ClientToken {
+        let token = TextInputRegistry::global()
+            .attach(OpaqueWindowHandle::new(Arc::clone(window)), callback);
+        if let Some(text_input) = window.text_input() {
+            text_input.set_ime_allowed(true);
+        }
+        token
+    }
+
+    fn detach(window: Option<&Arc<dyn PlatformWindow>>, token: ClientToken) {
+        if !TextInputRegistry::global().detach(token) {
+            return;
+        }
+        if let Some(text_input) = window.and_then(|window| window.text_input()) {
+            text_input.set_ime_allowed(false);
+        }
     }
 }
 
@@ -646,6 +682,34 @@ impl AppBinding {
     }
 
     // ========================================================================
+    // IME (text input)
+    // ========================================================================
+
+    /// Attach an IME client on the active window, via
+    /// [`TextInputRegistry::global`]. Enables platform IME composition
+    /// (`PlatformTextInput::set_ime_allowed(true)`) through the window's
+    /// `text_input()` capability, if the backend supports one.
+    ///
+    /// Returns `None` if there is no active window yet (the caller attached
+    /// before `set_window`/`set_shared_window` ran).
+    pub fn attach_text_input(&self, callback: ImeEventCallback) -> Option<ClientToken> {
+        let window = self.active_window.lock().as_ref().cloned()?;
+        Some(ImeBackend::attach(&window, callback))
+    }
+
+    /// Detach the IME client identified by `token`.
+    ///
+    /// The registry side always runs; the platform `set_ime_allowed(false)`
+    /// call additionally requires `token` to still be the registry's active
+    /// client (see [`TextInputRegistry::detach`]'s stale-token guard) — that
+    /// guard is what keeps a replaced field's dispose/blur handler from
+    /// disabling IME for the field that replaced it.
+    pub fn detach_text_input(&self, token: ClientToken) {
+        let window = self.active_window.lock().as_ref().cloned();
+        ImeBackend::detach(window.as_ref(), token);
+    }
+
+    // ========================================================================
     // Frame Management
     // ========================================================================
 
@@ -1007,14 +1071,19 @@ impl AppBinding {
     /// Handle a platform input event.
     ///
     /// This is the single entry point for all input from the platform layer.
-    /// Routes pointer events to `GestureBinding` and keyboard events to
-    /// `FocusManager`.
+    /// Routes pointer events to `GestureBinding`, keyboard events to
+    /// `FocusManager`, and IME composition/commit events to
+    /// `TextInputRegistry`.
     ///
     /// Pointer events are coalesced by `GestureBinding` — high-frequency move
     /// events are stored and flushed once per frame via
     /// `flush_pending_moves()` in `render_frame()`.
     pub fn handle_input(&self, input: PlatformInput) {
         match input {
+            PlatformInput::Ime(ime_event) => {
+                TextInputRegistry::global().dispatch(&ime_event);
+                self.request_redraw();
+            }
             PlatformInput::Pointer(pointer_event) => {
                 self.gestures
                     .handle_pointer_event(&pointer_event, |position| {
@@ -2262,5 +2331,154 @@ mod tests {
         // `needs_redraw` may be set by OTHER paths (the pipeline-owner dirty hook
         // fires when the new binding's PipelineOwner is touched).  We assert only
         // the Vsync-specific gate: has_vsync_running is false.
+    }
+
+    /// `AppBinding::attach_text_input`/`detach_text_input` (the `ImeBackend`
+    /// bridge) end-to-end against a headless window backed by
+    /// `flui_platform::FakeTextInput`, plus `handle_input`'s
+    /// `PlatformInput::Ime` → `TextInputRegistry` dispatch.
+    mod ime_binding_bridge {
+        use std::cell::RefCell;
+
+        use flui_types::ImeEvent;
+
+        use super::*;
+
+        /// `TextInputRegistry::global()` is a thread-local singleton
+        /// (matching `FocusManager`'s shape). Rust's default test harness
+        /// reuses worker threads across tests, so two of these tests could
+        /// otherwise observe each other's leftover attach/detach state on a
+        /// shared thread — the same class of hazard `SEMANTICS_TEST_LOCK`
+        /// guards against in `renderer_binding.rs` (AGENTS.md, "Testing
+        /// quirks"). Held for each test's duration.
+        static TEXT_INPUT_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+        /// A headless window plus a live handle to the same
+        /// `FakeTextInput` its `PlatformWindow::text_input()` returns, so a
+        /// test can drive the binding and assert exactly what the platform
+        /// side recorded.
+        fn headless_window_with_ime() -> (
+            Box<dyn PlatformWindow>,
+            Arc<dyn flui_platform::traits::PlatformTextInput>,
+        ) {
+            let platform = flui_platform::headless_platform();
+            let window = platform
+                .open_window(flui_platform::traits::WindowOptions::default())
+                .expect("headless platform always opens a window");
+            let text_input = window
+                .text_input()
+                .expect("headless backend supports PlatformTextInput");
+            (window, text_input)
+        }
+
+        fn fake_text_input(
+            text_input: &Arc<dyn flui_platform::traits::PlatformTextInput>,
+        ) -> &flui_platform::FakeTextInput {
+            text_input
+                .as_any()
+                .downcast_ref::<flui_platform::FakeTextInput>()
+                .expect("the headless backend's PlatformTextInput is a FakeTextInput")
+        }
+
+        /// Attach records `set_ime_allowed(true)`; preedit/commit events
+        /// routed through `handle_input` reach the attached client with the
+        /// exact delivered strings; detach from the still-active token
+        /// records `set_ime_allowed(false)`.
+        #[test]
+        fn attach_dispatch_and_active_detach_round_trip_through_the_platform() {
+            let _guard = TEXT_INPUT_TEST_LOCK
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+            let (window, text_input) = headless_window_with_ime();
+            let fake = fake_text_input(&text_input);
+
+            let binding = AppBinding::new();
+            binding.set_window(window);
+
+            let received = Rc::new(RefCell::new(Vec::new()));
+            let sink = Rc::clone(&received);
+            let token = binding
+                .attach_text_input(Rc::new(move |event: &ImeEvent| {
+                    sink.borrow_mut().push(event.clone());
+                }))
+                .expect("attach_text_input must succeed once a window is set");
+
+            assert_eq!(
+                fake.last_ime_allowed(),
+                Some(true),
+                "attach must enable platform IME composition"
+            );
+
+            binding.handle_input(PlatformInput::Ime(ImeEvent::Preedit {
+                text: "ni".to_string(),
+                cursor: Some((0, 2)),
+            }));
+            binding.handle_input(PlatformInput::Ime(ImeEvent::Commit("你好".to_string())));
+
+            assert_eq!(
+                received.borrow().as_slice(),
+                [
+                    ImeEvent::Preedit {
+                        text: "ni".to_string(),
+                        cursor: Some((0, 2)),
+                    },
+                    ImeEvent::Commit("你好".to_string()),
+                ],
+                "handle_input must deliver the exact ImeEvent payload to the attached client"
+            );
+
+            binding.detach_text_input(token);
+            assert_eq!(
+                fake.last_ime_allowed(),
+                Some(false),
+                "detaching the active token must disable platform IME composition"
+            );
+        }
+
+        /// The stale-detach race named in `TextInputRegistry`'s module doc:
+        /// field A attaches, field B attaches (replacing A), and A's
+        /// now-stale detach must record NOTHING on the platform side —
+        /// only B's later, active-token detach may disable IME.
+        #[test]
+        fn a_stale_detach_records_nothing_on_the_platform() {
+            let _guard = TEXT_INPUT_TEST_LOCK
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+            let (window, text_input) = headless_window_with_ime();
+            let fake = fake_text_input(&text_input);
+
+            let binding = AppBinding::new();
+            binding.set_window(window);
+
+            let token_a = binding
+                .attach_text_input(Rc::new(|_event: &ImeEvent| {}))
+                .expect("attach_text_input must succeed once a window is set");
+            assert_eq!(fake.ime_allowed_calls(), vec![true]);
+
+            let token_b = binding
+                .attach_text_input(Rc::new(|_event: &ImeEvent| {}))
+                .expect("attach_text_input must succeed once a window is set");
+            assert_eq!(
+                fake.ime_allowed_calls(),
+                vec![true, true],
+                "attach-replaces still enables IME for the new client"
+            );
+
+            binding.detach_text_input(token_a);
+            assert_eq!(
+                fake.ime_allowed_calls(),
+                vec![true, true],
+                "a stale detach (token_a, already replaced by token_b) records nothing"
+            );
+
+            binding.detach_text_input(token_b);
+            assert_eq!(
+                fake.ime_allowed_calls(),
+                vec![true, true, false],
+                "the active token's detach still disables IME"
+            );
+        }
     }
 }
