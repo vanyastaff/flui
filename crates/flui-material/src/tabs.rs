@@ -50,16 +50,26 @@
 //! every tab cell is an equal `Expanded` share of the bar's width (see
 //! above), this composition renders **exactly** the rect the oracle's
 //! `_IndicatorPainter.indicatorRect` computes for `TabBarIndicatorSize::Tab`
-//! with `indicatorPadding: EdgeInsets.zero` — independently pinned by this
-//! module's test-only `indicator_rect` re-derivation of that geometry (see
-//! `tests`), not a function the paint path itself calls.
+//! with `indicatorPadding: EdgeInsets.zero`: the *horizontal* bounds are
+//! pinned in isolation by this module's test-only `indicator_rect`
+//! re-derivation (see `tests`, not a function the paint path itself calls),
+//! and the *vertical* position (the band sits at the bar's bottom edge, not
+//! its top) is pinned end to end, against the real mounted render tree, by
+//! `crates/flui-material/tests/tabs.rs`'s
+//! `indicator_band_sits_at_the_bar_bottom_beneath_the_divider_and_paints_over_it`
+//! — the horizontal-only unit test cannot see a regression that reverses
+//! the `Column`'s child order, so the vertical claim needs its own,
+//! independent, mounted proof.
 //!
 //! The divider (`showDivider: true` for a non-scrollable M3 bar) is a
 //! `Positioned` full-width strip at the bar's bottom edge, stacked *behind*
 //! the tab row — so an unselected tab's transparent band still lets the
 //! divider line show through beneath it, and a selected tab's opaque
 //! indicator band paints over it, matching the oracle's paint order
-//! (divider drawn first, indicator second, in the same `Canvas` pass).
+//! (divider drawn first, indicator second, in the same `Canvas` pass). The
+//! same mounted test above proves this stacking order structurally (the
+//! `Stack`'s divider layer is its first, earlier-painted child; the tab row
+//! is its second, later-painted — hence on top — child).
 //!
 //! # Named deferrals (not silently dropped)
 //!
@@ -90,6 +100,27 @@
 //! - **`onHover`/`onFocusChange`/`mouseCursor`/`splashFactory`/
 //!   `splashBorderRadius`/`dragStartBehavior`/`physics`/`textScaler`** — no
 //!   consumer yet; `InkWell`'s own defaults apply.
+//! - **Per-tab `Semantics`** — the oracle wraps each tab in
+//!   `Semantics(role: SemanticsRole.tab, child: Stack([content,
+//!   Semantics(selected: ..., label: "Tab N of M")]))` plus a
+//!   `SemanticsRole.tabBar` container on the bar itself
+//!   (`_TabBarState.build`, `tabs.dart`, oracle tag `3.44.0`). This crate
+//!   mounts no semantics annotation at all for `TabBar` — no "Tab 2 of 3"
+//!   label, no `selected` flag, no `tab`/`tabBar` role — so an assistive
+//!   technology gets no structured information about a mounted `TabBar`
+//!   today. Named, not silently dropped: a real gap, not a stylistic
+//!   simplification.
+//! - **`enableFeedback`** — the oracle's `InkWell.enableFeedback` (haptic/
+//!   acoustic click feedback on tap, defaulting to `true`) has no analog
+//!   here; [`crate::InkWell`] itself has no `enableFeedback` parameter yet
+//!   (see that module's own docs), so `TabBar` has nothing to plumb it to.
+//! - **`automaticIndicatorColorAdjustment`** — the oracle snaps
+//!   `indicatorColor` to white when it would otherwise match the ambient
+//!   `Material`'s own fill color (avoiding an invisible indicator). This
+//!   crate's indicator band is a plain `Container` fill with no ambient-color
+//!   lookup at all — an indicator configured (via `TabBarThemeData` or a
+//!   theme with an unusual `ColorScheme.primary`) to match the bar's actual
+//!   background paints invisibly, with no automatic correction.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -556,6 +587,32 @@ impl TabBarState {
 impl ViewState<TabBar> for TabBarState {
     fn init_state(&mut self, ctx: &dyn BuildContext) {
         self.rebuild = Some(ctx.rebuild_handle());
+    }
+
+    /// Unregisters this bar's listener from whatever controller it's
+    /// currently subscribed to — Flutter parity: `_TabBarState.dispose`'s
+    /// `_controller!.animation!.removeListener(...)`/
+    /// `_controller!.removeListener(_handleTabControllerTick)`. Without
+    /// this, a controller that outlives the bar (an explicit
+    /// `TabBar::controller` shared with a sibling, or any
+    /// `DefaultTabController` ancestor that itself outlives one particular
+    /// `TabBar` child) keeps firing an `Rc` closure that calls
+    /// `rebuild.schedule()` on a `RebuildHandle` whose element no longer
+    /// exists — a leaked listener per unmount, same class of bug
+    /// `TextFieldState::dispose` guards against for `FocusManager`
+    /// (`crates/flui-material/tests/text_field.rs`'s
+    /// `unmounting_removes_the_focus_listener_from_the_process_wide_manager`).
+    ///
+    /// `&mut self` here (unlike `resolve_controller`, called from `build`'s
+    /// `&self`) means the `RefCell`s can be read via `get_mut` — a plain
+    /// field access with no runtime borrow check — rather than
+    /// `borrow_mut`.
+    fn dispose(&mut self) {
+        let controller = self.controller.get_mut().take();
+        let listener_id = self.listener_id.get_mut().take();
+        if let (Some(controller), Some(id)) = (controller, listener_id) {
+            controller.remove_listener(id);
+        }
     }
 
     fn build(&self, view: &TabBar, ctx: &dyn BuildContext) -> impl IntoView {

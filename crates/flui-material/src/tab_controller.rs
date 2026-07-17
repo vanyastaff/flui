@@ -130,6 +130,10 @@ impl TabListenerRegistry {
             .retain(|(entry, _)| *entry != id);
     }
 
+    fn len(&self) -> usize {
+        self.listeners.borrow().len()
+    }
+
     /// Fires every registered listener. Snapshots the list first (cloning
     /// the `Rc<dyn Fn()>` handles, not the `Vec`'s backing allocation) so a
     /// listener that adds/removes a listener mid-notify does not conflict
@@ -239,7 +243,19 @@ impl TabController {
     /// `(index, previous_index)` tuple, so a listener invoked by the
     /// `notify_listeners()` that follows always observes a consistent pair
     /// — never `index` updated with a stale `previous_index` or vice versa.
+    ///
+    /// Flutter parity: `_changeIndex`'s own bounds assert (`assert(value >=
+    /// 0 && (value < length || length == 0))`) is ported as a
+    /// `debug_assert!` here too, matching [`new`](Self::new)'s — `index`
+    /// must be in range for [`length`](Self::length) (or `length` must be
+    /// `0`, in which case only `index == 0` ever reaches this far since the
+    /// `length < 2` no-op guard below returns first).
     pub fn set_index(&self, index: usize) {
+        debug_assert!(
+            index < self.length || self.length == 0,
+            "TabController::set_index: index {index} is out of range for length {}",
+            self.length
+        );
         let current = self.state.get();
         if index == current.index || self.length < 2 {
             return;
@@ -271,6 +287,15 @@ impl TabController {
     /// Unregisters a previously-registered listener.
     pub fn remove_listener(&self, id: ListenerId) {
         self.listeners.remove_listener(id);
+    }
+
+    /// The number of currently-registered listeners. Mainly a test seam —
+    /// mirrors `flui_foundation::ChangeNotifier::len`'s own reason for
+    /// existing: proving a consumer's `dispose()` actually unregisters
+    /// (rather than leaking) is otherwise unobservable from outside.
+    #[must_use]
+    pub fn listener_count(&self) -> usize {
+        self.listeners.len()
     }
 }
 
@@ -589,6 +614,18 @@ mod tests {
 
         assert_eq!(count.get(), 0);
         assert_eq!(controller.index(), 0);
+    }
+
+    /// Flutter parity: `_changeIndex`'s own bounds assert. Red-check: delete
+    /// the `debug_assert!` in `set_index` — this test stops panicking and
+    /// `set_index(7)` on a length-3 controller instead silently stores 7 and
+    /// notifies.
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "index 7 is out of range for length 3")]
+    fn set_index_out_of_range_debug_asserts() {
+        let controller = TabController::new(3, 0);
+        controller.set_index(7);
     }
 
     #[test]

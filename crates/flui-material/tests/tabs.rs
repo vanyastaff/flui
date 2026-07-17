@@ -36,6 +36,68 @@ fn themed(theme: ThemeData, child: impl flui_view::prelude::IntoView) -> Theme {
     Theme::new(theme, child)
 }
 
+/// Unmounting a `TabBar` removes its listener from the (outliving)
+/// `TabController` it was subscribed to — without `TabBarState::dispose`,
+/// every unmount leaks an `Rc` closure that calls `rebuild.schedule()` on a
+/// `RebuildHandle` whose element no longer exists, and repeated mount/unmount
+/// cycles against a long-lived controller (an explicit `TabBar::controller`
+/// shared with a sibling, or a `DefaultTabController` that outlives one
+/// particular child) accumulate dead listeners forever.
+///
+/// Same "count seam" pattern as
+/// `crates/flui-material/tests/text_field.rs`'s
+/// `unmounting_removes_the_focus_listener_from_the_process_wide_manager`:
+/// the `TabBar` is a `Column` CHILD here, not the mounted root, so removing
+/// it from the children list goes through ordinary list reconciliation
+/// (ending in `dispose`) rather than a same-type root-config swap
+/// (`pump_widget`/`swap_root_view` on the ROOT documents itself as NOT a
+/// full deactivate-and-remount in that same test's module doc).
+///
+/// Mutation red-check (run and reverted, see the review evidence): deleting
+/// `TabBarState::dispose`'s body makes `after_removal` stay at `while_mounted`
+/// (`1`) instead of returning to `before_mount` (`0`) — confirmed by running
+/// this test against that mutation before restoring the real `dispose`.
+#[test]
+fn unmounting_a_tab_bar_removes_its_listener_from_the_controller() {
+    use flui_view::{IntoView, ViewExt};
+    use flui_widgets::Column;
+
+    let controller = TabController::new(2, 0);
+
+    let before_mount = controller.listener_count();
+    let mut laid = lay_out(
+        themed(
+            ThemeData::light(),
+            Column::new(vec![
+                TabBar::secondary(two_tabs())
+                    .controller(controller.clone())
+                    .into_view()
+                    .boxed(),
+            ]),
+        ),
+        tight(200.0, 48.0),
+    );
+    let while_mounted = controller.listener_count();
+    assert!(
+        while_mounted > before_mount,
+        "mounting a TabBar must register its own listener on the controller"
+    );
+
+    // Remove the TabBar from the Column's children — an ordinary child
+    // removal, not a root-type swap.
+    laid.pump_widget(themed(
+        ThemeData::light(),
+        Column::new(Vec::<flui_view::BoxedView>::new()),
+    ));
+
+    let after_removal = controller.listener_count();
+    assert_eq!(
+        after_removal, before_mount,
+        "removing a TabBar from the tree must remove its listener from the controller, not \
+         leak it"
+    );
+}
+
 /// A real pointer down+up over the second (of two, equal-width) tabs reaches
 /// [`TabController::set_index`] through [`flui_material::InkWell`]'s
 /// dispatch — not just a directly-called closure, as the unit tests in
@@ -184,6 +246,112 @@ fn indicator_theme_override_reaches_the_mounted_selected_tab_band() {
     );
 }
 
+/// The indicator band sits at the BOTTOM of its 48px-tall cell (`dy ==
+/// 46.0` — the 46px content area's bottom edge, spanning the reserved 2dp
+/// gutter to the bar's own bottom edge), the divider sits at the very
+/// bottom of the whole bar (`dy == 47.0` — its own 1dp occupies the last
+/// pixel of that gutter), and the tab row (carrying the indicator bands) is
+/// the STACK's later child, so it paints over the divider wherever a
+/// band is opaque — Flutter parity: `_IndicatorPainter.paint`'s draw order
+/// (divider's `canvas.drawLine` first, then `_painter!.paint` for the
+/// indicator, `tabs.dart` oracle tag `3.44.0`) and `_TabBarState.build`'s
+/// `TabBarIndicatorSize::Tab` geometry (the indicator rect's height spans
+/// the full bar height, i.e. its top is `bar_height - indicator_weight`).
+///
+/// Neither `resolve_style_defaults_to_the_m3_secondary_token_table` (a pure
+/// unit test) nor `divider_theme_override_reaches_the_mounted_tree`/
+/// `indicator_theme_override_reaches_the_mounted_selected_tab_band` (mounted,
+/// but width/height-only) constrain the VERTICAL position of either shape —
+/// a `build_tab_cell` regression that puts the band at the top of the cell
+/// (`Column::new(vec![band.boxed(), Expanded::new(styled).boxed()])`,
+/// reversed from the correct order) still passes every one of them. This
+/// test is the one that catches it.
+///
+/// Mutation red-check (run and reverted, see the review evidence): swapping
+/// `build_tab_cell`'s `Column` children to `[band, Expanded::new(styled)]`
+/// (band first/top instead of last/bottom) makes the `band_top` assertion
+/// below fail (`0.0` instead of `46.0`) — confirmed by running this test
+/// against that mutation before restoring the correct order.
+#[test]
+fn indicator_band_sits_at_the_bar_bottom_beneath_the_divider_and_paints_over_it() {
+    let laid = lay_out(
+        themed(
+            ThemeData::light(),
+            TabBar::secondary(two_tabs()).controller(TabController::new(2, 0)),
+        ),
+        tight(200.0, 48.0),
+    );
+
+    let divider = laid
+        .find_all_by_render_type("RenderDecoratedBox")
+        .into_iter()
+        .find(|&id| {
+            let size = laid.size(id);
+            size.height.get() == 1.0 && size.width.get() == 200.0
+        })
+        .expect("a full-width 1dp divider must be mounted");
+    let band = laid
+        .find_all_by_render_type("RenderDecoratedBox")
+        .into_iter()
+        .find(|&id| {
+            let size = laid.size(id);
+            size.height.get() == 2.0 && size.width.get() == 100.0
+        })
+        .expect("a per-tab 2dp indicator band must be mounted");
+
+    let divider_top = laid.absolute_offset(divider).dy.get();
+    let band_top = laid.absolute_offset(band).dy.get();
+    assert_eq!(
+        band_top, 46.0,
+        "the indicator band must sit at the BOTTOM of the 48px bar (46px content + 2dp band), \
+         not the top"
+    );
+    assert_eq!(
+        divider_top, 47.0,
+        "the 1dp divider must sit at the very bottom of the 48px bar"
+    );
+
+    // Structural "paints over" proof: the harness documents render-tree
+    // child order as paint AND hit-test order, with a LATER child painting
+    // on top (`tests/common/mod.rs`'s `LaidOut::children` doc comment). The
+    // tab row (which carries the indicator bands) must be the STACK's
+    // second (later) child, with the divider strip first — so wherever a
+    // band is opaque, it paints over the divider beneath it.
+    let stack = laid
+        .find_by_render_type("RenderStack")
+        .expect("the divider and tab row must be layered in a Stack");
+    let stack_children = laid.children(stack);
+    assert_eq!(
+        stack_children.len(),
+        2,
+        "the Stack must have exactly two layers: the divider strip and the tab row"
+    );
+    assert!(
+        subtree_contains(&laid, stack_children[0], divider),
+        "the Stack's FIRST (earlier-painted) child must be the divider layer"
+    );
+    assert!(
+        subtree_contains(&laid, stack_children[1], band),
+        "the Stack's SECOND (later-painted, on top) child must be the tab row carrying the \
+         indicator bands"
+    );
+}
+
+/// Whether `id` is `root` itself or appears anywhere in `root`'s render
+/// subtree — a small DFS helper for structural paint-order assertions.
+fn subtree_contains(
+    laid: &common::LaidOut,
+    root: flui_foundation::RenderId,
+    id: flui_foundation::RenderId,
+) -> bool {
+    if root == id {
+        return true;
+    }
+    laid.children(root)
+        .into_iter()
+        .any(|child| subtree_contains(laid, child, id))
+}
+
 /// A zero-tab `TabBar` mounts the documented `48px` empty box (`TAB_HEIGHT +
 /// indicator_weight`), not a collapsed/zero-height `Row` — Flutter parity:
 /// `_TabBarState.build`'s zero-tabs early return. A (length-0) controller is
@@ -309,6 +477,30 @@ fn default_tab_controller_survives_a_length_shrink_past_the_selected_index() {
         DefaultTabController::new(2, TabBar::secondary(two_tabs())),
     ));
 
+    // The clamp itself — index 1, not the tap about to happen — must
+    // already be reflected BEFORE any post-shrink tap. Asserting this only
+    // after tapping the very index the clamp should have produced would
+    // mask a broken clamp (e.g. one that leaves the old, now out-of-range
+    // index 2 in place): the subsequent tap on index 1 would still light up
+    // exactly one band regardless of whether the clamp ran at all, since a
+    // tap always selects whatever it lands on.
+    let indicator_color = ThemeData::light().color_scheme.primary;
+    let clamped_band_x = laid
+        .find_all_by_render_type("RenderDecoratedBox")
+        .into_iter()
+        .filter(|&id| laid.size(id).height.get() == 2.0 && laid.size(id).width.get() == 150.0)
+        .find(|&id| {
+            laid.render_property(id, "decoration")
+                .is_some_and(|decoration| decoration.contains(&format!("{indicator_color:?}")))
+        })
+        .map(|id| laid.absolute_offset(id).dx.get());
+    assert_eq!(
+        clamped_band_x,
+        Some(150.0),
+        "the re-created controller must already select index 1 (x=150) right after the shrink, \
+         before any post-shrink tap"
+    );
+
     // A tap on the (new) second tab must still dispatch through the
     // re-created controller and repaint a single opaque indicator band —
     // proof the swap left a live, correctly-wired TabController behind.
@@ -318,7 +510,6 @@ fn default_tab_controller_survives_a_length_shrink_past_the_selected_index() {
     laid.dispatch_pointer_up(225.0, 24.0);
     laid.pump();
 
-    let indicator_color = ThemeData::light().color_scheme.primary;
     let opaque_bands: Vec<_> = laid
         .find_all_by_render_type("RenderDecoratedBox")
         .into_iter()
