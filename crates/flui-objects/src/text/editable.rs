@@ -169,6 +169,32 @@ impl RenderEditable {
         self.caret_offset
     }
 
+    /// The collapsed caret's rect in this object's local painted coordinate
+    /// space: origin at [`caret_offset`](Self::caret_offset), sized
+    /// `caret_width` × `caret_height`.
+    ///
+    /// **Visibility-independent**: this returns geometry regardless of
+    /// `show_caret` — composition is exactly when the platform IME
+    /// candidate window should track the caret (see `flui_widgets::
+    /// EditableText`'s IME cursor-area tracking loop), which is also when
+    /// `show_caret` may be `false` (the hidden-caret-while-composing case
+    /// this object does not yet model — see the module doc's "Deferred"
+    /// section). A caller that also wants the *painted* caret must check
+    /// `show_caret` itself; `paint` does exactly that around its own use of
+    /// this same rect.
+    ///
+    /// Local painted coordinates: relative to this render object's own
+    /// origin, pre-transform. When internal scrolling lands (see the module
+    /// doc's "Deferred" list), this accessor stays viewport-relative — it is
+    /// not a full-text-content-space caret position.
+    #[must_use]
+    pub fn caret_local_rect(&self) -> Rect {
+        Rect::from_origin_size(
+            Point::new(self.caret_offset.dx, self.caret_offset.dy),
+            Size::new(px(self.caret_width), px(self.caret_height)),
+        )
+    }
+
     /// Read access to the underlying painter for selection geometry work.
     #[must_use]
     pub fn painter(&self) -> &TextPainter {
@@ -336,12 +362,8 @@ impl RenderBox for RenderEditable {
         self.painter.paint(ctx.canvas(), Offset::ZERO);
 
         if self.show_caret && self.caret_width > 0.0 && self.caret_height > 0.0 {
-            let caret_rect = Rect::from_origin_size(
-                Point::new(self.caret_offset.dx, self.caret_offset.dy),
-                Size::new(px(self.caret_width), px(self.caret_height)),
-            );
             ctx.canvas()
-                .draw_rect(caret_rect, &Paint::fill(self.caret_color));
+                .draw_rect(self.caret_local_rect(), &Paint::fill(self.caret_color));
         }
     }
 }

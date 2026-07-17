@@ -75,6 +75,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use flui_types::ImeEvent;
+use flui_types::geometry::{Bounds, Pixels};
 use parking_lot::RwLock;
 
 /// Attach half of [`TextInputHandle`]'s installed bridge — the signature
@@ -84,6 +85,13 @@ type TextInputAttachFn = dyn Fn(ImeEventCallback) -> Option<ClientToken> + Send 
 /// Detach half of [`TextInputHandle`]'s installed bridge — matches
 /// `AppBinding::detach_text_input`'s signature.
 type TextInputDetachFn = dyn Fn(ClientToken) + Send + Sync;
+/// Cursor-area half of [`TextInputHandle`]'s installed bridge (ADR-0032) —
+/// matches `AppBinding::set_ime_cursor_area`'s signature. Unlike
+/// attach/detach, this has no success/failure to report: a binding with no
+/// active window (or a backend with no `PlatformTextInput` capability)
+/// degrades to a silent no-op, the same contract
+/// `PlatformTextInput::set_ime_cursor_area` itself documents.
+type TextInputSetCursorAreaFn = dyn Fn(Bounds<Pixels>) + Send + Sync;
 
 /// Type-erased handle to the platform window a client attached from.
 ///
@@ -159,20 +167,24 @@ pub type ImeEventCallback = Rc<dyn Fn(&ImeEvent)>;
 pub struct TextInputHandle {
     attach: Arc<TextInputAttachFn>,
     detach: Arc<TextInputDetachFn>,
+    set_cursor_area: Arc<TextInputSetCursorAreaFn>,
 }
 
 impl TextInputHandle {
-    /// Wrap a binding's own attach/detach methods. `attach` returns `None`
-    /// exactly when the binding cannot honor an attach yet (e.g. no active
-    /// window), matching `AppBinding::attach_text_input`'s own `None`.
+    /// Wrap a binding's own attach/detach/cursor-area methods. `attach`
+    /// returns `None` exactly when the binding cannot honor an attach yet
+    /// (e.g. no active window), matching `AppBinding::attach_text_input`'s
+    /// own `None`.
     #[must_use]
     pub fn new(
         attach: impl Fn(ImeEventCallback) -> Option<ClientToken> + Send + Sync + 'static,
         detach: impl Fn(ClientToken) + Send + Sync + 'static,
+        set_cursor_area: impl Fn(Bounds<Pixels>) + Send + Sync + 'static,
     ) -> Self {
         Self {
             attach: Arc::new(attach),
             detach: Arc::new(detach),
+            set_cursor_area: Arc::new(set_cursor_area),
         }
     }
 
@@ -190,6 +202,17 @@ impl TextInputHandle {
     /// installed binding forwards to.
     pub fn detach(&self, token: ClientToken) {
         (self.detach)(token);
+    }
+
+    /// Tell the platform IME where to draw its candidate window, in
+    /// window-root-space logical pixels (ADR-0032) — forwarded to
+    /// `PlatformTextInput::set_ime_cursor_area` through the installed
+    /// binding. A caller does not need an attached client to call this
+    /// (mirrors the platform capability itself): a binding with no active
+    /// window, or a backend with no `PlatformTextInput` capability,
+    /// degrades to a silent no-op.
+    pub fn set_cursor_area(&self, area: Bounds<Pixels>) {
+        (self.set_cursor_area)(area);
     }
 }
 
@@ -498,6 +521,7 @@ mod tests {
                 Some(minted_token)
             },
             move |token: ClientToken| detach_calls_for_closure.lock().push(token),
+            |_area| {},
         );
 
         let token = handle
@@ -510,9 +534,37 @@ mod tests {
         assert_eq!(detach_calls.lock().as_slice(), [minted_token]);
     }
 
+    /// `TextInputHandle::set_cursor_area` forwards to exactly the installed
+    /// closure, with the exact `Bounds` argument.
+    ///
+    /// Red-check: swap `(self.set_cursor_area)(area)` for a call that drops
+    /// the argument or never calls through — this test's recorded-call
+    /// assertion fails.
+    #[test]
+    fn text_input_handle_forwards_set_cursor_area_to_the_installed_closure() {
+        use flui_types::geometry::{Point, Size, px};
+
+        let recorded: Arc<parking_lot::Mutex<Vec<Bounds<Pixels>>>> =
+            Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let recorded_for_closure = Arc::clone(&recorded);
+        let handle = TextInputHandle::new(
+            |_callback| None,
+            |_token| {},
+            move |area: Bounds<Pixels>| recorded_for_closure.lock().push(area),
+        );
+
+        let area = Bounds::new(
+            Point::new(px(10.0), px(20.0)),
+            Size::new(px(30.0), px(40.0)),
+        );
+        handle.set_cursor_area(area);
+
+        assert_eq!(recorded.lock().as_slice(), [area]);
+    }
+
     #[test]
     fn text_input_handle_debug_does_not_panic() {
-        let handle = TextInputHandle::new(|_callback| None, |_token| {});
+        let handle = TextInputHandle::new(|_callback| None, |_token| {}, |_area| {});
         assert_eq!(format!("{handle:?}"), "TextInputHandle { .. }");
     }
 }

@@ -1,7 +1,11 @@
 //! [`EditableText`] — single-line editable text backed by a
 //! [`TextEditingController`].
 
-use std::{cell::RefCell, rc::Rc, sync::Arc};
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+    sync::Arc,
+};
 
 use flui_foundation::ListenerId;
 use flui_foundation::notifier::Listenable;
@@ -9,13 +13,16 @@ use flui_interaction::events::{Key, KeyState, NamedKey};
 use flui_interaction::routing::{FocusManager, FocusNode, KeyEventCallback};
 use flui_interaction::{ClientToken, TextInputHandle};
 use flui_objects::RenderEditable;
+use flui_rendering::pipeline::PipelineOwner;
 use flui_rendering::protocol::BoxProtocol;
 use flui_types::{
-    Color, ImeEvent,
+    Color, ImeEvent, Point, Rect,
+    geometry::{Bounds, Pixels},
     typography::{TextDirection, TextSpan, TextStyle},
 };
 use flui_view::prelude::*;
 use flui_view::{BoxedView, RenderView, impl_render_view};
+use parking_lot::RwLock;
 
 use crate::AnimatedBuilder;
 use crate::text::controller::TextEditingController;
@@ -56,17 +63,34 @@ use crate::text::controller::TextEditingController;
 /// `Key::Character` for keys it did **not** already route through
 /// composition. See [`ImeEvent`]'s doc for the full contract.
 ///
+/// # IME cursor-area tracking
+///
+/// While an IME client is attached (focus gain to blur/dispose),
+/// `EditableTextState` also runs a self-rescheduling post-frame loop (ADR-0032)
+/// that reads the caret's current global rect — through the second,
+/// inner [`SubtreeAnchor`](flui_objects::SubtreeAnchor) wrapping the render
+/// view directly (`build_field_view`) and
+/// [`RenderEditable::caret_local_rect`] — and forwards it to
+/// [`TextInputHandle::set_cursor_area`] whenever it changes, so the platform
+/// IME candidate window follows the caret. This is a winit single-rect
+/// reduction of Flutter's transform+local-rect protocol
+/// (`editable_text.dart`'s `_updateSizeAndTransform`/
+/// `_updateCaretRectIfNeeded`/`_schedulePeriodicPostFrameCallbacks`, tag
+/// `3.44.0`) — see ADR-0032 for the full rationale, including why the loop
+/// is per-attach (a fresh alive-flag and a fresh last-sent cache each
+/// attach) rather than shared across the field's lifetime.
+///
 /// # DEFERRED (v1)
 ///
 /// The following are absent in v1; do not use these features and expect them
 /// to work:
 /// - **Composing underline / hidden caret while composing** — see
 ///   [`TextEditingController`]'s "IME composition" doc section.
-/// - **`set_ime_cursor_area`** — nothing in this widget tree calls it yet, so
-///   the platform IME candidate window does not follow the caret; the
-///   platform capability exists (`flui-platform`'s `PlatformTextInput`) but
-///   `EditableText` has no caret-to-global-coordinates path to feed it (see
-///   `RenderEditable`'s module doc).
+/// - **Composing-range cursor-area rect** — the cursor-area loop always
+///   reports the collapsed caret's rect, never a per-glyph composing-range
+///   rect (Flutter's `_updateComposingRectIfNeeded`, `3.44.0`, which itself
+///   falls back to the caret rect when no composing-range geometry is
+///   available — the same fallback this substrate uses unconditionally).
 /// - **Text selection by drag** — only a collapsed caret is tracked; drag
 ///   selection, shift-click, and selection rendering are not implemented.
 /// - **Clipboard** — copy / paste / cut (`Ctrl+C/V/X`) are not wired.
@@ -193,6 +217,12 @@ pub struct EditableTextState {
     /// Publishes the field's `RenderId` while mounted, so the node's rect
     /// provider can measure it for reading-order traversal.
     anchor: flui_objects::SubtreeAnchor,
+    /// Publishes the `RenderId` of exactly the `EditableTextRenderView` —
+    /// the inner anchor (ADR-0032), wrapped directly around it in
+    /// `build_field_view`, so the IME cursor-area loop's `transform_to`
+    /// starts right at the editable instead of walking through `anchor`'s
+    /// wider subtree (which also covers the `AnimatedBuilder` in between).
+    inner_anchor: flui_objects::SubtreeAnchor,
     /// The node this field's node hangs under — the nearest enclosing focus
     /// parent at mount, or the root scope's backing node. Detached from in
     /// `dispose`.
@@ -230,6 +260,25 @@ pub struct EditableTextState {
     /// (detach-on-unmount, independent of any focus-loss notification) can
     /// clear it.
     ime_token: Rc<RefCell<Option<ClientToken>>>,
+    /// The post-frame scheduling capability the IME cursor-area loop uses,
+    /// acquired once in `init_state` beside `ime_handle` (trigger-22: a
+    /// lifecycle-only frame capability is acquired in `init_state`, never in
+    /// `build`). `None` under a binding that installs no post-frame handle —
+    /// the loop then simply never starts (warned, not panicked; see
+    /// `init_state`'s IME focus listener).
+    post_frame_handle: Option<flui_scheduler::PostFrameHandle>,
+    /// The current IME attach's cursor-area loop alive-flag, if a loop is
+    /// currently running. `None` when no loop is running (never attached,
+    /// or already blurred/disposed).
+    ///
+    /// A *fresh* `Rc<Cell<bool>>` is minted per attach (ADR-0032): sharing
+    /// one flag across attaches would let a stale queued firing from a
+    /// PREVIOUS attach flip it back to `true` behavior on a blur→refocus,
+    /// resurrecting a loop that should have died, or running two loops at
+    /// once. Detach/dispose flips THIS slot's flag `false` and takes it out
+    /// of the slot; a loop closure that already holds its own clone still
+    /// sees the flip (shared `Cell`) and dies on its next firing.
+    cursor_area_alive: Rc<RefCell<Option<Rc<Cell<bool>>>>>,
     /// The view's `enabled` at construction time, cached because
     /// `init_state` has no `view` parameter — see [`EditableText::enabled`].
     /// Read exactly once, by `init_state`'s initial-publish decision; there
@@ -257,6 +306,7 @@ impl StatefulView for EditableText {
         EditableTextState {
             focus_node,
             anchor: flui_objects::SubtreeAnchor::new(),
+            inner_anchor: flui_objects::SubtreeAnchor::new(),
             parent: None,
             controller: self.controller.clone(),
             controller_listener_id: None,
@@ -265,6 +315,8 @@ impl StatefulView for EditableText {
             ime_focus_listener_id: None,
             ime_handle: None,
             ime_token: Rc::new(RefCell::new(None)),
+            post_frame_handle: None,
+            cursor_area_alive: Rc::new(RefCell::new(None)),
             enabled: self.enabled,
         }
     }
@@ -326,11 +378,19 @@ impl ViewState<EditableText> for EditableTextState {
         //    acquired here, in `init_state`, never in `build` (see
         //    `BuildContext::text_input_handle`'s doc) — and stored so the
         //    focus-listener closure below (which cannot borrow `&mut self`)
-        //    and `dispose` can both reach it.
+        //    and `dispose` can both reach it. `post_frame_handle()` and
+        //    `pipeline_owner()` are acquired alongside it for the same
+        //    reason — the IME cursor-area loop (ADR-0032) they drive is
+        //    started/stopped by that same closure.
         self.ime_handle = ctx.text_input_handle();
+        self.post_frame_handle = ctx.post_frame_handle();
         let ime_handle_for_focus = self.ime_handle.clone();
+        let post_frame_handle_for_focus = self.post_frame_handle.clone();
+        let pipeline_owner_for_focus = ctx.pipeline_owner();
+        let inner_anchor_for_focus = self.inner_anchor.clone();
         let controller_for_ime = self.controller.clone();
         let ime_token_for_focus = Rc::clone(&self.ime_token);
+        let cursor_area_alive_for_focus = Rc::clone(&self.cursor_area_alive);
         self.ime_focus_listener_id = Some(FocusManager::global().add_listener(Rc::new(
             move |previous, current| {
                 let was_focused = previous == Some(node_id);
@@ -342,13 +402,55 @@ impl ViewState<EditableText> for EditableTextState {
                     return;
                 };
                 if now_focused {
+                    // Fresh per-attach state (ADR-0032): `last_sent` resets
+                    // so a brand-new IME session always gets its first rect
+                    // even at an unchanged caret position, and `alive` is a
+                    // NEW flag so a stale queued firing from a previous
+                    // attach (see the field's `cursor_area_alive` doc) can
+                    // never resurrect this session or run alongside it.
+                    let last_sent: Rc<Cell<Option<Bounds<Pixels>>>> = Rc::new(Cell::new(None));
+                    let alive = Rc::new(Cell::new(true));
+                    *cursor_area_alive_for_focus.borrow_mut() = Some(Rc::clone(&alive));
+
                     let controller_for_callback = controller_for_ime.clone();
+                    let last_sent_for_ime_event = Rc::clone(&last_sent);
                     let token = handle.attach(Rc::new(move |event: &ImeEvent| {
                         apply_ime_event(&controller_for_callback, event);
+                        // The backend may have restarted the IME session
+                        // (`Enabled` re-fires on that restart) — clearing
+                        // `last_sent` guarantees the new session gets a
+                        // fresh rect instead of the dedupe cache silently
+                        // suppressing it.
+                        if matches!(event, ImeEvent::Enabled) {
+                            last_sent_for_ime_event.set(None);
+                        }
                     }));
                     *ime_token_for_focus.borrow_mut() = token;
-                } else if let Some(token) = ime_token_for_focus.borrow_mut().take() {
-                    handle.detach(token);
+
+                    if let Some(post_frame) = post_frame_handle_for_focus.clone() {
+                        CursorAreaLoop {
+                            post_frame,
+                            pipeline_owner: pipeline_owner_for_focus.clone(),
+                            inner_anchor: inner_anchor_for_focus.clone(),
+                            text_input: handle.clone(),
+                            alive,
+                            last_sent,
+                        }
+                        .schedule();
+                    } else {
+                        tracing::warn!(
+                            "IME cursor-area tracking not started: no post-frame handle \
+                             installed (the platform candidate window will not follow \
+                             the caret)"
+                        );
+                    }
+                } else {
+                    if let Some(token) = ime_token_for_focus.borrow_mut().take() {
+                        handle.detach(token);
+                    }
+                    if let Some(alive) = cursor_area_alive_for_focus.borrow_mut().take() {
+                        alive.set(false);
+                    }
                 }
             },
         )));
@@ -387,6 +489,7 @@ impl ViewState<EditableText> for EditableTextState {
         let caret_color = view.caret_color;
         let enabled = view.enabled;
         let text_style = view.text_style.clone();
+        let inner_anchor = self.inner_anchor.clone();
 
         crate::navigator::AnchoredBox::new(
             self.anchor.clone(),
@@ -398,6 +501,7 @@ impl ViewState<EditableText> for EditableTextState {
                     caret_color,
                     enabled,
                     text_style.clone(),
+                    inner_anchor.clone(),
                 )
             }),
         )
@@ -425,6 +529,16 @@ impl ViewState<EditableText> for EditableTextState {
             && let Some(handle) = &self.ime_handle
         {
             handle.detach(token);
+        }
+
+        // Stop the IME cursor-area loop (ADR-0032) if one is running — the
+        // same unconditional-on-unmount contract as the IME token detach
+        // just above, and independent of it: a field unmounted while
+        // focused is not guaranteed a blur notification, so this is the one
+        // path that always flips the current attach's alive flag false,
+        // whether or not the field ever blurred first.
+        if let Some(alive) = self.cursor_area_alive.borrow_mut().take() {
+            alive.set(false);
         }
 
         // Unregister the key handler from the FocusManager, and withdraw the
@@ -488,6 +602,130 @@ fn apply_ime_event(controller: &TextEditingController, event: &ImeEvent) {
         // unrelated crate bump.
         _ => {}
     }
+}
+
+/// The self-rescheduling IME cursor-area tracking loop (ADR-0032).
+///
+/// One instance is created per IME attach (focus gain). Each firing reads the
+/// caret's current global rect and forwards it through
+/// [`TextInputHandle::set_cursor_area`] when it changed, then reschedules
+/// itself for the next completed frame — Flutter's own
+/// `_schedulePeriodicPostFrameCallbacks` cadence (`editable_text.dart`, tag
+/// `3.44.0`), dormant whenever no frame runs. `Clone` because
+/// [`flui_scheduler::PostFrameHandle::schedule_local`] takes an `FnOnce`, so the only way to
+/// make it self-rescheduling without boxing a trait object is for each
+/// firing to consume `self` and, if still alive, construct the next firing's
+/// closure from a fresh clone of the same capture.
+#[derive(Clone)]
+struct CursorAreaLoop {
+    post_frame: flui_scheduler::PostFrameHandle,
+    pipeline_owner: Option<Arc<RwLock<PipelineOwner>>>,
+    /// The `EditableTextRenderView`'s own inner anchor (ADR-0032) — see
+    /// `EditableTextState::inner_anchor`'s doc.
+    inner_anchor: flui_objects::SubtreeAnchor,
+    text_input: TextInputHandle,
+    /// Per-attach liveness flag — see `EditableTextState::cursor_area_alive`'s
+    /// doc for why it is fresh per attach. Checked at the START of every
+    /// firing so a callback already queued when the attach ended dies
+    /// silently instead of resurrecting a stale loop or running alongside a
+    /// newer one.
+    alive: Rc<Cell<bool>>,
+    /// The last rect actually sent. Fresh per attach (never shared across
+    /// attaches, see `EditableTextState::init_state`'s IME focus listener) —
+    /// a brand-new IME session must always get the first rect, even at an
+    /// unchanged caret position.
+    last_sent: Rc<Cell<Option<Bounds<Pixels>>>>,
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Test-only probe: counts every successful `PostFrameHandle::
+    /// schedule_local` registration `CursorAreaLoop::schedule` makes.
+    ///
+    /// This exists because "no new `cursor_area_calls`" is NOT sufficient
+    /// evidence that the loop stopped: once `inner_anchor` clears (on
+    /// unmount), `global_caret_rect` returns `None` regardless of whether
+    /// the loop is still alive, so a zombie loop that keeps rescheduling
+    /// itself forever looks send-silent and indistinguishable from a
+    /// correctly-stopped one under a sends-only assertion. Counting actual
+    /// reschedule registrations is what tells them apart — see
+    /// `loop_stops_rescheduling_after_dispose_while_still_focused`.
+    static CURSOR_AREA_RESCHEDULE_COUNT: Cell<usize> = const { Cell::new(0) };
+}
+
+/// The number of `CursorAreaLoop::schedule` registrations made so far on
+/// this thread. Test-only; see `CURSOR_AREA_RESCHEDULE_COUNT`'s doc.
+#[cfg(test)]
+fn cursor_area_reschedule_count() -> usize {
+    CURSOR_AREA_RESCHEDULE_COUNT.with(Cell::get)
+}
+
+impl CursorAreaLoop {
+    /// Register the next firing. Every `schedule_local` failure is warned,
+    /// never silent: a loop that stops rescheduling without a diagnostic is
+    /// a candidate window stuck at (0, 0) with no signal anything is wrong.
+    fn schedule(self) {
+        let post_frame = self.post_frame.clone();
+        match post_frame.schedule_local(move |_timing| self.fire()) {
+            Ok(()) => {
+                #[cfg(test)]
+                CURSOR_AREA_RESCHEDULE_COUNT.with(|count| count.set(count.get() + 1));
+            }
+            Err(error) => {
+                tracing::warn!(
+                    ?error,
+                    "IME cursor-area tick could not be (re)scheduled; the platform \
+                     candidate window will stop following the caret"
+                );
+            }
+        }
+    }
+
+    fn fire(self) {
+        if !self.alive.get() {
+            return;
+        }
+        // A `None` read is a transient miss (the anchored subtree unmounted
+        // mid-rebuild, or a transform is momentarily unavailable) — skip
+        // this firing's send but keep the loop alive. Only `alive == false`
+        // ever stops rescheduling.
+        if let Some(rect) = self.global_caret_rect()
+            && Some(rect) != self.last_sent.get()
+        {
+            self.text_input.set_cursor_area(rect);
+            self.last_sent.set(Some(rect));
+        }
+        self.schedule();
+    }
+
+    /// The caret's current rect in window-root-space logical pixels:
+    /// `inner_anchor`'s committed transform to the render root, applied to
+    /// the anchored `RenderEditable` child's local caret rect.
+    fn global_caret_rect(&self) -> Option<Bounds<Pixels>> {
+        let anchor_id = self.inner_anchor.get()?;
+        let owner = self.pipeline_owner.as_ref()?.read();
+        let root_id = owner.root_id()?;
+        let tree = owner.render_tree();
+        let editable_id = *tree.children(anchor_id).first()?;
+        let editable = tree
+            .get(editable_id)?
+            .as_box()?
+            .render_object()
+            .downcast_ref::<RenderEditable>()?; // PORT-CHECK-OK-DOWNCAST: ADR-0032 IME cursor-area loop reaches the one concrete render object type it knows sits under `inner_anchor` (an `EditableTextRenderView`'s `RenderEditable`) through the storage layer's `&dyn RenderObject<BoxProtocol>` erasure — see docs/PORT.md FR-033/widgets.
+        let local_rect = editable.caret_local_rect();
+        let transform = owner.transform_to(anchor_id, root_id)?;
+        Some(bounds_from_rect(transform.transform_rect(&local_rect)))
+    }
+}
+
+/// `Rect` (min/max corners) to `Bounds` (origin/size) — `PlatformTextInput::
+/// set_ime_cursor_area`'s parameter convention, matching `PlatformWindow::
+/// bounds`.
+fn bounds_from_rect(rect: Rect) -> Bounds<Pixels> {
+    Bounds::new(
+        Point::new(rect.min.x, rect.min.y),
+        flui_types::Size::new(rect.width(), rect.height()),
+    )
 }
 
 /// Build the key-event handler closure for `controller`.
@@ -601,6 +839,13 @@ impl RenderView for EditableTextRenderView {
 impl_render_view!(EditableTextRenderView);
 
 /// Assemble the visual render view for the text field interior.
+///
+/// Wraps `EditableTextRenderView` directly in `inner_anchor` (the inner
+/// anchor, ADR-0032): a second, inner `SubtreeAnchor` whose only job is to publish
+/// exactly the editable's own `RenderId`, so the IME cursor-area loop's
+/// `transform_to` starts right at the editable — not at the outer `anchor`
+/// wrapping this whole field (which also spans the `AnimatedBuilder` between
+/// the two, zero-offset by convention only).
 fn build_field_view(
     controller: &TextEditingController,
     focus_node: &Arc<FocusNode>,
@@ -608,18 +853,23 @@ fn build_field_view(
     caret_color: Color,
     enabled: bool,
     text_style: Option<TextStyle>,
+    inner_anchor: flui_objects::SubtreeAnchor,
 ) -> BoxedView {
-    EditableTextRenderView {
-        text: controller.text(),
-        caret_byte_offset: controller.caret_byte_offset(),
-        // `enabled` is defensive here: `did_update_view` already unfocuses a
-        // field that becomes disabled while focused, so `has_primary_focus`
-        // should already be `false` by the time this runs.
-        show_caret: enabled && focus_node.has_primary_focus(),
-        caret_height,
-        caret_color,
-        text_style,
-    }
+    crate::navigator::AnchoredBox::new(
+        inner_anchor,
+        EditableTextRenderView {
+            text: controller.text(),
+            caret_byte_offset: controller.caret_byte_offset(),
+            // `enabled` is defensive here: `did_update_view` already
+            // unfocuses a field that becomes disabled while focused, so
+            // `has_primary_focus` should already be `false` by the time
+            // this runs.
+            show_caret: enabled && focus_node.has_primary_focus(),
+            caret_height,
+            caret_color,
+            text_style,
+        },
+    )
     .boxed()
 }
 
@@ -1060,5 +1310,380 @@ mod tests {
              TextInputConnection.connectionClosed)"
         );
         assert!(!controller.is_composing());
+    }
+
+    // ------------------------------------------------------------------
+    // IME cursor-area tracking (ADR-0032)
+    //
+    // Focusing/blurring in these tests runs inside `harness.
+    // enter_owner_scope(...)`, unlike the IME-composition tests above:
+    // the cursor-area loop's `PostFrameHandle::schedule_local` call only
+    // succeeds while the harness's local post-frame lane is the active
+    // top of the lane stack — exactly the shape `HeadlessBinding::
+    // pump_frame` and production's `realm.enter` share (see
+    // `CursorAreaLoop`'s doc). A focus change dispatched with no active
+    // lane still attaches/detaches the IME client correctly (that part
+    // needs no lane), it just never starts the loop — which is why the
+    // composition tests above, which never call `enter_owner_scope`,
+    // still pass unaffected by this feature.
+    //
+    // Transient-`None` resilience (a fully in-place red-check for "skip
+    // the send, keep the loop alive" — one of `CursorAreaLoop::fire`'s
+    // two branches) is not constructed here: forcing `global_caret_rect`
+    // to observe the inner anchor mid-unmount deterministically would
+    // require reaching into the pipeline mid-rebuild, which this
+    // harness has no cheap hook for. The branch itself is exercised
+    // structurally by every test below during the ordinary frame in which
+    // the tree is *not* yet built (`mount_with_ime`'s own initial
+    // attach), and its shape (`if let Some(rect) = ... { send } ;
+    // self.schedule()` — the reschedule is unconditional, not gated on
+    // the `Some` arm) is the same one line the `loop_stops_sending_after_*`
+    // tests below would fail to distinguish from a real stop if it were
+    // wrong.
+    // ------------------------------------------------------------------
+
+    /// Focusing a field under a translated ancestor (`Padding`) sends the
+    /// caret's rect through `TextInputHandle::set_cursor_area` exactly once,
+    /// with the ancestor's offset folded in — proving both the basic
+    /// send-on-focus contract and that `transform_to` (not the local rect
+    /// alone) is what reaches the platform.
+    ///
+    /// Red-check: skip `transform.transform_rect(&local_rect)` in
+    /// `CursorAreaLoop::global_caret_rect` (send the untransformed local
+    /// rect) — the origin assertions below fail (they'd read `(0, 0)`
+    /// instead of the padding offset).
+    #[test]
+    fn focusing_sends_the_exact_caret_rect_including_ancestor_padding() {
+        let _guard = crate::test_harness::FOCUS_TEST_LOCK.lock();
+        FocusManager::global().unfocus();
+
+        let controller = TextEditingController::new();
+        let mut harness = crate::test_harness::mount_with_ime(
+            crate::Padding::only(20.0, 10.0, 0.0, 0.0).child(EditableText::new(controller.clone())),
+        );
+        let node_id = controller.focus_node_id().expect("published node");
+
+        harness.enter_owner_scope(|| {
+            FocusManager::global().request_focus(node_id);
+        });
+        assert!(
+            harness.cursor_area_calls().is_empty(),
+            "focus gain schedules the first tick but must not send synchronously"
+        );
+
+        harness.tick();
+
+        let calls = harness.cursor_area_calls();
+        assert_eq!(
+            calls.len(),
+            1,
+            "exactly one send on the frame after focus gain"
+        );
+        assert_eq!(
+            calls[0].origin,
+            flui_types::Point::new(
+                flui_types::geometry::px(20.0),
+                flui_types::geometry::px(10.0)
+            ),
+            "the sent rect must include the Padding ancestor's offset, not just \
+             the caret's local position: {:?}",
+            calls[0]
+        );
+        assert_eq!(
+            calls[0].size,
+            flui_types::Size::new(
+                flui_types::geometry::px(2.0),
+                flui_types::geometry::px(18.0)
+            ),
+            "the sent rect must carry the caret's own width/height: {:?}",
+            calls[0]
+        );
+    }
+
+    /// Committing a character moves the caret, and the next pump sends a new
+    /// rect with the x coordinate advanced.
+    #[test]
+    fn caret_advance_sends_a_new_rect_with_x_advanced_after_a_commit() {
+        let _guard = crate::test_harness::FOCUS_TEST_LOCK.lock();
+        FocusManager::global().unfocus();
+
+        let controller = TextEditingController::new();
+        let mut harness =
+            crate::test_harness::mount_with_ime(EditableText::new(controller.clone()));
+        let node_id = controller.focus_node_id().expect("published node");
+
+        harness.enter_owner_scope(|| {
+            FocusManager::global().request_focus(node_id);
+        });
+        harness.tick();
+        let first = *harness
+            .cursor_area_calls()
+            .first()
+            .expect("one send after focus gain");
+
+        controller.insert_str("m");
+        harness.tick();
+
+        let calls = harness.cursor_area_calls();
+        assert_eq!(
+            calls.len(),
+            2,
+            "the caret moving after a commit must trigger exactly one more send"
+        );
+        assert!(
+            calls[1].origin.x.get() > first.origin.x.get(),
+            "the caret's x must advance after inserting a character: {:?} -> {:?}",
+            first,
+            calls[1]
+        );
+    }
+
+    /// Two unchanged frames send exactly one call (dedupe), but a
+    /// blur→refocus at the SAME caret position sends again — the
+    /// attach-reset half that keeps dedupe from suppressing a brand-new IME
+    /// session forever.
+    ///
+    /// Red-check (dedupe half): drop the `Some(rect) != self.last_sent.get()`
+    /// guard in `CursorAreaLoop::fire` — the unchanged-frame assertion below
+    /// fails (every tick resends).
+    ///
+    /// Red-check (attach-reset half): make `last_sent` a field shared across
+    /// attaches instead of a fresh `Rc::new(Cell::new(None))` per attach in
+    /// `init_state`'s IME focus listener — the post-refocus assertion fails
+    /// (the old cache suppresses the resend).
+    #[test]
+    fn dedupes_unchanged_frames_and_resends_after_a_refocus_at_the_same_position() {
+        let _guard = crate::test_harness::FOCUS_TEST_LOCK.lock();
+        FocusManager::global().unfocus();
+
+        let controller = TextEditingController::new();
+        let mut harness =
+            crate::test_harness::mount_with_ime(EditableText::new(controller.clone()));
+        let node_id = controller.focus_node_id().expect("published node");
+
+        harness.enter_owner_scope(|| {
+            FocusManager::global().request_focus(node_id);
+        });
+        harness.tick();
+        assert_eq!(harness.cursor_area_calls().len(), 1);
+
+        harness.tick();
+        harness.tick();
+        assert_eq!(
+            harness.cursor_area_calls().len(),
+            1,
+            "two further unchanged frames must not resend"
+        );
+
+        harness.enter_owner_scope(|| {
+            FocusManager::global().unfocus();
+        });
+        harness.tick();
+        harness.enter_owner_scope(|| {
+            FocusManager::global().request_focus(node_id);
+        });
+        harness.tick();
+
+        assert_eq!(
+            harness.cursor_area_calls().len(),
+            2,
+            "refocusing at an unchanged caret position must resend — a new IME \
+             session always gets its first rect"
+        );
+    }
+
+    /// `ImeEvent::Enabled` clears the current attach's dedupe cache — the
+    /// backend may restart the IME session without any focus change, and
+    /// that restart must not be silently absorbed by `last_sent`: the
+    /// resumed session needs its own first send even at an unchanged caret
+    /// position.
+    ///
+    /// Red-check: drop the `last_sent_for_ime_event.set(None)` call in the
+    /// IME event callback's `ImeEvent::Enabled` arm (`init_state`) — the
+    /// final assertion fails (dedupe suppresses the resend).
+    #[test]
+    fn ime_enabled_event_clears_the_dedupe_cache_and_forces_a_resend() {
+        let _guard = crate::test_harness::FOCUS_TEST_LOCK.lock();
+        FocusManager::global().unfocus();
+
+        let controller = TextEditingController::new();
+        let mut harness =
+            crate::test_harness::mount_with_ime(EditableText::new(controller.clone()));
+        let node_id = controller.focus_node_id().expect("published node");
+
+        harness.enter_owner_scope(|| {
+            FocusManager::global().request_focus(node_id);
+        });
+        harness.tick();
+        assert_eq!(harness.cursor_area_calls().len(), 1);
+
+        // An unchanged frame first, to prove the dedupe cache is actually
+        // populated (not merely empty from a fresh attach) before `Enabled`
+        // clears it.
+        harness.tick();
+        assert_eq!(
+            harness.cursor_area_calls().len(),
+            1,
+            "precondition: an unchanged frame must dedupe before Enabled fires"
+        );
+
+        dispatch_ime(&flui_types::ImeEvent::Enabled);
+        harness.tick();
+
+        assert_eq!(
+            harness.cursor_area_calls().len(),
+            2,
+            "ImeEvent::Enabled must clear the dedupe cache so an unchanged \
+             caret position resends on the next frame"
+        );
+    }
+
+    /// Blurring stops the loop: no further sends, even once the controller
+    /// keeps changing after the blur.
+    ///
+    /// Red-check: drop the `alive.set(false)` call in the IME focus
+    /// listener's blur branch (`init_state`) — this test's final assertion
+    /// fails (the loop keeps sending after blur).
+    #[test]
+    fn loop_stops_sending_after_blur() {
+        let _guard = crate::test_harness::FOCUS_TEST_LOCK.lock();
+        FocusManager::global().unfocus();
+
+        let controller = TextEditingController::new();
+        let mut harness =
+            crate::test_harness::mount_with_ime(EditableText::new(controller.clone()));
+        let node_id = controller.focus_node_id().expect("published node");
+
+        harness.enter_owner_scope(|| {
+            FocusManager::global().request_focus(node_id);
+        });
+        harness.tick();
+        assert_eq!(harness.cursor_area_calls().len(), 1);
+
+        harness.enter_owner_scope(|| {
+            FocusManager::global().unfocus();
+        });
+        harness.tick();
+        let calls_after_blur = harness.cursor_area_calls().len();
+
+        controller.insert_str("z");
+        harness.tick();
+        harness.tick();
+
+        assert_eq!(
+            harness.cursor_area_calls().len(),
+            calls_after_blur,
+            "a blurred field's loop must not send again even after the caret \
+             moves and further frames pump"
+        );
+    }
+
+    /// Unmounting a still-focused field stops the loop's RESCHEDULING, not
+    /// merely its sends — the ADR-0030 detach-on-dispose contract extended
+    /// to the cursor-area loop, and no panic either.
+    ///
+    /// "No new `cursor_area_calls`" alone is NOT sufficient evidence here:
+    /// `RenderSubtreeAnchor::detach` clears `inner_anchor` on unmount, so
+    /// `global_caret_rect` returns `None` regardless of whether the loop is
+    /// still alive — a zombie loop that kept rescheduling itself forever
+    /// (never sending, but never stopping either — a permanent
+    /// once-per-frame `schedule_local` registration leak) would look
+    /// send-silent and pass a sends-only assertion. This test instead counts
+    /// actual reschedule registrations via `cursor_area_reschedule_count`.
+    ///
+    /// Red-check: drop the `alive.set(false)` call in `EditableTextState::
+    /// dispose` — the reschedule count keeps climbing on every subsequent
+    /// `tick()` instead of holding steady once the dispose frame settles.
+    #[test]
+    fn loop_stops_rescheduling_after_dispose_while_still_focused() {
+        let _guard = crate::test_harness::FOCUS_TEST_LOCK.lock();
+        FocusManager::global().unfocus();
+
+        let controller = TextEditingController::new();
+        let mut harness = crate::test_harness::mount_with_ime(ImeUnmountRoot {
+            controller: controller.clone(),
+            show: true,
+        });
+        let node_id = controller.focus_node_id().expect("published node");
+
+        harness.enter_owner_scope(|| {
+            FocusManager::global().request_focus(node_id);
+        });
+        harness.tick();
+        assert_eq!(harness.cursor_area_calls().len(), 1);
+
+        // `swap_root` disposes the old (still-focused) field within its own
+        // pumped frame: dispose runs during that frame's build phase,
+        // before the SAME frame's post-frame phase drains the `fire()`
+        // queued by the `tick()` above — so a correctly stopped loop must
+        // not reschedule even once more here.
+        harness.swap_root(ImeUnmountRoot {
+            controller: controller.clone(),
+            show: false,
+        });
+        let calls_after_unmount = harness.cursor_area_calls().len();
+        let reschedules_after_dispose_frame = cursor_area_reschedule_count();
+
+        // Further frames must not resurrect scheduling, and must not panic.
+        controller.insert_str("y");
+        harness.tick();
+        harness.tick();
+
+        assert_eq!(
+            harness.cursor_area_calls().len(),
+            calls_after_unmount,
+            "unmounting a still-focused field must not send further cursor \
+             areas"
+        );
+        assert_eq!(
+            cursor_area_reschedule_count(),
+            reschedules_after_dispose_frame,
+            "a disposed-while-focused field must not keep rescheduling its \
+             cursor-area loop — a zombie loop would reschedule once per \
+             frame forever even though its sends look silent"
+        );
+    }
+
+    /// A blur immediately followed by a refocus, both inside the SAME
+    /// active-lane scope (no intervening pump) — the scenario a shared
+    /// alive-flag across attaches would double-loop: the stale queued
+    /// firing from the blurred attach would resurrect (share `true` with
+    /// the new attach) instead of dying, and the next frame would send
+    /// twice instead of once.
+    ///
+    /// Red-check: mint `alive`/`cursor_area_alive` once per field instead of
+    /// fresh per attach — this test's delta assertion becomes `2` instead
+    /// of `1`.
+    #[test]
+    fn blur_then_refocus_within_the_same_scope_leaves_exactly_one_live_loop() {
+        let _guard = crate::test_harness::FOCUS_TEST_LOCK.lock();
+        FocusManager::global().unfocus();
+
+        let controller = TextEditingController::new();
+        let mut harness =
+            crate::test_harness::mount_with_ime(EditableText::new(controller.clone()));
+        let node_id = controller.focus_node_id().expect("published node");
+
+        harness.enter_owner_scope(|| {
+            FocusManager::global().request_focus(node_id);
+        });
+        harness.tick();
+        assert_eq!(harness.cursor_area_calls().len(), 1);
+
+        harness.enter_owner_scope(|| {
+            FocusManager::global().unfocus();
+            FocusManager::global().request_focus(node_id);
+        });
+
+        let before = harness.cursor_area_calls().len();
+        harness.tick();
+        let after = harness.cursor_area_calls().len();
+
+        assert_eq!(
+            after - before,
+            1,
+            "blur->refocus in one scope must leave exactly one live loop; a \
+             leaked stale loop would double this frame's send count"
+        );
     }
 }
