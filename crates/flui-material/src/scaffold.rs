@@ -1,20 +1,36 @@
 //! [`Scaffold`] — the top-level Material page structure: an app bar, a body,
-//! and a floating action button, laid out by the private
-//! `ScaffoldLayoutDelegate` defined further down in this module.
+//! a floating action button, and drawer/end-drawer slots, laid out by the
+//! private `ScaffoldLayoutDelegate` defined further down in this module.
 //!
 //! # Flutter parity
 //!
 //! `material/scaffold.dart`'s `Scaffold` (oracle tag `3.44.0`). Implemented
-//! subset: the `app_bar`, `body`, and `floating_action_button` slots of
-//! `_ScaffoldLayout.performLayout` (`scaffold.dart:1027-1296`) — the other
-//! eight slots (`bottomNavigationBar`, `persistentFooter`, `materialBanner`,
-//! `bodyScrim`, `snackBar`, `bottomSheet`, drawers, `statusBar`) are not
-//! ported; a future slot extends `ScaffoldLayoutDelegate`, it does not
-//! restructure it. `resize_to_avoid_bottom_inset` defaults to `true`, same
-//! as the oracle. `background_color` falls back to `ColorScheme.surface`
-//! (the oracle's `themeData.scaffoldBackgroundColor`, which this substrate
-//! has not ported onto [`crate::ThemeData`] yet — `ColorScheme.surface` is
-//! the closer M3 analogue in the meantime).
+//! subset: the `app_bar`, `body`, `floating_action_button`, `drawer`, and
+//! `end_drawer` slots of `_ScaffoldLayout.performLayout`
+//! (`scaffold.dart:1027-1296`) — the remaining six slots
+//! (`bottomNavigationBar`, `persistentFooter`, `materialBanner`, `bodyScrim`,
+//! `snackBar`, `bottomSheet`, `statusBar`) are not ported; a future slot
+//! extends `ScaffoldLayoutDelegate`, it does not restructure it.
+//! `resize_to_avoid_bottom_inset` defaults to `true`, same as the oracle.
+//! `background_color` falls back to `ColorScheme.surface` (the oracle's
+//! `themeData.scaffoldBackgroundColor`, which this substrate has not ported
+//! onto [`crate::ThemeData`] yet — `ColorScheme.surface` is the closer M3
+//! analogue in the meantime).
+//!
+//! ## Drawer wiring
+//!
+//! `Scaffold` is a [`StatefulView`] specifically to own the two
+//! [`GlobalKey`]s and the [`DrawerHandle`] the drawer/end-drawer
+//! [`DrawerController`]s need — see `crate::drawer`'s module docs for the
+//! `GlobalKey` bridge and why [`DrawerHandle`] is `!Send`. The state tracks
+//! each drawer's opened bool (`crate::drawer::DrawerController::on_open_changed`
+//! updates it and reschedules this build), which drives BOTH the dynamic
+//! child order — Flutter parity: `Scaffold.build`'s `if (_endDrawerOpened.value)
+//! { buildDrawer, buildEndDrawer } else { buildEndDrawer, buildDrawer }`
+//! (`scaffold.dart:3211-3217`) — added last, an open end-drawer's scrim/panel
+//! must paint on top of, and hit-test before, a closed start-drawer's edge
+//! strip — and `on_drawer_changed`/`on_end_drawer_changed`'s relay to the
+//! app author.
 //!
 //! ## The inset contract
 //!
@@ -56,15 +72,21 @@
 //!
 //! ## Deferred, and named
 //!
-//! `bottomNavigationBar`, `persistentFooterButtons`, `drawer`/`endDrawer`,
-//! `MaterialBanner`, `SnackBar` (via `ScaffoldMessenger`), `bottomSheet`,
+//! `bottomNavigationBar`, `persistentFooterButtons`, `MaterialBanner`,
+//! `SnackBar` (via `ScaffoldMessenger`), `bottomSheet`,
 //! `extendBody`/`extendBodyBehindAppBar`, non-`endFloat`
-//! `FloatingActionButtonLocation`s, and `Scaffold.of`/`ScaffoldState`'s
-//! runtime API (opening drawers, showing snack bars). None of these slots
-//! exist in `ScaffoldLayoutDelegate` yet — the three that do
-//! (`app_bar`/`body`/`floating_action_button`) are copied verbatim from
-//! `_ScaffoldLayout`'s branches for those same slots, so adding a slot later
-//! is additive, not a rewrite.
+//! `FloatingActionButtonLocation`s. Also deferred, specific to the drawer
+//! slots this update adds: the `AppBar` auto-hamburger (no `AppBar` ↔
+//! `Scaffold` coupling exists yet), per-side `enable_open_drag_gesture`
+//! (oracle: separate `drawerEnableOpenDragGesture`/
+//! `endDrawerEnableOpenDragGesture` — this substrate exposes one flag for
+//! both sides), and `drawerDragStartBehavior`/`drawerBarrierDismissible`
+//! overrides at the `Scaffold` level (fixed at
+//! `DrawerController`'s own defaults — see `crate::drawer`). None of these
+//! slots exist in `ScaffoldLayoutDelegate` yet — the five that do
+//! (`app_bar`/`body`/`floating_action_button`/`drawer`/`end_drawer`) are
+//! copied verbatim from `_ScaffoldLayout`'s branches for those same slots,
+//! so adding a slot later is additive, not a rewrite.
 //!
 //! **Named divergence: no `TextDirection` / RTL.** The oracle's
 //! `_ScaffoldLayout` carries a `textDirection` field, both to mirror
@@ -79,6 +101,7 @@
 //! together.
 
 use std::any::Any;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use flui_rendering::constraints::BoxConstraints;
@@ -86,11 +109,15 @@ use flui_types::geometry::px;
 use flui_types::styling::Color;
 use flui_types::{EdgeInsets, Offset, Pixels, Size};
 use flui_view::prelude::*;
+use flui_view::{GlobalKey, impl_inherited_view};
 use flui_widgets::{
     ConstrainedBox, CustomMultiChildLayout, LayoutId, MediaQuery, MultiChildLayoutContext,
     MultiChildLayoutDelegate, PreferredSizeView,
 };
 
+use crate::drawer::{
+    Drawer, DrawerAlignment, DrawerController, DrawerControllerState, DrawerHandle,
+};
 use crate::material::Material;
 use crate::theme::Theme;
 
@@ -100,6 +127,10 @@ const SLOT_APP_BAR: &str = "app_bar";
 const SLOT_BODY: &str = "body";
 /// The `floating_action_button` slot id — see [`ScaffoldLayoutDelegate`].
 const SLOT_FLOATING_ACTION_BUTTON: &str = "floating_action_button";
+/// The `drawer` slot id — see [`ScaffoldLayoutDelegate`].
+const SLOT_DRAWER: &str = "drawer";
+/// The `end_drawer` slot id — see [`ScaffoldLayoutDelegate`].
+const SLOT_END_DRAWER: &str = "end_drawer";
 
 /// The margin between a floating action button and the scaffold edge it
 /// floats near.
@@ -124,7 +155,7 @@ const FLOATING_ACTION_BUTTON_MARGIN: f32 = 16.0;
 ///     .app_bar(AppBar::new().title(Text::new("FLUI")))
 ///     .body(Text::new("Hello"));
 /// ```
-#[derive(Clone, StatelessView)]
+#[derive(Clone, StatefulView)]
 pub struct Scaffold {
     body: Option<BoxedView>,
     app_bar: Option<BoxedView>,
@@ -132,12 +163,20 @@ pub struct Scaffold {
     floating_action_button: Option<BoxedView>,
     resize_to_avoid_bottom_inset: bool,
     background_color: Option<Color>,
+    drawer: Option<Drawer>,
+    end_drawer: Option<Drawer>,
+    on_drawer_changed: Option<Rc<dyn Fn(bool)>>,
+    on_end_drawer_changed: Option<Rc<dyn Fn(bool)>>,
+    drawer_scrim_color: Option<Color>,
+    drawer_edge_drag_width: Option<f32>,
+    enable_open_drag_gesture: bool,
 }
 
 impl Scaffold {
     /// An empty `Scaffold`: no app bar, no body, no floating action button,
-    /// `resize_to_avoid_bottom_inset: true`, and a `background_color`
-    /// falling back to `ColorScheme.surface`.
+    /// no drawer/end-drawer, `resize_to_avoid_bottom_inset: true`,
+    /// `enable_open_drag_gesture: true`, and a `background_color` falling
+    /// back to `ColorScheme.surface`.
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -147,6 +186,13 @@ impl Scaffold {
             floating_action_button: None,
             resize_to_avoid_bottom_inset: true,
             background_color: None,
+            drawer: None,
+            end_drawer: None,
+            on_drawer_changed: None,
+            on_end_drawer_changed: None,
+            drawer_scrim_color: None,
+            drawer_edge_drag_width: None,
+            enable_open_drag_gesture: true,
         }
     }
 
@@ -195,6 +241,60 @@ impl Scaffold {
         self.background_color = Some(color);
         self
     }
+
+    /// Sets the start-side drawer, opened via
+    /// [`DrawerHandle::open_drawer`]/edge-swipe from the start edge.
+    #[must_use]
+    pub fn drawer(mut self, drawer: Drawer) -> Self {
+        self.drawer = Some(drawer);
+        self
+    }
+
+    /// Sets the end-side drawer, opened via
+    /// [`DrawerHandle::open_end_drawer`]/edge-swipe from the end edge.
+    #[must_use]
+    pub fn end_drawer(mut self, end_drawer: Drawer) -> Self {
+        self.end_drawer = Some(end_drawer);
+        self
+    }
+
+    /// Called whenever the start-side drawer opens or closes.
+    #[must_use]
+    pub fn on_drawer_changed(mut self, callback: impl Fn(bool) + 'static) -> Self {
+        self.on_drawer_changed = Some(Rc::new(callback));
+        self
+    }
+
+    /// Called whenever the end-side drawer opens or closes.
+    #[must_use]
+    pub fn on_end_drawer_changed(mut self, callback: impl Fn(bool) + 'static) -> Self {
+        self.on_end_drawer_changed = Some(Rc::new(callback));
+        self
+    }
+
+    /// Overrides both drawers' scrim color. Defaults to `Colors.black54`.
+    #[must_use]
+    pub fn drawer_scrim_color(mut self, color: Color) -> Self {
+        self.drawer_scrim_color = Some(color);
+        self
+    }
+
+    /// Overrides both drawers' closed-state edge-drag detection width.
+    #[must_use]
+    pub fn drawer_edge_drag_width(mut self, width: f32) -> Self {
+        self.drawer_edge_drag_width = Some(width);
+        self
+    }
+
+    /// Whether either drawer can be opened with an edge-swipe from closed.
+    /// Defaults to `true`. Applies to both `drawer` and `end_drawer` — see
+    /// the module docs' deferred-and-named note on the per-side split this
+    /// substrate does not (yet) expose.
+    #[must_use]
+    pub fn enable_open_drag_gesture(mut self, enabled: bool) -> Self {
+        self.enable_open_drag_gesture = enabled;
+        self
+    }
 }
 
 impl Default for Scaffold {
@@ -212,6 +312,8 @@ impl std::fmt::Debug for Scaffold {
                 "has_floating_action_button",
                 &self.floating_action_button.is_some(),
             )
+            .field("has_drawer", &self.drawer.is_some())
+            .field("has_end_drawer", &self.end_drawer.is_some())
             .field(
                 "resize_to_avoid_bottom_inset",
                 &self.resize_to_avoid_bottom_inset,
@@ -220,20 +322,107 @@ impl std::fmt::Debug for Scaffold {
     }
 }
 
-impl StatelessView for Scaffold {
-    fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
+/// Publishes a [`DrawerHandle`] to a [`Scaffold`]'s subtree — the runtime
+/// capability to open/close its drawer/end-drawer. Flutter parity:
+/// `_ScaffoldScope`/`Scaffold.of`, narrowed to the drawer runtime API (this
+/// substrate's `ScaffoldState` has no snack-bar/bottom-sheet API yet).
+#[derive(Clone, Debug)]
+pub struct ScaffoldScope {
+    handle: DrawerHandle,
+    child: BoxedView,
+}
+
+impl ScaffoldScope {
+    /// Access the nearest ancestor [`Scaffold`]'s [`DrawerHandle`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if there is no [`Scaffold`] ancestor. Use
+    /// [`maybe_of`](Self::maybe_of) for a non-panicking variant.
+    #[must_use]
+    pub fn of(ctx: &dyn BuildContext) -> DrawerHandle {
+        Self::maybe_of(ctx).expect(
+            "ScaffoldScope::of called with no Scaffold ancestor in the tree — wrap the subtree \
+             in a Scaffold, or use ScaffoldScope::maybe_of with a caller-chosen fallback",
+        )
+    }
+
+    /// Look up the nearest ancestor [`Scaffold`]'s [`DrawerHandle`]. Returns
+    /// `None` if there is no [`Scaffold`] ancestor.
+    ///
+    /// No dependency is registered: the handle is a stable capability object
+    /// (its own methods read live state), not a value whose *identity*
+    /// changing should trigger a rebuild — same reasoning `crate::theme::Theme`'s
+    /// sibling lookups document for other stable ambient handles.
+    #[must_use]
+    pub fn maybe_of(ctx: &dyn BuildContext) -> Option<DrawerHandle> {
+        ctx.get::<Self, _>(|scope| scope.handle.clone())
+    }
+}
+
+impl InheritedView for ScaffoldScope {
+    type Data = DrawerHandle;
+
+    fn data(&self) -> &Self::Data {
+        &self.handle
+    }
+
+    fn child(&self) -> &dyn View {
+        &self.child
+    }
+
+    fn update_should_notify(&self, _old: &Self) -> bool {
+        // The handle is the same stable object across every rebuild (created
+        // once in `ScaffoldState::create_state`) — nothing for a dependent
+        // to react to.
+        false
+    }
+}
+
+impl_inherited_view!(ScaffoldScope);
+
+/// Persistent state behind [`Scaffold`] — see the module docs' "Drawer
+/// wiring" section.
+pub struct ScaffoldState {
+    handle: DrawerHandle,
+}
+
+impl std::fmt::Debug for ScaffoldState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ScaffoldState")
+            .field("drawer_open", &self.handle.is_drawer_open())
+            .field("end_drawer_open", &self.handle.is_end_drawer_open())
+            .finish_non_exhaustive()
+    }
+}
+
+impl StatefulView for Scaffold {
+    type State = ScaffoldState;
+
+    fn create_state(&self) -> Self::State {
+        ScaffoldState {
+            handle: DrawerHandle::new(),
+        }
+    }
+}
+
+impl ViewState<Scaffold> for ScaffoldState {
+    fn build(&self, view: &Scaffold, ctx: &dyn BuildContext) -> impl IntoView {
         let theme = Theme::of(ctx);
-        let background_color = self.background_color.unwrap_or(theme.color_scheme.surface);
+        let background_color = view.background_color.unwrap_or(theme.color_scheme.surface);
         let media_query = MediaQuery::of(ctx);
+
+        self.handle.set_has_drawer(view.drawer.is_some());
+        self.handle.set_has_end_drawer(view.end_drawer.is_some());
 
         let mut children: Vec<LayoutId> = Vec::new();
 
-        if let Some(body) = &self.body {
+        if let Some(body) = &view.body {
             let mut reduced_media_query = media_query.clone();
-            if self.app_bar.is_some() {
+            if view.app_bar.is_some() {
                 reduced_media_query.padding.top = px(0.0);
             }
-            if self.resize_to_avoid_bottom_inset {
+            if view.resize_to_avoid_bottom_inset {
                 reduced_media_query.view_insets.bottom = px(0.0);
             }
             children.push(LayoutId::new(
@@ -242,8 +431,8 @@ impl StatelessView for Scaffold {
             ));
         }
 
-        if let Some(app_bar) = &self.app_bar {
-            let max_height = px(self.app_bar_preferred_height) + media_query.padding.top;
+        if let Some(app_bar) = &view.app_bar {
+            let max_height = px(view.app_bar_preferred_height) + media_query.padding.top;
             let cap = BoxConstraints {
                 max_height,
                 ..BoxConstraints::UNCONSTRAINED
@@ -254,11 +443,52 @@ impl StatelessView for Scaffold {
             ));
         }
 
-        if let Some(floating_action_button) = &self.floating_action_button {
+        if let Some(floating_action_button) = &view.floating_action_button {
             children.push(LayoutId::new(
                 SLOT_FLOATING_ACTION_BUTTON,
                 floating_action_button.clone(),
             ));
+        }
+
+        let drawer_slot = view.drawer.as_ref().map(|drawer| {
+            LayoutId::new(
+                SLOT_DRAWER,
+                self.build_drawer_controller(
+                    DrawerAlignment::Start,
+                    drawer,
+                    self.handle.drawer_key(),
+                    self.handle.is_drawer_open(),
+                    view.on_drawer_changed.clone(),
+                    view,
+                    ctx,
+                ),
+            )
+        });
+        let end_drawer_slot = view.end_drawer.as_ref().map(|end_drawer| {
+            LayoutId::new(
+                SLOT_END_DRAWER,
+                self.build_drawer_controller(
+                    DrawerAlignment::End,
+                    end_drawer,
+                    self.handle.end_drawer_key(),
+                    self.handle.is_end_drawer_open(),
+                    view.on_end_drawer_changed.clone(),
+                    view,
+                    ctx,
+                ),
+            )
+        });
+
+        // Flutter parity: `Scaffold.build` (`scaffold.dart:3211-3217`) — with
+        // the end drawer open, the start drawer is added first so the open
+        // end drawer's scrim/panel paint on top of, and hit-test before, the
+        // closed start drawer's edge strip; otherwise the reverse.
+        if self.handle.is_end_drawer_open() {
+            children.extend(drawer_slot);
+            children.extend(end_drawer_slot);
+        } else {
+            children.extend(end_drawer_slot);
+            children.extend(drawer_slot);
         }
 
         // Flutter oracle: `minInsets = MediaQuery.paddingOf(context).copyWith(
@@ -268,7 +498,7 @@ impl StatelessView for Scaffold {
         let min_insets = EdgeInsets::new(
             media_query.padding.top,
             media_query.padding.right,
-            if self.resize_to_avoid_bottom_inset {
+            if view.resize_to_avoid_bottom_inset {
                 media_query.view_insets.bottom
             } else {
                 px(0.0)
@@ -285,7 +515,7 @@ impl StatelessView for Scaffold {
         // `padding` (both name the same "safe area from the OS" concept
         // here), so `padding.bottom` is this substrate's `viewPadding.bottom`.
         let min_view_padding_bottom =
-            if self.resize_to_avoid_bottom_inset && media_query.view_insets.bottom != px(0.0) {
+            if view.resize_to_avoid_bottom_inset && media_query.view_insets.bottom != px(0.0) {
                 px(0.0)
             } else {
                 media_query.padding.bottom
@@ -296,15 +526,65 @@ impl StatelessView for Scaffold {
             min_view_padding_bottom,
         });
 
-        Material::new(background_color).child(CustomMultiChildLayout::new(delegate, children))
+        ScaffoldScope {
+            handle: self.handle.clone(),
+            child: Material::new(background_color)
+                .child(CustomMultiChildLayout::new(delegate, children))
+                .boxed(),
+        }
+    }
+}
+
+impl ScaffoldState {
+    /// Builds the [`DrawerController`] for one drawer slot, wiring its
+    /// `on_open_changed` to update [`DrawerHandle`]'s tracked opened-bool,
+    /// reschedule this `Scaffold`'s own rebuild (so the dynamic slot order
+    /// and `on_drawer_changed` relay both react), and forward to the app
+    /// author's callback.
+    #[allow(clippy::too_many_arguments, reason = "internal helper, not public API")]
+    fn build_drawer_controller(
+        &self,
+        alignment: DrawerAlignment,
+        drawer: &Drawer,
+        key: GlobalKey<DrawerControllerState>,
+        is_open: bool,
+        on_changed: Option<Rc<dyn Fn(bool)>>,
+        view: &Scaffold,
+        ctx: &dyn BuildContext,
+    ) -> DrawerController {
+        let handle = self.handle.clone();
+        let rebuild = ctx.rebuild_handle();
+        let set_opened: fn(&DrawerHandle, bool) = match alignment {
+            DrawerAlignment::Start => DrawerHandle::set_drawer_opened,
+            DrawerAlignment::End => DrawerHandle::set_end_drawer_opened,
+        };
+
+        let mut controller = DrawerController::new(key, alignment, drawer.clone())
+            .panel_width(drawer.configured_width())
+            .is_open(is_open)
+            .enable_open_drag_gesture(view.enable_open_drag_gesture)
+            .on_open_changed(move |opened| {
+                set_opened(&handle, opened);
+                rebuild.schedule();
+                if let Some(callback) = &on_changed {
+                    callback(opened);
+                }
+            });
+        if let Some(color) = view.drawer_scrim_color {
+            controller = controller.scrim_color(color);
+        }
+        if let Some(width) = view.drawer_edge_drag_width {
+            controller = controller.edge_drag_width(width);
+        }
+        controller
     }
 }
 
 /// The layout algorithm for [`Scaffold`]'s `app_bar` / `body` /
-/// `floating_action_button` slots.
+/// `floating_action_button` / `drawer` / `end_drawer` slots.
 ///
 /// Flutter parity: `_ScaffoldLayout` (`scaffold.dart:991-1308`), narrowed to
-/// the three slots this substrate ports — see the module docs for the full
+/// the five slots this substrate ports — see the module docs for the full
 /// deferred-slot list and the inset contract this delegate enforces.
 #[derive(Debug, Clone, PartialEq)]
 struct ScaffoldLayoutDelegate {
@@ -386,6 +666,20 @@ impl MultiChildLayoutDelegate for ScaffoldLayoutDelegate {
             .max(px(FLOATING_ACTION_BUTTON_MARGIN));
             let fab_y = content_bottom - fab_size.height - safe_margin;
             ctx.position_child(SLOT_FLOATING_ACTION_BUTTON, Offset::new(fab_x, fab_y));
+        }
+
+        // Flutter oracle: `_ScaffoldLayout.performLayout` (`scaffold.dart:1282-1289`)
+        // — both drawer slots are laid out tight at the scaffold's full size,
+        // pinned to the origin; each `DrawerController` handles its own
+        // internal open/closed sizing (an edge strip when closed, the full
+        // area when open).
+        if ctx.has_child(SLOT_DRAWER) {
+            ctx.layout_child(SLOT_DRAWER, BoxConstraints::tight(size));
+            ctx.position_child(SLOT_DRAWER, Offset::ZERO);
+        }
+        if ctx.has_child(SLOT_END_DRAWER) {
+            ctx.layout_child(SLOT_END_DRAWER, BoxConstraints::tight(size));
+            ctx.position_child(SLOT_END_DRAWER, Offset::ZERO);
         }
     }
 
