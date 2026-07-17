@@ -324,7 +324,12 @@ workspace = true
 
 # The facade surface (src/lib.rs): the layers an application author consumes.
 # Lower layers (rendering/painting/engine/platform) stay dev-deps — examples
-# reach them directly, app authors go through the widget layer.
+# reach them directly, app authors go through the widget layer. The two
+# design systems (flui-material/flui-cupertino) are regular dependencies,
+# not dev-deps: `src/lib.rs` re-exports them as `flui::material`/
+# `flui::cupertino`, and a `[dev-dependencies]` crate is unavailable to the
+# lib target itself. `flui` is on ADR-0028's design-system-dependent
+# allowlist alongside `flui-app` — see `scripts/check-workspace-inventory.sh`.
 [dependencies]
 flui-types = { path = "crates/flui-types", version = "0.2.0" }
 flui-geometry = { path = "crates/flui-geometry", version = "0.2.0" }
@@ -333,6 +338,8 @@ flui-view = { path = "crates/flui-view", version = "0.2.0" }
 flui-widgets = { path = "crates/flui-widgets", version = "0.2.0" }
 flui-animation = { path = "crates/flui-animation", version = "0.2.0" }
 flui-app = { path = "crates/flui-app", version = "0.2.0" }
+flui-material = { path = "crates/flui-material", version = "0.2.0" }
+flui-cupertino = { path = "crates/flui-cupertino", version = "0.2.0" }
 
 [dev-dependencies]
 # === Foundation Layer ===
@@ -362,11 +369,8 @@ flui-hot-reload = { path = "crates/flui-hot-reload", version = "0.2.0" }
 flui-binding = { path = "crates/flui-binding", version = "0.2.0" }
 parking_lot.workspace = true
 
-# === Material Design Layer (for the material_demo example + acceptance test) ===
-flui-material = { path = "crates/flui-material", version = "0.2.0" }
-
-# === Cupertino Design Layer ===
-flui-cupertino = { path = "crates/flui-cupertino", version = "0.2.0" }
+# NOTE: flui-material / flui-cupertino moved to [dependencies] above — the
+# facade's own src/lib.rs re-exports them as `flui::material`/`flui::cupertino`.
 
 # === Engine Layer (for GPU examples) ===
 flui-engine = { path = "crates/flui-engine", version = "0.2.0", features = ["dx12"] }

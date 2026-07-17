@@ -1,15 +1,20 @@
 //! The Material sample-app tree — shared, via `#[path]`-inclusion, between
 //! `examples/material_demo/main.rs` (mounted on a live window through
-//! `flui_app::run_app`) and the root-crate acceptance test
+//! `flui::run_app`) and the root-crate acceptance test
 //! `tests/material_demo.rs` (mounted headlessly through
 //! `flui_binding::HeadlessBinding`). Both consumers exercise the exact same
 //! tree, so the acceptance test proves the tree the example actually runs.
 //!
-//! Built entirely on `flui-material`'s and `flui-widgets`' public APIs — no
-//! raw render objects. This is the Catalog.1 Material sample-app exit
-//! criterion: "A Material sample app (`Scaffold` + `AppBar` +
-//! `FloatingActionButton` + a `ListView` of `Card`s + a `Dialog`) renders and
-//! is interactive."
+//! Built entirely on the `flui` facade's `flui::material` and
+//! `flui::prelude` surfaces (`flui-material`'s and `flui-widgets`' public
+//! APIs, one layer up) — no raw render objects. This is also the App.1
+//! facade proof-of-ergonomics migration: this is the one example migrated
+//! onto `flui::prelude`/`flui::material`/`flui::widgets`; the rest of the
+//! example tree still imports the layer crates directly (see
+//! `docs/ROADMAP.md`'s App.1 entry). It is also the Catalog.1 Material
+//! sample-app exit criterion: "A Material sample app (`Scaffold` +
+//! `AppBar` + `FloatingActionButton` + a `ListView` of `Card`s + a
+//! `Dialog`) renders and is interactive."
 //!
 //! # Composition
 //!
@@ -79,15 +84,15 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use flui_material::{
+use flui::material::{
     AlertDialog, AppBar, Card, DefaultTabController, ElevatedButton, FilledButton,
     FloatingActionButton, IconButton, InkWell, Scaffold, ScaffoldMessenger,
     ScaffoldMessengerHandle, ScaffoldMessengerScope, SnackBar, Tab, TabBar, TabBarView, TextButton,
     Theme, ThemeData, show_dialog,
 };
-use flui_view::RebuildHandle;
-use flui_widgets::column;
-use flui_widgets::prelude::*;
+use flui::prelude::*;
+use flui::view::RebuildHandle;
+use flui::widgets::column;
 
 /// How many cards the list starts with — enough to overflow any reasonably
 /// sized window, so the scroll acceptance test exercises a real overflow.
@@ -550,7 +555,7 @@ fn tabs_route() -> PageRoute<()> {
             Tab::new().text(COUNTER_TAB_LABEL),
             Tab::new().text(ABOUT_TAB_LABEL),
         ];
-        let pages: Vec<flui_view::BoxedView> = vec![
+        let pages: Vec<flui::view::BoxedView> = vec![
             Center::new().child(Text::new(OVERVIEW_TAB_TEXT)).boxed(),
             CounterTab.into_view().boxed(),
             Center::new().child(Text::new(ABOUT_TAB_TEXT)).boxed(),
