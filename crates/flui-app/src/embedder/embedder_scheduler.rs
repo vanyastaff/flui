@@ -17,7 +17,11 @@ use parking_lot::RwLock;
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
 pub struct SchedulerStats {
-    /// Target frames per second
+    /// Target frames per second, read from this snapshot's own
+    /// `flui_scheduler::Scheduler` instance — unrelated to
+    /// `AppConfig::target_fps` (App.1 vsync-pacing consumer audit: this
+    /// whole struct is unreachable from the running app until
+    /// `EmbedderScheduler` is wired in; see the struct's doc).
     pub target_fps: u32,
     /// Frame budget in milliseconds
     pub frame_budget_ms: f64,

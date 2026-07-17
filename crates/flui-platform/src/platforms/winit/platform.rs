@@ -28,6 +28,21 @@
 //! forever. [`ACTIVE_EVENT_LOOP`] publishes the live `ActiveEventLoop` for
 //! the exact duration of the `on_ready` call so `open_window` can create the
 //! window directly instead.
+//!
+//! # Vsync pacing
+//!
+//! [`WinitApp::about_to_wait`] pins the event loop's control flow to
+//! `ControlFlow::Wait` explicitly every iteration, even though `Wait` is
+//! winit's documented default when nothing sets it. This is deliberate,
+//! not decorative: `flui-app`'s frame loop is wake-driven (a redraw is
+//! requested only from `AppBinding::wake_frame`/`request_redraw`, never
+//! polled), and steady-state pacing for a frame that DOES present comes
+//! entirely from the GPU-side blocking Fifo present in `flui-engine`'s
+//! `Renderer::render_scene` (see the frame-pacing ADR). If a future winit
+//! release changed its own default away from `Wait` (e.g. to `Poll`), that
+//! pacing model would silently regress into a busy-spin with no compile or
+//! CI signal — pinning the value here turns an upstream default change
+//! into a one-line diff to review instead of a surprise.
 
 use std::{
     cell::Cell,
@@ -610,6 +625,12 @@ impl ApplicationHandler for WinitApp {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        // Explicit `Wait`, not a no-op: see the module doc's "Vsync pacing"
+        // section. Re-asserted every iteration so an upstream winit default
+        // change can't silently turn the wake-driven frame loop into a
+        // busy poll.
+        event_loop.set_control_flow(winit::event_loop::ControlFlow::Wait);
+
         // Process pending window creation requests
         self.process_window_requests(event_loop);
 

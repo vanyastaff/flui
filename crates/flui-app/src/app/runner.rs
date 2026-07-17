@@ -27,10 +27,14 @@ where
     // Initialize logging
     init_logging();
 
+    // `target_fps` is logged as advisory, not enforced: the desktop runner's
+    // steady-state pacing comes from the GPU-side blocking Fifo present
+    // (`flui-engine::wgpu::Renderer::render_scene`), not from this value —
+    // see `AppConfig::target_fps`'s doc for the full consumer audit.
     tracing::info!(
         title = %config.title,
         size = ?config.size,
-        fps = config.target_fps,
+        target_fps_advisory = config.target_fps,
         "Starting FLUI application"
     );
 
@@ -533,6 +537,187 @@ mod realm_dispatch_tests {
     }
 }
 
+// ============================================================================
+// Desktop frame-pacing gate (App.1 vsync pacing)
+// ============================================================================
+//
+// Extracted as free functions — pure, no realm/window/GPU state — so the
+// two decisions `run_desktop`'s frame callback makes each wake are unit
+// testable without a live event loop. See the frame-pacing ADR for the
+// full design: Fifo present blocks every PRESENTED frame at display
+// cadence (the steady-state pacing); these two functions cover what
+// happens on the frames that path never blocks: a spurious wake with
+// nothing to do (`should_render_frame`), and a frame that ran the pipeline
+// but never reached `present()` (`no_present_fallback_pace`).
+
+/// Whether a wake should run the frame pipeline at all.
+///
+/// `dirty` is true when there is real work (an inbox redraw request,
+/// `needs_redraw`, or dirty pipeline nodes); `frame_scheduled` is true when
+/// the global `Scheduler` has a pending ticker callback (a running
+/// `AnimationController` with no other dirty state). Either alone renders;
+/// neither means the wake was spurious and the frame is skipped with no
+/// render, no sleep, no GPU work — the loop returns to `ControlFlow::Wait`.
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+fn should_render_frame(dirty: bool, frame_scheduled: bool) -> bool {
+    dirty || frame_scheduled
+}
+
+/// Coarse fallback pace for a frame that ran the pipeline but never reached
+/// `present()`, applied only while a ticker keeps re-requesting a frame.
+///
+/// This throttles; it does not pace. An un-presented frame carries no vsync
+/// signal (Fifo's blocking present never engaged), so this is a fixed CPU-time
+/// bound, not frame-accurate cadence — good enough to keep a repeating
+/// controller behind a minimized/occluded window (or a `SurfaceLost` retry
+/// loop) from busy-spinning at CPU speed (observed pre-fix: ~30 000 fps).
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+const NO_PRESENT_FALLBACK_PACE: std::time::Duration = std::time::Duration::from_millis(16);
+
+/// Decides whether [`NO_PRESENT_FALLBACK_PACE`] applies this frame.
+///
+/// `presented` is `false` when `render_frame_entered`'s scene never reached
+/// `present()` — no damage, an occluded surface, or a lost surface.
+/// `keeps_gate_open` is `true` when another frame will be requested
+/// regardless (`AppBinding::needs_redraw` or the scheduler still has a
+/// ticker scheduled). The fallback is needed only when both hold: no vsync
+/// block happened AND something is about to wake this loop again anyway —
+/// that combination is the only busy-spin risk left once the fixed
+/// frame-budget sleep is gone. A presented frame needs no fallback (Fifo
+/// already paced it); an un-presented frame with nothing re-requesting a
+/// wake needs no fallback either (the loop just goes idle).
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+fn no_present_fallback_pace(presented: bool, keeps_gate_open: bool) -> Option<std::time::Duration> {
+    (!presented && keeps_gate_open).then_some(NO_PRESENT_FALLBACK_PACE)
+}
+
+/// App.1 vsync-pacing gate tests.
+///
+/// `run_desktop` itself opens a real window and GPU device, so it cannot
+/// run headlessly; `should_render_frame` and `no_present_fallback_pace`
+/// were pulled out specifically so the two decisions the frame callback
+/// makes each wake are covered here without one. Coverage map for the
+/// four invariants the frame-pacing ADR calls out:
+///
+/// - **Wake coalescing** (N `wake_frame` calls -> one draw): a
+///   PRE-EXISTING invariant, unchanged by this diff — pinned by
+///   `ui_realm::tests::redraw_requests_coalesce_to_one_flag_and_one_wake`.
+/// - **Idle = zero frames**: a PRE-EXISTING invariant (the dirty gate
+///   itself predates this diff; only its extraction into
+///   `should_render_frame` is new) — pinned by
+///   `idle_wake_with_no_dirty_work_and_no_scheduled_frame_renders_nothing`
+///   below.
+/// - **No-present fallback bound**: the actual delta this diff introduces —
+///   pinned by `no_present_fallback_bounds_repeating_no_present_wakes`.
+/// - **Ticker keeps the gate open**: the fallback's AND condition — pinned
+///   by `no_present_fallback_pace_requires_both_no_present_and_an_open_gate`
+///   (this module) and, at the binding layer, by
+///   `binding::tests::vsync_continuation_keeps_gate_open_while_running_and_closes_on_settle`.
+#[cfg(all(
+    test,
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+mod desktop_pacing_tests {
+    use std::time::{Duration, Instant};
+
+    use super::{NO_PRESENT_FALLBACK_PACE, no_present_fallback_pace, should_render_frame};
+
+    #[test]
+    fn idle_wake_with_no_dirty_work_and_no_scheduled_frame_renders_nothing() {
+        assert!(
+            !should_render_frame(false, false),
+            "a spurious wake with nothing dirty and no scheduled ticker must render zero frames"
+        );
+    }
+
+    #[test]
+    fn dirty_work_or_a_scheduled_ticker_alone_renders_a_frame() {
+        assert!(should_render_frame(true, false), "dirty work alone renders");
+        assert!(
+            should_render_frame(false, true),
+            "a scheduled ticker alone renders (keeps animations alive with no other dirty state)"
+        );
+        assert!(should_render_frame(true, true));
+    }
+
+    #[test]
+    fn no_present_fallback_pace_requires_both_no_present_and_an_open_gate() {
+        assert_eq!(
+            no_present_fallback_pace(true, true),
+            None,
+            "a presented frame needs no fallback — Fifo present already paced it"
+        );
+        assert_eq!(
+            no_present_fallback_pace(true, false),
+            None,
+            "a presented frame with a closing gate needs no fallback either"
+        );
+        assert_eq!(
+            no_present_fallback_pace(false, false),
+            None,
+            "an un-presented frame with nothing re-requesting a wake needs no fallback \
+             — the loop simply goes idle, no busy-spin risk"
+        );
+        assert_eq!(
+            no_present_fallback_pace(false, true),
+            Some(NO_PRESENT_FALLBACK_PACE),
+            "the only busy-spin risk: no present AND a ticker keeps re-requesting a frame"
+        );
+    }
+
+    /// Mutation-run target for item 3's FATAL fix: simulates the shape of
+    /// `run_desktop`'s frame callback for a window that never presents
+    /// (e.g. minimized/occluded) while a repeating ticker keeps
+    /// re-requesting a frame every wake — the exact scenario that used to
+    /// busy-spin at CPU speed (observed pre-fix: ~30 000 fps) once the
+    /// fixed frame-budget sleep this diff removes was the only thing
+    /// bounding it.
+    ///
+    /// This cannot drive the real winit closure (it requires a live event
+    /// loop), so it exercises the same predicate + `thread::sleep` pairing
+    /// `run_desktop` calls, in a tight loop bounded by wall-clock time.
+    /// Deleting the `sleep` (or the `if let Some` guard around it) turns
+    /// this from ~5 iterations in the test window into whatever the CPU
+    /// can spin through in that time — comfortably over the assertion's
+    /// generous ceiling.
+    #[test]
+    fn no_present_fallback_bounds_repeating_no_present_wakes() {
+        let window = Duration::from_millis(80);
+        let deadline = Instant::now() + window;
+        let mut iterations = 0u32;
+
+        while Instant::now() < deadline {
+            iterations += 1;
+            let presented = false; // simulated: no damage / occluded / surface lost
+            let keeps_gate_open = true; // simulated: a repeating AnimationController
+            if let Some(pace) = no_present_fallback_pace(presented, keeps_gate_open) {
+                std::thread::sleep(pace);
+            }
+        }
+
+        assert!(
+            iterations < 50,
+            "no-present fallback failed to bound the loop: {iterations} iterations in \
+             {window:?} (expected roughly window / NO_PRESENT_FALLBACK_PACE, generously \
+             capped) — a busy-spin without it would rack up orders of magnitude more",
+        );
+    }
+}
+
 #[cfg(all(
     not(target_os = "android"),
     not(target_os = "ios"),
@@ -737,13 +922,9 @@ where
         // 6. Register frame callback -> scheduler + AppBinding::render_frame()
         let renderer_frame = Arc::clone(&renderer);
         let worker_driver_frame = Arc::clone(&worker_driver);
-        let frame_budget =
-            std::time::Duration::from_secs_f64(1.0 / f64::from(config.target_fps.max(1)));
-        let last_frame_started = Arc::new(Mutex::new(None::<web_time::Instant>));
         window.on_request_frame(Box::new(move || {
         let renderer_frame = Arc::clone(&renderer_frame);
         let worker_driver_frame = Arc::clone(&worker_driver_frame);
-        let last_frame_started = Arc::clone(&last_frame_started);
         let _ = dispatch_platform_realm(realm_dispatch, RealmEvent::Frame(Box::new(move |realm| {
             if let Some(ref mut driver) = *worker_driver_frame.lock()
                 && matches!(driver.poll(), WorkerPollOutcome::Reloaded { .. })
@@ -776,34 +957,11 @@ where
 
             let dirty =
                 inbox_redraw || binding.needs_redraw() || binding.has_pending_work(realm);
-            if !dirty && !scheduler.is_frame_scheduled() {
+            if !should_render_frame(dirty, scheduler.is_frame_scheduled()) {
                 return;
             }
 
-        // On-demand rendering: skip frame if nothing changed. A frame
-        // the SCHEDULER scheduled (a pending animation ticker callback)
-        // counts as work: `needs_redraw` is cleared by `mark_rendered`
-        // at the end of the previous frame, so without this check the
-        // gate starves tickers after one frame — the wake hook gets the
-        // event loop here, and this lets the pump actually run.
-        // Pace pure ticker-driven frames to the configured target FPS.
-        // WM_PAINT-style redraw requests carry no vsync: an animation
-        // re-requesting a redraw every frame would otherwise spin the
-        // render loop as fast as the CPU allows (observed: ~30 000 fps
-        // with a Mailbox present mode). Dirty work renders immediately.
-            if !dirty && let Some(started) = *last_frame_started.lock() {
-            let elapsed = started.elapsed();
-            if elapsed < frame_budget {
-                std::thread::sleep(
-                    frame_budget
-                        .checked_sub(elapsed)
-                        .expect("BUG: `elapsed < frame_budget` was checked on the previous line"),
-                );
-            }
-        }
-
             let now = web_time::Instant::now();
-            *last_frame_started.lock() = Some(now);
 
         // Scheduler callbacks (animations). NOTE: the global `Scheduler` is driven
         // off this per-frame `Instant::now()`, while the tree-bound `Vsync`
@@ -816,10 +974,10 @@ where
         // microtasks + the single async-driver poll) -> persistent callbacks ->
         // the pipeline below -> post-frame callbacks -> Idle. `HeadlessBinding`
         // drives the same helper on its binding-local scheduler.
-            scheduler.drive_frame(now, || {
+            let presented = scheduler.drive_frame(now, || {
             // Render frame via AppBinding
             let mut r = renderer_frame.lock();
-                binding.render_frame_entered(realm, &mut *r);
+                let did_present = binding.render_frame_entered(realm, &mut *r);
 
             // GPU device-loss recovery: if the device was lost during this frame
             // (detected by the wgpu callback that fired between render_frame calls),
@@ -845,7 +1003,25 @@ where
                     }
                 }
             }
+                did_present
             });
+
+        // No-present fallback throttle. Fifo present (the default, see
+        // `select_present_mode`) blocks every PRESENTED frame at display
+        // cadence — that IS the steady-state pacing, which is why the fixed
+        // frame-budget sleep this replaced is gone. A frame that never
+        // reaches `present()` (no damage, occluded surface, surface lost)
+        // gets none of that blocking, so if nothing else is going to wake
+        // this loop, an unpaced wake is harmless: the loop falls back to
+        // `ControlFlow::Wait` and blocks on the next real event. The
+        // busy-spin this guards against (observed: ~30 000 fps) only
+        // happens when a ticker/animation keeps re-requesting a frame every
+        // wake with nothing pacing it — `no_present_fallback_pace` fires
+        // only in exactly that combination.
+            let keeps_gate_open = binding.needs_redraw() || scheduler.is_frame_scheduled();
+            if let Some(pace) = no_present_fallback_pace(presented, keeps_gate_open) {
+                std::thread::sleep(pace);
+            }
         })));
     }));
 

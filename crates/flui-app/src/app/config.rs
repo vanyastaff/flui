@@ -43,7 +43,28 @@ pub struct AppConfig {
     /// Whether to enable vsync.
     pub vsync: bool,
 
-    /// Target frame rate (FPS).
+    /// Advisory target frame rate (FPS) — **not enforced pacing**.
+    ///
+    /// The desktop runner's steady-state pacing comes from the GPU-side
+    /// blocking Fifo present (`flui-engine::wgpu::Renderer::render_scene`
+    /// blocks in `present()` until the next vsync for every frame that
+    /// actually presents), not from this value. Consumer audit (App.1
+    /// vsync pacing):
+    /// - `run_app_with_config_impl` logs it (`target_fps_advisory`) at
+    ///   startup; informational only.
+    /// - `EmbedderScheduler::stats` (`flui-app::embedder`) reports it from
+    ///   a *separate* `flui_scheduler::Scheduler` instance's own
+    ///   `target_fps`, unrelated to this field; `EmbedderScheduler` itself
+    ///   is unwired scaffolding, not reachable from the running app.
+    /// - `flui-platform`'s `PlatformCapabilities::default_target_fps` is a
+    ///   platform-reported hint (e.g. `120` for a ProMotion display) that
+    ///   nothing currently reads into this field — `AppConfig::default`
+    ///   hardcodes `60` regardless of platform.
+    ///
+    /// The one place a target-fps-shaped value governs anything real is
+    /// the no-present fallback throttle in `runner.rs`'s `run_desktop`
+    /// (a fixed ~1/60s constant, not derived from this field) — see the
+    /// frame-pacing ADR.
     pub target_fps: u32,
 
     /// Whether to show performance overlay.
@@ -132,7 +153,8 @@ impl AppConfig {
         self
     }
 
-    /// Set the target frame rate.
+    /// Set the advisory target frame rate. See [`AppConfig::target_fps`] —
+    /// this does not change how the frame loop is paced.
     pub fn with_target_fps(mut self, fps: u32) -> Self {
         self.target_fps = fps;
         self

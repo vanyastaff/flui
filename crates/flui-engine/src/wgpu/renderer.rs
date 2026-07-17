@@ -932,21 +932,33 @@ impl Renderer {
         }
     }
 
-    /// Select present mode based on capabilities
+    /// Select present mode based on capabilities.
+    ///
+    /// Fifo (vsync-blocked present) is the default. `render_scene`'s blocking
+    /// `get_current_texture()`/`present()` pair against Fifo is the
+    /// steady-state pacing mechanism for the whole frame loop: every
+    /// PRESENTED frame blocks at display cadence, which is what lets
+    /// `flui-app`'s runner drop its fixed frame-budget sleep in favor of a
+    /// real vsync block (see the frame-pacing ADR). Mailbox (triple
+    /// buffering, uncapped present, lower latency) is a documented future
+    /// opt-in for latency-sensitive apps that accept trading pacing for
+    /// responsiveness — it is not the default because pairing an uncapped
+    /// present mode with a wake-driven redraw loop reproduces the exact
+    /// busy-spin (~30 000 fps, observed) this pacing model exists to avoid.
+    ///
+    /// NB: Fifo does not cure live-resize wobble either — it blocks on
+    /// vsync and ghosts a stale frame during the modal resize loop, same as
+    /// Mailbox stretching the in-flight frame. The wobble is inherent
+    /// flip-model DWM compositing; the only real fix is DXGI_SCALING_NONE,
+    /// which wgpu 29 does not expose.
     fn select_present_mode(surface_caps: &wgpu::SurfaceCapabilities) -> wgpu::PresentMode {
-        // Prefer Mailbox (triple buffering, low latency) > Fifo (vsync).
-        // NB: neither cures live-resize wobble — Mailbox stretches the in-flight
-        // frame, Fifo blocks on vsync and ghosts a stale frame during the modal
-        // resize loop. The wobble is inherent flip-model DWM compositing; the only
-        // real fix is DXGI_SCALING_NONE, which wgpu 29 does not expose.
-        if surface_caps
-            .present_modes
-            .contains(&wgpu::PresentMode::Mailbox)
-        {
-            wgpu::PresentMode::Mailbox
-        } else {
-            wgpu::PresentMode::Fifo // Always supported
-        }
+        debug_assert!(
+            surface_caps
+                .present_modes
+                .contains(&wgpu::PresentMode::Fifo),
+            "BUG: wgpu guarantees Fifo is always a supported present mode"
+        );
+        wgpu::PresentMode::Fifo
     }
 
     /// Resize the surface
@@ -1060,7 +1072,15 @@ impl Renderer {
     /// For scenes containing `BackdropFilterLayer`, the render flow supports
     /// mid-frame flush: painter batches are submitted early so the surface
     /// texture can be copied, blurred, and composited before continuing.
-    pub fn render_scene(&mut self, scene: &flui_layer::Scene) -> Result<(), EngineError> {
+    /// Renders `scene` and returns whether it actually reached `present()`.
+    ///
+    /// `Ok(false)` covers every path that skips presentation without error —
+    /// no damage, or the surface reporting `Occluded` — and carries no vsync
+    /// signal: Fifo's blocking present never engaged, so the caller got no
+    /// pacing out of this call. `Ok(true)` means `present()` ran, which
+    /// (under the default Fifo present mode) blocked until the next vsync —
+    /// the steady-state pacing the frame loop relies on.
+    pub fn render_scene(&mut self, scene: &flui_layer::Scene) -> Result<bool, EngineError> {
         // Fine-grained damage tracking is the caller's responsibility: the
         // application layer calls `mark_dirty()` / `mark_full_repaint()` after
         // input events or state changes. When flui-view is wired up, widgets
@@ -1082,15 +1102,15 @@ impl Renderer {
 
         // Check if we need to render at all
         if !self.damage_tracker.has_damage() && !self.damage_tracker.needs_full_repaint() {
-            // Nothing changed — skip this frame entirely
+            // Nothing changed — skip this frame entirely; no present, no vsync block.
             tracing::trace!("Skipping frame: no damage");
-            return Ok(());
+            return Ok(false);
         }
 
         // Acquire the swapchain texture; returns None when the frame should be
         // skipped (Occluded), or Err for unrecoverable surface states.
         let Some(output) = self.acquire_surface_texture()? else {
-            return Ok(());
+            return Ok(false);
         };
 
         let view = output
@@ -1209,7 +1229,7 @@ impl Renderer {
         // Reset damage for next frame
         self.damage_tracker.reset();
 
-        Ok(())
+        Ok(true)
     }
 
     /// Acquire the current swapchain texture, handling device-lost and all
