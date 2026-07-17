@@ -21,32 +21,26 @@
 //! | selected row color | `colorScheme.primary` @ `8%` opacity | `build`'s `defaultRowColor` |
 //! | `Checkbox.width` (checkbox column formula) | `18.0` | `checkbox.dart` |
 //!
-//! Two corrections against this task's initial brief, both verified at the
-//! tag rather than assumed: the data row height default is
-//! `kMinInteractiveDimension` (`48.0`), not `52.0`; the heading text style is
-//! `TextTheme.titleSmall`, not `labelLarge` — `data_table.dart` at `3.44.0`
-//! has no `_DataTableDefaultsM3` token-class layer at all (unlike the button
-//! family), so every default above is a bare literal or a direct
-//! `TextTheme`/`ColorScheme` read, confirmed by grepping the oracle file
-//! directly rather than assuming an M3-tokens indirection exists.
+//! `data_table.dart` at `3.44.0` has no `_DataTableDefaultsM3` token-class
+//! layer at all (unlike the button family) — every default above is a bare
+//! literal or a direct `TextTheme`/`ColorScheme` read. The data row height
+//! default is `kMinInteractiveDimension` (`48.0`), not `52.0`; the heading
+//! text style is `TextTheme.titleSmall`, not `labelLarge`.
 //!
 //! # Layout: genuine per-column intrinsic sizing, not a fallback
 //!
 //! Flutter's `DataTable` lays out over a custom `Table`/`RenderTable` with
-//! per-column `IntrinsicColumnWidth` sizing. FLUI already has the same
-//! machinery — [`flui_widgets::Table`] over [`flui_objects::RenderTable`],
-//! including
-//! [`TableColumnWidth::Intrinsic`] with the oracle's own 4-pass
-//! grow/shrink algorithm (`rendering/table.dart:1070-1236`, ported in
-//! `flui-objects/src/layout/table.rs`). V1 therefore uses the SAME default
-//! heuristic as the oracle (`_initOnlyTextColumn`/`build`'s column-width
-//! selection, `data_table.dart:1148-1155`): the single non-numeric column
-//! (if there is exactly one) gets `Intrinsic { flex: Some(1.0) }`, every
-//! other column gets `Intrinsic { flex: None }`, and [`DataColumn::column_width`]
+//! per-column `IntrinsicColumnWidth` sizing. FLUI has the same machinery —
+//! [`flui_widgets::Table`] over [`flui_objects::RenderTable`], including
+//! [`TableColumnWidth::Intrinsic`] with the oracle's own 4-pass grow/shrink
+//! algorithm (`rendering/table.dart:1070-1236`, ported in
+//! `flui-objects/src/layout/table.rs`). V1 uses the SAME default heuristic
+//! as the oracle (`_initOnlyTextColumn`/`build`'s column-width selection,
+//! `data_table.dart:1148-1155`): the single non-numeric column (if there is
+//! exactly one) gets `Intrinsic { flex: Some(1.0) }`, every other column
+//! gets `Intrinsic { flex: None }`, and [`DataColumn::column_width`]
 //! overrides either with any [`TableColumnWidth`] (the oracle's
-//! `DataColumn.columnWidth`). No fixed/flex compromise was needed — the
-//! "layout reality check" this task opened with does not hold for this
-//! codebase.
+//! `DataColumn.columnWidth`).
 //!
 //! # Composition: per-cell `InkWell`, not a row-spanning `TableRowInkWell`
 //!
@@ -618,6 +612,22 @@ fn default_row_color(primary: Color) -> RowColorProperty {
     })
 }
 
+/// A data row's resolved background color for `states`: the widget/theme
+/// `data_row_color` cascade if it resolves to a color for these states, else
+/// `default_row_color`. Flutter parity: `build`'s
+/// `rowColor ?? defaultRowColor.resolve(states)` (`data_table.dart`, oracle
+/// tag `3.44.0`) — this is the value `build` passes as [`row_decoration`]'s
+/// `color` argument for every data row.
+fn resolve_row_color(
+    data_row_color: Option<&RowColorProperty>,
+    default_row_color: &RowColorProperty,
+    states: WidgetStates,
+) -> Option<Color> {
+    data_row_color
+        .and_then(|property| property.resolve(&states))
+        .or_else(|| default_row_color.resolve(&states))
+}
+
 /// The active [`WidgetStates`] for a data row: `Selected` when the row is
 /// selected, `Disabled` when at least one row in the table is selectable but
 /// this one is not. Flutter parity: `build`'s per-row `states` set
@@ -1013,11 +1023,11 @@ impl StatelessView for DataTable {
         for (row_index, row) in self.rows.iter().enumerate() {
             let is_disabled = any_row_selectable && row.on_select_changed.is_none();
             let states = row_states(row.selected, is_disabled);
-            let row_color = style
-                .data_row_color
-                .as_ref()
-                .and_then(|property| property.resolve(&states))
-                .or_else(|| style.default_row_color.resolve(&states));
+            let row_color = resolve_row_color(
+                style.data_row_color.as_ref(),
+                &style.default_row_color,
+                states,
+            );
             let overlay = style.data_row_color.clone();
 
             let mut cells: Vec<BoxedView> = Vec::with_capacity(column_count);
@@ -1177,6 +1187,87 @@ mod tests {
             )
         );
         assert_eq!(style.default_row_color.resolve(&unselected), None);
+    }
+
+    #[test]
+    fn resolve_row_color_falls_through_to_the_default_when_no_cascade_is_set() {
+        let default = default_row_color(Color::rgb(1, 2, 3));
+        let selected = row_states(true, false);
+        assert_eq!(
+            resolve_row_color(None, &default, selected),
+            default.resolve(&selected),
+        );
+    }
+
+    #[test]
+    fn resolve_row_color_a_set_data_row_color_beats_the_primary_8_percent_default() {
+        // Mutation-honest: if `resolve_row_color` used the default before
+        // (or instead of) the cascade — e.g. `default.or(cascade)` instead
+        // of `cascade.or(default)` — this observes the DEFAULT'S color
+        // (primary@8%) instead of the override, and fails.
+        let overridden = Color::rgb(9, 9, 9);
+        let cascade = WidgetStateProperty::all(Some(overridden));
+        let default = default_row_color(Color::rgb(1, 2, 3)); // would resolve to primary@8% if selected
+        let selected = row_states(true, false);
+
+        let resolved = resolve_row_color(Some(&cascade), &default, selected);
+
+        assert_eq!(resolved, Some(overridden));
+        assert_ne!(
+            resolved,
+            default.resolve(&selected),
+            "the widget/theme override must win over the primary@8% default"
+        );
+    }
+
+    #[test]
+    fn resolve_row_color_a_cascade_that_resolves_to_none_for_these_states_falls_through() {
+        // The cascade is present but returns no color for THIS state set
+        // (e.g. only overrides `Selected`) — must fall through to the
+        // default, not resolve to `None`.
+        let cascade: RowColorProperty = WidgetStateProperty::from_map([(
+            flui_widgets::WidgetStateConstraint::Is(WidgetState::Disabled),
+            Some(Color::rgb(9, 9, 9)),
+        )]);
+        let default = default_row_color(Color::rgb(1, 2, 3));
+        let selected = row_states(true, false); // Selected, not Disabled
+
+        assert_eq!(
+            resolve_row_color(Some(&cascade), &default, selected),
+            default.resolve(&selected),
+        );
+    }
+
+    #[test]
+    fn resolve_style_heading_row_color_widget_override_beats_theme_and_default() {
+        let mut theme = ThemeData::light();
+        let theme_color = Color::rgb(4, 5, 6);
+        theme.data_table_theme = Some(DataTableThemeData {
+            heading_row_color: Some(WidgetStateProperty::all(Some(theme_color))),
+            ..Default::default()
+        });
+        let widget_color = Color::rgb(9, 9, 9);
+        let table = DataTable::new(vec![text_column("Name")], Vec::new())
+            .heading_row_color(WidgetStateProperty::all(Some(widget_color)));
+
+        let style = resolve_style(&table, &theme);
+
+        assert_eq!(style.heading_row_color, Some(widget_color));
+    }
+
+    #[test]
+    fn resolve_style_heading_row_color_theme_tier_beats_the_default_when_unset_at_the_widget() {
+        let mut theme = ThemeData::light();
+        let theme_color = Color::rgb(4, 5, 6);
+        theme.data_table_theme = Some(DataTableThemeData {
+            heading_row_color: Some(WidgetStateProperty::all(Some(theme_color))),
+            ..Default::default()
+        });
+        let table = DataTable::new(vec![text_column("Name")], Vec::new());
+
+        let style = resolve_style(&table, &theme);
+
+        assert_eq!(style.heading_row_color, Some(theme_color));
     }
 
     // ---- only_text_column ----------------------------------------------------

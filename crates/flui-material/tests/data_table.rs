@@ -80,8 +80,8 @@ fn mounting_composes_a_render_table_with_row_major_children() {
 }
 
 /// The heading row is `56.0` tall and each data row is `48.0` tall
-/// (`kMinInteractiveDimension`) by default — verified at the oracle tag,
-/// NOT `52.0` (see `data_table.rs`'s module docs for the correction).
+/// (`kMinInteractiveDimension`) by default — verified at the oracle tag.
+/// The data row height is NOT `52.0`.
 #[test]
 fn default_row_heights_match_the_verified_m3_token_table() {
     let table = DataTable::new(
@@ -224,6 +224,81 @@ fn row_checkbox_tap_fires_on_select_changed_with_the_next_value() {
         *observed.borrow(),
         Some(true),
         "tapping an unselected, selectable row's checkbox must fire on_select_changed(true)"
+    );
+}
+
+/// Tapping a PLAIN data cell (not the checkbox) of a selectable row also
+/// fires `on_select_changed` with the row's next value — the row's own
+/// cells fall back to the row-selection toggle when they carry no
+/// `DataCell::on_tap` of their own.
+#[test]
+fn row_tap_on_a_plain_data_cell_fires_on_select_changed_with_the_next_value() {
+    let observed = Rc::new(RefCell::new(None));
+    let recorder = Rc::clone(&observed);
+    let table = DataTable::new(
+        vec![text_column("Name")],
+        vec![
+            DataRow::new(vec![text_cell("Ada")])
+                .selected(false)
+                .on_select_changed(move |next| *recorder.borrow_mut() = Some(next)),
+        ],
+    );
+    let laid = common::lay_out(themed(ThemeData::light(), table), loose(400.0));
+    let render_table = laid.find_by_render_type("RenderTable").unwrap();
+
+    // [heading checkbox(0), heading Name(1), row checkbox(2), row Name(3)] —
+    // index 3 is the plain data cell, deliberately NOT the checkbox at 2.
+    let data_cell = laid.child(render_table, 3);
+    let (x, y) = center_of(&laid, data_cell);
+    laid.dispatch_pointer_down(x, y);
+    laid.dispatch_pointer_up(x, y);
+
+    assert_eq!(
+        *observed.borrow(),
+        Some(true),
+        "tapping a plain data cell of a selectable row must fire on_select_changed(true)"
+    );
+}
+
+/// `DataCell::on_tap` takes precedence over the row's selection toggle: a
+/// tap on a cell that sets its own `on_tap` fires that handler and does NOT
+/// also toggle the row. Flutter parity: `_buildDataCell`'s `if (onTap !=
+/// null ...) { InkWell(onTap: onTap, ...) } else if (onSelectChanged != null
+/// ...) { TableRowInkWell(...) }` — mutually exclusive branches, not both
+/// wired (`data_table.dart`, oracle tag `3.44.0`).
+#[test]
+fn data_cell_on_tap_fires_and_suppresses_the_row_selection_toggle() {
+    let cell_taps = Rc::new(RefCell::new(0));
+    let row_selects: Rc<RefCell<Vec<bool>>> = Rc::new(RefCell::new(Vec::new()));
+    let cell_recorder = Rc::clone(&cell_taps);
+    let row_recorder = Rc::clone(&row_selects);
+    let table = DataTable::new(
+        vec![text_column("Name")],
+        vec![
+            DataRow::new(vec![DataCell::new(Text::new("Ada")).on_tap(move || {
+                *cell_recorder.borrow_mut() += 1;
+            })])
+            .selected(false)
+            .on_select_changed(move |next| row_recorder.borrow_mut().push(next)),
+        ],
+    );
+    let laid = common::lay_out(themed(ThemeData::light(), table), loose(400.0));
+    let render_table = laid.find_by_render_type("RenderTable").unwrap();
+
+    let data_cell = laid.child(render_table, 3);
+    let (x, y) = center_of(&laid, data_cell);
+    laid.dispatch_pointer_down(x, y);
+    laid.dispatch_pointer_up(x, y);
+
+    assert_eq!(
+        *cell_taps.borrow(),
+        1,
+        "DataCell::on_tap must fire exactly once"
+    );
+    assert!(
+        row_selects.borrow().is_empty(),
+        "a cell with its own on_tap must NOT also fire the row's on_select_changed, got {:?}",
+        row_selects.borrow()
     );
 }
 
