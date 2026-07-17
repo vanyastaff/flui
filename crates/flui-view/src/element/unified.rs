@@ -430,16 +430,12 @@ where
             if let Some(parent_id) = self.behavior.render_id()
                 && let Some(pipeline_owner) = self.core.pipeline_owner()
             {
-                let mut owner = pipeline_owner.write();
-                let render_tree = owner.render_tree_mut();
-
-                if let Some(parent_node) = render_tree.get_mut(parent_id) {
-                    parent_node.remove_child(*child_render_id);
-                }
-
-                if let Some(child_node) = render_tree.get_mut(*child_render_id) {
-                    child_node.set_parent(None);
-                }
+                // `drop_child` clears both link directions in one call —
+                // see `RenderTree::drop_child`.
+                pipeline_owner
+                    .write()
+                    .render_tree_mut()
+                    .drop_child(parent_id, *child_render_id);
             }
         }
     }

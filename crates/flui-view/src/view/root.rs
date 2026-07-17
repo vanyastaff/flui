@@ -452,21 +452,15 @@ impl<V: View + Clone + 'static> RenderObjectElement for RootRenderElement<V> {
                 slot
             );
 
-            // Clear parent-child relationship in RenderTree
+            // Clear parent-child relationship in RenderTree. `drop_child`
+            // clears both link directions in one call — see
+            // `RenderTree::drop_child`.
             if let (Some(pipeline_owner), Some(parent_id)) = (&self.pipeline_owner, self.render_id)
             {
-                let mut owner = pipeline_owner.write();
-                let render_tree = owner.render_tree_mut();
-
-                // Remove child from parent's children list
-                if let Some(parent_node) = render_tree.get_mut(parent_id) {
-                    parent_node.remove_child(*child_render_id);
-                }
-
-                // Clear child's parent
-                if let Some(child_node) = render_tree.get_mut(*child_render_id) {
-                    child_node.set_parent(None);
-                }
+                pipeline_owner
+                    .write()
+                    .render_tree_mut()
+                    .drop_child(parent_id, *child_render_id);
             }
         }
     }
