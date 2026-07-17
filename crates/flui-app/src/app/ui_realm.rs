@@ -20,6 +20,7 @@
 //! generational [`RealmId`], so results stamped for a dead runtime are
 //! droppable by identity, not by convention.
 
+use std::cell::RefCell;
 use std::marker::PhantomData;
 use std::num::NonZeroU32;
 use std::sync::Arc;
@@ -404,6 +405,15 @@ pub(crate) struct UiRealm {
     /// with the runtime and every outstanding sender turns `OwnerGone`.
     sender_prototype: UiCommandSender,
     redraw_pending: Arc<AtomicBool>,
+    /// The [`AppBinding`](super::binding::AppBinding) this realm is bound to,
+    /// installed by [`Self::bind_to_app`]. `drain_commands`'s
+    /// `UiCommand::HotReload` arm applies against THIS, never
+    /// `AppBinding::instance()` directly — the latter would silently
+    /// reassemble the wrong (process-singleton) tree for a realm bound to a
+    /// standalone test instance (`UiRealm::for_test`). `RefCell` because
+    /// `bind_to_app` takes `&self`; construction happens before binding, so
+    /// this starts `None`.
+    hot_reload_bridge: RefCell<Option<super::binding::HotReloadBridge>>,
     /// Whether this instance owns the transitional process-wide claim.
     claimed: bool,
     /// `*const ()` is `!Send + !Sync`; `PhantomData` of it makes the runtime
@@ -495,6 +505,7 @@ impl UiRealm {
                 wake,
             },
             redraw_pending,
+            hot_reload_bridge: RefCell::new(None),
             claimed,
             _owner_affine: PhantomData,
         })
@@ -541,6 +552,12 @@ impl UiRealm {
     /// Connect the realm-owned widget tree to the transitional app host's
     /// render pipeline and scheduler services.
     pub(crate) fn bind_to_app(&self, app: &super::binding::AppBinding) {
+        // Same reasoning as `text_input_platform_bridge` below: install the
+        // bridge tied to THIS `app`, so a later `drain_commands` hot-reload
+        // arm applies against it instead of resolving `AppBinding::instance()`
+        // fresh (and, for `UiRealm::for_test`, wrong).
+        *self.hot_reload_bridge.borrow_mut() = Some(app.hot_reload_bridge());
+
         self.widgets.set_pipeline_owner(app.render_pipeline_arc());
         self.widgets.with_build_owner_mut(|owner| {
             owner.set_async_driver(Scheduler::instance().async_driver().clone());
@@ -602,8 +619,16 @@ impl UiRealm {
             };
             match command {
                 UiCommand::HotReload(tier) => {
-                    super::binding::AppBinding::instance().perform_hot_reload_entered(self, tier);
-                    report.invoked += 1;
+                    if let Some(bridge) = self.hot_reload_bridge.borrow().as_ref() {
+                        bridge.apply(self, tier);
+                        report.invoked += 1;
+                    } else {
+                        tracing::error!(
+                            "hot-reload command dropped: realm was never bound to an \
+                             AppBinding (drain_commands ran before bind_to_app)"
+                        );
+                        report.dropped_stale += 1;
+                    }
                 }
                 UiCommand::Navigation(command) => match command.apply_on_owner() {
                     Ok(_) => {
@@ -974,5 +999,79 @@ mod tests {
 
     fn test_route(name: &'static str) -> SimpleRoute<i32> {
         SimpleRoute::new(move |_ctx| SizedBox::new(1.0, 1.0).into_view().boxed()).named(name)
+    }
+
+    /// Serializes tests that read/write `AppBinding::instance()` (the
+    /// process-singleton), per the repo rule for tests mutating shared
+    /// binding state (AGENTS.md "Testing quirks"). nextest gives each test
+    /// its own process; `cargo test` runs them on threads in one process,
+    /// where two tests each asserting on the singleton's `needs_redraw` flag
+    /// could interleave.
+    static SINGLETON_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// `drain_commands`'s `UiCommand::HotReload` arm must apply against the
+    /// app THIS realm was bound to via `bind_to_app`, never
+    /// `AppBinding::instance()` directly — the exact stale-binding class
+    /// `TextInputPlatformBridge` exists to prevent for IME callbacks. A
+    /// realm built with `UiRealm::for_test` (a standalone, non-singleton
+    /// `AppBinding`) is precisely the case where hard-coding the singleton
+    /// silently reassembles the WRONG (unrelated, windowless) app's tree.
+    ///
+    /// Red-check: revert `drain_commands`'s hot-reload arm to
+    /// `super::binding::AppBinding::instance().perform_hot_reload_entered(self, tier)`
+    /// and this fails — `bound_app.needs_redraw()` stays false while the
+    /// unrelated singleton's flips instead.
+    #[test]
+    fn hot_reload_command_applies_to_the_bound_app_not_the_instance_singleton() {
+        let _serialized = SINGLETON_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+        // Deliberately NOT `AppBinding::instance()`.
+        let bound_app = super::super::binding::AppBinding::new();
+        let realm = UiRealm::for_test(&bound_app);
+
+        let singleton = super::super::binding::AppBinding::instance();
+        bound_app.mark_rendered();
+        singleton.mark_rendered();
+
+        realm
+            .command_sender()
+            .request_hot_reload(flui_hot_reload::HotReloadTier::HotReload)
+            .expect("inbox has room");
+
+        let report = realm.drain_commands();
+
+        assert_eq!(
+            report.invoked, 1,
+            "the hot-reload command must be applied, not dropped as stale"
+        );
+        assert!(
+            bound_app.needs_redraw(),
+            "hot reload must apply against the app the realm was bound to via bind_to_app"
+        );
+        assert!(
+            !singleton.needs_redraw(),
+            "hot reload must NOT reach for AppBinding::instance() when the realm was \
+             bound to a different, standalone app"
+        );
+    }
+
+    /// A realm that never called `bind_to_app` (so `hot_reload_bridge` is
+    /// still `None`) must drop a hot-reload command rather than panic or
+    /// silently resolve some other binding.
+    #[test]
+    fn hot_reload_command_on_an_unbound_realm_is_dropped_not_panicked() {
+        let _claim = REALM_TEST_LOCK.lock();
+        let runtime = UiRealm::new(noop_wake()).expect("runtime");
+
+        runtime
+            .command_sender()
+            .request_hot_reload(flui_hot_reload::HotReloadTier::HotReload)
+            .expect("inbox has room");
+
+        let report = runtime.drain_commands();
+        assert_eq!(report.invoked, 0);
+        assert_eq!(report.dropped_stale, 1);
     }
 }
