@@ -661,12 +661,6 @@ impl WidgetsBinding {
     // Root Widget Attachment
     // ========================================================================
 
-    // PORT-TARGET: flui-app runner root-bootstrap consolidation — the runner's `mount_root`
-    // hand-rolls its own root-element wiring instead of calling this method. Folding the two
-    // together requires first deciding which of the two coexisting element-tree ownership
-    // models (the by-id `ElementTree` vs. the recursive boxed-child tree the runner actually
-    // drives) is the single source of truth, so consolidation stays deferred until that
-    // ownership question is resolved.
     /// Attach a root widget to the binding.
     ///
     /// This creates the root element and schedules the first build.

@@ -772,15 +772,14 @@ where
                 // Use helper to insert (handles Protocol type)
                 let render_id = insert_render_object_helper(render_object, &mut pipeline_owner);
 
-                // Handle parent relationship
+                // Handle parent relationship. `adopt_child` writes the
+                // child's parent link and the parent's child-list entry in
+                // one call — the two directions can never be written
+                // independently (see `RenderTree::adopt_child`).
                 if let Some(parent_id) = core.parent_render_id() {
-                    let render_tree = pipeline_owner.render_tree_mut();
-                    if let Some(node) = render_tree.get_mut(render_id) {
-                        node.set_parent(Some(parent_id));
-                    }
-                    if let Some(parent_node) = render_tree.get_mut(parent_id) {
-                        parent_node.add_child(render_id);
-                    }
+                    pipeline_owner
+                        .render_tree_mut()
+                        .adopt_child(parent_id, render_id);
                 }
 
                 render_id

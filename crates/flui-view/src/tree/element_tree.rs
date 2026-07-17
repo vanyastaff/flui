@@ -808,6 +808,23 @@ impl ElementTree {
     /// Average/worst case O(element-tree size) for the DFS, plus O(children) per
     /// drifted render parent. The element walk completes before the pipeline
     /// owner is locked; the lock guards only the render tree.
+    ///
+    /// # Exempt from [`adopt_child`](flui_rendering::storage::RenderTree::adopt_child)
+    ///
+    /// `adopt_child` is the single-edge primitive for attaching ONE freshly
+    /// mounted child under its parent. This pass is a different shape: a
+    /// bulk diff of a parent's WHOLE children list against the element-slot
+    /// order, so it writes the parent-pointer sync loop and the
+    /// children-list rewrite loop separately rather than one `adopt_child`
+    /// call per child — an `adopt_child`-per-child here would re-derive the
+    /// same target list one element at a time for no benefit, and would
+    /// still need the separate stale-child eviction the children-list loop
+    /// already does. The two loops are still required to leave both edge
+    /// directions consistent; a debug-only invariant check at the end of
+    /// this function proves that rather than trusting it silently (this is
+    /// exactly the invariant the root-hop parent-link defect violated: a
+    /// child recorded in its parent's children list while its own `parent`
+    /// link disagreed).
     pub(crate) fn reorder_render_children_after_build(&mut self) {
         if !self.needs_render_reorder {
             return;
@@ -919,6 +936,36 @@ impl ElementTree {
                     parent_node.insert_child(target_index, child);
                 }
                 dirty_render_parents.insert(*parent_render);
+            }
+
+            // Invariant check (debug-only, O(desired_parent size)): the two
+            // loops above write the parent-pointer and the children-list
+            // separately, so prove they agree rather than trust it silently.
+            // This is exactly the asymmetry the root-hop parent-link defect
+            // produced — a child present in its parent's children list with
+            // its own `parent` link disagreeing (or missing).
+            #[cfg(debug_assertions)]
+            for (&render_id, &desired) in &desired_parent {
+                let Some(node) = render_tree.get(render_id) else {
+                    continue;
+                };
+                debug_assert_eq!(
+                    node.parent(),
+                    desired,
+                    "reorder pass: render node {render_id:?}'s parent link disagrees with the \
+                     desired parent the DFS computed for it — the two directions of a render-tree \
+                     edge must always be written consistently"
+                );
+                if let Some(parent_id) = desired {
+                    let parent_has_child = render_tree
+                        .get(parent_id)
+                        .is_some_and(|parent_node| parent_node.children().contains(&render_id));
+                    debug_assert!(
+                        parent_has_child,
+                        "reorder pass: render node {render_id:?} claims parent {parent_id:?}, \
+                         but that parent's children list does not contain it"
+                    );
+                }
             }
         }
 

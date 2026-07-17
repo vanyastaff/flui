@@ -396,16 +396,12 @@ where
             if let Some(parent_id) = self.behavior.render_id()
                 && let Some(pipeline_owner) = self.core.pipeline_owner()
             {
-                let mut owner = pipeline_owner.write();
-                let render_tree = owner.render_tree_mut();
-
-                if let Some(child_node) = render_tree.get_mut(*child_render_id) {
-                    child_node.set_parent(Some(parent_id));
-                }
-
-                if let Some(parent_node) = render_tree.get_mut(parent_id) {
-                    parent_node.add_child(*child_render_id);
-                }
+                // `adopt_child` writes both link directions in one call —
+                // see `RenderTree::adopt_child`.
+                pipeline_owner
+                    .write()
+                    .render_tree_mut()
+                    .adopt_child(parent_id, *child_render_id);
             }
         }
     }

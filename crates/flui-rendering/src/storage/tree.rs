@@ -486,6 +486,36 @@ impl RenderTree {
         Some(child_id)
     }
 
+    /// Adopts `child_id` under `parent_id`: sets the child's parent link AND
+    /// appends it to the parent's children list in one call, so the two
+    /// directions of a render-tree edge can never be written independently.
+    ///
+    /// [`insert_box_child`](Self::insert_box_child) /
+    /// [`insert_sliver_child`](Self::insert_sliver_child) already bake the
+    /// parent link into construction (`RenderNode::new_*_with_parent`), so
+    /// they do not need this. This primitive is for the shape
+    /// `RenderBehavior::on_mount` needs instead: the `RenderObject` is
+    /// minted with [`insert_box`](Self::insert_box) /
+    /// [`insert_sliver`](Self::insert_sliver) — no parent yet, because the
+    /// element does not know its render parent until after the object
+    /// exists — and is adopted under its parent as a second step. Before
+    /// this primitive existed, every such call site wrote `set_parent` and
+    /// `add_child` as two independent statements, which made the
+    /// parent-link / child-link asymmetry representable (and, at the root
+    /// hop, real: see `RootRenderElement`'s `ElementBase::render_id`
+    /// history).
+    ///
+    /// No-op per side when the corresponding id no longer resolves
+    /// (defensive, matching every other tree-mutation primitive here).
+    pub fn adopt_child(&mut self, parent_id: RenderId, child_id: RenderId) {
+        if let Some(child) = self.get_mut(child_id) {
+            child.set_parent(Some(parent_id));
+        }
+        if let Some(parent) = self.get_mut(parent_id) {
+            parent.add_child(child_id);
+        }
+    }
+
     /// Removes a node from the tree.
     ///
     /// Removes a node WITHOUT cascading to descendants.
