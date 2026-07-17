@@ -765,13 +765,19 @@ impl AppBinding {
     /// fire-and-forget best-effort, with no availability-discovery API to
     /// check first (see `flui_types::HapticFeedback`'s module doc).
     ///
+    /// `perform` runs *after* `with_window`'s `active_window` guard is
+    /// dropped — only the cheap `Arc` clone out of `haptics()` happens
+    /// under the lock, matching `TextInputPlatformBridge::attach`'s
+    /// clone-then-release shape. A backend whose `perform` blocks or
+    /// re-enters the binding must not stall every other window accessor
+    /// for the duration of one haptic call.
+    ///
     /// [`PlatformHaptics`]: flui_platform::traits::PlatformHaptics
     pub fn perform_haptic_feedback(&self, feedback: HapticFeedback) {
-        self.with_window(|window| {
-            if let Some(haptics) = window.haptics() {
-                haptics.perform(feedback);
-            }
-        });
+        let haptics = self.with_window(|window| window.haptics()).flatten();
+        if let Some(haptics) = haptics {
+            haptics.perform(feedback);
+        }
     }
 
     // ========================================================================

@@ -3,13 +3,14 @@
 //! [`HapticFeedback`] mirrors Flutter's `HapticFeedback` static methods
 //! 1:1 (`packages/flutter/lib/src/services/haptic_feedback.dart` @ 3.44.0):
 //! `vibrate()`, `lightImpact()`, `mediumImpact()`, `heavyImpact()`,
-//! `selectionClick()`, `successNotification`/`warningNotification`/
-//! `errorNotification` (added later, as members of `HapticFeedbackType` on
-//! `HapticFeedback.notification` — Flutter's own vocabulary grew once
-//! already after the original five landed). [`HapticFeedback`] is
-//! `#[non_exhaustive]` for the same reason: a future upstream or
-//! platform-specific style is an additive variant here, not a breaking
-//! change.
+//! `selectionClick()`, and `successNotification()`/`warningNotification()`/
+//! `errorNotification()` — three more plain statics, added later, each
+//! sending its own `'HapticFeedbackType.*Notification'` platform-channel
+//! payload string (there is no `notification(type)` method upstream to
+//! group them under) — Flutter's own vocabulary grew once already after
+//! the original five landed. [`HapticFeedback`] is `#[non_exhaustive]` for
+//! the same reason: a future upstream or platform-specific style is an
+//! additive variant here, not a breaking change.
 //!
 //! # Fire-and-forget, best-effort semantics
 //!
@@ -57,13 +58,13 @@ pub enum HapticFeedback {
     /// Mirrors `HapticFeedback.selectionClick()`.
     SelectionClick,
     /// A successful action/operation notification.
-    /// Mirrors `HapticFeedback.notification(NotificationFeedbackType.success)`.
+    /// Mirrors `HapticFeedback.successNotification()`.
     SuccessNotification,
     /// A warning notification.
-    /// Mirrors `HapticFeedback.notification(NotificationFeedbackType.warning)`.
+    /// Mirrors `HapticFeedback.warningNotification()`.
     WarningNotification,
     /// An error notification.
-    /// Mirrors `HapticFeedback.notification(NotificationFeedbackType.error)`.
+    /// Mirrors `HapticFeedback.errorNotification()`.
     ErrorNotification,
 }
 
