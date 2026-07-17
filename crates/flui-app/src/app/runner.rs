@@ -580,13 +580,19 @@ fn should_render_frame(dirty: bool, frame_scheduled: bool) -> bool {
 /// outcome: `needs_redraw`, a scheduled ticker, or dirty
 /// pipeline/build work left over from the frame that just ran.
 ///
-/// The pending-work leg matters for a frame that errored partway through
-/// (e.g. the pipeline transaction failed) and left dirty nodes behind but
-/// neither raised `needs_redraw` nor scheduled a ticker: without it, such a
-/// frame closes the gate, and — since it also never `present()`s — draws no
-/// `no_present_fallback_pace` throttle either. The loop then falls back to
-/// `ControlFlow::Wait` with real work still queued, sleeping through it
-/// until the next external input.
+/// This only feeds [`no_present_fallback_pace`]'s THROTTLE decision below —
+/// it cannot itself wake anything. A `ControlFlow::Wait` loop only wakes on
+/// an actual `wake_frame()`/platform `request_redraw()` call or external
+/// input; a dropped/errored frame's retry wake comes from
+/// `render_frame_entered`'s `retry_needed` path, not from this function.
+///
+/// The pending-work leg matters when a frame that left dirty pipeline/build
+/// nodes behind is ALSO being re-invoked by some other wake source without
+/// ever reaching `present()`: without this leg, such a frame would read
+/// `keeps_gate_open == false`, skip the fallback sleep, and the loop could
+/// spin at full CPU speed re-processing the same leftover work on every
+/// rapid re-wake instead of being bounded like any other no-present,
+/// gate-open frame.
 #[cfg(all(
     not(target_os = "android"),
     not(target_os = "ios"),
@@ -701,8 +707,9 @@ mod desktop_pacing_tests {
     fn pending_work_alone_keeps_the_gate_open() {
         assert!(
             keeps_frame_gate_open(false, false, true),
-            "an errored frame that left dirty pipeline/build nodes behind must keep the \
-             loop awake even with no `needs_redraw` and no scheduled ticker"
+            "a frame that left dirty pipeline/build nodes behind must keep the fallback-pace \
+             gate open (so the busy-spin throttle still applies on a rapid re-wake) even with \
+             no `needs_redraw` and no scheduled ticker"
         );
     }
 

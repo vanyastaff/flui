@@ -619,7 +619,15 @@ impl UiRealm {
             };
             match command {
                 UiCommand::HotReload(tier) => {
-                    if let Some(bridge) = self.hot_reload_bridge.borrow().as_ref() {
+                    // Cloned out of the `RefCell` (`HotReloadBridge` is cheap
+                    // `Arc`-clone `Clone`) BEFORE calling through — the same
+                    // take-out-of-the-slot discipline this method's own inbox
+                    // drain follows. `bridge.apply` runs arbitrary reassemble
+                    // code; holding the `Ref` guard across that call would
+                    // panic on any reentrant `bind_to_app` (the only
+                    // `borrow_mut` on this field) the reassemble triggers.
+                    let bridge = self.hot_reload_bridge.borrow().clone();
+                    if let Some(bridge) = bridge {
                         bridge.apply(self, tier);
                         report.invoked += 1;
                     } else {

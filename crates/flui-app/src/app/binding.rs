@@ -354,31 +354,10 @@ impl AppBinding {
             .write()
             .set_on_need_visual_update(move || visual_wake.wake_frame());
 
-        // Animation-wake wiring: scheduling a frame callback (a ticker
-        // tick) fires this hook on the scheduler's false→true
-        // `frame_scheduled` transition (Flutter parity:
-        // `SchedulerBinding.scheduleFrame` → platform `scheduleFrame`).
-        // Without it an AnimationController only advances on frames some
-        // OTHER source produces — after the first idle frame the ticker
-        // starves and the animation freezes.
-        //
-        // Deliberately NOT `wake_handle.into_callback()`: `Scheduler::instance()`
-        // is itself a thread-local singleton, so this hook is a shared resource
-        // between every `AppBinding` constructed on this thread — including a
-        // throwaway `AppBinding::new()` a test builds alongside the real
-        // singleton. A hook closing over ONE construction's `wake_handle` would
-        // get silently overwritten by the next `new()` call, leaving whichever
-        // binding built the hook first (often the real singleton) with a dead
-        // ticker and no diagnostic. Resolving `AppBinding::instance()` fresh on
-        // every fire instead makes reinstallation idempotent — every `new()`
-        // call installs the same semantic hook — and always wakes the ONE
-        // binding `instance()` actually resolves to on this thread, regardless
-        // of how many throwaway bindings were constructed after it. Same
-        // lock-safety argument as the visual-update hook above: `wake_frame`
-        // touches only the `active_window` leaf Mutex, never re-entering here.
-        Scheduler::instance().set_on_frame_scheduled(Some(Arc::new(|| {
-            AppBinding::instance().wake_frame();
-        })));
+        // Animation-wake wiring (the scheduler's `on_frame_scheduled` hook) is
+        // installed in `instance()`'s one-time initializer, NOT here — see
+        // that method's doc for why a per-construction install is wrong both
+        // for steal-proofing and for cross-thread wake correctness.
 
         // Create RendererBinding sharing the SAME PipelineOwner
         let renderer =
@@ -410,7 +389,54 @@ impl AppBinding {
         thread_local! {
             static INSTANCE: &'static AppBinding = {
             tracing::info!("Initializing AppBinding");
-            Box::leak(Box::new(AppBinding::new()))
+            let binding: &'static AppBinding = Box::leak(Box::new(AppBinding::new()));
+
+            // Animation-wake wiring: scheduling a frame callback (a ticker
+            // tick) fires this hook on the scheduler's false→true
+            // `frame_scheduled` transition (Flutter parity:
+            // `SchedulerBinding.scheduleFrame` → platform `scheduleFrame`).
+            // Without it an AnimationController only advances on frames some
+            // OTHER source produces — after the first idle frame the ticker
+            // starves and the animation freezes.
+            //
+            // The SAME hook also fires from the async-driver's task waker
+            // (`AsyncDriver::set_request_frame`, wired in
+            // `Scheduler::with_frame_duration`) whenever a spawned future's
+            // `Waker::wake` runs — and that can happen on a thread that never
+            // called `AppBinding::instance()` at all (an executor thread
+            // completing an image-decode future, for instance). This is
+            // installed HERE — once, in this thread-local singleton's
+            // one-time initializer, capturing THIS canonical binding's
+            // `frame_wake_callback()` (an `Arc`-backed, `Send + Sync` handle)
+            // — rather than in `AppBinding::new()` resolving
+            // `AppBinding::instance()` fresh on every fire, for two reasons:
+            //
+            // 1. Cross-thread correctness (the reason resolving at fire time
+            //    is wrong): `AppBinding::instance()` is itself thread-local.
+            //    A hook that calls it AT FIRE TIME, fired from some OTHER
+            //    thread, would lazily construct a brand-new, windowless
+            //    `AppBinding` for THAT thread and wake it instead of the
+            //    owner — a lost wake / async-task starvation, exactly what
+            //    the visual-update hook above (same reasoning, same fix
+            //    shape) already avoids by capturing an `Arc`-based handle
+            //    instead of re-resolving the thread-local. Capturing
+            //    `frame_wake_callback()` up front sidesteps thread-local
+            //    resolution entirely: firing it only ever touches `Send +
+            //    Sync` `Arc` state, so it wakes the correct binding
+            //    regardless of which thread calls it.
+            // 2. Steal-proofing: `Scheduler::instance()` is itself a
+            //    thread-local singleton, so this hook is a shared resource
+            //    between every `AppBinding` constructed on this thread.
+            //    Installing it from `AppBinding::new()` meant a throwaway
+            //    `AppBinding::new()` a test builds alongside the real
+            //    singleton would silently steal the hook toward its own
+            //    (about-to-be-dropped) wake handle. Installing it only here
+            //    means a throwaway `new()` never touches the shared hook at
+            //    all — this initializer runs exactly once per thread, for
+            //    the canonical singleton only.
+            Scheduler::instance().set_on_frame_scheduled(Some(binding.frame_wake_callback()));
+
+            binding
             };
         }
 
@@ -2013,9 +2039,10 @@ mod tests {
     /// A second `AppBinding::new()` (a throwaway test binding, constructed
     /// alongside the real thread-local singleton) must not steal the
     /// process-global `Scheduler::instance()`'s animation wake hook away
-    /// from the singleton — it used to, because `AppBinding::new()` closed
-    /// the hook over that ONE construction's own `wake_handle`, and every
-    /// later construction on this thread overwrote it.
+    /// from the singleton. `new()` itself never touches the hook at all —
+    /// only `AppBinding::instance()`'s one-time initializer installs it — so
+    /// this also doubles as the "a throwaway `new()` alone does not install"
+    /// check: there is nothing for it to steal.
     ///
     /// Drives the real mechanism end to end: `Scheduler::instance().request_frame()`
     /// firing `on_frame_scheduled` (the same hook a running `AnimationController`
@@ -2023,9 +2050,10 @@ mod tests {
     /// still reaches `AppBinding::instance()` (the real singleton) rather
     /// than the throwaway.
     ///
-    /// Red-check: revert `AppBinding::new()`'s scheduler-hook line back to
-    /// `wake_handle.into_callback()` and this fails — the throwaway
-    /// binding's construction below steals the hook, so the real
+    /// Red-check: move the `set_on_frame_scheduled` install back into
+    /// `AppBinding::new()` using a per-construction `wake_handle.into_callback()`
+    /// (the original bug this test was written for) and this fails — the
+    /// throwaway binding's construction below steals the hook, so the real
     /// singleton's `needs_redraw` never flips.
     #[test]
     fn a_second_binding_does_not_steal_the_real_singletons_scheduler_wake_hook() {
@@ -2056,6 +2084,92 @@ mod tests {
              animation wake hook away from the real singleton — an animation \
              driven through Scheduler::instance() would otherwise freeze with \
              no diagnostic the first time a test built an extra binding",
+        );
+    }
+
+    /// The blocking cross-thread case: `on_frame_scheduled` also fires from
+    /// the async-driver's task waker (`AsyncDriver::set_request_frame`, wired
+    /// in `Scheduler::with_frame_duration`) whenever a spawned future's
+    /// `Waker` wakes — and that can happen on a thread that never called
+    /// `AppBinding::instance()` (an executor thread completing an
+    /// image-decode future, for instance), NOT only on the owner thread a
+    /// ticker would fire from.
+    ///
+    /// A hook that resolved `AppBinding::instance()` AT FIRE TIME would
+    /// construct a brand-new, windowless `AppBinding` on the waking thread
+    /// and wake THAT instead of the owner — a lost wake indistinguishable
+    /// from the ticker-starvation bug this whole hook exists to prevent.
+    /// Capturing `frame_wake_callback()` once, in `instance()`'s
+    /// initializer, avoids ever touching a thread-local at fire time, so the
+    /// real singleton wakes regardless of which thread fires the hook.
+    ///
+    /// Drives the real mechanism: spawn a future on the real singleton's
+    /// `Scheduler`, poll it once (registering a real `TaskWaker`-backed
+    /// `Waker` via `drive_async_tasks`), then wake that `Waker` from a
+    /// spawned OS thread — exactly how a completed async task's waker fires
+    /// in production.
+    ///
+    /// Red-check: change the hook installed in `instance()` back to
+    /// resolving `AppBinding::instance()` inside the closure (fire-time
+    /// resolution) and this fails — the spawned thread constructs its own
+    /// windowless binding and wakes it instead of `real`.
+    #[test]
+    fn scheduler_wake_hook_wakes_the_real_singleton_when_fired_from_another_thread() {
+        let _serialized = SINGLETON_FRAME_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+        let real = AppBinding::instance();
+        let scheduler = flui_scheduler::Scheduler::instance();
+        if scheduler.is_frame_scheduled() {
+            scheduler.drive_frame(flui_scheduler::Instant::now(), || {});
+        }
+        real.mark_rendered();
+
+        // Register a waker on first poll instead of completing, so it can be
+        // fired later, from another thread, exactly like a pending
+        // image-decode future's `Waker` firing once the decode completes on
+        // an executor thread.
+        let waker_slot: Arc<Mutex<Option<std::task::Waker>>> = Arc::new(Mutex::new(None));
+        let waker_slot_for_future = Arc::clone(&waker_slot);
+        let _token = scheduler.spawn_local(Box::pin(async move {
+            std::future::poll_fn(move |cx| {
+                *waker_slot_for_future.lock() = Some(cx.waker().clone());
+                std::task::Poll::<()>::Pending
+            })
+            .await;
+        }));
+
+        // A full `drive_frame` (not a bare `drive_async_tasks`) both polls the
+        // task above (registering its waker) AND resets `frame_scheduled`
+        // back to `false`: `spawn_local` itself already requested a frame (a
+        // freshly spawned task needs one to be polled in), and
+        // `request_frame_impl`'s coalescing would otherwise treat the
+        // cross-thread wake below as already-scheduled and silently skip
+        // calling the hook — a false pass unrelated to what this test
+        // exists to check.
+        scheduler.drive_frame(flui_scheduler::Instant::now(), || {});
+        real.mark_rendered();
+
+        let waker = waker_slot
+            .lock()
+            .take()
+            .expect("the first poll must have registered a waker");
+
+        // The waking thread never calls `AppBinding::instance()` — mirroring
+        // an executor thread that has no reason to ever touch this crate's
+        // singleton directly.
+        std::thread::spawn(move || {
+            waker.wake_by_ref();
+        })
+        .join()
+        .expect("waker thread must not panic");
+
+        assert!(
+            real.needs_redraw(),
+            "a task waker firing from a non-owner thread must wake the REAL singleton \
+             (via its captured, Send+Sync frame_wake_callback), not lazily construct a \
+             fresh thread-local AppBinding on the waking thread",
         );
     }
 
@@ -2673,8 +2787,7 @@ mod tests {
 
     /// `render_frame_entered`'s retry gate: a frame dropped mid-render (surface
     /// lost) must not be treated as settled. Drives `render_frame_entered`
-    /// directly against a scripted `RasterBackend` — no GPU device required —
-    /// covering the error arm the audit found had zero tests.
+    /// directly against a scripted `RasterBackend` — no GPU device required.
     mod frame_retry_semantics {
         use flui_types::geometry::{Pixels, Rect};
 
