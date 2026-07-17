@@ -12,7 +12,7 @@
 //! ([`ListTile`], [`Divider`]/[`VerticalDivider`]), bottom navigation
 //! ([`NavigationBar`]/[`NavigationDestination`]), the chip family
 //! ([`Chip`], [`FilterChip`]), and secondary tabs ([`TabController`],
-//! [`DefaultTabController`], [`Tab`], [`TabBar`]).
+//! [`DefaultTabController`], [`Tab`], [`TabBar`], [`TabBarView`]).
 //!
 //! ## Flutter parity
 //!
@@ -94,6 +94,7 @@ pub mod shape;
 pub mod snack_bar;
 mod state_color;
 pub mod switch;
+pub mod tab_bar_view;
 pub mod tab_controller;
 pub mod tabs;
 pub mod text_button;
@@ -132,6 +133,7 @@ pub use scaffold_messenger::{
 pub use shape::MaterialShape;
 pub use snack_bar::{SnackBar, SnackBarAction, SnackBarActionState};
 pub use switch::{Switch, SwitchState};
+pub use tab_bar_view::{TabBarView, TabBarViewState};
 pub use tab_controller::{DefaultTabController, DefaultTabControllerState, TabController};
 pub use tabs::{Tab, TabBar, TabBarState};
 pub use text_button::TextButton;

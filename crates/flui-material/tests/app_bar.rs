@@ -11,11 +11,12 @@ mod common;
 
 use common::{lay_out, loose, tight};
 use flui_material::{AppBar, AppBarThemeData, Theme, ThemeData, ThemeDataOverrides};
-use flui_types::EdgeInsets;
 use flui_types::geometry::px;
+use flui_types::{EdgeInsets, Size};
 use flui_view::prelude::*;
 use flui_widgets::{
-    MediaQuery, MediaQueryData, Navigator, NavigatorHandle, SimpleRoute, SizedBox, Text,
+    MediaQuery, MediaQueryData, Navigator, NavigatorHandle, PreferredSize, SimpleRoute, SizedBox,
+    Text,
 };
 
 /// `_ElevatedButtonDefaultsM3`'s sibling formatting helper (see
@@ -432,5 +433,185 @@ fn tapping_the_implied_back_button_pops_the_route() {
         !handle.can_pop(),
         "tapping the implied back button must pop the pushed route via NavigatorHandle::maybe_pop, \
          leaving only the seeded initial route on the stack",
+    );
+}
+
+// ── `AppBar.bottom` — Flexible-toolbar/fixed-bottom Column layout ──
+//
+// `bottom.rs`'s own module docs and `app_bar.rs`'s `builders_set_the_expected_fields`/
+// `preferred_size_adds_the_bottom_slots_height_when_set` cover the pure
+// preferred-size math in isolation; these prove the mounted geometry end to
+// end: the toolbar and bottom slot actually stack at their expected sizes,
+// and a height shortfall shrinks the toolbar, never the bottom slot.
+
+/// A `bottom` slot whose `preferred_size` and actual mounted height always
+/// agree — matching how a real [`flui_material::TabBar`] behaves (its own
+/// `build` returns exactly the height it advertises via
+/// [`flui_widgets::PreferredSizeView::preferred_size`]).
+fn fixed_height_bottom(height: f32) -> PreferredSize {
+    PreferredSize::new(
+        Size::new(px(f32::INFINITY), px(height)),
+        SizedBox::height(height),
+    )
+}
+
+const BOTTOM_SLOT_HEIGHT: f32 = 48.0;
+
+/// The bottom slot's own mounted [`RenderConstrainedBox`](flui_objects::RenderConstrainedBox)
+/// — the only one in this tree sized to exactly [`BOTTOM_SLOT_HEIGHT`] (the
+/// toolbar's own `SizedBox` is 56px tall or, under a shortfall, shrunk below
+/// it; the outer `SizedBox` wrapping the whole `Column` sums to a different
+/// total again) — so filtering on that exact height disambiguates it without
+/// walking tree structure.
+fn find_bottom_slot_box(laid: &common::LaidOut) -> flui_foundation::RenderId {
+    let candidates: Vec<_> = laid
+        .find_all_by_render_type("RenderConstrainedBox")
+        .into_iter()
+        .filter(|&id| laid.size(id).height == px(BOTTOM_SLOT_HEIGHT))
+        .collect();
+    assert_eq!(
+        candidates.len(),
+        1,
+        "expected exactly one RenderConstrainedBox at the bottom slot's own {BOTTOM_SLOT_HEIGHT}px \
+         height"
+    );
+    candidates[0]
+}
+
+#[test]
+fn app_bar_with_a_bottom_slot_mounts_the_toolbar_then_the_bottom_at_their_full_heights() {
+    let laid = lay_out(
+        Theme::new(
+            ThemeData::light(),
+            MediaQuery::new(
+                MediaQueryData::default(),
+                AppBar::new()
+                    .title(Text::new("Title"))
+                    .bottom(fixed_height_bottom(BOTTOM_SLOT_HEIGHT)),
+            ),
+        ),
+        loose(400.0),
+    );
+
+    let root = laid.root();
+    assert_eq!(
+        laid.size(root).height,
+        px(56.0 + BOTTOM_SLOT_HEIGHT),
+        "with no height shortfall, the AppBar's total height must be toolbar_height + the \
+         bottom slot's own preferred height",
+    );
+
+    let bottom = find_bottom_slot_box(&laid);
+    assert_eq!(
+        laid.absolute_offset(bottom).dy,
+        px(56.0),
+        "the bottom slot must sit directly below the toolbar, at y == toolbar_height"
+    );
+}
+
+/// A caller-imposed height shortfall (here: an outer constraint that leaves
+/// no extra room for the `MediaQuery` top inset the `SafeArea` still
+/// consumes internally) must shrink the **toolbar**, not the bottom slot —
+/// see `app_bar.rs`'s module docs' `bottom` section on why `Flexible`
+/// (loose fit) wraps the toolbar specifically. `56 (toolbar) + 48 (bottom)
+/// == 104`, the exact outer constraint below; the 40px top inset eats into
+/// that 104 internally, leaving only `104 - 40 - 48 == 16px` for the toolbar.
+///
+/// Red-check: swap `Flexible`/`ConstrainedBox(max_height: toolbar_height)`
+/// for a plain (unwrapped) toolbar in `app_bar.rs`'s `build` — the Column
+/// would then try to give the toolbar its full, un-shrinkable natural size
+/// under `MainAxisSize::Max`, overflowing the available height instead of
+/// this test's exact 16px.
+#[test]
+fn a_height_shortfall_shrinks_the_toolbar_and_leaves_the_bottom_slot_at_its_full_height() {
+    let media = MediaQueryData {
+        padding: EdgeInsets::new(px(40.0), px(0.0), px(0.0), px(0.0)),
+        ..MediaQueryData::default()
+    };
+    let laid = lay_out(
+        Theme::new(
+            ThemeData::light(),
+            MediaQuery::new(
+                media,
+                AppBar::new()
+                    .title(Text::new("Title"))
+                    .bottom(fixed_height_bottom(BOTTOM_SLOT_HEIGHT)),
+            ),
+        ),
+        tight(400.0, 56.0 + BOTTOM_SLOT_HEIGHT),
+    );
+
+    let bottom = find_bottom_slot_box(&laid);
+    assert_eq!(
+        laid.size(bottom).height,
+        px(BOTTOM_SLOT_HEIGHT),
+        "the bottom slot must keep its full preferred height under a shortfall"
+    );
+
+    let toolbar_boxes: Vec<_> = laid
+        .find_all_by_render_type("RenderConstrainedBox")
+        .into_iter()
+        .filter(|&id| laid.size(id).height == px(56.0))
+        .collect();
+    assert!(
+        toolbar_boxes.is_empty(),
+        "the toolbar must have shrunk below its 56px preference under the shortfall"
+    );
+
+    // Both the toolbar's own `SizedBox` and the `ConstrainedBox(max_height:
+    // toolbar_height)` wrapping it end up reporting the SAME shrunk height
+    // (the inner one is fully absorbed by the outer's tighter constraint) —
+    // so this is `>= 1`, not `== 1`; the count is an implementation detail,
+    // the shrunk height itself is the behavior under test.
+    let shrunk_toolbar_boxes: Vec<_> = laid
+        .find_all_by_render_type("RenderConstrainedBox")
+        .into_iter()
+        .filter(|&id| laid.size(id).height == px(16.0))
+        .collect();
+    assert!(
+        !shrunk_toolbar_boxes.is_empty(),
+        "the toolbar must shrink to exactly the 16px left over (104 total - 40 top inset - \
+         48 bottom slot)"
+    );
+}
+
+/// A standalone `AppBar` (no `Scaffold`) with a `bottom` slot still consumes
+/// its own top safe-area inset unassisted — the same "consumes the top inset
+/// itself" contract `standalone_app_bar_consumes_the_top_padding_itself`
+/// proves for a bare toolbar, now with `bottom` in the mix and ample room
+/// (no shortfall), so the top inset adds cleanly on top of the full
+/// toolbar + bottom sum rather than eating into either.
+#[test]
+fn standalone_app_bar_with_a_bottom_slot_still_consumes_its_own_top_padding() {
+    let media = MediaQueryData {
+        padding: EdgeInsets::new(px(24.0), px(0.0), px(0.0), px(0.0)),
+        ..MediaQueryData::default()
+    };
+    let laid = lay_out(
+        Theme::new(
+            ThemeData::light(),
+            MediaQuery::new(
+                media,
+                AppBar::new()
+                    .title(Text::new("Title"))
+                    .bottom(fixed_height_bottom(BOTTOM_SLOT_HEIGHT)),
+            ),
+        ),
+        loose(400.0),
+    );
+
+    let root = laid.root();
+    assert_eq!(
+        laid.size(root).height,
+        px(56.0 + BOTTOM_SLOT_HEIGHT + 24.0),
+        "a primary AppBar with a bottom slot must add the ambient MediaQuery top padding to \
+         toolbar_height + the bottom slot's own preferred height, unassisted by any Scaffold",
+    );
+
+    let bottom = find_bottom_slot_box(&laid);
+    assert_eq!(
+        laid.size(bottom).height,
+        px(BOTTOM_SLOT_HEIGHT),
+        "with ample room (no shortfall), the bottom slot must mount at its full preferred height"
     );
 }

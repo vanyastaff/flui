@@ -41,6 +41,7 @@ use flui_material::{Theme, ThemeData};
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::hit_testing::HitTestResult;
 use flui_rendering::pipeline::PipelineOwner;
+use flui_rendering::testing::inspect;
 use flui_types::geometry::px;
 use flui_types::{Offset, Size};
 use flui_view::{BuildOwner, ElementTree};
@@ -243,6 +244,29 @@ impl MountedDemo {
         found
     }
 
+    /// Every render node whose short type name (generic parameters stripped)
+    /// equals `render_type_name` — duplicated from
+    /// `crates/flui-material/tests/common/mod.rs`'s `LaidOut::find_all_by_render_type`
+    /// for the same reason every other helper here is (see the module doc).
+    fn find_all_by_render_type(&self, render_type_name: &str) -> Vec<RenderId> {
+        let owner = self.pipeline_owner.read();
+        owner
+            .render_tree()
+            .iter()
+            .filter_map(|(id, _node)| {
+                let diagnostics = owner.debug_node_diagnostics(id)?;
+                let short_name = diagnostics.name()?.split('<').next().unwrap_or("");
+                (short_name == render_type_name).then_some(id)
+            })
+            .collect()
+    }
+
+    /// The laid-out size of a render node.
+    fn size(&self, id: RenderId) -> Size {
+        inspect::box_geometry(&self.pipeline_owner.read(), id)
+            .expect("render node should have box geometry after layout")
+    }
+
     /// The screen-space (root-local) top-left of `id`, by summing paint
     /// offsets up the render-tree ancestry — every node between the root and
     /// `id` in this tree only translates (no scale/rotation), so a plain sum
@@ -295,6 +319,14 @@ fn settings_glyph_text() -> String {
     tree::settings_icon_data()
         .code_point_string()
         .expect("the settings glyph's codepoint must be a valid Unicode scalar value")
+}
+
+/// The app bar action's glyph text for [`tree::tabs_icon_data`] — same
+/// reasoning as [`settings_glyph_text`].
+fn tabs_glyph_text() -> String {
+    tree::tabs_icon_data()
+        .code_point_string()
+        .expect("the tabs glyph's codepoint must be a valid Unicode scalar value")
 }
 
 /// The implied `BackButton`'s glyph text, computed from
@@ -726,6 +758,172 @@ fn dragging_inside_the_list_scrolls_its_items() {
         "dragging up {expected_scroll_delta}px worth of post-slop deltas must move item 0's \
          paint position up by the same amount (the slop-crossing move's delta is swallowed): \
          before={offset_before:?}, after={offset_after:?}, moved_up_by={moved_up_by}"
+    );
+}
+
+// ============================================================================
+// (8) Tabs route — TabBarView + AppBar.bottom
+// ============================================================================
+
+/// Pushes [`tree::tabs_route`] from the home route's app bar action and
+/// returns once the tabs route's title has rendered — the shared setup
+/// every test below starts from.
+fn push_tabs_route(demo: &mut MountedDemo) {
+    let tabs_glyph = tabs_glyph_text();
+    let tabs_button = demo
+        .find_text(&tabs_glyph)
+        .expect("the app bar's tabs action must render");
+    demo.tap_node(tabs_button);
+    demo.pump(Duration::ZERO);
+
+    assert!(
+        demo.find_text(tree::TABS_ROUTE_TITLE).is_some(),
+        "the tabs route's app bar title must render once pushed"
+    );
+}
+
+/// Taps a tab's own label text in the mounted `TabBar` — every test below
+/// needs this at least once, so it's factored out rather than copy-pasted
+/// three times.
+fn tap_tab(demo: &mut MountedDemo, tab_label: &str) {
+    let label = demo
+        .find_text(tab_label)
+        .unwrap_or_else(|| panic!("tab label {tab_label:?} must render in the mounted TabBar"));
+    demo.tap_node(label);
+    demo.pump(Duration::ZERO);
+}
+
+/// A tab tap switches the visible child: on mount, tab 0
+/// ([`tree::OVERVIEW_TAB_LABEL`])'s content is showing and neither other
+/// tab's is; tapping tab 1 ([`tree::COUNTER_TAB_LABEL`]) swaps which one is.
+#[test]
+fn tapping_a_tab_switches_the_visible_child() {
+    let mut demo = MountedDemo::mount();
+    push_tabs_route(&mut demo);
+
+    assert!(
+        demo.find_text(tree::OVERVIEW_TAB_TEXT).is_some(),
+        "tab 0 (Overview) is the controller's initial index — its content must be built and \
+         showing on mount"
+    );
+    assert!(
+        demo.find_text(&format!("{}0", tree::COUNTER_LABEL_PREFIX))
+            .is_none(),
+        "the Counter tab must not be showing before it's ever tapped"
+    );
+
+    tap_tab(&mut demo, tree::COUNTER_TAB_LABEL);
+
+    assert!(
+        demo.find_text(&format!("{}0", tree::COUNTER_LABEL_PREFIX))
+            .is_some(),
+        "tapping the Counter tab must switch the visible child to its content"
+    );
+}
+
+/// The Counter tab's count survives switching away to another tab and back —
+/// `TabBarView`'s `Offstage` keep-alive retention, not a rebuild that resets
+/// local state. Flutter parity target: `TabBarView`'s own "state survives a
+/// tab switch" contract (see `tab_bar_view.rs`'s module docs for the
+/// composed mechanism this substrate uses instead of a real `PageView`).
+#[test]
+fn the_counters_state_survives_switching_away_and_back() {
+    let mut demo = MountedDemo::mount();
+    push_tabs_route(&mut demo);
+
+    tap_tab(&mut demo, tree::COUNTER_TAB_LABEL);
+    let increment = demo
+        .find_text(tree::COUNTER_INCREMENT_LABEL)
+        .expect("the Counter tab's Increment button must render once visited");
+    // The tap position is captured ONCE, up front, and reused for every
+    // subsequent tap — re-resolving `absolute_position` off a `RenderId`
+    // AFTER a rebuild it triggered is unreliable (the node's parent chain
+    // can read back detached until the next full relayout), the same
+    // fixed-position-computed-once pattern
+    // `tests/vertical_slice_demo.rs`'s `tapping_the_plus_button_updates_the_rendered_counter_text`
+    // already established for its own repeatedly-tapped counter button.
+    let tap_at = demo.absolute_position(increment);
+    demo.tap(tap_at.dx.get() + 1.0, tap_at.dy.get() + 1.0);
+    demo.pump(Duration::ZERO);
+    demo.tap(tap_at.dx.get() + 1.0, tap_at.dy.get() + 1.0);
+    demo.pump(Duration::ZERO);
+    demo.tap(tap_at.dx.get() + 1.0, tap_at.dy.get() + 1.0);
+    demo.pump(Duration::ZERO);
+
+    assert!(
+        demo.find_text(&format!("{}3", tree::COUNTER_LABEL_PREFIX))
+            .is_some(),
+        "three taps on Increment must bring the count to 3"
+    );
+
+    // Switch away to Overview, then back to Counter. `TabBarView`'s
+    // `Offstage` keep-alive retention (see `tab_bar_view.rs`'s module docs)
+    // means the Counter tab's `RenderParagraph` stays in the tree the whole
+    // time — merely unpainted while inactive, not torn down — so a
+    // "must not be found while inactive" assertion here would test the
+    // wrong thing (`find_text` has no visibility/offstage awareness; that
+    // half of the contract is `crates/flui-material/tests/tab_bar_view.rs`'s
+    // `default_tab_controller_ancestor_drives_the_active_child_through_offstage`
+    // via the `RenderOffstage` diagnostics flag directly). The genuinely
+    // observable retention proof at this level is that the count reads 3
+    // again after the round trip, not 0 — a reset here is exactly what a
+    // regression to index-keyed (rebuild-from-scratch) tab elements would
+    // produce.
+    tap_tab(&mut demo, tree::OVERVIEW_TAB_LABEL);
+    tap_tab(&mut demo, tree::COUNTER_TAB_LABEL);
+
+    assert!(
+        demo.find_text(&format!("{}3", tree::COUNTER_LABEL_PREFIX))
+            .is_some(),
+        "the count must still read 3 after switching away and back — retention, not a reset"
+    );
+}
+
+/// The About tab (index 2) is never built until it's actually visited —
+/// `TabBarView`'s lazy-build contract, proven end to end through the real
+/// `TabBar`'s tap dispatch (not just `TabBarView` mounted directly, as
+/// `crates/flui-material/tests/tab_bar_view.rs`'s own
+/// `a_tab_is_not_built_until_it_becomes_active` already covers in
+/// isolation).
+#[test]
+fn the_about_tab_is_not_built_until_visited() {
+    let mut demo = MountedDemo::mount();
+    push_tabs_route(&mut demo);
+
+    assert!(
+        demo.find_text(tree::ABOUT_TAB_TEXT).is_none(),
+        "the About tab's content must not be built before it's ever visited"
+    );
+
+    tap_tab(&mut demo, tree::ABOUT_TAB_LABEL);
+
+    assert!(
+        demo.find_text(tree::ABOUT_TAB_TEXT).is_some(),
+        "the About tab's content must be built once it's visited"
+    );
+}
+
+/// With the `TabBar` mounted as `AppBar.bottom`, the app bar's total height
+/// is `toolbar_height (56) + the TabBar's own preferred height (48, three
+/// plain-text tabs: `TAB_HEIGHT` 46 + `indicator_weight` 2)` — the same
+/// `toolbar_height + bottom_height` math `crates/flui-material/tests/app_bar.rs`
+/// pins in isolation, now proven reachable through the full sample-app tree
+/// (real `Theme`/`MediaQuery` ancestors, a real `Navigator`-pushed route).
+#[test]
+fn the_app_bar_height_is_toolbar_plus_the_mounted_tab_bars_height() {
+    let mut demo = MountedDemo::mount();
+    push_tabs_route(&mut demo);
+
+    const EXPECTED_HEIGHT: f32 = 56.0 + 48.0;
+    let matches = demo
+        .find_all_by_render_type("RenderConstrainedBox")
+        .into_iter()
+        .filter(|&id| demo.size(id).height == px(EXPECTED_HEIGHT))
+        .count();
+    assert!(
+        matches > 0,
+        "expected at least one RenderConstrainedBox sized to toolbar_height + TabBar height \
+         ({EXPECTED_HEIGHT}px) once the tabs route is mounted"
     );
 }
 
