@@ -477,7 +477,7 @@ pub struct CheckboxThemeData {
 /// [`icon_color`](Self::icon_color) alone — because [`Chip`](crate::Chip)/
 /// [`FilterChip`](crate::FilterChip)'s avatar/checkmark/delete-icon size is
 /// pinned at the M3 default (`CHIP_ICON_SIZE`, `18.0`, `chip.rs`) with no
-/// override surface yet, so the `size`/`fill`/`weight`/`grade`/`opical_size`
+/// override surface yet, so the `size`/`fill`/`weight`/`grade`/`optical_size`
 /// axes `IconThemeData` also carries have nothing to reach. The delete
 /// affordance's `_EnsureMinSemanticsSize`/`MaterialTapTargetSize`-driven
 /// minimum tap target (`chip.dart`'s `_buildDeleteIcon`, padding the visible
