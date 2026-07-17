@@ -14,7 +14,7 @@ use flui_foundation::ElementId;
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::pipeline::PipelineOwner;
 use flui_types::Size;
-use flui_types::geometry::px;
+use flui_types::geometry::{Bounds, Pixels, px};
 use flui_view::View;
 use parking_lot::RwLock;
 
@@ -23,6 +23,11 @@ pub(crate) struct Harness {
     binding: HeadlessBinding,
     root_element: ElementId,
     pipeline_owner: Arc<RwLock<PipelineOwner>>,
+    /// Every `TextInputHandle::set_cursor_area` call recorded by the
+    /// installed IME capability, in delivery order. `None` when the harness
+    /// was mounted with [`TextInputCapability::Absent`] — there is nothing
+    /// to record.
+    cursor_area_calls: Option<Arc<parking_lot::Mutex<Vec<Bounds<Pixels>>>>>,
     /// Held for the harness's whole lifetime as conservative focus-fixture
     /// serialization across test owners. Each owner thread resolves independent
     /// TLS focus state; the guard prevents overlapping fixtures rather than
@@ -113,11 +118,18 @@ pub(crate) fn mount_with_capabilities(
             build_owner.set_async_driver(binding.scheduler().async_driver().clone());
         }
     }
-    if text_input == TextInputCapability::Installed {
-        // Zero-capture closures: automatically `Send + Sync` regardless of
-        // `TextInputRegistry`'s own `Rc`-based, non-`Send` internals — the
-        // same reasoning `flui-app`'s production `AppBinding::instance()`
-        // closures rely on (see `TextInputHandle`'s doc).
+    let cursor_area_calls = if text_input == TextInputCapability::Installed {
+        // Attach/detach are zero-capture closures: automatically `Send +
+        // Sync` regardless of `TextInputRegistry`'s own `Rc`-based,
+        // non-`Send` internals — the same reasoning `flui-app`'s production
+        // `AppBinding::instance()` closures rely on (see `TextInputHandle`'s
+        // doc). `set_cursor_area` has no platform window to forward to in
+        // this harness (no `flui-app`/`PlatformWindow` involved — see this
+        // module's doc), so it records into an `Arc<Mutex<_>>` a test can
+        // read back through `Harness::cursor_area_calls` instead.
+        let recorded: Arc<parking_lot::Mutex<Vec<Bounds<Pixels>>>> =
+            Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let recorded_for_closure = Arc::clone(&recorded);
         build_owner.set_text_input_handle(flui_interaction::TextInputHandle::new(
             |callback| {
                 Some(
@@ -128,8 +140,12 @@ pub(crate) fn mount_with_capabilities(
             |token| {
                 flui_interaction::TextInputRegistry::global().detach(token);
             },
+            move |area| recorded_for_closure.lock().push(area),
         ));
-    }
+        Some(recorded)
+    } else {
+        None
+    };
 
     let root_element = binding.enter_owner_scope(|| {
         let root_element = tree.mount_root_with_pipeline_owner(
@@ -169,6 +185,7 @@ pub(crate) fn mount_with_capabilities(
         binding,
         root_element,
         pipeline_owner,
+        cursor_area_calls,
         _focus_guard: focus_guard,
     }
 }
@@ -177,6 +194,27 @@ impl Harness {
     /// Run an owner-side test action under the binding's full local scope.
     pub(crate) fn enter_owner_scope<R>(&self, callback: impl FnOnce() -> R) -> R {
         self.binding.enter_owner_scope(callback)
+    }
+
+    /// Every `TextInputHandle::set_cursor_area` call recorded so far, in
+    /// delivery order.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the harness was mounted with [`TextInputCapability::Absent`]
+    /// (via [`mount`] rather than [`mount_with_ime`]) — that configuration
+    /// installs no `TextInputHandle` at all, so there is nothing to record,
+    /// and a test reading this without IME installed is testing the wrong
+    /// harness.
+    pub(crate) fn cursor_area_calls(&self) -> Vec<Bounds<Pixels>> {
+        self.cursor_area_calls
+            .as_ref()
+            .expect(
+                "cursor_area_calls requires mounting with TextInputCapability::Installed \
+                 (mount_with_ime, not mount)",
+            )
+            .lock()
+            .clone()
     }
     /// The root element id.
     pub(crate) fn root(&self) -> ElementId {

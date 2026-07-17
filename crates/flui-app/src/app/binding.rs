@@ -43,7 +43,10 @@ use flui_layer::Scene;
 use flui_platform::traits::{PlatformInput, PlatformWindow};
 use flui_rendering::constraints::BoxConstraints;
 use flui_scheduler::Scheduler;
-use flui_types::{HapticFeedback, Size, geometry::px};
+use flui_types::{
+    HapticFeedback, Size,
+    geometry::{Bounds, Pixels, px},
+};
 use flui_view::View;
 use flui_widgets::VsyncScope;
 use parking_lot::{Mutex, RwLock};
@@ -227,6 +230,20 @@ impl TextInputPlatformBridge {
     pub(crate) fn detach(&self, token: ClientToken) {
         let window = self.active_window.lock().as_ref().cloned();
         ImeBackend::detach(window.as_ref(), token);
+    }
+
+    /// Tell the platform IME where to draw its candidate window (ADR-0032).
+    /// Clones the active window's `Arc<dyn PlatformTextInput>` out from
+    /// under the lock before calling through — the same clone-then-call
+    /// discipline [`AppBinding::perform_haptic_feedback`] follows, so a slow
+    /// or reentrant backend call never holds `active_window` for anyone
+    /// else. Silent no-op with no active window, or a backend with no
+    /// `PlatformTextInput` capability.
+    pub(crate) fn set_cursor_area(&self, area: Bounds<Pixels>) {
+        let window = self.active_window.lock().as_ref().cloned();
+        if let Some(text_input) = window.and_then(|window| window.text_input()) {
+            text_input.set_ime_cursor_area(area);
+        }
     }
 }
 
@@ -738,6 +755,25 @@ impl AppBinding {
     /// disabling IME for the field that replaced it.
     pub fn detach_text_input(&self, token: ClientToken) {
         self.text_input_platform_bridge().detach(token);
+    }
+
+    /// Tell the platform IME where to draw its candidate window, in
+    /// window-root-space logical pixels (ADR-0032) — `flui-widgets`'
+    /// `EditableText` post-frame loop is the only production caller, via
+    /// the `TextInputHandle::set_cursor_area` capability
+    /// `UiRealm::bind_to_app` installs.
+    ///
+    /// Routes through `text_input_platform_bridge` rather than reading
+    /// `self.active_window` directly, for the same per-instance-targeting
+    /// reason [`attach_text_input`](Self::attach_text_input) does (see
+    /// `TextInputPlatformBridge`'s doc) — but follows
+    /// [`perform_haptic_feedback`](Self::perform_haptic_feedback)'s exact
+    /// clone-the-capability-out-of-the-lock-then-call-outside-it discipline
+    /// (see `TextInputPlatformBridge::set_cursor_area`). Silent no-op with
+    /// no active window yet, or a backend with no `PlatformTextInput`
+    /// capability.
+    pub fn set_ime_cursor_area(&self, area: Bounds<Pixels>) {
+        self.text_input_platform_bridge().set_cursor_area(area);
     }
 
     /// A `'static`, `Arc`-cloneable handle onto this specific binding's
@@ -2611,6 +2647,67 @@ mod tests {
                 Some(false),
                 "blurring the field must detach and disable platform IME composition"
             );
+        }
+
+        /// `AppBinding::set_ime_cursor_area` (ADR-0032) reaches the active
+        /// window's `PlatformTextInput` capability — the real-path proof
+        /// `flui-widgets`' own IME cursor-area tests cannot make on their
+        /// own (their harness wires `TextInputHandle` straight to an
+        /// in-crate recorder, with no `flui-app`/`PlatformWindow` involved;
+        /// see `test_harness`'s `mount_with_ime` doc). This exercises
+        /// exactly the plumbing `UiRealm::bind_to_app`'s installed third
+        /// closure calls through: `AppBinding::set_ime_cursor_area` ->
+        /// `TextInputPlatformBridge::set_cursor_area` ->
+        /// `PlatformTextInput::set_ime_cursor_area`.
+        ///
+        /// Deliberately does not mount a widget tree: `AppBinding::
+        /// attach_root_widget`'s `RootRenderElement` bootstrap does not
+        /// connect the mounted subtree's own render root as a child of its
+        /// synthetic `RenderViewAdapter` node (a pre-existing gap tracked by
+        /// the `PORT-TARGET` note on `attach_root_widget`, unrelated to
+        /// ADR-0032) — `transform_to` from a real `EditableText` up to
+        /// `root_id()` would fail structurally here regardless of the IME
+        /// wiring. The widget-level geometry/dedupe/lifecycle tests
+        /// (`flui-widgets`' `editable_text` module) mount through a
+        /// different, connectivity-correct harness instead and carry that
+        /// coverage.
+        ///
+        /// Red-check: turning `AppBinding::set_ime_cursor_area` into a
+        /// no-op (dropping the `text_input_platform_bridge().
+        /// set_cursor_area` call) makes `fake.cursor_area_calls()` stay
+        /// empty.
+        #[test]
+        fn set_ime_cursor_area_reaches_the_active_windows_platform_capability() {
+            let (window, text_input) = headless_window_with_ime();
+            let fake = fake_text_input(&text_input);
+
+            let binding = AppBinding::new();
+            binding.set_window(window);
+
+            let area = Bounds::new(
+                flui_types::Point::new(px(10.0), px(20.0)),
+                Size::new(px(2.0), px(18.0)),
+            );
+            binding.set_ime_cursor_area(area);
+
+            assert_eq!(
+                fake.cursor_area_calls(),
+                vec![area],
+                "set_ime_cursor_area must call through to the active window's \
+                 PlatformTextInput::set_ime_cursor_area with the exact area"
+            );
+        }
+
+        /// No active window yet (the loop's first tick fires before
+        /// `set_window` ran) is a silent no-op — the same degradation
+        /// contract `perform_haptic_feedback` documents, not a panic.
+        #[test]
+        fn set_ime_cursor_area_with_no_active_window_is_a_silent_no_op() {
+            let binding = AppBinding::new();
+            binding.set_ime_cursor_area(Bounds::new(
+                flui_types::Point::new(px(0.0), px(0.0)),
+                Size::new(px(1.0), px(1.0)),
+            ));
         }
     }
 

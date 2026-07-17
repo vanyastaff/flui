@@ -555,9 +555,11 @@ impl UiRealm {
             // singleton. See `TextInputPlatformBridge`'s doc.
             let text_input_bridge = app.text_input_platform_bridge();
             let text_input_bridge_for_detach = text_input_bridge.clone();
+            let text_input_bridge_for_cursor_area = text_input_bridge.clone();
             owner.set_text_input_handle(flui_interaction::TextInputHandle::new(
                 move |callback| text_input_bridge.attach(callback),
                 move |token| text_input_bridge_for_detach.detach(token),
+                move |area| text_input_bridge_for_cursor_area.set_cursor_area(area),
             ));
         });
     }

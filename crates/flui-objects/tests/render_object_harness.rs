@@ -936,6 +936,82 @@ fn harness_editable_lays_out_and_paints_collapsed_caret() {
     );
 }
 
+/// `caret_local_rect()` returns real geometry even when the caret is not
+/// painted (`show_caret == false`) — the visibility-independence contract
+/// the platform IME cursor-area tracking loop relies on (composition is
+/// exactly when the caret is hidden yet the candidate window must still
+/// track it; see `flui_widgets::EditableText`'s IME cursor-area doc).
+///
+/// Red-check: make `caret_local_rect` return `Rect::ZERO`/gate on
+/// `show_caret` instead of always composing from `caret_offset` — this
+/// test's size assertions fail.
+#[test]
+fn harness_editable_caret_local_rect_is_visibility_independent() {
+    let run = RenderTester::mount(box_node(
+        RenderEditable::new(TextSpan::new("edit me"), TextDirection::Ltr)
+            .with_caret_byte_offset(7)
+            .with_show_caret(false)
+            .with_caret_width(2.0)
+            .with_caret_height(18.0),
+    ))
+    .with_constraints(loose(160.0))
+    .run_layout();
+
+    let editable = run
+        .owner()
+        .render_tree()
+        .get(run.root())
+        .expect("root render id must be live")
+        .as_box()
+        .expect("root is a box node")
+        .render_object()
+        .downcast_ref::<RenderEditable>()
+        .expect("root is a RenderEditable");
+
+    let rect = editable.caret_local_rect();
+    assert_eq!(
+        rect.width(),
+        px(2.0),
+        "caret_local_rect must report the caret width regardless of show_caret"
+    );
+    assert_eq!(
+        rect.height(),
+        px(18.0),
+        "caret_local_rect must report the caret height regardless of show_caret"
+    );
+}
+
+/// The paint-gating contrast case: `show_caret == false` still yields real
+/// geometry from [`RenderEditable::caret_local_rect`] (proven above), but
+/// `paint` itself must not draw a caret rect when it is hidden — the
+/// visibility check stays in `paint`, only the geometry moved out of it.
+#[test]
+fn harness_editable_hidden_caret_paints_no_caret_rect() {
+    let run = RenderTester::mount(box_node(
+        RenderEditable::new(TextSpan::new("edit me"), TextDirection::Ltr)
+            .with_caret_byte_offset(7)
+            .with_show_caret(false)
+            .with_caret_width(2.0)
+            .with_caret_height(18.0),
+    ))
+    .with_constraints(loose(160.0))
+    .run_frame();
+
+    let commands = run.display_commands();
+    assert!(
+        commands
+            .iter()
+            .any(|command| command.line.contains("DrawTextSpan")),
+        "the text itself must still paint; commands: {commands:#?}"
+    );
+    assert!(
+        !commands
+            .iter()
+            .any(|command| command.line.contains("DrawRect")),
+        "a hidden caret (show_caret == false) must not paint a caret rect; commands: {commands:#?}"
+    );
+}
+
 #[test]
 fn harness_editable_hit_tests_self() {
     let run = RenderTester::mount(box_node(RenderEditable::new(
