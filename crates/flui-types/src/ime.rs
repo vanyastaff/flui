@@ -31,25 +31,37 @@
 /// [`ImeEvent::Preedit`]'s `cursor` field indexes *into the preedit string
 /// itself* (`text`), as a byte offset `(start, end)` range — not into the
 /// surrounding committed document. `cursor == None` means the platform wants
-/// the composition caret hidden (winit's own semantics for this case); the
-/// widget-side hidden-caret rendering state that honors that is a named PR2
-/// deferral, not implemented by this vocabulary alone.
+/// the composition caret hidden (winit's own semantics for this case);
+/// `flui_widgets::TextEditingController::caret_hidden_by_ime` tracks this and
+/// the owning widget suppresses its painted caret accordingly (ADR-0033).
 ///
-/// # Suppression contract (PR2 deferral, documented here for the client
-/// authors that consume this vocabulary)
+/// # `Preedit` with an empty `text` is composition cancellation
+///
+/// Winit signals a **cancelled** composition as `Preedit { text: "", cursor:
+/// None }`, with **no** following `Commit`/`Disabled` event. A client must
+/// treat this the same as composition *ending* — not as "an empty but still
+/// active" preedit. Getting this wrong is a real, previously-shipped bug
+/// class: a client that leaves its "is composing" state `true` after an
+/// empty preedit permanently suppresses `Key::Character` insertion for the
+/// rest of the focus session (see the suppression contract below), since
+/// nothing else ever tells it composition ended.
+///
+/// # Suppression contract (documented here for the client authors that
+/// consume this vocabulary)
 ///
 /// A text-input client must suppress `Key::Character` insertion **only**
-/// while a composition is in progress (a non-empty preedit is active) —
-/// winit itself already withholds `KeyboardInput` events during composition
-/// and immediately after a commit, so a client that suppressed *all* typing
-/// after [`ImeEvent::Enabled`] would silently kill plain (non-IME) keyboard
-/// input for the rest of the session. [`ImeEvent::Disabled`] delivered
-/// mid-composition means the client must strip the in-progress composing
-/// slice from its buffer — winit's semantics, a documented divergence from
-/// Flutter's `TextInputConnection.connectionClosed`, which instead *keeps*
-/// the uncommitted text. Detach-on-dispose is part of the same client
-/// contract (the bound-drop-cascade knot class this workspace has hit
-/// before with other owner-thread callback registries).
+/// while a composition is in progress (a non-empty preedit is active — see
+/// the empty-`Preedit`-is-cancellation note above for the case this excludes)
+/// — winit itself already withholds `KeyboardInput` events during
+/// composition and immediately after a commit, so a client that suppressed
+/// *all* typing after [`ImeEvent::Enabled`] would silently kill plain
+/// (non-IME) keyboard input for the rest of the session. [`ImeEvent::Disabled`]
+/// delivered mid-composition means the client must strip the in-progress
+/// composing slice from its buffer — winit's semantics, a documented
+/// divergence from Flutter's `TextInputConnection.connectionClosed`, which
+/// instead *keeps* the uncommitted text. Detach-on-dispose is part of the
+/// same client contract (the bound-drop-cascade knot class this workspace
+/// has hit before with other owner-thread callback registries).
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ImeEvent {

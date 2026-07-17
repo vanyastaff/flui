@@ -128,7 +128,7 @@ use flui_types::{
     styling::{
         BorderRadius, BorderRadiusExt, BorderSide, BorderStyle, BoxDecoration, Color, TableBorder,
     },
-    typography::{TextDirection, TextSpan},
+    typography::{TextDirection, TextSpan, TextStyle},
 };
 
 /// Every concrete render-object type exported from `flui_objects`.
@@ -1022,6 +1022,234 @@ fn harness_editable_hit_tests_self() {
     .run_layout();
 
     assert_eq!(run.hit_first(10.0, 10.0), Some(run.root()));
+}
+
+// ------------------------------------------------------------------------
+// Composing-region underline (ADR-0033)
+// ------------------------------------------------------------------------
+
+/// The composing-region underline paints at exactly the box
+/// `get_boxes_for_selection` reports for that byte range — the byte-offset
+/// agreement pin: a MULTIBYTE (CJK) range specifically catches a char-count
+/// vs byte-count mixup in the composing-range plumbing, which a pure-ASCII
+/// range cannot distinguish (every ASCII char is exactly one byte).
+///
+/// Red-check: write this test before `RenderEditable::paint`'s underline
+/// branch exists (or with `composing_range` never wired in) — it fails
+/// because no `DrawRect` command matches the expected rect at all (only the
+/// `DrawTextSpan` command is present).
+#[test]
+fn harness_editable_composing_underline_paints_at_the_exact_multibyte_box() {
+    // "abc" (3 ASCII bytes) + "你好" (two 3-byte CJK chars = 6 bytes) + "def".
+    let text = "abc你好def";
+    let composing_start = "abc".len();
+    let composing_end = composing_start + "你好".len();
+
+    let run = RenderTester::mount(box_node(
+        RenderEditable::new(TextSpan::new(text), TextDirection::Ltr)
+            .with_composing_range(Some(composing_start..composing_end))
+            .with_show_caret(false),
+    ))
+    .with_constraints(loose(400.0))
+    .run_frame();
+
+    let editable = run
+        .owner()
+        .render_tree()
+        .get(run.root())
+        .expect("root render id must be live")
+        .as_box()
+        .expect("root is a box node")
+        .render_object()
+        .downcast_ref::<RenderEditable>()
+        .expect("root is a RenderEditable");
+
+    let boxes = editable
+        .painter()
+        .get_boxes_for_selection(composing_start, composing_end);
+    assert_eq!(
+        boxes.len(),
+        1,
+        "a single-line contiguous CJK range must produce exactly one box"
+    );
+    let expected_box = boxes[0].rect;
+    let baseline = editable
+        .compute_distance_to_actual_baseline(TextBaseline::Alphabetic)
+        .expect("layout ran, so a baseline must be available");
+    // Mirrors `RenderEditable`'s own private `underline_rect_for_box` clamp —
+    // baseline + 1px gap, clamped inside the box's vertical span.
+    let top = expected_box.top().get();
+    let max_top = (expected_box.bottom().get() - 1.0).max(top);
+    let expected_top = (baseline + 1.0).clamp(top, max_top);
+
+    let commands = run.display_commands();
+    let expected_rect_fragment = format!(
+        "rect=({:.2},{:.2} {:.2}x{:.2})",
+        expected_box.left().get(),
+        expected_top,
+        expected_box.width().get(),
+        1.0
+    );
+    assert!(
+        commands
+            .iter()
+            .any(|c| c.line.contains("DrawRect") && c.line.contains(&expected_rect_fragment)),
+        "the underline must paint exactly at the CJK composing range's box \
+         (byte-offset agreement, not a char-offset mixup); expected fragment \
+         {expected_rect_fragment:?}; commands: {commands:#?}"
+    );
+}
+
+/// `composing_range: None` paints no underline — only the text itself.
+#[test]
+fn harness_editable_no_underline_when_composing_range_is_none() {
+    let run = RenderTester::mount(box_node(
+        RenderEditable::new(TextSpan::new("plain text"), TextDirection::Ltr).with_show_caret(false),
+    ))
+    .with_constraints(loose(200.0))
+    .run_frame();
+
+    let commands = run.display_commands();
+    assert!(
+        !commands.iter().any(|c| c.line.contains("DrawRect")),
+        "no composing range must mean no underline rect; commands: {commands:#?}"
+    );
+}
+
+/// An empty composing range (`start == end`) also paints no underline — a
+/// zero-width selection is not a visible region.
+#[test]
+fn harness_editable_no_underline_when_composing_range_is_empty() {
+    let run = RenderTester::mount(box_node(
+        RenderEditable::new(TextSpan::new("plain text"), TextDirection::Ltr)
+            .with_composing_range(Some(3..3))
+            .with_show_caret(false),
+    ))
+    .with_constraints(loose(200.0))
+    .run_frame();
+
+    let commands = run.display_commands();
+    assert!(
+        !commands.iter().any(|c| c.line.contains("DrawRect")),
+        "an empty composing range must not paint an underline; commands: {commands:#?}"
+    );
+}
+
+/// The underline's color equals the default glyph color — `flui-engine`'s
+/// own `render_text_span` fallback (`foreground.or(color).unwrap_or(BLACK)`)
+/// when the span carries no explicit style.
+#[test]
+fn harness_editable_underline_color_matches_the_default_glyph_color() {
+    let run = RenderTester::mount(box_node(
+        RenderEditable::new(TextSpan::new("ni hao"), TextDirection::Ltr)
+            .with_composing_range(Some(0..2))
+            .with_show_caret(false),
+    ))
+    .with_constraints(loose(200.0))
+    .run_frame();
+
+    let commands = run.display_commands();
+    let expected_color = format!(
+        "#{:02X}{:02X}{:02X}{:02X}",
+        Color::BLACK.r,
+        Color::BLACK.g,
+        Color::BLACK.b,
+        Color::BLACK.a
+    );
+    assert!(
+        commands
+            .iter()
+            .any(|c| c.line.contains("DrawRect") && c.line.contains(&expected_color)),
+        "an unstyled span's underline must fall back to the same black the \
+         glyphs themselves resolve to; commands: {commands:#?}"
+    );
+}
+
+/// The underline's color equals an EXPLICIT glyph color — proving the
+/// resolution isn't hardcoded to black, it tracks the span's own style.
+///
+/// Red-check: hardcode `resolved_glyph_color` to always return
+/// `Color::BLACK` — this test's color-fragment assertion fails.
+#[test]
+fn harness_editable_underline_color_matches_an_explicit_glyph_color() {
+    let color = Color::rgb(200, 30, 90);
+    let styled_span = TextSpan::new("ni hao").with_style(TextStyle::default().with_color(color));
+
+    let run = RenderTester::mount(box_node(
+        RenderEditable::new(styled_span, TextDirection::Ltr)
+            .with_composing_range(Some(0..2))
+            .with_show_caret(false),
+    ))
+    .with_constraints(loose(200.0))
+    .run_frame();
+
+    let commands = run.display_commands();
+    let expected_color = format!(
+        "#{:02X}{:02X}{:02X}{:02X}",
+        color.r, color.g, color.b, color.a
+    );
+    assert!(
+        commands
+            .iter()
+            .any(|c| c.line.contains("DrawRect") && c.line.contains(&expected_color)),
+        "the underline must match the span's explicit color, not fall back \
+         to black; commands: {commands:#?}"
+    );
+}
+
+/// `rect_for_composing_range` — the `None` cases: no active range, an empty
+/// range, and no layout yet. None of these may ever surface as
+/// `Rect::ZERO`, which would read to a caller as real geometry instead of
+/// "nothing to report."
+///
+/// Red-check: make `rect_for_composing_range` return `Some(Rect::ZERO)` for
+/// an empty range instead of `None` — the second assertion below fails.
+#[test]
+fn harness_editable_rect_for_composing_range_none_cases() {
+    let no_range = RenderEditable::new(TextSpan::new("abc"), TextDirection::Ltr);
+    assert_eq!(no_range.rect_for_composing_range(), None);
+
+    let empty_range = RenderEditable::new(TextSpan::new("abc"), TextDirection::Ltr)
+        .with_composing_range(Some(1..1));
+    assert_eq!(empty_range.rect_for_composing_range(), None);
+
+    // No layout has run at all — `has_layout()` is false.
+    let no_layout = RenderEditable::new(TextSpan::new("abc"), TextDirection::Ltr)
+        .with_composing_range(Some(0..2));
+    assert_eq!(no_layout.rect_for_composing_range(), None);
+}
+
+/// The `Some` case: an active, non-empty, laid-out composing range reports
+/// real bounding geometry — never `Rect::ZERO`.
+#[test]
+fn harness_editable_rect_for_composing_range_some() {
+    let run = RenderTester::mount(box_node(
+        RenderEditable::new(TextSpan::new("hello world"), TextDirection::Ltr)
+            .with_composing_range(Some(0..5)),
+    ))
+    .with_constraints(loose(200.0))
+    .run_layout();
+
+    let editable = run
+        .owner()
+        .render_tree()
+        .get(run.root())
+        .expect("root render id must be live")
+        .as_box()
+        .expect("root is a box node")
+        .render_object()
+        .downcast_ref::<RenderEditable>()
+        .expect("root is a RenderEditable");
+
+    let rect = editable
+        .rect_for_composing_range()
+        .expect("an active, laid-out, non-empty composing range must report geometry");
+    assert_ne!(
+        rect,
+        Rect::from_ltrb(px(0.0), px(0.0), px(0.0), px(0.0)),
+        "a real composing range must never report Rect::ZERO"
+    );
+    assert!(rect.width().get() > 0.0);
 }
 
 // ============================================================================

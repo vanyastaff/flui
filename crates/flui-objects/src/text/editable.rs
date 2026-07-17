@@ -13,12 +13,25 @@
 //! - dry layout, intrinsics, baseline, and hit-test-self;
 //! - collapsed caret only.
 //!
-//! Deferred: selection painting, a composing-region underline (the
-//! controller tracks the range; nothing here paints it differently from
-//! committed text), a hidden caret while composing (`ImeEvent::Preedit`'s
-//! `cursor: None` case — the controller collapses the caret to the end of
-//! the composing region instead, since this object has no rendering state to
-//! hide it), scroll offset, multiline viewport behavior, and obscured text.
+//! Deferred: selection painting, a hidden caret while composing rendered as
+//! a *separate* render-object state (the owning widget instead suppresses
+//! this object's ordinary `show_caret` — see `flui_widgets::EditableText`'s
+//! doc), scroll offset, multiline viewport behavior, and obscured text.
+//!
+//! **Composing-region underline** (ADR-0033): [`RenderEditable::composing_range`]
+//! paints one thin rect per selection box under the composing text — a
+//! declared **1px-at-baseline+1 approximation**, not real font underline
+//! metrics (`TextStyle` has no `decoration` field to merge, unlike Flutter's
+//! `TextStyle(decoration: TextDecoration.underline)`) — do not call this
+//! parity. [`RenderEditable::rect_for_composing_range`] exposes the same
+//! geometry as a bounding rect for the IME cursor-area loop (ADR-0032), with
+//! Flutter's own caret-rect fallback order (`_updateComposingRectIfNeeded`,
+//! `editable_text.dart`, tag `3.44.0`). Single-line only: box-to-byte-range
+//! mapping (`get_boxes_for_range`) compares a global byte range against
+//! per-run glyph indices, which is only correct while this object is
+//! constrained to one line (`max_lines(1)`) — revisit when multiline lands.
+
+use std::ops::Range;
 
 use flui_foundation::Diagnosticable;
 use flui_painting::{Invalidation, Paint, TextBaseline as PainterBaseline, TextPainter};
@@ -43,6 +56,19 @@ const DEFAULT_CARET_WIDTH: f32 = 1.0;
 const DEFAULT_CARET_HEIGHT: f32 = 18.0;
 const CARET_GAP: f32 = 1.0;
 
+/// Thickness of the composing-region underline, in logical pixels.
+///
+/// Declared divergence (ADR-0033): a flat 1px bar, not a font's actual
+/// underline metrics — `TextStyle` has no `decoration` field to source real
+/// metrics from.
+const COMPOSING_UNDERLINE_THICKNESS: f32 = 1.0;
+
+/// Gap between the alphabetic baseline and the top of the composing-region
+/// underline, in logical pixels. Same value as [`CARET_GAP`] by coincidence,
+/// not by any shared meaning — kept as a separate constant so the two can
+/// diverge later without one silently dragging the other along.
+const COMPOSING_UNDERLINE_GAP: f32 = 1.0;
+
 /// Render object that lays out editable text and paints a collapsed caret.
 #[derive(Debug)]
 pub struct RenderEditable {
@@ -55,6 +81,12 @@ pub struct RenderEditable {
     caret_color: Color,
     force_line: bool,
     caret_offset: Offset,
+    /// The in-progress IME composition's byte range into [`Self::plain_text`],
+    /// if any — paints an underline (ADR-0033), never a selection highlight.
+    /// Always char-boundary-clamped against the current text, mirroring
+    /// [`Self::caret_byte_offset`]'s own clamping — see
+    /// [`Self::clamp_composing_range`].
+    composing_range: Option<Range<usize>>,
 }
 
 impl RenderEditable {
@@ -81,6 +113,7 @@ impl RenderEditable {
             caret_color: Color::BLACK,
             force_line: true,
             caret_offset: Offset::ZERO,
+            composing_range: None,
         }
     }
 
@@ -133,6 +166,16 @@ impl RenderEditable {
         self
     }
 
+    /// Sets the composing-region byte range (builder form) — `None` when no
+    /// IME composition is active. Clamped to valid UTF-8 boundaries against
+    /// the current text, the same way [`Self::with_caret_byte_offset`] clamps
+    /// the caret.
+    #[must_use]
+    pub fn with_composing_range(mut self, range: Option<Range<usize>>) -> Self {
+        self.composing_range = range.map(|r| self.clamp_composing_range(r));
+        self
+    }
+
     /// Disables `force_line` sizing (builder form).
     ///
     /// With `force_line = true`, finite incoming max width becomes this box's
@@ -148,7 +191,51 @@ impl RenderEditable {
         let text = text.into();
         self.plain_text = text.to_plain_text();
         self.caret_byte_offset = self.safe_caret_offset(self.caret_byte_offset);
+        // Defense in depth, mirroring the caret re-clamp just above: a
+        // composing range that outlived a text replacement degrades to an
+        // in-bounds (if wrong) slice instead of a `get_boxes_for_selection`
+        // out-of-range read.
+        self.composing_range = self
+            .composing_range
+            .take()
+            .map(|range| self.clamp_composing_range(range));
         self.painter.set_text(Some(text))
+    }
+
+    /// Replaces the composing-region range and returns the invalidation
+    /// level — always paint-only: the composing region changes what gets an
+    /// underline, never glyph shaping.
+    pub fn set_composing_range(&mut self, range: Option<Range<usize>>) -> Invalidation {
+        let clamped = range.map(|r| self.clamp_composing_range(r));
+        if clamped == self.composing_range {
+            Invalidation::None
+        } else {
+            self.composing_range = clamped;
+            Invalidation::Paint
+        }
+    }
+
+    /// The composing region's bounding rect in this object's local painted
+    /// coordinate space — one rect per selection box, folded via
+    /// [`Rect::union`]. `None` whenever there is nothing meaningful to
+    /// report: no active composing range, an empty range, no layout yet, or
+    /// zero boxes — **never [`Rect::ZERO`]**, which would read to a caller
+    /// as "the composing region is at the origin" instead of "there is no
+    /// composing region." `flui_widgets::EditableText`'s IME cursor-area
+    /// loop (ADR-0032) prefers this over [`Self::caret_local_rect`] and
+    /// falls back to it on `None` — Flutter's own
+    /// `_updateComposingRectIfNeeded` order.
+    #[must_use]
+    pub fn rect_for_composing_range(&self) -> Option<Rect> {
+        let range = self.composing_range.clone()?;
+        if range.is_empty() || !self.painter.has_layout() {
+            return None;
+        }
+        self.painter
+            .get_boxes_for_selection(range.start, range.end)
+            .into_iter()
+            .map(|text_box| text_box.rect)
+            .reduce(|acc, rect| acc.union(&rect))
     }
 
     /// The plain text used for caret byte offsets.
@@ -169,6 +256,14 @@ impl RenderEditable {
         self.caret_offset
     }
 
+    /// Whether the collapsed caret is currently painted. Visibility for the
+    /// *geometry* is a separate question — see
+    /// [`caret_local_rect`](Self::caret_local_rect)'s doc.
+    #[must_use]
+    pub fn show_caret(&self) -> bool {
+        self.show_caret
+    }
+
     /// The collapsed caret's rect in this object's local painted coordinate
     /// space: origin at [`caret_offset`](Self::caret_offset), sized
     /// `caret_width` × `caret_height`.
@@ -177,9 +272,11 @@ impl RenderEditable {
     /// `show_caret` — composition is exactly when the platform IME
     /// candidate window should track the caret (see `flui_widgets::
     /// EditableText`'s IME cursor-area tracking loop), which is also when
-    /// `show_caret` may be `false` (the hidden-caret-while-composing case
-    /// this object does not yet model — see the module doc's "Deferred"
-    /// section). A caller that also wants the *painted* caret must check
+    /// `show_caret` may be `false` — this object still has no rendering
+    /// state of its own for "hidden because composing"; the owning widget
+    /// achieves it by passing `show_caret = false` through the ordinary
+    /// flag, driven by `TextEditingController::caret_hidden_by_ime`
+    /// (ADR-0033). A caller that also wants the *painted* caret must check
     /// `show_caret` itself; `paint` does exactly that around its own use of
     /// this same rect.
     ///
@@ -258,6 +355,58 @@ impl RenderEditable {
             .find(|idx| *idx >= offset)
             .unwrap_or(self.plain_text.len())
     }
+
+    /// Clamp a composing-region range to `plain_text`'s current bounds and
+    /// char boundaries, the same way [`Self::safe_caret_offset`] clamps a
+    /// single index. A range whose start outlived the text (`start > end`
+    /// after clamping) collapses to a zero-width range at the clamped
+    /// start — matching an empty composing region rather than reordering
+    /// the bounds.
+    fn clamp_composing_range(&self, range: Range<usize>) -> Range<usize> {
+        let start = self.safe_caret_offset(range.start);
+        let end = self.safe_caret_offset(range.end);
+        if start > end {
+            start..start
+        } else {
+            start..end
+        }
+    }
+
+    /// The color the composing-region underline must paint — identical to
+    /// the color the glyphs themselves resolve to, by construction (ADR-0033's
+    /// color-resolution contract): `foreground` takes precedence over
+    /// `color`, falling back to black, exactly matching
+    /// `flui-engine`'s `render_text_span` resolution for the root span
+    /// style. Reads the span this object already owns through `painter()`
+    /// rather than requiring a separately plumbed color, since nothing else
+    /// resolves it earlier in the pipeline that this object could observe.
+    fn resolved_glyph_color(&self) -> Color {
+        self.painter
+            .text()
+            .and_then(InlineSpan::style)
+            .and_then(|style| style.foreground.or(style.color))
+            .unwrap_or(Color::BLACK)
+    }
+
+    /// The underline rect for one composing-region selection box: 1px thick
+    /// ([`COMPOSING_UNDERLINE_THICKNESS`]), positioned
+    /// [`COMPOSING_UNDERLINE_GAP`] below the alphabetic baseline, clamped to
+    /// stay inside `box_rect`'s vertical span. Declared divergence from real
+    /// font underline metrics — see the module doc's ADR-0033 note.
+    fn underline_rect_for_box(&self, box_rect: Rect) -> Rect {
+        let baseline = self
+            .compute_distance_to_actual_baseline(TextBaseline::Alphabetic)
+            .unwrap_or_else(|| box_rect.height().get());
+        let top = box_rect.top().get();
+        let max_top = (box_rect.bottom().get() - COMPOSING_UNDERLINE_THICKNESS).max(top);
+        let y = (baseline + COMPOSING_UNDERLINE_GAP).clamp(top, max_top);
+        Rect::from_ltrb(
+            box_rect.left(),
+            px(y),
+            box_rect.right(),
+            px(y + COMPOSING_UNDERLINE_THICKNESS),
+        )
+    }
 }
 
 impl Diagnosticable for RenderEditable {
@@ -276,6 +425,12 @@ impl Diagnosticable for RenderEditable {
         properties.add("caret_height", self.caret_height);
         properties.add("caret_color", format!("{:?}", self.caret_color));
         properties.add_flag("force_line", self.force_line, "force line");
+        properties.add(
+            "composing_range",
+            self.composing_range
+                .as_ref()
+                .map_or_else(|| "none".to_string(), |r| format!("{}..{}", r.start, r.end)),
+        );
     }
 }
 
@@ -360,6 +515,19 @@ impl RenderBox for RenderEditable {
         }
 
         self.painter.paint(ctx.canvas(), Offset::ZERO);
+
+        if let Some(range) = self.composing_range.clone()
+            && !range.is_empty()
+        {
+            let boxes = self.painter.get_boxes_for_selection(range.start, range.end);
+            if !boxes.is_empty() {
+                let underline_paint = Paint::fill(self.resolved_glyph_color());
+                for text_box in &boxes {
+                    ctx.canvas()
+                        .draw_rect(self.underline_rect_for_box(text_box.rect), &underline_paint);
+                }
+            }
+        }
 
         if self.show_caret && self.caret_width > 0.0 && self.caret_height > 0.0 {
             ctx.canvas()
