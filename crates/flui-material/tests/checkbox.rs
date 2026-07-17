@@ -10,13 +10,19 @@
 //! since `Checkbox` shares its `WidgetStatesController` with the `InkWell`
 //! it builds).
 //!
-//! **Not covered here** (see `checkbox.rs`'s own unit tests instead): the
-//! M3 default token-table branch order/combined-state pins (exhaustively
-//! unit-tested against `ColorScheme` directly — no render-tree needed to
-//! prove pure functions), and per-field theme-tier-beats-default resolution
-//! (same reason: `resolve_state_color`'s fallthrough contract is unit
-//! tested, and the harness has no generic accessor for a `CustomPainter`'s
-//! resolved fields to assert against post-mount).
+//! **Not covered here** (see `checkbox.rs`'s own unit tests instead, since
+//! neither needs a render tree): the M3 default token-table branch
+//! order/combined-state pins (exhaustively unit-tested against
+//! `ColorScheme` directly), and the widget -> theme -> default tier
+//! precedence + `active_color`'s `!Disabled && Selected` gate — both
+//! exercised directly against `resolve_checkbox_fill_color` (extracted out
+//! of `build` specifically so this cascade is unit-testable without
+//! mounting a widget tree; see `theme_tier_beats_the_m3_default_when_no_widget_override_is_set`/
+//! `widget_override_wins_over_theme_and_default_when_selected_and_enabled`/
+//! `widget_override_is_ignored_when_disabled_even_if_selected`/
+//! `widget_override_is_ignored_when_unselected`), plus `CheckboxPainter`'s
+//! own paint-invocation proof (`draws_the_correct_mark_per_tristate_value`,
+//! a real `Canvas`/`DisplayList` recording).
 
 mod common;
 

@@ -897,6 +897,9 @@ mod tests {
             assert!(theme.input_decoration_theme.is_none());
             assert!(theme.list_tile_theme.is_none());
             assert!(theme.divider_theme.is_none());
+            assert!(theme.checkbox_theme.is_none());
+            assert!(theme.switch_theme.is_none());
+            assert!(theme.radio_theme.is_none());
         }
 
         assert_every_slot_unset(&ThemeData::light());
@@ -1065,5 +1068,131 @@ mod tests {
 
         let patched = base.copy_with(ThemeDataOverrides::default());
         assert_eq!(patched.divider_theme, Some(divider_theme));
+    }
+
+    /// Same shape as `copy_with_sets_input_decoration_theme_slot`, for the
+    /// `checkbox_theme` slot.
+    #[test]
+    fn copy_with_sets_checkbox_theme_slot() {
+        let base = ThemeData::light();
+        let checkbox_theme = CheckboxThemeData {
+            fill_color: Some(flui_widgets::WidgetStateProperty::all(Some(Color::rgb(
+                1, 2, 3,
+            )))),
+            ..Default::default()
+        };
+
+        let patched = base.copy_with(ThemeDataOverrides {
+            checkbox_theme: Some(checkbox_theme.clone()),
+            ..Default::default()
+        });
+
+        assert_eq!(patched.checkbox_theme, Some(checkbox_theme));
+        // Untouched slots stay unset, mirroring the base theme.
+        assert!(patched.switch_theme.is_none());
+    }
+
+    /// Same already-set-slot-survives-a-`None`-override proof as
+    /// `copy_with_none_preserves_an_already_set_input_decoration_theme_slot`,
+    /// for the `checkbox_theme` slot.
+    #[test]
+    fn copy_with_none_preserves_an_already_set_checkbox_theme_slot() {
+        let checkbox_theme = CheckboxThemeData {
+            fill_color: Some(flui_widgets::WidgetStateProperty::all(Some(Color::rgb(
+                1, 2, 3,
+            )))),
+            ..Default::default()
+        };
+        let base = ThemeData::light().copy_with(ThemeDataOverrides {
+            checkbox_theme: Some(checkbox_theme.clone()),
+            ..Default::default()
+        });
+
+        let patched = base.copy_with(ThemeDataOverrides::default());
+        assert_eq!(patched.checkbox_theme, Some(checkbox_theme));
+    }
+
+    /// Same shape as `copy_with_sets_input_decoration_theme_slot`, for the
+    /// `switch_theme` slot.
+    #[test]
+    fn copy_with_sets_switch_theme_slot() {
+        let base = ThemeData::light();
+        let switch_theme = SwitchThemeData {
+            thumb_color: Some(flui_widgets::WidgetStateProperty::all(Some(Color::rgb(
+                4, 5, 6,
+            )))),
+            ..Default::default()
+        };
+
+        let patched = base.copy_with(ThemeDataOverrides {
+            switch_theme: Some(switch_theme.clone()),
+            ..Default::default()
+        });
+
+        assert_eq!(patched.switch_theme, Some(switch_theme));
+        // Untouched slots stay unset, mirroring the base theme.
+        assert!(patched.radio_theme.is_none());
+    }
+
+    /// Same already-set-slot-survives-a-`None`-override proof as
+    /// `copy_with_none_preserves_an_already_set_input_decoration_theme_slot`,
+    /// for the `switch_theme` slot.
+    #[test]
+    fn copy_with_none_preserves_an_already_set_switch_theme_slot() {
+        let switch_theme = SwitchThemeData {
+            thumb_color: Some(flui_widgets::WidgetStateProperty::all(Some(Color::rgb(
+                4, 5, 6,
+            )))),
+            ..Default::default()
+        };
+        let base = ThemeData::light().copy_with(ThemeDataOverrides {
+            switch_theme: Some(switch_theme.clone()),
+            ..Default::default()
+        });
+
+        let patched = base.copy_with(ThemeDataOverrides::default());
+        assert_eq!(patched.switch_theme, Some(switch_theme));
+    }
+
+    /// Same shape as `copy_with_sets_input_decoration_theme_slot`, for the
+    /// `radio_theme` slot.
+    #[test]
+    fn copy_with_sets_radio_theme_slot() {
+        let base = ThemeData::light();
+        let radio_theme = RadioThemeData {
+            fill_color: Some(flui_widgets::WidgetStateProperty::all(Some(Color::rgb(
+                7, 8, 9,
+            )))),
+            ..Default::default()
+        };
+
+        let patched = base.copy_with(ThemeDataOverrides {
+            radio_theme: Some(radio_theme.clone()),
+            ..Default::default()
+        });
+
+        assert_eq!(patched.radio_theme, Some(radio_theme));
+        // Untouched slots stay unset, mirroring the base theme.
+        assert!(patched.checkbox_theme.is_none());
+    }
+
+    /// Same already-set-slot-survives-a-`None`-override proof as
+    /// `copy_with_none_preserves_an_already_set_input_decoration_theme_slot`,
+    /// for the `radio_theme` slot.
+    #[test]
+    fn copy_with_none_preserves_an_already_set_radio_theme_slot() {
+        let radio_theme = RadioThemeData {
+            fill_color: Some(flui_widgets::WidgetStateProperty::all(Some(Color::rgb(
+                7, 8, 9,
+            )))),
+            ..Default::default()
+        };
+        let base = ThemeData::light().copy_with(ThemeDataOverrides {
+            radio_theme: Some(radio_theme.clone()),
+            ..Default::default()
+        });
+
+        let patched = base.copy_with(ThemeDataOverrides::default());
+        assert_eq!(patched.radio_theme, Some(radio_theme));
     }
 }

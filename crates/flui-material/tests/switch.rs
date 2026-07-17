@@ -8,10 +8,21 @@
 //! `tests/checkbox.rs` proves for `Checkbox`, since `Switch` shares the same
 //! `InkWell`-composition shape.
 //!
-//! **Not covered here** (see `switch.rs`'s own unit tests instead): the M3
-//! default token-table branch order/combined-state pins, and per-field
-//! theme-tier-beats-default resolution — both pure-function unit tests, no
-//! render tree needed.
+//! **Not covered here** (see `switch.rs`'s own unit tests instead, since
+//! neither needs a render tree): the M3 default token-table branch
+//! order/combined-state pins, and the widget -> theme -> default tier
+//! precedence + `active_thumb_color`'s `!Disabled && Selected` gate + the
+//! `colorScheme.surface` alpha-blend fix — all exercised directly against
+//! `resolve_switch_thumb_color` (extracted out of `build` specifically so
+//! this cascade is unit-testable without mounting a widget tree; see
+//! `theme_tier_beats_the_m3_default_when_no_widget_override_is_set`/
+//! `widget_override_wins_over_theme_and_default_when_selected_and_enabled`/
+//! `widget_override_is_ignored_when_disabled_even_if_selected`/
+//! `widget_override_is_ignored_when_unselected`/
+//! `disabled_unselected_thumb_color_is_opaque_after_the_surface_blend`),
+//! plus `SwitchPainter`'s own paint-invocation proof
+//! (`thumb_circle_center_lands_on_the_correct_track_end_per_value`, a real
+//! `Canvas`/`DisplayList` recording).
 
 mod common;
 

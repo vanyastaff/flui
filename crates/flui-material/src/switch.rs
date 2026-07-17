@@ -79,6 +79,13 @@
 //!   M3 default tier are both fully state-resolved.
 //! - **`focus_node`/`autofocus`** — same whole-substrate `InkWell` gap
 //!   [`crate::Checkbox`] already names.
+//! - **RTL thumb mirroring** — the oracle computes a `visualPosition` that
+//!   flips which track end is "selected" under `TextDirection.rtl`
+//!   (`visualPosition = 1.0 - currentValue`, `switch.dart` `:1513-1516`), so
+//!   an RTL switch's thumb slides toward the START edge when selected, not
+//!   the end. `SwitchPainter` has no `TextDirection` input and always
+//!   treats "selected" as "thumb at the track's higher-x end" — an LTR-only
+//!   position, not yet a named divergence until now.
 
 use std::rc::Rc;
 
@@ -88,7 +95,6 @@ use flui_types::geometry::px;
 use flui_types::painting::Paint;
 use flui_types::styling::Color;
 use flui_types::{Pixels, Point, RRect, Rect, Size};
-use flui_view::RebuildHandle;
 use flui_view::prelude::*;
 use flui_widgets::{
     CustomPaint, CustomPainter, Semantics, WidgetState, WidgetStateProperty, WidgetStates,
@@ -98,6 +104,7 @@ use flui_widgets::{
 use crate::color_scheme::ColorScheme;
 use crate::ink_well::InkWell;
 use crate::shape::MaterialShape;
+use crate::state_color::resolve_state_color;
 use crate::theme::Theme;
 
 /// The track's width. Flutter parity: `_SwitchConfigM3.trackWidth`/
@@ -216,7 +223,6 @@ impl Switch {
 pub struct SwitchState {
     states: WidgetStatesController,
     states_listener: Option<flui_foundation::ListenerId>,
-    rebuild: Option<RebuildHandle>,
 }
 
 impl std::fmt::Debug for SwitchState {
@@ -239,19 +245,18 @@ impl StatefulView for Switch {
         SwitchState {
             states: WidgetStatesController::new(initial),
             states_listener: None,
-            rebuild: None,
         }
     }
 }
 
 impl ViewState<Switch> for SwitchState {
     fn init_state(&mut self, ctx: &dyn BuildContext) {
+        // The handle is consumed directly by the listener closure; nothing
+        // else needs to re-read it later, so it is not stored on `self`.
         let rebuild = ctx.rebuild_handle();
-        let rebuild_for_listener = rebuild.clone();
         self.states_listener = Some(self.states.add_listener(std::sync::Arc::new(move || {
-            rebuild_for_listener.schedule();
+            rebuild.schedule();
         })));
-        self.rebuild = Some(rebuild);
     }
 
     fn did_update_view(&mut self, old_view: &Switch, new_view: &Switch) {
@@ -267,19 +272,12 @@ impl ViewState<Switch> for SwitchState {
 
         let states = self.states.value();
 
-        let widget_active_override = (!states.contains_state(WidgetState::Disabled)
-            && states.contains_state(WidgetState::Selected))
-        .then_some(view.active_thumb_color)
-        .flatten();
-
-        let thumb_color = widget_active_override
-            .or_else(|| {
-                resolve_state_color(
-                    switch_theme.as_ref().and_then(|t| t.thumb_color.as_ref()),
-                    &states,
-                )
-            })
-            .unwrap_or_else(|| switch_default_thumb_color(&colors, states));
+        let thumb_color = resolve_switch_thumb_color(
+            view.active_thumb_color,
+            switch_theme.as_ref().and_then(|t| t.thumb_color.as_ref()),
+            &colors,
+            states,
+        );
 
         let track_color = resolve_state_color(
             switch_theme.as_ref().and_then(|t| t.track_color.as_ref()),
@@ -346,15 +344,36 @@ impl ViewState<Switch> for SwitchState {
     }
 }
 
-/// Resolves `property` against `states`, flattening the "no property" and
-/// "property present but resolves to `None`" cases into one `None`. Shared
-/// shape with `crate::checkbox`'s private `resolve_state_color` (not reused
-/// directly — that copy is private to its own module).
-fn resolve_state_color(
-    property: Option<&WidgetStateProperty<Option<Color>>>,
-    states: &WidgetStates,
-) -> Option<Color> {
-    property.and_then(|p| p.resolve(states))
+/// Resolves [`Switch`]'s thumb color through the widget -> theme -> default
+/// cascade, then alpha-blends the result over `colors.surface` — extracted
+/// as its own pure function (not left inline in `build`) specifically so
+/// both the tier-precedence order AND the surface-blend fix are
+/// unit-testable without mounting a widget tree. Flutter parity:
+/// `_MaterialSwitchState.build`'s `?? switchTheme.thumbColor?.resolve ??
+/// defaults.thumbColor.resolve` chain, `active_thumb_color` substituting
+/// only when [`WidgetState::Selected`] AND NOT [`WidgetState::Disabled`]
+/// (same shape `crate::checkbox`'s own `resolve_checkbox_fill_color` uses
+/// for its `activeColor` gate), composed with `_SwitchPainter.paint`'s
+/// `Color.alphaBlend(lerpedThumbColor, surfaceColor)` (`switch.dart`
+/// `:1664-1667`) — the blend keeps a translucent thumb (e.g. the
+/// disabled+unselected `onSurface@38%` default tier) from letting the
+/// track paint underneath it show through.
+fn resolve_switch_thumb_color(
+    active_thumb_color: Option<Color>,
+    theme_thumb_color: Option<&WidgetStateProperty<Option<Color>>>,
+    colors: &ColorScheme,
+    states: WidgetStates,
+) -> Color {
+    let widget_active_override = (!states.contains_state(WidgetState::Disabled)
+        && states.contains_state(WidgetState::Selected))
+    .then_some(active_thumb_color)
+    .flatten();
+
+    let resolved = widget_active_override
+        .or_else(|| resolve_state_color(theme_thumb_color, &states))
+        .unwrap_or_else(|| switch_default_thumb_color(colors, states));
+
+    resolved.blend_over(colors.surface)
 }
 
 /// `_SwitchDefaultsM3.thumbColor` (`switch.dart`, oracle tag `3.44.0`).
@@ -553,6 +572,78 @@ mod tests {
 
     fn light() -> ColorScheme {
         ColorScheme::light()
+    }
+
+    // ------------------------------------------------------------------
+    // resolve_switch_thumb_color — tier precedence (widget > theme >
+    // default) and the surface-blend fix, mutation-run: each probe below
+    // was verified to fail against a deliberately broken cascade (widget/
+    // theme tier short-circuited, the `!Disabled && Selected` gate
+    // dropped, or the `blend_over` call removed) before being confirmed
+    // against the real implementation.
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn theme_tier_beats_the_m3_default_when_no_widget_override_is_set() {
+        let states = WidgetStates::from(WidgetState::Selected);
+        let theme_color = WidgetStateProperty::all(Some(Color::rgb(9, 9, 9)));
+        let resolved = resolve_switch_thumb_color(None, Some(&theme_color), &light(), states);
+        // Opaque theme override survives the `blend_over` unchanged (an
+        // opaque foreground always wins a source-over blend).
+        assert_eq!(resolved, Color::rgb(9, 9, 9));
+        assert_ne!(resolved, switch_default_thumb_color(&light(), states));
+    }
+
+    #[test]
+    fn widget_override_wins_over_theme_and_default_when_selected_and_enabled() {
+        let states = WidgetStates::from(WidgetState::Selected);
+        let theme_color = WidgetStateProperty::all(Some(Color::rgb(9, 9, 9)));
+        let resolved = resolve_switch_thumb_color(
+            Some(Color::rgb(1, 1, 1)),
+            Some(&theme_color),
+            &light(),
+            states,
+        );
+        assert_eq!(resolved, Color::rgb(1, 1, 1));
+    }
+
+    #[test]
+    fn widget_override_is_ignored_when_disabled_even_if_selected() {
+        let states = WidgetStates::from(WidgetState::Selected).with_state(WidgetState::Disabled);
+        let resolved =
+            resolve_switch_thumb_color(Some(Color::rgb(1, 1, 1)), None, &light(), states);
+        assert_ne!(resolved, Color::rgb(1, 1, 1));
+    }
+
+    #[test]
+    fn widget_override_is_ignored_when_unselected() {
+        let resolved = resolve_switch_thumb_color(
+            Some(Color::rgb(1, 1, 1)),
+            None,
+            &light(),
+            WidgetStates::NONE,
+        );
+        assert_ne!(resolved, Color::rgb(1, 1, 1));
+    }
+
+    /// Finding: the disabled+unselected default thumb color
+    /// (`on_surface@38%`, translucent) must read as an OPAQUE color once
+    /// resolved — the whole point of blending over `colors.surface` (see
+    /// `resolve_switch_thumb_color`'s doc comment) is that the track
+    /// beneath the thumb must not show through a translucent thumb fill.
+    #[test]
+    fn disabled_unselected_thumb_color_is_opaque_after_the_surface_blend() {
+        let states = WidgetStates::from(WidgetState::Disabled);
+        let pre_blend = switch_default_thumb_color(&light(), states);
+        assert!(
+            pre_blend.a < 255,
+            "the default disabled+unselected thumb color must itself be translucent \
+             for this test to prove anything about the blend step"
+        );
+
+        let resolved = resolve_switch_thumb_color(None, None, &light(), states);
+        assert_eq!(resolved.a, 255, "resolved thumb color must be fully opaque");
+        assert_eq!(resolved, pre_blend.blend_over(light().surface));
     }
 
     #[test]
@@ -772,21 +863,55 @@ mod tests {
         assert!(new.should_repaint(&old));
     }
 
-    // ------------------------------------------------------------------
-    // resolve_state_color fallthrough contract
-    // ------------------------------------------------------------------
-
+    /// The thumb's painted circle center per `selected`, computed
+    /// independently of `SwitchPainter::paint`'s own arithmetic — proves
+    /// the painter is actually invoked (via a real [`Canvas`]/
+    /// [`flui_painting::display_list::DrawCommand`]) and that the thumb
+    /// really lands on the track's `track_inner_start`/`track_inner_end`
+    /// x-coordinate for the given `selected`, not some other value.
+    /// Mutation-run: swapping `track_inner_start`/`track_inner_end` in
+    /// `SwitchPainter::paint` was confirmed to make this test fail before
+    /// being reverted.
     #[test]
-    fn resolve_state_color_is_none_with_no_property() {
-        assert_eq!(resolve_state_color(None, &WidgetStates::NONE), None);
-    }
+    fn thumb_circle_center_lands_on_the_correct_track_end_per_value() {
+        use flui_painting::display_list::DrawCommand;
 
-    #[test]
-    fn resolve_state_color_resolves_a_present_property() {
-        let property = WidgetStateProperty::all(Some(Color::rgb(4, 5, 6)));
-        assert_eq!(
-            resolve_state_color(Some(&property), &WidgetStates::NONE),
-            Some(Color::rgb(4, 5, 6))
-        );
+        let size = Size::new(px(SWITCH_TAP_TARGET_WIDTH), px(SWITCH_TAP_TARGET_HEIGHT));
+        let track_origin_x = (SWITCH_TAP_TARGET_WIDTH - SWITCH_TRACK_WIDTH) / 2.0;
+        let track_origin_y = (SWITCH_TAP_TARGET_HEIGHT - SWITCH_TRACK_HEIGHT) / 2.0;
+        let track_inner_start = SWITCH_TRACK_HEIGHT / 2.0;
+        let track_inner_end = SWITCH_TRACK_WIDTH - track_inner_start;
+        let expected_center_y = track_origin_y + SWITCH_TRACK_HEIGHT / 2.0;
+
+        for (selected, expected_inner_x) in [(false, track_inner_start), (true, track_inner_end)] {
+            let mut canvas = Canvas::new();
+            painter(selected).paint(&mut canvas, size);
+
+            let circles: Vec<_> = canvas
+                .display_list()
+                .iter()
+                .filter_map(|command| match command {
+                    DrawCommand::DrawCircle { center, .. } => Some(*center),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                circles.len(),
+                1,
+                "expected exactly one drawn circle (the thumb) for selected={selected}",
+            );
+
+            let expected_center_x = track_origin_x + expected_inner_x;
+            assert!(
+                (circles[0].x.get() - expected_center_x).abs() < 0.01,
+                "selected={selected}: expected thumb center x {expected_center_x}, got {}",
+                circles[0].x.get(),
+            );
+            assert!(
+                (circles[0].y.get() - expected_center_y).abs() < 0.01,
+                "selected={selected}: expected thumb center y {expected_center_y}, got {}",
+                circles[0].y.get(),
+            );
+        }
     }
 }

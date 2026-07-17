@@ -96,7 +96,6 @@ use flui_types::geometry::px;
 use flui_types::painting::{Paint, Path};
 use flui_types::styling::{BorderSide, BorderStyle};
 use flui_types::{Color, Pixels, Point, RRect, Rect, Size};
-use flui_view::RebuildHandle;
 use flui_view::prelude::*;
 use flui_widgets::{
     CustomPaint, CustomPainter, Semantics, WidgetState, WidgetStateProperty, WidgetStates,
@@ -106,6 +105,7 @@ use flui_widgets::{
 use crate::color_scheme::ColorScheme;
 use crate::ink_well::InkWell;
 use crate::shape::MaterialShape;
+use crate::state_color::resolve_state_color;
 use crate::theme::Theme;
 
 /// A checkbox's edge length. Flutter parity: `Checkbox.width` (`18.0`,
@@ -275,7 +275,6 @@ impl Checkbox {
 pub struct CheckboxState {
     states: WidgetStatesController,
     states_listener: Option<flui_foundation::ListenerId>,
-    rebuild: Option<RebuildHandle>,
 }
 
 impl std::fmt::Debug for CheckboxState {
@@ -303,7 +302,6 @@ impl StatefulView for Checkbox {
         CheckboxState {
             states: WidgetStatesController::new(initial),
             states_listener: None,
-            rebuild: None,
         }
     }
 }
@@ -311,13 +309,13 @@ impl StatefulView for Checkbox {
 impl ViewState<Checkbox> for CheckboxState {
     fn init_state(&mut self, ctx: &dyn BuildContext) {
         // ADR-0018: acquired here, fired only from the states-controller
-        // listener below — never from `build`. Mirrors `InkWellState`.
+        // listener below — never from `build`. Mirrors `InkWellState`. The
+        // handle is consumed directly by the listener closure; nothing else
+        // needs to re-read it later, so it is not stored on `self`.
         let rebuild = ctx.rebuild_handle();
-        let rebuild_for_listener = rebuild.clone();
         self.states_listener = Some(self.states.add_listener(std::sync::Arc::new(move || {
-            rebuild_for_listener.schedule();
+            rebuild.schedule();
         })));
-        self.rebuild = Some(rebuild);
     }
 
     fn did_update_view(&mut self, old_view: &Checkbox, new_view: &Checkbox) {
@@ -350,23 +348,12 @@ impl ViewState<Checkbox> for CheckboxState {
             states = states.with_state(WidgetState::Error);
         }
 
-        // Flutter parity: `_widgetFillColor` (`checkbox.dart` `:450-460`) —
-        // `activeColor` only substitutes when selected and enabled; the
-        // `widget.fillColor` tier above it is a named V1 deferral (see the
-        // module docs), so the cascade starts one tier lower.
-        let widget_active_override = (!states.contains_state(WidgetState::Disabled)
-            && states.contains_state(WidgetState::Selected))
-        .then_some(view.active_color)
-        .flatten();
-
-        let fill_color = widget_active_override
-            .or_else(|| {
-                resolve_state_color(
-                    checkbox_theme.as_ref().and_then(|t| t.fill_color.as_ref()),
-                    &states,
-                )
-            })
-            .unwrap_or_else(|| checkbox_default_fill_color(&colors, states));
+        let fill_color = resolve_checkbox_fill_color(
+            view.active_color,
+            checkbox_theme.as_ref().and_then(|t| t.fill_color.as_ref()),
+            &colors,
+            states,
+        );
 
         let check_color = view
             .check_color
@@ -446,15 +433,31 @@ impl ViewState<Checkbox> for CheckboxState {
     }
 }
 
-/// Resolves `property` against `states`, flattening the "no property" and
-/// "property present but resolves to `None`" cases into one `None` —
-/// exactly the fall-through-to-next-tier shape every cascade in this module
-/// wants (`widget?.resolve(states) ?? theme?.resolve(states) ?? default`).
-fn resolve_state_color(
-    property: Option<&WidgetStateProperty<Option<Color>>>,
-    states: &WidgetStates,
-) -> Option<Color> {
-    property.and_then(|p| p.resolve(states))
+/// Resolves [`Checkbox`]'s fill color through the widget -> theme -> default
+/// cascade — extracted as its own pure function (not left inline in
+/// `build`) specifically so the tier-precedence order is unit-testable
+/// without mounting a widget tree. Flutter parity: `_widgetFillColor`
+/// (`checkbox.dart` `:450-460`) composed with `_CheckboxState.build`'s own
+/// `?? checkboxTheme.fillColor?.resolve ?? defaults.fillColor.resolve`
+/// chain — `active_color` only substitutes when [`WidgetState::Selected`]
+/// AND NOT [`WidgetState::Disabled`] (the oracle's `_widgetFillColor`
+/// returns `null` otherwise, falling through); the `widget.fillColor`
+/// `WidgetStateProperty` tier above it is a named V1 deferral (see the
+/// module docs), so this cascade starts one tier lower than the oracle's.
+fn resolve_checkbox_fill_color(
+    active_color: Option<Color>,
+    theme_fill_color: Option<&WidgetStateProperty<Option<Color>>>,
+    colors: &ColorScheme,
+    states: WidgetStates,
+) -> Color {
+    let widget_active_override = (!states.contains_state(WidgetState::Disabled)
+        && states.contains_state(WidgetState::Selected))
+    .then_some(active_color)
+    .flatten();
+
+    widget_active_override
+        .or_else(|| resolve_state_color(theme_fill_color, &states))
+        .unwrap_or_else(|| checkbox_default_fill_color(colors, states))
 }
 
 /// `_CheckboxDefaultsM3.fillColor` (`checkbox.dart`, oracle tag `3.44.0`).
@@ -702,6 +705,63 @@ mod tests {
         ColorScheme::light()
     }
 
+    // ------------------------------------------------------------------
+    // resolve_checkbox_fill_color — tier precedence (widget > theme >
+    // default), mutation-run: each probe below was verified to fail
+    // against a deliberately broken cascade (widget/theme tier short-
+    // circuited, or the `!Disabled && Selected` gate dropped) before being
+    // confirmed against the real implementation.
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn theme_tier_beats_the_m3_default_when_no_widget_override_is_set() {
+        let states = WidgetStates::from(WidgetState::Selected);
+        let theme_color = WidgetStateProperty::all(Some(Color::rgb(9, 9, 9)));
+        let resolved = resolve_checkbox_fill_color(None, Some(&theme_color), &light(), states);
+        assert_eq!(resolved, Color::rgb(9, 9, 9));
+        // Sanity: the theme color must differ from the M3 default at the
+        // same states, or this test couldn't distinguish "theme applied"
+        // from "default applied by coincidence".
+        assert_ne!(resolved, checkbox_default_fill_color(&light(), states));
+    }
+
+    #[test]
+    fn widget_override_wins_over_theme_and_default_when_selected_and_enabled() {
+        let states = WidgetStates::from(WidgetState::Selected);
+        let theme_color = WidgetStateProperty::all(Some(Color::rgb(9, 9, 9)));
+        let resolved = resolve_checkbox_fill_color(
+            Some(Color::rgb(1, 1, 1)),
+            Some(&theme_color),
+            &light(),
+            states,
+        );
+        assert_eq!(resolved, Color::rgb(1, 1, 1));
+    }
+
+    #[test]
+    fn widget_override_is_ignored_when_disabled_even_if_selected() {
+        let states = WidgetStates::from(WidgetState::Selected).with_state(WidgetState::Disabled);
+        let resolved =
+            resolve_checkbox_fill_color(Some(Color::rgb(1, 1, 1)), None, &light(), states);
+        assert_ne!(resolved, Color::rgb(1, 1, 1));
+        assert_eq!(resolved, checkbox_default_fill_color(&light(), states));
+    }
+
+    #[test]
+    fn widget_override_is_ignored_when_unselected() {
+        let resolved = resolve_checkbox_fill_color(
+            Some(Color::rgb(1, 1, 1)),
+            None,
+            &light(),
+            WidgetStates::NONE,
+        );
+        assert_ne!(resolved, Color::rgb(1, 1, 1));
+        assert_eq!(
+            resolved,
+            checkbox_default_fill_color(&light(), WidgetStates::NONE)
+        );
+    }
+
     #[test]
     fn default_fill_color_unselected_enabled_is_transparent() {
         assert_eq!(
@@ -929,21 +989,42 @@ mod tests {
         assert!(new.should_repaint(&Other));
     }
 
-    // ------------------------------------------------------------------
-    // resolve_state_color fallthrough contract
-    // ------------------------------------------------------------------
-
+    /// Proves the painter is actually invoked (via a real [`Canvas`]/
+    /// [`flui_painting::display_list::DrawCommand`]) and paints the
+    /// correct mark per tristate value: a checkmark (`DrawPath`) only for
+    /// `Some(true)`, a dash (`DrawLine`) only for `None`, and neither for
+    /// `Some(false)` — [`CheckboxPainter::paint`]'s `match self.value`
+    /// (see the module docs' V1-scope section). Mutation-run: swapping the
+    /// `Some(true)`/`None` arms was confirmed to make this test fail
+    /// before being reverted.
     #[test]
-    fn resolve_state_color_is_none_with_no_property() {
-        assert_eq!(resolve_state_color(None, &WidgetStates::NONE), None);
-    }
+    fn draws_the_correct_mark_per_tristate_value() {
+        use flui_painting::display_list::DrawCommand;
 
-    #[test]
-    fn resolve_state_color_resolves_a_present_property() {
-        let property = WidgetStateProperty::all(Some(Color::rgb(1, 2, 3)));
-        assert_eq!(
-            resolve_state_color(Some(&property), &WidgetStates::NONE),
-            Some(Color::rgb(1, 2, 3))
-        );
+        let size = Size::new(px(CHECKBOX_TAP_TARGET_SIZE), px(CHECKBOX_TAP_TARGET_SIZE));
+
+        for (value, expect_path, expect_line) in [
+            (Some(true), true, false),
+            (None, false, true),
+            (Some(false), false, false),
+        ] {
+            let mut canvas = Canvas::new();
+            painter(value).paint(&mut canvas, size);
+
+            let has_path = canvas
+                .display_list()
+                .iter()
+                .any(|command| matches!(command, DrawCommand::DrawPath { .. }));
+            let has_line = canvas
+                .display_list()
+                .iter()
+                .any(|command| matches!(command, DrawCommand::DrawLine { .. }));
+
+            assert_eq!(
+                has_path, expect_path,
+                "value={value:?}: checkmark path presence"
+            );
+            assert_eq!(has_line, expect_line, "value={value:?}: dash line presence");
+        }
     }
 }

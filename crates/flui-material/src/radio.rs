@@ -112,7 +112,6 @@ use flui_types::geometry::px;
 use flui_types::painting::Paint;
 use flui_types::styling::Color;
 use flui_types::{Point, Size};
-use flui_view::RebuildHandle;
 use flui_view::prelude::*;
 use flui_widgets::{
     CustomPaint, CustomPainter, Semantics, WidgetState, WidgetStateProperty, WidgetStates,
@@ -122,6 +121,7 @@ use flui_widgets::{
 use crate::color_scheme::ColorScheme;
 use crate::ink_well::InkWell;
 use crate::shape::MaterialShape;
+use crate::state_color::resolve_state_color;
 use crate::theme::Theme;
 
 /// The outer ring's radius. Flutter parity: `_kOuterRadius` (`radio.dart`,
@@ -248,7 +248,6 @@ impl<T: PartialEq + Clone + 'static> Radio<T> {
 pub struct RadioState {
     states: WidgetStatesController,
     states_listener: Option<flui_foundation::ListenerId>,
-    rebuild: Option<RebuildHandle>,
 }
 
 impl std::fmt::Debug for RadioState {
@@ -271,19 +270,18 @@ impl<T: PartialEq + Clone + 'static> StatefulView for Radio<T> {
         RadioState {
             states: WidgetStatesController::new(initial),
             states_listener: None,
-            rebuild: None,
         }
     }
 }
 
 impl<T: PartialEq + Clone + 'static> ViewState<Radio<T>> for RadioState {
     fn init_state(&mut self, ctx: &dyn BuildContext) {
+        // The handle is consumed directly by the listener closure; nothing
+        // else needs to re-read it later, so it is not stored on `self`.
         let rebuild = ctx.rebuild_handle();
-        let rebuild_for_listener = rebuild.clone();
         self.states_listener = Some(self.states.add_listener(std::sync::Arc::new(move || {
-            rebuild_for_listener.schedule();
+            rebuild.schedule();
         })));
-        self.rebuild = Some(rebuild);
     }
 
     fn did_update_view(&mut self, old_view: &Radio<T>, new_view: &Radio<T>) {
@@ -301,19 +299,12 @@ impl<T: PartialEq + Clone + 'static> ViewState<Radio<T>> for RadioState {
 
         let states = self.states.value();
 
-        let widget_active_override = (!states.contains_state(WidgetState::Disabled)
-            && states.contains_state(WidgetState::Selected))
-        .then_some(view.active_color)
-        .flatten();
-
-        let ring_color = widget_active_override
-            .or_else(|| {
-                resolve_state_color(
-                    radio_theme.as_ref().and_then(|t| t.fill_color.as_ref()),
-                    &states,
-                )
-            })
-            .unwrap_or_else(|| radio_default_fill_color(&colors, states));
+        let ring_color = resolve_radio_ring_color(
+            view.active_color,
+            radio_theme.as_ref().and_then(|t| t.fill_color.as_ref()),
+            &colors,
+            states,
+        );
 
         let theme_overlay = radio_theme.as_ref().and_then(|t| t.overlay_color.clone());
         let overlay_color = WidgetStateProperty::resolve_with(move |live_states: &WidgetStates| {
@@ -365,15 +356,26 @@ impl<T: PartialEq + Clone + 'static> ViewState<Radio<T>> for RadioState {
     }
 }
 
-/// Resolves `property` against `states`, flattening the "no property" and
-/// "property present but resolves to `None`" cases into one `None`. Shared
-/// shape with `crate::checkbox`/`crate::switch`'s own private copies (not
-/// reused directly — each is private to its own module).
-fn resolve_state_color(
-    property: Option<&WidgetStateProperty<Option<Color>>>,
-    states: &WidgetStates,
-) -> Option<Color> {
-    property.and_then(|p| p.resolve(states))
+/// Resolves [`Radio`]'s ring/inner-dot color through the widget -> theme ->
+/// default cascade — extracted as its own pure function (not left inline
+/// in `build`) specifically so the tier-precedence order is unit-testable
+/// without mounting a widget tree. Same shape `crate::checkbox`'s own
+/// `resolve_checkbox_fill_color` uses: `active_color` only substitutes
+/// when [`WidgetState::Selected`] AND NOT [`WidgetState::Disabled`].
+fn resolve_radio_ring_color(
+    active_color: Option<Color>,
+    theme_fill_color: Option<&WidgetStateProperty<Option<Color>>>,
+    colors: &ColorScheme,
+    states: WidgetStates,
+) -> Color {
+    let widget_active_override = (!states.contains_state(WidgetState::Disabled)
+        && states.contains_state(WidgetState::Selected))
+    .then_some(active_color)
+    .flatten();
+
+    widget_active_override
+        .or_else(|| resolve_state_color(theme_fill_color, &states))
+        .unwrap_or_else(|| radio_default_fill_color(colors, states))
 }
 
 /// `_RadioDefaultsM3.fillColor` (`radio.dart`, oracle tag `3.44.0`).
@@ -507,6 +509,59 @@ mod tests {
         ColorScheme::light()
     }
 
+    // ------------------------------------------------------------------
+    // resolve_radio_ring_color — tier precedence (widget > theme >
+    // default), mutation-run: each probe below was verified to fail
+    // against a deliberately broken cascade (widget/theme tier short-
+    // circuited, or the `!Disabled && Selected` gate dropped) before being
+    // confirmed against the real implementation.
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn theme_tier_beats_the_m3_default_when_no_widget_override_is_set() {
+        let states = WidgetStates::from(WidgetState::Selected);
+        let theme_color = WidgetStateProperty::all(Some(Color::rgb(9, 9, 9)));
+        let resolved = resolve_radio_ring_color(None, Some(&theme_color), &light(), states);
+        assert_eq!(resolved, Color::rgb(9, 9, 9));
+        assert_ne!(resolved, radio_default_fill_color(&light(), states));
+    }
+
+    #[test]
+    fn widget_override_wins_over_theme_and_default_when_selected_and_enabled() {
+        let states = WidgetStates::from(WidgetState::Selected);
+        let theme_color = WidgetStateProperty::all(Some(Color::rgb(9, 9, 9)));
+        let resolved = resolve_radio_ring_color(
+            Some(Color::rgb(1, 1, 1)),
+            Some(&theme_color),
+            &light(),
+            states,
+        );
+        assert_eq!(resolved, Color::rgb(1, 1, 1));
+    }
+
+    #[test]
+    fn widget_override_is_ignored_when_disabled_even_if_selected() {
+        let states = WidgetStates::from(WidgetState::Selected).with_state(WidgetState::Disabled);
+        let resolved = resolve_radio_ring_color(Some(Color::rgb(1, 1, 1)), None, &light(), states);
+        assert_ne!(resolved, Color::rgb(1, 1, 1));
+        assert_eq!(resolved, radio_default_fill_color(&light(), states));
+    }
+
+    #[test]
+    fn widget_override_is_ignored_when_unselected() {
+        let resolved = resolve_radio_ring_color(
+            Some(Color::rgb(1, 1, 1)),
+            None,
+            &light(),
+            WidgetStates::NONE,
+        );
+        assert_ne!(resolved, Color::rgb(1, 1, 1));
+        assert_eq!(
+            resolved,
+            radio_default_fill_color(&light(), WidgetStates::NONE)
+        );
+    }
+
     #[test]
     fn default_fill_color_unselected_enabled_default_is_on_surface_variant() {
         assert_eq!(
@@ -630,21 +685,34 @@ mod tests {
         assert!(new.should_repaint(&old));
     }
 
-    // ------------------------------------------------------------------
-    // resolve_state_color fallthrough contract
-    // ------------------------------------------------------------------
-
+    /// Proves the painter is actually invoked (via a real [`Canvas`]/
+    /// [`flui_painting::display_list::DrawCommand`]) and that the inner
+    /// dot is drawn if and only if `selected` — the oracle's own
+    /// `!position.isDismissed` guard (`radio.dart` `:870`), which V1's
+    /// non-animated `position ∈ {0.0, 1.0}` collapses to exactly this
+    /// boolean. Mutation-run: deleting the `if self.selected` guard in
+    /// `RadioPainter::paint` (always drawing the dot) was confirmed to make
+    /// the `unselected` half of this test fail before being reverted.
     #[test]
-    fn resolve_state_color_is_none_with_no_property() {
-        assert_eq!(resolve_state_color(None, &WidgetStates::NONE), None);
-    }
+    fn inner_dot_is_present_only_when_selected() {
+        use flui_painting::display_list::DrawCommand;
 
-    #[test]
-    fn resolve_state_color_resolves_a_present_property() {
-        let property = WidgetStateProperty::all(Some(Color::rgb(7, 8, 9)));
-        assert_eq!(
-            resolve_state_color(Some(&property), &WidgetStates::NONE),
-            Some(Color::rgb(7, 8, 9))
-        );
+        let size = Size::new(px(RADIO_TAP_TARGET_SIZE), px(RADIO_TAP_TARGET_SIZE));
+
+        for (selected, expected_circle_count) in [(false, 1_usize), (true, 2_usize)] {
+            let mut canvas = Canvas::new();
+            painter(selected).paint(&mut canvas, size);
+
+            let circle_count = canvas
+                .display_list()
+                .iter()
+                .filter(|command| matches!(command, DrawCommand::DrawCircle { .. }))
+                .count();
+            assert_eq!(
+                circle_count, expected_circle_count,
+                "selected={selected}: expected {expected_circle_count} drawn circle(s) \
+                 (the outer ring, plus the inner dot only when selected)",
+            );
+        }
     }
 }
