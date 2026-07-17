@@ -27,9 +27,10 @@ use common::{lay_out, size, tight};
 use flui_material::{Checkbox, Theme, ThemeData};
 
 /// The checkbox's full tap target — Flutter parity: `kMinInteractiveDimension`
-/// (`constants.dart`, oracle tag `3.44.0`), the branch `Checkbox.build`
-/// always takes in this V1 (no `materialTapTargetSize` override yet).
-const TAP_TARGET: f32 = 40.0;
+/// (`constants.dart`, `48.0`, oracle tag `3.44.0`), the branch
+/// `Checkbox.build` always takes in this V1 (no `materialTapTargetSize`
+/// override yet).
+const TAP_TARGET: f32 = 48.0;
 
 fn constraints() -> flui_rendering::constraints::BoxConstraints {
     tight(TAP_TARGET, TAP_TARGET)

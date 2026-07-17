@@ -53,6 +53,18 @@
 //! oracle's own painter uses, so this is a direct, honest port of the static
 //! (non-animated) shape.
 //!
+//! # Overlay shape: the whole tap target, not a fixed-radius circle
+//!
+//! `_CheckboxDefaultsM3.splashRadius` (`20.0`) sizes the oracle's own
+//! FREE (unclipped) radial-reaction circle
+//! (`ToggleablePainter.paintRadialReaction`). `InkWell`'s single-fill
+//! substitution (see the "V1 scope" section above) has no free-circle
+//! primitive — it paints one shape-clipped fill over its own bounds. This
+//! port shapes that fill as [`MaterialShape::Stadium`] over the FULL
+//! `CHECKBOX_TAP_TARGET_SIZE` square (inscribing a `24.0`-radius circle, not
+//! exactly `20.0`) — the same named, position-independent approximation
+//! [`crate::switch`]'s module docs describe for `Switch`'s own overlay.
+//!
 //! # Deferred (named, not silently dropped)
 //!
 //! - **Toggle/reaction/hover/focus-fade animation** — see above.
@@ -60,9 +72,11 @@
 //!   `TargetPlatform` substrate to switch on yet.
 //! - **`mouse_cursor`, `splash_radius`, `material_tap_target_size`,
 //!   `visual_density` overrides** — V1 always uses the M3 defaults
-//!   (`kMinInteractiveDimension` = 40dp tap target, `VisualDensity.standard`
-//!   = no adjustment, `splashRadius = 20.0`). [`crate::CheckboxThemeData`]
-//!   and the widget both omit these fields; see that type's own doc comment.
+//!   (`kMinInteractiveDimension` = 48dp tap target, `VisualDensity.standard`
+//!   = no adjustment, `splashRadius = 20.0` — see the "Overlay shape"
+//!   section above for why the InkWell substitution doesn't hit that value
+//!   exactly). [`crate::CheckboxThemeData`] and the widget both omit these
+//!   fields; see that type's own doc comment.
 //! - **Widget-level `fill_color`/`overlay_color`/`side`/`shape` overrides**
 //!   (the oracle's `WidgetStateProperty`-shaped constructor parameters) —
 //!   only [`Checkbox::active_color`] and [`Checkbox::check_color`] (the
@@ -103,16 +117,16 @@ pub const CHECKBOX_EDGE_SIZE: f32 = 18.0;
 const STROKE_WIDTH: f32 = 2.0;
 
 /// The M3 tap-target side length. Flutter parity: `kMinInteractiveDimension`
-/// (`constants.dart`), the `MaterialTapTargetSize.padded` branch
+/// (`constants.dart`, `48.0`), the `MaterialTapTargetSize.padded` branch
 /// `_CheckboxState.build` always takes in V1 (no `materialTapTargetSize`
 /// override yet — see the module docs).
-pub const CHECKBOX_TAP_TARGET_SIZE: f32 = 40.0;
+pub const CHECKBOX_TAP_TARGET_SIZE: f32 = 48.0;
 
 /// The box's corner radius. Flutter parity: `_CheckboxDefaultsM3.shape`,
 /// `RoundedRectangleBorder(borderRadius: BorderRadius.all(Radius.circular(2.0)))`.
 const CORNER_RADIUS: f32 = 2.0;
 
-// The 18dp box must fit inside the 40dp tap target with room for the
+// The 18dp box must fit inside the 48dp tap target with room for the
 // centering inset the painter computes — a compile-time invariant, not a
 // runtime test (both sides are `const`).
 const _: () = assert!(CHECKBOX_EDGE_SIZE < CHECKBOX_TAP_TARGET_SIZE);
@@ -860,12 +874,12 @@ mod tests {
     // ------------------------------------------------------------------
 
     /// `InkWell`'s [`MaterialShape::Stadium`] over the square tap target
-    /// inscribes a circle whose radius equals `_CheckboxDefaultsM3.splashRadius`
-    /// (`40.0 / 2`, `checkbox.dart`, oracle tag `3.44.0`) — the geometric
-    /// justification for reusing `Stadium` instead of a dedicated `Circle`
-    /// shape (see the module docs).
+    /// inscribes a circle at half the tap-target side — the geometric shape
+    /// the overlay actually paints. See the module docs' "Overlay shape"
+    /// section for why this is `24.0`, not exactly
+    /// `_CheckboxDefaultsM3.splashRadius`'s `20.0`.
     #[test]
-    fn stadium_shape_on_the_tap_target_inscribes_the_m3_splash_radius() {
+    fn stadium_shape_on_the_tap_target_inscribes_a_circle_at_half_its_side() {
         let tap_target = Size::new(px(CHECKBOX_TAP_TARGET_SIZE), px(CHECKBOX_TAP_TARGET_SIZE));
         let rrect = MaterialShape::Stadium.to_rrect(tap_target);
         assert_eq!(rrect.top_left.x, px(CHECKBOX_TAP_TARGET_SIZE / 2.0));
