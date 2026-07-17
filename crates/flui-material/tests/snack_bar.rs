@@ -128,6 +128,29 @@ fn scaffold_roots(laid: &common::LaidOut) -> Vec<RenderId> {
     laid.find_all_by_render_type("RenderCustomMultiChildLayoutBox")
 }
 
+/// The `RenderParagraph` node whose rendered text exactly matches `text` —
+/// mirrors `tests/material_demo.rs`'s own `find_text` helper (that file
+/// cannot share this one; see this crate's `tests/common/mod.rs` module
+/// doc on why the harness itself is duplicated, not shared, per test binary).
+fn find_text(laid: &common::LaidOut, text: &str) -> Option<RenderId> {
+    laid.find_all_by_render_type("RenderParagraph")
+        .into_iter()
+        .find(|&id| laid.render_property(id, "text").as_deref() == Some(text))
+}
+
+/// The snack bar's own `Material` (`RenderPhysicalShape` at elevation
+/// `6.0`) — see [`snack_bar_material_count`]'s doc for why elevation is the
+/// distinguishing property.
+fn find_snack_bar_material(laid: &common::LaidOut) -> Option<RenderId> {
+    laid.find_all_by_render_type("RenderPhysicalShape")
+        .into_iter()
+        .find(|&id| {
+            laid.render_property(id, "elevation")
+                .and_then(|value| value.parse::<f32>().ok())
+                == Some(6.0)
+        })
+}
+
 /// The number of mounted `Material` surfaces (`RenderPhysicalShape`) with
 /// elevation `6.0` — `crate::snack_bar`'s `DEFAULT_ELEVATION`, distinctive
 /// among this tree's other surfaces (`Scaffold`'s own root `Material`
@@ -279,15 +302,8 @@ fn action_press_closes_the_snack_bar_and_is_single_fire() {
     // `snack_bar_material_count` uses, so this test does not depend on
     // internal render-node identification beyond that one distinctive
     // property.
-    let snack_bar_material = laid
-        .find_all_by_render_type("RenderPhysicalShape")
-        .into_iter()
-        .find(|&id| {
-            laid.render_property(id, "elevation")
-                .and_then(|value| value.parse::<f32>().ok())
-                == Some(6.0)
-        })
-        .expect("the snack bar's Material must be mounted");
+    let snack_bar_material =
+        find_snack_bar_material(&laid).expect("the snack bar's Material must be mounted");
     let bar_offset = laid.absolute_offset(snack_bar_material);
     let bar_size = laid.size(snack_bar_material);
     let tap_x = bar_offset.dx.get() + bar_size.width.get() * 0.92;
@@ -565,5 +581,187 @@ fn a_scaffold_mounted_fresh_under_a_new_messenger_registers_with_that_one_not_a_
         second_handle.registered_scaffold_count(),
         1,
         "the freshly-mounted Scaffold must register with its OWN nearest messenger"
+    );
+}
+
+// ============================================================================
+// 9. A Scaffold that mounts while a snack bar is already showing renders it
+//    immediately.
+//
+// `register_scaffold`'s "queue non-empty -> schedule an immediate rebuild"
+// branch (Flutter parity: `_register`, `scaffold.dart:211-223`) is what this
+// test SETS OUT to isolate, but a mutation run against it (dropping the
+// branch entirely) still leaves this test green: a freshly-mounted
+// `Scaffold`'s `init_state` (which registers) always runs immediately
+// before that SAME element's own first `build()`, in the same synchronous
+// mount pass — so the first `build()` already reads `current_entry()`
+// fresh regardless of whether `register_scaffold` additionally scheduled a
+// rebuild. The branch is therefore genuinely unobservable via a fresh-mount
+// scenario in this substrate (confirmed by actually running that exact
+// mutation, not merely asserted). It is kept anyway: it mirrors the
+// oracle's own defensive `_register` (which similarly calls
+// `scaffold._updateSnackBar()` unconditionally, not gated on "is this the
+// very first build"), and would matter the moment `ScaffoldState`'s
+// re-home path (`did_change_dependencies`) becomes reachable without an
+// immediately-following rebuild of the same element. This test still earns
+// its place as a genuine behavior guarantee — "mount while showing renders
+// it" — even though it does not, by itself, prove WHICH code path delivers
+// that guarantee.
+// ============================================================================
+
+#[test]
+fn mounting_a_scaffold_while_a_snack_bar_is_already_showing_renders_it_immediately() {
+    let vsync = Vsync::new();
+    let handle_slot: Rc<RefCell<Option<ScaffoldMessengerHandle>>> = Rc::new(RefCell::new(None));
+    let tree = themed_animated(
+        &vsync,
+        ScaffoldMessenger::new(flui_widgets::Column::new(vec![
+            ViewExt::boxed(HandleProbe {
+                slot: Rc::clone(&handle_slot),
+            }),
+            ViewExt::boxed(flui_widgets::Expanded::new(
+                Scaffold::new().body(body_marker()),
+            )),
+        ])),
+    );
+    let mut laid = lay_out_animated(tree, tight(400.0, 1600.0), vsync.clone());
+    let handle = handle_slot
+        .borrow()
+        .clone()
+        .expect("handle must be published");
+
+    handle.show_snack_bar(SnackBar::new(Text::new("already showing")));
+    pump_ms(&mut laid, ENTRY.as_millis() as u64);
+    assert_eq!(
+        snack_bar_material_count(&laid),
+        1,
+        "showing on the first Scaffold"
+    );
+
+    // Mount a SECOND Scaffold under the SAME messenger while the snack bar
+    // is already showing.
+    let replacement = themed_animated(
+        &vsync,
+        ScaffoldMessenger::new(flui_widgets::Column::new(vec![
+            ViewExt::boxed(HandleProbe {
+                slot: Rc::clone(&handle_slot),
+            }),
+            ViewExt::boxed(flui_widgets::Expanded::new(
+                Scaffold::new().body(body_marker()),
+            )),
+            ViewExt::boxed(flui_widgets::Expanded::new(
+                Scaffold::new().body(body_marker()),
+            )),
+        ])),
+    );
+    laid.pump_widget(replacement);
+
+    assert_eq!(
+        scaffold_roots(&laid).len(),
+        2,
+        "both Scaffolds must be mounted"
+    );
+    assert_eq!(
+        snack_bar_material_count(&laid),
+        2,
+        "the newly-mounted Scaffold must render the ALREADY-showing snack bar immediately, \
+         not wait for the next unrelated rebuild"
+    );
+}
+
+// ============================================================================
+// 10. Paint-bounds pin: the entrance/exit transition is clipped to its
+//     CURRENT (animated) height, not painted at the content's full natural
+//     height past that box — the exact overflow-into-a-stacked-sibling bug
+//     an omitted `ClipRect` produces.
+// ============================================================================
+
+#[test]
+fn snack_bar_clips_to_its_animated_height_mid_entrance() {
+    let vsync = Vsync::new();
+    let (mut laid, handle) =
+        mount_with_scaffolds(&vsync, vec![Scaffold::new().body(body_marker())]);
+
+    handle.show_snack_bar(SnackBar::new(Text::new("clip me")));
+    pump_ms(&mut laid, 60); // mid-entrance: a partial, still-growing height
+
+    let clip_rect = laid.find_by_render_type("RenderClipRect").expect(
+        "the entrance/exit transition must be wrapped in a ClipRect (snack_bar.dart's own \
+             outermost wrap) — without it, Align's full-height, unclipped child paint bleeds \
+             past the partially-grown box into whatever sits below (an adjacent Scaffold's own \
+             content, in the multi-scaffold layout)",
+    );
+    let material =
+        find_snack_bar_material(&laid).expect("the snack bar's Material must be mounted");
+
+    let clip_height = laid.size(clip_rect).height.get();
+    let content_height = laid.size(material).height.get();
+    assert!(
+        clip_height < content_height - 1.0,
+        "mid-entrance, the ClipRect's own (animated, shrunk) reported box must be measurably \
+         SMALLER than the content's full natural height — content_height={content_height}, \
+         clip_height={clip_height} — otherwise there is no actual overflow for the clip to \
+         contain, and dropping the ClipRect wrap would go unnoticed by this test"
+    );
+}
+
+// ============================================================================
+// 11. A tick-driven close's `on_closed` is deferred out of the build phase:
+//     a reentrant `show_snack_bar` from it must not corrupt the frame, and
+//     must not take effect until a LATER frame.
+// ============================================================================
+
+#[test]
+fn tick_driven_close_defers_a_reentrant_show_snack_bar_out_of_the_build_phase() {
+    let vsync = Vsync::new();
+    let (mut laid, handle) =
+        mount_with_scaffolds(&vsync, vec![Scaffold::new().body(body_marker())]);
+
+    let handle_for_on_closed = handle.clone();
+    handle
+        .show_snack_bar(SnackBar::new(Text::new("a")).duration(Duration::from_millis(60)))
+        .on_closed(move |_reason| {
+            // Reentrant, reached from a PURELY tick-driven close (no
+            // explicit hide/remove call below) — must land in a safe,
+            // post-build window, not corrupt the frame that just built.
+            handle_for_on_closed.show_snack_bar(SnackBar::new(Text::new("b")));
+        });
+
+    pump_ms(&mut laid, ENTRY.as_millis() as u64); // "a" fully shown
+    assert!(find_text(&laid, "a").is_some(), "\"a\" must be shown");
+
+    // Single-frame-stepped through "a"'s natural timeout + exit reverse, so
+    // the exact frame it disappears on can be pinned down.
+    let settle_budget =
+        (60 / FRAME.as_millis() as u64) + (ENTRY.as_millis() as u64 / FRAME.as_millis() as u64) + 4;
+    let mut settled_on_frame = None;
+    for frame_index in 0..settle_budget {
+        laid.pump_for(FRAME);
+        if find_text(&laid, "a").is_none() {
+            settled_on_frame = Some(frame_index);
+            break;
+        }
+    }
+    assert!(
+        settled_on_frame.is_some(),
+        "\"a\" must have closed on its own from purely ticking (timeout + exit reverse), \
+         within the pumped budget"
+    );
+
+    // THE SAME frame "a" disappeared on: the reentrant `show_snack_bar("b")`
+    // must NOT have taken effect yet — it was deferred past this frame.
+    assert!(
+        find_text(&laid, "b").is_none(),
+        "a reentrant show_snack_bar from a build-phase-deferred on_closed must not be visible \
+         in the SAME frame its closing on_closed fired — it must wait for the post-frame \
+         callback to run"
+    );
+
+    // One more frame runs the deferred post-frame callback, which shows
+    // "b" — then it enters over the usual 250ms.
+    pump_ms(&mut laid, ENTRY.as_millis() as u64);
+    assert!(
+        find_text(&laid, "b").is_some(),
+        "the reentrant show_snack_bar from a's deferred on_closed must eventually take effect"
     );
 }

@@ -32,11 +32,18 @@
 //!
 //! ## The drain state machine
 //!
-//! `DrainState` makes the oracle's implicit `_snackBarController` status
-//! machine explicit: `Idle` (nothing showing) → `Entering` (250ms forward) →
-//! `Displayed` (entrance complete, display timer running) → `Exiting` (250ms
-//! reverse) → back to `Idle`, which immediately re-enters if the queue is
-//! still non-empty (`MessengerCore::pop_and_advance`).
+//! There is no separate `enum` tracking Idle/Entering/Displayed/Exiting: the
+//! entrance controller's own [`AnimationStatus`] already carries every bit of
+//! that state (`Dismissed` = idle, `Forward` = entering, `Completed` =
+//! displayed, `Reverse` = exiting) with the queue as the one piece it does
+//! not — an earlier version of this module shadowed that status in a
+//! `DrainState` cell, which nothing ever read except its own tests, exactly
+//! the "two sources of truth, one inert" shape this module now avoids.
+//! `MessengerCore::handle_entry_status` translates a *change* in that status
+//! into the one queue-affecting consequence it has (`Dismissed` → pop and
+//! advance to the next entry; `Completed` → start the display timer) — `pop
+//! and advance` on `Dismissed`, then immediately re-entering if the queue is
+//! still non-empty, IS the state machine.
 //!
 //! ## Why status edges are polled, not pushed, from the controller
 //!
@@ -93,6 +100,42 @@
 //! `MessengerCore::advancing` guards `pop_and_advance` itself against
 //! double-entry from that same re-entrant path.
 //!
+//! ## Deferring `on_closed` out of the build phase
+//!
+//! `MessengerCore::reconcile` runs from two kinds of call site with
+//! different obligations, captured in `ReconcileOrigin`:
+//!
+//! - **`ReconcileOrigin::Direct`** — synchronously, at the end of every
+//!   public [`ScaffoldMessengerHandle`] method (`show_snack_bar`/
+//!   `hide_current_snack_bar`/`remove_current_snack_bar`/`clear_snack_bars`),
+//!   which only ever run from event-handler call stacks. `on_closed` fires
+//!   immediately here — Flutter parity: `removeCurrentSnackBar` completes its
+//!   completer synchronously, in the same call.
+//! - **`ReconcileOrigin::Build`** — from [`ScaffoldMessengerState::build`],
+//!   reached when the Send-safe controller listeners scheduled a rebuild for
+//!   a PURELY tick-driven status settle (no explicit API call in between —
+//!   e.g. the entrance animation finishing, or the display timer expiring
+//!   and starting the exit reverse, which later settles on its own). Firing
+//!   arbitrary caller-supplied `on_closed` code inline, mid-`build`, is the
+//!   same hazard trigger #22 names for `rebuild_handle`/`post_frame_handle`
+//!   themselves: an `on_closed` that calls `show_snack_bar` would mutate the
+//!   queue and schedule further rebuilds *after* this build's siblings have
+//!   already built against the pre-mutation tree, silently.
+//!   `MessengerCore::pop_and_advance` instead defers the fire through the
+//!   [`flui_scheduler::PostFrameHandle`] acquired in
+//!   [`ScaffoldMessengerState::init_state`] (ADR-0021) — the callback runs
+//!   after this frame's build/layout/paint have committed, its own reentrant
+//!   `show_snack_bar`/etc. call landing squarely in a safe, ordinary
+//!   event-handler-shaped window. If no `PostFrameHandle` is available (the
+//!   messenger was never `attach`ed — a bare unit test constructing
+//!   [`ScaffoldMessengerHandle`] directly), the fire falls back to
+//!   synchronous, the same as `Direct`, rather than silently dropping the
+//!   callback.
+//!
+//! State BOOKKEEPING (which entry is at the front, the recorded reason,
+//! whether the display timer is running) is safe to mutate from `build` —
+//! only the arbitrary-code DISPATCH of `on_closed` needs to leave it.
+//!
 //! ## Multi-scaffold fan-out
 //!
 //! `show_snack_bar` shows the current entry on every registered
@@ -120,11 +163,30 @@
 //!
 //! ## Completion slot
 //!
-//! Each queued entry's [`SnackBarClosedReason`] is recorded exactly once
-//! (`QueuedEntry::set_reason_once`) at hide/remove/action time — a slot the
-//! drain pop reads but never invents or overwrites (falling back to
-//! [`SnackBarClosedReason::Remove`] only in the unreachable-in-practice case
-//! of a pop with no reason ever recorded).
+//! Each queued entry carries a `reason` cell the eventual pop reads (falling
+//! back to [`SnackBarClosedReason::Remove`] only in the unreachable-in-
+//! practice case of a pop with no reason ever recorded). It is set two
+//! different ways, matching an asymmetry in the oracle itself:
+//!
+//! - `QueuedEntry::set_reason_once` (hide, timeout) — **provisional**: only
+//!   applies if nothing has been recorded yet. Flutter parity:
+//!   `hideCurrentSnackBar`'s completion is itself deferred to
+//!   `_snackBarController!.reverse().then(...)` — it does not complete
+//!   anything until the reverse actually settles, so whatever reason is
+//!   recorded here is only a promise about what a LATER completion will
+//!   carry, not a completion itself.
+//! - `QueuedEntry::set_reason` (remove) — **unconditional overwrite**.
+//!   Flutter parity: `removeCurrentSnackBar` completes the still-pending
+//!   completer with ITS OWN reason immediately, `if (!completer.isCompleted)`
+//!   — a race it always wins against a hide/timeout that recorded a reason
+//!   but has not yet actually completed (settled to `Dismissed`). So a
+//!   `remove_current_snack_bar()` call arriving mid-reverse (after an
+//!   earlier `hide_current_snack_bar()`) must report `Remove`, not the
+//!   hide's own `Hide` — see `hide_then_remove_mid_reverse_reports_remove`.
+//!
+//! Both a provisional (hide/timeout) and a completed (remove/action) call
+//! only ever *record* a reason on the entry — see the previous section for
+//! when that recording turns into an actual `on_closed` fire.
 //!
 //! ## V1 scope
 //!
@@ -147,6 +209,7 @@ use flui_animation::{
     Animation, AnimationController, AnimationStatus, Scheduler, Vsync, VsyncRegistration,
 };
 use flui_foundation::ElementId;
+use flui_scheduler::PostFrameHandle;
 use flui_view::prelude::*;
 use flui_view::{RebuildHandle, impl_inherited_view};
 use flui_widgets::animated::VsyncScope;
@@ -226,11 +289,20 @@ struct QueuedEntry {
 
 impl QueuedEntry {
     /// Records `reason` only if nothing has been recorded yet — the
-    /// once-only guard the module docs describe.
+    /// provisional guard [`hide_current`](MessengerCore::hide_current)/timeout
+    /// use. See the module docs' "Completion slot" section.
     fn set_reason_once(&self, reason: SnackBarClosedReason) {
         if self.reason.get().is_none() {
             self.reason.set(Some(reason));
         }
+    }
+
+    /// Unconditionally overwrites the recorded reason —
+    /// [`remove_current`](MessengerCore::remove_current)'s own use, which
+    /// always wins over a not-yet-completed provisional reason. See the
+    /// module docs' "Completion slot" section.
+    fn set_reason(&self, reason: SnackBarClosedReason) {
+        self.reason.set(Some(reason));
     }
 
     /// Fires `on_closed` with the recorded reason (falling back to
@@ -251,18 +323,16 @@ impl QueuedEntry {
     }
 }
 
-/// The explicit drain state — see the module docs' "The drain state
-/// machine" section.
+/// Where a [`MessengerCore::reconcile`] call originated — see the module
+/// docs' "Deferring `on_closed` out of the build phase" section.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DrainState {
-    /// Nothing showing, queue empty (or about to be re-entered).
-    Idle,
-    /// The shared controller is running forward.
-    Entering,
-    /// The shared controller is at `1.0`; the display timer is running.
-    Displayed,
-    /// The shared controller is running in reverse.
-    Exiting,
+enum ReconcileOrigin {
+    /// A public [`ScaffoldMessengerHandle`] method, called synchronously
+    /// from an event-handler call stack — `on_closed` fires immediately.
+    Direct,
+    /// [`ScaffoldMessengerState::build`], reached from a purely tick-driven
+    /// status settle — `on_closed` is deferred past this frame.
+    Build,
 }
 
 /// The messenger's interior-mutable state, `Rc`-shared between
@@ -281,8 +351,12 @@ struct MessengerCore {
     /// reaches [`Self::reconcile`] via [`ScaffoldMessengerState::build`].
     /// `None` until [`ScaffoldMessengerHandle::attach`] runs.
     rebuild: RefCell<Option<RebuildHandle>>,
+    /// Acquired in [`ScaffoldMessengerHandle::attach`] (`init_state`, per
+    /// ADR-0021/trigger #22). `None` until then, or if no binding installed
+    /// one — see the module docs' "Deferring `on_closed` out of the build
+    /// phase" section for the synchronous fallback that implies.
+    post_frame: RefCell<Option<PostFrameHandle>>,
     queue: RefCell<VecDeque<Rc<QueuedEntry>>>,
-    state: Cell<DrainState>,
     last_entry_status: Cell<AnimationStatus>,
     last_duration_status: Cell<AnimationStatus>,
     /// Reentrancy guard for [`Self::pop_and_advance`] — see the module docs'
@@ -302,14 +376,14 @@ impl MessengerCore {
     /// translates every change into a state transition/pop, looping until a
     /// full pass detects no further change. See the module docs' "Why
     /// status edges are polled, not pushed, from the controller" section.
-    fn reconcile(&self) {
+    fn reconcile(&self, origin: ReconcileOrigin) {
         loop {
             let mut changed = false;
 
             let entry_status = self.entry_controller.status();
             if entry_status != self.last_entry_status.get() {
                 self.last_entry_status.set(entry_status);
-                self.handle_entry_status(entry_status);
+                self.handle_entry_status(entry_status, origin);
                 changed = true;
             }
 
@@ -338,25 +412,24 @@ impl MessengerCore {
 
     /// Translates one entrance-controller status into a state
     /// transition/pop.
-    fn handle_entry_status(&self, status: AnimationStatus) {
+    fn handle_entry_status(&self, status: AnimationStatus, origin: ReconcileOrigin) {
         match status {
-            AnimationStatus::Dismissed => self.pop_and_advance(),
-            AnimationStatus::Completed => {
-                self.state.set(DrainState::Displayed);
-                self.start_display_timer();
-            }
-            AnimationStatus::Forward => self.state.set(DrainState::Entering),
-            AnimationStatus::Reverse => self.state.set(DrainState::Exiting),
+            AnimationStatus::Dismissed => self.pop_and_advance(origin),
+            AnimationStatus::Completed => self.start_display_timer(),
+            // Forward/Reverse carry no further consequence here — the
+            // controller's own `status()` already IS the observable state
+            // (see the module docs' "The drain state machine" section).
             // `AnimationStatus` is `#[non_exhaustive]`; every variant it has
             // today is handled above.
             _ => {}
         }
     }
 
-    /// Pops the just-exited front entry (if any), fires its `on_closed`,
-    /// then begins the next entry's entrance if the queue is still
-    /// non-empty. The single place that ever pops the queue.
-    fn pop_and_advance(&self) {
+    /// Pops the just-exited front entry (if any), fires (or, for
+    /// [`ReconcileOrigin::Build`], defers) its `on_closed`, then begins the
+    /// next entry's entrance if the queue is still non-empty. The single
+    /// place that ever pops the queue.
+    fn pop_and_advance(&self, origin: ReconcileOrigin) {
         if self.advancing.get() {
             // A re-entrant call from inside the `on_closed` callback this
             // very function is about to invoke below — the outer call owns
@@ -368,18 +441,45 @@ impl MessengerCore {
         self.cancel_display_timer();
         let popped = self.queue.borrow_mut().pop_front();
         if let Some(entry) = popped {
-            entry.complete();
+            self.complete_entry(entry, origin);
         }
 
-        self.state.set(DrainState::Idle);
         let has_next = !self.queue.borrow().is_empty();
         if has_next {
-            self.state.set(DrainState::Entering);
             let _ = self.entry_controller.forward();
         }
 
         self.advancing.set(false);
         self.schedule_rebuild_on_scaffolds();
+    }
+
+    /// Fires `entry`'s `on_closed` per `origin` — immediately for
+    /// [`ReconcileOrigin::Direct`], or deferred through [`Self::post_frame`]
+    /// for [`ReconcileOrigin::Build`] (falling back to immediate if no
+    /// [`PostFrameHandle`] is available). See the module docs' "Deferring
+    /// `on_closed` out of the build phase" section.
+    fn complete_entry(&self, entry: Rc<QueuedEntry>, origin: ReconcileOrigin) {
+        if origin == ReconcileOrigin::Direct {
+            entry.complete();
+            return;
+        }
+        let Some(post_frame) = self.post_frame.borrow().clone() else {
+            entry.complete();
+            return;
+        };
+        // `schedule_local` DROPS the callback without running it on error
+        // (per its own doc) — keep a fallback handle so a scheduling failure
+        // still completes the entry instead of silently losing the call.
+        let entry_for_fallback = Rc::clone(&entry);
+        let scheduled = post_frame.schedule_local(move |_timing| entry.complete());
+        if let Err(error) = scheduled {
+            tracing::warn!(
+                %error,
+                "SnackBar on_closed post-frame scheduling failed; firing immediately instead \
+                 of silently dropping it"
+            );
+            entry_for_fallback.complete();
+        }
     }
 
     fn start_display_timer(&self) {
@@ -438,15 +538,21 @@ impl MessengerCore {
 
     /// Flutter parity: `removeCurrentSnackBar` (`:424-436`) — no
     /// `isDismissed` early return in the oracle, which is exactly why this
-    /// needs the direct-pop fallback the module docs describe.
+    /// needs the direct-pop fallback the module docs describe. Overwrites
+    /// the reason unconditionally, not once-only — see the module docs'
+    /// "Completion slot" section for why `remove` always wins over a
+    /// not-yet-completed `hide`/timeout. Only ever reached from
+    /// [`ScaffoldMessengerHandle::remove_current_snack_bar`], an
+    /// event-handler call stack, so the direct-pop fallback fires
+    /// synchronously ([`ReconcileOrigin::Direct`]).
     fn remove_current(&self, reason: SnackBarClosedReason) {
         let Some(front) = self.queue.borrow().front().cloned() else {
             return;
         };
-        front.set_reason_once(reason);
+        front.set_reason(reason);
         self.cancel_display_timer();
         if self.entry_controller.status() == AnimationStatus::Dismissed {
-            self.pop_and_advance();
+            self.pop_and_advance(ReconcileOrigin::Direct);
         } else {
             self.entry_controller.set_value(0.0);
         }
@@ -509,8 +615,8 @@ impl ScaffoldMessengerHandle {
             entry_vsync_registration: RefCell::new(None),
             duration_vsync_registration: RefCell::new(None),
             rebuild: RefCell::new(None),
+            post_frame: RefCell::new(None),
             queue: RefCell::new(VecDeque::new()),
-            state: Cell::new(DrainState::Idle),
             last_entry_status: Cell::new(AnimationStatus::Dismissed),
             last_duration_status: Cell::new(AnimationStatus::Dismissed),
             advancing: Cell::new(false),
@@ -519,9 +625,12 @@ impl ScaffoldMessengerHandle {
         Self { shared }
     }
 
-    /// Wires the ambient `Vsync` and installs the entrance controller's
-    /// Send-safe "reschedule [`ScaffoldMessenger`]'s rebuild" listener — see
-    /// [`Self::new`]'s doc for why this is deferred out of construction.
+    /// Wires the ambient `Vsync`, installs the entrance controller's
+    /// Send-safe "reschedule [`ScaffoldMessenger`]'s rebuild" listener, and
+    /// acquires the binding's post-frame capability (ADR-0021) — see
+    /// [`Self::new`]'s doc for why this is deferred out of construction, and
+    /// the module docs' "Deferring `on_closed` out of the build phase"
+    /// section for what the post-frame handle is for.
     pub(crate) fn attach(&self, ctx: &dyn BuildContext) {
         let rebuild = ctx.rebuild_handle();
         let rebuild_for_listener = rebuild.clone();
@@ -531,6 +640,7 @@ impl ScaffoldMessengerHandle {
                 rebuild_for_listener.schedule();
             }));
         *self.shared.rebuild.borrow_mut() = Some(rebuild);
+        *self.shared.post_frame.borrow_mut() = ctx.post_frame_handle();
 
         let vsync = ctx.get::<VsyncScope, _>(|scope| scope.vsync().clone());
         if let Some(vsync) = &vsync {
@@ -551,11 +661,13 @@ impl ScaffoldMessengerHandle {
         self.shared.entry_controller.dispose();
     }
 
-    /// Re-runs the state-machine reconciliation — called from
-    /// [`ScaffoldMessengerState::build`] whenever the Send-safe listeners
-    /// scheduled a rebuild.
-    pub(crate) fn reconcile(&self) {
-        self.shared.reconcile();
+    /// Re-runs the state-machine reconciliation for a purely tick-driven
+    /// settle — called from [`ScaffoldMessengerState::build`] whenever the
+    /// Send-safe listeners scheduled a rebuild. Any `on_closed` this
+    /// reaches is deferred, never fired inline mid-`build` — see the module
+    /// docs' "Deferring `on_closed` out of the build phase" section.
+    pub(crate) fn reconcile_after_tick_driven_settle(&self) {
+        self.shared.reconcile(ReconcileOrigin::Build);
     }
 
     /// Registers a [`crate::Scaffold`] so it receives `schedule_rebuild`
@@ -635,11 +747,10 @@ impl ScaffoldMessengerHandle {
             queue.len() == 1
         };
         if should_enter {
-            self.shared.state.set(DrainState::Entering);
             let _ = self.shared.entry_controller.forward();
             self.shared.schedule_rebuild_on_scaffolds();
         }
-        self.shared.reconcile();
+        self.shared.reconcile(ReconcileOrigin::Direct);
 
         SnackBarController { on_closed }
     }
@@ -649,7 +760,7 @@ impl ScaffoldMessengerHandle {
     /// currently showing.
     pub fn hide_current_snack_bar(&self) {
         self.shared.hide_current(SnackBarClosedReason::Hide);
-        self.shared.reconcile();
+        self.shared.reconcile(ReconcileOrigin::Direct);
     }
 
     /// Reason-carrying counterpart of [`Self::hide_current_snack_bar`], for
@@ -657,7 +768,7 @@ impl ScaffoldMessengerHandle {
     /// [`crate::snack_bar::SnackBarAction`]'s single-fire press).
     pub(crate) fn hide_current_snack_bar_because(&self, reason: SnackBarClosedReason) {
         self.shared.hide_current(reason);
-        self.shared.reconcile();
+        self.shared.reconcile(ReconcileOrigin::Direct);
     }
 
     /// Removes the current snack bar (if any) immediately, with no exit
@@ -665,7 +776,7 @@ impl ScaffoldMessengerHandle {
     /// are queued, the next begins its entrance immediately.
     pub fn remove_current_snack_bar(&self) {
         self.shared.remove_current(SnackBarClosedReason::Remove);
-        self.shared.reconcile();
+        self.shared.reconcile(ReconcileOrigin::Direct);
     }
 
     /// Drops every queued (not-yet-shown) snack bar silently (their
@@ -673,7 +784,7 @@ impl ScaffoldMessengerHandle {
     /// exit animation. See the module docs' "`clearSnackBars`" section.
     pub fn clear_snack_bars(&self) {
         self.shared.clear();
-        self.shared.reconcile();
+        self.shared.reconcile(ReconcileOrigin::Direct);
     }
 }
 
@@ -807,9 +918,10 @@ impl ViewState<ScaffoldMessenger> for ScaffoldMessengerState {
 
     fn build(&self, view: &ScaffoldMessenger, _ctx: &dyn BuildContext) -> impl IntoView {
         // Absorbs any tick-driven status settle the Send-safe listeners
-        // scheduled this rebuild for — see the module docs' "Why status
-        // edges are polled, not pushed, from the controller" section.
-        self.handle.reconcile();
+        // scheduled this rebuild for — see the module docs' "Deferring
+        // `on_closed` out of the build phase" section for why any
+        // `on_closed` this reaches is deferred, not fired inline here.
+        self.handle.reconcile_after_tick_driven_settle();
         ScaffoldMessengerScope {
             handle: self.handle.clone(),
             child: view.child.clone(),
@@ -838,7 +950,6 @@ mod tests {
     fn show_snack_bar_on_an_empty_queue_starts_entering() {
         let handle = ScaffoldMessengerHandle::new();
         handle.show_snack_bar(snack_bar("a"));
-        assert_eq!(handle.shared.state.get(), DrainState::Entering);
         assert_eq!(
             handle.shared.entry_controller.status(),
             AnimationStatus::Forward
@@ -875,8 +986,11 @@ mod tests {
             AnimationStatus::Forward
         );
         handle.shared.entry_controller.set_value(1.0); // settle "a"'s entrance -> Completed
-        handle.shared.reconcile();
-        assert_eq!(handle.shared.state.get(), DrainState::Displayed);
+        handle.shared.reconcile(ReconcileOrigin::Direct);
+        assert_eq!(
+            handle.shared.entry_controller.status(),
+            AnimationStatus::Completed
+        );
 
         handle.remove_current_snack_bar(); // "a" removed abruptly -> "b" starts entering
         assert_eq!(
@@ -908,7 +1022,7 @@ mod tests {
         let handle = ScaffoldMessengerHandle::new();
         handle.show_snack_bar(snack_bar("a"));
         handle.shared.entry_controller.set_value(1.0);
-        handle.shared.reconcile();
+        handle.shared.reconcile(ReconcileOrigin::Direct);
 
         handle.hide_current_snack_bar();
 
@@ -916,7 +1030,6 @@ mod tests {
             handle.shared.entry_controller.status(),
             AnimationStatus::Reverse
         );
-        assert_eq!(handle.shared.state.get(), DrainState::Exiting);
         // Still queued — the entry pops only once the reverse animation
         // actually settles at Dismissed.
         assert_eq!(handle.shared.queue.borrow().len(), 1);
@@ -929,6 +1042,54 @@ mod tests {
         assert_eq!(
             handle.shared.entry_controller.status(),
             AnimationStatus::Dismissed
+        );
+    }
+
+    /// `remove_current_snack_bar` called mid-reverse, after an earlier
+    /// `hide_current_snack_bar`, must report `Remove` — not the hide's own
+    /// `Hide`, which never actually completed (the reverse hadn't settled
+    /// yet). Flutter parity: `removeCurrentSnackBar` completes the
+    /// still-pending completer with its own reason immediately,
+    /// `if (!completer.isCompleted)`, always winning that race — see the
+    /// module docs' "Completion slot" section.
+    ///
+    /// Red-check: change `remove_current`'s `front.set_reason(reason)` back
+    /// to `front.set_reason_once(reason)` — this test fails: the final
+    /// reason reads `Hide` (the once-only guard preserves hide's earlier,
+    /// still-provisional record instead of letting remove overwrite it).
+    #[test]
+    fn hide_then_remove_mid_reverse_reports_remove() {
+        let handle = ScaffoldMessengerHandle::new();
+        let reason = Rc::new(RefCell::new(None));
+        let reason_for_cb = Rc::clone(&reason);
+        handle
+            .show_snack_bar(snack_bar("a"))
+            .on_closed(move |r| *reason_for_cb.borrow_mut() = Some(r));
+
+        handle.shared.entry_controller.set_value(1.0); // fully shown
+        handle.shared.reconcile(ReconcileOrigin::Direct);
+
+        handle.hide_current_snack_bar(); // provisionally records Hide, starts reversing
+        assert_eq!(
+            handle.shared.entry_controller.status(),
+            AnimationStatus::Reverse,
+            "hide must not have completed yet — still mid-reverse"
+        );
+        assert!(
+            reason.borrow().is_none(),
+            "hide's own reason must not have fired yet"
+        );
+
+        handle.remove_current_snack_bar(); // mid-reverse: must win the race and fire NOW
+
+        assert_eq!(
+            *reason.borrow(),
+            Some(SnackBarClosedReason::Remove),
+            "remove must overwrite hide's not-yet-completed provisional reason"
+        );
+        assert!(
+            handle.shared.queue.borrow().is_empty(),
+            "the queue must have drained, not merely recorded a reason"
         );
     }
 
@@ -977,6 +1138,15 @@ mod tests {
     /// re-entrancy, the state the module docs describe) and confirm the
     /// queue still drains rather than sitting forever with a
     /// recorded-but-unfired reason.
+    ///
+    /// Red-check: remove the `status() == Dismissed` branch from
+    /// `MessengerCore::remove_current` (always call `set_value(0.0)`) — this
+    /// test fails: `set_value` on an already-`Dismissed` controller is a
+    /// genuine no-op (value and status both already at rest), so no edge
+    /// fires and the queue never drains — confirmed by actually running
+    /// this mutation, not merely asserted (see
+    /// `remove_current_reentrantly_from_on_closed_still_drains_the_queue`'s
+    /// own doc for why THAT test does not also catch it).
     #[test]
     fn remove_current_direct_pops_when_the_controller_is_already_dismissed() {
         let handle = ScaffoldMessengerHandle::new();
@@ -1006,20 +1176,28 @@ mod tests {
     /// `forward()` call for the next entry) — exactly the scenario the
     /// module docs' "Queue-wedge invariant" section describes.
     ///
-    /// Red-check A: remove the `status() == Dismissed` branch from
-    /// `MessengerCore::remove_current` (always call `set_value(0.0)`) — this
-    /// test fails: the reentrant call's `set_value(0.0)` is a genuine no-op
-    /// (status unchanged, so no edge fires and nothing advances past
-    /// `Dismissed`) — the assertion on `entry_controller.status()` below
-    /// reads `Dismissed` instead of `Forward`.
+    /// This test does NOT, by itself, catch removing `remove_current`'s
+    /// `status() == Dismissed` fallback branch (confirmed by actually
+    /// running that mutation): with the fallback gone, the reentrant call's
+    /// unconditional `set_value(0.0)` on "b" is a genuine no-op (value and
+    /// status already at rest) — the SAME observable no-op the fallback
+    /// branch's own `pop_and_advance` call would also produce here, since
+    /// `advancing` guards it right back out. Either version leaves the
+    /// reentrant call inert and the OUTER `pop_and_advance` (already
+    /// in-flight) to `forward()` to "b" on its own — so this test cannot
+    /// distinguish the two.
+    /// `remove_current_direct_pops_when_the_controller_is_already_dismissed`
+    /// is the one that actually exercises the fallback branch (a COLD call
+    /// against an already-`Dismissed` controller, no `advancing` reentrancy
+    /// involved) — see that test's own red-check.
     ///
-    /// Red-check B: remove `MessengerCore::advancing`'s guard in
-    /// `pop_and_advance` — this test fails differently: the reentrant call's
-    /// direct-pop path now ALSO pops "b" (queue empties before the OUTER
+    /// Red-check: remove `MessengerCore::advancing`'s guard in
+    /// `pop_and_advance` — this test fails: the reentrant call's direct-pop
+    /// path now ALSO pops "b" (queue empties before the OUTER
     /// `pop_and_advance` resumes), so the outer call's own `has_next` check
     /// finds nothing to `forward()` — "b" is silently dropped without ever
-    /// entering, and `entry_controller.status()` again reads `Dismissed`
-    /// instead of `Forward`.
+    /// entering, and `entry_controller.status()` reads `Dismissed` instead
+    /// of `Forward`.
     #[test]
     fn remove_current_reentrantly_from_on_closed_still_drains_the_queue() {
         let handle = ScaffoldMessengerHandle::new();
@@ -1042,7 +1220,7 @@ mod tests {
             .on_closed(move |reason| order_b.borrow_mut().push(("b", reason)));
 
         handle.shared.entry_controller.set_value(1.0); // settle "a"'s entrance
-        handle.shared.reconcile();
+        handle.shared.reconcile(ReconcileOrigin::Direct);
 
         handle.remove_current_snack_bar(); // triggers the reentrant chain above
 
@@ -1068,7 +1246,7 @@ mod tests {
         // entered — the once-only guard means its eventual close still
         // reports Remove, not whatever later closes it.
         handle.shared.entry_controller.set_value(1.0);
-        handle.shared.reconcile();
+        handle.shared.reconcile(ReconcileOrigin::Direct);
         handle.remove_current_snack_bar();
         assert_eq!(
             order.borrow().as_slice(),
@@ -1095,7 +1273,7 @@ mod tests {
             .on_closed(move |_| *queued_closed_for_cb.borrow_mut() = true);
 
         handle.shared.entry_controller.set_value(1.0); // "current" fully shown
-        handle.shared.reconcile();
+        handle.shared.reconcile(ReconcileOrigin::Direct);
 
         handle.clear_snack_bars();
 
@@ -1118,7 +1296,7 @@ mod tests {
         );
 
         handle.shared.entry_controller.set_value(0.0); // settle the reverse
-        handle.shared.reconcile();
+        handle.shared.reconcile(ReconcileOrigin::Direct);
         assert_eq!(*current_closed.borrow(), Some(SnackBarClosedReason::Hide));
     }
 
@@ -1150,8 +1328,11 @@ mod tests {
             .on_closed(move |r| *reason_for_cb.borrow_mut() = Some(r));
 
         handle.shared.entry_controller.set_value(1.0); // fully shown, display timer starts
-        handle.shared.reconcile();
-        assert_eq!(handle.shared.state.get(), DrainState::Displayed);
+        handle.shared.reconcile(ReconcileOrigin::Direct);
+        assert!(
+            handle.shared.duration_controller.borrow().is_some(),
+            "the display timer must have started once the entrance settled at Completed"
+        );
 
         // The display timer expires first: reconcile observes its Completed
         // edge, records Timeout, and starts the exit reverse.
@@ -1162,7 +1343,7 @@ mod tests {
             .as_ref()
             .expect("Displayed state must have started the display timer")
             .set_value(1.0);
-        handle.shared.reconcile();
+        handle.shared.reconcile(ReconcileOrigin::Direct);
         assert_eq!(
             handle.shared.entry_controller.status(),
             AnimationStatus::Reverse
@@ -1173,7 +1354,7 @@ mod tests {
         handle.hide_current_snack_bar();
 
         handle.shared.entry_controller.set_value(0.0); // settle the reverse
-        handle.shared.reconcile();
+        handle.shared.reconcile(ReconcileOrigin::Direct);
 
         assert_eq!(*reason.borrow(), Some(SnackBarClosedReason::Timeout));
     }

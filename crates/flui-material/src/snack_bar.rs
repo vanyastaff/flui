@@ -59,7 +59,8 @@ use flui_types::{Alignment, Color, EdgeInsets};
 use flui_view::RebuildHandle;
 use flui_view::prelude::*;
 use flui_widgets::{
-    Align, AnimatedBuilder, DefaultTextStyle, Expanded, Padding, Row, SafeArea, WidgetStateProperty,
+    Align, AnimatedBuilder, ClipRect, DefaultTextStyle, Expanded, Padding, Row, SafeArea,
+    WidgetStateProperty,
 };
 
 use crate::button_style::ButtonStyle;
@@ -365,12 +366,26 @@ impl StatelessView for SnackBarPresenter {
         let animation = self.animation.clone();
         let listenable = Arc::new(self.animation.clone()) as Arc<dyn Listenable>;
 
-        AnimatedBuilder::new(listenable, move || {
+        // Flutter parity: `_SnackBarState.build`'s outermost wrap is
+        // `ClipRect(clipBehavior: widget.clipBehavior, child: snackBarTransition)`
+        // (`snack_bar.dart:877-881`), around the exact `Align(heightFactor:)`
+        // transition this builds. `Align`/`RenderPositionedBox` lays its
+        // child out LOOSE at that child's full natural height regardless of
+        // `heightFactor` — only `Align`'s own REPORTED size shrinks — and
+        // paints the child unclipped at that full size in `Align`'s local
+        // coordinate space. Mid-entrance (a partially-grown `heightFactor`),
+        // that full-height paint bleeds past `Align`'s own (still-shrunk)
+        // box into whatever paints below it (an adjacent scaffold's own
+        // snack bar, in the multi-scaffold case) unless something clips to
+        // `Align`'s reported box. `ClipRect`'s own layout is a pass-through
+        // (it reports exactly its child's size), so wrapping it here clips
+        // paint to the CURRENT animated height every tick, not a stale one.
+        ClipRect::new().child(AnimatedBuilder::new(listenable, move || {
             let height_factor = Curves::FastOutSlowIn.transform(animation.value().clamp(0.0, 1.0));
             Align::new(Alignment::TOP_LEFT)
                 .height_factor(height_factor)
                 .child(content.clone())
-        })
+        }))
     }
 }
 
