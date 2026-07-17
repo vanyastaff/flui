@@ -82,7 +82,9 @@ pub mod list_tile;
 pub mod material;
 pub mod outlined_button;
 pub mod scaffold;
+pub mod scaffold_messenger;
 pub mod shape;
+pub mod snack_bar;
 pub mod text_button;
 pub mod text_field;
 pub mod text_theme;
@@ -108,7 +110,12 @@ pub use list_tile::ListTile;
 pub use material::Material;
 pub use outlined_button::OutlinedButton;
 pub use scaffold::{Scaffold, ScaffoldScope, ScaffoldState};
+pub use scaffold_messenger::{
+    ScaffoldMessenger, ScaffoldMessengerHandle, ScaffoldMessengerScope, ScaffoldMessengerState,
+    SnackBarClosedReason, SnackBarController,
+};
 pub use shape::MaterialShape;
+pub use snack_bar::{SnackBar, SnackBarAction, SnackBarActionState};
 pub use text_button::TextButton;
 pub use text_field::{TextField, TextFieldState};
 pub use text_theme::TextTheme;

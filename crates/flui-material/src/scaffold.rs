@@ -5,12 +5,14 @@
 //! # Flutter parity
 //!
 //! `material/scaffold.dart`'s `Scaffold` (oracle tag `3.44.0`). Implemented
-//! subset: the `app_bar`, `body`, `floating_action_button`, `drawer`, and
-//! `end_drawer` slots of `_ScaffoldLayout.performLayout`
-//! (`scaffold.dart:1027-1296`) — the remaining six slots
+//! subset: the `app_bar`, `body`, `floating_action_button`, `snack_bar`,
+//! `drawer`, and `end_drawer` slots of `_ScaffoldLayout.performLayout`
+//! (`scaffold.dart:1027-1296`) — the remaining five slots
 //! (`bottomNavigationBar`, `persistentFooter`, `materialBanner`, `bodyScrim`,
-//! `snackBar`, `bottomSheet`, `statusBar`) are not ported; a future slot
-//! extends `ScaffoldLayoutDelegate`, it does not restructure it.
+//! `bottomSheet`, `statusBar`) are not ported; a future slot extends
+//! `ScaffoldLayoutDelegate`, it does not restructure it. The `snack_bar` slot
+//! only ever carries `SnackBarBehavior.fixed` content — see
+//! `crate::snack_bar`'s module docs for the V1 scope that narrowing implies.
 //! `resize_to_avoid_bottom_inset` defaults to `true`, same as the oracle.
 //! `background_color` falls back to `ColorScheme.surface` (the oracle's
 //! `themeData.scaffoldBackgroundColor`, which this substrate has not ported
@@ -73,8 +75,7 @@
 //! ## Deferred, and named
 //!
 //! `bottomNavigationBar`, `persistentFooterButtons`, `MaterialBanner`,
-//! `SnackBar` (via `ScaffoldMessenger`), `bottomSheet`,
-//! `extendBody`/`extendBodyBehindAppBar`, non-`endFloat`
+//! `bottomSheet`, `extendBody`/`extendBodyBehindAppBar`, non-`endFloat`
 //! `FloatingActionButtonLocation`s. Also deferred, specific to the drawer
 //! slots this update adds: the `AppBar` auto-hamburger (no `AppBar` ↔
 //! `Scaffold` coupling exists yet), per-side `enable_open_drag_gesture`
@@ -83,10 +84,34 @@
 //! both sides), and `drawerDragStartBehavior`/`drawerBarrierDismissible`
 //! overrides at the `Scaffold` level (fixed at
 //! `DrawerController`'s own defaults — see `crate::drawer`). None of these
-//! slots exist in `ScaffoldLayoutDelegate` yet — the five that do
-//! (`app_bar`/`body`/`floating_action_button`/`drawer`/`end_drawer`) are
-//! copied verbatim from `_ScaffoldLayout`'s branches for those same slots,
-//! so adding a slot later is additive, not a rewrite.
+//! slots exist in `ScaffoldLayoutDelegate` yet — the six that do
+//! (`app_bar`/`body`/`floating_action_button`/`snack_bar`/`drawer`/`end_drawer`)
+//! are copied verbatim from `_ScaffoldLayout`'s branches for those same
+//! slots, so adding a slot later is additive, not a rewrite.
+//!
+//! ## `ScaffoldMessenger` wiring
+//!
+//! `ScaffoldState` registers with the nearest ancestor
+//! [`crate::ScaffoldMessengerScope`] (if any) — not `build` (ADR-0018/trigger
+//! #22, same reasoning the drawer wiring section above gives). **Not**
+//! `did_change_dependencies` alone, either: `ScaffoldMessengerScope::maybe_of`
+//! is a no-dependency ambient lookup (`ctx.get`, matching `ScaffoldScope`'s
+//! own `DrawerHandle` lookup — see that type's doc), and this substrate's
+//! `did_change_dependencies` only fires when a TRACKED (`ctx.depend_on`)
+//! inherited ancestor's `update_should_notify` returns `true` since the last
+//! build — never merely "this element was just mounted under some ancestor".
+//! So the actual, guaranteed registration point is `ViewState::init_state`
+//! (the same proven pattern `DrawerControllerState::init_state` already uses
+//! for its own `VsyncScope` lookup); `did_change_dependencies` re-runs the
+//! identical `ScaffoldState::sync_messenger_registration` helper as a
+//! best-effort re-home for the rare case it DOES fire, but nothing depends
+//! on it firing. Registration is keyed by this scaffold's own `ElementId` and
+//! idempotent; a messenger-identity change (`ScaffoldMessengerHandle::ptr_eq`)
+//! unregisters from the old messenger before registering with the new one,
+//! and `dispose` unregisters unconditionally. `build` reads
+//! `crate::ScaffoldMessengerHandle::current_entry` (private) fresh every call and, if
+//! `Some`, mounts a `SnackBarPresenter` at `SLOT_SNACK_BAR` — see
+//! `crate::snack_bar`'s module docs for what that presenter renders.
 //!
 //! **Named divergence: no `TextDirection` / RTL.** The oracle's
 //! `_ScaffoldLayout` carries a `textDirection` field, both to mirror
@@ -104,6 +129,7 @@ use std::any::Any;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use flui_foundation::ElementId;
 use flui_rendering::constraints::BoxConstraints;
 use flui_types::geometry::px;
 use flui_types::styling::Color;
@@ -119,6 +145,8 @@ use crate::drawer::{
     Drawer, DrawerAlignment, DrawerController, DrawerControllerState, DrawerHandle,
 };
 use crate::material::Material;
+use crate::scaffold_messenger::{ScaffoldMessengerHandle, ScaffoldMessengerScope};
+use crate::snack_bar::SnackBarPresenter;
 use crate::theme::Theme;
 
 /// The `app_bar` slot id — see [`ScaffoldLayoutDelegate`].
@@ -127,6 +155,8 @@ const SLOT_APP_BAR: &str = "app_bar";
 const SLOT_BODY: &str = "body";
 /// The `floating_action_button` slot id — see [`ScaffoldLayoutDelegate`].
 const SLOT_FLOATING_ACTION_BUTTON: &str = "floating_action_button";
+/// The `snack_bar` slot id — see [`ScaffoldLayoutDelegate`].
+const SLOT_SNACK_BAR: &str = "snack_bar";
 /// The `drawer` slot id — see [`ScaffoldLayoutDelegate`].
 const SLOT_DRAWER: &str = "drawer";
 /// The `end_drawer` slot id — see [`ScaffoldLayoutDelegate`].
@@ -382,7 +412,7 @@ impl InheritedView for ScaffoldScope {
 impl_inherited_view!(ScaffoldScope);
 
 /// Persistent state behind [`Scaffold`] — see the module docs' "Drawer
-/// wiring" section.
+/// wiring" and "`ScaffoldMessenger` wiring" sections.
 pub struct ScaffoldState {
     handle: DrawerHandle,
     /// Acquired in [`init_state`](ViewState::init_state), per ADR-0018 —
@@ -395,6 +425,13 @@ pub struct ScaffoldState {
     /// first `init_state` — never observed by `build`, which always runs
     /// after `init_state`.
     rebuild: Option<RebuildHandle>,
+    /// This scaffold's own `ElementId`, captured in `init_state` (ctx is not
+    /// available in `dispose`) so `dispose` can unregister from
+    /// [`Self::messenger`] without a context.
+    element_id: Option<ElementId>,
+    /// The currently-registered [`ScaffoldMessengerHandle`] (if any) — see
+    /// the module docs' "`ScaffoldMessenger` wiring" section.
+    messenger: Option<ScaffoldMessengerHandle>,
 }
 
 impl std::fmt::Debug for ScaffoldState {
@@ -402,6 +439,7 @@ impl std::fmt::Debug for ScaffoldState {
         f.debug_struct("ScaffoldState")
             .field("drawer_open", &self.handle.is_drawer_open())
             .field("end_drawer_open", &self.handle.is_end_drawer_open())
+            .field("has_messenger", &self.messenger.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -413,6 +451,8 @@ impl StatefulView for Scaffold {
         ScaffoldState {
             handle: DrawerHandle::new(),
             rebuild: None,
+            element_id: None,
+            messenger: None,
         }
     }
 }
@@ -420,6 +460,30 @@ impl StatefulView for Scaffold {
 impl ViewState<Scaffold> for ScaffoldState {
     fn init_state(&mut self, ctx: &dyn BuildContext) {
         self.rebuild = Some(ctx.rebuild_handle());
+        self.element_id = Some(ctx.element_id());
+        // The primary, guaranteed-to-run registration point — see this
+        // method's own doc comment on `Self::sync_messenger_registration`
+        // for why `did_change_dependencies` alone is not enough here.
+        self.sync_messenger_registration(ctx);
+    }
+
+    fn did_change_dependencies(&mut self, ctx: &dyn BuildContext) {
+        // Best-effort re-home: `ScaffoldMessengerScope::maybe_of` is a
+        // no-dependency ambient lookup (`ctx.get`, not `ctx.depend_on`),
+        // per its own doc — so this hook only fires here if some OTHER
+        // depended-upon inherited ancestor notifies in the same rebuild,
+        // not on a `ScaffoldMessenger` swap by itself. `init_state` above
+        // is what actually guarantees the initial registration; this call
+        // is a defensive no-op the rest of the time (see
+        // `Self::sync_messenger_registration`'s own identity-comparison
+        // short-circuit).
+        self.sync_messenger_registration(ctx);
+    }
+
+    fn dispose(&mut self) {
+        if let (Some(messenger), Some(element_id)) = (self.messenger.take(), self.element_id) {
+            messenger.unregister_scaffold(element_id);
+        }
     }
 
     fn build(&self, view: &Scaffold, ctx: &dyn BuildContext) -> impl IntoView {
@@ -462,6 +526,17 @@ impl ViewState<Scaffold> for ScaffoldState {
             children.push(LayoutId::new(
                 SLOT_FLOATING_ACTION_BUTTON,
                 floating_action_button.clone(),
+            ));
+        }
+
+        if let Some((snack_bar, animation)) = self
+            .messenger
+            .as_ref()
+            .and_then(ScaffoldMessengerHandle::current_entry)
+        {
+            children.push(LayoutId::new(
+                SLOT_SNACK_BAR,
+                SnackBarPresenter::new(snack_bar, animation),
             ));
         }
 
@@ -595,13 +670,46 @@ impl ScaffoldState {
         }
         controller
     }
+
+    /// Compares the nearest ancestor [`ScaffoldMessengerScope`]'s handle
+    /// (if any) against [`Self::messenger`] by [`ScaffoldMessengerHandle::ptr_eq`]
+    /// identity and, if it changed, unregisters from the old messenger and
+    /// registers with the new one. A no-op when the identity is unchanged
+    /// (including the common "both `None`" and "same handle, called again"
+    /// cases) — see [`ViewState::init_state`]/[`ViewState::did_change_dependencies`]'s
+    /// own doc comments for why this runs from both hooks.
+    fn sync_messenger_registration(&mut self, ctx: &dyn BuildContext) {
+        let new_messenger = ScaffoldMessengerScope::maybe_of(ctx);
+        let identity_changed = match (&self.messenger, &new_messenger) {
+            (Some(old), Some(new)) => !old.ptr_eq(new),
+            (None, None) => false,
+            _ => true,
+        };
+        if !identity_changed {
+            return;
+        }
+        let element_id = self
+            .element_id
+            .expect("BUG: init_state always runs before this method (both its own call site and \
+                     did_change_dependencies, which the ViewState lifecycle guarantees runs after it)");
+        if let Some(old) = &self.messenger {
+            old.unregister_scaffold(element_id);
+        }
+        if let Some(new) = &new_messenger {
+            let rebuild = self.rebuild.clone().expect(
+                "BUG: init_state always runs before this method — see the identical note above",
+            );
+            new.register_scaffold(element_id, rebuild);
+        }
+        self.messenger = new_messenger;
+    }
 }
 
 /// The layout algorithm for [`Scaffold`]'s `app_bar` / `body` /
-/// `floating_action_button` / `drawer` / `end_drawer` slots.
+/// `floating_action_button` / `snack_bar` / `drawer` / `end_drawer` slots.
 ///
 /// Flutter parity: `_ScaffoldLayout` (`scaffold.dart:991-1308`), narrowed to
-/// the five slots this substrate ports — see the module docs for the full
+/// the six slots this substrate ports — see the module docs for the full
 /// deferred-slot list and the inset contract this delegate enforces.
 #[derive(Debug, Clone, PartialEq)]
 struct ScaffoldLayoutDelegate {
@@ -651,6 +759,24 @@ impl MultiChildLayoutDelegate for ScaffoldLayoutDelegate {
             ctx.position_child(SLOT_BODY, Offset::new(px(0.0), content_top));
         }
 
+        // Oracle: "Set the size of the SnackBar early if the behavior is
+        // fixed so the FAB can be positioned correctly" (`:1140-1144`) — this
+        // substrate only ever mounts `SnackBarBehavior.fixed` content (see
+        // `crate::snack_bar`'s module docs), so the snack bar is always
+        // measured and positioned here, before the FAB. Full-width, loose
+        // height — its rendered height varies frame-to-frame while its
+        // entrance/exit animation runs (the animating child dirties this
+        // render object's own layout, which bubbles up to this delegate
+        // exactly like any other child-size change).
+        let mut snack_bar_size = Size::ZERO;
+        if ctx.has_child(SLOT_SNACK_BAR) {
+            snack_bar_size = ctx.layout_child(SLOT_SNACK_BAR, full_width_loose_height);
+            ctx.position_child(
+                SLOT_SNACK_BAR,
+                Offset::new(px(0.0), content_bottom - snack_bar_size.height),
+            );
+        }
+
         if ctx.has_child(SLOT_FLOATING_ACTION_BUTTON) {
             // Loose on both axes — the button reports its own intrinsic
             // size, never forced from `size` (oracle: `layoutChild(...,
@@ -681,7 +807,22 @@ impl MultiChildLayoutDelegate for ScaffoldLayoutDelegate {
             let safe_margin = (self.min_view_padding_bottom - bottom_content_height
                 + px(FLOATING_ACTION_BUTTON_MARGIN))
             .max(px(FLOATING_ACTION_BUTTON_MARGIN));
-            let fab_y = content_bottom - fab_size.height - safe_margin;
+            let mut fab_y = content_bottom - fab_size.height - safe_margin;
+
+            // `FabFloatOffsetY`'s snack-bar branch (`:571-576`): a visible
+            // snack bar (any nonzero measured height, including a
+            // mid-animation, partially-grown one — see the `snack_bar_size`
+            // comment above) pulls the FAB up to sit `kFloatingActionButtonMargin`
+            // above it, whenever that's tighter than the plain safe-margin
+            // position.
+            if snack_bar_size.height > px(0.0) {
+                fab_y = fab_y.min(
+                    content_bottom
+                        - snack_bar_size.height
+                        - fab_size.height
+                        - px(FLOATING_ACTION_BUTTON_MARGIN),
+                );
+            }
             ctx.position_child(SLOT_FLOATING_ACTION_BUTTON, Offset::new(fab_x, fab_y));
         }
 
