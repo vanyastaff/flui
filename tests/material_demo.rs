@@ -463,6 +463,77 @@ fn dialog_add_appends_an_item_and_preserves_home_state() {
 }
 
 // ============================================================================
+// (3b) Add shows a snack bar via the scope-mounted ScaffoldMessenger, which
+//      auto-dismisses after its own display duration
+// ============================================================================
+
+#[test]
+fn adding_an_item_shows_a_snack_bar_that_auto_dismisses() {
+    let mut demo = MountedDemo::mount();
+
+    let fab = demo
+        .find_text(tree::FAB_LABEL)
+        .expect("the FAB must render");
+    demo.tap_node(fab);
+    demo.pump(Duration::ZERO);
+    assert!(
+        demo.find_text(tree::ADD_DIALOG_TITLE).is_some(),
+        "the FAB must still open the Add-item dialog with the ScaffoldMessenger mounted above it"
+    );
+
+    let add_button = demo
+        .find_text(tree::ADD_LABEL)
+        .expect("the dialog's Add action must render");
+    demo.tap_node(add_button);
+    demo.pump(Duration::ZERO);
+
+    assert!(
+        demo.find_text(tree::ADD_DIALOG_TITLE).is_none(),
+        "the dialog must still close on Add"
+    );
+
+    // Pumped in small (one simulated frame each) steps rather than a few
+    // large jumps: the entrance -> display-timer -> exit sequence spawns a
+    // fresh controller mid-sequence (`ScaffoldMessengerHandle`'s display
+    // timer starts only once the entrance controller's own `Completed`
+    // status is observed), so a single huge `pump` would not give that
+    // freshly-registered controller its fair share of the elapsed time —
+    // matching `crates/flui-material/tests/snack_bar.rs`'s own
+    // frame-stepped `pump_ms` helper.
+    let frame = Duration::from_millis(16);
+    let pump_ms = |demo: &mut MountedDemo, millis: u64| {
+        let frames = (millis / frame.as_millis() as u64) + 2;
+        for _ in 0..frames {
+            demo.pump(frame);
+        }
+    };
+
+    // Carry the 250ms entrance past its end. (The snack bar's content
+    // mounts immediately, at `heightFactor: 0` — `find_text` sees it
+    // regardless of animated height, so the meaningful assertion is that
+    // it survives well past the entrance, not that it's absent before it.)
+    pump_ms(&mut demo, 250);
+    assert!(
+        demo.find_text(tree::SNACK_BAR_ADDED_MESSAGE).is_some(),
+        "the snack bar must be shown once its entrance animation completes"
+    );
+
+    // Comfortably before its 4s default display duration elapses: still shown.
+    pump_ms(&mut demo, 2000);
+    assert!(
+        demo.find_text(tree::SNACK_BAR_ADDED_MESSAGE).is_some(),
+        "the snack bar must still be visible well before its display duration elapses"
+    );
+
+    // Past the 4s display duration plus the 250ms exit reverse: gone.
+    pump_ms(&mut demo, 2500);
+    assert!(
+        demo.find_text(tree::SNACK_BAR_ADDED_MESSAGE).is_none(),
+        "the snack bar must have auto-dismissed once its display duration elapsed"
+    );
+}
+
+// ============================================================================
 // (4) Dialog "Cancel" dismisses without appending
 // ============================================================================
 
