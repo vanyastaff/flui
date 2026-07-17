@@ -278,7 +278,7 @@ fn android_main(app: AndroidApp) {
                     }
 
                     match r.render_scene(&scene) {
-                        Ok(()) => {
+                        Ok(_presented) => {
                             tracing::info!("Scene rendered successfully");
                             needs_render = false;
                         }

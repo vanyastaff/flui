@@ -28,7 +28,7 @@
 //! [`RasterOwner`] is generic over [`RasterBackend`] (defined in
 //! [`crate::raster`], unchanged by this module) so the mailbox/channel
 //! protocol is identical for the synchronous in-process baseline this ADR
-//! ships and the threaded raster owner ADR-0028 reserves. [`RasterOwner::pump`]
+//! ships and the planned threaded-raster-owner design reserves. [`RasterOwner::pump`]
 //! is the baseline's per-frame call; [`RasterOwner::run_until_shutdown`] is
 //! the blocking loop a dedicated raster thread (or this module's own
 //! threaded test harness) drives instead.
@@ -181,7 +181,7 @@ pub enum RasterAck {
 
 /// Why a [`RasterAck::Dropped`] frame never presented.
 ///
-/// `#[non_exhaustive]`: ADR-0028's threaded raster owner can abandon a
+/// `#[non_exhaustive]`: the planned threaded raster owner can abandon a
 /// still-pending frame mid-shutdown instead of finishing it — something
 /// this module's synchronous baseline never does (see [`RasterOwner::pump`],
 /// which always finishes a pending frame through the ordinary render path
@@ -522,7 +522,14 @@ impl<B: RasterBackend> RasterOwner<B> {
         self.backend.mark_full_repaint();
 
         match self.backend.render_scene(&frame.scene) {
-            Ok(()) => {
+            // `_presented`: this pump's ack protocol predates the
+            // `RasterBackend::render_scene` presented-bool plumbing (added
+            // for App.1's frame-pacing fallback throttle, unrelated to this
+            // module) and is unchanged here — `RasterOwner` is unwired
+            // scaffolding reserved for the planned threaded raster owner, not
+            // yet a consumer of any pacing model. Any `Ok` still completes
+            // the render attempt with a `Presented` ack.
+            Ok(_presented) => {
                 self.mailbox
                     .send_ack(RasterAck::Presented { epoch: frame.epoch });
                 PumpOutcome::Presented(frame.epoch)
@@ -642,12 +649,12 @@ mod tests {
         render_calls: usize,
         resize_calls: Vec<(u32, u32)>,
         full_repaint_calls: usize,
-        planned_results: VecDeque<Result<(), EngineError>>,
+        planned_results: VecDeque<Result<bool, EngineError>>,
         size: (u32, u32),
     }
 
     impl FakeBackend {
-        fn with_planned(results: impl IntoIterator<Item = Result<(), EngineError>>) -> Self {
+        fn with_planned(results: impl IntoIterator<Item = Result<bool, EngineError>>) -> Self {
             Self {
                 planned_results: results.into_iter().collect(),
                 ..Self::default()
@@ -656,9 +663,9 @@ mod tests {
     }
 
     impl RasterBackend for FakeBackend {
-        fn render_scene(&mut self, _scene: &Scene) -> Result<(), EngineError> {
+        fn render_scene(&mut self, _scene: &Scene) -> Result<bool, EngineError> {
             self.render_calls += 1;
-            self.planned_results.pop_front().unwrap_or(Ok(()))
+            self.planned_results.pop_front().unwrap_or(Ok(true))
         }
 
         fn resize(&mut self, width: u32, height: u32) {

@@ -30,7 +30,13 @@ pub trait PlatformCapabilities: Send + Sync {
     /// Touch events are already lower frequency.
     fn should_coalesce_pointer_moves(&self) -> bool;
 
-    /// Default target frame rate
+    /// Default target frame rate — a platform-reported hint (e.g. `120` for
+    /// a ProMotion display), currently **not consumed anywhere**: nothing
+    /// reads this into `flui_app::AppConfig::target_fps`, which hardcodes
+    /// `60` regardless of platform (App.1 vsync-pacing consumer audit,
+    /// documented on `AppConfig::target_fps`). Steady-state frame pacing on
+    /// desktop does not depend on this value either — it comes from the
+    /// GPU-side blocking Fifo present.
     fn default_target_fps(&self) -> u32;
 
     /// Should rendering be suspended when in background?

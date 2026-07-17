@@ -887,12 +887,22 @@ impl AppBinding {
     /// Render while the platform dispatcher already owns the realm entry.
     /// This keeps scheduler callbacks and the full build/layout/paint/raster
     /// transaction under one activation instead of creating a nested scope.
+    ///
+    /// Returns whether the frame reached `present()` — needed for the
+    /// runner's no-present fallback throttle (see `runner.rs`'s
+    /// `no_present_fallback_pace`): Fifo present blocks every PRESENTED
+    /// frame at display cadence, but a frame that never presents (nothing
+    /// dirty, no damage, occluded surface, surface lost) carries no such
+    /// pacing signal. No caller currently consumes the painted [`Scene`]
+    /// itself (the GPU-side `render_scene` call already owns presentation),
+    /// so this returns the presented flag alone rather than reintroducing
+    /// an unused `Option<Arc<Scene>>`.
     #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) fn render_frame_entered<R: RasterBackend>(
         &self,
         realm: &super::ui_realm::UiRealm,
         renderer: &mut R,
-    ) -> Option<Arc<Scene>> {
+    ) -> bool {
         // 1. Flush coalesced pointer moves (GestureBinding handles coalescing)
         self.gestures.flush_pending_moves();
 
@@ -912,6 +922,7 @@ impl AppBinding {
         let scene = self.draw_frame_entered(realm, constraints);
 
         // 3. Render scene to GPU
+        let mut presented = false;
         if let Some(ref scene) = scene
             && scene.has_content()
         {
@@ -924,13 +935,24 @@ impl AppBinding {
             // diff lands, a new scene is a full repaint.
             renderer.mark_full_repaint();
             match renderer.render_scene(scene) {
-                Ok(()) => {
-                    self.frames_rendered.fetch_add(1, Ordering::Relaxed);
-                    tracing::trace!(
-                        frame = scene.frame_number(),
-                        total = self.frames_rendered.load(Ordering::Relaxed),
-                        "Frame rendered successfully"
-                    );
+                Ok(did_present) => {
+                    presented = did_present;
+                    if did_present {
+                        self.frames_rendered.fetch_add(1, Ordering::Relaxed);
+                        tracing::trace!(
+                            frame = scene.frame_number(),
+                            total = self.frames_rendered.load(Ordering::Relaxed),
+                            "Frame rendered successfully"
+                        );
+                    } else {
+                        // No damage / occluded: `render_scene` skipped
+                        // `present()` without error. Not counted as a
+                        // rendered frame — no pixel reached the screen.
+                        tracing::trace!(
+                            frame = scene.frame_number(),
+                            "Frame skipped: no damage or surface occluded (no present)"
+                        );
+                    }
                 }
                 Err(EngineError::SurfaceLost) => {
                     self.frames_dropped.fetch_add(1, Ordering::Relaxed);
@@ -970,7 +992,7 @@ impl AppBinding {
         // 4. Mark rendered
         self.mark_rendered();
 
-        scene
+        presented
     }
 
     /// Check if there is pending work.
