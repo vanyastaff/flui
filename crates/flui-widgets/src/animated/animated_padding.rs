@@ -94,7 +94,15 @@ impl ViewState<AnimatedPadding> for AnimatedPaddingState {
         let tween = self.animation.tween();
         let child = self.child.clone();
         AnimatedBuilder::new(self.animation.listenable(), move || {
-            Padding::new(tween.transform(curved.value())).child(child.clone())
+            // Oracle: `_padding!.evaluate(animation).clamp(EdgeInsets.zero,
+            // EdgeInsetsGeometry.infinity)` (`implicit_animations.dart`
+            // `AnimatedPaddingState.build`) — a curve that overshoots below `0`
+            // (e.g. `Curves.easeInOutBack`) must never hand `RenderPadding` a
+            // negative inset. `AnimatedContainer`'s sibling `_padding` tween is
+            // NOT clamped by its oracle, so that widget is intentionally left
+            // as-is; this clamp is specific to `AnimatedPadding`.
+            let padding = tween.transform(curved.value()).clamp_non_negative();
+            Padding::new(padding).child(child.clone())
         })
     }
 
