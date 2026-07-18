@@ -74,3 +74,6 @@ mod localizations_test;
 
 // ── Business.1 fidelity front — Focus/FocusScope parity (family 4) ──────────
 mod focus_test;
+
+// ── Business.1 fidelity front — Shortcuts/Actions parity (family 5) ─────────
+mod shortcuts_test;
