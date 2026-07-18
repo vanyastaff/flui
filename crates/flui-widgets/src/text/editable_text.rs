@@ -556,20 +556,23 @@ impl ViewState<EditableText> for EditableTextState {
             self.controller.remove_listener(id);
         }
 
-        // Deliberately NOT disposed: `self.rebuild_notifier` is also held by
-        // the `AnimatedBuilder` this state's own `build()` output wraps
-        // around (`Arc::new(self.rebuild_notifier.clone())`), and that
+        // Deliberately NOT disposed here: `self.rebuild_notifier` is also
+        // held by the `AnimatedBuilder` this state's own `build()` output
+        // wraps around (`Arc::new(self.rebuild_notifier.clone())`), and that
         // child element's own `on_unmount` calls `remove_listener` on its
         // clone as part of the SAME unmount sweep. `ViewState::dispose`
-        // (this method) runs before that child unmounts, so calling
-        // `dispose()` here first would mark the shared notifier disposed
-        // out from under a still-live subscriber, and
-        // `ChangeNotifier::remove_listener` panics in debug builds against
-        // exactly that "used after dispose" case — turning ordinary
-        // unmount-while-focused teardown into a panic. Letting the
-        // notifier's `Arc` refcount reach zero naturally (Rust's normal
-        // drop, once every clone — this state's and the child element's —
-        // is gone) is sufficient; nothing reads its disposed-flag.
+        // (this method) runs before that child unmounts.
+        //
+        // `ChangeNotifier::remove_listener` is a safe no-op after dispose
+        // (Flutter parity — see `Listenable::remove_listener`'s doc), so
+        // calling `dispose()` here first would no longer panic against the
+        // child's later `remove_listener` call. It is still left undone: an
+        // explicit `dispose()` would mark the shared notifier disposed while
+        // the child's subscription is still live, which is unnecessary
+        // churn for no behavioral gain here — letting the notifier's `Arc`
+        // refcount reach zero naturally (once every clone — this state's
+        // and the child element's — is gone) is sufficient, since nothing
+        // reads its disposed-flag on this path.
     }
 }
 

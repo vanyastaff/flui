@@ -91,6 +91,10 @@ pub trait Listenable: Send + Sync {
     fn add_listener(&self, listener: ListenerCallback) -> ListenerId;
 
     /// Remove a previously registered listener.
+    ///
+    /// A no-op if `id` is not registered — including after the listenable
+    /// has been disposed (Flutter parity: `ChangeNotifier.removeListener`
+    /// tolerates a disposed receiver so teardown code can always detach).
     fn remove_listener(&self, id: ListenerId);
 
     /// Remove all listeners.
@@ -135,12 +139,17 @@ pub trait ValueListenable<T>: Listenable {
 ///
 /// # Disposal
 ///
-/// After [`dispose`] has been called, the notifier is no longer usable:
-/// [`add_listener`], [`notify_listeners`], and [`remove_listener`] panic in
-/// debug builds via `debug_assert!` and degrade to a `tracing::warn!` + no-op
-/// in release builds. Mirrors Flutter's `ChangeNotifier.dispose` and
-/// `_debugAssertNotDisposed` semantics
+/// After [`dispose`] has been called, [`add_listener`] and
+/// [`notify_listeners`] panic in debug builds via `debug_assert!` and
+/// degrade to a `tracing::warn!` + no-op in release builds. Mirrors
+/// Flutter's `ChangeNotifier.dispose` and `_debugAssertNotDisposed` semantics
 /// (`flutter/lib/src/foundation/change_notifier.dart:181`, :376).
+///
+/// [`remove_listener`] is the deliberate exception: it carries no disposed
+/// check in either build profile, matching `ChangeNotifier.removeListener`
+/// upstream, which has no `debugAssertNotDisposed` so that teardown code can
+/// detach from an already-disposed listenable. It is always a silent no-op
+/// once disposed (the listener map is already empty).
 ///
 /// `is_disposed` is shared across clones via `Arc<AtomicBool>` so that a
 /// listener-callback holding its own clone sees disposal performed elsewhere.
@@ -199,9 +208,11 @@ impl ChangeNotifier {
     /// Discards listeners and marks this notifier as disposed.
     ///
     /// After this is called, the notifier is not in a usable state:
-    /// subsequent calls to [`add_listener`], [`notify_listeners`], or
-    /// [`remove_listener`] panic in debug builds via `debug_assert!` and
-    /// degrade to a `tracing::warn!` + no-op in release builds.
+    /// subsequent calls to [`add_listener`] or [`notify_listeners`] panic in
+    /// debug builds via `debug_assert!` and degrade to a `tracing::warn!` +
+    /// no-op in release builds. [`remove_listener`] is the deliberate
+    /// exception — it stays a silent no-op after dispose (Flutter parity;
+    /// see [`Listenable::remove_listener`]'s impl on this type).
     ///
     /// Mirrors Flutter's `ChangeNotifier.dispose` at
     /// `flutter/lib/src/foundation/change_notifier.dart:376`. Disposal does
@@ -393,9 +404,17 @@ impl Listenable for ChangeNotifier {
     }
 
     fn remove_listener(&self, id: ListenerId) {
-        if self.check_disposed() {
-            return;
-        }
+        // Deliberately NO disposed check here — Flutter parity.
+        // `ChangeNotifier.removeListener` in `change_notifier.dart` carries no
+        // `debugAssertNotDisposed`, unlike `addListener`/`dispose`/
+        // `notifyListeners` (each carries an explicit assert): its doc comment states
+        // "This method returns immediately if [dispose] has been called," and
+        // the rationale is explicit — "it is common that the owner of this
+        // instance would be disposed a frame earlier than the listeners.
+        // Allowing calls to this method after it is disposed makes it easier
+        // for listeners to properly clean up." `dispose()` already cleared
+        // `self.listeners`, so the lookup below is naturally a no-op; the id
+        // simply isn't found.
         self.listeners.lock().remove(&id);
     }
 
@@ -1011,14 +1030,18 @@ mod tests {
         notifier.notify_listeners();
     }
 
-    #[cfg(debug_assertions)]
     #[test]
-    #[should_panic(expected = "ChangeNotifier used after dispose")]
-    fn dispose_then_remove_listener_debug_asserts() {
+    fn dispose_then_remove_listener_is_a_silent_no_op() {
+        // Flutter parity: `ChangeNotifier.removeListener` carries no
+        // `debugAssertNotDisposed`, unlike `addListener`/`notifyListeners`/
+        // `dispose` — its doc comment explains that teardown code must be
+        // able to detach from an already-disposed listenable. Must not
+        // panic in debug OR release; behavior is identical in both.
         let notifier = ChangeNotifier::new();
         let id = notifier.add_listener(Arc::new(|| {}));
         notifier.dispose();
-        notifier.remove_listener(id);
+        notifier.remove_listener(id); // must not panic
+        notifier.remove_listener(ListenerId::new(9999)); // unknown id: also fine
     }
 
     #[test]
