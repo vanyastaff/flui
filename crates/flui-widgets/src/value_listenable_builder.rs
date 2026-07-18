@@ -50,10 +50,11 @@ use flui_view::{BoxedView, IntoView, RebuildHandle, StatefulView, View, ViewExt,
 
 /// Builds a widget from the current value of a [`ValueListenable<T>`].
 ///
-/// If `child` is `Some`, the exact same instance is handed back on every
-/// call — build the value-independent part of the subtree once (outside the
-/// closure) and incorporate it here, rather than reconstructing it every
-/// notification.
+/// If `child` is `Some`, it is handed back unchanged in content on every
+/// call (the module doc's divergence note explains why identity is not
+/// preserved through `BoxedView`'s dyn-clone) — build the value-independent
+/// part of the subtree once (outside the closure) and incorporate it here,
+/// rather than reconstructing it every notification.
 ///
 /// Flutter parity: `ValueWidgetBuilder<T>`.
 pub type ValueWidgetBuilder<T> = Rc<dyn Fn(&dyn BuildContext, &T, Option<BoxedView>) -> BoxedView>;

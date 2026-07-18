@@ -199,10 +199,9 @@ fn can_change_listenable() {
 /// Flutter parity: `'Stops listening to old listenable after changing
 /// listenable'`. Beyond the oracle's own assertion (the old listenable's
 /// later mutation must not reach the widget), this also asserts the
-/// underlying registration count directly — the AnimatedSwitcher-lesson
-/// rigor the oracle's `find.text` checks alone don't give: a leaked listener
-/// doesn't panic, so the observable must be an explicit count, not
-/// must-not-panic.
+/// underlying registration count directly, which the oracle's `find.text`
+/// checks alone don't give: a leaked listener doesn't panic, so the
+/// observable must be an explicit count, not must-not-panic.
 #[test]
 fn stops_listening_to_old_listenable_after_changing_listenable() {
     let (first, first_cell) = shared_listenable(None);
