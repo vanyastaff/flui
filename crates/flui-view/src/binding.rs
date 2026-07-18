@@ -367,20 +367,14 @@ pub trait WidgetsBindingObserver {
 }
 
 /// Application lifecycle states.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AppLifecycleState {
-    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
-    /// App is visible and responding to user input.
-    Resumed,
-    /// App is inactive (e.g., incoming call).
-    Inactive,
-    /// App is not visible but running.
-    Hidden,
-    /// App is paused (backgrounded).
-    Paused,
-    /// App is being destroyed.
-    Detached,
-}
+///
+/// Re-exported from [`flui_scheduler::AppLifecycleState`] — the canonical
+/// Flutter-parity lifecycle enum (`Scheduler::handle_app_lifecycle_state_change`,
+/// binding.dart:414-441). `flui-view` previously defined its own parallel
+/// `Resumed`/`Inactive`/`Hidden`/`Paused`/`Detached` enum; the two were
+/// consolidated onto the scheduler's copy (ADR-0035) since it is the one
+/// tied to real frame-scheduling behavior (`frames_enabled`).
+pub use flui_scheduler::AppLifecycleState;
 
 /// The owner-local binding for one widgets layer.
 ///

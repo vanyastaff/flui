@@ -41,9 +41,10 @@ AppBinding (transitional host)
   auto-wraps it in `VsyncScope` so implicit-animation widgets tick with zero
   boilerplate. `run_direct` bypasses the widget tree for raw
   `SceneBuilder`-callback rendering.
-- **Lifecycle** — `LifecycleState`/`LifecycleEvent` port Flutter's
-  `AppLifecycleState` (resumed, inactive, paused, detached);
-  `DefaultLifecycle` is the stock observer.
+- **Lifecycle** — `flui_scheduler::AppLifecycleState` (resumed, inactive,
+  hidden, paused, detached) is the canonical Flutter-parity state; the
+  runner drives `Scheduler::handle_app_lifecycle_state_change` directly at
+  bootstrap/shutdown (ADR-0035).
 - **Frame loop** — on-demand rendering: a frame runs only when the tree is
   dirty or the scheduler has pending work, and pure ticker-driven frames are
   paced to the configured target FPS.

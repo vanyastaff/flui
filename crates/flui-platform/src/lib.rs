@@ -13,8 +13,7 @@
 //!   │   ├─ platform.rs      - Central Platform trait
 //!   │   ├─ window.rs        - Window abstraction
 //!   │   ├─ display.rs       - Display/monitor info
-//!   │   ├─ capabilities.rs  - Platform capabilities
-//!   │   └─ lifecycle.rs     - App lifecycle
+//!   │   └─ capabilities.rs  - Platform capabilities
 //!   │
 //!   ├─ shared/              - Shared infrastructure
 //!   │   └─ handlers.rs      - Callback registry
@@ -201,12 +200,11 @@ pub use shared::{PlatformHandlers, WindowCallbacks};
 pub use task::{Priority, Task, TaskLabel};
 // Re-export core traits
 pub use traits::{
-    Clipboard, ClipboardItem, DefaultLifecycle, DesktopCapabilities, DispatchEventResult,
-    DisplayId, LifecycleEvent, LifecycleState, MobileCapabilities, PathPromptOptions, Platform,
-    PlatformCapabilities, PlatformDisplay, PlatformEmbedder, PlatformExecutor, PlatformHaptics,
-    PlatformLifecycle, PlatformReadyCallback, PlatformTextInput, PlatformWindow, WebCapabilities,
-    WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowEvent, WindowId, WindowMode,
-    WindowOptions,
+    Clipboard, ClipboardItem, DesktopCapabilities, DispatchEventResult, DisplayId,
+    MobileCapabilities, PathPromptOptions, Platform, PlatformCapabilities, PlatformDisplay,
+    PlatformEmbedder, PlatformExecutor, PlatformHaptics, PlatformReadyCallback, PlatformTextInput,
+    PlatformWindow, WebCapabilities, WindowAppearance, WindowBackgroundAppearance, WindowBounds,
+    WindowEvent, WindowId, WindowMode, WindowOptions,
 };
 
 /// Get the current platform implementation

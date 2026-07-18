@@ -231,7 +231,6 @@ impl fmt::Display for SchedulerPhase {
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[repr(u8)]
 pub enum AppLifecycleState {
-    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// The application is visible and responding to user input.
     ///
     /// This is the default running state. Animations should run,

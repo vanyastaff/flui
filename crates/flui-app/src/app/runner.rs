@@ -145,7 +145,14 @@ enum RealmEvent {
         scale_factor: f32,
         apply_surface: Box<dyn FnOnce()>,
     },
-    Lifecycle(flui_platform::traits::LifecycleEvent),
+    /// Window active/focus status changed.
+    ///
+    /// PR1 (ADR-0035): intentionally a no-op. The old `AppBinding`-owned
+    /// `DefaultLifecycle` state machine this used to feed via
+    /// `transition_lifecycle` was retired in favor of the canonical
+    /// `flui_scheduler::Scheduler` lifecycle; nothing derives a lifecycle
+    /// signal from window focus yet. PR2 wires this into the
+    /// `(visible, focused)` derivation that drives the scheduler directly.
     Active(bool),
     Frame(Box<dyn FnOnce(&super::ui_realm::UiRealm)>),
 }
@@ -167,14 +174,9 @@ impl RealmEvent {
                 AppBinding::instance().request_redraw();
                 tracing::trace!(?size, scale_factor, "realm resize committed");
             }
-            Self::Lifecycle(event) => AppBinding::instance().transition_lifecycle(event),
-            Self::Active(active) => {
-                let event = if active {
-                    flui_platform::traits::LifecycleEvent::Activated
-                } else {
-                    flui_platform::traits::LifecycleEvent::Deactivated
-                };
-                AppBinding::instance().transition_lifecycle(event);
+            Self::Active(_active) => {
+                // See the `Active` variant doc: PR1 deliberately does not
+                // feed a lifecycle signal from focus changes.
             }
             Self::Frame(run) => run(realm),
         }
@@ -423,7 +425,7 @@ mod realm_dispatch_tests {
     }
 
     #[test]
-    fn nested_resize_and_lifecycle_wait_until_frame_returns() {
+    fn nested_resize_and_active_wait_until_frame_returns() {
         let dispatcher = install_test_realm();
         let order = Rc::new(RefCell::new(Vec::new()));
         let outer = Rc::clone(&order);
@@ -431,11 +433,8 @@ mod realm_dispatch_tests {
             dispatcher,
             RealmEvent::Frame(Box::new(move |_| {
                 outer.borrow_mut().push(1);
-                dispatch_platform_realm(
-                    dispatcher,
-                    RealmEvent::Lifecycle(flui_platform::traits::LifecycleEvent::Activated),
-                )
-                .expect("lifecycle queues");
+                dispatch_platform_realm(dispatcher, RealmEvent::Active(true))
+                    .expect("active queues");
                 let resize = Rc::clone(&outer);
                 dispatch_platform_realm(
                     dispatcher,
@@ -453,11 +452,11 @@ mod realm_dispatch_tests {
             })),
         )
         .expect("frame dispatches");
+        // Two different `RealmEvent` variants nested inside a `Frame` still
+        // queue FIFO rather than running immediately — the property
+        // `reentrant_frame_event_is_queued_fifo` proves for same-variant
+        // nesting, this proves it holds across variant types too.
         assert_eq!(*order.borrow(), vec![1, 2, 3]);
-        assert_eq!(
-            AppBinding::instance().lifecycle_state(),
-            super::super::lifecycle::LifecycleState::Active
-        );
     }
 
     #[test]
@@ -852,9 +851,9 @@ where
     };
     use flui_platform::{
         Platform, WindowOptions,
-        traits::{DispatchEventResult, LifecycleEvent, PlatformInput},
+        traits::{DispatchEventResult, PlatformInput},
     };
-    use flui_scheduler::Scheduler;
+    use flui_scheduler::{AppLifecycleState, Scheduler};
     use parking_lot::Mutex;
 
     use crate::embedder::PlatformWindowHandle;
@@ -1195,14 +1194,24 @@ where
         }));
 
         // 8. Lifecycle callbacks
+        //
+        // ADR-0035 (PR1): Started/Terminating call the canonical
+        // `flui_scheduler::Scheduler` lifecycle directly rather than
+        // round-tripping through `RealmEvent`/`dispatch_platform_realm` —
+        // neither needs `&UiRealm` access, and both already run on the
+        // realm's owner thread (the platform event-loop thread), so the
+        // debug_assert below is the cheap, in-scope way to verify that
+        // invariant instead of teaching the scheduler about realm ownership.
 
-        // Platform quit -> transition to Terminating
+        // Platform quit -> Detached (frames disabled, listeners notified).
         platform.on_quit(Box::new(move || {
             tracing::info!("Platform quit");
-            let _ = dispatch_platform_realm(
-                realm_dispatch,
-                RealmEvent::Lifecycle(LifecycleEvent::Terminating),
+            debug_assert_eq!(
+                std::thread::current().id(),
+                realm_dispatch.owner_thread,
+                "platform on_quit must fire on the realm's owner thread"
             );
+            Scheduler::instance().handle_app_lifecycle_state_change(AppLifecycleState::Detached);
         }));
 
         // Window close -> log and let the platform handle quit
@@ -1217,25 +1226,28 @@ where
             true
         }));
 
-        // Window active status -> lifecycle Activated/Deactivated
+        // Window active status -> RealmEvent::Active (currently a no-op; see
+        // that variant's doc).
         window.on_active_status_change(Box::new(move |active| {
             let _ = dispatch_platform_realm(realm_dispatch, RealmEvent::Active(active));
         }));
 
         // 9. Store window in AppBinding for runtime access — BEFORE
-        // dispatching `Lifecycle::Started` or requesting the initial
-        // redraw. Both of those can synchronously run the first frame
-        // through `dispatch_platform_realm`; if `active_window` were still
-        // `None` at that point, anything resolving it during that frame
-        // (an autofocus `EditableText` attaching its IME client, for
-        // instance) would silently no-op instead of attaching.
+        // marking the lifecycle Resumed or requesting the initial redraw.
+        // Both of those can synchronously run the first frame through
+        // `dispatch_platform_realm`; if `active_window` were still `None`
+        // at that point, anything resolving it during that frame (an
+        // autofocus `EditableText` attaching its IME client, for instance)
+        // would silently no-op instead of attaching.
         AppBinding::instance().set_window(window);
 
-        // Mark lifecycle as started
-        let _ = dispatch_platform_realm(
-            realm_dispatch,
-            RealmEvent::Lifecycle(LifecycleEvent::Started),
+        // Mark lifecycle as started (Resumed).
+        debug_assert_eq!(
+            std::thread::current().id(),
+            realm_dispatch.owner_thread,
+            "desktop bootstrap must run on the realm's owner thread"
         );
+        Scheduler::instance().handle_app_lifecycle_state_change(AppLifecycleState::Resumed);
 
         // 10. Request initial redraw, now that the window is stored.
         // `wake_frame` (not `with_window(|w| w.request_redraw())`): it clones
@@ -1346,9 +1358,9 @@ where
     use flui_hot_reload::HotReloadDriver;
     use flui_platform::{
         AndroidPlatform, Platform, WindowOptions,
-        traits::{DispatchEventResult, LifecycleEvent, PlatformInput},
+        traits::{DispatchEventResult, PlatformInput},
     };
-    use flui_scheduler::Scheduler;
+    use flui_scheduler::{AppLifecycleState, Scheduler};
     use parking_lot::Mutex;
 
     use crate::embedder::PlatformWindowHandle;
@@ -1524,14 +1536,22 @@ where
     }));
 
     // 8. Lifecycle callbacks
+    //
+    // ADR-0035 (PR1): Started/Terminating call the canonical
+    // `flui_scheduler::Scheduler` lifecycle directly — see `run_desktop`'s
+    // identical comment for why this bypasses `RealmEvent`/
+    // `dispatch_platform_realm` and why the debug_assert lives here rather
+    // than in the scheduler.
 
-    // Platform quit -> transition to Terminating
+    // Platform quit -> Detached (frames disabled, listeners notified).
     platform.on_quit(Box::new(move || {
         tracing::info!("Platform quit");
-        let _ = dispatch_platform_realm(
-            realm_dispatch,
-            RealmEvent::Lifecycle(LifecycleEvent::Terminating),
+        debug_assert_eq!(
+            std::thread::current().id(),
+            realm_dispatch.owner_thread,
+            "platform on_quit must fire on the realm's owner thread"
         );
+        Scheduler::instance().handle_app_lifecycle_state_change(AppLifecycleState::Detached);
     }));
 
     // Window close (fired by Android Destroy event)
@@ -1539,25 +1559,28 @@ where
         tracing::info!("Window closed");
     }));
 
-    // Window active status -> lifecycle Activated/Deactivated
+    // Window active status -> RealmEvent::Active (currently a no-op; see
+    // that variant's doc).
     window.on_active_status_change(Box::new(move |active| {
         let _ = dispatch_platform_realm(realm_dispatch, RealmEvent::Active(active));
     }));
 
-    // 9. Store window in AppBinding for runtime access — BEFORE
-    // dispatching `Lifecycle::Started` or requesting the initial redraw.
-    // Both of those can synchronously run the first frame through
-    // `dispatch_platform_realm`; if `active_window` were still `None` at
-    // that point, anything resolving it during that frame (an autofocus
-    // `EditableText` attaching its IME client, for instance) would
-    // silently no-op instead of attaching.
+    // 9. Store window in AppBinding for runtime access — BEFORE marking the
+    // lifecycle Resumed or requesting the initial redraw. Both of those can
+    // synchronously run the first frame through `dispatch_platform_realm`;
+    // if `active_window` were still `None` at that point, anything
+    // resolving it during that frame (an autofocus `EditableText`
+    // attaching its IME client, for instance) would silently no-op instead
+    // of attaching.
     AppBinding::instance().set_window(window);
 
-    // Mark lifecycle as started
-    let _ = dispatch_platform_realm(
-        realm_dispatch,
-        RealmEvent::Lifecycle(LifecycleEvent::Started),
+    // Mark lifecycle as started (Resumed).
+    debug_assert_eq!(
+        std::thread::current().id(),
+        realm_dispatch.owner_thread,
+        "android bootstrap must run on the realm's owner thread"
     );
+    Scheduler::instance().handle_app_lifecycle_state_change(AppLifecycleState::Resumed);
 
     // 10. Request initial redraw, now that the window is stored.
     // `wake_frame` (not `with_window(|w| w.request_redraw())`): it clones
@@ -1605,9 +1628,9 @@ where
     use flui_foundation::HasInstance;
     use flui_platform::{
         WindowOptions,
-        traits::{DispatchEventResult, LifecycleEvent, PlatformInput},
+        traits::{DispatchEventResult, PlatformInput},
     };
-    use flui_scheduler::Scheduler;
+    use flui_scheduler::{AppLifecycleState, Scheduler};
     use parking_lot::Mutex;
 
     use crate::embedder::PlatformWindowHandle;
@@ -1774,12 +1797,20 @@ where
     }));
 
     // 6. Lifecycle callbacks
+    //
+    // ADR-0035 (PR1): Started/Terminating call the canonical
+    // `flui_scheduler::Scheduler` lifecycle directly — see `run_desktop`'s
+    // identical comment for why this bypasses `RealmEvent`/
+    // `dispatch_platform_realm` and why the debug_assert lives here rather
+    // than in the scheduler.
     platform.on_quit(Box::new(move || {
         tracing::info!("Web platform quit");
-        let _ = dispatch_platform_realm(
-            realm_dispatch,
-            RealmEvent::Lifecycle(LifecycleEvent::Terminating),
+        debug_assert_eq!(
+            std::thread::current().id(),
+            realm_dispatch.owner_thread,
+            "platform on_quit must fire on the realm's owner thread"
         );
+        Scheduler::instance().handle_app_lifecycle_state_change(AppLifecycleState::Detached);
     }));
 
     window.on_close(Box::new(move || {
@@ -1791,17 +1822,19 @@ where
         let _ = dispatch_platform_realm(realm_dispatch, RealmEvent::Active(active));
     }));
 
-    // 7. Store window — BEFORE dispatching `Lifecycle::Started`, which can
+    // 7. Store window — BEFORE marking the lifecycle Resumed, which can
     // synchronously run the first frame through `dispatch_platform_realm`;
     // anything resolving `active_window` during that frame (an autofocus
     // `EditableText` attaching its IME client, for instance) must not see
     // `None`.
     AppBinding::instance().set_shared_window(window);
 
-    let _ = dispatch_platform_realm(
-        realm_dispatch,
-        RealmEvent::Lifecycle(LifecycleEvent::Started),
+    debug_assert_eq!(
+        std::thread::current().id(),
+        realm_dispatch.owner_thread,
+        "web bootstrap must run on the realm's owner thread"
     );
+    Scheduler::instance().handle_app_lifecycle_state_change(AppLifecycleState::Resumed);
 
     tracing::info!("Web platform initialized with callbacks");
 

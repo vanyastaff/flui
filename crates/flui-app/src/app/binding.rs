@@ -52,10 +52,7 @@ use flui_view::View;
 use flui_widgets::VsyncScope;
 use parking_lot::{Mutex, RwLock};
 
-use crate::{
-    app::lifecycle::{DefaultLifecycle, LifecycleEvent, LifecycleState, PlatformLifecycle},
-    bindings::RenderingFlutterBinding,
-};
+use crate::bindings::RenderingFlutterBinding;
 
 /// Transitional process service host.
 ///
@@ -104,9 +101,6 @@ pub struct AppBinding {
     /// This is the same PipelineOwner as in RendererBinding, but wrapped
     /// for sharing with elements that need `Arc<RwLock<PipelineOwner>>`.
     shared_pipeline_owner: Arc<RwLock<flui_rendering::pipeline::PipelineOwner>>,
-
-    /// Application lifecycle state tracker.
-    lifecycle: Mutex<DefaultLifecycle>,
 
     /// Active platform window (set during run_desktop).
     active_window: Arc<Mutex<Option<Arc<dyn PlatformWindow>>>>,
@@ -381,7 +375,6 @@ impl AppBinding {
             frames_rendered: AtomicU64::new(0),
             frames_dropped: AtomicU64::new(0),
             shared_pipeline_owner,
-            lifecycle: Mutex::new(DefaultLifecycle::new()),
             active_window,
             platform_clipboard: Arc::new(Mutex::new(None)),
             vsync_slot: Mutex::new(Vsync::new()),
@@ -788,28 +781,6 @@ impl AppBinding {
     #[cfg(test)]
     pub fn clear_now_secs_for_test(&self) {
         self.now_secs_override.store(0, Ordering::Relaxed);
-    }
-
-    // ========================================================================
-    // Lifecycle Management
-    // ========================================================================
-
-    /// Get the current lifecycle state.
-    pub fn lifecycle_state(&self) -> LifecycleState {
-        self.lifecycle.lock().state()
-    }
-
-    /// Transition the lifecycle via an event.
-    ///
-    /// Delegates to [`DefaultLifecycle::handle_event`] and logs the transition.
-    pub fn transition_lifecycle(&self, event: LifecycleEvent) {
-        self.lifecycle.lock().handle_event(event);
-        tracing::debug!(?event, state = ?self.lifecycle_state(), "Lifecycle transition");
-    }
-
-    /// Check if the lifecycle state allows rendering.
-    pub fn should_render(&self) -> bool {
-        self.lifecycle.lock().should_render()
     }
 
     // ========================================================================
