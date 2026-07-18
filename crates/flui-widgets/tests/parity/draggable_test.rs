@@ -53,8 +53,8 @@
 //!
 //! ### Denominator: 71 oracle cases
 //!
-//! **21 tests ported below** (11 `Draggable`-gesture + 6
-//! `DragTargetState`-protocol + 4 feedback-layer-mechanism, listed in each
+//! **23 tests ported below** (11 `Draggable`-gesture + 6
+//! `DragTargetState`-protocol + 6 feedback-layer-mechanism, listed in each
 //! section's own comment). Of these, 6 correspond exactly (or as an
 //! explicitly-noted partial) to a specific oracle `testWidgets` name:
 //! - `'Null axis onDragUpdate called only if draggable moves in any
@@ -76,14 +76,14 @@
 //!   proves the *documented divergence* (`draggable.rs`'s divergence #5)
 //!   in their place, not the oracle's own keep-alive behavior.
 //!
-//! The remaining 15 ported tests exercise the oracle's established
+//! The remaining 17 ported tests exercise the oracle's established
 //! start/update/end/cancel/accept/candidate/reject/leave *contract*, plus the
 //! feedback-layer mechanism — spread by the oracle across many live
 //! end-to-end `testWidgets` cases — without a single corresponding
 //! `testWidgets` name, same as the original cut of this file. (This includes
 //! `reported_offset_is_displacement_not_global_position`, which pins a
 //! *divergence* — see `draggable.rs`'s divergence note #4 — rather than
-//! porting any single oracle case; the four feedback-layer tests are the
+//! porting any single oracle case; the six feedback-layer tests are the
 //! same shape, proving the mechanism the corpus's first bucket names as
 //! still not enough to satisfy any of its 15 oracle cases.)
 //!
@@ -108,10 +108,13 @@
 //!   MaterialApp'`, `'childDragAnchorStrategy works in scaled MaterialApp'`,
 //!   `'... matches pointer in rotated MaterialApp'` need transform-aware
 //!   global positioning on top of the anchor-strategy gap; `'unmounting
-//!   overlay ends drag gracefully'` needs an `Overlay` that can itself
-//!   unmount mid-drag (not exercised — this port's harness always keeps the
-//!   `Overlay` alive for the test's duration); `'feedback respect the
-//!   MouseRegion cursor configure'` and `'configurable feedback ignore
+//!   overlay ends drag gracefully'` needs the `Overlay` itself to unmount
+//!   mid-drag, which this port's harness never drives (the `Overlay` is
+//!   always kept alive for a test's duration) — `feedback_layer_is_removed_when_the_draggable_unmounts_mid_drag`
+//!   below proves the narrower, Draggable-side half of the same shape (the
+//!   `Draggable` unmounting while its `Overlay` stays up), not the oracle's
+//!   own scenario, so the named case still doesn't port; `'feedback respect
+//!   the MouseRegion cursor configure'` and `'configurable feedback ignore
 //!   pointer behavior'` need cursor/hit-test configurability on the feedback
 //!   layer, not implemented. None of the 15 has no remaining blocker, so none
 //!   ports — but the mechanism all 15 implicitly depend on (an entry that
@@ -943,12 +946,17 @@ fn did_drop_only_accepts_a_current_candidate() {
 // Group 3 — the feedback layer's insert/reposition/remove mechanism
 // ============================================================================
 //
-// 4 cases: `feedback` mounts once the drag starts and is gone once it ends
+// 6 cases: `feedback` mounts once the drag starts and is gone once it ends
 // (via a real `pointer up`) or is cancelled (via a platform `pointer
 // cancel`); it repositions to follow the tracked displacement across
-// multiple moves; and `child_when_dragging`'s swap keeps working unchanged
-// alongside it. None of these correspond to a specific oracle `testWidgets`
-// name — see the corpus accounting's first bucket above for why the 15 named
+// multiple moves; `child_when_dragging`'s swap keeps working unchanged
+// alongside it; the layer is torn down if the `Draggable` itself unmounts
+// mid-drag (the route holding it is replaced), not just on a normal
+// end/cancel; and a rapid restart (a new drag starting before an ended
+// one's removal has drained through a rebuild) does not leave a stale,
+// frozen layer stuck forever while the new drag shows none of its own. None
+// of these correspond to a specific oracle `testWidgets` name — see the
+// corpus accounting's first bucket above for why the 15 named
 // feedback-position cases still do not port even though this mechanism is
 // now real (each needs something else still missing: the true global-anchor
 // position, `rootOverlay`, scaled/rotated ancestors, or cursor
@@ -1175,5 +1183,138 @@ fn feedback_layer_and_child_when_dragging_swap_together() {
             .len(),
         0,
         "after the drag ends: child_when_dragging and the feedback layer are both gone"
+    );
+}
+
+/// Narrower cousin of the oracle's `'unmounting overlay ends drag
+/// gracefully'` (one of the 15 out-of-scope feedback-position cases, see the
+/// corpus accounting above): this port's harness always keeps the `Overlay`
+/// itself mounted for a test's duration, so the oracle's exact scenario (the
+/// `Overlay` unmounting) isn't driven here. What this proves instead is the
+/// `Draggable` side of the same shape — its own `dispose` tearing the
+/// feedback layer down when *it* unmounts mid-drag (the route holding it is
+/// replaced), not just when the drag ends normally.
+///
+/// Red-check: comment out `dispose`'s stale-take-and-remove in
+/// `draggable.rs` — this test's second assertion then fails (the entry is
+/// orphaned in the overlay forever, since no later `build` runs for a
+/// disposed element to catch it there either).
+#[test]
+fn feedback_layer_is_removed_when_the_draggable_unmounts_mid_drag() {
+    let widget = Draggable::<i32>::new(child()).feedback(|| SizedBox::new(20.0, 10.0).boxed());
+    let handle = NavigatorHandle::new();
+    handle.seed_initial(SimpleRoute::<i32>::new(move |_ctx| widget.clone().boxed()));
+    let mut scoped = lay_out_with_arena(Navigator::new(handle.clone()), extent());
+
+    scoped.dispatch_pointer_down(50.0, 50.0);
+    scoped.dispatch_pointer_move(80.0, 50.0);
+    settle_one_frame(&mut scoped);
+    assert_eq!(
+        scoped
+            .laid()
+            .find_all_by_render_type("RenderConstrainedBox")
+            .len(),
+        1,
+        "the feedback layer is showing mid-drag"
+    );
+
+    // Replace the route holding the Draggable while the drag is still
+    // active — this tears down its subtree, including `DraggableState`,
+    // without ever going through a normal `pointer up`/`cancel`. The
+    // replacement's own content is a `ColoredBox` (`RenderDecoratedBox`),
+    // deliberately *not* a `SizedBox` (`RenderConstrainedBox`) — the latter
+    // would collide with the feedback layer's own marker type below and
+    // make a bug that leaves the old entry mounted look like a pass.
+    handle.push_replacement(SimpleRoute::<i32>::new(|_ctx| {
+        ColoredBox::new(Color::rgb(0, 0, 0)).boxed()
+    }));
+    // Four hops, each needing its own drain: (1) Navigator's own rebuild
+    // calls `overlay.rearrange`, which (2) schedules the Overlay's own
+    // rebuild, unmounting the old route's subtree and calling
+    // `DraggableState::dispose` — which itself calls `entry.remove()`, (3)
+    // scheduling a third rebuild that detaches the feedback entry from the
+    // overlay's list, which (4) finally drops it from the render tree.
+    settle_one_frame(&mut scoped);
+    settle_one_frame(&mut scoped);
+    settle_one_frame(&mut scoped);
+
+    assert_eq!(
+        scoped
+            .laid()
+            .find_all_by_render_type("RenderConstrainedBox")
+            .len(),
+        0,
+        "the feedback layer must not outlive the Draggable that inserted it"
+    );
+}
+
+/// A rapid restart at `max_simultaneous_drags(1)` — a new drag starting
+/// before the ended one's `entry.remove()` has drained through a rebuild —
+/// must not leave the old, now-frozen feedback layer stuck in the overlay
+/// forever with the new drag showing none of its own.
+///
+/// A plain render-object *count* cannot tell "the new drag's own live
+/// feedback" apart from "the old drag's orphaned, frozen-in-place feedback"
+/// — both leave exactly one `RenderConstrainedBox` mounted. So this checks
+/// *position*: the first drag moves purely horizontally, the second (started
+/// before the first's removal drains) purely vertically. If the slot still
+/// held the first drag's stale, un-evicted entry, nothing would ever be
+/// writing to *its* `FeedbackSignal` again (a stale entry has no live
+/// session), so it would stay frozen at the first drag's horizontal-only
+/// position — the second drag's own vertical move would not move it, because
+/// `on_start` would have handed that second session `feedback: None`.
+///
+/// Red-check: revert `on_start` to only act "if slot.is_none()" (the
+/// pre-fix shape) — the entry visible after the second drag's move stays
+/// frozen at the first drag's horizontal-only position (this test's second
+/// assertion fails).
+#[test]
+fn feedback_layer_survives_a_restart_before_the_previous_removal_drains() {
+    let widget = Draggable::<i32>::new(child())
+        .max_simultaneous_drags(1)
+        .feedback(|| SizedBox::new(20.0, 10.0).boxed());
+    let mut scoped = lay_out_draggable_with_overlay(widget, extent());
+
+    // First drag: +30 horizontal, 0 vertical.
+    scoped.dispatch_pointer_down(50.0, 50.0);
+    scoped.dispatch_pointer_move(80.0, 50.0);
+    settle_one_frame(&mut scoped);
+    assert_eq!(
+        scoped
+            .laid()
+            .find_all_by_render_type("RenderConstrainedBox")
+            .len(),
+        1,
+        "the first drag's feedback layer is showing"
+    );
+
+    // End the first drag and *immediately* start a second, with no
+    // intervening `settle_one_frame` — `end_active`'s scheduled rebuild
+    // (which is where the ended drag's stale entry would normally be
+    // removed) has not drained yet when the new drag's own `on_start` runs.
+    // Second drag: 0 horizontal, +40 vertical — the opposite axis, so a
+    // frozen first-drag entry and a live second-drag entry are
+    // unambiguously distinguishable by position.
+    scoped.dispatch_pointer_up(80.0, 50.0);
+    scoped.dispatch_pointer_down(50.0, 50.0);
+    scoped.dispatch_pointer_move(50.0, 90.0);
+    settle_one_frame(&mut scoped);
+    settle_one_frame(&mut scoped);
+
+    assert_eq!(
+        scoped
+            .laid()
+            .find_all_by_render_type("RenderConstrainedBox")
+            .len(),
+        1,
+        "exactly one feedback layer must remain — the new drag's own, not \
+         the old drag's orphaned one left behind on top of it"
+    );
+    let position = feedback_origin(&scoped);
+    assert!(
+        (position.y.0 - 40.0).abs() < 0.5 && position.x.0.abs() < 0.5,
+        "the surviving layer must be the second drag's own — tracking its \
+         +40 vertical move, not frozen at the first drag's +30 horizontal \
+         position — got {position:?}"
     );
 }

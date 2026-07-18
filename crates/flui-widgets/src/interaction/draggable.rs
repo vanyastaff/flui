@@ -347,11 +347,24 @@ pub struct DraggableState<T: Clone + Send + Sync + 'static> {
     /// instead.
     ///
     /// One slot, not one per session: with `max_simultaneous_drags > 1`,
-    /// concurrent drags share this single feedback layer (the later session
-    /// to start wins the slot; earlier ones simply show no feedback of their
-    /// own). Named, honest scope cut — no harness capability here can even
-    /// drive two truly concurrent contacts to observe the difference (see
-    /// this file's own module docs on that limitation).
+    /// concurrent drags share this single feedback layer. A later session's
+    /// `on_start` always evicts whatever an earlier one left here — removing
+    /// a still-live occupant outright, not just a stale one an earlier
+    /// session's own end/cancel hasn't gotten around to tearing down yet
+    /// (`build`'s removal is deferred to the next rebuild, which a rapid
+    /// restart — end, then a new drag starts before that rebuild drains —
+    /// can easily race ahead of; evicting unconditionally here, not only
+    /// when the slot looks "stale," is what closes that race). One further
+    /// named case this does **not** fix: if the session that currently owns
+    /// the slot ends while some other, still-active session continues (and
+    /// no new session ever starts to evict it), this slot stays `Some` —
+    /// nothing clears it on that one session's end alone — so the layer is
+    /// left mounted but frozen (no session left is writing to its
+    /// `FeedbackSignal`) until `build` next observes zero active sessions
+    /// and tears it down. Both are
+    /// honest scope cuts of the same root cause: no harness capability here
+    /// can even drive two truly concurrent contacts to observe either case
+    /// directly (see this file's own module docs on that limitation).
     feedback_entry: Rc<RefCell<Option<OverlayEntry>>>,
     /// The `Send + Sync` handle shared with whichever `DragSession` currently
     /// owns `feedback_entry`, if any.
@@ -475,7 +488,11 @@ impl FeedbackSignal {
     /// [`OverlayEntry::mark_needs_build`]'s own before-mount/after-unmount
     /// inertness.
     fn reposition(&self) {
-        if let Some(handle) = self.rebuild.lock().as_ref() {
+        // Clone the handle out and drop the lock before calling into the
+        // framework: `RebuildHandle::schedule` must never run with this
+        // (or any other) lock still held.
+        let handle = self.rebuild.lock().clone();
+        if let Some(handle) = handle {
             handle.schedule();
         }
     }
@@ -487,7 +504,7 @@ impl FeedbackSignal {
 /// bare `Positioned` as an entry's root is silently dropped to the origin
 /// (pinned by
 /// `overlay::tests::positioned_inside_an_overlay_entry_is_laid_out_by_an_inner_stack`,
-/// ADR-0021 S8) — so the inner `Stack` is load-bearing, not decorative.
+/// ADR-0021) — so the inner `Stack` is load-bearing, not decorative.
 ///
 /// A real, `Rc`-backed `StatefulView` (not a bare closure) specifically so its
 /// `init_state` can acquire a `RebuildHandle` the ADR-0018 way and publish it
@@ -759,29 +776,35 @@ impl<T: Clone + Send + Sync + 'static> ViewState<Draggable<T>> for DraggableStat
             // paint it — absent either, this drag simply has no visible
             // feedback, same as before this wiring landed. One slot per
             // `Draggable`, not one per session — see `feedback_entry`'s docs
-            // on the `max_simultaneous_drags > 1` scope cut this implies.
-            let mut slot = feedback_entry_slot.borrow_mut();
-            let feedback = if slot.is_none() {
-                let feedback_config = feedback_config.borrow();
-                match (overlay.lock().clone(), feedback_config.feedback.clone()) {
-                    (Some(handle), Some(builder)) => {
-                        feedback_signal.set_offset(Offset::ZERO);
-                        let entry = feedback_entry(
-                            builder,
-                            feedback_config.feedback_offset,
-                            feedback_signal.clone(),
-                        );
-                        handle.insert(&entry, &InsertPosition::Top);
-                        *slot = Some(entry);
-                        Some(feedback_signal.clone())
-                    }
-                    _ => None,
-                }
-            } else {
-                // Another session already occupies the one feedback slot.
-                None
+            // on the `max_simultaneous_drags > 1` scope cut this implies:
+            // a later session always evicts an earlier one's layer here,
+            // including a stale one an earlier session's own end/cancel
+            // never got to remove yet (`build`'s teardown is deferred to the
+            // next rebuild, which may not have drained before this call).
+            //
+            // Every lock/borrow below is cloned out and dropped before the
+            // framework calls (`stale.remove()`, `handle.insert()`) that
+            // follow — never held across them.
+            let stale = feedback_entry_slot.borrow_mut().take();
+            if let Some(stale) = stale {
+                stale.remove();
+            }
+            let overlay_handle = overlay.lock().clone();
+            let (feedback_builder, feedback_offset) = {
+                let cfg = feedback_config.borrow();
+                (cfg.feedback.clone(), cfg.feedback_offset)
             };
-            drop(slot);
+
+            let feedback = match (overlay_handle, feedback_builder) {
+                (Some(handle), Some(builder)) => {
+                    feedback_signal.set_offset(Offset::ZERO);
+                    let entry = feedback_entry(builder, feedback_offset, feedback_signal.clone());
+                    handle.insert(&entry, &InsertPosition::Top);
+                    *feedback_entry_slot.borrow_mut() = Some(entry);
+                    Some(feedback_signal.clone())
+                }
+                _ => None,
+            };
 
             Some(Box::new(DragSession {
                 active_count: Arc::clone(&active_count),
@@ -844,10 +867,13 @@ impl<T: Clone + Send + Sync + 'static> ViewState<Draggable<T>> for DraggableStat
         // this rebuild): tear down the feedback layer. `DragSession` cannot
         // do this itself (`OverlayEntry::remove` needs `Rc` access it
         // structurally lacks — see `feedback`'s docs on `DragSession`).
-        if currently_active == 0
-            && let Some(entry) = self.feedback_entry.borrow_mut().take()
-        {
-            entry.remove();
+        if currently_active == 0 {
+            // Taken out and the borrow dropped (this statement ends before
+            // the `if let` runs) before the framework call below.
+            let stale = self.feedback_entry.borrow_mut().take();
+            if let Some(entry) = stale {
+                entry.remove();
+            }
         }
 
         if showing_child_when_dragging {
@@ -880,7 +906,8 @@ impl<T: Clone + Send + Sync + 'static> ViewState<Draggable<T>> for DraggableStat
         if let Some(recognizer) = self.recognizer.as_ref() {
             recognizer.dispose();
         }
-        if let Some(entry) = self.feedback_entry.borrow_mut().take() {
+        let stale = self.feedback_entry.borrow_mut().take();
+        if let Some(entry) = stale {
             entry.remove();
         }
     }

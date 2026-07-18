@@ -375,14 +375,16 @@ impl Overlay {
 
     /// The nearest ancestor [`Overlay`]'s handle, registering a dependency so
     /// this element rebuilds if a *different* overlay identity ever replaces
-    /// the one found here.
+    /// the one found here — a FLUI-native divergence from the oracle; see
+    /// [`maybe_of`](Self::maybe_of)'s doc for why.
     ///
     /// # Panics
     ///
     /// Panics if there is no `Overlay` ancestor. Use
     /// [`maybe_of`](Self::maybe_of) for a non-panicking variant.
     ///
-    /// Flutter parity: `Overlay.of(context)` (`.flutter/packages/flutter/lib/src/widgets/overlay.dart`,
+    /// Flutter parity (API shape, not the dependency behavior below):
+    /// `Overlay.of(context)` (`.flutter/packages/flutter/lib/src/widgets/overlay.dart`,
     /// tag `3.44.0`).
     #[must_use]
     pub fn of(ctx: &dyn BuildContext) -> OverlayHandle {
@@ -396,16 +398,34 @@ impl Overlay {
     /// Look up the nearest ancestor [`Overlay`]'s handle, registering a
     /// dependency. Returns `None` if there is no `Overlay` ancestor.
     ///
-    /// # Depend, not get
+    /// # Depend, not get — a FLUI-native divergence, not oracle parity
     ///
-    /// Resolves via [`BuildContextExt::depend_on`], not the lookup-only `get`:
-    /// the 3.44.0 oracle's `Overlay.maybeOf` calls
-    /// `dependOnInheritedWidgetOfExactType` with `createDependency: true` — a
-    /// genuine dependency, which this ships loyal to. This differs from
-    /// `ScaffoldScope::maybe_of` (`flui-material`), which uses `get`: that
-    /// precedent is for a FLUI-invented ambient handle with no oracle contract
-    /// requiring a dependency; `Overlay.of` is oracle-contracted to register
-    /// one.
+    /// Resolves via [`BuildContextExt::depend_on`], not the lookup-only `get`.
+    /// **This is not what the oracle does**: Flutter 3.44's `Overlay.maybeOf`
+    /// calls the private `_RenderTheaterMarker.maybeOf` with
+    /// `createDependency: false` explicitly (`overlay.dart`) — `_RenderTheaterMarker`'s
+    /// own `maybeOf` helper defaults that parameter to `true`, but `Overlay.maybeOf`
+    /// overrides it to `false`, and `Overlay.of` routes through `maybeOf`. So
+    /// neither oracle entry point registers a dependency at all; a
+    /// dependency-free `get` would in fact be the *loyal* port.
+    ///
+    /// `depend_on` is used anyway, deliberately: it is what makes
+    /// `Overlay::maybe_of` re-fire from `did_change_dependencies` if a
+    /// *different* overlay identity ever replaces the resolved one. That
+    /// re-resolution is load-bearing here in a way the oracle never needs it
+    /// to be. Flutter's `_DragAvatar.update` can call `Overlay.of(context)`
+    /// fresh, on demand, because Dart closures keep `context` alive for free.
+    /// FLUI's `MultiDragHandle` (what `DragSession`, the thing that would
+    /// need the overlay mid-drag, implements) is `Send + Sync` and holds no
+    /// `BuildContext` at all — the handle has to be resolved and cached
+    /// *ahead of time*, in a lifecycle hook, for a gesture callback with no
+    /// `BuildContext` to read later (see `draggable.rs`'s `DraggableState`).
+    /// `depend_on` is what keeps that cached value honest if the ancestor
+    /// ever changes underneath it; `get`, resolved once and never
+    /// re-checked, would silently go stale. This differs from
+    /// `ScaffoldScope::maybe_of` (`flui-material`), which uses `get` for the
+    /// same reason the oracle would here too: nothing there needs to survive
+    /// past the immediate lookup into a context-free callback.
     ///
     /// Resolves an `OverlayScope` marker (crate-internal) mounted **per entry** (wrapping
     /// that entry's built child, not once per `Overlay`) — the 3.44.0 oracle's

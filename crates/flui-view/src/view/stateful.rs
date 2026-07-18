@@ -99,10 +99,20 @@ pub trait ViewState<V: StatefulView>: 'static {
     /// Use this for one-time initialization that requires BuildContext.
     fn init_state(&mut self, _ctx: &dyn BuildContext) {}
 
-    /// Called when an InheritedView dependency changes.
+    /// Called when an already-registered `InheritedView` dependency changes.
     ///
-    /// This is called after `init_state()` and whenever an InheritedView
-    /// that this state depends on (via `ctx.depend_on()`) notifies.
+    /// **Divergence from Flutter:** Flutter's `State.didChangeDependencies`
+    /// is guaranteed to fire once, unconditionally, right after `initState` —
+    /// even before any dependency has been registered — precisely so a
+    /// widget can use that first call to register one. This implementation
+    /// does not provide that guarantee: it fires only when an `InheritedView`
+    /// this state has *already* registered as a dependent of (via
+    /// `ctx.depend_on()`) later notifies. A state that needs its first
+    /// `depend_on`-derived value at mount time must resolve it directly in
+    /// `init_state` too (see e.g. `interaction::draggable::DraggableState`,
+    /// which resolves `Overlay::maybe_of` in both hooks for exactly this
+    /// reason) — relying on this hook alone for the initial value silently
+    /// never fires.
     fn did_change_dependencies(&mut self, _ctx: &dyn BuildContext) {}
 
     /// Build the child View tree.
