@@ -156,11 +156,13 @@ pub use image::{
     MemoryImage,
 };
 pub use interaction::{
-    AbsorbPointer, Action, ActionOutcome, Actions, CallbackAction, CallbackShortcuts, ExcludeFocus,
-    Focus, FocusChangeHandler, FocusScope, FocusScopeState, FocusState, GestureArenaScope,
-    GestureDetector, GestureDetectorState, IgnorePointer, Intent, Listener, MouseRegion,
-    NextFocusAction, NextFocusIntent, Offstage, PreviousFocusAction, PreviousFocusIntent,
-    ShortcutCallback, Shortcuts, SingleActivator, Visibility,
+    AbsorbPointer, Action, ActionOutcome, Actions, CallbackAction, CallbackShortcuts,
+    DismissDirection, DismissDirectionCallback, DismissUpdateCallback, DismissUpdateDetails,
+    Dismissible, DismissibleState, ExcludeFocus, Focus, FocusChangeHandler, FocusScope,
+    FocusScopeState, FocusState, GestureArenaScope, GestureDetector, GestureDetectorState,
+    IgnorePointer, Intent, Listener, MouseRegion, NextFocusAction, NextFocusIntent, Offstage,
+    PreviousFocusAction, PreviousFocusIntent, ShortcutCallback, Shortcuts, SingleActivator,
+    Visibility,
 };
 pub use layout::{
     Align, AspectRatio, Baseline, Center, ConstrainedBox, CustomMultiChildLayout,
