@@ -339,8 +339,9 @@ impl FocusState {
         )));
     }
 
-    /// `_handleAutofocus` (`:622-626`): a one-shot attempt, made the first
-    /// time `autofocus` is (or becomes) `true` and never repeated —
+    /// `_handleAutofocus` (`focus_scope.dart`, tag `3.44.0`): a one-shot
+    /// attempt, made the first time `autofocus` is (or becomes) `true` and
+    /// never repeated —
     /// [`FocusState::did_autofocus`] latches regardless of whether the
     /// attempt actually won the focus (an already-focused sibling can still
     /// make it lose). Only when the enclosing scope has nothing focused yet
@@ -407,10 +408,11 @@ impl ViewState<Focus> for FocusState {
         new_view.configure(&self.node);
         self.autofocus = new_view.autofocus;
         // `didUpdateWidget`'s `oldWidget.autofocus != widget.autofocus` guard
-        // (`:676-678`) is folded into `try_autofocus`'s own `did_autofocus`
-        // latch: a rebuild that flips `autofocus` from `false` to `true`
-        // makes the one still-unattempted autofocus request; one that merely
-        // repeats an already-`true` value is a no-op either way.
+        // (`focus_scope.dart`, tag `3.44.0`) is folded into `try_autofocus`'s
+        // own `did_autofocus` latch: a rebuild that flips `autofocus` from
+        // `false` to `true` makes the one still-unattempted autofocus
+        // request; one that merely repeats an already-`true` value is a
+        // no-op either way.
         self.try_autofocus();
         // The listener installed at mount reads this cell, so a rebuild that
         // swaps the handler swaps what actually fires — capturing the handler
@@ -828,8 +830,8 @@ mod tests {
     /// A rebuild that flips `autofocus` from `false` to `true` makes the
     /// still-unattempted autofocus request — Flutter's `didUpdateWidget`
     /// re-running `_handleAutofocus` on an `autofocus` change
-    /// (`focus_scope.dart`'s "Can autofocus a node.", tag 3.44.0), not just
-    /// `initState`/`didChangeDependencies`.
+    /// (`focus_scope_test.dart`'s "Can autofocus a node.", tag 3.44.0), not
+    /// just `initState`/`didChangeDependencies`.
     ///
     /// Red-check (verified): drop the `try_autofocus()` call from
     /// `did_update_view` — the node mounted with `autofocus: false` never

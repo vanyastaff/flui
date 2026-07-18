@@ -293,18 +293,30 @@ impl FocusNode {
 
     /// Sets whether this node can request focus.
     ///
-    /// On a `true` to `false` change, primary focus **held by this node
-    /// itself** is released (Flutter: `FocusNode.canRequestFocus` setter,
-    /// `focus_scope_test.dart`'s "Focus is lost when set to not focusable.",
-    /// tag 3.44.0). Unlike [`Self::set_descendants_are_focusable`], this does
-    /// not evict a focused *descendant* — `can_request_focus` gates only
-    /// whether this node itself may hold focus.
+    /// On a `true` to `false` change, focus this node is responsible for is
+    /// released — Flutter's `FocusNode.canRequestFocus` setter checks
+    /// `hasFocus` (this node **or any descendant**), then unfocuses with
+    /// `UnfocusDisposition.previouslyFocusedChild`
+    /// (`focus_manager.dart`'s `canRequestFocus` setter, tag `3.44.0`;
+    /// `focus_scope_test.dart`'s "Focus is lost when set to not focusable."
+    /// and "canRequestFocus causes descendants of scope to be skipped."'s
+    /// `pumpTest(allowScope2: false)` step, same tag).
+    ///
+    /// A **scope** additionally gates whether it allows descendant focus at
+    /// all (`allows_descendant_focus`), so disabling it evicts a focused
+    /// descendant too — checked via [`Self::has_focus`], mirroring the
+    /// oracle's `hasFocus` check. A plain node's own eligibility does not
+    /// carry that gate, so only [`Self::has_primary_focus`] (this node
+    /// itself) is checked — an intentional simplification of Flutter's
+    /// `previouslyFocusedChild` disposition, which walks up to the enclosing
+    /// scope and re-descends to restore whatever was focused before, rather
+    /// than leaving nothing focused the way this does.
     pub fn set_can_request_focus(&self, can: bool) {
         let previous = self.can_request_focus.swap(can, AtomicOrdering::AcqRel);
         if previous == can {
             return;
         }
-        if !can && self.has_primary_focus() {
+        if !can && (self.has_primary_focus() || (self.is_scope() && self.has_focus())) {
             crate::FocusManager::global().unfocus();
         }
     }

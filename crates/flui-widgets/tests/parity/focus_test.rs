@@ -88,11 +88,19 @@
 //!   against `FocusNode`/`FocusScopeNode` directly (the oracle's widget tree
 //!   only supplies node references via `GlobalKey`), and trimmed to one
 //!   scope level (the oracle's outer `scope1` layer asserts the identical
-//!   scope-level contract `scope2` already covers). A plain `Focus`'s own
-//!   `canRequestFocus: false` does **not** restrict its descendants —
+//!   scope-level contract `scope2` already covers) at the oracle's own
+//!   `focus1`-holds-`focus2` depth. Dropped from the oracle: the redundant
+//!   outer `scope1` sub-case; the `unfocus()`-then-refocus round-trip inside
+//!   the plain-Focus-ancestor sub-case; and re-mounting a whole widget tree
+//!   per state (each kept assertion runs directly against the current node
+//!   state instead). Kept: a plain `Focus`'s own `canRequestFocus: false`
+//!   does **not** restrict its descendants —
 //!   [`can_request_focus_on_a_plain_focus_does_not_restrict_its_descendants`]
-//!   — but a **scope**'s does, because a scope additionally gates whether it
-//!   allows descendant focus at all —
+//!   — but a **scope**'s does, in both directions the oracle checks:
+//!   disabling it before a descendant requests refuses the request, and
+//!   disabling it *while* a descendant already holds focus evicts that
+//!   focus (the oracle's `pumpTest(allowScope2: false)` step, checked while
+//!   `focus2` held focus) — and re-enabling restores descendant focus —
 //!   [`can_request_focus_on_a_scope_restricts_its_descendants`].
 //! - `'Nodes are removed when all Focuses are removed.'`
 //!   (focus_scope_test.dart) — focus node lifecycle: unmounting detaches the
@@ -477,10 +485,20 @@ fn can_request_focus_on_a_plain_focus_does_not_restrict_its_descendants() {
 
 /// Oracle: `'canRequestFocus causes descendants of scope to be skipped.'`
 /// (focus_scope_test.dart), the scope half — see the module doc's *Adapted*
-/// note for what was trimmed.
+/// note for what was trimmed and kept.
 ///
 /// A **scope**'s own `canRequestFocus: false` gates every descendant, not
-/// just itself — the contrast with the plain-`Focus` case above.
+/// just itself — the contrast with the plain-`Focus` case above — in both
+/// directions the oracle checks: refusing a fresh request while disabled,
+/// AND evicting a descendant's *already-held* focus the moment the scope is
+/// disabled (the oracle's `pumpTest(allowScope2: false)` step, checked while
+/// `focus2` held focus — `FocusNode.canRequestFocus`'s setter,
+/// `focus_manager.dart`, checks `hasFocus`, not `hasPrimaryFocus`, so a
+/// scope's own eviction reaches a focused descendant, not just itself).
+///
+/// Red-check (verified): before `FocusNode::set_can_request_focus` also
+/// checked `is_scope() && has_focus()`, the mid-focus disable left `focus2`
+/// focused and the eviction assertion failed.
 #[test]
 fn can_request_focus_on_a_scope_restricts_its_descendants() {
     let _guard = FOCUS_TEST_LOCK.lock();
@@ -494,9 +512,24 @@ fn can_request_focus_on_a_scope_restricts_its_descendants() {
     let focus2 = FocusNode::with_debug_label("focus2");
     focus1.attach_node(&focus2);
 
-    scope.as_focus_node().set_can_request_focus(false);
+    // `focus2` already holds focus when the scope is disabled — the
+    // mid-focus eviction case.
     focus2.request_focus();
+    assert!(
+        focus2.has_primary_focus(),
+        "sanity: focus2 is focused first"
+    );
 
+    scope.as_focus_node().set_can_request_focus(false);
+
+    assert!(
+        !focus2.has_focus(),
+        "disabling the scope evicts the descendant's already-held focus"
+    );
+    assert_eq!(manager.primary_focus(), None);
+
+    // While still disabled, a fresh request is refused too.
+    focus2.request_focus();
     assert!(
         !focus2.has_primary_focus(),
         "the scope's own canRequestFocus(false) blocks every descendant"
@@ -858,15 +891,21 @@ fn focus_is_lost_when_set_to_not_focusable_mid_focus() {
     assert_eq!(got_focus.lock().as_slice(), [true]);
     got_focus.lock().clear();
 
+    let recorded = Arc::clone(&got_focus);
     laid.pump_widget(Host {
         node: Arc::clone(&node),
         can_request_focus: false,
-        on_focus_change: Rc::new(move |_focused| {}),
+        on_focus_change: Rc::new(move |focused| recorded.lock().push(focused)),
     });
 
     assert!(
         !node.has_focus(),
         "flipping canRequestFocus false released the focus this node held"
+    );
+    assert_eq!(
+        got_focus.lock().as_slice(),
+        [false],
+        "on_focus_change reports the loss, matching the oracle's `expect(gotFocus, false)`"
     );
 
     manager.unfocus();
