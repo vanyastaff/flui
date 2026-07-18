@@ -41,6 +41,7 @@ use flui_interaction::{
 };
 use flui_layer::Scene;
 use flui_platform::traits::{Clipboard, PlatformInput, PlatformWindow};
+use flui_rendering::binding::RendererBinding;
 use flui_rendering::constraints::BoxConstraints;
 use flui_scheduler::Scheduler;
 use flui_types::{
@@ -60,7 +61,7 @@ use crate::{
 ///
 /// AppBinding coordinates the specialized process services that remain during
 /// the ADR-0027 migration:
-/// - [`RendererBinding`](crate::bindings::RendererBinding) - Manages render tree and pipeline
+/// - [`RendererBinding`] - Manages render tree and pipeline
 /// - [`GestureBinding`] - Manages hit testing, pointer coalescing, and gestures
 /// - [`Scheduler`] - Manages frame scheduling
 ///
@@ -1050,6 +1051,52 @@ impl AppBinding {
         self.frames_dropped.load(Ordering::Relaxed)
     }
 
+    // ========================================================================
+    // First Frame Deferral
+    //
+    // Forwards to `RenderingFlutterBinding`'s counter (`self.renderer`,
+    // `crates/flui-app/src/bindings/renderer_binding.rs`) — the single
+    // canonical implementation (oracle tag `3.44.0`; see that module's doc
+    // for the full Flutter `RendererBinding.deferFirstFrame`/
+    // `allowFirstFrame`/`sendFramesToEngine` citation and the two drifting
+    // copies that were deleted alongside this consolidation). `self.renderer`
+    // is a plain field unique to this `AppBinding` — not the
+    // `RenderingFlutterBinding::instance()` process singleton — so these
+    // three methods need no cross-test lock discipline of their own; each
+    // `AppBinding` has its own independent counter.
+    //
+    // `Self::render_frame_entered` below is the ONLY production frame path
+    // that consults `send_frames_to_engine`; that is the fix this
+    // consolidation exists to make (previously the production path
+    // consulted none of the three counters that used to exist).
+    // ========================================================================
+
+    /// Defer sending the first frame to the engine until a matching
+    /// [`allow_first_frame`](Self::allow_first_frame).
+    ///
+    /// See [`RenderingFlutterBinding::defer_first_frame`] for the full
+    /// semantics (nested defer/allow, no-op after the first frame is sent).
+    pub fn defer_first_frame(&self) {
+        self.renderer.read().defer_first_frame();
+    }
+
+    /// Release one deferral registered by
+    /// [`defer_first_frame`](Self::defer_first_frame).
+    ///
+    /// # Panics
+    ///
+    /// Panics if called without a matching prior `defer_first_frame` —
+    /// see [`RenderingFlutterBinding::allow_first_frame`].
+    pub fn allow_first_frame(&self) {
+        self.renderer.read().allow_first_frame();
+    }
+
+    /// Whether the next produced frame may reach the engine (be presented),
+    /// or is still withheld by an open deferral.
+    pub fn send_frames_to_engine(&self) -> bool {
+        self.renderer.read().send_frames_to_engine()
+    }
+
     /// Draw a frame and return Scene for GPU rendering.
     ///
     /// This executes the complete rendering pipeline:
@@ -1291,7 +1338,33 @@ impl AppBinding {
             BoxConstraints::tight(Size::new(px(width as f32 / dpr), px(height as f32 / dpr)));
         let outcome = self.draw_frame_entered(realm, constraints);
 
-        // 3. Render scene to GPU
+        // 3. Render scene to GPU — gated by the first-frame deferral
+        // counter (oracle `RendererBinding.drawFrame`, tag `3.44.0`; full
+        // citation in `crates/flui-app/src/bindings/renderer_binding.rs`
+        // above `defer_first_frame`). Build/layout/paint above (step 2)
+        // ran unconditionally — Flutter pumps frames during deferral too,
+        // paying warm-up costs early — only the composite-to-engine step
+        // here is withheld while the first frame is deferred. This is the
+        // ONLY place the production frame path consults the counter; two
+        // other, drifting counters that neither implemented this gate nor
+        // were reachable from here were deleted in the same change.
+        let send_to_engine = self.send_frames_to_engine();
+        let errored = matches!(outcome, FramePaintOutcome::Errored);
+        if send_to_engine && !errored {
+            // Mirrors the oracle's `_firstFrameSent = true`: latched once
+            // the gate is found open AND the frame actually completed —
+            // independent of whether it painted anything (an `Idle` frame
+            // still means "no deferral is blocking presentation"), but
+            // NEVER on a phase that raised. The oracle's `_firstFrameSent`
+            // is likewise only set after `compositeFrame()` runs, which a
+            // thrown exception earlier in `drawFrame` would prevent.
+            // Latching on `Errored` would let a pipeline crash on the very
+            // first frame permanently defeat any LATER
+            // `defer_first_frame`/`allow_first_frame` pair, since
+            // `send_frames_to_engine` short-circuits true once sent.
+            self.renderer.read().mark_first_frame_sent();
+        }
+
         let mut presented = false;
         // Forces `wake_frame()` instead of `mark_rendered()` below for any
         // frame that was dropped rather than settled — a pipeline error, or
@@ -1300,8 +1373,20 @@ impl AppBinding {
         // otherwise-quiescent event loop (no animation, no further input)
         // never gets retried: the loop falls back to `ControlFlow::Wait`
         // and the UI stays stale until the next external event.
-        let mut retry_needed = matches!(outcome, FramePaintOutcome::Errored);
-        if let FramePaintOutcome::Painted(ref scene) = outcome
+        //
+        // A DEFERRED frame is deliberately excluded from this retry path:
+        // deferred is not errored. The pipeline settled normally (it ran
+        // to completion; only presentation was withheld), so the frame
+        // below falls through to `mark_rendered()` and the withheld scene
+        // is simply dropped without a present — no retry spam. Presenting
+        // it once the deferral lifts is `allow_first_frame`'s job (it
+        // re-marks the root dirty through a captured, cross-thread-safe
+        // `RepaintHandle` so the warm-up frame has content to paint, and
+        // the same mark fires the visual-update notifier the runner's wake
+        // gate already observes), not a concern of this retry flag.
+        let mut retry_needed = errored;
+        if send_to_engine
+            && let FramePaintOutcome::Painted(ref scene) = outcome
             && scene.has_content()
         {
             // The pipeline painted a FRESH scene this frame, so the
@@ -1414,7 +1499,6 @@ impl AppBinding {
                         // `flui_interaction::routing::HitTestResult`, so the
                         // same instance crosses both layers without conversion
                         // (no per-hit bridge that could silently drop targets).
-                        use flui_rendering::binding::RendererBinding;
                         let renderer = self.renderer.read();
                         let mut result = flui_interaction::routing::HitTestResult::new();
                         let offset = flui_types::Offset::new(position.dx, position.dy);
@@ -2967,6 +3051,293 @@ mod tests {
                 !app.needs_redraw(),
                 "a successfully presented frame must clear needs_redraw, same as \
                  before this fix"
+            );
+        }
+    }
+
+    /// `AppBinding::defer_first_frame`/`allow_first_frame`/
+    /// `send_frames_to_engine` — the ONE deferral gate the production frame
+    /// path (`render_frame_entered`) actually consults (oracle
+    /// `RendererBinding`, tag `3.44.0`; full citation in
+    /// `crates/flui-app/src/bindings/renderer_binding.rs` above
+    /// `defer_first_frame`). Before this consolidation, `render_frame_entered`
+    /// consulted none of the three counters that used to exist — deferring
+    /// the first frame did nothing observable from here. Drives
+    /// `render_frame_entered` directly against a counting `RasterBackend`,
+    /// mirroring `frame_retry_semantics` above.
+    mod first_frame_deferral {
+        use flui_types::geometry::{Pixels, Rect};
+
+        use super::*;
+
+        /// A `RasterBackend` that always presents successfully and counts
+        /// how many times `render_scene` was actually called. Unlike
+        /// `frame_retry_semantics::ScriptedRasterBackend` (a single scripted
+        /// outcome consumed once), this backend is driven across several
+        /// `render_frame_entered` calls in one test — what matters here is
+        /// whether the gate lets the call through AT ALL, not any particular
+        /// GPU outcome.
+        struct CountingRasterBackend {
+            render_scene_calls: u32,
+        }
+
+        impl CountingRasterBackend {
+            fn new() -> Self {
+                Self {
+                    render_scene_calls: 0,
+                }
+            }
+        }
+
+        impl RasterBackend for CountingRasterBackend {
+            fn render_scene(&mut self, _scene: &Scene) -> Result<bool, EngineError> {
+                self.render_scene_calls += 1;
+                Ok(true)
+            }
+            fn resize(&mut self, _width: u32, _height: u32) {}
+            fn is_device_lost(&self) -> bool {
+                false
+            }
+            fn mark_dirty(&mut self, _rect: Rect<Pixels>) {}
+            fn mark_full_repaint(&mut self) {}
+            fn has_damage(&self) -> bool {
+                true
+            }
+            fn size(&self) -> (u32, u32) {
+                (800, 600)
+            }
+            fn reconfigure_surface(&mut self) -> Result<(), EngineError> {
+                Ok(())
+            }
+        }
+
+        /// Mounts a root so the pipeline actually paints a non-empty scene —
+        /// same shape as `frame_retry_semantics::mount_root`.
+        fn mount_root(app: &AppBinding) -> super::super::super::ui_realm::UiRealm {
+            let realm = test_realm(app);
+            realm
+                .enter(|realm| app.attach_root_widget(realm, &LeafView))
+                .expect("attach succeeds");
+            realm
+        }
+
+        /// Root `RenderBox` whose layout panics — the exact catch_unwind
+        /// path any third-party panic in production widget code
+        /// (`panic!`/`unwrap()`/an assertion inside `RenderBox::
+        /// perform_layout`) reaches. Mirrors `flui-rendering`'s own
+        /// `PanickingLayoutBox` pipeline-level fixture, but lives here
+        /// (rather than being imported) since it exercises the trait
+        /// surface public to downstream crates, not `flui-rendering`
+        /// internals. `perform_layout` is `RenderBox`'s only method
+        /// without a default body; every other method (paint, hit-test,
+        /// intrinsics, ...) falls back to a harmless no-op default.
+        #[derive(Debug)]
+        struct PanicOnLayoutBox;
+
+        impl flui_foundation::Diagnosticable for PanicOnLayoutBox {}
+
+        impl flui_rendering::traits::RenderBox for PanicOnLayoutBox {
+            type Arity = flui_rendering::prelude::Leaf;
+            type ParentData = flui_rendering::prelude::BoxParentData;
+
+            fn perform_layout(
+                &mut self,
+                _ctx: &mut flui_rendering::context::BoxLayoutContext<
+                    '_,
+                    Self::Arity,
+                    Self::ParentData,
+                >,
+            ) -> Size {
+                panic!("PanicOnLayoutBox::perform_layout -- intentional test panic");
+            }
+        }
+
+        /// Mounts `PanicOnLayoutBox` directly as the pipeline root,
+        /// bypassing `attach_root_widget`/`View` entirely — same pattern
+        /// `dirty_mark_fires_wake_via_notifier` (above) uses to touch the
+        /// pipeline without the widget layer.
+        fn mount_panicking_root(app: &AppBinding) -> super::super::super::ui_realm::UiRealm {
+            let realm = test_realm(app);
+            let mut owner = app.shared_pipeline_owner.write();
+            let root_id = owner.insert(Box::new(PanicOnLayoutBox)
+                as Box<
+                    dyn flui_rendering::traits::RenderObject<flui_rendering::protocol::BoxProtocol>,
+                >);
+            owner.set_root_id(Some(root_id));
+            drop(owner);
+            realm
+        }
+
+        /// Red-check: remove the `send_to_engine` consult in
+        /// `render_frame_entered` (fall through to the unconditional present
+        /// branch as before this fix) and this fails — `render_scene` gets
+        /// called despite the deferral.
+        #[test]
+        fn deferred_first_frame_runs_the_pipeline_but_withholds_the_scene() {
+            let app = AppBinding::new();
+            let realm = mount_root(&app);
+            let mut backend = CountingRasterBackend::new();
+
+            app.defer_first_frame();
+            app.mark_rendered(); // known baseline before the frame
+
+            let presented = app.render_frame_entered(&realm, &mut backend);
+
+            assert!(!presented, "a deferred first frame must never present");
+            assert_eq!(
+                backend.render_scene_calls, 0,
+                "the scene must never reach render_scene while deferred — build/ \
+                 layout/paint above still ran (Flutter pumps frames during \
+                 deferral too), only the composite-to-engine step is gated"
+            );
+            assert_eq!(app.frames_rendered(), 0);
+            assert!(
+                !app.needs_redraw(),
+                "deferred is not errored: the frame settled normally (mark_rendered), \
+                 so it must not spam a retry wake the way a dropped/errored frame does"
+            );
+        }
+
+        /// Red-check: comment out `allow_first_frame`'s `RepaintHandle`
+        /// re-mark (the wake+redirty block) and this fails — `presented`
+        /// comes back `false` because the woken frame finds a clean
+        /// pipeline (the deferred pass already consumed the dirty work)
+        /// and produces `FramePaintOutcome::Idle`. NO manual re-dirty
+        /// happens in this test: that is the whole point — a caller of
+        /// the public `defer_first_frame`/`allow_first_frame` API has no
+        /// pipeline handle to reach for, so the fix must live inside
+        /// `allow_first_frame` itself.
+        #[test]
+        fn allow_first_frame_alone_presents_the_previously_withheld_content() {
+            let app = AppBinding::new();
+            let realm = mount_root(&app);
+            let mut backend = CountingRasterBackend::new();
+
+            app.defer_first_frame();
+            let withheld = app.render_frame_entered(&realm, &mut backend);
+            assert!(
+                !withheld,
+                "precondition: the first frame is withheld while deferred"
+            );
+            assert_eq!(backend.render_scene_calls, 0);
+
+            app.allow_first_frame();
+
+            let presented = app.render_frame_entered(&realm, &mut backend);
+
+            assert!(
+                presented,
+                "allow_first_frame alone (no external re-dirty) must make the \
+                 withheld content reach present() on the next pumped frame"
+            );
+            assert_eq!(backend.render_scene_calls, 1);
+            assert_eq!(app.frames_rendered(), 1);
+        }
+
+        /// Red-check: replace `first_frame_deferred_count.fetch_sub`'s
+        /// underflow-checked decrement with an unconditional "count == 0
+        /// means open" read that ignores nesting depth, and this fails —
+        /// the frame after the FIRST `allow_first_frame()` would present
+        /// even though a second `defer_first_frame()` is still outstanding.
+        #[test]
+        fn nested_defer_allow_only_presents_after_the_last_allow() {
+            let app = AppBinding::new();
+            let realm = mount_root(&app);
+            let mut backend = CountingRasterBackend::new();
+
+            app.defer_first_frame();
+            app.defer_first_frame(); // deferred count = 2
+
+            assert!(!app.render_frame_entered(&realm, &mut backend));
+            assert_eq!(backend.render_scene_calls, 0);
+
+            app.allow_first_frame(); // count = 1 -- still deferred
+            assert!(
+                !app.render_frame_entered(&realm, &mut backend),
+                "one matching allow of two nested defers must not yet open the gate"
+            );
+            assert_eq!(backend.render_scene_calls, 0);
+
+            app.allow_first_frame(); // count = 0 -- gate opens
+            assert!(
+                app.render_frame_entered(&realm, &mut backend),
+                "the last matching allow must open the gate"
+            );
+            assert_eq!(backend.render_scene_calls, 1);
+        }
+
+        /// Caller-contract violation: an `allow_first_frame` with no
+        /// matching prior `defer_first_frame` mirrors the oracle's
+        /// `assert(_firstFrameDeferredCount > 0)`.
+        #[test]
+        #[should_panic(expected = "allow_first_frame called without matching defer_first_frame")]
+        fn allow_first_frame_without_matching_defer_panics() {
+            let app = AppBinding::new();
+            app.allow_first_frame();
+        }
+
+        /// Oracle: `_firstFrameSent` latches only after a successful
+        /// `compositeFrame()` — never on a phase that raised. Latching on
+        /// `Errored` would let a pipeline crash on the very first frame
+        /// permanently defeat any LATER `defer_first_frame`/
+        /// `allow_first_frame` pair, since `send_frames_to_engine`
+        /// short-circuits `true` once sent.
+        ///
+        /// Red-check: drop the `!errored` guard around `mark_first_frame_sent`
+        /// in `render_frame_entered` and this fails — the errored frame
+        /// latches, and the later `defer_first_frame` cannot close the gate.
+        #[test]
+        fn errored_first_frame_does_not_latch_first_frame_sent() {
+            let app = AppBinding::new();
+            let realm = mount_panicking_root(&app);
+            let mut backend = CountingRasterBackend::new();
+
+            // Silence the default panic hook for the duration of the
+            // intentional panic -- same discipline as flui-rendering's own
+            // catch_unwind tests (`PipelineOwner::test_run_frame_catches_paint_panic`).
+            let prev_hook = std::panic::take_hook();
+            std::panic::set_hook(Box::new(|_| {}));
+            let presented = app.render_frame_entered(&realm, &mut backend);
+            std::panic::set_hook(prev_hook);
+
+            assert!(!presented, "an errored frame must never present");
+            assert_eq!(backend.render_scene_calls, 0);
+
+            // Precondition: the gate was open (no deferral was ever
+            // registered) before the errored frame ran.
+            assert!(app.send_frames_to_engine());
+
+            app.defer_first_frame();
+            assert!(
+                !app.send_frames_to_engine(),
+                "an errored first frame must not latch first_frame_sent -- a \
+                 later defer_first_frame must still be able to close the gate"
+            );
+        }
+
+        /// Oracle: `sendFramesToEngine => _firstFrameSent || \
+        /// _firstFrameDeferredCount == 0` — once the first frame has been
+        /// sent, a LATER `defer_first_frame` has no effect on the gate
+        /// (matching `defer_first_frame`'s own doc: "Calling this has no
+        /// effect after the first frame has been sent").
+        #[test]
+        fn first_frame_sent_latch_short_circuits_later_defers() {
+            let app = AppBinding::new();
+            let realm = mount_root(&app);
+            let mut backend = CountingRasterBackend::new();
+
+            let presented = app.render_frame_entered(&realm, &mut backend);
+            assert!(
+                presented,
+                "precondition: the first frame presents with no active deferral"
+            );
+            assert!(app.send_frames_to_engine());
+
+            app.defer_first_frame();
+            assert!(
+                app.send_frames_to_engine(),
+                "a defer registered AFTER the first frame was sent must not \
+                 re-close the gate"
             );
         }
     }

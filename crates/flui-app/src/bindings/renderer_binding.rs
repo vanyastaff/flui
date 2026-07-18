@@ -186,6 +186,65 @@ impl RenderingFlutterBinding {
 
     // ========================================================================
     // First Frame Deferral
+    //
+    // This is the ONE canonical implementation of the first-frame deferral
+    // gate. It used to be duplicated: `WidgetsBinding` (flui-view) carried
+    // its own independent counter that neither matched this one's semantics
+    // (no `first_frame_sent` latch, no panic on an unmatched `allow`) nor
+    // was reachable from the production frame path; `RendererBinding`
+    // (flui-rendering) declared a default `send_frames_to_engine() -> true`
+    // plus a default `draw_frame()` gate that no real embedder overrode.
+    // Both were deleted — see AGENTS.md's port-methodology note against
+    // reintroducing a second copy of this state. Every consumer (the
+    // `RendererBinding` trait impl below and `AppBinding::defer_first_frame`
+    // / `allow_first_frame` / `send_frames_to_engine` in
+    // `crates/flui-app/src/app/binding.rs`, which the production
+    // `render_frame_entered` path actually calls) forwards to this struct.
+    //
+    // # Flutter Equivalence (oracle tag `3.44.0`)
+    //
+    // `packages/flutter/lib/src/rendering/binding.dart`,
+    // `RendererBinding`:
+    // ```dart
+    // int _firstFrameDeferredCount = 0;
+    // bool _firstFrameSent = false;
+    // bool get sendFramesToEngine =>
+    //     _firstFrameSent || _firstFrameDeferredCount == 0;
+    // void deferFirstFrame() {
+    //   assert(_firstFrameDeferredCount >= 0);
+    //   _firstFrameDeferredCount += 1;
+    // }
+    // void allowFirstFrame() {
+    //   assert(_firstFrameDeferredCount > 0);
+    //   _firstFrameDeferredCount -= 1;
+    //   if (!_firstFrameSent) {
+    //     scheduleWarmUpFrame();
+    //   }
+    // }
+    // ```
+    // and `drawFrame`'s gate:
+    // ```dart
+    // rootPipelineOwner.flushLayout();
+    // rootPipelineOwner.flushCompositingBits();
+    // rootPipelineOwner.flushPaint();
+    // if (sendFramesToEngine) {
+    //   for (final RenderView renderView in renderViews) {
+    //     renderView.compositeFrame();
+    //   }
+    //   rootPipelineOwner.flushSemantics();
+    //   _firstFrameSent = true;
+    // }
+    // ```
+    // Layout/compositing-bits/paint always run; only the composite-to-engine
+    // step (and Flutter's semantics flush alongside it) is gated. FLUI's
+    // production mirror of this split lives in `AppBinding::
+    // render_frame_entered` (`crates/flui-app/src/app/binding.rs`): the
+    // build/layout/paint pipeline always runs in `draw_frame_entered`, and
+    // only the GPU `render_scene` (present) call is gated on
+    // `send_frames_to_engine`. FLUI's `run_frame` does not yet gate its own
+    // semantics phase behind this flag the way the oracle's `flushSemantics`
+    // does — a documented, narrower scope than the oracle's for this unit,
+    // not a silent gap.
     // ========================================================================
 
     /// Tell the framework to not send the first frames to the engine until
@@ -216,7 +275,8 @@ impl RenderingFlutterBinding {
     ///
     /// Panics if called without a matching prior
     /// [`defer_first_frame`](Self::defer_first_frame) call (i.e. the deferred
-    /// count is already zero).
+    /// count is already zero) — a caller-contract violation, mirroring the
+    /// oracle's `assert(_firstFrameDeferredCount > 0)`.
     pub fn allow_first_frame(&self) {
         let prev = self
             .first_frame_deferred_count
@@ -226,11 +286,53 @@ impl RenderingFlutterBinding {
             "allow_first_frame called without matching defer_first_frame"
         );
 
-        // Schedule a warm up frame even if count is not zero yet
+        // Schedule a warm-up frame even if the count is not down to zero
+        // yet: removing one deferral may uncover a NEW one further down the
+        // widget tree (a subtree that only registers its own
+        // `defer_first_frame` once an outer one clears), so every
+        // `allow_first_frame` call gets a pass, not just the last.
         if !self.first_frame_sent.load(Ordering::Relaxed) {
-            Scheduler::instance().schedule_frame(Box::new(|_timing| {
-                // Warm-up frame callback
-            }));
+            // The withheld frame(s) already ran build/layout/paint while
+            // deferred (the pipeline work happens unconditionally — see the
+            // module note above `defer_first_frame`); their dirty flags are
+            // already clear by the time the deferral lifts. The oracle's
+            // `compositeFrame()` re-submits the RETAINED layer tree
+            // regardless of dirty state, so its `scheduleWarmUpFrame` always
+            // has something to present. FLUI has no such retained-scene
+            // re-present (a frame with nothing dirty produces
+            // `FramePaintOutcome::Idle`, not a repeat of the last `Scene`)
+            // — without re-marking the root dirty here, the warm-up frame
+            // would find nothing to do and the withheld content would sit
+            // blank until some UNRELATED input dirtied the tree.
+            //
+            // Routed through `PipelineOwner::repaint_handle` /
+            // `RepaintHandle::mark_needs_layout`, NOT `Scheduler::instance()`:
+            // the async-init caller this method exists for (a splash screen
+            // awaiting a network fetch, resolving on an executor thread) may
+            // not be the UI thread, and `Scheduler::instance()` is a
+            // thread-local — resolving it at fire time from a non-UI thread
+            // would schedule on THAT thread's fresh, undriven `Scheduler`
+            // and silently lose the wake (the exact fire-time-resolution
+            // hazard `AppBinding::new`'s wake-wiring comment warns against).
+            // `RepaintHandle` is `Send + Sync`, captured over a bounded
+            // channel at `PipelineOwner` construction time, and its
+            // `mark_needs_layout` fires the SAME visual-update notifier a
+            // local dirty mark does — safe and non-blocking from any
+            // thread.
+            let root_owner = self.root_pipeline_owner().read();
+            if let Some(root_id) = root_owner.root_id()
+                && let Some(handle) = root_owner.repaint_handle(root_id)
+            {
+                drop(root_owner);
+                if let Err(e) = handle.mark_needs_layout() {
+                    tracing::warn!(
+                        error = ?e,
+                        "allow_first_frame: failed to re-mark the root dirty for \
+                         the warm-up frame; the withheld content may not \
+                         present until something else dirties the tree",
+                    );
+                }
+            }
         }
     }
 
@@ -241,6 +343,65 @@ impl RenderingFlutterBinding {
     /// frames have been sent to the engine yet.
     pub fn reset_first_frame_sent(&self) {
         self.first_frame_sent.store(false, Ordering::Relaxed);
+    }
+
+    /// Latch that the first frame has been sent to the engine.
+    ///
+    /// Mirrors the oracle's `_firstFrameSent = true`, set unconditionally
+    /// once `send_frames_to_engine()` is found `true` during a frame —
+    /// regardless of whether that particular frame painted anything.
+    /// Idempotent: once latched, [`Self::send_frames_to_engine`] stays
+    /// `true` forever (barring [`Self::reset_first_frame_sent`], a test-only
+    /// escape hatch), so calling this again is a harmless no-op.
+    pub fn mark_first_frame_sent(&self) {
+        self.first_frame_sent.store(true, Ordering::Relaxed);
+    }
+
+    /// Pump the rendering pipeline once and return the produced layer tree,
+    /// gated by the first-frame deferral counter.
+    ///
+    /// Consumes the root [`PipelineOwner`] out of its lock, drives it
+    /// through [`PipelineOwner::run_frame`] (layout, compositing bits,
+    /// paint, semantics), and restores it — the owner is always left
+    /// usable for the next frame, error or not. The layer tree this
+    /// produces is withheld (`None`) while [`Self::send_frames_to_engine`]
+    /// is `false`; the pipeline work itself (the warm-up cost) still runs
+    /// either way, matching the oracle's `drawFrame` split (see the module
+    /// note above `defer_first_frame`).
+    ///
+    /// This is a convenience for using `RenderingFlutterBinding` directly,
+    /// without `WidgetsBinding` (see the module doc). `AppBinding`'s
+    /// production frame path (`render_frame_entered`) does **not** call
+    /// this method — it drives the shared pipeline through
+    /// `WidgetsBinding::run_frame_with_layout_builders` instead (the
+    /// build-during-layout fixpoint this method does not need to settle)
+    /// and consults [`Self::send_frames_to_engine`] /
+    /// [`Self::mark_first_frame_sent`] directly at its own presentation
+    /// step.
+    pub fn draw_frame(&self) -> Option<flui_layer::LayerTree> {
+        let root_owner = self.root_pipeline_owner();
+        let layer_tree = {
+            let mut guard = root_owner.write();
+            let owner = std::mem::take(&mut *guard);
+            let (owner, result) = owner.run_frame();
+            *guard = owner;
+            match result {
+                Ok(layer_tree) => layer_tree,
+                Err(e) => {
+                    tracing::error!(error = ?e, "draw_frame: pipeline failed, dropping frame");
+                    None
+                }
+            }
+        };
+
+        if self.send_frames_to_engine() {
+            self.mark_first_frame_sent();
+            layer_tree
+        } else {
+            // Deferred-first-frame: pipeline work ran (warm-up), the
+            // output is withheld until the deferral count drains.
+            None
+        }
     }
 
     // ========================================================================
@@ -438,39 +599,6 @@ impl RendererBinding for RenderingFlutterBinding {
         } else {
             // Default configuration for testing
             ViewConfiguration::default()
-        }
-    }
-
-    fn draw_frame(&self) -> Option<flui_layer::LayerTree> {
-        // Single authoritative frame path: run_frame produces the
-        // layer tree; the caller (platform binding / embedder) wraps
-        // it in a Scene and submits it to the renderer. The previous
-        // shape dropped the tree here while a divergent
-        // `composite_frame()` loop computed per-view metadata that
-        // never reached a compositor — both dead ends are gone.
-        let root_owner = self.root_pipeline_owner();
-        let layer_tree = {
-            let mut guard = root_owner.write();
-            let owner = std::mem::take(&mut *guard);
-            let (owner, result) = owner.run_frame();
-            *guard = owner;
-            match result {
-                Ok(layer_tree) => layer_tree,
-                Err(e) => {
-                    tracing::error!(error = ?e, "draw_frame: pipeline failed, dropping frame");
-                    None
-                }
-            }
-        };
-
-        if self.send_frames_to_engine() {
-            // First non-deferred frame marks the gate open.
-            self.first_frame_sent.store(true, Ordering::Relaxed);
-            layer_tree
-        } else {
-            // Deferred-first-frame: pipeline work ran (warm-up), the
-            // output is withheld until the deferral count drains.
-            None
         }
     }
 
