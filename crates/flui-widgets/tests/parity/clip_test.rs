@@ -40,7 +40,7 @@
 //! above port only that delta: the `Clip::None` leg, driven end-to-end
 //! through [`common::LaidOut::pump_widget`].
 //!
-//! Suspected framework gaps (filed under `docs/ROADMAP.md` Cross.H, not just
+//! Known framework gaps (filed under `docs/ROADMAP.md` Cross.H, not just
 //! noted here — see that file for the full writeup):
 //! - `'ClipRect'` (the `ValueClipper<Rect>`-driven reclip + hit-test case) —
 //!   `ClipRect`/`ClipOval` accept no custom clipper at all; `RenderClip<S>`
