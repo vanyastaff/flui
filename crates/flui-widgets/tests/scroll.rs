@@ -1196,7 +1196,7 @@ fn scrollbar_thumb_drag_moves_scroll_offset_proportionally() {
     //   Down at (290, 10)       — inside thumb
     //   Move to (290, 60)  +50  — slop-crossing (>18 px): fires on_pan_start (no-op)
     //   Move to (290, 110) +50  — fires on_pan_update(delta_y=50) → content_delta=100
-    //   Up   at (290, 110)      — within new thumb y=[25,175] after scroll, within widget
+    //   Up   at (290, 110)      — within new thumb y=[50,200] after scroll, within widget
     scoped.dispatch_pointer_down(290.0, 10.0);
     scoped.dispatch_pointer_move(290.0, 60.0);
     scoped.dispatch_pointer_move(290.0, 110.0);
