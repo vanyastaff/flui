@@ -58,13 +58,15 @@
 //!   integration test outside the module to assert on — the render-type
 //!   evidence (transitions actually swap) is asserted instead.
 //!
-//! Out of scope: 1 of 12.
+//! Adapted: 1 of 12.
 //! - `'AnimatedSwitcher does not duplicate animations if the same child is
 //!   entered twice.'` — needs a KEYED widget re-entering after its ORIGINAL
 //!   entry already exists (possibly still outgoing); ported as
 //!   `reentering_a_still_dismissing_key_starts_a_fresh_entry_not_a_duplicate`
-//!   using the test-local `Keyed<W>` wrapper (see above), so functionally
-//!   this is covered — filed under "adapted", not dropped; see that test.
+//!   using the test-local `Keyed<W>` wrapper (see above) — functionally
+//!   covered, not dropped; see that test.
+//!
+//! Arithmetic: 10 ported + 1 adapted-and-narrowed + 1 adapted = 12.
 //!
 //! No divergence: oracle case 2's `container2 findsNothing` after the third
 //! back-to-back swap (with no elapsed time between swaps) is not special-cased
@@ -206,6 +208,11 @@ fn fades_in_a_new_child() {
         vec![1.0],
         "settling the run dismisses every outgoing entry, leaving only child_c at full opacity"
     );
+    assert_eq!(
+        vsync.len(),
+        1,
+        "settling must unregister every dismissed entry's controller, leaving only child_c's"
+    );
 }
 
 /// `AnimatedSwitcher can handle back-to-back changes.` (adapted: distinct
@@ -311,6 +318,10 @@ fn same_type_keyless_child_does_not_transition() {
 ///
 /// Oracle: `animated_switcher_test.dart`, tag `3.44.0`. `None` <-> `Some`
 /// transitions animate exactly like any other `can_update`-incompatible swap.
+/// Ported in full, including the oracle's tail: a SECOND `pumpWidget` of the
+/// SAME child-less switcher while the previous child is still reversing out
+/// is a genuine no-op reconfigure (`has_new_child == has_old_child == false`)
+/// that must not restart or otherwise disturb the in-flight entry.
 #[test]
 fn handles_no_child() {
     let vsync = Vsync::new();
@@ -336,6 +347,11 @@ fn handles_no_child() {
         1,
         "same-type keyless swap updates in place, does not start a None-shaped transition"
     );
+    assert_eq!(
+        laid.opacity(laid.find_by_render_type("RenderOpacity")),
+        1.0,
+        "an in-place update does not restart the transition; opacity stays at its settled value"
+    );
 
     laid.pump_widget(VsyncScope::new(vsync.clone(), AnimatedSwitcher::new(RUN)));
     laid.pump_for(Duration::ZERO); // detection tick: anchors the fresh reverse run
@@ -345,13 +361,51 @@ fn handles_no_child() {
         0.5,
         "child -> None transitions out exactly like child -> child"
     );
+
+    // Oracle tail: a SECOND pumpWidget of the same child-less switcher, mid
+    // reverse — a genuine no-op reconfigure. `did_update_view` matches
+    // `(None, None)` and takes neither branch, so the in-flight outgoing
+    // entry must continue completely undisturbed by this reconfigure.
+    laid.pump_widget(VsyncScope::new(vsync.clone(), AnimatedSwitcher::new(RUN)));
+    // 49ms, not the oracle's 50ms (which would land exactly on the 100ms
+    // reverse duration's completion): this harness ticks vsync BEFORE
+    // running that frame's build pass (see the module doc's harness note),
+    // so a controller dismissing exactly during a `pump_for` call is swept
+    // and removed from the tree within that SAME call — there is no
+    // observable "still mounted at exactly 0.0" frame the way Flutter's
+    // tick-then-rebuild-next-frame ordering provides. 49ms instead proves
+    // the same contract just as strongly: if the no-op reconfigure had
+    // wrongly restarted the reverse run, this tick would show ~0.5
+    // (a fresh run's detection tick) instead of continuing down to ~0.01.
+    laid.pump_for(Duration::from_millis(49));
+    let opacity = laid.opacity(laid.find_by_render_type("RenderOpacity"));
+    assert!(
+        (opacity - 0.01).abs() < 1e-3,
+        "the no-op reconfigure must not restart the reverse run: total elapsed \
+         (50ms + 49ms of the 100ms reverse) should show near-zero opacity, got \
+         {opacity} — 0.5 would mean the no-op reconfigure wrongly restarted the run"
+    );
 }
 
 /// `AnimatedSwitcher doesn't start any animations after dispose.`
 ///
-/// Oracle: `animated_switcher_test.dart`, tag `3.44.0`. Replacing the whole
-/// root (unmounting `AnimatedSwitcher` mid-transition) must dispose every
-/// entry's controller — driving a further frame must not panic.
+/// Oracle: `animated_switcher_test.dart`, tag `3.44.0` — asserts
+/// `tester.pumpAndSettle() == 1` (exactly one frame was needed to settle after
+/// the swap, i.e. nothing kept requesting more). FLUI's harness has no
+/// pump-count-until-settled equivalent, so this asserts the mechanism that
+/// guarantee rests on directly: unmounting `AnimatedSwitcher` mid-transition
+/// must dispose every entry's controller AND unregister it from `vsync` —
+/// `vsync.len() == 0` afterward is the evidence that nothing is left for a
+/// frame driver to keep ticking, and a further frame must not panic.
+///
+/// The unmount is a CHILD swap under a stable `VsyncScope` root (not a root
+/// swap): `ElementTree::update` on the ROOT position does not itself run
+/// `finalize_tree` before this harness's very next `vsync.len()` read is
+/// possible to express within one test body (a generic, pre-existing
+/// framework/harness property, confirmed independent of `AnimatedSwitcher` by
+/// reproducing it with a root-swapped `AnimatedContainer`) — swapping the
+/// CHILD under an unchanged root reconciles and finalizes normally within one
+/// `pump_widget` call, which is what actually exercises `AnimatedSwitcherState::dispose`.
 #[test]
 fn no_animation_after_dispose() {
     let vsync = Vsync::new();
@@ -360,10 +414,23 @@ fn no_animation_after_dispose() {
         AnimatedSwitcher::new(RUN).child(ColoredBox::new(Color::rgba(0, 0, 0, 255))),
     );
     let mut laid = lay_out_animated(root, screen(), vsync.clone());
+    assert_eq!(
+        vsync.len(),
+        1,
+        "the single mounted entry registers its controller"
+    );
     laid.pump_for(Duration::from_millis(50));
 
-    laid.pump_widget(ColoredBox::new(Color::rgba(255, 0, 0, 255)));
-    laid.pump_for(RUN); // must not panic: every entry's controller was disposed
+    laid.pump_widget(VsyncScope::new(
+        vsync.clone(),
+        ColoredBox::new(Color::rgba(255, 0, 0, 255)),
+    ));
+    assert_eq!(
+        vsync.len(),
+        0,
+        "unmounting AnimatedSwitcher mid-transition must dispose and unregister every entry"
+    );
+    laid.pump_for(RUN); // must not panic: nothing left registered to tick
 }
 
 /// `AnimatedSwitcher uses custom layout.`
@@ -468,6 +535,18 @@ macro_rules! generation_probe {
 /// back-to-back swaps mounts exactly ONE fresh `State` (`init_state` runs
 /// once per swap, not once per frame) — an entry animating out must stay
 /// MOUNTED, not be torn down and rebuilt.
+///
+/// Dropped co-assertions (this port keeps ONLY the generation counter, which
+/// is this test's own distinguishing point — the others duplicate coverage
+/// this file already carries elsewhere on the same shape of children):
+/// - The `FadeTransition` COUNT at each step (1, then 2, then 3 — via
+///   `find.byType(FadeTransition)` / `.at(0/1/2)`) — the same count
+///   trajectory `fades_in_a_new_child` already asserts.
+/// - The exact opacity VALUES at each step (`1.0`, then `0.5`, then
+///   `0.4`/`0.4`/`0.1`) — the identical trajectory (same durations, same
+///   `Curves::Linear`, same three-entries-in-flight shape)
+///   `fades_in_a_new_child` already asserts in full, just against
+///   `ColoredBox`/`SizedBox`/`Text` instead of `StatefulTest`.
 #[test]
 fn preserves_child_state_across_transitions() {
     generation_probe!(ProbeA, ProbeAState);
