@@ -77,3 +77,6 @@ mod focus_test;
 
 // ── Business.1 fidelity front — Shortcuts/Actions parity (family 5) ─────────
 mod shortcuts_test;
+
+// ── Business.1 fidelity front — Scrollbar parity (family 6) ─────────────────
+mod scrollbar_test;

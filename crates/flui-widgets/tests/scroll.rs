@@ -560,16 +560,21 @@ fn scroll_controller_thumb_fraction_is_one_when_content_fits_in_viewport() {
 #[test]
 fn scroll_controller_thumb_offset_fraction_at_scroll_midpoint() {
     // viewport = 400, scroll_extent = 400, content = 800.
-    // thumb_fraction = 0.5.
-    // At pixels = 200 (halfway): offset_fraction = (200/400) * (1 − 0.5) = 0.25
+    // offset_fraction = (pixels - min_scroll_extent) / scroll_extent — a
+    // fraction of the AVAILABLE track, independent of thumb_fraction (see
+    // `ScrollController::thumb_offset_fraction`'s doc for why folding in
+    // `(1 - thumb_fraction)` here would be a double-application once
+    // `Scrollbar` multiplies by `available_track`, which already contains
+    // that factor).
+    // At pixels = 200 (halfway): offset_fraction = 200/400 = 0.5
     let controller = ScrollController::new();
     controller.update_dimensions(400.0, 0.0, 400.0);
     controller.set_pixels(200.0);
 
     let frac = controller.thumb_offset_fraction();
     assert!(
-        (frac - 0.25).abs() < 0.001,
-        "thumb offset fraction at scroll midpoint should be 0.25, got {frac}"
+        (frac - 0.5).abs() < 0.001,
+        "thumb offset fraction at scroll midpoint should be 0.5, got {frac}"
     );
 }
 
@@ -1160,9 +1165,11 @@ fn pan_start_during_fling_halts_momentum() {
 /// `on_pan_update` wired to the thumb's `GestureDetector` does not call
 /// `set_pixels` — the controller would remain at 0.
 ///
-/// Mapping: `dP/d(thumb_top) = (viewport + scroll_extent) / available_track`
-/// With viewport=300, scroll_extent=300, available_track=150:
-///   50 track-px × (600 / 150) = 200 content-px
+/// Mapping (`ScrollController::thumb_offset_fraction`'s doc, matching
+/// Flutter's `ScrollbarPainter` thumb-drag contract in
+/// `widgets/scrollbar.dart`, 3.44.0): `dP/d(thumb_top) = scroll_extent /
+/// available_track`. With scroll_extent=300, available_track=150:
+///   50 track-px × (300 / 150) = 100 content-px
 #[test]
 fn scrollbar_thumb_drag_moves_scroll_offset_proportionally() {
     use flui_widgets::Scrollbar;
@@ -1188,7 +1195,7 @@ fn scrollbar_thumb_drag_moves_scroll_offset_proportionally() {
     // Sequence:
     //   Down at (290, 10)       — inside thumb
     //   Move to (290, 60)  +50  — slop-crossing (>18 px): fires on_pan_start (no-op)
-    //   Move to (290, 110) +50  — fires on_pan_update(delta_y=50) → content_delta=200
+    //   Move to (290, 110) +50  — fires on_pan_update(delta_y=50) → content_delta=100
     //   Up   at (290, 110)      — within new thumb y=[50,200] after scroll, within widget
     scoped.dispatch_pointer_down(290.0, 10.0);
     scoped.dispatch_pointer_move(290.0, 60.0);
@@ -1197,27 +1204,30 @@ fn scrollbar_thumb_drag_moves_scroll_offset_proportionally() {
 
     let final_pixels = controller.pixels();
     assert!(
-        (final_pixels - 200.0).abs() < 1.0,
-        "dragging the thumb 50 track-px must scroll 200 content-px \
-         (viewport=300, scroll_extent=300, available_track=150); got {final_pixels:.2}"
+        (final_pixels - 100.0).abs() < 1.0,
+        "dragging the thumb 50 track-px must scroll 100 content-px \
+         (scroll_extent=300, available_track=150); got {final_pixels:.2}"
     );
 }
 
 /// Chaining small thumb-drag moves accumulates content-delta until `max_scroll_extent`
 /// is hit, and `clamp` prevents the position from exceeding the maximum.
 ///
-/// Geometry: viewport=300, scroll_extent=300, thumb_height=150, available_track=150.
-/// Each +20 track-px move gives content_delta = (20/150)*600 = 80 px.
-/// After 4 `on_pan_update` calls: accumulated proposed = 320, clamped to 300.
+/// Geometry: viewport=300, scroll_extent=150 (max_scroll_extent=150) →
+/// thumb_fraction = 300/450 = 0.6667, thumb_height=200, available_track=100.
+/// Each +30 track-px move gives content_delta = (30/100)*150 = 45 px
+/// (`dP/d(thumb_top) = scroll_extent / available_track`, this file's
+/// `scrollbar_thumb_drag_moves_scroll_offset_proportionally` above).
+/// After 4 `on_pan_update` calls: accumulated proposed = 180, clamped to 150.
 ///
 /// All pointer positions stay within the thumb's original Positioned bounds
-/// (y in [0, 150]) so every re-hit-test succeeds.
+/// (y in [0, 200]) so every re-hit-test succeeds.
 #[test]
 fn scrollbar_thumb_drag_clamps_at_max_scroll_extent() {
     use flui_widgets::Scrollbar;
 
     let controller = ScrollController::new();
-    controller.update_dimensions(300.0, 0.0, 300.0);
+    controller.update_dimensions(300.0, 0.0, 150.0);
 
     let widget = Scrollbar::new()
         .controller(controller.clone())
@@ -1226,20 +1236,20 @@ fn scrollbar_thumb_drag_clamps_at_max_scroll_extent() {
 
     let scoped = lay_out_with_arena(widget, tight(300.0, 300.0));
 
-    // Thumb at pixels=0 occupies x=[280,300], y=[0,150].
-    // Slop-crossing: DOWN -> MOVE(+20) crosses 18px threshold.
-    // Four on_pan_update calls of +20 track-px each accumulate 320 content-px -> clamped to 300.
+    // Thumb at pixels=0 occupies x=[280,300], y=[0,200].
+    // Slop-crossing: DOWN -> MOVE(+30) crosses 18px threshold.
+    // Four on_pan_update calls of +30 track-px each accumulate 180 content-px -> clamped to 150.
     scoped.dispatch_pointer_down(290.0, 10.0);
-    scoped.dispatch_pointer_move(290.0, 30.0); // +20 px: slop-crossing -> on_pan_start
-    scoped.dispatch_pointer_move(290.0, 50.0); // +20 px -> on_pan_update: pixels=80
-    scoped.dispatch_pointer_move(290.0, 70.0); // +20 px -> on_pan_update: pixels=160
-    scoped.dispatch_pointer_move(290.0, 90.0); // +20 px -> on_pan_update: pixels=240
-    scoped.dispatch_pointer_move(290.0, 110.0); // +20 px -> on_pan_update: proposed=320, clamped=300
-    scoped.dispatch_pointer_up(290.0, 110.0);
+    scoped.dispatch_pointer_move(290.0, 40.0); // +30 px: slop-crossing -> on_pan_start
+    scoped.dispatch_pointer_move(290.0, 70.0); // +30 px -> on_pan_update: pixels=45
+    scoped.dispatch_pointer_move(290.0, 100.0); // +30 px -> on_pan_update: pixels=90
+    scoped.dispatch_pointer_move(290.0, 130.0); // +30 px -> on_pan_update: pixels=135
+    scoped.dispatch_pointer_move(290.0, 160.0); // +30 px -> on_pan_update: proposed=180, clamped=150
+    scoped.dispatch_pointer_up(290.0, 160.0);
 
     assert!(
-        controller.pixels() <= 300.0,
-        "thumb drag must not carry scroll past max_scroll_extent (300); got {:.2}",
+        controller.pixels() <= 150.0,
+        "thumb drag must not carry scroll past max_scroll_extent (150); got {:.2}",
         controller.pixels()
     );
     assert!(
