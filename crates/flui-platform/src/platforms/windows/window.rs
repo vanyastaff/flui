@@ -590,6 +590,10 @@ impl PlatformWindow for Arc<WindowsWindow> {
         PlatformWindow::on_active_status_change(self.as_ref(), callback)
     }
 
+    fn on_visibility_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
+        PlatformWindow::on_visibility_status_change(self.as_ref(), callback)
+    }
+
     fn on_hover_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
         PlatformWindow::on_hover_status_change(self.as_ref(), callback)
     }
@@ -897,6 +901,10 @@ impl PlatformWindow for WindowsWindow {
 
     fn on_active_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
         *self.callbacks.on_active_status_change.lock() = Some(callback);
+    }
+
+    fn on_visibility_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
+        *self.callbacks.on_visibility_status_change.lock() = Some(callback);
     }
 
     fn on_hover_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {

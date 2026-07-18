@@ -7,6 +7,11 @@ use flui_view::{StatelessView, View};
 
 use super::{AppBinding, AppConfig};
 
+#[cfg(not(target_os = "ios"))]
+use flui_foundation::HasInstance;
+#[cfg(not(target_os = "ios"))]
+use flui_scheduler::{AppLifecycleState, Scheduler};
+
 /// Run a FLUI application with default configuration.
 ///
 /// This is the internal implementation called by `run_app()`.
@@ -107,6 +112,15 @@ struct RealmHost {
     draining: bool,
     owner_thread: Option<std::thread::ThreadId>,
     realm_id: Option<flui_foundation::RealmId>,
+
+    /// Single-window `(visible, focused)` tracking for the
+    /// `AppLifecycleState` derivation (ADR-0035 PR2) — `RealmEvent::
+    /// WindowFocus`/`WindowVisibility` each update one half of this pair and
+    /// re-derive. Both default `true`: a window is assumed visible and
+    /// focused until a platform callback says otherwise (matches every
+    /// backend's actual startup state).
+    visible: bool,
+    focused: bool,
 }
 
 #[cfg(not(target_os = "ios"))]
@@ -118,6 +132,8 @@ impl RealmHost {
             draining: false,
             owner_thread: None,
             realm_id: None,
+            visible: true,
+            focused: true,
         }
     }
 }
@@ -145,15 +161,25 @@ enum RealmEvent {
         scale_factor: f32,
         apply_surface: Box<dyn FnOnce()>,
     },
-    /// Window active/focus status changed.
+    /// Window focus changed (winit's `WindowEvent::Focused`, or the
+    /// equivalent per-backend signal).
     ///
-    /// PR1 (ADR-0035): intentionally a no-op. The old `AppBinding`-owned
-    /// `DefaultLifecycle` state machine this used to feed via
-    /// `transition_lifecycle` was retired in favor of the canonical
-    /// `flui_scheduler::Scheduler` lifecycle; nothing derives a lifecycle
-    /// signal from window focus yet. PR2 wires this into the
-    /// `(visible, focused)` derivation that drives the scheduler directly.
-    Active(bool),
+    /// PR1 (ADR-0035) named this `Active` and left it a deliberate no-op.
+    /// PR2 renames it (same source, no transport change) and feeds it into
+    /// the `(visible, focused)` -> `AppLifecycleState` derivation below,
+    /// alongside [`WindowVisibility`](Self::WindowVisibility).
+    WindowFocus(bool),
+    /// Window visibility/occlusion changed (winit's `WindowEvent::Occluded`,
+    /// negated — see `PlatformWindow::on_visibility_status_change`).
+    ///
+    /// New in PR2. Combined with [`WindowFocus`](Self::WindowFocus) via
+    /// [`derive_lifecycle_state`] to produce the `AppLifecycleState` the
+    /// ladder in [`emit_lifecycle_transition`] steps toward.
+    // Not yet constructed on wasm32: `run_web` only wires `WindowFocus` in
+    // this PR — no occlusion signal for the web backend yet (see run_web's
+    // comment at its `on_active_status_change` registration).
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    WindowVisibility(bool),
     Frame(Box<dyn FnOnce(&super::ui_realm::UiRealm)>),
 }
 
@@ -174,12 +200,225 @@ impl RealmEvent {
                 AppBinding::instance().request_redraw();
                 tracing::trace!(?size, scale_factor, "realm resize committed");
             }
-            Self::Active(_active) => {
-                // See the `Active` variant doc: PR1 deliberately does not
-                // feed a lifecycle signal from focus changes.
+            Self::WindowFocus(focused) => {
+                let (old, new) = PLATFORM_REALM_HOST.with(|slot| {
+                    let mut state = slot.borrow_mut();
+                    let old = derive_lifecycle_state(state.visible, state.focused);
+                    state.focused = focused;
+                    (old, derive_lifecycle_state(state.visible, state.focused))
+                });
+                emit_lifecycle_transition(realm, old, new);
+            }
+            Self::WindowVisibility(visible) => {
+                let (old, new) = PLATFORM_REALM_HOST.with(|slot| {
+                    let mut state = slot.borrow_mut();
+                    let old = derive_lifecycle_state(state.visible, state.focused);
+                    state.visible = visible;
+                    (old, derive_lifecycle_state(state.visible, state.focused))
+                });
+                emit_lifecycle_transition(realm, old, new);
             }
             Self::Frame(run) => run(realm),
         }
+    }
+}
+
+// ============================================================================
+// Lifecycle derivation and ladder synthesis (ADR-0035 PR2)
+// ============================================================================
+
+/// Derives the Flutter-parity [`AppLifecycleState`] from the two window
+/// signals FLUI tracks per window: visibility (occlusion) and focus.
+///
+/// Pure and order-insensitive: the result depends only on the final
+/// `(visible, focused)` pair, never on which of the two changed most
+/// recently — occlusion-before-focus-loss and focus-loss-before-occlusion
+/// converge to the same derived state once both signals have landed.
+#[cfg(not(target_os = "ios"))]
+fn derive_lifecycle_state(visible: bool, focused: bool) -> AppLifecycleState {
+    if !visible {
+        AppLifecycleState::Hidden
+    } else if focused {
+        AppLifecycleState::Resumed
+    } else {
+        AppLifecycleState::Inactive
+    }
+}
+
+/// The intermediate `AppLifecycleState` steps between `old` and `new`,
+/// inclusive of `new`, exclusive of `old` — Flutter's `AppLifecycleState`
+/// ladder order (`Resumed < Inactive < Hidden < Paused < Detached`, exactly
+/// the enum's own discriminant order). Oracle: `platform_dispatcher.dart`
+/// (Flutter 3.44.0) synthesizes every skipped state so no observer misses a
+/// step when a transition jumps straight from `Resumed` to `Hidden` without
+/// visiting `Inactive`.
+///
+/// Returns an empty `Vec` when `old == new` — this is where change-detection
+/// for the whole re-derivation lives: a wake that doesn't change the derived
+/// state emits nothing, to neither the scheduler nor `WidgetsBinding`
+/// observers.
+#[cfg(not(target_os = "ios"))]
+fn lifecycle_ladder(old: AppLifecycleState, new: AppLifecycleState) -> Vec<AppLifecycleState> {
+    let (old_ord, new_ord) = (old as u8, new as u8);
+    match old_ord.cmp(&new_ord) {
+        std::cmp::Ordering::Equal => Vec::new(),
+        std::cmp::Ordering::Less => (old_ord + 1..=new_ord)
+            .filter_map(AppLifecycleState::try_from_u8)
+            .collect(),
+        std::cmp::Ordering::Greater => (new_ord..old_ord)
+            .rev()
+            .filter_map(AppLifecycleState::try_from_u8)
+            .collect(),
+    }
+}
+
+/// Emits the full ladder from `old` to `new` (see [`lifecycle_ladder`]), one
+/// step at a time, to both the canonical `Scheduler` and the realm's
+/// `WidgetsBinding` observers — mirroring Flutter's single platform-message
+/// stream driving both `SchedulerBinding` and `WidgetsBinding` from the same
+/// synthesized sequence of states.
+///
+/// Installed as a direct call in the same `RealmEvent` handler (never a
+/// `Scheduler`-listener closure): a listener captured at bootstrap time would
+/// have to resolve `realm`/`WidgetsBinding` lazily at fire time, which is
+/// exactly the thread-local-resolution/Send-capture trap
+/// `AppBinding::instance()`'s own installer avoids elsewhere in this crate.
+/// `realm` is already in scope here (`RealmEvent::run`'s parameter), so no
+/// such resolution is needed.
+#[cfg(not(target_os = "ios"))]
+fn emit_lifecycle_transition(
+    realm: &super::ui_realm::UiRealm,
+    old: AppLifecycleState,
+    new: AppLifecycleState,
+) {
+    for step in lifecycle_ladder(old, new) {
+        Scheduler::instance().handle_app_lifecycle_state_change(step);
+        realm.widgets().handle_app_lifecycle_state_changed(step);
+    }
+}
+
+#[cfg(all(test, not(target_os = "ios")))]
+mod lifecycle_derivation_tests {
+    use super::{AppLifecycleState, derive_lifecycle_state, lifecycle_ladder};
+
+    #[test]
+    fn derivation_truth_table() {
+        assert_eq!(
+            derive_lifecycle_state(true, true),
+            AppLifecycleState::Resumed
+        );
+        assert_eq!(
+            derive_lifecycle_state(true, false),
+            AppLifecycleState::Inactive
+        );
+        assert_eq!(
+            derive_lifecycle_state(false, true),
+            AppLifecycleState::Hidden,
+            "not visible must win over focused — a hidden window cannot be Resumed"
+        );
+        assert_eq!(
+            derive_lifecycle_state(false, false),
+            AppLifecycleState::Hidden
+        );
+    }
+
+    /// Occlusion-before-focus-loss and focus-loss-before-occlusion must
+    /// converge to the same derived state — the derivation depends only on
+    /// the final `(visible, focused)` pair, never on update order.
+    /// Mirrors `RealmHost`'s actual update pattern (mutate one signal,
+    /// re-derive) so this test exercises real ordering, not just two calls
+    /// to a pure function with identical arguments.
+    struct WindowSignals {
+        visible: bool,
+        focused: bool,
+    }
+
+    impl WindowSignals {
+        fn new() -> Self {
+            Self {
+                visible: true,
+                focused: true,
+            }
+        }
+
+        fn set_visible(&mut self, visible: bool) -> AppLifecycleState {
+            self.visible = visible;
+            derive_lifecycle_state(self.visible, self.focused)
+        }
+
+        fn set_focused(&mut self, focused: bool) -> AppLifecycleState {
+            self.focused = focused;
+            derive_lifecycle_state(self.visible, self.focused)
+        }
+    }
+
+    #[test]
+    fn derivation_is_order_insensitive() {
+        // Occlusion before focus loss.
+        let mut occlusion_first = WindowSignals::new();
+        let _after_occlusion = occlusion_first.set_visible(false);
+        let occlusion_then_focus_loss = occlusion_first.set_focused(false);
+
+        // The same two updates, reverse order: focus loss before occlusion.
+        let mut focus_loss_first = WindowSignals::new();
+        let _after_focus_loss = focus_loss_first.set_focused(false);
+        let focus_loss_then_occlusion = focus_loss_first.set_visible(false);
+
+        assert_eq!(
+            occlusion_then_focus_loss, focus_loss_then_occlusion,
+            "both orderings of the same two updates must land on the same derived state"
+        );
+        assert_eq!(occlusion_then_focus_loss, AppLifecycleState::Hidden);
+    }
+
+    #[test]
+    fn ladder_is_empty_for_an_unchanged_state() {
+        assert!(
+            lifecycle_ladder(AppLifecycleState::Resumed, AppLifecycleState::Resumed).is_empty(),
+            "a no-op transition must emit nothing — this is where change-detection for the \
+             whole re-derivation lives (neither the scheduler nor WidgetsBinding observers see \
+             a same-state call)"
+        );
+        assert!(lifecycle_ladder(AppLifecycleState::Hidden, AppLifecycleState::Hidden).is_empty());
+    }
+
+    /// Pause's ladder: Resumed -> Paused must visit Inactive, then Hidden,
+    /// then Paused, in that order.
+    #[test]
+    fn ladder_steps_forward_through_every_intermediate_state_in_order() {
+        assert_eq!(
+            lifecycle_ladder(AppLifecycleState::Resumed, AppLifecycleState::Paused),
+            vec![
+                AppLifecycleState::Inactive,
+                AppLifecycleState::Hidden,
+                AppLifecycleState::Paused,
+            ]
+        );
+    }
+
+    /// Resume's ladder: the exact reverse of Pause's.
+    #[test]
+    fn ladder_steps_backward_through_every_intermediate_state_in_order() {
+        assert_eq!(
+            lifecycle_ladder(AppLifecycleState::Paused, AppLifecycleState::Resumed),
+            vec![
+                AppLifecycleState::Hidden,
+                AppLifecycleState::Inactive,
+                AppLifecycleState::Resumed,
+            ]
+        );
+    }
+
+    #[test]
+    fn ladder_single_step_transitions_emit_exactly_that_step() {
+        assert_eq!(
+            lifecycle_ladder(AppLifecycleState::Resumed, AppLifecycleState::Inactive),
+            vec![AppLifecycleState::Inactive]
+        );
+        assert_eq!(
+            lifecycle_ladder(AppLifecycleState::Inactive, AppLifecycleState::Resumed),
+            vec![AppLifecycleState::Resumed]
+        );
     }
 }
 
@@ -425,7 +664,7 @@ mod realm_dispatch_tests {
     }
 
     #[test]
-    fn nested_resize_and_active_wait_until_frame_returns() {
+    fn nested_resize_and_window_focus_wait_until_frame_returns() {
         let dispatcher = install_test_realm();
         let order = Rc::new(RefCell::new(Vec::new()));
         let outer = Rc::clone(&order);
@@ -433,8 +672,8 @@ mod realm_dispatch_tests {
             dispatcher,
             RealmEvent::Frame(Box::new(move |_| {
                 outer.borrow_mut().push(1);
-                dispatch_platform_realm(dispatcher, RealmEvent::Active(true))
-                    .expect("active queues");
+                dispatch_platform_realm(dispatcher, RealmEvent::WindowFocus(true))
+                    .expect("window focus queues");
                 let resize = Rc::clone(&outer);
                 dispatch_platform_realm(
                     dispatcher,
@@ -579,29 +818,57 @@ mod realm_dispatch_tests {
 // ============================================================================
 //
 // Extracted as free functions — pure, no realm/window/GPU state — so the
-// two decisions `run_desktop`'s frame callback makes each wake are unit
+// decisions each platform's frame callback makes each wake are unit
 // testable without a live event loop. See the frame-pacing ADR for the
 // full design: Fifo present blocks every PRESENTED frame at display
-// cadence (the steady-state pacing); these two functions cover what
-// happens on the frames that path never blocks: a spurious wake with
-// nothing to do (`should_render_frame`), and a frame that ran the pipeline
-// but never reached `present()` (`no_present_fallback_pace`).
+// cadence (the steady-state pacing); these functions cover what happens on
+// the frames that path never blocks: a spurious wake with nothing to do or
+// a backgrounded app (`wake_action`), and a frame that ran the pipeline but
+// never reached `present()` (`no_present_fallback_pace`).
 
-/// Whether a wake should run the frame pipeline at all.
+/// What a platform wake should do: run the full frame pipeline, pump only
+/// the async driver, or nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WakeAction {
+    /// Run the full frame pipeline — the pre-existing path, unchanged:
+    /// frames are enabled and there is real work or a scheduled ticker.
+    Render,
+    /// Frames are disabled (`AppLifecycleState::Hidden`/`Paused`/
+    /// `Detached`): poll only [`Scheduler::drive_async_tasks`] — never
+    /// begin/draw a frame, tick, run the pipeline, or present. Dirty work
+    /// is left untouched; it accumulates until frames re-enable.
+    PumpAsync,
+    /// A spurious wake while frames are enabled: nothing dirty, no
+    /// scheduled ticker. No render, no pump, no sleep.
+    Skip,
+}
+
+/// Decides what a platform wake should do, given the scheduler's
+/// [`Scheduler::frames_enabled`] fact (ADR-0035) alongside the pre-existing
+/// dirty/scheduled-ticker signals.
+///
+/// `frames_enabled == false` takes priority over everything else — even
+/// with `dirty` work pending, a backgrounded app pumps only the async
+/// driver; the dirty work is left alone (it accumulates untouched) rather
+/// than running a full frame nobody can see. This is the ONLY thing that
+/// keeps a spawned future progressing while the app is backgrounded: the
+/// mid-frame `drive_async_tasks` poll inside `handle_begin_frame` never
+/// runs in `PumpAsync` mode (no frame runs at all), so this explicit call
+/// is the only pump.
 ///
 /// `dirty` is true when there is real work (an inbox redraw request,
 /// `needs_redraw`, or dirty pipeline nodes); `frame_scheduled` is true when
 /// the global `Scheduler` has a pending ticker callback (a running
-/// `AnimationController` with no other dirty state). Either alone renders;
-/// neither means the wake was spurious and the frame is skipped with no
-/// render, no sleep, no GPU work — the loop returns to `ControlFlow::Wait`.
-#[cfg(all(
-    not(target_os = "android"),
-    not(target_os = "ios"),
-    not(target_arch = "wasm32")
-))]
-fn should_render_frame(dirty: bool, frame_scheduled: bool) -> bool {
-    dirty || frame_scheduled
+/// `AnimationController` with no other dirty state).
+fn wake_action(frames_enabled: bool, dirty: bool, frame_scheduled: bool) -> WakeAction {
+    if !frames_enabled {
+        return WakeAction::PumpAsync;
+    }
+    if dirty || frame_scheduled {
+        WakeAction::Render
+    } else {
+        WakeAction::Skip
+    }
 }
 
 /// Whether another frame will be requested regardless of this one's
@@ -680,21 +947,21 @@ fn no_present_fallback_pace(presented: bool, keeps_gate_open: bool) -> Option<st
 /// App.1 vsync-pacing gate tests.
 ///
 /// `run_desktop` itself opens a real window and GPU device, so it cannot
-/// run headlessly; `should_render_frame` and `no_present_fallback_pace`
-/// were pulled out specifically so the two decisions the frame callback
-/// makes each wake are covered here without one. Coverage map for the
-/// four invariants the frame-pacing ADR calls out:
+/// run headlessly; `wake_action` and `no_present_fallback_pace` were pulled
+/// out specifically so the decisions the frame callback makes each wake are
+/// covered here without one. Coverage map for the four invariants the
+/// frame-pacing ADR calls out:
 ///
 /// - **Wake coalescing** (N `wake_frame` calls -> one draw): a
 ///   PRE-EXISTING invariant, unchanged by this diff — pinned by
 ///   `ui_realm::tests::redraw_requests_coalesce_to_one_flag_and_one_wake`.
 /// - **Idle = zero frames**: a PRE-EXISTING invariant (the dirty gate
-///   itself predates this diff; only its extraction into
-///   `should_render_frame` is new) — pinned by
-///   `idle_wake_with_no_dirty_work_and_no_scheduled_frame_renders_nothing`
+///   itself predates this diff; only its migration onto `wake_action` is
+///   new, ADR-0035 PR2) — pinned by
+///   `idle_wake_with_no_dirty_work_and_no_scheduled_frame_skips`
 ///   below.
-/// - **No-present fallback bound**: the actual delta this diff introduces —
-///   pinned by `no_present_fallback_bounds_repeating_no_present_wakes`.
+/// - **No-present fallback bound**: the actual delta the frame-pacing ADR
+///   introduces — pinned by `no_present_fallback_bounds_repeating_no_present_wakes`.
 /// - **Ticker keeps the gate open**: the fallback's AND condition — pinned
 ///   by `no_present_fallback_pace_requires_both_no_present_and_an_open_gate`
 ///   (this module) and, at the binding layer, by
@@ -709,26 +976,131 @@ mod desktop_pacing_tests {
     use std::time::{Duration, Instant};
 
     use super::{
-        NO_PRESENT_FALLBACK_PACE, keeps_frame_gate_open, no_present_fallback_pace,
-        should_render_frame,
+        NO_PRESENT_FALLBACK_PACE, WakeAction, keeps_frame_gate_open, no_present_fallback_pace,
+        wake_action,
     };
 
     #[test]
-    fn idle_wake_with_no_dirty_work_and_no_scheduled_frame_renders_nothing() {
-        assert!(
-            !should_render_frame(false, false),
-            "a spurious wake with nothing dirty and no scheduled ticker must render zero frames"
+    fn idle_wake_with_no_dirty_work_and_no_scheduled_frame_skips() {
+        assert_eq!(
+            wake_action(true, false, false),
+            WakeAction::Skip,
+            "a spurious wake with frames enabled, nothing dirty, and no scheduled ticker must \
+             render zero frames"
         );
     }
 
     #[test]
     fn dirty_work_or_a_scheduled_ticker_alone_renders_a_frame() {
-        assert!(should_render_frame(true, false), "dirty work alone renders");
-        assert!(
-            should_render_frame(false, true),
+        assert_eq!(
+            wake_action(true, true, false),
+            WakeAction::Render,
+            "dirty work alone renders"
+        );
+        assert_eq!(
+            wake_action(true, false, true),
+            WakeAction::Render,
             "a scheduled ticker alone renders (keeps animations alive with no other dirty state)"
         );
-        assert!(should_render_frame(true, true));
+        assert_eq!(wake_action(true, true, true), WakeAction::Render);
+    }
+
+    #[test]
+    fn frames_disabled_always_pumps_async_regardless_of_dirty_or_scheduled() {
+        // The load-bearing case (ADR-0035 PR2): a backgrounded app must
+        // never render, even with real dirty work or a scheduled ticker —
+        // dirty work accumulates untouched until frames re-enable.
+        assert_eq!(wake_action(false, false, false), WakeAction::PumpAsync);
+        assert_eq!(wake_action(false, true, false), WakeAction::PumpAsync);
+        assert_eq!(wake_action(false, false, true), WakeAction::PumpAsync);
+        assert_eq!(wake_action(false, true, true), WakeAction::PumpAsync);
+    }
+
+    /// Async-keeps-running-while-Background (ADR-0035 PR2): a spawned
+    /// future must keep progressing through `PumpAsync`'s
+    /// `Scheduler::drive_async_tasks` call while frames are disabled, with
+    /// no frame ever advancing — and a `Resumed` transition afterward must
+    /// produce exactly one frame.
+    ///
+    /// Standalone `Scheduler::new()`, not the process singleton: this test
+    /// mirrors what `run_desktop`'s frame callback does on a `PumpAsync`
+    /// wake, without needing a live window/event loop.
+    ///
+    /// Red-check: gate the pump too (only call `drive_async_tasks` when
+    /// `wake_action` returns `Render` — a mistaken "no work while
+    /// backgrounded" fix) and this fails: the future never completes (RUN
+    /// IT — see the test module doc for how this is verified).
+    #[test]
+    fn frames_disabled_pump_async_keeps_futures_running_without_advancing_frames() {
+        use std::sync::atomic::{AtomicBool, AtomicUsize};
+
+        use flui_scheduler::{AppLifecycleState, Scheduler};
+
+        let scheduler = Scheduler::new();
+        let polls = std::sync::Arc::new(AtomicUsize::new(0));
+        let completed = std::sync::Arc::new(AtomicBool::new(false));
+        let polls_for_task = std::sync::Arc::clone(&polls);
+        let completed_for_task = std::sync::Arc::clone(&completed);
+        // Needs two polls to complete, so the loop below observes both the
+        // Pending and the Ready poll — proving `drive_async_tasks` is what
+        // actually advances it, not a single incidental call.
+        let _token = scheduler.spawn_local(Box::pin(std::future::poll_fn(move |cx| {
+            let n = polls_for_task.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+            if n < 2 {
+                // Re-arm itself for the next `drive_async_tasks` call —
+                // without this, `poll_ready` would only ever poll it once
+                // (nothing else wakes it), and the second loop iteration
+                // below would silently poll zero tasks.
+                cx.waker().wake_by_ref();
+                std::task::Poll::Pending
+            } else {
+                completed_for_task.store(true, std::sync::atomic::Ordering::SeqCst);
+                std::task::Poll::Ready(())
+            }
+        })));
+
+        scheduler.handle_app_lifecycle_state_change(AppLifecycleState::Hidden);
+        assert!(!scheduler.frames_enabled());
+
+        let frame_count_before = scheduler.frame_count();
+        for _ in 0..2 {
+            assert_eq!(
+                wake_action(
+                    scheduler.frames_enabled(),
+                    true,
+                    scheduler.is_frame_scheduled()
+                ),
+                WakeAction::PumpAsync,
+                "frames disabled must always pump, even with dirty work"
+            );
+            scheduler.drive_async_tasks();
+        }
+
+        assert!(
+            completed.load(std::sync::atomic::Ordering::SeqCst),
+            "the future must complete via PumpAsync's drive_async_tasks calls alone"
+        );
+        assert_eq!(
+            scheduler.frame_count(),
+            frame_count_before,
+            "no frame may run while the app is backgrounded"
+        );
+
+        scheduler.handle_app_lifecycle_state_change(AppLifecycleState::Resumed);
+        assert_eq!(
+            wake_action(
+                scheduler.frames_enabled(),
+                true,
+                scheduler.is_frame_scheduled()
+            ),
+            WakeAction::Render
+        );
+        scheduler.drive_frame(web_time::Instant::now(), || {});
+        assert_eq!(
+            scheduler.frame_count(),
+            frame_count_before + 1,
+            "resuming must produce exactly one frame"
+        );
     }
 
     #[test]
@@ -844,7 +1216,6 @@ where
     use std::{cell::RefCell, rc::Rc, sync::Arc};
 
     use flui_engine::wgpu::Renderer;
-    use flui_foundation::HasInstance;
     use flui_hot_reload::{
         HotReloadTier, RebuildHookRegistration, WorkerPollOutcome, WorkerReloadDriver, engine::env,
         register_request_rebuild,
@@ -853,7 +1224,6 @@ where
         Platform, WindowOptions,
         traits::{DispatchEventResult, PlatformInput},
     };
-    use flui_scheduler::{AppLifecycleState, Scheduler};
     use parking_lot::Mutex;
 
     use crate::embedder::PlatformWindowHandle;
@@ -1098,8 +1468,32 @@ where
 
             let dirty =
                 inbox_redraw || binding.needs_redraw() || binding.has_pending_work(realm);
-            if !should_render_frame(dirty, scheduler.is_frame_scheduled()) {
-                return;
+            match wake_action(scheduler.frames_enabled(), dirty, scheduler.is_frame_scheduled()) {
+                WakeAction::Skip => return,
+                WakeAction::PumpAsync => {
+                    // Frames disabled (Hidden/Paused/Detached): the mid-frame
+                    // `drive_async_tasks` poll inside `handle_begin_frame`
+                    // never runs because no frame runs at all — this
+                    // explicit call is the ONLY thing keeping a spawned
+                    // future progressing while backgrounded. No begin/draw
+                    // frame, no tickers, no pipeline, no present.
+                    scheduler.drive_async_tasks();
+                    // Reuse the existing no-present throttle: a backgrounded
+                    // wake with dirty/pending work re-requesting another
+                    // wake every loop tick has the identical busy-spin risk
+                    // an un-presented frame with an open gate has, and
+                    // nothing else paces it while frames are disabled.
+                    let keeps_gate_open = keeps_frame_gate_open(
+                        binding.needs_redraw(),
+                        scheduler.is_frame_scheduled(),
+                        binding.has_pending_work(realm),
+                    );
+                    if let Some(pace) = no_present_fallback_pace(false, keeps_gate_open) {
+                        std::thread::sleep(pace);
+                    }
+                    return;
+                }
+                WakeAction::Render => {}
             }
 
             let now = web_time::Instant::now();
@@ -1226,10 +1620,17 @@ where
             true
         }));
 
-        // Window active status -> RealmEvent::Active (currently a no-op; see
-        // that variant's doc).
-        window.on_active_status_change(Box::new(move |active| {
-            let _ = dispatch_platform_realm(realm_dispatch, RealmEvent::Active(active));
+        // Window focus/visibility -> the `(visible, focused)`
+        // `AppLifecycleState` derivation (ADR-0035 PR2). `on_visibility_
+        // status_change` rides winit's `Occluded` event; Wayland delivery
+        // is compositor-conditional (see that callback's doc) — where a
+        // compositor never sends it, the window is treated as always
+        // visible, matching pre-PR2 behavior.
+        window.on_active_status_change(Box::new(move |focused| {
+            let _ = dispatch_platform_realm(realm_dispatch, RealmEvent::WindowFocus(focused));
+        }));
+        window.on_visibility_status_change(Box::new(move |visible| {
+            let _ = dispatch_platform_realm(realm_dispatch, RealmEvent::WindowVisibility(visible));
         }));
 
         // 9. Store window in AppBinding for runtime access — BEFORE
@@ -1354,13 +1755,11 @@ where
     use std::{path::PathBuf, sync::Arc};
 
     use flui_engine::wgpu::Renderer;
-    use flui_foundation::HasInstance;
     use flui_hot_reload::HotReloadDriver;
     use flui_platform::{
         AndroidPlatform, Platform, WindowOptions,
         traits::{DispatchEventResult, PlatformInput},
     };
-    use flui_scheduler::{AppLifecycleState, Scheduler};
     use parking_lot::Mutex;
 
     use crate::embedder::PlatformWindowHandle;
@@ -1483,16 +1882,24 @@ where
 
                 let binding = AppBinding::instance();
                 let has_pending = binding.has_pending_work(realm);
-                if !inbox_redraw
-                    && !binding.needs_redraw()
-                    && !has_pending
-                    && !Scheduler::instance().is_frame_scheduled()
+                let dirty = inbox_redraw || binding.needs_redraw() || has_pending;
+                let scheduler = Scheduler::instance();
+                match wake_action(scheduler.frames_enabled(), dirty, scheduler.is_frame_scheduled())
                 {
-                    return;
+                    WakeAction::Skip => return,
+                    WakeAction::PumpAsync => {
+                        // Frames disabled: pump only the async driver — no
+                        // begin/draw frame, no tickers, no pipeline, no
+                        // present. See `wake_action`'s doc for why this is
+                        // the only thing keeping a spawned future
+                        // progressing while backgrounded.
+                        scheduler.drive_async_tasks();
+                        return;
+                    }
+                    WakeAction::Render => {}
                 }
 
                 let now = web_time::Instant::now();
-                let scheduler = Scheduler::instance();
                 // Scheduler callbacks and rendering share ONE `UiRealm::enter`
                 // dynamic extent; callbacks may legally resolve realm-local
                 // capabilities throughout the complete frame transaction.
@@ -1559,10 +1966,31 @@ where
         tracing::info!("Window closed");
     }));
 
-    // Window active status -> RealmEvent::Active (currently a no-op; see
-    // that variant's doc).
-    window.on_active_status_change(Box::new(move |active| {
-        let _ = dispatch_platform_realm(realm_dispatch, RealmEvent::Active(active));
+    // Window active status. On Android this one callback conflates real
+    // window focus (`MainEvent::GainedFocus`/`LostFocus`) with the app's
+    // actual pause/resume signal (`MainEvent::Resume`/`Pause` currently fire
+    // the identical `dispatch_active_status_change` — see
+    // `flui-platform`'s `platforms/android/mod.rs`); a dedicated
+    // `MainEvent` -> lifecycle callback that tells them apart is a named
+    // follow-up (ADR-0035), not this PR. Until that split lands, this keeps
+    // the existing transport but fixes the mapping: `false` ladders all the
+    // way to `Paused` and `true` back to `Resumed` — Android's
+    // backgrounding signal needs the deeper ladder the desktop/web
+    // `(visible, focused)` derivation (which only ever reaches
+    // `Inactive`/`Hidden`) does not produce.
+    window.on_active_status_change(Box::new(move |resumed| {
+        let target = if resumed {
+            AppLifecycleState::Resumed
+        } else {
+            AppLifecycleState::Paused
+        };
+        let _ = dispatch_platform_realm(
+            realm_dispatch,
+            RealmEvent::Frame(Box::new(move |realm| {
+                let old = Scheduler::instance().lifecycle_state();
+                emit_lifecycle_transition(realm, old, target);
+            })),
+        );
     }));
 
     // 9. Store window in AppBinding for runtime access — BEFORE marking the
@@ -1625,12 +2053,10 @@ where
     use std::sync::Arc;
 
     use flui_engine::wgpu::Renderer;
-    use flui_foundation::HasInstance;
     use flui_platform::{
         WindowOptions,
         traits::{DispatchEventResult, PlatformInput},
     };
-    use flui_scheduler::{AppLifecycleState, Scheduler};
     use parking_lot::Mutex;
 
     use crate::embedder::PlatformWindowHandle;
@@ -1731,16 +2157,23 @@ where
 
                 let binding = AppBinding::instance();
                 let has_pending = binding.has_pending_work(realm);
-                if !inbox_redraw
-                    && !binding.needs_redraw()
-                    && !has_pending
-                    && !Scheduler::instance().is_frame_scheduled()
+                let dirty = inbox_redraw || binding.needs_redraw() || has_pending;
+                let scheduler = Scheduler::instance();
+                match wake_action(scheduler.frames_enabled(), dirty, scheduler.is_frame_scheduled())
                 {
-                    return;
+                    WakeAction::Skip => return,
+                    WakeAction::PumpAsync => {
+                        // Frames disabled: pump only the async driver — see
+                        // `wake_action`'s doc for why this is the only thing
+                        // keeping a spawned future progressing while
+                        // backgrounded.
+                        scheduler.drive_async_tasks();
+                        return;
+                    }
+                    WakeAction::Render => {}
                 }
 
                 let now = web_time::Instant::now();
-                let scheduler = Scheduler::instance();
                 // Scheduler callbacks and rendering share one realm entry.
                 scheduler.drive_frame(now, || {
                     let mut slot = renderer_frame.lock();
@@ -1818,8 +2251,12 @@ where
         // On web, no explicit quit mechanism needed
     }));
 
-    window.on_active_status_change(Box::new(move |active| {
-        let _ = dispatch_platform_realm(realm_dispatch, RealmEvent::Active(active));
+    // No `on_visibility_status_change` registration on web (yet): there is
+    // no occlusion signal wired for this backend in this PR (winit's
+    // `Occluded` is desktop-only) — a DOM `visibilitychange` listener is a
+    // future follow-up, not this PR's scope.
+    window.on_active_status_change(Box::new(move |focused| {
+        let _ = dispatch_platform_realm(realm_dispatch, RealmEvent::WindowFocus(focused));
     }));
 
     // 7. Store window — BEFORE marking the lifecycle Resumed, which can

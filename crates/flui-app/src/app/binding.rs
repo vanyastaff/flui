@@ -43,7 +43,7 @@ use flui_layer::Scene;
 use flui_platform::traits::{Clipboard, PlatformInput, PlatformWindow};
 use flui_rendering::binding::RendererBinding;
 use flui_rendering::constraints::BoxConstraints;
-use flui_scheduler::Scheduler;
+use flui_scheduler::{AppLifecycleState, Scheduler};
 use flui_types::{
     HapticFeedback, Size,
     geometry::{Bounds, Pixels, px},
@@ -439,6 +439,28 @@ impl AppBinding {
             //    all — this initializer runs exactly once per thread, for
             //    the canonical singleton only.
             Scheduler::instance().set_on_frame_scheduled(Some(binding.frame_wake_callback()));
+
+            // Frames-disabled→enabled re-dirty wiring (ADR-0035 PR2): FLUI
+            // has no retained-scene re-present, so an app that was
+            // `Hidden`/`Paused`/`Detached` and comes back to `Resumed`/
+            // `Inactive` needs the root explicitly re-dirtied alongside the
+            // frame the scheduler's re-enable leg (PR1) already guarantees
+            // gets requested — otherwise that frame finds nothing dirty and
+            // produces `FramePaintOutcome::Idle` instead of presenting
+            // fresh content. Installed HERE, for the identical reasons as
+            // the wake hook just above: capturing `Send + Sync` handles (the
+            // shared pipeline owner `Arc`, `frame_wake_callback()`) up front
+            // avoids re-resolving `AppBinding::instance()`/`Scheduler::
+            // instance()` — both thread-locals — from whatever thread the
+            // lifecycle listener fires on, and installing it only in this
+            // one-time initializer keeps a throwaway `AppBinding::new()`
+            // from stealing the shared listener slot the way installing it
+            // in `new()` would.
+            install_frames_reenable_redirty_listener(
+                Scheduler::instance(),
+                Arc::clone(&binding.shared_pipeline_owner),
+                binding.frame_wake_callback(),
+            );
 
             binding
             };
@@ -1487,6 +1509,31 @@ impl AppBinding {
             }
         }
     }
+}
+
+/// Registers a `Scheduler` lifecycle listener that re-dirties
+/// `pipeline_owner`'s root and calls `wake` on the frames-disabled→enabled
+/// edge (ADR-0035 PR2) — see [`AppBinding::instance`]'s installer for why
+/// this lives in that one-time initializer and captures `Send + Sync`
+/// handles rather than the live binding/scheduler.
+///
+/// Pulled into its own fn so a test can exercise the exact production
+/// listener body against a throwaway `Scheduler`/`PipelineOwner` pair
+/// instead of the real thread-local singletons.
+fn install_frames_reenable_redirty_listener(
+    scheduler: &Scheduler,
+    pipeline_owner: Arc<RwLock<flui_rendering::pipeline::PipelineOwner>>,
+    wake: Arc<dyn Fn() + Send + Sync>,
+) {
+    let frames_were_enabled = Arc::new(AtomicBool::new(scheduler.frames_enabled()));
+    scheduler.add_lifecycle_state_listener(Arc::new(move |state: AppLifecycleState| {
+        let now_enabled = state.should_render();
+        let was_enabled = frames_were_enabled.swap(now_enabled, Ordering::AcqRel);
+        if !was_enabled && now_enabled {
+            crate::bindings::redirty_pipeline_root(&pipeline_owner);
+            wake();
+        }
+    }));
 }
 
 impl std::fmt::Debug for AppBinding {
@@ -3203,6 +3250,86 @@ mod tests {
             );
             assert_eq!(backend.render_scene_calls, 1);
             assert_eq!(app.frames_rendered(), 1);
+        }
+
+        /// Same deferral-lesson shape as
+        /// `allow_first_frame_alone_presents_the_previously_withheld_content`
+        /// above, for ADR-0035 PR2's re-enable listener instead of the
+        /// first-frame gate: FLUI has no retained-scene re-present, so a
+        /// `Hidden` -> `Resumed` transition needs the same explicit re-dirty
+        /// `allow_first_frame` needed — this time driven by a `Scheduler`
+        /// lifecycle listener rather than a direct call.
+        ///
+        /// Installed against a throwaway `Scheduler::new()`, not
+        /// `Scheduler::instance()`, so this test neither depends on nor
+        /// pollutes the process-global thread-local singleton
+        /// `AppBinding::instance()`'s bootstrap installs the real listener
+        /// against.
+        ///
+        /// Red-check: comment out the redirty call inside
+        /// `install_frames_reenable_redirty_listener`'s body (leave only
+        /// `wake()`) and the final assertion fails — the woken frame finds
+        /// a clean pipeline and presents `false` (`FramePaintOutcome::Idle`)
+        /// instead of `true`.
+        #[test]
+        fn frames_reenable_redirties_root_so_next_frame_paints_not_idle() {
+            use std::sync::atomic::AtomicUsize;
+
+            let app = AppBinding::new();
+            let realm = mount_root(&app);
+            let mut backend = CountingRasterBackend::new();
+
+            // Settle the dirty state the mount above left behind, so the
+            // frames below are attributable only to the listener under test.
+            assert!(app.render_frame_entered(&realm, &mut backend));
+            assert_eq!(backend.render_scene_calls, 1);
+            assert!(
+                !app.render_frame_entered(&realm, &mut backend),
+                "precondition: settled — nothing dirty left after the first frame"
+            );
+            assert_eq!(backend.render_scene_calls, 1);
+
+            let scheduler = flui_scheduler::Scheduler::new();
+            let wake_calls = Arc::new(AtomicUsize::new(0));
+            let wake_calls_for_listener = Arc::clone(&wake_calls);
+            let wake: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+                wake_calls_for_listener.fetch_add(1, Ordering::SeqCst);
+            });
+            install_frames_reenable_redirty_listener(
+                &scheduler,
+                Arc::clone(&app.shared_pipeline_owner),
+                wake,
+            );
+
+            // enabled -> enabled (Resumed -> Inactive) must fire neither.
+            scheduler.handle_app_lifecycle_state_change(AppLifecycleState::Inactive);
+            assert_eq!(wake_calls.load(Ordering::SeqCst), 0);
+            assert!(
+                !app.render_frame_entered(&realm, &mut backend),
+                "an enabled->enabled edge must not redirty the root"
+            );
+            assert_eq!(backend.render_scene_calls, 1);
+
+            // Disable, then re-enable: the edge must redirty AND wake.
+            scheduler.handle_app_lifecycle_state_change(AppLifecycleState::Hidden);
+            assert_eq!(
+                wake_calls.load(Ordering::SeqCst),
+                0,
+                "the disable edge itself must not redirty/wake"
+            );
+            scheduler.handle_app_lifecycle_state_change(AppLifecycleState::Resumed);
+            assert_eq!(
+                wake_calls.load(Ordering::SeqCst),
+                1,
+                "the re-enable edge must wake exactly once"
+            );
+
+            assert!(
+                app.render_frame_entered(&realm, &mut backend),
+                "the root must be marked dirty by the re-enable listener so the next frame \
+                 paints, not Idle"
+            );
+            assert_eq!(backend.render_scene_calls, 2);
         }
 
         /// Red-check: replace `first_frame_deferred_count.fetch_sub`'s

@@ -37,3 +37,4 @@ pub use flui_semantics::SemanticsBinding;
 pub use flui_view::WidgetsBinding;
 // Re-export the local binding
 pub use renderer_binding::RenderingFlutterBinding;
+pub(crate) use renderer_binding::redirty_pipeline_root;

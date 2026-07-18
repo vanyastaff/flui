@@ -626,6 +626,21 @@ impl ApplicationHandler for WinitApp {
                     win.callbacks().dispatch_appearance_changed();
                 }
             }
+            WinitWindowEvent::Occluded(occluded) => {
+                tracing::debug!(?platform_id, ?occluded, "Window occlusion changed");
+
+                // `occluded == true` means fully covered/not visible;
+                // `PlatformWindow::on_visibility_status_change`'s contract
+                // is `is_visible`, so this is the negation. Wayland
+                // delivery rides the xdg-shell v6 `suspended` state (a
+                // compositor-conditional extension); on a compositor that
+                // never sends it, this arm simply never fires, matching
+                // the pre-existing always-visible behavior.
+                if let Some(ref win) = window {
+                    win.set_visible(!occluded);
+                    win.callbacks().dispatch_visibility_status_change(!occluded);
+                }
+            }
             _ => {}
         }
     }
@@ -1017,6 +1032,10 @@ impl PlatformWindow for WinitWindowHandle {
 
     fn on_active_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
         self.inner.on_active_status_change(callback);
+    }
+
+    fn on_visibility_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
+        self.inner.on_visibility_status_change(callback);
     }
 
     fn on_hover_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
