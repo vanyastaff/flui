@@ -4,7 +4,7 @@
 //! view type (Stateless, Proxy, Stateful, Render). Behaviors encapsulate the
 //! view-specific logic while the unified Element handles all common operations.
 
-use std::{collections::HashMap, marker::PhantomData};
+use std::{collections::HashMap, marker::PhantomData, sync::Arc};
 
 use flui_foundation::{ElementId, ListenerId, RenderId};
 use flui_rendering::{
@@ -1179,23 +1179,14 @@ where
     }
 
     fn on_update(&mut self, core: &ElementCore<V, A>, owner: &mut crate::ElementOwner<'_>) {
-        // On update, we need to:
-        // 1. Unsubscribe from old listenable
-        // 2. Subscribe to new listenable
-        // 3. Let StatefulBehavior handle state update
-
-        if let Some(listener_id) = self.listener_id.take() {
-            let listenable = core.view().listenable();
-            listenable.remove_listener(listener_id);
-        }
-
-        let listenable = core.view().listenable();
-        let mark_dirty = core.create_mark_dirty_callback();
-        self.listener_id = Some(listenable.add_listener(mark_dirty));
-
+        // Listener resubscription happens in `on_view_updated` below, not
+        // here: `Element::update` (unified.rs) already swapped `core`'s
+        // view by the time `on_update` fires, so `core.view()` at this
+        // point IS the new view — there is no way to reach the old
+        // listenable to unsubscribe from it. `on_view_updated` is handed
+        // the pre-swap `old_view` explicitly and is the correct place to
+        // diff the two listenable instances.
         self.stateful.on_update(core, owner);
-
-        tracing::debug!("AnimatedBehavior::on_update resubscribed to listenable");
     }
 
     fn on_activate(&mut self, core: &mut ElementCore<V, A>) {
@@ -1212,6 +1203,42 @@ where
         old_view: &V,
         owner: &mut crate::ElementOwner<'_>,
     ) {
+        // Swap the subscription only when the listenable *instance* actually
+        // changed — `Arc::ptr_eq`, matching Flutter's reference-identity
+        // `Listenable` comparison (see `_AnimatedState.didUpdateWidget`'s
+        // `widget.listenable != oldWidget.listenable`, and FLUI's own
+        // `ValueListenableBuilderState::did_update_view`, which uses the same
+        // guard). A rebuild that passes the same `Arc<dyn Listenable>` through
+        // unchanged (by far the common case — the parent rebuilt but the
+        // animation itself didn't) must not unsubscribe/resubscribe.
+        //
+        // `old_view` is the pre-swap snapshot `Element::update` captured
+        // before replacing `core`'s view, so `old_view.listenable()` reaches
+        // the actual old instance — unlike reading `core.view()` twice, which
+        // is the bug this replaces (both reads would resolve to the new view).
+        let old_listenable = old_view.listenable();
+        let new_listenable = core.view().listenable();
+
+        if !Arc::ptr_eq(&old_listenable, &new_listenable) {
+            // Safe to unsubscribe unconditionally: none of `AnimatedView`'s
+            // current listenable sources (`AnimationController`, wrapped in
+            // `flui-animation`) dispose their backing `ChangeNotifier` from
+            // `AnimationController::dispose` — only the controller's own
+            // "disposed" flag flips, so `remove_listener` on an
+            // instance-swapped-away-from old listenable never hits
+            // `ChangeNotifier`'s used-after-dispose debug assert here.
+            if let Some(listener_id) = self.listener_id.take() {
+                old_listenable.remove_listener(listener_id);
+            }
+
+            let mark_dirty = core.create_mark_dirty_callback();
+            self.listener_id = Some(new_listenable.add_listener(mark_dirty));
+
+            tracing::debug!(
+                "AnimatedBehavior::on_view_updated resubscribed: listenable instance changed"
+            );
+        }
+
         self.stateful.on_view_updated(core, old_view, owner);
     }
 
