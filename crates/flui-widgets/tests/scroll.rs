@@ -583,9 +583,10 @@ fn scroll_controller_thumb_offset_fraction_at_scroll_midpoint() {
 // ============================================================================
 
 /// Minimal metrics fixture for these boundary-clamp tests: only
-/// `min_scroll_extent`/`max_scroll_extent` matter to `ClampingScrollPhysics`.
+/// `min_scroll_extent`/`max_scroll_extent` matter to `ClampingScrollPhysics`;
+/// `pixels`/`viewport_dimension` are passed explicitly as `0.0` (unused here).
 fn metrics_with_extents(min_scroll_extent: f32, max_scroll_extent: f32) -> ScrollMetrics {
-    ScrollMetrics::new(0.0, min_scroll_extent, max_scroll_extent)
+    ScrollMetrics::new(0.0, min_scroll_extent, max_scroll_extent, 0.0)
 }
 
 #[test]

@@ -65,22 +65,26 @@ impl ScrollMetrics {
     /// fixture or a caller assembling metrics from values that don't come
     /// from a live [`ScrollPosition`] (e.g. a hypothetical "what if" probe).
     /// Prefer [`ScrollMetrics::from`] when a [`ScrollPosition`] is at hand.
+    ///
+    /// All four fields are required: a caller that only cares about
+    /// `pixels`/`min_scroll_extent`/`max_scroll_extent` still must pass an
+    /// explicit `viewport_dimension` (even if `0.0`) rather than have it
+    /// silently defaulted — a physics implementation that reads
+    /// `viewport_dimension` (e.g. a future page-snapping physics) must not
+    /// get `0.0` from every fixture that forgot to set it.
     #[must_use]
-    pub fn new(pixels: f32, min_scroll_extent: f32, max_scroll_extent: f32) -> Self {
+    pub fn new(
+        pixels: f32,
+        min_scroll_extent: f32,
+        max_scroll_extent: f32,
+        viewport_dimension: f32,
+    ) -> Self {
         Self {
             pixels,
             min_scroll_extent,
             max_scroll_extent,
-            viewport_dimension: 0.0,
+            viewport_dimension,
         }
-    }
-
-    /// Same as [`ScrollMetrics::new`], additionally specifying
-    /// `viewport_dimension` (defaulted to `0.0` otherwise).
-    #[must_use]
-    pub fn with_viewport_dimension(mut self, viewport_dimension: f32) -> Self {
-        self.viewport_dimension = viewport_dimension;
-        self
     }
 }
 
@@ -351,11 +355,11 @@ mod tests {
 
     use super::*;
 
-    /// Builds a `ScrollMetrics` with the given `pixels`/`min`/`max`, leaving
-    /// `viewport_dimension` at 0.0 (unused by the boundary/ballistic math
-    /// under test here).
+    /// Builds a `ScrollMetrics` with the given `pixels`/`min`/`max`, passing
+    /// `viewport_dimension: 0.0` explicitly — unused by the boundary/
+    /// ballistic math under test here.
     fn metrics(pixels: f32, min_scroll_extent: f32, max_scroll_extent: f32) -> ScrollMetrics {
-        ScrollMetrics::new(pixels, min_scroll_extent, max_scroll_extent)
+        ScrollMetrics::new(pixels, min_scroll_extent, max_scroll_extent, 0.0)
     }
 
     // ClampingScrollPhysics ---------------------------------------------------

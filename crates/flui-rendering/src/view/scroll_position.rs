@@ -42,6 +42,24 @@ struct State {
     /// policy read and the recompute it drives happen under the one lock
     /// acquisition `apply_viewport_dimension` already takes.
     dimension_policy: DimensionChangePolicy,
+    /// Whether `apply_viewport_dimension` has ever committed a real
+    /// dimension. Distinguishes "never laid out" from "laid out at literal
+    /// `0.0`" — mirrors Flutter's `hasViewportDimension` (`this.viewportDimension`
+    /// vs. `null` in `_PagePosition.applyViewportDimension`). The very first
+    /// call must not run the `KeepFractionalPage` recompute: there is no
+    /// prior dimension to divide by, so treating `viewport_dimension: 0.0`'s
+    /// initial value as a real "old dimension" would reinterpret whatever
+    /// pixels were seeded before layout (e.g. `ScrollPosition::new`) as a
+    /// page count instead of a pixel offset.
+    has_applied_viewport_dimension: bool,
+    /// The fractional page cached by `KeepFractionalPage` whenever a resize
+    /// collapses the viewport to a `0.0` dimension. Mirrors
+    /// `_PagePosition._cachedPage`: while the dimension is `0.0`, `pixels`
+    /// itself is set to `0.0` (there is no viewport to derive a pixel offset
+    /// against), so the page must live in a separate field — one a
+    /// concurrent `apply_content_dimensions` clamp on `pixels` cannot
+    /// corrupt — until the viewport resizes back to a real dimension.
+    cached_page: Option<f32>,
 }
 
 impl State {
@@ -52,7 +70,38 @@ impl State {
             max_scroll_extent: 0.0,
             viewport_dimension: 0.0,
             dimension_policy: DimensionChangePolicy::KeepPixels,
+            has_applied_viewport_dimension: false,
+            cached_page: None,
         }
+    }
+}
+
+/// Floating-point tolerance for snapping a recomputed fractional page back to
+/// the nearest whole page when the value "should" have landed exactly on one.
+///
+/// # Flutter parity
+///
+/// Mirrors `_PagePosition.getPageFromPixels`'s round-snap against
+/// `precisionErrorTolerance` (`widgets/page_view.dart`, tag `3.44.0`): a
+/// `pixels / (dimension * fraction)` division should exactly reconstruct an
+/// integral page when the pixels were originally seeded from `page *
+/// dimension * fraction`, but float rounding leaves residue. Flutter's
+/// `precisionErrorTolerance` is `1e-10`, sized for `f64`; `f32` carries far
+/// fewer significant digits, so that fixed tolerance doesn't transfer
+/// numerically — same reasoning `EXCESS_EPSILON` documents in
+/// `interaction/interactive_viewer.rs`. Chosen against the scale of a page
+/// count (small integers, typically single digits to low hundreds) rather
+/// than absolute machine epsilon.
+const PAGE_ROUND_EPSILON: f32 = 1e-4;
+
+/// Snaps `page` to the nearest whole page when within [`PAGE_ROUND_EPSILON`]
+/// of one; otherwise returns it unchanged.
+fn round_snap_page(page: f32) -> f32 {
+    let rounded = page.round();
+    if (page - rounded).abs() < PAGE_ROUND_EPSILON {
+        rounded
+    } else {
+        page
     }
 }
 
@@ -87,7 +136,39 @@ pub struct ScrollPositionSnapshot {
 /// performs in `widgets/page_view.dart` (tag `3.44.0`) so the same logical
 /// page stays in view across a viewport resize. Ported here as a general
 /// policy on the plain `ScrollPosition` (rather than bolted onto a future
-/// `PageView`-only type) so any scrollable can opt in.
+/// `PageView`-only type) so any scrollable can opt in. The oracle branches
+/// three ways on the *old* dimension: never established (`null`) uses
+/// `_pageToUseOnStartup`; collapsed to `0.0` reads `_cachedPage`; anything
+/// else recomputes via `getPageFromPixels`/`getPixelsFromPage`. See
+/// [`ScrollPosition::apply_viewport_dimension`] for how each branch maps
+/// here, and the divergences (deferred pieces, not silently dropped
+/// behavior) called out below.
+///
+/// # Deferred / documented divergences from the oracle
+///
+/// - **First-ever establishment.** Flutter seeds `page` from
+///   `_pageToUseOnStartup` (`PageController`'s `initialPage`, or a value
+///   restored from `PageStorage`). FLUI has no `PageController` yet (that is
+///   PR2's job) — the first `apply_viewport_dimension` call instead leaves
+///   `pixels` untouched, i.e. behaves like `KeepPixels` for that one call.
+///   A caller that seeds `pixels` via [`ScrollPosition::new`] before the
+///   first layout gets that literal pixel value, not a page-relative one.
+/// - **`viewport_fraction > 1.0`.** Flutter centers each page within a
+///   wider-than-one-page viewport via `_initialPageOffset`
+///   (`max(0, viewportDimension * (viewportFraction - 1) / 2)`), added to
+///   both `getPageFromPixels` and `getPixelsFromPage`. This is not modeled
+///   here — only `viewport_fraction <= 1.0` (many small pages per viewport,
+///   or exactly one) is exercised by PR1; a `viewport_fraction > 1.0` caller
+///   gets the un-centered formula until a real multi-page-viewport use case
+///   lands.
+/// - **No public "current page" accessor.** Flutter also exposes
+///   `PageMetrics.page`/`_PagePosition.page`, a *defensively* guarded
+///   `max(0.0, clampDouble(pixels, min, max)) / max(1.0, viewportDimension *
+///   viewportFraction)` meant to be safe to call at any time (including
+///   before content dimensions exist). That is a different, public-facing
+///   computation from the internal recompute this policy drives, and is out
+///   of scope for PR1 — a future `page()`-style accessor should use the
+///   guarded formula, not this one.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum DimensionChangePolicy {
@@ -95,15 +176,21 @@ pub enum DimensionChangePolicy {
     /// only behavior, and the default.
     #[default]
     KeepPixels,
-    /// Keep the fractional "page" — `pixels / max(1.0, viewport_dimension *
+    /// Keep the fractional "page" — `pixels / (viewport_dimension *
     /// viewport_fraction)` — unchanged, recomputing `pixels` for the new
-    /// dimension.
+    /// dimension. See the enum-level docs for exactly how the old-dimension
+    /// null/zero/established three-way branch is handled, and the
+    /// documented divergences from the Flutter oracle.
     ///
     /// `viewport_fraction` is the fraction of the viewport one logical page
     /// occupies (`1.0` = one page per viewport, matching Flutter's
-    /// `PageController.viewportFraction` default).
+    /// `PageController.viewportFraction` default). Must be `> 0.0` — Flutter
+    /// asserts this at `PageController` construction; FLUI has no
+    /// `PageController` yet, so `set_dimension_policy`'s caller is
+    /// responsible (checked with a `debug_assert!` in the recompute).
     KeepFractionalPage {
-        /// Fraction of the viewport one logical page occupies.
+        /// Fraction of the viewport one logical page occupies. Must be
+        /// `> 0.0`.
         viewport_fraction: f32,
     },
 }
@@ -244,7 +331,12 @@ impl fmt::Debug for ScrollPosition {
                     .field("min_scroll_extent", &state.min_scroll_extent)
                     .field("max_scroll_extent", &state.max_scroll_extent)
                     .field("viewport_dimension", &state.viewport_dimension)
-                    .field("dimension_policy", &state.dimension_policy);
+                    .field("dimension_policy", &state.dimension_policy)
+                    .field(
+                        "has_applied_viewport_dimension",
+                        &state.has_applied_viewport_dimension,
+                    )
+                    .field("cached_page", &state.cached_page);
             }
             None => {
                 d.field("state", &"<locked>");
@@ -435,19 +527,64 @@ impl ViewportOffset for ScrollPosition {
                 false
             } else {
                 // Flutter parity: `_PagePosition.applyViewportDimension`
-                // (`widgets/page_view.dart`, tag `3.44.0`) recomputes the
-                // pixel offset from the page fraction *before* committing the
-                // new dimension, so the same logical page stays in view
-                // across a resize. Pure recompute under the lock already
-                // held here — no notify, no scheduling; the dirty-flag +
-                // coalesced flush below carries the observable change.
+                // (`widgets/page_view.dart`, tag `3.44.0`). Pure recompute
+                // under the lock already held here — no notify, no
+                // scheduling; the dirty-flag + coalesced flush below carries
+                // the observable change.
                 if let DimensionChangePolicy::KeepFractionalPage { viewport_fraction } =
                     state.dimension_policy
                 {
-                    let old_dimension = state.viewport_dimension;
-                    let old_page = state.pixels / (old_dimension * viewport_fraction).max(1.0);
-                    state.pixels = old_page * (viewport_dimension * viewport_fraction).max(1.0);
+                    debug_assert!(
+                        viewport_fraction > 0.0,
+                        "BUG: DimensionChangePolicy::KeepFractionalPage.viewport_fraction \
+                         must be > 0.0 (mirrors PageController's constructor assert in Flutter)"
+                    );
+                    // The oracle's three-way branch on the *old* dimension:
+                    // never established (null) is handled entirely by this
+                    // `if`'s absence below (see the comment after it); `0.0`
+                    // (a collapsed viewport) reads `cached_page` instead of
+                    // re-deriving it from `pixels`, which by then reads 0.0
+                    // and which a concurrent `apply_content_dimensions` clamp
+                    // could otherwise have stomped; anything else recomputes
+                    // via the pixels/dimension ratio.
+                    if state.has_applied_viewport_dimension {
+                        let old_dimension = state.viewport_dimension;
+                        let page = if old_dimension == 0.0 {
+                            state.cached_page.unwrap_or(0.0)
+                        } else {
+                            // Numerator clamp: an overscrolled `pixels` below
+                            // `min_scroll_extent` (allowed by
+                            // `BouncingScrollPhysics`) must not encode as a
+                            // negative page — Flutter's `getPageFromPixels`
+                            // clamps the same way (`math.max(0.0, ...)`).
+                            let raw_page =
+                                state.pixels.max(0.0) / (old_dimension * viewport_fraction);
+                            round_snap_page(raw_page)
+                        };
+
+                        if viewport_dimension == 0.0 {
+                            // Collapsing to zero: cache the page instead of
+                            // encoding it in `pixels` — `pixels` becomes
+                            // `0.0`, matching `getPixelsFromPage` evaluated at
+                            // a zero dimension, and the real state survives
+                            // in `cached_page` where a concurrent extent
+                            // clamp cannot reach it.
+                            state.cached_page = Some(page);
+                            state.pixels = 0.0;
+                        } else {
+                            state.cached_page = None;
+                            state.pixels = page * (viewport_dimension * viewport_fraction);
+                        }
+                    }
+                    // else: first-ever dimension establishment. Flutter uses
+                    // `_pageToUseOnStartup` here (a `PageController`-level
+                    // concept PR2 introduces); until then this call behaves
+                    // like `KeepPixels` — the seeded `pixels` value (e.g.
+                    // from `ScrollPosition::new`) is left untouched rather
+                    // than reinterpreted as a page count against a
+                    // never-established prior dimension.
                 }
+                state.has_applied_viewport_dimension = true;
                 state.viewport_dimension = viewport_dimension;
                 true
             }
@@ -780,7 +917,7 @@ mod tests {
     }
 
     #[test]
-    fn keep_fractional_page_guards_against_zero_dimension_without_nan_or_inf() {
+    fn keep_fractional_page_caches_the_page_across_a_zero_dimension_collapse_and_restore() {
         let mut position = ScrollPosition::zero();
         assert!(position.apply_viewport_dimension(300.0));
         position.set_pixels(150.0); // page = 150 / 300 = 0.5
@@ -788,8 +925,10 @@ mod tests {
             viewport_fraction: 1.0,
         });
 
-        // Collapse to a zero dimension: the `max(1.0, old_dim * fraction)`
-        // divisor guard must prevent a divide-by-zero, not produce NaN/inf.
+        // Collapse to a zero dimension: the page (0.5) is cached, not
+        // encoded in `pixels` — `pixels` becomes 0.0, matching
+        // `getPixelsFromPage` evaluated at a zero dimension. No NaN/inf
+        // either way.
         assert!(position.apply_viewport_dimension(0.0));
         assert!(
             position.pixels().is_finite(),
@@ -797,13 +936,13 @@ mod tests {
         );
         assert_eq!(
             position.pixels(),
-            0.5,
-            "page 0.5 recomputed against the guarded divisor (max(1.0, 0.0)) \
-             lands at pixels = 0.5 * 1.0"
+            0.0,
+            "a collapsed (0.0-dimension) viewport has no pixel offset to derive — \
+             the real page state lives in the cached page, not in `pixels`"
         );
 
-        // Recover from zero: the `max(1.0, new_dim * fraction)` multiplier
-        // guard must not produce NaN/inf either.
+        // Recover from zero: the cached page (0.5), not a formula re-derived
+        // from `pixels` (which reads 0.0 post-collapse), drives the restore.
         assert!(position.apply_viewport_dimension(600.0));
         assert!(
             position.pixels().is_finite(),
@@ -812,8 +951,54 @@ mod tests {
         assert_eq!(
             position.pixels(),
             300.0,
-            "page 0.5 recomputed against the guarded multiplier (max(1.0, 600.0)) \
-             lands at pixels = 0.5 * 600.0"
+            "the cached page (0.5) recomputed against the restored dimension \
+             (600 * 1.0) lands at pixels = 0.5 * 600.0, not 0.0 (which a \
+             pixels-derived formula would wrongly produce)"
+        );
+    }
+
+    /// Red-check for the reviewed 🔴 bug: the very first
+    /// `apply_viewport_dimension` call must not reinterpret pixels seeded
+    /// before any layout (e.g. via `ScrollPosition::new`) as a page count
+    /// against a never-established prior dimension. Before the
+    /// `has_applied_viewport_dimension` guard existed, this reproduced as
+    /// `209.0px` seeded, first layout at `300px`, exploding to `62,700px`
+    /// (`209 / max(1.0, 0.0) * 300`).
+    #[test]
+    fn keep_fractional_page_first_ever_dimension_does_not_reinterpret_seeded_pixels_as_a_page() {
+        let mut position = ScrollPosition::new(209.0);
+        position.set_dimension_policy(DimensionChangePolicy::KeepFractionalPage {
+            viewport_fraction: 1.0,
+        });
+
+        assert!(position.apply_viewport_dimension(300.0));
+        assert_eq!(
+            position.pixels(),
+            209.0,
+            "the first-ever dimension establishment must leave pre-seeded pixels \
+             untouched, not reinterpret them as a page count (209 / 0 * 300 \
+             would explode to 62,700px)"
+        );
+    }
+
+    /// Pins the numerator clamp: an overscrolled (negative) pixel value —
+    /// reachable under `BouncingScrollPhysics` — must not encode as a
+    /// negative page across a resize.
+    #[test]
+    fn keep_fractional_page_clamps_a_negative_overscrolled_page_to_zero() {
+        let mut position = ScrollPosition::zero();
+        assert!(position.apply_viewport_dimension(300.0));
+        position.set_pixels(-50.0); // overscrolled past min_scroll_extent
+        position.set_dimension_policy(DimensionChangePolicy::KeepFractionalPage {
+            viewport_fraction: 1.0,
+        });
+
+        assert!(position.apply_viewport_dimension(600.0));
+        assert_eq!(
+            position.pixels(),
+            0.0,
+            "an overscrolled negative pixel value must clamp to page 0.0, not \
+             encode a negative page (which would land pixels at -100.0)"
         );
     }
 
