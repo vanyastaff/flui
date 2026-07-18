@@ -988,7 +988,6 @@ where
             platform.quit();
             return;
         }
-        register_hit_test_render_view();
 
         // 3b. Wire the wake chain (E0a).
         //
@@ -1151,6 +1150,10 @@ where
                 binding.has_pending_work(realm),
             );
             if let Some(pace) = no_present_fallback_pace(presented, keeps_gate_open) {
+                // This runs on the platform event-loop thread, so the sleep
+                // blocks input dispatch for its duration — acceptable here
+                // because this path only fires for an occluded/undamaged
+                // window with a ticker still running, not an interactive one.
                 std::thread::sleep(pace);
             }
         })));
@@ -1262,26 +1265,6 @@ where
     if let Some(err) = bootstrap_error.borrow_mut().take() {
         panic!("desktop bootstrap failed: {err:?}");
     }
-}
-
-/// Register the hit-test root `RenderView` with the `RendererBinding`
-/// (`view_id = 0`).
-///
-/// `WidgetsBinding::attach_root_widget` bootstraps the *paint* render tree
-/// (`RootRenderElement` → `PipelineOwner`), but hit testing routes through the
-/// `RendererBinding`'s own per-view registry. These two `RenderView`s are
-/// kept mapped independently by design: the paint root lives in the
-/// `PipelineOwner`; the hit-test root is registered here by the runner
-/// after attach.
-fn register_hit_test_render_view() {
-    use std::sync::Arc;
-
-    use flui_rendering::{binding::RendererBinding, view::RenderView};
-
-    let renderer = AppBinding::instance().renderer();
-    let view = Arc::new(parking_lot::RwLock::new(RenderView::new()));
-    renderer.add_render_view_with_config(0, view);
-    tracing::info!("RenderView registered for hit testing (view_id=0)");
 }
 
 // ============================================================================
@@ -1416,7 +1399,6 @@ where
         return;
     }
     let realm_dispatch = install_platform_realm(ui_realm);
-    register_hit_test_render_view();
 
     // 4. Wrap renderer for callback sharing
     let renderer = Arc::new(Mutex::new(renderer));
@@ -1578,8 +1560,11 @@ where
 
 #[cfg(target_os = "ios")]
 fn run_ios(_config: AppConfig) {
+    // Native iOS (UIKit windowing + surface) is a Cross.P (Platform breadth)
+    // deliverable — see docs/ROADMAP.md's Cross.P section. This stub exists
+    // only so `#[cfg(target_os = "ios")]` builds compile; there is no
+    // UIKit-backed `flui-platform` implementation to call into yet.
     tracing::info!("iOS platform - not yet implemented");
-    // TODO: Implement UIKit integration
 }
 
 // ============================================================================
@@ -1671,7 +1656,6 @@ where
         return;
     }
     let realm_dispatch = install_platform_realm(ui_realm);
-    register_hit_test_render_view();
 
     // 4. Register input callback
     window.on_input(Box::new(move |input: PlatformInput| {
@@ -1813,8 +1797,9 @@ mod tests {
 
     use super::*;
 
-    // TODO: Will be used in future integration tests for run_app_impl
-    #[allow(dead_code)]
+    /// Trivial leaf fixture: an empty view used as the terminal node under
+    /// `OwnerLocalRoot` below, and constructible on its own wherever a test
+    /// needs a minimal `View + StatelessView` root.
     #[derive(Clone)]
     struct TestView;
 

@@ -982,8 +982,10 @@ impl AppBinding {
     /// 3. Paint phase - generate display lists
     /// 4. Create Scene from LayerTree
     ///
-    /// Returns `Some(Scene)` if a new scene was produced, or cached scene
-    /// otherwise.
+    /// Returns `Some(Scene)` if a new scene was produced. Returns `None` if
+    /// the frame was dropped (`FramePaintOutcome::Errored`) or nothing was
+    /// dirty (`FramePaintOutcome::Idle`) — there is no scene cache to fall
+    /// back to.
     #[cfg(test)]
     pub(crate) fn draw_frame(
         &self,
