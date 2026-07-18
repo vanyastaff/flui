@@ -80,3 +80,11 @@ mod shortcuts_test;
 
 // ── Business.1 fidelity front — Scrollbar parity (family 6) ─────────────────
 mod scrollbar_test;
+
+// ── Business.1 fidelity front — implicit-animation family parity (family 7:
+//    AnimatedContainer/Size/Align/Padding; AnimatedOpacity stays in
+//    implicit_animations_test.rs, its own oracle's home) ────────────────────
+mod animated_align_test;
+mod animated_container_test;
+mod animated_padding_test;
+mod animated_size_test;

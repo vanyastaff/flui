@@ -233,3 +233,75 @@ impl ViewState<AnimatedContainer> for AnimatedContainerState {
         self.controller.dispose();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use flui_animation::AnimationStatus;
+
+    use super::*;
+    use crate::SizedBox;
+
+    fn probe(width: f32) -> AnimatedContainer {
+        AnimatedContainer::new(SizedBox::shrink()).width(width)
+    }
+
+    /// Oracle: `'AnimatedContainer overanimate test'`
+    /// (`animated_container_test.dart`, tag `3.44.0`) asserts via
+    /// `tester.binding.transientCallbackCount` that an unrelated (identical)
+    /// reconfigure never starts a new animation run, and that a genuine
+    /// value change starts exactly one. FLUI's harness has no
+    /// scheduler-callback-count equivalent to assert against directly, so
+    /// this pins the same guarantee via `ImplicitController::status()`
+    /// (`pub(crate)`, visible from this module's own tests) directly on
+    /// `did_update_view` — the entire gating path this multi-property
+    /// widget's `|=` accumulation (deliberately not `||`, see the comment
+    /// above) exists to get right: a later property's unchanged retarget
+    /// must not mask an earlier property's genuine change, or vice versa.
+    #[test]
+    fn did_update_view_restarts_only_on_a_genuine_target_change() {
+        let view = probe(100.0);
+        let mut state = view.create_state();
+        assert_eq!(state.controller.status(), AnimationStatus::Dismissed);
+
+        // Unrelated rebuild: identical config on every animatable property.
+        let unchanged = probe(100.0);
+        state.did_update_view(&view, &unchanged);
+        assert_eq!(
+            state.controller.status(),
+            AnimationStatus::Dismissed,
+            "an unrelated rebuild (identical config) must not start a run"
+        );
+
+        // Genuine change: width retargets.
+        let retargeted = probe(200.0);
+        state.did_update_view(&unchanged, &retargeted);
+        assert_eq!(
+            state.controller.status(),
+            AnimationStatus::Forward,
+            "a genuine target change must start exactly one run"
+        );
+    }
+
+    /// The multi-property accumulation specifically: retargeting ONLY
+    /// `height` (leaving `width` at its already-set target) must still
+    /// restart the shared controller — an earlier property's "unchanged"
+    /// report must not mask a later property's genuine change.
+    #[test]
+    fn did_update_view_restarts_when_any_single_property_changes() {
+        let view = AnimatedContainer::new(SizedBox::shrink())
+            .width(100.0)
+            .height(100.0);
+        let mut state = view.create_state();
+
+        let height_only_change = AnimatedContainer::new(SizedBox::shrink())
+            .width(100.0)
+            .height(200.0);
+        state.did_update_view(&view, &height_only_change);
+
+        assert_eq!(
+            state.controller.status(),
+            AnimationStatus::Forward,
+            "a change to height alone must still restart the shared controller"
+        );
+    }
+}

@@ -33,17 +33,59 @@
 //! unconditionally (gated only by `is_within_own_size`), never by opacity —
 //! same as Flutter's `RenderAnimatedOpacityMixin`, which never overrides
 //! `hitTest`.
+//!
+//! ## AnimatedOpacity — the remaining `implicit_animations_test.dart` cases
+//!
+//! Ported: 2 more (4 total counted for this widget, see below).
+//! - `'AnimatedOpacity transition test'`
+//! - `'AnimatedOpacity does not crash at zero area'`
+//!
+//! Out of scope: 1.
+//! - `'AnimatedOpacity onEnd callback test'` — **`AnimatedOpacity` has no
+//!   `on_end` callback field at all**, unlike its sibling `AnimatedSize`
+//!   (`crates/flui-widgets/src/animated/animated_size.rs`'s `on_end`), so
+//!   there is nothing to invoke — a real, widget-specific capability gap,
+//!   not a silent skip.
+//!
+//! Citation-only: 1.
+//! - `'Ensure CurvedAnimations are disposed on widget change'` — this suite
+//!   already carries the equivalent assertion at the unit level:
+//!   `unrelated_rebuild_does_not_swap_the_proxy_parent`,
+//!   `opacity_retarget_swaps_the_proxy_parent`, and
+//!   `curve_only_change_swaps_the_proxy_parent`
+//!   (`crates/flui-widgets/src/animated/animated_opacity.rs`'s
+//!   `#[cfg(test)] mod tests`) — FLUI's `AnimatedOpacity` has no persistent
+//!   `CurvedAnimation` to directly query `isDisposed` on (it composes a
+//!   fresh `tween.animate(curved)` per retarget behind a `ProxyAnimation`,
+//!   see that module's docs), so "the old composition is discarded and the
+//!   render object observes only the new one" is exactly what those 3 tests
+//!   already pin via `Arc::ptr_eq` on the proxy's parent.
+//!
+//! `'AnimatedOpacity transition test'` uses `Curves::Linear` explicitly
+//! rather than the family's zero-arg default: the oracle's `TestAnimatedWidget`
+//! harness relies on `ImplicitlyAnimatedWidget`'s OWN default curve
+//! (`Curves.linear`, `implicit_animations.dart:288`), but FLUI's
+//! `default_curve()` (`crates/flui-widgets/src/animated/implicitly_animated.rs`)
+//! is `Curves::EaseInOut` for every widget in this family — a family-wide
+//! default-curve divergence from the oracle, undocumented before this port.
+//! Changing the shared default is a behavioral change with a much wider
+//! blast radius than this test port (every implicit-animation widget with no
+//! explicit `.curve(...)` override), so it is out of scope here; this test
+//! instead pins its own curve explicitly to isolate the interpolation-value
+//! assertions from that divergence.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use crate::common::{self, lay_out, lay_out_animated, loose, tight};
-use flui_animation::Vsync;
+use flui_animation::{Curves, Vsync};
 use flui_types::Color;
 use flui_view::prelude::{BuildContext, StatefulView};
 use flui_view::{IntoView, ViewState};
-use flui_widgets::{AnimatedContainer, AnimatedOpacity, ColoredBox, GestureDetector, VsyncScope};
+use flui_widgets::{
+    AnimatedContainer, AnimatedOpacity, ColoredBox, GestureDetector, SizedBox, VsyncScope,
+};
 use parking_lot::Mutex;
 
 const FRAME: Duration = Duration::from_millis(20);
@@ -193,5 +235,167 @@ fn animated_opacity_at_zero_still_participates_in_hit_testing() {
         taps.load(Ordering::SeqCst),
         1,
         "a fully transparent (opacity 0.0) AnimatedOpacity must still deliver taps to its child"
+    );
+}
+
+// ----------------------------------------------------------------------------
+// AnimatedOpacity — transition test
+// ----------------------------------------------------------------------------
+
+/// The ancestor hosting `AnimatedOpacity` — mirrors the oracle's
+/// `RebuildCountingState<TestAnimatedWidget>` (`implicit_animations_test.dart`):
+/// `builds` counts every time THIS build runs, so the transition test can
+/// assert the ancestor is rebuilt on the retarget (a real `setState`) and
+/// NOT on every subsequent tick (`AnimatedOpacity` updates its persistent
+/// render object directly, per its module docs — it never rebuilds through
+/// `AnimatedBuilder` the way `AnimatedContainer`/`AnimatedAlign`/
+/// `AnimatedPadding` do).
+#[derive(Clone, StatefulView)]
+struct OpacityProbe {
+    vsync: Vsync,
+    opacity: Arc<Mutex<f32>>,
+    builds: Arc<AtomicUsize>,
+}
+
+struct OpacityProbeState {
+    vsync: Vsync,
+    opacity: Arc<Mutex<f32>>,
+    builds: Arc<AtomicUsize>,
+}
+
+impl StatefulView for OpacityProbe {
+    type State = OpacityProbeState;
+
+    fn create_state(&self) -> Self::State {
+        OpacityProbeState {
+            vsync: self.vsync.clone(),
+            opacity: Arc::clone(&self.opacity),
+            builds: Arc::clone(&self.builds),
+        }
+    }
+}
+
+impl ViewState<OpacityProbe> for OpacityProbeState {
+    fn build(&self, _view: &OpacityProbe, _ctx: &dyn BuildContext) -> impl IntoView {
+        self.builds.fetch_add(1, Ordering::SeqCst);
+        let opacity = *self.opacity.lock();
+        VsyncScope::new(
+            self.vsync.clone(),
+            AnimatedOpacity::new(opacity, SizedBox::shrink())
+                .duration(Duration::from_secs(1))
+                .curve(Curves::Linear),
+        )
+    }
+}
+
+/// `AnimatedOpacity` genuinely interpolates from the current opacity to a
+/// retargeted one: `0.0` right after the retarget (t=0, begin unchanged),
+/// then exactly `0.5`/`0.75`/`1.0` at 50%/75%/100% of a 1-second linear run —
+/// and the ANCESTOR hosting it (`OpacityProbe`, standing in for the oracle's
+/// `TestAnimatedWidget`) is rebuilt exactly once for the retarget itself and
+/// NOT again on any of the subsequent animation ticks.
+///
+/// Flutter parity: `'AnimatedOpacity transition test'`
+/// (`implicit_animations_test.dart`, tag `3.44.0`) — same 1-second duration,
+/// same 0.0 → 1.0 retarget, same sample points (500 ms, 750 ms, 1000 ms
+/// cumulative), and the oracle's own `state.builds == 2` assertions (stable
+/// across every tick after the retargeting rebuild) via the `builds` counter
+/// below. `Curves::Linear` is pinned explicitly — see the module docs' note
+/// on the family's default-curve divergence from the oracle.
+#[test]
+fn animated_opacity_transition_test() {
+    let vsync = Vsync::new();
+    let opacity = Arc::new(Mutex::new(0.0));
+    let builds = Arc::new(AtomicUsize::new(0));
+    let probe = OpacityProbe {
+        vsync: vsync.clone(),
+        opacity: Arc::clone(&opacity),
+        builds: Arc::clone(&builds),
+    };
+    let mut laid = lay_out_animated(probe, tight(100.0, 100.0), vsync);
+    let id = laid.find_by_render_type("RenderAnimatedOpacity");
+
+    assert_eq!(
+        laid.opacity(id),
+        0.0,
+        "first build sits at the given opacity"
+    );
+    assert_eq!(builds.load(Ordering::SeqCst), 1, "the initial mount build");
+
+    *opacity.lock() = 1.0;
+    laid.pump();
+    assert_eq!(
+        laid.opacity(id),
+        0.0,
+        "immediately after retargeting, the run has not advanced (t=0, begin unchanged)"
+    );
+    assert_eq!(
+        builds.load(Ordering::SeqCst),
+        2,
+        "the retarget is a real ancestor rebuild (oracle: state.builds == 2)"
+    );
+
+    laid.pump_for(Duration::ZERO); // detection frame: anchors the fresh run
+    laid.pump_for(Duration::from_millis(500));
+    assert_eq!(laid.opacity(id), 0.5, "50% through a linear run");
+    assert_eq!(
+        builds.load(Ordering::SeqCst),
+        2,
+        "a tick alone must NOT rebuild the ancestor — AnimatedOpacity updates \
+         its persistent render object directly (oracle: state.builds stays 2)"
+    );
+
+    laid.pump_for(Duration::from_millis(250)); // cumulative 750 ms
+    assert_eq!(laid.opacity(id), 0.75, "75% through a linear run");
+    assert_eq!(
+        builds.load(Ordering::SeqCst),
+        2,
+        "still no ancestor rebuild"
+    );
+
+    laid.pump_for(Duration::from_millis(250)); // cumulative 1000 ms
+    assert_eq!(
+        laid.opacity(id),
+        1.0,
+        "the run must end exactly at the new target"
+    );
+    assert_eq!(
+        builds.load(Ordering::SeqCst),
+        2,
+        "no ancestor rebuild even once the run completes"
+    );
+}
+
+// ----------------------------------------------------------------------------
+// AnimatedOpacity — zero-area guard
+// ----------------------------------------------------------------------------
+
+/// `AnimatedOpacity` on a zero-area surface lays out to zero without
+/// panicking.
+///
+/// Flutter parity: `'AnimatedOpacity does not crash at zero area'`
+/// (`implicit_animations_test.dart`, tag `3.44.0`).
+#[test]
+fn animated_opacity_does_not_crash_at_zero_area() {
+    let mut laid = lay_out(
+        SizedBox::shrink().child(
+            AnimatedOpacity::new(0.5, SizedBox::shrink()).duration(Duration::from_millis(300)),
+        ),
+        tight(0.0, 0.0),
+    );
+
+    assert_eq!(
+        laid.size(laid.current_root()),
+        common::size(0.0, 0.0),
+        "AnimatedOpacity on a zero-area surface must measure 0×0 with no panic"
+    );
+
+    // The oracle reaches its assertion via `pumpAndSettle`; a never-pumped
+    // mount would not catch a panic that only surfaces once a frame runs.
+    laid.pump_for(Duration::from_millis(300));
+    assert_eq!(
+        laid.size(laid.current_root()),
+        common::size(0.0, 0.0),
+        "must still measure 0×0 with no panic after a frame runs"
     );
 }
