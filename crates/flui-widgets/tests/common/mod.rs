@@ -21,11 +21,16 @@ use flui_interaction::events::{
     PointerEvent, PointerType, make_cancel_event_for_id, make_down_event_for_id,
     make_move_event_for_id, make_up_event_for_id,
 };
-use flui_objects::{RenderAnimatedOpacity, RenderOpacity, RenderParagraph, RenderTransform};
+use flui_objects::{
+    RenderAnimatedOpacity, RenderClipOval, RenderClipPath, RenderClipRRect, RenderClipRect,
+    RenderOpacity, RenderParagraph, RenderTransform,
+};
 use flui_rendering::constraints::{BoxConstraints, SliverGeometry};
 use flui_rendering::pipeline::PipelineOwner;
 use flui_rendering::testing::inspect;
 use flui_types::geometry::px;
+use flui_types::painting::Clip;
+use flui_types::styling::BorderRadius;
 use flui_types::{Offset, Size};
 use flui_view::{BuildOwner, ElementTree, View};
 use flui_widgets::GestureArenaScope;
@@ -351,6 +356,43 @@ impl LaidOut {
         panic!("render node should be a RenderOpacity or RenderAnimatedOpacity");
     }
 
+    /// The [`Clip`] behavior of a clip-family render node (`RenderClipRect`,
+    /// `RenderClipRRect`, `RenderClipOval`, or `RenderClipPath`). Panics if
+    /// `id` is none of the four.
+    pub fn clip_behavior(&self, id: RenderId) -> Clip {
+        let mut owner = self.pipeline_owner.write();
+        let node = owner
+            .render_tree_mut()
+            .get_mut(id)
+            .expect("render node should exist");
+        if let Some(render) = node.downcast_render_object_mut::<RenderClipRect>() {
+            return render.clip_behavior();
+        }
+        if let Some(render) = node.downcast_render_object_mut::<RenderClipRRect>() {
+            return render.clip_behavior();
+        }
+        if let Some(render) = node.downcast_render_object_mut::<RenderClipOval>() {
+            return render.clip_behavior();
+        }
+        if let Some(render) = node.downcast_render_object_mut::<RenderClipPath>() {
+            return render.clip_behavior();
+        }
+        panic!("render node should be a clip-family render object (Rect/RRect/Oval/Path)");
+    }
+
+    /// The installed [`BorderRadius`] of a `RenderClipRRect` node. Panics if
+    /// `id` is not a `RenderClipRRect`, or it carries no border radius.
+    pub fn clip_rrect_border_radius(&self, id: RenderId) -> BorderRadius {
+        let mut owner = self.pipeline_owner.write();
+        owner
+            .render_tree_mut()
+            .get_mut(id)
+            .and_then(|node| node.downcast_render_object_mut::<RenderClipRRect>())
+            .expect("render node should be a RenderClipRRect")
+            .border_radius()
+            .expect("RenderClipRRect should carry a border radius")
+    }
+
     /// The x-scale (matrix `[0][0]`) of a [`RenderTransform`] node — the factor a
     /// `ScaleTransition` writes. Panics if `id` is not a `RenderTransform`.
     pub fn transform_scale(&self, id: RenderId) -> f32 {
@@ -507,34 +549,48 @@ impl LaidOut {
     /// Hit-test at root-local `(x, y)` and dispatch `event` to the entries hit
     /// there — the route step a binding runs before the arena lifecycle. The
     /// event already carries the pointer id; `(x, y)` is the hit-test position.
+    ///
+    /// Both the hit-test AND the dispatch run inside the binding's
+    /// interaction-lane scope: production (`crates/flui-app/src/app/runner.rs`,
+    /// `realm.enter(|realm| event.run(realm))`) hit-tests and dispatches from
+    /// inside the same lane entry, and hit-testing itself can now resolve
+    /// lane-registered owner-local state (`ClipPath`'s custom path clipper via
+    /// `resolve_path_clip_target`) — scoping only the dispatch half left
+    /// `hit_test` silently falling back to the default (whole-box) clip
+    /// whenever a caller hit-tested outside an active lane.
     pub fn route_event(&self, event: &PointerEvent, x: f32, y: f32) {
         use flui_rendering::hit_testing::HitTestResult;
 
         let position = Offset::new(px(x), px(y));
         let owner = self.pipeline_owner.read();
         let mut result = HitTestResult::new();
-        owner.hit_test(position, &mut result);
-        // Dispatch resolves owner-local targets, so it must run inside this
-        // binding's interaction lane scope (same lane the tree mounted under).
-        self.binding.enter_owner_scope(|| result.dispatch(event));
+        self.binding.enter_owner_scope(|| {
+            owner.hit_test(position, &mut result);
+            result.dispatch(event);
+        });
     }
 
     /// Hit-test at root-local `(x, y)` and dispatch a synthetic pointer-down
     /// event there — the headless analogue of a platform pointer-down reaching
     /// the framework (`AppBinding::handle_input` → hit_test → dispatch). Used by
     /// the `Listener` test to assert its callback fires.
+    ///
+    /// See [`route_event`](Self::route_event) for why hit-testing runs inside
+    /// the lane scope alongside dispatch.
     pub fn dispatch_pointer_down(&self, x: f32, y: f32) {
         use flui_rendering::hit_testing::HitTestResult;
 
         let position = Offset::new(px(x), px(y));
         let owner = self.pipeline_owner.read();
         let mut result = HitTestResult::new();
-        owner.hit_test(position, &mut result);
         let event = flui_interaction::events::make_down_event(
             position,
             flui_interaction::events::PointerType::Mouse,
         );
-        self.binding.enter_owner_scope(|| result.dispatch(&event));
+        self.binding.enter_owner_scope(|| {
+            owner.hit_test(position, &mut result);
+            result.dispatch(&event);
+        });
     }
 
     /// As [`dispatch_pointer_down`](Self::dispatch_pointer_down), but a
@@ -545,12 +601,14 @@ impl LaidOut {
         let position = Offset::new(px(x), px(y));
         let owner = self.pipeline_owner.read();
         let mut result = HitTestResult::new();
-        owner.hit_test(position, &mut result);
         let event = flui_interaction::events::make_up_event(
             position,
             flui_interaction::events::PointerType::Mouse,
         );
-        self.binding.enter_owner_scope(|| result.dispatch(&event));
+        self.binding.enter_owner_scope(|| {
+            owner.hit_test(position, &mut result);
+            result.dispatch(&event);
+        });
     }
 
     /// A pointer-move to `(x, y)` — to drive slop / drag handling.
@@ -560,12 +618,14 @@ impl LaidOut {
         let position = Offset::new(px(x), px(y));
         let owner = self.pipeline_owner.read();
         let mut result = HitTestResult::new();
-        owner.hit_test(position, &mut result);
         let event = flui_interaction::events::make_move_event(
             position,
             flui_interaction::events::PointerType::Mouse,
         );
-        self.binding.enter_owner_scope(|| result.dispatch(&event));
+        self.binding.enter_owner_scope(|| {
+            owner.hit_test(position, &mut result);
+            result.dispatch(&event);
+        });
     }
 
     /// A pointer-cancel routed to the entries hit at `(x, y)` — the headless
@@ -576,11 +636,13 @@ impl LaidOut {
         let position = Offset::new(px(x), px(y));
         let owner = self.pipeline_owner.read();
         let mut result = HitTestResult::new();
-        owner.hit_test(position, &mut result);
         let event = flui_interaction::events::make_cancel_event(
             flui_interaction::events::PointerType::Mouse,
         );
-        self.binding.enter_owner_scope(|| result.dispatch(&event));
+        self.binding.enter_owner_scope(|| {
+            owner.hit_test(position, &mut result);
+            result.dispatch(&event);
+        });
     }
 
     /// Hit-test at root-local `(x, y)` and dispatch a synthetic secondary-button
@@ -594,13 +656,15 @@ impl LaidOut {
         let position = Offset::new(px(x), px(y));
         let owner = self.pipeline_owner.read();
         let mut result = HitTestResult::new();
-        owner.hit_test(position, &mut result);
         let event = flui_interaction::events::make_down_event_with_button(
             position,
             flui_interaction::events::PointerType::Mouse,
             PointerButton::Secondary,
         );
-        self.binding.enter_owner_scope(|| result.dispatch(&event));
+        self.binding.enter_owner_scope(|| {
+            owner.hit_test(position, &mut result);
+            result.dispatch(&event);
+        });
     }
 
     /// As [`dispatch_secondary_down`](Self::dispatch_secondary_down), but a
@@ -612,13 +676,15 @@ impl LaidOut {
         let position = Offset::new(px(x), px(y));
         let owner = self.pipeline_owner.read();
         let mut result = HitTestResult::new();
-        owner.hit_test(position, &mut result);
         let event = flui_interaction::events::make_up_event_with_button(
             position,
             flui_interaction::events::PointerType::Mouse,
             PointerButton::Secondary,
         );
-        self.binding.enter_owner_scope(|| result.dispatch(&event));
+        self.binding.enter_owner_scope(|| {
+            owner.hit_test(position, &mut result);
+            result.dispatch(&event);
+        });
     }
 }
 
