@@ -1220,13 +1220,12 @@ where
         let new_listenable = core.view().listenable();
 
         if !Arc::ptr_eq(&old_listenable, &new_listenable) {
-            // Safe to unsubscribe unconditionally: none of `AnimatedView`'s
-            // current listenable sources (`AnimationController`, wrapped in
-            // `flui-animation`) dispose their backing `ChangeNotifier` from
-            // `AnimationController::dispose` — only the controller's own
-            // "disposed" flag flips, so `remove_listener` on an
-            // instance-swapped-away-from old listenable never hits
-            // `ChangeNotifier`'s used-after-dispose debug assert here.
+            // Safe to unsubscribe unconditionally, even if the old
+            // listenable's backing `ChangeNotifier` were already disposed:
+            // `Listenable::remove_listener` is a silent no-op on a disposed
+            // notifier (Flutter parity — `ChangeNotifier.removeListener`
+            // carries no `debugAssertNotDisposed`, precisely so teardown
+            // code can detach from an already-disposed listenable).
             if let Some(listener_id) = self.listener_id.take() {
                 old_listenable.remove_listener(listener_id);
             }

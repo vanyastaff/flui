@@ -188,3 +188,42 @@ fn animated_builder_same_instance_rebuild_does_not_resubscribe() {
         "no unsubscribe/resubscribe cycle ran on a same-instance rebuild"
     );
 }
+
+/// A widget swap must tolerate the OLD listenable already having been
+/// disposed by its owner before the swap runs — e.g. the user disposes
+/// notifier A themselves ahead of pumping the new-listenable frame.
+///
+/// `on_view_updated` calls `old_listenable.remove_listener(...)` to detach
+/// from the pre-swap instance; if A is already disposed by then, that call
+/// must be a silent no-op (Flutter parity — `ChangeNotifier.removeListener`
+/// carries no `debugAssertNotDisposed`), not a panic. The swap must still
+/// complete and subscribe to the new listenable.
+#[test]
+fn animated_builder_swap_tolerates_a_disposed_old_listenable() {
+    let notifier_a = Arc::new(ChangeNotifier::new());
+    let notifier_b = Arc::new(ChangeNotifier::new());
+
+    let listenable_a: Arc<dyn Listenable> = notifier_a.clone();
+    let mut laid = lay_out(
+        AnimatedBuilder::new(listenable_a, || SizedBox::new(10.0, 10.0)),
+        tight(10.0, 10.0),
+    );
+
+    assert!(notifier_a.has_listeners(), "mount subscribes to A");
+
+    // The owner disposes A before the swap runs.
+    notifier_a.dispose();
+
+    let listenable_b: Arc<dyn Listenable> = notifier_b.clone();
+    // Must not panic: `on_view_updated`'s `remove_listener` against the
+    // now-disposed A is a no-op, and the swap proceeds to subscribe to B.
+    laid.pump_widget(AnimatedBuilder::new(listenable_b, || {
+        SizedBox::new(10.0, 10.0)
+    }));
+
+    assert!(
+        notifier_b.has_listeners(),
+        "the swap must still subscribe to the new listenable even though \
+         detaching from the disposed old one was a no-op"
+    );
+}
