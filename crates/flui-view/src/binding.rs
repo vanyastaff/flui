@@ -2270,7 +2270,7 @@ mod tests {
     }
 
     // ========================================================================
-    // did_change_app_lifecycle_state dispatch (ADR-0035 PR2)
+    // did_change_app_lifecycle_state dispatch
     // ========================================================================
 
     /// Observer that adds another observer from inside its own

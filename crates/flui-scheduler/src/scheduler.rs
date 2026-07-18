@@ -1131,6 +1131,42 @@ impl Scheduler {
         self.async_driver.poll_ready()
     }
 
+    /// Clears the `frame_scheduled` latch for a wake that will call
+    /// [`drive_async_tasks`](Self::drive_async_tasks) WITHOUT a surrounding
+    /// [`handle_begin_frame`](Self::handle_begin_frame) — the frames-disabled
+    /// `PumpAsync` path (`ADR-0035`'s `wake_action`), which deliberately
+    /// never begins/draws a real frame.
+    ///
+    /// # Why this exists
+    ///
+    /// `on_frame_scheduled` fires only on `frame_scheduled`'s false→true
+    /// transition, and the *only* place that ever clears the latch back to
+    /// `false` is `handle_begin_frame`, unconditionally, at the top of every
+    /// real frame. A `PumpAsync` wake has no frame to do that clearing —
+    /// without this call, a `request_frame()` made before entering
+    /// `PumpAsync` (a task's initial spawn, or an earlier wake) leaves the
+    /// latch `true` forever: a LATER, independent wake (a network
+    /// response's `Waker::wake()`, arriving on a different thread after this
+    /// pump cycle already returned) finds the latch already set, never
+    /// transitions it, and the hook never fires again — the platform loop is
+    /// never told to wake, and the future silently stops advancing with no
+    /// visible error.
+    ///
+    /// # Call before, not after, `drive_async_tasks`
+    ///
+    /// Call this immediately **before** `drive_async_tasks`, mirroring
+    /// `handle_begin_frame`'s clear-at-the-top order — not after. A polled
+    /// future may legitimately re-arm itself synchronously (call
+    /// `Waker::wake_by_ref` from inside its own `poll`, wanting to be polled
+    /// again next cycle); that call sets `frame_scheduled` back to `true`
+    /// *during* `drive_async_tasks`. Clearing the latch again *afterward*
+    /// would silently erase that signal — the exact starvation this method
+    /// exists to prevent, just for a self-waking task instead of an
+    /// externally-woken one.
+    pub fn finish_async_pump(&self) {
+        self.frame.frame_scheduled.store(false, Ordering::Release);
+    }
+
     /// Number of tasks the async driver holds.
     #[must_use]
     pub fn pending_task_count(&self) -> usize {
@@ -2153,6 +2189,64 @@ mod tests {
             "repeated wakes between frames request exactly one frame"
         );
         assert!(scheduler.is_frame_scheduled());
+    }
+
+    /// A `PumpAsync` wake (frames disabled, so no `handle_begin_frame` ever
+    /// runs to clear `frame_scheduled`) must not starve a LATER, independent
+    /// wake. Shape: spawn -> simulate a `PumpAsync` cycle
+    /// (`finish_async_pump` + `drive_async_tasks`, no `handle_begin_frame`)
+    /// -> an external wake arriving afterward must still re-fire
+    /// `on_frame_scheduled`.
+    ///
+    /// Red-check: remove the `finish_async_pump()` call below and this
+    /// fails — `hook_fires` stays at 1 after the external wake, because
+    /// `frame_scheduled` was never cleared and the false→true edge the hook
+    /// needs never occurs.
+    #[test]
+    fn finish_async_pump_lets_a_later_independent_wake_refire_the_hook() {
+        use std::task::Waker;
+
+        let scheduler = Scheduler::new();
+        let hook_fires = Arc::new(AtomicU64::new(0));
+        let hook_fires_for_hook = Arc::clone(&hook_fires);
+        scheduler.set_on_frame_scheduled(Some(Arc::new(move || {
+            hook_fires_for_hook.fetch_add(1, Ordering::Relaxed);
+        })));
+
+        let stored: Arc<Mutex<Option<Waker>>> = Arc::new(Mutex::new(None));
+        let stored_for_task = Arc::clone(&stored);
+        let _token = scheduler.spawn_local(Box::pin(std::future::poll_fn(move |cx| {
+            *stored_for_task.lock() = Some(cx.waker().clone());
+            std::task::Poll::<()>::Pending
+        })));
+        // `spawn_local` requested the frame that will first poll the task.
+        assert_eq!(hook_fires.load(Ordering::Relaxed), 1);
+
+        // Simulate a `PumpAsync` wake cycle: no `handle_begin_frame` runs
+        // (frames are disabled), just the async-pump sequence a `PumpAsync`
+        // arm performs.
+        scheduler.finish_async_pump();
+        scheduler.drive_async_tasks();
+        assert!(
+            !scheduler.is_frame_scheduled(),
+            "the pump must consume the latch that triggered it, not leave it latched"
+        );
+
+        // A LATER, independent wake (e.g. a network response completing on
+        // a different thread, well after this pump cycle returned) must
+        // still be able to re-fire the hook.
+        let waker = stored
+            .lock()
+            .clone()
+            .expect("waker stored by the poll above");
+        waker.wake_by_ref();
+
+        assert_eq!(
+            hook_fires.load(Ordering::Relaxed),
+            2,
+            "a wake arriving after a PumpAsync cycle must re-fire on_frame_scheduled, not find \
+             the frame_scheduled latch already set and silently coalesce away"
+        );
     }
 
     /// Requirement 7: the microtask queue keeps its existing behavior — the

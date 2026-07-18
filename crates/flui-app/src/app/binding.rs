@@ -440,12 +440,12 @@ impl AppBinding {
             //    the canonical singleton only.
             Scheduler::instance().set_on_frame_scheduled(Some(binding.frame_wake_callback()));
 
-            // Frames-disabled→enabled re-dirty wiring (ADR-0035 PR2): FLUI
+            // Frames-disabled→enabled re-dirty wiring (see `ADR-0035`): FLUI
             // has no retained-scene re-present, so an app that was
             // `Hidden`/`Paused`/`Detached` and comes back to `Resumed`/
             // `Inactive` needs the root explicitly re-dirtied alongside the
-            // frame the scheduler's re-enable leg (PR1) already guarantees
-            // gets requested — otherwise that frame finds nothing dirty and
+            // frame the scheduler's re-enable leg already guarantees gets
+            // requested — otherwise that frame finds nothing dirty and
             // produces `FramePaintOutcome::Idle` instead of presenting
             // fresh content. Installed HERE, for the identical reasons as
             // the wake hook just above: capturing `Send + Sync` handles (the
@@ -1513,7 +1513,7 @@ impl AppBinding {
 
 /// Registers a `Scheduler` lifecycle listener that re-dirties
 /// `pipeline_owner`'s root and calls `wake` on the frames-disabled→enabled
-/// edge (ADR-0035 PR2) — see [`AppBinding::instance`]'s installer for why
+/// edge (see `ADR-0035`) — see [`AppBinding::instance`]'s installer for why
 /// this lives in that one-time initializer and captures `Send + Sync`
 /// handles rather than the live binding/scheduler.
 ///
@@ -3254,7 +3254,7 @@ mod tests {
 
         /// Same deferral-lesson shape as
         /// `allow_first_frame_alone_presents_the_previously_withheld_content`
-        /// above, for ADR-0035 PR2's re-enable listener instead of the
+        /// above, for the re-enable listener instead of the
         /// first-frame gate: FLUI has no retained-scene re-present, so a
         /// `Hidden` -> `Resumed` transition needs the same explicit re-dirty
         /// `allow_first_frame` needed — this time driven by a `Scheduler`

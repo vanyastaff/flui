@@ -66,9 +66,9 @@ type SemanticsEnabledListener = Arc<dyn Fn(bool) + Send + Sync>;
 /// operates on the bare `Arc<RwLock<PipelineOwner>>` (rather than requiring
 /// a full `RenderingFlutterBinding` reference) so a caller that only holds
 /// that handle — e.g. a `Send + Sync` closure captured once at
-/// `AppBinding::instance()`'s bootstrap (ADR-0035 PR2's frames-disabled→
-/// enabled re-dirty listener) — can reuse the identical logic instead of
-/// re-deriving it.
+/// `AppBinding::instance()`'s bootstrap (the frames-disabled→enabled
+/// re-dirty listener; see `ADR-0035`) — can reuse the identical logic
+/// instead of re-deriving it.
 pub(crate) fn redirty_pipeline_root(pipeline_owner: &RwLock<PipelineOwner>) {
     let root_owner = pipeline_owner.read();
     if let Some(root_id) = root_owner.root_id()
@@ -341,7 +341,7 @@ impl RenderingFlutterBinding {
     /// `Scene`. Two callers hit this exact problem — [`allow_first_frame`]
     /// (a deferred frame becoming presentable) and the scheduler's
     /// frames-disabled→enabled re-enable edge (`AppBinding::instance()`'s
-    /// bootstrap wiring, ADR-0035 PR2), which has no retained scene to
+    /// bootstrap wiring; see `ADR-0035`), which has no retained scene to
     /// re-present either — so the shared logic lives here, once.
     ///
     /// Routed through [`PipelineOwner::repaint_handle`]/

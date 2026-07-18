@@ -168,12 +168,13 @@ pub struct WindowCallbacks {
     ///
     /// Distinct from `on_active_status_change`: a window can be visible but
     /// unfocused (Flutter's `AppLifecycleState::Inactive`), or focused but
-    /// not visible (unusual, but not excluded). ADR-0035 (PR2) is the first
-    /// consumer — winit's `WindowEvent::Occluded` feeds this on desktop.
-    /// Wayland compositors deliver occlusion via the xdg-shell v6
-    /// `suspended` state, a compositor-conditional extension; where a
-    /// compositor never sends it, this callback simply never fires — the
-    /// window is treated as always visible, matching pre-PR2 behavior.
+    /// not visible (unusual, but not excluded). Feeds the `AppLifecycleState`
+    /// derivation `ADR-0035` documents; winit's `WindowEvent::Occluded`
+    /// drives it on desktop. Wayland compositors deliver occlusion via the
+    /// xdg-shell v6 `suspended` state, a compositor-conditional extension;
+    /// where a compositor never sends it, this callback simply never fires
+    /// — the window is treated as always visible (the same behavior as
+    /// before this callback existed).
     pub on_visibility_status_change: Mutex<Option<Box<dyn FnMut(bool) + Send>>>, // PORT-CHECK-OK-SP6: PlatformHandlers callback storage; FR-029 #5 sanctioned; SP-6 lock-placement tracked
 
     /// Called when the mouse enters or leaves the window. Parameter:

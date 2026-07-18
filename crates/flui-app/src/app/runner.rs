@@ -114,7 +114,7 @@ struct RealmHost {
     realm_id: Option<flui_foundation::RealmId>,
 
     /// Single-window `(visible, focused)` tracking for the
-    /// `AppLifecycleState` derivation (ADR-0035 PR2) — `RealmEvent::
+    /// `AppLifecycleState` derivation (see `ADR-0035`) — `RealmEvent::
     /// WindowFocus`/`WindowVisibility` each update one half of this pair and
     /// re-derive. Both default `true`: a window is assumed visible and
     /// focused until a platform callback says otherwise (matches every
@@ -162,22 +162,20 @@ enum RealmEvent {
         apply_surface: Box<dyn FnOnce()>,
     },
     /// Window focus changed (winit's `WindowEvent::Focused`, or the
-    /// equivalent per-backend signal).
-    ///
-    /// PR1 (ADR-0035) named this `Active` and left it a deliberate no-op.
-    /// PR2 renames it (same source, no transport change) and feeds it into
-    /// the `(visible, focused)` -> `AppLifecycleState` derivation below,
-    /// alongside [`WindowVisibility`](Self::WindowVisibility).
+    /// equivalent per-backend signal; same source as the deleted `Active`
+    /// variant this one replaces). Feeds the `(visible, focused)` ->
+    /// `AppLifecycleState` derivation below, alongside
+    /// [`WindowVisibility`](Self::WindowVisibility).
     WindowFocus(bool),
     /// Window visibility/occlusion changed (winit's `WindowEvent::Occluded`,
     /// negated — see `PlatformWindow::on_visibility_status_change`).
     ///
-    /// New in PR2. Combined with [`WindowFocus`](Self::WindowFocus) via
+    /// Combined with [`WindowFocus`](Self::WindowFocus) via
     /// [`derive_lifecycle_state`] to produce the `AppLifecycleState` the
     /// ladder in [`emit_lifecycle_transition`] steps toward.
-    // Not yet constructed on wasm32: `run_web` only wires `WindowFocus` in
-    // this PR — no occlusion signal for the web backend yet (see run_web's
-    // comment at its `on_active_status_change` registration).
+    // Not yet constructed on wasm32: `run_web` only wires `WindowFocus` —
+    // no occlusion signal for the web backend yet (see run_web's comment at
+    // its `on_active_status_change` registration).
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     WindowVisibility(bool),
     Frame(Box<dyn FnOnce(&super::ui_realm::UiRealm)>),
@@ -224,7 +222,7 @@ impl RealmEvent {
 }
 
 // ============================================================================
-// Lifecycle derivation and ladder synthesis (ADR-0035 PR2)
+// Lifecycle derivation and ladder synthesis (see ADR-0035)
 // ============================================================================
 
 /// Derives the Flutter-parity [`AppLifecycleState`] from the two window
@@ -246,12 +244,38 @@ fn derive_lifecycle_state(visible: bool, focused: bool) -> AppLifecycleState {
 }
 
 /// The intermediate `AppLifecycleState` steps between `old` and `new`,
-/// inclusive of `new`, exclusive of `old` — Flutter's `AppLifecycleState`
-/// ladder order (`Resumed < Inactive < Hidden < Paused < Detached`, exactly
-/// the enum's own discriminant order). Oracle: `platform_dispatcher.dart`
-/// (Flutter 3.44.0) synthesizes every skipped state so no observer misses a
-/// step when a transition jumps straight from `Resumed` to `Hidden` without
-/// visiting `Inactive`.
+/// inclusive of `new`, exclusive of `old`.
+///
+/// Faithful port of `ServicesBinding._generateStateTransitions`
+/// (`packages/flutter/lib/src/services/binding.dart` @ 3.44.0) — NOT a walk
+/// over this enum's own `#[repr(u8)]` discriminants, which exist for
+/// FLUI's `frames_enabled` derivation and do not match Flutter's ladder
+/// order. Flutter's `dart:ui` `AppLifecycleState` enum declares `detached`
+/// **first** (`engine/.../platform_dispatcher.dart`: `detached, resumed,
+/// inactive, hidden, paused` — `detached` is the state the engine starts in
+/// *before* initialization, not a terminal "highest" state), which is
+/// exactly [`AppLifecycleState::ALL`]'s order — the array this function
+/// walks, not `as u8`.
+///
+/// Three cases, mirroring the oracle exactly:
+/// - **Target is `Detached`**: walk forward from `old` to the end of `ALL`
+///   (through every remaining non-detached state), then append `Detached`
+///   itself. This is Flutter's dedicated `state == detached` branch — going
+///   to `Detached` always visits every state after `old`, regardless of
+///   where `old` sits.
+/// - **Going backward** (`old`'s index > `new`'s index, e.g. `Paused` ->
+///   `Resumed`): the intermediate states in *descending* index order,
+///   ending at `new` (Flutter's `insert(0, ...)` loop, which prepends and
+///   so reverses the ascending walk).
+/// - **Going forward** (otherwise): the intermediate states in ascending
+///   index order, ending at `new`.
+///
+/// Because `Detached` sits at index 0 (the lowest), a transition FROM
+/// `Detached` to anything else always takes the forward branch: `Detached
+/// -> Resumed` is the single step `[Resumed]`, not a crawl through
+/// `Paused`/`Hidden`/`Inactive` first — reachable via Android's Pause/Resume
+/// reroute if `Scheduler::lifecycle_state()`'s corrupt-byte fallback
+/// (`try_from_u8`'s `unwrap_or(AppLifecycleState::Detached)`) is ever hit.
 ///
 /// Returns an empty `Vec` when `old == new` — this is where change-detection
 /// for the whole re-derivation lives: a wake that doesn't change the derived
@@ -259,16 +283,28 @@ fn derive_lifecycle_state(visible: bool, focused: bool) -> AppLifecycleState {
 /// observers.
 #[cfg(not(target_os = "ios"))]
 fn lifecycle_ladder(old: AppLifecycleState, new: AppLifecycleState) -> Vec<AppLifecycleState> {
-    let (old_ord, new_ord) = (old as u8, new as u8);
-    match old_ord.cmp(&new_ord) {
-        std::cmp::Ordering::Equal => Vec::new(),
-        std::cmp::Ordering::Less => (old_ord + 1..=new_ord)
-            .filter_map(AppLifecycleState::try_from_u8)
-            .collect(),
-        std::cmp::Ordering::Greater => (new_ord..old_ord)
-            .rev()
-            .filter_map(AppLifecycleState::try_from_u8)
-            .collect(),
+    if old == new {
+        return Vec::new();
+    }
+
+    let order = AppLifecycleState::ALL;
+    let old_idx = order
+        .iter()
+        .position(|&s| s == old)
+        .expect("BUG: every AppLifecycleState variant must appear in AppLifecycleState::ALL");
+    let new_idx = order
+        .iter()
+        .position(|&s| s == new)
+        .expect("BUG: every AppLifecycleState variant must appear in AppLifecycleState::ALL");
+
+    if new == AppLifecycleState::Detached {
+        let mut steps: Vec<AppLifecycleState> = order[old_idx + 1..].to_vec();
+        steps.push(AppLifecycleState::Detached);
+        steps
+    } else if old_idx > new_idx {
+        order[new_idx..old_idx].iter().rev().copied().collect()
+    } else {
+        order[old_idx + 1..=new_idx].to_vec()
     }
 }
 
@@ -420,6 +456,49 @@ mod lifecycle_derivation_tests {
             vec![AppLifecycleState::Resumed]
         );
     }
+
+    /// Regression: `Detached` sits FIRST in Flutter's real `AppLifecycleState`
+    /// order (`AppLifecycleState::ALL`: `Detached, Resumed, Inactive, Hidden,
+    /// Paused` — the engine's "before initialization" state), not last. A
+    /// transition FROM `Detached` is therefore a single forward step to
+    /// whatever `new` is, never a crawl through every OTHER state first — the
+    /// oracle's dedicated `state == detached` branch only fires when
+    /// `Detached` is the TARGET, not the source.
+    ///
+    /// Reachable via Android's Pause/Resume reroute if `Scheduler::
+    /// lifecycle_state()`'s corrupt-byte fallback (`try_from_u8`'s
+    /// `unwrap_or(AppLifecycleState::Detached)`) is ever hit as "old".
+    #[test]
+    fn ladder_from_detached_is_a_single_forward_step() {
+        assert_eq!(
+            lifecycle_ladder(AppLifecycleState::Detached, AppLifecycleState::Resumed),
+            vec![AppLifecycleState::Resumed],
+            "Detached -> Resumed must NOT synthesize Paused/Hidden/Inactive first"
+        );
+        assert_eq!(
+            lifecycle_ladder(AppLifecycleState::Detached, AppLifecycleState::Inactive),
+            vec![AppLifecycleState::Resumed, AppLifecycleState::Inactive]
+        );
+    }
+
+    /// `Detached` as the TARGET is the oracle's special case: walk every
+    /// remaining state after `old`, in order, then append `Detached` itself.
+    #[test]
+    fn ladder_to_detached_walks_every_remaining_state_then_appends_detached() {
+        assert_eq!(
+            lifecycle_ladder(AppLifecycleState::Resumed, AppLifecycleState::Detached),
+            vec![
+                AppLifecycleState::Inactive,
+                AppLifecycleState::Hidden,
+                AppLifecycleState::Paused,
+                AppLifecycleState::Detached,
+            ]
+        );
+        assert_eq!(
+            lifecycle_ladder(AppLifecycleState::Hidden, AppLifecycleState::Detached),
+            vec![AppLifecycleState::Paused, AppLifecycleState::Detached]
+        );
+    }
 }
 
 #[cfg(not(target_os = "ios"))]
@@ -431,6 +510,15 @@ fn install_platform_realm(realm: super::ui_realm::UiRealm) -> RealmDispatcher {
         state.realm = Some(realm);
         state.owner_thread = Some(owner_thread);
         state.realm_id = Some(realm_id);
+        // A second realm installed on this thread (hot-restart, or a
+        // sequential test realm) must not inherit whatever `(visible,
+        // focused)` the PREVIOUS realm's window last reported — every
+        // backend starts a window visible and focused (see `RealmHost::new`
+        // and each `MockWindow`/`WinitWindow` constructor), so a fresh
+        // realm's derivation must start from that same baseline, not a
+        // stale `Hidden`/`Inactive` left behind by the last one.
+        state.visible = true;
+        state.focused = true;
     });
     RealmDispatcher {
         owner_thread,
@@ -578,6 +666,42 @@ mod realm_dispatch_tests {
     fn install_test_realm() -> RealmDispatcher {
         let app = AppBinding::instance();
         install_platform_realm(super::super::ui_realm::UiRealm::for_test(app))
+    }
+
+    /// A second realm installed on the same thread (hot-restart; sequential
+    /// test realms) must not inherit a PRIOR realm's stale `(visible,
+    /// focused)` window signals — every backend's window starts visible and
+    /// focused, so a fresh realm's derivation must start from that same
+    /// baseline.
+    ///
+    /// Red-check: remove the `state.visible = true; state.focused = true;`
+    /// reset from `install_platform_realm` and this fails — the second
+    /// realm reads `visible == false` left behind by the first.
+    #[test]
+    fn install_platform_realm_resets_stale_visible_focused_from_a_prior_realm() {
+        install_test_realm();
+        PLATFORM_REALM_HOST.with(|slot| {
+            let mut state = slot.borrow_mut();
+            state.visible = false;
+            state.focused = false;
+        });
+        teardown_platform_realm();
+
+        install_test_realm();
+        PLATFORM_REALM_HOST.with(|slot| {
+            let state = slot.borrow();
+            assert!(
+                state.visible,
+                "a realm installed on this thread must start visible, not inherit a stale \
+                 value from a prior realm"
+            );
+            assert!(
+                state.focused,
+                "a realm installed on this thread must start focused, not inherit a stale \
+                 value from a prior realm"
+            );
+        });
+        teardown_platform_realm();
     }
 
     #[test]
@@ -909,11 +1033,19 @@ fn keeps_frame_gate_open(
 /// bound, not frame-accurate cadence — good enough to keep a repeating
 /// controller behind a minimized/occluded window (or a `SurfaceLost` retry
 /// loop) from busy-spinning at CPU speed (observed pre-fix: ~30 000 fps).
-#[cfg(all(
-    not(target_os = "android"),
-    not(target_os = "ios"),
-    not(target_arch = "wasm32")
-))]
+///
+/// Not `cfg`-gated to desktop-only: Android's `PumpAsync` arm (`run_android`)
+/// reuses this same bound unconditionally — a self-re-arming task
+/// `Scheduler::finish_async_pump` lets keep waking the loop has no
+/// vsync/present call to bound it there either, and that arm has no
+/// `keeps_frame_gate_open`-style signal desktop's conditional
+/// `no_present_fallback_pace` uses — so its throttle is unconditional
+/// instead of gate-open-dependent. Web's `PumpAsync` arm does NOT use this
+/// (see its call site's comment: the browser's own `requestAnimationFrame`
+/// cadence already bounds it, and `wasm32-unknown-unknown` has no real
+/// `std::thread::sleep`) — excluded via `cfg` so it isn't flagged unused
+/// there.
+#[cfg(not(target_arch = "wasm32"))]
 const NO_PRESENT_FALLBACK_PACE: std::time::Duration = std::time::Duration::from_millis(16);
 
 /// Decides whether [`NO_PRESENT_FALLBACK_PACE`] applies this frame.
@@ -957,7 +1089,7 @@ fn no_present_fallback_pace(presented: bool, keeps_gate_open: bool) -> Option<st
 ///   `ui_realm::tests::redraw_requests_coalesce_to_one_flag_and_one_wake`.
 /// - **Idle = zero frames**: a PRE-EXISTING invariant (the dirty gate
 ///   itself predates this diff; only its migration onto `wake_action` is
-///   new, ADR-0035 PR2) — pinned by
+///   new) — pinned by
 ///   `idle_wake_with_no_dirty_work_and_no_scheduled_frame_skips`
 ///   below.
 /// - **No-present fallback bound**: the actual delta the frame-pacing ADR
@@ -1007,17 +1139,16 @@ mod desktop_pacing_tests {
 
     #[test]
     fn frames_disabled_always_pumps_async_regardless_of_dirty_or_scheduled() {
-        // The load-bearing case (ADR-0035 PR2): a backgrounded app must
-        // never render, even with real dirty work or a scheduled ticker —
-        // dirty work accumulates untouched until frames re-enable.
+        // The load-bearing case: a backgrounded app must never render, even
+        // with real dirty work or a scheduled ticker — dirty work
+        // accumulates untouched until frames re-enable.
         assert_eq!(wake_action(false, false, false), WakeAction::PumpAsync);
         assert_eq!(wake_action(false, true, false), WakeAction::PumpAsync);
         assert_eq!(wake_action(false, false, true), WakeAction::PumpAsync);
         assert_eq!(wake_action(false, true, true), WakeAction::PumpAsync);
     }
 
-    /// Async-keeps-running-while-Background (ADR-0035 PR2): a spawned
-    /// future must keep progressing through `PumpAsync`'s
+    /// A spawned future must keep progressing through `PumpAsync`'s
     /// `Scheduler::drive_async_tasks` call while frames are disabled, with
     /// no frame ever advancing — and a `Resumed` transition afterward must
     /// produce exactly one frame.
@@ -1477,6 +1608,18 @@ where
                     // explicit call is the ONLY thing keeping a spawned
                     // future progressing while backgrounded. No begin/draw
                     // frame, no tickers, no pipeline, no present.
+                    //
+                    // `finish_async_pump` MUST run first, not after: nothing
+                    // else ever clears the scheduler's `frame_scheduled`
+                    // latch on this path (only `handle_begin_frame` does,
+                    // and it never runs here), so without this call a LATER,
+                    // independent wake (a network response's `Waker::wake`,
+                    // arriving after this pump cycle returns) would find the
+                    // latch already set, never re-fire `on_frame_scheduled`,
+                    // and never wake this loop again — see
+                    // `Scheduler::finish_async_pump`'s doc for the full
+                    // starvation hazard and why the ordering matters.
+                    scheduler.finish_async_pump();
                     scheduler.drive_async_tasks();
                     // Reuse the existing no-present throttle: a backgrounded
                     // wake with dirty/pending work re-requesting another
@@ -1621,11 +1764,11 @@ where
         }));
 
         // Window focus/visibility -> the `(visible, focused)`
-        // `AppLifecycleState` derivation (ADR-0035 PR2). `on_visibility_
-        // status_change` rides winit's `Occluded` event; Wayland delivery
-        // is compositor-conditional (see that callback's doc) — where a
+        // `AppLifecycleState` derivation. `on_visibility_status_change`
+        // rides winit's `Occluded` event; Wayland delivery is
+        // compositor-conditional (see that callback's doc) — where a
         // compositor never sends it, the window is treated as always
-        // visible, matching pre-PR2 behavior.
+        // visible (the same as before this callback existed).
         window.on_active_status_change(Box::new(move |focused| {
             let _ = dispatch_platform_realm(realm_dispatch, RealmEvent::WindowFocus(focused));
         }));
@@ -1893,7 +2036,18 @@ where
                         // present. See `wake_action`'s doc for why this is
                         // the only thing keeping a spawned future
                         // progressing while backgrounded.
+                        //
+                        // `finish_async_pump` MUST run first, not after —
+                        // see `Scheduler::finish_async_pump`'s doc for the
+                        // starvation hazard this ordering avoids.
+                        scheduler.finish_async_pump();
                         scheduler.drive_async_tasks();
+                        // Unconditional throttle: a self-re-arming task has
+                        // no vsync/present call to bound it here either, and
+                        // this arm has no gate-open signal to make the pace
+                        // conditional the way desktop's does — see
+                        // `NO_PRESENT_FALLBACK_PACE`'s doc.
+                        std::thread::sleep(NO_PRESENT_FALLBACK_PACE);
                         return;
                     }
                     WakeAction::Render => {}
@@ -2167,6 +2321,25 @@ where
                         // `wake_action`'s doc for why this is the only thing
                         // keeping a spawned future progressing while
                         // backgrounded.
+                        //
+                        // `finish_async_pump` MUST run first, not after —
+                        // see `Scheduler::finish_async_pump`'s doc for the
+                        // starvation hazard this ordering avoids.
+                        //
+                        // No `NO_PRESENT_FALLBACK_PACE` sleep here, unlike
+                        // desktop/Android: this callback is driven by the
+                        // browser's `requestAnimationFrame` loop
+                        // (`start_raf_loop`, `flui-platform`'s web backend),
+                        // which fires unconditionally once per animation
+                        // frame regardless of whether a redraw was
+                        // requested — the browser's own vsync-paced RAF
+                        // cadence already bounds this arm's re-wake rate, so
+                        // an additional sleep would be redundant. It would
+                        // also be unsound here: `wasm32-unknown-unknown` has
+                        // no real OS threads, and blocking the single JS
+                        // thread with `std::thread::sleep` would hang the
+                        // page rather than pace it.
+                        scheduler.finish_async_pump();
                         scheduler.drive_async_tasks();
                         return;
                     }
