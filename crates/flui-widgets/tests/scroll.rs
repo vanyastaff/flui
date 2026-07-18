@@ -917,14 +917,16 @@ fn scrollable_viewport_builder_composes_a_custom_viewport_with_working_drag_and_
     let controller = ScrollController::new();
     let widget = Scrollable::new()
         .controller(controller.clone())
-        .viewport_builder(Arc::new(|position: flui_widgets::ScrollPosition| {
-            let rows: Vec<_> = (0..12)
-                .map(|_| SizedBox::new(300.0, 50.0).boxed())
-                .collect();
-            Viewport::new((SliverFixedExtentList::new(50.0, rows),))
-                .position(position)
-                .boxed()
-        }));
+        .viewport_builder(std::rc::Rc::new(
+            |position: flui_widgets::ScrollPosition| {
+                let rows: Vec<_> = (0..12)
+                    .map(|_| SizedBox::new(300.0, 50.0).boxed())
+                    .collect();
+                Viewport::new((SliverFixedExtentList::new(50.0, rows),))
+                    .position(position)
+                    .boxed()
+            },
+        ));
 
     let scoped = lay_out_with_arena(widget, tight(300.0, 300.0));
 

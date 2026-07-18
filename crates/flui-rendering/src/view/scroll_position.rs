@@ -148,11 +148,15 @@ pub struct ScrollPositionSnapshot {
 ///
 /// - **First-ever establishment.** Flutter seeds `page` from
 ///   `_pageToUseOnStartup` (`PageController`'s `initialPage`, or a value
-///   restored from `PageStorage`). FLUI has no `PageController` yet (that is
-///   PR2's job) — the first `apply_viewport_dimension` call instead leaves
-///   `pixels` untouched, i.e. behaves like `KeepPixels` for that one call.
-///   A caller that seeds `pixels` via [`ScrollPosition::new`] before the
-///   first layout gets that literal pixel value, not a page-relative one.
+///   restored from `PageStorage`). `KeepFractionalPage`'s `initial_page`
+///   field carries that seed: `Some(page)` (what `PageController` sets, PR2)
+///   reproduces `_pageToUseOnStartup` on the first `apply_viewport_dimension`
+///   call; `None` (a bare `ScrollPosition` opting into this policy directly,
+///   with no controller) preserves PR1's original placeholder — that one
+///   call behaves like `KeepPixels`, leaving `pixels` untouched, so a value
+///   seeded via [`ScrollPosition::new`] is not reinterpreted as a page count
+///   against a never-established prior dimension. PageStorage restoration is
+///   not modeled (no `PageStorage` equivalent exists).
 /// - **`viewport_fraction > 1.0`.** Flutter centers each page within a
 ///   wider-than-one-page viewport via `_initialPageOffset`
 ///   (`max(0, viewportDimension * (viewportFraction - 1) / 2)`), added to
@@ -192,6 +196,13 @@ pub enum DimensionChangePolicy {
         /// Fraction of the viewport one logical page occupies. Must be
         /// `> 0.0`.
         viewport_fraction: f32,
+        /// The page to seed `pixels` from on the very first
+        /// `apply_viewport_dimension` call. Mirrors `_pageToUseOnStartup`
+        /// (`_PagePosition`'s `oldPixels == null` branch,
+        /// `widgets/page_view.dart`, tag `3.44.0`). `None` preserves this
+        /// policy's original PR1 behavior for a caller with no
+        /// controller-driven startup page — see the enum-level docs.
+        initial_page: Option<f32>,
     },
 }
 
@@ -395,6 +406,19 @@ impl ScrollPosition {
         self.inner.state.lock().viewport_dimension
     }
 
+    /// Whether `apply_viewport_dimension` has ever committed a real
+    /// dimension — mirrors Flutter's `hasViewportDimension`. FLUI's
+    /// substitute "has this position ever been laid out" signal (see
+    /// [`DimensionChangePolicy`]'s docs for why dimension-application, not
+    /// pixel-nullity, plays that role here); `PageController::page`/
+    /// `jump_to_page` (`flui-widgets`, PR2) consult this to decide whether a
+    /// page request can be resolved to real pixels yet or must instead update
+    /// the pending startup page.
+    #[must_use]
+    pub fn has_applied_viewport_dimension(&self) -> bool {
+        self.inner.state.lock().has_applied_viewport_dimension
+    }
+
     /// Snapshots `pixels`, `min_scroll_extent`, `max_scroll_extent`, and
     /// `viewport_dimension` under a single lock acquisition. See
     /// [`ScrollPositionSnapshot`].
@@ -413,6 +437,44 @@ impl ScrollPosition {
     /// when the viewport's dimension changes. See [`DimensionChangePolicy`].
     pub fn set_dimension_policy(&self, policy: DimensionChangePolicy) {
         self.inner.state.lock().dimension_policy = policy;
+    }
+
+    /// Overwrites the cached page a [`DimensionChangePolicy::KeepFractionalPage`]
+    /// policy is currently holding for a collapsed (`viewport_dimension ==
+    /// 0.0`) viewport, without waiting for a real dimension to recompute
+    /// `pixels` against. Returns `true` if the overwrite took effect.
+    ///
+    /// A no-op (returns `false`) when the policy isn't `KeepFractionalPage`,
+    /// or the viewport isn't currently collapsed — this method only replaces
+    /// an *already-cached* page, it does not establish one.
+    ///
+    /// # Flutter parity
+    ///
+    /// Mirrors `PageController.jumpToPage`/`animateToPage`'s `position
+    /// ._cachedPage != null` branch (`widgets/page_view.dart`, tag `3.44.0`):
+    /// `position._cachedPage = page.toDouble()`. Needed because a `PageView`
+    /// resize sequence can pass through a collapsed viewport more than once
+    /// (e.g. hidden inside a currently-zero-size ancestor, then a page jump
+    /// request arrives, then the ancestor grows back) — [`set_dimension_policy`](Self::set_dimension_policy)
+    /// alone only affects the *next* `apply_viewport_dimension` call's
+    /// never-established branch, which does not run again once
+    /// `has_applied_viewport_dimension` is already `true`; the steady-state
+    /// branch that runs instead reads the private `cached_page`, not the
+    /// policy's `initial_page`. `PageController::jump_to_page` (`flui-widgets`,
+    /// PR2) calls this specifically for that already-collapsed case.
+    pub fn set_cached_page_while_collapsed(&self, page: f32) -> bool {
+        let mut state = self.inner.state.lock();
+        if !matches!(
+            state.dimension_policy,
+            DimensionChangePolicy::KeepFractionalPage { .. }
+        ) {
+            return false;
+        }
+        if !state.has_applied_viewport_dimension || state.viewport_dimension != 0.0 {
+            return false;
+        }
+        state.cached_page = Some(page);
+        true
     }
 
     /// Sets the scroll offset to `value`, unclamped, and notifies listeners
@@ -523,7 +585,24 @@ impl ViewportOffset for ScrollPosition {
     fn apply_viewport_dimension(&mut self, viewport_dimension: f32) -> bool {
         let changed = {
             let mut state = self.inner.state.lock();
-            if (state.viewport_dimension - viewport_dimension).abs() < f32::EPSILON {
+            // The equality short-circuit only applies once a REAL prior
+            // dimension is on record (`has_applied_viewport_dimension`).
+            // Mirrors Flutter's `hasViewportDimension => _viewportDimension
+            // != null` (`widgets/scroll_position.dart`, tag `3.44.0`):
+            // `_PagePosition.applyViewportDimension`'s own short-circuit
+            // compares against `null` for a never-established position, so a
+            // first-ever call is NEVER treated as a no-op there — even when
+            // it happens to carry `0.0` (a `PageView` mounted inside a
+            // currently-zero-size ancestor). Comparing raw `f32` values
+            // instead (this port's original PR1 shape) conflated "never
+            // established" with "established at literal `0.0`": a first
+            // call of exactly `0.0` matched `State::zero()`'s own default and
+            // silently short-circuited, so `has_applied_viewport_dimension`
+            // never flipped true and `KeepFractionalPage`'s first-establishment
+            // branch never ran for that call.
+            if state.has_applied_viewport_dimension
+                && (state.viewport_dimension - viewport_dimension).abs() < f32::EPSILON
+            {
                 false
             } else {
                 // Flutter parity: `_PagePosition.applyViewportDimension`
@@ -531,8 +610,10 @@ impl ViewportOffset for ScrollPosition {
                 // under the lock already held here — no notify, no
                 // scheduling; the dirty-flag + coalesced flush below carries
                 // the observable change.
-                if let DimensionChangePolicy::KeepFractionalPage { viewport_fraction } =
-                    state.dimension_policy
+                if let DimensionChangePolicy::KeepFractionalPage {
+                    viewport_fraction,
+                    initial_page,
+                } = state.dimension_policy
                 {
                     debug_assert!(
                         viewport_fraction > 0.0,
@@ -575,14 +656,28 @@ impl ViewportOffset for ScrollPosition {
                             state.cached_page = None;
                             state.pixels = page * (viewport_dimension * viewport_fraction);
                         }
+                    } else if let Some(start_page) = initial_page {
+                        // First-ever dimension establishment WITH a
+                        // controller-driven startup page: mirrors
+                        // `_pageToUseOnStartup`. Same zero-dimension collapse
+                        // handling as the steady-state branch above — a
+                        // `PageView` that never gets a real layout pass must
+                        // still not divide by zero.
+                        if viewport_dimension == 0.0 {
+                            state.cached_page = Some(start_page);
+                            state.pixels = 0.0;
+                        } else {
+                            state.cached_page = None;
+                            state.pixels = start_page * (viewport_dimension * viewport_fraction);
+                        }
                     }
-                    // else: first-ever dimension establishment. Flutter uses
-                    // `_pageToUseOnStartup` here (a `PageController`-level
-                    // concept PR2 introduces); until then this call behaves
-                    // like `KeepPixels` — the seeded `pixels` value (e.g.
-                    // from `ScrollPosition::new`) is left untouched rather
-                    // than reinterpreted as a page count against a
-                    // never-established prior dimension.
+                    // else: first-ever dimension establishment with no
+                    // controller-driven startup page (a bare `ScrollPosition`
+                    // opted into `KeepFractionalPage` directly). Behaves like
+                    // `KeepPixels` for this one call — the seeded `pixels`
+                    // value (e.g. from `ScrollPosition::new`) is left
+                    // untouched rather than reinterpreted as a page count
+                    // against a never-established prior dimension.
                 }
                 state.has_applied_viewport_dimension = true;
                 state.viewport_dimension = viewport_dimension;
@@ -884,6 +979,7 @@ mod tests {
         position.set_pixels(600.0); // page = 600 / (300 * 1.0) = 2.0
         position.set_dimension_policy(DimensionChangePolicy::KeepFractionalPage {
             viewport_fraction: 1.0,
+            initial_page: None,
         });
 
         assert!(position.apply_viewport_dimension(600.0));
@@ -904,6 +1000,7 @@ mod tests {
         position.set_pixels(720.0);
         position.set_dimension_policy(DimensionChangePolicy::KeepFractionalPage {
             viewport_fraction: 0.8,
+            initial_page: None,
         });
 
         assert!(position.apply_viewport_dimension(600.0));
@@ -923,6 +1020,7 @@ mod tests {
         position.set_pixels(150.0); // page = 150 / 300 = 0.5
         position.set_dimension_policy(DimensionChangePolicy::KeepFractionalPage {
             viewport_fraction: 1.0,
+            initial_page: None,
         });
 
         // Collapse to a zero dimension: the page (0.5) is cached, not
@@ -969,6 +1067,7 @@ mod tests {
         let mut position = ScrollPosition::new(209.0);
         position.set_dimension_policy(DimensionChangePolicy::KeepFractionalPage {
             viewport_fraction: 1.0,
+            initial_page: None,
         });
 
         assert!(position.apply_viewport_dimension(300.0));
@@ -991,6 +1090,7 @@ mod tests {
         position.set_pixels(-50.0); // overscrolled past min_scroll_extent
         position.set_dimension_policy(DimensionChangePolicy::KeepFractionalPage {
             viewport_fraction: 1.0,
+            initial_page: None,
         });
 
         assert!(position.apply_viewport_dimension(600.0));
@@ -1009,6 +1109,7 @@ mod tests {
         position.set_pixels(600.0);
         position.set_dimension_policy(DimensionChangePolicy::KeepFractionalPage {
             viewport_fraction: 1.0,
+            initial_page: None,
         });
 
         let notified = Arc::new(AtomicUsize::new(0));
@@ -1023,6 +1124,204 @@ mod tests {
             0,
             "the KeepFractionalPage recompute is a pure in-lock write — same \
              no-synchronous-notify contract as the KeepPixels path"
+        );
+    }
+
+    // `initial_page` (PR2's `_pageToUseOnStartup` wiring) ------------------
+
+    /// PR2 closes PR1's deferred first-establishment branch: `Some(page)`
+    /// seeds `pixels` from the controller-driven startup page on the very
+    /// first `apply_viewport_dimension` call, mirroring
+    /// `_pageToUseOnStartup` — in contrast to
+    /// `keep_fractional_page_first_ever_dimension_does_not_reinterpret_seeded_pixels_as_a_page`,
+    /// which pins the `None` (no controller) case leaving pre-seeded pixels
+    /// alone.
+    #[test]
+    fn keep_fractional_page_initial_page_seeds_pixels_on_first_establishment() {
+        // Pre-seeded at a pixel value that would be wrong if it survived —
+        // proves the startup page wins over whatever `ScrollPosition::new`
+        // seeded, unlike the `None` case.
+        let mut position = ScrollPosition::new(999.0);
+        position.set_dimension_policy(DimensionChangePolicy::KeepFractionalPage {
+            viewport_fraction: 1.0,
+            initial_page: Some(2.0),
+        });
+
+        assert!(position.apply_viewport_dimension(300.0));
+        assert_eq!(
+            position.pixels(),
+            600.0,
+            "the first-ever dimension establishment must seed pixels from the \
+             startup page (2.0 * 300 * 1.0 = 600.0), not preserve the \
+             pre-seeded 999.0"
+        );
+
+        // A SUBSEQUENT dimension change must go through the steady-state
+        // recompute (from the now-established pixels/dimension), not
+        // re-consult `initial_page` a second time.
+        assert!(position.apply_viewport_dimension(600.0));
+        assert_eq!(
+            position.pixels(),
+            1200.0,
+            "a later resize must recompute from the established page (2.0), \
+             not re-seed from initial_page"
+        );
+    }
+
+    /// The startup-page branch must handle a first-ever call that ALSO
+    /// collapses to a zero dimension (e.g. a `PageView` mounted inside a
+    /// currently-hidden/zero-size ancestor) — same zero-dimension caching as
+    /// the steady-state branch, no division by zero.
+    #[test]
+    fn keep_fractional_page_initial_page_caches_when_the_first_ever_dimension_is_zero() {
+        let mut position = ScrollPosition::zero();
+        position.set_dimension_policy(DimensionChangePolicy::KeepFractionalPage {
+            viewport_fraction: 1.0,
+            initial_page: Some(3.0),
+        });
+
+        assert!(position.apply_viewport_dimension(0.0));
+        assert!(
+            position.pixels().is_finite(),
+            "a zero first-ever dimension must not produce NaN/inf pixels"
+        );
+        assert_eq!(
+            position.pixels(),
+            0.0,
+            "a collapsed first-ever dimension has no pixel offset to derive; \
+             the startup page must be cached instead"
+        );
+
+        // Restoring to a real dimension must recover from the cached
+        // startup page (3.0), not from the stomped `pixels` (0.0).
+        assert!(position.apply_viewport_dimension(400.0));
+        assert_eq!(
+            position.pixels(),
+            1200.0,
+            "recovering from a zero first-ever dimension must apply the \
+             cached startup page (3.0 * 400 * 1.0 = 1200.0), not treat \
+             pixels (0.0) as page 0"
+        );
+    }
+
+    /// PR1 residual: `cached_page` must survive an `apply_content_dimensions`
+    /// extent clamp that runs WHILE the viewport is collapsed (interleaved
+    /// between the collapse and the restore) — not just a bare
+    /// collapse-then-restore with nothing in between (already pinned by
+    /// `keep_fractional_page_caches_the_page_across_a_zero_dimension_collapse_and_restore`).
+    /// While collapsed, `pixels` reads `0.0`; a content-dimension clamp
+    /// against a `min_scroll_extent` above zero would force `pixels` up to
+    /// that minimum — the restore must still use `cached_page`, not
+    /// re-derive a page from that clamped, no-longer-zero `pixels`.
+    #[test]
+    fn keep_fractional_page_cached_page_survives_an_interleaved_extent_clamp_while_collapsed() {
+        let mut position = ScrollPosition::zero();
+        assert!(position.apply_viewport_dimension(300.0));
+        position.set_pixels(150.0); // page = 150 / 300 = 0.5
+        position.set_dimension_policy(DimensionChangePolicy::KeepFractionalPage {
+            viewport_fraction: 1.0,
+            initial_page: None,
+        });
+
+        // Collapse: page 0.5 is cached, pixels reset to 0.0.
+        assert!(position.apply_viewport_dimension(0.0));
+        assert_eq!(position.pixels(), 0.0);
+
+        // Interleaved extent clamp WHILE collapsed: a `min_scroll_extent` of
+        // 40.0 forces the collapsed `pixels` (0.0) up to 40.0 — a value that
+        // has nothing to do with the cached page, and must not leak into the
+        // restore below. `apply_content_dimensions` returns `false` here
+        // (not `true`): the extents changed AND pixels needed re-clamping,
+        // the same "correction applied" signal `test_scrollable_viewport_offset_clamps_on_dimensions`
+        // pins for the non-paging `ScrollableViewportOffset` — not a bug this
+        // test is pinning, just its own return contract.
+        assert!(!position.apply_content_dimensions(40.0, 500.0));
+        assert_eq!(
+            position.pixels(),
+            40.0,
+            "the interleaved clamp must move pixels to the new min_scroll_extent \
+             while still collapsed — setting up the corruption this test guards \
+             against"
+        );
+
+        // Restore: must use cached_page (0.5), NOT re-derive from the
+        // clamped pixels (40.0) against the restored dimension — that would
+        // wrongly compute page = 40.0 / 600.0 ≈ 0.067, landing at ~40.0
+        // instead of 300.0.
+        assert!(position.apply_viewport_dimension(600.0));
+        assert_eq!(
+            position.pixels(),
+            300.0,
+            "the cached page (0.5) must survive the interleaved extent clamp — \
+             an interleaved apply_content_dimensions must not corrupt the \
+             collapsed-viewport page restore; got {:.1}",
+            position.pixels()
+        );
+    }
+
+    // set_cached_page_while_collapsed -------------------------------------
+
+    /// Mirrors `PageController.jumpToPage`'s `_cachedPage != null` branch: a
+    /// page request that arrives while the viewport is collapsed overwrites
+    /// the cached page directly, and that overwritten value (not whatever was
+    /// cached before) drives the restore once a real dimension arrives.
+    #[test]
+    fn set_cached_page_while_collapsed_overwrites_the_cached_page_and_drives_the_restore() {
+        let mut position = ScrollPosition::zero();
+        assert!(position.apply_viewport_dimension(300.0));
+        position.set_pixels(150.0); // page = 0.5
+        position.set_dimension_policy(DimensionChangePolicy::KeepFractionalPage {
+            viewport_fraction: 1.0,
+            initial_page: None,
+        });
+
+        // Collapse: page 0.5 is cached.
+        assert!(position.apply_viewport_dimension(0.0));
+
+        // A page request arrives while collapsed: overwrite the cache to 3.0.
+        assert!(
+            position.set_cached_page_while_collapsed(3.0),
+            "overwriting the cached page while genuinely collapsed must succeed"
+        );
+
+        // Restore: the OVERWRITTEN page (3.0), not the original 0.5, drives
+        // the recompute.
+        assert!(position.apply_viewport_dimension(400.0));
+        assert_eq!(
+            position.pixels(),
+            1200.0,
+            "the overwritten cached page (3.0) must drive the restore \
+             (3.0 * 400 * 1.0 = 1200.0), not the page cached before the \
+             overwrite (0.5, which would land at 200.0)"
+        );
+    }
+
+    /// A no-op when the viewport is NOT currently collapsed — this method
+    /// only replaces an already-cached page, it does not force a collapse.
+    #[test]
+    fn set_cached_page_while_collapsed_is_a_no_op_when_not_collapsed() {
+        let mut position = ScrollPosition::zero();
+        assert!(position.apply_viewport_dimension(300.0));
+        position.set_dimension_policy(DimensionChangePolicy::KeepFractionalPage {
+            viewport_fraction: 1.0,
+            initial_page: None,
+        });
+
+        assert!(
+            !position.set_cached_page_while_collapsed(5.0),
+            "a non-collapsed viewport (dimension 300.0) must reject the overwrite"
+        );
+    }
+
+    /// A no-op when the dimension policy isn't `KeepFractionalPage` at all —
+    /// there is no cached page to overwrite under `KeepPixels`.
+    #[test]
+    fn set_cached_page_while_collapsed_is_a_no_op_under_keep_pixels() {
+        let mut position = ScrollPosition::zero();
+        assert!(position.apply_viewport_dimension(0.0));
+        assert!(
+            !position.set_cached_page_while_collapsed(5.0),
+            "KeepPixels (the default policy) has no cached page to overwrite"
         );
     }
 }

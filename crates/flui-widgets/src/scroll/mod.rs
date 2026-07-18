@@ -13,6 +13,7 @@
 mod custom_scroll_view;
 mod grid_view;
 mod list_view;
+mod page_view;
 mod refresh_indicator;
 mod scroll_controller;
 mod scroll_physics;
@@ -34,6 +35,7 @@ mod viewport;
 pub use custom_scroll_view::CustomScrollView;
 pub use grid_view::GridView;
 pub use list_view::ListView;
+pub use page_view::{PageController, PageScrollPhysics, PageView, PageViewState};
 pub use refresh_indicator::{RefreshController, RefreshIndicator, RefreshIndicatorState};
 pub use scroll_controller::ScrollController;
 pub use scroll_physics::{
