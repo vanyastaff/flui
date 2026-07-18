@@ -412,16 +412,32 @@ impl GpuStateStack {
             (x, y, width, height)
         };
 
-        self.current_scissor = Some(new_scissor);
+        // Clamp the scissor to the render target. wgpu rejects a scissor whose
+        // origin or right/bottom edge lies outside the attachment; the AABB math
+        // above clamps the right/bottom edges but leaves the origin unclamped, so
+        // a clip lying entirely past the right/bottom edge (left >= surface width)
+        // would emit an out-of-bounds `x`/`y`. Clamping the origin first keeps the
+        // `surface - origin` extent subtraction from underflowing.
+        let (raw_x, raw_y, raw_w, raw_h) = new_scissor;
+        let clamped_x = raw_x.min(surface_size.0);
+        let clamped_y = raw_y.min(surface_size.1);
+        let clamped_scissor = (
+            clamped_x,
+            clamped_y,
+            raw_w.min(surface_size.0 - clamped_x),
+            raw_h.min(surface_size.1 - clamped_y),
+        );
+
+        self.current_scissor = Some(clamped_scissor);
 
         #[cfg(debug_assertions)]
         tracing::trace!(
             "GpuStateStack::clip_rect: rect={:?} → scissor=({}, {}, {}, {})",
             rect,
-            new_scissor.0,
-            new_scissor.1,
-            new_scissor.2,
-            new_scissor.3,
+            clamped_scissor.0,
+            clamped_scissor.1,
+            clamped_scissor.2,
+            clamped_scissor.3,
         );
     }
 
@@ -816,6 +832,49 @@ mod tests {
             stack.current_scissor(),
             outer_scissor,
             "outer scissor restored"
+        );
+    }
+
+    /// A clip rect lying entirely past the surface's right edge must clamp
+    /// its origin to the surface bound, not emit an out-of-bounds `x`.
+    ///
+    /// This is the exact crash case the origin clamp in `clip_rect` fixes:
+    /// before the AABB math clamps the right edge, `right.saturating_sub(x)`
+    /// already yields `width == 0` (900 vs 800 no wgpu problem by itself),
+    /// but `x == 900` is still past the 800-wide surface — passed straight to
+    /// `set_scissor_rect` that `x` alone fails wgpu's scissor-containment
+    /// validation regardless of `width` being zero.
+    ///
+    /// Red-check: remove the `raw_x.min(surface_size.0)` / `raw_y.min(...)`
+    /// origin clamp (restoring `clamped_x = raw_x`, `clamped_y = raw_y`) and
+    /// this test fails — the stored scissor's `x` becomes 900, past the
+    /// surface's 800px width.
+    #[test]
+    fn clip_rect_entirely_past_right_edge_clamps_origin_into_bounds() {
+        let mut stack = identity_stack();
+        let surface = (800, 600);
+        let far_right_rect = Rect::from_ltrb(
+            flui_types::geometry::px(900.0),
+            flui_types::geometry::px(0.0),
+            flui_types::geometry::px(950.0),
+            flui_types::geometry::px(50.0),
+        );
+
+        stack.clip_rect(far_right_rect, surface);
+
+        let (x, _y, w, _h) = stack
+            .current_scissor()
+            .expect("clip_rect always sets a scissor, even a zero-width one");
+        assert!(
+            x <= surface.0,
+            "scissor origin x={x} must not exceed the surface width {}; an out-of-bounds x \
+             fails wgpu's scissor-rect containment validation even when w == 0",
+            surface.0
+        );
+        assert_eq!(
+            w, 0,
+            "a clip rect entirely past the right edge must clamp to zero width, not leave a \
+             residual extent past the surface bound"
         );
     }
 }
