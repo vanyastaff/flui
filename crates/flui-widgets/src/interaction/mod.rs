@@ -4,6 +4,7 @@
 
 mod absorb_pointer;
 mod actions;
+mod dismissible;
 mod focus;
 mod gesture_arena_scope;
 mod gesture_detector;
@@ -18,6 +19,10 @@ pub use absorb_pointer::AbsorbPointer;
 pub use actions::{
     Action, ActionOutcome, Actions, CallbackAction, Intent, NextFocusAction, NextFocusIntent,
     PreviousFocusAction, PreviousFocusIntent,
+};
+pub use dismissible::{
+    DismissDirection, DismissDirectionCallback, DismissUpdateCallback, DismissUpdateDetails,
+    Dismissible, DismissibleState,
 };
 pub use focus::{ExcludeFocus, Focus, FocusChangeHandler, FocusScope, FocusScopeState, FocusState};
 pub(crate) use focus::{enclosing_focus_parent, install_rect_provider};

@@ -780,6 +780,15 @@ impl LaidOutScoped {
         &self.laid
     }
 
+    /// Reconcile the root against `new_root` — the scoped analogue of
+    /// [`LaidOut::pump_widget`], for tests that need both gesture dispatch
+    /// (arena-scoped) AND a later reconfigure/unmount of the same tree, e.g.
+    /// swapping a gesture-driven widget away mid-animation to prove its
+    /// `dispose` unregisters every controller it registered with `Vsync`.
+    pub fn pump_widget(&mut self, new_root: impl View) {
+        self.laid.pump_widget(new_root);
+    }
+
     /// Advance the virtual clock by `dt` and fire any gesture deadline that has
     /// now elapsed — the deterministic, sleep-free frame tick.
     pub fn pump(&mut self, dt: Duration) {

@@ -104,3 +104,6 @@ mod wrap_test;
 
 // ── Business.1 fidelity front — ValueListenableBuilder parity ───────────────
 mod value_listenable_builder_test;
+
+// ── Business.1 fidelity front — Dismissible parity (gesture-heavy widget) ───
+mod dismissible_test;
