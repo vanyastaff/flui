@@ -29,7 +29,9 @@
 //!   [`wrap_vertical_min_intrinsic_width_sums_run_cross_extents_with_spacing`].
 //! - `'Spacing with slight overflow'` (the sub-`PRECISION_TOLERANCE`
 //!   run-break boundary) — [`spacing_with_slight_overflow_wraps_within_precision_tolerance`].
-//! - `'Object exactly matches container width'` (both legs) —
+//! - `'Object exactly matches container width'` (both oracle legs, plus a
+//!   non-oracle third leg pinning the exact-fit run-break boundary — two
+//!   children exactly filling the width stay on one run) —
 //!   [`object_exactly_matches_container_width_avoids_a_spurious_extra_run`].
 //!
 //! Out of scope (8 cases):

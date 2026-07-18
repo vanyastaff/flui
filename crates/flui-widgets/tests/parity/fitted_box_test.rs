@@ -57,24 +57,28 @@
 //! (`crates/flui-objects/src/layout/fitted_box.rs`).
 //!
 //! **Divergence (real bug found and fixed during this port, not a pre-
-//! existing documented gap):** `RenderFittedBox::effective_transform` only
-//! composed `translate(destination-alignment-offset) * scale`, omitting
-//! Flutter's third term — `translate(-source-crop-offset)`
-//! (`RenderFittedBox._updatePaintData`, `proxy_box.dart`). This is a no-op
-//! for `Contain`/`Fill`/`ScaleDown` (their `source` is always the *whole*
-//! child, so the crop offset is always zero) but silently mis-mapped both
-//! paint and hit-testing for `Cover`/`FitWidth`/`FitHeight`/an overflowing
-//! `None` whenever the crop is off-center — which `'Child can cover'` (this
-//! file) exercises directly under the default `CENTER` alignment. Fixed by
-//! adding a cached `source_offset` field (computed the same way as the
-//! existing `align_offset`, against the child's own free space rather than
-//! the box's) and folding `translate(-source_offset)` into
-//! `effective_transform`. Regression-tested at both layers: a new unit test
-//! in `RenderFittedBox`'s own module
-//! (`effective_transform_accounts_for_a_cropped_cover_sources_offset`,
-//! mutation-verified — reverting the fix reproduces the exact wrong point
-//! this test caught, `(200, 100)` instead of `(100, 100)`) and this file's
-//! `child_can_cover` end-to-end port.
+//! existing documented gap):** the root cause lived in
+//! `flui_types::BoxFit::apply` (`crates/flui-types/src/layout/box.rs`), not
+//! in the render object — every variant returned `source: input_size`
+//! (never cropping), where Flutter's `applyBoxFit` (`box_fit.dart`) returns
+//! a *cropped* source for `Cover` and the cover-like halves of
+//! `FitWidth`/`FitHeight`, and caps `None` per axis. With the full-source
+//! answer, `RenderFittedBox`'s `translate(-source_offset)` transform term
+//! was unreachable dead state (always zero), so paint and hit-testing
+//! mis-mapped whenever a real crop should have applied — which
+//! `'Child can cover'` (this file) exercises under the default `CENTER`
+//! alignment. Fixed by porting the oracle's cropping contract into
+//! `BoxFit::apply` itself, which makes `RenderFittedBox::source_offset`
+//! genuinely live; the same correction exposed and fixed
+//! `has_visual_overflow` (Flutter's `_hasVisualOverflow` asks "was the
+//! source cropped", not "does the destination overflow the box").
+//! Regression-tested at both layers, mutation-verified by execution:
+//! reverting the `source_offset` transform term fails this file's
+//! `child_can_cover` at `(500, 300)` instead of `(400, 300)`, and fails the
+//! pipeline-driven harness test
+//! (`harness_fitted_box_cover_crops_the_source_and_offsets_the_transform`,
+//! `crates/flui-objects/tests/render_object_harness.rs`), which reads the
+//! nonzero crop offset off a node populated by the real `perform_layout`.
 //!
 //! New harness primitives: `LaidOut::fitted_box_transform` (the composed
 //! matrix `RenderFittedBox::effective_transform` produces, for verifying a
