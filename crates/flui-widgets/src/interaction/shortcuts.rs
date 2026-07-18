@@ -336,6 +336,20 @@ mod tests {
     /// (`shortcuts.dart:560-565`): Ctrl+C matches Ctrl+C only — not bare C,
     /// not Ctrl+Shift+C — and never a key-up. Repeats match unless opted out
     /// (`:461`, `:576-581`).
+    ///
+    /// Flutter parity (`shortcuts_test.dart`, tag `3.44.0`, `SingleActivator`
+    /// group): this single assertion set covers what that oracle spreads
+    /// across five separate `testWidgets` cases exercising the same
+    /// per-event exact-modifier-match contract through a real
+    /// `HardwareKeyboard` pressed-key simulator instead of direct
+    /// `KeyEvent` construction — `'isActivatedBy works as expected'`,
+    /// `'handles Ctrl-C'`, `'handles repeated events'`, `'rejects repeated
+    /// events if requested'`, `'handles Shift-Ctrl-C'`. Not duplicated here:
+    /// FLUI's `SingleActivator::matches` reads modifiers straight off the
+    /// event it is given, so the oracle's own multi-key press/release
+    /// *sequencing* (physical Ctrl held across several key events) has no
+    /// separate code path to pin — each event's modifier snapshot is all
+    /// `matches` ever sees.
     #[test]
     fn single_activator_matches_exact_modifiers_only() {
         let ctrl_c = SingleActivator::character("c").control();
@@ -593,6 +607,14 @@ mod intent_tests {
     /// maps a `NotPerformed` outcome to `SkipRemainingHandlers`
     /// (`actions.dart:312-314`): the action runs, but the event reports
     /// unconsumed and stops bubbling.
+    ///
+    /// Flutter parity (`actions_test.dart`, tag `3.44.0`): stands in for
+    /// `'Base Action class default toKeyEventResult delegates to
+    /// consumesKey'`. **Adapted, documented divergence**: Flutter splits the
+    /// question across two independently overridable methods,
+    /// `consumesKey`/`toKeyEventResult`, which can disagree; FLUI collapsed
+    /// them into the one method this test exercises (ADR-0023/ADR-0026) —
+    /// there is no separate `consumes_key` to assert delegates to anything.
     #[test]
     fn a_non_consuming_action_runs_but_leaves_the_event_unconsumed() {
         // An action that runs but changes nothing declines the key, so the

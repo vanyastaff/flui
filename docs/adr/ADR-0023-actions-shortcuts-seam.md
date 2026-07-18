@@ -156,6 +156,24 @@ typed wrapper behind the intent's `TypeId` and carries the FR-033/widgets
 marker. Rust 1.86 trait upcasting (`dyn Intent: Any`) removes any `as_any`
 ceremony. Original design follows.
 
+**Correction (2026-07-18, Shortcuts/Actions parity port).** The paragraph
+above misreads `_visitActionsAncestors`/`_castAction`
+(`actions.dart:736-753`, `:920-931`): Flutter's walk stops at the **first**
+`Actions` scope whose own map declares the intent's type *at all*, enabled or
+not — `maybeInvoke`'s own doc is explicit that a disabled match ends the
+search rather than falling through to an enclosing scope's mapping for the
+same type (`:993-995`). There is no fall-through past a disabled nearer
+action; the oracle test `'Disabled actions stop propagation to an ancestor'`
+(`actions_test.dart`) pins the opposite of what this ADR originally shipped.
+Fixed alongside the parity port: `ActionChain` is now
+`HashMap<TypeId, ErasedAction>` (one candidate per type, not a fallback
+list) — a nearer scope's own mapping for a type entirely *replaces* the
+enclosing chain's entry for that type, so a disabled nearer mapping is the
+last one `resolve` ever sees. Red-checked against the reverted
+Vec-of-candidates shape (see `interaction/actions.rs`'s
+`a_disabled_nearer_action_stops_resolution_at_its_own_scope`, formerly named
+for the fall-through this correction removes).
+
 
 The typed layer. Rust shape for Flutter's `Map<Type, Action<Intent>>`:
 

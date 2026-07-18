@@ -13,12 +13,17 @@
 //! # The Rust shape (ADR-0023)
 //!
 //! Flutter keys its map by the intent's runtime `Type` and walks
-//! `_ActionsScope` ancestors at invoke time. FLUI keys by [`TypeId`] and
-//! **chains at provide time**: each `Actions` widget layers its own map over
-//! the enclosing chain, so one nearest-provider lookup sees, per intent type,
-//! the same ordered candidates Flutter's walk would visit — nearest first,
-//! first *enabled* one wins, a disabled nearer action falls through to an
-//! enabled outer one exactly as `maybeInvoke` continues its walk.
+//! `_ActionsScope` ancestors at invoke time, **stopping at the first scope
+//! whose own map declares the intent's type at all** — enabled or not
+//! (`_castAction`/`_visitActionsAncestors`, `:736-753`, `:920-931`).
+//! `maybeInvoke`'s own doc is explicit: "If a suitable Action is found but its
+//! `isEnabled` returns false, the search will stop" (`:993-995`) — a disabled
+//! mapping does **not** fall through to an enclosing scope's mapping for the
+//! same type. FLUI keys by [`TypeId`] and **chains at provide time**: each
+//! `Actions` widget layers its own map over the enclosing chain, so one
+//! nearest-provider lookup sees, per intent type, the single entry Flutter's
+//! walk would stop at — the nearest declaring scope's action, whether enabled
+//! or not.
 //!
 //! The erasure (`TypeId` key + `dyn Any` downcast inside the typed wrapper)
 //! is the same shape as the one sanctioned `Navigator` pop-result boundary
@@ -80,8 +85,11 @@ pub enum ActionOutcome {
 /// `Action<T>` (`actions.dart:135`).
 pub trait Action<T: Intent> {
     /// Whether this action can run for `intent` right now (`:267`). A
-    /// disabled action lets resolution fall through to an enclosing
-    /// [`Actions`] scope, as Flutter's walk does.
+    /// disabled action stops resolution **at this scope** — it does not fall
+    /// through to an enclosing [`Actions`] scope's mapping for the same
+    /// intent type, matching `maybeInvoke`'s documented contract that the
+    /// search stops the moment a scope declares the type, enabled or not
+    /// (`actions.dart:993-995`).
     fn is_enabled(&self, intent: &T) -> bool {
         let _ = intent;
         true
@@ -204,18 +212,24 @@ impl ErasedAction {
     }
 }
 
-/// Per intent type, the candidate actions in resolution order — nearest
-/// `Actions` scope first. What Flutter's ancestor walk visits, precomputed at
-/// provide time.
-pub(crate) type ActionChain = Rc<HashMap<TypeId, Vec<ErasedAction>>>;
+/// Per intent type, the action bound by the **nearest** `Actions` scope that
+/// declares it — the single entry Flutter's ancestor walk would stop at
+/// (`_castAction`/`_visitActionsAncestors`, `actions.dart:736-753`,
+/// `:920-931`), precomputed at provide time. A nearer scope's mapping
+/// entirely replaces an enclosing scope's mapping for the same type; there is
+/// no fallback list to search past it.
+pub(crate) type ActionChain = Rc<HashMap<TypeId, ErasedAction>>;
 
-/// The first **enabled** action for `intent` in `chain` — `Actions.maybeInvoke`'s
-/// walk-until-enabled (`actions.dart:1032-1044`).
+/// The action bound to `intent`'s type, if its nearest declaring scope's
+/// mapping is enabled — `Actions.maybeInvoke`'s walk, which **stops** the
+/// moment a scope declares the type, whether or not that mapping is enabled
+/// (`actions.dart:1032-1044`, doc at `:993-995`: "If a suitable Action is
+/// found but its `isEnabled` returns false, the search will stop"). A
+/// disabled nearest mapping therefore returns `None` here rather than
+/// falling through to an enclosing scope's mapping for the same type.
 pub(crate) fn resolve<'c>(chain: &'c ActionChain, intent: &dyn Any) -> Option<&'c ErasedAction> {
-    chain
-        .get(&intent.type_id())?
-        .iter()
-        .find(|action| action.is_enabled(intent))
+    let action = chain.get(&intent.type_id())?;
+    action.is_enabled(intent).then_some(action)
 }
 
 // ============================================================================
@@ -225,10 +239,13 @@ pub(crate) fn resolve<'c>(chain: &'c ActionChain, intent: &dyn Any) -> Option<&'
 /// Binds intent types to [`Action`]s for a subtree — Flutter's `Actions`
 /// (`actions.dart:729`).
 ///
-/// Resolution is nearest-scope-first with fall-through past disabled actions,
-/// as Flutter's ancestor walk resolves (`:1032-1044`). Invoke with
-/// [`Actions::maybe_invoke`] from build-time code, or let a
-/// [`Shortcuts`](crate::Shortcuts) dispatch into it from the keyboard.
+/// Resolution stops at the **nearest** scope that declares a mapping for the
+/// intent's type — enabled or not — exactly as Flutter's ancestor walk
+/// resolves and its own doc states (`:1032-1044`, `:993-995`): a disabled
+/// nearer mapping is not skipped in favor of an enclosing scope's mapping for
+/// the same type. Invoke with [`Actions::maybe_invoke`] from build-time code,
+/// or let a [`Shortcuts`](crate::Shortcuts) dispatch into it from the
+/// keyboard.
 #[derive(Clone)]
 pub struct Actions {
     own: Vec<(TypeId, ErasedAction)>,
@@ -244,8 +261,10 @@ impl Actions {
         }
     }
 
-    /// Bind intent type `T` to `action`. A binding nearer the invoker shadows
-    /// an enclosing one — unless disabled, which falls through.
+    /// Bind intent type `T` to `action`. A binding nearer the invoker
+    /// entirely shadows an enclosing one for the same type — even when
+    /// `action` turns out disabled, since Flutter's walk stops at the
+    /// nearest declaring scope regardless of its enabled state.
     #[must_use]
     pub fn action<T: Intent>(mut self, action: impl Action<T> + 'static) -> Self {
         self.own
@@ -253,10 +272,10 @@ impl Actions {
         self
     }
 
-    /// Find the first enabled action for `intent` — nearest scope first — and
-    /// invoke it. Returns whether one ran. Flutter's `Actions.maybeInvoke`
-    /// (`actions.dart:1032-1044`), minus the result value (dropped on the key
-    /// path anyway, `:348-349`).
+    /// Resolve `intent`'s type to its nearest declaring scope's action and, if
+    /// enabled, invoke it. Returns whether one ran. Flutter's
+    /// `Actions.maybeInvoke` (`actions.dart:1032-1044`), minus the result
+    /// value (dropped on the key path anyway, `:348-349`).
     pub fn maybe_invoke<T: Intent>(ctx: &dyn BuildContext, intent: &T) -> bool {
         let Some(chain) = ambient_action_chain(ctx) else {
             return false;
@@ -287,13 +306,19 @@ impl View for Actions {
 
 impl StatelessView for Actions {
     /// Layer this widget's bindings over the enclosing chain: own actions
-    /// **prepend** per type, so the nearest scope resolves first.
+    /// **replace** the enclosing entry per type, so the nearest scope's
+    /// mapping is the only one a lookup ever sees — matching Flutter's walk,
+    /// which stops at the nearest scope that declares the type at all
+    /// (`actions.dart:920-931`). A type this widget does not declare keeps
+    /// falling back to whatever the enclosing chain already had. If `own`
+    /// binds the same type twice, the later call wins, same as a duplicate
+    /// key in Flutter's `Map<Type, Action<Intent>>` literal.
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
-        let mut chain: HashMap<TypeId, Vec<ErasedAction>> = ambient_action_chain(ctx)
+        let mut chain: HashMap<TypeId, ErasedAction> = ambient_action_chain(ctx)
             .map(|enclosing| (*enclosing).clone())
             .unwrap_or_default();
-        for (type_id, action) in self.own.iter().rev() {
-            chain.entry(*type_id).or_default().insert(0, action.clone());
+        for (type_id, action) in &self.own {
+            chain.insert(*type_id, action.clone());
         }
         ActionChainProvider {
             chain: Rc::new(chain),
@@ -398,6 +423,13 @@ mod tests {
     ///
     /// Red-check: resolve from the raw own-map instead of the layered chain —
     /// the outer counter moves and the inner assertion flips.
+    ///
+    /// Flutter parity (`actions_test.dart`, tag `3.44.0`): covers
+    /// `'Actions widget can invoke actions with default dispatcher'` and
+    /// `'Actions widget can invoke actions with default dispatcher and
+    /// maybeInvoke'` — FLUI has one dispatch path (no replaceable
+    /// `ActionDispatcher`, ADR-0023 deferred), so both oracle cases collapse
+    /// onto this one.
     #[test]
     fn the_nearest_enabled_action_wins_and_receives_the_payload() {
         let ran = Arc::new(AtomicUsize::new(0));
@@ -434,6 +466,8 @@ mod tests {
         );
     }
 
+    /// Flutter parity (`actions_test.dart`, tag `3.44.0`): stands in for
+    /// `'CallbackAction passes correct intent when invoked.'`.
     #[test]
     fn callback_action_accepts_owner_local_rc_state() {
         let ran = Arc::new(AtomicUsize::new(0));
@@ -454,12 +488,22 @@ mod tests {
         assert_eq!(total.get(), 11, "owner-local callback captured Rc<Cell<_>>");
     }
 
-    /// A **disabled** nearer action falls through to an enabled outer one —
-    /// Flutter's walk continues past scopes whose action is disabled
-    /// (`actions.dart:1032-1044`). A plain nearest-map merge would shadow the
-    /// outer action and invoke nothing.
+    /// A **disabled** nearer action stops resolution at its own scope — it
+    /// does *not* fall through to an outer scope's mapping for the same
+    /// intent type. This is Flutter's actual contract, not the inverse:
+    /// `Actions.maybeInvoke`'s own doc states "If a suitable Action is found
+    /// but its `isEnabled` returns false, the search will stop"
+    /// (`actions.dart:993-995`) — the walk stops at the first scope that
+    /// *declares* the type at all, whether or not it is enabled, and never
+    /// reaches the outer action.
+    ///
+    /// Red-check: merge `own` into the enclosing chain as a fallback list
+    /// instead of an outright replace (i.e. keep the outer entry reachable
+    /// once the inner one is checked) — `outer_sum` becomes `7` and `ran`
+    /// becomes `1`, silently reintroducing the fall-through this test pins
+    /// against.
     #[test]
-    fn a_disabled_nearer_action_falls_through_to_the_outer_scope() {
+    fn a_disabled_nearer_action_stops_resolution_at_its_own_scope() {
         let ran = Arc::new(AtomicUsize::new(0));
         let outer_sum = Arc::new(AtomicUsize::new(0));
 
@@ -477,15 +521,24 @@ mod tests {
             })),
         );
 
-        assert_eq!(ran.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            ran.load(Ordering::SeqCst),
+            0,
+            "maybe_invoke reported false: the disabled nearer mapping stopped the search"
+        );
         assert_eq!(
             outer_sum.load(Ordering::SeqCst),
-            7,
-            "resolution fell through the disabled nearer action"
+            0,
+            "the outer action was never reached, let alone invoked"
         );
     }
 
     /// No binding anywhere: `maybe_invoke` reports `false` and nothing runs.
+    ///
+    /// Flutter parity (`actions_test.dart`, tag `3.44.0`): stands in for
+    /// `'maybeInvoke returns null when no action is found'` — FLUI's
+    /// `maybe_invoke` reports "did anything run" as a `bool` rather than
+    /// Dart's `Object?`, so "returns null" ports as "returns `false`".
     #[test]
     fn maybe_invoke_without_a_binding_reports_false() {
         let ran = Arc::new(AtomicUsize::new(0));
