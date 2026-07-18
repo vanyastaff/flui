@@ -102,6 +102,7 @@ pub mod semantics;
 pub mod stack;
 pub mod text;
 pub mod transitions;
+mod value_listenable_builder;
 pub mod widget_state;
 pub mod wrap;
 
@@ -205,6 +206,9 @@ pub use transitions::{
     RotationTransitionState, ScaleTransition, ScaleTransitionState, SlideTransition,
     SlideTransitionState,
 };
+pub use value_listenable_builder::{
+    ValueListenableBuilder, ValueListenableBuilderState, ValueWidgetBuilder,
+};
 // The interactive-state vocabulary a widget's visual properties can vary
 // over (hover/focus/press/…) — see the module's own docs for Flutter parity
 // and named deferrals.
@@ -294,8 +298,8 @@ pub mod prelude {
         SliverFixedExtentList, SliverGrid, SliverIgnorePointer, SliverList, SliverOffstage,
         SliverOpacity, SliverPadding, SliverToBoxAdapter, Spacer, Stack, StreamBuilder, Table,
         TableCell, TableRow, Text, TextEditingController, TextField, TickerMode, Transform,
-        Viewport, Visibility, WidgetState, WidgetStateConstraint, WidgetStateProperty,
-        WidgetStates, WidgetStatesController, WidgetsLocalizations, Wrap,
+        ValueListenableBuilder, Viewport, Visibility, WidgetState, WidgetStateConstraint,
+        WidgetStateProperty, WidgetStates, WidgetStatesController, WidgetsLocalizations, Wrap,
     };
 
     // Common configuration value types, so an app author needs only this import.

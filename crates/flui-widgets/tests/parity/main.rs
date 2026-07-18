@@ -101,3 +101,6 @@ mod transform_test;
 mod constrained_box_test;
 mod fitted_box_test;
 mod wrap_test;
+
+// ── Business.1 fidelity front — ValueListenableBuilder parity ───────────────
+mod value_listenable_builder_test;
