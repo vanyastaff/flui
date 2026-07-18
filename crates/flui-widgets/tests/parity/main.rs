@@ -94,3 +94,9 @@ mod clip_test;
 
 // ── Business.1 fidelity front — Transform family parity (family 9) ──────────
 mod transform_test;
+
+// ── Business.1 fidelity front — layout-trio parity (Wrap / FittedBox /
+//    ConstrainedBox) ─────────────────────────────────────────────────────
+mod constrained_box_test;
+mod fitted_box_test;
+mod wrap_test;

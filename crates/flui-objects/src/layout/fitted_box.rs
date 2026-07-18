@@ -64,6 +64,11 @@ pub struct RenderFittedBox {
     scale_y: f32,
     /// Cached child top-left offset inside `size`.
     align_offset: Offset,
+    /// Cached top-left offset of the (possibly cropped) source region
+    /// *within the child* — nonzero whenever [`BoxFit::apply`] crops the
+    /// child (`Cover`/`FitWidth`/`FitHeight`/an overflowing `None`) under an
+    /// off-center `alignment`. See [`Self::effective_transform`].
+    source_offset: Offset,
     /// True iff the scaled child exceeds `size` on either axis.
     has_visual_overflow: bool,
 }
@@ -79,6 +84,7 @@ impl RenderFittedBox {
             scale_x: 1.0,
             scale_y: 1.0,
             align_offset: Offset::ZERO,
+            source_offset: Offset::ZERO,
             has_visual_overflow: false,
         }
     }
@@ -120,7 +126,14 @@ impl RenderFittedBox {
         self.align_offset
     }
 
-    /// The composed translate-then-scale matrix this box applies to
+    /// Returns the cached source-region offset from the last layout — see
+    /// [`Self::effective_transform`].
+    #[inline]
+    pub fn source_offset(&self) -> Offset {
+        self.source_offset
+    }
+
+    /// The composed translate-scale-translate matrix this box applies to
     /// its child.
     ///
     /// THE single transform accessor: `paint_transform` hands exactly
@@ -128,10 +141,29 @@ impl RenderFittedBox {
     /// inverse — paint and hit-test can never disagree about where the
     /// child is. Identity when nothing is cached (pre-layout /
     /// unit-scale defaults).
+    ///
+    /// Three parts, matching Flutter's `RenderFittedBox._updatePaintData`
+    /// (`proxy_box.dart`) exactly: translate to the destination region's
+    /// top-left, scale, then translate by the NEGATIVE of the source
+    /// region's top-left within the child. That third term only matters
+    /// when [`BoxFit::apply`] crops the child (`Cover`/`FitWidth`/
+    /// `FitHeight`/an overflowing `None`) under an off-center `alignment` —
+    /// `Contain`/`Fill`/`ScaleDown` never crop, so `source_offset` is
+    /// always `Offset::ZERO` for them and this term is a no-op. Dropping
+    /// it (as an earlier version of this method did) left both paint and
+    /// hit-testing consistently wrong together for a cropped, off-center
+    /// `Cover` — silently, since the invariant this method exists to
+    /// enforce (paint and hit-test can't disagree WITH EACH OTHER) still
+    /// held; they simply agreed on the wrong point.
     pub fn effective_transform(&self) -> Matrix4 {
         let t = Matrix4::translation(self.align_offset.dx.get(), self.align_offset.dy.get(), 0.0);
         let s = Matrix4::scaling(self.scale_x, self.scale_y, 1.0);
-        t * s
+        let pre = Matrix4::translation(
+            -self.source_offset.dx.get(),
+            -self.source_offset.dy.get(),
+            0.0,
+        );
+        t * s * pre
     }
 
     /// Builder: set the fit mode.
@@ -194,6 +226,7 @@ impl RenderFittedBox {
         self.scale_x = 1.0;
         self.scale_y = 1.0;
         self.align_offset = Offset::ZERO;
+        self.source_offset = Offset::ZERO;
         self.has_visual_overflow = false;
     }
 
@@ -302,6 +335,20 @@ impl RenderBox for RenderFittedBox {
             px(Self::align_axis(self.alignment.y, free_h)),
         );
 
+        // (7b) Alignment offset of the (possibly cropped) source region
+        //      WITHIN the child — Flutter's `sourceRect = alignment.inscribe
+        //      (sizes.source, Offset.zero & childSize)`. Zero whenever `fit`
+        //      never crops (`source == child_size` for `Contain`/`Fill`/
+        //      `ScaleDown`); nonzero for `Cover`/`FitWidth`/`FitHeight`/an
+        //      overflowing `None` under an off-center alignment, where it is
+        //      the crop window's own top-left inside the child.
+        let source_free_w = child_size.width.get() - src_w;
+        let source_free_h = child_size.height.get() - src_h;
+        self.source_offset = Offset::new(
+            px(Self::align_axis(self.alignment.x, source_free_w)),
+            px(Self::align_axis(self.alignment.y, source_free_h)),
+        );
+
         // (8) Overflow flag — the scaled destination may exceed `size`
         //     for `Cover` / `FitWidth` / `FitHeight` / `None`.
         self.has_visual_overflow = destination.width.get() > size.width.get()
@@ -380,7 +427,11 @@ impl RenderBox for RenderFittedBox {
         if !self.has_child {
             return None;
         }
-        if self.scale_x == 1.0 && self.scale_y == 1.0 && self.align_offset == Offset::ZERO {
+        if self.scale_x == 1.0
+            && self.scale_y == 1.0
+            && self.align_offset == Offset::ZERO
+            && self.source_offset == Offset::ZERO
+        {
             return None;
         }
         Some(self.effective_transform())
@@ -471,6 +522,47 @@ mod tests {
         let (tx, ty) = inverse.transform_point(px(70.0), px(40.0));
         assert!((tx.get() - 30.0).abs() < 1e-4, "tx = {tx:?}");
         assert!((ty.get() - 20.0).abs() < 1e-4, "ty = {ty:?}");
+    }
+
+    /// Regression: `effective_transform` must include the cropped source
+    /// region's own top-left offset within the child (Flutter's
+    /// `sourceRect.left`/`top`), not just the destination-region alignment
+    /// offset — dropping it (as an earlier version of this method did)
+    /// silently mis-maps every cropped `Cover`/`FitWidth`/`FitHeight` case
+    /// under a non-`CENTER` alignment.
+    ///
+    /// A 100×50 child covering a 200×200 box scales by `max(200/100,
+    /// 200/50) = 4`; that overflows the width, so `BoxFit::Cover` crops the
+    /// source to `50×50` (`200/4`), centered by `alignment` — inset `(100 -
+    /// 50) / 2 = 25` on the width axis, `0` on the height axis (no crop
+    /// there). Flutter's own `RenderFittedBox` maps child-local `(50, 25)`
+    /// (the crop window's center) to visual `(100, 100)` — the exact box
+    /// center — through `translate(destRect) * scale(4,4) *
+    /// translate(-sourceRect)`; the two-part `translate(destRect) *
+    /// scale(4,4)` this regression guards against maps it to `(200, 100)`
+    /// instead.
+    #[test]
+    fn effective_transform_accounts_for_a_cropped_cover_sources_offset() {
+        let node = RenderFittedBox {
+            has_child: true,
+            fit: BoxFit::Cover,
+            scale_x: 4.0,
+            scale_y: 4.0,
+            align_offset: Offset::ZERO,
+            source_offset: Offset::new(px(25.0), px(0.0)),
+            ..Default::default()
+        };
+
+        let (x, y) = node
+            .effective_transform()
+            .transform_point(px(50.0), px(25.0));
+        assert!(
+            (x.get() - 100.0).abs() < 1e-4 && (y.get() - 100.0).abs() < 1e-4,
+            "child-local (50, 25) (the crop window's center) must map to the \
+             box's own center (100, 100), got ({}, {})",
+            x.get(),
+            y.get(),
+        );
     }
 
     #[test]
