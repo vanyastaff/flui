@@ -107,3 +107,6 @@ mod value_listenable_builder_test;
 
 // ── Business.1 fidelity front — Dismissible parity (gesture-heavy widget) ───
 mod dismissible_test;
+
+// ── Business.1 implementation-gated fidelity unit — Draggable/DragTarget ────
+mod draggable_test;

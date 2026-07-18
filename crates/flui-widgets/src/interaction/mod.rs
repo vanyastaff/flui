@@ -5,6 +5,8 @@
 mod absorb_pointer;
 mod actions;
 mod dismissible;
+mod drag_target;
+mod draggable;
 mod focus;
 mod gesture_arena_scope;
 mod gesture_detector;
@@ -24,6 +26,11 @@ pub use dismissible::{
     DismissDirection, DismissDirectionCallback, DismissUpdateCallback, DismissUpdateDetails,
     Dismissible, DismissibleState,
 };
+pub use drag_target::{
+    DragTarget, DragTargetAccept, DragTargetBuilder, DragTargetDetails, DragTargetLeave,
+    DragTargetMove, DragTargetState, DragTargetWillAccept, ErasedDragData,
+};
+pub use draggable::{Draggable, DraggableDetails, DraggableState};
 pub use focus::{ExcludeFocus, Focus, FocusChangeHandler, FocusScope, FocusScopeState, FocusState};
 pub(crate) use focus::{enclosing_focus_parent, install_rect_provider};
 pub use gesture_arena_scope::GestureArenaScope;
