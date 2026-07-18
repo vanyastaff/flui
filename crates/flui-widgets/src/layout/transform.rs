@@ -82,6 +82,11 @@ impl Transform {
     }
 
     fn build_render_object(&self) -> RenderTransform {
+        // Order is load-bearing: `RenderTransform::with_alignment` clears
+        // `origin` back to `None` (it's a "set the pivot mode to alignment"
+        // call, not a field-merge), so it must run BEFORE `with_origin`.
+        // Reversing this — `.with_origin(..)` then `.with_alignment(..)` —
+        // would silently drop any explicit `origin` this widget was given.
         let render_object = RenderTransform::new(self.transform).with_alignment(self.alignment);
         match self.origin {
             Some(origin) => render_object.with_origin(origin),

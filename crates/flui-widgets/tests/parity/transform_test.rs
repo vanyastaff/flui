@@ -5,12 +5,19 @@
 //! - `packages/flutter/test/widgets/basic_test.dart` (tag `3.44.0`), the
 //!   `'FractionalTranslation'` group (4 cases).
 //!
-//! Ported cases (6 upstream names, 12 Rust tests — hit-testing under
+//! Ported cases (7 upstream names, 9 Rust tests — hit-testing under
 //! translation/scale/composition and the alignment+origin combination the
 //! render object's `compute_origin` fix addresses are the portable core; FLUI
 //! has no golden-file/compositing-layer harness, so every `TransformLayer`
 //! matrix/count assertion is dropped, same reason `clip_test.rs` drops
-//! `paints..save()..clipRect()` assertions):
+//! `paints..save()..clipRect()` assertions). Every case below that taps a
+//! target starts from a fresh `AtomicBool::new(false)`, so upstream's pre-tap
+//! `expect(didReceiveTap`/`pointerDown, isFalse)` — asserting only that the
+//! flag is still at its default before any interaction, not a behavior — is
+//! dropped uniformly across all of them (the `'Transform alignment'`,
+//! `'Transform offset + alignment'`, `'Translated child into translated box -
+//! hit test'`, and `'FractionalTranslation'` cases below, 8 Rust tests in
+//! total):
 //! - `'Transform alignment'` (the `tapAt` hit-test legs; the render-view
 //!   `Positioned`/`Stack` decoy that proves the *unrotated* screen position is
 //!   not itself hittable is dropped — nothing in the FLUI setup below occupies
@@ -26,17 +33,16 @@
 //!   isolation) end-to-end through `Transform`'s widget → render-object wiring,
 //!   which the unit test alone does not reach.
 //! - `'Translated child into translated box - hit test'` (nested
-//!   `Transform.translate` composition; the initial
-//!   `expect(pointerDown, isFalse)` before the tap is dropped — it asserts
-//!   only that the flag starts at its `Default` value, not a behavior) —
+//!   `Transform.translate` composition) —
 //!   [`nested_translate_composition_hit_test_reaches_the_doubly_translated_child`].
-//! - `'Transform.scale with 0.0 does not paint child layers'` (the hit-test
-//!   half only — `does not paint child layers` is a layer-count assertion,
-//!   dropped; both the uniform-zero and single-axis-zero legs are ported since
-//!   they exercise the same `try_inverse() == None` branch from different
-//!   determinant-zero matrix shapes) —
-//!   [`transform_scale_zero_hit_test_misses_the_non_invertible_transform`],
-//!   [`transform_scale_x_zero_hit_test_misses_the_non_invertible_transform`].
+//! - `'Transform.translate'` (the `getTopLeft` assert; ported as an
+//!   equivalent hit-test proof rather than a direct offset assertion — the
+//!   harness's `absolute_offset` sums each ancestor's *committed layout
+//!   offset*, and `RenderTransform` never writes one for its child, so it
+//!   cannot observe a paint-only shift; see the test's own doc comment for
+//!   the empirical confirmation. The `expect(layers.length, 1)` half stays
+//!   out of scope — see below) —
+//!   [`transform_translate_hit_test_reaches_the_child_at_its_shifted_position`].
 //! - `'FractionalTranslation'` group, all three `'hit test - ...'` cases (the
 //!   `'semantics bounds are updated'` fourth case is out of scope — see
 //!   below) —
@@ -56,6 +62,18 @@
 //!   offset, ignoring the paint-time shift) since no upstream test exercises it
 //!   at all —
 //!   [`fractional_translation_transform_hit_tests_false_hit_tests_the_unshifted_child`].
+//! - `'Transform.scale with 0.0 does not paint child layers'`'s three
+//!   zero-determinant legs (`scale: 0.0`, `scaleX: 0.0`, `scaleY: 0.0`) —
+//!   all four of upstream's `expect(tester.layers, hasLength(...))`
+//!   assertions are layer counts (the fourth, `scale: 0.01`, is a non-zero
+//!   sanity check), so none of this upstream test is a literal hit-test
+//!   port; this delta port instead probes the hit-test consequence of the
+//!   same three zero-determinant matrix shapes —
+//!   `RenderTransform::hit_test`'s `try_inverse()` returns `None` for each,
+//!   so the node reports no hit at all, regardless of tap position —
+//!   [`transform_scale_zero_hit_test_misses_the_non_invertible_transform`],
+//!   [`transform_scale_x_zero_hit_test_misses_the_non_invertible_transform`],
+//!   [`transform_scale_y_zero_hit_test_misses_the_non_invertible_transform`].
 //! - `'Transform.scale'`'s scale-factor assertion (the `m[0][0]` delta only —
 //!   the full composited-layer matrix, including the CENTER-alignment pivot's
 //!   translation component, is a `TransformLayer` assertion, out of scope) —
@@ -106,7 +124,9 @@
 //!   with or without needsCompositing'`, `'Transform.rotate does not remove
 //!   layers due to singular short-circuit'`, `'Transform.rotate creates nice
 //!   rotation matrices for 0, 90, 180, 270 degrees'`, `'Transform.scale with
-//!   0.0 does not paint child layers'` (the layer-count half),
+//!   0.0 does not paint child layers'` (all four `expect(tester.layers,
+//!   hasLength(...))` legs are layer counts — see the Delta ports section
+//!   above for the hit-test probes this port adds instead),
 //!   `'Transform.translate/scale/rotate with FilterQuality produces filter
 //!   layer'` (4 cases), `'Transform layers update to match child and
 //!   filterQuality'`, `'Transform layers with filterQuality golden'` — all
@@ -649,5 +669,95 @@ fn transform_rotation_widget_wires_the_angle_through_to_the_render_object() {
         "Transform::rotation(PI/2) must set the render object's rotation to \
          PI/2 (got {})",
         laid.transform_rotation(id)
+    );
+}
+
+/// `Transform::translate` shifts the child by `(100.0, 50.0)` for painting
+/// and hit-testing while leaving its own committed layout offset at
+/// `Offset::ZERO` — same as Flutter, where `RenderTransform`'s child
+/// `parentData.offset` also stays zero; `getTopLeft` there is a
+/// `localToGlobal`/`applyPaintTransform` matrix walk, not a
+/// `parentData.offset` sum. The harness's `absolute_offset` sums each
+/// ancestor's *committed layout offset*, and `RenderTransform` never writes
+/// one for its child (the shift lives only in `paint_transform`
+/// /`effective_transform`) — confirmed empirically: `absolute_offset` reads
+/// `Offset::ZERO` for the child below, not `(100.0, 50.0)`, so it cannot
+/// stand in for `getTopLeft` here. This proves the same shift the way every
+/// other hit-test case in this file does instead: the child fills the
+/// tight 800×600 screen, so its *unshifted* footprint would be `x: [0,
+/// 800], y: [0, 600]`; its *actual*, translated one is `x: [100, 900], y:
+/// [50, 650]`. `(50.0, 300.0)` falls in the former but not the latter —
+/// must miss; `(150.0, 300.0)` falls in both — must hit.
+///
+/// Flutter parity: `transform_test.dart` `'Transform.translate'` (3.44.0) —
+/// the `expect(tester.getTopLeft(find.byType(Container)), const
+/// Offset(100.0, 50.0))` assert, ported as an equivalent hit-test proof (see
+/// above for why a direct `absolute_offset` assertion does not reach this
+/// case). The `expect(layers.length, 1)` half (no transform layer for a
+/// pure translation) stays out of scope — see the "Out of scope" list below.
+#[test]
+fn transform_translate_hit_test_reaches_the_child_at_its_shifted_position() {
+    let did_tap = Arc::new(AtomicBool::new(false));
+    let tap_cb = Arc::clone(&did_tap);
+
+    let laid = pump_widget(
+        Transform::translate(100.0, 50.0).child(
+            GestureDetector::new()
+                .behavior(HitTestBehavior::Opaque)
+                .on_tap(move || tap_cb.store(true, Ordering::SeqCst)),
+        ),
+        screen(),
+    );
+
+    laid.dispatch_pointer_down(50.0, 300.0);
+    laid.dispatch_pointer_up(50.0, 300.0);
+    assert!(
+        !did_tap.load(Ordering::SeqCst),
+        "a tap at (50, 300) falls inside the child's unshifted 800x600 \
+         footprint (x: [0, 800]) but outside its actual, translated one \
+         (x: [100, 900]) and must miss"
+    );
+
+    laid.dispatch_pointer_down(150.0, 300.0);
+    laid.dispatch_pointer_up(150.0, 300.0);
+    assert!(
+        did_tap.load(Ordering::SeqCst),
+        "a tap at (150, 300) falls inside the child's translated footprint \
+         (x: [100, 900], y: [50, 650]) and must hit"
+    );
+}
+
+/// A single collapsed axis on the *other* dimension (`scaleY: 0.0`, `scaleX`
+/// left non-zero) — upstream's third zero-determinant leg, alongside
+/// [`transform_scale_zero_hit_test_misses_the_non_invertible_transform`] and
+/// [`transform_scale_x_zero_hit_test_misses_the_non_invertible_transform`].
+/// Same `try_inverse() == None` branch, from the third of the three
+/// differently-shaped zero-determinant matrices upstream's test builds.
+///
+/// Flutter parity: `transform_test.dart` `'Transform.scale with 0.0 does not
+/// paint child layers'` (3.44.0) — the `scaleY: 0.0` leg (delta port; see
+/// the module doc's Delta ports section for why none of this upstream test
+/// is a literal hit-test port).
+#[test]
+fn transform_scale_y_zero_hit_test_misses_the_non_invertible_transform() {
+    let did_tap = Arc::new(AtomicBool::new(false));
+    let tap_cb = Arc::clone(&did_tap);
+
+    let laid = pump_widget(
+        Transform::scale(1.0, 0.0).child(
+            GestureDetector::new()
+                .behavior(HitTestBehavior::Opaque)
+                .on_tap(move || tap_cb.store(true, Ordering::SeqCst)),
+        ),
+        screen(),
+    );
+
+    laid.dispatch_pointer_down(400.0, 300.0);
+    laid.dispatch_pointer_up(400.0, 300.0);
+
+    assert!(
+        !did_tap.load(Ordering::SeqCst),
+        "a Transform::scale(1.0, 0.0) collapses the y axis to a \
+         non-invertible matrix; even a tap at the screen center must miss"
     );
 }
