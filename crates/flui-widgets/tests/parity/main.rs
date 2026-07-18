@@ -91,3 +91,6 @@ mod animated_size_test;
 
 // ── Business.1 fidelity front — Clip family parity (family 8) ───────────────
 mod clip_test;
+
+// ── Business.1 fidelity front — Transform family parity (family 9) ──────────
+mod transform_test;

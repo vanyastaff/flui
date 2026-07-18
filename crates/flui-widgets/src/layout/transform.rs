@@ -3,6 +3,7 @@
 use flui_geometry::Matrix4;
 use flui_objects::RenderTransform;
 use flui_rendering::protocol::BoxProtocol;
+use flui_types::{Alignment, Offset};
 use flui_view::{Child, IntoView, RenderView, View, impl_render_view};
 
 /// Applies a [`Matrix4`] transform to its child before painting.
@@ -10,9 +11,23 @@ use flui_view::{Child, IntoView, RenderView, View, impl_render_view};
 /// Flutter parity: `widgets/basic.dart` `Transform` over `RenderTransform`.
 /// The transform affects painting and hit-testing but not layout — the child
 /// is laid out as if untransformed.
+///
+/// `alignment` defaults to [`Alignment::CENTER`] — matching Flutter's
+/// `Transform.rotate`/`Transform.scale`/`Transform.flip` factory defaults,
+/// but **not** Flutter's bare `Transform(transform:, origin:)` constructor,
+/// whose `alignment` defaults to `null` (no contribution at all). An
+/// `origin` set here without an explicit [`alignment`](Self::alignment) call
+/// therefore combines with the CENTER default instead of acting alone —
+/// see `docs/ROADMAP.md` Cross.H for the parity-port finding this surfaced.
+// `transform` names the Flutter-parity concept the struct wraps (matches
+// `RenderTransform`'s own field of the same name); renaming it to dodge the
+// lint would trade a clear name for a weaker one.
+#[allow(clippy::struct_field_names)]
 #[derive(Clone, Debug)]
 pub struct Transform {
     transform: Matrix4,
+    alignment: Alignment,
+    origin: Option<Offset>,
     child: Child,
 }
 
@@ -21,6 +36,8 @@ impl Transform {
     pub fn new(transform: Matrix4) -> Self {
         Self {
             transform,
+            alignment: Alignment::CENTER,
+            origin: None,
             child: Child::empty(),
         }
     }
@@ -40,11 +57,36 @@ impl Transform {
         Self::new(*RenderTransform::rotation(radians).transform())
     }
 
+    /// Sets the alignment of the transform's pivot, relative to the child's
+    /// size (Flutter parity: `Transform.alignment`). Combines additively with
+    /// [`origin`](Self::origin) when both are set.
+    #[must_use]
+    pub fn alignment(mut self, alignment: Alignment) -> Self {
+        self.alignment = alignment;
+        self
+    }
+
+    /// Sets an explicit pivot offset, on top of [`alignment`](Self::alignment)'s
+    /// contribution (Flutter parity: `Transform.origin`).
+    #[must_use]
+    pub fn origin(mut self, origin: Offset) -> Self {
+        self.origin = Some(origin);
+        self
+    }
+
     /// Set the transformed child.
     #[must_use]
     pub fn child(mut self, child: impl IntoView) -> Self {
         self.child = Child::some(child.into_view());
         self
+    }
+
+    fn build_render_object(&self) -> RenderTransform {
+        let render_object = RenderTransform::new(self.transform).with_alignment(self.alignment);
+        match self.origin {
+            Some(origin) => render_object.with_origin(origin),
+            None => render_object,
+        }
     }
 }
 
@@ -56,7 +98,7 @@ impl RenderView for Transform {
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,
     ) -> Self::RenderObject {
-        RenderTransform::new(self.transform)
+        self.build_render_object()
     }
 
     fn update_render_object(
@@ -64,7 +106,7 @@ impl RenderView for Transform {
         _ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
     ) {
-        *render_object = RenderTransform::new(self.transform);
+        *render_object = self.build_render_object();
     }
 
     fn has_children(&self) -> bool {
