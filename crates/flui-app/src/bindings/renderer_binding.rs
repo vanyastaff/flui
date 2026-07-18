@@ -238,9 +238,15 @@ impl RenderingFlutterBinding {
     pub fn set_semantics_enabled(&self, enabled: bool) {
         let was_enabled = self.semantics_enabled.swap(enabled, Ordering::Relaxed);
         if was_enabled != enabled {
-            // Notify listeners
-            let listeners = self.semantics_listeners.read();
-            for listener in listeners.iter() {
+            // Snapshot the listeners into an owned `Vec` and drop the read
+            // guard before invoking any of them — a listener that calls
+            // `add_semantics_enabled_listener`/`remove_semantics_enabled_listener`
+            // from inside its own callback would otherwise try to acquire the
+            // write lock while this thread still held the read guard and
+            // deadlock (same read-then-write reentrancy `PaintingBinding`'s
+            // `notify_listeners` guards against).
+            let listeners = self.semantics_listeners.read().clone();
+            for listener in &listeners {
                 listener(enabled);
             }
 
@@ -483,12 +489,16 @@ impl RendererBinding for RenderingFlutterBinding {
 mod tests {
     use super::*;
 
-    /// `RenderingFlutterBinding::instance()` is a process-wide singleton, so the
-    /// tests that toggle its `semantics_enabled` flag share one `AtomicBool`.
-    /// They serialize through this lock (held for each test's duration) so they
-    /// cannot interleave their writes and observe each other's state — the
-    /// listener test in particular asserts exact callback counts that a
-    /// concurrent toggle would corrupt.
+    /// `RenderingFlutterBinding::instance()` is a process-wide singleton, so any
+    /// test that mutates its shared state — the `semantics_enabled` flag, the
+    /// first-frame deferral counter, or (through `allow_first_frame`) the
+    /// global `Scheduler::instance()` — shares that state with every other
+    /// test in this module under `cargo test`'s one-process, multi-threaded
+    /// run (nextest's per-test process makes this belt and braces there, per
+    /// AGENTS.md "Testing quirks"). They serialize through this lock (held for
+    /// each test's duration) so they cannot interleave their writes and
+    /// observe each other's state — the listener tests in particular assert
+    /// exact callback counts that a concurrent toggle would corrupt.
     static SEMANTICS_TEST_LOCK: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
 
     #[test]
@@ -526,6 +536,7 @@ mod tests {
 
     #[test]
     fn test_send_frames_to_engine() {
+        let _guard = SEMANTICS_TEST_LOCK.lock();
         let binding = RenderingFlutterBinding::instance();
         binding.reset_first_frame_sent();
 
@@ -695,5 +706,89 @@ mod tests {
 
         // Leave the shared singleton disabled for the next test.
         binding.set_semantics_enabled(false);
+    }
+
+    /// A listener that registers another listener from inside its own
+    /// callback must not deadlock `set_semantics_enabled`.
+    ///
+    /// The notification loop used to run listener callbacks while still
+    /// holding `semantics_listeners.read()`; a callback that then called
+    /// `add_semantics_enabled_listener` (which takes the write lock) would
+    /// block forever on `parking_lot`'s non-reentrant read-then-write on the
+    /// same thread. The fix snapshots the listeners into an owned `Vec` and
+    /// drops the read guard before invoking any of them.
+    ///
+    /// The whole scenario (attach, both toggles, detach) runs on one
+    /// dedicated background thread rather than the test thread, for two
+    /// reasons: `RenderingFlutterBinding::instance()` is owner-thread-local
+    /// (ADR-0027) — a fresh OS thread's first `instance()` call leaks its own
+    /// binding, so splitting the steps across threads would silently operate
+    /// on two unrelated bindings — and the deadlock under test is itself a
+    /// same-thread read-then-write lock reacquisition, which only reproduces
+    /// when every step runs on that one thread. The test thread only bounds
+    /// how long it waits for that thread's result over a channel: a bare
+    /// `.join()` would hang forever (and, under `cargo test`'s shared-process
+    /// threads, wedge the rest of the suite) if the deadlock regressed;
+    /// `recv_timeout` turns that hang into an explicit `expect` panic
+    /// instead.
+    #[test]
+    fn semantics_listener_that_registers_another_listener_does_not_deadlock() {
+        use std::sync::{atomic::AtomicUsize, mpsc};
+        use std::time::Duration;
+
+        let _guard = SEMANTICS_TEST_LOCK.lock();
+
+        let (result_tx, result_rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let binding = RenderingFlutterBinding::instance();
+            binding.set_semantics_enabled(false);
+
+            let late_calls = Arc::new(AtomicUsize::new(0));
+            let late_calls_for_listener = Arc::clone(&late_calls);
+            let late_listener: Arc<dyn Fn(bool) + Send + Sync> = Arc::new(move |_enabled| {
+                late_calls_for_listener.fetch_add(1, Ordering::Relaxed);
+            });
+
+            // Callbacks must be `Send + Sync` (the listener trait bound), but
+            // `RenderingFlutterBinding` itself is not — it owns a `Rc`-based
+            // `MouseTracker` — so the reentrant call goes back through the
+            // `'static` singleton accessor rather than capturing `binding`.
+            let late_listener_for_reentrant = late_listener.clone();
+            let reentrant_listener: Arc<dyn Fn(bool) + Send + Sync> = Arc::new(move |_enabled| {
+                RenderingFlutterBinding::instance()
+                    .add_semantics_enabled_listener(late_listener_for_reentrant.clone());
+            });
+            binding.add_semantics_enabled_listener(reentrant_listener.clone());
+
+            // First toggle: `reentrant_listener` fires and registers
+            // `late_listener`, but must not itself run in this same pass.
+            binding.set_semantics_enabled(true);
+            let after_first = late_calls.load(Ordering::Relaxed);
+
+            // Second toggle: now observes `late_listener`, registered above.
+            binding.set_semantics_enabled(false);
+            let after_second = late_calls.load(Ordering::Relaxed);
+
+            binding.remove_semantics_enabled_listener(&late_listener);
+            binding.remove_semantics_enabled_listener(&reentrant_listener);
+
+            let _ = result_tx.send((after_first, after_second));
+        });
+
+        let (after_first, after_second) = result_rx.recv_timeout(Duration::from_secs(5)).expect(
+            "set_semantics_enabled deadlocked: a listener that registers another \
+             listener from inside its own callback must not block on the \
+             notification loop's own read guard",
+        );
+
+        assert_eq!(
+            after_first, 0,
+            "a listener registered mid-notification must not run in the same \
+             pass that registered it",
+        );
+        assert_eq!(
+            after_second, 1,
+            "a later toggle must observe the listener registered mid-notification",
+        );
     }
 }

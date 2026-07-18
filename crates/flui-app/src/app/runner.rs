@@ -259,6 +259,27 @@ fn dispatch_platform_realm(
     Ok(())
 }
 
+/// Drains the per-frame owner-inbox commands and reports whether the drain
+/// itself asked for a redraw.
+///
+/// Every platform's frame callback must call this exactly once per wake, at
+/// the Idle frame boundary — before the dirty gate, and before any
+/// early-return fast path a platform's frame callback takes (e.g. Android's
+/// hot-reload plugin scene) — never inside the frame transaction below.
+/// Running it unconditionally on every wake is what keeps
+/// `UiCommandSender`'s bounded inbox draining: a wake that skips the drain
+/// lets the inbox fill until it hard-errors, and a coalesced redraw request
+/// that nothing consumes never wakes the loop again (`take_redraw_request`
+/// only flips back to `false` once observed here).
+#[cfg(not(target_os = "ios"))]
+fn drain_owner_inbox(realm: &super::ui_realm::UiRealm) -> bool {
+    let report = realm.drain_commands();
+    if report != super::ui_realm::DrainReport::default() {
+        tracing::trace!(?report, "owner inbox drained");
+    }
+    realm.take_redraw_request()
+}
+
 #[cfg(all(not(target_os = "ios"), not(target_arch = "wasm32")))]
 fn teardown_platform_realm() {
     let (realm, queued) = PLATFORM_REALM_HOST.with(|slot| {
@@ -1059,13 +1080,7 @@ where
         // borrow: a command that re-enters this frame callback through a
         // nested platform pump then finds an empty slot and skips the
         // drain, instead of panicking the borrow.
-            let inbox_redraw = {
-                let report = realm.drain_commands();
-                if report != super::ui_realm::DrainReport::default() {
-                    tracing::trace!(?report, "owner inbox drained");
-                }
-                realm.take_redraw_request()
-            };
+            let inbox_redraw = drain_owner_inbox(realm);
 
             let dirty =
                 inbox_redraw || binding.needs_redraw() || binding.has_pending_work(realm);
@@ -1421,6 +1436,15 @@ where
         let _ = dispatch_platform_realm(
             realm_dispatch,
             RealmEvent::Frame(Box::new(move |realm| {
+                // Owner-inbox drain: commands and worker results commit HERE,
+                // at the frame boundary while the scheduler phase is Idle —
+                // never inside the frame transaction below. Runs before
+                // everything else in this callback, including the hot-reload
+                // plugin scene fast path below, so a command-driven redraw
+                // request is observed by the very frame its wake produced
+                // regardless of which rendering path this frame takes.
+                let inbox_redraw = drain_owner_inbox(realm);
+
                 let mut r = renderer_frame.lock();
                 let (w, h) = r.size();
                 let mut hr = hot_reload_frame.lock();
@@ -1442,7 +1466,8 @@ where
 
                 let binding = AppBinding::instance();
                 let has_pending = binding.has_pending_work(realm);
-                if !binding.needs_redraw()
+                if !inbox_redraw
+                    && !binding.needs_redraw()
                     && !has_pending
                     && !Scheduler::instance().is_frame_scheduled()
                 {
@@ -1661,9 +1686,17 @@ where
         let _ = dispatch_platform_realm(
             realm_dispatch,
             RealmEvent::Frame(Box::new(move |realm| {
+                // Owner-inbox drain: commands and worker results commit HERE,
+                // at the frame boundary while the scheduler phase is Idle —
+                // never inside the frame transaction below. Runs before the
+                // dirty gate so a command-driven redraw request is observed
+                // by the very frame its wake produced.
+                let inbox_redraw = drain_owner_inbox(realm);
+
                 let binding = AppBinding::instance();
                 let has_pending = binding.has_pending_work(realm);
-                if !binding.needs_redraw()
+                if !inbox_redraw
+                    && !binding.needs_redraw()
                     && !has_pending
                     && !Scheduler::instance().is_frame_scheduled()
                 {
