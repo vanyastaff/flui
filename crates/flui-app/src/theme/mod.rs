@@ -5,6 +5,13 @@
 //! widget that provides `flui_material::ThemeData` to descendants at
 //! runtime.
 //!
+//! **Status: parked, unwired.** Nothing in this crate reads `AppTheme` or
+//! `AppColorScheme` yet — no runner, binding, or widget consumes them. This
+//! is a deliberately-kept candidate surface pending the design-system
+//! integration work (`ADR-0028`,
+//! docs/adr/ADR-0028-design-system-decoupling-contract.md), not dead code
+//! left behind by accident.
+//!
 //! # Design Philosophy
 //!
 //! - Flat, composable structs

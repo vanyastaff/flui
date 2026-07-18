@@ -10,15 +10,16 @@
 //! ```text
 //! flui_app
 //!   ├── app/
-//!   │   ├── binding.rs      - transitional process service host
+//!   │   ├── binding.rs      - transitional process service host (AppBinding)
 //!   │   ├── ui_realm.rs     - owner-affine widget runtime
 //!   │   ├── config.rs       - AppConfig
-//!   │   └── lifecycle.rs    - AppLifecycle
+//!   │   ├── direct.rs       - direct rendering mode (bypasses the widget tree)
+//!   │   ├── lifecycle.rs    - AppLifecycle
+//!   │   └── runner.rs       - platform bootstrap (desktop/android/web run loops)
 //!   │
 //!   ├── bindings/           - Re-exports from other crates
-//!   │
-//!   └── debug/
-//!       └── flags.rs        - DebugFlags
+//!   ├── embedder/           - Platform embedder adapters (window handle, GPU surface)
+//!   └── theme/              - AppTheme/AppColorScheme (parked, unwired)
 //! ```
 //!
 //! Applications normally enter through [`run_app`] or

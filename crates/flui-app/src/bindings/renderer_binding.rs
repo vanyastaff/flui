@@ -52,6 +52,16 @@ use flui_semantics::{Assertiveness, SemanticsAction, SemanticsBinding};
 use flui_types::Offset;
 use parking_lot::RwLock;
 
+/// A subscriber to [`RenderingFlutterBinding::set_semantics_enabled`] changes.
+///
+/// Named alias for `Arc<dyn Fn(bool) + Send + Sync>` so the field and impl
+/// signatures below read as intent rather than nested generics (kills the
+/// `clippy::type_complexity` lint that fired on the inline form). Identical
+/// to the type spelled out in `RendererBinding::add_semantics_enabled_listener`
+/// (flui-rendering) — a type alias is transparent, so this satisfies the
+/// trait without repeating the trait's own long-hand spelling here.
+type SemanticsEnabledListener = Arc<dyn Fn(bool) + Send + Sync>;
+
 // ============================================================================
 // RenderingFlutterBinding
 // ============================================================================
@@ -96,8 +106,7 @@ pub struct RenderingFlutterBinding {
     semantics_enabled: AtomicBool,
 
     /// Listeners for semantics enabled changes.
-    #[allow(clippy::type_complexity)]
-    semantics_listeners: RwLock<Vec<Arc<dyn Fn(bool) + Send + Sync>>>,
+    semantics_listeners: RwLock<Vec<SemanticsEnabledListener>>,
 
     /// Counter for deferred first frame.
     first_frame_deferred_count: AtomicU32,
@@ -202,6 +211,12 @@ impl RenderingFlutterBinding {
     ///
     /// This method may only be called once for each corresponding call
     /// to [`defer_first_frame`](Self::defer_first_frame).
+    ///
+    /// # Panics
+    ///
+    /// Panics if called without a matching prior
+    /// [`defer_first_frame`](Self::defer_first_frame) call (i.e. the deferred
+    /// count is already zero).
     pub fn allow_first_frame(&self) {
         let prev = self
             .first_frame_deferred_count
@@ -350,11 +365,11 @@ impl RendererBinding for RenderingFlutterBinding {
         self.semantics_enabled.load(Ordering::Relaxed)
     }
 
-    fn add_semantics_enabled_listener(&self, listener: Arc<dyn Fn(bool) + Send + Sync>) {
+    fn add_semantics_enabled_listener(&self, listener: SemanticsEnabledListener) {
         self.semantics_listeners.write().push(listener);
     }
 
-    fn remove_semantics_enabled_listener(&self, listener: &Arc<dyn Fn(bool) + Send + Sync>) {
+    fn remove_semantics_enabled_listener(&self, listener: &SemanticsEnabledListener) {
         let mut listeners = self.semantics_listeners.write();
         listeners.retain(|l| !Arc::ptr_eq(l, listener));
     }

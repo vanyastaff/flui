@@ -12,7 +12,7 @@
 //!
 //! # Flutter Equivalence
 //!
-//! Flutter's mixin-based binding system:
+//! Flutter composes these responsibilities into one class via mixins:
 //! ```dart
 //! class WidgetsFlutterBinding extends BindingBase
 //!     with GestureBinding, SchedulerBinding, ServicesBinding,
@@ -20,19 +20,13 @@
 //!          WidgetsBinding { }
 //! ```
 //!
-//! FLUI equivalent using composition:
-//! ```rust,ignore
-//! pub struct WidgetsFlutterBinding {
-//!     widgets: WidgetsBinding,
-//!     gestures: GestureBinding,
-//!     pipeline_owner: PipelineOwner,
-//!     scheduler: Scheduler,
-//!     renderer: RenderingFlutterBinding,
-//! }
-//! ```
+//! FLUI does not compose a matching struct. `flui_app::WidgetsFlutterBinding`
+//! is a type alias for [`AppBinding`](crate::AppBinding) — the transitional
+//! process-scoped service host that owns the frame loop, render pipeline, and
+//! input dispatch directly. The element/build side lives in `UiRealm`
+//! (owner-affine, one per window), not as a field on this module's bindings.
 
 mod renderer_binding;
-mod traits;
 
 // Re-export bindings from their respective crates
 pub use flui_interaction::binding::GestureBinding;
@@ -41,6 +35,5 @@ pub use flui_rendering::{binding::RendererBinding, pipeline::PipelineOwner};
 pub use flui_scheduler::Scheduler;
 pub use flui_semantics::SemanticsBinding;
 pub use flui_view::WidgetsBinding;
-// Re-export local bindings and traits
+// Re-export the local binding
 pub use renderer_binding::RenderingFlutterBinding;
-pub use traits::{Binding, RendererBindingBehavior};

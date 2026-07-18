@@ -61,8 +61,10 @@ use crate::embedder::PlatformWindowHandle;
 ///
 /// # Platform Support
 ///
-/// Currently supports desktop platforms (Windows, macOS, Linux).
-/// Uses `flui_platform::current_platform()` for platform selection.
+/// Dead on arrival on the winit backend (Linux) — see the "Open window" note
+/// in the body for why. Native (non-winit) Windows/macOS backends are
+/// unaffected. Uses `flui_platform::current_platform()` for platform
+/// selection.
 pub fn run_direct(
     config: AppConfig,
     render_fn: impl FnMut(&mut SceneBuilder<'_>, f32, f32) + Send + 'static,
@@ -189,7 +191,10 @@ pub fn run_direct(
         }
     }));
 
-    // 6. Register input callback (triggers redraw on any input)
+    // 6. Register input callback. This is a no-op stub: it neither inspects
+    // the input nor requests a redraw (`resolved(false, false)`). Direct mode
+    // has no widget tree to dispatch input into; a caller who needs input
+    // handling drives it from inside `render_fn` via its own state.
     window.on_input(Box::new(move |_input: PlatformInput| {
         DispatchEventResult::resolved(false, false)
     }));

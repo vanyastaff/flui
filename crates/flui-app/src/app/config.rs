@@ -38,9 +38,23 @@ pub struct AppConfig {
     pub decorations: bool,
 
     /// Whether to start in fullscreen mode.
+    ///
+    /// Not currently wired: `From<&AppConfig> for flui_platform::WindowOptions`
+    /// has no fullscreen field to carry this into, and nothing calls
+    /// `PlatformWindow::toggle_fullscreen` at startup to honor it. The intended
+    /// consumer is the desktop bootstrap in `runner.rs`, once `WindowOptions`
+    /// (or a post-creation `toggle_fullscreen` call keyed off this field)
+    /// grows the plumbing end to end.
     pub fullscreen: bool,
 
     /// Whether to enable vsync.
+    ///
+    /// Not currently wired: `From<&AppConfig> for flui_platform::WindowOptions`
+    /// drops this field. `AppBinding::vsync()`/`VsyncScope` is an unrelated
+    /// animation-ticker registry, not the GPU present mode — do not confuse
+    /// the two. The intended consumer is `flui-engine`'s
+    /// `select_present_mode`, which today always chooses `Fifo` regardless of
+    /// this value.
     pub vsync: bool,
 
     /// Advisory target frame rate (FPS) — **not enforced pacing**.
@@ -52,10 +66,6 @@ pub struct AppConfig {
     /// vsync pacing):
     /// - `run_app_with_config_impl` logs it (`target_fps_advisory`) at
     ///   startup; informational only.
-    /// - `EmbedderScheduler::stats` (`flui-app::embedder`) reports it from
-    ///   a *separate* `flui_scheduler::Scheduler` instance's own
-    ///   `target_fps`, unrelated to this field; `EmbedderScheduler` itself
-    ///   is unwired scaffolding, not reachable from the running app.
     /// - `flui-platform`'s `PlatformCapabilities::default_target_fps` is a
     ///   platform-reported hint (e.g. `120` for a ProMotion display) that
     ///   nothing currently reads into this field — `AppConfig::default`
@@ -68,9 +78,20 @@ pub struct AppConfig {
     pub target_fps: u32,
 
     /// Whether to show performance overlay.
+    ///
+    /// Not currently wired: `From<&AppConfig> for flui_platform::WindowOptions`
+    /// drops this field and no overlay widget reads it yet. Intended
+    /// consumer: a future debug overlay (`flui-devtools`'s frame profiler, or
+    /// an equivalent in-tree overlay widget), analogous to Flutter's
+    /// `showPerformanceOverlay`.
     pub show_performance_overlay: bool,
 
     /// Whether to enable debug paint.
+    ///
+    /// Not currently wired: `From<&AppConfig> for flui_platform::WindowOptions`
+    /// drops this field and no paint-phase debug visualization reads it yet.
+    /// Intended consumer: a future paint-phase hook analogous to Flutter's
+    /// `debugPaintSizeEnabled`.
     pub debug_paint: bool,
 
     /// Optional hot-reload worker dylib path for host/worker apps.
