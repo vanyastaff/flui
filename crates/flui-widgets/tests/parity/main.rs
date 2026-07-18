@@ -88,6 +88,7 @@ mod animated_align_test;
 mod animated_container_test;
 mod animated_padding_test;
 mod animated_size_test;
+mod animated_switcher_test;
 
 // ── Business.1 fidelity front — Clip family parity (family 8) ───────────────
 mod clip_test;

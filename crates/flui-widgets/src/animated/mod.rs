@@ -15,6 +15,7 @@ mod animated_container;
 mod animated_opacity;
 mod animated_padding;
 mod animated_size;
+mod animated_switcher;
 mod implicitly_animated;
 mod ticker_mode;
 mod vsync_scope;
@@ -24,5 +25,9 @@ pub use animated_container::{AnimatedContainer, AnimatedContainerState};
 pub use animated_opacity::{AnimatedOpacity, AnimatedOpacityState};
 pub use animated_padding::{AnimatedPadding, AnimatedPaddingState};
 pub use animated_size::{AnimatedSize, AnimatedSizeState};
+pub use animated_switcher::{
+    AnimatedSwitcher, AnimatedSwitcherLayoutBuilder, AnimatedSwitcherState,
+    AnimatedSwitcherTransitionBuilder,
+};
 pub use ticker_mode::{TickerMode, TickerModeState};
 pub use vsync_scope::VsyncScope;
