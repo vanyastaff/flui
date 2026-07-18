@@ -29,9 +29,9 @@
 //! 2. **No progressive background clip.** The oracle's `_DismissibleClipper`
 //!    is a `CustomClipper<Rect>` that reveals only the sliver of `background`
 //!    between the sliding child's edge and the container edge, growing as the
-//!    drag proceeds. `flui-widgets`' [`ClipRect`](crate::ClipRect) has no
+//!    drag proceeds. `flui-widgets`' [`ClipRect`] has no
 //!    arbitrary-rect / custom-clipper primitive yet — only a fixed
-//!    [`Clip`](flui_types::painting::Clip) behavior. This port shows/hides
+//!    [`flui_types::painting::Clip`] behavior. This port shows/hides
 //!    `background` by *presence* (mounted whenever `move_controller.value()
 //!    != 0.0`, matching the oracle's `!_moveAnimation.isDismissed` guard) but
 //!    does not crop it to the revealed sliver — it paints at full extent
@@ -55,7 +55,7 @@
 //! 4. **No live "my own size" query.** The oracle reads `context.size!`
 //!    (this widget's last-laid-out size) from event handlers running well
 //!    after `build`. FLUI's `BuildContext` has no such accessor. This port
-//!    wraps its content in [`LayoutBuilder`](crate::LayoutBuilder) instead and
+//!    wraps its content in [`LayoutBuilder`] instead and
 //!    uses the incoming `BoxConstraints` (`max_width`/`max_height`) as the
 //!    drag-axis extent and the resize collapse's prior size — exact when the
 //!    constraints are tight (the common case: a fixed-extent list item), but
@@ -76,7 +76,7 @@
 //!    straight through to its `GestureDetector`, choosing whether the drag's
 //!    origin is where the gesture *won the arena* (`start`, smoother) or
 //!    where the initial *down* event landed (`down`, more reactive).
-//!    `flui-widgets`' [`GestureDetector`](crate::GestureDetector) has no
+//!    `flui-widgets`' [`GestureDetector`] has no
 //!    `DragStartBehavior` concept at all yet — every drag effectively behaves
 //!    as `start`. Not configurable here for the same reason divergence #3's
 //!    vertical-drag family and this list's #5 keep-alive gap aren't: the
@@ -529,7 +529,7 @@ struct ResolvedConfig {
 
 /// State for [`Dismissible`]. Owns the persistent `move_controller` (created
 /// once, per Flutter's `late final _moveController`) plus the shared
-/// [`DragState`] and the [`RebuildHandle`] acquired in `init_state` (per
+/// `DragState` and the [`RebuildHandle`] acquired in `init_state` (per
 /// ADR-0018 — never acquired from `build`/layout) that the lazily created
 /// resize controller's listener needs later.
 pub struct DismissibleState {

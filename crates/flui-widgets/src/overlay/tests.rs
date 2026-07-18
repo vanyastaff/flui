@@ -8,21 +8,29 @@
 //!
 //! # Why an in-crate harness
 //!
-//! [`Overlay`] is `pub(crate)` for now, so an integration test in
-//! `tests/` cannot name it. `tests/common::lay_out` is an integration-test module
-//! and is unreachable from `src/`. [`mount`] below is the trimmed equivalent: it
-//! keeps `lay_out`'s load-bearing ordering — **binding first, so the async driver
-//! is installed before the mount `build_scope`** — and drops the
-//! geometry helpers this unit does not need.
+//! [`Overlay`]/[`OverlayEntry`]/[`OverlayHandle`] are `pub` since ADR-0036, but
+//! the mutation surface these tests exercise directly (`insert`/`rearrange`/
+//! `InsertPosition`/`entry_ids`/…), plus [`OverlayScope`] and the
+//! `Theater`/`OverlayState` view machinery, stay `pub(crate)` — so an
+//! integration test in `tests/` still cannot drive this suite.
+//! `tests/common::lay_out` is an integration-test module and is unreachable
+//! from `src/`. [`mount`] below is the trimmed equivalent: it keeps `lay_out`'s
+//! load-bearing ordering — **binding first, so the async driver is installed
+//! before the mount `build_scope`** — and drops the geometry helpers this
+//! unit does not need.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use flui_foundation::ElementId;
 use flui_types::geometry::px;
+use flui_view::InheritedView;
 use flui_view::prelude::*;
+use parking_lot::Mutex;
 
-use super::{InsertPosition, OnstagePlan, Overlay, OverlayEntry, OverlayHandle, onstage_plan};
+use super::{
+    InsertPosition, OnstagePlan, Overlay, OverlayEntry, OverlayHandle, OverlayScope, onstage_plan,
+};
 use crate::SizedBox;
 use crate::test_harness::{Harness, mount};
 
@@ -887,5 +895,177 @@ fn positioned_inside_an_overlay_entry_is_laid_out_by_an_inner_stack() {
         "RenderTheater ignores positioned children, so a bare \
          Positioned is silently dropped to the origin — this is why S8 requires \
          the inner Stack, and it is now a fact rather than a paper argument"
+    );
+}
+
+// ============================================================================
+// ADR-0036 — `Overlay::of` / `Overlay::maybe_of`
+// ============================================================================
+
+/// A stateless leaf that runs `on_build` every time it builds — a generic
+/// hook for capturing whatever a `BuildContext`-driven lookup returns,
+/// without a bespoke probe type per test.
+#[derive(Clone)]
+struct Peek<F: Fn(&dyn BuildContext) + Clone + 'static>(F);
+
+impl<F: Fn(&dyn BuildContext) + Clone + 'static> View for Peek<F> {
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateless(self)
+    }
+}
+
+impl<F: Fn(&dyn BuildContext) + Clone + 'static> StatelessView for Peek<F> {
+    fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
+        (self.0)(ctx);
+        SizedBox::new(1.0, 1.0)
+    }
+}
+
+/// Without an ancestor `Overlay`, `maybe_of` must return `None`.
+#[test]
+fn overlay_maybe_of_is_none_without_an_overlay_ancestor() {
+    // Seeded `Some` so a probe that silently never ran would not be mistaken
+    // for a correct `None`.
+    let found = Arc::new(Mutex::new(Some(OverlayHandle::new())));
+    let found_for_probe = Arc::clone(&found);
+    let probe = Peek(move |ctx: &dyn BuildContext| {
+        *found_for_probe.lock() = Overlay::maybe_of(ctx);
+    });
+
+    let _harness = mount(probe);
+
+    assert!(
+        found.lock().is_none(),
+        "maybe_of must return None with no Overlay ancestor in the tree"
+    );
+}
+
+/// `Overlay::of` panics with a message that names the type and hints at the
+/// fix, matching the `MediaQuery::of`/`ScaffoldScope::of` precedent.
+///
+/// The panic is caught with `catch_unwind` **inside** the probe's own build,
+/// rather than expecting it to unwind through `mount`: the framework's own
+/// `build_or_recover` catches a `build()` panic to keep one bad widget from
+/// taking down the whole test process, so asserting on the message has to
+/// happen before that outer catch, not after.
+#[test]
+fn overlay_of_panics_with_a_helpful_message_without_an_overlay_ancestor() {
+    let message = Arc::new(Mutex::new(None));
+    let message_for_probe = Arc::clone(&message);
+    let probe = Peek(move |ctx: &dyn BuildContext| {
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| Overlay::of(ctx)));
+        if let Err(payload) = outcome {
+            let text = payload
+                .downcast_ref::<&str>() // PORT-CHECK-OK-DOWNCAST: test-only extraction of a caught panic's message, not V-type smuggling
+                .map(|s| (*s).to_string())
+                .or_else(|| payload.downcast_ref::<String>().cloned()) // PORT-CHECK-OK-DOWNCAST: same panic-message extraction, the `String`-payload case
+                .unwrap_or_default();
+            *message_for_probe.lock() = Some(text);
+        }
+    });
+
+    let _harness = mount(probe);
+
+    let text = message
+        .lock()
+        .clone()
+        .expect("Overlay::of must panic without an Overlay ancestor");
+    assert!(
+        text.contains("Overlay::of") && text.contains("no Overlay ancestor"),
+        "panic message must name the failing call and the missing ancestor, got: {text:?}"
+    );
+    assert!(
+        text.contains("Navigator") || text.contains("Overlay::maybe_of"),
+        "panic message must hint at the fix (wrap in a Navigator/Overlay, or \
+         use maybe_of), got: {text:?}"
+    );
+}
+
+/// A nested `Overlay`'s own entries resolve **the nearest** enclosing overlay,
+/// not an outer one — falling out of the ordinary inherited-map nearest-wins
+/// shadowing, with no extra code in `OverlayScope` itself.
+///
+/// The lookup runs from `Peek`'s **own** `build`, not from the entry
+/// builder's top-level closure: an `OverlayEntry`'s builder closure receives
+/// the *same* `BuildContext` as the `OverlayEntryViewState` that calls it
+/// (Flutter's own `_OverlayEntryWidgetState.build` passes its own `context`
+/// into `widget.entry.builder(context)` the identical way), which is an
+/// ancestor of, not a descendant of, the `OverlayScope` that build wraps the
+/// returned content in — so a lookup made with *that* context can never see
+/// its own entry's marker, only an enclosing one's, in Flutter too. A real
+/// consumer (a nested widget's own `build`/`did_change_dependencies`, as
+/// `DraggableState` will be) always has its own distinct, properly-nested
+/// context, which is what `Peek` supplies here.
+#[test]
+fn overlay_maybe_of_resolves_the_nearest_enclosing_overlay() {
+    let found: Arc<Mutex<Option<OverlayHandle>>> = Arc::new(Mutex::new(None));
+    let found_for_entry = Arc::clone(&found);
+
+    let inner_handle = OverlayHandle::new();
+    let inner_entry = OverlayEntry::new(move |_ctx| {
+        let found_for_peek = Arc::clone(&found_for_entry);
+        Peek(move |ctx: &dyn BuildContext| {
+            *found_for_peek.lock() = Overlay::maybe_of(ctx);
+        })
+        .into_view()
+        .boxed()
+    });
+    inner_handle.insert(&inner_entry, &InsertPosition::Top);
+    let inner_overlay = Overlay::new(inner_handle.clone());
+
+    let outer_handle = OverlayHandle::new();
+    let outer_entry = OverlayEntry::new(move |_ctx| inner_overlay.clone().into_view().boxed());
+    outer_handle.insert(&outer_entry, &InsertPosition::Top);
+
+    let _harness = mount(Overlay::new(outer_handle.clone()));
+
+    let resolved = found
+        .lock()
+        .clone()
+        .expect("the inner entry's Overlay::maybe_of found an ancestor overlay");
+    assert!(
+        resolved.is_same(&inner_handle),
+        "a nested Overlay's own entry must resolve the nearest ancestor \
+         overlay (the inner one), not the outer one"
+    );
+    assert!(
+        !resolved.is_same(&outer_handle),
+        "the resolved handle must not be the outer overlay's"
+    );
+}
+
+/// `OverlayScope::update_should_notify` is handle-**identity**, not
+/// structural equality — the same handle (even a fresh clone of it) must not
+/// notify, a different handle must.
+///
+/// This is a direct call, not a mounted-tree test: an `OverlayEntryView`
+/// element is reconciled in place across ordinary rebuilds of the *same*
+/// mounted entry, and its `overlay` field never changes across that entry's
+/// lifetime, so there is no reachable production path that ever hands the
+/// same mount point two different overlay identities to compare. The
+/// `InheritedView` contract is still real and still worth pinning directly —
+/// exactly the precedent `GestureArenaScope`'s own
+/// `update_should_notify_is_always_false` test and `view/inherited.rs`'s
+/// `test_inherited_element_update_should_notify` set.
+///
+/// Mutation-RUN: hardcode `update_should_notify` to always return `false` —
+/// the second assertion below fails (`scope_b` must notify against `scope_a1`
+/// but the stub reports it must not).
+#[test]
+fn overlay_scope_update_should_notify_is_true_only_on_handle_identity_change() {
+    let handle_a = OverlayHandle::new();
+    let handle_b = OverlayHandle::new();
+    let scope_a1 = OverlayScope::new(handle_a.clone(), SizedBox::shrink());
+    let scope_a2 = OverlayScope::new(handle_a.clone(), SizedBox::shrink());
+    let scope_b = OverlayScope::new(handle_b, SizedBox::shrink());
+
+    assert!(
+        !scope_a2.update_should_notify(&scope_a1),
+        "the same overlay handle identity must not notify dependents, even \
+         across two separately constructed OverlayScope values"
+    );
+    assert!(
+        scope_b.update_should_notify(&scope_a1),
+        "a different overlay handle identity must notify dependents"
     );
 }

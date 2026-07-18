@@ -51,7 +51,7 @@
 //! 2. This render object gained a `source_offset` field — the cropped
 //!    source region's own top-left within the child, i.e. Flutter's
 //!    `sourceRect.left`/`top` (`RenderFittedBox._updatePaintData`,
-//!    `proxy_box.dart`) — folded into [`Self::effective_transform`] as a
+//!    `proxy_box.dart`) — folded into `RenderFittedBox::effective_transform` as a
 //!    third `translate(-source_offset)` term alongside the pre-existing
 //!    `translate(align_offset) * scale`. Before the `flui-types` fix, this
 //!    term would have been a permanent no-op (`source_offset` could never
