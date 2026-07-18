@@ -16,6 +16,7 @@ use std::time::{Duration, Instant};
 use flui_animation::{AnimationController, Vsync};
 use flui_binding::HeadlessBinding;
 use flui_foundation::{ElementId, RenderId};
+use flui_geometry::Matrix4;
 use flui_interaction::PointerId;
 use flui_interaction::events::{
     PointerEvent, PointerType, make_cancel_event_for_id, make_down_event_for_id,
@@ -23,10 +24,11 @@ use flui_interaction::events::{
 };
 use flui_objects::{
     RenderAnimatedOpacity, RenderClipOval, RenderClipPath, RenderClipRRect, RenderClipRect,
-    RenderOpacity, RenderParagraph, RenderTransform,
+    RenderFittedBox, RenderOpacity, RenderParagraph, RenderTransform,
 };
 use flui_rendering::constraints::{BoxConstraints, SliverGeometry};
 use flui_rendering::pipeline::PipelineOwner;
+use flui_rendering::storage::IntrinsicDimension;
 use flui_rendering::testing::inspect;
 use flui_types::geometry::px;
 use flui_types::painting::Clip;
@@ -357,8 +359,10 @@ impl LaidOut {
     }
 
     /// The [`Clip`] behavior of a clip-family render node (`RenderClipRect`,
-    /// `RenderClipRRect`, `RenderClipOval`, or `RenderClipPath`). Panics if
-    /// `id` is none of the four.
+    /// `RenderClipRRect`, `RenderClipOval`, `RenderClipPath`) or a
+    /// [`RenderFittedBox`] (which stores `clip_behavior` today even though
+    /// active clip-painting is still pending — see its module doc). Panics
+    /// if `id` is none of the five.
     pub fn clip_behavior(&self, id: RenderId) -> Clip {
         let mut owner = self.pipeline_owner.write();
         let node = owner
@@ -377,7 +381,12 @@ impl LaidOut {
         if let Some(render) = node.downcast_render_object_mut::<RenderClipPath>() {
             return render.clip_behavior();
         }
-        panic!("render node should be a clip-family render object (Rect/RRect/Oval/Path)");
+        if let Some(render) = node.downcast_render_object_mut::<RenderFittedBox>() {
+            return render.clip_behavior();
+        }
+        panic!(
+            "render node should be a clip-family render object (Rect/RRect/Oval/Path) or a RenderFittedBox"
+        );
     }
 
     /// The installed [`BorderRadius`] of a `RenderClipRRect` node. Panics if
@@ -419,6 +428,42 @@ impl LaidOut {
                 matrix.get(1, 0).atan2(matrix.get(0, 0))
             })
             .expect("render node should be a RenderTransform")
+    }
+
+    /// One intrinsic dimension of a box-protocol render node at `extent`,
+    /// queried through the live pipeline — Flutter's
+    /// `RenderBox.getMinIntrinsicWidth`/`getMaxIntrinsicWidth`/
+    /// `getMinIntrinsicHeight`/`getMaxIntrinsicHeight` family, all four of
+    /// which route through the same `computeMinIntrinsicWidth`-style
+    /// dispatch on the Dart side.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `id` is stale, foreign, or a sliver node (box intrinsics are
+    /// undefined there) — see [`PipelineOwner::box_intrinsic_dimension`].
+    pub fn intrinsic_dimension(
+        &self,
+        id: RenderId,
+        dimension: IntrinsicDimension,
+        extent: f32,
+    ) -> f32 {
+        self.pipeline_owner
+            .write()
+            .box_intrinsic_dimension(id, dimension, extent)
+            .expect("box_intrinsic_dimension should succeed for a live box-protocol node")
+    }
+
+    /// The composed translate-then-scale transform of a [`RenderFittedBox`]
+    /// node — the same matrix `paint_transform` hands the pipeline and
+    /// `hit_test` inverts. Panics if `id` is not a `RenderFittedBox`.
+    pub fn fitted_box_transform(&self, id: RenderId) -> Matrix4 {
+        let mut owner = self.pipeline_owner.write();
+        owner
+            .render_tree_mut()
+            .get_mut(id)
+            .and_then(|node| node.downcast_render_object_mut::<RenderFittedBox>())
+            .map(|render| render.effective_transform())
+            .expect("render node should be a RenderFittedBox")
     }
 
     /// The paint-space left edge of a `RenderParagraph` node's first laid-out

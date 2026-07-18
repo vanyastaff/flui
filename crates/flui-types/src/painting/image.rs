@@ -523,47 +523,143 @@ mod tests {
         assert_eq!(fitted.destination.height, px(50.0));
     }
 
+    /// Flutter parity: `applyBoxFit(BoxFit.cover, ...)` (`box_fit.dart`,
+    /// 3.44.0) — a `100×200` input into a `100×100` output: the output is
+    /// proportionally WIDER than the input (`outputAspect(1.0) >
+    /// inputAspect(0.5)`), so Cover crops the source's HEIGHT down to match
+    /// the output's aspect (`100 * 100/100 = 100`) and fills the
+    /// destination exactly — it never overflows, unlike a naive
+    /// "scale-to-cover" that would leave `destination.height == 200` (the
+    /// bug this test previously encoded and asserted as correct).
     #[test]
     fn test_box_fit_cover() {
         let input = Size::new(px(100.0), px(200.0));
         let output = Size::new(px(100.0), px(100.0));
         let fitted = BoxFit::Cover.apply(input, output);
 
-        assert_eq!(fitted.source, input);
-        // Cover должен покрывать весь output, поэтому масштабируем по width
-        // height = 100 / 0.5 = 200 (изображение будет обрезано по высоте)
-        assert_eq!(fitted.destination.width, px(100.0));
-        assert_eq!(fitted.destination.height, px(200.0));
+        assert_eq!(fitted.source, Size::new(px(100.0), px(100.0)));
+        assert_eq!(fitted.destination, output);
     }
 
+    /// Cover when the input is proportionally WIDER than the output crops
+    /// the source's WIDTH instead (the opposite branch from
+    /// `test_box_fit_cover` above): a `200×100` input into a `100×100`
+    /// output crops the source width to `100 * 100/100 = 100`, keeping the
+    /// full `100` height.
+    #[test]
+    fn test_box_fit_cover_crops_width_when_input_is_wider() {
+        let input = Size::new(px(200.0), px(100.0));
+        let output = Size::new(px(100.0), px(100.0));
+        let fitted = BoxFit::Cover.apply(input, output);
+
+        assert_eq!(fitted.source, Size::new(px(100.0), px(100.0)));
+        assert_eq!(fitted.destination, output);
+    }
+
+    /// `FitWidth`'s "like Contain" branch (`outputAspect <= inputAspect`,
+    /// so the full width fits with no crop, matching Contain's own
+    /// letterbox math): destination `height = 100 * 100/200 = 50`.
     #[test]
     fn test_box_fit_fit_width() {
         let input = Size::new(px(200.0), px(100.0));
         let output = Size::new(px(100.0), px(100.0));
         let fitted = BoxFit::FitWidth.apply(input, output);
 
+        assert_eq!(fitted.source, input, "the contain-like branch never crops");
         assert_eq!(fitted.destination.width, px(100.0));
         assert_eq!(fitted.destination.height, px(50.0));
     }
 
+    /// `FitWidth`'s "like Cover" branch (`outputAspect > inputAspect`): a
+    /// `100×200` input into a `100×100` output crops the source height to
+    /// `100 * 100/100 = 100` and fills the destination exactly, same as
+    /// `Cover` would for this input/output pair.
+    #[test]
+    fn test_box_fit_fit_width_crops_when_output_is_proportionally_wider() {
+        let input = Size::new(px(100.0), px(200.0));
+        let output = Size::new(px(100.0), px(100.0));
+        let fitted = BoxFit::FitWidth.apply(input, output);
+
+        assert_eq!(fitted.source, Size::new(px(100.0), px(100.0)));
+        assert_eq!(fitted.destination, output);
+    }
+
+    /// `FitHeight`'s "like Contain" branch (`outputAspect > inputAspect`,
+    /// so the full height fits with no crop): destination
+    /// `width = 100 * 100/200 = 50`.
     #[test]
     fn test_box_fit_fit_height() {
         let input = Size::new(px(100.0), px(200.0));
         let output = Size::new(px(100.0), px(100.0));
         let fitted = BoxFit::FitHeight.apply(input, output);
 
+        assert_eq!(fitted.source, input, "the contain-like branch never crops");
         assert_eq!(fitted.destination.width, px(50.0));
         assert_eq!(fitted.destination.height, px(100.0));
     }
 
+    /// `FitHeight`'s "like Cover" branch (`outputAspect <= inputAspect`): a
+    /// `200×100` input into a `100×100` output crops the source width to
+    /// `100 * 100/100 = 100` and fills the destination exactly.
+    #[test]
+    fn test_box_fit_fit_height_crops_when_output_is_proportionally_narrower() {
+        let input = Size::new(px(200.0), px(100.0));
+        let output = Size::new(px(100.0), px(100.0));
+        let fitted = BoxFit::FitHeight.apply(input, output);
+
+        assert_eq!(fitted.source, Size::new(px(100.0), px(100.0)));
+        assert_eq!(fitted.destination, output);
+    }
+
+    /// Flutter parity: `applyBoxFit(BoxFit.none, ...)` — `None` never
+    /// scales, so `destination` always equals `source`, and `source` is
+    /// capped to `output` on whichever axis `input` overflows it: a
+    /// `200×100` input into a `100×100` output crops to `100×100` (the
+    /// width axis overflows; the height axis already fit).
     #[test]
     fn test_box_fit_none() {
         let input = Size::new(px(200.0), px(100.0));
         let output = Size::new(px(100.0), px(100.0));
         let fitted = BoxFit::None.apply(input, output);
 
+        assert_eq!(fitted.source, Size::new(px(100.0), px(100.0)));
+        assert_eq!(fitted.destination, fitted.source);
+    }
+
+    /// `None`'s other side: an input already smaller than the output on
+    /// both axes is never scaled up and never cropped — `source ==
+    /// destination == input`, unchanged (empty space around it, which
+    /// `RenderFittedBox`'s alignment computes separately).
+    #[test]
+    fn test_box_fit_none_keeps_a_smaller_input_unchanged() {
+        let input = Size::new(px(40.0), px(30.0));
+        let output = Size::new(px(100.0), px(100.0));
+        let fitted = BoxFit::None.apply(input, output);
+
         assert_eq!(fitted.source, input);
         assert_eq!(fitted.destination, input);
+    }
+
+    /// Flutter's leading degenerate-size guard: any non-positive width or
+    /// height on either input answers `(Size::zero, Size::zero)` — there is
+    /// no meaningful fit to compute.
+    #[test]
+    fn test_box_fit_degenerate_input_size_returns_zero() {
+        let zero_width = Size::new(px(0.0), px(50.0));
+        let output = Size::new(px(100.0), px(100.0));
+        for fit in [
+            BoxFit::Fill,
+            BoxFit::Contain,
+            BoxFit::Cover,
+            BoxFit::FitWidth,
+            BoxFit::FitHeight,
+            BoxFit::None,
+            BoxFit::ScaleDown,
+        ] {
+            let fitted = fit.apply(zero_width, output);
+            assert_eq!(fitted.source, Size::ZERO, "fit = {fit:?}");
+            assert_eq!(fitted.destination, Size::ZERO, "fit = {fit:?}");
+        }
     }
 
     #[test]
@@ -572,6 +668,7 @@ mod tests {
         let output = Size::new(px(100.0), px(100.0));
         let fitted = BoxFit::ScaleDown.apply(input, output);
 
+        assert_eq!(fitted.source, input, "ScaleDown never crops the source");
         assert_eq!(fitted.destination.width, px(100.0));
         assert_eq!(fitted.destination.height, px(100.0));
     }
@@ -582,7 +679,25 @@ mod tests {
         let output = Size::new(px(100.0), px(100.0));
         let fitted = BoxFit::ScaleDown.apply(input, output);
 
+        assert_eq!(fitted.source, input);
         assert_eq!(fitted.destination, input);
+    }
+
+    /// Flutter's `ScaleDown` shrinks height first, then re-checks width
+    /// against the (possibly already-shrunk) destination — asymmetric
+    /// aspect ratios exercise both steps of that sequence, not just the
+    /// single-axis case `test_box_fit_scale_down_shrinks` covers: a `400×100`
+    /// (4:1) input shrinking into a `100×100` output. Height (`100`)
+    /// already fits, so the first step is a no-op; width (`400`) overflows,
+    /// so the second step rescales to `(100, 100/4 = 25)`.
+    #[test]
+    fn test_box_fit_scale_down_wide_aspect_shrinks_via_the_width_step() {
+        let input = Size::new(px(400.0), px(100.0));
+        let output = Size::new(px(100.0), px(100.0));
+        let fitted = BoxFit::ScaleDown.apply(input, output);
+
+        assert_eq!(fitted.source, input);
+        assert_eq!(fitted.destination, Size::new(px(100.0), px(25.0)));
     }
 
     #[test]
