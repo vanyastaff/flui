@@ -26,7 +26,6 @@ use std::sync::Arc;
 use parking_lot::RwLock;
 
 use flui_interaction::MouseTracker;
-use flui_layer::LayerTree;
 
 use crate::{
     hit_testing::HitTestResult,
@@ -59,7 +58,8 @@ use crate::{
 /// - Managing the root [`PipelineOwner`] tree
 /// - Managing [`RenderView`]s (add/remove)
 /// - Creating [`ViewConfiguration`]s for views
-/// - Coordinating frame production via [`draw_frame`](Self::draw_frame)
+/// - Declaring the first-frame deferral gate via
+///   [`send_frames_to_engine`](Self::send_frames_to_engine)
 /// - Managing [`MouseTracker`] for hover events
 /// - Responding to visual-update requests from pipeline owners
 /// - Tracking semantics-enabled state and its listeners
@@ -82,7 +82,12 @@ use crate::{
 /// onto their phase-typed impls on 2026-05-20. The
 /// orchestrator is [`PipelineOwner::<Idle>::run_frame`], which
 /// composes the four phase transitions and returns the owner back at
-/// `Idle` plus the produced layer tree.
+/// `Idle` plus the produced layer tree. Pumping that orchestrator and
+/// gating step 6 on [`send_frames_to_engine`](Self::send_frames_to_engine)
+/// is the implementer's job, not a trait default — see that method's
+/// doc for why. The production incarnation is
+/// `AppBinding::render_frame_entered` (`flui-app`), which consults
+/// `RenderingFlutterBinding::send_frames_to_engine` before presenting.
 pub trait RendererBinding {
     // ========================================================================
     // Pipeline / Manifold (formerly PipelineManifold)
@@ -254,53 +259,24 @@ pub trait RendererBinding {
     ///
     /// If false, the framework does all frame work but doesn't render.
     /// Used for deferring the first frame until ready.
-    fn send_frames_to_engine(&self) -> bool {
-        true
-    }
-
-    /// Pump the rendering pipeline to generate a frame, returning the
-    /// produced layer tree.
     ///
-    /// The single authoritative frame path: consume the owner out of
-    /// the `RwLock`, drive it through `run_frame` (all four phase
-    /// transitions; semantics included), put it back, and hand the
-    /// produced `LayerTree` to the caller. The caller — a platform
-    /// binding or embedder — wraps the tree in a `Scene` and submits
-    /// it to the renderer (`AppBinding::render_frame` is the
-    /// production incarnation: `draw_frame → Scene::new →
-    /// Renderer::render_scene`).
+    /// # Flutter Equivalence
     ///
-    /// Returns `None` when the frame is deferred
-    /// ([`Self::send_frames_to_engine`] is `false` — Flutter's
-    /// deferred-first-frame mechanism; pipeline work still runs so
-    /// warm-up costs are paid early), when the pipeline produced no
-    /// tree (no root), or when a phase errored (logged, frame
-    /// dropped, owner restored for the next frame).
-    fn draw_frame(&self) -> Option<LayerTree> {
-        let root_owner = self.root_pipeline_owner();
-
-        // Consume the owner through the typestate transitions.
-        let layer_tree = {
-            let mut guard = root_owner.write();
-            let owner = std::mem::take(&mut *guard);
-            let (owner, result) = owner.run_frame();
-            *guard = owner;
-            match result {
-                Ok(layer_tree) => layer_tree,
-                Err(e) => {
-                    tracing::error!(error = ?e, "draw_frame: pipeline failed, dropping frame");
-                    None
-                }
-            }
-        };
-
-        if self.send_frames_to_engine() {
-            layer_tree
-        } else {
-            // Deferred: the work ran (warm-up), the output is withheld.
-            None
-        }
-    }
+    /// Corresponds to `RendererBinding.sendFramesToEngine` (oracle tag
+    /// `3.44.0`, `packages/flutter/lib/src/rendering/binding.dart`):
+    /// `_firstFrameSent || _firstFrameDeferredCount == 0`.
+    ///
+    /// This is a **required** method (no default) deliberately: the
+    /// deferral counter behind it is per-binding state (a nested
+    /// defer/allow counter plus a latching "first frame already sent"
+    /// flag), and a `true`-returning default previously let an
+    /// implementer silently skip wiring the counter at all — the exact
+    /// drift this trait method's history was flagged for. The one
+    /// production implementation lives on `RenderingFlutterBinding`
+    /// (`flui-app`'s `crates/flui-app/src/bindings/renderer_binding.rs`);
+    /// implement this by delegating to that same counter rather than
+    /// growing a second one.
+    fn send_frames_to_engine(&self) -> bool;
 
     // ========================================================================
     // Metrics Handling
@@ -634,22 +610,6 @@ mod tests {
 
         binding.handle_metrics_changed();
         assert_eq!(binding.visual_update_calls.load(Ordering::SeqCst), 1);
-    }
-
-    #[test]
-    fn draw_frame_withholds_output_when_deferred_but_still_runs_pipeline_work() {
-        let binding = TestBinding::new();
-        binding.send_frames.store(false, Ordering::SeqCst);
-
-        // No root attached, so there is nothing to layout/paint regardless;
-        // the point of this test is that a deferred frame reports `None`.
-        assert!(binding.draw_frame().is_none());
-    }
-
-    #[test]
-    fn draw_frame_returns_none_when_pipeline_has_no_root() {
-        let binding = TestBinding::new();
-        assert!(binding.draw_frame().is_none());
     }
 
     #[test]

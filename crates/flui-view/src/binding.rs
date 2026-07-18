@@ -54,7 +54,7 @@ use std::{
     pin::Pin,
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicU32, Ordering},
+        atomic::{AtomicBool, Ordering},
     },
 };
 
@@ -424,13 +424,6 @@ pub struct WidgetsBinding {
     /// Whether the first frame has been rasterized.
     first_frame_rasterized: AtomicBool,
 
-    /// Count of deferred first frame requests.
-    /// When > 0, the first frame is deferred (e.g., for splash screens).
-    first_frame_deferred_count: AtomicU32,
-
-    /// Whether the first frame has been sent to the engine.
-    first_frame_sent: AtomicBool,
-
     /// Whether binding is ready to produce frames.
     ready_to_produce_frames: AtomicBool,
 
@@ -540,8 +533,6 @@ impl WidgetsBinding {
             global_key_registry,
             on_need_frame: RwLock::new(None),
             first_frame_rasterized: AtomicBool::new(false),
-            first_frame_deferred_count: AtomicU32::new(0),
-            first_frame_sent: AtomicBool::new(false),
             ready_to_produce_frames: AtomicBool::new(false),
             #[cfg(debug_assertions)]
             debug_building_dirty_elements: AtomicBool::new(false),
@@ -1275,48 +1266,18 @@ impl WidgetsBinding {
         tracing::debug!("First frame rasterized");
     }
 
-    /// Whether the first frame has been sent to the engine.
-    ///
-    /// This is set after `draw_frame` completes for the first time.
-    pub fn debug_did_send_first_frame_event(&self) -> bool {
-        self.first_frame_sent.load(Ordering::Acquire)
-    }
-
-    /// Defer the first frame.
-    ///
-    /// Used for splash screens that need to delay showing content.
-    /// Call `allow_first_frame` to release.
-    ///
-    /// # Flutter Equivalent
-    ///
-    /// Corresponds to `RendererBinding.deferFirstFrame()`.
-    pub fn defer_first_frame(&self) {
-        self.first_frame_deferred_count
-            .fetch_add(1, Ordering::AcqRel);
-        tracing::debug!("First frame deferred");
-    }
-
-    /// Allow the first frame after a previous `defer_first_frame`.
-    ///
-    /// # Flutter Equivalent
-    ///
-    /// Corresponds to `RendererBinding.allowFirstFrame()`.
-    pub fn allow_first_frame(&self) {
-        let prev = self
-            .first_frame_deferred_count
-            .fetch_sub(1, Ordering::AcqRel);
-        if prev == 1 {
-            // No more deferrals, we can send frames now
-            tracing::debug!("First frame allowed - ready to produce frames");
-        }
-    }
-
-    /// Whether frames should be sent to the engine.
-    ///
-    /// Returns false if the first frame is deferred.
-    pub fn send_frames_to_engine(&self) -> bool {
-        self.first_frame_deferred_count.load(Ordering::Acquire) == 0
-    }
+    // Note: the first-frame *deferral counter* (`defer_first_frame` /
+    // `allow_first_frame` / `send_frames_to_engine`) used to be duplicated
+    // here as its own independent `AtomicU32` + `AtomicBool` pair. Flutter
+    // has exactly one such counter, on `RendererBinding` (`WidgetsBinding`
+    // is a mixin on top of it and shares the same state); a second,
+    // unrelated counter on this binding could drift from the real one and
+    // never actually gated anything reachable from the production frame
+    // path. It has been removed — the single canonical counter lives on
+    // `RenderingFlutterBinding` (`crates/flui-app/src/bindings/
+    // renderer_binding.rs`), forwarded through `AppBinding::defer_first_frame`
+    // / `allow_first_frame` / `send_frames_to_engine`, and consulted by
+    // `AppBinding::render_frame_entered`.
 
     /// Whether the binding is ready to produce frames.
     pub fn is_ready_to_produce_frames(&self) -> bool {
