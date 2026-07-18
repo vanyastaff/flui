@@ -457,7 +457,11 @@ fn focus_changes_notify_listeners_on_each_synchronous_request() {
 ///
 /// Adapted: node-level, trimmed to one `Focus` level (the oracle nests a
 /// second, `focus2`, under `focus1`; one level already shows the contrast).
-/// A plain `FocusNode`'s own `canRequestFocus: false` gates only itself.
+/// A plain `FocusNode`'s own `canRequestFocus: false` gates only itself —
+/// in both directions the oracle checks: a descendant's *already-held*
+/// focus survives the ancestor being disabled (the oracle's
+/// `pumpTest(allowFocus1: false)` step while `focus2` held focus —
+/// `hasFocus, isTrue`), and a fresh descendant request still succeeds.
 #[test]
 fn can_request_focus_on_a_plain_focus_does_not_restrict_its_descendants() {
     let _guard = FOCUS_TEST_LOCK.lock();
@@ -471,9 +475,19 @@ fn can_request_focus_on_a_plain_focus_does_not_restrict_its_descendants() {
     let focus2 = FocusNode::with_debug_label("focus2");
     focus1.attach_node(&focus2);
 
-    focus1.set_can_request_focus(false);
     focus2.request_focus();
+    assert!(focus2.has_primary_focus());
 
+    focus1.set_can_request_focus(false);
+    assert!(
+        focus2.has_focus(),
+        "disabling a plain (non-scope) ancestor must NOT evict a descendant's \
+         already-held focus — only a scope's canRequestFocus(false) reaches \
+         its descendants"
+    );
+
+    manager.unfocus();
+    focus2.request_focus();
     assert!(
         focus2.has_primary_focus(),
         "an ancestor Focus's canRequestFocus(false) does not restrict a descendant"
