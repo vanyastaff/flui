@@ -1173,7 +1173,9 @@ mod tests {
             .split_once("mod tests {")
             .expect("this module scans its own enclosing file");
 
-        let call_sites = production_source.matches("render_pass.set_scissor_rect(").count();
+        let call_sites = production_source
+            .matches("render_pass.set_scissor_rect(")
+            .count();
         assert_eq!(
             call_sites, 1,
             "expected exactly one call to `render_pass.set_scissor_rect` in flush.rs — inside \
