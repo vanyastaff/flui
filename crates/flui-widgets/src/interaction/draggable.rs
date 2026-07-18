@@ -361,9 +361,14 @@ pub struct DraggableState<T: Clone + Send + Sync + 'static> {
     /// nothing clears it on that one session's end alone — so the layer is
     /// left mounted but frozen (no session left is writing to its
     /// `FeedbackSignal`) until `build` next observes zero active sessions
-    /// and tears it down. Both are
+    /// and tears it down. A third named case, introduced by the eviction:
+    /// when a later session evicts a STILL-LIVE earlier one, both sessions
+    /// keep `Some` of the one shared [`FeedbackSignal`], so both write
+    /// offsets and the single mounted layer jitters between the two drags'
+    /// displacements until either ends (a fresh signal per inserted entry
+    /// would detach the stale writer — a follow-up shape). All three are
     /// honest scope cuts of the same root cause: no harness capability here
-    /// can even drive two truly concurrent contacts to observe either case
+    /// can even drive two truly concurrent contacts to observe any of them
     /// directly (see this file's own module docs on that limitation).
     feedback_entry: Rc<RefCell<Option<OverlayEntry>>>,
     /// The `Send + Sync` handle shared with whichever `DragSession` currently
