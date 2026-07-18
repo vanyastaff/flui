@@ -42,9 +42,9 @@
 //!
 //! ### Denominator: 71 oracle cases
 //!
-//! **16 tests ported below** (10 `Draggable`-gesture + 6
+//! **17 tests ported below** (11 `Draggable`-gesture + 6
 //! `DragTargetState`-protocol, listed in each section's own comment). Of
-//! these, 4 correspond exactly (or as an explicitly-noted partial) to a
+//! these, 6 correspond exactly (or as an explicitly-noted partial) to a
 //! specific oracle `testWidgets` name:
 //! - `'Null axis onDragUpdate called only if draggable moves in any
 //!   direction'`, `'Vertical axis onDragUpdate only called if draggable
@@ -65,14 +65,17 @@
 //!   proves the *documented divergence* (`draggable.rs`'s divergence #5)
 //!   in their place, not the oracle's own keep-alive behavior.
 //!
-//! The remaining 12 ported tests exercise the oracle's established
+//! The remaining 11 ported tests exercise the oracle's established
 //! start/update/end/cancel/accept/candidate/reject/leave *contract* —
 //! spread by the oracle across many live end-to-end `testWidgets` cases —
 //! without a single corresponding `testWidgets` name, same as the original
-//! cut of this file.
+//! cut of this file. (This includes `reported_offset_is_displacement_not_global_position`,
+//! which pins a *divergence* — see `draggable.rs`'s divergence note #4 —
+//! rather than porting any single oracle case.)
 //!
-//! **55 cases out of scope, with reasons (not silently dropped from the
-//! count):**
+//! **65 cases out of scope, with reasons (not silently dropped from the
+//! count):** 15 + 28 + 12 + 3 + 3 + 1 + 1 + 1 + 1 = 65; together with the 6
+//! in-scope oracle names above, that accounts for all 71.
 //!
 //! - **Feedback overlay presence/position (15 cases).** No
 //!   `Overlay.of(context)` equivalent exists (`draggable.rs` divergence #1):
@@ -85,7 +88,7 @@
 //!   pointer in rotated MaterialApp'`, `'unmounting overlay ends drag
 //!   gracefully'`, `'feedback respect the MouseRegion cursor configure'`,
 //!   `'configurable feedback ignore pointer behavior'`.
-//! - **Live hit-test-based target discovery (29 cases).** Needs a real
+//! - **Live hit-test-based target discovery (28 cases).** Needs a real
 //!   `DragTarget` hit-tested at the pointer's current, moved-to position —
 //!   the exact gap this module doc opens with: `'control test'`, `'onLeave
 //!   callback fires correctly'` (×2, with/without generic param — the
@@ -207,19 +210,23 @@ fn erase<T: Send + Sync + 'static>(value: T) -> ErasedDragData {
 // Group 1 — `Draggable`'s gesture lifecycle (real pointer dispatch)
 // ============================================================================
 //
-// 10 cases: drag started fires once past slop; update reports the RAW delta
-// (unrestricted — see the axis-gate cases below); the null/vertical/horizontal
-// axis "onDragUpdate only fires if the restricted position actually moved"
-// gate (the oracle's own three-case group, ported 1:1); end reports
-// unaccepted and fires canceled, never completed, with the tracked
-// anchor-relative offset; a platform pointer-cancel also fires `on_drag_end`
-// with that same offset and zero velocity (Flutter's `finishDrag` is
-// unconditional — this project found and fixed a divergence from that while
-// building this port, see `pointer_cancel_fires_drag_end_before_canceled_with_zero_velocity`
-// below); `max_simultaneous_drags(0)` disables dragging entirely;
-// `child_when_dragging` swaps in while active and reverts after the drag
-// ends; unmounting mid-drag cancels immediately (the documented divergence
-// from the oracle's recognizer keep-alive).
+// 11 cases: drag started fires once past slop; update reports the RAW delta
+// (unrestricted — see the axis-gate cases below); the reported offset is
+// displacement-since-drag-start, not the oracle's globally-anchored value
+// (a pinned, named divergence — see `draggable.rs`'s divergence note #4 —
+// exercised under a nonzero ancestor `Padding` so it is not origin-hidden);
+// the null/vertical/horizontal axis "onDragUpdate only fires if the
+// restricted position actually moved" gate (the oracle's own three-case
+// group, ported 1:1); end reports unaccepted and fires canceled, never
+// completed, with the tracked displacement offset; a platform pointer-cancel
+// also fires `on_drag_end` with that same offset and zero velocity
+// (Flutter's `finishDrag` is unconditional — this project found and fixed a
+// divergence from that while building this port, see
+// `pointer_cancel_fires_drag_end_before_canceled_with_zero_velocity` below);
+// `max_simultaneous_drags(0)` disables dragging entirely; `child_when_dragging`
+// swaps in while active and reverts after the drag ends; unmounting mid-drag
+// cancels immediately (the documented divergence from the oracle's
+// recognizer keep-alive).
 
 #[test]
 fn drag_started_fires_once_past_slop() {
@@ -278,6 +285,49 @@ fn drag_update_reports_delta_after_start() {
         "expected a +20px horizontal delta, got {delta:?}"
     );
     scoped.dispatch_pointer_up(95.0, 50.0);
+}
+
+#[test]
+fn reported_offset_is_displacement_not_global_position() {
+    // Pins the shipped semantics `draggable.rs`'s divergence note #4 names:
+    // `DraggableDetails.offset` is displacement-since-drag-start (the
+    // running sum of axis-restricted deltas), NOT the oracle's
+    // `_lastOffset` (which adds the draggable's global origin on top of
+    // that same sum). The `Draggable` here sits under a nonzero `Padding`
+    // — its own render object's global origin is `(60, 40)`, not `(0, 0)`
+    // — specifically so this test is NOT satisfied by an implementation
+    // that happens to be correct only at the screen origin: if a future
+    // change seeded the tracked offset with *any* nonzero base (an
+    // attempted, incomplete "fix" toward the oracle's real semantics), the
+    // reported value below would shift away from the exact displacement
+    // and this assertion would catch it.
+    use flui_types::geometry::EdgeInsets;
+    use flui_widgets::Padding;
+
+    let end_details: Arc<StdMutex<Option<DraggableDetails>>> = Arc::new(StdMutex::new(None));
+    let end_for_cb = Arc::clone(&end_details);
+    let widget = Draggable::<i32>::new(child()).on_drag_end(move |details| {
+        *end_for_cb.lock().expect("not poisoned") = Some(details);
+    });
+    let padded = Padding::new(EdgeInsets::new(px(40.0), px(0.0), px(0.0), px(60.0))).child(widget);
+    let mut scoped = lay_out_with_arena(padded, tight(300.0, 300.0));
+
+    // (70, 50) is 10px inside the padded Draggable's own top-left (60, 40).
+    scoped.dispatch_pointer_down(70.0, 50.0);
+    scoped.dispatch_pointer_move(100.0, 50.0); // +30px horizontal, +0 vertical
+    scoped.dispatch_pointer_up(100.0, 50.0);
+    settle_one_frame(&mut scoped);
+
+    let details = end_details
+        .lock()
+        .expect("not poisoned")
+        .expect("on_drag_end fired");
+    assert!(
+        (details.offset.dx.0 - 30.0).abs() < 0.01 && details.offset.dy.0.abs() < 0.01,
+        "offset must be the raw +30px displacement regardless of the \
+         Padding's (60, 40) origin — got {:?}",
+        details.offset
+    );
 }
 
 /// Records every `on_drag_update` delta and a running fire count.
@@ -467,7 +517,7 @@ fn pointer_cancel_fires_drag_end_before_canceled_with_zero_velocity() {
         .on_drag_end(move |details| {
             assert_eq!(details.velocity.pixels_per_second, origin());
             assert!(!details.was_accepted);
-            // The tracked anchor-relative offset (25px right, matching the
+            // The tracked displacement offset (25px right, matching the
             // move below), not zero — only velocity is zero on cancel.
             assert!((details.offset.dx.0 - 25.0).abs() < 0.01);
             end_for_cb.fetch_add(1, Ordering::SeqCst);

@@ -67,17 +67,37 @@
 //!    oracle subtracts from every reported global position to produce
 //!    `DraggableDetails.offset` / `DragTargetDetails.offset`
 //!    (`_DragAvatar.updateDrag`'s `_lastOffset = globalPosition -
-//!    dragStartPoint`). This port always uses the default strategy's
-//!    semantics — `childDragAnchorStrategy`'s `dragStartPoint` is the
-//!    down-time position local to `Draggable`'s own render object, which is
-//!    exactly what `Listener` already delivers as `event.position()` (event
-//!    delivery is per-target-local, `HitTestEntry.transform`-adjusted) — so
-//!    `dragStartPoint` needs no new global-transform capability: it *is* the
-//!    position at drag start, and `_lastOffset` reduces to "the running sum
-//!    of every axis-restricted delta since the drag started" (see
-//!    `DragSession::offset`). `pointerDragAnchorStrategy` (anchor at
-//!    `Offset.zero`) is not selectable — that is the actual, named
-//!    deferral.
+//!    dragStartPoint`).
+//!
+//!    **A further, separately-named divergence in `_lastOffset` itself,**
+//!    found while pinning this down precisely: under the default
+//!    `childDragAnchorStrategy`, `dragStartPoint = renderObject.globalToLocal(initialPosition)`
+//!    — a LOCAL offset — while `globalPosition` in the formula above is
+//!    GLOBAL. Writing `globalOrigin` for `Draggable`'s own render object's
+//!    global top-left corner, `initialPosition = globalOrigin +
+//!    dragStartPoint` by definition of `globalToLocal`, so the formula
+//!    reduces to `_lastOffset(t) = globalOrigin + Σ(axis-restricted deltas
+//!    since the drag started)` — **not** just the running sum. The running
+//!    sum alone (which is all [`DragSession::offset`] tracks: seeded at
+//!    `Offset::ZERO`, never given a `globalOrigin` term) is correct only for
+//!    a `Draggable` whose render object sits at the screen origin; for any
+//!    other position, this port's reported offset is short by exactly that
+//!    origin. Getting the real `globalOrigin` needs the same
+//!    global-position/frame-aware event delivery capability point 2 above
+//!    names as missing (`PipelineOwner::hit_test`/`local_to_global`,
+//!    reachable only from binding-internal code) — this is the *same*
+//!    Cross.H-tracked family of gaps, not a new one, and is **not** attempted
+//!    here. What this port ships is honestly **displacement since the drag
+//!    started**, not the oracle's globally-anchored value — pinned by
+//!    `draggable_test.rs`'s `reported_offset_is_displacement_not_global_position`,
+//!    which lays the `Draggable` under a nonzero `Padding` specifically so a
+//!    future accidental "fix" that seeds the offset with *some* base instead
+//!    of `Offset::ZERO` is still caught red-handed for shipping the *wrong*
+//!    base rather than silently looking correct at the origin.
+//!
+//!    Separately, `pointerDragAnchorStrategy` (anchor at `Offset.zero`) is
+//!    not selectable at all — that is the actual, named deferral for
+//!    *strategy choice*, distinct from the `_lastOffset` divergence above.
 //! 5. **Unmounting mid-drag cancels immediately rather than tracking to the
 //!    real pointer-up.** The oracle's `_disposeRecognizerIfInactive` keeps
 //!    the recognizer alive until every active drag naturally finishes, even
@@ -139,9 +159,11 @@ pub struct DraggableDetails {
     pub was_accepted: bool,
     /// Velocity at release.
     pub velocity: Velocity,
-    /// Position at release, relative to `dragStartPoint` (see the module
-    /// divergence note #4) — the running sum of every axis-restricted delta
-    /// since the drag started, not a raw global position.
+    /// Displacement since the drag started — the running sum of every
+    /// axis-restricted delta, not a raw global position. See the module
+    /// divergence note #4: the oracle's `_lastOffset` adds the draggable's
+    /// global origin on top of this sum; this port does not (a named,
+    /// pinned divergence, not a raw position either way).
     pub offset: Offset<Pixels>,
 }
 
@@ -389,10 +411,10 @@ struct DragSession {
     rebuild: RebuildHandle,
     config: Arc<Mutex<DragConfig>>,
     /// Running sum of every axis-restricted delta since the drag started —
-    /// `_DragAvatar._lastOffset` under the default `childDragAnchorStrategy`
-    /// (see the module's divergence note #4 on why no separate
-    /// `dragStartPoint` subtraction is needed). Reported as
-    /// `DraggableDetails.offset`.
+    /// displacement, seeded at `Offset::ZERO`. **Not** the oracle's
+    /// `_lastOffset`: that adds the draggable's global origin on top of this
+    /// same sum (see the module's divergence note #4 — a named, pinned
+    /// divergence, not attempted here). Reported as `DraggableDetails.offset`.
     offset: Mutex<Offset<Pixels>>,
 }
 
