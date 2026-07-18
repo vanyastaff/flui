@@ -49,7 +49,7 @@ use flui_view::{BuildContext, BuildContextExt, Child, IntoView, ViewExt, ViewSta
 
 use crate::animated::VsyncScope;
 use crate::scroll::single_child_scroll_view::SingleChildScrollView;
-use crate::scroll::{ClampingScrollPhysics, ScrollController, SharedScrollPhysics};
+use crate::scroll::{ClampingScrollPhysics, ScrollController, ScrollMetrics, SharedScrollPhysics};
 use crate::{AnimatedBuilder, ColoredBox, GestureDetector, Positioned, Stack};
 
 // ---------------------------------------------------------------------------
@@ -516,11 +516,8 @@ impl ViewState<RefreshIndicator> for RefreshIndicatorState {
                             sc_update.set_pixels(sc_update.min_scroll_extent());
                         } else {
                             rc_update.set_pull_distance_px(0.0);
-                            let clamped = ph_update.apply_boundary_conditions(
-                                proposed,
-                                sc_update.min_scroll_extent(),
-                                sc_update.max_scroll_extent(),
-                            );
+                            let metrics = ScrollMetrics::from(&sc_update.position());
+                            let clamped = ph_update.apply_boundary_conditions(&metrics, proposed);
                             sc_update.set_pixels(clamped);
                         }
                     })
@@ -544,12 +541,10 @@ impl ViewState<RefreshIndicator> for RefreshIndicatorState {
                                 // so spring-back still works without measurable velocity.
                                 if bounded.is_nan() { 0.0 } else { bounded }
                             };
-                            if let Some(sim) = ph_end.create_ballistic_simulation(
-                                fling_vel_px_per_sec,
-                                sc_end.pixels(),
-                                sc_end.min_scroll_extent(),
-                                sc_end.max_scroll_extent(),
-                            ) {
+                            let metrics = ScrollMetrics::from(&sc_end.position());
+                            if let Some(sim) =
+                                ph_end.create_ballistic_simulation(&metrics, fling_vel_px_per_sec)
+                            {
                                 let _ = fc_fling.animate_with(sim);
                             }
                         }

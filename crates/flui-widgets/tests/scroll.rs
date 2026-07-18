@@ -19,8 +19,8 @@ use flui_types::geometry::px;
 use flui_view::ViewExt;
 use flui_widgets::{
     BouncingScrollPhysics, ClampingScrollPhysics, ColoredBox, CustomScrollView, GridView, ListView,
-    ScrollController, ScrollPhysics, Scrollable, SharedScrollPhysics, SingleChildScrollView,
-    SizedBox, SliverFixedExtentList, VsyncScope,
+    ScrollController, ScrollMetrics, ScrollPhysics, Scrollable, SharedScrollPhysics,
+    SingleChildScrollView, SizedBox, SliverFixedExtentList, VsyncScope,
 };
 
 /// Flutter parity (tag `3.44.0`):
@@ -582,11 +582,17 @@ fn scroll_controller_thumb_offset_fraction_at_scroll_midpoint() {
 // ScrollPhysics — clamping boundary enforcement
 // ============================================================================
 
+/// Minimal metrics fixture for these boundary-clamp tests: only
+/// `min_scroll_extent`/`max_scroll_extent` matter to `ClampingScrollPhysics`.
+fn metrics_with_extents(min_scroll_extent: f32, max_scroll_extent: f32) -> ScrollMetrics {
+    ScrollMetrics::new(0.0, min_scroll_extent, max_scroll_extent)
+}
+
 #[test]
 fn clamping_physics_clamps_proposed_offset_below_minimum() {
     let physics = ClampingScrollPhysics::default();
     // Proposing -50 (past the 0 minimum) must snap to 0.
-    let result = physics.apply_boundary_conditions(-50.0, 0.0, 500.0);
+    let result = physics.apply_boundary_conditions(&metrics_with_extents(0.0, 500.0), -50.0);
     assert_eq!(
         result, 0.0,
         "clamping physics must clamp below-min proposals to min_scroll_extent"
@@ -597,7 +603,7 @@ fn clamping_physics_clamps_proposed_offset_below_minimum() {
 fn clamping_physics_clamps_proposed_offset_above_maximum() {
     let physics = ClampingScrollPhysics::default();
     // Proposing 600 past the 500 maximum must snap to 500.
-    let result = physics.apply_boundary_conditions(600.0, 0.0, 500.0);
+    let result = physics.apply_boundary_conditions(&metrics_with_extents(0.0, 500.0), 600.0);
     assert_eq!(
         result, 500.0,
         "clamping physics must clamp above-max proposals to max_scroll_extent"
@@ -607,7 +613,7 @@ fn clamping_physics_clamps_proposed_offset_above_maximum() {
 #[test]
 fn clamping_physics_passes_through_in_range_offset() {
     let physics = ClampingScrollPhysics::default();
-    let result = physics.apply_boundary_conditions(250.0, 0.0, 500.0);
+    let result = physics.apply_boundary_conditions(&metrics_with_extents(0.0, 500.0), 250.0);
     assert_eq!(
         result, 250.0,
         "clamping physics must pass through in-range proposals unchanged"

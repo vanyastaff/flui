@@ -37,7 +37,7 @@ pub use list_view::ListView;
 pub use refresh_indicator::{RefreshController, RefreshIndicator, RefreshIndicatorState};
 pub use scroll_controller::ScrollController;
 pub use scroll_physics::{
-    BouncingScrollPhysics, ClampingScrollPhysics, ScrollPhysics, SharedScrollPhysics,
+    BouncingScrollPhysics, ClampingScrollPhysics, ScrollMetrics, ScrollPhysics, SharedScrollPhysics,
 };
 pub use scrollable::Scrollable;
 pub use scrollbar::Scrollbar;

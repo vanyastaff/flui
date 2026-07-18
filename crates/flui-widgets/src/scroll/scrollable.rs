@@ -38,7 +38,7 @@ use flui_view::prelude::StatefulView;
 use flui_view::{BoxedView, BuildContext, BuildContextExt, Child, IntoView, ViewExt, ViewState};
 
 use crate::animated::VsyncScope;
-use crate::scroll::{ClampingScrollPhysics, ScrollController, SharedScrollPhysics};
+use crate::scroll::{ClampingScrollPhysics, ScrollController, ScrollMetrics, SharedScrollPhysics};
 use crate::{AnimatedBuilder, GestureDetector, SingleChildScrollView};
 
 /// A caller-supplied composition of the scrollable content, receiving the
@@ -365,11 +365,8 @@ impl ViewState<Scrollable> for ScrollableState {
                         Axis::Horizontal => details.delta.dx.get(),
                     };
                     let proposed = ctrl_update.pixels() - raw_delta;
-                    let clamped = phys_update.apply_boundary_conditions(
-                        proposed,
-                        ctrl_update.min_scroll_extent(),
-                        ctrl_update.max_scroll_extent(),
-                    );
+                    let metrics = ScrollMetrics::from(&ctrl_update.position());
+                    let clamped = phys_update.apply_boundary_conditions(&metrics, proposed);
                     ctrl_update.set_pixels(clamped);
                 })
                 .on_pan_end(move |details| {
@@ -399,12 +396,10 @@ impl ViewState<Scrollable> for ScrollableState {
                         fling_velocity_px_per_sec
                     };
 
-                    if let Some(sim) = phys_fling.create_ballistic_simulation(
-                        fling_velocity_px_per_sec,
-                        ctrl_fling.pixels(),
-                        ctrl_fling.min_scroll_extent(),
-                        ctrl_fling.max_scroll_extent(),
-                    ) {
+                    let metrics = ScrollMetrics::from(&ctrl_fling.position());
+                    if let Some(sim) =
+                        phys_fling.create_ballistic_simulation(&metrics, fling_velocity_px_per_sec)
+                    {
                         // `Box<dyn Simulation>` implements `Simulation` via the
                         // blanket impl in `flui-animation`, so it can be passed
                         // directly as `S: Simulation + 'static`.
