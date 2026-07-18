@@ -210,8 +210,17 @@ fn dispatch_platform_realm(
         let mut state = slot.borrow_mut();
         if state.realm_id != Some(dispatcher.realm_id) {
             return Err(if state.realm_id.is_some() {
+                tracing::debug!(
+                    ?dispatcher,
+                    current_realm_id = ?state.realm_id,
+                    "dropping realm callback: a newer realm replaced the one it was dispatched for"
+                );
                 RealmDispatchError::StaleRealm
             } else {
+                tracing::debug!(
+                    ?dispatcher,
+                    "dropping realm callback: no realm installed (not yet ready, or already torn down)"
+                );
                 RealmDispatchError::RealmUnavailable
             });
         }
@@ -567,6 +576,36 @@ fn should_render_frame(dirty: bool, frame_scheduled: bool) -> bool {
     dirty || frame_scheduled
 }
 
+/// Whether another frame will be requested regardless of this one's
+/// outcome: `needs_redraw`, a scheduled ticker, or dirty
+/// pipeline/build work left over from the frame that just ran.
+///
+/// This only feeds [`no_present_fallback_pace`]'s THROTTLE decision below —
+/// it cannot itself wake anything. A `ControlFlow::Wait` loop only wakes on
+/// an actual `wake_frame()`/platform `request_redraw()` call or external
+/// input; a dropped/errored frame's retry wake comes from
+/// `render_frame_entered`'s `retry_needed` path, not from this function.
+///
+/// The pending-work leg matters when a frame that left dirty pipeline/build
+/// nodes behind is ALSO being re-invoked by some other wake source without
+/// ever reaching `present()`: without this leg, such a frame would read
+/// `keeps_gate_open == false`, skip the fallback sleep, and the loop could
+/// spin at full CPU speed re-processing the same leftover work on every
+/// rapid re-wake instead of being bounded like any other no-present,
+/// gate-open frame.
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+fn keeps_frame_gate_open(
+    needs_redraw: bool,
+    frame_scheduled: bool,
+    has_pending_work: bool,
+) -> bool {
+    needs_redraw || frame_scheduled || has_pending_work
+}
+
 /// Coarse fallback pace for a frame that ran the pipeline but never reached
 /// `present()`, applied only while a ticker keeps re-requesting a frame.
 ///
@@ -641,7 +680,10 @@ fn no_present_fallback_pace(presented: bool, keeps_gate_open: bool) -> Option<st
 mod desktop_pacing_tests {
     use std::time::{Duration, Instant};
 
-    use super::{NO_PRESENT_FALLBACK_PACE, no_present_fallback_pace, should_render_frame};
+    use super::{
+        NO_PRESENT_FALLBACK_PACE, keeps_frame_gate_open, no_present_fallback_pace,
+        should_render_frame,
+    };
 
     #[test]
     fn idle_wake_with_no_dirty_work_and_no_scheduled_frame_renders_nothing() {
@@ -659,6 +701,43 @@ mod desktop_pacing_tests {
             "a scheduled ticker alone renders (keeps animations alive with no other dirty state)"
         );
         assert!(should_render_frame(true, true));
+    }
+
+    #[test]
+    fn pending_work_alone_keeps_the_gate_open() {
+        assert!(
+            keeps_frame_gate_open(false, false, true),
+            "a frame that left dirty pipeline/build nodes behind must keep the fallback-pace \
+             gate open (so the busy-spin throttle still applies on a rapid re-wake) even with \
+             no `needs_redraw` and no scheduled ticker"
+        );
+    }
+
+    #[test]
+    fn needs_redraw_or_scheduled_ticker_alone_keeps_the_gate_open() {
+        assert!(keeps_frame_gate_open(true, false, false));
+        assert!(keeps_frame_gate_open(false, true, false));
+    }
+
+    #[test]
+    fn no_signal_at_all_closes_the_gate() {
+        assert!(
+            !keeps_frame_gate_open(false, false, false),
+            "with no redraw request, no scheduled ticker, and no pending work, the gate \
+             must close so the loop can go idle"
+        );
+    }
+
+    #[test]
+    fn pending_work_drives_the_no_present_fallback_pace_like_any_other_open_gate() {
+        // A frame that never presents (surface lost / no damage) but left dirty
+        // pipeline work behind must still get the busy-spin-bounding fallback pace —
+        // exactly as if `needs_redraw` or a ticker had kept the gate open.
+        let keeps_gate_open = keeps_frame_gate_open(false, false, true);
+        assert_eq!(
+            no_present_fallback_pace(false, keeps_gate_open),
+            Some(NO_PRESENT_FALLBACK_PACE)
+        );
     }
 
     #[test]
@@ -761,7 +840,21 @@ where
     let has_worker_driver = worker_driver.is_some();
     let worker_driver = Arc::new(Mutex::new(worker_driver));
 
-    let platform = flui_platform::current_platform().expect("Failed to initialize platform");
+    // Platform init is an environment failure (missing display server, unsupported
+    // OS, driver problem), not a `BUG:` invariant — no `bootstrap_error_slot` exists
+    // yet to route this through (that cell, and the `platform` it needs for
+    // `quit()`, only exist once `on_ready` is running), so this is the one desktop
+    // failure this function still surfaces via `panic!` directly rather than the
+    // deferred-teardown path below. It still gets a full error log and the same
+    // "desktop bootstrap failed" wording as that deferred path, instead of a bare
+    // `.expect()`'s terse, context-free message.
+    let platform = match flui_platform::current_platform() {
+        Ok(platform) => platform,
+        Err(error) => {
+            tracing::error!(%error, "Failed to initialize platform");
+            panic!("desktop bootstrap failed: platform initialization error: {error:?}");
+        }
+    };
 
     // `rebuild_registration`'s `Drop` detaches the hot-reload hook and must
     // stay alive until the event loop exits — but it (like the window and
@@ -802,11 +895,23 @@ where
     {
         tracing::info!("Platform ready");
 
-        // 1. Open window now that the event loop is running.
+        // 1. Open window now that the event loop is running. Window creation is
+        // an environment failure (display server hiccup, resource exhaustion),
+        // not a `BUG:` invariant, and — unlike platform init above — this DOES
+        // run inside `on_ready` with a live `platform` and `bootstrap_error_slot`
+        // available, so it gets the same deferred-panic-after-teardown handling
+        // as the GPU/realm/attach failures below instead of an immediate bare
+        // `.expect()` panic mid-`on_ready`.
         let options: WindowOptions = (&config).into();
-        let window = platform
-            .open_window(options)
-            .expect("Failed to create window");
+        let window = match platform.open_window(options) {
+            Ok(window) => window,
+            Err(error) => {
+                tracing::error!(%error, "Window creation failed");
+                *bootstrap_error_slot.borrow_mut() = Some(error.context("Window creation failed"));
+                platform.quit();
+                return;
+            }
+        };
 
         // 2. Create GPU renderer directly (no DesktopEmbedder)
         let phys_size = window.physical_size();
@@ -1025,7 +1130,11 @@ where
         // happens when a ticker/animation keeps re-requesting a frame every
         // wake with nothing pacing it — `no_present_fallback_pace` fires
         // only in exactly that combination.
-            let keeps_gate_open = binding.needs_redraw() || scheduler.is_frame_scheduled();
+            let keeps_gate_open = keeps_frame_gate_open(
+                binding.needs_redraw(),
+                scheduler.is_frame_scheduled(),
+                binding.has_pending_work(realm),
+            );
             if let Some(pace) = no_present_fallback_pace(presented, keeps_gate_open) {
                 std::thread::sleep(pace);
             }
@@ -1079,17 +1188,29 @@ where
             let _ = dispatch_platform_realm(realm_dispatch, RealmEvent::Active(active));
         }));
 
+        // 9. Store window in AppBinding for runtime access — BEFORE
+        // dispatching `Lifecycle::Started` or requesting the initial
+        // redraw. Both of those can synchronously run the first frame
+        // through `dispatch_platform_realm`; if `active_window` were still
+        // `None` at that point, anything resolving it during that frame
+        // (an autofocus `EditableText` attaching its IME client, for
+        // instance) would silently no-op instead of attaching.
+        AppBinding::instance().set_window(window);
+
         // Mark lifecycle as started
         let _ = dispatch_platform_realm(
             realm_dispatch,
             RealmEvent::Lifecycle(LifecycleEvent::Started),
         );
 
-        // 9. Request initial redraw
-        window.request_redraw();
-
-        // 10. Store window in AppBinding for runtime access
-        AppBinding::instance().set_window(window);
+        // 10. Request initial redraw, now that the window is stored.
+        // `wake_frame` (not `with_window(|w| w.request_redraw())`): it clones
+        // the window out from under `active_window`'s lock before calling
+        // through, so a backend whose `request_redraw` re-enters `AppBinding`
+        // synchronously (headless, in this crate's own tests) cannot
+        // deadlock on that same lock — the same clone-then-call discipline
+        // `TextInputPlatformBridge`/`perform_haptic_feedback` follow.
+        AppBinding::instance().wake_frame();
 
         tracing::info!("Desktop platform initialized with callbacks");
     }
@@ -1393,17 +1514,29 @@ where
         let _ = dispatch_platform_realm(realm_dispatch, RealmEvent::Active(active));
     }));
 
+    // 9. Store window in AppBinding for runtime access — BEFORE
+    // dispatching `Lifecycle::Started` or requesting the initial redraw.
+    // Both of those can synchronously run the first frame through
+    // `dispatch_platform_realm`; if `active_window` were still `None` at
+    // that point, anything resolving it during that frame (an autofocus
+    // `EditableText` attaching its IME client, for instance) would
+    // silently no-op instead of attaching.
+    AppBinding::instance().set_window(window);
+
     // Mark lifecycle as started
     let _ = dispatch_platform_realm(
         realm_dispatch,
         RealmEvent::Lifecycle(LifecycleEvent::Started),
     );
 
-    // 9. Request initial redraw
-    window.request_redraw();
-
-    // 10. Store window in AppBinding for runtime access
-    AppBinding::instance().set_window(window);
+    // 10. Request initial redraw, now that the window is stored.
+    // `wake_frame` (not `with_window(|w| w.request_redraw())`): it clones
+    // the window out from under `active_window`'s lock before calling
+    // through, so a backend whose `request_redraw` re-enters `AppBinding`
+    // synchronously (headless, in this crate's own tests) cannot deadlock
+    // on that same lock — the same clone-then-call discipline
+    // `TextInputPlatformBridge`/`perform_haptic_feedback` follow.
+    AppBinding::instance().wake_frame();
 
     tracing::info!("Android platform initialized with callbacks (hot-reload enabled)");
 
@@ -1612,13 +1745,17 @@ where
         let _ = dispatch_platform_realm(realm_dispatch, RealmEvent::Active(active));
     }));
 
+    // 7. Store window — BEFORE dispatching `Lifecycle::Started`, which can
+    // synchronously run the first frame through `dispatch_platform_realm`;
+    // anything resolving `active_window` during that frame (an autofocus
+    // `EditableText` attaching its IME client, for instance) must not see
+    // `None`.
+    AppBinding::instance().set_shared_window(window);
+
     let _ = dispatch_platform_realm(
         realm_dispatch,
         RealmEvent::Lifecycle(LifecycleEvent::Started),
     );
-
-    // 7. Store window
-    AppBinding::instance().set_shared_window(window);
 
     tracing::info!("Web platform initialized with callbacks");
 
@@ -1694,5 +1831,99 @@ mod tests {
 
         assert_eq!(config.title, "Test");
         assert_eq!(config.size.width, px(800.0));
+    }
+
+    /// Serializes tests that read/write `AppBinding::instance()`'s active
+    /// window (the repo rule for tests mutating shared binding state —
+    /// AGENTS.md "Testing quirks"). nextest gives each test its own process;
+    /// `cargo test` (also a stated gate for this crate) runs them on threads
+    /// in one process, where two tests each setting the singleton's window
+    /// could interleave.
+    static SINGLETON_WINDOW_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Bootstrap ordering invariant shared by `bootstrap_desktop`, `run_android`,
+    /// and `run_web`: the window must be stored in `AppBinding` before anything
+    /// that could synchronously observe `active_window` (the initial redraw
+    /// request, `Lifecycle::Started`) runs — otherwise the first such observer
+    /// (an autofocus `EditableText` attaching its IME client, for instance)
+    /// silently sees `None`.
+    ///
+    /// `bootstrap_desktop`/`run_android`/`run_web` themselves cannot run in a
+    /// unit test: each opens its window from inside a live platform event loop
+    /// (`ActiveEventLoop` is unreachable outside `Platform::run`) and creates a
+    /// real GPU `Renderer`, gated behind the separate `enable-wgpu-tests` CI job
+    /// (WARP), not this one. This instead drives the exact ordering invariant
+    /// headlessly: `HeadlessWindow::request_redraw` (flui-platform's headless
+    /// backend, used elsewhere in this crate's tests) dispatches its
+    /// `on_request_frame` callback SYNCHRONOUSLY — unlike a real winit window,
+    /// where a queued `RedrawRequested` would not fire until `on_ready` (and
+    /// this reordering) has already returned. That is exactly why the ordering
+    /// bug was invisible in a real window's actual first frame but is directly
+    /// observable here.
+    ///
+    /// Checks a unique window *size* rather than mere `is_some()`, so this
+    /// cannot pass merely because an earlier test left SOME window installed
+    /// on the singleton — only THIS test's window, with THIS test's
+    /// unmistakable marker size, proves `set_window` ran before the callback.
+    ///
+    /// Red-check: swap the order of the two `AppBinding::instance()` calls
+    /// below (request the redraw, then store the window — the pre-fix shape)
+    /// and this fails: `wake_frame` finds no active window yet, never calls
+    /// `request_redraw` on it, and the callback never fires at all.
+    #[test]
+    fn desktop_bootstrap_stores_the_window_before_the_first_synchronous_redraw_observes_it() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let _serialized = SINGLETON_WINDOW_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+        let marker_size = flui_types::Size::new(px(4001.0), px(4002.0));
+
+        let platform = flui_platform::headless_platform();
+        let window = platform
+            .open_window(flui_platform::traits::WindowOptions {
+                size: marker_size,
+                ..Default::default()
+            })
+            .expect("headless platform always opens a window");
+
+        // `on_request_frame` requires `Send` on the callback; `AppBinding` is
+        // not `Send` (owner-thread-affine gesture arena state — ADR-0027), so
+        // the closure below cannot capture a specific `&AppBinding`/`Arc`.
+        // Resolving `AppBinding::instance()` fresh inside the closure (zero
+        // captures for the binding itself) sidesteps that entirely — the same
+        // pattern the production scheduler wake hook (`AppBinding::new`) uses
+        // to avoid capturing one specific instance.
+        //
+        // Reads through `with_window`, NOT `wake_frame`/`request_redraw`: a
+        // headless window's `request_redraw` dispatches this very callback
+        // synchronously, so calling anything that re-locks `active_window`
+        // from in here (the two are on the same thread, same call stack)
+        // would deadlock on `AppBinding`'s own non-reentrant lock.
+        let saw_marker_window = Arc::new(AtomicBool::new(false));
+        let saw_marker_window_cb = Arc::clone(&saw_marker_window);
+        window.on_request_frame(Box::new(move || {
+            let matches_marker = AppBinding::instance()
+                .with_window(|w| w.bounds().size == marker_size)
+                .unwrap_or(false);
+            saw_marker_window_cb.store(matches_marker, Ordering::SeqCst);
+        }));
+
+        // Mirrors the FIXED order in `bootstrap_desktop`/`run_android`:
+        // store the window BEFORE requesting the initial redraw. `wake_frame`
+        // (not `with_window(|w| w.request_redraw())`) clones the window out
+        // from under the lock before calling through, so this call cannot
+        // deadlock against the callback's own `with_window` re-entry above —
+        // see `wake_frame`'s doc and `bootstrap_desktop`'s matching comment.
+        AppBinding::instance().set_window(window);
+        AppBinding::instance().wake_frame();
+
+        assert!(
+            saw_marker_window.load(Ordering::SeqCst),
+            "set_window must have taken effect before the initial redraw fires \
+             the frame callback that could read active_window",
+        );
     }
 }

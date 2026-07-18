@@ -247,9 +247,79 @@ impl TextInputPlatformBridge {
     }
 }
 
+/// A `'static`, `Arc`-cloneable handle onto exactly the state
+/// [`HotReloadBridge::apply`] needs — the shared pipeline owner and the
+/// `needs_redraw` flag — without borrowing `&AppBinding` itself.
+///
+/// [`UiRealm::bind_to_app`](super::ui_realm::UiRealm::bind_to_app) installs
+/// this (via [`AppBinding::hot_reload_bridge`]) so `UiRealm::drain_commands`'s
+/// `UiCommand::HotReload` arm applies against the app the realm was actually
+/// bound to. This is the same stale-binding class
+/// [`TextInputPlatformBridge`] exists to prevent for IME callbacks: hitting
+/// `AppBinding::instance()` directly from that arm would silently reassemble
+/// the process-wide singleton's tree instead of a standalone test instance's
+/// (`UiRealm::for_test`) — wrong under `for_test`, and a trap for a future
+/// multi-realm binding.
+#[derive(Clone)]
+pub(crate) struct HotReloadBridge {
+    pipeline: Arc<RwLock<flui_rendering::pipeline::PipelineOwner>>,
+    needs_redraw: Arc<AtomicBool>,
+}
+
+impl HotReloadBridge {
+    /// Reassembles the element and render trees and requests a redraw.
+    /// Mirrors [`AppBinding::perform_hot_reload_entered`] but through the
+    /// bound app's own handles rather than `&AppBinding`.
+    pub(crate) fn apply(
+        &self,
+        realm: &super::ui_realm::UiRealm,
+        tier: flui_hot_reload::HotReloadTier,
+    ) {
+        use flui_hot_reload::HotReloadTier;
+
+        match tier {
+            HotReloadTier::HotReload => {
+                realm.widgets().perform_reassemble();
+                self.pipeline.write().reassemble();
+                self.needs_redraw.store(true, Ordering::Relaxed);
+                tracing::info!("Hot reload applied — element and render trees reassembled");
+            }
+            HotReloadTier::HotRestart => {
+                tracing::warn!(
+                    "HotRestart requested — root remount not yet implemented; \
+                     falling back to reassemble (state may be stale)"
+                );
+                self.apply(realm, HotReloadTier::HotReload);
+            }
+            HotReloadTier::FullRestart => {
+                tracing::debug!("FullRestart is handled by the CLI process supervisor");
+            }
+        }
+    }
+}
+
+/// Outcome of one build+layout+paint pass, distinguishing "nothing was
+/// dirty" from "the pipeline failed" — both produce no layer tree, but only
+/// the latter must force a retry rather than being treated as a settled,
+/// up-to-date frame (see [`AppBinding::render_frame_entered`]'s retry gate).
+enum FramePaintOutcome {
+    /// A fresh layer tree was painted and turned into a `Scene`.
+    Painted(Arc<Scene>),
+    /// Nothing was dirty this frame; no new content to composite.
+    Idle,
+    /// The build/layout/paint transaction failed (e.g. a render object
+    /// panicked and was caught by `catch_unwind`); the frame was dropped and
+    /// must be retried.
+    Errored,
+}
+
 impl AppBinding {
-    /// Create a new AppBinding.
-    fn new() -> Self {
+    /// Create a new, standalone `AppBinding` — distinct from
+    /// [`AppBinding::instance()`]'s process-singleton. `pub(crate)` (not
+    /// private) specifically so `UiRealm`'s own tests (a sibling module) can
+    /// build one to bind a realm against, the same way this module's tests
+    /// do — see `UiRealm::for_test`.
+    pub(crate) fn new() -> Self {
         // Ensure the global Scheduler singleton is initialized
         let _ = Scheduler::instance();
 
@@ -284,16 +354,10 @@ impl AppBinding {
             .write()
             .set_on_need_visual_update(move || visual_wake.wake_frame());
 
-        // Animation-wake wiring: scheduling a frame callback (a ticker
-        // tick) fires this hook on the scheduler's false→true
-        // `frame_scheduled` transition (Flutter parity:
-        // `SchedulerBinding.scheduleFrame` → platform `scheduleFrame`).
-        // Without it an AnimationController only advances on frames some
-        // OTHER source produces — after the first idle frame the ticker
-        // starves and the animation freezes. Same lock-safety argument as
-        // the visual-update hook above: `wake_frame` touches only the
-        // `active_window` leaf Mutex.
-        Scheduler::instance().set_on_frame_scheduled(Some(wake_handle.into_callback()));
+        // Animation-wake wiring (the scheduler's `on_frame_scheduled` hook) is
+        // installed in `instance()`'s one-time initializer, NOT here — see
+        // that method's doc for why a per-construction install is wrong both
+        // for steal-proofing and for cross-thread wake correctness.
 
         // Create RendererBinding sharing the SAME PipelineOwner
         let renderer =
@@ -325,7 +389,54 @@ impl AppBinding {
         thread_local! {
             static INSTANCE: &'static AppBinding = {
             tracing::info!("Initializing AppBinding");
-            Box::leak(Box::new(AppBinding::new()))
+            let binding: &'static AppBinding = Box::leak(Box::new(AppBinding::new()));
+
+            // Animation-wake wiring: scheduling a frame callback (a ticker
+            // tick) fires this hook on the scheduler's false→true
+            // `frame_scheduled` transition (Flutter parity:
+            // `SchedulerBinding.scheduleFrame` → platform `scheduleFrame`).
+            // Without it an AnimationController only advances on frames some
+            // OTHER source produces — after the first idle frame the ticker
+            // starves and the animation freezes.
+            //
+            // The SAME hook also fires from the async-driver's task waker
+            // (`AsyncDriver::set_request_frame`, wired in
+            // `Scheduler::with_frame_duration`) whenever a spawned future's
+            // `Waker::wake` runs — and that can happen on a thread that never
+            // called `AppBinding::instance()` at all (an executor thread
+            // completing an image-decode future, for instance). This is
+            // installed HERE — once, in this thread-local singleton's
+            // one-time initializer, capturing THIS canonical binding's
+            // `frame_wake_callback()` (an `Arc`-backed, `Send + Sync` handle)
+            // — rather than in `AppBinding::new()` resolving
+            // `AppBinding::instance()` fresh on every fire, for two reasons:
+            //
+            // 1. Cross-thread correctness (the reason resolving at fire time
+            //    is wrong): `AppBinding::instance()` is itself thread-local.
+            //    A hook that calls it AT FIRE TIME, fired from some OTHER
+            //    thread, would lazily construct a brand-new, windowless
+            //    `AppBinding` for THAT thread and wake it instead of the
+            //    owner — a lost wake / async-task starvation, exactly what
+            //    the visual-update hook above (same reasoning, same fix
+            //    shape) already avoids by capturing an `Arc`-based handle
+            //    instead of re-resolving the thread-local. Capturing
+            //    `frame_wake_callback()` up front sidesteps thread-local
+            //    resolution entirely: firing it only ever touches `Send +
+            //    Sync` `Arc` state, so it wakes the correct binding
+            //    regardless of which thread calls it.
+            // 2. Steal-proofing: `Scheduler::instance()` is itself a
+            //    thread-local singleton, so this hook is a shared resource
+            //    between every `AppBinding` constructed on this thread.
+            //    Installing it from `AppBinding::new()` meant a throwaway
+            //    `AppBinding::new()` a test builds alongside the real
+            //    singleton would silently steal the hook toward its own
+            //    (about-to-be-dropped) wake handle. Installing it only here
+            //    means a throwaway `new()` never touches the shared hook at
+            //    all — this initializer runs exactly once per thread, for
+            //    the canonical singleton only.
+            Scheduler::instance().set_on_frame_scheduled(Some(binding.frame_wake_callback()));
+
+            binding
             };
         }
 
@@ -508,31 +619,16 @@ impl AppBinding {
     /// - [`flui_hot_reload::HotReloadTier::FullRestart`]: no-op here; use `flui run` process restart.
     ///
     /// Apply reload while the realm owner is at an Idle commit point.
+    ///
+    /// Delegates to [`HotReloadBridge::apply`] against THIS app's own
+    /// pipeline/redraw handles — the single implementation both this method
+    /// and `UiRealm::drain_commands`'s hot-reload arm share.
     pub(crate) fn perform_hot_reload_entered(
         &self,
         realm: &super::ui_realm::UiRealm,
         tier: flui_hot_reload::HotReloadTier,
     ) {
-        use flui_hot_reload::HotReloadTier;
-
-        match tier {
-            HotReloadTier::HotReload => {
-                realm.widgets().perform_reassemble();
-                self.render_pipeline_mut().reassemble();
-                self.request_redraw();
-                tracing::info!("Hot reload applied — element and render trees reassembled");
-            }
-            HotReloadTier::HotRestart => {
-                tracing::warn!(
-                    "HotRestart requested — root remount not yet implemented; \
-                     falling back to reassemble (state may be stale)"
-                );
-                self.perform_hot_reload_entered(realm, HotReloadTier::HotReload);
-            }
-            HotReloadTier::FullRestart => {
-                tracing::debug!("FullRestart is handled by the CLI process supervisor");
-            }
-        }
+        self.hot_reload_bridge().apply(realm, tier);
     }
 
     // ========================================================================
@@ -790,6 +886,18 @@ impl AppBinding {
         }
     }
 
+    /// A cloneable capability onto this app's pipeline + redraw flag, for
+    /// [`UiRealm::bind_to_app`](super::ui_realm::UiRealm::bind_to_app) to
+    /// install so hot-reload commands drained later apply against THIS app,
+    /// not whichever `AppBinding::instance()` resolves to at drain time. See
+    /// [`HotReloadBridge`]'s doc for why that distinction matters.
+    pub(crate) fn hot_reload_bridge(&self) -> HotReloadBridge {
+        HotReloadBridge {
+            pipeline: Arc::clone(&self.shared_pipeline_owner),
+            needs_redraw: Arc::clone(&self.needs_redraw),
+        }
+    }
+
     // ========================================================================
     // Haptics
     // ========================================================================
@@ -882,14 +990,17 @@ impl AppBinding {
         realm: &super::ui_realm::UiRealm,
         constraints: BoxConstraints,
     ) -> Option<Arc<Scene>> {
-        realm.enter(|realm| self.draw_frame_entered(realm, constraints))
+        match realm.enter(|realm| self.draw_frame_entered(realm, constraints)) {
+            FramePaintOutcome::Painted(scene) => Some(scene),
+            FramePaintOutcome::Idle | FramePaintOutcome::Errored => None,
+        }
     }
 
     fn draw_frame_entered(
         &self,
         realm: &super::ui_realm::UiRealm,
         constraints: BoxConstraints,
-    ) -> Option<Arc<Scene>> {
+    ) -> FramePaintOutcome {
         // Vsync tick — MUST precede the build phase (Phase 1).
         //
         // Implicit-animation controllers registered via a `VsyncScope` use a
@@ -962,6 +1073,7 @@ impl AppBinding {
         // the frame errored (e.g. a render object panicked and was
         // caught by `catch_unwind`), we log via tracing and drop the
         // frame -- the owner is still usable for the next call.
+        let mut pipeline_errored = false;
         let (layer_tree, link_registry) = {
             {
                 // The window's constraints ARE the root constraints — without
@@ -997,6 +1109,7 @@ impl AppBinding {
                 Ok(layer_tree) => (layer_tree, link_registry),
                 Err(e) => {
                     tracing::error!(error = ?e, "draw_frame: pipeline failed, dropping frame");
+                    pipeline_errored = true;
                     (None, link_registry)
                 }
             }
@@ -1051,10 +1164,15 @@ impl AppBinding {
                 reason = "Scene: Send but !Sync due to CompositionCallback (FnOnce + Send + 'static, no Sync). Sole reader is the binding thread; relaxing the callback bound is tracked under the engine composition redesign."
             )]
             let arc = Arc::new(scene);
-            Some(arc)
+            FramePaintOutcome::Painted(arc)
+        } else if pipeline_errored {
+            // No layer tree because `run_frame_with_layout_builders` errored
+            // above, not because nothing was dirty — the caller must retry
+            // rather than treat this as a settled, up-to-date frame.
+            FramePaintOutcome::Errored
         } else {
-            // No new layer tree
-            None
+            // No new layer tree, and no error: nothing was dirty this frame.
+            FramePaintOutcome::Idle
         }
     }
 
@@ -1093,11 +1211,19 @@ impl AppBinding {
         let dpr = self.shared_pipeline_owner.read().device_pixel_ratio();
         let constraints =
             BoxConstraints::tight(Size::new(px(width as f32 / dpr), px(height as f32 / dpr)));
-        let scene = self.draw_frame_entered(realm, constraints);
+        let outcome = self.draw_frame_entered(realm, constraints);
 
         // 3. Render scene to GPU
         let mut presented = false;
-        if let Some(ref scene) = scene
+        // Forces `wake_frame()` instead of `mark_rendered()` below for any
+        // frame that was dropped rather than settled — a pipeline error, or
+        // a recoverable GPU error below — so `needs_redraw` stays armed AND
+        // an actual wake is scheduled. Without this, a dropped frame on an
+        // otherwise-quiescent event loop (no animation, no further input)
+        // never gets retried: the loop falls back to `ControlFlow::Wait`
+        // and the UI stays stale until the next external event.
+        let mut retry_needed = matches!(outcome, FramePaintOutcome::Errored);
+        if let FramePaintOutcome::Painted(ref scene) = outcome
             && scene.has_content()
         {
             // The pipeline painted a FRESH scene this frame, so the
@@ -1130,7 +1256,8 @@ impl AppBinding {
                 }
                 Err(EngineError::SurfaceLost) => {
                     self.frames_dropped.fetch_add(1, Ordering::Relaxed);
-                    tracing::debug!("Surface lost, will retry next frame");
+                    retry_needed = true;
+                    tracing::debug!("Surface lost; frame dropped — retry armed via wake_frame()");
                 }
                 Err(EngineError::DeviceLost) => {
                     // GPU device lost (TDR / driver crash / GPU switch). Recovery
@@ -1163,8 +1290,14 @@ impl AppBinding {
             }
         }
 
-        // 4. Mark rendered
-        self.mark_rendered();
+        // 4. Mark rendered — unless this frame was dropped rather than
+        // settled, in which case `wake_frame()` re-arms `needs_redraw` AND
+        // schedules an actual platform wake (see `retry_needed` above).
+        if retry_needed {
+            self.wake_frame();
+        } else {
+            self.mark_rendered();
+        }
 
         presented
     }
@@ -1903,6 +2036,143 @@ mod tests {
         );
     }
 
+    /// A second `AppBinding::new()` (a throwaway test binding, constructed
+    /// alongside the real thread-local singleton) must not steal the
+    /// process-global `Scheduler::instance()`'s animation wake hook away
+    /// from the singleton. `new()` itself never touches the hook at all —
+    /// only `AppBinding::instance()`'s one-time initializer installs it — so
+    /// this also doubles as the "a throwaway `new()` alone does not install"
+    /// check: there is nothing for it to steal.
+    ///
+    /// Drives the real mechanism end to end: `Scheduler::instance().request_frame()`
+    /// firing `on_frame_scheduled` (the same hook a running `AnimationController`
+    /// uses) after a throwaway binding was constructed, asserting the hook
+    /// still reaches `AppBinding::instance()` (the real singleton) rather
+    /// than the throwaway.
+    ///
+    /// Red-check: move the `set_on_frame_scheduled` install back into
+    /// `AppBinding::new()` using a per-construction `wake_handle.into_callback()`
+    /// (the original bug this test was written for) and this fails — the
+    /// throwaway binding's construction below steals the hook, so the real
+    /// singleton's `needs_redraw` never flips.
+    #[test]
+    fn a_second_binding_does_not_steal_the_real_singletons_scheduler_wake_hook() {
+        let _serialized = SINGLETON_FRAME_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+        // Ensure the real singleton exists on this thread (installs the hook,
+        // if some earlier test in this process has not already done so) and
+        // start from a known, settled state.
+        let real = AppBinding::instance();
+        let scheduler = flui_scheduler::Scheduler::instance();
+        if scheduler.is_frame_scheduled() {
+            scheduler.drive_frame(flui_scheduler::Instant::now(), || {});
+        }
+        real.mark_rendered();
+
+        // Construct a throwaway binding — pre-fix, this call would silently
+        // rebind the scheduler's wake hook to ITS OWN (windowless, about to
+        // be dropped) wake handle instead of the real singleton's.
+        let _throwaway = AppBinding::new();
+
+        scheduler.request_frame();
+
+        assert!(
+            real.needs_redraw(),
+            "constructing a second AppBinding must not steal the scheduler's \
+             animation wake hook away from the real singleton — an animation \
+             driven through Scheduler::instance() would otherwise freeze with \
+             no diagnostic the first time a test built an extra binding",
+        );
+    }
+
+    /// The blocking cross-thread case: `on_frame_scheduled` also fires from
+    /// the async-driver's task waker (`AsyncDriver::set_request_frame`, wired
+    /// in `Scheduler::with_frame_duration`) whenever a spawned future's
+    /// `Waker` wakes — and that can happen on a thread that never called
+    /// `AppBinding::instance()` (an executor thread completing an
+    /// image-decode future, for instance), NOT only on the owner thread a
+    /// ticker would fire from.
+    ///
+    /// A hook that resolved `AppBinding::instance()` AT FIRE TIME would
+    /// construct a brand-new, windowless `AppBinding` on the waking thread
+    /// and wake THAT instead of the owner — a lost wake indistinguishable
+    /// from the ticker-starvation bug this whole hook exists to prevent.
+    /// Capturing `frame_wake_callback()` once, in `instance()`'s
+    /// initializer, avoids ever touching a thread-local at fire time, so the
+    /// real singleton wakes regardless of which thread fires the hook.
+    ///
+    /// Drives the real mechanism: spawn a future on the real singleton's
+    /// `Scheduler`, poll it once (registering a real `TaskWaker`-backed
+    /// `Waker` via `drive_async_tasks`), then wake that `Waker` from a
+    /// spawned OS thread — exactly how a completed async task's waker fires
+    /// in production.
+    ///
+    /// Red-check: change the hook installed in `instance()` back to
+    /// resolving `AppBinding::instance()` inside the closure (fire-time
+    /// resolution) and this fails — the spawned thread constructs its own
+    /// windowless binding and wakes it instead of `real`.
+    #[test]
+    fn scheduler_wake_hook_wakes_the_real_singleton_when_fired_from_another_thread() {
+        let _serialized = SINGLETON_FRAME_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+        let real = AppBinding::instance();
+        let scheduler = flui_scheduler::Scheduler::instance();
+        if scheduler.is_frame_scheduled() {
+            scheduler.drive_frame(flui_scheduler::Instant::now(), || {});
+        }
+        real.mark_rendered();
+
+        // Register a waker on first poll instead of completing, so it can be
+        // fired later, from another thread, exactly like a pending
+        // image-decode future's `Waker` firing once the decode completes on
+        // an executor thread.
+        let waker_slot: Arc<Mutex<Option<std::task::Waker>>> = Arc::new(Mutex::new(None));
+        let waker_slot_for_future = Arc::clone(&waker_slot);
+        let _token = scheduler.spawn_local(Box::pin(async move {
+            std::future::poll_fn(move |cx| {
+                *waker_slot_for_future.lock() = Some(cx.waker().clone());
+                std::task::Poll::<()>::Pending
+            })
+            .await;
+        }));
+
+        // A full `drive_frame` (not a bare `drive_async_tasks`) both polls the
+        // task above (registering its waker) AND resets `frame_scheduled`
+        // back to `false`: `spawn_local` itself already requested a frame (a
+        // freshly spawned task needs one to be polled in), and
+        // `request_frame_impl`'s coalescing would otherwise treat the
+        // cross-thread wake below as already-scheduled and silently skip
+        // calling the hook — a false pass unrelated to what this test
+        // exists to check.
+        scheduler.drive_frame(flui_scheduler::Instant::now(), || {});
+        real.mark_rendered();
+
+        let waker = waker_slot
+            .lock()
+            .take()
+            .expect("the first poll must have registered a waker");
+
+        // The waking thread never calls `AppBinding::instance()` — mirroring
+        // an executor thread that has no reason to ever touch this crate's
+        // singleton directly.
+        std::thread::spawn(move || {
+            waker.wake_by_ref();
+        })
+        .join()
+        .expect("waker thread must not panic");
+
+        assert!(
+            real.needs_redraw(),
+            "a task waker firing from a non-owner thread must wake the REAL singleton \
+             (via its captured, Send+Sync frame_wake_callback), not lazily construct a \
+             fresh thread-local AppBinding on the waking thread",
+        );
+    }
+
     // ========================================================================
     // layout-builder seam wiring test
     // ========================================================================
@@ -2513,6 +2783,114 @@ mod tests {
         // `needs_redraw` may be set by OTHER paths (the pipeline-owner dirty hook
         // fires when the new binding's PipelineOwner is touched).  We assert only
         // the Vsync-specific gate: has_vsync_running is false.
+    }
+
+    /// `render_frame_entered`'s retry gate: a frame dropped mid-render (surface
+    /// lost) must not be treated as settled. Drives `render_frame_entered`
+    /// directly against a scripted `RasterBackend` — no GPU device required.
+    mod frame_retry_semantics {
+        use flui_types::geometry::{Pixels, Rect};
+
+        use super::*;
+
+        /// A `RasterBackend` whose `render_scene` outcome is fixed at
+        /// construction, so a test can force the exact arm
+        /// `render_frame_entered` must handle without a real GPU device.
+        struct ScriptedRasterBackend {
+            /// Consumed on the first `render_scene` call — a second call
+            /// within one of these single-frame tests would be a bug.
+            outcome: Option<Result<bool, EngineError>>,
+            render_scene_calls: u32,
+        }
+
+        impl ScriptedRasterBackend {
+            fn new(outcome: Result<bool, EngineError>) -> Self {
+                Self {
+                    outcome: Some(outcome),
+                    render_scene_calls: 0,
+                }
+            }
+        }
+
+        impl RasterBackend for ScriptedRasterBackend {
+            fn render_scene(&mut self, _scene: &Scene) -> Result<bool, EngineError> {
+                self.render_scene_calls += 1;
+                self.outcome
+                    .take()
+                    .expect("render_scene called more than once in a single-frame test")
+            }
+            fn resize(&mut self, _width: u32, _height: u32) {}
+            fn is_device_lost(&self) -> bool {
+                false
+            }
+            fn mark_dirty(&mut self, _rect: Rect<Pixels>) {}
+            fn mark_full_repaint(&mut self) {}
+            fn has_damage(&self) -> bool {
+                true
+            }
+            fn size(&self) -> (u32, u32) {
+                (800, 600)
+            }
+            fn reconfigure_surface(&mut self) -> Result<(), EngineError> {
+                Ok(())
+            }
+        }
+
+        /// Mounts a root so the pipeline actually paints a non-empty scene —
+        /// the SurfaceLost/success arms under test only run inside
+        /// `render_frame_entered`'s `scene.has_content()` gate.
+        fn mount_root(app: &AppBinding) -> super::super::super::ui_realm::UiRealm {
+            let realm = test_realm(app);
+            realm
+                .enter(|realm| app.attach_root_widget(realm, &LeafView))
+                .expect("attach succeeds");
+            realm
+        }
+
+        /// Red-check: replace the `retry_needed` branch with an unconditional
+        /// `self.mark_rendered()` (the pre-fix shape) and this fails —
+        /// `needs_redraw` comes back `false` after a dropped `SurfaceLost`
+        /// frame, so nothing would ever re-drive a static UI back to life.
+        #[test]
+        fn surface_lost_keeps_needs_redraw_armed_for_a_retry() {
+            let app = AppBinding::new();
+            let realm = mount_root(&app);
+            let mut backend = ScriptedRasterBackend::new(Err(EngineError::SurfaceLost));
+
+            app.mark_rendered(); // known state before the frame
+            let presented = app.render_frame_entered(&realm, &mut backend);
+
+            assert!(!presented, "a SurfaceLost frame never reaches present()");
+            assert_eq!(
+                backend.render_scene_calls, 1,
+                "precondition: the mounted scene actually reached render_scene"
+            );
+            assert!(
+                app.needs_redraw(),
+                "a dropped SurfaceLost frame must re-arm needs_redraw so the next wake \
+                 actually retries — 'will retry next frame' must be a mechanism, not \
+                 just a comment"
+            );
+        }
+
+        /// Control case: a successful, presented frame must still clear
+        /// `needs_redraw`, exactly as before this fix.
+        #[test]
+        fn a_successful_frame_still_clears_needs_redraw() {
+            let app = AppBinding::new();
+            let realm = mount_root(&app);
+            let mut backend = ScriptedRasterBackend::new(Ok(true));
+
+            app.request_redraw(); // simulate the wake that scheduled this frame
+            let presented = app.render_frame_entered(&realm, &mut backend);
+
+            assert!(presented, "Ok(true) means render_scene reached present()");
+            assert!(
+                !app.needs_redraw(),
+                "a successfully presented frame must clear needs_redraw, same as \
+                 before this fix"
+            );
+        }
     }
 
     /// `AppBinding::attach_text_input`/`detach_text_input` (the `ImeBackend`
