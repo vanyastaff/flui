@@ -481,8 +481,8 @@ mod tests {
 
     /// Minimal `RendererBinding` implementer exercising the trait's default
     /// methods (`add_render_view_with_config`, `create_view_configuration_for`,
-    /// `draw_frame`, `handle_metrics_changed`) and the free `debug_dump_*`
-    /// functions, none of which had any test coverage.
+    /// `handle_metrics_changed`) and the free `debug_dump_*` functions, plus
+    /// its own wiring of the required `send_frames_to_engine` method.
     struct TestBinding {
         owner: RwLock<PipelineOwner>,
         views: RwLock<HashMap<u64, Arc<RwLock<RenderView>>>>,
@@ -551,6 +551,26 @@ mod tests {
         fn send_frames_to_engine(&self) -> bool {
             self.send_frames.load(Ordering::SeqCst)
         }
+    }
+
+    /// `send_frames_to_engine` is a **required** trait method (no default)
+    /// precisely so each implementer wires its own deferral state instead of
+    /// inheriting a `true`-returning stub. This asserts `TestBinding`'s
+    /// minimal wiring actually reflects `send_frames`, not a trait-level
+    /// default silently masking an unwired knob.
+    #[test]
+    fn send_frames_to_engine_reflects_the_implementers_own_state() {
+        let binding = TestBinding::new();
+        assert!(
+            binding.send_frames_to_engine(),
+            "TestBinding::new defaults send_frames to true"
+        );
+
+        binding.send_frames.store(false, Ordering::SeqCst);
+        assert!(!binding.send_frames_to_engine());
+
+        binding.send_frames.store(true, Ordering::SeqCst);
+        assert!(binding.send_frames_to_engine());
     }
 
     #[test]

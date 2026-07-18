@@ -286,11 +286,53 @@ impl RenderingFlutterBinding {
             "allow_first_frame called without matching defer_first_frame"
         );
 
-        // Schedule a warm up frame even if count is not zero yet
+        // Schedule a warm-up frame even if the count is not down to zero
+        // yet: removing one deferral may uncover a NEW one further down the
+        // widget tree (a subtree that only registers its own
+        // `defer_first_frame` once an outer one clears), so every
+        // `allow_first_frame` call gets a pass, not just the last.
         if !self.first_frame_sent.load(Ordering::Relaxed) {
-            Scheduler::instance().schedule_frame(Box::new(|_timing| {
-                // Warm-up frame callback
-            }));
+            // The withheld frame(s) already ran build/layout/paint while
+            // deferred (the pipeline work happens unconditionally — see the
+            // module note above `defer_first_frame`); their dirty flags are
+            // already clear by the time the deferral lifts. The oracle's
+            // `compositeFrame()` re-submits the RETAINED layer tree
+            // regardless of dirty state, so its `scheduleWarmUpFrame` always
+            // has something to present. FLUI has no such retained-scene
+            // re-present (a frame with nothing dirty produces
+            // `FramePaintOutcome::Idle`, not a repeat of the last `Scene`)
+            // — without re-marking the root dirty here, the warm-up frame
+            // would find nothing to do and the withheld content would sit
+            // blank until some UNRELATED input dirtied the tree.
+            //
+            // Routed through `PipelineOwner::repaint_handle` /
+            // `RepaintHandle::mark_needs_layout`, NOT `Scheduler::instance()`:
+            // the async-init caller this method exists for (a splash screen
+            // awaiting a network fetch, resolving on an executor thread) may
+            // not be the UI thread, and `Scheduler::instance()` is a
+            // thread-local — resolving it at fire time from a non-UI thread
+            // would schedule on THAT thread's fresh, undriven `Scheduler`
+            // and silently lose the wake (the exact fire-time-resolution
+            // hazard `AppBinding::new`'s wake-wiring comment warns against).
+            // `RepaintHandle` is `Send + Sync`, captured over a bounded
+            // channel at `PipelineOwner` construction time, and its
+            // `mark_needs_layout` fires the SAME visual-update notifier a
+            // local dirty mark does — safe and non-blocking from any
+            // thread.
+            let root_owner = self.root_pipeline_owner().read();
+            if let Some(root_id) = root_owner.root_id()
+                && let Some(handle) = root_owner.repaint_handle(root_id)
+            {
+                drop(root_owner);
+                if let Err(e) = handle.mark_needs_layout() {
+                    tracing::warn!(
+                        error = ?e,
+                        "allow_first_frame: failed to re-mark the root dirty for \
+                         the warm-up frame; the withheld content may not \
+                         present until something else dirties the tree",
+                    );
+                }
+            }
         }
     }
 
