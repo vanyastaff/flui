@@ -167,18 +167,21 @@ impl StatelessView for Scrollbar {
 
                 // Wrap the thumb in a GestureDetector so the user can drag it
                 // to reposition the scroll. The delta in track-space maps to
-                // content-space via:
-                //   dP/d(thumb_top) = (viewport + scroll_extent) / available_track
-                // (derived from the thumb_offset_fraction formula).
+                // content-space via the inverse of
+                // `thumb_top = available_track * thumb_offset_fraction`
+                // (see that method's doc):
+                //   dP/d(thumb_top) = scroll_extent / available_track
+                // matching Flutter's `ScrollbarPainter` thumb-drag contract
+                // (`widgets/scrollbar.dart`, `_ScrollbarPainter`/`_startDrag`,
+                // 3.44.0), which maps track delta to scroll delta through the
+                // same `scrollExtent / trackExtent` ratio.
                 let thumb_gesture = GestureDetector::new()
                     .behavior(HitTestBehavior::Opaque)
                     .on_pan_update(move |details| {
                         let delta_track_px = details.delta.dy.get();
                         if available_track > 0.0 {
-                            let total_content_extent =
-                                ctrl_drag.viewport_dimension_pixels() + ctrl_drag.scroll_extent();
                             let content_delta =
-                                (delta_track_px / available_track) * total_content_extent;
+                                (delta_track_px / available_track) * ctrl_drag.scroll_extent();
                             let proposed = ctrl_drag.pixels() + content_delta;
                             ctrl_drag.set_pixels(proposed.clamp(
                                 ctrl_drag.min_scroll_extent(),

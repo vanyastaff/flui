@@ -250,19 +250,32 @@ impl ScrollController {
         (viewport / content_length).clamp(0.0, 1.0)
     }
 
-    /// The offset fraction of the scrollbar thumb along the track.
+    /// The offset fraction of the scrollbar thumb along the *available*
+    /// track (the track length minus the thumb's own extent) — the fraction
+    /// into `[0, 1]` (where 0 = top, 1 = bottom) at which the top of the
+    /// thumb sits.
     ///
-    /// `thumb_offset_fraction = pixels / scroll_extent * (1 - thumb_fraction)`
-    /// — the fraction into `[0, 1]` (where 0 = top, 1 = bottom) at which the
-    /// top of the thumb sits.
+    /// `thumb_offset_fraction = (pixels - min_scroll_extent) / scroll_extent`.
+    /// Multiplying this by `available_track` (`viewport_dimension_pixels -
+    /// thumb_height`, using the ACTUAL, already-min-clamped thumb height)
+    /// gives the thumb's pixel offset — the same `_thumbOffset` contract as
+    /// Flutter's `ScrollbarPainter` (`widgets/scrollbar.dart`, 3.44.0): flush
+    /// with the track's start at `pixels == min_scroll_extent` and flush with
+    /// its end at `pixels == max_scroll_extent`, in both the unclamped and
+    /// min-thumb-length-clamped cases.
+    ///
+    /// This does NOT itself fold in `(1 - thumb_fraction)` — a caller must
+    /// not multiply by the raw `viewport_dimension_pixels` (which does, for
+    /// an unclamped thumb, equal `available_track / (1 - thumb_fraction)`,
+    /// silently double-applying the factor and stopping short of the
+    /// track's end).
     #[must_use]
     pub fn thumb_offset_fraction(&self) -> f32 {
         let scroll_extent = self.scroll_extent();
         if scroll_extent <= 0.0 {
             return 0.0;
         }
-        let thumb_fraction = self.thumb_fraction();
-        ((self.pixels() - self.min_scroll_extent()) / scroll_extent) * (1.0 - thumb_fraction)
+        (self.pixels() - self.min_scroll_extent()) / scroll_extent
     }
 }
 
@@ -456,11 +469,37 @@ mod tests {
         let controller = ScrollController::new();
         controller.update_dimensions(400.0, 0.0, 400.0);
         controller.set_pixels(200.0); // half-way
-        // thumb_fraction = 0.5; offset_fraction = (200/400) * (1 - 0.5) = 0.25
+        // offset_fraction = (200 - 0) / 400 = 0.5 -- a fraction of the
+        // AVAILABLE track (0=top, 1=bottom), independent of thumb_fraction;
+        // see this method's doc for why `(1 - thumb_fraction)` must NOT be
+        // folded in here.
         let offset = controller.thumb_offset_fraction();
         assert!(
-            (offset - 0.25).abs() < 0.001,
-            "thumb offset fraction at half-scroll should be 0.25, got {offset}"
+            (offset - 0.5).abs() < 0.001,
+            "thumb offset fraction at half-scroll should be 0.5, got {offset}"
+        );
+    }
+
+    /// `thumb_offset_fraction` must reach exactly `1.0` at `max_scroll_extent`
+    /// and exactly `0.0` at `min_scroll_extent` — the full `[0, 1]` range its
+    /// own doc promises. A version that folds in `(1 - thumb_fraction)` (the
+    /// bug this pins the fix for) would instead top out at
+    /// `1 - thumb_fraction`, short of `1.0`.
+    #[test]
+    fn thumb_offset_fraction_spans_the_full_unit_range_between_the_extents() {
+        let controller = ScrollController::new();
+        // thumb_fraction = 300/600 = 0.5 -- if the old `* (1 - thumb_fraction)`
+        // factor were still applied, this would top out at 0.5, not 1.0.
+        controller.update_dimensions(300.0, 0.0, 300.0);
+
+        controller.set_pixels(0.0);
+        assert_eq!(controller.thumb_offset_fraction(), 0.0);
+
+        controller.set_pixels(300.0);
+        assert_eq!(
+            controller.thumb_offset_fraction(),
+            1.0,
+            "thumb_offset_fraction must reach exactly 1.0 at max_scroll_extent"
         );
     }
 

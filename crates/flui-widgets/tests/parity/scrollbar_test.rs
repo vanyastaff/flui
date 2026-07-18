@@ -172,11 +172,14 @@ use crate::common::{lay_out, lay_out_with_arena, size, tight};
 
 /// The proportional thumb-size/offset formula
 /// (`thumb_fraction = viewport / (viewport + scroll_extent)`,
-/// `thumb_top = available_track * thumb_offset_fraction`) must hold across
-/// several scroll positions, with the thumb's extent staying constant while
-/// only its offset moves — and a non-zero `min_scroll_extent` must be
-/// folded into the `(pixels - min_scroll_extent)` term, not just `pixels`
-/// alone (a bug that would only surface when `min_scroll_extent != 0`).
+/// `thumb_top = available_track * thumb_offset_fraction` with
+/// `thumb_offset_fraction = (pixels - min_scroll_extent) / scroll_extent` —
+/// see that method's doc in `scroll_controller.rs`) must hold across several
+/// scroll positions, with the thumb's extent staying constant while only its
+/// offset moves, reaching the track's ends EXACTLY (flush, not short of
+/// them) at `pixels == min_scroll_extent` / `pixels == max_scroll_extent` —
+/// and a non-zero `min_scroll_extent` must be folded into the `(pixels -
+/// min_scroll_extent)` term, not just `pixels` alone.
 ///
 /// Flutter parity: `scrollbar_test.dart` `'When scrolling normally (no
 /// overscrolling), the size of the scrollbar stays the same, and it scrolls
@@ -187,7 +190,13 @@ use crate::common::{lay_out, lay_out_with_arena, size, tight};
 /// asserts `rect.top`/`rect.bottom` strictly increase as `pixels` increases
 /// (using a *negative* `minScrollExtent`, which this case borrows the idea
 /// from instead of Flutter's own exhaustive per-viewport-height generative
-/// loop).
+/// loop). The flush-at-the-end assertion below is this case's own addition,
+/// not lifted from either upstream test verbatim — both assert the ratio
+/// stays constant and increases monotonically, not the exact endpoint
+/// value — but it is what makes the formula's `(pixels - min) / scroll_extent`
+/// contract (no extra `(1 - thumb_fraction)` factor) verifiable: with that
+/// extra factor still present the thumb would stop `available_track *
+/// thumb_fraction` short of the track's far edge instead of reaching it.
 ///
 /// Dropped assertions (both upstream tests): the exhaustive
 /// `List.generate` sweep over every viewport-height step (this uses 5
@@ -200,8 +209,8 @@ fn thumb_geometry_matches_the_proportional_formula_and_advances_monotonically() 
     // thumb_fraction = 80/320 = 0.25 -> thumb_height = 80*0.25 = 20 (>= the
     // 18px minimum, so the min-clamp does not engage here).
     // available_track = 80 - 20 = 60.
-    // thumb_top(pixels) = available_track * ((pixels - min)/scroll_extent) * (1 - fraction)
-    //                   = 60 * ((pixels + 100)/240) * 0.75 = 0.1875 * (pixels + 100)
+    // thumb_top(pixels) = available_track * (pixels - min)/scroll_extent
+    //                   = 60 * (pixels + 100)/240 = 0.25 * (pixels + 100)
     let controller = ScrollController::new();
     controller.update_dimensions(80.0, -100.0, 140.0);
 
@@ -212,7 +221,7 @@ fn thumb_geometry_matches_the_proportional_formula_and_advances_monotonically() 
     };
     let mut laid = lay_out(widget(), tight(200.0, 80.0));
 
-    let expected_top = |pixels: f32| 0.1875 * (pixels + 100.0);
+    let expected_top = |pixels: f32| 0.25 * (pixels + 100.0);
     let mut previous_top = f32::NEG_INFINITY;
 
     for pixels in [-100.0_f32, -40.0, 20.0, 80.0, 140.0] {
@@ -220,8 +229,9 @@ fn thumb_geometry_matches_the_proportional_formula_and_advances_monotonically() 
         laid.pump();
 
         let thumb_id = laid.find_by_render_type("RenderDecoratedBox");
+        let thumb_size = laid.size(thumb_id);
         assert_eq!(
-            laid.size(thumb_id),
+            thumb_size,
             size(6.0, 20.0),
             "thumb extent must stay constant (20px) regardless of scroll position; \
              pixels={pixels}"
@@ -239,6 +249,21 @@ fn thumb_geometry_matches_the_proportional_formula_and_advances_monotonically() 
              current={top:.4} (pixels={pixels})"
         );
         previous_top = top;
+
+        // At max_scroll_extent (140.0, the last sample point) the thumb must
+        // sit FLUSH with the track's far edge — bottom == viewport_dim
+        // exactly, not short of it. A version of the formula that still
+        // folds in `(1 - thumb_fraction)` would stop at
+        // `available_track * thumb_fraction` = 60 * 0.25 = 15px short here
+        // (bottom == 65, not 80).
+        if pixels == 140.0 {
+            let bottom = top + thumb_size.height.get();
+            assert_eq!(
+                bottom, 80.0,
+                "thumb bottom must be flush with the track end (viewport_dim=80) \
+                 at pixels == max_scroll_extent; got {bottom}"
+            );
+        }
     }
 }
 
@@ -309,8 +334,9 @@ fn thumb_extent_clamps_to_the_minimum_when_the_scroll_view_is_very_large() {
 #[test]
 fn scrollbar_thumb_drag_clamps_at_min_scroll_extent() {
     // viewport=300, scroll_extent=300 -> thumb_fraction=0.5, thumb_height=150,
-    // available_track=150. Starting at pixels=100: thumb_top = 150 *
-    // (100/300)*0.5 = 25 -> thumb y=[25,175], x=[280,300] (thumb_width=20).
+    // available_track=150. Starting at pixels=100: thumb_top = available_track
+    // * (pixels/scroll_extent) = 150 * (100/300) = 50 -> thumb y=[50,200],
+    // x=[280,300] (thumb_width=20).
     let controller = ScrollController::new();
     controller.update_dimensions(300.0, 0.0, 300.0);
     controller.set_pixels(100.0);
@@ -329,14 +355,16 @@ fn scrollbar_thumb_drag_clamps_at_min_scroll_extent() {
     );
 
     // Every position below stays comfortably within the thumb's ORIGINAL
-    // y=[25,175] bounds (no rebuild happens mid-drag, matching the existing
-    // max-side test's own precedent), with a 5px margin off both edges so
-    // hit-testing is unambiguous.
+    // y=[50,200] bounds (no rebuild happens mid-drag, matching the existing
+    // max-side test's own precedent), with a wide margin off both edges so
+    // hit-testing is unambiguous. Each -20 track-px move maps to
+    // content_delta = (-20/150)*300 = -40 (`dP/d(thumb_top) = scroll_extent /
+    // available_track`, this file's proportional-formula test).
     //   Down at (290, 170)      -- inside thumb
     //   Move to (290, 150) -20  -- slop-crossing (>18px): on_pan_start (no-op)
-    //   Move to (290, 130) -20  -- on_pan_update: proposed = 100 - 80 = 20
-    //   Move to (290, 110) -20  -- on_pan_update: proposed = 20 - 80 = -60 -> clamp 0
-    //   Move to (290,  90) -20  -- on_pan_update: proposed stays clamped at 0
+    //   Move to (290, 130) -20  -- on_pan_update: proposed = 100 - 40 = 60
+    //   Move to (290, 110) -20  -- on_pan_update: proposed = 60 - 40 = 20
+    //   Move to (290,  90) -20  -- on_pan_update: proposed = 20 - 40 = -20 -> clamp 0
     scoped.dispatch_pointer_down(290.0, 170.0);
     scoped.dispatch_pointer_move(290.0, 150.0);
     scoped.dispatch_pointer_move(290.0, 130.0);
@@ -585,7 +613,7 @@ fn resizing_to_a_non_scrollable_extent_hides_the_thumb_and_stale_taps_are_inert(
 fn thumb_top_never_extends_past_the_bottom_of_the_track_when_pixels_overshoots_max() {
     // viewport=300, scroll_extent=300 -> thumb_fraction=0.5, thumb_height=150,
     // available_track=150. pixels=900 (3x max) -> offset_fraction =
-    // (900/300)*0.5 = 1.5 -> unclamped thumb_top = 150*1.5 = 225 > 150.
+    // 900/300 = 3.0 -> unclamped thumb_top = 150*3.0 = 450 > 150.
     let controller = ScrollController::new();
     controller.update_dimensions(300.0, 0.0, 300.0);
     controller.set_pixels(900.0);
@@ -609,8 +637,8 @@ fn thumb_top_never_extends_past_the_bottom_of_the_track_when_pixels_overshoots_m
 /// must not push the thumb above the top of the track.
 #[test]
 fn thumb_top_never_extends_above_the_top_of_the_track_when_pixels_undershoots_min() {
-    // pixels=-600 -> offset_fraction = (-600/300)*0.5 = -1.0 -> unclamped
-    // thumb_top = 150*(-1.0) = -150 < 0.
+    // pixels=-600 -> offset_fraction = -600/300 = -2.0 -> unclamped
+    // thumb_top = 150*(-2.0) = -300 < 0.
     let controller = ScrollController::new();
     controller.update_dimensions(300.0, 0.0, 300.0);
     controller.set_pixels(-600.0);
