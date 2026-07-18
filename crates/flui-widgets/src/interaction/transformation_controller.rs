@@ -138,6 +138,29 @@ impl TransformationController {
     pub fn as_listenable(&self) -> Arc<dyn Listenable> {
         Arc::clone(&self.inner) as Arc<dyn Listenable>
     }
+
+    /// The number of listeners currently registered.
+    ///
+    /// Disposal-testing hook, mirroring `ChangeNotifier::len` — a caller
+    /// that mounts a widget against this controller and unmounts it can
+    /// assert this returns to `0`, proving the widget's subscription was
+    /// actually removed rather than left dangling into a torn-down subtree.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.inner.notifier.len()
+    }
+
+    /// Whether any listeners are currently registered. See [`len`](Self::len).
+    #[must_use]
+    pub fn has_listeners(&self) -> bool {
+        self.inner.notifier.has_listeners()
+    }
+
+    /// Whether no listeners are currently registered.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.inner.notifier.is_empty()
+    }
 }
 
 #[cfg(test)]

@@ -65,21 +65,19 @@ use std::rc::Rc;
 use flui_geometry::{Matrix4, px};
 use flui_interaction::events::ScrollEventData;
 use flui_interaction::{DragEndDetails, DragStartDetails, DragUpdateDetails};
-use flui_objects::{RenderSubtreeAnchor, SubtreeAnchor};
+use flui_objects::SubtreeAnchor;
 use flui_rendering::hit_testing::{HitTestBehavior, PointerEvent};
 use flui_rendering::pipeline::PipelineOwner;
-use flui_rendering::protocol::BoxProtocol;
 use flui_types::geometry::Pixels;
 use flui_types::gestures::Velocity;
 use flui_types::painting::Clip;
 use flui_types::{Alignment, Axis, EdgeInsets, Offset, Point, Rect};
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
-use flui_view::{
-    Child, IntoView, RenderObjectContext, RenderView, View, ViewState, impl_render_view,
-};
+use flui_view::{Child, IntoView, View, ViewState};
 use parking_lot::RwLock;
 
+use crate::navigator::AnchoredBox;
 use crate::{AnimatedBuilder, ClipRect, GestureDetector, Listener, Transform};
 
 use super::transformation_controller::TransformationController;
@@ -609,8 +607,10 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
                 }
             };
 
-            let mut transform =
-                Transform::new(matrix).child(AnchoredChild::new(anchor.clone(), child.clone()));
+            let mut transform = Transform::new(matrix);
+            if let Some(inner_child) = child.clone().into_inner() {
+                transform = transform.child(AnchoredBox::new(anchor.clone(), inner_child));
+            }
             if let Some(alignment) = alignment {
                 transform = transform.alignment(alignment);
             }
@@ -667,61 +667,6 @@ impl InteractiveViewerState {
         Some((rect, boundary_margin.inflate_rect(rect)))
     }
 }
-
-// ============================================================================
-// AnchoredChild — publishes the child's RenderId for size queries
-// ============================================================================
-
-/// A transparent proxy that publishes its own `RenderId` into `anchor` while
-/// mounted, so gesture callbacks (which run outside `build`) can later query
-/// the child's committed size via `PipelineOwner::box_size`.
-///
-/// Same shape as the `AnchoredBox` helper in `navigator::subtree`/`hero`
-/// (each site keeps its own thin wrapper over the shared
-/// `flui_objects::RenderSubtreeAnchor` rather than exporting one — the
-/// wrapper itself is a few lines and `pub(crate)` visibility doesn't cross
-/// module boundaries here).
-#[derive(Debug, Clone)]
-struct AnchoredChild {
-    anchor: SubtreeAnchor,
-    child: Child,
-}
-
-impl AnchoredChild {
-    fn new(anchor: SubtreeAnchor, child: Child) -> Self {
-        Self { anchor, child }
-    }
-}
-
-impl RenderView for AnchoredChild {
-    type Protocol = BoxProtocol;
-    type RenderObject = RenderSubtreeAnchor;
-
-    fn create_render_object(&self, _ctx: &RenderObjectContext<'_>) -> Self::RenderObject {
-        RenderSubtreeAnchor::new(self.anchor.clone())
-    }
-
-    fn update_render_object(
-        &self,
-        _ctx: &RenderObjectContext<'_>,
-        _render_object: &mut Self::RenderObject,
-    ) {
-        // Nothing to update: a render object's anchor is its identity, fixed
-        // for the life of the node.
-    }
-
-    fn has_children(&self) -> bool {
-        self.child.is_some()
-    }
-
-    fn visit_child_views(&self, visitor: &mut dyn FnMut(&dyn View)) {
-        if let Some(child) = self.child.as_ref() {
-            visitor(child);
-        }
-    }
-}
-
-impl_render_view!(AnchoredChild);
 
 // ============================================================================
 // Matrix math — boundary-clamped translate/scale
@@ -793,6 +738,37 @@ fn rect_excess(boundary: Rect<Pixels>, viewport: Rect<Pixels>) -> Offset<Pixels>
     )
 }
 
+/// Floating-point tolerance for the "did this transform round-trip produce
+/// zero excess" checks in [`clamp_translation`].
+///
+/// Flutter parity: `InteractiveViewer`'s own `_round` helper exists for
+/// exactly this reason — `_exceedsBy`'s result is rounded to 9 decimal
+/// places before the `== Offset.zero` check, because
+/// `_transformViewport`'s inverse-then-transform round trip leaves residue
+/// that *should* be exactly zero but isn't once the matrix carries a
+/// non-unit (and non-power-of-two) scale, per the oracle's own comment:
+/// "values that should have been zero were given as within 10^-10 of zero".
+/// `f32` carries far fewer significant digits than the `f64` the oracle
+/// rounds, so a fixed decimal count doesn't transfer numerically; this
+/// snaps anything within `EXCESS_EPSILON` of zero back to exactly zero
+/// instead. Chosen against the scale of one gesture's excess (tens to
+/// thousands of pixels) rather than absolute machine epsilon — comfortably
+/// larger than the ~1e-4 residue a `scale * (a - b)` round trip leaves at
+/// these magnitudes, comfortably smaller than any excess a real boundary
+/// hit produces.
+const EXCESS_EPSILON: f32 = 1e-3;
+
+/// Whether a single excess component is within [`EXCESS_EPSILON`] of zero.
+fn is_negligible(component: f32) -> bool {
+    component.abs() < EXCESS_EPSILON
+}
+
+/// Whether `excess` is within [`EXCESS_EPSILON`] of `Offset::ZERO` on both
+/// axes — the round-trip-tolerant replacement for `excess == Offset::ZERO`.
+fn excess_is_negligible(excess: Offset<Pixels>) -> bool {
+    is_negligible(excess.dx.get()) && is_negligible(excess.dy.get())
+}
+
 /// Locks a `PanAxis::Aligned` drag to whichever axis dominates `delta`.
 /// `delta` must be non-zero (callers only invoke this on real movement).
 fn dominant_axis(delta: Offset<Pixels>) -> Axis {
@@ -838,7 +814,7 @@ fn clamp_translation(
 
     let next_viewport = transform_viewport(next, viewport);
     let excess = rect_excess(boundary, next_viewport);
-    if excess == Offset::ZERO {
+    if excess_is_negligible(excess) {
         return next;
     }
 
@@ -851,23 +827,23 @@ fn clamp_translation(
 
     let corrected_viewport = transform_viewport(corrected, viewport);
     let corrected_excess = rect_excess(boundary, corrected_viewport);
-    if corrected_excess == Offset::ZERO {
+    if excess_is_negligible(corrected_excess) {
         return corrected;
     }
 
-    if corrected_excess.dx.get() != 0.0 && corrected_excess.dy.get() != 0.0 {
+    if !is_negligible(corrected_excess.dx.get()) && !is_negligible(corrected_excess.dy.get()) {
         // Neither axis fits at all (the viewport is larger than the
         // boundary in both directions): no translation, matching the
         // oracle.
         return matrix;
     }
 
-    let unidirectional_tx = if corrected_excess.dx.get() == 0.0 {
+    let unidirectional_tx = if is_negligible(corrected_excess.dx.get()) {
         corrected_tx
     } else {
         0.0
     };
-    let unidirectional_ty = if corrected_excess.dy.get() == 0.0 {
+    let unidirectional_ty = if is_negligible(corrected_excess.dy.get()) {
         corrected_ty
     } else {
         0.0
@@ -895,13 +871,107 @@ fn clamp_scale(
     if scale == 1.0 {
         return matrix;
     }
+    // Flutter parity: `assert(maxScale >= minScale)` on `InteractiveViewer`'s
+    // constructor — debug-only there too (Dart's `assert` is stripped in
+    // release), so this does not replace `clamp_double`'s non-panicking
+    // behavior below; it only surfaces the misconfiguration in debug builds.
+    debug_assert!(
+        max_scale >= min_scale,
+        "InteractiveViewer: max_scale ({max_scale}) must be >= min_scale ({min_scale})"
+    );
     let current_scale = uniform_scale(&matrix);
     // Finite / infinite (unbounded boundary) is naturally 0.0 here — no
     // separate infinite-boundary branch needed.
     let boundary_floor = (viewport.width().get() / boundary.width().get())
         .max(viewport.height().get() / boundary.height().get());
     let total_scale = (current_scale * scale).max(boundary_floor);
-    let clamped_total = total_scale.clamp(min_scale, max_scale);
+    let clamped_total = clamp_double(total_scale, min_scale, max_scale);
     let applied = clamped_total / current_scale;
     matrix * Matrix4::scaling(applied, applied, applied)
+}
+
+/// Flutter parity: `foundation.dart`'s `clampDouble`. Unlike `f32::clamp`
+/// (which panics — in every build profile, not just debug — whenever `min >
+/// max`), this never panics: a misconfigured `min_scale > max_scale` falls
+/// through to Dart's own release-mode behavior (the `assert` above is
+/// debug-only) instead of crashing a release build over a caller error that
+/// should have been caught in testing.
+fn clamp_double(x: f32, min: f32, max: f32) -> f32 {
+    if x < min {
+        min
+    } else if x > max {
+        max
+    } else {
+        x
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn child_rect() -> Rect<Pixels> {
+        Rect::from_min_max(
+            Point::new(px(0.0), px(0.0)),
+            Point::new(px(200.0), px(200.0)),
+        )
+    }
+
+    /// Regression: at a non-unit, non-power-of-two scale,
+    /// `transform_viewport`'s inverse-then-transform round trip can leave
+    /// floating-point residue in the corrected excess that is not exactly
+    /// zero even where the corrected transform mathematically fits the
+    /// boundary exactly. Comparing that residue to `0.0` exactly (the
+    /// pre-fix code) misread "should be zero, isn't quite" as "this axis
+    /// still doesn't fit", so the unidirectional branch discarded the
+    /// corrected translation on that axis entirely instead of keeping it —
+    /// observably, the transform snaps back to zero translation on a
+    /// boundary hit while zoomed, instead of clamping to the boundary edge.
+    ///
+    /// Scenario: child/viewport 200x200, `boundary_margin: 20` (boundary
+    /// -20..220), scale = e, a hard-left drag attempting -1000 scene units.
+    /// Confirmed empirically (see the PR review fix-up) that this exact
+    /// input reproduces nonzero residue in `corrected_excess.dx` against
+    /// the pre-fix exact-`f32`-equality code, which returns exactly `0.0`
+    /// here; the epsilon-tolerant fix returns the correctly clamped
+    /// `~= -398.022`. Reverting the `excess_is_negligible`/`is_negligible`
+    /// calls in `clamp_translation` back to `== Offset::ZERO` / `== 0.0` /
+    /// `!= 0.0` makes this test fail with `tx == 0.0`.
+    #[test]
+    fn clamp_translation_clamps_instead_of_snapping_to_zero_at_non_unit_scale() {
+        let rect = child_rect();
+        let boundary = EdgeInsets::all(px(20.0)).inflate_rect(rect);
+        let scale = std::f32::consts::E;
+        let matrix = Matrix4::scaling(scale, scale, scale);
+        let translation = Offset::new(px(-1000.0), px(0.0));
+
+        let result = clamp_translation(matrix, translation, rect, boundary);
+        let (tx, ty, _tz) = result.translation_component();
+
+        assert!(
+            (tx - (-398.022)).abs() < 0.01,
+            "expected the clamped translation to land near -398.022, got {tx} \
+             (exactly 0.0 here means the fix regressed back to the \
+             snap-to-zero bug)"
+        );
+        assert_eq!(ty, 0.0);
+    }
+
+    /// `f32::clamp` panics — in every build profile, not just debug builds —
+    /// whenever `min > max`. `clamp_double` must never panic on that input,
+    /// matching Dart's `clampDouble` (whose own `assert(min <= max)` is
+    /// debug-only, so release Flutter never crashes over this either).
+    #[test]
+    fn clamp_double_never_panics_when_min_exceeds_max() {
+        assert_eq!(
+            clamp_double(5.0, 10.0, 1.0),
+            10.0,
+            "x < min returns min first"
+        );
+        assert_eq!(
+            clamp_double(50.0, 10.0, 1.0),
+            1.0,
+            "x not < min falls through to the x > max check, which returns max"
+        );
+    }
 }

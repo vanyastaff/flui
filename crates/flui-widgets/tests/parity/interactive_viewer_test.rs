@@ -32,13 +32,14 @@
 //!   default, `trackpadScrollCausesScale`, and discrete
 //!   `PointerScaleEvent`/trackpad-gesture scaling are not ported.
 //!
-//! **13 tests ported below**, covering the portable core: pan translates the
+//! **16 tests ported below**, covering the portable core: pan translates the
 //! child (`pan_translates_child_by_the_drag_delta`), boundary clamp
 //! (`pan_clamps_at_the_boundary_edge`), an infinite margin removing the
 //! boundary (`infinite_boundary_margin_pans_without_clamping`), `pan_axis`
 //! locking (`pan_axis_horizontal_locks_out_vertical_movement`,
-//! `pan_axis_vertical_locks_out_horizontal_movement`), `pan_enabled: false`
-//! still firing callbacks without moving the transform
+//! `pan_axis_vertical_locks_out_horizontal_movement`,
+//! `pan_axis_aligned_locks_to_the_first_updates_dominant_axis_for_the_whole_gesture`),
+//! `pan_enabled: false` still firing callbacks without moving the transform
 //! (`pan_disabled_ignores_the_drag_but_still_fires_callbacks`), an external
 //! controller composing with a later gesture and notifying its own listener
 //! (`controller_driven_initial_value_composes_with_a_later_pan`), the wheel
@@ -47,14 +48,18 @@
 //! `scale_enabled: false` leaving the transform untouched while still firing
 //! callbacks (`wheel_scale_disabled_still_fires_callbacks_but_does_not_scale`),
 //! a scale-then-inverse-scale round trip returning to identity within
-//! floating-point tolerance (`wheel_scale_round_trips_back_to_identity`),
+//! floating-point tolerance (`wheel_scale_round_trips_back_to_identity`), the
+//! wheel path's off-center focal-point correction
+//! (`wheel_scale_keeps_the_scene_point_under_an_off_center_cursor_fixed`),
 //! `on_interaction_*` firing in start/update/end order for both the pan and
 //! wheel paths (`on_interaction_callbacks_fire_in_order_for_a_pan`,
-//! `on_interaction_callbacks_fire_in_order_for_a_wheel_scale`), and the
+//! `on_interaction_callbacks_fire_in_order_for_a_wheel_scale`), the
 //! `boundary_margin` mixed-finite/infinite precondition
-//! (`boundary_margin_mixing_finite_and_infinite_edges_is_rejected`).
+//! (`boundary_margin_mixing_finite_and_infinite_edges_is_rejected`), and
+//! unmounting unsubscribing from an external controller
+//! (`unmounting_the_widget_unsubscribes_from_an_external_controller`).
 //!
-//! None of the 13 corresponds 1:1 to a single named oracle `testWidgets` case
+//! None of the 16 corresponds 1:1 to a single named oracle `testWidgets` case
 //! (the oracle drives everything through `tester.pumpWidget` +
 //! `tester.startGesture`/`scrollAt`, which exercise pan and wheel together
 //! with the full `constrained: true` default this port also uses) — they are
@@ -74,6 +79,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use flui_geometry::Matrix4;
 use flui_interaction::events::make_scroll_event;
 use flui_types::{EdgeInsets, Offset, geometry::px};
+use flui_widgets::prelude::*;
 use flui_widgets::{
     InteractionEndDetails, InteractionStartDetails, InteractionUpdateDetails, InteractiveViewer,
     PanAxis, SizedBox, TransformationController,
@@ -494,4 +500,163 @@ fn boundary_margin_mixing_finite_and_infinite_edges_is_rejected() {
         left: px(10.0),
     };
     let _ = InteractiveViewer::new().boundary_margin(mixed);
+}
+
+// ============================================================================
+// Wheel focal-point correction (review finding 5a)
+// ============================================================================
+
+/// The wheel-scale path must keep the *same scene point* under the cursor
+/// before and after the zoom — Flutter parity: the `_receivedPointerSignal`
+/// mouse-wheel branch scales, then translates by exactly the shift the scale
+/// introduced at the focal point, cross-checked against the oracle's `'Can
+/// scale with mouse'` / `'onInteraction can be used to get scene point'`
+/// intent. A focal point at the widget's own center makes this correction a
+/// zero vector by symmetry, which is why an off-center focal point (`(50,
+/// 50)`, not the 200x200 widget's `(100, 100)` center) is required to
+/// exercise it at all: mutating the correction to `Offset::ZERO` passes
+/// every other test in this file but fails both assertions here.
+#[test]
+fn wheel_scale_keeps_the_scene_point_under_an_off_center_cursor_fixed() {
+    let controller = TransformationController::new();
+    let widget = InteractiveViewer::new()
+        .controller(controller.clone())
+        .boundary_margin(EdgeInsets::all(px(f32::INFINITY)))
+        .child(child());
+    let laid = lay_out(widget, loose(500.0));
+
+    let focal = Offset::new(px(50.0), px(50.0));
+    let scene_before = controller.to_scene(focal);
+
+    let event = make_scroll_event(focal, Offset::new(px(0.0), px(-20.0)));
+    laid.route_event(&event, 50.0, 50.0);
+
+    let (tx, ty, _) = controller.value().translation_component();
+    assert!(
+        tx != 0.0 || ty != 0.0,
+        "an off-center wheel-zoom must produce a compensating translation, not a pure \
+         scale-about-the-origin — a zeroed-out correction would leave the transform at \
+         (0.0, 0.0)"
+    );
+
+    let scene_after = controller.to_scene(focal);
+    assert!(
+        (scene_after.dx.get() - scene_before.dx.get()).abs() < 0.01,
+        "the scene point under the cursor must not drift on the x axis: before={scene_before:?} after={scene_after:?}"
+    );
+    assert!(
+        (scene_after.dy.get() - scene_before.dy.get()).abs() < 0.01,
+        "the scene point under the cursor must not drift on the y axis: before={scene_before:?} after={scene_after:?}"
+    );
+}
+
+// ============================================================================
+// PanAxis::Aligned (review finding 5b)
+// ============================================================================
+
+/// `PanAxis::Aligned` locks to whichever axis dominates the *first* update's
+/// cumulative movement from the drag's start position, and that lock holds
+/// for the rest of the gesture — even once a later update's own per-event
+/// delta leans the other way. Oracle group: `PanAxis.*`
+/// (`'PanAxis.aligned allows panning in one direction only...'`).
+#[test]
+fn pan_axis_aligned_locks_to_the_first_updates_dominant_axis_for_the_whole_gesture() {
+    let controller = TransformationController::new();
+    let widget = InteractiveViewer::new()
+        .controller(controller.clone())
+        .pan_axis(PanAxis::Aligned)
+        .boundary_margin(EdgeInsets::all(px(f32::INFINITY)))
+        .child(child());
+    let scoped = lay_out_with_arena(widget, loose(500.0));
+
+    scoped.dispatch_pointer_down(50.0, 50.0);
+    scoped.dispatch_pointer_move(110.0, 50.0); // +60,0: crosses slop, starts (start_local = (110, 50))
+    // Update 1: cumulative movement from start = (50, 10) -> x dominates -> locks Horizontal.
+    // This update's own per-event delta is (50, 10) -> aligned to (50, 0).
+    scoped.dispatch_pointer_move(160.0, 60.0);
+    // Update 2: per-event delta (-40, 80) is mostly VERTICAL, but the axis lock from
+    // update 1 must still force it to (-40, 0) — that's the behavior this test pins.
+    scoped.dispatch_pointer_move(120.0, 140.0);
+    scoped.dispatch_pointer_up(120.0, 140.0);
+
+    let (tx, ty, _) = controller.value().translation_component();
+    assert_eq!(
+        tx, 10.0,
+        "locked to horizontal: +50 (update 1) + -40 (update 2) = 10"
+    );
+    assert_eq!(
+        ty, 0.0,
+        "vertical must stay locked out for the whole gesture, even though update 2's own \
+         raw delta was mostly vertical"
+    );
+}
+
+// ============================================================================
+// Controller disposal (review finding 5c)
+// ============================================================================
+
+/// A stable root TYPE that toggles its shape internally — `pump_widget`
+/// dispatches by `TypeId`, so swapping between two *different* concrete root
+/// widget types is not the supported way to unmount a subtree (see
+/// `LaidOut::pump_widget`'s doc, and `focus_test.rs`'s
+/// `nodes_are_removed_when_all_focuses_are_removed` for the same pattern);
+/// `show` is.
+#[derive(Clone, StatelessView)]
+struct InteractiveViewerHost {
+    controller: TransformationController,
+    show: bool,
+}
+
+impl StatelessView for InteractiveViewerHost {
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        if !self.show {
+            return SizedBox::new(1.0, 1.0).into_view().boxed();
+        }
+        InteractiveViewer::new()
+            .controller(self.controller.clone())
+            .child(child())
+            .into_view()
+            .boxed()
+    }
+}
+
+/// Unmounting `InteractiveViewer` must remove its `AnimatedBuilder`
+/// subscription from an externally supplied `TransformationController` — a
+/// dangling listener would keep firing into a torn-down subtree (and would
+/// keep the controller from ever reporting itself listener-free, which
+/// matters to a caller that wants to know it is safe to drop).
+///
+/// Uses plain `lay_out`/`LaidOut::pump_widget`, not
+/// `lay_out_with_arena`/`LaidOutScoped`: the latter mounts the root wrapped
+/// in a `GestureArenaScope`, so `LaidOutScoped::pump_widget(new_root)` would
+/// itself swap the *actual* mounted root from `GestureArenaScope<Host>` to a
+/// bare `Host` — the exact unsupported different-root-type swap
+/// `InteractiveViewerHost`'s own doc warns about, one level further out. This
+/// test dispatches no pointer events, so it does not need the arena.
+#[test]
+fn unmounting_the_widget_unsubscribes_from_an_external_controller() {
+    let controller = TransformationController::new();
+    let mut laid = lay_out(
+        InteractiveViewerHost {
+            controller: controller.clone(),
+            show: true,
+        },
+        loose(500.0),
+    );
+
+    assert!(
+        controller.has_listeners(),
+        "mounting must subscribe to the externally supplied controller"
+    );
+
+    laid.pump_widget(InteractiveViewerHost {
+        controller: controller.clone(),
+        show: false,
+    });
+
+    assert!(
+        !controller.has_listeners(),
+        "unmounting must remove the subscription — a leaked listener would keep this true \
+         forever, even though nothing is mounted against the controller anymore"
+    );
 }
