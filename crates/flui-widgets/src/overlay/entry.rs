@@ -1,6 +1,10 @@
 //! [`OverlayEntry`] — one independently-managed layer of an [`Overlay`].
 //!
-//! Private to `flui-widgets` until the parity + sign-off gate.
+//! `OverlayEntry`/[`OverlayEntryId`] are published from the crate root (see
+//! `docs/adr/ADR-0036-overlay-publication-and-per-entry-scope-marker.md`); the
+//! mutation surface (`insert`/`remove`/`mark_needs_build`/…) stays
+//! `pub(crate)` — `Navigator` and `Draggable`'s feedback layer are the only
+//! in-crate callers for now, and nothing in ADR-0036 widens that.
 //!
 //! # Flutter parity
 //!
@@ -61,7 +65,7 @@ pub(crate) type OverlayBuilder = Rc<dyn Fn(&dyn BuildContext) -> BoxedView>;
 /// preserves subtree state across a reorder) and to find the entry for removal
 /// without requiring `PartialEq` on the builder closure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub(crate) struct OverlayEntryId(u64);
+pub struct OverlayEntryId(u64);
 
 impl OverlayEntryId {
     fn next() -> Self {
@@ -113,7 +117,7 @@ struct EntryInner {
 /// the same entry. This is what lets the caller keep a handle, the overlay keep
 /// one in its list, and the view tree hold a third.
 #[derive(Clone)]
-pub(crate) struct OverlayEntry {
+pub struct OverlayEntry {
     inner: Arc<EntryInner>,
 }
 

@@ -1,8 +1,12 @@
 //! [`Overlay`] — an insertion-ordered stack of independently-managed layers.
 //!
-//! The first prerequisite for `Navigator`. **Private to
-//! `flui-widgets`**: nothing here is exported from the crate root or the prelude
-//! until the parity + sign-off gate.
+//! The first prerequisite for `Navigator`. [`Overlay`], [`OverlayEntry`],
+//! [`OverlayEntryId`] and [`OverlayHandle`] are published from the crate root
+//! (`docs/adr/ADR-0036-overlay-publication-and-per-entry-scope-marker.md`);
+//! everything else here — the mutation surface, [`OverlayScope`], the
+//! `Theater`/`OverlayState`/`OverlayEntryView` machinery — stays
+//! `pub(crate)`. `Navigator` and `Draggable`'s feedback layer are the only
+//! in-crate consumers of the mutation surface for now.
 //!
 //! # Flutter parity
 //!
@@ -52,16 +56,14 @@
 //!
 //! [`RebuildHandle`]: flui_view::RebuildHandle
 
-// `Overlay` stays **private**: `Navigator`, `ModalRoute` and the public
-// `PageRoute` / `PopupRoute` all need it, but nothing in the signed-off
-// public surface names it, and exporting Flutter's `Overlay` / `OverlayEntry` /
-// `OverlayPortal` is a separate parity gate.
-//
-// `Navigator` exercises `rearrange`, `OverlayEntry::new/remove/is_attached`, and
-// `opaque` / `maintain_state`. What stays dead is the *insertion*
-// half (`insert`, `insert_all`, `InsertPosition`, `entry_ids`) plus the builder
-// forms and `mark_needs_build`, which only an app author placing entries directly,
-// or `Hero`, would call. Ported, tested, waiting for a consumer.
+// `Overlay`/`OverlayEntry`/`OverlayEntryId`/`OverlayHandle` are published
+// (ADR-0036: the `Overlay::of`/`maybe_of` lookup contract). The mutation
+// surface — `insert`/`insert_all`/`rearrange`/`InsertPosition`/`entry_ids`,
+// the builder-form constructors, `mark_needs_build` — stays `pub(crate)`:
+// `Navigator` and `Draggable`'s feedback layer are its only callers today,
+// and widening it (a public `Overlay::wrap`/`initialEntries` constructor, a
+// public `OverlayHandle::insert`) is a separate, not-yet-taken gate — see
+// ADR-0036's deferrals.
 //
 // The `navigator` module needs no such allow: every item there has a production
 // caller or a `#[cfg(test)]`.
@@ -76,11 +78,11 @@ mod tests;
 use std::fmt;
 use std::sync::Arc;
 
-pub(crate) use entry::{OverlayEntry, OverlayEntryId};
+pub use entry::{OverlayEntry, OverlayEntryId};
 use flui_foundation::ViewKey;
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
-use flui_view::{BoxedView, RebuildHandle, ValueKey};
+use flui_view::{BoxedView, InheritedView, RebuildHandle, ValueKey, impl_inherited_view};
 use parking_lot::Mutex;
 
 use self::theater::Theater;
@@ -146,8 +148,9 @@ impl OverlayShared {
 
 /// An owned, `'static` capability to mutate an [`Overlay`]'s entry list.
 ///
-/// Create one, hand it to [`Overlay::new`], and keep a clone: every clone names
-/// the same overlay. Mutating before mount is legal — the first build reads
+/// Create one, hand it to `Overlay::new` (crate-internal — `Navigator` is the
+/// only caller today), and keep a clone: every clone names the same overlay.
+/// Mutating before mount is legal — the first build reads
 /// whatever the list holds — and mutating after unmount is a silent no-op.
 ///
 /// This replaces Flutter's `GlobalKey<OverlayState>` (`navigator.dart:3746`),
@@ -156,7 +159,7 @@ impl OverlayShared {
 /// tree-borrow callback would nest the `WidgetsBinding` registry lock inside
 /// the lock already held for the ancestor walk.
 #[derive(Clone)]
-pub(crate) struct OverlayHandle {
+pub struct OverlayHandle {
     shared: Arc<OverlayShared>,
 }
 
@@ -192,6 +195,14 @@ impl OverlayHandle {
 
     pub(crate) fn len(&self) -> usize {
         self.shared.entries.lock().len()
+    }
+
+    /// Whether two handles name the same overlay. Identity, not structural
+    /// equality — mirrors [`OverlayEntry::is_same`]. Used by [`OverlayScope`]'s
+    /// [`InheritedView::update_should_notify`] so a rebuild that hands down
+    /// the *same* handle again does not churn dependents.
+    pub(crate) fn is_same(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.shared, &other.shared)
     }
 
     /// Insert `entry` at `position` and schedule a rebuild.
@@ -352,7 +363,7 @@ pub(crate) fn onstage_plan(entries: &[OverlayEntry]) -> OnstagePlan {
 /// Flutter's `Overlay.initialEntries` (`overlay.dart:655-658`, inserted in
 /// `initState`) has no analogue: insert into the handle before mounting instead.
 #[derive(Clone)]
-pub(crate) struct Overlay {
+pub struct Overlay {
     handle: OverlayHandle,
 }
 
@@ -360,6 +371,55 @@ impl Overlay {
     /// An overlay backed by `handle`.
     pub(crate) fn new(handle: OverlayHandle) -> Self {
         Self { handle }
+    }
+
+    /// The nearest ancestor [`Overlay`]'s handle, registering a dependency so
+    /// this element rebuilds if a *different* overlay identity ever replaces
+    /// the one found here.
+    ///
+    /// # Panics
+    ///
+    /// Panics if there is no `Overlay` ancestor. Use
+    /// [`maybe_of`](Self::maybe_of) for a non-panicking variant.
+    ///
+    /// Flutter parity: `Overlay.of(context)` (`.flutter/packages/flutter/lib/src/widgets/overlay.dart`,
+    /// tag `3.44.0`).
+    #[must_use]
+    pub fn of(ctx: &dyn BuildContext) -> OverlayHandle {
+        Self::maybe_of(ctx).expect(
+            "Overlay::of called with no Overlay ancestor in the tree — wrap the \
+             subtree in a Navigator (which mounts one) or an Overlay directly, \
+             or use Overlay::maybe_of with a caller-chosen fallback",
+        )
+    }
+
+    /// Look up the nearest ancestor [`Overlay`]'s handle, registering a
+    /// dependency. Returns `None` if there is no `Overlay` ancestor.
+    ///
+    /// # Depend, not get
+    ///
+    /// Resolves via [`BuildContextExt::depend_on`], not the lookup-only `get`:
+    /// the 3.44.0 oracle's `Overlay.maybeOf` calls
+    /// `dependOnInheritedWidgetOfExactType` with `createDependency: true` — a
+    /// genuine dependency, which this ships loyal to. This differs from
+    /// `ScaffoldScope::maybe_of` (`flui-material`), which uses `get`: that
+    /// precedent is for a FLUI-invented ambient handle with no oracle contract
+    /// requiring a dependency; `Overlay.of` is oracle-contracted to register
+    /// one.
+    ///
+    /// Resolves an `OverlayScope` marker (crate-internal) mounted **per entry** (wrapping
+    /// that entry's built child, not once per `Overlay`) — the 3.44.0 oracle's
+    /// own shift from `findAncestorStateOfType<OverlayState>` to resolving a
+    /// private `_RenderTheaterMarker` `InheritedWidget` each
+    /// `_OverlayEntryWidgetState` mounts around its entry's child. A nested
+    /// `Overlay`'s own entries therefore see the nearest enclosing overlay,
+    /// falling out of the ordinary inherited-map nearest-wins shadowing with
+    /// no extra code here.
+    ///
+    /// Flutter parity: `Overlay.maybeOf(context)`.
+    #[must_use]
+    pub fn maybe_of(ctx: &dyn BuildContext) -> Option<OverlayHandle> {
+        ctx.depend_on::<OverlayScope, _>(|scope| scope.data().clone())
     }
 }
 
@@ -392,8 +452,20 @@ impl StatefulView for Overlay {
 /// Holds the shared entry list. The list is `Arc`-shared rather than owned
 /// outright because `ViewState::build` takes `&self` and no caller can ever
 /// obtain `&mut OverlayState`.
-pub(crate) struct OverlayState {
+///
+/// `pub` only because [`StatefulView::State`] must be at least as visible as
+/// [`Overlay`] itself — its field stays private, and nothing outside this
+/// module constructs or names it.
+pub struct OverlayState {
     shared: Arc<OverlayShared>,
+}
+
+impl fmt::Debug for OverlayState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("OverlayState")
+            .field("entries", &self.shared.entries.lock().len())
+            .finish_non_exhaustive()
+    }
 }
 
 impl ViewState<Overlay> for OverlayState {
@@ -416,10 +488,16 @@ impl ViewState<Overlay> for OverlayState {
     fn build(&self, _view: &Overlay, _ctx: &dyn BuildContext) -> impl IntoView {
         let entries = self.shared.entries.lock();
         let plan = onstage_plan(&entries);
+        // The handle every entry's `OverlayScope` marker provides to
+        // `Overlay::of`/`maybe_of` — the same `Arc` this `OverlayState` was
+        // constructed from, so `OverlayHandle::is_same` matches it.
+        let handle = OverlayHandle {
+            shared: Arc::clone(&self.shared),
+        };
         let children: Vec<BoxedView> = plan
             .build
             .iter()
-            .map(|&index| OverlayEntryView::new(entries[index].clone()).boxed())
+            .map(|&index| OverlayEntryView::new(entries[index].clone(), handle.clone()).boxed())
             .collect();
         Theater::new(children, plan.skip_count)
     }
@@ -449,13 +527,21 @@ impl ViewState<Overlay> for OverlayState {
 #[derive(Clone)]
 struct OverlayEntryView {
     entry: OverlayEntry,
+    /// The enclosing [`Overlay`]'s handle, provided to this entry's built
+    /// child through an [`OverlayScope`] marker so `Overlay::of`/`maybe_of`
+    /// can resolve it.
+    overlay: OverlayHandle,
     key: ValueKey<u64>,
 }
 
 impl OverlayEntryView {
-    fn new(entry: OverlayEntry) -> Self {
+    fn new(entry: OverlayEntry, overlay: OverlayHandle) -> Self {
         let key = ValueKey::new(entry.id().get());
-        Self { entry, key }
+        Self {
+            entry,
+            overlay,
+            key,
+        }
     }
 }
 
@@ -497,8 +583,13 @@ impl ViewState<OverlayEntryView> for OverlayEntryViewState {
     /// Build from `view`, not `self`: the element may have been reconciled onto a
     /// fresh `OverlayEntryView`. Both name the same entry (the key guarantees it),
     /// but reading the current view is the contract.
+    ///
+    /// Wraps the entry's built child in an [`OverlayScope`] marker — the
+    /// per-entry mount point `Overlay::of`/`maybe_of` resolve against
+    /// (ADR-0036), matching the 3.44.0 oracle's `_OverlayEntryWidgetState`,
+    /// which wraps each entry's child in its own `_RenderTheaterMarker`.
     fn build(&self, view: &OverlayEntryView, ctx: &dyn BuildContext) -> impl IntoView {
-        (view.entry.builder())(ctx)
+        OverlayScope::new(view.overlay.clone(), (view.entry.builder())(ctx))
     }
 
     /// The keyed reconciler must never hand this element a *different* entry: the
@@ -518,3 +609,69 @@ impl ViewState<OverlayEntryView> for OverlayEntryViewState {
         self.entry.clear_rebuild();
     }
 }
+
+// ============================================================================
+// THE LOOKUP MARKER
+// ============================================================================
+
+/// Marks the nearest enclosing [`Overlay`] for `Overlay::of`/`maybe_of`
+/// lookups. Mounted **per entry**, wrapping that entry's built child — never
+/// once per `Overlay` — by [`OverlayEntryViewState::build`].
+///
+/// This is FLUI's analogue of the 3.44.0 oracle's private
+/// `_RenderTheaterMarker`: `_OverlayEntryWidgetState.build` wraps each
+/// entry's child in one, and `Overlay.maybeOf` resolves it via
+/// `dependOnInheritedWidgetOfExactType`. Earlier Flutter releases used
+/// `context.findAncestorStateOfType<OverlayState>()` instead — a lookup with
+/// no dependency and no per-entry granularity. `OverlayScope` stays
+/// `pub(crate)`, matching its oracle counterpart's own privacy: nothing
+/// outside `overlay` ever names it directly — [`Overlay::of`]/[`Overlay::maybe_of`]
+/// are the only door.
+#[derive(Clone)]
+pub(crate) struct OverlayScope {
+    handle: OverlayHandle,
+    child: BoxedView,
+}
+
+impl OverlayScope {
+    /// Wrap `child` in a scope that provides `handle` — the enclosing
+    /// `Overlay`'s handle — to `Overlay::of`/`maybe_of` lookups in `child`'s
+    /// subtree.
+    fn new(handle: OverlayHandle, child: impl IntoView) -> Self {
+        Self {
+            handle,
+            child: BoxedView(Box::new(child.into_view())),
+        }
+    }
+}
+
+impl fmt::Debug for OverlayScope {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("OverlayScope").finish_non_exhaustive()
+    }
+}
+
+impl InheritedView for OverlayScope {
+    type Data = OverlayHandle;
+
+    fn data(&self) -> &Self::Data {
+        &self.handle
+    }
+
+    fn child(&self) -> &dyn View {
+        &self.child
+    }
+
+    /// An `OverlayEntryView` element is reconciled in place across ordinary
+    /// rebuilds of the *same* mounted entry, and its `overlay` field never
+    /// changes for that entry's lifetime — so in production this compares
+    /// the same handle to itself and is always `false`. It is still handle
+    /// **identity**, not structural/derived equality, because the contract
+    /// this type exists to satisfy is `InheritedView`'s in general, not just
+    /// the one call site that happens to exercise it today.
+    fn update_should_notify(&self, old: &Self) -> bool {
+        !self.handle.is_same(&old.handle)
+    }
+}
+
+impl_inherited_view!(OverlayScope);

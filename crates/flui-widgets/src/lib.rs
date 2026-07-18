@@ -90,11 +90,13 @@ mod test_harness;
 /// route stack, its lifecycle, the flush algorithm and the result channel are
 /// private; the signed-off surface is re-exported from the crate root below.
 pub mod navigator;
-// `Overlay` / `OverlayEntry`, the first `Navigator` prerequisite. Deliberately
-// private: nothing here is exported from the crate root or the prelude until
-// the parity + sign-off gate lands. `Navigator` is the intended in-crate
-// consumer. (A `///` doc here would be concatenated with the module's own
-// `//!` docs and resolve its intra-doc links in the crate root.)
+// `Overlay` / `OverlayEntry`, the first `Navigator` prerequisite. `Overlay`,
+// `OverlayEntry`, `OverlayEntryId` and `OverlayHandle` are re-exported below
+// (ADR-0036); the mutation surface (`insert`/`rearrange`/`OverlayScope`/the
+// `Theater`/`OverlayState` machinery) stays private. `Navigator` and
+// `Draggable`'s feedback layer are the in-crate consumers of that surface. (A
+// `///` doc here would be concatenated with the module's own `//!` docs and
+// resolve its intra-doc links in the crate root.)
 mod overlay;
 pub mod paint;
 pub mod scroll;
@@ -189,6 +191,10 @@ pub use navigator::{
     RouteArguments, RouteBindingSlot, RouteContentBuilder, RouteId, RoutePageBuilder, RouteResult,
     RouteSettings, RouteTransitionsBuilder, SimpleRoute,
 };
+// The `Overlay::of`/`maybe_of` lookup contract (ADR-0036) and the types it
+// resolves. The mutation surface (`insert`/`rearrange`/…) stays private to
+// the crate — `Navigator` and `Draggable`'s feedback layer are its callers.
+pub use overlay::{Overlay, OverlayEntry, OverlayEntryId, OverlayHandle};
 pub use paint::{ColoredBox, CustomPaint, DecoratedBox, Opacity, RepaintBoundary};
 pub use scroll::{
     BouncingScrollPhysics, ClampingScrollPhysics, CustomScrollView, GridView, ListView,
@@ -293,18 +299,18 @@ pub mod prelude {
         IntrinsicHeight, IntrinsicWidth, LayoutBuilder, LayoutId, LimitedBox, ListBody, ListView,
         Listener, Localizations, LocalizationsDelegate, MediaQuery, MediaQueryData, MergeSemantics,
         MouseRegion, Navigator, NavigatorHandle, NextFocusAction, NextFocusIntent, Offstage,
-        Opacity, OverflowBox, OverflowBoxFit, Padding, PageRoute, PopScope, PopupRoute, Positioned,
-        PreferredSize, PreferredSizeView, PreviousFocusAction, PreviousFocusIntent,
-        RepaintBoundary, RichText, RotatedBox, Row, SafeArea, ScrollController, Scrollable,
-        Scrollbar, Semantics, Shortcuts, ShrinkWrappingViewport, SimpleRoute, SingleActivator,
-        SingleChildScrollView, SizedBox, SizedOverflowBox, SliverChildBuilderDelegate,
-        SliverFillRemaining, SliverFillRemainingAndOverscroll, SliverFillRemainingWithScrollable,
-        SliverFillViewport, SliverFixedExtentList, SliverGrid, SliverIgnorePointer, SliverList,
-        SliverOffstage, SliverOpacity, SliverPadding, SliverToBoxAdapter, Spacer, Stack,
-        StreamBuilder, Table, TableCell, TableRow, Text, TextEditingController, TextField,
-        TickerMode, Transform, ValueListenableBuilder, Viewport, Visibility, WidgetState,
-        WidgetStateConstraint, WidgetStateProperty, WidgetStates, WidgetStatesController,
-        WidgetsLocalizations, Wrap,
+        Opacity, OverflowBox, OverflowBoxFit, Overlay, OverlayEntry, OverlayEntryId, OverlayHandle,
+        Padding, PageRoute, PopScope, PopupRoute, Positioned, PreferredSize, PreferredSizeView,
+        PreviousFocusAction, PreviousFocusIntent, RepaintBoundary, RichText, RotatedBox, Row,
+        SafeArea, ScrollController, Scrollable, Scrollbar, Semantics, Shortcuts,
+        ShrinkWrappingViewport, SimpleRoute, SingleActivator, SingleChildScrollView, SizedBox,
+        SizedOverflowBox, SliverChildBuilderDelegate, SliverFillRemaining,
+        SliverFillRemainingAndOverscroll, SliverFillRemainingWithScrollable, SliverFillViewport,
+        SliverFixedExtentList, SliverGrid, SliverIgnorePointer, SliverList, SliverOffstage,
+        SliverOpacity, SliverPadding, SliverToBoxAdapter, Spacer, Stack, StreamBuilder, Table,
+        TableCell, TableRow, Text, TextEditingController, TextField, TickerMode, Transform,
+        ValueListenableBuilder, Viewport, Visibility, WidgetState, WidgetStateConstraint,
+        WidgetStateProperty, WidgetStates, WidgetStatesController, WidgetsLocalizations, Wrap,
     };
 
     // Common configuration value types, so an app author needs only this import.

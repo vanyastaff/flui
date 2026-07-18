@@ -425,6 +425,68 @@ fn navigator_of_self_check_finds_current_navigator() {
     );
 }
 
+/// `Overlay::of`/`maybe_of` (ADR-0036) from inside a route's content resolves
+/// to the `Overlay` `Navigator::build` mounts (`navigator.rs:1610`) — the
+/// only honest way to test it, same reasoning as `probing_page` above: the
+/// lookup must run from a `BuildContext` inside the navigator's own subtree,
+/// which is exactly where a route's content builds (inside one of that
+/// `Overlay`'s entries).
+///
+/// The lookup runs from `OverlayPeek`'s own `build`, not from
+/// `SimpleRoute`'s top-level content closure: that closure's `ctx` is the
+/// same `BuildContext` the enclosing `OverlayEntryViewState` builds with —
+/// an ancestor of, not a descendant of, the `OverlayScope` wrapped around the
+/// content it returns (Flutter's own `_OverlayEntryWidgetState.build` has
+/// the identical shape). A real consumer (a widget's own `build`/
+/// `did_change_dependencies`) always has its own distinct, nested context.
+///
+/// Red-check: make `Overlay::maybe_of` return `None` unconditionally — the
+/// `expect` below fires.
+#[test]
+fn overlay_of_from_route_content_resolves_the_navigators_own_overlay() {
+    use crate::overlay::{Overlay, OverlayHandle};
+
+    /// A stateless leaf that runs `on_build` on its own nested `BuildContext`.
+    #[derive(Clone)]
+    struct OverlayPeek<F: Fn(&dyn BuildContext) + Clone + 'static>(F);
+
+    impl<F: Fn(&dyn BuildContext) + Clone + 'static> View for OverlayPeek<F> {
+        fn create_element(&self) -> ElementKind {
+            ElementKind::stateless(self)
+        }
+    }
+
+    impl<F: Fn(&dyn BuildContext) + Clone + 'static> StatelessView for OverlayPeek<F> {
+        fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
+            (self.0)(ctx);
+            SizedBox::new(5.0, 5.0)
+        }
+    }
+
+    let sink: Arc<Mutex<Option<OverlayHandle>>> = Arc::new(Mutex::new(None));
+    let sink_for_route = Arc::clone(&sink);
+    let handle = NavigatorHandle::new();
+    handle.seed_initial(SimpleRoute::<i32>::new(move |_ctx| {
+        let sink_for_peek = Arc::clone(&sink_for_route);
+        OverlayPeek(move |ctx: &dyn BuildContext| {
+            *sink_for_peek.lock() = Overlay::maybe_of(ctx);
+        })
+        .into_view()
+        .boxed()
+    }));
+    let _harness = mount(Navigator::new(handle.clone()));
+
+    let found = sink
+        .lock()
+        .clone()
+        .expect("Overlay::maybe_of found an ancestor overlay from route content");
+    assert!(
+        found.is_same(handle.overlay()),
+        "route content built inside the Navigator's own Overlay must resolve \
+         THAT overlay's handle, not some other one"
+    );
+}
+
 /// `maybe_of` returns the **nearest** navigator; `maybe_of_root` the outermost.
 /// Oracle: `'Navigator.of rootNavigator finds root Navigator'`.
 ///
@@ -903,16 +965,62 @@ fn public_no_internal_route_stack_exports() {
     super::export_guard::assert_not_exported("lib.rs", LIB, &INTERNAL);
 }
 
-/// `Overlay` / `OverlayEntry` / `OverlayHandle` stay **private**.
+/// `Overlay` / `OverlayEntry` / `OverlayEntryId` / `OverlayHandle` are
+/// published from the crate root (ADR-0036: the `Overlay::of`/`maybe_of`
+/// lookup contract). The mutation surface and the view/state machinery
+/// (`OverlayScope`, `OverlayShared`, `InsertPosition`, `OnstagePlan`,
+/// `OverlayState`, `OverlayEntryView`, `OverlayEntryViewState`, `Theater`)
+/// stays private — `Navigator` and `Draggable`'s feedback layer reach it
+/// in-crate through `crate::overlay::*`, not through this re-export. The
+/// `overlay` module itself also stays a private `mod` (not `pub mod`): every
+/// re-export is a deliberate, individually-named `pub use`, not a module-wide
+/// opening.
 ///
-/// `Navigator` needs them, but exporting Flutter's `Overlay` surface is a separate
-/// parity gate, with `ModalRoute` and `OverlayPortal`. Nothing in
-/// the signed-off `Navigator` surface names them.
+/// This replaces an earlier guard test whose premise — that no part of
+/// `overlay` should ever be exported — ADR-0036 deliberately reverses; see
+/// the ADR for why the lookup contract, not the mutation surface, is the
+/// right cut.
 ///
-/// Red-check: add `pub mod overlay;` to `lib.rs`.
+/// Red-check: remove the `pub use overlay::{...}` line from `lib.rs` — the
+/// first loop's assertion fails. Add `pub mod overlay;` — the last assertion
+/// fails. Add any of the mutation-surface names to a `pub use` line — the
+/// `assert_not_exported` call fails.
 #[test]
-fn overlay_stays_private_after_u4() {
+fn overlay_publishes_only_the_lookup_contract_types() {
     const LIB: &str = include_str!("../lib.rs");
+
+    let exported: Vec<&str> = LIB
+        .lines()
+        .map(str::trim_start)
+        .filter(|code| !code.starts_with("//"))
+        .filter(|code| code.starts_with("pub use") || code.starts_with("pub mod"))
+        .flat_map(|code| {
+            code.split(|c: char| !(c.is_alphanumeric() || c == '_'))
+                .filter(|token| !token.is_empty())
+        })
+        .collect();
+
+    for published in ["Overlay", "OverlayEntry", "OverlayEntryId", "OverlayHandle"] {
+        assert!(
+            exported.contains(&published),
+            "{published} must be re-exported from lib.rs — ADR-0036 publishes it"
+        );
+    }
+
+    super::export_guard::assert_not_exported(
+        "lib.rs",
+        LIB,
+        &[
+            "OverlayScope",
+            "OverlayShared",
+            "InsertPosition",
+            "OnstagePlan",
+            "OverlayState",
+            "OverlayEntryView",
+            "OverlayEntryViewState",
+            "Theater",
+        ],
+    );
 
     for line in LIB.lines() {
         let code = line.trim_start();
@@ -921,14 +1029,8 @@ fn overlay_stays_private_after_u4() {
         }
         assert!(
             !code.starts_with("pub mod overlay"),
-            "the overlay module must stay private: {line}"
+            "the overlay module itself must stay a private `mod`, not `pub mod`: {line}"
         );
-        if code.starts_with("pub use") {
-            assert!(
-                !(code.contains("OverlayEntry") || code.contains("OverlayHandle")),
-                "the overlay surface must stay private: {line}"
-            );
-        }
     }
 }
 
