@@ -27,16 +27,28 @@
 //! the unit tests prove the machine correct in isolation, this proves that
 //! one leg is reachable from a real tree. See that test's own doc for why
 //! the oracle's OTHER legs (`Unstable`, a SECOND widget-level retarget) are
-//! not additionally forced through this harness.
+//! not additionally forced through this harness, and for the tracked gap
+//! that surfaced along the way (`docs/ROADMAP.md`, Cross.H section).
 //!
-//! Ported: 7 of 11 oracle cases.
+//! Ported: 6 of 11 oracle cases, plus 1 partial/adapted (see below).
 //! - `'animates forwards then backwards with stable-sized children'`
 //! - `'calls onEnd when animation is completed'`
 //! - `'clamps animated size to constraints'`
-//! - `'tracks unstable child, then resumes animation when child stabilizes'`
 //! - `'does not run animation unnecessarily'`
 //! - `'can set and update clipBehavior'`
 //! - `'AnimatedSize does not crash at zero size'`
+//!
+//! Partial/adapted: 1 of 11.
+//! - `'tracks unstable child, then resumes animation when child stabilizes'`
+//!   — the oracle exercises FOUR legs of the state machine end-to-end
+//!   (`Stable`→`Changed`→`Unstable`→`Unstable`→`Stable`, then a SECOND
+//!   retarget's `Stable`→`Changed`→`Stable`-resumed). This port's
+//!   `animated_size_tracks_unstable_child_then_resumes_when_child_stabilizes`
+//!   reliably exercises only ONE of those legs end-to-end (a single
+//!   `Stable`→`Changed`→`Stable`-resumed retarget) — the `Unstable` leg and a
+//!   second widget-level retarget could not be forced reliably through this
+//!   harness; see that test's own doc for the full account and the tracked
+//!   `docs/ROADMAP.md` gap this surfaced.
 //!
 //! Citation-only: 1 of 11.
 //! - `'resyncs its animation controller'` — same core mid-flight-then-settle
@@ -430,7 +442,7 @@ fn animated_size_can_set_and_update_clip_behavior() {
 /// (`animated_size_test.dart`, tag `3.44.0`).
 #[test]
 fn animated_size_does_not_crash_at_zero_size() {
-    let laid = lay_out(
+    let mut laid = lay_out(
         SizedBox::shrink()
             .child(AnimatedSize::new(Duration::from_millis(300)).child(Text::new("X"))),
         tight(0.0, 0.0),
@@ -440,6 +452,16 @@ fn animated_size_does_not_crash_at_zero_size() {
         laid.size(laid.current_root()),
         size(0.0, 0.0),
         "AnimatedSize on a zero-area surface must measure 0×0 with no panic"
+    );
+
+    // The oracle's zero-area case reaches its assertion via `pumpAndSettle`;
+    // a never-pumped mount would not catch a panic that only surfaces once a
+    // frame actually runs.
+    laid.pump_for(Duration::from_millis(300));
+    assert_eq!(
+        laid.size(laid.current_root()),
+        size(0.0, 0.0),
+        "must still measure 0×0 with no panic after a frame runs"
     );
 }
 
@@ -483,10 +505,16 @@ impl ViewState<SteppedChildProbe> for SteppedChildProbeState {
     }
 }
 
+/// PARTIAL/ADAPTED PORT — see the module docs' "Partial/adapted" entry. This
+/// exercises exactly ONE of the oracle's four state-machine legs end-to-end:
 /// `AnimatedSize` transiently reports `Changed` for the one layout a child's
-/// size-change is first observed — then, when the child does NOT change
+/// size-change is first observed, then, when the child does NOT change
 /// again, genuinely RESUMES that interpolation span (rather than collapsing
-/// it to a degenerate no-op tween) as it settles back to `Stable`.
+/// it to a degenerate no-op tween) as it settles back to `Stable`. The
+/// oracle's `Unstable` leg and its second widget-level retarget are NOT
+/// exercised here — see the divergence note below for why, and
+/// `docs/ROADMAP.md`'s Cross.H section ("Suspected gap (unconfirmed)") for
+/// the tracked, unconfirmed framework question this surfaced.
 ///
 /// Flutter parity: `'tracks unstable child, then resumes animation when
 /// child stabilizes'` (`animated_size_test.dart`, tag `3.44.0`), which nests
@@ -508,10 +536,12 @@ impl ViewState<SteppedChildProbe> for SteppedChildProbeState {
 /// (confirmed independently) but `AnimatedSize`'s own committed size/state
 /// stayed stale. Whether either is a genuine cross-render-object
 /// dirty-propagation gap is a `flui-rendering` pipeline question, out of
-/// scope for this widget-level port (see `AGENTS.md`'s TRIPWIRE guidance on
-/// structural ripple beyond `flui-widgets`/`flui-animation`). The
-/// `Unstable`/degenerate-collapse legs of the state machine already have
-/// direct, thorough `#[cfg(test)]` coverage in
+/// scope for this widget-level port to root-cause or fix (see `AGENTS.md`'s
+/// TRIPWIRE guidance on structural ripple beyond `flui-widgets`/
+/// `flui-animation`) — tracked instead as a named, unconfirmed gap in
+/// `docs/ROADMAP.md`'s Cross.H section rather than left only in this
+/// comment. The `Unstable`/degenerate-collapse legs of the state machine
+/// already have direct, thorough `#[cfg(test)]` coverage in
 /// `flui-objects/src/layout/animated_size.rs`
 /// (`changed_to_unstable_collapses_to_degenerate_zero_span_tween`,
 /// `unstable_repeats_then_settles_with_no_visible_jump`) calling the

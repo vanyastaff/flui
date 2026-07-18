@@ -50,13 +50,16 @@ use crate::common::{self, lay_out, lay_out_animated, tight};
 
 const RUN: Duration = Duration::from_millis(200);
 
-/// `AnimatedAlign` on a zero-area surface lays out to zero without panicking.
+/// `AnimatedAlign` on a zero-area surface lays out to zero without
+/// panicking — checked at mount AND after a frame runs (the oracle's own
+/// case pumps via `pumpAndSettle` before asserting; a never-pumped mount
+/// would not catch a panic that only surfaces once a frame actually runs).
 ///
 /// Flutter parity: `'AnimatedAlign does not crash at zero area'`
 /// (`animated_align_test.dart`, tag `3.44.0`).
 #[test]
 fn animated_align_does_not_crash_at_zero_area() {
-    let laid = lay_out(
+    let mut laid = lay_out(
         SizedBox::shrink()
             .child(AnimatedAlign::new(Alignment::BOTTOM_CENTER, SizedBox::shrink()).duration(RUN)),
         tight(0.0, 0.0),
@@ -66,6 +69,13 @@ fn animated_align_does_not_crash_at_zero_area() {
         laid.size(laid.current_root()),
         common::size(0.0, 0.0),
         "AnimatedAlign on a zero-area surface must measure 0×0 with no panic"
+    );
+
+    laid.pump_for(RUN);
+    assert_eq!(
+        laid.size(laid.current_root()),
+        common::size(0.0, 0.0),
+        "must still measure 0×0 with no panic after a frame runs"
     );
 }
 
@@ -149,9 +159,9 @@ fn animated_align_animates_child_offset_over_duration() {
     );
 
     laid.pump_for(RUN / 2);
-    let (end_x, end_y) = child_offset(&laid);
-    assert!(
-        (end_x - 80.0).abs() < 1.0 && (end_y - 80.0).abs() < 1.0,
-        "the run must end exactly at the new alignment's offset, got ({end_x}, {end_y})"
+    assert_eq!(
+        child_offset(&laid),
+        (80.0, 80.0),
+        "the run must end exactly at the new alignment's offset"
     );
 }

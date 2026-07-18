@@ -34,9 +34,8 @@
 //! ```text
 //! RED (pre-fix), animated_padding_clamps_negative_overshoot_to_zero:
 //! thread 'animated_padding_test::animated_padding_clamps_negative_overshoot_to_zero'
-//! panicked at crates/flui-widgets/tests/parity/animated_padding_test.rs:171:5:
-//! an overshooting curve must clamp the evaluated padding to non-negative,
-//! got right=-0.6675644px
+//! panicked: an overshooting curve must clamp the evaluated padding to
+//! non-negative, got right=-0.6675644px
 //! ```
 //!
 //! Fixed in `animated_padding.rs` (`AnimatedPaddingState::build`) by clamping
@@ -112,13 +111,17 @@ impl ViewState<PaddingProbe> for PaddingProbeState {
     }
 }
 
-/// `AnimatedPadding` on a zero-area surface lays out to zero without panicking.
+/// `AnimatedPadding` on a zero-area surface lays out to zero without
+/// panicking — checked at mount AND after a frame runs (the oracle pumps
+/// `const Duration(milliseconds: 100)` then `pumpAndSettle` before its
+/// assertion; a static, never-pumped mount would not catch a panic that only
+/// surfaces once the implicit animation actually ticks).
 ///
 /// Flutter parity: `'AnimatedPadding does not crash at zero area'`
 /// (`animated_padding_test.dart`, tag `3.44.0`).
 #[test]
 fn animated_padding_does_not_crash_at_zero_area() {
-    let laid = lay_out(
+    let mut laid = lay_out(
         SizedBox::shrink().child(
             AnimatedPadding::new(EdgeInsets::all(px(1.0)), SizedBox::shrink())
                 .duration(Duration::from_millis(200)),
@@ -130,6 +133,13 @@ fn animated_padding_does_not_crash_at_zero_area() {
         laid.size(laid.current_root()),
         common::size(0.0, 0.0),
         "AnimatedPadding on a zero-area surface must measure 0×0 with no panic"
+    );
+
+    laid.pump_for(Duration::from_millis(100));
+    assert_eq!(
+        laid.size(laid.current_root()),
+        common::size(0.0, 0.0),
+        "must still measure 0×0 with no panic after a frame runs"
     );
 }
 
@@ -164,15 +174,22 @@ fn animated_padding_clamps_negative_overshoot_to_zero() {
     laid.pump_for(Duration::ZERO); // detection frame: anchors the fresh run
     laid.pump_for(Duration::from_millis(128));
 
+    // At 128ms into the 200ms run the curve overshoots below 0 — confirmed
+    // via the RED run above (pre-fix: right=-0.6675644px). Post-fix,
+    // `clamp_non_negative()` forces the exact floor, `0.0` — not merely
+    // "non-negative" (a dead/never-started retarget would also read `>= 0`
+    // and silently pass a weaker check).
     let evaluated = padding_of(&laid, padding_id);
-    assert!(
-        evaluated.right >= px(0.0),
-        "an overshooting curve must clamp the evaluated padding to \
-         non-negative, got right={:?}",
+    assert_eq!(
+        evaluated.right,
+        px(0.0),
+        "an overshooting curve must clamp the evaluated padding to exactly \
+         0, got right={:?}",
         evaluated.right
     );
-    assert!(
-        evaluated.top >= px(0.0) && evaluated.bottom >= px(0.0) && evaluated.left >= px(0.0),
+    assert_eq!(
+        evaluated,
+        EdgeInsets::ZERO,
         "every edge must be clamped, not just the animated one, got {evaluated:?}"
     );
 }

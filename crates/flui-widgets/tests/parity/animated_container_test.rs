@@ -81,7 +81,7 @@ const FRAME: Duration = Duration::from_millis(20);
 /// (`animated_container_test.dart`, tag `3.44.0`).
 #[test]
 fn animated_container_does_not_crash_at_zero_area() {
-    let laid = lay_out(
+    let mut laid = lay_out(
         SizedBox::shrink().child(AnimatedContainer::new(SizedBox::shrink()).duration(RUN)),
         tight(0.0, 0.0),
     );
@@ -90,6 +90,16 @@ fn animated_container_does_not_crash_at_zero_area() {
         laid.size(laid.current_root()),
         common::size(0.0, 0.0),
         "AnimatedContainer on a zero-area surface must measure 0×0 with no panic"
+    );
+
+    // The oracle pumps (`const Duration(milliseconds: 100)` then
+    // `pumpAndSettle`) before its assertion; a never-pumped mount would not
+    // catch a panic that only surfaces once a frame actually runs.
+    laid.pump_for(RUN);
+    assert_eq!(
+        laid.size(laid.current_root()),
+        common::size(0.0, 0.0),
+        "must still measure 0×0 with no panic after a frame runs"
     );
 }
 

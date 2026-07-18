@@ -242,15 +242,25 @@ fn animated_opacity_at_zero_still_participates_in_hit_testing() {
 // AnimatedOpacity — transition test
 // ----------------------------------------------------------------------------
 
+/// The ancestor hosting `AnimatedOpacity` — mirrors the oracle's
+/// `RebuildCountingState<TestAnimatedWidget>` (`implicit_animations_test.dart`):
+/// `builds` counts every time THIS build runs, so the transition test can
+/// assert the ancestor is rebuilt on the retarget (a real `setState`) and
+/// NOT on every subsequent tick (`AnimatedOpacity` updates its persistent
+/// render object directly, per its module docs — it never rebuilds through
+/// `AnimatedBuilder` the way `AnimatedContainer`/`AnimatedAlign`/
+/// `AnimatedPadding` do).
 #[derive(Clone, StatefulView)]
 struct OpacityProbe {
     vsync: Vsync,
     opacity: Arc<Mutex<f32>>,
+    builds: Arc<AtomicUsize>,
 }
 
 struct OpacityProbeState {
     vsync: Vsync,
     opacity: Arc<Mutex<f32>>,
+    builds: Arc<AtomicUsize>,
 }
 
 impl StatefulView for OpacityProbe {
@@ -260,12 +270,14 @@ impl StatefulView for OpacityProbe {
         OpacityProbeState {
             vsync: self.vsync.clone(),
             opacity: Arc::clone(&self.opacity),
+            builds: Arc::clone(&self.builds),
         }
     }
 }
 
 impl ViewState<OpacityProbe> for OpacityProbeState {
     fn build(&self, _view: &OpacityProbe, _ctx: &dyn BuildContext) -> impl IntoView {
+        self.builds.fetch_add(1, Ordering::SeqCst);
         let opacity = *self.opacity.lock();
         VsyncScope::new(
             self.vsync.clone(),
@@ -278,20 +290,27 @@ impl ViewState<OpacityProbe> for OpacityProbeState {
 
 /// `AnimatedOpacity` genuinely interpolates from the current opacity to a
 /// retargeted one: `0.0` right after the retarget (t=0, begin unchanged),
-/// then exactly `0.5`/`0.75`/`1.0` at 50%/75%/100% of a 1-second linear run.
+/// then exactly `0.5`/`0.75`/`1.0` at 50%/75%/100% of a 1-second linear run —
+/// and the ANCESTOR hosting it (`OpacityProbe`, standing in for the oracle's
+/// `TestAnimatedWidget`) is rebuilt exactly once for the retarget itself and
+/// NOT again on any of the subsequent animation ticks.
 ///
 /// Flutter parity: `'AnimatedOpacity transition test'`
 /// (`implicit_animations_test.dart`, tag `3.44.0`) — same 1-second duration,
 /// same 0.0 → 1.0 retarget, same sample points (500 ms, 750 ms, 1000 ms
-/// cumulative). `Curves::Linear` is pinned explicitly — see the module docs'
-/// note on the family's default-curve divergence from the oracle.
+/// cumulative), and the oracle's own `state.builds == 2` assertions (stable
+/// across every tick after the retargeting rebuild) via the `builds` counter
+/// below. `Curves::Linear` is pinned explicitly — see the module docs' note
+/// on the family's default-curve divergence from the oracle.
 #[test]
 fn animated_opacity_transition_test() {
     let vsync = Vsync::new();
     let opacity = Arc::new(Mutex::new(0.0));
+    let builds = Arc::new(AtomicUsize::new(0));
     let probe = OpacityProbe {
         vsync: vsync.clone(),
         opacity: Arc::clone(&opacity),
+        builds: Arc::clone(&builds),
     };
     let mut laid = lay_out_animated(probe, tight(100.0, 100.0), vsync);
     let id = laid.find_by_render_type("RenderAnimatedOpacity");
@@ -301,6 +320,7 @@ fn animated_opacity_transition_test() {
         0.0,
         "first build sits at the given opacity"
     );
+    assert_eq!(builds.load(Ordering::SeqCst), 1, "the initial mount build");
 
     *opacity.lock() = 1.0;
     laid.pump();
@@ -309,24 +329,40 @@ fn animated_opacity_transition_test() {
         0.0,
         "immediately after retargeting, the run has not advanced (t=0, begin unchanged)"
     );
+    assert_eq!(
+        builds.load(Ordering::SeqCst),
+        2,
+        "the retarget is a real ancestor rebuild (oracle: state.builds == 2)"
+    );
 
     laid.pump_for(Duration::ZERO); // detection frame: anchors the fresh run
     laid.pump_for(Duration::from_millis(500));
-    assert!(
-        (laid.opacity(id) - 0.5).abs() < 1e-4,
-        "50% through a linear run"
+    assert_eq!(laid.opacity(id), 0.5, "50% through a linear run");
+    assert_eq!(
+        builds.load(Ordering::SeqCst),
+        2,
+        "a tick alone must NOT rebuild the ancestor — AnimatedOpacity updates \
+         its persistent render object directly (oracle: state.builds stays 2)"
     );
 
     laid.pump_for(Duration::from_millis(250)); // cumulative 750 ms
-    assert!(
-        (laid.opacity(id) - 0.75).abs() < 1e-4,
-        "75% through a linear run"
+    assert_eq!(laid.opacity(id), 0.75, "75% through a linear run");
+    assert_eq!(
+        builds.load(Ordering::SeqCst),
+        2,
+        "still no ancestor rebuild"
     );
 
     laid.pump_for(Duration::from_millis(250)); // cumulative 1000 ms
-    assert!(
-        (laid.opacity(id) - 1.0).abs() < 1e-4,
+    assert_eq!(
+        laid.opacity(id),
+        1.0,
         "the run must end exactly at the new target"
+    );
+    assert_eq!(
+        builds.load(Ordering::SeqCst),
+        2,
+        "no ancestor rebuild even once the run completes"
     );
 }
 
@@ -341,7 +377,7 @@ fn animated_opacity_transition_test() {
 /// (`implicit_animations_test.dart`, tag `3.44.0`).
 #[test]
 fn animated_opacity_does_not_crash_at_zero_area() {
-    let laid = lay_out(
+    let mut laid = lay_out(
         SizedBox::shrink().child(
             AnimatedOpacity::new(0.5, SizedBox::shrink()).duration(Duration::from_millis(300)),
         ),
@@ -352,5 +388,14 @@ fn animated_opacity_does_not_crash_at_zero_area() {
         laid.size(laid.current_root()),
         common::size(0.0, 0.0),
         "AnimatedOpacity on a zero-area surface must measure 0×0 with no panic"
+    );
+
+    // The oracle reaches its assertion via `pumpAndSettle`; a never-pumped
+    // mount would not catch a panic that only surfaces once a frame runs.
+    laid.pump_for(Duration::from_millis(300));
+    assert_eq!(
+        laid.size(laid.current_root()),
+        common::size(0.0, 0.0),
+        "must still measure 0×0 with no panic after a frame runs"
     );
 }
