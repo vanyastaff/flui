@@ -80,32 +80,53 @@
 //!   deferred); ported through `Actions::maybe_invoke` from a probe widget's
 //!   `build`, which is the same "does resolution stop here" question the
 //!   oracle's `Actions.invoke` asks.
-//! - `'Actions can invoke actions in ancestor dispatcher'` — the fix's other
-//!   branch: a nearer scope that declares **no** mapping for the intent type
-//!   at all still lets resolution continue to an enclosing scope's mapping
-//!   (only a *declared* mapping stops the walk) —
+//! - `'Actions can invoke actions in ancestor dispatcher'` (plus its sibling
+//!   `"...if a lower one isn't specified"`, which differs only in whether
+//!   the nearer scope also omits a custom `ActionDispatcher` — a distinction
+//!   FLUI has no concept of, so both collapse onto this one port) — the
+//!   fix's other branch: a nearer scope that declares **no** mapping for the
+//!   intent type at all still lets resolution continue to an enclosing
+//!   scope's mapping (only a *declared* mapping stops the walk) —
 //!   [`an_intent_undeclared_at_the_nearer_scope_resolves_from_the_ancestor`].
 //!   Paired with the disabled-action case above per this port's mutation
 //!   discipline: one pins each side of `resolve`'s "found but disabled" vs.
 //!   "not found here" branch. **Adapted**: same `ActionDispatcher` substitution
 //!   as above.
+//! - A third mutation-paired case, not tied to its own oracle test:
+//!   [`a_scope_that_binds_one_intent_still_inherits_the_ancestor_for_another`]
+//!   — a scope's own mapping for one intent type must not shadow the
+//!   ambient chain's entries for *other* types. Needed because the other two
+//!   cases' inner scope always declares nothing of its own, so neither one
+//!   kills a "drop the ambient chain whenever this scope declares anything"
+//!   mutant; this fixture's inner scope declares a different type than the
+//!   one the probe needs, closing that gap.
 //!
 //! ## Not ported
 //! - `LogicalKeySet` group (`test('LogicalKeySet passes parameters
 //!   correctly.')`, `'... works as a map key.'`, `'.hashCode is stable'`,
 //!   `'.hashCode is order-independent'`, `'.diagnostics work.'`, `'handles
-//!   two keys'`, the three `numLock works as expected...` cases) —
-//!   `LogicalKeySet`'s exact-pressed-set semantics need a
-//!   `HardwareKeyboard`-style pressed-key tracker FLUI does not have;
+//!   two keys'`, `'isActivatedBy works as expected'` (the `LogicalKeySet`
+//!   one — a second, distinct case of this name lives in the
+//!   `SingleActivator` group, cited above), the three `numLock works as
+//!   expected...` cases) — `LogicalKeySet`'s exact-pressed-set semantics
+//!   need a `HardwareKeyboard`-style pressed-key tracker FLUI does not have;
 //!   documented not-ported in `interaction/shortcuts.rs`'s module doc
 //!   (ADR-0023). `SingleActivator` covers the catalog's real uses.
+//! - The `SingleActivator` group's `'diagnostics.'` subgroup (`'single
+//!   key'`, `'no repeats'`, `'combination'`) and the four `'Shortcuts
+//!   diagnostics work...'` cases (plain, `'...when debugLabel specified.'`,
+//!   `'...when manager not specified.'`, `'...when manager specified.'`) —
+//!   no `Diagnosticable`/`debugFillProperties` tree-dump equivalent exists
+//!   for `SingleActivator`/`Shortcuts` (same reason as the
+//!   `debugFillProperties` group under `actions_test.dart`, below).
 //! - `CharacterActivator` group (`'is triggered on events with correct
 //!   character'`, `'handles repeated events'`, `'rejects repeated events if
 //!   requested'`, `'handles Alt, Ctrl and Meta'`, `'isActivatedBy works as
-//!   expected'`, its diagnostics case) — `CharacterActivator` itself waits
-//!   for a consumer (ADR-0023); the two `CallbackShortcuts` ports above
-//!   substitute `SingleActivator::character` where the oracle's own case
-//!   only needs "bind by produced character", not `CharacterActivator`'s
+//!   expected'`, and its `'diagnostics.'` subgroup — `'single key'`, `'no
+//!   repeats'`, `'combination'`) — `CharacterActivator` itself waits for a
+//!   consumer (ADR-0023); the two `CallbackShortcuts` ports above substitute
+//!   `SingleActivator::character` where the oracle's own case only needs
+//!   "bind by produced character", not `CharacterActivator`'s
 //!   shift-insensitivity.
 //! - `ShortcutManager`/`Shortcuts.manager` group (`'Default constructed
 //!   Shortcuts has empty shortcuts'`, `'Default constructed Shortcuts.manager
@@ -316,6 +337,9 @@ fn nested_callback_shortcuts_the_inner_consuming_binding_stops_the_outer() {
         "the inner binding consumed the key first"
     );
     assert_eq!(invoked_inner.get(), 1);
+    assert!(!manager.dispatch_key_event(&key_up("a", Modifiers::empty())));
+    assert_eq!(invoked_outer.get(), 0);
+    assert_eq!(invoked_inner.get(), 1);
 
     manager.unfocus();
 }
@@ -359,6 +383,14 @@ fn non_overlapping_nested_callback_shortcuts_each_fire_for_their_own_key() {
         1,
         "the inner CallbackShortcuts ignored 'b', so it bubbled to the outer"
     );
+    assert_eq!(invoked_inner.get(), 1);
+
+    // Neither key-up matches any binding — `SingleActivator::matches` requires
+    // a down (or allowed-repeat) event — so both stay unconsumed and the
+    // counters hold.
+    assert!(!manager.dispatch_key_event(&key_up("a", Modifiers::empty())));
+    assert!(!manager.dispatch_key_event(&key_up("b", Modifiers::empty())));
+    assert_eq!(invoked_outer.get(), 1);
     assert_eq!(invoked_inner.get(), 1);
 
     manager.unfocus();
@@ -595,11 +627,16 @@ fn a_disabled_action_stops_propagation_to_an_ancestor_scope() {
 /// port's mutation discipline — together they pin both branches of
 /// `resolve`'s "declared but disabled" vs. "not declared here" distinction.
 ///
-/// Red-check: makes the merge in `Actions::build` skip inheriting the
-/// enclosing chain whenever `own` is non-empty (instead of only overwriting
-/// the types `own` actually declares) — `ran` flips to `false`, since the
-/// inner scope's now-empty-looking chain would shadow the outer's mapping
-/// for `TestIntent` even though `own` never declared it.
+/// Red-check (run against `Actions::build` with the ambient-inheritance seed
+/// dropped entirely — `let mut chain = HashMap::default();` instead of
+/// cloning `ambient_action_chain(ctx)` first): `ran` flips to `false`. The
+/// inner scope declares no mapping of its own, so with no ambient seed its
+/// chain is empty and `TestIntent` never resolves to the outer's mapping.
+/// (A "skip inheriting only when `own` is non-empty" mutant does *not* fail
+/// this test — this fixture's inner scope has an empty `own`, so that guard
+/// never triggers here; see
+/// [`a_scope_that_binds_one_intent_still_inherits_the_ancestor_for_another`]
+/// for the fixture that actually kills *that* mutant.)
 #[test]
 fn an_intent_undeclared_at_the_nearer_scope_resolves_from_the_ancestor() {
     #[derive(Clone)]
@@ -620,5 +657,53 @@ fn an_intent_undeclared_at_the_nearer_scope_resolves_from_the_ancestor() {
     assert!(
         ran.get(),
         "the nearer scope declared nothing for this type, so resolution continued to the ancestor"
+    );
+}
+
+/// A scope that binds one intent type still inherits the ambient chain's
+/// entries for **other** types — Flutter's `_visitActionsAncestors` walk
+/// continues past a scope whose map lacks the sought intent's type,
+/// regardless of what else that scope's map declares (`_castAction` looks up
+/// only the specific type sought — `actions.dart:920-931`).
+///
+/// Paired with [`a_disabled_action_stops_propagation_to_an_ancestor_scope`]
+/// and [`an_intent_undeclared_at_the_nearer_scope_resolves_from_the_ancestor`]
+/// per this port's mutation discipline: this is the fixture that actually
+/// kills a "skip inheriting the ambient chain whenever `own` is non-empty"
+/// mutant — the other two do not, because their inner scope's `own` is
+/// empty, so that mutant's guard never triggers for them.
+///
+/// Red-check (run against `Actions::build` with the ambient-inheritance seed
+/// guarded on `self.own.is_empty()` — inherit only when this scope declares
+/// nothing, otherwise start from an empty chain): `ran` flips to `false`.
+/// The inner scope's `own` binds `IntentA`, so the mutant drops the ambient
+/// chain entirely instead of merely overwriting `IntentA`'s entry, losing
+/// the outer's `IntentB` mapping the probe needs.
+#[test]
+fn a_scope_that_binds_one_intent_still_inherits_the_ancestor_for_another() {
+    #[derive(Clone)]
+    struct IntentA;
+    impl Intent for IntentA {}
+    #[derive(Clone)]
+    struct IntentB;
+    impl Intent for IntentB {}
+
+    let ran = Rc::new(Cell::new(false));
+
+    let _laid = lay_out(
+        Actions::new(
+            Actions::new(InvokeProbe {
+                intent: IntentB,
+                ran: Rc::clone(&ran),
+            })
+            .action(CallbackAction::new(|_intent: &IntentA| {})),
+        )
+        .action(CallbackAction::new(|_intent: &IntentB| {})),
+        loose(50.0),
+    );
+
+    assert!(
+        ran.get(),
+        "the inner scope's own mapping for IntentA must not shadow the outer's mapping for IntentB"
     );
 }
