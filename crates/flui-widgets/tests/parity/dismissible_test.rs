@@ -7,13 +7,42 @@
 //!
 //! - **`confirmDismiss`** (`'confirmDismiss returns values: true, false,
 //!   null'`, `'Pending confirmDismiss does not cause errors'`, `'Dismissible
-//!   cannot be dragged with pending confirmDismiss'`) — `Dismissible` does not
-//!   implement `confirmDismiss` at all (see
+//!   cannot be dragged with pending confirmDismiss'`, `'Drag to end and
+//!   release - items does not get stuck if confirmDismiss returns false'`) —
+//!   `Dismissible` does not implement `confirmDismiss` at all (see
 //!   `crates/flui-widgets/src/interaction/dismissible.rs`'s module-doc
 //!   divergence #1): FLUI has no established widget-level "await a caller
 //!   future, then resume a state transition" seam yet, and inventing one
 //!   one-off for this port would misrepresent the oracle's real (vetoable,
 //!   async) contract with a synchronous stand-in. Tracked as a follow-up.
+//! - **`'drag-left with DismissDirection.startToEnd triggers dismiss
+//!   (RTL)'`** and **`'drag-down with DismissDirection.down triggers
+//!   dismiss'`** — the RTL/vertical siblings of the two cases this file DOES
+//!   port to completion (`drag_past_threshold_dismisses_for_start_to_end_too`
+//!   is the LTR `StartToEnd` case; `drag_past_threshold_dismisses_for_up_too`
+//!   is the `Up` case). Both omitted siblings are a symmetric flip of an
+//!   already-proven fact: `direction_end_to_start_rtl_flips_which_physical_drag_dismisses`
+//!   already proves `Directionality` flips the `EndToStart`/`StartToEnd`
+//!   mapping, and `accumulate_drag_extent_down_direction_only_admits_positive_extent`
+//!   (a `dismissible.rs` unit test) already proves `Down`'s gating is the
+//!   exact mirror of `Up`'s — a 4th/6th combinatorial case here would not add
+//!   independent coverage over combining those two already-proven facts.
+//! - **`'Verify that drag-move events do not assert'`** — a
+//!   crash-prevention regression against Flutter's own mutable
+//!   `_DismissibleState` invariants. This port's equivalent invariant
+//!   (`handle_drag_update`/`handle_drag_end`'s `drag_underway` gate) is
+//!   exercised by every drag test in this file already, and Rust's ownership
+//!   model rules out the memory-unsafety class of failure the oracle's
+//!   underlying concern (asserting on out-of-order pointer events) guards
+//!   against — there is no separate translated case to write.
+//! - **`'DismissDirection.none does not prevent scrolling'`** — follows
+//!   directly from `direction_none_ignores_drag_entirely` (`direction: None`
+//!   mounts no recognizer at all — see `build`'s early return — so there is
+//!   nothing to compete with an ancestor `Scrollable`'s own recognizer in the
+//!   gesture arena). An end-to-end proof would need a `Scrollable` ancestor
+//!   in the test tree, redundant with both the already-proven "no recognizer"
+//!   fact and `Scrollable`'s own, separately-tested arena-competition
+//!   behavior (`scrollable_test.rs`).
 //! - **Fling-velocity cases** (`'Horizontal fling triggers dismiss...'` and
 //!   every other `'fling-*'` case, `'... fling item before/after
 //!   movementDuration'`, `'Horizontal/Vertical fling less than threshold'`) —
@@ -54,9 +83,11 @@
 //!   `vertical_extent` below) — the dismiss axis itself keeps the round
 //!   200px / 80px this file's percentages are written against.
 //! - **Semantics** (`'Dismissible.behavior should behave correctly during
-//!   hit testing'`'s semantics half, the semantics-tree assertions embedded in
-//!   several other cases) — paint/semantics are Phase 3 (deferred) per this
-//!   crate's `parity/main.rs` module doc.
+//!   hit testing'`'s semantics HALF only — the hit-testing half IS ported, as
+//!   `a_tappable_child_still_taps_and_a_real_drag_still_wins_the_arena` —
+//!   plus the semantics-tree assertions embedded in several other cases) —
+//!   paint/semantics are Phase 3 (deferred) per this crate's `parity/main.rs`
+//!   module doc.
 //! - **`AutomaticKeepAlive` interaction** (`'dismissing bottom then top
 //!   (smoketest)'`'s `ListView`-recycling half, `'setState that does not
 //!   remove the Dismissible from tree should throw Error'`) — no keep-alive
@@ -107,16 +138,22 @@
 //!
 //! The portable core the oracle's threshold/direction/callback/collapse state
 //! machine reduces to once fling is out of reach: drag-past-threshold
-//! dismissal and below-threshold spring-back (the non-fling halves of
-//! `'Horizontal drag triggers dismiss...'` and siblings), direction gating
-//! (`Up`/`EndToStart`/`None`, LTR and RTL), the `dismissThresholds` `>= 1.0`
-//! lock (`'drag-left has no effect on dismissible with a high dismiss
-//! threshold'`), `onUpdate` progression across the threshold crossing, the
-//! `background`/`secondaryBackground` presence signal, the resize collapse's
-//! start geometry + `onResize`/`onDismissed` ordering, `resizeDuration: None`'s
-//! immediate `onDismissed`, and controller-lifecycle cleanup via `Vsync::len()`
-//! on plain (non-mid-animation) unmount — see the "framework gap" section
-//! above for why the mid-resize-collapse unmount case is not included.
+//! dismissal and below-threshold spring-back for `EndToStart`, `StartToEnd`,
+//! and `Up` (the non-fling halves of `'Horizontal/Vertical drag triggers
+//! dismiss...'` and siblings), direction gating (`Up`/`EndToStart`/`None`,
+//! LTR and RTL), the `dismissThresholds` `>= 1.0` lock (`'drag-left has no
+//! effect on dismissible with a high dismiss threshold'`), `onUpdate`
+//! progression across the threshold crossing, the `background`/
+//! `secondaryBackground` presence signal, the resize collapse's start
+//! geometry + `onResize`/`onDismissed` ordering, `resizeDuration: None`'s
+//! immediate `onDismissed`, the hit-testing half of `'Dismissible.behavior
+//! should behave correctly during hit testing'` (a tappable child nested
+//! inside `Dismissible`'s own drag-family `GestureDetector` — the named
+//! defect class of a wrapping recognizer swallowing or being swallowed by a
+//! child's), and controller-lifecycle cleanup via `Vsync::len()` on plain
+//! (non-mid-animation) unmount AND on a mid-DRAG unmount — see the "framework
+//! gap" section above for why the mid-RESIZE-COLLAPSE unmount case is not
+//! included.
 //!
 //! ### Harness note: the touch-slop-crossing move carries no update delta
 //!
@@ -138,7 +175,9 @@ use flui_animation::Vsync;
 use flui_rendering::constraints::BoxConstraints;
 use flui_types::Color;
 use flui_types::typography::TextDirection;
-use flui_widgets::{ColoredBox, Directionality, DismissDirection, Dismissible, VsyncScope};
+use flui_widgets::{
+    ColoredBox, Directionality, DismissDirection, Dismissible, GestureDetector, VsyncScope,
+};
 
 use crate::common::{LaidOutScoped, lay_out_animated, lay_out_with_arena, tight};
 
@@ -364,6 +403,85 @@ fn drag_past_threshold_dismisses_and_resize_collapse_fires_on_dismissed() {
     );
 }
 
+/// Flutter parity: `'drag-right with DismissDirection.startToEnd triggers
+/// dismiss (LTR)'` (`dismissible_test.dart:369`), non-fling half — the
+/// `StartToEnd` sibling of the `EndToStart` case above. Every other
+/// dismissal test in this file drags `EndToStart`; this proves the SAME
+/// completion pipeline (`.forward()`, resize collapse, `on_dismissed`) also
+/// runs for the opposite direction member, not just that
+/// `accumulate_drag_extent`'s per-direction gating is correct in isolation
+/// (already unit-tested at the function level in `dismissible.rs`).
+#[test]
+fn drag_past_threshold_dismisses_for_start_to_end_too() {
+    let dismissed = Arc::new(AtomicUsize::new(0));
+    let dismissed_direction: Arc<Mutex<Option<DismissDirection>>> = Arc::new(Mutex::new(None));
+    let on_dismissed_count = Arc::clone(&dismissed);
+    let on_dismissed_direction = Arc::clone(&dismissed_direction);
+
+    let widget = Dismissible::new(child())
+        .direction(DismissDirection::StartToEnd)
+        .on_dismissed(move |direction| {
+            on_dismissed_count.fetch_add(1, Ordering::SeqCst);
+            *on_dismissed_direction.lock().expect("test-only mutex") = Some(direction);
+        });
+
+    let vsync = Vsync::new();
+    let mut scoped = lay_out_animated_with_arena(widget, vsync, horizontal_extent());
+    drag_and_release_horizontal(&mut scoped, 250.0, 40.0, 120.0); // rightward, 60% of 200px
+
+    settle_for(&mut scoped, 400);
+    settle_for(&mut scoped, 400);
+
+    assert_eq!(
+        dismissed.load(Ordering::SeqCst),
+        1,
+        "a 120px (60%) rightward drag past the 40% default threshold must dismiss exactly once"
+    );
+    assert_eq!(
+        *dismissed_direction.lock().expect("test-only mutex"),
+        Some(DismissDirection::StartToEnd)
+    );
+}
+
+/// Flutter parity: `'drag-up with DismissDirection.up triggers dismiss'`
+/// (`dismissible_test.dart:490`), non-fling half, completion case — the
+/// vertical-family sibling of the horizontal dismissal tests above.
+/// `direction_up_rejects_downward_extent_but_admits_upward` already proves
+/// `Up`'s gating and progress reporting; this proves the vertical-family
+/// path (`on_pan_*` — see module docs divergence #3) also reaches actual
+/// dismissal, not just admitted progress.
+#[test]
+fn drag_past_threshold_dismisses_for_up_too() {
+    let dismissed = Arc::new(AtomicUsize::new(0));
+    let dismissed_direction: Arc<Mutex<Option<DismissDirection>>> = Arc::new(Mutex::new(None));
+    let on_dismissed_count = Arc::clone(&dismissed);
+    let on_dismissed_direction = Arc::clone(&dismissed_direction);
+
+    let widget = Dismissible::new(child())
+        .direction(DismissDirection::Up)
+        .on_dismissed(move |direction| {
+            on_dismissed_count.fetch_add(1, Ordering::SeqCst);
+            *on_dismissed_direction.lock().expect("test-only mutex") = Some(direction);
+        });
+
+    let vsync = Vsync::new();
+    let mut scoped = lay_out_animated_with_arena(widget, vsync, vertical_extent());
+    drag_and_release_vertical(&mut scoped, 250.0, 75.0, -48.0); // upward, 60% of the 80px extent
+
+    settle_for(&mut scoped, 400);
+    settle_for(&mut scoped, 400);
+
+    assert_eq!(
+        dismissed.load(Ordering::SeqCst),
+        1,
+        "a 48px (60%) upward drag past the 40% default threshold must dismiss exactly once"
+    );
+    assert_eq!(
+        *dismissed_direction.lock().expect("test-only mutex"),
+        Some(DismissDirection::Up)
+    );
+}
+
 /// Flutter parity: `'drag-left with DismissDirection.endToStart triggers
 /// dismiss (LTR)'`'s below-threshold sibling — no case in the oracle drags
 /// short and asserts spring-back directly, but every direction-gating case
@@ -529,6 +647,74 @@ fn direction_end_to_start_rtl_flips_which_physical_drag_dismisses() {
         (progress - 0.5).abs() < 0.02,
         "RTL EndToStart must admit a rightward drag; a 100px drag on a 200px \
          box is 50% progress, got {progress}"
+    );
+}
+
+// ============================================================================
+// Arena competition with a tappable child.
+// ============================================================================
+
+/// The hit-testing half of `'Dismissible.behavior should behave correctly
+/// during hit testing'` (`dismissible_test.dart:977`) — the named defect
+/// class: a widget's own gesture family must not break a nested tappable
+/// child's, and vice versa. Mirrors `gesture_detector_advanced.rs`'s
+/// `nested_tap_over_long_press` pattern (an outer detector's family
+/// competing with an inner `on_tap` in one arena), swapping the outer
+/// long-press family for `Dismissible`'s own drag family.
+#[test]
+fn a_tappable_child_still_taps_and_a_real_drag_still_wins_the_arena() {
+    let taps = Arc::new(AtomicUsize::new(0));
+    let taps_cb = Arc::clone(&taps);
+    let last_progress = Arc::new(Mutex::new(-1.0_f32));
+    let last_progress_cb = Arc::clone(&last_progress);
+
+    let tappable_child = GestureDetector::new()
+        .on_tap(move || {
+            taps_cb.fetch_add(1, Ordering::SeqCst);
+        })
+        .child(child());
+
+    let widget = Dismissible::new(tappable_child)
+        .direction(DismissDirection::EndToStart)
+        .on_update(move |details| {
+            *last_progress_cb.lock().expect("test-only mutex") = details.progress;
+        });
+
+    let mut scoped = lay_out_with_arena(widget, extent());
+
+    // A quick tap (down+up at the same position, never past touch slop) must
+    // still reach the nested GestureDetector's on_tap — Dismissible's own
+    // drag family (an axis-constrained recognizer that never even starts
+    // without crossing slop) does not swallow it.
+    scoped.dispatch_pointer_down(100.0, 40.0);
+    settle_one_frame(&mut scoped);
+    scoped.dispatch_pointer_up(100.0, 40.0);
+    settle_one_frame(&mut scoped);
+    assert_eq!(
+        taps.load(Ordering::SeqCst),
+        1,
+        "a quick tap on a Dismissible-wrapped tappable child must still fire on_tap"
+    );
+
+    // A real drag (past slop) must resolve to Dismissible's OWN drag family,
+    // not the child's tap.
+    scoped.dispatch_pointer_down(180.0, 40.0);
+    settle_one_frame(&mut scoped);
+    scoped.dispatch_pointer_move(160.0, 40.0); // 20px slop-crossing
+    settle_one_frame(&mut scoped);
+    scoped.dispatch_pointer_move(120.0, 40.0); // delta -40: 20% of 200px
+    settle_one_frame(&mut scoped);
+    scoped.dispatch_pointer_up(120.0, 40.0);
+    settle_one_frame(&mut scoped);
+    assert_eq!(
+        taps.load(Ordering::SeqCst),
+        1,
+        "a real drag must not ALSO fire the child's on_tap"
+    );
+    assert!(
+        *last_progress.lock().expect("test-only mutex") > 0.0,
+        "the drag must have reached Dismissible's own on_update — the arena resolved to the \
+         drag, not silently to neither recognizer"
     );
 }
 
@@ -867,6 +1053,48 @@ fn move_controller_registers_with_vsync_and_unregisters_on_unmount() {
         "unmounting Dismissible must dispose move_controller and unregister it from Vsync"
     );
     laid.pump_for(Duration::from_millis(16)); // must not panic: nothing left registered to tick
+}
+
+/// Mid-DRAG unmount smoke test — a widget torn out of the tree while a
+/// finger is still down must not panic. `move_controller` is unregistered
+/// from `Vsync` for the whole drag (`unregister_move_controller_vsync`), so
+/// `vsync.len()` is already `0` at the moment of the swap; `dispose`'s own
+/// attempt to unregister it is a documented no-op, not a double-unregister.
+/// Unlike the mid-resize-collapse case above, this drag never reaches
+/// `Dismissible`'s `LayoutBuilder` resize branch — `dispose` runs normally.
+#[test]
+fn unmounting_mid_drag_does_not_panic_or_double_unregister() {
+    let vsync = Vsync::new();
+    let widget = Dismissible::new(child()).direction(DismissDirection::EndToStart);
+    let mut scoped = lay_out_animated_with_arena(widget, vsync.clone(), extent());
+
+    // Drag halfway — never released.
+    scoped.dispatch_pointer_down(180.0, 40.0);
+    settle_one_frame(&mut scoped);
+    scoped.dispatch_pointer_move(160.0, 40.0); // 20px slop-crossing
+    settle_one_frame(&mut scoped);
+    scoped.dispatch_pointer_move(100.0, 40.0); // delta -60: mid-drag, never released
+    settle_one_frame(&mut scoped);
+
+    assert_eq!(
+        vsync.len(),
+        0,
+        "move_controller is unregistered from Vsync for the whole drag (see \
+         unregister_move_controller_vsync) — nothing should be registered mid-drag"
+    );
+
+    scoped.pump_widget(VsyncScope::new(
+        vsync.clone(),
+        ColoredBox::new(Color::rgb(1, 2, 3)),
+    ));
+    scoped.pump(Duration::from_millis(16)); // must not panic
+
+    assert_eq!(
+        vsync.len(),
+        0,
+        "unmounting mid-drag must not leave anything registered, nor attempt a double \
+         unregister of the already-unregistered move_controller"
+    );
 }
 
 // `both_controllers_are_disposed_when_unmounted_mid_resize_collapse` — the

@@ -71,6 +71,16 @@
 //!    index). FLUI's reconciliation is not index-keyed the same way; omitted
 //!    as orthogonal to the drag/threshold/callback behavior this port
 //!    targets.
+//! 7. **No `dragStartBehavior`.** The oracle's `dragStartBehavior` field
+//!    (`DragStartBehavior.start` by default, `.down` optionally) is passed
+//!    straight through to its `GestureDetector`, choosing whether the drag's
+//!    origin is where the gesture *won the arena* (`start`, smoother) or
+//!    where the initial *down* event landed (`down`, more reactive).
+//!    `flui-widgets`' [`GestureDetector`](crate::GestureDetector) has no
+//!    `DragStartBehavior` concept at all yet — every drag effectively behaves
+//!    as `start`. Not configurable here for the same reason divergence #3's
+//!    vertical-drag family and this list's #5 keep-alive gap aren't: the
+//!    primitive this widget would delegate to does not exist in FLUI yet.
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -635,7 +645,52 @@ impl ViewState<Dismissible> for DismissibleState {
             } else {
                 constraints.max_height.get()
             };
+            // Module docs divergence #4: this widget divides by
+            // `overall_extent` to turn a drag delta into a fraction, so it
+            // requires bounded constraints along the dismiss axis. An
+            // unbounded axis (`f32::INFINITY`) would silently produce a
+            // stuck-at-zero or NaN drag fraction instead of a loud failure —
+            // catch the caller error here instead.
+            debug_assert!(
+                overall_extent.is_finite(),
+                "BUG: Dismissible requires bounded constraints along its dismiss axis \
+                 (got an unbounded/non-finite extent) — see module docs divergence #4"
+            );
 
+            // Firing `on_update`/`on_resize`/`on_dismissed` (and scheduling
+            // further rebuilds via `RebuildHandle::schedule()`) from HERE runs
+            // them during LAYOUT, not from an animation-listener callback the
+            // way the oracle's `_handleDismissUpdateValueChanged`/
+            // `_handleResizeProgressChanged`/`_handleMoveCompleted` do
+            // (Dart's `AnimationController` listeners are not
+            // thread-constrained, so the oracle fires straight from them). This
+            // port cannot: the `Send + Sync`-bounded status/value listeners
+            // registered in `init_state` can only touch `Arc<Atomic*>` signals,
+            // never the `Rc`-based `on_update`/`on_resize`/`on_dismissed`
+            // callbacks (see `DragState`'s own doc) — so delivery is deferred
+            // to here, the next time this `LayoutBuilder` (re-)runs.
+            //
+            // Verified, not assumed, safe to do from a layout-phase closure:
+            // - `RebuildHandle::schedule()`'s own contract (`rebuild_handle.rs`)
+            //   states it "never touches the element tree, the render tree, or
+            //   the pipeline. It writes to a mutex-guarded set and calls one
+            //   `Fn()`" — callable from any thread, any phase, by design.
+            // - `BuildOwner::service_layout_builders` (`owner/layout_builder.rs`,
+            //   the fixpoint that actually invokes this closure) calls
+            //   `self.build_scope(tree)` with the pipeline write-lock
+            //   EXPLICITLY released first — "with NO pipeline lock held, so a
+            //   builder that mounts a child can insert its render objects".
+            //   That is: this closure runs as a genuine, ordinary build pass
+            //   (the same `build_scope` every other `StatefulView::build` runs
+            //   through), just one sequenced *between* layout passes rather
+            //   than at the top of the frame — not a restricted context with
+            //   different rules. Port-check trigger #22 (see
+            //   `scripts/check-frame-capability-scope.sh`) governs *acquiring*
+            //   `rebuild_handle()`/`post_frame_handle()` from `build`/`layout`/
+            //   `paint` (an unbounded-rebuild-loop hazard); it says nothing
+            //   about *calling* `.schedule()` on a handle already acquired in
+            //   `init_state` (this one), which is exactly what every listener
+            //   callback in this file already does.
             deliver_move_completion(
                 &drag,
                 &move_controller,
@@ -863,6 +918,50 @@ fn ensure_move_controller_registered(
     drag.move_vsync_registration.set(Some(registration));
 }
 
+/// Marks whatever `move_completed_runs` currently holds as already
+/// "delivered", discarding any `Completed` transition a direct `set_value`
+/// call (in `handle_drag_start`/`handle_drag_update`) might just have caused
+/// — without running the actual completion behavior for it.
+///
+/// **The bug this fixes:** `move_controller.set_value(...)` clamps to
+/// `[0.0, 1.0]`, and a drag whose extent reaches (or overshoots) 100% of
+/// `overall_extent` therefore lands the controller at the upper bound —
+/// which `AnimationController` reports as `Completed`, *mid-drag*, well
+/// before `handle_drag_end` ever runs. The oracle's own status listener
+/// (`_handleDismissStatusChanged`) discards exactly this case:
+/// `status.isCompleted && !_dragUnderway` — a `Completed` event that fires
+/// while still dragging is dropped outright, never queued for later.
+///
+/// This port cannot replicate that check *in the listener*: the listener
+/// registered in `init_state` must be `Send + Sync` (`flui_foundation::ListenerCallback`),
+/// so it can only touch the `Arc<AtomicU64>` `move_completed_runs` counter,
+/// never the `Cell<bool>` `drag_underway` flag (see `DragState`'s own doc on
+/// why). Earlier drafts of this port bumped the counter unconditionally and
+/// left `deliver_move_completion`'s build()-driven consumer to skip
+/// delivery *while* `drag_underway` was still true — but skipping is not
+/// discarding: the bump stayed on the counter, unconsumed. The very next
+/// time `deliver_move_completion` ran with `drag_underway` false again (e.g.
+/// after the user dragged back below threshold and released, which
+/// correctly springs back via `.reverse()`), it saw a "new" completion it
+/// had never delivered and ran the collapse + `on_dismissed` anyway — a
+/// false dismissal the oracle never produces.
+///
+/// The fix moves the discard to the only place that reliably knows
+/// `drag_underway` is true: right here, synchronously after every direct
+/// `set_value`, in the same call stack that might have just caused the
+/// bump. Marking it "delivered" immediately means `deliver_move_completion`
+/// can never later mistake it for a real, undelivered completion. The
+/// legitimate "released exactly at 100%" dismissal does not depend on this
+/// counter at all: `handle_drag_end` calls [`run_move_completion`] directly
+/// and unconditionally when `move_controller.is_completed()` holds at the
+/// exact moment of release — mirroring the oracle's own direct
+/// `_handleDragEnd` bypass, which likewise never consults the status
+/// listener for that case.
+fn discard_transient_move_completion(drag: &DragState) {
+    let completed_runs = drag.move_completed_runs.load(Ordering::SeqCst);
+    drag.delivered_move_completions.set(completed_runs);
+}
+
 /// Flutter parity: `_handleDragStart` (`dismissible.dart:366`), minus the
 /// `_confirming` guard (no `confirmDismiss` — see module docs divergence #1).
 fn handle_drag_start(
@@ -885,6 +984,11 @@ fn handle_drag_start(
     // doc for why a vsync-ticked controller cannot also be a direct-`set_value`-tracked
     // one at the same time.
     unregister_move_controller_vsync(drag, vsync);
+    // A `set_value(0.0)` above cannot itself clamp to the upper bound, but a
+    // resumed-mid-animation `set_value` (the `is_animating()` branch) could in
+    // principle land exactly at a bound too — discard defensively; see
+    // `discard_transient_move_completion`'s doc.
+    discard_transient_move_completion(drag);
 }
 
 /// Flutter parity: `_handleDragUpdate` (`dismissible.dart:383`) — `delta` is
@@ -909,6 +1013,14 @@ fn handle_drag_update(
         // (see `handle_drag_start`), so this direct write is not immediately
         // clobbered by a tick — no re-registration needed here.
         move_controller.set_value(new_extent.abs() / overall_extent);
+        // A drag that reaches (or overshoots) 100% of `overall_extent` clamps
+        // `set_value` to the upper bound, which reports `Completed` — mid-drag,
+        // exactly like the oracle's own `AnimationController.value` setter can.
+        // The oracle's status listener discards that case explicitly
+        // (`status.isCompleted && !_dragUnderway`, dismissible.dart); see
+        // `discard_transient_move_completion`'s doc for why this port discards
+        // it here instead of in the listener.
+        discard_transient_move_completion(drag);
     }
 }
 
@@ -929,7 +1041,14 @@ fn handle_drag_end(
     }
     drag.drag_underway.set(false);
     if move_controller.is_completed() {
-        deliver_move_completion(drag, move_controller, resolved, vsync, rebuild, constraints);
+        // The direct bypass — mirrors the oracle's own `if (_moveController.isCompleted)
+        // { _handleMoveCompleted(); return; }` in `_handleDragEnd`. Calls
+        // `run_move_completion` unconditionally, NOT the counter-gated
+        // `deliver_move_completion`: a drag released exactly at 100% never
+        // bumped `move_completed_runs` in the first place (see
+        // `discard_transient_move_completion`), so gating on that counter here
+        // would wrongly skip this legitimate completion.
+        run_move_completion(drag, move_controller, resolved, vsync, rebuild, constraints);
         return;
     }
     let dismiss_direction = extent_to_direction(
@@ -973,16 +1092,26 @@ fn handle_drag_end(
     }
 }
 
-/// Flutter parity: `_handleDismissStatusChanged` + `_handleMoveCompleted`
-/// (`dismissible.dart:539`-`561`), collapsed into one idempotent function
-/// callable from either the deferred (`build()`-driven) path or the
-/// immediate path `handle_drag_end` takes when the controller is already
-/// completed at release. Idempotent via the `move_completed_runs` /
-/// `delivered_move_completions` counter pair: a call that finds nothing new
-/// to deliver is a no-op, so it is safe to call from both sites without
-/// double-firing `on_dismissed` or double-reversing.
-#[allow(clippy::too_many_arguments)] // mirrors the oracle's own method arity — see `handle_drag_end`'s note
-fn deliver_move_completion(
+/// Flutter parity: `_handleMoveCompleted` (`dismissible.dart:548`-`561`) — the
+/// actual completion behavior, run unconditionally (no counter/latch gate of
+/// any kind). Two call sites reach this, matching the oracle's own two ways
+/// into `_handleMoveCompleted`:
+///
+/// - `handle_drag_end`'s direct bypass, when `move_controller.is_completed()`
+///   holds at the exact moment of release (oracle: `_handleDragEnd`'s own
+///   `if (_moveController.isCompleted) { _handleMoveCompleted(); return; }`).
+/// - [`deliver_move_completion`], the deferred, counter-gated path for a
+///   `.forward()`/`.fling()` run that settles to `Completed` sometime AFTER
+///   release (oracle: `_handleDismissStatusChanged`, driven by the status
+///   listener).
+///
+/// Calling this twice for the "same" logical completion cannot happen: the
+/// direct-bypass site is reached only once per release, and the deferred
+/// site only ever observes a completion the direct-bypass site did not
+/// already consume (see `discard_transient_move_completion`'s doc for why a
+/// mid-drag `Completed` never reaches the deferred path's counter at all).
+#[allow(clippy::too_many_arguments)] // mirrors the oracle's own `_handleMoveCompleted`, which reaches the same six pieces of state via `widget`/instance fields rather than parameters
+fn run_move_completion(
     drag: &Rc<DragState>,
     move_controller: &AnimationController,
     resolved: &Rc<ResolvedConfig>,
@@ -990,12 +1119,6 @@ fn deliver_move_completion(
     rebuild: &RebuildHandle,
     constraints: BoxConstraints,
 ) {
-    let completed_runs = drag.move_completed_runs.load(Ordering::SeqCst);
-    if completed_runs <= drag.delivered_move_completions.get() || drag.drag_underway.get() {
-        return;
-    }
-    drag.delivered_move_completions.set(completed_runs);
-
     let dismiss_direction = extent_to_direction(
         drag.drag_extent.get(),
         resolved.direction,
@@ -1021,6 +1144,34 @@ fn deliver_move_completion(
             start_resize_animation(drag, duration, vsync, rebuild, constraints.biggest());
         }
     }
+}
+
+/// Flutter parity: the deferred half of `_handleDismissStatusChanged`
+/// (`dismissible.dart:539`-`546`) — reacts to `move_controller` completing
+/// AFTER release (a `.forward()`/`.fling()` run settling), observed via the
+/// status listener registered in `init_state` and the `move_completed_runs` /
+/// `delivered_move_completions` counter pair. Idempotent: a call that finds
+/// nothing new to deliver is a no-op. Never reached for a mid-drag
+/// `Completed` event — those are discarded at the source (see
+/// `discard_transient_move_completion`) — nor does it need its own
+/// `drag_underway` check for that reason: by the time this runs,
+/// `move_completed_runs` only ever counts completions the drag was not
+/// underway for.
+#[allow(clippy::too_many_arguments)] // mirrors `run_move_completion`'s arity — see its own note
+fn deliver_move_completion(
+    drag: &Rc<DragState>,
+    move_controller: &AnimationController,
+    resolved: &Rc<ResolvedConfig>,
+    vsync: Option<&Vsync>,
+    rebuild: &RebuildHandle,
+    constraints: BoxConstraints,
+) {
+    let completed_runs = drag.move_completed_runs.load(Ordering::SeqCst);
+    if completed_runs <= drag.delivered_move_completions.get() {
+        return;
+    }
+    drag.delivered_move_completions.set(completed_runs);
+    run_move_completion(drag, move_controller, resolved, vsync, rebuild, constraints);
 }
 
 /// Flutter parity: `_startResizeAnimation` (`dismissible.dart:576`), the
@@ -1454,5 +1605,187 @@ mod tests {
         assert_eq!(drag_sign(-0.0), 0.0);
         assert_eq!(drag_sign(5.0), 1.0);
         assert_eq!(drag_sign(-5.0), -1.0);
+    }
+
+    // ------------------------------------------------------------------
+    // Mid-drag `Completed` latch — the stale-completion bug caught in
+    // review: a drag reaching 100% of `overall_extent` clamps
+    // `move_controller` to its upper bound, which reports `Completed` even
+    // though the oracle discards that (`status.isCompleted && !_dragUnderway`)
+    // as not a real move-completion. This exercises the actual
+    // `handle_drag_start`/`handle_drag_update`/`handle_drag_end` state
+    // machine — not achievable through the `tests/parity/dismissible_test.rs`
+    // integration harness, whose touch-slop-then-delta drag helper cannot
+    // reach literal 100% within a laid-out box (see that file's own module
+    // doc). `RebuildHandle` has no public standalone constructor (by design:
+    // only a real mount ever mints one — see `flui_view::owner::rebuild_handle`),
+    // so this mounts the smallest possible real element tree to capture one.
+    // ------------------------------------------------------------------
+
+    /// A trivial `StatefulView` whose only job is to capture the
+    /// `RebuildHandle` `init_state` acquires. Mirrors
+    /// `flui_view::owner::rebuild_handle`'s own `Capturing` test fixture.
+    #[derive(Clone, StatefulView)]
+    struct RebuildHandleCapture {
+        captured: Rc<RefCell<Option<RebuildHandle>>>,
+    }
+
+    struct RebuildHandleCaptureState {
+        captured: Rc<RefCell<Option<RebuildHandle>>>,
+    }
+
+    impl StatefulView for RebuildHandleCapture {
+        type State = RebuildHandleCaptureState;
+
+        fn create_state(&self) -> Self::State {
+            RebuildHandleCaptureState {
+                captured: Rc::clone(&self.captured),
+            }
+        }
+    }
+
+    impl ViewState<RebuildHandleCapture> for RebuildHandleCaptureState {
+        fn init_state(&mut self, ctx: &dyn BuildContext) {
+            *self.captured.borrow_mut() = Some(ctx.rebuild_handle());
+        }
+
+        fn build(&self, _view: &RebuildHandleCapture, _ctx: &dyn BuildContext) -> impl IntoView {
+            crate::SizedBox::shrink()
+        }
+    }
+
+    /// Mounts [`RebuildHandleCapture`] as a bare root (no pipeline owner —
+    /// this probe never lays out or paints, only runs `init_state`/`build`)
+    /// and returns the handle its `init_state` captured.
+    fn mount_and_capture_rebuild_handle() -> RebuildHandle {
+        use flui_view::{BuildOwner, ElementTree};
+
+        let captured = Rc::new(RefCell::new(None));
+        let view = RebuildHandleCapture {
+            captured: Rc::clone(&captured),
+        };
+        let mut owner = BuildOwner::new();
+        let mut tree = ElementTree::new();
+        let root = tree.mount_root(&view, &mut owner.element_owner_mut());
+        owner.schedule_build_for(root, 0);
+        owner.build_scope(&mut tree);
+
+        captured
+            .borrow()
+            .clone()
+            .expect("init_state must have captured a handle")
+    }
+
+    #[test]
+    fn move_controller_reaching_the_clamp_mid_drag_does_not_leave_a_stale_completion_latch() {
+        let rebuild = mount_and_capture_rebuild_handle();
+
+        let move_controller =
+            AnimationController::new(Duration::from_millis(200), Arc::new(Scheduler::new()));
+        let drag = Rc::new(DragState::default());
+        let move_completed_runs = Arc::clone(&drag.move_completed_runs);
+        let _status_listener_id = move_controller.add_status_listener(Arc::new(move |status| {
+            if status == AnimationStatus::Completed {
+                move_completed_runs.fetch_add(1, Ordering::SeqCst);
+            }
+        }));
+
+        let dismissed = Arc::new(AtomicU64::new(0));
+        let on_dismissed_probe: DismissDirectionCallback = {
+            let dismissed = Arc::clone(&dismissed);
+            Rc::new(move |_direction| {
+                dismissed.fetch_add(1, Ordering::SeqCst);
+            })
+        };
+        // `resize_duration: None` so a wrongful `run_move_completion` call
+        // fires `on_dismissed` SYNCHRONOUSLY (the `None` branch), making the
+        // probe below observe the bug directly — with `Some(duration)` the
+        // symptom would instead be "wrongly starts the resize collapse",
+        // requiring the collapse's own controller to actually tick (real time,
+        // never advanced in this synchronous unit test) before `on_dismissed`
+        // would fire.
+        let resolved = Rc::new(ResolvedConfig {
+            direction: DismissDirection::EndToStart,
+            text_direction: TextDirection::Ltr,
+            dismiss_thresholds: HashMap::new(),
+            resize_duration: None,
+            cross_axis_end_offset: 0.0,
+            on_dismissed: Some(on_dismissed_probe),
+            on_resize: None,
+        });
+        let overall_extent = 100.0_f32;
+        let constraints = BoxConstraints::tight(Size::new(
+            flui_types::geometry::px(overall_extent),
+            flui_types::geometry::px(50.0),
+        ));
+
+        // Drag straight past the clamp: a single update's delta already
+        // exceeds 100% of `overall_extent`, exactly like a real drag that
+        // runs off the end of the axis. `drag_underway` is still true —
+        // matching the oracle's mid-drag `Completed` event that
+        // `!_dragUnderway` discards.
+        handle_drag_start(&drag, &move_controller, None, overall_extent);
+        handle_drag_update(
+            &drag,
+            &move_controller,
+            DismissDirection::EndToStart,
+            TextDirection::Ltr,
+            overall_extent,
+            -150.0,
+        );
+        assert!(
+            move_controller.is_completed(),
+            "the clamp must actually reach Completed for this probe to mean anything"
+        );
+        assert_eq!(
+            drag.move_completed_runs.load(Ordering::SeqCst),
+            drag.delivered_move_completions.get(),
+            "a mid-drag Completed event must be discarded immediately (delivered synced to \
+             the counter), not left as a stale, unconsumed latch"
+        );
+
+        // Spring back below threshold — still mid-drag.
+        handle_drag_update(
+            &drag,
+            &move_controller,
+            DismissDirection::EndToStart,
+            TextDirection::Ltr,
+            overall_extent,
+            130.0, // -150 + 130 = -20: 20% of the 100-unit extent
+        );
+
+        // Release below the 40% default threshold: `.reverse()`, no dismissal.
+        handle_drag_end(
+            &drag,
+            &move_controller,
+            &resolved,
+            None,
+            &rebuild,
+            constraints,
+            0.0,
+            0.0,
+        );
+
+        // Simulate the build pass `deliver_move_completion` runs from on
+        // every rebuild (`Dismissible::build`'s `LayoutBuilder` closure) —
+        // the site a stale, unconsumed latch would actually be replayed
+        // from in production. Calling it directly here is what makes this
+        // probe exercise the full bug chain end to end, not just the
+        // latch-invariant assertion above in isolation.
+        deliver_move_completion(
+            &drag,
+            &move_controller,
+            &resolved,
+            None,
+            &rebuild,
+            constraints,
+        );
+
+        assert_eq!(
+            dismissed.load(Ordering::SeqCst),
+            0,
+            "a spring-back release must not fire on_dismissed — the mid-drag clamp's stale \
+             Completed event must not be replayed once drag_underway goes false again"
+        );
     }
 }
