@@ -174,14 +174,12 @@ impl EditableText {
     /// withdraw-on-unavailable mechanism `dispose` already uses for an
     /// unmounted field — and marks the node
     /// [`FocusNode::set_can_request_focus`]`(false)`, which keyboard-traversal
-    /// (`focus_next`/`focus_previous`) already honors. **Unlike** Flutter's
-    /// `FocusNode.canRequestFocus` setter, FLUI's `set_can_request_focus` is a
-    /// bare atomic store with no side effects — so if the field is focused
-    /// when it becomes disabled, `did_update_view` explicitly calls
-    /// `FocusManager::unfocus` (a step the oracle's setter performs
-    /// implicitly as part of assigning `canRequestFocus`). Its key handler
-    /// also stops mutating the controller while disabled, so even a stray
-    /// dispatch reaching an already-focused-then-disabled node is a no-op.
+    /// (`focus_next`/`focus_previous`) already honors and which — matching
+    /// Flutter's `FocusNode.canRequestFocus` setter — releases primary focus
+    /// itself if the field is focused when it becomes disabled; no separate
+    /// `did_update_view` unfocus step is needed. Its key handler also stops
+    /// mutating the controller while disabled, so even a stray dispatch
+    /// reaching an already-focused-then-disabled node is a no-op.
     ///
     /// Tap suppression is a decoration-level concern (an enclosing
     /// `TextField`'s `GestureDetector`), not this primitive's — out of scope
@@ -455,27 +453,26 @@ impl ViewState<EditableText> for EditableTextState {
     }
 
     fn did_update_view(&mut self, _old_view: &EditableText, new_view: &EditableText) {
+        // A field disabled while focused must not keep the caret and keyboard
+        // input — mirrors Flutter's `TextField`/`EditableText` unfocusing when
+        // `enabled` flips false mid-focus. `FocusNode::set_can_request_focus`
+        // itself releases primary focus on a true-to-false change (Flutter's
+        // `FocusNode.canRequestFocus` setter semantics), so this call alone
+        // covers the unfocus — no separate `has_primary_focus` check needed.
+        //
+        // Load-bearing order: this runs BEFORE `set_focus_node_id(None)`
+        // below. `FocusManager::unfocus` notifies every registered listener
+        // with the (previous, current) pair; an enclosing decorated field
+        // (`flui_material::TextField`) compares that pair against
+        // `controller.focus_node_id()` to detect ITS OWN focus-loss
+        // transition. Clearing the id first would make that comparison
+        // vacuous by the time the notification fires (the id is already
+        // gone), silently masking the transition from any such listener.
         self.focus_node.set_can_request_focus(new_view.enabled);
         if new_view.enabled {
             self.controller
                 .set_focus_node_id(Some(self.focus_node.id()));
         } else {
-            // A field disabled while focused must not keep the caret and
-            // keyboard input — mirrors Flutter's `TextField`/`EditableText`
-            // unfocusing when `enabled` flips false mid-focus.
-            //
-            // Unfocus BEFORE withdrawing the published node id — load-
-            // bearing order, not incidental. `FocusManager::unfocus` notifies
-            // every registered listener with the (previous, current) pair;
-            // an enclosing decorated field (`flui_material::TextField`)
-            // compares that pair against `controller.focus_node_id()` to
-            // detect ITS OWN focus-loss transition. Clearing the id first
-            // would make that comparison vacuous by the time the
-            // notification fires (the id is already gone), silently masking
-            // the transition from any such listener.
-            if self.focus_node.has_primary_focus() {
-                FocusManager::global().unfocus();
-            }
             self.controller.set_focus_node_id(None);
         }
     }
@@ -946,15 +943,13 @@ mod tests {
     }
 
     /// Disabling a focused field unfocuses it and withdraws its published
-    /// node. Load-bearing: FLUI's `FocusNode::set_can_request_focus` is a
-    /// bare atomic store with no side effects — unlike Flutter's
-    /// `FocusNode.canRequestFocus` setter, which auto-unfocuses — so nothing
-    /// but `did_update_view`'s explicit `FocusManager::unfocus` call (see
-    /// [`EditableText::enabled`]'s doc comment) does this.
+    /// node — `did_update_view`'s `set_can_request_focus(false)` call (see
+    /// [`EditableText::enabled`]'s doc comment) releases primary focus itself,
+    /// matching Flutter's `FocusNode.canRequestFocus` setter.
     ///
-    /// Red-check: delete the `FocusManager::global().unfocus()` call in
-    /// `did_update_view`'s disabled branch — the node stays primary-focused
-    /// and the first assertion fails.
+    /// Red-check: pass `true` instead of `new_view.enabled` to
+    /// `set_can_request_focus` in `did_update_view` — the node stays
+    /// primary-focused and the first assertion fails.
     #[test]
     fn disabling_a_focused_field_unfocuses_it_and_withdraws_the_node() {
         let _guard = crate::test_harness::FOCUS_TEST_LOCK.lock();

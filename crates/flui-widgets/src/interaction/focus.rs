@@ -100,17 +100,6 @@ pub(crate) fn enclosing_focus_parent(ctx: &dyn BuildContext) -> Arc<FocusNode> {
         .unwrap_or_else(|| Arc::clone(FocusManager::global().root_scope().as_focus_node()))
 }
 
-/// The nearest enclosing **scope** — `FocusScope.of`'s fallback contract
-/// (`focus_scope.dart:843-850`): the nearest provider node when it is itself a
-/// scope, else that node's enclosing scope, else the root scope.
-pub(crate) fn enclosing_scope(ctx: &dyn BuildContext) -> Arc<FocusScopeNode> {
-    let parent = enclosing_focus_parent(ctx);
-    parent
-        .as_scope()
-        .or_else(|| parent.enclosing_scope())
-        .unwrap_or_else(|| Arc::clone(FocusManager::global().root_scope()))
-}
-
 // ============================================================================
 // Focus
 // ============================================================================
@@ -285,6 +274,7 @@ impl StatefulView for Focus {
             anchor: SubtreeAnchor::new(),
             focus_listener_id: None,
             autofocus: self.autofocus,
+            did_autofocus: false,
             on_focus_change: Rc::new(RefCell::new(self.on_focus_change.clone())),
             pending_focus_changes: Arc::new(Mutex::new(Vec::new())),
         }
@@ -306,6 +296,12 @@ pub struct FocusState {
     focus_listener_id: Option<ListenerId>,
     /// Captured at `create_state`: `init_state` has no view reference.
     autofocus: bool,
+    /// One-shot latch: whether this widget has already attempted its
+    /// autofocus request — Flutter's `_didAutofocus` (`focus_scope.dart`).
+    /// Set the moment the attempt is made, win or lose (an already-focused
+    /// sibling can still make the attempt lose), so a later rebuild that
+    /// merely re-asserts the same `autofocus` value does not re-request.
+    did_autofocus: bool,
     /// The current `on_focus_change` handler, behind a shared cell so the installed
     /// listener reads the *latest* one. `did_update_view` writes here rather than
     /// reinstalling the listener — a captured-by-value closure would keep firing the
@@ -342,6 +338,33 @@ impl FocusState {
             },
         )));
     }
+
+    /// `_handleAutofocus` (`:622-626`): a one-shot attempt, made the first
+    /// time `autofocus` is (or becomes) `true` and never repeated —
+    /// [`FocusState::did_autofocus`] latches regardless of whether the
+    /// attempt actually won the focus (an already-focused sibling can still
+    /// make it lose). Only when the enclosing scope has nothing focused yet
+    /// does the request land; either way the attempt is marked made.
+    /// Synchronous — FLUI has no end-of-frame focus batch (module docs).
+    ///
+    /// Derives the nearest scope from [`FocusState::parent`] (kept current by
+    /// `init_state`/`did_change_dependencies`) rather than an ambient
+    /// `BuildContext` lookup, so it can run from
+    /// [`ViewState::did_update_view`] too — that hook gets no `BuildContext`.
+    fn try_autofocus(&mut self) {
+        if self.did_autofocus || !self.autofocus {
+            return;
+        }
+        self.did_autofocus = true;
+        let scope = self
+            .parent
+            .as_ref()
+            .and_then(|parent| parent.as_scope().or_else(|| parent.enclosing_scope()))
+            .unwrap_or_else(|| Arc::clone(FocusManager::global().root_scope()));
+        if scope.focused_child().is_none() {
+            self.node.request_focus();
+        }
+    }
 }
 
 impl ViewState<Focus> for FocusState {
@@ -358,12 +381,7 @@ impl ViewState<Focus> for FocusState {
 
         self.install_focus_listener(ctx.rebuild_handle());
 
-        // `_handleAutofocus` (`:625-630`): only when the enclosing scope has
-        // nothing focused yet. Synchronous — FLUI has no end-of-frame focus
-        // batch (module docs).
-        if self.autofocus && enclosing_scope(ctx).focused_child().is_none() {
-            self.node.request_focus();
-        }
+        self.try_autofocus();
     }
 
     fn did_change_dependencies(&mut self, ctx: &dyn BuildContext) {
@@ -388,6 +406,12 @@ impl ViewState<Focus> for FocusState {
         // node is read once in `create_state`.
         new_view.configure(&self.node);
         self.autofocus = new_view.autofocus;
+        // `didUpdateWidget`'s `oldWidget.autofocus != widget.autofocus` guard
+        // (`:676-678`) is folded into `try_autofocus`'s own `did_autofocus`
+        // latch: a rebuild that flips `autofocus` from `false` to `true`
+        // makes the one still-unattempted autofocus request; one that merely
+        // repeats an already-`true` value is a no-op either way.
+        self.try_autofocus();
         // The listener installed at mount reads this cell, so a rebuild that
         // swaps the handler swaps what actually fires — capturing the handler
         // in the closure instead would pin the *first* one for the widget's
@@ -690,6 +714,12 @@ mod tests {
         }
     }
 
+    /// Flutter parity: `focus_scope_test.dart`'s `"Descendants of ExcludeFocus
+    /// aren't focusable."` (a request while excluding refuses) and
+    /// `"ExcludeFocus doesn't transfer focus to another descendant."` (turning
+    /// exclusion on evicts an already-focused descendant without picking a new
+    /// one), tag `3.44.0`. Also the idempotent-toggle and no-auto-refocus-on-
+    /// re-enable properties, which the oracle tests do not separately cover.
     #[test]
     fn exclude_focus_refuses_allows_evicts_idempotently_and_does_not_refocus() {
         let _guard = FOCUS_TEST_LOCK.lock();
@@ -736,6 +766,10 @@ mod tests {
     /// `focus_scope.dart:565-630`): the widget scope hangs under the root
     /// scope, the node hangs under the widget scope — **not** the root — and
     /// unmounting detaches both and releases the primary focus.
+    ///
+    /// Flutter parity: `focus_scope_test.dart`'s `'Removing a FocusScope
+    /// removes its node from the tree'` (the unmount-detaches-both half) and
+    /// `'Autofocus works'` (the autofocus-on-mount half), tag `3.44.0`.
     ///
     /// Red-check: make `enclosing_scope` always answer the root scope — the
     /// node parents to the root and the first assertion fails.
@@ -791,9 +825,72 @@ mod tests {
         );
     }
 
+    /// A rebuild that flips `autofocus` from `false` to `true` makes the
+    /// still-unattempted autofocus request — Flutter's `didUpdateWidget`
+    /// re-running `_handleAutofocus` on an `autofocus` change
+    /// (`focus_scope.dart`'s "Can autofocus a node.", tag 3.44.0), not just
+    /// `initState`/`didChangeDependencies`.
+    ///
+    /// Red-check (verified): drop the `try_autofocus()` call from
+    /// `did_update_view` — the node mounted with `autofocus: false` never
+    /// requests focus on the later rebuild, and the assertion fails.
+    #[test]
+    fn a_rebuild_that_turns_on_autofocus_requests_focus() {
+        let _guard = FOCUS_TEST_LOCK.lock();
+        let manager = FocusManager::global();
+        manager.unfocus();
+
+        let scope = FocusScopeNode::with_debug_label("rebuild-autofocus-scope");
+        let node = FocusNode::with_debug_label("rebuild-autofocus-node");
+        let mut harness = mount(Host {
+            show: true,
+            scope: Arc::clone(&scope),
+            node: Arc::clone(&node),
+            autofocus: false,
+            on_focus_change: None,
+        });
+        assert!(!node.has_primary_focus(), "sanity: not focused on mount");
+
+        harness.swap_root(Host {
+            show: true,
+            scope: Arc::clone(&scope),
+            node: Arc::clone(&node),
+            autofocus: true,
+            on_focus_change: None,
+        });
+
+        assert!(
+            node.has_primary_focus(),
+            "the rebuild's autofocus: true made its one-shot request"
+        );
+
+        // A second rebuild that merely repeats `autofocus: true` must not
+        // re-attempt: nothing else focused now, so an unfocus followed by a
+        // repeated-`true` rebuild staying unfocused proves the latch, not a
+        // silently-passing accident.
+        manager.unfocus();
+        harness.swap_root(Host {
+            show: true,
+            scope: Arc::clone(&scope),
+            node: Arc::clone(&node),
+            autofocus: true,
+            on_focus_change: None,
+        });
+        assert!(
+            !node.has_primary_focus(),
+            "the one-shot latch does not re-request on a value-repeating rebuild"
+        );
+
+        manager.unfocus();
+        manager.root_scope().detach_node(scope.as_focus_node().id());
+    }
+
     /// `autofocus` yields when the scope already focused something
     /// (`_handleAutofocus`, `focus_scope.dart:625-630`): with two autofocus
     /// siblings, the first to mount wins and the second is skipped.
+    ///
+    /// Flutter parity: `focus_scope_test.dart`'s `"Won't autofocus a node if
+    /// one is already focused."`, tag `3.44.0`.
     ///
     /// Red-check: drop the `focused_child().is_none()` gate in `init_state` —
     /// the second steals the focus and both assertions flip.

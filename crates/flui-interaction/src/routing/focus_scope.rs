@@ -198,6 +198,16 @@ pub struct FocusNode {
 
     /// Whether this node is attached to the focus tree.
     attached: AtomicBool,
+
+    /// A `request_focus()` call made while unattached, fulfilled the moment
+    /// [`Self::attach_child`] attaches this node — Flutter's requestFocus-
+    /// before-attach queuing (`FocusNode._requestFocus`/`_hasKeyboardToken`
+    /// resolve their pending grant on `FocusAttachment.reparent`).  Consumed
+    /// (cleared) on attach whether or not the retried request actually
+    /// succeeds, so a request dropped for another reason (e.g.
+    /// `can_request_focus` turned false in the meantime) does not linger and
+    /// fire on a later, unrelated attach.
+    pending_focus_request: AtomicBool,
 }
 
 impl FocusNode {
@@ -216,6 +226,7 @@ impl FocusNode {
             rect: RwLock::new(Rect::ZERO),
             rect_provider: RwLock::new(None),
             attached: AtomicBool::new(false),
+            pending_focus_request: AtomicBool::new(false),
         })
     }
 
@@ -234,6 +245,7 @@ impl FocusNode {
             rect: RwLock::new(Rect::ZERO),
             rect_provider: RwLock::new(None),
             attached: AtomicBool::new(false),
+            pending_focus_request: AtomicBool::new(false),
         })
     }
 
@@ -254,6 +266,7 @@ impl FocusNode {
             rect: RwLock::new(Rect::ZERO),
             rect_provider: RwLock::new(None),
             attached: AtomicBool::new(false),
+            pending_focus_request: AtomicBool::new(false),
         })
     }
 
@@ -279,8 +292,21 @@ impl FocusNode {
     }
 
     /// Sets whether this node can request focus.
+    ///
+    /// On a `true` to `false` change, primary focus **held by this node
+    /// itself** is released (Flutter: `FocusNode.canRequestFocus` setter,
+    /// `focus_scope_test.dart`'s "Focus is lost when set to not focusable.",
+    /// tag 3.44.0). Unlike [`Self::set_descendants_are_focusable`], this does
+    /// not evict a focused *descendant* — `can_request_focus` gates only
+    /// whether this node itself may hold focus.
     pub fn set_can_request_focus(&self, can: bool) {
-        self.can_request_focus.store(can, AtomicOrdering::Release);
+        let previous = self.can_request_focus.swap(can, AtomicOrdering::AcqRel);
+        if previous == can {
+            return;
+        }
+        if !can && self.has_primary_focus() {
+            crate::FocusManager::global().unfocus();
+        }
     }
 
     /// Returns whether to skip this node during traversal.
@@ -445,10 +471,19 @@ impl FocusNode {
 
     /// Requests primary focus for this node.
     ///
-    /// No-op when the node cannot request focus or is not attached to
-    /// the focus tree.
+    /// No-op when the node cannot request focus. A request made while the
+    /// node is not yet attached to the focus tree is deferred rather than
+    /// dropped: [`Self::attach_child`] retries it the moment this node joins
+    /// the tree — Flutter's requestFocus-before-attach queuing
+    /// (`FocusNode._requestFocus`/`_hasKeyboardToken`, fulfilled on
+    /// `FocusAttachment.reparent`).
     pub fn request_focus(self: &Arc<Self>) {
-        if !self.can_request_focus() || !self.is_attached() {
+        if !self.can_request_focus() {
+            return;
+        }
+        if !self.is_attached() {
+            self.pending_focus_request
+                .store(true, AtomicOrdering::Release);
             return;
         }
         crate::FocusManager::global().request_focus(self.id);
@@ -622,6 +657,17 @@ impl FocusNode {
 
         // Add to children
         self.children.write().push(child.clone());
+
+        // Fulfill a `request_focus()` call made before this node was
+        // attached. Consumed unconditionally: a request that no longer
+        // applies (`can_request_focus` turned false in the meantime) must not
+        // linger and fire on a later, unrelated attach.
+        if child
+            .pending_focus_request
+            .swap(false, AtomicOrdering::AcqRel)
+        {
+            child.request_focus();
+        }
     }
 
     fn detach_child(&self, child_id: FocusNodeId) {
@@ -688,6 +734,7 @@ impl Default for FocusNode {
             rect: RwLock::new(Rect::ZERO),
             rect_provider: RwLock::new(None),
             attached: AtomicBool::new(false),
+            pending_focus_request: AtomicBool::new(false),
         }
     }
 }
@@ -1373,6 +1420,80 @@ mod tests {
         assert!(node.parent().is_some());
         // After attach the child is marked attached.
         assert!(node.is_attached());
+    }
+
+    /// `request_focus()` called before a node is attached is deferred, not
+    /// dropped: `attach_child` retries it the moment the node joins the tree.
+    /// Flutter parity: `FocusManager.instance` queues a pre-attach
+    /// `requestFocus()` behind the node's `FocusAttachment` and grants it on
+    /// `reparent` (`focus_manager_test.dart`'s "Requesting focus before
+    /// adding to tree results in a request after adding", tag 3.44.0).
+    ///
+    /// Red-check (verified): reverting `request_focus`/`attach_child` to the
+    /// prior unconditional `!is_attached()` no-op leaves `child` never
+    /// focused — the final assertion fails.
+    #[test]
+    fn request_focus_before_attach_is_granted_on_attach() {
+        let _guard = GLOBAL_FOCUS_LOCK.lock();
+        let manager = crate::FocusManager::global();
+        manager.unfocus();
+
+        let scope = FocusScopeNode::with_debug_label("pending-request-scope");
+        manager.root_scope().attach_node(scope.as_focus_node());
+        let child = FocusNode::with_debug_label("pending-request-child");
+
+        // Requested while unattached: neither attached nor focused yet.
+        child.request_focus();
+        assert!(!child.is_attached());
+        assert!(!child.has_primary_focus());
+        assert_eq!(manager.primary_focus(), None);
+
+        scope.attach_node(&child);
+
+        assert!(
+            child.has_primary_focus(),
+            "the deferred request is granted the moment the node attaches"
+        );
+        assert_eq!(scope.focused_child(), Some(child.id()));
+
+        manager.unfocus();
+        manager.root_scope().detach_node(scope.as_focus_node().id());
+    }
+
+    /// A pending request is consumed on attach even when it can no longer
+    /// succeed: `can_request_focus(false)` set between the request and the
+    /// attach must not leave a stale grant that fires on some *later*,
+    /// unrelated attach.
+    #[test]
+    fn a_pending_request_dropped_by_can_request_focus_does_not_linger() {
+        let _guard = GLOBAL_FOCUS_LOCK.lock();
+        let manager = crate::FocusManager::global();
+        manager.unfocus();
+
+        let scope = FocusScopeNode::with_debug_label("stale-pending-scope");
+        manager.root_scope().attach_node(scope.as_focus_node());
+        let child = FocusNode::with_debug_label("stale-pending-child");
+        child.request_focus();
+        child.set_can_request_focus(false);
+
+        scope.attach_node(&child);
+        assert!(
+            !child.has_primary_focus(),
+            "can_request_focus(false) defeats the retried request"
+        );
+
+        // Detach, re-enable, and reattach: the earlier request must not have
+        // lingered to fire here.
+        scope.detach_node(child.id());
+        child.set_can_request_focus(true);
+        scope.attach_node(&child);
+        assert!(
+            !child.has_primary_focus(),
+            "a defeated pending request does not resurrect on a later attach"
+        );
+
+        manager.unfocus();
+        manager.root_scope().detach_node(scope.as_focus_node().id());
     }
 
     #[test]
