@@ -616,10 +616,20 @@ impl LaidOut {
         use flui_rendering::hit_testing::HitTestResult;
 
         let position = Offset::new(px(x), px(y));
-        let owner = self.pipeline_owner.read();
         let mut result = HitTestResult::new();
         self.binding.enter_owner_scope(|| {
-            owner.hit_test(position, &mut result);
+            // Scoped to the hit-test only: `dispatch` below can run
+            // gesture-callback code that itself acquires `pipeline_owner.read()`
+            // (e.g. a widget querying committed layout from inside its own
+            // pointer-signal/gesture handler). `parking_lot::RwLock` read locks
+            // are not safely reentrant on the same thread once a writer is
+            // queued — holding this guard across `dispatch` risks a
+            // same-thread self-deadlock that production avoids by dropping its
+            // own guard before dispatch.
+            {
+                let owner = self.pipeline_owner.read();
+                owner.hit_test(position, &mut result);
+            }
             result.dispatch(event);
         });
     }
@@ -635,14 +645,19 @@ impl LaidOut {
         use flui_rendering::hit_testing::HitTestResult;
 
         let position = Offset::new(px(x), px(y));
-        let owner = self.pipeline_owner.read();
         let mut result = HitTestResult::new();
         let event = flui_interaction::events::make_down_event(
             position,
             flui_interaction::events::PointerType::Mouse,
         );
         self.binding.enter_owner_scope(|| {
-            owner.hit_test(position, &mut result);
+            // See `route_event`'s comment: the read guard must not span
+            // `dispatch`, which can reenter `pipeline_owner.read()` from a
+            // gesture callback.
+            {
+                let owner = self.pipeline_owner.read();
+                owner.hit_test(position, &mut result);
+            }
             result.dispatch(&event);
         });
     }
@@ -653,14 +668,19 @@ impl LaidOut {
         use flui_rendering::hit_testing::HitTestResult;
 
         let position = Offset::new(px(x), px(y));
-        let owner = self.pipeline_owner.read();
         let mut result = HitTestResult::new();
         let event = flui_interaction::events::make_up_event(
             position,
             flui_interaction::events::PointerType::Mouse,
         );
         self.binding.enter_owner_scope(|| {
-            owner.hit_test(position, &mut result);
+            // See `route_event`'s comment: the read guard must not span
+            // `dispatch`, which can reenter `pipeline_owner.read()` from a
+            // gesture callback.
+            {
+                let owner = self.pipeline_owner.read();
+                owner.hit_test(position, &mut result);
+            }
             result.dispatch(&event);
         });
     }
@@ -670,14 +690,19 @@ impl LaidOut {
         use flui_rendering::hit_testing::HitTestResult;
 
         let position = Offset::new(px(x), px(y));
-        let owner = self.pipeline_owner.read();
         let mut result = HitTestResult::new();
         let event = flui_interaction::events::make_move_event(
             position,
             flui_interaction::events::PointerType::Mouse,
         );
         self.binding.enter_owner_scope(|| {
-            owner.hit_test(position, &mut result);
+            // See `route_event`'s comment: the read guard must not span
+            // `dispatch`, which can reenter `pipeline_owner.read()` from a
+            // gesture callback.
+            {
+                let owner = self.pipeline_owner.read();
+                owner.hit_test(position, &mut result);
+            }
             result.dispatch(&event);
         });
     }
@@ -688,13 +713,18 @@ impl LaidOut {
         use flui_rendering::hit_testing::HitTestResult;
 
         let position = Offset::new(px(x), px(y));
-        let owner = self.pipeline_owner.read();
         let mut result = HitTestResult::new();
         let event = flui_interaction::events::make_cancel_event(
             flui_interaction::events::PointerType::Mouse,
         );
         self.binding.enter_owner_scope(|| {
-            owner.hit_test(position, &mut result);
+            // See `route_event`'s comment: the read guard must not span
+            // `dispatch`, which can reenter `pipeline_owner.read()` from a
+            // gesture callback.
+            {
+                let owner = self.pipeline_owner.read();
+                owner.hit_test(position, &mut result);
+            }
             result.dispatch(&event);
         });
     }
@@ -708,7 +738,6 @@ impl LaidOut {
         use flui_rendering::hit_testing::HitTestResult;
 
         let position = Offset::new(px(x), px(y));
-        let owner = self.pipeline_owner.read();
         let mut result = HitTestResult::new();
         let event = flui_interaction::events::make_down_event_with_button(
             position,
@@ -716,7 +745,13 @@ impl LaidOut {
             PointerButton::Secondary,
         );
         self.binding.enter_owner_scope(|| {
-            owner.hit_test(position, &mut result);
+            // See `route_event`'s comment: the read guard must not span
+            // `dispatch`, which can reenter `pipeline_owner.read()` from a
+            // gesture callback.
+            {
+                let owner = self.pipeline_owner.read();
+                owner.hit_test(position, &mut result);
+            }
             result.dispatch(&event);
         });
     }
@@ -728,7 +763,6 @@ impl LaidOut {
         use flui_rendering::hit_testing::HitTestResult;
 
         let position = Offset::new(px(x), px(y));
-        let owner = self.pipeline_owner.read();
         let mut result = HitTestResult::new();
         let event = flui_interaction::events::make_up_event_with_button(
             position,
@@ -736,7 +770,13 @@ impl LaidOut {
             PointerButton::Secondary,
         );
         self.binding.enter_owner_scope(|| {
-            owner.hit_test(position, &mut result);
+            // See `route_event`'s comment: the read guard must not span
+            // `dispatch`, which can reenter `pipeline_owner.read()` from a
+            // gesture callback.
+            {
+                let owner = self.pipeline_owner.read();
+                owner.hit_test(position, &mut result);
+            }
             result.dispatch(&event);
         });
     }

@@ -11,10 +11,12 @@ mod focus;
 mod gesture_arena_scope;
 mod gesture_detector;
 mod ignore_pointer;
+mod interactive_viewer;
 mod listener;
 mod mouse_region;
 mod offstage;
 mod shortcuts;
+mod transformation_controller;
 mod visibility;
 
 pub use absorb_pointer::AbsorbPointer;
@@ -36,8 +38,13 @@ pub(crate) use focus::{enclosing_focus_parent, install_rect_provider};
 pub use gesture_arena_scope::GestureArenaScope;
 pub use gesture_detector::{GestureDetector, GestureDetectorState};
 pub use ignore_pointer::IgnorePointer;
+pub use interactive_viewer::{
+    InteractionEndDetails, InteractionStartDetails, InteractionUpdateDetails, InteractiveViewer,
+    InteractiveViewerState, PanAxis,
+};
 pub use listener::Listener;
 pub use mouse_region::MouseRegion;
 pub use offstage::Offstage;
 pub use shortcuts::{CallbackShortcuts, ShortcutCallback, Shortcuts, SingleActivator};
+pub use transformation_controller::TransformationController;
 pub use visibility::Visibility;

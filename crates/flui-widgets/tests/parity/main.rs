@@ -110,3 +110,6 @@ mod dismissible_test;
 
 // ── Business.1 implementation-gated fidelity unit — Draggable/DragTarget ────
 mod draggable_test;
+
+// ── Business.1 implementation-gated fidelity unit — InteractiveViewer ───────
+mod interactive_viewer_test;
