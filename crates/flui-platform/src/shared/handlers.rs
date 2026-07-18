@@ -163,6 +163,20 @@ pub struct WindowCallbacks {
     /// Called when the window gains or loses focus. Parameter: is_active.
     pub on_active_status_change: Mutex<Option<Box<dyn FnMut(bool) + Send>>>, // PORT-CHECK-OK-SP6: PlatformHandlers callback storage; FR-029 #5 sanctioned; SP-6 lock-placement tracked
 
+    /// Called when the window's visibility (occlusion) changes. Parameter:
+    /// is_visible (`true` when the window becomes visible/unoccluded).
+    ///
+    /// Distinct from `on_active_status_change`: a window can be visible but
+    /// unfocused (Flutter's `AppLifecycleState::Inactive`), or focused but
+    /// not visible (unusual, but not excluded). Feeds the `AppLifecycleState`
+    /// derivation `ADR-0035` documents; winit's `WindowEvent::Occluded`
+    /// drives it on desktop. Wayland compositors deliver occlusion via the
+    /// xdg-shell v6 `suspended` state, a compositor-conditional extension;
+    /// where a compositor never sends it, this callback simply never fires
+    /// — the window is treated as always visible (the same behavior as
+    /// before this callback existed).
+    pub on_visibility_status_change: Mutex<Option<Box<dyn FnMut(bool) + Send>>>, // PORT-CHECK-OK-SP6: PlatformHandlers callback storage; FR-029 #5 sanctioned; SP-6 lock-placement tracked
+
     /// Called when the mouse enters or leaves the window. Parameter:
     /// is_hovered.
     pub on_hover_status_change: Mutex<Option<Box<dyn FnMut(bool) + Send>>>, // PORT-CHECK-OK-SP6: PlatformHandlers callback storage; FR-029 #5 sanctioned; SP-6 lock-placement tracked
@@ -181,6 +195,7 @@ enum WindowCallbackEvent {
     Moved,
     Close,
     Active(bool),
+    Visibility(bool),
     Hover(bool),
     AppearanceChanged,
 }
@@ -301,6 +316,7 @@ impl WindowCallbacks {
             on_close: Mutex::new(None),
             on_should_close: Mutex::new(None),
             on_active_status_change: Mutex::new(None),
+            on_visibility_status_change: Mutex::new(None),
             on_hover_status_change: Mutex::new(None),
             on_appearance_changed: Mutex::new(None),
             event_dispatch: Mutex::new(DispatchState::new()),
@@ -350,6 +366,12 @@ impl WindowCallbacks {
                     let mut lease = CallbackLease::take(&self.on_active_status_change);
                     if let Some(callback) = lease.callback_mut() {
                         callback(is_active);
+                    }
+                }
+                WindowCallbackEvent::Visibility(is_visible) => {
+                    let mut lease = CallbackLease::take(&self.on_visibility_status_change);
+                    if let Some(callback) = lease.callback_mut() {
+                        callback(is_visible);
                     }
                 }
                 WindowCallbackEvent::Hover(is_hovered) => {
@@ -459,6 +481,17 @@ impl WindowCallbacks {
         self.drain_events(drain);
     }
 
+    /// Dispatch visibility status change (occlusion gained/lost).
+    pub fn dispatch_visibility_status_change(&self, is_visible: bool) {
+        let Some(drain) = DispatchDrain::begin(
+            &self.event_dispatch,
+            WindowCallbackEvent::Visibility(is_visible),
+        ) else {
+            return;
+        };
+        self.drain_events(drain);
+    }
+
     /// Dispatch hover status change (mouse enter/leave).
     pub fn dispatch_hover_status_change(&self, is_hovered: bool) {
         let Some(drain) =
@@ -498,6 +531,10 @@ impl std::fmt::Debug for WindowCallbacks {
             .field(
                 "on_active_status_change",
                 &self.on_active_status_change.lock().is_some(),
+            )
+            .field(
+                "on_visibility_status_change",
+                &self.on_visibility_status_change.lock().is_some(),
             )
             .field(
                 "on_hover_status_change",

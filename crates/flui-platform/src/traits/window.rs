@@ -272,6 +272,23 @@ pub trait PlatformWindow: Send + Sync {
         let _ = callback;
     }
 
+    /// Register a callback for visibility (occlusion) changes.
+    ///
+    /// Called with `true` when the window becomes visible/unoccluded,
+    /// `false` when it becomes fully occluded (or minimized, on backends
+    /// that report that through the same signal). Distinct from
+    /// [`on_active_status_change`](Self::on_active_status_change): a window
+    /// can be visible but unfocused, or occluded while still nominally
+    /// focused.
+    ///
+    /// Delivery is compositor/backend-conditional — on Wayland this rides
+    /// the xdg-shell v6 `suspended` state, which not every compositor
+    /// sends; where it is never delivered, this callback simply never
+    /// fires (the window is treated as always visible, today's behavior).
+    fn on_visibility_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
+        let _ = callback;
+    }
+
     /// Register a callback for mouse hover changes
     ///
     /// Called with `true` when the mouse enters the window, `false` when it
@@ -513,6 +530,10 @@ impl PlatformWindow for WinitWindow {
 
     fn on_active_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
         *self.callbacks.on_active_status_change.lock() = Some(callback);
+    }
+
+    fn on_visibility_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
+        *self.callbacks.on_visibility_status_change.lock() = Some(callback);
     }
 
     fn on_hover_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {

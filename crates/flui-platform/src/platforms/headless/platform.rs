@@ -331,6 +331,14 @@ impl MockWindow {
         self.callbacks.dispatch_active_status_change(focused);
     }
 
+    /// Simulate a visibility/occlusion change for testing.
+    /// Fires the registered `on_visibility_status_change` callback.
+    #[allow(dead_code)]
+    pub fn simulate_visibility(&self, visible: bool) {
+        self.state.lock().visible = visible;
+        self.callbacks.dispatch_visibility_status_change(visible);
+    }
+
     /// Simulate close request for testing.
     /// Fires `on_should_close`, then `on_close` if allowed.
     #[allow(dead_code)]
@@ -515,6 +523,10 @@ impl crate::traits::PlatformWindow for MockWindow {
 
     fn on_active_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
         *self.callbacks.on_active_status_change.lock() = Some(callback);
+    }
+
+    fn on_visibility_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
+        *self.callbacks.on_visibility_status_change.lock() = Some(callback);
     }
 
     fn on_hover_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
@@ -873,6 +885,26 @@ mod tests {
 
         window.simulate_focus(false);
         assert!(!focused.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn test_on_visibility_status_change() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let window = MockWindow::new(WindowId(0), WindowOptions::default());
+
+        let visible = Arc::new(AtomicBool::new(true));
+        let visible_clone = visible.clone();
+
+        window.on_visibility_status_change(Box::new(move |is_visible| {
+            visible_clone.store(is_visible, Ordering::SeqCst);
+        }));
+
+        window.simulate_visibility(false);
+        assert!(!visible.load(Ordering::SeqCst));
+
+        window.simulate_visibility(true);
+        assert!(visible.load(Ordering::SeqCst));
     }
 
     // ==================== US2 Tests ====================

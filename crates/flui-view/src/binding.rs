@@ -2268,4 +2268,107 @@ mod tests {
             "re-entrant add_observer inside the callback must complete"
         );
     }
+
+    // ========================================================================
+    // did_change_app_lifecycle_state dispatch
+    // ========================================================================
+
+    /// Observer that adds another observer from inside its own
+    /// `did_change_app_lifecycle_state` callback — the lifecycle-specific
+    /// twin of `ReentrantObserver`/`handle_metrics_changed_does_not_
+    /// deadlock_on_reentrant_observer` above, proving the snapshot-then-fire
+    /// discipline holds for this dispatcher too, not just metrics.
+    struct ReentrantLifecycleObserver {
+        binding: &'static WidgetsBinding,
+        fired: std::sync::atomic::AtomicUsize,
+    }
+
+    impl WidgetsBindingObserver for ReentrantLifecycleObserver {
+        fn did_change_app_lifecycle_state(&self, _state: AppLifecycleState) {
+            self.fired
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.binding.add_observer(Arc::new(InertObserver));
+        }
+    }
+
+    /// Before the snapshot-then-fire fix this would deadlock (a `read()`
+    /// lock held across the iteration, re-entered by `add_observer`'s
+    /// `write()`); after it, this returns normally.
+    #[test]
+    fn handle_app_lifecycle_state_changed_does_not_deadlock_on_reentrant_observer() {
+        let binding: &'static WidgetsBinding = Box::leak(Box::new(WidgetsBinding::new()));
+
+        let observer = Arc::new(ReentrantLifecycleObserver {
+            binding,
+            fired: std::sync::atomic::AtomicUsize::new(0),
+        });
+        binding.add_observer(observer.clone() as Arc<dyn WidgetsBindingObserver>);
+        assert_eq!(binding.observer_count(), 1);
+
+        binding.handle_app_lifecycle_state_changed(AppLifecycleState::Inactive);
+
+        assert_eq!(
+            observer.fired.load(std::sync::atomic::Ordering::Relaxed),
+            1,
+            "observer's did_change_app_lifecycle_state must fire exactly once"
+        );
+        assert_eq!(
+            binding.observer_count(),
+            2,
+            "re-entrant add_observer inside the callback must complete"
+        );
+    }
+
+    /// Observer that removes ITSELF from inside its own
+    /// `did_change_app_lifecycle_state` callback. `self_handle` is set right
+    /// after construction (a self-referential `Arc` clone) so the callback
+    /// — which only has `&self`, not its own `Arc` — has something to hand
+    /// `remove_observer`.
+    struct SelfRemovingLifecycleObserver {
+        binding: &'static WidgetsBinding,
+        self_handle: parking_lot::Mutex<Option<Arc<dyn WidgetsBindingObserver>>>,
+        fired: std::sync::atomic::AtomicUsize,
+    }
+
+    impl WidgetsBindingObserver for SelfRemovingLifecycleObserver {
+        fn did_change_app_lifecycle_state(&self, _state: AppLifecycleState) {
+            self.fired
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if let Some(handle) = self.self_handle.lock().take() {
+                self.binding.remove_observer(&handle);
+            }
+        }
+    }
+
+    #[test]
+    fn handle_app_lifecycle_state_changed_observer_can_remove_itself_mid_dispatch() {
+        let binding: &'static WidgetsBinding = Box::leak(Box::new(WidgetsBinding::new()));
+
+        let observer = Arc::new(SelfRemovingLifecycleObserver {
+            binding,
+            self_handle: parking_lot::Mutex::new(None),
+            fired: std::sync::atomic::AtomicUsize::new(0),
+        });
+        *observer.self_handle.lock() = Some(observer.clone() as Arc<dyn WidgetsBindingObserver>);
+        binding.add_observer(observer.clone() as Arc<dyn WidgetsBindingObserver>);
+        assert_eq!(binding.observer_count(), 1);
+
+        binding.handle_app_lifecycle_state_changed(AppLifecycleState::Inactive);
+
+        assert_eq!(observer.fired.load(std::sync::atomic::Ordering::Relaxed), 1);
+        assert_eq!(
+            binding.observer_count(),
+            0,
+            "self-removal mid-dispatch must complete safely (snapshot iteration, not a lock \
+             held across the callback)"
+        );
+
+        // The removed observer must not fire again on a later dispatch.
+        binding.handle_app_lifecycle_state_changed(AppLifecycleState::Hidden);
+        assert_eq!(
+            observer.fired.load(std::sync::atomic::Ordering::Relaxed),
+            1,
+            "a removed observer must not fire again"
+        );
+    }
 }
