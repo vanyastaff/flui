@@ -485,7 +485,7 @@ impl FocusNode {
     ///
     /// No-op when the node cannot request focus. A request made while the
     /// node is not yet attached to the focus tree is deferred rather than
-    /// dropped: [`Self::attach_child`] retries it the moment this node joins
+    /// dropped: `Self::attach_child` retries it the moment this node joins
     /// the tree — Flutter's requestFocus-before-attach queuing
     /// (`FocusNode._requestFocus`/`_hasKeyboardToken`, fulfilled on
     /// `FocusAttachment.reparent`).
