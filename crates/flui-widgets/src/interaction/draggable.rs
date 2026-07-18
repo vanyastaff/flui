@@ -7,19 +7,23 @@
 //!
 //! # Deliberate divergences from the oracle (framework-surface gaps)
 //!
-//! 1. **No feedback overlay.** The oracle's `_DragAvatar` inserts `feedback`
-//!    into the nearest ancestor [`Overlay`](crate::overlay) as an
-//!    `OverlayEntry` that repositions itself under the pointer every update,
-//!    and *requires* an `Overlay` ancestor (`debugCheckHasOverlay`). FLUI's
-//!    `Overlay`/`OverlayHandle` are `pub(crate)` with no `Overlay.of(context)`
-//!    equivalent — nothing publishes an ancestor overlay for a descendant to
-//!    find (`Navigator` constructs and holds its own `OverlayHandle` directly;
-//!    there is no `InheritedWidget`-style lookup). Building that lookup is a
-//!    separate, sizable feature, tracked in `docs/ROADMAP.md`'s Cross.H
-//!    section (not just here — a module doc alone has no scheduling anchor).
-//!    `feedback` is accepted and stored (so the constructor shape is
-//!    future-compatible) but is **not painted anywhere** in this cut — a
-//!    widget-visible, honestly-deferred gap, not a silent one.
+//! 1. **Feedback paints, but at a displacement, not a global position.**
+//!    `Overlay::maybe_of` (ADR-0036) closed the lookup gap this divergence
+//!    used to name in full: `DraggableState` now resolves the ancestor
+//!    `Overlay` in `did_change_dependencies` and, on drag start, inserts
+//!    `feedback` as a real `OverlayEntry` — matching the oracle's
+//!    `_DragAvatar`, which does the same through `Overlay.of(context)`. What
+//!    remains a divergence is *where* it paints: the oracle's `_lastOffset`
+//!    is anchored at the drag's true global position (`dragAnchorStrategy`
+//!    plus the pointer's live global coordinates — see divergence #4 below).
+//!    This port has neither a `dragAnchorStrategy` nor the global-origin term
+//!    divergence #4 already names as missing, so the feedback entry positions
+//!    itself at `feedback_offset` plus the same **displacement-since-start**
+//!    `DragSession` already tracks for `DraggableDetails.offset` — visibly
+//!    correct only for a `Draggable` sitting at the screen origin, honestly
+//!    wrong (by exactly that origin) everywhere else, same shape of divergence
+//!    as #4. `rootOverlay`, `ignoringFeedback*`, and scaled/rotated-ancestor
+//!    correctness are separate, still-open gaps (ADR-0036's deferrals).
 //! 2. **No live drag-target discovery.** The oracle's `_DragAvatar.updateDrag`
 //!    performs an ad hoc `WidgetsBinding.instance.hitTestInView` at the
 //!    pointer's *current* global position on every move, independent of
@@ -112,6 +116,7 @@
 //!    [`DragSession`]'s own docs) instead of continuing to track the pointer
 //!    after the widget is gone.
 
+use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -128,10 +133,12 @@ use flui_types::{
     layout::Axis,
 };
 use flui_view::RebuildHandle;
+use flui_view::element::ElementKind;
 use flui_view::prelude::*;
 use parking_lot::Mutex;
 
-use crate::{GestureArenaScope, Listener};
+use crate::overlay::{InsertPosition, Overlay, OverlayEntry, OverlayHandle};
+use crate::{GestureArenaScope, Listener, Positioned, Stack, StackFit};
 
 /// A no-argument, thread-safe callback — [`Draggable::on_drag_started`] /
 /// [`Draggable::on_drag_completed`]. `Arc<dyn Fn + Send + Sync>` (not the
@@ -240,16 +247,18 @@ impl<T: Clone + Send + Sync + 'static> Draggable<T> {
         self
     }
 
-    /// The widget shown under the pointer during a drag. Stored, but not
-    /// painted in this cut — see the module divergence notes.
+    /// The widget shown under the pointer during a drag, painted in an
+    /// `OverlayEntry` if an ancestor `Overlay` is found (`Overlay::maybe_of`,
+    /// ADR-0036) — positioned at a **displacement**, not the oracle's true
+    /// global anchor; see the module divergence notes.
     #[must_use]
     pub fn feedback(mut self, builder: impl Fn() -> BoxedView + 'static) -> Self {
         self.feedback = Some(Rc::new(builder));
         self
     }
 
-    /// Offset from the drag anchor to where `feedback` would be painted, were
-    /// it painted (see the module divergence notes).
+    /// Offset from the drag anchor to where `feedback` is painted, added to
+    /// the tracked displacement (see the module divergence notes).
     #[must_use]
     pub fn feedback_offset(mut self, offset: Offset<Pixels>) -> Self {
         self.feedback_offset = offset;
@@ -313,7 +322,7 @@ impl<T: Clone + Send + Sync + 'static> Draggable<T> {
 
 /// Persistent gesture state: the recognizer survives rebuilds (the pointer
 /// stream is stateful) and is disposed on unmount — see
-/// [`DragSession`]'s docs for why this diverges from the oracle's
+/// `DragSession`'s docs for why this diverges from the oracle's
 /// `_disposeRecognizerIfInactive` keep-alive. Mirrors `GestureDetectorState`'s
 /// init_state-acquires-the-arena shape.
 pub struct DraggableState<T: Clone + Send + Sync + 'static> {
@@ -323,6 +332,34 @@ pub struct DraggableState<T: Clone + Send + Sync + 'static> {
     /// The live config the recognizer's `on_start` closure reads at drag-start
     /// time (data, callbacks, axis, max-drags). Refreshed each `build`.
     config: Arc<Mutex<DragConfig>>,
+    /// The nearest ancestor `Overlay`'s handle, if any — resolved in
+    /// `did_change_dependencies` (a lifecycle hook, per port-check trigger
+    /// #22 and ADR-0018's pattern), not in `build` or from inside the
+    /// `on_start` gesture callback, neither of which holds a `BuildContext`.
+    /// `Arc<Mutex<_>>` so the `on_start` closure captured once in
+    /// `init_state` always reads the latest resolution.
+    overlay: Arc<Mutex<Option<OverlayHandle>>>,
+    /// The currently-mounted feedback layer, if any is showing. Owner-local
+    /// (`Rc<RefCell<_>>`, not `Arc<Mutex<_>>`): only `on_start`, `build` and
+    /// `dispose` — all owner-thread code — ever touch it. `DragSession`
+    /// cannot hold this directly (`OverlayEntry` is `!Send`); see
+    /// [`FeedbackSignal`]'s docs for the `Send + Sync` bridge it uses
+    /// instead.
+    ///
+    /// One slot, not one per session: with `max_simultaneous_drags > 1`,
+    /// concurrent drags share this single feedback layer (the later session
+    /// to start wins the slot; earlier ones simply show no feedback of their
+    /// own). Named, honest scope cut — no harness capability here can even
+    /// drive two truly concurrent contacts to observe the difference (see
+    /// this file's own module docs on that limitation).
+    feedback_entry: Rc<RefCell<Option<OverlayEntry>>>,
+    /// The `Send + Sync` handle shared with whichever `DragSession` currently
+    /// owns `feedback_entry`, if any.
+    feedback_signal: FeedbackSignal,
+    /// `feedback`/`feedback_offset`, refreshed each `build` — read by
+    /// `on_start` at drag-start time. Owner-local (`Rc<RefCell<_>>`): see
+    /// [`FeedbackConfig`]'s docs on why it cannot live in [`DragConfig`].
+    feedback_config: Rc<RefCell<FeedbackConfig>>,
     /// Built once in `init_state` against the ambient (or private) arena.
     recognizer: Option<Arc<MultiDragGestureRecognizer>>,
     /// Ties this state to `Draggable<T>` even though no field stores a `T`
@@ -348,7 +385,12 @@ impl<T: Clone + Send + Sync + 'static> std::fmt::Debug for DraggableState<T> {
 /// never accepted, so neither is ever consulted by a session — they stay on
 /// the public [`Draggable`] view only, ready for a future live-wiring pass
 /// rather than threaded into internal state that would silently do nothing
-/// with them.
+/// with them. `feedback`/`feedback_offset` are **not** carried here either,
+/// even though a session does read them at start: `feedback` is
+/// `Rc<dyn Fn() -> BoxedView>`, which is `!Send` (owner-local, ADR-0027) and
+/// would make this whole `Send + Sync`-bound struct `!Send` by infection —
+/// see [`FeedbackConfig`], the separate owner-local cell `on_start` (itself
+/// `Rc`-based, not `Send`-bound) reads directly instead.
 struct DragConfig {
     axis: Option<Axis>,
     max_simultaneous_drags: Option<usize>,
@@ -369,6 +411,150 @@ impl DragConfig {
             on_drag_end: view.on_drag_end.clone(),
         }
     }
+}
+
+/// `feedback`/`feedback_offset`, refreshed each `build` — split out of
+/// [`DragConfig`] because `Rc<dyn Fn() -> BoxedView>` is `!Send` (ADR-0027);
+/// only `on_start` (itself `Rc`-based, not `Send`-bound — see its call site)
+/// ever reads this.
+struct FeedbackConfig {
+    feedback: Option<Rc<dyn Fn() -> BoxedView>>,
+    feedback_offset: Offset<Pixels>,
+}
+
+impl FeedbackConfig {
+    fn from_view<T: Clone + Send + Sync + 'static>(view: &Draggable<T>) -> Self {
+        Self {
+            feedback: view.feedback.clone(),
+            feedback_offset: view.feedback_offset,
+        }
+    }
+}
+
+/// The `Send + Sync` bridge between a [`DragSession`] (which must itself be
+/// `Send + Sync` — [`MultiDragHandle`]'s bound) and its feedback layer's real,
+/// mounted content (a [`FeedbackAnchor`], reached through an [`OverlayEntry`],
+/// both `Rc`-backed/owner-local per ADR-0027 and therefore `!Send`).
+/// `DragSession` never touches the `OverlayEntry` — only this handle, which
+/// holds nothing but `Send + Sync`-safe primitives.
+#[derive(Clone)]
+struct FeedbackSignal {
+    /// The displacement `feedback` is painted at (`feedback_offset` plus
+    /// this). Written by [`DragSession::update`], read by
+    /// [`FeedbackAnchorState::build`].
+    offset: Arc<Mutex<Offset<Pixels>>>,
+    /// The mounted [`FeedbackAnchor`] element's own rebuild capability,
+    /// published by [`FeedbackAnchorState::init_state`] (never from `build` —
+    /// port-check trigger #22) so [`DragSession::update`] can reposition it
+    /// without reaching into any `Rc`-backed type.
+    rebuild: Arc<Mutex<Option<RebuildHandle>>>,
+}
+
+impl FeedbackSignal {
+    fn new() -> Self {
+        Self {
+            offset: Arc::new(Mutex::new(Offset::ZERO)),
+            rebuild: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    fn offset(&self) -> Offset<Pixels> {
+        *self.offset.lock()
+    }
+
+    fn set_offset(&self, offset: Offset<Pixels>) {
+        *self.offset.lock() = offset;
+    }
+
+    fn publish_rebuild(&self, handle: RebuildHandle) {
+        *self.rebuild.lock() = Some(handle);
+    }
+
+    /// Reposition the mounted anchor, if one is currently published. A no-op
+    /// before the anchor's first build, or after it unmounts — same shape as
+    /// [`OverlayEntry::mark_needs_build`]'s own before-mount/after-unmount
+    /// inertness.
+    fn reposition(&self) {
+        if let Some(handle) = self.rebuild.lock().as_ref() {
+            handle.schedule();
+        }
+    }
+}
+
+/// The feedback layer's mounted content: `feedback` wrapped in a `Positioned`
+/// inside its own `Stack`. `RenderTheater` (the `Overlay`'s render object)
+/// does not run `RenderStack`'s positioned split on its direct children — a
+/// bare `Positioned` as an entry's root is silently dropped to the origin
+/// (pinned by
+/// `overlay::tests::positioned_inside_an_overlay_entry_is_laid_out_by_an_inner_stack`,
+/// ADR-0021 S8) — so the inner `Stack` is load-bearing, not decorative.
+///
+/// A real, `Rc`-backed `StatefulView` (not a bare closure) specifically so its
+/// `init_state` can acquire a `RebuildHandle` the ADR-0018 way and publish it
+/// to [`FeedbackSignal`] — the one door a `Send + Sync`-bound `DragSession`
+/// has into repositioning this owner-local content.
+#[derive(Clone)]
+struct FeedbackAnchor {
+    feedback: Rc<dyn Fn() -> BoxedView>,
+    feedback_offset: Offset<Pixels>,
+    signal: FeedbackSignal,
+}
+
+impl View for FeedbackAnchor {
+    fn create_element(&self) -> ElementKind {
+        ElementKind::stateful(self)
+    }
+}
+
+impl StatefulView for FeedbackAnchor {
+    type State = FeedbackAnchorState;
+
+    fn create_state(&self) -> Self::State {
+        FeedbackAnchorState {
+            signal: self.signal.clone(),
+        }
+    }
+}
+
+struct FeedbackAnchorState {
+    signal: FeedbackSignal,
+}
+
+impl ViewState<FeedbackAnchor> for FeedbackAnchorState {
+    fn init_state(&mut self, ctx: &dyn BuildContext) {
+        self.signal.publish_rebuild(ctx.rebuild_handle());
+    }
+
+    fn build(&self, view: &FeedbackAnchor, _ctx: &dyn BuildContext) -> impl IntoView {
+        let displacement = self.signal.offset();
+        Stack::new(vec![
+            Positioned::new((view.feedback)())
+                .left((view.feedback_offset.dx + displacement.dx).0)
+                .top((view.feedback_offset.dy + displacement.dy).0)
+                .into_view()
+                .boxed(),
+        ])
+        .fit(StackFit::Expand)
+    }
+}
+
+/// Builds the `OverlayEntry` a drag session inserts at start: a
+/// [`FeedbackAnchor`] wrapping `feedback`, sharing `signal` with the
+/// [`DragSession`] that will reposition it.
+fn feedback_entry(
+    feedback: Rc<dyn Fn() -> BoxedView>,
+    feedback_offset: Offset<Pixels>,
+    signal: FeedbackSignal,
+) -> OverlayEntry {
+    OverlayEntry::new(move |_ctx| {
+        FeedbackAnchor {
+            feedback: Rc::clone(&feedback),
+            feedback_offset,
+            signal: signal.clone(),
+        }
+        .into_view()
+        .boxed()
+    })
 }
 
 /// Restricts `offset` to `axis`'s component (`_DragAvatar._restrictAxis`).
@@ -416,11 +602,22 @@ struct DragSession {
     /// same sum (see the module's divergence note #4 — a named, pinned
     /// divergence, not attempted here). Reported as `DraggableDetails.offset`.
     offset: Mutex<Offset<Pixels>>,
+    /// The `Send + Sync` bridge to this session's feedback layer, if one is
+    /// showing — `None` when there is no ancestor `Overlay`
+    /// (`Overlay::maybe_of` found nothing) or no `feedback` builder is
+    /// configured. `DragSession` cannot hold the `OverlayEntry` itself (it is
+    /// `!Send`, ADR-0027); see [`FeedbackSignal`]'s docs. Actual removal of
+    /// the entry happens in `DraggableState::build`/`dispose`, triggered by
+    /// [`end_active`](Self::end_active)'s `rebuild.schedule()` — this session
+    /// only needs to stop repositioning it, which needs no `Rc` access.
+    feedback: Option<FeedbackSignal>,
 }
 
 impl DragSession {
     /// Decrements the active count and schedules a rebuild so the widget can
-    /// swap back from `child_when_dragging` to `child`.
+    /// swap back from `child_when_dragging` to `child` — and, if this was the
+    /// last active drag, so `DraggableState::build` tears down the feedback
+    /// layer (see [`feedback`](Self::feedback)'s docs).
     fn end_active(&self) {
         self.active_count.fetch_sub(1, Ordering::AcqRel);
         self.rebuild.schedule();
@@ -436,6 +633,10 @@ impl MultiDragHandle for DragSession {
             return;
         }
         *self.offset.lock() += Offset::new(Pixels(restricted.dx.0), Pixels(restricted.dy.0));
+        if let Some(feedback) = &self.feedback {
+            feedback.set_offset(*self.offset.lock());
+            feedback.reposition();
+        }
 
         // Flutter's `update` passes the RAW (unrestricted) `details` through
         // to `onDragUpdate` unchanged — only the *gate* ("did the restricted
@@ -507,6 +708,10 @@ impl<T: Clone + Send + Sync + 'static> StatefulView for Draggable<T> {
         DraggableState {
             active_count: Arc::new(AtomicUsize::new(0)),
             config: Arc::new(Mutex::new(DragConfig::from_view(self))),
+            overlay: Arc::new(Mutex::new(None)),
+            feedback_entry: Rc::new(RefCell::new(None)),
+            feedback_signal: FeedbackSignal::new(),
+            feedback_config: Rc::new(RefCell::new(FeedbackConfig::from_view(self))),
             recognizer: None,
             _data: std::marker::PhantomData,
         }
@@ -520,8 +725,21 @@ impl<T: Clone + Send + Sync + 'static> ViewState<Draggable<T>> for DraggableStat
             .unwrap_or_else(GestureArena::new);
         let rebuild = ctx.rebuild_handle();
 
+        // The *initial* resolution, not just re-resolution: `depend_on`
+        // (which `Overlay::maybe_of` calls) only registers this element as a
+        // dependent — it does not, by itself, guarantee `did_change_dependencies`
+        // fires on first mount with no prior dependency to notify about. Same
+        // two-call shape `FocusScopeState` uses for `enclosing_focus_parent`
+        // (`interaction/focus.rs`): resolve here for the first value, and
+        // again in `did_change_dependencies` for later changes.
+        *self.overlay.lock() = Overlay::maybe_of(ctx);
+
         let active_count = Arc::clone(&self.active_count);
         let config = Arc::clone(&self.config);
+        let overlay = Arc::clone(&self.overlay);
+        let feedback_entry_slot = Rc::clone(&self.feedback_entry);
+        let feedback_signal = self.feedback_signal.clone();
+        let feedback_config = Rc::clone(&self.feedback_config);
         let on_start: MultiDragStartCallback = Rc::new(move |_pointer, _position| {
             {
                 let guard = config.lock();
@@ -536,11 +754,41 @@ impl<T: Clone + Send + Sync + 'static> ViewState<Draggable<T>> for DraggableStat
             if let Some(callback) = config.lock().on_drag_started.clone() {
                 callback();
             }
+
+            // A feedback layer needs both a builder to paint and somewhere to
+            // paint it — absent either, this drag simply has no visible
+            // feedback, same as before this wiring landed. One slot per
+            // `Draggable`, not one per session — see `feedback_entry`'s docs
+            // on the `max_simultaneous_drags > 1` scope cut this implies.
+            let mut slot = feedback_entry_slot.borrow_mut();
+            let feedback = if slot.is_none() {
+                let feedback_config = feedback_config.borrow();
+                match (overlay.lock().clone(), feedback_config.feedback.clone()) {
+                    (Some(handle), Some(builder)) => {
+                        feedback_signal.set_offset(Offset::ZERO);
+                        let entry = feedback_entry(
+                            builder,
+                            feedback_config.feedback_offset,
+                            feedback_signal.clone(),
+                        );
+                        handle.insert(&entry, &InsertPosition::Top);
+                        *slot = Some(entry);
+                        Some(feedback_signal.clone())
+                    }
+                    _ => None,
+                }
+            } else {
+                // Another session already occupies the one feedback slot.
+                None
+            };
+            drop(slot);
+
             Some(Box::new(DragSession {
                 active_count: Arc::clone(&active_count),
                 rebuild: rebuild.clone(),
                 config: Arc::clone(&config),
                 offset: Mutex::new(Offset::ZERO),
+                feedback,
             }) as Box<dyn MultiDragHandle>) // PORT-CHECK-OK-DYN: see flui-interaction's MultiDragStartCallback — the per-pointer handle `MultiDragGestureRecognizer::with_on_start` requires.
         });
 
@@ -549,8 +797,19 @@ impl<T: Clone + Send + Sync + 'static> ViewState<Draggable<T>> for DraggableStat
         );
     }
 
+    /// Resolves the nearest ancestor `Overlay`, if any — a lifecycle hook,
+    /// not `build` (port-check trigger #22) and not the `on_start` gesture
+    /// callback above, neither of which holds a `BuildContext`. Re-resolved
+    /// on every dependency change, not just once: `Overlay::maybe_of` depends
+    /// (ADR-0036), so a *different* enclosing overlay later replacing this
+    /// one is exactly what re-fires this hook.
+    fn did_change_dependencies(&mut self, ctx: &dyn BuildContext) {
+        *self.overlay.lock() = Overlay::maybe_of(ctx);
+    }
+
     fn build(&self, view: &Draggable<T>, _ctx: &dyn BuildContext) -> impl IntoView {
         *self.config.lock() = DragConfig::from_view(view);
+        *self.feedback_config.borrow_mut() = FeedbackConfig::from_view(view);
 
         let recognizer = self
             .recognizer
@@ -577,8 +836,19 @@ impl<T: Clone + Send + Sync + 'static> ViewState<Draggable<T>> for DraggableStat
             .on_pointer_up(move |event| up_recognizer.handle_event(event))
             .on_pointer_cancel(move |event| cancel_recognizer.handle_event(event));
 
+        let currently_active = self.active_count.load(Ordering::Acquire);
         let showing_child_when_dragging =
-            self.active_count.load(Ordering::Acquire) > 0 && view.child_when_dragging.is_some();
+            currently_active > 0 && view.child_when_dragging.is_some();
+
+        // The last active drag just ended (`end_active` schedules exactly
+        // this rebuild): tear down the feedback layer. `DragSession` cannot
+        // do this itself (`OverlayEntry::remove` needs `Rc` access it
+        // structurally lacks — see `feedback`'s docs on `DragSession`).
+        if currently_active == 0
+            && let Some(entry) = self.feedback_entry.borrow_mut().take()
+        {
+            entry.remove();
+        }
 
         if showing_child_when_dragging {
             let builder = view
@@ -595,14 +865,23 @@ impl<T: Clone + Send + Sync + 'static> ViewState<Draggable<T>> for DraggableStat
     }
 
     /// Disposes the recognizer unconditionally, even if a drag is still
-    /// active. See [`DragSession`]'s docs on why this diverges from the
+    /// active. See `DragSession`'s docs on why this diverges from the
     /// oracle's `_disposeRecognizerIfInactive` keep-alive: any drag still in
     /// flight is canceled right here (the recognizer's own `dispose` fires
     /// `.cancel()` on every accepted handle), rather than tracked to the
     /// user's real pointer-up.
+    ///
+    /// Also removes the feedback layer directly, if one is still showing:
+    /// `recognizer.dispose()`'s `cancel()` calls schedule a rebuild
+    /// (`DragSession::end_active`), but this element is unmounting — no
+    /// later `build` will ever run to act on it (see `build`'s own teardown
+    /// check), so this is the last chance.
     fn dispose(&mut self) {
         if let Some(recognizer) = self.recognizer.as_ref() {
             recognizer.dispose();
+        }
+        if let Some(entry) = self.feedback_entry.borrow_mut().take() {
+            entry.remove();
         }
     }
 }

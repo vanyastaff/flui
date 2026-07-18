@@ -16,11 +16,13 @@
 //! global position, which is exactly what the oracle's
 //! `_DragAvatar.updateDrag` (`WidgetsBinding.hitTestInView`) needs to
 //! discover a `DragTarget` the drag has moved onto. Building that
-//! reachability is a legitimate, separate-scope change (the same shape of
-//! gap as the missing `Overlay.of(context)` ancestor lookup the feedback
-//! widget would also need) — not invented silently as a byproduct of this
-//! task. Both gaps are tracked as roadmap follow-ups (Cross.H: widget-reachable
-//! fresh hit-test capability; Cross.H: `Overlay.of`-style ancestor lookup).
+//! reachability is a legitimate, separate-scope change, tracked in
+//! `docs/ROADMAP.md`'s Cross.H section (widget-reachable fresh hit-test
+//! capability). The *other* architectural gap that used to sit alongside it
+//! here — no `Overlay.of(context)` equivalent, so `feedback` was accepted but
+//! never painted — is closed (ADR-0036; `Overlay::of`/`maybe_of`); see the
+//! feedback-layer group below and the corpus accounting's first bucket for
+//! what that does and does not unlock.
 //!
 //! Consequently this file proves two *independently real* things rather than
 //! one *simulated* end-to-end thing:
@@ -39,13 +41,22 @@
 //!    `did_leave`/`did_drop`), the same methods a live discovery mechanism
 //!    would call once it exists. This is the load-bearing, testable core the
 //!    task brief names explicitly.
+//! 3. **The feedback layer's insert/reposition/remove mechanism** — now that
+//!    `Overlay::maybe_of` exists (ADR-0036), `feedback` genuinely mounts as
+//!    an `OverlayEntry` in a real ancestor `Overlay` (provided here by
+//!    wrapping the draggable's route content in a `Navigator`, the same way
+//!    a real app gets one), follows the tracked pointer displacement, and is
+//!    removed on end/cancel/unmount. What is **not** proven is pixel-exact
+//!    parity with the oracle's own feedback *position* — see the first
+//!    corpus bucket below for why the 15 named oracle cases still do not
+//!    port even though the underlying mechanism is now real.
 //!
 //! ### Denominator: 71 oracle cases
 //!
-//! **17 tests ported below** (11 `Draggable`-gesture + 6
-//! `DragTargetState`-protocol, listed in each section's own comment). Of
-//! these, 6 correspond exactly (or as an explicitly-noted partial) to a
-//! specific oracle `testWidgets` name:
+//! **21 tests ported below** (11 `Draggable`-gesture + 6
+//! `DragTargetState`-protocol + 4 feedback-layer-mechanism, listed in each
+//! section's own comment). Of these, 6 correspond exactly (or as an
+//! explicitly-noted partial) to a specific oracle `testWidgets` name:
 //! - `'Null axis onDragUpdate called only if draggable moves in any
 //!   direction'`, `'Vertical axis onDragUpdate only called if draggable
 //!   moves vertical'`, `'Horizontal axis onDragUpdate only called if
@@ -65,29 +76,50 @@
 //!   proves the *documented divergence* (`draggable.rs`'s divergence #5)
 //!   in their place, not the oracle's own keep-alive behavior.
 //!
-//! The remaining 11 ported tests exercise the oracle's established
-//! start/update/end/cancel/accept/candidate/reject/leave *contract* —
-//! spread by the oracle across many live end-to-end `testWidgets` cases —
-//! without a single corresponding `testWidgets` name, same as the original
-//! cut of this file. (This includes `reported_offset_is_displacement_not_global_position`,
-//! which pins a *divergence* — see `draggable.rs`'s divergence note #4 —
-//! rather than porting any single oracle case.)
+//! The remaining 15 ported tests exercise the oracle's established
+//! start/update/end/cancel/accept/candidate/reject/leave *contract*, plus the
+//! feedback-layer mechanism — spread by the oracle across many live
+//! end-to-end `testWidgets` cases — without a single corresponding
+//! `testWidgets` name, same as the original cut of this file. (This includes
+//! `reported_offset_is_displacement_not_global_position`, which pins a
+//! *divergence* — see `draggable.rs`'s divergence note #4 — rather than
+//! porting any single oracle case; the four feedback-layer tests are the
+//! same shape, proving the mechanism the corpus's first bucket names as
+//! still not enough to satisfy any of its 15 oracle cases.)
 //!
 //! **65 cases out of scope, with reasons (not silently dropped from the
 //! count):** 15 + 28 + 12 + 3 + 3 + 1 + 1 + 1 + 1 = 65; together with the 6
 //! in-scope oracle names above, that accounts for all 71.
 //!
-//! - **Feedback overlay presence/position (15 cases).** No
-//!   `Overlay.of(context)` equivalent exists (`draggable.rs` divergence #1):
-//!   `'Null/Horizontal/Vertical axis draggable moves ...'` (×5, check the
-//!   *feedback* widget's rendered position), `'Drag feedback with child
-//!   anchor positions correctly'`, `'... within a non-global Overlay ...'`,
-//!   `'Drag feedback is put on root overlay with [rootOverlay] flag'` (×2,
-//!   duplicate oracle name), `'... matches pointer in scaled MaterialApp'`,
-//!   `'childDragAnchorStrategy works in scaled MaterialApp'`, `'... matches
-//!   pointer in rotated MaterialApp'`, `'unmounting overlay ends drag
-//!   gracefully'`, `'feedback respect the MouseRegion cursor configure'`,
-//!   `'configurable feedback ignore pointer behavior'`.
+//! - **Feedback overlay presence/position (15 cases) — still 0 ported, for a
+//!   *different* reason than before.** ADR-0036 closed the `Overlay.of`
+//!   lookup gap `draggable.rs`'s divergence #1 used to name in full, and
+//!   `feedback` now genuinely paints (see group 3 above and the
+//!   `feedback_layer_*` tests below) — but every one of these 15 cases
+//!   additionally needs something still missing: the five `'.../axis
+//!   draggable moves ...'` cases and `'Drag feedback with child anchor
+//!   positions correctly'` need the oracle's true global-position anchor
+//!   (`dragAnchorStrategy` plus the real pointer/render-object global origin —
+//!   divergence #4, separately pinned by
+//!   `reported_offset_is_displacement_not_global_position`); `'... within a
+//!   non-global Overlay ...'` and `'Drag feedback is put on root overlay with
+//!   [rootOverlay] flag'` (×2, duplicate oracle name) need `rootOverlay`
+//!   (an explicit ADR-0036 deferral); `'... matches pointer in scaled
+//!   MaterialApp'`, `'childDragAnchorStrategy works in scaled MaterialApp'`,
+//!   `'... matches pointer in rotated MaterialApp'` need transform-aware
+//!   global positioning on top of the anchor-strategy gap; `'unmounting
+//!   overlay ends drag gracefully'` needs an `Overlay` that can itself
+//!   unmount mid-drag (not exercised — this port's harness always keeps the
+//!   `Overlay` alive for the test's duration); `'feedback respect the
+//!   MouseRegion cursor configure'` and `'configurable feedback ignore
+//!   pointer behavior'` need cursor/hit-test configurability on the feedback
+//!   layer, not implemented. None of the 15 has no remaining blocker, so none
+//!   ports — but the mechanism all 15 implicitly depend on (an entry that
+//!   inserts, repositions, and removes) is exactly what group 3's
+//!   `feedback_layer_*` tests below now prove directly, the same way
+//!   `reported_offset_is_displacement_not_global_position` proves the
+//!   *shipped* semantics of a related, still-open gap rather than the
+//!   oracle's own value.
 //! - **Live hit-test-based target discovery (28 cases).** Needs a real
 //!   `DragTarget` hit-tested at the pointer's current, moved-to position —
 //!   the exact gap this module doc opens with: `'control test'`, `'onLeave
@@ -160,9 +192,12 @@ use std::time::Duration;
 use flui_interaction::PointerId;
 use flui_rendering::constraints::BoxConstraints;
 use flui_types::layout::Axis;
-use flui_types::{Color, Offset, geometry::px};
+use flui_types::{Color, Offset, Point, geometry::px};
 use flui_view::{StatefulView, ViewExt};
-use flui_widgets::{ColoredBox, DragTarget, Draggable, DraggableDetails, ErasedDragData, SizedBox};
+use flui_widgets::{
+    ColoredBox, DragTarget, Draggable, DraggableDetails, ErasedDragData, Navigator,
+    NavigatorHandle, SimpleRoute, SizedBox,
+};
 
 use crate::common::{LaidOutScoped, lay_out_with_arena, tight};
 
@@ -902,4 +937,243 @@ fn did_drop_only_accepts_a_current_candidate() {
 
     // An unknown pointer (never entered at all) is equally a no-op.
     assert!(!state.did_drop(&target, pointer(2), origin()));
+}
+
+// ============================================================================
+// Group 3 — the feedback layer's insert/reposition/remove mechanism
+// ============================================================================
+//
+// 4 cases: `feedback` mounts once the drag starts and is gone once it ends
+// (via a real `pointer up`) or is cancelled (via a platform `pointer
+// cancel`); it repositions to follow the tracked displacement across
+// multiple moves; and `child_when_dragging`'s swap keeps working unchanged
+// alongside it. None of these correspond to a specific oracle `testWidgets`
+// name — see the corpus accounting's first bucket above for why the 15 named
+// feedback-position cases still do not port even though this mechanism is
+// now real (each needs something else still missing: the true global-anchor
+// position, `rootOverlay`, scaled/rotated ancestors, or cursor
+// configurability).
+//
+// `Overlay::maybe_of` needs a real ancestor `Overlay` to find — provided
+// here by wrapping the draggable in a `Navigator`'s route content, the
+// public way any real app gets one (`Navigator`'s own privately-held
+// `Overlay` is not otherwise constructible outside `flui-widgets`).
+
+/// A `Draggable` mounted as a `Navigator`'s sole route's content, so
+/// `Overlay::maybe_of` resolves the `Overlay` that `Navigator::build` mounts.
+fn lay_out_draggable_with_overlay(
+    widget: Draggable<i32>,
+    constraints: BoxConstraints,
+) -> LaidOutScoped {
+    let handle = NavigatorHandle::new();
+    handle.seed_initial(SimpleRoute::<i32>::new(move |_ctx| widget.clone().boxed()));
+    lay_out_with_arena(Navigator::new(handle), constraints)
+}
+
+/// The top-left corner of the one mounted `RenderConstrainedBox` (this
+/// group's feedback content, a bare `SizedBox`) — `find_all_by_render_type`
+/// is exact-type, not a substring match, so this does not also match
+/// `child()`'s `ColoredBox` (`RenderDecoratedBox`).
+fn feedback_origin(scoped: &LaidOutScoped) -> Point {
+    let matches = scoped
+        .laid()
+        .find_all_by_render_type("RenderConstrainedBox");
+    let target = *matches
+        .first()
+        .expect("the feedback layer's SizedBox must be mounted");
+    scoped
+        .laid()
+        .pipeline_owner()
+        .read()
+        .local_to_global(target, Point::ZERO, None)
+        .expect("committed layout")
+}
+
+#[test]
+fn feedback_layer_appears_on_start_and_disappears_on_end() {
+    let widget = Draggable::<i32>::new(child()).feedback(|| SizedBox::new(20.0, 10.0).boxed());
+    let mut scoped = lay_out_draggable_with_overlay(widget, extent());
+
+    assert_eq!(
+        scoped
+            .laid()
+            .find_all_by_render_type("RenderConstrainedBox")
+            .len(),
+        0,
+        "no feedback layer before the drag starts"
+    );
+
+    scoped.dispatch_pointer_down(50.0, 50.0);
+    scoped.dispatch_pointer_move(80.0, 50.0); // crosses the slop: starts the drag
+    settle_one_frame(&mut scoped);
+    assert_eq!(
+        scoped
+            .laid()
+            .find_all_by_render_type("RenderConstrainedBox")
+            .len(),
+        1,
+        "the feedback layer mounts once the drag starts"
+    );
+
+    scoped.dispatch_pointer_up(80.0, 50.0);
+    // Two ticks: the first drains `DraggableState::build`'s own rebuild
+    // (`end_active`'s `rebuild.schedule()`), which is where `entry.remove()`
+    // runs; removal itself schedules a *second*, separate rebuild — of the
+    // `Overlay`, a different element — so the entry's element does not
+    // actually leave the render tree until that one drains too. Same
+    // two-hop shape `overlay::tests::overlay_remove_entry_rebuilds` pins
+    // directly for `OverlayEntry::remove` in isolation.
+    settle_one_frame(&mut scoped);
+    settle_one_frame(&mut scoped);
+    assert_eq!(
+        scoped
+            .laid()
+            .find_all_by_render_type("RenderConstrainedBox")
+            .len(),
+        0,
+        "the feedback layer is removed once the drag ends"
+    );
+}
+
+#[test]
+fn feedback_layer_is_removed_on_cancel_too() {
+    // Flutter's `_DragAvatar.finishDrag` (which both `endDrag` and
+    // `cancelDrag` route through) removes `_overlayEntry` unconditionally —
+    // a platform cancel must tear the feedback layer down exactly like a
+    // real pointer-up does.
+    let widget = Draggable::<i32>::new(child()).feedback(|| SizedBox::new(20.0, 10.0).boxed());
+    let mut scoped = lay_out_draggable_with_overlay(widget, extent());
+
+    scoped.dispatch_pointer_down(50.0, 50.0);
+    scoped.dispatch_pointer_move(80.0, 50.0);
+    settle_one_frame(&mut scoped);
+    assert_eq!(
+        scoped
+            .laid()
+            .find_all_by_render_type("RenderConstrainedBox")
+            .len(),
+        1,
+        "the feedback layer is showing mid-drag"
+    );
+
+    scoped.dispatch_pointer_cancel(80.0, 50.0);
+    // Two ticks: see `feedback_layer_appears_on_start_and_disappears_on_end`'s
+    // comment on why `entry.remove()` needs a second, separate drain.
+    settle_one_frame(&mut scoped);
+    settle_one_frame(&mut scoped);
+    assert_eq!(
+        scoped
+            .laid()
+            .find_all_by_render_type("RenderConstrainedBox")
+            .len(),
+        0,
+        "a platform cancel must remove the feedback layer exactly like a real pointer-up"
+    );
+}
+
+#[test]
+fn feedback_layer_follows_pointer_moves() {
+    let widget = Draggable::<i32>::new(child())
+        .feedback(|| SizedBox::new(20.0, 10.0).boxed())
+        .feedback_offset(Offset::new(px(5.0), px(7.0)));
+    let mut scoped = lay_out_draggable_with_overlay(widget, large_extent());
+
+    scoped.dispatch_pointer_down(50.0, 50.0);
+    scoped.dispatch_pointer_move(80.0, 50.0); // +30 horizontal: starts the drag
+    settle_one_frame(&mut scoped);
+    let first = feedback_origin(&scoped);
+
+    scoped.dispatch_pointer_move(80.0, 90.0); // +0 horizontal, +40 vertical from here
+    settle_one_frame(&mut scoped);
+    let second = feedback_origin(&scoped);
+
+    assert!(
+        (second.y.0 - first.y.0 - 40.0).abs() < 0.5,
+        "the feedback layer must move by the same vertical delta as the \
+         pointer: first={first:?} second={second:?}"
+    );
+    assert!(
+        (second.x.0 - first.x.0).abs() < 0.5,
+        "a purely-vertical move must not shift the feedback layer \
+         horizontally: first={first:?} second={second:?}"
+    );
+
+    scoped.dispatch_pointer_up(80.0, 90.0);
+}
+
+#[test]
+fn feedback_layer_and_child_when_dragging_swap_together() {
+    // Cheap co-assertion (task-requested, not a new mechanism): the
+    // pre-existing `child`/`child_when_dragging` swap and the new feedback
+    // layer are both driven by the same `active_count` transition and must
+    // not interfere with each other.
+    let widget = Draggable::<i32>::new(child())
+        .child_when_dragging(|| {
+            SizedBox::new(100.0, 100.0)
+                .child(ColoredBox::new(Color::rgb(90, 90, 90)))
+                .boxed()
+        })
+        .feedback(|| ColoredBox::new(Color::rgb(10, 200, 10)).boxed());
+    let mut scoped = lay_out_draggable_with_overlay(widget, extent());
+
+    assert_eq!(
+        scoped
+            .laid()
+            .find_all_by_render_type("RenderDecoratedBox")
+            .len(),
+        1,
+        "at rest: just `child`'s ColoredBox"
+    );
+    assert_eq!(
+        scoped
+            .laid()
+            .find_all_by_render_type("RenderConstrainedBox")
+            .len(),
+        0,
+        "at rest: no child_when_dragging wrapper"
+    );
+
+    scoped.dispatch_pointer_down(50.0, 50.0);
+    scoped.dispatch_pointer_move(80.0, 50.0);
+    settle_one_frame(&mut scoped);
+
+    assert_eq!(
+        scoped
+            .laid()
+            .find_all_by_render_type("RenderDecoratedBox")
+            .len(),
+        2,
+        "mid-drag: child_when_dragging's inner ColoredBox + the feedback layer's ColoredBox"
+    );
+    assert_eq!(
+        scoped
+            .laid()
+            .find_all_by_render_type("RenderConstrainedBox")
+            .len(),
+        1,
+        "mid-drag: child_when_dragging's own SizedBox wrapper"
+    );
+
+    scoped.dispatch_pointer_up(80.0, 50.0);
+    // Two ticks: see `feedback_layer_appears_on_start_and_disappears_on_end`'s
+    // comment on why `entry.remove()` needs a second, separate drain.
+    settle_one_frame(&mut scoped);
+    settle_one_frame(&mut scoped);
+
+    assert_eq!(
+        scoped
+            .laid()
+            .find_all_by_render_type("RenderDecoratedBox")
+            .len(),
+        1,
+        "after the drag ends: back to just `child`"
+    );
+    assert_eq!(
+        scoped
+            .laid()
+            .find_all_by_render_type("RenderConstrainedBox")
+            .len(),
+        0,
+        "after the drag ends: child_when_dragging and the feedback layer are both gone"
+    );
 }
