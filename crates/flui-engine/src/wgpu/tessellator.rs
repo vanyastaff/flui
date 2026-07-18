@@ -1080,10 +1080,6 @@ impl IntoLyonPath for flui_types::painting::path::Path {
                 }
 
                 PathCommand::AddArc(rect, start_angle, sweep_angle) => {
-                    // Start new subpath for arc using lyon Arc primitive
-                    if has_begun {
-                        builder.end(false);
-                    }
                     let center = rect.center();
                     let rx = (rect.width() / 2.0).0;
                     let ry = (rect.height() / 2.0).0;
@@ -1096,9 +1092,21 @@ impl IntoLyonPath for flui_types::painting::path::Path {
                         x_rotation: lyon::geom::Angle::radians(0.0),
                     };
 
+                    // An arc appended to an open contour *continues* it: move
+                    // along the contour to the arc's start, then trace the arc.
+                    // `Path::from_rrect` builds a rounded rectangle as one
+                    // contour (edge, corner arc, edge, corner arc, …); starting
+                    // a fresh subpath per arc instead fragments it, and each open
+                    // fragment's implicit fill-closure chord renders as a
+                    // diagonal slash across the corner. Only open a new subpath
+                    // when nothing is in progress (a standalone arc).
                     let arc_start = arc.from();
-                    builder.begin(arc_start);
-                    has_begun = true;
+                    if has_begun {
+                        builder.line_to(arc_start);
+                    } else {
+                        builder.begin(arc_start);
+                        has_begun = true;
+                    }
 
                     arc.for_each_cubic_bezier(&mut |cubic| {
                         builder.cubic_bezier_to(cubic.ctrl1, cubic.ctrl2, cubic.to);
@@ -1284,6 +1292,33 @@ mod cpu_tests {
         assert!((tess.fill_tolerance() - DEVICE_FILL_TOLERANCE).abs() < 1e-6);
         tess.set_max_scale(-4.0);
         assert!((tess.fill_tolerance() - DEVICE_FILL_TOLERANCE).abs() < 1e-6);
+    }
+
+    /// A rounded rectangle must convert to ONE continuous lyon contour, not a
+    /// separate subpath per corner. `Path::from_rrect` traces edge → corner arc
+    /// → edge → corner arc as a single outline; when `AddArc` opened a fresh
+    /// subpath, that outline fragmented into the top edge plus four detached
+    /// arcs, and each open fragment's implicit fill-closure chord painted a
+    /// diagonal slash across the corner (seen on every Material `Card`). Guard
+    /// the single-contour invariant at the lyon-conversion boundary.
+    #[test]
+    fn rounded_rect_converts_to_one_contour_not_per_corner_subpaths() {
+        use flui_types::geometry::rrect::RRect;
+        use flui_types::painting::path::Path as FluiPath;
+
+        let rrect = RRect::from_xywh_circular(px(0.0), px(0.0), px(120.0), px(80.0), px(12.0));
+        let lyon_path = FluiPath::from_rrect(rrect).to_lyon_path();
+
+        let contour_starts = lyon_path
+            .iter()
+            .filter(|event| matches!(event, lyon::path::PathEvent::Begin { .. }))
+            .count();
+
+        assert_eq!(
+            contour_starts, 1,
+            "a rounded rectangle must be one contour; {contour_starts} subpaths \
+             means the corner arcs fragmented the outline into diagonal-slashed pieces",
+        );
     }
 }
 

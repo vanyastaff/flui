@@ -589,7 +589,19 @@ impl GpuReplay {
             }
 
             if let Some((x, y, w, h)) = batch.scissor {
-                render_pass.set_scissor_rect(x, y, w, h);
+                // Clamp to the attachment. The SSAA tile remap rewrites a
+                // fully-clipped batch's scissor to an off-target sentinel, and a
+                // clip whose edge rounds one pixel past the attachment would fail
+                // wgpu's scissor containment validation. A zero-area result means
+                // the batch is fully clipped — skip its draw.
+                let clamped_x = x.min(full_w);
+                let clamped_y = y.min(full_h);
+                let clamped_w = w.min(full_w - clamped_x);
+                let clamped_h = h.min(full_h - clamped_y);
+                if clamped_w == 0 || clamped_h == 0 {
+                    continue;
+                }
+                render_pass.set_scissor_rect(clamped_x, clamped_y, clamped_w, clamped_h);
             } else {
                 render_pass.set_scissor_rect(0, 0, full_w, full_h);
             }

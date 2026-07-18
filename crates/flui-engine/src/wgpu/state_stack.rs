@@ -412,16 +412,32 @@ impl GpuStateStack {
             (x, y, width, height)
         };
 
-        self.current_scissor = Some(new_scissor);
+        // Clamp the scissor to the render target. wgpu rejects a scissor whose
+        // origin or right/bottom edge lies outside the attachment; the AABB math
+        // above clamps the right/bottom edges but leaves the origin unclamped, so
+        // a clip lying entirely past the right/bottom edge (left >= surface width)
+        // would emit an out-of-bounds `x`/`y`. Clamping the origin first keeps the
+        // `surface - origin` extent subtraction from underflowing.
+        let (raw_x, raw_y, raw_w, raw_h) = new_scissor;
+        let clamped_x = raw_x.min(surface_size.0);
+        let clamped_y = raw_y.min(surface_size.1);
+        let clamped_scissor = (
+            clamped_x,
+            clamped_y,
+            raw_w.min(surface_size.0 - clamped_x),
+            raw_h.min(surface_size.1 - clamped_y),
+        );
+
+        self.current_scissor = Some(clamped_scissor);
 
         #[cfg(debug_assertions)]
         tracing::trace!(
             "GpuStateStack::clip_rect: rect={:?} → scissor=({}, {}, {}, {})",
             rect,
-            new_scissor.0,
-            new_scissor.1,
-            new_scissor.2,
-            new_scissor.3,
+            clamped_scissor.0,
+            clamped_scissor.1,
+            clamped_scissor.2,
+            clamped_scissor.3,
         );
     }
 
