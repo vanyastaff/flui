@@ -137,23 +137,42 @@ impl BoxFit {
 
     /// Apply this fit mode to given input and output sizes.
     ///
-    /// Returns `(fitted_size, source_size)` where:
-    /// - `fitted_size` is the size the image should be rendered at
-    /// - `source_size` is the portion of the source image to use
+    /// Behavior-faithful port of Flutter's
+    /// [`applyBoxFit`](https://api.flutter.dev/flutter/painting/applyBoxFit.html)
+    /// (`packages/flutter/lib/src/painting/box_fit.dart`, 3.44.0) — every
+    /// branch below mirrors that function's `switch` arm exactly, including
+    /// which variants crop the source (`Cover`, and the "like cover" half
+    /// of `FitWidth`/`FitHeight`/`None`) versus which never do (`Contain`,
+    /// `ScaleDown`, `Fill`, and the "like contain" half of `FitWidth`/
+    /// `FitHeight`).
+    ///
+    /// Returns a [`FittedSizes`] where:
+    /// - [`FittedSizes::source`] is the portion of `input_size` to show —
+    ///   equal to `input_size` unless this fit mode crops (see above).
+    /// - [`FittedSizes::destination`] is the portion of `output_size` to
+    ///   paint into — smaller than `output_size` when the fit letterboxes/
+    ///   pillarboxes (`Contain`, `ScaleDown`, the non-cropping halves of
+    ///   `FitWidth`/`FitHeight`), otherwise exactly `output_size`.
+    ///
+    /// A non-positive width or height on either input answers the
+    /// degenerate `(Size::ZERO, Size::ZERO)` pair, matching Flutter's own
+    /// leading guard — there is no meaningful fit to compute.
     #[must_use]
     #[inline]
     pub fn apply(self, input_size: Size<Pixels>, output_size: Size<Pixels>) -> FittedSizes {
-        let input_aspect_ratio = if input_size.height.abs() > Pixels(EPSILON) {
-            input_size.width / input_size.height
-        } else {
-            0.0
-        };
+        if input_size.width <= Pixels::ZERO
+            || input_size.height <= Pixels::ZERO
+            || output_size.width <= Pixels::ZERO
+            || output_size.height <= Pixels::ZERO
+        {
+            return FittedSizes {
+                source: Size::ZERO,
+                destination: Size::ZERO,
+            };
+        }
 
-        let output_aspect_ratio = if output_size.height.abs() > Pixels(EPSILON) {
-            output_size.width / output_size.height
-        } else {
-            0.0
-        };
+        let input_aspect_ratio = input_size.width / input_size.height;
+        let output_aspect_ratio = output_size.width / output_size.height;
 
         match self {
             BoxFit::Fill => FittedSizes {
@@ -162,82 +181,148 @@ impl BoxFit {
             },
 
             BoxFit::Contain => {
-                if output_aspect_ratio > input_aspect_ratio && input_aspect_ratio.abs() > EPSILON {
-                    let width = output_size.height * input_aspect_ratio;
-                    FittedSizes {
-                        source: input_size,
-                        destination: Size::new(width, output_size.height),
-                    }
-                } else if output_aspect_ratio.abs() > EPSILON {
-                    let height = output_size.width / input_aspect_ratio;
-                    FittedSizes {
-                        source: input_size,
-                        destination: Size::new(output_size.width, height),
-                    }
+                let destination = if output_aspect_ratio > input_aspect_ratio {
+                    Size::new(
+                        input_size.width * (output_size.height / input_size.height),
+                        output_size.height,
+                    )
                 } else {
-                    FittedSizes {
-                        source: input_size,
-                        destination: output_size,
-                    }
+                    Size::new(
+                        output_size.width,
+                        input_size.height * (output_size.width / input_size.width),
+                    )
+                };
+                FittedSizes {
+                    source: input_size,
+                    destination,
                 }
             }
 
             BoxFit::Cover => {
-                // Cover needs to fill the entire output, scaling to the smallest dimension
-                if output_aspect_ratio < input_aspect_ratio && input_aspect_ratio.abs() > EPSILON {
-                    // Output is taller, fit to height
-                    let width = output_size.height * input_aspect_ratio;
+                let source = Self::cover_source(
+                    input_size,
+                    output_size,
+                    input_aspect_ratio,
+                    output_aspect_ratio,
+                );
+                FittedSizes {
+                    source,
+                    destination: output_size,
+                }
+            }
+
+            BoxFit::FitWidth => {
+                if output_aspect_ratio > input_aspect_ratio {
+                    // Like Cover: crop the source height to match the output's aspect.
+                    let source = Self::cover_source(
+                        input_size,
+                        output_size,
+                        input_aspect_ratio,
+                        output_aspect_ratio,
+                    );
                     FittedSizes {
-                        source: input_size,
-                        destination: Size::new(width, output_size.height),
-                    }
-                } else if output_aspect_ratio.abs() > EPSILON {
-                    // Output is wider, fit to width
-                    let height = output_size.width / input_aspect_ratio;
-                    FittedSizes {
-                        source: input_size,
-                        destination: Size::new(output_size.width, height),
+                        source,
+                        destination: output_size,
                     }
                 } else {
+                    // Like Contain: no crop, letterbox vertically.
+                    let destination = Size::new(
+                        output_size.width,
+                        input_size.height * (output_size.width / input_size.width),
+                    );
                     FittedSizes {
                         source: input_size,
+                        destination,
+                    }
+                }
+            }
+
+            BoxFit::FitHeight => {
+                if output_aspect_ratio > input_aspect_ratio {
+                    // Like Contain: no crop, letterbox horizontally.
+                    let destination = Size::new(
+                        input_size.width * (output_size.height / input_size.height),
+                        output_size.height,
+                    );
+                    FittedSizes {
+                        source: input_size,
+                        destination,
+                    }
+                } else {
+                    // Like Cover: crop the source width to match the output's aspect.
+                    let source = Self::cover_source(
+                        input_size,
+                        output_size,
+                        input_aspect_ratio,
+                        output_aspect_ratio,
+                    );
+                    FittedSizes {
+                        source,
                         destination: output_size,
                     }
                 }
             }
 
-            BoxFit::FitWidth => {
-                let height = if input_aspect_ratio.abs() > EPSILON {
-                    output_size.width / input_aspect_ratio
-                } else {
-                    output_size.height
-                };
+            BoxFit::None => {
+                // The visible region is capped to output on whichever axis
+                // input overflows it; destination always equals that same
+                // (possibly cropped) source — `None` never scales.
+                let source = Size::new(
+                    input_size.width.min(output_size.width),
+                    input_size.height.min(output_size.height),
+                );
                 FittedSizes {
-                    source: input_size,
-                    destination: Size::new(output_size.width, height),
+                    source,
+                    destination: source,
                 }
             }
-
-            BoxFit::FitHeight => {
-                let width = output_size.height * input_aspect_ratio;
-                FittedSizes {
-                    source: input_size,
-                    destination: Size::new(width, output_size.height),
-                }
-            }
-
-            BoxFit::None => FittedSizes {
-                source: input_size,
-                destination: input_size,
-            },
 
             BoxFit::ScaleDown => {
-                if input_size.width > output_size.width || input_size.height > output_size.height {
-                    BoxFit::Contain.apply(input_size, output_size)
-                } else {
-                    BoxFit::None.apply(input_size, output_size)
+                // Flutter's own two-step sequential shrink (NOT a delegation
+                // to Contain/None): source is always the full input; the
+                // destination starts at the input's own size and is
+                // rescaled down an axis at a time, height first, using the
+                // ORIGINAL input's aspect ratio throughout.
+                let mut destination = input_size;
+                if destination.height > output_size.height {
+                    destination =
+                        Size::new(output_size.height * input_aspect_ratio, output_size.height);
+                }
+                if destination.width > output_size.width {
+                    destination =
+                        Size::new(output_size.width, output_size.width / input_aspect_ratio);
+                }
+                FittedSizes {
+                    source: input_size,
+                    destination,
                 }
             }
+        }
+    }
+
+    /// Shared `Cover`-style source crop: the largest sub-rect of `input_size`
+    /// whose aspect ratio matches `output_size`'s, keeping the FULL extent
+    /// of whichever axis is the tighter constraint. `Cover` uses this
+    /// directly; `FitWidth`/`FitHeight` fall into it on the half of their
+    /// own branch that behaves like `Cover` (see `applyBoxFit`'s "like
+    /// cover" comments).
+    #[inline]
+    fn cover_source(
+        input_size: Size<Pixels>,
+        output_size: Size<Pixels>,
+        input_aspect_ratio: f32,
+        output_aspect_ratio: f32,
+    ) -> Size<Pixels> {
+        if output_aspect_ratio > input_aspect_ratio {
+            Size::new(
+                input_size.width,
+                input_size.width * (output_size.height / output_size.width),
+            )
+        } else {
+            Size::new(
+                input_size.height * (output_size.width / output_size.height),
+                input_size.height,
+            )
         }
     }
 }

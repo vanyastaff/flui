@@ -38,11 +38,19 @@
 //!
 //! Widget → render-object mapping: `ConstrainedBox` → `RenderConstrainedBox`
 //! (`crates/flui-objects/src/layout/constrained_box.rs`).
+//!
+//! Delta, not in the oracle: every case above ports a `Placeholder` child as
+//! a bare, childless `ConstrainedBox`, so all 8 only exercise
+//! `RenderConstrainedBox`'s childless (`ctx.child_count() == 0`) intrinsics
+//! branch. [`constrained_box_intrinsics_with_child_delegates_then_clamps`]
+//! closes that gap with a real, non-zero-intrinsic child, proving the
+//! `ctx.child_count() > 0` delegation path and the outer bound's clamp both
+//! run correctly end to end through the widget tree.
 
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::storage::IntrinsicDimension;
 use flui_types::geometry::px;
-use flui_widgets::ConstrainedBox;
+use flui_widgets::{ConstrainedBox, SizedBox};
 
 use crate::harness;
 
@@ -218,5 +226,76 @@ fn constrained_box_intrinsics_infinite() {
         0.0,
         0.0,
         0.0,
+    );
+}
+
+/// Not in the oracle (every `constrained_box_test.dart` case wraps a
+/// zero-intrinsic `Placeholder`, so all 8 ported cases above only exercise
+/// `RenderConstrainedBox`'s CHILDLESS intrinsics branch): a `ConstrainedBox`
+/// with a real, non-zero-intrinsic child closes that gap, proving
+/// `ctx.child_count() > 0`'s delegation to `ctx.child_{min,max}_intrinsic_
+/// {width,height}` actually runs, not just the `0.0` fallback.
+///
+/// `ConstrainedBox(minHeight: 20)` wrapping a tight `30×5` `SizedBox`:
+/// width is unbounded on the outer box, so it delegates straight to the
+/// child's own tight intrinsic width (`30`, unaffected by the `height`
+/// extent argument — a `SizedBox`'s tight fast path ignores it). Height
+/// delegates to the child's tight intrinsic height (`5`), but the outer
+/// `minHeight: 20` then clamps that UP to `20` — the child's smaller
+/// intrinsic loses to the box's own bound, exactly as it must when a
+/// `ConstrainedBox` widens a small child rather than merely reporting it.
+#[test]
+fn constrained_box_intrinsics_with_child_delegates_then_clamps() {
+    let laid = harness::pump_widget(
+        ConstrainedBox::new(BoxConstraints::new(
+            px(0.0),
+            px(f32::INFINITY),
+            px(20.0),
+            px(f32::INFINITY),
+        ))
+        .child(SizedBox::new(30.0, 5.0)),
+        harness::screen(),
+    );
+    // The outer `ConstrainedBox` is the tree root; its `SizedBox` child is
+    // ALSO a `RenderConstrainedBox` (see `SizedBox`'s widget→render mapping),
+    // so `find_by_render_type` alone would be ambiguous here.
+    let constrained_box_id = laid.current_root();
+
+    let min_width = laid.intrinsic_dimension(
+        constrained_box_id,
+        IntrinsicDimension::MinWidth,
+        f32::INFINITY,
+    );
+    let max_width = laid.intrinsic_dimension(
+        constrained_box_id,
+        IntrinsicDimension::MaxWidth,
+        f32::INFINITY,
+    );
+    let min_height = laid.intrinsic_dimension(
+        constrained_box_id,
+        IntrinsicDimension::MinHeight,
+        f32::INFINITY,
+    );
+    let max_height = laid.intrinsic_dimension(
+        constrained_box_id,
+        IntrinsicDimension::MaxHeight,
+        f32::INFINITY,
+    );
+
+    assert_eq!(
+        min_width, 30.0,
+        "delegates straight to the child's own tight width"
+    );
+    assert_eq!(
+        max_width, 30.0,
+        "delegates straight to the child's own tight width"
+    );
+    assert_eq!(
+        min_height, 20.0,
+        "the child's 5 loses to the box's own minHeight: 20"
+    );
+    assert_eq!(
+        max_height, 20.0,
+        "the child's 5 loses to the box's own minHeight: 20"
     );
 }

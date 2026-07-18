@@ -631,13 +631,25 @@ fn spacing_with_slight_overflow_wraps_within_precision_tolerance() {
 }
 
 /// Flutter parity: `wrap_test.dart` `'Object exactly matches container
-/// width'` (3.44.0) — a child whose width exactly equals the incoming
-/// bound must NOT spuriously wrap onto its own row (off-by-one in the
-/// run-break comparison would do exactly that). Ported directly against
-/// `BoxConstraints` shaped like Flutter's `Column` hands a non-stretched
-/// child (loose width bounded to 800, unbounded height) rather than via an
-/// actual `Column` widget — the constraint shape is what matters here, not
-/// `Column`'s own layout algorithm.
+/// width'` (3.44.0). Ported directly against a `BoxConstraints` shaped like
+/// Flutter's `Column` hands a non-stretched child (loose width bounded to
+/// 800, unbounded height) rather than via an actual `Column` widget — the
+/// constraint shape is what matters here, not `Column`'s own layout
+/// algorithm.
+///
+/// Legs 1-2 are the oracle's own two pumps (single 800px-wide child; two
+/// 800px-wide children forced onto separate rows by `spacing: 10`
+/// overflowing a shared row). Neither leg alone exercises the run-break
+/// COMPARISON at its exact boundary: leg 1's single child never reaches it
+/// at all (`needs_new_run` short-circuits on `run_child_count > 0`, which is
+/// false for a run's first child, regardless of what the comparison would
+/// say), and leg 2's pair overflows by a clear 10px, nowhere near the
+/// boundary. Leg 3 (added here, not in the oracle) closes that gap: two
+/// 400px children with zero spacing sum to EXACTLY the 800px main limit —
+/// `run_main + child_main + spacing - main_limit == 0`, which must NOT
+/// exceed `PRECISION_TOLERANCE` and must NOT start a new row. A sign-flipped
+/// or reversed comparison here would wrap the second child onto its own row
+/// instead of keeping both in one.
 #[test]
 fn object_exactly_matches_container_width_avoids_a_spurious_extra_run() {
     let column_child_constraints =
@@ -670,5 +682,26 @@ fn object_exactly_matches_container_width_avoids_a_spurious_extra_run() {
             .map(|i| laid.offset(laid.child(wrap_id, i)))
             .collect::<Vec<_>>(),
         vec![offset(0.0, 0.0), offset(0.0, 20.0)]
+    );
+
+    // Leg 3 (not in the oracle): two 400px children, zero spacing — the
+    // second child's main-axis sum lands EXACTLY on the 800px limit
+    // (400 + 0 + 400 - 800 == 0), which must stay in the same row.
+    let children = vec![
+        flui_view::ViewExt::boxed(SizedBox::new(400.0, 10.0)),
+        flui_view::ViewExt::boxed(SizedBox::new(400.0, 10.0)),
+    ];
+    let laid = harness::pump_widget(Wrap::new(children), column_child_constraints);
+    let wrap_id = laid.current_root();
+    assert_eq!(
+        laid.size(wrap_id),
+        size(800.0, 10.0),
+        "both children must share one row at the exact-fit boundary"
+    );
+    assert_eq!(
+        (0..2)
+            .map(|i| laid.offset(laid.child(wrap_id, i)))
+            .collect::<Vec<_>>(),
+        vec![offset(0.0, 0.0), offset(400.0, 0.0)]
     );
 }

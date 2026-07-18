@@ -2413,6 +2413,59 @@ fn harness_fitted_box_preserves_aspect_ratio_when_sizing_box() {
     assert_eq!(run.box_geometry(run.root()), Size::new(px(60.0), px(30.0)));
 }
 
+/// Drives `RenderFittedBox::perform_layout` through the REAL pipeline (not a
+/// hand-constructed struct literal) and proves its `source_offset` — and the
+/// `effective_transform` it feeds — now genuinely reflect `BoxFit::Cover`'s
+/// cropped source, closing the gap a prior unit test left open: that test
+/// set `source_offset` directly on a struct literal, a state
+/// `perform_layout` could never actually reach while `BoxFit::apply` (before
+/// its fix in `flui-types`) always answered `source == input_size` for
+/// every variant.
+///
+/// A `100×50` child covering a `200×200` box: `Cover` crops the child's
+/// WIDTH down to `50` (source `50×50`), centered — Flutter's own
+/// `sourceRect.left = (100 - 50) / 2 = 25`. The child-local crop-window
+/// center `(50, 25)` (in the ORIGINAL 100-wide child) must map, through
+/// `effective_transform`, to the box's own exact center `(100, 100)`.
+#[test]
+fn harness_fitted_box_cover_crops_the_source_and_offsets_the_transform() {
+    let mut run = RenderTester::mount(
+        box_node(RenderFittedBox::new(
+            BoxFit::Cover,
+            Alignment::CENTER,
+            Clip::None,
+        ))
+        .child(box_node(RenderColoredBox::red(100.0, 50.0)).label("child")),
+    )
+    .with_size(Size::new(px(200.0), px(200.0)))
+    .run_layout();
+
+    let root = run.root();
+    let fitted = run
+        .owner_mut()
+        .render_tree_mut()
+        .get_mut(root)
+        .and_then(|node| node.downcast_render_object_mut::<RenderFittedBox>())
+        .expect("root should be a RenderFittedBox");
+
+    assert_eq!(
+        fitted.source_offset(),
+        Offset::new(px(25.0), px(0.0)),
+        "the crop window's own top-left within the 100-wide child"
+    );
+
+    let (x, y) = fitted
+        .effective_transform()
+        .transform_point(px(50.0), px(25.0));
+    assert!(
+        (x.get() - 100.0).abs() < 1e-3 && (y.get() - 100.0).abs() < 1e-3,
+        "the crop window's center (50, 25) must map to the box's own center \
+         (100, 100), got ({}, {})",
+        x.get(),
+        y.get(),
+    );
+}
+
 #[test]
 fn harness_fractionally_sized_box_applies_width_factor() {
     let run = RenderTester::mount(
