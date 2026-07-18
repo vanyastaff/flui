@@ -406,8 +406,8 @@ impl Listenable for ChangeNotifier {
     fn remove_listener(&self, id: ListenerId) {
         // Deliberately NO disposed check here — Flutter parity.
         // `ChangeNotifier.removeListener` in `change_notifier.dart` carries no
-        // `debugAssertNotDisposed`, unlike `addListener`/`dispose` (and the
-        // implicit assert `notifyListeners` inherits): its doc comment states
+        // `debugAssertNotDisposed`, unlike `addListener`/`dispose`/
+        // `notifyListeners` (each carries an explicit assert): its doc comment states
         // "This method returns immediately if [dispose] has been called," and
         // the rationale is explicit — "it is common that the owner of this
         // instance would be disposed a frame earlier than the listeners.

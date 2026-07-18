@@ -81,12 +81,15 @@ trait RemoveFrom: Send + Sync {
 
 impl<S: Send + Sync + 'static> RemoveFrom for RegistryInner<S> {
     fn remove(&self, channel: Channel, id: ListenerId) {
-        // After `dispose()` both channels have already cleared their listeners
-        // and a further `remove` would debug-panic (use-after-dispose). A live
+        // After `dispose()` both channels have already cleared their listeners.
+        // The Value channel (`ChangeNotifier::remove_listener`) tolerates
+        // post-dispose removal per Flutter parity, so its guard below is merely
+        // redundant; the Status channel (`Notifier::remove`) still debug-panics
+        // on use-after-dispose, so ITS guard is load-bearing. A live
         // `ListenerSubscription` dropped after the registry is disposed must stay
         // safe — otherwise disposing while a subscription is alive aborts on its
-        // drop — so skip the now-redundant channel removal once disposed, while
-        // still decrementing the shared count to keep the 1 → 0 edge exact.
+        // drop — so skip the channel removal once disposed, while still
+        // decrementing the shared count to keep the 1 → 0 edge exact.
         match channel {
             Channel::Value => {
                 if !self.value.is_disposed() {
