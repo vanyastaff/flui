@@ -503,7 +503,7 @@ fn boundary_margin_mixing_finite_and_infinite_edges_is_rejected() {
 }
 
 // ============================================================================
-// Wheel focal-point correction (review finding 5a)
+// Wheel focal-point correction
 // ============================================================================
 
 /// The wheel-scale path must keep the *same scene point* under the cursor
@@ -551,7 +551,7 @@ fn wheel_scale_keeps_the_scene_point_under_an_off_center_cursor_fixed() {
 }
 
 // ============================================================================
-// PanAxis::Aligned (review finding 5b)
+// PanAxis::Aligned
 // ============================================================================
 
 /// `PanAxis::Aligned` locks to whichever axis dominates the *first* update's
@@ -592,7 +592,7 @@ fn pan_axis_aligned_locks_to_the_first_updates_dominant_axis_for_the_whole_gestu
 }
 
 // ============================================================================
-// Controller disposal (review finding 5c)
+// Controller disposal
 // ============================================================================
 
 /// A stable root TYPE that toggles its shape internally — `pump_widget`

@@ -930,7 +930,7 @@ mod tests {
     ///
     /// Scenario: child/viewport 200x200, `boundary_margin: 20` (boundary
     /// -20..220), scale = e, a hard-left drag attempting -1000 scene units.
-    /// Confirmed empirically (see the PR review fix-up) that this exact
+    /// Confirmed empirically that this exact
     /// input reproduces nonzero residue in `corrected_excess.dx` against
     /// the pre-fix exact-`f32`-equality code, which returns exactly `0.0`
     /// here; the epsilon-tolerant fix returns the correctly clamped
