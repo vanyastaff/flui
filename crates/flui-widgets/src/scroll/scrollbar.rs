@@ -146,9 +146,14 @@ impl StatelessView for Scrollbar {
             // content is actually larger than the viewport.
             let show_thumb = viewport_dim > 0.0 && fraction < 1.0;
             let thumb_height = (viewport_dim * fraction).max(MIN_THUMB_PX);
-            // Clamp thumb top so thumb never overflows the track.
             let available_track = (viewport_dim - thumb_height).max(0.0);
-            let thumb_top = available_track * offset_fraction;
+            // Clamp thumb top so the thumb never overflows the track: `pixels`
+            // can sit outside `[min_scroll_extent, max_scroll_extent]` whenever
+            // a `Scrollable` sharing this controller uses `BouncingScrollPhysics`
+            // and is mid-overscroll — that drag path does not route through
+            // this widget's own thumb-drag clamp (see `on_pan_update` below),
+            // so `offset_fraction` alone can fall outside `[0.0, 1.0]`.
+            let thumb_top = (available_track * offset_fraction).clamp(0.0, available_track);
 
             // Stack children: content first (non-positioned, determines size),
             // then the thumb on top (positioned).
