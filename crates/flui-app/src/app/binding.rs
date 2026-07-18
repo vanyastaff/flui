@@ -40,7 +40,7 @@ use flui_interaction::{
     routing::FocusManager,
 };
 use flui_layer::Scene;
-use flui_platform::traits::{PlatformInput, PlatformWindow};
+use flui_platform::traits::{Clipboard, PlatformInput, PlatformWindow};
 use flui_rendering::constraints::BoxConstraints;
 use flui_scheduler::Scheduler;
 use flui_types::{
@@ -109,6 +109,15 @@ pub struct AppBinding {
 
     /// Active platform window (set during run_desktop).
     active_window: Arc<Mutex<Option<Arc<dyn PlatformWindow>>>>,
+
+    /// The platform's clipboard capability (ADR-0034), resolved from
+    /// `Platform::clipboard()` — a required method every backend already
+    /// implements — before `Platform::run()` consumes ownership of the
+    /// platform value. `set_platform_clipboard`/`clear_platform_clipboard`
+    /// are the install/teardown symmetry: without the clear half, a live
+    /// platform resource (arboard on X11 owns a live X11 connection) would
+    /// stay pinned behind this `Arc` past the event loop's exit.
+    platform_clipboard: Arc<Mutex<Option<Arc<dyn Clipboard>>>>,
 
     /// Controller registry for implicit animations (VsyncScope-driven).
     ///
@@ -373,6 +382,7 @@ impl AppBinding {
             shared_pipeline_owner,
             lifecycle: Mutex::new(DefaultLifecycle::new()),
             active_window,
+            platform_clipboard: Arc::new(Mutex::new(None)),
             vsync_slot: Mutex::new(Vsync::new()),
             start: web_time::Instant::now(),
             #[cfg(test)]
@@ -925,6 +935,72 @@ impl AppBinding {
         if let Some(haptics) = haptics {
             haptics.perform(feedback);
         }
+    }
+
+    // ========================================================================
+    // Clipboard (ADR-0034)
+    // ========================================================================
+
+    /// Install the platform's clipboard capability.
+    ///
+    /// Called from bootstrap wiring (`runner.rs`) with `Platform::clipboard()`
+    /// — resolved while the platform value is still intact, either from
+    /// inside `on_ready` (desktop) or before `Platform::run()` takes
+    /// ownership of the `Box<dyn Platform>` (Android, web). See ADR-0034 for
+    /// why this is a plain `AppBinding` slot rather than a new `Platform`
+    /// surface.
+    pub(crate) fn set_platform_clipboard(&self, clipboard: Arc<dyn Clipboard>) {
+        *self.platform_clipboard.lock() = Some(clipboard);
+    }
+
+    /// Remove the installed platform clipboard.
+    ///
+    /// The teardown symmetry to [`set_platform_clipboard`](Self::set_platform_clipboard) —
+    /// `teardown_platform_realm` (`runner.rs`) calls this after the event
+    /// loop exits so a torn-down realm does not keep a live platform
+    /// resource (arboard on X11 owns a live X11 connection) pinned behind
+    /// this `Arc` past the platform's own shutdown.
+    pub(crate) fn clear_platform_clipboard(&self) {
+        *self.platform_clipboard.lock() = None;
+    }
+
+    /// Access the installed platform clipboard, if any.
+    ///
+    /// Clones the `Arc` out of `platform_clipboard`'s lock and drops the
+    /// guard before returning — the same clone-then-call discipline
+    /// `TextInputPlatformBridge` and
+    /// [`perform_haptic_feedback`](Self::perform_haptic_feedback) follow —
+    /// so a caller's `read_text`/`write_text` call, even one that re-enters
+    /// `AppBinding::clipboard()`, never finds the lock still held.
+    ///
+    /// Returns `None` when no platform has installed a clipboard yet
+    /// (bootstrap hasn't run) or after `clear_platform_clipboard`
+    /// tore it down; logged at `debug` so the degradation is not silent.
+    pub fn clipboard(&self) -> Option<Arc<dyn Clipboard>> {
+        let clipboard = self.platform_clipboard.lock().clone();
+        if clipboard.is_none() {
+            tracing::debug!(
+                "AppBinding::clipboard: no platform clipboard installed (not yet bootstrapped, \
+                 or torn down)"
+            );
+        }
+        clipboard
+    }
+
+    /// Test-only: a clone of the exact `Arc<Mutex<...>>` slot [`clipboard`]
+    /// reads from.
+    ///
+    /// `AppBinding` itself is neither `Send` nor `Sync` (it embeds
+    /// `GestureBinding`'s arena, which holds `Arc<dyn GestureArenaMember>`),
+    /// so a fake [`Clipboard`] impl — which must be `Send + Sync` per the
+    /// trait bound — cannot hold a reference back to the binding to prove
+    /// [`clipboard`](Self::clipboard)'s reentrant-call safety. The slot
+    /// itself has no such restriction, so a test's fake clipboard can
+    /// reproduce `clipboard`'s exact lock-then-clone-then-drop sequence
+    /// directly against it instead.
+    #[cfg(test)]
+    pub(crate) fn platform_clipboard_slot(&self) -> Arc<Mutex<Option<Arc<dyn Clipboard>>>> {
+        Arc::clone(&self.platform_clipboard)
     }
 
     // ========================================================================
@@ -3275,6 +3351,157 @@ mod tests {
             binding.set_window(Box::new(BareWindow));
 
             binding.perform_haptic_feedback(HapticFeedback::MediumImpact);
+        }
+    }
+
+    /// `AppBinding::clipboard()` reaching the platform clipboard installed
+    /// via `set_platform_clipboard` (ADR-0034) — the bootstrap-wiring seam
+    /// `runner.rs` uses instead of a new `Platform` trait surface, since
+    /// `Platform::clipboard()` is already `Arc<dyn Clipboard>`-shaped and
+    /// callable before `run()` consumes the platform value. All tests build
+    /// a standalone `AppBinding::new()` rather than touching
+    /// `AppBinding::instance()`'s singleton, so none of them need
+    /// `SEMANTICS_TEST_LOCK` (or an equivalent) — the same reasoning
+    /// `haptics_binding_bridge`'s tests above rely on.
+    mod platform_clipboard_reachability {
+        use super::*;
+
+        fn headless_clipboard() -> Arc<dyn flui_platform::traits::Clipboard> {
+            flui_platform::headless_platform().clipboard()
+        }
+
+        /// Real-path proof: installing the platform clipboard makes it
+        /// reachable through `AppBinding::clipboard()`, and a write/read
+        /// round-trips through the SAME clipboard instance.
+        ///
+        /// Red-check: turning `set_platform_clipboard` into a no-op (dropping
+        /// its `*self.platform_clipboard.lock() = Some(clipboard)` write)
+        /// makes this fail — `binding.clipboard()` stays `None` and the
+        /// `.expect()` below panics.
+        #[test]
+        fn app_binding_clipboard_reaches_the_installed_platform_clipboard() {
+            let binding = AppBinding::new();
+            assert!(
+                binding.clipboard().is_none(),
+                "no platform installed yet must read back as None"
+            );
+
+            let clipboard = headless_clipboard();
+            binding.set_platform_clipboard(Arc::clone(&clipboard));
+
+            let reached = binding
+                .clipboard()
+                .expect("set_platform_clipboard must make the clipboard reachable");
+            reached.write_text("clipboard-reachability".to_string());
+
+            assert_eq!(
+                binding
+                    .clipboard()
+                    .expect("still installed")
+                    .read_text()
+                    .as_deref(),
+                Some("clipboard-reachability"),
+                "AppBinding::clipboard() must reach through to the SAME platform \
+                 clipboard instance set_platform_clipboard installed"
+            );
+        }
+
+        /// No platform has installed a clipboard yet (bootstrap hasn't run,
+        /// or this is a standalone test binding) — `None`, not a panic.
+        #[test]
+        fn clipboard_with_no_platform_installed_is_none_not_a_panic() {
+            let binding = AppBinding::new();
+            assert!(binding.clipboard().is_none());
+        }
+
+        /// Teardown symmetry: after `clear_platform_clipboard`, the slot
+        /// reads back `None` again — the counterpart
+        /// `teardown_platform_realm` (`runner.rs`) calls so a torn-down realm
+        /// doesn't keep a live platform clipboard (arboard on X11 owns a
+        /// live X11 connection) pinned behind `AppBinding` past the event
+        /// loop's exit.
+        #[test]
+        fn clear_platform_clipboard_removes_the_installed_clipboard() {
+            let binding = AppBinding::new();
+            binding.set_platform_clipboard(headless_clipboard());
+            assert!(binding.clipboard().is_some());
+
+            binding.clear_platform_clipboard();
+
+            assert!(
+                binding.clipboard().is_none(),
+                "clear_platform_clipboard must remove the installed clipboard"
+            );
+        }
+
+        /// A clipboard whose `read_text` re-enters the same critical section
+        /// `clipboard()` uses must not deadlock — proof that `clipboard()`
+        /// drops `platform_clipboard`'s lock guard before the caller can
+        /// touch the returned capability (the same clone-then-call
+        /// discipline `TextInputPlatformBridge` and
+        /// `perform_haptic_feedback` follow).
+        ///
+        /// The fake clipboard reproduces `clipboard()`'s exact
+        /// lock-then-clone-then-drop sequence directly against
+        /// [`AppBinding::platform_clipboard_slot`]'s clone of the same
+        /// underlying `Arc<Mutex<...>>`, rather than holding a reference
+        /// back to `AppBinding` itself: `AppBinding` embeds `GestureBinding`
+        /// (an `Arc<dyn GestureArenaMember>` arena), so it is neither `Send`
+        /// nor `Sync` — and `Clipboard: Send + Sync` means no type that
+        /// implements it can hold one.
+        ///
+        /// Constructed and driven entirely on one dedicated background
+        /// thread, purely to bound a potential hang: a same-thread
+        /// `parking_lot::Mutex` re-lock deadlocks with no timeout of its
+        /// own, so a bare synchronous call here would wedge this test's
+        /// thread forever if `clipboard()` regressed to holding its lock
+        /// across the call-out. `recv_timeout` turns that hang into an
+        /// explicit `expect` panic instead — the same bounding shape
+        /// `semantics_listener_that_registers_another_listener_does_not_deadlock`
+        /// (`renderer_binding.rs`) uses for its own reentrancy proof.
+        #[test]
+        fn clipboard_reentrant_read_does_not_deadlock() {
+            use std::sync::mpsc;
+            use std::time::Duration;
+
+            struct ReentrantClipboard {
+                slot: Arc<Mutex<Option<Arc<dyn flui_platform::traits::Clipboard>>>>,
+            }
+
+            impl flui_platform::traits::Clipboard for ReentrantClipboard {
+                fn read_text(&self) -> Option<String> {
+                    // Reproduces `AppBinding::clipboard()`'s exact
+                    // lock-then-clone-then-drop sequence against the SAME
+                    // slot Arc — proving a reentrant call through this path
+                    // does not deadlock on `platform_clipboard`'s mutex.
+                    let reentered = self.slot.lock().clone();
+                    assert!(
+                        reentered.is_some(),
+                        "reentrant read through the same slot must still see \
+                         the installed clipboard"
+                    );
+                    Some("reentrant".to_string())
+                }
+
+                fn write_text(&self, _text: String) {}
+            }
+
+            let (result_tx, result_rx) = mpsc::channel();
+            std::thread::spawn(move || {
+                let binding = AppBinding::new();
+                let slot = binding.platform_clipboard_slot();
+                binding.set_platform_clipboard(Arc::new(ReentrantClipboard { slot }));
+
+                let reached = binding.clipboard().expect("clipboard installed above");
+                let text = reached.read_text();
+                let _ = result_tx.send(text);
+            });
+
+            let text = result_rx.recv_timeout(Duration::from_secs(5)).expect(
+                "AppBinding::clipboard() deadlocked: a reentrant read_text call must not \
+                 block on the platform_clipboard lock it itself just released",
+            );
+            assert_eq!(text.as_deref(), Some("reentrant"));
         }
     }
 }

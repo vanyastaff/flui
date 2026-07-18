@@ -295,6 +295,14 @@ fn teardown_platform_realm() {
     // TLS borrow and incarnation identity have been released.
     drop(queued);
     drop(realm);
+
+    // ADR-0034's install/teardown symmetry: the event loop has exited (this
+    // runs from both `run_desktop` and `run_android`, after their respective
+    // `platform.run(...)` returns), so drop the platform clipboard now rather
+    // than let a live platform resource (arboard on X11 owns a live X11
+    // connection) sit pinned behind `AppBinding` for the rest of the
+    // process's life.
+    AppBinding::instance().clear_platform_clipboard();
 }
 
 #[cfg(all(
@@ -916,6 +924,14 @@ where
     {
         tracing::info!("Platform ready");
 
+        // 0. Wire the platform clipboard (ADR-0034) before anything else can
+        // observe `AppBinding::clipboard()`. `platform` is `&dyn Platform`
+        // here, still fully intact — `on_ready` runs before `Platform::run`
+        // returns, so this is not the pre-`run()` extraction Android/web
+        // need, just an early call on a reference that stays valid for the
+        // rest of this function.
+        AppBinding::instance().set_platform_clipboard(platform.clipboard());
+
         // 1. Open window now that the event loop is running. Window creation is
         // an environment failure (display server hiccup, resource exhaustion),
         // not a `BUG:` invariant, and — unlike platform init above — this DOES
@@ -1349,6 +1365,13 @@ where
 
     let platform: Box<dyn Platform> = Box::new(AndroidPlatform::new(app));
 
+    // 0. Wire the platform clipboard (ADR-0034). Extracted from the `Box`
+    // now, while `platform` is still intact: `platform.run(...)` below takes
+    // `self: Box<Self>` by value, and the `on_ready` closure it invokes
+    // discards its `platform` parameter, so there is no later point at which
+    // this platform's `clipboard()` is reachable at all.
+    AppBinding::instance().set_platform_clipboard(platform.clipboard());
+
     // 1. Open window (wraps the existing ANativeWindow) before run()
     let options: WindowOptions = (&config).into();
     let window = platform
@@ -1592,6 +1615,12 @@ where
     tracing::info!("Starting web platform via flui-platform");
 
     let platform = flui_platform::current_platform().expect("Failed to initialize web platform");
+
+    // 0. Wire the platform clipboard (ADR-0034). Extracted from the `Box`
+    // now, while `platform` is still intact — see `run_android`'s identical
+    // comment for why there is no later point at which this platform's
+    // `clipboard()` is reachable.
+    AppBinding::instance().set_platform_clipboard(platform.clipboard());
 
     // 1. Open window (creates canvas) before run() since run() takes ownership
     let options: WindowOptions = (&config).into();
