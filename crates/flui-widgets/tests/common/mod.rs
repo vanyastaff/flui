@@ -330,6 +330,15 @@ impl LaidOut {
         self.binding.scheduler().clone()
     }
 
+    /// The binding's gesture arena — needed to re-wrap a replacement root in
+    /// a matching `GestureArenaScope` when a test swaps the root via
+    /// `pump_widget` and must keep the *scope's own element* stable (a root
+    /// element type change does not run the normal unmount/dispose path;
+    /// see the arena-scoped mid-drag unmount tests for why).
+    pub fn arena(&self) -> flui_interaction::arena::GestureArena {
+        self.binding.arena().clone()
+    }
+
     /// The shared pipeline owner, so a post-frame callback can read committed
     /// geometry from inside the frame.
     pub fn pipeline_owner(&self) -> Arc<RwLock<PipelineOwner>> {

@@ -15,9 +15,11 @@
 //!    equivalent — nothing publishes an ancestor overlay for a descendant to
 //!    find (`Navigator` constructs and holds its own `OverlayHandle` directly;
 //!    there is no `InheritedWidget`-style lookup). Building that lookup is a
-//!    separate, sizable feature. `feedback` is accepted and stored (so the
-//!    constructor shape is future-compatible) but is **not painted anywhere**
-//!    in this cut — a widget-visible, honestly-deferred gap, not a silent one.
+//!    separate, sizable feature, tracked in `docs/ROADMAP.md`'s Cross.H
+//!    section (not just here — a module doc alone has no scheduling anchor).
+//!    `feedback` is accepted and stored (so the constructor shape is
+//!    future-compatible) but is **not painted anywhere** in this cut — a
+//!    widget-visible, honestly-deferred gap, not a silent one.
 //! 2. **No live drag-target discovery.** The oracle's `_DragAvatar.updateDrag`
 //!    performs an ad hoc `WidgetsBinding.instance.hitTestInView` at the
 //!    pointer's *current* global position on every move, independent of
@@ -33,8 +35,9 @@
 //!    (`RenderObjectContext` exposes only owner-lane registration;
 //!    `PipelineOwner::hit_test` lives one layer up and is reachable only from
 //!    binding-internal code). Adding that reachability is a legitimate,
-//!    separate-scope change — the same shape of gap as point 1 above, and one
-//!    this port does not invent silently mid-task.
+//!    separate-scope change — the same shape of gap as point 1 above, also
+//!    tracked in `docs/ROADMAP.md`'s Cross.H section — and one this port
+//!    does not invent silently mid-task.
 //!
 //!    Consequently: **`Draggable`'s own gesture lifecycle is fully real** —
 //!    start/update/end/cancel, `child`/`child_when_dragging` swap,
@@ -52,14 +55,42 @@
 //!    `flui-interaction` yet (only the immediate `MultiDragGestureRecognizer`
 //!    is ported). Deferred rather than hand-rolling a new recognizer as a
 //!    side effect of this port.
-//! 4. **No `dragAnchorStrategy`, `affinity`, `hitTestBehavior`,
-//!    `ignoringFeedback*`, `rootOverlay`, `allowedButtonsFilter`.** All but
-//!    `affinity`/`hitTestBehavior` only affect the feedback overlay (moot per
-//!    point 1). `affinity` selects which single-axis recognizer competes for
-//!    the *start* of the gesture; `Draggable::axis` (implemented) instead
-//!    restricts *reported* movement after the drag has already started,
-//!    mirroring the oracle's `_DragAvatar._restrictAxis`. Both are named
-//!    deferrals rather than dead fields.
+//! 4. **No configurable `dragAnchorStrategy`, `affinity`, `hitTestBehavior`,
+//!    `ignoringFeedback*`, `rootOverlay`, `allowedButtonsFilter`.**
+//!    `ignoringFeedback*`/`rootOverlay` only affect the feedback overlay
+//!    (moot per point 1). `affinity` selects which single-axis recognizer
+//!    competes for the *start* of the gesture — a named deferral, unrelated
+//!    to `Draggable::axis` (implemented), which restricts *reported*
+//!    movement after the drag has already started
+//!    (`_DragAvatar._restrictAxis`). `dragAnchorStrategy` is **not** merely
+//!    cosmetic feedback positioning: it defines `dragStartPoint`, which the
+//!    oracle subtracts from every reported global position to produce
+//!    `DraggableDetails.offset` / `DragTargetDetails.offset`
+//!    (`_DragAvatar.updateDrag`'s `_lastOffset = globalPosition -
+//!    dragStartPoint`). This port always uses the default strategy's
+//!    semantics — `childDragAnchorStrategy`'s `dragStartPoint` is the
+//!    down-time position local to `Draggable`'s own render object, which is
+//!    exactly what `Listener` already delivers as `event.position()` (event
+//!    delivery is per-target-local, `HitTestEntry.transform`-adjusted) — so
+//!    `dragStartPoint` needs no new global-transform capability: it *is* the
+//!    position at drag start, and `_lastOffset` reduces to "the running sum
+//!    of every axis-restricted delta since the drag started" (see
+//!    `DragSession::offset`). `pointerDragAnchorStrategy` (anchor at
+//!    `Offset.zero`) is not selectable — that is the actual, named
+//!    deferral.
+//! 5. **Unmounting mid-drag cancels immediately rather than tracking to the
+//!    real pointer-up.** The oracle's `_disposeRecognizerIfInactive` keeps
+//!    the recognizer alive until every active drag naturally finishes, even
+//!    past `_DraggableState` unmounting. This port's recognizer
+//!    (`MultiDragGestureRecognizer`) is owner-local (`!Send + !Sync`, per
+//!    ADR-0027), while a `DragSession` — the thing that would need to hold a
+//!    reference to it to dispose it later — must be `Send + Sync` to satisfy
+//!    `MultiDragHandle`'s bound; it structurally cannot hold that reference.
+//!    `DraggableState::dispose` therefore disposes the recognizer
+//!    unconditionally on unmount, which cancels any still-active drag right
+//!    there (correctly firing `on_drag_end`/`on_draggable_canceled` — see
+//!    [`DragSession`]'s own docs) instead of continuing to track the pointer
+//!    after the widget is gone.
 
 use std::rc::Rc;
 use std::sync::Arc;
@@ -108,7 +139,9 @@ pub struct DraggableDetails {
     pub was_accepted: bool,
     /// Velocity at release.
     pub velocity: Velocity,
-    /// Global position at release.
+    /// Position at release, relative to `dragStartPoint` (see the module
+    /// divergence note #4) — the running sum of every axis-restricted delta
+    /// since the drag started, not a raw global position.
     pub offset: Offset<Pixels>,
 }
 
@@ -257,8 +290,10 @@ impl<T: Clone + Send + Sync + 'static> Draggable<T> {
 }
 
 /// Persistent gesture state: the recognizer survives rebuilds (the pointer
-/// stream is stateful) and is disposed on unmount. Mirrors
-/// `GestureDetectorState`'s init_state-acquires-the-arena shape.
+/// stream is stateful) and is disposed on unmount — see
+/// [`DragSession`]'s docs for why this diverges from the oracle's
+/// `_disposeRecognizerIfInactive` keep-alive. Mirrors `GestureDetectorState`'s
+/// init_state-acquires-the-arena shape.
 pub struct DraggableState<T: Clone + Send + Sync + 'static> {
     /// How many drags this widget currently has active — gates
     /// `max_simultaneous_drags` and switches `child` vs `child_when_dragging`.
@@ -333,33 +368,66 @@ fn restrict_axis_delta(delta: Offset<PixelDelta>, axis: Option<Axis>) -> Offset<
 }
 
 /// The `_DragAvatar` analogue: one instance per active drag, held by the
-/// recognizer for the pointer's lifetime (it must outlive `DraggableState`
-/// if the widget unmounts mid-drag — mirroring the oracle's own comment on
-/// `_DragAvatar`'s "dubious" lifetime).
+/// recognizer for the pointer's lifetime.
+///
+/// **Divergence from the oracle's `_disposeRecognizerIfInactive`:** the
+/// oracle keeps its recognizer alive until every active drag naturally
+/// finishes, even if `_DraggableState` itself unmounts first. This port
+/// cannot: `MultiDragGestureRecognizer` is owner-local (`Rc`/`RefCell`
+/// internally, per ADR-0027) and therefore `!Send + !Sync`, while
+/// `MultiDragHandle` (this session's trait) requires `Send + Sync + 'static`
+/// — a `DragSession` structurally cannot hold a live reference to the
+/// recognizer it came from to dispose it later itself. `DraggableState::dispose`
+/// therefore disposes the recognizer unconditionally, immediately, on
+/// unmount — which cancels any still-active drag right there (`dispose`
+/// calls `.cancel()` on every accepted handle) rather than letting it run to
+/// the user's real pointer-up. `on_drag_end`/`on_draggable_canceled` still
+/// fire correctly for that cancellation (`DragSession::cancel`); what does
+/// NOT happen is tracking the pointer any further after unmount.
 struct DragSession {
     active_count: Arc<AtomicUsize>,
     rebuild: RebuildHandle,
     config: Arc<Mutex<DragConfig>>,
+    /// Running sum of every axis-restricted delta since the drag started —
+    /// `_DragAvatar._lastOffset` under the default `childDragAnchorStrategy`
+    /// (see the module's divergence note #4 on why no separate
+    /// `dragStartPoint` subtraction is needed). Reported as
+    /// `DraggableDetails.offset`.
+    offset: Mutex<Offset<Pixels>>,
+}
+
+impl DragSession {
+    /// Decrements the active count and schedules a rebuild so the widget can
+    /// swap back from `child_when_dragging` to `child`.
+    fn end_active(&self) {
+        self.active_count.fetch_sub(1, Ordering::AcqRel);
+        self.rebuild.schedule();
+    }
 }
 
 impl MultiDragHandle for DragSession {
     fn update(&self, details: MultiDragUpdateDetails) {
         let config = self.config.lock();
+        let restricted = restrict_axis_delta(details.delta, config.axis);
+        let moved = restricted.dx.0 != 0.0 || restricted.dy.0 != 0.0;
+        if !moved {
+            return;
+        }
+        *self.offset.lock() += Offset::new(Pixels(restricted.dx.0), Pixels(restricted.dy.0));
+
+        // Flutter's `update` passes the RAW (unrestricted) `details` through
+        // to `onDragUpdate` unchanged — only the *gate* ("did the restricted
+        // position move") is axis-aware, not the reported delta.
         if let Some(callback) = &config.on_drag_update {
-            let delta = restrict_axis_delta(details.delta, config.axis);
-            // Flutter's `primaryDelta` is only defined for a single-axis
-            // recognizer; this drag's own recognizer is always `Free` (axis
-            // restriction is applied here, post-hoc), so it is 0.0 without a
-            // configured axis.
             let primary_delta = match config.axis {
-                Some(Axis::Horizontal) => delta.dx.0,
-                Some(Axis::Vertical) => delta.dy.0,
+                Some(Axis::Horizontal) => details.delta.dx.0,
+                Some(Axis::Vertical) => details.delta.dy.0,
                 None => 0.0,
             };
             callback(DragUpdateDetails {
                 global_position: details.global_position,
                 local_position: details.local_position,
-                delta,
+                delta: details.delta,
                 primary_delta,
                 kind: details.kind,
             });
@@ -367,45 +435,45 @@ impl MultiDragHandle for DragSession {
     }
 
     fn end(&self, details: MultiDragEndDetails) {
-        self.active_count.fetch_sub(1, Ordering::AcqRel);
-        self.rebuild.schedule();
+        self.end_active();
 
         let config = self.config.lock();
         // No live target discovery (see module docs): every drag ends
         // uncaptured.
-        let was_accepted = false;
         let velocity = Velocity {
             pixels_per_second: restrict_axis(details.velocity.pixels_per_second, config.axis),
         };
+        let offset = *self.offset.lock();
         if let Some(callback) = &config.on_drag_end {
             callback(DraggableDetails {
-                was_accepted,
+                was_accepted: false,
                 velocity,
-                offset: details.global_position,
+                offset,
             });
         }
         if let Some(callback) = &config.on_draggable_canceled {
-            callback(velocity, details.global_position);
+            callback(velocity, offset);
         }
     }
 
     fn cancel(&self) {
-        self.active_count.fetch_sub(1, Ordering::AcqRel);
-        self.rebuild.schedule();
+        self.end_active();
 
         // Flutter's `_DragAvatar.cancel` also routes through `finishDrag`,
         // which fires `onDragEnd` unconditionally (zero velocity, not
-        // accepted) before `onDraggableCanceled` — not a cancel-only path.
+        // accepted, but the real `_lastOffset` — not zero) before
+        // `onDraggableCanceled` — not a cancel-only path.
         let config = self.config.lock();
+        let offset = *self.offset.lock();
         if let Some(callback) = &config.on_drag_end {
             callback(DraggableDetails {
                 was_accepted: false,
                 velocity: Velocity::ZERO,
-                offset: Offset::ZERO,
+                offset,
             });
         }
         if let Some(callback) = &config.on_draggable_canceled {
-            callback(Velocity::ZERO, Offset::ZERO);
+            callback(Velocity::ZERO, offset);
         }
     }
 }
@@ -450,6 +518,7 @@ impl<T: Clone + Send + Sync + 'static> ViewState<Draggable<T>> for DraggableStat
                 active_count: Arc::clone(&active_count),
                 rebuild: rebuild.clone(),
                 config: Arc::clone(&config),
+                offset: Mutex::new(Offset::ZERO),
             }) as Box<dyn MultiDragHandle>) // PORT-CHECK-OK-DYN: see flui-interaction's MultiDragStartCallback — the per-pointer handle `MultiDragGestureRecognizer::with_on_start` requires.
         });
 
@@ -464,7 +533,7 @@ impl<T: Clone + Send + Sync + 'static> ViewState<Draggable<T>> for DraggableStat
         let recognizer = self
             .recognizer
             .clone()
-            .expect("init_state builds the recognizer before the first build");
+            .expect("BUG: init_state must build the recognizer before the first build");
         let max = view.max_simultaneous_drags;
         let active_count = Arc::clone(&self.active_count);
 
@@ -493,7 +562,7 @@ impl<T: Clone + Send + Sync + 'static> ViewState<Draggable<T>> for DraggableStat
             let builder = view
                 .child_when_dragging
                 .clone()
-                .expect("checked is_some above");
+                .expect("BUG: checked is_some above");
             listener.child(builder())
         } else {
             match view.child.clone().into_inner() {
@@ -503,6 +572,12 @@ impl<T: Clone + Send + Sync + 'static> ViewState<Draggable<T>> for DraggableStat
         }
     }
 
+    /// Disposes the recognizer unconditionally, even if a drag is still
+    /// active. See [`DragSession`]'s docs on why this diverges from the
+    /// oracle's `_disposeRecognizerIfInactive` keep-alive: any drag still in
+    /// flight is canceled right here (the recognizer's own `dispose` fires
+    /// `.cancel()` on every accepted handle), rather than tracked to the
+    /// user's real pointer-up.
     fn dispose(&mut self) {
         if let Some(recognizer) = self.recognizer.as_ref() {
             recognizer.dispose();

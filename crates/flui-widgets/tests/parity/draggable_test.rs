@@ -1,23 +1,26 @@
 //! ## Test parity notes
 //!
 //! Flutter source: `packages/flutter/test/widgets/draggable_test.dart`
-//! (tag `3.44.0`, 63 `testWidgets` cases).
+//! (tag `3.44.0`, **71** `testWidgets` cases — `grep -cE '^\s*testWidgets\('`
+//! against the tagged file).
 //!
 //! ### Why this file is split into two halves
 //!
 //! `crates/flui-widgets/src/interaction/draggable.rs` and `.../drag_target.rs`
-//! document, in depth, the one architectural gap that shapes every case
-//! below: FLUI's pointer dispatch (both the production path and this crate's
-//! own test harness) resolves the hit-test path **once, at `PointerDown`**,
-//! and replays that cached route for every later `Move`/`Up` — there is no
-//! capability reachable from widget or gesture-callback code to run a fresh
-//! hit test at an arbitrary *later* global position, which is exactly what
-//! the oracle's `_DragAvatar.updateDrag` (`WidgetsBinding.hitTestInView`)
-//! needs to discover a `DragTarget` the drag has moved onto. Building that
+//! document, in depth, the one architectural gap that shapes most of the
+//! cases below: FLUI's pointer dispatch (both the production path and this
+//! crate's own test harness) resolves the hit-test path **once, at
+//! `PointerDown`**, and replays that cached route for every later
+//! `Move`/`Up` — there is no capability reachable from widget or
+//! gesture-callback code to run a fresh hit test at an arbitrary *later*
+//! global position, which is exactly what the oracle's
+//! `_DragAvatar.updateDrag` (`WidgetsBinding.hitTestInView`) needs to
+//! discover a `DragTarget` the drag has moved onto. Building that
 //! reachability is a legitimate, separate-scope change (the same shape of
 //! gap as the missing `Overlay.of(context)` ancestor lookup the feedback
 //! widget would also need) — not invented silently as a byproduct of this
-//! task.
+//! task. Both gaps are tracked as roadmap follow-ups (Cross.H: widget-reachable
+//! fresh hit-test capability; Cross.H: `Overlay.of`-style ancestor lookup).
 //!
 //! Consequently this file proves two *independently real* things rather than
 //! one *simulated* end-to-end thing:
@@ -25,43 +28,126 @@
 //! 1. **`Draggable`'s gesture lifecycle** — genuine pointer dispatch through
 //!    `LaidOutScoped`, exercising the real `MultiDragGestureRecognizer`:
 //!    start/update/end/cancel, the `child`/`child_when_dragging` swap,
-//!    `max_simultaneous_drags`, and axis restriction. Because no target is
-//!    ever discovered, every drop is honestly unaccepted here — proven, not
-//!    assumed (`drag_end_reports_not_accepted_and_never_fires_completed`).
+//!    `max_simultaneous_drags`, axis restriction (including the oracle's
+//!    "only fires when the restricted position actually moves" gate), and
+//!    the divergent-but-documented immediate-cancel-on-unmount behavior.
+//!    Because no target is ever discovered, every drop is honestly
+//!    unaccepted here — proven, not assumed
+//!    (`drag_end_reports_not_accepted_and_never_fires_completed`).
 //! 2. **`DragTargetState`'s accept/candidate/reject/leave protocol** — driven
 //!    directly through its production methods (`did_enter`/`did_move`/
 //!    `did_leave`/`did_drop`), the same methods a live discovery mechanism
 //!    would call once it exists. This is the load-bearing, testable core the
 //!    task brief names explicitly.
 //!
-//! ### Denominator: 63 oracle cases
+//! ### Denominator: 71 oracle cases
 //!
-//! - **12 ported** below (7 `Draggable`-gesture + 5 `DragTargetState`-protocol
-//!   listed in each section's own comment).
-//! - **Out of scope, with reasons (51 cases, not silently dropped):**
-//!   - **Every case needing the feedback overlay to be visually present or
-//!     positioned** (`'Feedback has default ...'`, `'... following pointer'`,
-//!     `'DragTarget can be dragged'`, all `'feedbackOffset'`/`dragAnchorStrategy`
-//!     cases, `rootOverlay`, `ignoringFeedback*`) — no `Overlay.of(context)`
-//!     equivalent exists yet (see `draggable.rs` divergence #1). ~15 cases.
-//!   - **Every case needing live hit-test-based target discovery**
-//!     end-to-end through a real `Draggable` + `DragTarget` pair moving across
-//!     each other on screen (`'Drag and drop'`, `'Drag and drop with tap'`,
-//!     `'onLeave and onAccept...'`, `'multi drag...'` positional cases,
-//!     `'Drag start delay...'`) — this is exactly the gap point 1 above names;
-//!     the *protocol itself* is ported (group 2), the *live wiring* is not.
-//!     ~20 cases.
-//!   - **`LongPressDraggable`** (every `'long press...'` case) —
-//!     `DelayedMultiDragGestureRecognizer` does not exist in `flui-interaction`
-//!     yet (see `draggable.rs` divergence #3). ~8 cases.
-//!   - **Velocity/fling-magnitude assertions on `onDraggableCanceled`** — the
-//!     same real-clock non-determinism `dismissible_test.rs`'s module doc
-//!     documents for `DragGestureRecognizer::handle_move`; a scripted move
-//!     sequence cannot assert a *specific* velocity. ~3 cases.
-//!   - **`axis`-affinity / scroll-interaction cases** (`Axis` combined with a
-//!     `Scrollable` ancestor) — no scroll-arena-competition scenario is set up
-//!     in this file; covered in spirit by `axis_horizontal_zeroes_reported_vertical_delta`
-//!     proving the restriction math alone. ~5 cases.
+//! **16 tests ported below** (10 `Draggable`-gesture + 6
+//! `DragTargetState`-protocol, listed in each section's own comment). Of
+//! these, 4 correspond exactly (or as an explicitly-noted partial) to a
+//! specific oracle `testWidgets` name:
+//! - `'Null axis onDragUpdate called only if draggable moves in any
+//!   direction'`, `'Vertical axis onDragUpdate only called if draggable
+//!   moves vertical'`, `'Horizontal axis onDragUpdate only called if
+//!   draggable moves horizontal'` → the three `*_on_drag_update_only_fires_*`
+//!   tests.
+//! - `'Drag and drop - maxSimultaneousDrags'` → `max_simultaneous_drags_zero_disables_dragging`
+//!   covers only the `maxSimultaneousDrags: 0` half of that oracle case; the
+//!   `maxSimultaneousDrags: 2`-with-3-concurrent-pointers half needs two (or
+//!   three) *independently addressable* concurrent contacts, and
+//!   `LaidOutScoped`'s `dispatch_pointer_*` sugar tracks exactly one
+//!   "current contact" at a time (each `dispatch_pointer_down` reassigns it) —
+//!   there is no way through this harness's public surface to `moveTo`/`up`
+//!   an *earlier* contact once a later one has gone down. Named harness
+//!   limitation, not silently dropped.
+//! - `'Draggable disposes recognizer'` / `'Drag and drop - remove
+//!   draggable'` → `unmounting_mid_drag_cancels_immediately_and_fires_end_and_canceled`
+//!   proves the *documented divergence* (`draggable.rs`'s divergence #5)
+//!   in their place, not the oracle's own keep-alive behavior.
+//!
+//! The remaining 12 ported tests exercise the oracle's established
+//! start/update/end/cancel/accept/candidate/reject/leave *contract* —
+//! spread by the oracle across many live end-to-end `testWidgets` cases —
+//! without a single corresponding `testWidgets` name, same as the original
+//! cut of this file.
+//!
+//! **55 cases out of scope, with reasons (not silently dropped from the
+//! count):**
+//!
+//! - **Feedback overlay presence/position (15 cases).** No
+//!   `Overlay.of(context)` equivalent exists (`draggable.rs` divergence #1):
+//!   `'Null/Horizontal/Vertical axis draggable moves ...'` (×5, check the
+//!   *feedback* widget's rendered position), `'Drag feedback with child
+//!   anchor positions correctly'`, `'... within a non-global Overlay ...'`,
+//!   `'Drag feedback is put on root overlay with [rootOverlay] flag'` (×2,
+//!   duplicate oracle name), `'... matches pointer in scaled MaterialApp'`,
+//!   `'childDragAnchorStrategy works in scaled MaterialApp'`, `'... matches
+//!   pointer in rotated MaterialApp'`, `'unmounting overlay ends drag
+//!   gracefully'`, `'feedback respect the MouseRegion cursor configure'`,
+//!   `'configurable feedback ignore pointer behavior'`.
+//! - **Live hit-test-based target discovery (29 cases).** Needs a real
+//!   `DragTarget` hit-tested at the pointer's current, moved-to position —
+//!   the exact gap this module doc opens with: `'control test'`, `'onLeave
+//!   callback fires correctly'` (×2, with/without generic param — the
+//!   *protocol* is ported directly, see `on_leave` coverage in group 2),
+//!   `'onMove callback fires correctly'` (×2, ditto — see
+//!   `on_move_fires_for_both_candidate_and_rejected_entries`), `'onMove is
+//!   not called if moved with null data'` (also needs null-data modeling —
+//!   `ErasedDragData` erases a concrete value, not an `Option`, so a
+//!   genuinely-null `Draggable::data` has no representation in this cut),
+//!   `'dragging over button'`, `'tapping button'`, `'horizontal and vertical
+//!   draggables in vertical/horizontal block'` (×2), `'onDraggableCanceled
+//!   not/called if dropped on a/non-accepting target'` (×2, plus `'...with
+//!   details'`/`'...with correct velocity'` variants, ×2 more),
+//!   `'onDragEnd not called if dropped on non-accepting target'` (+`'...with
+//!   details'`, ×2), `'DragTarget rebuilds with and without rejected data
+//!   ...'`, `'Can drag and drop over a non-accepting target multiple
+//!   times'`, `'onDragCompleted not called if dropped on non-accepting
+//!   target'` (+`'...with details'`, ×2), `'onDragEnd called if dropped on
+//!   accepting target'`, `'DragTarget does not call onDragEnd when remove
+//!   from the tree'`, `'onDragCompleted called if dropped on accepting
+//!   target'`, `'allow pass through of unaccepted data test'` (+`'...twice
+//!   test'`, ×2), `'onAccept is not called if dropped with null data'` (also
+//!   null-data), `'Draggable plays nice with onTap'`, `'DragTarget does not
+//!   set state when remove from the tree'` (a `setState`-after-dispose class
+//!   of bug Rust's ownership model rules out structurally — same reasoning
+//!   as `dismissible_test.rs`'s `'Verify that drag-move events do not
+//!   assert'` note).
+//! - **`LongPressDraggable` (12 cases).** `DelayedMultiDragGestureRecognizer`
+//!   does not exist in `flui-interaction` yet (`draggable.rs` divergence
+//!   #3): both `'long press draggable, short/long press'`, `'Tap above
+//!   long-press draggable works'`, `'long-press draggable calls onDragEnd/
+//!   onDragCompleted/onDragStartedCalled ...'` (×3), `'Custom/Default long
+//!   press delay for LongPressDraggable'` (×2), `'long-press draggable calls
+//!   Haptic Feedback onStart'`, `'... can disable Haptic Feedback'`,
+//!   `'configurable feedback ignore pointer behavior - LongPressDraggable'`,
+//!   `'LongPressDraggable.dragAnchorStrategy'`.
+//! - **Rust's exact-type `downcast` vs. Dart's supertype-compatible `is`
+//!   (3 cases).** `'DragTarget<Object> can accept Draggable<int> data'`,
+//!   `'DragTarget<int> can accept Draggable<Object> data when runtime type
+//!   is int'`, `'... should not accept ... runtime type null'` — Dart's `is
+//!   T?` accepts a subtype/matching-runtime-type value through a wider
+//!   static type (`Object`); `Any::downcast::<T>()` requires the *exact*
+//!   concrete type `T`, with no variance. A `DragTarget<Object>` has no
+//!   Rust equivalent that would accept a boxed `i32` the way Dart's does.
+//! - **`hitTestBehavior` not configurable on `Draggable`/`DragTarget` (3
+//!   cases).** `'configurable DragTarget hit test behavior'` (×2, duplicate
+//!   oracle name), `'configurable Draggable hit test behavior'` — named
+//!   deferral (`draggable.rs` divergence #4).
+//! - **`allowedButtonsFilter` not implemented (1 case).** `'Test
+//!   allowedButtonsFilter'` — named deferral (`draggable.rs` divergence #4).
+//! - **Deprecated dual-callback assertion, not applicable (1 case).**
+//!   `'throws error when both onWillAccept and onWillAcceptWithDetails are
+//!   provided'` — `DragTarget` ships only the details-carrying callback under
+//!   the plain name (`drag_target.rs` divergence note); there is no
+//!   deprecated predecessor to guard against combining.
+//! - **Semantics (1 case).** `'Drag and drop can contribute semantics'` —
+//!   Phase 3 (deferred) per this crate's `parity/main.rs` module doc, same
+//!   as every other file in this directory.
+//! - **Custom `dragAnchorStrategy` callback (1 case).** `'when a
+//!   dragAnchorStrategy is provided it gets called'` — only the *default*
+//!   strategy's offset semantics are implemented (`draggable.rs` divergence
+//!   #4); a caller-supplied strategy function is not configurable.
 
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
@@ -79,6 +165,13 @@ use crate::common::{LaidOutScoped, lay_out_with_arena, tight};
 
 fn extent() -> BoxConstraints {
     tight(100.0, 100.0)
+}
+
+/// A larger box for the axis-update-gate tests below, which move the
+/// pointer well past 100px in both dimensions to exercise several
+/// independent move steps without crowding `extent()`'s edge.
+fn large_extent() -> BoxConstraints {
+    tight(300.0, 300.0)
 }
 
 /// `child`'s render type is `RenderDecoratedBox` — distinct from
@@ -114,14 +207,19 @@ fn erase<T: Send + Sync + 'static>(value: T) -> ErasedDragData {
 // Group 1 — `Draggable`'s gesture lifecycle (real pointer dispatch)
 // ============================================================================
 //
-// 7 cases: drag started fires once past slop; update reports the real delta;
-// axis restriction zeroes the cross component; end reports unaccepted and
-// fires canceled, never completed; a platform pointer-cancel also fires
-// `on_drag_end` (Flutter's `finishDrag` is unconditional — this project
-// found and fixed a divergence from that while building this port, see
-// `pointer_cancel_fires_drag_end_before_canceled_with_zero_velocity` below);
-// `max_simultaneous_drags(0)` disables dragging entirely; `child_when_dragging`
-// swaps in while active and reverts after the drag ends.
+// 10 cases: drag started fires once past slop; update reports the RAW delta
+// (unrestricted — see the axis-gate cases below); the null/vertical/horizontal
+// axis "onDragUpdate only fires if the restricted position actually moved"
+// gate (the oracle's own three-case group, ported 1:1); end reports
+// unaccepted and fires canceled, never completed, with the tracked
+// anchor-relative offset; a platform pointer-cancel also fires `on_drag_end`
+// with that same offset and zero velocity (Flutter's `finishDrag` is
+// unconditional — this project found and fixed a divergence from that while
+// building this port, see `pointer_cancel_fires_drag_end_before_canceled_with_zero_velocity`
+// below); `max_simultaneous_drags(0)` disables dragging entirely;
+// `child_when_dragging` swaps in while active and reverts after the drag
+// ends; unmounting mid-drag cancels immediately (the documented divergence
+// from the oracle's recognizer keep-alive).
 
 #[test]
 fn drag_started_fires_once_past_slop() {
@@ -182,30 +280,130 @@ fn drag_update_reports_delta_after_start() {
     scoped.dispatch_pointer_up(95.0, 50.0);
 }
 
+/// Records every `on_drag_update` delta and a running fire count.
+#[derive(Default)]
+struct UpdateLog {
+    fires: usize,
+    last_delta: Option<Offset<flui_types::geometry::PixelDelta>>,
+}
+
+// Every case below starts the drag with a single, clean, sufficiently large
+// move (its own magnitude alone crosses the touch slop — the same pattern
+// `drag_started_fires_once_past_slop` uses). This matters because
+// `MultiDragGestureRecognizer` flushes the *accumulated* pending delta as
+// the drag's first `update()` call the moment slop is crossed (see
+// `multidrag.rs`'s "pending delta flushes on acceptance" contract); spreading
+// slop-crossing across two small moves would fold both of their deltas into
+// that first flush, making a single move's contribution unobservable. A
+// single large first move sidesteps that entirely: it both starts the drag
+// and *is* the move under test, and every move after it is a clean,
+// unaccumulated per-move delta.
+
 #[test]
-fn axis_horizontal_zeroes_reported_vertical_delta() {
-    let last_delta = Arc::new(StdMutex::new(None));
-    let last_delta_for_cb = Arc::clone(&last_delta);
+fn null_axis_on_drag_update_only_fires_when_position_moves() {
+    // Oracle: `'Null axis onDragUpdate called only if draggable moves in any
+    // direction'`. A zero-delta move must not fire a second update.
+    let log = Arc::new(StdMutex::new(UpdateLog::default()));
+    let log_for_cb = Arc::clone(&log);
+    let widget = Draggable::<i32>::new(child()).on_drag_update(move |details| {
+        let mut log = log_for_cb.lock().expect("not poisoned");
+        log.fires += 1;
+        log.last_delta = Some(details.delta);
+    });
+    let scoped = lay_out_with_arena(widget, large_extent());
+
+    scoped.dispatch_pointer_down(50.0, 50.0);
+    scoped.dispatch_pointer_move(80.0, 80.0); // +30,+30: starts the drag AND fires (nonzero)
+    assert_eq!(
+        log.lock().expect("not poisoned").fires,
+        1,
+        "the slop-crossing move itself carries a nonzero delta and must fire"
+    );
+
+    scoped.dispatch_pointer_move(80.0, 80.0); // zero delta from the last position
+    assert_eq!(
+        log.lock().expect("not poisoned").fires,
+        1,
+        "a zero-delta move must not fire again"
+    );
+    scoped.dispatch_pointer_up(80.0, 80.0);
+}
+
+#[test]
+fn vertical_axis_on_drag_update_only_fires_when_position_moves_vertically() {
+    // Oracle: `'Vertical axis onDragUpdate only called if draggable moves
+    // vertical'`. A purely-horizontal move must not fire (the restricted
+    // position does not change), even though it carries a nonzero raw delta.
+    let log = Arc::new(StdMutex::new(UpdateLog::default()));
+    let log_for_cb = Arc::clone(&log);
+    let widget = Draggable::<i32>::new(child())
+        .axis(Axis::Vertical)
+        .on_drag_update(move |details| {
+            let mut log = log_for_cb.lock().expect("not poisoned");
+            log.fires += 1;
+            log.last_delta = Some(details.delta);
+        });
+    let scoped = lay_out_with_arena(widget, large_extent());
+
+    scoped.dispatch_pointer_down(50.0, 50.0);
+    scoped.dispatch_pointer_move(50.0, 90.0); // +0,+40: starts the drag, purely vertical
+    assert_eq!(
+        log.lock().expect("not poisoned").fires,
+        1,
+        "a vertical move must fire under Axis::Vertical"
+    );
+
+    scoped.dispatch_pointer_move(90.0, 90.0); // +40,+0 from here: purely horizontal
+    assert_eq!(
+        log.lock().expect("not poisoned").fires,
+        1,
+        "a purely horizontal move must not fire under Axis::Vertical, even \
+         though its raw delta is nonzero"
+    );
+    scoped.dispatch_pointer_up(90.0, 90.0);
+}
+
+#[test]
+fn horizontal_axis_on_drag_update_only_fires_when_position_moves_horizontally() {
+    // Oracle: `'Horizontal axis onDragUpdate only called if draggable moves
+    // horizontal'` — the mirror of the vertical case above, plus a final
+    // diagonal move proving the *reported* delta is RAW (unrestricted), not
+    // axis-zeroed, per `draggable.rs`'s divergence from the earlier cut.
+    let log = Arc::new(StdMutex::new(UpdateLog::default()));
+    let log_for_cb = Arc::clone(&log);
     let widget = Draggable::<i32>::new(child())
         .axis(Axis::Horizontal)
         .on_drag_update(move |details| {
-            *last_delta_for_cb.lock().expect("not poisoned") = Some(details.delta);
+            let mut log = log_for_cb.lock().expect("not poisoned");
+            log.fires += 1;
+            log.last_delta = Some(details.delta);
         });
-    let scoped = lay_out_with_arena(widget, extent());
+    let scoped = lay_out_with_arena(widget, large_extent());
 
     scoped.dispatch_pointer_down(50.0, 50.0);
-    scoped.dispatch_pointer_move(75.0, 50.0); // starts the drag
-    scoped.dispatch_pointer_move(75.0, 90.0); // 0px horizontal, +40px vertical
-
-    let delta = last_delta
-        .lock()
-        .expect("not poisoned")
-        .expect("on_drag_update fired");
+    scoped.dispatch_pointer_move(90.0, 50.0); // +40,+0: starts the drag, purely horizontal
     assert_eq!(
-        delta.dy.0, 0.0,
-        "Axis::Horizontal must zero the reported vertical component (_DragAvatar._restrictAxis)"
+        log.lock().expect("not poisoned").fires,
+        1,
+        "a horizontal move must fire under Axis::Horizontal"
     );
-    scoped.dispatch_pointer_up(75.0, 90.0);
+
+    scoped.dispatch_pointer_move(90.0, 90.0); // +0,+40 from here: purely vertical
+    assert_eq!(
+        log.lock().expect("not poisoned").fires,
+        1,
+        "a purely vertical move must not fire under Axis::Horizontal"
+    );
+
+    scoped.dispatch_pointer_move(110.0, 120.0); // +20,+30: on-axis component present, fires
+    assert_eq!(log.lock().expect("not poisoned").fires, 2);
+    let delta = log.lock().expect("not poisoned").last_delta.expect("fired");
+    assert!(
+        (delta.dx.0 - 20.0).abs() < 0.01 && (delta.dy.0 - 30.0).abs() < 0.01,
+        "the RAW (unrestricted) delta is reported — both components — not \
+         axis-zeroed: got {delta:?}"
+    );
+    scoped.dispatch_pointer_up(110.0, 120.0);
 }
 
 #[test]
@@ -256,10 +454,11 @@ fn drag_end_reports_not_accepted_and_never_fires_completed() {
 #[test]
 fn pointer_cancel_fires_drag_end_before_canceled_with_zero_velocity() {
     // Flutter's `_DragAvatar.cancel` routes through `finishDrag`, which fires
-    // `onDragEnd` unconditionally (zero velocity, unaccepted) before
-    // `onDraggableCanceled` — a platform cancel is not a cancel-only path.
-    // Building this port's `DragSession::cancel` initially skipped the
-    // `on_drag_end` fire; this case is the red-check that caught it.
+    // `onDragEnd` unconditionally (zero velocity, unaccepted, but the real
+    // `_lastOffset`) before `onDraggableCanceled` — a platform cancel is not
+    // a cancel-only path. Building this port's `DragSession::cancel`
+    // initially skipped the `on_drag_end` fire; this case is the red-check
+    // that caught it.
     let end_count = Arc::new(AtomicUsize::new(0));
     let end_for_cb = Arc::clone(&end_count);
     let canceled_count = Arc::new(AtomicUsize::new(0));
@@ -268,10 +467,14 @@ fn pointer_cancel_fires_drag_end_before_canceled_with_zero_velocity() {
         .on_drag_end(move |details| {
             assert_eq!(details.velocity.pixels_per_second, origin());
             assert!(!details.was_accepted);
+            // The tracked anchor-relative offset (25px right, matching the
+            // move below), not zero — only velocity is zero on cancel.
+            assert!((details.offset.dx.0 - 25.0).abs() < 0.01);
             end_for_cb.fetch_add(1, Ordering::SeqCst);
         })
-        .on_draggable_canceled(move |velocity, _offset| {
+        .on_draggable_canceled(move |velocity, offset| {
             assert_eq!(velocity.pixels_per_second, origin());
+            assert!((offset.dx.0 - 25.0).abs() < 0.01);
             canceled_for_cb.fetch_add(1, Ordering::SeqCst);
         });
     let scoped = lay_out_with_arena(widget, extent());
@@ -290,6 +493,9 @@ fn pointer_cancel_fires_drag_end_before_canceled_with_zero_velocity() {
 
 #[test]
 fn max_simultaneous_drags_zero_disables_dragging() {
+    // Oracle: `'Drag and drop - maxSimultaneousDrags'` — the
+    // `maxSimultaneousDrags: 0` half only; see the module doc on why the
+    // N-concurrent-pointers half is a named harness limitation.
     let started = Arc::new(AtomicUsize::new(0));
     let started_for_cb = Arc::clone(&started);
     let widget = Draggable::<i32>::new(child())
@@ -372,18 +578,96 @@ fn child_when_dragging_swaps_in_while_active_and_reverts_on_end() {
     );
 }
 
+#[test]
+fn unmounting_mid_drag_cancels_immediately_and_fires_end_and_canceled() {
+    // Oracle: `'Draggable disposes recognizer'` / `'Drag and drop - remove
+    // draggable'`, in spirit — see `draggable.rs`'s divergence #5 on why
+    // this port cancels immediately on unmount instead of tracking the
+    // pointer to its real up (a `MultiDragGestureRecognizer` is `!Send +
+    // !Sync`, so a `Send + Sync`-bound `DragSession` cannot hold a
+    // reference to it to dispose it later itself).
+    //
+    // `Draggable`'s own gesture recognition (crossing the drag slop) needs
+    // the arena-driven dispatch `lay_out_with_arena`/`LaidOutScoped`
+    // provides (plain `lay_out`'s dispatch never starts the drag at all —
+    // confirmed directly while building this case). But swapping the
+    // *literal root element's own type* via `pump_widget`/`swap_root_view`
+    // does not run the normal unmount/dispose path either (also confirmed
+    // directly: a bare-root swap never calls `DraggableState::dispose`, with
+    // or without an active drag) — `dismissible_test.rs`'s own unmount cases
+    // hit the same thing and avoid it by keeping an outer wrapper (there,
+    // `VsyncScope`) stable and swapping only its child. Here, that means
+    // re-wrapping the replacement root in a `GestureArenaScope` built from
+    // the *same* arena (`LaidOut::arena()`), so `GestureArenaScope` itself —
+    // the true root element — never changes type across the swap.
+    //
+    // The stable wrapper is `Padding::new(EdgeInsets::ZERO)`, not `Center`:
+    // `Center` gives its child its own preferred (loose) size, which shrank
+    // `Draggable`'s `ColoredBox` away from the coordinates this test dispatches
+    // to (confirmed directly — the drag never started under `Center`). Zero
+    // padding passes the incoming tight `extent()` constraint straight
+    // through, so `child()`'s `ColoredBox` still fills the whole box exactly
+    // as it does everywhere else in this file.
+    use flui_types::geometry::EdgeInsets;
+    use flui_widgets::{GestureArenaScope, Padding};
+
+    let started = Arc::new(AtomicUsize::new(0));
+    let started_for_cb = Arc::clone(&started);
+    let canceled = Arc::new(AtomicUsize::new(0));
+    let canceled_for_cb = Arc::clone(&canceled);
+    let widget = Draggable::<i32>::new(child())
+        .on_drag_started(move || {
+            started_for_cb.fetch_add(1, Ordering::SeqCst);
+        })
+        .on_draggable_canceled(move |_v, _o| {
+            canceled_for_cb.fetch_add(1, Ordering::SeqCst);
+        });
+    let mut scoped = lay_out_with_arena(Padding::new(EdgeInsets::ZERO).child(widget), extent());
+
+    scoped.dispatch_pointer_down(50.0, 50.0);
+    scoped.dispatch_pointer_move(80.0, 50.0);
+    assert_eq!(
+        started.load(Ordering::SeqCst),
+        1,
+        "the drag must have started before we test unmounting it mid-flight"
+    );
+    assert_eq!(
+        canceled.load(Ordering::SeqCst),
+        0,
+        "the drag is active; no cancellation yet"
+    );
+
+    // Unmount the Draggable (swap Padding's child for an unrelated widget)
+    // while the drag is still active. The GestureArenaScope root and the
+    // Padding underneath it both stay mounted; only Padding's child changes.
+    let arena = scoped.laid().arena();
+    scoped.pump_widget(GestureArenaScope::new(
+        arena,
+        Padding::new(EdgeInsets::ZERO).child(child()),
+    ));
+
+    assert_eq!(
+        canceled.load(Ordering::SeqCst),
+        1,
+        "unmounting mid-drag must dispose the recognizer, which cancels the \
+         still-active drag right there"
+    );
+}
+
 // ============================================================================
 // Group 2 — `DragTargetState`'s accept/candidate/reject/leave protocol
 // ============================================================================
 //
-// 5 cases, driven directly against the state machine (see the module doc
+// 6 cases, driven directly against the state machine (see the module doc
 // above for why): data delivered on an accepted drop; the candidate list
 // gains/loses entries across enter/leave; `on_will_accept` returning `false`
-// routes to the rejected count instead of the candidate list; typed-data
-// mismatch (a `DragTarget<String>` given an `i32` payload) is always
-// rejected regardless of `on_will_accept`; `did_drop` only accepts a pointer
-// that is a *current* candidate (a rejected or unknown pointer's drop is a
-// no-op, matching the oracle's `assert(_candidateAvatars.contains(avatar))`).
+// routes to the rejected list instead of the candidate list; typed-data
+// mismatch (a `DragTarget<String>` given an `i32` payload) never becomes an
+// entry at all, matching the oracle's discovery-time `isExpectedDataType`
+// filter; `did_move` fires for a rejected entry too — the oracle's own
+// `didMove` gates only on null data, not rejection status (this is the
+// mutation-coverage gap the pre-fix code had: `did_move` used to no-op for
+// `Standing::Rejected`); `did_drop` only accepts a *current* candidate.
 
 fn string_target() -> DragTarget<String> {
     DragTarget::new(|_candidates, _rejected| SizedBox::new(0.0, 0.0).boxed())
@@ -441,7 +725,13 @@ fn candidate_list_gains_and_loses_entries_across_enter_and_leave() {
 
 #[test]
 fn on_will_accept_veto_routes_to_rejected_not_candidate() {
-    let target = string_target().on_will_accept(|_details| false);
+    let left_with = Arc::new(StdMutex::new(None));
+    let left_for_cb = Arc::clone(&left_with);
+    let target = string_target()
+        .on_will_accept(|_details| false)
+        .on_leave(move |data| {
+            *left_for_cb.lock().expect("not poisoned") = Some(data);
+        });
     let mut state = target.create_state();
     let p = pointer(1);
 
@@ -452,14 +742,32 @@ fn on_will_accept_veto_routes_to_rejected_not_candidate() {
         "on_will_accept returning false must reject the enter"
     );
     assert!(state.candidate_data().is_empty());
-    assert_eq!(state.rejected_count(), 1);
+    assert_eq!(
+        state.rejected_data(),
+        vec!["a".to_string()],
+        "a vetoed-but-correctly-typed drag is tracked with its real data, \
+         not merely counted (the oracle's own _rejectedAvatars only ever \
+         holds T?-typed data — see drag_target.rs's module docs)"
+    );
+
+    state.did_leave(&target, p);
+    assert_eq!(
+        left_with.lock().expect("not poisoned").clone().flatten(),
+        Some("a".to_string()),
+        "on_leave must receive the rejected entry's real data too — the \
+         oracle's didLeave does `avatar.data as T?` unconditionally, not \
+         gated on candidate-vs-rejected status"
+    );
 }
 
 #[test]
-fn typed_data_mismatch_is_always_rejected_regardless_of_on_will_accept() {
+fn typed_data_mismatch_is_never_tracked_regardless_of_on_will_accept() {
     // `on_will_accept` is configured to accept everything — the mismatch
-    // must still reject, matching the oracle's `isExpectedDataType` gate,
-    // which runs before `onWillAcceptWithDetails` is even consulted.
+    // must still be rejected, and moreover never becomes an entry at all
+    // (neither candidate nor rejected): the oracle's `_getDragTargets`
+    // filters by `isExpectedDataType` *before* `didEnter` ever runs, so a
+    // type-mismatched avatar never reaches `_candidateAvatars` OR
+    // `_rejectedAvatars`.
     let target = string_target().on_will_accept(|_details| true);
     let mut state = target.create_state();
     let p = pointer(1);
@@ -471,7 +779,53 @@ fn typed_data_mismatch_is_always_rejected_regardless_of_on_will_accept() {
         "an i32 payload must never be accepted by a DragTarget<String>"
     );
     assert!(state.candidate_data().is_empty());
-    assert_eq!(state.rejected_count(), 1);
+    assert!(
+        state.rejected_data().is_empty(),
+        "a type mismatch must not be tracked as rejected either — it never \
+         became an entry at all"
+    );
+
+    // Confirms it was never tracked: a later did_leave/did_move/did_drop for
+    // the same pointer is a no-op, not an error.
+    state.did_leave(&target, p);
+    state.did_move(&target, p, origin());
+    assert!(!state.did_drop(&target, p, origin()));
+}
+
+#[test]
+fn did_move_fires_for_both_candidate_and_rejected_entries() {
+    // Oracle: `_DragTargetState.didMove`'s only gate is `avatar.data ==
+    // null` — a genuinely null payload — NOT rejection status. A
+    // veto-rejected-but-correctly-typed avatar still sits in
+    // `_enteredTargets` and receives every move. This is the mutation-
+    // coverage gap the original cut of this file had: `did_move` used to
+    // silently no-op for `Standing::Rejected`, which no test here caught
+    // until this case was added.
+    let candidate_moves = Arc::new(StdMutex::new(Vec::new()));
+    let candidate_moves_for_cb = Arc::clone(&candidate_moves);
+    let target = string_target()
+        .on_will_accept(|details| details.data == "candidate")
+        .on_move(move |details| {
+            candidate_moves_for_cb
+                .lock()
+                .expect("not poisoned")
+                .push(details.data);
+        });
+    let mut state = target.create_state();
+
+    let candidate = pointer(1);
+    let rejected = pointer(2);
+    assert!(state.did_enter(&target, candidate, erase("candidate".to_string()), origin()));
+    assert!(!state.did_enter(&target, rejected, erase("rejected".to_string()), origin()));
+
+    state.did_move(&target, candidate, origin());
+    state.did_move(&target, rejected, origin());
+
+    assert_eq!(
+        *candidate_moves.lock().expect("not poisoned"),
+        vec!["candidate".to_string(), "rejected".to_string()],
+        "on_move must fire for the rejected entry too, not just the candidate"
+    );
 }
 
 #[test]

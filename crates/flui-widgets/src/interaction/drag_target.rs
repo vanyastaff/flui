@@ -10,7 +10,7 @@
 //! position" after mount, so `did_enter`/`did_move`/`did_leave`/`did_drop`
 //! below are real, tested production methods, driven directly rather than by
 //! a live `Draggable` session discovering this target through a pointer
-//! move.
+//! move. Tracked in `docs/ROADMAP.md`'s Cross.H section, not just here.
 //!
 //! # Divergences from the oracle
 //!
@@ -21,12 +21,22 @@
 //!   details-carrying form under the plain name (`on_will_accept`,
 //!   `on_accept`) — there is no deprecated predecessor to stay compatible
 //!   with in a new port.
-//! - **`rejected_data` is a count, not a list.** The oracle's `rejectedData`
-//!   is `List<dynamic>` — genuinely heterogeneous, since a rejected drag may
-//!   carry a type unrelated to `T`. FLUI's rejected drags are tracked as
-//!   type-erased payloads (`Arc<dyn Any + Send + Sync>`); the builder is
-//!   handed how many there are rather than the erased payloads themselves,
-//!   since nothing in `T`'s scope can do anything useful with them.
+//! - **`rejected_data` is typed (`&[T]`), not `List<dynamic>`.** The oracle's
+//!   `rejectedData` signature is `List<dynamic>`, but `_getDragTargets`
+//!   (`drag_target.dart`) filters every hit-tested target by
+//!   `isExpectedDataType(data, T)` *before* `didEnter` is ever called for it
+//!   — a type-mismatched drag never becomes an entry in `_rejectedAvatars`
+//!   (or `_candidateAvatars`) at all, only an `onWillAccept`-vetoed drag
+//!   whose data already matched `T` does. So the oracle's own rejected list,
+//!   for a given `DragTarget<T>`, only ever holds `T?`-typed values in
+//!   practice — `List<dynamic>` is Dart's loose typing describing a fact
+//!   that is always `T`-shaped, not evidence of real heterogeneity. FLUI's
+//!   `rejected_data() -> Vec<T>` makes that already-true fact explicit in
+//!   the type system rather than replicating Dart's looser surface.
+//!   `did_enter` mirrors the same discovery-time filter: a genuinely
+//!   type-mismatched payload is never added to either list (see its own
+//!   doc), so `did_leave`/`did_move` never need to reconstruct a "was this
+//!   ever a real `T`" answer after the fact.
 
 use std::any::Any;
 use std::rc::Rc;
@@ -58,8 +68,10 @@ pub struct DragTargetDetails<T> {
 ///
 /// Flutter parity: `DragTargetBuilder<T>`, minus the `BuildContext` parameter
 /// (the target's own `build` already has one available if the builder needs
-/// ambient lookups — the candidate/rejected data is what changes per drag).
-pub type DragTargetBuilder<T> = Rc<dyn Fn(&[Option<T>], usize) -> BoxedView>;
+/// ambient lookups — the candidate/rejected data is what changes per drag),
+/// and a typed `&[T]` rejected list rather than `List<dynamic>` — see the
+/// module docs on why that is a faithful narrowing, not a divergence.
+pub type DragTargetBuilder<T> = Rc<dyn Fn(&[Option<T>], &[T]) -> BoxedView>;
 
 /// Determines whether a [`DragTarget`] will accept `details`.
 pub type DragTargetWillAccept<T> = Rc<dyn Fn(&DragTargetDetails<T>) -> bool>;
@@ -98,7 +110,7 @@ impl<T: Clone + Send + Sync + 'static> std::fmt::Debug for DragTarget<T> {
 impl<T: Clone + Send + Sync + 'static> DragTarget<T> {
     /// A target whose contents are built from the current candidate/rejected
     /// state.
-    pub fn new(builder: impl Fn(&[Option<T>], usize) -> BoxedView + 'static) -> Self {
+    pub fn new(builder: impl Fn(&[Option<T>], &[T]) -> BoxedView + 'static) -> Self {
         Self {
             builder: Rc::new(builder),
             on_will_accept: None,
@@ -142,13 +154,23 @@ impl<T: Clone + Send + Sync + 'static> DragTarget<T> {
     }
 }
 
-/// One pointer's standing with a [`DragTarget`]: a candidate carries its
-/// resolved, downcast data; a rejected entry keeps no payload — nothing in
-/// `T`'s scope can use it (see [`DragTarget`]'s module docs on why
-/// `rejected_data` is a count, not a list).
+/// One pointer's standing with a [`DragTarget`]: both variants carry the
+/// resolved, downcast `T` — a type mismatch never reaches either variant at
+/// all (see [`DragTargetState::did_enter`]'s doc). `Rejected` is exactly the
+/// oracle's `_rejectedAvatars`: an `on_will_accept`-vetoed drag whose data
+/// already matched `T`, not a foreign-typed one.
 enum Standing<T> {
     Candidate(T),
-    Rejected,
+    Rejected(T),
+}
+
+impl<T> Standing<T> {
+    /// The carried data, whichever standing this is — both variants have one.
+    fn data(&self) -> &T {
+        match self {
+            Standing::Candidate(data) | Standing::Rejected(data) => data,
+        }
+    }
 }
 
 /// Persistent state: the candidate/rejected lists, keyed by the dragging
@@ -162,7 +184,7 @@ impl<T: Clone + Send + Sync + 'static> std::fmt::Debug for DragTargetState<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DragTargetState")
             .field("candidate_count", &self.candidate_data().len())
-            .field("rejected_count", &self.rejected_count())
+            .field("rejected_count", &self.rejected_data().len())
             .finish()
     }
 }
@@ -174,8 +196,14 @@ impl<T: Clone + Send + Sync + 'static> DragTargetState<T> {
     }
 
     /// A drag identified by `pointer` enters this target carrying `data` at
-    /// `offset`. Resolves `on_will_accept`, files the pointer as a candidate
-    /// or rejected, and returns whether it was accepted.
+    /// `offset`. A `data` whose concrete type does not match `T` is never
+    /// tracked at all — no candidate entry, no rejected entry, and returns
+    /// `false` without creating anything for `pointer` to leave later. This
+    /// mirrors `_getDragTargets`' `isExpectedDataType` filter, which runs
+    /// *before* `didEnter` and keeps a type-mismatched avatar out of
+    /// `_enteredTargets` entirely — `didEnter` itself, once reached, only
+    /// ever decides candidate vs. rejected for already-`T`-typed data via
+    /// `on_will_accept`.
     ///
     /// Flutter parity: `_DragTargetState.didEnter`.
     pub fn did_enter(
@@ -190,30 +218,34 @@ impl<T: Clone + Send + Sync + 'static> DragTargetState<T> {
             "BUG: did_enter called twice for the same pointer without an intervening did_leave"
         );
 
-        let typed = Self::downcast(&data);
-        let accepted = match (&typed, &view.on_will_accept) {
-            (None, _) => false,
-            (Some(_), None) => true,
-            (Some(value), Some(callback)) => callback(&DragTargetDetails {
-                data: value.clone(),
+        let Some(typed) = Self::downcast(&data) else {
+            // Type mismatch: never becomes an entry, matching the oracle's
+            // discovery-time filter — no candidate, no rejected, no future
+            // did_leave/did_move/did_drop call for this pointer at all.
+            return false;
+        };
+
+        let accepted = match &view.on_will_accept {
+            None => true,
+            Some(callback) => callback(&DragTargetDetails {
+                data: typed.clone(),
                 offset,
             }),
         };
 
         let standing = if accepted {
-            Standing::Candidate(typed.expect("accepted implies a downcast succeeded"))
+            Standing::Candidate(typed)
         } else {
-            Standing::Rejected
+            Standing::Rejected(typed)
         };
         self.entered.push((pointer, standing));
         accepted
     }
 
     /// `pointer`'s drag leaves this target — removed from whichever list it
-    /// was in, then `on_leave` fires with its typed data (candidates only;
-    /// a rejected drag's data may not even be `T`, so `on_leave` receives
-    /// `None` for it, same as the oracle's `avatar.data as T?` would for a
-    /// mismatched type).
+    /// was in, then `on_leave` fires with its data. A no-op for a pointer
+    /// that was never tracked (a type mismatch at `did_enter`, or a repeat
+    /// call).
     ///
     /// Flutter parity: `_DragTargetState.didLeave`.
     pub fn did_leave(&mut self, view: &DragTarget<T>, pointer: PointerId) {
@@ -221,12 +253,11 @@ impl<T: Clone + Send + Sync + 'static> DragTargetState<T> {
             return;
         };
         let (_, standing) = self.entered.remove(index);
-        let data = match standing {
-            Standing::Candidate(data) => Some(data),
-            Standing::Rejected => None,
-        };
         if let Some(callback) = &view.on_leave {
-            callback(data);
+            let data = match standing {
+                Standing::Candidate(data) | Standing::Rejected(data) => data,
+            };
+            callback(Some(data));
         }
     }
 
@@ -248,7 +279,7 @@ impl<T: Clone + Send + Sync + 'static> DragTargetState<T> {
             return false;
         };
         let (_, Standing::Candidate(data)) = self.entered.remove(index) else {
-            unreachable!("checked Candidate above");
+            unreachable!("BUG: checked Candidate above, remove must yield the same variant");
         };
         if let Some(callback) = &view.on_accept {
             callback(DragTargetDetails { data, offset });
@@ -256,22 +287,21 @@ impl<T: Clone + Send + Sync + 'static> DragTargetState<T> {
         true
     }
 
-    /// `pointer`'s drag moves while over this target (candidate or
-    /// rejected). No-op for a rejected drag, matching the oracle's
-    /// `didMove`'s early return when `avatar.data == null` — here, when the
-    /// erased payload didn't downcast to `T`.
+    /// `pointer`'s drag moves while over this target — fires `on_move` for
+    /// **either** standing (candidate or rejected), matching the oracle's
+    /// `didMove`, whose only gate is `avatar.data == null` (a genuinely null
+    /// payload, not rejection status: a vetoed-but-typed avatar still sits in
+    /// `_enteredTargets` and receives moves). A no-op only for an untracked
+    /// pointer (never entered, or a type mismatch at `did_enter`).
     ///
     /// Flutter parity: `_DragTargetState.didMove`.
     pub fn did_move(&self, view: &DragTarget<T>, pointer: PointerId, offset: Offset<Pixels>) {
         let Some((_, standing)) = self.entered.iter().find(|(id, _)| *id == pointer) else {
             return;
         };
-        let Standing::Candidate(data) = standing else {
-            return;
-        };
         if let Some(callback) = &view.on_move {
             callback(DragTargetDetails {
-                data: data.clone(),
+                data: standing.data().clone(),
                 offset,
             });
         }
@@ -284,18 +314,23 @@ impl<T: Clone + Send + Sync + 'static> DragTargetState<T> {
             .iter()
             .filter_map(|(_, standing)| match standing {
                 Standing::Candidate(data) => Some(Some(data.clone())),
-                Standing::Rejected => None,
+                Standing::Rejected(_) => None,
             })
             .collect()
     }
 
-    /// How many rejected drags are currently over this target.
+    /// The rejected (`on_will_accept`-vetoed) data currently over this
+    /// target, in entry order. See the module docs on why this is typed
+    /// (`Vec<T>`) rather than the oracle's `List<dynamic>`.
     #[must_use]
-    pub fn rejected_count(&self) -> usize {
+    pub fn rejected_data(&self) -> Vec<T> {
         self.entered
             .iter()
-            .filter(|(_, standing)| matches!(standing, Standing::Rejected))
-            .count()
+            .filter_map(|(_, standing)| match standing {
+                Standing::Rejected(data) => Some(data.clone()),
+                Standing::Candidate(_) => None,
+            })
+            .collect()
     }
 }
 
@@ -312,7 +347,7 @@ impl<T: Clone + Send + Sync + 'static> StatefulView for DragTarget<T> {
 impl<T: Clone + Send + Sync + 'static> ViewState<DragTarget<T>> for DragTargetState<T> {
     fn build(&self, view: &DragTarget<T>, _ctx: &dyn BuildContext) -> impl IntoView {
         let candidates = self.candidate_data();
-        let rejected = self.rejected_count();
-        (view.builder)(&candidates, rejected)
+        let rejected = self.rejected_data();
+        (view.builder)(&candidates, &rejected)
     }
 }
