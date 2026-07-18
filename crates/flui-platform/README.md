@@ -22,7 +22,7 @@ consumed by path (not published to crates.io).
 
 ```text
 traits/          Platform, PlatformWindow, PlatformDisplay, PlatformExecutor,
-                 PlatformCapabilities, PlatformLifecycle, PlatformEmbedder,
+                 PlatformCapabilities, PlatformEmbedder,
                  input (PlatformInput, velocity tracking)
 shared/          PlatformHandlers / WindowCallbacks — callback registries
 platforms/       windows, macos, headless, winit (+ linux/android/ios/web stubs)

@@ -1476,7 +1476,18 @@ impl Scheduler {
     /// lifecycle state changes. It will:
     /// 1. Update the internal state
     /// 2. Notify all registered listeners
-    /// 3. Adjust frame scheduling behavior accordingly
+    /// 3. Adjust frame scheduling behavior accordingly, re-scheduling a
+    ///    frame on the disabled→enabled edge
+    ///
+    /// # Thread affinity
+    ///
+    /// Listener callbacks fire synchronously, on whatever thread calls this
+    /// method — there is no dispatch/queueing here. Production callers are
+    /// expected to already be on the realm's owner thread (the platform
+    /// event-loop thread that drives `flui-app`'s realm dispatch); this
+    /// method does not itself verify that, since the scheduler has no
+    /// notion of "realm" or "owner thread" to assert against. A caller with
+    /// that context cheaply available should assert it before calling in.
     ///
     /// # Example
     ///
@@ -1511,9 +1522,22 @@ impl Scheduler {
             new_state,
             AppLifecycleState::Resumed | AppLifecycleState::Inactive
         );
-        self.binding
+        let frames_were_enabled = self
+            .binding
             .frames_enabled
-            .store(should_render, Ordering::Release);
+            .swap(should_render, Ordering::AcqRel);
+
+        // Flutter's `_setFramesEnabledState(true)` (binding.dart @ 3.44.0)
+        // schedules a frame on exactly the disabled→enabled edge —
+        // `SchedulerBinding.scheduleFrame()` is called there, not on every
+        // transition that happens to leave frames enabled. Without this leg,
+        // an app that was Hidden/Paused/Detached and comes back to
+        // Resumed/Inactive never wakes: nothing else re-requests a frame
+        // that was never scheduled while frames were off, so the pipeline
+        // sits idle until some unrelated event happens to nudge it.
+        if !frames_were_enabled && should_render {
+            self.request_frame();
+        }
 
         // Only notify if state actually changed
         if old_state != new_state {
@@ -1576,16 +1600,12 @@ impl Scheduler {
 
     /// Check if frames should be scheduled based on lifecycle state
     ///
-    /// Returns `false` when the app is hidden, paused, or detached.
+    /// Returns `false` when the app is hidden, paused, or detached. Thin
+    /// alias over [`frames_enabled`](Self::frames_enabled) — the single
+    /// atomic `handle_app_lifecycle_state_change` already maintains, rather
+    /// than re-deriving the same fact from `lifecycle_state()`.
     pub fn should_schedule_frame(&self) -> bool {
-        self.lifecycle_state().should_render()
-    }
-
-    /// Check if animations should run based on lifecycle state
-    ///
-    /// Returns `true` only when the app is resumed (visible and focused).
-    pub fn should_run_animations(&self) -> bool {
-        self.lifecycle_state().should_animate()
+        self.frames_enabled()
     }
 
     // =========================================================================
@@ -2540,7 +2560,6 @@ mod tests {
         // Default state should be Resumed
         assert_eq!(scheduler.lifecycle_state(), AppLifecycleState::Resumed);
         assert!(scheduler.should_schedule_frame());
-        assert!(scheduler.should_run_animations());
     }
 
     #[test]
@@ -2550,7 +2569,6 @@ mod tests {
         scheduler.handle_app_lifecycle_state_change(AppLifecycleState::Hidden);
         assert_eq!(scheduler.lifecycle_state(), AppLifecycleState::Hidden);
         assert!(!scheduler.should_schedule_frame());
-        assert!(!scheduler.should_run_animations());
 
         scheduler.handle_app_lifecycle_state_change(AppLifecycleState::Resumed);
         assert_eq!(scheduler.lifecycle_state(), AppLifecycleState::Resumed);
@@ -2597,6 +2615,71 @@ mod tests {
         // Change to different state should notify
         scheduler.handle_app_lifecycle_state_change(AppLifecycleState::Hidden);
         assert_eq!(*call_count.lock(), 1);
+    }
+
+    /// Flutter parity leg (binding.dart `_setFramesEnabledState(true)` @
+    /// 3.44.0): the disabled→enabled edge must actually schedule a frame,
+    /// through the real `request_frame` path so `on_frame_scheduled` fires —
+    /// otherwise a resumed app never wakes an idle event loop.
+    #[test]
+    fn lifecycle_reenable_edge_schedules_exactly_one_frame() {
+        let scheduler = Scheduler::new();
+        let wakes = Arc::new(AtomicU64::new(0));
+        let wakes_for_hook = Arc::clone(&wakes);
+        scheduler.set_on_frame_scheduled(Some(Arc::new(move || {
+            wakes_for_hook.fetch_add(1, Ordering::Relaxed);
+        })));
+
+        // Go to Hidden first: frames_enabled false->false transition here
+        // (Resumed -> Hidden) does not schedule (frames are being disabled,
+        // not enabled), and consumes no wake.
+        scheduler.handle_app_lifecycle_state_change(AppLifecycleState::Hidden);
+        assert_eq!(wakes.load(Ordering::Relaxed), 0);
+        assert!(!scheduler.is_frame_scheduled());
+
+        // Hidden -> Resumed is the disabled->enabled edge: exactly one wake.
+        scheduler.handle_app_lifecycle_state_change(AppLifecycleState::Resumed);
+        assert_eq!(
+            wakes.load(Ordering::Relaxed),
+            1,
+            "re-enabling frames after Hidden must schedule exactly one frame"
+        );
+        assert!(scheduler.is_frame_scheduled());
+    }
+
+    /// Resumed -> Inactive keeps `frames_enabled` true -> true (Inactive
+    /// still renders — visible-but-unfocused). No edge, so no frame is
+    /// (re)scheduled by the lifecycle handler itself.
+    #[test]
+    fn lifecycle_resumed_to_inactive_schedules_nothing() {
+        let scheduler = Scheduler::new();
+        let wakes = Arc::new(AtomicU64::new(0));
+        let wakes_for_hook = Arc::clone(&wakes);
+        scheduler.set_on_frame_scheduled(Some(Arc::new(move || {
+            wakes_for_hook.fetch_add(1, Ordering::Relaxed);
+        })));
+
+        scheduler.handle_app_lifecycle_state_change(AppLifecycleState::Inactive);
+        assert_eq!(wakes.load(Ordering::Relaxed), 0);
+        assert!(!scheduler.is_frame_scheduled());
+    }
+
+    /// A repeated same-state transition is a no-op on every axis: no
+    /// listener call (already covered above), and — the frames_enabled edge
+    /// this test targets — no frame (re)scheduled either.
+    #[test]
+    fn lifecycle_repeated_same_state_schedules_nothing() {
+        let scheduler = Scheduler::new();
+        let wakes = Arc::new(AtomicU64::new(0));
+        let wakes_for_hook = Arc::clone(&wakes);
+        scheduler.set_on_frame_scheduled(Some(Arc::new(move || {
+            wakes_for_hook.fetch_add(1, Ordering::Relaxed);
+        })));
+
+        // Resumed -> Resumed: already enabled, not an edge.
+        scheduler.handle_app_lifecycle_state_change(AppLifecycleState::Resumed);
+        assert_eq!(wakes.load(Ordering::Relaxed), 0);
+        assert!(!scheduler.is_frame_scheduled());
     }
 
     #[test]

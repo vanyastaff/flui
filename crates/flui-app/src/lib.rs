@@ -14,7 +14,6 @@
 //!   │   ├── ui_realm.rs     - owner-affine widget runtime
 //!   │   ├── config.rs       - AppConfig
 //!   │   ├── direct.rs       - direct rendering mode (bypasses the widget tree)
-//!   │   ├── lifecycle.rs    - AppLifecycle
 //!   │   └── runner.rs       - platform bootstrap (desktop/android/web run loops)
 //!   │
 //!   ├── bindings/           - Re-exports from other crates
@@ -37,8 +36,8 @@ pub mod theme; // PORT-CHECK-OK-SP4: theme API surface; binding entry for app in
 // Primary exports - Flutter naming
 // Legacy alias
 pub use app::{
-    AppBinding, AppConfig, DefaultLifecycle, LifecycleEvent, LifecycleState, RootRenderElement,
-    RootRenderView, WidgetsFlutterBinding, run_app, run_app_with_config, run_direct,
+    AppBinding, AppConfig, RootRenderElement, RootRenderView, WidgetsFlutterBinding, run_app,
+    run_app_with_config, run_direct,
 };
 // Android-specific entry points
 #[cfg(target_os = "android")]
@@ -72,9 +71,7 @@ pub mod prelude {
     // Logging
     pub use flui_foundation::log::{debug, error, info, trace, warn};
 
-    pub use crate::{
-        AppConfig, LifecycleState, WidgetsFlutterBinding, run_app, run_app_with_config, run_direct,
-    };
+    pub use crate::{AppConfig, WidgetsFlutterBinding, run_app, run_app_with_config, run_direct};
     // Bindings
     pub use crate::{
         GestureBinding, PaintingBinding, PipelineOwner, RenderingFlutterBinding, Scheduler,

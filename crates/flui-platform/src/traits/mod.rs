@@ -9,7 +9,6 @@ mod display;
 mod embedder;
 mod haptics;
 mod input;
-mod lifecycle;
 mod platform;
 mod text_input;
 mod window;
@@ -47,7 +46,6 @@ pub use input::{
 };
 // Re-export keyboard-types for convenience
 pub use keyboard_types::NamedKey;
-pub use lifecycle::{DefaultLifecycle, LifecycleEvent, LifecycleState, PlatformLifecycle};
 pub use platform::{
     Clipboard, ClipboardItem, PathPromptOptions, Platform, PlatformExecutor, PlatformReadyCallback,
     WindowEvent, WindowId, WindowMode, WindowOptions,
