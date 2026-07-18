@@ -987,7 +987,11 @@ fn handle_drag_start(
     // A `set_value(0.0)` above cannot itself clamp to the upper bound, but a
     // resumed-mid-animation `set_value` (the `is_animating()` branch) could in
     // principle land exactly at a bound too — discard defensively; see
-    // `discard_transient_move_completion`'s doc.
+    // `discard_transient_move_completion`'s doc. This same discard also eats a
+    // real `.forward()` completion in the sub-frame window where the run
+    // finished but its scheduled build has not yet delivered — a deliberate
+    // user-interaction-wins divergence: the new drag resets the card under
+    // the finger instead of dismissing it out from under an active gesture.
     discard_transient_move_completion(drag);
 }
 
