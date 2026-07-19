@@ -130,3 +130,6 @@ mod layout_builder_test;
 
 // ── Business.1 fidelity — AspectRatio parity ────────────────────────────────
 mod aspect_ratio_test;
+
+// ── Business.1 fidelity — OverflowBox / SizedOverflowBox parity ────────────
+mod overflow_box_test;
