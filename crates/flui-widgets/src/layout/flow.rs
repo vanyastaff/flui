@@ -179,6 +179,46 @@ mod tests {
         assert_eq!(render_object.clip_behavior(), Clip::None);
     }
 
+    /// Every `Clip` variant, not just `None`/`HardEdge` (already covered
+    /// above) — the render object's clip behavior must default to
+    /// `HardEdge` and then track a rebuild for each variant in turn.
+    ///
+    /// Flutter parity: `flow_test.dart` `'Flow can set and update
+    /// clipBehavior'` and `'Flow.unwrapped can set and update
+    /// clipBehavior'` — `for (final Clip clip in Clip.values) { ...
+    /// expect(renderObject.clipBehavior, clip); }`. FLUI has a single `Flow`
+    /// constructor with no `Flow.unwrapped` equivalent (Flutter's default
+    /// `Flow()` wraps every child in a `RepaintBoundary` via
+    /// `RepaintBoundary.wrapAll`, a paint-isolation optimization `Flow::new`
+    /// here does not perform), so this one test covers both oracle cases —
+    /// see `tests/parity/flow_test.rs`'s module docs for the full
+    /// reconciliation.
+    #[test]
+    fn update_render_object_applies_every_clip_variant() {
+        let flow: Flow = Flow::new(delegate(), Vec::new());
+        let mut render_object =
+            flow.create_render_object(&flui_view::RenderObjectContext::detached());
+        assert_eq!(render_object.clip_behavior(), Clip::HardEdge);
+
+        for clip in [
+            Clip::None,
+            Clip::HardEdge,
+            Clip::AntiAlias,
+            Clip::AntiAliasWithSaveLayer,
+        ] {
+            let updated: Flow = Flow::new(delegate(), Vec::new()).clip_behavior(clip);
+            updated.update_render_object(
+                &flui_view::RenderObjectContext::detached(),
+                &mut render_object,
+            );
+            assert_eq!(
+                render_object.clip_behavior(),
+                clip,
+                "clip_behavior must track a rebuild to {clip:?}"
+            );
+        }
+    }
+
     #[test]
     fn debug_reports_clip_behavior_and_child_count() {
         let flow = Flow::new(delegate(), vec![SizedBox::shrink().boxed()]);
