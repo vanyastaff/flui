@@ -30,7 +30,7 @@
 //!   even though `allowImplicitScrolling` itself isn't modeled — see that
 //!   method's docs.
 //! - **`PageController::animate_to_page`/`next_page`/`previous_page`**
-//!   (ADR-0037 PR3) delegate to [`ScrollController::animate_to`] — see that
+//!   (ADR-0037) delegate to [`ScrollController::animate_to`] — see that
 //!   type's module docs for the "no `Future`" divergence this inherits, and
 //!   [`PageController::next_page`]/[`PageController::previous_page`]'s own
 //!   docs for how end-of-range behavior diverges from the oracle's

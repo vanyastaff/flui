@@ -72,13 +72,13 @@
 //!   coverage (the horizontal axis dominates the rest of this file, but
 //!   `PageView::scroll_direction` is not axis-agnostic-by-construction — a
 //!   `dy`-vs-`dx` mixup would only show up in a real vertical drag).
-//! - `animate_to_page_lands_on_the_page` (ADR-0037 PR3) — page → pixels
+//! - `animate_to_page_lands_on_the_page` (ADR-0037) — page → pixels
 //!   through the guarded formula, then a real curve/duration animation
 //!   pumped to completion. Cross-checked against `'PageController control
 //!   test'` (309), which exercises `animateToPage` the same way this port's
 //!   `PageController::animate_to_page` does.
 //! - `next_page_and_previous_page_navigate_and_clamp_at_the_ends`
-//!   (ADR-0037 PR3) — an ordinary one-page step, then `next_page` past the
+//!   (ADR-0037) — an ordinary one-page step, then `next_page` past the
 //!   last real page and `previous_page` below the first: both clamp at
 //!   `max_scroll_extent`/`0.0` via `ScrollController::animate_to`'s own
 //!   clamp, a documented divergence from the oracle's physics-clamped ticks
@@ -833,7 +833,7 @@ fn vertical_page_view_drag_crosses_to_the_next_page() {
 }
 
 // ============================================================================
-// animate_to_page / next_page / previous_page (ADR-0037 PR3)
+// animate_to_page / next_page / previous_page (ADR-0037)
 // ============================================================================
 
 /// `animate_to_page` navigates via a real curve/duration animation — page →
