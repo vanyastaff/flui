@@ -29,14 +29,19 @@
 //!   `allowImplicitScrolling: false` default (`ScrollCacheExtent.viewport(0.0)`)
 //!   even though `allowImplicitScrolling` itself isn't modeled — see that
 //!   method's docs.
-//! - **`PageController::animateToPage`/`nextPage`/`previousPage`** (animated,
-//!   ticker-driven transitions) are not ported — [`PageController::jump_to_page`]
-//!   is the only programmatic navigation, matching `jumpToPage`.
+//! - **`PageController::animate_to_page`/`next_page`/`previous_page`**
+//!   (ADR-0037 PR3) delegate to [`ScrollController::animate_to`] — see that
+//!   type's module docs for the "no `Future`" divergence this inherits, and
+//!   [`PageController::next_page`]/[`PageController::previous_page`]'s own
+//!   docs for how end-of-range behavior diverges from the oracle's
+//!   physics-clamped ticks.
 
 use std::rc::Rc;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
+use flui_animation::Curve;
 use flui_animation::simulation::{ScrollSpringSimulation, Simulation, SpringDescription};
 use flui_foundation::{Listenable, ListenerId};
 use flui_rendering::view::{
@@ -300,6 +305,95 @@ impl PageController {
                 initial_page: Some(page_f),
             });
         }
+    }
+
+    /// Animates to `page` over `duration`, easing through `curve` — page →
+    /// pixels via the guarded [`ScrollMetrics::pixels_from_page`] formula,
+    /// then delegates to [`ScrollController::animate_to`].
+    ///
+    /// # Flutter parity
+    ///
+    /// Mirrors `PageController.animateToPage`'s three-way branch
+    /// (`widgets/page_view.dart`, tag `3.44.0`) — the same shape
+    /// [`jump_to_page`](Self::jump_to_page) uses: a page requested while the
+    /// viewport is collapsed just overwrites the cached page (there is no
+    /// viewport for an animation to visibly run in), one requested before any
+    /// layout has committed a real dimension updates the pending startup
+    /// page, and only a real, established dimension actually starts a run.
+    ///
+    /// The target page is **not** bounds-checked against a page count —
+    /// `PageController` has no visibility into how many children the
+    /// `PageView` holds, matching the oracle: `getPixelsFromPage` never
+    /// clamps `page` either. [`ScrollController::animate_to`]'s own clamp to
+    /// `[min_scroll_extent, max_scroll_extent]` is what stops the run at the
+    /// last/first real page instead of overshooting past it — see
+    /// [`next_page`](Self::next_page)/[`previous_page`](Self::previous_page)'s
+    /// docs for the resulting end-of-range behavior.
+    pub fn animate_to_page(
+        &self,
+        page: usize,
+        duration: Duration,
+        curve: Arc<dyn Curve + Send + Sync>, // PORT-CHECK-OK-DYN: see PopPacing's doc (navigator/binding.rs) — same erased easing-curve boundary
+    ) {
+        let page_f = page as f32;
+        let position = self.scroll.position();
+        if position.set_cached_page_while_collapsed(page_f) {
+            return;
+        }
+        if position.has_applied_viewport_dimension() {
+            let metrics = ScrollMetrics::from(&position);
+            let pixels = metrics.pixels_from_page(self.viewport_fraction, page_f);
+            self.scroll.animate_to(pixels, duration, curve);
+        } else {
+            position.set_dimension_policy(DimensionChangePolicy::KeepFractionalPage {
+                viewport_fraction: self.viewport_fraction,
+                initial_page: Some(page_f),
+            });
+        }
+    }
+
+    /// Animates forward to the next whole page from the current fractional
+    /// page, rounded (`page().round() + 1`). A no-op before the first layout
+    /// — there is no current [`page`](Self::page) to round from yet.
+    ///
+    /// # Flutter parity
+    ///
+    /// Mirrors `PageController.nextPage` (`page!.round() + 1`,
+    /// `widgets/page_view.dart`, tag `3.44.0`) — including NOT clamping the
+    /// requested page to a known last page: `PageController` doesn't track a
+    /// page count, so neither does the oracle here. Past the last real page,
+    /// [`animate_to_page`](Self::animate_to_page)'s delegated
+    /// [`ScrollController::animate_to`] clamps the resulting pixel target to
+    /// `max_scroll_extent`, so the run visibly stops AT the last page instead
+    /// of scrolling past it — the oracle reaches the same visible stopping
+    /// point through its physics' boundary-clamped per-tick `setPixels`
+    /// (`ClampingScrollPhysics.applyBoundaryConditions`) instead, since
+    /// `ScrollPositionWithSingleContext.animateTo` itself does not pre-clamp
+    /// the target the way this port's `animate_to` does.
+    pub fn next_page(
+        &self,
+        duration: Duration,
+        curve: Arc<dyn Curve + Send + Sync>, // PORT-CHECK-OK-DYN: see PopPacing's doc (navigator/binding.rs) — same erased easing-curve boundary
+    ) {
+        let Some(page) = self.page() else { return };
+        self.animate_to_page((page.round() + 1.0).max(0.0) as usize, duration, curve);
+    }
+
+    /// Animates backward to the previous whole page (`page().round() - 1`),
+    /// saturating at page `0` rather than underflowing — FLUI's page index is
+    /// `usize`, unlike the oracle's signed `int` (which can pass a transient
+    /// negative page into `getPixelsFromPage`); the saturated pixel target is
+    /// the same either way, since a negative page produces a negative pixel
+    /// offset that [`animate_to_page`](Self::animate_to_page)'s delegated
+    /// `animate_to` clamps to `min_scroll_extent` regardless. A no-op before
+    /// the first layout.
+    pub fn previous_page(
+        &self,
+        duration: Duration,
+        curve: Arc<dyn Curve + Send + Sync>, // PORT-CHECK-OK-DYN: see PopPacing's doc (navigator/binding.rs) — same erased easing-curve boundary
+    ) {
+        let Some(page) = self.page() else { return };
+        self.animate_to_page((page.round() - 1.0).max(0.0) as usize, duration, curve);
     }
 
     /// The shared [`ScrollPosition`] backing this controller.

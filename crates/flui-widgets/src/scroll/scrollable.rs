@@ -20,6 +20,18 @@
 //! `on_pan_start` halts any in-flight fling via `stop()`, so grabbing a
 //! scrolling list feels physically correct.
 //!
+//! # `animate_to` servicing (ADR-0037 PR3)
+//!
+//! [`ScrollController::animate_to`]/[`jump_to`](ScrollController::jump_to)
+//! don't drive the fling controller directly — they queue a command (see
+//! `scroll_controller.rs`'s module docs) that this widget's `build` closure
+//! services on every rebuild the controller's notify triggers, via
+//! [`ScrollController::service_pending_command`]. Reusing the SAME
+//! `AnimationController` the ballistic fling above drives means `on_pan_start`
+//! cancels a running `animate_to` for free — it stops whichever of the two
+//! (fling or curve-driven tween) happens to be active — and `jump_to` queues
+//! an explicit cancel for the same reason.
+//!
 //! # Flutter parity
 //!
 //! Corresponds to `widgets/scrollable.dart` `Scrollable`. FLUI merges
@@ -280,11 +292,24 @@ impl ScrollableState {
             self.scroll_controller.position().set_flush_handle(handle);
         }
     }
+
+    /// Installs the synchronous `jump_to` cancellation hook (ADR-0037 PR3) on
+    /// [`ScrollController`], closing over this state's own fling controller —
+    /// see `ScrollController`'s `stop_hook` field docs for why `jump_to`
+    /// needs a hook called AT jump_to time rather than a merely-queued
+    /// command serviced on the next rebuild.
+    fn install_stop_hook(&self) {
+        let fling = self.fling_controller.clone();
+        self.scroll_controller.set_stop_hook(Arc::new(move || {
+            let _ = fling.stop();
+        }));
+    }
 }
 
 impl ViewState<Scrollable> for ScrollableState {
     fn init_state(&mut self, ctx: &dyn BuildContext) {
         self.install_flush_handle(ctx);
+        self.install_stop_hook();
 
         // Attach the value listener that pushes the fling simulation's current
         // pixel position into the scroll controller each tick. The listener
@@ -322,6 +347,14 @@ impl ViewState<Scrollable> for ScrollableState {
         let fling_controller = self.fling_controller.clone();
 
         AnimatedBuilder::new(scroll_controller.as_listenable(), move || {
+            // Service any `animate_to`/`jump_to`-queued command BEFORE
+            // building this rebuild's subtree — this closure reruns on every
+            // notify the controller fires (ADR-0037 PR3's "notify path"),
+            // exactly the trigger `ScrollController::animate_to`/`jump_to`
+            // fire after queuing a command. See `scroll_controller.rs`'s
+            // module docs and `ScrollController::service_pending_command`.
+            scroll_controller.service_pending_command(&fling_controller);
+
             // Clones for the gesture callbacks; each closure needs its own
             // `Arc`-counted handle (no refcount bump at call time).
             let fling_stop = fling_controller.clone();

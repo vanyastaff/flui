@@ -9,7 +9,7 @@
 //! `crates/flui-widgets/src/scroll/page_view.rs`'s module docs record the
 //! exact V1 boundary (eager children, listener-based `on_page_changed`, no
 //! `pageSnapping: false`/`reverse`/`padEnds`/`allowImplicitScrolling`/
-//! `PageStorage`/`animateToPage`/`viewport_fraction > 1.0` centering). **13
+//! `PageStorage`/`viewport_fraction > 1.0` centering). **15
 //! tests ported below**, covering the portable core:
 //!
 //! - `initial_page_lands_on_first_layout` — `initialPage` seeding on the very
@@ -72,6 +72,17 @@
 //!   coverage (the horizontal axis dominates the rest of this file, but
 //!   `PageView::scroll_direction` is not axis-agnostic-by-construction — a
 //!   `dy`-vs-`dx` mixup would only show up in a real vertical drag).
+//! - `animate_to_page_lands_on_the_page` (ADR-0037 PR3) — page → pixels
+//!   through the guarded formula, then a real curve/duration animation
+//!   pumped to completion. Cross-checked against `'PageController control
+//!   test'` (309), which exercises `animateToPage` the same way this port's
+//!   `PageController::animate_to_page` does.
+//! - `next_page_and_previous_page_navigate_and_clamp_at_the_ends`
+//!   (ADR-0037 PR3) — an ordinary one-page step, then `next_page` past the
+//!   last real page and `previous_page` below the first: both clamp at
+//!   `max_scroll_extent`/`0.0` via `ScrollController::animate_to`'s own
+//!   clamp, a documented divergence from the oracle's physics-clamped ticks
+//!   (see `PageController::next_page`'s doc).
 //!
 //! ## Why "past half"/"below half"/"fling velocity" aren't ALSO gesture-driven
 //! *release+settle* tests
@@ -106,7 +117,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use flui_animation::Vsync;
+use flui_animation::{Curves, Vsync};
 use flui_types::layout::Axis;
 use flui_view::prelude::StatelessView;
 use flui_view::{BuildContext, IntoView, ViewExt};
@@ -819,4 +830,102 @@ fn vertical_page_view_drag_crosses_to_the_next_page() {
     );
 
     scoped.dispatch_pointer_up(100.0, 20.0);
+}
+
+// ============================================================================
+// animate_to_page / next_page / previous_page (ADR-0037 PR3)
+// ============================================================================
+
+/// `animate_to_page` navigates via a real curve/duration animation — page →
+/// pixels through the guarded `ScrollMetrics::pixels_from_page` formula, then
+/// delegates to `ScrollController::animate_to`. Pumping past the duration
+/// must land EXACTLY on the target page's pixel offset.
+///
+/// Cross-checked against `'PageController control test'`
+/// (`test/widgets/page_view_test.dart`, line 309), which drives
+/// `animateToPage` the same way this port's `PageController::animate_to_page`
+/// does.
+#[test]
+fn animate_to_page_lands_on_the_page() {
+    let controller = PageController::new();
+    let widget = PageView::new(pages(5)).controller(controller.clone());
+    let vsync = Vsync::new();
+    let wrapped = VsyncScope::new(vsync.clone(), widget);
+    let mut scoped = lay_out_with_arena(wrapped, tight(300.0, 300.0));
+    scoped.adopt_vsync(vsync);
+
+    controller.animate_to_page(3, Duration::from_millis(100), Arc::new(Curves::Linear));
+
+    // Comfortably past the 100ms duration (see `scroll.rs`'s
+    // `scrollable_animate_to_reaches_the_target_through_the_curve` for why
+    // driving through the queued-command path needs a few warm-up pumps).
+    for _ in 0..20 {
+        scoped.pump_for(Duration::from_millis(16));
+    }
+
+    assert_eq!(
+        controller.scroll_controller().pixels(),
+        900.0,
+        "animate_to_page(3) must land at 3 * 300 * 1.0 = 900.0 once the \
+         animation has fully elapsed"
+    );
+    assert_eq!(controller.page(), Some(3.0));
+}
+
+/// `next_page`/`previous_page` step by one whole page from the current
+/// (rounded) page. Past the last real page or below the first, the run
+/// clamps at `max_scroll_extent`/`0.0` — via `ScrollController::animate_to`'s
+/// own clamp, not a page-count check `PageController` has no way to make
+/// (matching the oracle: `nextPage`/`previousPage` are plain
+/// `animateToPage(page!.round() +/- 1, ...)` calls with no bounds check of
+/// their own — see `PageController::next_page`'s doc for how FLUI reaches the
+/// same visible stopping point through a different mechanism than the
+/// oracle's boundary-clamped per-tick `setPixels`).
+#[test]
+fn next_page_and_previous_page_navigate_and_clamp_at_the_ends() {
+    let controller = PageController::new();
+    let widget = PageView::new(pages(5)).controller(controller.clone());
+    let vsync = Vsync::new();
+    let wrapped = VsyncScope::new(vsync.clone(), widget);
+    let mut scoped = lay_out_with_arena(wrapped, tight(300.0, 300.0));
+    scoped.adopt_vsync(vsync);
+
+    // Ordinary step: page 0 -> 1.
+    controller.next_page(Duration::from_millis(50), Arc::new(Curves::Linear));
+    for _ in 0..20 {
+        scoped.pump_for(Duration::from_millis(16));
+    }
+    assert_eq!(
+        controller.scroll_controller().pixels(),
+        300.0,
+        "next_page from page 0 must land on page 1 (300.0)"
+    );
+
+    // Jump to the last real page (4 of 5 — index 4), then next_page must
+    // clamp AT it, never overshooting to a nonexistent page 5.
+    controller.jump_to_page(4);
+    controller.next_page(Duration::from_millis(50), Arc::new(Curves::Linear));
+    for _ in 0..20 {
+        scoped.pump_for(Duration::from_millis(16));
+    }
+    let max_scroll_extent = controller.scroll_controller().max_scroll_extent();
+    assert_eq!(
+        controller.scroll_controller().pixels(),
+        max_scroll_extent,
+        "next_page past the last real page must clamp at max_scroll_extent \
+         ({max_scroll_extent}), not overshoot toward a page-5 pixel offset"
+    );
+
+    // Jump to the first page, then previous_page must clamp at 0, never
+    // going negative.
+    controller.jump_to_page(0);
+    controller.previous_page(Duration::from_millis(50), Arc::new(Curves::Linear));
+    for _ in 0..20 {
+        scoped.pump_for(Duration::from_millis(16));
+    }
+    assert_eq!(
+        controller.scroll_controller().pixels(),
+        0.0,
+        "previous_page below the first page must clamp at 0.0, not go negative"
+    );
 }
