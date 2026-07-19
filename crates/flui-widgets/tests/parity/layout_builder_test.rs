@@ -71,9 +71,10 @@
 //!   [`layout_builder_inherited_rebuilds_when_dependency_used`] (green, with
 //!   a caveat on proof strength noted in its doc comment).
 //! - `'LayoutBuilder rebuilds once in the same frame'` →
-//!   [`layout_builder_dependent_descendant_rebuilds_once_per_pump`] (green;
-//!   scope narrowed from the oracle — see that test's doc comment for the
-//!   isolating step taken).
+//!   [`layout_builder_dependent_descendant_rebuilds_once_per_pump`] —
+//!   **`#[ignore]`d, confirmed divergence, filed to `docs/ROADMAP.md`
+//!   Cross.H** (calls goes `1 -> 3`, not Flutter's `1 -> 2`; see that test's
+//!   doc comment).
 //! - `'LayoutBuilder does not call builder when layout happens but layout
 //!   constraints do not change'` →
 //!   [`layout_builder_layout_only_invalidation_does_not_reinvoke_the_builder`]
@@ -390,23 +391,29 @@ impl StatelessView for DependentCounter {
 /// Flutter parity: `'LayoutBuilder rebuilds once in the same frame'` — a
 /// regression guard for
 /// <https://github.com/flutter/flutter/issues/146379>: a single pump that
-/// changes the `MediaQuery` data a nested dependent descendant reads must
-/// rebuild that descendant exactly once, not twice.
+/// BOTH resizes the constraint-feeding `SizedBox` AND changes the
+/// `MediaQuery` data a nested dependent descendant reads must rebuild that
+/// descendant exactly once, not twice — Flutter's own count goes `1 -> 2`
+/// across the pump (one build per `pumpWidget` call), never landing on 3.
 ///
-/// ## Scope narrowed from the oracle (isolating step taken)
+/// ## Confirmed divergence — filed to `docs/ROADMAP.md` Cross.H
 ///
-/// Flutter's case changes BOTH the constraint-feeding `SizedBox` AND the
-/// `MediaQuery` data in the same pump. Porting that combination faithfully
-/// was tried first and failed at `calls == 3`, not `2` — but an isolating
-/// run with the `SizedBox` size held FIXED (only below) passes cleanly at
-/// `2`, showing the extra invocation comes from the ALREADY-DOCUMENTED
-/// ADR-0017 stale/fresh double-invocation on a real constraint change (see
-/// `layout_builder_parent_state_change_drives_a_constraint_change` above),
-/// not from a MediaQuery-specific double-notify bug. Combining both changes
-/// would only re-demonstrate that already-filed divergence, not isolate the
-/// thing this regression test actually targets — so the `SizedBox` size is
-/// held constant here to test the dependency-notification path on its own.
+/// Running this exact, faithful (both constraints AND `MediaQuery` data
+/// change together) scenario shows `calls` go `1 -> 3`, not `1 -> 2`. An
+/// earlier version of this port held the `SizedBox` size fixed to make the
+/// assertion pass — that silently converts a real divergence into a
+/// green "port", locking in the wrong behavior as if it were correct. Kept
+/// `#[ignore]`d instead, pinning Flutter's real expectation (`2`, not the
+/// `3` FLUI actually produces) — un-ignore when the gap closes. See that
+/// test's own doc comment on `layout_builder_inherited_no_rebuild_without_dependency`
+/// above and the ROADMAP entry for the two candidate contributing
+/// mechanisms (not fully isolated from each other): the ADR-0017 stale/fresh
+/// double-invocation on a real constraint change, and the `should_skip_rebuild`
+/// gap (default `false`, so any reconcile-driven update always rebuilds)
+/// already filed for the Inherited case above.
 #[test]
+#[ignore = "known divergence: calls goes 1 -> 3 on a simultaneous constraint + \
+            MediaQuery change, not Flutter's 1 -> 2 — see docs/ROADMAP.md Cross.H"]
 fn layout_builder_dependent_descendant_rebuilds_once_per_pump() {
     let calls = Arc::new(AtomicUsize::new(0));
     let target = LayoutBuilder::new({
@@ -429,18 +436,18 @@ fn layout_builder_dependent_descendant_rebuilds_once_per_pump() {
         "first frame builds the dependent descendant once"
     );
 
-    // Same SizedBox size (no constraint change reaching LayoutBuilder) —
-    // only the MediaQuery data changes.
+    // Faithful to the oracle: BOTH the constraint-feeding SizedBox's size
+    // AND the MediaQuery data change in this one pump.
     laid.pump_widget(MediaQuery::new(
         media_query_data(300.0, 400.0),
-        Center::new().child(SizedBox::new(400.0, 300.0).child(target.clone())),
+        Center::new().child(SizedBox::new(300.0, 400.0).child(target.clone())),
     ));
 
     assert_eq!(
         calls.load(Ordering::Relaxed),
         2,
-        "a pump that changes only the MediaQuery data (constraints unchanged) must \
-         rebuild the dependent descendant exactly once, not twice"
+        "a pump that changes both the constraint-feeding SizedBox and the MediaQuery \
+         data must rebuild the dependent descendant exactly once, not twice"
     );
 }
 
