@@ -257,24 +257,31 @@ impl RenderBox for RenderIntrinsicWidth {
     // ---- intrinsic dimensions -----------------------------------------------
     //
     // Flutter parity: proxy_box.dart RenderIntrinsicWidth.
-    // Width queries apply `apply_step` twice (height-extent snap + width snap);
-    // height queries just delegate to the child unchanged.
+    //
+    // * `computeMinIntrinsicWidth(height) => getMaxIntrinsicWidth(height)` —
+    //   the min-width query delegates to the max-width query verbatim instead
+    //   of asking the child for its own min. Forcing the child to a single
+    //   width (the max intrinsic) is the entire point of this render object,
+    //   so its own reported min and max width are always equal.
+    // * `computeMaxIntrinsicWidth(height)` queries the child's max intrinsic
+    //   width at the RAW `height` — no `step_height` snapping here; stepping
+    //   only tightens the layout height axis (`child_constraints`), not this
+    //   intrinsic query — then applies `step_width`.
+    // * `computeMinIntrinsicHeight`/`computeMaxIntrinsicHeight(width)` resolve
+    //   an infinite `width` to this object's own forced max intrinsic width
+    //   first (proxy_box.dart: `if (!width.isFinite) { width =
+    //   getMaxIntrinsicWidth(double.infinity); }`), then query the child's
+    //   min/max intrinsic height at that resolved width and apply `step_height`.
 
     fn compute_min_intrinsic_width(&self, height: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
-        if ctx.child_count() == 0 {
-            return 0.0;
-        }
-        let snapped_height = apply_step(height, self.step_height);
-        let child_min = ctx.child_min_intrinsic_width(0, snapped_height);
-        apply_step(child_min, self.step_width)
+        self.compute_max_intrinsic_width(height, ctx)
     }
 
     fn compute_max_intrinsic_width(&self, height: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
         if ctx.child_count() == 0 {
             return 0.0;
         }
-        let snapped_height = apply_step(height, self.step_height);
-        let child_max = ctx.child_max_intrinsic_width(0, snapped_height);
+        let child_max = ctx.child_max_intrinsic_width(0, height);
         apply_step(child_max, self.step_width)
     }
 
@@ -282,14 +289,26 @@ impl RenderBox for RenderIntrinsicWidth {
         if ctx.child_count() == 0 {
             return 0.0;
         }
-        ctx.child_min_intrinsic_height(0, width)
+        let width = if width.is_finite() {
+            width
+        } else {
+            self.compute_max_intrinsic_width(f32::INFINITY, ctx)
+        };
+        let child_min = ctx.child_min_intrinsic_height(0, width);
+        apply_step(child_min, self.step_height)
     }
 
     fn compute_max_intrinsic_height(&self, width: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
         if ctx.child_count() == 0 {
             return 0.0;
         }
-        ctx.child_max_intrinsic_height(0, width)
+        let width = if width.is_finite() {
+            width
+        } else {
+            self.compute_max_intrinsic_width(f32::INFINITY, ctx)
+        };
+        let child_max = ctx.child_max_intrinsic_height(0, width);
+        apply_step(child_max, self.step_height)
     }
 
     fn compute_dry_layout(
