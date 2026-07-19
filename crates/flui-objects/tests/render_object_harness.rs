@@ -3068,6 +3068,90 @@ fn harness_decorated_box_layout_wraps_child_geometry() {
 }
 
 #[test]
+fn harness_decorated_box_paints_background_before_child() {
+    // Flutter parity: proxy_box.dart `RenderDecoratedBox.paint` (3.44.0) — with
+    // the default `DecorationPosition::Background`, the decoration's fill must
+    // land on the canvas BEFORE the child's. `harness_decorated_box_wraps_child`
+    // only asserts `run.painted()` (a layer tree exists somewhere), which would
+    // stay green even if the decoration painted the wrong color or after the
+    // child instead of before it. Assert the actual draw commands and their
+    // order, mirroring `harness_custom_paint_orders_background_child_foreground`.
+    let run = RenderTester::mount(
+        box_node(RenderDecoratedBox::new(BoxDecoration::with_color(
+            Color::RED,
+        )))
+        .child(box_node(RenderColoredBox::blue(40.0, 40.0)).label("child")),
+    )
+    .with_constraints(loose(200.0))
+    .run_frame();
+
+    // Layout stays a passthrough to the child even though paint now does
+    // real work: the decorated box must not claim any size of its own.
+    assert_eq!(run.box_geometry(run.root()), Size::new(px(40.0), px(40.0)));
+
+    let painted = run
+        .display_commands()
+        .into_iter()
+        .map(|cmd| cmd.line)
+        .collect::<Vec<_>>();
+    let rects = painted
+        .iter()
+        .filter(|line| line.contains("DrawRect"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        rects.len(),
+        2,
+        "expected the decoration's background fill and the child's fill; commands:\n{}",
+        painted.join("\n"),
+    );
+    assert!(
+        rects[0].contains("#FF0000FF") && rects[1].contains("#0000FFFF"),
+        "paint order must be background red -> child blue; commands:\n{}",
+        painted.join("\n"),
+    );
+}
+
+#[test]
+fn harness_decorated_box_foreground_paints_after_child() {
+    // Flutter parity: proxy_box.dart `RenderDecoratedBox.paint` (3.44.0) — with
+    // `DecorationPosition::Foreground` the decoration paints AFTER
+    // `super.paint` (the child), e.g. a vignette or focus ring drawn over
+    // content. Same command-order assertion as the background case, reversed.
+    let run = RenderTester::mount(
+        box_node(
+            RenderDecoratedBox::new(BoxDecoration::with_color(Color::RED))
+                .with_position(DecorationPosition::Foreground),
+        )
+        .child(box_node(RenderColoredBox::blue(40.0, 40.0)).label("child")),
+    )
+    .with_constraints(loose(200.0))
+    .run_frame();
+
+    assert_eq!(run.box_geometry(run.root()), Size::new(px(40.0), px(40.0)));
+
+    let painted = run
+        .display_commands()
+        .into_iter()
+        .map(|cmd| cmd.line)
+        .collect::<Vec<_>>();
+    let rects = painted
+        .iter()
+        .filter(|line| line.contains("DrawRect"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        rects.len(),
+        2,
+        "expected the child's fill and the decoration's foreground fill; commands:\n{}",
+        painted.join("\n"),
+    );
+    assert!(
+        rects[0].contains("#0000FFFF") && rects[1].contains("#FF0000FF"),
+        "paint order must be child blue -> foreground red; commands:\n{}",
+        painted.join("\n"),
+    );
+}
+
+#[test]
 fn harness_clip_rect_self_describes() {
     let run = RenderTester::mount(
         box_node(RenderClipRect::new(Clip::HardEdge))
