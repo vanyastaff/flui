@@ -7802,13 +7802,17 @@ fn harness_rotated_box_odd_turn_lays_out_child_under_flipped_constraints() {
     );
 }
 
-/// Flutter parity: `rotated_box_test.dart` `'RotatedBox does not crash at
-/// zero area'` (3.44.0) — a childless `RotatedBox(quarterTurns: 1)` under a
-/// zero-area tight constraint must report `Size.zero`, not panic. This pins
-/// the ODD-turn leg of the no-child branch specifically (the existing
-/// `harness_rotated_box_leaf_sizes_to_zero_even_turns` case only covers
-/// `quarter_turns = 0`, which cannot exercise the `constraints.flipped()`
-/// call in `perform_layout`'s empty-child branch).
+/// FLUI-added edge case, NOT a 3.44.0 oracle citation: a childless
+/// `RotatedBox(quarterTurns: 1)` under a zero-area tight constraint must
+/// report `Size::ZERO`, not panic. Upstream's `rotated_box_test.dart` has a
+/// same-shaped `'RotatedBox does not crash at zero area'` case, but it was
+/// added by PR #186201 (commit `c2d451e1237`), which postdates the `3.44.0`
+/// tag this port is scoped to — not an ancestor of `3.44.0`, so not part of
+/// the oracle corpus being ported. This test is an independent regression
+/// guard for the ODD-turn leg of the no-child branch specifically (the
+/// existing `harness_rotated_box_leaf_sizes_to_zero_even_turns` case only
+/// covers `quarter_turns = 0`, which cannot exercise the
+/// `constraints.flipped()` call in `perform_layout`'s empty-child branch).
 #[test]
 fn harness_rotated_box_no_child_odd_turn_zero_area_does_not_crash() {
     let run = RenderTester::mount(box_node(RenderRotatedBox::new(1)))

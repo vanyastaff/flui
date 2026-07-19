@@ -1,12 +1,18 @@
 //! ## Test parity notes
 //!
 //! Flutter source: `packages/flutter/test/widgets/rotated_box_test.dart` (tag
-//! `3.44.0`) — 2 `testWidgets` cases, 0 bare `test(` cases (the file's only
-//! two, confirmed by `git ls-tree`/`grep -c` over the checked-out tag; no
-//! `test/rendering/rotated_box_test.dart` exists — `RenderRotatedBox` has no
-//! render-level oracle file, only this widget-level one).
+//! `3.44.0`) — 1 `testWidgets` case, 0 bare `test(` cases (confirmed via
+//! `git -C /mnt/data/dev/flutter show
+//! 3.44.0:packages/flutter/test/widgets/rotated_box_test.dart | grep -cE
+//! "^\s*testWidgets\("` → `1`; no `test/rendering/rotated_box_test.dart`
+//! exists — `RenderRotatedBox` has no render-level oracle file, only this
+//! widget-level one). Upstream's second case, `'RotatedBox does not crash at
+//! zero area'`, postdates `3.44.0` (PR #186201, commit `c2d451e1237`, not an
+//! ancestor of the `3.44.0` tag) — it is NOT part of the 3.44.0 oracle corpus
+//! and is not cited as an oracle case below (see the FLUI-added edge case
+//! instead).
 //!
-//! Both cases ported, both split into one Rust test per independent
+//! The one 3.44.0 oracle case, split into one Rust test per independent
 //! assertion (this file's established granularity, see e.g. `transform_test.rs`):
 //! - `'Rotated box control test'` — the box-size half (odd-turn width/height
 //!   swap reported through the full widget → render-object pipeline, not the
@@ -18,7 +24,13 @@
 //!   [`rotated_box_control_test_swaps_box_size_for_an_odd_turn`],
 //!   [`rotated_box_control_test_hit_test_reaches_the_left_child`],
 //!   [`rotated_box_control_test_hit_test_reaches_the_right_child`].
-//! - `'RotatedBox does not crash at zero area'` —
+//!
+//! FLUI-added edge case (NOT part of the 3.44.0 oracle corpus — see above;
+//! ported as an independent regression guard, not an oracle citation, since
+//! the upstream case it mirrors in shape postdates the tag this port is
+//! against):
+//! - a childless, odd-turn `RotatedBox` under a zero-area surface must report
+//!   `Size::ZERO` and must not panic during layout —
 //!   [`rotated_box_does_not_crash_at_zero_area`].
 //!
 //! Widget → render-object mapping: `RotatedBox`
@@ -224,9 +236,14 @@ fn rotated_box_control_test_hit_test_reaches_the_right_child() {
 /// A childless `RotatedBox(quarterTurns: 1)` under a zero-size test surface
 /// must report `Size.zero` and must not panic during layout.
 ///
-/// Flutter parity: `rotated_box_test.dart` `'RotatedBox does not crash at
-/// zero area'` (3.44.0) — `expect(tester.getSize(find.byType(RotatedBox)),
-/// Size.zero)`.
+/// FLUI-added edge case, NOT a 3.44.0 oracle citation: upstream's
+/// `'RotatedBox does not crash at zero area'` in `rotated_box_test.dart`
+/// checks this same shape, but that case was added to upstream by PR
+/// #186201 (commit `c2d451e1237`), which postdates the `3.44.0` tag this
+/// port is scoped to — it is not an ancestor of `3.44.0` and so is not part
+/// of the oracle corpus being ported here. This test stands on its own as a
+/// regression guard for the odd-turn no-child branch, not as a ported
+/// upstream case.
 #[test]
 fn rotated_box_does_not_crash_at_zero_area() {
     let laid = pump_widget(Center::new().child(RotatedBox::new(1)), screen_of(0.0, 0.0));
