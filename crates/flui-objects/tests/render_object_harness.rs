@@ -1667,6 +1667,168 @@ fn harness_baseline_dry_baseline_handles_cross_kind_query() {
     );
 }
 
+/// Oracle: `3.44.0` `test/rendering/baseline_test.dart` `test('RenderBaseline')`.
+///
+/// The child is a `RenderSizedBox` with no real baseline (default
+/// `compute_distance_to_actual_baseline` returns `None`), so `RenderBaseline`
+/// falls back to the child's full height (100) as the effective baseline —
+/// the oracle's `RenderSizedBox(Size(100.0, 100.0))` behaves identically.
+/// Walks the same five `baseline_offset` values the oracle mutates through
+/// (`parent.baseline = X; pumpFrame(); expect(...)`), asserting the child
+/// offset and the box's own committed size recompute on every relayout:
+/// `offset.dy = baseline_offset - 100`, `size = (100, baseline_offset)`.
+#[test]
+fn harness_baseline_relayout_recomputes_offset_and_size_ladder() {
+    let mut run = RenderTester::mount(
+        box_node(RenderBaseline::new(TextBaseline::Alphabetic, px(0.0)))
+            .child(box_node(RenderSizedBox::fixed(px(100.0), px(100.0))).label("child")),
+    )
+    .with_constraints(loose(1000.0))
+    .run_layout();
+
+    let root = run.root();
+    let child = run.id("child");
+
+    for (step, &baseline_offset) in [0.0f32, 25.0, 90.0, 100.0, 110.0].iter().enumerate() {
+        if step > 0 {
+            run.update::<RenderBaseline>(root, |render_baseline| {
+                render_baseline.set_baseline_offset(px(baseline_offset));
+            });
+            run.relayout();
+        }
+        assert_eq!(
+            run.offset(child),
+            Offset::new(px(0.0), px(baseline_offset - 100.0)),
+            "child offset must be baseline_offset - fallback height (100) \
+             at baseline_offset={baseline_offset}",
+        );
+        assert_eq!(
+            run.box_geometry(root),
+            Size::new(px(100.0), px(baseline_offset)),
+            "box size must be (child width, baseline_offset) at baseline_offset={baseline_offset}",
+        );
+    }
+}
+
+/// Oracle: `3.44.0` `test/rendering/baseline_test.dart`
+/// `test('RenderBaseline different baseline types')`.
+///
+/// A leaf probe reports independent alphabetic/ideographic offsets (FLUI's
+/// equivalent of the oracle's private `_RenderBaselineTester`). With the box's
+/// own kind set to Alphabetic:
+/// - a same-kind query cancels to the configured `baseline_offset` alone
+///   (`1.0 + 50 - 50 = 1.0`);
+/// - a cross-kind query adds the requested/own child delta
+///   (`1.0 + 60 - 50 = 11.0`), matching `compute_dry_baseline`'s
+///   `baseline_offset + requested - own` formula.
+///
+/// After the probe's offsets are cleared to `None` and the child is marked
+/// layout-dirty (the oracle's "Clears baseline cache" step), a relayout must
+/// recompute both queries to `None` rather than serve the prior 1.0/11.0 —
+/// the same stale-value regression the oracle guards against (whether FLUI's
+/// dry-baseline query is memoized per call or always recomputed live, the
+/// observable contract — fresh state in, fresh answer out — must hold).
+#[test]
+fn harness_baseline_dry_baseline_recomputes_per_kind_offsets_after_relayout() {
+    use flui_rendering::context::{BoxDryBaselineCtx, BoxDryLayoutCtx, BoxLayoutContext};
+    use flui_rendering::parent_data::BoxParentData;
+    use flui_tree::Leaf;
+
+    /// Leaf render object with independently settable per-kind baseline
+    /// offsets, mirroring Flutter's `_RenderBaselineTester` test double.
+    #[derive(Debug)]
+    struct BaselineOffsetProbe {
+        box_size: Size,
+        alphabetic_offset: Option<f32>,
+        ideographic_offset: Option<f32>,
+    }
+
+    impl flui_foundation::Diagnosticable for BaselineOffsetProbe {
+        fn debug_fill_properties(&self, _properties: &mut flui_foundation::DiagnosticsBuilder) {}
+    }
+
+    impl RenderBox for BaselineOffsetProbe {
+        type Arity = Leaf;
+        type ParentData = BoxParentData;
+
+        fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size {
+            ctx.constraints().constrain(self.box_size)
+        }
+
+        fn compute_dry_layout(
+            &self,
+            constraints: BoxConstraints,
+            _ctx: &mut BoxDryLayoutCtx<'_>,
+        ) -> Size {
+            constraints.constrain(self.box_size)
+        }
+
+        fn compute_distance_to_actual_baseline(&self, baseline: TextBaseline) -> Option<f32> {
+            match baseline {
+                TextBaseline::Alphabetic => self.alphabetic_offset,
+                TextBaseline::Ideographic => self.ideographic_offset,
+            }
+        }
+
+        fn compute_dry_baseline(
+            &self,
+            _constraints: BoxConstraints,
+            baseline: TextBaseline,
+            _ctx: &mut BoxDryBaselineCtx<'_>,
+        ) -> Option<f32> {
+            match baseline {
+                TextBaseline::Alphabetic => self.alphabetic_offset,
+                TextBaseline::Ideographic => self.ideographic_offset,
+            }
+        }
+    }
+
+    let mut run = RenderTester::mount(
+        box_node(RenderBaseline::new(TextBaseline::Alphabetic, px(1.0))).child(
+            box_node(BaselineOffsetProbe {
+                box_size: Size::new(px(100.0), px(100.0)),
+                alphabetic_offset: Some(50.0),
+                ideographic_offset: Some(60.0),
+            })
+            .label("child"),
+        ),
+    )
+    .with_constraints(loose(1000.0))
+    .run_layout();
+
+    let root = run.root();
+    let constraints = loose(1000.0);
+
+    assert_eq!(
+        run.dry_baseline(root, constraints, TextBaseline::Alphabetic),
+        Some(1.0),
+        "same-kind dry baseline must cancel to the configured baseline_offset",
+    );
+    assert_eq!(
+        run.dry_baseline(root, constraints, TextBaseline::Ideographic),
+        Some(11.0),
+        "cross-kind dry baseline must be baseline_offset + requested - own",
+    );
+
+    run.update::<BaselineOffsetProbe>(run.id("child"), |probe| {
+        probe.alphabetic_offset = None;
+        probe.ideographic_offset = None;
+    });
+    run.relayout();
+
+    assert_eq!(
+        run.dry_baseline(root, constraints, TextBaseline::Alphabetic),
+        None,
+        "dry baseline must recompute to None once the child reports no real \
+         baseline, not serve a stale cached value",
+    );
+    assert_eq!(
+        run.dry_baseline(root, constraints, TextBaseline::Ideographic),
+        None,
+        "cross-kind dry baseline must also recompute to None after relayout",
+    );
+}
+
 #[test]
 fn harness_flex_row_baseline_aligns_text_and_box() {
     let run = RenderTester::mount(
