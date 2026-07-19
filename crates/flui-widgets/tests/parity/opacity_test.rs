@@ -187,11 +187,19 @@ fn stacked_opacity_widgets_preserve_column_layout_offsets() {
 
 // ── Full-frame-does-not-panic substitute for 'empty opacity does not crash' ─
 
-/// A partial-alpha `Opacity` over a zero-area (no-child) subtree must not
-/// panic anywhere across a full headless frame (layout → compositing →
-/// paint) -- the same root condition ('an `OpacityLayer` over empty content')
-/// as the historical engine crash the oracle guards against, driven through
-/// FLUI's pipeline instead of `dart:ui`'s `OffsetLayer.toImage`.
+/// A partial-alpha `Opacity` over a zero-area (but non-null) child subtree
+/// must not panic anywhere across a full headless frame (layout →
+/// compositing → paint) -- the same root condition ('an `OpacityLayer` over
+/// empty content') as the historical engine crash the oracle guards against,
+/// driven through FLUI's pipeline instead of `dart:ui`'s `OffsetLayer.toImage`.
+///
+/// The child must be present (a real, zero-*size* `SizedBox`), not absent:
+/// Flutter's own `RenderOpacity.alwaysNeedsCompositing => child != null &&
+/// _alpha > 0` (`proxy_box.dart:884`) and `paint`'s `if (child == null)
+/// return;` mean a *childless* `Opacity` never composites at all, regardless
+/// of alpha -- matching the oracle's `Opacity(opacity: 0.5, child:
+/// Container())`, which is empty in *content* (`Container()` has no
+/// decoration or further child) but not `child: null`.
 ///
 /// Flutter parity: `opacity_test.dart` `'empty opacity does not crash'`
 /// (`skip: isBrowser`, flutter/flutter#49857) -- the oracle's own mechanism
@@ -202,19 +210,22 @@ fn stacked_opacity_widgets_preserve_column_layout_offsets() {
 /// the wgpu/engine-side image-extraction half.
 #[test]
 fn zero_area_child_under_partial_opacity_does_not_panic_during_a_full_frame() {
-    let laid = pump_widget(Opacity::new(0.5), screen_of(0.0, 0.0));
+    let laid = pump_widget(
+        Opacity::new(0.5).child(SizedBox::new(0.0, 0.0)),
+        screen_of(0.0, 0.0),
+    );
     let opacity_id = laid.root();
 
     assert_eq!(
         laid.size(opacity_id),
         Size::ZERO,
-        "a childless Opacity under 0x0 constraints lays out to zero area"
+        "a zero-size child under 0x0 constraints lays the Opacity out to zero area"
     );
     assert_eq!(
         laid.opacity_paint_alpha(opacity_id),
         Some(128),
-        "opacity 0.5 still needs an OpacityLayer even with zero-area content \
-         (round(0.5 * 255) = 128)"
+        "opacity 0.5 over a real (zero-area) child still needs an \
+         OpacityLayer at round(0.5 * 255) = 128"
     );
 }
 
