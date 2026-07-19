@@ -200,12 +200,13 @@ pub use overlay::{Overlay, OverlayEntry, OverlayEntryId, OverlayHandle};
 pub use paint::{ColoredBox, CustomPaint, DecoratedBox, Opacity, RepaintBoundary};
 pub use scroll::{
     BouncingScrollPhysics, ClampingScrollPhysics, CustomScrollView, GridView, ListView,
-    RefreshController, RefreshIndicator, RefreshIndicatorState, ScrollController, ScrollMetrics,
-    ScrollPhysics, Scrollable, Scrollbar, SharedScrollPhysics, ShrinkWrappingViewport,
-    SingleChildScrollView, SliverChildBuilderDelegate, SliverFillRemaining,
-    SliverFillRemainingAndOverscroll, SliverFillRemainingWithScrollable, SliverFillViewport,
-    SliverFixedExtentList, SliverGrid, SliverIgnorePointer, SliverList, SliverOffstage,
-    SliverOpacity, SliverPadding, SliverToBoxAdapter, Viewport,
+    PageController, PageScrollPhysics, PageView, PageViewState, RefreshController,
+    RefreshIndicator, RefreshIndicatorState, ScrollController, ScrollMetrics, ScrollPhysics,
+    Scrollable, Scrollbar, SharedScrollPhysics, ShrinkWrappingViewport, SingleChildScrollView,
+    SliverChildBuilderDelegate, SliverFillRemaining, SliverFillRemainingAndOverscroll,
+    SliverFillRemainingWithScrollable, SliverFillViewport, SliverFixedExtentList, SliverGrid,
+    SliverIgnorePointer, SliverList, SliverOffstage, SliverOpacity, SliverPadding,
+    SliverToBoxAdapter, Viewport,
 };
 pub use semantics::{ExcludeSemantics, MergeSemantics, Semantics};
 pub use stack::{IndexedStack, Positioned, Stack};
@@ -302,17 +303,18 @@ pub mod prelude {
         Listener, Localizations, LocalizationsDelegate, MediaQuery, MediaQueryData, MergeSemantics,
         MouseRegion, Navigator, NavigatorHandle, NextFocusAction, NextFocusIntent, Offstage,
         Opacity, OverflowBox, OverflowBoxFit, Overlay, OverlayEntry, OverlayEntryId, OverlayHandle,
-        Padding, PageRoute, PopScope, PopupRoute, Positioned, PreferredSize, PreferredSizeView,
-        PreviousFocusAction, PreviousFocusIntent, RepaintBoundary, RichText, RotatedBox, Row,
-        SafeArea, ScrollController, Scrollable, Scrollbar, Semantics, Shortcuts,
-        ShrinkWrappingViewport, SimpleRoute, SingleActivator, SingleChildScrollView, SizedBox,
-        SizedOverflowBox, SliverChildBuilderDelegate, SliverFillRemaining,
-        SliverFillRemainingAndOverscroll, SliverFillRemainingWithScrollable, SliverFillViewport,
-        SliverFixedExtentList, SliverGrid, SliverIgnorePointer, SliverList, SliverOffstage,
-        SliverOpacity, SliverPadding, SliverToBoxAdapter, Spacer, Stack, StreamBuilder, Table,
-        TableCell, TableRow, Text, TextEditingController, TextField, TickerMode, Transform,
-        ValueListenableBuilder, Viewport, Visibility, WidgetState, WidgetStateConstraint,
-        WidgetStateProperty, WidgetStates, WidgetStatesController, WidgetsLocalizations, Wrap,
+        Padding, PageController, PageRoute, PageScrollPhysics, PageView, PopScope, PopupRoute,
+        Positioned, PreferredSize, PreferredSizeView, PreviousFocusAction, PreviousFocusIntent,
+        RepaintBoundary, RichText, RotatedBox, Row, SafeArea, ScrollController, Scrollable,
+        Scrollbar, Semantics, Shortcuts, ShrinkWrappingViewport, SimpleRoute, SingleActivator,
+        SingleChildScrollView, SizedBox, SizedOverflowBox, SliverChildBuilderDelegate,
+        SliverFillRemaining, SliverFillRemainingAndOverscroll, SliverFillRemainingWithScrollable,
+        SliverFillViewport, SliverFixedExtentList, SliverGrid, SliverIgnorePointer, SliverList,
+        SliverOffstage, SliverOpacity, SliverPadding, SliverToBoxAdapter, Spacer, Stack,
+        StreamBuilder, Table, TableCell, TableRow, Text, TextEditingController, TextField,
+        TickerMode, Transform, ValueListenableBuilder, Viewport, Visibility, WidgetState,
+        WidgetStateConstraint, WidgetStateProperty, WidgetStates, WidgetStatesController,
+        WidgetsLocalizations, Wrap,
     };
 
     // Common configuration value types, so an app author needs only this import.

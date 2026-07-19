@@ -5,7 +5,7 @@ use std::fmt;
 
 use flui_objects::{RenderShrinkWrappingViewport, RenderViewport};
 use flui_rendering::protocol::BoxProtocol;
-use flui_rendering::view::ScrollPosition;
+use flui_rendering::view::{CacheExtentStyle, ScrollPosition};
 use flui_types::layout::{Axis, AxisDirection};
 use flui_view::BoxedView;
 use flui_view::seq::ViewSeq;
@@ -61,6 +61,7 @@ fn default_cross_axis_direction(axis_direction: AxisDirection) -> AxisDirection 
 pub struct Viewport<C = Vec<BoxedView>> {
     axis_direction: AxisDirection,
     offset_source: OffsetSource,
+    cache_extent: Option<(f32, CacheExtentStyle)>,
     children: C,
 }
 
@@ -70,6 +71,7 @@ impl<C> Viewport<C> {
         Self {
             axis_direction: AxisDirection::TopToBottom,
             offset_source: OffsetSource::Pixels(0.0),
+            cache_extent: None,
             children,
         }
     }
@@ -106,13 +108,28 @@ impl<C> Viewport<C> {
         self
     }
 
+    /// Set how far beyond the visible viewport to keep slivers laid out and
+    /// painted (`RenderViewport::set_cache_extent`'s passthrough — the
+    /// render object has always supported this; this widget just lacked the
+    /// builder). `None` (the default) keeps the render object's own default.
+    #[must_use]
+    pub fn cache_extent(mut self, cache_extent: f32, style: CacheExtentStyle) -> Self {
+        self.cache_extent = Some((cache_extent, style));
+        self
+    }
+
     fn build_render_object(&self) -> RenderViewport<ScrollPosition> {
         let cross_axis_direction = default_cross_axis_direction(self.axis_direction);
         let position = match &self.offset_source {
             OffsetSource::Pixels(pixels) => ScrollPosition::new(*pixels),
             OffsetSource::Position(position) => position.clone(),
         };
-        RenderViewport::with_offset(self.axis_direction, cross_axis_direction, position)
+        let mut render_object =
+            RenderViewport::with_offset(self.axis_direction, cross_axis_direction, position);
+        if let Some((extent, style)) = self.cache_extent {
+            render_object.set_cache_extent(extent, style);
+        }
+        render_object
     }
 }
 
@@ -121,6 +138,7 @@ impl<C: ViewSeq> fmt::Debug for Viewport<C> {
         f.debug_struct("Viewport")
             .field("axis_direction", &self.axis_direction)
             .field("offset_source", &self.offset_source)
+            .field("cache_extent", &self.cache_extent)
             .field("children", &self.children.len())
             .finish()
     }
@@ -149,6 +167,9 @@ where
         // object), not just the scroll offset — otherwise a vertical↔horizontal
         // change keeps the stale axis from construction.
         render_object.set_axis_direction(self.axis_direction);
+        if let Some((extent, style)) = self.cache_extent {
+            render_object.set_cache_extent(extent, style);
+        }
         match &self.offset_source {
             OffsetSource::Pixels(pixels) => {
                 // Compat with today's behavior: push the new value into the

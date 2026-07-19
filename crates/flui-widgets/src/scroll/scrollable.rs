@@ -26,6 +26,7 @@
 //! `ScrollPosition` into `ScrollController` (v1 restriction: one position per
 //! controller).
 
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -44,7 +45,15 @@ use crate::{AnimatedBuilder, GestureDetector, SingleChildScrollView};
 /// A caller-supplied composition of the scrollable content, receiving the
 /// [`Scrollable`]'s shared [`ScrollPosition`] and returning the view to
 /// scroll. See [`Scrollable::viewport_builder`].
-pub type ViewportBuilder = Arc<dyn Fn(ScrollPosition) -> BoxedView + Send + Sync>;
+///
+/// `Rc`, not `Arc + Send + Sync`: `BoxedView` erases to `Box<dyn View>`, and
+/// `View` carries no `Send`/`Sync` supertrait (widget trees are built and
+/// laid out on one thread), so a closure that captures pre-built view
+/// content (e.g. an eager child list) can never satisfy `+ Send + Sync` —
+/// same reason `AnimatedBuilder`'s own builder closure
+/// (`transitions/animated_builder.rs`) is `Rc<dyn Fn() -> BoxedView>`, not
+/// `Arc<... + Send + Sync>`.
+pub type ViewportBuilder = Rc<dyn Fn(ScrollPosition) -> BoxedView>;
 
 // ---------------------------------------------------------------------------
 // View (configuration)

@@ -86,6 +86,51 @@ impl ScrollMetrics {
             viewport_dimension,
         }
     }
+
+    /// The current fractional "page" at `viewport_fraction`, defensively
+    /// guarded to be callable at any time (including before real content
+    /// dimensions exist).
+    ///
+    /// # Flutter parity
+    ///
+    /// Mirrors `PageMetrics.page` (`widgets/page_view.dart`, tag `3.44.0`):
+    /// `max(0.0, clamp(pixels, min, max)) / max(1.0, viewport_dimension *
+    /// viewport_fraction)`. This is the *public*, defensively-guarded
+    /// formula — distinct from the internal recompute
+    /// `ScrollPosition::apply_viewport_dimension` drives — used by both
+    /// `PageController::page` and `PageScrollPhysics` (`page_view.rs`) so the
+    /// two agree on exactly what "the current page" means.
+    ///
+    /// This snapshot alone never special-cases a collapsed
+    /// (`viewport_dimension == 0.0`) viewport's cached page
+    /// (`DimensionChangePolicy::KeepFractionalPage`'s private `cached_page`,
+    /// which `ScrollMetrics` has no access to) — it always divides
+    /// `pixels`/`viewport_dimension` as written above. `PageController::page`
+    /// (`page_view.rs`) is the one that consults the cached page first via
+    /// `ScrollPosition::cached_page`, falling back to this formula only when
+    /// the viewport isn't currently collapsed.
+    #[must_use]
+    pub fn page(&self, viewport_fraction: f32) -> f32 {
+        let clamped = self
+            .pixels
+            .clamp(self.min_scroll_extent, self.max_scroll_extent);
+        clamped.max(0.0) / (self.viewport_dimension * viewport_fraction).max(1.0)
+    }
+
+    /// The inverse of [`page`](Self::page): the pixel offset for `page` at
+    /// `viewport_fraction`.
+    ///
+    /// # Flutter parity
+    ///
+    /// Mirrors `_PagePosition.getPixelsFromPage` (`widgets/page_view.dart`,
+    /// tag `3.44.0`): `page * viewport_dimension * viewport_fraction`. Unlike
+    /// [`page`](Self::page), this has no `max(1.0, ...)` guard — it is a
+    /// forward computation, not a division, so there is no zero-denominator
+    /// hazard to guard against.
+    #[must_use]
+    pub fn pixels_from_page(&self, viewport_fraction: f32, page: f32) -> f32 {
+        page * self.viewport_dimension * viewport_fraction
+    }
 }
 
 impl From<&ScrollPosition> for ScrollMetrics {
@@ -526,5 +571,57 @@ mod tests {
 
         stop.store(true, Ordering::Relaxed);
         writer.join().expect("writer thread must not panic");
+    }
+
+    // ScrollMetrics::page / pixels_from_page -----------------------------
+
+    #[test]
+    fn page_computes_the_guarded_fraction_at_full_viewport_fraction() {
+        // page = clamp(600, 0, 1000) / max(1.0, 300 * 1.0) = 2.0
+        let m = ScrollMetrics::new(600.0, 0.0, 1000.0, 300.0);
+        assert_eq!(m.page(1.0), 2.0);
+    }
+
+    #[test]
+    fn page_computes_the_guarded_fraction_at_a_partial_viewport_fraction() {
+        // page = clamp(720, 0, 1000) / max(1.0, 300 * 0.8) = 720 / 240 = 3.0
+        let m = ScrollMetrics::new(720.0, 0.0, 1000.0, 300.0);
+        assert_eq!(m.page(0.8), 3.0);
+    }
+
+    #[test]
+    fn page_clamps_pixels_to_the_extents_before_dividing() {
+        // pixels (-50.0) is below min_scroll_extent (0.0): clamp(-50, 0, 1000)
+        // = 0.0, then max(0.0, 0.0) = 0.0 -> page = 0.0, not a negative page.
+        let m = ScrollMetrics::new(-50.0, 0.0, 1000.0, 300.0);
+        assert_eq!(
+            m.page(1.0),
+            0.0,
+            "an overscrolled negative pixels value must clamp to page 0.0"
+        );
+    }
+
+    #[test]
+    fn page_guards_against_division_by_a_zero_viewport_dimension() {
+        let m = ScrollMetrics::new(50.0, 0.0, 1000.0, 0.0);
+        assert_eq!(
+            m.page(1.0),
+            50.0,
+            "max(1.0, 0.0) denominator guard must prevent a NaN/inf page \
+             before the viewport has laid out"
+        );
+    }
+
+    #[test]
+    fn pixels_from_page_is_the_inverse_of_page_at_matching_extents() {
+        let m = ScrollMetrics::new(0.0, 0.0, 1000.0, 300.0);
+        let pixels = m.pixels_from_page(0.8, 3.0);
+        assert_eq!(pixels, 720.0, "3.0 * 300 * 0.8 = 720.0");
+
+        let round_tripped = ScrollMetrics::new(pixels, 0.0, 1000.0, 300.0).page(0.8);
+        assert_eq!(
+            round_tripped, 3.0,
+            "pixels_from_page then page must round-trip"
+        );
     }
 }

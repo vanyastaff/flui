@@ -113,3 +113,6 @@ mod draggable_test;
 
 // ── Business.1 implementation-gated fidelity unit — InteractiveViewer ───────
 mod interactive_viewer_test;
+
+// ── Paging (ADR-0037) — PageView ─────────────────────────────────────────────
+mod page_view_test;
