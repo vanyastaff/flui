@@ -7761,6 +7761,72 @@ fn harness_rotated_box_negative_quarter_turn_swaps_axes() {
     );
 }
 
+/// Every other `harness_rotated_box_*` case uses either a leaf that ignores
+/// its incoming constraints in the swapped direction, or symmetric
+/// `loose(200.0)` bounds — so a bug that skipped `constraints.flipped()`
+/// entirely and handed the child the parent's own (unswapped) constraints
+/// would still produce the same final child size and go undetected. This
+/// case uses ASYMMETRIC parent bounds (max width 30, max height 200) with a
+/// `RenderColoredBox` child that clamps to whatever constraints it receives
+/// (`ctx.constrain(preferred_size)`): under the correct FLIPPED constraints
+/// (max width 200, max height 30) the 60×40 child clamps to 60×30; under the
+/// parent's own UNFLIPPED constraints it would instead clamp to 30×40 — the
+/// two outcomes are distinguishable, which is the point.
+///
+/// No named upstream `testWidgets` case isolates this; `rotated_box_test.dart`
+/// (3.44.0) `'Rotated box control test'` builds its `Row` under
+/// `MainAxisSize.min`, which shrink-wraps regardless of which constraints it
+/// receives, so it cannot discriminate this either. Cited instead against
+/// `RenderRotatedBox.performLayout`'s `child.layout(constraints.flipped(), ...)`
+/// call (`rendering/rotated_box.dart`, 3.44.0).
+#[test]
+fn harness_rotated_box_odd_turn_lays_out_child_under_flipped_constraints() {
+    let run = RenderTester::mount(
+        box_node(RenderRotatedBox::new(1))
+            .child(box_node(RenderColoredBox::red(60.0, 40.0)).label("child")),
+    )
+    .with_constraints(BoxConstraints::new(px(0.0), px(30.0), px(0.0), px(200.0)))
+    .run_layout();
+
+    assert_eq!(
+        run.box_geometry(run.id("child")),
+        Size::new(px(60.0), px(30.0)),
+        "the child must be laid out under FLIPPED constraints (max 200×30), \
+         clamping its 60×40 preferred size to 60×30 — not the parent's own \
+         max 30×200, which would clamp it to 30×40",
+    );
+    assert_eq!(
+        run.box_geometry(run.root()),
+        Size::new(px(30.0), px(60.0)),
+        "the parent reports the child's clamped size swapped back: (30, 60)",
+    );
+}
+
+/// FLUI-added edge case, NOT a 3.44.0 oracle citation: a childless
+/// `RotatedBox(quarterTurns: 1)` under a zero-area tight constraint must
+/// report `Size::ZERO`, not panic. Upstream's `rotated_box_test.dart` has a
+/// same-shaped `'RotatedBox does not crash at zero area'` case, but it was
+/// added by PR #186201 (commit `c2d451e1237`), which postdates the `3.44.0`
+/// tag this port is scoped to — not an ancestor of `3.44.0`, so not part of
+/// the oracle corpus being ported. This test is an independent regression
+/// guard for the ODD-turn leg of the no-child branch specifically (the
+/// existing `harness_rotated_box_leaf_sizes_to_zero_even_turns` case only
+/// covers `quarter_turns = 0`, which cannot exercise the
+/// `constraints.flipped()` call in `perform_layout`'s empty-child branch).
+#[test]
+fn harness_rotated_box_no_child_odd_turn_zero_area_does_not_crash() {
+    let run = RenderTester::mount(box_node(RenderRotatedBox::new(1)))
+        .with_constraints(BoxConstraints::tight(Size::ZERO))
+        .run_layout();
+
+    assert_eq!(
+        run.box_geometry(run.root()),
+        Size::ZERO,
+        "a childless odd-turn RotatedBox under a zero-area tight constraint \
+         must report Size::ZERO without panicking",
+    );
+}
+
 #[test]
 fn harness_render_wrap_diagnostics_reports_all_properties() {
     let run = RenderTester::mount(box_node(RenderWrap::new()))
