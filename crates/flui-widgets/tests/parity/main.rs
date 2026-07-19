@@ -127,3 +127,6 @@ mod text_editing_controller_test;
 
 // ── Business.1 fidelity — LayoutBuilder parity (build-during-layout seam) ───
 mod layout_builder_test;
+
+// ── Business.1 fidelity — AspectRatio parity ────────────────────────────────
+mod aspect_ratio_test;
