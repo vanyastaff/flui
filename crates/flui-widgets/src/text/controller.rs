@@ -122,6 +122,19 @@ struct ComposingState {
 ///   Drag-to-select and selection rendering are not implemented.
 /// - **Clipboard**: copy/paste/cut are not wired.
 /// - **Input formatters**: no validation or transformation pipeline.
+/// - **Grapheme-cluster-aware deletion**: [`Self::backspace`]/[`Self::delete_forward`]
+///   walk back or forward exactly one Unicode scalar value (`char`), not one
+///   extended grapheme cluster. Flutter deletes by grapheme cluster (the
+///   `characters` package / `CharacterRange`, matching `TextEditingValue`'s
+///   own delete-by-character semantics) — for a plain multi-byte character
+///   (e.g. `'€'`) the two happen to coincide, but for a Zero-Width-Joiner
+///   sequence (a family/flag emoji: `'👨‍👩‍👦'`) a single Backspace removes only
+///   the trailing scalar, leaving a dangling joiner rendered as a broken
+///   partial glyph on screen instead of deleting the whole visual character.
+///   Tracked as ROADMAP Cross.H's "no grapheme-cluster segmentation" known
+///   gap; the fix needs a grapheme-segmentation dependency
+///   (`unicode-segmentation`) threaded through this module's mutators and is
+///   its own future unit, not attempted here.
 #[derive(Clone)]
 pub struct TextEditingController {
     /// Shared text buffer + caret state.
@@ -987,6 +1000,16 @@ mod tests {
         assert!(!controller.is_composing());
     }
 
+    /// Oracle analog: `'connection is closed when TextInputClient
+    /// .onConnectionClosed message received'` (`editable_text_test.dart`,
+    /// tag `3.44.0`) — **adapted, not a direct port**: Flutter's
+    /// `connectionClosed` leaves the buffer untouched; `clear_composing`
+    /// (FLUI's `ImeEvent::Disabled` handler) strips the composing slice
+    /// instead — see this method's own doc comment for the documented
+    /// divergence, and
+    /// `flui_widgets::text::editable_text::tests::disabled_removes_the_underline_and_restores_the_caret`
+    /// for the widget-level counterpart.
+    ///
     /// Red-check: change `clear_composing`'s `replace_range(range, "")` to
     /// only clear the `composing` marker (`guard.composing = None`) without
     /// touching `guard.text` — this test's text assertion fails because the
@@ -1017,6 +1040,12 @@ mod tests {
         assert_eq!(controller.caret_byte_offset(), 3);
     }
 
+    /// Oracle analog: `'Clears composing range if cursor moves outside that
+    /// range'` (`editable_text_test.dart`, tag `3.44.0`) — see
+    /// `caret_navigation_restores_the_caret_while_composing`'s doc comment
+    /// for the divergence this contrasts with (Flutter would clear the
+    /// composing range here; FLUI's `clear_composing` is a distinct,
+    /// explicit call — direct caret navigation alone never triggers it).
     #[test]
     fn clear_composing_leaves_a_caret_before_the_region_untouched() {
         let controller = TextEditingController::with_text("Hello ");
@@ -1114,6 +1143,19 @@ mod tests {
     /// composition itself keeps running (the underline still paints), but
     /// the caret is no longer hidden.
     ///
+    /// Oracle analog: `'Preserves composing range if cursor moves within
+    /// that range'`, `'Clears composing range if cursor moves outside that
+    /// range'`, and its `'case two'` variant (`editable_text_test.dart`, tag
+    /// `3.44.0`) — **divergent, not a port**: Flutter clears the composing
+    /// range whenever the selection moves outside it; FLUI's direct caret
+    /// navigation never touches the composing range at all (only the
+    /// caret-hidden flag this test pins) — see
+    /// `tests/parity/text_editing_controller_test.rs`'s
+    /// `direct_caret_navigation_leaves_the_composing_range_untouched_unlike_flutter`
+    /// for the divergence pinned again from outside the crate, and
+    /// `clear_composing_leaves_a_caret_before_the_region_untouched` below for
+    /// the composing-range-survives half of this same contrast.
+    ///
     /// Red-check: remove the `clear_caret_hidden` call from
     /// `move_caret_home` — `caret_hidden_by_ime()` stays `true` after this
     /// test's `move_caret_home()` call.
@@ -1141,6 +1183,16 @@ mod tests {
         );
     }
 
+    /// Oracle analog: `'Asserts if composing text is not valid'` (`test`,
+    /// `editable_text_test.dart`, tag `3.44.0`) — **divergent, not a port**:
+    /// Flutter throws constructing/assigning a `TextEditingValue` whose
+    /// composing range is out of bounds; FLUI's `set_composing_text` takes
+    /// text + cursor directly and clamps instead of asserting
+    /// (`docs/PANIC-POLICY.md`: untrusted platform input must not panic) —
+    /// see `tests/parity/text_editing_controller_test.rs`'s
+    /// `malformed_composing_cursor_clamps_through_the_public_api_instead_of_asserting`
+    /// for the same contract proven from outside the crate.
+    ///
     /// Red-check: drop the `clamp_to_char_boundary` call in
     /// `set_composing_text` (use `cursor.1` raw) — this test panics instead
     /// of asserting the clamped value.
@@ -1303,6 +1355,10 @@ mod tests {
     /// Red-check: remove the `clamp_range_to_text` call in `commit_text` —
     /// this test panics instead of asserting the degraded (wrong but
     /// in-bounds) outcome.
+    /// Oracle analog: `'Asserts if composing text is not valid'` (`test`,
+    /// `editable_text_test.dart`, tag `3.44.0`) — see
+    /// `malformed_cursor_offset_past_the_preedit_end_clamps_without_panicking`'s
+    /// doc comment for the divergence (Flutter asserts; FLUI clamps).
     #[test]
     fn a_stale_composing_range_that_bypasses_the_mutator_guard_still_cannot_panic_commit() {
         let controller = TextEditingController::with_text("Hello nihao");
