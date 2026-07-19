@@ -5,6 +5,8 @@
 //! 2. `ScrollController` thumb geometry helpers.
 //! 3. `Scrollable` interactive drag integration (gesture → offset change).
 //! 4. `ClampingScrollPhysics` hard-boundary enforcement.
+//! 5. `ScrollController::animate_to` (ADR-0037) — curve-driven animation,
+//!    grab-to-cancel, and jump_to-cancels-in-flight.
 
 mod common;
 
@@ -12,15 +14,16 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use common::{LaidOutScoped, lay_out, lay_out_with_arena, size, tight};
-use flui_animation::Vsync;
+use flui_animation::{Curves, Vsync};
 use flui_rendering::constraints::BoxConstraints;
 use flui_types::Color;
 use flui_types::geometry::px;
-use flui_view::ViewExt;
+use flui_view::prelude::StatelessView;
+use flui_view::{BuildContext, IntoView, ViewExt};
 use flui_widgets::{
-    BouncingScrollPhysics, ClampingScrollPhysics, ColoredBox, CustomScrollView, GridView, ListView,
-    ScrollController, ScrollMetrics, ScrollPhysics, Scrollable, SharedScrollPhysics,
-    SingleChildScrollView, SizedBox, SliverFixedExtentList, VsyncScope,
+    BouncingScrollPhysics, ClampingScrollPhysics, ColoredBox, CustomScrollView, GestureArenaScope,
+    GridView, ListView, ScrollController, ScrollMetrics, ScrollPhysics, Scrollable,
+    SharedScrollPhysics, SingleChildScrollView, SizedBox, SliverFixedExtentList, VsyncScope,
 };
 
 /// Flutter parity (tag `3.44.0`):
@@ -1161,6 +1164,448 @@ fn pan_start_during_fling_halts_momentum() {
         "halting the fling via on_pan_start must freeze the scroll offset; \
          offset drifted by {drift:.3} px after grab \
          (from {pixels_after_grab:.1} to {:.1})",
+        controller.pixels()
+    );
+}
+
+// ============================================================================
+// Scrollable — animate_to (ADR-0037)
+// ============================================================================
+
+/// `animate_to` drives the SAME fling `AnimationController` a ballistic fling
+/// uses, through a curve/duration tween: pumping frames must show the offset
+/// moving continuously between the start and target (not jumping straight to
+/// the end), landing EXACTLY on the target once the duration has elapsed.
+///
+/// Three pumps of warm-up before real advance begins, one more than
+/// `scrollable_fling_advances_offset_past_release`'s direct `animate_with`
+/// call needs: `animate_to` queues a command rather than driving the fling
+/// controller synchronously (see `scroll_controller.rs`'s module docs), so
+/// pump 1 is what services that queue (`flui-binding::pump_frame` ticks
+/// registered controllers BEFORE draining the rebuild that services it —
+/// `AnimationController::animate_to_curved` only runs during pump 1's
+/// rebuild step, too late for pump 1's OWN tick step to see it running).
+/// Pump 2 is then the vsync registry's own "detect the new run generation,
+/// anchor `t = 0`" pump (same as the direct-`animate_with` fling case);
+/// pump 3 is the first tick that actually advances the value.
+///
+/// Flutter parity: `ScrollController.animateTo`/`ScrollPositionWithSingleContext
+/// .animateTo` (`scroll_controller.dart`/`scroll_position_with_single_context.dart`,
+/// tag `3.44.0`) drive a `DrivenScrollActivity`'s curve/duration tween from
+/// the current position to the target.
+#[test]
+fn scrollable_animate_to_reaches_the_target_through_the_curve() {
+    let controller = ScrollController::new();
+    controller.update_dimensions(300.0, 0.0, 4700.0);
+
+    let vsync = Vsync::new();
+    let widget = Scrollable::new()
+        .controller(controller.clone())
+        .child(SizedBox::new(300.0, 5000.0));
+
+    let mut scoped = fling_scoped(widget, vsync, tight(300.0, 300.0));
+
+    controller.animate_to(1000.0, Duration::from_millis(100), Arc::new(Curves::Linear));
+
+    // Pump 1: services the queued command (starts the run). Pump 2: vsync
+    // anchors the new run generation at t=0. Pump 3: the first real tick,
+    // 16ms into a 100ms run (t = 0.16).
+    scoped.pump_for(Duration::from_millis(16));
+    scoped.pump_for(Duration::from_millis(16));
+    scoped.pump_for(Duration::from_millis(16));
+    let mid = controller.pixels();
+    assert!(
+        mid > 0.0 && mid < 1000.0,
+        "part-way through a 100ms animate_to, the offset must sit strictly \
+         between the start (0.0) and the target (1000.0); got {mid:.2}"
+    );
+
+    // Pump comfortably past the 100ms duration.
+    for _ in 0..10 {
+        scoped.pump_for(Duration::from_millis(16));
+    }
+    assert_eq!(
+        controller.pixels(),
+        1000.0,
+        "once the duration has fully elapsed, animate_to must land EXACTLY on \
+         the target; got {:.2}",
+        controller.pixels()
+    );
+}
+
+/// A pan gesture that crosses drag-slop DURING an in-flight `animate_to` must
+/// halt it at the finger's contact position — `on_pan_start` calls
+/// `fling_controller.stop()`, and `animate_to` drives that EXACT SAME
+/// controller (the whole reason `ScrollableState` reuses its fling
+/// controller instead of a separate one — see `scrollable.rs`'s module
+/// docs), so the cancellation falls out of the existing grab-to-stop
+/// discipline for free.
+#[test]
+fn scrollable_grab_during_animate_to_halts_it() {
+    let controller = ScrollController::new();
+    controller.update_dimensions(300.0, 0.0, 4700.0);
+
+    let vsync = Vsync::new();
+    let widget = Scrollable::new()
+        .controller(controller.clone())
+        .child(SizedBox::new(300.0, 5000.0));
+
+    let mut scoped = fling_scoped(widget, vsync, tight(300.0, 300.0));
+
+    controller.animate_to(1000.0, Duration::from_millis(300), Arc::new(Curves::Linear));
+    // Three pumps of warm-up — see `scrollable_animate_to_reaches_the_target_through_the_curve`'s
+    // doc for why this needs one more pump than a direct `animate_with` fling.
+    scoped.pump_for(Duration::from_millis(16));
+    scoped.pump_for(Duration::from_millis(16));
+    scoped.pump_for(Duration::from_millis(16));
+    let pixels_mid_animation = controller.pixels();
+    assert!(
+        pixels_mid_animation > 0.0 && pixels_mid_animation < 1000.0,
+        "sanity: the animation must be genuinely in flight before the grab; \
+         got {pixels_mid_animation:.2}"
+    );
+
+    // Grab: cross slop to fire on_pan_start -> fling_controller.stop(). A
+    // downward drag so it doesn't overlap numerically with the already-
+    // advanced scroll position, then cancel to avoid firing on_pan_end (and
+    // starting a new fling).
+    scoped.dispatch_pointer_down(150.0, 200.0);
+    scoped.dispatch_pointer_move(150.0, 250.0); // 50px downward: past the 18px slop
+    scoped.dispatch_pointer_cancel(150.0, 250.0);
+
+    let pixels_after_grab = controller.pixels();
+
+    for _ in 0..10 {
+        scoped.pump_for(Duration::from_millis(16));
+    }
+
+    let drift = (controller.pixels() - pixels_after_grab).abs();
+    assert!(
+        drift <= 1.0,
+        "grabbing mid-animate_to must halt the run; offset drifted by {drift:.3} px \
+         after the grab (from {pixels_after_grab:.1} to {:.1})",
+        controller.pixels()
+    );
+    assert!(
+        controller.pixels() < 1000.0,
+        "a halted animate_to must never reach its original target (1000.0); got {:.2}",
+        controller.pixels()
+    );
+}
+
+/// `jump_to` called while an `animate_to` is in flight must cancel it
+/// SYNCHRONOUSLY — a subsequent frame must not resume driving toward the
+/// original target, and must not even transiently show a stale fling-tick
+/// value before the cancellation "catches up" (see `ScrollController`'s
+/// `stop_hook` field docs for the one-frame race a merely QUEUED
+/// cancellation would otherwise leave open, since `flui-binding::pump_frame`
+/// ticks registered controllers before draining the rebuild queue that
+/// services a queued command).
+///
+/// Flutter parity: `ScrollPosition.jumpTo` calls `goIdle()` — cancelling
+/// whatever activity currently owns the position — before touching `pixels`
+/// (`scroll_position_with_single_context.dart`, tag `3.44.0`).
+#[test]
+fn scrollable_jump_to_during_animate_to_cancels_it_synchronously() {
+    let controller = ScrollController::new();
+    controller.update_dimensions(300.0, 0.0, 4700.0);
+
+    let vsync = Vsync::new();
+    let widget = Scrollable::new()
+        .controller(controller.clone())
+        .child(SizedBox::new(300.0, 5000.0));
+
+    let mut scoped = fling_scoped(widget, vsync, tight(300.0, 300.0));
+
+    controller.animate_to(1000.0, Duration::from_millis(300), Arc::new(Curves::Linear));
+    // Three pumps of warm-up — see `scrollable_animate_to_reaches_the_target_through_the_curve`'s
+    // doc for why this needs one more pump than a direct `animate_with` fling.
+    scoped.pump_for(Duration::from_millis(16));
+    scoped.pump_for(Duration::from_millis(16));
+    scoped.pump_for(Duration::from_millis(16));
+    assert!(
+        controller.pixels() > 0.0 && controller.pixels() < 1000.0,
+        "sanity: the animation must be in flight before jump_to"
+    );
+
+    controller.jump_to(42.0);
+    assert_eq!(
+        controller.pixels(),
+        42.0,
+        "jump_to must move to its own target immediately"
+    );
+
+    // The very next frame tick must NOT resume the old animation — if the
+    // cancellation were only queued (not synchronous), this frame's tick step
+    // (which runs BEFORE the rebuild that would service the queued Cancel)
+    // would advance the still-running fling controller once more, stomping
+    // the 42.0 this assertion checks.
+    scoped.pump_for(Duration::from_millis(16));
+    assert_eq!(
+        controller.pixels(),
+        42.0,
+        "the frame immediately after jump_to must not have resumed the \
+         canceled animate_to even transiently; got {:.2}",
+        controller.pixels()
+    );
+
+    for _ in 0..10 {
+        scoped.pump_for(Duration::from_millis(16));
+    }
+    assert_eq!(
+        controller.pixels(),
+        42.0,
+        "a jump_to mid-animate_to must cancel the run for good — later frames \
+         must not resume driving toward the original 1000.0 target; got {:.2}",
+        controller.pixels()
+    );
+}
+
+/// A second `animate_to`, issued before the first has finished, must replace
+/// it outright — the position must end up at the SECOND target, never
+/// pausing at or passing through the first.
+///
+/// Flutter parity: `ScrollPositionWithSingleContext.animateTo` calls
+/// `beginActivity`, which disposes whatever `DrivenScrollActivity` (or
+/// ballistic activity) was previously running before installing the new one
+/// (`scroll_position_with_single_context.dart`, tag `3.44.0`).
+#[test]
+fn scrollable_second_animate_to_supersedes_the_first() {
+    let controller = ScrollController::new();
+    controller.update_dimensions(300.0, 0.0, 4700.0);
+
+    let vsync = Vsync::new();
+    let widget = Scrollable::new()
+        .controller(controller.clone())
+        .child(SizedBox::new(300.0, 5000.0));
+
+    let mut scoped = fling_scoped(widget, vsync, tight(300.0, 300.0));
+
+    controller.animate_to(500.0, Duration::from_millis(100), Arc::new(Curves::Linear));
+    // Three pumps of warm-up — see `scrollable_animate_to_reaches_the_target_through_the_curve`'s
+    // doc for why the run only starts genuinely ticking on the third pump.
+    scoped.pump_for(Duration::from_millis(16));
+    scoped.pump_for(Duration::from_millis(16));
+    scoped.pump_for(Duration::from_millis(16));
+    let pixels_before_supersede = controller.pixels();
+    assert!(
+        pixels_before_supersede > 0.0 && pixels_before_supersede < 500.0,
+        "sanity: the first animate_to must be genuinely in flight before it is \
+         superseded; got {pixels_before_supersede:.2}"
+    );
+
+    // Replace it before it ever reaches 500.0.
+    controller.animate_to(2000.0, Duration::from_millis(100), Arc::new(Curves::Linear));
+
+    for _ in 0..20 {
+        scoped.pump_for(Duration::from_millis(16));
+    }
+
+    assert_eq!(
+        controller.pixels(),
+        2000.0,
+        "a second animate_to must supersede the first outright, landing on \
+         the SECOND target (2000.0), never settling at the first (500.0); \
+         got {:.2}",
+        controller.pixels()
+    );
+}
+
+/// A controller SWAP (via `did_update_view` — same root `Scrollable` type
+/// before and after, so this reconciles as an update, not a remount) must
+/// move the synchronous `jump_to` cancellation hook onto the NEW controller.
+/// Without `ScrollableState::did_update_view` re-installing it there, the new
+/// controller's `jump_to` would find no hook installed at all (a fresh
+/// `ScrollController` starts with none) and fail to stop the SHARED fling
+/// controller synchronously.
+///
+/// This starts the fling via a REAL drag+release on the OLD controller
+/// BEFORE the swap (`Scrollable`'s `AnimatedBuilder`-rebuilt gesture
+/// callbacks are only known-good against the controller active at gesture
+/// time), then swaps, then exercises ONLY the stop hook — a plain field
+/// read-and-call at `jump_to` time, wired directly by `did_update_view`
+/// rather than by anything requiring a POST-swap `AnimatedBuilder` rebuild
+/// (a separate, pre-existing gap — see `scroll_controller`'s field doc in
+/// `scrollable.rs` — that a fresh `animate_to` call on the new controller
+/// would otherwise entangle this test with).
+#[test]
+fn scrollable_reinstalls_the_stop_hook_after_a_controller_swap() {
+    let old_controller = ScrollController::new();
+    let new_controller = ScrollController::new();
+    old_controller.update_dimensions(300.0, 0.0, 4700.0);
+
+    let vsync = Vsync::new();
+    let widget = Scrollable::new()
+        .controller(old_controller.clone())
+        .child(SizedBox::new(300.0, 5000.0));
+    let mut scoped = fling_scoped(widget, vsync.clone(), tight(300.0, 300.0));
+
+    // Start a REAL fling on the OLD controller — the shared fling
+    // `AnimationController` this drives is the SAME instance
+    // `ScrollableState` keeps across a controller swap (created once in
+    // `create_state`), so it stays running straight through the swap below.
+    scoped.dispatch_pointer_down(150.0, 250.0);
+    scoped.dispatch_pointer_move(150.0, 180.0); // slop-crossing: 70 px upward
+    scoped.dispatch_pointer_move(150.0, 150.0); // 30 px more: on_pan_update
+    scoped.dispatch_pointer_up(150.0, 150.0);
+    scoped.pump_for(Duration::from_millis(16));
+    scoped.pump_for(Duration::from_millis(16));
+    let old_pixels_mid_fling = old_controller.pixels();
+    assert!(
+        old_pixels_mid_fling > 0.0,
+        "sanity: the fling must be genuinely advancing the OLD controller \
+         before the swap; got {old_pixels_mid_fling:.2}"
+    );
+
+    // Swap to a DIFFERENT controller, re-wrapped in a matching
+    // `GestureArenaScope` (`fling_scoped`/`lay_out_with_arena` mounted the
+    // root as `GestureArenaScope<VsyncScope<Scrollable>>` — a root element
+    // TYPE change does not run the normal update/dispose path, so the
+    // replacement must keep that exact same outer shape for this to
+    // reconcile as an UPDATE through `did_update_view`, not a remount; same
+    // pattern `tests/parity/page_view_test.rs`'s
+    // `a_parent_rebuild_with_no_explicit_controller_keeps_the_current_page`
+    // uses).
+    let rewrapped = GestureArenaScope::new(
+        scoped.laid().arena(),
+        VsyncScope::new(
+            vsync,
+            Scrollable::new()
+                .controller(new_controller.clone())
+                .child(SizedBox::new(300.0, 5000.0)),
+        ),
+    );
+    scoped.pump_widget(rewrapped);
+
+    // The fling is STILL running on the shared controller post-swap (its
+    // value listener keeps pushing into the OLD controller — the named,
+    // pre-existing, out-of-scope swap gap `scrollable.rs` documents — so
+    // `old_controller` is what still observably advances).
+    scoped.pump_for(Duration::from_millis(16));
+    assert!(
+        old_controller.pixels() > old_pixels_mid_fling,
+        "sanity: the fling must still be advancing after the swap, before \
+         jump_to; old_controller: {:.2} -> {:.2}",
+        old_pixels_mid_fling,
+        old_controller.pixels()
+    );
+
+    // The SYNCHRONOUS cancellation path: `new_controller.jump_to` must find
+    // the stop hook `did_update_view` re-installed on it, and stop the
+    // SHARED fling controller THIS INSTANT.
+    new_controller.jump_to(0.0);
+    let old_pixels_after_jump = old_controller.pixels();
+
+    for _ in 0..5 {
+        scoped.pump_for(Duration::from_millis(16));
+    }
+
+    let drift = (old_controller.pixels() - old_pixels_after_jump).abs();
+    assert!(
+        drift <= 1.0,
+        "jump_to on the controller installed by a did_update_view SWAP must \
+         still stop the shared fling controller synchronously — the OLD \
+         controller's pixels (still fed by the fling's value listener) must \
+         stop drifting once jump_to is called on the NEW one; drifted \
+         {drift:.3} px after jump_to (from {old_pixels_after_jump:.1} to \
+         {:.1})",
+        old_controller.pixels()
+    );
+}
+
+/// A `StatelessView` host that can unmount `Scrollable` entirely (`show:
+/// false`) — the same "stable root TYPE, varying build output" pattern
+/// `PageViewHost` (`tests/parity/page_view_test.rs`) uses, since `pump_widget`
+/// reconciling two DIFFERENT concrete ROOT types does not run the normal
+/// unmount/dispose path; toggling the INNER build output under a stable
+/// outer type does.
+#[derive(Clone, StatelessView)]
+struct ScrollableHost {
+    controller: ScrollController,
+    show: bool,
+}
+
+impl StatelessView for ScrollableHost {
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        if !self.show {
+            return SizedBox::new(1.0, 1.0).into_view().boxed();
+        }
+        Scrollable::new()
+            .controller(self.controller.clone())
+            .child(SizedBox::new(300.0, 5000.0))
+            .into_view()
+            .boxed()
+    }
+}
+
+/// Disposing a `Scrollable` must clear any not-yet-serviced pending command
+/// from its controller — otherwise an `animate_to` queued before dispose
+/// would replay against a DIFFERENT (freshly mounted) `ScrollableState`'s
+/// fling controller if the same `ScrollController` is later re-attached to a
+/// new `Scrollable`, instead of leaving the fresh, untouched state a caller
+/// re-attaching a controller would expect.
+#[test]
+fn disposing_a_scrollable_clears_the_controllers_pending_command_before_a_reattach() {
+    let controller = ScrollController::new();
+    controller.update_dimensions(300.0, 0.0, 4700.0);
+
+    let vsync = Vsync::new();
+    let mut scoped = lay_out_with_arena(
+        VsyncScope::new(
+            vsync.clone(),
+            ScrollableHost {
+                controller: controller.clone(),
+                show: true,
+            },
+        ),
+        tight(300.0, 300.0),
+    );
+    scoped.adopt_vsync(vsync.clone());
+
+    // Queue an animate_to but dispose before ANY pump services it.
+    controller.animate_to(1000.0, Duration::from_millis(100), Arc::new(Curves::Linear));
+
+    // Unmount: `show: false` toggles the INNER build output. Re-wrapped in a
+    // matching `GestureArenaScope` (`lay_out_with_arena` mounted the root as
+    // `GestureArenaScope<VsyncScope<ScrollableHost>>` — a root element TYPE
+    // change does not run the normal update/dispose path, so the
+    // replacement must keep that exact same outer shape for this to
+    // reconcile as a genuine update that runs `Scrollable`'s dispose, not a
+    // remount).
+    let unmounted = GestureArenaScope::new(
+        scoped.laid().arena(),
+        VsyncScope::new(
+            vsync.clone(),
+            ScrollableHost {
+                controller: controller.clone(),
+                show: false,
+            },
+        ),
+    );
+    scoped.pump_widget(unmounted);
+
+    // Re-attach the SAME controller to a brand-new mounted Scrollable.
+    let reattached = GestureArenaScope::new(
+        scoped.laid().arena(),
+        VsyncScope::new(
+            vsync,
+            ScrollableHost {
+                controller: controller.clone(),
+                show: true,
+            },
+        ),
+    );
+    scoped.pump_widget(reattached);
+
+    for _ in 0..10 {
+        scoped.pump_for(Duration::from_millis(16));
+    }
+
+    assert_eq!(
+        controller.pixels(),
+        0.0,
+        "an animate_to queued before dispose must NOT replay against a \
+         freshly re-attached Scrollable; got {:.2}",
         controller.pixels()
     );
 }

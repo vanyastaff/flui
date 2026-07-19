@@ -20,6 +20,18 @@
 //! `on_pan_start` halts any in-flight fling via `stop()`, so grabbing a
 //! scrolling list feels physically correct.
 //!
+//! # `animate_to` servicing (ADR-0037)
+//!
+//! [`ScrollController::animate_to`]/[`jump_to`](ScrollController::jump_to)
+//! don't drive the fling controller directly — they queue a command (see
+//! `scroll_controller.rs`'s module docs) that this widget's `build` closure
+//! services on every rebuild the controller's notify triggers, via
+//! [`ScrollController::service_pending_command`]. Reusing the SAME
+//! `AnimationController` the ballistic fling above drives means `on_pan_start`
+//! cancels a running `animate_to` for free — it stops whichever of the two
+//! (fling or curve-driven tween) happens to be active — and `jump_to` queues
+//! an explicit cancel for the same reason.
+//!
 //! # Flutter parity
 //!
 //! Corresponds to `widgets/scrollable.dart` `Scrollable`. FLUI merges
@@ -208,10 +220,15 @@ pub struct ScrollableState {
     /// state so the fling listener (registered in `init_state`) can reach it
     /// without re-capturing on every `build`. Updated in `did_update_view`.
     ///
-    /// Note: if the caller replaces the controller with a different object
-    /// (rather than mutating the same `Arc`-backed handle), the listener will
-    /// continue driving the old one until the widget is disposed. Full
-    /// hot-swap is deferred — the common case is one stable controller.
+    /// Named follow-up (pre-existing, not fixed by ADR-0037): if the caller
+    /// replaces the controller with a different object (rather than mutating
+    /// the same `Arc`-backed handle), the fling VALUE LISTENER registered
+    /// once in `init_state` keeps pushing ticks into the OLD controller until
+    /// the widget is disposed — full hot-swap of that listener is deferred,
+    /// the common case is one stable controller. The `stop_hook`
+    /// `did_update_view` re-installs on every swap does NOT share this gap:
+    /// it is looked up fresh from `self.scroll_controller` (updated first),
+    /// not captured once in `init_state`.
     scroll_controller: ScrollController,
     /// The ballistic simulation driver. Bounds span `(NEG_INFINITY, INFINITY)`
     /// so pixel-space simulation positions are not clamped to `[0, 1]`.
@@ -280,11 +297,29 @@ impl ScrollableState {
             self.scroll_controller.position().set_flush_handle(handle);
         }
     }
+
+    /// Installs the synchronous `jump_to` cancellation hook (ADR-0037) on
+    /// [`ScrollController`], closing over this state's own fling controller —
+    /// see `ScrollController`'s `stop_hook` field docs for why `jump_to`
+    /// needs a hook called AT jump_to time rather than a merely-queued
+    /// command serviced on the next rebuild.
+    ///
+    /// Idempotent (mirrors `install_flush_handle`): called from `init_state`
+    /// AND `did_update_view` (a controller swap must move the hook onto the
+    /// NEW controller — see `scroll_controller`'s field doc), always against
+    /// whatever `self.scroll_controller` currently is.
+    fn install_stop_hook(&self) {
+        let fling = self.fling_controller.clone();
+        self.scroll_controller.set_stop_hook(Arc::new(move || {
+            let _ = fling.stop();
+        }));
+    }
 }
 
 impl ViewState<Scrollable> for ScrollableState {
     fn init_state(&mut self, ctx: &dyn BuildContext) {
         self.install_flush_handle(ctx);
+        self.install_stop_hook();
 
         // Attach the value listener that pushes the fling simulation's current
         // pixel position into the scroll controller each tick. The listener
@@ -322,6 +357,14 @@ impl ViewState<Scrollable> for ScrollableState {
         let fling_controller = self.fling_controller.clone();
 
         AnimatedBuilder::new(scroll_controller.as_listenable(), move || {
+            // Service any `animate_to`/`jump_to`-queued command BEFORE
+            // building this rebuild's subtree — this closure reruns on every
+            // notify the controller fires (ADR-0037's "notify path"),
+            // exactly the trigger `ScrollController::animate_to`/`jump_to`
+            // fire after queuing a command. See `scroll_controller.rs`'s
+            // module docs and `ScrollController::service_pending_command`.
+            scroll_controller.service_pending_command(&fling_controller);
+
             // Clones for the gesture callbacks; each closure needs its own
             // `Arc`-counted handle (no refcount bump at call time).
             let fling_stop = fling_controller.clone();
@@ -423,6 +466,18 @@ impl ViewState<Scrollable> for ScrollableState {
         // Track the current controller so the fling listener stays in sync if
         // a parent rebuild hands us a new configuration.
         self.scroll_controller = new_view.controller.clone();
+
+        // Re-install the stop hook on the (possibly new) controller —
+        // `install_stop_hook` is idempotent (see its doc), so this is cheap
+        // even when the controller didn't actually change. Without this, a
+        // controller SWAP would leave the hook on the OLD controller only:
+        // the new controller's `jump_to` would silently lose the
+        // synchronous cancel path (see `ScrollController`'s `stop_hook`
+        // field docs for the one-frame gap that reopens). The fling VALUE
+        // LISTENER is deliberately NOT re-subscribed here — see
+        // `scroll_controller`'s own field doc above for that pre-existing,
+        // out-of-scope gap.
+        self.install_stop_hook();
     }
 
     fn dispose(&mut self) {
@@ -438,6 +493,15 @@ impl ViewState<Scrollable> for ScrollableState {
         {
             vsync.unregister(registration);
         }
+        // Detach the ADR-0037 stop hook and drop any not-yet-serviced
+        // pending command — without this, the user-held `ScrollController`
+        // would keep an `Arc` closing over this about-to-be-disposed
+        // `fling_controller` alive (and reachable via `jump_to`) forever, and
+        // a command queued while still attached to THIS widget would
+        // otherwise resurface against a DIFFERENT `ScrollableState` if the
+        // same controller is later re-attached to a new `Scrollable`.
+        self.scroll_controller.clear_stop_hook();
+        self.scroll_controller.clear_pending_command();
         self.fling_controller.dispose();
     }
 }
