@@ -8,7 +8,7 @@
 //! |------|-----------------|--------|----------|-------|-------------|---------|
 //! | `RenderSizedBox` | `harness_sized_box_*` | yes | — | — | yes | queries |
 //! | `RenderColoredBox` | `harness_colored_box_*` | yes | yes | yes | yes | — |
-//! | `RenderCustomPaint` | `harness_custom_paint_*` | yes | yes | yes | yes | order |
+//! | `RenderCustomPaint` | `harness_custom_paint_*` | yes | yes | yes | yes | order, paint size, poison |
 //! | `RenderImage` | `harness_image_*` | yes | — | yes | yes | — |
 //! | `RenderParagraph` | `harness_paragraph_*` | yes | — | yes | yes | — |
 //! | `RenderEditable` | `harness_editable_*` | yes | yes | yes | yes | — |
@@ -681,11 +681,21 @@ fn harness_custom_paint_childless_uses_preferred_size_and_paints() {
 
     assert_eq!(run.box_geometry(run.root()), Size::new(px(30.0), px(20.0)));
     assert!(run.hit_first(10.0, 10.0).is_some());
+    // Flutter parity: `paint(canvas, size)` must receive the node's OWN
+    // committed size (custom_paint.dart `_paintWithPainter`) — a color-only
+    // check would pass even if the wrong `size` reached the painter, so this
+    // asserts the full draw-rect extent (30x20) matches `box_geometry` above.
     assert!(
         run.display_commands()
             .iter()
-            .any(|cmd| cmd.line.contains("#FF0000FF")),
-        "background painter must emit a red draw command",
+            .any(|cmd| cmd.line == "DrawRect rect=(0.00,0.00 30.00x20.00) fill #FF0000FF"),
+        "background painter must be invoked with size == committed layout size \
+         (30x20), not some other extent; commands:\n{}",
+        run.display_commands()
+            .iter()
+            .map(|cmd| cmd.line.clone())
+            .collect::<Vec<_>>()
+            .join("\n"),
     );
     assert_descendant_properties(
         &run.diagnostics(),
@@ -729,6 +739,19 @@ fn harness_custom_paint_orders_background_child_foreground() {
         "paint order must be background red -> child green -> foreground blue; commands:\n{}",
         painted.join("\n"),
     );
+    // CustomPaint sizes to its child (20x10 `RenderColoredBox`), so both
+    // painters must be invoked with THAT size, not the Size::ZERO preferred
+    // size given at construction (Flutter parity: background/foreground
+    // painters share the node's one committed `size`, custom_paint.dart
+    // `paint()`).
+    assert!(
+        rects
+            .iter()
+            .all(|line| line.contains("(0.00,0.00 20.00x10.00)")),
+        "background, child, and foreground must all paint at the node's \
+         committed 20x10 size; commands:\n{}",
+        painted.join("\n"),
+    );
 }
 
 #[test]
@@ -742,6 +765,101 @@ fn harness_custom_paint_foreground_hit_test_wins() {
     .run_frame();
 
     assert_eq!(run.hit_first(10.0, 10.0), Some(run.root()));
+}
+
+/// A present-but-zero-size child must still drive layout through the
+/// has-child branch, producing `Size::ZERO` because the CHILD does, not
+/// because `RenderCustomPaint` special-cases a small/zero `preferred_size`.
+/// The large, distinctive `preferred_size` (999x999) makes the two branches
+/// unmistakable: any regression that let a zero-size child fall through to
+/// the childless branch (or vice versa) would report 999x999, not 0x0.
+///
+/// Flutter parity: `custom_paint_test.dart` "CustomPaint sizing" (3.44.0) —
+/// `CustomPaint(child: const SizedBox.shrink())` measures to `Size.zero`,
+/// distinct from the childless-default-Size.zero case (same oracle test)
+/// which this file's `custom_paint_childless_uses_preferred_size` widget
+/// test and this suite's `dry_layout_childless_*` unit tests already cover
+/// via the `preferred_size` mechanism.
+#[test]
+fn harness_custom_paint_with_zero_size_child_sizes_to_zero_not_preferred_size() {
+    let run = RenderTester::mount(
+        box_node(RenderCustomPaint::new(
+            None,
+            None,
+            Size::new(px(999.0), px(999.0)),
+        ))
+        .child(box_node(RenderSizedBox::shrink())),
+    )
+    .with_constraints(loose(200.0))
+    .run_layout();
+
+    assert_eq!(
+        run.box_geometry(run.root()),
+        Size::ZERO,
+        "a zero-size child must size CustomPaint to zero, not to preferred_size",
+    );
+}
+
+/// A painter that calls `canvas.save()` without a matching `restore()` before
+/// `paint()` returns must poison the paint phase rather than silently
+/// corrupting the canvas save/restore stack.
+///
+/// Divergence from the oracle (documented, not silently dropped): Flutter's
+/// `custom_paint_test.dart` "Throws FlutterError on custom painter incorrect
+/// restore/save calls" asserts the exact multi-line `FlutterError` diagnostic
+/// text produced by a *catchable* Dart exception. FLUI's parity check is the
+/// `debug_assert_eq!` in `paint_with_painter`
+/// (`crates/flui-objects/src/proxy/custom_paint.rs`), which raises a Rust
+/// panic; the pipeline's `catch_unwind` wrapper
+/// (`crates/flui-rendering/src/pipeline/owner/paint.rs`) converts ANY paint
+/// panic into `RenderError::Poisoned { render_object, phase }` and discards
+/// the panic payload — so the specific "must pair every canvas.save()..."
+/// message the oracle asserts on has no observable equivalent here. What IS
+/// verified, faithfully: the imbalance is detected and the paint phase is
+/// rejected rather than producing a broken display.
+#[test]
+fn harness_custom_paint_unbalanced_save_poisons_the_paint_phase() {
+    #[derive(Debug)]
+    struct UnbalancedSavePainter;
+
+    impl CustomPainter for UnbalancedSavePainter {
+        fn paint(&self, canvas: &mut Canvas, _size: Size) {
+            canvas.save();
+            // Deliberately no matching `restore()`.
+        }
+
+        fn should_repaint(&self, _old_delegate: &dyn CustomPainter) -> bool {
+            true
+        }
+
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+    }
+
+    let result = RenderTester::mount(box_node(RenderCustomPaint::new(
+        Some(Arc::new(UnbalancedSavePainter)),
+        None,
+        Size::new(px(10.0), px(10.0)),
+    )))
+    .with_constraints(loose(200.0))
+    .try_run_frame();
+
+    match result {
+        Err(flui_rendering::RenderError::Poisoned {
+            render_object,
+            phase,
+        }) => {
+            assert!(
+                render_object.contains("RenderCustomPaint"),
+                "render_object name must identify the offending node; got {render_object}",
+            );
+            assert_eq!(phase, "paint", "phase tag must identify the paint phase");
+        }
+        other => {
+            panic!("expected RenderError::Poisoned from the unbalanced save(), got {other:?}")
+        }
+    }
 }
 
 #[test]
