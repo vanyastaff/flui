@@ -910,6 +910,13 @@ mod tests {
     /// `controller.focus_node_id()`) finds nothing to focus — the
     /// withhold-acquisition contract [`EditableText::enabled`] documents.
     ///
+    /// Oracle analog: `'Does not accept updates when read-only'`
+    /// (`editable_text_test.dart`, tag `3.44.0`) — **adapted, not a direct
+    /// port**: Flutter's `readOnly` blocks platform text updates while the
+    /// field keeps focus; `enabled` is a strictly wider gate that withholds
+    /// focus acquisition entirely (see `tests/parity/editable_text_test.rs`'s
+    /// module doc for the full contrast).
+    ///
     /// Red-check: drop the `if self.enabled` guard around
     /// `set_focus_node_id` in `init_state` — the node publishes
     /// unconditionally and this assertion fails.
@@ -931,6 +938,11 @@ mod tests {
 
     /// An enabled field (the default) does publish, so the same field
     /// re-enabled is focusable again — the contrast case for the test above.
+    ///
+    /// Oracle analog: `'Does not accept updates when read-only'`
+    /// (`editable_text_test.dart`, tag `3.44.0`) — see
+    /// `disabled_field_does_not_publish_its_focus_node`'s doc comment for the
+    /// adapted contrast this is the enabled-side counterpart of.
     #[test]
     fn enabled_field_publishes_its_focus_node() {
         let _guard = crate::test_harness::FOCUS_TEST_LOCK.lock();
@@ -949,6 +961,12 @@ mod tests {
     /// node — `did_update_view`'s `set_can_request_focus(false)` call (see
     /// [`EditableText::enabled`]'s doc comment) releases primary focus itself,
     /// matching Flutter's `FocusNode.canRequestFocus` setter.
+    ///
+    /// Oracle analog: `'Does not accept updates when read-only'`
+    /// (`editable_text_test.dart`, tag `3.44.0`) — see
+    /// `disabled_field_does_not_publish_its_focus_node`'s doc comment above
+    /// for the adapted contrast (Flutter's `readOnly` keeps focus; `enabled`
+    /// releases it outright).
     ///
     /// Red-check: pass `true` instead of `new_view.enabled` to
     /// `set_can_request_focus` in `did_update_view` — the node stays
@@ -983,6 +1001,11 @@ mod tests {
 
     /// The contrast case: re-enabling a disabled field republishes its
     /// node, so it becomes focusable again.
+    ///
+    /// Oracle analog: `'Does not accept updates when read-only'`
+    /// (`editable_text_test.dart`, tag `3.44.0`) — see
+    /// `disabled_field_does_not_publish_its_focus_node`'s doc comment for the
+    /// adapted contrast.
     #[test]
     fn re_enabling_a_disabled_field_republishes_its_focus_node() {
         let _guard = crate::test_harness::FOCUS_TEST_LOCK.lock();
@@ -1005,6 +1028,11 @@ mod tests {
     /// directly (bypassing `FocusManager::dispatch_key_event`'s own
     /// primary-focus routing), a disabled node's handler must still refuse
     /// to mutate the controller.
+    ///
+    /// Oracle analog: `'Does not accept updates when read-only'`
+    /// (`editable_text_test.dart`, tag `3.44.0`) — see
+    /// `disabled_field_does_not_publish_its_focus_node`'s doc comment above
+    /// for the adapted contrast.
     ///
     /// Red-check: delete the `if !focus_node.can_request_focus() { return
     /// false; }` guard at the top of `build_key_handler`'s closure — the
@@ -1305,6 +1333,12 @@ mod tests {
         );
     }
 
+    /// Oracle analog: `'connection is closed when TextInputClient
+    /// .onConnectionClosed message received'` (`editable_text_test.dart`,
+    /// tag `3.44.0`) — see `disabled_removes_the_underline_and_restores_the_caret`'s
+    /// doc comment for the documented divergence (Flutter keeps the buffer;
+    /// FLUI strips the composing slice).
+    ///
     /// Red-check: drop the `guard.text.replace_range(range, "")` in
     /// `TextEditingController::clear_composing` (keep only the marker
     /// clear) — this test's text assertion fails, keeping the uncommitted
@@ -1761,6 +1795,12 @@ mod tests {
     /// `buildTextSpan`'s composing-underline three-way split plus its
     /// hidden-caret case, both now implemented (ADR-0033).
     ///
+    /// Oracle: `'Composing text is underlined and underline is cleared when
+    /// losing focus'` (`editable_text_test.dart`, tag `3.44.0`) — ported
+    /// geometry-relative, see `tests/parity/editable_text_test.rs`'s module
+    /// doc for why (no `TextStyle.decoration` to source real underline
+    /// metrics from).
+    ///
     /// Red-check: drop the `!controller.caret_hidden_by_ime()` term from
     /// `build_field_view`'s `show_caret` expression — this test's
     /// `show_caret_flag` assertion fails (stays `true`).
@@ -1829,6 +1869,12 @@ mod tests {
 
     /// A commit ends composition: the underline disappears and the caret is
     /// restored.
+    ///
+    /// Oracle: `'Composing text is underlined and underline is cleared when
+    /// losing focus'` (`editable_text_test.dart`, tag `3.44.0`) — the
+    /// composition-ends-so-underline-clears half; see
+    /// `preedit_cursor_none_while_focused_hides_the_caret_and_starts_the_underline`'s
+    /// doc comment for the geometry-relative adaptation note.
     #[test]
     fn commit_removes_the_underline_and_restores_the_caret() {
         let _guard = crate::test_harness::FOCUS_TEST_LOCK.lock();
@@ -1865,6 +1911,16 @@ mod tests {
 
     /// `Disabled` mid-composition (winit's connection-closed signal) also
     /// ends composition: underline gone, caret restored.
+    ///
+    /// Oracle analog: `'connection is closed when TextInputClient
+    /// .onConnectionClosed message received'` (`editable_text_test.dart`,
+    /// tag `3.44.0`) — **adapted, not a direct port**: Flutter's
+    /// `connectionClosed` only ends the input session, leaving the buffer
+    /// untouched; FLUI's `ImeEvent::Disabled` additionally strips the
+    /// in-progress composing slice (see
+    /// `disabled_mid_preedit_strips_the_composing_slice_through_the_attached_client`
+    /// below, and `TextEditingController::clear_composing`'s doc, for the
+    /// documented divergence this pins).
     #[test]
     fn disabled_removes_the_underline_and_restores_the_caret() {
         let _guard = crate::test_harness::FOCUS_TEST_LOCK.lock();

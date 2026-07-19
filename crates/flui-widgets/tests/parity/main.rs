@@ -116,3 +116,7 @@ mod interactive_viewer_test;
 
 // ── Paging (ADR-0037) — PageView ─────────────────────────────────────────────
 mod page_view_test;
+
+// ── Business.1 fidelity — EditableText / TextEditingController parity ───────
+mod editable_text_test;
+mod text_editing_controller_test;
