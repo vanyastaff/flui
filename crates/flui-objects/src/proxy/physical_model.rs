@@ -571,13 +571,23 @@ impl RenderPhysicalModelBase<PathClip> {
         self.clip_source.target.is_some()
     }
 
-    /// Replaces the path clip target; returns `true` if presence changed. `None`
-    /// falls back to the whole-box rectangle default clip (oracle `:2296`).
+    /// Replaces the path clip target; returns `true` if the value changed
+    /// (`None` -> `Some`, `Some` -> `None`, or a swap between two distinct
+    /// targets). `None` falls back to the whole-box rectangle default clip
+    /// (oracle `:2296`).
+    ///
+    /// Comparing the full `Option<PathClipTarget>`, not just presence, is
+    /// load-bearing: oracle `RenderPhysicalShape`'s `clipper` setter compares
+    /// the new `CustomClipper` for equality and calls `markNeedsPaint()`
+    /// whenever it differs (`_markNeedsClip()`), including a swap between two
+    /// distinct non-null clippers — a presence-only check would silently miss
+    /// that swap and never signal a repaint.
     pub fn set_path_clip_target(&mut self, target: Option<PathClipTarget>) -> bool {
-        let had_clipper = self.clip_source.target.is_some();
-        let has_clipper = target.is_some();
+        if self.clip_source.target == target {
+            return false;
+        }
         self.clip_source.target = target;
-        had_clipper != has_clipper
+        true
     }
 }
 
@@ -819,6 +829,45 @@ mod tests {
         assert!(!node.has_custom_clipper());
     }
 
+    // Oracle parity (`proxy_box_test.dart`, `'RenderPhysicalModel compositing'`,
+    // tag `3.44.0`): `needsCompositing` stays `false` across an elevation
+    // 0.0 -> 1.0 -> 0.0 round trip — casting a shadow does not by itself
+    // force a dedicated compositing layer (oracle comment: on Fuchsia the
+    // system compositor draws elevation shadows, but even there the
+    // per-object flag this test reads stays false). `RenderPhysicalModelBase`
+    // never overrides `always_needs_compositing`, so it keeps the trait's
+    // `false` default regardless of elevation — this test pins that the
+    // generic body does not gain an override that would diverge from the
+    // oracle.
+    #[test]
+    fn render_physical_model_compositing_stays_false_across_elevation_changes() {
+        let mut node = RenderPhysicalModel::new(Color::from_argb(0xffff_00ff));
+        assert!(!node.always_needs_compositing());
+
+        node.set_elevation(1.0);
+        assert!(!node.always_needs_compositing());
+
+        node.set_elevation(0.0);
+        assert!(!node.always_needs_compositing());
+    }
+
+    // Sibling port of the same oracle contract for `RenderPhysicalShape`
+    // (`proxy_box_test.dart`, `RenderPhysicalShape` group, `'compositing'`,
+    // tag `3.44.0`) — both aliases share the identical generic
+    // `RenderPhysicalModelBase<C>` body, so the same assertion applies
+    // unmodified to the path-clip variant.
+    #[test]
+    fn render_physical_shape_compositing_stays_false_across_elevation_changes() {
+        let mut node = RenderPhysicalShape::new(Color::from_argb(0xffff_00ff));
+        assert!(!node.always_needs_compositing());
+
+        node.set_elevation(1.0);
+        assert!(!node.always_needs_compositing());
+
+        node.set_elevation(0.0);
+        assert!(!node.always_needs_compositing());
+    }
+
     #[test]
     fn set_elevation_returns_change_flag() {
         let mut node = RenderPhysicalModel::new(Color::RED);
@@ -860,6 +909,63 @@ mod tests {
             assert!(!node.has_custom_clipper());
             assert!(node.set_path_clip_target(Some(target)));
             assert!(node.has_custom_clipper());
+        });
+    }
+
+    // Oracle parity (`proxy_box_test.dart`, `RenderPhysicalShape` group,
+    // `'shape change triggers repaint'`, tag `3.44.0`): setting the SAME
+    // clipper again reports no change; swapping to a DIFFERENT clipper must
+    // report a change even though both are `Some` — a presence-only
+    // comparison (`had_clipper != has_clipper`) would wrongly miss this swap
+    // since presence never toggles. Bug fixed in the same change as this
+    // test: `set_path_clip_target` now compares the full
+    // `Option<PathClipTarget>`, not just its `is_some()` presence.
+    //
+    // FLUI has no `RenderPhysicalShape`-consuming widget wired up yet (no
+    // `PhysicalShape` view exists in `flui-widgets`), so this cannot be
+    // ported at the oracle's own fidelity (`debugNeedsPaint` after a real
+    // `layout()`/`pumpFrame()`) — there is no `mark_needs_paint()` consumer
+    // of this setter's return value to observe yet. This tests the setter's
+    // own change-detection contract instead, the precondition any future
+    // widget-diff layer will rely on.
+    #[test]
+    fn set_path_clip_target_detects_target_swap_not_just_presence() {
+        let lane = InteractionLane::try_new().expect("lane");
+        let handle = lane.dispatch_handle();
+        lane.enter(|| {
+            let target_a = handle
+                .register_path_clipper(|size: Size| {
+                    let mut p = Path::new();
+                    p.add_rect(Rect::from_origin_size(Point::ZERO, size));
+                    p
+                })
+                .expect("register target_a");
+            let target_b = handle
+                .register_path_clipper(|size: Size| {
+                    let mut p = Path::new();
+                    p.add_rect(Rect::from_origin_size(
+                        Point::ZERO,
+                        Size::new(size.width * 0.5, size.height * 0.5),
+                    ));
+                    p
+                })
+                .expect("register target_b");
+
+            let mut node = RenderPhysicalShape::new(Color::BLUE).with_path_clip_target(target_a);
+
+            // "Same shape, no repaint" (oracle).
+            assert!(
+                !node.set_path_clip_target(Some(target_a)),
+                "re-setting the identical target must report no change"
+            );
+            // "Different shape triggers repaint" (oracle) — both sides are
+            // `Some`, so presence alone cannot distinguish this case.
+            assert!(
+                node.set_path_clip_target(Some(target_b)),
+                "swapping to a distinct target must report a change even \
+                 though presence (Some -> Some) never toggles"
+            );
+            assert_eq!(node.path_clip_target(), Some(target_b));
         });
     }
 
