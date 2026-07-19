@@ -136,3 +136,6 @@ mod overflow_box_test;
 
 // ── Business.1 fidelity — Opacity parity ────────────────────────────────────
 mod opacity_test;
+
+// ── Business.1 fidelity — FractionallySizedBox parity ───────────────────────
+mod fractionally_sized_box_test;
