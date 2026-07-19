@@ -367,6 +367,45 @@ impl LaidOut {
         panic!("render node should be a RenderOpacity or RenderAnimatedOpacity");
     }
 
+    /// The [`RenderOpacity`] node's `paint_alpha()` — `None` when the node
+    /// paints via a fast-path passthrough (opacity `1.0`, no `OpacityLayer`
+    /// needed) or when it is fully transparent without
+    /// `always_needs_compositing` (opacity `0.0`, subtree skipped, also no
+    /// layer needed); `Some(alpha)` otherwise. This is the exact quantity the
+    /// pipeline reads through `&dyn RenderObject<BoxProtocol>` to decide
+    /// whether to allocate a compositing layer. Panics if `id` is not a
+    /// `RenderOpacity`.
+    pub fn opacity_paint_alpha(&self, id: RenderId) -> Option<u8> {
+        use flui_rendering::traits::RenderBox;
+
+        let mut owner = self.pipeline_owner.write();
+        let node = owner
+            .render_tree_mut()
+            .get_mut(id)
+            .expect("render node should exist");
+        let render = node
+            .downcast_render_object_mut::<RenderOpacity>()
+            .expect("render node should be a RenderOpacity");
+        render.paint_alpha()
+    }
+
+    /// Whether the [`RenderOpacity`] node at `id` suppresses painting its
+    /// child entirely — Flutter's `RenderOpacity.paint`: `if (_alpha == 0)
+    /// return;`. Panics if `id` is not a `RenderOpacity`.
+    pub fn opacity_skip_paint(&self, id: RenderId) -> bool {
+        use flui_rendering::traits::RenderBox;
+
+        let mut owner = self.pipeline_owner.write();
+        let node = owner
+            .render_tree_mut()
+            .get_mut(id)
+            .expect("render node should exist");
+        let render = node
+            .downcast_render_object_mut::<RenderOpacity>()
+            .expect("render node should be a RenderOpacity");
+        render.skip_paint()
+    }
+
     /// The [`Clip`] behavior of a clip-family render node (`RenderClipRect`,
     /// `RenderClipRRect`, `RenderClipOval`, `RenderClipPath`) or a
     /// [`RenderFittedBox`] (which stores `clip_behavior` today even though

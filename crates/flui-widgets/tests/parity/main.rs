@@ -133,3 +133,6 @@ mod aspect_ratio_test;
 
 // ── Business.1 fidelity — OverflowBox / SizedOverflowBox parity ────────────
 mod overflow_box_test;
+
+// ── Business.1 fidelity — Opacity parity ────────────────────────────────────
+mod opacity_test;
