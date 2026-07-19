@@ -74,8 +74,8 @@
 //! | `RenderViewport` | `harness_viewport_*` | yes | — | — | yes | — |
 //! | `RenderShrinkWrappingViewport` | `harness_shrink_wrapping_viewport_*` | yes | — | — | yes | — |
 //! | `RenderWrap` | `harness_render_wrap_*` | yes | yes | — | yes | — |
-//! | `RenderIntrinsicWidth` | `harness_intrinsic_width_*` | yes | — | — | yes | — |
-//! | `RenderIntrinsicHeight` | `harness_intrinsic_height_*` | yes | — | — | yes | — |
+//! | `RenderIntrinsicWidth` | `harness_intrinsic_width_*` | yes | — | — | yes | queries |
+//! | `RenderIntrinsicHeight` | `harness_intrinsic_height_*` | yes | — | — | yes | queries |
 //! | `RenderConstrainedOverflowBox` | `harness_constrained_overflow_box_*` | yes | — | — | yes | — |
 //! | `RenderSizedOverflowBox` | `harness_sized_overflow_box_*` | yes | — | — | yes | — |
 //! | `RenderRotatedBox` | `harness_rotated_box_*` | yes | yes | — | yes | paint transform |
@@ -97,6 +97,7 @@ use flui_objects::*;
 use flui_painting::{Canvas, Paint};
 use flui_rendering::{
     constraints::BoxConstraints,
+    context::BoxIntrinsicsCtx,
     delegates::{
         CustomPainter, FlowDelegate, FlowPaintingContext, MultiChildLayoutContext,
         MultiChildLayoutDelegate, SingleChildLayoutDelegate,
@@ -216,6 +217,182 @@ const RENDER_OBJECT_TYPES: &[&str] = &[
 
 fn loose(max: f32) -> BoxConstraints {
     BoxConstraints::new(px(0.0), px(max), px(0.0), px(max))
+}
+
+// ============================================================================
+// Intrinsics test doubles (RenderIntrinsicWidth / RenderIntrinsicHeight oracle port)
+// ============================================================================
+
+/// Leaf reporting independently configurable min/max intrinsic width and
+/// height, regardless of the queried extent — a Rust port of Flutter's own
+/// `RenderTestBox` fixture (`test/rendering/intrinsic_width_test.dart`,
+/// 3.44.0), which is itself test-only code, not a production Flutter class.
+///
+/// Lays itself out at the midpoint of its min/max on each axis, clamped to
+/// whatever constraints its parent hands it — mirroring the oracle's
+/// `performResize` (`sizedByParent = true`, `size = constraints.constrain(...)`).
+#[derive(Debug, Clone, Copy)]
+struct RenderTestBox {
+    min_width: f32,
+    max_width: f32,
+    min_height: f32,
+    max_height: f32,
+}
+
+impl RenderTestBox {
+    fn new(min_width: f32, max_width: f32, min_height: f32, max_height: f32) -> Self {
+        Self {
+            min_width,
+            max_width,
+            min_height,
+            max_height,
+        }
+    }
+}
+
+impl flui_foundation::Diagnosticable for RenderTestBox {}
+
+impl RenderBox for RenderTestBox {
+    type Arity = flui_tree::Leaf;
+    type ParentData = flui_rendering::parent_data::BoxParentData;
+
+    fn perform_layout(
+        &mut self,
+        ctx: &mut flui_rendering::context::BoxLayoutContext<'_, flui_tree::Leaf, Self::ParentData>,
+    ) -> Size {
+        let midpoint = Size::new(
+            px(self.min_width + (self.max_width - self.min_width) / 2.0),
+            px(self.min_height + (self.max_height - self.min_height) / 2.0),
+        );
+        ctx.constraints().constrain(midpoint)
+    }
+
+    fn hit_test(
+        &self,
+        _ctx: &mut flui_rendering::context::BoxHitTestContext<
+            '_,
+            flui_tree::Leaf,
+            Self::ParentData,
+        >,
+    ) -> bool {
+        false
+    }
+
+    fn compute_min_intrinsic_width(&self, _height: f32, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+        self.min_width
+    }
+
+    fn compute_max_intrinsic_width(&self, _height: f32, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+        self.max_width
+    }
+
+    fn compute_min_intrinsic_height(&self, _width: f32, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+        self.min_height
+    }
+
+    fn compute_max_intrinsic_height(&self, _width: f32, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+        self.max_height
+    }
+}
+
+/// Regression fixture (FLUI-added, not oracle-cited): pairs a constant width
+/// axis with a height axis that echoes its queried extent verbatim, so that
+/// `RenderIntrinsicWidth`'s height-axis intrinsics can be proven to resolve an
+/// infinite width extent to a concrete value (`proxy_box.dart`'s
+/// `if (!width.isFinite) { width = getMaxIntrinsicWidth(double.infinity); }`
+/// guard) before querying the child, instead of forwarding `f32::INFINITY`
+/// straight through.
+#[derive(Debug, Clone, Copy)]
+struct ExtentEchoProbe;
+
+impl flui_foundation::Diagnosticable for ExtentEchoProbe {}
+
+impl RenderBox for ExtentEchoProbe {
+    type Arity = flui_tree::Leaf;
+    type ParentData = flui_rendering::parent_data::BoxParentData;
+
+    fn perform_layout(
+        &mut self,
+        ctx: &mut flui_rendering::context::BoxLayoutContext<'_, flui_tree::Leaf, Self::ParentData>,
+    ) -> Size {
+        ctx.constraints().smallest()
+    }
+
+    fn hit_test(
+        &self,
+        _ctx: &mut flui_rendering::context::BoxHitTestContext<
+            '_,
+            flui_tree::Leaf,
+            Self::ParentData,
+        >,
+    ) -> bool {
+        false
+    }
+
+    fn compute_min_intrinsic_width(&self, _height: f32, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+        42.0
+    }
+
+    fn compute_max_intrinsic_width(&self, _height: f32, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+        42.0
+    }
+
+    fn compute_min_intrinsic_height(&self, width: f32, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+        width
+    }
+
+    fn compute_max_intrinsic_height(&self, width: f32, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+        width
+    }
+}
+
+/// Mirror image of [`ExtentEchoProbe`] for `RenderIntrinsicHeight`'s
+/// width-axis fix: a constant height axis paired with a width axis that
+/// echoes its queried extent verbatim, proving the
+/// `if (!height.isFinite) { height = child.getMaxIntrinsicHeight(double.infinity); }`
+/// substitution.
+#[derive(Debug, Clone, Copy)]
+struct ExtentEchoProbeSwapped;
+
+impl flui_foundation::Diagnosticable for ExtentEchoProbeSwapped {}
+
+impl RenderBox for ExtentEchoProbeSwapped {
+    type Arity = flui_tree::Leaf;
+    type ParentData = flui_rendering::parent_data::BoxParentData;
+
+    fn perform_layout(
+        &mut self,
+        ctx: &mut flui_rendering::context::BoxLayoutContext<'_, flui_tree::Leaf, Self::ParentData>,
+    ) -> Size {
+        ctx.constraints().smallest()
+    }
+
+    fn hit_test(
+        &self,
+        _ctx: &mut flui_rendering::context::BoxHitTestContext<
+            '_,
+            flui_tree::Leaf,
+            Self::ParentData,
+        >,
+    ) -> bool {
+        false
+    }
+
+    fn compute_min_intrinsic_width(&self, height: f32, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+        height
+    }
+
+    fn compute_max_intrinsic_width(&self, height: f32, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+        height
+    }
+
+    fn compute_min_intrinsic_height(&self, _width: f32, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+        42.0
+    }
+
+    fn compute_max_intrinsic_height(&self, _width: f32, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+        42.0
+    }
 }
 
 #[derive(Debug)]
@@ -6510,6 +6687,244 @@ fn harness_intrinsic_width_self_describes_step_knobs() {
     );
 }
 
+// ---- Oracle port: rendering/intrinsic_width_test.dart (3.44.0) ------------
+
+/// Oracle: `test('Shrink-wrapping width', ...)`.
+#[test]
+fn harness_intrinsic_width_shrink_wrapping_width_oracle() {
+    let mut run = RenderTester::mount(
+        box_node(RenderIntrinsicWidth::unconstrained())
+            .child(box_node(RenderTestBox::new(10.0, 100.0, 20.0, 200.0)).label("child")),
+    )
+    .with_constraints(BoxConstraints::new(px(5.0), px(500.0), px(8.0), px(800.0)))
+    .run_layout();
+
+    let root = run.root();
+    let child = run.id("child");
+    assert_eq!(run.box_geometry(root), Size::new(px(100.0), px(110.0)));
+    assert_eq!(run.box_geometry(child), Size::new(px(100.0), px(110.0)));
+
+    for h in [0.0, 10.0, 80.0, f32::INFINITY] {
+        assert_eq!(run.min_intrinsic_width(root, h), 100.0, "min width @ h={h}");
+        assert_eq!(run.max_intrinsic_width(root, h), 100.0, "max width @ h={h}");
+        assert_eq!(
+            run.min_intrinsic_height(root, h),
+            20.0,
+            "min height @ w={h}"
+        );
+        assert_eq!(
+            run.max_intrinsic_height(root, h),
+            200.0,
+            "max height @ w={h}"
+        );
+    }
+}
+
+/// Oracle: `test('IntrinsicWidth without a child', ...)`.
+#[test]
+fn harness_intrinsic_width_without_child_oracle() {
+    let mut run = RenderTester::mount(box_node(RenderIntrinsicWidth::unconstrained()))
+        .with_constraints(BoxConstraints::new(px(5.0), px(500.0), px(8.0), px(800.0)))
+        .run_layout();
+
+    let root = run.root();
+    assert_eq!(run.box_geometry(root), Size::new(px(5.0), px(8.0)));
+
+    for extent in [0.0, 10.0, 80.0, f32::INFINITY] {
+        assert_eq!(run.min_intrinsic_width(root, extent), 0.0);
+        assert_eq!(run.max_intrinsic_width(root, extent), 0.0);
+        assert_eq!(run.min_intrinsic_height(root, extent), 0.0);
+        assert_eq!(run.max_intrinsic_height(root, extent), 0.0);
+    }
+}
+
+/// Oracle: `test('Shrink-wrapping width (stepped width)', ...)`.
+#[test]
+fn harness_intrinsic_width_stepped_width_oracle() {
+    let mut run = RenderTester::mount(
+        box_node(RenderIntrinsicWidth::new(Some(47.0), None))
+            .child(box_node(RenderTestBox::new(10.0, 100.0, 20.0, 200.0)).label("child")),
+    )
+    .with_constraints(BoxConstraints::new(px(5.0), px(500.0), px(8.0), px(800.0)))
+    .run_layout();
+
+    let root = run.root();
+    let child = run.id("child");
+    assert_eq!(run.box_geometry(root), Size::new(px(3.0 * 47.0), px(110.0)));
+    assert_eq!(
+        run.box_geometry(child),
+        Size::new(px(3.0 * 47.0), px(110.0))
+    );
+
+    for h in [0.0, 10.0, 80.0, f32::INFINITY] {
+        assert_eq!(run.min_intrinsic_width(root, h), 3.0 * 47.0);
+        assert_eq!(run.max_intrinsic_width(root, h), 3.0 * 47.0);
+        assert_eq!(run.min_intrinsic_height(root, h), 20.0);
+        assert_eq!(run.max_intrinsic_height(root, h), 200.0);
+    }
+}
+
+/// Oracle: `test('Shrink-wrapping width (stepped height)', ...)`.
+#[test]
+fn harness_intrinsic_width_stepped_height_oracle() {
+    let mut run = RenderTester::mount(
+        box_node(RenderIntrinsicWidth::new(None, Some(47.0)))
+            .child(box_node(RenderTestBox::new(10.0, 100.0, 20.0, 200.0)).label("child")),
+    )
+    .with_constraints(BoxConstraints::new(px(5.0), px(500.0), px(8.0), px(800.0)))
+    .run_layout();
+
+    let root = run.root();
+    assert_eq!(run.box_geometry(root), Size::new(px(100.0), px(235.0)));
+
+    for h in [0.0, 10.0, 80.0, f32::INFINITY] {
+        assert_eq!(run.min_intrinsic_width(root, h), 100.0);
+        assert_eq!(run.max_intrinsic_width(root, h), 100.0);
+        assert_eq!(run.min_intrinsic_height(root, h), 1.0 * 47.0);
+        assert_eq!(run.max_intrinsic_height(root, h), 5.0 * 47.0);
+    }
+}
+
+/// Oracle: `test('Shrink-wrapping width (stepped everything)', ...)`.
+#[test]
+fn harness_intrinsic_width_stepped_everything_oracle() {
+    let mut run = RenderTester::mount(
+        box_node(RenderIntrinsicWidth::new(Some(37.0), Some(47.0)))
+            .child(box_node(RenderTestBox::new(10.0, 100.0, 20.0, 200.0)).label("child")),
+    )
+    .with_constraints(BoxConstraints::new(px(5.0), px(500.0), px(8.0), px(800.0)))
+    .run_layout();
+
+    let root = run.root();
+    assert_eq!(run.box_geometry(root), Size::new(px(3.0 * 37.0), px(235.0)));
+
+    for h in [0.0, 10.0, 80.0, f32::INFINITY] {
+        assert_eq!(run.min_intrinsic_width(root, h), 3.0 * 37.0);
+        assert_eq!(run.max_intrinsic_width(root, h), 3.0 * 37.0);
+        assert_eq!(run.min_intrinsic_height(root, h), 1.0 * 47.0);
+        assert_eq!(run.max_intrinsic_height(root, h), 5.0 * 47.0);
+    }
+}
+
+/// Oracle: `test('RenderIntrinsicWidth when parent is given loose constraints
+/// smaller than intrinsic width of child', ...)`.
+#[test]
+fn harness_intrinsic_width_loose_smaller_than_child_intrinsic_oracle() {
+    let run = RenderTester::mount(
+        box_node(RenderIntrinsicWidth::unconstrained())
+            .child(box_node(RenderTestBox::new(10.0, 100.0, 20.0, 200.0)).label("child")),
+    )
+    .with_constraints(BoxConstraints::new(px(50.0), px(70.0), px(8.0), px(800.0)))
+    .run_layout();
+
+    let root = run.root();
+    let child = run.id("child");
+    assert_eq!(run.box_geometry(root), Size::new(px(70.0), px(110.0)));
+    assert_eq!(run.box_geometry(child), Size::new(px(70.0), px(110.0)));
+}
+
+/// Oracle: `test('RenderIntrinsicWidth when parent is given tight constraints
+/// larger than intrinsic width of child', ...)`.
+#[test]
+fn harness_intrinsic_width_tight_larger_than_child_intrinsic_oracle() {
+    let run = RenderTester::mount(
+        box_node(RenderIntrinsicWidth::unconstrained())
+            .child(box_node(RenderTestBox::new(10.0, 100.0, 20.0, 200.0)).label("child")),
+    )
+    .with_constraints(BoxConstraints::new(
+        px(500.0),
+        px(500.0),
+        px(8.0),
+        px(800.0),
+    ))
+    .run_layout();
+
+    let root = run.root();
+    let child = run.id("child");
+    assert_eq!(run.box_geometry(root), Size::new(px(500.0), px(110.0)));
+    assert_eq!(run.box_geometry(child), Size::new(px(500.0), px(110.0)));
+}
+
+/// Oracle: `test('RenderIntrinsicWidth when parent is given tight constraints
+/// smaller than intrinsic width of child', ...)`.
+#[test]
+fn harness_intrinsic_width_tight_smaller_than_child_intrinsic_oracle() {
+    let run = RenderTester::mount(
+        box_node(RenderIntrinsicWidth::unconstrained())
+            .child(box_node(RenderTestBox::new(10.0, 100.0, 20.0, 200.0)).label("child")),
+    )
+    .with_constraints(BoxConstraints::new(px(50.0), px(50.0), px(8.0), px(800.0)))
+    .run_layout();
+
+    let root = run.root();
+    let child = run.id("child");
+    assert_eq!(run.box_geometry(root), Size::new(px(50.0), px(110.0)));
+    assert_eq!(run.box_geometry(child), Size::new(px(50.0), px(110.0)));
+}
+
+/// Oracle: `testWidgets('Intrinsic stepWidth, stepHeight', ...)`
+/// (widgets/intrinsic_width_test.dart, 3.44.0) — the `buildFrame(null, null)`
+/// and `buildFrame(0.0, 0.0)` cases, both of which expect the wrapped
+/// `SizedBox(100, 50)` to come through unchanged.
+///
+/// The oracle's `buildFrame(-1.0, 0.0)` / `buildFrame(0.0, -1.0)` cases assert
+/// a Dart `AssertionError` at widget-construction time. FLUI has no equivalent
+/// assertion: `apply_step` treats a non-positive or non-finite step as "no
+/// snapping" instead of panicking, because panicking on a layout path is
+/// disallowed by this repo's panic policy. That graceful-degradation behavior
+/// is already covered by the `apply_step_negative_step_treated_as_none` unit
+/// test in `crates/flui-objects/src/layout/intrinsic_width.rs` — a deliberate,
+/// documented Rust-native divergence, not a gap.
+#[test]
+fn harness_intrinsic_width_step_width_step_height_oracle() {
+    // buildFrame(null, null)
+    let run = RenderTester::mount(
+        box_node(RenderIntrinsicWidth::unconstrained())
+            .child(box_node(RenderSizedBox::fixed(px(100.0), px(50.0)))),
+    )
+    .with_constraints(loose(300.0))
+    .run_layout();
+    assert_eq!(run.box_geometry(run.root()), Size::new(px(100.0), px(50.0)));
+
+    // buildFrame(0.0, 0.0) — apply_step treats a zero step as identity.
+    let run = RenderTester::mount(
+        box_node(RenderIntrinsicWidth::new(Some(0.0), Some(0.0)))
+            .child(box_node(RenderSizedBox::fixed(px(100.0), px(50.0)))),
+    )
+    .with_constraints(loose(300.0))
+    .run_layout();
+    assert_eq!(run.box_geometry(run.root()), Size::new(px(100.0), px(50.0)));
+}
+
+/// FLUI-added regression (not oracle-cited): proves that
+/// `RenderIntrinsicWidth`'s height-axis intrinsics resolve an infinite width
+/// extent to a concrete value before querying the child (proxy_box.dart:
+/// `if (!width.isFinite) { width = getMaxIntrinsicWidth(double.infinity); }`)
+/// instead of forwarding `f32::INFINITY` straight through. `ExtentEchoProbe`
+/// echoes the width argument it receives back out as its intrinsic height, so
+/// an unresolved infinity would propagate all the way out as `f32::INFINITY`;
+/// a resolved call passes the finite `42.0` constant instead.
+#[test]
+fn harness_intrinsic_width_resolves_infinite_width_for_height_axis() {
+    let mut run = RenderTester::mount(
+        box_node(RenderIntrinsicWidth::unconstrained()).child(box_node(ExtentEchoProbe)),
+    )
+    .with_constraints(loose(200.0))
+    .run_layout();
+
+    let root = run.root();
+    assert_eq!(
+        run.min_intrinsic_height(root, f32::INFINITY),
+        42.0,
+        "an unresolved infinity would echo back as f32::INFINITY"
+    );
+    assert_eq!(
+        run.max_intrinsic_height(root, f32::INFINITY),
+        42.0,
+        "an unresolved infinity would echo back as f32::INFINITY"
+    );
+}
+
 // ---- Slice-2 milestone: dry == committed for filling child ----------------
 
 /// `RenderIntrinsicWidth::unconstrained()` over a `RenderFlex` row (`MainAxisSize::Max`)
@@ -6758,6 +7173,143 @@ fn harness_intrinsic_height_with_child_passes_size_through() {
     .run_layout();
 
     assert_eq!(run.box_geometry(run.root()), Size::new(px(60.0), px(40.0)));
+}
+
+// ---- Oracle port: rendering/intrinsic_width_test.dart (3.44.0) ------------
+// (RenderIntrinsicHeight cases live in the same oracle file as
+// RenderIntrinsicWidth's.)
+
+/// Oracle: `test('Shrink-wrapping height', ...)`.
+#[test]
+fn harness_intrinsic_height_shrink_wrapping_height_oracle() {
+    let mut run = RenderTester::mount(
+        box_node(RenderIntrinsicHeight::new())
+            .child(box_node(RenderTestBox::new(10.0, 100.0, 20.0, 200.0)).label("child")),
+    )
+    .with_constraints(BoxConstraints::new(px(5.0), px(500.0), px(8.0), px(800.0)))
+    .run_layout();
+
+    let root = run.root();
+    assert_eq!(run.box_geometry(root), Size::new(px(55.0), px(200.0)));
+
+    for w in [0.0, 10.0, 80.0, f32::INFINITY] {
+        assert_eq!(run.min_intrinsic_width(root, w), 10.0, "min width @ h={w}");
+        assert_eq!(run.max_intrinsic_width(root, w), 100.0, "max width @ h={w}");
+        assert_eq!(
+            run.min_intrinsic_height(root, w),
+            200.0,
+            "min height @ w={w}"
+        );
+        assert_eq!(
+            run.max_intrinsic_height(root, w),
+            200.0,
+            "max height @ w={w}"
+        );
+    }
+}
+
+/// Oracle: `test('IntrinsicHeight without a child', ...)`.
+#[test]
+fn harness_intrinsic_height_without_child_oracle() {
+    let mut run = RenderTester::mount(box_node(RenderIntrinsicHeight::new()))
+        .with_constraints(BoxConstraints::new(px(5.0), px(500.0), px(8.0), px(800.0)))
+        .run_layout();
+
+    let root = run.root();
+    assert_eq!(run.box_geometry(root), Size::new(px(5.0), px(8.0)));
+
+    for extent in [0.0, 10.0, 80.0, f32::INFINITY] {
+        assert_eq!(run.min_intrinsic_width(root, extent), 0.0);
+        assert_eq!(run.max_intrinsic_width(root, extent), 0.0);
+        assert_eq!(run.min_intrinsic_height(root, extent), 0.0);
+        assert_eq!(run.max_intrinsic_height(root, extent), 0.0);
+    }
+}
+
+/// Oracle: `test('RenderIntrinsicHeight when parent is given loose
+/// constraints smaller than intrinsic height of child', ...)`.
+#[test]
+fn harness_intrinsic_height_loose_smaller_than_child_intrinsic_oracle() {
+    let run = RenderTester::mount(
+        box_node(RenderIntrinsicHeight::new())
+            .child(box_node(RenderTestBox::new(10.0, 100.0, 20.0, 200.0)).label("child")),
+    )
+    .with_constraints(BoxConstraints::new(px(5.0), px(500.0), px(8.0), px(80.0)))
+    .run_layout();
+
+    let root = run.root();
+    let child = run.id("child");
+    assert_eq!(run.box_geometry(root), Size::new(px(55.0), px(80.0)));
+    assert_eq!(run.box_geometry(child), Size::new(px(55.0), px(80.0)));
+}
+
+/// Oracle: `test('RenderIntrinsicHeight when parent is given tight
+/// constraints larger than intrinsic height of child', ...)`.
+#[test]
+fn harness_intrinsic_height_tight_larger_than_child_intrinsic_oracle() {
+    let run = RenderTester::mount(
+        box_node(RenderIntrinsicHeight::new())
+            .child(box_node(RenderTestBox::new(10.0, 100.0, 20.0, 200.0)).label("child")),
+    )
+    .with_constraints(BoxConstraints::new(
+        px(5.0),
+        px(500.0),
+        px(400.0),
+        px(400.0),
+    ))
+    .run_layout();
+
+    let root = run.root();
+    let child = run.id("child");
+    assert_eq!(run.box_geometry(root), Size::new(px(55.0), px(400.0)));
+    assert_eq!(run.box_geometry(child), Size::new(px(55.0), px(400.0)));
+}
+
+/// Oracle: `test('RenderIntrinsicHeight when parent is given tight
+/// constraints smaller than intrinsic height of child', ...)`.
+#[test]
+fn harness_intrinsic_height_tight_smaller_than_child_intrinsic_oracle() {
+    let run = RenderTester::mount(
+        box_node(RenderIntrinsicHeight::new())
+            .child(box_node(RenderTestBox::new(10.0, 100.0, 20.0, 200.0)).label("child")),
+    )
+    .with_constraints(BoxConstraints::new(px(5.0), px(500.0), px(80.0), px(80.0)))
+    .run_layout();
+
+    let root = run.root();
+    let child = run.id("child");
+    assert_eq!(run.box_geometry(root), Size::new(px(55.0), px(80.0)));
+    assert_eq!(run.box_geometry(child), Size::new(px(55.0), px(80.0)));
+}
+
+/// FLUI-added regression (not oracle-cited): proves that
+/// `RenderIntrinsicHeight`'s width-axis intrinsics resolve an infinite height
+/// extent to a concrete value before querying the child (proxy_box.dart:
+/// `if (!height.isFinite) { height = child.getMaxIntrinsicHeight(double.infinity); }`)
+/// instead of forwarding `f32::INFINITY` straight through.
+/// `ExtentEchoProbeSwapped` echoes the height argument it receives back out
+/// as its intrinsic width, so an unresolved infinity would propagate all the
+/// way out as `f32::INFINITY`; a resolved call passes the finite `42.0`
+/// constant instead.
+#[test]
+fn harness_intrinsic_height_resolves_infinite_height_for_width_axis() {
+    let mut run = RenderTester::mount(
+        box_node(RenderIntrinsicHeight::new()).child(box_node(ExtentEchoProbeSwapped)),
+    )
+    .with_constraints(loose(200.0))
+    .run_layout();
+
+    let root = run.root();
+    assert_eq!(
+        run.min_intrinsic_width(root, f32::INFINITY),
+        42.0,
+        "an unresolved infinity would echo back as f32::INFINITY"
+    );
+    assert_eq!(
+        run.max_intrinsic_width(root, f32::INFINITY),
+        42.0,
+        "an unresolved infinity would echo back as f32::INFINITY"
+    );
 }
 
 // ============================================================================

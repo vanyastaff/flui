@@ -149,10 +149,15 @@ impl RenderBox for RenderIntrinsicHeight {
         if ctx.child_count() == 0 {
             return 0.0;
         }
-        // When height is finite, the caller already knows the height extent;
-        // pass it through to the child.  When infinite, the child is
-        // unconstrained in height and should report its own unconstrained
-        // intrinsic width.
+        // Flutter (proxy_box.dart): an infinite height resolves to the
+        // child's own max intrinsic height at infinity before querying its
+        // min intrinsic width — "min width at infinite height" is not a
+        // meaningful query on its own.
+        let height = if height.is_finite() {
+            height
+        } else {
+            ctx.child_max_intrinsic_height(0, f32::INFINITY)
+        };
         ctx.child_min_intrinsic_width(0, height)
     }
 
@@ -160,6 +165,11 @@ impl RenderBox for RenderIntrinsicHeight {
         if ctx.child_count() == 0 {
             return 0.0;
         }
+        let height = if height.is_finite() {
+            height
+        } else {
+            ctx.child_max_intrinsic_height(0, f32::INFINITY)
+        };
         ctx.child_max_intrinsic_width(0, height)
     }
 
