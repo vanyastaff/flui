@@ -96,9 +96,17 @@
 //!   `backspace_removes_full_multibyte_char`, `src/text/controller.rs`) but
 //!   is NOT grapheme-cluster-aware: backspacing after inserting a
 //!   Zero-Width-Joiner emoji sequence removes only the trailing scalar,
-//!   leaving a dangling joiner. A genuine, documented divergence — not a
-//!   silently dropped feature, since FLUI's `[`DEFERRED (v1)`]` list already
-//!   states multi-byte correctness as scalar-level, not grapheme-level.
+//!   leaving a dangling joiner rendered as a broken partial glyph — a
+//!   genuinely wrong user-facing result, not a cosmetic quirk. This test
+//!   pins FLUI's documented scalar-level divergence
+//!   (`TextEditingController`'s own `# DEFERRED (v1)` doc,
+//!   `src/text/controller.rs`; `docs/ROADMAP.md`'s Cross.H "known gap" entry
+//!   citing this exact port) rather than a pre-existing, previously-silent
+//!   behavior — the deferral entry and this port landed together, in this
+//!   same change, specifically because this test surfaced the gap. Fixing it
+//!   for real needs a grapheme-segmentation dependency
+//!   (`unicode-segmentation`) threaded through `controller.rs`'s mutators —
+//!   named as its own future unit, not attempted here.
 //!
 //! ## Out of scope, with reasons
 //! - `'will not cause crash while the TextEditingValue is composing'`,
@@ -250,7 +258,9 @@ fn backspace_after_a_zwj_family_emoji_breaks_the_grapheme_cluster_unlike_flutter
          trailing BOY glyph), leaving a dangling Zero-Width-Joiner — a \
          broken grapheme cluster. Flutter's grapheme-aware deletion would \
          remove the whole 5-scalar cluster in one Backspace; FLUI has no \
-         grapheme-cluster segmentation in v1 (see the crate's DEFERRED list)"
+         grapheme-cluster segmentation in v1 — a documented divergence, \
+         TextEditingController's own `# DEFERRED (v1)` doc and ROADMAP.md's \
+         Cross.H known-gap entry"
     );
     assert_eq!(controller.caret_byte_offset(), 14);
     assert!(

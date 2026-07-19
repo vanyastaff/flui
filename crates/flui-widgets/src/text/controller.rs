@@ -122,6 +122,19 @@ struct ComposingState {
 ///   Drag-to-select and selection rendering are not implemented.
 /// - **Clipboard**: copy/paste/cut are not wired.
 /// - **Input formatters**: no validation or transformation pipeline.
+/// - **Grapheme-cluster-aware deletion**: [`Self::backspace`]/[`Self::delete_forward`]
+///   walk back or forward exactly one Unicode scalar value (`char`), not one
+///   extended grapheme cluster. Flutter deletes by grapheme cluster (the
+///   `characters` package / `CharacterRange`, matching `TextEditingValue`'s
+///   own delete-by-character semantics) — for a plain multi-byte character
+///   (e.g. `'€'`) the two happen to coincide, but for a Zero-Width-Joiner
+///   sequence (a family/flag emoji: `'👨‍👩‍👦'`) a single Backspace removes only
+///   the trailing scalar, leaving a dangling joiner rendered as a broken
+///   partial glyph on screen instead of deleting the whole visual character.
+///   Tracked as ROADMAP Cross.H's "no grapheme-cluster segmentation" known
+///   gap; the fix needs a grapheme-segmentation dependency
+///   (`unicode-segmentation`) threaded through this module's mutators and is
+///   its own future unit, not attempted here.
 #[derive(Clone)]
 pub struct TextEditingController {
     /// Shared text buffer + caret state.
