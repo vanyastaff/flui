@@ -518,7 +518,12 @@ impl PageViewState {
             let current_page = metrics.page(viewport_fraction).round().max(0.0) as i64;
             if current_page != last_reported.load(Ordering::SeqCst) {
                 last_reported.store(current_page, Ordering::SeqCst);
-                let callback = on_page_changed.lock().expect("not poisoned").clone();
+                let callback = on_page_changed
+                    .lock()
+                    .expect(
+                        "BUG: on_page_changed mutex poisoned — a panic escaped a locked section",
+                    )
+                    .clone();
                 if let Some(callback) = callback {
                     callback(current_page as usize);
                 }
@@ -583,7 +588,7 @@ impl ViewState<PageView> for PageViewState {
         // including a `None` -> `Some` transition.
         self.on_page_changed
             .lock()
-            .expect("not poisoned")
+            .expect("BUG: on_page_changed mutex poisoned — a panic escaped a locked section")
             .clone_from(&new_view.on_page_changed);
 
         // No explicit controller in this build: keep the state-owned
