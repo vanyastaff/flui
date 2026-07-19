@@ -2,9 +2,21 @@
 //!
 //! # Parity oracles
 //!
-//! `.flutter/packages/flutter/test/widgets/overlay_test.dart` — `'insert top'`,
-//! `'insert below'`, `'insert above'`, `'insertAll top'`, `'rearrange'`.
-//! Expected values are read from `overlay.dart`, not from running this code.
+//! `.flutter/packages/flutter/test/widgets/overlay_test.dart` (tag `3.44.0`) —
+//! `'insert top'`, `'insert below'`, `'insert above'`, `'insertAll top'`,
+//! `'insertAll below'`, `'insertAll above'`, `'rearrange'`,
+//! `'OverlayState.of() throws when called if an Overlay does not exist'`,
+//! `'OverlayState.maybeOf() works when an Overlay does and doesn't exist'`,
+//! `'OverlayEntry.opaque can be changed when OverlayEntry is not part of an
+//! Overlay (yet)'`, `'OverlayEntries do not rebuild when opaqueness changes'`,
+//! `'OverlayEntries do not rebuild when opaque entry is added'`, `'Can use
+//! Positioned within OverlayEntry'`. Expected values are read from
+//! `overlay.dart`, not from running this code. The mutation-surface,
+//! opaque/maintainState, and lookup cases above are everything this suite
+//! reasonably ports; `tests/parity/overlay_test.rs` documents the rest of the
+//! ~30-case oracle file as out of scope, with reasons, since almost none of it
+//! is reachable through the crate's public API at all (see that file's module
+//! docs).
 //!
 //! # Why an in-crate harness
 //!
@@ -263,6 +275,54 @@ fn overlay_insert_all_keeps_the_group_contiguous() {
 
     handle.insert_all(&[], &InsertPosition::Top);
     assert_eq!(handle.len(), 4, "an empty insert_all is a no-op");
+}
+
+/// `insertAll` at [`InsertPosition::Top`] appends the whole group, in order,
+/// after every existing entry.
+///
+/// Flutter parity: `'insertAll top'` (`overlay_test.dart`, tag `3.44.0`).
+#[test]
+fn overlay_insert_all_top_appends_the_group_in_order() {
+    let calls = Calls::default();
+    let entry_a = counting_entry(&calls);
+    let (handle, overlay) = overlay_with(std::slice::from_ref(&entry_a));
+    let mut harness = mount(overlay);
+    assert_eq!(calls.get(), 1);
+
+    let (entry_b, entry_c) = (counting_entry(&calls), counting_entry(&calls));
+    handle.insert_all(&[entry_b.clone(), entry_c.clone()], &InsertPosition::Top);
+    harness.tick();
+
+    assert_eq!(
+        handle.entry_ids(),
+        vec![entry_a.id(), entry_b.id(), entry_c.id()]
+    );
+    assert_eq!(layer_count(&mut harness), 3);
+}
+
+/// `insertAll` at [`InsertPosition::Above`] places the whole group directly
+/// after the reference entry, preserving the group's relative order.
+///
+/// Flutter parity: `'insertAll above'` (`overlay_test.dart`, tag `3.44.0`).
+#[test]
+fn overlay_insert_all_above_places_the_group_after_the_reference() {
+    let calls = Calls::default();
+    let (entry_a, entry_c) = (counting_entry(&calls), counting_entry(&calls));
+    let (handle, overlay) = overlay_with(&[entry_a.clone(), entry_c.clone()]);
+    let mut harness = mount(overlay);
+
+    let (entry_b1, entry_b2) = (counting_entry(&calls), counting_entry(&calls));
+    handle.insert_all(
+        &[entry_b1.clone(), entry_b2.clone()],
+        &InsertPosition::Above(entry_a.clone()),
+    );
+    harness.tick();
+
+    assert_eq!(
+        handle.entry_ids(),
+        vec![entry_a.id(), entry_b1.id(), entry_b2.id(), entry_c.id()]
+    );
+    assert_eq!(layer_count(&mut harness), 4);
 }
 
 /// Removing an entry rebuilds the overlay without it, on the next frame — via
@@ -706,6 +766,124 @@ fn overlay_setting_maintain_state_rebuilds_the_overlay() {
     harness.tick();
     assert_eq!(calls.get(), 1, "the covered entry is built once maintained");
     assert_eq!(layer_count(&mut harness), 2);
+}
+
+/// `set_opaque` on an entry attached to no overlay is legal — no rebuild to
+/// schedule, no panic — and the value is honored once the entry is inserted.
+///
+/// Flutter parity: `'OverlayEntry.opaque can be changed when OverlayEntry is
+/// not part of an Overlay (yet)'` (`overlay_test.dart`, tag `3.44.0`).
+#[test]
+fn overlay_entry_opaque_set_before_attachment_is_honored_on_insert() {
+    let root_calls = Calls::default();
+    let root_entry = counting_entry(&root_calls);
+    let (handle, overlay) = overlay_with(std::slice::from_ref(&root_entry));
+    let mut harness = mount(overlay);
+    assert_eq!(layer_count(&mut harness), 1);
+
+    let top_calls = Calls::default();
+    let top_entry = counting_entry(&top_calls);
+    assert!(!top_entry.opaque(), "opaque defaults to false");
+    assert!(!top_entry.is_attached(), "not yet part of any overlay");
+    top_entry.set_opaque(true);
+    assert!(top_entry.opaque(), "the flag is stored even while detached");
+
+    handle.insert(&top_entry, &InsertPosition::Top);
+    harness.tick();
+
+    assert_eq!(
+        layer_count(&mut harness),
+        1,
+        "root is now covered by the pre-set opaque entry and dropped"
+    );
+    assert!(!root_entry.is_mounted());
+    assert_eq!(top_calls.get(), 1);
+}
+
+/// Ported, but **red by design against the oracle's actual regression
+/// guard** — the oracle test is `'OverlayEntries do not rebuild when
+/// opaqueness changes'` (`overlay_test.dart`, tag `3.44.0`), Flutter's own
+/// regression test for flutter/flutter#45797: a covered `maintainState`
+/// entry stays mounted (already pinned by
+/// `overlay_maintain_state_keeps_covered_entry_built`) *and its builder must
+/// not rerun* just because the overlay above it changed.
+///
+/// FLUI does not have that second half. `OverlayState::build` reconciles a
+/// fresh (but key-equal) `OverlayEntryView` for every survivor on every
+/// overlay rebuild, and `OverlayEntryView` does not override
+/// [`View::should_skip_rebuild`](flui_view::View::should_skip_rebuild) (nor
+/// wrap itself in [`flui_view::view::Memo`], the opt-in that would) — so the
+/// framework's documented safe default (`flui_view::view::memo`'s module
+/// docs: always rebuild unless a view opts out) applies, and every survivor's
+/// content rebuilds on every overlay-level structural change, not just the
+/// one that actually triggered it. This is a real, previously-undocumented
+/// gap, not a test-porting artifact — filed as `docs/ROADMAP.md`'s Cross.H
+/// "Overlay entries always rebuild on any overlay-level change" entry.
+///
+/// This assertion is deliberately the oracle's own expectation, not FLUI's
+/// current behavior: weakening it to `(2, 2, 2)` would launder a real gap as
+/// a passing parity test. Left `#[ignore]`, not deleted, so the fix (opting
+/// `OverlayEntryView` into `Memo`, once `OverlayEntry`/`OverlayHandle` gain
+/// the `PartialEq` that requires) has a pinned target to turn green.
+#[test]
+#[ignore = "known gap, docs/ROADMAP.md Cross.H — OverlayEntryView does not opt into Memo, so surviving entries rebuild on every overlay-level change; see this test's doc comment"]
+fn overlay_maintain_state_entries_are_not_rebuilt_when_opaqueness_changes() {
+    let (bottom, middle, top) = (Calls::default(), Calls::default(), Calls::default());
+    let entry_a = counting_entry(&bottom).with_maintain_state(true);
+    let entry_b = counting_entry(&middle).with_maintain_state(true);
+    let entry_c = counting_entry(&top).with_maintain_state(true);
+    let (_handle, overlay) = overlay_with(&[entry_a.clone(), entry_b.clone(), entry_c.clone()]);
+    let mut harness = mount(overlay);
+    assert_eq!((bottom.get(), middle.get(), top.get()), (1, 1, 1));
+
+    entry_b.set_opaque(true);
+    harness.tick();
+
+    assert_eq!(
+        layer_count(&mut harness),
+        3,
+        "bottom stays in the tree (maintain_state)"
+    );
+    assert_eq!(
+        (bottom.get(), middle.get(), top.get()),
+        (1, 1, 1),
+        "no entry's builder reran — the overlay reconciled its survivors, it did not rebuild them"
+    );
+}
+
+/// The same known gap as
+/// [`overlay_maintain_state_entries_are_not_rebuilt_when_opaqueness_changes`],
+/// exercised from the other direction that oracle test `'OverlayEntries do
+/// not rebuild when opaque entry is added'` (`overlay_test.dart`, tag
+/// `3.44.0`) covers: `rearrange` inserting a *new* opaque entry between two
+/// already-mounted `maintainState` entries should not rebuild either of them.
+/// See the sibling test's doc comment for the root cause and the filed gap.
+#[test]
+#[ignore = "known gap, docs/ROADMAP.md Cross.H — same root cause as overlay_maintain_state_entries_are_not_rebuilt_when_opaqueness_changes"]
+fn overlay_maintain_state_entries_are_not_rebuilt_when_an_opaque_entry_is_added() {
+    let (bottom, top) = (Calls::default(), Calls::default());
+    let entry_a = counting_entry(&bottom).with_maintain_state(true);
+    let entry_c = counting_entry(&top).with_maintain_state(true);
+    let (handle, overlay) = overlay_with(&[entry_a.clone(), entry_c.clone()]);
+    let mut harness = mount(overlay);
+    assert_eq!((bottom.get(), top.get()), (1, 1));
+
+    let middle = Calls::default();
+    let entry_b = counting_entry(&middle).with_opaque(true);
+    handle.rearrange(&[entry_a.clone(), entry_b.clone(), entry_c.clone()]);
+    harness.tick();
+
+    assert_eq!(layer_count(&mut harness), 3);
+    assert_eq!(
+        (bottom.get(), top.get()),
+        (1, 1),
+        "the pre-existing entries were reconciled, not rebuilt, by the rearrange"
+    );
+    assert_eq!(
+        middle.get(),
+        1,
+        "the newly inserted entry built exactly once"
+    );
 }
 
 /// A `rearrange` that reorders entries under an opaque top must still preserve

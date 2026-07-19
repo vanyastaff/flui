@@ -37,6 +37,18 @@
 //!   running. Recorded, not claimed.
 //! - **No `canSizeOverlay`.** It only bites under unbounded constraints; see
 //!   [`RenderTheater`](flui_objects::RenderTheater).
+//! - **Not a `Listenable`, no separate `dispose()`.** Flutter's `OverlayEntry`
+//!   implements `Listenable` and carries its own `dispose()`, independent of
+//!   `remove()` (`overlay.dart:109-243`): a caller can listen for `mounted`
+//!   flipping, and must `dispose()` an entry (even one never inserted, or
+//!   already removed) to release its `ChangeNotifier` resources — skipping
+//!   that is a leak-tracker failure in the oracle's own test suite. FLUI's
+//!   `OverlayEntry` is a cheap `Arc`-backed handle with no listener list and
+//!   no disposal step of its own; dropping every clone is enough. The one
+//!   behavior from that group FLUI does port — a second `remove()` is inert
+//!   rather than panicking (`overlay.dart`'s `assert` in `remove()`,
+//!   `:226-243`) — is `overlay/tests.rs`'s
+//!   `removed_entry_cannot_reinsert_or_rebuild_silently`.
 //!
 //! [`Overlay`]: super::Overlay
 //! [`RebuildHandle`]: flui_view::RebuildHandle
