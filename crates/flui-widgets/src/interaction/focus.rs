@@ -278,7 +278,7 @@ impl Focus {
     /// Returns the [`FocusNode`] of the [`Focus`] that most tightly encloses
     /// `ctx`, registering a dependency — Flutter's `Focus.maybeOf`
     /// (`focus_scope.dart:452`, tag `3.44.0`) with its default
-    /// `createDependency: true` (see [`nearest_focus_node`]'s doc for why
+    /// `createDependency: true` (see `nearest_focus_node`'s doc for why
     /// that default, not `Overlay::maybe_of`'s override, is what this
     /// mirrors).
     ///
@@ -606,11 +606,11 @@ impl FocusScope {
     /// Returns the [`FocusScopeNode`] of the nearest enclosing [`Focus`] or
     /// [`FocusScope`], walked up to its scope — Flutter's `FocusScope.of`
     /// (`focus_scope.dart:834`, tag `3.44.0`): `Focus.maybeOf(context,
-    /// scopeOk: true)` (unfiltered — [`nearest_focus_node`] directly, not
+    /// scopeOk: true)` (unfiltered — `nearest_focus_node` directly, not
     /// [`Focus::maybe_of`]'s scope-filtering wrapper), then `.nearestScope`
     /// (itself if it already is a scope, else the nearest scope ancestor —
     /// [`FocusNode::as_scope`]/[`FocusNode::enclosing_scope`], the exact pair
-    /// [`FocusState::try_autofocus`] already uses to find "the enclosing
+    /// `FocusState::try_autofocus` already uses to find "the enclosing
     /// scope" for autofocus purposes).
     ///
     /// Falls back to the process-global root scope

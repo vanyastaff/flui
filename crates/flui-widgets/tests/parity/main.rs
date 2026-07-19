@@ -69,6 +69,10 @@ mod navigator_test;
 // ── Business.1 fidelity front — Hero parity (family 3, heroes) ──────────────
 mod heroes_test;
 
+// ── Business.1 fidelity front — Overlay parity (Navigator prerequisite,
+//    ADR-0036) ────────────────────────────────────────────────────────────
+mod overlay_test;
+
 // ── Catalog.1 — theming + localizations substrate ────────────────────────────
 mod localizations_test;
 
