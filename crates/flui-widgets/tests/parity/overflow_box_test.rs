@@ -66,10 +66,12 @@
 //!   math and the box's alignment placement agree with the oracle; it does
 //!   **not** exercise automatic ambient-`Directionality` resolution inside
 //!   the widget tree, because that capability does not exist yet for this
-//!   widget family (a pre-existing, systemic gap across `Align`/`Center`/
+//!   widget family — a pre-existing, systemic gap across `Align`/`Center`/
 //!   `OverflowBox`/`SizedOverflowBox`, not something introduced or
-//!   discovered as OverflowBox-specific — out of scope for a parity-test
-//!   port to newly build). Filed as a follow-up gap, not a regression.
+//!   discovered as OverflowBox-specific, and out of scope for a parity-test
+//!   port to newly build. Filed to `docs/ROADMAP.md` Cross.H ("the
+//!   shifted-box family ... takes an already-resolved `Alignment` ...");
+//!   this header is a pointer to that record, not the record itself.
 //!
 //! Out of scope (1 of 6):
 //! - `'OverflowBox implements debugFillProperties'` — asserts the exact
@@ -82,8 +84,12 @@
 //!   today: `RenderConstrainedOverflowBox::debug_fill_properties`
 //!   (`crates/flui-objects/src/layout/overflow_box.rs`) never emits an
 //!   `alignment` property and has no `ifNull` placeholder text for unset
-//!   overrides — a real but separate diagnostics-fidelity gap, not opened
-//!   as a Cross.H here since it sits outside layout geometry.
+//!   overrides — a real but separate diagnostics-fidelity gap. Filed to
+//!   `docs/ROADMAP.md` Cross.H
+//!   (`RenderConstrainedOverflowBox::debug_fill_properties omits an
+//!   alignment diagnostics property entirely ...`); this header is a
+//!   pointer to that record, not the record itself. Both gaps are
+//!   pre-existing and systemic, not newly-introduced bugs.
 //!
 //! Denominator: 6 upstream `testWidgets` cases (all in
 //! `overflow_box_test.dart`), 5 ported (one covering 2 parameterized
