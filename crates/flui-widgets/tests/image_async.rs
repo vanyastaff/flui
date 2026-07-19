@@ -413,14 +413,16 @@ fn async_image_provider_swap_should_clear_to_the_placeholder_like_flutters_defau
 /// A COLD (`FutureBuilder`-wrapped while loading, matching the literal
 /// oracle) and swapping to an already-cached path B mid-flight reproducibly
 /// panics in this harness with "render node should have box geometry after
-/// layout" -- a real, separate pipeline defect (a `StatelessView` whose
-/// built child changes from a wrapped-combinator type to a differently
-/// -typed bare leaf, resolving synchronously within the very build pass
-/// that performs the swap, ends up mounted but never registered for
-/// layout). That defect is pinned by the `#[ignore]`d regression test below
-/// and filed to `docs/ROADMAP.md` Cross.H rather than fixed here — its
-/// blast radius is the general View reconciliation path, not `Image`
-/// specifically, and is out of scope for a test-porting pass.
+/// layout" -- a real, separate reproducible failure: a `StatelessView`
+/// that is itself the pipeline root, whose built child changes from a
+/// wrapped-combinator type to a differently-typed bare leaf within the same
+/// build pass, has its ROOT render object replaced -- the new node mounts
+/// but never receives a layout pass. Whether the cause is general View
+/// reconciliation or the root-swap re-root path is NOT yet isolated (the
+/// reproducer only covers the root-as-swap-subtree case) -- see
+/// `docs/ROADMAP.md` Cross.H. It is pinned by the `#[ignore]`d regression
+/// test below and filed there rather than chased here; out of scope for a
+/// test-porting pass.
 #[test]
 fn async_image_provider_swap_between_two_already_cached_providers_shows_immediately() {
     let path_a = fixture("tiny-swap2-a.png");
@@ -451,30 +453,40 @@ fn async_image_provider_swap_between_two_already_cached_providers_shows_immediat
     );
 }
 
-/// Regression pin for a real pipeline defect surfaced while porting the
-/// swap-to-already-cached-provider case above: when the FIRST provider
+/// Regression pin for a real, reproducible failure surfaced while porting
+/// the swap-to-already-cached-provider case above: when the FIRST provider
 /// mounts COLD (cache miss, so `Image` builds a `FutureBuilder`-wrapped
 /// `RawImage` while it loads) and is THEN swapped, after resolving, to a
 /// DIFFERENT provider whose decode is already cached (so `Image` builds a
-/// bare `RawImage` directly, no wrapper), the resulting render object is
+/// bare `RawImage` directly, no wrapper) -- with `Image` mounted as the
+/// pipeline root -- the ROOT render object is replaced: the new node is
 /// mounted (`render_node_count` stays 1, `current_root` resolves to it,
-/// its generation is bumped confirming a real remount happened) but never
-/// receives a layout pass -- `LaidOut::size` panics with "render node
-/// should have box geometry after layout" on the very frame of the swap,
-/// and an additional `tick()` afterward does not recover it either (proven
-/// by hand while investigating this port; not merely a timing fluke).
+/// its generation bumped confirming a real remount) but never receives a
+/// layout pass -- `LaidOut::size` panics with "render node should have box
+/// geometry after layout" on the very frame of the swap, and an additional
+/// `tick()` afterward does not recover it either (proven by hand; not a
+/// timing fluke). This is not test misuse: the same `pump_widget`/
+/// `swap_root_view` primitive lays out every swap that REUSES the root
+/// render object -- only replacing it trips this.
 ///
-/// Root cause is NOT narrowed further here (that is a `flui-view`/
-/// `flui-rendering` reconciliation investigation, not an `Image`-widget
-/// fix) -- filed to `docs/ROADMAP.md` Cross.H. Un-ignore once a
-/// `StatelessView`'s built child changing from a wrapped-combinator type to
-/// a differently-typed bare leaf reliably registers the new render object
-/// for layout within the same frame.
+/// The cause is NOT isolated between two candidates this reproducer cannot
+/// separate: (a) a general `flui-view`/`flui-rendering` reconciliation gap
+/// (a replaced child's fresh render object not marked needs-layout on
+/// creation), or (b) a root-swap re-root gap (`swap_root_view` never
+/// re-establishes the pipeline's `root_id`/root constraints when the root
+/// render object's identity changes). Because this mounts `Image` as the
+/// pipeline root, it exercises only (b)'s trigger; a production tree roots
+/// the pipeline at a stable `RenderView`, where (b) cannot occur. Filed to
+/// `docs/ROADMAP.md` Cross.H; isolate by re-running under a stable parent
+/// before asserting a layer. Un-ignore once a root-render-object identity
+/// change across a swap reliably lays the new node out.
 #[test]
-#[ignore = "real pipeline defect: a StatelessView child type-change (wrapped \
-            combinator -> bare leaf) resolving synchronously within the same \
-            build pass leaves the new render object unlaid-out -- panics \
-            rather than fails; see docs/ROADMAP.md Cross.H"]
+#[ignore = "reproducible failure (cause not isolated -- general \
+            reconciliation vs the root-swap re-root path): replacing the \
+            pipeline-root render object across a StatelessView child \
+            type-change (wrapped combinator -> bare leaf) leaves the new \
+            node unlaid-out -- panics rather than fails; see \
+            docs/ROADMAP.md Cross.H"]
 fn async_image_provider_swap_from_a_cold_stream_to_an_already_cached_provider_lays_out() {
     let path_a = fixture("tiny-swap2-a.png");
     let path_b = fixture("tiny-swap2-b.png");
