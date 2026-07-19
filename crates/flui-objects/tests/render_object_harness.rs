@@ -774,12 +774,12 @@ fn harness_custom_paint_foreground_hit_test_wins() {
 /// unmistakable: any regression that let a zero-size child fall through to
 /// the childless branch (or vice versa) would report 999x999, not 0x0.
 ///
-/// Flutter parity: `custom_paint_test.dart` "CustomPaint sizing" (oracle
-/// L163-164) — `CustomPaint(child: const SizedBox.shrink())` measures to
-/// `Size.zero`, distinct from the childless-default-Size.zero case (oracle
-/// L127-128) which this file's `custom_paint_childless_uses_preferred_size`
-/// widget test and this suite's `dry_layout_childless_*` unit tests already
-/// cover via the `preferred_size` mechanism.
+/// Flutter parity: `custom_paint_test.dart` "CustomPaint sizing" (3.44.0) —
+/// `CustomPaint(child: const SizedBox.shrink())` measures to `Size.zero`,
+/// distinct from the childless-default-Size.zero case (same oracle test)
+/// which this file's `custom_paint_childless_uses_preferred_size` widget
+/// test and this suite's `dry_layout_childless_*` unit tests already cover
+/// via the `preferred_size` mechanism.
 #[test]
 fn harness_custom_paint_with_zero_size_child_sizes_to_zero_not_preferred_size() {
     let run = RenderTester::mount(

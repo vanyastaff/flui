@@ -10,9 +10,8 @@ use flui_widgets::{CustomPaint, SizedBox};
 /// value, but this proves it through an actual layout pass rather than just
 /// reading the constructed field back.
 ///
-/// Flutter parity: `custom_paint_test.dart` "CustomPaint sizing" (oracle
-/// L127-128) — `Center(child: CustomPaint(key: target))` measures to
-/// `Size.zero`.
+/// Flutter parity: `custom_paint_test.dart` "CustomPaint sizing" (3.44.0) —
+/// `Center(child: CustomPaint(key: target))` measures to `Size.zero`.
 #[test]
 fn custom_paint_childless_default_size_is_zero() {
     let laid = lay_out(CustomPaint::new(), loose(200.0));
