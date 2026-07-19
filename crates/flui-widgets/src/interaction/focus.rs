@@ -27,9 +27,12 @@
 //!   `applyFocusChangesIfNeeded` at end of frame; FLUI's `FocusManager` is
 //!   synchronous throughout, so `autofocus` runs inline from `init_state`.
 //! * Not ported: `onKey` (legacy), `includeSemantics` (needs the semantics
-//!   layer), `parentNode`, `descendantsAreTraversable` (no node-layer flag),
-//!   and `Focus.of`/`maybeOf` (descendants read the provider directly; a
-//!   public lookup waits for `Actions`/`Shortcuts`).
+//!   layer), `parentNode`, `descendantsAreTraversable` (no node-layer flag).
+//!   `Focus.of`/`maybeOf`/`FocusScope.of` ARE ported (ADR-0036's
+//!   `OverlayScope` precedent, applied here — see [`Focus::of`]) — only their
+//!   `scopeOk: true` variant of `Focus.of`/`maybeOf` is not: nothing in this
+//!   crate needs a Focus-flavored lookup that also accepts a scope node,
+//!   since [`FocusScope::of`] already covers "give me the nearest scope".
 
 use std::{cell::RefCell, rc::Rc, sync::Arc};
 
@@ -98,6 +101,44 @@ impl_inherited_view!(FocusParentProvider);
 pub(crate) fn enclosing_focus_parent(ctx: &dyn BuildContext) -> Arc<FocusNode> {
     ctx.get::<FocusParentProvider, _>(|provider| Arc::clone(&provider.parent))
         .unwrap_or_else(|| Arc::clone(FocusManager::global().root_scope().as_focus_node()))
+}
+
+/// Raw lookup behind [`Focus::of`]/[`Focus::maybe_of`]/[`FocusScope::of`]:
+/// the nearest enclosing [`FocusParentProvider`]'s node, registering a
+/// dependency, with **no** scope-node filtering. Flutter's own
+/// `Focus.maybeOf(context, scopeOk: true)` (`focus_scope.dart:452`, tag
+/// `3.44.0`) — the call [`FocusScope::of`] makes internally; [`Focus::maybe_of`]
+/// layers the `scopeOk: false` filter back on top.
+///
+/// # Depend, not get
+///
+/// Unlike `Overlay::maybe_of` (`overlay/mod.rs`), routing through
+/// [`BuildContextExt::depend_on`] here is not a FLUI-native divergence from
+/// the oracle — it is the loyal port. Flutter's `Focus.maybeOf` calls
+/// `context.dependOnInheritedWidgetOfExactType` under its **default**
+/// `createDependency: true` (not an override, the way `Overlay.maybeOf`
+/// explicitly passes `createDependency: false`), so registering a dependency
+/// is what the oracle itself does by default.
+///
+/// This resolves the SAME [`FocusParentProvider`] marker `Focus`/`FocusScope`'s
+/// own `build` already mounts around their child for
+/// [`enclosing_focus_parent`]'s mount-time attach/reparent lookups —
+/// Flutter's `_FocusInheritedScope`. No second, redundant marker is mounted
+/// just for this public entry point.
+///
+/// One named divergence, inherited from [`FocusParentProvider`] as it already
+/// existed (not introduced here): Flutter's `_FocusInheritedScope` extends
+/// `InheritedNotifier<FocusNode>`, so a dependent also rebuilds whenever the
+/// resolved `FocusNode` itself fires `notifyListeners` — e.g. a plain gain/
+/// loss of focus, not just a reparent. `FocusParentProvider::update_should_notify`
+/// only compares node IDENTITY (`Arc::ptr_eq`), so a descendant reading
+/// `Focus::of`/`maybe_of`/`FocusScope::of` does NOT automatically rebuild on
+/// a focus-state change alone — only on the enclosing node changing outright.
+/// Changing that notify contract is a separate, wider-reaching decision
+/// (it would also affect `enclosing_focus_parent`'s own callers) and is not
+/// attempted here.
+fn nearest_focus_node(ctx: &dyn BuildContext) -> Option<Arc<FocusNode>> {
+    ctx.depend_on::<FocusParentProvider, _>(|provider| Arc::clone(&provider.parent))
 }
 
 // ============================================================================
@@ -211,6 +252,43 @@ impl Focus {
     pub fn debug_label(mut self, label: &'static str) -> Self {
         self.debug_label = Some(label);
         self
+    }
+
+    /// Returns the [`FocusNode`] of the [`Focus`] that most tightly encloses
+    /// `ctx` — Flutter's `Focus.of` (`focus_scope.dart:398`, tag `3.44.0`),
+    /// `scopeOk: false` only (see the module divergence notes for the
+    /// unported `scopeOk: true` variant; [`FocusScope::of`] covers that case).
+    ///
+    /// # Panics
+    ///
+    /// Panics with a message naming the missing ancestor if no enclosing
+    /// [`Focus`] provides one (Flutter's own assert-time `FlutterError`,
+    /// `focus_scope.dart:398-424`). Use [`maybe_of`](Self::maybe_of) for a
+    /// non-panicking lookup.
+    #[must_use]
+    pub fn of(ctx: &dyn BuildContext) -> Arc<FocusNode> {
+        Self::maybe_of(ctx).expect(
+            "Focus::of() was called with a context that does not contain a Focus widget. \
+             No Focus widget ancestor could be found starting from the context passed to \
+             Focus::of() — wrap the subtree in a Focus, or use Focus::maybe_of with a \
+             caller-chosen fallback.",
+        )
+    }
+
+    /// Returns the [`FocusNode`] of the [`Focus`] that most tightly encloses
+    /// `ctx`, registering a dependency — Flutter's `Focus.maybeOf`
+    /// (`focus_scope.dart:452`, tag `3.44.0`) with its default
+    /// `createDependency: true` (see [`nearest_focus_node`]'s doc for why
+    /// that default, not `Overlay::maybe_of`'s override, is what this
+    /// mirrors).
+    ///
+    /// `None` if the nearest enclosing node is a [`FocusScope`]'s own scope
+    /// node rather than a plain [`Focus`] (`scopeOk: false` — a scope only
+    /// satisfies [`FocusScope::of`], not this), or if there is no enclosing
+    /// [`Focus`]/[`FocusScope`] at all.
+    #[must_use]
+    pub fn maybe_of(ctx: &dyn BuildContext) -> Option<Arc<FocusNode>> {
+        nearest_focus_node(ctx).filter(|node| !node.is_scope())
     }
 
     /// The node this widget will drive: the external one, or a fresh one.
@@ -523,6 +601,27 @@ impl FocusScope {
             child: BoxedView(Box::new(child.into_view())),
             external_scope: Some(scope),
         }
+    }
+
+    /// Returns the [`FocusScopeNode`] of the nearest enclosing [`Focus`] or
+    /// [`FocusScope`], walked up to its scope — Flutter's `FocusScope.of`
+    /// (`focus_scope.dart:834`, tag `3.44.0`): `Focus.maybeOf(context,
+    /// scopeOk: true)` (unfiltered — [`nearest_focus_node`] directly, not
+    /// [`Focus::maybe_of`]'s scope-filtering wrapper), then `.nearestScope`
+    /// (itself if it already is a scope, else the nearest scope ancestor —
+    /// [`FocusNode::as_scope`]/[`FocusNode::enclosing_scope`], the exact pair
+    /// [`FocusState::try_autofocus`] already uses to find "the enclosing
+    /// scope" for autofocus purposes).
+    ///
+    /// Falls back to the process-global root scope
+    /// ([`FocusManager::global`]'s [`root_scope`](FocusManager::root_scope))
+    /// when there is no enclosing [`Focus`]/[`FocusScope`] at all — Flutter
+    /// never returns null here, unlike [`Focus::maybe_of`].
+    #[must_use]
+    pub fn of(ctx: &dyn BuildContext) -> Arc<FocusScopeNode> {
+        nearest_focus_node(ctx)
+            .and_then(|node| node.as_scope().or_else(|| node.enclosing_scope()))
+            .unwrap_or_else(|| Arc::clone(FocusManager::global().root_scope()))
     }
 }
 
@@ -1123,6 +1222,334 @@ mod tests {
         );
 
         manager.root_scope().detach_node(scope.as_focus_node().id());
+    }
+
+    // ------------------------------------------------------------------
+    // Focus::of / Focus::maybe_of / FocusScope::of
+    // ------------------------------------------------------------------
+
+    /// Which tree shape a [`FocusOfProbe`] is mounted under — one reusable
+    /// host below instead of a bespoke type per shape.
+    #[derive(Clone, Copy)]
+    enum FocusOfShape {
+        /// No Focus/FocusScope ancestor at all.
+        Bare,
+        /// A single plain `Focus` directly wrapping the probe.
+        OneFocus,
+        /// Two nested plain `Focus` widgets — the probe sits under the INNER
+        /// one, so a correct lookup must not stop at the outer one.
+        NestedFocus,
+        /// A bare `FocusScope` directly wrapping the probe (no plain `Focus`
+        /// in between) — the scope-vs-node distinction.
+        BareScope,
+        /// `FocusScope`, then a plain `Focus`, then the probe —
+        /// `FocusScope::of` must walk past the plain `Focus` to the scope.
+        ScopeThenFocus,
+    }
+
+    /// A leaf that records what [`Focus::maybe_of`] and [`FocusScope::of`]
+    /// resolve to from its own build context.
+    #[derive(Clone, StatelessView)]
+    struct FocusOfProbe {
+        found_node: Rc<RefCell<Option<Arc<FocusNode>>>>,
+        found_scope: Rc<RefCell<Option<Arc<FocusScopeNode>>>>,
+    }
+
+    impl StatelessView for FocusOfProbe {
+        fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
+            *self.found_node.borrow_mut() = Focus::maybe_of(ctx);
+            *self.found_scope.borrow_mut() = Some(FocusScope::of(ctx));
+            SizedBox::new(1.0, 1.0)
+        }
+    }
+
+    /// Composes a [`FocusOfProbe`] under `shape`, or drops the whole subtree
+    /// when `show` is `false` — the same toggle-to-unmount idiom `Host`/
+    /// `ExcludeHost` above use, so a test can `swap_root` back to a bare leaf
+    /// at the end and let real `dispose()` detach every node this mounted.
+    #[derive(Clone, StatelessView)]
+    struct FocusOfHost {
+        shape: FocusOfShape,
+        show: bool,
+        outer_node: Arc<FocusNode>,
+        inner_node: Arc<FocusNode>,
+        scope: Arc<FocusScopeNode>,
+        found_node: Rc<RefCell<Option<Arc<FocusNode>>>>,
+        found_scope: Rc<RefCell<Option<Arc<FocusScopeNode>>>>,
+    }
+
+    impl StatelessView for FocusOfHost {
+        fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+            if !self.show {
+                return SizedBox::new(1.0, 1.0).into_view().boxed();
+            }
+            let probe = FocusOfProbe {
+                found_node: Rc::clone(&self.found_node),
+                found_scope: Rc::clone(&self.found_scope),
+            };
+            match self.shape {
+                FocusOfShape::Bare => probe.into_view().boxed(),
+                FocusOfShape::OneFocus => Focus::new(probe)
+                    .focus_node(Arc::clone(&self.outer_node))
+                    .into_view()
+                    .boxed(),
+                FocusOfShape::NestedFocus => {
+                    Focus::new(Focus::new(probe).focus_node(Arc::clone(&self.inner_node)))
+                        .focus_node(Arc::clone(&self.outer_node))
+                        .into_view()
+                        .boxed()
+                }
+                FocusOfShape::BareScope => {
+                    FocusScope::with_external_node(Arc::clone(&self.scope), probe)
+                        .into_view()
+                        .boxed()
+                }
+                FocusOfShape::ScopeThenFocus => FocusScope::with_external_node(
+                    Arc::clone(&self.scope),
+                    Focus::new(probe).focus_node(Arc::clone(&self.outer_node)),
+                )
+                .into_view()
+                .boxed(),
+            }
+        }
+    }
+
+    /// Builds a fresh [`FocusOfHost`] with brand-new nodes/scope and empty
+    /// result cells for `shape`.
+    fn focus_of_host(shape: FocusOfShape) -> FocusOfHost {
+        FocusOfHost {
+            shape,
+            show: true,
+            outer_node: FocusNode::with_debug_label("focus-of-outer"),
+            inner_node: FocusNode::with_debug_label("focus-of-inner"),
+            scope: FocusScopeNode::with_debug_label("focus-of-scope"),
+            found_node: Rc::new(RefCell::new(None)),
+            found_scope: Rc::new(RefCell::new(None)),
+        }
+    }
+
+    /// Without any enclosing `Focus`/`FocusScope`, `Focus::maybe_of` is
+    /// `None` and `FocusScope::of` falls back to the root scope.
+    #[test]
+    fn focus_maybe_of_is_none_and_focus_scope_of_falls_back_to_root_without_an_ancestor() {
+        let _guard = FOCUS_TEST_LOCK.lock();
+        let manager = FocusManager::global();
+        manager.unfocus();
+
+        let host = focus_of_host(FocusOfShape::Bare);
+        let mut harness = mount(host.clone());
+
+        assert!(
+            host.found_node.borrow().is_none(),
+            "Focus::maybe_of must return None with no Focus/FocusScope ancestor"
+        );
+        let resolved_scope = host
+            .found_scope
+            .borrow()
+            .clone()
+            .expect("the probe's build must have run");
+        assert!(
+            Arc::ptr_eq(&resolved_scope, manager.root_scope()),
+            "FocusScope::of must fall back to the root scope with no ancestor"
+        );
+
+        harness.swap_root(FocusOfHost {
+            show: false,
+            ..host
+        });
+    }
+
+    /// A descendant's `Focus::maybe_of` resolves the one enclosing `Focus`'s
+    /// own node.
+    #[test]
+    fn focus_maybe_of_returns_the_nearest_enclosing_focus_node() {
+        let _guard = FOCUS_TEST_LOCK.lock();
+        let manager = FocusManager::global();
+        manager.unfocus();
+
+        let host = focus_of_host(FocusOfShape::OneFocus);
+        let mut harness = mount(host.clone());
+
+        let resolved = host
+            .found_node
+            .borrow()
+            .clone()
+            .expect("Focus::maybe_of must find the enclosing Focus's node");
+        assert!(
+            Arc::ptr_eq(&resolved, &host.outer_node),
+            "Focus::maybe_of must resolve THIS Focus's own node"
+        );
+
+        harness.swap_root(FocusOfHost {
+            show: false,
+            ..host
+        });
+    }
+
+    /// Oracle: `'Focus.of stops at the nearest Focus widget.'`
+    /// (`focus_scope_test.dart`, tag `3.44.0`) — nesting two plain `Focus`
+    /// widgets, a descendant's lookup must resolve the INNER one, never
+    /// reaching past it to the outer one.
+    #[test]
+    fn focus_maybe_of_nearest_wins_over_an_outer_focus() {
+        let _guard = FOCUS_TEST_LOCK.lock();
+        let manager = FocusManager::global();
+        manager.unfocus();
+
+        let host = focus_of_host(FocusOfShape::NestedFocus);
+        let mut harness = mount(host.clone());
+
+        let resolved = host
+            .found_node
+            .borrow()
+            .clone()
+            .expect("Focus::maybe_of must find the nearest enclosing Focus's node");
+        assert!(
+            Arc::ptr_eq(&resolved, &host.inner_node),
+            "the NEAREST Focus must win"
+        );
+        assert!(
+            !Arc::ptr_eq(&resolved, &host.outer_node),
+            "must not resolve the outer Focus instead of the inner one"
+        );
+
+        harness.swap_root(FocusOfHost {
+            show: false,
+            ..host
+        });
+    }
+
+    /// Oracle: `'Focus.of stops at the nearest Focus widget.'`
+    /// (`focus_scope_test.dart`, tag `3.44.0`) — the `Focus.maybeOf(element2),
+    /// isNull` assertion: a bare enclosing `FocusScope` (no plain `Focus` in
+    /// between) does not satisfy `Focus::maybe_of` (`scopeOk: false`), even
+    /// though `FocusScope::of` still resolves the scope itself.
+    #[test]
+    fn focus_maybe_of_returns_none_for_a_bare_enclosing_scope() {
+        let _guard = FOCUS_TEST_LOCK.lock();
+        let manager = FocusManager::global();
+        manager.unfocus();
+
+        let host = focus_of_host(FocusOfShape::BareScope);
+        let mut harness = mount(host.clone());
+
+        assert!(
+            host.found_node.borrow().is_none(),
+            "a bare enclosing FocusScope must not satisfy Focus::maybe_of — \
+             only a plain Focus counts"
+        );
+        let resolved_scope = host
+            .found_scope
+            .borrow()
+            .clone()
+            .expect("the probe's build must have run");
+        assert!(
+            Arc::ptr_eq(&resolved_scope, &host.scope),
+            "FocusScope::of must still resolve the enclosing scope itself"
+        );
+
+        harness.swap_root(FocusOfHost {
+            show: false,
+            ..host
+        });
+    }
+
+    /// `FocusScope::of` walks past an intervening plain `Focus` to the
+    /// nearest enclosing SCOPE — Flutter's `.nearestScope` — rather than
+    /// stopping at (or being refused by) the plain `Focus` the way
+    /// `Focus::maybe_of` would be.
+    #[test]
+    fn focus_scope_of_walks_up_past_a_plain_focus_to_the_nearest_scope() {
+        let _guard = FOCUS_TEST_LOCK.lock();
+        let manager = FocusManager::global();
+        manager.unfocus();
+
+        let host = focus_of_host(FocusOfShape::ScopeThenFocus);
+        let mut harness = mount(host.clone());
+
+        let resolved_node =
+            host.found_node.borrow().clone().expect(
+                "Focus::maybe_of must find the plain Focus between the scope and the probe",
+            );
+        assert!(Arc::ptr_eq(&resolved_node, &host.outer_node));
+        let resolved_scope = host
+            .found_scope
+            .borrow()
+            .clone()
+            .expect("the probe's build must have run");
+        assert!(
+            Arc::ptr_eq(&resolved_scope, &host.scope),
+            "FocusScope::of must walk past the plain Focus to the enclosing scope"
+        );
+
+        harness.swap_root(FocusOfHost {
+            show: false,
+            ..host
+        });
+    }
+
+    /// A stateless leaf that runs an arbitrary `on_build` closure once —
+    /// mirrors `overlay/tests.rs`'s own `Peek`, kept file-local since only
+    /// this one test needs a caller-supplied closure (the others above reuse
+    /// `FocusOfHost`/`FocusOfProbe`).
+    #[derive(Clone)]
+    struct Peek<F: Fn(&dyn BuildContext) + Clone + 'static>(F);
+
+    impl<F: Fn(&dyn BuildContext) + Clone + 'static> View for Peek<F> {
+        fn create_element(&self) -> ElementKind {
+            ElementKind::stateless(self)
+        }
+    }
+
+    impl<F: Fn(&dyn BuildContext) + Clone + 'static> StatelessView for Peek<F> {
+        fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
+            (self.0)(ctx);
+            SizedBox::new(1.0, 1.0)
+        }
+    }
+
+    /// `Focus::of` panics with a message naming the failing call and hinting
+    /// at the non-panicking fallback — Flutter's own assert-time
+    /// `FlutterError` (`focus_scope.dart:398-424`), matching the
+    /// `Overlay::of` precedent (`overlay/tests.rs`).
+    ///
+    /// The panic is caught with `catch_unwind` **inside** the probe's own
+    /// build, rather than expecting it to unwind through `mount`: the
+    /// framework's own `build_or_recover` catches a `build()` panic to keep
+    /// one bad widget from taking down the whole test process.
+    #[test]
+    fn focus_of_panics_with_a_helpful_message_without_a_focus_ancestor() {
+        let _guard = FOCUS_TEST_LOCK.lock();
+        FocusManager::global().unfocus();
+
+        let message: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+        let message_for_probe = Arc::clone(&message);
+        let probe = Peek(move |ctx: &dyn BuildContext| {
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| Focus::of(ctx)));
+            if let Err(payload) = outcome {
+                let text = payload
+                    .downcast_ref::<&str>() // PORT-CHECK-OK-DOWNCAST: test-only extraction of a caught panic's message, not V-type smuggling
+                    .map(|s| (*s).to_string())
+                    .or_else(|| payload.downcast_ref::<String>().cloned()) // PORT-CHECK-OK-DOWNCAST: same panic-message extraction, the `String`-payload case
+                    .unwrap_or_default();
+                *message_for_probe.lock() = Some(text);
+            }
+        });
+
+        let _harness = mount(probe);
+
+        let text = message
+            .lock()
+            .clone()
+            .expect("Focus::of must panic without a Focus ancestor");
+        assert!(
+            text.contains("Focus::of") && text.contains("Focus widget"),
+            "panic message must name the failing call, got: {text:?}"
+        );
+        assert!(
+            text.contains("Focus::maybe_of"),
+            "panic message must hint at the non-panicking fallback, got: {text:?}"
+        );
     }
 }
 
