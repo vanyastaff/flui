@@ -2,21 +2,23 @@
 //!
 //! # Parity oracles
 //!
-//! `.flutter/packages/flutter/test/widgets/overlay_test.dart` (tag `3.44.0`) —
+//! `.flutter/packages/flutter/test/widgets/overlay_test.dart` (tag `3.44.0`,
+//! 43 cases total — `grep -cE '^\s*(testWidgets|test)\('`) —
 //! `'insert top'`, `'insert below'`, `'insert above'`, `'insertAll top'`,
 //! `'insertAll below'`, `'insertAll above'`, `'rearrange'`,
 //! `'OverlayState.of() throws when called if an Overlay does not exist'`,
 //! `'OverlayState.maybeOf() works when an Overlay does and doesn't exist'`,
 //! `'OverlayEntry.opaque can be changed when OverlayEntry is not part of an
-//! Overlay (yet)'`, `'OverlayEntries do not rebuild when opaqueness changes'`,
-//! `'OverlayEntries do not rebuild when opaque entry is added'`, `'Can use
-//! Positioned within OverlayEntry'`. Expected values are read from
-//! `overlay.dart`, not from running this code. The mutation-surface,
-//! opaque/maintainState, and lookup cases above are everything this suite
-//! reasonably ports; `tests/parity/overlay_test.rs` documents the rest of the
-//! ~30-case oracle file as out of scope, with reasons, since almost none of it
-//! is reachable through the crate's public API at all (see that file's module
-//! docs).
+//! Overlay (yet)'`, `'OverlayEntries do not rebuild when opaqueness changes'`
+//! (red by design — see below), `'OverlayEntries do not rebuild when opaque
+//! entry is added'` (same), `'Can use Positioned within OverlayEntry'`,
+//! `'asserts when remove is called twice'`. Expected values are read from
+//! `overlay.dart`, not from running this code. These 14 of the 43 oracle
+//! cases are everything this suite reasonably ports; `tests/parity/
+//! overlay_test.rs`'s module doc carries the full 43-case accounting —
+//! every case ported, cited, or named out of scope with a reason — since
+//! almost none of the remaining 29 are reachable through the crate's public
+//! API at all.
 //!
 //! # Why an in-crate harness
 //!

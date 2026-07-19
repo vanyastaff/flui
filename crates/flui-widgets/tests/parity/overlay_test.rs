@@ -1,7 +1,8 @@
 //! ## Test parity notes
 //!
 //! Flutter source: `packages/flutter/test/widgets/overlay_test.dart` (tag
-//! `3.44.0`) — 30 `testWidgets` cases, plus 4 plain `test()`s.
+//! `3.44.0`) — 43 cases total (40 `testWidgets` + 3 plain `test()`s; exact
+//! count: `grep -cE '^\s*(testWidgets|test)\('`).
 //!
 //! ## Why this file is thin
 //!
@@ -37,7 +38,12 @@
 //!   version, reached through `mount()` and `OverlayHandle::overlay()`,
 //!   cannot demonstrate by construction.
 //!
-//! ## Not ported, and why
+//! ## Not ported in this file, and why
+//!
+//! Two bullets below are cross-references, not genuinely-out-of-scope cases:
+//! the `insert*`/`rearrange`/opaque family (ported in `overlay/tests.rs`) and
+//! `'Can use Positioned within OverlayEntry'` (ported there too, wider). Both
+//! are counted as **ported** in the denominator below, not out of scope.
 //! - The "no ancestor" halves of `'OverlayState.of() throws when called if an
 //!   Overlay does not exist'` and `'...maybeOf() works when an Overlay does
 //!   and doesn't exist'` — already pinned in-crate by
@@ -65,6 +71,25 @@
 //!   `above:`/`below:` placement of the unmentioned trailing group is an
 //!   explicitly named deferral (`overlay/mod.rs`'s `rearrange` doc); no
 //!   caller, including `Navigator`, passes either.
+//! - `'OverlayEntry throws if inserted to an invalid Overlay'` — asserts a
+//!   rich `FlutterError` (with a specific message) when the same entry is
+//!   inserted twice into one overlay, into an already-disposed overlay, or
+//!   into a second overlay without `remove()` first. FLUI's
+//!   `OverlayHandle::insert_all` and `OverlayEntry::attach` (`overlay/mod.rs`,
+//!   `overlay/entry.rs`) have no equivalent guard at all: `attach`
+//!   unconditionally overwrites the entry's back-reference, and
+//!   `insert_all` splices unconditionally, with no check for an
+//!   already-present id or an already-attached entry — none of the three
+//!   oracle misuses is detected, let alone reported with a diagnostic.
+//!   Undiscovered until this reconciliation; not fixed here (a defensive
+//!   runtime check plus a diagnostic message is a production-behavior
+//!   change, not a side effect of accounting for the oracle's test count),
+//!   and not yet worth a `Cross.H` entry either: `insert`/`insert_all` are
+//!   `pub(crate)`, and both in-crate callers (`Navigator`, `Draggable`'s
+//!   feedback layer) never insert an entry they don't already own exactly
+//!   once — this only bites if the mutation surface is ever widened
+//!   (ADR-0036's Deferred list: "a public `OverlayHandle::insert`"), which
+//!   is its own gated design question, not assumed here.
 //! - `'entries below opaque entries are ignored for hit testing'` — the
 //!   enforcing mechanism is real and unit-tested directly:
 //!   `RenderTheater::hit_test` bounds its walk to `first_onstage(..)`
@@ -117,10 +142,20 @@
 //!   `positioned_inside_an_overlay_entry_is_laid_out_by_an_inner_stack`
 //!   (`overlay/tests.rs`).
 //!
-//! Denominator: 34 oracle cases (30 `testWidgets` + 4 `test()`), all
-//! accounted for above — 1 ported here, ~19 ported in `overlay/tests.rs`
-//! (see that file's own header), the remainder named out of scope with a
-//! reason.
+//! ## Denominator: 43/43 accounted for
+//!
+//! `'insert top'`, `'insert below'`, `'insert above'`, `'insertAll top'`,
+//! `'insertAll below'`, `'insertAll above'`, `'rearrange'`, `'OverlayState.of()
+//! throws when called if an Overlay does not exist'`, `'OverlayEntry.opaque
+//! can be changed when OverlayEntry is not part of an Overlay (yet)'`,
+//! `'OverlayEntries do not rebuild when opaqueness changes'`, `'...when opaque
+//! entry is added'`, `'Can use Positioned within OverlayEntry'`, `'asserts
+//! when remove is called twice'` — 13 cases ported in `overlay/tests.rs`.
+//! `'OverlayState.maybeOf() works when an Overlay does and doesn't exist'` is
+//! the 14th, split across both files: its "no ancestor" half in
+//! `overlay/tests.rs`, its "an Overlay does exist" half in this file. 14
+//! ported total (1 in this file, 13 in `overlay/tests.rs`) + 29 named out of
+//! scope above, with a reason each = 43.
 
 use std::sync::Arc;
 
