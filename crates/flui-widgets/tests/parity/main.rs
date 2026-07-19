@@ -142,3 +142,6 @@ mod fractionally_sized_box_test;
 
 // ── Business.1 fidelity — Offstage parity ───────────────────────────────────
 mod offstage_test;
+
+// ── Business.1 fidelity — RotatedBox parity ─────────────────────────────────
+mod rotated_box_test;
