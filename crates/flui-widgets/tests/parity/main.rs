@@ -124,3 +124,6 @@ mod page_view_test;
 // ── Business.1 fidelity — EditableText / TextEditingController parity ───────
 mod editable_text_test;
 mod text_editing_controller_test;
+
+// ── Business.1 fidelity — LayoutBuilder parity (build-during-layout seam) ───
+mod layout_builder_test;
