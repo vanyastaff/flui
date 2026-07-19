@@ -16,6 +16,7 @@
 mod common;
 
 use common::{lay_out, loose, size, tight};
+use flui_types::geometry::px;
 use flui_types::painting::Image as PixelImage;
 use flui_widgets::{Image, ImageAlignment, ImageFit};
 
@@ -141,4 +142,179 @@ fn image_fit_and_alignment_accessors_are_chainable() {
     // 8×8 intrinsic in 1000×1000 loose = 8×8 (no forced dims; image is below
     // the max so it sits at intrinsic size).
     assert_eq!(laid.size(laid.root()), size(8.0, 8.0));
+}
+
+// ---------------------------------------------------------------------------
+// Full-pipeline paint-geometry wiring
+//
+// Not direct `image_test.dart` ports -- Flutter's fit/alignment paint math
+// has its own oracle, `painting/paint_image_test.dart`, outside this
+// corpus's denominator, and `RenderImage`'s fit math is already exhaustively
+// unit-tested in `crates/flui-objects/src/image/render_image.rs`
+// (`test_compute_paint_rect_*`, `test_paint_*`). These three prove the
+// WIRING instead: that a real `Image` widget, mounted through the full
+// View -> RawImage -> RenderImage pipeline, carries `fit`/`alignment` all
+// the way to the committed paint rect -- every other test in this file only
+// asserts the LAYOUT size, never where the image content actually paints.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn image_widget_wires_cover_fit_and_center_alignment_into_the_paint_rect() {
+    // 100×100 image (1:1) Cover-fit into a 200×50 box: scale =
+    // max(200/100, 50/100) = 2.0 -> painted 200×200, Center-aligned ->
+    // origin (0, (50-200)/2 = -75) (cropped top and bottom).
+    let laid = lay_out(
+        Image::from_image(solid_image(100, 100))
+            .fit(ImageFit::Cover)
+            .alignment(ImageAlignment::Center),
+        tight(200.0, 50.0),
+    );
+    let rect = laid
+        .image_paint_rect(laid.root())
+        .expect("a resolved image must produce a paint rect");
+    assert_eq!(rect.size().width, px(200.0));
+    assert_eq!(rect.size().height, px(200.0));
+    assert_eq!(rect.origin().x, px(0.0));
+    assert_eq!(rect.origin().y, px(-75.0));
+}
+
+#[test]
+fn image_widget_wires_fill_fit_and_top_left_alignment_into_the_paint_rect() {
+    // Fill ignores aspect ratio and stretches to the whole box regardless of
+    // alignment (alignment becomes a no-op once the painted size equals the
+    // box exactly).
+    let laid = lay_out(
+        Image::from_image(solid_image(10, 40))
+            .fit(ImageFit::Fill)
+            .alignment(ImageAlignment::TopLeft),
+        tight(120.0, 80.0),
+    );
+    let rect = laid
+        .image_paint_rect(laid.root())
+        .expect("a resolved image must produce a paint rect");
+    assert_eq!(rect.size().width, px(120.0));
+    assert_eq!(rect.size().height, px(80.0));
+    assert_eq!(rect.origin().x, px(0.0));
+    assert_eq!(rect.origin().y, px(0.0));
+}
+
+#[test]
+fn image_widget_wires_scale_down_fit_and_bottom_right_alignment_into_the_paint_rect() {
+    // ScaleDown never enlarges: a small 10×10 image in a big 100×100 box
+    // stays at its natural 10×10 size, BottomRight-aligned into the box's
+    // bottom-right corner.
+    let laid = lay_out(
+        Image::from_image(solid_image(10, 10))
+            .fit(ImageFit::ScaleDown)
+            .alignment(ImageAlignment::BottomRight),
+        tight(100.0, 100.0),
+    );
+    let rect = laid
+        .image_paint_rect(laid.root())
+        .expect("a resolved image must produce a paint rect");
+    assert_eq!(rect.size().width, px(10.0));
+    assert_eq!(rect.size().height, px(10.0));
+    assert_eq!(rect.origin().x, px(90.0));
+    assert_eq!(rect.origin().y, px(90.0));
+}
+
+// ---------------------------------------------------------------------------
+// Post-mount provider swap / reconfiguration
+//
+// Every OTHER sync test in this file only exercises the FIRST frame. These
+// two mount, then drive a SECOND frame that changes the resolved image,
+// proving the update path (not just the create path) wires correctly.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn image_widget_sync_provider_swap_replaces_the_displayed_image_not_the_stale_one() {
+    // `RawImage::update_render_object` always pushes the freshly resolved
+    // image (`render.set_image(self.image.clone())`) on every rebuild --
+    // this proves that wiring survives an actual provider swap on an
+    // already-mounted `Image`, not just at initial creation.
+    let mut laid = lay_out(Image::from_image(solid_image(4, 4)), loose(1000.0));
+    assert_eq!(laid.size(laid.root()), size(4.0, 4.0));
+
+    laid.pump_widget(Image::from_image(solid_image(9, 6)));
+    assert_eq!(
+        laid.size(laid.current_root()),
+        size(9.0, 6.0),
+        "swapping to a differently-sized decoded image on an already-mounted \
+         Image must update the render object's displayed content, not keep \
+         painting/laying-out the stale first image",
+    );
+    assert!(
+        laid.image_has_image(laid.current_root()),
+        "the render object must carry the NEW image, not have cleared to \
+         the empty placeholder",
+    );
+}
+
+/// Mirrors Flutter's `Image State can be reconfigured to use another image`
+/// (`image_test.dart`, 3.44.0): reordering a list of UNKEYED `Image`
+/// widgets does not move render objects around with them -- element
+/// reconciliation matches by (type, position) when no key disambiguates,
+/// so each POSITION keeps its own render object and merely receives the
+/// other widget's config on the next update.
+#[test]
+fn image_state_rebinds_config_to_positional_render_objects_when_reordered_without_keys() {
+    use flui_widgets::{Column, column};
+
+    let image1 = Image::from_image(solid_image(4, 4)).width(10.0);
+    let image2 = Image::from_image(solid_image(4, 4)).width(20.0);
+
+    let mut laid = lay_out(
+        Column::new(column![image1.clone(), image2.clone()]),
+        loose(1000.0),
+    );
+    let root = laid.root();
+    let first = laid.child(root, 0);
+    let second = laid.child(root, 1);
+
+    assert_eq!(laid.image_width(first), Some(px(10.0)));
+    assert_eq!(laid.image_width(second), Some(px(20.0)));
+
+    laid.pump_widget(Column::new(column![image2, image1]));
+    let after_root = laid.current_root();
+
+    assert_eq!(
+        laid.child(after_root, 0),
+        first,
+        "reordering unkeyed widgets must reuse the SAME render object at \
+         each position -- Flutter's default (type, position) matching \
+         reuses the Element/RenderObject and swaps only its config, it does \
+         not move objects to follow their originating widget instance",
+    );
+    assert_eq!(
+        laid.image_width(first),
+        Some(px(20.0)),
+        "position 0 must now carry image2's width -- config rebinds to the \
+         POSITION, not the widget instance that first created the object",
+    );
+    assert_eq!(laid.image_width(second), Some(px(10.0)));
+}
+
+/// Mirrors Flutter's `Image.memory control test` (`image_test.dart`,
+/// 3.44.0) -- a smoke test that `Image.memory` mounts and decodes without
+/// panicking. The oracle also passes `excludeFromSemantics: true`; FLUI's
+/// `Image` contributes no semantics node at all yet (with or without such a
+/// parameter -- there is no semantics wiring to exclude from, see
+/// `docs/ROADMAP.md` Cross.H), so that part of the oracle has no FLUI
+/// counterpart to assert against.
+#[test]
+#[cfg(feature = "images")]
+fn image_memory_control_test_decodes_bytes_without_panicking() {
+    let bytes = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/tiny.png"
+    ))
+    .expect("the committed fixture PNG must be readable");
+
+    let laid = lay_out(Image::memory(bytes), loose(1000.0));
+    assert_eq!(
+        laid.size(laid.root()),
+        size(5.0, 3.0),
+        "Image::memory must decode the real PNG bytes to their true \
+         dimensions, not silently fail to an empty placeholder",
+    );
 }

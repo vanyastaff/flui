@@ -24,7 +24,7 @@ use flui_interaction::events::{
 };
 use flui_objects::{
     RenderAnimatedOpacity, RenderClipOval, RenderClipPath, RenderClipRRect, RenderClipRect,
-    RenderFittedBox, RenderOpacity, RenderParagraph, RenderTransform,
+    RenderFittedBox, RenderImage, RenderOpacity, RenderParagraph, RenderTransform,
 };
 use flui_rendering::constraints::{BoxConstraints, SliverGeometry};
 use flui_rendering::pipeline::PipelineOwner;
@@ -33,7 +33,7 @@ use flui_rendering::testing::inspect;
 use flui_types::geometry::px;
 use flui_types::painting::Clip;
 use flui_types::styling::BorderRadius;
-use flui_types::{Offset, Size};
+use flui_types::{Offset, Pixels, Rect, Size};
 use flui_view::{BuildOwner, ElementTree, View};
 use flui_widgets::GestureArenaScope;
 use parking_lot::RwLock;
@@ -473,6 +473,50 @@ impl LaidOut {
             .and_then(|node| node.downcast_render_object_mut::<RenderFittedBox>())
             .map(|render| render.effective_transform())
             .expect("render node should be a RenderFittedBox")
+    }
+
+    /// Whether a [`RenderImage`] node currently holds a decoded image (as
+    /// opposed to the empty placeholder it paints nothing for). Panics if
+    /// `id` is not a `RenderImage`.
+    pub fn image_has_image(&self, id: RenderId) -> bool {
+        let mut owner = self.pipeline_owner.write();
+        owner
+            .render_tree_mut()
+            .get_mut(id)
+            .and_then(|node| node.downcast_render_object_mut::<RenderImage>())
+            .map(|render| render.image().is_some())
+            .expect("render node should be a RenderImage")
+    }
+
+    /// The forced logical width of a [`RenderImage`] node (`Image::width`),
+    /// or `None` when unset — used to prove a builder's config actually
+    /// reaches the render object it currently owns after a rebuild/reorder
+    /// (not just at initial creation). Panics if `id` is not a `RenderImage`.
+    pub fn image_width(&self, id: RenderId) -> Option<Pixels> {
+        let mut owner = self.pipeline_owner.write();
+        owner
+            .render_tree_mut()
+            .get_mut(id)
+            .and_then(|node| node.downcast_render_object_mut::<RenderImage>())
+            .map(|render| render.width())
+            .expect("render node should be a RenderImage")
+    }
+
+    /// The destination rectangle [`RenderImage::paint_rect_in`] computes for
+    /// its CURRENT committed box size — where the image content actually
+    /// paints once `fit`/`alignment` are applied, not merely the box's own
+    /// size. `None` when the node carries no image (nothing to paint) or a
+    /// degenerate (zero) intrinsic size. Panics if `id` is not a
+    /// `RenderImage`.
+    pub fn image_paint_rect(&self, id: RenderId) -> Option<Rect> {
+        let box_size = self.size(id);
+        let mut owner = self.pipeline_owner.write();
+        owner
+            .render_tree_mut()
+            .get_mut(id)
+            .and_then(|node| node.downcast_render_object_mut::<RenderImage>())
+            .map(|render| render.paint_rect_in(box_size))
+            .expect("render node should be a RenderImage")
     }
 
     /// The paint-space left edge of a `RenderParagraph` node's first laid-out

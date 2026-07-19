@@ -306,3 +306,244 @@ fn asset_image_missing_path_settles_on_the_empty_box_not_a_hang() {
          not show a phantom decoded size",
     );
 }
+
+/// Flutter's oracle `Verify Image resets its RenderImage when changing
+/// providers` (`image_test.dart`, 3.44.0) expects the DEFAULT
+/// (`gaplessPlayback: false`) behavior to clear the previously displayed
+/// image the instant the provider key changes, showing the placeholder
+/// again while the new one loads.
+///
+/// FLUI's `Image` does NOT do this — and investigating why is a genuine,
+/// previously-undocumented finding, not a simple missing-parameter gap.
+/// `Image`'s async dispatch is built on the generic
+/// [`FutureBuilder`](flui_widgets::FutureBuilder) primitive
+/// (`crates/flui-view/src/element/future_builder.rs`), and that primitive's
+/// `did_update_view` intentionally PRESERVES the old snapshot data across a
+/// key change (`"preserving the old data/error"`, ported faithfully from
+/// Dart's own generic `FutureBuilder.didUpdateWidget` — see
+/// `future_builder_key_change_preserves_old_data_and_ignores_initial_data`
+/// in that same file). That is *correct* for the generic combinator; but it
+/// means `Image`, having no policy of its own layered on top, inherits
+/// "always preserve the old frame" — i.e. it behaves as Flutter's
+/// `gaplessPlayback: true` UNCONDITIONALLY, with no way to opt into the
+/// oracle's default reset. See `docs/ROADMAP.md` Cross.H for the full
+/// writeup and the `#[ignore]`d test below pinning the oracle's actual
+/// expectation.
+#[test]
+fn async_image_provider_swap_retains_the_previous_frame_until_the_new_one_decodes() {
+    let old_path = fixture("tiny-swap1-old.png");
+    let new_path = fixture("tiny-swap1-new.png");
+    let reg = registry();
+
+    let mut laid = lay_out(Image::asset(Arc::clone(&reg), old_path), loose(1000.0));
+    pump_until(&mut laid, |laid| {
+        laid.size(laid.current_root()) == size(5.0, 3.0)
+    });
+
+    laid.pump_widget(Image::asset(reg, new_path));
+    assert_eq!(
+        laid.size(laid.current_root()),
+        size(5.0, 3.0),
+        "FLUI's Image inherits FutureBuilder's data-preserving update \
+         semantics: swapping to a provider with a different cache key must \
+         keep showing the OLD decoded frame while the new one loads, not \
+         reset to the placeholder -- this is real, verified current \
+         behavior (a documented divergence from Flutter's default \
+         gaplessPlayback:false, not a bug in this test)",
+    );
+
+    // Watch a short window while the new path's load is genuinely in
+    // flight: the frame must stay 5x3 continuously, never dipping to the
+    // empty placeholder in between -- proving this is real data retention,
+    // not a race that happens to land the same value on the one frame
+    // already asserted above.
+    for _ in 0..50 {
+        laid.tick();
+        assert_eq!(
+            laid.size(laid.current_root()),
+            size(5.0, 3.0),
+            "the displayed frame must never drop to the empty placeholder \
+             while the new provider's load is in flight",
+        );
+        std::thread::sleep(POLL_INTERVAL);
+    }
+}
+
+/// Pins Flutter's ACTUAL oracle expectation from `Verify Image resets its
+/// RenderImage when changing providers` (`image_test.dart`, 3.44.0): a
+/// provider-key change should clear to the placeholder immediately, per the
+/// test directly above this one currently does not (and, per that test's
+/// doc, cannot without `Image` growing its own reset-unless-gapless policy
+/// on top of `FutureBuilder`). Un-ignore once that policy lands — see
+/// `docs/ROADMAP.md` Cross.H.
+#[test]
+#[ignore = "Image has no reset-on-key-change policy of its own; it inherits \
+            FutureBuilder's data-preserving semantics unconditionally -- see \
+            docs/ROADMAP.md Cross.H"]
+fn async_image_provider_swap_should_clear_to_the_placeholder_like_flutters_default() {
+    let old_path = fixture("tiny-swap1-old.png");
+    let new_path = fixture("tiny-swap1-new.png");
+    let reg = registry();
+
+    let mut laid = lay_out(Image::asset(Arc::clone(&reg), old_path), loose(1000.0));
+    pump_until(&mut laid, |laid| {
+        laid.size(laid.current_root()) == size(5.0, 3.0)
+    });
+
+    laid.pump_widget(Image::asset(reg, new_path));
+    assert_eq!(
+        laid.size(laid.current_root()),
+        size(0.0, 0.0),
+        "Flutter's default (gaplessPlayback: false) clears to the \
+         placeholder the instant the provider key changes",
+    );
+}
+
+/// Mirrors the spirit of Flutter's `Verify Image shows correct RenderImage
+/// when changing to an already completed provider` (`image_test.dart`,
+/// 3.44.0): when BOTH providers' decodes are already resolved and cached
+/// before the swap, `build_dispatch`'s synchronous `decode_cache::cached`
+/// probe hits for the new key immediately, so the swap shows the correct
+/// image on the very same frame it lands -- no placeholder gap.
+///
+/// This pre-warms path A too (not just path B, unlike the literal oracle)
+/// so BOTH sides of the swap take the "already cached" `build_dispatch`
+/// branch (a bare `RawImage`, no `FutureBuilder` wrapper) from their very
+/// first frame. That narrowing is deliberate, not a shortcut: starting path
+/// A COLD (`FutureBuilder`-wrapped while loading, matching the literal
+/// oracle) and swapping to an already-cached path B mid-flight reproducibly
+/// panics in this harness with "render node should have box geometry after
+/// layout" -- a real, separate reproducible failure: a `StatelessView`
+/// that is itself the pipeline root, whose built child changes from a
+/// wrapped-combinator type to a differently-typed bare leaf within the same
+/// build pass, has its ROOT render object replaced -- the new node mounts
+/// but never receives a layout pass. Whether the cause is general View
+/// reconciliation or the root-swap re-root path is NOT yet isolated (the
+/// reproducer only covers the root-as-swap-subtree case) -- see
+/// `docs/ROADMAP.md` Cross.H. It is pinned by the `#[ignore]`d regression
+/// test below and filed there rather than chased here; out of scope for a
+/// test-porting pass.
+#[test]
+fn async_image_provider_swap_between_two_already_cached_providers_shows_immediately() {
+    let path_a = fixture("tiny-swap2-a.png");
+    let path_b = fixture("tiny-swap2-b.png");
+    let reg = registry();
+
+    for path in [path_a.clone(), path_b.clone()] {
+        let mut warm_up = lay_out(Image::asset(Arc::clone(&reg), path), loose(1000.0));
+        pump_until(&mut warm_up, |laid| {
+            laid.size(laid.current_root()) == size(5.0, 3.0)
+        });
+    }
+
+    let mut laid = lay_out(Image::asset(Arc::clone(&reg), path_a), loose(1000.0));
+    assert_eq!(
+        laid.size(laid.current_root()),
+        size(5.0, 3.0),
+        "a pre-cached provider must show its real dimensions on its very \
+         first frame, with no placeholder frame at all",
+    );
+
+    laid.pump_widget(Image::asset(reg, path_b));
+    assert_eq!(
+        laid.size(laid.current_root()),
+        size(5.0, 3.0),
+        "swapping between two already-cached providers must show the new \
+         one's real dimensions on the same frame as the swap",
+    );
+}
+
+/// Regression pin for a real, reproducible failure surfaced while porting
+/// the swap-to-already-cached-provider case above: when the FIRST provider
+/// mounts COLD (cache miss, so `Image` builds a `FutureBuilder`-wrapped
+/// `RawImage` while it loads) and is THEN swapped, after resolving, to a
+/// DIFFERENT provider whose decode is already cached (so `Image` builds a
+/// bare `RawImage` directly, no wrapper) -- with `Image` mounted as the
+/// pipeline root -- the ROOT render object is replaced: the new node is
+/// mounted (`render_node_count` stays 1, `current_root` resolves to it,
+/// its generation bumped confirming a real remount) but never receives a
+/// layout pass -- `LaidOut::size` panics with "render node should have box
+/// geometry after layout" on the very frame of the swap, and an additional
+/// `tick()` afterward does not recover it either (proven by hand; not a
+/// timing fluke). This is not test misuse: the same `pump_widget`/
+/// `swap_root_view` primitive lays out every swap that REUSES the root
+/// render object -- only replacing it trips this.
+///
+/// The cause is NOT isolated between two candidates this reproducer cannot
+/// separate: (a) a general `flui-view`/`flui-rendering` reconciliation gap
+/// (a replaced child's fresh render object not marked needs-layout on
+/// creation), or (b) a root-swap re-root gap (`swap_root_view` never
+/// re-establishes the pipeline's `root_id`/root constraints when the root
+/// render object's identity changes). Because this mounts `Image` as the
+/// pipeline root, it exercises only (b)'s trigger; a production tree roots
+/// the pipeline at a stable `RenderView`, where (b) cannot occur. Filed to
+/// `docs/ROADMAP.md` Cross.H; isolate by re-running under a stable parent
+/// before asserting a layer. Un-ignore once a root-render-object identity
+/// change across a swap reliably lays the new node out.
+#[test]
+#[ignore = "reproducible failure (cause not isolated -- general \
+            reconciliation vs the root-swap re-root path): replacing the \
+            pipeline-root render object across a StatelessView child \
+            type-change (wrapped combinator -> bare leaf) leaves the new \
+            node unlaid-out -- panics rather than fails; see \
+            docs/ROADMAP.md Cross.H"]
+fn async_image_provider_swap_from_a_cold_stream_to_an_already_cached_provider_lays_out() {
+    let path_a = fixture("tiny-swap2-a.png");
+    let path_b = fixture("tiny-swap2-b.png");
+    let reg = registry();
+
+    // Pre-warm ONLY path B.
+    {
+        let mut warm_up = lay_out(
+            Image::asset(Arc::clone(&reg), path_b.clone()),
+            loose(1000.0),
+        );
+        pump_until(&mut warm_up, |laid| {
+            laid.size(laid.current_root()) == size(5.0, 3.0)
+        });
+    }
+
+    // Path A starts COLD: FutureBuilder-wrapped while it decodes.
+    let mut laid = lay_out(Image::asset(Arc::clone(&reg), path_a), loose(1000.0));
+    pump_until(&mut laid, |laid| {
+        laid.size(laid.current_root()) == size(5.0, 3.0)
+    });
+
+    laid.pump_widget(Image::asset(reg, path_b));
+    assert_eq!(
+        laid.size(laid.current_root()),
+        size(5.0, 3.0),
+        "swapping from a cold-then-resolved stream to an already-cached \
+         provider must still lay out the new render object on the same \
+         frame, not leave it permanently without committed geometry",
+    );
+}
+
+/// An async image's forced `width` reserves that width during the
+/// placeholder frame too, not just once decoded -- `RawImage::
+/// create_render_object` calls `render.set_width` unconditionally, even
+/// when `image` is still `None`. With intrinsic size `Size::ZERO` (no image
+/// yet) the aspect source is degenerate, so `RenderImage::compute_size`
+/// falls back to `folded.smallest()`: the forced width axis is tight at 40,
+/// the unconstrained height axis reports its minimum (0). This has no direct
+/// `image_test.dart` counterpart (Flutter's placeholder-sizing story runs
+/// through a different code path, `_ImageState`'s synchronous `ImageStream`
+/// attach), but proves a real, previously-unexercised FLUI behavior: a
+/// forced dimension is not silently dropped while a load is in flight.
+#[test]
+fn async_image_with_forced_width_reserves_that_width_during_the_placeholder_frame() {
+    let path = fixture("tiny-forced-width.png");
+    let mut laid = lay_out(Image::asset(registry(), path).width(40.0), loose(1000.0));
+
+    assert_eq!(
+        laid.size(laid.current_root()),
+        size(40.0, 0.0),
+        "the forced width must be honored even on the placeholder frame, \
+         before any image has decoded -- a dropped forced width here would \
+         silently collapse layout to 0x0 for one frame",
+    );
+
+    pump_until(&mut laid, |laid| {
+        laid.size(laid.current_root()) == size(40.0, 24.0)
+    });
+}
