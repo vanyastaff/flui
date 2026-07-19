@@ -1422,12 +1422,17 @@ fn scrollable_second_animate_to_supersedes_the_first() {
 /// This starts the fling via a REAL drag+release on the OLD controller
 /// BEFORE the swap (`Scrollable`'s `AnimatedBuilder`-rebuilt gesture
 /// callbacks are only known-good against the controller active at gesture
-/// time), then swaps, then exercises ONLY the stop hook — a plain field
-/// read-and-call at `jump_to` time, wired directly by `did_update_view`
-/// rather than by anything requiring a POST-swap `AnimatedBuilder` rebuild
-/// (a separate, pre-existing gap — see `scroll_controller`'s field doc in
-/// `scrollable.rs` — that a fresh `animate_to` call on the new controller
-/// would otherwise entangle this test with).
+/// time), then swaps, then exercises the stop hook.
+///
+/// The fling VALUE LISTENER is ALSO re-wired onto the new controller by the
+/// same swap (`ScrollableState::install_fling_listener`, called from
+/// `did_update_view` right alongside the stop-hook re-install — the fix for
+/// the swap-blindness gap `scrollable.rs`'s `scroll_controller` field doc
+/// used to name). That's why the OLD controller's own pixels stop moving
+/// right after the swap below, and the NEW controller's pixels are what the
+/// still-in-flight fling — and later the stop hook — are observed against.
+/// See `scrollable_reinstalls_the_fling_listener_after_a_controller_swap`
+/// for a test isolating just that half via a post-swap `animate_to`.
 #[test]
 fn scrollable_reinstalls_the_stop_hook_after_a_controller_swap() {
     let old_controller = ScrollController::new();
@@ -1477,39 +1482,125 @@ fn scrollable_reinstalls_the_stop_hook_after_a_controller_swap() {
     );
     scoped.pump_widget(rewrapped);
 
-    // The fling is STILL running on the shared controller post-swap (its
-    // value listener keeps pushing into the OLD controller — the named,
-    // pre-existing, out-of-scope swap gap `scrollable.rs` documents — so
-    // `old_controller` is what still observably advances).
+    // The fling is STILL running on the shared `fling_controller` post-swap,
+    // but its value listener now writes into the NEW controller — the OLD
+    // one is frozen at whatever it reached right before the swap.
     scoped.pump_for(Duration::from_millis(16));
-    assert!(
-        old_controller.pixels() > old_pixels_mid_fling,
-        "sanity: the fling must still be advancing after the swap, before \
-         jump_to; old_controller: {:.2} -> {:.2}",
+    assert_eq!(
+        old_controller.pixels(),
         old_pixels_mid_fling,
-        old_controller.pixels()
+        "the OLD controller must stop moving once the fling listener has \
+         been re-wired onto the new controller by the swap"
+    );
+    let new_pixels_mid_fling = new_controller.pixels();
+    assert!(
+        new_pixels_mid_fling > 0.0,
+        "sanity: the still-in-flight fling must now be advancing the NEW \
+         controller after the swap; got {new_pixels_mid_fling:.2}"
     );
 
     // The SYNCHRONOUS cancellation path: `new_controller.jump_to` must find
     // the stop hook `did_update_view` re-installed on it, and stop the
     // SHARED fling controller THIS INSTANT.
     new_controller.jump_to(0.0);
-    let old_pixels_after_jump = old_controller.pixels();
+    let new_pixels_after_jump = new_controller.pixels();
 
     for _ in 0..5 {
         scoped.pump_for(Duration::from_millis(16));
     }
 
-    let drift = (old_controller.pixels() - old_pixels_after_jump).abs();
+    let drift = (new_controller.pixels() - new_pixels_after_jump).abs();
     assert!(
         drift <= 1.0,
         "jump_to on the controller installed by a did_update_view SWAP must \
-         still stop the shared fling controller synchronously — the OLD \
-         controller's pixels (still fed by the fling's value listener) must \
-         stop drifting once jump_to is called on the NEW one; drifted \
-         {drift:.3} px after jump_to (from {old_pixels_after_jump:.1} to \
-         {:.1})",
-        old_controller.pixels()
+         still stop the shared fling controller synchronously — the NEW \
+         controller's pixels (now fed by the fling's value listener) must \
+         stop drifting once jump_to is called on it; drifted {drift:.3} px \
+         after jump_to (from {new_pixels_after_jump:.1} to {:.1})",
+        new_controller.pixels()
+    );
+}
+
+/// Isolates the fling-listener half of the swap fix: a post-swap
+/// `animate_to` on the NEW controller must move the NEW controller's own
+/// `pixels()`.
+///
+/// Before the fix, `ScrollableState::init_state` captured the scroll
+/// controller once into the fling value listener's closure and never
+/// re-captured it; `did_update_view` only ever re-installed the `stop_hook`.
+/// A controller swap therefore left the listener writing into the OLD
+/// controller forever — `animate_to`/a fling driven on the NEW controller
+/// still moved the shared `fling_controller`'s own value (queued and
+/// serviced correctly, see `scroll_controller.rs`'s ADR-0037 docs), but
+/// nothing ever copied that value into the NEW controller's `ScrollPosition`,
+/// so its `pixels()` never moved at all.
+///
+/// Red-check: comment out `did_update_view`'s `self.install_fling_listener()`
+/// call — this test's first assertion fails (`new_controller.pixels()` stays
+/// at its pre-`animate_to` value).
+#[test]
+fn scrollable_reinstalls_the_fling_listener_after_a_controller_swap() {
+    let old_controller = ScrollController::new();
+    let new_controller = ScrollController::new();
+    old_controller.update_dimensions(300.0, 0.0, 4700.0);
+
+    let vsync = Vsync::new();
+    let widget = Scrollable::new()
+        .controller(old_controller.clone())
+        .child(SizedBox::new(300.0, 5000.0));
+    let mut scoped = fling_scoped(widget, vsync.clone(), tight(300.0, 300.0));
+
+    // Swap to a DIFFERENT controller — same shape as
+    // `scrollable_reinstalls_the_stop_hook_after_a_controller_swap` above,
+    // but with NO pre-swap gesture: the very first fling this test ever
+    // drives is via `animate_to` on the NEW controller, after the swap.
+    let rewrapped = GestureArenaScope::new(
+        scoped.laid().arena(),
+        VsyncScope::new(
+            vsync,
+            Scrollable::new()
+                .controller(new_controller.clone())
+                .child(SizedBox::new(300.0, 5000.0)),
+        ),
+    );
+    scoped.pump_widget(rewrapped);
+
+    let new_pixels_before = new_controller.pixels();
+
+    // Drives the SAME shared `fling_controller` `ScrollableState` has kept
+    // since `create_state` (queued and serviced regardless of this bug) —
+    // it's the value listener's re-wiring that this test actually pins.
+    new_controller.animate_to(500.0, Duration::from_millis(100), Arc::new(Curves::Linear));
+
+    // Same 3-pump warm-up as `scrollable_animate_to_reaches_the_target_through_the_curve`.
+    scoped.pump_for(Duration::from_millis(16));
+    scoped.pump_for(Duration::from_millis(16));
+    scoped.pump_for(Duration::from_millis(16));
+
+    assert!(
+        new_controller.pixels() > new_pixels_before,
+        "a post-swap animate_to must move the NEW controller's own position \
+         — did_update_view must re-wire the fling value listener onto it, \
+         not leave it writing into the old controller forever; got \
+         {new_pixels_before:.2} -> {:.2}",
+        new_controller.pixels()
+    );
+    assert_eq!(
+        old_controller.pixels(),
+        0.0,
+        "the OLD controller must receive no ticks at all once the listener \
+         has been re-wired onto the new one by the swap"
+    );
+
+    for _ in 0..10 {
+        scoped.pump_for(Duration::from_millis(16));
+    }
+    assert_eq!(
+        new_controller.pixels(),
+        500.0,
+        "once the duration has fully elapsed, the post-swap animate_to must \
+         land EXACTLY on the target on the NEW controller; got {:.2}",
+        new_controller.pixels()
     );
 }
 

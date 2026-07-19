@@ -354,26 +354,30 @@ pub struct DraggableState<T: Clone + Send + Sync + 'static> {
     /// (`build`'s removal is deferred to the next rebuild, which a rapid
     /// restart — end, then a new drag starts before that rebuild drains —
     /// can easily race ahead of; evicting unconditionally here, not only
-    /// when the slot looks "stale," is what closes that race). One further
-    /// named case this does **not** fix: if the session that currently owns
-    /// the slot ends while some other, still-active session continues (and
-    /// no new session ever starts to evict it), this slot stays `Some` —
-    /// nothing clears it on that one session's end alone — so the layer is
+    /// when the slot looks "stale," is what closes that race).
+    ///
+    /// One named case this does **not** fix: if the session that currently
+    /// owns the slot ends while some other, still-active session continues
+    /// (and no new session ever starts to evict it), this slot stays `Some`
+    /// — nothing clears it on that one session's end alone — so the layer is
     /// left mounted but frozen (no session left is writing to its
     /// `FeedbackSignal`) until `build` next observes zero active sessions
-    /// and tears it down. A third named case, introduced by the eviction:
-    /// when a later session evicts a STILL-LIVE earlier one, both sessions
-    /// keep `Some` of the one shared [`FeedbackSignal`], so both write
-    /// offsets and the single mounted layer jitters between the two drags'
-    /// displacements until either ends (a fresh signal per inserted entry
-    /// would detach the stale writer — a follow-up shape). All three are
-    /// honest scope cuts of the same root cause: no harness capability here
-    /// can even drive two truly concurrent contacts to observe any of them
-    /// directly (see this file's own module docs on that limitation).
+    /// and tears it down. An honest scope cut of the same root cause as
+    /// eviction itself: no harness capability here can even drive two truly
+    /// concurrent contacts to observe it directly (see this file's own
+    /// module docs on that limitation).
+    ///
+    /// A second case this doc used to name is now fixed: eviction of a
+    /// STILL-LIVE earlier session used to leave both sessions holding `Some`
+    /// of the one shared [`FeedbackSignal`] carried on `DraggableState`, so
+    /// both wrote offsets and the single mounted layer jittered between the
+    /// two drags' displacements until either ended. `on_start` now mints a
+    /// **fresh** [`FeedbackSignal::new`] for every inserted entry instead of
+    /// reusing one shared field — the evicted session's `DragSession` keeps
+    /// writing to *its own*, now-detached signal, which nothing reads (inert,
+    /// the same shape as [`FeedbackSignal::reposition`]'s existing
+    /// before-mount/after-unmount no-op).
     feedback_entry: Rc<RefCell<Option<OverlayEntry>>>,
-    /// The `Send + Sync` handle shared with whichever `DragSession` currently
-    /// owns `feedback_entry`, if any.
-    feedback_signal: FeedbackSignal,
     /// `feedback`/`feedback_offset`, refreshed each `build` — read by
     /// `on_start` at drag-start time. Owner-local (`Rc<RefCell<_>>`): see
     /// [`FeedbackConfig`]'s docs on why it cannot live in [`DragConfig`].
@@ -732,7 +736,6 @@ impl<T: Clone + Send + Sync + 'static> StatefulView for Draggable<T> {
             config: Arc::new(Mutex::new(DragConfig::from_view(self))),
             overlay: Arc::new(Mutex::new(None)),
             feedback_entry: Rc::new(RefCell::new(None)),
-            feedback_signal: FeedbackSignal::new(),
             feedback_config: Rc::new(RefCell::new(FeedbackConfig::from_view(self))),
             recognizer: None,
             _data: std::marker::PhantomData,
@@ -760,7 +763,6 @@ impl<T: Clone + Send + Sync + 'static> ViewState<Draggable<T>> for DraggableStat
         let config = Arc::clone(&self.config);
         let overlay = Arc::clone(&self.overlay);
         let feedback_entry_slot = Rc::clone(&self.feedback_entry);
-        let feedback_signal = self.feedback_signal.clone();
         let feedback_config = Rc::clone(&self.feedback_config);
         let on_start: MultiDragStartCallback = Rc::new(move |_pointer, _position| {
             {
@@ -802,11 +804,17 @@ impl<T: Clone + Send + Sync + 'static> ViewState<Draggable<T>> for DraggableStat
 
             let feedback = match (overlay_handle, feedback_builder) {
                 (Some(handle), Some(builder)) => {
-                    feedback_signal.set_offset(Offset::ZERO);
-                    let entry = feedback_entry(builder, feedback_offset, feedback_signal.clone());
+                    // A FRESH signal per inserted entry, not one shared
+                    // across sessions on `DraggableState` — see
+                    // `feedback_entry`'s docs: reusing one shared instance is
+                    // exactly what let a still-live evicted session keep
+                    // writing into the surviving layer. `FeedbackSignal::new`
+                    // already starts at `Offset::ZERO`.
+                    let signal = FeedbackSignal::new();
+                    let entry = feedback_entry(builder, feedback_offset, signal.clone());
                     handle.insert(&entry, &InsertPosition::Top);
                     *feedback_entry_slot.borrow_mut() = Some(entry);
-                    Some(feedback_signal.clone())
+                    Some(signal)
                 }
                 _ => None,
             };
@@ -915,5 +923,178 @@ impl<T: Clone + Send + Sync + 'static> ViewState<Draggable<T>> for DraggableStat
         if let Some(entry) = stale {
             entry.remove();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Instant;
+
+    use flui_interaction::PointerId;
+    use flui_interaction::events::PointerType;
+
+    use super::*;
+
+    // ------------------------------------------------------------------
+    // Fresh-`FeedbackSignal`-per-entry — the fix for the documented third
+    // scope-cut `feedback_entry`'s docs used to name: a later session
+    // evicting a STILL-LIVE earlier one used to leave both sessions writing
+    // to the one shared `FeedbackSignal`, jittering the mounted layer.
+    //
+    // No `LaidOutScoped` capability can drive two truly concurrent pointer
+    // contacts (`tests/parity/draggable_test.rs`'s own module doc; each
+    // `dispatch_pointer_down` reassigns the harness's single "current
+    // contact"), so an end-to-end integration test cannot construct the
+    // "still-live earlier session" this fixes. This constructs the two
+    // `DragSession`s directly instead — exactly the shape two overlapping
+    // `on_start` calls now produce (see `init_state`'s `on_start` closure:
+    // each inserts its own entry via a freshly-minted `FeedbackSignal::new()`,
+    // never `self.feedback_signal.clone()` — that shared field no longer
+    // exists).
+    // ------------------------------------------------------------------
+
+    /// A trivial `StatefulView` whose only job is to capture the
+    /// `RebuildHandle` `init_state` acquires. `RebuildHandle` has no public
+    /// standalone constructor (only a real mount ever mints one), so this
+    /// mounts the smallest possible real element tree to get one. Mirrors
+    /// `dismissible.rs`'s own `RebuildHandleCapture` fixture.
+    #[derive(Clone, StatefulView)]
+    struct RebuildHandleCapture {
+        captured: Rc<RefCell<Option<RebuildHandle>>>,
+    }
+
+    struct RebuildHandleCaptureState {
+        captured: Rc<RefCell<Option<RebuildHandle>>>,
+    }
+
+    impl StatefulView for RebuildHandleCapture {
+        type State = RebuildHandleCaptureState;
+
+        fn create_state(&self) -> Self::State {
+            RebuildHandleCaptureState {
+                captured: Rc::clone(&self.captured),
+            }
+        }
+    }
+
+    impl ViewState<RebuildHandleCapture> for RebuildHandleCaptureState {
+        fn init_state(&mut self, ctx: &dyn BuildContext) {
+            *self.captured.borrow_mut() = Some(ctx.rebuild_handle());
+        }
+
+        fn build(&self, _view: &RebuildHandleCapture, _ctx: &dyn BuildContext) -> impl IntoView {
+            crate::SizedBox::shrink()
+        }
+    }
+
+    fn mount_and_capture_rebuild_handle() -> RebuildHandle {
+        use flui_view::{BuildOwner, ElementTree};
+
+        let captured = Rc::new(RefCell::new(None));
+        let view = RebuildHandleCapture {
+            captured: Rc::clone(&captured),
+        };
+        let mut owner = BuildOwner::new();
+        let mut tree = ElementTree::new();
+        let root = tree.mount_root(&view, &mut owner.element_owner_mut());
+        owner.schedule_build_for(root, 0);
+        owner.build_scope(&mut tree);
+
+        captured
+            .borrow()
+            .clone()
+            .expect("init_state must have captured a handle")
+    }
+
+    fn empty_config() -> Arc<Mutex<DragConfig>> {
+        Arc::new(Mutex::new(DragConfig {
+            axis: None,
+            max_simultaneous_drags: None,
+            on_drag_started: None,
+            on_drag_update: None,
+            on_draggable_canceled: None,
+            on_drag_end: None,
+        }))
+    }
+
+    fn update_details(dx: f32, dy: f32) -> MultiDragUpdateDetails {
+        MultiDragUpdateDetails {
+            pointer_id: PointerId::new(1).expect("contact ids start at 1"),
+            global_position: Offset::new(Pixels(dx), Pixels(dy)),
+            local_position: Offset::new(Pixels(dx), Pixels(dy)),
+            delta: Offset::new(PixelDelta(dx), PixelDelta(dy)),
+            kind: PointerType::Mouse,
+            timestamp: Instant::now(),
+        }
+    }
+
+    #[test]
+    fn on_start_mints_a_fresh_feedback_signal_every_time_not_a_shared_one() {
+        // `feedback_entry`'s docs: this is exactly what `on_start` mints per
+        // inserted entry now — two independent instances, not two handles to
+        // the same one.
+        let signal_1 = FeedbackSignal::new();
+        let signal_2 = FeedbackSignal::new();
+
+        assert!(
+            !Arc::ptr_eq(&signal_1.offset, &signal_2.offset),
+            "each call must produce a distinct FeedbackSignal instance"
+        );
+    }
+
+    /// Pins the actual fix: an evicted-but-still-live session's writes land
+    /// on its own detached signal, not on the surviving session's.
+    ///
+    /// Red-check: give `session_1` and `session_2` the SAME `FeedbackSignal`
+    /// (the pre-fix shape `on_start` used to have via the shared
+    /// `feedback_signal` field) — the final assertion then fails, because
+    /// `session_1`'s write clobbers what `signal_2` reads.
+    #[test]
+    fn evicted_sessions_write_only_reaches_its_own_detached_signal() {
+        let rebuild = mount_and_capture_rebuild_handle();
+
+        // Session 1 "wins" the feedback slot first...
+        let signal_1 = FeedbackSignal::new();
+        let session_1 = DragSession {
+            active_count: Arc::new(AtomicUsize::new(1)),
+            rebuild: rebuild.clone(),
+            config: empty_config(),
+            offset: Mutex::new(Offset::ZERO),
+            feedback: Some(signal_1.clone()),
+        };
+
+        // ...then a second session starts and evicts it — minting its OWN
+        // signal per the fix, not `signal_1.clone()`.
+        let signal_2 = FeedbackSignal::new();
+        let session_2 = DragSession {
+            active_count: Arc::new(AtomicUsize::new(1)),
+            rebuild,
+            config: empty_config(),
+            offset: Mutex::new(Offset::ZERO),
+            feedback: Some(signal_2.clone()),
+        };
+
+        // Session 1 is stale/evicted but still live (its own pointer hasn't
+        // lifted yet) — its `update()` calls keep landing somewhere.
+        session_1.update(update_details(10.0, 0.0));
+        // Session 2 is the surviving session whose signal the mounted layer
+        // actually reads.
+        session_2.update(update_details(0.0, 25.0));
+
+        assert_eq!(
+            signal_2.offset(),
+            Offset::new(Pixels(0.0), Pixels(25.0)),
+            "the surviving signal must reflect only the surviving session's own moves"
+        );
+        assert_eq!(
+            signal_1.offset(),
+            Offset::new(Pixels(10.0), Pixels(0.0)),
+            "the evicted session's own signal still tracks its own displacement locally"
+        );
+        assert_ne!(
+            signal_1.offset(),
+            signal_2.offset(),
+            "the evicted session's writes must never bleed into the surviving signal"
+        );
     }
 }

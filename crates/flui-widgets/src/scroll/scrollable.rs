@@ -217,18 +217,13 @@ impl Scrollable {
 /// position into the [`ScrollController`] each tick.
 pub struct ScrollableState {
     /// The scroll controller from the current view configuration. Kept in
-    /// state so the fling listener (registered in `init_state`) can reach it
-    /// without re-capturing on every `build`. Updated in `did_update_view`.
-    ///
-    /// Named follow-up (pre-existing, not fixed by ADR-0037): if the caller
-    /// replaces the controller with a different object (rather than mutating
-    /// the same `Arc`-backed handle), the fling VALUE LISTENER registered
-    /// once in `init_state` keeps pushing ticks into the OLD controller until
-    /// the widget is disposed — full hot-swap of that listener is deferred,
-    /// the common case is one stable controller. The `stop_hook`
-    /// `did_update_view` re-installs on every swap does NOT share this gap:
-    /// it is looked up fresh from `self.scroll_controller` (updated first),
-    /// not captured once in `init_state`.
+    /// state so the fling listener (installed by
+    /// [`install_fling_listener`](ScrollableState::install_fling_listener))
+    /// can reach it without re-capturing on every `build`. Updated in
+    /// `did_update_view` BEFORE both `install_fling_listener` and
+    /// `install_stop_hook` re-run — each always reads whatever this field
+    /// currently holds, so a controller SWAP moves both onto the new
+    /// controller in the same call.
     scroll_controller: ScrollController,
     /// The ballistic simulation driver. Bounds span `(NEG_INFINITY, INFINITY)`
     /// so pixel-space simulation positions are not clamped to `[0, 1]`.
@@ -237,7 +232,10 @@ pub struct ScrollableState {
     /// `VsyncScope` in `init_state`; disposed in `dispose`.
     fling_controller: AnimationController,
     /// Value-listener ID on `fling_controller` that pushes pixels into
-    /// `scroll_controller` each tick. Registered in `init_state`, removed in
+    /// `scroll_controller` each tick. Installed by
+    /// [`install_fling_listener`](ScrollableState::install_fling_listener)
+    /// (called from `init_state`, and re-run on every `did_update_view` so a
+    /// controller swap moves it onto the new controller), removed in
     /// `dispose`.
     fling_listener_id: Option<ListenerId>,
     /// Vsync handle kept for `unregister` in `dispose`.
@@ -314,22 +312,37 @@ impl ScrollableState {
             let _ = fling.stop();
         }));
     }
-}
 
-impl ViewState<Scrollable> for ScrollableState {
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
-        self.install_flush_handle(ctx);
-        self.install_stop_hook();
-
-        // Attach the value listener that pushes the fling simulation's current
-        // pixel position into the scroll controller each tick. The listener
-        // holds `Arc`-backed clones, so it survives across widget rebuilds.
+    /// Installs (or re-installs) the fling value listener that pushes the
+    /// ballistic simulation's current pixel position into
+    /// `self.scroll_controller` each tick.
+    ///
+    /// Idempotent, mirroring `install_stop_hook`: called from `init_state`
+    /// AND `did_update_view`, always against whatever `self.scroll_controller`
+    /// currently is. Removes any previously-installed listener first — this
+    /// is what closes the swap-blindness bug: without it, a controller SWAP
+    /// left the listener captured in `init_state` pushing ticks into the OLD
+    /// controller forever, so an `animate_to`/fling on the NEW controller
+    /// drove `fling_controller`'s value but the new controller's own
+    /// `pixels()` never moved.
+    fn install_fling_listener(&mut self) {
+        if let Some(id) = self.fling_listener_id.take() {
+            self.fling_controller.remove_listener(id);
+        }
         let fling_ref = self.fling_controller.clone();
         let scroll_ref = self.scroll_controller.clone();
         let listener_id = self.fling_controller.add_listener(Arc::new(move || {
             scroll_ref.set_pixels(fling_ref.value());
         }));
         self.fling_listener_id = Some(listener_id);
+    }
+}
+
+impl ViewState<Scrollable> for ScrollableState {
+    fn init_state(&mut self, ctx: &dyn BuildContext) {
+        self.install_flush_handle(ctx);
+        self.install_stop_hook();
+        self.install_fling_listener();
 
         // Register with the ambient VsyncScope so the binding ticks the fling
         // controller on each virtual frame — the same pattern used by
@@ -463,9 +476,22 @@ impl ViewState<Scrollable> for ScrollableState {
     }
 
     fn did_update_view(&mut self, _old_view: &Scrollable, new_view: &Scrollable) {
-        // Track the current controller so the fling listener stays in sync if
-        // a parent rebuild hands us a new configuration.
+        // Track the current controller so the fling listener and stop hook
+        // stay in sync if a parent rebuild hands us a new configuration —
+        // both re-installs below always read `self.scroll_controller` as
+        // just updated here.
         self.scroll_controller = new_view.controller.clone();
+
+        // Re-install the fling value listener on the (possibly new)
+        // controller. `install_fling_listener` is idempotent (removes any
+        // previous listener first), so this is cheap even when the
+        // controller didn't actually change. Without this, a controller
+        // SWAP would leave the listener pushing ticks into the OLD
+        // controller forever: an `animate_to`/fling driven on the NEW
+        // controller would move `fling_controller`'s value, but nothing
+        // would ever copy it into the new controller's own `ScrollPosition`
+        // — its pixels would never move.
+        self.install_fling_listener();
 
         // Re-install the stop hook on the (possibly new) controller —
         // `install_stop_hook` is idempotent (see its doc), so this is cheap
@@ -473,10 +499,7 @@ impl ViewState<Scrollable> for ScrollableState {
         // controller SWAP would leave the hook on the OLD controller only:
         // the new controller's `jump_to` would silently lose the
         // synchronous cancel path (see `ScrollController`'s `stop_hook`
-        // field docs for the one-frame gap that reopens). The fling VALUE
-        // LISTENER is deliberately NOT re-subscribed here — see
-        // `scroll_controller`'s own field doc above for that pre-existing,
-        // out-of-scope gap.
+        // field docs for the one-frame gap that reopens).
         self.install_stop_hook();
     }
 

@@ -25,8 +25,13 @@
 //! - **Node-level** — `FocusNode`/`FocusScopeNode`/`FocusManager` are
 //!   exercised directly, for cases whose Flutter oracle asserts a node-API
 //!   contract and only uses a widget to obtain a `BuildContext`/node
-//!   reference (FLUI has no `Focus.of`/`FocusScope.of` ambient lookup — see
-//!   *Not ported* — so the direct node reference stands in for it).
+//!   reference. `Focus::of`/`Focus::maybe_of`/`FocusScope::of` are now ported
+//!   (`interaction/focus.rs`, ADR-0036's `OverlayScope` precedent applied to
+//!   the pre-existing `FocusParentProvider` marker) — most node-level cases
+//!   below still use a direct node reference anyway, unchanged, since porting
+//!   the lookup itself doesn't retroactively make the REST of a case's own
+//!   node-API assertions any more portable; see *Ported cases* below for the
+//!   one case this newly unlocked.
 //!
 //! `FocusManager::global()` is an owner-thread (thread-local) singleton
 //! (`crates/flui-interaction/src/routing/focus.rs`); nextest's libtest runner
@@ -66,7 +71,11 @@
 //!   [`adding_a_new_focus_scope_attaches_its_node_under_the_parent_scope`].
 //! - `'Can focus root node.'` (focus_scope_test.dart) — the root scope itself
 //!   can hold primary focus. **Adapted**: node-level — the oracle mounts a
-//!   widget only to reach `FocusScope.of`, which FLUI does not have —
+//!   widget only to reach `FocusScope.of`; `FocusScope::of` is ported now
+//!   (see *Ported cases* below), but this specific case's own assertion is
+//!   about the ROOT scope's own `hasPrimaryFocus`, not about the lookup
+//!   itself, so it stays node-level rather than being re-plumbed through a
+//!   probe widget for no behavioral gain —
 //!   [`can_focus_the_root_scope_directly`].
 //! - `'Focus is ignored when set to not focusable.'` (focus_scope_test.dart)
 //!   — `canRequestFocus: false` refuses a `request_focus` call and
@@ -121,13 +130,29 @@
 //!   ADR-0022) — ported as two synchronous notifications instead of one
 //!   batched one, with the divergence stated inline —
 //!   [`focus_changes_notify_listeners_on_each_synchronous_request`].
+//! - `'Focus.of stops at the nearest Focus widget.'` (focus_scope_test.dart)
+//!   — now portable: `Focus::of`/`Focus::maybe_of`/`FocusScope::of` are
+//!   ported (`interaction/focus.rs`, ADR-0036's `OverlayScope` precedent).
+//!   **Adapted**: the oracle's own assertion walks Flutter's internal
+//!   node-parent depth from a descendant up to the root
+//!   (`Focus.of(element4).parent!.parent!.parent!.parent == root`) — a depth
+//!   this port has no reason to reproduce exactly (its own attach shape may
+//!   need a different number of hops; see `enclosing_focus_parent`'s doc).
+//!   Ported instead is the oracle's actual point, by identity rather than
+//!   hop-counting: `Focus::maybe_of` from a context between a `FocusScope`
+//!   and its first plain `Focus` descendant is `None` (the bare scope alone
+//!   does not satisfy it — `scopeOk: false`), and from a context past that
+//!   plain `Focus` it resolves EXACTLY that `Focus`'s own node, not the
+//!   enclosing `FocusScope`'s —
+//!   [`focus_of_stops_at_the_nearest_focus_widget_not_the_enclosing_scope`].
 //!
 //! ## Not ported
-//! - `Focus.of`/`Focus.maybeOf`/`FocusScope.of` (ambient lookup) and every
-//!   case whose only role for them is obtaining a node reference — already
-//!   documented not-ported in `interaction/focus.rs`'s module doc; a direct
-//!   node/scope reference stands in wherever the case is otherwise portable
-//!   (see *Adapted* notes above).
+//! - `Focus.maybeOf`/`FocusScope.of`'s `scopeOk: true` variant, and every
+//!   case whose only role for them is obtaining a node reference where a
+//!   direct node/scope reference already stands in (see *Adapted* notes
+//!   above) — the base `Focus::of`/`maybe_of`/`FocusScope::of` lookups
+//!   themselves are ported now (see *Ported cases* above and
+//!   `interaction/focus.rs`'s module doc).
 //! - `'Setting first focus requests focus for the scope properly.'`,
 //!   `'Can move focus in and out of FocusScope'`, `'Moving widget from one
 //!   scope to another retains focus'`, `'Moving FocusScopeNodes retains
@@ -228,15 +253,20 @@
 //!   (not ported) and `descendantsAreTraversable` (no FLUI flag); the
 //!   `onKeyEvent`/`descendantsAreFocusable` half is covered by
 //!   `a_rebuild_resets_dropped_focus_config`.
-//! - `'Focus.of stops at the nearest Focus widget.'`, `'Can traverse Focus
-//!   children.'` — `Focus.of` is not ported; the traversal-ordering half of
-//!   the latter is covered by `tab_traversal_follows_geometry_not_attach_order`.
+//! - `'Can traverse Focus children.'` — `Focus.of` (its only use here is
+//!   obtaining a starting node for `FocusNode.descendants`) is ported now,
+//!   but the `descendants` traversal-order walk this case actually asserts
+//!   is not: FLUI's `FocusNode` has no `descendants` iterator, and the
+//!   traversal-ordering contract it would prove is already covered by
+//!   `tab_traversal_follows_geometry_not_attach_order`. (`'Focus.of stops at
+//!   the nearest Focus widget.'` is ported now — see *Ported cases* above.)
 //! - `'Can set focus.'` — redundant with `'Can focus'` (ported) plus
 //!   `on_focus_change` coverage already in `interaction/focus.rs`.
 //!
 //! Widget → node mapping: `Focus` → `FocusNode`, `FocusScope` →
 //! `FocusScopeNode`, both via `flui-interaction`'s `routing` module.
 
+use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -789,6 +819,81 @@ fn removing_the_focused_widget_within_a_scope_does_not_transfer_focus() {
 
     manager.unfocus();
     manager.set_active_scope(None);
+    manager.root_scope().detach_node(scope.as_focus_node().id());
+}
+
+/// A leaf that records what `Focus::maybe_of` resolves to from its own
+/// build context — the widget-mounted counterpart of this file's node-level
+/// probes, now that `interaction/focus.rs` ports the lookup.
+///
+/// `Rc<RefCell<_>>`, not `Arc<Mutex<_>>`: `FocusNode` is owner-thread-only
+/// (`!Send + !Sync`, per ADR-0027), same reason `Mutex<Option<Arc<FocusNode>>>`
+/// itself would not be `Send`/`Sync` either.
+#[derive(Clone, StatelessView)]
+struct FocusOfProbe {
+    found: Rc<RefCell<Option<Arc<FocusNode>>>>,
+}
+
+impl StatelessView for FocusOfProbe {
+    fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
+        *self.found.borrow_mut() = Focus::maybe_of(ctx);
+        leaf()
+    }
+}
+
+/// Oracle: `'Focus.of stops at the nearest Focus widget.'`
+/// (`focus_scope_test.dart`, tag `3.44.0`). See this file's module doc for
+/// what is adapted (identity checks against known nodes, not a hop-counted
+/// walk up Flutter's own internal node-parent chain).
+#[test]
+fn focus_of_stops_at_the_nearest_focus_widget_not_the_enclosing_scope() {
+    let _guard = FOCUS_TEST_LOCK.lock();
+    let manager = FocusManager::global();
+    manager.unfocus();
+
+    let scope = FocusScopeNode::with_debug_label("focus-of-scope");
+    let plain = FocusNode::with_debug_label("focus-of-plain");
+    // Seeded `Some` so a probe that silently never ran would not be mistaken
+    // for a correct `None`.
+    let found_at_scope: Rc<RefCell<Option<Arc<FocusNode>>>> =
+        Rc::new(RefCell::new(Some(FocusNode::with_debug_label("seed"))));
+    let found_past_focus: Rc<RefCell<Option<Arc<FocusNode>>>> = Rc::new(RefCell::new(None));
+
+    let tree = FocusScope::with_external_node(
+        Arc::clone(&scope),
+        Column::new(vec![
+            FocusOfProbe {
+                found: Rc::clone(&found_at_scope),
+            }
+            .into_view()
+            .boxed(),
+            Focus::new(FocusOfProbe {
+                found: Rc::clone(&found_past_focus),
+            })
+            .focus_node(Arc::clone(&plain))
+            .into_view()
+            .boxed(),
+        ]),
+    );
+    let _laid = lay_out(tree, loose(200.0));
+
+    assert!(
+        found_at_scope.borrow().is_none(),
+        "Focus::maybe_of from a context whose nearest ancestor provider is \
+         the FocusScope's own node (not a plain Focus) must be None — the \
+         oracle's `Focus.maybeOf(element2), isNull`"
+    );
+    let resolved = found_past_focus
+        .borrow()
+        .clone()
+        .expect("the second probe's build must have run");
+    assert!(
+        Arc::ptr_eq(&resolved, &plain),
+        "Focus::maybe_of past the plain Focus must resolve THAT Focus's own \
+         node, not the enclosing FocusScope's — the oracle's `Focus.of(element4)`"
+    );
+
+    manager.unfocus();
     manager.root_scope().detach_node(scope.as_focus_node().id());
 }
 
