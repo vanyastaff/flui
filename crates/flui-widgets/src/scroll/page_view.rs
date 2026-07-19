@@ -25,13 +25,17 @@
 //!   not modeled — [`PageScrollPhysics`] is always applied (page snapping is
 //!   the only supported mode) and [`DimensionChangePolicy::KeepFractionalPage`]
 //!   already documents the `viewport_fraction > 1.0` gap it inherits.
+//!   [`PageView::cache_extent`]'s default DOES match the oracle's
+//!   `allowImplicitScrolling: false` default (`ScrollCacheExtent.viewport(0.0)`)
+//!   even though `allowImplicitScrolling` itself isn't modeled — see that
+//!   method's docs.
 //! - **`PageController::animateToPage`/`nextPage`/`previousPage`** (animated,
 //!   ticker-driven transitions) are not ported — [`PageController::jump_to_page`]
 //!   is the only programmatic navigation, matching `jumpToPage`.
 
 use std::rc::Rc;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use flui_animation::simulation::{ScrollSpringSimulation, Simulation, SpringDescription};
 use flui_foundation::{Listenable, ListenerId};
@@ -241,9 +245,13 @@ impl PageController {
     ///
     /// # Flutter parity
     ///
-    /// Uses the guarded [`ScrollMetrics::page`] formula (`PageMetrics.page`),
-    /// not the internal recompute `apply_viewport_dimension` drives — see
-    /// that method's docs. FLUI's `ScrollPosition` always "has pixels" (no
+    /// Mirrors `_PagePosition.page`'s `_cachedPage ?? getPageFromPixels(...)`:
+    /// consults [`ScrollPosition::cached_page`] first (the collapsed-viewport
+    /// case — a page tracked while the viewport reads `0.0`, which
+    /// `pixels / viewport_dimension` could never recover), falling back to
+    /// the guarded [`ScrollMetrics::page`] formula (`PageMetrics.page`) —
+    /// not the internal recompute `apply_viewport_dimension` drives — only
+    /// when not collapsed. FLUI's `ScrollPosition` always "has pixels" (no
     /// `hasPixels == false` state to mirror Flutter's pre-attach `null`), so
     /// [`ScrollPosition::has_applied_viewport_dimension`] is the substitute
     /// "not yet answerable" signal instead.
@@ -252,6 +260,9 @@ impl PageController {
         let position = self.scroll.position();
         if !position.has_applied_viewport_dimension() {
             return None;
+        }
+        if let Some(cached) = position.cached_page() {
+            return Some(cached);
         }
         let metrics = ScrollMetrics::from(&position);
         Some(metrics.page(self.viewport_fraction))
@@ -332,7 +343,12 @@ type OnPageChanged = Arc<dyn Fn(usize) + Send + Sync>;
 /// `padEnds`).
 #[derive(Clone, StatefulView)]
 pub struct PageView {
-    controller: PageController,
+    /// `None` when the caller never called [`PageView::controller`] — in
+    /// that case [`PageViewState`] owns a default [`PageController`] created
+    /// once in `create_state` and kept across rebuilds (see
+    /// [`PageView::controller`]'s docs for why this can't just default-clone
+    /// a fresh one on every build).
+    controller: Option<PageController>,
     scroll_direction: Axis,
     on_page_changed: Option<OnPageChanged>,
     cache_extent: Option<(f32, CacheExtentStyle)>,
@@ -341,23 +357,34 @@ pub struct PageView {
 
 impl PageView {
     /// A horizontally-scrolling page view over `children` (Flutter's default
-    /// `scrollDirection: Axis.horizontal`), with a fresh default
-    /// [`PageController`].
+    /// `scrollDirection: Axis.horizontal`). With no explicit
+    /// [`PageView::controller`], mirrors the oracle's default
+    /// `ScrollCacheExtent.viewport(0.0)` (`allowImplicitScrolling: false`'s
+    /// default) for [`PageView::cache_extent`] too.
     pub fn new(children: impl ViewSeq) -> Self {
         Self {
-            controller: PageController::new(),
+            controller: None,
             scroll_direction: Axis::Horizontal,
             on_page_changed: None,
-            cache_extent: None,
+            cache_extent: Some((0.0, CacheExtentStyle::Viewport)),
             children: children.into_boxed_vec(),
         }
     }
 
     /// Attach a [`PageController`] (position + page navigation). Multiple
     /// clones of the same controller share state.
+    ///
+    /// Omitting this entirely (the default) is NOT the same as calling it
+    /// with a fresh [`PageController::new`] on every rebuild: `PageViewState`
+    /// creates its own default controller exactly once (`create_state`) and
+    /// keeps it — and the current page it's tracking — alive across rebuilds
+    /// that don't pass an explicit controller. Mirrors Flutter's
+    /// `_PageViewState._initController`: `widget.controller ??
+    /// PageController()` only re-evaluates when `widget.controller` itself
+    /// changes, never unconditionally on every `build`.
     #[must_use]
     pub fn controller(mut self, controller: PageController) -> Self {
-        self.controller = controller;
+        self.controller = Some(controller);
         self
     }
 
@@ -380,6 +407,15 @@ impl PageView {
 
     /// Set how far beyond the visible page(s) to keep neighboring pages laid
     /// out and painted ([`Viewport::cache_extent`] passthrough).
+    ///
+    /// Defaults to `(0.0, CacheExtentStyle::Viewport)` — matching the
+    /// oracle's `PageView.scrollCacheExtent` default of
+    /// `ScrollCacheExtent.viewport(allowImplicitScrolling ? 1.0 : 0.0)`
+    /// evaluated at `allowImplicitScrolling: false` (the only value this
+    /// port models). `Viewport`'s own render-object default (250px, `Pixel`
+    /// style — `RenderViewport`'s general-purpose default, unrelated to
+    /// `PageView`) would otherwise silently keep neighboring pages laid out
+    /// and painted where the oracle keeps none.
     #[must_use]
     pub fn cache_extent(mut self, cache_extent: f32, style: CacheExtentStyle) -> Self {
         self.cache_extent = Some((cache_extent, style));
@@ -405,21 +441,48 @@ impl std::fmt::Debug for PageView {
 
 /// Persistent state for [`PageView`].
 ///
-/// Owns the `round(page)`-change listener registered on the controller's
-/// position in [`init_state`](ViewState::init_state) and removed in
+/// Owns the default [`PageController`] when the view config carries none
+/// (kept alive, current-page-and-all, across every rebuild that doesn't pass
+/// an explicit one — see [`PageView::controller`]), and the `round(page)`-
+/// change listener registered on the controller's position in
+/// [`init_state`](ViewState::init_state) / re-registered on a controller swap
+/// in [`did_update_view`](ViewState::did_update_view), removed in
 /// [`dispose`](ViewState::dispose).
 pub struct PageViewState {
     controller: PageController,
-    on_page_changed: Option<OnPageChanged>,
+    /// Shared, mutable slot for the current callback — NOT snapshotted into
+    /// the listener closure at registration time. `did_update_view` writes
+    /// through this `Arc<Mutex<_>>` on every rebuild; the listener (installed
+    /// once in `init_state`, or once per controller swap) dereferences it at
+    /// CALL time, so a callback change on an ordinary rebuild (no controller
+    /// swap) — including a `None` -> `Some` transition — is observed instead
+    /// of silently keeping whatever `init_state` captured.
+    on_page_changed: Arc<Mutex<Option<OnPageChanged>>>,
     last_reported_page: Arc<AtomicI64>,
-    page_listener_id: Option<ListenerId>,
+    /// The listenable the listener is registered on, alongside its id.
+    /// Stored together (not looked up fresh from `self.controller` at
+    /// removal time) because a controller SWAP changes which listenable
+    /// `self.controller.as_listenable()` resolves to — each notifier keeps
+    /// its own `ListenerId` counter, so removing by id from a DIFFERENT
+    /// notifier than the one that issued it can collide with an unrelated
+    /// listener there (silently removing the wrong one and leaking the
+    /// real one). Same shape `AnimatedBehavior::on_view_updated`
+    /// (`crates/flui-view/src/element/behavior.rs`) uses for a `Listenable`
+    /// swap.
+    page_listener: Option<(Arc<dyn Listenable>, ListenerId)>,
 }
 
 impl std::fmt::Debug for PageViewState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PageViewState")
             .field("controller", &self.controller)
-            .field("has_on_page_changed", &self.on_page_changed.is_some())
+            .field(
+                "has_on_page_changed",
+                &self
+                    .on_page_changed
+                    .lock()
+                    .is_ok_and(|guard| guard.is_some()),
+            )
             .field(
                 "last_reported_page",
                 &self.last_reported_page.load(Ordering::Relaxed),
@@ -428,47 +491,60 @@ impl std::fmt::Debug for PageViewState {
     }
 }
 
+impl PageViewState {
+    /// Subscribes to `self.controller`'s current listenable, tracking
+    /// `round(page)` changes and firing whatever callback
+    /// `self.on_page_changed` currently holds (dereferenced at call time —
+    /// see that field's docs). Stores the listenable alongside the returned
+    /// id so [`dispose`](ViewState::dispose) and a later controller swap in
+    /// [`did_update_view`](ViewState::did_update_view) remove from the exact
+    /// listenable this registered on.
+    fn register_page_listener(&mut self) {
+        let position = self.controller.position();
+        let viewport_fraction = self.controller.viewport_fraction();
+        let last_reported = Arc::clone(&self.last_reported_page);
+        let on_page_changed = Arc::clone(&self.on_page_changed);
+
+        let listenable = self.controller.as_listenable();
+        let listener_id = listenable.add_listener(Arc::new(move || {
+            if !position.has_applied_viewport_dimension() {
+                return;
+            }
+            let metrics = ScrollMetrics::from(&position);
+            // The guarded `page` formula clamps its numerator to >= 0.0
+            // before dividing, so `round()` never yields a negative value —
+            // the `.max(0.0)` here is belt-and-suspenders against a
+            // negative-zero rounding artifact, not a real overflow guard.
+            let current_page = metrics.page(viewport_fraction).round().max(0.0) as i64;
+            if current_page != last_reported.load(Ordering::SeqCst) {
+                last_reported.store(current_page, Ordering::SeqCst);
+                let callback = on_page_changed.lock().expect("not poisoned").clone();
+                if let Some(callback) = callback {
+                    callback(current_page as usize);
+                }
+            }
+        }));
+        self.page_listener = Some((listenable, listener_id));
+    }
+}
+
 impl StatefulView for PageView {
     type State = PageViewState;
 
     fn create_state(&self) -> Self::State {
+        let controller = self.controller.clone().unwrap_or_default();
         PageViewState {
-            controller: self.controller.clone(),
-            on_page_changed: self.on_page_changed.clone(),
-            last_reported_page: Arc::new(AtomicI64::new(self.controller.initial_page() as i64)),
-            page_listener_id: None,
+            last_reported_page: Arc::new(AtomicI64::new(controller.initial_page() as i64)),
+            controller,
+            on_page_changed: Arc::new(Mutex::new(self.on_page_changed.clone())),
+            page_listener: None,
         }
     }
 }
 
 impl ViewState<PageView> for PageViewState {
     fn init_state(&mut self, _ctx: &dyn BuildContext) {
-        let Some(on_page_changed) = self.on_page_changed.clone() else {
-            return;
-        };
-        let position = self.controller.position();
-        let viewport_fraction = self.controller.viewport_fraction();
-        let last_reported = Arc::clone(&self.last_reported_page);
-
-        let listener_id = self
-            .controller
-            .as_listenable()
-            .add_listener(Arc::new(move || {
-                if !position.has_applied_viewport_dimension() {
-                    return;
-                }
-                let metrics = ScrollMetrics::from(&position);
-                // The guarded `page` formula clamps its numerator to >= 0.0
-                // before dividing, so `round()` never yields a negative value —
-                // the `.max(0.0)` here is belt-and-suspenders against a
-                // negative-zero rounding artifact, not a real overflow guard.
-                let current_page = metrics.page(viewport_fraction).round().max(0.0) as i64;
-                if current_page != last_reported.load(Ordering::SeqCst) {
-                    last_reported.store(current_page, Ordering::SeqCst);
-                    on_page_changed(current_page as usize);
-                }
-            }));
-        self.page_listener_id = Some(listener_id);
+        self.register_page_listener();
     }
 
     fn build(&self, view: &PageView, _ctx: &dyn BuildContext) -> impl IntoView {
@@ -501,19 +577,51 @@ impl ViewState<PageView> for PageViewState {
     }
 
     fn did_update_view(&mut self, _old_view: &PageView, new_view: &PageView) {
-        // Track the current controller/callback so a parent rebuild handing
-        // a new configuration is reflected — same limitation as
-        // `ScrollableState::did_update_view`: a controller SWAP (not a
-        // mutation of the same shared controller) does not re-register the
-        // page-changed listener, which stays bound to whatever controller
-        // `init_state` saw.
-        self.controller = new_view.controller.clone();
-        self.on_page_changed.clone_from(&new_view.on_page_changed);
+        // The callback lives behind the shared slot the listener already
+        // dereferences at call time (see `on_page_changed`'s docs) — no
+        // listener re-registration needed for a callback-only change,
+        // including a `None` -> `Some` transition.
+        self.on_page_changed
+            .lock()
+            .expect("not poisoned")
+            .clone_from(&new_view.on_page_changed);
+
+        // No explicit controller in this build: keep the state-owned
+        // default (and its live subscription) across the rebuild — see
+        // `PageView::controller`'s docs for why this must NOT unconditionally
+        // adopt a fresh default every build.
+        let Some(new_controller) = &new_view.controller else {
+            return;
+        };
+
+        // Detect an actual controller SWAP by listenable identity — mirrors
+        // `AnimatedBehavior::on_view_updated`'s `Arc::ptr_eq` guard
+        // (`crates/flui-view/src/element/behavior.rs`): a rebuild that hands
+        // back the SAME controller (by far the common case when one IS
+        // explicitly supplied) must not tear down and rebuild the
+        // subscription.
+        let old_listenable = self.controller.as_listenable();
+        let new_listenable = new_controller.as_listenable();
+        let controller_swapped = !Arc::ptr_eq(&old_listenable, &new_listenable);
+
+        self.controller = new_controller.clone();
+
+        if controller_swapped {
+            // Remove from the OLD listenable specifically — never from
+            // whatever `self.controller` resolves to AFTER this assignment
+            // (a different notifier, whose own `ListenerId` counter could
+            // collide with this one and remove an unrelated listener while
+            // leaking this one).
+            if let Some((listenable, id)) = self.page_listener.take() {
+                listenable.remove_listener(id);
+            }
+            self.register_page_listener();
+        }
     }
 
     fn dispose(&mut self) {
-        if let Some(id) = self.page_listener_id.take() {
-            self.controller.as_listenable().remove_listener(id);
+        if let Some((listenable, id)) = self.page_listener.take() {
+            listenable.remove_listener(id);
         }
     }
 }

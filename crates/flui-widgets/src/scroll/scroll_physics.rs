@@ -96,17 +96,19 @@ impl ScrollMetrics {
     /// Mirrors `PageMetrics.page` (`widgets/page_view.dart`, tag `3.44.0`):
     /// `max(0.0, clamp(pixels, min, max)) / max(1.0, viewport_dimension *
     /// viewport_fraction)`. This is the *public*, defensively-guarded
-    /// formula PR1's `DimensionChangePolicy` docs flagged as distinct from
-    /// the internal recompute `apply_viewport_dimension` drives — used by
-    /// both `PageController::page` and `PageScrollPhysics` (`page_view.rs`,
-    /// PR2) so the two agree on exactly what "the current page" means.
+    /// formula — distinct from the internal recompute
+    /// `ScrollPosition::apply_viewport_dimension` drives — used by both
+    /// `PageController::page` and `PageScrollPhysics` (`page_view.rs`) so the
+    /// two agree on exactly what "the current page" means.
     ///
-    /// Does not special-case a collapsed (`viewport_dimension == 0.0`)
-    /// viewport's cached page (`DimensionChangePolicy::KeepFractionalPage`'s
-    /// private `cached_page`, which this snapshot has no access to) —
-    /// documented divergence, inherited from PR1's own note that a future
-    /// `page()`-style accessor is out of scope for reconciling with that
-    /// internal cache.
+    /// This snapshot alone never special-cases a collapsed
+    /// (`viewport_dimension == 0.0`) viewport's cached page
+    /// (`DimensionChangePolicy::KeepFractionalPage`'s private `cached_page`,
+    /// which `ScrollMetrics` has no access to) — it always divides
+    /// `pixels`/`viewport_dimension` as written above. `PageController::page`
+    /// (`page_view.rs`) is the one that consults the cached page first via
+    /// `ScrollPosition::cached_page`, falling back to this formula only when
+    /// the viewport isn't currently collapsed.
     #[must_use]
     pub fn page(&self, viewport_fraction: f32) -> f32 {
         let clamped = self
