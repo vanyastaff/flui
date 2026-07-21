@@ -82,7 +82,8 @@
 //! sliver_fixed_extent_list.rs`) is **fully eager** — unlike `SliverList`/
 //! `SliverGrid` (both routed through the lazy `SparseChildren` adaptor,
 //! `crates/flui-view/src/element/sliver_adaptor.rs`, and the subject of the
-//! builder-refresh fix landed in #453/#454), `SliverFixedExtentList` never
+//! lazy-adaptor builder-refresh fix — the `needs_resident_refresh` flag +
+//! `SparseChildren::refresh_resident`), `SliverFixedExtentList` never
 //! touches that adaptor at all — confirmed by grepping `sliver_adaptor.rs`
 //! for `FixedExtent` (zero hits). Its render counterpart,
 //! `RenderSliverFixedExtentList` (`crates/flui-objects/src/sliver/
@@ -100,8 +101,8 @@
 //! on FLUI's type at all.
 //!
 //! So: **not** "shares the merged builder-refresh path" and **not** "has its
-//! own copy of the pre-fix staleness bug" — the fix in #453/#454 is
-//! categorically inapplicable here, because there is no lazy adaptor for it
+//! own copy of the pre-fix staleness bug" — the lazy-adaptor builder-refresh
+//! fix is categorically inapplicable here, because there is no lazy adaptor for it
 //! to apply to. This is a new, broader finding, filed as its own Cross.H
 //! entry in `docs/ROADMAP.md` (not a re-file of the existing "no per-item
 //! key API" gap-1, which this port does not need — see case 3 below).
@@ -116,7 +117,7 @@
 //! 2. `'SliverFixedExtentList handles underflow when its children changes'`
 //!    — **out of scope, but pinned**: uses `.list(...)`, which maps to
 //!    FLUI's `::new(...)`, so the call itself compiles — see
-//!    [`sliver_fixed_extent_list_underflow_offscreen_children_stay_resident_pin`]
+//!    [`sliver_fixed_extent_list_offscreen_children_are_not_built_on_initial_window_pin`]
 //!    (`#[ignore]`d, verified failing) below, which demonstrates the
 //!    divergence directly rather than merely asserting it can't be
 //!    expressed.
@@ -356,28 +357,45 @@ fn sliver_fixed_extent_list_lays_out_children_in_order_after_rearranging() {
 /// underflow when its children changes'` (tag `3.44.0`).
 ///
 /// **`#[ignore]`d divergence pin, verified failing for the stated reason.**
-/// The oracle's core assertion: with 6 items of `itemExtent: 900` scrolled
-/// to `max_scroll_extent` (`5400 - 600 = 4800`), only the single onstage
-/// tail item ever has its `State` initialized — each child is a
+/// Named for the oracle behavior it asserts (offscreen children are *not
+/// built*), not for FLUI's divergent one. The oracle's first-phase
+/// assertion: with 6 items of `itemExtent: 900` scrolled to
+/// `max_scroll_extent` (`5400 - 600 = 4800`), only the single onstage tail
+/// item ever has its `State` initialized — each child is a
 /// `StateInitSpy(item, () => initializedChild.add(item), ...)`, and the
 /// oracle asserts `listEquals<String>(initializedChild, <String>['6'])` —
-/// Flutter's real `SliverMultiBoxAdaptorElement` never builds an
-/// off-window child at all, so `find.text('1')` through `find.text('5')`
-/// are `findsNothing` (a genuine RESIDENCY absence, not merely an offstage
-/// one — no `is_onstage_text` nuance applies here). FLUI's
-/// `SliverFixedExtentList` mounts and lays out every child unconditionally
-/// (module doc's headline finding), so all 6 items are found in the tree
-/// regardless of scroll position — this assertion is expected to, and
-/// does, fail.
+/// Flutter's real `SliverMultiBoxAdaptorElement` never builds an off-window
+/// child at all, so `find.text('1')` through `find.text('5')` are
+/// `findsNothing` (a genuine RESIDENCY absence, not merely an offstage one —
+/// no `is_onstage_text` nuance applies here). FLUI's `SliverFixedExtentList`
+/// mounts and lays out every child unconditionally (module doc's headline
+/// finding), so all 6 items are found in the tree regardless of scroll
+/// position — this assertion is expected to, and does, fail.
+///
+/// **Scope: this pin reproduces only the oracle's initial-window phase**,
+/// deliberately not its second phase (`jumpTo(0)` + swapping `children[0]`
+/// with `children[5]` then re-pumping, which the oracle expects to keep
+/// `initializedChild == ['6']` because the keyed `'6'` element is reused at
+/// the new head while the rest still never build). That second phase is
+/// omitted, not overlooked: (1) FLUI is fully eager, so the initial-window
+/// assertion above already diverges — a later child swap cannot change that
+/// outcome, and (2) the second phase's keyed-identity-preservation half
+/// additionally needs the still-open no-per-item-view-key API (the separate
+/// Cross.H gap the `SliverList` port filed), which `SliverFixedExtentList`'s
+/// bare-`ViewSeq` children cannot express today. Scoping the pin to
+/// initial-window laziness keeps it honest rather than adding a swap step
+/// that would be a no-op against an eager, keyless type; the name reflects
+/// that scope so a future reader does not unignore it expecting
+/// child-change/underflow coverage it never had.
 ///
 /// See the Cross.H entry this pin references (`docs/ROADMAP.md`) for the
 /// architectural gap (no lazy child-manager for this render object) that
-/// would need closing before this could pass.
+/// would need closing before the first-phase assertion could pass.
 #[test]
 #[ignore = "divergence pin: SliverFixedExtentList is eager (no lazy child-manager) — \
             see the 'SliverFixedExtentList/RenderSliverFixedExtentList is a fully eager' \
             Cross.H entry in docs/ROADMAP.md"]
-fn sliver_fixed_extent_list_underflow_offscreen_children_stay_resident_pin() {
+fn sliver_fixed_extent_list_offscreen_children_are_not_built_on_initial_window_pin() {
     const ITEM_EXTENT: f32 = 900.0;
     const VIEWPORT_HEIGHT: f32 = 600.0;
     // 6 items * 900px = 5400px total scroll extent; max_scroll_extent =
