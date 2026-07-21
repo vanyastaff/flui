@@ -199,6 +199,23 @@ pub(crate) struct SliverListAdaptorManager {
     /// Item factory. `Rc` so it's shared with `SliverList` and the
     /// behavior without cloning the closure.
     builder: Rc<dyn Fn(usize) -> Option<BoxedView>>,
+    /// Set by `SliverListAdaptorBehavior::on_view_updated` whenever the
+    /// parent hands this element a new `SliverList` view; consumed (and
+    /// cleared) by the next `service` call, which re-consults `builder` for
+    /// every currently-resident index via `SparseChildren::refresh_resident`.
+    /// Mirrors Flutter's `SliverChildBuilderDelegate.shouldRebuild => true`
+    /// default (`widgets/scroll_delegate.dart`, tag `3.44.0`): a delegate
+    /// change re-builds every resident child, not only newly-visible ones.
+    ///
+    /// The "next `service` call" is guaranteed to land in the SAME frame as
+    /// the view update, on two legs that must both stay unconditional:
+    /// `RenderBehavior::on_update` marks the render object needs-layout on
+    /// every view update (not gated on any setter change-flag), and
+    /// `RenderSliverList::perform_layout` emits its retain band on every
+    /// layout pass — so the frame's `service_child_requests` pass never takes
+    /// its empty early-return after a sliver view update. An early-out added
+    /// to either leg turns this flag into deferred-forever work.
+    needs_resident_refresh: bool,
 }
 
 impl std::fmt::Debug for SliverListAdaptorManager {
@@ -206,6 +223,7 @@ impl std::fmt::Debug for SliverListAdaptorManager {
         f.debug_struct("SliverListAdaptorManager")
             .field("built_children", &self.sparse_children.len())
             .field("host_element_id", &self.host_element_id)
+            .field("needs_resident_refresh", &self.needs_resident_refresh)
             .finish_non_exhaustive()
     }
 }
@@ -237,6 +255,18 @@ impl ChildManager for SliverListAdaptorManager {
             self.sparse_children
                 .retain_band(retain_first, retain_last, tree, owner);
 
+        // Refresh whatever survived eviction against the (possibly just-
+        // updated) builder — see `on_view_updated`'s doc comment for why
+        // this is needed at all; a resident child is otherwise never
+        // re-diffed against a new view (`SparseChildren::ensure`'s own doc).
+        let refresh_did_work = if self.needs_resident_refresh {
+            self.needs_resident_refresh = false;
+            self.sparse_children
+                .refresh_resident(&*self.builder, host, tree, owner, pipeline)
+        } else {
+            false
+        };
+
         // Build each requested index that is (a) within the retain band and
         // (b) not already built. We check first to avoid calling the builder
         // for already-present indices (idempotency without closure overhead)
@@ -264,7 +294,7 @@ impl ChildManager for SliverListAdaptorManager {
             }
         }
 
-        retain_did_work || any_new_build
+        retain_did_work || refresh_did_work || any_new_build
     }
 }
 
@@ -310,6 +340,7 @@ impl SliverListAdaptorBehavior {
                 sparse_children: SparseChildren::new(),
                 host_element_id: None,
                 builder: Rc::clone(&view.builder),
+                needs_resident_refresh: false,
             })),
         }
     }
@@ -440,7 +471,25 @@ where
         old_view: &SliverList,
         owner: &mut ElementOwner<'_>,
     ) {
+        // NOTE: `item_count` does NOT travel through this call —
+        // `RenderBehavior` has no `on_view_updated` override, so this hits
+        // the empty trait default. It reaches `RenderSliverList` via this
+        // behavior's `on_update` delegation (`RenderBehavior::on_update` →
+        // `RenderView::update_render_object` → `set_item_count`), a
+        // separate, already-working path this fix does not touch.
         self.inner.on_view_updated(core, old_view, owner);
+
+        // Refresh the stored builder and flag the resident children for
+        // re-consultation on the next `service` call — see
+        // `SliverListAdaptorManager::needs_resident_refresh`'s doc comment
+        // for the Flutter contract this mirrors and why it is needed at all
+        // (`SparseChildren::ensure` is otherwise idempotent for an
+        // already-built index, so without this an already-resident child
+        // would show stale content forever across a `pump_widget` root-swap
+        // that changes the backing item list/builder).
+        let mut manager = self.manager.lock();
+        manager.builder = Rc::clone(&core.view().builder);
+        manager.needs_resident_refresh = true;
     }
 
     fn render_id(&self) -> Option<RenderId> {
@@ -1026,6 +1075,7 @@ mod tests {
             sparse_children: SparseChildren::new(),
             host_element_id: Some(host),
             builder: make_builder(5),
+            needs_resident_refresh: false,
         };
 
         let did_work = manager.service(
@@ -1054,6 +1104,7 @@ mod tests {
             sparse_children: SparseChildren::new(),
             host_element_id: Some(host),
             builder: make_builder(5),
+            needs_resident_refresh: false,
         };
 
         // Request index 0, retain band [0, 1): service must build item 0.
@@ -1087,6 +1138,7 @@ mod tests {
             sparse_children: SparseChildren::new(),
             host_element_id: Some(host),
             builder: make_builder(5),
+            needs_resident_refresh: false,
         };
 
         // Seed two pre-built children at indices 0 and 1.

@@ -30,54 +30,48 @@
 //! later concern — Flutter's `updateChild`)" — i.e. a resident lazy child is
 //! never re-diffed against a new view at all, key or no key.
 //!
-//! Two compounding gaps, both confirmed by reading the source (not
-//! guessed), make the oracle's "(with keys)" scenarios unportable as
-//! specified, independent of each other:
+//! Two compounding gaps were confirmed by reading the source (not guessed)
+//! when this port was first written:
 //!
-//! 1. **No public per-item view-key API exists.** Flutter's oracle keys
-//!    each item with `ValueKey<int>(items[i])`. FLUI has a real
-//!    `ValueKey<T>` type (`flui_foundation::key::ValueKey`, re-exported at
-//!    `flui_view::ValueKey`) and a real Flutter-faithful keyed-matching
-//!    engine (`id_reconcile.rs`'s "Matching semantics (Flutter-faithful)"),
-//!    but the generic attachment combinator, `Keyed<V>`
-//!    (`flui_foundation::key::Keyed`, produced by
+//! 1. **No public per-item view-key API exists** — still true, still open.
+//!    Flutter's oracle keys each item with `ValueKey<int>(items[i])`. FLUI
+//!    has a real `ValueKey<T>` type (`flui_foundation::key::ValueKey`,
+//!    re-exported at `flui_view::ValueKey`) and a real Flutter-faithful
+//!    keyed-matching engine (`id_reconcile.rs`'s "Matching semantics
+//!    (Flutter-faithful)"), but the generic attachment combinator,
+//!    `Keyed<V>` (`flui_foundation::key::Keyed`, produced by
 //!    `WithKey::with_value_key`), has **no `View` implementation anywhere
 //!    in the workspace** — confirmed by an exhaustive `impl View for
 //!    Keyed` search across every crate; the only matches are unrelated
 //!    test-local types that shadow the name. Nor does `SizedBox`/`Text`
 //!    carry a bespoke `.key(...)` builder of their own (unlike
 //!    `AnimatedSwitcher`'s purpose-built `KeyedEntry`). There is therefore
-//!    no way, through any public composition API, to attach a `ValueKey`
-//!    to a plain leaf view at all — `Keyed<SizedBox>` cannot be used
+//!    still no way, through any public composition API, to attach a
+//!    `ValueKey` to a plain leaf view — `Keyed<SizedBox>` cannot be used
 //!    anywhere a `View`/`BoxedView`/`IntoView` is expected; it does not
-//!    compile.
-//! 2. **Independent of (1):** `SliverListAdaptorManager`'s item-builder
-//!    closure (`crates/flui-view/src/element/sliver_adaptor.rs`) is
-//!    captured exactly once, in `SliverListAdaptorBehavior::new`, which
-//!    only runs on the element's first mount (`SliverList::create_element`).
-//!    Neither `on_update` nor `on_view_updated` (both present on
-//!    `SliverListAdaptorBehavior`) ever refresh `self.manager`'s stored
-//!    `builder` from the new `SliverList` view — both delegate wholly to
-//!    the generic `RenderBehavior<SliverList>`, which only pushes
-//!    `item_count` into the render object
-//!    (`RenderSliverList::set_item_count`). So even a **keyless** rebuild
-//!    that swaps a `SliverList`'s backing item list/builder in place (a
-//!    `pump_widget` root-swap, same type/slot, matching Flutter's own
-//!    `ListView.builder(itemBuilder: newClosure)`) leaves any
-//!    **already-resident** child showing its stale old content forever
-//!    (gap 1's "idempotent, no rebuild"), and any **newly-requested**
-//!    child (one that scrolls into view for the first time after the
-//!    swap) is still built from the **old, pre-swap** closure — the new
-//!    items never reach the sliver at all post-mount.
-//!
-//! Both are confirmed empirically below, not just by static reading: every
-//! oracle case that mutates a `SliverList`'s backing item list/builder
-//! *after* the first `pump_widget` was red-checked against gap 2. Five of
-//! them (cases 1, 2, 5, 6, 7) actually trip it and are pinned `#[ignore]`d
-//! rather than narrowed to pass; case 3 (dropping only the LAST item)
-//! turns out not to exercise gap 2 at all and is a genuine pass — see its
-//! own entry in the ledger below for why. Filed as a new Cross.H entry in
-//! `docs/ROADMAP.md` (search `SliverListAdaptorManager`).
+//!    compile. A widget-API design decision out of scope for this port;
+//!    remains filed to Cross.H (`docs/ROADMAP.md`).
+//! 2. **Independent of (1) — fixed.** `SliverListAdaptorManager`'s
+//!    item-builder closure (`crates/flui-view/src/element/sliver_adaptor.rs`)
+//!    used to be captured exactly once, in `SliverListAdaptorBehavior::new`,
+//!    and never refreshed: `SliverListAdaptorBehavior::on_view_updated` now
+//!    pushes the new view's builder into the manager and sets
+//!    `SliverListAdaptorManager::needs_resident_refresh`, which the next
+//!    `service` call consumes by re-consulting the (now current) builder
+//!    for every resident index via the new
+//!    `SparseChildren::refresh_resident` — mirroring Flutter's
+//!    `SliverChildBuilderDelegate.shouldRebuild => true` default
+//!    (`widgets/scroll_delegate.dart`, tag `3.44.0`): a type-compatible
+//!    result reconciles the existing child in place (`ElementTree::update`,
+//!    preserving identity/state); an incompatible type evicts and remounts.
+//!    All 7 attempted cases below — 5 of which were pinned `#[ignore]`d
+//!    against this exact gap when this port was first written — now pass
+//!    unmodified. `SliverGridLazyAdaptorManager` (`sliver_adaptor.rs`, a
+//!    structurally-parallel but separately-implemented manager backing
+//!    `GridView::builder`) has the identical pre-fix bug and was
+//!    confirmed, by inspection, NOT to share code with `SliverListAdaptorManager`
+//!    (no generic layer exists today — see that struct's own module
+//!    comment) — left open, out of scope for this fix.
 //!
 //! A third candidate finding was raised and then RETRACTED during review: an
 //! earlier draft of this port misdiagnosed a probe artifact as a FLUI
@@ -143,49 +137,32 @@
 //!   state when both resident children lose their layout offset"
 //!   regression target).
 //!
-//! Ported (7 of 8 upstream names attempted; 2 real/green, 5 red-checked
-//! `#[ignore]`d pins, all five confirmed rooted in gap 2 specifically — not
-//! merely "still failing somewhere" — see the per-test doc comment for
-//! each one's exact evidence). Total recounted against this file's own
-//! `#[test]` functions: 7 attempted + 1 out-of-scope = 8, matching the
-//! oracle's own count.
+//! Ported (7 of 8 upstream names attempted; all 7 real/green). Total
+//! recounted against this file's own `#[test]` functions: 7 attempted + 1
+//! out-of-scope = 8, matching the oracle's own count.
 //! - `'SliverList reverse children (with keys)'` →
-//!   [`sliver_list_reverse_children_keeps_scroll_offset_and_shows_reversed_window`]
-//!   (`#[ignore]`d — gap 2; its first assertion block, before any
-//!   `pump_widget`, is real and passes).
+//!   [`sliver_list_reverse_children_keeps_scroll_offset_and_shows_reversed_window`].
 //! - `'SliverList replace children (with keys)'` →
-//!   [`sliver_list_replace_children_keeps_scroll_offset_and_shows_new_values`]
-//!   (`#[ignore]`d — gap 2; its first assertion block also passes).
+//!   [`sliver_list_replace_children_keeps_scroll_offset_and_shows_new_values`].
 //! - `'SliverList replace with shorter children list (with keys)'` →
 //!   [`sliver_list_replace_with_shorter_list_shifts_scroll_offset_by_removed_extent`]
-//!   — **real, green**. Dropping the LAST item never changes any surviving
-//!   index's VALUE (only tail eviction and the offset reclamp are
-//!   exercised, both gap-2-independent), so this scenario happens not to
-//!   need the builder refresh gap 2 is missing; see its own doc comment for
-//!   why that is a genuine (not vacuous) pass.
+//!   — passed even before the gap-2 fix landed: dropping the LAST item
+//!   never changes any surviving index's VALUE (only tail eviction and the
+//!   offset reclamp are exercised, both independent of gap 2); see its own
+//!   doc comment for why that is a genuine, not vacuous, pass regardless.
 //! - `'SliverList should layout first child in case of child reordering'`
-//!   → [`sliver_list_reordering_two_items_keeps_both_visible`] — **real,
-//!   green**, but a weaker regression guard than the oracle intends; see
-//!   its own doc comment.
+//!   → [`sliver_list_reordering_two_items_keeps_both_visible`] — the
+//!   oracle's own asserts are presence-only; strengthened here with
+//!   position-level asserts (see its own doc comment) now that the fix
+//!   makes the reorder itself meaningful to check.
 //! - `'SliverList should recalculate inaccurate layout offset case 1'` →
-//!   [`sliver_list_recalculates_offset_when_item_prepended_while_scrolled_to_end`]
-//!   (`#[ignore]`d — gap 2, confirmed at the post-insert block: value 15
-//!   should be onstage at the shifted-by-one index 16, but the stale
-//!   builder never builds it — its pre-insert instance survives offstage
-//!   at old index 15, and no onstage `"Tile 15"` ever appears).
+//!   [`sliver_list_recalculates_offset_when_item_prepended_while_scrolled_to_end`].
 //! - `'SliverList should recalculate inaccurate layout offset case 2'` →
-//!   [`sliver_list_recalculates_offset_when_items_swapped_while_scrolled_to_end`]
-//!   (`#[ignore]`d — gap 2, confirmed at the post-swap block: `"Tile 3"`,
-//!   the value swapped into the resident band, never gets built anywhere).
+//!   [`sliver_list_recalculates_offset_when_items_swapped_while_scrolled_to_end`].
 //! - `'SliverList should start to perform layout from the initial child
 //!   when there is no valid offset'` (regression test for
 //!   flutter/flutter#66198) →
-//!   [`sliver_list_falls_back_to_initial_child_when_no_valid_layout_offset_survives`]
-//!   (`#[ignore]`d — gap 2, confirmed at the post-shrink block: `"Tile 0"`
-//!   (stale pre-shrink content) is still onstage where the reclamped
-//!   `"Marker 0"`/`"Marker 1"` should be; the offset-reclamp half is
-//!   independently real, per `scroll_controller_test.rs`'s
-//!   `resizing_the_viewport_reclamps_an_already_scrolled_position`).
+//!   [`sliver_list_falls_back_to_initial_child_when_no_valid_layout_offset_survives`].
 //!
 //! Out of scope (1 upstream name):
 //! - `'SliverList.builder respects semanticIndexOffset'` — no
@@ -197,10 +174,10 @@
 //!   out-of-scope by every other port in this directory that touches
 //!   semantics.
 //!
-//! Content sweep (`git -C /mnt/data/dev/flutter grep -l SliverList 3.44.0
-//! -- packages/flutter/test/`, beyond the oracle file above): 49 files hit
-//! the string. `packages/flutter/test/widgets/slivers_test.dart` alone
-//! carries 8 more `testWidgets('SliverList...')` cases of its own —
+//! Content sweep (a `SliverList` string search across
+//! `packages/flutter/test/` at tag `3.44.0`, beyond the oracle file above):
+//! 49 files hit the string. `packages/flutter/test/widgets/slivers_test.dart`
+//! alone carries 8 more `testWidgets('SliverList...')` cases of its own —
 //! `'SliverList can handle inaccurate scroll offset due to changes in
 //! children list'`, `'SliverList handles 0 scrollOffsetCorrection'`,
 //! `'SliverList.builder can build children'`, and others — plus
@@ -412,22 +389,16 @@ fn is_onstage_text(laid: &LaidOut, text: &str, viewport_height: f32) -> bool {
 /// Flutter parity: `sliver_list_test.dart` `'SliverList reverse children
 /// (with keys)'` (tag `3.44.0`).
 ///
-/// **Red-checked, `#[ignore]`d** — confirmed failing (not merely
-/// hypothesized) by running it un-ignored: after the `pump_widget` with the
-/// reversed item list, `find_text("Tile 1")`/`find_text("Tile 0")` are
-/// absent and the STALE pre-reversal content (`"Tile 19"`/`"Tile 18"`) is
-/// still what's resident, because `SliverListAdaptorManager`'s builder
-/// closure never refreshes past first mount (module doc gap 2). This is
-/// not a bare-residency probe artifact (the module doc's onstage-vs-
-/// residency finding does not apply here): at `SCROLL_POSITION = 5400`
-/// with `ITEM_HEIGHT = 300`, item 19 (`[5700, 6000)`) fully overlaps the
-/// strictly-visible window `[5400, 5900)`, so it is genuinely onstage with
-/// the wrong (stale) content, not merely cache-resident-but-offscreen.
-/// Filed to Cross.H (`docs/ROADMAP.md`, `SliverListAdaptorManager`).
+/// Before the gap-2 fix (module doc), this failed reproducibly: after the
+/// `pump_widget` with the reversed item list, `find_text("Tile 19")` still
+/// found the STALE pre-reversal content — genuinely onstage with the wrong
+/// value (item 19, `[5700, 6000)`, fully overlaps the strictly-visible
+/// window `[5400, 5900)` at `SCROLL_POSITION = 5400`/`ITEM_HEIGHT = 300`,
+/// so this was never a bare-residency probe artifact of the kind the
+/// module doc's onstage-vs-residency finding describes). Passes unmodified
+/// now that `SliverListAdaptorManager` refreshes resident children on a
+/// view update.
 #[test]
-#[ignore = "documented divergence: SliverListAdaptorManager's item-builder \
-            closure is captured once at mount and never refreshed on a \
-            pump_widget root-swap — see module doc gap 2; filed to Cross.H"]
 fn sliver_list_reverse_children_keeps_scroll_offset_and_shows_reversed_window() {
     let items: Vec<i32> = (0..20).collect();
     const ITEM_HEIGHT: f32 = 300.0;
@@ -475,18 +446,11 @@ fn sliver_list_reverse_children_keeps_scroll_offset_and_shows_reversed_window() 
 /// Flutter parity: `sliver_list_test.dart` `'SliverList replace children
 /// (with keys)'` (tag `3.44.0`).
 ///
-/// **Red-checked, `#[ignore]`d** — same root cause as case 1 (module doc
-/// gap 2), and same non-artifact confirmation: this scene uses the
-/// identical `SCROLL_POSITION`/`ITEM_HEIGHT` as case 1, so item 18
-/// (`[5400, 5700)`) is likewise genuinely onstage within `[5400, 5900)`.
-/// After replacing the item list with `items.map(|i| i + 100)`, the stale
-/// pre-swap builder means `"Tile 18"`/`"Tile 19"` remain resident (and
-/// onstage, with the wrong content) and `"Tile 118"`/`"Tile 119"` never
-/// appear anywhere. Filed to Cross.H.
+/// Before the gap-2 fix (module doc), this failed the same way as case 1
+/// and for the same non-artifact reason: identical `SCROLL_POSITION`/
+/// `ITEM_HEIGHT`, so item 18 (`[5400, 5700)`) is likewise genuinely onstage
+/// within `[5400, 5900)`. Passes unmodified now.
 #[test]
-#[ignore = "documented divergence: SliverListAdaptorManager's item-builder \
-            closure is captured once at mount and never refreshed on a \
-            pump_widget root-swap — see module doc gap 2; filed to Cross.H"]
 fn sliver_list_replace_children_keeps_scroll_offset_and_shows_new_values() {
     let items: Vec<i32> = (0..20).collect();
     const ITEM_HEIGHT: f32 = 300.0;
@@ -594,19 +558,21 @@ fn sliver_list_replace_with_shorter_list_shifts_scroll_offset_by_removed_extent(
 /// child in case of child reordering'` (tag `3.44.0`) — regression test for
 /// <https://github.com/flutter/flutter/issues/35904>.
 ///
-/// **Real, green** — but a strictly weaker regression guard than the
-/// oracle's, and honestly so: with only 2 small items in a 500px viewport,
-/// neither item ever leaves the resident/visible band across the reorder,
-/// so `SliverListAdaptorManager` never calls its (stale — module doc gap 2)
-/// builder again at all; both items simply stay mounted from the first
-/// build regardless of order. `find_text` presence alone cannot
-/// distinguish "correctly re-laid-out after reordering" from "untouched
-/// because nothing was ever re-requested" — both produce the same
-/// observation here. The `find_all_by_render_type` count below is added
-/// beyond the oracle's own assertions to at least rule out the one failure
-/// mode this scenario COULD still expose (a duplicate/leaked child from a
-/// broken reorder), which is a real, meaningful (if narrower) regression
-/// guard.
+/// **Real, green.** With only 2 small items in a 500px viewport, neither
+/// item ever leaves the resident/visible band across the reorder, so the
+/// oracle's own presence-only asserts (`find.text(...) findsOneWidget`)
+/// cannot by themselves distinguish "correctly re-laid-out after
+/// reordering" from "untouched because nothing was ever re-requested" —
+/// both produce the same observation. Before the gap-2 fix (module doc)
+/// landed, that distinction mattered: neither item would have been
+/// re-requested, so presence-only checks would have passed vacuously. Now
+/// that a view update refreshes resident content
+/// (`SliverListAdaptorManager::needs_resident_refresh` →
+/// `SparseChildren::refresh_resident`), the reorder is genuinely reflected
+/// in the render tree, so this file adds position-level asserts — an
+/// FLUI-added strengthening beyond the oracle's own presence-only checks —
+/// to prove it, plus the resident-count check that was already here to
+/// rule out a duplicate/leaked child from a broken reorder.
 #[test]
 fn sliver_list_reordering_two_items_keeps_both_visible() {
     let mut laid = harness::pump_widget(
@@ -615,8 +581,16 @@ fn sliver_list_reordering_two_items_keeps_both_visible() {
     );
     settle(&mut laid);
 
-    assert!(laid.find_text("Tile 1").is_some());
-    assert!(laid.find_text("Tile 2").is_some());
+    let tile1 = laid
+        .find_text("Tile 1")
+        .expect("'Tile 1' mounted before reorder");
+    let tile2 = laid
+        .find_text("Tile 2")
+        .expect("'Tile 2' mounted before reorder");
+    assert!(
+        laid.absolute_offset(tile1).dy.get() < laid.absolute_offset(tile2).dy.get(),
+        "before the reorder, 'Tile 1' (index 0) must sit above 'Tile 2' (index 1)"
+    );
     assert_eq!(
         laid.find_all_by_render_type("RenderParagraph").len(),
         2,
@@ -629,8 +603,19 @@ fn sliver_list_reordering_two_items_keeps_both_visible() {
     ]));
     settle(&mut laid);
 
-    assert!(laid.find_text("Tile 1").is_some());
-    assert!(laid.find_text("Tile 2").is_some());
+    let tile1 = laid
+        .find_text("Tile 1")
+        .expect("'Tile 1' mounted after reorder");
+    let tile2 = laid
+        .find_text("Tile 2")
+        .expect("'Tile 2' mounted after reorder");
+    assert!(
+        laid.absolute_offset(tile2).dy.get() < laid.absolute_offset(tile1).dy.get(),
+        "FLUI-added strengthening beyond the oracle's presence-only asserts: after the \
+         reorder, 'Tile 2' (now at index 0) must sit ABOVE 'Tile 1' (now at index 1) — \
+         the vertical order must actually flip, proving the reorder reached the render \
+         tree rather than merely that neither item vanished"
+    );
     assert_eq!(
         laid.find_all_by_render_type("RenderParagraph").len(),
         2,
@@ -646,17 +631,16 @@ fn sliver_list_reordering_two_items_keeps_both_visible() {
 /// inaccurate layout offset case 1'` (tag `3.44.0`) — regression test for
 /// <https://github.com/flutter/flutter/issues/42142>.
 ///
-/// **Red-checked, `#[ignore]`d** — gap 2 (module doc): after the insert,
-/// value 15 should occupy the shifted-by-one index 16 and be onstage
-/// there, but the stale pre-insert builder never builds it — the stale
-/// world instead leaves value 15's pre-insert instance at its old index
-/// 15, whose slot is offstage after the insert, so the onstage instance
-/// at index 16 never appears and [`is_onstage_text`] stays false either
-/// way the failure is read. The first assertion block (offset 800, before the
-/// insert) uses [`is_onstage_text`] rather than bare `find_text`, since
-/// its boundary items (`"Tile 15"` absent, `"Tile 16"`..`"Tile 19"`
-/// present) previously misfired on cache-resident-but-offscreen content —
-/// see the module doc's retracted-finding note.
+/// Before the gap-2 fix (module doc), this failed reproducibly: after the
+/// insert, value 15 should occupy the shifted-by-one index 16 and be
+/// onstage there, but the stale pre-insert builder never built it —
+/// value 15's pre-insert instance stayed at its old (now offstage) index
+/// 15 instead, so no onstage `"Tile 15"` ever appeared. Passes unmodified
+/// now. The first assertion block (offset 800, before the insert) uses
+/// [`is_onstage_text`] rather than bare `find_text`, since its boundary
+/// items (`"Tile 15"` absent, `"Tile 16"`..`"Tile 19"` present) would
+/// otherwise misfire on cache-resident-but-offscreen content — see the
+/// module doc's retracted-finding note.
 ///
 /// `tester.drag(find.text('Tile 2'), Offset(0, -1000))` is substituted with
 /// a direct `jump_to(800.0)` — the exact value Flutter's own clamping
@@ -664,9 +648,6 @@ fn sliver_list_reordering_two_items_keeps_both_visible() {
 /// content in a 200px viewport → `max_scroll_extent` = 800), per this
 /// file's module doc.
 #[test]
-#[ignore = "documented divergence: SliverListAdaptorManager's item-builder \
-            closure is captured once at mount and never refreshed on a \
-            pump_widget root-swap — see module doc gap 2; filed to Cross.H"]
 fn sliver_list_recalculates_offset_when_item_prepended_while_scrolled_to_end() {
     let mut items: Vec<i32> = (0..20).collect();
     const ITEM_HEIGHT: f32 = 50.0;
@@ -720,23 +701,21 @@ fn sliver_list_recalculates_offset_when_item_prepended_while_scrolled_to_end() {
 /// inaccurate layout offset case 2'` (tag `3.44.0`) — regression test for
 /// <https://github.com/flutter/flutter/issues/42142>.
 ///
-/// **Red-checked, `#[ignore]`d** — gap 2 (module doc), confirmed at the
+/// Before the gap-2 fix (module doc), this failed reproducibly at the
 /// post-swap block: `items.swap(3, 19)` moves value 3 into the resident
-/// band (index 19), but the stale pre-swap builder never rebuilds that
-/// index, so `"Tile 3"` never appears anywhere in the tree — not merely
-/// offstage. `"Tile 14"`/`"Tile 15"` immediately before it in the same
-/// block are genuinely absent from the STRICT visible window either way
-/// (unaffected by the swap, which only touches indices 3 and 19), so they
-/// pass under [`is_onstage_text`] regardless of gap 2 — using bare
-/// `find_text` there would have wrongly flagged them as failures too, the
-/// same probe-artifact class the module doc's retracted finding describes.
+/// band (index 19), but the stale pre-swap builder never rebuilt that
+/// index, so `"Tile 3"` never appeared anywhere in the tree — not merely
+/// offstage. Passes unmodified now. `"Tile 14"`/`"Tile 15"` immediately
+/// before it in the same block are genuinely absent from the STRICT
+/// visible window either way (unaffected by the swap, which only touches
+/// indices 3 and 19), so they pass under [`is_onstage_text`] regardless of
+/// the fix — using bare `find_text` there would have wrongly flagged them
+/// as failures too, the same probe-artifact class the module doc's
+/// retracted finding describes.
 ///
 /// `tester.drag(find.text('Tile 2'), Offset(0, -1000))` is substituted the
 /// same way as the sibling case above (`jump_to(800.0)`).
 #[test]
-#[ignore = "documented divergence: SliverListAdaptorManager's item-builder \
-            closure is captured once at mount and never refreshed on a \
-            pump_widget root-swap — see module doc gap 2; filed to Cross.H"]
 fn sliver_list_recalculates_offset_when_items_swapped_while_scrolled_to_end() {
     let mut items: Vec<i32> = (0..20).collect();
     const ITEM_HEIGHT: f32 = 50.0;
@@ -785,22 +764,22 @@ fn sliver_list_recalculates_offset_when_items_swapped_while_scrolled_to_end() {
 /// (tag `3.44.0`) — regression test for
 /// <https://github.com/flutter/flutter/issues/66198>.
 ///
-/// **Red-checked, `#[ignore]`d** — gap 2 (module doc), confirmed at the
-/// post-shrink block: the render object's own `item_count` DOES update on
-/// `pump_widget` (`RenderSliverList::set_item_count`, wired through the
+/// Before the gap-2 fix (module doc), this failed reproducibly at the
+/// post-shrink block. The render object's own `item_count` already updated
+/// on `pump_widget` (`RenderSliverList::set_item_count`, wired through the
 /// generic `update_render_object`, independent of the builder-staleness
-/// gap), so the geometry half genuinely works — `controller.pixels()`
+/// gap), so the geometry half always worked — `controller.pixels()`
 /// reclamps to `0.0` once the shrunk content's `max_scroll_extent` drops
 /// below the current position, the same real path
 /// `scroll_controller_test.rs`'s
-/// `resizing_the_viewport_reclamps_an_already_scrolled_position` pins. But
-/// the content half does not: once offset 0 makes the tail band (logical
-/// indices 0..3) the resident/onstage band, the manager calls the STALE
+/// `resizing_the_viewport_reclamps_an_already_scrolled_position` pins. The
+/// content half did not: once offset 0 made the tail band (logical indices
+/// 0..3) the resident/onstage band, the manager called the STALE
 /// pre-shrink builder (23-item closure) for those indices, returning
 /// `"Tile 0"`/`"Tile 1"`/`"Tile 2"` instead of the expected placeholder +
-/// `"Marker 0"` + `"Marker 1"`. `"Tile 0"` is genuinely onstage with this
+/// `"Marker 0"` + `"Marker 1"` — `"Tile 0"` was genuinely onstage with this
 /// wrong content (item 0 is `[0, 50)`, fully inside the `[0, 200)` visible
-/// window) — not a residency-vs-onstage artifact.
+/// window), not a residency-vs-onstage artifact. Passes unmodified now.
 ///
 /// The first assertion block (offset 900, before the shrink) uses
 /// [`is_onstage_text`] rather than bare `find_text` for the same reason as
@@ -813,9 +792,6 @@ fn sliver_list_recalculates_offset_when_items_swapped_while_scrolled_to_end() {
 /// viewport → `max_scroll_extent` = 900, matching the oracle's own
 /// `expect(controller.offset, 900.0)`.
 #[test]
-#[ignore = "documented divergence: SliverListAdaptorManager's item-builder \
-            closure is captured once at mount and never refreshed on a \
-            pump_widget root-swap — see module doc gap 2; filed to Cross.H"]
 fn sliver_list_falls_back_to_initial_child_when_no_valid_layout_offset_survives() {
     const VIEWPORT_HEIGHT: f32 = 200.0;
     const DRAG_CLAMPED_OFFSET: f32 = 900.0;

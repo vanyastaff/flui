@@ -22,6 +22,7 @@ use flui_rendering::parent_data::SliverMultiBoxAdaptorParentData;
 use flui_rendering::pipeline::PipelineOwner;
 use parking_lot::RwLock;
 
+use crate::BoxedView;
 use crate::ElementOwner;
 use crate::tree::ElementNode;
 use crate::tree::ElementTree;
@@ -184,6 +185,103 @@ impl SparseChildren {
         }
         any_evicted
     }
+
+    /// Re-invoke `builder` for every currently-resident logical index and
+    /// reconcile the result against that index's existing child.
+    ///
+    /// Mirrors Flutter's `SliverChildBuilderDelegate.shouldRebuild` contract
+    /// (`widgets/scroll_delegate.dart`, tag `3.44.0`): the default
+    /// implementation returns `true` unconditionally, so a new delegate (a
+    /// new `SliverList` view reaching the adaptor element) re-consults the
+    /// builder for every resident child, not only newly-visible ones.
+    /// `Self::ensure` is otherwise idempotent for an already-built index (see
+    /// its own doc) — this is the mechanism that closes that gap for a
+    /// caller that has just learned its builder changed.
+    ///
+    /// A same-type result reconciles the existing child in place via
+    /// [`ElementTree::update`] (preserving its identity/state — Flutter's
+    /// `Element.updateChild`); a type change, or the index falling out of
+    /// the (possibly-shrunk) data source, evicts and — if the builder still
+    /// returns a view — remounts a fresh child (Flutter's dispose-and-
+    /// remount on an incompatible widget). Sparse children never carry a
+    /// key (no lazy-sliver call site attaches one), so the compatibility
+    /// check is type-only — the same reduction [`View::can_update`] makes
+    /// when both sides are keyless.
+    ///
+    /// `host` is the adaptor element's own id, needed only for the
+    /// remount-on-type-change fallback (`Self::ensure` already requires it).
+    ///
+    /// Returns `true` if any resident child was updated, evicted, or
+    /// remounted — callers use this the same way as [`Self::retain_band`],
+    /// to decide whether to mark the sliver dirty for re-layout.
+    pub(crate) fn refresh_resident(
+        &mut self,
+        builder: &dyn Fn(usize) -> Option<BoxedView>,
+        host: ElementId,
+        tree: &mut ElementTree,
+        owner: &mut ElementOwner<'_>,
+        pipeline: &Arc<RwLock<PipelineOwner>>,
+    ) -> bool {
+        let resident: Vec<(usize, ElementId)> = self.iter_built().collect();
+        let mut any_work = false;
+        for (logical_index, existing) in resident {
+            match builder(logical_index) {
+                None => {
+                    // Past the end of a data source that shrank. The render
+                    // object's own item_count already narrows independently
+                    // (`RenderSliverList::set_item_count`, a separate path
+                    // this method does not touch), so `retain_band` ordinarily
+                    // evicts this index before `refresh_resident` ever sees
+                    // it; handled here too so a surviving stale index cannot
+                    // leak rather than silently persist.
+                    self.evict(logical_index, tree, owner);
+                    any_work = true;
+                }
+                Some(view) => {
+                    if resident_type_matches(tree, existing, view.0.as_ref()) {
+                        tree.update(existing, view.0.as_ref(), owner);
+                        // Mirrors the dense reconciler's post-update scheduling
+                        // (`tree/id_reconcile.rs`): an update that left the
+                        // child clean (its own `should_skip_rebuild`
+                        // memoization fired) must not be pushed onto the
+                        // build heap.
+                        if let Some(node) = tree.get(existing)
+                            && node.element().is_dirty()
+                        {
+                            let depth = node.depth();
+                            owner.schedule_build_for(existing, depth);
+                        }
+                    } else {
+                        self.evict(logical_index, tree, owner);
+                        self.ensure(logical_index, view.0.as_ref(), host, tree, owner, pipeline);
+                    }
+                    any_work = true;
+                }
+            }
+        }
+        any_work
+    }
+}
+
+/// Whether `existing`'s live element can be updated in place by `new` — a
+/// same-type check only. Sparse-lazy children never carry a [`ViewKey`]
+/// (no call site in this module attaches one), so this is the reduction
+/// [`View::can_update`]'s type-then-key check collapses to when both sides
+/// are keyless — mirrors `tree/id_reconcile.rs`'s `can_update_by_id` minus
+/// the key stage, which would be a no-op here regardless.
+///
+/// [`ViewKey`]: flui_foundation::ViewKey
+fn resident_type_matches(tree: &ElementTree, existing: ElementId, new: &dyn View) -> bool {
+    debug_assert!(
+        new.key().is_none(),
+        "a lazy-sliver builder produced a KEYED view: resident_type_matches \
+         skips the key stage of `can_update_by_id` on the invariant that \
+         sparse children are keyless — add key comparison here (Flutter \
+         remounts on key mismatch) before letting `Keyed<V>` views reach \
+         lazy children"
+    );
+    tree.get(existing)
+        .is_some_and(|node| node.element().view_type_id() == new.view_type_id())
 }
 
 // Called from `SparseChildren::ensure` via the lazy-sliver adaptor element.
