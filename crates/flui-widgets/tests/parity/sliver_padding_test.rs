@@ -238,8 +238,13 @@ fn assert_scene_rects(
 /// past the trailing sliver.
 #[test]
 fn sliver_padding_viewport_basic_geometry_across_scroll_offsets() {
-    // EdgeInsets.fromLTRB(25.0, 20.0, 15.0, 35.0): left=25, top=20, right=15, bottom=35.
-    let padding = EdgeInsets::new(px(20.0), px(15.0), px(35.0), px(25.0));
+    // Oracle: EdgeInsets.fromLTRB(25.0, 20.0, 15.0, 35.0).
+    let padding = EdgeInsets {
+        top: px(20.0),
+        right: px(15.0),
+        bottom: px(35.0),
+        left: px(25.0),
+    };
 
     let mut laid = harness::pump_widget(
         padding_scene(0.0, padding, AxisDirection::TopToBottom),
@@ -554,14 +559,24 @@ fn sliver_padding_changing_padding_repositions_the_following_sliver() {
         .offset(0.0)
     }
 
-    // EdgeInsets.fromLTRB(90.0, 1.0, 110.0, 2.0): left=90, top=1, right=110, bottom=2.
-    let padding1 = EdgeInsets::new(px(1.0), px(110.0), px(2.0), px(90.0));
+    // Oracle: EdgeInsets.fromLTRB(90.0, 1.0, 110.0, 2.0).
+    let padding1 = EdgeInsets {
+        top: px(1.0),
+        right: px(110.0),
+        bottom: px(2.0),
+        left: px(90.0),
+    };
     let mut laid = harness::pump_widget(scene(padding1), harness::screen());
     let x = laid.find_text("x").expect("'x' paragraph mounted");
     assert_eq!(laid.absolute_offset(x), offset(399.0, 0.0));
 
-    // EdgeInsets.fromLTRB(110.0, 1.0, 80.0, 2.0): left=110, top=1, right=80, bottom=2.
-    let padding2 = EdgeInsets::new(px(1.0), px(80.0), px(2.0), px(110.0));
+    // Oracle: EdgeInsets.fromLTRB(110.0, 1.0, 80.0, 2.0).
+    let padding2 = EdgeInsets {
+        top: px(1.0),
+        right: px(80.0),
+        bottom: px(2.0),
+        left: px(110.0),
+    };
     laid.pump_widget(scene(padding2));
     let x = laid
         .find_text("x")
