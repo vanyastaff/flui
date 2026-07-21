@@ -377,7 +377,7 @@ pub(crate) fn reconcile_children_by_id(
 /// 2. on a hash hit where both sides are keyed, a semantic
 ///    [`ViewKey::key_eq`](flui_foundation::ViewKey::key_eq) check via
 ///    [`ElementBase::current_key`] to reject `u64` collisions.
-fn can_update_by_id(tree: &ElementTree, old_id: ElementId, new: &dyn View) -> bool {
+pub(crate) fn can_update_by_id(tree: &ElementTree, old_id: ElementId, new: &dyn View) -> bool {
     let Some(node) = tree.get(old_id) else {
         return false;
     };

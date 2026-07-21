@@ -263,25 +263,20 @@ impl SparseChildren {
     }
 }
 
-/// Whether `existing`'s live element can be updated in place by `new` — a
-/// same-type check only. Sparse-lazy children never carry a [`ViewKey`]
-/// (no call site in this module attaches one), so this is the reduction
-/// [`View::can_update`]'s type-then-key check collapses to when both sides
-/// are keyless — mirrors `tree/id_reconcile.rs`'s `can_update_by_id` minus
-/// the key stage, which would be a no-op here regardless.
+/// Whether `existing`'s live element can be updated in place by `new`.
+///
+/// Delegates to `tree/id_reconcile.rs`'s `can_update_by_id` — the same
+/// type-then-key predicate the dense reconciler uses. Sparse-lazy children
+/// never carry a [`ViewKey`] today (no call site in this module attaches
+/// one, and `Keyed<V>` has no `View` impl to reach one), so the key stage
+/// is a no-op for every current input; routing through the shared check
+/// keeps the correct semantics — Flutter remounts on a key mismatch even
+/// when the type matches — the day a keyed view can reach a lazy child,
+/// rather than relying on a debug-only guard.
 ///
 /// [`ViewKey`]: flui_foundation::ViewKey
 fn resident_type_matches(tree: &ElementTree, existing: ElementId, new: &dyn View) -> bool {
-    debug_assert!(
-        new.key().is_none(),
-        "a lazy-sliver builder produced a KEYED view: resident_type_matches \
-         skips the key stage of `can_update_by_id` on the invariant that \
-         sparse children are keyless — add key comparison here (Flutter \
-         remounts on key mismatch) before letting `Keyed<V>` views reach \
-         lazy children"
-    );
-    tree.get(existing)
-        .is_some_and(|node| node.element().view_type_id() == new.view_type_id())
+    crate::tree::id_reconcile::can_update_by_id(tree, existing, new)
 }
 
 // Called from `SparseChildren::ensure` via the lazy-sliver adaptor element.

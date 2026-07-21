@@ -934,6 +934,35 @@ mod tests {
         }
     }
 
+    /// A second, distinct view type — same render shape, different `TypeId` —
+    /// so a refresh whose new builder returns this instead of [`ItemView`]
+    /// exercises the incompatible-type (evict + remount) branch.
+    #[derive(Clone)]
+    struct OtherItemView;
+
+    impl RenderView for OtherItemView {
+        type Protocol = BoxProtocol;
+        type RenderObject = RenderSizedBox;
+        fn create_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+        ) -> Self::RenderObject {
+            RenderSizedBox::new(Some(px(48.0)), Some(px(48.0)))
+        }
+        fn update_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+            _: &mut Self::RenderObject,
+        ) {
+        }
+    }
+
+    impl View for OtherItemView {
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::render_variable(self)
+        }
+    }
+
     fn make_builder(item_count: usize) -> Rc<dyn Fn(usize) -> Option<BoxedView>> {
         Rc::new(move |idx: usize| {
             if idx < item_count {
@@ -1174,6 +1203,132 @@ mod tests {
             manager.sparse_children.len(),
             0,
             "all out-of-band children must be evicted"
+        );
+    }
+
+    // =========================================================================
+    // `needs_resident_refresh` → `refresh_resident`: the builder-staleness fix.
+    // =========================================================================
+
+    /// After the item builder is swapped and `needs_resident_refresh` is set,
+    /// the next `service` re-consults the NEW builder for every resident index
+    /// and, when the result is the same view type, updates the existing child
+    /// in place — preserving its `ElementId` (identity/state) rather than
+    /// evicting and remounting. The flag is consumed exactly once.
+    #[test]
+    fn refresh_resident_updates_in_place_and_consumes_flag() {
+        let (mut tree, mut build_owner, pipeline, host) = host_tree();
+
+        let mut manager = SliverListAdaptorManager {
+            sparse_children: SparseChildren::new(),
+            host_element_id: Some(host),
+            builder: make_builder(3),
+            needs_resident_refresh: false,
+        };
+
+        // Seed a resident child at index 0.
+        manager.service(
+            &[0],
+            0,
+            usize::MAX,
+            &mut tree,
+            &mut build_owner.element_owner_mut(),
+            &pipeline,
+        );
+        let before = manager
+            .sparse_children
+            .get(0)
+            .expect("index 0 resident after seed");
+
+        // Swap in a fresh (same-type) builder that counts its calls, and flag
+        // the residents for refresh.
+        let calls = Arc::new(AtomicUsize::new(0));
+        let calls_probe = Arc::clone(&calls);
+        let refreshed: Rc<dyn Fn(usize) -> Option<BoxedView>> = Rc::new(move |idx: usize| {
+            calls_probe.fetch_add(1, Ordering::Relaxed);
+            (idx < 3).then(|| BoxedView(Box::new(ItemView)))
+        });
+        manager.builder = refreshed;
+        manager.needs_resident_refresh = true;
+
+        manager.service(
+            &[],
+            0,
+            usize::MAX,
+            &mut tree,
+            &mut build_owner.element_owner_mut(),
+            &pipeline,
+        );
+
+        assert!(
+            calls.load(Ordering::Relaxed) >= 1,
+            "refresh must re-consult the new builder for the resident index"
+        );
+        assert_eq!(
+            manager.sparse_children.get(0),
+            Some(before),
+            "a same-type refresh must update in place, preserving the ElementId"
+        );
+        assert!(
+            !manager.needs_resident_refresh,
+            "the refresh flag must be consumed exactly once"
+        );
+    }
+
+    /// When the swapped-in builder returns a DIFFERENT view type for a
+    /// resident index, `refresh_resident` evicts the stale child and remounts
+    /// a fresh one — matching Flutter's remount-on-incompatible-type behavior.
+    /// The resident `ElementId` changes.
+    #[test]
+    fn refresh_resident_remounts_on_type_change() {
+        let (mut tree, mut build_owner, pipeline, host) = host_tree();
+
+        let mut manager = SliverListAdaptorManager {
+            sparse_children: SparseChildren::new(),
+            host_element_id: Some(host),
+            builder: make_builder(3),
+            needs_resident_refresh: false,
+        };
+
+        manager.service(
+            &[0],
+            0,
+            usize::MAX,
+            &mut tree,
+            &mut build_owner.element_owner_mut(),
+            &pipeline,
+        );
+        let before = manager
+            .sparse_children
+            .get(0)
+            .expect("index 0 resident after seed");
+
+        // New builder returns a different concrete type at the same index.
+        let remounting: Rc<dyn Fn(usize) -> Option<BoxedView>> =
+            Rc::new(|idx: usize| (idx < 3).then(|| BoxedView(Box::new(OtherItemView))));
+        manager.builder = remounting;
+        manager.needs_resident_refresh = true;
+
+        manager.service(
+            &[],
+            0,
+            usize::MAX,
+            &mut tree,
+            &mut build_owner.element_owner_mut(),
+            &pipeline,
+        );
+
+        let after = manager
+            .sparse_children
+            .get(0)
+            .expect("index 0 still resident after refresh remount");
+        assert_ne!(
+            after, before,
+            "an incompatible-type refresh must evict and remount, changing the ElementId"
+        );
+        assert!(
+            !manager.needs_resident_refresh,
+            "the refresh flag must be consumed exactly once"
         );
     }
 
