@@ -41,6 +41,7 @@ mod custom_paint_test;
 mod custom_scroll_view_test;
 mod sliver_fill_remaining_test;
 mod sliver_fill_viewport_test;
+mod sliver_fixed_extent_list_test;
 mod sliver_ignore_pointer_test;
 mod sliver_list_test;
 mod sliver_offstage_test;

@@ -5417,6 +5417,27 @@ fn harness_sliver_fixed_extent_list_geometry() {
     assert_has_committed_geometry(sliver);
 }
 
+// Render-level parity oracle: `rendering/sliver_fixed_extent_layout_test.dart`
+// (tag `3.44.0`) has 12 `RenderSliverFixedExtentList`/
+// `RenderSliverFixedExtentBoxAdaptor`-subject cases (the 9-case
+// `group('getMaxChildIndexForScrollOffset')`, the two `'... correctly
+// references itemExtent, ...'` cases, and `'RenderSliverMultiBoxAdaptor has
+// calculate leading and trailing garbage'`). None are portable here: every
+// one needs API this type does not have at all —
+// `indexToLayoutOffset`/`getMinChildIndexForScrollOffset`/
+// `getMaxChildIndexForScrollOffset`/`computeMaxScrollOffset`/
+// `calculateLeadingGarbage`/`calculateTrailingGarbage` are absent from
+// `RenderSliverFixedExtentList` (`crates/flui-objects/src/sliver/
+// sliver_fixed_extent_list.rs` — the type carries only `item_extent`/
+// `child_count` and lays out every attached child unconditionally, no
+// scroll-offset-driven index range or child-manager protocol at all), and
+// this harness's own `viewport()`/`sliver_node()` builders construct a
+// fully-eager render tree with no lazy child-manager concept to even set up
+// a "only some children attach" scenario against. Filed as a Cross.H entry
+// in `docs/ROADMAP.md` (see `crates/flui-widgets/tests/parity/
+// sliver_fixed_extent_list_test.rs`'s module doc for the paired
+// widget-level ledger and the one divergence pin that IS constructible).
+
 // ── RenderSliverGrid ─────────────────────────────────────────────────────────
 
 #[test]
