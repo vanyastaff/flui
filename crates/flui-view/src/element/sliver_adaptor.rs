@@ -635,6 +635,25 @@ pub(crate) struct SliverGridLazyAdaptorManager {
     host_element_id: Option<ElementId>,
     render_id: Option<RenderId>,
     builder: Rc<dyn Fn(usize) -> Option<BoxedView>>,
+    /// Set by `SliverGridLazyAdaptorBehavior::on_view_updated` whenever the
+    /// parent hands this element a new `SliverGridLazy` view; consumed (and
+    /// cleared) by the next `service` call, which re-consults `builder` for
+    /// every currently-resident index via `SparseChildren::refresh_resident`.
+    /// Mirrors Flutter's `SliverChildBuilderDelegate.shouldRebuild => true`
+    /// default (`widgets/scroll_delegate.dart`, tag `3.44.0`) — the same
+    /// mechanism `SliverListAdaptorManager` uses; see its own doc comment for
+    /// the full rationale.
+    ///
+    /// The "next `service` call" is guaranteed to land in the SAME frame as
+    /// the view update, on two legs that must both stay unconditional:
+    /// `RenderBehavior::on_update` marks the render object needs-layout on
+    /// every view update (not gated on any setter change-flag), and
+    /// `RenderSliverGridLazy::perform_layout` emits its retain band on every
+    /// exit path (empty grid, window-past-end, and the normal path) — so the
+    /// frame's `service_child_requests` pass never takes its empty
+    /// early-return after a grid view update. An early-out added to either
+    /// leg turns this flag into deferred-forever work.
+    needs_resident_refresh: bool,
 }
 
 impl std::fmt::Debug for SliverGridLazyAdaptorManager {
@@ -643,6 +662,7 @@ impl std::fmt::Debug for SliverGridLazyAdaptorManager {
             .field("built_children", &self.sparse_children.len())
             .field("host_element_id", &self.host_element_id)
             .field("render_id", &self.render_id)
+            .field("needs_resident_refresh", &self.needs_resident_refresh)
             .finish_non_exhaustive()
     }
 }
@@ -698,6 +718,18 @@ impl ChildManager for SliverGridLazyAdaptorManager {
             self.sparse_children
                 .retain_band(retain_first, retain_last, tree, owner);
 
+        // Refresh whatever survived eviction against the (possibly
+        // just-updated) builder — see `on_view_updated`'s doc comment for why
+        // this is needed at all; a resident child is otherwise never
+        // re-diffed against a new view (`SparseChildren::ensure`'s own doc).
+        let refresh_did_work = if self.needs_resident_refresh {
+            self.needs_resident_refresh = false;
+            self.sparse_children
+                .refresh_resident(&*self.builder, host, tree, owner, pipeline)
+        } else {
+            false
+        };
+
         let mut any_new_build = false;
         let mut reached_end_at: Option<usize> = None;
         for &logical_index in requested_indices {
@@ -730,7 +762,7 @@ impl ChildManager for SliverGridLazyAdaptorManager {
         let count_clamped = reached_end_at
             .is_some_and(|end_index| self.clamp_render_item_count(end_index, pipeline));
 
-        eviction_did_work || any_new_build || count_clamped
+        eviction_did_work || refresh_did_work || any_new_build || count_clamped
     }
 }
 
@@ -764,6 +796,7 @@ impl SliverGridLazyAdaptorBehavior {
                 host_element_id: None,
                 render_id: None,
                 builder: Rc::clone(&view.builder),
+                needs_resident_refresh: false,
             })),
         }
     }
@@ -865,7 +898,27 @@ where
         old_view: &SliverGridLazy,
         owner: &mut ElementOwner<'_>,
     ) {
+        // NOTE: `item_count`/`grid_delegate` do NOT travel through this call —
+        // `RenderBehavior` has no `on_view_updated` override, so this hits the
+        // empty trait default. They reach `RenderSliverGridLazy` via this
+        // behavior's `on_update` delegation (`RenderBehavior::on_update` →
+        // `RenderView::update_render_object` → `set_item_count`/
+        // `set_grid_delegate`), a separate, already-working path this fix
+        // does not touch.
         self.inner.on_view_updated(core, old_view, owner);
+
+        // Refresh the stored builder and flag the resident children for
+        // re-consultation on the next `service` call — see
+        // `SliverGridLazyAdaptorManager::needs_resident_refresh`'s doc
+        // comment for the Flutter contract this mirrors and why it is
+        // needed at all (`SparseChildren::ensure` is otherwise idempotent
+        // for an already-built index, so without this an already-resident
+        // child would show stale content forever across a `pump_widget`
+        // root-swap that changes the backing item list/builder) — the same
+        // gap `SliverListAdaptorManager` had, fixed identically here.
+        let mut manager = self.manager.lock();
+        manager.builder = Rc::clone(&core.view().builder);
+        manager.needs_resident_refresh = true;
     }
 
     fn render_id(&self) -> Option<RenderId> {
@@ -1286,6 +1339,138 @@ mod tests {
         let mut manager = SliverListAdaptorManager {
             sparse_children: SparseChildren::new(),
             host_element_id: Some(host),
+            builder: make_builder(3),
+            needs_resident_refresh: false,
+        };
+
+        manager.service(
+            &[0],
+            0,
+            usize::MAX,
+            &mut tree,
+            &mut build_owner.element_owner_mut(),
+            &pipeline,
+        );
+        let before = manager
+            .sparse_children
+            .get(0)
+            .expect("index 0 resident after seed");
+
+        // New builder returns a different concrete type at the same index.
+        let remounting: Rc<dyn Fn(usize) -> Option<BoxedView>> =
+            Rc::new(|idx: usize| (idx < 3).then(|| BoxedView(Box::new(OtherItemView))));
+        manager.builder = remounting;
+        manager.needs_resident_refresh = true;
+
+        manager.service(
+            &[],
+            0,
+            usize::MAX,
+            &mut tree,
+            &mut build_owner.element_owner_mut(),
+            &pipeline,
+        );
+
+        let after = manager
+            .sparse_children
+            .get(0)
+            .expect("index 0 still resident after refresh remount");
+        assert_ne!(
+            after, before,
+            "an incompatible-type refresh must evict and remount, changing the ElementId"
+        );
+        assert!(
+            !manager.needs_resident_refresh,
+            "the refresh flag must be consumed exactly once"
+        );
+    }
+
+    // =========================================================================
+    // `needs_resident_refresh` → `refresh_resident`: the grid sister fix.
+    // Mirrors the two `refresh_resident_*` tests above exactly, driving
+    // `SliverGridLazyAdaptorManager::service` instead of the list manager's —
+    // `SliverGridLazyAdaptorManager` had the identical builder-staleness bug,
+    // confirmed by inspection to be separately-implemented (not shared) code.
+    // =========================================================================
+
+    /// After the item builder is swapped and `needs_resident_refresh` is set,
+    /// the next `service` re-consults the NEW builder for every resident index
+    /// and, when the result is the same view type, updates the existing child
+    /// in place — preserving its `ElementId` (identity/state) rather than
+    /// evicting and remounting. The flag is consumed exactly once.
+    #[test]
+    fn grid_refresh_resident_updates_in_place_and_consumes_flag() {
+        let (mut tree, mut build_owner, pipeline, host) = host_tree();
+
+        let mut manager = SliverGridLazyAdaptorManager {
+            sparse_children: SparseChildren::new(),
+            host_element_id: Some(host),
+            render_id: None,
+            builder: make_builder(3),
+            needs_resident_refresh: false,
+        };
+
+        // Seed a resident child at index 0.
+        manager.service(
+            &[0],
+            0,
+            usize::MAX,
+            &mut tree,
+            &mut build_owner.element_owner_mut(),
+            &pipeline,
+        );
+        let before = manager
+            .sparse_children
+            .get(0)
+            .expect("index 0 resident after seed");
+
+        // Swap in a fresh (same-type) builder that counts its calls, and flag
+        // the residents for refresh.
+        let calls = Arc::new(AtomicUsize::new(0));
+        let calls_probe = Arc::clone(&calls);
+        let refreshed: Rc<dyn Fn(usize) -> Option<BoxedView>> = Rc::new(move |idx: usize| {
+            calls_probe.fetch_add(1, Ordering::Relaxed);
+            (idx < 3).then(|| BoxedView(Box::new(ItemView)))
+        });
+        manager.builder = refreshed;
+        manager.needs_resident_refresh = true;
+
+        manager.service(
+            &[],
+            0,
+            usize::MAX,
+            &mut tree,
+            &mut build_owner.element_owner_mut(),
+            &pipeline,
+        );
+
+        assert!(
+            calls.load(Ordering::Relaxed) >= 1,
+            "refresh must re-consult the new builder for the resident index"
+        );
+        assert_eq!(
+            manager.sparse_children.get(0),
+            Some(before),
+            "a same-type refresh must update in place, preserving the ElementId"
+        );
+        assert!(
+            !manager.needs_resident_refresh,
+            "the refresh flag must be consumed exactly once"
+        );
+    }
+
+    /// When the swapped-in builder returns a DIFFERENT view type for a
+    /// resident index, `refresh_resident` evicts the stale child and remounts
+    /// a fresh one — matching Flutter's remount-on-incompatible-type behavior.
+    /// The resident `ElementId` changes.
+    #[test]
+    fn grid_refresh_resident_remounts_on_type_change() {
+        let (mut tree, mut build_owner, pipeline, host) = host_tree();
+
+        let mut manager = SliverGridLazyAdaptorManager {
+            sparse_children: SparseChildren::new(),
+            host_element_id: Some(host),
+            render_id: None,
             builder: make_builder(3),
             needs_resident_refresh: false,
         };
