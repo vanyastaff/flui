@@ -2246,6 +2246,245 @@ fn harness_limited_box_self_describes_and_caps_unbounded_height() {
     );
 }
 
+// ---- Oracle port: rendering/limited_box_test.dart (3.44.0) -----------------
+//
+// Every case below mounts `RenderConstrainedOverflowBox` as the parent
+// fixture exactly as the oracle does, with the oracle's own per-axis
+// constraint overrides — never a substitute fixture — so `RenderLimitedBox`'s
+// constraint plumbing runs through the same path Flutter's test exercises.
+// Root constraints mirror the oracle's `layout()` harness default: a tight
+// 800×600 (`rendering_tester.dart`), which is why every case's own
+// `toStringDeep` dump reads `constraints: BoxConstraints(w=800.0, h=600.0)`.
+//
+// The one LimitedBox-subject case outside this oracle file at the tag —
+// `proxy_getters_and_setters_test.dart`'s `'RenderLimitedBox getters and
+// setters'` (3.44.0; default no-cap state + setter read-back) — is already
+// covered by `limited_box.rs`'s own unit tests (`defaults_are_unset`,
+// `const_constructors`, `setters_return_change_flag`) and is not re-ported
+// here.
+//
+// The oracle also asserts `hasAGoodToStringDeep` plus a full `toStringDeep`
+// dump per case; FLUI has no deep-string-matching harness (see
+// `crates/flui-rendering/docs/TESTING.md`), so the observable content —
+// sizes and, where the dump supplies numbers, offsets — is ported instead of
+// the dump text. Dropped fragments, with reasons:
+// - the parent's own `alignment`/`minWidth`/`maxWidth`/`minHeight`/
+//   `maxHeight`/`fit` diagnostics: `RenderConstrainedOverflowBox` already
+//   carries a filed Cross.H known gap (`docs/ROADMAP.md` —
+//   `debug_fill_properties` omits `alignment` and has no `ifNull` placeholder
+//   for unset overrides), so that text can't be ported faithfully; not
+//   re-filed here.
+// - `RenderLimitedBox`'s own `maxWidth`/`maxHeight` diagnostics: already
+//   covered generically just above by
+//   `harness_limited_box_self_describes_and_caps_unbounded_height`.
+// - `RenderConstrainedBox`'s `additionalConstraints` diagnostics: already
+//   covered generically by the `harness_constrained_box_*` tests.
+// - the `NEEDS-PAINT`/`NEEDS-COMPOSITING-BITS-UPDATE` dirty-flag markers and
+//   `relayoutBoundary=upN` annotations: Flutter-internal render-object
+//   bookkeeping with no FLUI diagnostics equivalent to assert against.
+
+/// The oracle's `layout()` test harness lays every root out under a tight
+/// 800×600 (`rendering_tester.dart`).
+fn limited_box_oracle_root() -> BoxConstraints {
+    BoxConstraints::tight(Size::new(px(800.0), px(600.0)))
+}
+
+/// Oracle: `test('LimitedBox: parent max size is unconstrained', ...)`.
+///
+/// Both axes of the overflow box are fully unconstrained (`0..∞`), so both of
+/// `RenderLimitedBox`'s caps (`maxWidth: 100`, `maxHeight: 200`) apply at
+/// once — unlike `harness_limited_box_caps_unbounded_width_in_row` /
+/// `_self_describes_and_caps_unbounded_height` above, which each cap only a
+/// single axis. The inner `RenderConstrainedBox` requests a tight 300×400;
+/// `BoxConstraints::enforce` clamps that down to the limited 100×200
+/// ceiling, and `RenderLimitedBox` itself shrink-wraps to the same size.
+#[test]
+fn harness_limited_box_parent_max_size_unconstrained_oracle() {
+    let run = RenderTester::mount(
+        box_node(RenderConstrainedOverflowBox::new(
+            Alignment::CENTER,
+            Some(px(0.0)),
+            Some(px(f32::INFINITY)),
+            Some(px(0.0)),
+            Some(px(f32::INFINITY)),
+            OverflowBoxFit::Max,
+        ))
+        .child(
+            box_node(RenderLimitedBox::both(px(100.0), px(200.0)))
+                .label("limited")
+                .child(
+                    box_node(RenderConstrainedBox::new(BoxConstraints::tight(Size::new(
+                        px(300.0),
+                        px(400.0),
+                    ))))
+                    .label("child"),
+                ),
+        ),
+    )
+    .with_constraints(limited_box_oracle_root())
+    .run_layout();
+
+    assert_eq!(
+        run.box_geometry(run.id("child")),
+        Size::new(px(100.0), px(200.0)),
+        "both axes unconstrained ⇒ both LimitedBox caps apply simultaneously",
+    );
+    assert_eq!(
+        run.box_geometry(run.id("limited")),
+        Size::new(px(100.0), px(200.0)),
+        "RenderLimitedBox shrink-wraps to the same capped size as its child",
+    );
+    assert_eq!(
+        run.offset(run.id("limited")),
+        Offset::new(px(350.0), px(200.0)),
+        "center alignment of the 100x200 box within the 800x600 overflow box",
+    );
+}
+
+/// Oracle: `test('LimitedBox: parent maxWidth is unconstrained', ...)`.
+///
+/// Height is tight at 500 (bounded), so only the width cap applies; the
+/// bounded height passes through untouched to the child.
+#[test]
+fn harness_limited_box_parent_max_width_unconstrained_oracle() {
+    let run = RenderTester::mount(
+        box_node(RenderConstrainedOverflowBox::new(
+            Alignment::CENTER,
+            Some(px(0.0)),
+            Some(px(f32::INFINITY)),
+            Some(px(500.0)),
+            Some(px(500.0)),
+            OverflowBoxFit::Max,
+        ))
+        .child(
+            box_node(RenderLimitedBox::both(px(100.0), px(200.0))).child(
+                box_node(RenderConstrainedBox::new(BoxConstraints::tight(Size::new(
+                    px(300.0),
+                    px(400.0),
+                ))))
+                .label("child"),
+            ),
+        ),
+    )
+    .with_constraints(limited_box_oracle_root())
+    .run_layout();
+
+    assert_eq!(
+        run.box_geometry(run.id("child")),
+        Size::new(px(100.0), px(500.0)),
+        "width capped at 100 (unbounded incoming); height passes the bounded 500 through",
+    );
+}
+
+/// Oracle: `test('LimitedBox: parent maxHeight is unconstrained', ...)`.
+///
+/// Mirror of the previous case on the other axis: width is tight at 500
+/// (bounded), so only the height cap applies.
+#[test]
+fn harness_limited_box_parent_max_height_unconstrained_oracle() {
+    let run = RenderTester::mount(
+        box_node(RenderConstrainedOverflowBox::new(
+            Alignment::CENTER,
+            Some(px(500.0)),
+            Some(px(500.0)),
+            Some(px(0.0)),
+            Some(px(f32::INFINITY)),
+            OverflowBoxFit::Max,
+        ))
+        .child(
+            box_node(RenderLimitedBox::both(px(100.0), px(200.0))).child(
+                box_node(RenderConstrainedBox::new(BoxConstraints::tight(Size::new(
+                    px(300.0),
+                    px(400.0),
+                ))))
+                .label("child"),
+            ),
+        ),
+    )
+    .with_constraints(limited_box_oracle_root())
+    .run_layout();
+
+    assert_eq!(
+        run.box_geometry(run.id("child")),
+        Size::new(px(500.0), px(200.0)),
+        "height capped at 200 (unbounded incoming); width passes the bounded 500 through",
+    );
+}
+
+/// Oracle: `test('LimitedBox: no child', ...)`.
+///
+/// A childless `RenderLimitedBox` takes `incoming.constrain(limited.min)`.
+/// Flutter's own childless path computes
+/// `_limitConstraints(constraints).constrain(Size.zero)` — a differently
+/// shaped expression, verified algebraically equivalent before writing this
+/// assertion: `constrain(Size.zero)` clamps up to exactly
+/// `(limited.min_width, limited.min_height)` (mins are always >= 0), and both
+/// `_limitConstraints`/`limit_constraints` copy `min_width`/`min_height` from
+/// the incoming constraints verbatim, so re-clamping them through that same
+/// incoming is a no-op. No divergence found for this — or any — of the 5
+/// ported cases.
+#[test]
+fn harness_limited_box_no_child_oracle() {
+    let run = RenderTester::mount(
+        box_node(RenderConstrainedOverflowBox::new(
+            Alignment::CENTER,
+            Some(px(10.0)),
+            Some(px(500.0)),
+            Some(px(0.0)),
+            Some(px(f32::INFINITY)),
+            OverflowBoxFit::Max,
+        ))
+        .child(box_node(RenderLimitedBox::both(px(100.0), px(200.0))).label("limited")),
+    )
+    .with_constraints(limited_box_oracle_root())
+    .run_layout();
+
+    assert_eq!(
+        run.box_geometry(run.id("limited")),
+        Size::new(px(10.0), px(0.0)),
+        "childless LimitedBox takes the smallest size satisfying the limited constraints",
+    );
+    assert_eq!(
+        run.offset(run.id("limited")),
+        Offset::new(px(395.0), px(300.0)),
+        "center alignment of the 10x0 box within the 800x600 overflow box",
+    );
+}
+
+/// Oracle: `test('LimitedBox: no child use parent', ...)`.
+///
+/// Only `minWidth` is overridden; maxWidth/minHeight/maxHeight all pass the
+/// parent's own incoming constraints through unchanged (bounded, since the
+/// root is tight 800×600) — so the childless `RenderLimitedBox` reaches
+/// `(10, 600)`: the overridden minWidth, and the full passed-through height.
+#[test]
+fn harness_limited_box_no_child_use_parent_oracle() {
+    let run = RenderTester::mount(
+        box_node(RenderConstrainedOverflowBox::new(
+            Alignment::CENTER,
+            Some(px(10.0)),
+            None,
+            None,
+            None,
+            OverflowBoxFit::Max,
+        ))
+        .child(box_node(RenderLimitedBox::both(px(100.0), px(200.0))).label("limited")),
+    )
+    .with_constraints(limited_box_oracle_root())
+    .run_layout();
+
+    assert_eq!(
+        run.box_geometry(run.id("limited")),
+        Size::new(px(10.0), px(600.0)),
+        "minWidth override (10) plus the parent's own height (600) passed through",
+    );
+    assert_eq!(
+        run.offset(run.id("limited")),
+        Offset::new(px(395.0), px(0.0)),
+        "center alignment of the 10x600 box within the 800x600 overflow box",
+    );
+}
+
 #[test]
 fn harness_offstage_hidden_collapses_and_misses_hits() {
     let run = RenderTester::mount(
