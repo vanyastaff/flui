@@ -68,10 +68,16 @@
 //!    against this exact gap when this port was first written — now pass
 //!    unmodified. `SliverGridLazyAdaptorManager` (`sliver_adaptor.rs`, a
 //!    structurally-parallel but separately-implemented manager backing
-//!    `GridView::builder`) has the identical pre-fix bug and was
-//!    confirmed, by inspection, NOT to share code with `SliverListAdaptorManager`
-//!    (no generic layer exists today — see that struct's own module
-//!    comment) — left open, out of scope for this fix.
+//!    `GridView::builder`) had the identical bug — confirmed, by
+//!    inspection, NOT to share code with `SliverListAdaptorManager` (no
+//!    generic layer exists today — see that struct's own module comment)
+//!    — and was **fixed identically** in a follow-up unit: same
+//!    `needs_resident_refresh` + `SparseChildren::refresh_resident`
+//!    mechanism, independently verified that
+//!    `RenderSliverGridLazy::perform_layout` also emits its retain band
+//!    unconditionally (all three exit paths checked, not assumed from
+//!    `RenderSliverList`'s parity) before relying on the same
+//!    same-frame-service guarantee.
 //!
 //! A third candidate finding was raised and then RETRACTED during review: an
 //! earlier draft of this port misdiagnosed a probe artifact as a FLUI
