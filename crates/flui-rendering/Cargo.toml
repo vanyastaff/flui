@@ -95,7 +95,7 @@ flui-animation = { path = "../flui-animation", version = "0.2.0" }
 # so the feature must be flipped on for the dev build graph. This is the
 # standard Cargo pattern for shipping a feature-gated test-support module
 # without making it part of normal/release builds.
-flui-rendering = { path = ".", version = "0.2.0", features = ["testing"] }
+flui-rendering = { path = ".", version = "0.2.0", features = ["testing", "serde"] }
 # Concrete render-object catalog. The integration tests in `tests/*.rs`
 # previously imported objects from `flui_rendering::objects`; after the
 # flui-objects extraction (ADR-0008) they import from `flui_objects` instead.
@@ -117,7 +117,9 @@ serde = ["flui-types/serde"]
 # dev-dependency above. Downstream crates (e.g. flui-app) opt in explicitly.
 # Forwards to `flui-layer/testing` so the layer-tree walkers (`structure`,
 # `first_picture_bounds`, diagnostics dump) are reused rather than duplicated.
-testing = ["flui-layer/testing"]
+# Forwards to `flui-foundation/serde` so `DiagnosticsEnvelope::new(node)`
+# can be serialized by `SnapshotStrategy::json()` via serde_json.
+testing = ["flui-layer/testing", "flui-foundation/serde"]
 
 # Cycle 4 R-16: gate the delegate trait modules behind an off-by-default
 # feature until their companion render object lands (ADR-0007). Each

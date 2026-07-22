@@ -23,6 +23,12 @@ parking_lot = { workspace = true }
 # overflow spills to heap.
 smallvec = { workspace = true }
 tracing = { workspace = true }
+# Geometry + colour types consumed by `From<Rect<Pixels>>` / `From<Color>` /
+# etc. impls on `DiagnosticsValue` (ADR-0005 Decision 1, Task 4.5).
+# Orphan rule: `DiagnosticsValue` is local to this crate; `From` impls are
+# legal here. Direction: flui-types → flui-geometry → (no foundation dep),
+# so no cycle.
+flui-types = { path = "../flui-types", version = "0.2.0" }
 # Logging (merged from flui-log).
 # `tracing-subscriber` powers `flui_foundation::log::Logger::try_init`;
 # `tracing-forest` is gated behind the optional `pretty` feature for the
@@ -33,6 +39,7 @@ tracing-forest = { workspace = true, optional = true }
 # Optional dependencies
 serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
+schemars = { workspace = true, optional = true }
 
 # Android: logcat integration for `flui_foundation::log::android_layer`.
 [target.'cfg(target_os = "android")'.dependencies]
@@ -47,12 +54,17 @@ tracing-oslog = "0.3"
 tracing-wasm = "0.2"
 
 [dev-dependencies]
-flui-types = { path = "../flui-types", version = "0.2.0" }
 serde_json = { workspace = true }
 
 [features]
 default = []
-serde = ["dep:serde", "dep:serde_json"]
+# Activates serde derives on DiagnosticsValue / DiagnosticsProperty / etc.
+# Forwarded to flui-types/serde so the geometry types embedded in `From`
+# impls (Rect, Color, RRect, …) also get their Serialize/Deserialize impls;
+# without the forward, enabling flui-foundation/serde would silently leave
+# those types non-serialisable — a compat regression.
+serde = ["dep:serde", "dep:serde_json", "flui-types/serde"]
+schemars = ["dep:schemars", "serde"]
 # Enable pretty hierarchical desktop logging via `tracing-forest`.
 # Mobile/WASM backends ignore this flag.
 pretty = ["dep:tracing-forest"]

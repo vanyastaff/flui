@@ -18,6 +18,7 @@ flui-foundation = { path = "../flui-foundation", version = "0.2.0" }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 serde = { workspace = true, optional = true }
+schemars = { workspace = true, optional = true }
 parking_lot = { workspace = true }
 
 # Text shaping and layout
@@ -30,6 +31,7 @@ flui-painting = { path = ".", version = "0.2.0", features = ["testing"] }
 
 [features]
 serde = ["dep:serde", "flui-types/serde"]
+schemars = ["dep:schemars", "serde", "flui-types/serde"]
 
 # testing: opt-in painting test harness (`crate::testing`) — a `record`
 # builder for `DisplayList`s plus diagnostics helpers. Off by default;

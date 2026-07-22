@@ -562,24 +562,32 @@ impl FrameRun {
     }
 
     /// Serializes the most recent frame's layer tree to a stable indented
-    /// text form, or returns `"<no layer tree>"` when nothing was painted.
+    /// text form via the [`DiagnosticsNode`] tree, or returns an empty string
+    /// when nothing was painted.
     ///
-    /// Use with `insta::assert_snapshot!` to pin the layer structure over
-    /// time. The format is stable across runs (2-decimal floats, insertion-order
+    /// Use with `insta::assert_snapshot!` to pin the layer structure over time.
+    /// The format is stable across runs (2-decimal floats, insertion-order
     /// children, no hash iteration).
+    ///
+    /// [`DiagnosticsNode`]: flui_foundation::DiagnosticsNode
     #[must_use]
     pub fn snapshot(&self) -> String {
-        super::snapshot::snapshot_tree(self.layer_tree.as_ref())
+        super::snapshot::SnapshotStrategy::text().render(&super::snapshot::scene_diagnostics_tree(
+            self.layer_tree.as_ref(),
+        ))
     }
 
-    /// Serializes the subtree at the layer boundary for `node`, or returns
-    /// `"<no layer tree>"` when nothing was painted.
+    /// Serializes the subtree at the layer boundary for `node`, or returns an
+    /// empty string when nothing was painted.
     ///
     /// Falls back to the full tree until a `RenderId → LayerId` mapping is
-    /// available; see [`super::snapshot::snapshot_subtree`] for details.
+    /// available.
     #[must_use]
-    pub fn snapshot_of(&self, node: RenderId) -> String {
-        super::snapshot::snapshot_subtree(self.layer_tree.as_ref(), node)
+    pub fn snapshot_of(&self, _node: RenderId) -> String {
+        // No RenderId→LayerId map yet; fall back to the whole tree.
+        super::snapshot::SnapshotStrategy::text().render(&super::snapshot::scene_diagnostics_tree(
+            self.layer_tree.as_ref(),
+        ))
     }
 
     /// Returns every [`DrawCommandSummary`] reachable from the most recent
@@ -589,16 +597,22 @@ impl FrameRun {
     /// [`DrawCommandSummary`]: super::snapshot::DrawCommandSummary
     #[must_use]
     pub fn display_commands(&self) -> Vec<super::snapshot::DrawCommandSummary> {
-        super::snapshot::commands_of(self.layer_tree.as_ref())
+        super::snapshot::command_summaries_of(self.layer_tree.as_ref())
     }
 
-    /// Panics unless at least one painted command satisfies `pred`.
+    /// Panics unless at least one [`DiagnosticsNode`] in the painted scene
+    /// satisfies `pred`.
     ///
-    /// The panic message includes the full snapshot so it is immediately clear
-    /// what was actually painted. Unlike Flutter's `paints..something()` this
-    /// assertion never passes silently when `pred` never matches.
-    pub fn assert_paints_any(&self, pred: impl Fn(&super::snapshot::DrawCommandSummary) -> bool) {
-        super::snapshot::assert_any(self.layer_tree.as_ref(), pred);
+    /// Walks the full diagnostics tree (layer nodes and their command-children)
+    /// in depth-first order.  The panic message includes the full text snapshot
+    /// so the failure is self-describing.
+    ///
+    /// Unlike Flutter's `paints..something()` this assertion never passes
+    /// silently when `pred` never matches.
+    ///
+    /// [`DiagnosticsNode`]: flui_foundation::DiagnosticsNode
+    pub fn assert_paints_any(&self, pred: impl Fn(&flui_foundation::DiagnosticsNode) -> bool) {
+        super::snapshot::assert_paints_node(self.layer_tree.as_ref(), pred);
     }
 }
 
@@ -770,39 +784,52 @@ impl PaintRun {
         self.layer_tree.as_ref()
     }
 
-    /// Serializes the painted layer tree to a stable indented text form, or
-    /// returns `"<no layer tree>"` when nothing was painted.
+    /// Serializes the painted layer tree to a stable indented text form via the
+    /// [`DiagnosticsNode`] tree, or returns an empty string when nothing was
+    /// painted.
     ///
     /// Use with `insta::assert_snapshot!` to pin layer structure over time.
+    ///
+    /// [`DiagnosticsNode`]: flui_foundation::DiagnosticsNode
     #[must_use]
     pub fn snapshot(&self) -> String {
-        super::snapshot::snapshot_tree(self.layer_tree.as_ref())
+        super::snapshot::SnapshotStrategy::text().render(&super::snapshot::scene_diagnostics_tree(
+            self.layer_tree.as_ref(),
+        ))
     }
 
     /// Serializes the subtree at the layer boundary for `node`.
     ///
     /// Falls back to the full tree until a `RenderId → LayerId` mapping is
-    /// available; see [`super::snapshot::snapshot_subtree`] for details.
+    /// available.
     #[must_use]
-    pub fn snapshot_of(&self, node: RenderId) -> String {
-        super::snapshot::snapshot_subtree(self.layer_tree.as_ref(), node)
+    pub fn snapshot_of(&self, _node: RenderId) -> String {
+        // No RenderId→LayerId map yet; fall back to the whole tree.
+        super::snapshot::SnapshotStrategy::text().render(&super::snapshot::scene_diagnostics_tree(
+            self.layer_tree.as_ref(),
+        ))
     }
 
-    /// Returns every [`DrawCommandSummary`] reachable from the painted layer
-    /// tree in pre-order, or an empty `Vec` when nothing was painted.
+    /// Returns every [`DrawCommandSummary`] reachable from the most recent
+    /// frame's layer tree in pre-order, or an empty `Vec` when nothing was
+    /// painted.
     ///
     /// [`DrawCommandSummary`]: super::snapshot::DrawCommandSummary
     #[must_use]
     pub fn display_commands(&self) -> Vec<super::snapshot::DrawCommandSummary> {
-        super::snapshot::commands_of(self.layer_tree.as_ref())
+        super::snapshot::command_summaries_of(self.layer_tree.as_ref())
     }
 
-    /// Panics unless at least one painted command satisfies `pred`.
+    /// Panics unless at least one [`DiagnosticsNode`] in the painted scene
+    /// satisfies `pred`.
     ///
-    /// The panic message includes the full snapshot so the failure is
-    /// self-describing.
-    pub fn assert_paints_any(&self, pred: impl Fn(&super::snapshot::DrawCommandSummary) -> bool) {
-        super::snapshot::assert_any(self.layer_tree.as_ref(), pred);
+    /// Walks the full diagnostics tree (layer nodes and their command-children)
+    /// in depth-first order.  The panic message includes the full text snapshot
+    /// so the failure is self-describing.
+    ///
+    /// [`DiagnosticsNode`]: flui_foundation::DiagnosticsNode
+    pub fn assert_paints_any(&self, pred: impl Fn(&flui_foundation::DiagnosticsNode) -> bool) {
+        super::snapshot::assert_paints_node(self.layer_tree.as_ref(), pred);
     }
 }
 

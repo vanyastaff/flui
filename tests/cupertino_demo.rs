@@ -237,7 +237,7 @@ impl MountedDemo {
             if diagnostics.name() != Some("RenderParagraph") {
                 continue;
             }
-            if diagnostics.get_property("text") == Some(text) {
+            if diagnostics.get_property("text").as_deref() == Some(text) {
                 assert!(
                     found.is_none(),
                     "multiple RenderParagraph nodes contain {text:?}"
@@ -266,7 +266,7 @@ impl MountedDemo {
     fn render_property(&self, id: RenderId, property_name: &str) -> Option<String> {
         let owner = self.pipeline_owner.read();
         let diagnostics = owner.debug_node_diagnostics(id)?;
-        diagnostics.get_property(property_name).map(str::to_string)
+        diagnostics.get_property(property_name)
     }
 
     /// The screen-space (root-local) top-left of `id`, by summing paint

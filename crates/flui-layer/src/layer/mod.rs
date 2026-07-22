@@ -394,38 +394,169 @@ impl Layer {
 }
 
 impl Diagnosticable for Layer {
+    /// Builds the [`DiagnosticsNode`] for this layer.
+    ///
+    /// Each variant sets the kind name (matching the `write_layer` header names
+    /// used by the snapshot serializer) and attaches typed properties via
+    /// [`DiagnosticsBuilder::add_value`] / [`add_f64`](DiagnosticsBuilder::add_f64) /
+    /// [`add_i64`](DiagnosticsBuilder::add_i64).
+    ///
+    /// For `Picture` the command stream is descended into: every
+    /// [`DrawCommand`](flui_painting::display_list::DrawCommand) becomes a child
+    /// [`DiagnosticsNode`] via [`Diagnosticable::to_diagnostics_node`].
+    /// Sub-layer children are NOT added here — that walk is performed by the
+    /// caller (see `inspect::diagnostics_tree`).
+    ///
+    /// Opaque handles (texture id, platform-view id, layer-link id) are
+    /// projected to `i64` properties so the inspector carries a stable identity
+    /// without exposing the raw resource handle. `u64` ids that exceed `i64::MAX`
+    /// are clamped to `i64::MAX` (diagnostic display only, not a correctness path).
     fn to_diagnostics_node(&self) -> DiagnosticsNode {
-        let mut node = DiagnosticsNode::new(self.kind_name());
         let mut builder = DiagnosticsBuilder::new();
-        self.debug_fill_properties(&mut builder);
-        *node.properties_mut() = builder.build();
+        let mut node = DiagnosticsNode::new(self.kind_name());
+
+        match self {
+            // ── Leaf: Picture ────────────────────────────────────────────────
+            Layer::Picture(p) => {
+                builder.add_value("bounds", p.bounds());
+                builder.add_i64(
+                    "commands",
+                    // picture().len() is a monotonic counter bounded by frame
+                    // budget; i64::MAX is an unreachable diagnostics-only sentinel.
+                    i64::try_from(p.picture().len()).unwrap_or(i64::MAX),
+                );
+                // Descend into the command stream: each DrawCommand becomes a
+                // child node so the inspector can walk individual paint ops.
+                for cmd in p.picture() {
+                    node.add_child(cmd.to_diagnostics_node());
+                }
+            }
+
+            // ── Leaf: Texture ─────────────────────────────────────────────
+            // texture_id is an opaque GPU handle — emit only the integer id so
+            // the inspector carries a stable identity without the raw handle.
+            Layer::Texture(t) => {
+                builder.add_i64(
+                    "id",
+                    // Texture ids are <2^63 monotonic counters assigned by the
+                    // GPU backend; i64::MAX is an unreachable diagnostics-only sentinel.
+                    i64::try_from(t.texture_id().get()).unwrap_or(i64::MAX),
+                );
+                builder.add_value("rect", t.rect());
+            }
+
+            // ── Leaf: PlatformView ────────────────────────────────────────
+            Layer::PlatformView(pv) => {
+                // PlatformViewId wraps i64 — direct use is lossless.
+                builder.add_i64("id", pv.view_id().value());
+                builder.add_value("rect", pv.rect());
+            }
+
+            // ── Clip: ClipRect ────────────────────────────────────────────
+            Layer::ClipRect(c) => {
+                builder.add_value("rect", c.clip_rect());
+                builder.add("clip", format!("{:?}", c.clip_behavior()));
+            }
+
+            // ── Clip: ClipRRect ───────────────────────────────────────────
+            Layer::ClipRRect(c) => {
+                // RRect is Copy; deref to pass an owned value to add_value.
+                // DiagnosticsValue::Nested (outer rect + per-corner radii) is
+                // produced via the From<RRect> impl in flui-foundation.
+                builder.add_value("rect", *c.clip_rrect());
+                builder.add("clip", format!("{:?}", c.clip_behavior()));
+            }
+
+            // ── Clip: ClipPath ────────────────────────────────────────────
+            Layer::ClipPath(c) => {
+                let path = c.clip_path();
+                builder.add_value("bounds", path.compute_bounds());
+                builder.add_i64(
+                    "pts",
+                    // Path command counts are bounded by frame budget (<2^63);
+                    // i64::MAX is an unreachable diagnostics-only sentinel.
+                    i64::try_from(path.commands().len()).unwrap_or(i64::MAX),
+                );
+                builder.add("clip", format!("{:?}", c.clip_behavior()));
+            }
+
+            // ── Clip: ClipSuperellipse ────────────────────────────────────
+            Layer::ClipSuperellipse(c) => {
+                builder.add_value("rect", c.clip_superellipse().outer_rect());
+                builder.add("clip", format!("{:?}", c.clip_behavior()));
+            }
+
+            // ── Transform: Offset ─────────────────────────────────────────
+            Layer::Offset(o) => {
+                builder.add_f64("dx", f64::from(o.dx()));
+                builder.add_f64("dy", f64::from(o.dy()));
+            }
+
+            // ── Effect: Opacity ───────────────────────────────────────────
+            // `offset` is carried alongside alpha to avoid a redundant
+            // OffsetLayer. Emit it alongside alpha so the inspector carries
+            // both, matching the old `debug_fill_properties` contract.
+            Layer::Opacity(o) => {
+                builder.add_f64("alpha", f64::from(o.alpha()));
+                builder.add_f64("dx", f64::from(o.offset().dx));
+                builder.add_f64("dy", f64::from(o.offset().dy));
+            }
+
+            // ── Effect: ShaderMask ────────────────────────────────────────
+            Layer::ShaderMask(s) => {
+                builder.add_value("bounds", s.bounds());
+            }
+
+            // ── Effect: BackdropFilter ────────────────────────────────────
+            Layer::BackdropFilter(b) => {
+                builder.add_value("bounds", b.bounds());
+            }
+
+            // ── Linking: Leader ───────────────────────────────────────────
+            Layer::Leader(l) => {
+                // LayerLink ids are <2^63 monotonic counters; i64::MAX is an
+                // unreachable diagnostics-only sentinel (no lossy collapse in practice).
+                builder.add_i64("link_id", i64::try_from(l.link().id()).unwrap_or(i64::MAX));
+            }
+
+            // ── Linking: Follower ─────────────────────────────────────────
+            Layer::Follower(f) => {
+                // Same sentinel rationale as Leader above.
+                builder.add_i64("link_id", i64::try_from(f.link().id()).unwrap_or(i64::MAX));
+            }
+
+            // ── Annotation: AnnotatedRegion ───────────────────────────────
+            Layer::AnnotatedRegion(a) => {
+                builder.add_value("rect", a.rect());
+            }
+
+            // Canvas, PerformanceOverlay, Transform, ColorFilter, ImageFilter:
+            // no stable identifying properties beyond the kind name.
+            // - Canvas: mutable command list is not sealed at node-build time.
+            // - Transform: no public matrix getter (only is_identity /
+            //   transform_point); a TransformLayer::matrix() accessor would
+            //   enable emitting the 16-element column-major list here.
+            // - ColorFilter: ColorMatrix has no stable Display impl.
+            // - ImageFilter: opaque handle.
+            Layer::Canvas(_)
+            | Layer::PerformanceOverlay(_)
+            | Layer::Transform(_)
+            | Layer::ColorFilter(_)
+            | Layer::ImageFilter(_) => {}
+        }
+
+        builder.add_flag("needs_compositing", self.needs_compositing(), "true");
+
+        // Attach the scalar properties built above; children were pushed
+        // directly onto the node for the Picture variant above.
+        node.properties_mut().extend(builder.build());
         node
     }
 
-    fn debug_fill_properties(&self, properties: &mut DiagnosticsBuilder) {
-        if let Some(bounds) = self.bounds() {
-            properties.add("bounds", format!("{bounds:?}"));
-        }
-        match self {
-            Layer::Offset(layer) => {
-                properties.add("offset", format!("{:?}", layer.offset()));
-            }
-            Layer::Transform(layer) => {
-                properties.add("transform", format!("{:?}", layer.transform()));
-            }
-            Layer::Opacity(layer) => {
-                properties.add("alpha", layer.alpha());
-                properties.add("offset", format!("{:?}", layer.offset()));
-            }
-            Layer::ClipRect(layer) => {
-                properties.add("clip_rect", format!("{:?}", layer.clip_rect()));
-            }
-            Layer::Picture(layer) => {
-                properties.add("commands", layer.picture().len());
-            }
-            _ => {}
-        }
-        properties.add_flag("needs_compositing", self.needs_compositing(), "true");
+    fn debug_fill_properties(&self, _properties: &mut DiagnosticsBuilder) {
+        // Properties are assembled in `to_diagnostics_node` so that the Picture
+        // variant can attach child nodes in the same pass. Populating
+        // `debug_fill_properties` separately would break that coupling.
     }
 }
 

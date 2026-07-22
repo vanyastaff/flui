@@ -492,7 +492,7 @@ fn requesting_focus_via_the_controllers_published_node_reveals_the_caret_after_a
         laid.pipeline_owner()
             .read()
             .debug_node_diagnostics(editable)
-            .and_then(|diagnostics| diagnostics.get_property("show_caret").map(str::to_string))
+            .and_then(|diagnostics| diagnostics.get_property("show_caret"))
     };
 
     assert_eq!(

@@ -97,7 +97,7 @@ mod tests {
         let node = diagnostics(&list);
         assert_eq!(node.name(), Some("DisplayList"), "names the list");
         assert_eq!(
-            node.get_property("commands"),
+            node.get_property("commands").as_deref(),
             Some("1"),
             "carries the command count",
         );

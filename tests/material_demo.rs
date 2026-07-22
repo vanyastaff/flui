@@ -233,7 +233,7 @@ impl MountedDemo {
             if diagnostics.name() != Some("RenderParagraph") {
                 continue;
             }
-            if diagnostics.get_property("text") == Some(text) {
+            if diagnostics.get_property("text").as_deref() == Some(text) {
                 assert!(
                     found.is_none(),
                     "multiple RenderParagraph nodes contain {text:?}"

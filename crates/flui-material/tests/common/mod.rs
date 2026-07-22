@@ -258,7 +258,7 @@ impl LaidOut {
         let diagnostics = owner.debug_node_diagnostics(id)?;
         diagnostics
             .find_property(property_name)
-            .map(|property| property.value().to_string())
+            .map(|property| property.value().clone())
     }
 
     /// The `i`-th render-tree child of `id`.

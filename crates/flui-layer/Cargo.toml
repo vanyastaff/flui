@@ -13,6 +13,16 @@ categories = ["gui", "graphics", "rendering"]
 [features]
 default = []
 
+# serde: opt-in serialization of layer-tree types. Activates serde on this
+# crate's direct flui-* deps so that all forwarded geometry/paint types are
+# also (de)serializable without the caller having to thread feature flags
+# through every intermediate crate.
+serde = ["dep:serde", "flui-painting/serde", "flui-types/serde"]
+
+# schemars: opt-in JSON Schema derivation for the painted-scene IR
+# (ADR-0004). Implies `serde` because schemars requires serde impls.
+schemars = ["dep:schemars", "serde", "flui-painting/schemars"]
+
 # testing: opt-in layer-tree test harness (`crate::testing`) — declarative
 # LayerTree builder + structural/bounds inspection + a Diagnosticable-backed
 # tree dump. Off by default; enabled for this crate's own dev targets via the
@@ -40,6 +50,12 @@ tracing = "0.1"
 
 # Structured errors for LayerError
 thiserror = { workspace = true }
+
+# Serialization — optional; activated by the `serde` feature
+serde = { workspace = true, optional = true }
+
+# JSON Schema generation — optional; activated by the `schemars` feature
+schemars = { workspace = true, optional = true }
 
 [dev-dependencies]
 # Self dev-dependency that turns the off-by-default `testing` feature on for

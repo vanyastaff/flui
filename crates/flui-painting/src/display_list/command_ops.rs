@@ -3,11 +3,11 @@
 //!
 //! These were extracted from the 2,434-LOC
 //! `display_list.rs` god module as part of a concern-based split. This file is the largest in
-//! `display_list/` because each method pattern-matches across all 29
+//! `display_list/` because each method pattern-matches across all 31
 //! variants. The structure is mechanical -- the 240-LOC
 //! `with_opacity` and 250-LOC `bounds` matches dominate.
 //!
-//! Future Outstanding refactor: collapse the 29-variant patterns via
+//! Future Outstanding refactor: collapse the 31-variant patterns via
 //! a hand-written `macro_rules!` `gen_command_accessors!` mirroring
 //! the `flui-layer` Step 4 macro pattern. Not bundled with this chain
 //! because the file is structurally clean despite size.
@@ -45,10 +45,12 @@
 
 use std::sync::Arc;
 
+use flui_foundation::{Diagnosticable, DiagnosticsBuilder};
 use flui_types::geometry::{Matrix4, Pixels, Rect, Size};
 
 use super::command::{CommandKind, DrawCommand};
-use crate::display_list::Paint;
+use crate::PaintStyle;
+use crate::display_list::{Paint, sealed::DisplayListCore};
 
 /// Maximum recursion depth for [`DrawCommand::with_opacity`] and
 /// [`DrawCommand::apply_transform`] into the inner [`DisplayList`](super::DisplayList) of
@@ -897,4 +899,736 @@ fn log_effect_depth_saturation(variant: &'static str, op: &'static str, depth: u
         "DrawCommand::{op} saturated MAX_EFFECT_DEPTH on {variant}; \
          inner DisplayList left untouched"
     );
+}
+
+// ============================================================================
+// Diagnosticable impl for DrawCommand (ADR-0005 Decision 2)
+// ============================================================================
+
+/// Populate `builder` with the colour/geometry properties of `paint`.
+///
+/// Called from every `DrawCommand` variant that carries a `Paint` so all
+/// variants emit properties under the same names, making automated diffing
+/// stable. `stroke_width` is only emitted for stroke-style paints.
+fn add_paint_props(builder: &mut DiagnosticsBuilder, paint: &Paint) {
+    builder.add_value("color", paint.color);
+    builder.add("style", format!("{:?}", paint.style));
+    if matches!(paint.style, PaintStyle::Stroke) {
+        builder.add_f64("stroke_width", f64::from(paint.stroke_width));
+    }
+}
+
+/// Populate `builder` with the colour/geometry properties of `paint` when it
+/// is wrapped in an `Option<Arc<Paint>>`.
+fn add_opt_paint_props(builder: &mut DiagnosticsBuilder, paint: Option<&Arc<Paint>>) {
+    if let Some(p) = paint {
+        add_paint_props(builder, p);
+    }
+}
+
+/// Populate `builder` with an axis-aligned rect property in typed form.
+///
+/// Thin wrapper around [`DiagnosticsBuilder::add_value`] that accepts the
+/// concrete `Rect<Pixels>` type used throughout `DrawCommand` variants.
+fn add_rect_prop(builder: &mut DiagnosticsBuilder, name: &'static str, r: Rect<Pixels>) {
+    builder.add_value(name, r);
+}
+
+/// Emit the recording-time transform as a typed `List` of 16 floats only when
+/// it is non-identity.
+///
+/// Identity transforms are omitted to keep diagnostics output readable and to
+/// match the contract of the stable text serialiser (`maybe_transform`).
+fn add_transform_if_nonidentity(builder: &mut DiagnosticsBuilder, transform: &Matrix4) {
+    if !transform.is_identity() {
+        builder.add_value("transform", transform);
+    }
+}
+
+impl DrawCommand {
+    /// Returns the stable, per-variant name used as the diagnostics node name.
+    ///
+    /// This is the migration target for the retired `DrawKind`-based
+    /// categorisation and the old `summarize_command` prefix strings.  Using
+    /// per-variant names lets automated diff tooling distinguish a `DrawOval`
+    /// from a `DrawRect` even when both carry identical rects and paints.
+    #[must_use]
+    pub fn command_kind(&self) -> &'static str {
+        match self {
+            Self::DrawRect { .. } => "DrawRect",
+            Self::DrawRRect { .. } => "DrawRRect",
+            Self::DrawCircle { .. } => "DrawCircle",
+            Self::DrawOval { .. } => "DrawOval",
+            Self::DrawLine { .. } => "DrawLine",
+            Self::DrawArc { .. } => "DrawArc",
+            Self::DrawPath { .. } => "DrawPath",
+            Self::DrawDRRect { .. } => "DrawDRRect",
+            Self::DrawText { .. } => "DrawText",
+            Self::DrawTextSpan { .. } => "DrawTextSpan",
+            Self::DrawImage { .. } => "DrawImage",
+            Self::DrawImageRepeat { .. } => "DrawImageRepeat",
+            Self::DrawImageNineSlice { .. } => "DrawImageNineSlice",
+            Self::DrawImageFiltered { .. } => "DrawImageFiltered",
+            Self::DrawTexture { .. } => "DrawTexture",
+            Self::DrawShadow { .. } => "DrawShadow",
+            Self::DrawGradient { .. } => "DrawGradient",
+            Self::DrawGradientRRect { .. } => "DrawGradientRRect",
+            Self::ShaderMask { .. } => "ShaderMask",
+            Self::BackdropFilter { .. } => "BackdropFilter",
+            Self::DrawPoints { .. } => "DrawPoints",
+            Self::DrawVertices { .. } => "DrawVertices",
+            Self::DrawColor { .. } => "DrawColor",
+            Self::DrawPaint { .. } => "DrawPaint",
+            Self::DrawAtlas { .. } => "DrawAtlas",
+            Self::ClipRect { .. } => "ClipRect",
+            Self::ClipRRect { .. } => "ClipRRect",
+            Self::ClipRSuperellipse { .. } => "ClipRSuperellipse",
+            Self::ClipPath { .. } => "ClipPath",
+            Self::SaveLayer { .. } => "SaveLayer",
+            Self::RestoreLayer { .. } => "RestoreLayer",
+        }
+    }
+}
+
+impl Diagnosticable for DrawCommand {
+    fn to_diagnostics_node(&self) -> flui_foundation::DiagnosticsNode {
+        let mut node = flui_foundation::DiagnosticsNode::new(self.command_kind());
+        let mut builder = flui_foundation::DiagnosticsBuilder::new();
+        self.debug_fill_properties(&mut builder);
+        *node.properties_mut() = builder.build();
+        node
+    }
+
+    fn debug_fill_properties(&self, p: &mut DiagnosticsBuilder) {
+        match self {
+            // ── Clipping ─────────────────────────────────────────────────────
+            DrawCommand::ClipRect {
+                rect,
+                clip_op,
+                clip_behavior,
+                transform,
+            } => {
+                add_rect_prop(p, "rect", *rect);
+                p.add_enum("clip_op", clip_op);
+                p.add_enum("clip_behavior", clip_behavior);
+                add_transform_if_nonidentity(p, transform);
+            }
+
+            DrawCommand::ClipRRect {
+                rrect,
+                clip_op,
+                clip_behavior,
+                transform,
+            } => {
+                // Emit as Nested so a radius change diffs the output.
+                p.add_value("rect", *rrect);
+                p.add_enum("clip_op", clip_op);
+                p.add_enum("clip_behavior", clip_behavior);
+                add_transform_if_nonidentity(p, transform);
+            }
+
+            DrawCommand::ClipRSuperellipse {
+                rsuperellipse,
+                clip_op,
+                clip_behavior,
+                transform,
+            } => {
+                add_rect_prop(p, "rect", rsuperellipse.outer_rect());
+                p.add_enum("clip_op", clip_op);
+                p.add_enum("clip_behavior", clip_behavior);
+                add_transform_if_nonidentity(p, transform);
+            }
+
+            DrawCommand::ClipPath {
+                path,
+                clip_op,
+                clip_behavior,
+                transform,
+            } => {
+                // Bounds + command count are the stable fingerprint (raw verbs
+                // are too verbose); mirrors `summarize_command` for ClipPath.
+                add_rect_prop(p, "bounds", path.compute_bounds());
+                p.add_i64(
+                    "pt_count",
+                    path.commands().len().try_into().unwrap_or(i64::MAX),
+                );
+                p.add_enum("clip_op", clip_op);
+                p.add_enum("clip_behavior", clip_behavior);
+                add_transform_if_nonidentity(p, transform);
+            }
+
+            // ── Primitive draws ───────────────────────────────────────────────
+            DrawCommand::DrawLine {
+                p1,
+                p2,
+                paint,
+                transform,
+            } => {
+                p.add_value("p1", *p1);
+                p.add_value("p2", *p2);
+                add_paint_props(p, paint);
+                add_transform_if_nonidentity(p, transform);
+            }
+
+            DrawCommand::DrawRect {
+                rect,
+                paint,
+                transform,
+            } => {
+                add_rect_prop(p, "rect", *rect);
+                add_paint_props(p, paint);
+                add_transform_if_nonidentity(p, transform);
+            }
+
+            DrawCommand::DrawRRect {
+                rrect,
+                paint,
+                transform,
+            } => {
+                p.add_value("rect", *rrect);
+                add_paint_props(p, paint);
+                add_transform_if_nonidentity(p, transform);
+            }
+
+            DrawCommand::DrawCircle {
+                center,
+                radius,
+                paint,
+                transform,
+            } => {
+                p.add_value("center", *center);
+                p.add_f64("radius", f64::from(radius.get()));
+                add_paint_props(p, paint);
+                add_transform_if_nonidentity(p, transform);
+            }
+
+            DrawCommand::DrawOval {
+                rect,
+                paint,
+                transform,
+            } => {
+                add_rect_prop(p, "rect", *rect);
+                add_paint_props(p, paint);
+                add_transform_if_nonidentity(p, transform);
+            }
+
+            DrawCommand::DrawPath {
+                path,
+                paint,
+                transform,
+            } => {
+                // Bounds + command count are the stable fingerprint; raw verbs
+                // are too verbose and unstable. Mirrors `summarize_command`.
+                add_rect_prop(p, "bounds", path.compute_bounds());
+                p.add_i64(
+                    "pt_count",
+                    path.commands().len().try_into().unwrap_or(i64::MAX),
+                );
+                add_paint_props(p, paint);
+                add_transform_if_nonidentity(p, transform);
+            }
+
+            // ── Text ─────────────────────────────────────────────────────────
+            DrawCommand::DrawText {
+                text,
+                offset,
+                size,
+                paint,
+                transform,
+                ..
+            } => {
+                p.add("text", text.as_str());
+                p.add_value("offset", *offset);
+                p.add_value("size", *size);
+                add_paint_props(p, paint);
+                add_transform_if_nonidentity(p, transform);
+            }
+
+            DrawCommand::DrawTextSpan {
+                span,
+                offset,
+                text_scale_factor,
+                wrap_width,
+                transform,
+            } => {
+                // Plain text is the stable fingerprint; glyph/run details are
+                // not needed and change with shaper versions.
+                p.add("text", span.to_plain_text());
+                p.add_value("offset", *offset);
+                p.add_f64("text_scale_factor", *text_scale_factor);
+                if let Some(w) = wrap_width {
+                    p.add_f64("wrap_width", f64::from(*w));
+                }
+                add_transform_if_nonidentity(p, transform);
+            }
+
+            // ── Image ─────────────────────────────────────────────────────────
+            DrawCommand::DrawImage {
+                dst,
+                paint,
+                transform,
+                ..
+            } => {
+                add_rect_prop(p, "dst", *dst);
+                add_opt_paint_props(p, paint.as_ref());
+                add_transform_if_nonidentity(p, transform);
+            }
+
+            DrawCommand::DrawImageRepeat {
+                dst,
+                repeat,
+                paint,
+                transform,
+                ..
+            } => {
+                add_rect_prop(p, "dst", *dst);
+                p.add_enum("repeat", repeat);
+                add_opt_paint_props(p, paint.as_ref());
+                add_transform_if_nonidentity(p, transform);
+            }
+
+            DrawCommand::DrawImageNineSlice {
+                center_slice,
+                dst,
+                paint,
+                transform,
+                ..
+            } => {
+                add_rect_prop(p, "dst", *dst);
+                add_rect_prop(p, "center_slice", *center_slice);
+                add_opt_paint_props(p, paint.as_ref());
+                add_transform_if_nonidentity(p, transform);
+            }
+
+            DrawCommand::DrawImageFiltered {
+                dst,
+                filter,
+                paint,
+                transform,
+                ..
+            } => {
+                add_rect_prop(p, "dst", *dst);
+                p.add_enum("filter", filter);
+                add_opt_paint_props(p, paint.as_ref());
+                add_transform_if_nonidentity(p, transform);
+            }
+
+            // ── Texture ───────────────────────────────────────────────────────
+            DrawCommand::DrawTexture {
+                texture_id,
+                dst,
+                src,
+                filter_quality,
+                opacity,
+                transform,
+            } => {
+                p.add_i64(
+                    "texture_id",
+                    i64::try_from(texture_id.get()).unwrap_or(i64::MAX),
+                );
+                add_rect_prop(p, "dst", *dst);
+                if let Some(s) = src {
+                    add_rect_prop(p, "src", *s);
+                }
+                p.add_enum("filter_quality", filter_quality);
+                p.add_f64("opacity", f64::from(*opacity));
+                add_transform_if_nonidentity(p, transform);
+            }
+
+            // ── Effects ───────────────────────────────────────────────────────
+            DrawCommand::DrawShadow {
+                path,
+                color,
+                elevation,
+                transform,
+            } => {
+                // Path bounds are the stable fingerprint for shadow geometry;
+                // mirrors `summarize_command` for DrawShadow.
+                add_rect_prop(p, "path_bounds", path.compute_bounds());
+                p.add_value("color", *color);
+                p.add_f64("elevation", f64::from(*elevation));
+                add_transform_if_nonidentity(p, transform);
+            }
+
+            DrawCommand::DrawGradient {
+                rect,
+                shader,
+                transform,
+            } => {
+                add_rect_prop(p, "rect", *rect);
+                p.add_enum("shader", shader);
+                add_transform_if_nonidentity(p, transform);
+            }
+
+            DrawCommand::DrawGradientRRect {
+                rrect,
+                shader,
+                transform,
+            } => {
+                p.add_value("rect", *rrect);
+                p.add_enum("shader", shader);
+                add_transform_if_nonidentity(p, transform);
+            }
+
+            DrawCommand::ShaderMask {
+                child,
+                shader,
+                bounds,
+                blend_mode,
+                transform,
+            } => {
+                add_rect_prop(p, "bounds", *bounds);
+                p.add_enum("shader", shader);
+                p.add_enum("blend_mode", blend_mode);
+                p.add_i64("child_commands", child.len().try_into().unwrap_or(i64::MAX));
+                add_transform_if_nonidentity(p, transform);
+            }
+
+            DrawCommand::BackdropFilter {
+                child,
+                filter,
+                bounds,
+                blend_mode,
+                transform,
+            } => {
+                add_rect_prop(p, "bounds", *bounds);
+                p.add_enum("filter", filter);
+                p.add_enum("blend_mode", blend_mode);
+                if let Some(c) = child {
+                    p.add_i64("child_commands", c.len().try_into().unwrap_or(i64::MAX));
+                }
+                add_transform_if_nonidentity(p, transform);
+            }
+
+            // ── Advanced primitives ───────────────────────────────────────────
+            DrawCommand::DrawArc {
+                rect,
+                start_angle,
+                sweep_angle,
+                use_center,
+                paint,
+                transform,
+            } => {
+                add_rect_prop(p, "rect", *rect);
+                p.add_f64("start_angle", f64::from(*start_angle));
+                p.add_f64("sweep_angle", f64::from(*sweep_angle));
+                p.add_bool("use_center", *use_center);
+                add_paint_props(p, paint);
+                add_transform_if_nonidentity(p, transform);
+            }
+
+            DrawCommand::DrawDRRect {
+                outer,
+                inner,
+                paint,
+                transform,
+            } => {
+                // Each rrect becomes a Nested value under its own top-level
+                // property name, so outer/inner corner radii cannot collide.
+                p.add_value("outer", *outer);
+                p.add_value("inner", *inner);
+                add_paint_props(p, paint);
+                add_transform_if_nonidentity(p, transform);
+            }
+
+            DrawCommand::DrawPoints {
+                mode,
+                points,
+                paint,
+                transform,
+            } => {
+                p.add_enum("mode", mode);
+                p.add_i64("point_count", points.len().try_into().unwrap_or(i64::MAX));
+                add_paint_props(p, paint);
+                add_transform_if_nonidentity(p, transform);
+            }
+
+            DrawCommand::DrawVertices {
+                vertices,
+                colors,
+                tex_coords,
+                paint,
+                transform,
+                ..
+            } => {
+                p.add_i64(
+                    "vertex_count",
+                    vertices.len().try_into().unwrap_or(i64::MAX),
+                );
+                p.add_bool("has_colors", colors.is_some());
+                p.add_bool("has_tex_coords", tex_coords.is_some());
+                add_paint_props(p, paint);
+                add_transform_if_nonidentity(p, transform);
+            }
+
+            DrawCommand::DrawColor {
+                color,
+                blend_mode,
+                transform,
+            } => {
+                p.add_value("color", *color);
+                p.add_enum("blend_mode", blend_mode);
+                add_transform_if_nonidentity(p, transform);
+            }
+
+            DrawCommand::DrawPaint { paint, transform } => {
+                add_paint_props(p, paint);
+                add_transform_if_nonidentity(p, transform);
+            }
+
+            DrawCommand::DrawAtlas {
+                sprites,
+                colors,
+                blend_mode,
+                paint,
+                transform,
+                ..
+            } => {
+                p.add_i64("sprite_count", sprites.len().try_into().unwrap_or(i64::MAX));
+                p.add_bool("has_colors", colors.is_some());
+                p.add_enum("blend_mode", blend_mode);
+                add_opt_paint_props(p, paint.as_ref());
+                add_transform_if_nonidentity(p, transform);
+            }
+
+            // ── Layer ─────────────────────────────────────────────────────────
+            DrawCommand::SaveLayer {
+                bounds,
+                paint,
+                transform,
+            } => {
+                if let Some(b) = bounds {
+                    add_rect_prop(p, "bounds", *b);
+                }
+                add_paint_props(p, paint);
+                add_transform_if_nonidentity(p, transform);
+            }
+
+            DrawCommand::RestoreLayer { transform } => {
+                add_transform_if_nonidentity(p, transform);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+// `expect`/`panic!`/`unwrap_or_else(|| panic!())` are approved test-assertion patterns.
+#[allow(clippy::expect_used, clippy::panic)]
+mod tests {
+    use std::sync::Arc;
+
+    use flui_foundation::Diagnosticable;
+    use flui_types::{
+        geometry::{Point, Rect, px},
+        styling::Color,
+    };
+
+    use crate::{
+        Paint,
+        display_list::{BlendMode, DrawCommand},
+    };
+
+    /// Each `DrawRect` node must be named `"DrawRect"` by the per-variant
+    /// `to_diagnostics_node` override, and the `rect` property must carry a
+    /// typed `Rect` value, not a `String`.
+    #[test]
+    fn draw_rect_node_name_and_typed_rect() {
+        use flui_foundation::DiagnosticsValue;
+
+        let cmd = DrawCommand::DrawRect {
+            rect: Rect::from_ltrb(px(0.0), px(0.0), px(40.0), px(30.0)),
+            paint: Arc::new(Paint::fill(Color::RED)),
+            transform: flui_types::geometry::Matrix4::identity(),
+        };
+
+        let node = cmd.to_diagnostics_node();
+        // Per-variant override produces "DrawRect", not the generic enum type name.
+        assert_eq!(node.name(), Some("DrawRect"), "node name");
+
+        // The `rect` property must carry a typed Rect value.
+        let prop = node
+            .find_property("rect")
+            .expect("DrawRect must have a `rect` property");
+        assert!(
+            matches!(
+                prop.value_typed(),
+                DiagnosticsValue::Rect { w, h, .. } if *w > 0.0 && *h > 0.0
+            ),
+            "rect property must be a typed Rect, got: {:?}",
+            prop.value_typed(),
+        );
+    }
+
+    /// A `DrawColor` command must emit a typed `Color` value for the `color`
+    /// property so the inspector JSON is faithful (not a display string).
+    #[test]
+    fn draw_color_emits_typed_color_rgba() {
+        use flui_foundation::DiagnosticsValue;
+
+        let cmd = DrawCommand::DrawColor {
+            color: Color::rgba(255, 128, 0, 200),
+            blend_mode: BlendMode::SrcOver,
+            transform: flui_types::geometry::Matrix4::identity(),
+        };
+
+        let node = cmd.to_diagnostics_node();
+        let prop = node
+            .find_property("color")
+            .expect("DrawColor must have a `color` property");
+
+        assert!(
+            matches!(
+                prop.value_typed(),
+                DiagnosticsValue::Color {
+                    r: 255,
+                    g: 128,
+                    b: 0,
+                    a: 200
+                }
+            ),
+            "color property must be typed Color {{r,g,b,a}}, got: {:?}",
+            prop.value_typed(),
+        );
+    }
+
+    /// `DrawDRRect` emits outer and inner rrects as `Nested` values so each
+    /// rrect's corner radii live inside their own sub-object.
+    ///
+    /// The top-level node has exactly two rrect properties (`"outer"` and
+    /// `"inner"`), each carrying a `Nested` value that contains `"rect"` plus
+    /// the four corner radii `"r_tl"` / `"r_tr"` / `"r_br"` / `"r_bl"`.
+    /// Each corner radius is itself a `Nested` value with `"x"` and `"y"` float
+    /// sub-properties, faithfully recording elliptical radii (FIX 2).
+    /// Distinct outer/inner radii must produce distinct nested values — the
+    /// old flat-name collision (`outer_r_tl` vs `inner_r_tl` on the same node)
+    /// is impossible with this structure.
+    #[test]
+    fn draw_drrect_outer_and_inner_radii_have_distinct_names() {
+        use flui_foundation::DiagnosticsValue;
+        use flui_types::geometry::{Matrix4, RRect, Radius, Rect, px};
+
+        let outer = RRect::from_rect_circular(
+            Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(100.0)),
+            px(12.0),
+        );
+        let inner = RRect::from_rect_and_radius(
+            Rect::from_ltrb(px(10.0), px(10.0), px(90.0), px(90.0)),
+            Radius::circular(px(4.0)),
+        );
+        let cmd = DrawCommand::DrawDRRect {
+            outer,
+            inner,
+            paint: Arc::new(Paint::fill(Color::RED)),
+            transform: Matrix4::identity(),
+        };
+
+        let node = cmd.to_diagnostics_node();
+
+        // Helper: extract the Nested props from a top-level property.
+        let get_nested = |name: &str| -> &[flui_foundation::DiagnosticsProperty] {
+            match node
+                .find_property(name)
+                .unwrap_or_else(|| panic!("{name} property must be present on DrawDRRect node"))
+                .value_typed()
+            {
+                DiagnosticsValue::Nested(props) => props.as_slice(),
+                other => panic!("{name} must be Nested, got {other:?}"),
+            }
+        };
+
+        let outer_props = get_nested("outer");
+        let inner_props = get_nested("inner");
+
+        // Each Nested must contain a "r_tl" that is itself a Nested {x, y}.
+        // Extract the x-radius from a corner's Nested value.
+        let get_r_tl_x = |props: &[flui_foundation::DiagnosticsProperty]| -> f64 {
+            let r_tl = props
+                .iter()
+                .find(|p| p.name() == "r_tl")
+                .unwrap_or_else(|| panic!("Nested must contain r_tl"));
+            match r_tl.value_typed() {
+                DiagnosticsValue::Nested(sub) => {
+                    let x_prop = sub
+                        .iter()
+                        .find(|p| p.name() == "x")
+                        .unwrap_or_else(|| panic!("r_tl Nested must contain x"));
+                    match x_prop.value_typed() {
+                        DiagnosticsValue::Float(v) => *v,
+                        other => panic!("r_tl.x must be Float, got {other:?}"),
+                    }
+                }
+                other => panic!("r_tl must be Nested{{x,y}}, got {other:?}"),
+            }
+        };
+
+        let outer_r_tl_x = get_r_tl_x(outer_props);
+        let inner_r_tl_x = get_r_tl_x(inner_props);
+
+        assert!(
+            (outer_r_tl_x - 12.0_f64).abs() < 0.01,
+            "outer r_tl.x must be ~12.0, got: {outer_r_tl_x}",
+        );
+        assert!(
+            (inner_r_tl_x - 4.0_f64).abs() < 0.01,
+            "inner r_tl.x must be ~4.0, got: {inner_r_tl_x}",
+        );
+
+        // The two Nested values must not be equal — different radii, different values.
+        assert_ne!(
+            node.find_property("outer")
+                .map(flui_foundation::DiagnosticsProperty::value_typed),
+            node.find_property("inner")
+                .map(flui_foundation::DiagnosticsProperty::value_typed),
+            "outer and inner Nested values must differ (distinct radii)",
+        );
+
+        // No duplicate top-level property names.
+        let all_names: Vec<&str> = node
+            .properties()
+            .iter()
+            .map(flui_foundation::DiagnosticsProperty::name)
+            .collect();
+        let mut deduped = all_names.clone();
+        deduped.sort_unstable();
+        deduped.dedup();
+        assert_eq!(
+            all_names.len(),
+            deduped.len(),
+            "DrawDRRect node has duplicate property names: {all_names:?}",
+        );
+    }
+
+    /// `DrawCircle` must emit typed `Float` values for `radius`, and the
+    /// `Display` string for `radius` must be `"50.00"` (2-dp normalized).
+    #[test]
+    fn draw_circle_radius_is_typed_float_with_two_dp_display() {
+        let cmd = DrawCommand::DrawCircle {
+            center: Point::new(px(10.0), px(10.0)),
+            radius: px(50.0),
+            paint: Arc::new(Paint::fill(Color::BLUE)),
+            transform: flui_types::geometry::Matrix4::identity(),
+        };
+
+        let node = cmd.to_diagnostics_node();
+
+        // Typed value is Float.
+        let prop = node
+            .find_property("radius")
+            .expect("DrawCircle must have a `radius` property");
+        assert!(
+            matches!(
+                prop.value_typed(),
+                flui_foundation::DiagnosticsValue::Float(_)
+            ),
+            "radius must be typed Float, got: {:?}",
+            prop.value_typed(),
+        );
+
+        // Display is the 2-decimal normalized float.
+        assert_eq!(
+            prop.value(),
+            "50.00",
+            "radius display must be 2-dp normalized",
+        );
+    }
 }

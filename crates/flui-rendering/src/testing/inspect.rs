@@ -171,7 +171,7 @@ pub trait Probe {
     fn property(&self, id: RenderId, name: &str) -> Option<String> {
         self.pipeline()
             .debug_node_diagnostics(id)
-            .and_then(|node| node.get_property(name).map(str::to_owned))
+            .and_then(|node| node.get_property(name))
     }
 
     /// Parses a numeric diagnostics property on `id`, if present.
@@ -188,7 +188,6 @@ pub trait Probe {
             .find_descendant_unique(type_name)
             .ok()?
             .get_property(property)
-            .map(str::to_owned)
     }
 
     /// Parses a numeric property on the first descendant matched by `type_name`.

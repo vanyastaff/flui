@@ -672,7 +672,7 @@ impl LaidOut {
             if diagnostics.name() != Some("RenderParagraph") {
                 continue;
             }
-            if diagnostics.get_property("text") == Some(text) {
+            if diagnostics.get_property("text").as_deref() == Some(text) {
                 assert!(
                     found.is_none(),
                     "find_text: multiple RenderParagraph nodes contain {text:?}"

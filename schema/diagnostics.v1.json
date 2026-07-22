@@ -1,0 +1,553 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "DiagnosticsEnvelope",
+  "description": "A versioned envelope wrapping a [`DiagnosticsNode`] tree for JSON export.\n\n`format_version` lets tooling (devtools, golden-diff scripts, language\nbindings) detect schema evolution without ad-hoc version probing.\n\n# Example\n\n```rust\n# use flui_foundation::{DiagnosticsEnvelope, DiagnosticsNode};\nlet node = DiagnosticsNode::new(\"RenderPadding\");\nlet env = DiagnosticsEnvelope::new(node);\nassert_eq!(env.format_version, flui_foundation::DIAGNOSTICS_FORMAT_VERSION);\n```",
+  "type": "object",
+  "properties": {
+    "format_version": {
+      "description": "Schema version — always [`DIAGNOSTICS_FORMAT_VERSION`] for freshly\nconstructed envelopes. Tooling must check this field before\ninterpreting `root`.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "root": {
+      "description": "The diagnostics tree root.",
+      "$ref": "#/$defs/DiagnosticsNode"
+    }
+  },
+  "required": [
+    "format_version",
+    "root"
+  ],
+  "$defs": {
+    "DiagnosticLevel": {
+      "description": "The level of importance of a diagnostic message.\n\nSimilar to Flutter's `DiagnosticLevel`.\n\n# Examples\n\n```rust\nuse flui_foundation::DiagnosticLevel;\n\nlet level = DiagnosticLevel::Info;\nassert!(level > DiagnosticLevel::Debug);\nassert_eq!(level.to_string(), \"info\");\n```",
+      "oneOf": [
+        {
+          "description": "Hidden diagnostic level.",
+          "type": "string",
+          "const": "hidden"
+        },
+        {
+          "description": "A diagnostic that is likely to be low-value but may provide debugging\nvalue.",
+          "type": "string",
+          "const": "fine"
+        },
+        {
+          "description": "A diagnostic useful for debugging.",
+          "type": "string",
+          "const": "debug"
+        },
+        {
+          "description": "Diagnostics that are probably useful for debugging.",
+          "type": "string",
+          "const": "info"
+        },
+        {
+          "description": "A diagnostic that is informational.",
+          "type": "string",
+          "const": "warning"
+        },
+        {
+          "description": "A diagnostic that we want to bring to the user's attention.",
+          "type": "string",
+          "const": "hint"
+        },
+        {
+          "description": "A diagnostic that indicates an error.",
+          "type": "string",
+          "const": "error"
+        }
+      ]
+    },
+    "DiagnosticsNode": {
+      "description": "A node in the diagnostics tree\n\nSimilar to Flutter's `DiagnosticsNode`.\n\n# Examples\n\n```rust\nuse flui_foundation::{DiagnosticsNode, DiagnosticsProperty};\n\nlet mut node = DiagnosticsNode::new(\"MyView\");\nnode.add_property(DiagnosticsProperty::new(\"width\", 100));\nlet rendered = node.to_string();\nassert!(rendered.contains(\"MyView\"));\nassert!(rendered.contains(\"width\"));\n```",
+      "type": "object",
+      "properties": {
+        "children": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/DiagnosticsNode"
+          }
+        },
+        "level": {
+          "$ref": "#/$defs/DiagnosticLevel",
+          "default": "info"
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "properties": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/DiagnosticsProperty"
+          }
+        },
+        "style": {
+          "$ref": "#/$defs/DiagnosticsTreeStyle",
+          "default": "sparse"
+        }
+      }
+    },
+    "DiagnosticsProperty": {
+      "description": "A diagnostic property\n\nSimilar to Flutter's `DiagnosticsProperty`.\n\n# Examples\n\n```rust\nuse flui_foundation::DiagnosticsProperty;\n\nlet prop = DiagnosticsProperty::new(\"width\", 100);\nassert_eq!(prop.name(), \"width\");\nassert_eq!(prop.value(), \"100\");\nassert_eq!(prop.to_string(), \"width: 100\");\n```",
+      "type": "object",
+      "properties": {
+        "default_value": {
+          "description": "The display string to compare against when checking\n[`DiagnosticsProperty::is_hidden`]. Stored as a plain string so\ncallers can pass `\"0\"` / `\"false\"` etc. without knowing the typed\nvariant.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "description": "The typed kind of this property, determining how it is displayed.\n\nDefaults to [`DiagnosticsPropertyKind::Generic`] for properties built\nvia [`DiagnosticsProperty::new`], preserving backwards compatibility.",
+          "$ref": "#/$defs/DiagnosticsPropertyKind",
+          "default": "Generic"
+        },
+        "level": {
+          "$ref": "#/$defs/DiagnosticLevel",
+          "default": "info"
+        },
+        "name": {
+          "type": "string"
+        },
+        "show_name": {
+          "type": "boolean",
+          "default": true
+        },
+        "show_separator": {
+          "type": "boolean",
+          "default": true
+        },
+        "tooltip": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "value": {
+          "$ref": "#/$defs/DiagnosticsValue"
+        }
+      },
+      "required": [
+        "name",
+        "value"
+      ]
+    },
+    "DiagnosticsPropertyKind": {
+      "description": "The kind of a diagnostics property, determining how it is displayed.\n\nMirrors Flutter's typed `DiagnosticsProperty<T>` subclass hierarchy\n(`EnumProperty`, `FlagProperty`, `IterableProperty`, etc.) but as an\nenum variant instead of class inheritance.\n\nThe `Generic` variant is the fallback for all types not explicitly listed.\n\n# Examples\n\n```rust\nuse flui_foundation::DiagnosticsPropertyKind;\n\nlet kind = DiagnosticsPropertyKind::Iterable { count: 3 };\nassert_eq!(kind, DiagnosticsPropertyKind::Iterable { count: 3 });\n```",
+      "oneOf": [
+        {
+          "description": "A generic property displayed as `{name}: {value:?}`.",
+          "type": "string",
+          "const": "Generic"
+        },
+        {
+          "description": "An enum property; `description` overrides the formatted value string.",
+          "type": "object",
+          "properties": {
+            "Enum": {
+              "type": "object",
+              "properties": {
+                "description": {
+                  "description": "Optional human-readable description of the current enum variant.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              }
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "Enum"
+          ]
+        },
+        {
+          "description": "A boolean flag property; displayed as `{name}` (true) or omitted (false).",
+          "type": "string",
+          "const": "Flag"
+        },
+        {
+          "description": "An iterable property; `count` is the number of elements.",
+          "type": "object",
+          "properties": {
+            "Iterable": {
+              "type": "object",
+              "properties": {
+                "count": {
+                  "description": "The number of elements in the iterable.",
+                  "type": "integer",
+                  "format": "uint",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "count"
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "Iterable"
+          ]
+        },
+        {
+          "description": "An optional reference; displayed as `{name}: <null>` when absent.",
+          "type": "string",
+          "const": "OptionalRef"
+        },
+        {
+          "description": "A stack of strings (e.g. stack traces).",
+          "type": "string",
+          "const": "Stack"
+        },
+        {
+          "description": "A double/float with an optional unit (e.g. `\"dp\"`, `\"px\"`).",
+          "type": "object",
+          "properties": {
+            "Double": {
+              "type": "object",
+              "properties": {
+                "unit": {
+                  "description": "Optional unit label appended to the formatted value.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              }
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "Double"
+          ]
+        },
+        {
+          "description": "An integer with an optional unit.",
+          "type": "object",
+          "properties": {
+            "Int": {
+              "type": "object",
+              "properties": {
+                "unit": {
+                  "description": "Optional unit label appended to the formatted value.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              }
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "Int"
+          ]
+        },
+        {
+          "description": "A color value (RGBA hex display).",
+          "type": "string",
+          "const": "Color"
+        },
+        {
+          "description": "An `Offset` / `Point2D` value.",
+          "type": "string",
+          "const": "Offset"
+        },
+        {
+          "description": "A `Rect` value.",
+          "type": "string",
+          "const": "Rect"
+        },
+        {
+          "description": "A `Size` value.",
+          "type": "string",
+          "const": "Size"
+        }
+      ]
+    },
+    "DiagnosticsTreeStyle": {
+      "description": "How a tree should be rendered.\n\nSimilar to Flutter's `DiagnosticsTreeStyle`.\n\n# Examples\n\n```rust\nuse flui_foundation::DiagnosticsTreeStyle;\n\nlet style = DiagnosticsTreeStyle::Sparse;\nassert_eq!(style.to_string(), \"sparse\");\n```",
+      "oneOf": [
+        {
+          "description": "A style that is appropriate for displaying sparse trees.",
+          "type": "string",
+          "const": "sparse"
+        },
+        {
+          "description": "A style that is appropriate for displaying the properties of an object.",
+          "type": "string",
+          "const": "shallow"
+        },
+        {
+          "description": "A style that is appropriate for displaying a tree.",
+          "type": "string",
+          "const": "dense"
+        },
+        {
+          "description": "A style that is appropriate for displaying a single line.",
+          "type": "string",
+          "const": "singleline"
+        },
+        {
+          "description": "A style that is appropriate for displaying an error.",
+          "type": "string",
+          "const": "errorproperty"
+        }
+      ]
+    },
+    "DiagnosticsValue": {
+      "description": "The typed value of a [`DiagnosticsProperty`].\n\nCarries the structured data so the inspector's JSON serialization is\nfaithful (full precision, typed shapes) while the text renderer normalises\nat the [`fmt::Display`] boundary only (floats → 2 decimal places,\ncolors → `#RRGGBBAA`, etc.).\n\nThe `Str` variant is the back-compat path: [`DiagnosticsProperty::new`]\nalways constructs it, so all existing `Diagnosticable` impls continue to\ncompile and behave identically.\n\n# Examples\n\n```rust\nuse flui_foundation::DiagnosticsValue;\n\nlet v = DiagnosticsValue::Float(0.333_333);\nassert_eq!(v.to_string(), \"0.33\");           // normalised for text\nassert_eq!(DiagnosticsValue::Str(\"hello\".into()).to_string(), \"hello\");\n```",
+      "oneOf": [
+        {
+          "description": "Absent / null value.",
+          "type": "string",
+          "const": "Null"
+        },
+        {
+          "description": "Boolean value.",
+          "type": "object",
+          "properties": {
+            "Bool": {
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "Bool"
+          ]
+        },
+        {
+          "description": "Signed 64-bit integer.",
+          "type": "object",
+          "properties": {
+            "Int": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "Int"
+          ]
+        },
+        {
+          "description": "64-bit float — serialised at full precision; displayed at 2 d.p.",
+          "type": "object",
+          "properties": {
+            "Float": {
+              "type": "number",
+              "format": "double"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "Float"
+          ]
+        },
+        {
+          "description": "Generic string (the back-compat variant produced by\n[`DiagnosticsProperty::new`]).",
+          "type": "object",
+          "properties": {
+            "Str": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "Str"
+          ]
+        },
+        {
+          "description": "RGBA colour, each channel `0–255`.",
+          "type": "object",
+          "properties": {
+            "Color": {
+              "type": "object",
+              "properties": {
+                "a": {
+                  "description": "Alpha channel `0–255` (255 = fully opaque).",
+                  "type": "integer",
+                  "format": "uint8",
+                  "maximum": 255,
+                  "minimum": 0
+                },
+                "b": {
+                  "description": "Blue channel `0–255`.",
+                  "type": "integer",
+                  "format": "uint8",
+                  "maximum": 255,
+                  "minimum": 0
+                },
+                "g": {
+                  "description": "Green channel `0–255`.",
+                  "type": "integer",
+                  "format": "uint8",
+                  "maximum": 255,
+                  "minimum": 0
+                },
+                "r": {
+                  "description": "Red channel `0–255`.",
+                  "type": "integer",
+                  "format": "uint8",
+                  "maximum": 255,
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "r",
+                "g",
+                "b",
+                "a"
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "Color"
+          ]
+        },
+        {
+          "description": "Axis-aligned rectangle: origin (`x`, `y`) + extent (`w`, `h`).",
+          "type": "object",
+          "properties": {
+            "Rect": {
+              "type": "object",
+              "properties": {
+                "h": {
+                  "description": "Height.",
+                  "type": "number",
+                  "format": "double"
+                },
+                "w": {
+                  "description": "Width.",
+                  "type": "number",
+                  "format": "double"
+                },
+                "x": {
+                  "description": "Left edge (origin x).",
+                  "type": "number",
+                  "format": "double"
+                },
+                "y": {
+                  "description": "Top edge (origin y).",
+                  "type": "number",
+                  "format": "double"
+                }
+              },
+              "required": [
+                "x",
+                "y",
+                "w",
+                "h"
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "Rect"
+          ]
+        },
+        {
+          "description": "2-D offset / point.",
+          "type": "object",
+          "properties": {
+            "Offset": {
+              "type": "object",
+              "properties": {
+                "x": {
+                  "description": "Horizontal component.",
+                  "type": "number",
+                  "format": "double"
+                },
+                "y": {
+                  "description": "Vertical component.",
+                  "type": "number",
+                  "format": "double"
+                }
+              },
+              "required": [
+                "x",
+                "y"
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "Offset"
+          ]
+        },
+        {
+          "description": "2-D size.",
+          "type": "object",
+          "properties": {
+            "Size": {
+              "type": "object",
+              "properties": {
+                "h": {
+                  "description": "Height.",
+                  "type": "number",
+                  "format": "double"
+                },
+                "w": {
+                  "description": "Width.",
+                  "type": "number",
+                  "format": "double"
+                }
+              },
+              "required": [
+                "w",
+                "h"
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "Size"
+          ]
+        },
+        {
+          "description": "Ordered list of diagnostic values.",
+          "type": "object",
+          "properties": {
+            "List": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/DiagnosticsValue"
+              }
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "List"
+          ]
+        },
+        {
+          "description": "Inline nested properties (for sub-objects that don't warrant a full\nchild node).",
+          "type": "object",
+          "properties": {
+            "Nested": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/DiagnosticsProperty"
+              }
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "Nested"
+          ]
+        }
+      ]
+    }
+  }
+}
