@@ -265,6 +265,13 @@ impl RenderSliver for RenderSliverGridLazy {
             max_paint_extent: scroll_extent,
             cache_extent,
             hit_test_extent: paint_extent,
+            // See the identical fix/comment on eager `RenderSliverGrid`
+            // (`sliver_grid.rs`): omitting this left `visible` at
+            // `SliverGeometry::ZERO`'s `false` unconditionally, which blocked
+            // the viewport's hit-test walk (`sliver_child_is_visible`,
+            // `flui-rendering/src/pipeline/owner/accessors.rs`) from ever
+            // reaching a lazy grid's children.
+            visible: paint_extent > 0.0,
             has_visual_overflow: scroll_extent > paint_extent
                 || constraints.scroll_offset > 0.0
                 || constraints.overlap != 0.0,

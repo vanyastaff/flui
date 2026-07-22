@@ -5465,6 +5465,15 @@ fn harness_render_sliver_grid_lays_out_two_column_grid() {
         "4 children × 2 columns = 2 rows × 100px = 200px total extent",
     );
     assert!(geom.paint_extent > 0.0);
+    // A grid painting on-screen content must report `visible: true`, matching
+    // Flutter's `SliverGeometry.visible ?? paintExtent > 0.0` default and every
+    // sibling sliver leaf. Regression guard for the production fix that added
+    // this field: with it omitted, `visible` stayed `false` and the viewport's
+    // hit-test walk (`sliver_child_is_visible`) never reached grid children.
+    assert!(
+        geom.visible,
+        "a grid with paint_extent > 0 must report visible: true (else it is un-hit-testable)",
+    );
 
     // Each tile must receive tight 100×100 constraints from the delegate.
     assert_eq!(
@@ -5484,6 +5493,41 @@ fn harness_render_sliver_grid_lays_out_two_column_grid() {
     let sliver_node_diag = tree.find_descendant("RenderSliverGrid").unwrap();
     assert_has_committed_geometry(sliver_node_diag);
 }
+
+// Render-level parity oracle: `rendering/sliver_cache_test.dart`'s
+// `'RenderSliverGrid calculates correct geometry'` (tag `3.44.0`, the one
+// genuine `RenderSliverGrid`-subject case in that file — confirmed by the
+// `SliverGrid` widget-level port's own content sweep,
+// `crates/flui-widgets/tests/parity/sliver_grid_test.rs`). Not portable here,
+// but for a TEST-HARNESS reason, not a production gap — no Cross.H entry
+// follows from this one, same disposition as that file's own
+// `find_text`-vs-`skipOffstage` note. The oracle constructs 60 pre-existing
+// `RenderBox` children via a `TestRenderSliverBoxChildManager`, scrolls the
+// SAME mounted `RenderViewport` through four offsets (`root.offset = ...;
+// pumpFrame();`), and asserts which of the 60 boxes are `.attached` at each
+// position — i.e. it exercises a genuine child-manager request/attach/evict
+// protocol across multiple relayouts of one persistent tree. This harness's
+// `LayoutRun::update`/`relayout` (`crates/flui-rendering/src/testing/
+// harness.rs`) DOES support mutating and re-laying-out an already-mounted
+// tree — the mechanism itself is not the blocker. The blocker is
+// `RenderSliverGridLazy::perform_layout` (`crates/flui-objects/src/sliver/
+// sliver_grid_lazy.rs`): resident (already-attached, pre-seeded) slots inside
+// the current window get laid out, and absent slots get a
+// `ctx.request_child_build` — but nothing detaches slots that fall OUTSIDE
+// the window (`ctx.emit_retain_band` only signals the ELEMENT tree's
+// `SparseChildren::retain_band` to evict them later; `dispose_box_child` is
+// deliberately not called at the render level, per that file's own module
+// doc, to avoid an ABA double-remove with the element side). Since this
+// harness mounts render objects directly with no element tree at all, there
+// is no consumer for that retain-band signal — pre-seeding all 60 children
+// and scrolling would show every one still `.attached` forever, the OPPOSITE
+// of what the oracle asserts. Reproducing the oracle's actual scenario needs
+// a fake render-level child-manager that creates/disposes real `RenderBox`
+// children on demand (Flutter's `TestRenderSliverBoxChildManager`); this
+// harness's `viewport()`/`sliver_node()` builders have no such concept for
+// ANY lazy sliver, grid or list alike — a test-infrastructure gap, not
+// something wrong in `RenderSliverGridLazy`'s own (correct, checked
+// separately by the two hit-test cases in the widget-level port) behavior.
 
 // ── RenderSliverGridLazy ──────────────────────────────────────────────────────
 

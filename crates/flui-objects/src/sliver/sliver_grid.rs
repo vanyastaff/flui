@@ -151,6 +151,15 @@ impl RenderSliver for RenderSliverGrid {
             max_paint_extent: scroll_extent,
             cache_extent,
             hit_test_extent: paint_extent,
+            // Every sibling sliver (`RenderSliverFixedExtentList`,
+            // `RenderSliverPadding`, `RenderSliverFillViewport`, ...) sets this
+            // explicitly; omitting it left `visible` at `SliverGeometry::ZERO`'s
+            // `false` unconditionally. The viewport's own hit-test walk gates on
+            // it (`sliver_child_is_visible` in
+            // `flui-rendering/src/pipeline/owner/accessors.rs`), so a grid with
+            // real on-screen content was never reachable by any pointer event —
+            // confirmed while porting `SliverGrid`'s hit-test parity cases.
+            visible: paint_extent > 0.0,
             has_visual_overflow: scroll_extent > paint_extent
                 || constraints.scroll_offset > 0.0
                 || constraints.overlap != 0.0,
