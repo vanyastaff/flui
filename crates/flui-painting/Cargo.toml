@@ -21,7 +21,7 @@ serde = { workspace = true, optional = true }
 parking_lot = { workspace = true }
 
 # Text shaping and layout
-cosmic-text = { version = "0.18" }
+cosmic-text = { version = "0.19" }
 
 [dev-dependencies]
 # Self dev-dependency that turns the off-by-default `testing` feature on for
