@@ -167,7 +167,7 @@ See [Hot Reload](hot-reload.md) for workflows, `ReloadStrategy`, and integration
 
 - [Hot Reload](hot-reload.md) — two-layer dev model, plugin workflows
 - [`.ai-factory/ARCHITECTURE.md`](../.ai-factory/ARCHITECTURE.md) — full architectural rules and anti-patterns
-- [`.specify/memory/constitution.md`](../.specify/memory/constitution.md) — constitution v2.3.0
+- [`.specify/memory/constitution.md`](../.specify/memory/constitution.md) — constitution (last ratified v2.3.0; ⚠ file currently absent from the repo — pending maintainer restore)
 - [Foundations](FOUNDATIONS.md) — architecture contract, target crate graph
 - [Roadmap](ROADMAP.md) — construction phases from current to target
 - [Crates Map](crates.md) — per-layer crate inventory

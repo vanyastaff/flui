@@ -116,7 +116,7 @@ cargo build -p flui-app
 1. Decide its layer based on what it depends on. Lower-layer crates must not depend on higher-layer ones.
 2. Add the directory under `crates/<flui-name>/` with a standard layout (`Cargo.toml`, `src/lib.rs`, `src/error.rs`).
 3. Add the path to `[workspace.members]` in the root `Cargo.toml`; add it to `default-members` unless the crate is intentionally excluded from default local builds.
-4. Update the constitution layer table in `.specify/memory/constitution.md` if it represents a new responsibility.
+4. Update the layer table if it represents a new responsibility — in the constitution (`.specify/memory/constitution.md`) once restored, and meanwhile in [`FOUNDATIONS.md` Part IV](FOUNDATIONS.md#part-iv--the-target-crate-decomposition), the de-facto layer-table source while the constitution file is absent from the repo.
 5. Update this page (`docs/crates.md`) and the directory tree in `AGENTS.md`.
 
 ## See Also
@@ -126,4 +126,4 @@ cargo build -p flui-app
 - [Architecture](architecture.md) — three-tree pipeline + layered DAG (current state)
 - [Getting Started](getting-started.md) — build and run instructions
 - [`.ai-factory/ARCHITECTURE.md`](../.ai-factory/ARCHITECTURE.md) — full architectural rules
-- [`.specify/memory/constitution.md`](../.specify/memory/constitution.md) — constitution v2.3.0
+- [`.specify/memory/constitution.md`](../.specify/memory/constitution.md) — constitution (last ratified v2.3.0; ⚠ file currently absent from the repo — pending maintainer restore. Layer table: see [`FOUNDATIONS.md` Part IV](FOUNDATIONS.md#part-iv--the-target-crate-decomposition))

@@ -1361,6 +1361,43 @@ mod tests {
         assert_eq!(ViewId::new_checked(42).map(super::Id::get), Some(42));
     }
 
+    /// F18 — boundary: a plain `Id<T>` must hold `usize::MAX` and round-trip
+    /// losslessly through `into_raw` / `from_raw` and `get`.
+    ///
+    /// The original F18 spec targeted `ElementId`, but `ElementId` is now a
+    /// generational key (it packs a 32-bit index and rejects `new(usize::MAX)`,
+    /// and exposes neither `get` nor `into_raw`). The boundary contract the
+    /// finding documents belongs to the non-generational `Id<T>` family, so the
+    /// test exercises `ViewId`, where `usize::MAX` is a valid `NonZeroUsize`.
+    #[test]
+    fn id_at_usize_max() {
+        let id = ViewId::new(usize::MAX);
+        assert_eq!(id.get(), usize::MAX);
+
+        // `Option<ViewId>` keeps the niche (0 == None), so `Some(MAX)` is fine.
+        let opt: Option<ViewId> = Some(id);
+        assert!(opt.is_some());
+
+        // Round-trip through the raw representation.
+        let raw = id.into_raw();
+        let id2 = ViewId::from_raw(raw);
+        assert_eq!(id, id2);
+        assert_eq!(id2.get(), usize::MAX);
+    }
+
+    /// F18 — niche optimisation holds at the `usize::MAX` boundary:
+    /// `Some(MAX)` is distinct from `None`, and `Option<ViewId>` stays the
+    /// size of `ViewId` (0 is the `None` sentinel, never a valid index).
+    #[test]
+    fn id_niche_at_usize_max() {
+        let some: Option<ViewId> = Some(ViewId::new(usize::MAX));
+        let none: Option<ViewId> = None;
+        assert!(some.is_some());
+        assert!(none.is_none());
+        assert_eq!(some.map(ViewId::get), Some(usize::MAX));
+        assert_eq!(size_of::<Option<ViewId>>(), size_of::<ViewId>());
+    }
+
     #[test]
     fn test_scheduler_id_types() {
         // Sanity-check the scheduler-consumer IDs survive the audit.
