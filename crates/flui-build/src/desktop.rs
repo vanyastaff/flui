@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::error::{BuildError, BuildResult};
-use crate::platform::{private, BuildArtifacts, BuilderContext, FinalArtifacts, PlatformBuilder};
+use crate::platform::{BuildArtifacts, BuilderContext, FinalArtifacts, PlatformBuilder, private};
 use crate::util::process;
 
 /// Builder for desktop platforms (Windows, macOS, Linux)
@@ -85,7 +85,7 @@ impl PlatformBuilder for DesktopBuilder {
             _ => {
                 return Err(BuildError::InvalidPlatform {
                     reason: "Expected Desktop platform".to_string(),
-                })
+                });
             }
         };
 
@@ -146,8 +146,14 @@ impl PlatformBuilder for DesktopBuilder {
             .first()
             .ok_or_else(|| BuildError::Other("No library found".to_string()))?;
 
-        // Copy to output directory
-        let lib_name = lib_src.file_name().unwrap();
+        // Copy to output directory. `artifacts` is caller-supplied, so a
+        // library path without a final component is an input error, not a bug.
+        let lib_name = lib_src.file_name().ok_or_else(|| {
+            BuildError::invalid_config(
+                "artifacts.rust_libs",
+                format!("library path {} has no file name", lib_src.display()),
+            )
+        })?;
         let output_lib = ctx.output_dir.join(lib_name);
 
         std::fs::create_dir_all(&ctx.output_dir)?;

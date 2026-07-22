@@ -1,6 +1,6 @@
-//! `View::can_update` semantics test suite (plan §U11 / FR-028).
+//! `View::can_update` semantics test suite (FR-028).
 //!
-//! Phase 1 §U11 extends the default `View::can_update` body from a
+//! The default `View::can_update` body was extended from a
 //! type-id-only check to spec FR-028's full
 //! `runtimeType == other.runtimeType && key == other.key` semantics.
 //! The body already shipped in
@@ -14,10 +14,7 @@
 use std::sync::Arc;
 
 use flui_foundation::{UniqueKey, ValueKey, ViewKey};
-use flui_view::{
-    BuildContext, ElementBase, GlobalKey, IntoView, ObjectKey, StatelessElement, StatelessView,
-    View, ViewExt,
-};
+use flui_view::{BuildContext, GlobalKey, IntoView, ObjectKey, StatelessView, View, ViewExt};
 
 // ----------------------------------------------------------------------------
 // Two distinct view types so the "type mismatch" axis is unambiguous.
@@ -54,9 +51,8 @@ impl StatelessView for Alpha {
 }
 
 impl View for Alpha {
-    fn create_element(&self) -> Box<dyn ElementBase> {
-        use flui_view::element::StatelessBehavior;
-        Box::new(StatelessElement::new(self, StatelessBehavior))
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateless(self)
     }
 
     fn key(&self) -> Option<&dyn ViewKey> {
@@ -95,9 +91,8 @@ impl StatelessView for Beta {
 }
 
 impl View for Beta {
-    fn create_element(&self) -> Box<dyn ElementBase> {
-        use flui_view::element::StatelessBehavior;
-        Box::new(StatelessElement::new(self, StatelessBehavior))
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateless(self)
     }
 
     fn key(&self) -> Option<&dyn ViewKey> {
@@ -157,8 +152,8 @@ fn covers_fr028_type_mismatch() {
 fn covers_fr028_mixed_keyed_unkeyed() {
     let keyed = Alpha::with_key(ValueKey::new(7_u32));
     let keyless = Alpha::keyless();
-    assert!(!keyed.can_update(&keyless), "keyed must NOT update keyless",);
-    assert!(!keyless.can_update(&keyed), "keyless must NOT update keyed",);
+    assert!(!keyed.can_update(&keyless), "keyed must NOT update keyless");
+    assert!(!keyless.can_update(&keyed), "keyless must NOT update keyed");
 }
 
 // ============================================================================
@@ -219,11 +214,11 @@ fn global_key_compares_by_id() {
     );
 }
 
-/// `Key` (the foundation newtype that U10 added a `ViewKey` impl
-/// for) compares by inner `u64`. Identical `Key::from_str` strings
-/// hash to the same value (compile-time FNV-1a), so the
-/// `can_update` round-trip succeeds — the U10 impl participates in
-/// the FR-028 match path correctly.
+/// `Key` (the foundation newtype with a `ViewKey` impl) compares by
+/// inner `u64`. Identical `Key::from_str` strings hash to the same
+/// value (compile-time FNV-1a), so the `can_update` round-trip
+/// succeeds — the `Key` impl participates in the FR-028 match path
+/// correctly.
 #[test]
 fn key_newtype_compares_by_inner_u64() {
     use flui_foundation::Key;

@@ -93,6 +93,17 @@ fn edit_object<T: 'static, P: crate::pipeline::PipelinePhase>(
 pub struct RenderTester {
     spec: TreeNode,
     constraints: Option<BoxConstraints>,
+    semantics_enabled: bool,
+}
+
+impl std::fmt::Debug for RenderTester {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RenderTester")
+            .field("spec", &self.spec)
+            .field("constraints", &self.constraints)
+            .field("semantics_enabled", &self.semantics_enabled)
+            .finish()
+    }
 }
 
 impl RenderTester {
@@ -103,6 +114,7 @@ impl RenderTester {
         Self {
             spec,
             constraints: None,
+            semantics_enabled: false,
         }
     }
 
@@ -120,12 +132,27 @@ impl RenderTester {
         self
     }
 
+    /// Enables semantics on the built [`PipelineOwner`] before any phase
+    /// runs (lazily creates a `SemanticsOwner`, see ADR-0014).
+    ///
+    /// Without this, `run_semantics` (and therefore [`Self::run_to_semantics`]
+    /// / [`Self::run_frame`]'s semantics phase) is a no-op — semantics stays
+    /// disabled by default so every other harness test is unaffected.
+    #[must_use]
+    pub fn with_semantics_enabled(mut self) -> Self {
+        self.semantics_enabled = true;
+        self
+    }
+
     /// Builds the owner, mounts the spec, and seeds the root + constraints.
     fn build(self) -> (PipelineOwner<Idle>, RenderId, RenderLabelRegistry) {
         let mut owner = PipelineOwner::new();
         let (root_id, registry) = tree::mount(&mut owner, self.spec);
         owner.set_root_id(Some(root_id));
         owner.set_root_constraints(Some(self.constraints.unwrap_or_else(default_constraints)));
+        if self.semantics_enabled {
+            owner.set_semantics_enabled(true);
+        }
         (owner, root_id, registry)
     }
 
@@ -413,23 +440,32 @@ impl FrameRun {
     /// then pumps exactly one frame. Returns one report per tick.
     ///
     /// ```
-    /// # use flui_rendering::objects::{RenderColoredBox, RenderPadding};
     /// # use flui_rendering::testing::{RenderTester, Probe, box_node};
-    /// # use flui_types::{EdgeInsets, Offset, geometry::px};
-    /// let mut run = RenderTester::mount(
-    ///     box_node(RenderPadding::all(5.0))
-    ///         .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
-    /// )
-    /// .run_frame();
-    /// let child = run.id("child");
-    /// let pad = run.root();
+    /// # use flui_rendering::prelude::*;
+    /// # use flui_tree::Leaf;
+    /// # use flui_types::{Size, geometry::px};
+    /// # #[derive(Debug, Default)]
+    /// # struct FixedBox(f32);
+    /// # impl flui_foundation::Diagnosticable for FixedBox {}
+    /// # impl RenderBox for FixedBox {
+    /// #     type Arity = Leaf;
+    /// #     type ParentData = BoxParentData;
+    /// #     fn perform_layout(&mut self, _ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size {
+    /// #         Size::new(px(self.0), px(self.0))
+    /// #     }
+    /// #     fn paint(&self, _ctx: &mut PaintCx<'_, Leaf>) {}
+    /// # }
+    /// let mut run = RenderTester::mount(box_node(FixedBox(40.0)).label("root"))
+    ///     .run_frame();
+    /// let root = run.id("root");
     /// run.simulate([0.0, 0.5, 1.0], |t, run| {
-    ///     let padding = 5.0 + 50.0 * t as f32;
-    ///     run.update::<RenderPadding>(pad, |p| {
-    ///         p.set_padding(EdgeInsets::all(px(padding)));
-    ///     });
+    ///     let side = 40.0 + 20.0 * t as f32;
+    ///     run.update::<FixedBox>(root, |b| b.0 = side);
     /// });
-    /// assert_eq!(run.offset(child), Offset::new(px(55.0), px(55.0)));
+    /// assert_eq!(
+    ///     run.box_geometry(root),
+    ///     Size::new(px(60.0), px(60.0)),
+    /// );
     /// ```
     pub fn simulate<I, F>(&mut self, ticks: I, mut on_tick: F) -> Vec<FrameReport>
     where
@@ -481,18 +517,30 @@ impl FrameRun {
     /// Panics if the id is stale or is not a `T`.
     ///
     /// ```
-    /// # use flui_rendering::objects::{RenderColoredBox, RenderPadding};
     /// # use flui_rendering::testing::{RenderTester, Probe, box_node};
-    /// # use flui_types::{EdgeInsets, Offset, geometry::px};
-    /// let mut run = RenderTester::mount(
-    ///     box_node(RenderPadding::all(5.0))
-    ///         .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
-    /// )
-    /// .run_frame();
-    /// let pad = run.root();
-    /// run.update::<RenderPadding>(pad, |p| p.set_padding(EdgeInsets::all(px(20.0))));
+    /// # use flui_rendering::prelude::*;
+    /// # use flui_tree::Leaf;
+    /// # use flui_types::{Size, geometry::px};
+    /// # #[derive(Debug, Default)]
+    /// # struct FixedBox(f32);
+    /// # impl flui_foundation::Diagnosticable for FixedBox {}
+    /// # impl RenderBox for FixedBox {
+    /// #     type Arity = Leaf;
+    /// #     type ParentData = BoxParentData;
+    /// #     fn perform_layout(&mut self, _ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size {
+    /// #         Size::new(px(self.0), px(self.0))
+    /// #     }
+    /// #     fn paint(&self, _ctx: &mut PaintCx<'_, Leaf>) {}
+    /// # }
+    /// let mut run = RenderTester::mount(box_node(FixedBox(40.0)).label("root"))
+    ///     .run_frame();
+    /// let root = run.root();
+    /// run.update::<FixedBox>(root, |b| b.0 = 60.0);
     /// run.pump();
-    /// assert_eq!(run.offset(run.id("child")), Offset::new(px(20.0), px(20.0)));
+    /// assert_eq!(
+    ///     run.box_geometry(root),
+    ///     Size::new(px(60.0), px(60.0)),
+    /// );
     /// ```
     pub fn update<T: 'static>(&mut self, id: RenderId, edit: impl FnOnce(&mut T)) {
         edit_object(&mut self.owner, id, edit);
@@ -542,6 +590,16 @@ impl FrameRun {
         ))
     }
 
+    /// Returns every [`DrawCommandSummary`] reachable from the most recent
+    /// frame's layer tree in pre-order, or an empty `Vec` when nothing was
+    /// painted.
+    ///
+    /// [`DrawCommandSummary`]: super::snapshot::DrawCommandSummary
+    #[must_use]
+    pub fn display_commands(&self) -> Vec<super::snapshot::DrawCommandSummary> {
+        super::snapshot::command_summaries_of(self.layer_tree.as_ref())
+    }
+
     /// Panics unless at least one [`DiagnosticsNode`] in the painted scene
     /// satisfies `pred`.
     ///
@@ -587,9 +645,20 @@ impl RenderTester {
     /// exclusively on paint-phase handles. The compile-time proof:
     ///
     /// ```compile_fail
-    /// # use flui_rendering::objects::RenderColoredBox;
     /// # use flui_rendering::testing::{box_node, RenderTester};
-    /// let run = RenderTester::mount(box_node(RenderColoredBox::red(1.0, 1.0))).run_layout();
+    /// # use flui_rendering::prelude::*;
+    /// # use flui_tree::Leaf;
+    /// # use flui_types::{Size, geometry::px};
+    /// # #[derive(Debug, Default)]
+    /// # struct FixedBox;
+    /// # impl flui_foundation::Diagnosticable for FixedBox {}
+    /// # impl RenderBox for FixedBox {
+    /// #     type Arity = Leaf;
+    /// #     type ParentData = BoxParentData;
+    /// #     fn perform_layout(&mut self, _ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size { Size::ZERO }
+    /// #     fn paint(&self, _ctx: &mut PaintCx<'_, Leaf>) {}
+    /// # }
+    /// let run = RenderTester::mount(box_node(FixedBox)).run_layout();
     /// let _ = run.snapshot(); // error: no method `snapshot` found for `LayoutRun`
     /// ```
     #[must_use]
@@ -646,9 +715,9 @@ impl RenderTester {
     /// semantics), then stops, returning a [`SemanticsRun`] parked in the
     /// `Semantics` phase.
     ///
-    /// The semantics pass is a stub in the current implementation; this handle
-    /// exists so semantics-aware tests can be authored now and will gain
-    /// real assertions once the semantics owner is wired.
+    /// The semantics pass builds a `SemanticsOwner` only when the caller has
+    /// installed one and enabled semantics on the pipeline. Raw owner access
+    /// via [`Probe::pipeline`] is the inspection surface.
     #[must_use]
     pub fn run_to_semantics(self) -> SemanticsRun {
         let (owner, root_id, registry) = self.build();
@@ -741,6 +810,16 @@ impl PaintRun {
         ))
     }
 
+    /// Returns every [`DrawCommandSummary`] reachable from the most recent
+    /// frame's layer tree in pre-order, or an empty `Vec` when nothing was
+    /// painted.
+    ///
+    /// [`DrawCommandSummary`]: super::snapshot::DrawCommandSummary
+    #[must_use]
+    pub fn display_commands(&self) -> Vec<super::snapshot::DrawCommandSummary> {
+        super::snapshot::command_summaries_of(self.layer_tree.as_ref())
+    }
+
     /// Panics unless at least one [`DiagnosticsNode`] in the painted scene
     /// satisfies `pred`.
     ///
@@ -811,9 +890,7 @@ impl Probe for CompositingRun {
 /// The result of [`RenderTester::run_to_semantics`]: a pipeline parked in the
 /// `Semantics` phase after all four pipeline phases have executed.
 ///
-/// The semantics pass is a stub in the current implementation; raw owner
-/// access via [`Probe::pipeline`] is the primary inspection surface until the
-/// semantics owner is wired.
+/// Semantics inspection goes through raw owner access via [`Probe::pipeline`].
 #[derive(Debug)]
 pub struct SemanticsRun {
     owner: PipelineOwner<Semantics>,
@@ -826,6 +903,16 @@ impl SemanticsRun {
     #[must_use]
     pub fn root(&self) -> RenderId {
         self.root_id
+    }
+
+    /// The assembled semantics owner, if semantics was enabled for this run
+    /// (see [`RenderTester::with_semantics_enabled`]).
+    ///
+    /// `None` when semantics was never enabled — `run_semantics` is then a
+    /// no-op and no `SemanticsOwner` was ever lazily created (see ADR-0014).
+    #[must_use]
+    pub fn semantics_owner(&self) -> Option<&crate::semantics::SemanticsOwner> {
+        self.owner.semantics_owner()
     }
 }
 
@@ -841,39 +928,7 @@ impl Probe for SemanticsRun {
     }
 }
 
-// ============================================================================
-// Overflow inspection (Task 6)
-// ============================================================================
-
-/// Returns `true` when the render object at `node` has set its
-/// `has_visual_overflow` flag after layout.
-///
-/// Recognises [`crate::objects::RenderFittedBox`],
-/// [`crate::objects::RenderStack`], and
-/// [`crate::objects::RenderViewport`]. Any other node type, or a stale /
-/// sliver `node`, returns `false`.
-///
-/// Call this on a [`LayoutRun`] or [`FrameRun`] after the layout pass has
-/// committed geometry.
-#[must_use]
-pub fn has_overflow(probe: &impl Probe, node: RenderId) -> bool {
-    use crate::objects::{RenderFittedBox, RenderStack, RenderViewport};
-
-    let Some(render_node) = probe.pipeline().render_tree().get(node) else {
-        return false;
-    };
-    let Some(entry) = render_node.as_box() else {
-        return false;
-    };
-    let obj = entry.render_object();
-    if let Some(fitted) = obj.as_any().downcast_ref::<RenderFittedBox>() {
-        return fitted.has_visual_overflow();
-    }
-    if let Some(stack) = obj.as_any().downcast_ref::<RenderStack>() {
-        return stack.has_visual_overflow();
-    }
-    if let Some(viewport) = obj.as_any().downcast_ref::<RenderViewport>() {
-        return viewport.has_visual_overflow();
-    }
-    false
-}
+// `has_overflow` moved to `flui-objects/tests/helpers.rs` (part of the flui-objects
+// extraction plan): it downcasts to concrete objects (RenderFittedBox/Stack/Viewport)
+// which now live in flui-objects, not flui-rendering. Moved verbatim so
+// `tests/harness_snapshot.rs` (also moved) keeps using it from its new home.

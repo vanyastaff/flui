@@ -958,7 +958,14 @@ impl ExtentTree {
         let last = count - 1;
         // Sorted, so the three regions are contiguous: `<= 0` | interior | `>= total`.
         let lo = offsets.partition_point(|&o| o <= 0.0);
-        let hi = offsets.partition_point(|&o| o < total);
+        // `.max(lo)`: when `total == 0.0` (every item has zero extent), the two
+        // partition predicates disagree on an offset of exactly `0.0` -- `o <=
+        // 0.0` counts it into `lo` but `o < total` (= `o < 0.0`) does not, so
+        // `hi` alone could fall below `lo` and underflow the `split_at_mut`
+        // below. `total > 0.0` implies `o <= 0.0 ⟹ o < total`, so `lo <= hi`
+        // already holds there and this is a no-op; it only clamps the `total
+        // == 0.0` degenerate case, collapsing the (empty) interior region.
+        let hi = offsets.partition_point(|&o| o < total).max(lo);
         let (head, rest) = out.split_at_mut(lo);
         head.fill((0, 0.0));
         let (mid, tail) = rest.split_at_mut(hi - lo);
@@ -1178,5 +1185,28 @@ mod tests {
         assert_eq!(t.seek_offset(5.0), (0, 5.0));
         assert_eq!(t.seek_offset(10.0), (3, 0.0));
         assert_eq!(t.seek_offset(15.0), (3, 5.0));
+    }
+
+    #[test]
+    fn seek_sorted_agrees_with_scalar_seek_when_total_extent_is_zero() {
+        // Every item has zero extent -- a legitimate state (e.g. a lazily
+        // virtualized list whose items have not yet grown past zero height).
+        // `lo` (offsets `<= 0`) and `hi` (offsets `< total`) disagree on an
+        // offset of exactly `0.0` here since `total == 0.0`; unclamped, `hi`
+        // can fall strictly below `lo` and underflow `hi - lo`.
+        let t = build(&[0.0, 0.0, 0.0]);
+        assert_eq!(t.total_extent(), 0.0);
+
+        let offsets = [0.0, 0.0, 500.0, 750.0];
+        let mut out = [(0usize, 0.0f32); 4];
+        t.seek_sorted(&offsets, &mut out);
+
+        for (i, &o) in offsets.iter().enumerate() {
+            assert_eq!(
+                out[i],
+                t.seek_offset(o),
+                "seek_sorted[{i}] (offset {o}) must agree with scalar seek_offset",
+            );
+        }
     }
 }

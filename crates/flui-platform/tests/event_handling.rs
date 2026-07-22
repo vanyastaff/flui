@@ -6,6 +6,11 @@
 //! - Window events (T048)
 //! - Multi-touch events (T050)
 
+// Target-level lint relaxations — crate-level allows don't reach this
+// target. `unwrap` in test/example code: a panic IS the failure report
+// (docs/PANIC-POLICY.md); style items here are ship-wave debt.
+#![allow(clippy::no_effect_underscore_binding)]
+
 use std::sync::{Arc, Mutex};
 
 use flui_platform::{Platform, WindowOptions, current_platform};
@@ -198,13 +203,11 @@ fn test_window_resize_event() {
     let height_diff = (logical_height - 480.0).abs();
     assert!(
         width_diff < 5.0,
-        "Width mismatch: expected ~640, got {}",
-        logical_width
+        "Width mismatch: expected ~640, got {logical_width}"
     );
     assert!(
         height_diff < 5.0,
-        "Height mismatch: expected ~480, got {}",
-        logical_height
+        "Height mismatch: expected ~480, got {logical_height}"
     );
 
     // Contract: Platform fires WindowEvent::Resized on size change

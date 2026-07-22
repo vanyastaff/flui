@@ -12,6 +12,7 @@ mod handle;
 mod notifier;
 mod owner;
 pub mod phase;
+pub(super) mod scheduler;
 
 // Re-export Clip from flui_types
 // Re-export layer types from flui-layer

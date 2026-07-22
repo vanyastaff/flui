@@ -1,6 +1,6 @@
 //! Scene compositor: stack-based builder + retained-layer tracking.
 //!
-//! Mythos Step 10 split the original 967 LOC `compositor.rs` into:
+//! The original 967 LOC `compositor.rs` was split into:
 //!
 //! - [`builder`] -- `SceneBuilder<'a>` and its push/add/pop/build surface.
 //! - [`retained`] -- `SceneCompositor` retained-layer registry.

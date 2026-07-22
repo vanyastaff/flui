@@ -56,6 +56,15 @@ pub struct LayoutContext<'ctx, P: Protocol, A: Arity, PD: ParentData + Default> 
     inner: <P::Layout as LayoutCapability>::Context<'ctx, A, PD>,
 }
 
+impl<P: Protocol, A: Arity, PD: ParentData + Default> std::fmt::Debug
+    for LayoutContext<'_, P, A, PD>
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // `inner` is a capability-GAT context (may hold live driver callbacks).
+        f.debug_struct("LayoutContext").finish_non_exhaustive()
+    }
+}
+
 impl<'ctx, P: Protocol, A: Arity, PD: ParentData + Default> LayoutContext<'ctx, P, A, PD>
 where
     <P::Layout as LayoutCapability>::Context<'ctx, A, PD>: LayoutContextApi<'ctx, P::Layout, A, PD>,
@@ -372,6 +381,54 @@ where
             baseline,
         )
     }
+
+    /// Queries a child's intrinsic dimension from within `perform_layout`.
+    ///
+    /// On the production pipeline path the call is routed through
+    /// `box_intrinsic_query_borrowed` (the same pre-acquired subtree pool used
+    /// by the Sliver→Box intrinsic path).  On Direct-storage / test contexts
+    /// where no callback is wired, returns `0.0` — the same conservative
+    /// fallback as `layout_child` returning `Size::ZERO`.
+    ///
+    /// Used by `RenderIntrinsicWidth` / `RenderIntrinsicHeight` to measure the
+    /// child's preferred extent before committing to a layout size.
+    pub fn child_intrinsic(
+        &mut self,
+        index: usize,
+        dimension: IntrinsicDimension,
+        extent: f32,
+    ) -> f32 {
+        crate::protocol::box_protocol::BoxLayoutCtxErased::child_intrinsic(
+            &mut self.inner,
+            index,
+            dimension,
+            extent,
+        )
+    }
+
+    /// Convenience: maximum intrinsic width of child `index` for the given
+    /// `height` extent.  Returns `0.0` when the intrinsics callback is not wired.
+    pub fn child_max_intrinsic_width(&mut self, index: usize, height: f32) -> f32 {
+        self.child_intrinsic(index, IntrinsicDimension::MaxWidth, height)
+    }
+
+    /// Convenience: minimum intrinsic width of child `index` for the given
+    /// `height` extent.  Returns `0.0` when the intrinsics callback is not wired.
+    pub fn child_min_intrinsic_width(&mut self, index: usize, height: f32) -> f32 {
+        self.child_intrinsic(index, IntrinsicDimension::MinWidth, height)
+    }
+
+    /// Convenience: maximum intrinsic height of child `index` for the given
+    /// `width` extent.  Returns `0.0` when the intrinsics callback is not wired.
+    pub fn child_max_intrinsic_height(&mut self, index: usize, width: f32) -> f32 {
+        self.child_intrinsic(index, IntrinsicDimension::MaxHeight, width)
+    }
+
+    /// Convenience: minimum intrinsic height of child `index` for the given
+    /// `width` extent.  Returns `0.0` when the intrinsics callback is not wired.
+    pub fn child_min_intrinsic_height(&mut self, index: usize, width: f32) -> f32 {
+        self.child_intrinsic(index, IntrinsicDimension::MinHeight, width)
+    }
 }
 
 // ============================================================================
@@ -465,7 +522,7 @@ where
         crate::protocol::sliver_protocol::SliverLayoutCtxErased::dispose_box_child(
             &mut self.inner,
             id,
-        )
+        );
     }
 
     /// Returns the [`RenderId`](flui_foundation::RenderId) of the Box child at
@@ -473,6 +530,51 @@ where
     /// [`Self::dispose_box_child`] to evict off-band children by id.
     pub fn child_id(&self, index: usize) -> Option<flui_foundation::RenderId> {
         crate::protocol::sliver_protocol::SliverLayoutCtxErased::child_id(&self.inner, index)
+    }
+
+    /// Records a child-build request for `logical_index` under this sliver
+    /// — the producer half of the request-strategy seam.
+    ///
+    /// Unlike [`Self::build_and_layout_box_child`], no render object is
+    /// supplied — the element tree decides what to build and where to
+    /// insert it, once the consumer half (child-manager wiring) lands; until
+    /// then the request is simply parked.  The request is deposited into the
+    /// arena's `pending_child_requests` sink; after the walk releases its borrows,
+    /// the pipeline moves it to
+    /// [`PipelineOwner::take_pending_child_requests`](crate::pipeline::PipelineOwner::take_pending_child_requests)
+    /// for the binding layer.
+    ///
+    /// Return type is [`ChildLayout<BoxChildRef>`]: `Scheduled` in v1
+    /// (next-frame policy); a true-mid-pass backend may return
+    /// `Ready(BoxChildRef)` without a breaking change — ADR-0003 Decision 2(c)
+    /// forbids narrowing the return type to `Infallible`/`Scheduled` only.
+    /// Returns `Unwired` when this context carries no request sink.
+    pub fn request_child_build(
+        &mut self,
+        logical_index: usize,
+    ) -> crate::protocol::ChildLayout<crate::protocol::BoxChildRef> {
+        crate::protocol::sliver_protocol::SliverLayoutCtxErased::request_child_build(
+            &mut self.inner,
+            logical_index,
+        )
+    }
+
+    /// Emits the retained logical-index band `[first, last)` for this
+    /// element-owned sliver.
+    ///
+    /// `RenderSliverList` calls this once per layout pass after
+    /// `walk_virtualizer_band` returns. The pipeline moves the signal to
+    /// `PipelineOwner::take_pending_retain_bands`; the binding layer, once
+    /// the consumer half (child-manager wiring) lands, drives
+    /// `SparseChildren::retain_band` from it, evicting out-of-band lazy
+    /// children on the element side and bypassing `dispose_box_child` to avoid
+    /// the ABA double-remove.
+    pub fn emit_retain_band(&mut self, first: usize, last: usize) {
+        crate::protocol::sliver_protocol::SliverLayoutCtxErased::emit_retain_band(
+            &mut self.inner,
+            first,
+            last,
+        );
     }
 }
 
@@ -482,9 +584,283 @@ where
 
 #[cfg(test)]
 mod tests {
+    use flui_foundation::RenderId;
+    use flui_tree::Leaf;
+    use flui_types::geometry::px;
+
+    use super::*;
+    use crate::parent_data::{BoxParentData, SliverParentData};
+    use crate::protocol::box_protocol::{BoxLayoutCtx, ChildState};
+    use crate::protocol::sliver_protocol::SliverLayoutCtx;
+
     #[test]
     fn test_layout_context_compiles() {
         // This test just verifies the module compiles — empty body is enough
         // because failure surfaces at `cargo build`, not at assert time.
+    }
+
+    fn box_constraints() -> BoxConstraints {
+        BoxConstraints::new(px(10.0), px(200.0), px(20.0), px(100.0))
+    }
+
+    // ------------------------------------------------------------------
+    // Generic LayoutContext<P, A, PD> forwarding
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn generic_layout_context_forwards_constraints_and_child_presence() {
+        let ctx: LayoutContext<'_, BoxProtocol, Leaf, BoxParentData> =
+            LayoutContext::new(BoxLayoutCtx::new(box_constraints()));
+
+        assert_eq!(*ctx.constraints(), box_constraints());
+        assert_eq!(ctx.child_count(), 0);
+        assert!(!ctx.has_children());
+        assert_eq!(ctx.children().collect::<Vec<_>>(), Vec::<usize>::new());
+    }
+
+    #[test]
+    fn generic_layout_context_child_dispatch_and_write_through() {
+        let child_a = RenderId::new(1);
+        let child_b = RenderId::new(2);
+        let child_ids = [child_a, child_b];
+        let mut children = vec![
+            ChildState::<BoxParentData>::new(child_a),
+            ChildState::<BoxParentData>::new(child_b),
+        ];
+        let layout_child_callback = |id: RenderId, _c: BoxConstraints| -> Size {
+            if id == child_a {
+                Size::new(px(11.0), px(22.0))
+            } else {
+                Size::new(px(33.0), px(44.0))
+            }
+        };
+
+        let mut ctx: LayoutContext<'_, BoxProtocol, Leaf, BoxParentData> =
+            LayoutContext::new(BoxLayoutCtx::with_layout_callback(
+                box_constraints(),
+                &mut children,
+                &child_ids,
+                &layout_child_callback,
+            ));
+
+        assert!(ctx.has_children());
+        assert_eq!(ctx.child_count(), 2);
+
+        let size = ctx.layout_child(0, box_constraints());
+        assert_eq!(size, Size::new(px(11.0), px(22.0)));
+        assert_eq!(ctx.child_geometry(0), Some(&Size::new(px(11.0), px(22.0))));
+
+        ctx.position_child(0, Offset::new(px(1.0), px(2.0)));
+
+        let geom =
+            ctx.layout_and_position_child(1, box_constraints(), Offset::new(px(3.0), px(4.0)));
+        assert_eq!(geom, Size::new(px(33.0), px(44.0)));
+
+        ctx.child_parent_data_mut(0).unwrap().offset = Offset::new(px(9.0), px(9.0));
+        assert_eq!(
+            ctx.child_parent_data(0).unwrap().offset,
+            Offset::new(px(9.0), px(9.0))
+        );
+
+        let all = ctx.layout_all_children(box_constraints());
+        assert_eq!(all.len(), 2);
+
+        assert_eq!(ctx.inner().child_count(), 2);
+        assert_eq!(LayoutContextApi::child_count(ctx.inner_mut()), 2);
+
+        drop(ctx);
+        // The write-through offset must have reached the backing storage.
+        assert_eq!(children[0].offset, Offset::new(px(1.0), px(2.0)));
+        assert_eq!(children[1].offset, Offset::new(px(3.0), px(4.0)));
+    }
+
+    // ------------------------------------------------------------------
+    // Box-specific constraint helpers
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn box_constraint_accessors_and_bounds_checks() {
+        let ctx: LayoutContext<'_, BoxProtocol, Leaf, BoxParentData> =
+            LayoutContext::new(BoxLayoutCtx::new(box_constraints()));
+
+        assert_eq!(ctx.min_width(), px(10.0));
+        assert_eq!(ctx.max_width(), px(200.0));
+        assert_eq!(ctx.min_height(), px(20.0));
+        assert_eq!(ctx.max_height(), px(100.0));
+        assert!(!ctx.is_tight());
+        assert!(!ctx.has_unbounded_width());
+        assert!(!ctx.has_unbounded_height());
+
+        assert_eq!(ctx.smallest(), Size::new(px(10.0), px(20.0)));
+        assert_eq!(ctx.biggest(), Size::new(px(200.0), px(100.0)));
+    }
+
+    #[test]
+    fn box_constraint_transforms_loosen_and_tighten() {
+        let ctx: LayoutContext<'_, BoxProtocol, Leaf, BoxParentData> =
+            LayoutContext::new(BoxLayoutCtx::new(box_constraints()));
+
+        let loosened = ctx.loosen();
+        assert_eq!(loosened.min_width, px(0.0));
+        assert_eq!(loosened.min_height, px(0.0));
+        assert_eq!(loosened.max_width, px(200.0));
+
+        let tightened = ctx.tighten();
+        assert!(tightened.is_tight());
+        assert_eq!(tightened.min_width, px(200.0));
+        assert_eq!(tightened.min_height, px(100.0));
+
+        let width_tight = ctx.tighten_width(px(50.0));
+        assert_eq!(width_tight.min_width, px(50.0));
+        assert_eq!(width_tight.max_width, px(50.0));
+        assert_eq!(width_tight.min_height, px(20.0), "height untouched");
+
+        let height_tight = ctx.tighten_height(px(60.0));
+        assert_eq!(height_tight.min_height, px(60.0));
+        assert_eq!(height_tight.max_height, px(60.0));
+        assert_eq!(height_tight.min_width, px(10.0), "width untouched");
+    }
+
+    #[test]
+    fn box_constraint_clamp_helpers() {
+        let ctx: LayoutContext<'_, BoxProtocol, Leaf, BoxParentData> =
+            LayoutContext::new(BoxLayoutCtx::new(box_constraints()));
+
+        assert_eq!(
+            ctx.constrain(Size::new(px(5.0), px(500.0))),
+            Size::new(px(10.0), px(100.0)),
+            "clamps below-min width up and above-max height down"
+        );
+        assert_eq!(ctx.constrain_width(px(500.0)), px(200.0));
+        assert_eq!(ctx.constrain_height(px(1.0)), px(20.0));
+    }
+
+    // ------------------------------------------------------------------
+    // Box-specific single-child layout helpers
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn layout_single_child_helpers_are_zero_size_and_noop_without_children() {
+        let mut ctx: LayoutContext<'_, BoxProtocol, Leaf, BoxParentData> =
+            LayoutContext::new(BoxLayoutCtx::new(box_constraints()));
+
+        assert_eq!(ctx.layout_single_child(), Size::ZERO);
+        assert_eq!(ctx.layout_single_child_loose(), Size::ZERO);
+        ctx.position_single_child_at_origin(); // must not panic with no children
+    }
+
+    #[test]
+    fn layout_single_child_lays_out_and_positions_the_first_child() {
+        let child_id = RenderId::new(1);
+        let child_ids = [child_id];
+        let mut children = vec![ChildState::<BoxParentData>::new(child_id)];
+        let layout_child_callback = |_id: RenderId, c: BoxConstraints| -> Size { c.biggest() };
+
+        let mut ctx: LayoutContext<'_, BoxProtocol, Leaf, BoxParentData> =
+            LayoutContext::new(BoxLayoutCtx::with_layout_callback(
+                box_constraints(),
+                &mut children,
+                &child_ids,
+                &layout_child_callback,
+            ));
+
+        assert_eq!(ctx.layout_single_child(), box_constraints().biggest());
+        ctx.position_single_child_at_origin();
+
+        drop(ctx);
+        assert_eq!(children[0].offset, Offset::ZERO);
+    }
+
+    #[test]
+    fn layout_single_child_loose_lays_out_under_loosened_constraints() {
+        let child_id = RenderId::new(1);
+        let child_ids = [child_id];
+        let mut children = vec![ChildState::<BoxParentData>::new(child_id)];
+        let layout_child_callback = |_id: RenderId, c: BoxConstraints| -> Size { c.smallest() };
+
+        let mut ctx: LayoutContext<'_, BoxProtocol, Leaf, BoxParentData> =
+            LayoutContext::new(BoxLayoutCtx::with_layout_callback(
+                box_constraints(),
+                &mut children,
+                &child_ids,
+                &layout_child_callback,
+            ));
+
+        // Loosened min is zero, so `smallest()` under the loosened
+        // constraints must be Size::ZERO -- distinct from the un-loosened
+        // constraints' smallest() of (10, 20).
+        assert_eq!(ctx.layout_single_child_loose(), Size::ZERO);
+    }
+
+    // ------------------------------------------------------------------
+    // Box cross-protocol extensions (Direct-mode fallback contract)
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn box_cross_protocol_direct_mode_fallbacks() {
+        let mut ctx: LayoutContext<'_, BoxProtocol, Leaf, BoxParentData> =
+            LayoutContext::new(BoxLayoutCtx::new(box_constraints()));
+
+        assert_eq!(
+            ctx.layout_sliver_child(0, SliverConstraints::default()),
+            SliverGeometry::ZERO
+        );
+        assert_eq!(ctx.cached_sliver_child_layout(0), None);
+        assert!(
+            ctx.sliver_child_needs_layout(0),
+            "Direct-mode conservatively reports needs-layout=true"
+        );
+        assert_eq!(
+            ctx.child_distance_to_actual_baseline(0, crate::traits::TextBaseline::Alphabetic),
+            None
+        );
+        assert_eq!(
+            ctx.child_intrinsic(0, IntrinsicDimension::MinWidth, 10.0),
+            0.0
+        );
+        assert_eq!(ctx.child_max_intrinsic_width(0, 10.0), 0.0);
+        assert_eq!(ctx.child_min_intrinsic_width(0, 10.0), 0.0);
+        assert_eq!(ctx.child_max_intrinsic_height(0, 10.0), 0.0);
+        assert_eq!(ctx.child_min_intrinsic_height(0, 10.0), 0.0);
+    }
+
+    // ------------------------------------------------------------------
+    // Sliver cross-protocol extensions (Direct-mode fallback contract)
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn sliver_cross_protocol_direct_mode_fallbacks() {
+        let mut ctx: LayoutContext<'_, SliverProtocol, Leaf, SliverParentData> =
+            LayoutContext::new(SliverLayoutCtx::new(SliverConstraints::default()));
+
+        assert_eq!(
+            ctx.layout_box_child(0, BoxConstraints::tight(Size::ZERO)),
+            Size::ZERO
+        );
+        assert_eq!(
+            ctx.box_child_intrinsic(0, IntrinsicDimension::MaxHeight, 5.0),
+            0.0
+        );
+        assert_eq!(ctx.box_child_max_intrinsic_height(0, 5.0), 0.0);
+        assert_eq!(ctx.box_child_max_intrinsic_width(0, 5.0), 0.0);
+        assert_eq!(ctx.child_id(0), None);
+
+        // No-op / no-panic without a wired backend.
+        ctx.dispose_box_child(RenderId::new(1));
+        ctx.emit_retain_band(0, 1);
+
+        let mut never_builds = |_idx: usize| -> Option<Box<dyn RenderObject<BoxProtocol>>> {
+            panic!("no build backend is wired -- this must not run")
+        };
+        assert_eq!(
+            ctx.build_and_layout_box_child(
+                0,
+                0,
+                BoxConstraints::tight(Size::ZERO),
+                &mut never_builds
+            ),
+            ChildLayout::Unwired
+        );
+        assert_eq!(ctx.request_child_build(0), ChildLayout::Unwired);
     }
 }

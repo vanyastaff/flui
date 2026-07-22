@@ -8,7 +8,7 @@ use crate::{
     context::{SliverHitTestContext, SliverLayoutContext},
     parent_data::ParentData,
     protocol::SliverProtocol,
-    traits::RenderObject,
+    traits::{HitTestOutcome, RenderObject},
 };
 
 // ============================================================================
@@ -343,6 +343,149 @@ pub trait RenderSliver: flui_foundation::Diagnosticable + Send + Sync + 'static 
     }
 
     // ========================================================================
+    // Effect Layers
+    // ========================================================================
+    //
+    // Override these to have the pipeline wrap children in OpacityLayer /
+    // TransformLayer. The blanket `impl RenderObject<SliverProtocol> for T`
+    // forwards every call from the `RenderObject<P>` surface to these
+    // RenderSliver methods — concrete types override here.
+
+    /// Returns the alpha value to apply to children.
+    ///
+    /// Default: `None`. See
+    /// [`RenderObject::paint_alpha`].
+    fn paint_alpha(&self) -> Option<u8> {
+        None
+    }
+
+    /// Returns the blend mode for the opacity layer wrapping children.
+    ///
+    /// Default: `None`. See
+    /// [`RenderObject::paint_layer_blend`].
+    fn paint_layer_blend(&self) -> Option<flui_types::painting::BlendMode> {
+        None
+    }
+
+    /// Whether this render object should suppress all child painting.
+    ///
+    /// Default: `false`. See
+    /// [`RenderObject::skip_paint`].
+    fn skip_paint(&self) -> bool {
+        false
+    }
+
+    /// Returns the transform matrix to apply to children during painting.
+    ///
+    /// Default: `None`. See
+    /// [`RenderObject::paint_transform`].
+    fn paint_transform(&self, size: flui_types::Size) -> Option<flui_types::Matrix4> {
+        let _ = size;
+        None
+    }
+
+    /// Returns the transform matrix for hit testing.
+    ///
+    /// Default: `None`. See
+    /// [`RenderObject::hit_test_transform`].
+    fn hit_test_transform(&self, size: flui_types::Size) -> Option<flui_types::Matrix4> {
+        let _ = size;
+        None
+    }
+
+    // ========================================================================
+    // Compositing / Layer Boundaries
+    // ========================================================================
+    //
+    // Mirror the RenderBox trait methods of the same names (render_box.rs).
+    // The blanket `impl<T: RenderSliver …> RenderObject<SliverProtocol> for T`
+    // forwards each of these so overrides here are visible through the
+    // `&dyn RenderObject<SliverProtocol>` vtable — which is what the pipeline
+    // compositing-bits walk (`owner/mod.rs:2355`) and `RenderNode::debug_name`
+    // (`storage/node.rs:592`) both call.
+
+    /// Whether this node is a repaint boundary.
+    ///
+    /// Override and return `true` to have the pipeline allocate a dedicated
+    /// compositing layer for this subtree. Default: `false`. See
+    /// [`RenderObject::is_repaint_boundary`].
+    fn is_repaint_boundary(&self) -> bool {
+        false
+    }
+
+    /// Whether this node always needs its own compositing layer.
+    ///
+    /// Override and return `true` for sliver nodes that apply an effect
+    /// requiring a dedicated layer (e.g. `RenderSliverOpacity` when alpha is
+    /// in `(0, 255)`). The pipeline compositing-bits walk at
+    /// `PipelineOwner::update_subtree_compositing_bits` reads this via the
+    /// `dyn RenderObject<SliverProtocol>` vtable, so the blanket impl must
+    /// forward the call here — concrete types override here to be visible to
+    /// the pipeline. Default: `false`. See
+    /// [`RenderObject::always_needs_compositing`].
+    fn always_needs_compositing(&self) -> bool {
+        false
+    }
+
+    /// Short human-readable name for diagnostics and error messages.
+    ///
+    /// Default: [`core::any::type_name::<Self>()`]. Override to return a
+    /// stable short name independent of crate layout. See
+    /// [`RenderObject::debug_name`].
+    fn debug_name(&self) -> &'static str {
+        core::any::type_name::<Self>()
+    }
+
+    // ========================================================================
+    // Semantics / Hot Reload
+    // ========================================================================
+
+    /// Describes semantic properties for accessibility.
+    ///
+    /// Default: no-op. See
+    /// [`RenderObject::describe_semantics_configuration`].
+    fn describe_semantics_configuration(
+        &self,
+        _config: &mut crate::semantics::SemanticsConfiguration,
+    ) {
+    }
+
+    /// Whether the semantics assembly walk should skip this sliver's entire
+    /// child subtree.
+    ///
+    /// Default: `false`. See [`RenderObject::excludes_semantics_subtree`].
+    fn excludes_semantics_subtree(&self) -> bool {
+        false
+    }
+
+    /// Marks this render object for reprocessing after hot reload.
+    ///
+    /// Default: no-op. See
+    /// [`RenderObject::reassemble`].
+    fn reassemble(&mut self) {}
+
+    // ========================================================================
+    // Tree Lifecycle (ADR-0013)
+    // ========================================================================
+
+    /// Hands this render object a generational, least-privilege self-dirty
+    /// handle when it enters the tree.
+    ///
+    /// Override to subscribe to a `dyn Listenable` this object owns or
+    /// holds and self-mark on notify via the handle. Default: no-op. See
+    /// [`RenderObject::attach`].
+    fn attach(&mut self, handle: crate::pipeline::RepaintHandle) {
+        let _ = handle;
+    }
+
+    /// Tears down whatever [`Self::attach`] subscribed to, before this
+    /// render object leaves the tree.
+    ///
+    /// Default: no-op. See
+    /// [`RenderObject::detach`].
+    fn detach(&mut self) {}
+
+    // ========================================================================
     // Parent Data
     // ========================================================================
 
@@ -369,11 +512,7 @@ pub trait RenderSliver: flui_foundation::Diagnosticable + Send + Sync + 'static 
 /// explanation.
 impl<T> RenderObject<SliverProtocol> for T
 where
-    T: RenderSliver
-        + flui_foundation::Diagnosticable
-        + crate::traits::PaintEffectsCapability
-        + crate::traits::SemanticsCapability
-        + crate::traits::HotReloadCapability,
+    T: RenderSliver + flui_foundation::Diagnosticable,
 {
     fn perform_layout_raw(
         &mut self,
@@ -426,7 +565,7 @@ where
                      + Send
                      + Sync
              ),
-    ) -> bool {
+    ) -> HitTestOutcome {
         // The sliver hit gate is driver-owned (geometry / cross-axis
         // range), so `size` is threaded for signature uniformity but the
         // sliver context does not read it.
@@ -435,7 +574,73 @@ where
                 position, hit_child,
             );
         let mut ctx = crate::context::SliverHitTestContext::new(inner, size);
-        T::hit_test(self, &mut ctx)
+        let blocks_below = T::hit_test(self, &mut ctx);
+        HitTestOutcome::new(
+            ctx.self_hit_entry_registered() || blocks_below,
+            blocks_below,
+        )
+    }
+
+    // Effect-layer and lifecycle forwards — same pattern as the BoxProtocol
+    // blanket: call into the RenderSliver method so overrides are visible
+    // through `&dyn RenderObject<SliverProtocol>`.
+    fn paint_alpha(&self) -> Option<u8> {
+        <T as RenderSliver>::paint_alpha(self)
+    }
+
+    fn paint_layer_blend(&self) -> Option<flui_types::painting::BlendMode> {
+        <T as RenderSliver>::paint_layer_blend(self)
+    }
+
+    fn skip_paint(&self) -> bool {
+        <T as RenderSliver>::skip_paint(self)
+    }
+
+    fn paint_transform(&self, size: flui_types::Size) -> Option<flui_types::Matrix4> {
+        <T as RenderSliver>::paint_transform(self, size)
+    }
+
+    fn hit_test_transform(&self, size: flui_types::Size) -> Option<flui_types::Matrix4> {
+        <T as RenderSliver>::hit_test_transform(self, size)
+    }
+
+    fn describe_semantics_configuration(
+        &self,
+        config: &mut crate::semantics::SemanticsConfiguration,
+    ) {
+        <T as RenderSliver>::describe_semantics_configuration(self, config);
+    }
+
+    fn excludes_semantics_subtree(&self) -> bool {
+        <T as RenderSliver>::excludes_semantics_subtree(self)
+    }
+
+    fn reassemble(&mut self) {
+        <T as RenderSliver>::reassemble(self);
+    }
+
+    fn attach(&mut self, handle: crate::pipeline::RepaintHandle) {
+        <T as RenderSliver>::attach(self, handle);
+    }
+
+    fn detach(&mut self) {
+        <T as RenderSliver>::detach(self);
+    }
+
+    // Compositing / layer-boundary forwards — mirror the RenderBox blanket
+    // (render_box.rs:626-667).  UFCS calls prevent recursion: each method
+    // resolves to the `RenderSliver` trait method on `T`, not back to this
+    // `RenderObject<SliverProtocol>` impl.
+    fn is_repaint_boundary(&self) -> bool {
+        <T as RenderSliver>::is_repaint_boundary(self)
+    }
+
+    fn always_needs_compositing(&self) -> bool {
+        <T as RenderSliver>::always_needs_compositing(self)
+    }
+
+    fn debug_name(&self) -> &'static str {
+        <T as RenderSliver>::debug_name(self)
     }
 }
 
@@ -472,7 +677,6 @@ mod tests {
         constraints::{GrowthDirection, SliverConstraints, SliverGeometry},
         context::SliverHitTestContext,
         protocol::{Protocol, SliverProtocol},
-        traits::{HotReloadCapability, PaintEffectsCapability, SemanticsCapability},
         view::ScrollDirection,
     };
 
@@ -562,10 +766,6 @@ mod tests {
     impl flui_foundation::Diagnosticable for FixedHeightSliver {
         fn debug_fill_properties(&self, _properties: &mut flui_foundation::DiagnosticsBuilder) {}
     }
-    impl PaintEffectsCapability for FixedHeightSliver {}
-    impl SemanticsCapability for FixedHeightSliver {}
-    impl HotReloadCapability for FixedHeightSliver {}
-
     impl RenderSliver for FixedHeightSliver {
         type Arity = Leaf;
         type ParentData = crate::parent_data::SliverParentData;
@@ -751,10 +951,6 @@ mod tests {
     impl flui_foundation::Diagnosticable for SingleAritySliver {
         fn debug_fill_properties(&self, _properties: &mut flui_foundation::DiagnosticsBuilder) {}
     }
-    impl PaintEffectsCapability for SingleAritySliver {}
-    impl SemanticsCapability for SingleAritySliver {}
-    impl HotReloadCapability for SingleAritySliver {}
-
     impl RenderSliver for SingleAritySliver {
         type Arity = Single;
         type ParentData = crate::parent_data::SliverParentData;
@@ -772,6 +968,106 @@ mod tests {
         fn hit_test(&self, _ctx: &mut SliverHitTestContext<'_, Single, Self::ParentData>) -> bool {
             false
         }
+    }
+
+    // ────────────────────────────────────────────────────────────────────────
+    // Compositing-hooks forwarding — RED→GREEN tests
+    //
+    // These tests exercise the blanket impl forwarding of
+    // `is_repaint_boundary`, `always_needs_compositing`, and `debug_name`
+    // through `dyn RenderObject<SliverProtocol>`.  A concrete `RenderSliver`
+    // that overrides these methods must be visible to callers going through
+    // the vtable, matching the RenderBox pattern (render_box.rs:626-667).
+    //
+    // Without the blanket-impl forwards the vtable dispatches to the
+    // default `false`/type_name on `RenderObject<P>` regardless of what
+    // the concrete type returns — the pipeline compositing-bits walk at
+    // `owner/mod.rs:2355` silently ignores `always_needs_compositing`.
+    // ────────────────────────────────────────────────────────────────────────
+
+    /// Test double: a leaf sliver that declares itself as always needing a
+    /// compositing layer and as a repaint boundary, with a custom debug name.
+    struct AlwaysCompositingSliver;
+
+    impl std::fmt::Debug for AlwaysCompositingSliver {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("AlwaysCompositingSliver").finish()
+        }
+    }
+
+    impl flui_foundation::Diagnosticable for AlwaysCompositingSliver {
+        fn debug_fill_properties(&self, _properties: &mut flui_foundation::DiagnosticsBuilder) {}
+    }
+
+    impl RenderSliver for AlwaysCompositingSliver {
+        type Arity = Leaf;
+        type ParentData = crate::parent_data::SliverParentData;
+
+        fn perform_layout(
+            &mut self,
+            ctx: &mut SliverLayoutContext<'_, Leaf, Self::ParentData>,
+        ) -> SliverGeometry {
+            let c = *ctx.constraints();
+            SliverGeometry::new(c.remaining_paint_extent, c.remaining_paint_extent, 0.0)
+        }
+
+        fn is_repaint_boundary(&self) -> bool {
+            true
+        }
+
+        fn always_needs_compositing(&self) -> bool {
+            true
+        }
+
+        fn debug_name(&self) -> &'static str {
+            "AlwaysCompositingSliver"
+        }
+    }
+
+    /// `always_needs_compositing` override must be visible through
+    /// `dyn RenderObject<SliverProtocol>`.
+    ///
+    /// RED before the blanket-impl forward is added (returns `false` —
+    /// default on `RenderObject<P>`), GREEN after (returns `true` from the
+    /// concrete override).  This is the exact path the pipeline walks at
+    /// `owner/mod.rs:2355`.
+    #[test]
+    fn sliver_always_needs_compositing_forward_through_dyn() {
+        let sliver: Box<dyn crate::protocol::RenderObject<SliverProtocol>> =
+            Box::new(AlwaysCompositingSliver);
+        assert!(
+            sliver.always_needs_compositing(),
+            "always_needs_compositing override on RenderSliver must be \
+             visible through dyn RenderObject<SliverProtocol>; \
+             blanket impl must forward via UFCS"
+        );
+    }
+
+    /// `is_repaint_boundary` override must be visible through
+    /// `dyn RenderObject<SliverProtocol>`.
+    #[test]
+    fn sliver_is_repaint_boundary_forward_through_dyn() {
+        let sliver: Box<dyn crate::protocol::RenderObject<SliverProtocol>> =
+            Box::new(AlwaysCompositingSliver);
+        assert!(
+            sliver.is_repaint_boundary(),
+            "is_repaint_boundary override on RenderSliver must be \
+             visible through dyn RenderObject<SliverProtocol>"
+        );
+    }
+
+    /// `debug_name` override must be visible through
+    /// `dyn RenderObject<SliverProtocol>`.
+    #[test]
+    fn sliver_debug_name_forward_through_dyn() {
+        let sliver: Box<dyn crate::protocol::RenderObject<SliverProtocol>> =
+            Box::new(AlwaysCompositingSliver);
+        assert_eq!(
+            sliver.debug_name(),
+            "AlwaysCompositingSliver",
+            "debug_name override on RenderSliver must be visible \
+             through dyn RenderObject<SliverProtocol>"
+        );
     }
 
     /// A non-`Leaf` sliver that completes layout must now pass through the

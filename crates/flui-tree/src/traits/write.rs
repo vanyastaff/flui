@@ -90,13 +90,15 @@ pub trait TreeWrite<I: TreeId>: TreeRead<I> {
 
     /// Removes a node **and all its descendants** (cascade-by-default).
     ///
-    /// Cycle 2 PR #100 hoisted this contract to `LayerTree::remove` and
-    /// `SemanticsTree::remove` per-impl. Cycle 3 T-1 lifts it to the
-    /// trait so every adopter (current `RenderTree`, future
-    /// `ElementTree`, `ViewTree`, and the two cycle-2 adopters) inherits
-    /// the cascade as the default contract. Pre-cycle the trait
-    /// codified non-cascade as the default — i.e. orphans-in-storage —
-    /// which the audit T-1 finding flagged as a footgun.
+    /// `LayerTree::remove` and `SemanticsTree::remove` originally
+    /// implemented this cascade themselves, per-impl; the contract has
+    /// since been hoisted onto this trait so every adopter (`RenderTree`
+    /// today, `ElementTree`/`ViewTree` in the future, and the two trees
+    /// that used to implement it individually) inherits the same
+    /// cascade-by-default behavior automatically. The trait used to
+    /// default to *not* cascading — leaving descendants orphaned in
+    /// storage — which turned out to be a footgun for callers who
+    /// expected `remove` to clean up the whole subtree.
     ///
     /// This default delegates to [`try_remove`](Self::try_remove),
     /// which walks the subtree post-order **iteratively** with
@@ -107,16 +109,15 @@ pub trait TreeWrite<I: TreeId>: TreeRead<I> {
     ///
     /// The post-order drain guarantees each `remove_shallow` call sees
     /// children disposing before their parents — the engine listeners
-    /// and lifecycle hooks (`LayerNode::Drop` from PR #100 U8) rely on
-    /// it.
+    /// and lifecycle hooks (`LayerNode::Drop`) rely on it.
     ///
-    /// PR #103 followup: the original draft of this default did a
-    /// recursive `self.remove(child_id)` call per child, which
-    /// consumed one stack frame per tree depth level and risked a
-    /// stack overflow on tall trees (large generated view trees or
-    /// nested scroll views can exceed the default thread stack).
-    /// The iterative shape uses heap allocation for the worklist and
-    /// keeps stack usage constant regardless of depth.
+    /// An earlier draft of this default recursed with a
+    /// `self.remove(child_id)` call per child, which consumed one stack
+    /// frame per tree depth level and risked a stack overflow on tall
+    /// trees (large generated view trees or nested scroll views can
+    /// exceed the default thread stack). The iterative shape here uses
+    /// heap allocation for the worklist instead, keeping stack usage
+    /// constant regardless of depth.
     ///
     /// Implementations MAY override for efficiency (e.g. a `Vec`-backed
     /// arena that wants to free a contiguous range in one go), but
@@ -177,8 +178,8 @@ pub trait TreeWrite<I: TreeId>: TreeRead<I> {
     /// Both the to-visit stack and the collected worklist use
     /// `SmallVec<[I; INLINE_TREE_DEPTH]>` (inline = 32 entries) to avoid
     /// heap allocation for typical shallow subtrees; deeper subtrees
-    /// spill to the heap (closes audit F24, replacing the prior
-    /// heap-allocated vector worklist).
+    /// spill to the heap. This replaces an earlier version that always
+    /// heap-allocated the worklist as a plain `Vec`.
     ///
     /// # Post-order drain
     ///
@@ -768,12 +769,12 @@ mod tests {
         assert!(tree.contains(child2));
     }
 
-    /// Cycle 3 T-1 regression: `TreeWrite::remove` cascades by default.
+    /// Regression test: `TreeWrite::remove` cascades by default.
     ///
-    /// Pre-cycle the trait's `remove` was non-cascade — descendants were
-    /// orphaned in storage. Cycle 2 PR #100 fixed this at the impl
-    /// level for `LayerTree` and `SemanticsTree`; cycle 3 lifts the
-    /// fix to the trait contract so every adopter inherits it.
+    /// `remove` used to be non-cascading — descendants were left
+    /// orphaned in storage. `LayerTree` and `SemanticsTree` fixed this
+    /// at the impl level individually; the fix has since been lifted
+    /// to the trait contract so every adopter inherits it.
     #[test]
     fn remove_cascades_by_default() {
         let mut tree = TestTree::new();
@@ -793,8 +794,8 @@ mod tests {
         assert!(!tree.contains(grandchild));
     }
 
-    /// Cycle 3 T-1 regression: `TreeWrite::remove_shallow` preserves
-    /// the pre-cycle non-cascade behaviour. Use for re-parenting
+    /// Regression test: `TreeWrite::remove_shallow` preserves the
+    /// original non-cascading behavior. Use for re-parenting
     /// workflows that immediately re-attach the descendants.
     #[test]
     fn remove_shallow_does_not_cascade() {
@@ -822,16 +823,17 @@ mod tests {
         assert_eq!(tree.len(), 1);
     }
 
-    /// PR #103 followup (Codex P2): the default cascade is iterative,
-    /// not recursive. A linear chain of 10,000 nodes must `remove`
-    /// without exhausting the native call stack. Pre-fix the recursive
-    /// `self.remove(child_id)` shape consumed one stack frame per
-    /// depth level and would stack-overflow on chains longer than
-    /// roughly 1k nodes depending on platform default stack size.
-    /// F19 + F24: the cascade walk must detect a corrupted cycle and
-    /// return `Err(TreeError::CycleDetected)` instead of hanging or
-    /// OOM-ing on an infinite traversal. `remove()` must degrade to
-    /// `None` (with a `tracing::warn!`) on the same corruption.
+    /// The default cascade is iterative, not recursive: a linear chain
+    /// of 10,000 nodes must `remove` without exhausting the native call
+    /// stack. The earlier recursive `self.remove(child_id)` shape
+    /// consumed one stack frame per depth level and would stack-overflow
+    /// on chains longer than roughly 1k nodes depending on platform
+    /// default stack size.
+    ///
+    /// The cascade walk must also detect a corrupted cycle and return
+    /// `Err(TreeError::CycleDetected)` instead of hanging or OOM-ing on
+    /// an infinite traversal. `remove()` must degrade to `None` (with a
+    /// `tracing::warn!`) on the same corruption.
     #[test]
     fn cascade_cycle_detection() {
         let mut tree = TestTree::new();
@@ -861,7 +863,7 @@ mod tests {
         );
     }
 
-    /// F19 triangulation: normal subtree removal returns `Ok(Some(root))`.
+    /// Normal subtree removal returns `Ok(Some(root))`.
     #[test]
     fn remove_subtree_no_cycle() {
         let mut tree = TestTree::new();
@@ -876,7 +878,7 @@ mod tests {
         assert_eq!(tree.len(), 0);
     }
 
-    /// F19 triangulation: leaf removal walks no children.
+    /// Leaf removal walks no children.
     #[test]
     fn remove_leaf_node() {
         let mut tree = TestTree::new();
@@ -890,7 +892,7 @@ mod tests {
         assert_eq!(tree.len(), 0);
     }
 
-    /// F19 triangulation: removing a missing node is `Ok(None)`.
+    /// Removing a missing node is `Ok(None)`.
     #[test]
     fn remove_nonexistent_node() {
         let mut tree = TestTree::new();
@@ -900,7 +902,7 @@ mod tests {
         assert_eq!(tree.len(), 1);
     }
 
-    /// F19 triangulation: `remove_shallow` is unaffected by `try_remove`.
+    /// `remove_shallow` is unaffected by `try_remove`.
     #[test]
     fn remove_shallow_still_available() {
         let mut tree = TestTree::new();

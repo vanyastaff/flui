@@ -77,12 +77,21 @@ impl Clone for Box<dyn TextScaler> {
     }
 }
 
+/// A [`TextScaler`] that multiplies every font size by a constant factor.
+///
+/// This is the default scaling model, equivalent to Flutter's
+/// `TextScaler.linear`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LinearTextScaler {
     factor: f64,
 }
 
 impl LinearTextScaler {
+    /// Creates a linear scaler with the given scale factor.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `factor` is negative or NaN.
     #[must_use]
     #[inline]
     pub fn new(factor: f64) -> Self {
@@ -93,12 +102,14 @@ impl LinearTextScaler {
         Self { factor }
     }
 
+    /// Creates the identity scaler (factor 1.0, no scaling).
     #[must_use]
     #[inline]
     pub const fn identity() -> Self {
         Self { factor: 1.0 }
     }
 
+    /// Returns the scale factor.
     #[must_use]
     #[inline]
     pub const fn factor(&self) -> f64 {
@@ -130,6 +141,10 @@ impl TextScaler for LinearTextScaler {
     }
 }
 
+/// A [`TextScaler`] that never scales: every font size is returned unchanged.
+///
+/// Use this to opt out of system text scaling, equivalent to Flutter's
+/// `TextScaler.noScaling`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct NoScaling;
 
@@ -150,6 +165,11 @@ impl TextScaler for NoScaling {
     }
 }
 
+/// A [`TextScaler`] that applies different factors to small and large text.
+///
+/// Font sizes below `threshold` are multiplied by `small_factor`; sizes at
+/// or above it by `large_factor`. This supports non-linear accessibility
+/// scaling where already-large text is scaled less aggressively.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ClampedTextScaler {
     /// Scale factor for small text.
@@ -161,6 +181,12 @@ pub struct ClampedTextScaler {
 }
 
 impl ClampedTextScaler {
+    /// Creates a clamped scaler with the given small/large factors and size threshold.
+    ///
+    /// # Panics
+    ///
+    /// Panics if either factor is negative or NaN, or if `threshold` is
+    /// not strictly positive.
     #[must_use]
     #[inline]
     pub fn new(small_factor: f64, large_factor: f64, threshold: f64) -> Self {
@@ -183,18 +209,21 @@ impl ClampedTextScaler {
         }
     }
 
+    /// Returns the scale factor applied to sizes below the threshold.
     #[must_use]
     #[inline]
     pub const fn small_factor(&self) -> f64 {
         self.small_factor
     }
 
+    /// Returns the scale factor applied to sizes at or above the threshold.
     #[must_use]
     #[inline]
     pub const fn large_factor(&self) -> f64 {
         self.large_factor
     }
 
+    /// Returns the font size threshold that separates small from large text.
     #[must_use]
     #[inline]
     pub const fn threshold(&self) -> f64 {

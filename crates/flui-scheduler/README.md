@@ -6,7 +6,7 @@ Frame scheduling, task prioritization, and animation coordination for FLUI.
 
 - **Frame Scheduling** - VSync coordination and frame lifecycle management
 - **Priority-based Task Queue** - Execute tasks in priority order (UserInput > Animation > Build > Idle)
-- **Animation Tickers** - Frame-perfect animation timing with typestate safety
+- **Animation Tickers** - Frame-perfect animation timing with explicit lifecycle futures
 - **Frame Budget Management** - Enforce time limits to maintain target FPS
 - **VSync Integration** - Coordinate with display refresh to avoid tearing
 - **Type-Safe Durations** - Newtype wrappers prevent unit confusion
@@ -68,17 +68,24 @@ scheduler.execute_frame();
 ### Animation Tickers
 
 ```rust
-use flui_scheduler::Ticker;
+use std::sync::Arc;
 
-let mut ticker = Ticker::new();
+use flui_scheduler::{Scheduler, Ticker};
 
-ticker.start(|elapsed| {
+let scheduler = Arc::new(Scheduler::new());
+let mut ticker = Ticker::new_with_scheduler(Arc::clone(&scheduler));
+
+let future = ticker.start(|elapsed| {
     let progress = (elapsed % 2.0) / 2.0; // 2-second loop
     println!("Animation progress: {:.2}", progress);
 });
 
-// In your render loop
-ticker.tick();
+// In your frame loop, scheduler transient callbacks drive the ticker.
+scheduler.execute_frame();
+
+// Stop completes the future normally. dispose()/drop cancels it.
+ticker.stop();
+assert!(future.is_complete());
 ```
 
 ### Frame Budget Management
@@ -139,30 +146,24 @@ vsync.set_callback(|instant| {
 let vsync_time = vsync.wait_for_vsync();
 ```
 
-## Advanced Type System Features
+## Safety Features
 
-This crate leverages Rust's advanced type system for zero-cost safety guarantees.
+This crate uses small, explicit Rust types for correctness at API boundaries.
 
-### Typestate Pattern for Tickers
+### Ticker Lifecycle Futures
 
-Compile-time state machine prevents invalid operations:
+Ticker start methods return a `TickerFuture`. The future completes when the
+ticker is stopped normally and is canceled when the ticker is disposed, dropped,
+or reset.
 
 ```rust
-use flui_scheduler::typestate::{TypestateTicker, Idle, Active};
+use flui_scheduler::Ticker;
 
-// Create idle ticker
-let ticker: TypestateTicker<Idle> = TypestateTicker::new();
+let mut ticker = Ticker::new();
+let future = ticker.start(|_| {});
 
-// Start transitions to Active state
-let ticker: TypestateTicker<Active> = ticker.start(|elapsed| {
-    println!("Elapsed: {:.2}s", elapsed);
-});
-
-// tick() only available in Active state - compile error if called on Idle!
-ticker.tick();
-
-// Stop transitions back to Idle
-let ticker: TypestateTicker<Idle> = ticker.stop();
+ticker.stop();
+assert!(future.is_complete());
 ```
 
 ### Type-Safe Duration Wrappers
@@ -185,38 +186,19 @@ let as_seconds: Seconds = elapsed.as_seconds();
 
 ### Type-Safe IDs
 
-PhantomData markers prevent ID type confusion at compile time:
+Foundation IDs prevent ID type confusion at compile time:
 
 ```rust
-use flui_scheduler::{FrameId, TaskId, TickerId};
+use flui_scheduler::id::{IdGenerator, markers};
 
-let frame_id = FrameId::new();
-let task_id = TaskId::new();
+let frame_gen = IdGenerator::<markers::Frame>::new();
+let task_gen = IdGenerator::<markers::Task>::new();
+
+let frame_id = frame_gen.next();
+let task_id = task_gen.next();
 
 // These are different types - can't be accidentally mixed!
 // frame_id == task_id  // Compile error!
-```
-
-### Typed Tasks with Compile-Time Priority
-
-```rust
-use flui_scheduler::task::TypedTask;
-use flui_scheduler::traits::{UserInputPriority, IdlePriority};
-
-// Type encodes the priority
-let input_task = TypedTask::<UserInputPriority>::new(|| {
-    println!("High priority!");
-});
-
-// Function that only accepts user input tasks
-fn process_urgent<F>(task: TypedTask<UserInputPriority>) {
-    task.execute();
-}
-
-process_urgent(input_task); // OK
-
-// let idle_task = TypedTask::<IdlePriority>::new(|| {});
-// process_urgent(idle_task); // Compile error! Wrong priority type
 ```
 
 ### Builder Pattern
@@ -236,16 +218,12 @@ let scheduler = SchedulerBuilder::new()
     .build();
 ```
 
-## Preludes
+## Prelude
 
-Two prelude modules for convenient imports:
+The prelude exports common scheduler types:
 
 ```rust
-// Basic types
 use flui_scheduler::prelude::*;
-
-// Advanced types (typestate, typed IDs, etc.)
-use flui_scheduler::prelude_advanced::*;
 ```
 
 ## Priority Levels

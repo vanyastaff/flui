@@ -75,6 +75,16 @@ pub struct IdGenerator<M: Marker> {
     _marker: PhantomData<M>,
 }
 
+// Manual impl instead of `#[derive(Debug)]` so no `M: Debug` bound is
+// required — marker types are never instantiated.
+impl<M: Marker> std::fmt::Debug for IdGenerator<M> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("IdGenerator")
+            .field("counter", &self.counter)
+            .finish()
+    }
+}
+
 impl<M: Marker> IdGenerator<M> {
     /// Create a new ID generator starting from 1.
     pub const fn new() -> Self {
@@ -155,7 +165,7 @@ mod tests {
     #[test]
     fn test_id_display() {
         let frame_id = FrameId::zip(42);
-        let display = format!("{}", frame_id);
+        let display = format!("{frame_id}");
         assert!(display.contains("Frame"));
         assert!(display.contains("42"));
     }

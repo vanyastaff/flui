@@ -1,8 +1,8 @@
 //! `DisplayListStats` -- structured counts of different command types
 //! in a `DisplayList`.
 //!
-//! Mythos chain U5 extracted these from the 2,434-LOC
-//! `display_list.rs` god module. Stats are computed on demand via
+//! These were extracted from the 2,434-LOC
+//! `display_list.rs` god module as part of a concern-based split. Stats are computed on demand via
 //! `DisplayListExt::stats()` (one iteration over commands).
 
 /// Detailed statistics about a [`crate::display_list::DisplayList`]'s

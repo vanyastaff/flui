@@ -3,7 +3,7 @@
 //! This module provides types for batched semantics updates to the platform.
 
 use flui_foundation::SemanticsId;
-use flui_types::{geometry::Pixels, Matrix4, Rect};
+use flui_types::{Matrix4, Rect, geometry::Pixels};
 use smallvec::SmallVec;
 use smol_str::SmolStr;
 

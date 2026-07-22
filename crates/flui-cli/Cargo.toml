@@ -16,11 +16,15 @@ path = "src/main.rs"
 
 [dependencies]
 # Build system
-flui-build = { path = "../flui-build" }
+flui-build = { path = "../flui-build", version = "0.2.0" }
+flui-hot-reload = { path = "../flui-hot-reload", version = "0.2.0", features = ["source-watch"] }
 
-# Logging (via flui_foundation::log — merged from flui-log in
-# D-block PR-C-1 U2)
-flui-foundation = { path = "../flui-foundation" }
+# Async runtime — `run` blocks on the async build/push pipeline via a
+# multi-thread `Runtime`.
+tokio = { workspace = true, features = ["rt-multi-thread"] }
+
+# Logging (via flui_foundation::log — merged from flui-log)
+flui-foundation = { path = "../flui-foundation", version = "0.2.0" }
 
 # CLI framework
 clap = { version = "4.5", features = ["derive", "cargo", "env", "color"] }
@@ -45,11 +49,8 @@ dirs = "5.0"
 # Async runtime (for flui-build async builders)
 pollster = { workspace = true }
 
-# File watching (hot reload)
-notify-debouncer-mini = "0.5"
-
 # Optional: DevTools integration
-flui-devtools = { path = "../flui-devtools", optional = true }
+flui-devtools = { path = "../flui-devtools", version = "0.2.0", optional = true }
 
 [features]
 default = []

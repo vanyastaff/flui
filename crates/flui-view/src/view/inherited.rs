@@ -1,7 +1,10 @@
 //! InheritedView - Views that provide data to descendants.
 //!
-//! InheritedViews propagate data down the tree efficiently using O(1) lookup
-//! via a hash table in BuildOwner, rather than O(depth) parent walks.
+//! InheritedViews propagate data down the tree with O(1) lookup: each
+//! [`ElementNode`](crate::tree::ElementNode) carries an `inherited` map
+//! (`provider view TypeId → provider ElementId`) built at mount, so
+//! `ctx.depend_on::<T>()` is one hash lookup rather than an O(depth) parent
+//! walk. Mirrors Flutter's per-element `_inheritedElements` map.
 
 use super::view::View;
 
@@ -69,9 +72,9 @@ use super::view::View;
 ///     Container::new().color(theme.primary_color)
 /// }
 /// ```
-pub trait InheritedView: Clone + Send + Sync + 'static + Sized {
+pub trait InheritedView: Clone + 'static + Sized {
     /// The data type this InheritedView provides.
-    type Data: Clone + Send + Sync + 'static;
+    type Data: Clone + 'static;
 
     /// Get the data to provide to descendants.
     fn data(&self) -> &Self::Data;
@@ -101,12 +104,8 @@ pub trait InheritedView: Clone + Send + Sync + 'static + Sized {
 macro_rules! impl_inherited_view {
     ($ty:ty) => {
         impl $crate::View for $ty {
-            fn create_element(&self) -> Box<dyn $crate::ElementBase> {
-                use $crate::element::InheritedBehavior;
-                Box::new($crate::InheritedElement::new(
-                    self,
-                    InheritedBehavior::new(self),
-                ))
+            fn create_element(&self) -> $crate::element::ElementKind {
+                $crate::element::ElementKind::inherited(self)
             }
         }
     };
@@ -119,7 +118,8 @@ macro_rules! impl_inherited_view {
 
 #[cfg(test)]
 mod tests {
-    use std::any::TypeId;
+    use flui_objects::RenderSizedBox;
+    use flui_rendering::protocol::BoxProtocol;
 
     use flui_foundation::ElementId;
 
@@ -127,7 +127,7 @@ mod tests {
     use crate::{
         InheritedElement,
         element::{InheritedBehavior, Lifecycle},
-        view::{ElementBase, View},
+        view::View,
     };
 
     #[derive(Clone, Debug, PartialEq)]
@@ -139,32 +139,28 @@ mod tests {
     #[derive(Clone)]
     struct DummyView;
 
-    impl View for DummyView {
-        fn create_element(&self) -> Box<dyn ElementBase> {
-            Box::new(DummyElement)
+    impl crate::RenderView for DummyView {
+        type Protocol = BoxProtocol;
+        type RenderObject = RenderSizedBox;
+
+        fn create_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+        ) -> Self::RenderObject {
+            RenderSizedBox::shrink()
+        }
+
+        fn update_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+            _render_object: &mut Self::RenderObject,
+        ) {
         }
     }
 
-    struct DummyElement;
-
-    impl ElementBase for DummyElement {
-        fn view_type_id(&self) -> TypeId {
-            TypeId::of::<DummyView>()
-        }
-        fn lifecycle(&self) -> Lifecycle {
-            Lifecycle::Active
-        }
-        fn update(&mut self, _: &dyn View, _: &mut crate::ElementOwner<'_>) {}
-        fn mark_needs_build(&mut self) {}
-        fn build_into_views(&mut self, _: &mut crate::ElementOwner<'_>) -> Vec<Box<dyn View>> {
-            Vec::new()
-        }
-        fn mount(&mut self, _: Option<ElementId>, _: usize, _: &mut crate::ElementOwner<'_>) {}
-        fn deactivate(&mut self) {}
-        fn activate(&mut self) {}
-        fn unmount(&mut self, _: &mut crate::ElementOwner<'_>) {}
-        fn depth(&self) -> usize {
-            0
+    impl View for DummyView {
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::render_variable(self)
         }
     }
 
@@ -192,8 +188,8 @@ mod tests {
     }
 
     impl View for TestThemeProvider {
-        fn create_element(&self) -> Box<dyn ElementBase> {
-            Box::new(InheritedElement::new(self, InheritedBehavior::new(self)))
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::inherited(self)
         }
     }
 

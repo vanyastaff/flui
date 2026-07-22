@@ -1,0 +1,50 @@
+[package]
+name = "flui-binding"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+readme = "README.md"
+description = "Deterministic headless frame driver (pump_frame) over the gesture arena + virtual clock for FLUI"
+keywords = ["ui", "gesture", "headless", "testing"]
+categories = ["gui"]
+
+[lints]
+workspace = true
+
+[dependencies]
+# The virtual clock (`ManualClock`) + clock-bound gesture arena (deadline polling).
+flui-interaction = { path = "../flui-interaction", version = "0.2.0" }
+# The element tree + build owner this binding drives each frame (`build_scope`
+# drains the external inbox an animation/listenable tick fills).
+flui-view = { path = "../flui-view", version = "0.2.0" }
+# The pipeline owner the frame loop lays out / paints / composites (`run_frame`).
+flui-rendering = { path = "../flui-rendering", version = "0.2.0" }
+# Registered `AnimationController`s the frame loop ticks on the virtual timeline,
+# restart-aware via the controller's `run_generation` counter.
+flui-animation = { path = "../flui-animation", version = "0.2.0" }
+# The frame-driven async task driver. `pump_frame` runs the SAME
+# `Scheduler::drive_async_tasks` step `AppBinding::draw_frame` runs, in the same
+# slot — between the vsync tick and `build_scope`.
+flui-scheduler = { path = "../flui-scheduler", version = "0.2.0" }
+# Names the shared `Arc<RwLock<PipelineOwner>>` the element tree and the binding
+# both hold (render-object attachment shares the owner; the binding does not own
+# it exclusively).
+parking_lot = { workspace = true }
+
+[dev-dependencies]
+static_assertions.workspace = true
+flui-interaction = { path = "../flui-interaction", version = "0.2.0", features = ["testing"] }
+# Enable flui-view's `test-utils` feature in test builds so the layout-builder
+# seam test can plant a registry entry (`register_layout_builder_for_test`).
+# Same dev-only feature-unification pattern used by flui-app; the hook stays out
+# of release builds.
+flui-view = { path = "../flui-view", version = "0.2.0", features = ["test-utils"] }
+flui-foundation = { path = "../flui-foundation", version = "0.2.0" }
+# The long-press deadline recognizer + settings exercised by the pump_frame test,
+# plus the geometry/offset types for the synthetic pointer-down. The `testing`
+# feature is NOT required: `add_pointer`/`poll_deadlines` are part of the release
+# API, so the deterministic deadline test runs against the public surface.
+flui-types = { path = "../flui-types", version = "0.2.0" }

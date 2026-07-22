@@ -1,4 +1,4 @@
-//! Integration tests for build-panic recovery (plan §U7, origin R9).
+//! Integration tests for build-panic recovery.
 //!
 //! When a user `build()` panics, `ElementBase::build_into_views` must
 //! catch the unwind and substitute the registered `ErrorView` instead of
@@ -6,16 +6,21 @@
 //! `ComponentElement.performRebuild` dual try/catch
 //! (`framework.dart:5810-5859`).
 //!
-//! E3 (atomic box→arena swap): the element no longer owns its children;
-//! `build_into_views` RETURNS the (recovered) child views, and the slab
-//! id-reconciler creates the child nodes. These tests drive a standalone
-//! element and inspect the returned view list directly — that is where
-//! the panic→`ErrorView` substitution is observable without a slab.
+//! E3 + H3: the element no longer owns its children, and component
+//! builds require the live tree-backed `BuildCtx` supplied by
+//! `BuildOwner::build_scope`. These tests drive the production
+//! mount/schedule/build-scope path and inspect the materialized slab
+//! children created by the id-reconciler.
 //!
 //! These tests deliberately panic inside `build()`. `catch_unwind` still
 //! prints the panic's backtrace to stderr even when the unwind is
 //! caught — that stderr noise is expected; the test process must NOT
 //! abort and the assertions below must hold.
+
+// Target-level lint relaxations — crate-level allows don't reach this
+// target. `unwrap` in test/example code: a panic IS the failure report
+// (docs/PANIC-POLICY.md); style items here are ship-wave debt.
+#![allow(clippy::unwrap_used)]
 
 use std::{
     any::TypeId,
@@ -26,9 +31,9 @@ use std::{
 };
 
 use flui_view::{
-    BuildContext, BuildOwner, ElementBase, ErrorView, FlutterError, IntoView, Lifecycle,
-    StatefulBehavior, StatefulElement, StatefulView, StatelessBehavior, StatelessElement,
-    StatelessView, View, ViewExt, ViewState, clear_error_view_builder, set_error_view_builder,
+    BuildContext, BuildOwner, ElementTree, ErrorView, FlutterError, IntoView, Lifecycle,
+    StatefulView, StatelessView, View, ViewExt, ViewState, clear_error_view_builder,
+    set_error_view_builder,
 };
 
 /// Serializes the tests in this file.
@@ -82,8 +87,8 @@ impl StatelessView for PanickingView {
 }
 
 impl View for PanickingView {
-    fn create_element(&self) -> Box<dyn ElementBase> {
-        Box::new(StatelessElement::new(self, StatelessBehavior))
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateless(self)
     }
 }
 
@@ -102,8 +107,8 @@ impl<C: View + Clone + 'static> StatelessView for WrapperView<C> {
 }
 
 impl<C: View + Clone + 'static> View for WrapperView<C> {
-    fn create_element(&self) -> Box<dyn ElementBase> {
-        Box::new(StatelessElement::new(self, StatelessBehavior))
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateless(self)
     }
 }
 
@@ -137,8 +142,8 @@ impl ViewState<PanickingStatefulView> for PanickingStatefulState {
 }
 
 impl View for PanickingStatefulView {
-    fn create_element(&self) -> Box<dyn ElementBase> {
-        Box::new(StatefulElement::new(self, StatefulBehavior::new(self)))
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateful(self)
     }
 }
 
@@ -146,16 +151,28 @@ impl View for PanickingStatefulView {
 // Helpers
 // ----------------------------------------------------------------------------
 
-/// Count of returned child views whose `view_type_id()` is `ErrorView`.
-///
-/// E3: the recovered child is observable as a view in the list
-/// `build_into_views` returns (the slab reconciler then materialises it),
-/// not as a box child inside `ElementCore`.
-fn count_error_views(views: &[Box<dyn View>]) -> usize {
-    views
-        .iter()
-        .filter(|v| v.view_type_id() == TypeId::of::<ErrorView>())
+fn mount_and_build(view: &dyn View) -> (ElementTree, BuildOwner, flui_view::ElementId) {
+    let mut tree = ElementTree::new();
+    let mut owner = BuildOwner::new();
+    let root_id = tree.mount_root(view, &mut owner.element_owner_mut());
+    owner.schedule_build_for(root_id, 0);
+    owner.build_scope(&mut tree);
+    (tree, owner, root_id)
+}
+
+fn count_error_child_elements(tree: &ElementTree, parent: flui_view::ElementId) -> usize {
+    child_ids(tree, parent)
+        .into_iter()
+        .filter(|&child_id| {
+            tree.get(child_id).unwrap().element().view_type_id() == TypeId::of::<ErrorView>()
+        })
         .count()
+}
+
+fn child_ids(tree: &ElementTree, parent: flui_view::ElementId) -> Vec<flui_view::ElementId> {
+    tree.iter_nodes()
+        .filter_map(|(id, node)| (node.parent() == Some(parent)).then_some(id))
+        .collect()
 }
 
 // ============================================================================
@@ -179,13 +196,9 @@ fn stateless_build_panic_substitutes_registered_error_view() {
     let view = PanickingView {
         message: "boom in stateless build",
     };
-    let mut element = StatelessElement::new(&view, StatelessBehavior);
-    let mut owner = BuildOwner::new();
-    element.mount(None, 0, &mut owner.element_owner_mut());
-
-    // The frame must NOT unwind here — build_into_views catches the panic
-    // and returns the substituted ErrorView as the child view.
-    let views = element.build_into_views(&mut owner.element_owner_mut());
+    // The frame must NOT unwind here — build_scope catches the panic and the
+    // reconciler materializes the substituted ErrorView as a child element.
+    let (tree, _owner, root_id) = mount_and_build(&view);
 
     assert_eq!(
         BUILDER_HITS.load(Ordering::SeqCst),
@@ -193,12 +206,12 @@ fn stateless_build_panic_substitutes_registered_error_view() {
         "the registered error-view builder must run exactly once"
     );
     assert_eq!(
-        count_error_views(&views),
+        count_error_child_elements(&tree, root_id),
         1,
-        "the panicked subtree must be replaced by exactly one ErrorView child view"
+        "the panicked subtree must be replaced by exactly one ErrorView child element"
     );
     assert_eq!(
-        element.lifecycle(),
+        tree.get(root_id).unwrap().element().lifecycle(),
         Lifecycle::Active,
         "the element itself stays Active after recovering"
     );
@@ -220,18 +233,17 @@ fn stateless_build_panic_falls_back_to_default_error_view() {
     let view = PanickingView {
         message: "boom with no builder",
     };
-    let mut element = StatelessElement::new(&view, StatelessBehavior);
-    let mut owner = BuildOwner::new();
-    element.mount(None, 0, &mut owner.element_owner_mut());
-
-    let views = element.build_into_views(&mut owner.element_owner_mut());
+    let (tree, _owner, root_id) = mount_and_build(&view);
 
     assert_eq!(
-        count_error_views(&views),
+        count_error_child_elements(&tree, root_id),
         1,
         "with no builder the default ErrorView must still substitute"
     );
-    assert_eq!(element.lifecycle(), Lifecycle::Active);
+    assert_eq!(
+        tree.get(root_id).unwrap().element().lifecycle(),
+        Lifecycle::Active
+    );
 }
 
 // ============================================================================
@@ -244,18 +256,17 @@ fn stateful_build_panic_substitutes_error_view() {
     clear_error_view_builder();
 
     let view = PanickingStatefulView;
-    let mut element = StatefulElement::new(&view, StatefulBehavior::new(&view));
-    let mut owner = BuildOwner::new();
-    element.mount(None, 0, &mut owner.element_owner_mut());
-
-    let views = element.build_into_views(&mut owner.element_owner_mut());
+    let (tree, _owner, root_id) = mount_and_build(&view);
 
     assert_eq!(
-        count_error_views(&views),
+        count_error_child_elements(&tree, root_id),
         1,
         "a panicking ViewState::build must be caught and substituted"
     );
-    assert_eq!(element.lifecycle(), Lifecycle::Active);
+    assert_eq!(
+        tree.get(root_id).unwrap().element().lifecycle(),
+        Lifecycle::Active
+    );
 }
 
 // ============================================================================
@@ -268,31 +279,39 @@ fn nested_child_build_panic_replaces_only_that_subtree() {
     clear_error_view_builder();
 
     // Parent is a well-behaved wrapper; its child is a PanickingView.
-    // E3: the parent's build does NOT recurse — it returns its child view,
-    // and the slab id-reconciler would build the child as its own drain
-    // entry (where the child's panic is caught). On a standalone parent
-    // the child is never built, so the parent must return its (un-replaced)
-    // child view here.
+    // E3: the parent's build returns its child view, and the slab
+    // id-reconciler builds that child as its own drain entry, where the
+    // child's panic is caught.
     let view = WrapperView {
         child: PanickingView {
             message: "boom in nested child",
         },
     };
-    let mut element = StatelessElement::new(&view, StatelessBehavior);
-    let mut owner = BuildOwner::new();
-    element.mount(None, 0, &mut owner.element_owner_mut());
+    let (tree, _owner, root_id) = mount_and_build(&view);
 
-    let views = element.build_into_views(&mut owner.element_owner_mut());
-
-    // The parent did NOT panic — it built fine. The returned child view is
-    // the PanickingView itself, NOT an ErrorView (the panic only fires when
-    // the child is *built*, which is a separate drain entry on the slab).
-    assert_eq!(element.lifecycle(), Lifecycle::Active);
-    assert_eq!(views.len(), 1, "parent returns exactly one child view");
+    // The parent did NOT panic — it built fine. Its direct child remains the
+    // PanickingView element; only that child's own subtree is replaced.
     assert_eq!(
-        count_error_views(&views),
+        tree.get(root_id).unwrap().element().lifecycle(),
+        Lifecycle::Active
+    );
+    let child_ids = child_ids(&tree, root_id);
+    assert_eq!(child_ids.len(), 1, "parent materializes exactly one child");
+    let child_id = child_ids[0];
+    assert_eq!(
+        tree.get(child_id).unwrap().element().view_type_id(),
+        TypeId::of::<PanickingView>(),
+        "the well-behaved parent's direct child must not be replaced"
+    );
+    assert_eq!(
+        count_error_child_elements(&tree, child_id),
+        1,
+        "the panicking child subtree must be replaced by an ErrorView child"
+    );
+    assert_eq!(
+        count_error_child_elements(&tree, root_id),
         0,
-        "the well-behaved parent's child view must NOT be replaced by build_into_views"
+        "the well-behaved parent's direct child must NOT be an ErrorView"
     );
 }
 
@@ -308,18 +327,14 @@ fn caught_panic_leaves_no_dangling_dirty_state() {
     let view = PanickingView {
         message: "boom — check dirty heap",
     };
-    let mut element = StatelessElement::new(&view, StatelessBehavior);
-    let mut owner = BuildOwner::new();
-    element.mount(None, 0, &mut owner.element_owner_mut());
-
-    let _ = element.build_into_views(&mut owner.element_owner_mut());
+    let (tree, mut owner, root_id) = mount_and_build(&view);
 
     // The element's own dirty flag must be cleared (the build-half tail
     // runs even on the recovery path) and nothing must be left queued on
     // the BuildOwner's dirty heap.
     assert!(
-        !element.core().is_dirty(),
-        "build_into_views must clear the element's dirty flag on the recovery path"
+        !tree.get(root_id).unwrap().element().is_dirty(),
+        "build_scope must clear the element's dirty flag on the recovery path"
     );
     assert_eq!(
         owner.element_owner_mut().dirty_count(),
@@ -340,23 +355,30 @@ fn repeated_build_after_panic_stays_stable() {
     let view = PanickingView {
         message: "boom — repeated",
     };
-    let mut element = StatelessElement::new(&view, StatelessBehavior);
-    let mut owner = BuildOwner::new();
-    element.mount(None, 0, &mut owner.element_owner_mut());
+    let (mut tree, mut owner, root_id) = mount_and_build(&view);
+    assert_eq!(count_error_child_elements(&tree, root_id), 1);
 
-    let views = element.build_into_views(&mut owner.element_owner_mut());
-    assert_eq!(count_error_views(&views), 1);
-
-    // Force a rebuild and run build_into_views again: still exactly one
-    // ErrorView child view, no extra views leaked, no unwind.
-    element.mark_needs_build();
-    let views = element.build_into_views(&mut owner.element_owner_mut());
+    // Force a rebuild and run build_scope again: still exactly one ErrorView
+    // child element, no extra nodes leaked, no unwind.
+    tree.get_mut(root_id)
+        .unwrap()
+        .element_mut()
+        .mark_needs_build();
+    owner.schedule_build_for(root_id, 0);
+    owner.build_scope(&mut tree);
 
     assert_eq!(
-        count_error_views(&views),
+        count_error_child_elements(&tree, root_id),
         1,
-        "a second build after recovery must still yield exactly one ErrorView view"
+        "a second build after recovery must still yield exactly one ErrorView child"
     );
-    assert_eq!(views.len(), 1, "no extra child view leaked on rebuild");
-    assert_eq!(element.lifecycle(), Lifecycle::Active);
+    assert_eq!(
+        child_ids(&tree, root_id).len(),
+        1,
+        "no extra child element leaked on rebuild"
+    );
+    assert_eq!(
+        tree.get(root_id).unwrap().element().lifecycle(),
+        Lifecycle::Active
+    );
 }

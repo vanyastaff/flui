@@ -17,6 +17,8 @@ use crate::geometry::{Offset, Pixels};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+/// Details for a tap-down event: the pointer has contacted the screen and
+/// might begin a tap.
 pub struct TapDownDetails {
     /// The global position where the tap occurred
     pub global_position: Offset<Pixels>,
@@ -49,6 +51,8 @@ impl TapDownDetails {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+/// Details for a tap-up event: the pointer that triggered a tap has
+/// stopped contacting the screen.
 pub struct TapUpDetails {
     /// The global position where the tap ended
     pub global_position: Offset<Pixels>,
@@ -85,6 +89,8 @@ impl TapUpDetails {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+/// Details for a drag-start event: the pointer has begun to move and a
+/// drag gesture has been recognized.
 pub struct DragStartDetails {
     // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// The time when the drag started
@@ -126,6 +132,8 @@ impl DragStartDetails {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+/// Details for a drag-down event: the pointer has contacted the screen
+/// and might begin a drag.
 pub struct DragDownDetails {
     // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// The global position where the pointer contacted
@@ -148,6 +156,8 @@ impl DragDownDetails {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+/// Details for a drag-update event: a dragging pointer has moved, carrying
+/// the movement delta since the previous update.
 pub struct DragUpdateDetails {
     // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// The time when the update occurred
@@ -197,6 +207,8 @@ impl DragUpdateDetails {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+/// Details for a drag-end event: the pointer has been released, carrying
+/// the velocity at which it was moving for fling handling.
 pub struct DragEndDetails {
     // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// The velocity of the pointer when the drag ended
@@ -230,6 +242,8 @@ impl DragEndDetails {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+/// Details for a scale-start event: the pointers in contact have
+/// established a focal point and a scale gesture has begun.
 pub struct ScaleStartDetails {
     // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// The focal point of the pointers in contact with the screen
@@ -252,6 +266,8 @@ impl ScaleStartDetails {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+/// Details for a scale-update event: the pointers have moved, carrying
+/// the new focal point, scale factors, and rotation.
 pub struct ScaleUpdateDetails {
     // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// The focal point of the pointers in contact with the screen
@@ -316,6 +332,8 @@ impl ScaleUpdateDetails {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+/// Details for a scale-end event: the pointers are no longer in contact
+/// with the screen and the scale gesture has ended.
 pub struct ScaleEndDetails {
     // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// The velocity of the gesture
@@ -342,6 +360,8 @@ impl ScaleEndDetails {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+/// Details for a long-press-down event: the pointer has contacted the
+/// screen and might begin a long press.
 pub struct LongPressDownDetails {
     // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// The global position where the pointer contacted
@@ -375,6 +395,8 @@ impl LongPressDownDetails {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+/// Details for a long-press-start event: the pointer has remained in
+/// contact long enough for a long press to be recognized.
 pub struct LongPressStartDetails {
     // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// The global position where the long press started
@@ -397,6 +419,8 @@ impl LongPressStartDetails {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+/// Details for a long-press-move-update event: the pointer has moved
+/// while the long press is held, carrying offsets from the press origin.
 pub struct LongPressMoveUpdateDetails {
     /// The global position of the pointer
     pub global_position: Offset<Pixels>,
@@ -431,6 +455,8 @@ impl LongPressMoveUpdateDetails {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+/// Details for a long-press-end event: the pointer that held the long
+/// press has stopped contacting the screen.
 pub struct LongPressEndDetails {
     /// The global position where the long press ended
     pub global_position: Offset<Pixels>,
@@ -464,6 +490,8 @@ impl LongPressEndDetails {
 
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+/// Details for a force-press event: the pointer's pressure on a
+/// pressure-sensitive screen, along with its position.
 pub struct ForcePressDetails {
     /// The global position of the pointer
     pub global_position: Offset<Pixels>,

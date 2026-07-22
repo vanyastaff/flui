@@ -17,18 +17,6 @@ use crate::{
 };
 
 // ============================================================================
-// SUPERELLIPSE PATH GENERATION
-// ============================================================================
-//
-// The `SuperellipseKey` cache key + bounded `SuperellipsePathCache` moved
-// to `crate::wgpu::superellipse_cache` in U1 of the audit Step 5 item 14
-// follow-up. The previous `thread_local!` static cache was unbounded; the
-// new bounded cache lives on `WgpuPainter` (mirroring `PathCache`'s
-// ownership) and is consulted via `CommandRenderer::superellipse_path`'s
-// default + override impls. `generate_superellipse_path` remains here as
-// the math reference; both the cache and the trait default invoke it.
-
-// ============================================================================
 // LAYER RENDER TRAIT
 // ============================================================================
 
@@ -225,8 +213,8 @@ impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R>
         if !self.clips() {
             return;
         }
-        let path = renderer.superellipse_path(*self.clip_superellipse());
-        renderer.push_clip_path(&path, self.clip_behavior());
+        let arc_path = renderer.superellipse_path(*self.clip_superellipse());
+        renderer.push_clip_path(&arc_path, self.clip_behavior());
     }
 
     fn cleanup(&self, renderer: &mut R) {
@@ -234,142 +222,6 @@ impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R>
             renderer.pop_clip();
         }
     }
-}
-
-/// Generates a proper superellipse (squircle) path from an `RSuperellipse`.
-///
-/// Uses the parametric superellipse equation with `n = 4` (iOS squircle):
-/// ```text
-/// x(t) = a * sign(cos(t)) * |cos(t)|^(2/n)
-/// y(t) = b * sign(sin(t)) * |sin(t)|^(2/n)
-/// ```
-///
-/// Each corner is generated independently using its own radii, with straight
-/// edges connecting the corners. 64 points per corner ensure a smooth curve.
-///
-/// Exposed `pub(crate)` so `CommandRenderer::superellipse_path`'s default
-/// impl can call it for backends that don't own a Painter-side cache.
-pub(crate) fn generate_superellipse_path(
-    superellipse: &flui_types::geometry::RSuperellipse,
-) -> flui_types::painting::Path {
-    use flui_types::geometry::{Pixels, Point, px};
-
-    let rect = superellipse.outer_rect();
-    let tl = superellipse.tl_radius();
-    let tr = superellipse.tr_radius();
-    let br = superellipse.br_radius();
-    let bl = superellipse.bl_radius();
-
-    let mut path = flui_types::painting::Path::new();
-
-    // iOS squircle exponent
-    let n: f32 = 4.0;
-    let two_over_n = 2.0 / n;
-
-    // Number of sample points per corner quarter-arc
-    let segments_per_corner: usize = 16;
-
-    let left = rect.left().0;
-    let top = rect.top().0;
-    let right = rect.right().0;
-    let bottom = rect.bottom().0;
-
-    // Helper: compute superellipse point for a corner quadrant.
-    // `cx`, `cy` is the corner center, `rx`, `ry` are the radii,
-    // `t` sweeps through the quarter, `sx`/`sy` select the quadrant direction.
-    let se_point =
-        |cx: f32, cy: f32, rx: f32, ry: f32, t: f32, sx: f32, sy: f32| -> Point<Pixels> {
-            let cos_t = t.cos();
-            let sin_t = t.sin();
-            let x = cx + sx * rx * cos_t.abs().powf(two_over_n);
-            let y = cy + sy * ry * sin_t.abs().powf(two_over_n);
-            Point::new(px(x), px(y))
-        };
-
-    // Start at top edge, after top-left corner
-    // Top-left corner: center at (left + tl.x, top + tl.y)
-    // Sweep from PI (left) to PI/2 (top), i.e. t goes PI -> PI/2
-    // Direction: sx = -1 (left of center), sy = -1 (above center)
-    {
-        let cx = left + tl.x.0;
-        let cy = top + tl.y.0;
-        let rx = tl.x.0;
-        let ry = tl.y.0;
-        if rx > 0.0 && ry > 0.0 {
-            for i in 0..=segments_per_corner {
-                // Sweep from PI/2 to 0 (parametric), mapping to top-left quadrant
-                let t = std::f32::consts::FRAC_PI_2 * (1.0 - i as f32 / segments_per_corner as f32);
-                let p = se_point(cx, cy, rx, ry, t, -1.0, -1.0);
-                if i == 0 {
-                    path.move_to(p);
-                } else {
-                    path.line_to(p);
-                }
-            }
-        } else {
-            path.move_to(Point::new(px(left), px(top)));
-        }
-    }
-
-    // Top edge -> top-right corner
-    // Top-right corner: center at (right - tr.x, top + tr.y)
-    // Direction: sx = +1 (right of center), sy = -1 (above center)
-    {
-        let cx = right - tr.x.0;
-        let cy = top + tr.y.0;
-        let rx = tr.x.0;
-        let ry = tr.y.0;
-        if rx > 0.0 && ry > 0.0 {
-            for i in 0..=segments_per_corner {
-                let t = std::f32::consts::FRAC_PI_2 * (i as f32 / segments_per_corner as f32);
-                let p = se_point(cx, cy, rx, ry, t, 1.0, -1.0);
-                path.line_to(p);
-            }
-        } else {
-            path.line_to(Point::new(px(right), px(top)));
-        }
-    }
-
-    // Right edge -> bottom-right corner
-    // Bottom-right corner: center at (right - br.x, bottom - br.y)
-    // Direction: sx = +1, sy = +1
-    {
-        let cx = right - br.x.0;
-        let cy = bottom - br.y.0;
-        let rx = br.x.0;
-        let ry = br.y.0;
-        if rx > 0.0 && ry > 0.0 {
-            for i in 0..=segments_per_corner {
-                let t = std::f32::consts::FRAC_PI_2 * (1.0 - i as f32 / segments_per_corner as f32);
-                let p = se_point(cx, cy, rx, ry, t, 1.0, 1.0);
-                path.line_to(p);
-            }
-        } else {
-            path.line_to(Point::new(px(right), px(bottom)));
-        }
-    }
-
-    // Bottom edge -> bottom-left corner
-    // Bottom-left corner: center at (left + bl.x, bottom - bl.y)
-    // Direction: sx = -1, sy = +1
-    {
-        let cx = left + bl.x.0;
-        let cy = bottom - bl.y.0;
-        let rx = bl.x.0;
-        let ry = bl.y.0;
-        if rx > 0.0 && ry > 0.0 {
-            for i in 0..=segments_per_corner {
-                let t = std::f32::consts::FRAC_PI_2 * (i as f32 / segments_per_corner as f32);
-                let p = se_point(cx, cy, rx, ry, t, -1.0, 1.0);
-                path.line_to(p);
-            }
-        } else {
-            path.line_to(Point::new(px(left), px(bottom)));
-        }
-    }
-
-    path.close();
-    path
 }
 
 // ============================================================================
@@ -415,20 +267,28 @@ impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for OpacityLa
         if self.is_invisible() {
             return;
         }
-        if self.is_opaque() {
+        // An opaque SrcOver layer is a no-op composite — skip it entirely.
+        // An opaque advanced-blend layer (opacity=1, non-SrcOver) MUST still be
+        // pushed so the compositor applies the dst-read blend to its children.
+        let is_src_over_opaque = self.is_opaque() && !self.blend().is_advanced();
+        if is_src_over_opaque {
             return;
         }
         if self.has_offset() {
             renderer.push_offset(self.offset());
         }
-        renderer.push_opacity(self.alpha());
+        renderer.push_opacity_blend(self.alpha(), self.blend());
     }
 
     fn cleanup(&self, renderer: &mut R) {
-        if self.is_invisible() || self.is_opaque() {
+        if self.is_invisible() {
             return;
         }
-        // Pop in reverse order: first opacity, then offset
+        let is_src_over_opaque = self.is_opaque() && !self.blend().is_advanced();
+        if is_src_over_opaque {
+            return;
+        }
+        // Pop in reverse order: first opacity, then offset.
         renderer.pop_opacity();
         if self.has_offset() {
             renderer.pop_transform();
@@ -441,7 +301,10 @@ impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for ColorFilt
         if self.is_identity() {
             return;
         }
-        renderer.push_color_filter(self.color_filter());
+        // `color_filter()` returns `ColorFilter` by value (Copy); take a reference
+        // to match the `&ColorFilter` trait parameter.
+        let filter = self.color_filter();
+        renderer.push_color_filter(&filter);
     }
 
     fn cleanup(&self, renderer: &mut R) {
@@ -851,7 +714,7 @@ mod tests {
             self.calls.push("restore_layer".to_string());
         }
 
-        // Cycle 4 E-9: push/pop methods moved to impl LayerStateStack below.
+        // The push/pop methods live in `impl LayerStateStack` below, not here.
 
         // ===== Performance Overlay (recorded) =====
         fn add_performance_overlay(
@@ -866,9 +729,10 @@ mod tests {
         }
     }
 
-    // Cycle 4 E-9: layer-tree state-stack impl split into a dedicated
-    // trait. MockRenderer records each push/pop as a string for the
-    // ordering assertions in the test suite.
+    // The layer-tree state-stack methods are implemented on their own
+    // dedicated `LayerStateStack` trait rather than on `CommandRenderer`.
+    // MockRenderer records each push/pop as a string for the ordering
+    // assertions in the test suite.
     impl LayerStateStack for MockRenderer {
         fn push_clip_rect(&mut self, _rect: &Rect<Pixels>, _clip_behavior: Clip) {
             self.calls.push("push_clip_rect".to_string());
@@ -897,7 +761,7 @@ mod tests {
         fn pop_opacity(&mut self) {
             self.calls.push("pop_opacity".to_string());
         }
-        fn push_color_filter(&mut self, _filter: &flui_types::painting::ColorMatrix) {
+        fn push_color_filter(&mut self, _filter: &flui_types::painting::ColorFilter) {
             self.calls.push("push_color_filter".to_string());
         }
         fn pop_color_filter(&mut self) {

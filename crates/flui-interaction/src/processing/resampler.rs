@@ -72,7 +72,7 @@ pub const DEFAULT_RESAMPLE_LOOKBACK: Duration = Duration::from_millis(38);
 const MAX_BUFFERED_EVENTS: usize = 100;
 
 /// Minimum time between samples to prevent excessive resampling
-const MIN_SAMPLE_INTERVAL: Duration = Duration::from_micros(1000); // 1ms
+const MIN_SAMPLE_INTERVAL: Duration = Duration::from_millis(1); // 1ms
 
 /// Callback for handling resampled events
 #[allow(dead_code)] // Future public API
@@ -95,11 +95,12 @@ struct BufferedEvent {
 /// # Thread Safety
 ///
 /// This type is thread-safe using `Arc<Mutex<_>>` internally.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct PointerEventResampler {
     inner: Arc<Mutex<ResamplerInner>>,
 }
 
+#[derive(Debug)]
 struct ResamplerInner {
     /// Pointer ID this resampler tracks
     pointer_id: PointerId,

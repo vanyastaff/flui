@@ -109,7 +109,7 @@ impl<I: TreeId> Slot<I> {
     /// This is the "full" constructor used during reconciliation
     /// when sibling information is available.
     ///
-    /// # Builder (F14)
+    /// # Builder
     ///
     /// This constructor is a [`bon`] builder, not a positional function.
     /// The two `Option<I>` sibling slots are indistinguishable by position,
@@ -132,7 +132,7 @@ impl<I: TreeId> Slot<I> {
     /// assert_eq!(slot.previous_sibling(), Some(ElementId::new(5)));
     /// assert_eq!(slot.next_sibling(), Some(ElementId::new(7)));
     /// ```
-    // F14: this is a `bon::builder`. Inside an `impl` block whose method
+    // This is a `bon::builder`. Inside an `impl` block whose method
     // returns `Self`, `bon` requires the *inert* `#[builder]` spelling under
     // an `#[bon::bon]`-annotated impl (a path-prefixed `#[bon::builder]` is
     // rejected there); see the `#[bon::bon]` attribute on the impl above.
@@ -691,10 +691,10 @@ mod tests {
         assert!(slot.has_siblings());
     }
 
-    // F14 — RED-then-GREEN: the `#[bon::builder]` attribute generates a
-    // type-state builder, so the fluent method chain below only compiles
-    // once the builder is applied. Before the fix this is a hard
-    // "method not found" compile error.
+    // The `#[bon::builder]` attribute generates a type-state builder, so
+    // the fluent method chain below only compiles once the builder is
+    // applied; without it this is a hard "method not found" compile
+    // error.
     #[test]
     fn slot_builder_syntax() {
         let parent_id = ElementId::new(1);
@@ -707,9 +707,9 @@ mod tests {
             .call();
     }
 
-    // F14 triangulation — every field set; values round-trip through the
-    // accessors. `bon` wraps each `Option<I>` parameter as an optional
-    // builder setter that takes the inner `I` directly.
+    // Every field set; values round-trip through the accessors. `bon`
+    // wraps each `Option<I>` parameter as an optional builder setter
+    // that takes the inner `I` directly.
     #[test]
     fn slot_with_siblings_all_fields() {
         let parent = ElementId::new(10);
@@ -731,7 +731,7 @@ mod tests {
         assert_eq!(slot.next_sibling(), Some(next));
     }
 
-    // F14 triangulation — only the required fields; `index` defaults to 0
+    // Only the required fields; `index` defaults to 0
     // (`#[builder(default)]`) and both sibling setters are omitted, so they
     // default to `None`.
     #[test]

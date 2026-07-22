@@ -207,7 +207,7 @@ fn test_value_notifier_complex_state() {
 }
 
 // ============================================================================
-// Observer System Integration Tests — removed in audit I-1
+// Observer System Integration Tests — removed
 // ============================================================================
 //
 // `ObserverList` was deleted (zero in-workspace consumers; `ChangeNotifier`
@@ -308,7 +308,7 @@ fn test_diagnostics_builder_usage() {
 }
 
 // ============================================================================
-// Error Handling Integration Tests — removed in audit I-2
+// Error Handling Integration Tests — removed
 // ============================================================================
 //
 // `FoundationError` + `ErrorContext` were deleted (zero in-workspace

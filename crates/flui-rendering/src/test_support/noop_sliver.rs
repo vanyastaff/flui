@@ -5,7 +5,6 @@ use flui_tree::Leaf;
 use crate::{
     constraints::SliverGeometry,
     context::{SliverHitTestContext, SliverLayoutContext},
-    impl_sliver_test_caps,
     parent_data::SliverPhysicalParentData,
     traits::RenderSliver,
 };
@@ -14,7 +13,7 @@ use crate::{
 #[derive(Debug, Default)]
 pub struct NoopSliver;
 
-impl_sliver_test_caps!(NoopSliver);
+impl flui_foundation::Diagnosticable for NoopSliver {}
 
 impl RenderSliver for NoopSliver {
     type Arity = Leaf;

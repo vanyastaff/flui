@@ -34,18 +34,25 @@ pub fn generate(
 fn generate_cargo_toml(dir: &Path, name: &str, local: bool) -> CliResult<()> {
     let version = env!("CARGO_PKG_VERSION");
 
+    // LOCAL mode: path deps assume the project lives at <flui-root>/<subdir>/<name>/
+    // so "../../crates/" resolves to the workspace crates directory.
+    // PUBLISHED mode: version strings won't resolve until FLUI is on crates.io.
+    //
+    // flui-view is a required direct dep: the `#[derive(StatelessView)]` macro
+    // expands to `::flui_view::View` references that must resolve at the crate root.
     let deps = if local {
-        r#"flui_app = { path = "../../crates/flui_app" }
-flui_widgets = { path = "../../crates/flui_widgets" }
-flui_core = { path = "../../crates/flui_core" }
-flui_types = { path = "../../crates/flui_types" }"#
+        r#"flui-app = { path = "../../crates/flui-app" }
+flui-view = { path = "../../crates/flui-view" }
+flui-widgets = { path = "../../crates/flui-widgets" }"#
             .to_string()
     } else {
         format!(
-            r#"flui_app = "{version}"
-flui_widgets = "{version}"
-flui_core = "{version}"
-flui_types = "{version}""#
+            // NOTE: FLUI is not yet published to crates.io.
+            // These version strings will not resolve until the crates are released.
+            // Use `flui create --local` when working from the FLUI source tree.
+            r#"flui-app = "{version}"
+flui-view = "{version}"
+flui-widgets = "{version}""#
         )
     };
 
@@ -54,20 +61,18 @@ flui_types = "{version}""#
     let content = format!(
         r#"# FLUI Template v{version}{mode_comment}
 
+# Standalone workspace declaration so this project is not absorbed into
+# any parent workspace that may contain the FLUI source tree.
+[workspace]
+
 [package]
 name = "{name}"
 version = "0.1.0"
-edition = "2021"
-rust-version = "1.91"
+edition = "2024"
+rust-version = "1.96"
 
 [dependencies]
 {deps}
-
-# Logging
-tracing = "0.1"
-
-[dev-dependencies]
-env_logger = "0.11"
 
 [profile.release]
 opt-level = 3
@@ -82,54 +87,19 @@ strip = "debuginfo"
 }
 
 fn generate_main(dir: &Path) -> CliResult<()> {
-    let content = r#"use flui_app::runApp;
-use flui_core::prelude::*;
-use flui_widgets::*;
+    let content = r#"use flui_app::run_app;
+use flui_widgets::prelude::*;
 
 fn main() {
-    // Initialize logging
-    #[cfg(debug_assertions)]
-    {
-        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
-    }
-
-    runApp(MyApp);
+    run_app(HelloView);
 }
 
-#[derive(Debug)]
-struct MyApp;
+#[derive(Clone, StatelessView)]
+struct HelloView;
 
-impl View for MyApp {
-    fn build(self, ctx: &BuildContext) -> impl IntoElement {
-        MaterialApp::builder()
-            .title("FLUI App")
-            .theme(ThemeData::light())
-            .home(HomeView)
-            .build()
-    }
-}
-
-#[derive(Debug)]
-struct HomeView;
-
-impl View for HomeView {
-    fn build(self, ctx: &BuildContext) -> impl IntoElement {
-        Scaffold::builder()
-            .app_bar(
-                AppBar::new()
-                    .title(Text::new("FLUI App"))
-            )
-            .body(
-                Center::new(
-                    Text::new("Hello, FLUI!")
-                        .style(
-                            TextStyle::new()
-                                .font_size(24.0)
-                                .font_weight(FontWeight::Bold)
-                        )
-                )
-            )
-            .build()
+impl StatelessView for HelloView {
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        Center::new().child(Text::new("Hello, FLUI!"))
     }
 }
 "#;

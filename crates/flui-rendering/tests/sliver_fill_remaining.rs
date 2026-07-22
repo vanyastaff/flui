@@ -1,19 +1,18 @@
+//! Harness tests for the `RenderSliverFillRemaining` family.
+
+use flui_objects::{
+    RenderSliverFillRemaining, RenderSliverFillRemainingAndOverscroll,
+    RenderSliverFillRemainingWithScrollable,
+};
 use flui_rendering::{
     constraints::{BoxConstraints, SliverConstraints, SliverGeometry},
     context::{BoxHitTestContext, BoxIntrinsicsCtx, BoxLayoutContext, SliverLayoutContext},
-    objects::{
-        RenderSliverFillRemaining, RenderSliverFillRemainingAndOverscroll,
-        RenderSliverFillRemainingWithScrollable,
-    },
     parent_data::{BoxParentData, SliverPhysicalParentData},
     pipeline::PipelineOwner,
     protocol::{BoxProtocol, SliverProtocol},
     storage::IntrinsicDimension,
     testing::{inspect, sliver as sliver_presets},
-    traits::{
-        HotReloadCapability, PaintEffectsCapability, RenderBox, RenderObject, RenderSliver,
-        SemanticsCapability,
-    },
+    traits::{RenderBox, RenderObject, RenderSliver},
 };
 use flui_tree::{Leaf, Single};
 use flui_types::{Offset, Rect, Size, geometry::px, layout::AxisDirection};
@@ -93,9 +92,6 @@ impl FixedHitBox {
 }
 
 impl flui_foundation::Diagnosticable for FixedHitBox {}
-impl PaintEffectsCapability for FixedHitBox {}
-impl SemanticsCapability for FixedHitBox {}
-impl HotReloadCapability for FixedHitBox {}
 
 impl RenderBox for FixedHitBox {
     type Arity = Leaf;
@@ -135,9 +131,6 @@ impl ExpandingHitBox {
 }
 
 impl flui_foundation::Diagnosticable for ExpandingHitBox {}
-impl PaintEffectsCapability for ExpandingHitBox {}
-impl SemanticsCapability for ExpandingHitBox {}
-impl HotReloadCapability for ExpandingHitBox {}
 
 impl RenderBox for ExpandingHitBox {
     type Arity = Leaf;
@@ -167,9 +160,6 @@ impl RenderBox for ExpandingHitBox {
 struct IntrinsicProbeSliver;
 
 impl flui_foundation::Diagnosticable for IntrinsicProbeSliver {}
-impl PaintEffectsCapability for IntrinsicProbeSliver {}
-impl SemanticsCapability for IntrinsicProbeSliver {}
-impl HotReloadCapability for IntrinsicProbeSliver {}
 
 impl RenderSliver for IntrinsicProbeSliver {
     type Arity = flui_tree::Single;
@@ -211,9 +201,6 @@ struct SliverHost {
 }
 
 impl flui_foundation::Diagnosticable for SliverHost {}
-impl PaintEffectsCapability for SliverHost {}
-impl SemanticsCapability for SliverHost {}
-impl HotReloadCapability for SliverHost {}
 
 impl RenderBox for SliverHost {
     type Arity = flui_tree::Variable;
@@ -469,7 +456,10 @@ fn sliver_fill_remaining_overscroll_expands_max_paint_extent() {
 }
 
 #[test]
-fn sliver_fill_remaining_overscroll_reverse_axis_positions_actual_child_extent() {
+fn sliver_fill_remaining_overscroll_reverse_axis_positions_by_scroll_extent() {
+    // Reverse axis: the child is positioned by geometry.scroll_extent, NOT its
+    // overscrolled measured extent (fixed 3d0699af; matches the sibling fill
+    // slivers and Flutter RenderSliverSingleBoxAdapter.setChildParentData).
     let mut constraints = vertical_constraints(0.0, 20.0, 90.0, -30.0);
     constraints.axis_direction = AxisDirection::BottomToTop;
 
@@ -497,8 +487,10 @@ fn sliver_fill_remaining_overscroll_reverse_axis_positions_actual_child_extent()
     assert_eq!(geometry.scroll_extent, 80.0);
     assert_eq!(geometry.paint_extent, 90.0);
     assert_eq!(geometry.max_paint_extent, 120.0);
+    // paint_extent + scroll_offset - scroll_extent = 90 + 0 - 80 = 10
+    // (was -30, i.e. paint_extent minus the measured child extent 120).
     assert_eq!(
         render_offset(&owner, child_id),
-        Offset::new(px(0.0), px(-30.0))
+        Offset::new(px(0.0), px(10.0))
     );
 }

@@ -5,47 +5,16 @@ edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "Type-safe 2D geometry primitives for FLUI (split from flui-types in D-block PR-C-2)"
+description = "Type-safe 2D geometry primitives for FLUI"
 repository.workspace = true
+readme = "README.md"
 keywords = ["geometry", "graphics", "ui", "flui", "math"]
 categories = ["graphics", "mathematics"]
 
-# Geometry-specific lint relaxations — mirrors crates/flui-types/Cargo.toml
-# pre-split. Math/geometry crates legitimately have many single-char names,
-# tolerated truncation casts, similar names (x/y/z), float comparisons (with
-# epsilon checks done at higher levels), and wildcard imports in preludes.
-[lints.rust]
-unsafe_code = "warn"
-rust_2018_idioms = "warn"
-
-[lints.clippy]
-# Inherit workspace-like base
-all = { level = "warn", priority = -1 }
-pedantic = { level = "warn", priority = -1 }
-# Workspace-level allows
-cast_precision_loss = "allow"
-module_name_repetitions = "allow"
-too_many_lines = "allow"
-missing_errors_doc = "allow"
-missing_panics_doc = "allow"
-must_use_candidate = "allow"
-# Math/geometry crate specifics
-many_single_char_names = "allow"
-cast_possible_truncation = "allow"
-cast_sign_loss = "allow"
-cast_lossless = "allow"
-similar_names = "allow"
-# Doc lints — will address incrementally
-doc_markdown = "allow"
-# Geometry code often passes small Copy types by ref for API consistency
-needless_pass_by_value = "allow"
-trivially_copy_pass_by_ref = "allow"
-# Builder-pattern methods returning Self are pervasive
-return_self_not_must_use = "allow"
-# Float comparisons are intentional in geometry/physics (tolerance-checked elsewhere)
-float_cmp = "allow"
-# Wildcard imports used in preludes
-wildcard_imports = "allow"
+# Crate-specific lint relaxations live in src/lib.rs next to the code they
+# cover; the manifest inherits [workspace.lints] unmodified.
+[lints]
+workspace = true
 
 [dependencies]
 # Error handling
@@ -54,16 +23,17 @@ thiserror = { workspace = true }
 # Optional dependencies
 serde = { workspace = true, optional = true }
 
-# Linear-algebra backend (Option D, N-geom PR 2): glam provides SIMD-by-default
+# Linear-algebra backend (Option D): glam provides SIMD-by-default
 # matrix/vector math + `bytemuck` Pod derives + the `mint` interop cascade.
 # Non-optional — Matrix4 (and, in later PR-2 steps, Vec2/Transform) delegate to it.
-glam = { version = "0.33", features = ["bytemuck", "mint"] }
+# Workspace base has bytemuck; add mint here for the interop cascade.
+glam = { workspace = true, features = ["mint"] }
 
 # Pod/Zeroable derives for zero-copy GPU upload (Matrix4 + future vertex structs).
-bytemuck = { version = "1", features = ["derive"] }
+bytemuck = { workspace = true }
 
 # kurbo: f64 Bézier/curve math for the painting layer. The bridge
-# (src/bridges/kurbo.rs) is gated behind `feature = "kurbo"` (PR 3, U8).
+# (src/bridges/kurbo.rs) is gated behind `feature = "kurbo"`.
 kurbo = { version = "0.13", optional = true }
 
 [dev-dependencies]

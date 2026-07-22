@@ -6,9 +6,9 @@
 //!
 //! Corresponds to Flutter's `PaintingBinding` mixin from
 //! `painting/binding.dart`. Flutter's shader-warm-up subsystem was
-//! deleted in Mythos chain step 2 (decorative; `execute()` was a stub
-//! and no production caller relied on it). Real offscreen-canvas-backed
-//! warm-up is tracked in `crates/flui-painting/ARCHITECTURE.md`
+//! deleted (decorative; `execute()` was a stub and no production
+//! caller relied on it). Real offscreen-canvas-backed warm-up is
+//! tracked in `crates/flui-painting/ARCHITECTURE.md`
 //! `## Outstanding refactors`.
 //!
 //! # Features
@@ -28,6 +28,9 @@ use std::{
 use flui_foundation::{BindingBase, HasInstance, impl_binding_singleton};
 use flui_types::{Size, geometry::Pixels};
 use parking_lot::RwLock;
+
+use crate::error::{PaintingError, Result};
+use crate::text_layout::SharedFontSystem;
 
 // ============================================================================
 // ImageCache
@@ -296,7 +299,7 @@ impl SystemFontsNotifier {
     ///
     /// Crate-internal until the platform-side font-change trigger lands;
     /// currently exercised only by the in-crate test suite. See the
-    /// struct doc-comment (audit P-10) for the visibility rationale.
+    /// struct doc-comment above for the visibility rationale.
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn add_listener(&self, listener: Arc<dyn Fn() + Send + Sync>) {
         self.listeners.write().push(listener);
@@ -341,7 +344,7 @@ impl SystemFontsNotifier {
 ///
 /// Corresponds to Flutter's `PaintingBinding` mixin.
 ///
-/// # Trimmed surface (Mythos chain U2/U3)
+/// # Trimmed surface
 ///
 /// Flutter's shader-warm-up subsystem was deleted -- the trait had one
 /// stub impl whose `execute()` body documented "in a real implementation,
@@ -409,6 +412,44 @@ impl PaintingBinding {
         &self.system_fonts
     }
 
+    /// Returns the shared font system handle.
+    ///
+    /// This is the single [`FontSystem`](crate::FontSystem) the whole
+    /// framework shapes and measures text with; the engine's glyph pipeline holds a clone
+    /// of the same handle (ADR-0016), so a face registered via
+    /// [`Self::register_font`] is visible to both measurement and rendering.
+    #[must_use]
+    pub fn font_system(&self) -> SharedFontSystem {
+        crate::text_layout::shared_font_system()
+    }
+
+    /// Registers a font from its raw bytes (TTF/OTF), making every face it
+    /// contains available to text measurement and glyph rendering.
+    ///
+    /// On success, font listeners are notified so already-laid-out text can
+    /// re-shape against the newly available faces.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PaintingError::RegisterFontFailed`] if `font_bytes` parses
+    /// to zero loadable faces (empty, truncated, or not a font at all).
+    #[tracing::instrument(skip(self, font_bytes), fields(bytes = font_bytes.len()))]
+    pub fn register_font(&self, font_bytes: &[u8]) -> Result<()> {
+        let faces_added = self.font_system().with_mut(|font_system| {
+            let faces_before = font_system.db().len();
+            font_system.db_mut().load_font_data(font_bytes.to_vec());
+            font_system.db().len() - faces_before
+        });
+        if faces_added == 0 {
+            return Err(PaintingError::register_font_failed(
+                "font data contained no loadable faces",
+            ));
+        }
+        tracing::debug!(faces_added, "registered font");
+        self.system_fonts.notify_listeners();
+        Ok(())
+    }
+
     /// Handles memory pressure by clearing the image cache.
     #[tracing::instrument(skip(self))]
     pub fn handle_memory_pressure(&self) {
@@ -461,7 +502,8 @@ pub fn image_cache() -> &'static ImageCache {
 #[cfg(test)]
 #[allow(
     clippy::unwrap_used,
-    reason = "test code: unwrap-panic IS the assertion path"
+    clippy::expect_used,
+    reason = "test code: unwrap/expect-panic IS the assertion path"
 )]
 mod tests {
     use flui_types::geometry::px;
@@ -576,5 +618,45 @@ mod tests {
         let binding1 = PaintingBinding::instance();
         let binding2 = PaintingBinding::instance();
         assert!(std::ptr::eq(binding1, binding2));
+    }
+
+    #[test]
+    fn register_font_rejects_data_with_no_loadable_faces() {
+        let binding = PaintingBinding::instance();
+        let err = binding
+            .register_font(b"this is plainly not a font file")
+            .unwrap_err();
+        assert!(
+            matches!(err, PaintingError::RegisterFontFailed { .. }),
+            "garbage bytes must fail with RegisterFontFailed, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn a_registered_font_is_visible_through_a_fresh_handle() {
+        // Shared workspace font fixture (dev-only `include_bytes!`; a build
+        // input, not an API/layering coupling — flui-engine still depends on
+        // flui-painting, never the reverse).
+        const ROBOTO: &[u8] = include_bytes!("../../flui-engine/assets/fonts/Roboto-Regular.ttf");
+        let binding = PaintingBinding::instance();
+
+        binding
+            .register_font(ROBOTO)
+            .expect("Roboto-Regular.ttf is a valid TTF with at least one face");
+
+        // A *separately obtained* handle sees the face — proving the ADR-0016
+        // contract that `font_system()` shares one instance rather than
+        // handing out isolated copies.
+        let visible = binding.font_system().with_mut(|font_system| {
+            font_system.db().faces().any(|face| {
+                face.families
+                    .iter()
+                    .any(|(name, _)| name.contains("Roboto"))
+            })
+        });
+        assert!(
+            visible,
+            "a registered face must be visible through any font_system() handle"
+        );
     }
 }

@@ -15,13 +15,13 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use flui_objects::RenderConstrainedBox;
 use flui_rendering::{
     constraints::BoxConstraints,
     context::{BoxDryLayoutCtx, BoxHitTestContext, BoxIntrinsicsCtx, BoxLayoutContext},
-    objects::RenderConstrainedBox,
     pipeline::PipelineOwner,
     storage::IntrinsicDimension,
-    traits::{HotReloadCapability, PaintEffectsCapability, RenderBox, SemanticsCapability},
+    traits::RenderBox,
 };
 use flui_tree::{Leaf, Variable};
 use flui_types::{Size, geometry::px};
@@ -51,9 +51,6 @@ impl CountingLeaf {
 }
 
 impl flui_foundation::Diagnosticable for CountingLeaf {}
-impl PaintEffectsCapability for CountingLeaf {}
-impl SemanticsCapability for CountingLeaf {}
-impl HotReloadCapability for CountingLeaf {}
 
 impl RenderBox for CountingLeaf {
     type Arity = Leaf;
@@ -97,9 +94,6 @@ impl CountingRoot {
 }
 
 impl flui_foundation::Diagnosticable for CountingRoot {}
-impl PaintEffectsCapability for CountingRoot {}
-impl SemanticsCapability for CountingRoot {}
-impl HotReloadCapability for CountingRoot {}
 
 impl RenderBox for CountingRoot {
     type Arity = Variable;
@@ -385,10 +379,8 @@ fn dry_layout_flows_through_real_objects_and_memoizes() {
 
 #[test]
 fn dry_baseline_flows_through_padding_and_memoizes() {
-    use flui_rendering::{
-        objects::{RenderPadding, RenderParagraph},
-        traits::TextBaseline,
-    };
+    use flui_objects::{RenderPadding, RenderParagraph};
+    use flui_rendering::traits::TextBaseline;
     use flui_types::typography::{TextDirection, TextSpan};
 
     let mut owner = PipelineOwner::new();
@@ -430,7 +422,7 @@ fn dry_baseline_flows_through_padding_and_memoizes() {
 
 #[test]
 fn passthrough_proxy_forwards_intrinsics_and_dry_layout() {
-    use flui_rendering::objects::RenderOpacity;
+    use flui_objects::RenderOpacity;
 
     let intrinsic_runs = Arc::new(AtomicUsize::new(0));
     let dry_runs = Arc::new(AtomicUsize::new(0));
@@ -481,7 +473,7 @@ fn passthrough_proxy_forwards_intrinsics_and_dry_layout() {
 
 #[test]
 fn padding_forwards_intrinsics_with_insets() {
-    use flui_rendering::objects::RenderPadding;
+    use flui_objects::RenderPadding;
 
     let intrinsic_runs = Arc::new(AtomicUsize::new(0));
     let dry_runs = Arc::new(AtomicUsize::new(0));
@@ -509,7 +501,7 @@ fn padding_forwards_intrinsics_with_insets() {
 
 #[test]
 fn sized_box_reports_fixed_intrinsics_and_dry_layout() {
-    use flui_rendering::objects::RenderSizedBox;
+    use flui_objects::RenderSizedBox;
 
     let mut owner = PipelineOwner::new();
     let sized_id =

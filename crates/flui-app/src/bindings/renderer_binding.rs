@@ -52,6 +52,40 @@ use flui_semantics::{Assertiveness, SemanticsAction, SemanticsBinding};
 use flui_types::Offset;
 use parking_lot::RwLock;
 
+/// A subscriber to [`RenderingFlutterBinding::set_semantics_enabled`] changes.
+///
+/// Named alias for `Arc<dyn Fn(bool) + Send + Sync>` so the field and impl
+/// signatures below read as intent rather than nested generics (kills the
+/// `clippy::type_complexity` lint that fired on the inline form). Identical
+/// to the type spelled out in `RendererBinding::add_semantics_enabled_listener`
+/// (flui-rendering) — a type alias is transparent, so this satisfies the
+/// trait without repeating the trait's own long-hand spelling here.
+type SemanticsEnabledListener = Arc<dyn Fn(bool) + Send + Sync>;
+
+/// Shared body for [`RenderingFlutterBinding::redirty_root_for_represent`]:
+/// operates on the bare `Arc<RwLock<PipelineOwner>>` (rather than requiring
+/// a full `RenderingFlutterBinding` reference) so a caller that only holds
+/// that handle — e.g. a `Send + Sync` closure captured once at
+/// `AppBinding::instance()`'s bootstrap (the frames-disabled→enabled
+/// re-dirty listener; see `ADR-0035`) — can reuse the identical logic
+/// instead of re-deriving it.
+pub(crate) fn redirty_pipeline_root(pipeline_owner: &RwLock<PipelineOwner>) {
+    let root_owner = pipeline_owner.read();
+    if let Some(root_id) = root_owner.root_id()
+        && let Some(handle) = root_owner.repaint_handle(root_id)
+    {
+        drop(root_owner);
+        if let Err(e) = handle.mark_needs_layout() {
+            tracing::warn!(
+                error = ?e,
+                "redirty_root_for_represent: failed to re-mark the root dirty; \
+                 the withheld/re-enabled content may not present until \
+                 something else dirties the tree",
+            );
+        }
+    }
+}
+
 // ============================================================================
 // RenderingFlutterBinding
 // ============================================================================
@@ -84,11 +118,11 @@ pub struct RenderingFlutterBinding {
 
     /// Mouse tracker for hover notification.
     ///
-    /// Cycle 4 U-6: switched from the deleted rendering-side
+    /// Switched from the deleted rendering-side
     /// `flui_rendering::input::MouseTracker` to the canonical
     /// `flui_interaction::MouseTracker`. The latter is `Clone` with
     /// `Arc<Mutex<inner>>` interior mutability, so the previous
-    /// `RwLock<...>` outer wrap is dropped -- it was double-wrapping
+    /// `RwLock<...>` outer wrap was dropped -- it was double-wrapping
     /// the same mutability concern.
     mouse_tracker: MouseTracker,
 
@@ -96,8 +130,7 @@ pub struct RenderingFlutterBinding {
     semantics_enabled: AtomicBool,
 
     /// Listeners for semantics enabled changes.
-    #[allow(clippy::type_complexity)]
-    semantics_listeners: RwLock<Vec<Arc<dyn Fn(bool) + Send + Sync>>>,
+    semantics_listeners: RwLock<Vec<SemanticsEnabledListener>>,
 
     /// Counter for deferred first frame.
     first_frame_deferred_count: AtomicU32,
@@ -118,7 +151,7 @@ impl std::fmt::Debug for RenderingFlutterBinding {
                 "first_frame_sent",
                 &self.first_frame_sent.load(Ordering::Relaxed),
             )
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -142,8 +175,8 @@ impl RenderingFlutterBinding {
     /// This allows AppBinding to pass in the same `Arc<RwLock<PipelineOwner>>`
     /// that elements use, ensuring a single PipelineOwner instance at runtime.
     pub fn new_with_pipeline(pipeline_owner: Arc<RwLock<PipelineOwner>>) -> Self {
-        // Cycle 4 U-6: the pre-cycle dummy `MouseTrackerHitTest`
-        // callback constructed here is gone -- the canonical
+        // The dummy `MouseTrackerHitTest` callback that used to be
+        // constructed here is gone -- the canonical
         // `flui_interaction::MouseTracker` is parameterless. The
         // hit-test function is passed at the `update_*` call site
         // by the gesture binding, not stored on the tracker.
@@ -177,6 +210,65 @@ impl RenderingFlutterBinding {
 
     // ========================================================================
     // First Frame Deferral
+    //
+    // This is the ONE canonical implementation of the first-frame deferral
+    // gate. It used to be duplicated: `WidgetsBinding` (flui-view) carried
+    // its own independent counter that neither matched this one's semantics
+    // (no `first_frame_sent` latch, no panic on an unmatched `allow`) nor
+    // was reachable from the production frame path; `RendererBinding`
+    // (flui-rendering) declared a default `send_frames_to_engine() -> true`
+    // plus a default `draw_frame()` gate that no real embedder overrode.
+    // Both were deleted — see AGENTS.md's port-methodology note against
+    // reintroducing a second copy of this state. Every consumer (the
+    // `RendererBinding` trait impl below and `AppBinding::defer_first_frame`
+    // / `allow_first_frame` / `send_frames_to_engine` in
+    // `crates/flui-app/src/app/binding.rs`, which the production
+    // `render_frame_entered` path actually calls) forwards to this struct.
+    //
+    // # Flutter Equivalence (oracle tag `3.44.0`)
+    //
+    // `packages/flutter/lib/src/rendering/binding.dart`,
+    // `RendererBinding`:
+    // ```dart
+    // int _firstFrameDeferredCount = 0;
+    // bool _firstFrameSent = false;
+    // bool get sendFramesToEngine =>
+    //     _firstFrameSent || _firstFrameDeferredCount == 0;
+    // void deferFirstFrame() {
+    //   assert(_firstFrameDeferredCount >= 0);
+    //   _firstFrameDeferredCount += 1;
+    // }
+    // void allowFirstFrame() {
+    //   assert(_firstFrameDeferredCount > 0);
+    //   _firstFrameDeferredCount -= 1;
+    //   if (!_firstFrameSent) {
+    //     scheduleWarmUpFrame();
+    //   }
+    // }
+    // ```
+    // and `drawFrame`'s gate:
+    // ```dart
+    // rootPipelineOwner.flushLayout();
+    // rootPipelineOwner.flushCompositingBits();
+    // rootPipelineOwner.flushPaint();
+    // if (sendFramesToEngine) {
+    //   for (final RenderView renderView in renderViews) {
+    //     renderView.compositeFrame();
+    //   }
+    //   rootPipelineOwner.flushSemantics();
+    //   _firstFrameSent = true;
+    // }
+    // ```
+    // Layout/compositing-bits/paint always run; only the composite-to-engine
+    // step (and Flutter's semantics flush alongside it) is gated. FLUI's
+    // production mirror of this split lives in `AppBinding::
+    // render_frame_entered` (`crates/flui-app/src/app/binding.rs`): the
+    // build/layout/paint pipeline always runs in `draw_frame_entered`, and
+    // only the GPU `render_scene` (present) call is gated on
+    // `send_frames_to_engine`. FLUI's `run_frame` does not yet gate its own
+    // semantics phase behind this flag the way the oracle's `flushSemantics`
+    // does — a documented, narrower scope than the oracle's for this unit,
+    // not a silent gap.
     // ========================================================================
 
     /// Tell the framework to not send the first frames to the engine until
@@ -202,6 +294,13 @@ impl RenderingFlutterBinding {
     ///
     /// This method may only be called once for each corresponding call
     /// to [`defer_first_frame`](Self::defer_first_frame).
+    ///
+    /// # Panics
+    ///
+    /// Panics if called without a matching prior
+    /// [`defer_first_frame`](Self::defer_first_frame) call (i.e. the deferred
+    /// count is already zero) — a caller-contract violation, mirroring the
+    /// oracle's `assert(_firstFrameDeferredCount > 0)`.
     pub fn allow_first_frame(&self) {
         let prev = self
             .first_frame_deferred_count
@@ -211,12 +310,57 @@ impl RenderingFlutterBinding {
             "allow_first_frame called without matching defer_first_frame"
         );
 
-        // Schedule a warm up frame even if count is not zero yet
+        // Schedule a warm-up frame even if the count is not down to zero
+        // yet: removing one deferral may uncover a NEW one further down the
+        // widget tree (a subtree that only registers its own
+        // `defer_first_frame` once an outer one clears), so every
+        // `allow_first_frame` call gets a pass, not just the last.
+        //
+        // The withheld frame(s) already ran build/layout/paint while
+        // deferred (the pipeline work happens unconditionally — see the
+        // module note above `defer_first_frame`); their dirty flags are
+        // already clear by the time the deferral lifts. The oracle's
+        // `compositeFrame()` re-submits the RETAINED layer tree regardless
+        // of dirty state, so its `scheduleWarmUpFrame` always has something
+        // to present. FLUI has no such retained-scene re-present — without
+        // re-marking the root dirty, the warm-up frame would find nothing
+        // to do and the withheld content would sit blank until some
+        // UNRELATED input dirtied the tree. See
+        // [`redirty_root_for_represent`](Self::redirty_root_for_represent).
         if !self.first_frame_sent.load(Ordering::Relaxed) {
-            Scheduler::instance().schedule_frame(Box::new(|_timing| {
-                // Warm-up frame callback
-            }));
+            self.redirty_root_for_represent();
         }
+    }
+
+    /// Re-dirty the root so the next frame actually produces content,
+    /// without depending on some UNRELATED input dirtying the tree first.
+    ///
+    /// FLUI has no retained-scene layer to fall back on (see the
+    /// first-frame-deferral module note above): a frame with nothing dirty
+    /// produces `FramePaintOutcome::Idle`, not a repeat of the last
+    /// `Scene`. Two callers hit this exact problem — [`allow_first_frame`]
+    /// (a deferred frame becoming presentable) and the scheduler's
+    /// frames-disabled→enabled re-enable edge (`AppBinding::instance()`'s
+    /// bootstrap wiring; see `ADR-0035`), which has no retained scene to
+    /// re-present either — so the shared logic lives here, once.
+    ///
+    /// Routed through [`PipelineOwner::repaint_handle`]/
+    /// [`RepaintHandle::mark_needs_layout`](flui_rendering::pipeline::RepaintHandle::mark_needs_layout),
+    /// NOT `Scheduler::instance()`: a caller may not be the UI thread (an
+    /// async-init splash screen resolving on an executor thread, or the
+    /// re-enable listener firing from whatever thread drove the lifecycle
+    /// change) — `Scheduler::instance()` is thread-local, so resolving it at
+    /// fire time from the wrong thread would schedule on THAT thread's
+    /// fresh, undriven `Scheduler` and silently lose the wake (the
+    /// fire-time-resolution hazard `AppBinding::new`'s wake-wiring comment
+    /// warns against). `RepaintHandle` is `Send + Sync`, captured over a
+    /// bounded channel at `PipelineOwner` construction time, and its
+    /// `mark_needs_layout` fires the SAME visual-update notifier a local
+    /// dirty mark does — safe and non-blocking from any thread.
+    ///
+    /// [`allow_first_frame`]: Self::allow_first_frame
+    pub fn redirty_root_for_represent(&self) {
+        redirty_pipeline_root(self.root_pipeline_owner());
     }
 
     /// Call this to pretend that no frames have been sent to the engine yet.
@@ -226,6 +370,65 @@ impl RenderingFlutterBinding {
     /// frames have been sent to the engine yet.
     pub fn reset_first_frame_sent(&self) {
         self.first_frame_sent.store(false, Ordering::Relaxed);
+    }
+
+    /// Latch that the first frame has been sent to the engine.
+    ///
+    /// Mirrors the oracle's `_firstFrameSent = true`, set unconditionally
+    /// once `send_frames_to_engine()` is found `true` during a frame —
+    /// regardless of whether that particular frame painted anything.
+    /// Idempotent: once latched, [`Self::send_frames_to_engine`] stays
+    /// `true` forever (barring [`Self::reset_first_frame_sent`], a test-only
+    /// escape hatch), so calling this again is a harmless no-op.
+    pub fn mark_first_frame_sent(&self) {
+        self.first_frame_sent.store(true, Ordering::Relaxed);
+    }
+
+    /// Pump the rendering pipeline once and return the produced layer tree,
+    /// gated by the first-frame deferral counter.
+    ///
+    /// Consumes the root [`PipelineOwner`] out of its lock, drives it
+    /// through [`PipelineOwner::run_frame`] (layout, compositing bits,
+    /// paint, semantics), and restores it — the owner is always left
+    /// usable for the next frame, error or not. The layer tree this
+    /// produces is withheld (`None`) while [`Self::send_frames_to_engine`]
+    /// is `false`; the pipeline work itself (the warm-up cost) still runs
+    /// either way, matching the oracle's `drawFrame` split (see the module
+    /// note above `defer_first_frame`).
+    ///
+    /// This is a convenience for using `RenderingFlutterBinding` directly,
+    /// without `WidgetsBinding` (see the module doc). `AppBinding`'s
+    /// production frame path (`render_frame_entered`) does **not** call
+    /// this method — it drives the shared pipeline through
+    /// `WidgetsBinding::run_frame_with_layout_builders` instead (the
+    /// build-during-layout fixpoint this method does not need to settle)
+    /// and consults [`Self::send_frames_to_engine`] /
+    /// [`Self::mark_first_frame_sent`] directly at its own presentation
+    /// step.
+    pub fn draw_frame(&self) -> Option<flui_layer::LayerTree> {
+        let root_owner = self.root_pipeline_owner();
+        let layer_tree = {
+            let mut guard = root_owner.write();
+            let owner = std::mem::take(&mut *guard);
+            let (owner, result) = owner.run_frame();
+            *guard = owner;
+            match result {
+                Ok(layer_tree) => layer_tree,
+                Err(e) => {
+                    tracing::error!(error = ?e, "draw_frame: pipeline failed, dropping frame");
+                    None
+                }
+            }
+        };
+
+        if self.send_frames_to_engine() {
+            self.mark_first_frame_sent();
+            layer_tree
+        } else {
+            // Deferred-first-frame: pipeline work ran (warm-up), the
+            // output is withheld until the deferral count drains.
+            None
+        }
     }
 
     // ========================================================================
@@ -238,9 +441,15 @@ impl RenderingFlutterBinding {
     pub fn set_semantics_enabled(&self, enabled: bool) {
         let was_enabled = self.semantics_enabled.swap(enabled, Ordering::Relaxed);
         if was_enabled != enabled {
-            // Notify listeners
-            let listeners = self.semantics_listeners.read();
-            for listener in listeners.iter() {
+            // Snapshot the listeners into an owned `Vec` and drop the read
+            // guard before invoking any of them — a listener that calls
+            // `add_semantics_enabled_listener`/`remove_semantics_enabled_listener`
+            // from inside its own callback would otherwise try to acquire the
+            // write lock while this thread still held the read guard and
+            // deadlock (same read-then-write reentrancy `PaintingBinding`'s
+            // `notify_listeners` guards against).
+            let listeners = self.semantics_listeners.read().clone();
+            for listener in &listeners {
                 listener(enabled);
             }
 
@@ -344,11 +553,11 @@ impl RendererBinding for RenderingFlutterBinding {
         self.semantics_enabled.load(Ordering::Relaxed)
     }
 
-    fn add_semantics_enabled_listener(&self, listener: Arc<dyn Fn(bool) + Send + Sync>) {
+    fn add_semantics_enabled_listener(&self, listener: SemanticsEnabledListener) {
         self.semantics_listeners.write().push(listener);
     }
 
-    fn remove_semantics_enabled_listener(&self, listener: &Arc<dyn Fn(bool) + Send + Sync>) {
+    fn remove_semantics_enabled_listener(&self, listener: &SemanticsEnabledListener) {
         let mut listeners = self.semantics_listeners.write();
         listeners.retain(|l| !Arc::ptr_eq(l, listener));
     }
@@ -379,13 +588,13 @@ impl RendererBinding for RenderingFlutterBinding {
         &self.root_pipeline_owner
     }
 
-    // R-6 reshape (cycle 4 Wave 2 U-1): the pre-cycle `render_views()`
-    // returned `&RwLock<HashMap<u64, Arc<RwLock<RenderView>>>>` and
+    // The trait used to expose `render_views()` returning
+    // `&RwLock<HashMap<u64, Arc<RwLock<RenderView>>>>` directly, which
     // leaked the implementer's lock topology through the trait surface.
-    // Post-cycle the trait exposes four primitives; the
+    // The trait now exposes four narrow primitives instead; the
     // `self.render_views: RwLock<HashMap<u64, Arc<RwLock<RenderView>>>>`
-    // private field stays as private storage (HashMap is still the
-    // canonical container; we just don't expose the lock graph anymore).
+    // field stays as private storage (HashMap is still the
+    // canonical container -- it just isn't exposed as a lock graph anymore).
     fn render_view(&self, view_id: u64) -> Option<Arc<RwLock<RenderView>>> {
         self.render_views.read().get(&view_id).cloned()
     }
@@ -420,39 +629,6 @@ impl RendererBinding for RenderingFlutterBinding {
         }
     }
 
-    fn draw_frame(&self) -> Option<flui_layer::LayerTree> {
-        // Single authoritative frame path: run_frame produces the
-        // layer tree; the caller (platform binding / embedder) wraps
-        // it in a Scene and submits it to the renderer. The previous
-        // shape dropped the tree here while a divergent
-        // `composite_frame()` loop computed per-view metadata that
-        // never reached a compositor — both dead ends are gone.
-        let root_owner = self.root_pipeline_owner();
-        let layer_tree = {
-            let mut guard = root_owner.write();
-            let owner = std::mem::take(&mut *guard);
-            let (owner, result) = owner.run_frame();
-            *guard = owner;
-            match result {
-                Ok(layer_tree) => layer_tree,
-                Err(e) => {
-                    tracing::error!(error = ?e, "draw_frame: pipeline failed, dropping frame");
-                    None
-                }
-            }
-        };
-
-        if self.send_frames_to_engine() {
-            // First non-deferred frame marks the gate open.
-            self.first_frame_sent.store(true, Ordering::Relaxed);
-            layer_tree
-        } else {
-            // Deferred-first-frame: pipeline work ran (warm-up), the
-            // output is withheld until the deferral count drains.
-            None
-        }
-    }
-
     fn perform_semantics_action(
         &self,
         view_id: u64,
@@ -483,12 +659,16 @@ impl RendererBinding for RenderingFlutterBinding {
 mod tests {
     use super::*;
 
-    /// `RenderingFlutterBinding::instance()` is a process-wide singleton, so the
-    /// tests that toggle its `semantics_enabled` flag share one `AtomicBool`.
-    /// They serialize through this lock (held for each test's duration) so they
-    /// cannot interleave their writes and observe each other's state — the
-    /// listener test in particular asserts exact callback counts that a
-    /// concurrent toggle would corrupt.
+    /// `RenderingFlutterBinding::instance()` is a process-wide singleton, so any
+    /// test that mutates its shared state — the `semantics_enabled` flag, the
+    /// first-frame deferral counter, or (through `allow_first_frame`) the
+    /// global `Scheduler::instance()` — shares that state with every other
+    /// test in this module under `cargo test`'s one-process, multi-threaded
+    /// run (nextest's per-test process makes this belt and braces there, per
+    /// AGENTS.md "Testing quirks"). They serialize through this lock (held for
+    /// each test's duration) so they cannot interleave their writes and
+    /// observe each other's state — the listener tests in particular assert
+    /// exact callback counts that a concurrent toggle would corrupt.
     static SEMANTICS_TEST_LOCK: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
 
     #[test]
@@ -526,6 +706,7 @@ mod tests {
 
     #[test]
     fn test_send_frames_to_engine() {
+        let _guard = SEMANTICS_TEST_LOCK.lock();
         let binding = RenderingFlutterBinding::instance();
         binding.reset_first_frame_sent();
 
@@ -548,7 +729,8 @@ mod tests {
     /// no other test's pipeline state can interfere.
     #[test]
     fn draw_frame_returns_layer_tree_and_defers_when_gated() {
-        use flui_rendering::{constraints::BoxConstraints, objects::RenderColoredBox};
+        use flui_objects::RenderColoredBox;
+        use flui_rendering::constraints::BoxConstraints;
         use flui_types::{Size, geometry::px};
 
         let owner = Arc::new(RwLock::new(PipelineOwner::new()));
@@ -596,7 +778,8 @@ mod tests {
     /// division mapped it back inside and produced phantom hits.
     #[test]
     fn hit_test_in_view_takes_logical_positions_without_rescaling() {
-        use flui_rendering::{constraints::BoxConstraints, objects::RenderColoredBox};
+        use flui_objects::RenderColoredBox;
+        use flui_rendering::constraints::BoxConstraints;
         use flui_types::{Offset, geometry::px};
 
         let owner = Arc::new(RwLock::new(PipelineOwner::new()));
@@ -641,10 +824,9 @@ mod tests {
     fn test_render_view_management() {
         let binding = RenderingFlutterBinding::instance();
 
-        // Add a render view (R-6 reshape: use the new
-        // `add_render_view_with_config` default-impl helper which
-        // delegates to `insert_render_view` after deriving the
-        // view-configuration).
+        // Add a render view via the `add_render_view_with_config`
+        // default-impl helper, which delegates to `insert_render_view`
+        // after deriving the view configuration.
         let view = Arc::new(RwLock::new(RenderView::new()));
         binding.add_render_view_with_config(1, view.clone());
 
@@ -694,5 +876,89 @@ mod tests {
 
         // Leave the shared singleton disabled for the next test.
         binding.set_semantics_enabled(false);
+    }
+
+    /// A listener that registers another listener from inside its own
+    /// callback must not deadlock `set_semantics_enabled`.
+    ///
+    /// The notification loop used to run listener callbacks while still
+    /// holding `semantics_listeners.read()`; a callback that then called
+    /// `add_semantics_enabled_listener` (which takes the write lock) would
+    /// block forever on `parking_lot`'s non-reentrant read-then-write on the
+    /// same thread. The fix snapshots the listeners into an owned `Vec` and
+    /// drops the read guard before invoking any of them.
+    ///
+    /// The whole scenario (attach, both toggles, detach) runs on one
+    /// dedicated background thread rather than the test thread, for two
+    /// reasons: `RenderingFlutterBinding::instance()` is owner-thread-local
+    /// (ADR-0027) — a fresh OS thread's first `instance()` call leaks its own
+    /// binding, so splitting the steps across threads would silently operate
+    /// on two unrelated bindings — and the deadlock under test is itself a
+    /// same-thread read-then-write lock reacquisition, which only reproduces
+    /// when every step runs on that one thread. The test thread only bounds
+    /// how long it waits for that thread's result over a channel: a bare
+    /// `.join()` would hang forever (and, under `cargo test`'s shared-process
+    /// threads, wedge the rest of the suite) if the deadlock regressed;
+    /// `recv_timeout` turns that hang into an explicit `expect` panic
+    /// instead.
+    #[test]
+    fn semantics_listener_that_registers_another_listener_does_not_deadlock() {
+        use std::sync::{atomic::AtomicUsize, mpsc};
+        use std::time::Duration;
+
+        let _guard = SEMANTICS_TEST_LOCK.lock();
+
+        let (result_tx, result_rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let binding = RenderingFlutterBinding::instance();
+            binding.set_semantics_enabled(false);
+
+            let late_calls = Arc::new(AtomicUsize::new(0));
+            let late_calls_for_listener = Arc::clone(&late_calls);
+            let late_listener: Arc<dyn Fn(bool) + Send + Sync> = Arc::new(move |_enabled| {
+                late_calls_for_listener.fetch_add(1, Ordering::Relaxed);
+            });
+
+            // Callbacks must be `Send + Sync` (the listener trait bound), but
+            // `RenderingFlutterBinding` itself is not — it owns a `Rc`-based
+            // `MouseTracker` — so the reentrant call goes back through the
+            // `'static` singleton accessor rather than capturing `binding`.
+            let late_listener_for_reentrant = late_listener.clone();
+            let reentrant_listener: Arc<dyn Fn(bool) + Send + Sync> = Arc::new(move |_enabled| {
+                RenderingFlutterBinding::instance()
+                    .add_semantics_enabled_listener(late_listener_for_reentrant.clone());
+            });
+            binding.add_semantics_enabled_listener(reentrant_listener.clone());
+
+            // First toggle: `reentrant_listener` fires and registers
+            // `late_listener`, but must not itself run in this same pass.
+            binding.set_semantics_enabled(true);
+            let after_first = late_calls.load(Ordering::Relaxed);
+
+            // Second toggle: now observes `late_listener`, registered above.
+            binding.set_semantics_enabled(false);
+            let after_second = late_calls.load(Ordering::Relaxed);
+
+            binding.remove_semantics_enabled_listener(&late_listener);
+            binding.remove_semantics_enabled_listener(&reentrant_listener);
+
+            let _ = result_tx.send((after_first, after_second));
+        });
+
+        let (after_first, after_second) = result_rx.recv_timeout(Duration::from_secs(5)).expect(
+            "set_semantics_enabled deadlocked: a listener that registers another \
+             listener from inside its own callback must not block on the \
+             notification loop's own read guard",
+        );
+
+        assert_eq!(
+            after_first, 0,
+            "a listener registered mid-notification must not run in the same \
+             pass that registered it",
+        );
+        assert_eq!(
+            after_second, 1,
+            "a later toggle must observe the listener registered mid-notification",
+        );
     }
 }

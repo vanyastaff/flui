@@ -27,7 +27,7 @@
 //! use flui_platform::MacOSPlatform;
 //!
 //! let platform = MacOSPlatform::new()?;
-//! platform.run(Box::new(|| {
+//! platform.run(Box::new(|_platform| {
 //!     println!("macOS platform ready!");
 //! }));
 //! ```

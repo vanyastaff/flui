@@ -8,14 +8,88 @@
 
 use std::{
     cmp::Reverse,
-    collections::{BinaryHeap, HashMap},
-    sync::{Arc, OnceLock},
+    collections::{BinaryHeap, HashMap, HashSet},
+    sync::Arc,
 };
 
-use flui_foundation::ElementId;
-use parking_lot::RwLock;
+use flui_foundation::{ElementId, RenderId};
+use parking_lot::{Mutex, RwLock};
 
-use crate::{tree::ElementTree, view::View};
+use crate::{
+    element::child_manager::{ChildManager, ChildManagerRegistry},
+    owner::layout_builder::LayoutBuilderRegistry,
+    tree::ElementTree,
+    view::View,
+};
+
+/// A cloneable, owned handle that lets a listener callback — an animation tick
+/// fired *outside* any frame, with no `&mut BuildOwner` in scope — enqueue an
+/// element for the next [`BuildOwner::build_scope`] drain and request a frame.
+///
+/// This is the arena analogue of Flutter's `Element.markNeedsBuild` reaching
+/// `BuildOwner.scheduleBuildFor` + `SchedulerBinding.scheduleFrame`: an
+/// `AnimatedView`'s mark-dirty callback captures one of these at mount (via
+/// [`ElementOwner::external_scheduler`](super::ElementOwner::external_scheduler))
+/// and calls [`schedule`](Self::schedule) when the listenable changes. The
+/// pending ids accumulate in a shared inbox that `build_scope` drains onto its
+/// dirty heap at frame start, so the listener never needs to touch the owner.
+///
+/// The inbox carries the element id ONLY — the dirty-heap ordering key (tree
+/// depth) is read authoritatively from the node at drain time, not captured
+/// here, because `ElementCore` does not know its own tree depth (its `depth`
+/// field is the sibling slot index, not `parent_depth + 1`).
+#[derive(Clone)]
+pub(crate) struct ExternalBuildScheduler {
+    /// Shared inbox drained by `build_scope`; a SET of element ids to rebuild.
+    /// A set (not a `Vec`) so repeated ticks between frames — a 60fps animation
+    /// while the frame driver is stalled — collapse to one entry per element
+    /// instead of growing unbounded.
+    inbox: Arc<Mutex<HashSet<ElementId>>>,
+    /// Frame-request hook (the binding's `on_build_scheduled`), so a tick
+    /// between frames asks the platform for a new frame. `None` in headless
+    /// tests, which drive `build_scope` directly.
+    request_frame: Option<Arc<dyn Fn() + Send + Sync>>,
+}
+
+impl ExternalBuildScheduler {
+    /// Enqueue `id` for the next `build_scope` drain and request a frame.
+    ///
+    /// Deduplicating: a repeat tick for an id already queued is a no-op and does
+    /// NOT re-request a frame, so a burst of ticks for one element costs one
+    /// inbox slot and one frame request. Thread-safe: the inbox lock is held
+    /// only for the insert and released before `request_frame` runs (no lock
+    /// across the platform wake).
+    pub(crate) fn schedule(&self, id: ElementId) {
+        let newly_queued = self.inbox.lock().insert(id);
+        if newly_queued && let Some(request_frame) = &self.request_frame {
+            request_frame();
+        }
+    }
+
+    /// Build a scheduler from the shared inbox + frame-request handle. Used by
+    /// [`ElementOwner::external_scheduler`](super::ElementOwner::external_scheduler).
+    pub(crate) fn from_parts(
+        inbox: Arc<Mutex<HashSet<ElementId>>>,
+        request_frame: Option<Arc<dyn Fn() + Send + Sync>>,
+    ) -> Self {
+        Self {
+            inbox,
+            request_frame,
+        }
+    }
+}
+
+impl std::fmt::Debug for ExternalBuildScheduler {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // `try_lock`, not `lock`: `parking_lot::Mutex` is non-reentrant, so a
+        // `{:?}` while the inbox is already held (e.g. instrumenting the drain)
+        // would otherwise deadlock silently.
+        f.debug_struct("ExternalBuildScheduler")
+            .field("pending", &self.inbox.try_lock().map(|set| set.len()))
+            .field("has_request_frame", &self.request_frame.is_some())
+            .finish()
+    }
+}
 
 /// Entry in the dirty elements heap.
 ///
@@ -39,7 +113,7 @@ impl DirtyElement {
 
     /// Depth used to order the heap (shallowest first).
     ///
-    /// Currently consumed only by inline tests; U9+ will read it during
+    /// Currently consumed only by inline tests; a future consumer will read it during
     /// dirty-element drain dispatching. The `Ord` impl reads
     /// `self.depth` directly (private field access from the same `impl`
     /// block), so the accessor stays on the surface for future
@@ -77,8 +151,10 @@ impl PartialOrd for DirtyElement {
 /// - Maintain list of dirty elements
 /// - Process rebuilds in correct order
 /// - Manage GlobalKey registry
-/// - Track InheritedElement locations for O(1) lookup
 /// - Track inactive elements for finalization
+///
+/// O(1) InheritedElement lookup is NOT here — it lives structurally in each
+/// node's [`inherited`](crate::tree::ElementNode) map, built at mount.
 pub struct BuildOwner {
     /// Elements that need rebuild, sorted by depth.
     ///
@@ -135,9 +211,68 @@ pub struct BuildOwner {
     ///
     /// `pub(crate)` so the [`ElementOwner`](super::ElementOwner)
     /// split-borrow can fire it from `schedule_build_for` without
-    /// re-borrowing the owner.
+    /// re-borrowing the owner. Stored as `Arc` (not `Box`) so an
+    /// `ExternalBuildScheduler` captured by an animation listener can clone
+    /// and fire it as a frame request from outside a frame.
     #[allow(clippy::type_complexity)]
-    pub(crate) on_build_scheduled: Option<Box<dyn Fn() + Send + Sync>>,
+    pub(crate) on_build_scheduled: Option<Arc<dyn Fn() + Send + Sync>>,
+
+    /// Inbox of element ids scheduled from *outside* a frame — an
+    /// animation/listenable tick whose mark-dirty callback holds an
+    /// `ExternalBuildScheduler` but no `&mut BuildOwner`. A SET, so repeated
+    /// ticks dedup. Drained onto [`Self::dirty_elements`] at the start of
+    /// [`Self::build_scope`], where each id's tree depth is looked up. Shared
+    /// (`Arc`) so the listener callbacks and the owner reference the same queue.
+    pub(crate) external_inbox: Arc<Mutex<HashSet<ElementId>>>,
+
+    /// Registry of live lazy-sliver [`ChildManager`]s, one per live adaptor
+    /// element. Keyed by the sliver's `RenderId`; populated at mount and
+    /// cleared at unmount by `SliverListAdaptorBehavior` via the
+    /// `ElementOwner::register_child_manager` / `unregister_child_manager`
+    /// split-borrow methods.
+    ///
+    /// `Arc<Mutex<…>>` (not a plain `HashMap`) so `ElementOwner` can carry a
+    /// `&'a Arc<…>` reference — the same pattern as `external_inbox`. The outer
+    /// `Arc` lets `service_child_requests` clone individual manager `Arc`s out
+    /// of the registry before calling service (releasing the registry lock
+    /// before the potentially long service call).
+    pub(crate) child_manager_registry: ChildManagerRegistry,
+
+    /// Registry of live build-during-layout nodes, one per
+    /// mounted layout-builder element, keyed by its render object's `RenderId`.
+    /// Drained every layout pass by
+    /// [`service_layout_builders`](Self::service_layout_builders).
+    ///
+    /// Empty unless a `LayoutBuilder` is mounted; the seam is inert until one is.
+    pub(crate) layout_builder_registry: LayoutBuilderRegistry,
+
+    /// The binding's frame-driven async task driver, installed by
+    /// whichever binding owns this owner. `None` until then — a tree built with
+    /// no binding cannot spawn tasks, and `BuildContext::async_driver` reports
+    /// that honestly rather than silently spawning into a driver nobody polls.
+    ///
+    /// This must be the driver the binding's frame step actually polls:
+    /// `HeadlessBinding` drives a binding-local `Scheduler`, production drives
+    /// `Scheduler::instance()`. Reaching for the singleton from a widget would
+    /// make headless tests spawn into a driver that never runs.
+    pub(crate) async_driver: Option<flui_scheduler::AsyncDriver>,
+
+    /// The binding's post-frame capability. `None` when no binding
+    /// installed one, which makes `BuildContext::post_frame_handle` report the
+    /// absence rather than silently scheduling onto a global.
+    pub(crate) post_frame_handle: Option<flui_scheduler::PostFrameHandle>,
+
+    /// The binding's IME/text-input attach-detach capability. `None` when no
+    /// binding installed one, which makes `BuildContext::text_input_handle`
+    /// report the absence rather than a widget silently having no way to
+    /// attach an IME client.
+    pub(crate) text_input_handle: Option<flui_interaction::TextInputHandle>,
+
+    /// The binding's owner-local interaction dispatch capability (ADR-0027).
+    ///
+    /// `None` means the owner was built detached from a runtime interaction lane;
+    /// render-object lifecycle contexts report that as a typed inactive realm.
+    pub(crate) interaction_dispatch: Option<flui_interaction::InteractionDispatchHandle>,
 }
 
 /// An element that has been deactivated and is pending unmount.
@@ -176,46 +311,6 @@ impl Default for BuildOwner {
     }
 }
 
-/// Process-global cache of the dummy `ElementTree` handed out by
-/// [`ElementBuildContext::new_minimal`](crate::ElementBuildContext::new_minimal).
-///
-/// Plan §U12 / R15 — audit V-13 (cheap separable part). Each
-/// `StatelessView::build` / `StatefulView::build` allocates a fresh
-/// `ElementBuildContext` to satisfy the `&dyn BuildContext` parameter
-/// shape. Before V-13 each one called
-/// `Arc::new(RwLock::new(ElementTree::new()))` — heap-allocating an Arc
-/// inner, a `RwLock` payload, and an empty `Slab`-backed `ElementTree`
-/// per build. For animation-driven full-tree rebuilds, that is N heap
-/// allocations per frame.
-///
-/// The dummy is functionally read-only on the production path:
-/// `BuildContext::find_ancestor_*`, `depend_on_inherited`, and
-/// `find_render_object` all return `None`/`false` immediately because
-/// the dummy tree is empty. Every build can safely share one
-/// `Arc<RwLock<ElementTree>>` — clones of the shared Arc bump the
-/// atomic refcount only.
-///
-/// The cache is initialized lazily via `OnceLock` and lives for the
-/// lifetime of the process. A test or future code path that wants
-/// strictly per-binding isolation can still construct an
-/// `ElementBuildContext` manually via
-/// [`ElementBuildContext::new`](crate::ElementBuildContext::new).
-static SHARED_DUMMY_TREE: OnceLock<Arc<RwLock<ElementTree>>> = OnceLock::new();
-
-/// Process-global cache of the dummy `BuildOwner` handed out by
-/// [`ElementBuildContext::new_minimal`](crate::ElementBuildContext::new_minimal). Companion to
-/// [`SHARED_DUMMY_TREE`] — see that doc for the rationale.
-///
-/// The inner `BuildOwner` is itself constructed via [`BuildOwner::new`],
-/// which sets `on_build_scheduled = None`, so calls to
-/// `BuildContext::mark_needs_build` from inside a stateless `build()`
-/// (a Flutter-forbidden anti-pattern; flui matches Flutter's policy by
-/// design) silently accumulate entries in this shared dummy's
-/// `dirty_elements` heap. The accumulation is bounded by however many
-/// times misuse occurs and never read because nothing ever calls
-/// `build_scope` on the shared dummy.
-static SHARED_DUMMY_OWNER: OnceLock<Arc<RwLock<BuildOwner>>> = OnceLock::new();
-
 impl BuildOwner {
     /// Create a new BuildOwner.
     pub fn new() -> Self {
@@ -230,55 +325,149 @@ impl BuildOwner {
             #[cfg(debug_assertions)]
             scope_depth: 0,
             on_build_scheduled: None,
+            external_inbox: Arc::new(Mutex::new(HashSet::new())),
+            child_manager_registry: Arc::new(Mutex::new(HashMap::new())),
+            layout_builder_registry: Arc::new(Mutex::new(HashMap::new())),
+            async_driver: None,
+            post_frame_handle: None,
+            text_input_handle: None,
+            interaction_dispatch: None,
         }
     }
 
-    /// Acquire a clone of the process-shared dummy `ElementTree` handle
-    /// used to back [`ElementBuildContext::new_minimal`](crate::ElementBuildContext::new_minimal).
+    /// Install the binding's async task driver.
     ///
-    /// First call lazily allocates the empty tree behind a `OnceLock`;
-    /// every subsequent call returns an `Arc::clone` of the same inner
-    /// pointer — observable via `Arc::ptr_eq`. Audit V-13 (cheap part)
-    /// — eliminates the per-build `Arc::new(RwLock::new(_))` allocation
-    /// in the stateless/stateful build paths.
-    pub fn shared_dummy_tree() -> Arc<RwLock<ElementTree>> {
-        // PORT-CHECK-OK-SP6: shared_dummy_tree test-harness accessor; pre-existing SP-6
-        Arc::clone(SHARED_DUMMY_TREE.get_or_init(|| Arc::new(RwLock::new(ElementTree::new()))))
+    /// Called once, at wiring time, by `HeadlessBinding` and `AppBinding`. Must
+    /// be the same driver the binding's frame step polls.
+    pub fn set_async_driver(&mut self, driver: flui_scheduler::AsyncDriver) {
+        self.async_driver = Some(driver);
     }
 
-    /// Acquire a clone of the process-shared dummy `BuildOwner` handle
-    /// used to back [`ElementBuildContext::new_minimal`](crate::ElementBuildContext::new_minimal). See
-    /// [`shared_dummy_tree`](Self::shared_dummy_tree) for the
-    /// allocation-elimination rationale.
-    pub fn shared_dummy_owner() -> Arc<RwLock<BuildOwner>> {
-        // PORT-CHECK-OK-SP6: shared_dummy_owner test-harness accessor; pre-existing SP-6
-        Arc::clone(SHARED_DUMMY_OWNER.get_or_init(|| Arc::new(RwLock::new(BuildOwner::new()))))
+    /// The binding's async task driver, if one was installed.
+    #[must_use]
+    pub fn async_driver(&self) -> Option<&flui_scheduler::AsyncDriver> {
+        self.async_driver.as_ref()
+    }
+
+    /// Install the binding's post-frame capability.
+    ///
+    /// Called once, at wiring time, by `HeadlessBinding` and `AppBinding`. It must
+    /// name **that binding's** scheduler — the one whose `drive_frame` drains the
+    /// queue. Headless owns a binding-local `Scheduler`; production drives the
+    /// `Scheduler::instance()` singleton.
+    pub fn set_post_frame_handle(&mut self, handle: flui_scheduler::PostFrameHandle) {
+        self.post_frame_handle = Some(handle);
+    }
+
+    /// Install the binding's IME/text-input attach-detach capability.
+    ///
+    /// Called once, at wiring time, by `AppBinding` (via `UiRealm::bind_to_app`).
+    /// `HeadlessBinding` installs none, so headless-tree tests observe
+    /// `BuildContext::text_input_handle() == None` honestly rather than a
+    /// stub that silently accepts attaches nobody delivers events to.
+    pub fn set_text_input_handle(&mut self, handle: flui_interaction::TextInputHandle) {
+        self.text_input_handle = Some(handle);
+    }
+
+    /// Install the binding's owner-local interaction dispatch handle (ADR-0027).
+    pub fn set_interaction_dispatch_handle(
+        &mut self,
+        handle: flui_interaction::InteractionDispatchHandle,
+    ) {
+        self.interaction_dispatch = Some(handle);
+    }
+
+    /// The binding's post-frame capability, if one was installed.
+    #[must_use]
+    pub fn post_frame_handle(&self) -> Option<&flui_scheduler::PostFrameHandle> {
+        self.post_frame_handle.as_ref()
+    }
+
+    /// The binding's IME/text-input attach-detach capability, if one was
+    /// installed.
+    #[must_use]
+    pub fn text_input_handle(&self) -> Option<&flui_interaction::TextInputHandle> {
+        self.text_input_handle.as_ref()
     }
 
     /// Set the callback for when a build is scheduled.
     ///
     /// This is called by `schedule_build_for` to notify the binding
     /// that a visual update is needed.
+    ///
+    /// Set this BEFORE mounting any element. Each element captures a clone of
+    /// the current callback `Arc` into its `ExternalBuildScheduler` at mount
+    /// (for out-of-frame rebuild requests); replacing the callback afterwards
+    /// does not retroactively update already-mounted elements, which keep
+    /// firing the previous `Arc`. The binding wires this once at startup.
     pub fn set_on_build_scheduled<F>(&mut self, callback: F)
     where
         F: Fn() + Send + Sync + 'static,
     {
-        self.on_build_scheduled = Some(Box::new(callback));
+        self.on_build_scheduled = Some(Arc::new(callback));
     }
 
     /// Schedule an element for rebuild.
     ///
-    /// Elements are processed in depth order (shallowest first) to ensure
-    /// parent rebuilds happen before child rebuilds.
+    /// Elements are processed in depth order (shallowest first) so parent
+    /// rebuilds happen before child rebuilds. The `depth` is a best-effort
+    /// ordering hint: [`build_scope`](Self::build_scope) re-derives every
+    /// queued element's authoritative tree depth from its node before draining
+    /// (see `rekey_dirty_depths`), so a caller that
+    /// only knows the sibling slot index (e.g. `setState` via
+    /// `ElementCore::schedule_self_build`) cannot mis-order the drain.
     pub fn schedule_build_for(&mut self, id: ElementId, depth: usize) {
         if self.dirty_set.insert(id) {
             self.dirty_elements
                 .push(Reverse(DirtyElement::new(id, depth)));
 
             // Notify that a build was scheduled
-            if let Some(ref callback) = self.on_build_scheduled {
+            if let Some(callback) = self.on_build_scheduled.as_deref() {
                 callback();
             }
+        }
+    }
+
+    /// Mark every live element dirty so the next [`build_scope`](Self::build_scope)
+    /// re-runs all `build()` methods.
+    ///
+    /// Flutter parity: `BuildOwner.reassemble()` / `Element.reassemble()` during
+    /// hot reload. **Does not** unmount elements or dispose `State` — stateful
+    /// elements keep their in-tree `ViewState` across the call.
+    pub fn reassemble(&mut self, tree: &ElementTree) {
+        for (id, node) in tree.iter_nodes() {
+            self.schedule_build_for(id, node.depth);
+        }
+        tracing::info!(
+            count = self.dirty_count(),
+            "BuildOwner::reassemble — all elements marked dirty for hot reload"
+        );
+    }
+
+    /// Re-key every queued dirty element to its authoritative TREE depth.
+    ///
+    /// The dirty heap orders by depth, but `schedule_build_for` is handed a
+    /// depth by its caller — and the `setState` path
+    /// (`ElementCore::schedule_self_build`) plus the live `BuildCtx` both pass
+    /// `ElementCore::depth`, which is the sibling SLOT index, not
+    /// `parent_depth + 1`. Left as-is, a deeply-nested `setState` would sort as
+    /// if it were shallow and a child could rebuild before its parent —
+    /// violating Flutter's shallowest-first contract. Rebuilding the heap keyed
+    /// on each node's real depth (`ElementNode::depth`, the same authority the
+    /// external-inbox drain uses) restores the contract regardless of what
+    /// `schedule_build_for` was told.
+    fn rekey_dirty_depths(&mut self, tree: &ElementTree) {
+        if self.dirty_elements.is_empty() {
+            return;
+        }
+        let queued: Vec<ElementId> = std::mem::take(&mut self.dirty_elements)
+            .into_iter()
+            .map(|Reverse(dirty)| dirty.id())
+            .collect();
+        for id in queued {
+            let depth = tree.get(id).map_or(0, |node| node.depth);
+            self.dirty_elements
+                .push(Reverse(DirtyElement::new(id, depth)));
         }
     }
 
@@ -290,8 +479,6 @@ impl BuildOwner {
     /// `inactive_elements` — every field an `Element::mount` /
     /// `unmount` / `update` path may write. The borrow checker proves
     /// non-aliasing because each field is borrowed once.
-    ///
-    /// Threading reference: `docs/plans/2026-05-21-002-feat-framework-spine-repair-plan.md` §U8, §D1.
     pub fn element_owner_mut(&mut self) -> super::ElementOwner<'_> {
         super::ElementOwner {
             global_keys: &mut self.global_keys,
@@ -300,7 +487,49 @@ impl BuildOwner {
             inactive_elements: &mut self.inactive_elements,
             pending_dependency_changes: &mut self.pending_dependency_changes,
             on_build_scheduled: self.on_build_scheduled.as_deref(),
+            external_inbox: &self.external_inbox,
+            external_request_frame: self.on_build_scheduled.as_ref(),
+            // Lifecycle paths (mount/unmount/update) get no live-tree view;
+            // only the `build_scope` drain sets `build_view`.
+            build_view: None,
+            child_manager_registry: &self.child_manager_registry,
+            layout_builder_registry: &self.layout_builder_registry,
+            async_driver: &self.async_driver,
+            post_frame_handle: &self.post_frame_handle,
+            text_input_handle: &self.text_input_handle,
+            interaction_dispatch: &self.interaction_dispatch,
         }
+    }
+
+    /// Build an [`ExternalBuildScheduler`] over this owner's shared inbox and
+    /// frame-request hook.
+    ///
+    /// The single construction point for the out-of-frame rebuild channel:
+    /// [`ElementOwner::external_scheduler`](super::ElementOwner::external_scheduler)
+    /// and `ElementBuildContext::rebuild_handle` both route through it, so there
+    /// is exactly one inbox and one frame-request path.
+    pub(crate) fn external_scheduler(&self) -> ExternalBuildScheduler {
+        ExternalBuildScheduler::from_parts(
+            Arc::clone(&self.external_inbox),
+            self.on_build_scheduled.clone(),
+        )
+    }
+
+    /// A [`RebuildHandle`](super::RebuildHandle) for `element`, scheduling
+    /// through this owner's inbox.
+    pub(crate) fn rebuild_handle(&self, element: ElementId) -> super::RebuildHandle {
+        super::RebuildHandle::new(self.external_scheduler(), element)
+    }
+
+    /// Number of elements queued in the out-of-frame inbox, awaiting the next
+    /// [`build_scope`](Self::build_scope) drain.
+    ///
+    /// Observability for the `RebuildHandle` channel: a
+    /// `schedule()` from a worker thread is visible here before any frame runs.
+    /// Returns a count, never a guard — the lock stays private (SP-6).
+    #[must_use]
+    pub fn pending_external_builds(&self) -> usize {
+        self.external_inbox.lock().len()
     }
 
     /// Check if there are dirty elements.
@@ -329,6 +558,49 @@ impl BuildOwner {
             self.building = true;
             self.scope_depth += 1;
         }
+
+        // Drain elements scheduled from OUTSIDE a frame (animation / listenable
+        // ticks whose mark-dirty callback holds an `ExternalBuildScheduler`).
+        // Pushed straight onto the heap — we are already in a frame, so the
+        // `on_build_scheduled` frame request the callback already fired is
+        // enough; re-firing it here would loop. A tick landing mid-drain stays
+        // in the inbox for the next frame (Flutter defers mid-frame schedules).
+        //
+        // The heap key is the element's TREE depth, looked up from its node
+        // here (`&mut tree` is in scope) rather than captured in the callback —
+        // `ElementCore::depth` is the sibling slot index, not `parent_depth+1`,
+        // so capturing it would mis-order a nested animated element as if it
+        // were the root.
+        let externally_scheduled: Vec<ElementId> = self.external_inbox.lock().drain().collect();
+        for id in externally_scheduled {
+            // Mark dirty here, not in the caller. A `RebuildHandle`
+            // carries no reference to the element's dirty flag — it is a plain
+            // `(inbox, ElementId)` pair — so the drain is the one place that both
+            // knows the id and holds `&mut tree`. Without this the element lands
+            // on the heap but `perform_build` short-circuits on `!should_build()`,
+            // and a `build_into_views` that returns no views would reconcile the
+            // element's children away. Idempotent: `AnimatedView`'s mark-dirty
+            // callback already set the flag, and a node that has since been
+            // unmounted is a no-op lookup.
+            tree.mark_needs_build(id);
+            if self.dirty_set.insert(id) {
+                let depth = tree.get(id).map_or(0, |node| node.depth);
+                self.dirty_elements
+                    .push(Reverse(DirtyElement::new(id, depth)));
+            }
+        }
+
+        // Re-key every element already on the heap to its AUTHORITATIVE tree
+        // depth before draining. `schedule_build_for` trusts the depth its
+        // caller passes, but the `setState` path (`ElementCore::schedule_self_build`)
+        // and the live `BuildCtx` both pass `ElementCore::depth` — the sibling
+        // SLOT index, not `parent_depth + 1`. Trusting it lets a deeply-nested
+        // `setState` sort as if it were shallow, so a child could build before
+        // its parent and violate Flutter's shallowest-first build contract
+        // (`framework.dart` `_dirtyElements.sort(Element._sort)` keys on the
+        // element's real depth). Re-derive each id's depth from its node — the
+        // same authority the external-inbox drain just above already uses.
+        self.rekey_dirty_depths(tree);
 
         // Process dirty elements in depth order, extract-then-apply
         // (E3 — atomic box→arena swap).
@@ -363,37 +635,55 @@ impl BuildOwner {
             // per dependency-change-then-rebuild cycle.
             let needs_did_change = self.pending_dependency_changes.remove(&id);
 
-            // ── Phase 1: extract. Borrow the element from the slab, run
-            // its build half, capture owned child views, drop the borrow.
-            let new_views: Vec<Box<dyn View>> = {
+            // Guard (still holding only a brief `&mut node`): an
+            // inherited-dependency change marks an otherwise-clean dependent
+            // dirty so its build re-runs against the new value; then skip
+            // unless the element is both buildable (lifecycle) AND dirty. A
+            // clean element's build half returns an empty view list, and the
+            // phase-2 reconcile would then wrongly REMOVE all its children —
+            // so a clean entry must never reach reconcile.
+            {
                 let Some(node) = tree.get_mut(id) else {
                     // Stale / removed id — nothing to build.
                     continue;
                 };
-                // An inherited-dependency change marks the dependent dirty
-                // even when its own state is clean: the inherited value it
-                // reads changed, so its build MUST re-run.
-                // `InheritedBehavior::on_view_updated` cannot set the flag
-                // itself — it only has the dependent's id, not slab access —
-                // so the dirty mark is applied here, BEFORE the dirty guard,
-                // keyed off the `pending_dependency_changes` entry. Without
-                // this a clean dependent (dirty flag false after its first
-                // build) would be skipped by the guard below and never
-                // observe the change.
                 if needs_did_change {
                     node.element_mut().mark_needs_build();
                 }
-                // Skip unless the element is both buildable (lifecycle) AND
-                // actually dirty. A clean element's build half would return
-                // an empty view list, and the phase-2 reconcile would then
-                // wrongly REMOVE all its slab-resident children — so a clean
-                // entry must never reach the reconcile. A scheduled child is
-                // always dirty (`tree.update` / fresh insert set the flag),
-                // so this guard does not starve legitimate rebuilds.
                 if !node.element().lifecycle().can_build() || !node.element().is_dirty() {
                     continue;
                 }
+            }
 
+            // ── Phase 1: extract BY VALUE, build against a LIVE read view.
+            // Taking the element out of its slot frees the tree for a shared
+            // `&` borrow, so the element's `build()` can resolve InheritedView
+            // / ancestor lookups against the REAL tree (via the `BuildCtx`
+            // the behaviour builds from `ElementOwner::build_view`) — no empty
+            // dummy, and no deadlock against the `Arc<RwLock>` write lock the
+            // frame driver holds (the borrowed view sidesteps the lock).
+            // Inherited dependents are buffered (the tree is read-only here)
+            // and applied below once `&mut tree` is free again.
+            let Some(mut element) = tree.take_element(id) else {
+                continue;
+            };
+            let dep_sink: parking_lot::Mutex<Vec<crate::context::DependentRecord>> =
+                parking_lot::Mutex::new(Vec::new());
+
+            // Run the build half under `catch_unwind` so the extracted element
+            // is ALWAYS restored to its slot, even on an unwind. The user
+            // `build()` is already caught one level down (`build_or_recover`
+            // substitutes an `ErrorView`), but the other user hooks reachable
+            // in this window — `did_change_dependencies` (via
+            // `notify_dependency_change`) and `init_state` (inside
+            // `StatefulBehavior::build_into_views`) — are not. Without this
+            // guard a panic in either would drop `element` and leave a
+            // permanent `None` hole, turning every later
+            // `element()`/`element_mut()` access on this node into an
+            // `ELEMENT_PRESENT` panic. `AssertUnwindSafe` is sound because the
+            // sole cross-unwind invariant — the slot is whole again — is
+            // re-established by the unconditional `put_element` below.
+            let build_outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let mut element_owner = super::ElementOwner {
                     global_keys: &mut self.global_keys,
                     dirty_elements: &mut self.dirty_elements,
@@ -401,17 +691,55 @@ impl BuildOwner {
                     inactive_elements: &mut self.inactive_elements,
                     pending_dependency_changes: &mut self.pending_dependency_changes,
                     on_build_scheduled: self.on_build_scheduled.as_deref(),
+                    external_inbox: &self.external_inbox,
+                    external_request_frame: self.on_build_scheduled.as_ref(),
+                    build_view: Some(super::BuildHandle {
+                        tree: &*tree,
+                        dep_sink: &dep_sink,
+                    }),
+                    child_manager_registry: &self.child_manager_registry,
+                    layout_builder_registry: &self.layout_builder_registry,
+                    async_driver: &self.async_driver,
+                    post_frame_handle: &self.post_frame_handle,
+                    text_input_handle: &self.text_input_handle,
+                    interaction_dispatch: &self.interaction_dispatch,
                 };
                 if needs_did_change {
-                    node.element_mut().notify_dependency_change();
+                    element
+                        .element_mut()
+                        .notify_dependency_change(&mut element_owner);
                 }
-                node.element_mut().build_into_views(&mut element_owner)
-            }; // ← element borrow ENDS here.
+                element.element_mut().build_into_views(&mut element_owner)
+            })); // `element_owner` + its `&*tree` borrow drop here.
 
-            // ── Phase 2: apply. Reconcile the returned views against the
-            // node's slab-resident children with a fresh `&mut tree`.
-            // Newly inserted children are scheduled for build inside the
-            // reconciler so this same drain loop reaches them.
+            // Restore the element BEFORE anything else — the slot must be whole
+            // whether the build returned or unwound. With `&mut tree` free
+            // again we then apply the dependents buffered during the read-only
+            // build onto their provider nodes; recording in the SAME iteration
+            // (before the next dirty pop) preserves Flutter's
+            // record-before-notify ordering (`framework.dart:5086`).
+            tree.put_element(id, element);
+
+            let new_views: Vec<Box<dyn View>> = match build_outcome {
+                Ok(views) => views,
+                // Slot restored above; re-raise so the frame aborts exactly as
+                // it did before (no behavior change beyond keeping the slab
+                // consistent). Partial `dep_sink` records are intentionally
+                // dropped — the build did not complete.
+                Err(payload) => std::panic::resume_unwind(payload),
+            };
+            for record in dep_sink.into_inner() {
+                if let Some(node) = tree.get_mut(record.provider)
+                    && let Some(accessor) = node.element_mut().as_inherited_mut()
+                {
+                    accessor.record_dependent(record.dependent, record.depth);
+                }
+            }
+
+            // ── Phase 2: reconcile the returned views against the node's
+            // slab-resident children with a fresh `&mut tree`. Newly inserted
+            // children are scheduled inside the reconciler so this same drain
+            // loop reaches them.
             let mut element_owner = super::ElementOwner {
                 global_keys: &mut self.global_keys,
                 dirty_elements: &mut self.dirty_elements,
@@ -419,6 +747,15 @@ impl BuildOwner {
                 inactive_elements: &mut self.inactive_elements,
                 pending_dependency_changes: &mut self.pending_dependency_changes,
                 on_build_scheduled: self.on_build_scheduled.as_deref(),
+                external_inbox: &self.external_inbox,
+                external_request_frame: self.on_build_scheduled.as_ref(),
+                build_view: None,
+                child_manager_registry: &self.child_manager_registry,
+                layout_builder_registry: &self.layout_builder_registry,
+                async_driver: &self.async_driver,
+                post_frame_handle: &self.post_frame_handle,
+                text_input_handle: &self.text_input_handle,
+                interaction_dispatch: &self.interaction_dispatch,
             };
             crate::tree::id_reconcile::reconcile_children_by_id(
                 tree,
@@ -428,11 +765,207 @@ impl BuildOwner {
             );
         }
 
+        // The build drained: every render child has attached. Settle each
+        // render parent's children into element-slot order (no-op unless an
+        // insert flagged a possible drift), so a render sibling that attached
+        // before a component-deferred sibling does not invert their layout.
+        tree.reorder_render_children_after_build();
+
         #[cfg(debug_assertions)]
         {
             self.building = false;
             self.scope_depth -= 1;
         }
+    }
+
+    // ========================================================================
+    // Lazy-sliver child manager service
+    // ========================================================================
+
+    /// Drive lazy-sliver child managers post-layout.
+    ///
+    /// Called by `HeadlessBinding::pump_frame` (and future production bindings)
+    /// immediately **after** `PipelineOwner::run_frame` and the pipeline lock
+    /// is released, so the render tree is quiescent and no `NodePtr` alias is
+    /// live.
+    ///
+    /// # Ordering
+    ///
+    /// 1. Drain `PipelineOwner`'s `pending_child_requests` and
+    ///    `pending_retain_bands` accumulated during the most recent layout pass.
+    /// 2. Group by `RenderId`.
+    /// 3. Clone each affected manager `Arc` out of the registry (releases the
+    ///    registry lock before the service calls).
+    /// 4. For each manager, call `ChildManager::service` with an inline
+    ///    `ElementOwner` split-borrow — mirrors the pattern in `build_scope`'s
+    ///    `catch_unwind` closure.
+    /// 5. A second `build_scope` expands the newly-built children's subtrees
+    ///    (the items' own views — e.g. `Padding(Text)` — need their own build
+    ///    pass since `SparseChildren::ensure` only mounts the top-level node).
+    /// 6. Mark each affected sliver as needing layout so the next frame
+    ///    re-measures with the newly-present render nodes.
+    /// 7. `finalize_tree` cleans up any evicted children pushed to inactive by
+    ///    `retain_band` or `on_unmount`.
+    ///
+    /// # Production and headless bindings
+    ///
+    /// Called by both `HeadlessBinding::pump_frame` (step 6) and
+    /// `AppBinding::draw_frame` (after `run_frame` drops the pipeline write-lock)
+    /// — the two frame paths are now converged at this call site. Headless
+    /// tests drive it directly via `HeadlessBinding`; a real window drives it via
+    /// `WidgetsBinding::service_child_requests`, which `AppBinding` invokes after
+    /// each `run_frame`.
+    pub fn service_child_requests(
+        &mut self,
+        tree: &mut ElementTree,
+        pipeline: &Arc<RwLock<flui_rendering::pipeline::PipelineOwner>>,
+    ) {
+        // 1. Drain pending buffers from the pipeline (under a brief write lock).
+        let (pending_requests, retain_bands) = {
+            let mut guard = pipeline.write();
+            let requests = guard.take_pending_child_requests();
+            let bands = guard.take_pending_retain_bands();
+            (requests, bands)
+        };
+
+        // Finalize BEFORE the early-return: `build_scope` does not call
+        // `finalize_tree`, so sparse children pushed to `inactive_elements` by
+        // `SliverListAdaptorBehavior::on_unmount` (F3) — during a reconcile that
+        // removed their host — must be cleaned up here. Without this, those
+        // elements and their render nodes are leaked until the next
+        // `service_child_requests` call that has pending layout requests.
+        if !self.inactive_elements.is_empty() {
+            self.finalize_tree(tree);
+        }
+
+        if pending_requests.is_empty() && retain_bands.is_empty() {
+            return;
+        }
+
+        tracing::debug!(
+            requests = pending_requests.len(),
+            bands = retain_bands.len(),
+            "service_child_requests: draining lazy-sliver pending buffers"
+        );
+
+        // 2. Group requests and retain-bands by sliver RenderId.
+        let mut requests_by_sliver: HashMap<RenderId, Vec<usize>> = HashMap::new();
+        for (sliver_id, logical_index) in pending_requests {
+            requests_by_sliver
+                .entry(sliver_id)
+                .or_default()
+                .push(logical_index);
+        }
+        let mut bands_by_sliver: HashMap<RenderId, (usize, usize)> = HashMap::new();
+        for (sliver_id, first, last) in retain_bands {
+            bands_by_sliver.insert(sliver_id, (first, last));
+        }
+
+        // Collect all affected sliver ids (may have requests, bands, or both).
+        let affected_ids: Vec<RenderId> = {
+            let mut ids: HashSet<RenderId> = requests_by_sliver.keys().copied().collect();
+            ids.extend(bands_by_sliver.keys().copied());
+            ids.into_iter().collect()
+        };
+
+        // 3. Clone manager Arcs out of the registry before any service call.
+        //    This releases the registry lock so that service calls that call
+        //    `register_child_manager` / `unregister_child_manager` through an
+        //    `ElementOwner` can re-enter the registry without deadlocking.
+        let manager_arcs: Vec<(RenderId, Arc<Mutex<dyn ChildManager>>)> = {
+            let registry = self.child_manager_registry.lock();
+            affected_ids
+                .iter()
+                .filter_map(|&id| registry.get(&id).map(|m| (id, Arc::clone(m))))
+                .collect()
+        };
+
+        if manager_arcs.is_empty() {
+            tracing::debug!("service_child_requests: no registered managers for affected slivers");
+            return;
+        }
+
+        // 4. Call service on each manager. Each iteration builds an inline
+        //    ElementOwner split-borrow, calls service (which may call
+        //    `ensure`/`evict` and mutate the tree + dirty heap), then drops
+        //    the inline owner — the borrow ends before the next iteration.
+        //
+        //    Track whether any manager did real work (built or evicted a child).
+        //    When all managers return `false` (settled state — band unchanged,
+        //    no new requests in-band) we skip `mark_needs_layout` so the sliver
+        //    stays clean and the frame quiesces rather than looping forever.
+        let mut any_service_did_work = false;
+        for (sliver_id, manager_arc) in &manager_arcs {
+            let requested = requests_by_sliver
+                .get(sliver_id)
+                .map_or(&[][..], Vec::as_slice);
+            let (retain_first, retain_last) = bands_by_sliver
+                .get(sliver_id)
+                .copied()
+                .unwrap_or((0, usize::MAX));
+
+            // Inline split-borrow (same pattern as `build_scope` catch_unwind).
+            let mut inline_owner = super::ElementOwner {
+                global_keys: &mut self.global_keys,
+                dirty_elements: &mut self.dirty_elements,
+                dirty_set: &mut self.dirty_set,
+                inactive_elements: &mut self.inactive_elements,
+                pending_dependency_changes: &mut self.pending_dependency_changes,
+                on_build_scheduled: self.on_build_scheduled.as_deref(),
+                external_inbox: &self.external_inbox,
+                external_request_frame: self.on_build_scheduled.as_ref(),
+                build_view: None,
+                child_manager_registry: &self.child_manager_registry,
+                layout_builder_registry: &self.layout_builder_registry,
+                async_driver: &self.async_driver,
+                post_frame_handle: &self.post_frame_handle,
+                text_input_handle: &self.text_input_handle,
+                interaction_dispatch: &self.interaction_dispatch,
+            };
+
+            let did_work = manager_arc.lock().service(
+                requested,
+                retain_first,
+                retain_last,
+                tree,
+                &mut inline_owner,
+                pipeline,
+            );
+            if did_work {
+                any_service_did_work = true;
+            }
+        } // `inline_owner` drops here — all `&mut` borrows released.
+
+        // 5. Second build_scope: expand newly-built children's subtrees.
+        //    `SparseChildren::ensure` mounts the top-level lazy-child node and
+        //    pushes it onto the dirty heap (F1), but the child's own sub-views
+        //    (e.g. a Padding wrapping a Text) need a dedicated build pass.
+        self.build_scope(tree);
+
+        // 6. Mark each serviced sliver as needing re-layout ONLY if service
+        //    did real work (built or evicted children). When all service calls
+        //    returned `false`, the list has settled: the viewport, band, and
+        //    built-child set are all unchanged. Skipping `mark_needs_layout`
+        //    keeps the sliver clean so `flush_layout` skips it, `perform_layout`
+        //    does not run, no new `emit_retain_band` fires, and
+        //    `service_child_requests` early-returns on the next frame.
+        //    This breaks the unconditional dirty-loop that prevented quiescence.
+        if any_service_did_work {
+            let mut guard = pipeline.write();
+            for (sliver_id, _) in &manager_arcs {
+                guard.mark_needs_layout(*sliver_id);
+            }
+        } else {
+            tracing::debug!(
+                "service_child_requests: no work done, skipping mark_needs_layout \
+                 (frame quiesces)"
+            );
+        }
+
+        // 7. Finalize: unmount evicted children (pushed to inactive by
+        //    `retain_band` → `evict` → `tree.remove_subtree`) and the lazy
+        //    children pushed by `on_unmount` (F3).
+        self.finalize_tree(tree);
     }
 
     // ========================================================================
@@ -497,7 +1030,8 @@ impl BuildOwner {
 
         // Build the split-borrow handle once for the entire unmount sweep.
         // The handle survives `tree.get_mut` borrows because it points into
-        // disjoint `BuildOwner` fields.
+        // disjoint `BuildOwner` fields. No live build runs here, so the
+        // build-time tree handle is absent.
         let mut element_owner = super::ElementOwner {
             global_keys: &mut self.global_keys,
             dirty_elements: &mut self.dirty_elements,
@@ -505,11 +1039,20 @@ impl BuildOwner {
             inactive_elements: &mut self.inactive_elements,
             pending_dependency_changes: &mut self.pending_dependency_changes,
             on_build_scheduled: self.on_build_scheduled.as_deref(),
+            external_inbox: &self.external_inbox,
+            external_request_frame: self.on_build_scheduled.as_ref(),
+            build_view: None,
+            child_manager_registry: &self.child_manager_registry,
+            layout_builder_registry: &self.layout_builder_registry,
+            async_driver: &self.async_driver,
+            post_frame_handle: &self.post_frame_handle,
+            text_input_handle: &self.text_input_handle,
+            interaction_dispatch: &self.interaction_dispatch,
         };
 
         // Finalize all elements (deepest first - already sorted by collect order).
         //
-        // `remove_finalized` (plan §U14 / R14) bypasses the soft-remove
+        // `remove_finalized` bypasses the soft-remove
         // path that `remove` takes for keyed elements. At this point
         // we've already given mid-frame state migration its chance —
         // anything still in the inactive queue is genuinely going away,
@@ -590,7 +1133,7 @@ impl BuildOwner {
     /// Atomically remove and return the element registered under
     /// `key_hash` for a reparent operation.
     ///
-    /// Plan §U17 / KTD-3 N1. Closes the race window that a
+    /// Closes the race window that a
     /// two-call sequence (`element_for_global_key` followed by
     /// `unregister_global_key`) would leave open if any other code
     /// path mutates the registry between the two calls — a real
@@ -640,7 +1183,7 @@ impl std::fmt::Debug for BuildOwner {
         f.debug_struct("BuildOwner")
             .field("dirty_count", &self.dirty_elements.len())
             .field("global_keys", &self.global_keys.len())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -660,82 +1203,38 @@ impl Drop for BuildScopeGuard<'_> {
 
 #[cfg(test)]
 mod tests {
-    use std::any::TypeId;
+    use flui_objects::RenderSizedBox;
+    use flui_rendering::protocol::BoxProtocol;
 
     use super::*;
-    use crate::{Lifecycle, View, tree::ElementTree};
+    use crate::{View, tree::ElementTree};
 
-    /// A leaf element that doesn't create children (prevents infinite
-    /// recursion)
-    struct LeafElement {
-        depth: usize,
-        lifecycle: Lifecycle,
-    }
-
-    impl LeafElement {
-        fn new() -> Self {
-            Self {
-                depth: 0,
-                lifecycle: Lifecycle::Initial,
-            }
-        }
-    }
-
-    impl crate::ElementBase for LeafElement {
-        fn view_type_id(&self) -> TypeId {
-            TypeId::of::<TestView>()
-        }
-
-        fn depth(&self) -> usize {
-            self.depth
-        }
-
-        fn lifecycle(&self) -> Lifecycle {
-            self.lifecycle
-        }
-
-        fn mount(
-            &mut self,
-            _parent: Option<ElementId>,
-            slot: usize,
-            _owner: &mut super::super::ElementOwner<'_>,
-        ) {
-            self.depth = slot;
-            self.lifecycle = Lifecycle::Active;
-        }
-
-        fn unmount(&mut self, _owner: &mut super::super::ElementOwner<'_>) {
-            self.lifecycle = Lifecycle::Defunct;
-        }
-
-        fn activate(&mut self) {
-            self.lifecycle = Lifecycle::Active;
-        }
-
-        fn deactivate(&mut self) {
-            self.lifecycle = Lifecycle::Inactive;
-        }
-
-        fn update(&mut self, _new_view: &dyn View, _owner: &mut super::super::ElementOwner<'_>) {}
-
-        fn mark_needs_build(&mut self) {}
-
-        fn build_into_views(
-            &mut self,
-            _owner: &mut super::super::ElementOwner<'_>,
-        ) -> Vec<Box<dyn View>> {
-            // Leaf - no child views.
-            Vec::new()
-        }
-    }
-
-    /// A leaf view that creates a LeafElement (no children)
+    /// A render-family leaf view with no child views.
     #[derive(Clone)]
     struct TestView;
 
+    impl crate::RenderView for TestView {
+        type Protocol = BoxProtocol;
+        type RenderObject = RenderSizedBox;
+
+        fn create_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+        ) -> Self::RenderObject {
+            RenderSizedBox::shrink()
+        }
+
+        fn update_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+            _render_object: &mut Self::RenderObject,
+        ) {
+        }
+    }
+
     impl View for TestView {
-        fn create_element(&self) -> Box<dyn crate::ElementBase> {
-            Box::new(LeafElement::new())
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::render_variable(self)
         }
     }
 
@@ -799,6 +1298,49 @@ mod tests {
         assert_eq!(third.depth(), 2);
     }
 
+    /// A `setState` hands `schedule_build_for` the element's SLOT index, not its
+    /// tree depth. `rekey_dirty_depths` (run at the top of `build_scope`) must
+    /// override that with each node's authoritative `parent_depth + 1` so a
+    /// deeply-nested rebuild never drains before its shallower parent.
+    ///
+    /// This is RED without the re-key: the elements are scheduled with
+    /// deliberately INVERTED depths (the deepest leaf gets `0`, the root gets
+    /// `2`), so trusting the scheduled depth would drain the leaf first —
+    /// violating Flutter's shallowest-first contract.
+    #[test]
+    fn rekey_dirty_depths_restores_shallowest_first_from_inverted_slots() {
+        let mut owner = BuildOwner::new();
+        let mut tree = ElementTree::new();
+        let view = TestView;
+
+        // A single-child chain: root (depth 0) → mid (depth 1) → leaf (depth 2).
+        let root = tree.mount_root(&view, &mut owner.element_owner_mut());
+        let mid = tree.insert(&view, root, 0, &mut owner.element_owner_mut());
+        let leaf = tree.insert(&view, mid, 0, &mut owner.element_owner_mut());
+        assert_eq!(tree.get(root).map(|n| n.depth), Some(0));
+        assert_eq!(tree.get(mid).map(|n| n.depth), Some(1));
+        assert_eq!(tree.get(leaf).map(|n| n.depth), Some(2));
+
+        // Schedule with INVERTED depths — what a `setState` on each would pass if
+        // it trusted the slot index (all three are slot 0 here; we exaggerate to
+        // an outright inversion to make the mis-order deterministic).
+        owner.schedule_build_for(leaf, 0);
+        owner.schedule_build_for(mid, 1);
+        owner.schedule_build_for(root, 2);
+
+        owner.rekey_dirty_depths(&tree);
+
+        // Drains shallowest-first by AUTHORITATIVE tree depth, not the scheduled
+        // (inverted) depth.
+        let Reverse(first) = owner.dirty_elements.pop().unwrap();
+        let Reverse(second) = owner.dirty_elements.pop().unwrap();
+        let Reverse(third) = owner.dirty_elements.pop().unwrap();
+        assert_eq!(first.id(), root, "root (tree depth 0) drains first");
+        assert_eq!(second.id(), mid, "mid (tree depth 1) drains second");
+        assert_eq!(third.id(), leaf, "leaf (tree depth 2) drains last");
+        assert_eq!((first.depth(), second.depth(), third.depth()), (0, 1, 2));
+    }
+
     #[test]
     fn test_global_key_registry() {
         let mut owner = BuildOwner::new();
@@ -812,7 +1354,7 @@ mod tests {
         assert_eq!(owner.element_for_global_key(key_hash), None);
     }
 
-    /// Plan §U17 / KTD-3 N1: `take_global_key_for_reparent` returns
+    /// `take_global_key_for_reparent` returns
     /// the registered id AND removes it atomically. A second call for
     /// the same hash returns `None` — proving the second of two
     /// concurrent reparent claims (the rare same-frame collision)
@@ -899,75 +1441,5 @@ mod tests {
         // Known mapping unaffected by the failed claim on a different
         // hash.
         assert_eq!(owner.element_for_global_key(known), Some(id));
-    }
-
-    // ========================================================================
-    // V-13 (cheap part) — process-shared dummy tree / owner reuse
-    // ========================================================================
-
-    /// `BuildOwner::shared_dummy_tree` returns `Arc::clone`s of the same
-    /// inner pointer on every call — proven via `Arc::ptr_eq`. This is
-    /// the cache-reuse contract underpinning
-    /// `ElementBuildContext::new_minimal`.
-    #[test]
-    fn test_shared_dummy_tree_returns_ptr_equal_handles() {
-        let first = BuildOwner::shared_dummy_tree();
-        let second = BuildOwner::shared_dummy_tree();
-        let third = BuildOwner::shared_dummy_tree();
-
-        assert!(
-            Arc::ptr_eq(&first, &second),
-            "two shared_dummy_tree calls must alias the same Arc inner"
-        );
-        assert!(
-            Arc::ptr_eq(&second, &third),
-            "every shared_dummy_tree call must alias the same Arc inner"
-        );
-    }
-
-    /// Companion test for `shared_dummy_owner` — same Arc-aliasing
-    /// guarantee.
-    #[test]
-    fn test_shared_dummy_owner_returns_ptr_equal_handles() {
-        let first = BuildOwner::shared_dummy_owner();
-        let second = BuildOwner::shared_dummy_owner();
-
-        assert!(
-            Arc::ptr_eq(&first, &second),
-            "two shared_dummy_owner calls must alias the same Arc inner"
-        );
-    }
-
-    /// End-to-end: two `ElementBuildContext::new_minimal` calls reuse
-    /// the same dummy `tree` and `owner` Arc handles. Proves the
-    /// per-build allocation is eliminated on the production stateless /
-    /// stateful build path.
-    #[test]
-    fn test_new_minimal_reuses_shared_dummy_handles() {
-        let ctx_a = crate::ElementBuildContext::new_minimal(0);
-        let ctx_b = crate::ElementBuildContext::new_minimal(3);
-
-        assert!(
-            Arc::ptr_eq(ctx_a.tree(), ctx_b.tree()),
-            "two new_minimal contexts must share the dummy ElementTree Arc"
-        );
-        assert!(
-            Arc::ptr_eq(ctx_a.build_owner(), ctx_b.build_owner()),
-            "two new_minimal contexts must share the dummy BuildOwner Arc"
-        );
-    }
-
-    /// The per-call `depth` argument is recorded on the context even
-    /// though the underlying Arc handles are shared. Pins the
-    /// "depth varies, infrastructure shared" contract.
-    #[test]
-    fn test_new_minimal_records_per_call_depth() {
-        use crate::BuildContext as _;
-
-        let shallow = crate::ElementBuildContext::new_minimal(0);
-        let deeper = crate::ElementBuildContext::new_minimal(7);
-
-        assert_eq!(shallow.depth(), 0);
-        assert_eq!(deeper.depth(), 7);
     }
 }

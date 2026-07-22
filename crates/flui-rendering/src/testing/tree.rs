@@ -9,9 +9,10 @@
 //!
 //! - Box child -> [`PipelineOwner::insert_child_render_object`] (full dirty
 //!   tracking, the same path the box pipeline tests use);
-//! - Sliver child -> [`crate::storage::RenderTree::insert_sliver_child`]
-//!   (the path the sliver tests use; the root layout pass cascades into
-//!   the sliver subtree).
+//! - Sliver child -> [`PipelineOwner::insert_sliver_child_render_object`]
+//!   (full dirty tracking + ADR-0013 attach wiring, the Sliver-protocol
+//!   counterpart of `insert_child_render_object`; the root layout pass
+//!   cascades into the sliver subtree).
 //!
 //! The tree root must be a Box render object — the layout pass drives the
 //! root via [`BoxConstraints`](crate::constraints::BoxConstraints), and
@@ -23,7 +24,10 @@ use std::collections::HashMap;
 use flui_foundation::RenderId;
 
 use crate::{
-    parent_data::{FlexParentData, StackParentData},
+    parent_data::{
+        FlexParentData, MultiChildLayoutParentData, SliverMultiBoxAdaptorParentData,
+        StackParentData, TableCellParentData,
+    },
     pipeline::{Idle, PipelineOwner},
     protocol::{BoxProtocol, SliverProtocol},
     testing::parent_data::ParentDataSeed,
@@ -51,6 +55,22 @@ pub struct TreeNode {
     /// `perform_layout` (stack positioning, flex factor, …).
     parent_data_seed: Option<ParentDataSeed>,
     children: Vec<TreeNode>,
+}
+
+impl std::fmt::Debug for TreeNode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // `payload` boxes a type-erased render object with no Debug bound;
+        // report the protocol tag plus the spec metadata.
+        let protocol = match self.payload {
+            NodePayload::Box(_) => "Box",
+            NodePayload::Sliver(_) => "Sliver",
+        };
+        f.debug_struct("TreeNode")
+            .field("protocol", &protocol)
+            .field("label", &self.label)
+            .field("children", &self.children)
+            .finish_non_exhaustive()
+    }
 }
 
 /// Creates a Box-protocol node from any concrete `RenderBox`-derived render
@@ -137,6 +157,36 @@ impl TreeNode {
     pub fn with_flex_parent_data(self, data: FlexParentData) -> Self {
         self.with_parent_data_seed(ParentDataSeed::Flex(data))
     }
+
+    /// Convenience wrapper for [`MultiChildLayoutParentData`] on
+    /// [`RenderCustomMultiChildLayoutBox`] children.
+    ///
+    /// [`RenderCustomMultiChildLayoutBox`]: crate::traits::RenderBox
+    #[must_use]
+    pub fn with_multi_child_layout_parent_data(self, data: MultiChildLayoutParentData) -> Self {
+        self.with_parent_data_seed(ParentDataSeed::MultiChildLayout(data))
+    }
+
+    /// Convenience wrapper for [`SliverMultiBoxAdaptorParentData`] on
+    /// [`RenderSliverList`] / [`RenderSliverListLazy`] children.
+    ///
+    /// Stamps the logical `index` onto the child before layout so the
+    /// virtualizer band walk can discover it in `logical_to_slot` and treat
+    /// it as a pre-existing resident.
+    ///
+    /// [`RenderSliverList`]: crate::traits::RenderSliver
+    #[must_use]
+    pub fn with_sliver_multi_box_parent_data(self, data: SliverMultiBoxAdaptorParentData) -> Self {
+        self.with_parent_data_seed(ParentDataSeed::SliverMultiBoxAdaptor(data))
+    }
+
+    /// Convenience wrapper for [`TableCellParentData`] on [`RenderTable`] children.
+    ///
+    /// [`RenderTable`]: crate::traits::RenderBox
+    #[must_use]
+    pub fn with_table_parent_data(self, data: TableCellParentData) -> Self {
+        self.with_parent_data_seed(ParentDataSeed::Table(data))
+    }
 }
 
 /// Maps `&'static str` labels to the `RenderId`s minted while mounting a
@@ -153,9 +203,10 @@ impl RenderLabelRegistry {
     /// Records a label -> id mapping, panicking on a duplicate label (a
     /// duplicate is a test-authoring bug, not a runtime condition).
     fn record(&mut self, label: &'static str, id: RenderId) {
-        if self.by_label.insert(label, id).is_some() {
-            panic!("duplicate node label in test tree: {label:?}");
-        }
+        assert!(
+            self.by_label.insert(label, id).is_none(),
+            "duplicate node label in test tree: {label:?}"
+        );
     }
 
     /// Returns the id for `label`, if one was registered.
@@ -202,8 +253,7 @@ fn mount_child(
             .insert_child_render_object(parent_id, render_object)
             .expect("Box child insert must succeed: the parent id was just inserted and is valid"),
         NodePayload::Sliver(render_object) => owner
-            .render_tree_mut()
-            .insert_sliver_child(parent_id, render_object)
+            .insert_sliver_child_render_object(parent_id, render_object)
             .expect(
                 "Sliver child insert must succeed: the parent id was just inserted and is valid",
             ),

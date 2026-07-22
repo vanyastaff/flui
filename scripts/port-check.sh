@@ -1,16 +1,26 @@
 #!/usr/bin/env bash
 # scripts/port-check.sh
 #
-# Verifies the 18 refusal triggers (1-18, with #9 numbered for FR-036)
+# Verifies the 22 refusal triggers (1-22, with #9 numbered for FR-036)
 # documented in docs/PORT.md against the workspace, plus the FR-033
-# sanctioned-dyn-boundary check. Exits non-zero on the first violation
-# outside the whitelist; prints the offending file:line and the trigger
-# ID. Triggers #8/#10/#11/#12/#13 added in D-block PR-C-3 §U41-U45
+# sanctioned-dyn-boundary check, the N-geom.U16 engine-glam boundary
+# guard, Cross.H2 canonical-type-home guards, the Cross.H3
+# live-BuildContext guard, and the Cross.H7 speculative scheduler surface
+# guard. Exits non-zero on the first violation outside the whitelist; prints
+# the offending file:line and the trigger ID.
+# Triggers
+# #8/#10/#11/#12/#13 added in D-block PR-C-3 §U41-U45
 # (architecture-correction-plan SP-1/SP-3/SP-4/SP-6/SP-8). Trigger #14
 # added by the N-geom polish pass §U12 (unit-barrier escape-hatch guard).
 # Triggers #15/#16/#17/#18 added in core-0a adversarial-reaudit PR-4 §U5
 # (println!/eprintln!/dbg! ban, module-level allow(unsafe_code) ban,
-# reinvented debug_assert_* ban, key.rs new_unchecked ban).
+# reinvented debug_assert_* ban, key.rs new_unchecked ban). Trigger #19
+# added in engine overhaul T9f (C4: Matrix4 must not appear on the
+# record/pipeline side; convert at the Backend trait boundary). Trigger #20
+# added in advanced-blend PR-5 (gradient/image producers must not regress
+# to SrcOver warn-fallback; deleted strings must not reappear). Trigger #21
+# added in Core.0 N10 (RasterBackend seam): lyon CODE must stay confined to
+# wgpu/tessellator.rs so the rendering backend stays swappable.
 #
 # Additionally reports the inline port-marker budget (TODO(port),
 # PERF(port), PORT NOTE) — markers are deliberate Phase B deferrals, NOT
@@ -21,7 +31,7 @@
 # docs/PORT.md "## Verification" for usage and rationale.
 #
 # Usage:
-#   bash scripts/port-check.sh             # check all 17 triggers; silent on pass
+#   bash scripts/port-check.sh             # check all 22 triggers + extra guards; silent on pass
 #   bash scripts/port-check.sh -v          # verbose: per-trigger pass + marker totals
 #   bash scripts/port-check.sh -b          # marker-budget mode (per-file breakdown)
 #   bash scripts/port-check.sh --verbose   # alias for -v
@@ -265,7 +275,8 @@ check "4" \
 # -----------------------------------------------------------------------------
 # Trigger 5 -- Arc::clone inside per-frame paint/composite loop.
 # Forward-looking. Scope:
-#   - flui-rendering/src/objects (per-render-object paint impls)
+#   - flui-objects/src (per-render-object paint impls; moved from
+#     flui-rendering/src/objects per ADR-0008)
 #   - flui-engine/src/wgpu/layer_render.rs (per-layer wgpu walk; extended in
 #     Mythos Step 13 of the flui-layer chain)
 #
@@ -297,7 +308,7 @@ check "5" \
   --type rust \
   --glob '!**/test*.rs' \
   --glob '!**/tests/**' \
-  crates/flui-rendering/src/objects \
+  crates/flui-objects/src \
   crates/flui-engine/src/wgpu/layer_render.rs
 
 # -----------------------------------------------------------------------------
@@ -420,6 +431,46 @@ else
 fi
 
 # -----------------------------------------------------------------------------
+# FR-033/widgets (ADR-0019 U4) — type-erased downcasts in the public widget
+# catalog.
+#
+# `Navigator::pop(result)` must erase its result through `Box<dyn Any + Send>`,
+# because a heterogeneous route stack cannot carry each route's `Output` type
+# (ADR-0019 §4). The downcast back to `R::Output` in `RouteRecord::did_complete`
+# is signed off in ADR-0019's *Public API and sign-off (U4)*.
+#
+# Before U4, `crates/flui-widgets` sat outside both FR-036 and FR-033, so that
+# boundary would have shipped with no gate at all. This grep closes it: any new
+# `downcast`/`downcast_ref`/`downcast_mut` in the catalog must be justified with
+# a `// PORT-CHECK-OK-DOWNCAST: <reason>` marker, i.e. a deliberate act.
+#
+# Registry addition (2026-07-16, Catalog.1 theming + localizations substrate):
+# `Localizations::maybe_of`/`build` (crates/flui-widgets/src/localization/
+# localizations.rs) downcast an `Arc<dyn Any + Send + Sync>` resource-map entry
+# back to the delegate-declared, caller-requested resource type — the same
+# heterogeneous-erasure shape as the ADR-0019 U4 boundary above (a
+# `Localizations` cannot be generic over every `LocalizationsDelegate::Resources`
+# type its delegate list carries and stay `dyn`-storable). Confined to that one
+# module, both call sites marked.
+# -----------------------------------------------------------------------------
+fr033w_hits=$(rg --line-number --column 'downcast(_ref|_mut)?::<' \
+  crates/flui-widgets/src 2>/dev/null \
+  | grep -Ev '//\s*PORT-CHECK-OK-DOWNCAST:' \
+  | grep -Ev ':\s*(//!|///|//)' \
+  || true)
+if [[ -n "${fr033w_hits}" ]]; then
+  echo "VIOLATION FR-033/widgets: unsanctioned downcast in crates/flui-widgets/src"
+  echo "see docs/PORT.md (FR-033/widgets) — mark the site with // PORT-CHECK-OK-DOWNCAST: <reason>"
+  echo "${fr033w_hits}"
+  echo ""
+  violations=$((violations + 1))
+else
+  if [[ "${verbose}" -eq 1 ]]; then
+    echo "ok    FR-033/widgets: downcast in flui-widgets (Navigator pop-result + localizations resource-map boundaries only)"
+  fi
+fi
+
+# -----------------------------------------------------------------------------
 # Trigger 8 (D-block PR-C-3 §U41, architecture-correction-plan SP-1) —
 # stubbed-but-called functions.
 #
@@ -479,11 +530,16 @@ trigger8_raw=$(rg --line-number --column \
 trigger8_hits=""
 while IFS= read -r match_line; do
   [[ -z "${match_line}" ]] && continue
-  match_file=$(echo "${match_line}" | awk -F':' '{print $1}' | tr '\\' '/')
-  match_lineno=$(echo "${match_line}" | awk -F':' '{print $2}')
+  # Bash parameter expansion — zero subprocesses (replaces echo|awk|tr, echo|awk).
+  match_file="${match_line%%:*}"
+  match_file="${match_file//\\//}"
+  _rest="${match_line#*:}"
+  match_lineno="${_rest%%:*}"
   [[ -z "${match_file}" || -z "${match_lineno}" ]] && continue
-  if head -n "${match_lineno}" "${match_file}" 2>/dev/null \
-      | grep -qE '^[[:space:]]*#\[cfg\(test\)\][[:space:]]*$'; then
+  # Single awk call (replaces head|grep pipeline).
+  if awk -v maxn="${match_lineno}" \
+      'NR>maxn{exit} /^[[:space:]]*#\[cfg\(test\)\][[:space:]]*$/{found=1; exit} END{exit !found}' \
+      "${match_file}" 2>/dev/null; then
     continue
   fi
   trigger8_hits="${trigger8_hits}${match_line}
@@ -544,25 +600,36 @@ trigger10_defs_raw=$(rg --line-number --no-heading \
 # on the same line OR on the preceding line OR on either of the next
 # 2 lines (rustfmt moves trailing same-line markers on block-opening
 # decls like `pub enum Foo {` into the block body as the first
-# non-blank line). For each candidate line, fetch the surrounding
-# ±2-line window and check if any line carries the marker.
-trigger10_defs=""
-while IFS= read -r raw_line; do
-  [[ -z "${raw_line}" ]] && continue
-  file_part=$(echo "${raw_line}" | awk -F':' '{print $1}')
-  line_part=$(echo "${raw_line}" | awk -F':' '{print $2}')
-  # Normalize backslash → forward slash for sed path arg.
-  file_norm=$(echo "${file_part}" | tr '\\' '/')
-  [[ -z "${file_norm}" || -z "${line_part}" ]] && continue
-  start=$(( line_part - 1 ))
-  [[ "${start}" -lt 1 ]] && start=1
-  end=$(( line_part + 2 ))
-  window=$(sed -n "${start},${end}p" "${file_norm}" 2>/dev/null || true)
-  if ! echo "${window}" | grep -q 'PORT-CHECK-OK-SP3:'; then
-    trigger10_defs="${trigger10_defs}${raw_line}
-"
-  fi
-done <<< "${trigger10_defs_raw}"
+# non-blank line).
+# Optimised: one rg call collects all SP3 markers; one awk pass filters
+# defs via a single pipe (no process substitution — <() is ~7s each on
+# Windows Git Bash; {} | awk costs one fork total instead of two
+# <() forks). Window −1..+2 expanded at marker-load time → O(1) lookup.
+trigger10_sp3_markers=$(rg --line-number --no-heading 'PORT-CHECK-OK-SP3:' \
+    --type rust \
+    --glob '!**/tests/**' \
+    --glob '!**/test*.rs' \
+    --glob '!examples/**' \
+    crates/ 2>/dev/null || true)
+trigger10_defs=$(
+  { printf '%s\n' "${trigger10_sp3_markers}"; printf '%s\n' '---T10SPLIT---'; printf '%s\n' "${trigger10_defs_raw}"; } | \
+  awk -F':' '
+  /^---T10SPLIT---$/ { past_split = 1; next }
+  !past_split {
+    if (NF < 2) next
+    fp = $1; gsub(/\\/, "/", fp)
+    ln = int($2)
+    # Marker at M sanctions def at lines [M-2, M+1] (window def-1..def+2).
+    for (d = -2; d <= 1; d++) covered[fp SUBSEP (ln + d)] = 1
+    next
+  }
+  {
+    if (NF < 2) next
+    fp = $1; gsub(/\\/, "/", fp)
+    ln = int($2)
+    if (!((fp SUBSEP ln) in covered)) print
+  }'
+)
 
 # Build a tab-separated index: crate \t kind \t name \t full-line.
 # **PR #151 Copilot review #3295220014:** Windows rg output uses `\`
@@ -612,6 +679,36 @@ else
 fi
 
 # -----------------------------------------------------------------------------
+# Cross.H2: historical parallel-type collapse must stay collapsed.
+#
+# Trigger 10 catches arbitrary duplicate pub struct/enum/trait names across
+# crates. These three were the concrete D-8 collisions that blocked the
+# framework spine: ViewKey, IndexedSlot, and TargetPlatform. Guard their
+# canonical homes explicitly so a future rename/reintroduction cannot drift
+# unnoticed behind a same-name duplicate scan.
+# -----------------------------------------------------------------------------
+check "Cross.H2/ViewKey" \
+  "ViewKey trait outside flui-foundation (canonical home is flui-foundation::ViewKey)" \
+  'pub\s+trait\s+ViewKey\b' \
+  --type rust \
+  --glob '!**/flui-foundation/src/key.rs' \
+  crates
+
+check "Cross.H2/IndexedSlot" \
+  "IndexedSlot struct outside flui-tree (canonical home is flui_tree::IndexedSlot)" \
+  'pub\s+struct\s+IndexedSlot\b' \
+  --type rust \
+  --glob '!**/flui-tree/src/iter/slot.rs' \
+  crates
+
+check "Cross.H2/TargetPlatform" \
+  "TargetPlatform enum outside flui-types (canonical home is flui_types::platform::TargetPlatform)" \
+  'pub\s+enum\s+TargetPlatform\b' \
+  --type rust \
+  --glob '!**/flui-types/src/platform/target_platform.rs' \
+  crates
+
+# -----------------------------------------------------------------------------
 # Trigger 11 (D-block PR-C-3 §U43, architecture-correction-plan SP-4) —
 # speculative scaffolding: `pub mod` family with zero production
 # consumers and not behind `cfg(feature = "unstable-*")`.
@@ -638,47 +735,55 @@ fi
 # -----------------------------------------------------------------------------
 trigger11_lib_files=$(rg --files --type rust --glob '**/lib.rs' --glob '!**/tests/**' --glob '!examples/**' crates/ 2>/dev/null || true)
 trigger11_violations=""
+# cfg-feature pattern used in backward scan below (stored once; bash =~ avoids echo|grep).
+_t11_cfg_feat_pat='#\[cfg\([^)]*feature[[:space:]]*=[[:space:]]*"(unstable-|testing)"'
 for libfile in ${trigger11_lib_files}; do
   # Extract crate name from path: crates/flui-X/src/lib.rs → flui-X → flui_X
-  # Normalize backslash → forward slash for Windows portability so awk
-  # field splitting on `/` always returns `flui-X` in field 2.
-  libfile_norm=$(echo "${libfile}" | tr '\\' '/')
-  crate_dir=$(echo "${libfile_norm}" | awk -F'/' '{print $2}')
-  crate_underscore=$(echo "${crate_dir}" | tr '-' '_')
+  # Bash parameter expansion — zero subprocesses (replaces echo|tr, echo|awk, echo|tr).
+  libfile_norm="${libfile//\\//}"
+  _t11_tmp="${libfile_norm#*/}"        # strip leading component ("crates/")
+  crate_dir="${_t11_tmp%%/*}"          # keep only the crate directory name
+  crate_underscore="${crate_dir//-/_}"
+
+  # Preload lib.rs into an array for zero-fork backward scan.
+  mapfile -t _t11_lines < "${libfile}" 2>/dev/null || true
 
   # Find every `pub mod NAME;` line in lib.rs (declaration form, not block form).
   mod_lines=$(grep -nE '^[[:space:]]*pub[[:space:]]+mod[[:space:]]+[a-z_][a-z0-9_]*[[:space:]]*;' "${libfile}" 2>/dev/null || true)
   while IFS= read -r mod_line; do
     [[ -z "${mod_line}" ]] && continue
-    lineno=$(echo "${mod_line}" | awk -F':' '{print $1}')
-    content=$(echo "${mod_line}" | cut -d':' -f2-)
+    # Bash parameter expansion replaces echo|awk and echo|cut (zero forks).
+    lineno="${mod_line%%:*}"
+    content="${mod_line#*:}"
 
-    # Skip if marker present on the same line.
-    if echo "${content}" | grep -q 'PORT-CHECK-OK-SP4:'; then
+    # Skip if marker present on the same line (zero-fork string test).
+    if [[ "${content}" == *'PORT-CHECK-OK-SP4:'* ]]; then
       continue
     fi
 
-    # Extract mod name.
-    modname=$(echo "${content}" | sed -E 's/^[[:space:]]*pub[[:space:]]+mod[[:space:]]+([a-z_][a-z0-9_]*).*/\1/')
-    [[ -z "${modname}" ]] && continue
+    # Extract mod name via bash regex (zero forks; replaces echo|sed).
+    if [[ "${content}" =~ ^[[:space:]]*pub[[:space:]]+mod[[:space:]]+([a-z_][a-z0-9_]*) ]]; then
+      modname="${BASH_REMATCH[1]}"
+    else
+      continue
+    fi
 
     # Skip if previous non-blank line is `#[cfg(feature = "unstable-...")]`.
-    # **PR #151 Copilot review #3295220020 + Codex #3295220690:** the
-    # comment promises "previous non-blank line" but pre-fix only
-    # checked `lineno - 1`, so a blank separator between the cfg
-    # attribute and `pub mod` would false-positive. Scan backward
-    # until a non-blank line is found.
-    prev_lineno=$((lineno - 1))
+    # **PR #151 Copilot review #3295220020 + Codex #3295220690:** scan backward
+    # until a non-blank line is found (a blank separator between the attribute
+    # and `pub mod` must not cause a false-positive).
+    # Preloaded array eliminates per-line sed forks.
+    prev_lineno=$(( lineno - 1 ))
     prev_content=""
     while [[ "${prev_lineno}" -gt 0 ]]; do
-      prev_content=$(sed -n "${prev_lineno}p" "${libfile}")
-      # Strip whitespace; if non-empty, this is our target line.
+      prev_content="${_t11_lines[$((prev_lineno - 1))]}"
       if [[ -n "${prev_content// }" ]]; then
         break
       fi
-      prev_lineno=$((prev_lineno - 1))
+      prev_lineno=$(( prev_lineno - 1 ))
     done
-    if echo "${prev_content}" | grep -qE '#\[cfg\([^)]*feature[[:space:]]*=[[:space:]]*"(unstable-|testing)"'; then
+    # Bash =~ replaces echo|grep (zero forks).
+    if [[ "${prev_content}" =~ $_t11_cfg_feat_pat ]]; then
       continue
     fi
 
@@ -716,6 +821,28 @@ else
   fi
 fi
 
+# Cross.H7 — scheduler speculative-surface names must not leak back into the
+# canonical ticker/task docs or source. These identifiers belonged to deleted
+# parallel API experiments and are intentionally not feature-gated stable
+# surfaces. This raw check intentionally does NOT use `check()`, because H7
+# must also catch public Rust doc comments (`//!` / `///`).
+cross_h7_pattern='\b(TypestateTicker|prelude_advanced|ScheduledTicker|TypedTask|VsyncDrivenScheduler|FrameHandle|TaskHandle|UserInputPriority|AnimationPriority|BuildPriority|IdlePriority|PriorityExt|FrameBudgetExt|FrameTimingExt|ToMilliseconds|ToSeconds)\b'
+cross_h7_hits=$(rg --line-number --column --no-heading "${cross_h7_pattern}" \
+  crates/flui-scheduler/src \
+  crates/flui-scheduler/README.md \
+  crates/flui-scheduler/CHANGELOG.md 2>/dev/null || true)
+if [[ -n "${cross_h7_hits}" ]]; then
+  echo "VIOLATION Cross.H7/flui-scheduler speculative surfaces: removed flui-scheduler speculative API names in scheduler source/docs"
+  echo "see ${trigger_doc} (trigger Cross.H7)"
+  echo "${cross_h7_hits}"
+  echo ""
+  violations=$((violations + 1))
+else
+  if [[ "${verbose}" -eq 1 ]]; then
+    echo "ok    Cross.H7/flui-scheduler speculative surfaces: removed flui-scheduler speculative API names in scheduler source/docs"
+  fi
+fi
+
 # -----------------------------------------------------------------------------
 # Trigger 12 (D-block PR-C-3 §U44, architecture-correction-plan SP-6) —
 # lock placement in public API.
@@ -749,22 +876,32 @@ trigger12_raw=$(rg --line-number --no-heading \
 # Same ±2 line marker-scan window as trigger #10 — rustfmt may move
 # trailing same-line markers on `pub fn ... -> ... {` block-openings
 # into the function body.
-trigger12_hits=""
-while IFS= read -r raw_line; do
-  [[ -z "${raw_line}" ]] && continue
-  file_part=$(echo "${raw_line}" | awk -F':' '{print $1}')
-  line_part=$(echo "${raw_line}" | awk -F':' '{print $2}')
-  file_norm=$(echo "${file_part}" | tr '\\' '/')
-  [[ -z "${file_norm}" || -z "${line_part}" ]] && continue
-  start=$(( line_part - 1 ))
-  [[ "${start}" -lt 1 ]] && start=1
-  end=$(( line_part + 2 ))
-  window=$(sed -n "${start},${end}p" "${file_norm}" 2>/dev/null || true)
-  if ! echo "${window}" | grep -q 'PORT-CHECK-OK-SP6:'; then
-    trigger12_hits="${trigger12_hits}${raw_line}
-"
-  fi
-done <<< "${trigger12_raw}"
+# Optimised: one rg call collects all SP6 markers; one awk pass via
+# single pipe (no process substitution; window −1..+2 at load time).
+trigger12_sp6_markers=$(rg --line-number --no-heading 'PORT-CHECK-OK-SP6:' \
+    --type rust \
+    --glob '!**/tests/**' \
+    --glob '!**/test*.rs' \
+    --glob '!examples/**' \
+    crates/ 2>/dev/null || true)
+trigger12_hits=$(
+  { printf '%s\n' "${trigger12_sp6_markers}"; printf '%s\n' '---T12SPLIT---'; printf '%s\n' "${trigger12_raw}"; } | \
+  awk -F':' '
+  /^---T12SPLIT---$/ { past_split = 1; next }
+  !past_split {
+    if (NF < 2) next
+    fp = $1; gsub(/\\/, "/", fp)
+    ln = int($2)
+    for (d = -2; d <= 1; d++) covered[fp SUBSEP (ln + d)] = 1
+    next
+  }
+  {
+    if (NF < 2) next
+    fp = $1; gsub(/\\/, "/", fp)
+    ln = int($2)
+    if (!((fp SUBSEP ln) in covered)) print
+  }'
+)
 
 if [[ -n "${trigger12_hits}" ]]; then
   echo 'VIOLATION 12: SP-6 lock placement in public API'
@@ -859,22 +996,32 @@ trigger14_raw=$(rg --line-number --no-heading \
   | grep -Ev ':\s*(//!|///|//)' \
   || true)
 
-trigger14_hits=""
-while IFS= read -r raw_line; do
-  [[ -z "${raw_line}" ]] && continue
-  file_part=$(echo "${raw_line}" | awk -F':' '{print $1}')
-  line_part=$(echo "${raw_line}" | awk -F':' '{print $2}')
-  file_norm=$(echo "${file_part}" | tr '\\' '/')
-  [[ -z "${file_norm}" || -z "${line_part}" ]] && continue
-  start=$(( line_part - 2 ))
-  [[ "${start}" -lt 1 ]] && start=1
-  end=$(( line_part + 2 ))
-  window=$(sed -n "${start},${end}p" "${file_norm}" 2>/dev/null || true)
-  if ! echo "${window}" | grep -q 'PORT-CHECK-OK-UNIT:'; then
-    trigger14_hits="${trigger14_hits}${raw_line}
-"
-  fi
-done <<< "${trigger14_raw}"
+# Optimised: one rg call collects all UNIT markers; one awk pass via
+# single pipe (trigger 14 window −2..+2, no process substitution).
+trigger14_unit_markers=$(rg --line-number --no-heading 'PORT-CHECK-OK-UNIT:' \
+    --type rust \
+    --glob '!**/tests/**' \
+    --glob '!**/test*.rs' \
+    crates/flui-geometry/src/ 2>/dev/null || true)
+trigger14_hits=$(
+  { printf '%s\n' "${trigger14_unit_markers}"; printf '%s\n' '---T14SPLIT---'; printf '%s\n' "${trigger14_raw}"; } | \
+  awk -F':' '
+  /^---T14SPLIT---$/ { past_split = 1; next }
+  !past_split {
+    if (NF < 2) next
+    fp = $1; gsub(/\\/, "/", fp)
+    ln = int($2)
+    # Trigger 14 window is −2..+2: marker at M sanctions def at M−2..M+2.
+    for (d = -2; d <= 2; d++) covered[fp SUBSEP (ln + d)] = 1
+    next
+  }
+  {
+    if (NF < 2) next
+    fp = $1; gsub(/\\/, "/", fp)
+    ln = int($2)
+    if (!((fp SUBSEP ln) in covered)) print
+  }'
+)
 
 if [[ -n "${trigger14_hits// /}" && -n "$(echo "${trigger14_hits}" | tr -d '[:space:]')" ]]; then
   echo 'VIOLATION 14: U12 unit-barrier escape hatch in flui-geometry (From<scalar>/cross-type f32 op/Float* alias)'
@@ -956,7 +1103,9 @@ fi
 # Categories (FR-029 sanctioning):
 #   #1 element-storage sub-traits: ElementBase, ElementBehavior,
 #      StatelessElementBase, StatefulElementBase, ProxyElementBase,
-#      InheritedElementBase, RenderElementBase
+#      InheritedElementBase, RenderElementBase, RootElementBase,
+#      ErrorElementBase (the last two: dedicated ElementKind::Root/Error
+#      variants for the render-tree root + error-boundary leaf — N5 Phase 1)
 #   #2 BoxedView dynamic-children: View, BoxedView, ViewObject
 #   #4 pipeline-owner type-erasure: Any
 #   #5 error chains + observer/animation + owned callback storage:
@@ -980,6 +1129,16 @@ fi
 #      perform_layout_raw API per-protocol.
 #   Pre-existing surfaces: ViewKey, BuildContext, Notification,
 #                          NotifiableElement, RenderObject, RenderObjectTrait
+#   ADR-0021 U4: `HeroTag(Arc<dyn ViewKey>)` in flui-widgets. A hero's tag is
+#   Flutter's `Object` tag (`heroes.dart:286-309`), compared with `==` and used as a
+#   map key. `ViewKey` is the framework's existing erased key trait and already
+#   provides `key_eq` / `key_hash`, so `HeroTag` derives its `Eq`/`Hash` from the
+#   trait and NEVER calls `ViewKey::as_any` — no downcast, so FR-033 is untouched.
+#   Registered under the pre-existing `ViewKey` surface rather than a new one.
+#   ADR-0021 §7n: `Hero::create_rect_tween` stores a user-provided
+#   `Box<dyn Animatable<Rect>>`, the same erased animation-transform boundary as
+#   Flutter's `CreateRectTween`. It is value-only (no tree access), Send+Sync, and the
+#   public test proves the flight samples it.
 #   Framework trait surfaces (gesture / focus / delegate / parent-data /
 #   clipper / binding patterns — widely-used reference shapes; their
 #   owned-storage uses sit on sanctioned FR-029 categories):
@@ -991,7 +1150,19 @@ fi
 #   through at deferred-insert apply, keeping the generic insert path parent-data-
 #   agnostic. Sanctioned by the same FR-029 #6 rationale as the *LayoutCtxErased
 #   erasure traits below.
-fr036_allowed='dyn\s+(\$crate::|[a-zA-Z_][a-zA-Z0-9_]*::)*(View|ViewKey|BuildContext|ElementBase|ElementBehavior|StatelessElementBase|StatefulElementBase|ProxyElementBase|InheritedElementBase|RenderElementBase|InheritedElementAccess|RenderObjectTrait|RenderObject|Listenable|Notification|NotifiableElement|WidgetsBindingObserver|Animation|BoxedView|ViewObject|Any|Error|GestureArenaMember|FocusTraversalPolicy|SliverGridDelegate|SingleChildLayoutDelegate|MultiChildLayoutDelegate|MultiChildLayoutContext|FlowDelegate|CustomPainter|ParentData|LogicalIndexParentData|CustomClipper|RendererBinding|HitTestable|Debug|Fn|FnMut|FnOnce|BoxLayoutCtxErased|SliverLayoutCtxErased)\b'
+#   Catalog.1 theming + localizations substrate (2026-07-16):
+#   ErasedLocalizationsDelegate — `Arc<dyn ErasedLocalizationsDelegate>` inside
+#   `BoxedLocalizationsDelegate` erases a `LocalizationsDelegate`'s associated
+#   `Resources` type so a `Localizations` widget's delegate list can be
+#   heterogeneous (same shape as `ErasedRoute` above: a `Localizations` cannot
+#   be generic over every delegate's resource type and stay `dyn`-storable).
+#   WidgetsLocalizations — `Box<dyn WidgetsLocalizations>` inside
+#   `BoxedWidgetsLocalizations` erases the concrete localized-resource
+#   implementor (`DefaultWidgetsLocalizations`, `flui-localizations`'
+#   `GlobalWidgetsLocalizations`) behind the trait every `Localizations::of`
+#   caller depends on — Flutter parity: `Localizations.of<WidgetsLocalizations>`
+#   is keyed by the abstract interface, never the concrete runtime class.
+fr036_allowed='dyn\s+(\$crate::|[a-zA-Z_][a-zA-Z0-9_]*::)*(View|ViewKey|BuildContext|ElementBase|ElementBehavior|StatelessElementBase|StatefulElementBase|ProxyElementBase|InheritedElementBase|RenderElementBase|RootElementBase|ErrorElementBase|InheritedElementAccess|RenderObjectTrait|RenderObject|Listenable|Notification|NotifiableElement|WidgetsBindingObserver|Animation|Animatable|BoxedView|ViewObject|Any|Error|GestureArenaMember|MonotonicClock|FocusTraversalPolicy|SliverGridDelegate|SingleChildLayoutDelegate|MultiChildLayoutDelegate|MultiChildLayoutContext|FlowDelegate|CustomPainter|ParentData|LogicalIndexParentData|CustomClipper|RendererBinding|HitTestable|Debug|Fn|FnMut|FnOnce|BoxLayoutCtxErased|SliverLayoutCtxErased|ChildManager|Future|Stream|ErasedRoute|NavigatorObserver|Simulation|ScrollPhysics|ImageProvider|ErasedLocalizationsDelegate|WidgetsLocalizations)\b'
 
 # Framework crates under enforcement.
 fr036_scope=(
@@ -1001,6 +1172,11 @@ fr036_scope=(
   crates/flui-engine/src
   crates/flui-rendering/src
   crates/flui-interaction/src
+  # ADR-0019 U4: the public `Navigator` erases its route stack behind
+  # `Box<dyn ErasedRoute>` and its observers behind `Arc<dyn NavigatorObserver>`.
+  # Before U4 this crate was outside every dyn/downcast gate, so those boundaries
+  # would have shipped unguarded. Both are now registered in the allowlist above.
+  crates/flui-widgets/src
 )
 
 # Reference-form prefix covering all four `&`/`&mut`/`&'a`/`&'a mut` shapes
@@ -1019,7 +1195,7 @@ fr036_hits=$(rg --line-number --column \
     "${fr036_scope[@]}" 2>/dev/null \
   | grep -Ev ':\s*(//!|///|//)' \
   | grep -Ev '//\s*PORT-CHECK-OK-DYN:' \
-  | grep -Ev 'Pin<\s*Box<\s*dyn\s+([a-zA-Z_][a-zA-Z0-9_]*::)*Future|Box<\s*dyn\s+([a-zA-Z_][a-zA-Z0-9_]*::)*Future|Box<\s*dyn\s+([a-zA-Z_][a-zA-Z0-9_]*::)*Iterator' \
+  | grep -Ev 'Pin<\s*Box<\s*dyn\s+([a-zA-Z_][a-zA-Z0-9_]*::)*(Future|Stream)|Box<\s*dyn\s+([a-zA-Z_][a-zA-Z0-9_]*::)*(Future|Stream)|Box<\s*dyn\s+([a-zA-Z_][a-zA-Z0-9_]*::)*Iterator' \
   | grep -Ev "${fr036_ref_prefix}Fn[A-Za-z]*\\s*[(<]|${fr036_ref_prefix}FnMut|${fr036_ref_prefix}FnOnce" \
   | grep -Ev "${fr036_allowed}" \
   || true)
@@ -1200,6 +1376,172 @@ else
 fi
 
 # -----------------------------------------------------------------------------
+# Trigger 19 (engine overhaul T9f; extended to the replay/ submodules in T10e) —
+# `Matrix4` in the DrawBatcher record side, `PipelineCache`/`PipelineBuilder`
+# (record/pipeline modules), or `GpuReplay` (replay/submit module).
+#
+# C4 rule: `Matrix4`↔glam conversions must happen at the `Backend` trait
+# boundary (crates/flui-engine/src/wgpu/backend.rs). The hot record path
+# (`batches/`), the pipeline-cache module (`pipelines.rs`), and the
+# replay/submit module (`replay/`) must be glam-only; importing or
+# accepting `Matrix4` in any of these leaks the flui-types coordinate type
+# into the GPU plumbing layer and breaks the seam contract established in
+# the engine overhaul spec (T9/T10 split). The replay side must stay
+# glam-only for the same reason as the record side: the `Matrix4`↔glam
+# conversion must not migrate into the GPU-emit path.
+#
+# Allowlist: none. The correct fix is always to extract the needed scalar
+# fields (translation, scale) at the caller in backend.rs / painter.rs and
+# pass primitives down.
+# -----------------------------------------------------------------------------
+trigger19_hits=$(rg --line-number --column '\bMatrix4\b' \
+    crates/flui-engine/src/wgpu/batches \
+    crates/flui-engine/src/wgpu/pipelines.rs \
+    crates/flui-engine/src/wgpu/replay 2>/dev/null \
+  | grep -Ev ':\s*(//!|///|//)' \
+  || true)
+
+if [[ -n "${trigger19_hits}" ]]; then
+  echo 'VIOLATION 19: Matrix4 in batches/, pipelines.rs, or replay/ (record/pipeline/replay side must be glam-only; convert at the trait boundary)'
+  echo "see ${trigger_doc} (trigger 19)"
+  echo "${trigger19_hits}"
+  echo ""
+  violations=$((violations + 1))
+else
+  if [[ "${verbose}" -eq 1 ]]; then
+    echo "ok    19: no Matrix4 in batches/, pipelines.rs, or replay/"
+  fi
+fi
+
+# -----------------------------------------------------------------------------
+# N-geom.U16: direct glam use in flui-engine is confined to the wgpu backend.
+#
+# Option D deliberately uses glam for GPU/painter hot-path math, but that policy
+# is an engine-edge policy, not a blanket license for higher engine modules to
+# reach around FLUI's typed geometry boundary. Keep direct `glam::...` and
+# `use glam...` code under `crates/flui-engine/src/wgpu/`; other engine modules
+# should speak FLUI geometry types or add a documented bridge.
+# -----------------------------------------------------------------------------
+check "N-geom.U16" \
+  "direct glam use outside flui-engine/src/wgpu (GPU math backend must stay at the engine edge)" \
+  '(^\s*use\s+glam\b|glam::)' \
+  --type rust \
+  --glob '!**/wgpu/**' \
+  crates/flui-engine/src
+
+# -----------------------------------------------------------------------------
+# Cross.H3: no `ElementBuildContext::new_minimal` resurrection in flui-view.
+#
+# Catalog theming depends on `build()` receiving a live tree-backed context:
+# inherited lookups, ancestor walks, and notification dispatch must see the
+# real ElementTree. The old `new_minimal` dummy context made those operations
+# silently return None/false during production builds. Tests should use
+# `ElementBuildContext::for_element` or drive `BuildOwner::build_scope`.
+# -----------------------------------------------------------------------------
+check "Cross.H3" \
+  "new_minimal BuildContext factory in flui-view source (builds must use live BuildCtx)" \
+  '\bnew_minimal\s*\(' \
+  --type rust \
+  crates/flui-view/src
+
+# -----------------------------------------------------------------------------
+# Trigger 20: no warn-fallback strings for gradient/image producers (PR-5)
+#
+# PR-5 deleted three warn-fallback blocks that previously made gradient and
+# image producers silently fall through to SrcOver for advanced blend modes.
+# If any of these strings reappear in batches/, renderer.rs, or backend.rs,
+# a producer has regressed to the fallback path and advanced blend will
+# silently produce wrong output for those draw calls.
+#
+# replay.rs is excluded: it legitimately uses similar language in its own
+# documentation and is never a producer (it is the replay/submit side).
+#
+# The runtime half of this gate is PipelineCache::get_or_create's
+# debug_assert!(!key.blend_mode().is_advanced(), …) which panics in GPU
+# tests if an advanced mode reaches the pipeline cache.
+# -----------------------------------------------------------------------------
+trigger20_hits=$(rg --line-number --column \
+    -e 'is not supported by the' \
+    -e 'rendering as SrcOver' \
+    crates/flui-engine/src/wgpu/batches \
+    crates/flui-engine/src/wgpu/renderer.rs \
+    crates/flui-engine/src/wgpu/backend.rs 2>/dev/null \
+  || true)
+
+if [[ -n "${trigger20_hits}" ]]; then
+  echo 'VIOLATION 20: gradient/image warn-fallback strings found in batches/, renderer.rs, or backend.rs'
+  echo '  These strings were deleted by PR-5; their reappearance signals a producer has regressed to SrcOver fallback.'
+  echo "see ${trigger_doc} (trigger 20)"
+  echo "${trigger20_hits}"
+  echo ""
+  violations=$((violations + 1))
+else
+  if [[ "${verbose}" -eq 1 ]]; then
+    echo "ok    20: no warn-fallback strings in batches/, renderer.rs, or backend.rs"
+  fi
+fi
+
+# -----------------------------------------------------------------------------
+# Trigger 21 (Core.0 N10 RasterBackend seam) — lyon confined to the wgpu
+# tessellator.
+#
+# The rendering-backend swap seam (CommandRenderer + the RasterBackend driver
+# trait) only stays non-breaking if the lyon tessellation library is an
+# *internal detail* of the wgpu backend, not a dependency the rest of the
+# engine reaches into. All lyon CODE use (`lyon::…`, `use lyon …`) must live in
+# `crates/flui-engine/src/wgpu/tessellator.rs`. A future Vello/software backend
+# does not tessellate to triangles at all; any `lyon::` outside the tessellator
+# couples the codebase to one rasterization strategy and breaks the seam.
+#
+# Doc-comment mentions ("…tessellated by lyon…") are fine and filtered out by
+# the shared doc-comment filter in `check`; only real code constructs match.
+# Allowlist: none — if a second site ever legitimately needs lyon, widen this
+# trigger's glob in the same PR with a documented reason. See
+# docs/designs/2026-06-30-rasterbackend-seam.md.
+# -----------------------------------------------------------------------------
+check "21" \
+  "lyon used outside wgpu/tessellator.rs (raster backend must stay swappable)" \
+  'lyon::|use\s+lyon\b' \
+  --type rust \
+  --glob '!**/tessellator.rs' \
+  crates/flui-engine/src
+
+# -----------------------------------------------------------------------------
+# Trigger 22 (ADR-0018 U1) — `rebuild_handle()` never acquired in a frame phase.
+#
+# A *frame capability* lets code reach into a frame from outside one:
+# `rebuild_handle()` (ADR-0018 U1) dirties an element for the next frame;
+# `post_frame_handle()` (ADR-0021 U2) queues work for the end of the current one.
+#
+# Acquiring either inside `build` and scheduling from it is an unbounded rebuild
+# loop, or a callback fired against the frame still running; inside
+# `perform_layout` / `paint` / compositing either would touch the tree after
+# `build_scope` has already run for this frame. FOUNDATIONS.md permits an
+# out-of-catalog `mark_needs_build` driver ONLY when "gated by a refusal trigger
+# barring signal subscriptions from `build`/`layout`/`paint`" — this is it.
+#
+# Sanctioned shape: acquire in `ViewState::init_state` /
+# `did_change_dependencies`, store it, fire it later from a callback.
+#
+# A line grep cannot express "inside a function body", so this trigger delegates
+# to a brace-depth scanner. Run `scripts/check-frame-capability-scope.sh
+# --self-test` to verify the scanner against its own accept/reject fixtures.
+# -----------------------------------------------------------------------------
+frame_capability_hits=$("${repo_root}/scripts/check-frame-capability-scope.sh" crates 2>/dev/null || true)
+if [[ -n "${frame_capability_hits}" ]]; then
+  echo "VIOLATION 22: a lifecycle-only frame capability (rebuild_handle / post_frame_handle)"
+  echo "             was acquired inside a build/layout/paint body (ADR-0018 U1, ADR-0021 U2)"
+  echo "see ${trigger_doc} (trigger 22)"
+  echo "${frame_capability_hits}"
+  echo ""
+  violations=$((violations + 1))
+else
+  if [[ "${verbose}" -eq 1 ]]; then
+    echo "ok    22: rebuild_handle()/post_frame_handle() acquired in build/layout/paint (must be a lifecycle hook)"
+  fi
+fi
+
+# -----------------------------------------------------------------------------
 # Summary
 # -----------------------------------------------------------------------------
 if [[ "${violations}" -gt 0 ]]; then
@@ -1208,7 +1550,7 @@ if [[ "${violations}" -gt 0 ]]; then
   exit 1
 fi
 
-echo "port-check: all 18 refusal triggers + FR-033 grep clean"
+echo "port-check: all 22 refusal triggers + FR-033 + FR-033/widgets + N-geom.U16 + Cross.H2 + Cross.H3 + Cross.H7 grep clean"
 
 # -----------------------------------------------------------------------------
 # Marker summary (verbose mode only). Non-blocking — markers are Phase B

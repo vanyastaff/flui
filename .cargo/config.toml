@@ -77,5 +77,18 @@ git-fetch-with-cli = false
 # Environment variables for build scripts
 # ═══════════════════════════════════════════════════════════════════════════════
 [env]
+# Disable incremental compilation workspace-wide.
+#
+# `sccache` (the configured `rustc-wrapper`) is fundamentally incompatible with
+# incremental builds — it caches whole crate-unit outputs and cannot cache the
+# per-CGU incremental artifacts, so it disables incremental anyway. On Windows the
+# `sccache` + incremental combination additionally crashes `rustc` with
+# STATUS_ACCESS_VIOLATION (0xc0000005) when building the heavier test binaries
+# (e.g. `flui-interaction --test`), blocking the local test gate. Pinning
+# `CARGO_INCREMENTAL=0` matches CI (which already sets it) and makes every local
+# build reliable under `sccache`. Not `force`d — a contributor without `sccache`
+# can still opt back in with `CARGO_INCREMENTAL=1 cargo ...` for faster rebuilds.
+CARGO_INCREMENTAL = "0"
+
 # Faster shader compilation for wgpu
 # WGPU_BACKEND = "vulkan"  # or "dx12" on Windows

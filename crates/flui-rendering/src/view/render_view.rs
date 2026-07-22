@@ -5,23 +5,11 @@ use std::sync::{Arc, Weak};
 
 use flui_foundation::{Diagnosticable, DiagnosticsBuilder};
 use flui_layer::TransformLayer;
-use flui_types::{Matrix4, Offset, Pixels, Rect, Size};
+use flui_types::{Matrix4, Pixels, Rect, Size};
 use parking_lot::RwLock;
 
 use super::ViewConfiguration;
-use crate::{
-    constraints::BoxConstraints,
-    // Cycle 4 U-4: `HitTestResult` is re-exported from
-    // `flui_interaction::routing` via `hit_testing::mod`; the import
-    // path stays the same but the underlying type is now the
-    // interaction-side canonical one. The previous `HitTestTarget` +
-    // `PointerEvent` imports were dropped here alongside the deletion
-    // of `impl HitTestTarget for RenderView`. PR #110 review feedback
-    // dropped `HitTestEntry` here too once the root-sentinel add went
-    // away.
-    hit_testing::HitTestResult,
-    pipeline::PipelineOwner,
-};
+use crate::{constraints::BoxConstraints, pipeline::PipelineOwner};
 
 /// The root of the render tree.
 ///
@@ -64,11 +52,11 @@ pub struct RenderView {
     /// allows the render view to reference the owner without preventing cleanup
     /// when the owner is dropped.
     owner: Option<Weak<RwLock<PipelineOwner>>>,
-    // Cycle 4 R-14: the 9-field `#[allow(dead_code)]` placeholder
-    // block (depth / needs_layout / needs_paint /
-    // needs_compositing_bits_update / needs_semantics_update /
-    // is_repaint_boundary / needs_compositing / cached_constraints /
-    // parent_data) was deleted. Workspace audit:
+    // A 9-field `#[allow(dead_code)]` placeholder block used to live here
+    // (depth / needs_layout / needs_paint / needs_compositing_bits_update /
+    // needs_semantics_update / is_repaint_boundary / needs_compositing /
+    // cached_constraints / parent_data). It was removed after an audit
+    // found none of the fields were pulling their weight:
     //   - 5 fields (needs_compositing_bits_update, needs_semantics_update,
     //     needs_compositing, cached_constraints, parent_data) had zero
     //     writes AND zero reads -- pure placeholders.
@@ -84,7 +72,7 @@ pub struct RenderView {
     // already carries the equivalent atomic flags via
     // `crates/flui-rendering/src/storage/flags.rs`).
     //
-    // U2 exemplar refactor note (preserved): the previous
+    // Exemplar refactor note (preserved): the previous
     // `was_repaint_boundary` field lived here as a mirror of the
     // (removed) `RenderObject::set_was_repaint_boundary` trait method.
     // The bit now lives on `RenderState<P>::flags` as
@@ -97,7 +85,7 @@ impl Debug for RenderView {
             .field("configuration", &self.configuration)
             .field("size", &self.size)
             .field("has_layer", &self.layer.is_some())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -153,25 +141,35 @@ impl RenderView {
     /// Sets the view configuration.
     ///
     /// This is typically called by the binding when the view is registered.
+    ///
+    /// # Flutter Protocol
+    ///
+    /// Mirrors `RenderView.configuration`'s setter (`.flutter/.../view.dart:173-186`):
+    /// the new configuration is installed *before* the root layer is
+    /// rebuilt, since rebuilding it reads the new configuration to compute
+    /// the updated matrix.
     pub fn set_configuration(&mut self, configuration: ViewConfiguration) {
-        let old_configuration = self.configuration.take();
-
-        if let Some(ref old) = old_configuration {
-            if old == &configuration {
-                self.configuration = old_configuration;
-                return;
-            }
-
-            // Check if we need to update the root transform
-            if self.root_transform.is_some() && configuration.should_update_matrix(old) {
-                self.replace_root_layer_internal();
-            }
+        if self.configuration.as_ref() == Some(&configuration) {
+            return;
         }
 
-        self.configuration = Some(configuration);
-        // Cycle 4 R-14: the previous `self.needs_layout = true` write
-        // here had zero readers. When RenderView's full lifecycle
-        // plumbing lands, the equivalent invalidation flips on
+        let old_configuration = self.configuration.replace(configuration);
+
+        if self.root_transform.is_none() {
+            // prepare_initial_frame has not been called yet — nothing more to do.
+            return;
+        }
+
+        let should_replace_layer = match &old_configuration {
+            None => true,
+            Some(old) => self.configuration().should_update_matrix(old),
+        };
+        if should_replace_layer {
+            self.replace_root_layer_internal();
+        }
+        // A `self.needs_layout = true` write used to happen here, but it had
+        // zero readers, so it was removed. When RenderView's full lifecycle
+        // plumbing lands, the equivalent invalidation should flip on
         // `RenderState<P>::flags::NEEDS_LAYOUT` (the atomic version
         // in `crates/flui-rendering/src/storage/flags.rs`).
     }
@@ -282,22 +280,23 @@ impl RenderView {
             "set a configuration before calling prepare_initial_frame"
         );
 
-        self.schedule_initial_layout_internal();
+        Self::schedule_initial_layout_internal();
         self.schedule_initial_paint_internal();
     }
 
-    fn schedule_initial_layout_internal(&mut self) {
-        // Cycle 4 R-14: the previous `self.needs_layout = true` write
-        // had zero readers. RenderState<P>::flags::NEEDS_LAYOUT is
-        // the load-bearing equivalent; the full plumbing lands when
-        // RenderView grows its own RenderState (or attaches to one).
+    fn schedule_initial_layout_internal() {
+        // A `self.needs_layout = true` write used to happen here, but it had
+        // zero readers, so it was removed. RenderState<P>::flags::NEEDS_LAYOUT
+        // is the load-bearing equivalent; the full plumbing lands when
+        // RenderView grows its own RenderState (or attaches to one) —
+        // at which point this becomes a `&mut self` method again.
     }
 
     fn schedule_initial_paint_internal(&mut self) {
         self.layer = Some(self.update_matrices_and_create_new_root_layer());
-        // Cycle 4 R-14: the previous `self.needs_paint = true` write
-        // had zero readers. RenderState<P>::flags::NEEDS_PAINT carries
-        // the live signal post-plumbing.
+        // A `self.needs_paint = true` write used to happen here, but it had
+        // zero readers, so it was removed. RenderState<P>::flags::NEEDS_PAINT
+        // carries the live signal post-plumbing.
     }
 
     /// Prepare the initial frame without requiring a PipelineOwner.
@@ -305,7 +304,7 @@ impl RenderView {
         if self.root_transform.is_some() {
             return;
         }
-        self.schedule_initial_layout_internal();
+        Self::schedule_initial_layout_internal();
         self.schedule_initial_paint_internal();
     }
 
@@ -330,8 +329,8 @@ impl RenderView {
             "RenderView size must be finite: {:?}",
             self.size
         );
-        // Cycle 4 R-14: the previous `self.needs_layout = false`
-        // clear had zero readers. The atomic flag lives on
+        // A `self.needs_layout = false` clear used to happen here, but it
+        // had zero readers, so it was removed. The atomic flag lives on
         // `RenderState<P>::flags::NEEDS_LAYOUT`; clearing it will
         // happen at the state-flip site when RenderView's lifecycle
         // plumbing wires up.
@@ -340,34 +339,6 @@ impl RenderView {
     // ========================================================================
     // Hit Testing
     // ========================================================================
-
-    /// Determines the set of render objects located at the given position.
-    ///
-    /// Mirrors Flutter's `RenderView.hitTest`: returns `true` because
-    /// the view covers the entire surface, then delegates to child
-    /// traversal to populate the result with real hit entries.
-    ///
-    /// # Why no root-sentinel entry
-    ///
-    /// PR #110 review feedback: the pre-fix body added
-    /// `result.add(HitTestEntry::new(RenderId::new(1)))` as a "root
-    /// sentinel" mirroring the pre-U-4 `HitTestEntry::new_render_view()`
-    /// shape. The `RenderId::new(1)` value collides with whichever
-    /// real render node gets slab index 0 (FLUI's
-    /// Slab-0-based + IDs-1-based convention), so the sentinel
-    /// masquerades as a real node ID and makes the dispatch path
-    /// ambiguous. Post-fix the function adds NO sentinel; the
-    /// post-U-4 interaction-side `HitTestResult` carries handler
-    /// closures on entries, so an entry-less result correctly
-    /// dispatches zero handlers (the previous trait-dispatch shape
-    /// the sentinel was load-bearing for is gone).
-    ///
-    /// Child-traversal that populates the result with real hit
-    /// entries lands when the RenderView → child-render-object
-    /// dispatch plumbing materializes (separate audit item).
-    pub fn hit_test(&self, _result: &mut HitTestResult, _position: Offset) -> bool {
-        true
-    }
 
     // ========================================================================
     // Painting
@@ -482,11 +453,6 @@ impl Diagnosticable for RenderViewAdapter {
     }
 }
 
-// Mythos Step 11: explicit (default) capability opt-outs.
-impl crate::traits::PaintEffectsCapability for RenderViewAdapter {}
-impl crate::traits::SemanticsCapability for RenderViewAdapter {}
-impl crate::traits::HotReloadCapability for RenderViewAdapter {}
-
 impl crate::protocol::RenderObject<crate::protocol::BoxProtocol> for RenderViewAdapter {
     fn perform_layout_raw(
         &mut self,
@@ -537,12 +503,13 @@ impl crate::protocol::RenderObject<crate::protocol::BoxProtocol> for RenderViewA
         &self,
         recorder: &mut crate::context::FragmentRecorder,
         child_count: usize,
-        _size: flui_types::Size,
+        size: flui_types::Size,
     ) {
         // Root pass-through: the view draws nothing itself and splices
-        // every child subtree in order — its own `_size` is unused.
+        // every child subtree in order — `size` is only forwarded to
+        // the child-painting context.
         let mut cx =
-            crate::context::PaintCx::<flui_tree::Variable>::new(recorder, child_count, _size);
+            crate::context::PaintCx::<flui_tree::Variable>::new(recorder, child_count, size);
         cx.paint_children();
     }
 
@@ -559,17 +526,17 @@ impl crate::protocol::RenderObject<crate::protocol::BoxProtocol> for RenderViewA
                      + Send
                      + Sync
              ),
-    ) -> bool {
+    ) -> crate::traits::HitTestOutcome {
         // Root pass-through: test children topmost-first (later
         // siblings paint on top). The view itself claims no hit — an
         // empty window region reports a miss instead of a phantom
         // root target.
         for index in (0..child_count).rev() {
             if hit_child(index, None) {
-                return true;
+                return crate::traits::HitTestOutcome::from_hit(true);
             }
         }
-        false
+        crate::traits::HitTestOutcome::miss()
     }
 
     fn is_repaint_boundary(&self) -> bool {
@@ -617,14 +584,15 @@ impl Diagnosticable for RenderView {
     }
 }
 
-// Cycle 4 U-4: `impl HitTestTarget for RenderView` was deleted. The
-// pre-cycle body was a no-op (`let _ = (event, entry);`) -- the view
-// implemented the trait only to satisfy the trait-dispatch shape
-// `flui_rendering::hit_testing::HitTestResult` required. Post-U-4 the
-// result type is the data-typed `flui_interaction::routing::HitTestResult`
-// where entries carry handler closures directly; no trait impl is
-// needed on RenderView. The `HitTestTarget` trait itself is U-5's
-// deletion target.
+// `impl HitTestTarget for RenderView` used to live here, but was deleted.
+// Its body was a no-op (`let _ = (event, entry);`) -- the view only
+// implemented the trait to satisfy the trait-dispatch shape that the
+// old rendering-side `flui_rendering::hit_testing::HitTestResult` type
+// required. Hit testing now produces the data-typed
+// `flui_interaction::routing::HitTestResult`, whose entries carry handler
+// closures directly, so no trait impl is needed on RenderView. The
+// `HitTestTarget` trait itself has since been removed entirely, since it
+// no longer had a production implementor.
 
 #[cfg(test)]
 mod tests {
@@ -658,11 +626,11 @@ mod tests {
         );
     }
 
-    // Cycle 4 R-14: tests for `is_repaint_boundary` and `depth`
-    // fields were removed alongside the field deletions -- the tests
-    // asserted the field VALUE (a literal `0` / `true`), not any
-    // behavior driven by the field. Both fields had zero production
-    // readers, so the assertions tested the test itself.
+    // Tests for the `is_repaint_boundary` and `depth` fields were removed
+    // alongside the field deletions above -- the tests asserted the field
+    // VALUE (a literal `0` / `true`), not any behavior driven by the field.
+    // Both fields had zero production readers, so the assertions tested
+    // the test itself.
 
     #[test]
     fn test_render_view_owner_is_none() {
@@ -690,5 +658,210 @@ mod tests {
 
         assert!((transform[0] - 2.0).abs() < 1e-6);
         assert!((transform[5] - 2.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn layer_accessors_are_none_before_and_some_after_initial_frame() {
+        let config = ViewConfiguration::from_size(Size::new(px(800.0), px(600.0)), 1.0);
+        let mut view = RenderView::with_configuration(config);
+
+        assert!(view.layer().is_none());
+        assert!(view.layer_mut().is_none());
+
+        view.prepare_initial_frame_internal();
+
+        assert!(view.layer().is_some());
+        assert!(view.layer_mut().is_some());
+    }
+
+    #[test]
+    fn set_configuration_is_noop_when_identical() {
+        let config = ViewConfiguration::from_size(Size::new(px(800.0), px(600.0)), 2.0);
+        let mut view = RenderView::with_configuration(config.clone());
+        view.prepare_initial_frame_internal();
+
+        // Setting an identical configuration must not panic, must not clear
+        // the already-established layer, and must preserve the config value.
+        view.set_configuration(config.clone());
+
+        assert_eq!(view.configuration(), &config);
+        assert!(view.layer().is_some());
+    }
+
+    #[test]
+    fn set_configuration_replaces_root_layer_when_device_pixel_ratio_changes() {
+        let config = ViewConfiguration::from_size(Size::new(px(800.0), px(600.0)), 2.0);
+        let mut view = RenderView::with_configuration(config);
+        view.prepare_initial_frame_internal();
+
+        let new_config = ViewConfiguration::from_size(Size::new(px(800.0), px(600.0)), 3.0);
+        view.set_configuration(new_config.clone());
+
+        assert_eq!(view.configuration(), &new_config);
+        assert!(view.layer().is_some());
+
+        // The replaced root layer must carry the NEW device pixel ratio, not
+        // the stale one from the original configuration.
+        let mut transform = Matrix4::identity();
+        view.apply_paint_transform(&mut transform);
+        assert!((transform[0] - 3.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn attach_detach_and_owner_liveness_lifecycle() {
+        use std::sync::Arc;
+
+        use parking_lot::RwLock;
+
+        use crate::pipeline::PipelineOwner;
+
+        let mut view = RenderView::new();
+        assert!(!view.has_owner());
+
+        let owner = Arc::new(RwLock::new(PipelineOwner::new()));
+        view.attach(&owner);
+        assert!(view.has_owner());
+
+        view.detach();
+        assert!(!view.has_owner());
+
+        // Re-attach, then drop the strong reference: the weak pointer must
+        // report no owner rather than upgrading to a dangling value.
+        view.attach(&owner);
+        assert!(view.has_owner());
+        drop(owner);
+        assert!(!view.has_owner());
+    }
+
+    #[test]
+    #[should_panic(expected = "attach the RenderView to a PipelineOwner")]
+    fn prepare_initial_frame_panics_without_owner() {
+        let config = ViewConfiguration::from_size(Size::new(px(800.0), px(600.0)), 1.0);
+        let mut view = RenderView::with_configuration(config);
+        view.prepare_initial_frame();
+    }
+
+    #[test]
+    #[should_panic(expected = "set a configuration")]
+    fn prepare_initial_frame_panics_without_configuration() {
+        use std::sync::Arc;
+
+        use parking_lot::RwLock;
+
+        use crate::pipeline::PipelineOwner;
+
+        let mut view = RenderView::new();
+        let owner = Arc::new(RwLock::new(PipelineOwner::new()));
+        view.attach(&owner);
+        view.prepare_initial_frame();
+    }
+
+    #[test]
+    #[should_panic(expected = "must only be called once")]
+    fn prepare_initial_frame_panics_on_second_call() {
+        use std::sync::Arc;
+
+        use parking_lot::RwLock;
+
+        use crate::pipeline::PipelineOwner;
+
+        let config = ViewConfiguration::from_size(Size::new(px(800.0), px(600.0)), 1.0);
+        let mut view = RenderView::with_configuration(config);
+        let owner = Arc::new(RwLock::new(PipelineOwner::new()));
+        view.attach(&owner);
+
+        view.prepare_initial_frame();
+        view.prepare_initial_frame();
+    }
+
+    #[test]
+    fn prepare_initial_frame_without_owner_is_idempotent() {
+        let config = ViewConfiguration::from_size(Size::new(px(800.0), px(600.0)), 2.0);
+        let mut view = RenderView::with_configuration(config);
+
+        view.prepare_initial_frame_without_owner();
+        let mut first_transform = Matrix4::identity();
+        view.apply_paint_transform(&mut first_transform);
+
+        // A second call must be a no-op (early return on `root_transform.is_some()`),
+        // not a silent re-bootstrap that could reset accumulated frame state.
+        view.prepare_initial_frame_without_owner();
+        let mut second_transform = Matrix4::identity();
+        view.apply_paint_transform(&mut second_transform);
+
+        assert_eq!(first_transform, second_transform);
+    }
+
+    #[test]
+    fn perform_layout_sizes_to_the_smallest_logical_constraint() {
+        let config = ViewConfiguration::from_size(Size::new(px(800.0), px(600.0)), 2.0);
+        let mut view = RenderView::with_configuration(config.clone());
+        view.prepare_initial_frame_internal();
+
+        view.perform_layout();
+
+        assert_eq!(view.size(), config.logical_constraints().smallest());
+    }
+
+    #[test]
+    fn physical_paint_bounds_scales_logical_size_by_device_pixel_ratio() {
+        let config = ViewConfiguration::from_size(Size::new(px(800.0), px(600.0)), 2.0);
+        let mut view = RenderView::with_configuration(config);
+        view.prepare_initial_frame_internal();
+        view.perform_layout();
+
+        let bounds = view.physical_paint_bounds();
+        assert_eq!(bounds.width(), view.size().width * 2.0);
+        assert_eq!(bounds.height(), view.size().height * 2.0);
+    }
+
+    #[test]
+    fn semantic_bounds_is_unscaled_before_root_transform_is_established() {
+        let config = ViewConfiguration::from_size(Size::new(px(800.0), px(600.0)), 2.0);
+        let mut view = RenderView::with_configuration(config);
+        // `size` is crate-visible; set it directly to probe the pre-bootstrap
+        // (no root transform yet) branch of `semantic_bounds` in isolation.
+        view.size = Size::new(px(100.0), px(50.0));
+
+        let bounds = view.semantic_bounds();
+        assert_eq!(bounds.width(), px(100.0));
+        assert_eq!(bounds.height(), px(50.0));
+    }
+
+    #[test]
+    fn semantic_bounds_scales_by_root_transform_once_established() {
+        let config = ViewConfiguration::from_size(Size::new(px(800.0), px(600.0)), 2.0);
+        let mut view = RenderView::with_configuration(config);
+        view.size = Size::new(px(100.0), px(50.0));
+        view.prepare_initial_frame_internal();
+
+        let bounds = view.semantic_bounds();
+        assert_eq!(bounds.width(), px(200.0));
+        assert_eq!(bounds.height(), px(100.0));
+    }
+
+    #[test]
+    fn composite_frame_reports_physical_and_logical_size() {
+        let config = ViewConfiguration::from_size(Size::new(px(800.0), px(600.0)), 2.0);
+        let mut view = RenderView::with_configuration(config);
+        view.prepare_initial_frame_internal();
+        view.perform_layout();
+
+        let result = view.composite_frame();
+
+        assert_eq!(result.logical_size, view.size());
+        assert_eq!(result.device_pixel_ratio, 2.0);
+        assert_eq!(
+            result.physical_size,
+            Size::new(view.size().width * 2.0, view.size().height * 2.0)
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "self.root_transform.is_some()")]
+    fn composite_frame_panics_before_initial_frame_is_prepared() {
+        let config = ViewConfiguration::from_size(Size::new(px(800.0), px(600.0)), 2.0);
+        let view = RenderView::with_configuration(config);
+        let _ = view.composite_frame();
     }
 }

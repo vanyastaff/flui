@@ -99,11 +99,11 @@ The C2 design document must specify **both** paths to equal depth — most real 
 
 ### C3 — Widget-authoring API: `impl IntoView`, derive, `bon`
 
-`View::build()` returns `impl IntoView`, never `Box<dyn View>` (the trait `IntoView` exists — verified at `crates/flui-view/src/view/into_view.rs`; the change is half-applied — doc-comments were updated to show `impl IntoView` but the signatures still return `Box<dyn View>`, verified at `crates/flui-view/src/view/stateful.rs:116`). A `#[derive(StatelessView)]` (or a coherent blanket impl) removes the hand-written `impl View` boilerplate. Many-field widget constructors use `bon` builders (the workspace's stated builder dependency, currently unused). This is the single most-touched public surface in the framework — it is the adoption metric. It needs its own design document.
+`StatelessView::build()` and `ViewState::build()` return `impl IntoView`, never `Box<dyn View>`. `IntoView` is the authoring bridge; `View::create_element()` returns the closed `ElementKind` storage enum, and the derive macros emit that boilerplate for ordinary stateless/stateful views. Many-field widget constructors use `bon` builders where the field surface is large enough to justify them. This is the single most-touched public surface in the framework — it is the adoption metric.
 
 ### C4 — `View` trait & element storage
 
-The `View` trait stays object-safe (the children machinery needs it) with **no lifetime parameter** on the public surface. Element storage moves from `Box<dyn ElementBase>` toward a **closed `enum ElementNode`** over the finite element-behavior set (Stateless/Stateful/Proxy/Inherited/Render/Animation) — so reconciliation `match`es instead of vtable-dispatching, and the runtime `downcast_ref::<V>()` in the update path becomes a typed match arm. `Downcast`/`DynClone` leave the public bound surface where possible. Co-designed with C6.
+The `View` trait stays object-safe (the children machinery needs it) with **no lifetime parameter** on the public surface. Element storage is slab-backed `ElementNode` carrying the closed `ElementKind` enum over the finite element families (Stateless/Stateful/Proxy/Inherited/Notification/Render/Root/Error, with animation and parent-data folded into their host families). Reconciliation and lifecycle drive the `ElementBase` surface through this closed storage boundary; the runtime `downcast_ref::<V>()` update path is replaced by typed dispatch guarded by port-check. Co-designed with C6.
 
 ### C5 — `BuildContext`: callback-form, no lifetime, single-threaded
 
@@ -131,28 +131,28 @@ Concrete types are preserved from `View::build()`'s return value down to the `Sl
 
 ## Part IV — The target crate decomposition
 
-The workspace is healthier than its 21-crate count suggests: **19 of 21 crates are deep modules** (substantial complexity behind a small interface — Ousterhout's keep criterion). One earlier concern is already closed: `flui-tree`'s speculative `visitor`/`diff`/`cursor` surface (~10k LOC of zero-consumer scaffolding) was deleted in Cycle 3 — the crate is now lean, and its surviving unified `TreeRead`/`TreeNav`/`TreeWrite` trait trio is consumed by every production tree. The decomposition needs **two structural changes and one documentation fix**, not a churn.
+The workspace is healthier than its crate count suggests: most crates are deep modules (substantial complexity behind a small interface — Ousterhout's keep criterion). Several earlier structural do-nows have already landed: `flui-geometry` is split from `flui-types`, standalone `flui-log` is gone, `flui-objects` and `flui-widgets` exist, and `flui-animation` is active again. The remaining decomposition work is targeted, not churn.
 
-**Changes from the current workspace:**
+**Changes still ahead from the current workspace:**
 
-- **Split `flui-types`.** At 36k LOC it spans two unrelated domains. Extract **`flui-geometry`** (L0, ~19k LOC — the entire `geometry/` family: typed units, `Point`/`Rect`/`Matrix4`, Bézier, superellipse). The remainder stays `flui-types` (~17k — styling, painting-values, layout enums, typography, gestures, physics, platform). This localizes the compile-time blast radius and isolates a matrix-SIMD `unsafe` block currently in violation of Constitution Principle III.
-- **Merge `flui-log` into `flui-foundation`.** A 983-LOC `tracing` wrapper whose interface ≈ its implementation — a shallow crate. Its one real asset (per-platform log sinks) survives as `flui_foundation::log`. Removes ~20 dependency edges.
-- **Formalize the `flui` facade.** The root `flui` crate already exists (its `lib.rs` is currently parked as `src/lib.rs.disabled`) wired to eight crates — it predates the widget layer. Re-enable and re-scope it: narrow to the *public* surface, add `flui-widgets`/`flui-material`/`flui-cupertino` re-exports (feature-flagged) and a `flui::prelude` as those crates land. App authors depend on `flui`; framework authors depend on the granular crates.
+- **Formalize the `flui` facade.** Re-enable and re-scope the facade crate to the *public* surface, add `flui-widgets`/`flui-material`/`flui-cupertino` re-exports (feature-flagged), and provide a `flui::prelude` as those crates land. App authors depend on `flui`; framework authors depend on the granular crates.
+- **Create the design-system crates.** `flui-material` and `flui-cupertino` are terminal catalog crates built on top of `flui-widgets`.
+- **Create `flui-localizations`.** The shared l10n crate is a common ancestor both design-system siblings need; it implements `flui-widgets`' `Localizations`/`WidgetsLocalizations` mechanism (`l10n --> widgets`, added 2026-07-16 — see the amendment below the target graph) rather than defining a parallel one.
 
-**Four new crates** are created over the roadmap: `flui-widgets` (the user-facing catalog), `flui-material`, `flui-cupertino`, `flui-localizations` (shared l10n — a common ancestor the two design-system siblings both need). **No `flui-physics`** — Flutter's `physics` package is already ported into `flui-types/src/physics/`; this overrides the port-phasing research's proposal of a separate crate (~1k LOC of simulation math folded into `flui-types` is the correct shape — a standalone crate would be shallow). **No `flui-services`** — Flutter's `services` is deliberately dissolved; its residue (IME/text-input, system chrome, haptics) becomes capability traits on `flui-platform` (`PlatformTextInput`, `PlatformSystemChrome`, `PlatformHaptics`).
+**No `flui-physics`** — Flutter's `physics` package is already ported into `flui-types/src/physics/`; this overrides the port-phasing research's proposal of a separate crate (~1k LOC of simulation math folded into `flui-types` is the correct shape — a standalone crate would be shallow). **No `flui-services`** — Flutter's `services` is deliberately dissolved; its residue (IME/text-input, system chrome, haptics) becomes capability traits on `flui-platform` (`PlatformTextInput`, `PlatformSystemChrome`, `PlatformHaptics`).
 
-**Target — 24 library crates + 1 `flui` facade = 25 publishable units** (`flui-reactivity` is one of the 24, kept dormant and off the catalog dependency graph):
+**Target — current libraries plus the remaining catalog/l10n crates and the `flui` facade** (`flui-reactivity` is kept dormant and off the catalog dependency graph):
 
 | Layer | Crates |
 |---|---|
-| L0 — Foundation | **`flui-geometry`** (new), `flui-types`, `flui-reactivity` (dormant) |
-| L1 — Framework primitives | `flui-foundation` (absorbs `flui-log`) |
+| L0 — Foundation | `flui-geometry`, `flui-types`, `flui-reactivity` (dormant) |
+| L1 — Framework primitives | `flui-foundation`, `flui-macros` |
 | L2 — Substrate | `flui-tree`, `flui-platform`, `flui-scheduler`, `flui-painting`, `flui-interaction`, `flui-assets` |
 | L3 — Compositing / a11y / animation | `flui-semantics`, `flui-layer`, `flui-animation` |
 | L4 — Render machine | `flui-engine`, `flui-rendering` |
 | L5 — Framework spine + inspector | `flui-view`, `flui-devtools` |
-| L6 — Catalog + DX tooling | **`flui-widgets`** (new), **`flui-localizations`** (new), `flui-hot-reload`, `flui-cli`, `flui-build` |
-| L7 — Design systems | **`flui-material`** (new), **`flui-cupertino`** (new) |
+| L6 — Catalog + DX tooling | `flui-objects`, `flui-widgets`, `flui-binding`, `flui-localizations`, `flui-hot-reload`, `flui-cli`, `flui-build` |
+| L7 — Design systems | `flui-material`, `flui-cupertino` |
 | L8 — Application | `flui-app` |
 | Facade | **`flui`** (formalized) |
 
@@ -160,7 +160,8 @@ The workspace is healthier than its 21-crate count suggests: **19 of 21 crates a
 graph TD
     geometry[flui-geometry]
     types[flui-types]
-    foundation[flui-foundation +log]
+    foundation[flui-foundation]
+    macros[flui-macros]
     tree[flui-tree]
     platform[flui-platform +services-caps]
     scheduler[flui-scheduler]
@@ -172,12 +173,14 @@ graph TD
     animation[flui-animation]
     engine[flui-engine]
     rendering[flui-rendering]
+    objects[flui-objects]
     view[flui-view]
     devtools[flui-devtools]
-    widgets[flui-widgets NEW]
-    l10n[flui-localizations NEW]
-    material[flui-material NEW]
-    cupertino[flui-cupertino NEW]
+    widgets[flui-widgets]
+    binding[flui-binding]
+    l10n[flui-localizations]
+    material[flui-material]
+    cupertino[flui-cupertino]
     app[flui-app]
     facade[flui FACADE]
 
@@ -199,12 +202,21 @@ graph TD
     rendering --> layer
     rendering --> semantics
     rendering --> tree
+    rendering --> scheduler
+    objects --> rendering
+    objects --> painting
     view --> rendering
     devtools --> engine
     widgets --> view
+    widgets --> objects
     widgets --> animation
     widgets --> assets
+    binding --> view
+    binding --> rendering
+    binding --> interaction
+    binding --> animation
     l10n --> types
+    l10n --> widgets
     material --> widgets
     material --> l10n
     cupertino --> widgets
@@ -216,6 +228,12 @@ graph TD
     facade --> material
     facade --> widgets
 ```
+
+`rendering --> scheduler` (added 2026-07-14): `flui-rendering::view::ScrollPosition` names `flui_scheduler::PostFrameHandle` for its coalesced content-dimension-flush notify (a post-frame callback that fires a scroll listener after `RenderViewport::perform_layout` commits extents, instead of notifying mid-layout). `flui-scheduler` is L2 (Substrate) and depends only on `flui-foundation`, so this is a same-direction extension of the existing `animation --> scheduler` (L3) edge, not a new direction — `flui-rendering` (L4) gains a second, lower-layer dependency, no cycle.
+
+`l10n --> widgets` (added 2026-07-16): the target graph originally drew `l10n --> types` only — `flui-localizations` depending exclusively on the foundation value types, with no concrete consumer yet. Landing the Catalog.1 theming + localizations substrate gave it one: `flui-widgets` now owns the mechanism (`Localizations`, `LocalizationsDelegate`, the `WidgetsLocalizations` trait, `Directionality`) per Flutter's own layering (`widgets/localizations.dart` lives in the `widgets` package, and `flutter_localizations` depends on `widgets`, not the reverse), and `flui-localizations::GlobalWidgetsLocalizations` is a `WidgetsLocalizations` implementor — it must depend on the crate that defines the trait. This is a genuinely new edge (L6 `l10n` gains an L6 sibling dependency on `widgets`, not just its existing L0 `types` dependency), not a same-direction extension like `rendering --> scheduler` above; it does not create a cycle because nothing in `widgets`, `objects`, `view`, `animation`, or `assets` depends on `l10n`. `material`/`cupertino --> l10n` (already in the target graph) still holds: they depend on both `widgets` and `l10n`, and `l10n` itself now depends on `widgets` too — no cycle, since `material`/`cupertino` never appear on `l10n`'s or `widgets`'s dependency side.
+
+No new edge, but a new guarantee (added 2026-07-16): the `L7 --> L6` direction every `material -->`/`cupertino -->` edge above already draws (design systems depend on the widget catalog, never the reverse) is now a CI-enforced contract, not just a diagram — [ADR-0028](adr/ADR-0028-design-system-decoupling-contract.md) (design-system decoupling contract), guarded by `scripts/check-workspace-inventory.sh`/`just inventory-check`. Any crate below L7 that adds a dependency on `flui-material`/`flui-cupertino` fails CI immediately.
 
 The DAG is acyclic and downward-correct. The Constitution **v2.3.0** layer table reflects the pre-PR-C-2 layering snapshot (geometry was in `flui-types`; since [PR #138](https://github.com/vanyastaff/flui/pull/138) it lives in the dedicated `flui-geometry` crate and is re-exported via `flui_types::geometry::*` for compatibility — edition 2024 / Rust 1.96, accurate workspace member list otherwise); the **target graph above** is the forward-looking Part IV decomposition that Part V's roadmap migrates the workspace toward. The constitution remains "current state, locked"; this document is "target state, in progress." Full reasoning and the ordered migration delta: [`research/2026-05-22-crate-decomposition-redesign.md`](research/2026-05-22-crate-decomposition-redesign.md).
 

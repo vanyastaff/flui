@@ -203,6 +203,7 @@ pub trait Along {
 /// assert_eq!(width.half(), px(50.0));
 /// ```
 pub trait Half {
+    /// Returns half of this value.
     #[must_use]
     fn half(self) -> Self;
 }
@@ -262,6 +263,7 @@ impl Half for DevicePixels {
 /// assert_eq!(width.double(), px(100.0));
 /// ```
 pub trait Double {
+    /// Returns double of this value.
     #[must_use]
     fn double(self) -> Self;
 }

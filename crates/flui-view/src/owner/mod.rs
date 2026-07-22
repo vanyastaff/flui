@@ -9,6 +9,15 @@
 
 mod build_owner;
 mod element_owner;
+mod layout_builder;
+mod rebuild_handle;
 
 pub use build_owner::BuildOwner;
+pub use rebuild_handle::RebuildHandle;
+// Internal scheduling handle — `pub(crate)`: captured by `ElementCore` at mount,
+// no public consumer. See `ExternalBuildScheduler`.
+pub(crate) use build_owner::ExternalBuildScheduler;
 pub use element_owner::ElementOwner;
+// Build-time live-tree handle carried on `ElementOwner` during a
+// `build_scope` drain (PR-K). Crate-internal.
+pub(crate) use element_owner::BuildHandle;

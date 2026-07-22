@@ -5,13 +5,13 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-// Cycle 4 E-7 (extended): `bytemuck::{Pod, Zeroable}` imports
-// dropped alongside the deletion of the 5 dead uniform helpers (see
-// comment block above the `#[cfg(test)] mod tests` declaration).
-// `Shader` is retained -- `ShaderType::from_shader` (live, 1
-// callsite in offscreen.rs) still pattern-matches on the enum
-// variants. `Color` is needed only by the test module below; it is
-// imported there under the same cfg gate so default builds skip it.
+// The `bytemuck::{Pod, Zeroable}` imports were dropped alongside the
+// deletion of the 5 dead uniform helpers (see comment block above
+// the `#[cfg(test)] mod tests` declaration). `Shader` is retained --
+// `ShaderType::from_shader` (live, 1 callsite in offscreen.rs) still
+// pattern-matches on the enum variants. `Color` is needed only by
+// the test module below; it is imported there under the same cfg
+// gate so default builds skip it.
 use flui_types::painting::Shader;
 use parking_lot::RwLock;
 
@@ -26,18 +26,18 @@ pub enum ShaderType {
     RadialGradientMask,
     /// Sweep (angular/conic) gradient mask shader
     SweepGradientMask,
-    /// Gaussian blur horizontal pass shader (compute)
-    GaussianBlurHorizontal,
-    /// Gaussian blur vertical pass shader (compute)
-    GaussianBlurVertical,
+    // GaussianBlurHorizontal / GaussianBlurVertical removed (gpu-image-filters
+    // Task 4): the orphaned compute `blur_horizontal/vertical.wgsl` were dead
+    // registrations (no `from_shader`/`get_or_compile_module` consumer); the
+    // ImageFilter::Blur path now uses the fragment `blur.wgsl` + `BlurPipeline`
+    // (embedded via `include_str!` directly, like morphology/mode/gamma).
     /// Dual Kawase blur downsample pass shader
     DualKawaseDownsample,
     /// Dual Kawase blur upsample pass shader
     DualKawaseUpsample,
-    /// Morphological dilate (max filter) shader
-    MorphDilate,
-    /// Morphological erode (min filter) shader
-    MorphErode,
+    // MorphDilate / MorphErode removed: morphology filters now use their own
+    // pipeline in `morphology/pipeline.rs` (MorphologyPipeline) and embed
+    // their WGSL via `include_str!` directly — not through ShaderCache.
 }
 
 impl ShaderType {
@@ -48,20 +48,12 @@ impl ShaderType {
             ShaderType::LinearGradientMask => include_str!("shaders/masks/linear_gradient.wgsl"),
             ShaderType::RadialGradientMask => include_str!("shaders/masks/radial_gradient.wgsl"),
             ShaderType::SweepGradientMask => include_str!("shaders/masks/sweep_gradient.wgsl"),
-            ShaderType::GaussianBlurHorizontal => {
-                include_str!("shaders/effects/blur_horizontal.wgsl")
-            }
-            ShaderType::GaussianBlurVertical => {
-                include_str!("shaders/effects/blur_vertical.wgsl")
-            }
             ShaderType::DualKawaseDownsample => {
                 include_str!("shaders/effects/blur_downsample.wgsl")
             }
             ShaderType::DualKawaseUpsample => {
                 include_str!("shaders/effects/blur_upsample.wgsl")
             }
-            ShaderType::MorphDilate => include_str!("shaders/effects/dilate.wgsl"),
-            ShaderType::MorphErode => include_str!("shaders/effects/erode.wgsl"),
         }
     }
 
@@ -72,12 +64,8 @@ impl ShaderType {
             ShaderType::LinearGradientMask => "Linear Gradient Mask Shader",
             ShaderType::RadialGradientMask => "Radial Gradient Mask Shader",
             ShaderType::SweepGradientMask => "Sweep Gradient Mask Shader",
-            ShaderType::GaussianBlurHorizontal => "Gaussian Blur Horizontal Shader",
-            ShaderType::GaussianBlurVertical => "Gaussian Blur Vertical Shader",
             ShaderType::DualKawaseDownsample => "Dual Kawase Downsample",
             ShaderType::DualKawaseUpsample => "Dual Kawase Upsample",
-            ShaderType::MorphDilate => "Morphological Dilate Shader",
-            ShaderType::MorphErode => "Morphological Erode Shader",
         }
     }
 
@@ -256,30 +244,30 @@ impl Default for ShaderCache {
     }
 }
 
-// Cycle 4 E-7 (extended): the 5 forward-looking uniform helpers
-// (`SolidMaskUniforms`, `LinearGradientUniforms`,
-// `RadialGradientUniforms`, `SweepGradientUniforms`, and the
-// `create_uniforms_from_shader` dispatcher) were deleted alongside
-// dropping the module-level `#[allow(dead_code)]` mask. The 4
-// `*Uniforms` structs existed only to be constructed from
-// `create_uniforms_from_shader`, which itself had zero workspace
-// consumers -- the shader-mask integration that was supposed to
-// drive them never materialized. When that integration lands it
-// will define its own uniform buffer shapes inline next to the
-// concrete bind-group layout consumer, not as forward-bait helpers.
+// The 5 forward-looking uniform helpers (`SolidMaskUniforms`,
+// `LinearGradientUniforms`, `RadialGradientUniforms`,
+// `SweepGradientUniforms`, and the `create_uniforms_from_shader`
+// dispatcher) were deleted alongside dropping the module-level
+// `#[allow(dead_code)]` mask. The 4 `*Uniforms` structs existed only
+// to be constructed from `create_uniforms_from_shader`, which itself
+// had zero workspace consumers -- the shader-mask integration that
+// was supposed to drive them never materialized. When that
+// integration lands it will define its own uniform buffer shapes
+// inline next to the concrete bind-group layout consumer, not as
+// forward-bait helpers.
 //
-// PR #112 review fix: the previous version of this comment block
-// had three orphan attributes above it -- `/// Uniform data for
-// solid mask shader`, `#[repr(C)]`, `#[derive(Debug, Clone, Copy,
-// Pod, Zeroable)]` -- left behind when `SolidMaskUniforms` was
+// A later review fix caught that the previous version of this
+// comment block had three orphan attributes above it -- `/// Uniform
+// data for solid mask shader`, `#[repr(C)]`, `#[derive(Debug, Clone,
+// Copy, Pod, Zeroable)]` -- left behind when `SolidMaskUniforms` was
 // deleted. Under `--features enable-wgpu-tests` those attributes
 // attached to the `mod tests` declaration below (where `#[derive]`
 // is not valid + `Pod`/`Zeroable` are no longer in scope) and
 // blocked compilation. Removed.
 #[cfg(all(test, feature = "enable-wgpu-tests"))]
 mod tests {
-    // Cycle 4 PR #112 review fix: `Color` was dropped from the
-    // file-level imports in the E-7 cleanup but the tests below
+    // `Color` was dropped from the file-level imports when the dead
+    // uniform helpers above were cleaned up, but the tests below
     // still reference `Color::WHITE` / `Color::RED` / etc. Bring
     // the import back here under the same cfg gate so default
     // builds skip it.
@@ -362,14 +350,13 @@ mod tests {
         assert_eq!(radial.shader_type, ShaderType::RadialGradientMask);
     }
 
-    // Cycle 4 PR #112 review fix: the 4 tests
-    // (`test_solid_mask_uniforms`, `test_linear_gradient_uniforms`,
-    // `test_radial_gradient_uniforms`, `test_create_uniforms_from_shader`)
-    // that exercised the deleted `SolidMaskUniforms` /
-    // `LinearGradientUniforms` / `RadialGradientUniforms` /
-    // `create_uniforms_from_shader` items were removed alongside the
-    // E-7 production-side deletion. The pre-fix commit landed the
-    // production deletion but left the test bodies referencing
-    // unresolved symbols -- only visible under
-    // `--features enable-wgpu-tests`.
+    // The 4 tests (`test_solid_mask_uniforms`,
+    // `test_linear_gradient_uniforms`, `test_radial_gradient_uniforms`,
+    // `test_create_uniforms_from_shader`) that exercised the deleted
+    // `SolidMaskUniforms` / `LinearGradientUniforms` /
+    // `RadialGradientUniforms` / `create_uniforms_from_shader` items
+    // were removed alongside the production-side deletion above. An
+    // earlier commit had landed the production deletion but left the
+    // test bodies referencing unresolved symbols -- only visible
+    // under `--features enable-wgpu-tests`.
 }

@@ -1,5 +1,5 @@
 //! DisplayList unit tests extracted from
-//! `crates/flui-painting/src/display_list/mod.rs` during Mythos chain U8.
+//! `crates/flui-painting/src/display_list/mod.rs` during the display-list module split.
 
 use std::sync::Arc;
 
@@ -134,12 +134,11 @@ fn nested_shader_mask_opacity_depth_saturates_without_overflow() {
 }
 
 // ============================================================================
-// Cycle 5 U10 — Paint interning proof
+// Paint interning proof
 //
-// The three tests below pin the per-Canvas Paint interning behaviour
-// added in U10 (origin R15, audit P-7). They depend only on the
-// public DrawCommand enum surface and on Arc identity, so they are
-// stable against future representational tweaks.
+// The three tests below pin the per-Canvas Paint interning behaviour.
+// They depend only on the public DrawCommand enum surface and on Arc
+// identity, so they are stable against future representational tweaks.
 // ============================================================================
 
 /// Helper: pull the `Arc<Paint>` out of a `DrawRect` command for

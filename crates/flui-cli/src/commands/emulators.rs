@@ -64,10 +64,8 @@ pub fn execute_list(platform_filter: Option<&str>) -> CliResult<()> {
 
     let mut emulators = Vec::new();
 
-    let show_android = platform_filter.is_none()
-        || platform_filter.is_some_and(|p| p.eq_ignore_ascii_case("android"));
-    let show_ios =
-        platform_filter.is_none() || platform_filter.is_some_and(|p| p.eq_ignore_ascii_case("ios"));
+    let show_android = platform_filter.is_none_or(|p| p.eq_ignore_ascii_case("android"));
+    let show_ios = platform_filter.is_none_or(|p| p.eq_ignore_ascii_case("ios"));
 
     if show_android {
         match list_android_avds() {

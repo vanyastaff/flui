@@ -1,30 +1,37 @@
-//! Brightness settings for theming
+//! [`Brightness`] — light/dark theme preference.
 
 use crate::styling::Color;
 
-#[derive(Default)]
+/// Whether the ambient theme is visually light or dark.
+///
+/// Mirrors Flutter's `Brightness` enum. Used by `MediaQueryData`
+/// (platform OS preference) and `ThemeData` (app-level override).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Brightness {
+    /// Light theme: dark text on a light background.
     #[default]
     Light,
-
-    /// Dark theme (light text on dark background)
+    /// Dark theme: light text on a dark background.
     Dark,
 }
 
 impl Brightness {
+    /// Returns `true` if this is `Brightness::Light`.
     #[must_use]
     #[inline]
     pub const fn is_light(&self) -> bool {
         matches!(self, Self::Light)
     }
 
+    /// Returns `true` if this is `Brightness::Dark`.
     #[must_use]
     #[inline]
     pub const fn is_dark(&self) -> bool {
         matches!(self, Self::Dark)
     }
 
+    /// Returns the opposite brightness (`Light` ↔ `Dark`).
     #[must_use]
     #[inline]
     pub const fn invert(&self) -> Self {
@@ -34,6 +41,8 @@ impl Brightness {
         }
     }
 
+    /// Returns the default background color for this brightness:
+    /// white for `Light`, near-black for `Dark`.
     #[must_use]
     #[inline]
     pub const fn background_color(&self) -> Color {
@@ -43,6 +52,8 @@ impl Brightness {
         }
     }
 
+    /// Returns the default foreground (text) color for this brightness:
+    /// black for `Light`, white for `Dark`.
     #[must_use]
     #[inline]
     pub const fn foreground_color(&self) -> Color {
@@ -52,6 +63,8 @@ impl Brightness {
         }
     }
 
+    /// Returns the default surface color (cards, sheets) for this
+    /// brightness: white for `Light`, dark gray for `Dark`.
     #[must_use]
     #[inline]
     pub const fn surface_color(&self) -> Color {
@@ -61,6 +74,10 @@ impl Brightness {
         }
     }
 
+    /// Returns the default shadow opacity for this brightness.
+    ///
+    /// Dark themes use a stronger shadow (0.4 vs 0.2) so elevation
+    /// stays legible against dark surfaces.
     #[must_use]
     #[inline]
     pub const fn shadow_opacity(&self) -> f32 {
@@ -70,6 +87,9 @@ impl Brightness {
         }
     }
 
+    /// Parses a brightness from `"light"` or `"dark"`, case-insensitively.
+    ///
+    /// Returns `None` for unrecognized input.
     #[must_use]
     #[inline]
     pub fn parse(s: &str) -> Option<Self> {
@@ -80,6 +100,8 @@ impl Brightness {
         }
     }
 
+    /// Returns the canonical lowercase name (`"light"` or `"dark"`),
+    /// the inverse of [`parse`](Self::parse).
     #[must_use]
     #[inline]
     pub const fn as_str(&self) -> &'static str {

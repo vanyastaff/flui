@@ -7,19 +7,26 @@
 //! - Child element relationships
 //! - RenderObject connections
 
+pub(crate) mod async_slot;
+pub(crate) mod child_manager;
+pub(crate) mod future_builder;
 mod inherited_access;
+pub(crate) mod layout_builder;
 mod lifecycle;
 mod notification;
 mod render_object_element;
 mod root;
+pub(crate) mod sliver_adaptor;
+pub(crate) mod sparse_children;
+pub(crate) mod stream_builder;
 
 // New generic infrastructure
 pub mod arity;
 pub mod behavior;
 pub(crate) mod behavior_commons;
-// `dispatch` is the only View-update routing path post-§U27. The
-// pre-FR-021 `feature = "legacy-downcast"` gate (Phase 1 §U8 /
-// KTD-4) is gone: `ElementCore::update_view` unconditionally
+// `dispatch` is the only View-update routing path. The
+// pre-FR-021 `feature = "legacy-downcast"` gate is gone:
+// `ElementCore::update_view` unconditionally
 // routes through `dispatch_view_update`, which performs a
 // `TypeId`-keyed dispatch + `Downcast::into_any` + `Box::downcast`
 // (no `downcast_ref::<V>()` pattern). The workspace-internal
@@ -38,16 +45,19 @@ pub use flui_tree::IndexedSlot;
 
 // Re-export commonly used arity and generic types
 pub use arity::{ElementArity, Leaf, Optional, Single, Variable};
+pub use async_slot::{InitialDataFactory, SnapshotBuilder};
 pub use behavior::{
-    AnimatedBehavior, ElementBehavior, InheritedBehavior, ProxyBehavior, RenderBehavior,
-    StatefulBehavior, StatelessBehavior,
+    AnimatedBehavior, ElementBehavior, InheritedBehavior, ParentDataBehavior, ProxyBehavior,
+    RenderBehavior, StatefulBehavior, StatelessBehavior,
 };
+pub use future_builder::{BoxedResultFuture, FutureBuilder, FutureBuilderState, FutureFactory};
 pub use generic::ElementCore;
 pub use inherited_access::InheritedElementAccess;
 pub use kind::{
-    AnimationListener, ElementKind, InheritedElementBase, ProxyElementBase, RenderElementBase,
-    StatefulElementBase, StatelessElementBase,
+    AnimationListener, ElementKind, InheritedElementBase, NotificationElementBase,
+    ProxyElementBase, RenderElementBase, StatefulElementBase, StatelessElementBase,
 };
+pub use layout_builder::LayoutBuilder;
 pub use lifecycle::Lifecycle;
 pub use notification::{
     DragEndNotification, DragStartNotification, FocusNotification, KeepAliveNotification,
@@ -56,6 +66,8 @@ pub use notification::{
 };
 pub use render_object_element::{RenderObjectElement, RenderSlot, RenderTreeRootElement};
 pub use root::{RootElement, RootElementImpl};
+pub use sliver_adaptor::{SliverGridLazy, SliverList};
+pub use stream_builder::{BoxedResultStream, StreamBuilder, StreamBuilderState, StreamFactory};
 pub use unified::Element;
 
 /// Slot describing a child element's position in its parent's children list.
@@ -122,3 +134,12 @@ pub type InheritedElement<V> = Element<V, Single, InheritedBehavior<V>>;
 /// Automatically subscribes to listenable changes and marks element dirty
 /// when the animation value changes.
 pub type AnimatedElement<V> = Element<V, Single, AnimatedBehavior<V>>;
+
+/// Parent-data element with a single child.
+///
+/// This is the element type created for views implementing `ParentDataView`
+/// (`Flexible`, `Expanded`, `Positioned`). It is a transparent proxy: it
+/// reconciles its wrapped child unchanged, and additionally surfaces the
+/// view's configured parent-data through `parent_data_config()` so the
+/// `ElementTree` insert/update seams can write it onto the child render node.
+pub type ParentDataElement<V> = Element<V, Single, ParentDataBehavior>;

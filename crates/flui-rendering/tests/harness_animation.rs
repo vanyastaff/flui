@@ -7,9 +7,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use flui_animation::{Animation, AnimationController};
+use flui_objects::{RenderColoredBox, RenderPadding};
 use flui_rendering::{
     constraints::BoxConstraints,
-    objects::{RenderColoredBox, RenderPadding},
     testing::{Probe, RenderTester, box_node},
 };
 use flui_scheduler::Scheduler;

@@ -2,22 +2,30 @@
 name = "flui-rendering"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 description = "Rendering layer for Flui framework"
 repository.workspace = true
+readme = "README.md"
 # Benches are declared explicitly below; disable auto-discovery so the shared
 # `benches/helpers.rs` module is not itself compiled as a standalone bench target.
 autobenches = false
 
 [dependencies]
-flui-types = { path = "../flui-types" }
-flui-painting = { path = "../flui-painting" }
-flui-interaction = { path = "../flui-interaction" }
-flui-foundation = { path = "../flui-foundation" }
-flui-tree = { path = "../flui-tree" }
-flui-layer = { path = "../flui-layer" }
-flui-semantics = { path = "../flui-semantics" }
+flui-types = { path = "../flui-types", version = "0.2.0" }
+flui-painting = { path = "../flui-painting", version = "0.2.0" }
+flui-interaction = { path = "../flui-interaction", version = "0.2.0" }
+flui-foundation = { path = "../flui-foundation", version = "0.2.0" }
+flui-tree = { path = "../flui-tree", version = "0.2.0" }
+flui-layer = { path = "../flui-layer", version = "0.2.0" }
+flui-semantics = { path = "../flui-semantics", version = "0.2.0" }
+# `ScrollPosition`'s coalesced post-frame flush (view/scroll_position.rs) names
+# `PostFrameHandle` — promoted from dev-dependency (integration tests only) to a
+# real production edge. flui-scheduler sits below flui-rendering in the layer
+# graph already (flui-view/-widgets/-app all depend on both), so this is not a
+# new direction, just a new consumer.
+flui-scheduler = { path = "../flui-scheduler", version = "0.2.0" }
 
 parking_lot = { workspace = true }
 thiserror = { workspace = true }
@@ -26,9 +34,9 @@ bitflags = { workspace = true }
 smallvec = { workspace = true }
 downcast-rs = "2.0"
 dyn-clone = "1.0"
-slab = "0.4"                       # For RenderTree storage
-crossbeam-channel = "0.5"          # PipelineOwnerHandle bounded mark-dirty channel
-rustc-hash = { workspace = true }  # FxHashSet for layout cycle guard (D-block U21)
+slab = "0.4"                             # For RenderTree storage
+crossbeam-channel = { workspace = true } # PipelineOwnerHandle bounded mark-dirty channel
+rustc-hash = { workspace = true }        # FxHashSet for layout cycle guard
 
 # Segmented-stack growth for the recursive pipeline walks (layout /
 # paint / hit-test / intrinsics). A ~1000-level chain overflows the
@@ -46,10 +54,18 @@ harness = false
 name = "paint"
 harness = false
 
-# Virtualization core (ADR-0003 U1): O(log n) offset<->index seek both ways and
+# Virtualization core: O(log n) offset<->index seek both ways and
 # O(log n) mid-list insert/delete vs a naive O(n) flat-array baseline.
 [[bench]]
 name = "virtualizer"
+harness = false
+
+# Borrowed intrinsic path parent-data slice cost.
+# Measures build_intrinsic_child_parent_data (subtree_arena.rs) called when a
+# widget queries a child's intrinsic during perform_layout. Parameterized over
+# N = {1, 8, 64} flex children to show per-child allocation scaling.
+[[bench]]
+name = "intrinsic_parent_data"
 harness = false
 
 # Headless render-object inspection runner. Gated on `testing` so the
@@ -61,7 +77,7 @@ required-features = ["testing"]
 
 [dev-dependencies]
 criterion.workspace = true
-# Property-based tests for the virtualization B+-tree (ADR-0003 U1): random
+# Property-based tests for the virtualization B+-tree: random
 # insert/delete/set_measured/set_count sequences checked against a naive
 # Vec oracle + structural invariants. Test-only; no production dependency.
 # Version matches flui-types / flui-interaction (already resolved in the lockfile).
@@ -69,9 +85,9 @@ proptest = "1.5"
 # Snapshot testing for render-harness paint-phase (sub-project A).
 insta.workspace = true
 # Animation -> render-pipeline integration scenarios (tests only; no
-# production dependency between the layers).
-flui-animation = { path = "../flui-animation" }
-flui-scheduler = { path = "../flui-scheduler" }
+# production dependency between the layers). flui-scheduler moved to
+# `[dependencies]` above — `ScrollPosition` names it in production now.
+flui-animation = { path = "../flui-animation", version = "0.2.0" }
 # Self dev-dependency that turns the off-by-default `testing` feature on
 # for this crate's own integration tests (`tests/*.rs`), benches, and
 # examples. Unit tests reach the harness via `cfg(test)`; the separate
@@ -79,7 +95,13 @@ flui-scheduler = { path = "../flui-scheduler" }
 # so the feature must be flipped on for the dev build graph. This is the
 # standard Cargo pattern for shipping a feature-gated test-support module
 # without making it part of normal/release builds.
-flui-rendering = { path = ".", features = ["testing", "serde"] }
+flui-rendering = { path = ".", version = "0.2.0", features = ["testing", "serde"] }
+# Concrete render-object catalog. The integration tests in `tests/*.rs`
+# previously imported objects from `flui_rendering::objects`; after the
+# flui-objects extraction (ADR-0008) they import from `flui_objects` instead.
+# This is a dev-only dependency — flui-rendering does not depend on
+# flui-objects in production (that would invert the layer order).
+flui-objects = { path = "../flui-objects", version = "0.2.0", features = ["testing"] }
 
 [features]
 default = []
@@ -99,19 +121,16 @@ serde = ["flui-types/serde"]
 # can be serialized by `SnapshotStrategy::json()` via serde_json.
 testing = ["flui-layer/testing", "flui-foundation/serde"]
 
-# Cycle 4 R-18: gate `ScrollMetrics` trait + `FixedScrollMetrics` +
-# `FixedExtentMetrics` (~452 LOC at `src/constraints/scroll_metrics.rs`)
-# behind an off-by-default feature. The types had zero workspace
-# consumers; gating prevents the dead surface from being compiled into
-# every dependent build while keeping the code available for the
-# scrolling integration that will eventually land. Opt in via
-# `--features scrolling`.
-scrolling = []
-
-# Cycle 4 R-16: gate the delegate trait modules (~1,800 LOC across
-# `delegates/custom_painter.rs`, `flow.rs`, `multi_child_layout.rs`,
-# `single_child_layout.rs`, `sliver_grid.rs`, `custom_clipper.rs`)
-# behind an off-by-default feature. Each delegate trait has zero
-# production impls; gating removes the surface from default builds
-# without deleting it. Opt in via `--features experimental-delegates`.
+# Cycle 4 R-16: gate the delegate trait modules behind an off-by-default
+# feature until their companion render object lands (ADR-0007). Each
+# gated trait has zero production impls; gating removes the surface from
+# default builds without deleting it. `sliver_grid_delegate.rs`,
+# `custom_painter.rs`, and `flow_delegate.rs` were promoted to the default
+# build once their companions (`RenderSliverGrid`, `RenderCustomPaint`,
+# `RenderFlow`, `RenderCustomSingleChildLayoutBox`,
+# `RenderCustomMultiChildLayoutBox`) landed; the remaining gated module is
+# `custom_clipper.rs`. Opt in via `--features experimental-delegates`.
 experimental-delegates = []
+
+[lints]
+workspace = true

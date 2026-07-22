@@ -1,5 +1,9 @@
+// Target-level lint relaxations — crate-level allows don't reach this
+// target. `unwrap` in test/example code: a panic IS the failure report
+// (docs/PANIC-POLICY.md); style items here are ship-wave debt.
+#![allow(clippy::many_single_char_names)]
 #![allow(deprecated)]
-// N-geom U5: target intentionally exercises the deprecated raw-scalar device conversions (to_device_pixels(f32)/from_device_pixels).
+// This target intentionally exercises the deprecated raw-scalar device conversions (to_device_pixels(f32)/from_device_pixels).
 //! Integration tests for typed geometry system
 //!
 //! Tests the complete flow: unit types, conversions, operations, GPU

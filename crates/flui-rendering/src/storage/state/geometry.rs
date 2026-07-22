@@ -9,16 +9,15 @@
 //!   `layout_extent`, `max_paint_extent`, `set_sliver_geometry`) on
 //!   `RenderState<SliverProtocol>`
 //!
-//! **D-block PR-A1 U14 migration (2026-05-23):** the prior `OnceCell`-backed
-//! `set_geometry` panicked on second invocation, which made frame-2 re-layout
-//! a crash. Flutter `.flutter/.../object.dart` straight-assigns `_size` each
-//! layout pass; we mirror that semantics via `Option<T>`. `set_geometry`,
-//! `set_size`, `set_sliver_geometry` now take `&mut self`; production callers
-//! (`RenderEntry::layout`, RenderBox/RenderSliver impls) already hold a mut
-//! state borrow.
+//! The prior `OnceCell`-backed `set_geometry` panicked on second invocation,
+//! which made frame-2 re-layout a crash. Flutter `.flutter/.../object.dart`
+//! straight-assigns `_size` each layout pass; we mirror that semantics via
+//! `Option<T>`. `set_geometry`, `set_size`, `set_sliver_geometry` take
+//! `&mut self`; production callers (`RenderEntry::layout`, RenderBox/RenderSliver
+//! impls) already hold a mut state borrow.
 
 use super::RenderState;
-use crate::constraints::{Constraints, SliverGeometry};
+use crate::constraints::SliverGeometry;
 use crate::protocol::{BoxProtocol, Protocol, ProtocolGeometry, SliverProtocol};
 
 // ============================================================================
@@ -59,9 +58,9 @@ impl<P: Protocol> RenderState<P> {
     /// Idempotent — overwrites any prior value. Flutter `_size = size`
     /// straight-assignment semantics.
     ///
-    /// **D-block PR-A1 U14**: prior `OnceCell`-backed implementation panicked
-    /// on second invocation, which made re-layout a crash. See module-level
-    /// doc for rationale.
+    /// The prior `OnceCell`-backed implementation panicked on second
+    /// invocation, which made re-layout a crash. See module-level doc
+    /// for rationale.
     ///
     /// # Example
     ///
@@ -182,7 +181,9 @@ impl RenderState<BoxProtocol> {
         // is_boundary = !parent_uses_size || sized_by_parent || constraints.is_tight()
         // || !has_parent
 
-        let constraints_are_tight = self.constraints().map(|c| c.is_tight()).unwrap_or(false);
+        let constraints_are_tight = self
+            .constraints()
+            .is_some_and(crate::constraints::Constraints::is_tight);
 
         let is_boundary = !parent_uses_size  // Parent doesn't use size
             || sized_by_parent                // Size determined by constraints
@@ -208,8 +209,8 @@ impl RenderState<BoxProtocol> {
 
     /// Convenience method for setting size (box protocol).
     ///
-    /// **D-block PR-A1 U14**: signature changed to `&mut self` alongside
-    /// `set_geometry` migration.
+    /// Signature takes `&mut self`, matching `set_geometry`'s move off
+    /// the panic-on-second-write `OnceCell` storage.
     ///
     /// # Example
     ///
@@ -235,7 +236,7 @@ impl RenderState<BoxProtocol> {
     /// ```
     #[inline]
     pub fn has_size(&self, size: flui_types::Size) -> bool {
-        self.geometry().map(|s| s == size).unwrap_or(false)
+        self.geometry().is_some_and(|s| s == size)
     }
 }
 
@@ -253,7 +254,7 @@ impl RenderState<SliverProtocol> {
     /// ```
     #[inline]
     pub fn scroll_extent(&self) -> f32 {
-        self.geometry().map(|g| g.scroll_extent).unwrap_or(0.0)
+        self.geometry().map_or(0.0, |g| g.scroll_extent)
     }
 
     /// Returns paint extent, or 0.0 if geometry is not set.
@@ -268,25 +269,25 @@ impl RenderState<SliverProtocol> {
     /// ```
     #[inline]
     pub fn paint_extent(&self) -> f32 {
-        self.geometry().map(|g| g.paint_extent).unwrap_or(0.0)
+        self.geometry().map_or(0.0, |g| g.paint_extent)
     }
 
     /// Returns layout extent, or 0.0 if geometry is not set.
     #[inline]
     pub fn layout_extent(&self) -> f32 {
-        self.geometry().map(|g| g.layout_extent).unwrap_or(0.0)
+        self.geometry().map_or(0.0, |g| g.layout_extent)
     }
 
     /// Returns max paint extent, or 0.0 if geometry is not set.
     #[inline]
     pub fn max_paint_extent(&self) -> f32 {
-        self.geometry().map(|g| g.max_paint_extent).unwrap_or(0.0)
+        self.geometry().map_or(0.0, |g| g.max_paint_extent)
     }
 
     /// Sets sliver geometry (convenience wrapper for `set_geometry()`).
     ///
-    /// **D-block PR-A1 U14**: signature changed to `&mut self` alongside
-    /// `set_geometry` migration.
+    /// Signature takes `&mut self`, matching `set_geometry`'s move off
+    /// the panic-on-second-write `OnceCell` storage.
     ///
     /// # Example
     ///

@@ -5,11 +5,10 @@ use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
+use flui_objects::RenderViewport;
 use flui_rendering::{
     constraints::{BoxConstraints, GrowthDirection, SliverGeometry},
     context::{SliverHitTestContext, SliverLayoutContext},
-    impl_sliver_test_caps,
-    objects::RenderViewport,
     parent_data::SliverParentData,
     pipeline::PipelineOwner,
     protocol::SliverProtocol,
@@ -158,7 +157,7 @@ impl FixedSliver {
     }
 }
 
-impl_sliver_test_caps!(FixedSliver);
+impl flui_foundation::Diagnosticable for FixedSliver {}
 
 impl RenderSliver for FixedSliver {
     type Arity = Leaf;
@@ -202,7 +201,7 @@ impl RenderSliver for FixedSliver {
 #[derive(Debug, Default)]
 struct InvisibleHitSliver;
 
-impl_sliver_test_caps!(InvisibleHitSliver);
+impl flui_foundation::Diagnosticable for InvisibleHitSliver {}
 
 impl RenderSliver for InvisibleHitSliver {
     type Arity = Leaf;
@@ -250,7 +249,7 @@ impl MainAxisBandSliver {
     }
 }
 
-impl_sliver_test_caps!(MainAxisBandSliver);
+impl flui_foundation::Diagnosticable for MainAxisBandSliver {}
 
 impl RenderSliver for MainAxisBandSliver {
     type Arity = Leaf;
@@ -314,7 +313,7 @@ impl GeometrySliver {
     }
 }
 
-impl_sliver_test_caps!(GeometrySliver);
+impl flui_foundation::Diagnosticable for GeometrySliver {}
 
 impl RenderSliver for GeometrySliver {
     type Arity = Leaf;
@@ -358,7 +357,7 @@ impl CorrectingSliver {
     }
 }
 
-impl_sliver_test_caps!(CorrectingSliver);
+impl flui_foundation::Diagnosticable for CorrectingSliver {}
 
 impl RenderSliver for CorrectingSliver {
     type Arity = Leaf;
@@ -368,10 +367,7 @@ impl RenderSliver for CorrectingSliver {
         &mut self,
         _ctx: &mut SliverLayoutContext<'_, Leaf, Self::ParentData>,
     ) -> SliverGeometry {
-        if !self.corrected {
-            self.corrected = true;
-            SliverGeometry::scroll_offset_correction(self.correction)
-        } else {
+        if self.corrected {
             SliverGeometry {
                 scroll_extent: 80.0,
                 paint_extent: 80.0,
@@ -382,6 +378,9 @@ impl RenderSliver for CorrectingSliver {
                 visible: true,
                 ..SliverGeometry::ZERO
             }
+        } else {
+            self.corrected = true;
+            SliverGeometry::scroll_offset_correction(self.correction)
         }
     }
 
@@ -405,7 +404,7 @@ impl CountingSliver {
     }
 }
 
-impl_sliver_test_caps!(CountingSliver);
+impl flui_foundation::Diagnosticable for CountingSliver {}
 
 impl RenderSliver for CountingSliver {
     type Arity = Leaf;
@@ -458,7 +457,7 @@ impl OutOfBandSliver {
     }
 }
 
-impl_sliver_test_caps!(OutOfBandSliver);
+impl flui_foundation::Diagnosticable for OutOfBandSliver {}
 
 impl RenderSliver for OutOfBandSliver {
     type Arity = Leaf;
@@ -507,7 +506,7 @@ impl DynamicOutOfBandSliver {
     }
 }
 
-impl_sliver_test_caps!(DynamicOutOfBandSliver);
+impl flui_foundation::Diagnosticable for DynamicOutOfBandSliver {}
 
 impl RenderSliver for DynamicOutOfBandSliver {
     type Arity = Leaf;
@@ -565,7 +564,7 @@ fn viewport_lays_out_forward_slivers_and_applies_content_dimensions() {
     let laid_out_size = owner
         .render_tree()
         .get(root_id)
-        .and_then(|node| node.geometry_box())
+        .and_then(flui_rendering::storage::RenderNode::geometry_box)
         .expect("root viewport has committed box geometry");
     let viewport = owner
         .render_tree()

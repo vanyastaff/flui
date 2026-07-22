@@ -135,8 +135,9 @@
 //! - Change notifiers use efficient listener storage
 //! - Atomic flags provide lock-free state management
 
+// Ship bar (wave 1): every public item is documented; keep it that way.
+#![deny(missing_docs)]
 #![warn(
-    missing_docs,
     missing_debug_implementations,
     rust_2018_idioms,
     unreachable_pub,
@@ -145,15 +146,20 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 // Core modules - fundamental types with minimal dependencies
+pub mod async_snapshot;
 pub mod binding;
 pub mod callbacks;
+pub mod clock;
 pub mod consts;
+// Monotonic generation/version counters for the window-runtime protocol:
+// FrameEpoch, SurfaceGeneration, ResourceGeneration.
+pub mod epoch;
 pub mod id;
 pub mod key;
 pub mod wasm;
 
-// Logging - cross-platform tracing backend (merged from flui-log in
-// D-block PR-C-1 per docs/plans/2026-05-23-001-feat-pipeline-wiring-d-block-plan.md U1).
+// Logging - cross-platform tracing backend (merged from flui-log; see
+// docs/plans/2026-05-23-001-feat-pipeline-wiring-d-block-plan.md).
 pub mod log;
 
 // Reactive programming - change notification and observables
@@ -172,14 +178,20 @@ pub mod debug;
 
 // Core types - IDs for all tree levels
 // Binding infrastructure
+pub use async_snapshot::{AsyncSnapshot, ConnectionState};
 pub use binding::{BindingBase, HasInstance, check_instance};
 // Callbacks
 pub use callbacks::{
     FallibleCallback, Predicate, ValueChanged, ValueGetter, ValueSetter, ValueTransformer,
     VoidCallback,
 };
+// Monotonic time source (OS / virtual clock) — foundational primitive injected
+// by deadline- and frame-driven subsystems (gesture arena, headless binding).
+pub use clock::{ManualClock, MonotonicClock, SystemClock};
 // Constants
 pub use consts::{DEBUG_MODE, EPSILON, EPSILON_F32, IS_DESKTOP, IS_MOBILE, IS_WEB, RELEASE_MODE};
+// Window-runtime generation/version counters + commit-time freshness gate.
+pub use epoch::{FrameEpoch, GenerationGate, ResourceGeneration, SurfaceGeneration};
 // Diagnostics
 pub use debug::{
     DIAGNOSTICS_FORMAT_VERSION, DebugPaintConfig, DiagnosticLevel, Diagnosticable,
@@ -201,6 +213,8 @@ pub use id::{
     Marker,
     ObserverId,
     RawId,
+    // Realm identity — one UiRealm incarnation
+    RealmId,
     RenderId,
     SemanticsId,
     TaskId,
@@ -267,6 +281,7 @@ pub mod prelude {
         ObserverId,
         Predicate,
         RELEASE_MODE,
+        RealmId,
         RenderId,
         SemanticsId,
         TreeId,

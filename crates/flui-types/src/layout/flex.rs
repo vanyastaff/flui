@@ -1,9 +1,16 @@
 //! Flex layout types
 
+/// How a flexible child is inscribed into the space allocated by a
+/// flex layout.
+///
+/// Mirrors Flutter's `FlexFit`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum FlexFit {
     // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
+    /// Child is forced to fill the available space (the default).
+    ///
+    /// This is the behavior for `Expanded` widgets.
     #[default]
     Tight,
 
@@ -16,18 +23,21 @@ pub enum FlexFit {
 }
 
 impl FlexFit {
+    /// Returns `true` if this is `FlexFit::Tight`.
     #[must_use]
     #[inline]
     pub const fn is_tight(&self) -> bool {
         matches!(self, FlexFit::Tight)
     }
 
+    /// Returns `true` if this is `FlexFit::Loose`.
     #[must_use]
     #[inline]
     pub const fn is_loose(&self) -> bool {
         matches!(self, FlexFit::Loose)
     }
 
+    /// Returns the opposite fit (`Tight` ↔ `Loose`).
     #[must_use]
     #[inline]
     pub const fn flip(&self) -> Self {

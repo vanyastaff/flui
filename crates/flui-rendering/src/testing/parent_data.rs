@@ -14,22 +14,36 @@
 //! (or the `with_stack_parent_data` / `with_flex_parent_data` helpers).
 
 use crate::parent_data::{
-    BoxParentData, FlexParentData, ParentData, SliverPhysicalParentData, StackParentData,
+    BoxParentData, FlexParentData, MultiChildLayoutParentData, ParentData,
+    SliverMultiBoxAdaptorParentData, SliverPhysicalParentData, StackParentData,
+    TableCellParentData,
 };
 
 /// A harness-side clone of the parent metadata a widget would normally
 /// write onto its child before layout.
 #[derive(Debug, Clone)]
 pub enum ParentDataSeed {
-    /// [`StackParentData`] for [`RenderStack`](crate::objects::RenderStack) children.
+    /// [`StackParentData`] for `RenderStack` (see `flui_objects::RenderStack`) children.
     Stack(StackParentData),
-    /// [`FlexParentData`] for [`RenderFlex`](crate::objects::RenderFlex) children.
+    /// [`FlexParentData`] for `RenderFlex` (see `flui_objects::RenderFlex`) children.
     Flex(FlexParentData),
+    /// [`MultiChildLayoutParentData`] for `RenderCustomMultiChildLayoutBox`
+    /// children.
+    MultiChildLayout(MultiChildLayoutParentData),
     /// Default box offset slot (rarely needed — most parents use
     /// [`StackParentData`] / [`FlexParentData`] instead).
     Box(BoxParentData),
     /// [`SliverPhysicalParentData`] for single-child sliver adapters.
     SliverPhysical(SliverPhysicalParentData),
+    /// [`SliverMultiBoxAdaptorParentData`] for [`RenderSliverList`] /
+    /// [`RenderSliverListLazy`] children — stamps the logical index so the
+    /// virtualizer band walk can find the child in `logical_to_slot`.
+    ///
+    /// [`RenderSliverList`]: crate::traits::RenderSliver
+    SliverMultiBoxAdaptor(SliverMultiBoxAdaptorParentData),
+    /// [`TableCellParentData`] for `RenderTable` (see `flui_objects::RenderTable`)
+    /// children — cell vertical alignment.
+    Table(TableCellParentData),
 }
 
 impl ParentDataSeed {
@@ -39,8 +53,11 @@ impl ParentDataSeed {
         match self {
             Self::Stack(data) => Box::new(data.clone()),
             Self::Flex(data) => Box::new(data.clone()),
+            Self::MultiChildLayout(data) => Box::new(data.clone()),
             Self::Box(data) => Box::new(data.clone()),
             Self::SliverPhysical(data) => Box::new(data.clone()),
+            Self::SliverMultiBoxAdaptor(data) => Box::new(data.clone()),
+            Self::Table(data) => Box::new(data.clone()),
         }
     }
 }

@@ -12,80 +12,61 @@
 
 use std::collections::HashMap;
 
-use flui_painting::Paint;
+use flui_painting::{BlendMode, Paint};
 use wgpu::RenderPipeline;
 
 /// Pipeline key identifying a specific pipeline variant
 ///
-/// Uses bitflags for compact representation and fast hashing.
-/// Each bit represents a different pipeline feature.
+/// Uses bitflags for compact representation of MSAA / blend-enable state, plus a
+/// [`BlendMode`] dimension so the tessellated path produces (and caches) one
+/// pipeline per fixed-function Porter-Duff blend mode.
+///
+/// The `blend_mode` is only meaningful when blending is enabled (the
+/// [`Self::ALPHA_BLEND`] bit). Opaque keys carry `BlendMode::SrcOver` purely as
+/// a canonical value so equal opaque keys hash equal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PipelineKey {
     bits: u32,
+    /// Fixed-function blend mode for the color target. Only consulted when
+    /// [`Self::is_alpha_blended`] is true.
+    blend_mode: BlendMode,
 }
 
 impl PipelineKey {
     // Feature flags
     const ALPHA_BLEND: u32 = 1 << 0; // Requires alpha blending
-    const TEXTURED: u32 = 1 << 1; // Uses textures
     const MSAA_4X: u32 = 1 << 2; // 4x MSAA enabled
     const MSAA_8X: u32 = 1 << 3; // 8x MSAA enabled
-    const HDR: u32 = 1 << 4; // HDR color space
-    const PREMUL_ALPHA: u32 = 1 << 5; // Premultiplied alpha
 
     /// Create opaque pipeline key (no blending, fastest)
     pub fn opaque() -> Self {
-        Self { bits: 0 }
+        Self {
+            bits: 0,
+            blend_mode: BlendMode::SrcOver,
+        }
     }
 
-    /// Create alpha blending pipeline key
+    /// Create an alpha-blending pipeline key for the default `SrcOver` mode.
     pub fn alpha_blend() -> Self {
         Self {
             bits: Self::ALPHA_BLEND,
+            blend_mode: BlendMode::SrcOver,
         }
     }
 
-    /// Create textured pipeline key
-    pub fn textured() -> Self {
+    /// Create an alpha-blending pipeline key for a specific fixed-function
+    /// [`BlendMode`].
+    ///
+    /// Intended for fixed-function Porter-Duff modes. Advanced (dst-read) modes
+    /// may also be passed, but the tessellated record path intercepts them via
+    /// [`BlendMode::is_advanced`] (see `DrawBatcher::add_tessellated_with_key`)
+    /// before the key reaches [`PipelineCache`], so an advanced key never selects
+    /// a fixed-function pipeline.
+    pub fn with_blend(mode: BlendMode) -> Self {
         Self {
-            bits: Self::TEXTURED,
+            bits: Self::ALPHA_BLEND,
+            blend_mode: mode,
         }
-    }
-
-    /// Enable alpha blending
-    pub fn with_alpha_blend(mut self) -> Self {
-        self.bits |= Self::ALPHA_BLEND;
-        self
-    }
-
-    /// Enable texturing
-    pub fn with_textured(mut self) -> Self {
-        self.bits |= Self::TEXTURED;
-        self
-    }
-
-    /// Enable 4x MSAA
-    pub fn with_msaa_4x(mut self) -> Self {
-        self.bits |= Self::MSAA_4X;
-        self
-    }
-
-    /// Enable 8x MSAA
-    pub fn with_msaa_8x(mut self) -> Self {
-        self.bits |= Self::MSAA_8X;
-        self
-    }
-
-    /// Enable HDR
-    pub fn with_hdr(mut self) -> Self {
-        self.bits |= Self::HDR;
-        self
-    }
-
-    /// Enable premultiplied alpha
-    pub fn with_premul_alpha(mut self) -> Self {
-        self.bits |= Self::PREMUL_ALPHA;
-        self
     }
 
     /// Check if pipeline requires alpha blending
@@ -93,9 +74,10 @@ impl PipelineKey {
         self.bits & Self::ALPHA_BLEND != 0
     }
 
-    /// Check if pipeline uses textures
-    pub fn is_textured(self) -> bool {
-        self.bits & Self::TEXTURED != 0
+    /// The fixed-function blend mode this key selects (only meaningful when
+    /// [`Self::is_alpha_blended`] is true).
+    pub fn blend_mode(self) -> BlendMode {
+        self.blend_mode
     }
 
     /// Get MSAA sample count
@@ -108,6 +90,171 @@ impl PipelineKey {
             1
         }
     }
+}
+
+/// Map a fixed-function Porter-Duff [`BlendMode`] to its premultiplied-alpha
+/// [`wgpu::BlendState`].
+///
+/// These factors assume PREMULTIPLIED source and destination color (the
+/// tessellated `shape.wgsl` fragment emits `rgb * a`), which is the only form in
+/// which fixed-function Porter-Duff blending is correct. Color and alpha
+/// components use identical factors unless a mode requires otherwise.
+///
+/// `SrcOver` is exactly [`wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING`].
+///
+/// Advanced (separable/non-separable, dst-reading) modes are *not* handled here:
+/// shape records divert to `DrawItem::AdvancedShape` before a pipeline key is
+/// built (see `DrawBatcher::add_tessellated_with_key`), and
+/// [`PipelineCache::get_or_create`] debug-asserts that no advanced key reaches the
+/// cache. The defensive `_` arm below maps any stray advanced mode to `SrcOver`
+/// in release rather than panicking — but that path is a routing logic error.
+pub fn blend_state_for(mode: BlendMode) -> wgpu::BlendState {
+    use wgpu::{BlendComponent, BlendFactor, BlendOperation, BlendState};
+
+    // Helper: build a BlendState whose color and alpha components share the
+    // same (src, dst) factors with the Add operation.
+    let same = |src: BlendFactor, dst: BlendFactor| BlendState {
+        color: BlendComponent {
+            src_factor: src,
+            dst_factor: dst,
+            operation: BlendOperation::Add,
+        },
+        alpha: BlendComponent {
+            src_factor: src,
+            dst_factor: dst,
+            operation: BlendOperation::Add,
+        },
+    };
+
+    match mode {
+        BlendMode::Clear => same(BlendFactor::Zero, BlendFactor::Zero),
+        BlendMode::Src => same(BlendFactor::One, BlendFactor::Zero),
+        BlendMode::Dst => same(BlendFactor::Zero, BlendFactor::One),
+        BlendMode::SrcOver => same(BlendFactor::One, BlendFactor::OneMinusSrcAlpha),
+        BlendMode::DstOver => same(BlendFactor::OneMinusDstAlpha, BlendFactor::One),
+        BlendMode::SrcIn => same(BlendFactor::DstAlpha, BlendFactor::Zero),
+        BlendMode::DstIn => same(BlendFactor::Zero, BlendFactor::SrcAlpha),
+        BlendMode::SrcOut => same(BlendFactor::OneMinusDstAlpha, BlendFactor::Zero),
+        BlendMode::DstOut => same(BlendFactor::Zero, BlendFactor::OneMinusSrcAlpha),
+        BlendMode::SrcATop => same(BlendFactor::DstAlpha, BlendFactor::OneMinusSrcAlpha),
+        BlendMode::DstATop => same(BlendFactor::OneMinusDstAlpha, BlendFactor::SrcAlpha),
+        BlendMode::Xor => same(BlendFactor::OneMinusDstAlpha, BlendFactor::OneMinusSrcAlpha),
+        // Plus / Lighter: additive.
+        BlendMode::Plus => same(BlendFactor::One, BlendFactor::One),
+        // Modulate: src * dst. The color channels multiply by the destination
+        // color; alpha multiplies by destination alpha.
+        BlendMode::Modulate => BlendState {
+            color: BlendComponent {
+                src_factor: BlendFactor::Dst,
+                dst_factor: BlendFactor::Zero,
+                operation: BlendOperation::Add,
+            },
+            alpha: BlendComponent {
+                src_factor: BlendFactor::DstAlpha,
+                dst_factor: BlendFactor::Zero,
+                operation: BlendOperation::Add,
+            },
+        },
+        // Advanced modes never reach here (mapped to SrcOver upstream). Fall
+        // back defensively rather than panicking.
+        _ => BlendState::PREMULTIPLIED_ALPHA_BLENDING,
+    }
+}
+
+/// Classify a blend mode as "tile-safe" for SSAA compositing.
+///
+/// A mode is tile-safe iff compositing a **transparent-source** tile (src alpha=0,
+/// src color=0) onto any destination leaves the destination unchanged:
+///
+///   `blend(transparent_src, dst, mode) == dst`   for ALL dst values.
+///
+/// Derivation from `blend_state_for` with src=(0,0,0,0):
+///
+/// | Mode      | src-factor × 0 + dst-factor × dst | tile-safe? |
+/// |-----------|-----------------------------------|-----------|
+/// | SrcOver   | 0 + (1-0)·dst = dst               | ✓         |
+/// | Dst       | 0 + 1·dst = dst                   | ✓         |
+/// | DstOver   | 0 + 1·dst = dst                   | ✓         |
+/// | DstOut    | 0 + (1-0)·dst = dst               | ✓         |
+/// | SrcATop   | 0 + (1-0)·dst = dst               | ✓         |
+/// | Xor       | 0 + (1-0)·dst = dst               | ✓         |
+/// | Plus      | 0 + 1·dst = dst                   | ✓         |
+/// | Clear     | 0 + 0·dst = 0                     | ✗ (kills dst) |
+/// | Src       | 0 + 0·dst = 0                     | ✗         |
+/// | SrcIn     | dst_a·0 + 0·dst = 0               | ✗         |
+/// | DstIn     | 0 + src_a(=0)·dst = 0             | ✗         |
+/// | SrcOut    | (1-dst_a)·0 + 0·dst = 0           | ✗         |
+/// | DstATop   | dst_a·0 + src_a(=0)·dst = 0       | ✗         |
+/// | Modulate  | dst·0 + dst·src_a(=0) = 0         | ✗         |
+///
+/// (Rows where a dst-factor depends on `src_a` — DstIn, DstATop, Modulate —
+/// vanish only *because* `src_a = 0` here; they are state-dependent factors, not
+/// the constant `Zero`. `is_tile_safe_for_ssaa_agrees_with_color_blend` pins the
+/// whole partition to `Color::blend` so this hand-derivation can't drift.)
+///
+/// Advanced (dst-read) modes are NOT tile-safe by this definition, but they are
+/// handled separately via `flush_advanced_layer` (not fixed-function blend).
+/// Use `blend.is_advanced()` to detect them before calling this function.
+///
+/// ## Coverage-destructive exception set
+///
+/// The following modes are NOT tile-safe and NOT advanced (Porter-Duff modes
+/// that destroy the destination where the SSAA tile is transparent):
+///
+///   Clear, Src, SrcIn, DstIn, SrcOut, DstATop, Modulate
+///
+/// These modes KEEP the existing tessellated (aliased) render path for fills.
+/// This is an explicit, justified exception: routing them through the SSAA tile
+/// would apply the blend to the transparent padding, incorrectly writing zeros
+/// to destination pixels outside the shape's geometric boundary.
+/// The aliased result is COMPLETE and CORRECT in coverage region — only the
+/// 1px edge band is aliased, which is the same quality as the pre-PR-3 engine.
+pub fn is_tile_safe_for_ssaa(mode: BlendMode) -> bool {
+    matches!(
+        mode,
+        BlendMode::SrcOver
+            | BlendMode::Dst
+            | BlendMode::DstOver
+            | BlendMode::DstOut
+            | BlendMode::SrcATop
+            | BlendMode::Xor
+            | BlendMode::Plus
+    )
+}
+
+/// Minimum device-pixel² area a shape must have before SSAA is eligible.
+///
+/// A 16×16 px² shape (256 px²) is the crossover below which SSAA overhead
+/// (2× texture allocation + downsample pass) is not worth the quality gain.
+/// Shapes smaller than this fall back to the tessellated (SDF-AA) path.
+///
+/// Previously declared in `batches/paths.rs` (private to that module);
+/// centralised here so all batch modules share one constant.
+pub const SSAA_AREA_THRESHOLD_PX_SQ: f32 = 256.0;
+
+/// Returns `true` when SSAA tiling is both blend-safe and large enough to
+/// justify the 2× oversample overhead.
+///
+/// A shape is SSAA-eligible when:
+/// 1. `is_tile_safe_for_ssaa(mode)` — transparent padding in the tile cannot
+///    destroy destination pixels (no coverage-destructive Porter-Duff mode).
+/// 2. OR `mode.is_advanced()` — advanced (dst-read) modes are handled via
+///    the GPU compositor path which is inherently tile-aware.
+/// 3. AND `device_area >= SSAA_AREA_THRESHOLD_PX_SQ` — shape is large enough
+///    to amortise the tile's allocation and downsample cost.
+///
+/// ## Shape-specific prefix rules
+///
+/// Most shapes call this directly. Two shapes have additional prefix guards
+/// that must be evaluated BY THE CALLER:
+///
+/// - **arc** (`batches/shapes.rs`): must KEEP an outer `mode != BlendMode::SrcOver &&`
+///   guard — SrcOver arcs reach the non-SrcOver reflection-fallback branch and
+///   must stay on the tessellated path.
+/// - **drrect** (`batches/shapes.rs`): the `mode == BlendMode::SrcOver ||`
+///   prefix was dropped (it is subsumed by `is_tile_safe_for_ssaa(SrcOver)` == `true`).
+pub fn ssaa_eligible_for(mode: BlendMode, device_area: f32) -> bool {
+    (is_tile_safe_for_ssaa(mode) || mode.is_advanced()) && device_area >= SSAA_AREA_THRESHOLD_PX_SQ
 }
 
 /// Pipeline cache managing specialized pipeline variants
@@ -160,14 +307,27 @@ impl PipelineCache {
     /// Returns cached pipeline if available, otherwise creates and caches new
     /// one.
     pub fn get_or_create(&mut self, device: &wgpu::Device, key: PipelineKey) -> &RenderPipeline {
-        // Check if pipeline exists
+        // Invariant: advanced (dst-read) modes are NOT fixed-function and must never
+        // build a `PipelineCache` entry — shape records divert to
+        // `DrawItem::AdvancedShape` in `add_tessellated_with_key` before a key is
+        // created. A stray advanced key here is a routing logic error; catch it
+        // loudly in debug/tests (release degrades to the defensive SrcOver arm in
+        // `blend_state_for`). This guards future producers (e.g. gradient/image
+        // advanced blend) from silently rendering SrcOver.
+        debug_assert!(
+            !key.blend_mode().is_advanced(),
+            "advanced blend key {:?} reached PipelineCache; advanced shapes must \
+             divert to DrawItem::AdvancedShape via add_tessellated_with_key",
+            key.blend_mode()
+        );
+        // `entry` needs `&mut self.cache`; `create_pipeline` needs `&self.shader` /
+        // `self.format` / `self.viewport_bind_group_layout` — disjoint fields.
+        // We pre-create on miss, then insert, to keep one logical lookup on hit.
         if !self.cache.contains_key(&key) {
-            // Create and insert new pipeline
             let pipeline = self.create_pipeline(device, key);
             self.cache.insert(key, pipeline);
         }
-
-        // Return cached pipeline (guaranteed to exist now)
+        // Safety: just inserted above on miss path.
         &self.cache[&key]
     }
 
@@ -183,9 +343,13 @@ impl PipelineCache {
             immediate_size: 0,
         });
 
-        // Configure blend state based on key
+        // Configure blend state based on key. The tessellated fragment shader
+        // emits PREMULTIPLIED alpha, so blended pipelines use the premultiplied
+        // Porter-Duff factors for `key.blend_mode()`. SrcOver maps to
+        // PREMULTIPLIED_ALPHA_BLENDING — visually identical to the previous
+        // straight-alpha output now that the shader premultiplies.
         let blend_state = if key.is_alpha_blended() {
-            Some(wgpu::BlendState::ALPHA_BLENDING)
+            Some(blend_state_for(key.blend_mode()))
         } else {
             None // Opaque - no blending (faster!)
         };
@@ -233,16 +397,6 @@ impl PipelineCache {
         })
     }
 
-    /// Get number of cached pipelines
-    pub fn cached_count(&self) -> usize {
-        self.cache.len()
-    }
-
-    /// Clear the cache (useful for resource cleanup)
-    pub fn clear(&mut self) {
-        self.cache.clear();
-    }
-
     /// Get a reference to the viewport bind group layout
     ///
     /// This is needed to create bind groups that are compatible with pipelines
@@ -253,15 +407,558 @@ impl PipelineCache {
     }
 }
 
-/// Helper to determine pipeline key from paint properties
+/// Helper to determine pipeline key from paint properties.
+///
+/// Blend-mode routing (Phase A — fixed-function Porter-Duff; Phase B — advanced):
+/// - A non-`SrcOver` Porter-Duff mode always selects a blended pipeline keyed by
+///   that mode (the blend stage is required even for fully opaque source, e.g.
+///   `Clear`/`DstOut` punch-outs and `Plus` additive).
+/// - An advanced (dst-reading) mode — `Screen`, `Multiply`, `Overlay`, the HSL
+///   modes, etc. — is carried through in the key so that
+///   `DrawBatcher::add_tessellated_with_key` can detect `is_advanced()` and divert
+///   the shape into `DrawItem::AdvancedShape` before the key is used for a
+///   pipeline-cache lookup. The advanced key must never reach the cache:
+///   [`PipelineCache::get_or_create`] debug-asserts against it.
+/// - `SrcOver` keeps the legacy fast heuristic: opaque source (`a == 255`) skips
+///   the blend stage entirely; translucent source uses the SrcOver blend.
 pub fn pipeline_key_from_paint(paint: &Paint) -> PipelineKey {
-    let color = paint.color;
+    let mode = paint.blend_mode;
 
-    // Check if we need alpha blending
-    if color.a < 255 {
-        PipelineKey::alpha_blend()
+    if mode == BlendMode::SrcOver {
+        // Legacy fast path: opaque SrcOver skips blending.
+        return if paint.color.a < 255 {
+            PipelineKey::alpha_blend()
+        } else {
+            PipelineKey::opaque()
+        };
+    }
+
+    if mode.is_porter_duff() {
+        // Fixed-function Porter-Duff: dedicated blended pipeline for this mode.
+        PipelineKey::with_blend(mode)
     } else {
-        PipelineKey::opaque()
+        // Advanced / dst-read mode: carry the original mode in the key so that
+        // `DrawBatcher::add_tessellated_with_key` can detect `is_advanced()` and
+        // divert the shape into `DrawItem::AdvancedShape` before the key is ever
+        // used for pipeline-cache lookup.
+        //
+        // The advanced key MUST NOT reach `PipelineCache::get_or_create` — the
+        // diversion in `add_tessellated_with_key` fires unconditionally for
+        // `is_advanced()` keys, so the cache never sees them for tessellated shapes.
+        //
+        // Non-tessellated callers (gradients, images — PR-5) that reach
+        // `flush_tessellated_geometry` with an advanced key will hit a pipeline-cache
+        // miss or produce incorrect output; they are guarded by their own Phase-B
+        // routing (to be added in PR-5).
+        PipelineKey::with_blend(mode)
+    }
+}
+
+/// Pure-logic tests for the blend-mode routing and Porter-Duff factor table.
+/// Not gated behind `enable-wgpu-tests` because they need no GPU device, so they
+/// run in the default `cargo test --lib` gate.
+#[cfg(test)]
+mod blend_logic {
+    use flui_painting::BlendMode;
+    use wgpu::{BlendFactor, BlendOperation};
+
+    use super::*;
+
+    #[test]
+    fn srcover_opaque_skips_blending() {
+        let paint = Paint::fill(flui_types::Color::rgb(10, 20, 30)); // a == 255, SrcOver
+        let key = pipeline_key_from_paint(&paint);
+        assert!(
+            !key.is_alpha_blended(),
+            "opaque SrcOver must skip the blend stage"
+        );
+    }
+
+    #[test]
+    fn srcover_translucent_uses_blend() {
+        let paint = Paint::fill(flui_types::Color::rgba(10, 20, 30, 128));
+        let key = pipeline_key_from_paint(&paint);
+        assert!(key.is_alpha_blended());
+        assert_eq!(key.blend_mode(), BlendMode::SrcOver);
+    }
+
+    /// The SSAA tile-safe gate must agree with the canonical blend evaluator
+    /// `Color::blend`: a Porter-Duff mode is tile-safe iff compositing a fully
+    /// TRANSPARENT source leaves the destination unchanged for every dst (so the
+    /// SSAA tile's transparent padding cannot corrupt dst outside the shape).
+    /// This ties the hand-written `matches!` list to the source of truth, so a
+    /// future mode or a `blend_state_for` change cannot silently desync them and
+    /// route a coverage-destructive mode through the tile.
+    #[test]
+    fn is_tile_safe_for_ssaa_agrees_with_color_blend() {
+        use flui_types::Color;
+        let transparent = Color::TRANSPARENT;
+        let dsts = [
+            Color::rgba(200, 80, 40, 255),
+            Color::rgba(30, 150, 220, 128),
+            Color::rgba(255, 255, 255, 60),
+        ];
+        // Every Porter-Duff (non-advanced) mode. Advanced modes are routed via
+        // `flush_advanced_layer`, not this gate, so they are out of scope here.
+        for mode in [
+            BlendMode::Clear,
+            BlendMode::Src,
+            BlendMode::Dst,
+            BlendMode::SrcOver,
+            BlendMode::DstOver,
+            BlendMode::SrcIn,
+            BlendMode::DstIn,
+            BlendMode::SrcOut,
+            BlendMode::DstOut,
+            BlendMode::SrcATop,
+            BlendMode::DstATop,
+            BlendMode::Xor,
+            BlendMode::Plus,
+            BlendMode::Modulate,
+        ] {
+            let transparent_src_is_noop =
+                dsts.iter().all(|&dst| transparent.blend(dst, mode) == dst);
+            assert_eq!(
+                is_tile_safe_for_ssaa(mode),
+                transparent_src_is_noop,
+                "{mode:?}: is_tile_safe_for_ssaa()={} but (transparent-src is a no-op)={} — \
+                 the SSAA tile-safe classification desynced from Color::blend",
+                is_tile_safe_for_ssaa(mode),
+                transparent_src_is_noop,
+            );
+        }
+    }
+
+    #[test]
+    fn porter_duff_modes_select_their_own_pipeline() {
+        // Even an opaque source must take the blend stage for non-SrcOver modes
+        // (Clear punches out, Plus adds, etc.).
+        for mode in [
+            BlendMode::Clear,
+            BlendMode::Src,
+            BlendMode::Dst,
+            BlendMode::DstOver,
+            BlendMode::SrcIn,
+            BlendMode::DstIn,
+            BlendMode::SrcOut,
+            BlendMode::DstOut,
+            BlendMode::SrcATop,
+            BlendMode::DstATop,
+            BlendMode::Xor,
+            BlendMode::Plus,
+            BlendMode::Modulate,
+        ] {
+            let paint = Paint::fill(flui_types::Color::rgb(255, 0, 0)).with_blend_mode(mode);
+            let key = pipeline_key_from_paint(&paint);
+            assert!(key.is_alpha_blended(), "{mode:?} must enable blending");
+            assert_eq!(key.blend_mode(), mode, "{mode:?} must key its own pipeline");
+        }
+    }
+
+    /// PR-4: advanced modes now carry their original mode in the key so that
+    /// `add_tessellated_with_key` can detect `is_advanced()` and divert the
+    /// shape to `DrawItem::AdvancedShape` before the key reaches `PipelineCache`.
+    ///
+    /// The key is always alpha-blended (`with_blend`) and carries the original
+    /// mode — `PipelineCache` is never consulted for these keys in the
+    /// tessellated path (the diversion in `add_tessellated_with_key` fires first).
+    #[test]
+    fn advanced_modes_carry_their_mode_in_key() {
+        for mode in [
+            BlendMode::Screen,
+            BlendMode::Overlay,
+            BlendMode::Multiply,
+            BlendMode::Darken,
+            BlendMode::Hue,
+            BlendMode::Luminosity,
+        ] {
+            let paint = Paint::fill(flui_types::Color::rgb(255, 0, 0)).with_blend_mode(mode);
+            let key = pipeline_key_from_paint(&paint);
+            // Advanced modes → alpha-blend key carrying the original mode.
+            assert!(
+                key.is_alpha_blended(),
+                "{mode:?}: advanced mode must produce an alpha-blend key"
+            );
+            assert_eq!(
+                key.blend_mode(),
+                mode,
+                "{mode:?}: key must carry the original advanced mode (not SrcOver)"
+            );
+            // And is_advanced() fires so the tessellated diversion can detect it.
+            assert!(
+                key.blend_mode().is_advanced(),
+                "{mode:?}: key.blend_mode().is_advanced() must be true"
+            );
+        }
+    }
+
+    #[test]
+    fn srcover_blend_state_matches_premultiplied() {
+        // SrcOver must equal wgpu's PREMULTIPLIED_ALPHA_BLENDING so the shader's
+        // premultiply switch is a no-op visually.
+        assert_eq!(
+            blend_state_for(BlendMode::SrcOver),
+            wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING
+        );
+    }
+
+    #[test]
+    fn blend_state_factor_table_is_correct() {
+        let c = |m: BlendMode| blend_state_for(m).color;
+        let a = |m: BlendMode| blend_state_for(m).alpha;
+
+        // Clear: zero everything.
+        assert_eq!(c(BlendMode::Clear).src_factor, BlendFactor::Zero);
+        assert_eq!(c(BlendMode::Clear).dst_factor, BlendFactor::Zero);
+
+        // Src: keep source, drop dest.
+        assert_eq!(c(BlendMode::Src).src_factor, BlendFactor::One);
+        assert_eq!(c(BlendMode::Src).dst_factor, BlendFactor::Zero);
+
+        // Plus: additive.
+        assert_eq!(c(BlendMode::Plus).src_factor, BlendFactor::One);
+        assert_eq!(c(BlendMode::Plus).dst_factor, BlendFactor::One);
+
+        // DstOver: dst wins where it covers.
+        assert_eq!(
+            c(BlendMode::DstOver).src_factor,
+            BlendFactor::OneMinusDstAlpha
+        );
+        assert_eq!(c(BlendMode::DstOver).dst_factor, BlendFactor::One);
+
+        // Modulate: color uses Dst (src*dst), alpha uses DstAlpha.
+        assert_eq!(c(BlendMode::Modulate).src_factor, BlendFactor::Dst);
+        assert_eq!(c(BlendMode::Modulate).dst_factor, BlendFactor::Zero);
+        assert_eq!(a(BlendMode::Modulate).src_factor, BlendFactor::DstAlpha);
+
+        // All Porter-Duff modes use the Add operation.
+        for mode in [
+            BlendMode::Clear,
+            BlendMode::SrcOver,
+            BlendMode::Xor,
+            BlendMode::Modulate,
+            BlendMode::Plus,
+        ] {
+            assert_eq!(c(mode).operation, BlendOperation::Add);
+            assert_eq!(a(mode).operation, BlendOperation::Add);
+        }
+    }
+
+    #[test]
+    fn distinct_blend_modes_produce_distinct_keys() {
+        let red = flui_types::Color::rgb(255, 0, 0);
+        let k_plus = pipeline_key_from_paint(&Paint::fill(red).with_blend_mode(BlendMode::Plus));
+        let k_clear = pipeline_key_from_paint(&Paint::fill(red).with_blend_mode(BlendMode::Clear));
+        assert_ne!(
+            k_plus, k_clear,
+            "different blend modes must hash to different pipeline keys"
+        );
+    }
+
+    /// Exhaustive oracle cross-check: `is_tile_safe_for_ssaa` must agree with
+    /// the derivation from `blend_state_for` for every Porter-Duff mode.
+    ///
+    /// A mode is tile-safe iff compositing a fully-transparent source tile
+    /// (src = (0, 0, 0, 0)) leaves the destination unchanged for ALL dst:
+    ///
+    ///   out = src_factor × src_color + dst_factor × dst_color
+    ///       = src_factor × 0         + dst_factor × dst_color
+    ///       = dst_factor × dst_color
+    ///
+    /// The destination is preserved when `dst_factor` evaluates to `One` (or any
+    /// expression that equals 1 when src_alpha = 0): `One`,
+    /// `OneMinusSrcAlpha` (= 1 − 0 = 1), and `OneMinusDstAlpha` (= 1 − dst_a,
+    /// which is NOT necessarily 1 — so DstATop/Modulate/SrcIn/DstIn/SrcOut are
+    /// dst_alpha-dependent and may zero out dst for opaque destinations).
+    ///
+    /// This test evaluates the classification by substituting src = (0,0,0,0):
+    ///
+    /// | Mode      | color dst_factor         | a=0 ⟹ dst_factor=?  | tile-safe |
+    /// |-----------|--------------------------|----------------------|-----------|
+    /// | SrcOver   | OneMinusSrcAlpha (1-0=1) | 1                    | ✓         |
+    /// | Dst       | One                      | 1                    | ✓         |
+    /// | DstOver   | One                      | 1                    | ✓         |
+    /// | DstOut    | OneMinusSrcAlpha (1-0=1) | 1                    | ✓         |
+    /// | SrcATop   | OneMinusSrcAlpha (1-0=1) | 1                    | ✓         |
+    /// | Xor       | OneMinusSrcAlpha (1-0=1) | 1                    | ✓         |
+    /// | Plus      | One                      | 1                    | ✓         |
+    /// | Clear     | Zero                     | 0                    | ✗         |
+    /// | Src       | Zero                     | 0                    | ✗         |
+    /// | SrcIn     | Zero (DstAlpha×0=0)      | 0                    | ✗         |
+    /// | DstIn     | SrcAlpha (=0)            | 0                    | ✗         |
+    /// | SrcOut    | Zero                     | 0                    | ✗         |
+    /// | DstATop   | SrcAlpha (=0)            | 0                    | ✗         |
+    /// | Modulate  | Zero (Dst×0=0) / DstAlpha×0 | 0               | ✗         |
+    ///
+    /// Any future addition or reclassification of a Porter-Duff mode will
+    /// break this test, forcing a deliberate review of the safety gate.
+    #[test]
+    fn is_tile_safe_for_ssaa_matches_blend_state_for_all_porter_duff_modes() {
+        use wgpu::BlendFactor;
+
+        /// Evaluate `dst_factor` at src_alpha = 0, dst_alpha = arbitrary.
+        ///
+        /// Returns `None` when the factor depends on `dst_alpha` (and thus
+        /// `is_tile_safe` cannot be determined by src_alpha alone for all dst);
+        /// returns `Some(is_one)` when the factor is unconditionally 1 (safe)
+        /// or unconditionally 0 (destructive) at src_alpha = 0.
+        fn dst_factor_is_one_at_zero_src(factor: BlendFactor) -> Option<bool> {
+            match factor {
+                // `One` = always 1; `OneMinusSrcAlpha` = 1 − 0 = 1.
+                // Both unconditionally preserve dst at src_alpha = 0.
+                BlendFactor::One | BlendFactor::OneMinusSrcAlpha => Some(true),
+                // `Zero` = always 0; `SrcAlpha` = 0 at src_alpha = 0.
+                // Both unconditionally zero dst at src_alpha = 0.
+                BlendFactor::Zero | BlendFactor::SrcAlpha => Some(false),
+                // `OneMinusDstAlpha`, `DstAlpha`, `Dst`, and any other factor
+                // depend on the destination value, so tile-safety cannot be
+                // determined from src_alpha alone — classified as dst-dependent.
+                _ => None,
+            }
+        }
+
+        /// Compute whether `blend_state_for(mode)` at src=(0,0,0,0) preserves
+        /// the destination — i.e., both color and alpha dst_factor evaluate to 1.
+        fn tile_safe_from_blend_state(mode: BlendMode) -> bool {
+            let state = blend_state_for(mode);
+            // Both color and alpha dst_factor must evaluate to 1 unconditionally
+            // when src_alpha = 0. If either factor depends on dst_alpha (returns
+            // None), the mode is NOT guaranteed to be tile-safe for all dst.
+            matches!(
+                (
+                    dst_factor_is_one_at_zero_src(state.color.dst_factor),
+                    dst_factor_is_one_at_zero_src(state.alpha.dst_factor),
+                ),
+                (Some(true), Some(true))
+            )
+        }
+
+        let porter_duff_modes = [
+            BlendMode::Clear,
+            BlendMode::Src,
+            BlendMode::SrcOver,
+            BlendMode::Dst,
+            BlendMode::DstOver,
+            BlendMode::SrcIn,
+            BlendMode::DstIn,
+            BlendMode::SrcOut,
+            BlendMode::DstOut,
+            BlendMode::SrcATop,
+            BlendMode::DstATop,
+            BlendMode::Xor,
+            BlendMode::Plus,
+            BlendMode::Modulate,
+        ];
+
+        for mode in porter_duff_modes {
+            let expected = tile_safe_from_blend_state(mode);
+            let actual = is_tile_safe_for_ssaa(mode);
+            assert_eq!(
+                actual, expected,
+                "is_tile_safe_for_ssaa({mode:?}) = {actual} but \
+                 blend_state_for derivation says it should be {expected}. \
+                 Either the safety gate or the blend-state table is wrong — \
+                 update both together to keep them in sync."
+            );
+        }
+    }
+
+    /// Golden lock for the current routing of `pipeline_key_from_paint`.
+    ///
+    /// Asserts the exact key produced for each blend mode so any change to the
+    /// routing is forced to produce a diff here — accidental regressions surface
+    /// as a test failure rather than a silent render change.
+    ///
+    /// ## SrcOver / Porter-Duff record
+    ///
+    /// - `SrcOver` + opaque source → opaque key (no blend stage).
+    /// - `SrcOver` + translucent source → alpha-blend key (`SrcOver` mode).
+    /// - Every other Porter-Duff mode → alpha-blend key keyed to that mode.
+    ///
+    /// ## Advanced-mode record (PR-4: carry original mode in key)
+    ///
+    /// All 15 advanced modes produce an alpha-blend key carrying the original mode.
+    /// `add_tessellated_with_key` intercepts the key via `is_advanced()` and
+    /// diverts tessellated shapes into `DrawItem::AdvancedShape` before the key
+    /// reaches `PipelineCache::get_or_create`.
+    #[test]
+    fn pipeline_key_routing_golden() {
+        let opaque = flui_types::Color::rgb(200, 100, 50); // a == 255
+        let translucent = flui_types::Color::rgba(200, 100, 50, 128);
+
+        // ── SrcOver ─────────────────────────────────────────────────────────
+        let k = pipeline_key_from_paint(&Paint::fill(opaque).with_blend_mode(BlendMode::SrcOver));
+        assert!(!k.is_alpha_blended(), "SrcOver + opaque → opaque key");
+        assert_eq!(k.blend_mode(), BlendMode::SrcOver);
+
+        let k =
+            pipeline_key_from_paint(&Paint::fill(translucent).with_blend_mode(BlendMode::SrcOver));
+        assert!(k.is_alpha_blended(), "SrcOver + translucent → blend key");
+        assert_eq!(k.blend_mode(), BlendMode::SrcOver);
+
+        // ── Porter-Duff modes (all 13 non-SrcOver) ──────────────────────────
+        for mode in [
+            BlendMode::Clear,
+            BlendMode::Src,
+            BlendMode::Dst,
+            BlendMode::DstOver,
+            BlendMode::SrcIn,
+            BlendMode::DstIn,
+            BlendMode::SrcOut,
+            BlendMode::DstOut,
+            BlendMode::SrcATop,
+            BlendMode::DstATop,
+            BlendMode::Xor,
+            BlendMode::Plus,
+            BlendMode::Modulate,
+        ] {
+            let k = pipeline_key_from_paint(&Paint::fill(opaque).with_blend_mode(mode));
+            assert!(
+                k.is_alpha_blended(),
+                "{mode:?}: Porter-Duff must always use the blend stage"
+            );
+            assert_eq!(
+                k.blend_mode(),
+                mode,
+                "{mode:?}: key must encode the exact mode"
+            );
+        }
+
+        // ── Advanced modes (PR-4: carry original mode in key) ───────────────
+        // Both opaque and translucent sources now produce an alpha-blend key
+        // that carries the original mode.  The tessellated shape path intercepts
+        // this in `add_tessellated_with_key` via `is_advanced()` before the key
+        // reaches `PipelineCache::get_or_create`.
+        for mode in [
+            BlendMode::Screen,
+            BlendMode::Overlay,
+            BlendMode::Darken,
+            BlendMode::Lighten,
+            BlendMode::ColorDodge,
+            BlendMode::ColorBurn,
+            BlendMode::HardLight,
+            BlendMode::SoftLight,
+            BlendMode::Difference,
+            BlendMode::Exclusion,
+            BlendMode::Multiply,
+            BlendMode::Hue,
+            BlendMode::Saturation,
+            BlendMode::Color,
+            BlendMode::Luminosity,
+        ] {
+            let k_opaque = pipeline_key_from_paint(&Paint::fill(opaque).with_blend_mode(mode));
+            assert!(
+                k_opaque.is_alpha_blended(),
+                "{mode:?} opaque: advanced key must be alpha-blended"
+            );
+            assert_eq!(
+                k_opaque.blend_mode(),
+                mode,
+                "{mode:?} opaque: key must carry the original advanced mode"
+            );
+
+            let k_trans = pipeline_key_from_paint(&Paint::fill(translucent).with_blend_mode(mode));
+            assert!(
+                k_trans.is_alpha_blended(),
+                "{mode:?} translucent: advanced key must be alpha-blended"
+            );
+            assert_eq!(
+                k_trans.blend_mode(),
+                mode,
+                "{mode:?} translucent: key must carry the original advanced mode"
+            );
+        }
+    }
+
+    // =========================================================================
+    // H1: ssaa_eligible_for() behaviour tests
+    // =========================================================================
+
+    /// SrcOver at a large device area is eligible (tile-safe + above threshold).
+    #[test]
+    fn ssaa_eligible_for_srcover_large_area_is_true() {
+        assert!(
+            ssaa_eligible_for(BlendMode::SrcOver, 300.0),
+            "SrcOver at 300 px² must be SSAA-eligible"
+        );
+    }
+
+    /// Every destructive Porter-Duff mode is ineligible regardless of area.
+    ///
+    /// These modes zero the destination where the SSAA tile is transparent,
+    /// so routing them through the tile would corrupt pixels outside the shape.
+    #[test]
+    fn ssaa_eligible_for_destructive_modes_are_ineligible_at_max_area() {
+        for mode in [
+            BlendMode::Clear,
+            BlendMode::Src,
+            BlendMode::SrcIn,
+            BlendMode::DstIn,
+            BlendMode::SrcOut,
+            BlendMode::DstATop,
+            BlendMode::Modulate,
+        ] {
+            assert!(
+                !is_tile_safe_for_ssaa(mode),
+                "{mode:?} should NOT be tile-safe"
+            );
+            assert!(!mode.is_advanced(), "{mode:?} should NOT be advanced");
+            assert!(
+                !ssaa_eligible_for(mode, f32::MAX),
+                "{mode:?} must never be SSAA-eligible (destructive padding)"
+            );
+        }
+    }
+
+    /// Below-threshold area is always ineligible even for tile-safe modes.
+    #[test]
+    fn ssaa_eligible_for_srcover_below_threshold_is_false() {
+        assert!(
+            !ssaa_eligible_for(BlendMode::SrcOver, 255.9),
+            "SrcOver at 255.9 px² (below 256.0 threshold) must not be SSAA-eligible"
+        );
+    }
+
+    /// Pin the destructive set to Color::blend oracle: for every Porter-Duff mode,
+    /// `!is_tile_safe_for_ssaa(mode)` must agree with the color-blend oracle for
+    /// a canonical opaque dst. (Mirrors the existing `is_tile_safe_for_ssaa_agrees_with_color_blend`
+    /// check but scoped specifically to the destructive modes documented in H2.)
+    #[test]
+    fn destructive_modes_are_never_ssaa_eligible() {
+        use flui_types::Color;
+        let transparent = Color::TRANSPARENT;
+        let opaque_dst = Color::rgba(200, 80, 40, 255);
+
+        for mode in [
+            BlendMode::Clear,
+            BlendMode::Src,
+            BlendMode::SrcIn,
+            BlendMode::DstIn,
+            BlendMode::SrcOut,
+            BlendMode::DstATop,
+            BlendMode::Modulate,
+        ] {
+            // Oracle: transparent src changes dst → destructive → not tile-safe.
+            let transparent_src_changes_dst = transparent.blend(opaque_dst, mode) != opaque_dst;
+            assert!(
+                transparent_src_changes_dst,
+                "{mode:?}: Color::blend oracle says transparent src does NOT change dst \
+                 — this mode should be tile-safe, not in the destructive list"
+            );
+            // The H2 table: all three classifiers agree.
+            assert!(
+                !is_tile_safe_for_ssaa(mode),
+                "{mode:?}: is_tile_safe_for_ssaa should be false for a destructive mode"
+            );
+            assert!(
+                !mode.is_advanced(),
+                "{mode:?}: is_advanced should be false for a plain Porter-Duff mode"
+            );
+            assert!(
+                !ssaa_eligible_for(mode, f32::MAX),
+                "{mode:?}: ssaa_eligible_for must be false regardless of area"
+            );
+        }
     }
 }
 
@@ -273,7 +970,6 @@ mod tests {
     fn test_pipeline_key_opaque() {
         let key = PipelineKey::opaque();
         assert!(!key.is_alpha_blended());
-        assert!(!key.is_textured());
         assert_eq!(key.msaa_samples(), 1);
     }
 
@@ -281,36 +977,13 @@ mod tests {
     fn test_pipeline_key_alpha_blend() {
         let key = PipelineKey::alpha_blend();
         assert!(key.is_alpha_blended());
-        assert!(!key.is_textured());
         assert_eq!(key.msaa_samples(), 1);
     }
 
     #[test]
-    fn test_pipeline_key_builder() {
-        let key = PipelineKey::opaque().with_alpha_blend().with_msaa_4x();
-
-        assert!(key.is_alpha_blended());
-        assert_eq!(key.msaa_samples(), 4);
-    }
-
-    #[test]
-    fn test_pipeline_key_msaa() {
-        let key_4x = PipelineKey::opaque().with_msaa_4x();
-        assert_eq!(key_4x.msaa_samples(), 4);
-
-        let key_8x = PipelineKey::opaque().with_msaa_8x();
-        assert_eq!(key_8x.msaa_samples(), 8);
-
-        // 8x overrides 4x
-        let key_both = PipelineKey::opaque().with_msaa_4x().with_msaa_8x();
-        assert_eq!(key_both.msaa_samples(), 8);
-    }
-
-    #[test]
-    fn test_pipeline_key_equality() {
-        let key1 = PipelineKey::alpha_blend().with_msaa_4x();
-        let key2 = PipelineKey::opaque().with_alpha_blend().with_msaa_4x();
-
-        assert_eq!(key1, key2);
+    fn test_pipeline_key_msaa_samples_default() {
+        // opaque() has no MSAA bits set → 1 sample
+        let key = PipelineKey::opaque();
+        assert_eq!(key.msaa_samples(), 1);
     }
 }

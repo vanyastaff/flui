@@ -38,6 +38,7 @@ use crate::{
 /// // Route keyboard event (goes to focused element)
 /// router.route_event(&mut root_layer, &Event::Key(key_event));
 /// ```
+#[derive(Debug)]
 pub struct EventRouter {
     /// Pointer state tracking (for drag gestures)
     pointer_state: Arc<RwLock<HashMap<PointerId, PointerStateTracking>>>,
@@ -76,10 +77,10 @@ impl EventRouter {
                 self.route_pointer_event(root, pointer_event);
             }
             Event::Keyboard(key_event) | Event::Key(key_event) => {
-                self.route_key_event(root, key_event);
+                Self::route_key_event(root, key_event);
             }
             Event::Scroll(scroll_event_data) => {
-                self.route_scroll_event(root, scroll_event_data);
+                Self::route_scroll_event(root, scroll_event_data);
             }
         }
     }
@@ -98,7 +99,7 @@ impl EventRouter {
                 tracing::trace!(
                     position = ?position,
                     hit_count = result.len(),
-                    has_handlers = result.iter().any(|e| e.handler.is_some()),
+                    has_pointer_targets = result.iter().any(|e| e.pointer_target.is_some()),
                     "EventRouter: hit test complete for Down event"
                 );
 
@@ -122,8 +123,7 @@ impl EventRouter {
                     .pointer_state
                     .read()
                     .get(&pointer_id)
-                    .map(|s| s.is_down)
-                    .unwrap_or(false);
+                    .is_some_and(|s| s.is_down);
 
                 if is_dragging {
                     // Send to original down target (drag continuity)
@@ -179,7 +179,7 @@ impl EventRouter {
     /// 2. Focused node's handler
     ///
     /// Returns `true` if the event was handled.
-    fn route_key_event(&mut self, _root: &mut dyn HitTestable, event: &KeyEvent) -> bool {
+    fn route_key_event(_root: &mut dyn HitTestable, event: &KeyEvent) -> bool {
         let handled = FocusManager::global().dispatch_key_event(event);
 
         if !handled {
@@ -199,7 +199,7 @@ impl EventRouter {
     /// until a handler returns `EventPropagation::Stop`.
     ///
     /// Returns `true` if the event was handled.
-    fn route_scroll_event(&mut self, root: &mut dyn HitTestable, event: &ScrollEventData) -> bool {
+    fn route_scroll_event(root: &mut dyn HitTestable, event: &ScrollEventData) -> bool {
         let position = event.position;
 
         // Hit test to find scrollable targets
@@ -209,7 +209,7 @@ impl EventRouter {
         tracing::trace!(
             position = ?position,
             hit_count = result.len(),
-            scroll_handlers = result.entries_with_scroll_handlers().count(),
+            scroll_targets = result.entries_with_scroll_targets().count(),
             "Scroll event routing"
         );
 

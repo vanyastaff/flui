@@ -4,6 +4,7 @@ use std::hash::{Hash, Hasher};
 
 use flui_foundation::RenderId;
 use flui_types::Offset;
+pub use flui_types::layout::TableCellVerticalAlignment;
 
 use super::{base::ParentData, container_mixin::ContainerParentDataMixin};
 
@@ -19,50 +20,40 @@ pub struct TableCellParentData {
     /// Offset from parent (table's top-left corner).
     pub offset: Offset,
 
-    /// Column index (0-based).
+    /// Column index (0-based), as of the cell's last layout.
     pub x: usize,
 
-    /// Row index (0-based).
+    /// Row index (0-based), as of the cell's last layout.
     pub y: usize,
 
     /// Vertical alignment within the cell.
-    pub vertical_alignment: TableCellVerticalAlignment,
-}
-
-/// Vertical alignment options for table cells.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum TableCellVerticalAlignment {
-    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
-    /// Align to top of cell.
-    Top,
-
-    /// Center vertically in cell.
-    Middle,
-
-    /// Align to bottom of cell.
-    Bottom,
-
-    /// Align to baseline (for text cells).
-    Baseline,
-
-    /// Fill entire cell height.
-    Fill,
+    ///
+    /// `None` defers to `RenderTable::default_vertical_alignment` — Flutter
+    /// parity: `TableCellParentData.verticalAlignment` is `TableCellVerticalAlignment?`
+    /// (`table.dart:20`), not a value that forces `Top` on every unset cell.
+    pub vertical_alignment: Option<TableCellVerticalAlignment>,
 }
 
 impl TableCellParentData {
-    /// Create with cell position and alignment.
+    /// Create with cell position and an explicit vertical alignment.
     pub const fn new(x: usize, y: usize, vertical_alignment: TableCellVerticalAlignment) -> Self {
         Self {
             offset: Offset::ZERO,
             x,
             y,
-            vertical_alignment,
+            vertical_alignment: Some(vertical_alignment),
         }
     }
 
-    /// Create at cell (0, 0) with top alignment.
+    /// Create at cell (0, 0) with no explicit alignment (defers to the
+    /// table's `default_vertical_alignment`).
     pub const fn zero() -> Self {
-        Self::new(0, 0, TableCellVerticalAlignment::Top)
+        Self {
+            offset: Offset::ZERO,
+            x: 0,
+            y: 0,
+            vertical_alignment: None,
+        }
     }
 
     /// Builder: set cell position.
@@ -72,9 +63,9 @@ impl TableCellParentData {
         self
     }
 
-    /// Builder: set vertical alignment.
+    /// Builder: set an explicit vertical alignment, overriding the table's default.
     pub const fn with_alignment(mut self, alignment: TableCellVerticalAlignment) -> Self {
-        self.vertical_alignment = alignment;
+        self.vertical_alignment = Some(alignment);
         self
     }
 
@@ -155,9 +146,11 @@ impl TextRange {
     }
 
     /// Get length of range.
+    ///
+    /// Returns 0 for inverted ranges (`end < start`) rather than overflowing.
     #[inline]
     pub const fn len(&self) -> usize {
-        self.end - self.start
+        self.end.saturating_sub(self.start)
     }
 
     /// Check if range is empty.
@@ -214,7 +207,7 @@ impl TextParentData {
     /// Get span length if present.
     #[inline]
     pub fn span_length(&self) -> Option<usize> {
-        self.span.as_ref().map(|s| s.len())
+        self.span.as_ref().map(TextRange::len)
     }
 }
 
@@ -251,7 +244,10 @@ mod tests {
 
         assert_eq!(data.x, 2);
         assert_eq!(data.y, 3);
-        assert_eq!(data.vertical_alignment, TableCellVerticalAlignment::Middle);
+        assert_eq!(
+            data.vertical_alignment,
+            Some(TableCellVerticalAlignment::Middle)
+        );
         assert_eq!(data.cell_position(), (2, 3));
         assert!(!data.is_first_cell());
     }
@@ -263,6 +259,14 @@ mod tests {
     }
 
     #[test]
+    fn zero_leaves_vertical_alignment_unset() {
+        // Flutter parity: an unset cell defers to the table's
+        // `default_vertical_alignment` rather than being hard-coded to `Top`.
+        let data = TableCellParentData::zero();
+        assert_eq!(data.vertical_alignment, None);
+    }
+
+    #[test]
     fn test_text_range() {
         let range = TextRange::new(5, 10);
 
@@ -271,6 +275,18 @@ mod tests {
         assert!(range.contains(5));
         assert!(range.contains(9));
         assert!(!range.contains(10));
+    }
+
+    // 1.7b RED test (behavior fix): inverted range must saturate to zero, not
+    // panic with an arithmetic overflow in debug builds.
+    #[test]
+    fn text_range_len_saturates_when_end_before_start() {
+        let range = TextRange::new(10, 5);
+        assert_eq!(
+            range.len(),
+            0,
+            "inverted range must have length 0 (saturating_sub), not overflow"
+        );
     }
 
     #[test]

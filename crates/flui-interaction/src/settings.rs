@@ -332,10 +332,10 @@ impl GestureSettings {
     /// ```
     pub fn for_device(device_kind: PointerType) -> Self {
         match device_kind {
-            PointerType::Touch => Self::touch_defaults(),
             PointerType::Mouse => Self::mouse_defaults(),
             PointerType::Pen => Self::pen_defaults(),
-            _ => Self::touch_defaults(), // Default to touch for unknown
+            // Touch, and any unknown device type, use touch defaults.
+            _ => Self::touch_defaults(),
         }
     }
 

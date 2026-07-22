@@ -10,9 +10,9 @@
 //! Run with: cargo run --example image_demo
 
 use flui_app::run_app;
-use flui_rendering::objects::{ImageAlignment, ImageFit, RenderImage};
+use flui_objects::{ImageAlignment, ImageFit, RenderImage};
 use flui_types::painting::Image as FluiImage;
-use flui_view::{BuildContext, ElementBase, IntoView, RenderView, StatelessView, View, ViewExt};
+use flui_view::{BuildContext, IntoView, RenderView, StatelessView, View, ViewExt};
 
 /// Decoded image data shared across UI rebuilds.
 #[derive(Clone)]
@@ -30,7 +30,10 @@ impl RenderView for ImageDisplay {
     type Protocol = flui_rendering::protocol::BoxProtocol;
     type RenderObject = RenderImage;
 
-    fn create_render_object(&self) -> Self::RenderObject {
+    fn create_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+    ) -> Self::RenderObject {
         RenderImage::from_image(
             (*self.image.data).clone(),
             ImageFit::Contain,
@@ -38,8 +41,12 @@ impl RenderView for ImageDisplay {
         )
     }
 
-    fn update_render_object(&self, render_object: &mut Self::RenderObject) {
-        *render_object = self.create_render_object();
+    fn update_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+        render_object: &mut Self::RenderObject,
+    ) {
+        *render_object = self.create_render_object(&flui_view::RenderObjectContext::detached());
     }
 }
 
@@ -61,19 +68,16 @@ impl StatelessView for App {
 }
 
 impl View for App {
-    fn create_element(&self) -> Box<dyn ElementBase> {
-        Box::new(flui_view::StatelessElement::new(
-            self,
-            flui_view::element::StatelessBehavior,
-        ))
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateless(self)
     }
 }
 
 fn load_image() -> anyhow::Result<SharedImage> {
-    let input = std::env::args()
-        .nth(1)
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| std::env::temp_dir().join("flui_test_cat.jpg"));
+    let input = std::env::args().nth(1).map_or_else(
+        || std::env::temp_dir().join("flui_test_cat.jpg"),
+        std::path::PathBuf::from,
+    );
     println!("Loading image: {}", input.display());
 
     let decoded = image::open(&input)?.to_rgba8();

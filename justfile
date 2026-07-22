@@ -4,7 +4,7 @@
 # Install: https://just.systems/man/en/
 
 set shell := ["bash", "-euo", "pipefail", "-c"]
-set windows-shell := ["powershell.exe", "-NoLogo", "-NoProfile", "-Command"]
+set windows-shell := ["bash", "-euo", "pipefail", "-c"]
 set dotenv-load
 set export
 set positional-arguments
@@ -14,7 +14,7 @@ version := `git describe --tags --always --dirty 2>/dev/null || echo "dev"`
 commit  := `git rev-parse --short HEAD 2>/dev/null || echo "unknown"`
 
 # Active workspace members (must match crates/* in Cargo.toml [workspace.members])
-active_crates := "flui-types flui-foundation flui-tree flui-platform flui-painting flui-semantics flui-scheduler flui-layer flui-interaction flui-engine flui-log flui-hot-reload flui-rendering flui-view flui-app"
+active_crates := "flui-animation flui-app flui-assets flui-binding flui-build flui-cli flui-cupertino flui-devtools flui-engine flui-foundation flui-geometry flui-hot-reload flui-interaction flui-layer flui-localizations flui-macros flui-material flui-objects flui-painting flui-platform flui-rendering flui-scheduler flui-semantics flui-tree flui-types flui-view flui-widgets"
 
 # Default recipe — show help
 [doc("Show available recipes grouped by category")]
@@ -48,21 +48,33 @@ build-crate crate:
 [group("build")]
 [doc("Build foundation layer first, then up the DAG (manual incremental build)")]
 build-layered:
+    cargo build -p flui-geometry
     cargo build -p flui-types
     cargo build -p flui-foundation
+    cargo build -p flui-macros
     cargo build -p flui-tree
     cargo build -p flui-platform
+    cargo build -p flui-assets
     cargo build -p flui-painting
     cargo build -p flui-semantics
     cargo build -p flui-scheduler
     cargo build -p flui-layer
     cargo build -p flui-interaction
+    cargo build -p flui-animation
     cargo build -p flui-engine
-    cargo build -p flui-log
     cargo build -p flui-hot-reload
     cargo build -p flui-rendering
+    cargo build -p flui-objects
     cargo build -p flui-view
+    cargo build -p flui-widgets
+    cargo build -p flui-localizations
+    cargo build -p flui-material
+    cargo build -p flui-cupertino
+    cargo build -p flui-binding
     cargo build -p flui-app
+    cargo build -p flui-devtools
+    cargo build -p flui-build
+    cargo build -p flui-cli
 
 # =============================================================================
 # Testing
@@ -97,6 +109,30 @@ test-all:
 [doc("Run tests against the release profile")]
 test-release:
     cargo test --workspace --release
+
+[group("test")]
+[doc("Run rustdoc examples as tests (CI gate; nextest does not execute doctests)")]
+test-doc:
+    cargo test --workspace --exclude flui-platform --doc
+
+[group("test")]
+[doc("Run the flui-assets/Image feature-gated tests CI also runs (default = [] hides them otherwise)")]
+test-assets:
+    cargo nextest run -p flui-assets --features full
+    cargo nextest run -p flui-widgets --features images --test image
+    cargo nextest run -p flui-widgets --features asset-images --lib
+    cargo nextest run -p flui-widgets --features asset-images --test image_async
+    cargo nextest run -p flui-widgets --features network-images --test image_network
+
+[group("quality")]
+[doc("Dependency audit: advisories, bans, licenses, sources (requires cargo-deny)")]
+deny:
+    cargo deny check
+
+[group("test")]
+[doc("Run miri on the flui-rendering subtree arena (the unsafe hot spot; requires nightly + miri component)")]
+miri:
+    cargo +nightly miri test -p flui-rendering --lib pipeline::owner::subtree_arena
 
 [group("test")]
 [doc("Generate an HTML coverage report (requires cargo-llvm-cov)")]
@@ -143,12 +179,17 @@ doc-open:
 doc-strict:
     RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 
+[group("quality")]
+[doc("Check docs/justfile crate inventories against Cargo metadata")]
+inventory-check:
+    bash scripts/check-workspace-inventory.sh
+
 # =============================================================================
 # Port methodology
 # =============================================================================
 
 [group("port")]
-[doc("Run refusal-trigger grep regressions (six triggers from docs/PORT.md)")]
+[doc("Run refusal-trigger grep regressions (21 triggers + FR-033 from docs/PORT.md)")]
 port-check:
     bash scripts/port-check.sh
 
@@ -281,12 +322,18 @@ watch-test crate="":
 # =============================================================================
 
 [group("ci")]
-[doc("Run the three quality gates (fmt-check + clippy + test)")]
-ci: fmt-check clippy test
+[doc("Run local CI gates (fmt-check + inventory + port-check + clippy + test + doctests)")]
+ci: fmt-check inventory-check port-check clippy test test-doc
 
 # =============================================================================
 # Maintenance
 # =============================================================================
+
+[group("maintenance")]
+[doc("Prune stale build artifacts: current-toolchain sweep + anything older than 7 days (requires cargo-sweep)")]
+sweep:
+    cargo sweep --installed
+    cargo sweep --time 7
 
 [confirm("Remove target/ and all build artifacts?")]
 [group("maintenance")]

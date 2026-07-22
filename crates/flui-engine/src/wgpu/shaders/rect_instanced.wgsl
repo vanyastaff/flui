@@ -1,17 +1,34 @@
-// Instanced rectangle shader for FLUI (SDF-based)
+// Instanced rectangle shader for FLUI (SDF-based, full-affine transform).
 //
 // Renders multiple rectangles in a single draw call using GPU instancing.
-// Each instance contains: bounds, color, corner radii, transform, and clip rrect.
+// Each instance carries: local bounds, color, corner radii, a full 2×3 affine
+// (2×2 linear + translation), and an optional SDF clip rrect.
 //
-// Performance improvements over previous version:
+// ## Affine transform design
+//
+// The vertex shader applies a full 2×3 affine in LOCAL space, enabling correct
+// SDF anti-aliasing for rotated and skewed rects without any fragment-shader
+// change:
+//
+//   local_pos = vertex.position * bounds.zw + bounds.xy
+//   M         = mat2x2(transform.xy, transform.zw)   // column-major 2×2
+//   device    = M * local_pos + transform_translate.xy
+//
+// The SDF fragment evaluates distance in LOCAL space (via `uv` / `rect_size`);
+// the L2 screen-space gradient `length(vec2(dpdx(dist), dpdy(dist)))` measures the
+// derivative of that local distance, yielding ~1-device-px AA under ANY affine
+// (rotation/skew/anisotropic scale) with no fragment-shader change; L1/fwidth
+// would overestimate diagonal edges by up to √2.
+//
+// For the baked-AABB fast path (axis-aligned SrcOver):
+//   transform           = [1, 0, 0, 1]   (identity 2×2)
+//   transform_translate = [0, 0, 0, 0]
+//   device = identity * local + 0 = local  → byte-identical output.
+//
+// Performance:
 // - 30-40% faster fragment shader (branchless SDF)
-// - Adaptive antialiasing via fwidth() (perfect at any zoom level)
-// - CSG-ready (can combine with other SDFs)
+// - Adaptive antialiasing via L2 screen-space gradient — correct at any zoom AND under rotation
 // - SDF-based rounded rect clipping (no stencil buffer needed)
-//
-// SDF Implementation:
-// Uses signed distance field for rounded corners, eliminating conditional
-// branches in the fragment shader for optimal GPU parallelism.
 
 // Vertex input (shared unit quad: [0,0] to [1,1])
 struct VertexInput {
@@ -20,13 +37,14 @@ struct VertexInput {
 
 // Instance input (per-rectangle data)
 struct InstanceInput {
-    @location(2) bounds: vec4<f32>,         // [x, y, width, height]
-    @location(3) color: vec4<f32>,          // [r, g, b, a] in 0-1 range
-    @location(4) corner_radii: vec4<f32>,   // [tl, tr, br, bl]
-    @location(5) transform: vec4<f32>,      // [scale_x, scale_y, translate_x, translate_y]
-    @location(6) clip_bounds: vec4<f32>,    // [x, y, width, height] of clip
-    @location(7) clip_radii: vec4<f32>,     // [tl, tr, br, bl] of clip
-    @location(8) clip_kind: vec4<u32>,      // [kind, _, _, _]: 0=none, 1=rrect, 2=rsuperellipse
+    @location(2) bounds: vec4<f32>,              // [x_local, y_local, width_local, height_local]
+    @location(3) color: vec4<f32>,               // [r, g, b, a] in 0-1 range
+    @location(4) corner_radii: vec4<f32>,        // [tl, tr, br, bl]
+    @location(5) transform: vec4<f32>,           // 2×2 linear affine col-major: [a, b, c, d]
+    @location(6) clip_bounds: vec4<f32>,         // [x, y, width, height] of clip
+    @location(7) clip_radii: vec4<f32>,          // [tl, tr, br, bl] of clip
+    @location(8) clip_kind: vec4<u32>,           // [kind, _, _, _]: 0=none, 1=rrect, 2=rsuperellipse
+    @location(9) transform_translate: vec4<f32>, // [tx, ty, 0, 0] — translation part of affine
 }
 
 // Vertex output / Fragment input
@@ -61,8 +79,11 @@ var<uniform> viewport: Viewport;
 /// r: corner radii [top-left, top-right, bottom-right, bottom-left]
 fn sdRoundedBox(p: vec2<f32>, b: vec2<f32>, r: vec4<f32>) -> f32 {
     // Select radius based on quadrant (branchless!)
-    let r2 = select(r.zw, r.xy, p.x > 0.0);
-    let r3 = select(r2.y, r2.x, p.y > 0.0);
+    // r2 = (top, bottom) radii for the active horizontal side:
+    //   right (p.x>0) → (tr=r.y, br=r.z); left → (tl=r.x, bl=r.w).
+    let r2 = select(vec2<f32>(r.x, r.w), vec2<f32>(r.y, r.z), p.x > 0.0);
+    // r3 = bottom (p.y>0) → r2.y; top → r2.x.
+    let r3 = select(r2.x, r2.y, p.y > 0.0);
 
     let q = abs(p) - b + vec2<f32>(r3);
     return min(max(q.x, q.y), 0.0) + length(max(q, vec2<f32>(0.0))) - r3;
@@ -74,8 +95,9 @@ fn sdRoundedBox(p: vec2<f32>, b: vec2<f32>, r: vec4<f32>) -> f32 {
 /// the existing `sdRoundedBox` inlining convention. See the common-library
 /// version for full prose.
 fn sdRoundedSuperellipse(p: vec2<f32>, b: vec2<f32>, r: vec4<f32>) -> f32 {
-    let r2 = select(r.zw, r.xy, p.x > 0.0);
-    let r3 = select(r2.y, r2.x, p.y > 0.0);
+    // (top, bottom) radii for the active side — see sdRoundedBox.
+    let r2 = select(vec2<f32>(r.x, r.w), vec2<f32>(r.y, r.z), p.x > 0.0);
+    let r3 = select(r2.x, r2.y, p.y > 0.0);
 
     let q = abs(p) - b + vec2<f32>(r3);
 
@@ -93,10 +115,11 @@ fn sdRoundedSuperellipse(p: vec2<f32>, b: vec2<f32>, r: vec4<f32>) -> f32 {
     return (n_norm - 1.0) * r3;
 }
 
-/// Convert SDF distance to alpha with adaptive antialiasing
+/// Convert SDF distance to alpha with adaptive antialiasing.
+/// Uses the L2 (Euclidean) gradient magnitude so a diagonal/rotated edge
+/// receives ~1-device-px AA exactly, not ~1.41× as with L1/fwidth.
 fn sdfToAlpha(dist: f32) -> f32 {
-    // fwidth gives us screen-space gradient for resolution-independent AA
-    let edge_width = fwidth(dist) * 0.5;
+    let edge_width = length(vec2<f32>(dpdx(dist), dpdy(dist))) * 0.5;
     return 1.0 - smoothstep(-edge_width, edge_width, dist);
 }
 
@@ -111,24 +134,67 @@ fn vs_main(
 ) -> VertexOutput {
     var out: VertexOutput;
 
-    // Transform unit quad [0-1] to rectangle bounds
-    let local_pos = vertex.position * instance.bounds.zw; // Scale by width/height
-    let world_pos = local_pos + instance.bounds.xy;        // Translate to position
+    // Map unit quad [0,0]–[1,1] to local shape space, EXPANDED outward by a
+    // ~1.5 device-px AA fringe.
+    //
+    // The SDF anti-aliases the edge over a ~1 device-px band that straddles the
+    // geometric boundary (inside AND outside). A quad sized to the exact rect
+    // only rasterizes fragments whose center is inside, so the OUTER half of the
+    // AA band is never shaded — invisible for axis-aligned edges (outer fringe
+    // pixels have dist > edge_width → alpha 0) but visibly truncating for
+    // diagonal/rotated edges, where an outside-center pixel can still be ~50%
+    // covered. Expanding the quad gives those fringe pixels fragments; the SDF
+    // distance is still measured to the TRUE rect (via `out.uv` below), so the
+    // shape is unchanged — only the previously-missing outer fringe is added.
+    //
+    // Margin is applied in LOCAL units = fringe_device / per-axis scale, so the
+    // fringe is ~1.5 device-px at any zoom/rotation. Column lengths of the 2×2
+    // give the local→device scale per axis.
+    let fringe_device = 1.5;
+    let col0_len = length(instance.transform.xy); // |x-column| → device x-scale
+    let col1_len = length(instance.transform.zw); // |y-column| → device y-scale
+    let size_safe = max(instance.bounds.zw, vec2<f32>(1e-6, 1e-6));
+    let margin_local = vec2<f32>(
+        fringe_device / max(col0_len, 1e-6),
+        fringe_device / max(col1_len, 1e-6),
+    );
+    // Expand the unit quad to [-e, 1+e] where e = margin_local / size.
+    let expand = margin_local / size_safe;
+    let exp_pos = vertex.position * (1.0 + 2.0 * expand) - expand;
+    let local_pos = exp_pos * instance.bounds.zw + instance.bounds.xy;
 
-    // Apply instance transform (for rotations, scaling, etc.)
-    let transformed_x = world_pos.x * instance.transform.x + instance.transform.z;
-    let transformed_y = world_pos.y * instance.transform.y + instance.transform.w;
+    // Apply the full 2×3 affine: device = M * local + t.
+    //
+    // transform = [a, b, c, d] is the 2×2 linear part column-major:
+    //   x-column = (a, b), y-column = (c, d).
+    // So: M * p = (a*p.x + c*p.y,  b*p.x + d*p.y).
+    //
+    // For the baked-AABB path: M=identity ([1,0,0,1]), t=[0,0] →
+    // device = local (byte-identical output).
+    let m = mat2x2<f32>(
+        instance.transform.xy,  // x-column (a, b)
+        instance.transform.zw,  // y-column (c, d)
+    );
+    let device_pos = m * local_pos + instance.transform_translate.xy;
 
-    // Convert to clip space [-1, 1]
-    let clip_x = (transformed_x / viewport.size.x) * 2.0 - 1.0;
-    let clip_y = 1.0 - (transformed_y / viewport.size.y) * 2.0; // Flip Y for screen coords
+    // Convert device pixels to clip space [-1, 1].
+    let clip_x = (device_pos.x / viewport.size.x) * 2.0 - 1.0;
+    let clip_y = 1.0 - (device_pos.y / viewport.size.y) * 2.0; // flip Y
 
     out.position = vec4<f32>(clip_x, clip_y, 0.0, 1.0);
     out.color = instance.color;
-    out.uv = vertex.position;  // UV coordinates [0-1]
+    // UV carries the EXPANDED normalized coordinate so that the fragment's
+    // `(uv - 0.5) * rect_size` recovers the TRUE centered local position even on
+    // the expanded fringe (uv ranges slightly outside [0,1] there). This keeps
+    // the SDF distance measured to the true rect regardless of quad expansion.
+    out.uv = exp_pos;
+    // rect_size = local width × height; the SDF evaluates distance in this space.
+    // Under any affine, the L2 gradient length(dpdx(dist), dpdy(dist)) correctly
+    // measures the screen-space derivative of the LOCAL distance → ~1 device-px AA band.
     out.rect_size = instance.bounds.zw;
     out.corner_radii = instance.corner_radii;
-    out.world_pos = vec2<f32>(transformed_x, transformed_y);
+    // world_pos is the device-pixel position, used by the SDF clip test.
+    out.world_pos = device_pos;
     out.clip_bounds = instance.clip_bounds;
     out.clip_radii = instance.clip_radii;
     out.clip_kind = instance.clip_kind.x;
@@ -150,7 +216,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let dist = sdRoundedBox(p, in.rect_size * 0.5, in.corner_radii);
 
     // Convert distance to alpha with adaptive antialiasing
-    // fwidth() automatically adjusts AA based on zoom level and pixel density
+    // The L2 screen-space gradient automatically adjusts AA based on zoom level and pixel density
     let alpha = sdfToAlpha(dist);
 
     // --- SDF Clip Test ---

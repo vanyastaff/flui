@@ -37,9 +37,9 @@ pub use error::{
 pub use inherited::InheritedView;
 pub use into_view::{BoxedElement, BoxedView, ElementExt, IntoElement, IntoView, ViewExt};
 pub use memo::Memo;
-pub use parent_data::{ParentDataConfig, ParentDataElement, ParentDataView};
+pub use parent_data::{ParentDataConfig, ParentDataView};
 pub use proxy::ProxyView;
-pub use render::RenderView;
+pub use render::{RenderObjectContext, RenderObjectContextError, RenderView};
 pub use root::{RootRenderElement, RootRenderView};
 pub use stateful::{StatefulView, ViewState};
 pub use stateless::StatelessView;
@@ -47,6 +47,6 @@ pub use view::{ElementBase, View};
 
 // Re-export unified element types from element module
 pub use crate::element::{
-    AnimatedElement, InheritedElement, ProxyElement, RenderElement, StatefulElement,
-    StatelessElement,
+    AnimatedElement, InheritedElement, ParentDataElement, ProxyElement, RenderElement,
+    StatefulElement, StatelessElement,
 };

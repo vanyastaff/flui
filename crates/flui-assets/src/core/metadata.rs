@@ -134,8 +134,8 @@ mod tests {
 
     #[test]
     fn test_audio_metadata() {
-        let meta = AssetMetadata::audio(Duration::from_secs(180), 44100, 2, "audio/mp3");
-        assert_eq!(meta.duration, Some(Duration::from_secs(180)));
+        let meta = AssetMetadata::audio(Duration::from_mins(3), 44100, 2, "audio/mp3");
+        assert_eq!(meta.duration, Some(Duration::from_mins(3)));
         assert_eq!(meta.sample_rate, Some(44100));
         assert_eq!(meta.channels, Some(2));
         assert_eq!(meta.format, Some("audio/mp3".to_string()));
@@ -143,9 +143,9 @@ mod tests {
 
     #[test]
     fn test_video_metadata() {
-        let meta = AssetMetadata::video(1920, 1080, Duration::from_secs(120), 30.0, "video/mp4");
+        let meta = AssetMetadata::video(1920, 1080, Duration::from_mins(2), 30.0, "video/mp4");
         assert_eq!(meta.dimensions, Some((1920, 1080)));
-        assert_eq!(meta.duration, Some(Duration::from_secs(120)));
+        assert_eq!(meta.duration, Some(Duration::from_mins(2)));
         assert_eq!(meta.frame_rate, Some(30.0));
         assert_eq!(meta.format, Some("video/mp4".to_string()));
     }

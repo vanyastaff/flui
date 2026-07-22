@@ -86,7 +86,7 @@ impl Asset for ImageAsset {
                 .await
                 .map_err(|e| AssetError::LoadFailed {
                     path: self.path.clone(),
-                    reason: format!("Failed to read file: {}", e),
+                    reason: format!("Failed to read file: {e}"),
                 })?
         };
 
@@ -95,7 +95,7 @@ impl Asset for ImageAsset {
             // Decode image using image crate
             let img = image::load_from_memory(&bytes).map_err(|e| AssetError::LoadFailed {
                 path: self.path.clone(),
-                reason: format!("Failed to decode image: {}", e),
+                reason: format!("Failed to decode image: {e}"),
             })?;
 
             // Convert to RGBA8
@@ -120,10 +120,10 @@ impl Asset for ImageAsset {
         let format = Path::new(&self.path)
             .extension()
             .and_then(|ext| ext.to_str())
-            .map(|ext| ext.to_uppercase());
+            .map(str::to_uppercase);
 
         Some(AssetMetadata {
-            size_bytes: self.bytes.as_ref().map(|b| b.len()),
+            size_bytes: self.bytes.as_ref().map(std::vec::Vec::len),
             format,
             ..Default::default()
         })

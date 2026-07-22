@@ -23,15 +23,13 @@ use std::time::Duration;
 
 use flui_animation::{Animation, AnimationController};
 use flui_layer::{Layer, LayerTree};
+use flui_objects::{RenderColoredBox, RenderOpacity, RenderPadding, RenderTransform};
 use flui_rendering::{
-    constraints::BoxConstraints,
-    hit_testing::HitTestResult,
-    objects::{RenderColoredBox, RenderOpacity, RenderPadding, RenderTransform},
-    pipeline::PipelineOwner,
+    constraints::BoxConstraints, hit_testing::HitTestResult, pipeline::PipelineOwner,
     testing::inspect,
 };
 use flui_scheduler::Scheduler;
-use flui_types::{EdgeInsets, Matrix4, Offset, Size, geometry::px};
+use flui_types::{Alignment, EdgeInsets, Matrix4, Offset, Size, geometry::px};
 
 type BoxedRenderObject =
     Box<dyn flui_rendering::traits::RenderObject<flui_rendering::protocol::BoxProtocol>>;
@@ -253,12 +251,14 @@ fn animated_opacity_layer_follows_and_zero_alpha_skips() {
 #[test]
 fn animated_transform_hits_follow_current_frame_matrix() {
     let mut owner = PipelineOwner::new();
-    // Origin pinned to the top-left corner: the default CENTER alignment
-    // would scale around the node's midpoint, putting the probe point on
-    // the (exclusive) scaled edge instead of inside it.
-    let scaler = owner.insert(
-        Box::new(RenderTransform::identity().with_origin(Offset::ZERO)) as BoxedRenderObject,
-    );
+    // Pivot pinned to the top-left corner via alignment. Flutter's
+    // `_effectiveTransform` combines origin + `alignment.alongSize` (fixed
+    // 61298797), so the default CENTER alignment would scale around the node's
+    // midpoint, putting the probe point on the (exclusive) scaled edge instead
+    // of inside it. TOP_LEFT alignment yields a (0,0) pivot.
+    let scaler = owner.insert(Box::new(
+        RenderTransform::identity().with_alignment(Alignment::TOP_LEFT),
+    ) as BoxedRenderObject);
     let child = owner
         .insert_child_render_object(scaler, Box::new(RenderColoredBox::red(40.0, 40.0)))
         .expect("child");

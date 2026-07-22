@@ -866,7 +866,13 @@ fn walk_descendant<'a>(
     name: &str,
     found: &mut Option<&'a DiagnosticsNode>,
 ) -> bool {
-    if node.name.as_deref() == Some(name) {
+    // Compare base names (before any `<...>`): a diagnostics node's own name
+    // keeps full generic fidelity (e.g. "RenderViewport<ScrollPosition>"),
+    // but a caller querying "by render type" wants the base name regardless
+    // of which generic argument a render object happens to be monomorphized
+    // over — normalizing both sides also lets a caller pass the full
+    // generic name through unharmed if it wants to.
+    if node.name.as_deref().map(base_type_name) == Some(base_type_name(name)) {
         if found.is_some() {
             return true;
         }
@@ -878,6 +884,13 @@ fn walk_descendant<'a>(
         }
     }
     false
+}
+
+/// The part of `type_name` before its first `<`, if any — the base name
+/// ignoring generic parameters (`"RenderViewport<ScrollPosition>"` ->
+/// `"RenderViewport"`; `"RenderColoredBox"` -> `"RenderColoredBox"` unchanged).
+fn base_type_name(type_name: &str) -> &str {
+    type_name.split('<').next().unwrap_or(type_name)
 }
 
 impl fmt::Display for DiagnosticsProperty {
@@ -994,12 +1007,13 @@ impl DiagnosticsNode {
             .map(DiagnosticsProperty::value)
     }
 
-    /// Returns the first child node named `name`, if present.
+    /// Returns the first child node named `name`, if present. Compares base
+    /// names (before any `<...>`) — see [`find_descendant`](Self::find_descendant).
     #[must_use]
     pub fn find_child(&self, name: &str) -> Option<&Self> {
         self.children
             .iter()
-            .find(|child| child.name() == Some(name))
+            .find(|child| child.name().map(base_type_name) == Some(base_type_name(name)))
     }
 
     /// Returns the first descendant node named `name` (depth-first), if present.
@@ -1268,10 +1282,7 @@ impl fmt::Display for DiagnosticsNode {
 pub trait Diagnosticable: fmt::Debug {
     /// Create a diagnostics node for this object.
     fn to_diagnostics_node(&self) -> DiagnosticsNode {
-        // F27: strip the module path, keeping only the final type segment.
-        // "flui_rendering::objects::RenderPadding" -> "RenderPadding".
-        let full = std::any::type_name::<Self>();
-        let type_name = full.rsplit("::").next().unwrap_or(full);
+        let type_name = short_diagnostic_type_name(std::any::type_name::<Self>());
         let mut node = DiagnosticsNode::new(type_name);
         let mut builder = DiagnosticsBuilder::new();
         self.debug_fill_properties(&mut builder);
@@ -1282,6 +1293,64 @@ pub trait Diagnosticable: fmt::Debug {
     /// Collect diagnostic properties.
     fn debug_fill_properties(&self, _properties: &mut DiagnosticsBuilder) {
         // Override in implementations
+    }
+}
+
+/// Strips the module path from `full` (a `std::any::type_name::<Self>()`
+/// output) and from every generic argument nested inside it, keeping the
+/// bare type names — the same shape Dart's `runtimeType` prints (generics
+/// visible, no library prefixes).
+///
+/// Examples: `"a::B"` -> `"B"`; `"a::B<c::D>"` -> `"B<D>"`;
+/// `"a::B<c::D, e::F>"` -> `"B<D, F>"`; `"a::B<c::D<e::F>>"` -> `"B<D<F>>"`;
+/// a lifetime argument passes through unchanged (`"Borrowed<'_>"` stays
+/// `"Borrowed<'_>"` — it has no module path to strip).
+///
+/// A plain `rsplit("::")` over the whole string gets this wrong: the LAST
+/// `::` in `"a::B<c::D>"` sits inside the generic argument, so a bare
+/// rsplit yields `"D>"`, not `"B<D>"`. And truncating at the first `<`
+/// (an earlier version of this function did) throws the generic away
+/// entirely, which loses real information — `RenderViewport<ScrollPosition>`
+/// stops being distinguishable from any other `RenderViewport<O>`.
+///
+/// Implementation: a single left-to-right scan. `full` is split into
+/// maximal runs of "path characters" (`[A-Za-z0-9_:']`) — each run is one
+/// path segment or one lifetime — separated by structural characters
+/// (`<`, `>`, `,`, whitespace, …), which pass through unchanged. Each path
+/// run starting with `'` is a lifetime and passes through as-is; every
+/// other run is reduced to the text after its rightmost `::` (or kept
+/// whole if it has none, e.g. `u32`). No regex, no recursion — the `<`/`>`
+/// nesting doesn't need to be tracked because runs never cross a
+/// structural character, so "nested" generics fall out of the scan for
+/// free.
+fn short_diagnostic_type_name(full: &str) -> String {
+    let mut short = String::with_capacity(full.len());
+    let mut run = String::new();
+    for ch in full.chars() {
+        if ch.is_alphanumeric() || ch == '_' || ch == ':' || ch == '\'' {
+            run.push(ch);
+            continue;
+        }
+        push_shortened_run(&mut short, &run);
+        run.clear();
+        short.push(ch);
+    }
+    push_shortened_run(&mut short, &run);
+    short
+}
+
+/// Appends `run` to `short`, shortened to its bare name unless it's a
+/// lifetime (starts with `'`, passed through verbatim). A no-op on an
+/// empty `run` (two structural characters in direct succession, e.g. `>>`).
+fn push_shortened_run(short: &mut String, run: &str) {
+    if run.is_empty() {
+        return;
+    }
+    if let Some(lifetime) = run.strip_prefix('\'') {
+        short.push('\'');
+        short.push_str(lifetime);
+    } else {
+        short.push_str(run.rsplit("::").next().unwrap_or(run));
     }
 }
 
@@ -1931,12 +2000,93 @@ mod tests {
 
         let node = MyWidget.to_diagnostics_node();
         // `type_name::<MyWidget>()` includes the full module path
-        // (e.g. `flui_foundation::debug::tests::...::MyWidget`); after the
-        // F27 fix the node name must be stripped to just "MyWidget".
+        // (e.g. `flui_foundation::debug::tests::...::MyWidget`); the node
+        // name must be stripped down to just "MyWidget".
         assert_eq!(
             node.name(),
             Some("MyWidget"),
             "type_name should be short (no module path), got: {:?}",
+            node.name()
+        );
+    }
+
+    #[test]
+    fn short_diagnostic_type_name_strips_every_segment_including_inside_generics() {
+        // Flutter-loyal semantics (Dart's `runtimeType` shows generics with
+        // bare names, no library prefixes) — module paths are stripped from
+        // EVERY segment, including nested inside `<...>`, not just the
+        // outer type. A bare `rsplit("::")` over the whole string gets this
+        // wrong (the last "::" sits inside the generic argument); truncating
+        // at the first `<` throws the generic away entirely.
+        assert_eq!(short_diagnostic_type_name("a::B"), "B");
+        assert_eq!(short_diagnostic_type_name("a::B<c::D>"), "B<D>");
+        assert_eq!(
+            short_diagnostic_type_name("a::B<c::D, e::F>"),
+            "B<D, F>",
+            "multiple comma-separated generic arguments must each be stripped"
+        );
+        assert_eq!(
+            short_diagnostic_type_name("a::B<c::D<e::F>>"),
+            "B<D<F>>",
+            "nested generics must be stripped at every level"
+        );
+    }
+
+    #[test]
+    fn short_diagnostic_type_name_passes_lifetimes_through_unchanged() {
+        // A lifetime argument has no module path to strip; it must survive
+        // verbatim, elided or named.
+        assert_eq!(
+            short_diagnostic_type_name("a::Borrowed<'_>"),
+            "Borrowed<'_>"
+        );
+        assert_eq!(
+            short_diagnostic_type_name("a::Borrowed<'a>"),
+            "Borrowed<'a>"
+        );
+    }
+
+    #[test]
+    fn short_diagnostic_type_name_keeps_a_non_default_generic_argument_visible() {
+        // Regression (the inverse of an earlier, wrong fix): `type_name`
+        // appends `<...>` only when a generic argument differs from the
+        // type's declared default (elided otherwise) — but once it does
+        // appear, it must stay visible, distinguishing e.g.
+        // `RenderViewport<ScrollPosition>` from any other `RenderViewport<O>`,
+        // not be discarded down to the bare outer name.
+        assert_eq!(
+            short_diagnostic_type_name(
+                "flui_objects::sliver::viewport::RenderViewport<flui_rendering::view::\
+                 scroll_position::ScrollPosition>"
+            ),
+            "RenderViewport<ScrollPosition>"
+        );
+    }
+
+    #[test]
+    fn to_diagnostics_node_keeps_a_non_default_generic_argument_visible() {
+        // End-to-end through the trait default, not just the string
+        // function: a real generic type whose argument's own module path
+        // contains "::" must come out with both segments stripped and the
+        // generic kept.
+        mod inner {
+            #[derive(Debug)]
+            pub(super) struct NonDefaultArg;
+        }
+        #[derive(Debug)]
+        struct GenericWidget<T = ()> {
+            _marker: std::marker::PhantomData<T>,
+        }
+        impl<T: fmt::Debug> Diagnosticable for GenericWidget<T> {}
+
+        let node = GenericWidget::<inner::NonDefaultArg> {
+            _marker: std::marker::PhantomData,
+        }
+        .to_diagnostics_node();
+        assert_eq!(
+            node.name(),
+            Some("GenericWidget<NonDefaultArg>"),
+            "a non-default generic argument must survive, module-path-stripped, got: {:?}",
             node.name()
         );
     }
@@ -1979,6 +2129,37 @@ mod tests {
         );
         assert!(tree.find_descendant("RenderPadding").is_some());
         assert!(tree.find_descendant("Missing").is_none());
+    }
+
+    #[test]
+    fn find_descendant_and_find_child_match_a_generic_node_by_its_base_name() {
+        // A node's own name keeps full generic fidelity
+        // ("RenderViewport<ScrollPosition>"), but a caller querying "by
+        // render type" — the harness pattern every `find_by_render_type`
+        // helper wraps — passes the bare base name and must still find it.
+        let tree = DiagnosticsNode::new("Root").child(
+            DiagnosticsNode::new("RenderViewport<ScrollPosition>").property("axis", "TopToBottom"),
+        );
+
+        let viewport = tree
+            .find_descendant("RenderViewport")
+            .expect("base-name query must match a fully-qualified generic node name");
+        assert_eq!(
+            viewport.get_property("axis").as_deref(),
+            Some("TopToBottom")
+        );
+
+        let child = tree
+            .find_child("RenderViewport")
+            .expect("find_child must also match by base name");
+        assert_eq!(child.name(), Some("RenderViewport<ScrollPosition>"));
+
+        // The reverse direction also works: querying with the full generic
+        // name still matches (comparing both sides' base name is symmetric).
+        assert!(
+            tree.find_descendant("RenderViewport<ScrollPosition>")
+                .is_some()
+        );
     }
 
     #[test]

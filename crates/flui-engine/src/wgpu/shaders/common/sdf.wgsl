@@ -5,7 +5,7 @@
 //
 // SDF advantages:
 // - Branchless execution (no if/else in fragment shader)
-// - Adaptive antialiasing via fwidth()
+// - Adaptive antialiasing via L2 screen-space gradient (length(dpdx, dpdy))
 // - CSG operations (union, subtraction, intersection)
 // - Resolution-independent rendering
 //
@@ -43,8 +43,11 @@ fn sdRoundedBox(p: vec2<f32>, b: vec2<f32>, r: vec4<f32>) -> f32 {
     // - p.x < 0.0: left side (uses r.x or r.w)
     // - p.y > 0.0: bottom (uses r.z or r.w)
     // - p.y < 0.0: top (uses r.x or r.y)
-    let r2 = select(r.zw, r.xy, p.x > 0.0);  // Select left/right pair
-    let r3 = select(r2.y, r2.x, p.y > 0.0);  // Select top/bottom from pair
+    // r2 = (top, bottom) radii for the active horizontal side:
+    //   right (p.x>0) → (tr=r.y, br=r.z); left → (tl=r.x, bl=r.w).
+    let r2 = select(vec2<f32>(r.x, r.w), vec2<f32>(r.y, r.z), p.x > 0.0);
+    // r3 = bottom (p.y>0) → r2.y; top → r2.x.
+    let r3 = select(r2.x, r2.y, p.y > 0.0);
 
     let q = abs(p) - b + vec2<f32>(r3);
     return min(max(q.x, q.y), 0.0) + length(max(q, vec2<f32>(0.0))) - r3;
@@ -68,8 +71,9 @@ fn sdRoundedBox(p: vec2<f32>, b: vec2<f32>, r: vec4<f32>) -> f32 {
 fn sdRoundedSuperellipse(p: vec2<f32>, b: vec2<f32>, r: vec4<f32>) -> f32 {
     // Per-corner radius selection (identical branchless pattern to
     // sdRoundedBox).
-    let r2 = select(r.zw, r.xy, p.x > 0.0);
-    let r3 = select(r2.y, r2.x, p.y > 0.0);
+    // (top, bottom) radii for the active side — see sdRoundedBox.
+    let r2 = select(vec2<f32>(r.x, r.w), vec2<f32>(r.y, r.z), p.x > 0.0);
+    let r3 = select(r2.x, r2.y, p.y > 0.0);
 
     // `q` is the corner-local distance vector: positive when outside the
     // inner (non-rounded) rect.
@@ -138,15 +142,17 @@ fn sdEllipse(p: vec2<f32>, ab: vec2<f32>) -> f32 {
 // =============================================================================
 
 /// Convert SDF distance to alpha value with adaptive antialiasing
-/// Uses screen-space derivatives (fwidth) for resolution-independent AA
+/// Uses screen-space derivatives (L2: length(dpdx, dpdy)) for resolution-independent AA
 ///
 /// dist: signed distance from SDF function
 /// Returns: alpha value [0.0, 1.0] for blending
 fn sdfToAlpha(dist: f32) -> f32 {
-    // fwidth(dist) = abs(dFdx(dist)) + abs(dFdy(dist))
-    // This gives us the rate of change across the pixel, allowing
-    // adaptive antialiasing that works at any zoom level
-    let edge_width = fwidth(dist) * 0.5;
+    // L2 (Euclidean) gradient magnitude: length(∇dist) = sqrt(dpdx²+dpdy²).
+    // Compared to L1/fwidth (|dpdx|+|dpdy|), L2 is correct for isotropic 1-px
+    // AA at any orientation: on a ±45° diagonal L1 overestimates by √2 (~41%),
+    // giving a wider AA band on rounded corners under rotation/skew.
+    // Axis-aligned straight edges are numerically identical (one partial is 0).
+    let edge_width = length(vec2<f32>(dpdx(dist), dpdy(dist))) * 0.5;
 
     // smoothstep from -edge to +edge creates smooth transition
     return 1.0 - smoothstep(-edge_width, edge_width, dist);

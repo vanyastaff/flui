@@ -1,7 +1,7 @@
 //! Canvas scoped operations: 12 `with_*` helpers that wrap
 //! `save()`/`restore()` around a closure.
 //!
-//! Mythos chain U4 extracted these from the 3,305-LOC `canvas.rs` god
+//! These were extracted from the 3,305-LOC `canvas.rs` god
 //! module. Each scoped helper compiles to a direct `save() + body +
 //! restore()` sequence -- zero overhead vs. manual save/restore.
 //!

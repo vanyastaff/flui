@@ -151,16 +151,16 @@ impl FixedViewportOffset {
     }
 }
 
-// Cycle 4 R-19: pre-cycle `FixedViewportOffset` carried
-// `listeners: RwLock<Vec<Arc<dyn Fn() + Send + Sync>>>` + a private
+// `FixedViewportOffset` previously carried
+// `listeners: RwLock<Vec<Arc<dyn Fn() + Send + Sync>>>` plus a private
 // `notify_listeners()` marked `#[allow(dead_code)] // Reserved for
 // future ViewportOffset listener API`. The notify path was never
 // called because a fixed viewport offset never changes its `pixels`
 // (`jump_to` / `animate_to` are no-ops by design). Storing listeners
-// that can never fire was speculative API; both field and method
-// were deleted alongside the `add_listener`/`remove_listener` trait
-// impl below being downgraded to no-ops (the trait still requires
-// them, but with no storage they cost nothing). See audit R-19.
+// that can never fire was speculative API, so both the field and the
+// method were deleted, and the `add_listener`/`remove_listener` trait
+// impl below was downgraded to no-ops (the trait still requires them,
+// but with no storage they cost nothing).
 
 impl Default for FixedViewportOffset {
     fn default() -> Self {
@@ -212,8 +212,8 @@ impl ViewportOffset for FixedViewportOffset {
     fn add_listener(&self, _listener: Arc<dyn Fn() + Send + Sync>) {
         // No-op: FixedViewportOffset's `pixels` value never changes
         // (`jump_to` / `animate_to` are no-ops by design), so no
-        // listener could ever fire. The trait requires the method;
-        // dropping the unreachable storage is cycle 4 R-19.
+        // listener could ever fire. The trait requires the method,
+        // so we keep it but drop the storage that would back it.
     }
 
     fn remove_listener(&self, _listener: &Arc<dyn Fn() + Send + Sync>) {
@@ -274,7 +274,7 @@ impl Debug for ScrollableViewportOffset {
             .field("user_scroll_direction", &self.user_scroll_direction)
             .field("allow_implicit_scrolling", &self.allow_implicit_scrolling)
             .field("listeners_count", &self.listeners.read().len())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 

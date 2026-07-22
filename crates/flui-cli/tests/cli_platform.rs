@@ -3,8 +3,8 @@
 //! Tests the platform list subcommand and validates output.
 //! Note: cliclack writes all interactive output to stderr.
 
-use assert_cmd::cargo::cargo_bin_cmd;
 use assert_cmd::Command;
+use assert_cmd::cargo::cargo_bin_cmd;
 use predicates::prelude::*;
 
 /// Get a command for the `flui` binary.

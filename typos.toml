@@ -22,6 +22,9 @@ extend-exclude = [
 extend-ignore-identifiers-re = [
     # Type names from Flutter that look like typos to typos
     "RSuperellipse",
+    # `_TransitionableNavigationBar` (cupertino/nav_bar.dart) — the real oracle
+    # class name, not a typo of "Transitional".
+    "Transitionable",
     # Hex color literals + similar
     "0x[0-9a-fA-F]+",
 ]
@@ -50,3 +53,6 @@ udid = "udid"
 # the bare token `mis`, which typos flags as `miss`/`mist`. The prefix is valid
 # English; allow the token so the hyphenated forms pass.
 mis = "mis"
+# Intentional pre-insert text in a TextEditingController test: start "helo",
+# insert "l" before 'o' → "hello".
+helo = "helo"

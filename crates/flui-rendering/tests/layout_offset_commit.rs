@@ -15,13 +15,13 @@
 //! Refs:
 //!   * docs/research/2026-06-10-rendering-design-amendments.md §D9.1
 
+use flui_objects::{RenderColoredBox, RenderPadding};
 use flui_rendering::{
     constraints::BoxConstraints,
     context::{BoxHitTestContext, BoxLayoutContext},
-    objects::{RenderColoredBox, RenderPadding},
     parent_data::BoxParentData,
     testing::{Probe, RenderTester, box_node},
-    traits::{HotReloadCapability, PaintEffectsCapability, RenderBox, SemanticsCapability},
+    traits::RenderBox,
 };
 use flui_tree::Variable;
 use flui_types::{EdgeInsets, Offset, Size, geometry::px};
@@ -103,9 +103,6 @@ impl PositionFirstChildOnly {
 }
 
 impl flui_foundation::Diagnosticable for PositionFirstChildOnly {}
-impl PaintEffectsCapability for PositionFirstChildOnly {}
-impl SemanticsCapability for PositionFirstChildOnly {}
-impl HotReloadCapability for PositionFirstChildOnly {}
 
 impl RenderBox for PositionFirstChildOnly {
     type Arity = Variable;

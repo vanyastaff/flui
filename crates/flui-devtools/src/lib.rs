@@ -6,7 +6,7 @@
 //!
 //! # Features
 //!
-//! ## 🎯 Performance Profiler (default)
+//! ## 🎯 Performance Profiler (feature: profiling)
 //! - Frame timing and jank detection
 //! - Build/layout/paint phase profiling
 //! - CPU usage tracking
@@ -80,7 +80,7 @@
 //!
 //! # Feature Flags
 //!
-//! - `default`: Enables `profiling` only
+//! - `default`: no features enabled; opt in via `profiling`, `timeline`, or `hot-reload`
 //! - `profiling`: Performance profiling tools (no external dependencies)
 //! - `timeline`: Timeline view for events
 //! - `hot-reload`: File watching and hot reload
@@ -93,7 +93,8 @@
 //! **Note**: This crate has NO dependency on `flui_core` to avoid circular
 //! dependencies. Widget inspection is available through separate tools.
 
-#![warn(missing_docs)]
+// Ship bar (wave 4): every public item is documented; keep it that way.
+#![deny(missing_docs)]
 #![warn(missing_debug_implementations)]
 mod common;
 #[cfg(feature = "hot-reload")]
@@ -104,10 +105,11 @@ pub mod hot_reload;
 // TODO: Add network monitor module
 // #[cfg(feature = "network-monitor")]
 // pub mod network;
-pub mod profiler;
 // TODO: Add remote debug module
 // #[cfg(feature = "remote-debug")]
 // pub mod remote;
+#[cfg(feature = "profiling")]
+pub mod profiler;
 #[cfg(feature = "timeline")]
 pub mod timeline;
 

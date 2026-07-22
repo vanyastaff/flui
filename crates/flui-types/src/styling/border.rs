@@ -12,6 +12,7 @@ use crate::{
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum BorderStyle {
+    /// Draw the border as a solid line.
     #[default]
     Solid,
 

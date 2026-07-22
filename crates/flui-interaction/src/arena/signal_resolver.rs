@@ -38,9 +38,7 @@
 //! resolver.resolve(pointer_id, signal_event);
 //! ```
 
-use std::{collections::HashMap, sync::Arc};
-
-use parking_lot::Mutex;
+use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use crate::{
     events::PointerEvent,
@@ -48,7 +46,7 @@ use crate::{
 };
 
 /// Callback for handling pointer signals
-pub type SignalCallback = Arc<dyn Fn(PointerEvent) + Send + Sync>;
+pub type SignalCallback = Rc<dyn Fn(PointerEvent)>;
 
 /// Priority level for signal handlers
 ///
@@ -93,12 +91,14 @@ fn find_winner(handlers: &[SignalHandler]) -> Option<&SignalHandler> {
 /// Manages multiple handlers for pointer signals and resolves conflicts
 /// based on priority and registration order.
 ///
-/// # Thread Safety
+/// # Thread affinity
 ///
-/// This type is thread-safe using Arc<Mutex<_>> internally.
+/// This type is owner-local under ADR-0027. It stores executable callbacks in
+/// `Rc`/`RefCell`; cross-thread input should enter through typed data-plane
+/// events before owner-thread dispatch.
 #[derive(Clone)]
 pub struct PointerSignalResolver {
-    inner: Arc<Mutex<ResolverInner>>,
+    inner: Rc<RefCell<ResolverInner>>,
 }
 
 struct ResolverInner {
@@ -108,11 +108,20 @@ struct ResolverInner {
     handlers: HashMap<PointerId, Vec<SignalHandler>>,
 }
 
+// Manual impl: the registered handlers hold `dyn Fn` callbacks, which have no
+// useful `Debug` representation.
+impl std::fmt::Debug for PointerSignalResolver {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PointerSignalResolver")
+            .finish_non_exhaustive()
+    }
+}
+
 impl PointerSignalResolver {
     /// Creates a new signal resolver
     pub fn new() -> Self {
         Self {
-            inner: Arc::new(Mutex::new(ResolverInner {
+            inner: Rc::new(RefCell::new(ResolverInner {
                 next_handler_id: 1,
                 handlers: HashMap::new(),
             })),
@@ -135,9 +144,9 @@ impl PointerSignalResolver {
         callback: F,
     ) -> HandlerId
     where
-        F: Fn(PointerEvent) + Send + Sync + 'static,
+        F: Fn(PointerEvent) + 'static,
     {
-        let mut inner = self.inner.lock();
+        let mut inner = self.inner.borrow_mut();
 
         let handler_id = HandlerId::new(inner.next_handler_id);
         inner.next_handler_id += 1;
@@ -145,7 +154,7 @@ impl PointerSignalResolver {
         let handler = SignalHandler {
             id: handler_id,
             priority,
-            callback: Arc::new(callback),
+            callback: Rc::new(callback),
         };
 
         inner.handlers.entry(pointer_id).or_default().push(handler);
@@ -160,7 +169,7 @@ impl PointerSignalResolver {
     /// * `pointer_id` - The pointer device
     /// * `handler_id` - The handler ID returned from `register()`
     pub fn unregister(&self, pointer_id: PointerId, handler_id: HandlerId) {
-        let mut inner = self.inner.lock();
+        let mut inner = self.inner.borrow_mut();
 
         if let Some(handlers) = inner.handlers.get_mut(&pointer_id) {
             handlers.retain(|h| h.id != handler_id);
@@ -182,7 +191,7 @@ impl PointerSignalResolver {
     /// * `pointer_id` - The pointer device
     /// * `event` - The signal event to resolve
     pub fn resolve(&self, pointer_id: PointerId, event: PointerEvent) {
-        let inner = self.inner.lock();
+        let inner = self.inner.borrow();
 
         let Some(handlers) = inner.handlers.get(&pointer_id) else {
             return; // No handlers registered
@@ -190,7 +199,7 @@ impl PointerSignalResolver {
 
         if let Some(handler) = find_winner(handlers) {
             let callback = handler.callback.clone();
-            // Release lock before calling callback
+            // Release the borrow before calling callback.
             drop(inner);
             callback(event);
         }
@@ -203,7 +212,7 @@ impl PointerSignalResolver {
     ///
     /// Returns true if a handler was found and invoked.
     pub fn resolve_and_accept(&self, pointer_id: PointerId, event: PointerEvent) -> bool {
-        let inner = self.inner.lock();
+        let inner = self.inner.borrow();
 
         let Some(handlers) = inner.handlers.get(&pointer_id) else {
             return false;
@@ -221,24 +230,23 @@ impl PointerSignalResolver {
 
     /// Clears all handlers for a pointer
     pub fn clear(&self, pointer_id: PointerId) {
-        let mut inner = self.inner.lock();
+        let mut inner = self.inner.borrow_mut();
         inner.handlers.remove(&pointer_id);
     }
 
     /// Clears all handlers for all pointers
     pub fn clear_all(&self) {
-        let mut inner = self.inner.lock();
+        let mut inner = self.inner.borrow_mut();
         inner.handlers.clear();
     }
 
     /// Returns the number of handlers registered for a pointer
     pub fn handler_count(&self, pointer_id: PointerId) -> usize {
         self.inner
-            .lock()
+            .borrow()
             .handlers
             .get(&pointer_id)
-            .map(|h| h.len())
-            .unwrap_or(0)
+            .map_or(0, std::vec::Vec::len)
     }
 }
 
@@ -250,7 +258,7 @@ impl Default for PointerSignalResolver {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::{cell::Cell, rc::Rc};
 
     use flui_types::geometry::{Offset, px};
 
@@ -287,60 +295,60 @@ mod tests {
     #[test]
     fn test_resolve_single_handler() {
         let resolver = PointerSignalResolver::new();
-        let called = Arc::new(AtomicBool::new(false));
+        let called = Rc::new(Cell::new(false));
         let called_clone = called.clone();
 
         resolver.register(PointerId::PRIMARY, SignalPriority::Normal, move |_| {
-            called_clone.store(true, Ordering::Relaxed);
+            called_clone.set(true);
         });
 
         let event = crate::events::make_scroll_event(Offset::ZERO, Offset::new(px(0.0), px(10.0)));
 
         resolver.resolve(PointerId::PRIMARY, event);
 
-        assert!(called.load(Ordering::Relaxed));
+        assert!(called.get());
     }
 
     #[test]
     fn test_priority_resolution() {
         let resolver = PointerSignalResolver::new();
-        let low_called = Arc::new(AtomicBool::new(false));
-        let high_called = Arc::new(AtomicBool::new(false));
+        let low_called = Rc::new(Cell::new(false));
+        let high_called = Rc::new(Cell::new(false));
 
         let low_clone = low_called.clone();
         let high_clone = high_called.clone();
 
         resolver.register(PointerId::PRIMARY, SignalPriority::Low, move |_| {
-            low_clone.store(true, Ordering::Relaxed);
+            low_clone.set(true);
         });
 
         resolver.register(PointerId::PRIMARY, SignalPriority::High, move |_| {
-            high_clone.store(true, Ordering::Relaxed);
+            high_clone.set(true);
         });
 
         let event = crate::events::make_scroll_event(Offset::ZERO, Offset::new(px(0.0), px(10.0)));
 
         resolver.resolve(PointerId::PRIMARY, event);
 
-        assert!(!low_called.load(Ordering::Relaxed));
-        assert!(high_called.load(Ordering::Relaxed));
+        assert!(!low_called.get());
+        assert!(high_called.get());
     }
 
     #[test]
     fn test_same_priority_last_wins() {
         let resolver = PointerSignalResolver::new();
-        let first_called = Arc::new(AtomicUsize::new(0));
-        let second_called = Arc::new(AtomicUsize::new(0));
+        let first_called = Rc::new(Cell::new(0));
+        let second_called = Rc::new(Cell::new(0));
 
         let first_clone = first_called.clone();
         let second_clone = second_called.clone();
 
         resolver.register(PointerId::PRIMARY, SignalPriority::Normal, move |_| {
-            first_clone.fetch_add(1, Ordering::Relaxed);
+            first_clone.set(first_clone.get() + 1);
         });
 
         resolver.register(PointerId::PRIMARY, SignalPriority::Normal, move |_| {
-            second_clone.fetch_add(1, Ordering::Relaxed);
+            second_clone.set(second_clone.get() + 1);
         });
 
         let event = crate::events::make_scroll_event(Offset::ZERO, Offset::new(px(0.0), px(10.0)));
@@ -348,8 +356,8 @@ mod tests {
         resolver.resolve(PointerId::PRIMARY, event);
 
         // Last registered (second) should win
-        assert_eq!(first_called.load(Ordering::Relaxed), 0);
-        assert_eq!(second_called.load(Ordering::Relaxed), 1);
+        assert_eq!(first_called.get(), 0);
+        assert_eq!(second_called.get(), 1);
     }
 
     #[test]
@@ -389,11 +397,11 @@ mod tests {
     #[test]
     fn test_resolve_and_accept() {
         let resolver = PointerSignalResolver::new();
-        let called = Arc::new(AtomicBool::new(false));
+        let called = Rc::new(Cell::new(false));
         let called_clone = called.clone();
 
         resolver.register(PointerId::PRIMARY, SignalPriority::Normal, move |_| {
-            called_clone.store(true, Ordering::Relaxed);
+            called_clone.set(true);
         });
 
         let event = crate::events::make_scroll_event(Offset::ZERO, Offset::new(px(0.0), px(10.0)));
@@ -401,6 +409,22 @@ mod tests {
         let accepted = resolver.resolve_and_accept(PointerId::PRIMARY, event);
 
         assert!(accepted);
-        assert!(called.load(Ordering::Relaxed));
+        assert!(called.get());
+    }
+
+    #[test]
+    fn signal_callback_accepts_owner_local_rc_state() {
+        let resolver = PointerSignalResolver::new();
+        let total = Rc::new(Cell::new(0));
+        let captured = Rc::clone(&total);
+
+        resolver.register(PointerId::PRIMARY, SignalPriority::Normal, move |_| {
+            captured.set(captured.get() + 1);
+        });
+
+        let event = crate::events::make_scroll_event(Offset::ZERO, Offset::new(px(0.0), px(10.0)));
+        resolver.resolve(PointerId::PRIMARY, event);
+
+        assert_eq!(total.get(), 1);
     }
 }

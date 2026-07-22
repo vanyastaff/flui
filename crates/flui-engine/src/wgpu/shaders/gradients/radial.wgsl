@@ -68,8 +68,9 @@ fn sdRoundedBox(p: vec2<f32>, b: vec2<f32>, r: vec4<f32>) -> f32 {
     return min(max(q.x, q.y), 0.0) + length(max(q, vec2<f32>(0.0))) - r3;
 }
 
+/// L2 gradient magnitude for ~1-device-px AA on diagonal/rotated clip edges.
 fn sdfToAlpha(dist: f32) -> f32 {
-    let edge_width = fwidth(dist) * 0.5;
+    let edge_width = length(vec2<f32>(dpdx(dist), dpdy(dist))) * 0.5;
     return 1.0 - smoothstep(-edge_width, edge_width, dist);
 }
 
@@ -170,7 +171,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Interpolate color from storage buffer
     var color = interpolateGradient(t, in.stop_count, in.stop_offset);
 
-    // Apply corner clipping (fwidth must be called from uniform control flow)
+    // Apply corner clipping (derivatives dpdx/dpdy must be called from uniform control flow)
     let alpha = sdfToAlpha(dist);
     color = vec4<f32>(color.rgb, color.a * alpha);
 

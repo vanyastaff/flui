@@ -189,7 +189,7 @@ impl Default for DamageTracker {
 
 #[cfg(test)]
 mod tests {
-    use flui_types::geometry::{px, Rect};
+    use flui_types::geometry::{Rect, px};
 
     use super::*;
 
@@ -243,7 +243,7 @@ mod tests {
         tracker.mark_dirty(rect(0.0, 0.0, 10.0, 10.0)); // area = 100
         tracker.mark_dirty(rect(5.0, 5.0, 15.0, 15.0)); // area = 100, close to first
         tracker.mark_dirty(rect(200.0, 200.0, 210.0, 210.0)); // area = 100, far
-                                                              // Fourth rect should merge the two close ones.
+        // Fourth rect should merge the two close ones.
         tracker.mark_dirty(rect(300.0, 300.0, 310.0, 310.0));
         assert_eq!(tracker.region_count(), 3);
     }

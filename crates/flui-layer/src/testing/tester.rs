@@ -6,14 +6,15 @@ use flui_foundation::{DiagnosticsNode, LayerId};
 use flui_types::Rect;
 
 use crate::{
+    LayerTree,
     testing::{
         inspect,
         spec::{self, LayerLabelRegistry, LayerSpec},
     },
-    LayerTree,
 };
 
 /// A mounted layer tree plus its label registry, ready to inspect.
+#[derive(Debug)]
 pub struct LayerTester {
     tree: LayerTree,
     root: LayerId,

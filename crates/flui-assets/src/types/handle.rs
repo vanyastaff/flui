@@ -264,7 +264,7 @@ where
         f.debug_struct("WeakAssetHandle")
             .field("key", &self.key)
             .field("weak_count", &self.weak_count())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -276,7 +276,7 @@ where
 /// used directly. It's hidden from documentation.
 #[doc(hidden)]
 pub mod sealed {
-    use super::*;
+    use super::AssetHandle;
 
     /// Sealed trait to prevent external implementations of AssetHandleCore.
     ///
@@ -576,7 +576,7 @@ mod tests {
         let data = TestData { value: 42 };
         let handle = AssetHandle::new(Arc::new(data), AssetKey::new("test"));
 
-        let debug_str = format!("{:?}", handle);
+        let debug_str = format!("{handle:?}");
         assert!(debug_str.contains("AssetHandle"));
         // AssetKey debug format includes the string
         assert!(debug_str.contains("key"));

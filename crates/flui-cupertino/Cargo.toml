@@ -1,0 +1,71 @@
+[package]
+name = "flui-cupertino"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "iOS-style (Cupertino) theming foundation for FLUI — CupertinoDynamicColor, CupertinoTextTheme, CupertinoThemeData, and the CupertinoButton family"
+repository.workspace = true
+keywords = ["ui", "cupertino", "ios", "flutter", "flui"]
+categories = ["gui"]
+
+[dependencies]
+# `View`/`InheritedView`/`impl_inherited_view!`/`BuildContext` — the
+# element-tree primitives `CupertinoTheme` is built on, and the
+# `InheritedTheme` trait it implements (Flutter parity: `Theme`/
+# `CupertinoTheme` both implement it so a future capture/re-parent
+# mechanism treats every ambient theme the same way).
+flui-view = { path = "../flui-view", version = "0.2.0" }
+# `MediaQuery`/`MediaQueryData::platform_brightness` (the brightness fallback
+# root `CupertinoDynamicColor::resolve_from` reads when no `CupertinoTheme`
+# ancestor sets one), `WidgetState`/`WidgetStateProperty`, `SizedBox`,
+# `GestureDetector`, `FocusableActionDetector`-equivalent widgets, and
+# `FadeTransition` — `CupertinoButton`'s press-opacity substrate.
+# ADR-0028: this is the ONLY design-system-adjacent dependency allowed —
+# never `flui-material`, and never a new `flui-rendering` render object of
+# this crate's own (v1 composes existing `flui-widgets` widgets). The
+# `flui-objects` dependency below is a single value-type exception, not a
+# reversal of that rule — see its own comment.
+flui-widgets = { path = "../flui-widgets", version = "0.2.0" }
+# `TranslationFraction` only — the size-relative-offset newtype
+# `flui_widgets::SlideTransition` (an already-approved ADR-0028 dependency)
+# requires as its `Animation<T>` parameter. `route.rs` composes that existing
+# widget for `CupertinoPageRoute`'s slide transition; it does not construct
+# any `flui-objects` render object of its own.
+flui-objects = { path = "../flui-objects", version = "0.2.0" }
+# `ChangeNotifier`/`Listenable`/`ListenerCallback`/`ListenerId` —
+# `CupertinoTabController`'s notify substrate (`tab_scaffold.rs`), the same
+# primitive `flui-widgets` itself builds its own controllers on. A value
+# type/trait dependency, not a render object — same posture as the
+# `flui-objects` entry above.
+flui-foundation = { path = "../flui-foundation", version = "0.2.0" }
+# `Color`, `Brightness`, `TextStyle`/`FontWeight` — the value types every
+# const table in this crate (`colors.rs`, `text_theme.rs`) is built from.
+flui-types = { path = "../flui-types", version = "0.2.0" }
+# `AnimationController`/`Vsync`/`Curves` — `CupertinoButton`'s press-opacity
+# fade (`kFadeOutDuration`/`kFadeInDuration`), registered on the ambient
+# `VsyncScope` (`flui-widgets::animated`) exactly as `flui-material`'s
+# `InkWell` registers its press-deactivation timer — see `button.rs`'s
+# module doc.
+flui-animation = { path = "../flui-animation", version = "0.2.0" }
+tracing = { workspace = true }
+
+[dev-dependencies]
+flui-rendering = { path = "../flui-rendering", version = "0.2.0", features = ["testing"] }
+flui-objects = { path = "../flui-objects", version = "0.2.0", features = ["testing"] }
+flui-binding = { path = "../flui-binding", version = "0.2.0" }
+# `Scheduler` — a bare `AnimationController` fixture in
+# `tests/tab_scaffold.rs`'s `TickerMode`-muting test needs one to construct,
+# matching `flui-widgets/tests/visibility.rs`'s identical animation-probe
+# fixture.
+flui-scheduler = { path = "../flui-scheduler", version = "0.2.0" }
+# Synthetic pointer events (`make_down_event`/`make_up_event`) — `tests/common`
+# dispatches these to drive `CupertinoButton`'s tap handling at the widget
+# level. No `flui-interaction` usage in `src/` (no `FocusNode` wiring yet —
+# see `button.rs`'s deferred-`autofocus`/`onFocusChange` note).
+flui-interaction = { path = "../flui-interaction", version = "0.2.0", features = ["testing"] }
+parking_lot = { workspace = true }
+
+[lints]
+workspace = true

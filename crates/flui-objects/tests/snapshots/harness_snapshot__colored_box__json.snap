@@ -1,0 +1,130 @@
+---
+source: crates/flui-objects/tests/harness_snapshot.rs
+expression: json
+---
+{
+  "format_version": 1,
+  "root": {
+    "name": "Offset",
+    "properties": [
+      {
+        "name": "dx",
+        "value": {
+          "Float": 0.0
+        },
+        "level": "info",
+        "kind": {
+          "Double": {
+            "unit": null
+          }
+        },
+        "show_name": true,
+        "show_separator": true
+      },
+      {
+        "name": "dy",
+        "value": {
+          "Float": 0.0
+        },
+        "level": "info",
+        "kind": {
+          "Double": {
+            "unit": null
+          }
+        },
+        "show_name": true,
+        "show_separator": true
+      }
+    ],
+    "children": [
+      {
+        "name": "Picture",
+        "properties": [
+          {
+            "name": "bounds",
+            "value": {
+              "Rect": {
+                "x": 0.0,
+                "y": 0.0,
+                "w": 40.0,
+                "h": 40.0
+              }
+            },
+            "level": "info",
+            "kind": "Rect",
+            "show_name": true,
+            "show_separator": true
+          },
+          {
+            "name": "commands",
+            "value": {
+              "Int": 1
+            },
+            "level": "info",
+            "kind": {
+              "Int": {
+                "unit": null
+              }
+            },
+            "show_name": true,
+            "show_separator": true
+          }
+        ],
+        "children": [
+          {
+            "name": "DrawRect",
+            "properties": [
+              {
+                "name": "rect",
+                "value": {
+                  "Rect": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "w": 40.0,
+                    "h": 40.0
+                  }
+                },
+                "level": "info",
+                "kind": "Rect",
+                "show_name": true,
+                "show_separator": true
+              },
+              {
+                "name": "color",
+                "value": {
+                  "Color": {
+                    "r": 255,
+                    "g": 0,
+                    "b": 0,
+                    "a": 255
+                  }
+                },
+                "level": "info",
+                "kind": "Color",
+                "show_name": true,
+                "show_separator": true
+              },
+              {
+                "name": "style",
+                "value": {
+                  "Str": "Fill"
+                },
+                "level": "info",
+                "kind": "Generic",
+                "show_name": true,
+                "show_separator": true
+              }
+            ],
+            "children": [],
+            "level": "info",
+            "style": "sparse"
+          }
+        ],
+        "level": "info",
+        "style": "sparse"
+      }
+    ],
+    "level": "info",
+    "style": "sparse"
+  }
+}

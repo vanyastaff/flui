@@ -23,17 +23,17 @@ use crate::view::ScrollDirection;
 ///
 /// # Cache Support
 ///
-/// Implements `Hash` and `Eq` for use as cache keys. Use `normalize()` before
+/// Implements `Hash` and `Eq` for use as cache keys. Use `round_for_cache()` before
 /// caching to ensure consistent floating-point comparisons:
 ///
 /// ```ignore
-/// let key = constraints.normalize();
+/// let key = constraints.round_for_cache();
 /// cache.insert(key, geometry);
 /// ```
 ///
-/// # Normalization
+/// # Cache Rounding
 ///
-/// The `normalize()` method rounds floating-point values to 2 decimal places
+/// The `round_for_cache()` method rounds floating-point values to 2 decimal places
 /// (0.01 precision). This precision level:
 /// - Matches typical display pixel precision (sub-pixel rendering is rare)
 /// - Avoids cache thrashing from floating-point rounding errors
@@ -152,16 +152,18 @@ impl SliverConstraints {
     // NORMALIZATION FOR CACHING
     // ============================================================================
 
-    /// Normalizes constraints for use as cache keys.
+    /// Rounds constraints for use as cache keys.
     ///
     /// Rounds finite floating-point values to 0.01 precision (2 decimal
     /// places). This precision matches typical display requirements and
     /// prevents cache misses due to floating-point rounding errors.
     ///
     /// Infinite values are preserved unchanged.
+    ///
+    // TODO: a real Flutter-semantic normalize() (min≥0, max≥min) can live here if a caller needs it
     #[inline]
     #[must_use]
-    pub fn normalize(&self) -> Self {
+    pub fn round_for_cache(&self) -> Self {
         Self {
             axis_direction: self.axis_direction,
             growth_direction: self.growth_direction,
@@ -178,13 +180,13 @@ impl SliverConstraints {
         }
     }
 
-    /// Checks if constraints are already normalized.
+    /// Checks if constraints are already rounded for caching.
     ///
-    /// More efficient than comparing with `normalize()` as it checks
+    /// More efficient than comparing with `round_for_cache()` as it checks
     /// each field individually without allocation.
     #[inline]
     #[must_use]
-    pub fn is_normalized_for_cache(&self) -> bool {
+    pub fn is_rounded_for_cache(&self) -> bool {
         is_normalized(self.scroll_offset)
             && is_normalized(self.preceding_scroll_extent)
             && is_normalized(self.overlap)
@@ -337,10 +339,10 @@ fn round_to_hundredths_runtime(value: f32) -> f32 {
 /// Checks if value is already normalized to hundredths precision.
 #[inline]
 fn is_normalized(value: f32) -> bool {
-    if !value.is_finite() {
-        true // Infinity/NaN are "normalized"
-    } else {
+    if value.is_finite() {
         value == round_to_hundredths_runtime(value)
+    } else {
+        true // Infinity/NaN are "normalized"
     }
 }
 
@@ -374,8 +376,7 @@ impl Constraints for SliverConstraints {
     fn debug_assert_is_valid(&self, is_applied_constraint: bool) -> bool {
         debug_assert!(
             self.is_normalized(),
-            "SliverConstraints must be normalized: {:?}",
-            self
+            "SliverConstraints must be normalized: {self:?}"
         );
 
         if is_applied_constraint {
@@ -415,13 +416,13 @@ impl fmt::Debug for SliverConstraints {
             .field("scroll_offset", &self.scroll_offset)
             .field("remaining_paint", &self.remaining_paint_extent)
             .field("cross_extent", &self.cross_axis_extent)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
 impl fmt::Display for SliverConstraints {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:?}", self)
+        write!(f, "{self:?}")
     }
 }
 
@@ -454,15 +455,15 @@ mod tests {
     }
 
     #[test]
-    fn test_normalization() {
+    fn test_round_for_cache() {
         let c = SliverConstraints::default()
             .with_scroll_offset(100.123_46)
             .with_remaining_paint_extent(500.987_64);
 
-        let normalized = c.normalize();
+        let rounded = c.round_for_cache();
 
-        assert_eq!(normalized.scroll_offset, 100.12);
-        assert_eq!(normalized.remaining_paint_extent, 500.99);
+        assert_eq!(rounded.scroll_offset, 100.12);
+        assert_eq!(rounded.remaining_paint_extent, 500.99);
     }
 
     #[test]
@@ -506,15 +507,15 @@ mod tests {
     }
 
     #[test]
-    fn test_is_normalized_for_cache() {
-        let normalized = SliverConstraints::default()
+    fn test_is_rounded_for_cache() {
+        let rounded = SliverConstraints::default()
             .with_scroll_offset(100.12)
             .with_remaining_paint_extent(500.99);
 
-        assert!(normalized.is_normalized_for_cache());
+        assert!(rounded.is_rounded_for_cache());
 
-        let unnormalized = SliverConstraints::default().with_scroll_offset(100.123_46);
+        let unrounded = SliverConstraints::default().with_scroll_offset(100.123_46);
 
-        assert!(!unnormalized.is_normalized_for_cache());
+        assert!(!unrounded.is_rounded_for_cache());
     }
 }

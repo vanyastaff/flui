@@ -108,6 +108,13 @@ impl<Arg> Notifier<Arg> {
     }
 
     /// Remove a previously registered listener. No-op if absent.
+    ///
+    /// Unlike `ChangeNotifier::remove_listener` (which tolerates post-dispose
+    /// removal for Flutter parity), this generic notifier keeps its disposed
+    /// gate: it has no Flutter reference contract, and `ListenerRegistry`'s
+    /// Status-channel guard depends on the current shape. Re-seat on the
+    /// parity semantics deliberately if the planned `ChangeNotifier` →
+    /// `Notifier<()>` consolidation lands.
     pub fn remove(&self, id: ListenerId) {
         if self.check_disposed() {
             return;

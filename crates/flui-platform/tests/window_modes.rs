@@ -174,16 +174,14 @@ fn test_dpi_scaling_change() {
             // Verify scale factor is positive
             assert!(
                 initial_scale > 0.0,
-                "Scale factor should be positive, got {}",
-                initial_scale
+                "Scale factor should be positive, got {initial_scale}"
             );
 
             // Typical scale factors: 1.0 (96 DPI), 1.25 (120 DPI), 1.5 (144 DPI), 2.0 (192
             // DPI)
             assert!(
                 (1.0..=3.0).contains(&initial_scale),
-                "Scale factor should be reasonable (1.0-3.0), got {}",
-                initial_scale
+                "Scale factor should be reasonable (1.0-3.0), got {initial_scale}"
             );
 
             // TODO: Once event system is implemented (Phase 5), test:

@@ -31,7 +31,8 @@ pub struct BuilderContext {
 
 /// Platform to build for
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum Platform { // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
+pub enum Platform {
+    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// Android platform with target architectures
     Android {
         /// Target architectures (e.g., "aarch64-linux-android")

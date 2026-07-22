@@ -3,7 +3,7 @@
 //! emissions into an `Arc<Mutex<Vec<CollectedEvent>>>` so tests can
 //! assert on the reconciler's trace stream.
 //!
-//! Plan §U14 / FR-035.
+//! FR-035.
 //!
 //! # Why a parallel `CollectedEvent` type?
 //!
@@ -33,7 +33,7 @@
 //! let collector = ReconcileEventCollector::new();
 //! let subscriber = Registry::default().with(collector.layer());
 //! tracing::dispatcher::with_default(&tracing::Dispatch::new(subscriber), || {
-//!     // ... code that calls `reconcile_children` ...
+//!     // ... code that drives a reconcile (e.g. `reconcile_children_by_id`) ...
 //! });
 //! let events = collector.events();
 //! assert!(!events.is_empty(), "vacuous-pass guard — must observe events");
@@ -43,8 +43,8 @@
 //! `flui::reconcile` events while a per-thread collector is
 //! installed; if a future optimisation requires that, switch to
 //! `tracing::dispatcher::set_default()` (global) and gate the
-//! affected tests behind `#[serial_test::serial]`. Phase 1 ships the
-//! per-thread discipline (KTD-5).
+//! affected tests behind `#[serial_test::serial]`. The per-thread
+//! discipline ships today.
 //!
 //! Even with per-thread dispatchers, tests installing a collector
 //! must be `#[serial_test::serial]`-gated: tracing-core's callsite

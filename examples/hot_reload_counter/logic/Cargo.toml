@@ -1,0 +1,22 @@
+[package]
+name = "hot-reload-counter-logic"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "Reloadable UI logic (cdylib) for the hot-reload counter example"
+
+[lib]
+crate-type = ["cdylib"]
+name = "counter_logic"
+
+[dependencies]
+flui-hot-reload = { path = "../../../crates/flui-hot-reload", features = ["app-plugin"] }
+flui-types = { path = "../../../crates/flui-types" }
+flui-view = { path = "../../../crates/flui-view" }
+flui-widgets = { path = "../../../crates/flui-widgets" }
+hot-reload-counter-types = { path = "../types" }
+
+[lints]
+workspace = true

@@ -219,9 +219,51 @@ impl ExternalTextureRegistry {
     /// Use this for dynamic textures like video frames where the texture
     /// dimensions stay the same but the content changes.
     ///
+    /// # Contract
+    ///
+    /// The new texture **must** have the same width and height as the one
+    /// originally passed to [`Self::register`].  UV coordinates for any
+    /// `draw_texture` call that supplies a `src` sub-rect are computed from
+    /// the dimensions recorded at register time; a differently-sized
+    /// replacement would cause incorrect UV sampling without producing a
+    /// compile- or runtime error.  Violating this contract is logged as a
+    /// warning and a `debug_assert` fires in debug builds.  The stored
+    /// dimensions are kept frozen (the original values), so repeated lookups
+    /// remain consistent with the recorded draw commands.
+    ///
     /// Returns `true` if the texture was updated, `false` if not found.
     pub fn update(&mut self, texture_id: TextureId, new_texture: Texture) -> bool {
         if let Some(entry) = self.textures.get_mut(&texture_id.get()) {
+            // Guard: dimensions must not change between register and update.
+            // UV coordinates for src sub-rects are frozen at record time using
+            // entry.width/height; a resize here would silently corrupt sampling.
+            let new_size = new_texture.size();
+            let (new_w, new_h) = (new_size.width, new_size.height);
+            if new_w != entry.width || new_h != entry.height {
+                tracing::warn!(
+                    id = texture_id.get(),
+                    old_width = entry.width,
+                    old_height = entry.height,
+                    new_width = new_w,
+                    new_height = new_h,
+                    "ExternalTextureRegistry::update called with a differently-sized \
+                     texture — dimensions are frozen at register time and cannot change. \
+                     Dynamic resize is unsupported; UV coordinates recorded before this \
+                     update will sample incorrectly. Stored dimensions are unchanged."
+                );
+                debug_assert_eq!(
+                    (new_w, new_h),
+                    (entry.width, entry.height),
+                    "ExternalTextureRegistry::update: texture {} size changed from {}x{} \
+                     to {}x{} — contract violation (dimensions must stay the same)",
+                    texture_id.get(),
+                    entry.width,
+                    entry.height,
+                    new_w,
+                    new_h,
+                );
+            }
+
             // Create new view for the new texture
             let view = new_texture.create_view(&wgpu::TextureViewDescriptor::default());
 

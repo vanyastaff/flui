@@ -3,14 +3,92 @@
 //! Tests project creation with TempDir, verifying directory structure,
 //! template selection, and `--local` flag behavior.
 
-use assert_cmd::cargo::cargo_bin_cmd;
 use assert_cmd::Command;
+use assert_cmd::cargo::cargo_bin_cmd;
 use predicates::prelude::*;
+use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
 /// Get a command for the `flui` binary.
 fn flui() -> Command {
     cargo_bin_cmd!("flui")
+}
+
+/// Workspace root — this crate lives at `<root>/crates/flui-cli`.
+fn repo_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(2)
+        .expect("BUG: flui-cli must sit two levels below the workspace root")
+        .to_path_buf()
+}
+
+/// Generate a project with `--local` and prove it actually compiles.
+///
+/// This is the real gate on the templates: the file-existence tests below pass
+/// just as happily on a template that emits a long-deleted API. Anything that
+/// drifts the generated `main.rs` or `Cargo.toml` off the current public
+/// surface fails here.
+///
+/// `flui create --local` emits `path = "../../crates/flui-app"`, so a generated
+/// project resolves its dependencies only from exactly one directory below the
+/// workspace root — hence `<root>/target/<name>` (already gitignored) rather
+/// than a `TempDir`.
+///
+/// The check gets its own `--target-dir`: reusing the workspace's would
+/// deadlock, since the outer `cargo test` holds that directory's build lock for
+/// the duration of the run.
+fn assert_generated_project_compiles(template: &str) {
+    let root = repo_root();
+    let target = root.join("target");
+    let name = format!("flui-tmpl-check-{template}");
+    let project = target.join(&name);
+
+    // `target/` may not exist yet when `CARGO_TARGET_DIR` points elsewhere.
+    std::fs::create_dir_all(&target).expect("create the scratch directory");
+    if project.exists() {
+        std::fs::remove_dir_all(&project).expect("clear the previous generated project");
+    }
+
+    flui()
+        .args([
+            "create",
+            &name,
+            "--template",
+            template,
+            "--org",
+            "com.test",
+            "--local",
+        ])
+        .arg("--path")
+        .arg(&target)
+        .assert()
+        .success();
+
+    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
+    let output = std::process::Command::new(cargo)
+        .arg("check")
+        .arg("--target-dir")
+        .arg(target.join("cli-template-check"))
+        .current_dir(&project)
+        .output()
+        .expect("run cargo check on the generated project");
+
+    assert!(
+        output.status.success(),
+        "`flui create --template {template}` generated a project that does not compile:\n{}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+}
+
+#[test]
+fn generated_basic_project_compiles() {
+    assert_generated_project_compiles("basic");
+}
+
+#[test]
+fn generated_counter_project_compiles() {
+    assert_generated_project_compiles("counter");
 }
 
 #[test]

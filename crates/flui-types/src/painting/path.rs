@@ -10,6 +10,7 @@ use crate::{
     painting::PathFillType,
 };
 
+/// A single drawing command within a [`Path`].
 #[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum PathCommand {
@@ -52,6 +53,11 @@ pub enum PathCommand {
     AddArc(Rect<Pixels>, f32, f32),
 }
 
+/// A sequence of drawing commands describing a vector shape.
+///
+/// A path is an ordered list of [`PathCommand`]s (lines, Bézier curves, and
+/// whole shapes) plus a [`PathFillType`] that determines which regions count
+/// as inside when filling or hit-testing.
 #[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Path {
@@ -67,6 +73,7 @@ pub struct Path {
 }
 
 impl Path {
+    /// Creates an empty path with the default fill type (non-zero).
     #[must_use]
     #[inline]
     pub fn new() -> Self {
@@ -77,6 +84,7 @@ impl Path {
         }
     }
 
+    /// Creates an empty path with the given fill type.
     #[must_use]
     #[inline]
     pub fn with_fill_type(fill_type: PathFillType) -> Self {
@@ -87,6 +95,7 @@ impl Path {
         }
     }
 
+    /// Creates a path consisting of a single rectangle.
     #[must_use]
     #[inline]
     pub fn rectangle(rect: Rect<Pixels>) -> Self {
@@ -95,6 +104,7 @@ impl Path {
         path
     }
 
+    /// Creates a path consisting of a single oval inscribed in `rect`.
     #[must_use]
     #[inline]
     pub fn oval(rect: Rect<Pixels>) -> Self {
@@ -141,6 +151,10 @@ impl Path {
         path
     }
 
+    /// Creates a path consisting of a single arc.
+    ///
+    /// The arc lies on the oval inscribed in `rect`, starting at
+    /// `start_angle` and sweeping by `sweep_angle` (both in radians).
     #[must_use]
     #[inline]
     pub fn arc(rect: Rect<Pixels>, start_angle: f32, sweep_angle: f32) -> Self {
@@ -149,6 +163,10 @@ impl Path {
         path
     }
 
+    /// Creates a path outlining a rounded rectangle.
+    ///
+    /// Corners are approximated with quarter-circle arcs; a rounded rectangle
+    /// with no rounding degenerates to a plain rectangle.
     #[must_use]
     #[inline]
     pub fn from_rrect(rrect: crate::geometry::RRect) -> Self {
@@ -240,46 +258,94 @@ impl Path {
         path
     }
 
+    /// Sets the fill type used for filling and containment tests.
     #[inline]
     pub fn set_fill_type(&mut self, fill_type: PathFillType) {
         self.fill_type = fill_type;
     }
 
+    /// Returns the path's current fill type.
     #[must_use]
     #[inline]
     pub const fn fill_type(&self) -> PathFillType {
         self.fill_type
     }
 
+    /// Returns `true` if `point` lies inside this path, respecting the
+    /// path's [`PathFillType`] (non-zero winding or even-odd).
+    ///
+    /// Uses a ray-casting algorithm for even-odd fill and a winding-number
+    /// algorithm for non-zero fill.
+    ///
+    /// Note: `AddArc` commands are currently ignored (conservative miss);
+    /// only line/quadratic/cubic segments, rects, circles, and ovals are
+    /// evaluated.
+    #[must_use]
+    #[inline]
+    pub fn contains(&self, point: Point<Pixels>) -> bool {
+        match self.fill_type {
+            PathFillType::EvenOdd => self.contains_even_odd(point),
+            PathFillType::NonZero => self.contains_non_zero(point),
+        }
+    }
+
+    /// Starts a new subpath at `point` without drawing.
     #[inline]
     pub fn move_to(&mut self, point: Point<Pixels>) {
         self.commands.push(PathCommand::MoveTo(point));
         self.bounds = None;
     }
 
+    /// Adds a straight line from the current position to `point`.
     #[inline]
     pub fn line_to(&mut self, point: Point<Pixels>) {
         self.commands.push(PathCommand::LineTo(point));
         self.bounds = None;
     }
 
+    /// Closes the current subpath with a line back to its starting point.
     #[inline]
     pub fn close(&mut self) {
         self.commands.push(PathCommand::Close);
     }
 
+    /// Adds a rectangle as a separate subpath.
     #[inline]
     pub fn add_rect(&mut self, rect: Rect<Pixels>) {
         self.commands.push(PathCommand::AddRect(rect));
         self.bounds = None;
     }
 
+    /// Adds an oval inscribed in `rect` as a separate subpath.
     #[inline]
     pub fn add_oval(&mut self, rect: Rect<Pixels>) {
         self.commands.push(PathCommand::AddOval(rect));
         self.bounds = None;
     }
 
+    /// Adds an arc on the oval inscribed in `rect`, starting at `start_angle`
+    /// and sweeping by `sweep_angle` (both in radians).
+    ///
+    /// # Divergence from Flutter's `Path.addArc`
+    ///
+    /// Flutter's `Path.addArc` always starts a **new** sub-path — it behaves
+    /// like `arcTo(rect, startAngle, sweepAngle, forceMoveTo: true)`,
+    /// regardless of what the path was doing before the call.
+    ///
+    /// FLUI's `add_arc` does not: when called while a sub-path is already
+    /// open (a preceding `move_to`/`line_to`/`add_arc` with no `close`), the
+    /// tessellator (`flui-engine`'s `wgpu::tessellator`) draws a line from
+    /// the current position to the arc's start and *continues* that
+    /// contour — chord-connected, not a new sub-path. This is deliberate:
+    /// [`Self::from_rrect`] builds a fully-rounded rectangle as one
+    /// continuous contour (edge, corner arc, edge, corner arc, …); starting
+    /// a fresh sub-path per corner arc would fragment the contour into four
+    /// open pieces, each rendering an unwanted diagonal fill-closure chord
+    /// across its corner.
+    ///
+    /// A caller that wants Flutter's "always a new sub-path" semantics must
+    /// call [`Self::move_to`] (to the arc's start point) immediately before
+    /// `add_arc`, or call `add_arc` as the first command on a fresh `Path`.
     #[inline]
     pub fn add_arc(&mut self, rect: Rect<Pixels>, start_angle: f32, sweep_angle: f32) {
         self.commands
@@ -287,30 +353,41 @@ impl Path {
         self.bounds = None;
     }
 
+    /// Returns the path's commands in insertion order.
     #[must_use]
     #[inline]
     pub fn commands(&self) -> &[PathCommand] {
         &self.commands
     }
 
+    /// Returns `true` if the path contains no commands.
     #[must_use]
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.commands.is_empty()
     }
 
+    /// Removes all commands, leaving the path empty.
+    ///
+    /// The fill type is preserved; the cached bounds are invalidated.
     #[inline]
     pub fn reset(&mut self) {
         self.commands.clear();
         self.bounds = None;
     }
 
+    /// Returns the cached bounding box, if one has been computed via
+    /// `bounds` and not invalidated by a later mutation.
     #[must_use]
     #[inline]
     pub fn cached_bounds(&self) -> Option<Rect<Pixels>> {
         self.bounds
     }
 
+    /// Computes the bounding box of the path without caching the result.
+    ///
+    /// Uses the cached value when available. Curve bounds are conservative
+    /// (control points are included). Returns `Rect::ZERO` for an empty path.
     #[must_use]
     #[inline]
     pub fn compute_bounds(&self) -> Rect<Pixels> {
@@ -377,6 +454,11 @@ impl Path {
         }
     }
 
+    /// Returns the bounding box of the path, computing and caching it if
+    /// necessary.
+    ///
+    /// Same semantics as `compute_bounds`, but stores the result so later
+    /// calls are free until the path is mutated.
     #[must_use]
     #[inline]
     pub fn bounds(&mut self) -> Rect<Pixels> {
@@ -389,6 +471,7 @@ impl Path {
         bounds
     }
 
+    /// Returns a copy of this path with every command translated by `offset`.
     #[must_use]
     #[inline]
     pub fn translate(&self, offset: Offset<Pixels>) -> Self {
@@ -433,6 +516,15 @@ impl Path {
         for cmd in &self.commands {
             match cmd {
                 PathCommand::MoveTo(p) => {
+                    // Fill semantics: each subpath is implicitly closed for
+                    // containment even without an explicit `Close` (Skia/Flutter
+                    // fill an open contour as if closed). Count the closing edge
+                    // of the subpath being left. Degenerate (contributes 0) when
+                    // the subpath already ended with an explicit `Close`
+                    // (`current_pos == subpath_start`), so there is no double-count.
+                    if Self::ray_intersects_segment(point, current_pos, subpath_start) {
+                        crossings += 1;
+                    }
                     current_pos = *p;
                     subpath_start = *p;
                 }
@@ -492,6 +584,11 @@ impl Path {
             }
         }
 
+        // Implicitly close the final subpath (fill semantics — see MoveTo arm).
+        if Self::ray_intersects_segment(point, current_pos, subpath_start) {
+            crossings += 1;
+        }
+
         crossings % 2 == 1
     }
 
@@ -505,6 +602,10 @@ impl Path {
         for cmd in &self.commands {
             match cmd {
                 PathCommand::MoveTo(p) => {
+                    // Fill semantics: implicitly close the subpath being left
+                    // (see the even-odd variant). Degenerate after an explicit
+                    // `Close`, so no double-count.
+                    winding += Self::segment_winding(point, current_pos, subpath_start);
                     current_pos = *p;
                     subpath_start = *p;
                 }
@@ -552,6 +653,9 @@ impl Path {
                 }
             }
         }
+
+        // Implicitly close the final subpath (fill semantics — see MoveTo arm).
+        winding += Self::segment_winding(point, current_pos, subpath_start);
 
         winding != 0
     }
@@ -754,7 +858,56 @@ impl Default for Path {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::geometry::px;
+    use crate::geometry::{Point, px};
 
-    // Path containment tests
+    /// Builds the triangle (0,0)→(100,0)→(50,100) without an explicit `close()`.
+    fn open_triangle(fill_type: PathFillType) -> Path {
+        let mut path = Path::with_fill_type(fill_type);
+        path.move_to(Point::new(px(0.0), px(0.0)));
+        path.line_to(Point::new(px(100.0), px(0.0)));
+        path.line_to(Point::new(px(50.0), px(100.0)));
+        path
+    }
+
+    /// Regression (Codex review of PR #307): a filled path implicitly closes
+    /// each subpath, so containment must honor the closing edge even without an
+    /// explicit `Close`. Point (10,50) is left of the implicit closing edge —
+    /// OUTSIDE the triangle — yet was wrongly reported inside before the fix
+    /// (the missing left edge dropped one crossing). Holds for both fill rules.
+    #[test]
+    fn open_filled_contour_is_implicitly_closed_for_containment() {
+        for fill_type in [PathFillType::EvenOdd, PathFillType::NonZero] {
+            let path = open_triangle(fill_type);
+            assert!(
+                !path.contains(Point::new(px(10.0), px(50.0))),
+                "{fill_type:?}: point outside an open-but-filled triangle must not be contained",
+            );
+            assert!(
+                path.contains(Point::new(px(50.0), px(30.0))),
+                "{fill_type:?}: point inside the triangle must be contained",
+            );
+        }
+    }
+
+    /// The implicit closure must not double-count when the contour already ends
+    /// with an explicit `Close`: a closed triangle agrees with the open one.
+    #[test]
+    fn explicit_close_does_not_double_count() {
+        for fill_type in [PathFillType::EvenOdd, PathFillType::NonZero] {
+            let mut closed = open_triangle(fill_type);
+            closed.close();
+            let open = open_triangle(fill_type);
+            for p in [
+                Point::new(px(10.0), px(50.0)), // outside
+                Point::new(px(50.0), px(30.0)), // inside
+                Point::new(px(50.0), px(5.0)),  // inside, near base
+            ] {
+                assert_eq!(
+                    closed.contains(p),
+                    open.contains(p),
+                    "{fill_type:?}: explicit close must match implicit close at {p:?}",
+                );
+            }
+        }
+    }
 }

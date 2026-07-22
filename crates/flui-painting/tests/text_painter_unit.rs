@@ -1,5 +1,6 @@
 //! TextPainter unit tests extracted from
-//! `crates/flui-painting/src/text_painter/mod.rs` during Mythos chain U8.
+//! `crates/flui-painting/src/text_painter/mod.rs` during the text-painter
+//! module split.
 
 use flui_painting::{DEFAULT_FONT_SIZE, TextBaseline, TextPainter};
 use flui_types::{

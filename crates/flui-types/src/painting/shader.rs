@@ -390,7 +390,48 @@ impl Shader {
                 }
                 data
             }
-            // SweepGradient and Image fall back to white solid
+            // SweepGradient: 48-byte layout matching sweep_gradient.wgsl Uniforms:
+            //   offset  0: center     vec2<f32>  (8 bytes)
+            //   offset  8: start_angle f32       (4 bytes)
+            //   offset 12: end_angle   f32       (4 bytes)
+            //   offset 16: start_color vec4<f32> (16 bytes)
+            //   offset 32: end_color   vec4<f32> (16 bytes)
+            Shader::SweepGradient {
+                center,
+                colors,
+                start_angle,
+                end_angle,
+                ..
+            } => {
+                let mut data = Vec::with_capacity(48);
+                let w: f32 = bounds.width().0;
+                let h: f32 = bounds.height().0;
+                let bx: f32 = bounds.left().0;
+                let by: f32 = bounds.top().0;
+
+                // Normalize center to 0.0-1.0 relative to bounds (mirrors the
+                // radial gradient arm).
+                let cx = if w > 0.0 { (center.dx.0 - bx) / w } else { 0.5 };
+                let cy = if h > 0.0 { (center.dy.0 - by) / h } else { 0.5 };
+
+                data.extend_from_slice(&cx.to_le_bytes()); // center.x
+                data.extend_from_slice(&cy.to_le_bytes()); // center.y
+                data.extend_from_slice(&start_angle.to_le_bytes()); // start_angle
+                data.extend_from_slice(&end_angle.to_le_bytes()); // end_angle
+
+                let c0 = colors.first().map_or([0.0, 0.0, 0.0, 1.0], color_to_f32x4);
+                for v in &c0 {
+                    data.extend_from_slice(&v.to_le_bytes());
+                }
+
+                let c1 = colors.get(1).map_or(c0, color_to_f32x4);
+                for v in &c1 {
+                    data.extend_from_slice(&v.to_le_bytes());
+                }
+
+                data
+            }
+            // Image shaders fall back to opaque white (no mask effect)
             _ => {
                 let mut data = Vec::with_capacity(16);
                 for v in &[1.0f32, 1.0, 1.0, 1.0] {
@@ -709,5 +750,93 @@ mod tests {
 
         assert_eq!(filter.style, BlurStyle::Inner);
         assert_eq!(filter.sigma, 6.0);
+    }
+
+    // --- Regression tests for to_mask_uniform_data correctness ---
+
+    /// SweepGradient must produce exactly 48 bytes — the size that
+    /// `shaders/masks/sweep_gradient.wgsl` Uniforms expects:
+    ///   offset  0: center     vec2<f32>   (8 bytes)
+    ///   offset  8: start_angle f32        (4 bytes)
+    ///   offset 12: end_angle   f32        (4 bytes)
+    ///   offset 16: start_color vec4<f32>  (16 bytes)
+    ///   offset 32: end_color   vec4<f32>  (16 bytes)
+    ///
+    /// Before the fix the `_` fallback arm emitted only 16 bytes, causing a
+    /// wgpu uniform-size mismatch and garbage rendering.
+    #[test]
+    fn sweep_gradient_mask_uniform_is_48_bytes() {
+        use crate::geometry::{Offset, Rect, px};
+
+        let shader = Shader::sweep_gradient(
+            Offset::new(px(50.0), px(50.0)),
+            vec![Color::RED, Color::BLUE],
+            None,
+            TileMode::Clamp,
+            0.0,
+            std::f32::consts::TAU,
+        );
+        let bounds = Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0));
+        let data = shader.to_mask_uniform_data(bounds);
+        assert_eq!(
+            data.len(),
+            48,
+            "SweepGradient to_mask_uniform_data must emit 48 bytes to match sweep_gradient.wgsl"
+        );
+    }
+
+    /// LinearGradient and RadialGradient still emit 48 bytes (regression guard).
+    #[test]
+    fn linear_and_radial_gradient_mask_uniform_are_48_bytes() {
+        use crate::geometry::{Offset, Rect, px};
+
+        let bounds = Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0));
+
+        let linear = Shader::simple_linear(
+            Offset::new(px(0.0), px(0.0)),
+            Offset::new(px(100.0), px(0.0)),
+            vec![Color::RED, Color::BLUE],
+        );
+        assert_eq!(linear.to_mask_uniform_data(bounds).len(), 48);
+
+        let radial = Shader::simple_radial(
+            Offset::new(px(50.0), px(50.0)),
+            50.0,
+            vec![Color::RED, Color::BLUE],
+        );
+        assert_eq!(radial.to_mask_uniform_data(bounds).len(), 48);
+    }
+
+    /// Solid shader emits 16 bytes (regression guard).
+    #[test]
+    fn solid_shader_mask_uniform_is_16_bytes() {
+        use crate::geometry::{Rect, px};
+
+        let shader = Shader::solid(Color::RED);
+        let bounds = Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0));
+        assert_eq!(shader.to_mask_uniform_data(bounds).len(), 16);
+    }
+
+    /// SweepGradient center is correctly normalized to bounds-relative 0..1.
+    #[test]
+    fn sweep_gradient_mask_uniform_normalizes_center() {
+        use crate::geometry::{Offset, Rect, px};
+
+        // Center at (50, 50) in a 100x100 bounds starting at (0,0) → normalized (0.5, 0.5)
+        let shader = Shader::sweep_gradient(
+            Offset::new(px(50.0), px(50.0)),
+            vec![Color::RED, Color::BLUE],
+            None,
+            TileMode::Clamp,
+            0.0,
+            std::f32::consts::TAU,
+        );
+        let bounds = Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0));
+        let data = shader.to_mask_uniform_data(bounds);
+
+        let cx = f32::from_le_bytes(data[0..4].try_into().unwrap());
+        let cy = f32::from_le_bytes(data[4..8].try_into().unwrap());
+        assert!((cx - 0.5).abs() < 1e-6, "cx should be 0.5, got {cx}");
+        assert!((cy - 0.5).abs() < 1e-6, "cy should be 0.5, got {cy}");
     }
 }

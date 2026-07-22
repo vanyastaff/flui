@@ -17,11 +17,6 @@
 //!
 //! - [`GrowthDirection`] - Content growth direction in scrollable areas
 //!
-//! ## Scroll State
-//!
-//! - `FixedScrollMetrics` - Scroll position and bounds tracking (requires `scrolling` feature)
-//! - `FixedExtentMetrics` - Scroll metrics with uniform item sizing (requires `scrolling` feature)
-//!
 //! # Performance Features
 //!
 //! All constraint types are optimized for performance-critical layout
@@ -43,8 +38,8 @@
 //!
 //! let mut cache = HashMap::new();
 //!
-//! // Normalize constraints for stable cache keys
-//! let key = constraints.normalize();
+//! // Round constraints for stable cache keys
+//! let key = constraints.round_for_cache();
 //! cache.insert(key, computed_size);
 //! ```
 //!
@@ -83,13 +78,6 @@
 
 mod box_constraints;
 mod direction;
-// Cycle 4 R-18: scroll_metrics gated behind `scrolling` feature
-// (default off). The trait + 2 impls had zero workspace consumers
-// pre-cycle; gating prevents the dead surface from compiling into
-// every dependent build while keeping the code available for the
-// scrolling integration that will eventually land.
-#[cfg(feature = "scrolling")]
-mod scroll_metrics;
 mod sliver_constraints;
 mod sliver_geometry;
 mod sliver_layout;
@@ -98,11 +86,12 @@ use std::fmt;
 
 pub use box_constraints::BoxConstraints;
 pub use direction::{GrowthDirection, apply_growth_direction_to_scroll_direction, right_way_up};
-#[cfg(feature = "scrolling")]
-pub use scroll_metrics::{FixedExtentMetrics, FixedScrollMetrics, ScrollMetrics};
 pub use sliver_constraints::SliverConstraints;
 pub use sliver_geometry::SliverGeometry;
-pub(crate) use sliver_layout::child_paint_offset;
+/// Paint-offset math shared by sliver render objects and the pipeline.
+/// Moved from `pub(crate)` to `pub` so `flui_objects` sliver implementations
+/// can call it without adding an internal API surface.
+pub use sliver_layout::{child_paint_offset, grid_child_paint_offset};
 
 /// Abstract constraint trait following Flutter's protocol.
 ///
@@ -131,8 +120,7 @@ pub trait Constraints: Clone + PartialEq + fmt::Debug + Send + Sync + 'static {
     fn debug_assert_is_valid(&self, is_applied_constraint: bool) -> bool {
         debug_assert!(
             self.is_normalized(),
-            "Constraints must be normalized: {:?}",
-            self
+            "Constraints must be normalized: {self:?}"
         );
 
         if is_applied_constraint {
@@ -158,14 +146,10 @@ pub trait Constraints: Clone + PartialEq + fmt::Debug + Send + Sync + 'static {
 /// use flui_rendering::constraints::prelude::*;
 ///
 /// let constraints = BoxConstraints::tight(Size::new(100.0, 100.0));
-/// let normalized = constraints.normalize();
+/// let rounded = constraints.round_for_cache();
 /// ```
 pub mod prelude {
     pub use super::{
         BoxConstraints, Constraints, GrowthDirection, SliverConstraints, SliverGeometry,
     };
-    // Cycle 4 R-18: scroll-metrics types in the prelude only when
-    // the `scrolling` feature is enabled.
-    #[cfg(feature = "scrolling")]
-    pub use super::{FixedExtentMetrics, FixedScrollMetrics, ScrollMetrics};
 }

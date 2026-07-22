@@ -21,7 +21,6 @@
 //! by the framework. See *Rust for Rustaceans* §"Lifetimes and split
 //! borrows" (Gjengset) for the pattern.
 //!
-//! Plan reference: `docs/plans/2026-05-21-002-feat-framework-spine-repair-plan.md` §U8, §D1.
 //! Audit reference: `docs/research/2026-05-21-view-tree-foundation-audit.md` Finding #2.
 //!
 //! # Lifetime variance
@@ -29,18 +28,43 @@
 //! `ElementOwner<'a>` carries plain `&'a mut` references — no HRTB, no
 //! invariance trickery. Recursive `mount` calls reborrow the handle
 //! (`&mut *element_owner`) and the compiler accepts the chain because
-//! every reborrow is sequential. Per plan §I1 this simplest possible
+//! every reborrow is sequential. This simplest possible
 //! shape was tried first and held; we did not need the
 //! `for<'a> Fn(&'a mut ElementOwner<'a>)` HRTB fallback.
 
 use std::{
     cmp::Reverse,
     collections::{BinaryHeap, HashMap, HashSet},
+    sync::Arc,
 };
 
-use flui_foundation::ElementId;
+use flui_foundation::{ElementId, RenderId};
+use parking_lot::Mutex;
 
-use super::build_owner::{DirtyElement, InactiveElement};
+use flui_objects::LayoutConstraintsCell;
+
+use super::build_owner::{DirtyElement, ExternalBuildScheduler, InactiveElement};
+use super::layout_builder::{LayoutBuilderEntry, LayoutBuilderRegistry};
+use crate::element::child_manager::{ChildManager, ChildManagerRegistry};
+
+/// Borrowed live-tree access carried by [`ElementOwner`] while a
+/// `build_scope` drain runs an element's `build()` (PR-K).
+///
+/// Lets a behavior construct a live
+/// [`BuildCtx`](crate::context::BuildCtx) — reading the real tree and
+/// buffering inherited dependents — WITHOUT changing the object-safe
+/// `build_into_views` signature: the handle rides on the `ElementOwner`
+/// that is already threaded into every build. `dep_sink` collects the
+/// dependents recorded during the read-only build; `build_scope` drains it
+/// onto the provider nodes once it holds `&mut tree` again.
+///
+/// Both references are `Copy`, so reading [`ElementOwner::build_view`] lifts
+/// them out by value without keeping the owner borrowed.
+#[derive(Clone, Copy)]
+pub(crate) struct BuildHandle<'a> {
+    pub(crate) tree: &'a crate::tree::ElementTree,
+    pub(crate) dep_sink: &'a parking_lot::Mutex<Vec<crate::context::DependentRecord>>,
+}
 
 /// Split-borrow handle into `BuildOwner` for `Element` lifecycle paths.
 ///
@@ -63,9 +87,10 @@ use super::build_owner::{DirtyElement, InactiveElement};
 /// - `ElementTree::insert`
 /// - `ElementTree::remove`
 /// - `ElementTree::update`
+/// - `BuildOwner::build_scope` (carrying the live `BuildHandle`)
 ///
-/// Downstream units (U9–U14) layer on top by calling the registration
-/// methods below from `Element` lifecycle code paths.
+/// Downstream units layer on top by calling the registration methods below
+/// from `Element` lifecycle code paths.
 ///
 /// # Flutter equivalent
 ///
@@ -76,7 +101,7 @@ pub struct ElementOwner<'a> {
     /// `GlobalKey` registry: key hash → element holding the key.
     ///
     /// Populated by `register_global_key`; consulted by the future
-    /// `find_global_key_target` (U14). Initial U8 surface only exposes
+    /// `find_global_key_target`. The current surface only exposes
     /// register / unregister.
     pub(crate) global_keys: &'a mut HashMap<u64, ElementId>,
 
@@ -104,7 +129,7 @@ pub struct ElementOwner<'a> {
     /// [`ViewState::did_change_dependencies`](crate::view::ViewState::did_change_dependencies)
     /// hook fires exactly once per dependency-change-then-rebuild
     /// cycle. Flutter parity: `framework.dart:6114`
-    /// `_didChangeDependencies` flag on `StatefulElement`. Plan §U14.
+    /// `_didChangeDependencies` flag on `StatefulElement`.
     pub(crate) pending_dependency_changes: &'a mut HashSet<ElementId>,
 
     /// Snapshot of `BuildOwner::on_build_scheduled` so
@@ -114,6 +139,53 @@ pub struct ElementOwner<'a> {
     /// Stored as a raw reference because `Box<dyn Fn>` is not `Copy`
     /// and we never mutate it through this handle.
     pub(crate) on_build_scheduled: Option<&'a (dyn Fn() + Send + Sync)>,
+
+    /// Reference to `BuildOwner::external_inbox`, so an element can capture a
+    /// clone at mount (via [`Self::external_scheduler`]) for its mark-dirty
+    /// callback to push onto from outside a frame.
+    pub(crate) external_inbox: &'a Arc<Mutex<HashSet<ElementId>>>,
+
+    /// Reference to `BuildOwner::on_build_scheduled` as the shareable `Arc`
+    /// (the [`Self::on_build_scheduled`] field above is the `&dyn Fn` view used
+    /// for the in-frame fire). An [`ExternalBuildScheduler`] clones this so a
+    /// listener tick can request a frame from outside the build.
+    pub(crate) external_request_frame: Option<&'a Arc<dyn Fn() + Send + Sync>>,
+
+    /// Live-tree access during a `build_scope` drain (PR-K). `Some` only
+    /// while an element's `build()` runs; `None` on every other lifecycle
+    /// path (mount / unmount / update / reconcile). The behavior reads it
+    /// to build a live [`BuildCtx`](crate::context::BuildCtx).
+    pub(crate) build_view: Option<BuildHandle<'a>>,
+
+    /// Registry of live lazy-sliver `ChildManager`s, keyed by sliver `RenderId`.
+    ///
+    /// Carried as a reference to the `Arc` (same pattern as `external_inbox`)
+    /// so `SliverListAdaptorBehavior::on_mount` / `on_unmount` can mutate the
+    /// registry without re-borrowing `BuildOwner`. `service_child_requests` on
+    /// `BuildOwner` reads it after all `ElementOwner` borrows drop.
+    pub(crate) child_manager_registry: &'a ChildManagerRegistry,
+
+    /// Split-borrow view of `BuildOwner::layout_builder_registry`,
+    /// so a build-during-layout element can register its
+    /// `(RenderId -> ElementId + LayoutConstraintsCell)` entry at mount and drop
+    /// it at unmount — the same shape as `child_manager_registry`.
+    pub(crate) layout_builder_registry: &'a LayoutBuilderRegistry,
+
+    /// The binding's async task driver, or `None` when no
+    /// binding installed one. Cloned into the live `BuildCtx` so a
+    /// `ViewState::init_state` can spawn a subscription.
+    pub(crate) async_driver: &'a Option<flui_scheduler::AsyncDriver>,
+    /// The binding's post-frame capability, threaded into every
+    /// `BuildCtx` so a `ViewState` can acquire it from a lifecycle hook.
+    pub(crate) post_frame_handle: &'a Option<flui_scheduler::PostFrameHandle>,
+
+    /// The binding's IME/text-input attach-detach capability, threaded into
+    /// every `BuildCtx` the same way `post_frame_handle` is.
+    pub(crate) text_input_handle: &'a Option<flui_interaction::TextInputHandle>,
+
+    /// The binding's owner-local interaction dispatch capability (ADR-0027),
+    /// threaded into render-object lifecycle contexts.
+    pub(crate) interaction_dispatch: &'a Option<flui_interaction::InteractionDispatchHandle>,
 }
 
 impl ElementOwner<'_> {
@@ -122,8 +194,7 @@ impl ElementOwner<'_> {
     /// Called by `Element::mount` when the mounted element carries a
     /// `GlobalKey`. Idempotent: re-registering the same hash with the
     /// same `id` is a no-op; with a different `id` the new mapping
-    /// wins (last-write-wins; conflict detection lives in U14 per plan
-    /// §I4).
+    /// wins (last-write-wins; conflict detection is a future addition).
     ///
     /// `debug_assert!`s that `id` is non-default — an
     /// `ElementId::INVALID` register slips through release builds with
@@ -144,7 +215,7 @@ impl ElementOwner<'_> {
     /// Look up the element holding a given `GlobalKey` hash.
     ///
     /// Returned `None` means no element with that key is currently
-    /// mounted. U14 will layer reparenting on top of this lookup.
+    /// mounted. A future change will layer reparenting on top of this lookup.
     pub fn element_for_global_key(&self, key_hash: u64) -> Option<ElementId> {
         self.global_keys.get(&key_hash).copied()
     }
@@ -153,7 +224,7 @@ impl ElementOwner<'_> {
     /// `key_hash` for a reparent operation. Wrapper around
     /// [`BuildOwner::take_global_key_for_reparent`](crate::BuildOwner::take_global_key_for_reparent)
     /// for the split-borrow `ElementOwner` handle that the
-    /// reconciler holds. Plan §U17 / KTD-3 N1.
+    /// reconciler holds.
     pub fn take_global_key_for_reparent(&mut self, key_hash: u64) -> Option<ElementId> {
         self.global_keys.remove(&key_hash)
     }
@@ -175,6 +246,19 @@ impl ElementOwner<'_> {
         }
     }
 
+    /// Build an owned [`ExternalBuildScheduler`] for an element to capture at
+    /// mount. Its mark-dirty callback — fired by a listenable tick *outside* a
+    /// frame, with no owner in scope — uses it to enqueue the element onto the
+    /// shared inbox `build_scope` drains, and to request a frame. This is the
+    /// arena analogue of Flutter handing each `Element` a `BuildOwner`
+    /// backreference for `markNeedsBuild`.
+    pub(crate) fn external_scheduler(&self) -> ExternalBuildScheduler {
+        ExternalBuildScheduler::from_parts(
+            Arc::clone(self.external_inbox),
+            self.external_request_frame.map(Arc::clone),
+        )
+    }
+
     /// Mark a dependent as having received an inherited-dependency
     /// change.
     ///
@@ -186,7 +270,7 @@ impl ElementOwner<'_> {
     /// [`ViewState::did_change_dependencies`](crate::view::ViewState::did_change_dependencies)
     /// hook (via `ElementBase::notify_dependency_change`) BEFORE the
     /// actual rebuild — Flutter parity for the `_didChangeDependencies`
-    /// flag at `framework.dart:6114`. Plan §U14.
+    /// flag at `framework.dart:6114`.
     ///
     /// Idempotent: re-marking the same id is a no-op (HashSet dedup) —
     /// `did_change_dependencies` fires at most once per
@@ -225,7 +309,7 @@ impl ElementOwner<'_> {
     /// Remove an element from the inactive queue.
     ///
     /// Used when an element is re-activated mid-frame (Flutter
-    /// reparenting via `GlobalKey`, U14 territory). No-op if the id
+    /// reparenting via `GlobalKey`). No-op if the id
     /// isn't queued.
     pub fn remove_inactive(&mut self, id: ElementId) {
         self.inactive_elements.retain(|entry| entry.id() != id);
@@ -233,7 +317,7 @@ impl ElementOwner<'_> {
 
     /// Whether the given element is currently queued for finalization.
     ///
-    /// Used by `ElementTree::insert` to gate the U14 state-migration
+    /// Used by `ElementTree::insert` to gate the state-migration
     /// retake: the GlobalKey registry's `Some(_)` entry could be stale
     /// (the element is still active elsewhere) — only an entry that's
     /// actually in the inactive queue is safe to re-attach.
@@ -263,6 +347,67 @@ impl ElementOwner<'_> {
     /// Number of dirty elements pending rebuild.
     pub fn dirty_count(&self) -> usize {
         self.dirty_elements.len()
+    }
+
+    // ========================================================================
+    // Child-manager registry (lazy sliver backend)
+    // ========================================================================
+
+    /// Register a `ChildManager` for the given sliver render id.
+    ///
+    /// Called from `SliverListAdaptorBehavior::on_mount` (F8 — NOT from the
+    /// generic `RenderBehavior::on_mount`).  Idempotent: re-registering the
+    /// same `render_id` with a new manager replaces the old entry (last-write
+    /// wins; a single sliver has exactly one live manager at a time).
+    pub(crate) fn register_child_manager(
+        &mut self,
+        render_id: RenderId,
+        manager: Arc<Mutex<dyn ChildManager>>,
+    ) {
+        self.child_manager_registry
+            .lock()
+            .insert(render_id, manager);
+    }
+
+    /// Unregister the `ChildManager` for `render_id`.
+    ///
+    /// Called from `SliverListAdaptorBehavior::on_unmount` so that a stale
+    /// registry entry for the dismounted sliver cannot be serviced post-frame.
+    /// No-op if the id is not present.
+    pub(crate) fn unregister_child_manager(&mut self, render_id: RenderId) {
+        self.child_manager_registry.lock().remove(&render_id);
+    }
+
+    /// Register a build-during-layout node.
+    ///
+    /// Called from a layout-builder element's `on_mount` — the only lifecycle
+    /// hook handed an `&mut ElementOwner`, and therefore the only normal hook
+    /// that can register the render id, element id, and constraints cell as one
+    /// atomic mount-time fact. A later [`RebuildHandle`](crate::RebuildHandle)
+    /// can schedule the element, but it deliberately cannot mutate this
+    /// registry.
+    ///
+    /// `cell` must be the same `Arc` the render object registered under
+    /// `render_id` publishes its constraints into.
+    pub(crate) fn register_layout_builder(
+        &mut self,
+        render_id: RenderId,
+        element: ElementId,
+        cell: Arc<LayoutConstraintsCell>,
+    ) {
+        self.layout_builder_registry
+            .lock()
+            .insert(render_id, LayoutBuilderEntry { element, cell });
+    }
+
+    /// Unregister the build-during-layout node for `render_id`.
+    ///
+    /// Must run in `on_unmount`, before the render object is disposed.
+    /// `service_layout_builders` prunes entries that outlive their element or
+    /// render node anyway, but relying on that is how the sliver adaptor grew
+    /// its stale-entry bug.
+    pub(crate) fn unregister_layout_builder(&mut self, render_id: RenderId) {
+        self.layout_builder_registry.lock().remove(&render_id);
     }
 }
 
@@ -325,7 +470,7 @@ mod tests {
 
     #[test]
     fn no_key_path_keeps_registry_empty() {
-        // Mirrors the U8 plan test scenario: an element with no key
+        // An element with no key
         // mounts + unmounts without touching the `global_keys`
         // registry. Pure surface check — no Element types here, just
         // the handle's invariants.

@@ -3,10 +3,17 @@
 //! Tests dirty element tracking, build scheduling, and the GlobalKey
 //! registry.
 
-use std::any::TypeId;
-
 use flui_foundation::ElementId;
-use flui_view::{BuildOwner, ElementBase, ElementOwner, ElementTree, Lifecycle, View};
+use flui_interaction::{InteractionLane, PointerTarget};
+use flui_objects::RenderSizedBox;
+use flui_rendering::pipeline::PipelineOwner;
+use flui_rendering::protocol::BoxProtocol;
+use flui_view::{
+    BuildOwner, ElementTree, RenderObjectContext, RenderObjectContextError, RenderView, View,
+};
+use parking_lot::RwLock;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 // ============================================================================
 // Test View
@@ -19,67 +26,27 @@ struct TestView {
 }
 
 impl View for TestView {
-    fn create_element(&self) -> Box<dyn ElementBase> {
-        Box::new(TestLeafElement::new())
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::render_variable(self)
     }
 }
 
-/// A leaf element that creates no children, so `build_scope` terminates.
-///
-/// `TestView` was previously a `StatelessView` whose `build` returned
-/// `self` — an infinitely deep element tree that overflowed the stack
-/// when built. A leaf element is the correct fixture for exercising
-/// `BuildOwner` dirty-tracking and `build_scope` mechanics.
-struct TestLeafElement {
-    depth: usize,
-    lifecycle: Lifecycle,
-}
+impl RenderView for TestView {
+    type Protocol = BoxProtocol;
+    type RenderObject = RenderSizedBox;
 
-impl TestLeafElement {
-    fn new() -> Self {
-        Self {
-            depth: 0,
-            lifecycle: Lifecycle::Initial,
-        }
-    }
-}
-
-impl ElementBase for TestLeafElement {
-    fn view_type_id(&self) -> TypeId {
-        TypeId::of::<TestView>()
+    fn create_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+    ) -> Self::RenderObject {
+        RenderSizedBox::shrink()
     }
 
-    fn depth(&self) -> usize {
-        self.depth
-    }
-
-    fn lifecycle(&self) -> Lifecycle {
-        self.lifecycle
-    }
-
-    fn mount(&mut self, _parent: Option<ElementId>, slot: usize, _owner: &mut ElementOwner<'_>) {
-        self.depth = slot;
-        self.lifecycle = Lifecycle::Active;
-    }
-
-    fn unmount(&mut self, _owner: &mut ElementOwner<'_>) {
-        self.lifecycle = Lifecycle::Defunct;
-    }
-
-    fn activate(&mut self) {
-        self.lifecycle = Lifecycle::Active;
-    }
-
-    fn deactivate(&mut self) {
-        self.lifecycle = Lifecycle::Inactive;
-    }
-
-    fn update(&mut self, _new_view: &dyn View, _owner: &mut ElementOwner<'_>) {}
-
-    fn mark_needs_build(&mut self) {}
-
-    fn build_into_views(&mut self, _owner: &mut ElementOwner<'_>) -> Vec<Box<dyn View>> {
-        Vec::new()
+    fn update_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+        _render_object: &mut Self::RenderObject,
+    ) {
     }
 }
 
@@ -101,6 +68,116 @@ fn test_build_owner_default() {
 
     assert!(!owner.has_dirty_elements());
     assert_eq!(owner.dirty_count(), 0);
+}
+
+#[derive(Clone)]
+struct InteractionContextView {
+    create_count: Arc<AtomicUsize>,
+    update_count: Arc<AtomicUsize>,
+    unmount_count: Arc<AtomicUsize>,
+    target: Arc<RwLock<Option<PointerTarget>>>,
+}
+
+impl View for InteractionContextView {
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::render_variable(self)
+    }
+}
+
+impl RenderView for InteractionContextView {
+    type Protocol = BoxProtocol;
+    type RenderObject = RenderSizedBox;
+
+    fn create_render_object(&self, ctx: &RenderObjectContext<'_>) -> Self::RenderObject {
+        let target = ctx
+            .register_pointer(|_| {})
+            .expect("mount runs with the BuildOwner interaction capability active");
+        *self.target.write() = Some(target);
+        self.create_count.fetch_add(1, Ordering::Relaxed);
+        RenderSizedBox::shrink()
+    }
+
+    fn update_render_object(
+        &self,
+        ctx: &RenderObjectContext<'_>,
+        _render_object: &mut Self::RenderObject,
+    ) {
+        let target = (*self.target.read()).expect("create stored the target before update");
+        ctx.replace_pointer(target, |_| {})
+            .expect("update runs with the same BuildOwner interaction capability active");
+        self.update_count.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn did_unmount_render_object(
+        &self,
+        ctx: &RenderObjectContext<'_>,
+        _render_object: &mut Self::RenderObject,
+    ) {
+        let target = (*self.target.read()).expect("create stored the target before unmount");
+        ctx.unregister_pointer(target)
+            .expect("unmount runs with the same BuildOwner interaction capability active");
+        self.unmount_count.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+#[test]
+fn detached_render_object_context_reports_inactive_realm() {
+    let ctx = RenderObjectContext::detached();
+
+    assert!(matches!(
+        ctx.register_pointer(|_| {}),
+        Err(RenderObjectContextError::InteractionUnavailable)
+    ));
+}
+
+#[test]
+fn render_object_context_reaches_create_and_update_from_build_owner() {
+    let lane = InteractionLane::try_new().expect("interaction lane");
+    let handle = lane.dispatch_handle();
+    let pipeline = Arc::new(RwLock::new(PipelineOwner::new()));
+    let create_count = Arc::new(AtomicUsize::new(0));
+    let update_count = Arc::new(AtomicUsize::new(0));
+    let unmount_count = Arc::new(AtomicUsize::new(0));
+    let target = Arc::new(RwLock::new(None));
+    let first = InteractionContextView {
+        create_count: Arc::clone(&create_count),
+        update_count: Arc::clone(&update_count),
+        unmount_count: Arc::clone(&unmount_count),
+        target: Arc::clone(&target),
+    };
+    let second = first.clone();
+    let mut owner = BuildOwner::new();
+    owner.set_interaction_dispatch_handle(handle.clone());
+    let mut tree = ElementTree::new();
+
+    lane.enter(|| {
+        let root = tree.mount_root_with_pipeline_owner(
+            &first,
+            Some(Arc::clone(&pipeline)),
+            &mut owner.element_owner_mut(),
+        );
+        tree.update(root, &second, &mut owner.element_owner_mut());
+        tree.remove(root, &mut owner.element_owner_mut());
+        let target = (*target.read()).expect("create stored a target");
+        let entry = flui_interaction::HitTestEntry::new(flui_foundation::RenderId::new(1))
+            .pointer_target(target);
+        let resolution = handle
+            .resolve_pointer_route(&[entry])
+            .expect("resolution itself still succeeds for same-lane targets");
+        assert_eq!(
+            resolution.misses().len(),
+            1,
+            "unmount unregisters the target from future route resolution"
+        );
+    });
+
+    assert_eq!(create_count.load(Ordering::Relaxed), 1);
+    assert_eq!(update_count.load(Ordering::Relaxed), 1);
+    assert_eq!(unmount_count.load(Ordering::Relaxed), 1);
+    assert!(
+        target.read().is_some(),
+        "create stores the data-only target minted from the owner lane"
+    );
 }
 
 // ============================================================================
@@ -358,7 +435,7 @@ fn test_build_owner_debug() {
     owner.schedule_build_for(ElementId::new(1), 0);
     owner.register_global_key(123, ElementId::new(2));
 
-    let debug_str = format!("{:?}", owner);
+    let debug_str = format!("{owner:?}");
 
     assert!(debug_str.contains("BuildOwner"));
     assert!(debug_str.contains("dirty_count"));
@@ -429,6 +506,32 @@ fn test_multiple_build_cycles() {
     assert!(!owner.has_dirty_elements());
 }
 
+#[test]
+fn test_reassemble_marks_all_live_elements_dirty() {
+    let mut owner = BuildOwner::new();
+    let mut tree = ElementTree::new();
+
+    let root_id = tree.mount_root(&TestView { id: 1 }, &mut owner.element_owner_mut());
+    let _child1 = tree.insert(
+        &TestView { id: 2 },
+        root_id,
+        0,
+        &mut owner.element_owner_mut(),
+    );
+    let _child2 = tree.insert(
+        &TestView { id: 3 },
+        root_id,
+        1,
+        &mut owner.element_owner_mut(),
+    );
+
+    owner.build_scope(&mut tree);
+    assert!(!owner.has_dirty_elements());
+
+    owner.reassemble(&tree);
+    assert_eq!(owner.dirty_count(), tree.len());
+}
+
 // ============================================================================
 // Memory Layout Tests
 // ============================================================================
@@ -437,5 +540,5 @@ fn test_multiple_build_cycles() {
 fn test_build_owner_memory_size() {
     let size = std::mem::size_of::<BuildOwner>();
     // Should be reasonably sized (BinaryHeap + HashSet + HashMap + debug flags)
-    assert!(size < 512, "BuildOwner is too large: {} bytes", size);
+    assert!(size < 512, "BuildOwner is too large: {size} bytes");
 }

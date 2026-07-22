@@ -6,8 +6,8 @@
 
 use flui_foundation::LayerId;
 use flui_tree::{
-    iter::{AllSiblings, Ancestors, DescendantsWithDepth},
     TreeNav, TreeRead, TreeWrite,
+    iter::{AllSiblings, Ancestors, DescendantsWithDepth},
 };
 
 use super::layer_tree::{LayerNode, LayerTree};
@@ -91,16 +91,16 @@ impl TreeNav<LayerId> for LayerTree {
 }
 
 // ============================================================================
-// TREE WRITE IMPLEMENTATION (cycle 3 T-2)
+// TREE WRITE IMPLEMENTATION
 // ============================================================================
 //
-// Hoists the cycle 2 cascade-by-default `remove` from the inherent API
-// up to the unified [`TreeWrite`] trait per memory
-// `flui-tree-unified-interface-intent`. Callers now write
-// `use flui_tree::TreeWrite; tree.remove(id);` and get cascade
-// automatically. The inherent `LayerTree::remove_shallow` is the trait
-// primitive; the trait default `remove` (in `flui-tree/src/traits/write.rs`)
-// walks descendants and calls `remove_shallow`.
+// Hoists the cascade-by-default `remove` from the inherent API up to
+// the unified [`TreeWrite`] trait so every tree type shares one removal
+// contract. Callers now write `use flui_tree::TreeWrite; tree.remove(id);`
+// and get cascade automatically. The inherent `LayerTree::remove_shallow`
+// is the trait primitive; the trait default `remove` (in
+// `flui-tree/src/traits/write.rs`) walks descendants and calls
+// `remove_shallow`.
 
 impl TreeWrite<LayerId> for LayerTree {
     #[inline]

@@ -57,14 +57,39 @@ pub mod proxy_queries;
 
 pub use flui_painting::{Canvas, DisplayList, Paint, PaintStyle};
 pub use hit_test::HitTestContext;
-#[cfg(test)]
-pub(crate) use intrinsics::test_support as intrinsics_test_support;
+// Promoted to `testing` feature so flui-objects' cross-crate tests can reach
+// leaf_intrinsics/leaf_dry_layout/leaf_dry_baseline (see flui-objects extraction plan §7).
+#[cfg(any(test, feature = "testing"))]
+pub use intrinsics::test_support as intrinsics_test_support;
 pub use intrinsics::{
     BoxDryBaselineCtx, BoxDryLayoutCtx, BoxIntrinsicsCtx, DryBaselineChildRequest,
-    DryBaselineChildResponse, IntrinsicChildChannel,
+    DryBaselineChildResponse, DryLayoutChildRequest, DryLayoutChildResponse,
 };
 pub use layout::LayoutContext;
-pub(crate) use paint_cx::{FragmentClip, FragmentOp};
+// FragmentRecorder and PaintCx are unconditionally pub: FragmentRecorder
+// appears in the public `RenderObject::paint_raw` trait signature (users must
+// be able to name the type), and PaintCx is the render-object paint surface.
+// PaintFragment is pub because it is the return type of `FragmentRecorder::finish`.
+//
+// FragmentOp is crate-private in its definition (only the recorder writes ops,
+// only the pipeline composer reads them). It is re-exported as `pub` only when
+// the `testing` feature (or `#[cfg(test)]`) is active, so flui-objects' test
+// build (which enables `flui-rendering/testing` via its dev-dep) can
+// pattern-match on recorded ops without ossifying the paint IR as stable API.
+// PaintFragment itself is pub (needed for finish() return type), but its
+// `.ops` field is crate-private; the testing-gated `PaintFragment::ops()`
+// accessor exposes it to cross-crate tests.
+//
+// FragmentScope (née FragmentClip — it now also carries the ShaderMask and
+// BackdropFilter scope variants, not just clips) has ZERO cross-crate
+// consumers (used only crate-internally by the paint encoder in paint_cx.rs
+// and the composer in pipeline/owner). It is not re-exported as `pub` —
+// only as `pub(crate)` for the pipeline composer.
+#[cfg(any(test, feature = "testing"))]
+pub use paint_cx::FragmentOp;
+#[cfg(not(any(test, feature = "testing")))]
+pub(crate) use paint_cx::FragmentOp;
+pub(crate) use paint_cx::FragmentScope;
 pub use paint_cx::{FragmentRecorder, PaintCx, PaintFragment};
 
 // ============================================================================

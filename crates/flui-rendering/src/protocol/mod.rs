@@ -46,10 +46,9 @@
 // downstream consumers via the fully-qualified path
 // `flui_rendering::protocol::box_protocol::BoxLayoutCtxErased` without
 // being pulled into scope by a glob `use flui_rendering::protocol::*`.
-// PR #141 Copilot review feedback (comment 3293746269): a glob re-export
-// of the erased trait collides with `LayoutContextApi`'s method names
-// (`constraints` / `layout_child` / `position_child` overlap by design)
-// and triggers ambiguous-method E0034 in widget
+// A glob re-export of the erased trait collides with `LayoutContextApi`'s
+// method names (`constraints` / `layout_child` / `position_child` overlap
+// by design) and triggers ambiguous-method E0034 in widget
 // code. The submodule-pub approach surfaces the trait at one explicit
 // path without polluting the common namespace. The most-used surfaces
 // (`BoxLayoutCtx`, `BoxProtocol`, `LayoutContextApi`, …) are still
@@ -82,15 +81,14 @@ pub use box_protocol::{
     // Protocol
     BoxProtocol,
     // Per-child layout state (moved here from the deleted
-    // children_access.rs in Mythos Step 5b)
+    // children_access.rs)
     ChildState,
     ErasedBoxLayoutCtx,
     ErasedChildState,
 };
-// Erased layout-context trait (D-block PR-A1b U19 / memo D5).
+// Erased layout-context trait.
 //
-// **Deliberately NOT re-exported** at the `protocol::*` level (PR #141
-// Copilot review feedback, comment 3293746269):
+// **Deliberately NOT re-exported** at the `protocol::*` level:
 // `BoxLayoutCtxErased::constraints` / `layout_child` / `position_child`
 // overlap with `LayoutContextApi`'s method names by design (both view
 // the same operations from different angles); putting the trait into
@@ -126,11 +124,8 @@ pub use capabilities::{
 // ============================================================================
 pub use into_render_object::IntoRenderObject;
 pub use protocol::{
-    // Marker traits
-    BidirectionalProtocol,
     // Protocol trait
     Protocol,
-    ProtocolCompatible,
     // Usage by parent
     UsageByParent,
 };
@@ -176,8 +171,6 @@ pub use crate::traits::RenderObject;
 /// ```
 pub mod prelude {
     pub use super::{
-        // Marker traits
-        BidirectionalProtocol,
         // Concrete capabilities
         BoxHitTest,
         BoxLayout,
@@ -190,7 +183,6 @@ pub mod prelude {
         LayoutContextApi,
         // Protocol trait
         Protocol,
-        ProtocolCompatible,
         // Type aliases
         ProtocolConstraints,
         ProtocolGeometry,
@@ -200,28 +192,6 @@ pub mod prelude {
         SliverLayout,
         SliverProtocol,
     };
-}
-
-// ============================================================================
-// UTILITY FUNCTIONS
-// ============================================================================
-
-/// Check if two protocols are compatible at runtime.
-pub fn are_protocols_compatible<P1, P2>() -> bool
-where
-    P1: Protocol + ProtocolCompatible<P2>,
-    P2: Protocol,
-{
-    P1::is_compatible()
-}
-
-/// Assert protocol compatibility at compile time.
-pub fn assert_compatible<From, To>()
-where
-    From: Protocol + ProtocolCompatible<To>,
-    To: Protocol,
-{
-    // Compile-time assertion via trait bounds
 }
 
 // ============================================================================
@@ -236,21 +206,5 @@ mod tests {
     fn test_protocol_names() {
         assert_eq!(BoxProtocol::name(), "box");
         assert_eq!(SliverProtocol::name(), "sliver");
-    }
-
-    #[test]
-    fn test_protocol_compatibility() {
-        assert!(are_protocols_compatible::<BoxProtocol, BoxProtocol>());
-        assert!(are_protocols_compatible::<SliverProtocol, SliverProtocol>());
-        assert!(are_protocols_compatible::<BoxProtocol, SliverProtocol>());
-        assert!(are_protocols_compatible::<SliverProtocol, BoxProtocol>());
-    }
-
-    #[test]
-    fn test_compile_time_compatibility() {
-        assert_compatible::<BoxProtocol, BoxProtocol>();
-        assert_compatible::<SliverProtocol, SliverProtocol>();
-        assert_compatible::<BoxProtocol, SliverProtocol>();
-        assert_compatible::<SliverProtocol, BoxProtocol>();
     }
 }

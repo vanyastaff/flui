@@ -3,7 +3,7 @@
 //! This module defines vertex structures for all primitive types.
 //! All vertices use bytemuck for zero-copy GPU uploads.
 //!
-//! # Cycle 4 wave 5 E-10
+//! # Deleted duplicate/unused vertex types
 //!
 //! The 4 parallel vertex types `RectVertex`, `RectInstance`,
 //! `PathVertex`, `ImageInstance` (and their `new` / `desc`
@@ -12,7 +12,7 @@
 //!
 //! - `RectInstance` collided with the live
 //!   [`super::instancing::RectInstance`] — the only `RectInstance`
-//!   actually consumed by `painter.rs`'s instancing batch shaders.
+//!   actually consumed by `painter`'s instancing batch shaders.
 //!   The vertex.rs copy had an incompatible field layout (no
 //!   `border_radius`, different `desc()`) and zero consumers.
 //! - `RectVertex` / `PathVertex` / `ImageInstance` had zero
@@ -26,7 +26,7 @@
 //!   tests for code that doesn't exist).
 //!
 //! `Vertex` (general-purpose textured vertex) stays — it's the live
-//! vertex format consumed by `painter.rs`, `pipeline.rs`,
+//! vertex format consumed by `painter`, `pipeline.rs`,
 //! `tessellator.rs`.
 
 use bytemuck::{Pod, Zeroable};

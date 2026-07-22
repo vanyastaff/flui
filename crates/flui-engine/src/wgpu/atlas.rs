@@ -35,7 +35,15 @@ impl AtlasRect {
         }
     }
 
-    /// Get UV coordinates (0.0 - 1.0) for this rect in the atlas
+    /// Get UV coordinates (0.0 - 1.0) for this rect in the atlas.
+    ///
+    /// Returns exact texel-boundary UVs: `min_u = x / atlas_width`, etc.
+    /// Bilinear bleed into neighboring entries is prevented not by shrinking
+    /// the UV range but by [`TextureAtlas::upload_image`] zeroing the 1px
+    /// [`GUTTER`] strips on the right and bottom of every uploaded image. A
+    /// transparent gutter absorbs the bilinear footprint without distorting the
+    /// sampling grid — so a 2-pixel image drawn 1:1 still samples its own
+    /// texel centers crisply.
     ///
     /// # Arguments
     ///
@@ -44,13 +52,15 @@ impl AtlasRect {
     ///
     /// # Returns
     ///
-    /// (min_u, min_v, max_u, max_v)
+    /// `([min_u, min_v], [max_u, max_v])` in normalized atlas space.
     #[must_use]
     pub fn uv_coords(&self, atlas_width: u32, atlas_height: u32) -> ([f32; 2], [f32; 2]) {
-        let min_u = self.x as f32 / atlas_width as f32;
-        let min_v = self.y as f32 / atlas_height as f32;
-        let max_u = (self.x + self.width) as f32 / atlas_width as f32;
-        let max_v = (self.y + self.height) as f32 / atlas_height as f32;
+        let aw = atlas_width as f32;
+        let ah = atlas_height as f32;
+        let min_u = self.x as f32 / aw;
+        let min_v = self.y as f32 / ah;
+        let max_u = (self.x + self.width) as f32 / aw;
+        let max_v = (self.y + self.height) as f32 / ah;
 
         ([min_u, min_v], [max_u, max_v])
     }
@@ -58,7 +68,7 @@ impl AtlasRect {
 
 /// Texture atlas entry
 ///
-/// Cycle 4 wave 5 E-10: dropped the `image_id: u32` field. It was
+/// The `image_id: u32` field was dropped from this struct. It was
 /// set on construction but read by zero consumers in the workspace
 /// -- the `HashMap<u32, AtlasEntry>` keying inside `TextureAtlas`
 /// is the canonical ID source, and the field was duplicate
@@ -79,6 +89,21 @@ pub const ATLAS_MAX_DIMENSION: u32 = 256;
 /// Default atlas texture size (2048x2048).
 pub const ATLAS_DEFAULT_SIZE: u32 = 2048;
 
+/// Transparent padding, in pixels, reserved on the right and bottom of every
+/// packed entry.
+///
+/// Bilinear filtering at a fractional device scale reaches up to half a texel
+/// past the sampled coordinate; with edge-to-edge packing that footprint spills
+/// into the neighboring image and produces a wrong-color fringe. A 1px gutter
+/// cleared to transparent zeros by [`TextureAtlas::upload_image`] absorbs the
+/// bilinear footprint without distorting the sampling grid. Unlike a half-texel
+/// UV inset — which compresses the per-pixel sampling grid and blurs small
+/// images — transparent gutter strips leave [`AtlasRect::uv_coords`] at exact
+/// texel boundaries so a 1:1 draw samples each texel crisply. Impeller's glyph
+/// atlas uses a 2px gutter for mip safety; this atlas is mip-free
+/// (`mip_level_count: 1`), so a single texel is sufficient.
+pub const GUTTER: u32 = 1;
+
 /// Returns `true` when the given image dimensions fit inside the atlas.
 #[must_use]
 pub fn fits_in_atlas(width: u32, height: u32) -> bool {
@@ -98,11 +123,6 @@ pub struct TextureAtlas {
 
     /// Atlas height
     height: u32,
-
-    /// Texture format (stored at construction; queried via the underlying
-    /// `wgpu::Texture` at runtime, not via this field).
-    #[allow(dead_code)]
-    format: TextureFormat,
 
     /// Current shelf Y position
     current_shelf_y: u32,
@@ -149,7 +169,6 @@ impl TextureAtlas {
             texture,
             width,
             height,
-            format,
             current_shelf_y: 0,
             current_shelf_height: 0,
             current_x: 0,
@@ -158,7 +177,12 @@ impl TextureAtlas {
         }
     }
 
-    /// Allocate space for an image in the atlas
+    /// Allocate space for an image in the atlas.
+    ///
+    /// Each entry reserves a [`GUTTER`]-pixel transparent margin on its right
+    /// and bottom so bilinear filtering of one image never bleeds into the next.
+    /// The cursor therefore advances by `width + GUTTER` / `height + GUTTER`, and
+    /// every fits check reserves the gutter as well.
     ///
     /// # Arguments
     ///
@@ -169,15 +193,23 @@ impl TextureAtlas {
     ///
     /// Image ID and atlas rectangle, or None if atlas is full
     pub fn allocate(&mut self, width: u32, height: u32) -> Option<(u32, AtlasRect)> {
-        // Check if image fits in current shelf
-        if self.current_x + width <= self.width && self.current_shelf_y + height <= self.height {
-            // Update shelf height if needed
-            if height > self.current_shelf_height {
-                self.current_shelf_height = height;
+        // Footprint including the right/bottom gutter. `saturating_add` keeps the
+        // comparison sound even for pathological dimensions near u32::MAX (the
+        // routing gate `fits_in_atlas` already bounds real inputs to 256).
+        let footprint_w = width.saturating_add(GUTTER);
+        let footprint_h = height.saturating_add(GUTTER);
+
+        // Check if image (plus gutter) fits in the current shelf.
+        if self.current_x + footprint_w <= self.width
+            && self.current_shelf_y + footprint_h <= self.height
+        {
+            // Grow the shelf to include this entry's gutter.
+            if footprint_h > self.current_shelf_height {
+                self.current_shelf_height = footprint_h;
             }
 
             let rect = AtlasRect::new(self.current_x, self.current_shelf_y, width, height);
-            self.current_x += width;
+            self.current_x += footprint_w;
 
             let image_id = self.next_image_id;
             self.next_image_id += 1;
@@ -186,14 +218,15 @@ impl TextureAtlas {
 
             Some((image_id, rect))
         } else {
-            // Try next shelf
+            // Try next shelf. `current_shelf_height` already includes the gutter
+            // of the tallest entry on the previous shelf.
             self.current_shelf_y += self.current_shelf_height;
-            self.current_shelf_height = height;
+            self.current_shelf_height = footprint_h;
             self.current_x = 0;
 
-            if self.current_shelf_y + height <= self.height && width <= self.width {
+            if self.current_shelf_y + footprint_h <= self.height && footprint_w <= self.width {
                 let rect = AtlasRect::new(self.current_x, self.current_shelf_y, width, height);
-                self.current_x += width;
+                self.current_x += footprint_w;
 
                 let image_id = self.next_image_id;
                 self.next_image_id += 1;
@@ -207,17 +240,47 @@ impl TextureAtlas {
         }
     }
 
-    /// Upload image data to the atlas
+    /// Reclaim the entire atlas: drop every entry and rewind the shelf cursor.
+    ///
+    /// The shelf packer is append-only — once `allocate` walks the cursor to the
+    /// bottom-right it can never reuse a freed slot, so a long-lived atlas
+    /// eventually fills with stale entries and `allocate` returns `None`
+    /// forever. `reset` is the freeing mechanism: it clears `entries` and
+    /// rewinds the cursor so the GPU texture (reused as-is) can be re-packed
+    /// from scratch.
+    ///
+    /// # Invalidates outstanding rects
+    ///
+    /// Every [`AtlasRect`] / `image_id` handed out by `allocate` before this
+    /// call is invalidated — the regions they point at will be overwritten by
+    /// future uploads. Callers that cache atlas UVs (e.g. `TextureCache`) MUST
+    /// drop those cached entries in the same step. Old pixels are not cleared;
+    /// they become garbage that the next `upload_image` overwrites.
+    pub fn reset(&mut self) {
+        self.entries.clear();
+        self.current_shelf_y = 0;
+        self.current_shelf_height = 0;
+        self.current_x = 0;
+        self.next_image_id = 1;
+    }
+
+    /// Upload image data to the atlas and zero the surrounding gutter strips.
+    ///
+    /// After writing the image pixels the method clears the right and bottom
+    /// [`GUTTER`] strips to transparent zeros. This prevents bilinear filtering
+    /// from bleeding a neighbor's color into this image's edge without distorting
+    /// the per-pixel sampling grid (cf. the UV boundary note on [`AtlasRect::uv_coords`]).
     ///
     /// # Arguments
     ///
     /// * `queue` - GPU queue
     /// * `image_id` - Image ID from allocate()
-    /// * `data` - Image data (RGBA8)
+    /// * `data` - Image data (RGBA8, `width * height * 4` bytes)
     pub fn upload_image(&self, queue: &Queue, image_id: u32, data: &[u8]) {
         if let Some(entry) = self.entries.get(&image_id) {
             let rect = entry.rect;
 
+            // --- Write the image pixels ---
             queue.write_texture(
                 wgpu::TexelCopyTextureInfo {
                     texture: &self.texture,
@@ -241,17 +304,75 @@ impl TextureAtlas {
                     depth_or_array_layers: 1,
                 },
             );
+
+            // --- Clear right gutter strip: GUTTER × rect.height at (rect.x+rect.width, rect.y) ---
+            //
+            // `allocate` reserved rect.width + GUTTER columns so this write stays
+            // within the atlas bounds even at the right edge of a shelf.
+            let zeros_right = vec![0u8; (GUTTER * rect.height) as usize * 4];
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &self.texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d {
+                        x: rect.x + rect.width,
+                        y: rect.y,
+                        z: 0,
+                    },
+                    aspect: wgpu::TextureAspect::All,
+                },
+                &zeros_right,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(GUTTER * 4),
+                    rows_per_image: Some(rect.height),
+                },
+                Extent3d {
+                    width: GUTTER,
+                    height: rect.height,
+                    depth_or_array_layers: 1,
+                },
+            );
+
+            // --- Clear bottom gutter strip: (rect.width + GUTTER) × GUTTER at (rect.x, rect.y+rect.height) ---
+            //
+            // The bottom strip spans the full footprint width (image + right gutter)
+            // so the corner texel shared by both strips is also zeroed.
+            let bottom_w = rect.width + GUTTER;
+            let zeros_bottom = vec![0u8; (bottom_w * GUTTER) as usize * 4];
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &self.texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d {
+                        x: rect.x,
+                        y: rect.y + rect.height,
+                        z: 0,
+                    },
+                    aspect: wgpu::TextureAspect::All,
+                },
+                &zeros_bottom,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(bottom_w * 4),
+                    rows_per_image: Some(GUTTER),
+                },
+                Extent3d {
+                    width: bottom_w,
+                    height: GUTTER,
+                    depth_or_array_layers: 1,
+                },
+            );
         }
     }
 
-    // Cycle 4 wave 5 E-10: `get_entry(image_id)` and `texture()`
-    // getters deleted. Workspace grep returned zero callers for
-    // either; the entries `HashMap` is queried internally via
-    // `insert_image` / `pack_image` paths, and the texture is
-    // consumed exclusively through `create_view()` (live).
-    // `Texture` is wgpu's own type so the alternative `&self.texture`
-    // accessor is trivial to reintroduce if a future consumer needs
-    // direct access.
+    // The `get_entry(image_id)` and `texture()` getters were deleted.
+    // Workspace grep returned zero callers for either; the entries
+    // `HashMap` is queried internally via `insert_image` / `pack_image`
+    // paths, and the texture is consumed exclusively through
+    // `create_view()` (live). `Texture` is wgpu's own type so the
+    // alternative `&self.texture` accessor is trivial to reintroduce if
+    // a future consumer needs direct access.
 
     /// Create a [`wgpu::TextureView`] for the atlas texture.
     ///
@@ -348,6 +469,7 @@ mod tests {
 
     #[test]
     fn test_atlas_rect_uv_coords() {
+        // uv_coords returns exact texel-boundary UVs: x/w and (x+width)/w.
         let rect = AtlasRect::new(0, 0, 512, 512);
         let (min_uv, max_uv) = rect.uv_coords(1024, 1024);
 
@@ -364,9 +486,76 @@ mod tests {
         assert_eq!(max_uv, [0.5, 0.5]);
     }
 
+    /// Adjacent entries packed by `allocate` must leave a gutter between them:
+    /// the first entry's right edge plus its gutter must not exceed the second
+    /// entry's left edge.
+    #[test]
+    fn adjacent_entries_have_a_gutter_between_them() {
+        let device = test_device();
+        let mut atlas = TextureAtlas::new(&device, 2048, 2048, TextureFormat::Rgba8UnormSrgb);
+
+        let (_, a) = atlas.allocate(64, 64).expect("first entry fits");
+        let (_, b) = atlas.allocate(64, 64).expect("second entry fits");
+
+        // Same shelf, B to the right of A, separated by at least GUTTER pixels.
+        assert_eq!(a.y, b.y, "both entries share the first shelf");
+        assert!(
+            b.x >= a.x + a.width + GUTTER,
+            "expected a {GUTTER}px gutter: A right edge = {}, B left = {}",
+            a.x + a.width,
+            b.x
+        );
+    }
+
     #[test]
     fn test_texture_atlas_exists() {
         // Compile-time check
         let _ = std::marker::PhantomData::<TextureAtlas>;
+    }
+
+    /// Headless GPU device for atlas allocation/reset tests.
+    fn test_device() -> Device {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::LowPower,
+            force_fallback_adapter: false,
+            compatible_surface: None,
+        }))
+        .expect("a GPU adapter for atlas tests");
+        let (device, _queue) =
+            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+                label: Some("Atlas Test Device"),
+                ..Default::default()
+            }))
+            .expect("a GPU device for atlas tests");
+        device
+    }
+
+    #[test]
+    fn reset_reclaims_a_full_atlas() {
+        let device = test_device();
+        // Each 64x64 entry reserves a GUTTER margin, so its footprint is
+        // (64+GUTTER)². Size the atlas to fit exactly one such footprint, then
+        // it is full.
+        let dim = 64 + GUTTER;
+        let mut atlas = TextureAtlas::new(&device, dim, dim, TextureFormat::Rgba8UnormSrgb);
+
+        assert!(
+            atlas.allocate(64, 64).is_some(),
+            "first 64x64 (plus gutter) must fit the {dim}x{dim} atlas"
+        );
+        assert!(
+            atlas.allocate(1, 1).is_none(),
+            "atlas must report full — the shelf packer cannot reuse freed space"
+        );
+        assert_eq!(atlas.image_count(), 1);
+
+        atlas.reset();
+
+        assert_eq!(atlas.image_count(), 0, "reset drops all entries");
+        assert!(
+            atlas.allocate(64, 64).is_some(),
+            "reset must rewind the shelf cursor so the atlas is allocatable again"
+        );
     }
 }

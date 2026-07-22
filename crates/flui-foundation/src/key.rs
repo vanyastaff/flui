@@ -257,14 +257,14 @@ impl Key {
     }
 }
 
-// NOTE (audit I-5): `impl Default for Key` was removed in cycle 3.
+// NOTE: `impl Default for Key` was removed.
 // `Key::default()` returning a fresh unique key violated the
 // least-surprise principle for `Default`: every call produced a
 // different value, which made `#[derive(Default)]` on parent types
 // silently break round-trip equality.
 //
 // Construction now goes through `Key::new()` (explicit unique
-// generation) or `Key::from_u64` (deterministic). Audit confirmed
+// generation) or `Key::from_u64` (deterministic). There were
 // zero in-workspace consumers of `Key::default()`.
 
 impl fmt::Debug for Key {
@@ -390,7 +390,7 @@ pub trait ViewKey: Send + Sync + 'static {
     /// `ElementTree::insert` to decide whether to call
     /// `ElementOwner::register_global_key` and by `ElementTree::remove`
     /// to decide whether to soft-remove into the inactive queue (R13 /
-    /// R14, plan §U14).
+    /// R14).
     ///
     /// Flutter parity: `framework.dart:3148` keys the registry by
     /// `GlobalKey` identity rather than by a hash AND a "this is a
@@ -596,7 +596,7 @@ impl UniqueKey {
     }
 }
 
-// NOTE (audit I-5): `impl Default for UniqueKey` was removed —
+// NOTE: `impl Default for UniqueKey` was removed —
 // same rationale as `Key`: defaults must be deterministic, but
 // `UniqueKey::new()` bumps an atomic counter per call.
 // `UniqueKey::new()` is the only constructor.
@@ -636,7 +636,7 @@ impl ViewKey for UniqueKey {
 // VIEW KEY IMPLEMENTATION FOR `Key`
 // ============================================================================
 //
-// Plan §U10 / KTD-3 N2: the spec's "five concrete `ViewKey` impls"
+// The spec's "five concrete `ViewKey` impls"
 // assumption expected `Key` (NonZeroU64 newtype) to be storable as a
 // reconciliation key alongside `ValueKey<T>`, `UniqueKey`, `ObjectKey`,
 // `GlobalKey<T>`. Without this impl the assumption was off by one — only
@@ -1023,7 +1023,7 @@ mod tests {
     }
 
     // ========================================================================
-    // ViewKey impl for Key (plan §U10 / KTD-3 N2)
+    // ViewKey impl for Key
     // ========================================================================
 
     /// `Key::key_hash` returns the inner `u64` directly and is

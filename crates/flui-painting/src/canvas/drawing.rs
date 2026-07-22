@@ -1,7 +1,7 @@
 //! Canvas drawing primitives: 29 `draw_*` methods, each emitting one
 //! `DrawCommand` variant.
 //!
-//! Mythos chain U4 extracted these from the 3,305-LOC `canvas.rs` god
+//! These were extracted from the 3,305-LOC `canvas.rs` god
 //! module. Every method here pushes one `DrawCommand` onto the inner
 //! `DisplayList` with the current transform baked in.
 //!
@@ -9,7 +9,7 @@
 //! [`super::scoped`]. For multi-canvas composition, see
 //! [`super::composition`].
 //!
-//! # Allocation hot path (Mythos chain U9 audit / Cycle 5 U10)
+//! # Allocation hot path
 //!
 //! `Paint` is now interned through `Canvas::intern_paint` (crate-private).
 //! On the second-and-later draw of an identical paint, the call

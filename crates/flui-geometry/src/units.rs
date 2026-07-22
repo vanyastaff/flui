@@ -67,20 +67,26 @@ use super::traits::{NumericUnit, Unit};
 ///
 /// ```compile_fail
 /// use flui_geometry::Pixels;
-/// // No implicit scalar -> Pixels conversion (U1).
+/// // No implicit scalar -> Pixels conversion.
 /// let _: Pixels = 10.0_f32.into();
 /// ```
 ///
 /// ```compile_fail
 /// use flui_geometry::px;
-/// // No cross-type comparison / arithmetic against bare f32 (U2).
+/// // No cross-type comparison / arithmetic against bare f32.
 /// let _ = px(10.0) == 10.0;
 /// ```
 ///
 /// ```compile_fail
 /// use flui_geometry::{px, Pixels};
-/// // px * px is area, not length, so it has no `Pixels` result (U4).
+/// // px * px is area, not length, so it has no `Pixels` result.
 /// let _: Pixels = px(10.0) * px(2.0);
+/// ```
+///
+/// ```compile_fail
+/// use flui_geometry::px;
+/// // No lossy implicit Pixels -> integer conversion.
+/// let _: i32 = px(10.0).into();
 /// ```
 #[derive(Copy, Clone, Default, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -272,7 +278,7 @@ impl Pixels {
     #[must_use]
     #[deprecated(
         since = "0.1.0",
-        note = "raw-f32 scale factor is DPI-unsafe; use `Pixels::to_device(ScaleFactor<Pixels, DevicePixels>)` (N-geom U5)"
+        note = "raw-f32 scale factor is DPI-unsafe; use `Pixels::to_device(ScaleFactor<Pixels, DevicePixels>)`"
     )]
     pub fn to_device_pixels(self, scale_factor: f32) -> DevicePixels {
         DevicePixels((self.0 * scale_factor).round() as i32)
@@ -285,7 +291,7 @@ impl Pixels {
     #[must_use]
     #[deprecated(
         since = "0.1.0",
-        note = "raw-f32 scale factor is DPI-unsafe; use `DevicePixels::to_logical(ScaleFactor<Pixels, DevicePixels>)` (N-geom U5)"
+        note = "raw-f32 scale factor is DPI-unsafe; use `DevicePixels::to_logical(ScaleFactor<Pixels, DevicePixels>)`"
     )]
     pub fn from_device_pixels(device: DevicePixels, scale_factor: f32) -> Self {
         Pixels(device.0 as f32 / scale_factor)
@@ -307,7 +313,7 @@ impl Pixels {
 
     /// Rounds to the nearest integer and returns it as `i32`.
     ///
-    /// Explicit replacement for the removed lossy `From<Pixels> for i32` (U11):
+    /// Explicit replacement for the removed lossy `From<Pixels> for i32`:
     /// rounding (rather than truncation) is the intended behaviour and is named
     /// at the call site. Saturates to `i32::MIN`/`i32::MAX` for out-of-range or
     /// non-finite values (`f32 as i32` is saturating since Rust 1.45).
@@ -546,7 +552,7 @@ impl From<Pixels> for f64 {
     }
 }
 
-// NOTE (U11): the lossy `From<Pixels> for i32/u32/usize` impls were removed.
+// NOTE: the lossy `From<Pixels> for i32/u32/usize` impls were removed.
 // `From`/`.into()` should be reserved for lossless conversions; rounding and
 // clamping must be explicit at the call site. Use the `to_*` methods below.
 
@@ -1264,6 +1270,10 @@ impl<'a> Sum<&'a DevicePixels> for DevicePixels {
 // String parsing (FromStr)
 // ============================================================================
 
+/// Error returned when a length string fails to parse.
+///
+/// Produced by the [`FromStr`](std::str::FromStr) implementations on unit
+/// types such as [`Pixels`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParseLengthError {
     /// The input string that failed to parse.
@@ -1926,6 +1936,24 @@ mod tests {
         assert_eq!(p.ceil().get(), 11.0);
         assert_eq!(p.round().get(), 11.0);
         assert_eq!(p.trunc().get(), 10.0);
+    }
+
+    #[test]
+    fn test_pixels_explicit_integer_rounding() {
+        assert_eq!(px(10.4).to_i32_round(), 10);
+        assert_eq!(px(10.5).to_i32_round(), 11);
+        assert_eq!(px(-1.6).to_i32_round(), -2);
+        assert_eq!(Pixels::INFINITY.to_i32_round(), i32::MAX);
+        assert_eq!(Pixels::NEG_INFINITY.to_i32_round(), i32::MIN);
+
+        assert_eq!(px(10.4).to_u32_round_clamped(), 10);
+        assert_eq!(px(10.5).to_u32_round_clamped(), 11);
+        assert_eq!(px(-1.0).to_u32_round_clamped(), 0);
+        assert_eq!(Pixels::INFINITY.to_u32_round_clamped(), u32::MAX);
+
+        assert_eq!(px(10.4).to_usize_round_clamped(), 10);
+        assert_eq!(px(10.5).to_usize_round_clamped(), 11);
+        assert_eq!(px(-1.0).to_usize_round_clamped(), 0);
     }
 
     #[test]

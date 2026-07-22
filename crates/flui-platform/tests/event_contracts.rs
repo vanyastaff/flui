@@ -5,6 +5,11 @@
 //! - T062: Event handler demo example (created separately)
 //! - T063: Event dispatch latency benchmarking (<5ms target)
 
+// Target-level lint relaxations — crate-level allows don't reach this
+// target. `unwrap` in test/example code: a panic IS the failure report
+// (docs/PANIC-POLICY.md); style items here are ship-wave debt.
+#![allow(clippy::no_effect_underscore_binding)]
+
 use std::time::Instant;
 
 use flui_platform::{WindowOptions, current_platform};
@@ -85,13 +90,11 @@ fn test_platform_event_contract() {
 
     assert!(
         width_diff < 2.0,
-        "Coordinate conversion mismatch: width diff = {}",
-        width_diff
+        "Coordinate conversion mismatch: width diff = {width_diff}"
     );
     assert!(
         height_diff < 2.0,
-        "Coordinate conversion mismatch: height diff = {}",
-        height_diff
+        "Coordinate conversion mismatch: height diff = {height_diff}"
     );
 
     tracing::info!("✓ Contract 2: Coordinate system consistency verified");
@@ -188,7 +191,7 @@ fn test_cross_platform_event_consistency() {
 
     // Create identical window options for all platforms
     let options = WindowOptions {
-        title: format!("Event Consistency Test - {}", platform_name),
+        title: format!("Event Consistency Test - {platform_name}"),
         size: Size::new(px(640.0), px(480.0)),
         resizable: true,
         visible: false,
@@ -242,15 +245,11 @@ fn test_cross_platform_event_consistency() {
 
     assert!(
         width_error < 2.0,
-        "{}: Width conversion error too large: {}",
-        platform_name,
-        width_error
+        "{platform_name}: Width conversion error too large: {width_error}"
     );
     assert!(
         height_error < 2.0,
-        "{}: Height conversion error too large: {}",
-        platform_name,
-        height_error
+        "{platform_name}: Height conversion error too large: {height_error}"
     );
 
     tracing::info!("✓ {} platform behaves consistently", platform_name);
@@ -342,7 +341,7 @@ fn test_event_handling_performance_baseline() {
     let start = Instant::now();
     for i in 0..window_count {
         let options = WindowOptions {
-            title: format!("Perf Test Window {}", i),
+            title: format!("Perf Test Window {i}"),
             size: Size::new(px(400.0), px(300.0)),
             resizable: false,
             visible: false,

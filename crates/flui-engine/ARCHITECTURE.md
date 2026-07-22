@@ -15,7 +15,7 @@ The relevant external APIs the crate consumes:
 | FLUI module | wgpu API surface | Notes |
 |---|---|---|
 | [`src/wgpu/renderer.rs`](src/wgpu/renderer.rs) `Renderer` | `wgpu::Instance`, `wgpu::Adapter`, `wgpu::Device`, `wgpu::Queue`, `wgpu::Surface<'static>`, `wgpu::SurfaceConfiguration`, `wgpu::TextureFormat`, `wgpu::PresentMode`, `wgpu::SurfaceError`, `wgpu::CommandEncoderDescriptor`, `wgpu::RenderPassDescriptor`, `wgpu::CompositeAlphaMode` | The single owner of all per-window GPU state. Backend selection per platform: Metal (macOS/iOS) / DX12 (Windows) / Vulkan (Linux/Android) / WebGPU+GL (Web). |
-| [`src/wgpu/painter.rs`](src/wgpu/painter.rs) `WgpuPainter` | `wgpu::Buffer`, `wgpu::RenderPipeline`, `wgpu::BindGroup`, `wgpu::ShaderModule`, `wgpu::Texture`, `wgpu::TextureView`, `wgpu::Sampler`, `wgpu::ShaderSource::Wgsl`, `wgpu::RenderPassColorAttachment`, `wgpu::LoadOp`, `wgpu::StoreOp` | Batched recording + per-frame submission. Uses instancing (`RectInstance`, `CircleInstance`, `ArcInstance`, `TextureInstance`) for fast axis-aligned primitives; falls back to `lyon`-tessellated paths for arbitrary geometry. |
+| [`src/wgpu/painter/`](src/wgpu/painter/mod.rs) `WgpuPainter` | `wgpu::Buffer`, `wgpu::RenderPipeline`, `wgpu::BindGroup`, `wgpu::ShaderModule`, `wgpu::Texture`, `wgpu::TextureView`, `wgpu::Sampler`, `wgpu::ShaderSource::Wgsl`, `wgpu::RenderPassColorAttachment`, `wgpu::LoadOp`, `wgpu::StoreOp` | Batched recording + per-frame submission. Uses instancing (`RectInstance`, `CircleInstance`, `ArcInstance`, `TextureInstance`) for fast axis-aligned primitives; falls back to `lyon`-tessellated paths for arbitrary geometry. |
 | [`src/wgpu/backend.rs`](src/wgpu/backend.rs) `Backend` | -- | Visitor over `flui_painting::DrawCommand`; implements `CommandRenderer`; bridges per-command to `WgpuPainter` inherent methods. |
 | [`src/wgpu/layer_render.rs`](src/wgpu/layer_render.rs) `LayerRender<R>` | -- | Closed extension trait per `flui_layer::Layer` variant. 19 impls. Static dispatch via generic `R: CommandRenderer + ?Sized`. |
 | [`src/commands.rs`](src/commands.rs) `dispatch_command` | -- | Closed visitor over the ~30-variant `flui_painting::DrawCommand` enum. Static dispatch via generic `R: CommandRenderer + ?Sized`. |
@@ -25,7 +25,6 @@ The relevant external APIs the crate consumes:
 | [`src/wgpu/texture_pool.rs`](src/wgpu/texture_pool.rs) `TexturePool` | `wgpu::TextureDescriptor`, `wgpu::TextureUsages` | Per-frame texture reuse for offscreen renders. Currently `Arc<Mutex<TexturePoolInner>>` -- Mythos friction; see [Outstanding refactors](#outstanding-refactors). |
 | [`src/wgpu/tessellator.rs`](src/wgpu/tessellator.rs) `Tessellator` | -- | Adapter over `lyon::tessellation::FillTessellator` + `StrokeTessellator`. |
 | [`src/wgpu/text.rs`](src/wgpu/text.rs) `TextRenderer` | -- | Adapter over `glyphon` (cosmic-text + glyph atlas + GPU sampling). |
-| [`src/wgpu/occlusion.rs`](src/wgpu/occlusion.rs) `OcclusionTracker` | -- | Per-frame opaque-region tracker. Pure CPU; no GPU API surface. |
 
 **Spec references:**
 - wgpu API: [wgpu.rs documentation](https://docs.rs/wgpu) (workspace 29.x; see [`Cargo.toml`](../../Cargo.toml) `[workspace.dependencies]`).
@@ -94,18 +93,18 @@ The `GpuCapabilities` struct in `wgpu/renderer.rs` is the canonical capability s
 
 **Accepted trade-off:** Future HDR / EDR / WCG / MetalFX features will re-implement only what's needed against wgpu's actual capability surface, not 2,182 LOC of stubs. HDR support via `Rgba16Float` surface format is **not lost** -- `GpuCapabilities::supports_hdr` continues to detect it; the deleted `EdrConfig` was a configuration struct with no consumer.
 
-### 5. `RenderResult<T>` consistency over `anyhow::Result<T>` on `Renderer` + `FontLoader`
+### 5. `EngineResult<T>` consistency over `anyhow::Result<T>` on `Renderer` + `FontLoader`
 
 **Rule:** Strategy clause "Consistent error model in the engine's public API."
 
-**Choice:** Migrate `Renderer::new` / `Renderer::new_offscreen` / `FontLoader::load_file` / `FontLoader::load_directory` from `anyhow::Result<T>` to `RenderResult<T>` (Mythos U6 in commit log; verdict's U9, commit `8e6acb65`). Map wgpu errors to specific `RenderError` variants: `wgpu::SurfaceTargetUnsafe::from_window` and `wgpu::Instance::create_surface_unsafe` failures -> `RenderError::surface_creation`; `wgpu::Instance::request_adapter` failure -> `RenderError::AdapterRequest(#[source] Box<dyn Error + Send + Sync>)` (preserves the wgpu diagnostic payload via `Error::source()`); `wgpu::Adapter::request_device` failure -> `RenderError::device_creation`. filesystem errors in font_loader -> `RenderError::ResourceIo { context, #[source] source: std::io::Error }` (preserves `io::ErrorKind` for caller-side matching).
+**Choice:** Migrate `Renderer::new` / `Renderer::new_offscreen` / `FontLoader::load_file` / `FontLoader::load_directory` from `anyhow::Result<T>` to `EngineResult<T>` (Mythos U6 in commit log; verdict's U9, commit `8e6acb65`). Map wgpu errors to specific `EngineError` variants: `wgpu::SurfaceTargetUnsafe::from_window` and `wgpu::Instance::create_surface_unsafe` failures -> `EngineError::surface_creation`; `wgpu::Instance::request_adapter` failure -> `EngineError::AdapterRequest(#[source] Box<dyn Error + Send + Sync>)` (preserves the wgpu diagnostic payload via `Error::source()`); `wgpu::Adapter::request_device` failure -> `EngineError::device_creation`. filesystem errors in font_loader -> `EngineError::ResourceIo { context, #[source] source: std::io::Error }` (preserves `io::ErrorKind` for caller-side matching).
 
 **Alternatives:**
-- Keep `anyhow::Result` on `Renderer::new` "because it's simpler" -- rejected. Inconsistent with `RenderResult<T>` on every other engine API.
-- Use the existing `RenderError::ResourceCreation(String)` variant via `format!("font load {path}: {e}")` for font_loader -- rejected during the chain's cleanup pass. The format-into-String shape severs `Error::source()` and loses `io::ErrorKind` discrimination. Added `RenderError::ResourceIo { context, #[source] source: io::Error }` instead.
-- Keep `RenderError::NoAdapter` as a sentinel-only variant (discarding the wgpu diagnostic via `.map_err(|_| NoAdapter)`) -- rejected during the chain's cleanup pass. wgpu 29.x's `RequestAdapterError::NotFound` carries `active_backends` / `requested_backends` / `supported_backends` / `no_fallback_backends` / `no_adapter_backends` / `incompatible_surface_backends` operator-diagnostic fields; the original `.map_err(|_| NoAdapter)` flatten dropped them. Added `RenderError::AdapterRequest(#[source] Box<dyn Error + Send + Sync>)` to preserve the diagnostic.
+- Keep `anyhow::Result` on `Renderer::new` "because it's simpler" -- rejected. Inconsistent with `EngineResult<T>` on every other engine API.
+- Use the existing `EngineError::ResourceCreation(String)` variant via `format!("font load {path}: {e}")` for font_loader -- rejected during the chain's cleanup pass. The format-into-String shape severs `Error::source()` and loses `io::ErrorKind` discrimination. Added `EngineError::ResourceIo { context, #[source] source: io::Error }` instead. (The dead `ResourceCreation(String)` variant was later deleted as part of the error-model refactor.)
+- Keep `EngineError::NoAdapter` as a sentinel-only variant (discarding the wgpu diagnostic via `.map_err(|_| NoAdapter)`) -- rejected during the chain's cleanup pass. wgpu 29.x's `RequestAdapterError::NotFound` carries `active_backends` / `requested_backends` / `supported_backends` / `no_fallback_backends` / `no_adapter_backends` / `incompatible_surface_backends` operator-diagnostic fields; the original `.map_err(|_| NoAdapter)` flatten dropped them. Added `EngineError::AdapterRequest(#[source] Box<dyn Error + Send + Sync>)` to preserve the diagnostic.
 
-**Accepted trade-off:** Verdict §12 rejected design #8. **No `flui-app` ripple was required** -- `RenderError: Error + Send + Sync` auto-converts to `anyhow::Error` via the blanket `From<E: Error + Send + Sync + 'static>` impl. The original plan's claim of "ripple into flui-app" was incorrect; verified by `cargo build -p flui-app` clean post-migration with zero caller-side changes. The migration is engine-internal.
+**Accepted trade-off:** Verdict §12 rejected design #8. **No `flui-app` ripple was required** -- `EngineError: Error + Send + Sync` auto-converts to `anyhow::Error` via the blanket `From<E: Error + Send + Sync + 'static>` impl. The original plan's claim of "ripple into flui-app" was incorrect; verified by `cargo build -p flui-app` clean post-migration with zero caller-side changes. The migration is engine-internal.
 
 ### 5b. Deletion of global `#![allow(dead_code)]` + per-module audit
 
@@ -139,11 +138,148 @@ The `GpuCapabilities` struct in `wgpu/renderer.rs` is the canonical capability s
 | U3 (delete platform stubs) | -2,182 | 0 | 0 |
 | U4 (delete `wgpu/commands.rs` shim) | -6 | 0 | 0 |
 | U5 (delete `Painter` trait) | -492 | 0 | 0 |
-| U9 (`anyhow::Result` -> `RenderResult`) | ~+20 | 0 | 0 |
+| U9 (`anyhow::Result` -> `EngineResult`) | ~+20 | 0 | 0 |
 | U10 + U11 (dead_code audit + `text_renderer.rs` deletion) | ~-330 | 0 | 0 |
 | **Total** | **~-5,984** | **0** | **0** |
 
 Per-frame `Arc::clone` removal (verdict's U7) and `Arc<Mutex<OffscreenRenderer>>` + `Arc<Mutex<TexturePoolInner>>` removal (verdict's U6 + U8) were **deferred** to follow-up; see [Outstanding refactors](#outstanding-refactors).
+
+---
+
+## Record/replay boundary (engine overhaul T7–T10)
+
+This section documents the decomposition of `WgpuPainter` performed in the engine-overhaul series (PRs #231–#232, T9–T10 sub-PRs). The governing decision is recorded in [`docs/adr/ADR-0006-c-ir-record-replay-seam.md`](../../docs/adr/ADR-0006-c-ir-record-replay-seam.md).
+
+### Two-level IR contract (T11)
+
+The engine uses two distinct IRs in a strict producer/consumer chain.  Understanding their boundary is load-bearing for any change that touches recording, replay, or testing.
+
+| Level | Name | Home crate | Key types | Who writes | Who reads |
+|---|---|---|---|---|---|
+| **Scene IR** (Level 1) | `DisplayList` / `DrawCommand` | `flui-painting` | `DrawCommand` (30-variant enum), `Paint`, `Path`, `TextSpan` | Widget tree (`flui-view`) via `Canvas` | `Backend` (`CommandRenderer` visitor) in `flui-engine` |
+| **Command IR** (Level 2) | `CommandIR` | `flui-engine` | `DrawSegment`, `DrawItem`, `draw_order: Vec<DrawItem>` | `DrawBatcher` (`batches/`) via record methods | `GpuReplay::submit` (replay/flush path) |
+
+**Level 1 — Scene IR (`DisplayList` / `DrawCommand`).**  Lives in `flui-painting`
+(`crates/flui-painting/src/display_list.rs`).  Produced by the widget tree's
+`Canvas` API; consumed by `Backend` in `flui-engine/src/wgpu/backend.rs`.  Every
+`DrawCommand` variant is high-level and coordinate-system–agnostic: it carries
+`Paint`, logical `Rect`/`Path`/`TextSpan`, and `flui_types::Matrix4` transforms.
+This IR is **not GPU-specific** — it is the contract between the scene-graph layer
+and the engine.  `flui-painting::testing::record` is the reference recorder used
+by the snapshot harness in `flui-rendering`.
+
+**Level 2 — Command IR (`DrawSegment` / `DrawItem`).**  Lives in
+`flui-engine/src/wgpu/command_ir.rs`.  Produced by `DrawBatcher` record methods
+(`batches/{shapes,gradients,paths,images}.rs`) as `Backend` visits each
+`DrawCommand`.  Consumed by `GpuReplay::submit` (`replay/`) which drives all
+wgpu encode calls.  This IR is **GPU-lowered** (baked instance arrays, pixel-space
+transforms, `TextureId` opaque handles) but **device-free**: every field is a
+plain CPU value — no `wgpu::Buffer`, `wgpu::Texture`, or `wgpu::TextureView`.
+
+**Purity contract.**  `DrawSegment: Clone` is a compile-time machine-checked
+guarantee of Level-2 purity: `Clone` is only derivable when every field is
+`Clone`, and `wgpu::Buffer` / `wgpu::Texture` / `wgpu::TextureView` /
+`wgpu::BindGroup` are **not** `Clone`.  The T11 deterministic-replay test
+(`src/wgpu/deterministic_replay_tests.rs`) uses this property: it records a scene
+once, clones the resulting `DrawSegment`s, replays two independent clones to two
+independent render targets (encoder A → target A, encoder B → target B), and
+asserts byte-identical pixel output.  This is the non-tautological C5-gate
+assertion — it would fail under any determinism break in the replay path.
+
+**Exception.**  `DrawItem::OffscreenTexture` and `DrawItem::OpacityLayer` hold
+live `PooledTexture` (wrapping `wgpu::Texture`) and are therefore NOT `Clone`.
+These are transient compositing handles, not IR data — they are created and
+consumed within a single `render()` call.  The T8 layer readback suite covers
+their correctness independently.
+
+### Two-level picture
+
+```
+Backend (CommandRenderer)
+  │  visits flui_layer::Scene, converts Matrix4 → glam::Mat4 at the boundary
+  ▼
+WgpuPainter::draw_* (thin shims — field-split self → DrawBatcher)
+  │  record side: DrawBatcher builds the Command-IR
+  ▼
+DrawBatcher (batches/{shapes,gradients,paths,images}.rs)
+  │  writes DrawSegment / DrawItem structs — the Command IR
+  │  Matrix4-free; glam-only (C4 rule, Trigger 19)
+  ▼
+WgpuPainter::render() — record-finish + self.replay.submit(…)
+  │  replay side: GpuReplay consumes the Command-IR → GPU draw calls
+  ▼
+GpuReplay::submit (replay/mod.rs)
+     owns 5 GPU-plumbing fields + texture-batch scratch; the dispatch
+     core (submit / reintegrate_offscreen_content) is in replay/mod.rs,
+     the five-phase segment-flush machinery in replay/flush.rs;
+     flush_opacity_layer recursion (in opacity_layer.rs)
+     Matrix4-free; glam-only (C4 rule, Trigger 19)
+```
+
+### WgpuPainter as thin coordinator
+
+`WgpuPainter` is the per-frame coordinator (split across `painter/{mod,draw,transform_clip,layer,gradient}.rs`, each **< 1 500 non-test LOC**; **C1 closed**): it holds state and delegates — no record logic, no replay logic:
+
+| Field | Owner | Module |
+|---|---|---|
+| `state: GpuStateStack` | transform / scissor / rrect-clip / rsuperellipse stacks; Copy accessors; depth + `Drop` assert | [`src/wgpu/state_stack.rs`](src/wgpu/state_stack.rs) |
+| `compositor: LayerCompositor` | `SavedLayer` + `PendingOpacityLayer` + opacity stack | [`src/wgpu/layer_compositor.rs`](src/wgpu/layer_compositor.rs) |
+| `resources: GpuResources` | `TexturePool` / `BufferPool` / `TextureCache` / `ExternalTextureRegistry` | [`src/wgpu/resources.rs`](src/wgpu/resources.rs) |
+| `pipelines: PipelineSet` | 9 named `RenderPipeline` fields + `PipelineCache` (composition) | [`src/wgpu/pipelines.rs`](src/wgpu/pipelines.rs) |
+| `current_segment: DrawSegment`, `draw_order: Vec<DrawItem>` | Command IR — the record output | [`src/wgpu/command_ir.rs`](src/wgpu/command_ir.rs) |
+| `replay: GpuReplay` | GPU-emit/submit path — the replay side | [`src/wgpu/replay/`](src/wgpu/replay/mod.rs) |
+
+Record methods (per-primitive draw calls) are owned by `DrawBatcher` in `batches/`:
+
+| Sub-module | Primitive family |
+|---|---|
+| [`src/wgpu/batches/shapes.rs`](src/wgpu/batches/shapes.rs) | rect, rrect, circle, oval, drrect, arc, shadow, line |
+| [`src/wgpu/batches/gradients.rs`](src/wgpu/batches/gradients.rs) | linear gradient, radial gradient, sweep gradient, `dispatch_shader_rect` |
+| [`src/wgpu/batches/paths.rs`](src/wgpu/batches/paths.rs) | `draw_path`, `draw_vertices` |
+| [`src/wgpu/batches/images.rs`](src/wgpu/batches/images.rs) | `draw_image`, `draw_image_repeat`, `draw_image_nine_slice`, `draw_image_filtered`, `draw_atlas`, `draw_texture` |
+
+`GpuReplay` (`replay/`) owns the replay/submit path: it holds the viewport_buffer, viewport_bind_group, two unit_quad buffers, the default_sampler, and the texture_batch scratch. The dispatch core (`new` / `update_viewport` / `submit` / `reintegrate_offscreen_content`) lives in `replay/mod.rs`; the segment-flush machinery in `replay/flush.rs` — `flush_segment` (the canonical five-phase entry point) drives `flush_all_instanced_batches`, `flush_gradient_batches`, `flush_tessellated_geometry`, `flush_segment_cached_images`, and `flush_segment_external_images`, plus the four `flush_texture_batch*` blend variants. `GpuReplay::submit` is the top-level dispatch loop that consumes `&DrawSegment` / `&[DrawItem]` and drives GPU encoding, including `flush_opacity_layer` recursion (defined in `opacity_layer.rs`) and `reintegrate_offscreen_content`.
+
+`text` / `rich_text` remain on `WgpuPainter` pending T11 (the text-vs-IR seam decision).
+
+### Borrow-seam contract
+
+Each `DrawBatcher` record method takes the narrowest set of disjoint borrowed parameters it needs — it never takes `&mut WgpuPainter`. The borrow-checker enforces the data-flow contract:
+
+```text
+fn draw_*(
+    segment: &mut DrawSegment,          // IR write target
+    state: &GpuStateStack,              // Copy accessors only — no borrow aliasing
+    // plus any of:
+    draw_order: &mut Vec<DrawItem>,     // for methods that emit multiple items
+    texture_cache: &mut TextureCache,   // image/atlas paths
+    resources: &ExternalTextureRegistry,
+    opacity: f32,                       // from compositor.current_opacity()
+)
+```
+
+`WgpuPainter::draw_*` methods are thin shims that field-split `self` and delegate to `DrawBatcher`.
+
+### C1 definition — module file size limit
+
+Each module file in `batches/` must stay **< 1 500 non-test LOC**. `/spec-verify` measures non-test LOC (i.e., lines outside `#[cfg(test)]` blocks and `mod tests { … }` sections). The same limit applies to `state_stack.rs`, `layer_compositor.rs`, `resources.rs`, `pipelines.rs`, the `painter/` submodules, and the `replay/` submodules.
+
+`WgpuPainter`'s code is split across the `painter/` directory (`mod` / `draw` / `transform_clip` / `layer` / `gradient`), each file **< 1 500 non-test LOC**. **C1 is closed.** The replay/submit path (`render()` / `flush_segment` / `flush_*`) was extracted into `GpuReplay` across T10b–T10d, then split into `replay/{mod,flush}.rs` (both < 1 500 non-test LOC).
+
+### C4 rule — Matrix4 must not appear in batches/, pipelines.rs, or replay/
+
+`GpuStateStack` stores transforms as `glam::Mat4`. The conversion to/from `flui_types::Matrix4` happens at exactly one structural edge:
+
+- `painter::current_transform_matrix()` (`painter/mod.rs`) — Copy-accessor returning a `Matrix4` to callers outside the engine's wgpu module.
+- `backend.rs::with_transform` and the `render_*` methods — the `CommandRenderer` implementation that converts incoming `Matrix4` arguments into `glam::Mat4` before calling painter record methods.
+
+**`Matrix4` must not appear in `batches/`, `pipelines.rs`, or `replay/`** — these modules work entirely in glam primitives. Port-check Trigger 19 (`scripts/port-check.sh`) enforces this with an `rg` grep on every CI run and locally via `just port-check`. Trigger 19 was extended to cover the `replay/` submodules in T10e (the replay side must stay glam-only for the same reason as the record side: the `Matrix4`↔glam conversion must not migrate into the GPU-emit path).
+
+If a record method receives per-sprite transforms (e.g., `draw_atlas`), the conversion to pixel-space origins (`Offset<Pixels>`) happens at the `painter` call site before the batcher is invoked.
+
+### Replay side — shipped T10
+
+The replay/submit path (`render()`, `flush_segment`, `flush_segment_*`) was extracted into `GpuReplay` across T10b–T10d, then split into `replay/{mod,flush}.rs` for the C1 cap. `GpuReplay` owns: 5 GPU-plumbing fields (viewport_buffer, viewport_bind_group, unit_quad×2, default_sampler), the texture_batch scratch, the five-phase segment-flush machinery (`replay/flush.rs`), the `submit` dispatch loop (`replay/mod.rs`), `flush_opacity_layer` recursion (`opacity_layer.rs`), and `reintegrate_offscreen_content`. `WgpuPainter::render()` is now: record-finish + `self.replay.submit(…)`. C1 is closed.
 
 ---
 
@@ -175,10 +311,10 @@ Per-frame `Arc::clone` removal (verdict's U7) and `Arc<Mutex<OffscreenRenderer>>
 | [`src/wgpu/renderer.rs:189-208`](src/wgpu/renderer.rs) | `unsafe { let surface_target = wgpu::SurfaceTargetUnsafe::from_window(window).map_err(...)?; instance.create_surface_unsafe(surface_target).map_err(...)? }` | In this call site the `SurfaceTargetUnsafe::RawHandle` is consumed immediately by `create_surface_unsafe`, so the two unsafe-fn contracts collapse to a single invariant: `window` must outlive the returned `Surface`. `flui-app::App` holds the winit window for the entire application lifetime, so the `Renderer` (and its `Surface<'static>`) cannot outlive the window. |
 | [`src/wgpu/buffer_pool.rs:277-298`](src/wgpu/buffer_pool.rs) | 5 unsafe deref blocks (raw pointer disjoint-borrow primitive: `unsafe { &mut *allocations }`, `unsafe { &mut *reuses }`, `unsafe { &*vertex_ptr }`) | Pre-existing unsafe primitive for disjoint borrows over the allocation tracker. Predates this chain. The safety invariants are documented locally in the file. Not modified by the Mythos chain (net unsafe delta for this chain: 0); listed here for inventory completeness. |
 
-No `unsafe impl Send/Sync` anywhere in the crate. Two unsafe surfaces total: one in `renderer.rs` (wgpu surface creation), one in `buffer_pool.rs` (5-block disjoint-borrow primitive, pre-existing). Net unsafe delta for the chain: **0** (chain added zero; consolidated one existing block in `renderer.rs` with a documented SAFETY comment).
+One `unsafe impl Send` in the crate: `unsafe impl Send for Renderer` ([`renderer.rs`](src/wgpu/renderer.rs)). `Renderer` stores `Option<RawWindowHandle>` / `Option<RawDisplayHandle>`, which hold `NonNull<c_void>` on some platforms and are therefore `!Send` by default; the handles are extracted once at construction, read only under `&mut self` (`recover` / `build_windowed_gpu_stack`), never aliased across threads, and the owning window (flui-app's `App`) outlives the `Renderer` — the SAFETY invariant is documented at the impl site. There is **no `unsafe impl Sync`**. Two further unsafe surfaces: the wgpu surface-creation block in `renderer.rs`, and the `buffer_pool.rs` 5-block disjoint-borrow primitive (pre-existing).
 
-**Auto-derived Send/Sync** on (verified against wgpu 29.x trait bounds):
-- `Renderer` -- `Send + Sync` today (every field is `Send + Sync`: wgpu `Instance`/`Adapter`/`Device`/`Queue`/`Surface<'static>` are all `Send + Sync` in wgpu 29.x; `Arc<parking_lot::Mutex<OffscreenRenderer>>` provides `Sync` via the Mutex). Single-mutator enforced by code convention, not by trait bound. After U6 (Outstanding refactor) replaces `Arc<Mutex<OffscreenRenderer>>` with owned `Option<OffscreenRenderer>`, `Renderer: Send + Sync` will still hold iff `OffscreenRenderer: Sync`; if not, `Renderer` becomes `Send`-only.
+**Send/Sync** on (verified against wgpu 29.x trait bounds):
+- `Renderer` -- `Send` via the `unsafe impl Send` above; **not `Sync`**. Every field other than the raw window/display handles is `Send + Sync` (wgpu `Instance`/`Adapter`/`Device`/`Queue`/`Surface<'static>` in wgpu 29.x; `Arc<parking_lot::Mutex<OffscreenRenderer>>` via the Mutex); the `!Send`/`!Sync` raw handles are what force the manual `Send` impl and preclude an auto `Sync`. Single-mutator enforced by code convention, not by trait bound.
 - `WgpuPainter` -- `Send`, not `Sync` (holds `Arc<wgpu::Device>` + `Arc<wgpu::Queue>` which are `Send + Sync`, but internal batch state uses `Vec<T>` mutated through `&mut self`; no interior mutability sync surface).
 - `OffscreenRenderer` -- `Send`, not `Sync` (HashMap of `Arc<RenderPipeline>` is `Send`; the struct has no interior-mutability sync primitives).
 - `TexturePool` -- `Send + Sync` today (through inner `Arc<Mutex<TexturePoolInner>>`); will become `Send`-only after U8 (Outstanding refactor) replaces the inner lock with direct ownership.
@@ -213,17 +349,11 @@ Known sites that do not yet match the methodology but are not violations of the 
 
 **Next planned step:** see [Outstanding refactors](#outstanding-refactors) -- `RenderContext` becomes `RenderContext<'frame>` with borrowed `&'frame wgpu::Device` / `&'frame wgpu::Queue` references. Tied to the `Backend<'a>` lifetime refactor.
 
-### `painter.rs` is 3,772 LOC -- the largest .rs file in the workspace
+### `painter.rs` god module — RESOLVED (split into `painter/`)
 
-**Site:** [`src/wgpu/painter.rs`](src/wgpu/painter.rs).
+**Site:** [`src/wgpu/painter/`](src/wgpu/painter/mod.rs).
 
-**Violation:** none of the refusal triggers; the file passes `port-check` and `clippy`. Mythos audit flagged it as a "god module" because it mixes batch recording, save-layer state machines, gradient construction, text rendering integration, and per-frame submission. The verdict proposed a `painter/{batch, segment, layer, gradient, text, render}.rs` directory split; the chain deferred the split because:
-
-- The split is mechanical (no semantic change), but every change requires re-opening `impl WgpuPainter` blocks across multiple files.
-- The chain already touched `painter.rs` for the `Painter` trait removal (U5) and the dead-code audit (U10).
-- Review clarity favours landing the split in a thin housekeeping PR after the chain merges.
-
-**Next planned step:** see [Outstanding refactors](#outstanding-refactors).
+`painter.rs` (which grew to ~5,300 LOC) was a "god module" mixing batch recording, save-layer state machines, gradient construction, text integration, and per-frame submission. It was split **move-only** into `painter/{mod,draw,transform_clip,layer,gradient}.rs` (+ `tests.rs`), each production file **< 1 500 non-test LOC**, restoring the C1 cap. The move was proven behaviour-preserving by the full `enable-wgpu-tests` GPU readback suite staying bit-identical.
 
 ### `offscreen.rs` is 1,525 LOC -- second god module
 
@@ -239,11 +369,11 @@ Same shape as `painter.rs`. Mixes mask, blur, and morphological filter pipelines
 
 **Next planned step:** per-item audit + deletion -- see [Outstanding refactors](#outstanding-refactors).
 
-### `wgpu/texture_cache.rs` (1,000 LOC) + `wgpu/external_texture_registry.rs` (315 LOC) + `wgpu/path_cache.rs` (336 LOC) + `wgpu/multi_draw.rs` (304 LOC) -- in-crate-only consumers via `painter.rs` fields
+### `wgpu/texture_cache.rs` (1,000 LOC) + `wgpu/external_texture_registry.rs` (315 LOC) + `wgpu/path_cache.rs` (336 LOC) + `wgpu/multi_draw.rs` (304 LOC) -- in-crate-only consumers via `painter/` fields
 
-**Sites:** [`src/wgpu/painter.rs:316, 319, 326, 1525`](src/wgpu/painter.rs) (struct fields + one `use super::multi_draw` import).
+**Sites:** [`src/wgpu/painter/mod.rs`](src/wgpu/painter/mod.rs) (`WgpuPainter` struct fields) + the `multi_draw` use site in the `painter/` submodules.
 
-**Violation:** none of the refusal triggers. The original Mythos verdict (U4) proposed deleting all four modules because no external caller exists. Implementation surfaced `WgpuPainter` fields referencing each: `texture_cache: TextureCache`, `external_texture_registry: ExternalTextureRegistry`, `path_cache: PathCache`, `MultiDrawBatcher` import. Whether these fields are populated-and-queried in production paths or stored-but-never-read is interior to `painter.rs`'s 3,772 LOC; determining that requires a `painter.rs` internal audit that the chain deferred per the verdict's "bandwidth-dependent" clause.
+**Violation:** none of the refusal triggers. The original Mythos verdict (U4) proposed deleting all four modules because no external caller exists. Implementation surfaced `WgpuPainter` fields referencing each: `texture_cache: TextureCache`, `external_texture_registry: ExternalTextureRegistry`, `path_cache: PathCache`, `MultiDrawBatcher` import. Whether these fields are populated-and-queried in production paths or stored-but-never-read is interior to the `painter/` module; determining that requires a `painter/` internal audit that the chain deferred per the verdict's "bandwidth-dependent" clause.
 
 **Next planned step:** see [Outstanding refactors](#outstanding-refactors).
 
@@ -309,23 +439,9 @@ Concrete cleanups visible from `flui-engine` outward, sized for an `/aif-impleme
 
 **Dependencies:** previous Outstanding refactor.
 
-### `painter/` directory split: `wgpu/painter.rs` (3,772 LOC) -> `painter/{batch, segment, layer, gradient, text, render}.rs`
+### `painter/` directory split — DONE
 
-**Files:** [`src/wgpu/painter.rs`](src/wgpu/painter.rs) -> directory.
-
-**Goal:** drop the largest .rs file in the workspace by extracting cohesive concerns into sibling files. The pattern mirrors `flui-layer`'s U10 `compositor.rs` -> `compositor/{builder, retained}.rs` split.
-
-**Shape:**
-- `painter/mod.rs` (~50 LOC) -- `pub struct WgpuPainter` + public API + re-exports.
-- `painter/batch.rs` (~600 LOC) -- `DrawSegment`, `TessellatedBatch`, `ScissorRegion`.
-- `painter/layer.rs` (~400 LOC) -- `SavedLayer`, `PendingOpacityLayer`, `save_layer`, `restore_layer`.
-- `painter/gradient.rs` (~600 LOC) -- gradient construction + dispatch.
-- `painter/text.rs` (~400 LOC) -- text rendering methods.
-- `painter/render.rs` (~800 LOC) -- `render()` entry point + per-segment GPU submission.
-
-**Concrete blocker:** mechanical LOC redistribution with no semantic change. The split requires careful re-opening of `impl WgpuPainter` blocks across multiple files; verification that internal helpers stay accessible (`pub(super)` where needed). Estimated 1-2 hours of mechanical edits; review-clarity favours a focused housekeeping PR.
-
-**Dependencies:** none.
+The move-only split of `wgpu/painter.rs` into `painter/{mod,draw,transform_clip,layer,gradient}.rs` (+ `tests.rs`) landed (each production file < 1 500 non-test LOC; readback bit-identical). `replay.rs` was likewise split into `replay/{mod,flush}.rs`. See the Friction-log entry above. The descendant modules retain access to `WgpuPainter` / `GpuReplay` private fields, so no field-visibility widening was needed.
 
 ### `offscreen/` directory split: `wgpu/offscreen.rs` (1,525 LOC) -> `offscreen/{mask, blur, morph}.rs`
 
@@ -337,22 +453,22 @@ Concrete cleanups visible from `flui-engine` outward, sized for an `/aif-impleme
 
 **Dependencies:** none.
 
-### Audit `painter.rs` consumers of `texture_cache`, `external_texture_registry`, `path_cache`, `multi_draw`
+### Audit `painter/` consumers of `texture_cache`, `external_texture_registry`, `path_cache`, `multi_draw`
 
-**Files:** [`src/wgpu/painter.rs`](src/wgpu/painter.rs), [`src/wgpu/texture_cache.rs`](src/wgpu/texture_cache.rs), [`src/wgpu/external_texture_registry.rs`](src/wgpu/external_texture_registry.rs), [`src/wgpu/path_cache.rs`](src/wgpu/path_cache.rs), [`src/wgpu/multi_draw.rs`](src/wgpu/multi_draw.rs).
+**Files:** [`src/wgpu/painter/`](src/wgpu/painter/mod.rs), [`src/wgpu/texture_cache.rs`](src/wgpu/texture_cache.rs), [`src/wgpu/external_texture_registry.rs`](src/wgpu/external_texture_registry.rs), [`src/wgpu/path_cache.rs`](src/wgpu/path_cache.rs), [`src/wgpu/multi_draw.rs`](src/wgpu/multi_draw.rs).
 
 **Goal:** determine whether `WgpuPainter` fields (`texture_cache: TextureCache`, `external_texture_registry: ExternalTextureRegistry`, `path_cache: PathCache`) and the `multi_draw::MultiDrawBatcher` import are populated-and-queried in production paths or stored-but-never-read.
 
-**Shape:** read each field's use in `painter.rs`. For each:
+**Shape:** read each field's use in the `painter/` submodules. For each:
 - If populated + queried via specific call paths -> document the path in ARCHITECTURE.md and leave the module.
 - If populated but never queried (zombie field) -> delete the field, then delete the module (if no other consumer).
 - If never populated (dead init) -> delete the field, then delete the module.
 
 **Estimated deletion budget:** ~1,955 LOC (the four modules) if all confirmed unused. Substantial LOC win for an audit-only Mythos pass.
 
-**Concrete blocker:** depends on the `painter/` directory split (above) for review-clarity -- auditing 3,772-LOC `painter.rs` for field usage is much easier after the split.
+**Concrete blocker:** none remaining — the `painter/` directory split (above) has landed, so the per-field usage audit is now tractable across the focused submodules.
 
-**Dependencies:** `painter/` split first.
+**Dependencies:** none (the `painter/` split has landed).
 
 ### Per-item audit of `effects`, `instancing`, `pipeline`, `shader_compiler` dead helpers
 
@@ -380,17 +496,9 @@ Concrete cleanups visible from `flui-engine` outward, sized for an `/aif-impleme
 
 **Dependencies:** observed-real-world-panic before implementing.
 
-### Doc-sweep on `WgpuPainter` inherent methods
+### Doc-sweep on `WgpuPainter` inherent methods — DONE
 
-**Files:** [`src/wgpu/painter.rs`](src/wgpu/painter.rs) (the `impl WgpuPainter` block at the post-U5 boundary).
-
-**Goal:** the U5 commit (`1b376beb`) deleted the `pub trait Painter` and converted its 46 methods to inherent `pub fn` on `WgpuPainter`. The trait's per-method doc comments were lost with the trait deletion. A blanket `#[allow(missing_docs)]` was applied on the impl block as a transient suppression. The doc-sweep restores per-method docs (copied/adapted from the deleted trait's doc comments preserved in git history at commit `db817c0d^:crates/flui-engine/src/traits.rs`).
-
-**Shape:** 46 doc comments to write (or port from the pre-deletion git revision). After the sweep, remove the `#[allow(missing_docs)]` from the impl block at `painter.rs:2025` area.
-
-**Concrete blocker:** mechanical doc-writing; ~2-3 hours. Could land in the same PR as the `painter/` directory split (Outstanding refactor #4) since both touch the impl block.
-
-**Dependencies:** ideally lands with the `painter/` split for review-clarity, but standalone is also fine.
+The U5 commit (`1b376beb`) deleted `pub trait Painter` and made its methods inherent on `WgpuPainter` under a transient blanket `#[allow(missing_docs)]`. The doc-sweep wrote per-method docs across the public surface and dropped the `#[allow(missing_docs)]`; the documented methods now live in the `painter/` submodules.
 
 ### Pre-existing follow-ups (filed for awareness, not deferred-with-blocker)
 
@@ -405,8 +513,8 @@ The following pre-existing concerns are tracked outside this Outstanding refacto
 ## Notes
 
 - **Net unsafe delta for this chain: 0.** The single existing `unsafe { instance.create_surface_unsafe(...) }` block in `Renderer::new` is required by wgpu's API contract and stays; the chain consolidated the two unsafe calls into one block with a documented SAFETY comment. Zero new unsafe blocks were added.
-- **Net LOC reduction for this chain: ~-5,888 LOC of production code** (per `git show --stat` totals across the 10 substantive commits): U1 -812 (utils/ delete), U2 -2,190 (scene.rs + compositor.rs delete), U3 -2,188 (platform stubs delete), U4 net -1 (commands.rs shim + import fixes), U5 net -429 (Painter trait + RenderError::PainterError + painting_demo imports), U6 net +23 (anyhow -> RenderResult), U7 net -291 (text_renderer.rs delete + shader const aliases + dead-code allow audit). Original target was ≥6,000 LOC; **target missed by ~112 LOC** because R7's promised 1,955 LOC of additional module deletions deferred (the four `wgpu/{texture_cache, external_texture_registry, path_cache, multi_draw}.rs` modules turned out to have in-crate consumers via `painter.rs` fields; deletion deferred to Outstanding refactor #6). Three god modules (`painter.rs`, `offscreen.rs`, plus the historic mid-size files) remain un-split; tracked in Outstanding refactors.
+- **Net LOC reduction for this chain: ~-5,888 LOC of production code** (per `git show --stat` totals across the 10 substantive commits): U1 -812 (utils/ delete), U2 -2,190 (scene.rs + compositor.rs delete), U3 -2,188 (platform stubs delete), U4 net -1 (commands.rs shim + import fixes), U5 net -429 (Painter trait deletion + painting_demo imports), U6 net +23 (anyhow -> EngineResult), U7 net -291 (text_renderer.rs delete + shader const aliases + dead-code allow audit). Original target was ≥6,000 LOC; **target missed by ~112 LOC** because R7's promised 1,955 LOC of additional module deletions deferred (the four `wgpu/{texture_cache, external_texture_registry, path_cache, multi_draw}.rs` modules turned out to have in-crate consumers via `painter.rs` fields; deletion deferred to Outstanding refactor #6). `offscreen.rs` remains the one un-split god module (the `painter.rs` → `painter/` and `replay.rs` → `replay/` splits landed); tracked in Outstanding refactors.
 - **`port-check.sh` extended in Mythos U13 of this chain** -- see [`docs/PORT.md`](../../docs/PORT.md) `## Refusal triggers` for the seven trigger inventory after the extension.
 - **`Arc<Mutex<>>` shapes for `OffscreenRenderer` and `TexturePoolInner` survived the chain.** Documented in Friction log + Outstanding refactors with concrete blockers. The chain prioritised dead-code deletion (largest LOC wins) over lock-shape refactoring (substantial lifetime gymnastics for marginal runtime benefit).
 - **Two test counts** at chain end: `cargo test -p flui-engine --lib` shows 48 passed (down from 53 pre-chain, with 5 tests deleted alongside `text_renderer.rs`); `cargo test -p flui-engine --doc` count TBD per doctest fix Outstanding refactor.
-- **`anyhow::Result` is no longer in the engine's public API.** `Renderer::new`, `Renderer::new_offscreen`, `FontLoader::load_file`, `FontLoader::load_directory` all return `RenderResult<T>`. The `anyhow` crate stays in `Cargo.toml` (transitive via wgpu) but is no longer used in any signature; the workspace-wide consistency win.
+- **`anyhow::Result` is no longer in the engine's public API.** `Renderer::new`, `Renderer::new_offscreen`, `FontLoader::load_file`, `FontLoader::load_directory` all return `EngineResult<T>`. The `anyhow` crate stays in `Cargo.toml` (transitive via wgpu) but is no longer used in any signature; the workspace-wide consistency win.

@@ -87,9 +87,7 @@
 use crate::{
     protocol::{BoxProtocol, Protocol, SliverProtocol},
     storage::{RenderEntry, RenderNode},
-    traits::{
-        HotReloadCapability, PaintEffectsCapability, RenderBox, RenderSliver, SemanticsCapability,
-    },
+    traits::{RenderBox, RenderSliver},
 };
 
 // ============================================================================
@@ -129,13 +127,7 @@ pub trait IntoRenderObject<P: Protocol>: Sized {
 
 impl<T> IntoRenderObject<BoxProtocol> for T
 where
-    T: RenderBox
-        + PaintEffectsCapability
-        + SemanticsCapability
-        + HotReloadCapability
-        + Send
-        + Sync
-        + 'static,
+    T: RenderBox + Send + Sync + 'static,
 {
     fn into_render_entry(self) -> RenderEntry<BoxProtocol> {
         // No adapter needed - blanket impl makes T: RenderObject<BoxProtocol>
@@ -153,13 +145,7 @@ where
 
 impl<T> IntoRenderObject<SliverProtocol> for T
 where
-    T: RenderSliver
-        + PaintEffectsCapability
-        + SemanticsCapability
-        + HotReloadCapability
-        + Send
-        + Sync
-        + 'static,
+    T: RenderSliver + Send + Sync + 'static,
 {
     fn into_render_entry(self) -> RenderEntry<SliverProtocol> {
         // No adapter needed - blanket impl makes T: RenderObject<SliverProtocol>
@@ -198,10 +184,6 @@ mod tests {
     struct TestBox;
 
     impl flui_foundation::Diagnosticable for TestBox {}
-
-    impl PaintEffectsCapability for TestBox {}
-    impl SemanticsCapability for TestBox {}
-    impl HotReloadCapability for TestBox {}
 
     impl RenderBox for TestBox {
         type Arity = Leaf;

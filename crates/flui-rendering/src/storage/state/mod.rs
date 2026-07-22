@@ -7,26 +7,26 @@
 //! - Atomic offset updates for paint positioning
 //! - Boundary accessors (relayout/repaint) for pipeline-owner registration
 //!
-//! **D-block PR-A1 U14 migration (2026-05-23):** geometry and constraints
-//! previously used `OnceCell` for write-once semantics; the resulting
-//! panic-on-second-set crashed any re-layout. Migrated to `Option<T>` so
-//! re-layout overwrites unconditionally, mirroring Flutter
-//! `.flutter/.../object.dart:2865` `_size = size` straight assignment.
-//! `set_constraints`/`set_geometry`/`set_size`/`set_sliver_geometry` now
-//! take `&mut self`; production callers (`RenderEntry::layout` and the
-//! RenderBox/RenderSliver helpers) already hold a mut state borrow.
+//! Geometry and constraints previously used `OnceCell` for write-once
+//! semantics; the resulting panic-on-second-set crashed any re-layout.
+//! They are stored as `Option<T>` so re-layout overwrites unconditionally,
+//! mirroring Flutter `.flutter/.../object.dart:2865` `_size = size`
+//! straight assignment. `set_constraints`/`set_geometry`/`set_size`/
+//! `set_sliver_geometry` take `&mut self`; production callers
+//! (`RenderEntry::layout` and the RenderBox/RenderSliver helpers) already
+//! hold a mut state borrow.
 //!
 //! Production dirty marking does **not** live here. It is driven by
 //! [`PipelineOwner::mark_needs_layout`](crate::pipeline::PipelineOwner::mark_needs_layout)
-//! (D-block PR-A1 U15 — Flutter `markNeedsLayout` walk) invoked from
+//! (a Flutter `markNeedsLayout` walk) invoked from
 //! `flui-view::element::behavior_commons::mark_render_needs_layout_and_paint`.
 //! The boundary-aware propagation methods that previously hung off
-//! `RenderState<P>` were removed in U3 of the flui-rendering Phase 1 zombie
-//! cleanup as unreachable code; the `RenderDirtyPropagation` trait that
-//! PR #81 U3 preserved as a "cost-cheap option" was deleted in cycle 4 R-5
-//! because its `ElementId` typing did not match the crate's `RenderId` key —
-//! see the `propagation` submodule's module-level docstring for the audit
-//! trail (`docs/research/2026-05-22-flui-rendering-engine-audit.md`).
+//! `RenderState<P>` were removed as unreachable code; the
+//! `RenderDirtyPropagation` trait that was kept around as a "cost-cheap
+//! option" was deleted because its `ElementId` typing did not match the
+//! crate's `RenderId` key — see the `propagation` submodule's
+//! module-level docstring for the audit trail
+//! (`docs/research/2026-05-22-flui-rendering-engine-audit.md`).
 //!
 //! # Design Philosophy
 //!
@@ -90,8 +90,8 @@
 use std::marker::PhantomData;
 
 // NOTE: `OnceCell` was previously imported here for `geometry`/`constraints`
-// write-once semantics; D-block PR-A1 U14 migrated both fields to `Option<T>`
-// so the import is no longer needed.
+// write-once semantics; both fields moved to `Option<T>` so the import is
+// no longer needed.
 
 use crate::protocol::{
     BoxProtocol, Protocol, ProtocolConstraints, ProtocolGeometry, SliverProtocol,
@@ -99,7 +99,7 @@ use crate::protocol::{
 use crate::storage::flags::{AtomicRenderFlags, RenderFlags};
 
 mod constraints;
-mod flags;
+mod flag_accessors;
 mod geometry;
 mod layout_cache;
 mod offset;
@@ -131,7 +131,7 @@ pub type SliverRenderState = RenderState<SliverProtocol>;
 /// This struct provides efficient storage for render object state with:
 /// - Lock-free dirty flags using atomic operations
 /// - Boundary accessors (relayout/repaint) for pipeline-owner registration
-/// - Write-once geometry and constraints using `OnceCell`
+/// - Mutable geometry and constraints using `Option` (set/cleared via `&mut self`)
 /// - Atomic offset updates for paint positioning
 ///
 /// Boundary-aware dirty propagation is **not** performed here. Production
@@ -141,20 +141,18 @@ pub type SliverRenderState = RenderState<SliverProtocol>;
 /// # Memory Layout
 ///
 /// ```text
-/// [AtomicRenderFlags: 4 bytes] - Hot path, always accessible
-/// [OnceCell<Geometry>: 16-24 bytes] - Write-once, read-many
-/// [OnceCell<Constraints>: 16-24 bytes] - Write-once, read-many
-/// [AtomicOffset: 8 bytes] - Lock-free f32 pair
+/// [AtomicRenderFlags: 4 bytes]        - Hot path, always accessible
+/// [Option<Geometry>: 0-N bytes]        - Set/cleared each layout pass
+/// [Option<Constraints>: 0-N bytes]     - Set/cleared each layout pass
+/// [AtomicOffset: 8 bytes]             - Lock-free f32 pair
 /// ```
 ///
 /// Total: ≈44-60 bytes depending on protocol geometry size
 ///
 /// # Thread Safety
 ///
-/// All methods are thread-safe:
-/// - Atomic operations use appropriate memory ordering
-/// - OnceCell provides interior mutability safely
-/// - No data races possible
+/// Atomic flag operations are thread-safe. Geometry and constraints are
+/// accessed only through `&mut RenderState` during layout — no lock needed.
 ///
 /// # Performance Characteristics
 ///
@@ -178,9 +176,10 @@ pub struct RenderState<P: Protocol> {
     /// For SliverProtocol: SliverGeometry
     ///
     /// Mutated each layout pass via [`set_geometry`](Self::set_geometry).
-    /// Migrated from `OnceCell` to `Option` in D-block PR-A1 U14 — re-layout
-    /// must be idempotent (frame-2 panic fix per memo D2; Flutter `_size`
-    /// is straight-assigned each layout at `.flutter/.../object.dart:2865`).
+    /// Stored as `Option` rather than `OnceCell` — re-layout must be
+    /// idempotent (a second-write panic would crash frame 2's re-layout;
+    /// Flutter `_size` is straight-assigned each layout at
+    /// `.flutter/.../object.dart:2865`).
     geometry: Option<ProtocolGeometry<P>>,
 
     /// Last constraints used for layout.
@@ -189,8 +188,8 @@ pub struct RenderState<P: Protocol> {
     /// For SliverProtocol: SliverConstraints
     ///
     /// Used for cache validation and the relayout-boundary short-circuit.
-    /// Migrated from `OnceCell` to `Option` in D-block PR-A1 U14 alongside
-    /// `geometry`; see field doc above for rationale.
+    /// Stored as `Option` rather than `OnceCell` for the same idempotent
+    /// re-layout reason as `geometry`; see field doc above for rationale.
     constraints: Option<ProtocolConstraints<P>>,
 
     /// Offset relative to parent (atomic for lock-free updates).

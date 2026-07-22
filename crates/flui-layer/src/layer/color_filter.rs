@@ -1,322 +1,220 @@
-//! ColorFilterLayer - Color transformation layer
+//! `ColorFilterLayer` — applies a [`ColorFilter`] to its children.
 //!
-//! This layer applies a color filter (5x4 color matrix) to its children.
 //! Corresponds to Flutter's `ColorFilterLayer`.
 
-use flui_types::painting::effects::ColorMatrix;
+use flui_types::painting::{ColorFilter, effects::ColorMatrix};
 
-/// Layer that applies a color filter to its children.
+/// Layer that applies a [`ColorFilter`] to its children.
 ///
-/// Color filters transform the color of every pixel rendered by children
-/// using a 5x4 color matrix. This enables effects like:
-/// - Grayscale conversion
-/// - Sepia tone
-/// - Brightness/contrast adjustment
-/// - Saturation adjustment
-/// - Hue rotation
-/// - Color inversion
+/// Color filters transform the color of every pixel rendered by children.
+/// The full [`ColorFilter`] enum is supported:
+///
+/// | Variant | Effect |
+/// |---|---|
+/// | [`ColorFilter::Matrix`] | 5×4 matrix in un-premultiplied RGBA |
+/// | [`ColorFilter::Mode`] | Porter-Duff / W3C blend of a solid color |
+/// | [`ColorFilter::LinearToSrgbGamma`] | linear → sRGB transfer per RGB channel |
+/// | [`ColorFilter::SrgbToLinearGamma`] | sRGB → linear transfer per RGB channel |
+///
+/// Use the constructors on [`ColorFilter`] directly to build the filter value:
+///
+/// ```rust
+/// use flui_layer::ColorFilterLayer;
+/// use flui_types::painting::{ColorFilter, BlendMode};
+/// use flui_types::styling::Color;
+/// use flui_types::painting::effects::ColorMatrix;
+///
+/// // Matrix-based filter (e.g. grayscale).
+/// let layer = ColorFilterLayer::new(ColorFilter::grayscale());
+///
+/// // Mode-based filter: tint with 50% opacity blue.
+/// let tint = ColorFilterLayer::new(
+///     ColorFilter::mode(Color::BLUE, BlendMode::SrcOver),
+/// );
+///
+/// // Identity (no transformation): equivalent to no filter layer.
+/// let identity = ColorFilterLayer::identity();
+/// ```
 ///
 /// # Performance
 ///
 /// Color filter layers require offscreen rendering and per-pixel computation.
-/// For simple color changes, consider using Paint colors directly.
-///
-/// # Architecture
-///
-/// ```text
-/// ColorFilterLayer
-///   │
-///   │ Render children to offscreen buffer
-///   │ Apply 5x4 color matrix to each pixel
-///   ▼
-/// Children rendered with color transformation
-/// ```
-///
-/// # Example
-///
-/// ```rust
-/// use flui_layer::ColorFilterLayer;
-///
-/// // Create grayscale filter
-/// let layer = ColorFilterLayer::grayscale();
-///
-/// // Create custom brightness adjustment
-/// let bright = ColorFilterLayer::brightness(0.2);
-/// ```
-#[derive(Debug, Clone, PartialEq)]
+/// `Matrix`-identity layers are short-circuited in the render impl — they
+/// emit a no-op `save_layer` rather than a full GPU pass.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ColorFilterLayer {
-    /// The color transformation matrix
-    color_filter: ColorMatrix,
+    /// The color filter to apply to the layer's children.
+    color_filter: ColorFilter,
 }
 
 impl ColorFilterLayer {
-    /// Creates a new color filter layer with a custom matrix.
+    /// Creates a new color filter layer with the given [`ColorFilter`].
     #[inline]
-    pub fn new(color_filter: ColorMatrix) -> Self {
+    #[must_use]
+    pub const fn new(color_filter: ColorFilter) -> Self {
         Self { color_filter }
     }
 
-    /// Creates an identity color filter (no transformation).
+    /// Creates an identity filter layer (no color transformation).
+    ///
+    /// The render impl short-circuits identity layers to a no-op.
     #[inline]
+    #[must_use]
     pub fn identity() -> Self {
-        Self::new(ColorMatrix::identity())
+        Self::new(ColorFilter::Matrix(ColorMatrix::identity()))
     }
 
-    /// Creates a grayscale color filter.
+    /// Returns the [`ColorFilter`] this layer applies.
     ///
-    /// Converts colors to grayscale using luminance weights.
+    /// `ColorFilter` is `Copy`, so the value is returned by value at no cost.
     #[inline]
-    pub fn grayscale() -> Self {
-        Self::new(ColorMatrix::grayscale())
+    #[must_use]
+    pub const fn color_filter(&self) -> ColorFilter {
+        self.color_filter
     }
 
-    /// Creates a sepia tone color filter.
-    ///
-    /// Gives a warm, vintage look to images.
+    /// Replaces the active [`ColorFilter`].
     #[inline]
-    pub fn sepia() -> Self {
-        Self::new(ColorMatrix::sepia())
-    }
-
-    /// Creates a brightness adjustment filter.
-    ///
-    /// # Arguments
-    ///
-    /// * `amount` - Brightness adjustment (-1.0 to 1.0, 0.0 = no change)
-    #[inline]
-    pub fn brightness(amount: f32) -> Self {
-        Self::new(ColorMatrix::brightness(amount))
-    }
-
-    /// Creates a contrast adjustment filter.
-    ///
-    /// # Arguments
-    ///
-    /// * `amount` - Contrast multiplier (0.0 to 2.0, 1.0 = no change)
-    #[inline]
-    pub fn contrast(amount: f32) -> Self {
-        Self::new(ColorMatrix::contrast(amount))
-    }
-
-    /// Creates a saturation adjustment filter.
-    ///
-    /// # Arguments
-    ///
-    /// * `amount` - Saturation multiplier (0.0 = grayscale, 1.0 = no change,
-    ///   2.0 = double saturation)
-    #[inline]
-    pub fn saturation(amount: f32) -> Self {
-        Self::new(ColorMatrix::saturation(amount))
-    }
-
-    /// Creates a hue rotation filter.
-    ///
-    /// # Arguments
-    ///
-    /// * `degrees` - Hue rotation in degrees (0.0 to 360.0)
-    #[inline]
-    pub fn hue_rotate(degrees: f32) -> Self {
-        Self::new(ColorMatrix::hue_rotate(degrees))
-    }
-
-    /// Creates a color inversion filter.
-    ///
-    /// Inverts all color channels (like a photo negative).
-    #[inline]
-    pub fn invert() -> Self {
-        Self::new(ColorMatrix::invert())
-    }
-
-    /// Returns a reference to the color matrix.
-    #[inline]
-    pub fn color_filter(&self) -> &ColorMatrix {
-        &self.color_filter
-    }
-
-    /// Sets the color matrix.
-    #[inline]
-    pub fn set_color_filter(&mut self, color_filter: ColorMatrix) {
+    pub fn set_color_filter(&mut self, color_filter: ColorFilter) {
         self.color_filter = color_filter;
     }
 
-    /// Returns true if this is an identity matrix (no transformation).
+    /// Returns `true` if this layer applies no transformation.
+    ///
+    /// Only a `Matrix`-variant that equals the identity matrix is considered
+    /// identity.  `Mode` and `Gamma` variants are never identity — they always
+    /// affect pixel values.
     #[inline]
+    #[must_use]
     pub fn is_identity(&self) -> bool {
-        self.color_filter == ColorMatrix::identity()
-    }
-
-    /// Applies the color filter to a color.
-    ///
-    /// # Arguments
-    ///
-    /// * `color` - Input color as [r, g, b, a] where each component is 0.0-1.0
-    ///
-    /// # Returns
-    ///
-    /// Transformed color as [r, g, b, a]
-    #[inline]
-    pub fn apply(&self, color: [f32; 4]) -> [f32; 4] {
-        self.color_filter.apply(color)
-    }
-
-    /// Combines this filter with another.
-    ///
-    /// The result applies `other` first, then `self`.
-    #[inline]
-    pub fn then(&self, other: &ColorFilterLayer) -> ColorFilterLayer {
-        ColorFilterLayer::new(self.color_filter.multiply(&other.color_filter))
+        match self.color_filter {
+            ColorFilter::Matrix(m) => m == ColorMatrix::identity(),
+            _ => false,
+        }
     }
 }
 
 impl Default for ColorFilterLayer {
+    #[inline]
     fn default() -> Self {
         Self::identity()
     }
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::float_cmp,
-    reason = "tests compare exact f32 values they just set; ULP slop would mask real regressions"
-)]
 mod tests {
+    use flui_types::{
+        painting::{BlendMode, ColorFilter, effects::ColorMatrix},
+        styling::Color,
+    };
+
     use super::*;
 
-    #[test]
-    fn test_color_filter_layer_new() {
-        let matrix = ColorMatrix::grayscale();
-        let layer = ColorFilterLayer::new(matrix.clone());
+    // ── Construction ──────────────────────────────────────────────────────────
 
-        assert_eq!(layer.color_filter(), &matrix);
+    #[test]
+    fn new_stores_filter() {
+        let filter = ColorFilter::grayscale();
+        let layer = ColorFilterLayer::new(filter);
+        assert_eq!(layer.color_filter(), filter);
     }
 
     #[test]
-    fn test_color_filter_layer_identity() {
+    fn identity_is_matrix_identity() {
         let layer = ColorFilterLayer::identity();
-
         assert!(layer.is_identity());
-
-        // Identity should not change colors
-        let color = [0.5, 0.6, 0.7, 0.8];
-        let result = layer.apply(color);
-        for i in 0..4 {
-            assert!((result[i] - color[i]).abs() < 0.001);
-        }
+        assert!(matches!(layer.color_filter(), ColorFilter::Matrix(_)));
     }
 
     #[test]
-    fn test_color_filter_layer_grayscale() {
-        let layer = ColorFilterLayer::grayscale();
-
-        // Red should become gray
-        let red = [1.0, 0.0, 0.0, 1.0];
-        let result = layer.apply(red);
-
-        // All RGB channels should be equal (grayscale)
-        assert!((result[0] - result[1]).abs() < 0.001);
-        assert!((result[1] - result[2]).abs() < 0.001);
-        assert_eq!(result[3], 1.0); // Alpha unchanged
-    }
-
-    #[test]
-    fn test_color_filter_layer_sepia() {
-        let layer = ColorFilterLayer::sepia();
-
-        assert!(!layer.is_identity());
-    }
-
-    #[test]
-    fn test_color_filter_layer_brightness() {
-        let layer = ColorFilterLayer::brightness(0.2);
-
-        let gray = [0.5, 0.5, 0.5, 1.0];
-        let result = layer.apply(gray);
-
-        // Should be brighter
-        assert!(result[0] > gray[0]);
-        assert!(result[1] > gray[1]);
-        assert!(result[2] > gray[2]);
-    }
-
-    #[test]
-    fn test_color_filter_layer_contrast() {
-        let layer = ColorFilterLayer::contrast(1.5);
-
-        assert!(!layer.is_identity());
-    }
-
-    #[test]
-    fn test_color_filter_layer_saturation() {
-        // Zero saturation should give grayscale
-        let layer = ColorFilterLayer::saturation(0.0);
-
-        let red = [1.0, 0.0, 0.0, 1.0];
-        let result = layer.apply(red);
-
-        // Should be grayscale
-        assert!((result[0] - result[1]).abs() < 0.001);
-        assert!((result[1] - result[2]).abs() < 0.001);
-    }
-
-    #[test]
-    fn test_color_filter_layer_hue_rotate() {
-        let layer = ColorFilterLayer::hue_rotate(180.0);
-
-        assert!(!layer.is_identity());
-    }
-
-    #[test]
-    fn test_color_filter_layer_invert() {
-        let layer = ColorFilterLayer::invert();
-
-        let black = [0.0, 0.0, 0.0, 1.0];
-        let result = layer.apply(black);
-
-        // Black should become white
-        assert!((result[0] - 1.0).abs() < 0.001);
-        assert!((result[1] - 1.0).abs() < 0.001);
-        assert!((result[2] - 1.0).abs() < 0.001);
-    }
-
-    #[test]
-    fn test_color_filter_layer_set_color_filter() {
-        let mut layer = ColorFilterLayer::identity();
-
-        layer.set_color_filter(ColorMatrix::grayscale());
-        assert!(!layer.is_identity());
-    }
-
-    #[test]
-    fn test_color_filter_layer_then() {
-        let brightness = ColorFilterLayer::brightness(0.1);
-        let grayscale = ColorFilterLayer::grayscale();
-
-        let combined = grayscale.then(&brightness);
-
-        // Should not be identity
-        assert!(!combined.is_identity());
-    }
-
-    #[test]
-    fn test_color_filter_layer_default() {
+    fn default_is_identity() {
         let layer = ColorFilterLayer::default();
+        assert!(layer.is_identity());
+    }
 
+    // ── Copy + Clone ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn layer_is_copy() {
+        let a = ColorFilterLayer::new(ColorFilter::grayscale());
+        let b = a; // Copy
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn layer_is_clone() {
+        // `ColorFilterLayer: Copy`; route through a generic `&T` call so
+        // clippy's `clone_on_copy` lint doesn't fire.
+        fn clone_it<T: Clone>(v: &T) -> T {
+            v.clone()
+        }
+        let a = ColorFilterLayer::new(ColorFilter::grayscale());
+        let b = clone_it(&a);
+        assert_eq!(a, b);
+    }
+
+    // ── is_identity semantics ─────────────────────────────────────────────────
+
+    #[test]
+    fn matrix_identity_is_identity() {
+        let layer = ColorFilterLayer::new(ColorFilter::Matrix(ColorMatrix::identity()));
         assert!(layer.is_identity());
     }
 
     #[test]
-    fn test_color_filter_layer_clone() {
-        let layer = ColorFilterLayer::grayscale();
-        let cloned = layer.clone();
-
-        assert_eq!(layer, cloned);
+    fn non_identity_matrix_is_not_identity() {
+        let layer = ColorFilterLayer::new(ColorFilter::grayscale());
+        assert!(!layer.is_identity());
     }
 
     #[test]
-    fn test_color_filter_layer_send_sync() {
+    fn mode_filter_is_never_identity() {
+        let layer = ColorFilterLayer::new(ColorFilter::mode(Color::WHITE, BlendMode::SrcOver));
+        assert!(
+            !layer.is_identity(),
+            "Mode filter must not be classified as identity even with white+SrcOver"
+        );
+    }
+
+    #[test]
+    fn linear_to_srgb_gamma_is_never_identity() {
+        let layer = ColorFilterLayer::new(ColorFilter::LinearToSrgbGamma);
+        assert!(!layer.is_identity());
+    }
+
+    #[test]
+    fn srgb_to_linear_gamma_is_never_identity() {
+        let layer = ColorFilterLayer::new(ColorFilter::SrgbToLinearGamma);
+        assert!(!layer.is_identity());
+    }
+
+    // ── set_color_filter ──────────────────────────────────────────────────────
+
+    #[test]
+    fn set_color_filter_updates_field() {
+        let mut layer = ColorFilterLayer::identity();
+        assert!(layer.is_identity());
+
+        layer.set_color_filter(ColorFilter::grayscale());
+        assert!(!layer.is_identity());
+        assert_eq!(layer.color_filter(), ColorFilter::grayscale());
+    }
+
+    #[test]
+    fn set_mode_filter() {
+        let mut layer = ColorFilterLayer::identity();
+        let mode_filter = ColorFilter::mode(Color::RED, BlendMode::Multiply);
+        layer.set_color_filter(mode_filter);
+        assert_eq!(layer.color_filter(), mode_filter);
+        assert!(!layer.is_identity());
+    }
+
+    // ── Send + Sync ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn layer_is_send_and_sync() {
         fn assert_send<T: Send>() {}
         fn assert_sync<T: Sync>() {}
-
         assert_send::<ColorFilterLayer>();
         assert_sync::<ColorFilterLayer>();
     }

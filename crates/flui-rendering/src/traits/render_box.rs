@@ -1,15 +1,15 @@
 //! RenderBox trait for 2D box layout with Arity-based child management.
 
 use flui_tree::Arity;
-use flui_types::{Point, Size};
+use flui_types::Size;
 
 use crate::{
     constraints::BoxConstraints,
     context::{BoxHitTestContext, BoxLayoutContext},
-    hit_testing::HitTestBehavior,
+    hit_testing::{CursorIcon, HitTestBehavior, MouseTrackerAnnotation},
     parent_data::ParentData,
     protocol::BoxProtocol,
-    traits::RenderObject,
+    traits::{HitTestOutcome, RenderObject},
 };
 
 // ============================================================================
@@ -185,18 +185,22 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
     }
 
     // ========================================================================
-    // Coordinate Conversion
+    // Coordinate Conversion — see `PipelineOwner`, not here
     // ========================================================================
-
-    /// Converts a point from global coordinates to local coordinates.
-    fn global_to_local(&self, point: Point) -> Point {
-        point
-    }
-
-    /// Converts a point from local coordinates to global coordinates.
-    fn local_to_global(&self, point: Point) -> Point {
-        point
-    }
+    //
+    // `local_to_global` / `global_to_local` used to live here as `&self`
+    // methods returning `point` unchanged. They were identity stubs, and they
+    // could not be anything else: a FLUI render object has no parent link and no
+    // owner, so `self` cannot know where it is. Flutter's live on `RenderBox`
+    // precisely because a Dart render object *does* hold `parent` and `owner`
+    // (`box.dart:3062`, `:3113`, both implemented via `getTransformTo`).
+    //
+    // ADR-0021 removed them and put the real thing on the pipeline, which
+    // does own the tree:
+    //
+    //   PipelineOwner::transform_to(descendant, ancestor)
+    //   PipelineOwner::local_to_global(id, point, ancestor)
+    //   PipelineOwner::global_to_local(id, point, ancestor)
 
     // ========================================================================
     // Intrinsic Dimensions
@@ -339,21 +343,190 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
     // Effect Layers
     // ========================================================================
     //
-    // paint_alpha / paint_transform are NOT defined on RenderBox itself.
-    // They live on PaintEffectsCapability (a supertrait of
-    // RenderObject<BoxProtocol>); concrete render objects implement that
-    // capability trait directly. See Mythos Step 11.
+    // Override these to have the pipeline wrap children in OpacityLayer /
+    // TransformLayer. The blanket `impl RenderObject<BoxProtocol> for T`
+    // forwards every call from the `RenderObject<P>` surface to these
+    // RenderBox methods — concrete types override here, not on RenderObject.
+
+    /// Returns the alpha value to apply to children.
+    ///
+    /// Override to have the pipeline wrap children in an `OpacityLayer`.
+    /// Default: `None` (no opacity effect). See
+    /// [`RenderObject::paint_alpha`].
+    fn paint_alpha(&self) -> Option<u8> {
+        None
+    }
+
+    /// Returns the blend mode for the opacity layer wrapping children.
+    ///
+    /// Default: `None` (= `SrcOver`). See
+    /// [`RenderObject::paint_layer_blend`].
+    fn paint_layer_blend(&self) -> Option<flui_types::painting::BlendMode> {
+        None
+    }
+
+    /// Whether this node is a repaint boundary.
+    ///
+    /// Override and return `true` to have the pipeline allocate a dedicated
+    /// compositing layer for this subtree.  When the child tree repaints, only
+    /// this subtree's layer is invalidated — siblings and ancestors keep their
+    /// cached paint output.
+    ///
+    /// Default: `false`. See [`RenderObject::is_repaint_boundary`].
+    fn is_repaint_boundary(&self) -> bool {
+        false
+    }
+
+    /// Whether this node always needs its own compositing layer.
+    ///
+    /// Override and return `true` for nodes that apply an effect (clip,
+    /// backdrop filter, etc.) that requires a dedicated layer even when no
+    /// children need repainting.
+    ///
+    /// Default: `false`. See [`RenderObject::always_needs_compositing`].
+    fn always_needs_compositing(&self) -> bool {
+        false
+    }
+
+    /// Whether this render object should suppress all child painting.
+    ///
+    /// Default: `false`. See
+    /// [`RenderObject::skip_paint`].
+    fn skip_paint(&self) -> bool {
+        false
+    }
+
+    /// Returns the transform matrix to apply to children during painting.
+    ///
+    /// Default: `None`. See
+    /// [`RenderObject::paint_transform`].
+    fn paint_transform(&self, size: flui_types::Size) -> Option<flui_types::Matrix4> {
+        let _ = size;
+        None
+    }
+
+    /// Composes onto `transform` the mapping from child `child`'s local space
+    /// into this box's local space.
+    ///
+    /// Default: [`paint_transform`](Self::paint_transform) followed by a
+    /// translation by the child's committed paint offset — the paint pipeline's
+    /// own composition. See [`RenderObject::apply_paint_transform`] for when to
+    /// override, and for the right-multiplication convention.
+    fn apply_paint_transform(
+        &self,
+        child: usize,
+        child_offset: flui_types::Offset,
+        size: flui_types::Size,
+        transform: &mut flui_types::Matrix4,
+    ) {
+        let _ = child;
+        if let Some(matrix) = <Self as RenderBox>::paint_transform(self, size) {
+            *transform *= matrix;
+        }
+        *transform *= flui_types::Matrix4::translation(child_offset.dx.0, child_offset.dy.0, 0.0);
+    }
+
+    /// Returns the transform matrix for hit testing.
+    ///
+    /// Default: `None`. See
+    /// [`RenderObject::hit_test_transform`].
+    fn hit_test_transform(&self, size: flui_types::Size) -> Option<flui_types::Matrix4> {
+        let _ = size;
+        None
+    }
+
+    /// The data-only pointer target this box contributes to its hit entry.
+    ///
+    /// Default `None`; override (e.g. `RenderListener`) to receive pointer
+    /// events that land on this box. The blanket `RenderObject<BoxProtocol>`
+    /// impl forwards to this — concrete types override here, not on
+    /// `RenderObject`. See [`RenderObject::pointer_target`].
+    fn pointer_target(&self) -> Option<crate::hit_testing::PointerTarget> {
+        None
+    }
+
+    /// The mouse cursor this box contributes to its hit entry.
+    fn mouse_cursor(&self) -> CursorIcon {
+        CursorIcon::Default
+    }
+
+    /// Mouse-tracker annotation contributed to this box's hit entry.
+    fn mouse_tracker_annotation(
+        &self,
+        id: flui_foundation::RenderId,
+    ) -> Option<MouseTrackerAnnotation> {
+        let _ = id;
+        None
+    }
+
+    // ========================================================================
+    // Semantics / Hot Reload
+    // ========================================================================
+
+    /// Describes semantic properties for accessibility.
+    ///
+    /// Default: no-op. See
+    /// [`RenderObject::describe_semantics_configuration`].
+    fn describe_semantics_configuration(
+        &self,
+        _config: &mut crate::semantics::SemanticsConfiguration,
+    ) {
+    }
+
+    /// Whether the semantics assembly walk should skip this box's entire
+    /// child subtree.
+    ///
+    /// Default: `false`. See [`RenderObject::excludes_semantics_subtree`].
+    fn excludes_semantics_subtree(&self) -> bool {
+        false
+    }
+
+    /// Marks this render object for reprocessing after hot reload.
+    ///
+    /// Default: no-op. See
+    /// [`RenderObject::reassemble`].
+    fn reassemble(&mut self) {}
+
+    // ========================================================================
+    // Tree Lifecycle (ADR-0013)
+    // ========================================================================
+
+    /// Hands this render object a generational, least-privilege self-dirty
+    /// handle when it enters the tree.
+    ///
+    /// Override to subscribe to a `dyn Listenable` this object owns or
+    /// holds (an animation controller driving its own layout, a
+    /// delegate's repaint notifier driving paint) and self-mark on notify
+    /// via the handle. Default: no-op. See
+    /// [`RenderObject::attach`].
+    fn attach(&mut self, handle: crate::pipeline::RepaintHandle) {
+        let _ = handle;
+    }
+
+    /// Tears down whatever [`Self::attach`] subscribed to, before this
+    /// render object leaves the tree.
+    ///
+    /// Default: no-op. See
+    /// [`RenderObject::detach`].
+    fn detach(&mut self) {}
+
+    /// Short human-readable name for diagnostics and error messages.
+    ///
+    /// Default: [`core::any::type_name::<Self>()`] (the fully-qualified Rust
+    /// type name). Override to return a stable short name (e.g.
+    /// `"RenderPadding"`) that is independent of crate layout.
+    /// See [`RenderObject::debug_name`].
+    fn debug_name(&self) -> &'static str {
+        core::any::type_name::<Self>()
+    }
 }
 
 /// Text baseline types for baseline alignment.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TextBaseline {
-    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
-    /// The alphabetic baseline.
-    Alphabetic,
-    /// The ideographic baseline.
-    Ideographic,
-}
+///
+/// Re-exported from [`flui_types`] — the single canonical definition for the
+/// workspace. The former parallel enum here was consolidated into `flui-types`
+/// (its lower, owning layer) in 2026-06.
+pub use flui_types::layout::TextBaseline;
 
 // ============================================================================
 // Blanket Implementation of RenderObject<BoxProtocol> for RenderBox
@@ -365,7 +538,7 @@ pub enum TextBaseline {
 /// This blanket impl bridges the typed RenderBox API (with Arity/ParentData)
 /// and the protocol-specific `RenderObject<P>` trait needed for storage.
 ///
-/// # Architecture Note (D-block PR-A1b U19 / companion memo D5)
+/// # Architecture Note
 ///
 /// The `perform_layout_raw` body **is** the real bridge — it receives a
 /// protocol-erased `&mut dyn BoxLayoutCtxErased`, reconstructs a typed
@@ -376,9 +549,9 @@ pub enum TextBaseline {
 /// [`RenderBox::perform_layout`]. The completion size is read back from
 /// the inner context's geometry and returned to the pipeline.
 ///
-/// Pre-U19 this method returned `*self.size()` as a no-op placeholder
-/// (companion memo §D5: D-1 AE1 demonstrably returned `Size::ZERO` for
-/// fresh boxes). The real bridge is now live.
+/// This method used to return `*self.size()` as a no-op placeholder,
+/// which demonstrably returned `Size::ZERO` for fresh boxes. The real
+/// bridge is now live.
 ///
 /// `hit_test_raw` is still a placeholder — hit testing flows through
 /// `RenderBox::hit_test()` with `BoxHitTestContext` and is wired
@@ -390,17 +563,13 @@ pub enum TextBaseline {
 /// requires it.
 impl<T> RenderObject<BoxProtocol> for T
 where
-    T: RenderBox
-        + flui_foundation::Diagnosticable
-        + crate::traits::PaintEffectsCapability
-        + crate::traits::SemanticsCapability
-        + crate::traits::HotReloadCapability,
+    T: RenderBox + flui_foundation::Diagnosticable,
 {
     fn perform_layout_raw(
         &mut self,
         ctx: &mut <BoxProtocol as crate::protocol::Protocol>::LayoutCtxErased<'_>,
     ) -> crate::error::RenderResult<crate::protocol::ProtocolGeometry<BoxProtocol>> {
-        // D-block PR-A1b U19 / memo D5 — the real bridge.
+        // The real bridge.
         //
         // The pipeline / `RenderEntry::layout_leaf_only` hands us a
         // `&mut dyn BoxLayoutCtxErased` (the GAT for `BoxProtocol`
@@ -450,7 +619,7 @@ where
                      + Send
                      + Sync
              ),
-    ) -> bool {
+    ) -> HitTestOutcome {
         // The hit-test bridge: wrap the driver's child recursion in
         // the typed, arity-gated BoxHitTestContext and call the user's
         // RenderBox::hit_test. Same shape as the paint bridge — no GAT
@@ -462,7 +631,11 @@ where
             position, hit_child,
         );
         let mut ctx = crate::context::BoxHitTestContext::new(inner, size);
-        T::hit_test(self, &mut ctx)
+        let blocks_below = T::hit_test(self, &mut ctx);
+        HitTestOutcome::new(
+            ctx.self_hit_entry_registered() || blocks_below,
+            blocks_below,
+        )
     }
 
     fn intrinsic_raw(
@@ -470,17 +643,18 @@ where
         dimension: crate::storage::IntrinsicDimension,
         extent: f32,
         child_count: usize,
+        child_parent_data: &[Option<&dyn crate::parent_data::ParentData>],
         child_query: &mut (
                  dyn FnMut(usize, crate::storage::IntrinsicDimension, f32) -> f32 + Send + Sync
              ),
-        child_flex: &mut (dyn FnMut(usize) -> i32 + Send + Sync),
     ) -> f32 {
         // The intrinsics bridge: wrap the driver's memoizing child
         // recursion in the typed ctx and dispatch the dimension to the
         // matching typed compute_* — same shape as the paint/hit
         // bridges, no GAT erasure needed.
         use crate::storage::IntrinsicDimension as Dim;
-        let mut ctx = crate::context::BoxIntrinsicsCtx::new(child_count, child_query, child_flex);
+        let mut ctx =
+            crate::context::BoxIntrinsicsCtx::new(child_count, child_parent_data, child_query);
         match dimension {
             Dim::MinWidth => T::compute_min_intrinsic_width(self, extent, &mut ctx),
             Dim::MaxWidth => T::compute_max_intrinsic_width(self, extent, &mut ctx),
@@ -493,16 +667,18 @@ where
         &self,
         constraints: crate::protocol::ProtocolConstraints<BoxProtocol>,
         child_count: usize,
-        child_dry: &mut (
+        child_parent_data: &[Option<&dyn crate::parent_data::ParentData>],
+        child_query: &mut (
                  dyn FnMut(
             usize,
-            crate::protocol::ProtocolConstraints<BoxProtocol>,
-        ) -> crate::protocol::ProtocolGeometry<BoxProtocol>
+            crate::context::DryLayoutChildRequest,
+        ) -> crate::context::DryLayoutChildResponse
                      + Send
                      + Sync
              ),
     ) -> crate::protocol::ProtocolGeometry<BoxProtocol> {
-        let mut ctx = crate::context::BoxDryLayoutCtx::new(child_count, child_dry);
+        let mut ctx =
+            crate::context::BoxDryLayoutCtx::new(child_count, child_parent_data, child_query);
         T::compute_dry_layout(self, constraints, &mut ctx)
     }
 
@@ -511,6 +687,7 @@ where
         constraints: crate::protocol::ProtocolConstraints<BoxProtocol>,
         baseline: crate::traits::TextBaseline,
         child_count: usize,
+        child_parent_data: &[Option<&dyn crate::parent_data::ParentData>],
         child_query: &mut (
                  dyn FnMut(
             usize,
@@ -520,12 +697,96 @@ where
                      + Sync
              ),
     ) -> Option<f32> {
-        let mut ctx = crate::context::BoxDryBaselineCtx::new(child_count, child_query);
+        let mut ctx =
+            crate::context::BoxDryBaselineCtx::new(child_count, child_parent_data, child_query);
         T::compute_dry_baseline(self, constraints, baseline, &mut ctx)
     }
 
     fn actual_baseline_raw(&self, baseline: crate::traits::TextBaseline) -> Option<f32> {
         T::compute_distance_to_actual_baseline(self, baseline)
+    }
+
+    // Effect-layer and lifecycle forwards — mirror the `actual_baseline_raw`
+    // pattern: call into the RenderBox method so overrides on RenderBox are
+    // visible through `&dyn RenderObject<BoxProtocol>`.
+    fn is_repaint_boundary(&self) -> bool {
+        <T as RenderBox>::is_repaint_boundary(self)
+    }
+
+    fn always_needs_compositing(&self) -> bool {
+        <T as RenderBox>::always_needs_compositing(self)
+    }
+
+    fn paint_alpha(&self) -> Option<u8> {
+        <T as RenderBox>::paint_alpha(self)
+    }
+
+    fn paint_layer_blend(&self) -> Option<flui_types::painting::BlendMode> {
+        <T as RenderBox>::paint_layer_blend(self)
+    }
+
+    fn skip_paint(&self) -> bool {
+        <T as RenderBox>::skip_paint(self)
+    }
+
+    fn paint_transform(&self, size: flui_types::Size) -> Option<flui_types::Matrix4> {
+        <T as RenderBox>::paint_transform(self, size)
+    }
+
+    fn apply_paint_transform(
+        &self,
+        child: usize,
+        child_offset: flui_types::Offset,
+        size: flui_types::Size,
+        transform: &mut flui_types::Matrix4,
+    ) {
+        <T as RenderBox>::apply_paint_transform(self, child, child_offset, size, transform);
+    }
+
+    fn hit_test_transform(&self, size: flui_types::Size) -> Option<flui_types::Matrix4> {
+        <T as RenderBox>::hit_test_transform(self, size)
+    }
+
+    fn pointer_target(&self) -> Option<crate::hit_testing::PointerTarget> {
+        <T as RenderBox>::pointer_target(self)
+    }
+
+    fn mouse_cursor(&self) -> CursorIcon {
+        <T as RenderBox>::mouse_cursor(self)
+    }
+
+    fn mouse_tracker_annotation(
+        &self,
+        id: flui_foundation::RenderId,
+    ) -> Option<MouseTrackerAnnotation> {
+        <T as RenderBox>::mouse_tracker_annotation(self, id)
+    }
+
+    fn describe_semantics_configuration(
+        &self,
+        config: &mut crate::semantics::SemanticsConfiguration,
+    ) {
+        <T as RenderBox>::describe_semantics_configuration(self, config);
+    }
+
+    fn excludes_semantics_subtree(&self) -> bool {
+        <T as RenderBox>::excludes_semantics_subtree(self)
+    }
+
+    fn reassemble(&mut self) {
+        <T as RenderBox>::reassemble(self);
+    }
+
+    fn attach(&mut self, handle: crate::pipeline::RepaintHandle) {
+        <T as RenderBox>::attach(self, handle);
+    }
+
+    fn detach(&mut self) {
+        <T as RenderBox>::detach(self);
+    }
+
+    fn debug_name(&self) -> &'static str {
+        <T as RenderBox>::debug_name(self)
     }
 }
 

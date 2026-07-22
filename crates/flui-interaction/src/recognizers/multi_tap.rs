@@ -10,7 +10,9 @@
 //! Flutter reference: <https://api.flutter.dev/flutter/gestures/MultiTapGestureRecognizer-class.html>
 
 use std::{
+    cell::RefCell,
     collections::HashMap,
+    rc::Rc,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -27,7 +29,7 @@ use crate::{
 };
 
 /// Callback for multi-tap events
-pub type MultiTapCallback = Arc<dyn Fn(MultiTapDetails) + Send + Sync>;
+pub type MultiTapCallback = Rc<dyn Fn(MultiTapDetails)>;
 
 /// Details about a multi-tap gesture
 #[derive(Debug, Clone, PartialEq)]
@@ -74,7 +76,7 @@ pub struct MultiTapGestureRecognizer {
     required_pointer_count: usize,
 
     /// Callbacks
-    callbacks: Arc<Mutex<MultiTapCallbacks>>,
+    callbacks: Rc<RefCell<MultiTapCallbacks>>,
 
     /// Current gesture state
     gesture_state: Arc<Mutex<MultiTapState>>,
@@ -156,13 +158,12 @@ impl MultiTapGestureRecognizer {
     pub fn new(arena: crate::arena::GestureArena, required_pointer_count: usize) -> Arc<Self> {
         assert!(
             required_pointer_count >= 2,
-            "MultiTapGestureRecognizer requires at least 2 pointers, got {}",
-            required_pointer_count
+            "MultiTapGestureRecognizer requires at least 2 pointers, got {required_pointer_count}"
         );
         Arc::new(Self {
             state: RecognizerBase::new(arena),
             required_pointer_count,
-            callbacks: Arc::new(Mutex::new(MultiTapCallbacks::default())),
+            callbacks: Rc::new(RefCell::new(MultiTapCallbacks::default())),
             gesture_state: Arc::new(Mutex::new(MultiTapState::default())),
             settings: Arc::new(Mutex::new(GestureSettings::default())),
             max_time_window: Duration::from_millis(100), // 100ms to get all pointers down
@@ -177,13 +178,12 @@ impl MultiTapGestureRecognizer {
     ) -> Arc<Self> {
         assert!(
             required_pointer_count >= 2,
-            "MultiTapGestureRecognizer requires at least 2 pointers, got {}",
-            required_pointer_count
+            "MultiTapGestureRecognizer requires at least 2 pointers, got {required_pointer_count}"
         );
         Arc::new(Self {
             state: RecognizerBase::new(arena),
             required_pointer_count,
-            callbacks: Arc::new(Mutex::new(MultiTapCallbacks::default())),
+            callbacks: Rc::new(RefCell::new(MultiTapCallbacks::default())),
             gesture_state: Arc::new(Mutex::new(MultiTapState::default())),
             settings: Arc::new(Mutex::new(settings)),
             max_time_window: Duration::from_millis(100),
@@ -203,18 +203,18 @@ impl MultiTapGestureRecognizer {
     /// Set the multi-tap callback
     pub fn with_on_multi_tap(
         self: Arc<Self>,
-        callback: impl Fn(MultiTapDetails) + Send + Sync + 'static,
+        callback: impl Fn(MultiTapDetails) + 'static,
     ) -> Arc<Self> {
-        self.callbacks.lock().on_multi_tap = Some(Arc::new(callback));
+        self.callbacks.borrow_mut().on_multi_tap = Some(Rc::new(callback));
         self
     }
 
     /// Set the multi-tap cancel callback
     pub fn with_on_multi_tap_cancel(
         self: Arc<Self>,
-        callback: impl Fn(MultiTapDetails) + Send + Sync + 'static,
+        callback: impl Fn(MultiTapDetails) + 'static,
     ) -> Arc<Self> {
-        self.callbacks.lock().on_multi_tap_cancel = Some(Arc::new(callback));
+        self.callbacks.borrow_mut().on_multi_tap_cancel = Some(Rc::new(callback));
         self
     }
 
@@ -252,15 +252,18 @@ impl MultiTapGestureRecognizer {
 
                 state.device_kind = Some(kind);
 
-                if state.pointers.len() < self.required_pointer_count {
-                    state.phase = MultiTapPhase::Collecting;
-                } else if state.pointers.len() == self.required_pointer_count {
-                    // Got all required pointers!
-                    state.phase = MultiTapPhase::WaitingForUp;
-                } else {
-                    // Too many pointers - cancel (don't set phase here, let handle_cancel do it)
-                    drop(state);
-                    self.handle_cancel();
+                match state.pointers.len().cmp(&self.required_pointer_count) {
+                    std::cmp::Ordering::Less => state.phase = MultiTapPhase::Collecting,
+                    std::cmp::Ordering::Equal => {
+                        // Got all required pointers!
+                        state.phase = MultiTapPhase::WaitingForUp;
+                    }
+                    std::cmp::Ordering::Greater => {
+                        // Too many pointers - cancel (don't set phase here, let
+                        // handle_cancel do it)
+                        drop(state);
+                        self.handle_cancel();
+                    }
                 }
             }
             MultiTapPhase::WaitingForUp => {
@@ -316,13 +319,13 @@ impl MultiTapGestureRecognizer {
                     .map(|info| info.initial_position)
                     .collect();
 
-                let center = self.calculate_center(&positions);
+                let center = Self::calculate_center(&positions);
                 let count = positions.len();
 
                 drop(state);
 
                 // Call callback
-                if let Some(callback) = self.callbacks.lock().on_multi_tap.clone() {
+                if let Some(callback) = self.callbacks.borrow().on_multi_tap.clone() {
                     let details = MultiTapDetails {
                         pointer_count: count,
                         positions,
@@ -354,10 +357,10 @@ impl MultiTapGestureRecognizer {
                 .map(|info| info.initial_position)
                 .collect();
 
-            let center = if !positions.is_empty() {
-                self.calculate_center(&positions)
-            } else {
+            let center = if positions.is_empty() {
                 Offset::new(Pixels::ZERO, Pixels::ZERO)
+            } else {
+                Self::calculate_center(&positions)
             };
 
             let count = positions.len();
@@ -366,7 +369,7 @@ impl MultiTapGestureRecognizer {
             drop(state);
 
             // Call cancel callback
-            if let Some(callback) = self.callbacks.lock().on_multi_tap_cancel.clone() {
+            if let Some(callback) = self.callbacks.borrow().on_multi_tap_cancel.clone() {
                 let details = MultiTapDetails {
                     pointer_count: count,
                     positions,
@@ -383,7 +386,7 @@ impl MultiTapGestureRecognizer {
     }
 
     /// Calculate center point of all positions
-    fn calculate_center(&self, positions: &[Offset<Pixels>]) -> Offset<Pixels> {
+    fn calculate_center(positions: &[Offset<Pixels>]) -> Offset<Pixels> {
         if positions.is_empty() {
             return Offset::new(Pixels::ZERO, Pixels::ZERO);
         }
@@ -467,8 +470,8 @@ impl GestureRecognizer for MultiTapGestureRecognizer {
         // gestures/recognizer.dart:485-493 disposing GestureRecognizer
         // clears arena state for tracked pointers).
         self.state.reject();
-        self.callbacks.lock().on_multi_tap = None;
-        self.callbacks.lock().on_multi_tap_cancel = None;
+        self.callbacks.borrow_mut().on_multi_tap = None;
+        self.callbacks.borrow_mut().on_multi_tap_cancel = None;
     }
 
     fn primary_pointer(&self) -> Option<PointerId> {
@@ -494,7 +497,7 @@ impl std::fmt::Debug for MultiTapGestureRecognizer {
             .field("required_pointer_count", &self.required_pointer_count)
             .field("gesture_state", &self.gesture_state.lock())
             .field("settings", &self.settings.lock())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 

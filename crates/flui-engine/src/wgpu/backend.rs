@@ -5,46 +5,83 @@
 
 use flui_painting::{BlendMode, DisplayListCore, Paint, PointMode};
 use flui_types::{
-    geometry::{Matrix4, Offset, Pixels, Point, RRect, Rect, Transform, px},
+    geometry::{Matrix4, Offset, Pixels, Point, RRect, Rect, Size, Transform, px},
     painting::{Image, Path},
     styling::Color,
     typography::TextStyle,
 };
+use smallvec::SmallVec;
 
 use std::sync::Arc;
 
-use super::painter::WgpuPainter;
+use super::{
+    command_ir::{GammaDirection, ImageFilterPass, ImageFilterSpec, LayerFilter, MorphOp},
+    painter::WgpuPainter,
+};
 use crate::{
     commands::dispatch_command,
     traits::{CommandRenderer, LayerStateStack},
 };
 
+/// Builds a gradient stop array from a color slice and optional explicit stop
+/// positions, with no heap allocation for the common case of ≤ 8 stops.
+///
+/// When `stop_positions` is `None`, stops are spaced evenly across [0, 1].
+/// The return type derefs to `&[GradientStop]`, satisfying every painter call site.
+fn build_gradient_stops(
+    colors: &[Color],
+    stop_positions: Option<&Vec<f32>>,
+) -> SmallVec<[super::effects::GradientStop; 8]> {
+    use super::effects::GradientStop;
+    if let Some(positions) = stop_positions {
+        colors
+            .iter()
+            .zip(positions.iter())
+            .map(|(color, pos)| GradientStop::new(*color, *pos))
+            .collect()
+    } else {
+        let count = colors.len();
+        colors
+            .iter()
+            .enumerate()
+            .map(|(i, color)| {
+                let pos = if count > 1 {
+                    i as f32 / (count - 1) as f32
+                } else {
+                    0.0
+                };
+                GradientStop::new(*color, pos)
+            })
+            .collect()
+    }
+}
+
 /// wgpu backend implementation of CommandRenderer.
 ///
 /// # Lifetime parameter
 ///
-/// `Backend<'frame>` borrows the current frame's `wgpu::TextureView` +
-/// `wgpu::Texture` when [`bind_surface`](Self::bind_surface) is
-/// called. The lifetime is internal to one render pass: `Renderer::render`
-/// creates the Backend, binds the frame surface, dispatches the
-/// `LayerTree`, then drops the Backend before the surface is
-/// presented. Sites that don't need to flush mid-frame (shader-mask
-/// offscreen rendering, tests) call [`Backend::new`] which leaves
-/// the surface handles unbound; the
+/// `Backend<'frame>` borrows the current frame's painter (`&'frame mut
+/// WgpuPainter`) and, when present, the `wgpu::TextureView` /
+/// `wgpu::Texture` bound by [`bind_surface`](Self::bind_surface). The
+/// lifetime is internal to one render pass: `Renderer::render` creates
+/// the Backend in a scoped block, dispatches the `LayerTree`, then lets
+/// it drop before calling `painter.render()`. Sites that don't need to
+/// flush mid-frame (shader-mask offscreen rendering, tests) call
+/// [`Backend::new`] which leaves the surface handles unbound; the
 /// [`render_backdrop_filter`](CommandRenderer::render_backdrop_filter)
 /// command-path falls back to passthrough when the handles are
-/// `None` (cycle 4 U-8, U-9).
+/// `None`.
 ///
 /// Per *Rust for Rustaceans* ch.2 "Variance and Lifetimes": the
 /// `'frame` parameter encodes the borrow's scope so the compiler
-/// enforces that no Backend outlives its bound surface.
+/// enforces that no Backend outlives its bound resources.
 ///
 /// Note: Debug is not derived because `WgpuPainter` contains wgpu types that
 /// don't implement Debug.
 #[allow(missing_debug_implementations)]
 pub struct Backend<'frame> {
-    painter: WgpuPainter,
-    offscreen: Option<Arc<parking_lot::Mutex<super::offscreen::OffscreenRenderer>>>,
+    painter: &'frame mut WgpuPainter,
+    offscreen: Option<&'frame mut super::offscreen::OffscreenRenderer>,
     /// Cached offscreen painter reused across shader mask invocations.
     /// Lazily created on first use, resized when dimensions change.
     offscreen_painter: Option<WgpuPainter>,
@@ -58,7 +95,7 @@ pub struct Backend<'frame> {
     /// `COPY_TEXTURE_TO_TEXTURE` operations during backdrop-filter
     /// dispatch.
     surface_texture: Option<&'frame wgpu::Texture>,
-    /// Cycle 4 wave 5 E-13: matrix that is currently applied to
+    /// The matrix that is currently applied to
     /// [`painter`](Self::painter) via a `save() + apply` pair that
     /// has not yet been balanced with `restore()`. `with_transform`
     /// uses this to coalesce consecutive same-matrix calls into a
@@ -67,7 +104,7 @@ pub struct Backend<'frame> {
     /// already-applied state rather than paying another stack push.
     ///
     /// [`flush_active_transform`](Self::flush_active_transform)
-    /// balances the deferred `restore()`. It is called at every
+    /// balances the deferred `restore()`. It is called eagerly at every
     /// point where the painter save stack could be mutated outside
     /// `with_transform`'s coalescing path -- the identity /
     /// transform-mismatch arms inside `with_transform` itself, every
@@ -75,34 +112,33 @@ pub struct Backend<'frame> {
     /// `pop_clip`, `push_offset`, `push_transform`, `pop_transform`,
     /// `push_opacity`, `pop_opacity`, `push_color_filter`,
     /// `pop_color_filter`, `push_image_filter`, `pop_image_filter`),
-    /// the explicit [`Backend::restore`](Self::restore) escape
-    /// hatch, and [`into_painter`](Self::into_painter) (so the
-    /// returned painter is balanced for re-use). PR #117 review
-    /// (Codex P1) added the LayerStateStack flush points after the
-    /// initial wave-5 ship; without them, a `push_clip → with_transform
-    /// → pop_clip` sequence would pop the lazy save instead of the
-    /// clip, corrupting state across sibling layers.
+    /// and the explicit [`Backend::restore`](Self::restore) escape
+    /// hatch. These `LayerStateStack` flush points are required: without
+    /// them, a `push_clip → with_transform → pop_clip` sequence would pop
+    /// the lazy save instead of the clip, corrupting state across sibling
+    /// layers.
     ///
     /// `None` means the painter is at the default state and no
     /// balance is owed.
     ///
-    /// Why no `Drop` impl: `into_painter(self) -> WgpuPainter`
-    /// requires moving a field out of `Backend`, which Rust forbids
-    /// on a `Drop` type. The full set of flush points above covers
-    /// every balanced exit; an implicit drop without
-    /// `into_painter` leaves one unbalanced `save()` in a painter
-    /// that's immediately dropped (unobservable).
+    /// The `Drop` impl provides a final safety-net flush: if a future
+    /// code path forgets to call `flush_active_transform()` before
+    /// the Backend goes out of scope, Drop balances the deferred save
+    /// so the borrowed painter is left in a clean state. The 21 eager
+    /// call sites above are NOT replaced by Drop — they flush at
+    /// precisely the right point for correctness; Drop is the backstop
+    /// for any site that is missed.
     active_transform: Option<Matrix4>,
 }
 
 impl<'frame> Backend<'frame> {
-    /// Create a new Backend with the given painter.
+    /// Create a new Backend that borrows the given painter for the frame.
     ///
     /// `surface_view` / `surface_texture` start unbound. Call
     /// [`bind_surface`](Self::bind_surface) when the frame surface
     /// is available to enable the DisplayList-backdrop-filter
     /// command path.
-    pub fn new(painter: WgpuPainter) -> Self {
+    pub fn new(painter: &'frame mut WgpuPainter) -> Self {
         Self {
             painter,
             offscreen: None,
@@ -113,10 +149,10 @@ impl<'frame> Backend<'frame> {
         }
     }
 
-    /// Create a new Backend with the given painter and offscreen renderer.
+    /// Create a new Backend that borrows the given painter and offscreen renderer.
     pub fn with_offscreen(
-        painter: WgpuPainter,
-        offscreen: Arc<parking_lot::Mutex<super::offscreen::OffscreenRenderer>>,
+        painter: &'frame mut WgpuPainter,
+        offscreen: &'frame mut super::offscreen::OffscreenRenderer,
     ) -> Self {
         Self {
             painter,
@@ -137,8 +173,6 @@ impl<'frame> Backend<'frame> {
     /// flush + blur the surface contents; without it the backdrop-
     /// filter path falls back to dispatching the child display list
     /// without applying the filter (visible regression vs Flutter).
-    ///
-    /// Cycle 4 E-2 / U-8.
     pub fn bind_surface(
         &mut self,
         view: &'frame wgpu::TextureView,
@@ -148,35 +182,19 @@ impl<'frame> Backend<'frame> {
         self.surface_texture = Some(texture);
     }
 
-    /// Access the offscreen renderer (for shader mask, backdrop filter).
-    pub fn offscreen(
-        &self,
-    ) -> Option<&Arc<parking_lot::Mutex<super::offscreen::OffscreenRenderer>>> {
-        self.offscreen.as_ref()
+    /// Access the offscreen renderer mutably (for shader mask, backdrop filter).
+    pub fn offscreen_mut(&mut self) -> Option<&mut super::offscreen::OffscreenRenderer> {
+        self.offscreen.as_deref_mut()
     }
 
     /// Get a reference to the underlying painter.
     pub fn painter(&self) -> &WgpuPainter {
-        &self.painter
+        self.painter
     }
 
     /// Get a mutable reference to the underlying painter.
     pub fn painter_mut(&mut self) -> &mut WgpuPainter {
-        &mut self.painter
-    }
-
-    /// Consume the renderer and return the underlying painter.
-    ///
-    /// The offscreen `Arc` is dropped here; ref-counting keeps it alive in Renderer.
-    ///
-    /// Cycle 4 wave 5 E-13: flushes any active lazy-pop transform
-    /// first so the returned painter is balanced -- callers reuse
-    /// the painter (Renderer feeds it into the next frame, the
-    /// shader-mask offscreen path stashes it into a cache) and must
-    /// not inherit a leftover `save()`.
-    pub fn into_painter(mut self) -> WgpuPainter {
-        self.flush_active_transform();
-        self.painter
+        &mut *self.painter
     }
 
     /// Returns the current save stack depth.
@@ -193,10 +211,9 @@ impl<'frame> Backend<'frame> {
     /// This pops the transform and clip state from the save stack.
     /// Used to restore state after rendering layer children.
     ///
-    /// Cycle 4 wave 5 E-13 PR #117 review (Codex P1): flushes any
-    /// lazy `with_transform` save first so the explicit `restore()`
-    /// pops the caller's matched `save()`, not the lazy transform
-    /// that happens to be the top of the painter stack.
+    /// Flushes any lazy `with_transform` save first so the explicit
+    /// `restore()` pops the caller's matched `save()`, not the lazy
+    /// transform that happens to be the top of the painter stack.
     pub fn restore(&mut self) {
         self.flush_active_transform();
         self.painter.restore();
@@ -206,7 +223,13 @@ impl<'frame> Backend<'frame> {
     ///
     /// On first call, creates a new `WgpuPainter` with shared device/queue.
     /// On subsequent calls, returns the cached painter, resizing if needed.
-    fn get_or_create_offscreen_painter(
+    ///
+    /// `pub(crate)` (not private): `Renderer::handle_shader_mask`
+    /// (`renderer.rs`) reuses this to render a `Layer::ShaderMask`
+    /// subtree's children into a device-sized offscreen texture, the
+    /// same cached-painter machinery `render_shader_mask` below already
+    /// uses for the `DisplayList` path.
+    pub(crate) fn get_or_create_offscreen_painter(
         &mut self,
         device: &Arc<wgpu::Device>,
         queue: &Arc<wgpu::Queue>,
@@ -236,7 +259,7 @@ impl<'frame> Backend<'frame> {
         })
     }
 
-    /// Cycle 4 wave 5 E-13: dispatch a draw closure under the given
+    /// Dispatch a draw closure under the given
     /// transform, coalescing consecutive same-matrix calls so that
     /// the `painter.save()` + matrix-decompose + apply + restore
     /// pipeline runs once per RUN of identical transforms rather
@@ -260,11 +283,12 @@ impl<'frame> Backend<'frame> {
     /// push_transform / pop_transform / push_opacity / pop_opacity
     /// / push_color_filter / pop_color_filter / push_image_filter
     /// / pop_image_filter), the public `Backend::restore` escape
-    /// hatch, and `into_painter` (so the moved-out painter is
-    /// balanced for re-use). See [`Self::active_transform`] for
-    /// the full list and the PR #117 review (Codex P1) context.
+    /// hatch, and the `Drop` impl (so the borrowed painter is
+    /// balanced when the Backend leaves scope). See
+    /// [`Self::active_transform`] for the full list of flush points and why
+    /// each one is needed.
     ///
-    /// Audit context: a render pass batching 1000 same-transform
+    /// Measured effect: a render pass batching 1000 same-transform
     /// shapes used to pay 2000 stack ops + 1000 mat-decomposes
     /// (each pair `save + apply + restore`). After this change the
     /// run pays one `save + apply` plus one `restore` at the next
@@ -275,7 +299,7 @@ impl<'frame> Backend<'frame> {
     {
         if transform.is_identity() {
             self.flush_active_transform();
-            draw_fn(&mut self.painter);
+            draw_fn(self.painter);
             return;
         }
 
@@ -283,7 +307,7 @@ impl<'frame> Backend<'frame> {
             // Path 2: same matrix as the currently-applied one --
             // skip the push entirely; the painter is already in the
             // right state.
-            draw_fn(&mut self.painter);
+            draw_fn(self.painter);
             return;
         }
 
@@ -308,39 +332,194 @@ impl<'frame> Backend<'frame> {
         }
 
         self.active_transform = Some(*transform);
-        draw_fn(&mut self.painter);
+        draw_fn(self.painter);
     }
 
-    /// Cycle 4 wave 5 E-13: balance the deferred `save()` left by a
+    /// Balance the deferred `save()` left by a
     /// prior `with_transform` run with a `restore()`, clearing
     /// `active_transform`. No-op if no transform is active.
     ///
     /// Called from every site that mutates the painter save stack
     /// outside the coalescing path: `with_transform`'s identity /
     /// mismatch arms, every `LayerStateStack` method on `Backend`,
-    /// the public `Backend::restore`, and `into_painter`. See the
+    /// the public `Backend::restore`, and the `Drop` impl. See the
     /// [`active_transform`](Self::active_transform) field doc for
-    /// the full list and the PR #117 review (Codex P1) context.
+    /// the full list of flush points and why each one is needed.
     fn flush_active_transform(&mut self) {
         if self.active_transform.is_some() {
             self.painter.restore();
             self.active_transform = None;
         }
     }
+
+    /// Shared backdrop-filter blur pipeline used by both backdrop entry points:
+    /// the layer-tree path (`Renderer::handle_backdrop_filter`, "Path A") and the
+    /// display-list path ([`render_backdrop_filter`](CommandRenderer::render_backdrop_filter),
+    /// "Path B"). Consolidating it here is the single-source-of-truth fix for a
+    /// duplication that had the off-screen clamp bug fixed twice and silently
+    /// drift afterward (Path B truncated where Path A rounded).
+    ///
+    /// Steps: clamp `device_rect` to the surface extent → copy that region from
+    /// the surface into a pooled blur-input → Dual-Kawase blur → queue the result
+    /// for compositing at the **clamped** rect. The painter is flushed first so
+    /// the pixels to be sampled are present (the flush + copy stay in one
+    /// submission — "Fix #11 ordering").
+    ///
+    /// Returns `true` if the blur was queued, `false` if it was skipped (no
+    /// offscreen renderer, or the region is entirely off-screen). The caller
+    /// renders the backdrop's children either way — child dispatch differs per
+    /// path (layer-tree recursion vs display-list command dispatch) and stays at
+    /// the call site.
+    ///
+    /// `device_rect` is the filter bounds already mapped to device space by the
+    /// caller (the transform source differs: the layer-walk CTM vs the
+    /// display-list command transform).
+    pub(crate) fn apply_backdrop_blur(
+        &mut self,
+        device_rect: Rect<Pixels>,
+        sigma: f32,
+        surface_texture: &wgpu::Texture,
+        surface_view: &wgpu::TextureView,
+    ) -> bool {
+        if self.offscreen.is_none() {
+            // No offscreen renderer → no blur, and no mid-frame flush either: any
+            // painter batches queued before this backdrop still draw in the
+            // frame-end flush (the painter's `draw_order` is an explicit ordered
+            // list, so pre-backdrop content precedes the caller's children
+            // regardless of submit boundaries). Don't "restore" a mid-frame flush
+            // here — it would only split one submit into two with no blur to feed.
+            tracing::warn!("Backdrop blur skipped: no offscreen renderer available");
+            return false;
+        }
+
+        // device/queue/format come from the offscreen renderer (the same device
+        // the surface was created on); later mutation borrows `offscreen` again
+        // sequentially for the texture pool and the blur.
+        let (device, queue, format) = {
+            let off = self
+                .offscreen
+                .as_deref_mut()
+                .expect("offscreen is_some checked above");
+            (
+                Arc::clone(off.device()),
+                Arc::clone(off.queue()),
+                off.surface_format(),
+            )
+        };
+
+        // Clamp the device rect to the surface extent. `.round()` before
+        // truncation avoids a 1-device-pixel undersize on sub-pixel boundaries
+        // (DPR ≠ 1 or fractional-offset CTMs) — the canonical clamp both paths
+        // now share (Path B previously truncated here, undersizing fractional
+        // backdrops). Edges are kept ≥ 0 by the prior `clamp`.
+        let surface_extent = surface_texture.size();
+        let surface_w = surface_extent.width;
+        let surface_h = surface_extent.height;
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let x = device_rect.left().0.clamp(0.0, surface_w as f32).round() as u32;
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let y = device_rect.top().0.clamp(0.0, surface_h as f32).round() as u32;
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let right = device_rect.right().0.clamp(0.0, surface_w as f32).round() as u32;
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let bottom = device_rect.bottom().0.clamp(0.0, surface_h as f32).round() as u32;
+        let w = right.saturating_sub(x).max(1);
+        let h = bottom.saturating_sub(y).max(1);
+
+        // Entirely off-screen after clamping → no copyable region.
+        if right <= x || bottom <= y {
+            tracing::warn!(
+                rect_l = device_rect.left().0,
+                rect_t = device_rect.top().0,
+                rect_r = device_rect.right().0,
+                rect_b = device_rect.bottom().0,
+                surface_w,
+                surface_h,
+                "Backdrop blur skipped: clamped device region is empty (entirely off-screen)"
+            );
+            return false;
+        }
+
+        // Flush painter batches so the backdrop pixels are present on the surface
+        // before the copy. The copy is recorded into the same encoder, keeping
+        // flush → copy in one submission.
+        //
+        // PROFILER-SKIP: this backdrop-flush encoder is intentionally absent from
+        // the GpuFrameProfiler. Backdrop GPU time is not threaded through here
+        // (neither backdrop entry point has a profiler handle); the clear-pass and
+        // final-render scopes in `render_scene` cover the primary frame timing.
+        // This is an explicit trade-off, not an oversight.
+        let mut flush_encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Backdrop Flush Encoder"),
+        });
+        let flush_target =
+            super::render_target::RenderTarget::sampleable(surface_view, surface_texture);
+        if let Err(e) = self.painter.render(flush_target, &mut flush_encoder) {
+            tracing::error!("Backdrop flush failed: {}", e);
+        }
+
+        // Copy the clamped device region from the surface into a pooled blur input.
+        let blur_input = self
+            .offscreen
+            .as_deref_mut()
+            .expect("offscreen is_some checked above")
+            .texture_pool()
+            .acquire(w, h, format);
+        flush_encoder.copy_texture_to_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: surface_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d { x, y, z: 0 },
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyTextureInfo {
+                texture: blur_input.texture(),
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
+        );
+        queue.submit(std::iter::once(flush_encoder.finish()));
+
+        // Dual-Kawase blur, then queue for compositing at the CLAMPED rect — the
+        // copy used origin (x,y) extent (w,h), so the composite rect must match
+        // exactly or the smaller blurred texture would stretch across an
+        // unclamped (edge-crossing) `device_rect`.
+        let blurred = self
+            .offscreen
+            .as_deref_mut()
+            .expect("offscreen is_some checked above")
+            .render_blur(&blur_input, sigma);
+        let clamped_composite_rect = Rect::from_xywh(
+            Pixels(x as f32),
+            Pixels(y as f32),
+            Pixels(w as f32),
+            Pixels(h as f32),
+        );
+        self.painter
+            .queue_offscreen_result(blurred, clamped_composite_rect);
+        true
+    }
 }
 
-// Cycle 4 wave 5 E-13: a `Drop` impl that calls `flush_active_transform()`
-// would be the natural place to balance the lazy-pop save, but it
-// conflicts with `into_painter(self) -> WgpuPainter` -- Rust forbids
-// moving a field out of a `Drop` type. The chosen shape instead:
-// `into_painter` explicitly calls `flush_active_transform()` before
-// the move, and `with_transform`'s identity / mismatch paths also
-// flush. The only remaining failure mode is a `Backend` dropped via
-// implicit drop without going through `into_painter` -- which would
-// leak one `save()` worth of transform-stack depth in the painter
-// being dropped. That painter is itself going out of scope (no
-// other reference can leak the state), so the unbalanced save is
-// dropped with the painter and never observed.
+impl Drop for Backend<'_> {
+    /// Safety-net: balance any deferred lazy-coalescing save that was left on
+    /// the painter stack by `with_transform`. The 21 eager `flush_active_transform`
+    /// call sites throughout the impl (every `LayerStateStack` method, the identity
+    /// / mismatch arms of `with_transform`, and the `restore` escape hatch) flush at
+    /// the correct semantic point. This `Drop` impl is a backstop for any future call
+    /// path that forgets to flush: when the Backend goes out of scope the painter is
+    /// left balanced and ready for its next use (`painter.render`,
+    /// `end_frame_maintenance`, or the next frame's Backend).
+    fn drop(&mut self) {
+        self.flush_active_transform();
+    }
+}
 
 impl CommandRenderer for Backend<'_> {
     fn render_rect(&mut self, rect: Rect<Pixels>, paint: &Paint, transform: &Matrix4) {
@@ -499,11 +678,14 @@ impl CommandRenderer for Backend<'_> {
         &mut self,
         image: &Image,
         dst: Rect<Pixels>,
-        _paint: Option<&Paint>,
+        paint: Option<&Paint>,
         transform: &Matrix4,
     ) {
+        // Thread paint.blend_mode to the GPU-level composite (PR-5).
+        // SrcOver is the correct default when no Paint is supplied.
+        let blend_mode = paint.map_or(flui_painting::BlendMode::SrcOver, |p| p.blend_mode);
         self.with_transform(transform, |painter| {
-            painter.draw_image(image, dst);
+            painter.draw_image(image, dst, blend_mode);
         });
     }
 
@@ -513,12 +695,15 @@ impl CommandRenderer for Backend<'_> {
         sprites: &[Rect<Pixels>],
         transforms: &[Matrix4],
         colors: Option<&[Color]>,
-        _blend_mode: BlendMode,
+        blend_mode: BlendMode,
         _paint: Option<&Paint>,
         transform: &Matrix4,
     ) {
+        // Thread blend_mode to the painter so advanced modes divert to
+        // DrawItem::AdvancedShape (PR-5, condition 3). SrcOver takes the
+        // per-sprite cached_images path unchanged.
         self.with_transform(transform, |painter| {
-            painter.draw_atlas(image, sprites, transforms, colors);
+            painter.draw_atlas(image, sprites, transforms, colors, blend_mode);
         });
     }
 
@@ -527,11 +712,12 @@ impl CommandRenderer for Backend<'_> {
         image: &Image,
         dst: Rect<Pixels>,
         repeat: flui_painting::display_list::ImageRepeat,
-        _paint: Option<&Paint>,
+        paint: Option<&Paint>,
         transform: &Matrix4,
     ) {
+        let blend_mode = paint.map_or(flui_painting::BlendMode::SrcOver, |p| p.blend_mode);
         self.with_transform(transform, |painter| {
-            painter.draw_image_repeat(image, dst, repeat);
+            painter.draw_image_repeat(image, dst, repeat, blend_mode);
         });
     }
 
@@ -540,11 +726,12 @@ impl CommandRenderer for Backend<'_> {
         image: &Image,
         center_slice: Rect<Pixels>,
         dst: Rect<Pixels>,
-        _paint: Option<&Paint>,
+        paint: Option<&Paint>,
         transform: &Matrix4,
     ) {
+        let blend_mode = paint.map_or(flui_painting::BlendMode::SrcOver, |p| p.blend_mode);
         self.with_transform(transform, |painter| {
-            painter.draw_image_nine_slice(image, center_slice, dst);
+            painter.draw_image_nine_slice(image, center_slice, dst, blend_mode);
         });
     }
 
@@ -553,11 +740,16 @@ impl CommandRenderer for Backend<'_> {
         image: &Image,
         dst: Rect<Pixels>,
         filter: flui_painting::display_list::ColorFilter,
-        _paint: Option<&Paint>,
+        paint: Option<&Paint>,
         transform: &Matrix4,
     ) {
+        // Thread paint.blend_mode as the GPU-level composite mode (PR-5).
+        // ColorFilter bakes pixels CPU-side; paint.blend_mode composites the
+        // result GPU-side against the framebuffer. These two modes are independent.
+        // See DrawBatcher::draw_image_filtered for the boundary contract.
+        let paint_blend_mode = paint.map_or(flui_painting::BlendMode::SrcOver, |p| p.blend_mode);
         self.with_transform(transform, |painter| {
-            painter.draw_image_filtered(image, dst, filter);
+            painter.draw_image_filtered(image, dst, filter, paint_blend_mode);
         });
     }
 
@@ -589,38 +781,102 @@ impl CommandRenderer for Backend<'_> {
         blend_mode: BlendMode,
         _transform: &Matrix4,
     ) {
+        // Flush any deferred-coalesced transform from the prior command before
+        // reading the CTM. The Backend defers transforms lazily (see
+        // `with_transform` / `active_transform`); without this call
+        // `current_transform_matrix()` / `current_max_scale()` below would read
+        // the PRIOR command's unrelated transform and size/position the offscreen
+        // from stale state. Every other method that reads painter transform state
+        // calls `flush_active_transform()` first (push_opacity, push_color_filter,
+        // push_image_filter, all LayerStateStack impls); shader-mask must match.
+        self.flush_active_transform();
+
         // Try GPU shader mask pipeline
-        if let Some(offscreen_arc) = self.offscreen.clone() {
+        if self.offscreen.is_some() {
+            // SAFETY of subsequent `expect` calls: `is_some()` was true above; each
+            // `as_deref_mut()` is a separate sequential borrow that does not overlap
+            // with the painter borrows interleaved between them.
+            // The live device-pixel ratio rides in the painter's current
+            // transform: the `RenderView` root pushes `scale(dpr)` and the paint
+            // walk accumulates it into the CTM. The `_transform` argument is
+            // identity on the paint path, so it is NOT the DPR source — read the
+            // active CTM here, before `reset_frame_state` below clears it.
+            //
+            // Sizing the offscreen child/result textures from the logical
+            // `bounds` would allocate the masked layer at half resolution on a
+            // 2x display and composite it at half coordinates / quarter area
+            // (Flutter/Impeller `ShaderMaskLayer::Paint` runs the child + masked
+            // saveLayer under the accumulated device matrix, so the offscreen is
+            // device-resolution and composited in device space).
+            let transform = self.painter.current_transform_matrix();
+            let dpr_scale = self.painter.current_max_scale().max(1.0);
+
+            // Device-resolution offscreen dimensions: logical extent × DPR.
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            let width = bounds.width().0.max(1.0) as u32;
+            let dev_width = (bounds.width().0 * dpr_scale).round().max(1.0) as u32;
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            let height = bounds.height().0.max(1.0) as u32;
+            let dev_height = (bounds.height().0 * dpr_scale).round().max(1.0) as u32;
+
+            // Composite rect in device space — mirrors Path B (backdrop filter):
+            // map the logical bounds through the CTM rather than scaling by DPR
+            // alone, so any translation in the CTM is honored too.
+            let device_bounds = transform.transform_rect(&bounds);
 
             // Step 1: Get GPU resources from offscreen renderer
             let (device, queue, format, child_tex) = {
-                let offscreen = offscreen_arc.lock();
+                let offscreen = self
+                    .offscreen
+                    .as_deref_mut()
+                    .expect("checked is_some above");
                 let device = Arc::clone(offscreen.device());
                 let queue = Arc::clone(offscreen.queue());
                 let format = offscreen.surface_format();
-                let child_tex = offscreen.texture_pool().acquire(width, height, format);
+                let child_tex = offscreen
+                    .texture_pool()
+                    .acquire(dev_width, dev_height, format);
                 (device, queue, format, child_tex)
             };
-            // Lock released here
 
             // Step 2: Get or create cached offscreen painter (avoids per-call allocation)
-            // Ensure the cache is populated (creates or resizes as needed), then take
-            // it out temporarily so we can wrap it in a Backend for command dispatch.
-            let _ = self.get_or_create_offscreen_painter(&device, &queue, format, (width, height));
-            let mut temp_painter = self
-                .offscreen_painter
-                .take()
-                .expect("offscreen_painter was just populated by get_or_create");
+            // Ensure the cache is populated (creates or resizes as needed), then borrow
+            // it for command dispatch. No take/put-back needed: the Backend borrows
+            // `&mut WgpuPainter` directly from `self.offscreen_painter`, and the Drop
+            // impl on the temp Backend guarantees `flush_active_transform()` runs when
+            // the dispatch scope ends — leaving the cached painter balanced for its next
+            // use (render call below, or the next ShaderMask in this frame).
+            // The cached painter's render target is the device-sized child texture,
+            // so it must be sized at device resolution too.
+            let _ = self.get_or_create_offscreen_painter(
+                &device,
+                &queue,
+                format,
+                (dev_width, dev_height),
+            );
             {
-                let mut temp_backend = Backend::new(temp_painter);
+                let offscreen_painter = self
+                    .offscreen_painter
+                    .as_mut()
+                    .expect("offscreen_painter was just populated by get_or_create");
+                // Reset per-frame clip/transform/opacity state before rendering
+                // into this painter.  Without this, a clip_rect command from a
+                // previous ShaderMask call in the same frame leaks
+                // `current_scissor` / `current_rrect_clip` into the next one,
+                // causing the second ShaderMask's child content to be silently
+                // clipped to the prior mask's scissor region.
+                offscreen_painter.reset_frame_state();
+                // After reset the CTM is identity. The child DisplayList carries
+                // logical coordinates, so scale by the DPR to bake it into the
+                // device-sized offscreen — without this the child renders into
+                // the top-left logical quadrant of the device texture.
+                if (dpr_scale - 1.0).abs() > f32::EPSILON {
+                    offscreen_painter.scale(dpr_scale, dpr_scale);
+                }
+                let mut temp_backend = Backend::new(offscreen_painter);
                 for command in child.commands() {
                     dispatch_command(command, &mut temp_backend);
                 }
-                temp_painter = temp_backend.into_painter();
+                // temp_backend drops here → Drop impl calls flush_active_transform(),
+                // balancing any deferred lazy-coalescing save on the offscreen painter.
             }
 
             // Step 4: Flush child content to offscreen texture
@@ -646,31 +902,58 @@ impl CommandRenderer for Backend<'_> {
                     multiview_mask: None,
                 });
             }
-            // Render child batches to offscreen texture
-            if let Err(e) = temp_painter.render(child_tex.view(), &mut encoder) {
+            // Render child batches to the sampleable offscreen texture.
+            // `child_tex` is a pooled texture that carries COPY_SRC, so passing
+            // `sampleable` here lets any advanced-blend op inside the child
+            // display list dst-read from the child's own offscreen as backdrop,
+            // producing correct Multiply/Screen/etc. output rather than falling
+            // back to SrcOver.
+            let child_target = super::render_target::RenderTarget::sampleable(
+                child_tex.view(),
+                child_tex.texture(),
+            );
+            let offscreen_painter = self
+                .offscreen_painter
+                .as_mut()
+                .expect("offscreen_painter was populated in step 2 and not moved");
+            if let Err(e) = offscreen_painter.render(child_target, &mut encoder) {
                 tracing::error!("Failed to render shader mask child content: {}", e);
             }
             queue.submit(std::iter::once(encoder.finish()));
 
-            // Put the cached painter back for reuse
-            self.offscreen_painter = Some(temp_painter);
-
-            // Step 5: Apply shader mask via GPU pipeline
+            // Step 5: Apply shader mask via GPU pipeline. The result texture is
+            // sized at device resolution; `bounds` stays logical so the shader's
+            // gradient-endpoint normalization (scale-invariant) lands correctly.
+            let result_size = Size::new(Pixels(dev_width as f32), Pixels(dev_height as f32));
             let masked_texture = {
-                let mut offscreen = offscreen_arc.lock();
-                let result =
-                    offscreen.render_masked(bounds, shader, blend_mode, child_tex.texture());
+                let offscreen = self
+                    .offscreen
+                    .as_deref_mut()
+                    .expect("checked is_some above");
+                let result = offscreen.render_masked(
+                    bounds,
+                    result_size,
+                    shader,
+                    blend_mode,
+                    child_tex.texture(),
+                );
                 result.into_texture()
             };
 
-            // Step 6: Queue masked result for compositing on main target
-            self.painter.queue_offscreen_result(masked_texture, bounds);
+            // Step 6: Queue masked result for compositing on main target at the
+            // device-space rect (logical `bounds` would composite at half
+            // scale/position on a HiDPI frame).
+            self.painter
+                .queue_offscreen_result(masked_texture, device_bounds);
 
             tracing::debug!(
-                "ShaderMask GPU pipeline complete: bounds={:?}, child_size={}x{}",
+                "ShaderMask GPU pipeline complete: bounds={:?}, device_bounds={:?}, \
+                 dpr_scale={}, child_size={}x{}",
                 bounds,
-                width,
-                height
+                device_bounds,
+                dpr_scale,
+                dev_width,
+                dev_height
             );
             return;
         }
@@ -688,8 +971,10 @@ impl CommandRenderer for Backend<'_> {
         shader: &flui_painting::Shader,
         transform: &Matrix4,
     ) {
-        use super::effects::GradientStop;
-
+        // SrcOver-by-contract: DrawGradient / DrawGradientRRect display-list commands
+        // carry no Paint upstream, so advanced blend is unreachable for gradient-rect
+        // draws via this path. Shape-with-shader-paint (the gradient advanced blend
+        // producer) is handled by dispatch_shader_rect in batches/gradients.rs.
         self.with_transform(transform, |painter| {
             match shader {
                 flui_painting::Shader::LinearGradient {
@@ -703,30 +988,7 @@ impl CommandRenderer for Backend<'_> {
                         return;
                     }
 
-                    // Convert colors and stops to GradientStop array
-                    let gradient_stops: Vec<GradientStop> = if let Some(stop_positions) = stops {
-                        colors
-                            .iter()
-                            .zip(stop_positions.iter())
-                            .map(|(color, pos)| GradientStop::new(*color, *pos))
-                            .collect()
-                    } else {
-                        // Default evenly spaced stops
-                        let count = colors.len();
-                        colors
-                            .iter()
-                            .enumerate()
-                            .map(|(i, color)| {
-                                let pos = if count > 1 {
-                                    i as f32 / (count - 1) as f32
-                                } else {
-                                    0.0
-                                };
-                                GradientStop::new(*color, pos)
-                            })
-                            .collect()
-                    };
-
+                    let gradient_stops = build_gradient_stops(colors, stops.as_ref());
                     painter.gradient_rect(
                         rect,
                         glam::Vec2::new(from.dx.0, from.dy.0),
@@ -746,30 +1008,7 @@ impl CommandRenderer for Backend<'_> {
                         return;
                     }
 
-                    // Convert colors and stops to GradientStop array
-                    let gradient_stops: Vec<GradientStop> = if let Some(stop_positions) = stops {
-                        colors
-                            .iter()
-                            .zip(stop_positions.iter())
-                            .map(|(color, pos)| GradientStop::new(*color, *pos))
-                            .collect()
-                    } else {
-                        // Default evenly spaced stops
-                        let count = colors.len();
-                        colors
-                            .iter()
-                            .enumerate()
-                            .map(|(i, color)| {
-                                let pos = if count > 1 {
-                                    i as f32 / (count - 1) as f32
-                                } else {
-                                    0.0
-                                };
-                                GradientStop::new(*color, pos)
-                            })
-                            .collect()
-                    };
-
+                    let gradient_stops = build_gradient_stops(colors, stops.as_ref());
                     painter.radial_gradient_rect(
                         rect,
                         glam::Vec2::new(center.dx.0, center.dy.0),
@@ -790,29 +1029,7 @@ impl CommandRenderer for Backend<'_> {
                         return;
                     }
 
-                    // Convert colors and stops to GradientStop array
-                    let gradient_stops: Vec<GradientStop> = if let Some(stop_positions) = stops {
-                        colors
-                            .iter()
-                            .zip(stop_positions.iter())
-                            .map(|(color, pos)| GradientStop::new(*color, *pos))
-                            .collect()
-                    } else {
-                        let count = colors.len();
-                        colors
-                            .iter()
-                            .enumerate()
-                            .map(|(i, color)| {
-                                let pos = if count > 1 {
-                                    i as f32 / (count - 1) as f32
-                                } else {
-                                    0.0
-                                };
-                                GradientStop::new(*color, pos)
-                            })
-                            .collect()
-                    };
-
+                    let gradient_stops = build_gradient_stops(colors, stops.as_ref());
                     painter.sweep_gradient_rect(
                         rect,
                         glam::Vec2::new(center.dx.0, center.dy.0),
@@ -837,8 +1054,8 @@ impl CommandRenderer for Backend<'_> {
         shader: &flui_painting::Shader,
         transform: &Matrix4,
     ) {
-        use super::effects::GradientStop;
-
+        // SrcOver-by-contract: DrawGradientRRect carries no Paint upstream, so advanced
+        // blend is unreachable here. See render_gradient for the full rationale.
         self.with_transform(transform, |painter| {
             // Get average corner radius
             let corner_radius =
@@ -857,30 +1074,7 @@ impl CommandRenderer for Backend<'_> {
                         return;
                     }
 
-                    // Convert colors and stops to GradientStop array
-                    let gradient_stops: Vec<GradientStop> = if let Some(stop_positions) = stops {
-                        colors
-                            .iter()
-                            .zip(stop_positions.iter())
-                            .map(|(color, pos)| GradientStop::new(*color, *pos))
-                            .collect()
-                    } else {
-                        // Default evenly spaced stops
-                        let count = colors.len();
-                        colors
-                            .iter()
-                            .enumerate()
-                            .map(|(i, color)| {
-                                let pos = if count > 1 {
-                                    i as f32 / (count - 1) as f32
-                                } else {
-                                    0.0
-                                };
-                                GradientStop::new(*color, pos)
-                            })
-                            .collect()
-                    };
-
+                    let gradient_stops = build_gradient_stops(colors, stops.as_ref());
                     painter.gradient_rect(
                         rrect.rect,
                         glam::Vec2::new(from.dx.0, from.dy.0),
@@ -900,30 +1094,7 @@ impl CommandRenderer for Backend<'_> {
                         return;
                     }
 
-                    // Convert colors and stops to GradientStop array
-                    let gradient_stops: Vec<GradientStop> = if let Some(stop_positions) = stops {
-                        colors
-                            .iter()
-                            .zip(stop_positions.iter())
-                            .map(|(color, pos)| GradientStop::new(*color, *pos))
-                            .collect()
-                    } else {
-                        // Default evenly spaced stops
-                        let count = colors.len();
-                        colors
-                            .iter()
-                            .enumerate()
-                            .map(|(i, color)| {
-                                let pos = if count > 1 {
-                                    i as f32 / (count - 1) as f32
-                                } else {
-                                    0.0
-                                };
-                                GradientStop::new(*color, pos)
-                            })
-                            .collect()
-                    };
-
+                    let gradient_stops = build_gradient_stops(colors, stops.as_ref());
                     painter.radial_gradient_rect(
                         rrect.rect,
                         glam::Vec2::new(center.dx.0, center.dy.0),
@@ -944,28 +1115,7 @@ impl CommandRenderer for Backend<'_> {
                         return;
                     }
 
-                    let gradient_stops: Vec<GradientStop> = if let Some(stop_positions) = stops {
-                        colors
-                            .iter()
-                            .zip(stop_positions.iter())
-                            .map(|(color, pos)| GradientStop::new(*color, *pos))
-                            .collect()
-                    } else {
-                        let count = colors.len();
-                        colors
-                            .iter()
-                            .enumerate()
-                            .map(|(i, color)| {
-                                let pos = if count > 1 {
-                                    i as f32 / (count - 1) as f32
-                                } else {
-                                    0.0
-                                };
-                                GradientStop::new(*color, pos)
-                            })
-                            .collect()
-                    };
-
+                    let gradient_stops = build_gradient_stops(colors, stops.as_ref());
                     painter.sweep_gradient_rect(
                         rrect.rect,
                         glam::Vec2::new(center.dx.0, center.dy.0),
@@ -982,10 +1132,12 @@ impl CommandRenderer for Backend<'_> {
         });
     }
 
-    fn render_color(&mut self, color: Color, _blend_mode: BlendMode, transform: &Matrix4) {
+    fn render_color(&mut self, color: Color, blend_mode: BlendMode, transform: &Matrix4) {
         self.with_transform(transform, |painter| {
             let viewport_bounds = painter.viewport_bounds();
-            let paint = Paint::fill(color);
+            // Carry the command's blend mode so the full-viewport fill composites
+            // correctly (e.g. `DrawColor` with `Clear` punches out the layer).
+            let paint = Paint::fill(color).with_blend_mode(blend_mode);
             painter.rect(viewport_bounds, &paint);
         });
     }
@@ -1013,27 +1165,24 @@ impl CommandRenderer for Backend<'_> {
         _blend_mode: BlendMode,
         transform: &Matrix4,
     ) {
+        // `_blend_mode` is intentionally dropped here. Advanced blend on a
+        // BackdropFilter is a separate future Path-A backdrop-compositor seam,
+        // out of PR-5 scope. PR-5 covers shape/gradient/image producers only.
         use flui_painting::display_list::ImageFilter;
 
-        // Helper: dispatch the child display list (or no-op when None)
-        // without applying any backdrop filter. Used by every fall-back
-        // branch below.
+        // Dispatch the child display list (or no-op when None). Used both as the
+        // fall-back when no blur is applied (non-blur filter / no surface) AND as
+        // the success-path child dispatch after `apply_backdrop_blur` — children
+        // always render, with or without a backdrop behind them.
         //
-        // PR #110 review feedback (F-W2-4): pre-fix this helper called
-        // `this.with_transform(transform, |_painter| {})` before the
-        // dispatch loop. `with_transform` save+applies the transform
-        // then runs the closure body; the empty closure means save
-        // is immediately balanced by restore, so the transform never
-        // reached the subsequent `dispatch_command` loop. Effectively
-        // a misleading no-op. Each `DrawCommand` in a `DisplayList`
-        // carries its own pre-composited transform field (set during
-        // display-list capture), so re-applying the outer
-        // `render_backdrop_filter` transform here is redundant; Path A
-        // (`Renderer::handle_backdrop_filter`) does the same -- it
-        // just dispatches children without re-wrapping. The
-        // `transform` arg is consumed by Stage 2 below (it transforms
-        // `bounds` to device space).
-        let passthrough = |this: &mut Self| {
+        // Each `DrawCommand` carries its own pre-composited transform from
+        // display-list capture, so the outer `transform` is NOT re-applied here
+        // (it is consumed only to map `bounds` to device space below). Re-applying
+        // it would double-transform; Path A (`Renderer::handle_backdrop_filter`)
+        // dispatches children the same way. (PR #110 F-W2-4: an earlier version
+        // wrapped this in `with_transform(transform, |_| {})`, whose empty closure
+        // balanced save with restore immediately — a misleading no-op.)
+        let dispatch_children = |this: &mut Self| {
             if let Some(child) = child {
                 for command in child.commands() {
                     dispatch_command(command, this);
@@ -1041,25 +1190,13 @@ impl CommandRenderer for Backend<'_> {
             }
         };
 
-        // Cycle 4 E-2 U-9: Path B (DisplayList-command-level) backdrop
-        // filter. Mirrors Path A (`Renderer::handle_backdrop_filter`
-        // at renderer.rs:845-960) which already works for the
-        // layer-tree-level `BackdropFilterLayer`. The two paths converge
-        // on the same offscreen pipeline:
-        //
-        //   1. Flush current painter batches to surface
-        //   2. Apply `transform` to `bounds` -> device-space rect,
-        //      clamp against surface extent
-        //   3. COPY_TEXTURE_TO_TEXTURE the clamped region into a
-        //      pooled blur-input texture
-        //   4. Dual Kawase blur on the offscreen renderer
-        //   5. Queue the blurred result for compositing on next flush
-        //   6. Dispatch child display list on top of the blurred backdrop
-        //
-        // Non-blur filters + missing surface/offscreen handles fall
-        // back to passthrough with a `tracing::warn!` so the gap is
-        // observable (the pre-U-9 stub was silent for non-debug builds).
-
+        // Path B (DisplayList-command level) backdrop filter. Shares the
+        // offscreen blur pipeline with Path A (`Renderer::handle_backdrop_filter`,
+        // layer-tree level) via `Backend::apply_backdrop_blur` — the clamp +
+        // copy + blur + composite live there once, so the off-screen-clamp
+        // handling can no longer drift between the two paths. Non-blur filters
+        // and a missing surface fall back to passthrough with a `warn!` so the
+        // gap stays observable.
         let sigma = match filter {
             ImageFilter::Blur { sigma_x, sigma_y } => f32::midpoint(*sigma_x, *sigma_y),
             other => {
@@ -1067,17 +1204,9 @@ impl CommandRenderer for Backend<'_> {
                     "Backdrop filter type {:?} not supported in DisplayList path; passthrough",
                     other
                 );
-                passthrough(self);
+                dispatch_children(self);
                 return;
             }
-        };
-
-        let Some(offscreen_arc) = self.offscreen.clone() else {
-            tracing::warn!(
-                "Backdrop filter: no OffscreenRenderer in DisplayList path; passthrough"
-            );
-            passthrough(self);
-            return;
         };
 
         let (Some(surface_view), Some(surface_texture)) = (self.surface_view, self.surface_texture)
@@ -1087,134 +1216,20 @@ impl CommandRenderer for Backend<'_> {
                  (the surface handles are bound in `Renderer::render` only -- \
                  the shader-mask offscreen path does not bind them, which is expected)"
             );
-            passthrough(self);
+            dispatch_children(self);
             return;
         };
 
-        // Snapshot device/queue/format under a short lock; offscreen
-        // mutation happens later through `render_blur`.
-        let (device, queue, format) = {
-            let off = offscreen_arc.lock();
-            (
-                Arc::clone(off.device()),
-                Arc::clone(off.queue()),
-                off.surface_format(),
-            )
-        };
-
-        // Stage 2: apply `transform` to `bounds` -> device-space rect,
-        // then clamp against the surface texture extent.
-        //
-        // PR #110 review feedback (F-W2-2): pre-fix `bounds` was used
-        // directly as the copy source rect, ignoring `transform`.
-        // `DrawCommand::BackdropFilter` stores `bounds` in local space
-        // and `transform` as the outer transform stack; `paint_bounds()`
-        // composes them via `transform.transform_rect(bounds)`. Using
-        // untransformed `bounds` blurred the wrong region whenever the
-        // canvas transform was non-identity.
-        //
-        // PR #110 review feedback (F-W2-1, P1): pre-fix `x/y/w/h` were
-        // only lower-clamped (`max(0.0)`/`max(1.0)`). If a backdrop
-        // filter is partially off-screen (negative origin or extent
-        // beyond the frame), `copy_texture_to_texture` gets an
-        // out-of-range region and wgpu validation panics at submit
-        // time, dropping the frame. Clamp against the surface texture
-        // extent before computing extents.
+        // Map local `bounds` to device space (the command carries the outer
+        // transform), then run the shared blur (no-op return if off-screen or no
+        // offscreen renderer — children still render below either way).
         let device_rect = transform.transform_rect(&bounds);
-        let surface_extent = surface_texture.size();
-        let surface_w = surface_extent.width;
-        let surface_h = surface_extent.height;
+        self.apply_backdrop_blur(device_rect, sigma, surface_texture, surface_view);
 
-        let x = device_rect.left().0.clamp(0.0, surface_w as f32) as u32;
-        let y = device_rect.top().0.clamp(0.0, surface_h as f32) as u32;
-        // Right/bottom likewise clamp, then derive width/height as the
-        // difference. `saturating_sub` guards the corner case where
-        // device_rect is entirely outside the surface (right <= x).
-        let right = device_rect.right().0.clamp(0.0, surface_w as f32) as u32;
-        let bottom = device_rect.bottom().0.clamp(0.0, surface_h as f32) as u32;
-        let w = right.saturating_sub(x).max(1);
-        let h = bottom.saturating_sub(y).max(1);
-
-        // Refuse if the clamped region is empty (the backdrop region is
-        // entirely off-screen). `copy_texture_to_texture` requires
-        // non-zero extents; falling through to passthrough preserves
-        // the child rendering without GPU validation panics.
-        if right <= x || bottom <= y {
-            tracing::warn!(
-                bounds_l = bounds.left().0,
-                bounds_t = bounds.top().0,
-                bounds_r = bounds.right().0,
-                bounds_b = bounds.bottom().0,
-                surface_w,
-                surface_h,
-                "Backdrop filter: clamped region is empty (entirely off-screen); passthrough"
-            );
-            passthrough(self);
-            return;
-        }
-
-        // Stage 1: flush painter batches to surface so the backdrop
-        // pixels we are about to blur are present.
-        let mut flush_encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("DisplayList Backdrop Flush Encoder"),
-        });
-        if let Err(e) = self.painter.render(surface_view, &mut flush_encoder) {
-            tracing::error!("DisplayList backdrop flush failed: {}", e);
-        }
-
-        // Stage 3: COPY_TEXTURE_TO_TEXTURE surface region -> pooled
-        // blur-input. Acquired from offscreen's texture pool so the
-        // allocation amortises across frames (Path A acquires the
-        // same way).
-        let blur_input = {
-            let offscreen = offscreen_arc.lock();
-            offscreen.texture_pool().acquire(w, h, format)
-        };
-
-        flush_encoder.copy_texture_to_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: surface_texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d { x, y, z: 0 },
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyTextureInfo {
-                texture: blur_input.texture(),
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::Extent3d {
-                width: w,
-                height: h,
-                depth_or_array_layers: 1,
-            },
-        );
-        queue.submit(std::iter::once(flush_encoder.finish()));
-
-        // Stage 4: Dual Kawase blur on the offscreen renderer.
-        let blurred = {
-            let mut offscreen = offscreen_arc.lock();
-            offscreen.render_blur(&blur_input, sigma)
-        };
-
-        // Stage 5: queue blurred result for compositing on next painter
-        // flush. The blurred texture is laid down at the same
-        // device-space rect we just sampled from -- using `bounds`
-        // (local-space) here would composite the blur at the wrong
-        // location whenever `transform` is non-identity.
-        self.painter.queue_offscreen_result(blurred, device_rect);
-
-        // Stage 6: dispatch the child display list on top of the blurred
-        // backdrop. Each child `DrawCommand` carries its own
-        // pre-composited transform from display-list capture, so no
-        // outer transform wrap is needed here (Path A treats child
-        // dispatch the same way).
-        if let Some(child) = child {
-            for command in child.commands() {
-                dispatch_command(command, self);
-            }
-        }
+        // Dispatch the child display list on top of the (maybe-)blurred backdrop.
+        // Each child `DrawCommand` carries its own pre-composited transform, so
+        // no outer transform wrap is needed (Path A dispatches children the same).
+        dispatch_children(self);
     }
 
     fn render_vertices(
@@ -1268,8 +1283,8 @@ impl CommandRenderer for Backend<'_> {
         // Override the trait default (which routes to clip_rrect against an
         // approximating rounded rectangle). Delegate to the Painter's real
         // SDF clip, populating `current_rsuperellipse_clip` so subsequent
-        // rect_instanced draws apply the iOS-squircle SDF (U9 wired the
-        // per-instance kind=2 path).
+        // rect_instanced draws apply the iOS-squircle SDF via the
+        // per-instance kind=2 path.
         self.with_transform(transform, |painter| {
             painter.clip_rsuperellipse(rsuperellipse);
         });
@@ -1278,12 +1293,13 @@ impl CommandRenderer for Backend<'_> {
     fn superellipse_path(
         &mut self,
         rse: flui_types::geometry::RSuperellipse,
-    ) -> flui_types::painting::Path {
+    ) -> std::sync::Arc<flui_types::painting::Path> {
         // Override the trait default (which freshly generates the path
         // every call, no caching). Delegate to the Painter-owned bounded
         // cache so identical superellipses across frames reuse the cached
-        // tessellation. Cache eviction follows PathCache semantics
-        // (`max_entries` + `last_used_frame`).
+        // tessellation. Cache hits pay only for an Arc::clone; the
+        // ~256-command path is never deep-copied. Cache eviction follows
+        // PathCache semantics (`max_entries` + `last_used_frame`).
         self.painter.superellipse_path(&rse)
     }
 
@@ -1315,12 +1331,13 @@ impl CommandRenderer for Backend<'_> {
 
     // ===== Layer Tree Operations split out =====
     //
-    // Cycle 4 E-9: push_clip_* / push_offset / push_transform /
-    // push_opacity / push_color_filter / push_image_filter + their
-    // corresponding pop_* moved to `impl LayerStateStack for Backend`
-    // (below). The visitor methods on this trait stay; the layer-tree
-    // state-stack methods live on the dedicated `LayerStateStack`
-    // trait. See traits.rs E-9 commentary.
+    // push_clip_* / push_offset / push_transform / push_opacity /
+    // push_color_filter / push_image_filter and their corresponding pop_*
+    // methods live in `impl LayerStateStack for Backend` (below), not in
+    // this `CommandRenderer` impl. The visitor methods stay on this trait;
+    // the layer-tree state-stack methods live on the dedicated
+    // `LayerStateStack` trait. See the doc comment on that trait in
+    // traits.rs for why.
 
     fn add_performance_overlay(
         &mut self,
@@ -1402,41 +1419,19 @@ impl CommandRenderer for Backend<'_> {
 }
 
 // ============================================================================
-// LAYER-STATE-STACK IMPL (cycle 4 E-9 split)
+// LAYER-STATE-STACK IMPL
 // ============================================================================
 //
-// The 13 push_/pop_ methods below moved out of the `impl CommandRenderer
-// for Backend` block in cycle 4 E-9 to live on the dedicated
-// `LayerStateStack` trait. Bodies + behavior unchanged; only the
+// The 13 push_/pop_ methods below live on the dedicated `LayerStateStack`
+// trait rather than in the `impl CommandRenderer for Backend` block.
+// Bodies and behavior are unchanged from before the split; only the
 // receiving trait differs. See `crates/flui-engine/src/traits.rs`
 // for the trait-split rationale.
 
-// ColorMatrix row-major layout: `[r0-r4, g0-g4, b0-b4, a0-a4]`.
-// Each row holds (R-coeff, G-coeff, B-coeff, A-coeff, offset) for one
-// output channel: `out = m0*R + m1*G + m2*B + m3*A + m4`.
-// The alpha row sits at indices 15-19; the alpha-out coefficient on
-// alpha-in (`a3`, alpha scaling) is index 18, the alpha offset (`a4`)
-// is index 19. Naming these out keeps the push_color_filter +
-// ImageFilter::Matrix call sites readable (PR #115 review fix).
-const COLOR_MATRIX_ALPHA_SCALE_IDX: usize = 18;
-const COLOR_MATRIX_ALPHA_OFFSET_IDX: usize = 19;
-
-/// Extract (alpha_scale, alpha_offset, effective_alpha) from a
-/// `ColorMatrix`'s alpha row. All three values are clamped to `[0, 1]`.
-/// Helper shared by `push_color_filter` and the
-/// `ImageFilter::Matrix` branch of `push_image_filter`.
-fn color_matrix_effective_alpha(values: &[f32; 20]) -> (f32, f32, f32) {
-    let alpha_scale = values[COLOR_MATRIX_ALPHA_SCALE_IDX].clamp(0.0, 1.0);
-    let alpha_offset = values[COLOR_MATRIX_ALPHA_OFFSET_IDX].clamp(0.0, 1.0);
-    let effective = (alpha_scale + alpha_offset).clamp(0.0, 1.0);
-    (alpha_scale, alpha_offset, effective)
-}
-
 impl LayerStateStack for Backend<'_> {
-    // Cycle 4 wave 5 PR #117 review (Codex P1): every method on
-    // this trait must call `self.flush_active_transform()` BEFORE
-    // any `painter.save` / `painter.restore` / `painter.save_layer`
-    // / `painter.restore_layer` op. E-13's `with_transform` leaves
+    // Every method on this trait must call `self.flush_active_transform()`
+    // BEFORE any `painter.save` / `painter.restore` / `painter.save_layer`
+    // / `painter.restore_layer` op. `with_transform`'s coalescing leaves
     // a deferred `save()` active across consecutive same-matrix
     // calls; if a layer-tree boundary (push_clip etc.) intervened
     // without flushing first, the layer's matched
@@ -1505,10 +1500,24 @@ impl LayerStateStack for Backend<'_> {
 
     fn push_opacity(&mut self, alpha: f32) {
         self.flush_active_transform();
-        // Create a layer with opacity (clamped to [0, 255])
+        // Create a layer with opacity (clamped to [0, 255]).
+        // Blend mode defaults to SrcOver via Paint::fill.
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let alpha_u8 = (alpha.clamp(0.0, 1.0) * 255.0) as u8;
         let paint = Paint::fill(Color::WHITE).with_alpha(alpha_u8);
+        self.painter.save_layer(None, &paint);
+    }
+
+    fn push_opacity_blend(&mut self, alpha: f32, blend: flui_types::painting::BlendMode) {
+        self.flush_active_transform();
+        // Propagate the explicit blend mode into the saveLayer paint so the
+        // compositor reads it from `paint.blend_mode` and routes the layer
+        // through the dst-read advanced compositor path when needed.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let alpha_u8 = (alpha.clamp(0.0, 1.0) * 255.0) as u8;
+        let paint = Paint::fill(Color::WHITE)
+            .with_alpha(alpha_u8)
+            .with_blend_mode(blend);
         self.painter.save_layer(None, &paint);
     }
 
@@ -1517,51 +1526,78 @@ impl LayerStateStack for Backend<'_> {
         self.painter.restore_layer();
     }
 
-    fn push_color_filter(&mut self, filter: &flui_types::painting::ColorMatrix) {
+    fn push_color_filter(&mut self, filter: &flui_types::painting::ColorFilter) {
+        use flui_types::painting::ColorFilter;
+
         self.flush_active_transform();
-        // Check if the matrix is identity (no transformation needed)
-        let identity = flui_types::painting::ColorMatrix::identity();
-        // Exact f32 array comparison is intentional: ColorMatrix::identity()
-        // is built from bit-exact 0.0/1.0 literals, so a transitive equality
-        // check correctly fast-paths the no-op case without ULP slop.
-        #[expect(
-            clippy::float_cmp,
-            reason = "identity matrix is bit-exact (0.0/1.0 literals); exact comparison is correct"
-        )]
-        if filter.values == identity.values {
-            // Identity matrix: use a plain save so pop_color_filter stays balanced
-            self.painter.save_layer(None, &Paint::fill(Color::WHITE));
-            tracing::trace!("push_color_filter: identity matrix, no-op layer");
-            return;
+
+        match filter {
+            ColorFilter::Matrix(m) => {
+                // Identity fast-path: no-op layer keeps push/pop balanced.
+                // Exact f32 comparison is correct: `ColorMatrix::identity()` is
+                // built from bit-exact 0.0/1.0 literals, so a transitive equality
+                // check correctly skips the GPU pass without ULP slop.
+                let identity = flui_types::painting::effects::ColorMatrix::identity();
+                #[expect(
+                    clippy::float_cmp,
+                    reason = "identity matrix is bit-exact (0.0/1.0 literals); exact comparison is correct"
+                )]
+                if m.values == identity.values {
+                    self.painter.save_layer(None, &Paint::fill(Color::WHITE));
+                    tracing::trace!("push_color_filter: identity matrix — no-op layer");
+                    return;
+                }
+                // Real color-matrix: open a filter layer.  The GPU shader applies the
+                // full 5×4 matrix per-pixel (unpremul → matrix → clamp → repremul).
+                self.painter
+                    .save_layer_with_filter(None, LayerFilter::ColorMatrix(m.values));
+                tracing::trace!(
+                    matrix = ?m.values,
+                    "push_color_filter: GPU color-matrix filter layer"
+                );
+            }
+            ColorFilter::Mode { color, blend_mode } => {
+                // Blend a solid filter color over each layer pixel via the
+                // Porter-Duff / W3C blend equation.  Unpremul → blend → clamp →
+                // repremul is applied by the GPU shader.
+                self.painter.save_layer_with_filter(
+                    None,
+                    LayerFilter::Mode {
+                        color: color.to_f32_array(),
+                        blend_mode: *blend_mode,
+                    },
+                );
+                tracing::trace!(
+                    ?color,
+                    ?blend_mode,
+                    "push_color_filter: GPU mode filter layer"
+                );
+            }
+            ColorFilter::LinearToSrgbGamma => {
+                // Linear-light → sRGB-encoded transfer per RGB channel; alpha
+                // passes through unchanged.
+                self.painter
+                    .save_layer_with_filter(None, LayerFilter::Gamma(GammaDirection::LinearToSrgb));
+                tracing::trace!("push_color_filter: GPU LinearToSrgb gamma filter layer");
+            }
+            ColorFilter::SrgbToLinearGamma => {
+                // sRGB-encoded → linear-light transfer per RGB channel; alpha
+                // passes through unchanged.
+                self.painter
+                    .save_layer_with_filter(None, LayerFilter::Gamma(GammaDirection::SrgbToLinear));
+                tracing::trace!("push_color_filter: GPU SrgbToLinear gamma filter layer");
+            }
+            // `ColorFilter` is `#[non_exhaustive]`; a wildcard arm is required by
+            // the compiler.  Open a balanced no-op layer so `pop_color_filter` has a
+            // matching restore, and warn once so unknown variants surface in logs.
+            _ => {
+                tracing::warn!(
+                    "push_color_filter: unknown ColorFilter variant (future extension?) \
+                     — falling back to no-op layer to keep push/pop balanced"
+                );
+                self.painter.save_layer(None, &Paint::fill(Color::WHITE));
+            }
         }
-
-        // Pragmatic approximation: extract opacity and tint from the
-        // color matrix. The alpha-row coefficient layout
-        // (`a3` = scale, `a4` = offset) lives in
-        // `color_matrix_effective_alpha`; see the helper comment
-        // above for the row-major index mapping.
-        let (_alpha_scale, _alpha_offset, effective_alpha) =
-            color_matrix_effective_alpha(&filter.values);
-        let tinted = filter.apply([1.0, 1.0, 1.0, 1.0]);
-
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let tint_color = Color::rgba(
-            (tinted[0] * 255.0) as u8,
-            (tinted[1] * 255.0) as u8,
-            (tinted[2] * 255.0) as u8,
-            (effective_alpha * 255.0) as u8,
-        );
-
-        let paint = Paint::fill(tint_color);
-        self.painter.save_layer(None, &paint);
-
-        tracing::debug!(
-            "push_color_filter: approximation tint=({},{},{}) alpha={:.2}",
-            tint_color.r,
-            tint_color.g,
-            tint_color.b,
-            effective_alpha
-        );
     }
 
     fn pop_color_filter(&mut self) {
@@ -1574,78 +1610,88 @@ impl LayerStateStack for Backend<'_> {
 
         self.flush_active_transform();
 
-        // Pragmatic approximation: full GPU image filters (blur, dilate, erode)
-        // require render-to-texture + compute shader post-processing which needs
-        // offscreen infrastructure not yet available. Instead, we use save_layer
-        // to isolate the filtered content for future GPU pass integration.
         match filter {
             ImageFilter::Blur { sigma_x, sigma_y } => {
-                let paint = Paint::fill(Color::WHITE);
-                self.painter.save_layer(None, &paint);
-                tracing::debug!(
-                    "push_image_filter(Blur): save_layer for blur sigma_x={:.2}, sigma_y={:.2} \
-                     (GPU blur not yet implemented)",
+                // Full GPU separable Gaussian blur via two H/V sub-passes
+                // (PINNED #2: premultiplied-direct, sRGB-encoded, √3·σ kernel).
+                self.painter
+                    .save_layer_with_image_filter(ImageFilterSpec::Blur {
+                        sigma_x: *sigma_x,
+                        sigma_y: *sigma_y,
+                    });
+                tracing::trace!(
                     sigma_x,
                     sigma_y,
+                    "push_image_filter(Blur): GPU Gaussian blur layer opened"
                 );
             }
             ImageFilter::Dilate { radius } => {
-                let paint = Paint::fill(Color::WHITE);
-                self.painter.save_layer(None, &paint);
-                tracing::debug!(
-                    "push_image_filter(Dilate): save_layer for dilate radius={:.2} \
-                     (GPU morphology not yet implemented)",
+                self.painter
+                    .save_layer_with_image_filter(ImageFilterSpec::Morph {
+                        radius: *radius,
+                        op: MorphOp::Dilate,
+                    });
+                tracing::trace!(
                     radius,
+                    "push_image_filter(Dilate): GPU morphology dilate layer opened"
                 );
             }
             ImageFilter::Erode { radius } => {
-                let paint = Paint::fill(Color::WHITE);
-                self.painter.save_layer(None, &paint);
-                tracing::debug!(
-                    "push_image_filter(Erode): save_layer for erode radius={:.2} \
-                     (GPU morphology not yet implemented)",
+                self.painter
+                    .save_layer_with_image_filter(ImageFilterSpec::Morph {
+                        radius: *radius,
+                        op: MorphOp::Erode,
+                    });
+                tracing::trace!(
                     radius,
+                    "push_image_filter(Erode): GPU morphology erode layer opened"
                 );
             }
             ImageFilter::Matrix(matrix) => {
-                let (_alpha_scale, _alpha_offset, effective_alpha) =
-                    color_matrix_effective_alpha(&matrix.values);
-                let tinted = matrix.apply([1.0, 1.0, 1.0, 1.0]);
-
-                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                let tint_color = Color::rgba(
-                    (tinted[0] * 255.0) as u8,
-                    (tinted[1] * 255.0) as u8,
-                    (tinted[2] * 255.0) as u8,
-                    (effective_alpha * 255.0) as u8,
-                );
-                let paint = Paint::fill(tint_color);
-                self.painter.save_layer(None, &paint);
-                tracing::debug!(
-                    "push_image_filter(Matrix): approximation tint=({},{},{}) alpha={:.2}",
-                    tint_color.r,
-                    tint_color.g,
-                    tint_color.b,
-                    effective_alpha,
+                // Full GPU color-matrix pass — no approximation.
+                self.painter
+                    .save_layer_with_filter(None, LayerFilter::ColorMatrix(matrix.values));
+                tracing::trace!(
+                    matrix = ?matrix.values,
+                    "push_image_filter(Matrix): GPU color-matrix filter layer"
                 );
             }
             ImageFilter::ColorAdjust(adjustment) => {
-                let paint = Paint::fill(Color::WHITE);
-                self.painter.save_layer(None, &paint);
-                tracing::debug!(
-                    "push_image_filter(ColorAdjust): save_layer for {:?} \
-                     (GPU color adjust not yet implemented)",
-                    adjustment,
+                // Promote to a color matrix so the same GPU pass handles it.
+                let matrix = adjustment.to_color_matrix();
+                self.painter
+                    .save_layer_with_filter(None, LayerFilter::ColorMatrix(matrix.values));
+                tracing::trace!(
+                    ?adjustment,
+                    "push_image_filter(ColorAdjust): GPU color-matrix filter layer"
                 );
             }
             ImageFilter::Compose(filters) => {
-                let paint = Paint::fill(Color::WHITE);
-                self.painter.save_layer(None, &paint);
-                tracing::debug!(
-                    "push_image_filter(Compose): save_layer for {} chained filters \
-                     (GPU compose not yet implemented)",
-                    filters.len(),
-                );
+                // Flatten the AST at record time (depth-first, left-to-right =
+                // inner-first, PINNED #4).  The resulting flat `passes` vec is
+                // carried by `ImageFilterSpec::Chain` and handed to `restore_layer`,
+                // which emits a single `DrawItem::Filter` with `cumulative_growth`
+                // bounds and the full ordered chain.
+                let mut passes: SmallVec<[ImageFilterPass; 4]> = SmallVec::new();
+                flatten_compose(filters, &mut passes);
+
+                if passes.is_empty() {
+                    // Degenerate empty Compose — no filter math to apply.  Open a
+                    // plain group layer so that save/restore remains balanced without
+                    // emitting a `DrawItem::Filter` for a zero-length chain.
+                    let paint = Paint::fill(Color::WHITE);
+                    self.painter.save_layer(None, &paint);
+                    tracing::trace!(
+                        "push_image_filter(Compose): empty Compose — opened plain group"
+                    );
+                } else {
+                    self.painter
+                        .save_layer_with_image_filter(ImageFilterSpec::Chain(passes));
+                    tracing::trace!(
+                        "push_image_filter(Compose): {} flattened passes",
+                        filters.len(),
+                    );
+                }
             }
             #[cfg(debug_assertions)]
             ImageFilter::OverflowIndicator {
@@ -1667,5 +1713,742 @@ impl LayerStateStack for Backend<'_> {
     fn pop_image_filter(&mut self) {
         self.flush_active_transform();
         self.painter.restore_layer();
+    }
+}
+
+// ─── Compose flatten ──────────────────────────────────────────────────────────
+
+/// Flatten a `Compose(Vec<ImageFilter>)` AST into an ordered `ImageFilterPass` vec.
+///
+/// Traverses `filters` depth-first, left-to-right (index 0 = innermost = applied
+/// first, PINNED #4 verified against Flutter `dl_compose_image_filter.cc:33-51`).
+/// Nested `Compose` nodes are recursed into at record time — the resulting `out`
+/// vec is flat with no GPU-side recursion and no nested IR.
+///
+/// ## Variant mapping
+///
+/// - `Blur{σx,σy}` → [`ImageFilterPass::Blur`]
+/// - `Dilate{r}` → [`ImageFilterPass::Morph`] (op: Dilate)
+/// - `Erode{r}` → [`ImageFilterPass::Morph`] (op: Erode)
+/// - `Matrix(m)` → [`ImageFilterPass::ColorMatrix`] (`m.values`)
+/// - `ColorAdjust(a)` → [`ImageFilterPass::ColorMatrix`] (`a.to_color_matrix().values`)
+/// - nested `Compose(inner)` → recurse (depth-first, index order preserved)
+/// - `OverflowIndicator` (debug only) → [`ImageFilterPass::Identity`] + `tracing::debug!`
+///   (index-faithful: never elide, never shift sibling positions)
+///
+/// ## No `_` catch-all
+///
+/// The inner `match` is exhaustive: adding a new `ImageFilter` variant forces
+/// a compile error here, ensuring the flatten stays up-to-date.
+pub(crate) fn flatten_compose(
+    filters: &[flui_painting::display_list::ImageFilter],
+    out: &mut SmallVec<[ImageFilterPass; 4]>,
+) {
+    use flui_painting::display_list::ImageFilter;
+    for filter in filters {
+        match filter {
+            ImageFilter::Blur { sigma_x, sigma_y } => {
+                out.push(ImageFilterPass::Blur {
+                    sigma_x: *sigma_x,
+                    sigma_y: *sigma_y,
+                });
+            }
+            ImageFilter::Dilate { radius } => {
+                out.push(ImageFilterPass::Morph {
+                    radius: *radius,
+                    op: MorphOp::Dilate,
+                });
+            }
+            ImageFilter::Erode { radius } => {
+                out.push(ImageFilterPass::Morph {
+                    radius: *radius,
+                    op: MorphOp::Erode,
+                });
+            }
+            ImageFilter::Matrix(matrix) => {
+                out.push(ImageFilterPass::ColorMatrix(matrix.values));
+            }
+            ImageFilter::ColorAdjust(adjustment) => {
+                out.push(ImageFilterPass::ColorMatrix(
+                    adjustment.to_color_matrix().values,
+                ));
+            }
+            ImageFilter::Compose(inner_filters) => {
+                // Depth-first recursion: inner_filters[0] is innermost at this level.
+                flatten_compose(inner_filters, out);
+            }
+            #[cfg(debug_assertions)]
+            ImageFilter::OverflowIndicator {
+                overflow_h,
+                overflow_v,
+                ..
+            } => {
+                // Push Identity to preserve index positions — eliding would shift
+                // sibling filter positions, changing the fold order (PINNED #4).
+                out.push(ImageFilterPass::Identity);
+                tracing::debug!(
+                    overflow_h,
+                    overflow_v,
+                    "flatten_compose(OverflowIndicator): no GPU pass for overflow \
+                     indicator inside Compose; pushing Identity to preserve chain indices"
+                );
+            }
+        }
+    }
+}
+
+#[cfg(all(test, feature = "enable-wgpu-tests"))]
+mod tests {
+    use super::*;
+    use crate::traits::CommandRenderer;
+
+    /// Acquire a real device/queue. Returns `None` when no GPU adapter exists
+    /// (CI without a GPU), so the test skips gracefully.
+    fn test_device_and_queue() -> Option<(Arc<wgpu::Device>, Arc<wgpu::Queue>)> {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::LowPower,
+            force_fallback_adapter: false,
+            compatible_surface: None,
+        }))
+        .ok()?;
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("ShaderMask HiDPI Test Device"),
+            ..Default::default()
+        }))
+        .ok()?;
+        Some((Arc::new(device), Arc::new(queue)))
+    }
+
+    /// BUG 2 (HiDPI shader mask): the offscreen child/result textures must be
+    /// allocated at DEVICE resolution (`bounds * dpr`) and the masked result
+    /// composited at the device-space rect, sourcing the DPR from the live
+    /// painter CTM (not the identity `_transform` paint-path argument).
+    ///
+    /// Under a `scale(2)` CTM a `ShaderMask` over logical bounds (0,0,100,100)
+    /// must allocate a 200x200 offscreen and composite at device (0,0,200,200).
+    /// Red before the fix: 100x100 offscreen composited at (0,0,100,100)
+    /// (half resolution, quarter area).
+    #[test]
+    fn shader_mask_offscreen_is_device_sized_under_dpr() {
+        use super::super::offscreen::OffscreenRenderer;
+        use super::super::painter::WgpuPainter;
+
+        let Some((device, queue)) = test_device_and_queue() else {
+            return; // No GPU here; skip gracefully.
+        };
+
+        let format = wgpu::TextureFormat::Bgra8Unorm;
+
+        let mut offscreen = OffscreenRenderer::new(Arc::clone(&device), Arc::clone(&queue), format);
+        let mut painter = WgpuPainter::with_shared_device(
+            Arc::clone(&device),
+            Arc::clone(&queue),
+            format,
+            (800, 800),
+        );
+        let mut backend = Backend::with_offscreen(&mut painter, &mut offscreen);
+
+        // Simulate the `RenderView` DPR root transform on the live CTM.
+        backend.painter_mut().scale(2.0, 2.0);
+
+        // Child display list: a single 100x100 rect, built via the public Canvas.
+        let mut canvas = flui_painting::Canvas::new();
+        canvas.draw_rect(
+            Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0)),
+            &Paint::fill(Color::WHITE),
+        );
+        let child = canvas.finish();
+
+        let shader = flui_painting::Shader::solid(Color::WHITE);
+        let bounds = Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0));
+
+        // `_transform` is identity on the paint path — the DPR comes from the CTM.
+        backend.render_shader_mask(
+            &child,
+            &shader,
+            bounds,
+            BlendMode::SrcOver,
+            &Matrix4::IDENTITY,
+        );
+
+        let results = backend.painter().offscreen_results_for_test();
+        assert_eq!(
+            results.len(),
+            1,
+            "shader mask must queue exactly one offscreen composite"
+        );
+        let (composite_rect, tex_w, tex_h) = results[0];
+
+        // Result texture allocated at device resolution.
+        assert_eq!(
+            (tex_w, tex_h),
+            (200, 200),
+            "shader-mask offscreen must be device-sized (200x200) under DPR=2; \
+             got {tex_w}x{tex_h} (100x100 means the CTM scale was dropped)"
+        );
+
+        // Composited at the device-space rect (0,0,200,200).
+        assert!(
+            composite_rect.left().0.abs() < 0.5
+                && composite_rect.top().0.abs() < 0.5
+                && (composite_rect.right().0 - 200.0).abs() < 0.5
+                && (composite_rect.bottom().0 - 200.0).abs() < 0.5,
+            "shader-mask composite rect must span device (0,0,200,200) under DPR=2; \
+             got {composite_rect:?}"
+        );
+    }
+
+    /// Locks the gradient-uniform / device-sizing split under HiDPI.
+    ///
+    /// `render_masked` receives `child_bounds` in LOGICAL pixels (for gradient
+    /// normalization) but `result_size` in DEVICE pixels. A regression that passes
+    /// device-sized bounds as `child_bounds` would misplace gradient stop positions;
+    /// a regression that passes logical size as `result_size` would under-allocate.
+    ///
+    /// This test uses a LINEAR-GRADIENT shader (not solid) to exercise the
+    /// gradient-uniform branch. Under DPR=2 over logical bounds (0,0,100,100):
+    /// - result texture must be 200×200 (device-sized)
+    /// - composite rect must cover device (0,0,200,200)
+    /// - the dispatch must not panic (gradient uniforms stay in logical space)
+    ///
+    /// Red before the fix: result texture is 100×100 (logical size fed as
+    /// `result_size`) and composite rect is (0,0,100,100).
+    #[test]
+    fn shader_mask_gradient_is_device_sized_under_dpr() {
+        use super::super::offscreen::OffscreenRenderer;
+        use super::super::painter::WgpuPainter;
+        use flui_types::painting::TileMode;
+
+        let Some((device, queue)) = test_device_and_queue() else {
+            return; // No GPU here; skip gracefully.
+        };
+
+        let format = wgpu::TextureFormat::Bgra8Unorm;
+
+        let mut offscreen = OffscreenRenderer::new(Arc::clone(&device), Arc::clone(&queue), format);
+        let mut painter = WgpuPainter::with_shared_device(
+            Arc::clone(&device),
+            Arc::clone(&queue),
+            format,
+            (800, 800),
+        );
+        let mut backend = Backend::with_offscreen(&mut painter, &mut offscreen);
+
+        // Simulate DPR=2 on the live CTM.
+        backend.painter_mut().scale(2.0, 2.0);
+
+        // Child display list: a white rect matching the logical mask bounds.
+        let mut canvas = flui_painting::Canvas::new();
+        let bounds = Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0));
+        canvas.draw_rect(bounds, &Paint::fill(Color::WHITE));
+        let child = canvas.finish();
+
+        // Linear gradient: black-to-white left-to-right across the logical bounds.
+        // `to_mask_uniform_data` normalizes endpoints as (endpoint - origin) / extent;
+        // both endpoints and `child_bounds` are logical, so normalization is correct.
+        let shader = flui_painting::Shader::linear_gradient(
+            Offset::new(px(0.0), px(0.0)),
+            Offset::new(px(100.0), px(0.0)),
+            vec![Color::BLACK, Color::WHITE],
+            None,
+            TileMode::Clamp,
+        );
+
+        backend.render_shader_mask(
+            &child,
+            &shader,
+            bounds,
+            BlendMode::SrcOver,
+            &Matrix4::IDENTITY,
+        );
+
+        let results = backend.painter().offscreen_results_for_test();
+        assert_eq!(
+            results.len(),
+            1,
+            "gradient shader mask must queue exactly one offscreen composite"
+        );
+        let (composite_rect, tex_w, tex_h) = results[0];
+
+        // Result texture must be device-sized: 200×200 under DPR=2.
+        assert_eq!(
+            (tex_w, tex_h),
+            (200, 200),
+            "gradient shader-mask offscreen must be device-sized (200×200) under DPR=2; \
+             got {tex_w}×{tex_h} — logical sizing means the CTM scale was ignored for \
+             result_size"
+        );
+
+        // Composite must cover device (0,0,200,200).
+        assert!(
+            composite_rect.left().0.abs() < 0.5
+                && composite_rect.top().0.abs() < 0.5
+                && (composite_rect.right().0 - 200.0).abs() < 0.5
+                && (composite_rect.bottom().0 - 200.0).abs() < 0.5,
+            "gradient shader-mask composite rect must be (0,0,200,200) under DPR=2; \
+             got {composite_rect:?}"
+        );
+    }
+
+    /// Locks P2 #1: `render_shader_mask` must flush the backend's deferred
+    /// transform coalescing state before reading the painter CTM.
+    ///
+    /// The Backend's `with_transform` mechanism batches consecutive same-matrix
+    /// draw calls by leaving a `save()+apply` on the painter stack between calls,
+    /// clearing it lazily on the next transform change. If `render_shader_mask`
+    /// reads `current_transform_matrix()` / `current_max_scale()` WITHOUT first
+    /// calling `flush_active_transform()`, it reads the PRIOR command's transform
+    /// stacked on top of the DPR root, and sizes/positions the offscreen from
+    /// stale state.
+    ///
+    /// Scenario:
+    ///   1. Main painter CTM = scale(2) (DPR root, pushed by the test before
+    ///      any commands, simulating RenderView).
+    ///   2. `render_rect` is called with a non-identity per-command transform
+    ///      `scale(3, 3, 1)`. `with_transform` leaves `active_transform =
+    ///      Some(scale3)` on the stack (the painter's current transform matrix
+    ///      is now scale(2)*scale(3) = scale(6) in the lazy-save layer).
+    ///   3. `render_shader_mask` is called for bounds (0,0,100,100) under the
+    ///      DPR=2 root CTM (no additional per-mask transform, _transform=identity).
+    ///
+    ///   Without the flush: `current_max_scale()` returns ≈6.0 (scale(6) from
+    ///   the still-active rect transform), device_size ≈ 600, composite rect ≈
+    ///   (0,0,600,600).
+    ///   With the flush (fix): `flush_active_transform()` restores the lazy save,
+    ///   `current_max_scale()` returns ≈2.0 (the DPR root only), device_size =
+    ///   200, composite rect = (0,0,200,200).
+    ///
+    /// Red-before: tex 600×600, composite (0,0,600,600).
+    /// Green-after: tex 200×200, composite (0,0,200,200).
+    #[test]
+    fn shader_mask_uses_own_transform_not_prior_command() {
+        use super::super::offscreen::OffscreenRenderer;
+        use super::super::painter::WgpuPainter;
+
+        let Some((device, queue)) = test_device_and_queue() else {
+            return; // No GPU here; skip gracefully.
+        };
+
+        let format = wgpu::TextureFormat::Bgra8Unorm;
+
+        let mut offscreen = OffscreenRenderer::new(Arc::clone(&device), Arc::clone(&queue), format);
+        let mut painter = WgpuPainter::with_shared_device(
+            Arc::clone(&device),
+            Arc::clone(&queue),
+            format,
+            (800, 800),
+        );
+        let mut backend = Backend::with_offscreen(&mut painter, &mut offscreen);
+
+        // Step 1: push the DPR root scale(2) into the main painter CTM — this
+        // happens before any command dispatch in a real frame.
+        backend.painter_mut().scale(2.0, 2.0);
+
+        // Step 2: dispatch a rect with a non-identity per-command transform. This
+        // calls `with_transform(scale3_matrix, …)` which leaves
+        // `active_transform = Some(scale3)` and the painter's CTM temporarily at
+        // scale(2)*scale(3) = scale(6).
+        let scale3_matrix = Matrix4::scaling(3.0, 3.0, 1.0);
+        let prior_rect_bounds = Rect::from_xywh(px(0.0), px(0.0), px(10.0), px(10.0));
+        backend.render_rect(prior_rect_bounds, &Paint::fill(Color::RED), &scale3_matrix);
+
+        // Step 3: build the ShaderMask child display list and issue the mask
+        // under the DPR=2 root CTM (_transform = identity, as on the paint path).
+        let mut canvas = flui_painting::Canvas::new();
+        let bounds = Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0));
+        canvas.draw_rect(bounds, &Paint::fill(Color::WHITE));
+        let child = canvas.finish();
+        let shader = flui_painting::Shader::solid(Color::WHITE);
+
+        backend.render_shader_mask(
+            &child,
+            &shader,
+            bounds,
+            BlendMode::SrcOver,
+            &Matrix4::IDENTITY,
+        );
+
+        let results = backend.painter().offscreen_results_for_test();
+        assert_eq!(
+            results.len(),
+            1,
+            "shader mask must queue exactly one offscreen composite"
+        );
+        let (composite_rect, tex_w, tex_h) = results[0];
+
+        // Must be sized at DPR=2 (200×200), NOT at scale(2)*scale(3)=scale(6)
+        // (600×600) which would be the result if the deferred transform was not
+        // flushed before reading the CTM.
+        assert_eq!(
+            (tex_w, tex_h),
+            (200, 200),
+            "shader-mask offscreen must be 200×200 (DPR=2 only); got {tex_w}×{tex_h} — \
+             600×600 indicates the prior rect's deferred scale(3) was not flushed \
+             before the mask read the CTM (stale active_transform leak)"
+        );
+
+        // Composite rect must also derive from the DPR=2 CTM, not scale(6).
+        assert!(
+            composite_rect.left().0.abs() < 0.5
+                && composite_rect.top().0.abs() < 0.5
+                && (composite_rect.right().0 - 200.0).abs() < 0.5
+                && (composite_rect.bottom().0 - 200.0).abs() < 0.5,
+            "shader-mask composite rect must be (0,0,200,200) under DPR=2; \
+             got {composite_rect:?} — (0,0,600,600) indicates stale prior-rect \
+             transform leaked into the mask CTM read"
+        );
+    }
+
+    // ── ShaderMask child with advanced blend: Multiply applies, no panic ─────
+
+    /// Regression test for BLOCKER 2a: a ShaderMask whose child DisplayList
+    /// contains an advanced-blend shape (Multiply) must dst-read from the child's
+    /// own offscreen — NOT fall back to SrcOver and NOT panic.
+    ///
+    /// **Setup:**
+    /// - Child display list: (1) opaque blue rect (SrcOver), (2) opaque orange
+    ///   rect with `BlendMode::Multiply`.  The sampleable child texture means
+    ///   the Multiply shape dst-reads the blue backdrop that step (1) laid down.
+    /// - Solid-white shader mask (passthrough alpha) — the mask does not change
+    ///   the color, so the composited result on the main surface should reflect
+    ///   the advanced blend outcome.
+    ///
+    /// **What this proves:**
+    /// - Pre-fix (`view_only`): advanced shape fell back to SrcOver → orange.
+    /// - Post-fix (`sampleable`): advanced shape dst-reads blue → Multiply(orange,
+    ///   blue) = darker value in R and G channels.
+    ///
+    /// The test asserts no panic, and that the composited center pixel is NOT
+    /// orange-like (SrcOver), but darker (Multiply).
+    #[test]
+    fn shader_mask_child_advanced_blend_uses_sampleable_not_srcover() {
+        use super::super::offscreen::OffscreenRenderer;
+        use super::super::painter::WgpuPainter;
+        use super::super::render_target::RenderTarget;
+        use flui_types::{Color, Rect, geometry::Pixels, painting::BlendMode};
+
+        // Use Rgba8Unorm so readback values are straightforward.
+        const W: u32 = 64;
+        const H: u32 = 64;
+
+        let Some((device, queue)) = test_device_and_queue() else {
+            return; // No GPU — skip gracefully.
+        };
+
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        let bounds = Rect::from_xywh(Pixels(0.0), Pixels(0.0), Pixels(W as f32), Pixels(H as f32));
+
+        let mut offscreen = OffscreenRenderer::new(Arc::clone(&device), Arc::clone(&queue), format);
+        let mut painter = WgpuPainter::with_shared_device(
+            Arc::clone(&device),
+            Arc::clone(&queue),
+            format,
+            (W, H),
+        );
+
+        // Build child display list:
+        //   Step 1 — opaque blue rect (SrcOver): establishes child backdrop.
+        //   Step 2 — opaque orange rect (Multiply): must dst-read the blue backdrop.
+        let blue_color = Color::rgba(40, 60, 220, 255);
+        let orange_color = Color::rgba(200, 120, 40, 255);
+        let mut canvas = flui_painting::Canvas::new();
+        canvas.draw_rect(bounds, &Paint::fill(blue_color));
+        canvas.draw_rect(
+            bounds,
+            &Paint::fill(orange_color).with_blend_mode(BlendMode::Multiply),
+        );
+        let child = canvas.finish();
+
+        // Solid-white shader: passthrough — mask does not alter child colors.
+        let shader = flui_painting::Shader::solid(Color::WHITE);
+
+        // Call the method under test — must not panic.
+        {
+            let mut backend = Backend::with_offscreen(&mut painter, &mut offscreen);
+            backend.render_shader_mask(
+                &child,
+                &shader,
+                bounds,
+                BlendMode::SrcOver,
+                &Matrix4::IDENTITY,
+            );
+            // backend drops here → Drop impl calls flush_active_transform() so
+            // the painter borrow is released cleanly before painter.render below.
+        }
+
+        // Render the painter onto a sampleable main surface to composite the
+        // queued ShaderMask offscreen result.
+        let main_surface = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("ShaderMask Advanced Test Surface"),
+            size: wgpu::Extent3d {
+                width: W,
+                height: H,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let main_view = main_surface.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("ShaderMask Advanced Test Encoder"),
+        });
+        // Pre-clear main surface to black (so non-opaque composites are visible).
+        {
+            let _clear = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Main Surface Clear"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &main_view,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+        }
+        // Composite the ShaderMask result onto the main surface.
+        // The backend was dropped above (releasing the borrow); painter is
+        // now exclusively accessible for the final render call.
+        let render_target = RenderTarget::sampleable(&main_view, &main_surface);
+        painter
+            .render(render_target, &mut encoder)
+            .expect("painter.render must succeed on a GPU-enabled host");
+        queue.submit(std::iter::once(encoder.finish()));
+
+        // Readback center pixel of the main surface.
+        let pixel = {
+            let bytes_per_pixel = 4u32;
+            let unpadded = W * bytes_per_pixel;
+            let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+            let padded = unpadded.div_ceil(align) * align;
+            let buf = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("ShaderMask Advanced Readback"),
+                size: u64::from(padded * H),
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            });
+            let mut copy_enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("ShaderMask Advanced Readback Encoder"),
+            });
+            copy_enc.copy_texture_to_buffer(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &main_surface,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::TexelCopyBufferInfo {
+                    buffer: &buf,
+                    layout: wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(padded),
+                        rows_per_image: Some(H),
+                    },
+                },
+                wgpu::Extent3d {
+                    width: W,
+                    height: H,
+                    depth_or_array_layers: 1,
+                },
+            );
+            queue.submit(std::iter::once(copy_enc.finish()));
+            let slice = buf.slice(..);
+            slice.map_async(wgpu::MapMode::Read, |_| {});
+            device
+                .poll(wgpu::PollType::Wait {
+                    submission_index: None,
+                    timeout: None,
+                })
+                .expect("readback poll must complete");
+            let data = slice.get_mapped_range();
+            let center = (H / 2) as usize * padded as usize + (W / 2) as usize * 4;
+            let px = [
+                data[center],
+                data[center + 1],
+                data[center + 2],
+                data[center + 3],
+            ];
+            drop(data);
+            buf.unmap();
+            px
+        };
+
+        // CPU oracle: Multiply(orange, blue).
+        let blend_result = orange_color.blend(blue_color, BlendMode::Multiply);
+        let [br, bg, bb, ba] = blend_result.to_f32_array();
+        #[allow(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "clamped [0,1]*255; truncation safe"
+        )]
+        let to_u8 = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+        let multiply_oracle = [to_u8(br * ba), to_u8(bg * ba), to_u8(bb * ba), to_u8(ba)];
+
+        // SrcOver of orange over blue: opaque orange wins (R≈200, G≈120, B≈40).
+        let srcover_result = orange_color.blend(blue_color, BlendMode::SrcOver);
+        let [sr, sg, sb, sa] = srcover_result.to_f32_array();
+        let srcover_oracle = [to_u8(sr * sa), to_u8(sg * sa), to_u8(sb * sa), to_u8(sa)];
+
+        let tol = 6i16; // ±6: absorbs shader-mask pipeline quantization
+        let within = |a: u8, b: u8| (i16::from(a) - i16::from(b)).abs() <= tol;
+        let matches_multiply = pixel
+            .iter()
+            .zip(multiply_oracle.iter())
+            .all(|(&a, &b)| within(a, b));
+        let matches_srcover = pixel
+            .iter()
+            .zip(srcover_oracle.iter())
+            .all(|(&a, &b)| within(a, b));
+
+        // Must not be SrcOver (the pre-fix fallback).
+        assert!(
+            !matches_srcover,
+            "ShaderMask child advanced Multiply must NOT fall back to SrcOver; \
+             pixel={pixel:?} matches srcover_oracle={srcover_oracle:?}. \
+             Indicates `child_target` is still `view_only` instead of `sampleable`."
+        );
+
+        // Must match the Multiply oracle (or at least be non-trivially different from SrcOver).
+        assert!(
+            matches_multiply,
+            "ShaderMask child advanced Multiply must match the CPU Multiply oracle; \
+             pixel={pixel:?}, multiply_oracle={multiply_oracle:?}, srcover_oracle={srcover_oracle:?}."
+        );
+    }
+
+    // ── Backdrop filter: composite rect is clamped when crossing edge ─────────
+
+    /// Path B (`render_backdrop_filter`) must composite the blurred texture at the
+    /// CLAMPED rect that matches the copy source, not at the unclamped `device_rect`.
+    ///
+    /// Setup: 64×64 surface, backdrop `bounds` covering (32,32)→(100,100) in local
+    /// space with identity `transform`.  After transform: `device_rect` spans
+    /// x=32..100, y=32..100 (w=68, h=68), but the surface is only 64 wide/tall, so
+    /// the clamped copy region is x=32, y=32, w=32, h=32.
+    ///
+    /// Pre-fix: `queue_offscreen_result` receives the unclamped `device_rect`
+    /// (left=32, width=68) → composite_rect.width() ≈ 68 → test FAILS.
+    /// Post-fix: `queue_offscreen_result` receives the clamped rect
+    /// (left=32, width=32) → composite_rect.width() ≈ 32 → test PASSES.
+    #[test]
+    fn backdrop_filter_composites_at_clamped_rect_when_crossing_edge() {
+        use super::super::offscreen::OffscreenRenderer;
+        use super::super::painter::WgpuPainter;
+        use flui_painting::display_list::ImageFilter;
+
+        const SURFACE_W: u32 = 64;
+        const SURFACE_H: u32 = 64;
+
+        let Some((device, queue)) = test_device_and_queue() else {
+            return; // No GPU — skip gracefully.
+        };
+
+        let format = wgpu::TextureFormat::Bgra8Unorm;
+
+        let mut offscreen = OffscreenRenderer::new(Arc::clone(&device), Arc::clone(&queue), format);
+        let mut painter = WgpuPainter::with_shared_device(
+            Arc::clone(&device),
+            Arc::clone(&queue),
+            format,
+            (SURFACE_W, SURFACE_H),
+        );
+
+        // Create a minimal surface texture that `bind_surface` can reference.
+        // Needs RENDER_ATTACHMENT (for the flush render pass), TEXTURE_BINDING,
+        // COPY_SRC (copy_texture_to_texture source), and COPY_DST.
+        let surface_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Backdrop Edge Test Surface"),
+            size: wgpu::Extent3d {
+                width: SURFACE_W,
+                height: SURFACE_H,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let surface_view = surface_texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        // Bounds in local space: (32,32) → (100,100).  With identity transform,
+        // device_rect == bounds == left=32, top=32, right=100, bottom=100.
+        // Clamped to 64×64 surface: right→64, bottom→64, so w=32, h=32.
+        // The discriminating assertion: composite_rect.width() must be 32, not 68.
+        let filter_bounds = Rect::from_xywh(px(32.0), px(32.0), px(68.0), px(68.0));
+        let filter = ImageFilter::Blur {
+            sigma_x: 4.0,
+            sigma_y: 4.0,
+        };
+
+        let mut backend = Backend::with_offscreen(&mut painter, &mut offscreen);
+        backend.bind_surface(&surface_view, &surface_texture);
+
+        // `child = None` — we only care about the composite rect queued, not child dispatch.
+        backend.render_backdrop_filter(
+            None,
+            &filter,
+            filter_bounds,
+            BlendMode::SrcOver,
+            &Matrix4::IDENTITY,
+        );
+
+        let results = backend.painter().offscreen_results_for_test();
+        assert_eq!(
+            results.len(),
+            1,
+            "render_backdrop_filter must queue exactly one offscreen composite; got {}",
+            results.len()
+        );
+        let (composite_rect, _tex_w, _tex_h) = results[0];
+
+        // The clamped rect: left=32, top=32, width=32 (64-32), height=32 (64-32).
+        // Pre-fix: width ≈ 68 (unclamped device_rect width). Post-fix: width ≈ 32.
+        let expected_width = (SURFACE_W - 32) as f32; // 32.0
+        let expected_height = (SURFACE_H - 32) as f32; // 32.0
+        let expected_left = 32.0_f32;
+        let expected_top = 32.0_f32;
+
+        assert!(
+            (composite_rect.left().0 - expected_left).abs() < 0.5,
+            "composite_rect.left must be {expected_left} (clamped x); got {}",
+            composite_rect.left().0
+        );
+        assert!(
+            (composite_rect.top().0 - expected_top).abs() < 0.5,
+            "composite_rect.top must be {expected_top} (clamped y); got {}",
+            composite_rect.top().0
+        );
+        assert!(
+            (composite_rect.width().0 - expected_width).abs() < 0.5,
+            "composite_rect.width must be {expected_width} (clamped w=64-32=32), not 68 \
+             (unclamped device_rect width); got {}. \
+             Pre-fix failure: Path B passes device_rect to queue_offscreen_result instead \
+             of the clamped rect derived from x,y,w,h.",
+            composite_rect.width().0
+        );
+        assert!(
+            (composite_rect.height().0 - expected_height).abs() < 0.5,
+            "composite_rect.height must be {expected_height} (clamped h=64-32=32), not 68; got {}",
+            composite_rect.height().0
+        );
     }
 }

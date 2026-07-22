@@ -379,6 +379,10 @@ impl PlatformWindow for MacOSWindow {
         *self.callbacks.on_active_status_change.lock() = Some(callback);
     }
 
+    fn on_visibility_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
+        *self.callbacks.on_visibility_status_change.lock() = Some(callback);
+    }
+
     fn on_hover_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
         *self.callbacks.on_hover_status_change.lock() = Some(callback);
     }
@@ -497,6 +501,10 @@ impl PlatformWindow for Arc<MacOSWindow> {
 
     fn on_active_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
         PlatformWindow::on_active_status_change(self.as_ref(), callback)
+    }
+
+    fn on_visibility_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
+        PlatformWindow::on_visibility_status_change(self.as_ref(), callback)
     }
 
     fn on_hover_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {

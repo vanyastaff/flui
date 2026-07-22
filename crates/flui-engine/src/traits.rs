@@ -10,6 +10,8 @@
 //! - **Dependency Inversion**: High-level code depends on abstractions (SOLID)
 //! - **Extensible**: New backends implement these traits
 
+use std::sync::Arc;
+
 use flui_painting::{BlendMode, Paint, PointMode};
 use flui_types::{
     geometry::{Matrix4, Offset, Pixels, Point, RRect, RSuperellipse, Rect},
@@ -313,16 +315,20 @@ pub trait CommandRenderer {
     /// Generate (or retrieve from cache) a tessellated path for an
     /// `RSuperellipse`.
     ///
-    /// Used by `ClipSuperellipseLayer::render` for the layer-tree
-    /// path-tessellation route. The default implementation freshly
-    /// generates the path every call via the iOS-squircle math
-    /// (`n = 4`, ~64 sample points per corner) and does NOT cache —
-    /// suitable for `DebugBackend` / `MockRenderer` where performance
-    /// is not the concern. The production `Backend` overrides to
-    /// consult its `Painter`-owned `SuperellipsePathCache` so identical
-    /// superellipses across frames reuse the cached tessellation.
-    fn superellipse_path(&mut self, rse: RSuperellipse) -> Path {
-        crate::wgpu::layer_render::generate_superellipse_path(&rse)
+    /// Returns `Arc<Path>` so the caller holds shared ownership of the
+    /// ~256-command path without paying for a deep clone on every cache
+    /// hit. All call sites use the path read-only (`&Path` via deref),
+    /// so shared ownership is safe.
+    ///
+    /// The default implementation freshly generates the path every call
+    /// via the iOS-squircle math (`n = 4`, ~64 sample points per corner)
+    /// and does NOT cache — suitable for `DebugBackend` / `MockRenderer`
+    /// where performance is not the concern. The production `Backend`
+    /// overrides to consult its `Painter`-owned `SuperellipsePathCache`
+    /// so identical superellipses across frames reuse the cached
+    /// tessellation (cache hit = `Arc::clone`, no deep copy).
+    fn superellipse_path(&mut self, rse: RSuperellipse) -> Arc<Path> {
+        Arc::new(crate::superellipse::generate_superellipse_path(&rse))
     }
 
     // ===== Viewport Information =====
@@ -364,15 +370,15 @@ pub trait CommandRenderer {
 }
 
 // ============================================================================
-// LAYER-STATE-STACK TRAIT (cycle 4 E-9 split)
+// LAYER-STATE-STACK TRAIT
 // ============================================================================
 
 /// Compositor hand-off interface for the flui-layer clip/transform/effect
 /// stacks.
 ///
-/// Pre-cycle these 13 methods lived on [`CommandRenderer`] alongside the
-/// 34 per-command visitor methods. Cycle 4 E-9 split them into this
-/// dedicated trait because:
+/// These 13 methods used to live on [`CommandRenderer`] alongside its 34
+/// per-command visitor methods. They were split out into this dedicated
+/// trait because:
 ///
 /// - The visitor methods (render_rect / render_text / ...) are the
 ///   `DrawCommand` dispatch contract every backend implements -- a
@@ -393,11 +399,13 @@ pub trait CommandRenderer {
 /// compositor route -- implement both. The trait split lets new
 /// command-only backends materialize without the 13-method overhead.
 ///
-/// # Cycle 4 audit
+/// # Rationale
 ///
-/// See `docs/research/2026-05-22-flui-rendering-engine-audit.md`
-/// E-9. Same trait-split intuition as cycle 2 PR #100/U21
-/// SemanticsConfiguration split.
+/// See `docs/research/2026-05-22-flui-rendering-engine-audit.md` for the
+/// full write-up. This follows the same trait-split intuition as the
+/// earlier `SemanticsConfiguration` split: separate the minimal
+/// command-only surface from the fuller stateful one so implementers only
+/// pay for what they use.
 pub trait LayerStateStack {
     /// Push a rectangular clip onto the clip stack
     fn push_clip_rect(&mut self, rect: &Rect<Pixels>, clip_behavior: flui_types::painting::Clip);
@@ -423,11 +431,26 @@ pub trait LayerStateStack {
     /// Push an opacity value onto the effect stack
     fn push_opacity(&mut self, alpha: f32);
 
+    /// Push an opacity layer with an explicit blend mode onto the effect stack.
+    ///
+    /// The default implementation forwards to [`push_opacity`](Self::push_opacity),
+    /// which is correct for command-only backends that do not participate in the
+    /// dst-read compositor path.  The `wgpu` backend overrides this to route
+    /// advanced blend modes through `save_layer` with the blend propagated.
+    fn push_opacity_blend(&mut self, alpha: f32, blend: flui_types::painting::BlendMode) {
+        let _ = blend;
+        self.push_opacity(alpha);
+    }
+
     /// Pop the most recent opacity from the effect stack
     fn pop_opacity(&mut self);
 
-    /// Push a color filter onto the effect stack
-    fn push_color_filter(&mut self, filter: &flui_types::painting::ColorMatrix);
+    /// Push a color filter onto the effect stack.
+    ///
+    /// Accepts the full [`flui_types::painting::ColorFilter`] enum — `Matrix`,
+    /// `Mode`, `LinearToSrgbGamma`, and `SrgbToLinearGamma` — so all engine
+    /// GPU passes are reachable from a single trait method.
+    fn push_color_filter(&mut self, filter: &flui_types::painting::ColorFilter);
 
     /// Pop the most recent color filter from the effect stack
     fn pop_color_filter(&mut self);

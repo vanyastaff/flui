@@ -11,8 +11,8 @@ keywords = ["gui", "ui", "events", "gestures", "interaction"]
 
 [dependencies]
 # Flui dependencies
-flui-types = { path = "../flui-types" }
-flui-foundation = { path = "../flui-foundation" }
+flui-types = { path = "../flui-types", version = "0.2.0" }
+flui-foundation = { path = "../flui-foundation", version = "0.2.0" }
 
 # UI Events - Cross-platform input event abstraction (W3C compliant)
 ui-events = { workspace = true }
@@ -28,30 +28,32 @@ smallvec = { workspace = true }
 
 # Logging
 tracing = { workspace = true }
+thiserror = { workspace = true }
 dpi = "0.1.2"
 
 # Async runtime
 tokio = { workspace = true, features = ["time", "sync", "macros", "rt"] }
 
 [dev-dependencies]
+static_assertions = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 # `tracing-subscriber` is a dev-only dependency — the observability tests
 # install a `fmt::TestWriter` subscriber to exercise span emission on hot
 # paths. End users configure their subscriber at the app boundary via
 # `flui_foundation::log::Logger`, not via this crate.
 tracing-subscriber = { workspace = true }
-# Criterion — hot-path regression guards. Four benches cover VelocityTracker
+# Criterion — hot-path regression guards. Benches cover VelocityTracker
 # (per-pointer-move), GestureArena (per-pointer-up), TapGestureRecognizer
-# (per-pointer-event), and PointerEventResampler (per-raw-input). Each follows
-# the workspace benchmark template at
-# `rust-studio/.../templates/benchmark-report.md`.
+# (per-pointer-event), PointerEventResampler (per-raw-input), and
+# InteractionLane route resolution/invocation. Each follows the workspace
+# benchmark template at `rust-studio/.../templates/benchmark-report.md`.
 criterion = { workspace = true }
 # Property tests for the pure-math substrate (LSQ solver, velocity tracker).
 # Same version as the rest of the workspace (flui-types / flui-geometry).
 proptest = "1.5"
 # Bench fixtures use the `make_*_event` test helpers which are gated
 # behind the `testing` feature (they're not part of the release API).
-flui-interaction = { path = ".", features = ["testing"] }
+flui-interaction = { path = ".", version = "0.2.0", features = ["testing"] }
 
 [[bench]]
 name = "velocity_tracker_bench"
@@ -69,6 +71,10 @@ harness = false
 name = "pointer_resampler_bench"
 harness = false
 
+[[bench]]
+name = "pointer_route_bench"
+harness = false
+
 [features]
 default = []
 
@@ -81,3 +87,6 @@ testing = []
 
 # Serialization support (if needed in the future)
 serde = ["flui-types/serde"]
+
+[lints]
+workspace = true

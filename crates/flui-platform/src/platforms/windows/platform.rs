@@ -311,14 +311,14 @@ impl WindowsPlatform {
                         // Skip rendering for minimized windows to save CPU/GPU resources
                         let should_skip = WindowsWindow::should_skip_render(hwnd);
                         if !should_skip {
-                            // Fill with solid black - required for Mica backdrop transparency
-                            // When app draws, this will be replaced with actual content
-                            let mut rect = RECT::default();
-                            if GetClientRect(hwnd, &mut rect).is_ok() {
-                                let black_brush = GetStockObject(BLACK_BRUSH);
-                                FillRect(hdc, &rect, HBRUSH(black_brush.0));
-                            }
-
+                            // No GDI painting here. This HWND carries a D3D12 flip-model
+                            // swapchain (wgpu-on-DX12 is always flip-model). Per Microsoft,
+                            // GDI and flip model cannot share an HWND: after the first
+                            // `Present1`, GDI updates to the window are dropped, and the
+                            // contention with the compositor produces visible jitter while
+                            // the window is being live-resized. The background comes from the
+                            // wgpu clear pass + the scene, not from a GDI fill (the old
+                            // FillRect was overwritten by the present in the same frame).
                             if let Some(ctx) = ctx {
                                 // Fire per-window on_request_frame callback
                                 ctx.callbacks.dispatch_request_frame();
@@ -405,35 +405,29 @@ impl WindowsPlatform {
                                 }
                             }
                             SIZE_RESTORED => {
-                                tracing::info!("📐 Window Restored: {}x{}", width, height);
-                                // Validate transition
-                                let candidate = WindowMode::Normal;
-                                if !prev_mode.can_transition_to(&candidate) {
-                                    tracing::warn!(
-                                        "⚠️  Invalid state transition: {:?} -> Normal (transition ignored)",
-                                        prev_mode
-                                    );
-                                    (prev_mode, None)
+                                // SIZE_RESTORED covers two cases: a genuine restore FROM
+                                // minimized/maximized (a real state change), and a plain
+                                // resize while already Normal (same state — NOT a transition).
+                                // `can_transition_to` rejects same-state by design, so it must
+                                // NOT gate this event: a normal-state resize is always a valid
+                                // `Resized`. Gating on it dropped the event (and the last_size
+                                // update) on every live-resize drag step.
+                                ctx.last_size.set(size);
+                                let event = if prev_mode.is_minimized() || prev_mode.is_maximized()
+                                {
+                                    tracing::info!("📐 Window Restored: {}x{}", width, height);
+                                    WindowEvent::Restored {
+                                        window_id: ctx.window_id,
+                                        size,
+                                    }
                                 } else {
-                                    ctx.last_size.set(size);
-
-                                    // Dispatch Restored event only when transitioning FROM
-                                    // minimized or maximized
-                                    let event =
-                                        if prev_mode.is_minimized() || prev_mode.is_maximized() {
-                                            Some(WindowEvent::Restored {
-                                                window_id: ctx.window_id,
-                                                size,
-                                            })
-                                        } else {
-                                            // Normal resize within normal state
-                                            Some(WindowEvent::Resized {
-                                                window_id: ctx.window_id,
-                                                size,
-                                            })
-                                        };
-                                    (candidate, event)
-                                }
+                                    tracing::debug!("📐 Window Resized: {}x{}", width, height);
+                                    WindowEvent::Resized {
+                                        window_id: ctx.window_id,
+                                        size,
+                                    }
+                                };
+                                (WindowMode::Normal, Some(event))
                             }
                             _ => {
                                 // Regular resize while in current state
@@ -474,6 +468,25 @@ impl WindowsPlatform {
                         if let Some(event) = event {
                             ctx.dispatch_event(event);
                         }
+
+                        // Render synchronously at the new size, in the same WM_SIZE
+                        // message that reconfigured the surface. Win32 does not post a
+                        // WM_PAINT for every WM_SIZE during the modal resize loop, so
+                        // without this the next rendered frame lags ≥1 step behind the
+                        // window size: the compositor stretches the stale frame and
+                        // fixed-position content appears to jitter while dragging the
+                        // border. `dispatch_resize` above already released the renderer
+                        // lock (its closure returned), so this re-locks cleanly; a
+                        // minimized window has nothing to present.
+                        if size_type != SIZE_MINIMIZED {
+                            // Render synchronously, in the same WM_SIZE message that
+                            // reconfigured the surface, so the new size is presented within
+                            // the modal resize loop instead of waiting for the next WM_PAINT
+                            // (which Windows does not reliably post per drag step).
+                            // `dispatch_resize` above already released the renderer lock, so
+                            // this re-locks cleanly; a minimized window has nothing to present.
+                            ctx.callbacks.dispatch_request_frame();
+                        }
                     }
 
                     LRESULT(0)
@@ -495,7 +508,7 @@ impl WindowsPlatform {
                             px(y as f32 / ctx.scale_factor),
                         );
                         ctx.dispatch_event(WindowEvent::Moved {
-                            id: ctx.window_id,
+                            window_id: ctx.window_id,
                             position,
                         });
                     }
@@ -822,11 +835,11 @@ impl Platform for WindowsPlatform {
 
     // ==================== Lifecycle ====================
 
-    fn run(self: Box<Self>, on_ready: Box<dyn FnOnce()>) {
+    fn run(self: Box<Self>, on_ready: Box<dyn FnOnce(&dyn Platform)>) {
         tracing::info!("Running Windows platform");
 
         // Call ready callback
-        on_ready();
+        on_ready(&*self);
 
         // Run message loop
         if let Err(e) = self.run_message_loop() {

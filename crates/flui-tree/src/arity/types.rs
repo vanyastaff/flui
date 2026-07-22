@@ -1,6 +1,6 @@
 //! Concrete arity marker types.
 //!
-//! Cycle 3 T-7: rewritten as pure zero-sized markers after the
+//! These were rewritten as pure zero-sized markers after the
 //! accessor/runtime machinery was deleted. Each marker is a unit
 //! struct (or zero-sized generic) implementing the simplified
 //! [`super::Arity`] trait with `DESCRIPTION` + `validate_count`.

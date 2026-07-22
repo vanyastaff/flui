@@ -306,7 +306,7 @@ mod tests {
     #[test]
     fn test_tool_not_found_display() {
         let error = BuildError::tool_not_found("cargo-ndk", "cargo install cargo-ndk");
-        let msg = format!("{}", error);
+        let msg = format!("{error}");
         assert!(msg.contains("cargo-ndk"));
         assert!(msg.contains("cargo install"));
     }
@@ -317,7 +317,7 @@ mod tests {
             "aarch64-linux-android",
             "rustup target add aarch64-linux-android",
         );
-        let msg = format!("{}", error);
+        let msg = format!("{error}");
         assert!(msg.contains("aarch64-linux-android"));
         assert!(msg.contains("rustup target add"));
     }
@@ -325,7 +325,7 @@ mod tests {
     #[test]
     fn test_env_var_error_display() {
         let error = BuildError::env_var_error("ANDROID_HOME", "not set");
-        let msg = format!("{}", error);
+        let msg = format!("{error}");
         assert!(msg.contains("ANDROID_HOME"));
         assert!(msg.contains("not set"));
     }
@@ -333,7 +333,7 @@ mod tests {
     #[test]
     fn test_command_failed_display() {
         let error = BuildError::command_failed("cargo build", 1, "error: compilation failed");
-        let msg = format!("{}", error);
+        let msg = format!("{error}");
         assert!(msg.contains("cargo build"));
         assert!(msg.contains("exit code 1"));
         assert!(msg.contains("compilation failed"));
@@ -342,7 +342,7 @@ mod tests {
     #[test]
     fn test_path_not_found_display() {
         let error = BuildError::path_not_found(PathBuf::from("Cargo.toml"), "workspace root");
-        let msg = format!("{}", error);
+        let msg = format!("{error}");
         assert!(msg.contains("Cargo.toml"));
         assert!(msg.contains("workspace root"));
     }
@@ -350,14 +350,14 @@ mod tests {
     #[test]
     fn test_invalid_platform_display() {
         let error = BuildError::invalid_platform("unsupported architecture");
-        let msg = format!("{}", error);
+        let msg = format!("{error}");
         assert!(msg.contains("unsupported architecture"));
     }
 
     #[test]
     fn test_invalid_config_display() {
         let error = BuildError::invalid_config("output_dir", "does not exist");
-        let msg = format!("{}", error);
+        let msg = format!("{error}");
         assert!(msg.contains("output_dir"));
         assert!(msg.contains("does not exist"));
     }
@@ -383,6 +383,9 @@ mod tests {
 
     #[test]
     fn test_build_result() {
+        // Intentionally always-Ok: paired with `failure()` to exercise both
+        // arms of `BuildResult`; the wrap is the point, not a smell.
+        #[allow(clippy::unnecessary_wraps)]
         fn success() -> BuildResult<i32> {
             Ok(42)
         }

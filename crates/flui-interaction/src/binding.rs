@@ -1,4 +1,4 @@
-//! Gesture Binding - Singleton coordinator for pointer event handling
+//! Gesture Binding - owner-runtime coordinator for pointer event handling
 //!
 //! GestureBinding is the main entry point for handling pointer events in the
 //! gesture system. It coordinates hit testing, event routing, arena management,
@@ -29,7 +29,7 @@
 //!         │
 //!         ▼
 //! ┌─────────────────────┐
-//! │   GestureBinding    │ (singleton)
+//! │   GestureBinding    │ (owned by UiRealm/HeadlessBinding)
 //! │  ┌───────────────┐  │
 //! │  │ Hit Test Cache│  │  (DashMap<PointerId, HitTestResult>)
 //! │  └───────────────┘  │
@@ -64,12 +64,12 @@
 //! use flui_interaction::GestureBinding;
 //! use flui_interaction::events::PointerEvent;
 //!
-//! // Get the singleton instance
-//! let binding = GestureBinding::instance();
+//! // Create or use the owner runtime's binding.
+//! let binding = GestureBinding::new();
 //!
 //! // Handle platform events
 //! fn handle_event(event: &PointerEvent) {
-//!     GestureBinding::instance().handle_pointer_event(event, |hit_test_position| {
+//!     binding.handle_pointer_event(event, |hit_test_position| {
 //!         // Perform hit testing on your render tree
 //!         my_render_tree.hit_test(hit_test_position)
 //!     });
@@ -77,7 +77,6 @@
 //! ```
 
 use dashmap::DashMap;
-use flui_foundation::{BindingBase, impl_binding_singleton};
 use flui_types::geometry::{Offset, Pixels};
 use smallvec::SmallVec;
 use ui_events::pointer::{PointerEvent, PointerType};
@@ -86,9 +85,23 @@ use crate::{
     arena::GestureArena,
     ids::PointerId,
     processing::{PointerEventResampler, SamplingClock},
-    routing::{HitTestResult, PointerRouter},
+    routing::{
+        HitTestResult, PointerRouter, ResolvedRouteToken, RoutePanic, active_dispatch_handle,
+    },
     settings::GestureSettings,
 };
+
+/// Per-pointer state cached at Down: the data-only hit path plus the
+/// owner-local resolved route token that Move reuses and Up/Cancel releases.
+///
+/// `token` is `None` when no interaction lane was active at Down (a
+/// gesture-only binding without a mounted tree) or when the path carried no
+/// pointer targets; the pointer router still routes such events.
+#[derive(Clone)]
+struct CachedPointerRoute {
+    result: HitTestResult,
+    token: Option<ResolvedRouteToken>,
+}
 
 /// Truncate a `f64` to `f32` for pointer position conversion.
 ///
@@ -116,7 +129,7 @@ const fn px_f32(v: f64) -> Pixels {
     Pixels(v as f32)
 }
 
-/// Central coordinator for gesture event handling (singleton).
+/// Central coordinator for gesture event handling.
 ///
 /// GestureBinding manages the complete lifecycle of pointer events:
 /// - Performs hit testing on pointer down
@@ -126,14 +139,11 @@ const fn px_f32(v: f64) -> Pixels {
 /// - Routes events through the PointerRouter
 /// - Manages arena lifecycle (close on down, sweep on up)
 ///
-/// # Singleton Pattern
+/// # Ownership
 ///
-/// Access via `GestureBinding::instance()`:
-///
-/// ```rust,ignore
-/// let binding = GestureBinding::instance();
-/// binding.handle_pointer_event(&event, hit_test_fn);
-/// ```
+/// A UI runtime owns one `GestureBinding`. Prefer accessing the binding through
+/// the active `HeadlessBinding` / `UiRealm`; process-global gesture ownership is
+/// intentionally not part of ADR-0027.
 ///
 /// # Event Coalescing
 ///
@@ -142,14 +152,15 @@ const fn px_f32(v: f64) -> Pixels {
 /// per pointer. Call `flush_pending_moves()` once per frame to process
 /// the coalesced events.
 ///
-/// # Thread Safety
+/// # Thread affinity
 ///
-/// GestureBinding is fully thread-safe and can be shared across threads.
-/// All internal state is protected by appropriate synchronization primitives.
+/// `GestureBinding` is owner-local. Its pointer router and executable gesture
+/// callbacks are not `Send + Sync`; render hit-test entries and route tokens
+/// remain on the separate data plane.
 pub struct GestureBinding {
-    /// Cached hit test results per pointer.
-    /// Avoids redundant hit testing for move/up events.
-    hit_tests: DashMap<PointerId, HitTestResult>,
+    /// Cached hit paths and resolved routes per pointer.
+    /// Down resolves once; move/up events reuse the cached route.
+    hit_tests: DashMap<PointerId, CachedPointerRoute>,
 
     /// Pending move events for coalescing.
     /// Only the latest move per pointer is kept.
@@ -181,18 +192,6 @@ pub struct GestureBinding {
     default_settings: GestureSettings,
 }
 
-// Implement BindingBase trait
-impl BindingBase for GestureBinding {
-    fn init_instances(&mut self) {
-        // GestureBinding initialization is done in new()
-        // This is called automatically by the singleton macro
-        tracing::debug!("GestureBinding initialized");
-    }
-}
-
-// Implement singleton pattern via macro
-impl_binding_singleton!(GestureBinding);
-
 impl Default for GestureBinding {
     fn default() -> Self {
         Self::new()
@@ -202,9 +201,10 @@ impl Default for GestureBinding {
 impl GestureBinding {
     /// Create a new GestureBinding with default settings.
     ///
-    /// Note: Prefer using `GestureBinding::instance()` for singleton access.
+    /// `GestureBinding` is owner-local; prefer using the binding owned by the
+    /// active UI runtime (`HeadlessBinding`/`UiRealm`) over a process global.
     pub fn new() -> Self {
-        let mut binding = Self {
+        Self {
             hit_tests: DashMap::new(),
             pending_moves: DashMap::new(),
             resamplers: DashMap::new(),
@@ -213,14 +213,12 @@ impl GestureBinding {
             pointer_router: PointerRouter::new(),
             arena: GestureArena::new(),
             default_settings: GestureSettings::default(),
-        };
-        binding.init_instances();
-        binding
+        }
     }
 
     /// Create with specific settings.
     pub fn with_settings(settings: GestureSettings) -> Self {
-        let mut binding = Self {
+        Self {
             hit_tests: DashMap::new(),
             pending_moves: DashMap::new(),
             resamplers: DashMap::new(),
@@ -229,9 +227,7 @@ impl GestureBinding {
             pointer_router: PointerRouter::new(),
             arena: GestureArena::new(),
             default_settings: settings,
-        };
-        binding.init_instances();
-        binding
+        }
     }
 
     // ========================================================================
@@ -336,7 +332,7 @@ impl GestureBinding {
     /// # Example
     ///
     /// ```rust,ignore
-    /// GestureBinding::instance().handle_pointer_event(&event, |position| {
+    /// binding.handle_pointer_event(&event, |position| {
     ///     render_tree.hit_test(position)
     /// });
     /// ```
@@ -346,7 +342,7 @@ impl GestureBinding {
     {
         match event {
             PointerEvent::Down(e) => {
-                let pointer_id = self.extract_pointer_id(event);
+                let pointer_id = Self::extract_pointer_id(event);
 
                 // Bound per-pointer state growth (memory-DoS guard). A re-down of
                 // an already-tracked pointer replaces rather than grows, so it is
@@ -368,8 +364,21 @@ impl GestureBinding {
                 // Perform hit test
                 let result = hit_test_fn(position);
 
-                // Cache the result
-                self.hit_tests.insert(pointer_id, result.clone());
+                // Resolve the owner-local route ONCE, before the arena closes:
+                // Move reuses the cached token and Up/Cancel releases it. A
+                // re-down of a tracked pointer replaces the cached entry, so
+                // the superseded route is released rather than leaked.
+                let token = Self::resolve_route(&result);
+                let superseded = self.hit_tests.insert(
+                    pointer_id,
+                    CachedPointerRoute {
+                        result: result.clone(),
+                        token,
+                    },
+                );
+                if let Some(superseded) = superseded {
+                    Self::release_route(superseded.token);
+                }
 
                 // Lazy-create the per-pointer resampler AND mark it tracked.
                 // The resampler only paces moves once it is tracked; without
@@ -390,15 +399,18 @@ impl GestureBinding {
                     }
                 }
 
-                // Dispatch to targets
-                self.dispatch_event(event, &result);
-
-                // Close the arena for this pointer
+                // Dispatch to targets, THEN close the arena — Flutter's
+                // `GestureBinding.handleEvent` order. A per-target panic is
+                // captured so the close still runs before the unwind resumes.
+                let panic = self.dispatch_event(event, token);
                 self.arena.close(pointer_id);
+                if let Some(panic) = panic {
+                    panic.resume();
+                }
             }
 
             PointerEvent::Move(_) => {
-                let pointer_id = self.extract_pointer_id(event);
+                let pointer_id = Self::extract_pointer_id(event);
 
                 // Coalesce move events - store only the latest, process on flush
                 self.pending_moves.insert(pointer_id, event.clone());
@@ -413,12 +425,17 @@ impl GestureBinding {
             }
 
             PointerEvent::Up(_) | PointerEvent::Cancel(_) => {
-                let pointer_id = self.extract_pointer_id(event);
+                let pointer_id = Self::extract_pointer_id(event);
 
-                // Use cached hit test result
-                if let Some((_, result)) = self.hit_tests.remove(&pointer_id) {
-                    self.dispatch_event(event, &result);
-                }
+                // Deliver on the cached route, THEN sweep, THEN release the
+                // route — the cached cells stay strong through delivery even
+                // if the target unmounted mid-gesture (Flutter's retained
+                // `HitTestEntry.target`). A per-target panic is captured so
+                // sweep + release still run before the unwind resumes.
+                let cached = self.hit_tests.remove(&pointer_id).map(|(_, cached)| cached);
+                let panic = cached
+                    .as_ref()
+                    .and_then(|cached| self.dispatch_event(event, cached.token));
 
                 // Sweep the arena
                 self.arena.sweep(pointer_id);
@@ -427,37 +444,46 @@ impl GestureBinding {
                 // the owned value, so the resampler's Arc drops with
                 // last reference.
                 self.resamplers.remove(&pointer_id);
+
+                if let Some(cached) = cached {
+                    Self::release_route(cached.token);
+                }
+                if let Some(panic) = panic {
+                    panic.resume();
+                }
             }
 
             PointerEvent::Enter(_) | PointerEvent::Leave(_) => {
                 // Enter/Leave don't participate in gesture recognition
                 // but we still dispatch them
-                let pointer_id = self.extract_pointer_id(event);
-                if let Some(result) = self.hit_tests.get(&pointer_id) {
-                    self.dispatch_event(event, &result);
+                let pointer_id = Self::extract_pointer_id(event);
+                if let Some(panic) = self.dispatch_on_cached_route(pointer_id, event) {
+                    panic.resume();
                 }
             }
 
             PointerEvent::Scroll(e) => {
-                let pointer_id = self.extract_pointer_id(event);
+                let pointer_id = Self::extract_pointer_id(event);
 
                 // Scroll events might not have a cached hit test
                 // Use the position to do a hit test if needed
-                if let Some(result) = self.hit_tests.get(&pointer_id) {
-                    self.dispatch_event(event, &result);
+                if self.hit_tests.contains_key(&pointer_id) {
+                    if let Some(panic) = self.dispatch_on_cached_route(pointer_id, event) {
+                        panic.resume();
+                    }
                 } else {
                     let position =
                         Offset::new(px_f32(e.state.position.x), px_f32(e.state.position.y));
                     let result = hit_test_fn(position);
-                    self.dispatch_event(event, &result);
+                    self.dispatch_ephemeral(event, &result);
                 }
             }
 
             PointerEvent::Gesture(_) => {
                 // Gesture events are high-level and handled separately
-                let pointer_id = self.extract_pointer_id(event);
-                if let Some(result) = self.hit_tests.get(&pointer_id) {
-                    self.dispatch_event(event, &result);
+                let pointer_id = Self::extract_pointer_id(event);
+                if let Some(panic) = self.dispatch_on_cached_route(pointer_id, event) {
+                    panic.resume();
                 }
             }
         }
@@ -468,23 +494,53 @@ impl GestureBinding {
     /// Use this when you already have a hit test result or want to
     /// manually control hit testing.
     pub fn handle_pointer_event_with_result(&self, event: &PointerEvent, result: &HitTestResult) {
-        let pointer_id = self.extract_pointer_id(event);
+        let pointer_id = Self::extract_pointer_id(event);
 
         match event {
             PointerEvent::Down(_) => {
-                self.hit_tests.insert(pointer_id, result.clone());
-                self.dispatch_event(event, result);
+                let token = Self::resolve_route(result);
+                let superseded = self.hit_tests.insert(
+                    pointer_id,
+                    CachedPointerRoute {
+                        result: result.clone(),
+                        token,
+                    },
+                );
+                if let Some(superseded) = superseded {
+                    Self::release_route(superseded.token);
+                }
+                let panic = self.dispatch_event(event, token);
                 self.arena.close(pointer_id);
+                if let Some(panic) = panic {
+                    panic.resume();
+                }
             }
 
             PointerEvent::Up(_) | PointerEvent::Cancel(_) => {
-                self.dispatch_event(event, result);
-                self.hit_tests.remove(&pointer_id);
-                self.arena.sweep(pointer_id);
+                let cached = self.hit_tests.remove(&pointer_id).map(|(_, cached)| cached);
+                // Flutter parity: Up/Cancel deliver on the route cached at
+                // Down, then sweep, then release.
+                if let Some(cached) = cached {
+                    let panic = self.dispatch_event(event, cached.token);
+                    self.arena.sweep(pointer_id);
+                    Self::release_route(cached.token);
+                    if let Some(panic) = panic {
+                        panic.resume();
+                    }
+                } else {
+                    self.dispatch_ephemeral(event, result);
+                    self.arena.sweep(pointer_id);
+                }
             }
 
             _ => {
-                self.dispatch_event(event, result);
+                if self.hit_tests.contains_key(&pointer_id) {
+                    if let Some(panic) = self.dispatch_on_cached_route(pointer_id, event) {
+                        panic.resume();
+                    }
+                } else {
+                    self.dispatch_ephemeral(event, result);
+                }
             }
         }
     }
@@ -504,7 +560,7 @@ impl GestureBinding {
     /// // In your frame loop:
     /// fn on_frame(&mut self) {
     ///     // Process coalesced move events
-    ///     GestureBinding::instance().flush_pending_moves();
+    ///     self.binding.flush_pending_moves();
     ///
     ///     // Then do layout, paint, etc.
     /// }
@@ -543,14 +599,17 @@ impl GestureBinding {
                         continue;
                     };
                     resampler.sample(now, next, |resampled| {
-                        // Re-fetch the hit test result for each
-                        // resampled event. The DashMap entry was
-                        // acquired above; this re-read is cheap and
-                        // always finds a value (caller removed the
-                        // entry on Up/Cancel, so we are inside the
-                        // active-pointer window).
-                        if let Some(r) = self.hit_tests.get(&pointer_id) {
-                            self.dispatch_event(&resampled, &r);
+                        // Re-check the cache for each resampled event; the
+                        // cached route token is copied out so no DashMap
+                        // guard is held across handler re-entry. A Move has
+                        // no pending arena cleanup, so a captured per-target
+                        // panic resumes immediately.
+                        if self.hit_tests.contains_key(&pointer_id) {
+                            if let Some(panic) =
+                                self.dispatch_on_cached_route(pointer_id, &resampled)
+                            {
+                                panic.resume();
+                            }
                             count += 1;
                         }
                     });
@@ -569,7 +628,7 @@ impl GestureBinding {
             // and would otherwise grow unbounded to `MAX_BUFFERED_EVENTS` and
             // emit drop warnings every frame, since this path never drains
             // them via `sample()`.
-            for resampler in self.resamplers.iter() {
+            for resampler in &self.resamplers {
                 resampler.clear();
             }
         }
@@ -605,9 +664,12 @@ impl GestureBinding {
         }
 
         for (pointer_id, event) in drained {
-            // Use cached hit test result
-            if let Some(result) = self.hit_tests.get(&pointer_id) {
-                self.dispatch_event(&event, &result);
+            // Move reuses the route resolved at Down; no cleanup is pending,
+            // so a captured per-target panic resumes immediately.
+            if self.hit_tests.contains_key(&pointer_id) {
+                if let Some(panic) = self.dispatch_on_cached_route(pointer_id, &event) {
+                    panic.resume();
+                }
                 count += 1;
             }
         }
@@ -633,7 +695,9 @@ impl GestureBinding {
 
     /// Get the cached hit test result for a pointer.
     pub fn get_hit_test(&self, pointer_id: PointerId) -> Option<HitTestResult> {
-        self.hit_tests.get(&pointer_id).map(|r| r.clone())
+        self.hit_tests
+            .get(&pointer_id)
+            .map(|cached| cached.result.clone())
     }
 
     /// Check if there's a cached hit test for a pointer.
@@ -672,7 +736,18 @@ impl GestureBinding {
                 cleared,
                 "GestureBinding draining hit_tests on lifecycle pause"
             );
+            // Release the owner-local routes the drained entries were
+            // holding; best-effort when no lane scope is active here (the
+            // lane's own teardown drains any remainder).
+            let cached_tokens: Vec<ResolvedRouteToken> = self
+                .hit_tests
+                .iter()
+                .filter_map(|entry| entry.value().token)
+                .collect();
             self.hit_tests.clear();
+            for token in cached_tokens {
+                Self::release_route(Some(token));
+            }
         }
         // Resamplers reference the same pointers as the hit test
         // cache. Drop them too — the resampled event queue is keyed
@@ -749,21 +824,100 @@ impl GestureBinding {
 
     /// Extract pointer ID from event.
     #[inline]
-    fn extract_pointer_id(&self, event: &PointerEvent) -> PointerId {
+    fn extract_pointer_id(event: &PointerEvent) -> PointerId {
         crate::events::extract_pointer_id(event)
     }
 
-    /// Dispatch event to hit test targets.
-    fn dispatch_event(&self, event: &PointerEvent, result: &HitTestResult) {
+    /// Resolve a hit path into an owner-local route before the arena closes.
+    ///
+    /// Returns `None` when the path carries no pointer targets, or when the
+    /// typed lane boundary rejects the resolution (no active lane, wrong
+    /// realm) — the failure is traced, never a panic, and the pointer router
+    /// still routes the sequence.
+    fn resolve_route(result: &HitTestResult) -> Option<ResolvedRouteToken> {
+        if !result.iter().any(|entry| entry.pointer_target.is_some()) {
+            return None;
+        }
+        match active_dispatch_handle()
+            .and_then(|handle| handle.resolve_pointer_route(result.path()))
+        {
+            Ok(resolution) => {
+                for miss in resolution.misses() {
+                    tracing::debug!(
+                        path_index = miss.path_index(),
+                        "hit path target unregistered before Down resolution"
+                    );
+                }
+                Some(resolution.token())
+            }
+            Err(error) => {
+                tracing::error!(
+                    ?error,
+                    "pointer route resolution failed; hit targets will not receive this sequence"
+                );
+                None
+            }
+        }
+    }
+
+    /// Release a cached route after its pointer sequence completes.
+    fn release_route(token: Option<ResolvedRouteToken>) {
+        let Some(token) = token else {
+            return;
+        };
+        if let Err(error) = active_dispatch_handle().and_then(|handle| handle.release_route(token))
+        {
+            tracing::debug!(
+                ?error,
+                "cached pointer route not released through the active lane"
+            );
+        }
+    }
+
+    /// Route `event` to the pointer router and invoke the resolved route.
+    ///
+    /// Returns the first per-target panic so the caller can finish its arena
+    /// cleanup before resuming it.
+    fn dispatch_event(
+        &self,
+        event: &PointerEvent,
+        token: Option<ResolvedRouteToken>,
+    ) -> Option<RoutePanic> {
         // Route the event through the pointer router
         self.pointer_router.route(event);
 
-        // Also dispatch to hit test entries with handlers
-        for entry in result.path() {
-            if let Some(ref handler) = entry.handler {
-                handler(event);
+        let token = token?;
+        match active_dispatch_handle().and_then(|handle| handle.invoke_pointer_route(token, event))
+        {
+            Ok(panic) => panic,
+            Err(error) => {
+                tracing::error!(?error, "cached pointer route invocation failed");
+                None
             }
         }
+    }
+
+    /// Dispatch on the route cached for `pointer_id`, if any.
+    ///
+    /// The cached token is copied out before dispatch so no `DashMap` shard
+    /// guard is held while handlers re-enter the binding.
+    fn dispatch_on_cached_route(
+        &self,
+        pointer_id: PointerId,
+        event: &PointerEvent,
+    ) -> Option<RoutePanic> {
+        let token = self.hit_tests.get(&pointer_id)?.token;
+        self.dispatch_event(event, token)
+    }
+
+    /// Route `event` and deliver it over a one-shot route for `result`.
+    ///
+    /// Used for events with no cached Down route (e.g. a scroll landing on an
+    /// untracked pointer): `HitTestResult::dispatch` resolves, invokes, and
+    /// releases the ephemeral route through the same owner-lane seam.
+    fn dispatch_ephemeral(&self, event: &PointerEvent, result: &HitTestResult) {
+        self.pointer_router.route(event);
+        result.dispatch(event);
     }
 }
 
@@ -773,7 +927,7 @@ impl std::fmt::Debug for GestureBinding {
             .field("active_pointers", &self.hit_tests.len())
             .field("pending_moves", &self.pending_moves.len())
             .field("arena_count", &self.arena.len())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -781,27 +935,15 @@ impl std::fmt::Debug for GestureBinding {
 mod tests {
     use std::time::Duration;
 
-    use flui_foundation::HasInstance;
-
     use super::*;
     use crate::events::{make_down_event, make_move_event, make_up_event};
 
-    #[test]
-    fn test_binding_singleton() {
-        let binding1 = GestureBinding::instance();
-        let binding2 = GestureBinding::instance();
-
-        // Should be the same instance
-        assert!(std::ptr::eq(binding1, binding2));
-    }
-
-    #[test]
-    fn test_binding_is_initialized() {
-        // Ensure instance exists
-        let _ = GestureBinding::instance();
-
-        // Should be initialized
-        assert!(GestureBinding::is_initialized());
+    /// A cached entry with no hit path and no resolved route, for cache tests.
+    fn empty_cached_route() -> CachedPointerRoute {
+        CachedPointerRoute {
+            result: HitTestResult::new(),
+            token: None,
+        }
     }
 
     #[test]
@@ -824,9 +966,7 @@ mod tests {
     fn test_hit_test_cache() {
         let binding = GestureBinding::new();
         let pointer = PointerId::new(2).expect("nonzero pointer id");
-        let result = HitTestResult::new();
-
-        binding.hit_tests.insert(pointer, result.clone());
+        binding.hit_tests.insert(pointer, empty_cached_route());
         assert!(binding.has_hit_test(pointer));
 
         let cached = binding.get_hit_test(pointer);
@@ -842,15 +982,15 @@ mod tests {
 
         binding.hit_tests.insert(
             PointerId::new(2).expect("nonzero pointer id"),
-            HitTestResult::new(),
+            empty_cached_route(),
         );
         binding.hit_tests.insert(
             PointerId::new(3).expect("nonzero pointer id"),
-            HitTestResult::new(),
+            empty_cached_route(),
         );
         binding.hit_tests.insert(
             PointerId::new(4).expect("nonzero pointer id"),
-            HitTestResult::new(),
+            empty_cached_route(),
         );
 
         assert_eq!(binding.active_pointer_count(), 3);
@@ -920,7 +1060,7 @@ mod tests {
         // primary id (1) is a genuinely new pointer below.
         for i in 0..MAX_SIMULTANEOUS_POINTERS {
             let id = PointerId::new(i as u64 + 2).expect("nonzero pointer id");
-            binding.hit_tests.insert(id, HitTestResult::new());
+            binding.hit_tests.insert(id, empty_cached_route());
         }
         assert_eq!(binding.active_pointer_count(), MAX_SIMULTANEOUS_POINTERS);
 
@@ -1069,8 +1209,7 @@ mod tests {
         let tracked = binding
             .resamplers
             .get(&PointerId::PRIMARY)
-            .map(|r| r.is_tracked())
-            .unwrap_or(false);
+            .is_some_and(|r| r.is_tracked());
         assert!(tracked, "resampler must be tracked after the Down");
     }
 
@@ -1094,5 +1233,161 @@ mod tests {
             dispatched >= 1,
             "resampled move must be dispatched, not dropped (got {dispatched})"
         );
+    }
+
+    // ========================================================================
+    // Owner-routed route lifecycle (ADR-0027 Task 3)
+    // ========================================================================
+
+    use std::cell::{Cell, RefCell};
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    use std::rc::Rc;
+
+    use crate::events::make_cancel_event;
+    use crate::routing::{HitTestEntry, InteractionLane, PointerTarget, RenderId};
+
+    fn hit_result(target: PointerTarget) -> HitTestResult {
+        let mut result = HitTestResult::new();
+        result.add(HitTestEntry::new(RenderId::new(1)).pointer_target(target));
+        result
+    }
+
+    /// Sets its cell when dropped, so a test can observe the moment the
+    /// owner-local handler (and its captures) is released.
+    struct SetOnDrop(Rc<Cell<bool>>);
+
+    impl Drop for SetOnDrop {
+        fn drop(&mut self) {
+            self.0.set(true);
+        }
+    }
+
+    #[test]
+    fn down_caches_route_and_up_delivers_after_target_unregisters() {
+        let lane = InteractionLane::try_new().expect("lane");
+        let handle = lane.dispatch_handle();
+        let binding = GestureBinding::new();
+        let delivered = Rc::new(RefCell::new(Vec::new()));
+        lane.enter(|| {
+            let log = Rc::clone(&delivered);
+            let target = handle
+                .register_pointer(move |event| {
+                    log.borrow_mut().push(match event {
+                        PointerEvent::Down(_) => "down",
+                        PointerEvent::Move(_) => "move",
+                        PointerEvent::Up(_) => "up",
+                        _ => "other",
+                    });
+                })
+                .expect("register");
+            let result = hit_result(target);
+
+            let down = make_down_event(Offset::new(Pixels(5.0), Pixels(5.0)), PointerType::Mouse);
+            binding.handle_pointer_event(&down, |_| result.clone());
+            assert_eq!(&*delivered.borrow(), &["down"]);
+
+            // Unmount analog: the target leaves NEW route resolution, but the
+            // route cached at Down keeps its strong handler cell.
+            handle.unregister_pointer(target).expect("unregister");
+
+            let mv = make_move_event(Offset::new(Pixels(9.0), Pixels(9.0)), PointerType::Mouse);
+            binding.handle_pointer_event(&mv, |_| HitTestResult::new());
+            binding.flush_pending_moves();
+            assert_eq!(&*delivered.borrow(), &["down", "move"]);
+
+            let up = make_up_event(Offset::new(Pixels(9.0), Pixels(9.0)), PointerType::Mouse);
+            binding.handle_pointer_event(&up, |_| HitTestResult::new());
+            assert_eq!(&*delivered.borrow(), &["down", "move", "up"]);
+            assert!(!binding.has_hit_test(PointerId::PRIMARY));
+
+            // A fresh Down on the removed target is a typed miss: nothing is
+            // delivered and nothing panics.
+            let second_down =
+                make_down_event(Offset::new(Pixels(5.0), Pixels(5.0)), PointerType::Mouse);
+            binding.handle_pointer_event(&second_down, |_| hit_result(target));
+            assert_eq!(&*delivered.borrow(), &["down", "move", "up"]);
+        });
+    }
+
+    #[test]
+    fn up_releases_the_cached_route_and_drops_the_last_handler_owner() {
+        let lane = InteractionLane::try_new().expect("lane");
+        let handle = lane.dispatch_handle();
+        let binding = GestureBinding::new();
+        let handler_dropped = Rc::new(Cell::new(false));
+        lane.enter(|| {
+            let probe = SetOnDrop(Rc::clone(&handler_dropped));
+            let target = handle
+                .register_pointer(move |_| {
+                    let _keep_probe_alive = &probe;
+                })
+                .expect("register");
+            let result = hit_result(target);
+
+            let down = make_down_event(Offset::new(Pixels(5.0), Pixels(5.0)), PointerType::Mouse);
+            binding.handle_pointer_event(&down, |_| result.clone());
+            handle.unregister_pointer(target).expect("unregister");
+            assert!(
+                !handler_dropped.get(),
+                "the cached route must keep the handler cell alive"
+            );
+
+            let cancel = make_cancel_event(PointerType::Mouse);
+            binding.handle_pointer_event(&cancel, |_| HitTestResult::new());
+            assert!(
+                handler_dropped.get(),
+                "Cancel must release the cached route, dropping the last handler owner"
+            );
+        });
+    }
+
+    #[test]
+    fn per_target_panic_still_delivers_later_targets_and_cleans_up_the_sequence() {
+        let lane = InteractionLane::try_new().expect("lane");
+        let handle = lane.dispatch_handle();
+        let binding = GestureBinding::new();
+        let later_deliveries = Rc::new(Cell::new(0));
+        let handler_dropped = Rc::new(Cell::new(false));
+        lane.enter(|| {
+            let drop_probe = SetOnDrop(Rc::clone(&handler_dropped));
+            let panicking = handle
+                .register_pointer(move |event| {
+                    let _keep_probe_alive = &drop_probe;
+                    if matches!(event, PointerEvent::Up(_)) {
+                        panic!("target panic on Up");
+                    }
+                })
+                .expect("register panicking");
+            let count = Rc::clone(&later_deliveries);
+            let later = handle
+                .register_pointer(move |_| count.set(count.get() + 1))
+                .expect("register later");
+
+            let mut result = HitTestResult::new();
+            result.add(HitTestEntry::new(RenderId::new(1)).pointer_target(panicking));
+            result.add(HitTestEntry::new(RenderId::new(2)).pointer_target(later));
+
+            let down = make_down_event(Offset::new(Pixels(5.0), Pixels(5.0)), PointerType::Mouse);
+            binding.handle_pointer_event(&down, |_| result.clone());
+            assert_eq!(later_deliveries.get(), 1);
+            handle
+                .unregister_pointer(panicking)
+                .expect("route owns the panicking cell now");
+
+            let up = make_up_event(Offset::new(Pixels(5.0), Pixels(5.0)), PointerType::Mouse);
+            let unwind = catch_unwind(AssertUnwindSafe(|| {
+                binding.handle_pointer_event(&up, |_| HitTestResult::new());
+            }));
+            assert!(unwind.is_err(), "the first target panic must propagate");
+
+            // Later targets still received the Up, and the mandatory cleanup
+            // (cache removal + route release) ran before the resumed unwind.
+            assert_eq!(later_deliveries.get(), 2);
+            assert!(!binding.has_hit_test(PointerId::PRIMARY));
+            assert!(
+                handler_dropped.get(),
+                "Up must sweep and release the route before resuming the panic"
+            );
+        });
     }
 }

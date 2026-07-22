@@ -1,5 +1,10 @@
 //! Runtime validation for `SliverGeometry` layout results.
 
+// Target-level lint relaxations — crate-level allows don't reach this
+// target. `unwrap` in test/example code: a panic IS the failure report
+// (docs/PANIC-POLICY.md); style items here are ship-wave debt.
+#![allow(clippy::unwrap_used)]
+
 use std::sync::{Arc, Mutex};
 
 use flui_foundation::Diagnosticable;
@@ -10,10 +15,7 @@ use flui_rendering::{
     parent_data::{BoxParentData, SliverParentData},
     pipeline::PipelineOwner,
     protocol::{BoxProtocol, SliverProtocol},
-    traits::{
-        HotReloadCapability, PaintEffectsCapability, RenderBox, RenderObject, RenderSliver,
-        SemanticsCapability,
-    },
+    traits::{RenderBox, RenderObject, RenderSliver},
     view::ScrollDirection,
 };
 use flui_tree::{Leaf, Variable};
@@ -75,9 +77,6 @@ impl BadGeometrySliver {
 }
 
 impl Diagnosticable for BadGeometrySliver {}
-impl PaintEffectsCapability for BadGeometrySliver {}
-impl SemanticsCapability for BadGeometrySliver {}
-impl HotReloadCapability for BadGeometrySliver {}
 
 impl RenderSliver for BadGeometrySliver {
     type Arity = Leaf;
@@ -114,9 +113,6 @@ impl BoxWithSliverChild {
 }
 
 impl Diagnosticable for BoxWithSliverChild {}
-impl PaintEffectsCapability for BoxWithSliverChild {}
-impl SemanticsCapability for BoxWithSliverChild {}
-impl HotReloadCapability for BoxWithSliverChild {}
 
 impl RenderBox for BoxWithSliverChild {
     type Arity = Variable;

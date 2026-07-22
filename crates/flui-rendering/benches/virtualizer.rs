@@ -1,6 +1,6 @@
-//! Virtualization core benchmark (ADR-0003 U1 + U3c lazy-sliver consumer).
+//! Virtualization core benchmark (ADR-0003, including the lazy-sliver consumer).
 //!
-//! ## Virtualizer core (U1)
+//! ## Virtualizer core
 //!
 //! Demonstrates the asymptotic win of the augmented B+-tree-backed
 //! [`Virtualizer`] over a naive flat-array baseline on the three operations the
@@ -37,23 +37,25 @@
 //! Run with:
 //!   cargo bench -p flui-rendering --bench virtualizer
 
+// Bench harness, not public API; `criterion_group!` generates the
+// undocumentable entry fn.
+#![allow(missing_docs)]
+
 use std::hint::black_box;
 use std::sync::Arc;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use flui_foundation::Diagnosticable;
+use flui_objects::RenderSliverListLazy;
 use flui_rendering::{
     PipelineOwner,
     constraints::{BoxConstraints, SliverConstraints},
     context::{BoxHitTestContext, BoxLayoutContext},
-    objects::RenderSliverListLazy,
     parent_data::BoxParentData,
     pipeline::Layout,
     protocol::{BoxProtocol, SliverProtocol},
     testing::sliver as sliver_presets,
-    traits::{
-        HotReloadCapability, PaintEffectsCapability, RenderBox, RenderObject, SemanticsCapability,
-    },
+    traits::{RenderBox, RenderObject},
     virtualization::{ScrollWindow, Virtualizer},
 };
 use flui_tree::{Leaf, Variable};
@@ -328,9 +330,6 @@ struct BenchBox {
 }
 
 impl Diagnosticable for BenchBox {}
-impl PaintEffectsCapability for BenchBox {}
-impl SemanticsCapability for BenchBox {}
-impl HotReloadCapability for BenchBox {}
 
 impl RenderBox for BenchBox {
     type Arity = Leaf;
@@ -352,9 +351,6 @@ struct BenchSliverHost {
 }
 
 impl Diagnosticable for BenchSliverHost {}
-impl PaintEffectsCapability for BenchSliverHost {}
-impl SemanticsCapability for BenchSliverHost {}
-impl HotReloadCapability for BenchSliverHost {}
 
 impl RenderBox for BenchSliverHost {
     type Arity = Variable;
@@ -414,7 +410,7 @@ fn build_settled_lazy(
         }) as Box<dyn RenderObject<BoxProtocol>>)
     });
 
-    let lazy = RenderSliverListLazy::new(n_items, BENCH_ITEM_HEIGHT, Arc::clone(&source), None);
+    let lazy = RenderSliverListLazy::new(n_items, BENCH_ITEM_HEIGHT, Arc::clone(&source));
 
     let mut owner = PipelineOwner::new();
     let root_id = owner

@@ -1,4 +1,4 @@
-//! Synthetic `ElementNode` storage mocks for the U2 S1 prototype bench.
+//! Synthetic `ElementNode` storage mocks for the key-storage-shape prototype bench.
 //!
 //! This module is **bench-only**. It must not be referenced from production code,
 //! from `flui-view`'s `tests/` tree, or from other crates. Inclusion is via the
@@ -7,8 +7,8 @@
 //!
 //! # What this models
 //!
-//! Phase 0 must not modify production storage (per
-//! [`docs/plans/2026-05-22-005-feat-view-element-core-contracts-plan.md`] U2).
+//! This prototype must not modify production storage (per
+//! [`docs/plans/2026-05-22-005-feat-view-element-core-contracts-plan.md`]).
 //! We are measuring two candidate storage *shapes* for the `key` field on
 //! `ElementNode` independently of the rest of the production lifecycle:
 //!
@@ -27,10 +27,10 @@
 //!
 //! # Workload
 //!
-//! Synthetic 10K-element distribution at 80% unkeyed leaf / 20% keyed branch
-//! (per plan U2). The "reconcile" workload is a simplified placeholder
+//! Synthetic 10K-element distribution at 80% unkeyed leaf / 20% keyed branch.
+//! The "reconcile" workload is a simplified placeholder
 //! (HashMap key-build + lookup + match count) — NOT the production reconciler,
-//! which lands in Phase 2 U12. We are measuring the relative cost of
+//! which is implemented separately. We are measuring the relative cost of
 //! `Box<dyn ViewKey>::key_hash()` dispatch vs `KeyId` direct u64 access at the
 //! HashMap key-build site, on three canonical permutations (full-reverse,
 //! single-rotate, swap-first-last).
@@ -45,6 +45,11 @@
 //!
 //! See [`MemoryAccounting`] for the public surface.
 
+// Target-level lint relaxations — crate-level allows don't reach this
+// target. `unwrap` in test/example code: a panic IS the failure report
+// (docs/PANIC-POLICY.md); style items here are ship-wave debt.
+#![allow(clippy::struct_field_names)]
+
 use std::collections::HashMap;
 use std::num::NonZeroU64;
 
@@ -54,12 +59,12 @@ use flui_foundation::{ValueKey, ViewKey};
 // Workload distribution
 // ----------------------------------------------------------------------------
 
-/// 10K nodes per the plan U2 spec. The bench scales workload size only via
+/// Fixed at 10K nodes. The bench scales workload size only via
 /// permutation pattern — node count stays fixed so the memory column in the
 /// gate report is comparable shape-to-shape.
 pub const NODE_COUNT: usize = 10_000;
 
-/// 80% unkeyed leaf, 20% keyed branch (per plan U2). A node is "keyed" iff its
+/// 80% unkeyed leaf, 20% keyed branch. A node is "keyed" iff its
 /// index is a multiple of 5 — gives a deterministic 20/80 split without
 /// random-number plumbing across iterations.
 #[inline]
@@ -109,13 +114,13 @@ impl KeyId {
 ///   - `KeyId` is monotonically assigned (`next_id`) — no gaps.
 ///   - `Vec` is one fewer dependency for a bench-only fixture.
 ///   - The `Slab` shape would be the choice if the production interner ever
-///     needed to evict — out of scope for the Phase 0 spec-validation question.
+///     needed to evict — out of scope for this spec-validation question.
 #[derive(Debug, Default)]
 pub struct KeyInterner {
     /// Hash-to-bucket index. Bucket-per-hash with `key_eq` resolution on hit —
     /// mirrors the production FR-024 hash+eq discipline so the bench faithfully
     /// models the same contract. Hash-only dedup would silently merge distinct
-    /// keys whose hashes collide, skewing the bench's S1 memory accounting
+    /// keys whose hashes collide, skewing the bench's memory accounting
     /// downward; bucket-per-hash with `key_eq` keeps the accounting honest.
     forward: HashMap<u64, Vec<KeyId>>,
     /// Reverse store: `KeyId.as_u64() - 1` indexes into this vec.
@@ -208,7 +213,7 @@ impl KeyInterner {
 /// allocation for the boxed `ValueKey<u64>` payload.
 ///
 /// `kind` carries the same 1-byte `ElementKind` discriminant the spec FR-020
-/// closed enum will host (per plan KTD-1), padded out by the alignment of the
+/// closed enum will host, padded out by the alignment of the
 /// following fields. We model it as a `u8` so the shape comparison is honest:
 /// both `MockNode` and `MockNodeInterned` carry the same `kind` representation,
 /// and the only field that differs is `key`.
@@ -219,17 +224,17 @@ pub struct MockNode {
     /// through a real lifecycle.
     #[allow(dead_code)]
     pub id: usize,
-    /// 0..=7 in the production enum (per plan KTD-1).
+    /// 0..=7 in the production enum.
     #[allow(dead_code)]
     pub kind: u8,
     /// `Option<Box<dyn ViewKey>>` — 16 bytes, fat pointer, heap-backed when
-    /// `Some`. This is the baseline shape spec FR-022 commits to absent the
-    /// Phase 0 gate report's S1 verdict.
+    /// `Some`. This is the baseline shape spec FR-022 commits to, pending
+    /// this prototype's storage-shape verdict.
     pub key: Option<Box<dyn ViewKey>>,
     /// Position-based child slots. Empty for leaves; populated for branches.
     /// `Vec` so the mock matches the production `Variable`-arity shape — the
     /// keyed reconciler's hot path walks a `&[ElementId]` slice over this
-    /// vector's contents (per plan U15).
+    /// vector's contents.
     #[allow(dead_code)]
     pub child_indices: Vec<usize>,
 }
@@ -296,7 +301,7 @@ impl MockNodeInterned {
 
 /// Three canonical permutations exercised by the reconcile workload.
 ///
-/// The plan's U2 spec calls for at minimum full-reverse + single-rotate +
+/// The plan calls for at minimum full-reverse + single-rotate +
 /// swap-first-last. We ship all three so each Criterion group emits three
 /// scenarios and the per-permutation memory cost is held constant across
 /// shapes.
@@ -431,7 +436,7 @@ impl MemoryAccounting {
 
 /// Build a `HashMap<key_hash, old_index>` over keyed old nodes and count
 /// how many new nodes match by key hash. This is **not** the production
-/// reconciler (that ships in Phase 2 U12) — it is the minimal kernel that
+/// reconciler — it is the minimal kernel that
 /// isolates the cost of `Box<dyn ViewKey>::key_hash()` dispatch vs `KeyId`
 /// direct u64 read at the HashMap key-build site.
 ///

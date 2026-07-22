@@ -31,8 +31,8 @@ impl StatelessView for TrackingView {
 }
 
 impl View for TrackingView {
-    fn create_element(&self) -> Box<dyn ElementBase> {
-        Box::new(StatelessElement::new(self, StatelessBehavior))
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateless(self)
     }
 }
 
@@ -80,8 +80,8 @@ impl ViewState<LifecycleTrackingView> for LifecycleTrackingState {
 }
 
 impl View for LifecycleTrackingView {
-    fn create_element(&self) -> Box<dyn ElementBase> {
-        Box::new(StatefulElement::new(self, StatefulBehavior::new(self)))
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateful(self)
     }
 }
 
@@ -481,10 +481,10 @@ fn test_lifecycle_send_sync() {
 }
 
 // ============================================================================
-// Characterization Tests for U8 (`ElementOwner` threading)
+// Characterization Tests for `ElementOwner` threading
 // ============================================================================
 //
-// These tests pin the observable mount/unmount/update invariants that U8's
+// These tests pin the observable mount/unmount/update invariants that the
 // signature-threading refactor must preserve. They were authored BEFORE the
 // `&mut ElementOwner` parameter was threaded through `ElementBase` so that any
 // regression in the lifecycle FSM during the rewire is caught immediately.

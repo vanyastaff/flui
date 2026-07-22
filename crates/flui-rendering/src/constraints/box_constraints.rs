@@ -20,17 +20,17 @@ use super::Constraints;
 ///
 /// # Cache Support
 ///
-/// Implements `Hash` and `Eq` for use as cache keys. Use `normalize()` before
+/// Implements `Hash` and `Eq` for use as cache keys. Use `round_for_cache()` before
 /// caching to ensure consistent floating-point comparisons:
 ///
 /// ```ignore
-/// let key = constraints.normalize();
+/// let key = constraints.round_for_cache();
 /// layout_cache.insert(key, computed_size);
 /// ```
 ///
-/// # Normalization
+/// # Cache Rounding
 ///
-/// The `normalize()` method rounds floating-point values to 0.01 precision
+/// The `round_for_cache()` method rounds floating-point values to 0.01 precision
 /// (2 decimal places) to avoid cache thrashing from rounding errors while
 /// maintaining sufficient accuracy for layout calculations.
 ///
@@ -204,13 +204,15 @@ impl BoxConstraints {
     // NORMALIZATION FOR CACHING
     // ============================================================================
 
-    /// Normalizes constraints for use as cache keys.
+    /// Rounds constraints for use as cache keys.
     ///
     /// Rounds finite values to 0.01 precision (2 decimal places).
     /// Infinite values are preserved unchanged.
+    ///
+    // TODO: a real Flutter-semantic normalize() (min≥0, max≥min) can live here if a caller needs it
     #[inline]
     #[must_use]
-    pub fn normalize(&self) -> Self {
+    pub fn round_for_cache(&self) -> Self {
         Self {
             min_width: round_pixels_to_hundredths(self.min_width),
             max_width: round_pixels_to_hundredths(self.max_width),
@@ -219,13 +221,13 @@ impl BoxConstraints {
         }
     }
 
-    /// Checks if constraints are already normalized.
+    /// Checks if constraints are already rounded for caching.
     ///
-    /// More efficient than comparing with `normalize()` as it checks
+    /// More efficient than comparing with `round_for_cache()` as it checks
     /// each field individually.
     #[inline]
     #[must_use]
-    pub fn is_normalized_for_cache(&self) -> bool {
+    pub fn is_rounded_for_cache(&self) -> bool {
         is_pixels_normalized(self.min_width)
             && is_pixels_normalized(self.max_width)
             && is_pixels_normalized(self.min_height)
@@ -495,32 +497,56 @@ impl BoxConstraints {
     #[must_use]
     pub fn tighten(&self, width: Option<Pixels>, height: Option<Pixels>) -> Self {
         Self {
-            min_width: width
-                .map(|w| w.clamp(self.min_width, self.max_width))
-                .unwrap_or(self.min_width),
-            max_width: width
-                .map(|w| w.clamp(self.min_width, self.max_width))
-                .unwrap_or(self.max_width),
-            min_height: height
-                .map(|h| h.clamp(self.min_height, self.max_height))
-                .unwrap_or(self.min_height),
-            max_height: height
-                .map(|h| h.clamp(self.min_height, self.max_height))
-                .unwrap_or(self.max_height),
+            min_width: width.map_or(self.min_width, |w| w.clamp(self.min_width, self.max_width)),
+            max_width: width.map_or(self.max_width, |w| w.clamp(self.min_width, self.max_width)),
+            min_height: height.map_or(self.min_height, |h| {
+                h.clamp(self.min_height, self.max_height)
+            }),
+            max_height: height.map_or(self.max_height, |h| {
+                h.clamp(self.min_height, self.max_height)
+            }),
         }
     }
 
-    /// Enforces these constraints on another set of constraints.
+    /// Swaps the width and height axes of these constraints.
     ///
-    /// Constrains the other constraints to fit within these bounds.
+    /// Returns constraints with `min_width ↔ min_height` and `max_width ↔ max_height`
+    /// exchanged.  Used by `RenderRotatedBox` to pass rotated constraints to the
+    /// child when the quarter-turns count is odd (90° or 270°): the child must
+    /// fill the space that appears as the parent's *height* but, from the child's
+    /// coordinate frame, is its *width*.
+    ///
+    /// Flutter parity: `BoxConstraints.flipped` getter in `box.dart`.
+    #[inline]
+    #[must_use]
+    pub fn flipped(self) -> Self {
+        Self {
+            min_width: self.min_height,
+            max_width: self.max_height,
+            min_height: self.min_width,
+            max_height: self.max_width,
+        }
+    }
+
+    /// Returns these constraints clamped to fit within `other`'s bounds, while
+    /// staying as close as possible to the originals.
+    ///
+    /// Flutter parity: `BoxConstraints.enforce`
+    /// (`.flutter/flutter-master/packages/flutter/lib/src/rendering/box.dart`):
+    /// `a.enforce(b)` clamps **`a`'s own** values into `b`'s `[min, max]` range —
+    /// the argument's bounds win — so `additional.enforce(parent)` keeps the
+    /// parent's hard limits. The prior implementation clamped `other`'s values
+    /// into `self`'s range (the reverse), which let additional constraints
+    /// override the parent and silently oversized children whenever the two
+    /// ranges did not overlap.
     #[inline]
     #[must_use]
     pub fn enforce(&self, other: &Self) -> Self {
         Self {
-            min_width: self.constrain_width(other.min_width),
-            max_width: self.constrain_width(other.max_width),
-            min_height: self.constrain_height(other.min_height),
-            max_height: self.constrain_height(other.max_height),
+            min_width: other.constrain_width(self.min_width),
+            max_width: other.constrain_width(self.max_width),
+            min_height: other.constrain_height(self.min_height),
+            max_height: other.constrain_height(self.max_height),
         }
     }
 
@@ -712,21 +738,21 @@ impl BoxConstraints {
     #[inline]
     #[must_use]
     pub fn round(&self) -> Self {
-        self.map(|v| v.round())
+        self.map(flui_types::Pixels::round)
     }
 
     /// Floors all constraint values.
     #[inline]
     #[must_use]
     pub fn floor(&self) -> Self {
-        self.map(|v| v.floor())
+        self.map(flui_types::Pixels::floor)
     }
 
     /// Ceils all constraint values.
     #[inline]
     #[must_use]
     pub fn ceil(&self) -> Self {
-        self.map(|v| v.ceil())
+        self.map(flui_types::Pixels::ceil)
     }
 }
 
@@ -747,10 +773,10 @@ fn round_pixels_to_hundredths(value: Pixels) -> Pixels {
 /// Checks if a Pixels value is already normalized.
 #[inline]
 fn is_pixels_normalized(value: Pixels) -> bool {
-    if !value.is_finite() {
-        true
-    } else {
+    if value.is_finite() {
         value == round_pixels_to_hundredths(value)
+    } else {
+        true
     }
 }
 
@@ -805,7 +831,7 @@ impl fmt::Debug for BoxConstraints {
 
 impl fmt::Display for BoxConstraints {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:?}", self)
+        write!(f, "{self:?}")
     }
 }
 
@@ -896,32 +922,32 @@ mod tests {
     }
 
     #[test]
-    fn test_normalization() {
+    fn test_round_for_cache() {
         let c = BoxConstraints::new(
             px(10.123_456),
             px(100.987_654),
             px(20.555_555),
             px(200.444_44),
         );
-        let normalized = c.normalize();
+        let rounded = c.round_for_cache();
 
-        assert_eq!(normalized.min_width, px(10.12));
-        assert_eq!(normalized.max_width, px(100.99));
-        assert_eq!(normalized.min_height, px(20.56));
-        assert_eq!(normalized.max_height, px(200.44));
+        assert_eq!(rounded.min_width, px(10.12));
+        assert_eq!(rounded.max_width, px(100.99));
+        assert_eq!(rounded.min_height, px(20.56));
+        assert_eq!(rounded.max_height, px(200.44));
 
         // Infinity preserved
-        let inf = BoxConstraints::UNCONSTRAINED.normalize();
+        let inf = BoxConstraints::UNCONSTRAINED.round_for_cache();
         assert!(inf.max_width.is_infinite());
     }
 
     #[test]
-    fn test_is_normalized() {
-        let normalized = BoxConstraints::new(px(10.12), px(100.99), px(20.56), px(200.44));
-        assert!(normalized.is_normalized_for_cache());
+    fn test_is_rounded_for_cache() {
+        let rounded = BoxConstraints::new(px(10.12), px(100.99), px(20.56), px(200.44));
+        assert!(rounded.is_rounded_for_cache());
 
-        let unnormalized = BoxConstraints::new(px(10.123_456), px(100.0), px(20.0), px(200.0));
-        assert!(!unnormalized.is_normalized_for_cache());
+        let unrounded = BoxConstraints::new(px(10.123_456), px(100.0), px(20.0), px(200.0));
+        assert!(!unrounded.is_rounded_for_cache());
     }
 
     #[test]
@@ -976,5 +1002,27 @@ mod tests {
         assert_eq!(c.min_width, px(10.0));
         assert_eq!(c.max_width, px(100.0));
         assert!(c.has_tight_height());
+    }
+
+    #[test]
+    fn enforce_clamps_self_into_other_bounds() {
+        // Flutter `a.enforce(b)`: a's OWN values are clamped into b's [min,max],
+        // so the argument (parent) bounds win (box.dart BoxConstraints.enforce).
+        // additional minWidth 500 under a parent capped at 100 -> tight 100, not
+        // 500. (The reversed pre-fix impl returned min_width 500 here.)
+        let additional =
+            BoxConstraints::new(px(500.0), Pixels::INFINITY, Pixels::ZERO, Pixels::INFINITY);
+        let parent = BoxConstraints::new(Pixels::ZERO, px(100.0), Pixels::ZERO, px(100.0));
+        let combined = additional.enforce(&parent);
+        assert_eq!(combined.min_width, px(100.0));
+        assert_eq!(combined.max_width, px(100.0));
+
+        // Overlapping ranges are unchanged either way (the common case, which is
+        // why the pre-fix bug stayed hidden).
+        let a = BoxConstraints::new(px(10.0), px(50.0), px(10.0), px(50.0));
+        let b = BoxConstraints::new(px(0.0), px(100.0), px(0.0), px(100.0));
+        let c = a.enforce(&b);
+        assert_eq!(c.min_width, px(10.0));
+        assert_eq!(c.max_width, px(50.0));
     }
 }

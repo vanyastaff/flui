@@ -78,7 +78,7 @@ use crate::ids::PointerId;
 ///
 /// Custom recognizers must be `Send + Sync` to work with the concurrent
 /// gesture arena.
-pub trait CustomGestureRecognizer: Send + Sync {
+pub trait CustomGestureRecognizer {
     /// Called when this recognizer wins the gesture arena.
     ///
     /// This means your gesture was recognized and other competing
@@ -163,6 +163,8 @@ pub trait CustomHitTestable: Send + Sync {
 ///
 /// **Do not implement directly.** Instead, implement [`CustomHitTestable`].
 pub mod hit_testable {
+    /// Marker supertrait sealing `HitTestable`; implemented automatically for
+    /// every [`CustomHitTestable`](super::CustomHitTestable) via blanket impl.
     pub trait Sealed {} // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
 
     // Blanket impl: any CustomHitTestable automatically gets Sealed
@@ -178,6 +180,9 @@ pub mod hit_testable {
 /// **Do not implement directly.** Instead, implement
 /// [`CustomGestureRecognizer`].
 pub mod gesture_recognizer {
+    /// Marker supertrait sealing `GestureRecognizer`; implemented for the
+    /// built-in recognisers and automatically for every
+    /// [`CustomGestureRecognizer`](super::CustomGestureRecognizer).
     pub trait Sealed {} // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
 
     // Blanket impl: any CustomGestureRecognizer automatically gets Sealed
@@ -203,6 +208,9 @@ pub mod gesture_recognizer {
 /// **Do not implement directly.** Instead, implement
 /// [`CustomGestureRecognizer`].
 pub mod arena_member {
+    /// Marker supertrait sealing `GestureArenaMember`; implemented for the
+    /// built-in recognisers and automatically for every
+    /// [`CustomGestureRecognizer`](super::CustomGestureRecognizer).
     pub trait Sealed {} // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
 
     // Blanket impl: any CustomGestureRecognizer automatically gets Sealed
@@ -225,5 +233,6 @@ pub mod arena_member {
 ///
 /// This restricts which types can receive keyboard focus.
 pub mod focus_node {
+    /// Marker supertrait restricting which types can receive keyboard focus.
     pub trait Sealed {} // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
 }

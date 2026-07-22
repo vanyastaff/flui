@@ -22,6 +22,7 @@
 //! the same way `PathCache` does.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use flui_types::painting::Path;
 
@@ -96,7 +97,12 @@ impl SuperellipseKey {
 #[derive(Debug, Clone)]
 struct CachedSuperellipsePath {
     /// The tessellated path with iOS-squircle corner curves.
-    path: Path,
+    ///
+    /// Stored behind `Arc` so cache hits pay only for a reference-count
+    /// increment (`Arc::clone`) rather than a deep copy of the ~256-command
+    /// path. All callers use the path read-only (`&Path`), so shared
+    /// ownership is safe.
+    path: Arc<Path>,
     /// Frame number when this entry was last accessed.
     last_used_frame: u64,
 }
@@ -138,15 +144,15 @@ impl SuperellipsePathCache {
 
     /// Look up a cached superellipse path by key.
     ///
-    /// Returns `Some(Path)` on a cache hit and updates the last-used frame
-    /// counter. Returns `None` on a cache miss. The returned path is cloned
-    /// because `Path` ownership crosses the cache boundary to downstream
-    /// clipping code that consumes the value.
-    pub fn get(&mut self, key: &SuperellipseKey) -> Option<Path> {
+    /// Returns `Some(Arc<Path>)` on a cache hit and updates the last-used
+    /// frame counter. The `Arc` is cloned cheaply (reference-count bump
+    /// only); the underlying ~256-command path is never deep-copied.
+    /// Returns `None` on a cache miss.
+    pub fn get(&mut self, key: &SuperellipseKey) -> Option<Arc<Path>> {
         if let Some(entry) = self.entries.get_mut(key) {
             entry.last_used_frame = self.current_frame;
             self.hits += 1;
-            Some(entry.path.clone())
+            Some(Arc::clone(&entry.path))
         } else {
             self.misses += 1;
             None
@@ -155,10 +161,12 @@ impl SuperellipsePathCache {
 
     /// Insert a tessellated superellipse path into the cache.
     ///
-    /// If the cache is at capacity, the LRU entry (by `last_used_frame`)
-    /// is evicted before insertion. Matches
+    /// Accepts `Arc<Path>` so the caller retains shared ownership of the
+    /// path it just generated without an extra deep clone. If the cache is
+    /// at capacity, the LRU entry (by `last_used_frame`) is evicted before
+    /// insertion. Matches
     /// [`PathCache::insert`](super::path_cache::PathCache::insert) logic.
-    pub fn insert(&mut self, key: SuperellipseKey, path: Path) {
+    pub fn insert(&mut self, key: SuperellipseKey, path: Arc<Path>) {
         // Evict LRU entry when at capacity (skip if key already exists —
         // it's an update, not an insertion).
         if self.entries.len() >= self.max_entries
@@ -265,8 +273,8 @@ mod tests {
         }
     }
 
-    fn make_path() -> Path {
-        Path::new()
+    fn make_arc_path() -> Arc<Path> {
+        Arc::new(Path::new())
     }
 
     #[test]
@@ -279,23 +287,40 @@ mod tests {
         assert_eq!(cache.stats(), (0, 1, 0));
 
         // Insert + hit
-        cache.insert(key, make_path());
+        cache.insert(key, make_arc_path());
         assert!(cache.get(&key).is_some());
         assert_eq!(cache.stats(), (1, 1, 1));
     }
 
     #[test]
+    fn cache_hit_returns_arc_clone_not_deep_copy() {
+        // Verify that a warm hit hands out an Arc pointing to the same
+        // allocation as the one originally inserted (strong-count proof).
+        let mut cache = SuperellipsePathCache::new(64);
+        let key = make_key(42);
+        let original = make_arc_path();
+        cache.insert(key, Arc::clone(&original));
+
+        let hit = cache.get(&key).expect("cache should have key 42");
+        // Both Arcs must point to the same allocation.
+        assert!(
+            Arc::ptr_eq(&original, &hit),
+            "cache hit must return an Arc alias, not a deep copy"
+        );
+    }
+
+    #[test]
     fn insert_evicts_lru_at_capacity() {
         let mut cache = SuperellipsePathCache::new(2);
-        cache.insert(make_key(1), make_path());
-        cache.insert(make_key(2), make_path());
+        cache.insert(make_key(1), make_arc_path());
+        cache.insert(make_key(2), make_arc_path());
 
         // Advance a frame and touch only key 2
         cache.advance_frame();
         let _ = cache.get(&make_key(2));
 
         // Insert third entry — should evict key 1 (LRU)
-        cache.insert(make_key(3), make_path());
+        cache.insert(make_key(3), make_arc_path());
         assert!(cache.get(&make_key(1)).is_none(), "key 1 should be evicted");
         assert!(cache.get(&make_key(2)).is_some(), "key 2 stays");
         assert!(cache.get(&make_key(3)).is_some(), "key 3 stays");
@@ -304,7 +329,7 @@ mod tests {
     #[test]
     fn advance_frame_evicts_stale_entries() {
         let mut cache = SuperellipsePathCache::new(64);
-        cache.insert(make_key(1), make_path());
+        cache.insert(make_key(1), make_arc_path());
 
         // Advance past threshold without re-accessing
         for _ in 0..=EVICTION_THRESHOLD {
@@ -322,7 +347,7 @@ mod tests {
 
         // miss, insert, hit, hit → (2, 1, 1)
         let _ = cache.get(&key);
-        cache.insert(key, make_path());
+        cache.insert(key, make_arc_path());
         let _ = cache.get(&key);
         let _ = cache.get(&key);
 
@@ -332,8 +357,8 @@ mod tests {
     #[test]
     fn clear_empties_entries_and_resets_stats() {
         let mut cache = SuperellipsePathCache::new(64);
-        cache.insert(make_key(1), make_path());
-        cache.insert(make_key(2), make_path());
+        cache.insert(make_key(1), make_arc_path());
+        cache.insert(make_key(2), make_arc_path());
         let _ = cache.get(&make_key(1));
         assert_eq!(cache.stats(), (1, 0, 2));
 
@@ -356,7 +381,7 @@ mod tests {
         assert_eq!(k1, k2, "key stable across calls");
     }
 
-    /// Covers AE2 (R6): the audit Step 5 item 14 stress test.
+    /// Stress test for the cache's `max_entries` cap under heavy insertion churn.
     ///
     /// Insert 10 000 unique superellipse keys into a cache with the
     /// production-default `max_entries = 256` and verify the cache
@@ -371,7 +396,7 @@ mod tests {
         let mut cache = SuperellipsePathCache::new(MAX_ENTRIES);
 
         for i in 0..N {
-            cache.insert(make_key(i), make_path());
+            cache.insert(make_key(i), make_arc_path());
 
             // Periodically advance the frame to simulate real-world
             // frame progression alongside the insertion churn. Some

@@ -1,0 +1,14 @@
+---
+source: crates/flui-objects/tests/harness_snapshot.rs
+expression: run.snapshot()
+---
+Offset
+  dx: 0.00
+  dy: 0.00
+  Picture
+    bounds: (0.00,0.00,40.00,40.00)
+    commands: 1
+    DrawRect
+      rect: (0.00,0.00,40.00,40.00)
+      color: #FF0000FF
+      style: Fill

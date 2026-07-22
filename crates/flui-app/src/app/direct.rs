@@ -28,7 +28,7 @@
 
 use std::sync::Arc;
 
-use flui_engine::wgpu::Renderer;
+use flui_engine::{Recoverability, wgpu::Renderer};
 use flui_layer::{LayerTree, Scene, SceneBuilder};
 use flui_platform::{
     WindowOptions,
@@ -61,8 +61,10 @@ use crate::embedder::PlatformWindowHandle;
 ///
 /// # Platform Support
 ///
-/// Currently supports desktop platforms (Windows, macOS, Linux).
-/// Uses `flui_platform::current_platform()` for platform selection.
+/// Dead on arrival on the winit backend (Linux) — see the "Open window" note
+/// in the body for why. Native (non-winit) Windows/macOS backends are
+/// unaffected. Uses `flui_platform::current_platform()` for platform
+/// selection.
 pub fn run_direct(
     config: AppConfig,
     render_fn: impl FnMut(&mut SceneBuilder<'_>, f32, f32) + Send + 'static,
@@ -85,10 +87,20 @@ pub fn run_direct(
     let platform = flui_platform::current_platform()?;
 
     // 1. Open window
+    //
+    // NOTE: like the pre-fix `run_desktop`, this opens the window before
+    // `run()` starts the event loop. On the winit backend (Linux) that no
+    // longer hangs — `WinitPlatform::open_window` now fails fast with a
+    // clear error when called before the event loop is running — but it
+    // still can't work: this `?` will bubble that error out of `run_direct`
+    // immediately, before any window ever opens. Known, deliberately
+    // out-of-scope follow-up: `run_direct` needs the same on_ready-driven
+    // reorder `run_desktop` received (see `runner.rs`'s `run_desktop`), not
+    // attempted here.
     let options: WindowOptions = (&config).into();
     let window = platform
         .open_window(options)
-        .map_err(|e| anyhow::anyhow!("Failed to create window: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("Failed to create window: {e}"))?;
 
     // 2. Create GPU renderer
     let phys_size = window.physical_size();
@@ -100,7 +112,7 @@ pub fn run_direct(
         Ok(r) => r,
         Err(e) => {
             tracing::error!("GPU init failed: {:?}", e);
-            return Err(anyhow::anyhow!("GPU initialization failed: {}", e));
+            return Err(anyhow::anyhow!("GPU initialization failed: {e}"));
         }
     };
     renderer.resize(phys_size.width.0 as u32, phys_size.height.0 as u32);
@@ -145,10 +157,25 @@ pub fn run_direct(
         let scene = Scene::new(Size::new(px(w as f32), px(h as f32)), tree, root, frame);
 
         if let Err(e) = r.render_scene(&scene) {
-            if e.is_recoverable() {
+            if e.recoverability() == Recoverability::Recoverable {
                 tracing::warn!("Recoverable render error (will retry): {}", e);
             } else {
-                tracing::error!("Fatal render error: {}", e);
+                // Covers both Fatal (renderer must be recreated) and
+                // Unrecoverable (surface misconfig / resource I/O / text error:
+                // drop this frame, no blind retry). Neither auto-retries.
+                tracing::error!(error = ?e, "Non-recoverable render error");
+            }
+        }
+
+        // GPU device-loss recovery: same logic as runner.rs frame callbacks.
+        if r.is_device_lost() {
+            match pollster::block_on(r.recover()) {
+                Ok(()) => {
+                    tracing::warn!("GPU device lost — recovered successfully");
+                }
+                Err(e) => {
+                    tracing::error!(error = ?e, "GPU device recovery failed; will retry next frame");
+                }
             }
         }
     }));
@@ -164,10 +191,12 @@ pub fn run_direct(
         }
     }));
 
-    // 6. Register input callback (triggers redraw on any input)
-    window.on_input(Box::new(move |_input: PlatformInput| DispatchEventResult {
-        propagate: false,
-        default_prevented: false,
+    // 6. Register input callback. This is a no-op stub: it neither inspects
+    // the input nor requests a redraw (`resolved(false, false)`). Direct mode
+    // has no widget tree to dispatch input into; a caller who needs input
+    // handling drives it from inside `render_fn` via its own state.
+    window.on_input(Box::new(move |_input: PlatformInput| {
+        DispatchEventResult::resolved(false, false)
     }));
 
     // 7. Lifecycle callbacks
@@ -190,7 +219,7 @@ pub fn run_direct(
     tracing::info!("Direct render mode initialized, entering event loop");
 
     // 9. Run event loop (takes ownership of platform)
-    platform.run(Box::new(|| {
+    platform.run(Box::new(|_platform| {
         tracing::info!("FLUI direct render mode ready");
     }));
 

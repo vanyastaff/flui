@@ -2,10 +2,10 @@
 resolver = "2"
 members = [
     # === Phase 1: Foundation Layer ===
-    "crates/flui-geometry",   # Geometry primitives (split from flui-types in D-block PR-C-2)
+    "crates/flui-geometry",   # Geometry primitives (split from flui-types)
     "crates/flui-types",      # Base types with Unit system (ACTIVE)
     "crates/flui-foundation", # Foundation types and utilities (ACTIVE)
-    "crates/flui-macros",     # Proc-macros (skeleton — derives land in Phase 3 §U23)
+    "crates/flui-macros",     # Proc-macros (skeleton — derives land as a follow-up)
     "crates/flui-tree",       # Tree abstractions (ACTIVE)
     "crates/flui-platform",   # Platform abstraction (ACTIVE)
 
@@ -19,11 +19,18 @@ members = [
     "crates/flui-hot-reload",  # Hot-reload scene plugins via dlopen (ACTIVE)
 
     # === Phase 3: Framework Layer ===
-    "crates/flui-rendering", # Render tree (ACTIVE)
-    "crates/flui-view",      # View/Element tree (ACTIVE)
+    "crates/flui-rendering",     # Render tree / engine (ACTIVE)
+    "crates/flui-objects",       # Concrete RenderBox/RenderSliver catalog (ACTIVE)
+    "crates/flui-view",          # View/Element tree (ACTIVE)
+    "crates/flui-widgets",       # User-facing widget catalog (ACTIVE — Core.1 slice)
+    "crates/flui-localizations", # Global (multi-language) localized resources (ACTIVE — Catalog.1 slice)
+    "crates/flui-binding",       # Headless deterministic frame driver (pump_frame) (ACTIVE — Phase 1)
+    "crates/flui-material",      # Material Design theming foundation — ColorScheme/TextTheme/ThemeData/Theme (ACTIVE — Catalog.1 slice)
+    "crates/flui-cupertino",     # iOS-style theming foundation — CupertinoDynamicColor/CupertinoTextTheme/CupertinoTheme/CupertinoButton (ACTIVE — Catalog.1 slice)
 
     # === Phase 4: Application Layer ===
-    "crates/flui-app", # Application framework (ACTIVE - Migration)
+    "crates/flui-app",    # Application framework (ACTIVE - Migration)
+    "crates/flui-assets", # Asset loading/caching (ACTIVE — wired into Image per Cross.A)
 
     # === Examples (platform-specific) ===
     # NOTE: Android examples are excluded from workspace.members because they
@@ -32,7 +39,10 @@ members = [
     # "examples/android_demo",      # Android GPU demo (cdylib)
     # "examples/android_scene",     # Hot-reloadable scene plugin (cdylib)
     # "examples/android_app",       # Widget-based hot-reloadable plugin (cdylib)
-    "examples/desktop_scene", # Hot-reloadable scene plugin for desktop — loaded via HotReloadDriver
+    "examples/desktop_scene",            # Hot-reloadable scene plugin for desktop — loaded via HotReloadDriver
+    "examples/hot_reload_counter/types",
+    "examples/hot_reload_counter/logic",
+    "examples/hot_reload_counter/host",
 
     # NOTE: Web examples are excluded from default workspace members because they
     # require wasm32 target. Build with:
@@ -45,13 +55,21 @@ members = [
 
     # === Animation Layer ===
     "crates/flui-animation", # Animation system (ACTIVE)
+
+    # === DX tooling ===
+    "crates/flui-devtools", # Profiler / inspector / hot-reload protocol
+    "crates/flui-build",    # Build orchestration (android / cross)
+    "crates/flui-cli",      # `flui` CLI (run / build / devtools / templates)
+    # NOTE: flui-reactivity is excluded — its manifest inherits `any_spawner` from
+    # workspace.dependencies, which is not declared at the root (the reactive
+    # runtime is not wired into the workspace). The crate is standalone-by-design
+    # (0 consumers — "signals locked out by C1"); re-include it only when signals
+    # are integrated into the view layer and its deps are added to the workspace.
     # "crates/flui-reactivity",
-    # "crates/flui-devtools",
-    # "crates/flui-cli",
-    # "crates/flui-build",
 ]
 
-# Default members exclude Android-only crates (ndk-sys won't compile on host)
+# Default members exclude platform-specific examples/tools. `cargo build
+# --workspace` still builds every workspace member listed above.
 default-members = [
     "crates/flui-geometry",
     "crates/flui-types",
@@ -67,13 +85,23 @@ default-members = [
     "crates/flui-engine",
     "crates/flui-hot-reload",
     "crates/flui-rendering",
+    "crates/flui-objects",
     "crates/flui-view",
+    "crates/flui-widgets",
+    "crates/flui-localizations",
+    "crates/flui-binding",
+    "crates/flui-material",
+    "crates/flui-cupertino",
     "crates/flui-app",
+    "crates/flui-assets",
     "crates/flui-animation",
+    "crates/flui-devtools",
+    "crates/flui-build",
+    "crates/flui-cli",
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.96"
 license = "MIT OR Apache-2.0"
@@ -88,6 +116,9 @@ tokio = { version = "1.43" }
 parking_lot = "0.12"
 once_cell = "1.20"
 dashmap = "6.1"
+# Bounded typed mailboxes (PipelineOwnerHandle dirty channel, UiRealm
+# owner inbox — bounded queues with typed backpressure only)
+crossbeam-channel = "0.5"
 
 # COLLECTIONS - Used by multiple crates
 smallvec = { version = "1.13", features = ["serde", "union", "const_generics"] }
@@ -99,8 +130,20 @@ serde_json = "1.0"
 # BUILDER UTILITIES - Used by widgets
 bon = "3.8"
 
+# DX TOOLING - flui-cli / flui-build / flui-devtools
+indicatif = "0.17" # progress bars (build/cli)
+tempfile = "3"     # scratch dirs/files (build/cli tests)
+which = "7"        # locate toolchain executables (build/cli)
+
 # WORKSPACE PROC-MACROS
-flui-macros = { path = "crates/flui-macros" }
+flui-macros = { path = "crates/flui-macros", version = "0.2.0" }
+
+# OBJECT CATALOG — sits above flui-rendering (depends on it), below flui-view/app
+flui-objects = { path = "crates/flui-objects", version = "0.2.0" }
+
+# HEADLESS FRAME DRIVER — deterministic `pump_frame(dt)` over the gesture arena +
+# virtual clock; sits above flui-widgets, below flui-app.
+flui-binding = { path = "crates/flui-binding", version = "0.2.0" }
 
 # ERROR HANDLING & LOGGING - Used everywhere
 thiserror = "2.0"
@@ -114,10 +157,36 @@ tracing-forest = { version = "0.3", features = ["smallvec"] }
 # GPU RENDERING (WGPU BACKEND) - Track latest stable (29.x).
 # Update policy: bump within the same minor on security/bug fixes; bump major after
 # verifying API migration on a dedicated branch (see docs/adr/ADR-0002).
-wgpu = { version = "29.0", default-features = false, features = ["wgsl"] }
+wgpu = { version = "29.0", default-features = false, features = ["wgsl", "naga-ir"] }
+# GPU profiling — optional, reused by flui-engine behind the `gpu-profiler` feature.
+# Pins wgpu ^29.0, consistent with the workspace pin above. Excluded from wasm32.
+wgpu-profiler = { version = "0.27", default-features = false }
+# Shader module composition — resolves #import directives in WGSL at build-time or
+# pipeline-init time.  Pins naga ^29, consistent with wgpu 29's naga dep.
+# Used by flui-engine to compose blend_helpers.wgsl into mode.wgsl / advanced_blend.wgsl.
+naga_oil = { version = "0.22", default-features = false }
 winit = "0.30.12"
 raw-window-handle = "0.6"
 pollster = "0.4"
+# Trait-only `Stream`. NOT `futures`/`futures-util`: no executor, no
+# combinators, no proc macros — just the trait `StreamBuilder` polls by hand.
+# Already in the graph via wgpu's `flume`, so it vendors nothing new.
+futures-core = { version = "0.3", default-features = false, features = ["std"] }
+# Used by flui-widgets' image decode cache to coalesce concurrent async image
+# loads: `FutureExt::shared()` lets N `Image` widgets mounted with the same
+# provider key await ONE underlying load instead of starting N. `alloc` only
+# (no `std`/`io`/`channel`/proc-macro features) — this is the one place the
+# `futures-core`-only policy above is deliberately NOT enough, because
+# coalescing genuinely needs the `Shared` combinator, not just the `Future`
+# trait.
+futures-util = { version = "0.3", default-features = false, features = ["alloc"] }
+
+# Count-bounded LRU — flui-widgets' decoded-image cache
+# (`flui_widgets::image`'s sync probe before spawning an async load). No
+# time-based eviction, unlike flui-assets' moka byte-loader cache (TTL
+# 5min/TTI 1min) — see that module's doc for why the two caches serve
+# different roles and neither substitutes for the other.
+lru = "0.18"
 
 # CLIPBOARD - Cross-platform clipboard access
 arboard = "3.4"
@@ -126,19 +195,41 @@ arboard = "3.4"
 # TODO: Re-enable "webp" feature when image-rs/image-webp#102 is fixed upstream
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif"] }
 
+# === Engine/geometry shared math dependencies ===
+# glam: SIMD GPU math used by flui-engine (serde+bytemuck features) and
+# flui-geometry (bytemuck+mint features). The workspace entry carries the common
+# base features; each crate adds its own extras via per-crate `features = [...]`.
+glam = { version = "0.33", features = ["bytemuck"] }
+# bytemuck: zero-copy Pod/Zeroable derives shared by flui-engine and flui-geometry.
+bytemuck = { version = "1.24", features = ["derive"] }
+
+# === Engine build-script dependencies ===
+# wgsl_bindgen: WGSL → Rust binding codegen, used in flui-engine's build.rs only.
+# Pins naga ^29 (same as wgpu 29) and naga_oil ^0.22 (same as workspace); the
+# build-script context is separate from the compiled output, so the duplicate naga
+# dep does not affect the binary.
+wgsl_bindgen = { version = "0.22", default-features = false }
+# regex: required by wgsl_bindgen's OverrideTextureFilterability / OverrideSamplerType
+# constructors in build.rs; not compiled into the crate binary.
+regex = "1"
+
 # === Engine-specific dependencies (NOT in workspace) ===
 # These are ONLY used in flui-engine:
-# - glam (GPU math)
 # - glyphon, cosmic-text (text rendering)
 # - lyon (tessellation)
 # - guillotiere (texture atlas)
-# - bytemuck
 
 # CACHING - Used by flui_core and flui-assets
 moka = { version = "0.12", features = ["future"] }
 
 # NETWORKING - Used by flui-assets
-reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls"] }
+# default-features = false: reqwest's default `native-tls` pulls openssl,
+# which deny.toml bans — this workspace is rustls-only by policy.
+reqwest = { version = "0.12", default-features = false, features = [
+    "json",
+    "stream",
+    "rustls-tls",
+] }
 
 # UI EVENTS - Cross-platform input event abstraction (W3C compliant)
 ui-events = "0.3"
@@ -148,10 +239,10 @@ cursor-icon = "1.2"
 bitflags = "2.10"
 dyn-clone = "1.0"
 downcast-rs = "2.0.2"
+static_assertions = "1.1"
 
-# FAST HASHING - Used by flui-rendering (FxHashSet for layout cycle guard
-# per D-block U21; deterministic + faster than std SipHash for small keys
-# like RenderId)
+# FAST HASHING - Used by flui-rendering (FxHashSet for layout cycle guard;
+# deterministic + faster than std SipHash for small keys like RenderId)
 rustc-hash = "2.1"
 
 # STRING INTERNING - Used by flui-assets
@@ -180,6 +271,13 @@ rust_2018_idioms = "warn"
 # Lint groups need lower priority to allow individual lint overrides
 all = { level = "warn", priority = -1 }
 pedantic = { level = "warn", priority = -1 }
+# Panic policy (docs/PANIC-POLICY.md): production paths return Result or
+# assert invariants via `expect("BUG: ...")`; bare unwrap() is banned. Test
+# code is exempt via clippy.toml (allow-unwrap-in-tests). Crates predating
+# the policy carry a tracked `#![allow(clippy::unwrap_used)]` burned down in
+# ship-quality waves. `expect_used` stays off — expect() with the BUG:
+# message convention IS the sanctioned invariant idiom.
+unwrap_used = "warn"
 # Allow reasonable exceptions
 cast_precision_loss = "allow"
 module_name_repetitions = "allow"
@@ -189,6 +287,29 @@ missing_panics_doc = "allow"
 must_use_candidate = "allow"
 return_self_not_must_use = "allow"
 doc_markdown = "allow"
+# Graphics/layout idiom, workspace-wide: pixel math converts between float
+# and integer spaces constantly (px ↔ DevicePixels ↔ buffer indices), and
+# layout values are exact-by-construction so strict float comparison in
+# code and tests is deliberate (Flutter's own layout tests compare doubles
+# exactly). Same rationale as `cast_precision_loss` above.
+cast_possible_truncation = "allow"
+cast_sign_loss = "allow"
+cast_lossless = "allow"
+cast_possible_wrap = "allow"
+float_cmp = "allow"
+# Pedantic style relaxations that fight this codebase's idiom: math-adjacent
+# names (`x0`/`x1`, `min_w`/`max_w`) and helper items declared next to the
+# test statements that use them.
+similar_names = "allow"
+items_after_statements = "allow"
+# Declarative-UI API idiom: widget builders and `run_app` consume their
+# configuration by value (the View IS the argument — 100+ sites in
+# flui-widgets alone); small Copy geometry types are passed by ref for API
+# symmetry with their non-Copy siblings; UI config structs (WindowOptions,
+# gesture settings) are naturally bool-heavy.
+needless_pass_by_value = "allow"
+trivially_copy_pass_by_ref = "allow"
+struct_excessive_bools = "allow"
 
 [package]
 name = "flui"
@@ -196,41 +317,68 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+authors.workspace = true
+repository.workspace = true
 description = "Flutter-inspired declarative UI framework with wgpu rendering"
+readme = "README.md"
 keywords = ["gui", "ui", "wgpu", "flutter", "reactive"]
+categories = ["gui", "rendering::engine"]
 
+[lints]
+workspace = true
+
+# The facade surface (src/lib.rs): the layers an application author consumes.
+# Lower layers (rendering/painting/engine/platform) stay dev-deps — examples
+# reach them directly, app authors go through the widget layer. The two
+# design systems (flui-material/flui-cupertino) are regular dependencies,
+# not dev-deps: `src/lib.rs` re-exports them as `flui::material`/
+# `flui::cupertino`, and a `[dev-dependencies]` crate is unavailable to the
+# lib target itself. `flui` is on ADR-0028's design-system-dependent
+# allowlist alongside `flui-app` — see `scripts/check-workspace-inventory.sh`.
 [dependencies]
+flui-types = { path = "crates/flui-types", version = "0.2.0" }
+flui-geometry = { path = "crates/flui-geometry", version = "0.2.0" }
+flui-foundation = { path = "crates/flui-foundation", version = "0.2.0" }
+flui-view = { path = "crates/flui-view", version = "0.2.0" }
+flui-widgets = { path = "crates/flui-widgets", version = "0.2.0" }
+flui-animation = { path = "crates/flui-animation", version = "0.2.0" }
+flui-app = { path = "crates/flui-app", version = "0.2.0" }
+flui-material = { path = "crates/flui-material", version = "0.2.0" }
+flui-cupertino = { path = "crates/flui-cupertino", version = "0.2.0" }
 
 [dev-dependencies]
 # === Foundation Layer ===
-flui-types = { path = "crates/flui-types" }
-flui-foundation = { path = "crates/flui-foundation" } # HasInstance/Listenable in animated_box_app
 # flui-tree = { path = "crates/flui-tree" }
 
 # === Core Layer ===
-flui-layer = { path = "crates/flui-layer" }
-flui-painting = { path = "crates/flui-painting" }
-# === Rendering Layer (colored_box_app / animated_box_app examples) ===
-flui-rendering = { path = "crates/flui-rendering" }
-
-# === View Layer ===
-flui-view = { path = "crates/flui-view" }
+flui-layer = { path = "crates/flui-layer", version = "0.2.0" }
+flui-painting = { path = "crates/flui-painting", version = "0.2.0" }
+# === Rendering Layer (colored_box_app / animated_box_app examples; "testing"
+# for the vertical_slice_demo acceptance test's render-tree inspection) ===
+flui-rendering = { path = "crates/flui-rendering", version = "0.2.0", features = ["testing"] }
+flui-objects = { path = "crates/flui-objects", version = "0.2.0" }
+# === Interaction Layer ("testing" for the vertical_slice_demo acceptance
+# test's synthetic pointer events) ===
+flui-interaction = { path = "crates/flui-interaction", version = "0.2.0", features = ["testing"] }
 
 # === Reactive Layer (animated_box_app example) ===
-flui-scheduler = { path = "crates/flui-scheduler" }
-flui-animation = { path = "crates/flui-animation" }
-
-# === Application Layer ===
-flui-app = { path = "crates/flui-app" }
+flui-scheduler = { path = "crates/flui-scheduler", version = "0.2.0" }
 
 # === Platform Layer (for examples) ===
-flui-platform = { path = "crates/flui-platform" }
+flui-platform = { path = "crates/flui-platform", version = "0.2.0" }
 
 # === Hot-Reload (for examples) ===
-flui-hot-reload = { path = "crates/flui-hot-reload" }
+flui-hot-reload = { path = "crates/flui-hot-reload", version = "0.2.0" }
+
+# === Headless Binding (for the vertical_slice_demo acceptance test) ===
+flui-binding = { path = "crates/flui-binding", version = "0.2.0" }
+parking_lot.workspace = true
+
+# NOTE: flui-material / flui-cupertino moved to [dependencies] above — the
+# facade's own src/lib.rs re-exports them as `flui::material`/`flui::cupertino`.
 
 # === Engine Layer (for GPU examples) ===
-flui-engine = { path = "crates/flui-engine", features = ["dx12"] }
+flui-engine = { path = "crates/flui-engine", version = "0.2.0", features = ["dx12"] }
 pollster = { workspace = true }
 wgpu = { workspace = true }
 raw-window-handle.workspace = true
@@ -284,9 +432,25 @@ serde = [
 [profile.dev]
 opt-level = 1      # Some optimization for faster runtime
 incremental = true # Faster rebuilds
+# `line-tables-only` keeps file:line in panic backtraces and profiler stacks
+# but drops ALL variable/scope/type DWARF — on this 28-crate wgpu/cosmic-text/
+# lyon/naga workspace that debuginfo was the bulk of `target/debug/deps`
+# (measured: a full debug tree ran to ~20 GB and repeatedly filled agent
+# containers; CI hit the same ceiling in PRs #236/#242 and has built with
+# line-tables-only ever since). This makes the local default match CI. For a
+# step-debugger session with variables and types, opt into `--profile dbg`
+# (below); it inherits dev and restores `debug = "full"`.
+debug = "line-tables-only"
 
 [profile.dev.package."*"]
 opt-level = 2 # Optimize dependencies (they don't change often)
+
+# Opt-in full-debuginfo profile. Inherits `dev` but restores `debug = 2` so a
+# step-debugger (RustRover / lldb / gdb) sees complete type info. Use sparingly —
+# it re-inflates `target/`: `cargo build --profile dbg`, `cargo test --profile dbg`.
+[profile.dbg]
+inherits = "dev"
+debug = "full"
 
 [profile.release]
 opt-level = 3

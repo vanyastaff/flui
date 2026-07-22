@@ -265,9 +265,20 @@ impl StackParentData {
         self
     }
 
-    /// Check if child is positioned (any edge specified).
+    /// Check if child is positioned. Matches Flutter's
+    /// `StackParentData.isPositioned` (stack.dart:242-249): any of
+    /// top/right/bottom/left/**width/height** set. An explicit `width` or
+    /// `height` alone makes the child positioned — it is excluded from stack
+    /// sizing and sized/aligned per `RenderStack.layoutPositionedChild` (FLUI:
+    /// `PositionedSpec::child_constraints` / `child_offset`, which already handle
+    /// the no-anchor width/height-only case).
     pub const fn is_positioned(&self) -> bool {
-        self.top.is_some() || self.right.is_some() || self.bottom.is_some() || self.left.is_some()
+        self.top.is_some()
+            || self.right.is_some()
+            || self.bottom.is_some()
+            || self.left.is_some()
+            || self.width.is_some()
+            || self.height.is_some()
     }
 }
 

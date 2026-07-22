@@ -3,11 +3,10 @@
 //! Exercises 4 axis directions × 2 growth directions through a Box host that
 //! lays out a band sliver with explicit [`SliverConstraints`].
 
+use flui_objects::RenderViewport;
 use flui_rendering::{
     constraints::{BoxConstraints, GrowthDirection, SliverConstraints, SliverGeometry},
     context::{BoxHitTestContext, BoxLayoutContext, SliverLayoutContext},
-    impl_sliver_test_caps,
-    objects::RenderViewport,
     parent_data::{BoxParentData, SliverParentData},
     pipeline::PipelineOwner,
     protocol::SliverProtocol,
@@ -60,7 +59,7 @@ struct SliverHitHost {
     constraints: SliverConstraints,
 }
 
-impl_sliver_test_caps!(SliverHitHost);
+impl flui_foundation::Diagnosticable for SliverHitHost {}
 
 impl RenderBox for SliverHitHost {
     type Arity = Variable;
@@ -99,7 +98,7 @@ impl MainAxisBandSliver {
     }
 }
 
-impl_sliver_test_caps!(MainAxisBandSliver);
+impl flui_foundation::Diagnosticable for MainAxisBandSliver {}
 
 impl RenderSliver for MainAxisBandSliver {
     type Arity = Leaf;

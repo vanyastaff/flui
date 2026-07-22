@@ -1,11 +1,11 @@
 //! Self-tests for the layer-tree harness.
 
 use flui_painting::{Canvas, Paint};
-use flui_types::{geometry::px, styling::Color, Offset, Rect};
+use flui_types::{Offset, Rect, geometry::px, styling::Color};
 
 use crate::{
-    testing::{inspect, layer, LayerTester},
     CanvasLayer, OffsetLayer, PictureLayer,
+    testing::{LayerTester, inspect, layer},
 };
 
 fn picture_0_0_40_40() -> PictureLayer {

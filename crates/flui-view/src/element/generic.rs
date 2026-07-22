@@ -29,14 +29,10 @@
 //!     fn lifecycle(&self) -> Lifecycle { self.core.lifecycle() }
 //!     fn mount(&mut self, p: Option<ElementId>, s: usize) { self.core.mount(p, s) }
 //!
-//!     // Only view-specific logic remains
+//!     // Only view-specific logic remains. Real component builds run through
+//!     // BuildOwner::build_scope, which supplies a live tree-backed BuildCtx.
 //!     fn perform_build(&mut self) {
 //!         if !self.core.should_build() { return; }
-//!
-//!         let ctx = ElementBuildContext::new_minimal(self.core.depth());
-//!         let child_view = self.core.view().build(&ctx);
-//!
-//!         self.core.update_or_create_child(child_view);
 //!         self.core.clear_dirty();
 //!     }
 //! }
@@ -56,13 +52,13 @@ use flui_rendering::pipeline::PipelineOwner;
 use parking_lot::RwLock;
 
 use super::arity::ElementArity;
-use crate::{element::Lifecycle, view::View};
+use crate::{element::Lifecycle, owner::ExternalBuildScheduler, view::View};
 
 /// Generic element core with arity-based child management.
 ///
 /// This struct contains all common element state and lifecycle logic,
 /// parameterized by:
-/// - `V`: The View type (must be Clone + Send + Sync + 'static)
+/// - `V`: The View type (must be Clone + 'static)
 /// - `A`: The arity type (Leaf, Single, Optional, Variable)
 ///
 /// # Type Parameters
@@ -86,7 +82,7 @@ use crate::{element::Lifecycle, view::View};
 /// enabling generic code internally.
 pub struct ElementCore<V, A>
 where
-    V: Clone + Send + Sync + 'static,
+    V: Clone + 'static,
     A: ElementArity,
 {
     /// The current View configuration.
@@ -135,7 +131,7 @@ where
 
     /// This element's own `ElementId` in the surrounding `ElementTree`.
     ///
-    /// Plan §U15: stamped by `ElementTree::insert` /
+    /// Stamped by `ElementTree::insert` /
     /// `mount_root_with_pipeline_owner` immediately after slab insertion
     /// (via [`ElementBase::set_self_id`](crate::ElementBase::set_self_id),
     /// forwarded to [`Self::set_self_id`]) so the element can schedule its
@@ -144,13 +140,23 @@ where
     /// [`BuildOwner::build_scope`](crate::BuildOwner) drains.
     self_id: Option<ElementId>,
 
+    /// Handle for scheduling THIS element's rebuild from a listener callback
+    /// fired outside a frame (an animation tick). Captured at
+    /// [`mount`](Self::mount) from the
+    /// [`ElementOwner`](crate::ElementOwner); the mark-dirty callback
+    /// ([`create_mark_dirty_callback`](Self::create_mark_dirty_callback))
+    /// clones it so a `notify_listeners` enqueues `(self_id, depth)` onto the
+    /// inbox `BuildOwner::build_scope` drains. `None` before mount or for a
+    /// hand-rolled element that bypassed `ElementTree` insertion.
+    external_scheduler: Option<ExternalBuildScheduler>,
+
     /// Phantom data for generic parameter A.
     _phantom: PhantomData<A>,
 }
 
 impl<V, A> ElementCore<V, A>
 where
-    V: Clone + Send + Sync + 'static,
+    V: Clone + 'static,
     A: ElementArity,
 {
     /// Create a new ElementCore with the given view.
@@ -171,15 +177,28 @@ where
             pipeline_owner: None,
             parent_render_id: None,
             self_id: None,
+            external_scheduler: None,
             _phantom: PhantomData,
         }
     }
 
     /// Set this element's own `ElementId`. Called by
     /// [`crate::tree::ElementTree`] immediately after slab insertion
-    /// via [`crate::view::ElementBase::set_self_id`]. Plan §U15.
+    /// via [`crate::view::ElementBase::set_self_id`].
     pub(crate) fn set_self_id(&mut self, id: ElementId) {
         self.self_id = Some(id);
+    }
+
+    /// This element's own `ElementId`, stamped at slab insertion via
+    /// [`Self::set_self_id`]. `None` for a hand-rolled element that bypassed
+    /// `ElementTree::insert` / `mount_root_*` (not slab-addressable).
+    ///
+    /// Read by the behaviors to anchor the live build-time
+    /// [`BuildCtx`](crate::context::BuildContext) ancestor walk at the real
+    /// node (PR-K); the in-flight element is extracted by value during build,
+    /// so this id addresses the now-empty slot the walk skips.
+    pub(crate) fn self_id(&self) -> Option<ElementId> {
+        self.self_id
     }
 
     /// Push this element onto the dirty heap so
@@ -206,9 +225,9 @@ where
         }
     }
 
-    // NOTE: `self_id` is read directly via `self.self_id` inside
-    // `update_or_create_children` rather than through a getter; the
-    // single in-crate consumer doesn't justify the boilerplate.
+    // NOTE: the production build/reconcile path reads `self_id` through
+    // the element surface stamped by `set_self_id`; external consumers
+    // (the build-time `BuildCtx` anchor) go through [`Self::self_id`].
 
     // ========================================================================
     // Lifecycle Methods (eliminates ~40 lines of boilerplate per element)
@@ -216,29 +235,38 @@ where
 
     /// Mount this element into the tree.
     ///
-    /// Sets lifecycle to Active and stores depth.
+    /// Sets lifecycle to Active and stores the sibling `slot`. NOTE: the stored
+    /// `depth` field is this slot index, NOT the element's tree depth
+    /// (`parent_depth + 1`, which lives on [`ElementNode`](crate::tree::ElementNode)).
+    /// It must therefore NOT be used as a dirty-heap ordering key — external
+    /// rebuild scheduling looks the real tree depth up from the node at drain
+    /// time instead (see `BuildOwner::build_scope`).
     /// Delegates child mounting to the storage implementation.
     ///
     /// # Arguments
     ///
     /// * `parent` - The parent ElementId (if any)
-    /// * `slot` - The slot/depth in the tree
-    /// * `_owner` - Split-borrow handle into the BuildOwner. Currently
-    ///   unused at this layer because `update_or_create_child` /
-    ///   `update_or_create_children` (called during `perform_build`)
-    ///   handle child mounting outside this method's scope; threading
-    ///   the parameter through keeps the trait surface consistent and
-    ///   gives downstream units (U9-U14) a hook for GlobalKey
-    ///   registration during mount.
+    /// * `slot` - The element's sibling slot index (NOT its tree depth)
+    /// * `_owner` - Split-borrow handle into the BuildOwner. Kept on the
+    ///   signature so behavior `on_mount` hooks can register global keys,
+    ///   child managers, listeners, or other owner-backed resources while
+    ///   child reconciliation remains centralized in `BuildOwner::build_scope`.
     pub fn mount(
         &mut self,
         _parent: Option<ElementId>,
         slot: usize,
-        _owner: &mut crate::ElementOwner<'_>,
+        owner: &mut crate::ElementOwner<'_>,
     ) {
         self.lifecycle = Lifecycle::Active;
         self.depth = slot;
         self.dirty.store(true, Ordering::Relaxed);
+
+        // Capture the handle that lets an out-of-frame listener tick schedule
+        // THIS element's rebuild (see `create_mark_dirty_callback`). Stamped
+        // here — after `set_self_id` ran at slab insertion — so the callback
+        // built in a behavior's `on_mount` (e.g. `AnimatedBehavior`) already
+        // sees it.
+        self.external_scheduler = Some(owner.external_scheduler());
 
         // Children will be mounted during perform_build
         tracing::debug!(
@@ -305,7 +333,7 @@ where
 
     /// Update this element with a new View of the same type.
     ///
-    /// FR-021 (Phase 3 §U27): dispatch routes through
+    /// FR-021: dispatch routes through
     /// `crate::element::dispatch::dispatch_view_update` (`pub(crate)`)
     /// which discriminates on `TypeId` and extracts the typed inner
     /// via `Downcast::into_any` + `Box::downcast::<V>` — the literal
@@ -331,19 +359,19 @@ where
     }
 
     // ========================================================================
-    // Dispatch-internal setters (Phase 1 §U8)
+    // Dispatch-internal setters
     //
     // These are `pub(crate)` because `crate::element::dispatch` needs to
     // mutate `ElementCore::view` and `ElementCore::dirty` without
-    // ElementCore::update_view's body owning them. Phase 3 §U27
-    // replaces the dispatch function body and may retire these
+    // ElementCore::update_view's body owning them. A future dispatch
+    // function-body rewrite may retire these
     // setters; until then they keep the dispatch module free of
     // direct field access to ElementCore's private state.
     // ========================================================================
 
     /// Replace the stored view. Used by
     /// [`crate::element::dispatch::dispatch_view_update`] after the
-    /// `TypeId`-keyed `Box::downcast::<V>` succeeds (Phase 3 §U27).
+    /// `TypeId`-keyed `Box::downcast::<V>` succeeds.
     pub(crate) fn replace_view_for_dispatch(&mut self, view: V) {
         self.view = view;
     }
@@ -472,14 +500,22 @@ where
         self.dirty.store(false, Ordering::Relaxed);
     }
 
-    /// Create a callback that can mark this element dirty.
+    /// Create a callback that marks this element dirty AND schedules its
+    /// rebuild.
     ///
-    /// This is useful for AnimatedBehavior and other behaviors that need to
-    /// trigger rebuilds from listener callbacks without mutable access.
+    /// Used by `AnimatedBehavior` (and any behavior driving rebuilds from a
+    /// `Listenable`): the returned callback is registered with the listenable,
+    /// so a `notify_listeners` fired between frames — an animation tick — both
+    /// flips the dirty flag and enqueues `(self_id, depth)` onto the inbox that
+    /// [`BuildOwner::build_scope`](crate::BuildOwner) drains, then requests a
+    /// frame. Without the schedule half the flag would flip but the element
+    /// would never be on the heap `build_scope` processes, so its
+    /// `ViewState::build` would never re-run.
     ///
-    /// # Returns
-    ///
-    /// A shareable callback that marks this element dirty when called.
+    /// The `ExternalBuildScheduler` + `self_id` are captured by value, so the
+    /// callback is `'static` and needs no access to the owner when it fires. A
+    /// callback created before mount (no scheduler / `self_id` yet) degrades to
+    /// the flag-only behavior.
     ///
     /// # Example
     ///
@@ -489,9 +525,30 @@ where
     /// ```
     pub fn create_mark_dirty_callback(&self) -> ListenerCallback {
         let dirty = Arc::clone(&self.dirty);
+        let handle = self.rebuild_handle();
         Arc::new(move || {
             dirty.store(true, Ordering::Relaxed);
+            handle.schedule();
         })
+    }
+
+    /// An owned, `'static` [`crate::RebuildHandle`] for this element.
+    ///
+    /// Inert until the element is mounted: before `ElementTree::insert` stamps
+    /// `self_id` and `on_mount` installs the scheduler there is nothing to
+    /// schedule. After mount the handle stays valid for the element's lifetime,
+    /// and remains a safe no-op after unmount.
+    ///
+    /// This is the single source of the out-of-frame rebuild capability;
+    /// [`create_mark_dirty_callback`](Self::create_mark_dirty_callback) is a thin
+    /// `Listenable`-shaped wrapper over it, so `AnimatedView` and an async
+    /// builder ride the same channel.
+    #[must_use]
+    pub fn rebuild_handle(&self) -> crate::RebuildHandle {
+        match (self.external_scheduler.clone(), self.self_id) {
+            (Some(scheduler), Some(element)) => crate::RebuildHandle::new(scheduler, element),
+            _ => crate::RebuildHandle::inert(),
+        }
     }
 
     /// Get the PipelineOwner, if set.
@@ -515,7 +572,7 @@ where
 
 impl<V, A> std::fmt::Debug for ElementCore<V, A>
 where
-    V: Clone + Send + Sync + 'static,
+    V: Clone + 'static,
     A: ElementArity,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -526,7 +583,7 @@ where
             .field("dirty", &self.dirty.load(Ordering::Relaxed))
             .field("has_pipeline_owner", &self.pipeline_owner.is_some())
             .field("parent_render_id", &self.parent_render_id)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 

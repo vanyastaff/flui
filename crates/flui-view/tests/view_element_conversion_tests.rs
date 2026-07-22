@@ -8,8 +8,9 @@ use std::any::TypeId;
 use flui_view::{
     BoxedElement, BoxedView, BuildContext, ElementBase, IntoElement, IntoView, Lifecycle,
     StatefulElement, StatefulView, StatelessElement, StatelessView, View, ViewExt, ViewState,
-    element::{StatefulBehavior, StatelessBehavior},
+    element::StatelessBehavior,
 };
+use static_assertions::{assert_impl_all, assert_not_impl_any};
 
 // ============================================================================
 // Test Views
@@ -27,8 +28,8 @@ impl StatelessView for SimpleView {
 }
 
 impl View for SimpleView {
-    fn create_element(&self) -> Box<dyn ElementBase> {
-        Box::new(StatelessElement::new(self, StatelessBehavior::new()))
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateless(self)
     }
 }
 
@@ -60,8 +61,8 @@ impl ViewState<CounterView> for CounterState {
 }
 
 impl View for CounterView {
-    fn create_element(&self) -> Box<dyn ElementBase> {
-        Box::new(StatefulElement::new(self, StatefulBehavior::new(self)))
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateful(self)
     }
 }
 
@@ -374,27 +375,21 @@ fn test_boxed_view_independence_after_clone() {
 }
 
 // ============================================================================
-// Thread Safety Tests
+// Ownership Tests
 // ============================================================================
 
 #[test]
-fn test_view_send_sync() {
-    fn assert_send_sync<T: Send + Sync>() {}
-
-    assert_send_sync::<SimpleView>();
-    assert_send_sync::<CounterView>();
-    assert_send_sync::<BoxedView>();
-    assert_send_sync::<Box<dyn View>>();
+fn concrete_view_configs_remain_send_sync_but_erased_views_are_owner_local() {
+    assert_impl_all!(SimpleView: Send, Sync);
+    assert_impl_all!(CounterView: Send, Sync);
+    assert_not_impl_any!(BoxedView: Send, Sync);
+    assert_not_impl_any!(Box<dyn View>: Send, Sync);
 }
 
 #[test]
-fn test_element_send_sync() {
-    fn assert_send_sync<T: Send + Sync>() {}
-
-    assert_send_sync::<Box<dyn ElementBase>>();
-    assert_send_sync::<BoxedElement>();
-    assert_send_sync::<StatelessElement<SimpleView>>();
-    assert_send_sync::<StatefulElement<CounterView>>();
+fn element_instances_are_owner_local() {
+    assert_not_impl_any!(Box<dyn ElementBase>: Send, Sync);
+    assert_not_impl_any!(BoxedElement: Send, Sync);
 }
 
 // ============================================================================

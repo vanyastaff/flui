@@ -107,6 +107,16 @@
 //! - [`transform`] - 2D transformations
 //! - [`bezier`] - Bézier curve types
 
+// Math-crate idiom: these pedantic lints fight geometry/physics code (single-
+// letter coordinate names, Copy types passed by ref for API symmetry, prelude
+// glob re-exports). Permanent, not debt — the manifest inherits
+// `[workspace.lints]`; crate-specific relaxations live here where they are
+// visible next to the code they cover. (The float-comparison / numeric-cast
+// family is allowed workspace-wide — see `[workspace.lints.clippy]`.)
+#![allow(clippy::many_single_char_names, clippy::wildcard_imports)]
+// Ship bar (wave 1): every public item is documented; keep it that way.
+#![deny(missing_docs)]
+
 // =============================================================================
 // MODULES
 // =============================================================================
@@ -115,9 +125,9 @@ pub mod bezier;
 pub mod bounds;
 /// External-crate interop bridges. Gated per-bridge feature (`kurbo`), so the
 /// module is absent from default builds until a consumer opts in (lands ahead
-/// of its Core.2 consumer by design — N-geom PR 3, U8).
+/// of its Core.2 consumer by design).
 #[cfg(feature = "kurbo")]
-pub mod bridges; // PORT-CHECK-OK-SP4: kurbo bridge intentionally precedes its Core.2 consumer (U8); feature-gated, not speculative.
+pub mod bridges; // PORT-CHECK-OK-SP4: kurbo bridge intentionally precedes its Core.2 consumer; feature-gated, not speculative.
 pub mod circle;
 pub mod corner;
 pub mod corners;

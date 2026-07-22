@@ -22,17 +22,67 @@
 //! the controller stops — no busy-looping while idle.
 //!
 //! Run with: cargo run -p flui --example animated_box_app
+//!
+//! Set `FLUI_FRAME_HISTOGRAM=1` to also log inter-tick wall-clock deltas
+//! (median/p90/max) every [`WINDOW_SAMPLE_COUNT`] ticks — the real-window
+//! pacing evidence for App.1's vsync-pacing exit criterion. Off by default
+//! so the interactive demo is unaffected. This measures the SAME listener
+//! that drives the box's color, not a second synthetic controller: the
+//! histogram is exactly the cadence this window's frame loop delivers.
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use flui_animation::{Animation, AnimationController};
 use flui_app::{AppBinding, Scheduler, run_app};
 use flui_foundation::{HasInstance, Listenable, RenderId};
-use flui_rendering::objects::RenderColoredBox;
+use flui_objects::RenderColoredBox;
 use flui_rendering::pipeline::PipelineOwner;
 use flui_types::Color;
-use flui_view::{BuildContext, ElementBase, IntoView, RenderView, StatelessView, View, ViewExt};
+use flui_view::{BuildContext, IntoView, RenderView, StatelessView, View, ViewExt};
+
+/// Env var that turns the frame histogram on; see the module doc.
+const FRAME_HISTOGRAM_ENV_VAR: &str = "FLUI_FRAME_HISTOGRAM";
+
+/// Ticks collected per logged window. ~300 ticks at this controller's
+/// wake-driven cadence is a several-second window — long enough to smooth
+/// startup jitter without a long wait between log lines.
+const WINDOW_SAMPLE_COUNT: usize = 300;
+
+/// Accumulates inter-tick wall-clock deltas for the current histogram
+/// window, draining and logging once [`WINDOW_SAMPLE_COUNT`] accumulate.
+#[derive(Default)]
+struct FrameHistogram {
+    last_tick_at: Option<Instant>,
+    deltas: Vec<Duration>,
+}
+
+impl FrameHistogram {
+    /// Records `now` as a tick; logs and drains the window once full.
+    fn record(&mut self, now: Instant) {
+        if let Some(previous_tick_at) = self.last_tick_at {
+            self.deltas.push(now.duration_since(previous_tick_at));
+        }
+        self.last_tick_at = Some(now);
+
+        if self.deltas.len() < WINDOW_SAMPLE_COUNT {
+            return;
+        }
+        let mut deltas = std::mem::take(&mut self.deltas);
+        deltas.sort_unstable();
+        let sample_count = deltas.len();
+        let median = deltas[sample_count / 2];
+        let p90 = deltas[sample_count * 9 / 10];
+        let max = deltas[sample_count - 1];
+        tracing::info!(
+            sample_count,
+            median_ms = median.as_secs_f64() * 1000.0,
+            p90_ms = p90.as_secs_f64() * 1000.0,
+            max_ms = max.as_secs_f64() * 1000.0,
+            "frame histogram window"
+        );
+    }
+}
 
 /// Leaf render view producing the box the animation will drive.
 #[derive(Clone)]
@@ -42,11 +92,18 @@ impl RenderView for AnimatedBox {
     type Protocol = flui_rendering::protocol::BoxProtocol;
     type RenderObject = RenderColoredBox;
 
-    fn create_render_object(&self) -> Self::RenderObject {
+    fn create_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+    ) -> Self::RenderObject {
         RenderColoredBox::red(60.0, 60.0)
     }
 
-    fn update_render_object(&self, _render_object: &mut Self::RenderObject) {
+    fn update_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+        _render_object: &mut Self::RenderObject,
+    ) {
         // This example never rebuilds the view tree; the animation
         // listener mutates the render object directly each tick.
     }
@@ -65,11 +122,8 @@ impl StatelessView for App {
 }
 
 impl View for App {
-    fn create_element(&self) -> Box<dyn ElementBase> {
-        Box::new(flui_view::StatelessElement::new(
-            self,
-            flui_view::element::StatelessBehavior,
-        ))
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateless(self)
     }
 }
 
@@ -110,8 +164,26 @@ fn main() {
     let red = Color::rgb(244, 67, 54);
     let blue = Color::rgb(33, 150, 243);
 
+    // This "enabled" log (like any log before `run_app` installs the
+    // process-global subscriber) is dropped by the no-op default
+    // dispatcher — harmless, since the periodic histogram windows below
+    // only start firing once the event loop is running and the subscriber
+    // is up. Same accepted pattern as `vertical_slice_demo`'s
+    // `frame_histogram` module.
+    let histogram_enabled = std::env::var_os(FRAME_HISTOGRAM_ENV_VAR).is_some();
+    if histogram_enabled {
+        tracing::info!(
+            window_sample_count = WINDOW_SAMPLE_COUNT,
+            "frame histogram enabled ({FRAME_HISTOGRAM_ENV_VAR}=1)"
+        );
+    }
+    let histogram = parking_lot::Mutex::new(FrameHistogram::default());
+
     let ticked = controller.clone();
     let _listener_id = controller.add_listener(Arc::new(move || {
+        if histogram_enabled {
+            histogram.lock().record(Instant::now());
+        }
         let value = ticked.value();
         let binding = AppBinding::instance();
         let mut owner = binding.render_pipeline_mut();

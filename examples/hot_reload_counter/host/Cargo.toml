@@ -1,0 +1,21 @@
+[package]
+name = "hot-reload-counter-host"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "Host binary for the hot-reload counter example"
+
+[[bin]]
+name = "hot-reload-counter-host"
+path = "src/main.rs"
+
+[dependencies]
+flui-app = { path = "../../../crates/flui-app" }
+flui-hot-reload = { path = "../../../crates/flui-hot-reload", features = ["app-plugin"] }
+hot-reload-counter-types = { path = "../types" }
+tracing = { workspace = true }
+
+[lints]
+workspace = true

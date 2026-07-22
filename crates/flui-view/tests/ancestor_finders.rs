@@ -1,5 +1,5 @@
-//! Acceptance + edge-case tests for the U11 ancestor-finder trio and
-//! the U12 render-object finder on `BuildContext`:
+//! Acceptance + edge-case tests for the ancestor-finder trio and
+//! the render-object finder on `BuildContext`:
 //!
 //! - `find_ancestor_view` / `find_ancestor` (R6) — nearest View match.
 //! - `find_ancestor_state` / `find_state` (R7) — nearest State match.
@@ -9,22 +9,26 @@
 //!   `RenderElement` ancestor.
 //!
 //! Test fixtures use the same `mount_root` / `insert` shape as
-//! `inherited_dependency.rs`. The dependent-tracking concerns of U9/U10
-//! are out of scope here: these finders are read-only walks per Flutter
+//! `inherited_dependency.rs`. The dependent-tracking concerns of the
+//! inherited-lookup APIs are out of scope here: these finders are read-only walks per Flutter
 //! parity (`framework.dart:5122-5160` —
 //! `findAncestorWidgetOfExactType<T>`,
 //! `findAncestorStateOfType<T>`, `findRootAncestorStateOfType<T>`,
 //! `findAncestorRenderObjectOfType<T>`).
 
+// ADR-0027: ElementBuildContext's current test/prod seam still takes
+// Arc<RwLock<ElementTree/BuildOwner>>. The owner graph is !Send; do not restore
+// Send + Sync to satisfy clippy. Future UiRealm/Rc migration should remove this.
+#![allow(clippy::arc_with_non_send_sync)]
+
 use std::sync::Arc;
 
-use flui_rendering::{objects::RenderSizedBox, pipeline::PipelineOwner};
+use flui_objects::RenderSizedBox;
+use flui_rendering::pipeline::PipelineOwner;
 use flui_types::geometry::px;
 use flui_view::{
-    BuildContext, BuildContextExt, BuildOwner, ElementBase, ElementBuildContext, ElementTree,
-    IntoView, RenderElement, RenderView, StatefulBehavior, StatefulElement, StatefulView,
-    StatelessBehavior, StatelessElement, StatelessView, View, ViewExt, ViewState,
-    element::RenderBehavior,
+    BuildContext, BuildContextExt, BuildOwner, ElementBuildContext, ElementTree, IntoView,
+    RenderView, StatefulView, StatelessView, View, ViewExt, ViewState,
 };
 use parking_lot::RwLock;
 
@@ -43,8 +47,8 @@ impl StatelessView for DummyChild {
 }
 
 impl View for DummyChild {
-    fn create_element(&self) -> Box<dyn ElementBase> {
-        Box::new(StatelessElement::new(self, StatelessBehavior))
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateless(self)
     }
 }
 
@@ -60,8 +64,8 @@ impl StatelessView for Spacer {
 }
 
 impl View for Spacer {
-    fn create_element(&self) -> Box<dyn ElementBase> {
-        Box::new(StatelessElement::new(self, StatelessBehavior))
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateless(self)
     }
 }
 
@@ -85,8 +89,8 @@ impl StatelessView for LabeledView {
 }
 
 impl View for LabeledView {
-    fn create_element(&self) -> Box<dyn ElementBase> {
-        Box::new(StatelessElement::new(self, StatelessBehavior))
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateless(self)
     }
 }
 
@@ -104,19 +108,26 @@ impl RenderView for SizedBoxView {
     type Protocol = flui_rendering::protocol::BoxProtocol;
     type RenderObject = RenderSizedBox;
 
-    fn create_render_object(&self) -> Self::RenderObject {
+    fn create_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+    ) -> Self::RenderObject {
         RenderSizedBox::new(Some(px(self.width)), Some(px(self.height)))
     }
 
-    fn update_render_object(&self, _render_object: &mut Self::RenderObject) {
+    fn update_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+        _render_object: &mut Self::RenderObject,
+    ) {
         // RenderSizedBox doesn't carry mutable dimensions post-creation;
         // tests don't depend on update_render_object semantics.
     }
 }
 
 impl View for SizedBoxView {
-    fn create_element(&self) -> Box<dyn ElementBase> {
-        Box::new(RenderElement::new(self, RenderBehavior::new()))
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::render_variable(self)
     }
 }
 
@@ -154,8 +165,8 @@ impl ViewState<CounterView> for CounterState {
 }
 
 impl View for CounterView {
-    fn create_element(&self) -> Box<dyn ElementBase> {
-        Box::new(StatefulElement::new(self, StatefulBehavior::new(self)))
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateful(self)
     }
 }
 
@@ -200,7 +211,7 @@ fn find_ancestor_view_returns_nearest_match() {
 
     let ctx = ElementBuildContext::for_element(child_id, tree.clone(), owner.clone()).unwrap();
 
-    let value = ctx.find_ancestor::<LabeledView, u32>(|v| v.value());
+    let value = ctx.find_ancestor::<LabeledView, u32>(LabeledView::value);
     assert_eq!(
         value,
         Some(42),
@@ -235,7 +246,7 @@ fn find_ancestor_view_picks_nearest_when_multiple_match() {
 
     let ctx = ElementBuildContext::for_element(child_id, tree.clone(), owner.clone()).unwrap();
 
-    let value = ctx.find_ancestor::<LabeledView, u32>(|v| v.value());
+    let value = ctx.find_ancestor::<LabeledView, u32>(LabeledView::value);
     assert_eq!(
         value,
         Some(2),
@@ -261,7 +272,7 @@ fn find_ancestor_view_returns_none_when_no_match() {
 
     let ctx = ElementBuildContext::for_element(child_id, tree, owner).unwrap();
 
-    let value = ctx.find_ancestor::<LabeledView, u32>(|v| v.value());
+    let value = ctx.find_ancestor::<LabeledView, u32>(LabeledView::value);
     assert_eq!(value, None, "no LabeledView ancestor -> None");
 }
 
@@ -280,7 +291,7 @@ fn find_ancestor_view_excludes_self() {
 
     let ctx = ElementBuildContext::for_element(labeled_id, tree, owner).unwrap();
 
-    let value = ctx.find_ancestor::<LabeledView, u32>(|v| v.value());
+    let value = ctx.find_ancestor::<LabeledView, u32>(LabeledView::value);
     assert_eq!(
         value, None,
         "self is excluded from strict-ancestor walk per Flutter parity"
@@ -318,7 +329,7 @@ fn find_ancestor_state_returns_nearest_match() {
 
     let ctx = ElementBuildContext::for_element(child_id, tree.clone(), owner.clone()).unwrap();
 
-    let count = ctx.find_state::<CounterState, i32>(|s| s.snapshot());
+    let count = ctx.find_state::<CounterState, i32>(CounterState::snapshot);
     assert_eq!(
         count,
         Some(10),
@@ -355,7 +366,7 @@ fn find_ancestor_state_picks_nearest_when_multiple_match() {
 
     let ctx = ElementBuildContext::for_element(child_id, tree, owner).unwrap();
 
-    let count = ctx.find_state::<CounterState, i32>(|s| s.snapshot());
+    let count = ctx.find_state::<CounterState, i32>(CounterState::snapshot);
     assert_eq!(
         count,
         Some(2),
@@ -381,7 +392,7 @@ fn find_ancestor_state_returns_none_when_no_match() {
 
     let ctx = ElementBuildContext::for_element(child_id, tree, owner).unwrap();
 
-    let count = ctx.find_state::<CounterState, i32>(|s| s.snapshot());
+    let count = ctx.find_state::<CounterState, i32>(CounterState::snapshot);
     assert_eq!(count, None, "no CounterState ancestor -> None");
 }
 
@@ -450,7 +461,7 @@ fn find_root_ancestor_state_returns_root_most_match() {
 
     let ctx = ElementBuildContext::for_element(child_id, tree, owner).unwrap();
 
-    let count = ctx.find_root_state::<CounterState, i32>(|s| s.snapshot());
+    let count = ctx.find_root_state::<CounterState, i32>(CounterState::snapshot);
     assert_eq!(
         count,
         Some(100),
@@ -486,7 +497,7 @@ fn find_root_ancestor_state_single_match_works() {
 
     let ctx = ElementBuildContext::for_element(child_id, tree, owner).unwrap();
 
-    let count = ctx.find_root_state::<CounterState, i32>(|s| s.snapshot());
+    let count = ctx.find_root_state::<CounterState, i32>(CounterState::snapshot);
     assert_eq!(
         count,
         Some(7),
@@ -512,7 +523,7 @@ fn find_root_ancestor_state_returns_none_when_no_match() {
 
     let ctx = ElementBuildContext::for_element(child_id, tree, owner).unwrap();
 
-    let count = ctx.find_root_state::<CounterState, i32>(|s| s.snapshot());
+    let count = ctx.find_root_state::<CounterState, i32>(CounterState::snapshot);
     assert_eq!(count, None, "no Counter ancestor -> None");
 }
 
@@ -553,7 +564,7 @@ fn find_root_ancestor_state_with_non_matching_intermediate() {
 
     let ctx = ElementBuildContext::for_element(child_id, tree, owner).unwrap();
 
-    let count = ctx.find_root_state::<CounterState, i32>(|s| s.snapshot());
+    let count = ctx.find_root_state::<CounterState, i32>(CounterState::snapshot);
     assert_eq!(
         count,
         Some(1),

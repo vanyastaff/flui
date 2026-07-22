@@ -6,8 +6,8 @@
 
 use flui_foundation::{ElementId, SemanticsId};
 use flui_types::{
-    geometry::{Pixels, Rect},
     Matrix4,
+    geometry::{Pixels, Rect},
 };
 
 // Use our optimized types from flui-semantics
@@ -72,10 +72,10 @@ pub struct SemanticsNode {
     /// Transform matrix.
     ///
     /// Stored as the workspace-canonical [`Matrix4`] from `flui_types`
-    /// — the same representation `to_node_data()` exports. Pre-U19
+    /// — the same representation `to_node_data()` exports. Previously
     /// stored as `Option<[f32; 16]>` and round-tripped through
-    /// `Matrix4::from` at export time; U19 unifies the representation
-    /// across the framework and drops the round-trip.
+    /// `Matrix4::from` at export time; unifying the representation
+    /// across the framework drops that round-trip.
     transform: Option<Matrix4>,
 
     // ========== State ==========
@@ -301,7 +301,7 @@ impl SemanticsNode {
     /// [`SemanticsConfiguration::absorb`] for the config side and unions
     /// the rectangles on the geometry side.
     ///
-    /// **Naming**: renamed from `merge` → `absorb` in U20 for consistency
+    /// **Naming**: renamed from `merge` → `absorb` for consistency
     /// with [`SemanticsConfiguration::absorb`] and the Flutter convention
     /// (Flutter has no separate `SemanticsNode.merge` — merging happens
     /// via `SemanticsConfiguration.absorb` plus the tree-assembly walker;

@@ -36,22 +36,13 @@ use crate::{
 /// # Example
 ///
 /// ```ignore
-/// use flui_rendering::tree::RenderTree;
-/// use flui_rendering::objects::RenderColoredBox;
+/// // Concrete render objects (RenderColoredBox, RenderSizedBox, …) now live
+/// // in the `flui_objects` crate. See `flui_objects::RenderColoredBox` for a
+/// // ready-made leaf box to use in examples and tests.
+/// use flui_rendering::storage::RenderTree;
 ///
 /// let mut tree = RenderTree::new();
-///
-/// // Insert root
-/// let root_id = tree.insert(Box::new(RenderColoredBox::new(Color::RED)));
-/// tree.set_root(Some(root_id));
-///
-/// // Insert child`
-/// let child_id = tree.insert_child(root_id, Box::new(RenderColoredBox::new(Color::BLUE)));
-///
-/// // Access render object
-/// if let Some(node) = tree.get(root_id) {
-///     println!("Root has {} children", node.children().len());
-/// }
+/// // tree.insert_box(Box::new(flui_objects::RenderColoredBox::red(40.0, 40.0)) as Box<_>);
 /// ```
 #[derive(Debug)]
 pub struct RenderTree {
@@ -248,16 +239,16 @@ impl RenderTree {
     ///    `add_node_needing_*` registration methods directly when adding
     ///    nodes to an already-owned tree.
     ///
-    /// # Cycle 4 R-12
+    /// # Documentation note
     ///
-    /// Pre-cycle the docstring promised "This will attach all existing nodes
-    /// to the new owner" — the impl never did that (silent no-op on existing
-    /// nodes). The lie was a real Constitution Principle 6 violation in the
-    /// docstring layer. Per audit R-12 the cycle-4 cleanup is the lower-cost
-    /// **honest-doc** path; Flutter parity (`RenderObject::attach` recursive
-    /// subtree walk) is a follow-up audit item that needs an
-    /// `attached: AtomicBool` on `RenderState<P>::flags` + owner-dirty-list
-    /// re-registration plumbing not yet in place.
+    /// An earlier version of this docstring claimed this method would
+    /// attach all existing nodes to the new owner, but the implementation
+    /// never did that — it silently no-ops on nodes already in the tree.
+    /// This doc has been corrected to describe the actual (store-only)
+    /// behavior rather than the aspirational one. Full Flutter parity
+    /// (`RenderObject::attach`'s recursive subtree walk) is still pending
+    /// work: it needs an `attached: AtomicBool` on `RenderState<P>::flags`
+    /// plus owner-dirty-list re-registration plumbing that doesn't exist yet.
     pub fn set_owner(&mut self, owner: Option<Arc<RwLock<PipelineOwner>>>) {
         self.owner = owner;
     }
@@ -393,16 +384,15 @@ impl RenderTree {
     /// Returns `None` if any id is missing from the slab OR if `ids`
     /// contains duplicates.
     ///
-    /// # Use case (D-block PR-A1b3 U20.1)
+    /// # Use case
     ///
     /// [`PipelineOwner::layout_dirty_root`](crate::pipeline::PipelineOwner::layout_dirty_root)
     /// uses this to pre-acquire the entire subtree's `&mut RenderNode`
     /// borrows up front, then drives `perform_layout_raw` recursively
     /// against an index-into-pre-acquired-pool — eliminating the
-    /// recursive raw-pointer reborrow pattern that the prior U20
-    /// implementation used (latent Stacked/Tree Borrows UB, see
-    /// PR #144 review). All borrows live in one stack frame so the
-    /// aliasing model is satisfied: `&mut Slab` is borrowed once,
+    /// recursive raw-pointer reborrow pattern the prior implementation
+    /// used (latent Stacked/Tree Borrows UB). All borrows live in one
+    /// stack frame so the aliasing model is satisfied: `&mut Slab` is borrowed once,
     /// N disjoint `&mut RenderNode` borrows on distinct slots are
     /// returned, no nested reborrow.
     ///
@@ -496,6 +486,122 @@ impl RenderTree {
         Some(child_id)
     }
 
+    /// Adopts `child_id` under `parent_id`: sets the child's parent link AND
+    /// appends it to the parent's children list in one call, so the two
+    /// directions of a render-tree edge can never be written independently.
+    ///
+    /// Flutter equivalence: `RenderObject.adoptChild` (`rendering/object.dart`
+    /// @ tag `3.44.0`), which asserts `child._parent == null` and that
+    /// adopting will not introduce a cycle before wiring `child._parent =
+    /// this` and appending to the child list as one primitive — the same
+    /// two guards this method asserts below.
+    ///
+    /// [`insert_box_child`](Self::insert_box_child) /
+    /// [`insert_sliver_child`](Self::insert_sliver_child) already bake the
+    /// parent link into construction (`RenderNode::new_*_with_parent`), so
+    /// they do not need this. This primitive is for the shape
+    /// `RenderBehavior::on_mount` needs instead: the `RenderObject` is
+    /// minted with [`insert_box`](Self::insert_box) /
+    /// [`insert_sliver`](Self::insert_sliver) — no parent yet, because the
+    /// element does not know its render parent until after the object
+    /// exists — and is adopted under its parent as a second step. Before
+    /// this primitive existed, every such call site wrote `set_parent` and
+    /// `add_child` as two independent statements, which made the
+    /// parent-link / child-link asymmetry representable (and, at the root
+    /// hop, real: see `RootRenderElement`'s `ElementBase::render_id`
+    /// history).
+    ///
+    /// Both ids must resolve for either link to be written: if either is
+    /// stale, this is a no-op on BOTH sides, never just one — a one-sided
+    /// write (child's parent set while the old parent's stale entry stays
+    /// resolvable, or vice versa) would recreate exactly the asymmetry this
+    /// primitive exists to prevent.
+    ///
+    /// # Panics (debug only)
+    ///
+    /// - if `parent_id == child_id` — a self-adoption would write a
+    ///   self-cycle that the ancestor walk below cannot see (it starts at
+    ///   the descendant's parent).
+    /// - if `child_id` already has a parent. Re-parenting through this
+    ///   primitive would leave the OLD parent's children list with a stale
+    ///   entry — the same asymmetry this primitive exists to prevent, just
+    ///   moved to the donor side. A call site that legitimately moves a
+    ///   child must [`drop_child`](Self::drop_child) it from its old parent
+    ///   first, matching Flutter's `assert(child._parent == null)`.
+    /// - if `parent_id` is a descendant of `child_id` — adopting would
+    ///   close a cycle (`child_id` would become its own indirect ancestor),
+    ///   matching Flutter's cycle guard in `adoptChild`.
+    pub fn adopt_child(&mut self, parent_id: RenderId, child_id: RenderId) {
+        // Both must resolve BEFORE either link is written — a stale id on
+        // either side must leave both directions untouched.
+        if self.get(parent_id).is_none() || self.get(child_id).is_none() {
+            return;
+        }
+
+        debug_assert_ne!(
+            parent_id, child_id,
+            "adopt_child: a node cannot adopt itself — the ancestor walk below starts at the \
+             descendant's parent, so this degenerate self-cycle would slip past it"
+        );
+        debug_assert!(
+            self.get(child_id).and_then(RenderNode::parent).is_none(),
+            "adopt_child: {child_id:?} already has a parent — re-parenting through this \
+             primitive would leave the OLD parent's children list with a stale entry; drop it \
+             from its old parent first (see `drop_child`)"
+        );
+        debug_assert!(
+            !self.is_ancestor(child_id, parent_id),
+            "adopt_child: {parent_id:?} is already a descendant of {child_id:?} — adopting would \
+             close a cycle"
+        );
+
+        if let Some(child) = self.get_mut(child_id) {
+            child.set_parent(Some(parent_id));
+        }
+        if let Some(parent) = self.get_mut(parent_id) {
+            parent.add_child(child_id);
+        }
+    }
+
+    /// Drops `child_id` from `parent_id`: removes it from the parent's
+    /// children list AND clears the child's parent link in one call — the
+    /// inverse of [`adopt_child`](Self::adopt_child).
+    ///
+    /// Flutter equivalence: `RenderObject.dropChild` (`rendering/object.dart`
+    /// @ tag `3.44.0`), which asserts `child._parent == this` before clearing
+    /// `child._parent = null` and removing it from the child list as one
+    /// primitive.
+    ///
+    /// Both ids must resolve for either link to be cleared: if either is
+    /// stale, this is a no-op on BOTH sides, for the same reason
+    /// `adopt_child` requires it — a one-sided clear is the asymmetry these
+    /// primitives exist to make unrepresentable.
+    ///
+    /// # Panics (debug only)
+    ///
+    /// If `child_id`'s current parent is not `parent_id` — the caller's
+    /// belief about the tree shape is wrong, matching Flutter's
+    /// `assert(child._parent == this)` in `dropChild`.
+    pub fn drop_child(&mut self, parent_id: RenderId, child_id: RenderId) {
+        if self.get(parent_id).is_none() || self.get(child_id).is_none() {
+            return;
+        }
+
+        debug_assert_eq!(
+            self.get(child_id).and_then(RenderNode::parent),
+            Some(parent_id),
+            "drop_child: {child_id:?}'s current parent does not match {parent_id:?} — the \
+             caller's belief about the tree shape is wrong"
+        );
+
+        if let Some(parent) = self.get_mut(parent_id) {
+            parent.remove_child(child_id);
+        }
+        if let Some(child) = self.get_mut(child_id) {
+            child.set_parent(None);
+        }
+    }
+
     /// Removes a node from the tree.
     ///
     /// Removes a node WITHOUT cascading to descendants.
@@ -504,8 +610,8 @@ impl RenderTree {
     /// are orphaned in the slab; use [`Self::remove_recursive`] for full
     /// cascade.
     ///
-    /// Cycle 3 T-1: this is the [`TreeWrite::remove_shallow`] primitive
-    /// the trait builds the cascade-by-default `remove` on top of.
+    /// This is the [`TreeWrite::remove_shallow`] primitive the trait builds
+    /// its cascade-by-default `remove` on top of.
     pub fn remove_shallow(&mut self, id: RenderId) -> Option<RenderNode> {
         // Update root if removing root
         if self.root == Some(id) {
@@ -513,7 +619,7 @@ impl RenderTree {
         }
 
         // Get parent and remove from parent's children
-        if let Some(parent_id) = self.get(id).and_then(|n| n.parent())
+        if let Some(parent_id) = self.get(id).and_then(super::node::RenderNode::parent)
             && let Some(parent) = self.get_mut(parent_id)
         {
             parent.remove_child(id);
@@ -530,11 +636,11 @@ impl RenderTree {
 
     /// Removes a node and all its descendants recursively.
     ///
-    /// Returns the number of nodes removed. Cycle 3 T-1: equivalent to
-    /// [`TreeWrite::remove`] (which now cascades by default) with a
-    /// count instead of the returned root node. Prefer `TreeWrite::remove`
-    /// for new code; this inherent stays for in-crate callers that want
-    /// the count.
+    /// Returns the number of nodes removed. Equivalent to
+    /// [`TreeWrite::remove`] (which now cascades by default), except it
+    /// returns a count instead of the removed root node. Prefer
+    /// `TreeWrite::remove` for new code; this inherent method stays for
+    /// in-crate callers that want the count.
     pub fn remove_recursive(&mut self, id: RenderId) -> usize {
         // Iterative: collect the subtree up front (explicit-stack
         // pre-order with cycle protection), then remove in REVERSE
@@ -584,13 +690,13 @@ impl RenderTree {
     /// Returns the children IDs of a node.
     #[inline]
     pub fn children(&self, id: RenderId) -> &[RenderId] {
-        self.get(id).map(|n| n.children()).unwrap_or(&[])
+        self.get(id).map_or(&[], super::node::RenderNode::children)
     }
 
     /// Returns the depth of a node in the tree.
     #[inline]
     pub fn depth(&self, id: RenderId) -> Option<u16> {
-        self.get(id).map(|n| n.depth())
+        self.get(id).map(super::node::RenderNode::depth)
     }
 
     /// Collects `root_id` plus every transitive descendant in
@@ -598,40 +704,39 @@ impl RenderTree {
     /// stored order). Returns an empty `Vec` if `root_id` is not in
     /// the tree.
     ///
-    /// # Use case (D-block PR-A1b3 U20.1)
+    /// # Use case
     ///
     /// [`PipelineOwner::layout_dirty_root`](crate::pipeline::PipelineOwner::layout_dirty_root)
     /// passes the result into
     /// [`Self::get_subtree_mut`] to pre-acquire every subtree node's
     /// `&mut RenderNode` borrow in one stack frame, eliminating the
     /// recursive raw-pointer reborrow pattern (latent Stacked / Tree
-    /// Borrows UB) the prior U20 implementation used.
+    /// Borrows UB) the prior implementation used.
     ///
     /// # Implementation
     ///
     /// Iterative DFS with an explicit `Vec` stack so deep trees do
     /// not overflow Rust's call stack (the layout walk has no other
-    /// depth limit until U21's cycle guard lands). Children are
-    /// pushed in reverse so they pop in stored order — preserves
-    /// pre-order with children-left-to-right.
+    /// depth limit beyond the pipeline's own layout-cycle guard).
+    /// Children are pushed in reverse so they pop in stored order —
+    /// preserves pre-order with children-left-to-right.
     ///
-    /// # Cycle protection (PR #145 review fix)
+    /// # Cycle protection
     ///
     /// Carries a `visited` `HashSet<RenderId>` to short-circuit on
     /// repeated ids. Without this guard, a malformed tree containing
     /// a parent / child cycle (which `RenderNode::add_child` does not
-    /// prevent; full cycle protection arrives in U21) would loop
-    /// forever — repeatedly re-pushing the cycle's nodes onto `stack`
-    /// while `out` grows unbounded → hang / OOM. The visited-set
-    /// short-circuit terminates the walk on the first repeated id and
-    /// produces a deduplicated `Vec<RenderId>` suitable for
-    /// [`Self::get_subtree_mut`] (which requires pairwise uniqueness).
-    /// The cyclic edge itself is silently dropped; full
+    /// prevent) would loop forever — repeatedly re-pushing the cycle's
+    /// nodes onto `stack` while `out` grows unbounded → hang / OOM. The
+    /// visited-set short-circuit terminates the walk on the first
+    /// repeated id and produces a deduplicated `Vec<RenderId>` suitable
+    /// for [`Self::get_subtree_mut`] (which requires pairwise
+    /// uniqueness). The cyclic edge itself is silently dropped; full
     /// [`RenderError::LayoutCycle`](crate::error::RenderError::LayoutCycle)
-    /// reporting is U21's job — this fix is the minimum-disruption
-    /// termination guard so the pre-acquired-subtree walk does not
-    /// regress on cycles vs the prior PR #144 stack-overflow failure
-    /// mode.
+    /// reporting happens elsewhere, in the pipeline's layout-cycle
+    /// guard — this fix is the minimum-disruption termination guard
+    /// so the pre-acquired-subtree walk does not regress on cycles vs
+    /// the prior stack-overflow failure mode.
     ///
     /// # Complexity
     ///
@@ -647,11 +752,10 @@ impl RenderTree {
             return out;
         }
         let mut stack: Vec<RenderId> = vec![root_id];
-        // PR #145 review fix: visited-set short-circuits on repeated
-        // ids so a cyclic tree terminates instead of hanging /
-        // OOMing. Pre-sized to a conservative guess (small trees are
-        // the common case; HashSet grows by power-of-two doubling
-        // otherwise).
+        // The visited-set short-circuits on repeated ids so a cyclic
+        // tree terminates instead of hanging / OOMing. Pre-sized to a
+        // conservative guess (small trees are the common case; HashSet
+        // grows by power-of-two doubling otherwise).
         let mut visited: std::collections::HashSet<RenderId> =
             std::collections::HashSet::with_capacity(16);
         while let Some(id) = stack.pop() {
@@ -795,9 +899,8 @@ impl RenderTree {
     ///
     /// # Implementation
     ///
-    /// Cycle 4 R-26: iterative loop + `SmallVec<[RenderId; 32]>`
-    /// work-stack rather than recursive `visit_depth_first_from`.
-    /// Three wins:
+    /// Uses an iterative loop with a `SmallVec<[RenderId; 32]>` work-stack
+    /// rather than a recursive `visit_depth_first_from`. Three wins:
     /// - **No stack overflow** on pathological tree depths
     ///   (recursion blew at ~5000 with default Rust stack; the
     ///   iterative version is unbounded).
@@ -817,12 +920,12 @@ impl RenderTree {
     /// **reverse** order so the work-stack pops them in original
     /// child-order (mirrors Flutter's `visitChildren` shape).
     ///
-    /// PR #116 review (cycle 4 wave 4 follow-up): the prior comment
-    /// claimed `extend_from_slice`. That was a copy-paste error from
-    /// an earlier draft; reversing in-place via `iter().rev()` is
-    /// required for pre-order pop-order and `extend_from_slice` would
-    /// need a temporary reversed allocation, defeating the no-alloc
-    /// goal. The body matches the doc now.
+    /// A prior version of this comment claimed `extend_from_slice`.
+    /// That was a copy-paste error from an earlier draft; reversing
+    /// in-place via `iter().rev()` is required for pre-order
+    /// pop-order and `extend_from_slice` would need a temporary
+    /// reversed allocation, defeating the no-alloc goal. The body
+    /// matches the doc now.
     pub fn visit_depth_first<F>(&self, mut f: F)
     where
         F: FnMut(RenderId, &RenderNode),
@@ -881,7 +984,7 @@ impl RenderTree {
 
 // Send + Sync auto-derive.
 //
-// U2 exemplar refactor removed the `RwLock<Box<dyn RenderObject<P>>>` field
+// A prior refactor removed the `RwLock<Box<dyn RenderObject<P>>>` field
 // on `RenderEntry<P>` and replaced it with plain `Box<dyn RenderObject<P>>`.
 // All transitive components are Send + Sync:
 //   - Slab<RenderNode> auto-derives Send + Sync from RenderNode.
@@ -943,10 +1046,10 @@ impl TreeWrite<RenderId> for RenderTree {
     }
 
     fn remove_shallow(&mut self, id: RenderId) -> Option<Self::Node> {
-        // Cycle 3 T-1: the trait's `remove` default impl now cascades
-        // post-order via this primitive. `remove_shallow` keeps the
-        // pre-cycle non-cascade behaviour for reparenting workflows
-        // (re-attach the descendants under a new parent immediately).
+        // The trait's `remove` default impl cascades post-order via this
+        // primitive. `remove_shallow` itself keeps the original
+        // non-cascading behavior for reparenting workflows (re-attach the
+        // descendants under a new parent immediately).
 
         // Update root if removing root
         if self.root == Some(id) {
@@ -954,7 +1057,7 @@ impl TreeWrite<RenderId> for RenderTree {
         }
 
         // Get parent and remove from parent's children
-        if let Some(parent_id) = self.get(id).and_then(|n| n.parent())
+        if let Some(parent_id) = self.get(id).and_then(super::node::RenderNode::parent)
             && let Some(parent) = RenderTree::get_mut(self, parent_id)
         {
             parent.remove_child(id);
@@ -1013,14 +1116,12 @@ impl TreeNav<RenderId> for RenderTree {
 
     #[inline]
     fn child_count(&self, id: RenderId) -> usize {
-        self.get(id).map(|node| node.children().len()).unwrap_or(0)
+        self.get(id).map_or(0, |node| node.children().len())
     }
 
     #[inline]
     fn has_children(&self, id: RenderId) -> bool {
-        self.get(id)
-            .map(|node| !node.children().is_empty())
-            .unwrap_or(false)
+        self.get(id).is_some_and(|node| !node.children().is_empty())
     }
 }
 
@@ -1030,13 +1131,29 @@ impl TreeNav<RenderId> for RenderTree {
 
 #[cfg(test)]
 mod tests {
-    use flui_types::Pixels;
+    use flui_tree::Leaf;
+    use flui_types::{Size, geometry::px};
 
     use super::*;
-    use crate::objects::RenderSizedBox;
+    use crate::{context::BoxLayoutContext, parent_data::BoxParentData, traits::RenderBox};
+
+    /// Minimal leaf stub — concrete objects live in `flui_objects`.
+    /// This test only needs "something with RenderObject<BoxProtocol>" to
+    /// exercise the slab slot / generation / ABA mechanics.
+    #[derive(Debug, Default)]
+    struct LeafStub;
+    impl flui_foundation::Diagnosticable for LeafStub {}
+    impl RenderBox for LeafStub {
+        type Arity = Leaf;
+        type ParentData = BoxParentData;
+        fn perform_layout(&mut self, _ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size {
+            Size::new(px(10.0), px(10.0))
+        }
+        fn paint(&self, _ctx: &mut crate::context::PaintCx<'_, Leaf>) {}
+    }
 
     fn make_leaf() -> Box<dyn RenderObject<BoxProtocol>> {
-        Box::new(RenderSizedBox::fixed(Pixels(10.0), Pixels(10.0)))
+        Box::new(LeafStub)
     }
 
     /// D2 — ABA regression: after a slot is freed and reused, the OLD id
@@ -1114,7 +1231,10 @@ mod tests {
         assert!(pair.is_some(), "two existing distinct ids must yield Some");
         let (na, nb) = pair.unwrap();
         // The two refs must point to different RenderNodes -- compare addresses.
-        assert!(!std::ptr::eq(na as *const _, nb as *const _));
+        assert!(!std::ptr::eq(
+            std::ptr::from_ref(na),
+            std::ptr::from_ref(nb)
+        ));
     }
 
     #[test]
@@ -1190,7 +1310,7 @@ mod tests {
     }
 
     // ========================================================================
-    // get_subtree_mut (D-block PR-A1b3 U20.1)
+    // get_subtree_mut
     // ========================================================================
 
     #[test]
@@ -1211,7 +1331,10 @@ mod tests {
 
         // Verify disjointness — all 4 references point to distinct
         // RenderNodes (compare addresses through *const _).
-        let addrs: Vec<*const RenderNode> = refs.iter().map(|r| *r as *const RenderNode).collect();
+        let addrs: Vec<*const RenderNode> = refs
+            .iter()
+            .map(|r| std::ptr::from_ref::<RenderNode>(*r))
+            .collect();
         for (i, &a_addr) in addrs.iter().enumerate() {
             for &b_addr in &addrs[i + 1..] {
                 assert!(
@@ -1223,9 +1346,8 @@ mod tests {
         // Drop the disjointness check's borrow before the order check.
         drop(refs);
 
-        // PR #145 review fix (Copilot 3294267590): verify refs[i]
-        // CORRESPONDS to ids[i] — not just disjoint / correct count.
-        // Write a distinct marker via refs[i] (depth = i + 100), drop
+        // Verify refs[i] CORRESPONDS to ids[i] — not just disjoint /
+        // correct count. Write a distinct marker via refs[i] (depth = i + 100), drop
         // the Vec, read back via tree.get(ids[i]) to confirm
         // position-by-position alignment. The +100 offset avoids
         // collision with depths set by insert_box_child (these were
@@ -1249,7 +1371,6 @@ mod tests {
         }
     }
 
-    /// PR #145 review fix (Codex 3294268624 + Copilot 3294267583):
     /// `collect_subtree_ids` must terminate on cyclic trees instead of
     /// hanging / OOMing. The visited-set short-circuit dedups repeated
     /// ids on the DFS stack.
@@ -1326,7 +1447,7 @@ mod tests {
     }
 
     // ========================================================================
-    // collect_subtree_ids (D-block PR-A1b3 U20.1)
+    // collect_subtree_ids
     // ========================================================================
 
     #[test]
@@ -1406,7 +1527,7 @@ mod tests {
     }
 
     /// Pairs `collect_subtree_ids` with `get_subtree_mut` — the canonical
-    /// U20.1 usage pattern. Should always yield Some, and the returned
+    /// usage pattern. Should always yield Some, and the returned
     /// Vec length should equal the collected id count.
     #[test]
     fn collect_subtree_ids_feeds_get_subtree_mut() {
@@ -1426,12 +1547,11 @@ mod tests {
         assert_eq!(refs.len(), 4);
     }
 
-    /// Cycle 4 PR #116 review fix: pre-order traversal of the
-    /// iterative `visit_depth_first` must yield root, then each
-    /// subtree in child-insertion order. The reverse-push trick is
-    /// the load-bearing detail; this test would catch any future
-    /// "simpler" rewrite that pushes children forward and prints
-    /// siblings in reverse.
+    /// Pre-order traversal of the iterative `visit_depth_first` must
+    /// yield root, then each subtree in child-insertion order. The
+    /// reverse-push trick is the load-bearing detail; this test would
+    /// catch any future "simpler" rewrite that pushes children forward
+    /// and prints siblings in reverse.
     ///
     /// Tree shape (insertion order matches child order):
     /// ```text
@@ -1511,5 +1631,183 @@ mod tests {
             count, depth,
             "every chain node must be visited exactly once"
         );
+    }
+
+    // ========================================================================
+    // adopt_child / drop_child
+    // ========================================================================
+
+    /// `adopt_child` must write BOTH edge directions: the child's parent
+    /// link AND the parent's child-list entry. A one-directional write
+    /// (either half alone) is exactly the asymmetry this primitive exists
+    /// to make unrepresentable — an end-to-end test through a full
+    /// element-mount + `draw_frame` pipeline cannot catch a one-directional
+    /// regression here because `reorder_render_children_after_build`
+    /// self-heals the parent link afterwards; only a direct `RenderTree`
+    /// check on the two fields immediately after `adopt_child` returns can.
+    ///
+    /// Red-check (run manually, not committed as a mutant): deleting the
+    /// `child.set_parent(Some(parent_id))` call (leaving only
+    /// `parent.add_child(child_id)`) makes the `parent()` assertion below
+    /// fail — `left: None, right: Some(parent)`.
+    #[test]
+    fn adopt_child_writes_both_edge_directions() {
+        let mut tree = RenderTree::new();
+        let parent = tree.insert_box(make_leaf());
+        let child = tree.insert_box(make_leaf());
+
+        tree.adopt_child(parent, child);
+
+        assert_eq!(
+            tree.get(child).and_then(RenderNode::parent),
+            Some(parent),
+            "adopt_child must set the child's parent link"
+        );
+        assert!(
+            tree.get(parent)
+                .is_some_and(|node| node.children().contains(&child)),
+            "adopt_child must append the child to the parent's children list"
+        );
+    }
+
+    /// A stale id on either side must leave BOTH directions untouched — no
+    /// partial write. Exercises the ordering fix: both ids are checked to
+    /// resolve before either link is written.
+    #[test]
+    fn adopt_child_with_stale_parent_writes_neither_direction() {
+        let mut tree = RenderTree::new();
+        let child = tree.insert_box(make_leaf());
+        let stale_parent = {
+            let doomed = tree.insert_box(make_leaf());
+            tree.remove_shallow(doomed);
+            doomed
+        };
+        assert!(!tree.contains(stale_parent), "precondition: id is stale");
+
+        tree.adopt_child(stale_parent, child);
+
+        assert_eq!(
+            tree.get(child).and_then(RenderNode::parent),
+            None,
+            "a stale parent id must not leave the child's parent link written"
+        );
+    }
+
+    #[test]
+    fn adopt_child_with_stale_child_writes_neither_direction() {
+        let mut tree = RenderTree::new();
+        let parent = tree.insert_box(make_leaf());
+        let stale_child = {
+            let doomed = tree.insert_box(make_leaf());
+            tree.remove_shallow(doomed);
+            doomed
+        };
+        assert!(!tree.contains(stale_child), "precondition: id is stale");
+
+        tree.adopt_child(parent, stale_child);
+
+        assert!(
+            tree.get(parent)
+                .is_some_and(|node| node.children().is_empty()),
+            "a stale child id must not leave the parent's children list written"
+        );
+    }
+
+    /// Re-parenting an already-parented child through `adopt_child` is a
+    /// debug-only contract violation (Flutter's `assert(child._parent ==
+    /// null)`): it would leave the OLD parent's children list stale.
+    #[test]
+    #[should_panic(expected = "already has a parent")]
+    fn adopt_child_rejects_an_already_parented_child() {
+        let mut tree = RenderTree::new();
+        let old_parent = tree.insert_box(make_leaf());
+        let new_parent = tree.insert_box(make_leaf());
+        let child = tree.insert_box(make_leaf());
+        tree.adopt_child(old_parent, child);
+
+        tree.adopt_child(new_parent, child);
+    }
+
+    /// Adopting a node's own ancestor would close a cycle — rejected the
+    /// same way Flutter's `adoptChild` guards against it.
+    #[test]
+    #[should_panic(expected = "close a cycle")]
+    fn adopt_child_rejects_a_cycle() {
+        let mut tree = RenderTree::new();
+        let root = tree.insert_box(make_leaf());
+        let child = tree.insert_box_child(root, make_leaf()).unwrap();
+
+        // `root` is already `child`'s ancestor; adopting `root` under
+        // `child` would close a cycle.
+        tree.adopt_child(child, root);
+    }
+
+    /// `drop_child` must clear BOTH edge directions — the inverse of
+    /// `adopt_child_writes_both_edge_directions`, and for the same reason:
+    /// a one-directional clear would leave a dangling reference on one
+    /// side.
+    ///
+    /// Red-check (run manually, not committed as a mutant): deleting the
+    /// `child.set_parent(None)` call (leaving only
+    /// `parent.remove_child(child_id)`) makes the `parent()` assertion
+    /// below fail — `left: Some(parent), right: None`.
+    #[test]
+    fn drop_child_clears_both_edge_directions() {
+        let mut tree = RenderTree::new();
+        let parent = tree.insert_box(make_leaf());
+        let child = tree.insert_box(make_leaf());
+        tree.adopt_child(parent, child);
+
+        tree.drop_child(parent, child);
+
+        assert_eq!(
+            tree.get(child).and_then(RenderNode::parent),
+            None,
+            "drop_child must clear the child's parent link"
+        );
+        assert!(
+            tree.get(parent)
+                .is_some_and(|node| !node.children().contains(&child)),
+            "drop_child must remove the child from the parent's children list"
+        );
+    }
+
+    /// A stale id on either side must leave BOTH directions untouched.
+    #[test]
+    fn drop_child_with_stale_ids_clears_neither_direction() {
+        let mut tree = RenderTree::new();
+        let parent = tree.insert_box(make_leaf());
+        let child = tree.insert_box_child(parent, make_leaf()).unwrap();
+        let stale = {
+            let doomed = tree.insert_box(make_leaf());
+            tree.remove_shallow(doomed);
+            doomed
+        };
+
+        tree.drop_child(stale, child);
+
+        assert_eq!(
+            tree.get(child).and_then(RenderNode::parent),
+            Some(parent),
+            "a stale parent id must not clear the child's real parent link"
+        );
+        assert!(
+            tree.get(parent)
+                .is_some_and(|node| node.children().contains(&child)),
+            "a stale parent id must not remove the child from its real parent's children list"
+        );
+    }
+
+    /// Calling `drop_child` with the wrong parent is a debug-only contract
+    /// violation (Flutter's `assert(child._parent == this)`).
+    #[test]
+    #[should_panic(expected = "current parent does not match")]
+    fn drop_child_rejects_the_wrong_parent() {
+        let mut tree = RenderTree::new();
+        let real_parent = tree.insert_box(make_leaf());
+        let other = tree.insert_box(make_leaf());
+        let child = tree.insert_box_child(real_parent, make_leaf()).unwrap();
+
+        tree.drop_child(other, child);
     }
 }

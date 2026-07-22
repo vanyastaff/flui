@@ -64,7 +64,7 @@ pub trait HitTestTarget: Send + Sync {
 ///     }
 /// }
 /// ```
-pub trait GestureCallback: Send + Sync {
+pub trait GestureCallback {
     /// The type of details passed to this callback.
     ///
     /// Using GAT allows callbacks to borrow data from the gesture recognizer
@@ -78,7 +78,7 @@ pub trait GestureCallback: Send + Sync {
 }
 
 /// A boxed gesture callback for dynamic dispatch.
-pub type BoxedCallback<D> = Box<dyn Fn(D) + Send + Sync>;
+pub type BoxedCallback<D> = Box<dyn Fn(D)>;
 
 // ============================================================================
 // PointerEventExtTrait extension trait (additional methods)
@@ -177,7 +177,6 @@ pub trait GestureRecognizerExt {
 /// Drag axis constraint.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum DragAxis {
-    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// Vertical drag only (up/down).
     Vertical,
     /// Horizontal drag only (left/right).
@@ -211,7 +210,7 @@ pub trait Disposable {
 
 impl<T: HitTestTarget + ?Sized> HitTestTarget for Box<T> {
     fn handle_event(&self, event: &PointerEvent, entry: &HitTestEntry) {
-        (**self).handle_event(event, entry)
+        (**self).handle_event(event, entry);
     }
 }
 

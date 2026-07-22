@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::error::{BuildError, BuildResult};
-use crate::platform::{private, BuildArtifacts, BuilderContext, FinalArtifacts, PlatformBuilder};
+use crate::platform::{BuildArtifacts, BuilderContext, FinalArtifacts, PlatformBuilder, private};
 use crate::util::{check_command_exists, process};
 
 /// Builder for Web/WASM platform (via wasm-pack)
@@ -69,12 +69,24 @@ impl PlatformBuilder for WebBuilder {
         // Create dist directory
         std::fs::create_dir_all(&web_dist_dir)?;
 
+        // wasm-pack takes the out-dir as a UTF-8 CLI argument; a non-UTF-8
+        // workspace root is a caller-supplied environment problem, not a bug.
+        let web_dist_str = web_dist_dir.to_str().ok_or_else(|| {
+            BuildError::invalid_config(
+                "workspace_root",
+                format!(
+                    "web dist path {} is not valid UTF-8",
+                    web_dist_dir.display()
+                ),
+            )
+        })?;
+
         let mut args = vec![
             "build",
             "--target",
             target.as_str(),
             "--out-dir",
-            web_dist_dir.to_str().unwrap(),
+            web_dist_str,
         ];
 
         if matches!(ctx.profile, crate::platform::Profile::Release) {

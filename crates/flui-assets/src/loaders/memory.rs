@@ -135,7 +135,7 @@ where
             .get(key)
             .map(|arc| (**arc).clone())
             .ok_or_else(|| AssetError::NotFound {
-                path: format!("memory://{}", key),
+                path: format!("memory://{key}"),
             })
     }
 

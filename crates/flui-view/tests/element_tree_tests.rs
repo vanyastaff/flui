@@ -5,9 +5,9 @@
 
 use flui_foundation::ElementId;
 use flui_view::{
-    BuildContext, BuildOwner, ElementBase, ElementTree, IntoView, Lifecycle, StatelessBehavior,
-    StatelessElement, StatelessView, View, ViewExt,
+    BuildContext, BuildOwner, ElementTree, IntoView, Lifecycle, StatelessView, View, ViewExt,
 };
+use static_assertions::assert_not_impl_any;
 
 // ============================================================================
 // Test View
@@ -26,8 +26,8 @@ impl StatelessView for TestView {
 }
 
 impl View for TestView {
-    fn create_element(&self) -> Box<dyn ElementBase> {
-        Box::new(StatelessElement::new(self, StatelessBehavior))
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateless(self)
     }
 }
 
@@ -482,7 +482,7 @@ fn test_tree_memory_layout() {
     // ElementTree should be reasonably sized
     let size = std::mem::size_of::<ElementTree>();
     // Slab + Option<ElementId>
-    assert!(size < 128, "ElementTree is too large: {} bytes", size);
+    assert!(size < 128, "ElementTree is too large: {size} bytes");
 }
 
 #[test]
@@ -524,7 +524,7 @@ fn test_tree_debug() {
 
     tree.mount_root(&view, &mut owner.element_owner_mut());
 
-    let debug_str = format!("{:?}", tree);
+    let debug_str = format!("{tree:?}");
     assert!(debug_str.contains("ElementTree"));
     assert!(debug_str.contains("len"));
 }
@@ -538,22 +538,20 @@ fn test_element_node_debug() {
     let id = tree.mount_root(&view, &mut owner.element_owner_mut());
     let node = tree.get(id).unwrap();
 
-    let debug_str = format!("{:?}", node);
+    let debug_str = format!("{node:?}");
     assert!(debug_str.contains("ElementNode"));
     assert!(debug_str.contains("depth"));
 }
 
 // ============================================================================
-// Thread Safety Tests
+// Ownership Tests
 // ============================================================================
 
 #[test]
-fn test_tree_send_sync() {
-    // Compile-time assertion: ElementTree must be Send + Sync. The bound
-    // check fails to compile if the property regresses (e.g., a new non-
-    // Send/Sync field is added to ElementBase or to the tree itself).
-    fn assert_send_sync<T: Send + Sync>() {}
-    assert_send_sync::<ElementTree>();
+fn tree_is_owner_local() {
+    // The element tree stores type-erased UI owner-plane elements; render data
+    // remains the cross-thread boundary, not this tree.
+    assert_not_impl_any!(ElementTree: Send, Sync);
 }
 
 // ============================================================================

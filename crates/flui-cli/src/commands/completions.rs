@@ -50,10 +50,10 @@ fn detect_shell() -> Shell {
     }
 
     // Try ComSpec (Windows)
-    if let Ok(comspec) = std::env::var("ComSpec") {
-        if comspec.contains("powershell") || comspec.contains("pwsh") {
-            return Shell::PowerShell;
-        }
+    if let Ok(comspec) = std::env::var("ComSpec")
+        && (comspec.contains("powershell") || comspec.contains("pwsh"))
+    {
+        return Shell::PowerShell;
     }
 
     // Platform-specific defaults

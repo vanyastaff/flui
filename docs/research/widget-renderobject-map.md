@@ -14,44 +14,334 @@
 
 ## Summary
 
-- **Total widgets planned:** 87
-- **Distinct render objects needed:** 48
-- **Render objects existing:** 24
-- **Render objects to build in Core.2:** 24
+> **⚠ Reconciled 2026-07-01.** The original draft of this file (summary: "24 existing")
+> predates the Core.0/Core.1 catalog growth. The render-object catalog now holds **74**
+> concrete objects. The counts and the two lists immediately below are the **authoritative**
+> status, verified against `RENDER_OBJECT_TYPES` in
+> [`crates/flui-objects/tests/render_object_harness.rs`](../../crates/flui-objects/tests/render_object_harness.rs)
+> and `grep`-confirmed against the source tree. **The per-widget "FLUI Status" columns in the
+> body tables below are NOT re-verified row-by-row** — where they say "Needed" for an object
+> that appears in the "Existing (74)" list, the list wins. The body is retained for its
+> accurate Flutter-reference mapping (which Flutter RO each widget uses + the Flutter source
+> file), which the Core.2 implementers need.
 
-### Existing render objects (24)
+- **Total widgets planned:** ~87
+- **Distinct concrete render objects for full parity (Core.2 target):** ~74
+- **Render objects existing today:** **74**
+- **Render objects remaining to build (Core.2):** **0 verified missing** in this map
 
-| # | Render Object | FLUI Module | Wave |
-|---|---|---|---|
-| 1 | `RenderColoredBox` | `objects::colored_box` | — |
-| 2 | `RenderSizedBox` | `objects::sized_box` | — |
-| 3 | `RenderPadding` | `objects::padding` | — |
-| 4 | `RenderCenter` | `objects::center` | — |
-| 5 | `RenderOpacity` | `objects::opacity` | — |
-| 6 | `RenderTransform` | `objects::transform` | — |
-| 7 | `RenderConstrainedBox` | `objects::constrained_box` | Core.2 |
-| 8 | `RenderLimitedBox` | `objects::limited_box` | Core.2 |
-| 9 | `RenderAspectRatio` | `objects::aspect_ratio` | Core.2 |
-| 10 | `RenderFractionallySizedBox` | `objects::fractionally_sized_box` | Core.2 |
-| 11 | `RenderClipRect` | `objects::clip` | Core.2 |
-| 12 | `RenderClipRRect` | `objects::clip` | Core.2 |
-| 13 | `RenderClipOval` | `objects::clip` | Core.2 |
-| 14 | `RenderClipPath` | `objects::clip` | Core.2 |
-| 15 | `RenderRepaintBoundary` | `objects::repaint_boundary` | Core.2 |
-| 16 | `RenderOffstage` | `objects::offstage` | Core.2 W4 |
-| 17 | `RenderAbsorbPointer` | `objects::absorb_pointer` | Core.2 W4 |
-| 18 | `RenderIgnorePointer` | `objects::ignore_pointer` | Core.2 W4 |
-| 19 | `RenderMetaData` | `objects::meta_data` | Core.2 W4 |
-| 20 | `RenderFractionalTranslation` | `objects::fractional_translation` | Core.2 W4 |
-| 21 | `RenderFittedBox` | `objects::fitted_box` | Core.2 W4 |
-| 22 | `RenderFlex` | `objects::flex` | — |
-| 23 | `RenderStack` | `objects::stack` | Core.2 W2a |
-| 24 | `RenderSliverPadding` | `objects::sliver_padding` | Core.2 W5a |
-| 25 | `RenderSliverOpacity` | `objects::sliver_opacity` | Core.2 W5a |
-| 26 | `RenderSliverIgnorePointer` | `objects::sliver_ignore_pointer` | Core.2 W5a |
-| 27 | `RenderSliverOffstage` | `objects::sliver_offstage` | Core.2 W5a |
+### Existing render objects — authoritative (74)
 
-> Note: 27 entries above — the summary counts "24 existing" as those used directly by widgets; the sliver proxies (24–27) are infrastructure but listed for completeness.
+Concrete, harness-tested render objects (excludes base/infra types `RenderObject`, `RenderBox`, `RenderSliver`, `RenderShiftedBox`, `RenderProxyBox`, `RenderClip`, `RenderNode`):
+
+**Box layout (26):** `RenderAlign` · `RenderAnimatedSize` · `RenderAspectRatio` · `RenderBaseline` · `RenderCenter` · `RenderConstrainedBox` · `RenderConstrainedOverflowBox` · `RenderCustomMultiChildLayoutBox` · `RenderCustomSingleChildLayoutBox` · `RenderFittedBox` · `RenderFlex` · `RenderFlow` · `RenderFractionallySizedBox` · `RenderFractionalTranslation` · `RenderIndexedStack` · `RenderIntrinsicHeight` · `RenderIntrinsicWidth` · `RenderLimitedBox` · `RenderListBody` · `RenderPadding` · `RenderRotatedBox` · `RenderSizedBox` · `RenderSizedOverflowBox` · `RenderStack` · `RenderTable` · `RenderWrap`
+
+**Paint effects (16):** `RenderBackdropFilter` · `RenderClipOval` · `RenderClipPath` · `RenderClipRect` · `RenderClipRRect` · `RenderColoredBox` · `RenderCustomPaint` · `RenderDecoratedBox` · `RenderFollowerLayer` · `RenderLeaderLayer` · `RenderOpacity` · `RenderPhysicalModel` · `RenderPhysicalShape` · `RenderRepaintBoundary` · `RenderShaderMask` · `RenderTransform`
+
+**Interaction / pointer (6):** `RenderAbsorbPointer` · `RenderIgnorePointer` · `RenderListener` · `RenderMetaData` · `RenderMouseRegion` · `RenderOffstage`
+
+**Semantics proxies (3):** `RenderSemanticsAnnotations` · `RenderMergeSemantics` · `RenderExcludeSemantics`
+
+**Leaf (3):** `RenderEditable` · `RenderParagraph` · `RenderImage`
+
+**Slivers + viewport (20):** `RenderViewport` · `RenderShrinkWrappingViewport` · `RenderSliverList` · `RenderSliverListLazy` · `RenderSliverGrid` · `RenderSliverGridLazy` · `RenderSliverFixedExtentList` · `RenderSliverPadding` · `RenderSliverToBoxAdapter` · `RenderSliverFillViewport` · `RenderSliverFillRemaining` · `RenderSliverFillRemainingAndOverscroll` · `RenderSliverFillRemainingWithScrollable` · `RenderSliverIgnorePointer` · `RenderSliverOffstage` · `RenderSliverOpacity` · `RenderSliverScrollingPersistentHeader` · `RenderSliverPinnedPersistentHeader` · `RenderSliverFloatingPersistentHeader` · `RenderSliverFloatingPinnedPersistentHeader`
+
+### Remaining to build — verified missing (0)
+
+No render-object names are currently verified missing from the Core.2 map. The
+former final semantics-family gap is closed: `RenderSemanticsAnnotations`,
+`RenderMergeSemantics`, and `RenderExcludeSemantics` ship in `flui-objects`,
+are listed in the render-object harness catalog, and back the public
+`Semantics`, `MergeSemantics`, and `ExcludeSemantics` widgets.
+
+> **`RenderSliverGrid` closure note (verified 2026-07-01):** eager `RenderSliverGrid` and request-strategy `RenderSliverGridLazy` now ship in `flui-objects`, are listed in the render-object harness catalog, and back `SliverGrid` / `GridView.count` / `GridView.extent` / `GridView.builder`. `GridView.builder` uses the same next-frame lazy-child service model as `ListView.builder`, so first-frame blank settling remains an explicit FLUI divergence until a true mid-pass build backend exists.
+>
+> **`RenderShrinkWrappingViewport` closure note (verified 2026-07-01):** `RenderShrinkWrappingViewport` now ships in `flui-objects`, is listed in the harness catalog, and backs both the low-level `ShrinkWrappingViewport` widget and the high-level `CustomScrollView::shrink_wrap` / `ListView::shrink_wrap` / `GridView::shrink_wrap` composition path. It matches Flutter's bounded-cross-axis / shrink-wrapped-main-axis layout shape. Lazy `builder` views still keep FLUI's documented next-frame child-settling divergence until a true mid-pass build backend exists.
+>
+> **`RenderIndexedStack` closure note (verified 2026-07-01):** `RenderIndexedStack` now ships in `flui-objects`, is listed in the render-object harness catalog, and backs the public `IndexedStack` widget. It preserves Flutter's O(N) stack layout behavior while restricting paint, hit-test, and baseline reporting to the selected child; `index = None` displays no child.
+>
+> **`RenderCustomPaint` closure note (verified 2026-07-01):** `RenderCustomPaint` now ships in `flui-objects`, is listed in the harness catalog, and uses `flui-rendering`'s `CustomPainter` delegate feature. Harness coverage pins childless preferred sizing, background/child/foreground paint order, and foreground hit-test precedence. Repaint-listenable, semantics-builder, and raster-cache hint plumbing remain documented deferred edges in the render object module.
+>
+> **`RenderListBody` closure note (verified 2026-07-01):** `RenderListBody` now ships in `flui-objects`, is listed in the render-object harness catalog, and backs the public `ListBody` widget. Harness coverage pins vertical and horizontal axis-direction layout, reverse positioning, cross-axis stretching, hit testing, dry layout, and dry-baseline ordering against Flutter's `rendering/list_body.dart` behavior.
+>
+> **`RenderMouseRegion` closure note (verified 2026-07-01):** `RenderMouseRegion` now ships in `flui-objects`, is listed in the render-object harness catalog, and backs the public `MouseRegion` widget. Harness coverage pins childless `constraints.biggest` sizing, hit-entry cursor propagation, mouse-tracker annotation propagation, pointer-move hover dispatch, `MouseTracker` enter/hover/exit callbacks, and Flutter's `opaque = false` behavior: the region still contributes its hit entry while siblings visually behind it remain testable.
+>
+> **`RenderPointerListener` catalog note (verified 2026-07-01):** Flutter's `RenderPointerListener` is implemented as FLUI's Rust-native `RenderListener` and backs the public `Listener` widget. Harness/widget coverage pins child pass-through layout, childless live/dry `constraints.biggest` sizing, hit-entry handler propagation, `HitTestBehavior.translucent` self-entry without blocking lower siblings, down/up routing, hover routing via buttonless `PointerEvent::Move`, pointer-signal routing through FLUI's concrete `PointerEvent::Scroll`, and trackpad pan/zoom update routing through `PointerEvent::Gesture` → `PointerPanZoomEvent::Update`. Remaining edge: Flutter's pan/zoom start/end callbacks are not yet exposed on `Listener`.
+>
+> **`RenderEditable` first-slice note (verified 2026-07-01):** `RenderEditable` now ships in `flui-objects`, is listed in the render-object harness catalog, and backs the public `EditableText` widget as a single leaf render object. Harness/widget coverage pins single-line `force_line` sizing, text paint, collapsed-caret paint, self hit testing, and `EditableText` no longer splitting its text/caret into `Row` + multiple paragraphs. Deferred edges remain explicit: IME/composing, selection rendering, scrolling overflow, multiline viewport behavior, obscure text, and platform text input.
+>
+> **`RenderCustomSingleChildLayoutBox` closure note (verified 2026-07-01):** `RenderCustomSingleChildLayoutBox` now ships in `flui-objects`, is listed in the render-object harness catalog, and backs the public `CustomSingleChildLayout` widget. Harness/widget coverage pins delegated parent sizing, child constraints, child positioning, hit testing through the committed layout offset, dry layout/intrinsics, dry-baseline offsetting, and live actual-baseline forwarding. `SingleChildLayoutDelegate` is now un-gated in `flui-rendering`.
+>
+> **`RenderCustomMultiChildLayoutBox` closure note (verified 2026-07-01):** `RenderCustomMultiChildLayoutBox` now ships in `flui-objects`, is listed in the render-object harness catalog, and backs the public `CustomMultiChildLayout` widget plus `LayoutId` parent-data widget. Harness/widget coverage pins delegated parent sizing, child-id lookup, per-child constraints, layout offsets, reverse-order hit testing, dry layout/intrinsics, and `LayoutId` parent-data delivery. `MultiChildLayoutDelegate` is now un-gated in `flui-rendering`.
+>
+> **`RenderTable` closure note (verified 2026-07-01):** `RenderTable` now ships in `flui-objects`, is listed in the render-object harness catalog, and backs the public `Table`/`TableRow`/`TableCell` widgets. Building it surfaced and fixed a pre-existing type-debt bug: `TableCellParentData.vertical_alignment` was non-optional (defaulting every unset cell to `Top`), where Flutter's is nullable and defers to `RenderTable.defaultVerticalAlignment`; it is now `Option<TableCellVerticalAlignment>`, consolidated onto the single `flui_types::layout::table::TableCellVerticalAlignment` enum (retiring a duplicate `flui_rendering`-local copy). Harness coverage pins the oracle's 4-pass column-width algorithm (`Fixed`/`Flex`/`Fraction`/`Intrinsic`, including the oracle's own adversarial low-ideal/high-flex vs. high-ideal/low-flex shrink scenario), per-cell offset/size, row-decoration → children → border paint order, border interior-line placement, per-cell hit testing, and baseline row alignment. Deferred and documented: `MaxColumnWidth`/`MinColumnWidth` combinators, `TableCellVerticalAlignment::IntrinsicHeight`, RTL column ordering (matching `RenderWrap`'s/`RenderFlex`'s existing LTR-only precedent), and `TableBorder.border_radius`.
+>
+> **`RenderAnimatedOpacity` correction (investigated 2026-07-01):** removed from "remaining to build" — it is not a real gap. `FadeTransition` (`crates/flui-widgets/src/transitions/fade_transition.rs`) and `AnimatedOpacity` (`crates/flui-widgets/src/animated/animated_opacity.rs`) already compose the plain `Opacity` widget/`RenderOpacity`, rebuilding `Opacity::new(value)` on every animation tick — `RenderOpacity` (`crates/flui-objects/src/proxy/opacity.rs`) already implements the oracle's boundary fast paths (`paint_alpha()` → `None` and paint is skipped at alpha 0/255), so no behavior is missing. The oracle's `RenderAnimatedOpacity` differs only in *how* it stays current: it holds the `Animation<double>` itself and self-subscribes (`proxy_box.dart` `RenderAnimatedOpacityMixin`), bypassing a widget rebuild per tick — a pure performance shape, not a correctness one, and it depends on a `Listenable`/`Animation` attach-to-render-object mechanism FLUI's `RenderObject` trait does not have yet (the same gap already documented in `RenderFlow`'s and `RenderCustomPaint`'s module docs for their own painter/delegate `Listenable` wiring). Tracked as a cross-cutting FLUI-wide performance item, not a per-widget catalog gap.
+>
+> **`RenderAnimatedSize` investigation (2026-07-01): genuinely ADR-blocked, not just unbuilt.** Unlike `RenderAnimatedOpacity`, this is not a false positive — `AnimatedSize` does not exist in FLUI in any form (no widget, no composition, no stub; confirmed absent by grep across `flui-widgets`/`flui-objects`/`flui-animation`). Flutter's oracle `RenderAnimatedSize` (`rendering/animated_size.dart`) is architecturally different from `RenderAnimatedOpacity`'s shape: it owns and drives its **own** `AnimationController` (attached via a `vsync: TickerProvider` passed once at construction), detects a child size change during its own `performLayout`, and interpolates its reported size across many of *its own* frames — independent of any widget rebuild. This needs infrastructure that does not exist anywhere in this codebase today: (1) a lifecycle hook on FLUI's `RenderObject` trait for attach/detach-to-tree (to register/unregister a ticker), (2) a path for a render object to reach a `Vsync`/`TickerProvider` — today `Vsync` only reaches the `View`/`State` layer via `VsyncScope`, and `flui-rendering` has no dependency edge to `flui-animation` at all (crate-layering, not one-file), and (3) a way for a render-object-driven tick to trigger `markNeedsLayout` from outside the normal widget-rebuild entry point. This is a materially bigger gap than `RenderFlow`'s missing paint-time-transform primitive — it needs a cross-cutting architectural decision (an ADR) before any implementation plan can be written, since it would also be the mechanism that eventually unblocks `RenderAnimatedOpacity`'s and `RenderFlow`'s own deferred `Listenable` items. Not attempted in this pass; flagged for a chief-architect ADR rather than a build plan.
+>
+> **`RenderAnimatedSize` closure note (verified 2026-07-01):** the blocking architectural gap is closed by
+> [`ADR-0013`](../adr/ADR-0013-render-object-attach-self-dirty-handle.md) — a defaulted `attach`/`detach`
+> lifecycle pair on `RenderObject`/`RenderBox`/`RenderSliver` (mirroring the existing `reassemble` forwarded
+> default), firing off the pipeline's insert/remove paths and reusing the existing `RepaintHandle`
+> (extended with `mark_needs_layout`) plus `AnimationController`'s existing `Listenable` impl — no new ticker
+> subsystem, no new `flui-rendering` → `flui-animation` dependency edge. `RenderAnimatedSize` now ships in
+> `flui-objects` (`crates/flui-objects/src/layout/animated_size.rs`), is listed in the render-object harness
+> catalog, and backs the public `AnimatedSize` widget (`crates/flui-widgets/src/animated/animated_size.rs`).
+> It owns an injected (never self-built — ADR-0013 D2) `AnimationController` and subscribes to it in `attach`,
+> implementing the oracle's four-state retarget machine (`Start`/`Stable`/`Changed`/`Unstable`,
+> `animated_size.dart:15-51`) with its one subtlety intact: only the `Stable → Changed` transition begins the
+> tween at the live current size (genuine interpolation span); every later retarget while already
+> `Changed`/`Unstable` collapses to a degenerate zero-span tween (`begin = end = child's raw size`), not a
+> uniform "begin = current interpolated value" — both formulas have dedicated unit + harness regression tests.
+> Because it must persist its retarget state and controller subscription across rebuilds, its widget does not
+> follow the sibling `AnimatedBuilder`/rebuild-per-tick convention (`AnimatedOpacity`, `AnimatedAlign`) or the
+> `Align`-style whole-object-replace `update_render_object` convention — `AnimatedSizeRenderView` reaches the
+> persistent render object through targeted setters only, with a widget regression test proving an unrelated
+> (alignment-only) rebuild does not reset an in-flight resize animation. Deferred/documented: `reverseDuration`
+> is confirmed inert (this object never runs its controller in reverse).
+>
+> **`RenderSliverPersistentHeader` family closure note (verified 2026-07-01):** all four
+> concrete variants now ship in `crates/flui-objects/src/sliver/sliver_persistent_header.rs`
+> and are listed in the render-object harness catalog: `RenderSliverScrollingPersistentHeader`
+> and `RenderSliverPinnedPersistentHeader` (two small independent structs sharing a
+> `PersistentHeaderCore`) and `RenderSliverFloatingPersistentHeader`/
+> `RenderSliverFloatingPinnedPersistentHeader` (one generic struct over a sealed
+> `FloatingHeaderMode` trait, since the oracle itself documents their `perform_layout`
+> re-reveal state machine as verbatim-identical). No new ADR was needed — ADR-0013's
+> `attach`/`detach` lifecycle already exists on the `RenderSliver` trait; the floating
+> variants' snap-animation controller subscribes through it exactly like `RenderAnimatedSize`.
+> No new `flui-rendering` delegate trait was needed either — `min_extent`/`max_extent` are
+> plain constructor fields, not a delegate object (Flutter's `SliverPersistentHeaderDelegate`
+> is a widget-layer, build-producing concept; Flutter's own newer `PinnedHeaderSliver`/
+> `SliverFloatingHeader` widgets bypass it too). Harness coverage drives real multi-scroll-offset
+> sequences through an actual `RenderViewport`: shrink/scroll-off, the floating re-reveal
+> state machine's two-disjunct outer gate and two-disjunct `allow_floating_expansion`
+> condition, a two-sliver test proving the pinned variant's `max_scroll_obstruction_extent`
+> reaches a following sibling via `max_scroll_obstruction_extent_before`, and snap-animation
+> interpolation across real controller ticks. Out of scope, documented: `show_on_screen`
+> overrides (no `RenderObject::show_on_screen` exists anywhere in FLUI yet), and wiring a
+> caller for `update_scroll_start_direction`/`maybe_start_snap_animation`/`maybe_stop_snap_animation`
+> (needs `Scrollable`/`SliverAppBar`-layer integration, a separate future pass); the widget-layer
+> `SliverPersistentHeader`/`SliverAppBar` themselves are also not in this pass.
+>
+> **Two pre-existing infrastructure defects discovered while building this family:**
+> 1. **FIXED (2026-07-01).** `RenderViewport::attempt_layout` reported the wrong sign for
+>    `constraints.overlap` (`crates/flui-objects/src/sliver/viewport.rs`, the forward-sequence
+>    `overlap: center_offset.min(0.0)` line, where `center_offset = -corrected_offset`).
+>    Independently re-derived against the oracle
+>    (`rendering/viewport.dart:1834`: `overlap: leadingNegativeChild == null ? math.min(0.0, -centerOffset) : 0.0`,
+>    with `centerOffset = mainAxisExtent * anchor - correctedOffset`; for a top-anchored
+>    viewport with no leading reverse slivers this reduces to `overlap = min(0.0, correctedOffset)`)
+>    and confirmed by hand: at `scroll_offset = 300` a correct top-anchored forward viewport
+>    must report `overlap == 0.0`, but the old formula gave `overlap == -300.0`.
+>    `RenderShrinkWrappingViewport::attempt_layout` (same file) already had the correct formula
+>    (`overlap: corrected_offset.min(0.0)`) — this was a `RenderViewport`-only regression, not a
+>    systemic pattern. Fixed to force `overlap == 0.0` for both sequences whenever a leading
+>    reverse-growth group exists (`center_sliver_index` splits the children), matching the
+>    oracle's `leadingNegativeChild != null` branch, and to `corrected_offset.min(0.0)` otherwise.
+>    Two harness regression tests added (`harness_viewport_forward_overlap_is_zero_without_leading_reverse_group`,
+>    `harness_viewport_reverse_group_overlap_is_always_zero`), including one through
+>    `RenderSliverFillRemainingWithScrollable` (which reads `constraints.overlap` directly into
+>    its `extent` formula — the sign bug inflated `extent` and silently un-clamped `paint_extent`).
+>    No existing test's expected value needed to change (zero prior coverage asserted on
+>    `constraints.overlap` through a real viewport).
+> 2. **FIXED (2026-07-01).** No insertion path called `RenderObject::attach` for a Sliver child.
+>    `PipelineOwner::insert_child_render_object` (`crates/flui-rendering/src/pipeline/owner/accessors.rs`)
+>    was hard-coded to `BoxProtocol` and was the only caller of `attach_inserted_node` (the
+>    ADR-0013 wiring); Sliver children were inserted via the lower-level
+>    `render_tree_mut().insert_sliver_child(...)`, which never called it, and
+>    `apply_deferred_mutation`'s `Insert` arm (`pipeline/owner/layout.rs:279`, the
+>    lazy-list/grid-child-building path) had the same gap for **both** protocols (an additional
+>    discovery beyond the original finding — the Box side of the *lazy* path was equally broken,
+>    just masked because the non-lazy Box path was already correct). Fixed by adding
+>    `PipelineOwner::insert_sliver_child_render_object` (the Sliver-protocol counterpart of
+>    `insert_child_render_object`, same dirty-tracking + `attach_inserted_node` shape) and calling
+>    it from `crate::testing::tree::mount_child`'s Sliver branch, plus adding one
+>    `self.attach_inserted_node(child_id)` call in `apply_deferred_mutation`'s shared `Insert` arm
+>    (protocol-generic, so it covers `DeferredRenderObject::Box` and `::Sliver` in one place).
+>    `flui-view`'s real element-reconciliation path (`RenderBehavior::on_mount`) was confirmed
+>    already correct and untouched — it always went through the protocol-generic `PipelineOwner::insert<P>`,
+>    which already called `attach`; the gap was confined to the lazy/deferred-mutation queue and the
+>    test harness. Proven red-then-green: `crates/flui-rendering/tests/attach_detach_lifecycle.rs`
+>    gained a `LifecycleProbeSliver` and three tests (direct sliver-child insert,
+>    deferred-sliver-insert via `apply_deferred_mutation`, and the collateral deferred-box-insert
+>    case); `crates/flui-objects/tests/render_object_harness.rs`'s
+>    `harness_sliver_persistent_header_floating_snap_animation_drives_effective_scroll_offset_across_ticks`
+>    had its manual dirty-mark workaround removed and now proves the real `attach()`-registered
+>    controller listener drives the relayout end-to-end.
+>
+> Both defects are independent of this render-object family's own correctness (verified by
+> reading the implementation directly: the re-reveal state machine and `attach`/`detach`
+> overrides are correct) but block real end-to-end floating-header snap behavior in production
+> until fixed. Scoped as separate follow-up tasks, not fixed in this pass.
+>
+> **`RenderPhysicalModel`/`RenderPhysicalShape` closure note (verified 2026-07-01):** both now
+> ship in `crates/flui-objects/src/proxy/physical_model.rs` and are listed in the render-object
+> harness catalog — the render-tree primitives underneath Material elevation (Card, Dialog,
+> AppBar, FAB, elevated buttons). Zero new infrastructure was needed: `Canvas::draw_shadow`
+> (backed by a real analytic shadow shader, not a stub), the `RenderClip<S>` generic-collapse
+> pattern, and `RRect`/`Path` fill primitives were all already shipped — this is a straight port,
+> like `RenderTable`/`RenderAnimatedOpacity` before it. Uses a new, small `PhysicalClipSource`
+> trait (deliberately not a reuse of `proxy::clip::ClipGeometry`, which has no room for the extra
+> `shape`/`border_radius` config and no shadow/fill vocabulary) generic over one shared
+> `RenderPhysicalModelBase<C>` body, monomorphized to `RenderPhysicalModel` (`BoxShape` +
+> `BorderRadius`) and `RenderPhysicalShape` (arbitrary path clipper). Three confirmed divergences
+> from a literal transcription, each backed by an oracle citation and a regression test: (1) the
+> oracle's own `debugFillProperties` has a bug (passes `color` twice instead of `shadowColor`) —
+> not reproduced, FLUI surfaces the real `shadow_color`; (2) hit-test always tests the clip shape
+> for both variants (the oracle gates this on a clipper being present, which for
+> `RenderPhysicalModel` specifically never happens, so a circular/rounded `RenderPhysicalModel`
+> hit-tests as its full bounding box in real Flutter — FLUI applies the already-shipped
+> `RenderClip<S>` "always test shape" convention instead, for FLUI-wide consistency); (3)
+> `clip_behavior` defaults to `Clip::None`, not `Clip::AntiAlias` like every other class in the
+> same oracle file. The highest-risk formula — the `usesSaveLayer` fork, which controls WHERE the
+> fill is drawn (outside the clip on the parent canvas vs. inside via `draw_paint`), not just
+> whether — is ported exactly and proven by two harness tests asserting the fill kind and count in
+> each branch. `BoxShape::Circle`'s oracle formula (an ellipse — `width/2, height/2` as
+> independent radii, not a true circle) is preserved even though it contradicts FLUI's own
+> currently-unimplemented `BoxShape::Circle` doc comment; flagged, not silently reconciled.
+> Deferred, documented: the `PhysicalModel`/`PhysicalShape` widgets and `Material`'s
+> `AnimatedPhysicalModel` wrapper (a separate widget-layer pass), `debugDisableShadows`
+> (confirmed debug/inspector-only), and `transparentOccluder` (confirmed inapplicable — a
+> Skia-specific parameter with nothing to attach to in FLUI's from-scratch analytic shadow
+> algorithm).
+>
+> **`RenderBackdropFilter`/`RenderShaderMask` closure note (verified 2026-07-01) — render-tree
+> wiring complete, ⚠ ONE half is NOT visually working yet.** Both now ship in
+> `crates/flui-objects/src/proxy/backdrop_filter.rs`/`shader_mask.rs`, as two independent
+> non-generic structs (their config types, gating logic, default `blend_mode`, and diagnostics
+> diverge enough that a shared generic body wasn't worth it, unlike `RenderPhysicalModel`/`Shape`).
+> Building them required extending `flui-rendering`'s paint pipeline: `PaintCx` gained
+> `with_shader_mask`/`with_backdrop_filter`, extending the existing closure-scoped clip mechanism
+> (renamed `FragmentClip` → `FragmentScope` since it now covers non-clip effects too), and the
+> composer gained two new match arms producing real `Layer::ShaderMask`/`Layer::BackdropFilter`
+> nodes. `RenderBackdropFilter`'s two independent paint gates (`enabled` bypasses the filter
+> entirely and still paints the child unfiltered; enabled-with-no-child paints nothing at all) and
+> `RenderShaderMask`'s local-vs-global rect split (the shader callback sees the LOCAL bounds; the
+> composer's existing origin-shift produces the correct global `maskRect`) are both ported exactly
+> and harness-regression-tested. **Confirmed during this pass: the wgpu engine's
+> `LayerRender<ShaderMaskLayer>` never actually applies the shader** — it pushes an inert
+> clip-to-bounds save-layer and never reads the layer's `shader()`/`blend_mode()` fields anywhere
+> in the call graph (a separate, fully-working Canvas-level shader-mask pipeline exists but is
+> architecturally incompatible with `PaintCx`'s deferred-child/no-live-recursion model, so it can't
+> be reused as-is). The `LayerTree` structure is correct and harness-verifiable (a real
+> `Layer::ShaderMask` node with the right fields).
+>
+> **`flui-engine` `ShaderMask` visual-rendering follow-up CLOSED (verified 2026-07-01, see
+> `docs/research/2026-07-01-shader-mask-engine-render-plan.md`).** `render_layer_recursive` gained
+> a `Layer::ShaderMask` special case mirroring the already-shipped `Layer::BackdropFilter` one —
+> but the underlying technique is the *opposite*: `BackdropFilter` blurs what's already on the
+> surface behind the layer, then paints children normally on top; `ShaderMask` instead captures its
+> children's own rendered content to a private offscreen texture first (reusing the exact
+> six-step capture-then-mask-then-composite pipeline `Backend::render_shader_mask` already proves
+> for the `Canvas::draw_shader_mask`/`DisplayList` path), applies the shader as a GPU mask against
+> that capture, then composites the masked result. The one real trap: naively copying
+> `render_shader_mask`'s DPR-only transform reset (correct there because its children are recorded
+> into a *fresh*, self-relative `Canvas`) would silently mis-position or clip away any `ShaderMask`
+> not sitting at the tree root, since `Layer::ShaderMask`'s children are expressed in the same
+> ambient-CTM-relative frame as its own `bounds()` — the fix seeds the offscreen painter's
+> transform with `translate(-bounds.origin) * ambient_ctm` instead. Proven with a GPU pixel-readback
+> test nesting the mask under a translating `Layer::Offset` ancestor; the builder verified this
+> test genuinely fails (masked content lands at the wrong screen position) when reverted to the
+> naive DPR-only reset, then confirmed it passes with the fix. **`ShaderMask` now visually masks on
+> screen exactly as its render-tree wiring always claimed.** `RenderBackdropFilter`'s GPU blur
+> remains real but `ImageFilter::Blur`-only (unchanged, not addressed by this follow-up).
+> `RenderBackdropFilter`'s GPU blur is real but covers only `ImageFilter::Blur`; other filter
+> variants degrade to "children only, no backdrop effect" with a `tracing::warn!`. Scoped down from
+> the oracle's current `ImageFilterConfig`/`BackdropKey` surface (bounded blur, shared-backdrop
+> sampling) to the classic `filter`/`blend_mode`/`enabled` fields — neither newer feature has any
+> FLUI-side backing, so building them now would be dead plumbing.
+>
+> **`RenderLeaderLayer`/`RenderFollowerLayer` closure note (verified 2026-07-01) — Tier 1 only;
+> followers do NOT yet position correctly on screen.** Both now ship in
+> `crates/flui-objects/src/proxy/leader.rs`/`follower.rs`, two independent non-generic structs
+> (Leader has zero hit-test override in oracle at all; Follower has a materially different custom
+> `hitTest` plus three extra fields). Extends the same `PaintCx`/`FragmentScope` closure-scoped
+> mechanism `RenderShaderMask`/`RenderBackdropFilter` just proved out — `with_leader`/`with_follower`
+> plus two new composer match arms producing real `Layer::Leader`/`Layer::Follower` nodes. **Key
+> divergence from the immediately-preceding pair, gotten right**: both push their layer
+> UNCONDITIONALLY and report `always_needs_compositing() == true` unconditionally, regardless of
+> child presence — oracle never gates either on `child != null` for this family (a childless
+> `CompositedTransformTarget` is still a coordinate anchor, not a visual effect), unlike
+> ShaderMask/BackdropFilter's `has_child`-gated version. Regression-tested by mounting each with
+> zero children and asserting the layer is still present (the direct opposite of the sibling
+> pair's own no-child test).
+>
+> This pass precisely pinned down (not guessed) how Flutter resolves a follower's on-screen
+> position independent of paint order: Flutter's `flushPaint` and `compositeFrame`/`buildScene`
+> are two structurally separate phases, so a follower's transform resolves against an
+> already-complete retained layer tree regardless of which subtree painted first — genuine
+> same-frame, order-independent resolution, not a one-frame lag. FLUI's paint pipeline is a single
+> recursive pass that directly builds the `LayerTree`, so this guarantee does not fall out "for
+> free" — closing it needed a translation-only ancestor-chain-sum algorithm at RENDER time (after
+> the `LayerTree` is already complete for the frame), mirroring the already-existing
+> `Layer::BackdropFilter` special-case in `render_layer_recursive`.
+>
+> **Tier 2 closure note (verified 2026-07-01): the render-time resolution is now built and
+> GPU-tested.** `crates/flui-layer::resolve_follower_offset` walks the leader's and follower's
+> ancestor chains in the already-built `LayerTree` to their nearest common ancestor, summing
+> `Layer::Offset` deltas along each side — a per-frame `LinkRegistry` is populated as a byproduct
+> of the same paint-pass `FragmentComposer` walk that pushes `Layer::Leader`/`Layer::Follower`
+> (no `PipelineOwner`-level persistent-registry redesign needed, matching the plan's own
+> prediction), and handed to `Scene::with_links` (replacing the always-empty `Scene::new`) so
+> `flui-engine`'s `render_layer_recursive` can resolve a `Layer::Follower`'s position against it
+> before rendering its subtree — the identical `push_offset`/`pop_transform` mechanism
+> `Layer::Leader` already used correctly. Proven with 3 real GPU pixel-readback tests (not
+> harness-level stand-ins, per the plan's own "explicitly out of harness scope" note): a
+> cross-repaint-boundary leader/follower pair resolves correctly, an unlinked
+> `show_when_unlinked = true` follower renders at its own `target_offset`, and an unlinked
+> `show_when_unlinked = false` follower renders nothing. `CompositedTransformFollower` (tooltips,
+> dropdown menus) now positions correctly on screen.
+>
+> **Resolved-transform-aware hit-testing CLOSED (verified 2026-07-01) per `ADR-0015`**
+> (`docs/adr/ADR-0015-render-follower-hit-test-channel.md`). The channel: `FragmentComposer`
+> captures a `(RenderId, LayerId)` correlation as a near-free byproduct of pushing each
+> `Layer::Follower` during paint; `run_paint` resolves each correlated follower post-paint via
+> the SAME `flui_layer::resolve_follower_offset` the GPU path already uses (one algorithm, two
+> consumers, not two copies), stashing results in two `PipelineOwner` side tables
+> (`last_follower_offsets` for visible/resolved, `last_hidden_follower_ids` for
+> unlinked-and-hidden); the hit-test walk reads them generically, riding the exact
+> `push_transform`/`pop_transform`/position-shift lifecycle it already uses for
+> `hit_test_transform` and ordinary child offsets. `hit_test_transform`'s signature and every
+> existing implementor (`RenderTransform`, `RenderRotatedBox`, sliver variants) are completely
+> untouched; `RenderFollowerLayer::hit_test` stays the plain structural forward, since the walk
+> — not the object — now applies the resolved shift. Proven by a milestone harness test asserting
+> BOTH that a hit at the follower's resolved on-screen position reaches its child AND that a hit
+> at its plain tree-relative position does not (the direct regression proof, verified red before
+> the fix and green after). This is Flutter's own `getLastTransform()` cache-from-last-composite
+> contract, ported faithfully — the one-frame staleness (consulting the last completed paint's
+> resolved position, never a live per-event recompute) is the intended oracle behavior, not a
+> limitation.
+>
+> **Semantics family closure note (verified 2026-07-01) — the last catalog gap is closed via
+> `ADR-0014`.** `RenderSemanticsAnnotations`/`RenderMergeSemantics`/`RenderExcludeSemantics` now
+> ship in `crates/flui-objects/src/proxy/semantics.rs`, back the public `Semantics`/
+> `MergeSemantics`/`ExcludeSemantics` widgets (`crates/flui-widgets/src/semantics/`), and are
+> listed in the render-object harness catalog. Per `ADR-0014`
+> (`docs/adr/ADR-0014-semantics-assembly-integration.md`), this required porting Flutter's
+> CLASSIC full-rebuild semantics assembly — not the modern `_RenderObjectSemantics` incremental
+> compiler current Flutter master runs — into the previously-stubbed `PipelineOwner::run_semantics`
+> phase: a `SemanticsOwner` field with created/disposed lifecycle notifications, a depth-first
+> assembly walk (structurally a sibling of the paint walk, reusing its `offset()`/
+> `paint_transform()` geometry inputs rather than a new transform mechanism), the classic
+> boundary-vs-merge decision (`SemanticsConfiguration::absorb` merges non-boundary content up
+> into the nearest boundary ancestor), and two small additive hooks:
+> `is_merging_semantics_of_descendants` (`RenderMergeSemantics`) and `excludes_semantics_subtree`
+> (`RenderExcludeSemantics`). The trickiest correctness case — a nested descendant that
+> independently declares its own semantics boundary, still correctly collapsing into one node
+> under a `MergeSemantics` ancestor — is proven end-to-end against the real assembled
+> `SemanticsOwner`/`SemanticsNode` tree (`crates/flui-rendering/tests/semantics_assembly.rs`,
+> plus `harness_merge_semantics_collapses_descendant_boundaries` in the render-object harness).
+> **This closes the render-object catalog: 74/74, zero verified-missing entries.** Deferred,
+> documented per `ADR-0014` D6: the modern incremental compiler, sibling-merge-groups/
+> `RenderBlockSemantics`, cross-frame stable `SemanticsId` reuse, sliver semantics geometry, and
+> the OS accessibility bridge — `flui-platform` has no AT-SPI/UIAccessibility/MSAA and no
+> downstream consumer exists yet, so the assembled tree is verified via the harness and
+> `debug_dump_semantics_tree`, not a live screen reader, until that bridge lands as its own
+> multi-session effort.
+
+**Core.2 entry verdict: ✓ READY.** The former critical `RenderSliverGrid` blocker is closed; the rest phase in by family off the critical path. R2 mitigated.
 
 ---
 
@@ -81,13 +371,13 @@
 | `Spacer` | *(composes)* | N/A | Leaf | Wraps `Expanded(child: SizedBox.shrink())` |
 | `Stack` | `RenderStack` | **Exists** | Variable | |
 | `Positioned` | *(ParentDataWidget)* | N/A | — | Sets `StackParentData` offsets |
-| `IndexedStack` | `RenderIndexedStack` | Needed | Variable | Extends `RenderStack`, shows only one child |
+| `IndexedStack` | `RenderIndexedStack` | **Exists** | Variable | Extends `RenderStack`, shows only one child |
 | `Wrap` | `RenderWrap` | Needed | Variable | From `wrap.dart` |
 | `Flow` | `RenderFlow` | Needed | Variable | Paint-time transforms via `FlowDelegate` |
-| `Table` | `RenderTable` | Needed | Variable | From `table.dart` |
+| `Table` | `RenderTable` | **Exists** | Variable | From `table.dart` |
 | `TableRow` | *(composes)* | N/A | — | Grouping widget for Table rows |
-| `CustomSingleChildLayout` | `RenderCustomSingleChildLayoutBox` | Needed | Single | Delegate-driven layout |
-| `CustomMultiChildLayout` | `RenderCustomMultiChildLayoutBox` | Needed | Variable | Delegate-driven multi-child layout |
+| `CustomSingleChildLayout` | `RenderCustomSingleChildLayoutBox` | **Exists** | Single | Delegate-driven layout |
+| `CustomMultiChildLayout` | `RenderCustomMultiChildLayoutBox` | **Exists** | Variable | Delegate-driven multi-child layout |
 | `LayoutBuilder` | `RenderLayoutBuilder` (special) | Needed | Single | Uses `RenderObjectWithLayoutCallbackMixin` |
 | `ColoredBox` | `RenderColoredBox` | **Exists** | Single | Paints colored rectangle behind child |
 
@@ -106,11 +396,11 @@
 | `ClipOval` | `RenderClipOval` | **Exists** | Single | |
 | `ClipPath` | `RenderClipPath` | **Exists** | Single | |
 | `DecoratedBox` | `RenderDecoratedBox` | Needed | Single | Paints `BoxDecoration` (borders, gradients, shadows, images) |
-| `CustomPaint` | `RenderCustomPaint` | Needed | Single | User-supplied foreground/background painters |
-| `BackdropFilter` | `RenderBackdropFilter` | Needed | Single | Applies image filter to backdrop |
-| `ShaderMask` | `RenderShaderMask` | Needed | Single | Applies shader as color mask |
-| `PhysicalModel` | `RenderPhysicalModel` | Needed | Single | Rounded-rect clip + elevation shadow |
-| `PhysicalShape` | `RenderPhysicalShape` | Needed | Single | Arbitrary path clip + elevation shadow |
+| `CustomPaint` | `RenderCustomPaint` | **Exists** | Single | User-supplied foreground/background painters |
+| `BackdropFilter` | `RenderBackdropFilter` | **Exists** | Single | Applies image filter to backdrop; see closure note above |
+| `ShaderMask` | `RenderShaderMask` | **Exists** | Single | Applies shader as color mask; `flui-engine` now visually applies it — see closure note |
+| `PhysicalModel` | `RenderPhysicalModel` | **Exists** | Single | Rounded-rect clip + elevation shadow; see closure note above |
+| `PhysicalShape` | `RenderPhysicalShape` | **Exists** | Single | Arbitrary path clip + elevation shadow; see closure note above |
 | `RepaintBoundary` | `RenderRepaintBoundary` | **Exists** | Single | Isolates repaint subtree |
 | `Offstage` | `RenderOffstage` | **Exists** | Single | Hides subtree (zero-size, skip paint/hit-test) |
 | `ColorFiltered` | *(composes)* | N/A | Single | Uses layer-level `ColorFilterLayer` |
@@ -126,13 +416,13 @@
 | `ListView` | *(composes)* | N/A | Variable | `CustomScrollView` + `SliverList` |
 | `GridView` | *(composes)* | N/A | Variable | `CustomScrollView` + `SliverGrid` |
 | `CustomScrollView` | *(composes Viewport)* | N/A | Variable | Creates `Viewport` with sliver children |
-| `Viewport` | `RenderViewport` | Needed | Variable(Sliver) | Bridge: box → sliver protocol; from `viewport.dart` |
-| `ShrinkWrappingViewport` | `RenderShrinkWrappingViewport` | Needed | Variable(Sliver) | Viewport that sizes to content |
-| `SliverList` | `RenderSliverList` | Needed | Variable(Box) | Lazy linear list of box children |
-| `SliverGrid` | `RenderSliverGrid` | Needed | Variable(Box) | Lazy 2D grid of box children |
+| `Viewport` | `RenderViewport` | **Exists** | Variable(Sliver) | Bridge: box -> sliver protocol; from `viewport.dart` |
+| `ShrinkWrappingViewport` | `RenderShrinkWrappingViewport` | **Exists** | Variable(Sliver) | Viewport that sizes to content |
+| `SliverList` | `RenderSliverList` / `RenderSliverListLazy` | **Exists** | Variable(Box) | Eager and request-strategy lazy linear list paths |
+| `SliverGrid` | `RenderSliverGrid` / `RenderSliverGridLazy` | **Exists** | Variable(Box) | Eager and request-strategy lazy 2D grid paths |
 | `SliverFixedExtentList` | `RenderSliverFixedExtentList` | **Exists** | Variable(Box) | Eager attached-child fixed extent; lazy adaptor pending |
-| `SliverFillViewport` | `RenderSliverFillViewport` | Needed | Variable(Box) | Each child fills viewport main-axis extent |
-| `SliverToBoxAdapter` | `RenderSliverToBoxAdapter` | Needed | Single(Box) | Wraps single box child in sliver protocol |
+| `SliverFillViewport` | `RenderSliverFillViewport` | **Exists** | Variable(Box) | Each child fills viewport main-axis extent |
+| `SliverToBoxAdapter` | `RenderSliverToBoxAdapter` | **Exists** | Single(Box) | Wraps single box child in sliver protocol |
 | `SliverPadding` | `RenderSliverPadding` | **Exists** | Single(Sliver) | Pads a sliver child |
 | `SliverAppBar` | *(composes)* | N/A | — | Material widget — uses `SliverPersistentHeader` internally |
 | `SliverPersistentHeader` | `RenderSliverPersistentHeader` family | Needed | Single(Box) | Pinned/floating/scrolling persistent headers |
@@ -147,8 +437,8 @@
 | Widget | Flutter RenderObject | FLUI Status | Arity | Notes |
 |--------|---------------------|-------------|-------|-------|
 | `GestureDetector` | *(composes)* | N/A | Single | Composes `Listener` + gesture recognizers; no own RO |
-| `Listener` | `RenderPointerListener` | Needed | Single | Raw pointer event callbacks |
-| `MouseRegion` | `RenderMouseRegion` | Needed | Single | Mouse hover enter/exit tracking |
+| `Listener` | `RenderPointerListener` | **Exists** (as `RenderListener`) | Single | Raw pointer callbacks; buttonless move maps to hover, scroll maps to pointer signals, gesture maps to pan/zoom updates |
+| `MouseRegion` | `RenderMouseRegion` | **Exists** | Single | Mouse hover enter/exit tracking |
 | `AbsorbPointer` | `RenderAbsorbPointer` | **Exists** | Single | Catches hits, blocks child |
 | `IgnorePointer` | `RenderIgnorePointer` | **Exists** | Single | Pointers pass through subtree |
 | `Focus` | *(framework)* | N/A | Single | Focus node management; no own RO |
@@ -162,10 +452,10 @@
 
 | Widget | Flutter RenderObject | FLUI Status | Arity | Notes |
 |--------|---------------------|-------------|-------|-------|
-| `RichText` | `RenderParagraph` | Needed | Leaf | Core text rendering; drives cosmic-text in FLUI |
+| `RichText` | `RenderParagraph` | **Exists** | Leaf | Core text rendering; drives cosmic-text in FLUI |
 | `Text` | *(composes)* | N/A | Leaf | Wraps `RichText` with `DefaultTextStyle` |
 | `DefaultTextStyle` | *(InheritedWidget)* | N/A | Single | Provides inherited text style; no own RO |
-| `EditableText` | `RenderEditable` | Needed | Leaf | Text editing with cursor, selection, IME |
+| `EditableText` | `RenderEditable` | **Exists first visual slice** | Leaf | Text + collapsed cursor; selection, IME, scrolling overflow, multiline deferred |
 
 ---
 
@@ -173,7 +463,7 @@
 
 | Widget | Flutter RenderObject | FLUI Status | Arity | Notes |
 |--------|---------------------|-------------|-------|-------|
-| `Image` | `RenderImage` | Needed | Leaf | Displays decoded image with fit/alignment |
+| `Image` | `RenderImage` | **Exists** | Leaf | Displays decoded image with fit/alignment |
 | `Icon` | *(composes)* | N/A | Leaf | Composes `RichText` with icon font glyph |
 
 ---
@@ -184,7 +474,7 @@
 
 | Widget | Flutter RenderObject | FLUI Status | Arity | Notes |
 |--------|---------------------|-------------|-------|-------|
-| `FadeTransition` | `RenderAnimatedOpacity` | Needed | Single | Animated opacity via `Animation<double>` |
+| `FadeTransition` | *(composes)* | N/A | Single | Composes `Opacity`/`RenderOpacity`, rebuilt per tick — see the `RenderAnimatedOpacity` correction note above |
 | `SlideTransition` | *(composes)* | N/A | Single | Composes `FractionalTranslation` driven by animation |
 | `ScaleTransition` | *(composes)* | N/A | Single | Composes `Transform.scale` driven by animation |
 | `RotationTransition` | *(composes)* | N/A | Single | Composes `Transform.rotate` driven by animation |
@@ -197,11 +487,11 @@
 |--------|---------------------|-------------|-------|-------|
 | `AnimatedContainer` | *(composes)* | N/A | Single | Implicitly animates Container properties |
 | `AnimatedPadding` | *(composes)* | N/A | Single | Implicitly animates Padding |
-| `AnimatedOpacity` | `RenderAnimatedOpacity` | Needed | Single | Implicit opacity animation |
+| `AnimatedOpacity` | *(composes)* | N/A | Single | Composes `Opacity`/`RenderOpacity`, rebuilt per tick — see the `RenderAnimatedOpacity` correction note above |
 | `AnimatedPositioned` | *(composes)* | N/A | Single | Implicitly animates Positioned in Stack |
 | `AnimatedAlign` | *(composes)* | N/A | Single | Implicitly animates Align |
 | `AnimatedDefaultTextStyle` | *(composes)* | N/A | Single | Implicitly animates DefaultTextStyle |
-| `AnimatedSize` | `RenderAnimatedSize` | Needed | Single | Animates size changes over time |
+| `AnimatedSize` | `RenderAnimatedSize` | **Exists** | Single | Animates size changes over time; see ADR-0013 closure note above |
 
 ### Hero
 
@@ -227,9 +517,9 @@
 | Widget | Flutter RenderObject | FLUI Status | Arity | Notes |
 |--------|---------------------|-------------|-------|-------|
 | `Visibility` | *(composes)* | N/A | Single | Composes `Offstage` + `IgnorePointer` + `TickerMode` |
-| `Semantics` | `RenderSemanticsAnnotations` | Needed | Single | Accessibility annotation proxy |
-| `MergeSemantics` | `RenderMergeSemantics` | Needed | Single | Merges child semantics into one node |
-| `ExcludeSemantics` | `RenderExcludeSemantics` | Needed | Single | Drops child semantics |
+| `Semantics` | `RenderSemanticsAnnotations` | **Exists** | Single | Accessibility annotation proxy |
+| `MergeSemantics` | `RenderMergeSemantics` | **Exists** | Single | Merges child semantics into one node |
+| `ExcludeSemantics` | `RenderExcludeSemantics` | **Exists** | Single | Drops child semantics |
 | `Builder` | *(framework)* | N/A | Single | Convenience StatelessWidget with inline builder; no own RO |
 | `MediaQuery` | *(InheritedWidget)* | N/A | Single | Provides device metrics; no own RO |
 | `InheritedWidget` | *(framework)* | N/A | Single | Data-sharing base class; no own RO |
@@ -239,9 +529,9 @@
 | `StreamBuilder` | *(framework)* | N/A | Single | Rebuilds on `Stream` events; no own RO |
 | `TickerProvider` | *(framework)* | N/A | — | Mixin providing `Ticker` for animations; no own RO |
 | `MetaData` | `RenderMetaData` | **Exists** | Single | Attaches opaque data to hit-test entries |
-| `CompositedTransformTarget` | `RenderLeaderLayer` | Needed | Single | Anchor for follower layer |
-| `CompositedTransformFollower` | `RenderFollowerLayer` | Needed | Single | Follows leader layer position |
-| `ListBody` | `RenderListBody` | Needed | Variable | Sequential body layout (used by `Dialog`) |
+| `CompositedTransformTarget` | `RenderLeaderLayer` | **Exists** | Single | Anchor for follower layer; see closure note above |
+| `CompositedTransformFollower` | `RenderFollowerLayer` | **Exists** (Tier 2 landed — see closure note) | Single | Follows leader layer position; resolved-transform hit-testing remains ADR-deferred |
+| `ListBody` | `RenderListBody` | **Exists** | Variable | Sequential body layout (used by `Dialog`) |
 
 ---
 
@@ -249,7 +539,7 @@
 
 Grouped by family for parallelizable construction (per ROADMAP Core.2 structure):
 
-### Wave 1 — Box Layout (6 objects)
+### Wave 1 — Box Layout (4 objects)
 
 | # | Render Object | Flutter File | Needed By Widgets |
 |---|---|---|---|
@@ -257,39 +547,31 @@ Grouped by family for parallelizable construction (per ROADMAP Core.2 structure)
 | 2 | `RenderIntrinsicHeight` | `proxy_box.dart` | `IntrinsicHeight` |
 | 3 | `RenderBaseline` | `shifted_box.dart` | `Baseline` |
 | 4 | `RenderConstrainedOverflowBox` | `shifted_box.dart` | `OverflowBox` |
-| 5 | `RenderCustomSingleChildLayoutBox` | `custom_layout.dart` | `CustomSingleChildLayout` |
-| 6 | `RenderCustomMultiChildLayoutBox` | `custom_layout.dart` | `CustomMultiChildLayout` |
 
-### Wave 2 — Multi-Child Layout (4 objects)
+### Wave 2 — Multi-Child Layout (3 objects)
 
 | # | Render Object | Flutter File | Needed By Widgets |
 |---|---|---|---|
-| 1 | `RenderIndexedStack` | `stack.dart` | `IndexedStack` |
-| 2 | `RenderWrap` | `wrap.dart` | `Wrap` |
-| 3 | `RenderFlow` | `flow.dart` | `Flow` |
-| 4 | `RenderTable` | `table.dart` | `Table` |
+| 1 | `RenderWrap` | `wrap.dart` | `Wrap` |
+| 2 | `RenderFlow` | `flow.dart` | `Flow` |
+| 3 | `RenderTable` | `table.dart` | `Table` |
 
-### Wave 3 — Paint Effects (7 objects)
+### Wave 3 — Paint Effects (6 objects)
 
 | # | Render Object | Flutter File | Needed By Widgets |
 |---|---|---|---|
 | 1 | `RenderDecoratedBox` | `proxy_box.dart` | `DecoratedBox`, `Container` |
-| 2 | `RenderCustomPaint` | `custom_paint.dart` | `CustomPaint` |
-| 3 | `RenderBackdropFilter` | `proxy_box.dart` | `BackdropFilter` |
-| 4 | `RenderShaderMask` | `proxy_box.dart` | `ShaderMask` |
-| 5 | `RenderPhysicalModel` | `proxy_box.dart` | `PhysicalModel` |
-| 6 | `RenderPhysicalShape` | `proxy_box.dart` | `PhysicalShape` |
-| 7 | `RenderRotatedBox` | `rotated_box.dart` | `RotatedBox` |
+| 2 | `RenderBackdropFilter` | `proxy_box.dart` | `BackdropFilter` |
+| 3 | `RenderShaderMask` | `proxy_box.dart` | `ShaderMask` |
+| 4 | `RenderPhysicalModel` | `proxy_box.dart` | `PhysicalModel` |
+| 5 | `RenderPhysicalShape` | `proxy_box.dart` | `PhysicalShape` |
+| 6 | `RenderRotatedBox` | `rotated_box.dart` | `RotatedBox` |
 
-### Wave 4 — Input / Leaf (5 objects)
+### Wave 4 — Input / Leaf (0 objects remaining)
 
-| # | Render Object | Flutter File | Needed By Widgets |
-|---|---|---|---|
-| 1 | `RenderPointerListener` | `proxy_box.dart` | `Listener` |
-| 2 | `RenderMouseRegion` | `proxy_box.dart` | `MouseRegion` |
-| 3 | `RenderParagraph` | `paragraph.dart` | `RichText`, `Text` |
-| 4 | `RenderEditable` | `editable.dart` | `EditableText` |
-| 5 | `RenderImage` | `image.dart` | `Image` |
+`RenderEditable` exists as the single-line visual core for `EditableText`. Full
+IME/selection/scrolling behavior is App.1/platform work, not a missing render
+object.
 
 ### Wave 5 — Slivers / Viewport (8 objects)
 
@@ -315,12 +597,11 @@ Grouped by family for parallelizable construction (per ROADMAP Core.2 structure)
 | 5 | `RenderLeaderLayer` | `proxy_box.dart` | `CompositedTransformTarget` |
 | 6 | `RenderFollowerLayer` | `proxy_box.dart` | `CompositedTransformFollower` |
 
-### Wave 7 — Secondary (2 objects)
+### Wave 7 — Secondary (1 object)
 
 | # | Render Object | Flutter File | Needed By Widgets |
 |---|---|---|---|
-| 1 | `RenderListBody` | `list_body.dart` | `ListBody` |
-| 2 | `RenderExcludeSemantics` | `proxy_box.dart` | `ExcludeSemantics` |
+| 1 | `RenderExcludeSemantics` | `proxy_box.dart` | `ExcludeSemantics` |
 
 ---
 

@@ -1,16 +1,14 @@
 //! Stack-based [] for constructing layer hierarchies.
 //!
-//! Extracted from `compositor.rs` in Mythos Step 10. The builder is the
+//! Extracted from `compositor.rs`. The builder is the
 //! canonical scene-construction API; `LayerTree::push_*` helpers were
-//! deleted in Step 5.
+//! deleted separately.
 
 use flui_foundation::LayerId;
 use flui_types::{
-    geometry::{Pixels, RRect, Rect},
-    painting::{
-        effects::ColorMatrix, BlendMode, Clip, FilterQuality, ImageFilter, Path, Shader, TextureId,
-    },
     Matrix4,
+    geometry::{Pixels, RRect, Rect},
+    painting::{BlendMode, Clip, ColorFilter, FilterQuality, ImageFilter, Path, Shader, TextureId},
 };
 
 use crate::{
@@ -59,6 +57,7 @@ use crate::{
 /// let root = builder.build();
 /// assert!(root.is_some());
 /// ```
+#[derive(Debug)]
 pub struct SceneBuilder<'a> {
     /// Reference to the layer tree being built
     tree: &'a mut LayerTree,
@@ -216,6 +215,19 @@ impl<'a> SceneBuilder<'a> {
         self.push_layer(Layer::Opacity(OpacityLayer::with_offset(alpha, offset)))
     }
 
+    /// Pushes an opacity layer with an explicit blend mode.
+    ///
+    /// For plain opacity (`SrcOver`) use [`push_opacity`](Self::push_opacity).
+    /// For advanced blend modes (Multiply, Screen, …) use this method; the
+    /// engine will route the layer through the dst-read compositor path.
+    pub fn push_opacity_blend(&mut self, alpha: f32, blend: BlendMode) -> LayerId {
+        self.push_layer(Layer::Opacity(OpacityLayer::with_blend(
+            alpha,
+            flui_types::Offset::ZERO,
+            blend,
+        )))
+    }
+
     /// Pushes a clip rect layer that clips children to a rectangle.
     ///
     /// # Arguments
@@ -260,9 +272,9 @@ impl<'a> SceneBuilder<'a> {
     ///
     /// # Arguments
     ///
-    /// * `color_matrix` - The color matrix to apply
-    pub fn push_color_filter(&mut self, color_matrix: ColorMatrix) -> LayerId {
-        self.push_layer(Layer::ColorFilter(ColorFilterLayer::new(color_matrix)))
+    /// * `filter` - The [`ColorFilter`] to apply (`Matrix`, `Mode`, or `Gamma` variants)
+    pub fn push_color_filter(&mut self, filter: ColorFilter) -> LayerId {
+        self.push_layer(Layer::ColorFilter(ColorFilterLayer::new(filter)))
     }
 
     /// Pushes an image filter layer (blur, etc.).

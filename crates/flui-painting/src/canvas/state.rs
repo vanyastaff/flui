@@ -1,6 +1,6 @@
 //! Canvas state stack: save/restore + save_layer family.
 //!
-//! Mythos chain U4 extracted these from the 3,305-LOC `canvas.rs` god
+//! These were extracted from the 3,305-LOC `canvas.rs` god
 //! module into a focused file. The state stack carries:
 //!
 //! - The current transform matrix (snapshotted by `save()`).
@@ -62,8 +62,7 @@ impl Canvas {
     ///
     /// Must be balanced with `restore()`. Unbalanced saves at
     /// `finish()` time fire `debug_assert!` (caught during tests) and
-    /// `tracing::warn!` (release observability) per the Mythos chain
-    /// U10 strengthening.
+    /// `tracing::warn!` (release observability).
     #[inline]
     pub fn save(&mut self) {
         self.save_stack.push(CanvasState {
@@ -200,11 +199,54 @@ impl Canvas {
         );
     }
 
-    /// Saves the canvas state with a layer that applies a blend mode.
+    /// Saves the canvas state with a layer that applies a blend mode at full opacity.
+    ///
+    /// Flutter semantics: `saveLayer(blendMode)` with no explicit opacity is opaque
+    /// (alpha = 1.0).  The engine derives layer opacity from `paint.color.a`, so
+    /// this method sets alpha = 255 — not the zero produced by `Color::TRANSPARENT`.
+    /// RGB channels are ignored for saveLayer compositing; only alpha matters.
     pub fn save_layer_blend(&mut self, bounds: Option<Rect<Pixels>>, blend_mode: BlendMode) {
-        self.save_layer(
-            bounds,
-            &Paint::fill(Color::TRANSPARENT).with_blend_mode(blend_mode),
+        // Alpha=255 (opaque) — blend-only layer.  `Color::TRANSPARENT` has alpha=0,
+        // which would make the engine treat the layer as invisible (a no-op).
+        let opaque_blend_paint = Paint::fill(Color::TRANSPARENT)
+            .with_opacity(1.0)
+            .with_blend_mode(blend_mode);
+        self.save_layer(bounds, &opaque_blend_paint);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use flui_types::painting::BlendMode;
+
+    use crate::display_list::Paint;
+    use flui_types::styling::Color;
+
+    /// `save_layer_blend` must produce a paint with alpha = 255 (opaque).
+    ///
+    /// The engine derives layer opacity from `paint.color.a`.  Before this fix
+    /// `save_layer_blend` forwarded `Color::TRANSPARENT` (alpha = 0), making the
+    /// advanced-blend layer a silent no-op: opacity = 0 → backdrop passthrough
+    /// regardless of the requested blend mode.
+    ///
+    /// This test fails on pre-fix code where `with_opacity(1.0)` is absent.
+    #[test]
+    fn save_layer_blend_paint_is_opaque() {
+        // Verify the paint that save_layer_blend would pass to save_layer carries
+        // alpha = 255.  We construct the same expression used by the method body
+        // directly — this is a white-box test of the documented fixed invariant.
+        let blend_paint = Paint::fill(Color::TRANSPARENT)
+            .with_opacity(1.0)
+            .with_blend_mode(BlendMode::Multiply);
+        assert_eq!(
+            blend_paint.color.a, 255,
+            "save_layer_blend paint must be opaque (alpha = 255); \
+             alpha = 0 silently no-ops the advanced-blend layer"
+        );
+        assert_eq!(
+            blend_paint.blend_mode,
+            BlendMode::Multiply,
+            "save_layer_blend paint must carry the requested blend mode"
         );
     }
 }

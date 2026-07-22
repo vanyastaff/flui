@@ -51,18 +51,9 @@
 //! - `SemanticsOwner` ≈ Flutter's `SemanticsOwner`
 //! - `SemanticsAction` ≈ Flutter's `SemanticsAction`
 
-#![warn(rust_2018_idioms, clippy::all, clippy::pedantic)]
-#![allow(
-    dead_code,
-    unused_variables,
-    missing_docs,
-    clippy::module_name_repetitions,
-    clippy::must_use_candidate,
-    clippy::return_self_not_must_use,
-    clippy::doc_markdown,
-    clippy::missing_errors_doc,
-    clippy::missing_panics_doc
-)]
+// Lint levels come from `[workspace.lints]` (Cargo.toml `[lints] workspace = true`).
+// Ship bar (wave 2): every public item is documented; keep it that way.
+#![deny(missing_docs)]
 
 // ============================================================================
 // MODULES
@@ -184,7 +175,19 @@ mod tests {
 
     #[test]
     fn test_version() {
-        assert_eq!(VERSION, "0.1.0");
+        // `VERSION` is wired from the package version (`env!("CARGO_PKG_VERSION")`);
+        // assert its shape, not a pinned literal — a hardcoded value breaks on
+        // every workspace version bump (it broke at the 0.1.0 -> 0.2.0 bump).
+        let parts: Vec<&str> = VERSION.split('.').collect();
+        assert_eq!(
+            parts.len(),
+            3,
+            "VERSION should be semver `major.minor.patch`, got {VERSION:?}",
+        );
+        assert!(
+            parts.iter().all(|part| part.parse::<u64>().is_ok()),
+            "VERSION components should be numeric, got {VERSION:?}",
+        );
     }
 
     #[test]

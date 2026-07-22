@@ -32,7 +32,7 @@ pub mod inspect;
 mod spec;
 mod tester;
 
-pub use spec::{layer, mount, LayerLabelRegistry, LayerSpec};
+pub use spec::{LayerLabelRegistry, LayerSpec, layer, mount};
 pub use tester::LayerTester;
 
 #[cfg(test)]

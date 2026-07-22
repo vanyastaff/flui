@@ -79,7 +79,10 @@ use std::sync::Arc;
 use anyhow::Result;
 pub use window_ext::*;
 
-use crate::traits::*;
+use crate::traits::{
+    Clipboard, Platform, PlatformCapabilities, PlatformDisplay, PlatformExecutor,
+    PlatformReadyCallback, PlatformWindow, WindowEvent, WindowId, WindowOptions,
+};
 
 /// Linux platform implementation (stub)
 ///
@@ -96,6 +99,7 @@ use crate::traits::*;
 /// - **fontconfig** for font discovery
 /// - **FreeType** for text rendering
 /// - **Vulkan/wgpu** for GPU rendering
+#[derive(Debug)]
 pub struct LinuxPlatform;
 
 impl LinuxPlatform {
@@ -138,7 +142,7 @@ impl Platform for LinuxPlatform {
         unimplemented!("Linux main thread executor not implemented")
     }
 
-    fn run(self: Box<Self>, _on_finish_launching: Box<dyn FnOnce()>) {
+    fn run(self: Box<Self>, _on_finish_launching: PlatformReadyCallback) {
         unimplemented!("Linux event loop (Wayland/X11) not implemented")
     }
 

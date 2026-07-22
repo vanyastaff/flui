@@ -19,7 +19,7 @@ use crate::{element::Notification, owner::BuildOwner, tree::ElementTree};
 /// `ElementBuildContext` provides the bridge between Elements and the
 /// BuildContext trait, giving Views access to:
 /// - Element identity and tree position
-/// - InheritedView lookups (O(1) via BuildOwner registry)
+/// - InheritedView lookups (O(1) via each node's `inherited` map)
 /// - Ancestor traversal
 /// - Rebuild scheduling
 ///
@@ -48,17 +48,6 @@ pub struct ElementBuildContext {
 
     /// Reference to the build owner.
     owner: Arc<RwLock<BuildOwner>>,
-
-    /// Whether this context is the minimal/dummy variant created by
-    /// [`Self::new_minimal`]. The `tree` and `owner` Arcs of a minimal
-    /// context point at the process-shared dummy cache (plan §U12 /
-    /// audit V-13 — cheap part); mutating that shared state from a
-    /// user `build()` accumulates writes into a long-lived global heap.
-    /// [`BuildContext::mark_needs_build`] checks this flag and degrades
-    /// to a `tracing::warn!`-and-no-op on minimal contexts to prevent
-    /// unbounded growth of the shared dummy's `dirty_elements` heap
-    /// (PR #119 review — copilot).
-    is_minimal: bool,
 
     /// Whether we're currently in a build phase (debug only).
     #[cfg(debug_assertions)]
@@ -98,7 +87,6 @@ impl ElementBuildContext {
             mounted,
             tree,
             owner,
-            is_minimal: false,
             #[cfg(debug_assertions)]
             is_building: false,
         }
@@ -122,7 +110,6 @@ impl ElementBuildContext {
             mounted: node.element().mounted(),
             tree: tree.clone(),
             owner,
-            is_minimal: false,
             #[cfg(debug_assertions)]
             is_building: false,
         })
@@ -146,33 +133,21 @@ impl ElementBuildContext {
         &self.owner
     }
 
-    /// Walk ancestors of `self.element_id` looking for an element whose
-    /// `view_type_id()` matches `type_id`. Returns the first matching
-    /// ancestor's `ElementId`.
+    /// Nearest in-scope `InheritedElement` of view type `type_id`, in **O(1)**.
     ///
-    /// Shared helper for U9 (`depend_on_inherited`) and U10
-    /// (`get_inherited`). Both perform the same ancestor scan; only the
-    /// dependent-recording side differs. Extracting the helper now also
-    /// gives U11/U12 an obvious reuse target.
+    /// Shared helper for `depend_on_inherited` and `get_inherited`;
+    /// only the dependent-recording side differs.
     ///
-    /// Flutter parity: `framework.dart:5028-5060` `getElementForInheritedWidgetOfExactType` —
-    /// Flutter uses a per-element `_inheritedElements: PersistentHashMap`,
-    /// flui walks the ancestor chain directly because the per-element
-    /// hash-map isn't necessary at our scale and avoids the
-    /// reconciliation-time map-clone cost.
-    fn walk_ancestors_for_inherited(&self, type_id: std::any::TypeId) -> Option<ElementId> {
-        let tree = self.tree.read();
-
-        let mut current_id = self.element_id;
-        loop {
-            let node = tree.get(current_id)?;
-            let parent_id = node.parent()?;
-            let parent_node = tree.get(parent_id)?;
-            if parent_node.element().view_type_id() == type_id {
-                return Some(parent_id);
-            }
-            current_id = parent_id;
-        }
+    /// Reads the resolved inherited scope
+    /// ([`ElementNode::inherited`](crate::tree::ElementNode)) instead of
+    /// walking the ancestor chain — Flutter parity for `_inheritedElements[T]`
+    /// (`framework.dart:5094`, the O(1) per-element map). flui builds that map
+    /// at mount as an `Arc<HashMap>` shared by refcount down non-provider runs.
+    fn find_inherited_provider(&self, type_id: std::any::TypeId) -> Option<ElementId> {
+        self.tree
+            .read()
+            .get(self.element_id)?
+            .inherited_provider(type_id)
     }
 
     /// Walk strict-ancestors (parent and up) of `self.element_id`,
@@ -181,7 +156,7 @@ impl ElementBuildContext {
     /// `ControlFlow::Break`, or `None` if every ancestor is exhausted
     /// without a break.
     ///
-    /// Shared helper for the U11 trio
+    /// Shared helper for the ancestor-finder trio
     /// ([`find_ancestor_view`](BuildContext::find_ancestor_view),
     /// [`find_ancestor_state`](BuildContext::find_ancestor_state),
     /// [`find_root_ancestor_state`](BuildContext::find_root_ancestor_state)).
@@ -217,54 +192,6 @@ impl ElementBuildContext {
             current_id = parent_id;
         }
     }
-
-    /// Create a minimal context for use when full tree/owner aren't available.
-    ///
-    /// This is useful for StatelessElement::perform_build where we just need
-    /// a context to pass to view.build() but don't have full tree
-    /// infrastructure.
-    ///
-    /// The dummy `tree` / `owner` Arcs are pulled from a process-shared
-    /// cache initialized lazily on first call — see
-    /// [`BuildOwner::shared_dummy_tree`] /
-    /// [`BuildOwner::shared_dummy_owner`]. Plan §U12 / R15, audit V-13
-    /// (cheap separable part). Eliminates the
-    /// `Arc::new(RwLock::new(ElementTree::new()))` /
-    /// `Arc::new(RwLock::new(BuildOwner::new()))` allocations from the
-    /// per-build hot path — each call now does two `Arc::clone`s
-    /// (atomic refcount bumps) instead of two heap-arena allocations
-    /// plus two `RwLock` payload allocations plus two empty inner
-    /// structures.
-    ///
-    /// **Why this is sound.** The dummy tree is empty, so every
-    /// production `BuildContext` accessor that walks the tree
-    /// (`walk_ancestors_for_inherited`, `find_ancestor_element`, …)
-    /// returns `None` / `false` after the first `tree.get(id)` lookup —
-    /// the same return shape as the previous per-build dummy. The dummy
-    /// is never written to during build because the early-`None` exit
-    /// happens before any `write()` site. A user `build()` that calls
-    /// `ctx.mark_needs_build()` (Flutter-forbidden, flui matches that
-    /// policy) does write into the shared dummy's `BuildOwner`, but
-    /// that owner's `dirty_elements` is never drained — the write is as
-    /// lossy as the per-build dummy was, just to a different heap
-    /// location.
-    pub fn new_minimal(depth: usize) -> Self {
-        let tree = BuildOwner::shared_dummy_tree();
-        let owner = BuildOwner::shared_dummy_owner();
-        // ElementId::new(1) is safe - 1 is non-zero
-        let element_id = ElementId::new(1);
-
-        Self {
-            element_id,
-            depth,
-            mounted: true,
-            tree,
-            owner,
-            is_minimal: true,
-            #[cfg(debug_assertions)]
-            is_building: true,
-        }
-    }
 }
 
 impl BuildContext for ElementBuildContext {
@@ -291,11 +218,23 @@ impl BuildContext for ElementBuildContext {
         }
     }
 
-    fn owner(&self) -> Option<&BuildOwner> {
-        // We can't return a reference to data behind RwLock directly
-        // This method may need redesign or the trait needs adjustment
-        // For now, return None - callers should use build_owner() method instead
-        None
+    fn rebuild_handle(&self) -> crate::RebuildHandle {
+        // A real handle: the owner Arc is right here. The read lock is held only
+        // to clone the shared inbox + frame-request Arcs out; nothing is held
+        // across the returned handle's lifetime.
+        self.owner.read().rebuild_handle(self.element_id)
+    }
+
+    fn async_driver(&self) -> Option<flui_scheduler::AsyncDriver> {
+        self.owner.read().async_driver().cloned()
+    }
+
+    fn post_frame_handle(&self) -> Option<flui_scheduler::PostFrameHandle> {
+        self.owner.read().post_frame_handle().cloned()
+    }
+
+    fn text_input_handle(&self) -> Option<flui_interaction::TextInputHandle> {
+        self.owner.read().text_input_handle().cloned()
     }
 
     fn depend_on_inherited(&self, type_id: TypeId, callback: &mut dyn FnMut(&dyn Any)) -> bool {
@@ -304,14 +243,13 @@ impl BuildContext for ElementBuildContext {
         //
         // Records this element in the matched InheritedElement's
         // dependent map so a subsequent rebuild with
-        // `update_should_notify == true` schedules us for rebuild
-        // (R16, plan §U9).
+        // `update_should_notify == true` schedules us for rebuild.
         //
         // Flutter parity: `framework.dart:5081`
         // `dependOnInheritedWidgetOfExactType` -> the matched
         // `InheritedElement` then has `updateDependencies(self, null)`
         // called on it (`framework.dart:5034`).
-        let Some(ancestor_id) = self.walk_ancestors_for_inherited(type_id) else {
+        let Some(ancestor_id) = self.find_inherited_provider(type_id) else {
             return false;
         };
 
@@ -330,7 +268,7 @@ impl BuildContext for ElementBuildContext {
 
         // Capture self's depth before we hand `node` out so we can
         // record it as the dependent's depth (used by
-        // BuildOwner::schedule_build_for during R16 notify).
+        // BuildOwner::schedule_build_for during dependency-change notify).
         let self_depth = self.depth;
         let self_id = self.element_id;
 
@@ -363,9 +301,9 @@ impl BuildContext for ElementBuildContext {
 
     fn get_inherited(&self, type_id: TypeId, callback: &mut dyn FnMut(&dyn Any)) -> bool {
         // Same ancestor walk as depend_on_inherited, but does NOT
-        // record a dependency. Reserved for U10 — for now we share the
-        // walk + downcast logic and skip the `record_dependent` call.
-        let Some(ancestor_id) = self.walk_ancestors_for_inherited(type_id) else {
+        // record a dependency — we share the walk + downcast logic and
+        // skip the `record_dependent` call.
+        let Some(ancestor_id) = self.find_inherited_provider(type_id) else {
             return false;
         };
 
@@ -466,9 +404,8 @@ impl BuildContext for ElementBuildContext {
         // because it surfaces `&dyn ElementBase` but not the matching
         // ancestor's id, and root-most matching needs the id to fetch
         // state via the second borrow. Keeping the helper minimal
-        // (no id-yielding variant) is a YAGNI call for U11; if U12 or
-        // a future unit needs id-yielding walks we can widen the
-        // surface then.
+        // (no id-yielding variant) is a YAGNI call; if a future need
+        // arises for id-yielding walks we can widen the surface then.
         //
         // Flutter parity: `framework.dart:5146`
         // `findRootAncestorStateOfType<T>` — Flutter walks
@@ -550,6 +487,19 @@ impl BuildContext for ElementBuildContext {
         })
     }
 
+    /// See [`BuildContext::pipeline_owner`]. The owner is on this element's own
+    /// node — no ancestor walk.
+    fn pipeline_owner(
+        &self,
+    ) -> Option<std::sync::Arc<parking_lot::RwLock<flui_rendering::pipeline::PipelineOwner>>> {
+        let tree = self.tree.read();
+        tree.get(self.element_id)?
+            .element()
+            .pipeline_owner_any()?
+            .downcast::<parking_lot::RwLock<flui_rendering::pipeline::PipelineOwner>>()
+            .ok()
+    }
+
     fn visit_ancestor_elements(&self, visitor: &mut dyn FnMut(ElementId) -> bool) {
         let tree = self.tree.read();
 
@@ -587,20 +537,6 @@ impl BuildContext for ElementBuildContext {
     }
 
     fn mark_needs_build(&self) {
-        if self.is_minimal {
-            // The minimal/dummy context backs `new_minimal` builds and
-            // shares a single process-global `BuildOwner` (plan §U12 /
-            // audit V-13 — cheap part). Scheduling a build on it would
-            // accumulate a sentinel `ElementId(1)` into the shared
-            // dummy's long-lived `dirty_elements` heap with no drain
-            // path — unbounded growth on a Flutter-forbidden misuse
-            // path. Degrade to a warning instead (PR #119 review —
-            // copilot).
-            tracing::warn!(
-                "mark_needs_build called on minimal ElementBuildContext — no-op (Flutter-forbidden during build; ctx.mark_needs_build would corrupt the process-shared dummy BuildOwner's dirty_elements heap)"
-            );
-            return;
-        }
         let mut owner = self.owner.write();
         owner.schedule_build_for(self.element_id, self.depth);
     }
@@ -625,7 +561,7 @@ impl BuildContext for ElementBuildContext {
         // `_NotificationElement.onNotification` handler with the typed
         // notification and stopping when one returns `true`.
         //
-        // Plan §U13 / R10 / AE6. Single-`dyn`-boundary discipline per
+        // Single-`dyn`-boundary discipline per
         // Constitution Principle 4: the walk uses `&dyn ElementBase` (the
         // existing tree shape) but the handler call site is the only
         // place a typed downcast happens, in the listener Element's own
@@ -633,6 +569,364 @@ impl BuildContext for ElementBuildContext {
         let notification_any: &dyn Any = notification;
         let type_id = notification_any.type_id();
 
+        self.walk_strict_ancestors::<()>(|ancestor| {
+            if ancestor.on_notification(type_id, notification_any) {
+                std::ops::ControlFlow::Break(())
+            } else {
+                std::ops::ControlFlow::Continue(())
+            }
+        });
+    }
+}
+
+// ============================================================================
+// BuildCtx — borrowed, build-time BuildContext (PR-K)
+// ============================================================================
+
+/// A dependency a building element registered on an `InheritedElement`.
+///
+/// Recorded during `build()` while the tree is borrowed read-only (a
+/// [`BuildCtx`] holds `&ElementTree`), then applied by
+/// [`BuildOwner::build_scope`](crate::BuildOwner) — which holds `&mut tree`
+/// again once the built element is put back — onto the provider node's
+/// dependent set. Deferring the *write* keeps the build itself read-only
+/// while still recording within the same `build_scope` iteration, before
+/// the next dirty element is processed.
+pub(crate) struct DependentRecord {
+    /// The `InheritedElement` the dependent read from.
+    pub(crate) provider: ElementId,
+    /// The element that read it (and must rebuild when it changes).
+    pub(crate) dependent: ElementId,
+    /// The dependent's tree depth (for dirty-heap ordering).
+    pub(crate) depth: usize,
+}
+
+/// Build-time [`BuildContext`] backed by a live, borrowed read view of the
+/// real [`ElementTree`].
+///
+/// Replaces the empty process-shared dummy that made `depend_on` /
+/// `find_ancestor_*` / notification dispatch inert in production. The
+/// building element is extracted from the slab by value for the duration
+/// of its `build()`
+/// (see [`ElementNode::element`](crate::tree::ElementNode)), so this can
+/// hold a shared `&ElementTree` without aliasing: ancestor walks read every
+/// live node, and the in-flight node reads back as a hole via
+/// [`element_opt`](crate::tree::ElementNode::element_opt).
+///
+/// Inherited dependencies cannot be written here (the tree is read-only),
+/// so they are buffered into `dep_sink` and applied by `build_scope` after
+/// the element is restored. `mark_needs_build` during build is a
+/// Flutter-forbidden no-op.
+/// The three things a `BuildContext` is handed that it did not compute itself: two
+/// owned frame capabilities the binding installed, and the render tree the element is
+/// mounted in.
+///
+/// A bundle rather than three parameters, because every one of them is minted at the
+/// same place (`make_build_ctx`) from the same two sources, and threading them
+/// separately made `BuildCtx::new` an eight-argument function.
+#[derive(Clone, Default)]
+pub(crate) struct BuildCapabilities {
+    /// The binding's async task driver.
+    pub(crate) async_driver: Option<flui_scheduler::AsyncDriver>,
+    /// The binding's post-frame capability.
+    pub(crate) post_frame_handle: Option<flui_scheduler::PostFrameHandle>,
+    /// The binding's IME/text-input attach-detach capability.
+    pub(crate) text_input_handle: Option<flui_interaction::TextInputHandle>,
+    /// The render tree this element is mounted in, cloned from its own
+    /// `ElementCore` — see `make_build_ctx` for why not from the tree node.
+    pub(crate) pipeline_owner:
+        Option<std::sync::Arc<parking_lot::RwLock<flui_rendering::pipeline::PipelineOwner>>>,
+}
+
+pub(crate) struct BuildCtx<'b> {
+    element_id: ElementId,
+    depth: usize,
+    tree: &'b ElementTree,
+    dep_sink: &'b parking_lot::Mutex<Vec<DependentRecord>>,
+    /// Owned rebuild capability for `element_id`, minted by `make_build_ctx`
+    /// from the element's own core. Cloned out by
+    /// [`BuildContext::rebuild_handle`]; the build itself never schedules —
+    /// port-check trigger #22 forbids even acquiring it here.
+    rebuild: crate::RebuildHandle,
+    /// What the binding and the element's core handed this context.
+    capabilities: BuildCapabilities,
+}
+
+impl<'b> BuildCtx<'b> {
+    /// Construct a build-time context for `element_id` (at `depth`) over a
+    /// borrowed view of `tree`, buffering inherited dependencies into
+    /// `dep_sink`.
+    pub(crate) fn new(
+        element_id: ElementId,
+        depth: usize,
+        tree: &'b ElementTree,
+        dep_sink: &'b parking_lot::Mutex<Vec<DependentRecord>>,
+        rebuild: crate::RebuildHandle,
+        capabilities: BuildCapabilities,
+    ) -> Self {
+        Self {
+            element_id,
+            depth,
+            tree,
+            dep_sink,
+            rebuild,
+            capabilities,
+        }
+    }
+
+    /// Walk strict-ancestors (parent and up), invoking `predicate` on each
+    /// live ancestor element. The in-flight node (extracted during build)
+    /// is skipped via [`element_opt`](crate::tree::ElementNode::element_opt).
+    fn walk_strict_ancestors<R>(
+        &self,
+        mut predicate: impl FnMut(&dyn crate::view::ElementBase) -> std::ops::ControlFlow<R>,
+    ) -> Option<R> {
+        let mut current = self.element_id;
+        loop {
+            let parent_id = self.tree.get(current)?.parent()?;
+            if let Some(elem) = self.tree.get(parent_id)?.element_opt()
+                && let std::ops::ControlFlow::Break(result) = predicate(elem)
+            {
+                return Some(result);
+            }
+            current = parent_id;
+        }
+    }
+
+    /// Nearest in-scope `InheritedElement` whose view type is `type_id`, in
+    /// **O(1)**.
+    ///
+    /// Reads the building element's own resolved inherited scope
+    /// ([`ElementNode::inherited`](crate::tree::ElementNode)) — a node field
+    /// that survives the `build_scope` element hole — rather than walking the
+    /// ancestor chain. For a non-provider that scope is its parent's set, so
+    /// the result is the nearest strict-ancestor provider; matches Flutter's
+    /// `_inheritedElements[T]` lookup.
+    fn find_inherited_provider(&self, type_id: TypeId) -> Option<ElementId> {
+        self.tree.get(self.element_id)?.inherited_provider(type_id)
+    }
+}
+
+impl BuildContext for BuildCtx<'_> {
+    fn element_id(&self) -> ElementId {
+        self.element_id
+    }
+
+    fn depth(&self) -> usize {
+        self.depth
+    }
+
+    fn mounted(&self) -> bool {
+        true
+    }
+
+    fn is_building(&self) -> bool {
+        true
+    }
+
+    fn rebuild_handle(&self) -> crate::RebuildHandle {
+        self.rebuild.clone()
+    }
+
+    fn async_driver(&self) -> Option<flui_scheduler::AsyncDriver> {
+        self.capabilities.async_driver.clone()
+    }
+
+    fn post_frame_handle(&self) -> Option<flui_scheduler::PostFrameHandle> {
+        self.capabilities.post_frame_handle.clone()
+    }
+
+    fn text_input_handle(&self) -> Option<flui_interaction::TextInputHandle> {
+        self.capabilities.text_input_handle.clone()
+    }
+
+    fn depend_on_inherited(&self, type_id: TypeId, callback: &mut dyn FnMut(&dyn Any)) -> bool {
+        let Some(provider_id) = self.find_inherited_provider(type_id) else {
+            return false;
+        };
+        let Some(accessor) = self
+            .tree
+            .get(provider_id)
+            .and_then(super::super::tree::ElementNode::element_opt)
+            .and_then(crate::view::ElementBase::as_inherited)
+        else {
+            return false;
+        };
+        // Buffer the dependent BEFORE invoking the user callback. The tree is
+        // read-only here, so the write itself is deferred to the `build_scope`
+        // drain (see [`DependentRecord`]) — but it is *recorded* first, matching
+        // `ElementBuildContext::depend_on_inherited` and Flutter
+        // (`dependOnInheritedElement` calls `updateDependencies` before
+        // returning the widget). This matters on the error path: if the user
+        // `build()` panics after this `depend_on` (caught by `build_or_recover`,
+        // which substitutes an `ErrorView`), the element stays registered as a
+        // dependent, so a later inherited change reschedules it and it recovers.
+        // Recording only after the callback would drop the registration on that
+        // panic and strand the element on the `ErrorView`.
+        self.dep_sink.lock().push(DependentRecord {
+            provider: provider_id,
+            dependent: self.element_id,
+            depth: self.depth,
+        });
+        callback(accessor.view_as_any());
+        true
+    }
+
+    fn get_inherited(&self, type_id: TypeId, callback: &mut dyn FnMut(&dyn Any)) -> bool {
+        let Some(provider_id) = self.find_inherited_provider(type_id) else {
+            return false;
+        };
+        let Some(accessor) = self
+            .tree
+            .get(provider_id)
+            .and_then(super::super::tree::ElementNode::element_opt)
+            .and_then(crate::view::ElementBase::as_inherited)
+        else {
+            return false;
+        };
+        callback(accessor.view_as_any());
+        true
+    }
+
+    fn find_ancestor_element(&self, type_id: TypeId) -> Option<ElementId> {
+        let mut current = self.element_id;
+        loop {
+            let parent_id = self.tree.get(current)?.parent()?;
+            if self
+                .tree
+                .get(parent_id)?
+                .element_opt()
+                .is_some_and(|e| e.view_type_id() == type_id)
+            {
+                return Some(parent_id);
+            }
+            current = parent_id;
+        }
+    }
+
+    fn find_ancestor_view(&self, type_id: TypeId, callback: &mut dyn FnMut(&dyn Any)) -> bool {
+        self.walk_strict_ancestors::<()>(|elem| {
+            if elem.view_type_id() == type_id
+                && let Some(view_any) = elem.view_as_any()
+            {
+                callback(view_any);
+                std::ops::ControlFlow::Break(())
+            } else {
+                std::ops::ControlFlow::Continue(())
+            }
+        })
+        .is_some()
+    }
+
+    fn find_ancestor_state(&self, type_id: TypeId, callback: &mut dyn FnMut(&dyn Any)) -> bool {
+        self.walk_strict_ancestors::<()>(|elem| {
+            if let Some(state_any) = elem.state_as_any()
+                && (*state_any).type_id() == type_id
+            {
+                callback(state_any);
+                std::ops::ControlFlow::Break(())
+            } else {
+                std::ops::ControlFlow::Continue(())
+            }
+        })
+        .is_some()
+    }
+
+    fn find_root_ancestor_state(
+        &self,
+        type_id: TypeId,
+        callback: &mut dyn FnMut(&dyn Any),
+    ) -> bool {
+        let mut root_most: Option<ElementId> = None;
+        let mut current = self.element_id;
+        while let Some(node) = self.tree.get(current) {
+            let Some(parent_id) = node.parent() else {
+                break;
+            };
+            if self
+                .tree
+                .get(parent_id)
+                .and_then(super::super::tree::ElementNode::element_opt)
+                .and_then(crate::view::ElementBase::state_as_any)
+                .is_some_and(|s| (*s).type_id() == type_id)
+            {
+                root_most = Some(parent_id);
+            }
+            current = parent_id;
+        }
+        let Some(matched) = root_most else {
+            return false;
+        };
+        let Some(state_any) = self
+            .tree
+            .get(matched)
+            .and_then(super::super::tree::ElementNode::element_opt)
+            .and_then(crate::view::ElementBase::state_as_any)
+        else {
+            return false;
+        };
+        callback(state_any);
+        true
+    }
+
+    fn find_render_object(&self) -> Option<RenderId> {
+        self.walk_strict_ancestors(|elem| match elem.render_id() {
+            Some(id) => std::ops::ControlFlow::Break(id),
+            None => std::ops::ControlFlow::Continue(()),
+        })
+    }
+
+    /// Cloned at construction from the element's own `ElementCore`: during
+    /// `build_scope` the element is *extracted* from its tree node, so a
+    /// `BuildContext` cannot look itself up (`ElementNode::element` panics in that
+    /// window). See `make_build_ctx`.
+    fn pipeline_owner(
+        &self,
+    ) -> Option<std::sync::Arc<parking_lot::RwLock<flui_rendering::pipeline::PipelineOwner>>> {
+        self.capabilities.pipeline_owner.clone()
+    }
+
+    fn visit_ancestor_elements(&self, visitor: &mut dyn FnMut(ElementId) -> bool) {
+        let mut current = self.element_id;
+        while let Some(node) = self.tree.get(current) {
+            let Some(parent_id) = node.parent() else {
+                break;
+            };
+            if !visitor(parent_id) {
+                break;
+            }
+            current = parent_id;
+        }
+    }
+
+    fn visit_child_elements(&self, visitor: &mut dyn FnMut(ElementId)) {
+        // Forbidden during build: a `BuildCtx` is ALWAYS mid-build, and the
+        // node's `child_ids` here are the PRE-reconcile list — for an update
+        // build they may be removed or reordered moments later. Mirrors the
+        // guard on `ElementBuildContext::visit_child_elements` and Flutter's
+        // build-target check (`framework.dart` `_debugCheckOwnerBuildTargetExists`).
+        debug_assert!(
+            !self.is_building(),
+            "visit_child_elements cannot be called during build (a BuildCtx is always \
+             mid-build; its child_ids are the stale pre-reconcile list)"
+        );
+        if let Some(node) = self.tree.get(self.element_id) {
+            for &child_id in node.child_ids() {
+                visitor(child_id);
+            }
+        }
+    }
+
+    fn mark_needs_build(&self) {
+        tracing::warn!(
+            "BuildCtx::mark_needs_build called during build — no-op (Flutter forbids \
+             mark-dirty during the build of the same element)"
+        );
+    }
+
+    fn dispatch_notification(&self, notification: &dyn Notification) {
+        let notification_any: &dyn Any = notification;
+        let type_id = notification_any.type_id();
         self.walk_strict_ancestors::<()>(|ancestor| {
             if ancestor.on_notification(type_id, notification_any) {
                 std::ops::ControlFlow::Break(())
@@ -706,7 +1000,8 @@ impl ElementBuildContextBuilder {
 mod tests {
     use super::*;
     use crate::view::{IntoView, ViewExt};
-    use crate::{StatelessElement, StatelessView, View};
+    use crate::{StatelessView, View};
+    use static_assertions::assert_not_impl_any;
 
     #[derive(Clone)]
     struct TestView {
@@ -721,9 +1016,8 @@ mod tests {
     }
 
     impl View for TestView {
-        fn create_element(&self) -> Box<dyn crate::ElementBase> {
-            use crate::element::StatelessBehavior;
-            Box::new(StatelessElement::new(self, StatelessBehavior))
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::stateless(self)
         }
     }
 
@@ -864,8 +1158,29 @@ mod tests {
     }
 
     #[test]
-    fn test_context_send_sync() {
-        fn assert_send_sync<T: Send + Sync>() {}
-        assert_send_sync::<ElementBuildContext>();
+    fn context_is_owner_local() {
+        assert_not_impl_any!(ElementBuildContext: Send, Sync);
+    }
+
+    /// `BuildCtx` is the context handed to a live `build()`, so it is always
+    /// mid-build; `visit_child_elements` is forbidden during build (its
+    /// `child_ids` are the stale pre-reconcile list). The debug guard must
+    /// fire — mirroring `ElementBuildContext::visit_child_elements`.
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "visit_child_elements cannot be called during build")]
+    fn build_ctx_forbids_visit_child_elements_during_build() {
+        let tree = ElementTree::new();
+        let dep_sink = parking_lot::Mutex::new(Vec::new());
+        // The guard fires before any tree access, so a sentinel id is fine.
+        let ctx = BuildCtx::new(
+            ElementId::new(1),
+            0,
+            &tree,
+            &dep_sink,
+            crate::RebuildHandle::inert(),
+            BuildCapabilities::default(),
+        );
+        ctx.visit_child_elements(&mut |_| {});
     }
 }

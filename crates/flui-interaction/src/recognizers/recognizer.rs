@@ -30,7 +30,7 @@ use crate::{
 /// 3. Win/lose in gesture arena
 /// 4. Call user callbacks on successful recognition
 /// 5. `dispose()` - Clean up when done
-pub trait GestureRecognizer: GestureArenaMember + Send + Sync {
+pub trait GestureRecognizer: GestureArenaMember {
     /// Add a new pointer to track
     ///
     /// Called when a pointer goes down. The recognizer should add itself to the
@@ -107,6 +107,15 @@ impl RecognizerBase {
     #[inline]
     pub fn arena(&self) -> &GestureArena {
         &self.arena
+    }
+
+    /// The current instant on the arena's clock — the time a deadline-driven
+    /// recognizer compares its captured down-time against. Reads the OS clock in
+    /// production; a headless frame driver's virtual clock in tests, so a
+    /// deadline elapses deterministically without a wall-clock sleep.
+    #[inline]
+    pub fn now(&self) -> std::time::Instant {
+        self.arena.now()
     }
 
     /// Get the primary pointer ID (if tracking one)
@@ -217,10 +226,22 @@ impl RecognizerBase {
         let Some(pointer) = self.primary_pointer() else {
             return;
         };
-        let Some(member) = self.tracked_member.lock().as_ref().and_then(Weak::upgrade) else {
+        let Some(member) = self.tracked_member() else {
             return;
         };
         self.arena.resolve(pointer, Some(member));
+    }
+
+    /// The exact `Arc<dyn GestureArenaMember>` this recognizer registered with
+    /// the arena in [`start_tracking`](Self::start_tracking), upgraded from the
+    /// stored `Weak`.
+    ///
+    /// Returns `None` once the recognizer is no longer tracking (the member was
+    /// dropped). Used by the double-tap lifecycle to resolve the first contact's
+    /// entry in favour of the double-tap.
+    #[inline]
+    pub fn tracked_member(&self) -> Option<Arc<dyn GestureArenaMember>> {
+        self.tracked_member.lock().as_ref().and_then(Weak::upgrade)
     }
 
     /// Stop tracking (called on success or rejection)
@@ -234,7 +255,15 @@ impl RecognizerBase {
         )
     )]
     pub fn stop_tracking(&self) {
-        if let Some(pointer) = self.primary_pointer() {
+        // Sweep only when this recognizer owns the arena lifecycle. In a
+        // binding-driven arena the binding sweeps on `PointerUp` after routing
+        // the event to the whole hit-test path; a recognizer self-sweeping here
+        // would force-resolve a shared entry to the front member before a
+        // double-tap (or a peer detector) could complete. Local tracking is
+        // cleared in both modes.
+        if let Some(pointer) = self.primary_pointer()
+            && self.arena.sweep_model() == crate::arena::SweepModel::SelfDriven
+        {
             self.arena.sweep(pointer);
         }
         self.set_primary_pointer(None);
@@ -268,10 +297,27 @@ impl RecognizerBase {
         )
     )]
     pub fn reject(&self) {
-        if let Some(pointer) = self.primary_pointer() {
-            self.arena.resolve(pointer, None);
-            self.stop_tracking();
+        let Some(pointer) = self.primary_pointer() else {
+            return;
+        };
+        // Withdraw ONLY this recognizer from the arena, using the stable member
+        // identity captured in `start_tracking`. Resolving the whole entry with
+        // no winner (the previous behavior) rejected every *competing* member
+        // too, so a recognizer that bowed out of a shared arena (e.g. a tap
+        // exceeding its slop) silently killed the drag it was competing with.
+        let member = self.tracked_member.lock().as_ref().and_then(Weak::upgrade);
+        if let Some(member) = member {
+            self.arena.reject_member(pointer, &member);
         }
+        // Clear ONLY this recognizer's local tracking — do NOT `stop_tracking`
+        // (it would `sweep`, force-resolving any still-open competition in
+        // first-member-wins fashion mid-gesture). Tear the shared entry down
+        // only once it has actually settled (a winner emerged, or no members
+        // remain); a competition that still has rivals must keep running until
+        // one accepts or the pointer lifts.
+        self.set_primary_pointer(None);
+        self.set_initial_position(None);
+        self.arena.remove_if_settled(pointer);
     }
 }
 

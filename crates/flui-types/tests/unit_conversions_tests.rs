@@ -1,5 +1,5 @@
 #![allow(deprecated)]
-// N-geom U5: target intentionally exercises the deprecated raw-scalar device conversions (to_device_pixels(f32)/from_device_pixels).
+// This target intentionally exercises the deprecated raw-scalar device conversions (to_device_pixels(f32)/from_device_pixels).
 //! Unit conversion tests for Phase 7 (User Story 5)
 //!
 //! Tests explicit conversion methods between unit types:

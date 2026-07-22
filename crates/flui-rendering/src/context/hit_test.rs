@@ -33,6 +33,7 @@
 //! }
 //! ```
 
+use flui_foundation::RenderId;
 use flui_tree::Arity;
 use flui_types::{
     Pixels, Size,
@@ -67,6 +68,20 @@ pub struct HitTestContext<'ctx, P: Protocol, A: Arity, PD: ParentData> {
     /// (its hit gate is driver-owned). 2B field dedup: render objects no
     /// longer cache their own size.
     own_size: Size,
+    /// Whether this render object should be appended to the global hit-test
+    /// path even when its `hit_test` return value keeps sibling traversal open.
+    self_hit_entry_registered: bool,
+}
+
+impl<P: Protocol, A: Arity, PD: ParentData> std::fmt::Debug for HitTestContext<'_, P, A, PD> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // `inner` is a capability-GAT context (may hold live driver callbacks);
+        // report only the driver-resolved scalars.
+        f.debug_struct("HitTestContext")
+            .field("own_size", &self.own_size)
+            .field("self_hit_entry_registered", &self.self_hit_entry_registered)
+            .finish_non_exhaustive()
+    }
 }
 
 impl<'ctx, P: Protocol, A: Arity, PD: ParentData> HitTestContext<'ctx, P, A, PD>
@@ -83,7 +98,11 @@ where
         inner: <P::HitTest as HitTestCapability>::Context<'ctx, A, PD>,
         own_size: Size,
     ) -> Self {
-        Self { inner, own_size }
+        Self {
+            inner,
+            own_size,
+            self_hit_entry_registered: false,
+        }
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -126,6 +145,19 @@ where
     /// Adds a hit entry to the result.
     pub fn add_hit(&mut self, entry: <P::HitTest as HitTestCapability>::Entry) {
         self.inner.add_hit(entry);
+    }
+
+    /// Requests that the pipeline append this render object to the global
+    /// hit-test path even if this object's `hit_test` returns `false`.
+    ///
+    /// This models Flutter's `HitTestBehavior::Translucent` side effect:
+    /// receive the event, but keep testing siblings visually behind this node.
+    pub fn register_self_hit_entry(&mut self) {
+        self.self_hit_entry_registered = true;
+    }
+
+    pub(crate) fn self_hit_entry_registered(&self) -> bool {
+        self.self_hit_entry_registered
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -266,16 +298,16 @@ where
         self.is_within_size(self.own_size.width, self.own_size.height)
     }
 
-    /// Adds self as a hit target with the given ID.
-    pub fn add_self(&mut self, target_id: u64) {
+    /// Adds self as a hit target with the given render ID.
+    pub fn add_self(&mut self, target_id: RenderId) {
         self.inner
-            .add_hit(BoxHitTestEntry::new(target_id, Matrix4::IDENTITY));
+            .add_hit(BoxHitTestEntry::new(target_id.as_u64(), Matrix4::IDENTITY));
     }
 
     /// Adds self as a hit target with transform.
-    pub fn add_self_with_transform(&mut self, target_id: u64, transform: Matrix4) {
+    pub fn add_self_with_transform(&mut self, target_id: RenderId, transform: Matrix4) {
         self.inner
-            .add_hit(BoxHitTestEntry::new(target_id, transform));
+            .add_hit(BoxHitTestEntry::new(target_id.as_u64(), transform));
     }
 
     /// Tests a child at the given offset.
@@ -284,23 +316,6 @@ where
     pub fn hit_test_child_at_offset(&mut self, index: usize, offset: Offset) -> bool {
         let local_position = self.position_minus(offset);
         self.inner.hit_test_child(index, local_position)
-    }
-
-    /// Tests all children in reverse order (topmost first).
-    ///
-    /// Returns the index of the first child hit, or None.
-    pub fn hit_test_children_reverse<F>(&mut self, get_offset: F) -> Option<usize>
-    where
-        F: Fn(usize) -> Offset,
-    {
-        let count = 0; // Would need child count from parent
-        for i in (0..count).rev() {
-            let offset = get_offset(i);
-            if self.hit_test_child_at_offset(i, offset) {
-                return Some(i);
-            }
-        }
-        None
     }
 }
 
@@ -362,9 +377,43 @@ where
 
 #[cfg(test)]
 mod tests {
+    use flui_foundation::RenderId;
+    use flui_tree::Leaf;
+    use flui_types::geometry::Offset;
+
+    use crate::{
+        parent_data::BoxParentData,
+        protocol::{BoxHitTestCtx, BoxProtocol, HitTestContextApi},
+    };
+
+    use super::HitTestContext;
+
     #[test]
     fn test_hit_test_context_compiles() {
         // This test just verifies the module compiles — empty body is enough
         // because failure surfaces at `cargo build`, not at assert time.
+    }
+
+    /// Exercises `HitTestContext<BoxProtocol>::add_self` end-to-end.
+    ///
+    /// Constructs a real `HitTestContext`, calls `add_self(id)`, then asserts
+    /// the entry written into the inner result carries `target_id == id.as_u64()`.
+    /// A regression in the body (wrong accessor or cast) would fail this test.
+    #[test]
+    fn add_self_writes_render_id_as_u64_into_hit_result() {
+        let id = RenderId::new(7);
+        let inner: BoxHitTestCtx<'_, Leaf, BoxParentData> = BoxHitTestCtx::new(Offset::ZERO);
+        let mut ctx: HitTestContext<'_, BoxProtocol, Leaf, BoxParentData> =
+            HitTestContext::new(inner, flui_types::Size::ZERO);
+
+        ctx.add_self(id);
+
+        let entries = &ctx.inner().result().path;
+        assert_eq!(entries.len(), 1, "exactly one entry after add_self");
+        assert_eq!(
+            entries[0].target_id,
+            id.as_u64(),
+            "stored target_id must equal id.as_u64()"
+        );
     }
 }

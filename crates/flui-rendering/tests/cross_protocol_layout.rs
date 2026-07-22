@@ -16,20 +16,22 @@
 //!   * `crates/flui-rendering/src/pipeline/owner.rs` `layout_sliver_subtree_borrowed`
 //!   * `crates/flui-rendering/src/protocol/box_protocol.rs` `BoxLayoutCtxErased::layout_sliver_child`
 
+// Target-level lint relaxations — crate-level allows don't reach this
+// target. `unwrap` in test/example code: a panic IS the failure report
+// (docs/PANIC-POLICY.md); style items here are ship-wave debt.
+#![allow(clippy::unwrap_used)]
+
 use std::sync::{Arc, Mutex};
 
 use flui_foundation::Diagnosticable;
+use flui_objects::{RenderColoredBox, RenderSliverPadding};
 use flui_rendering::{
     constraints::{BoxConstraints, GrowthDirection, SliverConstraints, SliverGeometry},
     context::{BoxLayoutContext, SliverHitTestContext, SliverLayoutContext},
-    objects::{RenderColoredBox, RenderSliverPadding},
     parent_data::{BoxParentData, SliverParentData},
     pipeline::PipelineOwner,
     protocol::{BoxProtocol, SliverProtocol},
-    traits::{
-        HotReloadCapability, PaintEffectsCapability, RenderBox, RenderObject, RenderSliver,
-        SemanticsCapability,
-    },
+    traits::{RenderBox, RenderObject, RenderSliver},
     view::ScrollDirection,
 };
 use flui_tree::{Leaf, Variable};
@@ -74,9 +76,6 @@ fn make_sliver_constraints() -> SliverConstraints {
 struct StubLeafSliver;
 
 impl Diagnosticable for StubLeafSliver {}
-impl PaintEffectsCapability for StubLeafSliver {}
-impl SemanticsCapability for StubLeafSliver {}
-impl HotReloadCapability for StubLeafSliver {}
 
 impl RenderSliver for StubLeafSliver {
     type Arity = Leaf;
@@ -127,9 +126,6 @@ impl std::fmt::Debug for BoxWithSliverChild {
 }
 
 impl Diagnosticable for BoxWithSliverChild {}
-impl PaintEffectsCapability for BoxWithSliverChild {}
-impl SemanticsCapability for BoxWithSliverChild {}
-impl HotReloadCapability for BoxWithSliverChild {}
 
 impl RenderBox for BoxWithSliverChild {
     type Arity = Variable;

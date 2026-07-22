@@ -89,10 +89,10 @@ mod shader_mask;
 // Annotation search system
 pub mod annotation;
 
-// LayerBounds trait + impls (Mythos Step 6).
+// LayerBounds trait + impls.
 mod bounds;
 
-// Generated is_*/as_*/as_*_mut accessors on the Layer enum (Mythos Step 4).
+// Generated is_*/as_*/as_*_mut accessors on the Layer enum.
 mod dispatch;
 
 pub use bounds::LayerBounds;
@@ -345,10 +345,10 @@ impl Layer {
 
     /// Returns true if this layer is known to be fully opaque.
     ///
-    /// Conservative check used by `OcclusionTracker` to register opaque regions.
-    /// Only returns `true` for leaf layers that are guaranteed to draw solid
-    /// content with no transparency: `Canvas` and `Picture` layers (which always
-    /// fill their bounds), and `Texture` layers with opacity >= 1.0.
+    /// Conservative check: only returns `true` for leaf layers that are
+    /// guaranteed to draw solid content with no transparency — `Canvas` and
+    /// `Picture` layers (which always fill their bounds), and `Texture` layers
+    /// with opacity >= 1.0.
     ///
     /// Container/effect layers (clips, transforms, opacity, filters) return
     /// `false` because their visual output depends on their children.
@@ -564,8 +564,8 @@ impl Diagnosticable for Layer {
 // GENERATED is_*/as_*/as_*_mut ACCESSORS
 // ============================================================================
 //
-// Mythos Step 4 collapsed ~600 LOC of hand-written boilerplate (19 variants ×
-// 3 methods) into this single macro invocation. The macro definition lives in
+// This single macro invocation collapsed ~600 LOC of hand-written boilerplate
+// (19 variants × 3 methods). The macro definition lives in
 // `layer/dispatch.rs`. Composite predicates (`is_clip`, `is_linking`,
 // `is_opaque`) and the semantic methods (`bounds`, `needs_compositing`) stay
 // hand-written above.
@@ -796,7 +796,7 @@ mod tests {
 mod size_tests {
     use super::Layer;
 
-    /// Locks the `Layer` enum footprint after U2 boxing of the four heavy
+    /// Locks the `Layer` enum footprint after boxing the four heavy
     /// variants (`Canvas`, `Picture`, `ClipPath`, `PerformanceOverlay`).
     ///
     /// Pre-boxing, the enum sat at ~496 bytes because `ClipPathLayer` (488 B)
@@ -805,26 +805,24 @@ mod size_tests {
     /// variant (`ShaderMaskLayer` / `BackdropFilterLayer` at 112 B) drives
     /// the footprint to ~120 B — a 4× compression.
     ///
-    /// The 128-byte ceiling here is the *post-U2* receipt — it locks the
-    /// outcome of this commit and surfaces unintended footprint growth (e.g.
-    /// a future variant addition that exceeds the current widest inline
-    /// type) in CI rather than silently.
+    /// The 128-byte ceiling here locks that outcome and surfaces unintended
+    /// footprint growth (e.g. a future variant addition that exceeds the
+    /// current widest inline type) in CI rather than silently.
     ///
-    /// A follow-up unit (audit ref: U2-extension) can drop this budget to
-    /// ≤40 B by boxing the medium-heavy variants (`Transform`,
-    /// `ColorFilter`, `ImageFilter`, `ShaderMask`, `BackdropFilter`,
-    /// `ClipRRect`, `ClipSuperellipse`, `Follower`, `AnnotatedRegion`) and
-    /// to ≤32 B by also evicting `TextureLayer` / `PlatformViewLayer`.
-    /// That work is intentionally scoped out of U2 — boxing 13 variants in
-    /// one commit obscures review of the macro/`From`-impl rewiring U3/U4
-    /// just landed.
+    /// A follow-up pass could drop this budget to ≤40 B by boxing the
+    /// medium-heavy variants (`Transform`, `ColorFilter`, `ImageFilter`,
+    /// `ShaderMask`, `BackdropFilter`, `ClipRRect`, `ClipSuperellipse`,
+    /// `Follower`, `AnnotatedRegion`) and to ≤32 B by also evicting
+    /// `TextureLayer` / `PlatformViewLayer`. That work is intentionally out
+    /// of scope here — boxing 13 variants in one commit would obscure review
+    /// of the macro/`From`-impl rewiring this change already carries.
     #[test]
     fn layer_enum_size_compressed_via_boxing() {
         let size = std::mem::size_of::<Layer>();
         assert!(
             size <= 128,
             "Layer enum exceeds 128-byte budget; got {size} bytes. \
-             Heavy variants should be `Box<T>` — see U2 of \
+             Heavy variants should be `Box<T>` — see \
              docs/plans/2026-05-22-004-feat-layer-semantics-repair-plan.md",
         );
     }

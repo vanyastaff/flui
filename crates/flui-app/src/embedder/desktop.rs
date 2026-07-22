@@ -1,7 +1,6 @@
 //! Desktop embedder utilities
 //!
-//! Provides the `PlatformWindowHandle` adapter for GPU surface creation
-//! and error types for embedder initialization.
+//! Provides the `PlatformWindowHandle` adapter for GPU surface creation.
 
 use flui_platform::PlatformWindow;
 use raw_window_handle::{
@@ -30,20 +29,4 @@ impl HasDisplayHandle for PlatformWindowHandle<'_> {
     fn display_handle(&self) -> Result<DisplayHandle<'_>, HandleError> {
         self.0.display_handle()
     }
-}
-
-// ============================================================================
-// Errors
-// ============================================================================
-
-/// Embedder error types.
-#[derive(Debug, thiserror::Error)]
-pub enum EmbedderError {
-    /// Failed to create window
-    #[error("Failed to create window: {0}")]
-    WindowCreation(String),
-
-    /// Failed to initialize GPU
-    #[error("Failed to initialize GPU: {0}")]
-    GpuInitialization(String),
 }

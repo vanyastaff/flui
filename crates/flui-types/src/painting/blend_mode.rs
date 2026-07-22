@@ -1,5 +1,11 @@
 //! Blend modes for compositing colors.
 
+/// Algorithms for blending a source (the pixels being drawn) with a
+/// destination (the pixels already on the canvas).
+///
+/// The first fourteen variants are Porter-Duff compositing operators; the
+/// rest are "advanced" (separable and non-separable) blend modes matching
+/// CSS/Skia semantics. Mirrors Flutter's `BlendMode`.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum BlendMode {
@@ -18,6 +24,10 @@ pub enum BlendMode {
     /// This corresponds to the "dst" Porter-Duff operator.
     Dst,
 
+    /// Composite the source over the destination.
+    ///
+    /// This is the default blend mode for ordinary painting and corresponds
+    /// to the "src-over" Porter-Duff operator.
     #[default]
     SrcOver,
 
@@ -153,6 +163,8 @@ pub enum BlendMode {
 }
 
 impl BlendMode {
+    /// Returns `true` if this is one of the fourteen Porter-Duff compositing
+    /// operators (`Clear` through `Modulate`).
     #[must_use]
     #[inline]
     pub const fn is_porter_duff(&self) -> bool {
@@ -175,18 +187,26 @@ impl BlendMode {
         )
     }
 
+    /// Returns `true` if the result depends on the destination pixels.
+    ///
+    /// Only `Clear` and `Src` ignore the destination entirely; every other
+    /// mode must read the existing pixels to compute its output.
     #[must_use]
     #[inline]
     pub const fn requires_destination(&self) -> bool {
         !matches!(self, BlendMode::Clear | BlendMode::Src)
     }
 
+    /// Returns `true` for the advanced (non-Porter-Duff) blend modes, i.e.
+    /// `Screen` and beyond.
     #[must_use]
     #[inline]
     pub const fn is_advanced(&self) -> bool {
         !self.is_porter_duff()
     }
 
+    /// Returns `true` for modes that can only lighten colors
+    /// (`Screen`, `Lighten`, `ColorDodge`, `Plus`).
     #[must_use]
     #[inline]
     pub const fn can_lighten(&self) -> bool {
@@ -196,6 +216,8 @@ impl BlendMode {
         )
     }
 
+    /// Returns `true` for modes that can only darken colors
+    /// (`Darken`, `ColorBurn`, `Multiply`, `Modulate`).
     #[must_use]
     #[inline]
     pub const fn can_darken(&self) -> bool {
@@ -205,6 +227,8 @@ impl BlendMode {
         )
     }
 
+    /// Returns `true` if this mode is purely compositional (alpha-driven)
+    /// rather than a color blend; currently an alias for `is_porter_duff`.
     #[must_use]
     #[inline]
     pub const fn is_compositional(&self) -> bool {

@@ -1,11 +1,11 @@
 //! Co-located dirty sets for the pipeline owner.
 //!
 //! `PipelineOwner` used to carry four parallel `Vec<DirtyNode>` fields,
-//! scattered across the struct between unrelated bookkeeping. Mythos Step 2
-//! (2026-05-20) consolidates them into a single [`DirtySets`] struct so the
-//! one cache line of four `Vec` pointers lives together, the names line up,
-//! and "what dirty work is pending" reads as one concept rather than four
-//! adjacent ones.
+//! scattered across the struct between unrelated bookkeeping. As of
+//! 2026-05-20 they are consolidated into a single [`DirtySets`] struct so
+//! the one cache line of four `Vec` pointers lives together, the names
+//! line up, and "what dirty work is pending" reads as one concept rather
+//! than four adjacent ones.
 //!
 //! Each phase's vector has a stable sort discipline applied at flush time:
 //!

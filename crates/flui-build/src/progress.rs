@@ -68,7 +68,7 @@ impl BuildProgress {
         main_bar.set_style(
             ProgressStyle::default_bar()
                 .template("{prefix:.bold} [{bar:40.cyan/blue}] {pos}% {msg}")
-                .unwrap()
+                .expect("BUG: static progress-bar template literal must parse")
                 .progress_chars("█▓▒░ "),
         );
         main_bar.set_prefix(format!("Building {platform}"));
@@ -97,7 +97,7 @@ impl BuildProgress {
         phase_bar.set_style(
             ProgressStyle::default_spinner()
                 .template("  {spinner:.green} {prefix:.bold} {msg}")
-                .unwrap()
+                .expect("BUG: static phase-spinner template literal must parse")
                 .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]),
         );
         phase_bar.set_prefix(format!("{} {}", phase.emoji(), phase.display_name()));

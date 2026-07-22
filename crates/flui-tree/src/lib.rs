@@ -18,15 +18,17 @@
 //!
 //! See the concrete tree implementations (`flui-layer::LayerTree`,
 //! `flui-semantics::SemanticsTree`, etc.) for `TreeRead` + `TreeNav` +
-//! `TreeWrite` adopters with end-to-end test coverage. The audit cycle 3
-//! removed the standalone `Mountable` / `Unmountable` typestate
-//! machinery (`state.rs`, 616 LOC) — zero in-workspace consumers, and
-//! the cycle 2 PR #100 work on `LayerNode::disposed: AtomicBool` +
-//! `Drop` proved the lifecycle contract belongs on the concrete node
-//! type, not behind a generic typestate.
+//! `TreeWrite` adopters with end-to-end test coverage. The standalone
+//! `Mountable` / `Unmountable` typestate machinery (`state.rs`, 616 LOC)
+//! was removed — it had zero in-workspace consumers, and the work on
+//! `LayerNode::disposed: AtomicBool` + `Drop` proved the lifecycle
+//! contract belongs on the concrete node type, not behind a generic
+//! typestate.
 
 #![warn(rust_2018_idioms, clippy::all, clippy::pedantic)]
 #![allow(clippy::module_name_repetitions)]
+// Ship bar (wave 1): every public item is documented; keep it that way.
+#![deny(missing_docs)]
 
 // ============================================================================
 // MODULES
@@ -38,14 +40,14 @@ pub mod error;
 pub mod iter;
 pub mod traits;
 
-// Cycle 3 T-4..T-8: `visitor` + `diff` modules deleted (10k LOC
-// zombie surface, zero in-workspace consumers per audit
-// Appendix A.2). Same disposition for `iter::cursor`, `iter::path`,
-// `iter::breadth_first`, `iter::depth_first`, `traits::node`,
-// `arity::accessors`, `arity::arity_storage`, `arity::storage`,
-// `arity::runtime`, `arity::aliases`. Future devtools / advanced
-// visitor needs port from git history rather than carry maintenance
-// burden of speculative scaffolding.
+// The `visitor` and `diff` modules were deleted (10k LOC of unused
+// surface with zero in-workspace consumers). The same disposition
+// applies to `iter::cursor`, `iter::path`, `iter::breadth_first`,
+// `iter::depth_first`, `traits::node`, `arity::accessors`,
+// `arity::arity_storage`, `arity::storage`, `arity::runtime`, and
+// `arity::aliases`. Future devtools / advanced visitor needs should be
+// ported back from git history rather than carry the maintenance
+// burden of speculative scaffolding in the meantime.
 
 // ============================================================================
 // RE-EXPORTS - Arity System (markers only — storage machinery deleted)
@@ -155,7 +157,19 @@ mod tests {
 
     #[test]
     fn test_version() {
-        assert_eq!(VERSION, "0.1.0");
+        // `VERSION` is wired from the package version (`env!("CARGO_PKG_VERSION")`);
+        // assert its shape, not a pinned literal — a hardcoded value breaks on
+        // every workspace version bump (it broke at the 0.1.0 -> 0.2.0 bump).
+        let parts: Vec<&str> = VERSION.split('.').collect();
+        assert_eq!(
+            parts.len(),
+            3,
+            "VERSION should be semver `major.minor.patch`, got {VERSION:?}",
+        );
+        assert!(
+            parts.iter().all(|part| part.parse::<u64>().is_ok()),
+            "VERSION components should be numeric, got {VERSION:?}",
+        );
     }
 
     #[test]

@@ -76,18 +76,9 @@
 //! 3. **Separation of concerns**: Layer types here, rendering in `flui_engine`
 //! 4. **Thread-safe**: All types are `Send + Sync`
 
-#![warn(rust_2018_idioms, clippy::all, clippy::pedantic)]
-#![allow(
-    dead_code,
-    unused_variables,
-    missing_docs,
-    clippy::module_name_repetitions,
-    clippy::must_use_candidate,
-    clippy::return_self_not_must_use,
-    clippy::doc_markdown,
-    clippy::missing_errors_doc,
-    clippy::missing_panics_doc
-)]
+// Lint levels come from `[workspace.lints]` (Cargo.toml `[lints] workspace = true`).
+// Ship bar (wave 2): every public item is documented; keep it that way.
+#![deny(missing_docs)]
 
 // ============================================================================
 // MODULES
@@ -98,6 +89,8 @@ pub mod damage;
 mod error;
 mod link_registry;
 mod scene;
+// The owned per-window per-frame raster package.
+mod scene_snapshot;
 
 pub mod layer;
 // Layer-tree test harness. Compiled only for this crate's own tests
@@ -168,8 +161,9 @@ pub use layer::{
 // ============================================================================
 // RE-EXPORTS - Link Registry
 // ============================================================================
-pub use link_registry::{LeaderInfo, LinkRegistry};
+pub use link_registry::{LeaderInfo, LinkRegistry, resolve_follower_offset};
 pub use scene::{CompositionCallback, Scene};
+pub use scene_snapshot::{DamageRegion, SceneSnapshot};
 // ============================================================================
 // RE-EXPORTS - Tree
 // ============================================================================
@@ -210,7 +204,9 @@ pub mod prelude {
     // Core types
     pub use crate::{Layer, LayerBounds, LayerId, LayerNode, LayerTree};
     // Compositor
-    pub use crate::{LinkRegistry, Scene, SceneBuilder, SceneCompositor};
+    pub use crate::{LinkRegistry, Scene, SceneBuilder, SceneCompositor, resolve_follower_offset};
+    // Raster boundary
+    pub use crate::{DamageRegion, SceneSnapshot};
     // Transform layers
     pub use crate::{OffsetLayer, TransformLayer};
     // Platform types
@@ -231,7 +227,7 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 #[cfg(test)]
 mod tests {
     use flui_types::{
-        geometry::{px, Rect},
+        geometry::{Rect, px},
         painting::Clip,
     };
 
@@ -239,7 +235,19 @@ mod tests {
 
     #[test]
     fn test_version() {
-        assert_eq!(VERSION, "0.1.0");
+        // `VERSION` is wired from the package version (`env!("CARGO_PKG_VERSION")`);
+        // assert its shape, not a pinned literal — a hardcoded value breaks on
+        // every workspace version bump (it broke at the 0.1.0 -> 0.2.0 bump).
+        let parts: Vec<&str> = VERSION.split('.').collect();
+        assert_eq!(
+            parts.len(),
+            3,
+            "VERSION should be semver `major.minor.patch`, got {VERSION:?}",
+        );
+        assert!(
+            parts.iter().all(|part| part.parse::<u64>().is_ok()),
+            "VERSION components should be numeric, got {VERSION:?}",
+        );
     }
 
     #[test]
@@ -274,7 +282,9 @@ mod tests {
 
         // Effect layers
         let _ = tree.insert(Layer::Opacity(OpacityLayer::new(0.5)));
-        let _ = tree.insert(Layer::ColorFilter(ColorFilterLayer::grayscale()));
+        let _ = tree.insert(Layer::ColorFilter(ColorFilterLayer::new(
+            flui_types::painting::ColorFilter::grayscale(),
+        )));
         let _ = tree.insert(Layer::ImageFilter(ImageFilterLayer::blur(5.0)));
 
         assert_eq!(tree.len(), 7);

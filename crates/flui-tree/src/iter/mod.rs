@@ -97,10 +97,10 @@ mod descendants;
 mod siblings;
 pub mod slot;
 
-// Cycle 3 T-6: `breadth_first.rs`, `depth_first.rs`, `cursor.rs`,
-// `path.rs` deleted (~3,800 LOC, zero in-workspace consumers per
-// audit Appendix A). The kept iterators are the ones with real
-// consumers: `Ancestors`, `Descendants`, `Siblings`, `Slot*`.
+// `breadth_first.rs`, `depth_first.rs`, `cursor.rs`, and `path.rs`
+// were deleted (~3,800 LOC with zero in-workspace consumers). The
+// kept iterators are the ones with real consumers: `Ancestors`,
+// `Descendants`, `Siblings`, `Slot*`.
 
 pub use ancestors::{Ancestors, AncestorsWithDepth};
 pub use descendants::{Descendants, DescendantsWithDepth};

@@ -445,18 +445,24 @@ impl Offset<Pixels> {
         }
     }
 
+    /// Compute the dot product of this offset and another.
     #[inline]
     #[must_use]
     pub const fn dot(self, other: Offset<Pixels>) -> Pixels {
         Pixels(self.dx.0 * other.dx.0 + self.dy.0 * other.dy.0)
     }
 
+    /// Compute the 2D cross product (determinant) of this offset and another.
+    ///
+    /// Positive when `other` is counter-clockwise from `self`, negative when
+    /// clockwise, and zero when the offsets are parallel.
     #[inline]
     #[must_use]
     pub const fn cross(self, other: Offset<Pixels>) -> Pixels {
         Pixels(self.dx.0 * other.dy.0 - self.dy.0 * other.dx.0)
     }
 
+    /// Rotate this offset around the origin by `angle` radians.
     #[inline]
     #[must_use]
     pub fn rotate(self, angle: f32) -> Offset<Pixels> {
@@ -464,36 +470,45 @@ impl Offset<Pixels> {
         Offset::new(self.dx * cos - self.dy * sin, self.dx * sin + self.dy * cos)
     }
 
+    /// Rotate this offset around the origin by a typed [`Radians`](crate::Radians) angle.
     #[inline]
     #[must_use]
     pub fn rotate_radians(self, angle: crate::Radians) -> Offset<Pixels> {
         self.rotate(angle.0)
     }
 
+    /// Round each component to the nearest whole pixel.
     #[inline]
     #[must_use]
     pub fn round(self) -> Offset<Pixels> {
         Offset::new(self.dx.round(), self.dy.round())
     }
 
+    /// Round each component down to the nearest whole pixel.
     #[inline]
     #[must_use]
     pub fn floor(self) -> Offset<Pixels> {
         Offset::new(self.dx.floor(), self.dy.floor())
     }
 
+    /// Round each component up to the nearest whole pixel.
     #[inline]
     #[must_use]
     pub fn ceil(self) -> Offset<Pixels> {
         Offset::new(self.dx.ceil(), self.dy.ceil())
     }
 
+    /// Clamp each component to the range defined by `min` and `max`.
+    ///
+    /// Components are clamped independently; `min` and `max` are not treated
+    /// as a magnitude bound (see [`clamp_magnitude`](Self::clamp_magnitude)).
     #[inline]
     #[must_use]
     pub fn clamp(self, min: Offset<Pixels>, max: Offset<Pixels>) -> Offset<Pixels> {
         Offset::new(self.dx.clamp(min.dx, max.dx), self.dy.clamp(min.dy, max.dy))
     }
 
+    /// Take the absolute value of each component.
     #[inline]
     #[must_use]
     pub const fn abs(self) -> Offset<Pixels> {
@@ -605,6 +620,10 @@ impl Offset<Pixels> {
         det.atan2(dot).abs()
     }
 
+    /// Calculate the angle between this offset and another as typed [`Radians`](crate::Radians).
+    ///
+    /// Same as [`angle_to`](Self::angle_to), returning the absolute angle
+    /// difference in range [0, π] as a typed unit.
     #[inline]
     #[must_use]
     pub fn angle_to_radians(self, other: impl Into<Offset<Pixels>>) -> crate::Radians {

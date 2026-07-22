@@ -17,12 +17,17 @@
 //! 5. non-stretch children receive a LOOSE cross even when the
 //!    incoming cross is tight.
 
+// Target-level lint relaxations — crate-level allows don't reach this
+// target. `unwrap` in test/example code: a panic IS the failure report
+// (docs/PANIC-POLICY.md); style items here are ship-wave debt.
+#![allow(clippy::unwrap_used)]
+
 use std::sync::{Arc, Mutex};
 
 use flui_foundation::RenderId;
+use flui_objects::{MainAxisAlignment, MainAxisSize, RenderFlex};
 use flui_rendering::{
     constraints::BoxConstraints,
-    objects::{MainAxisAlignment, MainAxisSize, RenderFlex},
     parent_data::FlexParentData,
     protocol::{
         BoxLayoutCtx, BoxProtocol, ChildState, RenderObject, box_protocol::BoxLayoutCtxErased,
@@ -108,8 +113,8 @@ fn overflow_does_not_shift_children_by_negative_space() {
 
 #[test]
 fn stretch_tightens_child_cross_constraints() {
-    let mut flex = RenderFlex::row()
-        .with_cross_axis_alignment(flui_rendering::objects::CrossAxisAlignment::Stretch);
+    let mut flex =
+        RenderFlex::row().with_cross_axis_alignment(flui_objects::CrossAxisAlignment::Stretch);
     let (_, children, observed) = lay_out(
         &mut flex,
         BoxConstraints::new(px(0.0), px(200.0), px(0.0), px(80.0)),

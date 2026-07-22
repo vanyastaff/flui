@@ -1,6 +1,6 @@
 //! WGSL shader source bindings for the wgpu backend.
 //!
-//! Only shaders consumed by `painter.rs` via `wgpu::ShaderSource::Wgsl(super::
+//! Only shaders consumed by `painter` via `wgpu::ShaderSource::Wgsl(super::
 //! shaders::*.into())` are exposed as `pub const` aliases here. Other shader
 //! files (`masks/*.wgsl`, `effects/*.wgsl`, `gradients/*.wgsl`, `common/*.wgsl`)
 //! are loaded directly via `include_str!("shaders/...")` from their consumers
@@ -8,7 +8,7 @@
 //! for the gradient and shadow stack); the const-alias indirection only earns
 //! its place where multiple consumers reference the same shader.
 //!
-//! Removed in Mythos U10 (commit chain on `feat/flui-engine-mythos-redesign`):
+//! Removed (commit chain on `feat/flui-engine-mythos-redesign`):
 //! 12 unused const aliases (`FILL`, `SOLID`, `LINEAR_GRADIENT`, `RADIAL_GRADIENT`,
 //! `BLUR_HORIZONTAL`, `BLUR_VERTICAL`, `BLUR_DOWNSAMPLE`, `BLUR_UPSAMPLE`,
 //! `SHADOW`, `LINEAR`, `RADIAL`, `SDF`) that pointed at WGSL files already

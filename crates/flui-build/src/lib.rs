@@ -45,6 +45,9 @@
 //! }
 //! ```
 
+// Ship bar (wave 4): every public item is documented; keep it that way.
+#![deny(missing_docs)]
+
 /// Android platform build support
 pub mod android;
 /// Type-state builder for `BuilderContext`
@@ -76,7 +79,7 @@ pub use context_ext::BuilderContextExt;
 pub use desktop::DesktopBuilder;
 pub use error::{BuildError, BuildResult};
 pub use ios::IOSBuilder;
-pub use output_parser::{get_parser, BuildEvent, OutputParser};
+pub use output_parser::{BuildEvent, OutputParser, get_parser};
 pub use platform::*;
 pub use progress::{BuildPhase, BuildProgress, ProgressManager};
 pub use web::WebBuilder;

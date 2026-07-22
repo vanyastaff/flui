@@ -1,4 +1,4 @@
-//! Process-wide handle that `GlobalKey::current_element` /
+//! Owner-thread scoped handle that `GlobalKey::current_element` /
 //! `GlobalKey::with_current_state` read from to resolve a key hash back
 //! to the live element + state.
 //!
@@ -9,7 +9,7 @@
 //! the active `BuildOwner`. Element lifecycle paths reach the map via
 //! the element's mutable backreference to its owner. Rust can't take a
 //! mutable backreference of that shape (the borrow-checker forbids
-//! mutable aliasing), so U8 introduced [`ElementOwner`](crate::ElementOwner)
+//! mutable aliasing), so flui introduced [`ElementOwner`](crate::ElementOwner)
 //! as the split-borrow handle used DURING `mount`/`unmount`. That handle
 //! is fine for register/unregister at the lifecycle boundary, but it
 //! does NOT solve the OTHER side of the registry: external callers
@@ -23,31 +23,24 @@
 //! references. That keeps the framework's storage layout free —
 //! `WidgetsBinding` continues to own its `BuildOwner` and `ElementTree`
 //! inline behind a single `RwLock<WidgetsBindingInner>` — and the
-//! registry just captures `WidgetsBinding::instance()` inside its
-//! closures so reads go through whatever shape the binding uses. Tests
-//! install a different pair of closures pointing at mock state.
+//! registry captures one binding's owner state. The active handle is selected
+//! by the [`UiRealm`](../../../flui-app/src/app/ui_realm.rs) entry scope.
 //!
-//! # Thread-safety
-//!
-//! The handle slot is wrapped in `parking_lot::RwLock<Option<GlobalKeyRegistryHandle>>`.
-//! Install / take operations are serialized; concurrent reads through
-//! `with_registry` are fine. The closures themselves must be
-//! `Fn + Send + Sync` so they can be called from any thread.
+//! Activation is thread-local and stack-shaped. Nested realm entry restores
+//! the previous handle, including during panic unwinding. A lookup clones the
+//! active handle and releases the TLS `RefCell` borrow before invoking either
+//! framework or user code.
 
-use std::sync::Arc;
-
-use flui_foundation::ElementId;
-use parking_lot::RwLock;
+use std::{cell::RefCell, sync::Arc};
 
 use crate::view::ElementBase;
+use flui_foundation::ElementId;
 
 /// Snapshot of the framework's global-key lookup surface that
 /// `GlobalKey::current_element` / `with_current_state` consult.
 ///
-/// Held inside the module-private `REGISTRY` slot.
-/// [`WidgetsBinding::new`](crate::WidgetsBinding::new) installs one of
-/// these on construction (the binding's drop also clears it); tests use
-/// [`crate::test_only_set_global_key_registry`].
+/// Held by one [`WidgetsBinding`](crate::WidgetsBinding) and activated only
+/// while its owning realm is entered.
 ///
 /// The struct is `Clone` so internal copies stay cheap — both
 /// invariants funnel through the same `Arc`-shared closure pair.
@@ -58,14 +51,14 @@ pub(crate) struct GlobalKeyRegistryHandle {
 
 /// Lookup closure type — resolve a key hash back to an `ElementId`.
 /// Returns `None` when no element with that hash is currently mounted.
-type LookupFn = dyn Fn(u64) -> Option<ElementId> + Send + Sync;
+type LookupFn = dyn Fn(u64) -> Option<ElementId>;
 
 /// Visit closure type — call the inner `FnMut` once with the
 /// `&dyn ElementBase` at the given id. Type-erased here because trait
 /// objects can't carry per-call generics; the result-extraction shim
 /// for [`GlobalKeyRegistryHandle::with_element`]'s generic `R` return
 /// lives in the inner `FnMut`.
-type VisitFn = dyn Fn(ElementId, &mut dyn FnMut(&dyn ElementBase)) + Send + Sync;
+type VisitFn = dyn Fn(ElementId, &mut dyn FnMut(&dyn ElementBase));
 
 struct GlobalKeyRegistryInner {
     lookup: Box<LookupFn>,
@@ -87,8 +80,8 @@ impl GlobalKeyRegistryHandle {
     /// not called and `with_element` returns `None`.
     pub(crate) fn new<L, V>(lookup: L, visit: V) -> Self
     where
-        L: Fn(u64) -> Option<ElementId> + Send + Sync + 'static,
-        V: Fn(ElementId, &mut dyn FnMut(&dyn ElementBase)) + Send + Sync + 'static,
+        L: Fn(u64) -> Option<ElementId> + 'static,
+        V: Fn(ElementId, &mut dyn FnMut(&dyn ElementBase)) + 'static,
     {
         Self {
             inner: Arc::new(GlobalKeyRegistryInner {
@@ -122,31 +115,156 @@ impl GlobalKeyRegistryHandle {
     }
 }
 
-/// Module-private singleton slot. Installed by `WidgetsBinding::new`
-/// (production) or `test_only_set_global_key_registry` (tests).
-///
-/// `parking_lot::RwLock` because we expect lookups to outnumber
-/// install/take by orders of magnitude.
-static REGISTRY: RwLock<Option<GlobalKeyRegistryHandle>> = RwLock::new(None);
+thread_local! {
+    /// Active registry stack for this owner thread. A stack, rather than a
+    /// replaceable singleton, makes nested realm entry restore correctly.
+    static REGISTRY_STACK: RefCell<Vec<GlobalKeyRegistryHandle>> = const { RefCell::new(Vec::new()) };
+    /// Legacy fixture lane. It never mutates the production activation stack.
+    static TEST_REGISTRY: RefCell<Option<GlobalKeyRegistryHandle>> = const { RefCell::new(None) };
+}
 
-/// Install a new global-key registry handle. Returns the previous
-/// handle (or `None` if no handle was installed). The previous handle,
-/// if returned, can be re-installed by the caller later — useful for
-/// nesting in tests, although the standard pattern is install-then-
-/// clear via the public test_only_* shims in `crate::lib`.
+/// RAII activation token. Private so only the binding's scoped entry method
+/// can manipulate the ambient registry.
+#[cfg(any(test, feature = "runtime-internals"))]
+struct RegistryActivation {
+    expected: GlobalKeyRegistryHandle,
+}
+
+#[cfg(any(test, feature = "runtime-internals"))]
+impl Drop for RegistryActivation {
+    fn drop(&mut self) {
+        REGISTRY_STACK.with(|stack| {
+            let mut stack = stack.borrow_mut();
+            let Some(popped) = stack.pop() else {
+                tracing::error!("GlobalKey registry activation stack underflow");
+                return;
+            };
+            if !Arc::ptr_eq(&popped.inner, &self.expected.inner) {
+                // Never panic from Drop: a second panic during user-code unwind
+                // aborts the process. Preserve the unexpected top for diagnosis.
+                stack.push(popped);
+                tracing::error!("GlobalKey registry scopes dropped out of order");
+            }
+        });
+    }
+}
+
+#[cfg(any(test, feature = "runtime-internals"))]
+fn activate_registry(handle: GlobalKeyRegistryHandle) -> RegistryActivation {
+    REGISTRY_STACK.with(|stack| stack.borrow_mut().push(handle.clone()));
+    RegistryActivation { expected: handle }
+}
+
+/// Activate `handle` for the dynamic extent of `f`.
+#[cfg(any(test, feature = "runtime-internals"))]
+pub(crate) fn with_active_registry<R>(
+    handle: &GlobalKeyRegistryHandle,
+    f: impl FnOnce() -> R,
+) -> R {
+    let _activation = activate_registry(handle.clone());
+    f()
+}
+
+/// Legacy test-fixture adapter: replace the top handle on this thread and
+/// return the previous one. Production uses [`with_active_registry`].
 pub(crate) fn install_registry(handle: GlobalKeyRegistryHandle) -> Option<GlobalKeyRegistryHandle> {
-    let mut slot = REGISTRY.write();
-    slot.replace(handle)
+    TEST_REGISTRY.with(|slot| slot.borrow_mut().replace(handle))
 }
 
-/// Remove the currently-installed handle. Returns the previous handle.
+/// Legacy test-fixture adapter: remove the active handle on this thread.
 pub(crate) fn take_registry() -> Option<GlobalKeyRegistryHandle> {
-    REGISTRY.write().take()
+    TEST_REGISTRY.with(|slot| slot.borrow_mut().take())
 }
 
-/// Run `f` against the currently-installed handle, returning the
-/// closure's result. Returns `None` when no handle is installed
+/// Run `f` against the currently-active realm handle (or isolated legacy
+/// fixture lane), returning the closure's result. Returns `None` when neither
+/// lane is active
 /// (the quiescent state — e.g. unit tests that bypass the binding).
 pub(crate) fn with_registry<R>(f: impl FnOnce(&GlobalKeyRegistryHandle) -> R) -> Option<R> {
-    REGISTRY.read().as_ref().map(f)
+    let handle = REGISTRY_STACK.with(|stack| stack.borrow().last().cloned());
+    let handle = handle.or_else(|| TEST_REGISTRY.with(|slot| slot.borrow().clone()));
+    handle.as_ref().map(f)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    use super::*;
+
+    fn handle(value: usize) -> GlobalKeyRegistryHandle {
+        GlobalKeyRegistryHandle::new(move |_| Some(ElementId::new(value + 1)), |_, _| {})
+    }
+
+    fn current() -> Option<ElementId> {
+        with_registry(|registry| registry.lookup_element(0)).flatten()
+    }
+
+    #[test]
+    fn no_active_registry_is_none() {
+        assert_eq!(current(), None);
+    }
+
+    #[test]
+    fn nested_activation_restores_previous_registry() {
+        let a = handle(1);
+        let b = handle(2);
+        with_active_registry(&a, || {
+            assert_eq!(current(), Some(ElementId::new(2)));
+            with_active_registry(&b, || assert_eq!(current(), Some(ElementId::new(3))));
+            assert_eq!(current(), Some(ElementId::new(2)));
+        });
+        assert_eq!(current(), None);
+    }
+
+    #[test]
+    fn panic_unwind_restores_previous_registry() {
+        let a = handle(3);
+        let b = handle(4);
+        with_active_registry(&a, || {
+            let result = catch_unwind(AssertUnwindSafe(|| {
+                with_active_registry(&b, || panic!("test panic"));
+            }));
+            assert!(result.is_err());
+            assert_eq!(current(), Some(ElementId::new(4)));
+        });
+        assert_eq!(current(), None);
+    }
+
+    #[test]
+    fn lookup_releases_tls_borrow_before_nested_activation() {
+        let a = handle(5);
+        let b = handle(6);
+        with_active_registry(&a, || {
+            let observed = with_registry(|registry| {
+                assert_eq!(registry.lookup_element(0), Some(ElementId::new(6)));
+                with_active_registry(&b, current)
+            });
+            assert_eq!(observed.flatten(), Some(ElementId::new(7)));
+        });
+    }
+
+    #[test]
+    fn fixture_adapter_cannot_replace_active_realm_and_survives_unwind() {
+        let fixture = handle(7);
+        let realm = handle(8);
+        let _ = install_registry(fixture);
+
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            with_active_registry(&realm, || {
+                assert_eq!(current(), Some(ElementId::new(9)));
+                let _ = install_registry(handle(10));
+                assert_eq!(
+                    current(),
+                    Some(ElementId::new(9)),
+                    "fixture lane must not mutate the active realm stack"
+                );
+                panic!("test unwind");
+            });
+        }));
+        assert!(result.is_err());
+        assert_eq!(current(), Some(ElementId::new(11)));
+        let _ = take_registry();
+        assert_eq!(current(), None);
+    }
 }

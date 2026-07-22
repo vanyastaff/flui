@@ -97,10 +97,10 @@ impl<I: TreeId, T: TreeNav<I>> Iterator for Descendants<'_, I, T> {
     type Item = I;
 
     fn next(&mut self) -> Option<Self::Item> {
-        // Audit T-11: loop over missing-id skips instead of recursing
-        // via `self.next()`. Rust does NOT guarantee tail-call
-        // optimization — a long run of missing ids would otherwise
-        // build a deep `next()` call chain and risk stack overflow.
+        // Loop over missing-id skips instead of recursing via
+        // `self.next()`. Rust does NOT guarantee tail-call optimization
+        // — a long run of missing ids would otherwise build a deep
+        // `next()` call chain and risk stack overflow.
         loop {
             let current = self.stack.pop()?;
 
@@ -156,9 +156,9 @@ impl<I: TreeId, T: TreeNav<I>> Iterator for DescendantsWithDepth<'_, I, T> {
     type Item = (I, usize);
 
     fn next(&mut self) -> Option<Self::Item> {
-        // Audit T-11: loop instead of `self.next()` recursion. Rust
-        // does NOT guarantee TCO; a long run of missing ids would
-        // otherwise deepen the call stack.
+        // Loop instead of `self.next()` recursion. Rust does NOT
+        // guarantee TCO; a long run of missing ids would otherwise
+        // deepen the call stack.
         loop {
             let (current, depth) = self.stack.pop()?;
 

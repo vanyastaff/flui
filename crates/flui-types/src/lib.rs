@@ -83,14 +83,21 @@
 //! etc.) have been moved to `flui_rendering::constraints` as they are part of
 //! the rendering protocol rather than basic types.
 
-#![allow(missing_docs)] // TODO: Add comprehensive docs (486 items remaining - ongoing improvement)
-// Geometry primitives split out into flui-geometry crate in D-block PR-C-2 (U6+U7).
+// Ship bar (wave 1): every public item is documented; keep it that way.
+#![deny(missing_docs)]
+// Math-crate idiom shared with flui-geometry (see its lib.rs): permanent
+// crate-specific relaxations of workspace pedantic lints for math-heavy code.
+// (The float-comparison / numeric-cast family is allowed workspace-wide.)
+#![allow(clippy::many_single_char_names, clippy::wildcard_imports)]
+// Geometry primitives split out into flui-geometry crate.
 // Re-exported here under the original `geometry` namespace so existing consumers
 // of `flui_types::geometry::*` continue to compile unchanged during the transition.
 // Direct callers may also import `flui_geometry::*` for the same surface.
 pub use flui_geometry as geometry;
 
 pub mod gestures;
+pub mod haptics;
+pub mod ime;
 pub mod layout;
 // `Lerp` impls for Color/Alignment/BorderRadius (trait impls are globally
 // visible; the module needs no public surface).
@@ -106,6 +113,8 @@ pub mod typography;
 
 // Re-exports for convenience - Most commonly used types
 pub use geometry::{EdgeInsets, Edges, Matrix4, Offset, Pixels, Point, RRect, Rect, Size};
+pub use haptics::HapticFeedback;
+pub use ime::ImeEvent;
 pub use layout::{Alignment, Axis};
 pub use styling::{Color, Color32, Oklab};
 

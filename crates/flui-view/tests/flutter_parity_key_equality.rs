@@ -20,7 +20,7 @@
 //! - Flutter's `TestValueKey<String>` subclassing pattern uses Dart's
 //!   nominal inheritance; FLUI uses generic monomorphisation, so
 //!   `ValueKey<u32>` and `ValueKey<i32>` ARE distinct types via
-//!   `TypeId` (already locked in §U10's `test_key_view_key_eq_rejects_cross_type`
+//!   `TypeId` (already locked in `test_key_view_key_eq_rejects_cross_type`
 //!   and `flui-foundation`'s `test_key_view_key_hash_determinism`).
 //!
 //! What lands here: the EQUALITY contracts that DO translate.
@@ -127,7 +127,7 @@ fn object_key_distinct_arcs_same_inner_not_equals() {
 // FLUI-specific addition (not in Flutter's key_test.dart): the
 // foundation `Key` newtype distinguishes itself from `ValueKey`.
 // Flutter aliases `Key` as `ValueKey<String>`; FLUI's `Key` is a
-// `NonZeroU64` newtype with its own `ViewKey` impl (added by §U10).
+// `NonZeroU64` newtype with its own `ViewKey` impl.
 // Cross-impl matches must reject.
 // ============================================================================
 

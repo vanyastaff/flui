@@ -22,7 +22,7 @@
 //!
 //! **Result:** 75% CPU reduction for draw submission!
 //!
-//! # Cycle 4 wave 5 E-10
+//! # Trimmed to the live surface
 //!
 //! The batcher was trimmed to the surface `WgpuPainter::
 //! flush_all_instanced_batches` actually exercises:
@@ -32,30 +32,30 @@
 //! holding `pipeline_id` + `instance_buffer_offset` +
 //! `instance_buffer_size` alongside `args`) was forward-looking
 //! scaffolding for a multi-pipeline indirect-draw path that never
-//! shipped -- painter.rs collects per-pipeline draws into a single
+//! shipped -- painter collects per-pipeline draws into a single
 //! combined buffer and submits via direct `draw_indexed_indirect`
 //! calls, not via this batcher's `commands()` iterator.
 //!
 //! What remains is the minimal `MultiDrawStats` log surface plus
 //! the `add_quad_draw` accumulator. `PipelineId::Texture` (zero
-//! callers in painter.rs flush path) was dropped from the enum
+//! callers in painter flush path) was dropped from the enum
 //! along the way. The feature-gated test module was deleted
 //! because its targets are gone -- the surviving entry points
 //! have observable effect via `stats()`, which is covered by the
-//! debug-build log in painter.rs.
+//! debug-build log in painter.
 
-// Cycle 4 wave 5 E-10: `DrawIndexedIndirectArgs` struct + impl
-// deleted. The bytemuck::Pod wrapper for `wgpu::util::
+// The `DrawIndexedIndirectArgs` struct and its impl were deleted. The
+// bytemuck::Pod wrapper for `wgpu::util::
 // DrawIndexedIndirectArgs` was used only by the previous
-// `DrawIndirect` wrapper struct (also deleted this wave); the
-// surviving `MultiDrawBatcher` accumulates stats and lets painter.rs
+// `DrawIndirect` wrapper struct (also deleted alongside it); the
+// surviving `MultiDrawBatcher` accumulates stats and lets painter
 // drive the actual `wgpu::util::DrawIndexedIndirectArgs` construction
 // at the submission callsite. Reintroduce the Pod wrapper here if a
 // caller ever needs `bytemuck::bytes_of(&args)` for upload.
 
 /// Pipeline identifier for grouping draws
 ///
-/// Cycle 4 wave 5 E-10: `PipelineId::Texture` was dropped --
+/// `PipelineId::Texture` was dropped --
 /// `WgpuPainter::flush_all_instanced_batches` only batches
 /// rect / circle / arc / shadow; textured drawing has its own
 /// dispatch path that doesn't route through this enum.
@@ -74,7 +74,7 @@ pub enum PipelineId {
 /// Accumulates per-pipeline draw-arg records + an instance count
 /// total. The caller (`WgpuPainter::flush_all_instanced_batches`)
 /// reads `stats()` after enqueueing to log batch shape; the actual
-/// indirect-draw submission lives in painter.rs and does not iterate
+/// indirect-draw submission lives in painter and does not iterate
 /// this batcher's command list.
 pub struct MultiDrawBatcher {
     /// Number of draw commands accumulated this batch.
@@ -118,7 +118,11 @@ impl MultiDrawBatcher {
         self.total_instances += instance_count as usize;
     }
 
-    /// Get statistics
+    /// Get statistics (debug-only telemetry).
+    ///
+    /// The sole consumer logs at `debug_assertions`, so the method is gated to
+    /// match — avoiding a dead-code warning in release/bench builds.
+    #[cfg(debug_assertions)]
     pub fn stats(&self) -> MultiDrawStats {
         MultiDrawStats {
             active_draws: self.active_draws,
@@ -133,7 +137,8 @@ impl Default for MultiDrawBatcher {
     }
 }
 
-/// Multi-draw statistics
+/// Multi-draw statistics (debug-only telemetry).
+#[cfg(debug_assertions)]
 #[derive(Debug, Clone, Copy)]
 pub struct MultiDrawStats {
     /// Number of draw commands in current batch

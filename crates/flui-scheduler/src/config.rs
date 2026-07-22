@@ -13,9 +13,10 @@ use std::sync::{
     atomic::{AtomicU64, Ordering},
 };
 
-use flui_foundation::{BindingBase, HasInstance};
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
+
+use flui_foundation::{BindingBase, HasInstance};
 
 use crate::{frame::FrameTiming, scheduler::Scheduler};
 
@@ -176,6 +177,16 @@ pub enum PerformanceMode {
 /// ```
 pub struct PerformanceModeRequestHandle {
     cleanup: Option<Box<dyn FnOnce() + Send>>,
+}
+
+impl std::fmt::Debug for PerformanceModeRequestHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // `cleanup` is an opaque `dyn FnOnce`; report only whether the
+        // handle has already been disposed.
+        f.debug_struct("PerformanceModeRequestHandle")
+            .field("disposed", &self.cleanup.is_none())
+            .finish_non_exhaustive()
+    }
 }
 
 impl PerformanceModeRequestHandle {

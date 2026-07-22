@@ -3,6 +3,15 @@
 //! These tests verify the complete scheduler system works correctly
 //! across multiple components working together.
 
+// Target-level lint relaxations — crate-level allows don't reach this
+// target. `unwrap` in test/example code: a panic IS the failure report
+// (docs/PANIC-POLICY.md); style items here are ship-wave debt.
+#![allow(clippy::default_trait_access)]
+// A no-op `RawWaker` vtable is built manually to poll futures without a
+// runtime; `Waker::from_raw` is the one `unsafe` entry point, SAFETY-bound by
+// the vtable's no-op contract.
+#![allow(unsafe_code)]
+
 use std::{
     sync::{
         Arc,
@@ -558,8 +567,8 @@ fn test_cancel_nonexistent_callback() {
 #[should_panic(expected = "A ticker was started twice")]
 fn test_double_start_ticker_panics_in_debug() {
     // Flutter parity: ticker.dart:188 throws FlutterError('A ticker was
-    // started twice.'). Post-U10 (7d93611d) FLUI debug-asserts the same
-    // contract instead of silently overwriting the active callback.
+    // started twice.'). FLUI debug-asserts the same contract instead of
+    // silently overwriting the active callback.
     let mut ticker = Ticker::new();
     ticker.start(|_| {});
     ticker.start(|_| {});
@@ -1055,7 +1064,7 @@ fn test_frame_phase_all_variants() {
 
     for phase in phases {
         // Test display
-        let _ = format!("{}", phase);
+        let _ = format!("{phase}");
 
         // Test next
         let _ = phase.next();
@@ -1073,7 +1082,7 @@ fn test_scheduler_phase_all_variants() {
 
     for phase in phases {
         // Test display
-        let _ = format!("{}", phase);
+        let _ = format!("{phase}");
 
         // Test is_in_frame
         let _ = phase.is_in_frame();
@@ -1096,7 +1105,7 @@ fn test_app_lifecycle_state_all_variants() {
 
     for state in states {
         // Test display
-        let _ = format!("{}", state);
+        let _ = format!("{state}");
 
         // Test is_visible
         let _ = state.is_visible();
@@ -1293,7 +1302,7 @@ fn test_vsync_scheduler_default() {
 #[test]
 fn test_vsync_scheduler_debug() {
     let vsync = VsyncScheduler::try_new(60).expect("refresh > 0");
-    let debug_str = format!("{:?}", vsync);
+    let debug_str = format!("{vsync:?}");
     assert!(debug_str.contains("VsyncScheduler"));
     assert!(debug_str.contains("refresh_rate"));
 }
@@ -1348,7 +1357,7 @@ fn test_foundation_id_display() {
     use flui_scheduler::id::FrameId;
 
     let id = FrameId::zip(42);
-    let display = format!("{}", id);
+    let display = format!("{id}");
 
     assert!(display.contains("Frame"));
     assert!(display.contains("42"));
@@ -1359,7 +1368,7 @@ fn test_foundation_id_debug() {
     use flui_scheduler::id::FrameId;
 
     let id = FrameId::zip(42);
-    let debug = format!("{:?}", id);
+    let debug = format!("{id:?}");
 
     assert!(debug.contains("Frame"));
     assert!(debug.contains("42"));
@@ -1631,7 +1640,7 @@ fn test_microseconds_from_u64() {
 fn test_microseconds_from_duration() {
     use flui_scheduler::duration::Microseconds;
 
-    let std_dur = Duration::from_micros(1000);
+    let std_dur = Duration::from_millis(1);
     let us: Microseconds = std_dur.into();
 
     assert_eq!(us.value(), 1000);
@@ -1695,7 +1704,7 @@ fn test_frame_duration_default() {
 #[test]
 fn test_frame_duration_display() {
     let fd = FrameDuration::try_from_fps(60).expect("fps > 0");
-    let display = format!("{}", fd);
+    let display = format!("{fd}");
 
     assert!(display.contains("ms"));
     assert!(display.contains("FPS"));
@@ -1737,7 +1746,7 @@ fn test_percentage_display() {
     use flui_scheduler::duration::Percentage;
 
     let p = Percentage::new(75.5);
-    let display = format!("{}", p);
+    let display = format!("{p}");
 
     assert_eq!(display, "75.5%");
 }
@@ -1853,7 +1862,7 @@ fn test_ticker_independent_instances() {
 #[test]
 fn test_ticker_debug() {
     let ticker = Ticker::new();
-    let debug = format!("{:?}", ticker);
+    let debug = format!("{ticker:?}");
 
     assert!(debug.contains("Ticker"));
     assert!(debug.contains("id"));
@@ -1964,7 +1973,7 @@ fn test_auto_scheduling_ticker_debug() {
     let scheduler = Arc::new(Scheduler::new());
     let ticker = Ticker::new_with_scheduler(scheduler);
 
-    let debug = format!("{:?}", ticker);
+    let debug = format!("{ticker:?}");
     assert!(debug.contains("Ticker"));
 }
 
@@ -1976,7 +1985,7 @@ fn test_ticker_future_or_cancel() {
     let cancel_future = future.or_cancel();
 
     // Just verify it compiles and creates
-    let _ = format!("{:?}", cancel_future);
+    let _ = format!("{cancel_future:?}");
 }
 
 #[test]
@@ -1992,7 +2001,7 @@ fn test_ticker_future_clone() {
 #[test]
 fn test_ticker_future_debug() {
     let future = TickerFuture::new();
-    let debug = format!("{:?}", future);
+    let debug = format!("{future:?}");
     assert!(debug.contains("TickerFuture"));
 }
 
@@ -2001,7 +2010,7 @@ fn test_ticker_or_cancel_debug() {
     let future = TickerFuture::new();
     let cancel_future = future.or_cancel();
 
-    let debug = format!("{:?}", cancel_future);
+    let debug = format!("{cancel_future:?}");
     assert!(debug.contains("TickerFutureOrCancel"));
 }
 
@@ -2100,7 +2109,7 @@ fn test_task_debug() {
     use flui_scheduler::task::Task;
 
     let task = Task::new(Priority::Idle, || {});
-    let debug = format!("{:?}", task);
+    let debug = format!("{task:?}");
 
     assert!(debug.contains("Task"));
     assert!(debug.contains("priority"));
@@ -2596,7 +2605,7 @@ fn test_performance_mode_all_variants() {
     ];
 
     for mode in modes {
-        let _ = format!("{:?}", mode);
+        let _ = format!("{mode:?}");
     }
 
     // Default
@@ -2630,8 +2639,8 @@ fn test_scheduler_adjust_for_epoch() {
 // ============================================================================
 //
 // The old `test_ticker_provider_schedule_tick_typed` exercised
-// `TickerProvider::schedule_tick_typed`, deleted in U15 alongside the
-// `schedule_tick` API removal (Flutter `TickerProvider.createTicker(callback)
+// `TickerProvider::schedule_tick_typed`, since removed alongside the
+// `schedule_tick` API (Flutter `TickerProvider.createTicker(callback)
 // -> Ticker` is now the only factory shape). The auto-scheduling integration
 // is covered by `crates/flui-scheduler/src/ticker.rs` unit tests
 // (`test_auto_scheduling_ticker_fires_each_frame`,
@@ -2681,7 +2690,7 @@ fn test_ticker_tick_skipped_when_muted() {
     use flui_scheduler::ticker::TickerProvider;
 
     // Marker provider used only as a witness type for `Ticker::tick(&provider)`.
-    // After U15 the trait has no required methods (default `create_ticker` is
+    // `TickerProvider` has no required methods (default `create_ticker` is
     // sufficient), so this is a one-liner.
     struct MockProvider;
     impl TickerProvider for MockProvider {}
@@ -2743,7 +2752,7 @@ fn test_ticker_new_gets_unique_id() {
 #[test]
 fn test_ticker_debug_contains_fields() {
     let ticker = Ticker::new();
-    let debug_str = format!("{:?}", ticker);
+    let debug_str = format!("{ticker:?}");
     assert!(debug_str.contains("Ticker"));
     assert!(debug_str.contains("id"));
     assert!(debug_str.contains("state"));
@@ -2854,13 +2863,13 @@ fn test_ticker_future_default_pending() {
 #[test]
 fn test_ticker_future_debug_active_state() {
     let pending = TickerFuture::new();
-    assert!(format!("{:?}", pending).contains("active"));
+    assert!(format!("{pending:?}").contains("active"));
 }
 
 #[test]
 fn test_ticker_future_debug_complete_state() {
     let complete = TickerFuture::complete();
-    assert!(format!("{:?}", complete).contains("complete"));
+    assert!(format!("{complete:?}").contains("complete"));
 }
 
 #[test]
@@ -2983,7 +2992,7 @@ fn test_ticker_canceled_display_msg() {
 #[test]
 fn test_ticker_canceled_debug_output() {
     let error = TickerCanceled;
-    assert_eq!(format!("{:?}", error), "TickerCanceled");
+    assert_eq!(format!("{error:?}"), "TickerCanceled");
 }
 
 #[test]

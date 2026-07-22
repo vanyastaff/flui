@@ -6,6 +6,11 @@
 //!
 //! Run with: cargo run --example wgpu_window
 
+// Target-level lint relaxations — crate-level allows don't reach this
+// target. `unwrap` in test/example code: a panic IS the failure report
+// (docs/PANIC-POLICY.md); style items here are ship-wave debt.
+#![allow(clippy::unwrap_used)]
+
 use std::sync::{Arc, Mutex};
 
 use flui_platform::{WindowOptions, current_platform, traits::PlatformWindow};
@@ -236,10 +241,7 @@ fn main() {
     // Register input callback for logging
     window.on_input(Box::new(|input| {
         tracing::trace!("Input: {:?}", input);
-        flui_platform::traits::DispatchEventResult {
-            propagate: true,
-            default_prevented: false,
-        }
+        flui_platform::traits::DispatchEventResult::resolved(true, false)
     }));
 
     // Request first frame
@@ -247,7 +249,7 @@ fn main() {
 
     tracing::info!("Setup complete - starting event loop with wgpu rendering");
 
-    platform.run(Box::new(move || {
+    platform.run(Box::new(move |_platform| {
         tracing::info!("Platform ready");
         // Keep window and gpu alive via closure capture
         let _window = &window;

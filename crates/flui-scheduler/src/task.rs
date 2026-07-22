@@ -263,6 +263,15 @@ pub struct TaskQueue {
     len: Arc<AtomicUsize>,
 }
 
+impl std::fmt::Debug for TaskQueue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // The heap holds opaque task closures; report the lock-free length.
+        f.debug_struct("TaskQueue")
+            .field("len", &self.len())
+            .finish_non_exhaustive()
+    }
+}
+
 impl TaskQueue {
     /// Create a new task queue
     pub fn new() -> Self {
@@ -286,9 +295,9 @@ impl TaskQueue {
         queue.push(PriorityTask(task));
         // Update the atomic len mirror BEFORE releasing the heap mutex.
         // Otherwise concurrent observers see a window where the heap
-        // contains the new task but `len()` still reads the old value
-        // (PR #86 review finding — atomic update outside critical section
-        // creates TOCTOU between heap mutation and atomic mirror update).
+        // contains the new task but `len()` still reads the old value:
+        // updating the atomic outside the critical section creates a
+        // TOCTOU gap between the heap mutation and the atomic mirror update.
         self.len.fetch_add(1, AtomicOrdering::AcqRel);
     }
 
@@ -342,7 +351,10 @@ impl TaskQueue {
             let mut batch = Vec::with_capacity(queue.len());
             while let Some(pt) = queue.peek() {
                 if pt.0.priority >= min_priority {
-                    batch.push(queue.pop().unwrap().0);
+                    let task = queue
+                        .pop()
+                        .expect("BUG: peek returned Some under the same lock, so pop must succeed");
+                    batch.push(task.0);
                 } else {
                     break;
                 }
@@ -371,7 +383,10 @@ impl TaskQueue {
             let mut batch = Vec::with_capacity(queue.len());
             while let Some(pt) = queue.peek() {
                 if pt.0.priority == priority {
-                    batch.push(queue.pop().unwrap().0);
+                    let task = queue
+                        .pop()
+                        .expect("BUG: peek returned Some under the same lock, so pop must succeed");
+                    batch.push(task.0);
                 } else {
                     break;
                 }

@@ -368,8 +368,10 @@ impl CommandRenderer for DebugBackend {
         self.log_command("restore_layer", "");
     }
 
-    // Cycle 4 E-9: layer-tree push/pop methods moved to
-    // `impl LayerStateStack for DebugBackend` below.
+    // The layer-tree push/pop methods live in
+    // `impl LayerStateStack for DebugBackend` below, not here — see the
+    // `LayerStateStack` trait doc comment in `traits.rs` for why they are
+    // split into their own trait.
 
     fn add_performance_overlay(
         &mut self,
@@ -388,8 +390,9 @@ impl CommandRenderer for DebugBackend {
     }
 }
 
-// Cycle 4 E-9: layer-tree state-stack methods moved to dedicated
-// trait. Bodies + log-command output unchanged.
+// The layer-tree state-stack methods live on the dedicated
+// `LayerStateStack` trait rather than on `CommandRenderer`. Bodies and
+// log-command output are unchanged from before the split.
 impl LayerStateStack for DebugBackend {
     fn push_clip_rect(&mut self, rect: &Rect<Pixels>, clip_behavior: flui_types::painting::Clip) {
         self.log_command(
@@ -436,11 +439,18 @@ impl LayerStateStack for DebugBackend {
         self.log_command("push_opacity", &format!("alpha={alpha}"));
     }
 
+    fn push_opacity_blend(&mut self, alpha: f32, blend: flui_types::painting::BlendMode) {
+        self.log_command(
+            "push_opacity_blend",
+            &format!("alpha={alpha}, blend={blend:?}"),
+        );
+    }
+
     fn pop_opacity(&mut self) {
         self.log_command("pop_opacity", "");
     }
 
-    fn push_color_filter(&mut self, filter: &flui_types::painting::ColorMatrix) {
+    fn push_color_filter(&mut self, filter: &flui_types::painting::ColorFilter) {
         self.log_command("push_color_filter", &format!("filter={filter:?}"));
     }
 

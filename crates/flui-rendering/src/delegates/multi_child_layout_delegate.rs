@@ -25,8 +25,9 @@ use crate::constraints::BoxConstraints;
 /// # Example
 ///
 /// ```ignore
-/// use flui_rendering::delegates::{MultiChildLayoutDelegate, MultiChildLayoutContext};
-/// use flui_types::{BoxConstraints, Offset, Size};
+/// use flui_rendering::constraints::BoxConstraints;
+/// use flui_rendering::delegates::{MultiChildLayoutContext, MultiChildLayoutDelegate};
+/// use flui_types::{Offset, Size};
 ///
 /// #[derive(Debug)]
 /// struct DialogLayoutDelegate {
@@ -88,7 +89,9 @@ pub trait MultiChildLayoutDelegate: Send + Sync + Debug {
     /// # Returns
     ///
     /// The size of this render object.
-    fn get_size(&self, constraints: BoxConstraints) -> Size;
+    fn get_size(&self, constraints: BoxConstraints) -> Size {
+        constraints.biggest()
+    }
 
     /// Whether to relayout when the delegate changes.
     ///
@@ -124,7 +127,7 @@ pub trait MultiChildLayoutContext {
     ///
     /// # Panics
     ///
-    /// Panics if the child hasn't been laid out yet.
+    /// Panics if the child doesn't exist.
     fn position_child(&mut self, child_id: &str, offset: Offset);
 }
 

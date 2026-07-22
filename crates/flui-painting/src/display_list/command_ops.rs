@@ -1,8 +1,8 @@
 //! `DrawCommand` operations: `with_opacity`, `bounds`, `transform`,
 //! `paint`, `kind`, `is_*` accessors, `apply_transform`.
 //!
-//! Mythos chain U5 extracted these from the 2,434-LOC
-//! `display_list.rs` god module. This file is the largest in
+//! These were extracted from the 2,434-LOC
+//! `display_list.rs` god module as part of a concern-based split. This file is the largest in
 //! `display_list/` because each method pattern-matches across all 31
 //! variants. The structure is mechanical -- the 240-LOC
 //! `with_opacity` and 250-LOC `bounds` matches dominate.
@@ -753,7 +753,7 @@ impl DrawCommand {
     /// one.
     ///
     /// Variants carry `Arc<Paint>` internally for recording-time
-    /// interning (Cycle 5 U10 / origin R15 / audit P-7); the accessor
+    /// interning; the accessor
     /// returns a plain `&Paint` borrow so consumers stay refcount-agnostic.
     #[inline]
     pub fn paint(&self) -> Option<&Paint> {

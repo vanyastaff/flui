@@ -10,7 +10,7 @@
 //!
 //! Per-child `dyn`-dispatch cost is the same as the tuple path's
 //! `&dyn View` callback boundary — both pay one `dyn`-call per
-//! child (`SC-007` model). The tuple path's monomorphism advantage
+//! child. The tuple path's monomorphism advantage
 //! is per-*position* (inlined callback bodies, no nested arity
 //! discriminant), not per-child.
 
@@ -65,10 +65,8 @@ mod tests {
     struct Leaf(u32);
 
     impl View for Leaf {
-        fn create_element(&self) -> Box<dyn crate::view::ElementBase> {
-            use crate::element::StatelessBehavior;
-            use crate::view::StatelessElement;
-            Box::new(StatelessElement::new(self, StatelessBehavior))
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::stateless(self)
         }
     }
 
@@ -82,10 +80,8 @@ mod tests {
     struct OtherLeaf(&'static str);
 
     impl View for OtherLeaf {
-        fn create_element(&self) -> Box<dyn crate::view::ElementBase> {
-            use crate::element::StatelessBehavior;
-            use crate::view::StatelessElement;
-            Box::new(StatelessElement::new(self, StatelessBehavior))
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::stateless(self)
         }
     }
 

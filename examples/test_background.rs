@@ -42,7 +42,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  - BLACK = WM_ERASEBKGND working! (no background drawn)");
     println!();
 
-    platform.run(Box::new(move || {
+    platform.run(Box::new(move |_platform| {
         // Keep window alive via closure capture
         let _window = window;
     }));

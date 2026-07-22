@@ -118,12 +118,13 @@ impl SchedulerPhase {
         matches!(
             (self, next),
             (Self::Idle, Self::TransientCallbacks)
-                | (Self::TransientCallbacks, Self::MidFrameMicrotasks)
+                | (
+                    Self::TransientCallbacks,
+                    Self::MidFrameMicrotasks | Self::PersistentCallbacks
+                )
                 | (Self::MidFrameMicrotasks, Self::PersistentCallbacks)
                 | (Self::PersistentCallbacks, Self::PostFrameCallbacks)
                 | (Self::PostFrameCallbacks, Self::Idle)
-                // Allow skipping MidFrameMicrotasks if no microtasks pending
-                | (Self::TransientCallbacks, Self::PersistentCallbacks)
         )
     }
 
@@ -230,7 +231,6 @@ impl fmt::Display for SchedulerPhase {
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[repr(u8)]
 pub enum AppLifecycleState {
-    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// The application is visible and responding to user input.
     ///
     /// This is the default running state. Animations should run,
@@ -351,6 +351,12 @@ impl AppLifecycleState {
     /// Check if the state transition is valid
     ///
     /// Most transitions are valid, but some are logically unusual.
+    #[allow(
+        clippy::match_same_arms,
+        reason = "deliberate transition table: each state pair is listed explicitly \
+                  (Flutter AppLifecycleState parity) so a future tightening edits one \
+                  arm instead of reconstructing the table"
+    )]
     pub const fn can_transition_to(self, next: Self) -> bool {
         match (self, next) {
             // Same state is always valid (no-op)

@@ -7,6 +7,10 @@
 //! Run with:
 //!   cargo bench -p flui-rendering --bench layout
 
+// Bench harness, not public API; `criterion_group!` generates the
+// undocumentable entry fn.
+#![allow(missing_docs)]
+
 mod helpers;
 
 use std::hint::black_box;

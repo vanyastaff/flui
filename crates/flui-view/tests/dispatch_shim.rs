@@ -1,18 +1,15 @@
-//! Typed dispatch test (plan §U8 / KTD-4 / FR-021, finalized in §U27).
+//! Typed dispatch test (FR-021).
 //!
 //! `ElementCore::update_view` routes through
 //! `crate::element::dispatch::dispatch_view_update`. The dispatch
 //! body is now the concrete-`TypeId`-keyed
-//! `Downcast::as_any().type_id()` + `Box::downcast::<V>` path
-//! (§U27) — no `downcast_ref::<V>()` syntactic pattern in the
+//! `Downcast::as_any().type_id()` + `Box::downcast::<V>` path —
+//! no `downcast_ref::<V>()` syntactic pattern in the
 //! View-type update dispatch path. This file pins the dispatch
 //! contract so a regression surfaces here.
 
 use flui_foundation::{ValueKey, ViewKey};
-use flui_view::{
-    BuildContext, BuildOwner, ElementBase, ElementTree, IntoView, StatelessElement, StatelessView,
-    View, ViewExt,
-};
+use flui_view::{BuildContext, BuildOwner, ElementTree, IntoView, StatelessView, View, ViewExt};
 
 struct ShimView {
     payload: u32,
@@ -35,9 +32,8 @@ impl StatelessView for ShimView {
 }
 
 impl View for ShimView {
-    fn create_element(&self) -> Box<dyn ElementBase> {
-        use flui_view::element::StatelessBehavior;
-        Box::new(StatelessElement::new(self, StatelessBehavior))
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateless(self)
     }
 
     fn key(&self) -> Option<&dyn ViewKey> {
@@ -68,8 +64,8 @@ fn identity_shim_succeeds_on_type_match() {
     // through `dispatch_view_update` under default features.
     tree.update(id, &updated, &mut owner.element_owner_mut());
 
-    // The key should still survive the update (U7 re-clones at the
-    // update boundary). Same key value confirms the dispatch took the
+    // The key should still survive the update (the view re-clones its
+    // key at the update boundary). Same key value confirms the dispatch took the
     // success path and applied the new view — a downcast failure
     // would leave `node.key` unchanged at the old probe value (it
     // already matches by value here) but `payload` would also stay
@@ -78,7 +74,7 @@ fn identity_shim_succeeds_on_type_match() {
     let node = tree.get(id).expect("node alive after update");
     let stored_hash = node
         .key()
-        .map(|k| k.key_hash())
+        .map(flui_foundation::ViewKey::key_hash)
         .expect("key survives update");
     let probe = ValueKey::<u32>::new(42_u32);
     assert_eq!(
@@ -88,12 +84,12 @@ fn identity_shim_succeeds_on_type_match() {
     );
 }
 
-/// PR #133 review (P1) regression lock — `BoxedView` forwards
-/// `View::view_type_id()` to its inner view; a `view_type_id()`-keyed
-/// guard would let the wrapper slip through and the subsequent
-/// downcast would panic on every `.boxed()` rebuild.
+/// Regression lock: `BoxedView` forwards `View::view_type_id()` to its
+/// inner view; a `view_type_id()`-keyed guard would let the wrapper slip
+/// through and the subsequent downcast would panic on every `.boxed()`
+/// rebuild.
 ///
-/// The §U27 dispatch keys on `Downcast::as_any().type_id()` —
+/// The dispatch keys on `Downcast::as_any().type_id()` —
 /// the concrete runtime TypeId, not the overridable trait method —
 /// so a `BoxedView` handed into a `dispatch_view_update::<Inner, _>`
 /// call discriminates correctly and returns `false` rather than

@@ -5,11 +5,11 @@
 //! accessibility features.
 
 use std::sync::{
-    atomic::{AtomicBool, AtomicUsize, Ordering},
     Arc,
+    atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
-use flui_foundation::{impl_binding_singleton, BindingBase};
+use flui_foundation::{BindingBase, impl_binding_singleton};
 use parking_lot::RwLock;
 
 use crate::{event::SemanticsEvent, role::Assertiveness};
@@ -290,7 +290,7 @@ impl SemanticsBinding {
         }
     }
 
-    // ========== Semantics Events (U14) ==========
+    // ========== Semantics Events ==========
 
     /// Sets the callback for semantics events dispatched via
     /// [`SemanticsService::send_event`].
@@ -425,6 +425,7 @@ impl SemanticsActionEvent {
 /// // Make an assertive announcement
 /// SemanticsService::announce_with_assertiveness("Error occurred", Assertiveness::Assertive);
 /// ```
+#[derive(Debug)]
 pub struct SemanticsService;
 
 impl SemanticsService {

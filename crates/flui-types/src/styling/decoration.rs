@@ -16,6 +16,7 @@ use crate::{
 #[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DecorationImage {
+    /// The image to paint.
     #[cfg_attr(feature = "serde", serde(skip))]
     pub image: Image,
 
@@ -38,6 +39,8 @@ pub struct DecorationImage {
 }
 
 impl DecorationImage {
+    /// Creates a decoration image with default settings: no fit, centered,
+    /// not repeated, fully opaque, and no color filter.
     #[must_use]
     #[inline]
     pub fn new(image: Image) -> Self {
@@ -51,6 +54,7 @@ impl DecorationImage {
         }
     }
 
+    /// Sets how to inscribe the image into the space allocated during layout.
     #[must_use]
     #[inline]
     pub fn with_fit(mut self, fit: BoxFit) -> Self {
@@ -58,6 +62,7 @@ impl DecorationImage {
         self
     }
 
+    /// Sets how to align the image within its bounds.
     #[must_use]
     #[inline]
     pub const fn with_alignment(mut self, alignment: Alignment) -> Self {
@@ -65,6 +70,7 @@ impl DecorationImage {
         self
     }
 
+    /// Sets how to repeat the image.
     #[must_use]
     #[inline]
     pub const fn with_repeat(mut self, repeat: ImageRepeat) -> Self {
@@ -72,6 +78,8 @@ impl DecorationImage {
         self
     }
 
+    /// Sets the opacity to apply to the image (0.0 = fully transparent,
+    /// 1.0 = fully opaque).
     #[must_use]
     #[inline]
     pub const fn with_opacity(mut self, opacity: f32) -> Self {
@@ -79,6 +87,7 @@ impl DecorationImage {
         self
     }
 
+    /// Sets a color filter to apply to the image before painting it.
     #[must_use]
     #[inline]
     pub const fn with_color_filter(mut self, color_filter: ColorFilter) -> Self {

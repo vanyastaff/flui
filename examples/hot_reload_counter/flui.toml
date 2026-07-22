@@ -1,0 +1,11 @@
+[app]
+name = "hot-reload-counter"
+version = "0.1.0"
+organization = "dev.flui"
+
+[hot_reload]
+host_package = "hot-reload-counter-host"
+worker_package = "hot-reload-counter-logic"
+worker_lib = "counter_logic"
+logic_watch = "logic/src"
+types_watch = "types/src"

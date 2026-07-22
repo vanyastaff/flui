@@ -3,6 +3,11 @@
 //!
 //! Tests view creation, element management, state handling, and update cycles.
 
+// Target-level lint relaxations — crate-level allows don't reach this
+// target. `unwrap` in test/example code: a panic IS the failure report
+// (docs/PANIC-POLICY.md); style items here are ship-wave debt.
+#![allow(clippy::struct_field_names, clippy::unwrap_used)]
+
 use std::{
     any::TypeId,
     sync::{
@@ -11,9 +16,10 @@ use std::{
     },
 };
 
-use flui_foundation::ElementId;
+use flui_objects::RenderSizedBox;
+use flui_rendering::protocol::BoxProtocol;
 use flui_view::{
-    BuildContext, BuildOwner, ElementBase, ElementOwner, IntoView, Lifecycle, StatefulBehavior,
+    BuildContext, BuildOwner, ElementBase, ElementTree, IntoView, Lifecycle, StatefulBehavior,
     StatefulElement, StatefulView, StatelessBehavior, StatelessElement, StatelessView, View,
     ViewExt, ViewState,
 };
@@ -38,8 +44,8 @@ impl StatelessView for SimpleStatelessView {
 }
 
 impl View for SimpleStatelessView {
-    fn create_element(&self) -> Box<dyn ElementBase> {
-        Box::new(StatelessElement::new(self, StatelessBehavior))
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateless(self)
     }
 }
 
@@ -48,62 +54,28 @@ impl View for SimpleStatelessView {
 #[derive(Clone)]
 struct LeafView;
 
+impl flui_view::RenderView for LeafView {
+    type Protocol = BoxProtocol;
+    type RenderObject = RenderSizedBox;
+
+    fn create_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+    ) -> Self::RenderObject {
+        RenderSizedBox::shrink()
+    }
+
+    fn update_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+        _render_object: &mut Self::RenderObject,
+    ) {
+    }
+}
+
 impl View for LeafView {
-    fn create_element(&self) -> Box<dyn ElementBase> {
-        Box::new(LeafElement::new())
-    }
-}
-
-struct LeafElement {
-    depth: usize,
-    lifecycle: Lifecycle,
-}
-
-impl LeafElement {
-    fn new() -> Self {
-        Self {
-            depth: 0,
-            lifecycle: Lifecycle::Initial,
-        }
-    }
-}
-
-impl ElementBase for LeafElement {
-    fn view_type_id(&self) -> TypeId {
-        TypeId::of::<LeafView>()
-    }
-
-    fn depth(&self) -> usize {
-        self.depth
-    }
-
-    fn lifecycle(&self) -> Lifecycle {
-        self.lifecycle
-    }
-
-    fn mount(&mut self, _parent: Option<ElementId>, slot: usize, _owner: &mut ElementOwner<'_>) {
-        self.depth = slot;
-        self.lifecycle = Lifecycle::Active;
-    }
-
-    fn unmount(&mut self, _owner: &mut ElementOwner<'_>) {
-        self.lifecycle = Lifecycle::Defunct;
-    }
-
-    fn activate(&mut self) {
-        self.lifecycle = Lifecycle::Active;
-    }
-
-    fn deactivate(&mut self) {
-        self.lifecycle = Lifecycle::Inactive;
-    }
-
-    fn update(&mut self, _new_view: &dyn View, _owner: &mut ElementOwner<'_>) {}
-
-    fn mark_needs_build(&mut self) {}
-
-    fn build_into_views(&mut self, _owner: &mut ElementOwner<'_>) -> Vec<Box<dyn View>> {
-        Vec::new()
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::render_variable(self)
     }
 }
 
@@ -133,8 +105,8 @@ impl StatelessView for NestedView {
 }
 
 impl View for NestedView {
-    fn create_element(&self) -> Box<dyn ElementBase> {
-        Box::new(StatelessElement::new(self, StatelessBehavior))
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateless(self)
     }
 }
 
@@ -145,8 +117,11 @@ fn test_stateless_view_create_element() {
     };
     let element = view.create_element();
 
-    assert_eq!(element.view_type_id(), TypeId::of::<SimpleStatelessView>());
-    assert_eq!(element.lifecycle(), Lifecycle::Initial);
+    assert_eq!(
+        element.element().view_type_id(),
+        TypeId::of::<SimpleStatelessView>()
+    );
+    assert_eq!(element.element().lifecycle(), Lifecycle::Initial);
 }
 
 #[test]
@@ -187,17 +162,30 @@ fn test_stateless_element_mark_needs_build() {
     let view = SimpleStatelessView {
         label: "Dirty".to_string(),
     };
-    let mut element = StatelessElement::new(&view, StatelessBehavior);
+    let mut tree = ElementTree::new();
     let mut owner = BuildOwner::new();
-    element.mount(None, 0, &mut owner.element_owner_mut());
+    let root_id = tree.mount_root(&view, &mut owner.element_owner_mut());
 
-    // build_into_views runs the build half (clears the dirty flag).
-    let _ = element.build_into_views(&mut owner.element_owner_mut());
+    owner.schedule_build_for(root_id, 0);
+    owner.build_scope(&mut tree);
+    assert!(
+        !tree.get(root_id).unwrap().element().is_dirty(),
+        "initial build_scope clears the dirty flag"
+    );
 
-    // mark_needs_build sets it again
-    element.mark_needs_build();
+    tree.get_mut(root_id)
+        .unwrap()
+        .element_mut()
+        .mark_needs_build();
+    assert!(
+        tree.get(root_id).unwrap().element().is_dirty(),
+        "mark_needs_build sets the dirty flag again"
+    );
 
-    // Element should be functional
+    owner.schedule_build_for(root_id, 0);
+    owner.build_scope(&mut tree);
+    let element = tree.get(root_id).unwrap().element();
+    assert!(!element.is_dirty(), "second build_scope clears dirty again");
     assert_eq!(element.lifecycle(), Lifecycle::Active);
 }
 
@@ -206,7 +194,7 @@ fn test_nested_stateless_views() {
     let view = NestedView { depth: 3 };
     let element = view.create_element();
 
-    assert_eq!(element.view_type_id(), TypeId::of::<NestedView>());
+    assert_eq!(element.element().view_type_id(), TypeId::of::<NestedView>());
 }
 
 // ============================================================================
@@ -242,14 +230,14 @@ impl ViewState<CounterView> for CounterState {
         }
     }
 
-    fn did_update_view(&mut self, _old_view: &CounterView) {
+    fn did_update_view(&mut self, _old_view: &CounterView, _new_view: &CounterView) {
         self.update_count.fetch_add(1, Ordering::SeqCst);
     }
 }
 
 impl View for CounterView {
-    fn create_element(&self) -> Box<dyn ElementBase> {
-        Box::new(StatefulElement::new(self, StatefulBehavior::new(self)))
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateful(self)
     }
 }
 
@@ -378,8 +366,8 @@ impl ViewState<LifecycleCallbackView> for LifecycleCallbackState {
 }
 
 impl View for LifecycleCallbackView {
-    fn create_element(&self) -> Box<dyn ElementBase> {
-        Box::new(StatefulElement::new(self, StatefulBehavior::new(self)))
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateful(self)
     }
 }
 
@@ -498,7 +486,7 @@ fn test_stateless_element_is_small() {
     // StatelessElement should be reasonably sized
     let size = std::mem::size_of::<StatelessElement<SimpleStatelessView>>();
     // Should be less than 256 bytes (view + lifecycle + depth + child + dirty)
-    assert!(size < 256, "StatelessElement is too large: {} bytes", size);
+    assert!(size < 256, "StatelessElement is too large: {size} bytes");
 }
 
 #[test]
@@ -506,23 +494,7 @@ fn test_stateful_element_is_reasonably_sized() {
     // StatefulElement includes state, so it can be larger
     let size = std::mem::size_of::<StatefulElement<CounterView>>();
     // Should be less than 512 bytes
-    assert!(size < 512, "StatefulElement is too large: {} bytes", size);
-}
-
-// ============================================================================
-// Thread Safety Tests
-// ============================================================================
-
-#[test]
-fn test_stateless_element_send_sync() {
-    fn assert_send_sync<T: Send + Sync>() {}
-    assert_send_sync::<StatelessElement<SimpleStatelessView>>();
-}
-
-#[test]
-fn test_stateful_element_send_sync() {
-    fn assert_send_sync<T: Send + Sync>() {}
-    assert_send_sync::<StatefulElement<CounterView>>();
+    assert!(size < 512, "StatefulElement is too large: {size} bytes");
 }
 
 // ============================================================================
@@ -536,7 +508,7 @@ fn test_stateless_element_debug() {
     };
     let element = StatelessElement::new(&view, StatelessBehavior);
 
-    let debug_str = format!("{:?}", element);
+    let debug_str = format!("{element:?}");
     assert!(debug_str.contains("StatelessElement"));
     assert!(debug_str.contains("lifecycle"));
 }
@@ -546,7 +518,66 @@ fn test_stateful_element_debug() {
     let view = CounterView { initial_count: 42 };
     let element = StatefulElement::new(&view, StatefulBehavior::new(&view));
 
-    let debug_str = format!("{:?}", element);
+    let debug_str = format!("{element:?}");
     assert!(debug_str.contains("StatefulElement"));
     assert!(debug_str.contains("lifecycle"));
+}
+
+/// A stateless view that builds a chain of itself `remaining` levels deep,
+/// recording the live [`BuildContext::depth`] it sees at each level. The
+/// terminal level builds a [`LeafView`].
+#[derive(Clone)]
+struct DepthProbe {
+    remaining: usize,
+    seen: Arc<std::sync::Mutex<Vec<usize>>>,
+}
+
+impl StatelessView for DepthProbe {
+    fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
+        self.seen.lock().unwrap().push(ctx.depth());
+        if self.remaining == 0 {
+            LeafView.boxed()
+        } else {
+            DepthProbe {
+                remaining: self.remaining - 1,
+                seen: Arc::clone(&self.seen),
+            }
+            .boxed()
+        }
+    }
+}
+
+impl View for DepthProbe {
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateless(self)
+    }
+}
+
+/// The LIVE `BuildContext` handed to `ViewState::build` during a `build_scope`
+/// must report each element's AUTHORITATIVE tree depth (`parent_depth + 1`),
+/// not its sibling slot index. Every `DepthProbe` here is an only child (slot
+/// 0), so before the live-context depth fix the build saw `0` at every level
+/// (`[0, 0, 0]`); the fix makes it report the real chain depth `[0, 1, 2]`.
+/// Correct depth is what keeps `depend_on`-registered dependents and
+/// `mark_needs_build` rebuilds ordering shallowest-first in the dirty heap.
+#[test]
+fn live_build_context_reports_authoritative_tree_depth() {
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let root = DepthProbe {
+        remaining: 2,
+        seen: Arc::clone(&seen),
+    };
+
+    let mut tree = ElementTree::new();
+    let mut owner = BuildOwner::new();
+    let root_id = tree.mount_root(&root, &mut owner.element_owner_mut());
+    owner.schedule_build_for(root_id, 0);
+    owner.build_scope(&mut tree);
+
+    assert_eq!(
+        *seen.lock().unwrap(),
+        vec![0, 1, 2],
+        "the live build context must report authoritative tree depth at each \
+         chain level, not the sibling slot (which is 0 for every only-child)",
+    );
 }

@@ -173,7 +173,7 @@ fn contract_clipboard_empty() {
     let clipboard = platform.clipboard();
 
     // WHEN: We clear the clipboard
-    clipboard.write_text("".to_string());
+    clipboard.write_text(String::new());
 
     // THEN: has_text should reflect the state correctly
     // Note: Empty string behavior may vary - some platforms treat "" as no text
@@ -480,8 +480,7 @@ fn test_display_enumeration_contract() {
         // Contract: Scale factor must be positive and reasonable
         assert!(
             scale > 0.0 && scale <= 4.0,
-            "Display scale factor should be 0.0-4.0, got {}",
-            scale
+            "Display scale factor should be 0.0-4.0, got {scale}"
         );
 
         // Contract: Display bounds must be valid

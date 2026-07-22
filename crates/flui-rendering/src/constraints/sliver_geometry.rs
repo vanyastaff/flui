@@ -446,13 +446,14 @@ impl fmt::Debug for SliverGeometry {
             debug.field("scroll_correction", &correction);
         }
 
-        debug.finish()
+        // Fields at their default/derived values are elided above.
+        debug.finish_non_exhaustive()
     }
 }
 
 impl fmt::Display for SliverGeometry {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:?}", self)
+        write!(f, "{self:?}")
     }
 }
 

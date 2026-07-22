@@ -1,0 +1,38 @@
+[package]
+name = "flui-objects"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Concrete RenderBox/RenderSliver catalog for Flui (the object catalog atop flui-rendering's engine)"
+repository.workspace = true
+readme = "README.md"
+
+[dependencies]
+flui-rendering = { path = "../flui-rendering", version = "0.2.0" }
+flui-painting = { path = "../flui-painting", version = "0.2.0" }
+flui-types = { path = "../flui-types", version = "0.2.0" }
+flui-foundation = { path = "../flui-foundation", version = "0.2.0" }
+flui-tree = { path = "../flui-tree", version = "0.2.0" }
+flui-animation = { path = "../flui-animation", version = "0.2.0" }
+tracing = { workspace = true }
+parking_lot = { workspace = true }
+
+[features]
+default = []
+# Forward `testing` feature so flui-objects' test crate can drive the
+# real pipeline harness (RenderTester/Probe) without re-exporting it.
+testing = ["flui-rendering/testing"]
+serde = ["flui-types/serde"]
+
+[dev-dependencies]
+flui-rendering = { path = "../flui-rendering", version = "0.2.0", features = ["testing"] }
+flui-objects = { path = ".", version = "0.2.0", features = ["testing"] }
+flui-types = { path = "../flui-types", version = "0.2.0" }
+insta = { workspace = true }
+flui-scheduler = { path = "../flui-scheduler", version = "0.2.0" }
+flui-interaction = { path = "../flui-interaction", version = "0.2.0", features = ["testing"] }
+
+[lints]
+workspace = true

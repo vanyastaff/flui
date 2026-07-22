@@ -117,6 +117,38 @@ impl RenderNode {
             Self::Sliver(_) => "Sliver",
         }
     }
+
+    /// Hot-reload hook: mark this render object for reprocessing.
+    ///
+    /// Dispatches to [`RenderObject::reassemble`] on the underlying object.
+    pub fn reassemble(&mut self) {
+        match self {
+            Self::Box(entry) => entry.render_object_mut().reassemble(),
+            Self::Sliver(entry) => entry.render_object_mut().reassemble(),
+        }
+    }
+
+    /// Tree-lifecycle hook (ADR-0013): hands the freshly-inserted render
+    /// object a self-dirty handle bound to its own node.
+    ///
+    /// Dispatches to [`RenderObject::attach`] on the underlying object.
+    pub fn attach(&mut self, handle: crate::pipeline::RepaintHandle) {
+        match self {
+            Self::Box(entry) => entry.render_object_mut().attach(handle),
+            Self::Sliver(entry) => entry.render_object_mut().attach(handle),
+        }
+    }
+
+    /// Tree-lifecycle hook (ADR-0013): tears down whatever `attach`
+    /// subscribed to, called before this node is removed from the tree.
+    ///
+    /// Dispatches to [`RenderObject::detach`] on the underlying object.
+    pub fn detach(&mut self) {
+        match self {
+            Self::Box(entry) => entry.render_object_mut().detach(),
+            Self::Sliver(entry) => entry.render_object_mut().detach(),
+        }
+    }
 }
 
 // ============================================================================
@@ -129,7 +161,7 @@ impl RenderNode {
     pub fn as_box(&self) -> Option<&RenderEntry<BoxProtocol>> {
         match self {
             Self::Box(entry) => Some(entry),
-            _ => None,
+            Self::Sliver(_) => None,
         }
     }
 
@@ -138,7 +170,7 @@ impl RenderNode {
     pub fn as_box_mut(&mut self) -> Option<&mut RenderEntry<BoxProtocol>> {
         match self {
             Self::Box(entry) => Some(entry),
-            _ => None,
+            Self::Sliver(_) => None,
         }
     }
 
@@ -163,7 +195,7 @@ impl RenderNode {
     pub fn as_sliver(&self) -> Option<&RenderEntry<SliverProtocol>> {
         match self {
             Self::Sliver(entry) => Some(entry),
-            _ => None,
+            Self::Box(_) => None,
         }
     }
 
@@ -173,7 +205,7 @@ impl RenderNode {
     pub fn as_sliver_mut(&mut self) -> Option<&mut RenderEntry<SliverProtocol>> {
         match self {
             Self::Sliver(entry) => Some(entry),
-            _ => None,
+            Self::Box(_) => None,
         }
     }
 }
@@ -298,7 +330,7 @@ impl RenderNode {
     }
 
     /// Sets the `NEEDS_LAYOUT` flag on this node's state — **flag-only**, no
-    /// propagation. Added in D-block PR-A1 U15 to support the
+    /// propagation. Added to support the
     /// [`PipelineOwner::mark_needs_layout`](crate::pipeline::PipelineOwner::mark_needs_layout)
     /// ancestor-walk: each step of the walk flips one node's flag, and the
     /// owner is responsible for the ancestor traversal and dirty-queue push
@@ -335,8 +367,8 @@ impl RenderNode {
     /// Sets the `NEEDS_PAINT` flag on this node's state — flag-only,
     /// no propagation.
     ///
-    /// **D-block PR-A1 U22 (memo D7):** additive helper mirroring
-    /// [`Self::mark_layout_flag`]. NOT used by U22's dedup path —
+    /// Additive helper mirroring
+    /// [`Self::mark_layout_flag`]. NOT used by the dedup path —
     /// `PipelineOwner::add_node_needing_paint` uses queue-membership
     /// scanning instead of flag-based dedup (flag-based dedup is
     /// unsuitable because `RenderState::new()` defaults
@@ -353,7 +385,7 @@ impl RenderNode {
     }
 
     /// Sets the `NEEDS_COMPOSITING` flag on this node's state —
-    /// flag-only, no propagation. **D-block PR-A1 U22:** additive
+    /// flag-only, no propagation. Additive
     /// helper; not used by the queue-scan dedup path (see
     /// [`Self::mark_paint_flag`] doc for rationale).
     #[inline]
@@ -365,7 +397,7 @@ impl RenderNode {
     }
 
     /// Sets the `NEEDS_SEMANTICS` flag on this node's state —
-    /// flag-only, no propagation. **D-block PR-A1 U22:** additive
+    /// flag-only, no propagation. Additive
     /// helper; not used by the queue-scan dedup path (see
     /// [`Self::mark_paint_flag`] doc for rationale).
     #[inline]
@@ -377,7 +409,7 @@ impl RenderNode {
     }
 
     /// Returns true if `NEEDS_SEMANTICS` is set on this node's state.
-    /// **D-block PR-A1 U22:** additive accessor for future flag-based
+    /// Additive accessor for future flag-based
     /// callers (current `add_node_needing_semantics` uses queue-scan
     /// dedup, not this flag).
     #[inline]
@@ -395,7 +427,7 @@ impl RenderNode {
     }
 
     /// Returns true if `NEEDS_COMPOSITING` is set on this node's
-    /// state. **D-block PR-A1 U22:** additive accessor (see
+    /// state. Additive accessor (see
     /// [`Self::needs_semantics`] doc for usage notes).
     #[inline]
     pub fn needs_compositing(&self) -> bool {
@@ -426,7 +458,7 @@ impl RenderNode {
     ///
     /// # Background
     ///
-    /// **D-block PR-A1b U18 (companion memo D4):** the pipeline operates on
+    /// The pipeline operates on
     /// protocol-erased `RenderNode`s, but
     /// `RenderEntry::layout_leaf_only` is generic over `P: Protocol`.
     /// This method bridges the seam — variant mismatch (e.g., `Box`
@@ -436,11 +468,11 @@ impl RenderNode {
     /// Pipeline-side callers lift the protocol-typed root constraints
     /// to `ErasedConstraints` via the `From<BoxConstraints>` /
     /// `From<SliverConstraints>` impls before invoking. Per-protocol-typed
-    /// callers (the `RenderBox` bridge and `RenderSliver` bridge in
-    /// U19) downcast the returned geometry via
+    /// callers (the `RenderBox` bridge and `RenderSliver` bridge)
+    /// downcast the returned geometry via
     /// `TryFrom<ErasedGeometry>`.
     ///
-    /// U20's `PipelineOwner::layout_dirty_root` does NOT route through
+    /// `PipelineOwner::layout_dirty_root` does NOT route through
     /// this method — it builds typed `BoxLayoutCtx` with children via
     /// disjoint borrows and calls `render_object.perform_layout_raw`
     /// directly against an erased view, bypassing the leaf-mode
@@ -486,7 +518,7 @@ impl RenderNode {
         }
     }
 
-    /// Reads the `IS_REPAINT_BOUNDARY` storage flag (D-block PR-A2 U33).
+    /// Reads the `IS_REPAINT_BOUNDARY` storage flag.
     ///
     /// The flag is bootstrapped on insert from the trait answer via
     /// `PipelineOwner::bootstrap_repaint_boundary_flag`. The compositing-bits
@@ -502,7 +534,7 @@ impl RenderNode {
         }
     }
 
-    /// Sets the `IS_REPAINT_BOUNDARY` storage flag (D-block PR-A2 U33).
+    /// Sets the `IS_REPAINT_BOUNDARY` storage flag.
     ///
     /// Called by `PipelineOwner::bootstrap_repaint_boundary_flag` at insert
     /// time after reading the trait answer; not called from layout/paint
@@ -517,7 +549,7 @@ impl RenderNode {
 
     /// Returns true if this node is a relayout boundary.
     ///
-    /// **D-block PR-A1 U15**: reads the per-instance `IS_RELAYOUT_BOUNDARY`
+    /// Reads the per-instance `IS_RELAYOUT_BOUNDARY`
     /// storage flag (set by [`RenderState::compute_relayout_boundary`] during
     /// layout per Flutter `!parentUsesSize || sizedByParent || constraints.isTight() || !hasParent`).
     /// Prior behaviour returned the hardcoded `RenderObject::is_relayout_boundary()`
@@ -605,6 +637,32 @@ impl RenderNode {
         }
     }
 
+    /// Whether this node's render object requests that child paint be skipped.
+    ///
+    /// Returns `true` when the node is fully transparent (e.g. `RenderOpacity`
+    /// at alpha=0 without the `always_needs_compositing` flag). The pipeline
+    /// owner calls this before recording child fragments to avoid invisible GPU
+    /// draws.
+    #[inline]
+    pub fn skip_paint(&self) -> bool {
+        match self {
+            Self::Box(entry) => entry.render_object().skip_paint(),
+            Self::Sliver(entry) => entry.render_object().skip_paint(),
+        }
+    }
+
+    /// Optional blend mode for the opacity layer wrapping children.
+    ///
+    /// Returns the blend mode set by `paint_layer_blend`, or `None` when the
+    /// object uses the default `SrcOver` compositing (most objects).
+    #[inline]
+    pub fn paint_layer_blend(&self) -> Option<flui_types::painting::BlendMode> {
+        match self {
+            Self::Box(entry) => entry.render_object().paint_layer_blend(),
+            Self::Sliver(entry) => entry.render_object().paint_layer_blend(),
+        }
+    }
+
     /// Optional paint transform effect for this render object.
     ///
     /// The laid-out size is resolved from
@@ -627,6 +685,64 @@ impl RenderNode {
         }
     }
 
+    /// This node's committed laid-out size, or `None` before its first layout.
+    ///
+    /// Box → committed `Size`. Sliver → absolute paint size, which needs **both**
+    /// a committed geometry and committed constraints; `absolute_paint_size`
+    /// silently returns `Size::ZERO` when either is missing, so the presence
+    /// check happens here instead.
+    #[inline]
+    pub fn laid_out_size(&self) -> Option<flui_types::Size> {
+        match self {
+            Self::Box(entry) => entry.state().geometry(),
+            Self::Sliver(entry) => {
+                let state = entry.state();
+                (state.geometry().is_some() && state.constraints().is_some())
+                    .then(|| state.absolute_paint_size())
+            }
+        }
+    }
+
+    /// Composes onto `transform` the mapping from child `child`'s local space
+    /// into this node's local space.
+    ///
+    /// `None` when this node has **not been laid out**, and the caller must not
+    /// treat that as "no transform": a size-dependent object — a `FittedBox`, a
+    /// rotation about its centre, a `RenderFractionalTranslation`, a `RenderFlow`
+    /// — produces a *different, plausible-looking* matrix at `Size::ZERO`.
+    /// Substituting zero here made [`PipelineOwner::transform_to`] quietly wrong
+    /// before the first layout (ADR-0021). Flutter asserts `box.hasSize` at
+    /// the corresponding call sites (`heroes.dart:380`, `box.dart:3016`) rather
+    /// than inventing a size.
+    ///
+    /// Forwards to
+    /// [`crate::traits::RenderObject::apply_paint_transform`].
+    ///
+    /// [`PipelineOwner::transform_to`]: crate::pipeline::PipelineOwner::transform_to
+    #[inline]
+    #[must_use]
+    pub fn apply_paint_transform(
+        &self,
+        child: usize,
+        child_offset: flui_types::Offset,
+        transform: &mut flui_types::Matrix4,
+    ) -> Option<()> {
+        let size = self.laid_out_size()?;
+        match self {
+            Self::Box(entry) => {
+                entry
+                    .render_object()
+                    .apply_paint_transform(child, child_offset, size, transform);
+            }
+            Self::Sliver(entry) => {
+                entry
+                    .render_object()
+                    .apply_paint_transform(child, child_offset, size, transform);
+            }
+        }
+        Some(())
+    }
+
     /// Records this node's paint fragment through the protocol blanket.
     ///
     /// The node's laid-out paint size is resolved from
@@ -639,11 +755,11 @@ impl RenderNode {
         match self {
             Self::Box(entry) => {
                 let size = entry.state().geometry().unwrap_or(flui_types::Size::ZERO);
-                entry.render_object().paint_raw(recorder, child_count, size)
+                entry.render_object().paint_raw(recorder, child_count, size);
             }
             Self::Sliver(entry) => {
                 let size = entry.state().absolute_paint_size();
-                entry.render_object().paint_raw(recorder, child_count, size)
+                entry.render_object().paint_raw(recorder, child_count, size);
             }
         }
     }
@@ -696,10 +812,26 @@ impl RenderNode {
     /// Returns a mutable reference to the Box render object.
     ///
     /// Panics if this is not a Box node. Requires `&mut self`; pipeline
-    /// phases obtain this through `&mut RenderTree`. See the U2 exemplar
+    /// phases obtain this through `&mut RenderTree`. See the exemplar
     /// refactor docstring on `RenderEntry`.
     pub fn box_render_object_mut(&mut self) -> &mut dyn RenderObject<BoxProtocol> {
         self.as_box_unchecked_mut().render_object_mut()
+    }
+
+    /// Downcasts this node's render object to a concrete type `T`, regardless
+    /// of protocol (Box or Sliver). Returns `None` if the stored object is not
+    /// a `T`.
+    ///
+    /// This is the View layer's hook for `RenderObjectElement`'s update path:
+    /// when a `RenderObjectWidget` updates, the framework downcasts the live
+    /// render object to the widget's concrete `RenderObject` type and calls
+    /// `RenderView::update_render_object` to apply the new configuration in
+    /// place (Flutter's `Widget.updateRenderObject`).
+    pub fn downcast_render_object_mut<T: std::any::Any>(&mut self) -> Option<&mut T> {
+        match self {
+            Self::Box(entry) => entry.render_object_mut().as_any_mut().downcast_mut::<T>(),
+            Self::Sliver(entry) => entry.render_object_mut().as_any_mut().downcast_mut::<T>(),
+        }
     }
 
     /// Clears the needs_paint flag.
@@ -721,7 +853,7 @@ impl RenderNode {
     }
 
     /// Reads the `RenderObject::always_needs_compositing()` static trait
-    /// answer (D-block PR-A2 U34 / memo R26b).
+    /// answer.
     ///
     /// Consulted by the compositing-bits walk to force `NEEDS_COMPOSITING`
     /// regardless of subtree state — used by render objects that apply
@@ -734,7 +866,7 @@ impl RenderNode {
         }
     }
 
-    /// Reads the `WAS_REPAINT_BOUNDARY` storage flag (D-block PR-A2 U34).
+    /// Reads the `WAS_REPAINT_BOUNDARY` storage flag.
     ///
     /// Set by the paint phase after a node was painted as a repaint
     /// boundary. The compositing-bits walk consults this to detect the
@@ -749,7 +881,7 @@ impl RenderNode {
         }
     }
 
-    /// Writes the `WAS_REPAINT_BOUNDARY` storage flag (D-block PR-A2 U35).
+    /// Writes the `WAS_REPAINT_BOUNDARY` storage flag.
     ///
     /// Called by the paint phase after a node is painted so subsequent
     /// compositing-bits walks can detect boundary-status transitions.
@@ -761,12 +893,12 @@ impl RenderNode {
         }
     }
 
-    /// Sets the `NEEDS_COMPOSITING` flag (D-block PR-A2 U34).
+    /// Sets the `NEEDS_COMPOSITING` flag.
     ///
     /// Distinct from [`Self::mark_compositing_flag`] only in that this
     /// method documents its role in the per-frame compositing-bits walk
-    /// (`_updateCompositingBits`); `mark_compositing_flag` was added in
-    /// U22 as an additive helper.
+    /// (`_updateCompositingBits`); `mark_compositing_flag` was added
+    /// separately as an additive helper.
     #[inline]
     pub fn mark_needs_compositing(&self) {
         match self {
@@ -775,7 +907,7 @@ impl RenderNode {
         }
     }
 
-    /// Clears the `NEEDS_COMPOSITING` flag (D-block PR-A2 U34).
+    /// Clears the `NEEDS_COMPOSITING` flag.
     #[inline]
     pub fn clear_needs_compositing(&self) {
         match self {
@@ -784,7 +916,7 @@ impl RenderNode {
         }
     }
 
-    /// Reads the `NEEDS_COMPOSITING_BITS_UPDATE` flag (D-block PR-A2 U32).
+    /// Reads the `NEEDS_COMPOSITING_BITS_UPDATE` flag.
     ///
     /// Set by `markNeedsCompositingBitsUpdate` (parent chain walks up to
     /// the first repaint boundary or already-dirty ancestor) and consulted
@@ -798,7 +930,7 @@ impl RenderNode {
         }
     }
 
-    /// Sets the `NEEDS_COMPOSITING_BITS_UPDATE` flag (D-block PR-A2 U32).
+    /// Sets the `NEEDS_COMPOSITING_BITS_UPDATE` flag.
     #[inline]
     pub fn mark_needs_compositing_bits_update(&self) {
         match self {
@@ -807,7 +939,7 @@ impl RenderNode {
         }
     }
 
-    /// Clears the `NEEDS_COMPOSITING_BITS_UPDATE` flag (D-block PR-A2 U32).
+    /// Clears the `NEEDS_COMPOSITING_BITS_UPDATE` flag.
     #[inline]
     pub fn clear_needs_compositing_bits_update(&self) {
         match self {
@@ -819,15 +951,33 @@ impl RenderNode {
 
 #[cfg(test)]
 mod tests {
+    use flui_tree::Leaf;
     use flui_types::{Size, geometry::px};
 
     use super::*;
-    use crate::objects::RenderColoredBox;
+    use crate::{context::BoxLayoutContext, parent_data::BoxParentData, traits::RenderBox};
+
+    /// Minimal leaf box used only to exercise node-wiring logic.
+    /// Concrete objects live in `flui_objects`; the node API is object-agnostic.
+    #[derive(Debug, Default)]
+    struct TestBox;
+
+    impl flui_foundation::Diagnosticable for TestBox {}
+
+    impl RenderBox for TestBox {
+        type Arity = Leaf;
+        type ParentData = BoxParentData;
+
+        fn perform_layout(&mut self, _ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size {
+            Size::new(px(100.0), px(50.0))
+        }
+
+        fn paint(&self, _ctx: &mut crate::context::PaintCx<'_, Leaf>) {}
+    }
 
     #[test]
     fn test_render_node_box_creation() {
-        let colored_box = RenderColoredBox::red(100.0, 50.0);
-        let node = RenderNode::new_box(Box::new(colored_box));
+        let node = RenderNode::new_box(Box::new(TestBox));
 
         assert!(node.is_box());
         assert!(!node.is_sliver());
@@ -836,8 +986,7 @@ mod tests {
 
     #[test]
     fn test_render_node_links() {
-        let colored_box = RenderColoredBox::blue(200.0, 100.0);
-        let node = RenderNode::new_box(Box::new(colored_box));
+        let node = RenderNode::new_box(Box::new(TestBox));
 
         // New nodes have no parent
         assert!(node.parent().is_none());
@@ -847,9 +996,8 @@ mod tests {
 
     #[test]
     fn test_render_node_with_parent() {
-        let colored_box = RenderColoredBox::green(50.0, 50.0);
         let parent_id = RenderId::new(1);
-        let node = RenderNode::new_box_with_parent(Box::new(colored_box), parent_id, 1);
+        let node = RenderNode::new_box_with_parent(Box::new(TestBox), parent_id, 1);
 
         assert_eq!(node.parent(), Some(parent_id));
         assert_eq!(node.depth(), 1);
@@ -857,8 +1005,7 @@ mod tests {
 
     #[test]
     fn test_render_node_as_box() {
-        let colored_box = RenderColoredBox::red(100.0, 100.0);
-        let node = RenderNode::new_box(Box::new(colored_box));
+        let node = RenderNode::new_box(Box::new(TestBox));
 
         assert!(node.as_box().is_some());
         assert!(node.as_sliver().is_none());
@@ -866,9 +1013,7 @@ mod tests {
 
     #[test]
     fn test_render_node_state_access() {
-        let colored_box =
-            RenderColoredBox::new([1.0, 0.0, 0.0, 1.0], Size::new(px(100.0), px(50.0)));
-        let node = RenderNode::new_box(Box::new(colored_box));
+        let node = RenderNode::new_box(Box::new(TestBox));
 
         // Check state access through the node
         if let Some(entry) = node.as_box() {
@@ -879,8 +1024,7 @@ mod tests {
 
     #[test]
     fn test_render_node_needs_layout() {
-        let colored_box = RenderColoredBox::red(100.0, 50.0);
-        let node = RenderNode::new_box(Box::new(colored_box));
+        let node = RenderNode::new_box(Box::new(TestBox));
 
         // New nodes need layout by default
         assert!(node.needs_layout());

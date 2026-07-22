@@ -10,8 +10,8 @@ use ui_events::{
     ScrollDelta,
     keyboard::{Code, KeyState, KeyboardEvent, Location},
     pointer::{
-        PointerButton, PointerButtonEvent, PointerEvent, PointerId, PointerInfo, PointerState,
-        PointerType, PointerUpdate,
+        PointerButton, PointerButtonEvent, PointerButtons, PointerEvent, PointerId, PointerInfo,
+        PointerOrientation, PointerState, PointerType, PointerUpdate,
     },
 };
 use winit::event::{ElementState, MouseButton, MouseScrollDelta};
@@ -50,11 +50,11 @@ fn pointer_state(
     PointerState {
         time: event_timestamp_ms(),
         position: PhysicalPosition::new(logical_x, logical_y),
-        buttons: Default::default(),
+        buttons: PointerButtons::default(),
         modifiers,
         count: 1,
         contact_geometry: PhysicalSize::new(1.0, 1.0),
-        orientation: Default::default(),
+        orientation: PointerOrientation::default(),
         pressure,
         tangential_pressure: 0.0,
         scale_factor,
@@ -64,12 +64,13 @@ fn pointer_state(
 /// Convert winit MouseButton to W3C PointerButton
 fn convert_mouse_button(button: MouseButton) -> PointerButton {
     match button {
-        MouseButton::Left => PointerButton::Primary,
+        // `Other` carries a vendor-specific button id ui-events has no slot
+        // for; treat it as the primary button like an unrecognized click.
+        MouseButton::Left | MouseButton::Other(_) => PointerButton::Primary,
         MouseButton::Right => PointerButton::Secondary,
         MouseButton::Middle => PointerButton::Auxiliary,
         MouseButton::Back => PointerButton::X1,
         MouseButton::Forward => PointerButton::X2,
-        MouseButton::Other(_) => PointerButton::Primary,
     }
 }
 
@@ -216,8 +217,9 @@ fn convert_winit_key(key: &winit::keyboard::Key) -> keyboard_types::Key {
             K::Named(nk)
         }
         winit::keyboard::Key::Character(c) => K::Character(c.to_string()),
-        winit::keyboard::Key::Dead(_) => K::Named(keyboard_types::NamedKey::Unidentified),
-        winit::keyboard::Key::Unidentified(_) => K::Named(keyboard_types::NamedKey::Unidentified),
+        winit::keyboard::Key::Dead(_) | winit::keyboard::Key::Unidentified(_) => {
+            K::Named(keyboard_types::NamedKey::Unidentified)
+        }
     }
 }
 
@@ -335,8 +337,30 @@ fn convert_location(key: winit::keyboard::PhysicalKey) -> Location {
             | KeyCode::NumpadDecimal => Location::Numpad,
             _ => Location::Standard,
         },
-        _ => Location::Standard,
+        PhysicalKey::Unidentified(_) => Location::Standard,
     }
+}
+
+/// Convert winit's `Ime` event to [`flui_types::ImeEvent`].
+///
+/// A pure, unit-tested mapping: winit's `Ime` enum is already
+/// [`flui_types::ImeEvent`]'s reference shape (see that type's module doc),
+/// so this is a direct variant-for-variant translation with no coordinate
+/// or encoding conversion.
+pub fn ime_event(event: &winit::event::Ime) -> PlatformInput {
+    use winit::event::Ime;
+
+    let ime_event = match event {
+        Ime::Enabled => flui_types::ImeEvent::Enabled,
+        Ime::Preedit(text, cursor) => flui_types::ImeEvent::Preedit {
+            text: text.clone(),
+            cursor: *cursor,
+        },
+        Ime::Commit(text) => flui_types::ImeEvent::Commit(text.clone()),
+        Ime::Disabled => flui_types::ImeEvent::Disabled,
+    };
+
+    PlatformInput::Ime(ime_event)
 }
 
 /// Convert winit KeyboardInput to W3C KeyboardEvent
@@ -363,4 +387,64 @@ pub fn keyboard_event(
     };
 
     PlatformInput::Keyboard(keyboard_event)
+}
+
+#[cfg(test)]
+mod ime_tests {
+    use flui_types::ImeEvent;
+    use winit::event::Ime;
+
+    use super::ime_event;
+    use crate::traits::PlatformInput;
+
+    /// Unwraps the `PlatformInput::Ime` arm `ime_event` always produces,
+    /// asserting the wrapping variant at the same time so a future change
+    /// that wraps IME events in a different `PlatformInput` variant fails
+    /// loudly here instead of silently changing what these tests check.
+    fn convert(event: &Ime) -> ImeEvent {
+        match ime_event(event) {
+            PlatformInput::Ime(inner) => inner,
+            other => panic!("ime_event must return PlatformInput::Ime, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn enabled_maps_to_enabled() {
+        assert_eq!(convert(&Ime::Enabled), ImeEvent::Enabled);
+    }
+
+    #[test]
+    fn disabled_maps_to_disabled() {
+        assert_eq!(convert(&Ime::Disabled), ImeEvent::Disabled);
+    }
+
+    #[test]
+    fn commit_carries_the_delivered_text() {
+        assert_eq!(
+            convert(&Ime::Commit("hello".to_string())),
+            ImeEvent::Commit("hello".to_string())
+        );
+    }
+
+    #[test]
+    fn preedit_with_a_cursor_position_is_preserved() {
+        assert_eq!(
+            convert(&Ime::Preedit("ni".to_string(), Some((1, 2)))),
+            ImeEvent::Preedit {
+                text: "ni".to_string(),
+                cursor: Some((1, 2)),
+            }
+        );
+    }
+
+    #[test]
+    fn preedit_with_no_cursor_hides_the_caret() {
+        assert_eq!(
+            convert(&Ime::Preedit("ni".to_string(), None)),
+            ImeEvent::Preedit {
+                text: "ni".to_string(),
+                cursor: None,
+            }
+        );
+    }
 }

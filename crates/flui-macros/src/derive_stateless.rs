@@ -56,7 +56,7 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
     // forwards the generics into the `impl View` block verbatim.
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
 
-    // The bound `Self: Clone + Send + Sync + 'static` is what
+    // The bound `Self: Clone + 'static` is what
     // `StatelessView` itself requires. `View` adds `Downcast + DynClone`
     // — both satisfied by `Clone + 'static` via the blanket impls in
     // `downcast-rs` / `dyn-clone`. We do not add extra bounds here; the
@@ -82,13 +82,8 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
         impl #impl_generics ::flui_view::View for #ident #ty_generics
         #augmented_where
         {
-            fn create_element(&self) -> ::std::boxed::Box<dyn ::flui_view::ElementBase> {
-                ::std::boxed::Box::new(
-                    ::flui_view::StatelessElement::<Self>::new(
-                        self,
-                        ::flui_view::StatelessBehavior,
-                    ),
-                )
+            fn create_element(&self) -> ::flui_view::element::ElementKind {
+                ::flui_view::element::ElementKind::stateless(self)
             }
         }
     })

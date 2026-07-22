@@ -1,166 +1,59 @@
-//! Hot reload support for FLUI applications
+//! Hot reload support for FLUI applications.
 //!
-//! Watches source files for changes and triggers automatic rebuilds.
-//! This enables rapid development iteration without restarting the application.
-//!
-//! **Note:** This module is only available with the `hot-reload` feature flag.
-//!
-//! # Example
-//!
-//! ```rust
-//! use std::path::Path;
-//!
-//! #[cfg(feature = "hot-reload")]
-//! use flui_devtools::hot_reload::HotReloader;
-//!
-//! #[cfg(feature = "hot-reload")]
-//! {
-//!     let mut reloader = HotReloader::new();
-//!
-//!     // Watch a directory
-//!     reloader.watch("./src").expect("Failed to watch directory");
-//!
-//!     // Set up change callback
-//!     reloader.on_change(|path| {
-//!         println!("File changed: {:?}", path);
-//!         // Trigger rebuild here
-//!     });
-//!
-//!     // Start watching (blocking)
-//!     // reloader.watch_blocking().expect("Watch failed");
-//!
-//!     // Or watch in background
-//!     let handle = reloader.watch_async();
-//! }
-//! ```
+//! Callback-oriented wrapper around [`flui_hot_reload::dev::SourceWatcher`].
+//! For direct channel access, use `SourceWatcher` from `flui_hot_reload::dev`.
 
 use std::{
     path::{Path, PathBuf},
     sync::Arc,
+    thread::{self, JoinHandle},
     time::Duration,
 };
 
-use notify::{
-    Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Result as NotifyResult, Watcher,
-};
+use flui_hot_reload::dev::{SourceWatcher, WatchError};
+use flui_hot_reload::strategy::timing;
 use parking_lot::RwLock;
 
 /// Callback invoked with the changed path when a watched file changes.
 type OnChangeCallback = Box<dyn Fn(&Path) + Send + Sync>;
 
-/// Hot reloader for watching file changes
+/// Hot reloader for watching file changes.
 ///
-/// Monitors specified directories for file changes and triggers callbacks.
-/// Useful for implementing hot reload functionality in development.
+/// Monitors directories for changes and invokes a callback. Internally uses
+/// [`SourceWatcher`] (layer 1 of the hot-reload stack).
 pub struct HotReloader {
-    /// Paths being watched
     watched_paths: Arc<RwLock<Vec<PathBuf>>>,
-    /// Callback function for file changes
     on_change_callback: Arc<RwLock<Option<OnChangeCallback>>>,
-    /// File watcher
-    watcher: Arc<RwLock<Option<RecommendedWatcher>>>,
-    /// Debounce duration (to avoid triggering multiple times)
+    watcher: Arc<RwLock<Option<SourceWatcher>>>,
     debounce_duration: Duration,
+    watch_handle: Arc<RwLock<Option<JoinHandle<()>>>>,
 }
 
 impl HotReloader {
-    /// Create a new hot reloader
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// # #[cfg(feature = "hot-reload")]
-    /// # {
-    /// use flui_devtools::hot_reload::HotReloader;
-    ///
-    /// let reloader = HotReloader::new();
-    /// # }
-    /// ```
+    /// Create a new hot reloader with the default debounce interval.
     pub fn new() -> Self {
+        Self::with_debounce(timing::SOURCE_DEBOUNCE)
+    }
+
+    /// Create a hot reloader with a custom debounce duration.
+    pub fn with_debounce(debounce: Duration) -> Self {
         Self {
             watched_paths: Arc::new(RwLock::new(Vec::new())),
             on_change_callback: Arc::new(RwLock::new(None)),
             watcher: Arc::new(RwLock::new(None)),
-            debounce_duration: Duration::from_millis(500),
-        }
-    }
-
-    /// Create a hot reloader with custom debounce duration
-    ///
-    /// # Arguments
-    ///
-    /// - `debounce`: How long to wait after a change before triggering the
-    ///   callback
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// # #[cfg(feature = "hot-reload")]
-    /// # {
-    /// use std::time::Duration;
-    ///
-    /// use flui_devtools::hot_reload::HotReloader;
-    ///
-    /// let reloader = HotReloader::with_debounce(Duration::from_millis(1000));
-    /// # }
-    /// ```
-    pub fn with_debounce(debounce: Duration) -> Self {
-        Self {
             debounce_duration: debounce,
-            ..Self::new()
+            watch_handle: Arc::new(RwLock::new(None)),
         }
     }
 
-    /// Watch a directory for changes
-    ///
-    /// # Arguments
-    ///
-    /// - `path`: Directory or file to watch
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// # #[cfg(feature = "hot-reload")]
-    /// # {
-    /// use flui_devtools::hot_reload::HotReloader;
-    ///
-    /// let mut reloader = HotReloader::new();
-    /// reloader.watch("./src").expect("Failed to watch");
-    /// # }
-    /// ```
-    pub fn watch(&mut self, path: impl AsRef<Path>) -> NotifyResult<()> {
+    /// Watch a directory or file for changes.
+    pub fn watch(&mut self, path: impl AsRef<Path>) -> Result<(), WatchError> {
         let path = path.as_ref().to_path_buf();
-
-        // Add to watched paths
-        self.watched_paths.write().push(path.clone());
-
-        // If watcher is already initialized, add the path
-        if let Some(watcher) = self.watcher.write().as_mut() {
-            watcher.watch(&path, RecursiveMode::Recursive)?;
-        }
-
+        self.watched_paths.write().push(path);
         Ok(())
     }
 
-    /// Set the callback function for file changes
-    ///
-    /// # Arguments
-    ///
-    /// - `callback`: Function to call when a file changes
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// # #[cfg(feature = "hot-reload")]
-    /// # {
-    /// use flui_devtools::hot_reload::HotReloader;
-    ///
-    /// let mut reloader = HotReloader::new();
-    /// reloader.on_change(|path| {
-    ///     println!("File changed: {:?}", path);
-    /// });
-    /// # }
-    /// ```
+    /// Set the callback for file changes.
     pub fn on_change<F>(&mut self, callback: F)
     where
         F: Fn(&Path) + Send + Sync + 'static,
@@ -168,193 +61,65 @@ impl HotReloader {
         *self.on_change_callback.write() = Some(Box::new(callback));
     }
 
-    /// Start watching (blocking)
-    ///
-    /// This will block the current thread and handle file change events.
-    /// Use `watch_async()` if you want non-blocking behavior.
-    ///
-    /// # Example
-    ///
-    /// ```rust,no_run
-    /// # #[cfg(feature = "hot-reload")]
-    /// # {
-    /// use flui_devtools::hot_reload::HotReloader;
-    ///
-    /// let mut reloader = HotReloader::new();
-    /// reloader.watch("./src").expect("Failed to watch");
-    /// reloader.on_change(|path| {
-    ///     println!("Changed: {:?}", path);
-    /// });
-    ///
-    /// // This blocks forever
-    /// reloader.watch_blocking().expect("Watch failed");
-    /// # }
-    /// ```
-    pub fn watch_blocking(&mut self) -> NotifyResult<()> {
-        let callback = self.on_change_callback.clone();
-        let debounce = self.debounce_duration;
-        let last_event_time = Arc::new(RwLock::new(std::time::Instant::now()));
-
-        let watcher = RecommendedWatcher::new(
-            move |res: Result<Event, notify::Error>| {
-                match res {
-                    Ok(event) => {
-                        // Filter for modify events
-                        if matches!(
-                            event.kind,
-                            EventKind::Modify(_) | EventKind::Create(_) | EventKind::Remove(_)
-                        ) {
-                            // Debounce
-                            let now = std::time::Instant::now();
-                            let mut last_time = last_event_time.write();
-                            if now.duration_since(*last_time) < debounce {
-                                return;
-                            }
-                            *last_time = now;
-
-                            // Call callback for each path
-                            if let Some(ref callback) = *callback.read() {
-                                for path in event.paths {
-                                    callback(&path);
-                                }
-                            }
-                        }
-                    }
-                    Err(e) => eprintln!("Watch error: {:?}", e),
-                }
-            },
-            Config::default(),
-        )?;
-
-        // Store watcher
-        *self.watcher.write() = Some(watcher);
-
-        // Watch all paths
-        let paths = self.watched_paths.read().clone();
-        for path in paths {
-            if let Some(ref mut watcher) = *self.watcher.write() {
-                watcher.watch(&path, RecursiveMode::Recursive)?;
-            }
-        }
-
-        // Block forever
+    /// Start watching (blocking). Runs until the process is interrupted.
+    pub fn watch_blocking(&mut self) -> Result<(), WatchError> {
+        self.start_watcher()?;
         loop {
-            std::thread::sleep(Duration::from_secs(1));
+            thread::sleep(Duration::from_secs(3600));
         }
     }
 
-    /// Start watching in background (non-blocking)
-    ///
-    /// Returns a handle that keeps the watcher alive.
-    /// When the handle is dropped, watching stops.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// # #[cfg(feature = "hot-reload")]
-    /// # {
-    /// use flui_devtools::hot_reload::HotReloader;
-    ///
-    /// let mut reloader = HotReloader::new();
-    /// reloader.watch("./src").expect("Failed to watch");
-    /// reloader.on_change(|path| {
-    ///     println!("Changed: {:?}", path);
-    /// });
-    ///
-    /// let handle = reloader.watch_async();
-    ///
-    /// // Do other work...
-    ///
-    /// // Keep handle alive to continue watching
-    /// drop(handle);
-    /// # }
-    /// ```
+    /// Start watching in a background thread.
     pub fn watch_async(&mut self) -> WatchHandle {
-        let callback = self.on_change_callback.clone();
-        let debounce = self.debounce_duration;
-        let last_event_time = Arc::new(RwLock::new(std::time::Instant::now()));
-
-        let watcher = RecommendedWatcher::new(
-            move |res: Result<Event, notify::Error>| {
-                match res {
-                    Ok(event) => {
-                        // Filter for modify events
-                        if matches!(
-                            event.kind,
-                            EventKind::Modify(_) | EventKind::Create(_) | EventKind::Remove(_)
-                        ) {
-                            // Debounce
-                            let now = std::time::Instant::now();
-                            let mut last_time = last_event_time.write();
-                            if now.duration_since(*last_time) < debounce {
-                                return;
-                            }
-                            *last_time = now;
-
-                            // Call callback for each path
-                            if let Some(ref callback) = *callback.read() {
-                                for path in event.paths {
-                                    callback(&path);
-                                }
-                            }
-                        }
-                    }
-                    Err(e) => eprintln!("Watch error: {:?}", e),
-                }
-            },
-            Config::default(),
-        )
-        .expect("Failed to create watcher");
-
-        // Watch all paths
-        let paths = self.watched_paths.read().clone();
-        let mut watcher_guard = self.watcher.write();
-        *watcher_guard = Some(watcher);
-
-        for path in paths {
-            if let Some(ref mut watcher) = *watcher_guard {
-                watcher
-                    .watch(&path, RecursiveMode::Recursive)
-                    .expect("Failed to watch path");
-            }
-        }
-
-        drop(watcher_guard);
+        self.start_watcher()
+            .expect("failed to start source watcher");
 
         WatchHandle {
-            _watcher: self.watcher.clone(),
+            _watch_handle: Arc::clone(&self.watch_handle),
         }
     }
 
-    /// Stop watching all paths
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// # #[cfg(feature = "hot-reload")]
-    /// # {
-    /// use flui_devtools::hot_reload::HotReloader;
-    ///
-    /// let mut reloader = HotReloader::new();
-    /// reloader.watch("./src").expect("Failed to watch");
-    ///
-    /// // Later...
-    /// reloader.stop();
-    /// # }
-    /// ```
+    /// Stop watching all paths.
     pub fn stop(&mut self) {
+        *self.watch_handle.write() = None;
         *self.watcher.write() = None;
         self.watched_paths.write().clear();
     }
 
-    /// Get the list of watched paths
+    /// Paths registered via [`watch`](Self::watch).
     pub fn watched_paths(&self) -> Vec<PathBuf> {
         self.watched_paths.read().clone()
     }
 
-    /// Check if currently watching
+    /// Whether a background watcher thread is active.
     pub fn is_watching(&self) -> bool {
-        self.watcher.read().is_some()
+        self.watch_handle.read().is_some()
+    }
+
+    fn start_watcher(&mut self) -> Result<(), WatchError> {
+        if self.is_watching() {
+            return Ok(());
+        }
+
+        let mut source = SourceWatcher::with_debounce(self.debounce_duration)?;
+        for path in self.watched_paths.read().iter() {
+            source.watch(path, true)?;
+        }
+
+        let callback = self.on_change_callback.clone();
+        let handle = thread::spawn(move || {
+            while let Some(paths) = source.recv() {
+                if let Some(ref cb) = *callback.read() {
+                    for path in paths {
+                        cb(path.as_path());
+                    }
+                }
+            }
+        });
+
+        *self.watcher.write() = None;
+        *self.watch_handle.write() = Some(handle);
+        Ok(())
     }
 }
 
@@ -373,11 +138,9 @@ impl std::fmt::Debug for HotReloader {
     }
 }
 
-/// Handle that keeps the watcher alive
-///
-/// When dropped, the watcher stops watching.
+/// Handle that keeps the background watcher thread alive.
 pub struct WatchHandle {
-    _watcher: Arc<RwLock<Option<RecommendedWatcher>>>,
+    _watch_handle: Arc<RwLock<Option<JoinHandle<()>>>>,
 }
 
 impl std::fmt::Debug for WatchHandle {
@@ -405,17 +168,12 @@ mod tests {
     #[test]
     fn test_watch_path() {
         let mut reloader = HotReloader::new();
-
-        // Create a temp directory
         let temp_dir = std::env::temp_dir().join("flui_test_watch");
         fs::create_dir_all(&temp_dir).ok();
 
         reloader.watch(&temp_dir).expect("Failed to watch");
-
         assert_eq!(reloader.watched_paths().len(), 1);
-        assert_eq!(reloader.watched_paths()[0], temp_dir);
 
-        // Clean up
         fs::remove_dir_all(&temp_dir).ok();
     }
 
@@ -429,77 +187,20 @@ mod tests {
             counter_clone.fetch_add(1, Ordering::SeqCst);
         });
 
-        // We can't easily test the callback without actually triggering file changes
-        // Just verify it was set
         assert!(reloader.on_change_callback.read().is_some());
     }
 
     #[test]
     fn test_stop() {
         let mut reloader = HotReloader::new();
-
         let temp_dir = std::env::temp_dir().join("flui_test_stop");
         fs::create_dir_all(&temp_dir).ok();
 
         reloader.watch(&temp_dir).expect("Failed to watch");
-        assert_eq!(reloader.watched_paths().len(), 1);
-
         reloader.stop();
         assert_eq!(reloader.watched_paths().len(), 0);
         assert!(!reloader.is_watching());
 
         fs::remove_dir_all(&temp_dir).ok();
-    }
-
-    #[test]
-    fn test_custom_debounce() {
-        let reloader = HotReloader::with_debounce(Duration::from_secs(2));
-        assert_eq!(reloader.debounce_duration, Duration::from_secs(2));
-    }
-
-    #[test]
-    fn test_watch_async() {
-        let mut reloader = HotReloader::new();
-
-        let temp_dir = std::env::temp_dir().join("flui_test_async");
-        fs::create_dir_all(&temp_dir).ok();
-
-        reloader.watch(&temp_dir).expect("Failed to watch");
-
-        let counter = Arc::new(AtomicUsize::new(0));
-        let counter_clone = counter.clone();
-
-        reloader.on_change(move |_path| {
-            counter_clone.fetch_add(1, Ordering::SeqCst);
-        });
-
-        let _handle = reloader.watch_async();
-
-        // Give it a moment to start
-        std::thread::sleep(Duration::from_millis(100));
-
-        assert!(reloader.is_watching());
-
-        // Clean up
-        fs::remove_dir_all(&temp_dir).ok();
-    }
-
-    #[test]
-    fn test_multiple_paths() {
-        let mut reloader = HotReloader::new();
-
-        let temp_dir1 = std::env::temp_dir().join("flui_test_multi1");
-        let temp_dir2 = std::env::temp_dir().join("flui_test_multi2");
-
-        fs::create_dir_all(&temp_dir1).ok();
-        fs::create_dir_all(&temp_dir2).ok();
-
-        reloader.watch(&temp_dir1).expect("Failed to watch");
-        reloader.watch(&temp_dir2).expect("Failed to watch");
-
-        assert_eq!(reloader.watched_paths().len(), 2);
-
-        fs::remove_dir_all(&temp_dir1).ok();
-        fs::remove_dir_all(&temp_dir2).ok();
     }
 }

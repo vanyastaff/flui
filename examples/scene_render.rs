@@ -29,6 +29,11 @@
 //!
 //! Run with: cargo run --example scene_render
 
+// Target-level lint relaxations — crate-level allows don't reach this
+// target. `unwrap` in test/example code: a panic IS the failure report
+// (docs/PANIC-POLICY.md); style items here are ship-wave debt.
+#![allow(clippy::unwrap_used)]
+
 use std::sync::{Arc, Mutex};
 
 use flui_engine::wgpu::Renderer;
@@ -215,7 +220,7 @@ fn main() {
         tracing::info!("Scene render pipeline active — set FLUI_SCENE_PLUGIN for hot-reload");
     }
 
-    platform.run(Box::new(move || {
+    platform.run(Box::new(move |_platform| {
         tracing::info!("Platform ready");
         // Keep resources alive via closure capture
         let _window = &window;

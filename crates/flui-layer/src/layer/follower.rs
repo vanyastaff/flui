@@ -5,11 +5,13 @@
 //! anchor on itself, and the layer's runtime offset is derived from the two
 //! anchors at composite time.
 //!
-//! Anchors use the workspace-canonical [`Alignment`] coordinate system from
-//! `flui-types::painting::alignment` — `(-1, -1)` = top-left, `(0, 0)` =
-//! center, `(+1, +1)` = bottom-right. The pre-cycle representation used
-//! `Offset<Pixels>` in a 0..1 visual-fraction range; the U7 migration unifies
-//! anchor expression with the rest of the painting API and matches Flutter
+//! Anchors use the workspace-canonical [`Alignment`] coordinate system —
+//! `flui_types::painting::Alignment` re-exports the canonical
+//! `flui_types::layout::Alignment` — `(-1, -1)` = top-left, `(0, 0)` =
+//! center, `(+1, +1)` = bottom-right. The earlier representation used
+//! `Offset<Pixels>` in a 0..1 visual-fraction range; anchors were migrated
+//! to `Alignment` to unify anchor expression with the rest of the painting
+//! API and to match Flutter's
 //! [`painting/alignment.dart`](https://api.flutter.dev/flutter/painting/Alignment-class.html).
 
 use flui_types::{
@@ -69,13 +71,20 @@ pub struct FollowerLayer {
 
     /// Alignment point on the follower rectangle.
     follower_anchor: Alignment,
+
+    /// This follower's own laid-out size, published at paint time the same
+    /// way [`LeaderLayer::size`](super::leader::LeaderLayer::size) is —
+    /// required by [`Self::calculate_offset`]'s `follower_size` parameter
+    /// whenever `follower_anchor` is not [`Alignment::TOP_LEFT`]. Defaults
+    /// to [`Size::ZERO`] until the render object publishes its real size.
+    size: Size<Pixels>,
 }
 
 impl FollowerLayer {
     /// Creates a new follower layer linked to a leader.
     ///
     /// Defaults: top-left anchors on both leader and follower, zero target
-    /// offset, `show_when_unlinked = true`.
+    /// offset, `show_when_unlinked = true`, zero size (see [`Self::with_size`]).
     #[inline]
     pub fn new(link: LayerLink) -> Self {
         Self {
@@ -84,6 +93,7 @@ impl FollowerLayer {
             show_when_unlinked: true,
             leader_anchor: Alignment::TOP_LEFT,
             follower_anchor: Alignment::TOP_LEFT,
+            size: Size::ZERO,
         }
     }
 
@@ -116,6 +126,15 @@ impl FollowerLayer {
         self
     }
 
+    /// Sets this follower's own laid-out size (published by
+    /// `RenderFollowerLayer::paint` from its `PaintCx::size()`, mirroring
+    /// how `RenderLeaderLayer` publishes its own size onto [`LeaderLayer`](super::leader::LeaderLayer)).
+    #[inline]
+    pub fn with_size(mut self, size: Size<Pixels>) -> Self {
+        self.size = size;
+        self
+    }
+
     /// Returns the layer link.
     #[inline]
     pub fn link(&self) -> LayerLink {
@@ -144,6 +163,18 @@ impl FollowerLayer {
     #[inline]
     pub fn follower_anchor(&self) -> Alignment {
         self.follower_anchor
+    }
+
+    /// Returns this follower's own laid-out size.
+    #[inline]
+    pub fn size(&self) -> Size<Pixels> {
+        self.size
+    }
+
+    /// Sets this follower's own laid-out size.
+    #[inline]
+    pub fn set_size(&mut self, size: Size<Pixels>) {
+        self.size = size;
     }
 
     /// Sets the target offset.
@@ -269,6 +300,7 @@ mod tests {
         assert!(layer.show_when_unlinked());
         assert_eq!(layer.leader_anchor(), Alignment::TOP_LEFT);
         assert_eq!(layer.follower_anchor(), Alignment::TOP_LEFT);
+        assert_eq!(layer.size(), Size::ZERO);
     }
 
     #[test]
@@ -278,12 +310,24 @@ mod tests {
             .with_target_offset(Offset::new(px(10.0), px(20.0)))
             .with_show_when_unlinked(false)
             .with_leader_anchor(Alignment::BOTTOM_CENTER)
-            .with_follower_anchor(Alignment::TOP_CENTER);
+            .with_follower_anchor(Alignment::TOP_CENTER)
+            .with_size(Size::new(px(80.0), px(40.0)));
 
         assert_eq!(layer.target_offset(), Offset::new(px(10.0), px(20.0)));
         assert!(!layer.show_when_unlinked());
         assert_eq!(layer.leader_anchor(), Alignment::BOTTOM_CENTER);
         assert_eq!(layer.follower_anchor(), Alignment::TOP_CENTER);
+        assert_eq!(layer.size(), Size::new(px(80.0), px(40.0)));
+    }
+
+    #[test]
+    fn follower_layer_set_size() {
+        let link = LayerLink::new();
+        let mut layer = FollowerLayer::new(link);
+        assert_eq!(layer.size(), Size::ZERO);
+
+        layer.set_size(Size::new(px(12.0), px(34.0)));
+        assert_eq!(layer.size(), Size::new(px(12.0), px(34.0)));
     }
 
     #[test]

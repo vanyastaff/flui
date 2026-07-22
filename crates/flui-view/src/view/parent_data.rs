@@ -55,12 +55,7 @@
 //! impl_parent_data_view!(Positioned);
 //! ```
 
-use std::any::TypeId;
-
-use flui_foundation::ElementId;
-
-use super::view::{ElementBase, View};
-use crate::element::Lifecycle;
+use super::view::View;
 
 /// Marker trait for types that can be used as parent-data configuration.
 ///
@@ -71,11 +66,10 @@ use crate::element::Lifecycle;
 ///
 /// # Why the name
 ///
-/// Cycle 4 R-11 renamed this trait from `ParentData` to
-/// `ParentDataConfig` so it no longer collides with
-/// `flui_rendering::ParentData` (the actual render-object storage
-/// trait carrying `Any` + downcasting). The two traits serve
-/// different concerns:
+/// This trait is named `ParentDataConfig` rather than `ParentData` so it
+/// does not collide with `flui_rendering::ParentData` (the actual
+/// render-object storage trait carrying `Any` + downcasting). The two
+/// traits serve different concerns:
 ///
 /// - `flui_view::ParentDataConfig` (this trait): marker for the
 ///   widget-side **configuration value**, what a `ParentDataView`
@@ -83,15 +77,19 @@ use crate::element::Lifecycle;
 /// - `flui_rendering::ParentData`: the render-side **storage trait**
 ///   that a `RenderObject` carries.
 ///
-/// Same-name trait collision pre-cycle forced every workspace
-/// consumer importing both crates to fully-qualify or alias one of
-/// them. The rename matches Flutter's `ParentDataWidget` naming:
-/// the widget **configures** the parent-data; it is not itself the
-/// parent-data.
-pub trait ParentDataConfig: Clone + Default + Send + Sync + 'static {}
+/// A same-name trait would force every workspace consumer importing both
+/// crates to fully-qualify or alias one of them. The distinct name
+/// matches Flutter's `ParentDataWidget` naming: the widget **configures**
+/// the parent-data; it is not itself the parent-data.
+pub trait ParentDataConfig: flui_rendering::parent_data::ParentData + Clone + Default {}
 
-// Implement for common types
-impl ParentDataConfig for () {}
+/// Blanket: any concrete `flui-rendering` parent-data type
+/// (`FlexParentData`, `StackParentData`, …) that is `Clone + Default` is usable
+/// as a [`ParentDataView::ParentData`], so `create_parent_data()` returns the
+/// exact type written onto the render node — there is no widget-side
+/// parent-data type to convert from. (`ParentData` already requires
+/// `Send + Sync + 'static` for arena storage.)
+impl<T: flui_rendering::parent_data::ParentData + Clone + Default> ParentDataConfig for T {}
 
 /// A View that provides parent data to its child RenderObject.
 ///
@@ -117,12 +115,12 @@ impl ParentDataConfig for () {}
 /// | Positioned | Stack | left, top, right, bottom, width, height |
 /// | Flexible | Flex | flex, fit |
 /// | TableCell | Table | row, column span |
-pub trait ParentDataView: Send + Sync + 'static + Sized {
+pub trait ParentDataView: Clone + 'static + Sized {
     /// The type of parent data this View provides.
     ///
-    /// Cycle 4 R-11: bound is `ParentDataConfig` (was `ParentData`,
-    /// renamed to disambiguate from `flui_rendering::ParentData`).
-    /// The associated-type name `ParentData` is kept because no
+    /// The trait bound is `ParentDataConfig` (rather than `ParentData`,
+    /// which was renamed to disambiguate from `flui_rendering::ParentData`).
+    /// The associated-type name `ParentData` is kept as-is because no
     /// cross-crate collision can occur on associated-type names.
     type ParentData: ParentDataConfig;
 
@@ -157,205 +155,71 @@ pub trait ParentDataView: Send + Sync + 'static + Sized {
 macro_rules! impl_parent_data_view {
     ($ty:ty) => {
         impl $crate::View for $ty {
-            fn create_element(&self) -> Box<dyn $crate::ElementBase> {
-                Box::new($crate::ParentDataElement::new(self))
+            fn create_element(&self) -> $crate::element::ElementKind {
+                $crate::element::ElementKind::parent_data(self)
             }
         }
     };
 }
 
-// ============================================================================
-// ParentDataElement
-// ============================================================================
-
-/// Element for ParentDataViews.
-///
-/// Manages the lifecycle of a ParentDataView and applies parent data
-/// to the child's RenderObject.
-pub struct ParentDataElement<V: ParentDataView> {
-    /// The current View configuration.
-    view: V,
-    /// Current lifecycle state.
-    lifecycle: Lifecycle,
-    /// Depth in tree.
-    depth: usize,
-    /// Whether we need to rebuild.
-    dirty: bool,
-    /// Cached parent data.
-    parent_data: Option<V::ParentData>,
-}
-
-impl<V: ParentDataView> ParentDataElement<V>
-where
-    V: Clone,
-{
-    /// Create a new ParentDataElement for the given View.
-    pub fn new(view: &V) -> Self {
-        Self {
-            view: view.clone(),
-            lifecycle: Lifecycle::Initial,
-            depth: 0,
-            dirty: true,
-            parent_data: None,
-        }
-    }
-
-    /// Get the current parent data.
-    pub fn parent_data(&self) -> Option<&V::ParentData> {
-        self.parent_data.as_ref()
-    }
-
-    /// Get the parent data type ID (for debug purposes).
-    pub fn parent_data_type_id(&self) -> TypeId {
-        TypeId::of::<V::ParentData>()
-    }
-
-    /// Apply parent data to the child's RenderObject.
-    ///
-    /// This walks down the element tree to find the first RenderElement
-    /// and applies the parent data to its RenderObject.
-    fn apply_parent_data_to_child(&mut self) {
-        let data = self.view.create_parent_data();
-        self.parent_data = Some(data);
-        // In a full implementation, we would find the child's RenderObject
-        // and set its parentData field
-    }
-}
-
-impl<V: ParentDataView + Clone> std::fmt::Debug for ParentDataElement<V> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ParentDataElement")
-            .field("lifecycle", &self.lifecycle)
-            .field("depth", &self.depth)
-            .field("dirty", &self.dirty)
-            .field("parent_data_type", &std::any::type_name::<V::ParentData>())
-            .finish_non_exhaustive()
-    }
-}
-
-impl<V: ParentDataView + Clone> ElementBase for ParentDataElement<V> {
-    fn view_type_id(&self) -> TypeId {
-        TypeId::of::<V>()
-    }
-
-    fn lifecycle(&self) -> Lifecycle {
-        self.lifecycle
-    }
-
-    fn update(&mut self, new_view: &dyn View, _owner: &mut crate::ElementOwner<'_>) {
-        // Use View::as_any() for safe downcasting
-        if let Some(v) = new_view.as_any().downcast_ref::<V>() {
-            self.view = v.clone();
-            self.dirty = true;
-            // Apply updated parent data
-            self.apply_parent_data_to_child();
-        }
-    }
-
-    fn mark_needs_build(&mut self) {
-        self.dirty = true;
-    }
-
-    fn is_dirty(&self) -> bool {
-        // `build_into_views` gates on `self.dirty`; the build_scope dirty
-        // guard reads `is_dirty()`. Without this override the trait default
-        // (`false`) would make the guard skip a genuinely-dirty ParentData
-        // element before its build ever ran, so its wrapped child would
-        // never reconcile.
-        self.dirty
-    }
-
-    fn build_into_views(&mut self, _owner: &mut crate::ElementOwner<'_>) -> Vec<Box<dyn View>> {
-        if !self.dirty || !self.lifecycle.can_build() {
-            return Vec::new();
-        }
-
-        // Apply (cache) parent data when building.
-        self.apply_parent_data_to_child();
-        self.dirty = false;
-
-        // ParentDataView is single-child proxy-style: return the wrapped
-        // child view for the slab id-reconciler to reconcile.
-        vec![dyn_clone::clone_box(self.view.child())]
-    }
-
-    fn mount(
-        &mut self,
-        _parent: Option<ElementId>,
-        _slot: usize,
-        _owner: &mut crate::ElementOwner<'_>,
-    ) {
-        self.lifecycle = Lifecycle::Active;
-        self.dirty = true;
-    }
-
-    fn deactivate(&mut self) {
-        // E3: the child is a slab-resident node; the slab cascades
-        // activation / deactivation, so no box-child recursion here.
-        self.lifecycle = Lifecycle::Inactive;
-    }
-
-    fn activate(&mut self) {
-        self.lifecycle = Lifecycle::Active;
-    }
-
-    fn unmount(&mut self, _owner: &mut crate::ElementOwner<'_>) {
-        self.lifecycle = Lifecycle::Defunct;
-        self.parent_data = None;
-    }
-
-    fn depth(&self) -> usize {
-        self.depth
-    }
-}
+// The element for `ParentDataView`s is the unified
+// `Element<V, Single, ParentDataBehavior>` — see the `ParentDataElement<V>`
+// type alias in `element/mod.rs`. The behavior is a transparent proxy
+// (`ParentDataBehavior`), and the parent-data it contributes is written onto
+// the child render node at the `ElementTree` insert/update seams
+// (`apply_ancestor_parent_data`). The former bespoke, owner-blind element with
+// its stubbed `apply_parent_data_to_child` was deleted in the 2026-06 cutover.
 
 #[cfg(test)]
 mod tests {
+    use flui_objects::RenderSizedBox;
+    use flui_rendering::protocol::BoxProtocol;
+
     use super::*;
 
-    // Test parent data type
-    #[derive(Clone, Default)]
+    // A real render-side parent-data type — satisfies the `ParentDataConfig`
+    // blanket via `flui_rendering::parent_data::ParentData`, so it is the exact
+    // type written onto the child render node. (No widget-side conversion.)
+    #[derive(Debug, Clone, Default)]
     struct TestParentData {
         flex: f64,
         fit: bool,
     }
 
-    impl ParentDataConfig for TestParentData {}
+    impl flui_rendering::parent_data::ParentData for TestParentData {}
 
     // A dummy child view
     #[derive(Clone)]
     struct DummyChild;
 
+    impl crate::RenderView for DummyChild {
+        type Protocol = BoxProtocol;
+        type RenderObject = RenderSizedBox;
+
+        fn create_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+        ) -> Self::RenderObject {
+            RenderSizedBox::shrink()
+        }
+
+        fn update_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+            _render_object: &mut Self::RenderObject,
+        ) {
+        }
+    }
+
     impl View for DummyChild {
-        fn create_element(&self) -> Box<dyn ElementBase> {
-            Box::new(DummyChildElement)
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::render_variable(self)
         }
     }
 
-    struct DummyChildElement;
-
-    impl ElementBase for DummyChildElement {
-        fn view_type_id(&self) -> TypeId {
-            TypeId::of::<DummyChild>()
-        }
-        fn lifecycle(&self) -> Lifecycle {
-            Lifecycle::Active
-        }
-        fn update(&mut self, _: &dyn View, _: &mut crate::ElementOwner<'_>) {}
-        fn mark_needs_build(&mut self) {}
-        fn build_into_views(&mut self, _: &mut crate::ElementOwner<'_>) -> Vec<Box<dyn View>> {
-            Vec::new()
-        }
-        fn mount(&mut self, _: Option<ElementId>, _: usize, _: &mut crate::ElementOwner<'_>) {}
-        fn deactivate(&mut self) {}
-        fn activate(&mut self) {}
-        fn unmount(&mut self, _: &mut crate::ElementOwner<'_>) {}
-        fn depth(&self) -> usize {
-            0
-        }
-    }
-
-    /// A test parent data view (like Flexible)
+    /// A test parent data view (like `Flexible`). Drives the unified
+    /// `ParentDataElement<V>` (`Element<V, Single, ParentDataBehavior>`) via the
+    /// `impl_parent_data_view!` macro — no bespoke element type.
     #[derive(Clone)]
     struct TestFlexible {
         flex: f64,
@@ -378,88 +242,39 @@ mod tests {
         }
     }
 
-    impl View for TestFlexible {
-        fn create_element(&self) -> Box<dyn ElementBase> {
-            Box::new(ParentDataElement::new(self))
-        }
-    }
+    impl_parent_data_view!(TestFlexible);
 
+    /// The macro-built View resolves to the unified `ParentDataBehavior`
+    /// element, whose `parent_data_config()` surfaces the view's configured
+    /// parent data (the seam `ElementTree` writes onto the child render node).
     #[test]
-    fn test_parent_data_element_creation() {
+    fn behavior_surfaces_configured_parent_data() {
         let view = TestFlexible {
             flex: 2.0,
             fit: true,
             child: DummyChild,
         };
 
-        let element = ParentDataElement::new(&view);
-        assert_eq!(element.lifecycle(), Lifecycle::Initial);
-        assert!(element.parent_data().is_none());
-    }
-
-    #[test]
-    fn test_parent_data_element_mount_and_build() {
-        let view = TestFlexible {
-            flex: 2.0,
-            fit: true,
-            child: DummyChild,
-        };
-
-        let mut element = ParentDataElement::new(&view);
-        let mut owner = crate::BuildOwner::new();
-        {
-            let mut handle = owner.element_owner_mut();
-            element.mount(None, 0, &mut handle);
-            let _ = element.build_into_views(&mut handle);
-        }
-
-        assert_eq!(element.lifecycle(), Lifecycle::Active);
-        assert!(element.parent_data().is_some());
-
-        let data = element.parent_data().unwrap();
+        let element = view.create_element();
+        let config = element
+            .element()
+            .parent_data_config()
+            .expect("ParentDataBehavior must surface a parent-data config");
+        let data = config
+            .as_any()
+            .downcast_ref::<TestParentData>() // PORT-CHECK-OK-DOWNCAST: test asserts the concrete config type round-trips
+            .expect("the surfaced config is the view's concrete ParentData type");
         assert!((data.flex - 2.0).abs() < f64::EPSILON);
-        assert!(data.fit);
-    }
-
-    #[test]
-    fn test_parent_data_element_update() {
-        let view = TestFlexible {
-            flex: 1.0,
-            fit: false,
-            child: DummyChild,
-        };
-
-        let mut element = ParentDataElement::new(&view);
-        let mut owner = crate::BuildOwner::new();
-        {
-            let mut handle = owner.element_owner_mut();
-            element.mount(None, 0, &mut handle);
-            let _ = element.build_into_views(&mut handle);
-        }
-
-        let new_view = TestFlexible {
-            flex: 3.0,
-            fit: true,
-            child: DummyChild,
-        };
-
-        element.update(&new_view, &mut owner.element_owner_mut());
-
-        let data = element.parent_data().unwrap();
-        assert!((data.flex - 3.0).abs() < f64::EPSILON);
         assert!(data.fit);
     }
 
     /// E3 regression: a ParentData element scheduled in the tree actually
     /// reconciles its wrapped child through `build_scope`.
     ///
-    /// `build_into_views` gates on `self.dirty`, but `build_scope`'s dirty
-    /// guard reads `is_dirty()`. Before the `is_dirty()` override existed,
-    /// the trait default (`false`) made the guard skip a genuinely-dirty
-    /// ParentData element before its build ran, so its child never
-    /// reconciled. `test_parent_data_element_mount_and_build` does not
-    /// catch this — it calls `build_into_views` directly, bypassing the
-    /// guard.
+    /// `ParentDataBehavior` is a proxy-style behavior whose `build_into_views`
+    /// returns the wrapped child for the id-reconciler. `build_scope`'s dirty
+    /// guard reads `is_dirty()`; a freshly-mounted element reports dirty, so
+    /// the guard must let it build and hand its child off.
     #[test]
     fn regression_parent_data_reconciles_child_through_build_scope() {
         let view = TestFlexible {
@@ -495,21 +310,6 @@ mod tests {
         assert!(
             !tree.get(root).unwrap().element().is_dirty(),
             "is_dirty() is false after the build hands the child off",
-        );
-    }
-
-    #[test]
-    fn test_parent_data_type_id() {
-        let view = TestFlexible {
-            flex: 1.0,
-            fit: false,
-            child: DummyChild,
-        };
-
-        let element = ParentDataElement::new(&view);
-        assert_eq!(
-            element.parent_data_type_id(),
-            TypeId::of::<TestParentData>()
         );
     }
 }

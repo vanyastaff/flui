@@ -37,7 +37,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Install Rust stable + rustfmt
         uses: dtolnay/rust-toolchain@stable
@@ -49,8 +49,8 @@ jobs:
         with:
           # Pin versions — unpinned tools surface unrelated breakage on
           # release day. Bump deliberately. `ripgrep` is required by
-          # scripts/port-check.sh (the 7 institutional refusal triggers
-          # all run through `rg`).
+          # scripts/port-check.sh (the 22 refusal triggers + FR-033 all
+          # run through `rg`).
           tool: typos-cli@1.28,taplo-cli@0.10,ripgrep@14
 
       - name: cargo fmt --check
@@ -62,7 +62,10 @@ jobs:
       - name: typos
         run: typos
 
-      - name: scripts/port-check.sh (7 institutional refusal triggers)
+      - name: workspace inventory drift check
+        run: bash scripts/check-workspace-inventory.sh
+
+      - name: scripts/port-check.sh (22 refusal triggers + FR-033)
         run: bash scripts/port-check.sh -v
 
       # Verify the committed diagnostics JSON Schema matches what schemars
@@ -86,7 +89,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Install Rust stable + clippy
         uses: dtolnay/rust-toolchain@stable
@@ -100,6 +103,15 @@ jobs:
 
       - name: cargo clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
+
+      # Compile (not run) the feature-gated test module so the IR-purity witness
+      # (`_DRAW_SEGMENT_IS_CLONE` / `DrawSegment: Clone`) and the deterministic-replay
+      # tests are machine-checked in CI even though they require a GPU to execute.
+      # A future field that introduces a non-Clone GPU handle would fail here.
+      # `--tests` ensures the `#[cfg(all(test, feature = "enable-wgpu-tests"))]` block
+      # is compiled; `--no-run` (via clippy) is implicit — clippy only type-checks.
+      - name: cargo clippy flui-engine --features enable-wgpu-tests (IR-purity witness)
+        run: cargo clippy -p flui-engine --all-targets --features enable-wgpu-tests -- -D warnings
 
   # ─────────────────────────────────────────────────────────────────────────
   # test — workspace build + nextest. Matrix: Linux + Windows.
@@ -120,8 +132,34 @@ jobs:
         os: [ubuntu-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 40
+    # Complements the `Free disk space` reclaim below by shrinking the build
+    # itself. DWARF is the single largest contributor to debug-target size; the
+    # full workspace (~28 crates + the wgpu/glyphon/lyon/naga stack + dev-deps)
+    # built with full debuginfo is what crept toward the runner's disk ceiling
+    # (PRs #236/#242). `line-tables-only` drops the bulk of DWARF while keeping
+    # file:line in panic backtraces, so CI failures stay diagnosable. Scoped to
+    # this job's env so local `cargo test` debuginfo is unaffected.
+    env:
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+      CARGO_PROFILE_TEST_DEBUG: line-tables-only
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
+
+      # The full-workspace debug build of all lib+test targets (incl. the wgpu/
+      # glyphon/lyon/naga GPU stack and criterion/proptest/insta/trybuild dev-
+      # deps, with debug-assertions + debuginfo) exhausted the ~14 GB free on the
+      # default ubuntu runner — `rustc-LLVM ERROR: IO failure on output stream:
+      # No space left on device` mid-build (PRs #236/#242). Reclaim ~25 GB of
+      # preinstalled bloat we don't use BEFORE building. Linux-only guard so the
+      # step is a no-op if Windows/macOS rejoin the matrix.
+      - name: Free disk space (ubuntu)
+        if: runner.os == 'Linux'
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          sudo docker image prune --all --force || true
+          df -h /
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -142,14 +180,115 @@ jobs:
       - name: cargo build --workspace
         run: cargo build --workspace --all-targets
 
-      # `--test-threads=1` guards the documented pre-existing flui-app
-      # singleton-state flake (CLAUDE.md). flui-platform tests are excluded
-      # until the spawned STATUS_HEAP_CORRUPTION investigation lands a fix.
-      - name: cargo nextest run (--lib, --test-threads 1)
+      # Confirm the heavy compile (disk peak) left headroom — the reclaim above
+      # measures only around itself, not after the build. If this trends toward
+      # 0, raise the runner or trim further targets.
+      - name: Disk usage after build (ubuntu)
+        if: runner.os == 'Linux'
+        run: df -h /
+
+      # Runs BOTH unit (--lib) and integration (tests/) targets — the
+      # integration dirs carry the Core.0/Core.2 exit-gate suites
+      # (flui-rendering 37 files, flui-widgets 51, flui-view 26) and were
+      # previously never executed in CI (the invocation was `--lib` only).
+      # Runs fully parallel: nextest gives each test its own process, so the
+      # flui-app process-global binding cannot leak across tests, and the
+      # in-process semantics-flag race is serialized by `SEMANTICS_TEST_LOCK`
+      # in flui-app. flui-platform tests are excluded until the spawned
+      # STATUS_HEAP_CORRUPTION investigation lands a fix.
+      - name: cargo nextest run (lib + integration)
         run: >
           cargo nextest run
           --workspace
           --exclude flui-platform
+          --no-fail-fast
+
+      # flui-assets and flui-widgets both default to `default = []`, so the
+      # workspace-default run above never compiles their `images`/`network`
+      # decode-and-cache paths or the Image widget's own file-decode test —
+      # exactly the gap that let the Business.1 flui-assets↔Image
+      # verification tests go CI-dead once. Explicit feature-gated run, same
+      # precedent as `cargo clippy -p flui-engine --features
+      # enable-wgpu-tests` above.
+      #
+      # `asset-images`/`network-images` extend the same gap to the
+      # flui-assets↔Image ASYNC bridge (`AssetImage`/`NetworkImage`,
+      # `image::decode_cache`): those tests only compile under their own
+      # feature, so they need their own explicit run too, or they are as
+      # CI-dead as the sync path was before this block existed.
+      - name: cargo nextest run (flui-assets full, flui-widgets images)
+        run: |
+          cargo nextest run -p flui-assets --features full
+          cargo nextest run -p flui-widgets --features images --test image
+          cargo nextest run -p flui-widgets --features asset-images --lib
+          cargo nextest run -p flui-widgets --features asset-images --test image_async
+          cargo nextest run -p flui-widgets --features network-images --test image_network
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # gpu-test (PILOT) — actually RUN the `enable-wgpu-tests` readback/oracle
+  # suite, which the `clippy` job above only TYPE-CHECKS. Without this, a
+  # WGSL/blend-state/color-pipeline regression merges silently green — the #1
+  # risk in two independent engine audits (the oracle infra exists and is
+  # non-vacuous, but is operationally inert in CI today).
+  #
+  # windows-latest → WARP (Microsoft's software DX12 rasterizer). The readback
+  # harness is authored and executed locally on DX12, so WARP is the SAME
+  # backend (no Vulkan/lavapipe feature-gap or precision divergence). GitHub
+  # windows runners expose no hardware GPU, so `request_adapter`
+  # (force_fallback_adapter:false) returns WARP with no harness change.
+  #
+  # The pilot (a 5-test representative subset) PROVED the approach on CI: WARP is
+  # selected on the hardware-GPU-less windows runner with no harness change, the
+  # ±LSB oracle tolerances HOLD under software rasterization (blur_oracle ±3 LSB
+  # passed), and the run is fast (nextest ~16 s; the ~8 min is the wgpu-stack
+  # build). So this now runs the FULL `enable-wgpu-tests` suite (~440 tests).
+  #
+  # MERGE-BLOCKING as of 2026-07: the full suite showed 3 consecutive green
+  # runs on main (CI #583/#586/#595 — job wall-time 5m/7m/15m, nextest step
+  # 4m/5m/13m) against the 60-minute budget, satisfying the promotion
+  # criterion recorded here during the pilot. Verified only by THIS
+  # workflow's run — the dev machine is hardware DX12, so the WARP software
+  # path cannot be exercised locally.
+  # ─────────────────────────────────────────────────────────────────────────
+  gpu-test:
+    name: gpu-test (wgpu readback, WARP)
+    needs: checks
+    runs-on: windows-latest
+    # Generous headroom: ~440 readback tests on a software rasterizer, each
+    # creating its own wgpu::Device, plus the cold wgpu-stack build. The first
+    # full run measures the real figure; tighten or shard (nextest partition)
+    # afterward if needed.
+    timeout-minutes: 60
+    env:
+      CARGO_PROFILE_TEST_DEBUG: line-tables-only
+      # Surface the wgpu adapter selection in the log so the run confirms WARP
+      # was enumerated (not a silently-missing-adapter skip).
+      RUST_LOG: wgpu_hal=info,wgpu_core=info
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry + target
+        uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.event_name != 'merge_group' }}
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@0.9
+
+      # Full enable-wgpu-tests suite. `--test-threads 1`: each test builds its own
+      # wgpu::Device; WARP serializes command submission through one software
+      # driver, so parallel submission can saturate it. The job-level
+      # `timeout-minutes` is the hung-test backstop.
+      - name: cargo nextest run (flui-engine GPU readback suite, WARP)
+        run: >
+          cargo nextest run
+          -p flui-engine
+          --features enable-wgpu-tests
           --lib
           --no-fail-fast
           --test-threads 1
@@ -171,7 +310,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -201,7 +340,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -213,3 +352,125 @@ jobs:
 
       - name: cargo doc --no-deps
         run: cargo doc --workspace --no-deps --document-private-items
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # deny — cargo-deny over advisories/bans/licenses/sources. deny.toml has
+  # been maintained in-repo since the 0.19 schema migration but was never
+  # executed in CI; the first wired run surfaced 4 real advisories (anyhow
+  # unsound downcast_mut, crossbeam-epoch deref, quick-xml DoS pair) — three
+  # fixed by lockfile bumps, the transitive rest carry documented ignores.
+  # Merge-blocking: it was green at wiring time and every ignore is argued.
+  # ─────────────────────────────────────────────────────────────────────────
+  deny:
+    name: deny (advisories, bans, licenses, sources)
+    needs: checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny@0.19
+
+      - name: cargo deny check
+        run: cargo deny check
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # doc-test — run every rustdoc example as a test. nextest does NOT execute
+  # doctests (cargo-nextest#16), so the `test` job above never covers them;
+  # without this job the 700+ doc code fences in the workspace are unverified
+  # prose. Same exclusion as `test`: flui-platform (STATUS_HEAP_CORRUPTION).
+  # ─────────────────────────────────────────────────────────────────────────
+  doc-test:
+    name: doc-test
+    needs: checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+      CARGO_PROFILE_TEST_DEBUG: line-tables-only
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry + target
+        uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.event_name != 'merge_group' }}
+
+      - name: cargo test --doc
+        run: cargo test --workspace --exclude flui-platform --doc
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # msrv — verify the declared MSRV actually compiles the workspace. Every
+  # other job installs `dtolnay/rust-toolchain@stable`, which OVERRIDES the
+  # committed rust-toolchain.toml pin — so before this job, the 1.96 floor in
+  # `[workspace.package].rust-version` was never exercised in CI. `check`
+  # (not `test`): MSRV promises "compiles on 1.96", behavior is the stable
+  # jobs' concern. Bump procedure lives in rust-toolchain.toml's header.
+  # ─────────────────────────────────────────────────────────────────────────
+  msrv:
+    name: msrv (1.96)
+    needs: checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust 1.96 (declared MSRV)
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.96"
+
+      - name: Cache cargo registry + target
+        uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.event_name != 'merge_group' }}
+
+      - name: cargo check --workspace (MSRV)
+        run: cargo check --workspace --all-targets
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # miri — undefined-behavior check for the workspace's densest unsafe hot
+  # spot: flui-rendering's subtree arena (raw-pointer arena with ~49 unsafe
+  # sites). flui-rendering has no wgpu dependency, so miri can execute it;
+  # the test filter keeps runtime sane (workspace-wide miri is not realistic
+  # on this stack). ADVISORY (continue-on-error) until a few runs establish
+  # it is stable and in-budget — then drop the line, same playbook as
+  # gpu-test.
+  # ─────────────────────────────────────────────────────────────────────────
+  miri:
+    name: miri (flui-rendering subtree_arena)
+    needs: checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    continue-on-error: true
+    env:
+      # Override the workflow-level `-D warnings`: nightly deprecates APIs
+      # ahead of stable (e.g. `Atomic::fetch_update` -> `try_update`, which
+      # does not exist on the 1.96 MSRV yet), and those deprecation warnings
+      # would fail this job spuriously. Lint enforcement is the stable jobs'
+      # business; this job exists solely to catch undefined behavior.
+      RUSTFLAGS: ""
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust nightly + miri
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: miri
+
+      - name: Cache cargo registry + target
+        uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.event_name != 'merge_group' }}
+
+      # `+nightly` is required: the committed rust-toolchain.toml pin (1.96.0)
+      # overrides the job's installed default toolchain, and the pinned stable
+      # has no miri component (first run failed exactly there).
+      - name: cargo miri test (subtree_arena)
+        run: cargo +nightly miri test -p flui-rendering --lib pipeline::owner::subtree_arena

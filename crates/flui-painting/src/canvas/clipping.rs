@@ -2,7 +2,7 @@
 //! variants + bounds query helpers (local_clip_bounds,
 //! device_clip_bounds, would_be_clipped).
 //!
-//! Mythos chain U4 extracted these from the 3,305-LOC `canvas.rs`
+//! These were extracted from the 3,305-LOC `canvas.rs`
 //! god module. Each clip method pushes a `ClipShape` onto the clip
 //! stack AND emits a `DrawCommand::Clip*` command; the engine
 //! consumes the command for GPU-side clipping, the stack entry lets

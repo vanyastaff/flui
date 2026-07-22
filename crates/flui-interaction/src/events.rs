@@ -225,7 +225,7 @@ impl PointerEventData {
 
     /// Create from a ui-events PointerEvent
     pub fn from_pointer_event(event: &PointerEvent) -> Option<Self> {
-        let info = get_pointer_info(event)?;
+        let info = get_pointer_info(event);
         let state = get_pointer_state(event);
 
         let (position, time_stamp, buttons) = if let Some(s) = state {
@@ -258,7 +258,7 @@ impl PointerEventData {
             device_kind: info.pointer_type,
             device,
             buttons,
-            pressure: state.map(|s| s.pressure).unwrap_or(0.0),
+            pressure: state.map_or(0.0, |s| s.pressure),
             time_stamp,
         })
     }
@@ -331,8 +331,9 @@ impl InputEvent {
     /// a hash of the persistent device ID if available.
     pub fn device_id(&self) -> Option<DeviceId> {
         match self {
-            InputEvent::DeviceAdded { device_id, .. } => Some(*device_id),
-            InputEvent::DeviceRemoved { device_id } => Some(*device_id),
+            InputEvent::DeviceAdded { device_id, .. } | InputEvent::DeviceRemoved { device_id } => {
+                Some(*device_id)
+            }
             InputEvent::Pointer(event) => {
                 // Extract pointer_id from the event into the legacy
                 // `DeviceId = i32` surface. Primary pointer ⇒ 0;
@@ -349,7 +350,7 @@ impl InputEvent {
                 // directly. Callers needing physical-device stability
                 // should consume `PointerInfo::persistent_device_id`
                 // upstream rather than via this legacy DeviceId mapping.
-                let info = get_pointer_info(event)?;
+                let info = get_pointer_info(event);
                 let id = info.pointer_id?;
                 if id.is_primary_pointer() {
                     Some(0)
@@ -413,17 +414,16 @@ impl From<KeyboardEvent> for InputEvent {
 // ============================================================================
 
 /// Extracts PointerInfo from a PointerEvent.
+///
+/// Infallible: every `PointerEvent` variant carries a `PointerInfo`.
 #[inline]
-fn get_pointer_info(event: &PointerEvent) -> Option<&PointerInfo> {
+fn get_pointer_info(event: &PointerEvent) -> &PointerInfo {
     match event {
-        PointerEvent::Down(e) => Some(&e.pointer),
-        PointerEvent::Up(e) => Some(&e.pointer),
-        PointerEvent::Move(e) => Some(&e.pointer),
-        PointerEvent::Cancel(info) | PointerEvent::Enter(info) | PointerEvent::Leave(info) => {
-            Some(info)
-        }
-        PointerEvent::Scroll(e) => Some(&e.pointer),
-        PointerEvent::Gesture(e) => Some(&e.pointer),
+        PointerEvent::Down(e) | PointerEvent::Up(e) => &e.pointer,
+        PointerEvent::Move(e) => &e.pointer,
+        PointerEvent::Cancel(info) | PointerEvent::Enter(info) | PointerEvent::Leave(info) => info,
+        PointerEvent::Scroll(e) => &e.pointer,
+        PointerEvent::Gesture(e) => &e.pointer,
     }
 }
 
@@ -431,8 +431,7 @@ fn get_pointer_info(event: &PointerEvent) -> Option<&PointerInfo> {
 #[inline]
 fn get_pointer_state(event: &PointerEvent) -> Option<&PointerState> {
     match event {
-        PointerEvent::Down(e) => Some(&e.state),
-        PointerEvent::Up(e) => Some(&e.state),
+        PointerEvent::Down(e) | PointerEvent::Up(e) => Some(&e.state),
         PointerEvent::Move(e) => Some(&e.current),
         PointerEvent::Scroll(e) => Some(&e.state),
         PointerEvent::Gesture(e) => Some(&e.state),
@@ -466,7 +465,7 @@ impl PointerEventExt for PointerEvent {
 
     #[inline]
     fn pointer_type(&self) -> Option<PointerType> {
-        get_pointer_info(self).map(|info| info.pointer_type)
+        Some(get_pointer_info(self).pointer_type)
     }
 }
 
@@ -681,8 +680,17 @@ pub fn make_move_event_for_id(
 #[cfg(any(test, feature = "testing"))]
 /// Create a PointerEvent::Cancel for testing
 pub fn make_cancel_event(pointer_type: PointerType) -> PointerEvent {
+    make_cancel_event_for_id(PointerId::PRIMARY, pointer_type)
+}
+
+#[cfg(any(test, feature = "testing"))]
+/// Create a PointerEvent::Cancel for testing with an explicit pointer id.
+///
+/// See [`make_down_event_for_id`] for rationale — a multi-contact stream needs
+/// the cancel routed to the same id its down/up carried.
+pub fn make_cancel_event_for_id(pointer_id: PointerId, pointer_type: PointerType) -> PointerEvent {
     PointerEvent::Cancel(PointerInfo {
-        pointer_id: Some(PointerId::PRIMARY),
+        pointer_id: Some(pointer_id),
         pointer_type,
         persistent_device_id: None,
     })
@@ -876,8 +884,7 @@ pub fn make_scroll_event(position: Offset<Pixels>, delta: Offset<Pixels>) -> Poi
 #[must_use]
 pub fn extract_pointer_id(event: &PointerEvent) -> crate::ids::PointerId {
     let info = match event {
-        PointerEvent::Down(e) => &e.pointer,
-        PointerEvent::Up(e) => &e.pointer,
+        PointerEvent::Down(e) | PointerEvent::Up(e) => &e.pointer,
         PointerEvent::Move(e) => &e.pointer,
         PointerEvent::Cancel(info) | PointerEvent::Enter(info) | PointerEvent::Leave(info) => info,
         PointerEvent::Scroll(e) => &e.pointer,

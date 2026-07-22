@@ -1,5 +1,5 @@
 #![allow(deprecated)]
-// N-geom U5: target intentionally exercises the deprecated raw-scalar device conversions (to_device_pixels(f32)/from_device_pixels).
+// This target intentionally exercises the deprecated raw-scalar device conversions (to_device_pixels(f32)/from_device_pixels).
 //! Tests for DevicePixels geometry operations (Phase 10: User Story 8)
 //!
 //! This module tests pixel-perfect GPU rendering with DevicePixels type,

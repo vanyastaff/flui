@@ -1,13 +1,13 @@
 //! Integration tests for `SceneBuilder` + `SceneCompositor`.
 //!
-//! Extracted from `src/compositor.rs` inline tests in Mythos Step 10.
+//! Extracted from `src/compositor.rs` inline tests.
 
 use flui_foundation::LayerId;
 use flui_layer::{CanvasLayer, Layer, LayerTree, SceneBuilder, SceneCompositor};
 use flui_types::{
+    Matrix4, Offset, Rect,
     geometry::px,
     painting::{Clip, TextureId},
-    Matrix4, Offset, Rect,
 };
 
 #[test]
@@ -89,7 +89,7 @@ fn test_scene_builder_add_canvas() {
 #[test]
 fn test_scene_builder_add_picture() {
     use flui_painting::Canvas;
-    use flui_types::{painting::Paint, Color, Rect};
+    use flui_types::{Color, Rect, painting::Paint};
 
     let mut tree = LayerTree::new();
     let mut builder = SceneBuilder::new(&mut tree);
@@ -259,7 +259,7 @@ fn test_scene_compositor_retain() {
     assert_eq!(compositor.retained_layers().len(), 1);
 }
 
-// `release` and `clear_retained` removed in U1 (zero-consumer scaffolding).
+// `release` and `clear_retained` were removed as zero-consumer scaffolding.
 // SceneCompositor retention is currently write-only; reset must go through
 // a fresh `SceneCompositor::new()`. Tests covering those deleted methods
 // were removed alongside the methods.

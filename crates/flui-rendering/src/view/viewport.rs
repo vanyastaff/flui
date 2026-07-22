@@ -150,13 +150,13 @@ mod tests {
 
     #[test]
     fn test_cache_extent_style_default() {
-        let style: CacheExtentStyle = Default::default();
+        let style = CacheExtentStyle::default();
         assert_eq!(style, CacheExtentStyle::Pixel);
     }
 
     #[test]
     fn test_sliver_paint_order_default() {
-        let order: SliverPaintOrder = Default::default();
+        let order = SliverPaintOrder::default();
         assert_eq!(order, SliverPaintOrder::FirstIsTop);
     }
 

@@ -22,7 +22,7 @@ The translation manual draws inspiration from Bun's [oven-sh/bun#PORTING.md](htt
 
 **Governance layer** (write-time refusal rules, lock-decision matrix, per-crate documentation shape):
 
-- [§Refusal triggers](#refusal-triggers) — 14 anti-patterns the maintainer refuses to introduce, with grep regexes
+- [§Refusal triggers](#refusal-triggers) — 22 anti-patterns the maintainer refuses to introduce, with grep regexes
 - [§Lock decisions](#lock-decisions) — allowed vs forbidden `RwLock`/`Mutex` placements
 - [§Mapping rules](#mapping-rules) — Flutter behaviour primacy + binding-deletion carve-out + compile-time-over-runtime + sync-hot-path
 - [§Per-crate `ARCHITECTURE.md` template](#per-crate-architecturemd-template) — required and optional sections per crate
@@ -125,17 +125,42 @@ The *funnel* signatures (`tree.rs::insert_box`, view → render `From` impls) ac
 
 ### 9. Sanctioned `dyn`-boundary registry (FR-036)
 
-**FR-036 — every `Box<dyn …>` / `&dyn …` / `Arc<dyn …>` / `Rc<dyn …>` introduction (and every type alias of that shape) in the framework crates must either (a) name a sanctioned trait from the inline allowlist, (b) match a language-runtime exempt pattern (`Pin<Box<dyn Future>>`, `Box<dyn Iterator>`, `&dyn Fn*` callback parameters), or (c) carry an explicit `// PORT-CHECK-OK-DYN:` marker on the same line.** Phase 3.1 §U30 of the view/element core-contracts plan installs this trigger as the canonical FR-036 enforcement layer.
+**FR-036 — every `Box<dyn …>` / `&dyn …` / `Arc<dyn …>` / `Rc<dyn …>` introduction (and every type alias of that shape) in the framework crates must either (a) name a sanctioned trait from the inline allowlist, (b) match a language-runtime exempt pattern (`Pin<Box<dyn Future>>`, `Pin<Box<dyn Stream>>`, `Box<dyn Iterator>`, `&dyn Fn*` callback parameters), or (c) carry an explicit `// PORT-CHECK-OK-DYN:` marker on the same line.** Phase 3.1 §U30 of the view/element core-contracts plan installs this trigger as the canonical FR-036 enforcement layer.
+
+**Registry addition (2026-07-09, ADR-0018 U5):** `dyn Stream` joins `dyn Future` and `dyn Iterator` as a language-runtime exempt. `Stream` is the async `Iterator` — a trait from `futures-core` (trait-only: no executor, no combinators, no proc macros) that `StreamBuilder` polls by hand through `std::future::poll_fn`, because `futures-core` deliberately ships no `StreamExt::next()`. It is erased for the same reason `Future` is: the concrete stream type is the caller's, and a `StatefulView` cannot be generic over it and stay object-safe as a `dyn View`. This is a registry entry, not a loosening — an unsanctioned `Box<dyn Foo>` in the framework crates still fails trigger 9.
+
+**Registry addition (2026-07-09, ADR-0019 U4):** `crates/flui-widgets/src` enters the scope, and four traits are registered with it. `ErasedRoute` — the public `Navigator` holds `Vec<Box<dyn ErasedRoute>>` because a heterogeneous route stack cannot be generic over each route's result type (ADR-0019 §4). `NavigatorObserver` — `Arc<dyn NavigatorObserver>`, the observer chain, exactly as `Listenable` / `WidgetsBindingObserver` already are. `ScrollPhysics` and `ImageProvider` — **pre-existing** public delegate boundaries (`SharedScrollPhysics`, `Image`'s provider) that were simply never under a gate, because this crate was outside every `dyn` scope until now; registering them is the honest alternative to waiving them. Bringing the widget catalog into scope is the point: before U4 its erased boundaries shipped unguarded.
+
+**Registry addition (2026-07-10, ADR-0021 §7n):** `Animatable` is registered for `Hero::create_rect_tween`. The hook stores a `Box<dyn Animatable<Rect>>`, matching Flutter's `CreateRectTween` shape while staying value-only: the tween receives two rects, exposes `transform(t)`, and has no tree, scheduler, or render-owner access. This is an animation-transform boundary, not a new widget/render-object boundary; `tests/hero_public.rs::create_rect_tween_shapes_the_public_flight` proves a flight samples it.
+
+**Registry addition (2026-07-16, Catalog.1 theming + localizations substrate):** `ErasedLocalizationsDelegate` and `WidgetsLocalizations` are registered. `BoxedLocalizationsDelegate` holds `Arc<dyn ErasedLocalizationsDelegate>` to erase each `LocalizationsDelegate`'s associated `Resources` type, the same heterogeneous-erasure shape `ErasedRoute` already covers for `Navigator`'s route stack — a `Localizations` widget's delegate list cannot be generic over every delegate's resource type and stay `dyn`-storable. `BoxedWidgetsLocalizations` holds `Box<dyn WidgetsLocalizations>` so `Localizations::of`/`BoxedWidgetsLocalizations::of` retrieve the resource by the abstract trait, not the concrete implementor (`DefaultWidgetsLocalizations` in `flui-widgets`, `GlobalWidgetsLocalizations` in `flui-localizations`) — Flutter parity: `Localizations.of<WidgetsLocalizations>` is keyed by the interface, never the runtime class.
 
 **Allowlist marker:** `// PORT-CHECK-OK-DYN: <one-line justification>` on the same line as the `dyn`-introducing declaration. Multi-line declarations either keep the marker on the `Box<` line (matched by the scan) or refactor to a type alias that fits one line + carries its own marker.
 
-**Sanctioned trait allowlist** (categories per FR-029 #1-#5 + pre-existing framework surfaces): element-storage sub-traits (`ElementBase` / `ElementBehavior` / `StatelessElementBase` / `StatefulElementBase` / `ProxyElementBase` / `InheritedElementBase` / `RenderElementBase`), BoxedView (`View` / `BoxedView` / `ViewObject`), pipeline-owner type-erasure (`Any`), error / observer / animation / owned-callback chains (`Error` / `Listenable` / `Animation` / `WidgetsBindingObserver` / `Fn` / `FnMut` / `FnOnce`), protocol-layout erasure (`BoxLayoutCtxErased` / `SliverLayoutCtxErased` — D-block PR-A1b §U19 / memo D5), and pre-existing surfaces (`ViewKey` / `BuildContext` / `Notification` / `NotifiableElement` / `RenderObject` / `RenderObjectTrait`). Add a trait here when its `dyn` usage is widespread enough that per-site markers become noise; remove only after auditing that the trait's `dyn` surface is genuinely gone.
+**Sanctioned trait allowlist** (categories per FR-029 #1-#5 + pre-existing framework surfaces): element-storage sub-traits (`ElementBase` / `ElementBehavior` / `StatelessElementBase` / `StatefulElementBase` / `ProxyElementBase` / `InheritedElementBase` / `RenderElementBase` / `RootElementBase` / `ErrorElementBase`), BoxedView (`View` / `BoxedView` / `ViewObject`), pipeline-owner type-erasure (`Any`), error / observer / animation / owned-callback chains (`Error` / `Listenable` / `Animation` / `Animatable` / `WidgetsBindingObserver` / `Fn` / `FnMut` / `FnOnce`), protocol-layout erasure (`BoxLayoutCtxErased` / `SliverLayoutCtxErased` — D-block PR-A1b §U19 / memo D5), and pre-existing surfaces (`ViewKey` / `BuildContext` / `Notification` / `NotifiableElement` / `RenderObject` / `RenderObjectTrait`). Add a trait here when its `dyn` usage is widespread enough that per-site markers become noise; remove only after auditing that the trait's `dyn` surface is genuinely gone.
 
-**Scope:** framework crates (`crates/flui-view/src`, `crates/flui-foundation/src`, `crates/flui-tree/src`, `crates/flui-engine/src`, `crates/flui-rendering/src`, `crates/flui-interaction/src`).
+**Scope:** framework crates (`crates/flui-view/src`, `crates/flui-foundation/src`, `crates/flui-tree/src`, `crates/flui-engine/src`, `crates/flui-rendering/src`, `crates/flui-interaction/src`) **and the public widget catalog** (`crates/flui-widgets/src`, added 2026-07-09 by ADR-0019 U4).
 
 **Multi-line declaration handling:** the scan does NOT use `rg -U` multiline mode (mixing multi-line output blocks with line-oriented `grep -Ev` filters partial-filters multi-line matches → false positives and silent bypasses). The single-line scan catches rustfmt-formatted code (which collapses `Box<dyn Trait>` to one line whenever possible).
 
 **Back-references:** [specs/004-view-element-core/spec.md FR-036](../specs/004-view-element-core/spec.md), [Phase 3.1 §U30](plans/2026-05-22-005-feat-view-element-core-contracts-plan.md).
+
+### FR-033/widgets. Type-erased downcasts in the widget catalog (ADR-0019 U4)
+
+**Every `downcast::<…>` / `downcast_ref::<…>` / `downcast_mut::<…>` in `crates/flui-widgets/src` must carry a `// PORT-CHECK-OK-DOWNCAST: <reason>` marker on the same line.**
+
+Five marked sites exist, and they are not on the same footing:
+
+- `RouteRecord::did_complete` (`crates/flui-widgets/src/navigator/route.rs`), where a pop result crosses the `Box<dyn Any + Send>` boundary and is downcast back to the owning route's `Output`. **Signed off** in [`ADR-0019`](adr/ADR-0019-navigator-routing-seam.md) *Public API and sign-off (U4)* — the repository owner ruled on this exact boundary.
+- `RouteSettings::argument` (`crates/flui-widgets/src/navigator/route.rs`), downcasting the `arguments` payload named in [`ADR-0024`](adr/ADR-0024-named-routes-seam.md) §4.1. **Signed off 2026-07-15** — ADR-0024 §6 records the repository owner's explicit Gate decision (approve as-is) on exactly this boundary, closing the gap §6's earlier update flagged. §4.2's separate `GeneratedRoute` erased-result boundary remains proposed and ungated.
+- `Localizations::maybe_of` and `Localizations::build` (`crates/flui-widgets/src/localization/localizations.rs`), both downcasting an `Arc<dyn Any + Send + Sync>` resource-map entry back to a `LocalizationsDelegate::Resources` type. **Added 2026-07-16** as part of the Catalog.1 theming + localizations substrate; every such downcast in the crate is confined to this one module, so the resource-map erasure boundary has exactly one place to audit — same erasure shape as the ADR-0019 U4 boundary above, because a `Localizations` widget's delegate list is heterogeneous over each delegate's declared resource type and cannot be generic while staying `dyn`-storable.
+- `CursorAreaLoop::global_caret_rect` (`crates/flui-widgets/src/text/editable_text.rs`), downcasting a `&dyn RenderObject<BoxProtocol>` read out of the render tree by `RenderId` back to the concrete `RenderEditable`. **Added 2026-07-17** as part of the IME cursor-area tracking loop ([`ADR-0032`](adr/ADR-0032-ime-cursor-area-single-rect-reduction.md)): the loop knows, by construction, that exactly one concrete render type sits under the `SubtreeAnchor` it anchored directly around `EditableTextRenderView`, but the storage layer's `RenderTree`/`RenderEntry` API only ever hands back the protocol-erased trait object — the same shape `flui-rendering`'s own test harness (`RenderTester`) uses internally to reach a concrete type by id, applied here to production code because no non-erased accessor exists for "the render object I anchored".
+
+Why the U4 boundary exists: `Navigator::pop(result)` is called from deep inside a route's subtree, which knows its result type; the navigator, holding `Vec<Box<dyn ErasedRoute>>`, does not. Flutter has the same runtime failure mode (`Route<dynamic>` plus an unchecked `pop<T>`), but Rust would not otherwise need it. `Localizations` has the analogous shape: a `LocalizationsDelegate` list is heterogeneous over `Resources`, so the ambient resource map is `HashMap<TypeId, Arc<dyn Any + Send + Sync>>` and `Localizations::of::<R>` downcasts back to the caller's requested `R`.
+
+Why the guard exists: before U4, `flui-widgets` was outside both FR-036 (trigger 9) and FR-033, so this erasure — the first in the public catalog — would have landed with **no gate at all**. On a type mismatch FLUI logs via `tracing::error!` and completes the future with `None`; Flutter throws a cast error. Per [`PANIC-POLICY.md`](PANIC-POLICY.md), a wrong `pop` type is caller error, not a framework invariant, so it must not panic.
+
+**Enforcement:** `scripts/port-check.sh`, reported as `FR-033/widgets`. It is a spec-style grep, not a numbered refusal trigger — the numbered trigger for erased boundaries is #9 (FR-036).
 
 ### 10. Parallel cross-crate type definitions
 
@@ -151,6 +176,20 @@ Re-exports (`pub use foo::Bar`) do not trip the trigger — only literal `pub <k
 
 **Back-references:** [architecture-correction-plan §SP-3](research/2026-05-22-architecture-correction-plan.md), [D-block plan §U42](plans/2026-05-23-001-feat-pipeline-wiring-d-block-plan.md).
 
+### Cross.H2. Canonical homes for historical parallel-type collapses
+
+**The three D-8 collisions must stay collapsed.** Trigger 10 catches arbitrary same-name duplicate `pub struct` / `pub enum` / `pub trait` definitions, but D-8 had three concrete historical seams that downstream code depends on staying canonical:
+
+- `ViewKey` trait: canonical home is `flui-foundation`.
+- `IndexedSlot` struct: canonical home is `flui-tree`.
+- `TargetPlatform` enum: canonical home is `flui-types`.
+
+**Scope:** `crates/`, Rust source only.
+
+**Allowlist:** none. Re-export the canonical type if ergonomics require it; do not define a second local copy.
+
+**Back-references:** [framework spine repair plan §U1-U3](plans/2026-05-21-002-feat-framework-spine-repair-plan.md), `docs/ROADMAP-TRACKER.md` `H2`.
+
 ### 11. Speculative scaffolding: `pub mod` with zero workspace consumers
 
 **SP-4 — `pub mod <name>;` declared in `lib.rs` that is (a) not behind `#[cfg(feature = "unstable-*")]` on its preceding non-blank line, (b) not re-exported via `pub use [crate::]<name>::` in the same `lib.rs`, AND (c) not referenced as `<crate>::<name>` anywhere in the workspace outside the defining crate.** This catches speculative `pub mod` surfaces that publish API without consumers.
@@ -160,6 +199,14 @@ Re-exports (`pub use foo::Bar`) do not trip the trigger — only literal `pub <k
 **Limitations:** mechanical scan — catches lib.rs-level `pub mod`, NOT sub-module speculation (`mod foo { pub mod bar; }`). For deeper SP-4 audits see the manual verdicts in [architecture-correction-plan §SP-4](research/2026-05-22-architecture-correction-plan.md).
 
 **Back-references:** [architecture-correction-plan §SP-4](research/2026-05-22-architecture-correction-plan.md), [D-block plan §U43](plans/2026-05-23-001-feat-pipeline-wiring-d-block-plan.md), [view-tree-foundation audit "Post-audit correction"](research/2026-05-21-view-tree-foundation-audit.md) (zero-consumer flui-tree surface is deliberate unified-tree infrastructure, not a deletion signal).
+
+### Cross.H7. Scheduler speculative surface names stay deleted
+
+**`flui-scheduler` stable source/docs must not mention the deleted parallel scheduler/ticker experiments:** `TypestateTicker`, `ScheduledTicker`, `prelude_advanced`, `TypedTask`, priority ZSTs, legacy handles, or extension-trait names such as `ToMilliseconds` / `PriorityExt`.
+
+**Scope:** `crates/flui-scheduler/src`, `crates/flui-scheduler/README.md`, and `crates/flui-scheduler/CHANGELOG.md`. Unlike the generic `check()` helper, this guard intentionally scans Rust doc comments because public source docs are part of the exposed open-source surface.
+
+**Back-references:** `docs/ROADMAP-TRACKER.md` `H7`, [input/frame-loop repair requirements AE15](brainstorms/input-frame-loop-repair-requirements.md#acceptance-examples).
 
 ### 12. Lock placement in public API
 
@@ -200,6 +247,143 @@ Re-exports (`pub use foo::Bar`) do not trip the trigger — only literal `pub <k
 **Allowlist marker:** `// PORT-CHECK-OK-UNIT: <reason>` within ±2 lines of the declaration (e.g. `PixelDelta`'s `From<f64>`, which carries a platform scroll delta rather than a coordinate).
 
 **Back-references:** [N-geom polish-pass research §III U1–U12](research/2026-05-24-flui-geometry-polish-pass-research.md), [ROADMAP-TRACKER N-geom block](ROADMAP-TRACKER.md).
+
+### 15. `println!` / `eprintln!` / `dbg!` in foundation / tree / macros source
+
+**F26 — stdout/stderr macros in the low-level substrate.** Foundation, tree, and macros are the framework's low-level substrate; they must route diagnostics through `tracing::{error,warn,info,debug,trace}!`, never stdout/stderr macros. A stray `println!` / `eprintln!` / `dbg!` in this layer leaks unstructured output into every downstream binary and is invisible to the tracing subscriber.
+
+**Scope:** `crates/flui-foundation/src`, `crates/flui-tree/src`, `crates/flui-macros/src`.
+
+**Exclusions:** doc-comment lines (`//!`, `///`, `//`) — example code in docs is fine; dedicated test files (`tests/`, `test*.rs`). In-file `#[cfg(test)]` modules are NOT post-filtered (unlike trigger 8): the three crates in scope keep their test output via `assert!` / `tracing`, so the path-glob exclusion of dedicated test files suffices. If a future `#[cfg(test)]` block legitimately needs `println!`, add a `test*.rs`-style split or a per-line allowlist marker in the same PR.
+
+**Allowlist:** none today (see the `#[cfg(test)]` note above).
+
+**Back-references:** [core-0a foundation adversarial reaudit §F26 / SC10](../openspec/changes/core-0a-foundation-adversarial-reaudit/proposal.md); [`AGENTS.md`](../AGENTS.md) "no `println!` / `eprintln!` / `dbg!` in foundation/tree/macros crates."
+
+### 16. Module-level `#![allow(unsafe_code)]` in foundation / tree source
+
+**F9 — blanket unsafe-allow that never self-cleans.** Edition-2024 idiom: a module that genuinely needs `unsafe` must use `#![expect(unsafe_code, reason = "...")]` so the lint fires the day the last `unsafe` block is removed; a module with no `unsafe` carries neither attribute. A blanket `#![allow(unsafe_code)]` silently permits any future unsafe and never self-cleans — it is forbidden in these two crates.
+
+**Scope:** `crates/flui-foundation/src`, `crates/flui-tree/src`.
+
+**Allowed:** `#![expect(unsafe_code, reason = "...")]` is the sanctioned form and does NOT match this pattern (the regex is anchored to `#![allow(unsafe_code`).
+
+**Allowlist:** none — convert to `#![expect(...)]` or delete the attribute.
+
+**Back-references:** [core-0a foundation adversarial reaudit §F9 / SC9](../openspec/changes/core-0a-foundation-adversarial-reaudit/proposal.md).
+
+### 17. Reinvented `debug_assert_*` macros in foundation source
+
+**F29 — custom assert macros that reinvent `debug_assert!`.** F29 deleted `debug_assert_valid!` / `debug_assert_range!` / `debug_assert_finite!` / `debug_assert_not_nan!` — they reinvented stdlib `debug_assert!` with no added value. This trigger prevents their reintroduction: any `macro_rules!` defining one of these four names in foundation source is a regression.
+
+**Scope:** `crates/flui-foundation/src`.
+
+**Allowed:** stdlib `debug_assert!` is the canonical form.
+
+**Allowlist:** none.
+
+**Back-references:** [core-0a foundation adversarial reaudit §F29 / SC11](../openspec/changes/core-0a-foundation-adversarial-reaudit/proposal.md).
+
+### 18. `new_unchecked` in `flui-foundation/src/key.rs`
+
+**F2 (P0 UB) — key counter off the checked path.** F2 replaced `NonZeroU64::new_unchecked` in `Key::new` with the `fetch_update` sentinel pattern (counter = 0 is the permanent-exhaustion sentinel; retries panic without mutation or duplicate keys), eliminating the UB-on-counter-wrap hazard. This trigger guards against reintroducing any `new_unchecked` call into `crates/flui-foundation/src/key.rs` — the key counter must stay on the safe checked path.
+
+**Scope:** `crates/flui-foundation/src/key.rs` only.
+
+**Exclusions:** doc-comment lines (`//!`, `///`, `//`).
+
+**Allowlist:** none. `*_unchecked` constructors elsewhere (e.g. `id.rs`) are out of scope and governed by their own `#![expect(unsafe_code, ...)]`.
+
+**Back-references:** [core-0a foundation adversarial reaudit §F2 / SC2](../openspec/changes/core-0a-foundation-adversarial-reaudit/proposal.md) (Rustonomicon §3.2 is the UB basis).
+
+### 19. `Matrix4` in the DrawBatcher record side, `PipelineCache`/`PipelineBuilder`, or `GpuReplay` replay side
+
+**C4 rule: the `Matrix4`↔glam conversion happens at the `Backend` trait boundary; the record, pipeline, and replay modules are glam-only.** `GpuStateStack` stores transforms as `glam::Mat4`. The single structural conversion edge is `current_transform_matrix()` in `painter.rs` (outbound, returning a `Matrix4` to `Backend`/`LayerStateStack`) and `Backend::with_transform` (inbound, converting an incoming `Matrix4` into the glam state). Every record method below that boundary — `batches/{shapes,gradients,paths,images}.rs` — the pipeline-cache module (`pipelines.rs`), and the replay/submit module (`replay.rs`) work entirely in glam primitives and pixel-typed geometry.
+
+Importing or accepting `flui_types::Matrix4` on the record/pipeline/replay side leaks the flui-types coordinate abstraction into GPU plumbing, defeats the `GpuStateStack` encapsulation, and couples every record-method caller to both coordinate systems. The replay side must stay glam-only for the same reason: the `Matrix4`↔glam conversion must not migrate into the GPU-emit path. The correct fix is always to extract the needed scalars (translation, scale) at the `painter.rs` or `backend.rs` call site and pass primitives down.
+
+**Scope:** `crates/flui-engine/src/wgpu/batches/` (all files), `crates/flui-engine/src/wgpu/pipelines.rs`, and `crates/flui-engine/src/wgpu/replay.rs`. (Extended to `replay.rs` in T10e — the scope tracks the seam contract: wherever the record-IR is consumed, the glam-only rule applies.)
+
+**Allowlist:** none. Doc-comment lines (`//!`, `///`, `//`) are excluded (the rg filter strips them).
+
+**Back-references:** [`docs/adr/ADR-0006-c-ir-record-replay-seam.md`](adr/ADR-0006-c-ir-record-replay-seam.md) §Decision 4 (C4 rule); engine-overhaul spec `.rust-studio/specs/flui-engine-overhaul/spec.md` acceptance criterion C4; `crates/flui-engine/ARCHITECTURE.md` §Record/replay boundary.
+
+### N-geom.U16. Direct `glam` use outside the wgpu backend
+
+**Option D's glam policy is an engine-edge policy.** `glam` is sanctioned for GPU/painter hot-path math under `crates/flui-engine/src/wgpu/`, where typed `flui_geometry` values are converted into SIMD/Pod-friendly GPU primitives. Direct `glam::...` or `use glam...` code outside that backend widens the bridge policy into unrelated engine modules and bypasses the FLUI-owned public geometry surface documented in `crates/flui-types/README.md`.
+
+**Scope:** `crates/flui-engine/src`, excluding `crates/flui-engine/src/wgpu/**`.
+
+**Allowlist:** none. Add a documented bridge or move the conversion to the wgpu edge instead of importing `glam` directly in other engine modules.
+
+**Back-references:** `docs/ROADMAP-TRACKER.md` `N-geom.U16`; `crates/flui-engine/src/wgpu/mod.rs` §Math-backend policy; `crates/flui-types/README.md` FAQ "Why not use glam or euclid?".
+
+### Cross.H3. `ElementBuildContext::new_minimal` resurrection
+
+**Production builds must receive a live tree-backed `BuildContext`.** Catalog theming is an `InheritedView` consumer, so `build()` must resolve inherited providers, ancestor walks, render-object lookup, and notification bubbling against the real `ElementTree`. The old `ElementBuildContext::new_minimal` dummy context made those APIs silently return `None`/`false` during production builds and is not a valid fallback.
+
+**Scope:** `crates/flui-view/src`.
+
+**Allowlist:** none. Tests and helper code that need a context should use `ElementBuildContext::for_element` over a real tree or drive `BuildOwner::build_scope`, which supplies the borrowed live `BuildCtx`.
+
+**Back-references:** `docs/ROADMAP-TRACKER.md` `H3`; `docs/designs/2026-06-25-pr-k-live-buildcontext-execution-spec.md`; `crates/flui-view/src/context/element_build_context.rs` `BuildCtx`.
+
+### 20. Gradient/image SrcOver warn-fallback strings in producer files
+
+**PR-5 deleted three warn-fallback blocks** that previously made gradient and image producers silently fall through to SrcOver when an advanced (dst-read) blend mode was requested. If any of the deleted strings reappear in `batches/`, `renderer.rs`, or `backend.rs`, a producer has regressed to the fallback path: callers requesting Multiply, Screen, Overlay, etc. will silently receive SrcOver output instead of the correct advanced blend result.
+
+The two sentinel patterns are `"is not supported by the"` and `"rendering as SrcOver"`. Both were exclusive to the deleted warn-fallback blocks; their reappearance on the producer side is unambiguous evidence of regression.
+
+**Scope:** `crates/flui-engine/src/wgpu/batches/` (all files), `crates/flui-engine/src/wgpu/renderer.rs`, `crates/flui-engine/src/wgpu/backend.rs`. `replay.rs` is explicitly excluded — it is the replay/submit side, not a producer, and may legitimately use similar language in its own documentation.
+
+**Runtime companion:** `PipelineCache::get_or_create` contains a `debug_assert!(!key.blend_mode().is_advanced(), …)` that panics in debug/test builds if any advanced mode reaches the pipeline cache instead of diverting to `DrawItem::AdvancedShape`. This is the runtime half of the gate; the static grep above is the compile-time half. Both must remain active.
+
+**Allowlist:** none. A producer genuinely unable to support advanced blend must divert to `DrawItem::AdvancedShape` (reusing `render_segment_to_offscreen` + `flush_advanced_layer`) — not warn and fall through.
+
+**Witnesses — two tiers:**
+
+- **Routing witnesses (CI-runnable, no pixel readback):** CPU unit tests G1-G3 in `crates/flui-engine/src/wgpu/batches/mod.rs` (gradient path); GPU-device structure tests I1-I5 in `crates/flui-engine/src/wgpu/gradient_image_blend_tests.rs` (image/atlas paths — each asserts exactly one `DrawItem::AdvancedShape` per call with the correct `cached_images.len()`). These are the authoritative routing witnesses for condition 3.
+
+- **Non-panic + non-zero-output witness:** GPU test GI7 (`crates/flui-engine/src/wgpu/gradient_image_blend_tests.rs`) verifies all 15 modes × gradient + image produce valid RGBA output. GI7 does not verify routing (pixel equality alone cannot distinguish an `AdvancedShape` from a lucky SrcOver result); the routing witnesses above provide that guarantee. GI8 covers the atlas producer.
+
+**Back-references:** advanced-blend PR-5 (gradient + image + atlas diversion); `crates/flui-engine/src/wgpu/batches/gradients.rs` §dispatch_shader_rect advanced diversion; `crates/flui-engine/src/wgpu/batches/images.rs` §draw_image/draw_image_repeat/draw_image_nine_slice/draw_atlas advanced diversion; `crates/flui-engine/src/wgpu/gradient_image_blend_tests.rs` I1-I5 (routing), GI7 (non-panic + non-zero), GI8 (atlas GPU output).
+
+### 21. `lyon` code used outside `wgpu/tessellator.rs` (RasterBackend seam)
+
+**The rendering-backend swap seam (`CommandRenderer` + the `RasterBackend` driver trait) only stays non-breaking if `lyon` tessellation is an internal detail of the wgpu backend, not a dependency the rest of the engine reaches into.** All `lyon` code use (`lyon::…`, `use lyon …`) must live in `crates/flui-engine/src/wgpu/tessellator.rs`. A future Vello/software backend does not tessellate to triangles at all; any `lyon::` reference outside the tessellator couples the codebase to one rasterization strategy and breaks the seam.
+
+Doc-comment mentions ("…tessellated by lyon…") are fine and filtered out by the shared doc-comment filter in `check`; only real code constructs (`lyon::`, `use lyon`) match.
+
+**Regex:** `lyon::|use\s+lyon\b`, `--type rust --glob '!**/tessellator.rs'`, scoped to `crates/flui-engine/src`.
+
+**Scope:** `crates/flui-engine/src`, excluding `crates/flui-engine/src/wgpu/tessellator.rs`.
+
+**Allowlist:** none — if a second site ever legitimately needs `lyon`, widen this trigger's glob in the same PR with a documented reason.
+
+**Back-references:** [`docs/designs/2026-06-30-rasterbackend-seam.md`](designs/2026-06-30-rasterbackend-seam.md); `crates/flui-engine/src/wgpu/tessellator.rs`.
+
+### 22. A **lifecycle-only frame capability** acquired inside a `build` / layout / paint body
+
+**The capabilities.** A *frame capability* lets code reach into a frame from outside one. Two exist, and both are guarded by this trigger:
+
+| Capability | Introduced | What it does |
+|---|---|---|
+| `rebuild_handle()` | [`ADR-0018`](adr/ADR-0018-async-builder-seam.md) U1 | `RebuildHandle::schedule()` marks its element dirty for the **next** frame. |
+| `post_frame_handle()` | [`ADR-0021`](adr/ADR-0021-hero-flight-seam.md) U2 | `PostFrameHandle::schedule()` queues work for the **end of the current** frame. |
+
+**Why:** acquiring a handle inside `build` and scheduling from it is an unbounded rebuild loop (rebuild) or a callback fired against the very frame that is still building (post-frame). Acquiring one inside `perform_layout`, `paint`, or a compositing walk would touch the tree *after* `build_scope` has already run for this frame, so the dirty element would be laid out and painted stale.
+
+[`FOUNDATIONS.md`](FOUNDATIONS.md) permits an out-of-catalog `mark_needs_build` driver **only** when "gated by a refusal trigger barring signal subscriptions from `build`/`layout`/`paint`". This is that gate.
+
+**Sanctioned shape:** acquire the handle in `ViewState::init_state` or `did_change_dependencies`, store it in the state, and fire it later from a completion callback (any thread). The framework's own `make_build_ctx` mints both outside any guarded body, which is why the trigger scopes to function bodies rather than to the token.
+
+**Guarded functions:** `build`, `build_into_views`, `perform_layout`, `layout_node_with_children`, `paint`, `paint_raw`, `run_paint`, `run_layout`, `run_compositing`, `compose`, `composite`.
+
+**Implementation:** a line regex cannot express "inside a function body", so this trigger delegates to [`scripts/check-frame-capability-scope.sh`](../scripts/check-frame-capability-scope.sh) — a brace-depth scanner that enters a guarded function at its opening `{`, leaves at the matching `}`, strips line comments, and flags **any capability token** in between. Adding a new capability is one entry in the scanner's `capabilities` list plus a fixture case. The scanner has its own accept/reject fixtures under `scripts/fixtures/frame-capability/`; run `scripts/check-frame-capability-scope.sh --self-test` to verify the scanner itself.
+
+> **How this trigger nearly shipped a hole.** ADR-0021 U2 added `post_frame_handle()` and documented it as following the same lifecycle-only rule — but the scanner only ever matched the `rebuild_handle` token, so a `ctx.post_frame_handle()` inside `build()` passed port-check. The rule was prose, not a guard. A capability added to `BuildContext` must be added to `capabilities` in the same change; the self-test now asserts that **both** tokens are reported by the rejected fixture, so a scanner that silently matched only one would fail its own self-test.
+
+**Allowlist:** none. Nothing in `crates/` acquires a frame capability in a guarded body today.
 
 ### Reactive lint promotion
 
@@ -296,8 +480,8 @@ This table is the canonical lookup when translating a single Dart symbol into Ru
 | `Object?` (nullable untyped) | `Option<Box<dyn Any + Send>>` at FFI boundary only — usually a sign the source needs a typed enum | Flag with `// TODO(port): typed-enum candidate`. |
 | `void` (return) | `()` | Never `Result<(), ()>` — use `Result<(), ErrorType>` if fallible. |
 | `Never` (return) | `!` (never type) or `core::convert::Infallible` | Diverging fns use `-> !`; type-system slot for "this Result branch is impossible" uses `Infallible`. |
-| `Function` (untyped) | **forbidden** — narrow to `fn(Args) -> R` (zero-overhead fn pointer) or `Box<dyn Fn(Args) -> R + Send + Sync>` (owned callback storage, sanctioned by FR-029 #5) | Typed function pointers always win when the call site has a fixed signature. |
-| `typedef Cb = void Function(int)` | `type Cb = fn(i32);` for zero-overhead; `type Cb = Box<dyn Fn(i32) + Send + Sync>;` for owned storage | Owned-storage variant carries the `+ Send + Sync` bound to interop with `Listenable` plumbing. |
+| `Function` (untyped) | **forbidden** — narrow to `fn(Args) -> R` (zero-overhead fn pointer), `Rc<dyn Fn(Args) -> R>` for owner-authored UI callbacks, or `Box/Arc<dyn Fn(Args) -> R + Send + Sync>` only for data-plane/shared-service storage | Typed function pointers always win when the call site has a fixed signature. ADR-0027 forbids teaching `Send + Sync` as the default UI callback shape. |
+| `typedef Cb = void Function(int)` | `type Cb = fn(i32);` for zero-overhead; `type Cb = Rc<dyn Fn(i32)>` for owner-local UI storage; `Box/Arc<dyn Fn(i32) + Send + Sync>` only for data-plane/shared-service storage | Owner-plane callbacks may capture `Rc<Cell<_>>`; data-plane callbacks must not capture UI state. |
 | `Symbol` | `&'static str` or `core::any::TypeId` | Use `TypeId` for the `InheritedView` registry; use `&'static str` for `debug_name` slots. |
 | `DateTime` | `std::time::SystemTime` (wall clock) or `std::time::Instant` (monotonic) | Use `Instant` for frame timing; `SystemTime` for serialised timestamps only. |
 | `Duration` | `std::time::Duration` | 1:1. |
@@ -330,14 +514,14 @@ This table is the canonical lookup when translating a single Dart symbol into Ru
 | `Picture` / `Scene` | `DisplayList` (recorded) → `LayerTree` (composited) → wgpu draw | `flui-painting` → `flui-layer` → `flui-engine`. |
 | `Rect`, `RRect`, `Offset`, `Size`, `EdgeInsets` | identically-named structs in `flui-types` | `flui-types`. `Copy` types. |
 | `Color` | `Color` (`flui-types`, sRGB by default) | `flui-types`. Alpha is straight (not pre-multiplied) at the API surface; the engine pre-multiplies before upload. |
-| `Key` (`ValueKey`, `ObjectKey`, `UniqueKey`, etc.) | `ViewKey` (sealed enum — sanctioned by FR-029) | `flui-view`. Storage via `Option<ViewKey>` on every `Element`. |
+| `Key` (`ValueKey`, `ObjectKey`, `UniqueKey`, etc.) | `ViewKey` trait (sanctioned by FR-029) | `flui-foundation` owns the trait and base key types; `flui-view` owns `ObjectKey` / `GlobalKey`. Storage on `ElementNode` is `Option<Box<dyn ViewKey>>`, populated via `ViewKey::clone_key()`. |
 | `GlobalKey<T>` | typestate-checked `GlobalKey<T>` — separate machinery, not all keys are global | `flui-view`. |
 | `Notification` | `Notification` trait (sanctioned by FR-029) + `NotifiableElement` | `flui-view`. Bubble dispatch via element walk. |
 | `ChangeNotifier` | `Listenable` trait (sanctioned by FR-029) | `flui-foundation`. Multiple impls; `ChangeNotifier` struct is a default fan-out impl. |
 | `ValueNotifier<T>` | `ValueNotifier<T>` struct implementing `Listenable` | `flui-foundation`. |
-| `ValueChanged<T>` callback | `Arc<dyn Fn(T) + Send + Sync>` (owned storage — matches `crates/flui-foundation/src/callbacks.rs:70`) or `&dyn Fn(T)` (borrowed param) | Storage form sanctioned by FR-029 #5. `Arc` not `Box` because the listener registry clones callbacks across notifier fan-out. Note: `crates/flui-foundation/ARCHITECTURE.md:62` is stale and still says `Box<dyn Fn(T)>` — graft pending. |
-| `VoidCallback` | `Arc<dyn Fn() + Send + Sync>` (storage — matches `crates/flui-foundation/src/callbacks.rs:51`) or `&dyn Fn()` (param) | Same. |
-| `AnimationController`, `Animation<T>`, `CurvedAnimation` | `Animation<T>` trait (sanctioned by FR-029) + concrete impls | `flui-animation` (currently disabled — see `## Index`). |
+| `ValueChanged<T>` callback | `Rc<dyn Fn(T)>` for owner-authored widget/view callbacks; `Arc<dyn Fn(T) + Send + Sync>` only for data-plane/shared-service callback aliases such as `flui-foundation::ValueChanged` | ADR-0027 split: widget authoring is owner-local; listener registries or cross-thread services keep explicit thread-safe aliases. |
+| `VoidCallback` | `Rc<dyn Fn()>` for owner-authored widget/view callbacks; `Arc<dyn Fn() + Send + Sync>` only for data-plane/shared-service aliases such as `flui-foundation::VoidCallback` | Same split. Do not add `Send + Sync` to public widget callbacks unless the callback is actually executed off the owner lane. |
+| `AnimationController`, `Animation<T>`, `CurvedAnimation` | `Animation<T>` trait (sanctioned by FR-029) + concrete impls | `flui-animation` (active; see `## Index`). |
 | `Listenable` (Dart base class) | `Listenable` trait — `flui-foundation` | Multiple-source: also see `Animation` for animation-as-listenable. |
 | `mixin Foo on Bar` | `trait Foo` + `#[delegate(Foo)]` via `ambassador` (workspace dep) | See [§Dart → Rust idiom map](#dart--rust-idiom-map) row "mixin". |
 
@@ -393,7 +577,7 @@ Patterns, not types. When a Dart construct could compile to multiple Rust shapes
 |---|---|---|
 | `(int x) => x * 2` (arrow lambda) | `\|x: i32\| x * 2` | Type annotation usually elided. |
 | `(int x) { return x * 2; }` (block lambda) | `\|x: i32\| { x * 2 }` | Same. |
-| `void Function() cb = () { ... };` (storage) | `let cb: Box<dyn Fn() + Send + Sync> = Box::new(\|\| { ... });` | Storage form per FR-029 #5. |
+| `void Function() cb = () { ... };` (storage) | `let cb: Rc<dyn Fn()> = Rc::new(\|\| { ... });` for owner-plane UI storage; use `Arc<dyn Fn() + Send + Sync>` only for explicit data-plane/shared-service storage | ADR-0027 owner-local callback default. |
 | `cb()` (invocation) | `cb()` | Boxed closures call directly. |
 | capture by reference (Dart default) | move closures explicitly with `move \|\| { ... }` when crossing threads | Rust closure capture is inferred; `move` forces by-value. |
 
@@ -530,7 +714,7 @@ Dart conflates "UI text", "identifier", "syscall byte sequence", "source code", 
 
 7. **Filesystem paths** → `std::path::PathBuf` (owned) / `&std::path::Path` (borrowed). `PathBuf` handles OS-specific encoding (UTF-16 on Windows, bytes on Unix). **Never** `String` for paths — Windows paths can contain unpaired surrogates that `String` rejects.
 
-8. **Widget keys, identifier-shaped data** (`ValueKey<&'static str>`, `ObjectKey`, debug IDs) → `ViewKey` enum (sealed, sanctioned by FR-029). The enum carries the typed payload; do not flatten to `String`.
+8. **Widget keys, identifier-shaped data** (`ValueKey<&'static str>`, `ObjectKey`, debug IDs) → concrete `ViewKey` impls (`ValueKey`, `ObjectKey`, `UniqueKey`, `Key`, `GlobalKey<T>`), stored as `Box<dyn ViewKey>` only at the sanctioned element-key boundary. Do not flatten identity to `String`.
 
 ### Anti-patterns
 
@@ -712,7 +896,7 @@ When a need arises that the table does not cover, the order of operations is:
 
 ### Version policy
 
-- **Rust toolchain**: pinned to an explicit stable version (currently `channel = "1.96.0"`) in [`rust-toolchain.toml`](../rust-toolchain.toml), kept in lockstep with the MSRV below and bumped by the same PR.
+- **Rust toolchain**: pinned to an explicit stable version (currently `channel = "1.96.1"`) in [`rust-toolchain.toml`](../rust-toolchain.toml), kept in lockstep with the MSRV below and bumped by the same PR.
 - **MSRV** (`rust-version` in [`Cargo.toml`](../Cargo.toml)): bumped **no later than 6 weeks** after a new stable release. Rust ships every 6 weeks (current: **1.96**, released 2026-05-25; next: **1.97** ~2026-07-09). The MSRV bump PR is mechanical — bump the field and `rust-toolchain.toml`, update the CI matrix, ship.
 - **Workspace dependencies**: caret-pinned (`"1.43"`, not `"=1.43.2"`). Patch bumps automatic via `cargo update`. Minor bumps batched monthly; major bumps reviewed individually.
 - **Pinned exceptions**: documented inline in `Cargo.toml` (current: `image` `webp` feature disabled per `image-webp` issue #102; no wgpu pin — tracking latest stable major).
@@ -795,7 +979,7 @@ Three crates already hold port-flavoured documents that predate this template:
 - [`crates/flui-rendering/flutter-rendering-hierarchy.md`](../crates/flui-rendering/flutter-rendering-hierarchy.md) — 1352-LOC Flutter class hierarchy dump; remains as a sibling appendix linked from the templated `crates/flui-rendering/ARCHITECTURE.md`.
 - [`crates/flui-view/UNIFIED_ELEMENT.md`](../crates/flui-view/UNIFIED_ELEMENT.md) — element behaviour taxonomy; remains as a sibling appendix linked from the future templated `crates/flui-view/ARCHITECTURE.md` when that crate is templated.
 
-Four other crates carry `crates/<crate>/docs/ARCHITECTURE.md` files (`flui-painting`, `flui-interaction`, plus disabled crates `flui-animation`, `flui-assets`). Relocating those to the crate root per the `AGENTS.md` convention is deferred to a follow-up doc-tidying PR; this methodology does not require relocation upfront.
+Four other crates carry `crates/<crate>/docs/ARCHITECTURE.md` files (`flui-painting`, `flui-interaction`, `flui-animation`, `flui-assets`). Relocating those to the crate root per the `AGENTS.md` convention is deferred to a follow-up doc-tidying PR; this methodology does not require relocation upfront.
 
 ---
 
@@ -807,8 +991,10 @@ This section indexes **crate-level** `ARCHITECTURE.md` template state. For docum
 | --- | --- | --- |
 | [`flui-foundation`](../crates/flui-foundation/ARCHITECTURE.md) | Templated (grafted 2026-05-19) | Active |
 | [`flui-rendering`](../crates/flui-rendering/ARCHITECTURE.md) | Templated 2026-05-20 (exemplar instance, U2 refactor recorded) | Active |
+| `flui-geometry` | Not yet templated | Active |
 | `flui-types` | Not yet templated | Active |
 | `flui-tree` | Not yet templated | Active |
+| `flui-macros` | Not yet templated | Active |
 | `flui-platform` | Not yet templated | Active |
 | [`flui-painting`](../crates/flui-painting/ARCHITECTURE.md) | Templated 2026-05-20 (Mythos chain) | Active |
 | `flui-semantics` | Not yet templated | Active |
@@ -816,16 +1002,21 @@ This section indexes **crate-level** `ARCHITECTURE.md` template state. For docum
 | [`flui-layer`](../crates/flui-layer/ARCHITECTURE.md) | Templated 2026-05-20 (Mythos chain) | Active |
 | `flui-interaction` | `crates/flui-interaction/docs/ARCHITECTURE.md` (pre-template; precedent for `## Thread safety` format) | Active |
 | [`flui-engine`](../crates/flui-engine/ARCHITECTURE.md) | Templated 2026-05-20 (Mythos chain) | Active |
-| `flui-log` | Not yet templated | Active |
 | `flui-hot-reload` | Not yet templated | Active |
+| `flui-objects` | Not yet templated | Active |
 | `flui-view` | `crates/flui-view/UNIFIED_ELEMENT.md` (companion; not templated) | Active |
+| `flui-widgets` | Not yet templated | Active |
+| `flui-localizations` | Not yet templated | Active |
+| `flui-material` | Not yet templated | Active |
+| `flui-cupertino` | Not yet templated | Active |
+| `flui-binding` | Not yet templated | Active |
 | `flui-app` | Not yet templated | Active |
-| `flui-animation` | `crates/flui-animation/docs/ARCHITECTURE.md` (pre-template) | Disabled |
+| `flui-animation` | `crates/flui-animation/docs/ARCHITECTURE.md` (pre-template) | Active |
 | `flui-reactivity` | Not yet templated | Disabled |
-| `flui-devtools` | Not yet templated | Disabled |
-| `flui-cli` | Not yet templated | Disabled |
-| `flui-build` | Not yet templated | Disabled |
-| `flui-assets` | `crates/flui-assets/docs/ARCHITECTURE.md` (pre-template) | Disabled |
+| `flui-devtools` | Not yet templated | Active |
+| `flui-cli` | Not yet templated | Active |
+| `flui-build` | Not yet templated | Active |
+| `flui-assets` | `crates/flui-assets/docs/ARCHITECTURE.md` (pre-template) | Active |
 
 Authoritative workspace state lives in [`AGENTS.md`](../AGENTS.md) and [`docs/crates.md`](crates.md); this index restates "templated yes/no" only.
 
@@ -852,13 +1043,13 @@ just port-check-verbose       # prints "ok" lines for each passing trigger + mar
 just port-markers             # per-file marker breakdown (TODO(port) / PERF(port) / PORT NOTE)
 ```
 
-The underlying script lives at [`scripts/port-check.sh`](../scripts/port-check.sh). It runs nine `rg` (ripgrep) passes total — refusal triggers 1–7 plus the FR-033 downcast grep and the FR-036 sanctioned-`dyn`-boundary registry (main pattern + type-alias closure) — and filters out doc-comment matches. The marker-budget scan is an additional non-blocking pass in `-v` and `-b` modes. The regexes are derived directly from the trigger entries in this document; when a trigger changes here, the script changes too.
+The underlying script lives at [`scripts/port-check.sh`](../scripts/port-check.sh). It runs one `rg` (ripgrep) pass per trigger — 22 refusal triggers (trigger 22 delegates to a brace-depth scanner rather than a single `rg` pass) plus the FR-033 downcast grep, the FR-033/widgets downcast grep (ADR-0019 U4), and the FR-036 sanctioned-`dyn`-boundary registry (main pattern + type-alias closure) — and filters out doc-comment matches. The marker-budget scan is an additional non-blocking pass in `-v` and `-b` modes. The regexes are derived directly from the trigger entries in this document; when a trigger changes here, the script changes too.
 
 The marker-budget report is a **non-blocking** addition: it counts `TODO(port)`, `PERF(port)`, and `PORT NOTE` occurrences across `crates/` and prints a per-crate summary. Markers are deliberate deferrals (Phase B work-queue), not violations — the script never fails on marker count.
 
 **Cross-platform note.** The script is bash. On Windows, run via Git Bash or WSL — both ship with `bash` and modern `rg` on PATH. A PowerShell sibling is not provided in this iteration because the regex set is identical and dual-maintenance is not warranted at solo-maintainer scale.
 
-The recipe is not part of `just ci` by default — refusal triggers are a write-time guard, and CI carries the lint baseline plus the test suite. When a trigger is promoted to a clippy lint per the [Reactive lint promotion](#reactive-lint-promotion) rule, that lint runs under `cargo clippy --workspace -- -D warnings` (already in `just ci`); the doc entry stays as the human-readable surface for the rule.
+The recipe is part of `just ci` and the GitHub `checks` job. When a trigger is promoted to a clippy lint per the [Reactive lint promotion](#reactive-lint-promotion) rule, that lint runs under `cargo clippy --workspace --all-targets -- -D warnings`; the doc entry stays as the human-readable surface for the rule.
 
 ### Self-test (negative-test confirmation)
 

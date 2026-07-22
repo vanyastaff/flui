@@ -1,15 +1,23 @@
 //! Run command for executing FLUI applications.
 //!
-//! Wraps `cargo run` with hot reload support and device selection.
-//! Hot reload uses `notify-debouncer-mini` to watch `src/` and `Cargo.toml`
-//! for changes, then kills and restarts the application.
+//! Two hot-reload modes:
+//!
+//! - **Process restart** (default): watch `src/`, kill + `cargo run` on change.
+//! - **Worker host** (`flui.toml` `[hot_reload]`): watch worker UI sources,
+//!   rebuild `cdylib` only; host applies `HotReloadTier::HotReload` in-process.
 
+use crate::config::{FluiConfig, HotReloadConfig};
 use crate::error::{CliError, CliResult, ResultExt};
 use crate::runner::{CargoCommand, OutputStyle};
 use console::style;
-use std::path::Path;
+use flui_hot_reload::{
+    dev::SourceWatcher,
+    engine::env as worker_env,
+    strategy::{env, timing},
+};
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::mpsc;
+use std::sync::mpsc::RecvTimeoutError;
 use std::time::{Duration, Instant};
 
 /// Execute the run command.
@@ -35,8 +43,17 @@ pub fn execute(
     cliclack::log::info(format!("Target device: {}", style(&target_device).cyan()))?;
 
     if hot_reload && !release {
-        cliclack::log::success("Hot reload enabled")?;
-        watch_and_rebuild(profile.as_deref(), verbose)?;
+        if let Some(project) = find_worker_hot_reload_project()? {
+            cliclack::log::success(format!(
+                "Worker hot reload: {} → {}",
+                style(&project.config.worker_package).cyan(),
+                style(&project.config.host_package).cyan()
+            ))?;
+            watch_worker_hot_reload(&project, profile.as_deref(), verbose)?;
+        } else {
+            cliclack::log::success("Hot reload enabled (process restart)")?;
+            watch_and_rebuild(profile.as_deref(), verbose)?;
+        }
     } else {
         run_once(release, profile, verbose)?;
     }
@@ -65,14 +82,7 @@ fn run_once(release: bool, profile: Option<String>, verbose: bool) -> CliResult<
 }
 
 /// Watch for file changes and rebuild/restart the application.
-///
-/// Uses `notify-debouncer-mini` with 500ms debounce. On change:
-/// 1. Kill current child process
-/// 2. Run `cargo build`
-/// 3. Spawn new `cargo run` child
 fn watch_and_rebuild(profile: Option<&str>, verbose: bool) -> CliResult<()> {
-    use notify_debouncer_mini::{DebouncedEventKind, new_debouncer};
-
     // Initial build.
     cliclack::log::step("Building project...")?;
     let build_ok = run_cargo_build(profile, verbose);
@@ -88,32 +98,15 @@ fn watch_and_rebuild(profile: Option<&str>, verbose: bool) -> CliResult<()> {
     cliclack::log::success(format!("Application started (PID {})", child.id()))?;
     cliclack::log::info("Watching src/ for changes...")?;
 
-    // Set up file watcher. If this fails, kill the child before propagating.
-    let (tx, rx) = mpsc::channel();
+    let mut watcher =
+        SourceWatcher::new().map_err(|e| CliError::context(e, "Failed to create file watcher"))?;
 
-    let debouncer_result = new_debouncer(Duration::from_millis(500), tx);
-    let mut debouncer = match debouncer_result {
-        Ok(d) => d,
-        Err(e) => {
-            let _ = child.kill();
-            wait_with_timeout(&mut child, Duration::from_secs(5));
-            return Err(CliError::context(e, "Failed to create file watcher"));
-        }
-    };
-
-    let watcher = debouncer.watcher();
-    if let Err(e) = watcher.watch(
-        Path::new("src"),
-        notify_debouncer_mini::notify::RecursiveMode::Recursive,
-    ) {
+    if let Err(e) = watcher.watch(Path::new("src"), true) {
         let _ = child.kill();
         wait_with_timeout(&mut child, Duration::from_secs(5));
         return Err(CliError::context(e, "Failed to watch src/"));
     }
-    if let Err(e) = watcher.watch(
-        Path::new("Cargo.toml"),
-        notify_debouncer_mini::notify::RecursiveMode::NonRecursive,
-    ) {
+    if let Err(e) = watcher.watch(Path::new("Cargo.toml"), false) {
         tracing::debug!("Could not watch Cargo.toml: {e}");
     }
 
@@ -125,21 +118,10 @@ fn watch_and_rebuild(profile: Option<&str>, verbose: bool) -> CliResult<()> {
                 tracing::debug!("Application exited with: {:?}", status);
                 cliclack::log::info("Application exited. Watching for changes to restart...")?;
 
-                // Wait for next file change to restart.
-                match rx.recv() {
-                    Ok(Ok(events)) => {
-                        if events.iter().any(|e| e.kind == DebouncedEventKind::Any) {
-                            log_changed_files(&events)?;
-                        }
-                    }
-                    Ok(Err(errors)) => {
-                        tracing::warn!("Watch errors: {:?}", errors);
-                        continue;
-                    }
-                    Err(_) => break, // Channel closed
+                if let Some(paths) = watcher.recv() {
+                    log_changed_paths(&paths);
                 }
 
-                // Rebuild and respawn.
                 if run_cargo_build(profile, verbose) {
                     child = spawn_app(profile, verbose)?;
                     cliclack::log::success(format!("Application restarted (PID {})", child.id()))?;
@@ -156,22 +138,15 @@ fn watch_and_rebuild(profile: Option<&str>, verbose: bool) -> CliResult<()> {
             }
         }
 
-        // Wait for file change events with a short timeout so we can poll child status.
-        match rx.recv_timeout(Duration::from_millis(200)) {
-            Ok(Ok(events)) => {
-                if !events.iter().any(|e| e.kind == DebouncedEventKind::Any) {
-                    continue;
-                }
+        match watcher.recv_timeout(Duration::from_millis(200)) {
+            Ok(Some(paths)) => {
+                log_changed_paths(&paths);
 
-                log_changed_files(&events)?;
-
-                // Kill current process.
                 if let Err(e) = child.kill() {
                     tracing::debug!("Could not kill child process: {e}");
                 }
                 wait_with_timeout(&mut child, Duration::from_secs(5));
 
-                // Rebuild.
                 cliclack::log::step("Rebuilding...")?;
                 if run_cargo_build(profile, verbose) {
                     child = spawn_app(profile, verbose)?;
@@ -180,23 +155,14 @@ fn watch_and_rebuild(profile: Option<&str>, verbose: bool) -> CliResult<()> {
                     cliclack::log::warning(
                         "Build failed. Watching for changes... (fix errors and save to retry)",
                     )?;
-                    // Wait for next change before trying again — spawn a placeholder.
-                    // We'll detect the missing child on next loop iteration.
-                    // Use a dummy child that immediately exits.
                     child = spawn_wait_dummy()?;
                 }
             }
-            Ok(Err(errors)) => {
-                tracing::warn!("Watch errors: {:?}", errors);
-            }
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                // Normal — just loop back to check child status.
-            }
-            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            Ok(None) | Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => break,
         }
     }
 
-    // Cleanup: kill the child if still running.
     let _ = child.kill();
     wait_with_timeout(&mut child, Duration::from_secs(5));
 
@@ -238,7 +204,7 @@ fn spawn_app(profile: Option<&str>, verbose: bool) -> CliResult<Child> {
         cmd.arg("--verbose");
     }
 
-    cmd.env("FLUI_HOT_RELOAD", "1");
+    cmd.env(env::HOT_RELOAD, "1");
     cmd.stdin(Stdio::inherit());
     cmd.stdout(Stdio::inherit());
     cmd.stderr(Stdio::inherit());
@@ -292,25 +258,387 @@ fn spawn_wait_dummy() -> CliResult<Child> {
         .context("Failed to spawn dummy process")
 }
 
-/// Log which files changed.
-#[expect(
-    clippy::unnecessary_wraps,
-    reason = "consistent error handling interface"
-)]
-fn log_changed_files(events: &[notify_debouncer_mini::DebouncedEvent]) -> CliResult<()> {
-    for event in events {
-        if event.kind == notify_debouncer_mini::DebouncedEventKind::Any {
-            let _ = cliclack::log::info(format!(
-                "Change detected: {}",
-                style(event.path.display()).dim()
-            ));
+fn log_changed_paths(paths: &[PathBuf]) {
+    for path in paths {
+        let _ = cliclack::log::info(format!("Change detected: {}", style(path.display()).dim()));
+    }
+}
+
+/// Resolved host/worker project paths for `flui run`.
+struct WorkerHotReloadProject {
+    config: HotReloadConfig,
+    /// Directory containing `flui.toml`.
+    config_dir: PathBuf,
+    /// Cargo workspace root (`target/` lives here).
+    workspace_root: PathBuf,
+}
+
+/// Flutter-parity hot reload: keep host alive, rebuild worker `cdylib` on save.
+fn watch_worker_hot_reload(
+    project: &WorkerHotReloadProject,
+    profile: Option<&str>,
+    verbose: bool,
+) -> CliResult<()> {
+    let worker_path =
+        worker_dylib_path(&project.workspace_root, &project.config.worker_lib, profile);
+
+    cliclack::log::step("Building worker and host...")?;
+    if !run_cargo_build_package(&project.config.worker_package, profile, verbose, None) {
+        return Err(CliError::BuildFailed {
+            platform: "desktop".to_string(),
+            details: format!("Initial build failed for {}", project.config.worker_package),
+        });
+    }
+    publish_worker_plugin(&worker_path, &worker_path)?;
+    if !run_cargo_build_package(&project.config.host_package, profile, verbose, None) {
+        return Err(CliError::BuildFailed {
+            platform: "desktop".to_string(),
+            details: format!("Initial build failed for {}", project.config.host_package),
+        });
+    }
+
+    let mut child =
+        spawn_host_package(&project.config.host_package, &worker_path, profile, verbose)?;
+    cliclack::log::success(format!(
+        "Host started (PID {}) — worker at {}",
+        child.id(),
+        style(worker_path.display()).dim()
+    ))?;
+
+    let logic_src = project.config_dir.join(&project.config.logic_watch);
+    let types_src = project
+        .config
+        .types_watch
+        .as_ref()
+        .map(|p| project.config_dir.join(p));
+
+    let mut watcher =
+        SourceWatcher::new().map_err(|e| CliError::context(e, "Failed to create file watcher"))?;
+
+    watcher
+        .watch(&logic_src, true)
+        .map_err(|e| CliError::context(e, format!("Failed to watch {}", logic_src.display())))?;
+    if let Some(ref types) = types_src
+        && types.exists()
+    {
+        watcher
+            .watch(types, true)
+            .map_err(|e| CliError::context(e, format!("Failed to watch {}", types.display())))?;
+    }
+
+    cliclack::log::info(format!(
+        "Watching {} — edit UI code and save (host stays running)",
+        style(logic_src.display()).dim()
+    ))?;
+
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                tracing::debug!("Host exited with: {:?}", status);
+                cliclack::log::warning("Host exited. Rebuild and restart on next save...")?;
+                if let Some(paths) = watcher.recv() {
+                    handle_worker_watch_event(project, profile, verbose, &paths, &mut child)?;
+                }
+                continue;
+            }
+            Ok(None) => {}
+            Err(e) => tracing::warn!("Error checking host status: {e}"),
         }
+
+        match watcher.recv_timeout(Duration::from_millis(200)) {
+            Ok(Some(paths)) => {
+                handle_worker_watch_event(project, profile, verbose, &paths, &mut child)?;
+            }
+            Ok(None) | Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => break,
+        }
+    }
+
+    let _ = child.kill();
+    wait_with_timeout(&mut child, Duration::from_secs(5));
+    Ok(())
+}
+
+fn handle_worker_watch_event(
+    project: &WorkerHotReloadProject,
+    profile: Option<&str>,
+    verbose: bool,
+    paths: &[PathBuf],
+    child: &mut Child,
+) -> CliResult<()> {
+    log_changed_paths(paths);
+
+    let types_src = project
+        .config
+        .types_watch
+        .as_ref()
+        .map(|p| project.config_dir.join(p));
+    let types_changed = types_src.is_some_and(|types| paths.iter().any(|p| p.starts_with(&types)));
+
+    if types_changed {
+        cliclack::log::step("Types changed — rebuilding host (hot restart)...")?;
+        match child.try_wait() {
+            Ok(None) => {
+                let _ = child.kill();
+                wait_with_timeout(child, Duration::from_secs(5));
+            }
+            Ok(Some(_)) => {}
+            Err(e) => tracing::warn!("Error checking host status: {e}"),
+        }
+        let ok = run_cargo_build_package(&project.config.worker_package, profile, verbose, None)
+            && run_cargo_build_package(&project.config.host_package, profile, verbose, None);
+        if ok {
+            let worker_path =
+                worker_dylib_path(&project.workspace_root, &project.config.worker_lib, profile);
+            publish_worker_plugin(&worker_path, &worker_path)?;
+            *child =
+                spawn_host_package(&project.config.host_package, &worker_path, profile, verbose)?;
+            cliclack::log::success(format!("Host restarted (PID {})", child.id()))?;
+        } else {
+            cliclack::log::warning("Build failed — fix errors and save to retry")?;
+        }
+        return Ok(());
+    }
+
+    cliclack::log::step("Rebuilding worker (state preserved in host)...")?;
+    let host_running = matches!(child.try_wait(), Ok(None));
+    let isolate_target = host_running;
+    let build_root = if isolate_target {
+        worker_isolated_target_dir(&project.workspace_root)
+    } else {
+        project.workspace_root.clone()
+    };
+
+    if run_cargo_build_package(
+        &project.config.worker_package,
+        profile,
+        verbose,
+        isolate_target.then_some(build_root.as_path()),
+    ) {
+        let built = worker_dylib_path(&build_root, &project.config.worker_lib, profile);
+        let canonical =
+            worker_dylib_path(&project.workspace_root, &project.config.worker_lib, profile);
+        let staged = stage_worker_artifact(&built, &canonical, isolate_target)?;
+        publish_worker_plugin(&canonical, &staged)?;
+        cliclack::log::success("Worker rebuilt — host will hot-reload on next frame (~500ms)")?;
+        if let Ok(None) = child.try_wait() {
+            // Host still running — WorkerReloadDriver picks up the new dylib.
+        } else {
+            *child =
+                spawn_host_package(&project.config.host_package, &canonical, profile, verbose)?;
+            cliclack::log::success(format!("Host restarted (PID {})", child.id()))?;
+        }
+    } else {
+        cliclack::log::warning("Worker build failed — fix errors and save to retry")?;
     }
     Ok(())
 }
 
+fn worker_isolated_target_dir(workspace_root: &Path) -> PathBuf {
+    workspace_root.join("target").join("worker-hot-reload")
+}
+
+/// Copy a freshly built worker into a staging file the host can load while the
+/// canonical output remains locked (Windows).
+fn stage_worker_artifact(built: &Path, canonical: &Path, use_staging: bool) -> CliResult<PathBuf> {
+    if !use_staging {
+        return Ok(built.to_path_buf());
+    }
+
+    let parent = canonical.parent().ok_or_else(|| CliError::BuildFailed {
+        platform: "desktop".to_string(),
+        details: "worker dylib path has no parent directory".to_string(),
+    })?;
+    std::fs::create_dir_all(parent).context("Failed to create worker staging directory")?;
+
+    let ext = canonical
+        .extension()
+        .map(|e| format!(".{}", e.to_string_lossy()))
+        .unwrap_or_default();
+    let stem = canonical
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("worker");
+
+    let slot_a = parent.join(format!("{stem}.staging-a{ext}"));
+    let slot_b = parent.join(format!("{stem}.staging-b{ext}"));
+
+    let dest = if slot_a.exists() && !slot_b.exists() {
+        slot_b
+    } else {
+        slot_a
+    };
+
+    std::fs::copy(built, &dest).with_context(|| {
+        format!(
+            "Failed to stage worker from {} to {}",
+            built.display(),
+            dest.display()
+        )
+    })?;
+    Ok(dest)
+}
+
+/// Write `.flui_worker_plugin` next to the canonical dylib so the host loads
+/// the staged artifact without overwriting a locked file.
+fn publish_worker_plugin(canonical: &Path, load_path: &Path) -> CliResult<()> {
+    let manifest = worker_plugin_manifest_path(canonical);
+    if let Some(parent) = manifest.parent() {
+        std::fs::create_dir_all(parent).context("Failed to create worker manifest directory")?;
+    }
+    std::fs::write(&manifest, load_path.as_os_str().as_encoded_bytes())
+        .with_context(|| format!("Failed to write {}", manifest.display()))?;
+    Ok(())
+}
+
+fn worker_plugin_manifest_path(canonical: &Path) -> PathBuf {
+    canonical.parent().map_or_else(
+        || PathBuf::from(".flui_worker_plugin"),
+        |dir| dir.join(".flui_worker_plugin"),
+    )
+}
+
+fn spawn_host_package(
+    package: &str,
+    worker_plugin: &Path,
+    profile: Option<&str>,
+    verbose: bool,
+) -> CliResult<Child> {
+    let mut cmd = Command::new("cargo");
+    cmd.args(["run", "-p", package]);
+
+    if let Some(prof) = profile {
+        cmd.args(["--profile", prof]);
+    }
+
+    if verbose {
+        cmd.arg("--verbose");
+    }
+
+    cmd.env(worker_env::WORKER_PLUGIN, worker_plugin);
+    cmd.env(env::HOT_RELOAD, "1");
+    cmd.stdin(Stdio::inherit());
+    cmd.stdout(Stdio::inherit());
+    cmd.stderr(Stdio::inherit());
+
+    cmd.spawn().context("Failed to spawn host application")
+}
+
+fn run_cargo_build_package(
+    package: &str,
+    profile: Option<&str>,
+    verbose: bool,
+    target_dir: Option<&Path>,
+) -> bool {
+    let mut cmd = Command::new("cargo");
+    cmd.args(["build", "-p", package]);
+
+    if let Some(dir) = target_dir {
+        let dir = dir.to_string_lossy();
+        cmd.args(["--target-dir", &dir]);
+    }
+
+    if let Some(prof) = profile {
+        cmd.args(["--profile", prof]);
+    }
+
+    if verbose {
+        cmd.arg("--verbose");
+    }
+
+    match cmd.status() {
+        Ok(status) => status.success(),
+        Err(e) => {
+            tracing::error!("Failed to run cargo build -p {package}: {e}");
+            false
+        }
+    }
+}
+
+fn worker_dylib_path(workspace_root: &Path, worker_lib: &str, profile: Option<&str>) -> PathBuf {
+    let profile_dir = profile.unwrap_or("debug");
+    let mut path = workspace_root.join("target").join(profile_dir);
+    #[cfg(windows)]
+    {
+        path.push(format!("{worker_lib}.dll"));
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        path.push(format!("lib{worker_lib}.so"));
+    }
+    #[cfg(target_os = "macos")]
+    {
+        path.push(format!("lib{worker_lib}.dylib"));
+    }
+    path
+}
+
+fn find_worker_hot_reload_project() -> CliResult<Option<WorkerHotReloadProject>> {
+    let Some((config_dir, config)) = find_flui_config()? else {
+        return Ok(None);
+    };
+    let Some(hot_reload) = config.hot_reload else {
+        return Ok(None);
+    };
+    let workspace_root =
+        find_workspace_root(&config_dir).ok_or_else(|| CliError::NotFluiProject {
+            reason: "Could not find Cargo workspace root for worker hot reload".to_string(),
+        })?;
+    Ok(Some(WorkerHotReloadProject {
+        config: hot_reload,
+        config_dir,
+        workspace_root,
+    }))
+}
+
+fn find_flui_config() -> CliResult<Option<(PathBuf, FluiConfig)>> {
+    let mut dir = std::env::current_dir().context("Could not read current directory")?;
+    loop {
+        let path = dir.join("flui.toml");
+        if path.exists() {
+            let config = FluiConfig::load_from(&path)?;
+            return Ok(Some((dir, config)));
+        }
+        if !dir.pop() {
+            break;
+        }
+    }
+    Ok(None)
+}
+
+fn find_workspace_root(start: &Path) -> Option<PathBuf> {
+    let mut dir = start.to_path_buf();
+    loop {
+        let cargo = dir.join("Cargo.toml");
+        if cargo.exists()
+            && let Ok(content) = std::fs::read_to_string(&cargo)
+            && content.contains("[workspace]")
+        {
+            return Some(dir);
+        }
+        if !dir.pop() {
+            break;
+        }
+    }
+    None
+}
+
+/// Whether a `Cargo.toml` declares a FLUI dependency.
+///
+/// The package names are hyphenated (`flui-app`) — that is what the templates
+/// emit and what Cargo expects. The underscore spelling is accepted too, since
+/// a hand-written manifest may rename the dependency to its crate name.
+fn has_flui_dependency(cargo_toml: &str) -> bool {
+    let normalized = cargo_toml.replace('-', "_");
+    normalized.contains("flui_app") || normalized.contains("flui_widgets")
+}
+
 /// Ensure we're in a FLUI project directory.
 fn ensure_flui_project() -> CliResult<()> {
+    if find_worker_hot_reload_project()?.is_some() {
+        return Ok(());
+    }
+
     let cargo_toml = Path::new("Cargo.toml");
 
     if !cargo_toml.exists() {
@@ -319,11 +647,10 @@ fn ensure_flui_project() -> CliResult<()> {
         });
     }
 
-    // Check for FLUI dependency
     let content = std::fs::read_to_string(cargo_toml)?;
-    if !content.contains("flui_app") && !content.contains("flui_widgets") {
+    if !has_flui_dependency(&content) {
         return Err(CliError::NotFluiProject {
-            reason: "flui_app or flui_widgets dependency not found in Cargo.toml".to_string(),
+            reason: "flui-app or flui-widgets dependency not found in Cargo.toml".to_string(),
         });
     }
 
@@ -340,10 +667,9 @@ pub fn execute_scene(
     package: &str,
     target: &str,
     release: bool,
-    verbose: bool,
+    _verbose: bool,
 ) -> CliResult<()> {
     use flui_build::android::AndroidBuilder;
-    use notify_debouncer_mini::{DebouncedEventKind, new_debouncer};
 
     let mode = if release { "release" } else { "debug" };
     cliclack::intro(style(" flui run --scene ").on_magenta().black())?;
@@ -403,7 +729,11 @@ pub fn execute_scene(
         if !alt.exists() {
             return Err(CliError::BuildFailed {
                 platform: "android".to_string(),
-                details: format!("Scene crate src/ not found at {:?} or {:?}", scene_src, alt),
+                details: format!(
+                    "Scene crate src/ not found at {} or {}",
+                    scene_src.display(),
+                    alt.display()
+                ),
             });
         }
     }
@@ -413,56 +743,39 @@ pub fn execute_scene(
         style(scene_src.display()).dim()
     ))?;
 
-    let (tx, rx) = mpsc::channel();
-    let mut debouncer = new_debouncer(Duration::from_millis(300), tx)
+    let mut watcher = SourceWatcher::with_debounce(timing::ANDROID_SCENE_DEBOUNCE)
         .map_err(|e| CliError::context(e, "Failed to create file watcher"))?;
 
-    debouncer
-        .watcher()
-        .watch(
-            &scene_src,
-            notify_debouncer_mini::notify::RecursiveMode::Recursive,
-        )
+    watcher
+        .watch(&scene_src, true)
         .map_err(|e| CliError::context(e, "Failed to watch scene crate"))?;
 
-    loop {
-        match rx.recv() {
-            Ok(Ok(events)) => {
-                if !events.iter().any(|e| e.kind == DebouncedEventKind::Any) {
-                    continue;
-                }
+    while let Some(paths) = watcher.recv() {
+        log_changed_paths(&paths);
 
-                log_changed_files(&events)?;
+        let start = Instant::now();
+        cliclack::log::step("Rebuilding scene plugin...")?;
 
-                let start = Instant::now();
-                cliclack::log::step("Rebuilding scene plugin...")?;
-
-                match rt.block_on(builder.build_scene_plugin(target, scene_crate, release)) {
-                    Ok(so) => {
-                        let build_time = start.elapsed();
-                        cliclack::log::step("Pushing to device...")?;
-                        match rt.block_on(builder.push_scene_plugin(&so, package, lib_name)) {
-                            Ok(()) => {
-                                cliclack::log::success(format!(
-                                    "Updated in {:.2}s",
-                                    build_time.as_secs_f64()
-                                ))?;
-                            }
-                            Err(e) => {
-                                cliclack::log::warning(format!("Push failed: {e}"))?;
-                            }
-                        }
+        match rt.block_on(builder.build_scene_plugin(target, scene_crate, release)) {
+            Ok(so) => {
+                let build_time = start.elapsed();
+                cliclack::log::step("Pushing to device...")?;
+                match rt.block_on(builder.push_scene_plugin(&so, package, lib_name)) {
+                    Ok(()) => {
+                        cliclack::log::success(format!(
+                            "Updated in {:.2}s",
+                            build_time.as_secs_f64()
+                        ))?;
                     }
                     Err(e) => {
-                        cliclack::log::warning(format!("Build failed: {e}"))?;
-                        cliclack::log::info("Fix errors and save to retry...")?;
+                        cliclack::log::warning(format!("Push failed: {e}"))?;
                     }
                 }
             }
-            Ok(Err(errors)) => {
-                tracing::warn!("Watch errors: {:?}", errors);
+            Err(e) => {
+                cliclack::log::warning(format!("Build failed: {e}"))?;
+                cliclack::log::info("Fix errors and save to retry...")?;
             }
-            Err(_) => break,
         }
     }
 
@@ -487,4 +800,20 @@ fn select_default_device() -> CliResult<String> {
 
     #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
     Err(CliError::NoDefaultDevice)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::has_flui_dependency;
+
+    /// `flui create` emits hyphenated dep names; `flui run` must recognise the
+    /// project it just generated.
+    #[test]
+    fn generated_manifest_is_recognised_as_a_flui_project() {
+        assert!(has_flui_dependency(
+            r#"flui-app = { path = "../../crates/flui-app" }"#
+        ));
+        assert!(has_flui_dependency(r#"flui_widgets = "0.2.0""#));
+        assert!(!has_flui_dependency(r#"serde = "1.0""#));
+    }
 }

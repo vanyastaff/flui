@@ -7,7 +7,8 @@
 //! phase to warn about — and any future retained state would have
 //! dangled outright.
 
-use flui_rendering::{objects::RenderColoredBox, pipeline::PipelineOwner};
+use flui_objects::RenderColoredBox;
+use flui_rendering::pipeline::PipelineOwner;
 
 type BoxedRenderObject =
     Box<dyn flui_rendering::traits::RenderObject<flui_rendering::protocol::BoxProtocol>>;

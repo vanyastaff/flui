@@ -6,7 +6,6 @@
 
 #![allow(unused)] // Painting API for future implementation
 
-pub mod alignment;
 pub mod blend_mode;
 pub mod canvas;
 pub mod clipping;
@@ -17,7 +16,7 @@ pub mod path;
 pub mod shader;
 
 // Re-exports for convenience
-pub use alignment::Alignment;
+pub use crate::layout::Alignment;
 pub use blend_mode::BlendMode;
 pub use canvas::{
     BlurStyle, FilterQuality, PaintingStyle, PathFillType, PathOperation, PointMode, StrokeCap,

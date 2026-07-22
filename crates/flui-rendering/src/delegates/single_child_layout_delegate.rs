@@ -20,8 +20,9 @@ use crate::constraints::BoxConstraints;
 /// # Example
 ///
 /// ```ignore
+/// use flui_rendering::constraints::BoxConstraints;
 /// use flui_rendering::delegates::SingleChildLayoutDelegate;
-/// use flui_types::{BoxConstraints, Offset, Size};
+/// use flui_types::{Offset, Size};
 ///
 /// #[derive(Debug)]
 /// struct CenteringDelegate;
@@ -59,7 +60,9 @@ pub trait SingleChildLayoutDelegate: Send + Sync + Debug {
     /// # Returns
     ///
     /// The size of this render object.
-    fn get_size(&self, constraints: BoxConstraints) -> Size;
+    fn get_size(&self, constraints: BoxConstraints) -> Size {
+        constraints.biggest()
+    }
 
     /// Get the constraints to pass to the child.
     ///
@@ -73,7 +76,9 @@ pub trait SingleChildLayoutDelegate: Send + Sync + Debug {
     /// # Returns
     ///
     /// The constraints to pass to the child.
-    fn get_constraints_for_child(&self, constraints: BoxConstraints) -> BoxConstraints;
+    fn get_constraints_for_child(&self, constraints: BoxConstraints) -> BoxConstraints {
+        constraints
+    }
 
     /// Get the position of the child within the parent.
     ///
@@ -88,7 +93,9 @@ pub trait SingleChildLayoutDelegate: Send + Sync + Debug {
     /// # Returns
     ///
     /// The offset of the child from the parent's origin.
-    fn get_position_for_child(&self, size: Size, child_size: Size) -> Offset;
+    fn get_position_for_child(&self, _size: Size, _child_size: Size) -> Offset {
+        Offset::ZERO
+    }
 
     /// Whether to relayout when the delegate changes.
     ///

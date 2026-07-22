@@ -8,30 +8,28 @@ use thiserror::Error;
 
 /// Errors that can occur during rendering operations.
 ///
-/// Cycle 4: `#[non_exhaustive]` future-compat marker. Matches the
-/// workspace 2026 quality bar — public error enums in foundation /
-/// tree / painting / engine all carry the attribute (cycle 3 I-11
-/// added it on `DiagnosticLevel` / `DiagnosticsTreeStyle`).
+/// Marked `#[non_exhaustive]` as a future-compat measure, matching the
+/// convention followed by public error enums across foundation / tree /
+/// painting / engine so new variants can be added without a breaking
+/// change for downstream matches.
 ///
-/// Cycle 4 R-17: the 5 message-carrying variants
-/// (`InvalidConstraints`, `RelayoutBoundaryViolation`, `LayerError`,
-/// `CompositingError`, `SemanticsError`) store `Box<str>` rather
-/// than `String`. `Box<str>` is a 16-byte fat pointer (vs `String`'s
-/// 24-byte `Vec<u8>` header) and never wastes capacity on the heap
-/// — error messages are written-once / read-rarely, so the `Vec`
-/// growth amortisation `String` provides has no value here. Same
-/// pattern as cycle 3 PR #106 (TreeError::Internal). Constructors
-/// accept `impl Into<Box<str>>` which covers `&str`, `String`, and
-/// `Box<str>` callers unchanged.
-// Cycle 4 R-25: dropped `Clone` derive. Workspace grep
-// (`rg 'RenderError.*clone\(\)'`) returned zero consumers of
-// `.clone()` on RenderError; errors are terminal values that
-// propagate through `?` or `Result::map_err`, neither of which
-// requires Clone. Removing the derive matches the canonical Rust
-// error idiom (*Programming Rust* 2nd ed §7 "Error Handling":
-// errors are throwaways, not duplicates). If a future caller needs
-// to fan out a RenderError to multiple consumers, wrap in `Arc`
-// at that callsite -- cheap, explicit, and avoids the
+/// The 5 message-carrying variants (`InvalidConstraints`,
+/// `RelayoutBoundaryViolation`, `LayerError`, `CompositingError`,
+/// `SemanticsError`) store `Box<str>` rather than `String`. `Box<str>` is
+/// a 16-byte fat pointer (vs `String`'s 24-byte `Vec<u8>` header) and
+/// never wastes capacity on the heap — error messages are written-once /
+/// read-rarely, so the `Vec` growth amortisation `String` provides has no
+/// value here (the same reasoning applies to `TreeError::Internal`).
+/// Constructors accept `impl Into<Box<str>>` which covers `&str`,
+/// `String`, and `Box<str>` callers unchanged.
+// This type intentionally does not derive `Clone`. A workspace grep
+// (`rg 'RenderError.*clone\(\)'`) found zero consumers of `.clone()` on
+// RenderError; errors are terminal values that propagate through `?` or
+// `Result::map_err`, neither of which requires Clone. Omitting the derive
+// matches the canonical Rust error idiom (*Programming Rust* 2nd ed §7
+// "Error Handling": errors are throwaways, not duplicates). If a future
+// caller needs to fan out a RenderError to multiple consumers, wrap in
+// `Arc` at that callsite -- cheap, explicit, and avoids the
 // implicit-deep-copy footgun.
 #[derive(Error, Debug)]
 #[non_exhaustive]
@@ -147,11 +145,11 @@ pub enum RenderError {
     #[error("semantics system not enabled")]
     SemanticsNotEnabled,
 
-    // ChildHandleError variant removed in Mythos Step 5b along with the
+    // ChildHandleError variant removed along with the
     // child_handle.rs / children_access.rs modules it served.
 
     // ========================================================================
-    // Mythos Step 12 -- structured terminal failures
+    // Structured terminal failures
     // ========================================================================
     /// Geometry returned from a render object's `perform_layout` is
     /// structurally invalid (NaN, negative dimensions, larger than
@@ -187,7 +185,7 @@ pub enum RenderError {
     /// in-flight frame, and surfaces this variant so the caller can
     /// decide (drop the node, retry next frame, abort).
     ///
-    /// Mythos Step 12 (2026-05-20): the catch_unwind plumbing is live.
+    /// The `std::panic::catch_unwind` plumbing is live as of 2026-05-20.
     /// See [`RenderEntry::layout_leaf_only`](crate::storage::RenderEntry::layout_leaf_only)
     /// for the layout wrapper and `PipelineOwner::<PaintPhase>` for the
     /// paint wrapper. The `Mapping decisions` section of
@@ -201,7 +199,7 @@ pub enum RenderError {
     },
 
     // ========================================================================
-    // D-block PR-A1b — protocol-erased dispatch
+    // Protocol-erased dispatch
     // ========================================================================
     /// A pipeline walk reached a node whose protocol does not match the
     /// protocol the walk expects. Returned by the layout walk (a `Box(_)`
@@ -222,19 +220,17 @@ pub enum RenderError {
     /// (via `LayoutContext::layout_child`) back into a node whose layout
     /// was still in flight on the same frame.
     ///
-    /// **Variant pre-added in D-block PR-A1b U18; cycle-detection wiring
-    /// lands in U21** (companion memo D6) as a `currently_laying_out`
-    /// `FxHashSet<RenderId>` guard on `PipelineOwner<Layout>` with a
-    /// RAII drop-guard for unwind safety. Currently no production code
-    /// constructs this variant — it is reserved so the error surface is
-    /// already stable when U21 wires the guard.
+    /// The cycle-detection guard is a per-slot
+    /// `AtomicBool` in-flight flag in the `SubtreeArena` `by_id` index,
+    /// set/cleared by a RAII `LayoutCycleGuard` (unwind-safe via `Drop`);
+    /// re-entry into an in-flight slot returns this variant.
     #[error("layout cycle detected: node {0:?} re-entered while its own layout was in flight")]
     LayoutCycle(RenderId),
 
     /// A pipeline-side disjoint-borrow walk requested a child slot
     /// outside the parent's child-id range.
     ///
-    /// **D-block PR-A1b3 U20 (companion memo D1):** reserved variant
+    /// Reserved variant
     /// for future defensive bounds checks at the pipeline-side
     /// disjoint-borrow seam (e.g., when an off-by-one or stale-id
     /// condition would make a `child_ids[index]` access panic).
@@ -279,11 +275,11 @@ pub enum RenderError {
     ///
     /// # History
     ///
-    /// **D-block PR-A1b U19 review fix #5 (Option B, PR #141):**
-    /// introduced so the `RenderObject<BoxProtocol>` blanket impl on
+    /// **Original implementation:** introduced so the
+    /// `RenderObject<BoxProtocol>` blanket impl on
     /// [`crate::traits::RenderBox`] can signal that a render object
     /// violated its layout contract as a typed error rather than an
-    /// opaque panic. The original landing used
+    /// opaque panic. It used
     /// `std::panic::panic_any(RenderError::ContractViolation { ... })`
     /// caught by `catch_unwind` in
     /// [`RenderEntry::layout_leaf_only`](crate::storage::RenderEntry::layout_leaf_only)
@@ -291,9 +287,8 @@ pub enum RenderError {
     /// minimum-disruption shape that preserved the existing
     /// `perform_layout_raw` infallible signature.
     ///
-    /// **Follow-up PR (this commit, Option A):** the
-    /// `perform_layout_raw` signature now returns
-    /// `RenderResult<ProtocolGeometry<P>>` so contract violations
+    /// **Follow-up change:** the `perform_layout_raw` signature now
+    /// returns `RenderResult<ProtocolGeometry<P>>` so contract violations
     /// propagate as typed `Err(...)` through `?` directly — no panic
     /// primitive in the normal error path. The variant + constructor
     /// stay; the only change is how the value reaches
@@ -318,17 +313,16 @@ pub type RenderResult<T> = Result<T, RenderError>;
 impl RenderError {
     /// Creates an invalid constraints error with a message.
     ///
-    /// Cycle 4 R-17: message stored as `Box<str>` (heap allocation
-    /// shrinks from 24 bytes of `String` header to 16 bytes of fat
-    /// pointer).
+    /// The message is stored as `Box<str>` (heap allocation shrinks from
+    /// 24 bytes of `String` header to 16 bytes of fat pointer).
     ///
-    /// PR #112 review fix: constructor bound is `impl AsRef<str>`
-    /// rather than `impl Into<Box<str>>`. `AsRef<str>` is strictly
-    /// more permissive -- it accepts `&str`, `String`, `Box<str>`,
-    /// `&String`, `Cow<str>`, etc. The allocation happens once via
-    /// `message.as_ref().into()` (`str` -> `Box<str>`). Pre-fix
-    /// `Into<Box<str>>` rejected `&String` callers (no impl from
-    /// `&String` to `Box<str>` without deref coercion).
+    /// The constructor bound is `impl AsRef<str>` rather than
+    /// `impl Into<Box<str>>`. `AsRef<str>` is strictly more permissive --
+    /// it accepts `&str`, `String`, `Box<str>`, `&String`, `Cow<str>`,
+    /// etc. The allocation happens once via `message.as_ref().into()`
+    /// (`str` -> `Box<str>`); `Into<Box<str>>` would reject `&String`
+    /// callers (there is no impl from `&String` to `Box<str>` without
+    /// deref coercion).
     pub fn invalid_constraints(message: impl AsRef<str>) -> Self {
         Self::InvalidConstraints {
             message: message.as_ref().into(),
@@ -383,7 +377,7 @@ impl RenderError {
 
     /// Creates a ContractViolation error.
     ///
-    /// **D-block PR-A1b U19 review fix #5 (Option A follow-up):**
+    /// **Option A follow-up:**
     /// returned as `Err(...)` by the
     /// [`RenderObject<BoxProtocol>`](crate::traits::RenderObject)
     /// blanket impl when a render object violates its layout contract.
@@ -406,7 +400,7 @@ impl RenderError {
 
     /// Creates a [`ChildIndexOutOfBounds`](Self::ChildIndexOutOfBounds) error.
     ///
-    /// **D-block PR-A1b3 U20 (companion memo D1):** used by the
+    /// Used by the
     /// pipeline-side disjoint-borrow walk to surface stale-id /
     /// off-by-one conditions on the child-id slice as a typed error
     /// instead of a panic or silent `Size::ZERO`.
@@ -420,13 +414,13 @@ impl RenderError {
 
     /// Creates a [`LayoutCycle`](Self::LayoutCycle) error.
     ///
-    /// **D-block PR-A1 U21 (companion memo D6):** returned by
+    /// Returned by
     /// [`PipelineOwner::layout_dirty_root`](crate::pipeline::PipelineOwner::layout_dirty_root)
     /// when a render object's `perform_layout` re-enters an ancestor's
-    /// layout via `ctx.layout_child` — the `currently_laying_out`
-    /// `FxHashSet<RenderId>` guard detects the second-borrow attempt
-    /// and surfaces this variant instead of triggering an aliasing
-    /// reborrow or stack overflow.
+    /// layout via `ctx.layout_child` — the `SubtreeArena` per-slot
+    /// `AtomicBool` in-flight flag (set by `LayoutCycleGuard`) detects the
+    /// second-borrow attempt and surfaces this variant instead of
+    /// triggering an aliasing reborrow or stack overflow.
     pub fn layout_cycle(id: RenderId) -> Self {
         Self::LayoutCycle(id)
     }
@@ -457,7 +451,7 @@ mod tests {
         assert!(matches!(err, RenderError::CompositingError { .. }));
     }
 
-    /// PR-A1b3 U20: `ChildIndexOutOfBounds` round-trips its parent / index
+    /// `ChildIndexOutOfBounds` round-trips its parent / index
     /// / child_count fields and renders the expected display string.
     #[test]
     fn test_child_index_out_of_bounds() {

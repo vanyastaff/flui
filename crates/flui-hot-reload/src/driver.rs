@@ -34,10 +34,10 @@ use std::{
 
 use flui_layer::Scene;
 
-use crate::host::{PluginKind, ScenePlugin};
-
-/// Default polling interval for mtime checks.
-const DEFAULT_POLL_INTERVAL: Duration = Duration::from_millis(500);
+use crate::{
+    host::{PluginKind, ScenePlugin},
+    strategy::timing,
+};
 
 /// Manages the hot-reload lifecycle for a scene plugin.
 ///
@@ -77,7 +77,7 @@ impl HotReloadDriver {
         Self {
             plugin,
             lib_path,
-            poll_interval: DEFAULT_POLL_INTERVAL,
+            poll_interval: timing::ARTIFACT_POLL,
             last_poll: Instant::now(),
             reload_count: 0,
         }

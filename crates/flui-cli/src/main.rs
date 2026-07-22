@@ -380,7 +380,8 @@ impl Template {
 
 /// Target platforms for FLUI applications.
 #[derive(Clone, Copy, ValueEnum, Debug, PartialEq, Eq, Hash)]
-pub enum Platform { // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
+pub enum Platform {
+    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// Microsoft Windows
     Windows,
     /// Linux distributions
@@ -517,8 +518,7 @@ impl BuildTarget {
 fn main() {
     let cli = Cli::parse();
 
-    // Initialize logging (merged from flui-log into flui_foundation::log in
-    // D-block PR-C-1 U2).
+    // Initialize logging (merged from flui-log into flui_foundation::log).
     let log_level = if cli.verbose {
         flui_foundation::log::Level::DEBUG
     } else {

@@ -56,7 +56,6 @@
 //!
 //! // Layout complete
 //! flags.remove(RenderFlags::NEEDS_LAYOUT);
-//! flags.set(RenderFlags::HAS_GEOMETRY);
 //! ```
 //!
 //! ## Flutter-Style API
@@ -116,7 +115,6 @@ bitflags! {
     /// - `IS_REPAINT_BOUNDARY` - Paint change isolation boundary
     ///
     /// ## State Flags (computed properties)
-    /// - `HAS_GEOMETRY` - Node has computed geometry at least once
     /// - `HAS_OVERFLOW` - Overflow detected (debug only)
     ///
     /// # Flutter Equivalents
@@ -140,12 +138,12 @@ bitflags! {
     /// Bit 3: IS_RELAYOUT_BOUNDARY
     /// Bit 4: IS_REPAINT_BOUNDARY
     /// Bit 5: NEEDS_SEMANTICS
-    /// Bit 6: HAS_GEOMETRY
+    /// Bit 6: (reserved — hole left intentionally)
     /// Bit 7: HAS_OVERFLOW (debug only)
     /// Bit 8: NEEDS_LAYOUT_PROPAGATION
     /// Bit 9: NEEDS_PAINT_PROPAGATION
     /// Bit 10: WAS_REPAINT_BOUNDARY
-    /// Bit 11: NEEDS_COMPOSITING_BITS_UPDATE (PR-A2 U32)
+    /// Bit 11: NEEDS_COMPOSITING_BITS_UPDATE
     /// Bits 12-31: Reserved for future use
     /// ```
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -214,11 +212,7 @@ bitflags! {
 
         // ===== State Flags (Computed Properties) =====
 
-        /// Node has computed geometry at least once.
-        ///
-        /// Cleared on attach, set after first successful layout.
-        /// Used to determine if cached geometry is available.
-        const HAS_GEOMETRY = 1 << 6;
+        // Bit 6: reserved hole — do not reuse this bit position.
 
         /// Overflow detected during layout or paint (debug only).
         ///
@@ -243,7 +237,7 @@ bitflags! {
 
         /// Previous frame's `IS_REPAINT_BOUNDARY` value.
         ///
-        /// Written by the paint phase (`PipelineOwner::paint_node_recursive`)
+        /// Written by the paint phase (`PipelineOwner::paint_subtree`)
         /// when a node is painted. Read by compositing-bits propagation to
         /// detect a transition into or out of repaint-boundary status.
         ///
@@ -251,15 +245,15 @@ bitflags! {
         /// this on the render object as `_wasRepaintBoundary`; in FLUI it
         /// lives here so the paint phase can flip the bit through a single
         /// atomic store rather than acquiring a write lock on the trait
-        /// object). See `docs/PORT.md` Refusal trigger 1 and the U2 exemplar
-        /// refactor that introduced this flag.
+        /// object). See `docs/PORT.md` Refusal trigger 1 — this flag was
+        /// introduced alongside the refactor that removed the
+        /// `RwLock<Box<dyn RenderObject<P>>>` field.
         ///
         /// Flutter equivalent: `_wasRepaintBoundary` field on `RenderObject`.
         const WAS_REPAINT_BOUNDARY = 1 << 10;
 
-        /// **PR-A2 U32 (memo D3-3):** marks a node whose compositing-bits
-        /// subtree walk must be re-run on the next `run_compositing`
-        /// invocation.
+        /// Marks a node whose compositing-bits subtree walk must be
+        /// re-run on the next `run_compositing` invocation.
         ///
         /// Distinct from `NEEDS_COMPOSITING` (bit 2): this flag is the
         /// *scheduling* signal (the node is queued in
@@ -368,9 +362,6 @@ impl fmt::Display for RenderFlags {
         }
         if self.contains(Self::IS_REPAINT_BOUNDARY) {
             flags.push("IS_REPAINT_BOUNDARY");
-        }
-        if self.contains(Self::HAS_GEOMETRY) {
-            flags.push("HAS_GEOMETRY");
         }
         if self.contains(Self::WAS_REPAINT_BOUNDARY) {
             flags.push("WAS_REPAINT_BOUNDARY");
@@ -761,9 +752,8 @@ impl AtomicRenderFlags {
     /// Marks the render object as needing a compositing-bits subtree walk
     /// on the next `run_compositing` invocation.
     ///
-    /// **PR-A2 U32 (memo D3-3):** distinct from `mark_needs_compositing`
-    /// — this is the *scheduling* signal (paired with the dirty-queue
-    /// push in
+    /// Distinct from `mark_needs_compositing` — this is the *scheduling*
+    /// signal (paired with the dirty-queue push in
     /// [`PipelineOwner::add_node_needing_compositing_bits_update`](crate::pipeline::PipelineOwner::add_node_needing_compositing_bits_update)),
     /// whereas `NEEDS_COMPOSITING` is the *computed result* of the
     /// walk.
@@ -776,9 +766,8 @@ impl AtomicRenderFlags {
 
     /// Clears the needs-compositing-bits-update flag.
     ///
-    /// **PR-A2 U32:** called by `run_compositing` after the subtree
-    /// walk visits this node and updates its `NEEDS_COMPOSITING`
-    /// result bit.
+    /// Called by `run_compositing` after the subtree walk visits this
+    /// node and updates its `NEEDS_COMPOSITING` result bit.
     #[inline]
     pub fn clear_needs_compositing_bits_update(&self) {
         self.remove(RenderFlags::NEEDS_COMPOSITING_BITS_UPDATE);
@@ -898,22 +887,6 @@ impl AtomicRenderFlags {
         self.contains(RenderFlags::WAS_REPAINT_BOUNDARY)
     }
 
-    /// Marks that the render object has geometry.
-    ///
-    /// Set after first successful layout.
-    #[inline]
-    pub fn mark_has_geometry(&self) {
-        self.set(RenderFlags::HAS_GEOMETRY);
-    }
-
-    /// Checks if the render object has geometry.
-    ///
-    /// Returns true if layout has been computed at least once.
-    #[inline]
-    pub fn has_geometry(&self) -> bool {
-        self.contains(RenderFlags::HAS_GEOMETRY)
-    }
-
     /// Marks overflow detected (debug only).
     #[cfg(debug_assertions)]
     #[inline]
@@ -1004,7 +977,6 @@ mod tests {
         assert!(!RenderFlags::empty().is_dirty());
         assert!(RenderFlags::NEEDS_LAYOUT.is_dirty());
         assert!(RenderFlags::NEEDS_PAINT.is_dirty());
-        assert!(!RenderFlags::HAS_GEOMETRY.is_dirty());
         assert!(!RenderFlags::IS_REPAINT_BOUNDARY.is_dirty());
     }
 
@@ -1076,15 +1048,6 @@ mod tests {
     }
 
     #[test]
-    fn test_has_geometry() {
-        let flags = AtomicRenderFlags::empty();
-        assert!(!flags.has_geometry());
-
-        flags.mark_has_geometry();
-        assert!(flags.has_geometry());
-    }
-
-    #[test]
     fn test_dirty_clean() {
         let flags = AtomicRenderFlags::empty();
         assert!(flags.is_clean());
@@ -1124,7 +1087,7 @@ mod tests {
     #[test]
     fn test_display() {
         let flags = RenderFlags::NEEDS_LAYOUT | RenderFlags::NEEDS_PAINT;
-        let display = format!("{}", flags);
+        let display = format!("{flags}");
         assert!(display.contains("NEEDS_LAYOUT"));
         assert!(display.contains("NEEDS_PAINT"));
     }

@@ -3,7 +3,7 @@
 //! This layer applies an opacity (alpha) value to its children.
 //! Corresponds to Flutter's `OpacityLayer`.
 
-use flui_types::{geometry::Pixels, Offset};
+use flui_types::{Offset, geometry::Pixels, painting::BlendMode};
 
 /// Layer that applies opacity (alpha blending) to its children.
 ///
@@ -51,10 +51,16 @@ pub struct OpacityLayer {
 
     /// Optional offset (for optimization, avoids extra OffsetLayer)
     offset: Offset<Pixels>,
+
+    /// Blend mode applied when compositing this layer onto its parent.
+    ///
+    /// `SrcOver` for plain opacity layers; an advanced mode (e.g. Multiply)
+    /// when the layer was created by a `saveLayer` with an explicit blend mode.
+    blend: BlendMode,
 }
 
 impl OpacityLayer {
-    /// Creates a new opacity layer.
+    /// Creates a new opacity layer with `BlendMode::SrcOver`.
     ///
     /// # Arguments
     ///
@@ -64,10 +70,11 @@ impl OpacityLayer {
         Self {
             alpha: alpha.clamp(0.0, 1.0),
             offset: Offset::ZERO,
+            blend: BlendMode::SrcOver,
         }
     }
 
-    /// Creates an opacity layer with an offset.
+    /// Creates an opacity layer with an offset and `BlendMode::SrcOver`.
     ///
     /// Combining offset with opacity avoids needing a separate OffsetLayer.
     #[inline]
@@ -75,24 +82,40 @@ impl OpacityLayer {
         Self {
             alpha: alpha.clamp(0.0, 1.0),
             offset,
+            blend: BlendMode::SrcOver,
         }
     }
 
-    /// Creates a fully transparent layer.
+    /// Creates an opacity layer with an explicit blend mode.
+    ///
+    /// Used by saveLayer paths that carry an advanced blend mode (Multiply,
+    /// Screen, etc.).  Plain opacity layers always use `BlendMode::SrcOver`.
+    #[inline]
+    pub fn with_blend(alpha: f32, offset: Offset<Pixels>, blend: BlendMode) -> Self {
+        Self {
+            alpha: alpha.clamp(0.0, 1.0),
+            offset,
+            blend,
+        }
+    }
+
+    /// Creates a fully transparent layer with `BlendMode::SrcOver`.
     #[inline]
     pub const fn transparent() -> Self {
         Self {
             alpha: 0.0,
             offset: Offset::ZERO,
+            blend: BlendMode::SrcOver,
         }
     }
 
-    /// Creates a fully opaque layer.
+    /// Creates a fully opaque layer with `BlendMode::SrcOver`.
     #[inline]
     pub const fn opaque() -> Self {
         Self {
             alpha: 1.0,
             offset: Offset::ZERO,
+            blend: BlendMode::SrcOver,
         }
     }
 
@@ -150,6 +173,15 @@ impl OpacityLayer {
         (self.alpha * 255.0).round() as u8
     }
 
+    /// Returns the blend mode for this layer.
+    ///
+    /// Plain opacity layers return `BlendMode::SrcOver`; advanced-blend
+    /// saveLayer paths return the caller-specified mode.
+    #[inline]
+    pub const fn blend(&self) -> BlendMode {
+        self.blend
+    }
+
     /// Returns true if this layer needs compositing.
     ///
     /// Returns false if fully opaque (no compositing needed) or
@@ -163,6 +195,21 @@ impl OpacityLayer {
 impl Default for OpacityLayer {
     fn default() -> Self {
         Self::opaque()
+    }
+}
+
+/// A set builder: opacity + offset + blend mode in one call.
+///
+/// Used by `SceneBuilder::push_opacity_blend` and the rendering pipeline's
+/// paint-effect hook when a node reports an advanced layer blend.
+impl OpacityLayer {
+    /// Convenience: opacity=1.0, zero offset, explicit blend mode.
+    ///
+    /// Intended for callers that only want to set the blend (no alpha
+    /// reduction), e.g. an opaque `saveLayer(Multiply)`.
+    #[inline]
+    pub fn blend_only(blend: BlendMode) -> Self {
+        Self::with_blend(1.0, Offset::ZERO, blend)
     }
 }
 

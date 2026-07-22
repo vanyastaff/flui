@@ -164,8 +164,8 @@
 //! See the [API Guidelines Audit](https://github.com/your-repo/flui/blob/main/crates/flui_assets/API_GUIDELINES_AUDIT.md)
 //! for detailed compliance report.
 
-#![warn(missing_docs)]
-#![warn(clippy::all)]
+// Ship bar: crate is doc-complete — keep it that way.
+#![deny(missing_docs)]
 
 // Core traits and interfaces
 pub mod core;

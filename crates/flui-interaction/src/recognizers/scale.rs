@@ -9,7 +9,7 @@
 //!
 //! Flutter reference: <https://api.flutter.dev/flutter/gestures/ScaleGestureRecognizer-class.html>
 
-use std::{collections::HashMap, sync::Arc, time::Instant};
+use std::{cell::RefCell, collections::HashMap, rc::Rc, sync::Arc, time::Instant};
 
 use flui_types::{Offset, geometry::Pixels};
 use parking_lot::Mutex;
@@ -20,16 +20,16 @@ use crate::{
 };
 
 /// Callback for scale start events
-pub type ScaleStartCallback = Arc<dyn Fn(ScaleStartDetails) + Send + Sync>;
+pub type ScaleStartCallback = Rc<dyn Fn(ScaleStartDetails)>;
 
 /// Callback for scale update events
-pub type ScaleUpdateCallback = Arc<dyn Fn(ScaleUpdateDetails) + Send + Sync>;
+pub type ScaleUpdateCallback = Rc<dyn Fn(ScaleUpdateDetails)>;
 
 /// Callback for scale end events
-pub type ScaleEndCallback = Arc<dyn Fn(ScaleEndDetails) + Send + Sync>;
+pub type ScaleEndCallback = Rc<dyn Fn(ScaleEndDetails)>;
 
 /// Callback for scale cancel events
-pub type ScaleCancelCallback = Arc<dyn Fn() + Send + Sync>;
+pub type ScaleCancelCallback = Rc<dyn Fn()>;
 
 /// Details about scale gesture start
 #[derive(Debug, Clone, PartialEq)]
@@ -108,7 +108,7 @@ pub struct ScaleGestureRecognizer {
     state: RecognizerBase,
 
     /// Callbacks
-    callbacks: Arc<Mutex<ScaleCallbacks>>,
+    callbacks: Rc<RefCell<ScaleCallbacks>>,
 
     /// Current gesture state
     gesture_state: Arc<Mutex<ScaleState>>,
@@ -127,6 +127,8 @@ impl std::fmt::Debug for ScaleGestureRecognizer {
     }
 }
 
+// Field names keep Flutter's `onScaleStart`-style callback names (parity).
+#[allow(clippy::struct_field_names)]
 #[derive(Default)]
 struct ScaleCallbacks {
     on_start: Option<ScaleStartCallback>,
@@ -193,7 +195,7 @@ impl ScaleGestureRecognizer {
     pub fn new(arena: crate::arena::GestureArena) -> Arc<Self> {
         Arc::new(Self {
             state: RecognizerBase::new(arena),
-            callbacks: Arc::new(Mutex::new(ScaleCallbacks::default())),
+            callbacks: Rc::new(RefCell::new(ScaleCallbacks::default())),
             gesture_state: Arc::new(Mutex::new(ScaleState::default())),
             min_scale_delta: 0.05, // 5% change minimum
         })
@@ -202,36 +204,33 @@ impl ScaleGestureRecognizer {
     /// Set the scale start callback
     pub fn with_on_scale_start(
         self: Arc<Self>,
-        callback: impl Fn(ScaleStartDetails) + Send + Sync + 'static,
+        callback: impl Fn(ScaleStartDetails) + 'static,
     ) -> Arc<Self> {
-        self.callbacks.lock().on_start = Some(Arc::new(callback));
+        self.callbacks.borrow_mut().on_start = Some(Rc::new(callback));
         self
     }
 
     /// Set the scale update callback
     pub fn with_on_scale_update(
         self: Arc<Self>,
-        callback: impl Fn(ScaleUpdateDetails) + Send + Sync + 'static,
+        callback: impl Fn(ScaleUpdateDetails) + 'static,
     ) -> Arc<Self> {
-        self.callbacks.lock().on_update = Some(Arc::new(callback));
+        self.callbacks.borrow_mut().on_update = Some(Rc::new(callback));
         self
     }
 
     /// Set the scale end callback
     pub fn with_on_scale_end(
         self: Arc<Self>,
-        callback: impl Fn(ScaleEndDetails) + Send + Sync + 'static,
+        callback: impl Fn(ScaleEndDetails) + 'static,
     ) -> Arc<Self> {
-        self.callbacks.lock().on_end = Some(Arc::new(callback));
+        self.callbacks.borrow_mut().on_end = Some(Rc::new(callback));
         self
     }
 
     /// Set the scale cancel callback
-    pub fn with_on_scale_cancel(
-        self: Arc<Self>,
-        callback: impl Fn() + Send + Sync + 'static,
-    ) -> Arc<Self> {
-        self.callbacks.lock().on_cancel = Some(Arc::new(callback));
+    pub fn with_on_scale_cancel(self: Arc<Self>, callback: impl Fn() + 'static) -> Arc<Self> {
+        self.callbacks.borrow_mut().on_cancel = Some(Rc::new(callback));
         self
     }
 
@@ -247,21 +246,21 @@ impl ScaleGestureRecognizer {
             state.phase = ScalePhase::Possible;
 
             // Calculate initial spans and rotation
-            let spans = self.calculate_spans(&state.pointers);
+            let spans = Self::calculate_spans(&state.pointers);
             state.initial_span = Some(spans.0);
             state.initial_horizontal_span = Some(spans.1);
             state.initial_vertical_span = Some(spans.2);
-            state.initial_rotation = Some(self.calculate_rotation(&state.pointers));
+            state.initial_rotation = Some(Self::calculate_rotation(&state.pointers));
             state.previous_span = Some(spans.0);
             state.current_rotation = 0.0;
         } else if state.pointers.len() > 2 {
             // Additional pointers - recalculate initial span if not started
             if state.phase == ScalePhase::Possible {
-                let spans = self.calculate_spans(&state.pointers);
+                let spans = Self::calculate_spans(&state.pointers);
                 state.initial_span = Some(spans.0);
                 state.initial_horizontal_span = Some(spans.1);
                 state.initial_vertical_span = Some(spans.2);
-                state.initial_rotation = Some(self.calculate_rotation(&state.pointers));
+                state.initial_rotation = Some(Self::calculate_rotation(&state.pointers));
                 state.previous_span = Some(spans.0);
                 state.current_rotation = 0.0;
             }
@@ -281,7 +280,7 @@ impl ScaleGestureRecognizer {
             return; // Need at least 2 pointers
         }
 
-        let spans = self.calculate_spans(&state.pointers);
+        let spans = Self::calculate_spans(&state.pointers);
         let current_span = spans.0;
         let current_h_span = spans.1;
         let current_v_span = spans.2;
@@ -300,11 +299,11 @@ impl ScaleGestureRecognizer {
                         state.phase = ScalePhase::Started;
                         state.previous_span = Some(current_span);
 
-                        let focal_point = self.calculate_focal_point(&state.pointers);
+                        let focal_point = Self::calculate_focal_point(&state.pointers);
                         drop(state); // Release lock before callback
 
                         // Call on_start callback
-                        if let Some(callback) = self.callbacks.lock().on_start.clone() {
+                        if let Some(callback) = self.callbacks.borrow().on_start.clone() {
                             let details = ScaleStartDetails {
                                 focal_point,
                                 local_focal_point: focal_point,
@@ -333,7 +332,7 @@ impl ScaleGestureRecognizer {
                     let v_scale = current_v_span / initial_v_span;
 
                     // Calculate rotation delta from initial angle
-                    let current_rotation_raw = self.calculate_rotation(&state.pointers);
+                    let current_rotation_raw = Self::calculate_rotation(&state.pointers);
                     let rotation = current_rotation_raw - initial_rotation;
 
                     // Track scale velocity: use scale as a position-like value
@@ -347,12 +346,12 @@ impl ScaleGestureRecognizer {
                     state.previous_span = Some(current_span);
                     state.current_rotation = rotation;
 
-                    let focal_point = self.calculate_focal_point(&state.pointers);
+                    let focal_point = Self::calculate_focal_point(&state.pointers);
                     let pointer_count = state.pointers.len();
                     drop(state); // Release lock before callback
 
                     // Call on_update callback
-                    if let Some(callback) = self.callbacks.lock().on_update.clone() {
+                    if let Some(callback) = self.callbacks.borrow().on_update.clone() {
                         let details = ScaleUpdateDetails {
                             focal_point,
                             local_focal_point: focal_point,
@@ -380,10 +379,10 @@ impl ScaleGestureRecognizer {
             // Not enough pointers anymore
             if state.phase == ScalePhase::Started {
                 // End the gesture
-                let focal_point = if !state.pointers.is_empty() {
-                    self.calculate_focal_point(&state.pointers)
-                } else {
+                let focal_point = if state.pointers.is_empty() {
                     Offset::ZERO
+                } else {
+                    Self::calculate_focal_point(&state.pointers)
                 };
 
                 let scale = if let (Some(initial_span), Some(prev_span)) =
@@ -418,7 +417,7 @@ impl ScaleGestureRecognizer {
                 drop(state); // Release lock before callback
 
                 // Call on_end callback
-                if let Some(callback) = self.callbacks.lock().on_end.clone() {
+                if let Some(callback) = self.callbacks.borrow().on_end.clone() {
                     let details = ScaleEndDetails {
                         focal_point,
                         scale,
@@ -443,11 +442,11 @@ impl ScaleGestureRecognizer {
             }
         } else if state.pointers.len() >= 2 && state.phase == ScalePhase::Possible {
             // Still have 2+ pointers, recalculate initial span
-            let spans = self.calculate_spans(&state.pointers);
+            let spans = Self::calculate_spans(&state.pointers);
             state.initial_span = Some(spans.0);
             state.initial_horizontal_span = Some(spans.1);
             state.initial_vertical_span = Some(spans.2);
-            state.initial_rotation = Some(self.calculate_rotation(&state.pointers));
+            state.initial_rotation = Some(Self::calculate_rotation(&state.pointers));
             state.previous_span = Some(spans.0);
         }
     }
@@ -470,7 +469,7 @@ impl ScaleGestureRecognizer {
             drop(state);
 
             // Call on_cancel callback
-            if let Some(callback) = self.callbacks.lock().on_cancel.clone() {
+            if let Some(callback) = self.callbacks.borrow().on_cancel.clone() {
                 callback();
             }
 
@@ -480,7 +479,7 @@ impl ScaleGestureRecognizer {
 
     /// Calculate span (distance) between pointers
     /// Returns (total_span, horizontal_span, vertical_span)
-    fn calculate_spans(&self, pointers: &HashMap<PointerId, Offset<Pixels>>) -> (f32, f32, f32) {
+    fn calculate_spans(pointers: &HashMap<PointerId, Offset<Pixels>>) -> (f32, f32, f32) {
         if pointers.len() < 2 {
             return (0.0, 0.0, 0.0);
         }
@@ -515,10 +514,7 @@ impl ScaleGestureRecognizer {
     }
 
     /// Calculate focal point (center of all pointers)
-    fn calculate_focal_point(
-        &self,
-        pointers: &HashMap<PointerId, Offset<Pixels>>,
-    ) -> Offset<Pixels> {
+    fn calculate_focal_point(pointers: &HashMap<PointerId, Offset<Pixels>>) -> Offset<Pixels> {
         if pointers.is_empty() {
             return Offset::ZERO;
         }
@@ -540,7 +536,7 @@ impl ScaleGestureRecognizer {
     /// For 2 pointers, returns the angle of the line between them.
     /// For more pointers, returns the average angle from the focal point to
     /// each pointer.
-    fn calculate_rotation(&self, pointers: &HashMap<PointerId, Offset<Pixels>>) -> f32 {
+    fn calculate_rotation(pointers: &HashMap<PointerId, Offset<Pixels>>) -> f32 {
         if pointers.len() < 2 {
             return 0.0;
         }
@@ -553,7 +549,7 @@ impl ScaleGestureRecognizer {
             delta.dy.atan2(delta.dx)
         } else {
             // For more pointers, calculate average angle from focal point
-            let focal = self.calculate_focal_point(pointers);
+            let focal = Self::calculate_focal_point(pointers);
             let mut total_angle = 0.0;
             let mut count = 0;
 
@@ -622,10 +618,10 @@ impl GestureRecognizer for ScaleGestureRecognizer {
         // gestures/recognizer.dart:485-493 disposing GestureRecognizer
         // clears arena state for tracked pointers).
         self.state.reject();
-        self.callbacks.lock().on_start = None;
-        self.callbacks.lock().on_update = None;
-        self.callbacks.lock().on_end = None;
-        self.callbacks.lock().on_cancel = None;
+        self.callbacks.borrow_mut().on_start = None;
+        self.callbacks.borrow_mut().on_update = None;
+        self.callbacks.borrow_mut().on_end = None;
+        self.callbacks.borrow_mut().on_cancel = None;
     }
 
     fn primary_pointer(&self) -> Option<PointerId> {
@@ -760,9 +756,6 @@ mod tests {
 
     #[test]
     fn test_focal_point_calculation() {
-        let arena = GestureArena::new();
-        let recognizer = ScaleGestureRecognizer::new(arena);
-
         let mut pointers = HashMap::new();
         pointers.insert(
             PointerId::new(2).expect("nonzero pointer id"),
@@ -773,7 +766,7 @@ mod tests {
             Offset::new(Pixels(100.0), Pixels(100.0)),
         );
 
-        let focal_point = recognizer.calculate_focal_point(&pointers);
+        let focal_point = ScaleGestureRecognizer::calculate_focal_point(&pointers);
 
         // Center should be at (50, 50)
         assert!((focal_point.dx - Pixels(50.0)).abs() < Pixels(0.01));
@@ -782,9 +775,6 @@ mod tests {
 
     #[test]
     fn test_span_calculation() {
-        let arena = GestureArena::new();
-        let recognizer = ScaleGestureRecognizer::new(arena);
-
         let mut pointers = HashMap::new();
         pointers.insert(
             PointerId::new(2).expect("nonzero pointer id"),
@@ -795,7 +785,7 @@ mod tests {
             Offset::new(Pixels(100.0), Pixels(0.0)),
         );
 
-        let (span, h_span, v_span) = recognizer.calculate_spans(&pointers);
+        let (span, h_span, v_span) = ScaleGestureRecognizer::calculate_spans(&pointers);
 
         // Distance should be 100
         assert!((span - 100.0).abs() < 0.01);
@@ -827,15 +817,14 @@ mod tests {
         recognizer.handle_pointer_move(pointer2, Offset::new(Pixels(200.0), Pixels(0.0)));
 
         let state = recognizer.gesture_state.lock();
-        let current_span = recognizer.calculate_spans(&state.pointers).0;
+        let current_span = ScaleGestureRecognizer::calculate_spans(&state.pointers).0;
         assert!((current_span - 200.0).abs() < 0.01);
 
         // Calculate scale manually
         let scale = current_span / state.initial_span.unwrap();
         assert!(
             (scale - 2.0).abs() < 0.01,
-            "Scale was {}, expected 2.0",
-            scale
+            "Scale was {scale}, expected 2.0"
         );
     }
 }

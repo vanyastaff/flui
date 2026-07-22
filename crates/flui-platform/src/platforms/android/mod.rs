@@ -57,8 +57,9 @@ use crate::{shared::PlatformHandlers, traits::*};
 /// #[no_mangle]
 /// fn android_main(app: AndroidApp) {
 ///     let platform = AndroidPlatform::new(app);
-///     platform.run(Box::new(|| {
+///     platform.run(Box::new(|platform| {
 ///         // Platform ready — create window and renderer
+///         let _ = platform;
 ///     }));
 /// }
 /// ```
@@ -172,7 +173,7 @@ impl Platform for AndroidPlatform {
         self.background_executor.clone()
     }
 
-    fn run(self: Box<Self>, on_ready: Box<dyn FnOnce()>) {
+    fn run(self: Box<Self>, on_ready: Box<dyn FnOnce(&dyn Platform)>) {
         tracing::info!("Starting Android platform event loop");
 
         let mut on_ready = Some(on_ready);
@@ -271,7 +272,7 @@ impl Platform for AndroidPlatform {
             // Call on_ready outside of poll_events (FnOnce can't be called in closure)
             if should_call_ready {
                 if let Some(ready) = on_ready.take() {
-                    ready();
+                    ready(&*self);
                 }
             }
 

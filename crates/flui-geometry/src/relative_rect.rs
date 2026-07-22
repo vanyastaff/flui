@@ -8,6 +8,12 @@ use std::ops::{Add, Mul, Neg, Sub};
 use super::traits::{NumericUnit, Unit};
 use crate::{Offset, Size};
 
+/// A rectangle expressed as distances from the edges of a parent rectangle.
+///
+/// Unlike a plain rect, each field is an inset from the corresponding parent
+/// edge, so the described rectangle depends on the parent's size. Equivalent
+/// to Flutter's `RelativeRect`, used by `Positioned` and `RelativeRectTween`.
+#[derive(Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct RelativeRect<T: Unit> {
     /// Offset from the left edge of the parent.
@@ -26,6 +32,8 @@ pub struct RelativeRect<T: Unit> {
 // ============================================================================
 
 impl<T: Unit> RelativeRect<T> {
+    /// Creates a relative rect from offsets to the left, top, right, and
+    /// bottom parent edges.
     #[inline]
     #[must_use]
     pub const fn from_ltrb(left: T, top: T, right: T, bottom: T) -> Self {
@@ -46,6 +54,8 @@ impl<T: NumericUnit> RelativeRect<T>
 where
     T: Add<Output = T> + Sub<Output = T> + Mul<f32, Output = T>,
 {
+    /// Creates a relative rect for a child at `offset` with the given `size`
+    /// inside a parent of size `parent`.
     #[inline]
     #[must_use]
     pub fn from_size(offset: Offset<T>, size: Size<T>, parent: Size<T>) -> Self {
@@ -57,6 +67,8 @@ where
         }
     }
 
+    /// Creates a relative rect from a left/top position and a width/height
+    /// inside a parent of size `parent`.
     #[inline]
     #[must_use]
     pub fn from_left_top_width_height(
@@ -74,6 +86,8 @@ where
         }
     }
 
+    /// Returns the size of the described rectangle within a parent of size
+    /// `parent`.
     #[inline]
     #[must_use]
     pub fn to_size(&self, parent: Size<T>) -> Size<T> {
@@ -83,6 +97,8 @@ where
         )
     }
 
+    /// Returns a new relative rect translated by the given offset, keeping
+    /// the same size.
     #[inline]
     #[must_use]
     pub fn shift(&self, offset: Offset<T>) -> Self {
@@ -94,6 +110,8 @@ where
         }
     }
 
+    /// Returns a new relative rect grown by `delta` on each side (each edge
+    /// inset is reduced by `delta`).
     #[inline]
     #[must_use]
     pub fn inflate(&self, delta: T) -> Self {
@@ -105,6 +123,7 @@ where
         }
     }
 
+    /// Returns a new relative rect shrunk by `delta` on each side.
     #[inline]
     #[must_use]
     pub fn deflate(&self, delta: T) -> Self

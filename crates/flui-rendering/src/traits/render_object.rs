@@ -37,94 +37,67 @@ use downcast_rs::{DowncastSync, impl_downcast};
 use flui_foundation::Diagnosticable;
 
 use crate::{
+    hit_testing::{CursorIcon, MouseTrackerAnnotation},
+    parent_data::ParentData,
     protocol::{Protocol, ProtocolConstraints, ProtocolGeometry, ProtocolPosition},
     semantics::SemanticsConfiguration,
 };
 
-// ============================================================================
-// Capability Traits (Mythos Step 11 extension-trait split)
-// ============================================================================
-
-/// Optional paint-effect hooks (alpha + transform layers).
+/// Result of a raw hit-test bridge call.
 ///
-/// Only render objects that actually emit OpacityLayer / TransformLayer
-/// implement non-default behaviour here -- RenderOpacity overrides
-/// `paint_alpha`, RenderTransform overrides `paint_transform`. Other
-/// concrete types get the default `None` for both and the paint phase
-/// skips the layer-wrapping path.
-///
-/// This trait is a supertrait of `RenderObject<P>`; the pipeline reads
-/// these methods through a `&dyn RenderObject<P>` and the call resolves
-/// to whichever impl the concrete type provided.
-pub trait PaintEffectsCapability {
-    /// Returns the alpha value to apply to children.
-    ///
-    /// If `Some(alpha)`, the painting pipeline wraps children in an
-    /// OpacityLayer. Used by `RenderOpacity` to implement opacity
-    /// animations. Default: `None` (no opacity effect).
-    fn paint_alpha(&self) -> Option<u8> {
-        None
-    }
+/// Flutter's hit testing has two related but separate effects: a render object
+/// may add itself to the hit-test path, and it may return `true` to stop
+/// sibling traversal behind it. `HitTestBehavior::Translucent` relies on that
+/// split: it contributes an entry but can still let lower siblings be tested.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HitTestOutcome {
+    /// Whether the pipeline should append this render object to the global
+    /// hit-test path.
+    pub add_self: bool,
 
-    /// Returns the transform matrix to apply to children.
-    ///
-    /// If `Some(matrix)`, the painting pipeline wraps children in a
-    /// TransformLayer. Used by `RenderTransform` to implement transform
-    /// animations. Default: `None` (no transform effect).
-    ///
-    /// `size` is the node's laid-out size, resolved by the driver from
-    /// [`RenderState`](crate::storage::RenderState) (2B field dedup) —
-    /// transform objects pivoting around an alignment-relative origin read
-    /// it instead of caching their own size.
-    fn paint_transform(&self, size: flui_types::Size) -> Option<flui_types::Matrix4> {
-        let _ = size;
-        None
-    }
-
-    /// Returns the transform matrix for hit testing.
-    ///
-    /// If `Some(matrix)`, the hit-test pipeline pushes this transform
-    /// onto the `HitTestResult` stack before recursing into children,
-    /// so child entries capture the correct accumulated transform.
-    /// Default: `None` (no transform — uses identity).
-    ///
-    /// Typically the same as [`paint_transform`](Self::paint_transform).
-    /// Render objects that apply transforms for painting but not for
-    /// hit testing (e.g. decorative-only transforms) can override this
-    /// to return `None`. `size` is the laid-out size from `RenderState`
-    /// (same channel as `paint_transform`).
-    fn hit_test_transform(&self, size: flui_types::Size) -> Option<flui_types::Matrix4> {
-        let _ = size;
-        None
-    }
+    /// Whether the parent should treat this subtree as having consumed the hit
+    /// and stop testing siblings visually behind it.
+    pub blocks_below: bool,
 }
 
-/// Optional semantics-tree contribution.
-///
-/// Render objects that describe themselves to the accessibility tree
-/// override `describe_semantics_configuration`. Default no-op.
-///
-/// This trait is a supertrait of `RenderObject<P>`.
-pub trait SemanticsCapability {
-    /// Describes semantic properties for accessibility.
-    ///
-    /// Called when building the semantics tree. Override to provide
-    /// labels, actions, or other semantic information. Default: no-op.
-    fn describe_semantics_configuration(&self, _config: &mut SemanticsConfiguration) {}
-}
+impl HitTestOutcome {
+    /// A complete miss: no entry and no sibling blocking.
+    #[must_use]
+    pub const fn miss() -> Self {
+        Self {
+            add_self: false,
+            blocks_below: false,
+        }
+    }
 
-/// Optional hot-reload reassembly hook.
-///
-/// Default no-op. Used by render objects that need to invalidate
-/// cached state after a hot-reload.
-///
-/// This trait is a supertrait of `RenderObject<P>`.
-pub trait HotReloadCapability {
-    /// Marks this render object for reprocessing after hot reload.
-    ///
-    /// Called by the framework after code changes. The storage layer
-    /// will mark this node dirty and reprocess it. Default: no-op.
-    fn reassemble(&mut self) {}
+    /// The legacy/default behavior where adding self and blocking siblings are
+    /// coupled to the same boolean.
+    #[must_use]
+    pub const fn from_hit(hit: bool) -> Self {
+        Self {
+            add_self: hit,
+            blocks_below: hit,
+        }
+    }
+
+    /// Add the current render object to the hit path without blocking lower
+    /// siblings. This is the Flutter translucent side effect.
+    #[must_use]
+    pub const fn add_self_without_blocking() -> Self {
+        Self {
+            add_self: true,
+            blocks_below: false,
+        }
+    }
+
+    /// Builds an outcome from explicit entry/blocking bits.
+    #[must_use]
+    pub const fn new(add_self: bool, blocks_below: bool) -> Self {
+        Self {
+            add_self,
+            blocks_below,
+        }
+    }
 }
 
 /// Base trait for all render objects in the render tree.
@@ -139,19 +112,49 @@ pub trait HotReloadCapability {
 ///
 /// - `P`: The layout protocol (BoxProtocol or SliverProtocol)
 ///
-/// # Capability Traits
+/// # Effect-layer and Lifecycle Methods
 ///
-/// `RenderObject<P>` carries three capability supertraits whose methods
-/// are reachable through any `&dyn RenderObject<P>`:
+/// `RenderObject<P>` carries nine defaulted methods that are the former
+/// capability-supertrait surface, now inlined directly on this trait so
+/// concrete types need no boilerplate impl blocks:
 ///
-/// - [`PaintEffectsCapability`] -- `paint_alpha`, `paint_transform`
-/// - [`SemanticsCapability`] -- `describe_semantics_configuration`
-/// - [`HotReloadCapability`] -- `reassemble`
+/// - `paint_alpha`, `paint_layer_blend`, `skip_paint`, `paint_transform`,
+///   `hit_test_transform` — paint-effect hooks (default `None`/`false`)
+/// - `describe_semantics_configuration` — accessibility hook (default no-op)
+/// - `reassemble` — hot-reload hook (default no-op; see note below)
+/// - `attach`/`detach` — tree-lifecycle hook (default no-op; see
+///   *Tree-lifecycle note* below)
 ///
-/// All three default to no-op / `None`. Concrete render objects opt in
-/// by writing `impl <Capability> for MyRenderObject { ... }`; the empty
-/// `impl <Capability> for MyRenderObject {}` is the explicit opt-out
-/// (uses all defaults).
+/// All default to no-op / `None`. Override on `RenderBox` or `RenderSliver`
+/// (the blanket impls forward every call from `RenderObject<P>` to the
+/// protocol-specific trait). Direct `RenderObject<P>` impls (e.g.
+/// `RenderViewAdapter`) get the defaults for free.
+///
+/// # Hot-reload note
+///
+/// `reassemble` is a documented FLUI divergence: Flutter's
+/// `RenderObject.reassemble()` calls `markNeedsLayout` /
+/// `markNeedsPaint` / `markNeedsCompositingBitsUpdate` /
+/// `markNeedsSemanticsUpdate` / `visitChildren` — all pipeline-owner
+/// operations that require traversing the render tree via
+/// `PipelineOwner`. FLUI's object-level default is a no-op because
+/// render objects do not hold a pipeline-owner handle; the real fix
+/// (`PipelineOwner::reassemble_subtree`) is tracked as the hot-reload
+/// epic and deferred deliberately.
+///
+/// # Tree-lifecycle note
+///
+/// `attach`/`detach` (ADR-0013) are the seam a render object that must mark
+/// **itself** dirty out-of-band — an owned animation controller driving its
+/// own layout, a delegate's repaint `Listenable` driving paint — subscribes
+/// through: `attach` hands over a generational, least-privilege
+/// [`RepaintHandle`](crate::pipeline::RepaintHandle) bound to this node;
+/// `detach` is where the subscription is torn down. Neither is a hot path:
+/// both fire only on structural insert/remove
+/// ([`PipelineOwner::insert`](crate::pipeline::PipelineOwner::insert) and
+/// its siblings,
+/// [`PipelineOwner::remove_render_object`](crate::pipeline::PipelineOwner::remove_render_object)),
+/// never mid-layout/paint/hit-test.
 ///
 /// # Storage Integration
 ///
@@ -161,16 +164,7 @@ pub trait HotReloadCapability {
 /// - Thread-safe access via `RwLock`
 ///
 /// The storage layer calls these trait methods to drive the rendering pipeline.
-pub trait RenderObject<P: Protocol>:
-    Diagnosticable
-    + DowncastSync
-    + Send
-    + Sync
-    + 'static
-    + PaintEffectsCapability
-    + SemanticsCapability
-    + HotReloadCapability
-{
+pub trait RenderObject<P: Protocol>: Diagnosticable + DowncastSync + Send + Sync + 'static {
     // ========================================================================
     // Core Operations
     // ========================================================================
@@ -178,7 +172,7 @@ pub trait RenderObject<P: Protocol>:
     /// Performs layout with a protocol-erased layout context.
     ///
     /// Called by `RenderEntry::layout_leaf_only()` (leaf path) and the
-    /// pipeline's `layout_dirty_root` (U20, parent+children
+    /// pipeline's `layout_dirty_root` (the parent+children
     /// disjoint-borrow path). Returns either the computed geometry on
     /// success, or a typed [`RenderError`] on contract violation.
     ///
@@ -190,12 +184,12 @@ pub trait RenderObject<P: Protocol>:
     ///
     /// # Signature evolution
     ///
-    /// 1. **Pre-U19** — `fn perform_layout_raw(&mut self, constraints:
+    /// 1. **Originally** — `fn perform_layout_raw(&mut self, constraints:
     ///    ProtocolConstraints<P>) -> ProtocolGeometry<P>`. Blanket impl
     ///    shipped as a no-op returning `*self.size()` because the trait
-    ///    surface didn't carry children (companion memo D5).
+    ///    surface didn't carry children.
     ///
-    /// 2. **D-block PR-A1b U19 (PR #141)** — signature changed to
+    /// 2. **Next revision** — signature changed to
     ///    `fn perform_layout_raw(&mut self, ctx: &mut <P as Protocol>::LayoutCtxErased<'_>) -> ProtocolGeometry<P>`
     ///    so the blanket impl can construct a typed [`BoxLayoutCtx`]
     ///    with children access. Contract-violation signalling went
@@ -203,14 +197,14 @@ pub trait RenderObject<P: Protocol>:
     ///    caught by `catch_unwind` in `RenderEntry::layout_leaf_only` —
     ///    `panic_any` was a niche escape hatch with hidden control flow.
     ///
-    ///    The PR #141 review (finding #5) called this out as a
-    ///    Constitution Principle 6 violation — using panic primitives
-    ///    for an error condition the caller can structurally handle.
+    ///    That shape was flagged as unsound API design — using panic
+    ///    primitives for an error condition the caller can structurally
+    ///    handle.
     ///
-    /// 3. **Current shape (this PR, follow-up to #141 #5 Option A)** —
-    ///    signature returns `RenderResult<ProtocolGeometry<P>>` so
-    ///    contract violations propagate as typed `Err(RenderError::...)`
-    ///    directly through `?`. `panic_any` removed; `catch_unwind` in
+    /// 3. **Current shape** — signature returns
+    ///    `RenderResult<ProtocolGeometry<P>>` so contract violations
+    ///    propagate as typed `Err(RenderError::...)` directly through
+    ///    `?`. `panic_any` removed; `catch_unwind` in
     ///    `RenderEntry::layout_leaf_only` retained only to wrap genuine
     ///    runtime panics from third-party user widget code into
     ///    [`RenderError::Poisoned`].
@@ -284,7 +278,7 @@ pub trait RenderObject<P: Protocol>:
         child_count: usize,
         size: flui_types::Size,
         hit_child: &mut (dyn FnMut(usize, Option<ProtocolPosition<P>>) -> bool + Send + Sync),
-    ) -> bool;
+    ) -> HitTestOutcome;
 
     // ========================================================================
     // Intrinsic / Dry Queries
@@ -312,10 +306,10 @@ pub trait RenderObject<P: Protocol>:
         _dimension: crate::storage::IntrinsicDimension,
         _extent: f32,
         _child_count: usize,
+        _child_parent_data: &[Option<&dyn ParentData>],
         _child_query: &mut (
                  dyn FnMut(usize, crate::storage::IntrinsicDimension, f32) -> f32 + Send + Sync
              ),
-        _child_flex: &mut (dyn FnMut(usize) -> i32 + Send + Sync),
     ) -> f32 {
         0.0
     }
@@ -334,8 +328,14 @@ pub trait RenderObject<P: Protocol>:
         &self,
         _constraints: ProtocolConstraints<P>,
         _child_count: usize,
-        _child_dry: &mut (
-                 dyn FnMut(usize, ProtocolConstraints<P>) -> ProtocolGeometry<P> + Send + Sync
+        _child_parent_data: &[Option<&dyn ParentData>],
+        _child_query: &mut (
+                 dyn FnMut(
+            usize,
+            crate::context::DryLayoutChildRequest,
+        ) -> crate::context::DryLayoutChildResponse
+                     + Send
+                     + Sync
              ),
     ) -> ProtocolGeometry<P> {
         P::default_geometry()
@@ -353,6 +353,7 @@ pub trait RenderObject<P: Protocol>:
         _constraints: ProtocolConstraints<P>,
         _baseline: crate::traits::TextBaseline,
         _child_count: usize,
+        _child_parent_data: &[Option<&dyn ParentData>],
         _child_query: &mut (
                  dyn FnMut(
             usize,
@@ -435,20 +436,227 @@ pub trait RenderObject<P: Protocol>:
     // ========================================================================
     // Effect Layers
     // ========================================================================
-    //
-    // paint_alpha and paint_transform live on PaintEffectsCapability
-    // (Mythos Step 11 extension-trait split). They are still reachable
-    // through `&dyn RenderObject<P>` because PaintEffectsCapability is a
-    // supertrait, but a render object that doesn't apply any effect
-    // layers no longer has to carry the default impls on the core trait.
+
+    /// Returns the alpha value to apply to children.
+    ///
+    /// If `Some(alpha)`, the painting pipeline wraps children in an
+    /// `OpacityLayer`. Used by `RenderOpacity` to implement opacity
+    /// animations. Override on [`RenderBox`](crate::traits::RenderBox) or
+    /// [`RenderSliver`](crate::traits::RenderSliver) — the blanket impls
+    /// forward the call here. Default: `None` (no opacity effect).
+    fn paint_alpha(&self) -> Option<u8> {
+        None
+    }
+
+    /// Returns the blend mode for the opacity layer wrapping children.
+    ///
+    /// If `Some(mode)`, the pipeline passes the mode to
+    /// `OpacityLayer::with_blend` so advanced blend modes (Multiply, Screen,
+    /// etc.) are preserved through the layer-tree compositor path.
+    /// Default: `None` (= `SrcOver`).
+    fn paint_layer_blend(&self) -> Option<flui_types::painting::BlendMode> {
+        None
+    }
+
+    /// Whether this render object should suppress all child painting.
+    ///
+    /// Returns `true` when the node is fully transparent and no children
+    /// should be painted (e.g. `RenderOpacity` / `RenderSliverOpacity`
+    /// at `alpha == 0` without the `always_needs_compositing` flag).
+    /// Default: `false`.
+    fn skip_paint(&self) -> bool {
+        false
+    }
+
+    /// Returns the transform matrix to apply to children.
+    ///
+    /// If `Some(matrix)`, the painting pipeline wraps children in a
+    /// `TransformLayer`. `size` is the node's laid-out size from
+    /// [`RenderState`](crate::storage::RenderState) (2B field dedup).
+    /// Default: `None` (no transform effect).
+    fn paint_transform(&self, size: flui_types::Size) -> Option<flui_types::Matrix4> {
+        let _ = size;
+        None
+    }
+
+    /// Composes onto `transform` the mapping from child `child`'s local
+    /// coordinate space into **this** object's local coordinate space.
+    ///
+    /// Flutter's `RenderObject.applyPaintTransform` (`object.dart:3639`), whose
+    /// `RenderBox` override translates by the child's `BoxParentData.offset`
+    /// (`box.dart:3014`). It is what [`PipelineOwner::transform_to`] composes at
+    /// every step of an ancestor walk.
+    ///
+    /// # Why the extra parameters
+    ///
+    /// A Flutter render object owns its children and their parent data, so
+    /// `applyPaintTransform(child, transform)` can read the offset off the child.
+    /// A FLUI render object owns neither: children live in the
+    /// [`RenderTree`](crate::storage::RenderTree) and geometry lives in
+    /// [`RenderState`](crate::storage::RenderState). The pipeline therefore hands
+    /// in what the object cannot reach — the child's committed paint offset and
+    /// this node's own laid-out size.
+    ///
+    /// # The default is the paint pipeline's own composition
+    ///
+    /// `paint_subtree_impl` wraps children in [`paint_transform`]'s layer and then
+    /// paints each child at its committed offset, so child-local → parent-local is
+    /// `paint_transform · translate(child_offset)`. The default body is exactly
+    /// that, which means every object whose paint follows the pipeline's default
+    /// path gets a correct transform **without overriding anything**.
+    ///
+    /// Override only when paint *deviates*: an object that calls
+    /// `PaintCx::paint_child_at` (an `offset_override`, so the committed offset is
+    /// not what paints) or that pushes a per-child transform scope. In this
+    /// repository that is `RenderFractionalTranslation` and `RenderFlow`.
+    ///
+    /// # Convention
+    ///
+    /// Compose on the **right**: `*transform *= step`. `transform`
+    /// maps this object's local space into some outer ancestor's; the step maps
+    /// the child's into this object's. Do **not** use [`Matrix4::translate`],
+    /// which pre-multiplies.
+    ///
+    /// [`paint_transform`]: RenderObject::paint_transform
+    /// [`PipelineOwner::transform_to`]: crate::pipeline::PipelineOwner::transform_to
+    /// [`Matrix4::translate`]: flui_types::Matrix4::translate
+    fn apply_paint_transform(
+        &self,
+        child: usize,
+        child_offset: flui_types::Offset,
+        size: flui_types::Size,
+        transform: &mut flui_types::Matrix4,
+    ) {
+        let _ = child;
+        if let Some(matrix) = self.paint_transform(size) {
+            *transform *= matrix;
+        }
+        *transform *= flui_types::Matrix4::translation(child_offset.dx.0, child_offset.dy.0, 0.0);
+    }
+
+    /// Returns the transform matrix for hit testing.
+    ///
+    /// If `Some(matrix)`, the hit-test pipeline pushes this transform
+    /// onto the `HitTestResult` stack before recursing into children.
+    /// Default: `None` (no transform — uses identity).
+    fn hit_test_transform(&self, size: flui_types::Size) -> Option<flui_types::Matrix4> {
+        let _ = size;
+        None
+    }
+
+    /// The data-only pointer target this render object contributes to its hit
+    /// entry, if any.
+    ///
+    /// When a hit lands on this node, the pipeline attaches the returned
+    /// identity to the node's [`HitTestEntry`](crate::hit_testing::HitTestEntry);
+    /// pointer dispatch resolves it through the owner-local interaction lane
+    /// and invokes the registered handler with the locally transformed
+    /// [`PointerEvent`]. Delivery is leaf-first to every target with no
+    /// propagation result (ADR-0027). Default `None` — only a render object
+    /// that listens for pointer events (e.g. `RenderListener`) overrides it.
+    /// The executable callback never lives in render storage; this is the
+    /// arena analogue of Flutter's `RenderPointerListener` registering itself
+    /// as the `HitTestEntry`'s target.
+    ///
+    /// [`PointerEvent`]: crate::hit_testing::PointerEvent
+    fn pointer_target(&self) -> Option<crate::hit_testing::PointerTarget> {
+        None
+    }
+
+    /// The mouse cursor this render object contributes to its hit entry.
+    ///
+    /// Default `CursorIcon::Default`; `RenderMouseRegion` overrides this so
+    /// [`MouseTracker`](crate::prelude::MouseTracker) can resolve the active
+    /// platform cursor from the leaf-first hit-test path.
+    fn mouse_cursor(&self) -> CursorIcon {
+        CursorIcon::Default
+    }
+
+    /// Mouse-tracker annotation contributed to this render object's hit entry.
+    ///
+    /// The pipeline passes the entry's render id so the annotation can use the
+    /// same stable region identity as the hit-test path. Default `None`.
+    fn mouse_tracker_annotation(
+        &self,
+        id: flui_foundation::RenderId,
+    ) -> Option<MouseTrackerAnnotation> {
+        let _ = id;
+        None
+    }
 
     // ========================================================================
     // Semantics / Hot Reload
     // ========================================================================
-    //
-    // describe_semantics_configuration lives on SemanticsCapability.
-    // reassemble lives on HotReloadCapability. Both are supertraits of
-    // RenderObject<P>; reachable through the dyn pointer.
+
+    /// Describes semantic properties for accessibility.
+    ///
+    /// Called when building the semantics tree. Override to provide
+    /// labels, actions, or other semantic information. Default: no-op.
+    fn describe_semantics_configuration(&self, _config: &mut SemanticsConfiguration) {}
+
+    /// Whether the semantics assembly walk should skip this render
+    /// object's entire child subtree.
+    ///
+    /// Consulted by `flui-rendering`'s `run_semantics` assembly walk
+    /// (ADR-0014) before it recurses into children — the least-privilege
+    /// counterpart of Flutter's `visitChildrenForSemantics` override that
+    /// `RenderExcludeSemantics` uses to visit no children while excluding.
+    /// This node's own config is still built and merged/boundary-decided
+    /// normally; only its descendants are dropped from the walk.
+    ///
+    /// Default: `false` (children are always visited). Override on
+    /// [`RenderBox`](crate::traits::RenderBox) or
+    /// [`RenderSliver`](crate::traits::RenderSliver) — the blanket impls
+    /// forward the call here.
+    fn excludes_semantics_subtree(&self) -> bool {
+        false
+    }
+
+    /// Marks this render object for reprocessing after hot reload.
+    ///
+    /// Default: no-op. See the *Hot-reload note* in the trait doc for the
+    /// reason this is a documented FLUI divergence from Flutter semantics.
+    fn reassemble(&mut self) {}
+
+    // ========================================================================
+    // Tree Lifecycle (ADR-0013)
+    // ========================================================================
+
+    /// Hands this render object a generational, least-privilege self-dirty
+    /// handle when it enters the tree.
+    ///
+    /// Called exactly once, immediately after the pipeline assigns this
+    /// node's [`RenderId`](flui_foundation::RenderId) and wires its tree
+    /// links — see
+    /// [`PipelineOwner::insert`](crate::pipeline::PipelineOwner::insert)
+    /// and its sibling insertion methods. A render object that must mark
+    /// **itself** dirty out-of-band subscribes to its source here and
+    /// self-marks on notify via
+    /// [`RepaintHandle::mark_needs_layout`](crate::pipeline::RepaintHandle::mark_needs_layout)
+    /// or
+    /// [`RepaintHandle::mark_needs_paint`](crate::pipeline::RepaintHandle::mark_needs_paint).
+    ///
+    /// Default: no-op — override on `RenderBox` or `RenderSliver`,
+    /// mirroring `reassemble`. See the *Tree-lifecycle note* in the trait
+    /// doc.
+    fn attach(&mut self, handle: crate::pipeline::RepaintHandle) {
+        let _ = handle;
+    }
+
+    /// Tears down whatever [`Self::attach`] subscribed to, before this
+    /// render object leaves the tree.
+    ///
+    /// Called for every id in a removed subtree by
+    /// [`PipelineOwner::remove_render_object`](crate::pipeline::PipelineOwner::remove_render_object),
+    /// before the subtree's dirty-queue entries are evicted. Not a
+    /// correctness prerequisite — the handle captured in `attach` is
+    /// generational and already degrades to a silent no-op once this node
+    /// is removed — but it is the point to drop a still-live
+    /// `add_listener` subscription so a running notifier doesn't keep it
+    /// alive for nothing.
+    ///
+    /// Default: no-op.
+    fn detach(&mut self) {}
 
     // ========================================================================
     // Children Access (для pipeline/owner.rs)
@@ -482,9 +690,9 @@ pub trait RenderObject<P: Protocol>:
     /// concrete type name. Concrete impls may override to provide a
     /// shorter / more human-readable name.
     ///
-    /// Mythos Step 12 (2026-05-20): introduced alongside the
-    /// `std::panic::catch_unwind` plumbing that turns trait-call panics
-    /// into `RenderError::Poisoned` rather than process aborts.
+    /// Introduced 2026-05-20 alongside the `std::panic::catch_unwind`
+    /// plumbing that turns trait-call panics into `RenderError::Poisoned`
+    /// rather than process aborts.
     fn debug_name(&self) -> &'static str {
         core::any::type_name::<Self>()
     }
@@ -493,7 +701,7 @@ pub trait RenderObject<P: Protocol>:
     // Pipeline Integration
     // ========================================================================
     //
-    // Historical note (U2 exemplar refactor, see docs/PORT.md): the trait
+    // Historical note (see docs/PORT.md): the trait
     // formerly carried a `set_was_repaint_boundary(&mut self, bool)` method.
     // It was a leaky abstraction -- framework bookkeeping that only existed
     // on the trait because Flutter's Dart classes are flat. The bit now lives
@@ -503,12 +711,12 @@ pub trait RenderObject<P: Protocol>:
     // trait object. Removing the method also removes the only paint-phase
     // `&mut` access to the trait surface.
 
-    // Cycle 4 wave 5 R-21: `insert_into_pipeline` convenience method
-    // removed. It was a default trait method gated by `Self: Sized`
-    // (so unusable through `dyn RenderObject<P>`) that wrapped a
-    // single line: `owner.insert(self)`. Workspace grep showed zero
-    // production callsites -- the trait was paying compile-time and
-    // API-stability cost for a convenience that earned nothing.
+    // The `insert_into_pipeline` convenience method has been removed.
+    // It was a default trait method gated by `Self: Sized` (so unusable
+    // through `dyn RenderObject<P>`) that wrapped a single line:
+    // `owner.insert(self)`. A workspace grep showed zero production
+    // callsites -- the trait was paying compile-time and API-stability
+    // cost for a convenience that earned nothing.
     //
     // Direct equivalent: `owner.insert(Box::new(render_object))`,
     // see [`crate::pipeline::PipelineOwner::insert`]. The real
@@ -518,3 +726,125 @@ pub trait RenderObject<P: Protocol>:
 }
 
 impl_downcast!(sync RenderObject<P> where P: Protocol);
+
+#[cfg(test)]
+mod tests {
+    use flui_types::Size;
+
+    use super::*;
+    use crate::protocol::BoxProtocol;
+
+    /// Minimal `RenderObject<BoxProtocol>` implementer with no overrides,
+    /// used to exercise this trait's default method bodies -- the contract
+    /// every concrete render object gets "for free" until it opts in to
+    /// something else.
+    #[derive(Debug)]
+    struct MinimalLeaf;
+
+    impl Diagnosticable for MinimalLeaf {}
+
+    impl RenderObject<BoxProtocol> for MinimalLeaf {
+        fn perform_layout_raw(
+            &mut self,
+            _ctx: &mut <BoxProtocol as Protocol>::LayoutCtxErased<'_>,
+        ) -> crate::error::RenderResult<Size> {
+            Ok(Size::ZERO)
+        }
+
+        fn paint_raw(
+            &self,
+            _recorder: &mut crate::context::FragmentRecorder,
+            _child_count: usize,
+            _size: Size,
+        ) {
+        }
+
+        fn hit_test_raw(
+            &self,
+            _position: flui_types::Offset,
+            _child_count: usize,
+            _size: Size,
+            _hit_child: &mut (dyn FnMut(usize, Option<flui_types::Offset>) -> bool + Send + Sync),
+        ) -> HitTestOutcome {
+            HitTestOutcome::miss()
+        }
+    }
+
+    #[test]
+    fn hit_test_outcome_constructors_set_the_expected_bits() {
+        assert_eq!(HitTestOutcome::miss(), HitTestOutcome::new(false, false));
+        assert_eq!(
+            HitTestOutcome::from_hit(true),
+            HitTestOutcome::new(true, true)
+        );
+        assert_eq!(
+            HitTestOutcome::from_hit(false),
+            HitTestOutcome::new(false, false)
+        );
+        assert_eq!(
+            HitTestOutcome::add_self_without_blocking(),
+            HitTestOutcome::new(true, false)
+        );
+    }
+
+    #[test]
+    fn default_optimization_boundary_flags_are_all_false() {
+        let leaf = MinimalLeaf;
+        assert!(!leaf.is_repaint_boundary());
+        assert!(!leaf.is_relayout_boundary());
+        assert!(!leaf.sized_by_parent());
+        assert!(!leaf.always_needs_compositing());
+    }
+
+    #[test]
+    fn default_effect_layer_hooks_are_inert() {
+        let leaf = MinimalLeaf;
+        assert_eq!(leaf.paint_alpha(), None);
+        assert_eq!(leaf.paint_layer_blend(), None);
+        assert!(!leaf.skip_paint());
+        assert_eq!(leaf.paint_transform(Size::ZERO), None);
+        assert_eq!(leaf.hit_test_transform(Size::ZERO), None);
+        assert!(leaf.pointer_target().is_none());
+        assert_eq!(leaf.mouse_cursor(), CursorIcon::Default);
+        assert!(
+            leaf.mouse_tracker_annotation(flui_foundation::RenderId::new(1))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn default_semantics_hook_does_not_mutate_the_configuration() {
+        let leaf = MinimalLeaf;
+        let mut config = SemanticsConfiguration::new();
+
+        leaf.describe_semantics_configuration(&mut config);
+
+        assert!(!config.is_semantics_boundary());
+        assert!(!config.blocks_user_actions());
+        assert!(!leaf.excludes_semantics_subtree());
+    }
+
+    #[test]
+    fn default_reassemble_is_a_no_op() {
+        let mut leaf = MinimalLeaf;
+        leaf.reassemble();
+    }
+
+    #[test]
+    fn default_child_count_is_zero() {
+        let leaf = MinimalLeaf;
+        assert_eq!(leaf.child_count(), 0);
+    }
+
+    #[test]
+    fn default_debug_name_is_the_concrete_type_name() {
+        let leaf = MinimalLeaf;
+        assert!(leaf.debug_name().ends_with("MinimalLeaf"));
+    }
+
+    #[test]
+    fn render_object_trait_object_downcasts_to_the_concrete_type() {
+        let boxed: Box<dyn RenderObject<BoxProtocol>> = Box::new(MinimalLeaf);
+        assert!(boxed.downcast_ref::<MinimalLeaf>().is_some());
+    }
+}

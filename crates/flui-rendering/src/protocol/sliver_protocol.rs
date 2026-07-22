@@ -21,7 +21,7 @@ use crate::{
         capabilities::{
             ChildLayout, HitTestCapability, HitTestContextApi, LayoutCapability, LayoutContextApi,
         },
-        protocol::{Protocol, ProtocolCompatible, sealed},
+        protocol::{Protocol, sealed},
     },
     storage::IntrinsicDimension,
     traits::RenderObject,
@@ -104,7 +104,7 @@ impl Protocol for SliverProtocol {
     type HitTest = SliverHitTest;
     type DefaultParentData = SliverParentData;
 
-    // PORT-CHECK-OK-DYN: protocol-layout-erasure (D-block PR-A1b U19, memo D5)
+    // PORT-CHECK-OK-DYN: protocol-layout-erasure — sanctioned erased layout-context boundary
     type LayoutCtxErased<'ctx> = dyn SliverLayoutCtxErased + 'ctx;
 
     // No sliver layout cache yet: no sliver object exposes intrinsic
@@ -135,7 +135,7 @@ impl Protocol for SliverProtocol {
         Ok(())
     }
 
-    /// D-block PR-A1b U19 — Sliver counterpart to
+    /// Sliver counterpart to
     /// [`BoxProtocol::with_leaf_erased_ctx`](super::BoxProtocol::with_leaf_erased_ctx).
     /// Wraps the given `SliverConstraints` in a typed
     /// `SliverLayoutCtx::<Leaf, SliverParentData>::new(constraints)` and
@@ -145,29 +145,9 @@ impl Protocol for SliverProtocol {
         f: impl FnOnce(&mut Self::LayoutCtxErased<'_>) -> R,
     ) -> R {
         let mut typed = SliverLayoutCtx::<flui_tree::Leaf, SliverParentData>::new(constraints);
-        // PORT-CHECK-OK-DYN: protocol-layout-erasure (D-block PR-A1b U19, memo D5)
+        // PORT-CHECK-OK-DYN: protocol-layout-erasure — sanctioned erased layout-context boundary
         let erased: &mut dyn SliverLayoutCtxErased = &mut typed;
         f(erased)
-    }
-}
-
-// Self-compatibility
-impl ProtocolCompatible<SliverProtocol> for SliverProtocol {
-    fn is_compatible() -> bool {
-        true
-    }
-}
-
-// Box and Sliver can be adapted together
-impl ProtocolCompatible<BoxProtocol> for SliverProtocol {
-    fn is_compatible() -> bool {
-        true
-    }
-}
-
-impl ProtocolCompatible<SliverProtocol> for BoxProtocol {
-    fn is_compatible() -> bool {
-        true
     }
 }
 
@@ -303,7 +283,7 @@ impl LayoutCapability for SliverLayout {
     }
 
     fn normalize_constraints(constraints: Self::Constraints) -> Self::Constraints {
-        constraints.normalize()
+        constraints.round_for_cache()
     }
 }
 
@@ -324,6 +304,21 @@ impl LayoutCapability for SliverLayout {
 pub struct SliverLayoutCtx<'ctx, A: Arity, P: ParentData + Default> {
     storage: SliverLayoutCtxStorage<'ctx, P>,
     _phantom: std::marker::PhantomData<(A, P)>,
+}
+
+impl<A: Arity, P: ParentData + Default> std::fmt::Debug for SliverLayoutCtx<'_, A, P> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Storage holds live driver callbacks / an erased pipeline context;
+        // report the storage mode and the (Copy) constraints only.
+        let (mode, constraints) = match &self.storage {
+            SliverLayoutCtxStorage::Direct { constraints, .. } => ("Direct", constraints),
+            SliverLayoutCtxStorage::Proxy { constraints, .. } => ("Proxy", constraints),
+        };
+        f.debug_struct("SliverLayoutCtx")
+            .field("storage", &mode)
+            .field("constraints", constraints)
+            .finish_non_exhaustive()
+    }
 }
 
 /// Internal storage variants for [`SliverLayoutCtx`].
@@ -556,7 +551,7 @@ impl<'ctx, A: Arity, P: ParentData + Default> LayoutContextApi<'ctx, SliverLayou
     fn child_count(&self) -> usize {
         match &self.storage {
             SliverLayoutCtxStorage::Direct { children, .. } => {
-                children.as_ref().map(|c| c.len()).unwrap_or(0)
+                children.as_ref().map_or(0, |c| c.len())
             }
             SliverLayoutCtxStorage::Proxy { erased, .. } => erased.child_count(),
         }
@@ -659,7 +654,7 @@ impl<'ctx, A: Arity, P: ParentData + Default> LayoutContextApi<'ctx, SliverLayou
 }
 
 // ============================================================================
-// SLIVER LAYOUT CTX ERASED (D-block PR-A1b U19 / memo D5 — Sliver counterpart)
+// SLIVER LAYOUT CTX ERASED (Sliver counterpart)
 // ============================================================================
 
 /// Sliver counterpart to
@@ -764,6 +759,30 @@ pub trait SliverLayoutCtxErased: Send + Sync {
         let _ = id;
     }
 
+    /// Records a child-build request for `logical_index` under this sliver
+    /// — the producer half of the request-strategy seam.
+    ///
+    /// Unlike [`Self::build_and_layout_box_child`], the caller does **not**
+    /// supply a pre-built render object — the element tree decides
+    /// what to build and at which dense slot to insert it, once the
+    /// consumer half (child-manager wiring) lands.  The request is
+    /// parked in the arena's `pending_child_requests` sink; after the walk
+    /// releases its borrows the pipeline moves it into
+    /// `PipelineOwner::pending_child_requests` for the binding layer.
+    ///
+    /// Return type is [`ChildLayout<BoxChildRef>`] (not a narrower type):
+    /// ADR-0003 Decision 2(c) forbids a next-frame-only contract so the
+    /// `Ready(BoxChildRef)` arm must stay reachable for a future true-mid-pass
+    /// backend without a breaking change.  In v1 this always returns
+    /// `Scheduled`; a wired true-mid-pass backend may return `Ready`.
+    ///
+    /// Default: `Unwired` — Direct / test / leaf contexts that carry no sink
+    /// are honestly inert rather than silently discarding the request.
+    fn request_child_build(&mut self, logical_index: usize) -> ChildLayout<BoxChildRef> {
+        let _ = logical_index;
+        ChildLayout::Unwired
+    }
+
     /// Returns the [`RenderId`] of the child at
     /// dense slot `index`, if it exists.
     ///
@@ -774,6 +793,15 @@ pub trait SliverLayoutCtxErased: Send + Sync {
         let _ = index;
         None
     }
+
+    /// Emit the element-owned retain band `[first, last)` for this sliver
+    /// — the removal half of the consumer side, still awaiting its
+    /// child-manager wiring.
+    ///
+    /// Only `ErasedSliverLayoutCtx` (the pipeline-wired context) records the
+    /// band; `Direct` / test / leaf contexts are honestly inert — they carry
+    /// no `pending_retain_bands` sink.  The default is a no-op.
+    fn emit_retain_band(&mut self, _first: usize, _last: usize) {}
 }
 
 impl<A: Arity, P: ParentData + Default> SliverLayoutCtxErased for SliverLayoutCtx<'_, A, P> {
@@ -809,14 +837,16 @@ impl<A: Arity, P: ParentData + Default> SliverLayoutCtxErased for SliverLayoutCt
     ) -> ChildLayout<BoxChildRef> {
         match &mut self.storage {
             // Direct storage carries no build backend yet — the production
-            // next-frame scheduler lands with its consumer (the lazy
-            // `SliverList`, U3), at which point a build callback joins the other
-            // Direct-storage layout callbacks. Until then there is nothing to
-            // materialize: honestly `Unwired` (a bug if a production consumer
-            // ever sees it) rather than a silent no-op masquerading as end-of-data.
+            // next-frame scheduler lands together with its consumer (the lazy
+            // `SliverList` widget), at which point a build callback joins the
+            // other Direct-storage layout callbacks. Until then there is
+            // nothing to materialize: honestly `Unwired` (a bug if a
+            // production consumer ever sees it) rather than a silent no-op
+            // masquerading as end-of-data.
             SliverLayoutCtxStorage::Direct { .. } => ChildLayout::Unwired,
             // Proxy forwards to the pipeline-built context underneath, so a
-            // backend wired there (U3) is reached through this wrapper unchanged.
+            // backend wired there once the lazy `SliverList` consumer lands
+            // is reached through this wrapper unchanged.
             SliverLayoutCtxStorage::Proxy { erased, .. } => {
                 erased.build_and_layout_box_child(index, logical_index, constraints, build)
             }
@@ -835,7 +865,7 @@ impl<A: Arity, P: ParentData + Default> SliverLayoutCtxErased for SliverLayoutCt
 
     #[inline]
     fn position_child(&mut self, index: usize, offset: Offset) {
-        <Self as LayoutContextApi<'_, SliverLayout, A, P>>::position_child(self, index, offset)
+        <Self as LayoutContextApi<'_, SliverLayout, A, P>>::position_child(self, index, offset);
     }
 
     #[inline]
@@ -880,10 +910,30 @@ impl<A: Arity, P: ParentData + Default> SliverLayoutCtxErased for SliverLayoutCt
     }
 
     #[inline]
+    fn request_child_build(&mut self, logical_index: usize) -> ChildLayout<BoxChildRef> {
+        match &mut self.storage {
+            // Direct storage carries no request sink — honestly Unwired so the
+            // caller knows no backend is wired (same policy as build_and_layout).
+            SliverLayoutCtxStorage::Direct { .. } => ChildLayout::Unwired,
+            SliverLayoutCtxStorage::Proxy { erased, .. } => {
+                erased.request_child_build(logical_index)
+            }
+        }
+    }
+
+    #[inline]
     fn child_id(&self, index: usize) -> Option<flui_foundation::RenderId> {
         match &self.storage {
             SliverLayoutCtxStorage::Direct { .. } => None,
             SliverLayoutCtxStorage::Proxy { erased, .. } => erased.child_id(index),
+        }
+    }
+
+    #[inline]
+    fn emit_retain_band(&mut self, first: usize, last: usize) {
+        match &mut self.storage {
+            SliverLayoutCtxStorage::Direct { .. } => {} // honestly inert
+            SliverLayoutCtxStorage::Proxy { erased, .. } => erased.emit_retain_band(first, last),
         }
     }
 }
@@ -945,6 +995,36 @@ pub struct ErasedSliverLayoutCtx<'ctx> {
     /// pending_builds are applied (Remove → Insert ordering, D3). Same
     /// `Mutex`-for-Send discipline as `pending_builds`.
     pending_removes: &'ctx parking_lot::Mutex<Vec<(RenderId, RenderId)>>,
+    /// Sink for child-build requests from request-strategy slivers — the
+    /// producer half of the request-strategy seam: `(sliver_id,
+    /// logical_index)` pairs recorded when an absent in-band child is
+    /// encountered.  Unlike `pending_builds`, no render object is pre-built
+    /// here — the element tree decides what to build once its consumer half
+    /// (child-manager wiring) lands.  Drained after `pending_builds` and
+    /// exposed via `PipelineOwner::take_pending_child_requests` for the
+    /// binding layer.
+    pending_child_requests: &'ctx parking_lot::Mutex<Vec<(RenderId, usize)>>,
+    /// Sink for retain-band signals from element-owned slivers — the removal
+    /// half of the consumer side, still awaiting its child-manager wiring.
+    /// `RenderSliverList::perform_layout` emits `(sliver_id, first,
+    /// last)` after the band walk via `ctx.emit_retain_band(first, last)`; the
+    /// dirty-root walk drains this into `PipelineOwner::pending_retain_bands`
+    /// for the binding layer.  Element-owned slivers skip `dispose_box_child`
+    /// to prevent a double-remove ABA on the arena slot.
+    pending_retain_bands: &'ctx parking_lot::Mutex<Vec<(RenderId, usize, usize)>>,
+}
+
+impl std::fmt::Debug for ErasedSliverLayoutCtx<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Callbacks are live driver closures and the pending_* sinks are
+        // shared mutexes (never locked in fmt); report ids + child state.
+        f.debug_struct("ErasedSliverLayoutCtx")
+            .field("constraints", &self.constraints)
+            .field("children", &self.children)
+            .field("child_ids", &self.child_ids)
+            .field("node_id", &self.node_id)
+            .finish_non_exhaustive()
+    }
 }
 
 impl<'ctx> ErasedSliverLayoutCtx<'ctx> {
@@ -965,6 +1045,8 @@ impl<'ctx> ErasedSliverLayoutCtx<'ctx> {
         node_id: RenderId,
         pending_builds: &'ctx parking_lot::Mutex<Vec<PendingBuild>>,
         pending_removes: &'ctx parking_lot::Mutex<Vec<(RenderId, RenderId)>>,
+        pending_child_requests: &'ctx parking_lot::Mutex<Vec<(RenderId, usize)>>,
+        pending_retain_bands: &'ctx parking_lot::Mutex<Vec<(RenderId, usize, usize)>>,
     ) -> Self {
         Self {
             constraints,
@@ -976,6 +1058,8 @@ impl<'ctx> ErasedSliverLayoutCtx<'ctx> {
             node_id,
             pending_builds,
             pending_removes,
+            pending_child_requests,
+            pending_retain_bands,
         }
     }
 }
@@ -1104,8 +1188,27 @@ impl SliverLayoutCtxErased for ErasedSliverLayoutCtx<'_> {
         self.pending_removes.lock().push((self.node_id, id));
     }
 
+    fn request_child_build(&mut self, logical_index: usize) -> ChildLayout<BoxChildRef> {
+        // Record the request so the binding layer can service it post-layout
+        // once its consumer half (child-manager wiring) lands.  Returns
+        // `Scheduled` — the v1 next-frame policy.
+        // `self.node_id` is the sliver, giving the element tree enough
+        // context to locate the right child manager without leaking any
+        // view-layer type into this crate (H3 seam discipline).
+        self.pending_child_requests
+            .lock()
+            .push((self.node_id, logical_index));
+        ChildLayout::Scheduled
+    }
+
     fn child_id(&self, index: usize) -> Option<RenderId> {
         self.child_ids.get(index).copied()
+    }
+
+    fn emit_retain_band(&mut self, first: usize, last: usize) {
+        self.pending_retain_bands
+            .lock()
+            .push((self.node_id, first, last));
     }
 }
 
@@ -1218,6 +1321,16 @@ pub struct SliverHitTestCtx<'ctx, A: Arity, P: ParentData> {
     _phantom: std::marker::PhantomData<(&'ctx (), A, P)>,
 }
 
+impl<A: Arity, P: ParentData> std::fmt::Debug for SliverHitTestCtx<'_, A, P> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // `child_callback` is the driver's live hit-test recursion.
+        f.debug_struct("SliverHitTestCtx")
+            .field("position", &self.position)
+            .field("result", &self.result)
+            .finish_non_exhaustive()
+    }
+}
+
 impl<'ctx, A: Arity, P: ParentData> SliverHitTestCtx<'ctx, A, P> {
     /// Creates a new sliver hit test context.
     pub fn new(position: MainAxisPosition) -> Self {
@@ -1242,10 +1355,12 @@ impl<'ctx, A: Arity, P: ParentData> SliverHitTestCtx<'ctx, A, P> {
         }
     }
 
-    /// Adds self as a hit target with the given ID.
-    pub fn add_self(&mut self, target_id: u64) {
-        self.result
-            .add(SliverHitTestEntry::new(target_id, self.position.main_axis));
+    /// Adds self as a hit target with the given render ID.
+    pub fn add_self(&mut self, target_id: RenderId) {
+        self.result.add(SliverHitTestEntry::new(
+            target_id.as_u64(),
+            self.position.main_axis,
+        ));
     }
 }
 
@@ -1398,9 +1513,28 @@ mod tests {
     #[test]
     fn erased_sliver_ctx_backend_ready_scheduled_nochild() {
         use flui_foundation::RenderId;
-        use flui_types::Pixels;
+        use flui_tree::Leaf;
+        use flui_types::{Size, geometry::px};
 
-        use crate::objects::RenderSizedBox;
+        use crate::{context::BoxLayoutContext, parent_data::BoxParentData, traits::RenderBox};
+
+        /// Minimal leaf stub — only needed to satisfy the `build_one` closure's
+        /// `Box<dyn RenderObject<BoxProtocol>>` return type. The test checks the
+        /// scheduling contract, not the object's own layout behavior.
+        #[derive(Debug)]
+        struct BoxStub;
+        impl flui_foundation::Diagnosticable for BoxStub {}
+        impl RenderBox for BoxStub {
+            type Arity = Leaf;
+            type ParentData = BoxParentData;
+            fn perform_layout(
+                &mut self,
+                _ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>,
+            ) -> Size {
+                Size::new(px(50.0), px(30.0))
+            }
+            fn paint(&self, _ctx: &mut crate::context::PaintCx<'_, Leaf>) {}
+        }
 
         let constraints = SliverConstraints::new(
             flui_types::layout::AxisDirection::TopToBottom,
@@ -1433,6 +1567,10 @@ mod tests {
 
         let pending_removes: parking_lot::Mutex<Vec<(RenderId, RenderId)>> =
             parking_lot::Mutex::new(Vec::new());
+        let pending_child_requests: parking_lot::Mutex<Vec<(RenderId, usize)>> =
+            parking_lot::Mutex::new(Vec::new());
+        let pending_retain_bands: parking_lot::Mutex<Vec<(RenderId, usize, usize)>> =
+            parking_lot::Mutex::new(Vec::new());
         let mut ctx = ErasedSliverLayoutCtx::new(
             constraints,
             &mut children,
@@ -1443,6 +1581,8 @@ mod tests {
             parent,
             &sink,
             &pending_removes,
+            &pending_child_requests,
+            &pending_retain_bands,
         );
 
         // index 0 exists -> Ready(handle), builder untouched, nothing parked.
@@ -1466,9 +1606,8 @@ mod tests {
         );
 
         // index 1 absent, builder produces -> Scheduled + one parked request.
-        let mut build_one = |_idx: usize| -> Option<Box<dyn RenderObject<BoxProtocol>>> {
-            Some(Box::new(RenderSizedBox::fixed(Pixels(50.0), Pixels(30.0))))
-        };
+        let mut build_one =
+            |_idx: usize| -> Option<Box<dyn RenderObject<BoxProtocol>>> { Some(Box::new(BoxStub)) };
         let r1 = SliverLayoutCtxErased::build_and_layout_box_child(
             &mut ctx,
             1,
@@ -1536,19 +1675,6 @@ mod tests {
     }
 
     #[test]
-    fn test_protocol_compatibility() {
-        use crate::protocol::protocol::ProtocolCompatible;
-
-        // Test self-compatibility
-        assert!(<SliverProtocol as ProtocolCompatible<SliverProtocol>>::is_compatible());
-        assert!(<BoxProtocol as ProtocolCompatible<BoxProtocol>>::is_compatible());
-
-        // Box and Sliver protocols are compatible via adapters
-        assert!(<SliverProtocol as ProtocolCompatible<BoxProtocol>>::is_compatible());
-        assert!(<BoxProtocol as ProtocolCompatible<SliverProtocol>>::is_compatible());
-    }
-
-    #[test]
     fn sliver_constraints_cache_key_includes_all_direction_fields() {
         use flui_types::layout::AxisDirection;
 
@@ -1585,6 +1711,204 @@ mod tests {
             SliverConstraintsCacheKey::from_constraints(&changed_cross_axis),
             "cross_axis_direction participates in SliverConstraints::Hash and must also \
              participate in the layout cache key",
+        );
+    }
+
+    /// Exercises `SliverHitTestCtx::add_self` end-to-end.
+    ///
+    /// Constructs a real `SliverHitTestCtx`, calls `add_self(id)`, then asserts
+    /// the entry written into the result carries `target_id == id.as_u64()`.
+    /// A regression in the body (wrong accessor or cast) would fail this test.
+    #[test]
+    fn add_self_writes_render_id_as_u64_into_sliver_hit_result() {
+        let id = RenderId::new(3);
+        let main_axis_pos = MainAxisPosition::new(42.0, 10.0);
+        let mut ctx: SliverHitTestCtx<'_, Leaf, SliverParentData> =
+            SliverHitTestCtx::new(main_axis_pos);
+
+        ctx.add_self(id);
+
+        let entries = &ctx.result().path;
+        assert_eq!(entries.len(), 1, "exactly one entry after add_self");
+        assert_eq!(
+            entries[0].target_id,
+            id.as_u64(),
+            "stored target_id must equal id.as_u64()"
+        );
+        assert_eq!(
+            entries[0].main_axis_position, 42.0,
+            "main_axis_position must reflect the context position at call time"
+        );
+    }
+
+    // ========================================================================
+    // SliverLayoutCtx (Direct storage) — scalar accessors and child dispatch
+    // ========================================================================
+
+    #[test]
+    fn direct_ctx_scalar_accessors_read_from_constraints() {
+        let constraints = SliverConstraints {
+            scroll_offset: 12.0,
+            remaining_paint_extent: 340.0,
+            viewport_main_axis_extent: 600.0,
+            cross_axis_extent: 250.0,
+            ..SliverConstraints::default()
+        };
+        let ctx = SliverLayoutCtx::<Leaf, SliverParentData>::new(constraints);
+
+        assert_eq!(ctx.scroll_offset(), 12.0);
+        assert_eq!(ctx.remaining_paint_extent(), 340.0);
+        assert_eq!(ctx.viewport_main_axis_extent(), 600.0);
+        assert_eq!(ctx.cross_axis_extent(), 250.0);
+    }
+
+    #[test]
+    fn layout_box_child_and_box_child_intrinsic_return_zero_without_callbacks_wired() {
+        let mut ctx = SliverLayoutCtx::<Leaf, SliverParentData>::new(SliverConstraints::default());
+
+        assert_eq!(
+            ctx.layout_box_child(0, BoxConstraints::tight(Size::new(px(10.0), px(10.0)))),
+            Size::ZERO
+        );
+        assert_eq!(
+            ctx.box_child_intrinsic(0, IntrinsicDimension::MinWidth, 100.0),
+            0.0
+        );
+    }
+
+    #[test]
+    fn with_children_exposes_count_geometry_and_parent_data_by_index() {
+        let mut children = vec![
+            SliverChildState::<SliverParentData>::new(RenderId::new(1)),
+            SliverChildState::<SliverParentData>::new(RenderId::new(2)),
+        ];
+        children[0].geometry = SliverGeometry {
+            paint_extent: 40.0,
+            ..SliverGeometry::ZERO
+        };
+        children[1].geometry = SliverGeometry {
+            paint_extent: 80.0,
+            ..SliverGeometry::ZERO
+        };
+
+        {
+            let constraints = SliverConstraints::default();
+            let mut ctx = SliverLayoutCtx::<Leaf, SliverParentData>::with_children(
+                constraints,
+                &mut children,
+            );
+
+            assert_eq!(LayoutContextApi::child_count(&ctx), 2);
+            assert_eq!(ctx.child_geometry(0).unwrap().paint_extent, 40.0);
+            assert_eq!(ctx.child_geometry(1).unwrap().paint_extent, 80.0);
+            assert!(ctx.child_geometry(2).is_none());
+
+            assert_eq!(ctx.child_parent_data(0), Some(&SliverParentData::default()));
+            assert!(ctx.child_parent_data(5).is_none());
+            assert!(ctx.child_parent_data_mut(5).is_none());
+
+            ctx.child_parent_data_mut(0).unwrap().layout_offset = 99.0;
+            LayoutContextApi::position_child(&mut ctx, 1, Offset::new(px(3.0), px(4.0)));
+        }
+
+        assert_eq!(children[0].parent_data.layout_offset, 99.0);
+        assert_eq!(children[1].offset, Offset::new(px(3.0), px(4.0)));
+    }
+
+    #[test]
+    fn layout_child_falls_back_to_cached_geometry_when_no_callback_is_wired() {
+        let mut children = vec![SliverChildState::<SliverParentData>::new(RenderId::new(1))];
+        children[0].geometry = SliverGeometry {
+            paint_extent: 55.0,
+            ..SliverGeometry::ZERO
+        };
+
+        let constraints = SliverConstraints::default();
+        let mut ctx =
+            SliverLayoutCtx::<Leaf, SliverParentData>::with_children(constraints, &mut children);
+
+        // No `layout_child_callback` was wired (plain `with_children`), so the
+        // Direct-mode dispatch must fall back to the already-cached geometry
+        // rather than invoking a nonexistent callback.
+        let geometry = LayoutContextApi::layout_child(&mut ctx, 0, constraints);
+        assert_eq!(geometry.paint_extent, 55.0);
+    }
+
+    #[test]
+    fn layout_child_returns_zero_geometry_with_no_children_and_no_callback() {
+        let mut ctx = SliverLayoutCtx::<Leaf, SliverParentData>::new(SliverConstraints::default());
+        assert_eq!(
+            LayoutContextApi::layout_child(&mut ctx, 0, SliverConstraints::default()),
+            SliverGeometry::ZERO
+        );
+    }
+
+    #[test]
+    fn with_layout_callback_dispatches_child_layout_box_child_and_intrinsic_by_child_id() {
+        use parking_lot::Mutex;
+
+        let child_a = RenderId::new(10);
+        let child_b = RenderId::new(20);
+        let child_ids = [child_a, child_b];
+        let mut children = vec![
+            SliverChildState::<SliverParentData>::new(child_a),
+            SliverChildState::<SliverParentData>::new(child_b),
+        ];
+
+        let sliver_calls: Mutex<Vec<RenderId>> = Mutex::new(Vec::new());
+        let layout_child_callback = |id: RenderId, _c: SliverConstraints| -> SliverGeometry {
+            sliver_calls.lock().push(id);
+            SliverGeometry {
+                paint_extent: 123.0,
+                ..SliverGeometry::ZERO
+            }
+        };
+
+        let box_calls: Mutex<Vec<RenderId>> = Mutex::new(Vec::new());
+        let layout_box_child_callback = |id: RenderId, _c: BoxConstraints| -> Size {
+            box_calls.lock().push(id);
+            Size::new(px(11.0), px(22.0))
+        };
+
+        let intrinsic_calls: Mutex<Vec<RenderId>> = Mutex::new(Vec::new());
+        let box_child_intrinsic_callback = |id: RenderId, _d: IntrinsicDimension, _e: f32| -> f32 {
+            intrinsic_calls.lock().push(id);
+            77.0
+        };
+
+        let constraints = SliverConstraints::default();
+        let mut ctx = SliverLayoutCtx::<Leaf, SliverParentData>::with_layout_callback(
+            constraints,
+            &mut children,
+            &child_ids,
+            &layout_child_callback,
+            Some(&layout_box_child_callback),
+            Some(&box_child_intrinsic_callback),
+        );
+
+        // `layout_child` on index 1 must resolve child_ids[1] == child_b, invoke
+        // the callback with that id, and write the returned geometry through to
+        // the cached child state at the same index.
+        let geometry = LayoutContextApi::layout_child(&mut ctx, 1, constraints);
+        assert_eq!(geometry.paint_extent, 123.0);
+        assert_eq!(*sliver_calls.lock(), vec![child_b]);
+        assert_eq!(ctx.child_geometry(1).unwrap().paint_extent, 123.0);
+
+        let size = ctx.layout_box_child(0, BoxConstraints::tight(Size::new(px(11.0), px(22.0))));
+        assert_eq!(size, Size::new(px(11.0), px(22.0)));
+        assert_eq!(*box_calls.lock(), vec![child_a]);
+
+        let extent = ctx.box_child_intrinsic(0, IntrinsicDimension::MinWidth, 50.0);
+        assert_eq!(extent, 77.0);
+        assert_eq!(*intrinsic_calls.lock(), vec![child_a]);
+
+        // An index beyond `child_ids` must not dispatch to any callback.
+        let out_of_range = ctx.layout_box_child(5, BoxConstraints::tight(Size::ZERO));
+        assert_eq!(out_of_range, Size::ZERO);
+        assert_eq!(
+            box_calls.lock().len(),
+            1,
+            "no additional dispatch for an out-of-range index"
         );
     }
 }

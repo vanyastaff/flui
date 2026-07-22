@@ -15,12 +15,12 @@
 //! Run with: cargo run -p flui --example text_app
 
 use flui_app::run_app;
-use flui_rendering::objects::RenderParagraph;
+use flui_objects::RenderParagraph;
 use flui_types::{
     Color,
     typography::{FontWeight, TextDirection, TextSpan, TextStyle},
 };
-use flui_view::{BuildContext, ElementBase, IntoView, RenderView, StatelessView, View, ViewExt};
+use flui_view::{BuildContext, IntoView, RenderView, StatelessView, View, ViewExt};
 
 /// Builds the styled "Hello, FLUI!" span: a 48px dark base with one bold-red
 /// child word, so the rich-text path (per-span color + weight) is exercised.
@@ -50,11 +50,18 @@ impl RenderView for TextLabel {
     type Protocol = flui_rendering::protocol::BoxProtocol;
     type RenderObject = RenderParagraph;
 
-    fn create_render_object(&self) -> Self::RenderObject {
+    fn create_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+    ) -> Self::RenderObject {
         RenderParagraph::new(greeting(), TextDirection::Ltr)
     }
 
-    fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+    fn update_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+        render_object: &mut Self::RenderObject,
+    ) {
         render_object.set_text(greeting());
     }
 }
@@ -72,11 +79,8 @@ impl StatelessView for App {
 }
 
 impl View for App {
-    fn create_element(&self) -> Box<dyn ElementBase> {
-        Box::new(flui_view::StatelessElement::new(
-            self,
-            flui_view::element::StatelessBehavior,
-        ))
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateless(self)
     }
 }
 

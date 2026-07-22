@@ -3,6 +3,8 @@
 //! Allows various types to be converted into Views and Elements, enabling
 //! a fluent API for building UI trees.
 
+use crate::element::ElementKind;
+
 use super::view::{ElementBase, View};
 
 /// Trait for types that can be converted into a View.
@@ -68,8 +70,7 @@ impl<V: View> IntoView for V {
 /// (`Box::new(SomeView { … })`) are migrated to either bare
 /// `SomeView { … }` (concrete `impl IntoView` via the blanket) or
 /// `SomeView { … }.boxed()` (`BoxedView`, also `impl IntoView` via
-/// the blanket) at the §U28 sweep boundary — not via an interop shim
-/// on `Box<concrete>`.
+/// the blanket) — not via an interop shim on `Box<concrete>`.
 impl IntoView for Box<dyn View> {
     type View = BoxedView;
 
@@ -100,8 +101,8 @@ impl IntoView for Box<dyn View> {
 /// `create_element()`. This means you can pass any View where an
 /// `IntoElement` is expected.
 pub trait IntoElement {
-    /// Convert this value into a boxed Element.
-    fn into_element(self) -> Box<dyn ElementBase>;
+    /// Convert this value into an element kind.
+    fn into_element(self) -> ElementKind;
 }
 
 /// Blanket implementation for types that implement View.
@@ -109,7 +110,7 @@ pub trait IntoElement {
 /// This allows any View to be used where an Element is needed.
 impl<V: View> IntoElement for V {
     #[inline]
-    fn into_element(self) -> Box<dyn ElementBase> {
+    fn into_element(self) -> ElementKind {
         self.create_element()
     }
 }
@@ -117,20 +118,20 @@ impl<V: View> IntoElement for V {
 /// Implementation for boxed Views.
 impl IntoElement for Box<dyn View> {
     #[inline]
-    fn into_element(self) -> Box<dyn ElementBase> {
+    fn into_element(self) -> ElementKind {
         self.create_element()
     }
 }
 
-/// A boxed Element for type erasure.
+/// An element kind for type erasure.
 ///
 /// Used when the concrete Element type cannot be known at compile time.
-pub struct BoxedElement(pub Box<dyn ElementBase>);
+pub struct BoxedElement(pub ElementKind);
 
 impl std::fmt::Debug for BoxedElement {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_tuple("BoxedElement")
-            .field(&format_args!("<{:?}>", self.0.view_type_id()))
+            .field(&format_args!("<{:?}>", self.0.element().view_type_id()))
             .finish()
     }
 }
@@ -143,30 +144,27 @@ impl BoxedElement {
 
     /// Get a reference to the inner Element.
     pub fn inner(&self) -> &dyn ElementBase {
-        &*self.0
+        self.0.element()
     }
 
     /// Get a mutable reference to the inner Element.
     pub fn inner_mut(&mut self) -> &mut dyn ElementBase {
-        &mut *self.0
+        self.0.element_mut()
     }
 
-    /// Consume and return the inner boxed Element.
-    pub fn into_inner(self) -> Box<dyn ElementBase> {
+    /// Consume and return the inner element kind.
+    pub fn into_inner(self) -> ElementKind {
         self.0
     }
 }
 
-/// Extension trait for boxing Elements.
-pub trait ElementExt: ElementBase + Sized {
-    /// Box this Element for type erasure.
-    fn boxed(self) -> BoxedElement {
-        BoxedElement(Box::new(self))
-    }
-}
-
-// Note: Can't impl ElementExt for all ElementBase because ElementBase is not
-// Sized Users should use BoxedElement::new() instead
+/// Deprecated compatibility marker for the pre-`ElementKind` element boxing API.
+///
+/// The old `.boxed()` helper could wrap any `ElementBase` in
+/// `Box<dyn ElementBase>`, but that loses the closed family variant required by
+/// [`ElementKind`]. New code should create elements through
+/// [`View::create_element`] or [`IntoElement::into_element`].
+pub trait ElementExt: ElementBase + Sized {}
 
 /// A boxed View for type erasure.
 ///
@@ -189,7 +187,7 @@ impl std::fmt::Debug for BoxedView {
 }
 
 impl View for BoxedView {
-    fn create_element(&self) -> Box<dyn super::view::ElementBase> {
+    fn create_element(&self) -> crate::element::ElementKind {
         self.0.create_element()
     }
 

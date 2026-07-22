@@ -17,7 +17,7 @@ use crate::{
     parent_data::{BoxParentData, ParentData},
     protocol::{
         capabilities::{HitTestCapability, HitTestContextApi, LayoutCapability, LayoutContextApi},
-        protocol::{BidirectionalProtocol, Protocol, ProtocolCompatible, sealed},
+        protocol::{Protocol, sealed},
     },
 };
 
@@ -29,8 +29,8 @@ use crate::{
 // lived in `crates/flui-rendering/src/children_access.rs` alongside a
 // 500-LOC closure-based iterator (`ChildrenAccess`) and the
 // `ChildHandle` wrapper in `child_handle.rs` -- both fought the borrow
-// checker for users that never appeared, so Mythos Step 5b deleted them
-// outright. `ChildState<P>` itself stays because it IS the data shape
+// checker for users that never appeared, so they were deleted outright.
+// `ChildState<P>` itself stays because it IS the data shape
 // `BoxLayoutContextApi::layout_child` / `position_child` /
 // `child_geometry` / `child_parent_data` need.
 
@@ -91,7 +91,7 @@ impl Protocol for BoxProtocol {
     type HitTest = BoxHitTest;
     type DefaultParentData = BoxParentData;
 
-    // PORT-CHECK-OK-DYN: protocol-layout-erasure (D-block PR-A1b U19, memo D5)
+    // PORT-CHECK-OK-DYN: protocol-layout-erasure — sanctioned erased layout-context boundary
     type LayoutCtxErased<'ctx> = dyn BoxLayoutCtxErased + 'ctx;
 
     type LayoutCache = crate::storage::BoxLayoutCache;
@@ -100,7 +100,7 @@ impl Protocol for BoxProtocol {
         "box"
     }
 
-    /// D-block PR-A1 U17 — override the default no-op with the actual
+    /// Overrides the default no-op with the actual
     /// Flutter-parity `compute_relayout_boundary` call.
     ///
     /// `parent_uses_size = true` (conservative default per Copilot P1 review
@@ -174,7 +174,7 @@ impl Protocol for BoxProtocol {
         Ok(())
     }
 
-    /// D-block PR-A1b U19 — wraps the given `BoxConstraints` in a typed
+    /// Wraps the given `BoxConstraints` in a typed
     /// `BoxLayoutCtx::<Leaf, BoxParentData>::new(constraints)` (no
     /// children, no callback) and hands an erased `&mut dyn
     /// BoxLayoutCtxErased` view to `f`.
@@ -186,7 +186,7 @@ impl Protocol for BoxProtocol {
     /// `LayoutContextApi` whose `Leaf`-arity body returns `Size::ZERO` /
     /// no-op (the existing semantics for a no-children context).
     ///
-    /// The pipeline's `layout_dirty_root` (U20) constructs its own typed
+    /// The pipeline's `layout_dirty_root` constructs its own typed
     /// context with children via disjoint borrows and bypasses this
     /// helper.
     fn with_leaf_erased_ctx<R>(
@@ -194,18 +194,9 @@ impl Protocol for BoxProtocol {
         f: impl FnOnce(&mut Self::LayoutCtxErased<'_>) -> R,
     ) -> R {
         let mut typed = BoxLayoutCtx::<flui_tree::Leaf, BoxParentData>::new(constraints);
-        // PORT-CHECK-OK-DYN: protocol-layout-erasure (D-block PR-A1b U19, memo D5)
+        // PORT-CHECK-OK-DYN: protocol-layout-erasure — sanctioned erased layout-context boundary
         let erased: &mut dyn BoxLayoutCtxErased = &mut typed;
         f(erased)
-    }
-}
-
-impl BidirectionalProtocol for BoxProtocol {}
-
-// Self-compatibility
-impl ProtocolCompatible<BoxProtocol> for BoxProtocol {
-    fn is_compatible() -> bool {
-        true
     }
 }
 
@@ -224,6 +215,10 @@ pub struct BoxLayout;
 /// Uses integer representation of floats (bits) for reliable hashing.
 /// This handles -0.0/+0.0 and provides exact equality.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+// The `_bits` postfix is load-bearing: each field is the `f32::to_bits` image
+// of the same-named `BoxConstraints` field, and dropping it would suggest the
+// fields hold pixel values.
+#[allow(clippy::struct_field_names)]
 pub struct BoxConstraintsCacheKey {
     min_width_bits: u32,
     max_width_bits: u32,
@@ -276,7 +271,7 @@ impl LayoutCapability for BoxLayout {
     }
 
     fn normalize_constraints(constraints: Self::Constraints) -> Self::Constraints {
-        constraints.normalize()
+        constraints.round_for_cache()
     }
 }
 
@@ -312,10 +307,32 @@ pub type ActualBaselineChildCallback<'a> = &'a (
 pub type SliverLayoutChildCallback<'a> =
     &'a (dyn Fn(flui_foundation::RenderId, SliverConstraints) -> SliverGeometry + Send + Sync);
 
+/// Callback for querying a Box child's intrinsic dimensions from within a Box
+/// parent's `perform_layout`.
+///
+/// Called by `RenderIntrinsicWidth` / `RenderIntrinsicHeight` to measure the
+/// child's intrinsic extent before committing to a layout size.  The callback
+/// routes through the owner's private `subtree_arena`'s
+/// `box_intrinsic_query_borrowed` — the same pre-acquired subtree pool used by
+/// the sliver→box intrinsic path — so no fresh `&mut RenderTree` is needed.
+///
+/// The `extent` argument carries the cross-axis extent (height for width
+/// queries, width for height queries), matching Flutter's
+/// `getMinIntrinsicWidth(double height)` / `getMaxIntrinsicWidth(double height)`
+/// parameter convention.
+///
+/// Returns `0.0` when the callback cannot route the query (out-of-bounds index,
+/// error in child layout, or no callback wired on the Direct-storage path).
+pub type BoxChildIntrinsicCallback<'a> = &'a (
+        dyn Fn(flui_foundation::RenderId, crate::storage::IntrinsicDimension, f32) -> f32
+            + Send
+            + Sync
+    );
+
 /// Per-child geometry storage owned by the typed wrapper when bridging
 /// from an erased context.
 ///
-/// **D-block PR-A1b U19 (companion memo D5):** when the `RenderBox`
+/// When the `RenderBox`
 /// blanket impl constructs a `BoxLayoutCtx::from_erased(...)` Proxy view
 /// of an `&mut dyn BoxLayoutCtxErased`, the typed wrapper needs to honour
 /// the [`LayoutContextApi::child_geometry`] contract
@@ -329,7 +346,7 @@ pub type SliverLayoutChildCallback<'a> =
 /// user-widget flow
 /// (`let s = ctx.layout_child(i, c); … ctx.child_geometry(i)`).
 ///
-/// # Storage shape (PR #141 Copilot review feedback, comment 3293746260)
+/// # Storage shape
 ///
 /// Indexed by dense child index (`0..child_count`) so a hash map is
 /// strictly worse on every dimension: lookup is `O(log n)` ↔ `O(1)`
@@ -345,13 +362,14 @@ type ProxyChildSizeCache = Vec<Option<Size>>;
 /// The children reference allows `position_child` to store offsets that
 /// will be used during painting.
 ///
-/// **D-block PR-A1b U19 (companion memo D5) — storage variants.** The
-/// context carries two storage modes:
+/// # Storage variants
+///
+/// The context carries two storage modes:
 ///
 /// 1. `Direct` (default constructors `new`, `with_children`,
 ///    `with_layout_callback`): pipeline owns the children `Vec`, child
 ///    IDs, and synchronous layout callback. This is the production path
-///    used by `RenderEntry::layout_leaf_only` (leaf shape) and U20's
+///    used by `RenderEntry::layout_leaf_only` (leaf shape) and
 ///    `layout_dirty_root` (parent+children disjoint-borrow shape).
 /// 2. `Proxy` (constructor `from_erased`): wraps `&mut dyn
 ///    BoxLayoutCtxErased` so the `RenderObject<BoxProtocol>` blanket
@@ -363,6 +381,21 @@ type ProxyChildSizeCache = Vec<Option<Size>>;
 pub struct BoxLayoutCtx<'ctx, A: Arity, P: ParentData + Default> {
     storage: BoxLayoutCtxStorage<'ctx, P>,
     _phantom: std::marker::PhantomData<A>,
+}
+
+impl<A: Arity, P: ParentData + Default> std::fmt::Debug for BoxLayoutCtx<'_, A, P> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Storage holds live driver callbacks / an erased pipeline context;
+        // report the storage mode and the (Copy) constraints only.
+        let (mode, constraints) = match &self.storage {
+            BoxLayoutCtxStorage::Direct { constraints, .. } => ("Direct", constraints),
+            BoxLayoutCtxStorage::Proxy { constraints, .. } => ("Proxy", constraints),
+        };
+        f.debug_struct("BoxLayoutCtx")
+            .field("storage", &mode)
+            .field("constraints", constraints)
+            .finish_non_exhaustive()
+    }
 }
 
 /// Internal storage variants. See [`BoxLayoutCtx`] doc.
@@ -394,7 +427,7 @@ enum BoxLayoutCtxStorage<'ctx, P: ParentData + Default> {
         child_sizes: ProxyChildSizeCache,
         /// The underlying erased context (typically a pipeline-side
         /// `BoxLayoutCtx` in Direct mode).
-        // PORT-CHECK-OK-DYN: protocol-layout-erasure (D-block PR-A1b U19, memo D5)
+        // PORT-CHECK-OK-DYN: protocol-layout-erasure — sanctioned erased layout-context boundary
         erased: &'ctx mut dyn BoxLayoutCtxErased,
     },
 }
@@ -453,7 +486,7 @@ impl<'ctx, A: Arity, P: ParentData + Default> BoxLayoutCtx<'ctx, A, P> {
         }
     }
 
-    /// **D-block PR-A1b U19** — constructs a Proxy-mode `BoxLayoutCtx`
+    /// Constructs a Proxy-mode `BoxLayoutCtx`
     /// that delegates child operations to the given erased context. Used by
     /// the `RenderObject<BoxProtocol>` blanket impl in
     /// [`crate::traits::RenderBox`] to hand a typed
@@ -475,7 +508,7 @@ impl<'ctx, A: Arity, P: ParentData + Default> BoxLayoutCtx<'ctx, A, P> {
     /// code from constructing Proxy contexts (a sharp tool that requires
     /// the parent_data-downcast invariants and Direct↔Proxy semantic
     /// awareness documented on [`BoxLayoutCtxErased`]).
-    // PORT-CHECK-OK-DYN: protocol-layout-erasure (D-block PR-A1b U19, memo D5)
+    // PORT-CHECK-OK-DYN: protocol-layout-erasure — sanctioned erased layout-context boundary
     pub(crate) fn from_erased(erased: &'ctx mut dyn BoxLayoutCtxErased) -> Self {
         let constraints = erased.constraints();
         // Review fix #2: assert at construction time that the typed
@@ -502,9 +535,9 @@ impl<'ctx, A: Arity, P: ParentData + Default> BoxLayoutCtx<'ctx, A, P> {
         );
         // Pre-size the dense `Vec<Option<Size>>` cache to the erased
         // ctx's child_count — one allocation per Proxy construction, no
-        // per-`layout_child` reallocation. PR #141 Copilot review fix:
-        // swapped from `HashMap<usize, Size>` (sparse + hashing on hot
-        // path) to indexed `Vec<Option<Size>>` (O(1) access, contiguous).
+        // per-`layout_child` reallocation. Uses indexed `Vec<Option<Size>>`
+        // (O(1) access, contiguous) rather than `HashMap<usize, Size>`
+        // (sparse + hashing on the hot path).
         let child_count = erased.child_count();
         Self {
             storage: BoxLayoutCtxStorage::Proxy {
@@ -545,7 +578,7 @@ impl<'ctx, A: Arity, P: ParentData + Default> LayoutContextApi<'ctx, BoxLayout, 
     fn child_count(&self) -> usize {
         match &self.storage {
             BoxLayoutCtxStorage::Direct { children, .. } => {
-                children.as_ref().map(|c| c.len()).unwrap_or(0)
+                children.as_ref().map_or(0, |c| c.len())
             }
             BoxLayoutCtxStorage::Proxy { erased, .. } => erased.child_count(),
         }
@@ -670,7 +703,7 @@ impl<'ctx, A: Arity, P: ParentData + Default> LayoutContextApi<'ctx, BoxLayout, 
 }
 
 // ============================================================================
-// BOX LAYOUT CTX ERASED (D-block PR-A1b U19 / memo D5)
+// BOX LAYOUT CTX ERASED
 // ============================================================================
 
 /// Protocol-typed but **arity- and parent-data-erased** view of a box layout
@@ -678,18 +711,17 @@ impl<'ctx, A: Arity, P: ParentData + Default> LayoutContextApi<'ctx, BoxLayout, 
 /// [`RenderObject<BoxProtocol>::perform_layout_raw`](crate::traits::RenderObject::perform_layout_raw)
 /// boundary.
 ///
-/// # Motivation (D-block PR-A1b U19 / companion memo D5)
+/// # Motivation
 ///
-/// Pre-U19, the blanket impl `impl<T: RenderBox> RenderObject<BoxProtocol> for T`
+/// Before this trait existed, the blanket impl `impl<T: RenderBox> RenderObject<BoxProtocol> for T`
 /// could not bridge to the user's typed `RenderBox::perform_layout(ctx:
 /// &mut BoxLayoutCtx<Self::Arity, Self::ParentData>)` because the trait
 /// surface only carried protocol-typed constraints (no children, no
 /// layout-callback). As a consequence, the blanket `perform_layout_raw`
-/// shipped as a no-op returning the cached `*self.size()` — D-1's AE1
-/// concretely showed `Size::ZERO` for fresh boxes (companion memo §D5).
+/// shipped as a no-op returning the cached `*self.size()`, which
+/// concretely showed `Size::ZERO` for fresh boxes.
 ///
-/// `BoxLayoutCtxErased` is the trait-object-friendly wrapper picked in
-/// memo D5: the pipeline / [`RenderEntry::layout_leaf_only`](crate::storage::RenderEntry::layout_leaf_only)
+/// `BoxLayoutCtxErased` is the trait-object-friendly wrapper: the pipeline / [`RenderEntry::layout_leaf_only`](crate::storage::RenderEntry::layout_leaf_only)
 /// constructs a typed [`BoxLayoutCtx<'_, A, P>`], the trait blanket impl
 /// below coerces it to `&mut dyn BoxLayoutCtxErased`, and the
 /// `RenderObject<BoxProtocol>` blanket impl in
@@ -712,8 +744,8 @@ impl<'ctx, A: Arity, P: ParentData + Default> LayoutContextApi<'ctx, BoxLayout, 
 /// # Sliver counterpart
 ///
 /// [`SliverLayoutCtxErased`](super::sliver_protocol::SliverLayoutCtxErased) is the
-/// analogous trait for sliver layout. The sliver bridge is stubbed for
-/// D-block — see [`crate::traits::RenderSliver`].
+/// analogous trait for sliver layout. The sliver bridge is currently
+/// stubbed — see [`crate::traits::RenderSliver`].
 ///
 /// # Thread-safety
 ///
@@ -835,6 +867,27 @@ pub trait BoxLayoutCtxErased: Send + Sync {
     fn parent_data_type_id(&self) -> Option<std::any::TypeId> {
         None
     }
+
+    /// Queries a child's intrinsic dimension from within `perform_layout`.
+    ///
+    /// Delegates to the pipeline's `box_intrinsic_query_borrowed` callback when
+    /// one is wired (the production path used by `RenderIntrinsicWidth` /
+    /// `RenderIntrinsicHeight`).  Returns `0.0` on Direct-storage contexts
+    /// (unit tests, leaf-only paths) where no intrinsics callback is available —
+    /// the same conservative fallback as `layout_child` returning `Size::ZERO`
+    /// on the no-callback Direct path.
+    ///
+    /// `dimension` — which of the four intrinsic axes to query
+    /// (`MinWidth`/`MaxWidth` pass a height extent; `MinHeight`/`MaxHeight`
+    /// pass a width extent — matching Flutter's `_IntrinsicDimension`).
+    fn child_intrinsic(
+        &mut self,
+        _index: usize,
+        _dimension: crate::storage::IntrinsicDimension,
+        _extent: f32,
+    ) -> f32 {
+        0.0
+    }
 }
 
 impl<A: Arity, P: ParentData + Default> BoxLayoutCtxErased for BoxLayoutCtx<'_, A, P> {
@@ -897,7 +950,7 @@ impl<A: Arity, P: ParentData + Default> BoxLayoutCtxErased for BoxLayoutCtx<'_, 
 
     #[inline]
     fn position_child(&mut self, index: usize, offset: Offset) {
-        <Self as LayoutContextApi<'_, BoxLayout, A, P>>::position_child(self, index, offset)
+        <Self as LayoutContextApi<'_, BoxLayout, A, P>>::position_child(self, index, offset);
     }
 
     #[inline]
@@ -954,6 +1007,25 @@ impl<A: Arity, P: ParentData + Default> BoxLayoutCtxErased for BoxLayoutCtx<'_, 
             } => Some(std::any::TypeId::of::<P>()),
             BoxLayoutCtxStorage::Direct { children: None, .. }
             | BoxLayoutCtxStorage::Proxy { .. } => None,
+        }
+    }
+
+    #[inline]
+    fn child_intrinsic(
+        &mut self,
+        index: usize,
+        dimension: crate::storage::IntrinsicDimension,
+        extent: f32,
+    ) -> f32 {
+        match &mut self.storage {
+            // Direct-storage contexts have no intrinsics callback; return the
+            // same conservative 0.0 that the default trait body produces.
+            BoxLayoutCtxStorage::Direct { .. } => 0.0,
+            // Proxy delegates to the pipeline-wired ErasedBoxLayoutCtx, which
+            // holds the `BoxChildIntrinsicCallback` set by `layout_dirty_root`.
+            BoxLayoutCtxStorage::Proxy { erased, .. } => {
+                erased.child_intrinsic(index, dimension, extent)
+            }
         }
     }
 }
@@ -1025,6 +1097,30 @@ pub struct ErasedBoxLayoutCtx<'ctx> {
     /// `layout_sliver_child` returns [`SliverGeometry::ZERO`] in that
     /// case, matching the conservative fallback on the box path.
     sliver_layout_child_callback: Option<SliverLayoutChildCallback<'ctx>>,
+    /// Optional callback for querying Box child intrinsic dimensions from
+    /// within a Box parent's `perform_layout`.
+    ///
+    /// `None` on all paths that do not involve a Box parent that reads child
+    /// intrinsics (the overwhelming majority of layout nodes).  When `None`,
+    /// `child_intrinsic` returns `0.0` — the same conservative fallback as
+    /// `layout_child` returning `Size::ZERO` on the no-callback Direct path.
+    ///
+    /// Wired by `layout_dirty_root` in `subtree_arena.rs` via
+    /// `box_intrinsic_query_borrowed` — the same pre-acquired subtree pool
+    /// already used for the Sliver→Box intrinsic path.
+    intrinsics_child_callback: Option<BoxChildIntrinsicCallback<'ctx>>,
+}
+
+impl std::fmt::Debug for ErasedBoxLayoutCtx<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // The layout / baseline / intrinsic callbacks are live driver
+        // closures over the slot map; report constraints and child state.
+        f.debug_struct("ErasedBoxLayoutCtx")
+            .field("constraints", &self.constraints)
+            .field("children", &self.children)
+            .field("child_ids", &self.child_ids)
+            .finish_non_exhaustive()
+    }
 }
 
 impl<'ctx> ErasedBoxLayoutCtx<'ctx> {
@@ -1033,6 +1129,12 @@ impl<'ctx> ErasedBoxLayoutCtx<'ctx> {
     /// `sliver_layout_child_callback` is `None` when the parent is known
     /// to have no sliver children (avoids the allocation + closure
     /// construction on the all-box common path).
+    ///
+    /// `intrinsics_child_callback` is `None` when the parent is known not
+    /// to query child intrinsics during `perform_layout` (the common path).
+    /// Wired to `box_intrinsic_query_borrowed` by `layout_dirty_root` so that
+    /// `RenderIntrinsicWidth` / `RenderIntrinsicHeight` can measure their child
+    /// from within the layout walk.
     pub fn new(
         constraints: BoxConstraints,
         children: &'ctx mut Vec<ErasedChildState>,
@@ -1040,6 +1142,7 @@ impl<'ctx> ErasedBoxLayoutCtx<'ctx> {
         layout_child_callback: LayoutChildCallback<'ctx>,
         actual_baseline_callback: ActualBaselineChildCallback<'ctx>,
         sliver_layout_child_callback: Option<SliverLayoutChildCallback<'ctx>>,
+        intrinsics_child_callback: Option<BoxChildIntrinsicCallback<'ctx>>,
     ) -> Self {
         Self {
             constraints,
@@ -1048,6 +1151,7 @@ impl<'ctx> ErasedBoxLayoutCtx<'ctx> {
             layout_child_callback,
             actual_baseline_callback,
             sliver_layout_child_callback,
+            intrinsics_child_callback,
         }
     }
 }
@@ -1112,8 +1216,7 @@ impl BoxLayoutCtxErased for ErasedBoxLayoutCtx<'_> {
     fn sliver_child_needs_layout(&self, index: usize) -> bool {
         self.children
             .get(index)
-            .map(|slot| slot.needs_layout)
-            .unwrap_or(true)
+            .is_none_or(|slot| slot.needs_layout)
     }
 
     fn position_child(&mut self, index: usize, offset: Offset) {
@@ -1150,6 +1253,21 @@ impl BoxLayoutCtxErased for ErasedBoxLayoutCtx<'_> {
             .iter()
             .find_map(|slot| slot.parent_data.as_deref())
             .map(|pd| pd.as_any().type_id())
+    }
+
+    fn child_intrinsic(
+        &mut self,
+        index: usize,
+        dimension: crate::storage::IntrinsicDimension,
+        extent: f32,
+    ) -> f32 {
+        let Some(callback) = self.intrinsics_child_callback else {
+            return 0.0;
+        };
+        let Some(&child_id) = self.child_ids.get(index) else {
+            return 0.0;
+        };
+        callback(child_id, dimension, extent)
     }
 }
 
@@ -1235,7 +1353,7 @@ impl BoxHitTestEntry {
 ///
 /// # Transform accumulation
 ///
-/// Cycle 4 wave 5 R-24: `current_transform()` previously folded the
+/// `current_transform()` previously folded the
 /// entire `transform_stack: Vec<Matrix4>` via
 /// `iter().fold(IDENTITY, |acc, t| acc * t)` -- O(N) matrix-multiply
 /// chain on every hit-test entry. Hit testing is hot-path; a 30-deep
@@ -1256,14 +1374,15 @@ impl BoxHitTestEntry {
 /// (the driver subtracts the child's `RenderState.offset`). Returns
 /// whether the child subtree was hit.
 // `Send + Sync` mechanically required by `HitTestContextApi`'s bounds
-// (inherited like `LayoutChildCallback`'s — see U19); the walk itself
+// (inherited like `LayoutChildCallback`'s bound); the walk itself
 // is control-plane single-threaded.
 pub type HitTestChildCallback<'a> =
     &'a mut (dyn FnMut(usize, Option<Offset>) -> bool + Send + Sync);
 
 /// Box-protocol hit-test context: local-space position, the entry
 /// path under construction, the live child recursion supplied by the
-/// pipeline driver, and the transform stack (R-24 cached composition).
+/// pipeline driver, and the transform stack (with a cached composition,
+/// see [`BoxHitTestCtx::current_transform`]).
 pub struct BoxHitTestCtx<'ctx, A: Arity, P: ParentData> {
     position: Offset,
     result: BoxHitTestResult,
@@ -1276,6 +1395,19 @@ pub struct BoxHitTestCtx<'ctx, A: Arity, P: ParentData> {
     /// `pop_transform` (full re-fold over the truncated stack).
     composed_transform: Matrix4,
     _phantom: std::marker::PhantomData<(&'ctx (), A, P)>,
+}
+
+impl<A: Arity, P: ParentData> std::fmt::Debug for BoxHitTestCtx<'_, A, P> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // `child_callback` is the driver's live hit-test recursion; report
+        // the position, accumulated result, and transform state.
+        f.debug_struct("BoxHitTestCtx")
+            .field("position", &self.position)
+            .field("result", &self.result)
+            .field("transform_stack", &self.transform_stack)
+            .field("composed_transform", &self.composed_transform)
+            .finish_non_exhaustive()
+    }
 }
 
 impl<'ctx, A: Arity, P: ParentData> BoxHitTestCtx<'ctx, A, P> {
@@ -1307,8 +1439,8 @@ impl<'ctx, A: Arity, P: ParentData> BoxHitTestCtx<'ctx, A, P> {
 
     /// Returns the current accumulated transform.
     ///
-    /// O(1) -- reads the cached composition. See type-level doc for
-    /// the R-24 incremental-composition design.
+    /// O(1) -- reads the cached composition. See the type-level doc for
+    /// the incremental-composition design.
     pub fn current_transform(&self) -> Matrix4 {
         self.composed_transform
     }
@@ -1325,10 +1457,11 @@ impl<'ctx, A: Arity, P: ParentData> BoxHitTestCtx<'ctx, A, P> {
             .fold(Matrix4::IDENTITY, |acc, t| acc * *t);
     }
 
-    /// Adds self as a hit target with the given ID.
-    pub fn add_self(&mut self, target_id: u64) {
+    /// Adds self as a hit target with the given render ID.
+    pub fn add_self(&mut self, target_id: RenderId) {
         let transform = self.current_transform();
-        self.result.add(BoxHitTestEntry::new(target_id, transform));
+        self.result
+            .add(BoxHitTestEntry::new(target_id.as_u64(), transform));
     }
 }
 
@@ -1370,7 +1503,7 @@ impl<'ctx, A: Arity, P: ParentData> HitTestContextApi<'ctx, BoxHitTest, A, P>
     }
 
     fn push_transform(&mut self, transform: Matrix4) {
-        // R-24: keep the cached composition in sync. One mat-mult
+        // Keep the cached composition in sync. One mat-mult
         // per push amortizes O(stack_depth) hit-test queries down
         // to O(1).
         self.transform_stack.push(transform);
@@ -1378,7 +1511,7 @@ impl<'ctx, A: Arity, P: ParentData> HitTestContextApi<'ctx, BoxHitTest, A, P>
     }
 
     fn pop_transform(&mut self) {
-        // R-24: a popped factor cannot be "un-multiplied" cheaply
+        // A popped factor cannot be "un-multiplied" cheaply
         // (would require matrix inverse + multiply, ~5x cost of a
         // forward fold and numerically fragile). Full re-fold over
         // the now-shorter stack is the cleanest fix; hit-test stacks
@@ -1458,7 +1591,7 @@ mod tests {
         assert!(!ctx.is_hit(outside));
     }
 
-    /// Cycle 4 wave 5 R-24: incremental transform composition must
+    /// Incremental transform composition must
     /// stay numerically identical to the prior O(N) fold path.
     /// Builds a 3-deep stack and asserts the cached
     /// `current_transform()` equals the explicit `fold(IDENTITY, |a, t| a * t)`.

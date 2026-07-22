@@ -288,7 +288,10 @@ impl VsyncScheduler {
                     let interval = self.frame_interval_duration();
 
                     if elapsed < interval {
-                        let wait_time = interval - elapsed;
+                        let wait_time = interval.checked_sub(elapsed).expect(
+                            "BUG: `elapsed < interval` was checked on the previous line, \
+                             so the subtraction cannot underflow",
+                        );
                         std::thread::sleep(wait_time);
                         Instant::now()
                     } else {
@@ -403,7 +406,7 @@ impl std::fmt::Debug for VsyncScheduler {
             .field("mode", &inner.mode)
             .field("active", &inner.active)
             .field("stats", &inner.stats)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 

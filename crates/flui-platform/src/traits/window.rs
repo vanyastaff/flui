@@ -10,7 +10,9 @@ use flui_types::geometry::{Bounds, DevicePixels, Pixels, Point, Size};
 
 use super::{
     display::PlatformDisplay,
+    haptics::PlatformHaptics,
     input::{DispatchEventResult, Modifiers, PlatformInput},
+    text_input::PlatformTextInput,
 };
 
 // ==================== Value Types ====================
@@ -57,6 +59,8 @@ pub enum WindowBounds {
 }
 
 #[cfg(feature = "winit-backend")]
+use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
+#[cfg(feature = "winit-backend")]
 use winit::window::Window;
 
 /// Trait for platform window abstraction
@@ -71,8 +75,9 @@ use winit::window::Window;
 /// PlatformWindow>`). Callbacks are invoked by the platform's event loop when
 /// native events arrive.
 ///
-/// The take/restore dispatch pattern ensures reentrancy safety:
-/// the callback storage lock is released before the callback is invoked.
+/// Callback storage locks are released before user code is invoked. Nested
+/// notifications share one causal FIFO across event kinds; see
+/// [`crate::WindowCallbacks`] for nested input return semantics.
 pub trait PlatformWindow: Send + Sync {
     /// Get the window size in physical pixels (device pixels)
     fn physical_size(&self) -> Size<DevicePixels>;
@@ -149,6 +154,24 @@ pub trait PlatformWindow: Send + Sync {
         None
     }
 
+    /// Get this window's IME text-input capability, if the backend supports
+    /// it. `None` for backends that cannot honor IME composition (returned
+    /// by this trait's default so every non-desktop/no-IME backend does not
+    /// have to inherit unusable `set_ime_allowed`/`set_ime_cursor_area`
+    /// methods directly on `PlatformWindow`).
+    fn text_input(&self) -> Option<Arc<dyn PlatformTextInput>> {
+        None
+    }
+
+    /// Get this window's haptic feedback capability, if the backend
+    /// supports it. `None` for backends with no haptic hardware (desktop
+    /// winit targets; a minimal future embedder) — see
+    /// [`PlatformHaptics`]'s module doc for the full per-window-not-global
+    /// rationale.
+    fn haptics(&self) -> Option<Arc<dyn PlatformHaptics>> {
+        None
+    }
+
     /// Get the window title
     fn get_title(&self) -> String {
         String::new()
@@ -191,6 +214,12 @@ pub trait PlatformWindow: Send + Sync {
 
     // ==================== Callback Registration ====================
 
+    /// All callbacks registered on a window must be invoked on the same
+    /// platform/event-loop thread that registered them. `Send` permits backend
+    /// storage and wake plumbing; it is not permission to execute a UI callback
+    /// on an arbitrary worker thread. Backends must marshal first or reject the
+    /// dispatch when they cannot uphold this contract.
+    ///
     /// Register a callback for input events (pointer, keyboard)
     ///
     /// The callback receives a `PlatformInput` and returns a
@@ -240,6 +269,23 @@ pub trait PlatformWindow: Send + Sync {
     /// Called with `true` when the window gains focus, `false` when it loses
     /// focus.
     fn on_active_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
+        let _ = callback;
+    }
+
+    /// Register a callback for visibility (occlusion) changes.
+    ///
+    /// Called with `true` when the window becomes visible/unoccluded,
+    /// `false` when it becomes fully occluded (or minimized, on backends
+    /// that report that through the same signal). Distinct from
+    /// [`on_active_status_change`](Self::on_active_status_change): a window
+    /// can be visible but unfocused, or occluded while still nominally
+    /// focused.
+    ///
+    /// Delivery is compositor/backend-conditional — on Wayland this rides
+    /// the xdg-shell v6 `suspended` state, which not every compositor
+    /// sends; where it is never delivered, this callback simply never
+    /// fires (the window is treated as always visible, today's behavior).
+    fn on_visibility_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
         let _ = callback;
     }
 
@@ -301,13 +347,59 @@ pub trait PlatformWindow: Send + Sync {
 /// Concrete winit window wrapper
 ///
 /// Wraps `winit::window::Window` to implement `PlatformWindow`.
-/// Includes per-window callbacks for event delivery using the
-/// take/restore dispatch pattern for reentrancy safety.
+/// Includes per-window callbacks for event delivery using the causal FIFO
+/// dispatch pattern for reentrancy safety.
 pub struct WinitWindow {
     window: Arc<Window>,
     is_focused: parking_lot::Mutex<bool>,
     is_visible: parking_lot::Mutex<bool>,
     callbacks: crate::shared::WindowCallbacks,
+}
+
+/// [`PlatformTextInput`] for a winit window.
+///
+/// A thin wrapper around `Arc<winit::window::Window>` rather than an impl
+/// directly on `WinitWindow`: `PlatformWindow::text_input` hands back an
+/// `Arc<dyn PlatformTextInput>` from `&self`, and `WinitWindow` itself is
+/// typically boxed (`Platform::open_window` returns `Box<dyn
+/// PlatformWindow>`), not arced — so there is no `Arc<Self>` to clone.
+/// Cloning the inner `Arc<Window>` winit already holds is cheap and gives
+/// each call an independently owned capability handle.
+#[cfg(feature = "winit-backend")]
+pub struct WinitTextInput {
+    window: Arc<Window>,
+}
+
+#[cfg(feature = "winit-backend")]
+impl super::text_input::PlatformTextInput for WinitTextInput {
+    fn set_ime_allowed(&self, allowed: bool) {
+        self.window.set_ime_allowed(allowed);
+    }
+
+    fn set_ime_cursor_area(&self, area: Bounds<Pixels>) {
+        use winit::dpi::{LogicalPosition, LogicalSize};
+
+        self.window.set_ime_cursor_area(
+            LogicalPosition::new(f64::from(area.origin.x.0), f64::from(area.origin.y.0)),
+            LogicalSize::new(f64::from(area.size.width.0), f64::from(area.size.height.0)),
+        );
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+#[cfg(feature = "winit-backend")]
+impl std::fmt::Debug for WinitWindow {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // `WindowCallbacks` holds boxed closures that don't implement
+        // `Debug`; print the focus/visibility flags only.
+        f.debug_struct("WinitWindow")
+            .field("is_focused", &*self.is_focused.lock())
+            .field("is_visible", &*self.is_visible.lock())
+            .finish_non_exhaustive()
+    }
 }
 
 #[cfg(feature = "winit-backend")]
@@ -440,6 +532,10 @@ impl PlatformWindow for WinitWindow {
         *self.callbacks.on_active_status_change.lock() = Some(callback);
     }
 
+    fn on_visibility_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
+        *self.callbacks.on_visibility_status_change.lock() = Some(callback);
+    }
+
     fn on_hover_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
         *self.callbacks.on_hover_status_change.lock() = Some(callback);
     }
@@ -448,9 +544,36 @@ impl PlatformWindow for WinitWindow {
         *self.callbacks.on_appearance_changed.lock() = Some(callback);
     }
 
+    // GPU integration: `winit::window::Window` implements `HasWindowHandle`/
+    // `HasDisplayHandle` directly — without these overrides both fall through
+    // to the trait defaults (`Err(HandleError::Unavailable)`), which is what
+    // made every wgpu surface creation on this backend fail regardless of
+    // which GPU backend was compiled in.
+    fn window_handle(
+        &self,
+    ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
+        self.window.window_handle()
+    }
+
+    fn display_handle(
+        &self,
+    ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
+        self.window.display_handle()
+    }
+
     fn as_winit(&self) -> Option<&Arc<Window>> {
         Some(&self.window)
     }
+
+    fn text_input(&self) -> Option<Arc<dyn PlatformTextInput>> {
+        Some(Arc::new(WinitTextInput {
+            window: Arc::clone(&self.window),
+        }))
+    }
+
+    // No `haptics()` override: desktop winit targets have no haptic
+    // hardware to drive, so the `PlatformWindow` trait default (`None`) is
+    // the permanent correct answer here, not a stub awaiting a backend.
 }
 
 #[cfg(test)]

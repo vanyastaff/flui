@@ -5,8 +5,10 @@
 //!
 //! # Thread Safety
 //!
-//! All callback types are `Send + Sync` to support multi-threaded UI
-//! frameworks. This is a key difference from Flutter's Dart-based callbacks.
+//! These aliases are the thread-safe **shared-service/data-plane** callback
+//! shape. ADR-0027 owner-authored widget/view callbacks should prefer
+//! owner-local `Rc<dyn Fn...>` storage unless the callback really crosses a
+//! thread boundary.
 //!
 //! # Examples
 //!

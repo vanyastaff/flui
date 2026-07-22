@@ -9,17 +9,15 @@
 //! 3. compose Flutter-parity sliver geometry from the child's main-axis size;
 //! 4. commit the child's paint offset so hit-test/paint use the same source.
 
+use flui_objects::RenderSliverToBoxAdapter;
 use flui_rendering::{
     constraints::{BoxConstraints, GrowthDirection, SliverConstraints, SliverGeometry},
     context::{BoxHitTestContext, BoxLayoutContext},
-    objects::RenderSliverToBoxAdapter,
     parent_data::BoxParentData,
     pipeline::PipelineOwner,
     protocol::{BoxProtocol, SliverProtocol},
     testing::{inspect, sliver as sliver_presets},
-    traits::{
-        HotReloadCapability, PaintEffectsCapability, RenderBox, RenderObject, SemanticsCapability,
-    },
+    traits::{RenderBox, RenderObject},
 };
 use flui_tree::Leaf;
 use flui_types::{Offset, Rect, Size, geometry::px};
@@ -85,9 +83,6 @@ impl FixedHitBox {
 }
 
 impl flui_foundation::Diagnosticable for FixedHitBox {}
-impl PaintEffectsCapability for FixedHitBox {}
-impl SemanticsCapability for FixedHitBox {}
-impl HotReloadCapability for FixedHitBox {}
 
 impl RenderBox for FixedHitBox {
     type Arity = Leaf;
@@ -115,9 +110,6 @@ impl VerticalBandHitBox {
 }
 
 impl flui_foundation::Diagnosticable for VerticalBandHitBox {}
-impl PaintEffectsCapability for VerticalBandHitBox {}
-impl SemanticsCapability for VerticalBandHitBox {}
-impl HotReloadCapability for VerticalBandHitBox {}
 
 impl RenderBox for VerticalBandHitBox {
     type Arity = Leaf;
@@ -174,9 +166,6 @@ fn sliver_to_box_adapter_reverse_growth_hit_tests_box_child_right_way_up() {
 }
 
 impl flui_foundation::Diagnosticable for SliverHost {}
-impl PaintEffectsCapability for SliverHost {}
-impl SemanticsCapability for SliverHost {}
-impl HotReloadCapability for SliverHost {}
 
 impl RenderBox for SliverHost {
     type Arity = flui_tree::Variable;

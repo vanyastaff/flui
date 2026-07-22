@@ -9,9 +9,9 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use flui_objects::RenderColoredBox;
 use flui_rendering::{
     constraints::BoxConstraints,
-    objects::RenderColoredBox,
     pipeline::{DirtyKind, DirtySendError, PipelineOwner},
 };
 use flui_types::{Size, geometry::px};
