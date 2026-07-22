@@ -195,6 +195,10 @@ arboard = "3.4"
 # TODO: Re-enable "webp" feature when image-rs/image-webp#102 is fixed upstream
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif"] }
 
+# TEXT — flui-painting shaping/layout. `default-features = false` drops `fontconfig`
+# from cosmic-text's default set (Linux-only; irrelevant on Windows/macOS).
+cosmic-text = { version = "0.18", default-features = false, features = ["std", "swash"] }
+
 # === Engine/geometry shared math dependencies ===
 # glam: SIMD GPU math used by flui-engine (serde+bytemuck features) and
 # flui-geometry (bytemuck+mint features). The workspace entry carries the common
@@ -419,6 +423,10 @@ serde = [
 # === Convenience Features ===
 # Enable all stable features (temporarily disabled)
 # full = ["serde", "parallel", "devtools"]
+
+# Vendored patches (see vendor/README.md).
+[patch.crates-io]
+glyphon = { path = "vendor/glyphon-0.11.0" }
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Build Profiles
