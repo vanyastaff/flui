@@ -76,6 +76,16 @@ The three desktop/mobile/web bootstrap shapes extract the clipboard at different
 ## What is deferred
 
 - **`open_url`.** No `flui-platform` backend has a body for it (winit has none), and there is no consumer waiting on it. Plumbing an `AppBinding`-level seam now, ahead of both a real implementation and a caller, would ship stub API with nothing behind it. Ships together with its first real consumer and a real winit body, not before.
-- **`set_cursor_style` relocation.** `Platform::set_cursor_style` currently takes `flui_platform::CursorStyle`, a parallel enum to `cursor_icon::CursorIcon` — the type FLUI's hover pipeline (`RenderMouseRegion::mouse_cursor`) and winit both already use natively. Unifying the cursor boundary onto `CursorIcon` is real work with its own blast radius (every `set_cursor_style` call site, both enum definitions, the hover-pipeline plumbing) and belongs to the `MouseTracker`/hover-cursor unit, not this one. Not touched here.
 - **`reveal_path`/`open_path`/save-and-open prompts.** No `flui-platform` backend exposes these today and nothing calls them. Same reasoning as `open_url` — no plumbing ahead of a real consumer.
 - **macOS main-thread pasteboard affinity — a doc'd hazard, not a fix.** `clipboard()` makes the platform clipboard reachable from `AppBinding`'s `'static`-per-thread singleton, which in practice is read from whichever thread owns the running realm — today, always the platform's main/owner thread, since that is the only thread that calls `bootstrap_desktop`/`run_android`/`run_web`. `NSPasteboard` access is documented by Apple as safe off the main thread for reads, but `MacOSClipboard` currently makes no assertion either way. A future macOS `Clipboard` implementation, or a future caller that reaches `AppBinding::clipboard()` from a background thread (a worker completing an async paste operation, for instance), should `debug_assert!` main-thread affinity at the point `MacOSClipboard`'s methods run, rather than silently relying on every future call site staying on the owner thread by convention. No such assertion exists yet; this is named so it is not rediscovered as a production crash.
+
+## Resolved follow-up
+
+- **Window-scoped cursor ownership (2026-07-23).** The parallel
+  `flui_platform::CursorStyle` type and process-wide
+  `Platform::set_cursor_style` method were deleted. The render/interaction,
+  platform, winit, and CSS boundaries now use the same
+  `cursor_icon::CursorIcon`. `MouseTracker` applies a cursor through its
+  presentation's exact `PlatformWindow`; each native/headless window stores or
+  restores its own selection. There is no compatibility conversion or
+  forwarding API.

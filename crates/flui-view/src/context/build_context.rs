@@ -19,6 +19,7 @@ use flui_foundation::ElementId;
 /// - Dependency injection (InheritedView lookups)
 /// - Ancestor lookups (find ancestors by type)
 /// - Dirty marking for rebuilds
+/// - Presentation-owned lifecycle capabilities such as focus and text input
 ///
 /// # Important Notes
 ///
@@ -118,17 +119,32 @@ pub trait BuildContext {
     /// The binding's IME/text-input attach-detach capability, if a binding
     /// installed one.
     ///
-    /// `flui_interaction::TextInputRegistry` sits below `flui-app`'s
-    /// `AppBinding` in the crate graph (`flui-widgets`, where `EditableText`
-    /// lives, cannot name `AppBinding` directly — see
-    /// `flui_interaction::TextInputHandle`'s doc for why), so a widget that
-    /// needs to attach/detach an IME client reaches through this capability
-    /// instead of a global singleton.
+    /// The presentation-owned `flui_interaction::TextInputOwner` installs a
+    /// concrete weak `TextInputHandle` into its build owner during realm
+    /// construction. `flui-widgets`, where `EditableText` lives, can therefore
+    /// attach and detach its client without naming the application layer or
+    /// selecting an ambient "current" presentation.
     ///
     /// `None` when no binding installed one (a bare `ElementTree` in a unit
     /// test). Acquire it in a lifecycle hook (`init_state` /
     /// `did_change_dependencies`), the same rule `post_frame_handle` follows.
     fn text_input_handle(&self) -> Option<flui_interaction::TextInputHandle>;
+
+    /// This element tree's exact focus manager.
+    ///
+    /// A build owner always has one focus tree, so this capability is
+    /// non-optional. Acquire and retain it from `ViewState::init_state` or
+    /// `did_change_dependencies`; use the retained `Rc` from later input or
+    /// lifecycle callbacks.
+    ///
+    /// # Never acquire this during `build`
+    ///
+    /// Imperative focus changes can synchronously notify listeners and schedule
+    /// rebuilds. Acquiring the manager from `build`, layout, paint, or
+    /// compositing makes that side effect part of a frame phase and can create
+    /// re-entrant or unbounded frame work. Port-check trigger #22 guards
+    /// `focus_manager()` alongside the other lifecycle-only capabilities.
+    fn focus_manager(&self) -> std::rc::Rc<flui_interaction::FocusManager>;
 
     // ========================================================================
     // Inherited Data (Dependency Injection)

@@ -45,10 +45,6 @@ pub struct SemanticsNodeData {
     pub transform: Matrix4,
     /// Child node IDs.
     pub children: SmallVec<[u64; 4]>,
-    /// Elevation (z-order).
-    pub elevation: f64,
-    /// Thickness.
-    pub thickness: f64,
     /// Platform view ID.
     pub platform_view_id: Option<i32>,
     /// Maximum value length for text fields.
@@ -83,8 +79,6 @@ impl Default for SemanticsNodeData {
             rect: Rect::ZERO,
             transform: Matrix4::IDENTITY,
             children: SmallVec::new(),
-            elevation: 0.0,
-            thickness: 0.0,
             platform_view_id: None,
             max_value_length: None,
             current_value_length: None,

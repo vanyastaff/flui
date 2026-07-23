@@ -7,7 +7,7 @@
 //! phase to warn about — and any future retained state would have
 //! dangled outright.
 
-use flui_objects::RenderColoredBox;
+use flui_objects::{RenderColoredBox, RenderRepaintBoundary};
 use flui_rendering::pipeline::PipelineOwner;
 
 type BoxedRenderObject =
@@ -24,7 +24,7 @@ fn removing_a_subtree_evicts_its_dirty_entries() {
 
     // insert already queued both; pile on explicit marks too.
     owner.mark_needs_layout(child);
-    owner.add_node_needing_paint(child, 1);
+    owner.mark_needs_paint(child);
     assert!(owner.has_dirty_nodes());
 
     let removed = owner.remove_render_object(parent);
@@ -49,16 +49,36 @@ fn removing_one_subtree_keeps_sibling_entries() {
     let mut owner = PipelineOwner::new();
     let parent = owner.insert(Box::new(RenderColoredBox::red(10.0, 10.0)) as BoxedRenderObject);
     let keep = owner
-        .insert_child_render_object(parent, Box::new(RenderColoredBox::blue(10.0, 10.0)))
+        .insert_child_render_object(parent, Box::new(RenderRepaintBoundary::new()))
         .expect("kept child");
     let drop_me = owner
-        .insert_child_render_object(parent, Box::new(RenderColoredBox::green(10.0, 10.0)))
+        .insert_child_render_object(parent, Box::new(RenderRepaintBoundary::new()))
         .expect("dropped child");
     owner.set_root_id(Some(parent));
 
     owner.clear_all_dirty_nodes();
-    owner.add_node_needing_paint(keep, 1);
-    owner.add_node_needing_paint(drop_me, 1);
+    owner
+        .render_tree()
+        .get(keep)
+        .expect("kept boundary")
+        .set_was_repaint_boundary(true);
+    owner
+        .render_tree()
+        .get(keep)
+        .expect("kept boundary")
+        .clear_needs_paint();
+    owner
+        .render_tree()
+        .get(drop_me)
+        .expect("dropped boundary")
+        .set_was_repaint_boundary(true);
+    owner
+        .render_tree()
+        .get(drop_me)
+        .expect("dropped boundary")
+        .clear_needs_paint();
+    owner.mark_needs_paint(keep);
+    owner.mark_needs_paint(drop_me);
     assert_eq!(owner.dirty_node_count(), 2);
 
     let removed = owner.remove_render_object(drop_me);

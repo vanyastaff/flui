@@ -35,14 +35,10 @@ fn test_displays_enumeration() {
         displays.len()
     );
 
-    // Contract: displays() must return a valid collection
-    // Empty is OK for headless, but most systems have at least one
-    if platform.name() != "Headless" {
-        assert!(
-            !displays.is_empty(),
-            "Non-headless platform should have at least one display"
-        );
-    }
+    // An empty collection is valid before an event-loop-backed platform has
+    // reached its first resume (Winit populates monitors there), as well as
+    // in a genuinely display-less session. When displays are available, the
+    // assertions below validate every reported entry.
 
     // Each display should have valid properties
     for (idx, display) in displays.iter().enumerate() {

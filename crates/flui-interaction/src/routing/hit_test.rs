@@ -23,7 +23,7 @@ use flui_types::geometry::{Matrix4, Offset, Pixels};
 use crate::{
     events::{CursorIcon, PointerEvent, ScrollEventData},
     routing::MouseTrackerAnnotation,
-    routing::interaction_lane::{PointerTarget, ScrollTarget, active_dispatch_handle},
+    routing::interaction_lane::{PointerTarget, RoutePanic, ScrollTarget, active_dispatch_handle},
 };
 
 // ============================================================================
@@ -429,8 +429,16 @@ impl HitTestResult {
     /// carrying pointer targets cannot be delivered; the typed boundary error
     /// is traced and the event is dropped.
     pub fn dispatch(&self, event: &PointerEvent) {
+        if let Some(panic) = self.dispatch_capturing_panic(event) {
+            panic.resume();
+        }
+    }
+
+    /// Dispatch an ephemeral pointer route while returning the first target
+    /// panic to a binding that still has later transaction phases to run.
+    pub(crate) fn dispatch_capturing_panic(&self, event: &PointerEvent) -> Option<RoutePanic> {
         if !self.path.iter().any(|e| e.pointer_target.is_some()) {
-            return;
+            return None;
         }
         let handle = match active_dispatch_handle() {
             Ok(handle) => handle,
@@ -439,7 +447,7 @@ impl HitTestResult {
                     ?error,
                     "pointer dispatch outside an active interaction lane; event not delivered"
                 );
-                return;
+                return None;
             }
         };
         let resolution = match handle.resolve_pointer_route(&self.path) {
@@ -449,7 +457,7 @@ impl HitTestResult {
                     ?error,
                     "pointer route resolution failed; event not delivered"
                 );
-                return;
+                return None;
             }
         };
         for miss in resolution.misses() {
@@ -462,16 +470,28 @@ impl HitTestResult {
         let delivery = handle.invoke_pointer_route(token, event);
         // Mandatory cleanup precedes any resumed panic: the ephemeral route is
         // released whether or not a target panicked.
-        if let Err(error) = handle.release_route(token) {
-            tracing::error!(?error, "failed to release ephemeral pointer route");
-        }
-        match delivery {
-            Ok(Some(panic)) => panic.resume(),
-            Ok(None) => {}
+        let release = RoutePanic::try_run(|| handle.release_route(token));
+        let mut first_panic = match delivery {
+            Ok(panic) => panic,
             Err(error) => {
                 tracing::error!(?error, "pointer route invocation failed");
+                None
+            }
+        };
+        match release {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                tracing::error!(?error, "failed to release ephemeral pointer route");
+            }
+            Err(panic) => {
+                RoutePanic::preserve_first(
+                    &mut first_panic,
+                    Some(panic),
+                    "ephemeral route cleanup",
+                );
             }
         }
+        first_panic
     }
 
     /// Dispatches a scroll event to all entries.

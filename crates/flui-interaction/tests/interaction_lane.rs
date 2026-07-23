@@ -1,8 +1,9 @@
 //! Public-contract tests for the inert ADR-0027 owner-local interaction lane.
 
+use flui_interaction::routing::MouseRegionTarget;
 use flui_interaction::{
     HitTestEntry, InteractionDispatchError, InteractionDispatchHandle, InteractionLane,
-    MouseRegionTarget, PointerTarget, RenderId, ResolvedRouteToken, RouteResolutionMiss,
+    PointerTarget, RenderId, ResolvedRouteToken, RouteResolutionMiss,
 };
 use static_assertions::{assert_impl_all, assert_not_impl_any};
 use std::cell::RefCell;

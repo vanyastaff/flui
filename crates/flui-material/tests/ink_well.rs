@@ -1,71 +1,20 @@
 //! `InkWell` widget-level state-transition coverage.
 //!
-//! # Spike outcome
-//!
-//! `tests/common/mod.rs` here is `flui-widgets`' own `tests/common/mod.rs`
-//! (ported, since `flui-material`'s copy had been trimmed to `Theme`'s
-//! needs: no pointer dispatch, no vsync ticking) — the same infrastructure
-//! `flui-widgets/tests/mouse_region.rs` and
-//! `flui-widgets/tests/gesture_detector.rs` already use to prove
-//! `dispatch_pointer_move`/`dispatch_pointer_down`/`dispatch_pointer_up`
-//! route through a real hit-test + dispatch pass. Investigating the spike
-//! surfaced one real finding, not a bug in `InkWell`:
-//!
-//! - **Drivable**: `MouseRegion::on_hover` (fires on every move while the
-//!   pointer is inside the region — the mechanism `mouse_region.rs`'s own
-//!   existing test suite already exercises), `GestureDetector::on_tap` (a
-//!   standalone down+up), and the vsync-driven press-deactivation timer
-//!   (`lay_out_animated`/`pump_for`, proven by `flui-widgets`' own
-//!   implicitly-animated widget tests). `InkWell` is wired on `on_hover`,
-//!   not `on_enter`, specifically because of the next point.
-//! - **NOT drivable through this headless harness**: `MouseRegion::on_enter`/
-//!   `on_exit`. Both require `MouseTracker::update_with_event` — an
-//!   annotation-diffing pass (this hit-test's region set vs. the previous
-//!   one) that only a full `AppBinding` frame pump runs today; the raw
-//!   `HitTestResult::dispatch` this harness's `dispatch_pointer_move` calls
-//!   never reaches it. Confirmed directly: a bare `MouseRegion` with only
-//!   `.on_enter(..)` never fires it under this harness, while the same
-//!   region with `.on_hover(..)` does, for an identical single
-//!   `dispatch_pointer_move` call. `InkWell` still uses `on_exit` in its own
-//!   composition (real, `AppBinding`-correct behavior — see `ink_well.rs`),
-//!   but that half of hover tracking is **not** covered by a headless test
-//!   here; a real click-to-exit / real-window regression test is future
-//!   work once a headless `MouseTracker` pump exists.
-//! - **NOT drivable through this headless harness, at all**: FOCUS, by any
-//!   API path. Neither `FocusNode::request_focus()` nor
-//!   `FocusManager::global().request_focus(id)` fires `on_focus_change` for
-//!   a mounted `Focus` widget under this harness — confirmed directly with
-//!   a minimal `Focus::new(child).focus_node(external).on_focus_change(..)`
-//!   repro (no `InkWell` involved) for both APIs; `changed` stayed `false`
-//!   either way. This is a gap in the headless harness/focus-manager wiring
-//!   (nothing in `HeadlessBinding`'s pump appears to drive whatever
-//!   `FocusManager`'s change-propagation needs), not a defect in `InkWell`
-//!   or `Focus` — `ink_well.rs`'s `Focus::new(..).can_request_focus(enabled)
-//!   .on_focus_change(..)` wiring is structurally identical to every other
-//!   `on_focus_change` consumer in this codebase (e.g. `text_field.rs`).
-//!   Also unrelated: keyboard/click-to-focus through a real interaction
-//!   sequence has no dispatch helper in this harness either (no "Tab key"
-//!   dispatch, and mouse clicks do not request focus in FLUI's current
-//!   `NavigationMode` handling — matching the oracle, which also does not
-//!   focus-on-click by default).
-//!
-//! Given the above, the matrix below covers: hover-on, tap, disabled (both),
-//! press-state timing (both the vsync-driven delay and the standalone
-//! immediate-clear fallback), and overlay-color resolution end to end.
-//! **Not covered, both named gaps, not silently dropped**: hover-off
-//! (`on_exit`) and ANY focus transition. `InkWell::focus_node` and the
-//! `Focus` wiring inside `build()` remain part of the shipped surface —
-//! only the test coverage is deferred, pending a headless `MouseTracker`/
-//! focus-propagation pump.
+//! The harness routes input through the same presentation-local
+//! `GestureBinding` and `MouseTracker` as production. These tests therefore
+//! cover structural enter/exit, tap, disabled behavior, focus, press timing,
+//! and overlay resolution without a second headless-only input protocol.
 
 mod common;
 
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use common::{lay_out, lay_out_animated, tight};
 use flui_animation::Vsync;
+use flui_interaction::FocusNode;
 use flui_material::InkWell;
 use flui_types::Color;
 use flui_widgets::animated::VsyncScope;
@@ -88,6 +37,26 @@ fn hover_updates_widget_states_when_the_pointer_moves_over_the_ink_well() {
     assert!(
         states.value().contains_state(WidgetState::Hovered),
         "a pointer move over the InkWell must set WidgetState::Hovered",
+    );
+}
+
+#[test]
+fn hover_clears_when_the_pointer_exits_the_ink_well() {
+    let states = WidgetStatesController::default();
+    let laid = lay_out(
+        InkWell::new(SizedBox::new(60.0, 40.0))
+            .on_tap(|| {})
+            .states_controller(states.clone()),
+        tight(60.0, 40.0),
+    );
+
+    laid.dispatch_pointer_move(10.0, 10.0);
+    assert!(states.value().contains_state(WidgetState::Hovered));
+
+    laid.dispatch_pointer_move(80.0, 60.0);
+    assert!(
+        !states.value().contains_state(WidgetState::Hovered),
+        "leaving the InkWell must clear WidgetState::Hovered",
     );
 }
 
@@ -382,17 +351,23 @@ fn rebuilding_with_the_same_cloned_controller_keeps_driving_it() {
 // `disabled_ink_well_does_not_fire_a_tap_callback`) already prove the sync
 // itself still happens correctly at the new call sites.
 
-// `focused_state_updates_when_an_external_focus_node_is_granted_focus` was
-// removed after the spike showed focus is not drivable through this
-// headless harness at all: even a BARE `Focus` widget (no InkWell involved)
-// with an external `FocusNode` does not fire `on_focus_change` when
-// `FocusNode::request_focus()` is called from outside the widget tree in
-// this harness (confirmed directly: `changed` stayed `false` for a minimal
-// `Focus::new(child).focus_node(external).on_focus_change(..)` repro). This
-// is a gap in the headless test harness/focus-manager wiring, not a defect
-// in `InkWell` or `Focus` — both compose correctly (see `ink_well.rs`'s
-// `Focus::new(..).can_request_focus(enabled).on_focus_change(..)` wiring,
-// which is structurally identical to every other `on_focus_change` consumer
-// in this codebase, e.g. `text_field.rs`). Focus coverage for `InkWell` is
-// therefore a named gap here, not silently dropped — see the module doc
-// above.
+#[test]
+fn focused_state_tracks_the_exact_external_focus_node() {
+    let states = WidgetStatesController::default();
+    let focus_node = FocusNode::with_debug_label("ink-well");
+    let mut laid = lay_out(
+        InkWell::new(SizedBox::new(80.0, 40.0))
+            .on_tap(|| {})
+            .states_controller(states.clone())
+            .focus_node(Rc::clone(&focus_node)),
+        tight(80.0, 40.0),
+    );
+
+    focus_node.request_focus();
+    laid.tick();
+    assert!(states.value().contains_state(WidgetState::Focused));
+
+    focus_node.unfocus();
+    laid.tick();
+    assert!(!states.value().contains_state(WidgetState::Focused));
+}

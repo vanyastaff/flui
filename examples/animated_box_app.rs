@@ -85,7 +85,7 @@ impl FrameHistogram {
 }
 
 /// Leaf render view producing the box the animation will drive.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct AnimatedBox;
 
 impl RenderView for AnimatedBox {
@@ -112,8 +112,8 @@ impl RenderView for AnimatedBox {
 flui_view::impl_render_view!(AnimatedBox);
 
 /// Stateless root that builds the box.
-#[derive(Clone)]
-struct App;
+#[derive(Clone, Debug)]
+pub struct App;
 
 impl StatelessView for App {
     fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
@@ -128,13 +128,13 @@ impl View for App {
 }
 
 /// Depth-first search for the demo's single [`RenderColoredBox`],
-/// returning its id and depth.
+/// returning its id.
 ///
 /// Walked per tick instead of cached: the tree is three nodes, and a
 /// fresh lookup stays correct across any churn (generational ids make a
 /// stale cache miss, not alias).
-fn find_colored_box(owner: &PipelineOwner) -> Option<(RenderId, usize)> {
-    fn walk(owner: &PipelineOwner, id: RenderId, depth: usize) -> Option<(RenderId, usize)> {
+fn find_colored_box(owner: &PipelineOwner) -> Option<RenderId> {
+    fn walk(owner: &PipelineOwner, id: RenderId) -> Option<RenderId> {
         let node = owner.render_tree().get(id)?;
         let is_box = node.as_box().is_some_and(|entry| {
             entry
@@ -144,14 +144,12 @@ fn find_colored_box(owner: &PipelineOwner) -> Option<(RenderId, usize)> {
                 .is_some()
         });
         if is_box {
-            return Some((id, depth));
+            return Some(id);
         }
         let children: Vec<RenderId> = owner.render_tree().children(id).to_vec();
-        children
-            .into_iter()
-            .find_map(|child| walk(owner, child, depth + 1))
+        children.into_iter().find_map(|child| walk(owner, child))
     }
-    walk(owner, owner.root_id()?, 0)
+    walk(owner, owner.root_id()?)
 }
 
 fn main() {
@@ -188,7 +186,7 @@ fn main() {
         let binding = AppBinding::instance();
         let mut owner = binding.render_pipeline_mut();
 
-        let Some((id, depth)) = find_colored_box(&owner) else {
+        let Some(id) = find_colored_box(&owner) else {
             // The first tick can land before the element tree mounts the
             // render object; skip until it exists.
             return;
@@ -209,7 +207,7 @@ fn main() {
         // Color is paint-only state: invalidate paint, not layout. The
         // dirty mark fires the visual-update notifier, which wakes the
         // platform for the next frame.
-        owner.add_node_needing_paint(id, depth);
+        owner.mark_needs_paint(id);
     }));
 
     // Bounce 0 → 1 → 0 forever.

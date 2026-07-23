@@ -452,7 +452,7 @@ fn start_press_fade(
         tracing::debug!(?error, "CupertinoButton press fade failed to start");
     }
     if let Some(rebuild) = rebuild {
-        rebuild.schedule();
+        rebuild.schedule(flui_view::RebuildReason::StateChange);
     }
     true
 }

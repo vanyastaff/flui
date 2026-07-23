@@ -48,7 +48,7 @@
 //!   movementDuration'`, `'Horizontal/Vertical fling less than threshold'`) —
 //!   `DragGestureRecognizer::handle_move` (`crates/flui-interaction/src/recognizers/drag.rs`)
 //!   timestamps velocity samples with the real OS clock (`Instant::now()`),
-//!   not the deterministic virtual clock `LaidOutScoped::pump` advances for
+//!   not the deterministic virtual clock `LaidOut::pump_for` advances for
 //!   gesture *timing* (long-press/double-tap deadlines — see
 //!   `gesture_timing_test.rs`'s module doc). A scripted
 //!   `dispatch_pointer_move` sequence therefore produces a *real* velocity of
@@ -155,16 +155,15 @@
 //! gap" section above for why the mid-RESIZE-COLLAPSE unmount case is not
 //! included.
 //!
-//! ### Harness note: the touch-slop-crossing move carries no update delta
+//! ### Arena note: a lone drag starts when the Down arena closes
 //!
-//! `GestureDetector`'s default `DragStartBehavior::Start` (matching
-//! Flutter's default) means the FIRST past-slop move is consumed entirely by
-//! gesture *recognition* — it fires `on_*_drag_start`, not an update, and the
-//! recognizer's own delta tracking re-anchors at that slop-crossing position.
-//! Every drag helper below therefore issues an explicit small
-//! (`> 18px` touch-slop) slop-crossing move BEFORE the move that carries the
-//! actual intended delta — sizing a drag from `(down_x, down_x ± 20)` instead
-//! of `down_x` directly would silently report zero delta on every update.
+//! These helpers mount `Dismissible` with no competing recognizer. Flutter's
+//! arena therefore awards it the deferred default victory after `Down`, so
+//! `DragStartBehavior::Start` anchors at the down position and the first
+//! `Move` reports its full delta. The nested-tappable-child test is the
+//! deliberate exception: its tap recognizer keeps the arena competitive
+//! until the drag crosses slop, so that scenario retains a separate
+//! recognition move before its first update.
 
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -179,7 +178,7 @@ use flui_widgets::{
     ColoredBox, Directionality, DismissDirection, Dismissible, GestureDetector, VsyncScope,
 };
 
-use crate::common::{LaidOutScoped, lay_out_animated, lay_out_with_arena, tight};
+use crate::common::{LaidOut, lay_out, lay_out_animated, tight};
 
 /// A 200×80 box: the dismiss-axis extent every percentage in this file not
 /// involving a fling-neutralizing release (see the module doc) is written
@@ -226,27 +225,23 @@ fn colored_box_count(laid: &crate::common::LaidOut) -> usize {
 /// `DismissibleState::build`'s doc on why) is actually observed before the
 /// next dispatch or assertion. A 1ms nominal advance (not zero) keeps this
 /// indistinguishable from a real display's next-frame tick.
-fn settle_one_frame(scoped: &mut LaidOutScoped) {
-    scoped.pump(Duration::from_millis(1));
+fn settle_one_frame(scoped: &mut LaidOut) {
+    scoped.pump_for(Duration::from_millis(1));
 }
 
-/// A horizontal drag whose UPDATE delta is exactly `delta_px` (signed:
-/// negative = leftward) — see the module doc's slop note for why this is not
-/// simply `dispatch_pointer_move(down_x + delta_px, y)`. The release lands
+/// A horizontal drag whose update delta is exactly `delta_px` (signed:
+/// negative = leftward). With no competitor, the first move after `Down`
+/// carries that delta. The release lands
 /// offset on the cross (vertical) axis by `delta_px` too, to neutralize the
 /// release's fling classification — see the module doc's fling note. Callers
 /// that rely on the release settling (not just the drag itself) must lay out
 /// under [`horizontal_extent`], which has cross-axis room for this.
-fn drag_and_release_horizontal(scoped: &mut LaidOutScoped, y: f32, down_x: f32, delta_px: f32) {
-    let slop = 20.0 * delta_px.signum();
-    let after_slop = down_x + slop;
-    let target = after_slop + delta_px;
+fn drag_and_release_horizontal(scoped: &mut LaidOut, y: f32, down_x: f32, delta_px: f32) {
+    let target = down_x + delta_px;
     let release_y = y + delta_px;
     scoped.dispatch_pointer_down(down_x, y);
     settle_one_frame(scoped);
-    scoped.dispatch_pointer_move(after_slop, y); // consumed as `on_*_drag_start`
-    settle_one_frame(scoped);
-    scoped.dispatch_pointer_move(target, release_y); // the real update: primary delta == delta_px
+    scoped.dispatch_pointer_move(target, release_y);
     settle_one_frame(scoped);
     scoped.dispatch_pointer_up(target, release_y);
     settle_one_frame(scoped);
@@ -255,14 +250,10 @@ fn drag_and_release_horizontal(scoped: &mut LaidOutScoped, y: f32, down_x: f32, 
 /// As [`drag_and_release_horizontal`], along the vertical axis (cross axis:
 /// horizontal). Callers that rely on the release settling must lay out under
 /// [`vertical_extent`].
-fn drag_and_release_vertical(scoped: &mut LaidOutScoped, x: f32, down_y: f32, delta_px: f32) {
-    let slop = 20.0 * delta_px.signum();
-    let after_slop = down_y + slop;
-    let target = after_slop + delta_px;
+fn drag_and_release_vertical(scoped: &mut LaidOut, x: f32, down_y: f32, delta_px: f32) {
+    let target = down_y + delta_px;
     let release_x = x + delta_px;
     scoped.dispatch_pointer_down(x, down_y);
-    settle_one_frame(scoped);
-    scoped.dispatch_pointer_move(x, after_slop);
     settle_one_frame(scoped);
     scoped.dispatch_pointer_move(release_x, target);
     settle_one_frame(scoped);
@@ -276,19 +267,19 @@ fn drag_and_release_vertical(scoped: &mut LaidOutScoped, x: f32, down_y: f32, de
 /// only ever sets a controller's *value* directly; `.forward()`/`.reverse()`/
 /// the resize collapse all need real ticks from an adopted `Vsync`, the same
 /// `fling_scoped` pattern `scrollable_test.rs` uses).
-fn lay_out_animated_with_arena(
+fn lay_out_with_vsync(
     widget: impl flui_view::View,
     vsync: Vsync,
     constraints: BoxConstraints,
-) -> LaidOutScoped {
+) -> LaidOut {
     let wrapped = VsyncScope::new(vsync.clone(), widget);
-    let mut scoped = lay_out_with_arena(wrapped, constraints);
+    let mut scoped = lay_out(wrapped, constraints);
     scoped.adopt_vsync(vsync);
     scoped
 }
 
 /// Settles `scoped` for `millis` of virtual animation time, in 20ms steps.
-fn settle_for(scoped: &mut LaidOutScoped, millis: u64) {
+fn settle_for(scoped: &mut LaidOut, millis: u64) {
     let mut remaining = millis;
     while remaining > 0 {
         let step = remaining.min(20);
@@ -305,15 +296,9 @@ fn settle_for(scoped: &mut LaidOutScoped, millis: u64) {
 /// threshold (see the module doc's fling note), so how long it actually
 /// takes to settle is itself unpredictable — polling for the transition is
 /// the robust way to catch it, rather than guessing a fixed delay.
-fn settle_until_present(
-    scoped: &mut LaidOutScoped,
-    render_type_name: &str,
-    max_millis: u64,
-) -> bool {
+fn settle_until_present(scoped: &mut LaidOut, render_type_name: &str, max_millis: u64) -> bool {
     settle_until(scoped, max_millis, |s| {
-        !s.laid()
-            .find_all_by_render_type(render_type_name)
-            .is_empty()
+        !s.find_all_by_render_type(render_type_name).is_empty()
     })
 }
 
@@ -326,9 +311,9 @@ fn settle_until_present(
 /// `scoped` by shared reference (rather than capturing it) so this can also
 /// pump between checks without a borrow conflict.
 fn settle_until(
-    scoped: &mut LaidOutScoped,
+    scoped: &mut LaidOut,
     max_millis: u64,
-    condition: impl Fn(&LaidOutScoped) -> bool,
+    condition: impl Fn(&LaidOut) -> bool,
 ) -> bool {
     let mut remaining = max_millis;
     while remaining > 0 {
@@ -372,7 +357,7 @@ fn drag_past_threshold_dismisses_and_resize_collapse_fires_on_dismissed() {
         });
 
     let vsync = Vsync::new();
-    let mut scoped = lay_out_animated_with_arena(widget, vsync, horizontal_extent());
+    let mut scoped = lay_out_with_vsync(widget, vsync, horizontal_extent());
     drag_and_release_horizontal(&mut scoped, 250.0, 180.0, -120.0); // 60% of 200px
 
     assert_eq!(
@@ -426,7 +411,7 @@ fn drag_past_threshold_dismisses_for_start_to_end_too() {
         });
 
     let vsync = Vsync::new();
-    let mut scoped = lay_out_animated_with_arena(widget, vsync, horizontal_extent());
+    let mut scoped = lay_out_with_vsync(widget, vsync, horizontal_extent());
     drag_and_release_horizontal(&mut scoped, 250.0, 40.0, 120.0); // rightward, 60% of 200px
 
     settle_for(&mut scoped, 400);
@@ -465,7 +450,7 @@ fn drag_past_threshold_dismisses_for_up_too() {
         });
 
     let vsync = Vsync::new();
-    let mut scoped = lay_out_animated_with_arena(widget, vsync, vertical_extent());
+    let mut scoped = lay_out_with_vsync(widget, vsync, vertical_extent());
     drag_and_release_vertical(&mut scoped, 250.0, 75.0, -48.0); // upward, 60% of the 80px extent
 
     settle_for(&mut scoped, 400);
@@ -506,7 +491,7 @@ fn drag_below_threshold_springs_back_without_dismissing() {
         });
 
     let vsync = Vsync::new();
-    let mut scoped = lay_out_animated_with_arena(widget, vsync, horizontal_extent());
+    let mut scoped = lay_out_with_vsync(widget, vsync, horizontal_extent());
     drag_and_release_horizontal(&mut scoped, 250.0, 180.0, -20.0); // 10% of 200px
 
     let progress_at_release = *last_progress.lock().expect("test-only mutex");
@@ -550,7 +535,7 @@ fn direction_up_rejects_downward_extent_but_admits_upward() {
         });
 
     let vsync = Vsync::new();
-    let mut scoped = lay_out_animated_with_arena(widget, vsync, vertical_extent());
+    let mut scoped = lay_out_with_vsync(widget, vsync, vertical_extent());
 
     // Drag DOWN 30px first: `Up`'s accumulator must reject every downward
     // delta outright, so `on_update` must never deliver (progress stays at
@@ -595,7 +580,7 @@ fn direction_none_ignores_drag_entirely() {
         });
 
     let vsync = Vsync::new();
-    let mut scoped = lay_out_animated_with_arena(widget, vsync, extent());
+    let mut scoped = lay_out_with_vsync(widget, vsync, extent());
     drag_and_release_horizontal(&mut scoped, 40.0, 180.0, -160.0); // a full throw — dismissive in any other direction
     settle_for(&mut scoped, 400);
 
@@ -629,7 +614,7 @@ fn direction_end_to_start_rtl_flips_which_physical_drag_dismisses() {
     );
 
     let vsync = Vsync::new();
-    let mut scoped = lay_out_animated_with_arena(widget, vsync, horizontal_extent());
+    let mut scoped = lay_out_with_vsync(widget, vsync, horizontal_extent());
 
     // LEFTWARD 100px: in RTL, EndToStart is rightward — must be rejected
     // outright (extent stays 0, so release fling-detection is moot).
@@ -680,7 +665,7 @@ fn a_tappable_child_still_taps_and_a_real_drag_still_wins_the_arena() {
             *last_progress_cb.lock().expect("test-only mutex") = details.progress;
         });
 
-    let mut scoped = lay_out_with_arena(widget, extent());
+    let mut scoped = lay_out(widget, extent());
 
     // A quick tap (down+up at the same position, never past touch slop) must
     // still reach the nested GestureDetector's on_tap — Dismissible's own
@@ -729,14 +714,9 @@ fn a_tappable_child_still_taps_and_a_real_drag_still_wins_the_arena() {
 /// still lands on `.reverse()`, never `.forward()`, in `handle_drag_end`'s
 /// `value() > threshold` check.
 ///
-/// (Reaching literally 100% — the `move_controller.is_completed()` direct
-/// bypass a couple of lines earlier in `handle_drag_end` — is not reachable
-/// through this harness's touch-slop-then-delta drag helper within a single
-/// laid-out box: the slop-crossing sub-move needs 20px of room *in addition
-/// to* the reported delta, so a delta equal to the full dismiss-axis extent
-/// always overflows the box by that same 20px. 85% is the practical ceiling
-/// and is more than sufficient to distinguish "locked out by threshold" from
-/// "never dragged far enough".)
+/// 85% stays below the separate `move_controller.is_completed()` shortcut
+/// while remaining large enough to distinguish "locked out by threshold"
+/// from "never dragged far enough".
 #[test]
 fn dismiss_threshold_locked_at_one_never_dismisses_even_at_a_large_drag() {
     let dismissed = Arc::new(AtomicUsize::new(0));
@@ -755,7 +735,7 @@ fn dismiss_threshold_locked_at_one_never_dismisses_even_at_a_large_drag() {
         });
 
     let vsync = Vsync::new();
-    let mut scoped = lay_out_animated_with_arena(widget, vsync, horizontal_extent());
+    let mut scoped = lay_out_with_vsync(widget, vsync, horizontal_extent());
     drag_and_release_horizontal(&mut scoped, 250.0, 195.0, -170.0); // 85% of 200px
     let progress_at_release = *last_progress.lock().expect("test-only mutex");
     assert!(
@@ -797,18 +777,14 @@ fn on_update_progression_reports_the_threshold_crossing() {
         });
 
     let vsync = Vsync::new();
-    let mut scoped = lay_out_animated_with_arena(widget, vsync, extent());
+    let mut scoped = lay_out_with_vsync(widget, vsync, extent());
     scoped.dispatch_pointer_down(195.0, 40.0); // within the 200px-wide box
     settle_one_frame(&mut scoped);
-    scoped.dispatch_pointer_move(175.0, 40.0); // 20px slop-crossing: consumed as `start`
+    scoped.dispatch_pointer_move(155.0, 40.0); // -40: 20% — under threshold
     settle_one_frame(&mut scoped);
-    scoped.dispatch_pointer_move(135.0, 40.0); // delta -40: 20% — under threshold
+    scoped.dispatch_pointer_move(95.0, 40.0); // -60 more, 50% total — past threshold
     settle_one_frame(&mut scoped);
-    scoped.dispatch_pointer_move(75.0, 40.0); // delta -60 more, 50% total — past threshold
-    settle_one_frame(&mut scoped);
-    scoped.dispatch_pointer_move(75.0, 40.0);
-    settle_one_frame(&mut scoped);
-    scoped.dispatch_pointer_up(75.0, 40.0);
+    scoped.dispatch_pointer_up(95.0, 40.0);
     settle_one_frame(&mut scoped);
 
     let recorded = deliveries.lock().expect("test-only mutex").clone();
@@ -864,22 +840,20 @@ fn background_is_mounted_only_while_dragging() {
         .background(background());
 
     let vsync = Vsync::new();
-    let mut scoped = lay_out_animated_with_arena(widget, vsync, extent());
+    let mut scoped = lay_out_with_vsync(widget, vsync, extent());
     assert_eq!(
-        colored_box_count(scoped.laid()),
+        colored_box_count(&scoped),
         1,
         "at rest (never dragged), only `child` is mounted"
     );
 
     scoped.dispatch_pointer_down(195.0, 40.0);
     settle_one_frame(&mut scoped);
-    scoped.dispatch_pointer_move(175.0, 40.0); // 20px slop-crossing
-    settle_one_frame(&mut scoped);
-    scoped.dispatch_pointer_move(115.0, 40.0); // delta -60: nonzero offset
+    scoped.dispatch_pointer_move(135.0, 40.0); // -60: nonzero offset
     settle_one_frame(&mut scoped);
 
     assert_eq!(
-        colored_box_count(scoped.laid()),
+        colored_box_count(&scoped),
         2,
         "mid-drag (nonzero move_controller.value()), `background` is stacked behind `child`"
     );
@@ -904,13 +878,11 @@ fn secondary_background_direction_matches_the_drag() {
         });
 
     let vsync = Vsync::new();
-    let mut scoped = lay_out_animated_with_arena(widget, vsync, extent());
+    let mut scoped = lay_out_with_vsync(widget, vsync, extent());
 
     scoped.dispatch_pointer_down(60.0, 40.0);
     settle_one_frame(&mut scoped);
-    scoped.dispatch_pointer_move(80.0, 40.0); // 20px slop-crossing
-    settle_one_frame(&mut scoped);
-    scoped.dispatch_pointer_move(140.0, 40.0); // delta +60: rightward — StartToEnd
+    scoped.dispatch_pointer_move(120.0, 40.0); // +60: rightward — StartToEnd
     settle_one_frame(&mut scoped);
     assert_eq!(
         *last_direction.lock().expect("test-only mutex"),
@@ -920,9 +892,7 @@ fn secondary_background_direction_matches_the_drag() {
 
     scoped.dispatch_pointer_down(140.0, 40.0);
     settle_one_frame(&mut scoped);
-    scoped.dispatch_pointer_move(120.0, 40.0); // 20px slop-crossing
-    settle_one_frame(&mut scoped);
-    scoped.dispatch_pointer_move(60.0, 40.0); // delta -60: leftward — EndToStart
+    scoped.dispatch_pointer_move(80.0, 40.0); // -60: leftward — EndToStart
     settle_one_frame(&mut scoped);
     assert_eq!(
         *last_direction.lock().expect("test-only mutex"),
@@ -962,7 +932,7 @@ fn resize_collapse_starts_at_full_size_then_runs_to_completion() {
             on_dismissed.fetch_add(1, Ordering::SeqCst);
         });
     let vsync = Vsync::new();
-    let mut scoped = lay_out_animated_with_arena(widget, vsync, horizontal_extent());
+    let mut scoped = lay_out_with_vsync(widget, vsync, horizontal_extent());
     drag_and_release_horizontal(&mut scoped, 250.0, 180.0, -120.0); // 60%, past threshold
 
     // Settle the move animation onto the resize collapse's first frame —
@@ -971,8 +941,8 @@ fn resize_collapse_starts_at_full_size_then_runs_to_completion() {
         settle_until_present(&mut scoped, "RenderConstrainedBox", 5_000),
         "the move must settle and start the resize collapse within 5 virtual seconds"
     );
-    let collapsing_box = scoped.laid().find_by_render_type("RenderConstrainedBox");
-    let starting_size = scoped.laid().size(collapsing_box);
+    let collapsing_box = scoped.find_by_render_type("RenderConstrainedBox");
+    let starting_size = scoped.size(collapsing_box);
     assert_eq!(
         (starting_size.width.get(), starting_size.height.get()),
         (200.0, 500.0),
@@ -1012,7 +982,7 @@ fn resize_duration_none_fires_on_dismissed_immediately_without_collapsing() {
         });
 
     let vsync = Vsync::new();
-    let mut scoped = lay_out_animated_with_arena(widget, vsync, horizontal_extent());
+    let mut scoped = lay_out_with_vsync(widget, vsync, horizontal_extent());
     drag_and_release_horizontal(&mut scoped, 250.0, 180.0, -120.0); // 60%, past threshold
     settle_for(&mut scoped, 400);
 
@@ -1066,14 +1036,12 @@ fn move_controller_registers_with_vsync_and_unregisters_on_unmount() {
 fn unmounting_mid_drag_does_not_panic_or_double_unregister() {
     let vsync = Vsync::new();
     let widget = Dismissible::new(child()).direction(DismissDirection::EndToStart);
-    let mut scoped = lay_out_animated_with_arena(widget, vsync.clone(), extent());
+    let mut scoped = lay_out_with_vsync(widget, vsync.clone(), extent());
 
     // Drag halfway — never released.
     scoped.dispatch_pointer_down(180.0, 40.0);
     settle_one_frame(&mut scoped);
-    scoped.dispatch_pointer_move(160.0, 40.0); // 20px slop-crossing
-    settle_one_frame(&mut scoped);
-    scoped.dispatch_pointer_move(100.0, 40.0); // delta -60: mid-drag, never released
+    scoped.dispatch_pointer_move(120.0, 40.0); // -60: mid-drag, never released
     settle_one_frame(&mut scoped);
 
     assert_eq!(
@@ -1087,7 +1055,7 @@ fn unmounting_mid_drag_does_not_panic_or_double_unregister() {
         vsync.clone(),
         ColoredBox::new(Color::rgb(1, 2, 3)),
     ));
-    scoped.pump(Duration::from_millis(16)); // must not panic
+    scoped.pump_for(Duration::from_millis(16)); // must not panic
 
     assert_eq!(
         vsync.len(),

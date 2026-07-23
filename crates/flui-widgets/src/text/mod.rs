@@ -14,4 +14,4 @@ pub use default_text_style::DefaultTextStyle;
 pub use editable_text::{EditableText, EditableTextState};
 pub use rich_text::RichText;
 pub use text::Text;
-pub use text_field::TextField;
+pub use text_field::{TextField, TextFieldState};

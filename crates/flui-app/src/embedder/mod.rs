@@ -1,16 +1,13 @@
-//! Platform embedder utilities for FLUI
-//!
-//! This module provides the adapter types that connect
-//! the FLUI framework to the underlying platform (windowing, GPU, events).
+//! Platform-facing framework types.
 //!
 //! # Architecture
 //!
 //! ```text
-//! Platform callbacks → AppBinding (central coordinator)
-//!   ├── GestureBinding (pointer events + hit testing)
-//!   ├── FocusManager (keyboard events)
-//!   ├── WidgetsBinding (build phase)
-//!   ├── RenderPipelineOwner (layout/paint)
+//! Platform callbacks → entered UiRealm + transitional AppBinding
+//!   ├── UiRealm::GestureBinding (pointer events + hit testing)
+//!   ├── UiRealm::FocusManager (keyboard events)
+//!   ├── UiRealm::WidgetsBinding (build phase)
+//!   ├── AppBinding::RenderPipelineOwner (layout/paint)
 //!   └── Renderer (GPU rendering, owned by runner callback)
 //! ```
 //!
@@ -21,8 +18,5 @@
 //! - **iOS**: (future) UIKit integration
 //! - **Web**: (future) wasm-bindgen integration
 
-mod desktop;
-
-pub(crate) use desktop::PlatformWindowHandle;
 // Re-export GestureBinding from flui_interaction (no duplication)
 pub use flui_interaction::binding::GestureBinding;

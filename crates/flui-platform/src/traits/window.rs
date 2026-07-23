@@ -6,6 +6,7 @@
 
 use std::{any::Any, sync::Arc};
 
+use cursor_icon::CursorIcon;
 use flui_types::geometry::{Bounds, DevicePixels, Pixels, Point, Size};
 
 use super::{
@@ -58,7 +59,17 @@ pub enum WindowBounds {
     Fullscreen(Bounds<Pixels>),
 }
 
-#[cfg(feature = "winit-backend")]
+/// Failure to apply a cursor to one exact platform window.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum CursorError {
+    /// The backend has no pointer-cursor facility for this window.
+    #[error("this platform window does not support pointer cursors")]
+    Unsupported,
+    /// The backend rejected a concrete cursor update.
+    #[error("platform cursor update failed: {0}")]
+    Backend(String),
+}
+
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 #[cfg(feature = "winit-backend")]
 use winit::window::Window;
@@ -212,6 +223,18 @@ pub trait PlatformWindow: Send + Sync {
         let _ = appearance;
     }
 
+    /// Apply the cursor selected by this window's presentation.
+    ///
+    /// This is deliberately window-scoped: a process-global cursor setter
+    /// cannot identify which of several presentations owns the hovered region.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CursorError::Unsupported`] when this window backend has no
+    /// pointer-cursor facility, or [`CursorError::Backend`] when the native
+    /// update fails.
+    fn set_cursor(&self, cursor: CursorIcon) -> Result<(), CursorError>;
+
     // ==================== Callback Registration ====================
 
     /// All callbacks registered on a window must be invoked on the same
@@ -343,6 +366,22 @@ pub trait PlatformWindow: Send + Sync {
     }
 }
 
+impl HasWindowHandle for dyn PlatformWindow + '_ {
+    fn window_handle(
+        &self,
+    ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
+        PlatformWindow::window_handle(self)
+    }
+}
+
+impl HasDisplayHandle for dyn PlatformWindow + '_ {
+    fn display_handle(
+        &self,
+    ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
+        PlatformWindow::display_handle(self)
+    }
+}
+
 #[cfg(feature = "winit-backend")]
 /// Concrete winit window wrapper
 ///
@@ -360,11 +399,9 @@ pub struct WinitWindow {
 ///
 /// A thin wrapper around `Arc<winit::window::Window>` rather than an impl
 /// directly on `WinitWindow`: `PlatformWindow::text_input` hands back an
-/// `Arc<dyn PlatformTextInput>` from `&self`, and `WinitWindow` itself is
-/// typically boxed (`Platform::open_window` returns `Box<dyn
-/// PlatformWindow>`), not arced — so there is no `Arc<Self>` to clone.
-/// Cloning the inner `Arc<Window>` winit already holds is cheap and gives
-/// each call an independently owned capability handle.
+/// `Arc<dyn PlatformTextInput>` from `&self`. Cloning the exact inner
+/// `Arc<Window>` gives the capability independent ownership without cloning
+/// or forwarding the platform-window object itself.
 #[cfg(feature = "winit-backend")]
 pub struct WinitTextInput {
     window: Arc<Window>,
@@ -383,10 +420,6 @@ impl super::text_input::PlatformTextInput for WinitTextInput {
             LogicalPosition::new(f64::from(area.origin.x.0), f64::from(area.origin.y.0)),
             LogicalSize::new(f64::from(area.size.width.0), f64::from(area.size.height.0)),
         );
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
     }
 }
 
@@ -504,6 +537,11 @@ impl PlatformWindow for WinitWindow {
         self.window.set_visible(false);
     }
 
+    fn set_cursor(&self, cursor: CursorIcon) -> Result<(), CursorError> {
+        self.window.set_cursor(cursor);
+        Ok(())
+    }
+
     fn on_input(&self, callback: Box<dyn FnMut(PlatformInput) -> DispatchEventResult + Send>) {
         *self.callbacks.on_input.lock() = Some(callback);
     }
@@ -616,6 +654,10 @@ mod tests {
 
         fn is_visible(&self) -> bool {
             self.visible
+        }
+
+        fn set_cursor(&self, _cursor: CursorIcon) -> Result<(), CursorError> {
+            Ok(())
         }
     }
 

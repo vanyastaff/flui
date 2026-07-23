@@ -235,6 +235,52 @@ impl DirtyTracker {
     }
 
     // =========================================================================
+    // mark_needs_paint — the repaint-boundary-walking dirty enqueue
+    // =========================================================================
+
+    /// Marks a node as needing paint and schedules the nearest established
+    /// repaint boundary.
+    ///
+    /// Every visited node receives `NEEDS_PAINT`. The walk stops at the first
+    /// node that is both a repaint boundary now and was one during the previous
+    /// successful paint. A newly-created boundary has no retained layer yet, so
+    /// invalidation continues to its parent; the existing ancestor boundary
+    /// must repaint once to install it. A parentless node is the final paint
+    /// root regardless of its boundary flag.
+    ///
+    /// This is the canonical paint invalidation path. Callers must not enqueue
+    /// an arbitrary dirty render object: doing so loses the isolation contract
+    /// that retained layer reuse depends on.
+    pub(super) fn mark_needs_paint(&mut self, tree: &RenderTree, id: RenderId) {
+        let mut current = id;
+        loop {
+            let Some(node) = tree.get(current) else {
+                return;
+            };
+
+            // Flutter's idempotence rule: an already-dirty node proves that
+            // an earlier walk has marked or reached the same paint owner.
+            // Initial attachment uses `schedule_initial_paint` because fresh
+            // RenderState deliberately starts dirty.
+            if node.needs_paint() {
+                return;
+            }
+            node.mark_paint_flag();
+            let parent = node.links().parent();
+            let owns_retained_layer =
+                node.is_repaint_boundary_flag() && node.was_repaint_boundary();
+
+            if owns_retained_layer || parent.is_none() {
+                self.schedule_paint_boundary(current, node.depth() as usize);
+                return;
+            }
+
+            current = parent
+                .expect("parent must be Some: parentless nodes are scheduled in the branch above");
+        }
+    }
+
+    // =========================================================================
     // Low-level enqueue + wake — one per dirty list
     // =========================================================================
 
@@ -255,12 +301,18 @@ impl DirtyTracker {
         self.notifier.read().fire_need_visual_update();
     }
 
-    /// Adds a node to the paint dirty list.
+    /// Schedules a render object that is already known to own the paint output
+    /// being invalidated.
     ///
     /// Routes into `mid_layout_marks.needs_paint` when `debug_doing_paint`
     /// is true; otherwise into `dirty.needs_paint`.
     /// Fires the wake only on a new entry.
-    pub(super) fn add_node_needing_paint(&mut self, node_id: RenderId, depth: usize) {
+    ///
+    /// This primitive deliberately does not walk the render tree. It is used
+    /// only for initial attachment, before a node can have an established
+    /// retained layer, and by scheduler-level tests. Runtime invalidation goes
+    /// through [`Self::mark_needs_paint`].
+    pub(super) fn schedule_paint_boundary(&mut self, node_id: RenderId, depth: usize) {
         let target = if self.debug_doing_paint {
             &mut self.mid_layout_marks.needs_paint
         } else {
@@ -659,7 +711,23 @@ mod tests {
     // =========================================================================
 
     #[derive(Debug)]
-    struct ZeroSizeLeaf;
+    struct ZeroSizeLeaf {
+        repaint_boundary: bool,
+    }
+
+    impl ZeroSizeLeaf {
+        fn inline() -> Self {
+            Self {
+                repaint_boundary: false,
+            }
+        }
+
+        fn boundary() -> Self {
+            Self {
+                repaint_boundary: true,
+            }
+        }
+    }
 
     impl flui_foundation::Diagnosticable for ZeroSizeLeaf {}
 
@@ -699,10 +767,14 @@ mod tests {
         ) -> crate::traits::HitTestOutcome {
             crate::traits::HitTestOutcome::miss()
         }
+
+        fn is_repaint_boundary(&self) -> bool {
+            self.repaint_boundary
+        }
     }
 
     fn insert_zero_size_leaf(owner: &mut PipelineOwner<Idle>) -> RenderId {
-        owner.insert(Box::new(ZeroSizeLeaf)
+        owner.insert(Box::new(ZeroSizeLeaf::inline())
             as Box<dyn crate::traits::RenderObject<crate::protocol::BoxProtocol>>)
     }
 
@@ -734,13 +806,13 @@ mod tests {
             "a duplicate entry means a frame is already scheduled — no second wake",
         );
 
-        tracker.add_node_needing_paint(RenderId::new(2), 1);
+        tracker.schedule_paint_boundary(RenderId::new(2), 1);
         assert_eq!(
             wake_count.load(Ordering::Relaxed),
             2,
             "a new paint entry must wake the platform",
         );
-        tracker.add_node_needing_paint(RenderId::new(2), 1);
+        tracker.schedule_paint_boundary(RenderId::new(2), 1);
         assert_eq!(
             wake_count.load(Ordering::Relaxed),
             2,
@@ -914,14 +986,14 @@ mod tests {
         let middle_id = owner
             .insert_child_render_object(
                 root_id,
-                Box::new(ZeroSizeLeaf)
+                Box::new(ZeroSizeLeaf::inline())
                     as Box<dyn crate::traits::RenderObject<crate::protocol::BoxProtocol>>,
             )
             .expect("middle should attach under root");
         let leaf_id = owner
             .insert_child_render_object(
                 middle_id,
-                Box::new(ZeroSizeLeaf)
+                Box::new(ZeroSizeLeaf::inline())
                     as Box<dyn crate::traits::RenderObject<crate::protocol::BoxProtocol>>,
             )
             .expect("leaf should attach under middle");
@@ -1029,6 +1101,113 @@ mod tests {
         assert!(tracker.nodes_needing_layout().is_empty());
     }
 
+    fn build_repaint_boundary_chain() -> (PipelineOwner<Idle>, RenderId, RenderId, RenderId) {
+        let mut owner = PipelineOwner::new();
+        let root_id = insert_zero_size_leaf(&mut owner);
+        let boundary_id = owner
+            .insert_child_render_object(
+                root_id,
+                Box::new(ZeroSizeLeaf::boundary())
+                    as Box<dyn crate::traits::RenderObject<crate::protocol::BoxProtocol>>,
+            )
+            .expect("boundary should attach under root");
+        let leaf_id = owner
+            .insert_child_render_object(
+                boundary_id,
+                Box::new(ZeroSizeLeaf::inline())
+                    as Box<dyn crate::traits::RenderObject<crate::protocol::BoxProtocol>>,
+            )
+            .expect("leaf should attach under boundary");
+        owner.set_root_id(Some(root_id));
+        owner.clear_all_dirty_nodes();
+        for id in [root_id, boundary_id, leaf_id] {
+            owner
+                .render_tree()
+                .get(id)
+                .expect("paint test node")
+                .clear_needs_paint();
+        }
+        (owner, root_id, boundary_id, leaf_id)
+    }
+
+    #[test]
+    fn mark_needs_paint_stops_at_established_repaint_boundary() {
+        let (mut owner, root_id, boundary_id, leaf_id) = build_repaint_boundary_chain();
+        owner
+            .render_tree()
+            .get(boundary_id)
+            .expect("boundary")
+            .set_was_repaint_boundary(true);
+
+        owner.mark_needs_paint(leaf_id);
+
+        assert!(
+            owner
+                .render_tree()
+                .get(leaf_id)
+                .expect("leaf")
+                .needs_paint()
+        );
+        assert!(
+            owner
+                .render_tree()
+                .get(boundary_id)
+                .expect("boundary")
+                .needs_paint()
+        );
+        assert!(
+            !owner
+                .render_tree()
+                .get(root_id)
+                .expect("root")
+                .needs_paint(),
+            "the established boundary isolates ancestors",
+        );
+        assert_eq!(
+            owner.nodes_needing_paint(),
+            &[DirtyNode::new(boundary_id, 1)],
+            "only the retained-layer owner belongs in the paint queue",
+        );
+
+        owner.mark_needs_paint(leaf_id);
+        assert_eq!(
+            owner.nodes_needing_paint().len(),
+            1,
+            "re-marking an already-dirty leaf is an idempotent no-op",
+        );
+    }
+
+    #[test]
+    fn mark_needs_paint_walks_past_a_new_repaint_boundary() {
+        let (mut owner, root_id, boundary_id, leaf_id) = build_repaint_boundary_chain();
+        assert!(
+            !owner
+                .render_tree()
+                .get(boundary_id)
+                .expect("boundary")
+                .was_repaint_boundary(),
+            "precondition: the boundary has never produced a retained layer",
+        );
+
+        owner.mark_needs_paint(leaf_id);
+
+        for (id, label) in [
+            (leaf_id, "leaf"),
+            (boundary_id, "new boundary"),
+            (root_id, "existing paint root"),
+        ] {
+            assert!(
+                owner.render_tree().get(id).expect(label).needs_paint(),
+                "{label} must be marked by the upward walk",
+            );
+        }
+        assert_eq!(
+            owner.nodes_needing_paint(),
+            &[DirtyNode::new(root_id, 0)],
+            "the existing ancestor must install the new boundary layer",
+        );
+    }
+
     // =========================================================================
     // enter_phase / exit_phase
     // =========================================================================
@@ -1061,7 +1240,7 @@ mod tests {
         let (mut tracker, _tree) = DirtyTracker::new_test_pair();
         tracker.enter_phase(PhaseKind::Paint);
         assert!(tracker.debug_doing_paint());
-        tracker.add_node_needing_paint(RenderId::new(7), 1);
+        tracker.schedule_paint_boundary(RenderId::new(7), 1);
         assert!(tracker.has_mid_marks());
         let drained = tracker.exit_phase(PhaseKind::Paint);
         assert!(!tracker.debug_doing_paint());
@@ -1095,7 +1274,7 @@ mod tests {
         tracker.add_node_needing_layout(id, 0);
         // Force a mid-mark by flipping the flag.
         tracker.debug_doing_layout = true;
-        tracker.add_node_needing_paint(id, 0);
+        tracker.schedule_paint_boundary(id, 0);
         tracker.debug_doing_layout = false;
 
         let mut removed = FxHashSet::default();
@@ -1135,7 +1314,7 @@ mod tests {
         assert!(tracker.debug_doing_paint(), "flag must be set after enter");
 
         // Mid-paint mark arrives (routes to side queue because debug_doing_paint is true).
-        tracker.add_node_needing_paint(RenderId::new(42), 3);
+        tracker.schedule_paint_boundary(RenderId::new(42), 3);
         assert!(
             tracker.has_mid_marks(),
             "mid-paint mark must land in side queue while debug_doing_paint",

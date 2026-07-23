@@ -12,6 +12,8 @@
 
 ---
 
+> **Ownership superseded (2026-07-23):** [ADR-0037](ADR-0037-presentation-ownership-domains.md) replaces §§3–4 and §6's global registry, `OpaqueWindowHandle`, downcast, and `ImeBackend` wiring with presentation-owned state, a concrete weak owner capability, and direct ownership of `PlatformTextInput`. This ADR's `ImeEvent`, stale-token, suppression, and platform behavior remain accepted.
+
 ## Context
 
 FLUI's roadmap (`docs/ROADMAP.md`, App.1) named IME as a remaining gap after the frame-pacing work (ADR-0029) landed. Flutter's own `services` package bundles IME/text-input, system chrome, and haptics behind one `TextInputConnection`/`MethodChannel` layer; `docs/FOUNDATIONS.md` already decided FLUI does **not** port that as a standalone crate — the residue becomes capability traits directly on `flui-platform` (`PlatformTextInput`, and future `PlatformSystemChrome`/`PlatformHaptics` siblings).

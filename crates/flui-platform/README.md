@@ -13,7 +13,7 @@ path), then compile-time `#[cfg]` picks the OS backend:
 | Win32 (`WindowsPlatform`) | Windows | Native, full featured |
 | AppKit (`MacOSPlatform`) | macOS | Native, in progress |
 | Headless (`HeadlessPlatform`) | any (`FLUI_HEADLESS=1`) | Mock backend for CI/tests |
-| winit (`WinitPlatform`) | cross-platform fallback | Legacy, `winit-backend` feature |
+| winit (`WinitPlatform`) | cross-platform fallback | Primary on Linux; optional elsewhere via `winit-backend` |
 
 Part of the [FLUI](https://github.com/vanyastaff/flui) workspace — pre-release,
 consumed by path (not published to crates.io).
@@ -26,7 +26,7 @@ traits/          Platform, PlatformWindow, PlatformDisplay, PlatformExecutor,
                  input (PlatformInput, velocity tracking)
 shared/          PlatformHandlers / WindowCallbacks — callback registries
 platforms/       windows, macos, headless, winit (+ linux/android/ios/web stubs)
-executor.rs      BackgroundExecutor (tokio pool) / ForegroundExecutor (UI queue)
+executor.rs      BackgroundExecutor (tokio pool)
 window.rs        Window API surface — binding entry for platform integrators
 config.rs        WindowConfiguration, fullscreen/monitor selection
 ```
@@ -35,9 +35,9 @@ config.rs        WindowConfiguration, fullscreen/monitor selection
   dispatch (`Resized`, `ScaleFactorChanged`, `RedrawRequested`, ...).
 - **Events** — native input converted to W3C-compliant `ui-events` types
   (`PointerEvent`, `KeyboardEvent`) wrapped in `PlatformInput`.
-- **Executors** — `BackgroundExecutor` runs on a multi-threaded tokio runtime;
-  `ForegroundExecutor` queues closures for the platform's message loop to
-  drain on the UI thread.
+- **Executor** — `BackgroundExecutor` runs thread-safe work on a multi-threaded
+  tokio runtime. UI-owner commands stay private to each backend's bounded,
+  wake-integrated control path.
 - **Displays** — monitor enumeration, DPI/scale factors, device↔logical pixel
   conversion.
 

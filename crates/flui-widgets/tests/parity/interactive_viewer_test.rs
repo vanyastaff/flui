@@ -11,7 +11,7 @@
 //! is honest:
 //!
 //! - **Pan** is a genuine single-pointer drag, dispatched through the real
-//!   gesture arena (`LaidOutScoped::dispatch_pointer_*`), slop and all.
+//!   presentation gesture arena (`LaidOut::dispatch_pointer_*`), slop and all.
 //! - **Scale** is wired through mouse-wheel scroll only
 //!   (`Listener::on_pointer_signal`, dispatched with a real
 //!   `PointerEvent::Scroll` via `LaidOut::route_event`) — the wheel branch of
@@ -85,7 +85,7 @@ use flui_widgets::{
     PanAxis, SizedBox, TransformationController,
 };
 
-use crate::common::{lay_out, lay_out_with_arena, loose};
+use crate::common::{lay_out, loose};
 
 /// A 200x200 child under loose (up-to-500px) constraints: the child settles
 /// at its own preferred 200x200 size, and — because `InteractiveViewer`'s
@@ -106,11 +106,10 @@ fn scale_of(matrix: Matrix4) -> f32 {
 // Pan
 // ============================================================================
 
-/// Down, a slop-crossing move (recognized as the drag start — no delta
-/// reported for it, matching `DragGestureRecognizer`'s `dragStartBehavior:
-/// Start` default, see `draggable_test.rs`'s
-/// `drag_update_reports_delta_after_start`), then a second move whose raw
-/// delta is what `on_pan_update` reports and what this widget applies.
+/// With no competing recognizer, the Down arena awards the pan recognizer
+/// its deferred default victory. The first Move therefore reports its full
+/// raw delta, matching Flutter's arena and `DragStartBehavior::Start`
+/// lifecycle.
 #[test]
 fn pan_translates_child_by_the_drag_delta() {
     let controller = TransformationController::new();
@@ -118,17 +117,16 @@ fn pan_translates_child_by_the_drag_delta() {
         .controller(controller.clone())
         .boundary_margin(EdgeInsets::all(px(f32::INFINITY)))
         .child(child());
-    let scoped = lay_out_with_arena(widget, loose(500.0));
+    let scoped = lay_out(widget, loose(500.0));
 
     scoped.dispatch_pointer_down(50.0, 50.0);
-    scoped.dispatch_pointer_move(100.0, 50.0); // +50px: crosses slop, starts
-    scoped.dispatch_pointer_move(140.0, 50.0); // +40px: the reported update
-    scoped.dispatch_pointer_up(140.0, 50.0);
+    scoped.dispatch_pointer_move(90.0, 50.0); // +40px
+    scoped.dispatch_pointer_up(90.0, 50.0);
 
     let (tx, ty, _) = controller.value().translation_component();
     assert_eq!(
         tx, 40.0,
-        "the second move's raw +40px delta must apply exactly"
+        "the first move's raw +40px delta must apply exactly"
     );
     assert_eq!(ty, 0.0);
 }
@@ -145,12 +143,11 @@ fn pan_clamps_at_the_boundary_edge() {
         .controller(controller.clone())
         .boundary_margin(EdgeInsets::all(px(10.0)))
         .child(child());
-    let scoped = lay_out_with_arena(widget, loose(500.0));
+    let scoped = lay_out(widget, loose(500.0));
 
     scoped.dispatch_pointer_down(150.0, 100.0);
-    scoped.dispatch_pointer_move(90.0, 100.0); // -60px: crosses slop, starts
-    scoped.dispatch_pointer_move(30.0, 100.0); // -60px: the reported update
-    scoped.dispatch_pointer_up(30.0, 100.0);
+    scoped.dispatch_pointer_move(90.0, 100.0); // -60px
+    scoped.dispatch_pointer_up(90.0, 100.0);
 
     let (tx, ty, _) = controller.value().translation_component();
     assert_eq!(tx, -10.0, "must clamp to exactly -boundary_margin (-10.0)");
@@ -168,12 +165,11 @@ fn infinite_boundary_margin_pans_without_clamping() {
         .controller(controller.clone())
         .boundary_margin(EdgeInsets::all(px(f32::INFINITY)))
         .child(child());
-    let scoped = lay_out_with_arena(widget, loose(500.0));
+    let scoped = lay_out(widget, loose(500.0));
 
     scoped.dispatch_pointer_down(150.0, 100.0);
-    scoped.dispatch_pointer_move(90.0, 100.0); // -60px: crosses slop, starts
-    scoped.dispatch_pointer_move(30.0, 100.0); // -60px: the reported update
-    scoped.dispatch_pointer_up(30.0, 100.0);
+    scoped.dispatch_pointer_move(90.0, 100.0); // -60px
+    scoped.dispatch_pointer_up(90.0, 100.0);
 
     let (tx, ty, _) = controller.value().translation_component();
     assert_eq!(
@@ -193,12 +189,11 @@ fn pan_axis_horizontal_locks_out_vertical_movement() {
         .pan_axis(PanAxis::Horizontal)
         .boundary_margin(EdgeInsets::all(px(f32::INFINITY)))
         .child(child());
-    let scoped = lay_out_with_arena(widget, loose(500.0));
+    let scoped = lay_out(widget, loose(500.0));
 
     scoped.dispatch_pointer_down(100.0, 100.0);
-    scoped.dispatch_pointer_move(150.0, 140.0); // +50,+40: crosses slop, starts
-    scoped.dispatch_pointer_move(190.0, 180.0); // +40,+40: the reported update
-    scoped.dispatch_pointer_up(190.0, 180.0);
+    scoped.dispatch_pointer_move(140.0, 140.0); // +40,+40
+    scoped.dispatch_pointer_up(140.0, 140.0);
 
     let (tx, ty, _) = controller.value().translation_component();
     assert_eq!(tx, 40.0, "horizontal component must still apply");
@@ -214,12 +209,11 @@ fn pan_axis_vertical_locks_out_horizontal_movement() {
         .pan_axis(PanAxis::Vertical)
         .boundary_margin(EdgeInsets::all(px(f32::INFINITY)))
         .child(child());
-    let scoped = lay_out_with_arena(widget, loose(500.0));
+    let scoped = lay_out(widget, loose(500.0));
 
     scoped.dispatch_pointer_down(100.0, 100.0);
-    scoped.dispatch_pointer_move(150.0, 140.0); // +50,+40: crosses slop, starts
-    scoped.dispatch_pointer_move(190.0, 180.0); // +40,+40: the reported update
-    scoped.dispatch_pointer_up(190.0, 180.0);
+    scoped.dispatch_pointer_move(140.0, 140.0); // +40,+40
+    scoped.dispatch_pointer_up(140.0, 140.0);
 
     let (tx, ty, _) = controller.value().translation_component();
     assert_eq!(tx, 0.0, "horizontal component must be locked out entirely");
@@ -244,12 +238,11 @@ fn pan_disabled_ignores_the_drag_but_still_fires_callbacks() {
             updates_cb.fetch_add(1, Ordering::SeqCst);
         })
         .child(child());
-    let scoped = lay_out_with_arena(widget, loose(500.0));
+    let scoped = lay_out(widget, loose(500.0));
 
     scoped.dispatch_pointer_down(150.0, 100.0);
-    scoped.dispatch_pointer_move(90.0, 100.0); // crosses slop, starts
-    scoped.dispatch_pointer_move(30.0, 100.0); // the reported update
-    scoped.dispatch_pointer_up(30.0, 100.0);
+    scoped.dispatch_pointer_move(90.0, 100.0); // one real update
+    scoped.dispatch_pointer_up(90.0, 100.0);
 
     assert_eq!(
         controller.value().m,
@@ -289,12 +282,11 @@ fn controller_driven_initial_value_composes_with_a_later_pan() {
         .controller(controller.clone())
         .boundary_margin(EdgeInsets::all(px(f32::INFINITY)))
         .child(child());
-    let scoped = lay_out_with_arena(widget, loose(500.0));
+    let scoped = lay_out(widget, loose(500.0));
 
     scoped.dispatch_pointer_down(50.0, 50.0);
-    scoped.dispatch_pointer_move(100.0, 50.0); // crosses slop, starts
-    scoped.dispatch_pointer_move(140.0, 50.0); // +40px update
-    scoped.dispatch_pointer_up(140.0, 50.0);
+    scoped.dispatch_pointer_move(90.0, 50.0); // +40px update
+    scoped.dispatch_pointer_up(90.0, 50.0);
 
     let (tx, _, _) = controller.value().translation_component();
     assert_eq!(
@@ -328,7 +320,7 @@ fn wheel_scale_is_clamped_to_a_fixed_min_and_max_scale() {
 
     let position = Offset::new(px(100.0), px(100.0));
     let event = make_scroll_event(position, Offset::new(px(0.0), px(-20.0)));
-    laid.route_event(&event, 100.0, 100.0);
+    laid.dispatch_pointer_event(&event);
 
     assert_eq!(
         controller.value().m,
@@ -357,7 +349,7 @@ fn wheel_scale_disabled_still_fires_callbacks_but_does_not_scale() {
 
     let position = Offset::new(px(100.0), px(100.0));
     let event = make_scroll_event(position, Offset::new(px(0.0), px(-20.0)));
-    laid.route_event(&event, 100.0, 100.0);
+    laid.dispatch_pointer_event(&event);
 
     assert_eq!(controller.value().m, Matrix4::identity().m);
     assert_eq!(
@@ -390,14 +382,14 @@ fn wheel_scale_round_trips_back_to_identity() {
     let zoom_in = make_scroll_event(position, Offset::new(px(0.0), px(-200.0)));
     let zoom_out = make_scroll_event(position, Offset::new(px(0.0), px(200.0)));
 
-    laid.route_event(&zoom_in, 100.0, 100.0);
+    laid.dispatch_pointer_event(&zoom_in);
     let after_one_zoom_in = scale_of(controller.value());
     assert!(
         (after_one_zoom_in - std::f32::consts::E).abs() < 1e-3,
         "expected scale ~= e^1, got {after_one_zoom_in}"
     );
 
-    laid.route_event(&zoom_out, 100.0, 100.0);
+    laid.dispatch_pointer_event(&zoom_out);
     let after_round_trip = scale_of(controller.value());
     assert!(
         (after_round_trip - 1.0).abs() < 1e-4,
@@ -410,8 +402,8 @@ fn wheel_scale_round_trips_back_to_identity() {
 // ============================================================================
 
 /// `on_interaction_start`/`_update`/`_end` must fire in exactly that order
-/// for a pan gesture — one start (at slop-crossing), one update (the second
-/// move), one end (the release).
+/// for a pan gesture — one start (from the deferred default arena victory),
+/// one update (the first move), one end (the release).
 #[test]
 fn on_interaction_callbacks_fire_in_order_for_a_pan() {
     let order: Arc<StdMutex<Vec<&'static str>>> = Arc::new(StdMutex::new(Vec::new()));
@@ -431,12 +423,11 @@ fn on_interaction_callbacks_fire_in_order_for_a_pan() {
             order_end.lock().expect("not poisoned").push("end");
         })
         .child(child());
-    let scoped = lay_out_with_arena(widget, loose(500.0));
+    let scoped = lay_out(widget, loose(500.0));
 
     scoped.dispatch_pointer_down(50.0, 50.0);
-    scoped.dispatch_pointer_move(100.0, 50.0); // crosses slop: on_interaction_start
-    scoped.dispatch_pointer_move(140.0, 50.0); // the update: on_interaction_update
-    scoped.dispatch_pointer_up(140.0, 50.0); // on_interaction_end
+    scoped.dispatch_pointer_move(90.0, 50.0); // on_interaction_update
+    scoped.dispatch_pointer_up(90.0, 50.0); // on_interaction_end
 
     assert_eq!(
         *order.lock().expect("not poisoned"),
@@ -471,7 +462,7 @@ fn on_interaction_callbacks_fire_in_order_for_a_wheel_scale() {
 
     let position = Offset::new(px(100.0), px(100.0));
     let event = make_scroll_event(position, Offset::new(px(0.0), px(-20.0)));
-    laid.route_event(&event, 100.0, 100.0);
+    laid.dispatch_pointer_event(&event);
 
     assert_eq!(
         *order.lock().expect("not poisoned"),
@@ -529,7 +520,7 @@ fn wheel_scale_keeps_the_scene_point_under_an_off_center_cursor_fixed() {
     let scene_before = controller.to_scene(focal);
 
     let event = make_scroll_event(focal, Offset::new(px(0.0), px(-20.0)));
-    laid.route_event(&event, 50.0, 50.0);
+    laid.dispatch_pointer_event(&event);
 
     let (tx, ty, _) = controller.value().translation_component();
     assert!(
@@ -567,17 +558,16 @@ fn pan_axis_aligned_locks_to_the_first_updates_dominant_axis_for_the_whole_gestu
         .pan_axis(PanAxis::Aligned)
         .boundary_margin(EdgeInsets::all(px(f32::INFINITY)))
         .child(child());
-    let scoped = lay_out_with_arena(widget, loose(500.0));
+    let scoped = lay_out(widget, loose(500.0));
 
     scoped.dispatch_pointer_down(50.0, 50.0);
-    scoped.dispatch_pointer_move(110.0, 50.0); // +60,0: crosses slop, starts (start_local = (110, 50))
-    // Update 1: cumulative movement from start = (50, 10) -> x dominates -> locks Horizontal.
+    // Update 1: cumulative movement from Down = (50, 10) -> x dominates -> locks Horizontal.
     // This update's own per-event delta is (50, 10) -> aligned to (50, 0).
-    scoped.dispatch_pointer_move(160.0, 60.0);
+    scoped.dispatch_pointer_move(100.0, 60.0);
     // Update 2: per-event delta (-40, 80) is mostly VERTICAL, but the axis lock from
     // update 1 must still force it to (-40, 0) — that's the behavior this test pins.
-    scoped.dispatch_pointer_move(120.0, 140.0);
-    scoped.dispatch_pointer_up(120.0, 140.0);
+    scoped.dispatch_pointer_move(60.0, 140.0);
+    scoped.dispatch_pointer_up(60.0, 140.0);
 
     let (tx, ty, _) = controller.value().translation_component();
     assert_eq!(
@@ -627,8 +617,8 @@ impl StatelessView for InteractiveViewerHost {
 /// matters to a caller that wants to know it is safe to drop).
 ///
 /// Uses plain `lay_out`/`LaidOut::pump_widget`, not
-/// `lay_out_with_arena`/`LaidOutScoped`: the latter mounts the root wrapped
-/// in a `GestureArenaScope`, so `LaidOutScoped::pump_widget(new_root)` would
+/// `lay_out` mounts the root inside the canonical presentation scopes, so
+/// `LaidOut::pump_widget(new_root)` would
 /// itself swap the *actual* mounted root from `GestureArenaScope<Host>` to a
 /// bare `Host` — the exact unsupported different-root-type swap
 /// `InteractiveViewerHost`'s own doc warns about, one level further out. This

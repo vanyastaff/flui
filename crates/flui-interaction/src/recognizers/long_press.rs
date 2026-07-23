@@ -24,7 +24,7 @@ use tracing::instrument;
 
 use super::recognizer::{GestureRecognizer, RecognizerBase};
 use crate::{
-    arena::GestureArenaMember,
+    arena::{GestureArenaMember, GestureDeadlineRegistration},
     events::{PointerEvent, PointerType},
     ids::PointerId,
     settings::GestureSettings,
@@ -113,6 +113,10 @@ pub struct LongPressGestureRecognizer {
 
     /// Gesture settings (device-specific tolerances)
     settings: Arc<Mutex<GestureSettings>>,
+
+    /// Owner-frame timer registration. Unlike an arena slot, this remains
+    /// active after a lone recognizer wins the deferred default on Down.
+    deadline_registration: Rc<RefCell<Option<GestureDeadlineRegistration>>>,
 }
 
 // Field names keep Flutter's `onLongPressStart`-style callback names (parity).
@@ -137,8 +141,6 @@ enum LongPressPhase {
     Possible,
     /// Timer elapsed, long press started
     Started,
-    /// Cancelled (moved too far or rejected)
-    Cancelled,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -161,6 +163,7 @@ impl LongPressGestureRecognizer {
             callbacks: Rc::new(RefCell::new(LongPressCallbacks::default())),
             gesture_state: Arc::new(Mutex::new(LongPressState::default())),
             settings: Arc::new(Mutex::new(GestureSettings::default())),
+            deadline_registration: Rc::new(RefCell::new(None)),
         })
     }
 
@@ -174,6 +177,7 @@ impl LongPressGestureRecognizer {
             callbacks: Rc::new(RefCell::new(LongPressCallbacks::default())),
             gesture_state: Arc::new(Mutex::new(LongPressState::default())),
             settings: Arc::new(Mutex::new(settings)),
+            deadline_registration: Rc::new(RefCell::new(None)),
         })
     }
 
@@ -190,6 +194,10 @@ impl LongPressGestureRecognizer {
     /// Get the long press duration from settings
     fn long_press_duration(&self) -> Duration {
         self.settings.lock().long_press_timeout()
+    }
+
+    fn stop_deadline_polling(&self) {
+        self.deadline_registration.borrow_mut().take();
     }
 
     /// Set the long press down callback (called on initial contact)
@@ -325,12 +333,14 @@ impl LongPressGestureRecognizer {
                     callback(details);
                 }
             }
-            _ => {}
+            LongPressPhase::Ready => {}
         }
     }
 
     /// Handle pointer up event
     fn handle_up(&self, position: Offset<Pixels>, kind: PointerType) {
+        // Terminal input wins over a due timer in the same owner turn.
+        self.stop_deadline_polling();
         let mut state = self.gesture_state.lock();
 
         match state.phase {
@@ -367,29 +377,28 @@ impl LongPressGestureRecognizer {
 
                 self.state.stop_tracking();
             }
-            _ => {}
+            LongPressPhase::Ready => {}
         }
     }
 
     /// Handle cancel event
     fn handle_cancel(&self, position: Offset<Pixels>, kind: PointerType) {
+        self.stop_deadline_polling();
         let mut state = self.gesture_state.lock();
 
         if state.phase == LongPressPhase::Started || state.phase == LongPressPhase::Possible {
-            state.phase = LongPressPhase::Cancelled;
-            drop(state); // Release lock before calling callback
+            let callback = self.callbacks.borrow().on_long_press_cancel.clone();
+            *state = LongPressState::default();
+            drop(state);
 
-            // Call on_long_press_cancel callback
-            if let Some(callback) = self.callbacks.borrow().on_long_press_cancel.clone() {
-                let details = LongPressDetails {
+            self.state.reject();
+            if let Some(callback) = callback {
+                callback(LongPressDetails {
                     global_position: position,
                     local_position: position,
                     kind,
-                };
-                callback(details);
+                });
             }
-
-            self.state.reject();
         }
     }
 
@@ -430,6 +439,10 @@ impl LongPressGestureRecognizer {
         };
         let (kind, fired_pos) = snapshot;
 
+        // Retire the timer before invoking application code. A callback may
+        // synchronously dispose or start another sequence on this recognizer.
+        self.stop_deadline_polling();
+
         if let Some(callback) = self.callbacks.borrow().on_long_press.clone() {
             callback();
         }
@@ -459,7 +472,7 @@ impl LongPressGestureRecognizer {
 }
 
 impl GestureRecognizer for LongPressGestureRecognizer {
-    fn add_pointer(&self, pointer: PointerId, position: Offset<Pixels>) {
+    fn add_pointer(self: &Arc<Self>, pointer: PointerId, position: Offset<Pixels>) {
         // per-impl span (trait fn disallows `#[instrument]`).
         let _span = tracing::info_span!(
             "long_press.add_pointer",
@@ -469,9 +482,17 @@ impl GestureRecognizer for LongPressGestureRecognizer {
         if !self.state.assert_not_disposed("add_pointer") {
             return;
         }
-        // Start tracking this pointer
-        let recognizer = Arc::new(self.clone());
-        self.state.start_tracking(pointer, position, &recognizer);
+        // Start tracking this exact allocation in both the arena and the
+        // owner-frame deadline registry. The latter deliberately outlives
+        // default arena victory.
+        self.stop_deadline_polling();
+        self.state.start_tracking(pointer, position, self);
+        let member: Arc<dyn GestureArenaMember> = Arc::<Self>::clone(self);
+        let registration = self
+            .state
+            .arena()
+            .register_deadline_member(pointer, &member);
+        *self.deadline_registration.borrow_mut() = Some(registration);
 
         // Handle pointer down
         self.handle_down(position, PointerType::Touch);
@@ -515,6 +536,7 @@ impl GestureRecognizer for LongPressGestureRecognizer {
 
     fn dispose(&self) {
         self.state.mark_disposed();
+        self.stop_deadline_polling();
         // Reject arena entries + clear tracked pointer (Flutter parity:
         // gestures/recognizer.dart:485-493 disposing GestureRecognizer
         // clears arena state for tracked pointers).
@@ -622,6 +644,7 @@ impl GestureArenaMember for LongPressGestureRecognizer {
 
     fn reject_gesture(&self, _pointer: PointerId) {
         // We lost the arena - cancel the gesture
+        self.stop_deadline_polling();
         if let Some(pos) = self.state.initial_position() {
             let kind = self
                 .gesture_state
@@ -657,6 +680,23 @@ mod tests {
     }
 
     #[test]
+    fn panicking_cancel_callback_cannot_strand_long_press_tracking() {
+        let arena = GestureArena::new();
+        let recognizer = LongPressGestureRecognizer::new(arena.clone())
+            .with_on_long_press_cancel(|_| panic!("long press cancel panic"));
+        recognizer.add_pointer(PointerId::PRIMARY, Offset::new(Pixels(1.0), Pixels(2.0)));
+        arena.close(PointerId::PRIMARY);
+
+        let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            recognizer.handle_event(&crate::events::make_cancel_event(PointerType::Touch));
+        }));
+
+        assert!(unwind.is_err());
+        assert_eq!(recognizer.primary_pointer(), None);
+        assert!(arena.is_empty());
+    }
+
+    #[test]
     fn deadline_rejects_competing_arena_member() {
         use crate::recognizers::PrimaryPointerGestureRecognizer;
 
@@ -684,6 +724,7 @@ mod tests {
                 rejected: rejected.clone(),
             }),
         );
+        arena.close(pointer);
 
         // The deadline expiring must win the arena and reject the competitor
         // (Flutter parity: `didExceedDeadline` -> `resolve(accepted)`).
@@ -949,6 +990,71 @@ mod tests {
             *rejected.lock(),
             "poll_deadline must win the arena and reject the competing member",
         );
+    }
+
+    #[test]
+    fn default_arena_victory_does_not_cancel_the_hold_deadline() {
+        // Flutter awards a lone recognizer the arena in a microtask after
+        // Down, while the PrimaryPointerGestureRecognizer timer continues
+        // independently. This exact sequence regressed when deadline polling
+        // only inspected members still stored in active arena slots.
+        let clock = flui_foundation::ManualClock::new();
+        let arena = GestureArena::binding_driven(Arc::new(clock.clone()));
+        let fired = Arc::new(Mutex::new(0_u32));
+        let callback_count = Arc::clone(&fired);
+        let recognizer = LongPressGestureRecognizer::with_settings(
+            arena.clone(),
+            GestureSettings::touch_defaults().with_long_press_timeout(Duration::from_millis(100)),
+        )
+        .with_on_long_press(move || *callback_count.lock() += 1);
+        let pointer = PointerId::new(2).expect("nonzero pointer id");
+
+        recognizer.add_pointer(pointer, Offset::new(Pixels(10.0), Pixels(10.0)));
+        assert_eq!(arena.deadline_member_count(), 1);
+        arena.close(pointer);
+        assert_eq!(arena.drain_deferred_resolutions(), 1);
+        assert!(
+            arena.is_empty(),
+            "the default winner must no longer depend on an arena slot"
+        );
+
+        clock.advance(Duration::from_millis(100));
+        arena.poll_deadlines();
+        assert_eq!(*fired.lock(), 1);
+        assert_eq!(
+            arena.deadline_member_count(),
+            0,
+            "a fired deadline unregisters before application callbacks"
+        );
+
+        clock.advance(Duration::from_millis(100));
+        arena.poll_deadlines();
+        assert_eq!(*fired.lock(), 1, "the retired deadline cannot refire");
+    }
+
+    #[test]
+    fn terminal_paths_unregister_deadline_polling() {
+        let arena = GestureArena::new();
+        let position = Offset::new(Pixels(10.0), Pixels(10.0));
+        let pointer = PointerId::new(2).expect("nonzero pointer id");
+
+        let released = LongPressGestureRecognizer::new(arena.clone());
+        released.add_pointer(pointer, position);
+        assert_eq!(arena.deadline_member_count(), 1);
+        released.handle_up(position, PointerType::Touch);
+        assert_eq!(arena.deadline_member_count(), 0);
+
+        let cancelled = LongPressGestureRecognizer::new(arena.clone());
+        cancelled.add_pointer(pointer, position);
+        assert_eq!(arena.deadline_member_count(), 1);
+        cancelled.handle_cancel(position, PointerType::Touch);
+        assert_eq!(arena.deadline_member_count(), 0);
+
+        let disposed = LongPressGestureRecognizer::new(arena.clone());
+        disposed.add_pointer(pointer, position);
+        assert_eq!(arena.deadline_member_count(), 1);
+        disposed.dispose();
+        assert_eq!(arena.deadline_member_count(), 0);
     }
 
     #[test]

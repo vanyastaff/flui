@@ -30,7 +30,10 @@ use flui_interaction::routing::KeyEventResult;
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
 
-use super::actions::{ActionChainProvider, Intent, resolve};
+use super::actions::{
+    ActionChainProvider, Actions, Intent, NextFocusAction, NextFocusIntent, PreviousFocusAction,
+    PreviousFocusIntent, resolve,
+};
 use super::focus::Focus;
 
 /// A callback bound to a [`SingleActivator`] in [`CallbackShortcuts`].
@@ -310,18 +313,96 @@ impl StatelessView for Shortcuts {
     }
 }
 
+// ============================================================================
+// Default focus traversal
+// ============================================================================
+
+/// Installs the standard Tab and Shift+Tab focus traversal bindings for a
+/// subtree.
+///
+/// Flutter's `WidgetsApp` supplies these bindings at the application root.
+/// [`FocusRoot`](super::focus::FocusRoot) installs this widget automatically
+/// for every standard FLUI presentation. It remains public for custom
+/// embedders and deliberately isolated subtrees. Each instance binds actions
+/// to its own [`BuildContext::focus_manager`], with no ambient process
+/// singleton.
+#[derive(Clone, Debug, StatefulView)]
+pub struct DefaultFocusTraversal {
+    child: BoxedView,
+}
+
+impl DefaultFocusTraversal {
+    /// Wrap `child` in the standard traversal shortcuts and actions.
+    #[must_use]
+    pub fn new(child: impl IntoView) -> Self {
+        Self {
+            child: child.into_view().boxed(),
+        }
+    }
+}
+
+/// Presentation-local state behind [`DefaultFocusTraversal`].
+pub struct DefaultFocusTraversalState {
+    focus_owner: Option<Rc<flui_interaction::FocusManager>>,
+}
+
+impl std::fmt::Debug for DefaultFocusTraversalState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DefaultFocusTraversalState")
+            .field("initialized", &self.focus_owner.is_some())
+            .finish()
+    }
+}
+
+impl StatefulView for DefaultFocusTraversal {
+    type State = DefaultFocusTraversalState;
+
+    fn create_state(&self) -> Self::State {
+        DefaultFocusTraversalState { focus_owner: None }
+    }
+}
+
+impl ViewState<DefaultFocusTraversal> for DefaultFocusTraversalState {
+    fn init_state(&mut self, ctx: &dyn BuildContext) {
+        self.focus_owner = Some(ctx.focus_manager());
+    }
+
+    fn did_change_dependencies(&mut self, ctx: &dyn BuildContext) {
+        self.focus_owner = Some(ctx.focus_manager());
+    }
+
+    fn build(&self, view: &DefaultFocusTraversal, _ctx: &dyn BuildContext) -> impl IntoView {
+        let focus_owner = self
+            .focus_owner
+            .as_ref()
+            .expect("BUG: DefaultFocusTraversal built before init_state")
+            .clone();
+        Actions::new(
+            Shortcuts::new(view.child.clone())
+                .shortcut(SingleActivator::named(NamedKey::Tab), NextFocusIntent)
+                .shortcut(
+                    SingleActivator::named(NamedKey::Tab).shift(),
+                    PreviousFocusIntent,
+                ),
+        )
+        .action(NextFocusAction::new(Rc::clone(&focus_owner)))
+        .action(PreviousFocusAction::new(focus_owner))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::cell::Cell;
+    use std::rc::Rc;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use flui_interaction::events::{KeyState, Modifiers};
-    use flui_interaction::routing::{FocusManager, FocusNode};
+    use flui_interaction::routing::FocusNode;
 
     use super::*;
     use crate::SizedBox;
-    use crate::test_harness::{FOCUS_TEST_LOCK, mount};
+    use crate::test_harness::mount;
 
     fn key_down(character: &str, modifiers: Modifiers) -> KeyEvent {
         KeyEvent {
@@ -395,28 +476,25 @@ mod tests {
     /// the binding never fires and the second assertion fails.
     #[test]
     fn a_shortcut_fires_only_for_keys_the_focused_subtree_ignored() {
-        let _guard = FOCUS_TEST_LOCK.lock();
-        let manager = FocusManager::global();
-        manager.unfocus();
-
         let fired = Arc::new(AtomicUsize::new(0));
         let field = FocusNode::with_debug_label("shortcut-field");
 
         // The inner "field" consumes the character "x" and ignores all else.
         let inner = Focus::new(SizedBox::new(10.0, 10.0))
-            .focus_node(Arc::clone(&field))
+            .focus_node(Rc::clone(&field))
             .on_key_event(Rc::new(|event| match &event.key {
                 Key::Character(c) if c == "x" => KeyEventResult::Handled,
                 _ => KeyEventResult::Ignored,
             }));
 
         let fired_for_binding = Arc::clone(&fired);
-        let _harness = mount(CallbackShortcuts::new(inner).binding(
+        let harness = mount(CallbackShortcuts::new(inner).binding(
             SingleActivator::character("d").control(),
             move || {
                 fired_for_binding.fetch_add(1, Ordering::SeqCst);
             },
         ));
+        let manager = harness.focus_manager();
         field.request_focus();
 
         // Consumed below: never bubbles to the shortcut.
@@ -434,33 +512,26 @@ mod tests {
         // Ignored below and not matching: unhandled, nothing fires.
         assert!(!manager.dispatch_key_event(&key_down("q", Modifiers::empty())));
         assert_eq!(fired.load(Ordering::SeqCst), 1);
-
-        manager.unfocus();
     }
 
     #[test]
     fn callback_shortcuts_accept_owner_local_rc_state() {
-        let _guard = FOCUS_TEST_LOCK.lock();
-        let manager = FocusManager::global();
-        manager.unfocus();
-
         let fired = Rc::new(Cell::new(0));
         let fired_for_binding = Rc::clone(&fired);
         let field = FocusNode::with_debug_label("owner-local-shortcut-field");
-        let _harness = mount(
+        let harness = mount(
             CallbackShortcuts::new(
-                Focus::new(SizedBox::new(10.0, 10.0)).focus_node(Arc::clone(&field)),
+                Focus::new(SizedBox::new(10.0, 10.0)).focus_node(Rc::clone(&field)),
             )
             .binding(SingleActivator::character("l").control(), move || {
                 fired_for_binding.set(fired_for_binding.get() + 1);
             }),
         );
+        let manager = harness.focus_manager();
         field.request_focus();
 
         assert!(manager.dispatch_key_event(&key_down("l", Modifiers::CONTROL)));
         assert_eq!(fired.get(), 1, "shortcut callback captured Rc<Cell<_>>");
-
-        manager.unfocus();
     }
 }
 
@@ -471,12 +542,12 @@ mod intent_tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use flui_interaction::events::{KeyState, Modifiers};
-    use flui_interaction::routing::{FocusManager, FocusNode};
+    use flui_interaction::routing::FocusNode;
 
     use super::super::actions::{Action, ActionOutcome, Actions, CallbackAction, Intent};
     use super::*;
     use crate::SizedBox;
-    use crate::test_harness::{FOCUS_TEST_LOCK, mount};
+    use crate::test_harness::mount;
 
     struct SaveIntent;
     impl Intent for SaveIntent {}
@@ -498,25 +569,20 @@ mod intent_tests {
     /// nothing runs and dispatch reports unhandled.
     #[test]
     fn a_shortcut_dispatches_its_intent_through_the_actions_chain() {
-        let _guard = FOCUS_TEST_LOCK.lock();
-        let manager = FocusManager::global();
-        manager.unfocus();
-
         let saves = Arc::new(AtomicUsize::new(0));
         let field = FocusNode::with_debug_label("intent-field");
 
         let saves_for_action = Arc::clone(&saves);
-        let _harness = mount(
+        let harness = mount(
             Actions::new(
-                Shortcuts::new(
-                    Focus::new(SizedBox::new(10.0, 10.0)).focus_node(Arc::clone(&field)),
-                )
-                .shortcut(SingleActivator::character("s").control(), SaveIntent),
+                Shortcuts::new(Focus::new(SizedBox::new(10.0, 10.0)).focus_node(Rc::clone(&field)))
+                    .shortcut(SingleActivator::character("s").control(), SaveIntent),
             )
             .action(CallbackAction::new(move |_intent: &SaveIntent| {
                 saves_for_action.fetch_add(1, Ordering::SeqCst);
             })),
         );
+        let manager = harness.focus_manager();
         field.request_focus();
 
         assert!(manager.dispatch_key_event(&ctrl_s()), "consumed");
@@ -528,44 +594,31 @@ mod intent_tests {
             ..ctrl_s()
         }));
         assert_eq!(saves.load(Ordering::SeqCst), 1);
-
-        manager.unfocus();
     }
 
     #[test]
     fn shortcut_actions_accept_owner_local_rc_state() {
-        let _guard = FOCUS_TEST_LOCK.lock();
-        let manager = FocusManager::global();
-        manager.unfocus();
-
         let saves = Rc::new(Cell::new(0));
         let saves_for_action = Rc::clone(&saves);
         let field = FocusNode::with_debug_label("owner-local-intent-field");
-        let _harness = mount(
+        let harness = mount(
             Actions::new(
-                Shortcuts::new(
-                    Focus::new(SizedBox::new(10.0, 10.0)).focus_node(Arc::clone(&field)),
-                )
-                .shortcut(SingleActivator::character("s").control(), SaveIntent),
+                Shortcuts::new(Focus::new(SizedBox::new(10.0, 10.0)).focus_node(Rc::clone(&field)))
+                    .shortcut(SingleActivator::character("s").control(), SaveIntent),
             )
             .action(CallbackAction::new(move |_intent: &SaveIntent| {
                 saves_for_action.set(saves_for_action.get() + 1);
             })),
         );
+        let manager = harness.focus_manager();
         field.request_focus();
 
         assert!(manager.dispatch_key_event(&ctrl_s()), "consumed");
         assert_eq!(saves.get(), 1, "action callback captured Rc<Cell<_>>");
-
-        manager.unfocus();
     }
 
     #[test]
     fn shortcut_intents_accept_owner_local_rc_payloads() {
-        let _guard = FOCUS_TEST_LOCK.lock();
-        let manager = FocusManager::global();
-        manager.unfocus();
-
         struct OwnerLocalIntent {
             marker: Rc<Cell<u32>>,
         }
@@ -575,22 +628,21 @@ mod intent_tests {
         let seen = Rc::new(Cell::new(0));
         let seen_for_action = Rc::clone(&seen);
         let field = FocusNode::with_debug_label("owner-local-intent-payload-field");
-        let _harness = mount(
+        let harness = mount(
             Actions::new(
-                Shortcuts::new(
-                    Focus::new(SizedBox::new(10.0, 10.0)).focus_node(Arc::clone(&field)),
-                )
-                .shortcut(
-                    SingleActivator::character("s").control(),
-                    OwnerLocalIntent {
-                        marker: Rc::clone(&marker),
-                    },
-                ),
+                Shortcuts::new(Focus::new(SizedBox::new(10.0, 10.0)).focus_node(Rc::clone(&field)))
+                    .shortcut(
+                        SingleActivator::character("s").control(),
+                        OwnerLocalIntent {
+                            marker: Rc::clone(&marker),
+                        },
+                    ),
             )
             .action(CallbackAction::new(move |intent: &OwnerLocalIntent| {
                 seen_for_action.set(intent.marker.get());
             })),
         );
+        let manager = harness.focus_manager();
         field.request_focus();
 
         assert!(manager.dispatch_key_event(&ctrl_s()), "consumed");
@@ -599,8 +651,6 @@ mod intent_tests {
             7,
             "shortcut intent carried an owner-local Rc<Cell<_>> payload"
         );
-
-        manager.unfocus();
     }
 
     /// The default [`Action::to_key_event_result`](super::actions::Action::to_key_event_result)
@@ -627,21 +677,16 @@ mod intent_tests {
             }
         }
 
-        let _guard = FOCUS_TEST_LOCK.lock();
-        let manager = FocusManager::global();
-        manager.unfocus();
-
         let runs = Arc::new(AtomicUsize::new(0));
         let field = FocusNode::with_debug_label("nonconsuming-field");
-        let _harness = mount(
+        let harness = mount(
             Actions::new(
-                Shortcuts::new(
-                    Focus::new(SizedBox::new(10.0, 10.0)).focus_node(Arc::clone(&field)),
-                )
-                .shortcut(SingleActivator::character("s").control(), SaveIntent),
+                Shortcuts::new(Focus::new(SizedBox::new(10.0, 10.0)).focus_node(Rc::clone(&field)))
+                    .shortcut(SingleActivator::character("s").control(), SaveIntent),
             )
             .action(NonConsuming(Arc::clone(&runs))),
         );
+        let manager = harness.focus_manager();
         field.request_focus();
 
         assert!(
@@ -649,25 +694,20 @@ mod intent_tests {
             "SkipRemainingHandlers reports the event unconsumed"
         );
         assert_eq!(runs.load(Ordering::SeqCst), 1, "the action still ran");
-
-        manager.unfocus();
     }
 }
 
 #[cfg(test)]
 mod tab_tests {
-    use std::sync::Arc;
+    use std::rc::Rc;
 
     use flui_interaction::events::{KeyState, Modifiers, NamedKey};
-    use flui_interaction::routing::{FocusManager, FocusNode, FocusScopeNode};
+    use flui_interaction::routing::{FocusNode, FocusScopeNode};
     use flui_view::ViewExt;
 
-    use super::super::actions::{
-        Actions, NextFocusAction, NextFocusIntent, PreviousFocusAction, PreviousFocusIntent,
-    };
     use super::super::focus::FocusScope;
     use super::*;
-    use crate::test_harness::{FOCUS_TEST_LOCK, mount};
+    use crate::test_harness::mount;
     use crate::{Positioned, SizedBox, Stack};
 
     fn tab(shift: bool) -> KeyEvent {
@@ -698,16 +738,12 @@ mod tab_tests {
     /// focus never moves.
     #[test]
     fn tab_and_shift_tab_move_the_focus_through_the_actions_chain() {
-        let _guard = FOCUS_TEST_LOCK.lock();
-        let manager = FocusManager::global();
-        manager.unfocus();
-
         let scope = FocusScopeNode::with_debug_label("tab-scope");
         let left = FocusNode::with_debug_label("left");
         let right = FocusNode::with_debug_label("right");
 
-        let field = |x: f32, node: &Arc<FocusNode>| {
-            Positioned::new(Focus::new(SizedBox::new(10.0, 10.0)).focus_node(Arc::clone(node)))
+        let field = |x: f32, node: &Rc<FocusNode>| {
+            Positioned::new(Focus::new(SizedBox::new(10.0, 10.0)).focus_node(Rc::clone(node)))
                 .left(x)
                 .top(0.0)
                 .width(10.0)
@@ -716,23 +752,11 @@ mod tab_tests {
                 .boxed()
         };
 
-        let _harness = mount(
-            Actions::new(
-                Shortcuts::new(FocusScope::with_external_node(
-                    Arc::clone(&scope),
-                    Stack::new(vec![field(0.0, &left), field(20.0, &right)]),
-                ))
-                .shortcut(SingleActivator::named(NamedKey::Tab), NextFocusIntent)
-                .shortcut(
-                    SingleActivator::named(NamedKey::Tab).shift(),
-                    PreviousFocusIntent,
-                ),
-            )
-            .action(NextFocusAction)
-            .action(PreviousFocusAction),
-        );
-
-        manager.set_active_scope(Some(Arc::clone(&scope)));
+        let harness = mount(FocusScope::with_external_node(
+            Rc::clone(&scope),
+            Stack::new(vec![field(0.0, &left), field(20.0, &right)]),
+        ));
+        let manager = harness.focus_manager();
         left.request_focus();
 
         assert!(manager.dispatch_key_event(&tab(false)), "Tab is consumed");
@@ -743,10 +767,6 @@ mod tab_tests {
 
         assert!(manager.dispatch_key_event(&tab(true)), "Shift+Tab too");
         assert!(left.has_primary_focus(), "and it stepped back");
-
-        manager.unfocus();
-        manager.set_active_scope(None);
-        manager.root_scope().detach_node(scope.as_focus_node().id());
     }
 
     /// `NextFocusAction`'s key result is **what the traversal did**
@@ -763,26 +783,15 @@ mod tab_tests {
     fn a_tab_with_nowhere_to_go_reports_the_key_unconsumed() {
         use flui_interaction::routing::TraversalEdgeBehavior;
 
-        let _guard = FOCUS_TEST_LOCK.lock();
-        let manager = FocusManager::global();
-        manager.unfocus();
-
         let scope = FocusScopeNode::with_debug_label("dead-end-scope");
         scope.set_traversal_edge_behavior(TraversalEdgeBehavior::Stop);
         let only = FocusNode::with_debug_label("only");
 
-        let _harness = mount(
-            Actions::new(
-                Shortcuts::new(FocusScope::with_external_node(
-                    Arc::clone(&scope),
-                    Focus::new(SizedBox::new(10.0, 10.0)).focus_node(Arc::clone(&only)),
-                ))
-                .shortcut(SingleActivator::named(NamedKey::Tab), NextFocusIntent),
-            )
-            .action(NextFocusAction),
-        );
-
-        manager.set_active_scope(Some(Arc::clone(&scope)));
+        let harness = mount(FocusScope::with_external_node(
+            Rc::clone(&scope),
+            Focus::new(SizedBox::new(10.0, 10.0)).focus_node(Rc::clone(&only)),
+        ));
+        let manager = harness.focus_manager();
         only.request_focus();
 
         assert!(
@@ -790,9 +799,5 @@ mod tab_tests {
             "a Tab that moved nothing is reported unconsumed"
         );
         assert!(only.has_primary_focus(), "and the focus stayed put");
-
-        manager.unfocus();
-        manager.set_active_scope(None);
-        manager.root_scope().detach_node(scope.as_focus_node().id());
     }
 }

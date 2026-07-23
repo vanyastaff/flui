@@ -321,9 +321,11 @@ impl GestureArenaMember for CombiningMemberWrapper {
 
 /// A group of gesture recognizers that compete as a unit in the arena.
 ///
-/// # Thread Safety
+/// # Ownership
 ///
-/// `GestureArenaTeam` is thread-safe and can be shared across threads.
+/// Teams belong to the same UI-owner gesture lane as their arena members.
+/// Internal locks protect re-entrant state transitions; they do not make the
+/// executable team graph a cross-thread value.
 ///
 /// # Example
 ///
@@ -625,6 +627,7 @@ mod tests {
 
         // Close arena and let team win
         arena.close(pointer);
+        arena.drain_deferred_resolutions();
 
         // Team should win (only member in arena)
         // First member should be the winner
@@ -647,6 +650,7 @@ mod tests {
         // member1 accepts - captain should win
         entry1.resolve(GestureDisposition::Accepted);
         arena.close(pointer);
+        arena.drain_deferred_resolutions();
 
         // Captain should have won
         assert!(captain.was_accepted());

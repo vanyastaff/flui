@@ -5,7 +5,7 @@
 use rustc_hash::FxHashSet;
 use smol_str::SmolStr;
 
-use crate::flags::SemanticsFlag;
+use crate::{action::SemanticsAction, flags::SemanticsFlag};
 
 // ============================================================================
 // TextDirection
@@ -237,16 +237,12 @@ pub fn concat_attributed_string(
 /// `blocks_user_actions = true`. Mirrors Flutter
 /// `semantics.dart::_kUnblockedUserActions`.
 ///
-/// These actions are "user-navigation" rather than "user-interaction":
-/// tapping or scrolling on the child must still reach a parent that
-/// handles the navigation gesture even if the child has opted out of
-/// other user actions.
-pub(crate) const UNBLOCKED_USER_ACTIONS_MASK: u64 = (1 << 0) // Tap
-    | (1 << 1)  // LongPress
-    | (1 << 2)  // ScrollLeft
-    | (1 << 3)  // ScrollRight
-    | (1 << 4)  // ScrollUp
-    | (1 << 5); // ScrollDown
+/// Accessibility-focus lifecycle notifications remain available because they
+/// are emitted by the accessibility system rather than pointer interaction.
+/// Pointer, scroll, text-editing, and custom actions are blocked.
+pub(crate) const UNBLOCKED_USER_ACTIONS_MASK: u64 = (SemanticsAction::DidGainAccessibilityFocus
+    as u64)
+    | (SemanticsAction::DidLoseAccessibilityFocus as u64);
 
 // ============================================================================
 // StringAttribute

@@ -8,7 +8,7 @@
 //! - **NSApplication**: Main application and event loop
 //! - **NSWindow**: Window management
 //! - **NSScreen**: Display enumeration and info
-//! - **NSRunLoop**: Event loop for foreground executor
+//! - **NSRunLoop**: Owner-thread application event loop
 //! - **GCD/Tokio**: Background task execution
 //!
 //! # Features

@@ -131,7 +131,7 @@ If the requirement is ratified *and* the foundation change must be deferred, **O
 ### Phase 1 — converge callback discipline + wire the deadline driver (Option A; `flui-interaction` only)
 - Lift `tap.rs`'s `accepted`-flag pattern (`:513`) into a shared `AcceptanceGate` — a `&self`-callable "has the arena confirmed this member won?" check.
 - Route `long_press.rs` (`try_fire_timer` must gate **before** firing `on_long_press_start`, not after `accept_tracked`) and `tap_and_drag.rs` (FSM emission through the gate) through it. Three recognisers, one discipline.
-- **Wire the dead deadline driver** (`check_timer`/`resolve_timed_out_arenas`) into the frame loop on the event-loop thread, beside `flush_pending_moves` (`app/binding.rs:454-456`), so a stationary held finger actually fires long-press. Stays single-threaded — no timer thread, no `Send` added.
+- **Wire recognizer deadlines** (`check_timer`) into the frame loop on the event-loop thread, beside `flush_pending_moves`, so a stationary held finger actually fires long-press. The unrelated, unused arena force-timeout API was removed. Stays single-threaded — no timer thread, no `Send` added.
 - This is the typestate redesign's **runtime floor** and the exact code Phase 2 would promote into a type-level witness. Lands incrementally with per-recogniser regression tests.
 
 ### Phase 2 — Option B, only after the requirement is ratified
@@ -142,7 +142,7 @@ If the requirement is ratified *and* the foundation change must be deferred, **O
 ## 9. Bugs surfaced by the research (independent of A/B/C)
 
 1. **Dual-binding split-state (C-5)** — two `GestureBinding` allocations / two arenas; live input uses the owned one, a global is init-and-accessor-only. Latent wrong-arena hazard. *(Phase 0.)*
-2. **Held-finger long-press never fires** — `check_timer`/`did_exceed_deadline`/`resolve_timed_out_arenas` have zero production callers; deadlines only advance opportunistically on the next pointer event. A stationary finger past the deadline does nothing. *(Phase 1 wiring closes it.)*
+2. **Held-finger long-press never fires** — `check_timer`/`did_exceed_deadline` had zero production callers; deadlines only advanced opportunistically on the next pointer event. A stationary finger past the deadline did nothing. *(Frame-loop deadline polling closes it; the unrelated arena force-timeout was removed.)*
 3. **Doc drift** — ADR-001 fact #3 (dead async-timer) and ARCHITECTURE.md:70 (`tokio::sync::Mutex`/`OnceLock` → actually `parking_lot::Mutex`/`once_cell::Lazy`). *(Patched alongside this doc.)*
 
 ---

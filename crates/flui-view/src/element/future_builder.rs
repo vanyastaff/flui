@@ -274,7 +274,7 @@ where
         let token = driver.spawn_local_eager(Box::pin(async move {
             let result = future.await;
             if apply_completion(&slot_for_task, generation, result) {
-                handle.schedule();
+                handle.schedule(crate::RebuildReason::AsyncCompletion);
             }
         }));
 
@@ -475,7 +475,7 @@ mod tests {
             let mut tree = ElementTree::new();
 
             let root = tree.mount_root(view, &mut owner.element_owner_mut());
-            owner.schedule_build_for(root, 0);
+            owner.schedule_build_for(root, 0, crate::RebuildReason::InitialMount);
             // The mount build: `init_state` runs here.
             owner.build_scope(&mut tree);
 
@@ -503,7 +503,8 @@ mod tests {
                 .update(self.root, view, &mut self.owner.element_owner_mut());
             let depth = self.tree.get(self.root).map_or(0, |node| node.depth);
             self.tree.mark_needs_build(self.root);
-            self.owner.schedule_build_for(self.root, depth);
+            self.owner
+                .schedule_build_for(self.root, depth, crate::RebuildReason::AsyncCompletion);
             self.frame();
         }
     }

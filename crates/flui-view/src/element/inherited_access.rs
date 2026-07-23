@@ -45,11 +45,19 @@ pub trait InheritedElementAccess {
     /// `depth` is the dependent's depth in the element tree, threaded
     /// through so a later
     /// [`InheritedBehavior::on_view_updated`](crate::element::InheritedBehavior)
-    /// can call `ElementOwner::schedule_build_for(dep_id, dep_depth)`
+    /// can call `ElementOwner::schedule_build_for` with
+    /// [`RebuildReason::DependencyChange`](crate::RebuildReason::DependencyChange)
     /// without an extra tree traversal.
     ///
     /// Idempotent: re-registering the same id overwrites its depth
     /// (HashMap keyed by id) so reconciliation-driven depth changes are
     /// captured without leaving stale entries.
     fn record_dependent(&mut self, dependent: ElementId, depth: usize);
+
+    /// Release a dependent during deactivate or unmount.
+    ///
+    /// The reverse ownership index supplies the exact provider ids, so
+    /// lifecycle cleanup never scans the tree or waits for a later
+    /// notification to prune stale entries.
+    fn remove_dependent(&mut self, dependent: ElementId);
 }

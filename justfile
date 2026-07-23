@@ -86,6 +86,11 @@ test *args:
     cargo test --workspace {{args}}
 
 [group("test")]
+[doc("Run the workspace test scope used by CI")]
+test-ci:
+    cargo test --workspace --exclude flui-platform
+
+[group("test")]
 [doc("Test a single crate (e.g. just test-crate flui-tree)")]
 test-crate crate *args:
     cargo test -p {{crate}} {{args}}
@@ -114,6 +119,16 @@ test-release:
 [doc("Run rustdoc examples as tests (CI gate; nextest does not execute doctests)")]
 test-doc:
     cargo test --workspace --exclude flui-platform --doc
+
+[group("test")]
+[doc("Golden-image regression tests: render each demo headless and compare to tests/goldens/ (needs a GPU)")]
+golden:
+    cargo nextest run -p flui --features golden --test golden_screenshots
+
+[group("test")]
+[doc("Regenerate the golden PNGs from the current render (run after an intended visual change; review the diff)")]
+golden-update:
+    UPDATE_GOLDENS=1 cargo nextest run -p flui --features golden --test golden_screenshots
 
 [group("test")]
 [doc("Run the flui-assets/Image feature-gated tests CI also runs (default = [] hides them otherwise)")]
@@ -189,7 +204,7 @@ inventory-check:
 # =============================================================================
 
 [group("port")]
-[doc("Run refusal-trigger grep regressions (21 triggers + FR-033 from docs/PORT.md)")]
+[doc("Run refusal-trigger grep regressions (22 triggers + named guards from docs/PORT.md)")]
 port-check:
     bash scripts/port-check.sh
 
@@ -323,7 +338,7 @@ watch-test crate="":
 
 [group("ci")]
 [doc("Run local CI gates (fmt-check + inventory + port-check + clippy + test + doctests)")]
-ci: fmt-check inventory-check port-check clippy test test-doc
+ci: fmt-check inventory-check port-check clippy test-ci test-doc
 
 # =============================================================================
 # Maintenance

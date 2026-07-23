@@ -3,7 +3,7 @@
 //! This crate provides the application framework for FLUI, hosting:
 //! - an owner-affine `UiRealm` with `WidgetsBinding` (build phase)
 //! - `PipelineOwner` from flui_rendering (layout/paint phases)
-//! - `GestureBinding` from flui_interaction (input handling + event coalescing)
+//! - a realm-owned `GestureBinding` from flui_interaction (input handling + event coalescing)
 //!
 //! # Architecture
 //!
@@ -11,7 +11,7 @@
 //! flui_app
 //!   ├── app/
 //!   │   ├── binding.rs      - transitional process service host (AppBinding)
-//!   │   ├── ui_realm.rs     - owner-affine widget runtime
+//!   │   ├── ui_realm.rs     - owner-affine widget and gesture runtime
 //!   │   ├── config.rs       - AppConfig
 //!   │   ├── direct.rs       - direct rendering mode (bypasses the widget tree)
 //!   │   └── runner.rs       - platform bootstrap (desktop/android/web run loops)

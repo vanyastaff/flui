@@ -126,7 +126,7 @@ impl OverlayShared {
     /// `if (mounted) setState((){})`.
     pub(crate) fn schedule_rebuild(&self) {
         if let Some(handle) = self.rebuild.lock().as_ref() {
-            handle.schedule();
+            handle.schedule(flui_view::RebuildReason::StateChange);
         }
     }
 
@@ -415,11 +415,10 @@ impl Overlay {
     /// re-resolution is load-bearing here in a way the oracle never needs it
     /// to be. Flutter's `_DragAvatar.update` can call `Overlay.of(context)`
     /// fresh, on demand, because Dart closures keep `context` alive for free.
-    /// FLUI's `MultiDragHandle` (what `DragSession`, the thing that would
-    /// need the overlay mid-drag, implements) is `Send + Sync` and holds no
-    /// `BuildContext` at all — the handle has to be resolved and cached
-    /// *ahead of time*, in a lifecycle hook, for a gesture callback with no
-    /// `BuildContext` to read later (see `draggable.rs`'s `DraggableState`).
+    /// FLUI's `MultiDragHandle` is owner-local but still holds no borrowed
+    /// `BuildContext`; the overlay therefore has to be resolved and cached
+    /// *ahead of time*, in a lifecycle hook, for a context-free gesture
+    /// callback to read later (see `draggable.rs`'s `DraggableState`).
     /// `depend_on` is what keeps that cached value honest if the ancestor
     /// ever changes underneath it; `get`, resolved once and never
     /// re-checked, would silently go stale. This differs from

@@ -921,6 +921,137 @@ const _: () = assert!(
 );
 
 // =========================================================================
+// PresentationId — one presentation-runtime incarnation
+// =========================================================================
+
+#[derive(Debug)]
+enum PresentationMarker {}
+
+impl Marker for PresentationMarker {}
+
+/// Generational identity of one presentation-runtime incarnation.
+///
+/// A presentation owns the window/surface-facing state for one mounted UI:
+/// input routing, frame scheduling, and the render pipeline. Its identity is
+/// deliberately distinct from both [`RealmId`] and a platform-native window
+/// handle. A realm may own multiple presentations, and replacing a native
+/// window does not make those identity domains interchangeable.
+///
+/// The low 32 bits store a zero-based owner slot and the high 32 bits store a
+/// non-zero generation. Reusing a released slot therefore mints a different
+/// identity, so a stale frame, input event, or worker result cannot address a
+/// later presentation incarnation by accident.
+///
+/// `PresentationId` is a nominal newtype, not a type alias or a conversion
+/// layer around [`RealmId`]:
+///
+/// ```compile_fail
+/// use flui_foundation::{PresentationId, RealmId};
+///
+/// let realm = RealmId::new(1);
+/// let presentation: PresentationId = realm;
+/// ```
+///
+/// Like [`GenId`] and [`ElementId`], this type intentionally does not
+/// implement [`Identifier`]. Owner storage must validate both the slot and
+/// generation instead of indexing through a generation-erasing `get()`.
+///
+/// ```compile_fail
+/// use flui_foundation::PresentationId;
+///
+/// let presentation = PresentationId::new(1);
+/// let _ = presentation.get();
+/// ```
+///
+/// The non-zero generation preserves the null niche, so
+/// `Option<PresentationId>` occupies the same eight bytes as
+/// `PresentationId`.
+#[repr(transparent)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct PresentationId(GenId<PresentationMarker>);
+
+const _: () = assert!(
+    core::mem::size_of::<PresentationId>() == core::mem::size_of::<Option<PresentationId>>(),
+    "PresentationId niche invariant broken: Option<PresentationId> must remain eight bytes"
+);
+
+impl PresentationId {
+    /// Constructs an identity from a zero-based owner slot and non-zero generation.
+    #[inline]
+    #[must_use]
+    pub fn new_gen(index: u32, generation: core::num::NonZeroU32) -> Self {
+        Self(GenId::new_gen(index, generation))
+    }
+
+    /// Constructs a first-generation identity from a one-based slot number.
+    ///
+    /// `new(1)` addresses owner slot `0` with generation `1`. Production
+    /// identities should be minted by the presentation owner so slot reuse
+    /// advances the generation.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `n == 0` or if `n - 1` exceeds `u32::MAX`.
+    #[inline]
+    #[track_caller]
+    #[must_use]
+    pub fn new(n: usize) -> Self {
+        Self(GenId::new(n))
+    }
+
+    /// Returns the zero-based owner slot encoded in this identity.
+    ///
+    /// Only the owning presentation registry should use this value to resolve
+    /// storage, and it must validate [`Self::generation`] before exposing a
+    /// slot occupant.
+    #[inline]
+    #[must_use]
+    pub fn index(self) -> u32 {
+        self.0.index()
+    }
+
+    /// Returns the non-zero incarnation generation encoded in this identity.
+    #[inline]
+    #[must_use]
+    pub fn generation(self) -> core::num::NonZeroU32 {
+        self.0.generation()
+    }
+
+    /// Returns the packed identity value for diagnostics and tracing.
+    ///
+    /// This value must not be used as a storage index.
+    #[inline]
+    #[must_use]
+    pub fn as_u64(self) -> u64 {
+        self.0.as_u64()
+    }
+}
+
+impl Debug for PresentationId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "PresentationId(index={}, generation={})",
+            self.index(),
+            self.generation()
+        )
+    }
+}
+
+impl Display for PresentationId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Presentation({}:{})", self.index(), self.generation())
+    }
+}
+
+impl TreeId for PresentationId {
+    #[inline]
+    fn debug_value(self) -> u64 {
+        self.as_u64()
+    }
+}
+
+// =========================================================================
 // ElementId — generational arena key for the element tree
 // =========================================================================
 
@@ -1325,6 +1456,52 @@ mod tests {
         let id = RenderId::new(3);
         assert_eq!(needs_tree_id(id), id);
         assert_eq!(id.index(), 2);
+    }
+
+    // -----------------------------------------------------------------------
+    // PresentationId tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn presentation_id_preserves_niche_and_slot_generation() {
+        let generation = NonZeroU32::new(7).unwrap();
+        let id = PresentationId::new_gen(42, generation);
+
+        assert_eq!(id.index(), 42);
+        assert_eq!(id.generation(), generation);
+        assert_eq!(size_of::<PresentationId>(), size_of::<u64>());
+        assert_eq!(
+            size_of::<PresentationId>(),
+            size_of::<Option<PresentationId>>()
+        );
+    }
+
+    #[test]
+    fn presentation_id_recreated_slot_is_a_distinct_incarnation() {
+        let first = PresentationId::new_gen(5, NonZeroU32::new(1).unwrap());
+        let recreated = PresentationId::new_gen(5, NonZeroU32::new(2).unwrap());
+
+        assert_eq!(first.index(), recreated.index());
+        assert_ne!(first, recreated);
+    }
+
+    #[test]
+    fn presentation_id_uses_one_based_convenience_constructor() {
+        let id = PresentationId::new(1);
+
+        assert_eq!(id.index(), 0);
+        assert_eq!(id.generation(), NonZeroU32::MIN);
+    }
+
+    #[test]
+    fn presentation_id_is_a_tree_id() {
+        fn needs_tree_id<I: TreeId>(id: I) -> I {
+            id
+        }
+
+        let id = PresentationId::new(3);
+        assert_eq!(needs_tree_id(id), id);
+        assert_eq!(id.debug_value(), id.as_u64());
     }
 
     #[test]

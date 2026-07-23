@@ -9,6 +9,7 @@
 mod subtree_arena;
 
 mod accessors;
+mod actions;
 mod compositing;
 mod construction;
 mod diagnostics;
@@ -478,7 +479,9 @@ mod tests {
             config: &mut crate::semantics::SemanticsConfiguration,
         ) {
             config.set_semantics_boundary(self.boundary);
-            config.set_merging_semantics_of_descendants(self.merge_descendants);
+            if self.merge_descendants {
+                config.set_merging_semantics_of_descendants(true);
+            }
             if let Some(label) = self.label {
                 config.set_label(label);
             }
@@ -512,7 +515,7 @@ mod tests {
 
         owner.add_node_needing_layout(RenderId::new(1), 0);
         owner.add_node_needing_layout(RenderId::new(2), 1);
-        owner.add_node_needing_paint(RenderId::new(3), 2);
+        owner.scheduler.schedule_paint_boundary(RenderId::new(3), 2);
 
         assert_eq!(owner.nodes_needing_layout().len(), 2);
         assert_eq!(owner.nodes_needing_paint().len(), 1);
@@ -536,7 +539,7 @@ mod tests {
     fn test_pipeline_owner_run_frame() {
         let mut owner = PipelineOwner::new();
         owner.add_node_needing_layout(RenderId::new(1), 0);
-        owner.add_node_needing_paint(RenderId::new(2), 1);
+        owner.scheduler.schedule_paint_boundary(RenderId::new(2), 1);
         owner.add_node_needing_compositing_bits_update(RenderId::new(3), 2);
 
         let (owner, result) = owner.run_frame();
@@ -569,9 +572,9 @@ mod tests {
     fn test_run_paint_sorts_by_depth_deep_first() {
         let mut owner = PipelineOwner::new();
         // Add nodes in shallow-first order
-        owner.add_node_needing_paint(RenderId::new(1), 0); // shallowest
-        owner.add_node_needing_paint(RenderId::new(2), 1); // middle
-        owner.add_node_needing_paint(RenderId::new(3), 2); // deepest
+        owner.scheduler.schedule_paint_boundary(RenderId::new(1), 0); // shallowest
+        owner.scheduler.schedule_paint_boundary(RenderId::new(2), 1); // middle
+        owner.scheduler.schedule_paint_boundary(RenderId::new(3), 2); // deepest
 
         let owner = owner.into_layout().into_compositing();
         let mut owner = owner.into_paint();
@@ -618,7 +621,7 @@ mod tests {
     }
 
     #[test]
-    fn run_semantics_merges_non_boundary_child_into_root() {
+    fn run_semantics_root_forces_non_boundary_child_node() {
         let mut owner = PipelineOwner::new();
         let root_id = owner.set_root_render_object(Box::new(SemanticLeaf::empty()));
         owner
@@ -637,11 +640,12 @@ mod tests {
             .expect("test installed a semantics owner");
         let root = semantics_owner.root().expect("root semantics node");
         let root_node = semantics_owner.get(root).expect("root node is live");
-        assert_eq!(root_node.label(), Some("Child label"));
-        assert!(
-            root_node.children().is_empty(),
-            "non-boundary child config should merge into the root node"
-        );
+        assert_eq!(root_node.label(), None);
+        assert_eq!(root_node.children().len(), 1);
+        let child_node = semantics_owner
+            .get(root_node.children()[0])
+            .expect("root-forced child node is live");
+        assert_eq!(child_node.label(), Some("Child label"));
     }
 
     #[test]
@@ -713,7 +717,7 @@ mod tests {
     fn test_pipeline_owner_clear_dirty_nodes() {
         let mut owner = PipelineOwner::new();
         owner.add_node_needing_layout(RenderId::new(1), 0);
-        owner.add_node_needing_paint(RenderId::new(2), 1);
+        owner.scheduler.schedule_paint_boundary(RenderId::new(2), 1);
         owner.add_node_needing_semantics(RenderId::new(3), 2);
 
         owner.clear_all_dirty_nodes();
@@ -775,13 +779,13 @@ mod tests {
             "a duplicate entry means a frame is already scheduled — no second wake",
         );
 
-        owner.add_node_needing_paint(RenderId::new(2), 1);
+        owner.scheduler.schedule_paint_boundary(RenderId::new(2), 1);
         assert_eq!(
             counter.load(Ordering::Relaxed),
             2,
             "a new paint entry must wake the platform",
         );
-        owner.add_node_needing_paint(RenderId::new(2), 1);
+        owner.scheduler.schedule_paint_boundary(RenderId::new(2), 1);
         assert_eq!(counter.load(Ordering::Relaxed), 2);
     }
 
@@ -1077,7 +1081,7 @@ mod tests {
         // The second frame must hit the panic site once more and
         // surface the same Err(Poisoned).
         let mut owner = owner;
-        owner.add_node_needing_paint(root_id, 0);
+        owner.mark_needs_paint(root_id);
 
         let prev = std::panic::take_hook();
         std::panic::set_hook(Box::new(|_| {}));

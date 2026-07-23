@@ -12,6 +12,8 @@
 
 ---
 
+> **Ownership clarified (2026-07-23):** [ADR-0037](ADR-0037-presentation-ownership-domains.md) supersedes this ADR's `AppBinding`/`TextInputPlatformBridge` plumbing and single-current-window routing. The single global rect reduction, per-attach tracking loop, coordinate-space contract, and composing/caret geometry remain accepted.
+
 ## Context
 
 ADR-0030 landed `PlatformTextInput::set_ime_cursor_area` and the headless `FakeTextInput` recorder, but named the caret-to-global-coordinates path a named deferral: nothing in the widget tree called it. `EditableText`'s own module doc stated plainly: *"nothing in this widget tree calls it yet, so the platform IME candidate window does not follow the caret."* This ADR closes that gap.

@@ -380,7 +380,7 @@ impl ChildEntry {
             Some(self.controller.add_status_listener(Arc::new(move |status| {
                 if status == AnimationStatus::Dismissed {
                     dismissed.store(true, Ordering::Release);
-                    rebuild.schedule();
+                    rebuild.schedule(flui_view::RebuildReason::AnimationTick);
                 }
             })));
     }

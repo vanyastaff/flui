@@ -9,15 +9,20 @@
 use std::{
     cmp::Reverse,
     collections::{BinaryHeap, HashMap, HashSet},
+    rc::Rc,
     sync::Arc,
 };
 
 use flui_foundation::{ElementId, RenderId};
+use flui_interaction::FocusManager;
 use parking_lot::{Mutex, RwLock};
 
 use crate::{
     element::child_manager::{ChildManager, ChildManagerRegistry},
-    owner::layout_builder::LayoutBuilderRegistry,
+    owner::{
+        RebuildReason, inherited_dependencies::InheritedDependencies,
+        layout_builder::LayoutBuilderRegistry, rebuild_reason::RebuildReasons,
+    },
     tree::ElementTree,
     view::View,
 };
@@ -34,17 +39,16 @@ use crate::{
 /// pending ids accumulate in a shared inbox that `build_scope` drains onto its
 /// dirty heap at frame start, so the listener never needs to touch the owner.
 ///
-/// The inbox carries the element id ONLY — the dirty-heap ordering key (tree
-/// depth) is read authoritatively from the node at drain time, not captured
-/// here, because `ElementCore` does not know its own tree depth (its `depth`
-/// field is the sibling slot index, not `parent_depth + 1`).
+/// The inbox carries the element id and every cause accumulated before the next
+/// frame. The dirty-heap ordering key (tree depth) is read authoritatively from
+/// the node at drain time, not captured here, because `ElementCore` does not
+/// know its own tree depth (its `depth` field is the sibling slot index, not
+/// `parent_depth + 1`).
 #[derive(Clone)]
 pub(crate) struct ExternalBuildScheduler {
-    /// Shared inbox drained by `build_scope`; a SET of element ids to rebuild.
-    /// A set (not a `Vec`) so repeated ticks between frames — a 60fps animation
-    /// while the frame driver is stalled — collapse to one entry per element
-    /// instead of growing unbounded.
-    inbox: Arc<Mutex<HashSet<ElementId>>>,
+    /// Shared inbox drained by `build_scope`; one accumulated cause set per
+    /// element.
+    inbox: Arc<Mutex<HashMap<ElementId, RebuildReasons>>>,
     /// Frame-request hook (the binding's `on_build_scheduled`), so a tick
     /// between frames asks the platform for a new frame. `None` in headless
     /// tests, which drive `build_scope` directly.
@@ -59,8 +63,20 @@ impl ExternalBuildScheduler {
     /// inbox slot and one frame request. Thread-safe: the inbox lock is held
     /// only for the insert and released before `request_frame` runs (no lock
     /// across the platform wake).
-    pub(crate) fn schedule(&self, id: ElementId) {
-        let newly_queued = self.inbox.lock().insert(id);
+    pub(crate) fn schedule(&self, id: ElementId, reason: RebuildReason) {
+        let newly_queued = {
+            let mut inbox = self.inbox.lock();
+            match inbox.entry(id) {
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    entry.insert(RebuildReasons::one(reason));
+                    true
+                }
+                std::collections::hash_map::Entry::Occupied(mut entry) => {
+                    entry.get_mut().insert(reason);
+                    false
+                }
+            }
+        };
         if newly_queued && let Some(request_frame) = &self.request_frame {
             request_frame();
         }
@@ -69,7 +85,7 @@ impl ExternalBuildScheduler {
     /// Build a scheduler from the shared inbox + frame-request handle. Used by
     /// [`ElementOwner::external_scheduler`](super::ElementOwner::external_scheduler).
     pub(crate) fn from_parts(
-        inbox: Arc<Mutex<HashSet<ElementId>>>,
+        inbox: Arc<Mutex<HashMap<ElementId, RebuildReasons>>>,
         request_frame: Option<Arc<dyn Fn() + Send + Sync>>,
     ) -> Self {
         Self {
@@ -164,11 +180,11 @@ pub struct BuildOwner {
     /// BuildOwner` needed.
     pub(crate) dirty_elements: BinaryHeap<Reverse<DirtyElement>>,
 
-    /// Set of dirty element IDs (for deduplication).
+    /// Accumulated rebuild causes for every id present in `dirty_elements`.
     ///
     /// `pub(crate)` for the [`ElementOwner`](super::ElementOwner)
     /// split-borrow.
-    pub(crate) dirty_set: std::collections::HashSet<ElementId>,
+    pub(crate) dirty_reasons: HashMap<ElementId, RebuildReasons>,
 
     /// GlobalKey registry: key hash -> element ID.
     ///
@@ -199,6 +215,14 @@ pub struct BuildOwner {
     /// split-borrow.
     pub(crate) pending_dependency_changes: std::collections::HashSet<ElementId>,
 
+    /// Sparse dependent -> providers ownership index.
+    ///
+    /// Provider elements keep the forward notification map. This reverse index
+    /// is the lifecycle authority used to remove an element from every
+    /// provider on deactivate/unmount without adding a collection to every
+    /// [`ElementNode`](crate::tree::ElementNode).
+    pub(crate) inherited_dependencies: InheritedDependencies,
+
     /// Whether we're currently in a build phase.
     #[cfg(debug_assertions)]
     building: bool,
@@ -217,13 +241,14 @@ pub struct BuildOwner {
     #[allow(clippy::type_complexity)]
     pub(crate) on_build_scheduled: Option<Arc<dyn Fn() + Send + Sync>>,
 
-    /// Inbox of element ids scheduled from *outside* a frame — an
+    /// Inbox of element ids and causes scheduled from *outside* a frame — an
     /// animation/listenable tick whose mark-dirty callback holds an
-    /// `ExternalBuildScheduler` but no `&mut BuildOwner`. A SET, so repeated
-    /// ticks dedup. Drained onto [`Self::dirty_elements`] at the start of
+    /// `ExternalBuildScheduler` but no `&mut BuildOwner`. The map deduplicates
+    /// element ids while retaining distinct causes. Drained onto
+    /// [`Self::dirty_elements`] at the start of
     /// [`Self::build_scope`], where each id's tree depth is looked up. Shared
     /// (`Arc`) so the listener callbacks and the owner reference the same queue.
-    pub(crate) external_inbox: Arc<Mutex<HashSet<ElementId>>>,
+    pub(crate) external_inbox: Arc<Mutex<HashMap<ElementId, RebuildReasons>>>,
 
     /// Registry of live lazy-sliver [`ChildManager`]s, one per live adaptor
     /// element. Keyed by the sliver's `RenderId`; populated at mount and
@@ -245,6 +270,13 @@ pub struct BuildOwner {
     ///
     /// Empty unless a `LayoutBuilder` is mounted; the seam is inert until one is.
     pub(crate) layout_builder_registry: LayoutBuilderRegistry,
+
+    /// The focus tree owned by this element tree.
+    ///
+    /// Every `BuildOwner` has exactly one manager. Presentation composition
+    /// passes its manager through [`Self::with_focus_manager`]; detached owners
+    /// created by [`Self::new`] receive a fresh isolated manager.
+    focus_manager: Rc<FocusManager>,
 
     /// The binding's frame-driven async task driver, installed by
     /// whichever binding owns this owner. `None` until then — a tree built with
@@ -312,27 +344,48 @@ impl Default for BuildOwner {
 }
 
 impl BuildOwner {
-    /// Create a new BuildOwner.
+    /// Create a build owner with a fresh, isolated focus manager.
     pub fn new() -> Self {
+        Self::with_focus_manager(FocusManager::new())
+    }
+
+    /// Create a build owner using the presentation's exact focus manager.
+    ///
+    /// The manager is not replaceable after construction: the element tree and
+    /// focus tree share one ownership lifetime.
+    pub fn with_focus_manager(focus_manager: Rc<FocusManager>) -> Self {
         Self {
             dirty_elements: BinaryHeap::new(),
-            dirty_set: std::collections::HashSet::new(),
+            dirty_reasons: HashMap::new(),
             global_keys: HashMap::new(),
             inactive_elements: Vec::new(),
             pending_dependency_changes: std::collections::HashSet::new(),
+            inherited_dependencies: InheritedDependencies::default(),
             #[cfg(debug_assertions)]
             building: false,
             #[cfg(debug_assertions)]
             scope_depth: 0,
             on_build_scheduled: None,
-            external_inbox: Arc::new(Mutex::new(HashSet::new())),
+            external_inbox: Arc::new(Mutex::new(HashMap::new())),
             child_manager_registry: Arc::new(Mutex::new(HashMap::new())),
             layout_builder_registry: Arc::new(Mutex::new(HashMap::new())),
+            focus_manager,
             async_driver: None,
             post_frame_handle: None,
             text_input_handle: None,
             interaction_dispatch: None,
         }
+    }
+
+    /// Return this element tree's focus manager.
+    ///
+    /// Acquire the manager from `ViewState::init_state` or
+    /// `did_change_dependencies` and retain the returned `Rc` for later focus
+    /// transitions. Imperative focus changes do not belong in `build`, layout,
+    /// paint, or compositing; port-check trigger #22 enforces that boundary.
+    #[must_use]
+    pub fn focus_manager(&self) -> Rc<FocusManager> {
+        Rc::clone(&self.focus_manager)
     }
 
     /// Install the binding's async task driver.
@@ -361,10 +414,10 @@ impl BuildOwner {
 
     /// Install the binding's IME/text-input attach-detach capability.
     ///
-    /// Called once, at wiring time, by `AppBinding` (via `UiRealm::bind_to_app`).
-    /// `HeadlessBinding` installs none, so headless-tree tests observe
-    /// `BuildContext::text_input_handle() == None` honestly rather than a
-    /// stub that silently accepts attaches nobody delivers events to.
+    /// Called during `UiRealm` construction with the weak handle minted by that
+    /// presentation's `TextInputOwner`. `HeadlessBinding` installs none, so
+    /// headless-tree tests observe `BuildContext::text_input_handle() == None`
+    /// honestly rather than accepting attaches nobody delivers events to.
     pub fn set_text_input_handle(&mut self, handle: flui_interaction::TextInputHandle) {
         self.text_input_handle = Some(handle);
     }
@@ -416,14 +469,19 @@ impl BuildOwner {
     /// (see `rekey_dirty_depths`), so a caller that
     /// only knows the sibling slot index (e.g. `setState` via
     /// `ElementCore::schedule_self_build`) cannot mis-order the drain.
-    pub fn schedule_build_for(&mut self, id: ElementId, depth: usize) {
-        if self.dirty_set.insert(id) {
-            self.dirty_elements
-                .push(Reverse(DirtyElement::new(id, depth)));
+    pub fn schedule_build_for(&mut self, id: ElementId, depth: usize, reason: RebuildReason) {
+        match self.dirty_reasons.entry(id) {
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert(RebuildReasons::one(reason));
+                self.dirty_elements
+                    .push(Reverse(DirtyElement::new(id, depth)));
 
-            // Notify that a build was scheduled
-            if let Some(callback) = self.on_build_scheduled.as_deref() {
-                callback();
+                if let Some(callback) = self.on_build_scheduled.as_deref() {
+                    callback();
+                }
+            }
+            std::collections::hash_map::Entry::Occupied(mut entry) => {
+                entry.get_mut().insert(reason);
             }
         }
     }
@@ -436,7 +494,7 @@ impl BuildOwner {
     /// elements keep their in-tree `ViewState` across the call.
     pub fn reassemble(&mut self, tree: &ElementTree) {
         for (id, node) in tree.iter_nodes() {
-            self.schedule_build_for(id, node.depth);
+            self.schedule_build_for(id, node.depth, RebuildReason::HotReload);
         }
         tracing::info!(
             count = self.dirty_count(),
@@ -475,7 +533,7 @@ impl BuildOwner {
     /// handle for the duration of an Element lifecycle traversal.
     ///
     /// The returned handle holds disjoint `&mut` references to
-    /// `global_keys`, `dirty_elements`, `dirty_set`, and
+    /// `global_keys`, `dirty_elements`, `dirty_reasons`, and
     /// `inactive_elements` — every field an `Element::mount` /
     /// `unmount` / `update` path may write. The borrow checker proves
     /// non-aliasing because each field is borrowed once.
@@ -483,9 +541,10 @@ impl BuildOwner {
         super::ElementOwner {
             global_keys: &mut self.global_keys,
             dirty_elements: &mut self.dirty_elements,
-            dirty_set: &mut self.dirty_set,
+            dirty_reasons: &mut self.dirty_reasons,
             inactive_elements: &mut self.inactive_elements,
             pending_dependency_changes: &mut self.pending_dependency_changes,
+            inherited_dependencies: &mut self.inherited_dependencies,
             on_build_scheduled: self.on_build_scheduled.as_deref(),
             external_inbox: &self.external_inbox,
             external_request_frame: self.on_build_scheduled.as_ref(),
@@ -494,11 +553,26 @@ impl BuildOwner {
             build_view: None,
             child_manager_registry: &self.child_manager_registry,
             layout_builder_registry: &self.layout_builder_registry,
+            focus_manager: &self.focus_manager,
             async_driver: &self.async_driver,
             post_frame_handle: &self.post_frame_handle,
             text_input_handle: &self.text_input_handle,
             interaction_dispatch: &self.interaction_dispatch,
         }
+    }
+
+    /// Record the reverse half of an inherited dependency registration.
+    ///
+    /// The caller writes the provider's forward map in the same critical
+    /// section. Keeping this method crate-private prevents consumers from
+    /// manufacturing an ownership edge without going through a real
+    /// `BuildContext::depend_on` lookup.
+    pub(crate) fn register_inherited_dependency(
+        &mut self,
+        dependent: ElementId,
+        provider: ElementId,
+    ) {
+        self.inherited_dependencies.register(dependent, provider);
     }
 
     /// Build an [`ExternalBuildScheduler`] over this owner's shared inbox and
@@ -525,11 +599,30 @@ impl BuildOwner {
     /// [`build_scope`](Self::build_scope) drain.
     ///
     /// Observability for the `RebuildHandle` channel: a
-    /// `schedule()` from a worker thread is visible here before any frame runs.
+    /// `schedule(reason)` from a worker thread is visible here before any frame runs.
     /// Returns a count, never a guard — the lock stays private (SP-6).
     #[must_use]
     pub fn pending_external_builds(&self) -> usize {
         self.external_inbox.lock().len()
+    }
+
+    /// Return the exact causes currently queued for `element`.
+    ///
+    /// The snapshot merges in-frame and out-of-frame scheduling, because a
+    /// listener may enqueue another cause after an element was already placed
+    /// on the dirty heap. `None` means no rebuild is pending. The queue and its
+    /// lock stay private; callers cannot mutate scheduling state through this
+    /// diagnostic API.
+    #[must_use]
+    pub fn pending_rebuild_reasons(&self, element: ElementId) -> Option<RebuildReasons> {
+        let mut pending = self.dirty_reasons.get(&element).copied();
+        if let Some(external) = self.external_inbox.lock().get(&element).copied() {
+            match &mut pending {
+                Some(reasons) => reasons.merge(external),
+                None => pending = Some(external),
+            }
+        }
+        pending
     }
 
     /// Check if there are dirty elements.
@@ -571,8 +664,9 @@ impl BuildOwner {
         // `ElementCore::depth` is the sibling slot index, not `parent_depth+1`,
         // so capturing it would mis-order a nested animated element as if it
         // were the root.
-        let externally_scheduled: Vec<ElementId> = self.external_inbox.lock().drain().collect();
-        for id in externally_scheduled {
+        let externally_scheduled: Vec<(ElementId, RebuildReasons)> =
+            self.external_inbox.lock().drain().collect();
+        for (id, reasons) in externally_scheduled {
             // Mark dirty here, not in the caller. A `RebuildHandle`
             // carries no reference to the element's dirty flag — it is a plain
             // `(inbox, ElementId)` pair — so the drain is the one place that both
@@ -583,10 +677,16 @@ impl BuildOwner {
             // callback already set the flag, and a node that has since been
             // unmounted is a no-op lookup.
             tree.mark_needs_build(id);
-            if self.dirty_set.insert(id) {
-                let depth = tree.get(id).map_or(0, |node| node.depth);
-                self.dirty_elements
-                    .push(Reverse(DirtyElement::new(id, depth)));
+            match self.dirty_reasons.entry(id) {
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    entry.insert(reasons);
+                    let depth = tree.get(id).map_or(0, |node| node.depth);
+                    self.dirty_elements
+                        .push(Reverse(DirtyElement::new(id, depth)));
+                }
+                std::collections::hash_map::Entry::Occupied(mut entry) => {
+                    entry.get_mut().merge(reasons);
+                }
             }
         }
 
@@ -626,7 +726,10 @@ impl BuildOwner {
         // is released before the handle is reborrowed.
         while let Some(Reverse(dirty)) = self.dirty_elements.pop() {
             let id = dirty.id();
-            self.dirty_set.remove(&id);
+            let reasons = self
+                .dirty_reasons
+                .remove(&id)
+                .expect("BUG: every dirty heap entry must own rebuild reasons");
 
             // Flutter parity (`framework.dart:5977-5982`): if this
             // dependent received an inherited-dependency change since its
@@ -654,6 +757,13 @@ impl BuildOwner {
                     continue;
                 }
             }
+
+            let rebuild_span = tracing::info_span!(
+                "element_rebuild",
+                element = ?id,
+                reasons = %reasons,
+            );
+            let _rebuild_entered = rebuild_span.enter();
 
             // ── Phase 1: extract BY VALUE, build against a LIVE read view.
             // Taking the element out of its slot frees the tree for a shared
@@ -687,9 +797,10 @@ impl BuildOwner {
                 let mut element_owner = super::ElementOwner {
                     global_keys: &mut self.global_keys,
                     dirty_elements: &mut self.dirty_elements,
-                    dirty_set: &mut self.dirty_set,
+                    dirty_reasons: &mut self.dirty_reasons,
                     inactive_elements: &mut self.inactive_elements,
                     pending_dependency_changes: &mut self.pending_dependency_changes,
+                    inherited_dependencies: &mut self.inherited_dependencies,
                     on_build_scheduled: self.on_build_scheduled.as_deref(),
                     external_inbox: &self.external_inbox,
                     external_request_frame: self.on_build_scheduled.as_ref(),
@@ -699,6 +810,7 @@ impl BuildOwner {
                     }),
                     child_manager_registry: &self.child_manager_registry,
                     layout_builder_registry: &self.layout_builder_registry,
+                    focus_manager: &self.focus_manager,
                     async_driver: &self.async_driver,
                     post_frame_handle: &self.post_frame_handle,
                     text_input_handle: &self.text_input_handle,
@@ -733,6 +845,8 @@ impl BuildOwner {
                     && let Some(accessor) = node.element_mut().as_inherited_mut()
                 {
                     accessor.record_dependent(record.dependent, record.depth);
+                    self.inherited_dependencies
+                        .register(record.dependent, record.provider);
                 }
             }
 
@@ -743,15 +857,17 @@ impl BuildOwner {
             let mut element_owner = super::ElementOwner {
                 global_keys: &mut self.global_keys,
                 dirty_elements: &mut self.dirty_elements,
-                dirty_set: &mut self.dirty_set,
+                dirty_reasons: &mut self.dirty_reasons,
                 inactive_elements: &mut self.inactive_elements,
                 pending_dependency_changes: &mut self.pending_dependency_changes,
+                inherited_dependencies: &mut self.inherited_dependencies,
                 on_build_scheduled: self.on_build_scheduled.as_deref(),
                 external_inbox: &self.external_inbox,
                 external_request_frame: self.on_build_scheduled.as_ref(),
                 build_view: None,
                 child_manager_registry: &self.child_manager_registry,
                 layout_builder_registry: &self.layout_builder_registry,
+                focus_manager: &self.focus_manager,
                 async_driver: &self.async_driver,
                 post_frame_handle: &self.post_frame_handle,
                 text_input_handle: &self.text_input_handle,
@@ -908,15 +1024,17 @@ impl BuildOwner {
             let mut inline_owner = super::ElementOwner {
                 global_keys: &mut self.global_keys,
                 dirty_elements: &mut self.dirty_elements,
-                dirty_set: &mut self.dirty_set,
+                dirty_reasons: &mut self.dirty_reasons,
                 inactive_elements: &mut self.inactive_elements,
                 pending_dependency_changes: &mut self.pending_dependency_changes,
+                inherited_dependencies: &mut self.inherited_dependencies,
                 on_build_scheduled: self.on_build_scheduled.as_deref(),
                 external_inbox: &self.external_inbox,
                 external_request_frame: self.on_build_scheduled.as_ref(),
                 build_view: None,
                 child_manager_registry: &self.child_manager_registry,
                 layout_builder_registry: &self.layout_builder_registry,
+                focus_manager: &self.focus_manager,
                 async_driver: &self.async_driver,
                 post_frame_handle: &self.post_frame_handle,
                 text_input_handle: &self.text_input_handle,
@@ -1035,15 +1153,17 @@ impl BuildOwner {
         let mut element_owner = super::ElementOwner {
             global_keys: &mut self.global_keys,
             dirty_elements: &mut self.dirty_elements,
-            dirty_set: &mut self.dirty_set,
+            dirty_reasons: &mut self.dirty_reasons,
             inactive_elements: &mut self.inactive_elements,
             pending_dependency_changes: &mut self.pending_dependency_changes,
+            inherited_dependencies: &mut self.inherited_dependencies,
             on_build_scheduled: self.on_build_scheduled.as_deref(),
             external_inbox: &self.external_inbox,
             external_request_frame: self.on_build_scheduled.as_ref(),
             build_view: None,
             child_manager_registry: &self.child_manager_registry,
             layout_builder_registry: &self.layout_builder_registry,
+            focus_manager: &self.focus_manager,
             async_driver: &self.async_driver,
             post_frame_handle: &self.post_frame_handle,
             text_input_handle: &self.text_input_handle,
@@ -1250,12 +1370,12 @@ mod tests {
         let mut owner = BuildOwner::new();
         let id = ElementId::new(1);
 
-        owner.schedule_build_for(id, 0);
+        owner.schedule_build_for(id, 0, RebuildReason::StateChange);
         assert!(owner.has_dirty_elements());
         assert_eq!(owner.dirty_count(), 1);
 
         // Duplicate scheduling should not increase count
-        owner.schedule_build_for(id, 0);
+        owner.schedule_build_for(id, 0, RebuildReason::StateChange);
         assert_eq!(owner.dirty_count(), 1);
     }
 
@@ -1267,7 +1387,7 @@ mod tests {
         let view = TestView;
         let root_id = tree.mount_root(&view, &mut owner.element_owner_mut());
 
-        owner.schedule_build_for(root_id, 0);
+        owner.schedule_build_for(root_id, 0, RebuildReason::InitialMount);
         assert!(owner.has_dirty_elements());
 
         owner.build_scope(&mut tree);
@@ -1283,9 +1403,9 @@ mod tests {
         let id3 = ElementId::new(3);
 
         // Schedule in reverse depth order
-        owner.schedule_build_for(id3, 2);
-        owner.schedule_build_for(id1, 0);
-        owner.schedule_build_for(id2, 1);
+        owner.schedule_build_for(id3, 2, RebuildReason::StateChange);
+        owner.schedule_build_for(id1, 0, RebuildReason::StateChange);
+        owner.schedule_build_for(id2, 1, RebuildReason::StateChange);
 
         // Should process shallowest first
         let Reverse(first) = owner.dirty_elements.pop().unwrap();
@@ -1324,9 +1444,9 @@ mod tests {
         // Schedule with INVERTED depths — what a `setState` on each would pass if
         // it trusted the slot index (all three are slot 0 here; we exaggerate to
         // an outright inversion to make the mis-order deterministic).
-        owner.schedule_build_for(leaf, 0);
-        owner.schedule_build_for(mid, 1);
-        owner.schedule_build_for(root, 2);
+        owner.schedule_build_for(leaf, 0, RebuildReason::StateChange);
+        owner.schedule_build_for(mid, 1, RebuildReason::StateChange);
+        owner.schedule_build_for(root, 2, RebuildReason::StateChange);
 
         owner.rekey_dirty_depths(&tree);
 

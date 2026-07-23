@@ -258,6 +258,48 @@ impl Path {
         path
     }
 
+    /// Recovers the originating [`RRect`] when this path is a fully-rounded
+    /// rectangle emitted by [`Self::from_rrect`].
+    ///
+    /// The GPU shadow path uses this to route rounded-rectangle shadows
+    /// (Material `Card` / `FloatingActionButton` / `Dialog` / `Chip`, …) through
+    /// the analytical single-pass Gaussian shadow instead of the multi-layer
+    /// path-fill approximation. It recognizes only the "all four corners
+    /// rounded" command shape `from_rrect` emits — the common Material case;
+    /// a plain rectangle, a partially-rounded rect, or any hand-built path
+    /// returns `None` and keeps the fallback shadow.
+    #[must_use]
+    pub fn rrect_hint(&self) -> Option<crate::geometry::RRect> {
+        use crate::geometry::{RRect, Radius};
+
+        // `from_rrect`'s all-corners-rounded emission, in order:
+        //   MoveTo, LineTo, AddArc(TR), LineTo, AddArc(BR),
+        //   LineTo, AddArc(BL), LineTo, AddArc(TL), Close.
+        // Each corner arc's bounding rect encodes that corner's box: its half
+        // extents are the elliptical radii, and its edges pin the rectangle.
+        let [
+            PathCommand::MoveTo(_),
+            PathCommand::LineTo(_),
+            PathCommand::AddArc(tr, _, _),
+            PathCommand::LineTo(_),
+            PathCommand::AddArc(br, _, _),
+            PathCommand::LineTo(_),
+            PathCommand::AddArc(bl, _, _),
+            PathCommand::LineTo(_),
+            PathCommand::AddArc(tl, _, _),
+            PathCommand::Close,
+        ] = self.commands.as_slice()
+        else {
+            return None;
+        };
+
+        let rect = Rect::from_ltrb(tl.left(), tl.top(), tr.right(), br.bottom());
+        let half = |corner: &Rect<Pixels>| {
+            Radius::new(px(corner.width().0 / 2.0), px(corner.height().0 / 2.0))
+        };
+        Some(RRect::new(rect, half(tl), half(tr), half(br), half(bl)))
+    }
+
     /// Sets the fill type used for filling and containment tests.
     #[inline]
     pub fn set_fill_type(&mut self, fill_type: PathFillType) {
@@ -338,10 +380,12 @@ impl Path {
     /// the current position to the arc's start and *continues* that
     /// contour — chord-connected, not a new sub-path. This is deliberate:
     /// [`Self::from_rrect`] builds a fully-rounded rectangle as one
-    /// continuous contour (edge, corner arc, edge, corner arc, …); starting
-    /// a fresh sub-path per corner arc would fragment the contour into four
-    /// open pieces, each rendering an unwanted diagonal fill-closure chord
-    /// across its corner.
+    /// continuous contour (edge, corner arc, edge, corner arc, …), and
+    /// [`Self::rrect_hint`] depends on recognizing that exact single-contour
+    /// command shape to route rounded-rectangle shadows through the
+    /// analytical fast path. Starting a fresh sub-path per corner arc would
+    /// fragment the contour into four open pieces, each rendering an
+    /// unwanted diagonal fill-closure chord across its corner.
     ///
     /// A caller that wants Flutter's "always a new sub-path" semantics must
     /// call [`Self::move_to`] (to the arc's start point) immediately before
@@ -909,5 +953,40 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// `rrect_hint` must recover the exact `RRect` a `from_rrect` path was built
+    /// from, so the analytical Gaussian shadow uses the true rect and radii.
+    #[test]
+    fn rrect_hint_round_trips_a_rounded_rectangle() {
+        use crate::geometry::{RRect, Radius, Rect};
+
+        let rrect = RRect::from_rect_and_corners(
+            Rect::from_xywh(px(10.0), px(20.0), px(120.0), px(80.0)),
+            Radius::new(px(4.0), px(6.0)),
+            Radius::new(px(8.0), px(8.0)),
+            Radius::new(px(12.0), px(10.0)),
+            Radius::new(px(16.0), px(14.0)),
+        );
+
+        let recovered = Path::from_rrect(rrect)
+            .rrect_hint()
+            .expect("a fully-rounded rectangle path must be recognized");
+
+        assert_eq!(recovered.rect, rrect.rect);
+        assert_eq!(recovered.top_left, rrect.top_left);
+        assert_eq!(recovered.top_right, rrect.top_right);
+        assert_eq!(recovered.bottom_right, rrect.bottom_right);
+        assert_eq!(recovered.bottom_left, rrect.bottom_left);
+    }
+
+    /// A plain rectangle carries no rounding, so it is not a shadow candidate
+    /// for the analytical path and must return `None` (keeps the fallback).
+    #[test]
+    fn rrect_hint_is_none_for_a_plain_rectangle() {
+        use crate::geometry::Rect;
+
+        let path = Path::rectangle(Rect::from_xywh(px(0.0), px(0.0), px(10.0), px(10.0)));
+        assert!(path.rrect_hint().is_none());
     }
 }

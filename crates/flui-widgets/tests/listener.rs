@@ -140,21 +140,22 @@ fn listener_routes_buttonless_move_to_hover_callback() {
         tight(80.0, 80.0),
     );
 
+    let mut current = PointerState::default();
+    current.position.x = 40.0;
+    current.position.y = 40.0;
+    current.buttons = PointerButtons::new();
     let event = flui_interaction::events::PointerEvent::Move(PointerUpdate {
         pointer: PointerInfo {
             pointer_id: Some(flui_interaction::PointerId::PRIMARY),
             pointer_type: PointerType::Mouse,
             persistent_device_id: None,
         },
-        current: PointerState {
-            buttons: PointerButtons::new(),
-            ..PointerState::default()
-        },
+        current,
         coalesced: Vec::new(),
         predicted: Vec::new(),
     });
 
-    laid.route_event(&event, 40.0, 40.0);
+    laid.dispatch_pointer_event(&event);
 
     assert_eq!(
         hovers.get(),
@@ -167,7 +168,9 @@ fn listener_routes_buttonless_move_to_hover_callback() {
         "buttonless hover must not route to on_pointer_move",
     );
 
+    laid.dispatch_pointer_down(40.0, 40.0);
     laid.dispatch_pointer_move(40.0, 40.0);
+    laid.dispatch_pointer_up(40.0, 40.0);
     assert_eq!(
         moves.get(),
         1,
@@ -191,7 +194,7 @@ fn listener_routes_scroll_to_pointer_signal_callback() {
     let event =
         flui_interaction::events::make_scroll_event(position, Offset::new(px(0.0), px(12.0)));
 
-    laid.route_event(&event, 40.0, 40.0);
+    laid.dispatch_pointer_event(&event);
 
     assert_eq!(
         signals.get(),
@@ -212,6 +215,9 @@ fn listener_routes_gesture_to_pan_zoom_update_callback() {
         tight(80.0, 80.0),
     );
 
+    let mut state = PointerState::default();
+    state.position.x = 40.0;
+    state.position.y = 40.0;
     let event = flui_interaction::events::PointerEvent::Gesture(PointerGestureEvent {
         pointer: PointerInfo {
             pointer_id: Some(flui_interaction::PointerId::PRIMARY),
@@ -219,10 +225,10 @@ fn listener_routes_gesture_to_pan_zoom_update_callback() {
             persistent_device_id: None,
         },
         gesture: PointerGesture::Pinch(0.25),
-        state: PointerState::default(),
+        state,
     });
 
-    laid.route_event(&event, 40.0, 40.0);
+    laid.dispatch_pointer_event(&event);
 
     assert_eq!(
         updates.get(),

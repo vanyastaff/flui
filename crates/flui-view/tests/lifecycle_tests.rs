@@ -336,7 +336,7 @@ fn test_tree_deactivate_element() {
     let view = TrackingView { id: 1 };
 
     let root_id = tree.mount_root(&view, &mut owner.element_owner_mut());
-    tree.deactivate(root_id);
+    tree.deactivate(root_id, &mut owner.element_owner_mut());
 
     let node = tree.get(root_id).unwrap();
     assert_eq!(node.element().lifecycle(), Lifecycle::Inactive);
@@ -349,8 +349,8 @@ fn test_tree_activate_element() {
     let view = TrackingView { id: 1 };
 
     let root_id = tree.mount_root(&view, &mut owner.element_owner_mut());
-    tree.deactivate(root_id);
-    tree.activate(root_id);
+    tree.deactivate(root_id, &mut owner.element_owner_mut());
+    tree.activate(root_id, &mut owner.element_owner_mut());
 
     let node = tree.get(root_id).unwrap();
     assert_eq!(node.element().lifecycle(), Lifecycle::Active);

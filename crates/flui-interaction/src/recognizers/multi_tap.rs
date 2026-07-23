@@ -365,23 +365,20 @@ impl MultiTapGestureRecognizer {
 
             let count = positions.len();
             let kind = state.device_kind.unwrap_or(PointerType::Touch);
+            let callback = self.callbacks.borrow().on_multi_tap_cancel.clone();
 
+            *state = MultiTapState::default();
             drop(state);
 
-            // Call cancel callback
-            if let Some(callback) = self.callbacks.borrow().on_multi_tap_cancel.clone() {
-                let details = MultiTapDetails {
+            self.state.reject();
+            if let Some(callback) = callback {
+                callback(MultiTapDetails {
                     pointer_count: count,
                     positions,
                     center,
                     kind,
-                };
-                callback(details);
+                });
             }
-
-            self.gesture_state.lock().pointers.clear();
-            self.gesture_state.lock().first_down_time = None;
-            self.state.reject();
         }
     }
 
@@ -425,14 +422,13 @@ impl MultiTapGestureRecognizer {
 }
 
 impl GestureRecognizer for MultiTapGestureRecognizer {
-    fn add_pointer(&self, pointer: PointerId, position: Offset<Pixels>) {
+    fn add_pointer(self: &Arc<Self>, pointer: PointerId, position: Offset<Pixels>) {
         if !self.state.assert_not_disposed("add_pointer") {
             return;
         }
         // For the first pointer, track with arena
         if self.gesture_state.lock().pointers.is_empty() {
-            let recognizer = Arc::new(self.clone());
-            self.state.start_tracking(pointer, position, &recognizer);
+            self.state.start_tracking(pointer, position, self);
         }
 
         self.handle_pointer_down(pointer, position, PointerType::Touch);
@@ -513,6 +509,23 @@ mod tests {
 
         assert_eq!(recognizer.primary_pointer(), None);
         assert_eq!(recognizer.required_pointer_count, 2);
+    }
+
+    #[test]
+    fn panicking_cancel_callback_cannot_strand_multi_tap_tracking() {
+        let arena = GestureArena::new();
+        let recognizer = MultiTapGestureRecognizer::new(arena.clone(), 2)
+            .with_on_multi_tap_cancel(|_| panic!("multi tap cancel panic"));
+        recognizer.add_pointer(PointerId::PRIMARY, Offset::new(Pixels(1.0), Pixels(2.0)));
+        arena.close(PointerId::PRIMARY);
+
+        let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            recognizer.handle_event(&crate::events::make_cancel_event(PointerType::Touch));
+        }));
+
+        assert!(unwind.is_err());
+        assert_eq!(recognizer.primary_pointer(), None);
+        assert!(arena.is_empty());
     }
 
     #[test]

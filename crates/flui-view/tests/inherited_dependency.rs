@@ -9,8 +9,10 @@
 //!   `update_should_notify` returns `true` marks dependents dirty.
 //! - Edge: no ancestor of `T` -> returns `None`, no dependent-set write.
 //! - Edge: deduplication when the same element calls `depend_on` twice.
-//! - Edge: an unmounted dependent's `ElementId` does not panic when
-//!   `schedule_build_for` is invoked.
+//! - Unmount/deactivate remove provider edges synchronously, so long-lived
+//!   providers do not accumulate historical dependents.
+//! - Reactivation schedules dependency lifecycle refresh against the new
+//!   ancestry.
 //! - `get_inherited::<T, _>` returns `Some(R)` BUT does NOT
 //!   record the caller in the InheritedElement's dependent map. Used for
 //!   one-time reads (settings/theme captured at mount).
@@ -39,7 +41,7 @@ use flui_objects::RenderSizedBox;
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::{
     BuildContext, BuildContextExt, BuildOwner, ElementBuildContext, ElementTree, InheritedElement,
-    IntoView, Lifecycle, RenderView, StatelessView, View, ViewExt, view::InheritedView,
+    IntoView, RenderView, StatelessView, View, ViewExt, view::InheritedView,
 };
 use parking_lot::RwLock;
 
@@ -317,11 +319,11 @@ fn depend_on_deduplicates_per_dependent() {
 }
 
 // ============================================================================
-// Edge: unmounted dependent — schedule_build_for is a no-op (no panic)
+// Edge: unmounted dependent is removed from the provider immediately
 // ============================================================================
 
 #[test]
-fn unmounted_dependent_no_op_on_schedule() {
+fn unmounted_dependent_is_removed_from_provider_before_next_notification() {
     let (tree, owner) = create_tree_and_owner();
 
     let provider_v1 = ThemeProvider {
@@ -350,11 +352,22 @@ fn unmounted_dependent_no_op_on_schedule() {
     tree.write()
         .remove(child_id, &mut owner.write().element_owner_mut());
 
-    // Now update the provider with a different value. The on-view-updated
-    // path will walk the (stale) dependent set and call
-    // schedule_build_for for an ElementId no longer in the tree. This
-    // must not panic — it is allowed to push a stale id to the heap;
-    // BuildOwner::build_scope tolerates missing ids.
+    {
+        let tree_guard = tree.read();
+        let provider_node = tree_guard.get(provider_id).expect("provider exists");
+        let provider = provider_node
+            .element()
+            .downcast_ref::<InheritedElement<ThemeProvider>>()
+            .expect("provider is InheritedElement<ThemeProvider>");
+        assert!(
+            !provider.dependents().contains_key(&child_id),
+            "unmount must remove the dependent from the provider immediately",
+        );
+    }
+
+    // A later provider update must not schedule the removed element. This
+    // asserts both memory ownership and notification cost: historical
+    // dependents cannot accumulate in a long-lived provider.
     let provider_v2 = ThemeProvider {
         theme: MyTheme { color: 0x0000_FF00 },
         child: DummyChild,
@@ -365,9 +378,138 @@ fn unmounted_dependent_no_op_on_schedule() {
         &mut owner.write().element_owner_mut(),
     );
 
-    // Lifecycle of the now-removed child can no longer be inspected, but
-    // the test passes if the update path did not panic.
-    let _ = Lifecycle::Defunct; // suppress unused-import lint if any
+    assert_eq!(
+        owner.read().dirty_count(),
+        0,
+        "a provider update must not enqueue an already-unmounted dependent",
+    );
+}
+
+#[test]
+fn repeated_mount_and_unmount_does_not_grow_provider_dependents() {
+    let (tree, owner) = create_tree_and_owner();
+    let provider = ThemeProvider {
+        theme: MyTheme { color: 0x0012_3456 },
+        child: DummyChild,
+    };
+    let provider_id = tree
+        .write()
+        .mount_root(&provider, &mut owner.write().element_owner_mut());
+
+    let mut dependents = Vec::new();
+    for slot in 0..256 {
+        let dependent = tree.write().insert(
+            &DummyChild,
+            provider_id,
+            slot,
+            &mut owner.write().element_owner_mut(),
+        );
+        let ctx = ElementBuildContext::for_element(dependent, tree.clone(), owner.clone()).unwrap();
+        let _ = ctx.depend_on::<ThemeProvider, ()>(|_| ());
+        dependents.push(dependent);
+    }
+
+    {
+        let tree = tree.read();
+        let provider = tree
+            .get(provider_id)
+            .expect("provider exists")
+            .element()
+            .downcast_ref::<InheritedElement<ThemeProvider>>()
+            .expect("provider is InheritedElement<ThemeProvider>");
+        assert_eq!(provider.dependents().len(), dependents.len());
+    }
+
+    for dependent in dependents {
+        let mut owner = owner.write();
+        tree.write()
+            .remove(dependent, &mut owner.element_owner_mut());
+    }
+
+    let tree = tree.read();
+    let provider = tree
+        .get(provider_id)
+        .expect("provider exists")
+        .element()
+        .downcast_ref::<InheritedElement<ThemeProvider>>()
+        .expect("provider is InheritedElement<ThemeProvider>");
+    assert!(
+        provider.dependents().is_empty(),
+        "a long-lived provider must not retain historical dependents",
+    );
+}
+
+#[test]
+fn deactivate_releases_provider_and_activate_schedules_dependency_refresh() {
+    let (tree, owner) = create_tree_and_owner();
+    let provider_v1 = ThemeProvider {
+        theme: MyTheme { color: 0x00AA_0000 },
+        child: DummyChild,
+    };
+    let provider_id = tree
+        .write()
+        .mount_root(&provider_v1, &mut owner.write().element_owner_mut());
+    let dependent_id = tree.write().insert(
+        &DummyChild,
+        provider_id,
+        0,
+        &mut owner.write().element_owner_mut(),
+    );
+    let ctx = ElementBuildContext::for_element(dependent_id, tree.clone(), owner.clone()).unwrap();
+    let _ = ctx.depend_on::<ThemeProvider, ()>(|_| ());
+
+    {
+        let mut owner = owner.write();
+        tree.write()
+            .deactivate(dependent_id, &mut owner.element_owner_mut());
+    }
+
+    {
+        let tree = tree.read();
+        let provider = tree
+            .get(provider_id)
+            .expect("provider exists")
+            .element()
+            .downcast_ref::<InheritedElement<ThemeProvider>>()
+            .expect("provider is InheritedElement<ThemeProvider>");
+        assert!(
+            provider.dependents().is_empty(),
+            "deactivate must synchronously release the provider edge",
+        );
+    }
+
+    let provider_v2 = ThemeProvider {
+        theme: MyTheme { color: 0x0000_AA00 },
+        child: DummyChild,
+    };
+    tree.write().update(
+        provider_id,
+        &provider_v2,
+        &mut owner.write().element_owner_mut(),
+    );
+    assert_eq!(
+        owner.read().dirty_count(),
+        0,
+        "an inactive dependent is not notified through its former provider",
+    );
+
+    {
+        let mut owner = owner.write();
+        tree.write()
+            .activate(dependent_id, &mut owner.element_owner_mut());
+    }
+    assert_eq!(
+        owner.read().dirty_count(),
+        1,
+        "reactivation schedules a rebuild to resolve dependencies in the new ancestry",
+    );
+    assert!(
+        owner
+            .write()
+            .element_owner_mut()
+            .has_pending_dependency_change(dependent_id),
+        "reactivation preserves Flutter's didChangeDependencies contract",
+    );
 }
 
 // ============================================================================
@@ -466,7 +608,8 @@ mod did_change_dependencies_on_inherited_update {
     use std::sync::{Arc, Mutex};
 
     use flui_view::{
-        BuildContext, BuildOwner, ElementTree, IntoView, StatefulView, View, ViewExt, ViewState,
+        BuildContext, BuildContextExt, BuildOwner, ElementTree, IntoView, StatefulView, View,
+        ViewExt, ViewState,
     };
 
     use super::{DummyChild, LeafView, MyTheme};
@@ -511,7 +654,8 @@ mod did_change_dependencies_on_inherited_update {
                 .push(format!("dcd:{}", self.dcd_calls));
         }
 
-        fn build(&self, _view: &ProbeDependent, _ctx: &dyn BuildContext) -> impl IntoView {
+        fn build(&self, _view: &ProbeDependent, ctx: &dyn BuildContext) -> impl IntoView {
+            let _ = ctx.depend_on::<super::ThemeProvider, ()>(|_| ());
             self.probe.lock().unwrap().push("build".to_string());
             LeafView.boxed()
         }
@@ -533,7 +677,8 @@ mod did_change_dependencies_on_inherited_update {
     struct StatelessProbeDependent;
 
     impl flui_view::StatelessView for StatelessProbeDependent {
-        fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
+            let _ = ctx.depend_on::<super::ThemeProvider, ()>(|_| ());
             LeafView.boxed()
         }
     }
@@ -566,21 +711,11 @@ mod did_change_dependencies_on_inherited_update {
             &mut owner.element_owner_mut(),
         );
 
-        // Register the dependent via the actual access protocol so we
-        // exercise the same code path production uses. We can't pass an
-        // ElementBuildContext here because the test holds direct `&mut`
-        // borrows on tree+owner — instead, call `record_dependent`
-        // through the `InheritedElementAccess` trait on the provider.
-        {
-            use flui_view::InheritedElement;
-            let provider_node = tree.get_mut(provider_id).expect("provider exists");
-            let dep_depth = 1;
-            let element = provider_node
-                .element_mut()
-                .downcast_mut::<InheritedElement<super::ThemeProvider>>()
-                .expect("provider is InheritedElement<ThemeProvider>");
-            element.behavior_mut().add_dependent(dep_id, dep_depth);
-        }
+        // Drive the dependent's real build. Each fixture calls `depend_on`
+        // there, so registration passes through the same owner-owned forward
+        // and reverse indexes as production.
+        owner.schedule_build_for(dep_id, 1, flui_view::RebuildReason::DependencyChange);
+        owner.build_scope(tree);
 
         (provider_id, dep_id)
     }
@@ -721,12 +856,8 @@ mod did_change_dependencies_on_inherited_update {
             &dependent_view,
         );
 
-        // Build #1: drive the dependent's first build so it transitions
-        // from dirty-from-birth to CLEAN. (Insert does not schedule, so the
-        // dependent must be scheduled explicitly here — production schedules
-        // it from the parent's reconcile.)
-        owner.schedule_build_for(dep_id, 1);
-        owner.build_scope(&mut tree);
+        // The helper drove the first build and registration, so the dependent
+        // is already clean here.
         assert_eq!(
             probe.lock().unwrap().clone(),
             vec!["build".to_string()],
@@ -889,7 +1020,8 @@ mod did_change_dependencies_on_inherited_update {
             panic!("induced did_change_dependencies panic (build-window panic-safety test)");
         }
 
-        fn build(&self, _view: &PanicDcd, _ctx: &dyn BuildContext) -> impl IntoView {
+        fn build(&self, _view: &PanicDcd, ctx: &dyn BuildContext) -> impl IntoView {
+            let _ = ctx.depend_on::<super::ThemeProvider, ()>(|_| ());
             LeafView.boxed()
         }
     }
@@ -1072,7 +1204,7 @@ mod live_inherited_during_build {
         // and builds the whole subtree (ThemeRoot -> Middle -> Consumer ->
         // Leaf), so the consumer's real `build()` runs under a live context.
         let root_id = tree.mount_root(&root_v1, &mut owner.element_owner_mut());
-        owner.schedule_build_for(root_id, 0);
+        owner.schedule_build_for(root_id, 0, flui_view::RebuildReason::InitialMount);
         owner.build_scope(&mut tree);
 
         // CRUX — pre-PR-K this is `None` (empty dummy tree); now the consumer
@@ -1178,7 +1310,7 @@ mod live_inherited_during_build {
             0,
             &mut owner.element_owner_mut(),
         );
-        owner.schedule_build_for(outer_id, 1);
+        owner.schedule_build_for(outer_id, 1, flui_view::RebuildReason::ParentUpdate);
         owner.build_scope(&mut tree);
 
         assert_eq!(
@@ -1237,7 +1369,7 @@ mod live_inherited_during_build {
             0,
             &mut owner.element_owner_mut(),
         );
-        owner.schedule_build_for(consumer_id, 1);
+        owner.schedule_build_for(consumer_id, 1, flui_view::RebuildReason::StateChange);
 
         // The build panics inside the depend_on callback, but `build_or_recover`
         // catches it and substitutes an ErrorView — build_scope must not panic.
@@ -1312,7 +1444,7 @@ mod build_window_panic_restores_slot {
         let mut owner = BuildOwner::new();
 
         let root_id = tree.mount_root(&PanicOnInit, &mut owner.element_owner_mut());
-        owner.schedule_build_for(root_id, 0);
+        owner.schedule_build_for(root_id, 0, flui_view::RebuildReason::InitialMount);
 
         // The panic propagates (the guard re-raises after restoring) ...
         let outcome = catch_unwind(AssertUnwindSafe(|| owner.build_scope(&mut tree)));

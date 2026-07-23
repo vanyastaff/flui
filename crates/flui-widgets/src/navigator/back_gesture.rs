@@ -35,7 +35,6 @@ use std::time::Duration;
 
 use flui_animation::{Animation, AnimationController, Curve, Curves};
 use flui_foundation::Listenable;
-use flui_interaction::arena::{GestureArena, SweepModel};
 use flui_interaction::recognizers::drag_variants::horizontal_drag;
 use flui_interaction::{
     DragEndDetails, DragGestureRecognizer, DragStartDetails, DragUpdateDetails, GestureRecognizer,
@@ -207,13 +206,7 @@ struct BackGestureRuntime {
 }
 
 impl BackGestureRuntime {
-    fn on_pointer_down(
-        &self,
-        recognizer: &Arc<DragGestureRecognizer>,
-        arena: &GestureArena,
-        self_close: bool,
-        event: &PointerEvent,
-    ) {
+    fn on_pointer_down(&self, recognizer: &Arc<DragGestureRecognizer>, event: &PointerEvent) {
         if !(self.enabled)() {
             return;
         }
@@ -224,11 +217,7 @@ impl BackGestureRuntime {
         if self.gesture.borrow().is_some() {
             return;
         }
-        let pointer = event.pointer_id();
-        recognizer.add_pointer(pointer, event.position());
-        if self_close {
-            arena.close(pointer);
-        }
+        recognizer.add_pointer(event.pointer_id(), event.position());
     }
 
     fn on_drag_start(&self, _details: DragStartDetails) {
@@ -446,24 +435,18 @@ impl StatefulView for BackGestureDetector {
                 gesture: RefCell::new(None),
                 awaiting_settle: Cell::new(false),
             }),
-            recognizer: RefCell::new(None),
+            recognizer: None,
         }
     }
 }
 
 pub(crate) struct BackGestureDetectorState {
     runtime: Rc<BackGestureRuntime>,
-    /// Built lazily in the first `build` (not `init_state`): reading the
-    /// ambient `GestureArenaScope` only needs a one-time, non-dependency
-    /// lookup, and `build` is where every other FLUI gesture widget already
-    /// does it (`GestureDetectorState`), so this stays consistent with that
-    /// established pattern rather than inventing a second convention.
-    recognizer: RefCell<Option<Recognizer>>,
+    /// Built exactly once in `init_state` against the presentation arena.
+    recognizer: Option<Recognizer>,
 }
 
 struct Recognizer {
-    arena: GestureArena,
-    self_close: bool,
     drag: Arc<DragGestureRecognizer>,
 }
 
@@ -475,6 +458,10 @@ impl std::fmt::Debug for BackGestureDetectorState {
 }
 
 impl ViewState<BackGestureDetector> for BackGestureDetectorState {
+    fn init_state(&mut self, ctx: &dyn BuildContext) {
+        self.recognizer = Some(self.build_recognizer(ctx));
+    }
+
     fn build(&self, view: &BackGestureDetector, ctx: &dyn BuildContext) -> impl IntoView {
         self.runtime.poll_settle();
         // Renews the `Directionality` dependency every rebuild (the same
@@ -486,18 +473,13 @@ impl ViewState<BackGestureDetector> for BackGestureDetectorState {
             .direction
             .set(Directionality::maybe_of(ctx).unwrap_or(TextDirection::Ltr));
 
-        if self.recognizer.borrow().is_none() {
-            *self.recognizer.borrow_mut() = Some(self.build_recognizer(ctx));
-        }
-        let recognizer = self.recognizer.borrow();
-        let recognizer = recognizer
+        let recognizer = self
+            .recognizer
             .as_ref()
-            .expect("built immediately above if absent");
+            .expect("BUG: init_state must build the recognizer before the first build");
 
         let down_runtime = Rc::clone(&self.runtime);
         let down_drag = Arc::clone(&recognizer.drag);
-        let down_arena = recognizer.arena.clone();
-        let down_self_close = recognizer.self_close;
         let move_drag = Arc::clone(&recognizer.drag);
         let up_drag = Arc::clone(&recognizer.drag);
         let cancel_drag = Arc::clone(&recognizer.drag);
@@ -505,7 +487,7 @@ impl ViewState<BackGestureDetector> for BackGestureDetectorState {
         let listener = Listener::new()
             .behavior(HitTestBehavior::Translucent)
             .on_pointer_down(move |event| {
-                down_runtime.on_pointer_down(&down_drag, &down_arena, down_self_close, event);
+                down_runtime.on_pointer_down(&down_drag, event);
             })
             .on_pointer_move(move |event| move_drag.handle_event(event))
             .on_pointer_up(move |event| up_drag.handle_event(event))
@@ -531,7 +513,7 @@ impl ViewState<BackGestureDetector> for BackGestureDetectorState {
 
     fn dispose(&mut self) {
         self.runtime.dispose_safety_net();
-        if let Some(recognizer) = self.recognizer.get_mut() {
+        if let Some(recognizer) = self.recognizer.as_ref() {
             recognizer.drag.dispose();
         }
     }
@@ -539,12 +521,7 @@ impl ViewState<BackGestureDetector> for BackGestureDetectorState {
 
 impl BackGestureDetectorState {
     fn build_recognizer(&self, ctx: &dyn BuildContext) -> Recognizer {
-        // `get`, not `depend_on`: the arena handle never changes, matching
-        // `GestureDetectorState`'s own non-dependency lookup.
-        let arena = ctx
-            .get::<GestureArenaScope, _>(|scope| scope.arena().clone())
-            .unwrap_or_else(GestureArena::new);
-        let self_close = arena.sweep_model() == SweepModel::SelfDriven;
+        let arena = GestureArenaScope::of(ctx);
 
         let start_runtime = Rc::clone(&self.runtime);
         let update_runtime = Rc::clone(&self.runtime);
@@ -556,11 +533,7 @@ impl BackGestureDetectorState {
             .with_on_end(move |details| end_runtime.on_drag_end(details))
             .with_on_cancel(move || cancel_runtime.on_drag_cancel());
 
-        Recognizer {
-            arena,
-            self_close,
-            drag,
-        }
+        Recognizer { drag }
     }
 }
 
@@ -568,6 +541,7 @@ impl BackGestureDetectorState {
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    use flui_interaction::arena::GestureArena;
     use flui_scheduler::Scheduler;
 
     use super::*;
@@ -589,6 +563,24 @@ mod tests {
     fn controller(ms: u64) -> AnimationController {
         let scheduler = Arc::new(Scheduler::new());
         AnimationController::new(Duration::from_millis(ms), scheduler)
+    }
+
+    #[test]
+    #[should_panic(expected = "GestureArenaScope")]
+    fn detector_without_a_presentation_arena_fails_during_mount() {
+        let (navigator, _root, top) = navigator_with_two_routes();
+        let detector = BackGestureDetector::new(
+            navigator,
+            top,
+            controller(300),
+            Rc::new(|| true),
+            SizedBox::shrink(),
+        );
+        let mut owner = flui_view::BuildOwner::new();
+        let mut tree = flui_view::ElementTree::new();
+        let root = tree.mount_root(&detector, &mut owner.element_owner_mut());
+        owner.schedule_build_for(root, 0, flui_view::RebuildReason::InitialMount);
+        owner.build_scope(&mut tree);
     }
 
     /// A mounted navigator with a pushed [`PageRoute`], and that route's own
@@ -989,7 +981,7 @@ mod tests {
             flui_types::geometry::Offset::ZERO,
             flui_interaction::events::PointerType::Touch,
         );
-        runtime.on_pointer_down(&drag, &arena, false, &event);
+        runtime.on_pointer_down(&drag, &event);
         assert_eq!(
             attempts.load(Ordering::SeqCst),
             1,
@@ -1026,7 +1018,7 @@ mod tests {
             flui_types::geometry::Offset::ZERO,
             flui_interaction::events::PointerType::Touch,
         );
-        runtime.on_pointer_down(&drag, &arena, false, &down_1);
+        runtime.on_pointer_down(&drag, &down_1);
         assert!(
             runtime.gesture.borrow().is_none(),
             "on_pointer_down alone does not start a gesture (that's on_drag_start); \
@@ -1046,7 +1038,7 @@ mod tests {
         // (per `a_second_pointer_down_mid_drag_is_ignored` above) an enabled
         // predicate DOES reach `add_pointer`. The direct assertion is that
         // `enabled` itself, not a cached bool, gates this call.
-        runtime.on_pointer_down(&drag, &arena, false, &down_2);
+        runtime.on_pointer_down(&drag, &down_2);
         assert!(!(runtime.enabled)());
     }
 }

@@ -255,62 +255,36 @@ impl View for GestureDetector {
 
 ## Integration 4: Focus Management
 
-### FocusNode (flui_widgets)
+### Presentation-owned focus tree
 
 ```rust
-// crates/flui_widgets/src/focus/focus_node.rs
+use flui_interaction::{FocusManager, FocusNode};
 
-use flui_interaction::{FocusManager, FocusNodeId};
-use flui_types::events::{KeyEvent, KeyEventResult};
+let manager = FocusManager::new();
+let node = FocusNode::new();
+let attachment = manager
+    .root_scope()
+    .attach_node(&node)
+    .expect("a fresh node must attach to its presentation root");
 
-pub struct FocusNode {
-    id: FocusNodeId,
-    on_key: Option<Arc<dyn Fn(&KeyEvent) -> KeyEventResult + Send + Sync>>,
-}
+node.request_focus();
+assert!(node.has_primary_focus());
 
-impl FocusNode {
-    pub fn new() -> Self {
-        static NEXT_ID: AtomicU64 = AtomicU64::new(1);
-        Self {
-            id: FocusNodeId::new(NEXT_ID.fetch_add(1, Ordering::SeqCst)),
-            on_key: None,
-        }
-    }
-
-    pub fn request_focus(&self) {
-        FocusManager::global().request_focus(self.id);
-    }
-
-    pub fn has_focus(&self) -> bool {
-        FocusManager::global().has_focus(self.id)
-    }
-}
+// The attachment is the generation-checked lifecycle authority.
+attachment.detach();
 ```
 
-### Focus Widget
+`FocusManager` is presentation-local: there is no global fallback. Production
+embedders keep it in their `UiRealm`/binding owner and mount exactly one
+`flui_widgets::FocusRoot` around the element-tree root. `FocusRoot` publishes
+that manager's root scope and installs the standard Tab/Shift+Tab actions.
 
-```rust
-// crates/flui_widgets/src/interaction/focus.rs
-
-pub struct Focus {
-    focus_node: FocusNode,
-    autofocus: bool,
-    child: Box<dyn Widget>,
-}
-
-impl View for Focus {
-    fn build(self, ctx: &BuildContext) -> impl IntoElement {
-        if self.autofocus {
-            self.focus_node.request_focus();
-        }
-
-        // Create RenderFocus that registers with EventRouter
-        let render = RenderFocus::new(self.focus_node.id());
-
-        (render, self.child)
-    }
-}
-```
+Inside that root, `flui_widgets::Focus` owns or hosts a `FocusNode`, attaches
+it below the nearest focus provider during lifecycle initialization, reparents
+it when dependencies change, and detaches it on disposal. External nodes have
+two explicit policies: the regular `focus_node` path applies widget-provided
+overrides, while `Focus::with_external_node` leaves node attributes entirely
+caller-owned.
 
 ## Complete Event Flow Example
 

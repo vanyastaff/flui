@@ -23,6 +23,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use flui_animation::{Animation, AnimationStatus};
+use flui_interaction::events::{Key, KeyEvent, KeyState, Modifiers, NamedKey};
+use flui_interaction::routing::FocusNode;
 use flui_types::Color;
 use flui_view::prelude::*;
 
@@ -30,8 +32,8 @@ use super::modal_route::{ModalHandle, ModalRoute};
 use super::navigator::{Navigator, NavigatorHandle};
 use super::overlay_route::SimpleRoute;
 use super::route::RouteId;
-use crate::SizedBox;
 use crate::test_harness::{Harness, mount};
+use crate::{Column, Focus, SizedBox};
 
 const FRAME: Duration = Duration::from_millis(300);
 
@@ -91,6 +93,27 @@ fn plain_page() -> SimpleRoute<i32> {
     SimpleRoute::new(|_ctx| SizedBox::new(10.0, 10.0).into_view().boxed())
 }
 
+fn focus_modal(first: Rc<FocusNode>, second: Rc<FocusNode>) -> ModalRoute<i32> {
+    ModalRoute::new(
+        FRAME,
+        Rc::new(move |_ctx, _animation, _secondary| {
+            Column::new(vec![
+                Focus::new(SizedBox::new(10.0, 10.0))
+                    .focus_node(Rc::clone(&first))
+                    .into_view()
+                    .boxed(),
+                Focus::new(SizedBox::new(10.0, 10.0))
+                    .focus_node(Rc::clone(&second))
+                    .into_view()
+                    .boxed(),
+            ])
+            .into_view()
+            .boxed()
+        }),
+    )
+    .maintain_state(true)
+}
+
 /// A navigator with `bottom` seeded, mounted and settled.
 fn navigator_with_seed() -> (NavigatorHandle, Harness, RouteId) {
     let handle = NavigatorHandle::new();
@@ -119,6 +142,38 @@ fn complete_entrance(
     assert_eq!(controller.status(), AnimationStatus::Completed);
     harness.tick();
     harness.tick();
+}
+
+#[test]
+fn root_tab_traversal_stays_inside_the_top_mounted_route() {
+    let bottom_first = FocusNode::with_debug_label("bottom first");
+    let bottom_second = FocusNode::with_debug_label("bottom second");
+    let top_first = FocusNode::with_debug_label("top first");
+    let top_second = FocusNode::with_debug_label("top second");
+    let navigator = NavigatorHandle::new();
+    navigator.seed_initial(focus_modal(
+        Rc::clone(&bottom_first),
+        Rc::clone(&bottom_second),
+    ));
+    let mut harness = mount(Navigator::new(navigator.clone()));
+    assert!(bottom_first.has_primary_focus());
+
+    let _result = navigator.push(focus_modal(Rc::clone(&top_first), Rc::clone(&top_second)));
+    harness.tick();
+    assert!(
+        top_first.has_primary_focus(),
+        "activating the new route restores focus inside its own scope"
+    );
+
+    assert!(harness.focus_manager().dispatch_key_event(&KeyEvent {
+        state: KeyState::Down,
+        key: Key::Named(NamedKey::Tab),
+        modifiers: Modifiers::empty(),
+        ..KeyEvent::default()
+    }));
+    assert!(top_second.has_primary_focus());
+    assert!(!bottom_first.has_primary_focus());
+    assert!(!bottom_second.has_primary_focus());
 }
 
 // ============================================================================
@@ -355,15 +410,24 @@ fn modal_setting_offstage_to_the_same_value_is_a_noop() {
     let modal_handle = route.handle();
     let _result = navigator.push(route);
     harness.tick();
-    assert_eq!(built.get(), 1);
+    // Focus activation is delivered after the navigator history lock is
+    // released and schedules the route scope's normal focus-state rebuild for
+    // the next frame. Settle that independent work before measuring whether
+    // the offstage setter itself dirties the entry.
+    harness.tick();
+    let settled_builds = built.get();
 
     modal_handle.set_offstage(false);
     harness.tick();
-    assert_eq!(built.get(), 1, "no change, no rebuild");
+    assert_eq!(built.get(), settled_builds, "no change, no rebuild");
 
     modal_handle.set_offstage(true);
     harness.tick();
-    assert_eq!(built.get(), 2, "a real change rebuilds the entry");
+    assert_eq!(
+        built.get(),
+        settled_builds + 1,
+        "a real change rebuilds the entry"
+    );
 }
 
 // ============================================================================

@@ -94,8 +94,8 @@ use flui_types::styling::BorderRadius;
 use flui_view::RebuildHandle;
 use flui_view::prelude::*;
 use flui_widgets::{
-    ConstrainedBox, IconTheme, IconThemeData, WidgetState, WidgetStateProperty, WidgetStates,
-    WidgetStatesController,
+    Center, ConstrainedBox, IconTheme, IconThemeData, WidgetState, WidgetStateProperty,
+    WidgetStates, WidgetStatesController,
 };
 
 use crate::button_style_button::PressCallback;
@@ -297,7 +297,7 @@ impl ViewState<FloatingActionButton> for FloatingActionButtonState {
 
         let rebuild_for_listener = rebuild.clone();
         self.states_listener = Some(self.states.add_listener(Arc::new(move || {
-            rebuild_for_listener.schedule();
+            rebuild_for_listener.schedule(flui_view::RebuildReason::StateChange);
         })));
 
         self.rebuild = Some(rebuild);
@@ -361,7 +361,11 @@ impl ViewState<FloatingActionButton> for FloatingActionButtonState {
             view.child.clone(),
         );
 
-        let mut ink_well = InkWell::new(icon)
+        // Center the icon within the FAB's tight 56×56 box. Flutter's
+        // `RawMaterialButton` wraps the child in `Center(widthFactor: 1.0,
+        // heightFactor: 1.0)`; without it the icon pins to the top-left of the
+        // constrained box instead of the middle.
+        let mut ink_well = InkWell::new(Center::new().child(icon))
             .shape(shape)
             .overlay_color(overlay_color)
             .states_controller(self.states.clone());

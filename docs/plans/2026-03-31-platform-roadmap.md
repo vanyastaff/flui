@@ -274,55 +274,12 @@ fix(platform): remove unsound unsafe in HeadlessPlatform::capabilities()
 
 ---
 
-### Task 6: Fix ForegroundExecutor per-task runtime
+### Task 6: Legacy public UI task queue (superseded)
 
-**Files:**
-- Modify: `crates/flui-platform/src/executor.rs`
-
-**Step 1: Replace per-task runtime with simple closure execution**
-
-The ForegroundExecutor sends closures to the main thread via flume channel.
-For simple futures (`async { 42 }`), we don't need a tokio runtime at all —
-just `block_on` with a simple executor or use `futures_lite::future::block_on`.
-
-```rust
-pub fn spawn<R: Send + 'static>(
-    &self,
-    future: impl Future<Output = R> + Send + 'static,
-) -> Task<R> {
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    let sender = self.sender.clone();
-
-    if let Err(e) = sender.send(Box::new(move || {
-        // Use the existing background runtime handle for polling
-        // instead of creating a new runtime per task
-        let result = futures_lite::future::block_on(future);
-        let _ = tx.send(result);
-    })) {
-        tracing::error!("Failed to send task: {:?}", e);
-    }
-
-    Task::from_handle(tokio::task::spawn(async move {
-        rx.await.expect("Foreground task dropped")
-    }))
-}
-```
-
-Or even simpler — if the future is just `async { value }`, `block_on` completes immediately.
-
-**Step 2: Add `futures-lite` dependency if needed**
-
-Check if `futures-lite` is available or use `pollster::block_on` (lighter weight).
-
-**Step 3: Verify and commit**
-
-```bash
-rtk cargo test -p flui-platform --lib
-```
-
-```
-perf(platform): remove per-task tokio runtime in ForegroundExecutor
-```
+ADR-0027 superseded this task. A generic public closure queue cannot express
+event-loop wakeup, bounded admission, owner affinity, or shutdown. The public
+queue was removed; each backend now owns its thread-affine control path, while
+`BackgroundExecutor` remains the cross-thread data-plane executor.
 
 ---
 
@@ -614,7 +571,8 @@ impl PlatformExecutor for WebExecutor {
 }
 ```
 
-**Note:** On WASM, background executor = foreground executor (single-threaded). Both use `spawn_local`.
+**Note:** On WASM, the background executor uses `spawn_local`; owner work is
+driven by browser callbacks rather than a second executor API.
 
 **Step 2: Commit**
 
@@ -624,34 +582,28 @@ feat(platform): web executor via wasm-bindgen-futures
 
 ---
 
-### Task 12: Web cursor styles
+### Task 12: Web cursor styles — superseded by presentation ownership
 
 **Files:**
-- Modify: `crates/flui-platform/src/platforms/web/platform.rs`
+- Modify: `crates/flui-platform/src/platforms/web/window.rs`
 
-**Step 1: CSS cursor mapping**
+The original process-wide `Platform::set_cursor_style(CursorStyle)` design was
+deleted. Cursor selection is a property of one presentation and one canvas,
+using the same `cursor_icon::CursorIcon` type end to end:
 
 ```rust
-fn set_cursor_style(&self, style: CursorStyle) {
-    let css_cursor = match style {
-        CursorStyle::Arrow => "default",
-        CursorStyle::IBeam => "text",
-        CursorStyle::Crosshair => "crosshair",
-        CursorStyle::PointingHand => "pointer",
-        CursorStyle::ResizeLeftRight => "ew-resize",
-        CursorStyle::ResizeUpDown => "ns-resize",
-        CursorStyle::OperationNotAllowed => "not-allowed",
-        // ... map all variants ...
-    };
-    self.canvas.style().set_property("cursor", css_cursor).ok();
+fn set_cursor(&self, cursor: CursorIcon) -> Result<(), CursorError> {
+    self.canvas
+        .style()
+        .set_property("cursor", cursor.name())
+        .map_err(|error| CursorError::Backend(format!("{error:?}")))
 }
 ```
 
-**Step 2: Commit**
-
-```
-feat(platform): web cursor styles via CSS cursor property
-```
+`PresentationState` wires its owner-local `MouseTracker` directly to the exact
+`PlatformWindow`; the web implementation therefore updates only its own
+canvas. No global body style, parallel enum, bridge, or conversion table
+remains.
 
 ---
 
@@ -863,7 +815,7 @@ Task 2 (Remove request_frame)      ← Breaking, parallel with 1
 Task 3 (Fix run() signature)       ← Breaking, parallel with 1-2
 Task 4 (Clean WindowMode/Event)    ← Breaking, parallel with 1-3
 Task 5 (Fix HeadlessPlatform)       ← Independent, any time
-Task 6 (Fix ForegroundExecutor)     ← Independent, any time
+Task 6 (Remove legacy UI queue)     ← Superseded by ADR-0027
 --- Phase 1 complete: clean Platform trait ---
 Task 7-12 (Web platform)           ← After Phase 1
 Task 13 (Web test)                  ← After 7-12

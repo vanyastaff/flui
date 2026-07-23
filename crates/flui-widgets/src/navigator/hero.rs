@@ -630,7 +630,7 @@ impl HeroHandle {
     /// `if (mounted)` guard is (`heroes.dart:403`).
     fn request_rebuild(&self) {
         if let Some(rebuild) = self.inner.rebuild.lock().as_ref() {
-            rebuild.schedule();
+            rebuild.schedule(flui_view::RebuildReason::AnimationTick);
         }
     }
 }

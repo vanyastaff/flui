@@ -105,11 +105,11 @@ fn layout_request_routes_through_the_boundary_walk() {
 
     // Raw pipeline handle, Layout kind: the drain must route through
     // mark_needs_layout (boundary walk + dedup), not push a raw queue
-    // entry. The requested depth is deliberately wrong — the live
-    // node's state is authoritative.
+    // entry. Only identity and intent cross threads; tree metadata stays
+    // owner-authoritative.
     let pipeline_handle = owner.handle();
     pipeline_handle
-        .request_mark_dirty(node, 999, DirtyKind::Layout)
+        .request_mark_dirty(node, DirtyKind::Layout)
         .expect("owner alive");
 
     let (owner, painted) = frame(owner);

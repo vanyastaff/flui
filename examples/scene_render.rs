@@ -39,33 +39,12 @@ use std::sync::{Arc, Mutex};
 use flui_engine::wgpu::Renderer;
 use flui_hot_reload::HotReloadDriver;
 use flui_layer::{CanvasLayer, Layer, LayerTree, Scene};
-use flui_platform::{WindowOptions, current_platform, traits::PlatformWindow};
+use flui_platform::{WindowOptions, current_platform};
 use flui_types::{
     geometry::{Rect, Size, px},
     painting::Paint,
     styling::Color,
 };
-
-/// Wrapper for raw-window-handle bridging
-struct PlatformWindowHandle {
-    window: Arc<dyn PlatformWindow>,
-}
-
-impl raw_window_handle::HasWindowHandle for PlatformWindowHandle {
-    fn window_handle(
-        &self,
-    ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
-        self.window.window_handle()
-    }
-}
-
-impl raw_window_handle::HasDisplayHandle for PlatformWindowHandle {
-    fn display_handle(
-        &self,
-    ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
-        self.window.display_handle()
-    }
-}
 
 /// Build a scene with colored rectangles (fallback when no plugin is loaded).
 fn build_test_scene(width: f32, height: f32) -> Scene {
@@ -147,11 +126,9 @@ fn main() {
     };
 
     // Create window before running the event loop (run() takes ownership)
-    let window: Arc<dyn PlatformWindow> = Arc::from(
-        platform
-            .open_window(options)
-            .expect("Failed to open window"),
-    );
+    let window = platform
+        .open_window(options)
+        .expect("Failed to open window");
 
     tracing::info!(
         "Window created: {:?} @ {:.1}x scale",
@@ -159,13 +136,8 @@ fn main() {
         window.scale_factor()
     );
 
-    // Create Renderer from PlatformWindow
-    let handle = PlatformWindowHandle {
-        window: window.clone(),
-    };
-
     let mut renderer =
-        pollster::block_on(Renderer::new(&handle)).expect("Failed to create GPU renderer");
+        pollster::block_on(Renderer::new(window.as_ref())).expect("Failed to create GPU renderer");
 
     let phys = window.physical_size();
     renderer.resize(phys.width.0 as u32, phys.height.0 as u32);

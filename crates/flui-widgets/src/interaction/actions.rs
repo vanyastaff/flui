@@ -573,12 +573,22 @@ impl Intent for PreviousFocusIntent {}
 /// The key result is **what the traversal did**: `Handled` when focus moved,
 /// `SkipRemainingHandlers` when it did not (a `Stop` edge with nowhere to go),
 /// so an unmoved Tab keeps bubbling instead of being swallowed (`:2340-2348`).
-#[derive(Debug, Clone, Copy, Default)]
-pub struct NextFocusAction;
+#[derive(Debug, Clone)]
+pub struct NextFocusAction {
+    focus_manager: Rc<FocusManager>,
+}
+
+impl NextFocusAction {
+    /// Bind traversal to one presentation's focus owner.
+    #[must_use]
+    pub fn new(focus_manager: Rc<FocusManager>) -> Self {
+        Self { focus_manager }
+    }
+}
 
 impl Action<NextFocusIntent> for NextFocusAction {
     fn invoke(&self, _intent: &NextFocusIntent) -> ActionOutcome {
-        if FocusManager::global().focus_next() {
+        if self.focus_manager.focus_next() {
             ActionOutcome::Performed
         } else {
             ActionOutcome::NotPerformed
@@ -589,12 +599,22 @@ impl Action<NextFocusIntent> for NextFocusAction {
 /// Steps the focus backwards — `PreviousFocusAction`
 /// (`focus_traversal.dart:2350-2368`). Same result contract as
 /// [`NextFocusAction`].
-#[derive(Debug, Clone, Copy, Default)]
-pub struct PreviousFocusAction;
+#[derive(Debug, Clone)]
+pub struct PreviousFocusAction {
+    focus_manager: Rc<FocusManager>,
+}
+
+impl PreviousFocusAction {
+    /// Bind reverse traversal to one presentation's focus owner.
+    #[must_use]
+    pub fn new(focus_manager: Rc<FocusManager>) -> Self {
+        Self { focus_manager }
+    }
+}
 
 impl Action<PreviousFocusIntent> for PreviousFocusAction {
     fn invoke(&self, _intent: &PreviousFocusIntent) -> ActionOutcome {
-        if FocusManager::global().focus_previous() {
+        if self.focus_manager.focus_previous() {
             ActionOutcome::Performed
         } else {
             ActionOutcome::NotPerformed

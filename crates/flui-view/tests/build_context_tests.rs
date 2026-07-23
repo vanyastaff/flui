@@ -8,8 +8,9 @@
 // Send + Sync to satisfy clippy. Future UiRealm/Rc migration should remove this.
 #![allow(clippy::arc_with_non_send_sync)]
 
-use std::{any::TypeId, sync::Arc};
+use std::{any::TypeId, rc::Rc, sync::Arc};
 
+use flui_interaction::FocusManager;
 use flui_view::{
     BuildContext, BuildContextExt, BuildOwner, ElementBuildContext, ElementBuildContextBuilder,
     ElementTree, IntoView, Lifecycle, StatelessView, View, ViewExt,
@@ -129,6 +130,19 @@ fn test_context_creation_nonexistent_element() {
     let ctx = ElementBuildContext::for_element(fake_id, tree, owner);
 
     assert!(ctx.is_none());
+}
+
+#[test]
+fn context_returns_its_build_owners_exact_focus_manager() {
+    let focus_manager = FocusManager::new();
+    let tree = Arc::new(RwLock::new(ElementTree::new()));
+    let owner = Arc::new(RwLock::new(BuildOwner::with_focus_manager(Rc::clone(
+        &focus_manager,
+    ))));
+    let context =
+        ElementBuildContext::new(flui_foundation::ElementId::new(1), 0, true, tree, owner);
+
+    assert!(Rc::ptr_eq(&context.focus_manager(), &focus_manager));
 }
 
 #[test]
@@ -256,7 +270,11 @@ fn test_mounted_deactivated_element() {
     let root_id = tree
         .write()
         .mount_root(&view, &mut owner.write().element_owner_mut());
-    tree.write().deactivate(root_id);
+    {
+        let mut owner = owner.write();
+        tree.write()
+            .deactivate(root_id, &mut owner.element_owner_mut());
+    }
 
     // Note: Context is created with mounted status at creation time
     // After deactivation, we need to check the element directly
@@ -601,7 +619,7 @@ fn rebuild_handle_from_element_build_context_is_active_and_bound() {
     assert_eq!(handle.element_id(), Some(root_id));
 
     // Scheduling routes into the same inbox `build_scope` drains.
-    handle.schedule();
+    handle.schedule(flui_view::RebuildReason::StateChange);
     assert_eq!(owner.read().pending_external_builds(), 1);
 }
 

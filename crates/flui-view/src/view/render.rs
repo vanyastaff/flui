@@ -114,8 +114,8 @@ impl<'a> RenderObjectContext<'a> {
     /// the element was mounted detached, or the owner is gone.
     pub fn register_mouse_region(
         &self,
-        callbacks: flui_interaction::MouseRegionCallbacks,
-    ) -> Result<flui_interaction::MouseRegionTarget, RenderObjectContextError> {
+        callbacks: flui_interaction::routing::MouseRegionCallbacks,
+    ) -> Result<flui_interaction::routing::MouseRegionTarget, RenderObjectContextError> {
         Ok(self.dispatch_handle()?.register_mouse_region(callbacks)?)
     }
 
@@ -128,8 +128,8 @@ impl<'a> RenderObjectContext<'a> {
     /// or for a target that no longer belongs to the active owner lane.
     pub fn replace_mouse_region(
         &self,
-        target: flui_interaction::MouseRegionTarget,
-        callbacks: flui_interaction::MouseRegionCallbacks,
+        target: flui_interaction::routing::MouseRegionTarget,
+        callbacks: flui_interaction::routing::MouseRegionCallbacks,
     ) -> Result<(), RenderObjectContextError> {
         Ok(self
             .dispatch_handle()?
@@ -148,7 +148,7 @@ impl<'a> RenderObjectContext<'a> {
     /// or for a target already removed from the active owner lane.
     pub fn unregister_mouse_region(
         &self,
-        target: flui_interaction::MouseRegionTarget,
+        target: flui_interaction::routing::MouseRegionTarget,
     ) -> Result<(), RenderObjectContextError> {
         Ok(self.dispatch_handle()?.unregister_mouse_region(target)?)
     }

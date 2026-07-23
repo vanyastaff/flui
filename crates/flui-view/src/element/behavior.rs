@@ -97,6 +97,7 @@ where
         handle.dep_sink,
         core.rebuild_handle(),
         crate::context::BuildCapabilities {
+            focus_manager: std::rc::Rc::clone(owner.focus_manager),
             async_driver: owner.async_driver.clone(),
             post_frame_handle: owner.post_frame_handle.clone(),
             text_input_handle: owner.text_input_handle.clone(),
@@ -868,7 +869,7 @@ where
 /// Stored as `HashMap<ElementId, usize>` — dependent id mapped to its
 /// depth in the element tree. The depth is captured at
 /// `depend_on_inherited` time and used during `on_view_updated` to call
-/// `ElementOwner::schedule_build_for(dep_id, dep_depth)` without an
+/// `ElementOwner::schedule_build_for` with a typed rebuild reason, without an
 /// extra tree traversal (the tree is not in scope at `on_view_updated`
 /// time because we only see `ElementCore<V, A>`).
 ///
@@ -896,7 +897,7 @@ pub struct InheritedBehavior<V: InheritedView> {
     ///
     /// Maps each dependent's `ElementId` -> its tree depth (captured at
     /// the time `depend_on_inherited` was called). The depth is needed
-    /// for `BuildOwner::schedule_build_for(id, depth)` so the rebuild
+    /// for `BuildOwner::schedule_build_for(id, depth, reason)` so the rebuild
     /// heap orders dependents correctly without a separate tree walk.
     pub dependents: HashMap<ElementId, usize>,
     /// Marker for view type.
@@ -925,12 +926,12 @@ impl<V: InheritedView> InheritedBehavior<V> {
     /// Idempotent: re-registering the same `element` overwrites its
     /// stored depth (depths can change across reconciliation, so the
     /// latest call wins). HashMap inherently dedups on key.
-    pub fn add_dependent(&mut self, element: ElementId, depth: usize) {
+    pub(crate) fn add_dependent(&mut self, element: ElementId, depth: usize) {
         self.dependents.insert(element, depth);
     }
 
     /// Remove a dependent element.
-    pub fn remove_dependent(&mut self, element: ElementId) {
+    pub(crate) fn remove_dependent(&mut self, element: ElementId) {
         self.dependents.remove(&element);
     }
 
@@ -953,6 +954,10 @@ where
 
     fn record_dependent(&mut self, dependent: ElementId, depth: usize) {
         self.add_dependent(dependent, depth);
+    }
+
+    fn remove_dependent(&mut self, dependent: ElementId) {
+        self.remove_dependent(dependent);
     }
 }
 
@@ -1018,7 +1023,7 @@ where
                 // exactly once per dependency-change-then-rebuild
                 // cycle, strictly before the build.
                 owner.note_dependency_change(dep_id);
-                owner.schedule_build_for(dep_id, dep_depth);
+                owner.schedule_build_for(dep_id, dep_depth, crate::RebuildReason::DependencyChange);
             }
         } else {
             tracing::trace!(
@@ -1027,10 +1032,17 @@ where
         }
     }
 
-    fn on_unmount(&mut self, _core: &mut ElementCore<V, A>, _owner: &mut crate::ElementOwner<'_>) {
-        // Clear dependents on unmount; stale ids would otherwise be
-        // pushed onto `BuildOwner::dirty_elements` heap on a subsequent
-        // view-update.
+    fn on_unmount(&mut self, core: &mut ElementCore<V, A>, owner: &mut crate::ElementOwner<'_>) {
+        // Release the reverse half before dropping the provider's forward
+        // notification map. Normal subtree teardown already removed every
+        // dependent during its own lifecycle transition; this also covers a
+        // provider being torn down independently and keeps the two indexes
+        // symmetric.
+        if let Some(provider) = core.self_id() {
+            for dependent in self.dependents.keys().copied() {
+                owner.unregister_inherited_dependency(dependent, provider);
+            }
+        }
         let count = self.dependents.len();
         self.dependents.clear();
         tracing::debug!("InheritedBehavior::on_unmount cleared {} dependents", count);
@@ -1159,7 +1171,7 @@ where
 
         // Then subscribe to the listenable
         let listenable = core.view().listenable();
-        let mark_dirty = core.create_mark_dirty_callback();
+        let mark_dirty = core.create_mark_dirty_callback(crate::RebuildReason::AnimationTick);
 
         self.listener_id = Some(listenable.add_listener(mark_dirty));
 
@@ -1230,7 +1242,7 @@ where
                 old_listenable.remove_listener(listener_id);
             }
 
-            let mark_dirty = core.create_mark_dirty_callback();
+            let mark_dirty = core.create_mark_dirty_callback(crate::RebuildReason::AnimationTick);
             self.listener_id = Some(new_listenable.add_listener(mark_dirty));
 
             tracing::debug!(

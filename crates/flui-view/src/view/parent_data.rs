@@ -293,7 +293,7 @@ mod tests {
             "a freshly-mounted ParentData element reports is_dirty() == true",
         );
 
-        owner.schedule_build_for(root, 0);
+        owner.schedule_build_for(root, 0, crate::RebuildReason::InitialMount);
         owner.build_scope(&mut tree);
 
         let child_ids = tree.get(root).unwrap().child_ids().to_vec();

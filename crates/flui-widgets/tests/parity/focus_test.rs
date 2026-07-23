@@ -33,15 +33,10 @@
 //!   node-API assertions any more portable; see *Ported cases* below for the
 //!   one case this newly unlocked.
 //!
-//! `FocusManager::global()` is an owner-thread (thread-local) singleton
-//! (`crates/flui-interaction/src/routing/focus.rs`); nextest's libtest runner
-//! reuses OS threads across many `#[test]` functions in this binary, so every
-//! case below takes [`FOCUS_TEST_LOCK`] and explicitly `unfocus()`s /
-//! detaches whatever it attached, mirroring `flui-interaction`'s own
-//! `GLOBAL_FOCUS_LOCK` convention (`routing/focus_scope.rs`) and
-//! `flui-widgets`' crate-private `FOCUS_TEST_LOCK`
-//! (`src/test_harness.rs`, unreachable from this external integration-test
-//! crate).
+//! Focus ownership is presentation-local. Node-level cases create an isolated
+//! [`FocusManager`] directly; widget-mounted cases use the exact manager owned
+//! by the headless layout harness. No ambient owner or cross-test lock is
+//! involved, so these cases remain parallel-safe under nextest.
 //!
 //! ## Ported cases
 //! - `'Can add children to scope and focus'` (focus_manager_test.dart) —
@@ -266,21 +261,14 @@
 //! Widget → node mapping: `Focus` → `FocusNode`, `FocusScope` →
 //! `FocusScopeNode`, both via `flui-interaction`'s `routing` module.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use flui_interaction::{FocusManager, FocusNode, FocusScopeNode};
 use flui_widgets::prelude::*;
 use flui_widgets::{Column, Focus, FocusScope, SizedBox};
-use parking_lot::Mutex;
 
 use crate::common::{lay_out, loose};
-
-/// Conservatively serializes this file's focus fixtures on top of
-/// `FocusManager::global()`'s owner-thread singleton — see the module doc.
-static FOCUS_TEST_LOCK: Mutex<()> = Mutex::new(());
 
 /// A leaf big enough to mount without tripping any zero-size edge case, and
 /// otherwise inert — geometry is not what these tests assert about.
@@ -296,7 +284,8 @@ fn leaf() -> SizedBox {
 /// a `Column`, with no explicit `FocusScope` wrapper — matching the bare
 /// `Column(children: [TestFocus, TestFocus])` shape most `focus_scope_test
 /// .dart`/`focus_manager_test.dart` cases mount. Falls back to
-/// `FocusManager::global().root_scope()` (`Focus`'s own documented fallback).
+/// the mounted tree's presentation-owned root scope (`Focus`'s documented
+/// fallback).
 ///
 /// Both `Column` slots are always present — a hidden slot renders an inert
 /// placeholder rather than being omitted from the list. `Column`'s
@@ -307,8 +296,8 @@ fn leaf() -> SizedBox {
 /// actually unmounting the node this fixture means to remove.
 #[derive(Clone, StatelessView)]
 struct TwoFocusHost {
-    a: Arc<FocusNode>,
-    b: Arc<FocusNode>,
+    a: Rc<FocusNode>,
+    b: Rc<FocusNode>,
     show_a: bool,
     show_b: bool,
     a_autofocus: bool,
@@ -319,7 +308,7 @@ impl StatelessView for TwoFocusHost {
     fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
         let slot_a: BoxedView = if self.show_a {
             Focus::new(leaf())
-                .focus_node(Arc::clone(&self.a))
+                .focus_node(Rc::clone(&self.a))
                 .autofocus(self.a_autofocus)
                 .into_view()
                 .boxed()
@@ -328,7 +317,7 @@ impl StatelessView for TwoFocusHost {
         };
         let slot_b: BoxedView = if self.show_b {
             Focus::new(leaf())
-                .focus_node(Arc::clone(&self.b))
+                .focus_node(Rc::clone(&self.b))
                 .autofocus(self.b_autofocus)
                 .into_view()
                 .boxed()
@@ -344,21 +333,21 @@ impl StatelessView for TwoFocusHost {
 /// parent.'`'s shape.
 #[derive(Clone, StatelessView)]
 struct NestedScopeHost {
-    parent: Arc<FocusScopeNode>,
-    child: Arc<FocusScopeNode>,
+    parent: Rc<FocusScopeNode>,
+    child: Rc<FocusScopeNode>,
     show_child: bool,
 }
 
 impl StatelessView for NestedScopeHost {
     fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
         let inner: BoxedView = if self.show_child {
-            FocusScope::with_external_node(Arc::clone(&self.child), leaf())
+            FocusScope::with_external_node(Rc::clone(&self.child), leaf())
                 .into_view()
                 .boxed()
         } else {
             leaf().into_view().boxed()
         };
-        FocusScope::with_external_node(Arc::clone(&self.parent), inner)
+        FocusScope::with_external_node(Rc::clone(&self.parent), inner)
     }
 }
 
@@ -373,21 +362,32 @@ impl StatelessView for NestedScopeHost {
 /// which child holds focus.
 #[test]
 fn can_add_children_to_scope_and_focus_contrasts_has_focus_and_has_primary_focus() {
-    let _guard = FOCUS_TEST_LOCK.lock();
-    let manager = FocusManager::global();
-    manager.unfocus();
-
+    let manager = FocusManager::new();
     let scope = FocusScopeNode::with_debug_label("add-children-scope");
-    manager.root_scope().attach_node(scope.as_focus_node());
+    let _scope_attachment = manager
+        .root_scope()
+        .attach_node(scope.as_focus_node())
+        .expect("the isolated manager accepts the scope");
     let parent = FocusNode::with_debug_label("parent");
-    scope.attach_node(&parent);
+    let _parent_attachment = scope
+        .attach_node(&parent)
+        .expect("the scope accepts the parent node");
     let child1 = FocusNode::with_debug_label("child1");
-    parent.attach_node(&child1);
+    let _child1_attachment = parent
+        .attach_node(&child1)
+        .expect("the parent accepts child1");
     let child2 = FocusNode::with_debug_label("child2");
-    parent.attach_node(&child2);
+    let _child2_attachment = parent
+        .attach_node(&child2)
+        .expect("the parent accepts child2");
 
     child1.request_focus();
-    assert_eq!(scope.focused_child(), Some(child1.id()));
+    assert!(
+        scope
+            .focused_child()
+            .is_some_and(|node| Rc::ptr_eq(&node, &child1)),
+        "the scope remembers the exact focused child"
+    );
     assert!(
         parent.has_focus(),
         "an ancestor of the focused node reports hasFocus"
@@ -402,16 +402,18 @@ fn can_add_children_to_scope_and_focus_contrasts_has_focus_and_has_primary_focus
     assert!(!child2.has_primary_focus());
 
     child2.request_focus();
-    assert_eq!(scope.focused_child(), Some(child2.id()));
+    assert!(
+        scope
+            .focused_child()
+            .is_some_and(|node| Rc::ptr_eq(&node, &child2)),
+        "focus history now names the exact second child"
+    );
     assert!(parent.has_focus());
     assert!(!parent.has_primary_focus());
     assert!(!child1.has_focus());
     assert!(!child1.has_primary_focus());
     assert!(child2.has_focus());
     assert!(child2.has_primary_focus());
-
-    manager.unfocus();
-    manager.root_scope().detach_node(scope.as_focus_node().id());
 }
 
 /// Oracle: `'Can focus root node.'` (focus_scope_test.dart).
@@ -421,16 +423,11 @@ fn can_add_children_to_scope_and_focus_contrasts_has_focus_and_has_primary_focus
 /// root scope's own backing node is exercised directly.
 #[test]
 fn can_focus_the_root_scope_directly() {
-    let _guard = FOCUS_TEST_LOCK.lock();
-    let manager = FocusManager::global();
-    manager.unfocus();
-
+    let manager = FocusManager::new();
     let root = manager.root_scope().as_focus_node();
     root.request_focus();
 
     assert!(root.has_primary_focus(), "the root scope itself can focus");
-
-    manager.unfocus();
 }
 
 /// Oracle: `'Focus changes notify listeners.'` (focus_manager_test.dart).
@@ -443,43 +440,45 @@ fn can_focus_the_root_scope_directly() {
 /// changes, not Flutter's one batched notification.
 #[test]
 fn focus_changes_notify_listeners_on_each_synchronous_request() {
-    let _guard = FOCUS_TEST_LOCK.lock();
-    let manager = FocusManager::global();
-    manager.unfocus();
-
+    let manager = FocusManager::new();
     let scope = FocusScopeNode::with_debug_label("notify-scope");
-    manager.root_scope().attach_node(scope.as_focus_node());
+    let _scope_attachment = manager
+        .root_scope()
+        .attach_node(scope.as_focus_node())
+        .expect("the isolated manager accepts the scope");
     let child1 = FocusNode::with_debug_label("child1");
-    scope.attach_node(&child1);
+    let _child1_attachment = scope
+        .attach_node(&child1)
+        .expect("the scope accepts child1");
     let child2 = FocusNode::with_debug_label("child2");
-    scope.attach_node(&child2);
+    let _child2_attachment = scope
+        .attach_node(&child2)
+        .expect("the scope accepts child2");
 
-    let notify_count = Arc::new(AtomicUsize::new(0));
-    let counter = Arc::clone(&notify_count);
+    let notify_count = Rc::new(Cell::new(0));
+    let counter = Rc::clone(&notify_count);
     let listener_id = manager.add_listener(Rc::new(move |_previous, _new| {
-        counter.fetch_add(1, Ordering::SeqCst);
+        counter.set(counter.get() + 1);
     }));
 
     child1.request_focus();
-    assert_eq!(notify_count.load(Ordering::SeqCst), 1);
+    assert_eq!(notify_count.get(), 1);
 
-    notify_count.store(0, Ordering::SeqCst);
+    notify_count.set(0);
     child2.request_focus();
     child1.request_focus();
     assert_eq!(
-        notify_count.load(Ordering::SeqCst),
+        notify_count.get(),
         2,
         "two real focus changes, notified synchronously per change — not \
          batched into Flutter's single end-of-frame notification"
     );
 
-    notify_count.store(0, Ordering::SeqCst);
+    notify_count.set(0);
     child1.unfocus();
-    assert_eq!(notify_count.load(Ordering::SeqCst), 1);
+    assert_eq!(notify_count.get(), 1);
 
     manager.remove_listener(listener_id);
-    manager.unfocus();
-    manager.root_scope().detach_node(scope.as_focus_node().id());
 }
 
 /// Oracle: `'canRequestFocus causes descendants of scope to be skipped.'`
@@ -494,16 +493,18 @@ fn focus_changes_notify_listeners_on_each_synchronous_request() {
 /// `hasFocus, isTrue`), and a fresh descendant request still succeeds.
 #[test]
 fn can_request_focus_on_a_plain_focus_does_not_restrict_its_descendants() {
-    let _guard = FOCUS_TEST_LOCK.lock();
-    let manager = FocusManager::global();
-    manager.unfocus();
-
+    let manager = FocusManager::new();
     let scope = FocusScopeNode::with_debug_label("plain-gate-scope");
-    manager.root_scope().attach_node(scope.as_focus_node());
+    let _scope_attachment = manager
+        .root_scope()
+        .attach_node(scope.as_focus_node())
+        .expect("the isolated manager accepts the scope");
     let focus1 = FocusNode::with_debug_label("focus1");
-    scope.attach_node(&focus1);
+    let _focus1_attachment = scope
+        .attach_node(&focus1)
+        .expect("the scope accepts focus1");
     let focus2 = FocusNode::with_debug_label("focus2");
-    focus1.attach_node(&focus2);
+    let _focus2_attachment = focus1.attach_node(&focus2).expect("focus1 accepts focus2");
 
     focus2.request_focus();
     assert!(focus2.has_primary_focus());
@@ -522,9 +523,6 @@ fn can_request_focus_on_a_plain_focus_does_not_restrict_its_descendants() {
         focus2.has_primary_focus(),
         "an ancestor Focus's canRequestFocus(false) does not restrict a descendant"
     );
-
-    manager.unfocus();
-    manager.root_scope().detach_node(scope.as_focus_node().id());
 }
 
 /// Oracle: `'canRequestFocus causes descendants of scope to be skipped.'`
@@ -545,16 +543,18 @@ fn can_request_focus_on_a_plain_focus_does_not_restrict_its_descendants() {
 /// focused and the eviction assertion failed.
 #[test]
 fn can_request_focus_on_a_scope_restricts_its_descendants() {
-    let _guard = FOCUS_TEST_LOCK.lock();
-    let manager = FocusManager::global();
-    manager.unfocus();
-
+    let manager = FocusManager::new();
     let scope = FocusScopeNode::with_debug_label("scope-gate-scope");
-    manager.root_scope().attach_node(scope.as_focus_node());
+    let _scope_attachment = manager
+        .root_scope()
+        .attach_node(scope.as_focus_node())
+        .expect("the isolated manager accepts the scope");
     let focus1 = FocusNode::with_debug_label("focus1");
-    scope.attach_node(&focus1);
+    let _focus1_attachment = scope
+        .attach_node(&focus1)
+        .expect("the scope accepts focus1");
     let focus2 = FocusNode::with_debug_label("focus2");
-    focus1.attach_node(&focus2);
+    let _focus2_attachment = focus1.attach_node(&focus2).expect("focus1 accepts focus2");
 
     // `focus2` already holds focus when the scope is disabled — the
     // mid-focus eviction case.
@@ -570,7 +570,7 @@ fn can_request_focus_on_a_scope_restricts_its_descendants() {
         !focus2.has_focus(),
         "disabling the scope evicts the descendant's already-held focus"
     );
-    assert_eq!(manager.primary_focus(), None);
+    assert!(manager.primary_focus().is_none());
 
     // While still disabled, a fresh request is refused too.
     focus2.request_focus();
@@ -578,7 +578,7 @@ fn can_request_focus_on_a_scope_restricts_its_descendants() {
         !focus2.has_primary_focus(),
         "the scope's own canRequestFocus(false) blocks every descendant"
     );
-    assert_eq!(manager.primary_focus(), None);
+    assert!(manager.primary_focus().is_none());
 
     scope.as_focus_node().set_can_request_focus(true);
     focus2.request_focus();
@@ -587,9 +587,6 @@ fn can_request_focus_on_a_scope_restricts_its_descendants() {
         focus2.has_primary_focus(),
         "re-enabling the scope restores descendant focus"
     );
-
-    manager.unfocus();
-    manager.root_scope().detach_node(scope.as_focus_node().id());
 }
 
 // ============================================================================
@@ -599,16 +596,12 @@ fn can_request_focus_on_a_scope_restricts_its_descendants() {
 /// Oracle: `'Can focus'` (focus_scope_test.dart).
 #[test]
 fn can_focus_via_request_focus() {
-    let _guard = FOCUS_TEST_LOCK.lock();
-    let manager = FocusManager::global();
-    manager.unfocus();
-
     let a = FocusNode::with_debug_label("a");
     let b = FocusNode::with_debug_label("b");
     let _laid = lay_out(
         TwoFocusHost {
-            a: Arc::clone(&a),
-            b: Arc::clone(&b),
+            a: Rc::clone(&a),
+            b: Rc::clone(&b),
             show_a: true,
             show_b: false,
             a_autofocus: false,
@@ -621,25 +614,18 @@ fn can_focus_via_request_focus() {
     a.request_focus();
 
     assert!(a.has_focus());
-
-    manager.unfocus();
-    manager.root_scope().detach_node(a.id());
 }
 
 /// Oracle: `'Can unfocus'` (focus_scope_test.dart) — focus gain/loss
 /// ordering: focusing sibling B unfocuses sibling A.
 #[test]
 fn can_unfocus_by_focusing_a_sibling() {
-    let _guard = FOCUS_TEST_LOCK.lock();
-    let manager = FocusManager::global();
-    manager.unfocus();
-
     let a = FocusNode::with_debug_label("a");
     let b = FocusNode::with_debug_label("b");
     let _laid = lay_out(
         TwoFocusHost {
-            a: Arc::clone(&a),
-            b: Arc::clone(&b),
+            a: Rc::clone(&a),
+            b: Rc::clone(&b),
             show_a: true,
             show_b: true,
             a_autofocus: false,
@@ -655,10 +641,6 @@ fn can_unfocus_by_focusing_a_sibling() {
     b.request_focus();
     assert!(!a.has_focus(), "focusing b unfocuses a");
     assert!(b.has_focus());
-
-    manager.unfocus();
-    manager.root_scope().detach_node(a.id());
-    manager.root_scope().detach_node(b.id());
 }
 
 /// Oracle: `'Can have multiple focused children and they update accordingly'`
@@ -666,16 +648,12 @@ fn can_unfocus_by_focusing_a_sibling() {
 /// forth between the two siblings.
 #[test]
 fn multiple_focused_children_update_accordingly_as_focus_moves_between_siblings() {
-    let _guard = FOCUS_TEST_LOCK.lock();
-    let manager = FocusManager::global();
-    manager.unfocus();
-
     let a = FocusNode::with_debug_label("a");
     let b = FocusNode::with_debug_label("b");
     let _laid = lay_out(
         TwoFocusHost {
-            a: Arc::clone(&a),
-            b: Arc::clone(&b),
+            a: Rc::clone(&a),
+            b: Rc::clone(&b),
             show_a: true,
             show_b: true,
             a_autofocus: true,
@@ -694,10 +672,6 @@ fn multiple_focused_children_update_accordingly_as_focus_moves_between_siblings(
     a.request_focus();
     assert!(a.has_focus());
     assert!(!b.has_focus());
-
-    manager.unfocus();
-    manager.root_scope().detach_node(a.id());
-    manager.root_scope().detach_node(b.id());
 }
 
 /// Oracle: `'Removing focused widget moves focus to next widget'`
@@ -706,16 +680,12 @@ fn multiple_focused_children_update_accordingly_as_focus_moves_between_siblings(
 /// case.
 #[test]
 fn removing_the_focused_widget_does_not_transfer_focus_to_the_survivor() {
-    let _guard = FOCUS_TEST_LOCK.lock();
-    let manager = FocusManager::global();
-    manager.unfocus();
-
     let a = FocusNode::with_debug_label("a");
     let b = FocusNode::with_debug_label("b");
     let mut laid = lay_out(
         TwoFocusHost {
-            a: Arc::clone(&a),
-            b: Arc::clone(&b),
+            a: Rc::clone(&a),
+            b: Rc::clone(&b),
             show_a: true,
             show_b: true,
             a_autofocus: false,
@@ -729,8 +699,8 @@ fn removing_the_focused_widget_does_not_transfer_focus_to_the_survivor() {
     assert!(!b.has_focus());
 
     laid.pump_widget(TwoFocusHost {
-        a: Arc::clone(&a),
-        b: Arc::clone(&b),
+        a: Rc::clone(&a),
+        b: Rc::clone(&b),
         show_a: false,
         show_b: true,
         a_autofocus: false,
@@ -742,9 +712,6 @@ fn removing_the_focused_widget_does_not_transfer_focus_to_the_survivor() {
         !b.has_focus(),
         "b does not inherit the focus a's removal released"
     );
-
-    manager.unfocus();
-    manager.root_scope().detach_node(b.id());
 }
 
 /// Oracle: `"Removing focused widget doesn't move focus to next widget
@@ -752,10 +719,6 @@ fn removing_the_focused_widget_does_not_transfer_focus_to_the_survivor() {
 /// variant of the case above.
 #[test]
 fn removing_the_focused_widget_within_a_scope_does_not_transfer_focus() {
-    let _guard = FOCUS_TEST_LOCK.lock();
-    let manager = FocusManager::global();
-    manager.unfocus();
-
     let scope = FocusScopeNode::with_debug_label("removal-scope");
     let a = FocusNode::with_debug_label("a");
     let b = FocusNode::with_debug_label("b");
@@ -764,27 +727,27 @@ fn removing_the_focused_widget_within_a_scope_does_not_transfer_focus() {
     // omitted slot would let the survivor reuse the removed slot's element).
     #[derive(Clone, StatelessView)]
     struct ScopedTwoFocusHost {
-        scope: Arc<FocusScopeNode>,
-        a: Arc<FocusNode>,
-        b: Arc<FocusNode>,
+        scope: Rc<FocusScopeNode>,
+        a: Rc<FocusNode>,
+        b: Rc<FocusNode>,
         show_a: bool,
     }
     impl StatelessView for ScopedTwoFocusHost {
         fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
             let slot_a: BoxedView = if self.show_a {
                 Focus::new(leaf())
-                    .focus_node(Arc::clone(&self.a))
+                    .focus_node(Rc::clone(&self.a))
                     .into_view()
                     .boxed()
             } else {
                 leaf().into_view().boxed()
             };
             let slot_b: BoxedView = Focus::new(leaf())
-                .focus_node(Arc::clone(&self.b))
+                .focus_node(Rc::clone(&self.b))
                 .into_view()
                 .boxed();
             FocusScope::with_external_node(
-                Arc::clone(&self.scope),
+                Rc::clone(&self.scope),
                 Column::new(vec![slot_a, slot_b]),
             )
         }
@@ -792,22 +755,20 @@ fn removing_the_focused_widget_within_a_scope_does_not_transfer_focus() {
 
     let mut laid = lay_out(
         ScopedTwoFocusHost {
-            scope: Arc::clone(&scope),
-            a: Arc::clone(&a),
-            b: Arc::clone(&b),
+            scope: Rc::clone(&scope),
+            a: Rc::clone(&a),
+            b: Rc::clone(&b),
             show_a: true,
         },
         loose(200.0),
     );
-
     a.request_focus();
-    manager.set_active_scope(Some(Arc::clone(&scope)));
     assert!(a.has_focus());
 
     laid.pump_widget(ScopedTwoFocusHost {
-        scope: Arc::clone(&scope),
-        a: Arc::clone(&a),
-        b: Arc::clone(&b),
+        scope: Rc::clone(&scope),
+        a: Rc::clone(&a),
+        b: Rc::clone(&b),
         show_a: false,
     });
 
@@ -816,22 +777,17 @@ fn removing_the_focused_widget_within_a_scope_does_not_transfer_focus() {
         !b.has_focus(),
         "b does not inherit the focus a's removal released, even inside the scope"
     );
-
-    manager.unfocus();
-    manager.set_active_scope(None);
-    manager.root_scope().detach_node(scope.as_focus_node().id());
 }
 
 /// A leaf that records what `Focus::maybe_of` resolves to from its own
 /// build context — the widget-mounted counterpart of this file's node-level
 /// probes, now that `interaction/focus.rs` ports the lookup.
 ///
-/// `Rc<RefCell<_>>`, not `Arc<Mutex<_>>`: `FocusNode` is owner-thread-only
-/// (`!Send + !Sync`, per ADR-0027), same reason `Mutex<Option<Arc<FocusNode>>>`
-/// itself would not be `Send`/`Sync` either.
+/// `Rc<RefCell<_>>` matches `FocusNode`'s owner-thread-only
+/// (`!Send + !Sync`, per ADR-0027) ownership.
 #[derive(Clone, StatelessView)]
 struct FocusOfProbe {
-    found: Rc<RefCell<Option<Arc<FocusNode>>>>,
+    found: Rc<RefCell<Option<Rc<FocusNode>>>>,
 }
 
 impl StatelessView for FocusOfProbe {
@@ -847,20 +803,16 @@ impl StatelessView for FocusOfProbe {
 /// walk up Flutter's own internal node-parent chain).
 #[test]
 fn focus_of_stops_at_the_nearest_focus_widget_not_the_enclosing_scope() {
-    let _guard = FOCUS_TEST_LOCK.lock();
-    let manager = FocusManager::global();
-    manager.unfocus();
-
     let scope = FocusScopeNode::with_debug_label("focus-of-scope");
     let plain = FocusNode::with_debug_label("focus-of-plain");
     // Seeded `Some` so a probe that silently never ran would not be mistaken
     // for a correct `None`.
-    let found_at_scope: Rc<RefCell<Option<Arc<FocusNode>>>> =
+    let found_at_scope: Rc<RefCell<Option<Rc<FocusNode>>>> =
         Rc::new(RefCell::new(Some(FocusNode::with_debug_label("seed"))));
-    let found_past_focus: Rc<RefCell<Option<Arc<FocusNode>>>> = Rc::new(RefCell::new(None));
+    let found_past_focus: Rc<RefCell<Option<Rc<FocusNode>>>> = Rc::new(RefCell::new(None));
 
     let tree = FocusScope::with_external_node(
-        Arc::clone(&scope),
+        Rc::clone(&scope),
         Column::new(vec![
             FocusOfProbe {
                 found: Rc::clone(&found_at_scope),
@@ -870,7 +822,7 @@ fn focus_of_stops_at_the_nearest_focus_widget_not_the_enclosing_scope() {
             Focus::new(FocusOfProbe {
                 found: Rc::clone(&found_past_focus),
             })
-            .focus_node(Arc::clone(&plain))
+            .focus_node(Rc::clone(&plain))
             .into_view()
             .boxed(),
         ]),
@@ -888,13 +840,10 @@ fn focus_of_stops_at_the_nearest_focus_widget_not_the_enclosing_scope() {
         .clone()
         .expect("the second probe's build must have run");
     assert!(
-        Arc::ptr_eq(&resolved, &plain),
+        Rc::ptr_eq(&resolved, &plain),
         "Focus::maybe_of past the plain Focus must resolve THAT Focus's own \
          node, not the enclosing FocusScope's — the oracle's `Focus.of(element4)`"
     );
-
-    manager.unfocus();
-    manager.root_scope().detach_node(scope.as_focus_node().id());
 }
 
 /// Oracle: `'Adding a new FocusScope attaches the child to its parent.'`
@@ -902,16 +851,12 @@ fn focus_of_stops_at_the_nearest_focus_widget_not_the_enclosing_scope() {
 /// a later rebuild attaches under the parent scope's node.
 #[test]
 fn adding_a_new_focus_scope_attaches_its_node_under_the_parent_scope() {
-    let _guard = FOCUS_TEST_LOCK.lock();
-    let manager = FocusManager::global();
-    manager.unfocus();
-
     let parent_scope = FocusScopeNode::with_debug_label("parent-scope");
     let child_scope = FocusScopeNode::with_debug_label("child-scope");
     let mut laid = lay_out(
         NestedScopeHost {
-            parent: Arc::clone(&parent_scope),
-            child: Arc::clone(&child_scope),
+            parent: Rc::clone(&parent_scope),
+            child: Rc::clone(&child_scope),
             show_child: false,
         },
         loose(200.0),
@@ -923,47 +868,38 @@ fn adding_a_new_focus_scope_attaches_its_node_under_the_parent_scope() {
     );
 
     laid.pump_widget(NestedScopeHost {
-        parent: Arc::clone(&parent_scope),
-        child: Arc::clone(&child_scope),
+        parent: Rc::clone(&parent_scope),
+        child: Rc::clone(&child_scope),
         show_child: true,
     });
 
-    assert_eq!(
-        child_scope.as_focus_node().parent().map(|node| node.id()),
-        Some(parent_scope.as_focus_node().id()),
+    let actual_parent = child_scope
+        .as_focus_node()
+        .parent()
+        .expect("the mounted child scope has a focus parent");
+    assert!(
+        Rc::ptr_eq(&actual_parent, parent_scope.as_focus_node()),
         "the child scope now hangs under the parent scope's node"
     );
-
-    manager.unfocus();
-    manager
-        .root_scope()
-        .detach_node(parent_scope.as_focus_node().id());
 }
 
 /// Oracle: `'Focus is ignored when set to not focusable.'`
 /// (focus_scope_test.dart).
 #[test]
 fn focus_is_ignored_when_not_focusable() {
-    let _guard = FOCUS_TEST_LOCK.lock();
-    let manager = FocusManager::global();
-    manager.unfocus();
-
     let node = FocusNode::with_debug_label("unfocusable");
-    let got_focus = Arc::new(Mutex::new(Vec::<bool>::new()));
-    let recorded = Arc::clone(&got_focus);
+    let got_focus = Rc::new(RefCell::new(Vec::<bool>::new()));
+    let recorded = Rc::clone(&got_focus);
     let root = Focus::new(leaf())
-        .focus_node(Arc::clone(&node))
+        .focus_node(Rc::clone(&node))
         .can_request_focus(false)
-        .on_focus_change(move |focused| recorded.lock().push(focused));
+        .on_focus_change(move |focused| recorded.borrow_mut().push(focused));
     let _laid = lay_out(root, loose(200.0));
 
     node.request_focus();
 
-    assert!(got_focus.lock().is_empty(), "on_focus_change never fires");
+    assert!(got_focus.borrow().is_empty(), "on_focus_change never fires");
     assert!(!node.has_focus());
-
-    manager.unfocus();
-    manager.root_scope().detach_node(node.id());
 }
 
 /// Oracle: `'Focus is lost when set to not focusable.'`
@@ -973,13 +909,9 @@ fn focus_is_ignored_when_not_focusable() {
 /// currently holds, matching Flutter's setter semantics.
 #[test]
 fn focus_is_lost_when_set_to_not_focusable_mid_focus() {
-    let _guard = FOCUS_TEST_LOCK.lock();
-    let manager = FocusManager::global();
-    manager.unfocus();
-
     #[derive(Clone, StatelessView)]
     struct Host {
-        node: Arc<FocusNode>,
+        node: Rc<FocusNode>,
         can_request_focus: bool,
         on_focus_change: Rc<dyn Fn(bool)>,
     }
@@ -987,7 +919,7 @@ fn focus_is_lost_when_set_to_not_focusable_mid_focus() {
         fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
             let handler = Rc::clone(&self.on_focus_change);
             Focus::new(leaf())
-                .focus_node(Arc::clone(&self.node))
+                .focus_node(Rc::clone(&self.node))
                 .autofocus(true)
                 .can_request_focus(self.can_request_focus)
                 .on_focus_change(move |focused| handler(focused))
@@ -995,26 +927,26 @@ fn focus_is_lost_when_set_to_not_focusable_mid_focus() {
     }
 
     let node = FocusNode::with_debug_label("was-focusable");
-    let got_focus = Arc::new(Mutex::new(Vec::<bool>::new()));
-    let recorded = Arc::clone(&got_focus);
+    let got_focus = Rc::new(RefCell::new(Vec::<bool>::new()));
+    let recorded = Rc::clone(&got_focus);
     let mut laid = lay_out(
         Host {
-            node: Arc::clone(&node),
+            node: Rc::clone(&node),
             can_request_focus: true,
-            on_focus_change: Rc::new(move |focused| recorded.lock().push(focused)),
+            on_focus_change: Rc::new(move |focused| recorded.borrow_mut().push(focused)),
         },
         loose(200.0),
     );
 
     assert!(node.has_focus(), "autofocus landed on mount");
-    assert_eq!(got_focus.lock().as_slice(), [true]);
-    got_focus.lock().clear();
+    assert_eq!(got_focus.borrow().as_slice(), [true]);
+    got_focus.borrow_mut().clear();
 
-    let recorded = Arc::clone(&got_focus);
+    let recorded = Rc::clone(&got_focus);
     laid.pump_widget(Host {
-        node: Arc::clone(&node),
+        node: Rc::clone(&node),
         can_request_focus: false,
-        on_focus_change: Rc::new(move |focused| recorded.lock().push(focused)),
+        on_focus_change: Rc::new(move |focused| recorded.borrow_mut().push(focused)),
     });
 
     assert!(
@@ -1022,13 +954,10 @@ fn focus_is_lost_when_set_to_not_focusable_mid_focus() {
         "flipping canRequestFocus false released the focus this node held"
     );
     assert_eq!(
-        got_focus.lock().as_slice(),
+        got_focus.borrow().as_slice(),
         [false],
         "on_focus_change reports the loss, matching the oracle's `expect(gotFocus, false)`"
     );
-
-    manager.unfocus();
-    manager.root_scope().detach_node(node.id());
 }
 
 /// Oracle: `'Child of unfocusable Focus can get focus.'`
@@ -1036,14 +965,10 @@ fn focus_is_lost_when_set_to_not_focusable_mid_focus() {
 /// is set on, not its descendants.
 #[test]
 fn child_of_an_unfocusable_focus_can_still_get_focus() {
-    let _guard = FOCUS_TEST_LOCK.lock();
-    let manager = FocusManager::global();
-    manager.unfocus();
-
     let outer = FocusNode::with_debug_label("outer-unfocusable");
     let inner = FocusNode::with_debug_label("inner");
-    let root = Focus::new(Focus::new(leaf()).focus_node(Arc::clone(&inner)))
-        .focus_node(Arc::clone(&outer))
+    let root = Focus::new(Focus::new(leaf()).focus_node(Rc::clone(&inner)))
+        .focus_node(Rc::clone(&outer))
         .can_request_focus(false);
     let _laid = lay_out(root, loose(200.0));
 
@@ -1059,9 +984,6 @@ fn child_of_an_unfocusable_focus_can_still_get_focus() {
         outer.has_focus(),
         "the outer now reports hasFocus transitively, through the focused child"
     );
-
-    manager.unfocus();
-    manager.root_scope().detach_node(outer.id());
 }
 
 /// Oracle: `'descendantsAreFocusable works as expected.'`
@@ -1070,14 +992,10 @@ fn child_of_an_unfocusable_focus_can_still_get_focus() {
 /// the node's own eligibility alone.
 #[test]
 fn descendants_are_focusable_gates_descendants_not_the_node_itself() {
-    let _guard = FOCUS_TEST_LOCK.lock();
-    let manager = FocusManager::global();
-    manager.unfocus();
-
     let outer = FocusNode::with_debug_label("blocks-descendants");
     let inner = FocusNode::with_debug_label("blocked-descendant");
-    let root = Focus::new(Focus::new(leaf()).focus_node(Arc::clone(&inner)))
-        .focus_node(Arc::clone(&outer))
+    let root = Focus::new(Focus::new(leaf()).focus_node(Rc::clone(&inner)))
+        .focus_node(Rc::clone(&outer))
         .descendants_are_focusable(false);
     let _laid = lay_out(root, loose(200.0));
 
@@ -1092,9 +1010,6 @@ fn descendants_are_focusable_gates_descendants_not_the_node_itself() {
         outer.has_focus(),
         "the node's own eligibility is untouched by its descendants-are-focusable flag"
     );
-
-    manager.unfocus();
-    manager.root_scope().detach_node(outer.id());
 }
 
 /// Oracle: `'Nodes are removed when all Focuses are removed.'`
@@ -1107,18 +1022,14 @@ fn descendants_are_focusable_gates_descendants_not_the_node_itself() {
 /// "detached and unfocused" rather than an exact descendant count.
 #[test]
 fn nodes_are_removed_when_all_focuses_are_removed() {
-    let _guard = FOCUS_TEST_LOCK.lock();
-    let manager = FocusManager::global();
-    manager.unfocus();
-
     // A stable root TYPE that toggles its shape internally — `pump_widget`
     // dispatches by `TypeId`, so swapping between two *different* concrete
     // root widget types is not the supported way to unmount a subtree (see
     // `LaidOut::pump_widget`'s doc); `show` is.
     #[derive(Clone, StatelessView)]
     struct SoloFocusHost {
-        scope: Arc<FocusScopeNode>,
-        node: Arc<FocusNode>,
+        scope: Rc<FocusScopeNode>,
+        node: Rc<FocusNode>,
         on_focus_change: Rc<dyn Fn(bool)>,
         show: bool,
     }
@@ -1129,9 +1040,9 @@ fn nodes_are_removed_when_all_focuses_are_removed() {
             }
             let handler = Rc::clone(&self.on_focus_change);
             FocusScope::with_external_node(
-                Arc::clone(&self.scope),
+                Rc::clone(&self.scope),
                 Focus::new(leaf())
-                    .focus_node(Arc::clone(&self.node))
+                    .focus_node(Rc::clone(&self.node))
                     .on_focus_change(move |focused| handler(focused)),
             )
             .into_view()
@@ -1141,38 +1052,36 @@ fn nodes_are_removed_when_all_focuses_are_removed() {
 
     let node = FocusNode::with_debug_label("solo");
     let scope = FocusScopeNode::with_debug_label("solo-scope");
-    let got_focus = Arc::new(Mutex::new(Vec::<bool>::new()));
-    let recorded = Arc::clone(&got_focus);
+    let got_focus = Rc::new(RefCell::new(Vec::<bool>::new()));
+    let recorded = Rc::clone(&got_focus);
     let mut laid = lay_out(
         SoloFocusHost {
-            scope: Arc::clone(&scope),
-            node: Arc::clone(&node),
-            on_focus_change: Rc::new(move |focused| recorded.lock().push(focused)),
+            scope: Rc::clone(&scope),
+            node: Rc::clone(&node),
+            on_focus_change: Rc::new(move |focused| recorded.borrow_mut().push(focused)),
             show: true,
         },
         loose(200.0),
     );
+    let manager = laid.focus_manager();
 
     node.request_focus();
     laid.tick();
     assert!(node.has_focus());
-    assert_eq!(got_focus.lock().as_slice(), [true]);
+    assert_eq!(got_focus.borrow().as_slice(), [true]);
 
     laid.pump_widget(SoloFocusHost {
-        scope: Arc::clone(&scope),
-        node: Arc::clone(&node),
+        scope: Rc::clone(&scope),
+        node: Rc::clone(&node),
         on_focus_change: Rc::new(|_focused| {}),
         show: false,
     });
 
     assert!(!node.is_attached(), "unmounting detached the node");
-    assert_eq!(
-        manager.primary_focus(),
-        None,
+    assert!(
+        manager.primary_focus().is_none(),
         "a disposed focused widget releases the primary focus"
     );
-
-    manager.unfocus();
 }
 
 /// Oracle: `'FocusManager notifies listeners when a widget loses focus
@@ -1181,16 +1090,12 @@ fn nodes_are_removed_when_all_focuses_are_removed() {
 /// inherit focus.
 #[test]
 fn removing_a_focused_node_notifies_listeners_exactly_once_without_transferring_focus() {
-    let _guard = FOCUS_TEST_LOCK.lock();
-    let manager = FocusManager::global();
-    manager.unfocus();
-
     let a = FocusNode::with_debug_label("a");
     let b = FocusNode::with_debug_label("b");
     let mut laid = lay_out(
         TwoFocusHost {
-            a: Arc::clone(&a),
-            b: Arc::clone(&b),
+            a: Rc::clone(&a),
+            b: Rc::clone(&b),
             show_a: true,
             show_b: true,
             a_autofocus: false,
@@ -1198,19 +1103,20 @@ fn removing_a_focused_node_notifies_listeners_exactly_once_without_transferring_
         },
         loose(200.0),
     );
+    let manager = laid.focus_manager();
 
     a.request_focus();
     assert!(a.has_focus());
 
-    let notify_count = Arc::new(AtomicUsize::new(0));
-    let counter = Arc::clone(&notify_count);
+    let notify_count = Rc::new(Cell::new(0));
+    let counter = Rc::clone(&notify_count);
     let listener_id = manager.add_listener(Rc::new(move |_previous, _new| {
-        counter.fetch_add(1, Ordering::SeqCst);
+        counter.set(counter.get() + 1);
     }));
 
     laid.pump_widget(TwoFocusHost {
-        a: Arc::clone(&a),
-        b: Arc::clone(&b),
+        a: Rc::clone(&a),
+        b: Rc::clone(&b),
         show_a: false,
         show_b: true,
         a_autofocus: false,
@@ -1218,7 +1124,7 @@ fn removing_a_focused_node_notifies_listeners_exactly_once_without_transferring_
     });
 
     assert_eq!(
-        notify_count.load(Ordering::SeqCst),
+        notify_count.get(),
         1,
         "removing the focused node's widget notifies exactly once"
     );
@@ -1229,6 +1135,4 @@ fn removing_a_focused_node_notifies_listeners_exactly_once_without_transferring_
     );
 
     manager.remove_listener(listener_id);
-    manager.unfocus();
-    manager.root_scope().detach_node(b.id());
 }

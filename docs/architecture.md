@@ -107,7 +107,6 @@ Applies to: `ViewId`, `ElementId`, `RenderId`, `LayerId`, `SemanticsId`.
 pub trait Platform: Send + Sync + 'static {
     // Core
     fn background_executor(&self) -> Arc<dyn PlatformExecutor>;
-    fn foreground_executor(&self) -> Arc<dyn PlatformExecutor>;
 
     // Lifecycle
     fn run(self: Box<Self>, on_ready: Box<dyn FnOnce()>);

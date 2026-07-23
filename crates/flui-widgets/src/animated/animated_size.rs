@@ -184,7 +184,7 @@ impl ViewState<AnimatedSize> for AnimatedSizeState {
             Some(self.controller.add_status_listener(Arc::new(move |status| {
                 if status == AnimationStatus::Completed {
                     completed_runs.fetch_add(1, Ordering::SeqCst);
-                    rebuild.schedule();
+                    rebuild.schedule(flui_view::RebuildReason::AnimationTick);
                 }
             })));
 

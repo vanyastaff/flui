@@ -215,27 +215,6 @@ fn contract_background_executor() {
     );
 }
 
-#[test]
-fn contract_foreground_executor() {
-    // GIVEN: A platform implementation
-    let platform = get_test_platform();
-    let executor = platform.foreground_executor();
-
-    // WHEN: We spawn a task
-    use std::sync::{Arc as StdArc, Mutex};
-    let flag = StdArc::new(Mutex::new(false));
-    let flag_clone = flag.clone();
-
-    executor.spawn(Box::new(move || {
-        *flag_clone.lock().unwrap() = true;
-    }));
-
-    // THEN: Task should be queued (foreground executor requires manual
-    // draining) Note: Actual execution depends on platform event loop
-    // calling drain_tasks() This test just verifies spawning doesn't panic
-    // The flag won't be set without drain_tasks() being called by the platform
-}
-
 // ==================== Contract Tests: Platform Metadata ====================
 
 #[test]

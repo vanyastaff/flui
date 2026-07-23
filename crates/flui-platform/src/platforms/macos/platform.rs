@@ -13,7 +13,7 @@ use parking_lot::Mutex;
 use super::{display, window::MacOSWindow};
 use crate::{
     config::WindowConfiguration,
-    executor::{BackgroundExecutor, ForegroundExecutor},
+    executor::BackgroundExecutor,
     shared::PlatformHandlers,
     traits::{
         Clipboard, DesktopCapabilities, Platform, PlatformCapabilities, PlatformDisplay,
@@ -38,9 +38,6 @@ pub struct MacOSPlatform {
 
     /// Background executor (GCD-based)
     background_executor: Arc<BackgroundExecutor>,
-
-    /// Foreground executor (NSRunLoop-based)
-    foreground_executor: Arc<ForegroundExecutor>,
 
     /// Window configuration
     config: WindowConfiguration,
@@ -78,7 +75,6 @@ impl MacOSPlatform {
 
             // Create executors
             let background_executor = Arc::new(BackgroundExecutor::new());
-            let foreground_executor = Arc::new(ForegroundExecutor::new());
 
             tracing::info!("macOS platform initialized with AppKit");
 
@@ -87,7 +83,6 @@ impl MacOSPlatform {
                 windows: Arc::new(Mutex::new(HashMap::new())),
                 handlers: Arc::new(Mutex::new(PlatformHandlers::default())),
                 background_executor,
-                foreground_executor,
                 config,
             })
         }
@@ -102,10 +97,6 @@ impl MacOSPlatform {
 impl Platform for MacOSPlatform {
     fn background_executor(&self) -> Arc<dyn PlatformExecutor> {
         Arc::clone(&self.background_executor) as Arc<dyn PlatformExecutor>
-    }
-
-    fn foreground_executor(&self) -> Arc<dyn PlatformExecutor> {
-        Arc::clone(&self.foreground_executor) as Arc<dyn PlatformExecutor>
     }
 
     fn run(self: Box<Self>, on_finish_launching: PlatformReadyCallback) {
@@ -136,10 +127,10 @@ impl Platform for MacOSPlatform {
         }
     }
 
-    fn open_window(&self, options: WindowOptions) -> Result<Box<dyn PlatformWindow>> {
+    fn open_window(&self, options: WindowOptions) -> Result<Arc<dyn PlatformWindow>> {
         let window = MacOSWindow::new(options, Arc::clone(&self.windows), self.config.clone())?;
 
-        Ok(Box::new(window))
+        Ok(window)
     }
 
     fn active_window(&self) -> Option<WindowId> {

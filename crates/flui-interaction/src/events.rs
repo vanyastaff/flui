@@ -334,30 +334,7 @@ impl InputEvent {
             InputEvent::DeviceAdded { device_id, .. } | InputEvent::DeviceRemoved { device_id } => {
                 Some(*device_id)
             }
-            InputEvent::Pointer(event) => {
-                // Extract pointer_id from the event into the legacy
-                // `DeviceId = i32` surface. Primary pointer ⇒ 0;
-                // otherwise return the low 31 bits of the pointer id so
-                // that distinct pointers stay distinct DeviceIds.
-                //
-                // This branch previously also folded `persistent_device_id`
-                // via `DefaultHasher` to produce a distinct DeviceId per
-                // physical device — that allocator-hitting hash ran on
-                // every hot-path event. Since `PersistentDeviceId`'s
-                // inner `NonZeroU64` is private and `pointer_id` already
-                // uniquely identifies the logical pointer for the legacy
-                // i32 surface, drop the hasher and lean on `pointer_id`
-                // directly. Callers needing physical-device stability
-                // should consume `PointerInfo::persistent_device_id`
-                // upstream rather than via this legacy DeviceId mapping.
-                let info = get_pointer_info(event);
-                let id = info.pointer_id?;
-                if id.is_primary_pointer() {
-                    Some(0)
-                } else {
-                    Some((id.get_inner().get() & 0x7FFF_FFFF) as DeviceId)
-                }
-            }
+            InputEvent::Pointer(event) => Some(event.device_id()),
             InputEvent::Keyboard(_) => None,
         }
     }
@@ -450,6 +427,9 @@ pub trait PointerEventExt {
 
     /// Returns the pointer type if available.
     fn pointer_type(&self) -> Option<PointerType>;
+
+    /// Returns the logical device identity used by mouse tracking.
+    fn device_id(&self) -> DeviceId;
 }
 
 impl PointerEventExt for PointerEvent {
@@ -466,6 +446,16 @@ impl PointerEventExt for PointerEvent {
     #[inline]
     fn pointer_type(&self) -> Option<PointerType> {
         Some(get_pointer_info(self).pointer_type)
+    }
+
+    #[inline]
+    fn device_id(&self) -> DeviceId {
+        let id = get_pointer_info(self).pointer_id;
+        match id {
+            Some(id) if id.is_primary_pointer() => 0,
+            Some(id) => (id.get_inner().get() & 0x7FFF_FFFF) as DeviceId,
+            None => 0,
+        }
     }
 }
 
@@ -708,6 +698,18 @@ pub fn make_down_event_with_button(
     pointer_type: PointerType,
     button: PointerButton,
 ) -> PointerEvent {
+    make_down_event_for_id_with_button(PointerId::PRIMARY, position, pointer_type, button)
+}
+
+#[cfg(any(test, feature = "testing"))]
+/// Create a PointerEvent::Down for testing with an explicit pointer id and
+/// button.
+pub fn make_down_event_for_id_with_button(
+    pointer_id: PointerId,
+    position: Offset<Pixels>,
+    pointer_type: PointerType,
+    button: PointerButton,
+) -> PointerEvent {
     use ui_events::pointer::{
         ContactGeometry, PointerButtonEvent, PointerOrientation, PointerState,
     };
@@ -715,7 +717,7 @@ pub fn make_down_event_with_button(
     PointerEvent::Down(PointerButtonEvent {
         button: Some(button),
         pointer: PointerInfo {
-            pointer_id: Some(PointerId::PRIMARY),
+            pointer_id: Some(pointer_id),
             pointer_type,
             persistent_device_id: None,
         },
@@ -747,6 +749,18 @@ pub fn make_up_event_with_button(
     pointer_type: PointerType,
     button: PointerButton,
 ) -> PointerEvent {
+    make_up_event_for_id_with_button(PointerId::PRIMARY, position, pointer_type, button)
+}
+
+#[cfg(any(test, feature = "testing"))]
+/// Create a PointerEvent::Up for testing with an explicit pointer id and
+/// button.
+pub fn make_up_event_for_id_with_button(
+    pointer_id: PointerId,
+    position: Offset<Pixels>,
+    pointer_type: PointerType,
+    button: PointerButton,
+) -> PointerEvent {
     use ui_events::pointer::{
         ContactGeometry, PointerButtonEvent, PointerOrientation, PointerState,
     };
@@ -754,7 +768,7 @@ pub fn make_up_event_with_button(
     PointerEvent::Up(PointerButtonEvent {
         button: Some(button),
         pointer: PointerInfo {
-            pointer_id: Some(PointerId::PRIMARY),
+            pointer_id: Some(pointer_id),
             pointer_type,
             persistent_device_id: None,
         },
@@ -990,6 +1004,35 @@ mod tests {
         let primary = PointerButton::Primary;
         let secondary = PointerButton::Secondary;
         assert_ne!(primary, secondary);
+    }
+
+    #[test]
+    fn button_helpers_preserve_the_explicit_contact_id() {
+        let pointer = PointerId::new(42).expect("nonzero contact id");
+        let position = Offset::new(Pixels(10.0), Pixels(20.0));
+        let down = make_down_event_for_id_with_button(
+            pointer,
+            position,
+            PointerType::Mouse,
+            PointerButton::Secondary,
+        );
+        let up = make_up_event_for_id_with_button(
+            pointer,
+            position,
+            PointerType::Mouse,
+            PointerButton::Secondary,
+        );
+
+        assert_eq!(extract_pointer_id(&down), pointer);
+        assert_eq!(extract_pointer_id(&up), pointer);
+        assert!(matches!(
+            down,
+            PointerEvent::Down(ref event) if event.button == Some(PointerButton::Secondary)
+        ));
+        assert!(matches!(
+            up,
+            PointerEvent::Up(ref event) if event.button == Some(PointerButton::Secondary)
+        ));
     }
 
     #[test]

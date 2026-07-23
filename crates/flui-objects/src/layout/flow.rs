@@ -529,10 +529,16 @@ mod tests {
         // repaint listenable to a live handle from the pipeline.
         let id = owner.insert(Box::new(node) as Box<dyn RenderObject<BoxProtocol>>);
 
-        // A fresh node is paint-dirty by default; clear so the notify's mark is
-        // isolated (the red→green discriminator — without attach-subscribe the
-        // node stays clean below).
+        // A fresh node is paint-dirty by default. `clear_all_dirty_nodes`
+        // intentionally clears only the scheduler queues, so also clear the
+        // node's initial-paint flag to model a completed first paint. The
+        // notify must then set the flag and enqueue the node again.
         owner.clear_all_dirty_nodes();
+        owner
+            .render_tree()
+            .get(id)
+            .expect("the inserted flow must remain live")
+            .clear_needs_paint();
         assert!(
             !owner.nodes_needing_paint().iter().any(|d| d.id == id),
             "precondition: node must be clean after clear_all_dirty_nodes",

@@ -55,8 +55,6 @@ pub enum DirtyKind {
 pub struct DirtyRequest {
     /// The render object to mark.
     pub id: RenderId,
-    /// Tree depth (or 0 if unknown -- the owner re-computes during flush).
-    pub depth: usize,
     /// Which phase to mark for.
     pub kind: DirtyKind,
 }
@@ -169,13 +167,8 @@ impl PipelineOwnerHandle {
     /// Non-blocking. Returns [`SendError::ChannelFull`] if the channel is
     /// at capacity (the producer must back off and retry) or
     /// [`SendError::OwnerGone`] if the owner has dropped.
-    pub fn request_mark_dirty(
-        &self,
-        id: RenderId,
-        depth: usize,
-        kind: DirtyKind,
-    ) -> Result<(), SendError> {
-        let req = DirtyRequest { id, depth, kind };
+    pub fn request_mark_dirty(&self, id: RenderId, kind: DirtyKind) -> Result<(), SendError> {
+        let req = DirtyRequest { id, kind };
         match self.tx.try_send(req) {
             Ok(()) => {
                 // Wake the platform: an idle event loop must produce the
@@ -215,16 +208,13 @@ impl PipelineOwnerHandle {
 pub struct RepaintHandle {
     handle: PipelineOwnerHandle,
     id: RenderId,
-    /// Depth snapshot at creation; advisory only (the owner re-reads
-    /// the live node's depth on drain).
-    depth: usize,
 }
 
 impl RepaintHandle {
     /// Binds a pipeline handle to one render object. Internal;
     /// `PipelineOwner::repaint_handle` is the public constructor.
-    pub(super) fn new(handle: PipelineOwnerHandle, id: RenderId, depth: usize) -> Self {
-        Self { handle, id, depth }
+    pub(super) fn new(handle: PipelineOwnerHandle, id: RenderId) -> Self {
+        Self { handle, id }
     }
 
     /// The render object this handle repaints.
@@ -242,8 +232,7 @@ impl RepaintHandle {
     /// retry), [`SendError::OwnerGone`] once the pipeline owner is
     /// dropped.
     pub fn mark_needs_paint(&self) -> Result<(), SendError> {
-        self.handle
-            .request_mark_dirty(self.id, self.depth, DirtyKind::Paint)
+        self.handle.request_mark_dirty(self.id, DirtyKind::Paint)
     }
 
     /// Requests a re-layout of the bound node on the next frame and wakes
@@ -260,8 +249,7 @@ impl RepaintHandle {
     /// retry), [`SendError::OwnerGone`] once the pipeline owner is
     /// dropped.
     pub fn mark_needs_layout(&self) -> Result<(), SendError> {
-        self.handle
-            .request_mark_dirty(self.id, self.depth, DirtyKind::Layout)
+        self.handle.request_mark_dirty(self.id, DirtyKind::Layout)
     }
 
     /// Requests a compositing-bits update of the bound node on the next
@@ -280,7 +268,7 @@ impl RepaintHandle {
     /// dropped.
     pub fn mark_needs_compositing_bits_update(&self) -> Result<(), SendError> {
         self.handle
-            .request_mark_dirty(self.id, self.depth, DirtyKind::Compositing)
+            .request_mark_dirty(self.id, DirtyKind::Compositing)
     }
 }
 
@@ -301,18 +289,17 @@ mod tests {
         let (handle, rx) = pair(4);
         assert_eq!(handle.capacity(), 4);
         handle
-            .request_mark_dirty(id(1), 2, DirtyKind::Layout)
+            .request_mark_dirty(id(1), DirtyKind::Layout)
             .expect("first send must succeed");
         let req = rx.try_recv().expect("receiver should observe the request");
         assert_eq!(req.id, id(1));
-        assert_eq!(req.depth, 2);
         assert_eq!(req.kind, DirtyKind::Layout);
     }
 
     #[test]
     fn repaint_handle_mark_needs_layout_round_trips_as_layout_kind() {
         let (pipeline_handle, rx) = pair(4);
-        let repaint_handle = RepaintHandle::new(pipeline_handle, id(7), 3);
+        let repaint_handle = RepaintHandle::new(pipeline_handle, id(7));
 
         repaint_handle
             .mark_needs_layout()
@@ -320,14 +307,13 @@ mod tests {
 
         let req = rx.try_recv().expect("receiver should observe the request");
         assert_eq!(req.id, id(7));
-        assert_eq!(req.depth, 3);
         assert_eq!(req.kind, DirtyKind::Layout);
     }
 
     #[test]
     fn repaint_handle_mark_needs_compositing_bits_update_round_trips_as_compositing_kind() {
         let (pipeline_handle, rx) = pair(4);
-        let repaint_handle = RepaintHandle::new(pipeline_handle, id(9), 5);
+        let repaint_handle = RepaintHandle::new(pipeline_handle, id(9));
 
         repaint_handle
             .mark_needs_compositing_bits_update()
@@ -335,21 +321,16 @@ mod tests {
 
         let req = rx.try_recv().expect("receiver should observe the request");
         assert_eq!(req.id, id(9));
-        assert_eq!(req.depth, 5);
         assert_eq!(req.kind, DirtyKind::Compositing);
     }
 
     #[test]
     fn handle_returns_channel_full_at_capacity() {
         let (handle, _rx) = pair(2);
-        handle
-            .request_mark_dirty(id(1), 0, DirtyKind::Paint)
-            .unwrap();
-        handle
-            .request_mark_dirty(id(2), 0, DirtyKind::Paint)
-            .unwrap();
+        handle.request_mark_dirty(id(1), DirtyKind::Paint).unwrap();
+        handle.request_mark_dirty(id(2), DirtyKind::Paint).unwrap();
         let err = handle
-            .request_mark_dirty(id(3), 0, DirtyKind::Paint)
+            .request_mark_dirty(id(3), DirtyKind::Paint)
             .unwrap_err();
         assert_eq!(err, SendError::ChannelFull { capacity: 2 });
     }
@@ -359,7 +340,7 @@ mod tests {
         let (handle, rx) = pair(4);
         drop(rx);
         let err = handle
-            .request_mark_dirty(id(1), 0, DirtyKind::Layout)
+            .request_mark_dirty(id(1), DirtyKind::Layout)
             .unwrap_err();
         assert_eq!(err, SendError::OwnerGone);
     }
@@ -369,10 +350,10 @@ mod tests {
         let (handle_a, rx) = pair(4);
         let handle_b = handle_a.clone();
         handle_a
-            .request_mark_dirty(id(1), 0, DirtyKind::Layout)
+            .request_mark_dirty(id(1), DirtyKind::Layout)
             .unwrap();
         handle_b
-            .request_mark_dirty(id(2), 0, DirtyKind::Paint)
+            .request_mark_dirty(id(2), DirtyKind::Paint)
             .unwrap();
         assert_eq!(rx.len(), 2);
     }

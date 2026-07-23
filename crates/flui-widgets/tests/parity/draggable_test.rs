@@ -28,7 +28,8 @@
 //! one *simulated* end-to-end thing:
 //!
 //! 1. **`Draggable`'s gesture lifecycle** — genuine pointer dispatch through
-//!    `LaidOutScoped`, exercising the real `MultiDragGestureRecognizer`:
+//!    canonical `LaidOut` presentation harness, exercising the real
+//!    `MultiDragGestureRecognizer`:
 //!    start/update/end/cancel, the `child`/`child_when_dragging` swap,
 //!    `max_simultaneous_drags`, axis restriction (including the oracle's
 //!    "only fires when the restricted position actually moves" gate), and
@@ -66,7 +67,7 @@
 //!   covers only the `maxSimultaneousDrags: 0` half of that oracle case; the
 //!   `maxSimultaneousDrags: 2`-with-3-concurrent-pointers half needs two (or
 //!   three) *independently addressable* concurrent contacts, and
-//!   `LaidOutScoped`'s `dispatch_pointer_*` sugar tracks exactly one
+//!   `LaidOut`'s `dispatch_pointer_*` sugar tracks exactly one
 //!   "current contact" at a time (each `dispatch_pointer_down` reassigns it) —
 //!   there is no way through this harness's public surface to `moveTo`/`up`
 //!   an *earlier* contact once a later one has gone down. Named harness
@@ -202,7 +203,7 @@ use flui_widgets::{
     NavigatorHandle, SimpleRoute, SizedBox,
 };
 
-use crate::common::{LaidOutScoped, lay_out_with_arena, tight};
+use crate::common::{LaidOut, lay_out, tight};
 
 fn extent() -> BoxConstraints {
     tight(100.0, 100.0)
@@ -226,8 +227,8 @@ fn child() -> ColoredBox {
 /// gesture callback (drag start/end swapping `child`/`child_when_dragging`)
 /// is observed before the next assertion — same idiom as
 /// `dismissible_test.rs`'s `settle_one_frame`.
-fn settle_one_frame(scoped: &mut LaidOutScoped) {
-    scoped.pump(Duration::from_millis(1));
+fn settle_one_frame(scoped: &mut LaidOut) {
+    scoped.pump_for(Duration::from_millis(1));
 }
 
 fn pointer(n: u64) -> PointerId {
@@ -248,7 +249,7 @@ fn erase<T: Send + Sync + 'static>(value: T) -> ErasedDragData {
 // Group 1 — `Draggable`'s gesture lifecycle (real pointer dispatch)
 // ============================================================================
 //
-// 11 cases: drag started fires once past slop; update reports the RAW delta
+// 11 cases: a lone immediate drag starts once on default arena victory; update reports the RAW delta
 // (unrestricted — see the axis-gate cases below); the reported offset is
 // displacement-since-drag-start, not the oracle's globally-anchored value
 // (a pinned, named divergence — see `draggable.rs`'s divergence note #4 —
@@ -267,7 +268,7 @@ fn erase<T: Send + Sync + 'static>(value: T) -> ErasedDragData {
 // recognizer keep-alive).
 
 #[test]
-fn drag_started_fires_once_past_slop() {
+fn lone_immediate_drag_starts_once_on_default_arena_victory() {
     let started = Arc::new(AtomicUsize::new(0));
     let started_for_cb = Arc::clone(&started);
     let widget = Draggable::<i32>::new(child())
@@ -275,20 +276,20 @@ fn drag_started_fires_once_past_slop() {
         .on_drag_started(move || {
             started_for_cb.fetch_add(1, Ordering::SeqCst);
         });
-    let scoped = lay_out_with_arena(widget, extent());
+    let scoped = lay_out(widget, extent());
 
     scoped.dispatch_pointer_down(50.0, 50.0);
     assert_eq!(
         started.load(Ordering::SeqCst),
-        0,
-        "a down alone must not start a drag"
+        1,
+        "a lone ImmediateMultiDrag recognizer wins the deferred default after Down"
     );
 
-    scoped.dispatch_pointer_move(75.0, 50.0); // 25px > 18px touch slop
+    scoped.dispatch_pointer_move(75.0, 50.0);
     assert_eq!(
         started.load(Ordering::SeqCst),
         1,
-        "crossing the slop starts exactly one drag"
+        "movement within the same contact must not restart the drag"
     );
 
     scoped.dispatch_pointer_move(90.0, 50.0);
@@ -308,16 +309,16 @@ fn drag_update_reports_delta_after_start() {
     let widget = Draggable::<i32>::new(child()).on_drag_update(move |details| {
         *last_delta_for_cb.lock().expect("not poisoned") = Some(details.delta);
     });
-    let scoped = lay_out_with_arena(widget, extent());
+    let scoped = lay_out(widget, extent());
 
     scoped.dispatch_pointer_down(50.0, 50.0);
-    scoped.dispatch_pointer_move(75.0, 50.0); // slop-crossing move: starts the drag
+    scoped.dispatch_pointer_move(75.0, 50.0); // first post-start update
     scoped.dispatch_pointer_move(95.0, 50.0); // the real update: +20px horizontal
 
     let delta = last_delta
         .lock()
         .expect("not poisoned")
-        .expect("on_drag_update fired after the slop-crossing move");
+        .expect("on_drag_update fired after pointer movement");
     assert!(
         (delta.dx.0 - 20.0).abs() < 0.01,
         "expected a +20px horizontal delta, got {delta:?}"
@@ -348,7 +349,7 @@ fn reported_offset_is_displacement_not_global_position() {
         *end_for_cb.lock().expect("not poisoned") = Some(details);
     });
     let padded = Padding::new(EdgeInsets::new(px(40.0), px(0.0), px(0.0), px(60.0))).child(widget);
-    let mut scoped = lay_out_with_arena(padded, tight(300.0, 300.0));
+    let mut scoped = lay_out(padded, tight(300.0, 300.0));
 
     // (70, 50) is 10px inside the padded Draggable's own top-left (60, 40).
     scoped.dispatch_pointer_down(70.0, 50.0);
@@ -375,17 +376,10 @@ struct UpdateLog {
     last_delta: Option<Offset<flui_types::geometry::PixelDelta>>,
 }
 
-// Every case below starts the drag with a single, clean, sufficiently large
-// move (its own magnitude alone crosses the touch slop — the same pattern
-// `drag_started_fires_once_past_slop` uses). This matters because
-// `MultiDragGestureRecognizer` flushes the *accumulated* pending delta as
-// the drag's first `update()` call the moment slop is crossed (see
-// `multidrag.rs`'s "pending delta flushes on acceptance" contract); spreading
-// slop-crossing across two small moves would fold both of their deltas into
-// that first flush, making a single move's contribution unobservable. A
-// single large first move sidesteps that entirely: it both starts the drag
-// and *is* the move under test, and every move after it is a clean,
-// unaccumulated per-move delta.
+// A lone immediate recognizer has already won the deferred arena default after
+// Down. Every case below therefore uses one clean, nonzero post-start move so
+// the assertions isolate Draggable's axis restriction rather than gesture
+// acceptance or pending-delta accumulation.
 
 #[test]
 fn null_axis_on_drag_update_only_fires_when_position_moves() {
@@ -398,14 +392,14 @@ fn null_axis_on_drag_update_only_fires_when_position_moves() {
         log.fires += 1;
         log.last_delta = Some(details.delta);
     });
-    let scoped = lay_out_with_arena(widget, large_extent());
+    let scoped = lay_out(widget, large_extent());
 
     scoped.dispatch_pointer_down(50.0, 50.0);
-    scoped.dispatch_pointer_move(80.0, 80.0); // +30,+30: starts the drag AND fires (nonzero)
+    scoped.dispatch_pointer_move(80.0, 80.0); // +30,+30: first nonzero update
     assert_eq!(
         log.lock().expect("not poisoned").fires,
         1,
-        "the slop-crossing move itself carries a nonzero delta and must fire"
+        "the first nonzero post-start move must fire"
     );
 
     scoped.dispatch_pointer_move(80.0, 80.0); // zero delta from the last position
@@ -431,7 +425,7 @@ fn vertical_axis_on_drag_update_only_fires_when_position_moves_vertically() {
             log.fires += 1;
             log.last_delta = Some(details.delta);
         });
-    let scoped = lay_out_with_arena(widget, large_extent());
+    let scoped = lay_out(widget, large_extent());
 
     scoped.dispatch_pointer_down(50.0, 50.0);
     scoped.dispatch_pointer_move(50.0, 90.0); // +0,+40: starts the drag, purely vertical
@@ -466,7 +460,7 @@ fn horizontal_axis_on_drag_update_only_fires_when_position_moves_horizontally() 
             log.fires += 1;
             log.last_delta = Some(details.delta);
         });
-    let scoped = lay_out_with_arena(widget, large_extent());
+    let scoped = lay_out(widget, large_extent());
 
     scoped.dispatch_pointer_down(50.0, 50.0);
     scoped.dispatch_pointer_move(90.0, 50.0); // +40,+0: starts the drag, purely horizontal
@@ -512,7 +506,7 @@ fn drag_end_reports_not_accepted_and_never_fires_completed() {
         .on_drag_completed(move || {
             completed_for_cb.fetch_add(1, Ordering::SeqCst);
         });
-    let mut scoped = lay_out_with_arena(widget, extent());
+    let mut scoped = lay_out(widget, extent());
 
     scoped.dispatch_pointer_down(50.0, 50.0);
     scoped.dispatch_pointer_move(75.0, 50.0);
@@ -565,11 +559,11 @@ fn pointer_cancel_fires_drag_end_before_canceled_with_zero_velocity() {
             assert!((offset.dx.0 - 25.0).abs() < 0.01);
             canceled_for_cb.fetch_add(1, Ordering::SeqCst);
         });
-    let scoped = lay_out_with_arena(widget, extent());
+    let scoped = lay_out(widget, extent());
 
     scoped.dispatch_pointer_down(50.0, 50.0);
     scoped.dispatch_pointer_move(75.0, 50.0);
-    scoped.dispatch_pointer_cancel(75.0, 50.0);
+    scoped.dispatch_pointer_cancel();
 
     assert_eq!(
         end_count.load(Ordering::SeqCst),
@@ -591,7 +585,7 @@ fn max_simultaneous_drags_zero_disables_dragging() {
         .on_drag_started(move || {
             started_for_cb.fetch_add(1, Ordering::SeqCst);
         });
-    let scoped = lay_out_with_arena(widget, extent());
+    let scoped = lay_out(widget, extent());
 
     scoped.dispatch_pointer_down(50.0, 50.0);
     scoped.dispatch_pointer_move(80.0, 50.0);
@@ -621,13 +615,10 @@ fn child_when_dragging_swaps_in_while_active_and_reverts_on_end() {
             .child(ColoredBox::new(Color::rgb(90, 90, 90)))
             .boxed()
     });
-    let mut scoped = lay_out_with_arena(widget, extent());
+    let mut scoped = lay_out(widget, extent());
 
     assert_eq!(
-        scoped
-            .laid()
-            .find_all_by_render_type("RenderConstrainedBox")
-            .len(),
+        scoped.find_all_by_render_type("RenderConstrainedBox").len(),
         0,
         "at rest, `child_when_dragging`'s wrapper must not be mounted"
     );
@@ -637,10 +628,7 @@ fn child_when_dragging_swaps_in_while_active_and_reverts_on_end() {
     settle_one_frame(&mut scoped);
 
     assert_eq!(
-        scoped
-            .laid()
-            .find_all_by_render_type("RenderConstrainedBox")
-            .len(),
+        scoped.find_all_by_render_type("RenderConstrainedBox").len(),
         1,
         "mid-drag, `child_when_dragging` (a SizedBox) is mounted"
     );
@@ -649,18 +637,12 @@ fn child_when_dragging_swaps_in_while_active_and_reverts_on_end() {
     settle_one_frame(&mut scoped);
 
     assert_eq!(
-        scoped
-            .laid()
-            .find_all_by_render_type("RenderConstrainedBox")
-            .len(),
+        scoped.find_all_by_render_type("RenderConstrainedBox").len(),
         0,
         "after the drag ends, `child_when_dragging` is unmounted again and `child` is back"
     );
     assert_eq!(
-        scoped
-            .laid()
-            .find_all_by_render_type("RenderDecoratedBox")
-            .len(),
+        scoped.find_all_by_render_type("RenderDecoratedBox").len(),
         1,
         "after the drag ends, `child` (the original ColoredBox) is remounted"
     );
@@ -676,7 +658,7 @@ fn unmounting_mid_drag_cancels_immediately_and_fires_end_and_canceled() {
     // reference to it to dispose it later itself).
     //
     // `Draggable`'s own gesture recognition (crossing the drag slop) needs
-    // the arena-driven dispatch `lay_out_with_arena`/`LaidOutScoped`
+    // the arena-driven dispatch on the canonical `LaidOut`
     // provides (plain `lay_out`'s dispatch never starts the drag at all —
     // confirmed directly while building this case). But swapping the
     // *literal root element's own type* via `pump_widget`/`swap_root_view`
@@ -684,10 +666,10 @@ fn unmounting_mid_drag_cancels_immediately_and_fires_end_and_canceled() {
     // directly: a bare-root swap never calls `DraggableState::dispose`, with
     // or without an active drag) — `dismissible_test.rs`'s own unmount cases
     // hit the same thing and avoid it by keeping an outer wrapper (there,
-    // `VsyncScope`) stable and swapping only its child. Here, that means
-    // re-wrapping the replacement root in a `GestureArenaScope` built from
-    // the *same* arena (`LaidOut::arena()`), so `GestureArenaScope` itself —
-    // the true root element — never changes type across the swap.
+    // `VsyncScope`) stable and swapping only its child. Here,
+    // `LaidOut::pump_widget` preserves the harness-owned
+    // `GestureArenaScope`, while Padding keeps the application-side root
+    // type stable.
     //
     // The stable wrapper is `Padding::new(EdgeInsets::ZERO)`, not `Center`:
     // `Center` gives its child its own preferred (loose) size, which shrank
@@ -697,7 +679,7 @@ fn unmounting_mid_drag_cancels_immediately_and_fires_end_and_canceled() {
     // through, so `child()`'s `ColoredBox` still fills the whole box exactly
     // as it does everywhere else in this file.
     use flui_types::geometry::EdgeInsets;
-    use flui_widgets::{GestureArenaScope, Padding};
+    use flui_widgets::Padding;
 
     let started = Arc::new(AtomicUsize::new(0));
     let started_for_cb = Arc::clone(&started);
@@ -710,7 +692,7 @@ fn unmounting_mid_drag_cancels_immediately_and_fires_end_and_canceled() {
         .on_draggable_canceled(move |_v, _o| {
             canceled_for_cb.fetch_add(1, Ordering::SeqCst);
         });
-    let mut scoped = lay_out_with_arena(Padding::new(EdgeInsets::ZERO).child(widget), extent());
+    let mut scoped = lay_out(Padding::new(EdgeInsets::ZERO).child(widget), extent());
 
     scoped.dispatch_pointer_down(50.0, 50.0);
     scoped.dispatch_pointer_move(80.0, 50.0);
@@ -726,13 +708,9 @@ fn unmounting_mid_drag_cancels_immediately_and_fires_end_and_canceled() {
     );
 
     // Unmount the Draggable (swap Padding's child for an unrelated widget)
-    // while the drag is still active. The GestureArenaScope root and the
-    // Padding underneath it both stay mounted; only Padding's child changes.
-    let arena = scoped.laid().arena();
-    scoped.pump_widget(GestureArenaScope::new(
-        arena,
-        Padding::new(EdgeInsets::ZERO).child(child()),
-    ));
+    // while the drag is still active. The scoped harness preserves the
+    // GestureArenaScope root; only Padding's child changes.
+    scoped.pump_widget(Padding::new(EdgeInsets::ZERO).child(child()));
 
     assert_eq!(
         canceled.load(Ordering::SeqCst),
@@ -969,28 +947,22 @@ fn did_drop_only_accepts_a_current_candidate() {
 
 /// A `Draggable` mounted as a `Navigator`'s sole route's content, so
 /// `Overlay::maybe_of` resolves the `Overlay` that `Navigator::build` mounts.
-fn lay_out_draggable_with_overlay(
-    widget: Draggable<i32>,
-    constraints: BoxConstraints,
-) -> LaidOutScoped {
+fn lay_out_draggable_with_overlay(widget: Draggable<i32>, constraints: BoxConstraints) -> LaidOut {
     let handle = NavigatorHandle::new();
     handle.seed_initial(SimpleRoute::<i32>::new(move |_ctx| widget.clone().boxed()));
-    lay_out_with_arena(Navigator::new(handle), constraints)
+    lay_out(Navigator::new(handle), constraints)
 }
 
 /// The top-left corner of the one mounted `RenderConstrainedBox` (this
 /// group's feedback content, a bare `SizedBox`) — `find_all_by_render_type`
 /// is exact-type, not a substring match, so this does not also match
 /// `child()`'s `ColoredBox` (`RenderDecoratedBox`).
-fn feedback_origin(scoped: &LaidOutScoped) -> Point {
-    let matches = scoped
-        .laid()
-        .find_all_by_render_type("RenderConstrainedBox");
+fn feedback_origin(scoped: &LaidOut) -> Point {
+    let matches = scoped.find_all_by_render_type("RenderConstrainedBox");
     let target = *matches
         .first()
         .expect("the feedback layer's SizedBox must be mounted");
     scoped
-        .laid()
         .pipeline_owner()
         .read()
         .local_to_global(target, Point::ZERO, None)
@@ -1003,10 +975,7 @@ fn feedback_layer_appears_on_start_and_disappears_on_end() {
     let mut scoped = lay_out_draggable_with_overlay(widget, extent());
 
     assert_eq!(
-        scoped
-            .laid()
-            .find_all_by_render_type("RenderConstrainedBox")
-            .len(),
+        scoped.find_all_by_render_type("RenderConstrainedBox").len(),
         0,
         "no feedback layer before the drag starts"
     );
@@ -1015,10 +984,7 @@ fn feedback_layer_appears_on_start_and_disappears_on_end() {
     scoped.dispatch_pointer_move(80.0, 50.0); // crosses the slop: starts the drag
     settle_one_frame(&mut scoped);
     assert_eq!(
-        scoped
-            .laid()
-            .find_all_by_render_type("RenderConstrainedBox")
-            .len(),
+        scoped.find_all_by_render_type("RenderConstrainedBox").len(),
         1,
         "the feedback layer mounts once the drag starts"
     );
@@ -1034,10 +1000,7 @@ fn feedback_layer_appears_on_start_and_disappears_on_end() {
     settle_one_frame(&mut scoped);
     settle_one_frame(&mut scoped);
     assert_eq!(
-        scoped
-            .laid()
-            .find_all_by_render_type("RenderConstrainedBox")
-            .len(),
+        scoped.find_all_by_render_type("RenderConstrainedBox").len(),
         0,
         "the feedback layer is removed once the drag ends"
     );
@@ -1056,24 +1019,18 @@ fn feedback_layer_is_removed_on_cancel_too() {
     scoped.dispatch_pointer_move(80.0, 50.0);
     settle_one_frame(&mut scoped);
     assert_eq!(
-        scoped
-            .laid()
-            .find_all_by_render_type("RenderConstrainedBox")
-            .len(),
+        scoped.find_all_by_render_type("RenderConstrainedBox").len(),
         1,
         "the feedback layer is showing mid-drag"
     );
 
-    scoped.dispatch_pointer_cancel(80.0, 50.0);
+    scoped.dispatch_pointer_cancel();
     // Two ticks: see `feedback_layer_appears_on_start_and_disappears_on_end`'s
     // comment on why `entry.remove()` needs a second, separate drain.
     settle_one_frame(&mut scoped);
     settle_one_frame(&mut scoped);
     assert_eq!(
-        scoped
-            .laid()
-            .find_all_by_render_type("RenderConstrainedBox")
-            .len(),
+        scoped.find_all_by_render_type("RenderConstrainedBox").len(),
         0,
         "a platform cancel must remove the feedback layer exactly like a real pointer-up"
     );
@@ -1125,18 +1082,12 @@ fn feedback_layer_and_child_when_dragging_swap_together() {
     let mut scoped = lay_out_draggable_with_overlay(widget, extent());
 
     assert_eq!(
-        scoped
-            .laid()
-            .find_all_by_render_type("RenderDecoratedBox")
-            .len(),
+        scoped.find_all_by_render_type("RenderDecoratedBox").len(),
         1,
         "at rest: just `child`'s ColoredBox"
     );
     assert_eq!(
-        scoped
-            .laid()
-            .find_all_by_render_type("RenderConstrainedBox")
-            .len(),
+        scoped.find_all_by_render_type("RenderConstrainedBox").len(),
         0,
         "at rest: no child_when_dragging wrapper"
     );
@@ -1146,18 +1097,12 @@ fn feedback_layer_and_child_when_dragging_swap_together() {
     settle_one_frame(&mut scoped);
 
     assert_eq!(
-        scoped
-            .laid()
-            .find_all_by_render_type("RenderDecoratedBox")
-            .len(),
+        scoped.find_all_by_render_type("RenderDecoratedBox").len(),
         2,
         "mid-drag: child_when_dragging's inner ColoredBox + the feedback layer's ColoredBox"
     );
     assert_eq!(
-        scoped
-            .laid()
-            .find_all_by_render_type("RenderConstrainedBox")
-            .len(),
+        scoped.find_all_by_render_type("RenderConstrainedBox").len(),
         1,
         "mid-drag: child_when_dragging's own SizedBox wrapper"
     );
@@ -1169,18 +1114,12 @@ fn feedback_layer_and_child_when_dragging_swap_together() {
     settle_one_frame(&mut scoped);
 
     assert_eq!(
-        scoped
-            .laid()
-            .find_all_by_render_type("RenderDecoratedBox")
-            .len(),
+        scoped.find_all_by_render_type("RenderDecoratedBox").len(),
         1,
         "after the drag ends: back to just `child`"
     );
     assert_eq!(
-        scoped
-            .laid()
-            .find_all_by_render_type("RenderConstrainedBox")
-            .len(),
+        scoped.find_all_by_render_type("RenderConstrainedBox").len(),
         0,
         "after the drag ends: child_when_dragging and the feedback layer are both gone"
     );
@@ -1204,16 +1143,13 @@ fn feedback_layer_is_removed_when_the_draggable_unmounts_mid_drag() {
     let widget = Draggable::<i32>::new(child()).feedback(|| SizedBox::new(20.0, 10.0).boxed());
     let handle = NavigatorHandle::new();
     handle.seed_initial(SimpleRoute::<i32>::new(move |_ctx| widget.clone().boxed()));
-    let mut scoped = lay_out_with_arena(Navigator::new(handle.clone()), extent());
+    let mut scoped = lay_out(Navigator::new(handle.clone()), extent());
 
     scoped.dispatch_pointer_down(50.0, 50.0);
     scoped.dispatch_pointer_move(80.0, 50.0);
     settle_one_frame(&mut scoped);
     assert_eq!(
-        scoped
-            .laid()
-            .find_all_by_render_type("RenderConstrainedBox")
-            .len(),
+        scoped.find_all_by_render_type("RenderConstrainedBox").len(),
         1,
         "the feedback layer is showing mid-drag"
     );
@@ -1239,10 +1175,7 @@ fn feedback_layer_is_removed_when_the_draggable_unmounts_mid_drag() {
     settle_one_frame(&mut scoped);
 
     assert_eq!(
-        scoped
-            .laid()
-            .find_all_by_render_type("RenderConstrainedBox")
-            .len(),
+        scoped.find_all_by_render_type("RenderConstrainedBox").len(),
         0,
         "the feedback layer must not outlive the Draggable that inserted it"
     );
@@ -1280,10 +1213,7 @@ fn feedback_layer_survives_a_restart_before_the_previous_removal_drains() {
     scoped.dispatch_pointer_move(80.0, 50.0);
     settle_one_frame(&mut scoped);
     assert_eq!(
-        scoped
-            .laid()
-            .find_all_by_render_type("RenderConstrainedBox")
-            .len(),
+        scoped.find_all_by_render_type("RenderConstrainedBox").len(),
         1,
         "the first drag's feedback layer is showing"
     );
@@ -1302,10 +1232,7 @@ fn feedback_layer_survives_a_restart_before_the_previous_removal_drains() {
     settle_one_frame(&mut scoped);
 
     assert_eq!(
-        scoped
-            .laid()
-            .find_all_by_render_type("RenderConstrainedBox")
-            .len(),
+        scoped.find_all_by_render_type("RenderConstrainedBox").len(),
         1,
         "exactly one feedback layer must remain — the new drag's own, not \
          the old drag's orphaned one left behind on top of it"

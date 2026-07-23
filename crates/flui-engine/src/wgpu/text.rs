@@ -410,27 +410,36 @@ impl TextRenderer {
     /// (or an explicit `register_font`) already populated it — this is a
     /// no-op, so multiple renderers never double-load the fallback.
     fn ensure_fonts_available(font_system: &mut FontSystem) {
-        const ROBOTO_REGULAR: &[u8] = include_bytes!("../../assets/fonts/Roboto-Regular.ttf");
-
-        let existing_faces = font_system.db().faces().count();
-        if existing_faces > 0 {
-            tracing::trace!(
-                count = existing_faces,
-                "shared FontSystem already has faces"
-            );
-            return;
+        // Text fallback: on an empty shared DB (headless / CI / minimal
+        // containers with no OS fonts) text would render blank, so load the
+        // embedded Roboto. Idempotent via the face count — a system-provided or
+        // previously-loaded DB is left untouched.
+        if font_system.db().faces().count() == 0 {
+            const ROBOTO_REGULAR: &[u8] = include_bytes!("../../assets/fonts/Roboto-Regular.ttf");
+            tracing::warn!("shared FontSystem has no faces; loading embedded Roboto-Regular");
+            font_system.db_mut().load_font_data(ROBOTO_REGULAR.to_vec());
+            if font_system.db().faces().count() == 0 {
+                tracing::error!("failed to load any fonts; text rendering may be blank");
+            }
         }
 
-        tracing::warn!("shared FontSystem has no faces; loading embedded Roboto-Regular");
-        font_system.db_mut().load_font_data(ROBOTO_REGULAR.to_vec());
-
-        let loaded_faces = font_system.db().faces().count();
-        if loaded_faces == 0 {
-            tracing::error!("failed to load any fonts; text rendering may be blank");
-        } else {
+        // Icon fonts: always present, independent of the text-font count above.
+        // Neither the OS text fonts nor Roboto carry the private-use glyphs that
+        // Material / Cupertino icons resolve to, so `Icon` renders tofu without
+        // these. Loaded exactly once into the process-wide shared DB.
+        static ICON_FONTS_LOADED: std::sync::atomic::AtomicBool =
+            std::sync::atomic::AtomicBool::new(false);
+        if !ICON_FONTS_LOADED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            const MATERIAL_ICONS: &[u8] =
+                include_bytes!("../../assets/fonts/MaterialIcons-Regular.ttf");
+            const CUPERTINO_ICONS: &[u8] = include_bytes!("../../assets/fonts/CupertinoIcons.ttf");
+            font_system.db_mut().load_font_data(MATERIAL_ICONS.to_vec());
+            font_system
+                .db_mut()
+                .load_font_data(CUPERTINO_ICONS.to_vec());
             tracing::info!(
-                count = loaded_faces,
-                "loaded embedded Roboto-Regular into shared FontSystem"
+                count = font_system.db().faces().count(),
+                "loaded embedded Material Icons + Cupertino Icons fonts"
             );
         }
     }

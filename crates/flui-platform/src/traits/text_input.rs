@@ -26,8 +26,7 @@ use flui_types::geometry::{Bounds, Pixels};
 /// (enable/disable IME, place the candidate window). It does not model a
 /// text buffer, cursor/selection state, or the suppression contract a
 /// client applies to incoming [`flui_types::ImeEvent`]s — that is
-/// `flui-interaction`'s `TextInputRegistry` client contract (a named PR2
-/// deferral; see its module doc).
+/// `flui-interaction`'s presentation-owned text-input client contract.
 pub trait PlatformTextInput: Send + Sync {
     /// Enable or disable IME composition for this window's active input.
     ///
@@ -42,9 +41,4 @@ pub trait PlatformTextInput: Send + Sync {
     /// [`PlatformWindow::bounds`](super::window::PlatformWindow::bounds)'s
     /// convention).
     fn set_ime_cursor_area(&self, area: Bounds<Pixels>);
-
-    /// Downcast support for tests that need to reach a concrete recording
-    /// fake (e.g. the headless backend's `FakeTextInput`) behind the trait
-    /// object `PlatformWindow::text_input` returns.
-    fn as_any(&self) -> &dyn std::any::Any;
 }

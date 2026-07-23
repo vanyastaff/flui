@@ -1324,9 +1324,6 @@ name = "fastrand"
 version = "2.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f1f227452a390804cdb637b74a86990f2a7d7ba4b7d5693aac9b4dd6defd8d6"
-dependencies = [
- "getrandom 0.3.4",
-]
 
 [[package]]
 name = "fax"
@@ -1493,6 +1490,7 @@ dependencies = [
  "flui-view",
  "parking_lot",
  "static_assertions",
+ "tracing",
 ]
 
 [[package]]
@@ -1657,6 +1655,7 @@ dependencies = [
  "dpi",
  "flui-foundation",
  "flui-interaction",
+ "flui-platform",
  "flui-types",
  "once_cell",
  "parking_lot",
@@ -1777,15 +1776,18 @@ dependencies = [
  "bitflags 2.13.1",
  "cocoa",
  "console_error_panic_hook",
+ "crossbeam-channel",
+ "cursor-icon",
  "dpi",
  "flui-types",
- "flume",
  "keyboard-types",
  "libc",
  "num_cpus",
  "objc",
  "parking_lot",
  "raw-window-handle",
+ "static_assertions",
+ "thiserror 2.0.19",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -1854,6 +1856,7 @@ dependencies = [
  "slab",
  "smallvec",
  "smol_str 0.3.6",
+ "thiserror 2.0.19",
  "tracing",
 ]
 
@@ -1901,6 +1904,7 @@ dependencies = [
  "parking_lot",
  "serial_test",
  "slab",
+ "smallvec",
  "static_assertions",
  "thiserror 2.0.19",
  "tracing",
@@ -1945,6 +1949,7 @@ dependencies = [
  "flui-geometry",
  "flui-interaction",
  "flui-objects",
+ "flui-platform",
  "flui-rendering",
  "flui-scheduler",
  "flui-types",
@@ -1959,18 +1964,6 @@ dependencies = [
  "thiserror 2.0.19",
  "tokio",
  "tracing",
-]
-
-[[package]]
-name = "flume"
-version = "0.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5e139bc46ca777eb5efaf62df0ab8cc5fd400866427e56c68b22e414e53bd3be"
-dependencies = [
- "fastrand",
- "futures-core",
- "futures-sink",
- "spin",
 ]
 
 [[package]]
@@ -4811,15 +4804,6 @@ checksum = "52d1cfed4120b4d927bf7c0f86d2087a4a7d6027c906d9f9d525a80573b9be51"
 dependencies = [
  "libc",
  "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "spin"
-version = "0.9.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6980e8d7511241f8acf4aebddbb1ff938df5eebe98691418c4468d0b72a96a67"
-dependencies = [
- "lock_api",
 ]
 
 [[package]]

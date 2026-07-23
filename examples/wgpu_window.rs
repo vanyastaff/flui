@@ -16,31 +16,6 @@ use std::sync::{Arc, Mutex};
 use flui_platform::{WindowOptions, current_platform, traits::PlatformWindow};
 use flui_types::geometry::{Size, px};
 
-/// Wrapper that implements HasWindowHandle + HasDisplayHandle
-/// by delegating to PlatformWindow trait methods.
-///
-/// This bridges the gap between `dyn PlatformWindow` (which has methods)
-/// and wgpu's requirement for `HasWindowHandle + HasDisplayHandle` (traits).
-struct PlatformWindowHandle {
-    window: Arc<dyn PlatformWindow>,
-}
-
-impl raw_window_handle::HasWindowHandle for PlatformWindowHandle {
-    fn window_handle(
-        &self,
-    ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
-        self.window.window_handle()
-    }
-}
-
-impl raw_window_handle::HasDisplayHandle for PlatformWindowHandle {
-    fn display_handle(
-        &self,
-    ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
-        self.window.display_handle()
-    }
-}
-
 /// GPU state created from a PlatformWindow
 struct GpuState {
     surface: wgpu::Surface<'static>,
@@ -52,17 +27,13 @@ struct GpuState {
 
 impl GpuState {
     fn new(window: &Arc<dyn PlatformWindow>) -> Self {
-        let handle = PlatformWindowHandle {
-            window: window.clone(),
-        };
-
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
 
         // Safety: PlatformWindow outlives the surface (held in Arc)
         #[allow(unsafe_code)]
         let surface = unsafe {
             instance
-                .create_surface_unsafe(wgpu::SurfaceTargetUnsafe::from_window(&handle).unwrap())
+                .create_surface_unsafe(wgpu::SurfaceTargetUnsafe::from_window(window).unwrap())
                 .expect("Failed to create surface")
         };
 
@@ -209,11 +180,9 @@ fn main() {
     };
 
     // Create window before running the event loop (run() takes ownership)
-    let window: Arc<dyn PlatformWindow> = Arc::from(
-        platform
-            .open_window(options)
-            .expect("Failed to open window"),
-    );
+    let window = platform
+        .open_window(options)
+        .expect("Failed to open window");
 
     tracing::info!(
         "Window created: {:?} @ {:.1}x scale",

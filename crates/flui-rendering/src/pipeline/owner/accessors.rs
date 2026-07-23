@@ -88,12 +88,8 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// the returned handle degrades to a silent no-op (generational id:
     /// the drain drops requests whose generation died).
     pub fn repaint_handle(&self, id: RenderId) -> Option<crate::pipeline::RepaintHandle> {
-        let depth = self.render_tree.get(id)?.depth() as usize;
-        Some(crate::pipeline::RepaintHandle::new(
-            self.handle.clone(),
-            id,
-            depth,
-        ))
+        self.render_tree.get(id)?;
+        Some(crate::pipeline::RepaintHandle::new(self.handle.clone(), id))
     }
 
     /// Drains the pending dirty-request channel into the scheduler's
@@ -131,7 +127,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
                 DirtyKind::Compositing => {
                     self.add_node_needing_compositing_bits_update(req.id, depth);
                 }
-                DirtyKind::Paint => self.add_node_needing_paint(req.id, depth),
+                DirtyKind::Paint => self.mark_needs_paint(req.id),
                 DirtyKind::Semantics => self.add_node_needing_semantics(req.id, depth),
             }
         }
@@ -948,7 +944,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
 
         // New nodes need layout and paint
         self.add_node_needing_layout(id, depth);
-        self.add_node_needing_paint(id, depth);
+        self.schedule_initial_paint(id);
 
         id
     }
@@ -994,9 +990,10 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         // ADR-0013: hand the freshly-inserted child its self-dirty handle.
         self.attach_inserted_node(child_id);
 
-        // Mark child as needing layout and paint
+        // The child starts with NEEDS_PAINT but owns no retained output yet.
+        // Repaint the established ancestor that will install its first layer.
         self.add_node_needing_layout(child_id, child_depth as usize);
-        self.add_node_needing_paint(child_id, child_depth as usize);
+        self.mark_needs_paint(parent_id);
 
         // Mark parent as needing layout (child structure changed)
         self.add_node_needing_layout(parent_id, parent_depth as usize);
@@ -1054,9 +1051,10 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         // ADR-0013: hand the freshly-inserted child its self-dirty handle.
         self.attach_inserted_node(child_id);
 
-        // Mark child as needing layout and paint
+        // The child starts with NEEDS_PAINT but owns no retained output yet.
+        // Repaint the established ancestor that will install its first layer.
         self.add_node_needing_layout(child_id, child_depth as usize);
-        self.add_node_needing_paint(child_id, child_depth as usize);
+        self.mark_needs_paint(parent_id);
 
         // Mark parent as needing layout (child structure changed)
         self.add_node_needing_layout(parent_id, parent_depth as usize);
@@ -1089,7 +1087,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         self.attach_inserted_node(id);
 
         self.add_node_needing_layout(id, depth);
-        self.add_node_needing_paint(id, depth);
+        self.schedule_initial_paint(id);
 
         id
     }
@@ -1316,13 +1314,29 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         self.scheduler.mark_needs_layout(&mut self.render_tree, id);
     }
 
-    /// Adds a node to the paint dirty list.
+    /// Marks a node as needing paint and schedules the nearest established
+    /// repaint boundary.
     ///
-    /// Routes into the mid-phase side queue when paint is active, otherwise
-    /// into `dirty.needs_paint`. See `DirtyTracker::add_node_needing_paint`
-    /// for the full routing and dedup contract.
-    pub fn add_node_needing_paint(&mut self, node_id: RenderId, depth: usize) {
-        self.scheduler.add_node_needing_paint(node_id, depth);
+    /// Ports Flutter's `RenderObject.markNeedsPaint`: the invalidation flag
+    /// propagates toward the root until an existing repaint boundary owns the
+    /// affected retained layer. A boundary introduced this frame has no layer
+    /// to update yet, so the walk continues to the nearest established owner.
+    pub fn mark_needs_paint(&mut self, id: RenderId) {
+        self.scheduler.mark_needs_paint(&self.render_tree, id);
+    }
+
+    /// Schedules first paint for a freshly attached render object.
+    ///
+    /// New render state starts with `NEEDS_PAINT`, but no repaint boundary has
+    /// produced a retained layer yet. Initial attachment therefore queues the
+    /// new node directly once; every subsequent invalidation must go through
+    /// [`Self::mark_needs_paint`].
+    pub(super) fn schedule_initial_paint(&mut self, id: RenderId) {
+        let Some(node) = self.render_tree.get(id) else {
+            return;
+        };
+        self.scheduler
+            .schedule_paint_boundary(id, node.depth() as usize);
     }
 
     /// Adds a node to the compositing bits dirty list.
