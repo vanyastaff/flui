@@ -1253,6 +1253,98 @@ mod live_inherited_during_build {
             "a depend_on before a panicking callback must still register the dependent",
         );
     }
+
+    /// Unmounting a dependent must remove it from the provider's dependent
+    /// map — Flutter's `Element.deactivate` calls `removeDependent` for each
+    /// `_dependencies` entry. Without deregistration a long-lived provider
+    /// accumulates dead ids and every notify iterates stale entries.
+    #[test]
+    fn unmounted_dependents_are_removed_from_provider_map() {
+        let mut tree = ElementTree::new();
+        let mut owner = BuildOwner::new();
+
+        let root = ThemeRoot {
+            theme: MyTheme { color: 0x00DE_AD00 },
+            child: Middle {
+                observed: Arc::new(Mutex::new(None)),
+            },
+        };
+        let root_id = tree.mount_root(&root, &mut owner.element_owner_mut());
+
+        // Mount four dependent consumers directly under the provider and
+        // build them, so each records its `depend_on` registration.
+        let mut consumers = Vec::new();
+        for slot in 0..4 {
+            let id = tree.insert(
+                &Consumer {
+                    observed: Arc::new(Mutex::new(None)),
+                },
+                root_id,
+                slot,
+                &mut owner.element_owner_mut(),
+            );
+            owner.schedule_build_for(id, 1);
+            consumers.push(id);
+        }
+        owner.build_scope(&mut tree);
+        assert_eq!(
+            provider_dependent_count(&tree, root_id),
+            4,
+            "every built consumer registers as a dependent",
+        );
+
+        // Unmount all four (eager, un-keyed removal).
+        for id in consumers {
+            tree.remove(id, &mut owner.element_owner_mut());
+        }
+        assert_eq!(
+            provider_dependent_count(&tree, root_id),
+            0,
+            "unmounting a dependent must deregister it from the provider's map",
+        );
+    }
+
+    /// A scrolling-style mount/unmount churn must leave the provider's
+    /// dependent map bounded — each unmounted consumer takes its
+    /// registration with it.
+    #[test]
+    fn mount_unmount_cycles_keep_provider_dependents_bounded() {
+        let mut tree = ElementTree::new();
+        let mut owner = BuildOwner::new();
+
+        let root = ThemeRoot {
+            theme: MyTheme { color: 0x00DE_AD00 },
+            child: Middle {
+                observed: Arc::new(Mutex::new(None)),
+            },
+        };
+        let root_id = tree.mount_root(&root, &mut owner.element_owner_mut());
+
+        for cycle in 0..8 {
+            let id = tree.insert(
+                &Consumer {
+                    observed: Arc::new(Mutex::new(None)),
+                },
+                root_id,
+                0,
+                &mut owner.element_owner_mut(),
+            );
+            owner.schedule_build_for(id, 1);
+            owner.build_scope(&mut tree);
+            assert_eq!(
+                provider_dependent_count(&tree, root_id),
+                1,
+                "cycle {cycle}: the live consumer is registered",
+            );
+
+            tree.remove(id, &mut owner.element_owner_mut());
+            assert_eq!(
+                provider_dependent_count(&tree, root_id),
+                0,
+                "cycle {cycle}: the unmounted consumer is deregistered — the map stays bounded",
+            );
+        }
+    }
 }
 
 // ============================================================================

@@ -442,6 +442,10 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
 
         let removed: rustc_hash::FxHashSet<RenderId> = subtree.iter().copied().collect();
         self.scheduler.evict(&removed);
+        // Layout-poison records for the removed subtree die here too, so
+        // the map does not accumulate entries for nodes that no longer
+        // exist.
+        self.layout_poison.evict(&removed);
 
         let count = self.render_tree.remove_recursive(id);
         if self.root_id == Some(id) {
@@ -1310,10 +1314,18 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// Ports Flutter's `markNeedsLayout`
     /// walk (`.flutter/.../object.dart:2658-2700`). Thin forwarder: the walk
     /// logic lives in `DirtyTracker::mark_needs_layout` so it is
-    /// unit-testable without a full owner. The `scheduler` and `render_tree`
-    /// fields are disjoint, so the split borrow compiles.
+    /// unit-testable without a full owner. The `scheduler`, `render_tree`,
+    /// and `layout_poison` fields are disjoint, so the split borrow
+    /// compiles.
+    ///
+    /// Every node the walk visits is also un-poisoned: an invalidation mark
+    /// means the node's inputs actually changed, which is the one signal
+    /// that re-arms a layout-poisoned node for another attempt.
     pub fn mark_needs_layout(&mut self, id: RenderId) {
-        self.scheduler.mark_needs_layout(&mut self.render_tree, id);
+        self.scheduler
+            .mark_needs_layout(&mut self.render_tree, id, &mut |visited| {
+                self.layout_poison.unpoison(visited);
+            });
     }
 
     /// Adds a node to the paint dirty list.

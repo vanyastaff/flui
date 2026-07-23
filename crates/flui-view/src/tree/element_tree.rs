@@ -139,6 +139,17 @@ pub struct ElementNode {
     /// HAMT — provider counts in a UI scope are tiny, so the per-provider
     /// O(k) clone is effectively O(1) and avoids a new dependency.
     pub(crate) inherited: Arc<HashMap<TypeId, ElementId>>,
+    /// Reverse edge of every `depend_on` registration this element made:
+    /// the providers whose `InheritedBehavior::dependents` maps currently
+    /// contain this element. Read when the element leaves the active tree
+    /// (unmount / deactivate) to remove those entries — Flutter's
+    /// `Element._dependencies`, walked by `Element.deactivate` calling
+    /// `InheritedElement.removeDependent` (`framework.dart:4779`).
+    /// Populated by [`ElementTree::apply_dependent_record`], the single
+    /// choke point every dependency registration flows through. `None`
+    /// until the first registration: most elements never depend on an
+    /// InheritedView, so the common case stays allocation-free.
+    pub(crate) dependent_providers: Option<Vec<ElementId>>,
 }
 
 /// Compute a child node's inherited scope from its parent's.
@@ -194,6 +205,9 @@ impl ElementNode {
             // map (insert / mount_root_*), mirroring how `key`/`depth` are
             // finalised by the caller right after construction.
             inherited: Arc::new(HashMap::new()),
+            // No dependency registrations yet; populated on the first
+            // `depend_on` this element's build records.
+            dependent_providers: None,
         }
     }
 
@@ -206,6 +220,17 @@ impl ElementNode {
     /// `build_scope` element hole).
     pub(crate) fn inherited_provider(&self, type_id: TypeId) -> Option<ElementId> {
         self.inherited.get(&type_id).copied()
+    }
+
+    /// Record that this element is registered in `provider`'s dependent
+    /// map (the reverse edge of a `depend_on`). Idempotent per provider —
+    /// an element may `depend_on` the same provider on every rebuild, and
+    /// the provider side dedups by `ElementId` the same way.
+    pub(crate) fn note_dependent_provider(&mut self, provider: ElementId) {
+        let providers = self.dependent_providers.get_or_insert_default();
+        if !providers.contains(&provider) {
+            providers.push(provider);
+        }
     }
 
     /// Message for the `expect` in the element accessors — the element is
@@ -1017,6 +1042,103 @@ impl ElementTree {
         }
     }
 
+    /// Re-derive `depth` for every descendant of `root_id` after a reparent.
+    ///
+    /// Flutter parity: `Element._updateDepth` (`framework.dart:4660`)
+    /// recurses over the whole subtree when an element moves, because
+    /// `depth` must stay `parent.depth + 1` everywhere — the dirty heap's
+    /// shallowest-first drain (`BuildOwner::rekey_dirty_depths`),
+    /// `finalize_tree`'s deepest-first unmount order, and the depths stored
+    /// in provider dependent maps all key off it. The moved root's own
+    /// depth is already stamped by the reparent caller against its new
+    /// parent; this walk stamps each descendant from its own parent, which
+    /// is always processed before its children are pushed, so the parent
+    /// depth carried on the stack is final.
+    ///
+    /// Iterative work-stack (constant call-stack on deep subtrees, same
+    /// discipline as `recompute_inherited_subtree`); the `visited` set
+    /// converts a malformed `child_ids` cycle from an unbounded hang into
+    /// clean termination. Average/worst case O(subtree size).
+    fn update_depth_subtree(&mut self, root_id: ElementId) {
+        let Some(root) = self.get(root_id) else {
+            return;
+        };
+        let root_depth = root.depth;
+        let mut visited = std::collections::HashSet::new();
+        let mut stack: Vec<(ElementId, usize)> = root
+            .child_ids
+            .iter()
+            .map(|&child| (child, root_depth))
+            .collect();
+        while let Some((id, parent_depth)) = stack.pop() {
+            if !visited.insert(id) {
+                continue;
+            }
+            let Some(node) = self.get_mut(id) else {
+                continue;
+            };
+            let depth = parent_depth + 1;
+            node.depth = depth;
+            stack.extend(node.child_ids.iter().map(|&child| (child, depth)));
+        }
+    }
+
+    /// Apply one buffered `depend_on` registration (see
+    /// [`DependentRecord`](crate::context::DependentRecord)): record the
+    /// dependent on the provider's map AND the provider on the dependent's
+    /// reverse-edge list ([`ElementNode::dependent_providers`]), so a later
+    /// unmount/deactivate of the dependent can remove the entry. Both sides
+    /// are written here — the single choke point every registration flows
+    /// through — so the two maps can never drift apart.
+    ///
+    /// No-op when the provider id no longer resolves (or resolves to a
+    /// non-provider): with no provider-side entry there is nothing to
+    /// deregister later, so no reverse edge is recorded either.
+    pub(crate) fn apply_dependent_record(&mut self, record: &crate::context::DependentRecord) {
+        let Some(node) = self.get_mut(record.provider) else {
+            return;
+        };
+        let Some(accessor) = node.element_mut().as_inherited_mut() else {
+            return;
+        };
+        accessor.record_dependent(record.dependent, record.depth);
+        if let Some(node) = self.get_mut(record.dependent) {
+            node.note_dependent_provider(record.provider);
+        }
+    }
+
+    /// Remove `id` from the dependent map of every provider it registered
+    /// with, and drop its reverse-edge list.
+    ///
+    /// Flutter parity: `Element.deactivate` walks `_dependencies` calling
+    /// `dependency.removeDependent(this)` (`framework.dart:4779-4786`), so
+    /// a dependent that leaves the active tree stops receiving
+    /// notifications and the provider's map does not accumulate dead
+    /// entries. Every path that takes an element out of the active tree —
+    /// eager `remove`, soft (keyed) `remove`, `remove_finalized`,
+    /// `deactivate`, and the GlobalKey retake deactivate — routes through
+    /// here.
+    ///
+    /// A provider that already unmounted cleared its own map
+    /// (`InheritedBehavior::on_unmount`), and a freed provider slot fails
+    /// the generational id check, so a stale reverse edge resolves to a
+    /// no-op rather than touching a reused slot's map.
+    fn purge_dependent_registrations(&mut self, id: ElementId) {
+        let Some(providers) = self
+            .get_mut(id)
+            .and_then(|node| node.dependent_providers.take())
+        else {
+            return;
+        };
+        for provider in providers {
+            if let Some(node) = self.get_mut(provider)
+                && let Some(accessor) = node.element_mut().as_inherited_mut()
+            {
+                accessor.remove_dependent(id);
+            }
+        }
+    }
+
     /// Get an element node by ID.
     ///
     /// Returns `None` for a stale id (one that addressed a since-freed slot)
@@ -1123,6 +1245,10 @@ impl ElementTree {
             owner.push_inactive(id, depth);
             // Detach from active tree but keep the slot alive.
             self.nodes[index].parent = None;
+            // Flutter's `Element.deactivate` deregisters the element from
+            // every provider it depends on; a same-frame retake re-registers
+            // when the reactivated element rebuilds.
+            self.purge_dependent_registrations(id);
 
             if self.root == Some(id) {
                 self.root = None;
@@ -1143,6 +1269,9 @@ impl ElementTree {
         // `did_change_dependencies` flag — the dependent
         // leaves the active tree before its rebuild ever runs.
         owner.clear_pending_dependency_change(id);
+        // Deregister the element from every provider's dependent map
+        // before the slot is freed — the maps outlive this node.
+        self.purge_dependent_registrations(id);
         self.nodes[index].element_mut().unmount(owner);
 
         let node = self.nodes.remove(index);
@@ -1231,6 +1360,9 @@ impl ElementTree {
         // Drop any stale `did_change_dependencies` flag —
         // the dependent leaves the tree before its rebuild ever runs.
         owner.clear_pending_dependency_change(id);
+        // Deregister the element from every provider's dependent map
+        // before the slot is freed — the maps outlive this node.
+        self.purge_dependent_registrations(id);
         self.nodes[index].element_mut().unmount(owner);
 
         let node = self.nodes.remove(index);
@@ -1279,6 +1411,9 @@ impl ElementTree {
         if let Some(node) = self.get_mut(id) {
             node.element_mut().deactivate();
         }
+        // Flutter's `Element.deactivate` deregisters the element from every
+        // provider it depends on; reactivation rebuilds (and re-registers) it.
+        self.purge_dependent_registrations(id);
     }
 
     /// Activate an element (re-insertion after deactivation).
@@ -1482,11 +1617,24 @@ fn retake_inactive_global_key(
     // concrete `Box<dyn ViewKey>` is the new view's key now.
     node.set_key(view.key().map(ViewKey::clone_key));
 
+    // `node`'s `&mut` borrow ends above, freeing `tree` for the subtree
+    // walks below.
+    //
+    // Flutter's deactivate-then-reactivate deregisters the element from
+    // every provider it depended on at the OLD location; the rebuild the
+    // reconciler schedules for this (now-dirty) element re-registers
+    // against the new scope. No-op when the soft-remove already purged —
+    // this also covers elements parked in the inactive queue by routes
+    // other than `remove` (e.g. lazy-sliver eviction).
+    tree.purge_dependent_registrations(candidate_id);
+    // Flutter's `_updateDepth` recurses: every descendant of the moved
+    // root must follow `parent.depth + 1`, or the dirty heap and
+    // `finalize_tree` keep ordering the subtree by its old depth.
+    tree.update_depth_subtree(candidate_id);
     // The subtree moved under a new parent, so its inherited scopes (built
     // against the OLD ancestor chain) are stale — recompute top-down against
     // `new_parent`. Flutter re-runs `_updateInheritance` on reactivation
-    // (`framework.dart:4775`). `node`'s `&mut` borrow ends above, freeing
-    // `tree` for this walk.
+    // (`framework.dart:4775`).
     tree.recompute_inherited_subtree(candidate_id);
     tree.apply_ancestor_parent_data(candidate_id);
     tree.needs_render_reorder = true;
@@ -1577,6 +1725,18 @@ fn retake_active_global_key(
     node.element_mut().update(view, owner);
     node.set_key(view.key().map(ViewKey::clone_key));
 
+    // `node`'s `&mut` borrow ends above, freeing `tree` for the subtree
+    // walks below.
+    //
+    // Flutter's `Element.deactivate` (invoked on this element just above)
+    // deregisters it from every provider it depended on at the OLD
+    // location; the rebuild the reconciler schedules for this (now-dirty)
+    // element re-registers against the new scope.
+    tree.purge_dependent_registrations(candidate_id);
+    // Flutter's `_updateDepth` recurses: every descendant of the moved
+    // root must follow `parent.depth + 1`, or the dirty heap and
+    // `finalize_tree` keep ordering the subtree by its old depth.
+    tree.update_depth_subtree(candidate_id);
     tree.recompute_inherited_subtree(candidate_id);
     tree.apply_ancestor_parent_data(candidate_id);
     tree.needs_render_reorder = true;
@@ -2124,6 +2284,152 @@ mod tests {
             Some(provider_b),
             "the retaken node's child is recomputed too (try_retake_global_key wiring)",
         );
+
+        crate::test_only_clear_global_key_registry();
+    }
+
+    /// After a GlobalKey reparent to a deeper parent, every descendant's
+    /// `depth` must follow `parent.depth + 1` — Flutter's `_updateDepth`
+    /// recurses over the whole moved subtree. Stale descendant depths would
+    /// mis-order the dirty heap (a child could build before its parent) and
+    /// `finalize_tree`'s deepest-first unmount sweep.
+    #[test]
+    #[serial_test::serial(global_key_registry)]
+    fn globalkey_reparent_updates_descendant_depths() {
+        use parking_lot::RwLock;
+
+        let tree = Arc::new(RwLock::new(ElementTree::new()));
+        let owner = Arc::new(RwLock::new(BuildOwner::new()));
+        crate::test_only_set_global_key_registry(&tree, &owner);
+
+        let root = tree
+            .write()
+            .mount_root(&leaf("root"), &mut owner.write().element_owner_mut());
+        let shallow = tree.write().insert(
+            &leaf("shallow"),
+            root,
+            0,
+            &mut owner.write().element_owner_mut(),
+        );
+        // A deeper branch to reparent into: root -> d1 -> ... -> d7.
+        let mut deep = root;
+        for _ in 0..7 {
+            deep = tree.write().insert(
+                &leaf("deep"),
+                deep,
+                0,
+                &mut owner.write().element_owner_mut(),
+            );
+        }
+        assert_eq!(tree.read().get(deep).unwrap().depth(), 7);
+
+        // Keyed subtree under `shallow`: k(2) -> c(3) -> g(4).
+        let keyed = Keyed {
+            key: crate::GlobalKey::new(),
+        };
+        let k = tree
+            .write()
+            .insert(&keyed, shallow, 0, &mut owner.write().element_owner_mut());
+        let c = tree
+            .write()
+            .insert(&leaf("c"), k, 0, &mut owner.write().element_owner_mut());
+        let g = tree
+            .write()
+            .insert(&leaf("g"), c, 0, &mut owner.write().element_owner_mut());
+        // Direct `insert` does not maintain `child_ids` (the reconciler
+        // does); model the built subtree the reparent walk traverses.
+        tree.write().get_mut(k).unwrap().set_child_ids(vec![c]);
+        tree.write().get_mut(c).unwrap().set_child_ids(vec![g]);
+
+        assert_eq!(tree.read().get(k).unwrap().depth(), 2);
+        assert_eq!(tree.read().get(c).unwrap().depth(), 3);
+        assert_eq!(tree.read().get(g).unwrap().depth(), 4);
+
+        // Soft-remove K (→ inactive queue), then re-insert under the deep
+        // branch with the SAME GlobalKey: the real retake path moves the
+        // whole subtree.
+        tree.write()
+            .remove(k, &mut owner.write().element_owner_mut());
+        let migrated = tree
+            .write()
+            .insert(&keyed, deep, 0, &mut owner.write().element_owner_mut());
+        assert_eq!(migrated, k, "GlobalKey retake reuses the same ElementId");
+
+        assert_eq!(
+            tree.read().get(k).unwrap().depth(),
+            8,
+            "the moved root takes new_parent.depth + 1",
+        );
+        assert_eq!(
+            tree.read().get(c).unwrap().depth(),
+            9,
+            "a descendant of the moved root must follow it (parent.depth + 1)",
+        );
+        assert_eq!(
+            tree.read().get(g).unwrap().depth(),
+            10,
+            "the depth update recurses to the bottom of the moved subtree",
+        );
+
+        crate::test_only_clear_global_key_registry();
+    }
+
+    /// A keyed dependent that is soft-removed (deactivated into the inactive
+    /// queue) must be deregistered from its provider's dependent map right
+    /// away — Flutter's `Element.deactivate` removes the element from every
+    /// provider in `_dependencies` — and `finalize_tree` must leave the map
+    /// empty once the element is truly gone.
+    #[test]
+    #[serial_test::serial(global_key_registry)]
+    fn soft_removed_keyed_dependent_is_deregistered() {
+        use parking_lot::RwLock;
+
+        let tree = Arc::new(RwLock::new(ElementTree::new()));
+        let owner = Arc::new(RwLock::new(BuildOwner::new()));
+        crate::test_only_set_global_key_registry(&tree, &owner);
+
+        let provider = tree
+            .write()
+            .mount_root(&theme(1), &mut owner.write().element_owner_mut());
+        let keyed = Keyed {
+            key: crate::GlobalKey::new(),
+        };
+        let dependent =
+            tree.write()
+                .insert(&keyed, provider, 0, &mut owner.write().element_owner_mut());
+
+        // Register the dependency directly — `apply_dependent_record` is the
+        // single choke point the build_scope dep-sink drain flows through.
+        tree.write()
+            .apply_dependent_record(&crate::context::DependentRecord {
+                provider,
+                dependent,
+                depth: 1,
+            });
+        let dependent_count = |tree: &ElementTree| {
+            tree.get(provider)
+                .expect("provider exists")
+                .element()
+                .downcast_ref::<crate::InheritedElement<Theme>>()
+                .expect("root is InheritedElement<Theme>")
+                .dependents()
+                .len()
+        };
+        assert_eq!(dependent_count(&tree.read()), 1);
+
+        // Soft-remove (keyed → inactive queue): the deactivate purges the
+        // registration even though the element's slot (and state) survives.
+        tree.write()
+            .remove(dependent, &mut owner.write().element_owner_mut());
+        assert_eq!(
+            dependent_count(&tree.read()),
+            0,
+            "deactivation deregisters the dependent from the provider's map",
+        );
+
+        // End-of-frame: the element is truly unmounted; the map stays empty.
+        owner.write().finalize_tree(&mut tree.write());
+        assert_eq!(dependent_count(&tree.read()), 0);
 
         crate::test_only_clear_global_key_registry();
     }

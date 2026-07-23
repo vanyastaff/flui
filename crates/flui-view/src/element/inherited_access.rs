@@ -52,4 +52,12 @@ pub trait InheritedElementAccess {
     /// (HashMap keyed by id) so reconciliation-driven depth changes are
     /// captured without leaving stale entries.
     fn record_dependent(&mut self, dependent: ElementId, depth: usize);
+
+    /// Remove a dependent element from this `InheritedElement`'s map.
+    ///
+    /// Called when the dependent leaves the active tree (unmount /
+    /// deactivate) — Flutter's `InheritedElement.removeDependent`
+    /// (`framework.dart:6379`), invoked from `Element.deactivate`. No-op
+    /// when the id is not registered.
+    fn remove_dependent(&mut self, dependent: ElementId);
 }

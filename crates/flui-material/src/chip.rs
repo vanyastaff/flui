@@ -990,14 +990,13 @@ fn chip_content_constraints(padding: EdgeInsets, label_padding: EdgeInsets) -> B
 /// when TWO such standalone detectors both sit on the same hit-test path
 /// (exactly what a delete icon nested inside a tappable chip produces), each
 /// resolves its own tap independently, so a tap on the delete icon fires
-/// BOTH `on_deleted` and the chip's own `on_pressed`/`on_selected`. Neither
-/// `flui-app`'s binding nor any ancestor this crate's components mount
-/// installs a `GestureArenaScope` anywhere today — confirmed by grepping the
-/// workspace for it outside `flui-widgets` itself — so a real app has this
-/// exact double-fire bug for any nested tap targets, not just this one.
-/// Fixing that project-wide is out of scope here; this closes it locally,
-/// the same way any composed widget with more than one nested tap target
-/// must.
+/// BOTH `on_deleted` and the chip's own `on_pressed`/`on_selected`.
+/// `flui-app`'s binding now wraps the application root in a
+/// `GestureArenaScope` over the gesture binding's shared arena, so under a
+/// running app shell the two `InkWell`s compete there; this local scope
+/// keeps the same competition correct for a chip mounted with no shell
+/// above it (this crate's own test harness, or any detached subtree), where
+/// the ambient lookup would still miss.
 ///
 /// Constructing a fresh [`flui_interaction::arena::GestureArena::new`] on
 /// every `build()` call is safe despite [`Chip`]/[`FilterChip`] being

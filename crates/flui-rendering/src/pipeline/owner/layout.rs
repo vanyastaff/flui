@@ -13,7 +13,7 @@ use crate::{
     },
 };
 
-use super::{PipelineOwner, rebind_phase, subtree_arena::SubtreeArena};
+use super::{PipelineOwner, poison::LayoutFailureKind, rebind_phase, subtree_arena::SubtreeArena};
 
 // ============================================================================
 // Layout phase: run_layout + helpers
@@ -80,6 +80,22 @@ impl PipelineOwner<Layout> {
             // cached state (post-frame-1) OR the binding-set
             // root_constraints (frame-1 root).
             for dirty_node in dirty_nodes {
+                // Layout-poison backstop: a poisoned node that still
+                // landed in the dirty queue (queue pushes do not lift
+                // poison; only the mark_needs_layout walk does) is
+                // skipped.  Clearing NEEDS_LAYOUT here too keeps paint
+                // from treating the node as perpetually mid-layout.
+                if self.layout_poison.is_poisoned(dirty_node.id) {
+                    if let Some(node) = self.render_tree.get(dirty_node.id) {
+                        node.clear_needs_layout();
+                    }
+                    tracing::trace!(
+                        id = ?dirty_node.id,
+                        "run_layout: skipping layout-poisoned dirty entry",
+                    );
+                    continue;
+                }
+
                 // Skip entries whose NEEDS_LAYOUT flag was already
                 // cleared earlier in this iteration. Common case: a
                 // parent's layout_child callback recursively lays out
@@ -132,12 +148,63 @@ impl PipelineOwner<Layout> {
                     );
                     continue;
                 };
-                if let Err(e) = self.layout_dirty_root(dirty_node.id, constraints) {
-                    // Drain mid-phase marks back into `dirty` even on
-                    // the error path so they survive across phase
-                    // invocations.
-                    let _ = self.scheduler.exit_phase(PhaseKind::Layout);
-                    return Err(e);
+                match self.layout_dirty_root(dirty_node.id, constraints) {
+                    Ok(_) => {
+                        self.layout_poison.note_success(dirty_node.id);
+                    }
+                    Err(e) => {
+                        let kind = LayoutFailureKind::of(&e);
+                        match self.layout_poison.note_failure(dirty_node.id, kind) {
+                            // Re-poison after a fresh invalidation lifted
+                            // the poison: the caller was already signaled
+                            // on the first transition, so skip the node
+                            // quietly and let the frame complete with the
+                            // healthy rest of the tree.
+                            Some(false) => {
+                                if let Some(node) = self.render_tree.get(dirty_node.id) {
+                                    node.clear_needs_layout();
+                                }
+                                tracing::debug!(
+                                    id = ?dirty_node.id,
+                                    ?kind,
+                                    "layout poison re-engaged after a fresh \
+                                     invalidation; the node still fails layout \
+                                     and stays skipped.",
+                                );
+                                continue;
+                            }
+                            // First poison transition (Some(true)) or budget
+                            // not yet exhausted (None): surface the failure —
+                            // a structural break (or an exhausted retry
+                            // budget) is a bug the embedder must see once.
+                            // This cannot storm: once poisoned, later
+                            // run_layout passes skip the node via the
+                            // backstop above, so the Err is a one-frame
+                            // signal rather than a perpetual frame drop.
+                            first @ (Some(true) | None) => {
+                                if first.is_some() {
+                                    if let Some(node) = self.render_tree.get(dirty_node.id) {
+                                        node.clear_needs_layout();
+                                    }
+                                    tracing::error!(
+                                        id = ?dirty_node.id,
+                                        ?kind,
+                                        error = ?e,
+                                        "layout poison engaged: dirty-root layout \
+                                         failed with a structural error (or \
+                                         exhausted its retry budget); the node is \
+                                         skipped in later layout passes until \
+                                         freshly invalidated (mark_needs_layout).",
+                                    );
+                                }
+                                // Drain mid-phase marks back into `dirty`
+                                // even on the error path so they survive
+                                // across phase invocations.
+                                let _ = self.scheduler.exit_phase(PhaseKind::Layout);
+                                return Err(e);
+                            }
+                        }
+                    }
                 }
 
                 // Flutter parity (object.dart: `RenderObject.layout`
@@ -487,7 +554,11 @@ impl PipelineOwner<Layout> {
     ///    clears `NEEDS_LAYOUT`. When a descendant errored
     ///    mid-callback, geometry + constraints are still recorded but
     ///    `NEEDS_LAYOUT` stays set on the parent so the next dirty
-    ///    walk re-runs the subtree.
+    ///    walk re-runs the subtree — with one bound: a descendant that
+    ///    exhausts the layout-poison retry budget is skipped in place
+    ///    from then on (its last committed geometry stands in), and
+    ///    the flags it left set are cleared by the poison bookkeeping
+    ///    instead of retrying forever.
     ///
     /// # Soundness (Miri-clean)
     ///
@@ -528,11 +599,17 @@ impl PipelineOwner<Layout> {
     /// - **Descendant `Err` returned through the callback** → tracking
     ///   flag (`AtomicBool`) set; outer `perform_layout` still completes
     ///   with `Size::ZERO` for that child; outer `Ok` is returned to the
-    ///   caller, BUT parent's `NEEDS_LAYOUT` is **not cleared**.
-    ///   Next-frame dirty walk re-runs the parent. The `LayoutChildCallback`
+    ///   caller, BUT parent's `NEEDS_LAYOUT` is **not cleared** — unless
+    ///   the failure tips the child over its layout-poison budget, in
+    ///   which case the failed child (and its direct layout parent) have
+    ///   the flag cleared by the poison bookkeeping below and the child
+    ///   is skipped in later walks.  The `LayoutChildCallback`
     ///   signature is `Fn(_) -> Size`, not `Fn(_) -> Result<Size, _>`,
     ///   so callback failures can't propagate as typed `Err` through
-    ///   the parent's `perform_layout` body. Surfacing the typed error
+    ///   the parent's `perform_layout` body; instead they reach this
+    ///   method through the arena's failure sink as
+    ///   `(parent, failed, kind)` triples, which is what the poison
+    ///   counters consume.  Surfacing the typed error
     ///   to the outer caller requires widening `LayoutChildCallback`
     ///   to `Result`; deferred to Core.1.
     /// - **Stale tree state** (id not in tree → `NodeNotFound`; id is
@@ -576,11 +653,13 @@ impl PipelineOwner<Layout> {
     ///
     /// The cycle error collapses through the layout-child callback
     /// (Size::ZERO + `descendant_error_flag`) so the parent stays
-    /// `NEEDS_LAYOUT` for next-frame retry. The cycle persists
-    /// structurally so retry will re-surface `LayoutCycle` — but
-    /// predictably, never as panic/UB/hang. The user can fix the
-    /// tree (remove the cyclic `add_child`) and the next retry
-    /// succeeds.
+    /// `NEEDS_LAYOUT` for next-frame retry. A layout cycle is a
+    /// structural failure, so the first occurrence already engages the
+    /// layout poison on the re-entered node: the retry is attempted at
+    /// most once per fresh external invalidation rather than every
+    /// frame — predictably, never as panic/UB/hang. The user can fix the
+    /// tree (remove the cyclic `add_child`) and the next invalidation
+    /// lifts the poison, so the retry succeeds.
     ///
     /// Frame-cross panic safety: `LayoutCycleGuard::Drop` runs on
     /// every exit path including unwind from a panicking
@@ -597,10 +676,13 @@ impl PipelineOwner<Layout> {
         // Steps 1–3: collect subtree ids, pre-acquire disjoint &mut borrows,
         // and wrap them in a SubtreeArena for O(1) by-id lookup during the
         // recursive walk.  The unsafe aliasing machinery lives entirely inside
-        // `subtree_arena::SubtreeArena`; this call site is safe.
+        // `subtree_arena::SubtreeArena`; this call site is safe.  The arena
+        // also borrows the poison table read-only for the walk so poisoned
+        // nodes are skipped in place.
         let arena = SubtreeArena::from_tree(
             &mut self.render_tree,
             id,
+            &self.layout_poison,
             #[cfg(any(test, feature = "testing"))]
             &self.parent_data_seeds,
         )?;
@@ -623,7 +705,52 @@ impl PipelineOwner<Layout> {
         let pending_builds = arena.take_pending_builds();
         let pending_child_requests = arena.take_pending_child_requests();
         let pending_retain_bands = arena.take_pending_retain_bands();
+        let layout_failures = arena.take_layout_failures();
+        let layout_successes = arena.take_layout_successes();
         drop(arena);
+
+        // Poison bookkeeping for the walk's descendant failures/successes.
+        // A success clears the node's failure record; a failure increments
+        // it, and on the 0 → 1 poison transition the failed node AND its
+        // direct layout parent have their NEEDS_LAYOUT flags cleared: the
+        // parent's geometry with the poisoned child's stand-in size is the
+        // same value any further retry would produce, so keeping the flag
+        // would only hide the subtree from paint without changing it.
+        for succeeded in layout_successes {
+            self.layout_poison.note_success(succeeded);
+        }
+        for (parent, failed, kind) in layout_failures {
+            let Some(first_report) = self.layout_poison.note_failure(failed, kind) else {
+                continue;
+            };
+            if let Some(node) = self.render_tree.get(failed) {
+                node.clear_needs_layout();
+            }
+            if parent != failed
+                && let Some(node) = self.render_tree.get(parent)
+            {
+                node.clear_needs_layout();
+            }
+            if first_report {
+                tracing::error!(
+                    ?failed,
+                    ?parent,
+                    ?kind,
+                    "layout poison engaged: node failed layout with a structural \
+                     error (or exhausted its retry budget); skipping it in layout \
+                     until it is freshly invalidated (mark_needs_layout). Its last \
+                     committed geometry (or ZERO) stands in.",
+                );
+            } else {
+                tracing::debug!(
+                    ?failed,
+                    ?parent,
+                    ?kind,
+                    "layout poison re-engaged after a fresh invalidation; the \
+                     node still fails layout and stays skipped.",
+                );
+            }
+        }
 
         // Apply removes first.  Each entry is `(parent, child)`:
         // the parent is the sliver's own node_id (tagged at push time in
