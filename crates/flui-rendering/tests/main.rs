@@ -38,6 +38,8 @@ mod layout_cycle_guard;
 mod layout_dirty_root;
 #[path = "layout_offset_commit.rs"]
 mod layout_offset_commit;
+#[path = "layout_poison.rs"]
+mod layout_poison;
 #[path = "layout_raw_bridge.rs"]
 mod layout_raw_bridge;
 #[path = "paint_dirty_flag_discipline.rs"]

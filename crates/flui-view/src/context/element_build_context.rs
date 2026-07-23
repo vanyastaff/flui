@@ -296,6 +296,13 @@ impl BuildContext for ElementBuildContext {
         let view_any = accessor.view_as_any();
         callback(view_any);
 
+        // Reverse edge on the dependent's own node — the same record the
+        // `build_scope` dep-sink drain writes — so this element's
+        // unmount/deactivate can deregister it from the provider's map.
+        if let Some(self_node) = tree.get_mut(self_id) {
+            self_node.note_dependent_provider(ancestor_id);
+        }
+
         true
     }
 

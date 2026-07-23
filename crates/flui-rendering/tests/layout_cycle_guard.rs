@@ -70,14 +70,12 @@ fn structural_cycle_on_leaf_path_does_not_trigger_guard() {
 }
 
 // ============================================================================
-// Callback re-entry — guard fires, parent marked dirty for retry
+// Callback re-entry — guard fires, structural cycle poisons the node
 // ============================================================================
 
-/// This test's name was similarly corrected: an earlier name claimed
-/// the test "surfaces LayoutCycle" but it actually asserts
-/// `result.is_ok()` and only verifies the dirty-bit-preserved-
-/// for-retry semantics (the LayoutCycle Err is collapsed at the
-/// inner callback, never reaching the outer caller).
+/// The LayoutCycle Err is collapsed at the inner callback, never
+/// reaching the outer caller, so this test asserts `result.is_ok()` and
+/// verifies the bounded-retry state afterwards.
 ///
 /// The contract: when a user widget's `perform_layout` calls
 /// `ctx.layout_child` for an ancestor id that's already in flight up
@@ -85,15 +83,17 @@ fn structural_cycle_on_leaf_path_does_not_trigger_guard() {
 /// returns `Err(RenderError::LayoutCycle(id))`. The layout-child
 /// callback in `layout_subtree_borrowed` collapses that Err to
 /// `Size::ZERO` + sets `descendant_error_flag` for the current call
-/// frame. The dirty-bit-preserved contract (parent stays
-/// `NEEDS_LAYOUT`) is observable via tree state after the outer call
-/// returns Ok.
+/// frame. A layout cycle is a structural failure, so the layout poison
+/// engages on the first occurrence: the re-entered node is poisoned and
+/// the flags the cycle left set are cleared — the retry is bounded to
+/// one attempt per fresh external invalidation rather than running every
+/// frame.
 ///
 /// Trigger: Padding(P1) → Padding(P2) with P2.children additionally
 /// containing P1 (cyclic edge). Both widgets call `layout_child(0)`
 /// for their declared first child, so the cycle is reachable.
 #[test]
-fn callback_reentry_marks_parent_dirty_for_retry() {
+fn callback_reentry_poisons_structural_cycle() {
     let mut pipeline = fresh_layout_pipeline();
     let p1 = pipeline
         .render_tree_mut()
@@ -113,8 +113,11 @@ fn callback_reentry_marks_parent_dirty_for_retry() {
     // P2.perform_layout → layout_child(0) → recurses into P1 (cyclic
     // edge). P1's in-flight flag is already set → guard returns
     // Err(LayoutCycle(P1)) → callback collapses to Size::ZERO; P2's
-    // descendant_error_flag set → P2 stays NEEDS_LAYOUT. P1's
-    // callback only sees Ok(Size) from P2, so P1 is marked clean.
+    // descendant_error_flag set → P2 keeps NEEDS_LAYOUT for the walk.
+    // After the walk, the poison bookkeeping tips P1 (structural
+    // failure) and clears the flags the cycle left set. P1's callback
+    // only sees Ok(Size) from P2, so P1 is marked clean by the walk
+    // itself as well.
     let result = pipeline.layout_dirty_root(p1, constraints);
     assert!(
         result.is_ok(),
@@ -123,14 +126,15 @@ fn callback_reentry_marks_parent_dirty_for_retry() {
          {result:?}",
     );
 
-    // Retry-next-frame contract: P2 stays dirty because its callback
-    // observed LayoutCycle on the cyclic re-entry into P1.
+    // Bounded-retry contract: a structural cycle poisons instead of
+    // holding the dirty bit for an unbounded next-frame retry, so P2's
+    // NEEDS_LAYOUT is cleared by the poison bookkeeping.
     let p2_node = pipeline.render_tree().get(p2).expect("p2 in tree");
     assert!(
-        p2_node.needs_layout(),
-        "P2 must stay NEEDS_LAYOUT after its callback observed \
-         LayoutCycle on the cyclic re-entry into P1 — preserves \
-         retry-next-frame semantics",
+        !p2_node.needs_layout(),
+        "P2's NEEDS_LAYOUT must be cleared after the LayoutCycle engaged \
+         the layout poison — the cyclic child is skipped in later walks \
+         until freshly invalidated, rather than retried every frame",
     );
 }
 

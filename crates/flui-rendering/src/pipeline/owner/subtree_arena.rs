@@ -66,6 +66,8 @@ use crate::{
     storage::{RenderEntry, RenderNode, RenderTree},
 };
 
+use super::poison::{LayoutFailureKind, LayoutPoison};
+
 // ============================================================================
 // NodePtr — Send+Sync raw-pointer alias of a single &mut RenderNode borrow
 // ============================================================================
@@ -193,6 +195,33 @@ pub(super) struct SubtreeArena<'tree> {
     /// `Mutex` discipline as the other sinks.  Empty unless an element-owned
     /// sliver (`RenderSliverList`) completed layout this frame.
     pending_retain_bands: Mutex<Vec<(flui_foundation::RenderId, usize, usize)>>,
+    /// Read-only view of the owner's layout-poison table for the whole
+    /// walk.  Consulted at the top of each recursion level: a poisoned
+    /// node is skipped (its last committed geometry stands in) instead of
+    /// re-running a `perform_layout` that keeps failing.  Also gates the
+    /// success sink below so a skip's stand-in `Ok` is never mistaken for
+    /// a recovery.
+    layout_poison: &'tree LayoutPoison,
+    /// Descendant layout AND intrinsic-measurement failures swallowed by
+    /// the layout-child / intrinsic-child callbacks during this walk:
+    /// `(direct layout parent, failed node, kind)` triples.  The callbacks
+    /// must return a geometry / measured value, so the typed error cannot
+    /// propagate through `perform_layout`; this sink carries the failure
+    /// identity to `layout_dirty_root`, which feeds the poison counters
+    /// after the walk.  Same `Mutex` discipline as the other
+    /// sinks.  Empty unless a descendant errored this walk.
+    layout_failures: Mutex<
+        Vec<(
+            flui_foundation::RenderId,
+            flui_foundation::RenderId,
+            LayoutFailureKind,
+        )>,
+    >,
+    /// Descendants whose own layout succeeded this walk AND which had open
+    /// failure records — the only successes the poison table needs (a
+    /// success clears the record).  Filtered at record time so the sink
+    /// stays empty in the common all-healthy case.
+    layout_successes: Mutex<Vec<flui_foundation::RenderId>>,
     owner_thread: std::thread::ThreadId,
     _lifetime: PhantomData<&'tree mut ()>,
 }
@@ -210,6 +239,7 @@ impl<'tree> SubtreeArena<'tree> {
     pub(super) fn new(
         ids: &[RenderId],
         refs: Vec<&'tree mut RenderNode>,
+        layout_poison: &'tree LayoutPoison,
         #[cfg(any(test, feature = "testing"))] all_seeds: &FxHashMap<RenderId, ParentDataSeed>,
     ) -> Self {
         debug_assert_eq!(
@@ -243,6 +273,9 @@ impl<'tree> SubtreeArena<'tree> {
             pending_removes: Mutex::new(Vec::new()),
             pending_child_requests: Mutex::new(Vec::new()),
             pending_retain_bands: Mutex::new(Vec::new()),
+            layout_poison,
+            layout_failures: Mutex::new(Vec::new()),
+            layout_successes: Mutex::new(Vec::new()),
             owner_thread,
             _lifetime: PhantomData,
         }
@@ -358,6 +391,54 @@ impl<'tree> SubtreeArena<'tree> {
         std::mem::take(&mut *self.pending_retain_bands.lock())
     }
 
+    /// Records a descendant layout failure swallowed at a layout-child
+    /// callback.  `parent` is the node whose `perform_layout` invoked the
+    /// callback; `failed` is the direct child whose own layout returned
+    /// `err`.  Read by `layout_dirty_root` after the walk to feed the
+    /// poison counters.
+    fn note_layout_failure(
+        &self,
+        parent: RenderId,
+        failed: RenderId,
+        err: &crate::error::RenderError,
+    ) {
+        self.layout_failures
+            .lock()
+            .push((parent, failed, LayoutFailureKind::of(err)));
+    }
+
+    /// Records a descendant layout success, but only for a node with open
+    /// (not yet poisoned) failure records.  A poisoned node never reaches
+    /// this point as a real layout — the poison skip returns its stand-in
+    /// geometry through the same callback `Ok` arm — so filtering here is
+    /// what keeps a skip from being misread as a recovery.
+    fn note_layout_success(&self, id: RenderId) {
+        if self.layout_poison.has_open_failures(id) {
+            self.layout_successes.lock().push(id);
+        }
+    }
+
+    /// Takes the descendant layout failures recorded during this walk:
+    /// `(direct layout parent, failed node, kind)` triples.  Called by
+    /// `layout_dirty_root` after the walk, alongside the other sinks.
+    pub(super) fn take_layout_failures(
+        &self,
+    ) -> Vec<(
+        flui_foundation::RenderId,
+        flui_foundation::RenderId,
+        LayoutFailureKind,
+    )> {
+        std::mem::take(&mut *self.layout_failures.lock())
+    }
+
+    /// Takes the descendant layout successes recorded during this walk
+    /// (only nodes with open failure records; see
+    /// [`Self::note_layout_success`]).  Called by `layout_dirty_root`
+    /// after the walk.
+    pub(super) fn take_layout_successes(&self) -> Vec<flui_foundation::RenderId> {
+        std::mem::take(&mut *self.layout_successes.lock())
+    }
+
     // =========================================================================
     // Safe public API — callers in owner/mod.rs carry zero `unsafe`
     // =========================================================================
@@ -422,10 +503,13 @@ impl<'tree> SubtreeArena<'tree> {
     /// empty or a slot disappeared between collect and acquire.
     ///
     /// This is the one-stop safe constructor used by
-    /// [`super::PipelineOwner::layout_dirty_root`].
+    /// [`super::PipelineOwner::layout_dirty_root`].  `layout_poison` is the
+    /// owner's poison table, borrowed for exactly the walk's lifetime so
+    /// each recursion level can skip poisoned nodes.
     pub(super) fn from_tree(
         render_tree: &'tree mut RenderTree,
         id: RenderId,
+        layout_poison: &'tree LayoutPoison,
         #[cfg(any(test, feature = "testing"))] all_seeds: &FxHashMap<RenderId, ParentDataSeed>,
     ) -> crate::error::RenderResult<Self> {
         let subtree_ids = render_tree.collect_subtree_ids(id);
@@ -438,6 +522,7 @@ impl<'tree> SubtreeArena<'tree> {
         Ok(Self::new(
             &subtree_ids,
             node_refs,
+            layout_poison,
             #[cfg(any(test, feature = "testing"))]
             all_seeds,
         ))
@@ -700,6 +785,25 @@ unsafe fn layout_subtree_borrowed_impl(
         return Err(crate::error::RenderError::NodeNotFound(id));
     };
 
+    // Layout-poison skip: a node that exhausted its retry budget (or
+    // failed structurally) is not re-laid out until freshly invalidated —
+    // its last committed geometry stands in (`Size::ZERO` when it never
+    // succeeded, the same value the error-swallow path used before the
+    // poison mechanism existed).  The walk returns `Ok` here, NOT the
+    // recorded error: the poison decision was already made and logged
+    // when the budget tripped, and the parent still needs a geometry.
+    //
+    // SAFETY: the cycle guard is held, so no `&mut` of this slot is live
+    // on an ancestor frame (re-entry would have been rejected at
+    // `LayoutCycleGuard::enter`).  The shared reborrow is the only live
+    // borrow of the slot — the same invariant Phase 1's `parent_shared`
+    // relies on below.
+    if arena.layout_poison.is_poisoned(id) {
+        let node: &RenderNode = unsafe { &*node_ptr };
+        let geometry = node.geometry_box().unwrap_or(flui_types::Size::ZERO);
+        return Ok(geometry);
+    }
+
     // -----------------------------------------------------------------------
     // Phase 1 — shared reads of the parent slot (no &mut live).
     //
@@ -891,8 +995,12 @@ unsafe fn layout_subtree_borrowed_impl(
             // re-entry into `id`).  No two concurrent reborrows of the
             // same NodePtr.
             match unsafe { layout_subtree_borrowed(arena_for_cb, child_id, child_constraints) } {
-                Ok(size) => size,
+                Ok(size) => {
+                    arena_for_cb.note_layout_success(child_id);
+                    size
+                }
                 Err(err) => {
+                    arena_for_cb.note_layout_failure(id, child_id, &err);
                     descendant_error_for_cb.store(true, std::sync::atomic::Ordering::Relaxed);
                     tracing::error!(
                         parent = ?id,
@@ -900,7 +1008,8 @@ unsafe fn layout_subtree_borrowed_impl(
                         ?err,
                         "layout_dirty_root: descendant layout failed; \
                          returning Size::ZERO to caller's perform_layout. \
-                         Parent NEEDS_LAYOUT preserved for next-frame retry.",
+                         The failure is recorded against the child's retry \
+                         budget (layout poison).",
                     );
                     flui_types::Size::ZERO
                 }
@@ -935,8 +1044,12 @@ unsafe fn layout_subtree_borrowed_impl(
                 match unsafe {
                     layout_sliver_subtree_borrowed(arena_for_cb, child_id, sliver_constraints)
                 } {
-                    Ok(geometry) => geometry,
+                    Ok(geometry) => {
+                        arena_for_cb.note_layout_success(child_id);
+                        geometry
+                    }
                     Err(err) => {
+                        arena_for_cb.note_layout_failure(id, child_id, &err);
                         descendant_error_for_sliver_cb
                             .store(true, std::sync::atomic::Ordering::Relaxed);
                         tracing::error!(
@@ -945,7 +1058,8 @@ unsafe fn layout_subtree_borrowed_impl(
                             ?err,
                             "layout_dirty_root: sliver descendant layout failed; \
                              returning SliverGeometry::ZERO to caller's perform_layout. \
-                             Parent NEEDS_LAYOUT preserved for next-frame retry.",
+                             The failure is recorded against the child's retry \
+                             budget (layout poison).",
                         );
                         SliverGeometry::ZERO
                     }
@@ -972,8 +1086,12 @@ unsafe fn layout_subtree_borrowed_impl(
             // `id`).  No two concurrent reborrows of the same NodePtr.
             match unsafe { box_intrinsic_query_borrowed(arena_for_cb, child_id, dimension, extent) }
             {
-                Ok(value) => value,
+                Ok(value) => {
+                    arena_for_cb.note_layout_success(child_id);
+                    value
+                }
                 Err(err) => {
+                    arena_for_cb.note_layout_failure(id, child_id, &err);
                     descendant_error_for_intrinsics_cb
                         .store(true, std::sync::atomic::Ordering::Relaxed);
                     tracing::error!(
@@ -982,7 +1100,8 @@ unsafe fn layout_subtree_borrowed_impl(
                         ?err,
                         "layout_dirty_root: box child intrinsic query failed; \
                          returning 0.0 to caller's perform_layout. \
-                         Parent NEEDS_LAYOUT preserved for next-frame retry.",
+                         The failure is recorded against the child's retry \
+                         budget (layout poison).",
                     );
                     0.0
                 }
@@ -1170,6 +1289,31 @@ unsafe fn box_intrinsic_query_borrowed_impl(
         return Err(crate::error::RenderError::NodeNotFound(id));
     };
 
+    // Layout-poison skip: a node that exhausted its retry budget is not
+    // re-measured until freshly invalidated. Its last-good cached value
+    // for exactly this `(dimension, extent)` stands in — the intrinsic
+    // cache is only written on success, so a hit is a real previously
+    // computed answer; a miss falls back to 0.0, the same value the
+    // error-swallow path used before the poison mechanism existed.
+    //
+    // SAFETY: the cycle guard is held, so no `&mut` of this slot is live
+    // on an ancestor frame (re-entry would have been rejected at
+    // `LayoutCycleGuard::enter`).  The shared reborrow is the only live
+    // borrow of the slot.
+    if arena.layout_poison.is_poisoned(id) {
+        let node: &RenderNode = unsafe { &*node_ptr };
+        let value = node
+            .as_box()
+            .and_then(|entry| {
+                entry
+                    .state()
+                    .layout_cache()
+                    .peek_intrinsic(dimension, extent)
+            })
+            .unwrap_or(0.0);
+        return Ok(value);
+    }
+
     // SAFETY: this is the only live reborrow of `id` in this intrinsic
     // query frame.  Recursive callbacks target child slots; cycle guard
     // rejects attempts to revisit an in-flight ancestor.
@@ -1226,18 +1370,24 @@ unsafe fn box_intrinsic_query_borrowed_impl(
         let mut child_query =
             |index: usize, dim: crate::storage::IntrinsicDimension, ext: f32| -> f32 {
                 let Some(&child_id) = child_ids.get(index) else {
-                    child_err.get_or_insert(crate::error::RenderError::contract_violation(
+                    let err = crate::error::RenderError::contract_violation(
                         "sliver box child intrinsic query",
                         "child index out of range for this node's children",
-                    ));
+                    );
+                    arena.note_layout_failure(id, id, &err);
+                    child_err.get_or_insert(err);
                     return 0.0;
                 };
                 // SAFETY: the child query targets a child slot distinct from the
                 // current box node; the pre-acquired subtree arena is still live;
                 // `LayoutCycleGuard` will reject re-entry into any ancestor slot.
                 match unsafe { box_intrinsic_query_borrowed(arena, child_id, dim, ext) } {
-                    Ok(value) => value,
+                    Ok(value) => {
+                        arena.note_layout_success(child_id);
+                        value
+                    }
                     Err(err) => {
+                        arena.note_layout_failure(id, child_id, &err);
                         child_err.get_or_insert(err);
                         0.0
                     }
@@ -1328,6 +1478,20 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
     let Some(NodePtr(node_ptr)) = arena.get(id) else {
         return Err(crate::error::RenderError::NodeNotFound(id));
     };
+
+    // Layout-poison skip: same contract as the Box walk — a poisoned
+    // sliver is not re-laid out until freshly invalidated; its last
+    // committed geometry stands in (`SliverGeometry::ZERO` when it never
+    // succeeded).
+    //
+    // SAFETY: the cycle guard is held, so no `&mut` of this slot is live
+    // on an ancestor frame; the shared reborrow is the only live borrow
+    // of the slot.
+    if arena.layout_poison.is_poisoned(id) {
+        let node: &crate::storage::RenderNode = unsafe { &*node_ptr };
+        let geometry = node.geometry_sliver().unwrap_or(SliverGeometry::ZERO);
+        return Ok(geometry);
+    }
 
     // -----------------------------------------------------------------------
     // Phase 1 — shared reads of the parent slot (no &mut live).
@@ -1452,8 +1616,12 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
                 match unsafe {
                     layout_sliver_subtree_borrowed(arena_for_cb, child_id, child_constraints)
                 } {
-                    Ok(geometry) => geometry,
+                    Ok(geometry) => {
+                        arena_for_cb.note_layout_success(child_id);
+                        geometry
+                    }
                     Err(err) => {
+                        arena_for_cb.note_layout_failure(id, child_id, &err);
                         descendant_error_for_cb.store(true, std::sync::atomic::Ordering::Relaxed);
                         tracing::error!(
                             parent = ?id,
@@ -1461,7 +1629,8 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
                             ?err,
                             "layout_dirty_root: sliver descendant layout failed; \
                              returning SliverGeometry::ZERO to caller's perform_layout. \
-                             Parent NEEDS_LAYOUT preserved for next-frame retry.",
+                             The failure is recorded against the child's retry \
+                             budget (layout poison).",
                         );
                         SliverGeometry::ZERO
                     }
@@ -1475,8 +1644,12 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
             // SAFETY: same subtree-borrow contract as the sliver child
             // callback, but routed through the Box layout walk.
             match unsafe { layout_subtree_borrowed(arena_for_cb, child_id, child_constraints) } {
-                Ok(size) => size,
+                Ok(size) => {
+                    arena_for_cb.note_layout_success(child_id);
+                    size
+                }
                 Err(err) => {
+                    arena_for_cb.note_layout_failure(id, child_id, &err);
                     descendant_error_for_box_cb.store(true, std::sync::atomic::Ordering::Relaxed);
                     tracing::error!(
                         parent = ?id,
@@ -1484,7 +1657,8 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
                         ?err,
                         "layout_dirty_root: box descendant layout failed from sliver parent; \
                          returning Size::ZERO to caller's perform_layout. \
-                         Parent NEEDS_LAYOUT preserved for next-frame retry.",
+                         The failure is recorded against the child's retry \
+                         budget (layout poison).",
                     );
                     flui_types::Size::ZERO
                 }
@@ -1501,8 +1675,12 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
             // layout callback, routed through the Box intrinsic bridge.
             match unsafe { box_intrinsic_query_borrowed(arena_for_cb, child_id, dimension, extent) }
             {
-                Ok(value) => value,
+                Ok(value) => {
+                    arena_for_cb.note_layout_success(child_id);
+                    value
+                }
                 Err(err) => {
+                    arena_for_cb.note_layout_failure(id, child_id, &err);
                     descendant_error_for_intrinsic_cb
                         .store(true, std::sync::atomic::Ordering::Relaxed);
                     tracing::error!(
@@ -1511,7 +1689,8 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
                         ?err,
                         "layout_dirty_root: box intrinsic query failed from sliver parent; \
                          returning 0.0 to caller's perform_layout. \
-                         Parent NEEDS_LAYOUT preserved for next-frame retry.",
+                         The failure is recorded against the child's retry \
+                         budget (layout poison).",
                     );
                     0.0
                 }
@@ -1644,9 +1823,11 @@ mod tests {
         // Exercise `SubtreeArena::new` with the matched-length empty case
         // (zero ids, zero refs).  Verifies the debug_assert does not fire
         // and the resulting arena is empty with drained pending sinks.
+        let poison = LayoutPoison::default();
         let arena: SubtreeArena<'_> = SubtreeArena::new(
             &[],
             vec![],
+            &poison,
             #[cfg(any(test, feature = "testing"))]
             &FxHashMap::default(),
         );
@@ -1655,6 +1836,8 @@ mod tests {
         assert!(arena.take_pending_removes().is_empty());
         assert!(arena.take_pending_child_requests().is_empty());
         assert!(arena.take_pending_retain_bands().is_empty());
+        assert!(arena.take_layout_failures().is_empty());
+        assert!(arena.take_layout_successes().is_empty());
     }
 
     /// Verify that `SubtreeArena::new` panics (debug_assert fires) when
@@ -1671,9 +1854,11 @@ mod tests {
         // Two ids but zero refs — precondition violated.
         let id_a = RenderId::new(1);
         let id_b = RenderId::new(2);
+        let poison = LayoutPoison::default();
         let _ = SubtreeArena::new(
             &[id_a, id_b],
             vec![], // wrong length
+            &poison,
             #[cfg(any(test, feature = "testing"))]
             &FxHashMap::default(),
         );
@@ -1684,6 +1869,9 @@ mod tests {
     /// This is gate (c) from the adversarial test spec in the plan.
     #[test]
     fn check_thread_panics_on_wrong_thread() {
+        // Scoped thread borrows the stack-allocated poison table: the
+        // scope guarantees the join before `poison` goes out of scope.
+        let poison = LayoutPoison::default();
         let arena: SubtreeArena<'_> = SubtreeArena {
             by_id: HashMap::new(),
             #[cfg(any(test, feature = "testing"))]
@@ -1692,6 +1880,9 @@ mod tests {
             pending_removes: Mutex::new(Vec::new()),
             pending_child_requests: Mutex::new(Vec::new()),
             pending_retain_bands: Mutex::new(Vec::new()),
+            layout_poison: &poison,
+            layout_failures: Mutex::new(Vec::new()),
+            layout_successes: Mutex::new(Vec::new()),
             owner_thread: std::thread::current().id(),
             _lifetime: PhantomData,
         };
@@ -1700,19 +1891,19 @@ mod tests {
         // We use catch_unwind inside the thread to capture the panic and
         // relay it to the test thread via a channel.
         let (sender, receiver) = std::sync::mpsc::channel::<bool>();
-        std::thread::spawn(move || {
-            // arena.check_thread() is private — trigger it via arena.get(),
-            // which calls check_thread() before any HashMap lookup.
-            let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                // RenderId::new(1) produces a valid id that won't be in the
-                // empty map, but check_thread fires before the HashMap lookup.
-                arena.get(RenderId::new(1));
-            }))
-            .is_err();
-            sender.send(panicked).ok();
-        })
-        .join()
-        .ok();
+        std::thread::scope(|s| {
+            s.spawn(|| {
+                // arena.check_thread() is private — trigger it via arena.get(),
+                // which calls check_thread() before any HashMap lookup.
+                let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    // RenderId::new(1) produces a valid id that won't be in the
+                    // empty map, but check_thread fires before the HashMap lookup.
+                    arena.get(RenderId::new(1));
+                }))
+                .is_err();
+                sender.send(panicked).ok();
+            });
+        });
 
         let panicked = receiver.recv().expect("thread must send result");
         assert!(panicked, "check_thread must panic on wrong-thread access");
@@ -1739,6 +1930,7 @@ mod tests {
                 AtomicBool::new(false),
             ),
         );
+        let poison = LayoutPoison::default();
         let arena: SubtreeArena<'_> = SubtreeArena {
             by_id,
             #[cfg(any(test, feature = "testing"))]
@@ -1747,6 +1939,9 @@ mod tests {
             pending_removes: Mutex::new(Vec::new()),
             pending_child_requests: Mutex::new(Vec::new()),
             pending_retain_bands: Mutex::new(Vec::new()),
+            layout_poison: &poison,
+            layout_failures: Mutex::new(Vec::new()),
+            layout_successes: Mutex::new(Vec::new()),
             owner_thread: std::thread::current().id(),
             _lifetime: PhantomData,
         };
@@ -1775,6 +1970,7 @@ mod tests {
     /// requests) drain and leave themselves empty.
     #[test]
     fn pending_sink_drains_are_idempotent() {
+        let poison = LayoutPoison::default();
         let arena: SubtreeArena<'_> = SubtreeArena {
             by_id: HashMap::new(),
             #[cfg(any(test, feature = "testing"))]
@@ -1783,6 +1979,9 @@ mod tests {
             pending_removes: Mutex::new(Vec::new()),
             pending_child_requests: Mutex::new(Vec::new()),
             pending_retain_bands: Mutex::new(Vec::new()),
+            layout_poison: &poison,
+            layout_failures: Mutex::new(Vec::new()),
+            layout_successes: Mutex::new(Vec::new()),
             owner_thread: std::thread::current().id(),
             _lifetime: PhantomData,
         };

@@ -158,7 +158,7 @@ fn sliver_leaf_layout_rejects_invalid_geometry_before_state_commit() {
 }
 
 #[test]
-fn sliver_descendant_invalid_geometry_returns_zero_and_keeps_parent_dirty() {
+fn sliver_descendant_invalid_geometry_returns_zero_and_poisons() {
     let captured: Arc<Mutex<Option<SliverGeometry>>> = Arc::new(Mutex::new(None));
     let parent_obj: BoxedRenderObject = Box::new(BoxWithSliverChild::new(
         sliver_constraints(),
@@ -188,13 +188,20 @@ fn sliver_descendant_invalid_geometry_returns_zero_and_keeps_parent_dirty() {
         "invalid descendant geometry must be replaced with ZERO for the parent"
     );
 
+    // InvalidGeometry is a structural failure: the layout poison engages
+    // on the first occurrence, so instead of holding parent and child
+    // dirty for an unbounded next-frame retry, both flags are cleared and
+    // the failed sliver is skipped in later walks until freshly
+    // invalidated.
     let parent_node = pipeline
         .render_tree()
         .get(parent_id)
         .expect("parent remains in tree");
     assert!(
-        parent_node.needs_layout(),
-        "descendant InvalidGeometry must keep the parent dirty for retry"
+        !parent_node.needs_layout(),
+        "descendant InvalidGeometry is structural: the layout poison clears \
+         the parent's dirty bit (its geometry with the child's ZERO stand-in \
+         is the value any retry would reproduce)",
     );
 
     let sliver_entry = pipeline
@@ -207,7 +214,8 @@ fn sliver_descendant_invalid_geometry_returns_zero_and_keeps_parent_dirty() {
         "invalid descendant geometry must not be committed"
     );
     assert!(
-        sliver_entry.needs_layout(),
-        "invalid descendant must stay dirty for retry"
+        !sliver_entry.needs_layout(),
+        "the failed sliver is layout-poisoned: dirty bit cleared, layout \
+         skipped until a fresh invalidation lifts the poison",
     );
 }
