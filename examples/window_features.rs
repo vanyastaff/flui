@@ -64,7 +64,7 @@ fn main() -> anyhow::Result<()> {
     tracing::info!("  Visible:       {}", window.is_visible());
     tracing::info!("  Focused:       {}", window.is_focused());
 
-    platform.run(Box::new(move || {
+    platform.run(Box::new(move |_platform| {
         tracing::info!("Platform ready, window is open");
         // Keep window alive via closure capture
         let _window = window;

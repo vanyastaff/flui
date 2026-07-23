@@ -68,7 +68,7 @@ use crate::context::BuildContext;
 ///     }
 /// }
 /// ```
-pub trait StatefulView: Clone + Send + Sync + 'static + Sized {
+pub trait StatefulView: Clone + 'static + Sized {
     /// The State type for this View.
     type State: ViewState<Self>;
 
@@ -93,16 +93,26 @@ pub trait StatefulView: Clone + Send + Sync + 'static + Sized {
 /// 5. `deactivate()` - Called when temporarily removed
 /// 6. `activate()` - Called when re-inserted
 /// 7. `dispose()` - Called before permanent removal
-pub trait ViewState<V: StatefulView>: Send + Sync + 'static {
+pub trait ViewState<V: StatefulView>: 'static {
     /// Called once after the state is created.
     ///
     /// Use this for one-time initialization that requires BuildContext.
     fn init_state(&mut self, _ctx: &dyn BuildContext) {}
 
-    /// Called when an InheritedView dependency changes.
+    /// Called when an already-registered `InheritedView` dependency changes.
     ///
-    /// This is called after `init_state()` and whenever an InheritedView
-    /// that this state depends on (via `ctx.depend_on()`) notifies.
+    /// **Divergence from Flutter:** Flutter's `State.didChangeDependencies`
+    /// is guaranteed to fire once, unconditionally, right after `initState` —
+    /// even before any dependency has been registered — precisely so a
+    /// widget can use that first call to register one. This implementation
+    /// does not provide that guarantee: it fires only when an `InheritedView`
+    /// this state has *already* registered as a dependent of (via
+    /// `ctx.depend_on()`) later notifies. A state that needs its first
+    /// `depend_on`-derived value at mount time must resolve it directly in
+    /// `init_state` too (see e.g. `interaction::draggable::DraggableState`,
+    /// which resolves `Overlay::maybe_of` in both hooks for exactly this
+    /// reason) — relying on this hook alone for the initial value silently
+    /// never fires.
     fn did_change_dependencies(&mut self, _ctx: &dyn BuildContext) {}
 
     /// Build the child View tree.
@@ -119,7 +129,7 @@ pub trait ViewState<V: StatefulView>: Send + Sync + 'static {
     /// `ViewState::build` returns `impl IntoView` (return-position
     /// `impl Trait` in trait, stabilized in Rust 1.75). This makes
     /// `ViewState` **non-object-safe** — no `dyn ViewState` use exists
-    /// or is needed (Phase 3 §U22, FR-008).
+    /// or is needed (FR-008).
     ///
     /// The framework normalizes the opaque return via
     /// [`IntoView::into_view`] inside the build call site (see
@@ -156,8 +166,8 @@ pub trait ViewState<V: StatefulView>: Send + Sync + 'static {
     fn dispose(&mut self) {}
 }
 
-// The legacy `impl_stateful_view!` declarative macro was deleted in
-// Phase 3 §U24 (FR-010 "MUST NOT be two parallel authoring paths").
+// The legacy `impl_stateful_view!` declarative macro was deleted
+// (FR-010 "MUST NOT be two parallel authoring paths").
 // Widget authors now write `#[derive(StatefulView)]` from
 // `flui-macros` instead; the derive is re-exported from
 // `flui_view::prelude` for ergonomic single-import access. See

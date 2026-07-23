@@ -4,7 +4,7 @@
 //! [`Virtualizer`] for `O(log n)` range queries, builds only the
 //! visible-plus-cache band via the re-entrant build contract
 //! (ADR-0003 Decision 2, [`SliverLayoutContext::build_and_layout_box_child`]),
-//! and signals off-band children for garbage-collection via the dispose hook.
+//! and signals off-band children for render-owned garbage collection.
 //!
 //! # Design (Model B — logical-identity-keyed)
 //!
@@ -19,7 +19,7 @@
 //!    child out and feed the real extent back to the Virtualizer; if absent,
 //!    call the build hook — the v1 next-frame backend parks the request.
 //! 3. For children NOT in the cache band: honour `keep_alive` and otherwise
-//!    fire the dispose hook (the owning pipeline performs the actual removal).
+//!    enqueue render-owned disposal through the layout context.
 //! 4. Compute [`SliverGeometry`] with `scroll_offset_correction` from the
 //!    accumulated anchor-correction state machine.
 //!
@@ -42,9 +42,9 @@
 //!
 //! # Thread-affinity
 //!
-//! Control-plane: `Arc<dyn Fn…>` is `Send + Sync` (required by the
-//! `RenderSliver` supertrait) but the render object itself is not designed
-//! for concurrent mutation.
+//! Render-side storage remains data-plane compatible. This type does not store
+//! caller cleanup callbacks; owner-plane lifecycle work belongs above the
+//! render object boundary.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -96,8 +96,8 @@ use flui_rendering::virtualization::AnchorCorrection;
 ///   as needed (via the re-entrant build contract).
 /// - Feeds real measured extents back to a [`Virtualizer`] so the
 ///   scrollbar total converges incrementally from estimates.
-/// - Fires `dispose_hook` for children that scroll out of the cache band
-///   (the owning pipeline performs the actual tree removal).
+/// - Enqueues disposal for children that scroll out of the cache band when
+///   they are render-owned.
 ///
 /// # Construction
 ///
@@ -112,7 +112,6 @@ use flui_rendering::virtualization::AnchorCorrection;
 ///         if logical_index >= 10_000 { return None; }
 ///         Some(Box::new(/* your render object */) as Box<_>)
 ///     }),
-///     None, // optional dispose hook
 /// );
 /// ```
 pub struct RenderSliverListLazy {
@@ -125,12 +124,6 @@ pub struct RenderSliverListLazy {
     /// `Arc<dyn Fn>` (not `FnMut`) keeps it `Clone` and `Send + Sync`, matching
     /// the `RenderSliver` supertrait's `Send + Sync + 'static` requirement.
     child_source: Arc<dyn Fn(usize) -> Option<Box<dyn RenderObject<BoxProtocol>>> + Send + Sync>,
-
-    /// Optional hook fired just before a child is signalled for disposal
-    /// (scrolled out of the cache band without keep-alive). The hook receives
-    /// the logical index so the caller can clean up associated widget state.
-    /// Actual tree removal is done by the owning pipeline, not here.
-    dispose_hook: Option<Arc<dyn Fn(usize) + Send + Sync>>,
 
     // ── virtualization state ─────────────────────────────────────────────────
     /// Protocol-agnostic windowing engine.
@@ -173,7 +166,6 @@ impl Clone for RenderSliverListLazy {
         Self {
             item_count: self.item_count,
             child_source: self.child_source.clone(),
-            dispose_hook: self.dispose_hook.clone(),
             virtualizer: self.virtualizer.clone(),
             logical_to_slot: self.logical_to_slot.clone(),
             pending_correction: self.pending_correction,
@@ -194,7 +186,6 @@ impl RenderSliverListLazy {
     /// - `child_source`: factory `logical_index → Box<dyn RenderObject<BoxProtocol>>`.
     ///   `None` signals end-of-data (used for unknown-length sources).
     ///   Must be `Send + Sync`.
-    /// - `dispose_hook`: optional callback fired before a child is disposed.
     ///
     /// # Panics
     ///
@@ -206,7 +197,6 @@ impl RenderSliverListLazy {
         child_source: Arc<
             dyn Fn(usize) -> Option<Box<dyn RenderObject<BoxProtocol>>> + Send + Sync,
         >,
-        dispose_hook: Option<Arc<dyn Fn(usize) + Send + Sync>>,
     ) -> Self {
         assert!(
             default_extent_estimate.is_finite() && default_extent_estimate > 0.0,
@@ -216,7 +206,6 @@ impl RenderSliverListLazy {
         Self {
             item_count,
             child_source,
-            dispose_hook,
             virtualizer: Virtualizer::new(item_count, default_extent_estimate),
             logical_to_slot: BTreeMap::new(),
             pending_correction: 0.0,
@@ -355,12 +344,10 @@ impl RenderSliver for RenderSliverListLazy {
                     child_source(logical_i)
                 })
             },
-            // Dispose hook: fire the optional caller-side cleanup callback.
-            &mut |logical_i| {
-                if let Some(ref hook) = self.dispose_hook {
-                    hook(logical_i);
-                }
-            },
+            // Render-owned disposal has no executable owner-plane callback at
+            // this layer. Higher layers observe lifecycle through their own
+            // element/owner state.
+            &mut |_logical_i| {},
         );
         geometry
     }
@@ -395,7 +382,7 @@ mod tests {
     // ── anchor-correction state machine ───────────────────────────────────────
 
     fn make_list() -> RenderSliverListLazy {
-        RenderSliverListLazy::new(1000, 48.0, Arc::new(|_| None), None)
+        RenderSliverListLazy::new(1000, 48.0, Arc::new(|_| None))
     }
 
     #[test]
@@ -493,13 +480,13 @@ mod tests {
     #[test]
     #[should_panic(expected = "default_extent_estimate must be finite")]
     fn new_panics_on_non_finite_estimate() {
-        let _ = RenderSliverListLazy::new(10, f32::INFINITY, Arc::new(|_| None), None);
+        let _ = RenderSliverListLazy::new(10, f32::INFINITY, Arc::new(|_| None));
     }
 
     #[test]
     #[should_panic(expected = "default_extent_estimate must be finite")]
     fn new_panics_on_zero_estimate() {
-        let _ = RenderSliverListLazy::new(10, 0.0, Arc::new(|_| None), None);
+        let _ = RenderSliverListLazy::new(10, 0.0, Arc::new(|_| None));
     }
 
     #[test]

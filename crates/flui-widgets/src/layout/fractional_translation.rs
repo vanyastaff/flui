@@ -56,11 +56,18 @@ impl RenderView for FractionalTranslation {
     type Protocol = BoxProtocol;
     type RenderObject = RenderFractionalTranslation;
 
-    fn create_render_object(&self) -> Self::RenderObject {
+    fn create_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+    ) -> Self::RenderObject {
         self.build_render_object()
     }
 
-    fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+    fn update_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+        render_object: &mut Self::RenderObject,
+    ) {
         *render_object = self.build_render_object();
     }
 

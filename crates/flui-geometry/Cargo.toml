@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "Type-safe 2D geometry primitives for FLUI (split from flui-types in D-block PR-C-2)"
+description = "Type-safe 2D geometry primitives for FLUI"
 repository.workspace = true
 readme = "README.md"
 keywords = ["geometry", "graphics", "ui", "flui", "math"]
@@ -23,7 +23,7 @@ thiserror = { workspace = true }
 # Optional dependencies
 serde = { workspace = true, optional = true }
 
-# Linear-algebra backend (Option D, N-geom PR 2): glam provides SIMD-by-default
+# Linear-algebra backend (Option D): glam provides SIMD-by-default
 # matrix/vector math + `bytemuck` Pod derives + the `mint` interop cascade.
 # Non-optional — Matrix4 (and, in later PR-2 steps, Vec2/Transform) delegate to it.
 # Workspace base has bytemuck; add mint here for the interop cascade.
@@ -33,7 +33,7 @@ glam = { workspace = true, features = ["mint"] }
 bytemuck = { workspace = true }
 
 # kurbo: f64 Bézier/curve math for the painting layer. The bridge
-# (src/bridges/kurbo.rs) is gated behind `feature = "kurbo"` (PR 3, U8).
+# (src/bridges/kurbo.rs) is gated behind `feature = "kurbo"`.
 kurbo = { version = "0.13", optional = true }
 
 [dev-dependencies]

@@ -72,7 +72,7 @@ fn main() {
     tracing::info!("");
     tracing::info!("Waiting for input events...");
 
-    platform.run(Box::new(move || {
+    platform.run(Box::new(move |_platform| {
         tracing::info!("Platform ready, window is open");
         // Keep window alive via closure capture
         let _window = window;

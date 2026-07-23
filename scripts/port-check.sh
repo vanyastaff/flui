@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # scripts/port-check.sh
 #
-# Verifies the 21 refusal triggers (1-21, with #9 numbered for FR-036)
+# Verifies the 22 refusal triggers (1-22, with #9 numbered for FR-036)
 # documented in docs/PORT.md against the workspace, plus the FR-033
 # sanctioned-dyn-boundary check, the N-geom.U16 engine-glam boundary
 # guard, Cross.H2 canonical-type-home guards, the Cross.H3
@@ -31,7 +31,7 @@
 # docs/PORT.md "## Verification" for usage and rationale.
 #
 # Usage:
-#   bash scripts/port-check.sh             # check all 21 triggers + extra guards; silent on pass
+#   bash scripts/port-check.sh             # check all 22 triggers + extra guards; silent on pass
 #   bash scripts/port-check.sh -v          # verbose: per-trigger pass + marker totals
 #   bash scripts/port-check.sh -b          # marker-budget mode (per-file breakdown)
 #   bash scripts/port-check.sh --verbose   # alias for -v
@@ -427,6 +427,46 @@ if [[ -n "${fr033_hits}" ]]; then
 else
   if [[ "${verbose}" -eq 1 ]]; then
     echo "ok    FR-033: downcast_ref::<…> in update-dispatch path"
+  fi
+fi
+
+# -----------------------------------------------------------------------------
+# FR-033/widgets (ADR-0019 U4) — type-erased downcasts in the public widget
+# catalog.
+#
+# `Navigator::pop(result)` must erase its result through `Box<dyn Any + Send>`,
+# because a heterogeneous route stack cannot carry each route's `Output` type
+# (ADR-0019 §4). The downcast back to `R::Output` in `RouteRecord::did_complete`
+# is signed off in ADR-0019's *Public API and sign-off (U4)*.
+#
+# Before U4, `crates/flui-widgets` sat outside both FR-036 and FR-033, so that
+# boundary would have shipped with no gate at all. This grep closes it: any new
+# `downcast`/`downcast_ref`/`downcast_mut` in the catalog must be justified with
+# a `// PORT-CHECK-OK-DOWNCAST: <reason>` marker, i.e. a deliberate act.
+#
+# Registry addition (2026-07-16, Catalog.1 theming + localizations substrate):
+# `Localizations::maybe_of`/`build` (crates/flui-widgets/src/localization/
+# localizations.rs) downcast an `Arc<dyn Any + Send + Sync>` resource-map entry
+# back to the delegate-declared, caller-requested resource type — the same
+# heterogeneous-erasure shape as the ADR-0019 U4 boundary above (a
+# `Localizations` cannot be generic over every `LocalizationsDelegate::Resources`
+# type its delegate list carries and stay `dyn`-storable). Confined to that one
+# module, both call sites marked.
+# -----------------------------------------------------------------------------
+fr033w_hits=$(rg --line-number --column 'downcast(_ref|_mut)?::<' \
+  crates/flui-widgets/src 2>/dev/null \
+  | grep -Ev '//\s*PORT-CHECK-OK-DOWNCAST:' \
+  | grep -Ev ':\s*(//!|///|//)' \
+  || true)
+if [[ -n "${fr033w_hits}" ]]; then
+  echo "VIOLATION FR-033/widgets: unsanctioned downcast in crates/flui-widgets/src"
+  echo "see docs/PORT.md (FR-033/widgets) — mark the site with // PORT-CHECK-OK-DOWNCAST: <reason>"
+  echo "${fr033w_hits}"
+  echo ""
+  violations=$((violations + 1))
+else
+  if [[ "${verbose}" -eq 1 ]]; then
+    echo "ok    FR-033/widgets: downcast in flui-widgets (Navigator pop-result + localizations resource-map boundaries only)"
   fi
 fi
 
@@ -1089,6 +1129,16 @@ fi
 #      perform_layout_raw API per-protocol.
 #   Pre-existing surfaces: ViewKey, BuildContext, Notification,
 #                          NotifiableElement, RenderObject, RenderObjectTrait
+#   ADR-0021 U4: `HeroTag(Arc<dyn ViewKey>)` in flui-widgets. A hero's tag is
+#   Flutter's `Object` tag (`heroes.dart:286-309`), compared with `==` and used as a
+#   map key. `ViewKey` is the framework's existing erased key trait and already
+#   provides `key_eq` / `key_hash`, so `HeroTag` derives its `Eq`/`Hash` from the
+#   trait and NEVER calls `ViewKey::as_any` — no downcast, so FR-033 is untouched.
+#   Registered under the pre-existing `ViewKey` surface rather than a new one.
+#   ADR-0021 §7n: `Hero::create_rect_tween` stores a user-provided
+#   `Box<dyn Animatable<Rect>>`, the same erased animation-transform boundary as
+#   Flutter's `CreateRectTween`. It is value-only (no tree access), Send+Sync, and the
+#   public test proves the flight samples it.
 #   Framework trait surfaces (gesture / focus / delegate / parent-data /
 #   clipper / binding patterns — widely-used reference shapes; their
 #   owned-storage uses sit on sanctioned FR-029 categories):
@@ -1100,7 +1150,19 @@ fi
 #   through at deferred-insert apply, keeping the generic insert path parent-data-
 #   agnostic. Sanctioned by the same FR-029 #6 rationale as the *LayoutCtxErased
 #   erasure traits below.
-fr036_allowed='dyn\s+(\$crate::|[a-zA-Z_][a-zA-Z0-9_]*::)*(View|ViewKey|BuildContext|ElementBase|ElementBehavior|StatelessElementBase|StatefulElementBase|ProxyElementBase|InheritedElementBase|RenderElementBase|RootElementBase|ErrorElementBase|InheritedElementAccess|RenderObjectTrait|RenderObject|Listenable|Notification|NotifiableElement|WidgetsBindingObserver|Animation|BoxedView|ViewObject|Any|Error|GestureArenaMember|MonotonicClock|FocusTraversalPolicy|SliverGridDelegate|SingleChildLayoutDelegate|MultiChildLayoutDelegate|MultiChildLayoutContext|FlowDelegate|CustomPainter|ParentData|LogicalIndexParentData|CustomClipper|RendererBinding|HitTestable|Debug|Fn|FnMut|FnOnce|BoxLayoutCtxErased|SliverLayoutCtxErased|ChildManager)\b'
+#   Catalog.1 theming + localizations substrate (2026-07-16):
+#   ErasedLocalizationsDelegate — `Arc<dyn ErasedLocalizationsDelegate>` inside
+#   `BoxedLocalizationsDelegate` erases a `LocalizationsDelegate`'s associated
+#   `Resources` type so a `Localizations` widget's delegate list can be
+#   heterogeneous (same shape as `ErasedRoute` above: a `Localizations` cannot
+#   be generic over every delegate's resource type and stay `dyn`-storable).
+#   WidgetsLocalizations — `Box<dyn WidgetsLocalizations>` inside
+#   `BoxedWidgetsLocalizations` erases the concrete localized-resource
+#   implementor (`DefaultWidgetsLocalizations`, `flui-localizations`'
+#   `GlobalWidgetsLocalizations`) behind the trait every `Localizations::of`
+#   caller depends on — Flutter parity: `Localizations.of<WidgetsLocalizations>`
+#   is keyed by the abstract interface, never the concrete runtime class.
+fr036_allowed='dyn\s+(\$crate::|[a-zA-Z_][a-zA-Z0-9_]*::)*(View|ViewKey|BuildContext|ElementBase|ElementBehavior|StatelessElementBase|StatefulElementBase|ProxyElementBase|InheritedElementBase|RenderElementBase|RootElementBase|ErrorElementBase|InheritedElementAccess|RenderObjectTrait|RenderObject|Listenable|Notification|NotifiableElement|WidgetsBindingObserver|Animation|Animatable|BoxedView|ViewObject|Any|Error|GestureArenaMember|MonotonicClock|FocusTraversalPolicy|SliverGridDelegate|SingleChildLayoutDelegate|MultiChildLayoutDelegate|MultiChildLayoutContext|FlowDelegate|CustomPainter|ParentData|LogicalIndexParentData|CustomClipper|RendererBinding|HitTestable|Debug|Fn|FnMut|FnOnce|BoxLayoutCtxErased|SliverLayoutCtxErased|ChildManager|Future|Stream|ErasedRoute|NavigatorObserver|Simulation|ScrollPhysics|ImageProvider|ErasedLocalizationsDelegate|WidgetsLocalizations)\b'
 
 # Framework crates under enforcement.
 fr036_scope=(
@@ -1110,6 +1172,11 @@ fr036_scope=(
   crates/flui-engine/src
   crates/flui-rendering/src
   crates/flui-interaction/src
+  # ADR-0019 U4: the public `Navigator` erases its route stack behind
+  # `Box<dyn ErasedRoute>` and its observers behind `Arc<dyn NavigatorObserver>`.
+  # Before U4 this crate was outside every dyn/downcast gate, so those boundaries
+  # would have shipped unguarded. Both are now registered in the allowlist above.
+  crates/flui-widgets/src
 )
 
 # Reference-form prefix covering all four `&`/`&mut`/`&'a`/`&'a mut` shapes
@@ -1128,7 +1195,7 @@ fr036_hits=$(rg --line-number --column \
     "${fr036_scope[@]}" 2>/dev/null \
   | grep -Ev ':\s*(//!|///|//)' \
   | grep -Ev '//\s*PORT-CHECK-OK-DYN:' \
-  | grep -Ev 'Pin<\s*Box<\s*dyn\s+([a-zA-Z_][a-zA-Z0-9_]*::)*Future|Box<\s*dyn\s+([a-zA-Z_][a-zA-Z0-9_]*::)*Future|Box<\s*dyn\s+([a-zA-Z_][a-zA-Z0-9_]*::)*Iterator' \
+  | grep -Ev 'Pin<\s*Box<\s*dyn\s+([a-zA-Z_][a-zA-Z0-9_]*::)*(Future|Stream)|Box<\s*dyn\s+([a-zA-Z_][a-zA-Z0-9_]*::)*(Future|Stream)|Box<\s*dyn\s+([a-zA-Z_][a-zA-Z0-9_]*::)*Iterator' \
   | grep -Ev "${fr036_ref_prefix}Fn[A-Za-z]*\\s*[(<]|${fr036_ref_prefix}FnMut|${fr036_ref_prefix}FnOnce" \
   | grep -Ev "${fr036_allowed}" \
   || true)
@@ -1440,6 +1507,41 @@ check "21" \
   crates/flui-engine/src
 
 # -----------------------------------------------------------------------------
+# Trigger 22 (ADR-0018 U1) — `rebuild_handle()` never acquired in a frame phase.
+#
+# A *frame capability* lets code reach into a frame from outside one:
+# `rebuild_handle()` (ADR-0018 U1) dirties an element for the next frame;
+# `post_frame_handle()` (ADR-0021 U2) queues work for the end of the current one.
+#
+# Acquiring either inside `build` and scheduling from it is an unbounded rebuild
+# loop, or a callback fired against the frame still running; inside
+# `perform_layout` / `paint` / compositing either would touch the tree after
+# `build_scope` has already run for this frame. FOUNDATIONS.md permits an
+# out-of-catalog `mark_needs_build` driver ONLY when "gated by a refusal trigger
+# barring signal subscriptions from `build`/`layout`/`paint`" — this is it.
+#
+# Sanctioned shape: acquire in `ViewState::init_state` /
+# `did_change_dependencies`, store it, fire it later from a callback.
+#
+# A line grep cannot express "inside a function body", so this trigger delegates
+# to a brace-depth scanner. Run `scripts/check-frame-capability-scope.sh
+# --self-test` to verify the scanner against its own accept/reject fixtures.
+# -----------------------------------------------------------------------------
+frame_capability_hits=$("${repo_root}/scripts/check-frame-capability-scope.sh" crates 2>/dev/null || true)
+if [[ -n "${frame_capability_hits}" ]]; then
+  echo "VIOLATION 22: a lifecycle-only frame capability (rebuild_handle / post_frame_handle)"
+  echo "             was acquired inside a build/layout/paint body (ADR-0018 U1, ADR-0021 U2)"
+  echo "see ${trigger_doc} (trigger 22)"
+  echo "${frame_capability_hits}"
+  echo ""
+  violations=$((violations + 1))
+else
+  if [[ "${verbose}" -eq 1 ]]; then
+    echo "ok    22: rebuild_handle()/post_frame_handle() acquired in build/layout/paint (must be a lifecycle hook)"
+  fi
+fi
+
+# -----------------------------------------------------------------------------
 # Summary
 # -----------------------------------------------------------------------------
 if [[ "${violations}" -gt 0 ]]; then
@@ -1448,7 +1550,7 @@ if [[ "${violations}" -gt 0 ]]; then
   exit 1
 fi
 
-echo "port-check: all 21 refusal triggers + FR-033 + N-geom.U16 + Cross.H2 + Cross.H3 + Cross.H7 grep clean"
+echo "port-check: all 22 refusal triggers + FR-033 + FR-033/widgets + N-geom.U16 + Cross.H2 + Cross.H3 + Cross.H7 grep clean"
 
 # -----------------------------------------------------------------------------
 # Marker summary (verbose mode only). Non-blocking — markers are Phase B

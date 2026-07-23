@@ -64,7 +64,10 @@ impl RenderView for CustomPaint {
     type Protocol = BoxProtocol;
     type RenderObject = RenderCustomPaint;
 
-    fn create_render_object(&self) -> Self::RenderObject {
+    fn create_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+    ) -> Self::RenderObject {
         RenderCustomPaint::new(
             self.painter.clone(),
             self.foreground_painter.clone(),
@@ -72,7 +75,11 @@ impl RenderView for CustomPaint {
         )
     }
 
-    fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+    fn update_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+        render_object: &mut Self::RenderObject,
+    ) {
         render_object.set_painter(self.painter.clone());
         render_object.set_foreground_painter(self.foreground_painter.clone());
         render_object.set_preferred_size(self.size);
@@ -126,7 +133,8 @@ mod tests {
 
     #[test]
     fn create_render_object_defaults_to_no_painters_and_zero_size() {
-        let render_object = CustomPaint::new().create_render_object();
+        let render_object =
+            CustomPaint::new().create_render_object(&flui_view::RenderObjectContext::detached());
         assert!(render_object.painter().is_none());
         assert!(render_object.foreground_painter().is_none());
         assert_eq!(render_object.preferred_size(), Size::ZERO);
@@ -138,7 +146,7 @@ mod tests {
             .painter(painter())
             .foreground_painter(painter())
             .size(Size::new(px(30.0), px(20.0)))
-            .create_render_object();
+            .create_render_object(&flui_view::RenderObjectContext::detached());
 
         assert!(render_object.painter().is_some());
         assert!(render_object.foreground_painter().is_some());
@@ -150,13 +158,17 @@ mod tests {
 
     #[test]
     fn update_render_object_reinstalls_painters_and_size() {
-        let mut render_object = CustomPaint::new().create_render_object();
+        let mut render_object =
+            CustomPaint::new().create_render_object(&flui_view::RenderObjectContext::detached());
         assert!(render_object.painter().is_none());
 
         CustomPaint::new()
             .painter(painter())
             .size(Size::new(px(5.0), px(5.0)))
-            .update_render_object(&mut render_object);
+            .update_render_object(
+                &flui_view::RenderObjectContext::detached(),
+                &mut render_object,
+            );
 
         assert!(render_object.painter().is_some());
         assert!(render_object.foreground_painter().is_none());

@@ -575,7 +575,7 @@ mod gpu_tests {
     /// `[0,0,0,0]` pixels (cleared source). Those in-bounds zeros — NOT the decal —
     /// drive this test's contraction (the rect is far from the surface edge). The
     /// decal-boundary erosion is covered separately by
-    /// `erode_shrinks_at_viewport_decal_boundary` (E1).
+    /// `erode_shrinks_at_viewport_decal_boundary`.
     ///
     /// **Proves:**
     /// - `min` accumulation contracts the drawn rect by `ceil(radius)` pixels from
@@ -978,7 +978,7 @@ mod gpu_tests {
         );
     }
 
-    // ── E1: erode shrinks at the viewport decal boundary (MORPH-1) ────────────
+    // ── Erode shrinks at the viewport decal boundary ───────────────────────────
 
     /// Erode of opaque content flush against the LEFT viewport edge must shrink the
     /// content at that edge. Samples beyond the edge are decal = TRANSPARENT BLACK
@@ -1043,7 +1043,7 @@ mod gpu_tests {
             let alpha = pixels[mid_row * surface_width + col][3];
             assert_eq!(
                 alpha, 0,
-                "E1/MORPH-1: column {col} at row {mid_row} must erode to alpha 0 at the \
+                "column {col} at row {mid_row} must erode to alpha 0 at the \
                  left viewport decal boundary (decal=vec4(0) for both ops); got {alpha}. \
                  The pre-fix erode used a vec4(1) decal here and left the edge opaque."
             );
@@ -1052,22 +1052,22 @@ mod gpu_tests {
         let interior_alpha = pixels[mid_row * surface_width + 10][3];
         assert!(
             interior_alpha > 200,
-            "E1: interior column 10 at row {mid_row} must stay opaque (got {interior_alpha})"
+            "interior column 10 at row {mid_row} must stay opaque (got {interior_alpha})"
         );
     }
 
-    // ── E2: tight-bounds dilate — corner growth (MORPH-2) + placement (MORPH-3) ─
+    // ── Tight-bounds dilate — corner growth and placement ──────────────────────
 
     /// Dilate of an opaque square with a TIGHT `content_bounds`/`grown_bounds`
     /// (sub-viewport), constructed directly as a `DrawItem::Filter` (the current
     /// `save_layer_with_image_filter` producer only emits `bounds=None`, so this is
     /// the only way to exercise the tight-bounds paths). Verifies two latent fixes:
     ///
-    /// - **MORPH-2**: the separable V pass must read the H-pass horizontal halo
+    /// - The separable V pass must read the H-pass horizontal halo
     ///   (it decals at the texture edge, not the original content rect), so a box
     ///   dilate fills its CORNERS. Pre-fix the V pass decaled at `content_bounds`
     ///   and clipped the halo → corners stayed transparent.
-    /// - **MORPH-3**: the composite must map `grown_bounds` to the matching texture
+    /// - The composite must map `grown_bounds` to the matching texture
     ///   sub-region (`src_uv = grown/viewport`), not the whole texture (`[0,1]`),
     ///   so the result lands at the correct surface position. Pre-fix it stretched
     ///   the full-viewport texture onto the `grown_bounds` rect.
@@ -1134,32 +1134,32 @@ mod gpu_tests {
         // Content center stays opaque (basic dilate + correct placement).
         assert!(
             alpha_at(32, 32) > 200,
-            "E2: content center (32,32) must be opaque, got {}",
+            "content center (32,32) must be opaque, got {}",
             alpha_at(32, 32)
         );
         // Grown CORNER (43,43) — inside grown_bounds [20,44), diagonally beyond the
-        // original square. Opaque ONLY if MORPH-2 (V reads the H halo → corner fill)
-        // AND MORPH-3 (composite maps grown→correct texels) are both fixed.
+        // original square. Opaque only if the V pass reads the H halo (corner fill)
+        // and the composite maps grown to correct texels are both fixed.
         assert!(
             alpha_at(43, 43) > 200,
-            "E2/MORPH-2+3: grown corner (43,43) must be opaque after a box dilate; \
+            "grown corner (43,43) must be opaque after a box dilate; \
              got {}. Pre-fix the V pass clipped the H halo at content_bounds (corner \
              transparent) and/or the composite stretched the full texture onto \
              grown_bounds (mis-placed).",
             alpha_at(43, 43)
         );
-        // Well OUTSIDE grown_bounds must be transparent — no stretch-bleed (MORPH-3).
+        // Well OUTSIDE grown_bounds must be transparent — no stretch-bleed.
         assert_eq!(
             alpha_at(6, 6),
             0,
-            "E2/MORPH-3: pixel (6,6) far outside grown_bounds [20,44) must be \
+            "pixel (6,6) far outside grown_bounds [20,44) must be \
              transparent; got {}. A full-texture composite stretch would bleed \
              content here.",
             alpha_at(6, 6)
         );
     }
 
-    // ── E3: tight-bounds erode shrinks at the content-rect edge (MORPH-1) ──────
+    // ── Tight-bounds erode shrinks at the content-rect edge ────────────────────
 
     /// Erode of an opaque square that FILLS a TIGHT `content_bounds` (sub-viewport),
     /// constructed directly as a `DrawItem::Filter`. At the content-rect edge the H
@@ -1169,7 +1169,7 @@ mod gpu_tests {
     /// case where the cleared source coincides with the decal). Pre-fix the erode
     /// decal was `vec4(1)`, which overrode the boundary and left the edge un-eroded.
     ///
-    /// Closes the tight-bounds-erode coverage gap (E1 covers the viewport edge with
+    /// Closes the tight-bounds-erode coverage gap (the viewport-edge test above covers
     /// `content_rect == viewport`; this covers a tight content rect). **Absolute,
     /// oracle-independent assertions.** RED on the pre-fix erode decal; GREEN after.
     #[test]
@@ -1231,7 +1231,7 @@ mod gpu_tests {
         assert_eq!(
             alpha_at(22, 31),
             0,
-            "E3/MORPH-1: left content edge (22,31) must erode to alpha 0 at the tight \
+            "left content edge (22,31) must erode to alpha 0 at the tight \
              content-rect decal boundary (decal=vec4(0)); got {}. Pre-fix the erode \
              decal was vec4(1) and left the content edge opaque.",
             alpha_at(22, 31)
@@ -1239,7 +1239,7 @@ mod gpu_tests {
         // The content center (well clear of every eroded edge) stays opaque.
         assert!(
             alpha_at(31, 31) > 200,
-            "E3: content center (31,31) must stay opaque after erode; got {}",
+            "content center (31,31) must stay opaque after erode; got {}",
             alpha_at(31, 31)
         );
     }

@@ -55,10 +55,9 @@ use crate::traits::TreeNav;
 pub struct Ancestors<'a, I: TreeId, T: TreeNav<I>> {
     tree: &'a T,
     current: Option<I>,
-    /// Step counter for cycle detection (audit T-12). Bounded by the
-    /// tree's storage size: an acyclic parent chain of N nodes has at
-    /// most N steps. A malformed cycle would loop indefinitely
-    /// without this guard.
+    /// Step counter for cycle detection. Bounded by the tree's storage
+    /// size: an acyclic parent chain of N nodes has at most N steps. A
+    /// malformed cycle would loop indefinitely without this guard.
     steps: usize,
 }
 
@@ -93,14 +92,13 @@ impl<I: TreeId, T: TreeNav<I>> Iterator for Ancestors<'_, I, T> {
             return None;
         }
 
-        // Cycle detection (audit T-12): an acyclic parent chain has at
-        // most `tree.len()` distinct nodes. Past that, a parent
-        // pointer must be cycling. Cap the walk at `tree.len() + 1`
-        // and bail with a `tracing::warn!`. Cycles cannot be
-        // constructed through the public API (cycle 2 PR #100/#101
-        // added cycle-rejection to LayerTree / SemanticsTree
-        // `add_child`, and cycle 3 TreeWrite lifts that contract to
-        // the trait) — this is defence in depth against slabs
+        // Cycle detection: an acyclic parent chain has at most
+        // `tree.len()` distinct nodes. Past that, a parent pointer must
+        // be cycling. Cap the walk at `tree.len() + 1` and bail with a
+        // `tracing::warn!`. Cycles cannot be constructed through the
+        // public API — `LayerTree` / `SemanticsTree` `add_child` reject
+        // them directly, and `TreeWrite` lifts that same contract onto
+        // the trait — so this is defence in depth against slabs
         // corrupted by `unsafe` paths or de-serialization.
         self.steps += 1;
         if self.steps > self.tree.len().saturating_add(1) {

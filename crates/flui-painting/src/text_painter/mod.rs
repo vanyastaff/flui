@@ -4,7 +4,7 @@
 //! Provides [`TextPainter`], which measures and paints styled text.
 //! Rust equivalent of Flutter's `TextPainter` class.
 //!
-//! # Concern split (Mythos chain U7)
+//! # Concern split
 //!
 //! The 990-LOC `text_painter.rs` god module was split into a
 //! `text_painter/` directory. Four files:

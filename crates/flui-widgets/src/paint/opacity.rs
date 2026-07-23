@@ -36,11 +36,18 @@ impl RenderView for Opacity {
     type Protocol = BoxProtocol;
     type RenderObject = RenderOpacity;
 
-    fn create_render_object(&self) -> Self::RenderObject {
+    fn create_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+    ) -> Self::RenderObject {
         RenderOpacity::new(self.opacity)
     }
 
-    fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+    fn update_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+        render_object: &mut Self::RenderObject,
+    ) {
         render_object.set_opacity(self.opacity);
     }
 

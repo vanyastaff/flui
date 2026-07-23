@@ -439,9 +439,9 @@ struct BlurPipelines {
     upsample: Arc<wgpu::RenderPipeline>,
 }
 
-// Pre-cycle this module exposed `PipelineManager` + `PipelineHandle` as a
+// This module used to expose `PipelineManager` + `PipelineHandle` as a
 // forward-looking wrapper around `ShaderCache` and `wgpu::RenderPipeline`.
-// Both types were deleted in cycle 4 E-3:
+// Both types were deleted:
 //   - `PipelineManager` carried only a `shader_cache: Arc<ShaderCache>` field;
 //     the `device` / `pipelines` fields were commented-out TODOs.
 //   - `PipelineHandle` carried only `shader_type: ShaderType`, semantically
@@ -449,9 +449,10 @@ struct BlurPipelines {
 // The real pipeline ownership lives in `wgpu/pipelines.rs::PipelineCache`,
 // which `Backend` actually uses. Forward-looking shapes that have been TODO
 // for >18 months and have zero workspace consumers are codified design drift,
-// not "cost-cheap options" — see audit
-// `docs/research/2026-05-22-flui-rendering-engine-audit.md` E-3 and the
-// cycle-1 PR #93 `typestate.rs` deletion precedent.
+// not "cost-cheap options" — see
+// `docs/research/2026-05-22-flui-rendering-engine-audit.md`, which documents
+// this same pattern (a speculative wrapper type deleted once it turned out to
+// have zero consumers) recurring elsewhere in this codebase too.
 
 /// Vertex for fullscreen quad rendering
 ///

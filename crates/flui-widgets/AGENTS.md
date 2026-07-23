@@ -38,8 +38,8 @@ impl Foo {
 impl RenderView for Foo {
     type Protocol = BoxProtocol;
     type RenderObject = RenderFoo;
-    fn create_render_object(&self) -> Self::RenderObject { /* build from config */ }
-    fn update_render_object(&self, ro: &mut Self::RenderObject) { /* set_* or `*ro = …` */ }
+    fn create_render_object(&self, _ctx: &flui_view::RenderObjectContext<'_>) -> Self::RenderObject { /* build from config */ }
+    fn update_render_object(&self, _ctx: &flui_view::RenderObjectContext<'_>, ro: &mut Self::RenderObject) { /* set_* or `*ro = …` */ }
     fn has_children(&self) -> bool { self.child.is_some() }
     fn visit_child_views(&self, v: &mut dyn FnMut(&dyn View)) {
         if let Some(c) = self.child.as_ref() { v(c); }
@@ -78,6 +78,9 @@ Integration tests in `tests/` use the headless view-level harness
 render-tree root (the parentless render node — works for `RenderView` and
 `StatelessView` roots alike), drives a real `run_frame`, and reads back
 `Size`/`Offset`. **No `WidgetsBinding` singleton** — tests are parallel-safe.
+Owner-side fixture actions that can schedule local post-frame work must run through
+the harness's owner scope; direct navigation/animation mutations outside that scope
+correctly receive `InactiveLane` rather than silently queueing work.
 
 Every new widget needs a test asserting a **computed** size/offset that would be
 wrong without the widget (a regression that fails on a `Size::ZERO`/mis-wire).

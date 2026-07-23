@@ -1,20 +1,20 @@
-//! ADR-0014 Slice C milestone harness — the semantics assembly walk.
+//! ADR-0014 milestone harness — the semantics assembly walk.
 //!
 //! Exercises `PipelineOwner<Semantics>::run_semantics` through the real
 //! pipeline (`RenderTester::run_to_semantics`) against small test-only
 //! render objects that override `describe_semantics_configuration` /
 //! `excludes_semantics_subtree` directly. The three real consumers
 //! (`RenderSemanticsAnnotations` / `RenderMergeSemantics` /
-//! `RenderExcludeSemantics`) are ADR-0014 Slice D, a separate follow-up
+//! `RenderExcludeSemantics`) are a separate ADR-0014 follow-up
 //! task, and do not exist yet.
 //!
-//! This is the Slice C DoD harness proof required by AGENTS.md's
+//! This is the DoD harness proof required by AGENTS.md's
 //! Definition of Done: a test that fails without the assembly walk body
 //! and passes with it. Before the walk landed, `run_semantics` was a
 //! `tracing::warn!` no-op stub that never created a `SemanticsNode` tree —
 //! every assertion below that reads `run.semantics_owner()` would have
 //! panicked on `None`/an empty tree. The `merge_semantics_collapses_a_nested_boundary_descendant`
-//! test specifically targets the D3 boundary-vs-merge refinement (a naive
+//! test specifically targets the boundary-vs-merge refinement (a naive
 //! `is_semantics_boundary() || has_content()` predicate, or a boundary
 //! decision that ignores `is_merging_semantics_of_descendants`, would
 //! leave the nested boundary child as its own node).
@@ -33,7 +33,7 @@ use flui_types::{Size, geometry::px};
 /// A fixed-size leaf that reports a configurable `SemanticsConfiguration`.
 ///
 /// Stands in for a `Semantics`/button-like leaf widget — the real
-/// `RenderSemanticsAnnotations` (Slice D) is not built yet.
+/// `RenderSemanticsAnnotations` is not built yet.
 #[derive(Debug, Default)]
 struct SemanticsLeaf {
     side: f32,
@@ -94,10 +94,10 @@ impl RenderBox for SemanticsLeaf {
 }
 
 /// A pass-through container (`Variable` arity) standing in for the
-/// not-yet-built `RenderMergeSemantics` / `RenderExcludeSemantics`
-/// (Slice D): it can declare itself a semantics boundary, a
+/// not-yet-built `RenderMergeSemantics` / `RenderExcludeSemantics`:
+/// it can declare itself a semantics boundary, a
 /// merge-descendants boundary, or an excluded subtree, purely to exercise
-/// the assembly walk's D3/D5 decisions.
+/// the assembly walk's boundary/merge decisions.
 #[derive(Debug, Default)]
 struct SemanticsContainer {
     boundary: bool,
@@ -160,7 +160,7 @@ fn constraints() -> BoxConstraints {
 }
 
 // ============================================================================
-// Disabled semantics: no owner at all (ADR-0014 D1 lazy-creation contract).
+// Disabled semantics: no owner at all (ADR-0014 lazy-creation contract).
 // ============================================================================
 
 #[test]
@@ -172,7 +172,7 @@ fn semantics_disabled_produces_no_owner() {
     assert!(
         run.semantics_owner().is_none(),
         "a PipelineOwner that never enabled semantics must never lazily \
-         create a SemanticsOwner (ADR-0014 D1)",
+         create a SemanticsOwner (ADR-0014)",
     );
 }
 
@@ -195,7 +195,7 @@ fn labeled_root_leaf_becomes_one_semantics_node() {
 
     let root_id = owner
         .root()
-        .expect("the walk root always forms a SemanticsNode (ADR-0014 D3 root special case)");
+        .expect("the walk root always forms a SemanticsNode (ADR-0014 root special case)");
     let node = owner.get(root_id).expect("root id must resolve to a node");
 
     assert_eq!(node.label(), Some("Submit"));
@@ -247,7 +247,7 @@ fn merge_semantics_boundary_collapses_plain_children_into_one_node() {
     );
 }
 
-/// The D3 refinement, specifically: a descendant that independently
+/// The boundary-vs-merge refinement, specifically: a descendant that independently
 /// declares itself a semantics boundary must still collapse into the
 /// `MergeSemantics`-equivalent ancestor's single node. A boundary decision
 /// of the form `is_semantics_boundary() || has_content()` (the ADR's

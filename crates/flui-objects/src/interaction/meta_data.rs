@@ -13,7 +13,8 @@
 //!
 //! * Metadata is stored as `Option<Arc<dyn Any + Send + Sync + 'static>>`
 //!   — type-erased like Flutter, but `Arc`-shared so the render
-//!   object stays `Clone` (Wave 3a's `CustomClipper` discipline).
+//!   object stays `Clone` without putting executable callbacks in render
+//!   storage.
 //! * Hit-test policy is the typed [`HitTestBehavior`] enum
 //!   (`DeferToChild` / `Opaque` / `Translucent`) rather than two
 //!   independent booleans — the helper methods on

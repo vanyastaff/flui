@@ -47,6 +47,10 @@ fn main() {
 
     // Create window before running the event loop.
     // On Windows, window creation works before run() since it uses Win32 API directly.
+    // On the winit backend (Linux), this fails fast with a clear error instead —
+    // `WinitPlatform::open_window` rejects calls made before `Platform::run` starts
+    // the event loop rather than hanging forever, so the `.expect` below panics
+    // immediately here rather than opening a window.
     let window = platform
         .open_window(window_options)
         .expect("Failed to create window");
@@ -58,7 +62,7 @@ fn main() {
 
     // Run platform event loop (takes ownership)
     tracing::info!("Starting platform event loop...");
-    platform.run(Box::new(move || {
+    platform.run(Box::new(move |_platform| {
         tracing::info!("Platform ready callback invoked");
         // Window is already created; keep it alive via the closure capture
         let _window = window;

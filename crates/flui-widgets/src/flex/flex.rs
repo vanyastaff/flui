@@ -111,16 +111,23 @@ impl<C: ViewSeq> fmt::Debug for Flex<C> {
 
 impl<C> flui_view::RenderView for Flex<C>
 where
-    C: ViewSeq + Clone + Send + Sync + 'static,
+    C: ViewSeq + Clone + 'static,
 {
     type Protocol = BoxProtocol;
     type RenderObject = RenderFlex;
 
-    fn create_render_object(&self) -> Self::RenderObject {
+    fn create_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+    ) -> Self::RenderObject {
         self.style.build(self.direction)
     }
 
-    fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+    fn update_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+        render_object: &mut Self::RenderObject,
+    ) {
         *render_object = self.style.build(self.direction);
     }
 
@@ -165,16 +172,23 @@ impl<C: ViewSeq> fmt::Debug for Row<C> {
 
 impl<C> flui_view::RenderView for Row<C>
 where
-    C: ViewSeq + Clone + Send + Sync + 'static,
+    C: ViewSeq + Clone + 'static,
 {
     type Protocol = BoxProtocol;
     type RenderObject = RenderFlex;
 
-    fn create_render_object(&self) -> Self::RenderObject {
+    fn create_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+    ) -> Self::RenderObject {
         self.style.build(FlexDirection::Horizontal)
     }
 
-    fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+    fn update_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+        render_object: &mut Self::RenderObject,
+    ) {
         *render_object = self.style.build(FlexDirection::Horizontal);
     }
 
@@ -219,16 +233,23 @@ impl<C: ViewSeq> fmt::Debug for Column<C> {
 
 impl<C> flui_view::RenderView for Column<C>
 where
-    C: ViewSeq + Clone + Send + Sync + 'static,
+    C: ViewSeq + Clone + 'static,
 {
     type Protocol = BoxProtocol;
     type RenderObject = RenderFlex;
 
-    fn create_render_object(&self) -> Self::RenderObject {
+    fn create_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+    ) -> Self::RenderObject {
         self.style.build(FlexDirection::Vertical)
     }
 
-    fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+    fn update_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+        render_object: &mut Self::RenderObject,
+    ) {
         *render_object = self.style.build(FlexDirection::Vertical);
     }
 

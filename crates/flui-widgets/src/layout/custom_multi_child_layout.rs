@@ -81,16 +81,23 @@ impl<C: ViewSeq> fmt::Debug for CustomMultiChildLayout<C> {
 
 impl<C> flui_view::RenderView for CustomMultiChildLayout<C>
 where
-    C: ViewSeq + Clone + Send + Sync + 'static,
+    C: ViewSeq + Clone + 'static,
 {
     type Protocol = BoxProtocol;
     type RenderObject = RenderCustomMultiChildLayoutBox;
 
-    fn create_render_object(&self) -> Self::RenderObject {
+    fn create_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+    ) -> Self::RenderObject {
         RenderCustomMultiChildLayoutBox::new(self.delegate.clone())
     }
 
-    fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+    fn update_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+        render_object: &mut Self::RenderObject,
+    ) {
         render_object.set_delegate(self.delegate.clone());
     }
 
@@ -193,7 +200,7 @@ mod tests {
     #[test]
     fn create_render_object_installs_the_given_delegate() {
         let render_object = CustomMultiChildLayout::new(noop_delegate(), Vec::<BoxedView>::new())
-            .create_render_object();
+            .create_render_object(&flui_view::RenderObjectContext::detached());
         assert!(
             render_object.delegate().as_any().is::<NoopDelegate>(),
             "create_render_object must install the exact delegate passed to new()",
@@ -204,12 +211,14 @@ mod tests {
     fn update_render_object_replaces_the_delegate() {
         let mut render_object =
             CustomMultiChildLayout::new(noop_delegate(), Vec::<BoxedView>::new())
-                .create_render_object();
+                .create_render_object(&flui_view::RenderObjectContext::detached());
         assert!(render_object.delegate().as_any().is::<NoopDelegate>());
 
         let other: Arc<dyn MultiChildLayoutDelegate> = Arc::new(OtherDelegate);
-        CustomMultiChildLayout::new(other, Vec::<BoxedView>::new())
-            .update_render_object(&mut render_object);
+        CustomMultiChildLayout::new(other, Vec::<BoxedView>::new()).update_render_object(
+            &flui_view::RenderObjectContext::detached(),
+            &mut render_object,
+        );
 
         assert!(
             render_object.delegate().as_any().is::<OtherDelegate>(),

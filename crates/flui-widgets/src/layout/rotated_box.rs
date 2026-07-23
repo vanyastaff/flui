@@ -43,11 +43,18 @@ impl RenderView for RotatedBox {
     type Protocol = BoxProtocol;
     type RenderObject = RenderRotatedBox;
 
-    fn create_render_object(&self) -> Self::RenderObject {
+    fn create_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+    ) -> Self::RenderObject {
         RenderRotatedBox::new(self.quarter_turns)
     }
 
-    fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+    fn update_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+        render_object: &mut Self::RenderObject,
+    ) {
         render_object.set_quarter_turns(self.quarter_turns);
     }
 

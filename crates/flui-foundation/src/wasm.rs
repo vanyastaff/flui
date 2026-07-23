@@ -52,7 +52,7 @@ pub trait WasmNotSendSync {}
 #[cfg(target_arch = "wasm32")]
 impl<T> WasmNotSendSync for T {}
 
-// NOTE (audit I-22): `WasmNotSend` was removed — zero in-workspace
+// NOTE: `WasmNotSend` was removed — zero in-workspace
 // consumers. The `WasmNotSendSync` sibling above carries the relaxed
 // concurrency contract for the workspace; a Send-only variant has no
 // consumer that the Sync-relaxed form does not already cover. If a

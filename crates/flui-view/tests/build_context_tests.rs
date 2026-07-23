@@ -3,6 +3,11 @@
 //! Tests the BuildContext trait implementation, dependency tracking,
 //! ancestor lookups, and rebuild scheduling.
 
+// ADR-0027: ElementBuildContext's current test/prod seam still takes
+// Arc<RwLock<ElementTree/BuildOwner>>. The owner graph is !Send; do not restore
+// Send + Sync to satisfy clippy. Future UiRealm/Rc migration should remove this.
+#![allow(clippy::arc_with_non_send_sync)]
+
 use std::{any::TypeId, sync::Arc};
 
 use flui_view::{
@@ -10,6 +15,7 @@ use flui_view::{
     ElementTree, IntoView, Lifecycle, StatelessView, View, ViewExt,
 };
 use parking_lot::RwLock;
+use static_assertions::assert_not_impl_any;
 
 // ============================================================================
 // Test Views
@@ -571,13 +577,14 @@ fn test_set_building_flag() {
 }
 
 // ============================================================================
-// owner() Tests
+// rebuild_handle() Tests
 // ============================================================================
 
+/// `ElementBuildContext` mints a REAL handle — it owns the `BuildOwner` `Arc`.
+/// This replaces the old `owner() -> None` stub, which reported a design
+/// limitation instead of providing the capability callers actually needed.
 #[test]
-fn test_owner_returns_none() {
-    // Note: owner() returns None because we can't return reference through RwLock
-    // This is a design limitation that may need addressing
+fn rebuild_handle_from_element_build_context_is_active_and_bound() {
     let (tree, owner) = create_tree_and_owner();
 
     let view = SimpleView {
@@ -587,9 +594,15 @@ fn test_owner_returns_none() {
         .write()
         .mount_root(&view, &mut owner.write().element_owner_mut());
 
-    let ctx = ElementBuildContext::for_element(root_id, tree, owner).unwrap();
+    let ctx = ElementBuildContext::for_element(root_id, tree, Arc::clone(&owner)).unwrap();
+    let handle = ctx.rebuild_handle();
 
-    assert!(ctx.owner().is_none());
+    assert!(handle.is_active());
+    assert_eq!(handle.element_id(), Some(root_id));
+
+    // Scheduling routes into the same inbox `build_scope` drains.
+    handle.schedule();
+    assert_eq!(owner.read().pending_external_builds(), 1);
 }
 
 #[test]
@@ -611,19 +624,17 @@ fn test_build_owner_access_via_method() {
 }
 
 // ============================================================================
-// Thread Safety Tests
+// Ownership Tests
 // ============================================================================
 
 #[test]
-fn test_context_send_sync() {
-    fn assert_send_sync<T: Send + Sync>() {}
-    assert_send_sync::<ElementBuildContext>();
+fn context_is_owner_local() {
+    assert_not_impl_any!(ElementBuildContext: Send, Sync);
 }
 
 #[test]
-fn test_context_builder_send_sync() {
-    fn assert_send_sync<T: Send + Sync>() {}
-    assert_send_sync::<ElementBuildContextBuilder>();
+fn context_builder_is_owner_local() {
+    assert_not_impl_any!(ElementBuildContextBuilder: Send, Sync);
 }
 
 // ============================================================================
@@ -633,8 +644,8 @@ fn test_context_builder_send_sync() {
 #[test]
 fn test_depend_on_returns_none_when_no_inherited_ancestor() {
     // depend_on returns None when no InheritedView<T> ancestor exists.
-    // Acceptance coverage for `BuildContextExt::depend_on` (plan §U9
-    // edge case "no-ancestor None").
+    // Acceptance coverage for `BuildContextExt::depend_on`'s
+    // edge case "no-ancestor None".
     let (tree, owner) = create_tree_and_owner();
 
     let view = SimpleView {

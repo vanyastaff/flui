@@ -1,9 +1,9 @@
 //! Hit test result accumulation -- canonical type re-exported from
 //! `flui_interaction::routing`.
 //!
-//! # Cycle 4 R-7/U-4 migration
+//! # What this file used to contain
 //!
-//! Pre-cycle this file owned a `HitTestResult` struct with
+//! This file used to own a `HitTestResult` struct with
 //! `Arc<dyn HitTestTarget>`-based entries (`Vec<HitTestEntry>` +
 //! a `Vec<MatrixTransformPart>` transform stack +
 //! `add_with_paint_offset` / `add_with_raw_transform` helpers). It
@@ -14,13 +14,14 @@
 //! rendering HitTestEntry targets to interaction targets` bridge
 //! between the two types because conversion was never wired.
 //!
-//! Cycle 4 audit R-7 flagged this as a parallel-type smell. The
-//! interaction-side wins because:
+//! An audit flagged this as a parallel-type smell: the same concept
+//! (a hit-test result) was defined twice, and the two copies had
+//! drifted so far apart that a manual conversion bridge was needed
+//! between them. The interaction-side type won out because:
 //!   - only its entries carry runtime-dispatch data (handler closure
 //!     + cursor),
 //!   - Flutter's canonical `HitTestResult` lives in `gestures/`,
-//!     which `flui-interaction` is the workspace equivalent of
-//!     (per PR #84 framework-spine work),
+//!     which `flui-interaction` is the workspace equivalent of,
 //!   - the rendering-side `HitTestTarget` trait had ONE production
 //!     impl (`RenderView`) and TWO file-private `DummyTarget` stubs --
 //!     vestigial dyn-dispatch surface, not a system the workspace

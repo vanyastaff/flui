@@ -220,7 +220,7 @@ fn main() {
         tracing::info!("Scene render pipeline active — set FLUI_SCENE_PLUGIN for hot-reload");
     }
 
-    platform.run(Box::new(move || {
+    platform.run(Box::new(move |_platform| {
         tracing::info!("Platform ready");
         // Keep resources alive via closure capture
         let _window = &window;

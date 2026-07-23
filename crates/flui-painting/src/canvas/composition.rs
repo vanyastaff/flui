@@ -1,6 +1,6 @@
 //! Canvas composition: multi-canvas merge and static constructors.
 //!
-//! Mythos chain U4 extracted these from the 3,305-LOC `canvas.rs` god
+//! These were extracted from the 3,305-LOC `canvas.rs` god
 //! module. Composition is the seam between parent and child render
 //! objects: a parent records its content, gets the children's
 //! `Canvas`es, and merges them in via `extend_from`/`merge`/`extend`.
@@ -76,7 +76,7 @@ impl Canvas {
     /// transform, the `offset` argument would silently drop on the
     /// floor.
     ///
-    /// # Performance (Cycle 5 U11 / audit P-11)
+    /// # Performance
     ///
     /// The previous shape was `let mut shifted = dl.clone();
     /// shifted.apply_transform(...); self.display_list.append(shifted)` —

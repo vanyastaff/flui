@@ -155,10 +155,10 @@ impl SemanticsOwner {
 
     /// Creates a new SemanticsOwner without a callback (for testing).
     ///
-    /// **Testing only** — gated on `#[cfg(any(test, feature = "testing"))]`
-    /// per U23. Production code constructs through [`Self::new`] which
-    /// requires a platform callback; a no-callback owner is a
-    /// scaffolding-only convenience.
+    /// **Testing only** — gated on `#[cfg(any(test, feature = "testing"))]`.
+    /// Production code constructs through [`Self::new`] which requires a
+    /// platform callback; a no-callback owner is a scaffolding-only
+    /// convenience.
     #[cfg(any(test, feature = "testing"))]
     pub fn new_without_callback() -> Self {
         Self {
@@ -248,7 +248,7 @@ impl SemanticsOwner {
 
     /// Removes a SemanticsNode from the tree (cascades to all descendants).
     ///
-    /// Cycle 3 T-2: routes through the unified [`TreeWrite::remove`](flui_tree::TreeWrite::remove)
+    /// Routes through the unified [`TreeWrite::remove`](flui_tree::TreeWrite::remove)
     /// contract (cascade by default). For non-cascading removal,
     /// reach into [`SemanticsTree::remove_shallow`](crate::tree::SemanticsTree::remove_shallow) via
     /// [`Self::tree`] / [`Self::tree_mut`].
@@ -360,10 +360,10 @@ impl SemanticsOwner {
             return;
         }
 
-        // Send to platform via clone-and-release (matches U14 lock
-        // discipline). Cloning the Arc out of `self.callback` decouples
-        // the callback invocation from any future locks the owner may
-        // hold around the buffer.
+        // Send to platform via clone-and-release: cloning the Arc out of
+        // `self.callback` decouples the callback invocation from any
+        // future locks the owner may hold around the buffer, so the
+        // callback never runs while a lock is held.
         let cb = self.callback.as_ref().map(Arc::clone);
         if let Some(cb) = cb {
             cb(&self.updates_buffer);

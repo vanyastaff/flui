@@ -2,21 +2,16 @@
 
 Command-line interface for the FLUI framework.
 
-[![Crates.io](https://img.shields.io/crates/v/flui_cli.svg)](https://crates.io/crates/flui_cli)
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](../../LICENSE-MIT)
 
 ## Installation
 
-```bash
-cargo install flui_cli
-```
-
-Or build from source:
+FLUI is not published to crates.io yet, so build from source:
 
 ```bash
 git clone https://github.com/vanyastaff/flui.git
 cd flui
-cargo install --path crates/flui_cli
+cargo install --path crates/flui-cli
 ```
 
 ## Quick Start
@@ -66,12 +61,27 @@ flui create my_app --template basic
 flui create my_app --no-git
 ```
 
+Until FLUI is published, pass `--local` and create the project one directory
+below the FLUI checkout root — the generated `Cargo.toml` then uses
+`path = "../../crates/flui-app"` dependencies, which is the only mode that
+resolves today:
+
+```bash
+flui create my_app --local --path ./scratch
+```
+
 ### Templates
 
-- **counter** (default) - Counter app with state management
-- **basic** - Minimal "Hello, FLUI!" application
-- **todo** - Todo list application (planned)
-- **dashboard** - Dashboard with multiple widgets (planned)
+Both templates generate a project that compiles (enforced by
+`tests/cli_create.rs`, which runs `cargo check` on the generated output).
+
+- **counter** (default) — `Column` of `Text` widgets showing a static count.
+  The interactive version needs a `'static` rebuild handle, which the public
+  `BuildContext` does not expose yet; the template documents the
+  `StatefulView` + `ViewState` pair to grow into.
+- **basic** — minimal "Hello, FLUI!" `StatelessView`.
+- **todo** — Todo list application (planned)
+- **dashboard** — Dashboard with multiple widgets (planned)
 
 ## Building
 

@@ -43,10 +43,11 @@
 //!   `pushOpacity` wrapping) — FLUI's `FlowDelegate::paint_children`/
 //!   `paint_child(index, transform)` signature has no opacity parameter
 //!   already; this is a pre-existing scope cut, not a new one.
-//! - `RenderObject.applyPaintTransform`/`getTransformTo`/`localToGlobal`
-//!   (oracle L455-462) — `RenderBox::local_to_global`/`global_to_local` are
-//!   stub identity functions everywhere in FLUI today, not a
-//!   `RenderFlow`-specific gap.
+//! - ~~`RenderObject.applyPaintTransform`/`getTransformTo`/`localToGlobal`
+//!   (oracle L455-462)~~ — **landed.** `apply_paint_transform`
+//!   below replays `paint_children` to recover the child's paint matrix, the way
+//!   `hit_test` already does; `getTransformTo` / `localToGlobal` live on
+//!   `PipelineOwner`, because a FLUI render object has no parent link.
 //! - `markNeedsSemanticsUpdate` on `clip_behavior` change (oracle L245) —
 //!   FLUI has no semantics tree yet, consistent with every other render
 //!   object in the catalog.
@@ -55,7 +56,7 @@ use std::sync::Arc;
 
 use flui_foundation::ListenerId;
 use flui_tree::Variable;
-use flui_types::{Offset, Pixels, Point, Rect, Size, painting::Clip};
+use flui_types::{Matrix4, Offset, Pixels, Point, Rect, Size, painting::Clip};
 
 use flui_rendering::{
     constraints::BoxConstraints,
@@ -318,6 +319,43 @@ impl RenderBox for RenderFlow {
             body(ctx);
         } else {
             ctx.with_clip_rect(bounds, self.clip_behavior, body);
+        }
+    }
+
+    /// Flutter's `RenderFlow.applyPaintTransform` (`flow.dart:456-462`), which
+    /// multiplies in the child's cached `FlowParentData._transform`.
+    ///
+    /// **The default would be wrong here.** A flow paints each child under a
+    /// per-child transform scope chosen by the delegate, not at its committed
+    /// offset. FLUI caches no per-child transform (see the module docs), so this
+    /// replays `paint_children` exactly as `hit_test` does.
+    ///
+    /// A child the delegate never painted contributes no transform — Flutter's
+    /// `_transform == null` branch, which likewise leaves the matrix alone.
+    fn apply_paint_transform(
+        &self,
+        child: usize,
+        _child_offset: Offset,
+        size: Size,
+        transform: &mut Matrix4,
+    ) {
+        let n = self.child_sizes.len();
+        if child >= n {
+            return;
+        }
+        let (mut painted, mut paint_order, mut transforms) =
+            (vec![false; n], Vec::with_capacity(n), vec![None; n]);
+        let mut flow_ctx = FlowPaintingContext::for_replay(
+            size,
+            &self.child_sizes,
+            &mut paint_order,
+            &mut transforms,
+            &mut painted,
+        );
+        self.delegate.paint_children(&mut flow_ctx);
+
+        if let Some(matrix) = transforms[child] {
+            *transform *= matrix;
         }
     }
 

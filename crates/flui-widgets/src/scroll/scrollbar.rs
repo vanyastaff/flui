@@ -146,9 +146,14 @@ impl StatelessView for Scrollbar {
             // content is actually larger than the viewport.
             let show_thumb = viewport_dim > 0.0 && fraction < 1.0;
             let thumb_height = (viewport_dim * fraction).max(MIN_THUMB_PX);
-            // Clamp thumb top so thumb never overflows the track.
             let available_track = (viewport_dim - thumb_height).max(0.0);
-            let thumb_top = available_track * offset_fraction;
+            // Clamp thumb top so the thumb never overflows the track: `pixels`
+            // can sit outside `[min_scroll_extent, max_scroll_extent]` whenever
+            // a `Scrollable` sharing this controller uses `BouncingScrollPhysics`
+            // and is mid-overscroll — that drag path does not route through
+            // this widget's own thumb-drag clamp (see `on_pan_update` below),
+            // so `offset_fraction` alone can fall outside `[0.0, 1.0]`.
+            let thumb_top = (available_track * offset_fraction).clamp(0.0, available_track);
 
             // Stack children: content first (non-positioned, determines size),
             // then the thumb on top (positioned).
@@ -162,18 +167,21 @@ impl StatelessView for Scrollbar {
 
                 // Wrap the thumb in a GestureDetector so the user can drag it
                 // to reposition the scroll. The delta in track-space maps to
-                // content-space via:
-                //   dP/d(thumb_top) = (viewport + scroll_extent) / available_track
-                // (derived from the thumb_offset_fraction formula).
+                // content-space via the inverse of
+                // `thumb_top = available_track * thumb_offset_fraction`
+                // (see that method's doc):
+                //   dP/d(thumb_top) = scroll_extent / available_track
+                // matching Flutter's `ScrollbarPainter` thumb-drag contract
+                // (`widgets/scrollbar.dart`, `_ScrollbarPainter`/`_startDrag`,
+                // 3.44.0), which maps track delta to scroll delta through the
+                // same `scrollExtent / trackExtent` ratio.
                 let thumb_gesture = GestureDetector::new()
                     .behavior(HitTestBehavior::Opaque)
                     .on_pan_update(move |details| {
                         let delta_track_px = details.delta.dy.get();
                         if available_track > 0.0 {
-                            let total_content_extent =
-                                ctrl_drag.viewport_dimension_pixels() + ctrl_drag.scroll_extent();
                             let content_delta =
-                                (delta_track_px / available_track) * total_content_extent;
+                                (delta_track_px / available_track) * ctrl_drag.scroll_extent();
                             let proposed = ctrl_drag.pixels() + content_delta;
                             ctrl_drag.set_pixels(proposed.clamp(
                                 ctrl_drag.min_scroll_extent(),

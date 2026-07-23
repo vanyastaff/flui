@@ -22,6 +22,9 @@ extend-exclude = [
 extend-ignore-identifiers-re = [
     # Type names from Flutter that look like typos to typos
     "RSuperellipse",
+    # `_TransitionableNavigationBar` (cupertino/nav_bar.dart) — the real oracle
+    # class name, not a typo of "Transitional".
+    "Transitionable",
     # Hex color literals + similar
     "0x[0-9a-fA-F]+",
 ]

@@ -15,8 +15,8 @@
 //!
 //! The two oracle classes share their entire paint recipe, hit-test
 //! recipe, and four field-level setters — only how the clip shape is
-//! derived from `size` differs (`BoxShape` + `BorderRadius` vs. a mandatory
-//! [`CustomClipper<Path>`]). That is collapsed to one generic body,
+//! derived from `size` differs (`BoxShape` + `BorderRadius` vs. an owner-lane
+//! [`PathClipTarget`]). That is collapsed to one generic body,
 //! [`RenderPhysicalModelBase<C>`], monomorphised via [`RenderPhysicalModel`]
 //! and [`RenderPhysicalShape`].
 //!
@@ -45,7 +45,7 @@
 //!   the opposite of `RenderClip<S>`'s own default. Physical-model surfaces
 //!   don't clip by default (oracle `:2071`).
 
-use std::{fmt, sync::Arc};
+use std::fmt;
 
 use flui_painting::{Canvas, Paint};
 use flui_tree::Single;
@@ -60,11 +60,10 @@ use flui_types::{
 use flui_foundation::DiagnosticsBuilder;
 use flui_rendering::{
     context::{BoxHitTestContext, BoxLayoutContext, PaintCx},
+    hit_testing::{PathClipTarget, resolve_path_clip_target},
     parent_data::BoxParentData,
     traits::RenderBox,
 };
-
-use super::clip::CustomClipper;
 
 // =============================================================================
 // PhysicalClipShape — shape-level operations (RRect, Path)
@@ -278,22 +277,21 @@ impl PhysicalClipSource for RectangleClip {
     }
 }
 
-/// [`RenderPhysicalShape`]'s clip source: an arbitrary [`CustomClipper<Path>`].
+/// [`RenderPhysicalShape`]'s clip source: an owner-local path clip target.
 ///
 /// Stored as `Option` (matching the oracle's nullable base-class `clipper`
-/// field) even though [`RenderPhysicalModelBase::new`] on the `PathClip`
-/// variant always supplies one — the oracle's own inherited setter allows
-/// clearing it back to the whole-box rectangle default.
-#[derive(Clone)]
+/// field) because clearing it falls back to the whole-box rectangle default.
+#[derive(Clone, Copy)]
 pub struct PathClip {
-    /// The active clipper, or `None` to fall back to the whole-box rect.
-    pub clipper: Option<CustomClipper<Path>>,
+    /// The active owner-lane path target, or `None` to fall back to the
+    /// whole-box rect.
+    pub target: Option<PathClipTarget>,
 }
 
 impl fmt::Debug for PathClip {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("PathClip")
-            .field("has_custom_clipper", &self.clipper.is_some())
+            .field("has_custom_clipper", &self.target.is_some())
             .finish()
     }
 }
@@ -303,21 +301,29 @@ impl PhysicalClipSource for PathClip {
     const DIAGNOSTIC_NAME: &'static str = "RenderPhysicalShape";
 
     fn compute_clip(&self, size: Size) -> Path {
-        if let Some(clipper) = &self.clipper {
-            clipper(size)
-        } else {
-            // Oracle `:2296`'s `_defaultClip` fallback — only reachable
-            // once a clipper is cleared via `set_clipper(None)`.
-            let mut path = Path::new();
-            path.add_rect(Rect::from_origin_size(Point::ZERO, size));
-            path
+        if let Some(target) = self.target {
+            match resolve_path_clip_target(target, size) {
+                Ok(path) => return path,
+                Err(error) => {
+                    tracing::warn!(
+                        ?error,
+                        "RenderPhysicalShape path target resolution failed; using fallback clip"
+                    );
+                }
+            }
         }
+
+        // Oracle `:2296`'s `_defaultClip` fallback — reachable once a path
+        // target is cleared or cannot be resolved by the active owner lane.
+        let mut path = Path::new();
+        path.add_rect(Rect::from_origin_size(Point::ZERO, size));
+        path
     }
 
     fn debug_fill_extra(&self, builder: &mut DiagnosticsBuilder) {
         builder.add_flag(
             "custom_clipper",
-            self.clipper.is_some(),
+            self.target.is_some(),
             "has custom clipper",
         );
     }
@@ -332,7 +338,7 @@ impl PhysicalClipSource for PathClip {
 ///
 /// Pick the ergonomic alias:
 /// * [`RenderPhysicalModel`] — `BoxShape` + `BorderRadius` clip source.
-/// * [`RenderPhysicalShape`] — arbitrary [`CustomClipper<Path>`] clip source.
+/// * [`RenderPhysicalShape`] — owner-lane [`PathClipTarget`] clip source.
 #[derive(Debug, Clone)]
 pub struct RenderPhysicalModelBase<C: PhysicalClipSource> {
     /// The per-variant clip-shape source.
@@ -355,7 +361,7 @@ pub struct RenderPhysicalModelBase<C: PhysicalClipSource> {
 /// `BoxShape` + `BorderRadius` variant — Flutter's `RenderPhysicalModel`.
 pub type RenderPhysicalModel = RenderPhysicalModelBase<RectangleClip>;
 
-/// Arbitrary-path-clipper variant — Flutter's `RenderPhysicalShape`.
+/// Arbitrary-path-target variant — Flutter's `RenderPhysicalShape`.
 pub type RenderPhysicalShape = RenderPhysicalModelBase<PathClip>;
 
 impl<C: PhysicalClipSource> RenderPhysicalModelBase<C> {
@@ -536,37 +542,52 @@ impl RenderPhysicalModelBase<RectangleClip> {
 }
 
 impl RenderPhysicalModelBase<PathClip> {
-    /// Creates a `RenderPhysicalShape` with a mandatory clipper — Flutter
-    /// parity: `RenderPhysicalShape`'s `clipper` constructor argument is
-    /// `required`, unlike `RenderPhysicalModel`'s total absence of one.
-    pub fn new<F>(clipper: F, color: Color) -> Self
-    where
-        F: Fn(Size) -> Path + Send + Sync + 'static,
-    {
-        Self::with_clip_source(
-            PathClip {
-                clipper: Some(Arc::new(clipper)),
-            },
-            color,
-        )
+    /// Creates a `RenderPhysicalShape` with the whole-box fallback clip.
+    ///
+    /// Bounds-dependent path factories are registered in the owner runtime and
+    /// connected with [`with_path_clip_target`](Self::with_path_clip_target);
+    /// this render object never stores executable clipper callbacks.
+    pub fn new(color: Color) -> Self {
+        Self::with_clip_source(PathClip { target: None }, color)
+    }
+
+    /// Builder: sets the owner-lane path clip target.
+    #[must_use]
+    pub fn with_path_clip_target(mut self, target: PathClipTarget) -> Self {
+        self.clip_source.target = Some(target);
+        self
+    }
+
+    /// Returns the owner-lane path clip target, if one is installed.
+    #[inline]
+    #[must_use]
+    pub const fn path_clip_target(&self) -> Option<PathClipTarget> {
+        self.clip_source.target
     }
 
     /// Whether a clipper is currently installed.
     #[inline]
     pub fn has_custom_clipper(&self) -> bool {
-        self.clip_source.clipper.is_some()
+        self.clip_source.target.is_some()
     }
 
-    /// Replaces the clipper; returns `true` if presence changed. `None`
-    /// falls back to the whole-box rectangle default clip (oracle `:2296`).
-    pub fn set_clipper<F>(&mut self, clipper: Option<F>) -> bool
-    where
-        F: Fn(Size) -> Path + Send + Sync + 'static,
-    {
-        let had_clipper = self.clip_source.clipper.is_some();
-        let has_clipper = clipper.is_some();
-        self.clip_source.clipper = clipper.map(|c| Arc::new(c) as CustomClipper<Path>);
-        had_clipper != has_clipper
+    /// Replaces the path clip target; returns `true` if the value changed
+    /// (`None` -> `Some`, `Some` -> `None`, or a swap between two distinct
+    /// targets). `None` falls back to the whole-box rectangle default clip
+    /// (oracle `:2296`).
+    ///
+    /// Comparing the full `Option<PathClipTarget>`, not just presence, is
+    /// load-bearing: oracle `RenderPhysicalShape`'s `clipper` setter compares
+    /// the new `CustomClipper` for equality and calls `markNeedsPaint()`
+    /// whenever it differs (`_markNeedsClip()`), including a swap between two
+    /// distinct non-null clippers — a presence-only check would silently miss
+    /// that swap and never signal a repaint.
+    pub fn set_path_clip_target(&mut self, target: Option<PathClipTarget>) -> bool {
+        if self.clip_source.target == target {
+            return false;
+        }
+        self.clip_source.target = target;
+        true
     }
 }
 
@@ -657,9 +678,9 @@ impl<C: PhysicalClipSource> RenderBox for RenderPhysicalModelBase<C> {
         // circular or rounded-corner `RenderPhysicalModel` hit-tests as its
         // full bounding box in real Flutter. See the module doc and the
         // design research plan (`docs/research/2026-07-01-render-physical-model-plan.md`,
-        // trap §4.2) for the full citation. `RenderPhysicalShape` always
-        // has a clipper (mandatory constructor arg) so the oracle and this
-        // convention already agree there.
+        // trap §4.2) for the full citation. `RenderPhysicalShape` uses the
+        // same shape gate when an owner-lane path target is installed, and
+        // otherwise falls back to the whole-box default clip.
         let shape = self.clip_source.compute_clip(ctx.own_size());
         if !shape.contains(Point::new(ctx.x(), ctx.y())) {
             return false;
@@ -679,6 +700,7 @@ impl<C: PhysicalClipSource> RenderBox for RenderPhysicalModelBase<C> {
 #[cfg(test)]
 mod tests {
     use flui_foundation::Diagnosticable;
+    use flui_interaction::InteractionLane;
     use flui_types::geometry::{Radius, px};
 
     use super::*;
@@ -738,28 +760,35 @@ mod tests {
 
     #[test]
     fn path_clip_falls_back_to_whole_rect_without_clipper() {
-        let source = PathClip { clipper: None };
+        let source = PathClip { target: None };
         let path = source.compute_clip(Size::new(px(60.0), px(30.0)));
         assert!(path.contains(Point::new(px(30.0), px(15.0))));
         assert!(!path.contains(Point::new(px(200.0), px(200.0))));
     }
 
     #[test]
-    fn path_clip_uses_installed_custom_clipper() {
-        let source = PathClip {
-            clipper: Some(Arc::new(|size: Size| {
-                let mut p = Path::new();
-                p.add_rect(Rect::from_origin_size(
-                    Point::new(px(10.0), px(10.0)),
-                    Size::new(size.width - px(20.0), size.height - px(20.0)),
-                ));
-                p
-            })),
-        };
-        let path = source.compute_clip(Size::new(px(100.0), px(100.0)));
-        // Inset by 10px on each side: (5, 5) is outside, (50, 50) is inside.
-        assert!(!path.contains(Point::new(px(5.0), px(5.0))));
-        assert!(path.contains(Point::new(px(50.0), px(50.0))));
+    fn path_clip_uses_owner_local_path_target() {
+        let lane = InteractionLane::try_new().expect("lane");
+        let handle = lane.dispatch_handle();
+        lane.enter(|| {
+            let target = handle
+                .register_path_clipper(|size: Size| {
+                    let mut p = Path::new();
+                    p.add_rect(Rect::from_origin_size(
+                        Point::new(px(10.0), px(10.0)),
+                        Size::new(size.width - px(20.0), size.height - px(20.0)),
+                    ));
+                    p
+                })
+                .expect("register path target");
+            let source = PathClip {
+                target: Some(target),
+            };
+            let path = source.compute_clip(Size::new(px(100.0), px(100.0)));
+            // Inset by 10px on each side: (5, 5) is outside, (50, 50) is inside.
+            assert!(!path.contains(Point::new(px(5.0), px(5.0))));
+            assert!(path.contains(Point::new(px(50.0), px(50.0))));
+        });
     }
 
     // ---------- RRect corner hit-test (fresh, non-`ClipGeometry` impl) -----
@@ -793,18 +822,50 @@ mod tests {
 
     #[test]
     fn render_physical_shape_defaults_match_oracle() {
-        let node = RenderPhysicalShape::new(
-            |size: Size| {
-                let mut p = Path::new();
-                p.add_rect(Rect::from_origin_size(Point::ZERO, size));
-                p
-            },
-            Color::BLUE,
-        );
+        let node = RenderPhysicalShape::new(Color::BLUE);
         assert_eq!(node.elevation(), 0.0);
         assert_eq!(node.shadow_color(), Color::BLACK);
         assert_eq!(node.clip_behavior(), Clip::None);
-        assert!(node.has_custom_clipper());
+        assert!(!node.has_custom_clipper());
+    }
+
+    // Oracle parity (`proxy_box_test.dart`, `'RenderPhysicalModel compositing'`,
+    // tag `3.44.0`): `needsCompositing` stays `false` across an elevation
+    // 0.0 -> 1.0 -> 0.0 round trip — casting a shadow does not by itself
+    // force a dedicated compositing layer (oracle comment: on Fuchsia the
+    // system compositor draws elevation shadows, but even there the
+    // per-object flag this test reads stays false). `RenderPhysicalModelBase`
+    // never overrides `always_needs_compositing`, so it keeps the trait's
+    // `false` default regardless of elevation — this test pins that the
+    // generic body does not gain an override that would diverge from the
+    // oracle.
+    #[test]
+    fn render_physical_model_compositing_stays_false_across_elevation_changes() {
+        let mut node = RenderPhysicalModel::new(Color::from_argb(0xffff_00ff));
+        assert!(!node.always_needs_compositing());
+
+        node.set_elevation(1.0);
+        assert!(!node.always_needs_compositing());
+
+        node.set_elevation(0.0);
+        assert!(!node.always_needs_compositing());
+    }
+
+    // Sibling port of the same oracle contract for `RenderPhysicalShape`
+    // (`proxy_box_test.dart`, `RenderPhysicalShape` group, `'compositing'`,
+    // tag `3.44.0`) — both aliases share the identical generic
+    // `RenderPhysicalModelBase<C>` body, so the same assertion applies
+    // unmodified to the path-clip variant.
+    #[test]
+    fn render_physical_shape_compositing_stays_false_across_elevation_changes() {
+        let mut node = RenderPhysicalShape::new(Color::from_argb(0xffff_00ff));
+        assert!(!node.always_needs_compositing());
+
+        node.set_elevation(1.0);
+        assert!(!node.always_needs_compositing());
+
+        node.set_elevation(0.0);
+        assert!(!node.always_needs_compositing());
     }
 
     #[test]
@@ -831,23 +892,81 @@ mod tests {
     }
 
     #[test]
-    fn set_clipper_reports_presence_change() {
-        let mut node = RenderPhysicalShape::new(
-            |size: Size| {
-                let mut p = Path::new();
-                p.add_rect(Rect::from_origin_size(Point::ZERO, size));
-                p
-            },
-            Color::BLUE,
-        );
-        assert!(node.set_clipper::<fn(Size) -> Path>(None));
-        assert!(!node.has_custom_clipper());
-        assert!(node.set_clipper(Some(|size: Size| {
-            let mut p = Path::new();
-            p.add_rect(Rect::from_origin_size(Point::ZERO, size));
-            p
-        })));
-        assert!(node.has_custom_clipper());
+    fn set_path_clip_target_reports_presence_change() {
+        let lane = InteractionLane::try_new().expect("lane");
+        let handle = lane.dispatch_handle();
+        lane.enter(|| {
+            let target = handle
+                .register_path_clipper(|size: Size| {
+                    let mut p = Path::new();
+                    p.add_rect(Rect::from_origin_size(Point::ZERO, size));
+                    p
+                })
+                .expect("register path target");
+            let mut node = RenderPhysicalShape::new(Color::BLUE).with_path_clip_target(target);
+            assert!(node.has_custom_clipper());
+            assert!(node.set_path_clip_target(None));
+            assert!(!node.has_custom_clipper());
+            assert!(node.set_path_clip_target(Some(target)));
+            assert!(node.has_custom_clipper());
+        });
+    }
+
+    // Oracle parity (`proxy_box_test.dart`, `RenderPhysicalShape` group,
+    // `'shape change triggers repaint'`, tag `3.44.0`): setting the SAME
+    // clipper again reports no change; swapping to a DIFFERENT clipper must
+    // report a change even though both are `Some` — a presence-only
+    // comparison (`had_clipper != has_clipper`) would wrongly miss this swap
+    // since presence never toggles. Bug fixed in the same change as this
+    // test: `set_path_clip_target` now compares the full
+    // `Option<PathClipTarget>`, not just its `is_some()` presence.
+    //
+    // FLUI has no `RenderPhysicalShape`-consuming widget wired up yet (no
+    // `PhysicalShape` view exists in `flui-widgets`), so this cannot be
+    // ported at the oracle's own fidelity (`debugNeedsPaint` after a real
+    // `layout()`/`pumpFrame()`) — there is no `mark_needs_paint()` consumer
+    // of this setter's return value to observe yet. This tests the setter's
+    // own change-detection contract instead, the precondition any future
+    // widget-diff layer will rely on.
+    #[test]
+    fn set_path_clip_target_detects_target_swap_not_just_presence() {
+        let lane = InteractionLane::try_new().expect("lane");
+        let handle = lane.dispatch_handle();
+        lane.enter(|| {
+            let target_a = handle
+                .register_path_clipper(|size: Size| {
+                    let mut p = Path::new();
+                    p.add_rect(Rect::from_origin_size(Point::ZERO, size));
+                    p
+                })
+                .expect("register target_a");
+            let target_b = handle
+                .register_path_clipper(|size: Size| {
+                    let mut p = Path::new();
+                    p.add_rect(Rect::from_origin_size(
+                        Point::ZERO,
+                        Size::new(size.width * 0.5, size.height * 0.5),
+                    ));
+                    p
+                })
+                .expect("register target_b");
+
+            let mut node = RenderPhysicalShape::new(Color::BLUE).with_path_clip_target(target_a);
+
+            // "Same shape, no repaint" (oracle).
+            assert!(
+                !node.set_path_clip_target(Some(target_a)),
+                "re-setting the identical target must report no change"
+            );
+            // "Different shape triggers repaint" (oracle) — both sides are
+            // `Some`, so presence alone cannot distinguish this case.
+            assert!(
+                node.set_path_clip_target(Some(target_b)),
+                "swapping to a distinct target must report a change even \
+                 though presence (Some -> Some) never toggles"
+            );
+            assert_eq!(node.path_clip_target(), Some(target_b));
+        });
     }
 
     // Trap §4.1 regression: diagnostics must surface the real
@@ -874,14 +993,7 @@ mod tests {
                 .name(),
             Some("RenderPhysicalModel")
         );
-        let shape_node = RenderPhysicalShape::new(
-            |size: Size| {
-                let mut p = Path::new();
-                p.add_rect(Rect::from_origin_size(Point::ZERO, size));
-                p
-            },
-            Color::BLUE,
-        );
+        let shape_node = RenderPhysicalShape::new(Color::BLUE);
         assert_eq!(
             shape_node.to_diagnostics_node().name(),
             Some("RenderPhysicalShape")

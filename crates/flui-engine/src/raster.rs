@@ -32,8 +32,11 @@ pub trait RasterBackend {
     /// Render a [`Scene`] to the surface.
     ///
     /// Traverses the scene's `LayerTree` and dispatches each layer's
-    /// display-list commands through the GPU backend.
-    fn render_scene(&mut self, scene: &Scene) -> Result<(), EngineError>;
+    /// display-list commands through the GPU backend. Returns whether the
+    /// frame actually reached `present()` — `false` covers every skip path
+    /// (no damage, occluded surface) that returns successfully without
+    /// presenting, and therefore without a vsync block.
+    fn render_scene(&mut self, scene: &Scene) -> Result<bool, EngineError>;
 
     /// Resize the surface to the given physical pixel dimensions.
     fn resize(&mut self, width: u32, height: u32);
@@ -74,7 +77,7 @@ pub trait RasterBackend {
 
 #[cfg(feature = "wgpu-backend")]
 impl RasterBackend for crate::wgpu::Renderer {
-    fn render_scene(&mut self, scene: &Scene) -> Result<(), EngineError> {
+    fn render_scene(&mut self, scene: &Scene) -> Result<bool, EngineError> {
         self.render_scene(scene)
     }
 

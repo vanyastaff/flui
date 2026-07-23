@@ -137,16 +137,20 @@ impl<C: ViewSeq> fmt::Debug for Wrap<C> {
 
 impl<C> flui_view::RenderView for Wrap<C>
 where
-    C: ViewSeq + Clone + Send + Sync + 'static,
+    C: ViewSeq + Clone + 'static,
 {
     type Protocol = BoxProtocol;
     type RenderObject = RenderWrap;
 
-    fn create_render_object(&self) -> RenderWrap {
+    fn create_render_object(&self, _ctx: &flui_view::RenderObjectContext<'_>) -> RenderWrap {
         self.build_render_object()
     }
 
-    fn update_render_object(&self, render_object: &mut RenderWrap) {
+    fn update_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+        render_object: &mut RenderWrap,
+    ) {
         *render_object = self.build_render_object();
     }
 
@@ -210,7 +214,7 @@ mod tests {
     #[test]
     fn wrap_create_render_object_wires_defaults_into_render_wrap() {
         let wrap: Wrap = Wrap::new(Vec::new());
-        let render_object = wrap.create_render_object();
+        let render_object = wrap.create_render_object(&flui_view::RenderObjectContext::detached());
         let debug = format!("{render_object:?}");
         assert!(
             debug.contains("direction: Horizontal")
@@ -232,7 +236,7 @@ mod tests {
             .run_alignment(WrapAlignment::End)
             .run_spacing(4.0)
             .cross_axis_alignment(WrapCrossAlignment::Center);
-        let render_object = wrap.create_render_object();
+        let render_object = wrap.create_render_object(&flui_view::RenderObjectContext::detached());
         let debug = format!("{render_object:?}");
         assert!(
             debug.contains("direction: Vertical")
@@ -248,7 +252,8 @@ mod tests {
     #[test]
     fn wrap_update_render_object_replaces_stale_configuration() {
         let initial: Wrap = Wrap::new(Vec::new()).spacing(1.0);
-        let mut render_object = initial.create_render_object();
+        let mut render_object =
+            initial.create_render_object(&flui_view::RenderObjectContext::detached());
         assert!(format!("{render_object:?}").contains("spacing: 1.0"));
 
         let updated: Wrap = Wrap::new(Vec::new())
@@ -258,7 +263,10 @@ mod tests {
             .run_alignment(WrapAlignment::Center)
             .run_spacing(5.0)
             .cross_axis_alignment(WrapCrossAlignment::End);
-        updated.update_render_object(&mut render_object);
+        updated.update_render_object(
+            &flui_view::RenderObjectContext::detached(),
+            &mut render_object,
+        );
 
         let debug = format!("{render_object:?}");
         assert!(

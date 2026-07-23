@@ -135,7 +135,7 @@ impl ElementBuildContext {
 
     /// Nearest in-scope `InheritedElement` of view type `type_id`, in **O(1)**.
     ///
-    /// Shared helper for U9 (`depend_on_inherited`) and U10 (`get_inherited`);
+    /// Shared helper for `depend_on_inherited` and `get_inherited`;
     /// only the dependent-recording side differs.
     ///
     /// Reads the resolved inherited scope
@@ -156,7 +156,7 @@ impl ElementBuildContext {
     /// `ControlFlow::Break`, or `None` if every ancestor is exhausted
     /// without a break.
     ///
-    /// Shared helper for the U11 trio
+    /// Shared helper for the ancestor-finder trio
     /// ([`find_ancestor_view`](BuildContext::find_ancestor_view),
     /// [`find_ancestor_state`](BuildContext::find_ancestor_state),
     /// [`find_root_ancestor_state`](BuildContext::find_root_ancestor_state)).
@@ -218,11 +218,23 @@ impl BuildContext for ElementBuildContext {
         }
     }
 
-    fn owner(&self) -> Option<&BuildOwner> {
-        // We can't return a reference to data behind RwLock directly
-        // This method may need redesign or the trait needs adjustment
-        // For now, return None - callers should use build_owner() method instead
-        None
+    fn rebuild_handle(&self) -> crate::RebuildHandle {
+        // A real handle: the owner Arc is right here. The read lock is held only
+        // to clone the shared inbox + frame-request Arcs out; nothing is held
+        // across the returned handle's lifetime.
+        self.owner.read().rebuild_handle(self.element_id)
+    }
+
+    fn async_driver(&self) -> Option<flui_scheduler::AsyncDriver> {
+        self.owner.read().async_driver().cloned()
+    }
+
+    fn post_frame_handle(&self) -> Option<flui_scheduler::PostFrameHandle> {
+        self.owner.read().post_frame_handle().cloned()
+    }
+
+    fn text_input_handle(&self) -> Option<flui_interaction::TextInputHandle> {
+        self.owner.read().text_input_handle().cloned()
     }
 
     fn depend_on_inherited(&self, type_id: TypeId, callback: &mut dyn FnMut(&dyn Any)) -> bool {
@@ -231,8 +243,7 @@ impl BuildContext for ElementBuildContext {
         //
         // Records this element in the matched InheritedElement's
         // dependent map so a subsequent rebuild with
-        // `update_should_notify == true` schedules us for rebuild
-        // (R16, plan §U9).
+        // `update_should_notify == true` schedules us for rebuild.
         //
         // Flutter parity: `framework.dart:5081`
         // `dependOnInheritedWidgetOfExactType` -> the matched
@@ -257,7 +268,7 @@ impl BuildContext for ElementBuildContext {
 
         // Capture self's depth before we hand `node` out so we can
         // record it as the dependent's depth (used by
-        // BuildOwner::schedule_build_for during R16 notify).
+        // BuildOwner::schedule_build_for during dependency-change notify).
         let self_depth = self.depth;
         let self_id = self.element_id;
 
@@ -290,8 +301,8 @@ impl BuildContext for ElementBuildContext {
 
     fn get_inherited(&self, type_id: TypeId, callback: &mut dyn FnMut(&dyn Any)) -> bool {
         // Same ancestor walk as depend_on_inherited, but does NOT
-        // record a dependency. Reserved for U10 — for now we share the
-        // walk + downcast logic and skip the `record_dependent` call.
+        // record a dependency — we share the walk + downcast logic and
+        // skip the `record_dependent` call.
         let Some(ancestor_id) = self.find_inherited_provider(type_id) else {
             return false;
         };
@@ -393,9 +404,8 @@ impl BuildContext for ElementBuildContext {
         // because it surfaces `&dyn ElementBase` but not the matching
         // ancestor's id, and root-most matching needs the id to fetch
         // state via the second borrow. Keeping the helper minimal
-        // (no id-yielding variant) is a YAGNI call for U11; if U12 or
-        // a future unit needs id-yielding walks we can widen the
-        // surface then.
+        // (no id-yielding variant) is a YAGNI call; if a future need
+        // arises for id-yielding walks we can widen the surface then.
         //
         // Flutter parity: `framework.dart:5146`
         // `findRootAncestorStateOfType<T>` — Flutter walks
@@ -477,6 +487,19 @@ impl BuildContext for ElementBuildContext {
         })
     }
 
+    /// See [`BuildContext::pipeline_owner`]. The owner is on this element's own
+    /// node — no ancestor walk.
+    fn pipeline_owner(
+        &self,
+    ) -> Option<std::sync::Arc<parking_lot::RwLock<flui_rendering::pipeline::PipelineOwner>>> {
+        let tree = self.tree.read();
+        tree.get(self.element_id)?
+            .element()
+            .pipeline_owner_any()?
+            .downcast::<parking_lot::RwLock<flui_rendering::pipeline::PipelineOwner>>()
+            .ok()
+    }
+
     fn visit_ancestor_elements(&self, visitor: &mut dyn FnMut(ElementId) -> bool) {
         let tree = self.tree.read();
 
@@ -538,7 +561,7 @@ impl BuildContext for ElementBuildContext {
         // `_NotificationElement.onNotification` handler with the typed
         // notification and stopping when one returns `true`.
         //
-        // Plan §U13 / R10 / AE6. Single-`dyn`-boundary discipline per
+        // Single-`dyn`-boundary discipline per
         // Constitution Principle 4: the walk uses `&dyn ElementBase` (the
         // existing tree shape) but the handler call site is the only
         // place a typed downcast happens, in the listener Element's own
@@ -594,11 +617,39 @@ pub(crate) struct DependentRecord {
 /// so they are buffered into `dep_sink` and applied by `build_scope` after
 /// the element is restored. `mark_needs_build` during build is a
 /// Flutter-forbidden no-op.
+/// The three things a `BuildContext` is handed that it did not compute itself: two
+/// owned frame capabilities the binding installed, and the render tree the element is
+/// mounted in.
+///
+/// A bundle rather than three parameters, because every one of them is minted at the
+/// same place (`make_build_ctx`) from the same two sources, and threading them
+/// separately made `BuildCtx::new` an eight-argument function.
+#[derive(Clone, Default)]
+pub(crate) struct BuildCapabilities {
+    /// The binding's async task driver.
+    pub(crate) async_driver: Option<flui_scheduler::AsyncDriver>,
+    /// The binding's post-frame capability.
+    pub(crate) post_frame_handle: Option<flui_scheduler::PostFrameHandle>,
+    /// The binding's IME/text-input attach-detach capability.
+    pub(crate) text_input_handle: Option<flui_interaction::TextInputHandle>,
+    /// The render tree this element is mounted in, cloned from its own
+    /// `ElementCore` — see `make_build_ctx` for why not from the tree node.
+    pub(crate) pipeline_owner:
+        Option<std::sync::Arc<parking_lot::RwLock<flui_rendering::pipeline::PipelineOwner>>>,
+}
+
 pub(crate) struct BuildCtx<'b> {
     element_id: ElementId,
     depth: usize,
     tree: &'b ElementTree,
     dep_sink: &'b parking_lot::Mutex<Vec<DependentRecord>>,
+    /// Owned rebuild capability for `element_id`, minted by `make_build_ctx`
+    /// from the element's own core. Cloned out by
+    /// [`BuildContext::rebuild_handle`]; the build itself never schedules —
+    /// port-check trigger #22 forbids even acquiring it here.
+    rebuild: crate::RebuildHandle,
+    /// What the binding and the element's core handed this context.
+    capabilities: BuildCapabilities,
 }
 
 impl<'b> BuildCtx<'b> {
@@ -610,12 +661,16 @@ impl<'b> BuildCtx<'b> {
         depth: usize,
         tree: &'b ElementTree,
         dep_sink: &'b parking_lot::Mutex<Vec<DependentRecord>>,
+        rebuild: crate::RebuildHandle,
+        capabilities: BuildCapabilities,
     ) -> Self {
         Self {
             element_id,
             depth,
             tree,
             dep_sink,
+            rebuild,
+            capabilities,
         }
     }
 
@@ -669,8 +724,20 @@ impl BuildContext for BuildCtx<'_> {
         true
     }
 
-    fn owner(&self) -> Option<&BuildOwner> {
-        None
+    fn rebuild_handle(&self) -> crate::RebuildHandle {
+        self.rebuild.clone()
+    }
+
+    fn async_driver(&self) -> Option<flui_scheduler::AsyncDriver> {
+        self.capabilities.async_driver.clone()
+    }
+
+    fn post_frame_handle(&self) -> Option<flui_scheduler::PostFrameHandle> {
+        self.capabilities.post_frame_handle.clone()
+    }
+
+    fn text_input_handle(&self) -> Option<flui_interaction::TextInputHandle> {
+        self.capabilities.text_input_handle.clone()
     }
 
     fn depend_on_inherited(&self, type_id: TypeId, callback: &mut dyn FnMut(&dyn Any)) -> bool {
@@ -809,6 +876,16 @@ impl BuildContext for BuildCtx<'_> {
         })
     }
 
+    /// Cloned at construction from the element's own `ElementCore`: during
+    /// `build_scope` the element is *extracted* from its tree node, so a
+    /// `BuildContext` cannot look itself up (`ElementNode::element` panics in that
+    /// window). See `make_build_ctx`.
+    fn pipeline_owner(
+        &self,
+    ) -> Option<std::sync::Arc<parking_lot::RwLock<flui_rendering::pipeline::PipelineOwner>>> {
+        self.capabilities.pipeline_owner.clone()
+    }
+
     fn visit_ancestor_elements(&self, visitor: &mut dyn FnMut(ElementId) -> bool) {
         let mut current = self.element_id;
         while let Some(node) = self.tree.get(current) {
@@ -924,6 +1001,7 @@ mod tests {
     use super::*;
     use crate::view::{IntoView, ViewExt};
     use crate::{StatelessView, View};
+    use static_assertions::assert_not_impl_any;
 
     #[derive(Clone)]
     struct TestView {
@@ -1080,9 +1158,8 @@ mod tests {
     }
 
     #[test]
-    fn test_context_send_sync() {
-        fn assert_send_sync<T: Send + Sync>() {}
-        assert_send_sync::<ElementBuildContext>();
+    fn context_is_owner_local() {
+        assert_not_impl_any!(ElementBuildContext: Send, Sync);
     }
 
     /// `BuildCtx` is the context handed to a live `build()`, so it is always
@@ -1096,7 +1173,14 @@ mod tests {
         let tree = ElementTree::new();
         let dep_sink = parking_lot::Mutex::new(Vec::new());
         // The guard fires before any tree access, so a sentinel id is fine.
-        let ctx = BuildCtx::new(ElementId::new(1), 0, &tree, &dep_sink);
+        let ctx = BuildCtx::new(
+            ElementId::new(1),
+            0,
+            &tree,
+            &dep_sink,
+            crate::RebuildHandle::inert(),
+            BuildCapabilities::default(),
+        );
         ctx.visit_child_elements(&mut |_| {});
     }
 }

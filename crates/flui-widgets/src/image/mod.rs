@@ -3,18 +3,34 @@
 //! The [`Image`] widget is the entry point for rendering bitmap images.
 //! An [`ImageProvider`] describes how to obtain the pixel data — supply an
 //! already-decoded handle via [`Image::from_image`], encode-from-bytes via
-//! [`Image::memory`], or read from disk via [`Image::file`].
+//! [`Image::memory`], read from disk via [`Image::file`], or resolve
+//! asynchronously via `Image::asset`/`Image::network`.
 //!
-//! The `network-images` feature exposes a placeholder HTTP/HTTPS provider while
-//! async image loading is being wired. It is off by default so stable builds do
-//! not expose an always-failing network constructor.
+//! The `asset-images` feature exposes `AssetImage`, an async provider backed
+//! by `flui-assets`; `network-images` additionally exposes `NetworkImage`,
+//! an async HTTP/HTTPS provider. Both are off by default so stable builds do
+//! not pull in `flui-assets`/`futures-util`/`lru` unless asked for. (Not
+//! doc-linked above: these items only exist when their feature is enabled,
+//! and this module's own doc is built unconditionally.)
 
+mod cache_key;
 mod image;
 mod provider;
 
-pub use image::Image;
+#[cfg(feature = "asset-images")]
+mod asset_image;
+#[cfg(feature = "asset-images")]
+mod decode_cache;
 #[cfg(feature = "network-images")]
-pub use provider::NetworkImage;
+mod network_image;
+
+pub use cache_key::ImageCacheKey;
+pub use image::Image;
 pub use provider::{
     DirectImageProvider, FileImage, ImageProvider, ImageProviderError, MemoryImage,
 };
+
+#[cfg(feature = "asset-images")]
+pub use asset_image::AssetImage;
+#[cfg(feature = "network-images")]
+pub use network_image::NetworkImage;

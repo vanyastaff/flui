@@ -4,7 +4,7 @@
 //! view type (Stateless, Proxy, Stateful, Render). Behaviors encapsulate the
 //! view-specific logic while the unified Element handles all common operations.
 
-use std::{collections::HashMap, marker::PhantomData};
+use std::{collections::HashMap, marker::PhantomData, sync::Arc};
 
 use flui_foundation::{ElementId, ListenerId, RenderId};
 use flui_rendering::{
@@ -32,14 +32,14 @@ use crate::{
 ///
 /// Holding the concrete value in a local lets the caller hand out a
 /// `&dyn BuildContext` whose borrow outlives the user `build()` closure.
-enum BuildCtxChoice<'a> {
+pub(crate) enum BuildCtxChoice<'a> {
     /// Live context over the borrowed real tree (inside `build_scope`).
     Live(BuildCtx<'a>),
 }
 
 impl BuildCtxChoice<'_> {
     /// Borrow the chosen context as the object-safe trait.
-    fn as_ctx(&self) -> &dyn BuildContext {
+    pub(crate) fn as_ctx(&self) -> &dyn BuildContext {
         match self {
             Self::Live(ctx) => ctx,
         }
@@ -52,12 +52,12 @@ impl BuildCtxChoice<'_> {
 /// tree/sink references (lifetime `'a`, tied to the data — not to this `&`
 /// borrow of `owner`) out cleanly; the returned `BuildCtxChoice<'a>` does not
 /// keep `owner` borrowed, so the caller can still pass `owner` on mutably.
-fn make_build_ctx<'a, V, A>(
+pub(crate) fn make_build_ctx<'a, V, A>(
     core: &ElementCore<V, A>,
     owner: &crate::ElementOwner<'a>,
 ) -> BuildCtxChoice<'a>
 where
-    V: Clone + Send + Sync + 'static,
+    V: Clone + 'static,
     A: ElementArity,
 {
     let handle = owner.build_view.expect(
@@ -82,11 +82,26 @@ where
         Some(node) => node.depth(),
         None => core.depth(),
     };
+    // The rebuild capability is minted from the element's own core,
+    // which already holds the `ExternalBuildScheduler` installed at mount — the
+    // same channel `AnimatedView` rides. `build` must not call `schedule()`;
+    // port-check trigger #22 enforces that a handle is not even acquired there.
+    // The pipeline owner comes off the core, not off the tree node: `build_scope`
+    // has the element *extracted* from its node for the duration of the build
+    // (`ElementNode::element` panics in that window), so a `BuildContext` cannot
+    // look itself up. `ElementCore` holds the same `Arc` the node would have.
     BuildCtxChoice::Live(BuildCtx::new(
         element_id,
         tree_depth,
         handle.tree,
         handle.dep_sink,
+        core.rebuild_handle(),
+        crate::context::BuildCapabilities {
+            async_driver: owner.async_driver.clone(),
+            post_frame_handle: owner.post_frame_handle.clone(),
+            text_input_handle: owner.text_input_handle.clone(),
+            pipeline_owner: core.pipeline_owner().map(std::sync::Arc::clone),
+        },
     ))
 }
 
@@ -99,9 +114,9 @@ where
 /// This trait encapsulates all the view-type-specific logic that varies between
 /// Stateless, Proxy, Stateful, and Render elements. The unified Element<V,A,B>
 /// delegates to this trait for view-specific operations.
-pub trait ElementBehavior<V, A>: Send + Sync + 'static
+pub trait ElementBehavior<V, A>: 'static
 where
-    V: Clone + Send + Sync + 'static,
+    V: Clone + 'static,
     A: ElementArity,
 {
     /// Run this view type's build half and return its OWNED child view(s).
@@ -143,7 +158,7 @@ where
 
     /// Called after view update to perform behavior-specific reactions.
     #[allow(unused_variables)]
-    fn on_update(&mut self, core: &ElementCore<V, A>) {}
+    fn on_update(&mut self, core: &ElementCore<V, A>, owner: &mut crate::ElementOwner<'_>) {}
 
     /// Called after the element is re-activated (re-inserted into the tree).
     ///
@@ -171,7 +186,7 @@ where
     ///
     /// The split-borrow `owner` handle is threaded through so behaviors
     /// can call `ElementOwner::schedule_build_for` for affected
-    /// descendants. Plan §U9.
+    /// descendants.
     #[allow(unused_variables)]
     fn on_view_updated(
         &mut self,
@@ -195,7 +210,7 @@ where
     /// Returns `None` for every behavior except
     /// [`InheritedBehavior`], whose override returns `Some(self)`. The
     /// unified `Element::as_inherited` delegates to this so
-    /// `BuildContext::depend_on_inherited` (plan §U9, Flutter
+    /// `BuildContext::depend_on_inherited` (Flutter
     /// `framework.dart:5081`) can record dependents and read the view
     /// without naming `V` at the call site.
     fn as_inherited_access(&self) -> Option<&dyn crate::element::InheritedElementAccess> {
@@ -217,7 +232,7 @@ where
     ///
     /// Default returns `None`; only `StatefulBehavior<V>` overrides this
     /// to hand out `&self.state as &dyn Any`. Used by
-    /// [`BuildContext::find_ancestor_state`] (plan §U11, R7) to surface
+    /// [`BuildContext::find_ancestor_state`] to surface
     /// the typed `ViewState` to the dispatch boundary without naming
     /// `V` at the object-safe trait surface.
     ///
@@ -235,7 +250,7 @@ where
     /// Default returns `None`; only `RenderBehavior<V>` overrides this
     /// (`AnimatedBehavior` composes `StatefulBehavior`, not `RenderBehavior`,
     /// so it keeps the default). Used by
-    /// [`BuildContext::find_render_object`] (plan §U12, R9) to surface
+    /// [`BuildContext::find_render_object`] to surface
     /// the nearest ancestor's `RenderId` to the dispatch boundary.
     ///
     /// Flutter parity: `framework.dart:5160`
@@ -263,12 +278,12 @@ where
 
     /// Object-safe notification handler hook routed from
     /// [`ElementBase::on_notification`](crate::view::ElementBase::on_notification)
-    /// during bubble dispatch (plan §U13 / R10).
+    /// during bubble dispatch.
     ///
     /// Default returns `false` — non-listener behaviors are skipped
     /// cleanly. A future production `NotificationListener<N>` widget will
     /// override this in a dedicated `NotificationListenerBehavior<N>`
-    /// (out of scope for U13 — the integration tests in
+    /// (out of scope for now — the integration tests in
     /// `tests/notifications.rs` exercise the protocol via a hand-rolled
     /// `ElementBase` impl so the wiring is validated end-to-end without
     /// adding production scaffolding the framework doesn't yet need).
@@ -296,7 +311,7 @@ where
     /// behaviors own no `ViewState`, so the scheduled rebuild alone
     /// suffices. [`StatefulBehavior`] overrides this to forward to
     /// `ViewState::did_change_dependencies`; [`AnimatedBehavior`]
-    /// delegates to the composed `StatefulBehavior`. Plan §U14.
+    /// delegates to the composed `StatefulBehavior`.
     ///
     /// The split-borrow `owner` handle is threaded through so the override
     /// can resolve the same live build-time context (`BuildHandle`) the
@@ -508,7 +523,7 @@ where
 
     /// Expose the owned `ViewState` (`V::State`) as `&dyn Any` so
     /// [`BuildContext::find_ancestor_state`] / `find_root_ancestor_state`
-    /// (plan §U11, R7/R8) can downcast at the dispatch boundary.
+    /// can downcast at the dispatch boundary.
     ///
     /// `V::State: 'static` is guaranteed by the [`ViewState`] trait
     /// bound, so the resulting `&dyn Any` has a well-defined `TypeId`
@@ -588,7 +603,7 @@ where
     /// Called by `BuildOwner::build_scope` right before this
     /// dependent's `perform_build` when an inherited ancestor's
     /// `update_should_notify` returned true since the last build —
-    /// Flutter parity for `framework.dart:5977-5982`. Plan §U14.
+    /// Flutter parity for `framework.dart:5977-5982`.
     ///
     /// `init_state` always runs before any `did_change_dependencies`
     /// dispatch because `state_as_any` reaches the typed
@@ -693,7 +708,7 @@ where
 
     /// Expose the behavior's `RenderId` (set by `on_mount` once a
     /// `PipelineOwner` is in scope) so [`BuildContext::find_render_object`]
-    /// (plan §U12, R9) can surface it to the dispatch boundary.
+    /// can surface it to the dispatch boundary.
     ///
     /// Returns `None` until `on_mount` has run with a PipelineOwner —
     /// matches Flutter's behavior where `findAncestorRenderObjectOfType`
@@ -743,28 +758,28 @@ where
         child_views
     }
 
-    fn on_mount(&mut self, core: &mut ElementCore<V, A>, _owner: &mut crate::ElementOwner<'_>) {
+    fn on_mount(&mut self, core: &mut ElementCore<V, A>, owner: &mut crate::ElementOwner<'_>) {
         // Create RenderObject and insert into RenderTree
         if let Some(pipeline_owner) = core.pipeline_owner() {
             tracing::info!("RenderBehavior::on_mount creating RenderObject");
 
-            let render_object = core.view().create_render_object();
+            let ctx = crate::RenderObjectContext::new(owner.interaction_dispatch.as_ref());
+            let render_object = core.view().create_render_object(&ctx);
 
             let render_id = {
-                let mut owner = pipeline_owner.write();
+                let mut pipeline_owner = pipeline_owner.write();
 
                 // Use helper to insert (handles Protocol type)
-                let render_id = insert_render_object_helper(render_object, &mut owner);
+                let render_id = insert_render_object_helper(render_object, &mut pipeline_owner);
 
-                // Handle parent relationship
+                // Handle parent relationship. `adopt_child` writes the
+                // child's parent link and the parent's child-list entry in
+                // one call — the two directions can never be written
+                // independently (see `RenderTree::adopt_child`).
                 if let Some(parent_id) = core.parent_render_id() {
-                    let render_tree = owner.render_tree_mut();
-                    if let Some(node) = render_tree.get_mut(render_id) {
-                        node.set_parent(Some(parent_id));
-                    }
-                    if let Some(parent_node) = render_tree.get_mut(parent_id) {
-                        parent_node.add_child(render_id);
-                    }
+                    pipeline_owner
+                        .render_tree_mut()
+                        .adopt_child(parent_id, render_id);
                 }
 
                 render_id
@@ -778,7 +793,20 @@ where
         }
     }
 
-    fn on_unmount(&mut self, core: &mut ElementCore<V, A>, _owner: &mut crate::ElementOwner<'_>) {
+    fn on_unmount(&mut self, core: &mut ElementCore<V, A>, owner: &mut crate::ElementOwner<'_>) {
+        if let Some(render_id) = self.render_id
+            && let Some(pipeline_owner) = core.pipeline_owner()
+        {
+            let ctx = crate::RenderObjectContext::new(owner.interaction_dispatch.as_ref());
+            let mut pipeline_owner = pipeline_owner.write();
+            if let Some(render_object) = pipeline_owner
+                .render_tree_mut()
+                .get_mut(render_id)
+                .and_then(|node| node.downcast_render_object_mut::<V::RenderObject>())
+            {
+                core.view().did_unmount_render_object(&ctx, render_object);
+            }
+        }
         super::behavior_commons::remove_render_object_from_tree(
             core,
             self.render_id,
@@ -787,7 +815,7 @@ where
         self.render_id = None;
     }
 
-    fn on_update(&mut self, core: &ElementCore<V, A>) {
+    fn on_update(&mut self, core: &ElementCore<V, A>, owner: &mut crate::ElementOwner<'_>) {
         // Apply the widget's new configuration to the *existing* render object
         // before marking it dirty — Flutter's `RenderObjectElement.update` ->
         // `widget.updateRenderObject(context, renderObject)`. Without this the
@@ -797,13 +825,14 @@ where
         if let Some(render_id) = self.render_id
             && let Some(pipeline_owner) = core.pipeline_owner()
         {
-            let mut owner = pipeline_owner.write();
-            if let Some(render_object) = owner
+            let ctx = crate::RenderObjectContext::new(owner.interaction_dispatch.as_ref());
+            let mut pipeline_owner = pipeline_owner.write();
+            if let Some(render_object) = pipeline_owner
                 .render_tree_mut()
                 .get_mut(render_id)
                 .and_then(|node| node.downcast_render_object_mut::<V::RenderObject>())
             {
-                core.view().update_render_object(render_object);
+                core.view().update_render_object(&ctx, render_object);
             }
         }
 
@@ -846,7 +875,7 @@ where
 /// Flutter parity: `framework.dart:6252` `_dependents:
 /// HashMap<Element, Object?>` in `InheritedElement`. Flutter uses a
 /// HashMap because dependents may attach dependency aspects (the
-/// `Object?` value); we will gain that capability in U10 if we expand
+/// `Object?` value); we will gain that capability if we expand
 /// `aspect` support — for now the value slot holds the depth.
 #[derive(Debug)]
 pub struct InheritedBehavior<V: InheritedView> {
@@ -895,7 +924,7 @@ impl<V: InheritedView> InheritedBehavior<V> {
     ///
     /// Idempotent: re-registering the same `element` overwrites its
     /// stored depth (depths can change across reconciliation, so the
-    /// latest call wins). HashMap inherently dedups on key. Plan §U9.
+    /// latest call wins). HashMap inherently dedups on key.
     pub fn add_dependent(&mut self, element: ElementId, depth: usize) {
         self.dependents.insert(element, depth);
     }
@@ -987,7 +1016,7 @@ where
                 // `perform_build`. The typed
                 // `ViewState::did_change_dependencies` hook fires
                 // exactly once per dependency-change-then-rebuild
-                // cycle, strictly before the build. Plan §U14.
+                // cycle, strictly before the build.
                 owner.note_dependency_change(dep_id);
                 owner.schedule_build_for(dep_id, dep_depth);
             }
@@ -1110,7 +1139,7 @@ where
     }
 
     /// Delegate to the composed `StatefulBehavior` so animated elements
-    /// participate in ancestor-state lookups (plan §U11, R7/R8).
+    /// participate in ancestor-state lookups.
     fn state_as_any(&self) -> Option<&dyn std::any::Any> {
         <StatefulBehavior<V> as ElementBehavior<V, A>>::state_as_any(&self.stateful)
     }
@@ -1149,24 +1178,15 @@ where
         self.stateful.on_unmount(core, owner);
     }
 
-    fn on_update(&mut self, core: &ElementCore<V, A>) {
-        // On update, we need to:
-        // 1. Unsubscribe from old listenable
-        // 2. Subscribe to new listenable
-        // 3. Let StatefulBehavior handle state update
-
-        if let Some(listener_id) = self.listener_id.take() {
-            let listenable = core.view().listenable();
-            listenable.remove_listener(listener_id);
-        }
-
-        let listenable = core.view().listenable();
-        let mark_dirty = core.create_mark_dirty_callback();
-        self.listener_id = Some(listenable.add_listener(mark_dirty));
-
-        self.stateful.on_update(core);
-
-        tracing::debug!("AnimatedBehavior::on_update resubscribed to listenable");
+    fn on_update(&mut self, core: &ElementCore<V, A>, owner: &mut crate::ElementOwner<'_>) {
+        // Listener resubscription happens in `on_view_updated` below, not
+        // here: `Element::update` (unified.rs) already swapped `core`'s
+        // view by the time `on_update` fires, so `core.view()` at this
+        // point IS the new view — there is no way to reach the old
+        // listenable to unsubscribe from it. `on_view_updated` is handed
+        // the pre-swap `old_view` explicitly and is the correct place to
+        // diff the two listenable instances.
+        self.stateful.on_update(core, owner);
     }
 
     fn on_activate(&mut self, core: &mut ElementCore<V, A>) {
@@ -1183,6 +1203,41 @@ where
         old_view: &V,
         owner: &mut crate::ElementOwner<'_>,
     ) {
+        // Swap the subscription only when the listenable *instance* actually
+        // changed — `Arc::ptr_eq`, matching Flutter's reference-identity
+        // `Listenable` comparison (see `_AnimatedState.didUpdateWidget`'s
+        // `widget.listenable != oldWidget.listenable`, and FLUI's own
+        // `ValueListenableBuilderState::did_update_view`, which uses the same
+        // guard). A rebuild that passes the same `Arc<dyn Listenable>` through
+        // unchanged (by far the common case — the parent rebuilt but the
+        // animation itself didn't) must not unsubscribe/resubscribe.
+        //
+        // `old_view` is the pre-swap snapshot `Element::update` captured
+        // before replacing `core`'s view, so `old_view.listenable()` reaches
+        // the actual old instance — unlike reading `core.view()` twice, which
+        // is the bug this replaces (both reads would resolve to the new view).
+        let old_listenable = old_view.listenable();
+        let new_listenable = core.view().listenable();
+
+        if !Arc::ptr_eq(&old_listenable, &new_listenable) {
+            // Safe to unsubscribe unconditionally, even if the old
+            // listenable's backing `ChangeNotifier` were already disposed:
+            // `Listenable::remove_listener` is a silent no-op on a disposed
+            // notifier (Flutter parity — `ChangeNotifier.removeListener`
+            // carries no `debugAssertNotDisposed`, precisely so teardown
+            // code can detach from an already-disposed listenable).
+            if let Some(listener_id) = self.listener_id.take() {
+                old_listenable.remove_listener(listener_id);
+            }
+
+            let mark_dirty = core.create_mark_dirty_callback();
+            self.listener_id = Some(new_listenable.add_listener(mark_dirty));
+
+            tracing::debug!(
+                "AnimatedBehavior::on_view_updated resubscribed: listenable instance changed"
+            );
+        }
+
         self.stateful.on_view_updated(core, old_view, owner);
     }
 
@@ -1191,7 +1246,6 @@ where
     /// `ViewState::did_change_dependencies` hook before rebuilding —
     /// Flutter parity (animated widgets in Flutter inherit the
     /// `StatefulElement._didChangeDependencies` flag-and-fire path).
-    /// Plan §U14.
     fn did_change_dependencies(
         &mut self,
         core: &ElementCore<V, A>,

@@ -30,7 +30,10 @@ impl RenderView for ImageDisplay {
     type Protocol = flui_rendering::protocol::BoxProtocol;
     type RenderObject = RenderImage;
 
-    fn create_render_object(&self) -> Self::RenderObject {
+    fn create_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+    ) -> Self::RenderObject {
         RenderImage::from_image(
             (*self.image.data).clone(),
             ImageFit::Contain,
@@ -38,8 +41,12 @@ impl RenderView for ImageDisplay {
         )
     }
 
-    fn update_render_object(&self, render_object: &mut Self::RenderObject) {
-        *render_object = self.create_render_object();
+    fn update_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+        render_object: &mut Self::RenderObject,
+    ) {
+        *render_object = self.create_render_object(&flui_view::RenderObjectContext::detached());
     }
 }
 

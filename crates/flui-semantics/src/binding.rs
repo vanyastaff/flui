@@ -290,7 +290,7 @@ impl SemanticsBinding {
         }
     }
 
-    // ========== Semantics Events (U14) ==========
+    // ========== Semantics Events ==========
 
     /// Sets the callback for semantics events dispatched via
     /// [`SemanticsService::send_event`].

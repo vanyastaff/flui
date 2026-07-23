@@ -5,8 +5,8 @@
 //! `PartialEq`, etc. — stops at 12 or 16, with 16 being the larger
 //! cap). Authors who need >16 statically-known heterogeneous
 //! children fall back to the `Vec<BoxedView>` dynamic path with one
-//! `.boxed()` per child; the `column!` / `row!` macros (Phase 3
-//! §U26) emit a friendly `compile_error!` per FR-034 directing
+//! `.boxed()` per child; the `column!` / `row!` macros emit a
+//! friendly `compile_error!` per FR-034 directing
 //! the author to this fallback.
 //!
 //! Tuple impls are macro-generated so the 17 arities (`()` through

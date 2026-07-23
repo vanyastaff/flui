@@ -40,9 +40,9 @@ mod nav;
 mod read;
 mod write;
 
-// Cycle 3 T-8: `pub mod node` deleted (305 LOC, zero external impls).
-// The `Node`/`NodeExt`/`NodeTypeInfo` triad was a speculative
-// abstraction without consumers.
+// `pub mod node` was removed (305 LOC, zero external impls): the
+// `Node`/`NodeExt`/`NodeTypeInfo` triad was a speculative abstraction
+// without consumers.
 
 pub use nav::{TreeNav, TreeNavExt};
 pub use read::{

@@ -1,4 +1,4 @@
-//! Integration tests for build-panic recovery (plan §U7, origin R9).
+//! Integration tests for build-panic recovery.
 //!
 //! When a user `build()` panics, `ElementBase::build_into_views` must
 //! catch the unwind and substitute the registered `ErrorView` instead of

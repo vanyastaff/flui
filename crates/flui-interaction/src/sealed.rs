@@ -78,7 +78,7 @@ use crate::ids::PointerId;
 ///
 /// Custom recognizers must be `Send + Sync` to work with the concurrent
 /// gesture arena.
-pub trait CustomGestureRecognizer: Send + Sync {
+pub trait CustomGestureRecognizer {
     /// Called when this recognizer wins the gesture arena.
     ///
     /// This means your gesture was recognized and other competing

@@ -27,6 +27,12 @@ flui-foundation = { path = "../flui-foundation", version = "0.2.0" }
 flui-tree = { path = "../flui-tree", version = "0.2.0" }
 flui-layer = { path = "../flui-layer", version = "0.2.0" }
 flui-semantics = { path = "../flui-semantics", version = "0.2.0" }
+# `ScrollPosition`'s coalesced post-frame flush (view/scroll_position.rs) names
+# `PostFrameHandle` — promoted from dev-dependency (integration tests only) to a
+# real production edge. flui-scheduler sits below flui-rendering in the layer
+# graph already (flui-view/-widgets/-app all depend on both), so this is not a
+# new direction, just a new consumer.
+flui-scheduler = { path = "../flui-scheduler", version = "0.2.0" }
 
 parking_lot = { workspace = true }
 thiserror = { workspace = true }
@@ -35,9 +41,9 @@ bitflags = { workspace = true }
 smallvec = { workspace = true }
 downcast-rs = "2.0"
 dyn-clone = "1.0"
-slab = "0.4"                       # For RenderTree storage
-crossbeam-channel = "0.5"          # PipelineOwnerHandle bounded mark-dirty channel
-rustc-hash = { workspace = true }  # FxHashSet for layout cycle guard (D-block U21)
+slab = "0.4"                             # For RenderTree storage
+crossbeam-channel = { workspace = true } # PipelineOwnerHandle bounded mark-dirty channel
+rustc-hash = { workspace = true }        # FxHashSet for layout cycle guard
 
 # Segmented-stack growth for the recursive pipeline walks (layout /
 # paint / hit-test / intrinsics). A ~1000-level chain overflows the
@@ -55,13 +61,13 @@ harness = false
 name = "paint"
 harness = false
 
-# Virtualization core (ADR-0003 U1): O(log n) offset<->index seek both ways and
+# Virtualization core: O(log n) offset<->index seek both ways and
 # O(log n) mid-list insert/delete vs a naive O(n) flat-array baseline.
 [[bench]]
 name = "virtualizer"
 harness = false
 
-# ADR-0010 D3 — borrowed intrinsic path parent-data slice cost.
+# Borrowed intrinsic path parent-data slice cost.
 # Measures build_intrinsic_child_parent_data (subtree_arena.rs) called when a
 # widget queries a child's intrinsic during perform_layout. Parameterized over
 # N = {1, 8, 64} flex children to show per-child allocation scaling.
@@ -78,7 +84,7 @@ required-features = ["testing"]
 
 [dev-dependencies]
 criterion.workspace = true
-# Property-based tests for the virtualization B+-tree (ADR-0003 U1): random
+# Property-based tests for the virtualization B+-tree: random
 # insert/delete/set_measured/set_count sequences checked against a naive
 # Vec oracle + structural invariants. Test-only; no production dependency.
 # Version matches flui-types / flui-interaction (already resolved in the lockfile).
@@ -86,9 +92,9 @@ proptest = "1.5"
 # Snapshot testing for render-harness paint-phase (sub-project A).
 insta.workspace = true
 # Animation -> render-pipeline integration scenarios (tests only; no
-# production dependency between the layers).
+# production dependency between the layers). flui-scheduler moved to
+# `[dependencies]` above — `ScrollPosition` names it in production now.
 flui-animation = { path = "../flui-animation", version = "0.2.0" }
-flui-scheduler = { path = "../flui-scheduler", version = "0.2.0" }
 # Self dev-dependency that turns the off-by-default `testing` feature on
 # for this crate's own integration tests (`tests/*.rs`), benches, and
 # examples. Unit tests reach the harness via `cfg(test)`; the separate

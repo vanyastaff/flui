@@ -131,7 +131,10 @@ impl RenderView for Table {
     type Protocol = BoxProtocol;
     type RenderObject = RenderTable;
 
-    fn create_render_object(&self) -> Self::RenderObject {
+    fn create_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+    ) -> Self::RenderObject {
         debug_assert!(
             self.rows
                 .iter()
@@ -147,7 +150,11 @@ impl RenderView for Table {
             .with_row_decorations(self.row_decorations())
     }
 
-    fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+    fn update_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+        render_object: &mut Self::RenderObject,
+    ) {
         debug_assert!(
             self.rows
                 .iter()
@@ -266,13 +273,14 @@ mod tests {
         ));
         let render_object = Table::new(vec![row(1)])
             .border(border)
-            .create_render_object();
+            .create_render_object(&flui_view::RenderObjectContext::detached());
         assert_eq!(render_object.border(), Some(&border));
     }
 
     #[test]
     fn update_render_object_replaces_the_border() {
-        let mut render_object = Table::new(vec![row(1)]).create_render_object();
+        let mut render_object = Table::new(vec![row(1)])
+            .create_render_object(&flui_view::RenderObjectContext::detached());
         assert_eq!(render_object.border(), None);
 
         let border = TableBorder::all(flui_types::styling::BorderSide::new(
@@ -282,7 +290,10 @@ mod tests {
         ));
         Table::new(vec![row(1)])
             .border(border)
-            .update_render_object(&mut render_object);
+            .update_render_object(
+                &flui_view::RenderObjectContext::detached(),
+                &mut render_object,
+            );
         assert_eq!(render_object.border(), Some(&border));
     }
 

@@ -1,4 +1,4 @@
-//! Synthetic 16-position static-tuple mocks for the U3 S2 algorithm sketch.
+//! Synthetic 16-position static-tuple mocks for the S2 algorithm sketch.
 //!
 //! This module is **bench-only** and **purpose-built for the S2 question** —
 //! "given a true static-tuple `ViewSeq` path (`(A, B, C, ..., P)`), does a
@@ -8,8 +8,8 @@
 //! file ([`s2_static_path.rs`]).
 //!
 //! Sibling [`mock_node.rs`] models the 10K-element dynamic-`Vec<BoxedView>`
-//! distribution for the U2 S1 storage-shape question; this module models the
-//! 16-position static-tuple distribution for the U3 S2 algorithm question. The
+//! distribution for the S1 storage-shape question; this module models the
+//! 16-position static-tuple distribution for the S2 algorithm question. The
 //! two mocks intentionally share **no types** — the S1 question is about
 //! per-node storage shape over a large heterogeneous distribution, and the S2
 //! question is about per-frame algorithm shape over a fixed 16-position tuple.
@@ -57,7 +57,7 @@
 //!
 //! # Plan / spec references
 //!
-//! - [`docs/plans/2026-05-22-005-feat-view-element-core-contracts-plan.md`] U3
+//! - [`docs/plans/2026-05-22-005-feat-view-element-core-contracts-plan.md`]
 //! - [`specs/004-view-element-core/spec.md`] Deferred S2, FR-016
 
 use std::any::TypeId;
@@ -186,10 +186,10 @@ impl TypeIdSlot {
 }
 
 // ----------------------------------------------------------------------------
-// Permutation pattern — full reverse (worst case per plan U3)
+// Permutation pattern — full reverse (worst case)
 // ----------------------------------------------------------------------------
 
-/// Apply a full-reverse permutation to the 16-slot array. Per plan U3 the
+/// Apply a full-reverse permutation to the 16-slot array. The
 /// canonical workload is the full-reverse 16-tuple — the worst case where
 /// every position has moved, no prefix-scan or suffix-scan fast path can fire,
 /// and every position pays the full algorithm cost.

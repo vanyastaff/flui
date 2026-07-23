@@ -22,6 +22,7 @@ use flui_rendering::parent_data::SliverMultiBoxAdaptorParentData;
 use flui_rendering::pipeline::PipelineOwner;
 use parking_lot::RwLock;
 
+use crate::BoxedView;
 use crate::ElementOwner;
 use crate::tree::ElementNode;
 use crate::tree::ElementTree;
@@ -33,7 +34,7 @@ use crate::view::View;
 /// not by dense slot — the map is sparse because only the visible-plus-cache
 /// band is built. Ordered (`BTreeMap`) so band eviction sweeps in index order.
 ///
-/// # F4 invariant — host `child_ids` stays empty
+/// # Invariant: host `child_ids` stays empty
 ///
 /// The adaptor element that owns a `SparseChildren` must **never** append its
 /// lazy children to the host's `ElementNode::child_ids` list. If it did, a
@@ -84,9 +85,9 @@ impl SparseChildren {
 
     /// Iterate over all currently-built `(logical_index, ElementId)` pairs.
     ///
-    /// Used by the adaptor element's `on_unmount` (F3) to find and subtree-
-    /// remove every lazy child: since the host's `child_ids` is empty (F4
-    /// invariant) the generic tree-walk that covers dense children cannot
+    /// Used by the adaptor element's `on_unmount` to find and subtree-remove
+    /// every lazy child: since the host's `child_ids` stays empty by
+    /// invariant, the generic tree-walk that covers dense children cannot
     /// reach them.
     pub(crate) fn iter_built(&self) -> impl Iterator<Item = (usize, ElementId)> + '_ {
         self.by_logical_index
@@ -119,7 +120,7 @@ impl SparseChildren {
         stamp_logical_index(tree, pipeline, child, logical_index);
         self.by_logical_index.insert(logical_index, child);
 
-        // F1: `ElementTree::insert` (via `ElementCore::mount`) sets the child's
+        // `ElementTree::insert` (via `ElementCore::mount`) sets the child's
         // `dirty = true` but does NOT push it onto the build heap — only
         // `id_reconcile.rs` does that through `schedule_build_for`.  Without
         // this explicit push the second `build_scope` in
@@ -149,7 +150,7 @@ impl SparseChildren {
         let Some(child) = self.by_logical_index.remove(&logical_index) else {
             return false;
         };
-        // F2: use `remove_subtree` so the child's entire descendant subtree is
+        // Use `remove_subtree` so the child's entire descendant subtree is
         // freed.  A single-node `tree.remove` only removes the top-level element
         // and leaks every descendant (e.g. the Padding and Text inside a
         // Container child stay as orphaned slab entries and dangling render nodes).
@@ -184,6 +185,98 @@ impl SparseChildren {
         }
         any_evicted
     }
+
+    /// Re-invoke `builder` for every currently-resident logical index and
+    /// reconcile the result against that index's existing child.
+    ///
+    /// Mirrors Flutter's `SliverChildBuilderDelegate.shouldRebuild` contract
+    /// (`widgets/scroll_delegate.dart`, tag `3.44.0`): the default
+    /// implementation returns `true` unconditionally, so a new delegate (a
+    /// new `SliverList` view reaching the adaptor element) re-consults the
+    /// builder for every resident child, not only newly-visible ones.
+    /// `Self::ensure` is otherwise idempotent for an already-built index (see
+    /// its own doc) — this is the mechanism that closes that gap for a
+    /// caller that has just learned its builder changed.
+    ///
+    /// A same-type result reconciles the existing child in place via
+    /// [`ElementTree::update`] (preserving its identity/state — Flutter's
+    /// `Element.updateChild`); a type change, or the index falling out of
+    /// the (possibly-shrunk) data source, evicts and — if the builder still
+    /// returns a view — remounts a fresh child (Flutter's dispose-and-
+    /// remount on an incompatible widget). Sparse children never carry a
+    /// key (no lazy-sliver call site attaches one), so the compatibility
+    /// check is type-only — the same reduction [`View::can_update`] makes
+    /// when both sides are keyless.
+    ///
+    /// `host` is the adaptor element's own id, needed only for the
+    /// remount-on-type-change fallback (`Self::ensure` already requires it).
+    ///
+    /// Returns `true` if any resident child was updated, evicted, or
+    /// remounted — callers use this the same way as [`Self::retain_band`],
+    /// to decide whether to mark the sliver dirty for re-layout.
+    pub(crate) fn refresh_resident(
+        &mut self,
+        builder: &dyn Fn(usize) -> Option<BoxedView>,
+        host: ElementId,
+        tree: &mut ElementTree,
+        owner: &mut ElementOwner<'_>,
+        pipeline: &Arc<RwLock<PipelineOwner>>,
+    ) -> bool {
+        let resident: Vec<(usize, ElementId)> = self.iter_built().collect();
+        let mut any_work = false;
+        for (logical_index, existing) in resident {
+            match builder(logical_index) {
+                None => {
+                    // Past the end of a data source that shrank. The render
+                    // object's own item_count already narrows independently
+                    // (`RenderSliverList::set_item_count`, a separate path
+                    // this method does not touch), so `retain_band` ordinarily
+                    // evicts this index before `refresh_resident` ever sees
+                    // it; handled here too so a surviving stale index cannot
+                    // leak rather than silently persist.
+                    self.evict(logical_index, tree, owner);
+                    any_work = true;
+                }
+                Some(view) => {
+                    if resident_type_matches(tree, existing, view.0.as_ref()) {
+                        tree.update(existing, view.0.as_ref(), owner);
+                        // Mirrors the dense reconciler's post-update scheduling
+                        // (`tree/id_reconcile.rs`): an update that left the
+                        // child clean (its own `should_skip_rebuild`
+                        // memoization fired) must not be pushed onto the
+                        // build heap.
+                        if let Some(node) = tree.get(existing)
+                            && node.element().is_dirty()
+                        {
+                            let depth = node.depth();
+                            owner.schedule_build_for(existing, depth);
+                        }
+                    } else {
+                        self.evict(logical_index, tree, owner);
+                        self.ensure(logical_index, view.0.as_ref(), host, tree, owner, pipeline);
+                    }
+                    any_work = true;
+                }
+            }
+        }
+        any_work
+    }
+}
+
+/// Whether `existing`'s live element can be updated in place by `new`.
+///
+/// Delegates to `tree/id_reconcile.rs`'s `can_update_by_id` — the same
+/// type-then-key predicate the dense reconciler uses. Sparse-lazy children
+/// never carry a [`ViewKey`] today (no call site in this module attaches
+/// one, and `Keyed<V>` has no `View` impl to reach one), so the key stage
+/// is a no-op for every current input; routing through the shared check
+/// keeps the correct semantics — Flutter remounts on a key mismatch even
+/// when the type matches — the day a keyed view can reach a lazy child,
+/// rather than relying on a debug-only guard.
+///
+/// [`ViewKey`]: flui_foundation::ViewKey
+fn resident_type_matches(tree: &ElementTree, existing: ElementId, new: &dyn View) -> bool {
+    crate::tree::id_reconcile::can_update_by_id(tree, existing, new)
 }
 
 // Called from `SparseChildren::ensure` via the lazy-sliver adaptor element.
@@ -245,11 +338,19 @@ mod tests {
         type Protocol = flui_rendering::protocol::BoxProtocol;
         type RenderObject = RenderSizedBox;
 
-        fn create_render_object(&self) -> Self::RenderObject {
+        fn create_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+        ) -> Self::RenderObject {
             RenderSizedBox::new(Some(px(self.side)), Some(px(self.side)))
         }
 
-        fn update_render_object(&self, _render_object: &mut Self::RenderObject) {}
+        fn update_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+            _render_object: &mut Self::RenderObject,
+        ) {
+        }
     }
 
     impl View for LeafBox {
@@ -271,11 +372,19 @@ mod tests {
         type Protocol = flui_rendering::protocol::BoxProtocol;
         type RenderObject = RenderSizedBox;
 
-        fn create_render_object(&self) -> Self::RenderObject {
+        fn create_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+        ) -> Self::RenderObject {
             RenderSizedBox::new(Some(px(self.side)), Some(px(self.side)))
         }
 
-        fn update_render_object(&self, _render_object: &mut Self::RenderObject) {}
+        fn update_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+            _render_object: &mut Self::RenderObject,
+        ) {
+        }
     }
 
     impl View for GlobalKeyedLeafBox {
@@ -440,7 +549,7 @@ mod tests {
         assert_eq!(surviving, vec![2, 3], "only in-band children survive");
     }
 
-    /// F1: `ensure` must push the freshly-mounted child onto the dirty heap so
+    /// `ensure` must push the freshly-mounted child onto the dirty heap so
     /// the second `build_scope` in `service_child_requests` can expand its
     /// subtree (e.g. Padding(Text)). Without `schedule_build_for` the heap is
     /// empty and child subtrees never grow past the top-level node.
@@ -462,16 +571,16 @@ mod tests {
         );
 
         // After `ensure`, the child must be on the dirty heap so the next
-        // `build_scope` can expand its own subtree (F1).
+        // `build_scope` can expand its own subtree.
         assert!(
             build_owner.dirty_count() > count_before,
-            "ensure must schedule the freshly-mounted child for build (F1 — \
+            "ensure must schedule the freshly-mounted child for build — \
              without schedule_build_for, service_child_requests runs build_scope \
-             over an empty heap and child subtrees never expand)",
+             over an empty heap and child subtrees never expand",
         );
     }
 
-    /// F2: `evict` must remove the child's *entire* descendant subtree, not
+    /// `evict` must remove the child's *entire* descendant subtree, not
     /// only the top-level element. A single-node `tree.remove` leaks every
     /// descendant element (and their render nodes), which the slab retains as
     /// orphans forever.
@@ -534,39 +643,39 @@ mod tests {
             "grandchild element must have a render node before evict"
         );
 
-        // Evict the list item — the whole subtree must disappear (F2).
+        // Evict the list item — the whole subtree must disappear.
         let removed = children.evict(0, &mut tree, &mut build_owner.element_owner_mut());
 
         assert!(removed, "evict reports the child was present");
         assert!(
             tree.get(child).is_none(),
-            "top-level lazy child must be removed on evict (F2)",
+            "top-level lazy child must be removed on evict",
         );
         assert!(
             tree.get(grandchild).is_none(),
-            "descendant element must also be removed (F2 — single-node remove \
-             would leak this grandchild as an orphaned slab entry)",
+            "descendant element must also be removed — single-node remove \
+             would leak this grandchild as an orphaned slab entry",
         );
 
-        // F2: render nodes must also be gone after subtree eviction.
+        // Render nodes must also be gone after subtree eviction.
         let owner = pipeline.read();
         if let Some(rid) = child_render_id {
             assert!(
                 owner.render_tree().get(rid).is_none(),
-                "child render node must be removed on subtree evict (F2)",
+                "child render node must be removed on subtree evict",
             );
         }
         if let Some(rid) = grandchild_render_id {
             assert!(
                 owner.render_tree().get(rid).is_none(),
-                "grandchild render node must also be removed on subtree evict (F2 — \
-                 single-node remove leaks descendant render nodes)",
+                "grandchild render node must also be removed on subtree evict — \
+                 single-node remove leaks descendant render nodes",
             );
         }
     }
 
-    /// F5.key: a globally-keyed lazy child pushed to the inactive queue by
-    /// eviction must be slab-freed by `finalize_tree` — not left dangling.
+    /// A globally-keyed lazy child pushed to the inactive queue by eviction
+    /// must be slab-freed by `finalize_tree` — not left dangling.
     ///
     /// A globally-keyed element is soft-removed by `tree.remove` (called inside
     /// `remove_subtree`): the slab entry stays alive, the element is placed into
@@ -641,7 +750,7 @@ mod tests {
         assert_eq!(
             tree.len(),
             element_count_before,
-            "the globally-keyed element must be slab-freed by finalize_tree (F5.key)"
+            "the globally-keyed element must be slab-freed by finalize_tree"
         );
         assert!(
             tree.get(child_id).is_none(),

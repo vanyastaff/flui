@@ -46,22 +46,23 @@ pub use layout::{
     WrapCrossAlignment,
 };
 pub use layout::{
-    AspectRatioFactor, FractionFactor, RenderAlign, RenderAnimatedSize, RenderAspectRatio,
-    RenderBaseline, RenderCenter, RenderConstrainedBox, RenderConstrainedOverflowBox,
-    RenderCustomMultiChildLayoutBox, RenderCustomSingleChildLayoutBox, RenderFittedBox, RenderFlex,
-    RenderFlow, RenderFractionalTranslation, RenderFractionallySizedBox, RenderIndexedStack,
-    RenderIntrinsicHeight, RenderIntrinsicWidth, RenderLimitedBox, RenderListBody, RenderPadding,
-    RenderRotatedBox, RenderSizedBox, RenderSizedOverflowBox, RenderStack, RenderTable,
-    RenderTransform, RenderWrap,
+    AspectRatioFactor, FractionFactor, LayoutConstraintsCell, RenderAlign, RenderAnimatedSize,
+    RenderAspectRatio, RenderBaseline, RenderCenter, RenderConstrainedBox,
+    RenderConstrainedOverflowBox, RenderCustomMultiChildLayoutBox,
+    RenderCustomSingleChildLayoutBox, RenderFittedBox, RenderFlex, RenderFlow,
+    RenderFractionalTranslation, RenderFractionallySizedBox, RenderIndexedStack,
+    RenderIntrinsicHeight, RenderIntrinsicWidth, RenderLayoutBuilder, RenderLimitedBox,
+    RenderListBody, RenderPadding, RenderRotatedBox, RenderSizedBox, RenderSizedOverflowBox,
+    RenderStack, RenderTable, RenderTheater, RenderTransform, RenderWrap,
 };
 
 // --- flat re-exports (proxy) ---
 pub use proxy::{
-    ClipGeometry, CustomClipper, DecorationPosition, Oval, RenderBackdropFilter, RenderClip,
-    RenderClipOval, RenderClipPath, RenderClipRRect, RenderClipRect, RenderColoredBox,
+    ClipGeometry, DecorationPosition, Oval, RenderAnimatedOpacity, RenderBackdropFilter,
+    RenderClip, RenderClipOval, RenderClipPath, RenderClipRRect, RenderClipRect, RenderColoredBox,
     RenderCustomPaint, RenderDecoratedBox, RenderFollowerLayer, RenderLeaderLayer, RenderOpacity,
     RenderPhysicalModel, RenderPhysicalShape, RenderRepaintBoundary, RenderSemanticsAnnotations,
-    RenderShaderMask, ShaderCallback,
+    RenderShaderMask, RenderSubtreeAnchor, SubtreeAnchor,
 };
 pub use proxy::{RenderExcludeSemantics, RenderMergeSemantics};
 
@@ -80,11 +81,12 @@ pub use image::{ImageAlignment, ImageFit, RenderImage};
 // --- flat re-exports (sliver) ---
 pub use sliver::{
     FloatingHeaderSnapConfiguration, OverScrollHeaderStretchConfiguration,
-    RenderShrinkWrappingViewport, RenderSliverFillRemaining,
+    RenderShrinkWrappingViewport, RenderSliverAnimatedOpacity, RenderSliverFillRemaining,
     RenderSliverFillRemainingAndOverscroll, RenderSliverFillRemainingWithScrollable,
     RenderSliverFillViewport, RenderSliverFixedExtentList, RenderSliverFloatingPersistentHeader,
     RenderSliverFloatingPinnedPersistentHeader, RenderSliverGrid, RenderSliverGridLazy,
     RenderSliverIgnorePointer, RenderSliverList, RenderSliverListLazy, RenderSliverOffstage,
     RenderSliverOpacity, RenderSliverPadding, RenderSliverPinnedPersistentHeader,
     RenderSliverScrollingPersistentHeader, RenderSliverToBoxAdapter, RenderViewport,
+    StretchTriggerSignal,
 };

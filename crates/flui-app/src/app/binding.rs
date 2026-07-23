@@ -1,7 +1,7 @@
-//! AppBinding - Combined application binding.
+//! AppBinding - transitional process service host.
 //!
-//! This is the central coordinator that combines all bindings like Flutter's
-//! `WidgetsFlutterBinding`.
+//! This coordinates the process-scoped services that have not yet moved into
+//! ADR-0027 ownership domains. Widget-tree state lives in `UiRealm`, not here.
 //!
 //! # Flutter Equivalence
 //!
@@ -18,44 +18,52 @@
 //! # Architecture
 //!
 //! ```text
-//! AppBinding (singleton)
+//! AppBinding (transitional process host)
 //!   ├── renderer: RendererBinding      (render tree, pipeline)
-//!   ├── widgets: WidgetsBinding        (element tree, build)
 //!   ├── gestures: GestureBinding       (hit testing, pointer coalescing)
 //!   └── scheduler: Scheduler           (frame callbacks)
+//!
+//! UiRealm (owner-affine)
+//!   └── widgets: WidgetsBinding        (element tree, build)
 //! ```
 
 use std::sync::{
-    Arc, OnceLock,
+    Arc,
     atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
 use flui_animation::Vsync;
 use flui_engine::{EngineError, RasterBackend};
 use flui_foundation::HasInstance;
-use flui_interaction::{binding::GestureBinding, routing::FocusManager};
+use flui_interaction::{
+    ClientToken, ImeEventCallback, OpaqueWindowHandle, TextInputRegistry, binding::GestureBinding,
+    routing::FocusManager,
+};
 use flui_layer::Scene;
-use flui_platform::traits::{PlatformInput, PlatformWindow};
+use flui_platform::traits::{Clipboard, PlatformInput, PlatformWindow};
+use flui_rendering::binding::RendererBinding;
 use flui_rendering::constraints::BoxConstraints;
-use flui_scheduler::Scheduler;
-use flui_types::{Size, geometry::px};
-use flui_view::{View, WidgetsBinding};
+use flui_scheduler::{AppLifecycleState, Scheduler};
+use flui_types::{
+    HapticFeedback, Size,
+    geometry::{Bounds, Pixels, px},
+};
+use flui_view::View;
 use flui_widgets::VsyncScope;
 use parking_lot::{Mutex, RwLock};
 
-use crate::{
-    app::lifecycle::{DefaultLifecycle, LifecycleEvent, LifecycleState, PlatformLifecycle},
-    bindings::RenderingFlutterBinding,
-};
+use crate::bindings::RenderingFlutterBinding;
 
-/// Combined application binding.
+/// Transitional process service host.
 ///
-/// AppBinding is the central coordinator for the FLUI framework.
-/// It composes all the specialized bindings:
-/// - [`RendererBinding`](crate::bindings::RendererBinding) - Manages render tree and pipeline
-/// - [`WidgetsBinding`] - Manages element tree and build phase
+/// AppBinding coordinates the specialized process services that remain during
+/// the ADR-0027 migration:
+/// - [`RendererBinding`] - Manages render tree and pipeline
 /// - [`GestureBinding`] - Manages hit testing, pointer coalescing, and gestures
 /// - [`Scheduler`] - Manages frame scheduling
+///
+/// The runner-owned `UiRealm` separately owns the element tree, BuildOwner,
+/// and widget build phase.
 ///
 /// # Input Handling
 ///
@@ -64,22 +72,21 @@ use crate::{
 ///   coalescing)
 /// - Keyboard events → `FocusManager::dispatch_key_event()`
 ///
-/// # Thread Safety
+/// # Thread affinity
 ///
-/// AppBinding is a singleton accessed via `instance()`. It uses internal
-/// locking for thread-safe access to mutable state.
+/// AppBinding is a transitional owner-thread host accessed via `instance()`.
+/// It is thread-local during the ADR-0027 migration so owner-local gesture and
+/// widget state do not have to implement `Send + Sync` just to satisfy a
+/// process-global static.
 pub struct AppBinding {
     /// Renderer binding (render tree, layout/paint phases)
     renderer: RwLock<RenderingFlutterBinding>,
-
-    /// Widgets binding (element tree, build phase)
-    widgets: RwLock<WidgetsBinding>,
 
     /// Gesture binding (input handling, hit testing, pointer coalescing)
     gestures: GestureBinding,
 
     /// Whether a redraw is needed
-    needs_redraw: AtomicBool,
+    needs_redraw: Arc<AtomicBool>,
 
     /// Whether the app is initialized
     initialized: AtomicBool,
@@ -95,11 +102,17 @@ pub struct AppBinding {
     /// for sharing with elements that need `Arc<RwLock<PipelineOwner>>`.
     shared_pipeline_owner: Arc<RwLock<flui_rendering::pipeline::PipelineOwner>>,
 
-    /// Application lifecycle state tracker.
-    lifecycle: Mutex<DefaultLifecycle>,
-
     /// Active platform window (set during run_desktop).
-    active_window: Mutex<Option<Box<dyn PlatformWindow>>>,
+    active_window: Arc<Mutex<Option<Arc<dyn PlatformWindow>>>>,
+
+    /// The platform's clipboard capability (ADR-0034), resolved from
+    /// `Platform::clipboard()` — a required method every backend already
+    /// implements — before `Platform::run()` consumes ownership of the
+    /// platform value. `set_platform_clipboard`/`clear_platform_clipboard`
+    /// are the install/teardown symmetry: without the clear half, a live
+    /// platform resource (arboard on X11 owns a live X11 connection) would
+    /// stay pinned behind this `Arc` past the event loop's exit.
+    platform_clipboard: Arc<Mutex<Option<Arc<dyn Clipboard>>>>,
 
     /// Controller registry for implicit animations (VsyncScope-driven).
     ///
@@ -137,11 +150,189 @@ pub struct AppBinding {
     now_secs_override: AtomicU64,
 }
 
+#[derive(Clone)]
+struct FrameWakeHandle {
+    needs_redraw: Arc<AtomicBool>,
+    active_window: Arc<Mutex<Option<Arc<dyn PlatformWindow>>>>,
+}
+
+impl FrameWakeHandle {
+    fn wake_frame(&self) {
+        self.needs_redraw.store(true, Ordering::Relaxed);
+        let window = self.active_window.lock().as_ref().cloned();
+        if let Some(window) = window {
+            window.request_redraw();
+            tracing::trace!("wake_frame: platform window request_redraw sent");
+        }
+    }
+
+    fn into_callback(self) -> Arc<dyn Fn() + Send + Sync> {
+        Arc::new(move || self.wake_frame())
+    }
+}
+
+/// Bridges [`TextInputRegistry`] (`flui-interaction`) client attach/detach
+/// to the platform's `PlatformTextInput` capability (`flui-platform`), so
+/// attaching an IME client automatically enables platform IME composition
+/// and detaching automatically disables it. Without this bridge, every call
+/// site (PR2's `EditableText`) would need to re-derive the
+/// enable-on-attach/disable-only-if-still-active rule itself — and could get
+/// the stale-detach guard wrong.
+///
+/// `flui-interaction` cannot depend on `flui-platform` (see
+/// `TextInputRegistry`'s module doc), so `flui-app` — which depends on both
+/// — is where this wiring has to live.
+struct ImeBackend;
+
+impl ImeBackend {
+    fn attach(window: &Arc<dyn PlatformWindow>, callback: ImeEventCallback) -> ClientToken {
+        let token = TextInputRegistry::global()
+            .attach(OpaqueWindowHandle::new(Arc::clone(window)), callback);
+        if let Some(text_input) = window.text_input() {
+            text_input.set_ime_allowed(true);
+        }
+        token
+    }
+
+    fn detach(window: Option<&Arc<dyn PlatformWindow>>, token: ClientToken) {
+        if !TextInputRegistry::global().detach(token) {
+            return;
+        }
+        if let Some(text_input) = window.and_then(|window| window.text_input()) {
+            text_input.set_ime_allowed(false);
+        }
+    }
+}
+
+/// A `'static`, `Arc`-cloneable handle onto exactly the state
+/// [`ImeBackend::attach`]/[`ImeBackend::detach`] need — the active-window
+/// slot — without borrowing `&AppBinding` itself.
+///
+/// [`UiRealm::bind_to_app`](super::ui_realm::UiRealm::bind_to_app) installs
+/// this (via [`AppBinding::text_input_platform_bridge`]) into the
+/// [`flui_interaction::TextInputHandle`] capability, instead of a closure
+/// that re-resolves [`AppBinding::instance`] on every call. That distinction
+/// is load-bearing, not stylistic: `bind_to_app` is also called from test
+/// code with a standalone `AppBinding::new()` instance (`UiRealm::for_test`,
+/// isolated from the process-wide singleton on purpose), and a closure
+/// hard-coding `AppBinding::instance()` would silently attach to the WRONG
+/// binding there — the singleton, which never had `set_window` called on it
+/// in that test — rather than the specific `app` `bind_to_app` was given.
+/// Cloning the `Arc<Mutex<..>>` active-window slot ties the installed handle
+/// to the correct binding either way, production singleton or test instance.
+#[derive(Clone)]
+pub(crate) struct TextInputPlatformBridge {
+    active_window: Arc<Mutex<Option<Arc<dyn PlatformWindow>>>>,
+}
+
+impl TextInputPlatformBridge {
+    pub(crate) fn attach(&self, callback: ImeEventCallback) -> Option<ClientToken> {
+        let window = self.active_window.lock().as_ref().cloned()?;
+        Some(ImeBackend::attach(&window, callback))
+    }
+
+    pub(crate) fn detach(&self, token: ClientToken) {
+        let window = self.active_window.lock().as_ref().cloned();
+        ImeBackend::detach(window.as_ref(), token);
+    }
+
+    /// Tell the platform IME where to draw its candidate window (ADR-0032).
+    /// Clones the active window's `Arc<dyn PlatformTextInput>` out from
+    /// under the lock before calling through — the same clone-then-call
+    /// discipline [`AppBinding::perform_haptic_feedback`] follows, so a slow
+    /// or reentrant backend call never holds `active_window` for anyone
+    /// else. Silent no-op with no active window, or a backend with no
+    /// `PlatformTextInput` capability.
+    pub(crate) fn set_cursor_area(&self, area: Bounds<Pixels>) {
+        let window = self.active_window.lock().as_ref().cloned();
+        if let Some(text_input) = window.and_then(|window| window.text_input()) {
+            text_input.set_ime_cursor_area(area);
+        }
+    }
+}
+
+/// A `'static`, `Arc`-cloneable handle onto exactly the state
+/// [`HotReloadBridge::apply`] needs — the shared pipeline owner and the
+/// `needs_redraw` flag — without borrowing `&AppBinding` itself.
+///
+/// [`UiRealm::bind_to_app`](super::ui_realm::UiRealm::bind_to_app) installs
+/// this (via [`AppBinding::hot_reload_bridge`]) so `UiRealm::drain_commands`'s
+/// `UiCommand::HotReload` arm applies against the app the realm was actually
+/// bound to. This is the same stale-binding class
+/// [`TextInputPlatformBridge`] exists to prevent for IME callbacks: hitting
+/// `AppBinding::instance()` directly from that arm would silently reassemble
+/// the process-wide singleton's tree instead of a standalone test instance's
+/// (`UiRealm::for_test`) — wrong under `for_test`, and a trap for a future
+/// multi-realm binding.
+#[derive(Clone)]
+pub(crate) struct HotReloadBridge {
+    pipeline: Arc<RwLock<flui_rendering::pipeline::PipelineOwner>>,
+    needs_redraw: Arc<AtomicBool>,
+}
+
+impl HotReloadBridge {
+    /// Reassembles the element and render trees and requests a redraw.
+    /// Mirrors [`AppBinding::perform_hot_reload_entered`] but through the
+    /// bound app's own handles rather than `&AppBinding`.
+    pub(crate) fn apply(
+        &self,
+        realm: &super::ui_realm::UiRealm,
+        tier: flui_hot_reload::HotReloadTier,
+    ) {
+        use flui_hot_reload::HotReloadTier;
+
+        match tier {
+            HotReloadTier::HotReload => {
+                realm.widgets().perform_reassemble();
+                self.pipeline.write().reassemble();
+                self.needs_redraw.store(true, Ordering::Relaxed);
+                tracing::info!("Hot reload applied — element and render trees reassembled");
+            }
+            HotReloadTier::HotRestart => {
+                tracing::warn!(
+                    "HotRestart requested — root remount not yet implemented; \
+                     falling back to reassemble (state may be stale)"
+                );
+                self.apply(realm, HotReloadTier::HotReload);
+            }
+            HotReloadTier::FullRestart => {
+                tracing::debug!("FullRestart is handled by the CLI process supervisor");
+            }
+        }
+    }
+}
+
+/// Outcome of one build+layout+paint pass, distinguishing "nothing was
+/// dirty" from "the pipeline failed" — both produce no layer tree, but only
+/// the latter must force a retry rather than being treated as a settled,
+/// up-to-date frame (see [`AppBinding::render_frame_entered`]'s retry gate).
+enum FramePaintOutcome {
+    /// A fresh layer tree was painted and turned into a `Scene`.
+    Painted(Arc<Scene>),
+    /// Nothing was dirty this frame; no new content to composite.
+    Idle,
+    /// The build/layout/paint transaction failed (e.g. a render object
+    /// panicked and was caught by `catch_unwind`); the frame was dropped and
+    /// must be retried.
+    Errored,
+}
+
 impl AppBinding {
-    /// Create a new AppBinding.
-    fn new() -> Self {
+    /// Create a new, standalone `AppBinding` — distinct from
+    /// [`AppBinding::instance()`]'s process-singleton. `pub(crate)` (not
+    /// private) specifically so `UiRealm`'s own tests (a sibling module) can
+    /// build one to bind a realm against, the same way this module's tests
+    /// do — see `UiRealm::for_test`.
+    pub(crate) fn new() -> Self {
         // Ensure the global Scheduler singleton is initialized
         let _ = Scheduler::instance();
+
+        let needs_redraw = Arc::new(AtomicBool::new(false));
+        let active_window = Arc::new(Mutex::new(None));
+        let wake_handle = FrameWakeHandle {
+            needs_redraw: Arc::clone(&needs_redraw),
+            active_window: Arc::clone(&active_window),
+        };
 
         // Create shared pipeline owner first (elements need Arc access)
         let shared_pipeline_owner =
@@ -157,49 +348,35 @@ impl AppBinding {
         // Lock order is safe: the callback fires while the CALLER holds
         // the pipeline-owner lock, and `wake_frame` acquires only the
         // `active_window` leaf Mutex — never the owner, never `widgets`.
-        // `AppBinding::instance()` is resolved lazily at fire time, not
-        // captured, so this closure cannot re-enter `new()` during
-        // singleton construction (dirty marks only happen after init).
+        // The callback captures only a small Send + Sync wake capability, not
+        // `AppBinding` itself. That matters after ADR-0027 made
+        // `AppBinding::instance()` thread-local: a worker-thread dirty mark
+        // must wake the owner binding, not resolve/create a worker-local TLS
+        // binding and set redraw state there.
+        let visual_wake = wake_handle.clone();
         shared_pipeline_owner
             .write()
-            .set_on_need_visual_update(|| AppBinding::instance().wake_frame());
+            .set_on_need_visual_update(move || visual_wake.wake_frame());
 
-        // Animation-wake wiring: scheduling a frame callback (a ticker
-        // tick) fires this hook on the scheduler's false→true
-        // `frame_scheduled` transition (Flutter parity:
-        // `SchedulerBinding.scheduleFrame` → platform `scheduleFrame`).
-        // Without it an AnimationController only advances on frames some
-        // OTHER source produces — after the first idle frame the ticker
-        // starves and the animation freezes. Same lock-safety argument as
-        // the visual-update hook above: `wake_frame` touches only the
-        // `active_window` leaf Mutex.
-        Scheduler::instance().set_on_frame_scheduled(Some(std::sync::Arc::new(|| {
-            AppBinding::instance().wake_frame();
-        })));
+        // Animation-wake wiring (the scheduler's `on_frame_scheduled` hook) is
+        // installed in `instance()`'s one-time initializer, NOT here — see
+        // that method's doc for why a per-construction install is wrong both
+        // for steal-proofing and for cross-thread wake correctness.
 
         // Create RendererBinding sharing the SAME PipelineOwner
         let renderer =
             RenderingFlutterBinding::new_with_pipeline(Arc::clone(&shared_pipeline_owner));
 
-        // Create WidgetsBinding and hand it the SAME PipelineOwner the
-        // renderer shares. `attach_root_widget*` bootstraps the root render
-        // tree through `mount_root_with_pipeline_owner`; without the owner in
-        // scope the root element mounts with no PipelineOwner and never
-        // creates its RenderView — the window renders nothing.
-        let widgets = WidgetsBinding::new();
-        widgets.set_pipeline_owner(Arc::clone(&shared_pipeline_owner));
-
         Self {
             renderer: RwLock::new(renderer),
-            widgets: RwLock::new(widgets),
             gestures: GestureBinding::new(),
-            needs_redraw: AtomicBool::new(false),
+            needs_redraw,
             initialized: AtomicBool::new(false),
             frames_rendered: AtomicU64::new(0),
             frames_dropped: AtomicU64::new(0),
             shared_pipeline_owner,
-            lifecycle: Mutex::new(DefaultLifecycle::new()),
-            active_window: Mutex::new(None),
+            active_window,
+            platform_clipboard: Arc::new(Mutex::new(None)),
             vsync_slot: Mutex::new(Vsync::new()),
             start: web_time::Instant::now(),
             #[cfg(test)]
@@ -209,13 +386,98 @@ impl AppBinding {
 
     /// Get the singleton instance.
     ///
-    /// Creates the instance on first call.
+    /// Creates the owner-thread instance on first call. The leaked allocation
+    /// preserves the historical `&'static Self` API while avoiding a
+    /// process-global `Sync` requirement for owner-local interaction state.
     pub fn instance() -> &'static Self {
-        static INSTANCE: OnceLock<AppBinding> = OnceLock::new();
-        INSTANCE.get_or_init(|| {
+        thread_local! {
+            static INSTANCE: &'static AppBinding = {
             tracing::info!("Initializing AppBinding");
-            AppBinding::new()
-        })
+            let binding: &'static AppBinding = Box::leak(Box::new(AppBinding::new()));
+
+            // Animation-wake wiring: scheduling a frame callback (a ticker
+            // tick) fires this hook on the scheduler's false→true
+            // `frame_scheduled` transition (Flutter parity:
+            // `SchedulerBinding.scheduleFrame` → platform `scheduleFrame`).
+            // Without it an AnimationController only advances on frames some
+            // OTHER source produces — after the first idle frame the ticker
+            // starves and the animation freezes.
+            //
+            // The SAME hook also fires from the async-driver's task waker
+            // (`AsyncDriver::set_request_frame`, wired in
+            // `Scheduler::with_frame_duration`) whenever a spawned future's
+            // `Waker::wake` runs — and that can happen on a thread that never
+            // called `AppBinding::instance()` at all (an executor thread
+            // completing an image-decode future, for instance). This is
+            // installed HERE — once, in this thread-local singleton's
+            // one-time initializer, capturing THIS canonical binding's
+            // `frame_wake_callback()` (an `Arc`-backed, `Send + Sync` handle)
+            // — rather than in `AppBinding::new()` resolving
+            // `AppBinding::instance()` fresh on every fire, for two reasons:
+            //
+            // 1. Cross-thread correctness (the reason resolving at fire time
+            //    is wrong): `AppBinding::instance()` is itself thread-local.
+            //    A hook that calls it AT FIRE TIME, fired from some OTHER
+            //    thread, would lazily construct a brand-new, windowless
+            //    `AppBinding` for THAT thread and wake it instead of the
+            //    owner — a lost wake / async-task starvation, exactly what
+            //    the visual-update hook above (same reasoning, same fix
+            //    shape) already avoids by capturing an `Arc`-based handle
+            //    instead of re-resolving the thread-local. Capturing
+            //    `frame_wake_callback()` up front sidesteps thread-local
+            //    resolution entirely: firing it only ever touches `Send +
+            //    Sync` `Arc` state, so it wakes the correct binding
+            //    regardless of which thread calls it.
+            // 2. Steal-proofing: `Scheduler::instance()` is itself a
+            //    thread-local singleton, so this hook is a shared resource
+            //    between every `AppBinding` constructed on this thread.
+            //    Installing it from `AppBinding::new()` meant a throwaway
+            //    `AppBinding::new()` a test builds alongside the real
+            //    singleton would silently steal the hook toward its own
+            //    (about-to-be-dropped) wake handle. Installing it only here
+            //    means a throwaway `new()` never touches the shared hook at
+            //    all — this initializer runs exactly once per thread, for
+            //    the canonical singleton only.
+            Scheduler::instance().set_on_frame_scheduled(Some(binding.frame_wake_callback()));
+
+            // Frames-disabled→enabled re-dirty wiring (see `ADR-0035`): FLUI
+            // has no retained-scene re-present, so an app that was
+            // `Hidden`/`Paused`/`Detached` and comes back to `Resumed`/
+            // `Inactive` needs the root explicitly re-dirtied alongside the
+            // frame the scheduler's re-enable leg already guarantees gets
+            // requested — otherwise that frame finds nothing dirty and
+            // produces `FramePaintOutcome::Idle` instead of presenting
+            // fresh content. Installed HERE, for the identical reasons as
+            // the wake hook just above: capturing `Send + Sync` handles (the
+            // shared pipeline owner `Arc`, `frame_wake_callback()`) up front
+            // avoids re-resolving `AppBinding::instance()`/`Scheduler::
+            // instance()` — both thread-locals — from whatever thread the
+            // lifecycle listener fires on, and installing it only in this
+            // one-time initializer keeps a throwaway `AppBinding::new()`
+            // from stealing the shared listener slot the way installing it
+            // in `new()` would.
+            install_frames_reenable_redirty_listener(
+                Scheduler::instance(),
+                Arc::clone(&binding.shared_pipeline_owner),
+                binding.frame_wake_callback(),
+            );
+
+            binding
+            };
+        }
+
+        INSTANCE.with(|binding| *binding)
+    }
+
+    pub(crate) fn frame_wake_callback(&self) -> Arc<dyn Fn() + Send + Sync> {
+        self.wake_handle().into_callback()
+    }
+
+    fn wake_handle(&self) -> FrameWakeHandle {
+        FrameWakeHandle {
+            needs_redraw: Arc::clone(&self.needs_redraw),
+            active_window: Arc::clone(&self.active_window),
+        }
     }
 
     /// Check if the binding is initialized.
@@ -243,10 +505,18 @@ impl AppBinding {
     // Widgets Binding Access
     // ========================================================================
 
-    // PORT-TARGET: flui-app runner root-bootstrap consolidation, pending Cycle 6 element-ownership unification (V-7 deferral)
     /// Attach a root widget.
     ///
     /// This creates the root element and schedules the first build.
+    ///
+    /// # Root bootstrap
+    ///
+    /// Forwards to [`flui_view::WidgetsBinding::attach_root_widget`] — the
+    /// single root-bootstrap path. Every runner entry point
+    /// (`runner.rs::run_desktop`/`run_android`/`run_web`) calls
+    /// [`Self::attach_root_widget_with_size`] (this method's sized sibling),
+    /// not a separate hand-rolled wiring; there is exactly one element-tree
+    /// ownership model (the by-id, slab-resident `ElementTree`).
     ///
     /// # Implicit-animation auto-wrap
     ///
@@ -256,7 +526,7 @@ impl AppBinding {
     /// below the root (`AnimatedOpacity`, `AnimatedContainer`, …) registers its
     /// controller into the binding's vsync registry without any app-author
     /// boilerplate — the binding ticks that registry once per frame
-    /// (before the build phase in [`draw_frame`](Self::draw_frame)).
+    /// (before the frame's build phase).
     ///
     /// ## Invariant — the binding owns the root scope
     ///
@@ -275,23 +545,44 @@ impl AppBinding {
     /// # Errors
     ///
     /// Forwards every [`AttachError`](flui_view::AttachError) the
-    /// underlying [`WidgetsBinding::attach_root_widget`] returns —
+    /// underlying [`flui_view::WidgetsBinding::attach_root_widget`] returns —
     /// notably [`AttachError::AlreadyAttached`](flui_view::AttachError::AlreadyAttached)
     /// when a root widget is already mounted. Callers MUST handle the
-    /// `Result` (PR #119 review — copilot); the previous log-and-
-    /// swallow shape hid `AlreadyAttached` (and any future variant
-    /// added under the enum's `#[non_exhaustive]` cover) from the
-    /// caller.
-    pub fn attach_root_widget<V>(&self, view: &V) -> Result<(), flui_view::AttachError>
+    /// `Result`: an earlier version logged the error and swallowed it,
+    /// which hid `AlreadyAttached` (and any future variant added under
+    /// the enum's `#[non_exhaustive]` cover) from the caller.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "desktop/mobile runners use the sized attach variant"
+        )
+    )]
+    pub(crate) fn attach_root_widget<V>(
+        &self,
+        realm: &super::ui_realm::UiRealm,
+        view: &V,
+    ) -> Result<(), flui_view::AttachError>
     where
-        V: View + Clone + Send + Sync + 'static,
+        V: View + Clone + 'static,
+    {
+        realm.enter(|realm| self.attach_root_widget_entered(realm, view))
+    }
+
+    fn attach_root_widget_entered<V>(
+        &self,
+        realm: &super::ui_realm::UiRealm,
+        view: &V,
+    ) -> Result<(), flui_view::AttachError>
+    where
+        V: View + Clone + 'static,
     {
         // Auto-wrap: inject a VsyncScope carrying the binding's registry so
         // every implicitly-animated widget below can register its controller
         // without any app-author boilerplate. VsyncScope is an InheritedView
         // with no render object, so the render/hit-test root is unchanged.
         let wrapped = VsyncScope::new(self.vsync(), view.clone());
-        let widgets = self.widgets.write();
+        let widgets = realm.widgets();
         widgets.attach_root_widget(&wrapped)?;
         self.initialized.store(true, Ordering::Relaxed);
         self.request_redraw();
@@ -313,19 +604,33 @@ impl AppBinding {
     /// # Errors
     ///
     /// Forwards every [`AttachError`](flui_view::AttachError) from
-    /// [`WidgetsBinding::attach_root_widget_with_size`].
-    pub fn attach_root_widget_with_size<V>(
+    /// [`flui_view::WidgetsBinding::attach_root_widget_with_size`].
+    pub(crate) fn attach_root_widget_with_size<V>(
         &self,
+        realm: &super::ui_realm::UiRealm,
         view: &V,
         width: f32,
         height: f32,
     ) -> Result<(), flui_view::AttachError>
     where
-        V: View + Clone + Send + Sync + 'static,
+        V: View + Clone + 'static,
+    {
+        realm.enter(|realm| self.attach_root_widget_with_size_entered(realm, view, width, height))
+    }
+
+    fn attach_root_widget_with_size_entered<V>(
+        &self,
+        realm: &super::ui_realm::UiRealm,
+        view: &V,
+        width: f32,
+        height: f32,
+    ) -> Result<(), flui_view::AttachError>
+    where
+        V: View + Clone + 'static,
     {
         // Auto-wrap: same VsyncScope injection as attach_root_widget.
         let wrapped = VsyncScope::new(self.vsync(), view.clone());
-        let widgets = self.widgets.write();
+        let widgets = realm.widgets();
         widgets.attach_root_widget_with_size(&wrapped, width, height)?;
         self.initialized.store(true, Ordering::Relaxed);
         self.request_redraw();
@@ -338,39 +643,18 @@ impl AppBinding {
     /// - [`flui_hot_reload::HotReloadTier::HotReload`]: `perform_reassemble` on widgets + render pipeline.
     /// - [`flui_hot_reload::HotReloadTier::HotRestart`]: detach + re-attach root (Phase B — not yet wired).
     /// - [`flui_hot_reload::HotReloadTier::FullRestart`]: no-op here; use `flui run` process restart.
-    pub fn perform_hot_reload(&self, tier: flui_hot_reload::HotReloadTier) {
-        use flui_hot_reload::HotReloadTier;
-
-        match tier {
-            HotReloadTier::HotReload => {
-                self.widgets.read().perform_reassemble();
-                self.render_pipeline_mut().reassemble();
-                self.request_redraw();
-                tracing::info!("Hot reload applied — element and render trees reassembled");
-            }
-            HotReloadTier::HotRestart => {
-                tracing::warn!(
-                    "HotRestart requested — root remount not yet implemented; \
-                     falling back to reassemble (state may be stale)"
-                );
-                self.perform_hot_reload(HotReloadTier::HotReload);
-            }
-            HotReloadTier::FullRestart => {
-                tracing::debug!("FullRestart is handled by the CLI process supervisor");
-            }
-        }
-    }
-
-    /// Get read access to WidgetsBinding.
-    pub fn widgets(&self) -> parking_lot::RwLockReadGuard<'_, WidgetsBinding> {
-        // PORT-CHECK-OK-SP6: AppBinding widgets accessor; pre-existing SP-6
-        self.widgets.read()
-    }
-
-    /// Get write access to WidgetsBinding.
-    pub fn widgets_mut(&self) -> parking_lot::RwLockWriteGuard<'_, WidgetsBinding> {
-        // PORT-CHECK-OK-SP6: AppBinding widgets_mut accessor; pre-existing SP-6
-        self.widgets.write()
+    ///
+    /// Apply reload while the realm owner is at an Idle commit point.
+    ///
+    /// Delegates to [`HotReloadBridge::apply`] against THIS app's own
+    /// pipeline/redraw handles — the single implementation both this method
+    /// and `UiRealm::drain_commands`'s hot-reload arm share.
+    pub(crate) fn perform_hot_reload_entered(
+        &self,
+        realm: &super::ui_realm::UiRealm,
+        tier: flui_hot_reload::HotReloadTier,
+    ) {
+        self.hot_reload_bridge().apply(realm, tier);
     }
 
     // ========================================================================
@@ -447,7 +731,7 @@ impl AppBinding {
     ///
     /// # Customizing the auto-wrapped registry
     ///
-    /// [`attach_root_widget`](Self::attach_root_widget) auto-wraps the root in a
+    /// `attach_root_widget` auto-wraps the root in a
     /// [`VsyncScope`] backed by `self.vsync()` and the
     /// frame driver ticks **that same registry**. To supply a custom registry,
     /// call `set_vsync(custom)` **before** `attach_root_widget` so the binding
@@ -522,28 +806,6 @@ impl AppBinding {
     }
 
     // ========================================================================
-    // Lifecycle Management
-    // ========================================================================
-
-    /// Get the current lifecycle state.
-    pub fn lifecycle_state(&self) -> LifecycleState {
-        self.lifecycle.lock().state()
-    }
-
-    /// Transition the lifecycle via an event.
-    ///
-    /// Delegates to [`DefaultLifecycle::handle_event`] and logs the transition.
-    pub fn transition_lifecycle(&self, event: LifecycleEvent) {
-        self.lifecycle.lock().handle_event(event);
-        tracing::debug!(?event, state = ?self.lifecycle_state(), "Lifecycle transition");
-    }
-
-    /// Check if the lifecycle state allows rendering.
-    pub fn should_render(&self) -> bool {
-        self.lifecycle.lock().should_render()
-    }
-
-    // ========================================================================
     // Window Access
     // ========================================================================
 
@@ -551,6 +813,15 @@ impl AppBinding {
     ///
     /// Called by the runner after all callbacks have been registered.
     pub fn set_window(&self, window: Box<dyn PlatformWindow>) {
+        self.set_shared_window(Arc::from(window));
+    }
+
+    /// Store an already shared platform window.
+    ///
+    /// The web runner clones this owner into asynchronous WebGPU
+    /// initialization so the native canvas handle outlives every surface
+    /// operation, including early-return paths during app startup.
+    pub(crate) fn set_shared_window(&self, window: Arc<dyn PlatformWindow>) {
         *self.active_window.lock() = Some(window);
         tracing::debug!("Active window stored in AppBinding");
     }
@@ -561,6 +832,169 @@ impl AppBinding {
     /// Returns `None` if no window is set.
     pub fn with_window<R>(&self, f: impl FnOnce(&dyn PlatformWindow) -> R) -> Option<R> {
         self.active_window.lock().as_ref().map(|w| f(w.as_ref()))
+    }
+
+    // ========================================================================
+    // IME (text input)
+    // ========================================================================
+
+    /// Attach an IME client on the active window, via
+    /// [`TextInputRegistry::global`]. Enables platform IME composition
+    /// (`PlatformTextInput::set_ime_allowed(true)`) through the window's
+    /// `text_input()` capability, if the backend supports one.
+    ///
+    /// Returns `None` if there is no active window yet (the caller attached
+    /// before `set_window`/`set_shared_window` ran).
+    pub fn attach_text_input(&self, callback: ImeEventCallback) -> Option<ClientToken> {
+        self.text_input_platform_bridge().attach(callback)
+    }
+
+    /// Detach the IME client identified by `token`.
+    ///
+    /// The registry side always runs; the platform `set_ime_allowed(false)`
+    /// call additionally requires `token` to still be the registry's active
+    /// client (see [`TextInputRegistry::detach`]'s stale-token guard) — that
+    /// guard is what keeps a replaced field's dispose/blur handler from
+    /// disabling IME for the field that replaced it.
+    pub fn detach_text_input(&self, token: ClientToken) {
+        self.text_input_platform_bridge().detach(token);
+    }
+
+    /// Tell the platform IME where to draw its candidate window, in
+    /// window-root-space logical pixels (ADR-0032) — `flui-widgets`'
+    /// `EditableText` post-frame loop is the only production caller, via
+    /// the `TextInputHandle::set_cursor_area` capability
+    /// `UiRealm::bind_to_app` installs.
+    ///
+    /// Routes through `text_input_platform_bridge` rather than reading
+    /// `self.active_window` directly, for the same per-instance-targeting
+    /// reason [`attach_text_input`](Self::attach_text_input) does (see
+    /// `TextInputPlatformBridge`'s doc) — but follows
+    /// [`perform_haptic_feedback`](Self::perform_haptic_feedback)'s exact
+    /// clone-the-capability-out-of-the-lock-then-call-outside-it discipline
+    /// (see `TextInputPlatformBridge::set_cursor_area`). Silent no-op with
+    /// no active window yet, or a backend with no `PlatformTextInput`
+    /// capability.
+    pub fn set_ime_cursor_area(&self, area: Bounds<Pixels>) {
+        self.text_input_platform_bridge().set_cursor_area(area);
+    }
+
+    /// A `'static`, `Arc`-cloneable handle onto this specific binding's
+    /// active-window slot — see [`TextInputPlatformBridge`]'s doc for why
+    /// [`UiRealm::bind_to_app`](super::ui_realm::UiRealm::bind_to_app)
+    /// installs THIS instead of a closure that re-resolves
+    /// [`AppBinding::instance`].
+    pub(crate) fn text_input_platform_bridge(&self) -> TextInputPlatformBridge {
+        TextInputPlatformBridge {
+            active_window: Arc::clone(&self.active_window),
+        }
+    }
+
+    /// A cloneable capability onto this app's pipeline + redraw flag, for
+    /// [`UiRealm::bind_to_app`](super::ui_realm::UiRealm::bind_to_app) to
+    /// install so hot-reload commands drained later apply against THIS app,
+    /// not whichever `AppBinding::instance()` resolves to at drain time. See
+    /// [`HotReloadBridge`]'s doc for why that distinction matters.
+    pub(crate) fn hot_reload_bridge(&self) -> HotReloadBridge {
+        HotReloadBridge {
+            pipeline: Arc::clone(&self.shared_pipeline_owner),
+            needs_redraw: Arc::clone(&self.needs_redraw),
+        }
+    }
+
+    // ========================================================================
+    // Haptics
+    // ========================================================================
+
+    /// Perform haptic feedback on the active window, via
+    /// [`PlatformWindow::haptics`].
+    ///
+    /// Silent no-op — no panic, no error — when there is no active window
+    /// yet, or the active window's backend has no [`PlatformHaptics`]
+    /// capability (desktop winit targets, for instance). This mirrors
+    /// Flutter's own `HapticFeedback` degradation contract: every call is
+    /// fire-and-forget best-effort, with no availability-discovery API to
+    /// check first (see `flui_types::HapticFeedback`'s module doc).
+    ///
+    /// `perform` runs *after* `with_window`'s `active_window` guard is
+    /// dropped — only the cheap `Arc` clone out of `haptics()` happens
+    /// under the lock, matching `TextInputPlatformBridge::attach`'s
+    /// clone-then-release shape. A backend whose `perform` blocks or
+    /// re-enters the binding must not stall every other window accessor
+    /// for the duration of one haptic call.
+    ///
+    /// [`PlatformHaptics`]: flui_platform::traits::PlatformHaptics
+    pub fn perform_haptic_feedback(&self, feedback: HapticFeedback) {
+        let haptics = self.with_window(|window| window.haptics()).flatten();
+        if let Some(haptics) = haptics {
+            haptics.perform(feedback);
+        }
+    }
+
+    // ========================================================================
+    // Clipboard (ADR-0034)
+    // ========================================================================
+
+    /// Install the platform's clipboard capability.
+    ///
+    /// Called from bootstrap wiring (`runner.rs`) with `Platform::clipboard()`
+    /// — resolved while the platform value is still intact, either from
+    /// inside `on_ready` (desktop) or before `Platform::run()` takes
+    /// ownership of the `Box<dyn Platform>` (Android, web). See ADR-0034 for
+    /// why this is a plain `AppBinding` slot rather than a new `Platform`
+    /// surface.
+    pub(crate) fn set_platform_clipboard(&self, clipboard: Arc<dyn Clipboard>) {
+        *self.platform_clipboard.lock() = Some(clipboard);
+    }
+
+    /// Remove the installed platform clipboard.
+    ///
+    /// The teardown symmetry to [`set_platform_clipboard`](Self::set_platform_clipboard) —
+    /// `teardown_platform_realm` (`runner.rs`) calls this after the event
+    /// loop exits so a torn-down realm does not keep a live platform
+    /// resource (arboard on X11 owns a live X11 connection) pinned behind
+    /// this `Arc` past the platform's own shutdown.
+    pub(crate) fn clear_platform_clipboard(&self) {
+        *self.platform_clipboard.lock() = None;
+    }
+
+    /// Access the installed platform clipboard, if any.
+    ///
+    /// Clones the `Arc` out of `platform_clipboard`'s lock and drops the
+    /// guard before returning — the same clone-then-call discipline
+    /// `TextInputPlatformBridge` and
+    /// [`perform_haptic_feedback`](Self::perform_haptic_feedback) follow —
+    /// so a caller's `read_text`/`write_text` call, even one that re-enters
+    /// `AppBinding::clipboard()`, never finds the lock still held.
+    ///
+    /// Returns `None` when no platform has installed a clipboard yet
+    /// (bootstrap hasn't run) or after `clear_platform_clipboard`
+    /// tore it down; logged at `debug` so the degradation is not silent.
+    pub fn clipboard(&self) -> Option<Arc<dyn Clipboard>> {
+        let clipboard = self.platform_clipboard.lock().clone();
+        if clipboard.is_none() {
+            tracing::debug!(
+                "AppBinding::clipboard: no platform clipboard installed (not yet bootstrapped, \
+                 or torn down)"
+            );
+        }
+        clipboard
+    }
+
+    /// Test-only: a clone of the exact `Arc<Mutex<...>>` slot [`clipboard`]
+    /// reads from.
+    ///
+    /// `AppBinding` itself is neither `Send` nor `Sync` (it embeds
+    /// `GestureBinding`'s arena, which holds `Arc<dyn GestureArenaMember>`),
+    /// so a fake [`Clipboard`] impl — which must be `Send + Sync` per the
+    /// trait bound — cannot hold a reference back to the binding to prove
+    /// [`clipboard`](Self::clipboard)'s reentrant-call safety. The slot
+    /// itself has no such restriction, so a test's fake clipboard can
+    /// reproduce `clipboard`'s exact lock-then-clone-then-drop sequence
+    /// directly against it instead.
+    #[cfg(test)]
+    pub(crate) fn platform_clipboard_slot(&self) -> Arc<Mutex<Option<Arc<dyn Clipboard>>>> {
+        Arc::clone(&self.platform_clipboard)
     }
 
     // ========================================================================
@@ -582,15 +1016,12 @@ impl AppBinding {
     /// # Deadlock-safety
     ///
     /// This method acquires only `self.active_window` (a leaf `Mutex`)
-    /// and never touches `self.widgets` or `self.inner`. It is safe to
+    /// and never touches realm widget state. It is safe to
     /// call from any context, including from inside a `build_scope`
     /// callback that is executing while `AppBinding::widgets` is held —
     /// the two locks are disjoint.
     pub fn wake_frame(&self) {
-        self.needs_redraw.store(true, Ordering::Relaxed);
-        if let Some(()) = self.with_window(|w| w.request_redraw()) {
-            tracing::trace!("wake_frame: platform window request_redraw sent");
-        }
+        self.wake_handle().wake_frame();
     }
 
     /// Check if a redraw is needed.
@@ -613,6 +1044,52 @@ impl AppBinding {
         self.frames_dropped.load(Ordering::Relaxed)
     }
 
+    // ========================================================================
+    // First Frame Deferral
+    //
+    // Forwards to `RenderingFlutterBinding`'s counter (`self.renderer`,
+    // `crates/flui-app/src/bindings/renderer_binding.rs`) — the single
+    // canonical implementation (oracle tag `3.44.0`; see that module's doc
+    // for the full Flutter `RendererBinding.deferFirstFrame`/
+    // `allowFirstFrame`/`sendFramesToEngine` citation and the two drifting
+    // copies that were deleted alongside this consolidation). `self.renderer`
+    // is a plain field unique to this `AppBinding` — not the
+    // `RenderingFlutterBinding::instance()` process singleton — so these
+    // three methods need no cross-test lock discipline of their own; each
+    // `AppBinding` has its own independent counter.
+    //
+    // `Self::render_frame_entered` below is the ONLY production frame path
+    // that consults `send_frames_to_engine`; that is the fix this
+    // consolidation exists to make (previously the production path
+    // consulted none of the three counters that used to exist).
+    // ========================================================================
+
+    /// Defer sending the first frame to the engine until a matching
+    /// [`allow_first_frame`](Self::allow_first_frame).
+    ///
+    /// See [`RenderingFlutterBinding::defer_first_frame`] for the full
+    /// semantics (nested defer/allow, no-op after the first frame is sent).
+    pub fn defer_first_frame(&self) {
+        self.renderer.read().defer_first_frame();
+    }
+
+    /// Release one deferral registered by
+    /// [`defer_first_frame`](Self::defer_first_frame).
+    ///
+    /// # Panics
+    ///
+    /// Panics if called without a matching prior `defer_first_frame` —
+    /// see [`RenderingFlutterBinding::allow_first_frame`].
+    pub fn allow_first_frame(&self) {
+        self.renderer.read().allow_first_frame();
+    }
+
+    /// Whether the next produced frame may reach the engine (be presented),
+    /// or is still withheld by an open deferral.
+    pub fn send_frames_to_engine(&self) -> bool {
+        self.renderer.read().send_frames_to_engine()
+    }
+
     /// Draw a frame and return Scene for GPU rendering.
     ///
     /// This executes the complete rendering pipeline:
@@ -621,9 +1098,27 @@ impl AppBinding {
     /// 3. Paint phase - generate display lists
     /// 4. Create Scene from LayerTree
     ///
-    /// Returns `Some(Scene)` if a new scene was produced, or cached scene
-    /// otherwise.
-    pub fn draw_frame(&self, constraints: BoxConstraints) -> Option<Arc<Scene>> {
+    /// Returns `Some(Scene)` if a new scene was produced. Returns `None` if
+    /// the frame was dropped (`FramePaintOutcome::Errored`) or nothing was
+    /// dirty (`FramePaintOutcome::Idle`) — there is no scene cache to fall
+    /// back to.
+    #[cfg(test)]
+    pub(crate) fn draw_frame(
+        &self,
+        realm: &super::ui_realm::UiRealm,
+        constraints: BoxConstraints,
+    ) -> Option<Arc<Scene>> {
+        match realm.enter(|realm| self.draw_frame_entered(realm, constraints)) {
+            FramePaintOutcome::Painted(scene) => Some(scene),
+            FramePaintOutcome::Idle | FramePaintOutcome::Errored => None,
+        }
+    }
+
+    fn draw_frame_entered(
+        &self,
+        realm: &super::ui_realm::UiRealm,
+        constraints: BoxConstraints,
+    ) -> FramePaintOutcome {
         // Vsync tick — MUST precede the build phase (Phase 1).
         //
         // Implicit-animation controllers registered via a `VsyncScope` use a
@@ -662,46 +1157,77 @@ impl AppBinding {
             }
         }
 
+        // The async-driver step used to live HERE. It moved into
+        // `Scheduler::handle_begin_frame`'s mid-frame slot.
+        //
+        // Why: this method is the pipeline, and the pipeline runs in the
+        // scheduler's `PersistentCallbacks` phase — where `drive_async_tasks`
+        // debug-asserts it must never poll. Keeping the call here made it
+        // impossible to run post-frame callbacks *after* the pipeline, which is
+        // the ordering `HeroController` needs. One mid-frame poll per frame, on
+        // the right `Scheduler` instance is now enforced by the scheduler itself,
+        // for both bindings.
+        //
+        // Consequence, stated plainly: calling `draw_frame` **outside**
+        // `Scheduler::drive_frame` polls no async tasks. Every frame driver goes
+        // through `drive_frame`.
+
         // Phase 1: Build (WidgetsBinding)
         {
-            let w = self.widgets.write();
+            let w = realm.widgets();
             if w.has_pending_builds() {
                 w.draw_frame();
             }
         }
 
         // Phase 2 & 3: Layout, Compositing, Paint, Semantics through the
-        // typestate-driven orchestrator. Mythos Step 7 finalization
-        // (2026-05-20): the four `flush_*` calls are gone; `run_frame`
-        // is the single entry point and the layer tree comes back as
-        // its second return value.
+        // typestate-driven orchestrator. The four `flush_*` calls are gone;
+        // `run_frame` is the single entry point and the layer tree comes
+        // back as its second return value.
         //
-        // Mythos Step 12 (2026-05-20): `run_frame` now returns
+        // `run_frame` returns
         // `(PipelineOwner<Idle>, RenderResult<Option<LayerTree>>)`. The
         // owner always comes back at Idle, so we always restore it. If
         // the frame errored (e.g. a render object panicked and was
         // caught by `catch_unwind`), we log via tracing and drop the
         // frame -- the owner is still usable for the next call.
+        let mut pipeline_errored = false;
         let (layer_tree, link_registry) = {
-            let mut guard = self.shared_pipeline_owner.write();
-            // The window's constraints ARE the root constraints — without
-            // this, frame 1 has neither cached state nor root_constraints
-            // and run_layout drops the root dirty entry (blank window).
-            // set_root_constraints marks the root dirty only on CHANGE,
-            // so the per-frame call is idempotent and resize-correct.
-            guard.set_root_constraints(Some(constraints));
-            let owner = std::mem::take(&mut *guard);
-            let (mut owner, result) = owner.run_frame();
+            {
+                // The window's constraints ARE the root constraints — without
+                // this, frame 1 has neither cached state nor root_constraints
+                // and run_layout drops the root dirty entry (blank window).
+                // set_root_constraints marks the root dirty only on CHANGE,
+                // so the per-frame call is idempotent and resize-correct.
+                self.shared_pipeline_owner
+                    .write()
+                    .set_root_constraints(Some(constraints));
+            }
+            // The shared layout<->build fixpoint settles every build-during-layout
+            // node before paint, then delegates to `PipelineOwner::run_frame`.
+            // `HeadlessBinding::pump_frame` calls the SAME
+            // `BuildOwner::run_frame_with_layout_builders`; a builder that settles
+            // headlessly but not on screen would be a silent correctness bug, so
+            // neither frame path may hand-roll the loop. A plain `run_frame` when
+            // no `LayoutBuilder` is mounted.
+            //
+            // The owner is threaded by lock: the helper restores it and frees the
+            // write guard before each `build_scope`, which mounts render objects
+            // through that same lock. Holding the guard here would deadlock the
+            // first time a builder mounts a child.
+            let result = realm
+                .widgets()
+                .run_frame_with_layout_builders(&self.shared_pipeline_owner);
             // Taken alongside the layer tree so `Scene::with_links` (below)
             // gets the SAME frame's leader/follower registry — resolving a
             // `Layer::Follower` position against a stale or empty registry
             // would silently misposition tooltips/dropdowns.
-            let link_registry = owner.take_link_registry();
-            *guard = owner;
+            let link_registry = self.shared_pipeline_owner.write().take_link_registry();
             match result {
                 Ok(layer_tree) => (layer_tree, link_registry),
                 Err(e) => {
                     tracing::error!(error = ?e, "draw_frame: pipeline failed, dropping frame");
+                    pipeline_errored = true;
                     (None, link_registry)
                 }
             }
@@ -721,7 +1247,7 @@ impl AppBinding {
         // before `build_scope` drains the inbox — enabling a same-frame
         // rebuild.  See the Vsync tick block at the top of `draw_frame`.
         {
-            let w = self.widgets.write();
+            let w = realm.widgets();
             w.service_child_requests(&self.shared_pipeline_owner);
         }
 
@@ -756,18 +1282,37 @@ impl AppBinding {
                 reason = "Scene: Send but !Sync due to CompositionCallback (FnOnce + Send + 'static, no Sync). Sole reader is the binding thread; relaxing the callback bound is tracked under the engine composition redesign."
             )]
             let arc = Arc::new(scene);
-            Some(arc)
+            FramePaintOutcome::Painted(arc)
+        } else if pipeline_errored {
+            // No layer tree because `run_frame_with_layout_builders` errored
+            // above, not because nothing was dirty — the caller must retry
+            // rather than treat this as a settled, up-to-date frame.
+            FramePaintOutcome::Errored
         } else {
-            // No new layer tree
-            None
+            // No new layer tree, and no error: nothing was dirty this frame.
+            FramePaintOutcome::Idle
         }
     }
 
-    /// Render a complete frame to GPU.
+    /// Render while the platform dispatcher already owns the realm entry.
+    /// This keeps scheduler callbacks and the full build/layout/paint/raster
+    /// transaction under one activation instead of creating a nested scope.
     ///
-    /// Orchestrates: flush_coalesced_moves → draw → render → mark_rendered
+    /// Returns whether the frame reached `present()` — needed for the
+    /// runner's no-present fallback throttle (see `runner.rs`'s
+    /// `no_present_fallback_pace`): Fifo present blocks every PRESENTED
+    /// frame at display cadence, but a frame that never presents (nothing
+    /// dirty, no damage, occluded surface, surface lost) carries no such
+    /// pacing signal. No caller currently consumes the painted [`Scene`]
+    /// itself (the GPU-side `render_scene` call already owns presentation),
+    /// so this returns the presented flag alone rather than reintroducing
+    /// an unused `Option<Arc<Scene>>`.
     #[tracing::instrument(level = "debug", skip_all)]
-    pub fn render_frame<R: RasterBackend>(&self, renderer: &mut R) -> Option<Arc<Scene>> {
+    pub(crate) fn render_frame_entered<R: RasterBackend>(
+        &self,
+        realm: &super::ui_realm::UiRealm,
+        renderer: &mut R,
+    ) -> bool {
         // 1. Flush coalesced pointer moves (GestureBinding handles coalescing)
         self.gestures.flush_pending_moves();
 
@@ -784,10 +1329,57 @@ impl AppBinding {
         let dpr = self.shared_pipeline_owner.read().device_pixel_ratio();
         let constraints =
             BoxConstraints::tight(Size::new(px(width as f32 / dpr), px(height as f32 / dpr)));
-        let scene = self.draw_frame(constraints);
+        let outcome = self.draw_frame_entered(realm, constraints);
 
-        // 3. Render scene to GPU
-        if let Some(ref scene) = scene
+        // 3. Render scene to GPU — gated by the first-frame deferral
+        // counter (oracle `RendererBinding.drawFrame`, tag `3.44.0`; full
+        // citation in `crates/flui-app/src/bindings/renderer_binding.rs`
+        // above `defer_first_frame`). Build/layout/paint above (step 2)
+        // ran unconditionally — Flutter pumps frames during deferral too,
+        // paying warm-up costs early — only the composite-to-engine step
+        // here is withheld while the first frame is deferred. This is the
+        // ONLY place the production frame path consults the counter; two
+        // other, drifting counters that neither implemented this gate nor
+        // were reachable from here were deleted in the same change.
+        let send_to_engine = self.send_frames_to_engine();
+        let errored = matches!(outcome, FramePaintOutcome::Errored);
+        if send_to_engine && !errored {
+            // Mirrors the oracle's `_firstFrameSent = true`: latched once
+            // the gate is found open AND the frame actually completed —
+            // independent of whether it painted anything (an `Idle` frame
+            // still means "no deferral is blocking presentation"), but
+            // NEVER on a phase that raised. The oracle's `_firstFrameSent`
+            // is likewise only set after `compositeFrame()` runs, which a
+            // thrown exception earlier in `drawFrame` would prevent.
+            // Latching on `Errored` would let a pipeline crash on the very
+            // first frame permanently defeat any LATER
+            // `defer_first_frame`/`allow_first_frame` pair, since
+            // `send_frames_to_engine` short-circuits true once sent.
+            self.renderer.read().mark_first_frame_sent();
+        }
+
+        let mut presented = false;
+        // Forces `wake_frame()` instead of `mark_rendered()` below for any
+        // frame that was dropped rather than settled — a pipeline error, or
+        // a recoverable GPU error below — so `needs_redraw` stays armed AND
+        // an actual wake is scheduled. Without this, a dropped frame on an
+        // otherwise-quiescent event loop (no animation, no further input)
+        // never gets retried: the loop falls back to `ControlFlow::Wait`
+        // and the UI stays stale until the next external event.
+        //
+        // A DEFERRED frame is deliberately excluded from this retry path:
+        // deferred is not errored. The pipeline settled normally (it ran
+        // to completion; only presentation was withheld), so the frame
+        // below falls through to `mark_rendered()` and the withheld scene
+        // is simply dropped without a present — no retry spam. Presenting
+        // it once the deferral lifts is `allow_first_frame`'s job (it
+        // re-marks the root dirty through a captured, cross-thread-safe
+        // `RepaintHandle` so the warm-up frame has content to paint, and
+        // the same mark fires the visual-update notifier the runner's wake
+        // gate already observes), not a concern of this retry flag.
+        let mut retry_needed = errored;
+        if send_to_engine
+            && let FramePaintOutcome::Painted(ref scene) = outcome
             && scene.has_content()
         {
             // The pipeline painted a FRESH scene this frame, so the
@@ -799,17 +1391,29 @@ impl AppBinding {
             // diff lands, a new scene is a full repaint.
             renderer.mark_full_repaint();
             match renderer.render_scene(scene) {
-                Ok(()) => {
-                    self.frames_rendered.fetch_add(1, Ordering::Relaxed);
-                    tracing::trace!(
-                        frame = scene.frame_number(),
-                        total = self.frames_rendered.load(Ordering::Relaxed),
-                        "Frame rendered successfully"
-                    );
+                Ok(did_present) => {
+                    presented = did_present;
+                    if did_present {
+                        self.frames_rendered.fetch_add(1, Ordering::Relaxed);
+                        tracing::trace!(
+                            frame = scene.frame_number(),
+                            total = self.frames_rendered.load(Ordering::Relaxed),
+                            "Frame rendered successfully"
+                        );
+                    } else {
+                        // No damage / occluded: `render_scene` skipped
+                        // `present()` without error. Not counted as a
+                        // rendered frame — no pixel reached the screen.
+                        tracing::trace!(
+                            frame = scene.frame_number(),
+                            "Frame skipped: no damage or surface occluded (no present)"
+                        );
+                    }
                 }
                 Err(EngineError::SurfaceLost) => {
                     self.frames_dropped.fetch_add(1, Ordering::Relaxed);
-                    tracing::debug!("Surface lost, will retry next frame");
+                    retry_needed = true;
+                    tracing::debug!("Surface lost; frame dropped — retry armed via wake_frame()");
                 }
                 Err(EngineError::DeviceLost) => {
                     // GPU device lost (TDR / driver crash / GPU switch). Recovery
@@ -842,16 +1446,21 @@ impl AppBinding {
             }
         }
 
-        // 4. Mark rendered
-        self.mark_rendered();
+        // 4. Mark rendered — unless this frame was dropped rather than
+        // settled, in which case `wake_frame()` re-arms `needs_redraw` AND
+        // schedules an actual platform wake (see `retry_needed` above).
+        if retry_needed {
+            self.wake_frame();
+        } else {
+            self.mark_rendered();
+        }
 
-        scene
+        presented
     }
 
     /// Check if there is pending work.
-    pub fn has_pending_work(&self) -> bool {
-        self.widgets.read().has_pending_builds()
-            || self.shared_pipeline_owner.read().has_dirty_nodes()
+    pub(crate) fn has_pending_work(&self, realm: &super::ui_realm::UiRealm) -> bool {
+        realm.widgets().has_pending_builds() || self.shared_pipeline_owner.read().has_dirty_nodes()
     }
 
     // ========================================================================
@@ -861,14 +1470,19 @@ impl AppBinding {
     /// Handle a platform input event.
     ///
     /// This is the single entry point for all input from the platform layer.
-    /// Routes pointer events to `GestureBinding` and keyboard events to
-    /// `FocusManager`.
+    /// Routes pointer events to `GestureBinding`, keyboard events to
+    /// `FocusManager`, and IME composition/commit events to
+    /// `TextInputRegistry`.
     ///
     /// Pointer events are coalesced by `GestureBinding` — high-frequency move
     /// events are stored and flushed once per frame via
     /// `flush_pending_moves()` in `render_frame()`.
     pub fn handle_input(&self, input: PlatformInput) {
         match input {
+            PlatformInput::Ime(ime_event) => {
+                TextInputRegistry::global().dispatch(&ime_event);
+                self.request_redraw();
+            }
             PlatformInput::Pointer(pointer_event) => {
                 self.gestures
                     .handle_pointer_event(&pointer_event, |position| {
@@ -878,7 +1492,6 @@ impl AppBinding {
                         // `flui_interaction::routing::HitTestResult`, so the
                         // same instance crosses both layers without conversion
                         // (no per-hit bridge that could silently drop targets).
-                        use flui_rendering::binding::RendererBinding;
                         let renderer = self.renderer.read();
                         let mut result = flui_interaction::routing::HitTestResult::new();
                         let offset = flui_types::Offset::new(position.dx, position.dy);
@@ -898,6 +1511,31 @@ impl AppBinding {
     }
 }
 
+/// Registers a `Scheduler` lifecycle listener that re-dirties
+/// `pipeline_owner`'s root and calls `wake` on the frames-disabled→enabled
+/// edge (see `ADR-0035`) — see [`AppBinding::instance`]'s installer for why
+/// this lives in that one-time initializer and captures `Send + Sync`
+/// handles rather than the live binding/scheduler.
+///
+/// Pulled into its own fn so a test can exercise the exact production
+/// listener body against a throwaway `Scheduler`/`PipelineOwner` pair
+/// instead of the real thread-local singletons.
+fn install_frames_reenable_redirty_listener(
+    scheduler: &Scheduler,
+    pipeline_owner: Arc<RwLock<flui_rendering::pipeline::PipelineOwner>>,
+    wake: Arc<dyn Fn() + Send + Sync>,
+) {
+    let frames_were_enabled = Arc::new(AtomicBool::new(scheduler.frames_enabled()));
+    scheduler.add_lifecycle_state_listener(Arc::new(move |state: AppLifecycleState| {
+        let now_enabled = state.should_render();
+        let was_enabled = frames_were_enabled.swap(now_enabled, Ordering::AcqRel);
+        if !was_enabled && now_enabled {
+            crate::bindings::redirty_pipeline_root(&pipeline_owner);
+            wake();
+        }
+    }));
+}
+
 impl std::fmt::Debug for AppBinding {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AppBinding")
@@ -911,6 +1549,9 @@ impl std::fmt::Debug for AppBinding {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
     use super::*;
     // Required to call `ctx.get::<T, _>(...)` on `&dyn BuildContext`; the method
     // lives on the `BuildContextExt` extension trait.
@@ -952,6 +1593,31 @@ mod tests {
     }
 
     #[test]
+    fn cross_thread_dirty_handle_wakes_owner_binding_not_worker_tls() {
+        let binding = AppBinding::new();
+        binding.mark_rendered();
+
+        let handle = binding.shared_pipeline_owner.read().handle();
+        std::thread::spawn(move || {
+            handle
+                .request_mark_dirty(
+                    flui_foundation::RenderId::new(1),
+                    0,
+                    flui_rendering::pipeline::DirtyKind::Paint,
+                )
+                .expect("dirty request should enqueue");
+        })
+        .join()
+        .expect("worker thread should not panic");
+
+        assert!(
+            binding.needs_redraw(),
+            "cross-thread dirty requests must wake the owner binding captured \
+             during AppBinding construction, not resolve a worker-local TLS binding"
+        );
+    }
+
+    #[test]
     fn test_needs_redraw() {
         let binding = AppBinding::instance();
 
@@ -982,11 +1648,18 @@ mod tests {
         type Protocol = flui_rendering::protocol::BoxProtocol;
         type RenderObject = flui_objects::RenderSizedBox;
 
-        fn create_render_object(&self) -> Self::RenderObject {
+        fn create_render_object(
+            &self,
+            _ctx: &flui_view::RenderObjectContext<'_>,
+        ) -> Self::RenderObject {
             flui_objects::RenderSizedBox::shrink()
         }
 
-        fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+        fn update_render_object(
+            &self,
+            _ctx: &flui_view::RenderObjectContext<'_>,
+            render_object: &mut Self::RenderObject,
+        ) {
             *render_object = flui_objects::RenderSizedBox::shrink();
         }
     }
@@ -997,6 +1670,44 @@ mod tests {
         }
     }
 
+    /// Root view with owner-local state. This deliberately does not implement
+    /// `Send` or `Sync`; the app root is mounted on the UI owner thread.
+    #[derive(Clone)]
+    struct OwnerLocalLeafView {
+        creates: Rc<Cell<usize>>,
+    }
+
+    impl flui_view::RenderView for OwnerLocalLeafView {
+        type Protocol = flui_rendering::protocol::BoxProtocol;
+        type RenderObject = flui_objects::RenderSizedBox;
+
+        fn create_render_object(
+            &self,
+            _ctx: &flui_view::RenderObjectContext<'_>,
+        ) -> Self::RenderObject {
+            self.creates.set(self.creates.get() + 1);
+            flui_objects::RenderSizedBox::shrink()
+        }
+
+        fn update_render_object(
+            &self,
+            _ctx: &flui_view::RenderObjectContext<'_>,
+            render_object: &mut Self::RenderObject,
+        ) {
+            *render_object = flui_objects::RenderSizedBox::shrink();
+        }
+    }
+
+    impl View for OwnerLocalLeafView {
+        fn create_element(&self) -> flui_view::element::ElementKind {
+            flui_view::element::ElementKind::render_variable(self)
+        }
+    }
+
+    fn test_realm(app: &AppBinding) -> super::super::ui_realm::UiRealm {
+        super::super::ui_realm::UiRealm::for_test(app)
+    }
+
     /// E2/E3 regression: `AppBinding` hands its shared `PipelineOwner` to the
     /// `WidgetsBinding` it owns, so `attach_root_widget` actually bootstraps
     /// the root render tree. Without that wiring the root mounts with no
@@ -1005,12 +1716,105 @@ mod tests {
     #[test]
     fn attach_root_widget_bootstraps_shared_render_tree() {
         let app = AppBinding::new();
-        app.attach_root_widget(&LeafView).expect("attach succeeds");
+        let realm = test_realm(&app);
+        realm
+            .enter(|realm| app.attach_root_widget(realm, &LeafView))
+            .expect("attach succeeds");
         assert!(
             app.shared_pipeline_owner.read().root_id().is_some(),
             "AppBinding must pass its PipelineOwner to the widgets binding so the \
              root render tree bootstraps; without it the window renders nothing",
         );
+    }
+
+    /// Root-hop parent-link regression: after a standard `AppBinding`
+    /// bootstrap (`attach_root_widget` + a build/layout/paint `draw_frame`),
+    /// the mounted leaf's render node must have a working parent link back
+    /// to the root, not just the root's child-list entry.
+    ///
+    /// The two link directions were previously written asymmetrically:
+    /// `RenderBehavior::on_mount` set both when the leaf mounted, but
+    /// `RootRenderElement`'s `ElementBase::render_id` fell through to the
+    /// trait default (`None`) instead of the struct's own render id (root.rs
+    /// carried a correct *inherent* `render_id()` that the trait method
+    /// never delegated to). `ElementTree::reorder_render_children_after_build`
+    /// reads `render_id()` through `&dyn ElementBase` — the trait method —
+    /// while walking the tree to compute each render node's desired parent;
+    /// seeing `None` for the root, it treated the root as parentless-of-render
+    /// and propagated that past it, corrupting the leaf's desired parent to
+    /// `None` and overwriting the correct link `on_mount` had set. The
+    /// child-list entry was never touched by that bug, so layout/paint/hit-test
+    /// (which only walk downward) rendered fine while every upward walk
+    /// (`transform_to`, `local_to_global`, hero/overlay positioning) silently
+    /// failed at the very first hop.
+    #[test]
+    fn transform_to_resolves_through_the_root_hop_after_standard_bootstrap() {
+        let app = AppBinding::new();
+        let realm = test_realm(&app);
+        realm
+            .enter(|realm| app.attach_root_widget(realm, &LeafView))
+            .expect("attach succeeds");
+        let _ = app.draw_frame(
+            &realm,
+            flui_rendering::constraints::BoxConstraints::tight(flui_types::Size::new(
+                flui_types::geometry::px(800.0),
+                flui_types::geometry::px(600.0),
+            )),
+        );
+
+        let owner = app.shared_pipeline_owner.read();
+        let root_id = owner.root_id().expect("root id set by attach_root_widget");
+        let root_node = owner
+            .render_tree()
+            .get(root_id)
+            .expect("root render node resolves");
+        let leaf_id = *root_node
+            .children()
+            .first()
+            .expect("LeafView must have mounted one render child under the root");
+
+        // The downward link always worked (layout/paint only walk down) —
+        // assert it too, so a regression that breaks BOTH directions still
+        // fails loudly instead of looking like a pass on this half.
+        assert_eq!(
+            owner
+                .render_tree()
+                .get(leaf_id)
+                .and_then(flui_rendering::storage::RenderNode::parent),
+            Some(root_id),
+            "the leaf's render node must carry a parent link back to the root"
+        );
+
+        let transform = owner.transform_to(leaf_id, root_id);
+        assert!(
+            transform.is_some(),
+            "transform_to(leaf, root) must resolve through the root hop; None means the \
+             ancestor walk broke at the very first step (accessors.rs's `parent(current)?`)"
+        );
+        assert_eq!(
+            transform,
+            Some(flui_types::Matrix4::IDENTITY),
+            "LeafView (RenderSizedBox::shrink(), zero offset) composes to the identity \
+             transform into root space"
+        );
+    }
+
+    #[test]
+    fn attach_root_widget_accepts_owner_local_root_state() {
+        static_assertions::assert_not_impl_any!(OwnerLocalLeafView: Send, Sync);
+
+        let app = AppBinding::new();
+        let realm = test_realm(&app);
+        let creates = Rc::new(Cell::new(0));
+        let root = OwnerLocalLeafView {
+            creates: Rc::clone(&creates),
+        };
+
+        realm
+            .enter(|realm| app.attach_root_widget(realm, &root))
+            .expect("owner-local root attaches");
+
+        assert!(app.shared_pipeline_owner.read().root_id().is_some());
     }
 
     // ========================================================================
@@ -1100,36 +1904,13 @@ mod tests {
         );
     }
 
-    /// `wake_frame` must be callable while `widgets` read-lock is held on
-    /// the same thread — proving the implementation does not acquire
-    /// `widgets` or `inner`.
-    ///
-    /// parking_lot's RwLock is non-reentrant: a read-under-existing-read on
-    /// the same thread upgrades correctly but a write attempt deadlocks.
-    /// Holding the read guard here would expose any hidden write attempt.
-    #[test]
-    fn wake_frame_does_not_acquire_widgets_lock() {
-        let binding = AppBinding::new();
-        binding.mark_rendered();
-
-        // Hold widgets read-lock across the call.
-        let _guard = binding.widgets.read();
-        // Must return without deadlocking.
-        binding.wake_frame();
-
-        assert!(
-            binding.needs_redraw(),
-            "wake_frame must set needs_redraw even while widgets is read-locked"
-        );
-    }
-
     #[test]
     fn input_dispatches_through_the_exposed_gesture_binding() {
         use std::sync::atomic::{AtomicBool, Ordering};
 
         use flui_interaction::PointerId;
-        use flui_interaction::events::{PointerEvent, PointerType, make_down_event_for_id};
-        use flui_interaction::routing::HitTestResult;
+        use flui_interaction::events::{PointerType, make_down_event_for_id};
+        use flui_interaction::routing::{HitTestResult, PointerRouteHandler};
         use flui_types::geometry::{Offset, Pixels};
 
         // A handler registered on the gesture binding the public accessor
@@ -1145,8 +1926,7 @@ mod tests {
 
         let fired = Arc::new(AtomicBool::new(false));
         let f = fired.clone();
-        let handler: Arc<dyn Fn(&PointerEvent) + Send + Sync> =
-            Arc::new(move |_| f.store(true, Ordering::Relaxed));
+        let handler: PointerRouteHandler = Rc::new(move |_| f.store(true, Ordering::Relaxed));
         app.gestures().pointer_router().add_route(pointer, handler);
 
         // Dispatch straight through the accessor-exposed binding via the
@@ -1171,7 +1951,7 @@ mod tests {
     }
 
     // ========================================================================
-    // U4.4 — service_child_requests wiring tests
+    // service_child_requests wiring tests
     // ========================================================================
 
     /// Wiring test: `AppBinding::draw_frame` must invoke
@@ -1191,6 +1971,7 @@ mod tests {
     fn draw_frame_invokes_service_child_requests() {
         // A fresh binding so we avoid the singleton root-attach collision.
         let binding = AppBinding::new();
+        let realm = test_realm(&binding);
 
         // Insert a dummy render object to obtain a valid RenderId (the pending
         // buffer stores `(RenderId, index)` pairs — any valid id works).
@@ -1220,12 +2001,13 @@ mod tests {
 
         // Run one draw_frame.  No root render object is attached (fresh binding)
         // so no scene is produced, but the service path must still be traversed.
-        let _ = binding.draw_frame(flui_rendering::constraints::BoxConstraints::tight(
-            flui_types::Size::new(
+        let _ = binding.draw_frame(
+            &realm,
+            flui_rendering::constraints::BoxConstraints::tight(flui_types::Size::new(
                 flui_types::geometry::px(800.0),
                 flui_types::geometry::px(600.0),
-            ),
-        ));
+            )),
+        );
 
         // After draw_frame the pending buffer must be empty — drained by
         // `service_child_requests`.  Without the wiring the buffer is never
@@ -1240,6 +2022,384 @@ mod tests {
              {} request(s) remained undrained — wiring is absent",
             remaining.len(),
         );
+    }
+
+    // ========================================================================
+    // Async-driver ownership (historically coordinated between layers)
+    // ========================================================================
+
+    /// Serializes the tests that drive the process-global `Scheduler::instance()`.
+    ///
+    /// CI runs nextest, which gives each test its own process, so this is belt and
+    /// braces there. Plain `cargo test` (a stated gate for this crate) runs them on
+    /// threads in one process, where two tests each opening a scheduler frame on the
+    /// singleton would interleave — the same class of hazard `SEMANTICS_TEST_LOCK`
+    /// guards in `flui-app` (AGENTS.md, "Testing quirks").
+    static SINGLETON_FRAME_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// The production frame path polls the async driver **exactly once**, on the
+    /// `Scheduler::instance()` singleton, in the mid-frame slot — and the pipeline
+    /// runs afterwards, in the persistent slot.
+    ///
+    /// Replaces `draw_frame_invokes_the_async_driver_step`, which pinned the poll
+    /// *inside* `draw_frame`. That location was the bug: `drive_async_tasks`
+    /// debug-asserts it never runs during `PersistentCallbacks`, which is exactly
+    /// the phase the pipeline must occupy for post-frame callbacks to observe its
+    /// layout. The scheduler owns the step now. Historically this
+    /// real invariant — one mid-frame poll per frame, on the right instance — is
+    /// what this asserts.
+    #[test]
+    fn the_production_frame_polls_the_singletons_async_driver_once_before_the_pipeline() {
+        let _serialized = SINGLETON_FRAME_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+        let binding = AppBinding::new();
+        let realm = test_realm(&binding);
+        let scheduler = flui_scheduler::Scheduler::instance();
+
+        let polls = Arc::new(AtomicUsize::new(0));
+        let polls_for_task = Arc::clone(&polls);
+        let _token = scheduler.spawn_local(Box::pin(async move {
+            polls_for_task.fetch_add(1, Ordering::Release);
+        }));
+        assert_eq!(
+            polls.load(Ordering::Acquire),
+            0,
+            "spawn must not poll inline"
+        );
+
+        let polled_before_pipeline = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&polled_before_pipeline);
+        let polls_probe = Arc::clone(&polls);
+
+        scheduler.drive_frame(flui_scheduler::Instant::now(), || {
+            // The pipeline's slot. The driver poll already happened, in
+            // `handle_begin_frame`'s mid-frame slot.
+            flag.store(polls_probe.load(Ordering::Acquire) == 1, Ordering::Release);
+            let _ = binding.draw_frame(
+                &realm,
+                flui_rendering::constraints::BoxConstraints::tight(flui_types::Size::new(
+                    flui_types::geometry::px(800.0),
+                    flui_types::geometry::px(600.0),
+                )),
+            );
+        });
+
+        assert!(
+            polled_before_pipeline.load(Ordering::Acquire),
+            "the async driver must be polled before the pipeline runs"
+        );
+        assert_eq!(
+            polls.load(Ordering::Acquire),
+            1,
+            "exactly one driver poll per frame"
+        );
+    }
+
+    /// `draw_frame` no longer polls the driver itself. Stated as a test so the
+    /// call cannot quietly come back and re-break the phase invariant.
+    #[test]
+    fn draw_frame_does_not_poll_the_async_driver_itself() {
+        let _serialized = SINGLETON_FRAME_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let binding = AppBinding::new();
+        let realm = test_realm(&binding);
+        let ran = Arc::new(AtomicBool::new(false));
+        let ran_for_task = Arc::clone(&ran);
+        let _token = flui_scheduler::Scheduler::instance().spawn_local(Box::pin(async move {
+            ran_for_task.store(true, Ordering::Release);
+        }));
+
+        let _ = binding.draw_frame(
+            &realm,
+            flui_rendering::constraints::BoxConstraints::tight(flui_types::Size::new(
+                flui_types::geometry::px(800.0),
+                flui_types::geometry::px(600.0),
+            )),
+        );
+
+        assert!(
+            !ran.load(Ordering::Acquire),
+            "the driver step belongs to Scheduler::handle_begin_frame, not to the pipeline"
+        );
+    }
+
+    /// **The production-path acceptance test.** A post-frame callback on the
+    /// `Scheduler::instance()` singleton observes the geometry `AppBinding`'s real
+    /// pipeline committed **in the same frame**.
+    ///
+    /// This is the production twin of
+    /// `flui-binding`'s `post_frame_callback_runs_after_layout_in_the_same_pumped_frame`.
+    /// The runner drains the post-frame queue
+    /// `render_frame`, so the callback saw the previous frame's layout.
+    ///
+    /// No GPU: `draw_frame(constraints)` is the pipeline; `render_frame` only adds
+    /// the raster submission on top of it.
+    #[test]
+    fn production_post_frame_callback_observes_this_frames_committed_layout() {
+        let _serialized = SINGLETON_FRAME_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        use flui_rendering::prelude::Leaf;
+        use flui_rendering::prelude::{BoxLayoutContext, BoxParentData, PaintCx, RenderBox};
+        use flui_types::Size;
+        use flui_types::geometry::px;
+
+        #[derive(Debug, Default)]
+        struct FixedBox;
+        impl flui_foundation::Diagnosticable for FixedBox {}
+        impl RenderBox for FixedBox {
+            type Arity = Leaf;
+            type ParentData = BoxParentData;
+            fn perform_layout(
+                &mut self,
+                _ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>,
+            ) -> Size {
+                Size::new(px(40.0), px(24.0))
+            }
+            fn paint(&self, _ctx: &mut PaintCx<'_, Leaf>) {}
+        }
+
+        let binding = AppBinding::new();
+        let realm = test_realm(&binding);
+        let pipeline = binding.render_pipeline_arc();
+
+        let root = {
+            let mut owner = pipeline.write();
+            let root = owner.insert::<flui_rendering::protocol::BoxProtocol>(Box::new(FixedBox));
+            owner.set_root_id(Some(root));
+            root
+        };
+
+        assert_eq!(
+            pipeline.read().box_size(root),
+            None,
+            "nothing is laid out before the first frame"
+        );
+
+        let observed = Arc::new(RwLock::new(None));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let observed_cb = Arc::clone(&observed);
+        let calls_cb = Arc::clone(&calls);
+        let pipeline_cb = Arc::clone(&pipeline);
+
+        let scheduler = flui_scheduler::Scheduler::instance();
+        scheduler.add_post_frame_callback(Box::new(move |_timing| {
+            calls_cb.fetch_add(1, Ordering::SeqCst);
+            *observed_cb.write() = pipeline_cb.read().box_size(root);
+        }));
+
+        scheduler.drive_frame(flui_scheduler::Instant::now(), || {
+            let _ = binding.draw_frame(
+                &realm,
+                flui_rendering::constraints::BoxConstraints::new(
+                    px(0.0),
+                    px(200.0),
+                    px(0.0),
+                    px(200.0),
+                ),
+            );
+        });
+
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            *observed.read(),
+            Some(Size::new(px(40.0), px(24.0))),
+            "the production post-frame callback must observe THIS frame's layout"
+        );
+    }
+
+    /// A second `AppBinding::new()` (a throwaway test binding, constructed
+    /// alongside the real thread-local singleton) must not steal the
+    /// process-global `Scheduler::instance()`'s animation wake hook away
+    /// from the singleton. `new()` itself never touches the hook at all —
+    /// only `AppBinding::instance()`'s one-time initializer installs it — so
+    /// this also doubles as the "a throwaway `new()` alone does not install"
+    /// check: there is nothing for it to steal.
+    ///
+    /// Drives the real mechanism end to end: `Scheduler::instance().request_frame()`
+    /// firing `on_frame_scheduled` (the same hook a running `AnimationController`
+    /// uses) after a throwaway binding was constructed, asserting the hook
+    /// still reaches `AppBinding::instance()` (the real singleton) rather
+    /// than the throwaway.
+    ///
+    /// Red-check: move the `set_on_frame_scheduled` install back into
+    /// `AppBinding::new()` using a per-construction `wake_handle.into_callback()`
+    /// (the original bug this test was written for) and this fails — the
+    /// throwaway binding's construction below steals the hook, so the real
+    /// singleton's `needs_redraw` never flips.
+    #[test]
+    fn a_second_binding_does_not_steal_the_real_singletons_scheduler_wake_hook() {
+        let _serialized = SINGLETON_FRAME_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+        // Ensure the real singleton exists on this thread (installs the hook,
+        // if some earlier test in this process has not already done so) and
+        // start from a known, settled state.
+        let real = AppBinding::instance();
+        let scheduler = flui_scheduler::Scheduler::instance();
+        if scheduler.is_frame_scheduled() {
+            scheduler.drive_frame(flui_scheduler::Instant::now(), || {});
+        }
+        real.mark_rendered();
+
+        // Construct a throwaway binding — pre-fix, this call would silently
+        // rebind the scheduler's wake hook to ITS OWN (windowless, about to
+        // be dropped) wake handle instead of the real singleton's.
+        let _throwaway = AppBinding::new();
+
+        scheduler.request_frame();
+
+        assert!(
+            real.needs_redraw(),
+            "constructing a second AppBinding must not steal the scheduler's \
+             animation wake hook away from the real singleton — an animation \
+             driven through Scheduler::instance() would otherwise freeze with \
+             no diagnostic the first time a test built an extra binding",
+        );
+    }
+
+    /// The blocking cross-thread case: `on_frame_scheduled` also fires from
+    /// the async-driver's task waker (`AsyncDriver::set_request_frame`, wired
+    /// in `Scheduler::with_frame_duration`) whenever a spawned future's
+    /// `Waker` wakes — and that can happen on a thread that never called
+    /// `AppBinding::instance()` (an executor thread completing an
+    /// image-decode future, for instance), NOT only on the owner thread a
+    /// ticker would fire from.
+    ///
+    /// A hook that resolved `AppBinding::instance()` AT FIRE TIME would
+    /// construct a brand-new, windowless `AppBinding` on the waking thread
+    /// and wake THAT instead of the owner — a lost wake indistinguishable
+    /// from the ticker-starvation bug this whole hook exists to prevent.
+    /// Capturing `frame_wake_callback()` once, in `instance()`'s
+    /// initializer, avoids ever touching a thread-local at fire time, so the
+    /// real singleton wakes regardless of which thread fires the hook.
+    ///
+    /// Drives the real mechanism: spawn a future on the real singleton's
+    /// `Scheduler`, poll it once (registering a real `TaskWaker`-backed
+    /// `Waker` via `drive_async_tasks`), then wake that `Waker` from a
+    /// spawned OS thread — exactly how a completed async task's waker fires
+    /// in production.
+    ///
+    /// Red-check: change the hook installed in `instance()` back to
+    /// resolving `AppBinding::instance()` inside the closure (fire-time
+    /// resolution) and this fails — the spawned thread constructs its own
+    /// windowless binding and wakes it instead of `real`.
+    #[test]
+    fn scheduler_wake_hook_wakes_the_real_singleton_when_fired_from_another_thread() {
+        let _serialized = SINGLETON_FRAME_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+        let real = AppBinding::instance();
+        let scheduler = flui_scheduler::Scheduler::instance();
+        if scheduler.is_frame_scheduled() {
+            scheduler.drive_frame(flui_scheduler::Instant::now(), || {});
+        }
+        real.mark_rendered();
+
+        // Register a waker on first poll instead of completing, so it can be
+        // fired later, from another thread, exactly like a pending
+        // image-decode future's `Waker` firing once the decode completes on
+        // an executor thread.
+        let waker_slot: Arc<Mutex<Option<std::task::Waker>>> = Arc::new(Mutex::new(None));
+        let waker_slot_for_future = Arc::clone(&waker_slot);
+        let _token = scheduler.spawn_local(Box::pin(async move {
+            std::future::poll_fn(move |cx| {
+                *waker_slot_for_future.lock() = Some(cx.waker().clone());
+                std::task::Poll::<()>::Pending
+            })
+            .await;
+        }));
+
+        // A full `drive_frame` (not a bare `drive_async_tasks`) both polls the
+        // task above (registering its waker) AND resets `frame_scheduled`
+        // back to `false`: `spawn_local` itself already requested a frame (a
+        // freshly spawned task needs one to be polled in), and
+        // `request_frame_impl`'s coalescing would otherwise treat the
+        // cross-thread wake below as already-scheduled and silently skip
+        // calling the hook — a false pass unrelated to what this test
+        // exists to check.
+        scheduler.drive_frame(flui_scheduler::Instant::now(), || {});
+        real.mark_rendered();
+
+        let waker = waker_slot
+            .lock()
+            .take()
+            .expect("the first poll must have registered a waker");
+
+        // The waking thread never calls `AppBinding::instance()` — mirroring
+        // an executor thread that has no reason to ever touch this crate's
+        // singleton directly.
+        std::thread::spawn(move || {
+            waker.wake_by_ref();
+        })
+        .join()
+        .expect("waker thread must not panic");
+
+        assert!(
+            real.needs_redraw(),
+            "a task waker firing from a non-owner thread must wake the REAL singleton \
+             (via its captured, Send+Sync frame_wake_callback), not lazily construct a \
+             fresh thread-local AppBinding on the waking thread",
+        );
+    }
+
+    // ========================================================================
+    // layout-builder seam wiring test
+    // ========================================================================
+
+    /// Wiring test: `AppBinding::draw_frame` must run the shared layout<->build
+    /// fixpoint (`BuildOwner::run_frame_with_layout_builders`), not a bare
+    /// `PipelineOwner::run_frame`.
+    ///
+    /// This test plants a registry entry by hand rather than mounting a real
+    /// `LayoutBuilder`, so it stays a pure wiring test of the frame path. `service_layout_builders` prunes entries
+    /// whose element and render node do not exist, on every pass, before
+    /// anything is built; that prune is the observable side effect.
+    ///
+    /// `flui-binding` carries the mirror test for `HeadlessBinding::pump_frame`.
+    /// If either frame path stopped calling the shared helper, exactly one of
+    /// the two would fail — which is the headless↔production divergence this
+    /// pair exists to catch.
+    #[test]
+    fn draw_frame_invokes_the_layout_builder_seam() {
+        let binding = AppBinding::new();
+        let realm = test_realm(&binding);
+
+        // Plant a stale entry: neither the element nor the render node exists.
+        realm.widgets().with_build_owner_mut(|owner| {
+            let _cell = owner.register_layout_builder_for_test(
+                flui_foundation::RenderId::new(1),
+                flui_foundation::ElementId::new(1),
+            );
+            assert_eq!(owner.layout_builder_count(), 1);
+        });
+
+        let _ = binding.draw_frame(
+            &realm,
+            flui_rendering::constraints::BoxConstraints::tight(flui_types::Size::new(
+                flui_types::geometry::px(800.0),
+                flui_types::geometry::px(600.0),
+            )),
+        );
+
+        realm.widgets().with_build_owner_mut(|owner| {
+            assert_eq!(
+                owner.layout_builder_count(),
+                0,
+                "draw_frame must run service_layout_builders (via the shared \
+                 run_frame_with_layout_builders helper), which prunes the stale entry"
+            );
+        });
     }
 
     /// Wake-gate contract: after a frame marks a render node dirty (simulating
@@ -1262,6 +2422,7 @@ mod tests {
     #[test]
     fn wake_gate_schedules_settling_frame_after_dirty_mark() {
         let binding = AppBinding::new();
+        let realm = test_realm(&binding);
 
         // `mark_rendered` puts `needs_redraw` in a known state so the
         // has_pending_work assertion is insulated from any prior redraw state
@@ -1283,7 +2444,7 @@ mod tests {
             .clear_all_dirty_nodes();
         // Confirm quiescence baseline: nothing dirty yet.
         assert!(
-            !binding.has_pending_work(),
+            !binding.has_pending_work(&realm),
             "baseline: no pending work after clearing dirty nodes",
         );
 
@@ -1295,7 +2456,7 @@ mod tests {
 
         // The runner gate reads has_pending_work(); it must be true now.
         assert!(
-            binding.has_pending_work(),
+            binding.has_pending_work(&realm),
             "a dirty layout node must make has_pending_work() true so the runner \
              schedules the settling frame; this is the invariant that lazy-list \
              settling depends on (NOT the pending_child_requests buffer)",
@@ -1308,7 +2469,7 @@ mod tests {
             .write()
             .clear_all_dirty_nodes();
         assert!(
-            !binding.has_pending_work(),
+            !binding.has_pending_work(&realm),
             "after clearing dirty nodes has_pending_work() must be false so a \
              settled lazy-list app does not loop forever",
         );
@@ -1369,6 +2530,7 @@ mod tests {
         // Fresh non-singleton binding so this test does not race with others
         // that share the `AppBinding::instance()` singleton's redraw state.
         let binding = AppBinding::new();
+        let realm = test_realm(&binding);
         let vsync = binding.vsync();
 
         // 100 ms controller, registered directly (no widget tree).
@@ -1385,10 +2547,10 @@ mod tests {
         // `needs_redraw` is set.
         binding.set_now_secs_for_test(0.0);
         binding.mark_rendered(); // known state before the frame
-        let _ = binding.draw_frame(constraints);
+        let _ = binding.draw_frame(&realm, constraints);
 
         assert!(
-            binding.needs_redraw() || binding.has_pending_work(),
+            binding.needs_redraw() || binding.has_pending_work(&realm),
             "V1: the runner gate must be open after an anchor frame — a running \
              controller (100 ms, t=0) must schedule the next frame via wake_frame",
         );
@@ -1396,9 +2558,9 @@ mod tests {
         // --- Frame at t=0.05s: mid-animation ---
         binding.set_now_secs_for_test(0.05);
         binding.mark_rendered();
-        let _ = binding.draw_frame(constraints);
+        let _ = binding.draw_frame(&realm, constraints);
 
-        let gate_mid = binding.needs_redraw() || binding.has_pending_work();
+        let gate_mid = binding.needs_redraw() || binding.has_pending_work(&realm);
         assert!(
             gate_mid,
             "V1: runner gate must remain open at t=0.05s (controller still running \
@@ -1415,7 +2577,7 @@ mod tests {
         // --- Frame at t=0.2s: beyond the 100 ms duration, controller completes ---
         binding.set_now_secs_for_test(0.20);
         binding.mark_rendered();
-        let _ = binding.draw_frame(constraints);
+        let _ = binding.draw_frame(&realm, constraints);
 
         assert_eq!(
             controller.status(),
@@ -1457,6 +2619,7 @@ mod tests {
         use flui_animation::Animation;
 
         let binding = AppBinding::new();
+        let realm = test_realm(&binding);
         let vsync = binding.vsync();
         let controller = make_controller(200);
         vsync.register(controller.clone());
@@ -1466,12 +2629,12 @@ mod tests {
 
         // Frame 1 — anchor at t=0.
         binding.set_now_secs_for_test(0.0);
-        let _ = binding.draw_frame(constraints);
+        let _ = binding.draw_frame(&realm, constraints);
         let v0 = controller.value();
 
         // Frame 2 — t=0.1 s → 50 % of a 200 ms run.
         binding.set_now_secs_for_test(0.10);
-        let _ = binding.draw_frame(constraints);
+        let _ = binding.draw_frame(&realm, constraints);
         let v1 = controller.value();
 
         assert!(
@@ -1505,6 +2668,7 @@ mod tests {
         use flui_animation::{Animation, AnimationStatus};
 
         let binding = AppBinding::new();
+        let realm = test_realm(&binding);
         let vsync = binding.vsync();
         let controller = make_controller(100);
         vsync.register(controller.clone());
@@ -1514,13 +2678,13 @@ mod tests {
 
         // Anchor frame at t=0.
         binding.set_now_secs_for_test(0.0);
-        let _ = binding.draw_frame(constraints);
+        let _ = binding.draw_frame(&realm, constraints);
 
         // At t=0.05s (50 ms into a 100 ms run): NOT yet complete.
         // If `tick_all` were called twice, elapsed would appear as ~100 ms
         // and the controller would snap to Completed — failing this assert.
         binding.set_now_secs_for_test(0.05);
-        let _ = binding.draw_frame(constraints);
+        let _ = binding.draw_frame(&realm, constraints);
         assert_ne!(
             controller.status(),
             AnimationStatus::Completed,
@@ -1530,7 +2694,7 @@ mod tests {
 
         // At t=0.15s (150 ms, past the 100 ms duration): must complete.
         binding.set_now_secs_for_test(0.15);
-        let _ = binding.draw_frame(constraints);
+        let _ = binding.draw_frame(&realm, constraints);
         assert_eq!(
             controller.status(),
             AnimationStatus::Completed,
@@ -1654,10 +2818,11 @@ mod tests {
     #[test]
     fn a1_autowrap_causes_registration_after_build_pass() {
         let binding = AppBinding::new();
+        let realm = test_realm(&binding);
         let (probe, controller) = make_vsync_probe();
 
         binding
-            .attach_root_widget(&probe)
+            .attach_root_widget(&realm, &probe)
             .expect("a fresh AppBinding must accept its first root widget");
 
         // Before draw_frame: init_state has not run → no registration yet.
@@ -1667,7 +2832,7 @@ mod tests {
         );
 
         // draw_frame Phase 1 (build_scope) triggers mount → init_state → registration.
-        let _ = binding.draw_frame(test_constraints());
+        let _ = binding.draw_frame(&realm, test_constraints());
 
         assert!(
             !binding.vsync().is_empty(),
@@ -1707,15 +2872,16 @@ mod tests {
         use flui_animation::Animation as _;
 
         let binding = AppBinding::new();
+        let realm = test_realm(&binding);
         let (probe, controller) = make_vsync_probe();
         binding
-            .attach_root_widget(&probe)
+            .attach_root_widget(&realm, &probe)
             .expect("a fresh AppBinding must accept its first root widget");
 
         // Frame 1 (t=0.0): build pass runs init_state → registration + forward().
         // tick_all fires before build_scope, so the controller is not yet known; value = 0.
         binding.set_now_secs_for_test(0.0);
-        let _ = binding.draw_frame(test_constraints());
+        let _ = binding.draw_frame(&realm, test_constraints());
         assert!(
             !binding.vsync().is_empty(),
             "A2 precondition: controller must be registered after the first build pass",
@@ -1724,13 +2890,13 @@ mod tests {
         // Frame 2 (t=0.1): tick_all observes the new run-generation and sets run_start=0.1;
         // elapsed = 0.1 - 0.1 = 0 → this is the anchor frame; value stays near 0.
         binding.set_now_secs_for_test(0.1);
-        let _ = binding.draw_frame(test_constraints());
+        let _ = binding.draw_frame(&realm, test_constraints());
         let value_after_anchor = controller.value();
 
         // Frame 3 (t=0.2): elapsed = 0.2 - 0.1 = 0.1 s on a 200 ms run → ~50 % progress.
         // If the chain is intact, value must be strictly above the anchor-frame value.
         binding.set_now_secs_for_test(0.2);
-        let _ = binding.draw_frame(test_constraints());
+        let _ = binding.draw_frame(&realm, test_constraints());
         let value_at_50_percent = controller.value();
 
         assert!(
@@ -1753,13 +2919,14 @@ mod tests {
     #[test]
     fn a3_no_animation_root_vsync_stays_empty_after_build_pass() {
         let binding = AppBinding::new();
+        let realm = test_realm(&binding);
         binding
-            .attach_root_widget(&LeafView)
+            .attach_root_widget(&realm, &LeafView)
             .expect("a fresh AppBinding must accept its first root widget");
 
         // Build pass runs — VsyncScope is mounted but LeafView has no init_state
         // that reads it, so no registration occurs.
-        let _ = binding.draw_frame(test_constraints());
+        let _ = binding.draw_frame(&realm, test_constraints());
 
         assert!(
             binding.vsync().is_empty(),
@@ -1777,6 +2944,7 @@ mod tests {
     #[test]
     fn vsync_empty_does_not_keep_gate_open() {
         let binding = AppBinding::new();
+        let realm = test_realm(&binding);
         // No controllers registered.
         assert!(binding.vsync().is_empty(), "precondition: Vsync is empty");
 
@@ -1786,7 +2954,7 @@ mod tests {
 
         // `draw_frame` must not set `needs_redraw` through the Vsync path when
         // no controllers are registered.
-        let _ = binding.draw_frame(constraints);
+        let _ = binding.draw_frame(&realm, constraints);
 
         assert!(
             !binding.has_vsync_running(),
@@ -1795,5 +2963,1014 @@ mod tests {
         // `needs_redraw` may be set by OTHER paths (the pipeline-owner dirty hook
         // fires when the new binding's PipelineOwner is touched).  We assert only
         // the Vsync-specific gate: has_vsync_running is false.
+    }
+
+    /// `render_frame_entered`'s retry gate: a frame dropped mid-render (surface
+    /// lost) must not be treated as settled. Drives `render_frame_entered`
+    /// directly against a scripted `RasterBackend` — no GPU device required.
+    mod frame_retry_semantics {
+        use flui_types::geometry::{Pixels, Rect};
+
+        use super::*;
+
+        /// A `RasterBackend` whose `render_scene` outcome is fixed at
+        /// construction, so a test can force the exact arm
+        /// `render_frame_entered` must handle without a real GPU device.
+        struct ScriptedRasterBackend {
+            /// Consumed on the first `render_scene` call — a second call
+            /// within one of these single-frame tests would be a bug.
+            outcome: Option<Result<bool, EngineError>>,
+            render_scene_calls: u32,
+        }
+
+        impl ScriptedRasterBackend {
+            fn new(outcome: Result<bool, EngineError>) -> Self {
+                Self {
+                    outcome: Some(outcome),
+                    render_scene_calls: 0,
+                }
+            }
+        }
+
+        impl RasterBackend for ScriptedRasterBackend {
+            fn render_scene(&mut self, _scene: &Scene) -> Result<bool, EngineError> {
+                self.render_scene_calls += 1;
+                self.outcome
+                    .take()
+                    .expect("render_scene called more than once in a single-frame test")
+            }
+            fn resize(&mut self, _width: u32, _height: u32) {}
+            fn is_device_lost(&self) -> bool {
+                false
+            }
+            fn mark_dirty(&mut self, _rect: Rect<Pixels>) {}
+            fn mark_full_repaint(&mut self) {}
+            fn has_damage(&self) -> bool {
+                true
+            }
+            fn size(&self) -> (u32, u32) {
+                (800, 600)
+            }
+            fn reconfigure_surface(&mut self) -> Result<(), EngineError> {
+                Ok(())
+            }
+        }
+
+        /// Mounts a root so the pipeline actually paints a non-empty scene —
+        /// the SurfaceLost/success arms under test only run inside
+        /// `render_frame_entered`'s `scene.has_content()` gate.
+        fn mount_root(app: &AppBinding) -> super::super::super::ui_realm::UiRealm {
+            let realm = test_realm(app);
+            realm
+                .enter(|realm| app.attach_root_widget(realm, &LeafView))
+                .expect("attach succeeds");
+            realm
+        }
+
+        /// Red-check: replace the `retry_needed` branch with an unconditional
+        /// `self.mark_rendered()` (the pre-fix shape) and this fails —
+        /// `needs_redraw` comes back `false` after a dropped `SurfaceLost`
+        /// frame, so nothing would ever re-drive a static UI back to life.
+        #[test]
+        fn surface_lost_keeps_needs_redraw_armed_for_a_retry() {
+            let app = AppBinding::new();
+            let realm = mount_root(&app);
+            let mut backend = ScriptedRasterBackend::new(Err(EngineError::SurfaceLost));
+
+            app.mark_rendered(); // known state before the frame
+            let presented = app.render_frame_entered(&realm, &mut backend);
+
+            assert!(!presented, "a SurfaceLost frame never reaches present()");
+            assert_eq!(
+                backend.render_scene_calls, 1,
+                "precondition: the mounted scene actually reached render_scene"
+            );
+            assert!(
+                app.needs_redraw(),
+                "a dropped SurfaceLost frame must re-arm needs_redraw so the next wake \
+                 actually retries — 'will retry next frame' must be a mechanism, not \
+                 just a comment"
+            );
+        }
+
+        /// Control case: a successful, presented frame must still clear
+        /// `needs_redraw`, exactly as before this fix.
+        #[test]
+        fn a_successful_frame_still_clears_needs_redraw() {
+            let app = AppBinding::new();
+            let realm = mount_root(&app);
+            let mut backend = ScriptedRasterBackend::new(Ok(true));
+
+            app.request_redraw(); // simulate the wake that scheduled this frame
+            let presented = app.render_frame_entered(&realm, &mut backend);
+
+            assert!(presented, "Ok(true) means render_scene reached present()");
+            assert!(
+                !app.needs_redraw(),
+                "a successfully presented frame must clear needs_redraw, same as \
+                 before this fix"
+            );
+        }
+    }
+
+    /// `AppBinding::defer_first_frame`/`allow_first_frame`/
+    /// `send_frames_to_engine` — the ONE deferral gate the production frame
+    /// path (`render_frame_entered`) actually consults (oracle
+    /// `RendererBinding`, tag `3.44.0`; full citation in
+    /// `crates/flui-app/src/bindings/renderer_binding.rs` above
+    /// `defer_first_frame`). Before this consolidation, `render_frame_entered`
+    /// consulted none of the three counters that used to exist — deferring
+    /// the first frame did nothing observable from here. Drives
+    /// `render_frame_entered` directly against a counting `RasterBackend`,
+    /// mirroring `frame_retry_semantics` above.
+    mod first_frame_deferral {
+        use flui_types::geometry::{Pixels, Rect};
+
+        use super::*;
+
+        /// A `RasterBackend` that always presents successfully and counts
+        /// how many times `render_scene` was actually called. Unlike
+        /// `frame_retry_semantics::ScriptedRasterBackend` (a single scripted
+        /// outcome consumed once), this backend is driven across several
+        /// `render_frame_entered` calls in one test — what matters here is
+        /// whether the gate lets the call through AT ALL, not any particular
+        /// GPU outcome.
+        struct CountingRasterBackend {
+            render_scene_calls: u32,
+        }
+
+        impl CountingRasterBackend {
+            fn new() -> Self {
+                Self {
+                    render_scene_calls: 0,
+                }
+            }
+        }
+
+        impl RasterBackend for CountingRasterBackend {
+            fn render_scene(&mut self, _scene: &Scene) -> Result<bool, EngineError> {
+                self.render_scene_calls += 1;
+                Ok(true)
+            }
+            fn resize(&mut self, _width: u32, _height: u32) {}
+            fn is_device_lost(&self) -> bool {
+                false
+            }
+            fn mark_dirty(&mut self, _rect: Rect<Pixels>) {}
+            fn mark_full_repaint(&mut self) {}
+            fn has_damage(&self) -> bool {
+                true
+            }
+            fn size(&self) -> (u32, u32) {
+                (800, 600)
+            }
+            fn reconfigure_surface(&mut self) -> Result<(), EngineError> {
+                Ok(())
+            }
+        }
+
+        /// Mounts a root so the pipeline actually paints a non-empty scene —
+        /// same shape as `frame_retry_semantics::mount_root`.
+        fn mount_root(app: &AppBinding) -> super::super::super::ui_realm::UiRealm {
+            let realm = test_realm(app);
+            realm
+                .enter(|realm| app.attach_root_widget(realm, &LeafView))
+                .expect("attach succeeds");
+            realm
+        }
+
+        /// Root `RenderBox` whose layout panics — the exact catch_unwind
+        /// path any third-party panic in production widget code
+        /// (`panic!`/`unwrap()`/an assertion inside `RenderBox::
+        /// perform_layout`) reaches. Mirrors `flui-rendering`'s own
+        /// `PanickingLayoutBox` pipeline-level fixture, but lives here
+        /// (rather than being imported) since it exercises the trait
+        /// surface public to downstream crates, not `flui-rendering`
+        /// internals. `perform_layout` is `RenderBox`'s only method
+        /// without a default body; every other method (paint, hit-test,
+        /// intrinsics, ...) falls back to a harmless no-op default.
+        #[derive(Debug)]
+        struct PanicOnLayoutBox;
+
+        impl flui_foundation::Diagnosticable for PanicOnLayoutBox {}
+
+        impl flui_rendering::traits::RenderBox for PanicOnLayoutBox {
+            type Arity = flui_rendering::prelude::Leaf;
+            type ParentData = flui_rendering::prelude::BoxParentData;
+
+            fn perform_layout(
+                &mut self,
+                _ctx: &mut flui_rendering::context::BoxLayoutContext<
+                    '_,
+                    Self::Arity,
+                    Self::ParentData,
+                >,
+            ) -> Size {
+                panic!("PanicOnLayoutBox::perform_layout -- intentional test panic");
+            }
+        }
+
+        /// Mounts `PanicOnLayoutBox` directly as the pipeline root,
+        /// bypassing `attach_root_widget`/`View` entirely — same pattern
+        /// `dirty_mark_fires_wake_via_notifier` (above) uses to touch the
+        /// pipeline without the widget layer.
+        fn mount_panicking_root(app: &AppBinding) -> super::super::super::ui_realm::UiRealm {
+            let realm = test_realm(app);
+            let mut owner = app.shared_pipeline_owner.write();
+            let root_id = owner.insert(Box::new(PanicOnLayoutBox)
+                as Box<
+                    dyn flui_rendering::traits::RenderObject<flui_rendering::protocol::BoxProtocol>,
+                >);
+            owner.set_root_id(Some(root_id));
+            drop(owner);
+            realm
+        }
+
+        /// Red-check: remove the `send_to_engine` consult in
+        /// `render_frame_entered` (fall through to the unconditional present
+        /// branch as before this fix) and this fails — `render_scene` gets
+        /// called despite the deferral.
+        #[test]
+        fn deferred_first_frame_runs_the_pipeline_but_withholds_the_scene() {
+            let app = AppBinding::new();
+            let realm = mount_root(&app);
+            let mut backend = CountingRasterBackend::new();
+
+            app.defer_first_frame();
+            app.mark_rendered(); // known baseline before the frame
+
+            let presented = app.render_frame_entered(&realm, &mut backend);
+
+            assert!(!presented, "a deferred first frame must never present");
+            assert_eq!(
+                backend.render_scene_calls, 0,
+                "the scene must never reach render_scene while deferred — build/ \
+                 layout/paint above still ran (Flutter pumps frames during \
+                 deferral too), only the composite-to-engine step is gated"
+            );
+            assert_eq!(app.frames_rendered(), 0);
+            assert!(
+                !app.needs_redraw(),
+                "deferred is not errored: the frame settled normally (mark_rendered), \
+                 so it must not spam a retry wake the way a dropped/errored frame does"
+            );
+        }
+
+        /// Red-check: comment out `allow_first_frame`'s `RepaintHandle`
+        /// re-mark (the wake+redirty block) and this fails — `presented`
+        /// comes back `false` because the woken frame finds a clean
+        /// pipeline (the deferred pass already consumed the dirty work)
+        /// and produces `FramePaintOutcome::Idle`. NO manual re-dirty
+        /// happens in this test: that is the whole point — a caller of
+        /// the public `defer_first_frame`/`allow_first_frame` API has no
+        /// pipeline handle to reach for, so the fix must live inside
+        /// `allow_first_frame` itself.
+        #[test]
+        fn allow_first_frame_alone_presents_the_previously_withheld_content() {
+            let app = AppBinding::new();
+            let realm = mount_root(&app);
+            let mut backend = CountingRasterBackend::new();
+
+            app.defer_first_frame();
+            let withheld = app.render_frame_entered(&realm, &mut backend);
+            assert!(
+                !withheld,
+                "precondition: the first frame is withheld while deferred"
+            );
+            assert_eq!(backend.render_scene_calls, 0);
+
+            app.allow_first_frame();
+
+            let presented = app.render_frame_entered(&realm, &mut backend);
+
+            assert!(
+                presented,
+                "allow_first_frame alone (no external re-dirty) must make the \
+                 withheld content reach present() on the next pumped frame"
+            );
+            assert_eq!(backend.render_scene_calls, 1);
+            assert_eq!(app.frames_rendered(), 1);
+        }
+
+        /// Same deferral-lesson shape as
+        /// `allow_first_frame_alone_presents_the_previously_withheld_content`
+        /// above, for the re-enable listener instead of the
+        /// first-frame gate: FLUI has no retained-scene re-present, so a
+        /// `Hidden` -> `Resumed` transition needs the same explicit re-dirty
+        /// `allow_first_frame` needed — this time driven by a `Scheduler`
+        /// lifecycle listener rather than a direct call.
+        ///
+        /// Installed against a throwaway `Scheduler::new()`, not
+        /// `Scheduler::instance()`, so this test neither depends on nor
+        /// pollutes the process-global thread-local singleton
+        /// `AppBinding::instance()`'s bootstrap installs the real listener
+        /// against.
+        ///
+        /// Red-check: comment out the redirty call inside
+        /// `install_frames_reenable_redirty_listener`'s body (leave only
+        /// `wake()`) and the final assertion fails — the woken frame finds
+        /// a clean pipeline and presents `false` (`FramePaintOutcome::Idle`)
+        /// instead of `true`.
+        #[test]
+        fn frames_reenable_redirties_root_so_next_frame_paints_not_idle() {
+            use std::sync::atomic::AtomicUsize;
+
+            let app = AppBinding::new();
+            let realm = mount_root(&app);
+            let mut backend = CountingRasterBackend::new();
+
+            // Settle the dirty state the mount above left behind, so the
+            // frames below are attributable only to the listener under test.
+            assert!(app.render_frame_entered(&realm, &mut backend));
+            assert_eq!(backend.render_scene_calls, 1);
+            assert!(
+                !app.render_frame_entered(&realm, &mut backend),
+                "precondition: settled — nothing dirty left after the first frame"
+            );
+            assert_eq!(backend.render_scene_calls, 1);
+
+            let scheduler = flui_scheduler::Scheduler::new();
+            let wake_calls = Arc::new(AtomicUsize::new(0));
+            let wake_calls_for_listener = Arc::clone(&wake_calls);
+            let wake: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+                wake_calls_for_listener.fetch_add(1, Ordering::SeqCst);
+            });
+            install_frames_reenable_redirty_listener(
+                &scheduler,
+                Arc::clone(&app.shared_pipeline_owner),
+                wake,
+            );
+
+            // enabled -> enabled (Resumed -> Inactive) must fire neither.
+            scheduler.handle_app_lifecycle_state_change(AppLifecycleState::Inactive);
+            assert_eq!(wake_calls.load(Ordering::SeqCst), 0);
+            assert!(
+                !app.render_frame_entered(&realm, &mut backend),
+                "an enabled->enabled edge must not redirty the root"
+            );
+            assert_eq!(backend.render_scene_calls, 1);
+
+            // Disable, then re-enable: the edge must redirty AND wake.
+            scheduler.handle_app_lifecycle_state_change(AppLifecycleState::Hidden);
+            assert_eq!(
+                wake_calls.load(Ordering::SeqCst),
+                0,
+                "the disable edge itself must not redirty/wake"
+            );
+            scheduler.handle_app_lifecycle_state_change(AppLifecycleState::Resumed);
+            assert_eq!(
+                wake_calls.load(Ordering::SeqCst),
+                1,
+                "the re-enable edge must wake exactly once"
+            );
+
+            assert!(
+                app.render_frame_entered(&realm, &mut backend),
+                "the root must be marked dirty by the re-enable listener so the next frame \
+                 paints, not Idle"
+            );
+            assert_eq!(backend.render_scene_calls, 2);
+        }
+
+        /// Red-check: replace `first_frame_deferred_count.fetch_sub`'s
+        /// underflow-checked decrement with an unconditional "count == 0
+        /// means open" read that ignores nesting depth, and this fails —
+        /// the frame after the FIRST `allow_first_frame()` would present
+        /// even though a second `defer_first_frame()` is still outstanding.
+        #[test]
+        fn nested_defer_allow_only_presents_after_the_last_allow() {
+            let app = AppBinding::new();
+            let realm = mount_root(&app);
+            let mut backend = CountingRasterBackend::new();
+
+            app.defer_first_frame();
+            app.defer_first_frame(); // deferred count = 2
+
+            assert!(!app.render_frame_entered(&realm, &mut backend));
+            assert_eq!(backend.render_scene_calls, 0);
+
+            app.allow_first_frame(); // count = 1 -- still deferred
+            assert!(
+                !app.render_frame_entered(&realm, &mut backend),
+                "one matching allow of two nested defers must not yet open the gate"
+            );
+            assert_eq!(backend.render_scene_calls, 0);
+
+            app.allow_first_frame(); // count = 0 -- gate opens
+            assert!(
+                app.render_frame_entered(&realm, &mut backend),
+                "the last matching allow must open the gate"
+            );
+            assert_eq!(backend.render_scene_calls, 1);
+        }
+
+        /// Caller-contract violation: an `allow_first_frame` with no
+        /// matching prior `defer_first_frame` mirrors the oracle's
+        /// `assert(_firstFrameDeferredCount > 0)`.
+        #[test]
+        #[should_panic(expected = "allow_first_frame called without matching defer_first_frame")]
+        fn allow_first_frame_without_matching_defer_panics() {
+            let app = AppBinding::new();
+            app.allow_first_frame();
+        }
+
+        /// Oracle: `_firstFrameSent` latches only after a successful
+        /// `compositeFrame()` — never on a phase that raised. Latching on
+        /// `Errored` would let a pipeline crash on the very first frame
+        /// permanently defeat any LATER `defer_first_frame`/
+        /// `allow_first_frame` pair, since `send_frames_to_engine`
+        /// short-circuits `true` once sent.
+        ///
+        /// Red-check: drop the `!errored` guard around `mark_first_frame_sent`
+        /// in `render_frame_entered` and this fails — the errored frame
+        /// latches, and the later `defer_first_frame` cannot close the gate.
+        #[test]
+        fn errored_first_frame_does_not_latch_first_frame_sent() {
+            let app = AppBinding::new();
+            let realm = mount_panicking_root(&app);
+            let mut backend = CountingRasterBackend::new();
+
+            // Silence the default panic hook for the duration of the
+            // intentional panic -- same discipline as flui-rendering's own
+            // catch_unwind tests (`PipelineOwner::test_run_frame_catches_paint_panic`).
+            let prev_hook = std::panic::take_hook();
+            std::panic::set_hook(Box::new(|_| {}));
+            let presented = app.render_frame_entered(&realm, &mut backend);
+            std::panic::set_hook(prev_hook);
+
+            assert!(!presented, "an errored frame must never present");
+            assert_eq!(backend.render_scene_calls, 0);
+
+            // Precondition: the gate was open (no deferral was ever
+            // registered) before the errored frame ran.
+            assert!(app.send_frames_to_engine());
+
+            app.defer_first_frame();
+            assert!(
+                !app.send_frames_to_engine(),
+                "an errored first frame must not latch first_frame_sent -- a \
+                 later defer_first_frame must still be able to close the gate"
+            );
+        }
+
+        /// Oracle: `sendFramesToEngine => _firstFrameSent || \
+        /// _firstFrameDeferredCount == 0` — once the first frame has been
+        /// sent, a LATER `defer_first_frame` has no effect on the gate
+        /// (matching `defer_first_frame`'s own doc: "Calling this has no
+        /// effect after the first frame has been sent").
+        #[test]
+        fn first_frame_sent_latch_short_circuits_later_defers() {
+            let app = AppBinding::new();
+            let realm = mount_root(&app);
+            let mut backend = CountingRasterBackend::new();
+
+            let presented = app.render_frame_entered(&realm, &mut backend);
+            assert!(
+                presented,
+                "precondition: the first frame presents with no active deferral"
+            );
+            assert!(app.send_frames_to_engine());
+
+            app.defer_first_frame();
+            assert!(
+                app.send_frames_to_engine(),
+                "a defer registered AFTER the first frame was sent must not \
+                 re-close the gate"
+            );
+        }
+    }
+
+    /// `AppBinding::attach_text_input`/`detach_text_input` (the `ImeBackend`
+    /// bridge) end-to-end against a headless window backed by
+    /// `flui_platform::FakeTextInput`, plus `handle_input`'s
+    /// `PlatformInput::Ime` → `TextInputRegistry` dispatch.
+    mod ime_binding_bridge {
+        use std::cell::RefCell;
+
+        use flui_types::ImeEvent;
+
+        use super::*;
+
+        /// `TextInputRegistry::global()` is a thread-local singleton
+        /// (matching `FocusManager`'s shape). Rust's default test harness
+        /// reuses worker threads across tests, so two of these tests could
+        /// otherwise observe each other's leftover attach/detach state on a
+        /// shared thread — the same class of hazard `SEMANTICS_TEST_LOCK`
+        /// guards against in `renderer_binding.rs` (AGENTS.md, "Testing
+        /// quirks"). Held for each test's duration.
+        static TEXT_INPUT_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+        /// A headless window plus a live handle to the same
+        /// `FakeTextInput` its `PlatformWindow::text_input()` returns, so a
+        /// test can drive the binding and assert exactly what the platform
+        /// side recorded.
+        fn headless_window_with_ime() -> (
+            Box<dyn PlatformWindow>,
+            Arc<dyn flui_platform::traits::PlatformTextInput>,
+        ) {
+            let platform = flui_platform::headless_platform();
+            let window = platform
+                .open_window(flui_platform::traits::WindowOptions::default())
+                .expect("headless platform always opens a window");
+            let text_input = window
+                .text_input()
+                .expect("headless backend supports PlatformTextInput");
+            (window, text_input)
+        }
+
+        fn fake_text_input(
+            text_input: &Arc<dyn flui_platform::traits::PlatformTextInput>,
+        ) -> &flui_platform::FakeTextInput {
+            text_input
+                .as_any()
+                .downcast_ref::<flui_platform::FakeTextInput>()
+                .expect("the headless backend's PlatformTextInput is a FakeTextInput")
+        }
+
+        /// Attach records `set_ime_allowed(true)`; preedit/commit events
+        /// routed through `handle_input` reach the attached client with the
+        /// exact delivered strings; detach from the still-active token
+        /// records `set_ime_allowed(false)`.
+        #[test]
+        fn attach_dispatch_and_active_detach_round_trip_through_the_platform() {
+            let _guard = TEXT_INPUT_TEST_LOCK
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+            let (window, text_input) = headless_window_with_ime();
+            let fake = fake_text_input(&text_input);
+
+            let binding = AppBinding::new();
+            binding.set_window(window);
+
+            let received = Rc::new(RefCell::new(Vec::new()));
+            let sink = Rc::clone(&received);
+            let token = binding
+                .attach_text_input(Rc::new(move |event: &ImeEvent| {
+                    sink.borrow_mut().push(event.clone());
+                }))
+                .expect("attach_text_input must succeed once a window is set");
+
+            assert_eq!(
+                fake.last_ime_allowed(),
+                Some(true),
+                "attach must enable platform IME composition"
+            );
+
+            binding.handle_input(PlatformInput::Ime(ImeEvent::Preedit {
+                text: "ni".to_string(),
+                cursor: Some((0, 2)),
+            }));
+            binding.handle_input(PlatformInput::Ime(ImeEvent::Commit("你好".to_string())));
+
+            assert_eq!(
+                received.borrow().as_slice(),
+                [
+                    ImeEvent::Preedit {
+                        text: "ni".to_string(),
+                        cursor: Some((0, 2)),
+                    },
+                    ImeEvent::Commit("你好".to_string()),
+                ],
+                "handle_input must deliver the exact ImeEvent payload to the attached client"
+            );
+
+            binding.detach_text_input(token);
+            assert_eq!(
+                fake.last_ime_allowed(),
+                Some(false),
+                "detaching the active token must disable platform IME composition"
+            );
+        }
+
+        /// The stale-detach race named in `TextInputRegistry`'s module doc:
+        /// field A attaches, field B attaches (replacing A), and A's
+        /// now-stale detach must record NOTHING on the platform side —
+        /// only B's later, active-token detach may disable IME.
+        #[test]
+        fn a_stale_detach_records_nothing_on_the_platform() {
+            let _guard = TEXT_INPUT_TEST_LOCK
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+            let (window, text_input) = headless_window_with_ime();
+            let fake = fake_text_input(&text_input);
+
+            let binding = AppBinding::new();
+            binding.set_window(window);
+
+            let token_a = binding
+                .attach_text_input(Rc::new(|_event: &ImeEvent| {}))
+                .expect("attach_text_input must succeed once a window is set");
+            assert_eq!(fake.ime_allowed_calls(), vec![true]);
+
+            let token_b = binding
+                .attach_text_input(Rc::new(|_event: &ImeEvent| {}))
+                .expect("attach_text_input must succeed once a window is set");
+            assert_eq!(
+                fake.ime_allowed_calls(),
+                vec![true, true],
+                "attach-replaces still enables IME for the new client"
+            );
+
+            binding.detach_text_input(token_a);
+            assert_eq!(
+                fake.ime_allowed_calls(),
+                vec![true, true],
+                "a stale detach (token_a, already replaced by token_b) records nothing"
+            );
+
+            binding.detach_text_input(token_b);
+            assert_eq!(
+                fake.ime_allowed_calls(),
+                vec![true, true, false],
+                "the active token's detach still disables IME"
+            );
+        }
+
+        /// End-to-end proof of the literal ADR-0030 claim `flui-widgets`'
+        /// own `editable_text::tests` cannot make on their own (they wire
+        /// `TextInputHandle` straight to `TextInputRegistry::global()`, with
+        /// no `flui-app`/`PlatformWindow` involved — see that module's
+        /// doc): a real, mounted `flui_widgets::EditableText`, focused
+        /// through the same `FocusManager` singleton production keyboard
+        /// routing uses, attaches through `AppBinding::attach_text_input`
+        /// (via the `BuildContext::text_input_handle` capability
+        /// `UiRealm::bind_to_app` installs) and actually toggles the
+        /// platform's `set_ime_allowed` on the `FakeTextInput` — not merely
+        /// the registry.
+        ///
+        /// Red-check: skip `UiRealm::bind_to_app`'s `set_text_input_handle`
+        /// call — `EditableText::init_state`'s `ctx.text_input_handle()`
+        /// then returns `None`, no attach happens, and this test's first
+        /// assertion fails (`fake.last_ime_allowed()` stays `None`).
+        #[test]
+        fn a_mounted_editable_text_toggles_platform_ime_on_focus_and_blur() {
+            let _guard = TEXT_INPUT_TEST_LOCK
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            FocusManager::global().unfocus();
+
+            let (window, text_input) = headless_window_with_ime();
+            let fake = fake_text_input(&text_input);
+
+            let binding = AppBinding::new();
+            binding.set_window(window);
+            let realm = test_realm(&binding);
+
+            let controller = flui_widgets::TextEditingController::new();
+            realm
+                .enter(|realm| {
+                    binding.attach_root_widget(
+                        realm,
+                        &flui_widgets::EditableText::new(controller.clone()),
+                    )
+                })
+                .expect("attach succeeds");
+            let _ = binding.draw_frame(&realm, test_constraints());
+
+            let node_id = controller
+                .focus_node_id()
+                .expect("a mounted, enabled EditableText publishes its focus node");
+
+            FocusManager::global().request_focus(node_id);
+            assert_eq!(
+                fake.last_ime_allowed(),
+                Some(true),
+                "focusing a mounted EditableText must attach through AppBinding \
+                 and enable platform IME composition"
+            );
+
+            FocusManager::global().unfocus();
+            assert_eq!(
+                fake.last_ime_allowed(),
+                Some(false),
+                "blurring the field must detach and disable platform IME composition"
+            );
+        }
+
+        /// `AppBinding::set_ime_cursor_area` (ADR-0032) reaches the active
+        /// window's `PlatformTextInput` capability — the real-path proof
+        /// `flui-widgets`' own IME cursor-area tests cannot make on their
+        /// own (their harness wires `TextInputHandle` straight to an
+        /// in-crate recorder, with no `flui-app`/`PlatformWindow` involved;
+        /// see `test_harness`'s `mount_with_ime` doc). This exercises
+        /// exactly the plumbing `UiRealm::bind_to_app`'s installed third
+        /// closure calls through: `AppBinding::set_ime_cursor_area` ->
+        /// `TextInputPlatformBridge::set_cursor_area` ->
+        /// `PlatformTextInput::set_ime_cursor_area`.
+        ///
+        /// Deliberately does not mount a widget tree: this test proves the
+        /// bridge FORWARDS an already-computed `Bounds` to the platform, not
+        /// that a real `EditableText` computes the right one — that's the
+        /// widget-level geometry/dedupe/lifecycle coverage
+        /// (`flui-widgets`' `editable_text` module carries it). A bare
+        /// `Bounds::new(...)` exercises the forwarding path with less setup
+        /// and no render-tree dependency. (`AppBinding::attach_root_widget`'s
+        /// `RootRenderElement` bootstrap does correctly connect a mounted
+        /// subtree's render root under its `RenderViewAdapter` node in both
+        /// directions — see `transform_to_resolves_through_the_root_hop_after_standard_bootstrap`
+        /// above — so mounting one here would work; it is simply
+        /// unnecessary for what this test asserts.)
+        ///
+        /// Red-check: turning `AppBinding::set_ime_cursor_area` into a
+        /// no-op (dropping the `text_input_platform_bridge().
+        /// set_cursor_area` call) makes `fake.cursor_area_calls()` stay
+        /// empty.
+        #[test]
+        fn set_ime_cursor_area_reaches_the_active_windows_platform_capability() {
+            let (window, text_input) = headless_window_with_ime();
+            let fake = fake_text_input(&text_input);
+
+            let binding = AppBinding::new();
+            binding.set_window(window);
+
+            let area = Bounds::new(
+                flui_types::Point::new(px(10.0), px(20.0)),
+                Size::new(px(2.0), px(18.0)),
+            );
+            binding.set_ime_cursor_area(area);
+
+            assert_eq!(
+                fake.cursor_area_calls(),
+                vec![area],
+                "set_ime_cursor_area must call through to the active window's \
+                 PlatformTextInput::set_ime_cursor_area with the exact area"
+            );
+        }
+
+        /// No active window yet (the loop's first tick fires before
+        /// `set_window` ran) is a silent no-op — the same degradation
+        /// contract `perform_haptic_feedback` documents, not a panic.
+        #[test]
+        fn set_ime_cursor_area_with_no_active_window_is_a_silent_no_op() {
+            let binding = AppBinding::new();
+            binding.set_ime_cursor_area(Bounds::new(
+                flui_types::Point::new(px(0.0), px(0.0)),
+                Size::new(px(1.0), px(1.0)),
+            ));
+        }
+    }
+
+    /// `AppBinding::perform_haptic_feedback` end-to-end against a headless
+    /// window backed by `flui_platform::FakeHaptics`, plus the two silent
+    /// no-op degradation cases (no active window; a window with no
+    /// `PlatformHaptics` capability).
+    mod haptics_binding_bridge {
+        use super::*;
+
+        /// A headless window plus a live handle to the same `FakeHaptics`
+        /// its `PlatformWindow::haptics()` returns, so a test can drive
+        /// the binding and assert exactly what the platform side recorded.
+        fn headless_window_with_haptics() -> (
+            Box<dyn PlatformWindow>,
+            Arc<dyn flui_platform::traits::PlatformHaptics>,
+        ) {
+            let platform = flui_platform::headless_platform();
+            let window = platform
+                .open_window(flui_platform::traits::WindowOptions::default())
+                .expect("headless platform always opens a window");
+            let haptics = window
+                .haptics()
+                .expect("headless backend supports PlatformHaptics");
+            (window, haptics)
+        }
+
+        fn fake_haptics(
+            haptics: &Arc<dyn flui_platform::traits::PlatformHaptics>,
+        ) -> &flui_platform::FakeHaptics {
+            haptics
+                .as_any()
+                .downcast_ref::<flui_platform::FakeHaptics>()
+                .expect("the headless backend's PlatformHaptics is a FakeHaptics")
+        }
+
+        /// A minimal `PlatformWindow` implementing only the trait's
+        /// non-default methods, so `haptics()` falls through to the trait
+        /// default (`None`) — the "backend with no haptics capability"
+        /// case `perform_haptic_feedback` must degrade against silently.
+        struct BareWindow;
+
+        impl PlatformWindow for BareWindow {
+            fn physical_size(
+                &self,
+            ) -> flui_types::geometry::Size<flui_types::geometry::DevicePixels> {
+                flui_types::geometry::Size::default()
+            }
+
+            fn logical_size(&self) -> flui_types::geometry::Size<flui_types::Pixels> {
+                flui_types::geometry::Size::default()
+            }
+
+            fn scale_factor(&self) -> f64 {
+                1.0
+            }
+
+            fn request_redraw(&self) {}
+
+            fn is_focused(&self) -> bool {
+                false
+            }
+
+            fn is_visible(&self) -> bool {
+                true
+            }
+        }
+
+        /// Real-path proof: `perform_haptic_feedback` reads the binding's
+        /// active window and calls through to its `PlatformHaptics`.
+        ///
+        /// Red-check: turning `perform_haptic_feedback` into a no-op
+        /// (dropping the `with_window`/`perform` call) makes this fail —
+        /// `fake.calls()` would stay empty.
+        #[test]
+        fn perform_haptic_feedback_reaches_the_active_windows_platform_capability() {
+            let (window, haptics) = headless_window_with_haptics();
+            let fake = fake_haptics(&haptics);
+
+            let binding = AppBinding::new();
+            binding.set_window(window);
+
+            binding.perform_haptic_feedback(HapticFeedback::SelectionClick);
+
+            assert_eq!(
+                fake.calls(),
+                vec![HapticFeedback::SelectionClick],
+                "perform_haptic_feedback must call through to the active \
+                 window's PlatformHaptics::perform"
+            );
+        }
+
+        /// No active window yet (attached before `set_window` ran) is a
+        /// silent no-op — no panic, nothing recorded anywhere to assert
+        /// against beyond "this returned normally".
+        #[test]
+        fn perform_haptic_feedback_with_no_active_window_is_a_silent_no_op() {
+            let binding = AppBinding::new();
+            binding.perform_haptic_feedback(HapticFeedback::Vibrate);
+        }
+
+        /// An active window whose backend has no `PlatformHaptics`
+        /// capability (desktop winit's shape, reproduced here without a
+        /// real display) is also a silent no-op — Flutter's own
+        /// `HapticFeedback` degradation contract, not a panic.
+        #[test]
+        fn perform_haptic_feedback_on_a_window_without_haptics_is_a_silent_no_op() {
+            let binding = AppBinding::new();
+            binding.set_window(Box::new(BareWindow));
+
+            binding.perform_haptic_feedback(HapticFeedback::MediumImpact);
+        }
+    }
+
+    /// `AppBinding::clipboard()` reaching the platform clipboard installed
+    /// via `set_platform_clipboard` (ADR-0034) — the bootstrap-wiring seam
+    /// `runner.rs` uses instead of a new `Platform` trait surface, since
+    /// `Platform::clipboard()` is already `Arc<dyn Clipboard>`-shaped and
+    /// callable before `run()` consumes the platform value. All tests build
+    /// a standalone `AppBinding::new()` rather than touching
+    /// `AppBinding::instance()`'s singleton, so none of them need
+    /// `SEMANTICS_TEST_LOCK` (or an equivalent) — the same reasoning
+    /// `haptics_binding_bridge`'s tests above rely on.
+    mod platform_clipboard_reachability {
+        use super::*;
+
+        fn headless_clipboard() -> Arc<dyn flui_platform::traits::Clipboard> {
+            flui_platform::headless_platform().clipboard()
+        }
+
+        /// Real-path proof: installing the platform clipboard makes it
+        /// reachable through `AppBinding::clipboard()`, and a write/read
+        /// round-trips through the SAME clipboard instance.
+        ///
+        /// Red-check: turning `set_platform_clipboard` into a no-op (dropping
+        /// its `*self.platform_clipboard.lock() = Some(clipboard)` write)
+        /// makes this fail — `binding.clipboard()` stays `None` and the
+        /// `.expect()` below panics.
+        #[test]
+        fn app_binding_clipboard_reaches_the_installed_platform_clipboard() {
+            let binding = AppBinding::new();
+            assert!(
+                binding.clipboard().is_none(),
+                "no platform installed yet must read back as None"
+            );
+
+            let clipboard = headless_clipboard();
+            binding.set_platform_clipboard(Arc::clone(&clipboard));
+
+            let reached = binding
+                .clipboard()
+                .expect("set_platform_clipboard must make the clipboard reachable");
+            reached.write_text("clipboard-reachability".to_string());
+
+            assert_eq!(
+                binding
+                    .clipboard()
+                    .expect("still installed")
+                    .read_text()
+                    .as_deref(),
+                Some("clipboard-reachability"),
+                "AppBinding::clipboard() must reach through to the SAME platform \
+                 clipboard instance set_platform_clipboard installed"
+            );
+        }
+
+        /// No platform has installed a clipboard yet (bootstrap hasn't run,
+        /// or this is a standalone test binding) — `None`, not a panic.
+        #[test]
+        fn clipboard_with_no_platform_installed_is_none_not_a_panic() {
+            let binding = AppBinding::new();
+            assert!(binding.clipboard().is_none());
+        }
+
+        /// Teardown symmetry: after `clear_platform_clipboard`, the slot
+        /// reads back `None` again — the counterpart
+        /// `teardown_platform_realm` (`runner.rs`) calls so a torn-down realm
+        /// doesn't keep a live platform clipboard (arboard on X11 owns a
+        /// live X11 connection) pinned behind `AppBinding` past the event
+        /// loop's exit.
+        #[test]
+        fn clear_platform_clipboard_removes_the_installed_clipboard() {
+            let binding = AppBinding::new();
+            binding.set_platform_clipboard(headless_clipboard());
+            assert!(binding.clipboard().is_some());
+
+            binding.clear_platform_clipboard();
+
+            assert!(
+                binding.clipboard().is_none(),
+                "clear_platform_clipboard must remove the installed clipboard"
+            );
+        }
+
+        /// A clipboard whose `read_text` re-enters the same critical section
+        /// `clipboard()` uses must not deadlock — proof that `clipboard()`
+        /// drops `platform_clipboard`'s lock guard before the caller can
+        /// touch the returned capability (the same clone-then-call
+        /// discipline `TextInputPlatformBridge` and
+        /// `perform_haptic_feedback` follow).
+        ///
+        /// The fake clipboard reproduces `clipboard()`'s exact
+        /// lock-then-clone-then-drop sequence directly against
+        /// [`AppBinding::platform_clipboard_slot`]'s clone of the same
+        /// underlying `Arc<Mutex<...>>`, rather than holding a reference
+        /// back to `AppBinding` itself: `AppBinding` embeds `GestureBinding`
+        /// (an `Arc<dyn GestureArenaMember>` arena), so it is neither `Send`
+        /// nor `Sync` — and `Clipboard: Send + Sync` means no type that
+        /// implements it can hold one.
+        ///
+        /// Constructed and driven entirely on one dedicated background
+        /// thread, purely to bound a potential hang: a same-thread
+        /// `parking_lot::Mutex` re-lock deadlocks with no timeout of its
+        /// own, so a bare synchronous call here would wedge this test's
+        /// thread forever if `clipboard()` regressed to holding its lock
+        /// across the call-out. `recv_timeout` turns that hang into an
+        /// explicit `expect` panic instead — the same bounding shape
+        /// `semantics_listener_that_registers_another_listener_does_not_deadlock`
+        /// (`renderer_binding.rs`) uses for its own reentrancy proof.
+        #[test]
+        fn clipboard_reentrant_read_does_not_deadlock() {
+            use std::sync::mpsc;
+            use std::time::Duration;
+
+            struct ReentrantClipboard {
+                slot: Arc<Mutex<Option<Arc<dyn flui_platform::traits::Clipboard>>>>,
+            }
+
+            impl flui_platform::traits::Clipboard for ReentrantClipboard {
+                fn read_text(&self) -> Option<String> {
+                    // Reproduces `AppBinding::clipboard()`'s exact
+                    // lock-then-clone-then-drop sequence against the SAME
+                    // slot Arc — proving a reentrant call through this path
+                    // does not deadlock on `platform_clipboard`'s mutex.
+                    let reentered = self.slot.lock().clone();
+                    assert!(
+                        reentered.is_some(),
+                        "reentrant read through the same slot must still see \
+                         the installed clipboard"
+                    );
+                    Some("reentrant".to_string())
+                }
+
+                fn write_text(&self, _text: String) {}
+            }
+
+            let (result_tx, result_rx) = mpsc::channel();
+            std::thread::spawn(move || {
+                let binding = AppBinding::new();
+                let slot = binding.platform_clipboard_slot();
+                binding.set_platform_clipboard(Arc::new(ReentrantClipboard { slot }));
+
+                let reached = binding.clipboard().expect("clipboard installed above");
+                let text = reached.read_text();
+                let _ = result_tx.send(text);
+            });
+
+            let text = result_rx.recv_timeout(Duration::from_secs(5)).expect(
+                "AppBinding::clipboard() deadlocked: a reentrant read_text call must not \
+                 block on the platform_clipboard lock it itself just released",
+            );
+            assert_eq!(text.as_deref(), Some("reentrant"));
+        }
     }
 }

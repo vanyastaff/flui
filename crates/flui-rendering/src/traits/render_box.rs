@@ -1,7 +1,7 @@
 //! RenderBox trait for 2D box layout with Arity-based child management.
 
 use flui_tree::Arity;
-use flui_types::{Point, Size};
+use flui_types::Size;
 
 use crate::{
     constraints::BoxConstraints,
@@ -185,18 +185,22 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
     }
 
     // ========================================================================
-    // Coordinate Conversion
+    // Coordinate Conversion — see `PipelineOwner`, not here
     // ========================================================================
-
-    /// Converts a point from global coordinates to local coordinates.
-    fn global_to_local(&self, point: Point) -> Point {
-        point
-    }
-
-    /// Converts a point from local coordinates to global coordinates.
-    fn local_to_global(&self, point: Point) -> Point {
-        point
-    }
+    //
+    // `local_to_global` / `global_to_local` used to live here as `&self`
+    // methods returning `point` unchanged. They were identity stubs, and they
+    // could not be anything else: a FLUI render object has no parent link and no
+    // owner, so `self` cannot know where it is. Flutter's live on `RenderBox`
+    // precisely because a Dart render object *does* hold `parent` and `owner`
+    // (`box.dart:3062`, `:3113`, both implemented via `getTransformTo`).
+    //
+    // ADR-0021 removed them and put the real thing on the pipeline, which
+    // does own the tree:
+    //
+    //   PipelineOwner::transform_to(descendant, ancestor)
+    //   PipelineOwner::local_to_global(id, point, ancestor)
+    //   PipelineOwner::global_to_local(id, point, ancestor)
 
     // ========================================================================
     // Intrinsic Dimensions
@@ -401,6 +405,27 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
         None
     }
 
+    /// Composes onto `transform` the mapping from child `child`'s local space
+    /// into this box's local space.
+    ///
+    /// Default: [`paint_transform`](Self::paint_transform) followed by a
+    /// translation by the child's committed paint offset — the paint pipeline's
+    /// own composition. See [`RenderObject::apply_paint_transform`] for when to
+    /// override, and for the right-multiplication convention.
+    fn apply_paint_transform(
+        &self,
+        child: usize,
+        child_offset: flui_types::Offset,
+        size: flui_types::Size,
+        transform: &mut flui_types::Matrix4,
+    ) {
+        let _ = child;
+        if let Some(matrix) = <Self as RenderBox>::paint_transform(self, size) {
+            *transform *= matrix;
+        }
+        *transform *= flui_types::Matrix4::translation(child_offset.dx.0, child_offset.dy.0, 0.0);
+    }
+
     /// Returns the transform matrix for hit testing.
     ///
     /// Default: `None`. See
@@ -410,13 +435,13 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
         None
     }
 
-    /// The pointer-event handler this box contributes to its hit entry.
+    /// The data-only pointer target this box contributes to its hit entry.
     ///
     /// Default `None`; override (e.g. `RenderListener`) to receive pointer
     /// events that land on this box. The blanket `RenderObject<BoxProtocol>`
     /// impl forwards to this — concrete types override here, not on
-    /// `RenderObject`. See [`RenderObject::pointer_event_handler`].
-    fn pointer_event_handler(&self) -> Option<crate::hit_testing::PointerEventHandler> {
+    /// `RenderObject`. See [`RenderObject::pointer_target`].
+    fn pointer_target(&self) -> Option<crate::hit_testing::PointerTarget> {
         None
     }
 
@@ -513,7 +538,7 @@ pub use flui_types::layout::TextBaseline;
 /// This blanket impl bridges the typed RenderBox API (with Arity/ParentData)
 /// and the protocol-specific `RenderObject<P>` trait needed for storage.
 ///
-/// # Architecture Note (D-block PR-A1b U19 / companion memo D5)
+/// # Architecture Note
 ///
 /// The `perform_layout_raw` body **is** the real bridge — it receives a
 /// protocol-erased `&mut dyn BoxLayoutCtxErased`, reconstructs a typed
@@ -524,9 +549,9 @@ pub use flui_types::layout::TextBaseline;
 /// [`RenderBox::perform_layout`]. The completion size is read back from
 /// the inner context's geometry and returned to the pipeline.
 ///
-/// Pre-U19 this method returned `*self.size()` as a no-op placeholder
-/// (companion memo §D5: D-1 AE1 demonstrably returned `Size::ZERO` for
-/// fresh boxes). The real bridge is now live.
+/// This method used to return `*self.size()` as a no-op placeholder,
+/// which demonstrably returned `Size::ZERO` for fresh boxes. The real
+/// bridge is now live.
 ///
 /// `hit_test_raw` is still a placeholder — hit testing flows through
 /// `RenderBox::hit_test()` with `BoxHitTestContext` and is wired
@@ -544,7 +569,7 @@ where
         &mut self,
         ctx: &mut <BoxProtocol as crate::protocol::Protocol>::LayoutCtxErased<'_>,
     ) -> crate::error::RenderResult<crate::protocol::ProtocolGeometry<BoxProtocol>> {
-        // D-block PR-A1b U19 / memo D5 — the real bridge.
+        // The real bridge.
         //
         // The pipeline / `RenderEntry::layout_leaf_only` hands us a
         // `&mut dyn BoxLayoutCtxErased` (the GAT for `BoxProtocol`
@@ -708,12 +733,22 @@ where
         <T as RenderBox>::paint_transform(self, size)
     }
 
+    fn apply_paint_transform(
+        &self,
+        child: usize,
+        child_offset: flui_types::Offset,
+        size: flui_types::Size,
+        transform: &mut flui_types::Matrix4,
+    ) {
+        <T as RenderBox>::apply_paint_transform(self, child, child_offset, size, transform);
+    }
+
     fn hit_test_transform(&self, size: flui_types::Size) -> Option<flui_types::Matrix4> {
         <T as RenderBox>::hit_test_transform(self, size)
     }
 
-    fn pointer_event_handler(&self) -> Option<crate::hit_testing::PointerEventHandler> {
-        <T as RenderBox>::pointer_event_handler(self)
+    fn pointer_target(&self) -> Option<crate::hit_testing::PointerTarget> {
+        <T as RenderBox>::pointer_target(self)
     }
 
     fn mouse_cursor(&self) -> CursorIcon {

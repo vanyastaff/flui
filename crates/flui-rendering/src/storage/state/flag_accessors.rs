@@ -63,8 +63,8 @@ impl<P: Protocol> RenderState<P> {
     /// re-marking an already-dirty node is a no-op at the atomic level.
     ///
     /// Lock-free, `O(1)`. Used by [`PipelineOwner::mark_needs_layout`]
-    /// (added in D-block PR-A1 U15) to walk the ancestor chain marking
-    /// each node up to the nearest relayout boundary.
+    /// to walk the ancestor chain marking each node up to the nearest
+    /// relayout boundary.
     ///
     /// [`PipelineOwner::mark_needs_layout`]: crate::pipeline::PipelineOwner::mark_needs_layout
     ///
@@ -202,7 +202,7 @@ impl<P: Protocol> RenderState<P> {
     /// this as `_wasRepaintBoundary` on the render object; in FLUI it
     /// lives on `RenderState` so the paint phase flips a single atomic
     /// bit rather than acquiring a write lock on the trait object). See
-    /// `docs/PORT.md` Refusal trigger 1 and the U2 exemplar refactor.
+    /// `docs/PORT.md` Refusal trigger 1.
     ///
     /// Flutter equivalent: `_wasRepaintBoundary` (field read).
     #[inline]

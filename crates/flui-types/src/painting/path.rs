@@ -325,6 +325,27 @@ impl Path {
 
     /// Adds an arc on the oval inscribed in `rect`, starting at `start_angle`
     /// and sweeping by `sweep_angle` (both in radians).
+    ///
+    /// # Divergence from Flutter's `Path.addArc`
+    ///
+    /// Flutter's `Path.addArc` always starts a **new** sub-path — it behaves
+    /// like `arcTo(rect, startAngle, sweepAngle, forceMoveTo: true)`,
+    /// regardless of what the path was doing before the call.
+    ///
+    /// FLUI's `add_arc` does not: when called while a sub-path is already
+    /// open (a preceding `move_to`/`line_to`/`add_arc` with no `close`), the
+    /// tessellator (`flui-engine`'s `wgpu::tessellator`) draws a line from
+    /// the current position to the arc's start and *continues* that
+    /// contour — chord-connected, not a new sub-path. This is deliberate:
+    /// [`Self::from_rrect`] builds a fully-rounded rectangle as one
+    /// continuous contour (edge, corner arc, edge, corner arc, …); starting
+    /// a fresh sub-path per corner arc would fragment the contour into four
+    /// open pieces, each rendering an unwanted diagonal fill-closure chord
+    /// across its corner.
+    ///
+    /// A caller that wants Flutter's "always a new sub-path" semantics must
+    /// call [`Self::move_to`] (to the arc's start point) immediately before
+    /// `add_arc`, or call `add_arc` as the first command on a fresh `Path`.
     #[inline]
     pub fn add_arc(&mut self, rect: Rect<Pixels>, start_angle: f32, sweep_angle: f32) {
         self.commands

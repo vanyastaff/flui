@@ -7,12 +7,12 @@
 /// generic multi-child widgets (`Flex`/`Row`/`Column`/`Stack`) hand off to this
 /// macro instead. It mirrors `impl_render_view!`'s body (a `RenderElement` over
 /// a `RenderBehavior`) under the standard multi-child bound
-/// `C: ViewSeq + Clone + Send + Sync + 'static`.
+/// `C: ViewSeq + Clone + 'static`.
 macro_rules! generic_render_view_element {
     ($ty:ident) => {
         impl<C> ::flui_view::View for $ty<C>
         where
-            C: ::flui_view::seq::ViewSeq + ::core::clone::Clone + Send + Sync + 'static,
+            C: ::flui_view::seq::ViewSeq + ::core::clone::Clone + 'static,
         {
             fn create_element(&self) -> ::flui_view::element::ElementKind {
                 ::flui_view::element::ElementKind::render_variable(self)

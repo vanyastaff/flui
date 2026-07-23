@@ -23,11 +23,13 @@
 
 mod configuration;
 mod render_view;
+mod scroll_position;
 mod viewport;
 mod viewport_offset;
 
 pub use configuration::ViewConfiguration;
 pub use render_view::{CompositeResult, RenderView, RenderViewAdapter};
+pub use scroll_position::{DimensionChangePolicy, ScrollPosition, ScrollPositionSnapshot};
 pub use viewport::{CacheExtentStyle, RenderAbstractViewport, RevealedOffset, SliverPaintOrder};
 pub use viewport_offset::{
     FixedViewportOffset, ScrollDirection, ScrollableViewportOffset, ViewportOffset,

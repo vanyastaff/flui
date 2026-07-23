@@ -446,12 +446,16 @@ TapGestureRecognizer::new(arena.clone())
 // Arena waits for double-tap timeout before awarding to tap
 ```
 
-## Thread Safety
+## Ownership and threading
 
-All recognizers are `Send + Sync`:
-- State protected by `parking_lot::Mutex`
-- Callbacks stored in `Arc<dyn Fn + Send + Sync>`
-- Arena uses `DashMap` for lock-free concurrent access
+Gesture recognizers are owner-runtime objects under ADR-0027:
+
+- user gesture callbacks are owner-local `Rc<dyn Fn>` payloads and may capture
+  `Rc<Cell<_>>` / other `!Send` UI state;
+- data-plane identifiers, pointer events, gesture settings, and arena routing
+  remain thread-safe where they cross runtime boundaries;
+- executable UI callbacks must not be moved into render storage or a generic
+  cross-thread executor.
 
 ## Testing
 

@@ -20,8 +20,16 @@ flui-macros = { workspace = true }
 flui-tree = { path = "../flui-tree", version = "0.2.0" }
 flui-types = { path = "../flui-types", version = "0.2.0" }
 flui-rendering = { path = "../flui-rendering", version = "0.2.0" }
+# Owner-routed interaction targets/dispatch handles (ADR-0027).
+flui-interaction = { path = "../flui-interaction", version = "0.2.0" }
 # Concrete render-object catalog (moved out of flui-rendering per ADR-0008).
 flui-objects = { path = "../flui-objects", version = "0.2.0" }
+# The frame-driven async task driver. A `ViewState` reaches its
+# binding's driver through `BuildContext::async_driver()`; the type lives here.
+# No cycle: flui-rendering already depends on flui-scheduler.
+flui-scheduler = { path = "../flui-scheduler", version = "0.2.0" }
+# The `Stream` trait `StreamBuilder` polls. Trait-only.
+futures-core = { workspace = true }
 
 # Core dependencies
 parking_lot.workspace = true
@@ -33,7 +41,7 @@ tracing.workspace = true
 downcast-rs = "2.0"
 dyn-clone = "1.0"
 
-# Plan §U14: `ReconcileEventCollector` (gated to `test-utils` feature
+# `ReconcileEventCollector` (gated to `test-utils` feature
 # or `cfg(test)`) needs `tracing_subscriber::Layer` and the `registry`
 # extension trait. Optional + gated so production builds don't pull
 # it in.
@@ -41,25 +49,29 @@ tracing-subscriber = { workspace = true, optional = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
+# Enable flui-rendering's `testing` feature for unit tests so the
+# layout-builder tests can read committed geometry back off the pipeline
+# (`testing::box_geometry`). Dev-only; stays out of release builds.
+flui-rendering = { path = "../flui-rendering", version = "0.2.0", features = ["testing"] }
 # Same crate; dev-deps must redeclare so unit tests + integration
 # tests under `#[cfg(test)]` (without the `test-utils` feature flag
 # enabled at the integration boundary) still see it. Cargo merges
 # both declarations; no duplication in the lockfile.
 tracing-subscriber = { workspace = true }
-# Plan §U17/§U19 follow-up: serialize tests that touch the process-
-# wide GlobalKey REGISTRY singleton installed via
-# `test_only_set_global_key_registry`. Without `#[serial]` gating,
-# parallel cargo test runs race the install → tests resolve through
-# each other's trees and fail non-deterministically.
+static_assertions = { workspace = true }
+# Serialize legacy fixtures that install the
+# thread-local fallback GlobalKey registry via `test_only_set_global_key_registry`.
+# The adapter is isolated from the production realm-activation stack, but the
+# fixture tests still share assumptions about explicit install/clear pairing.
 serial_test = "3"
-# Phase 3 §U23 (`derive_bon_stack` US4 AS2): exercises the
+# Exercises the
 # `#[derive(StatelessView, ::bon::Builder)]` attribute stack
 # (the catalog's most-common future authoring pattern). The
 # workspace already pins `bon = "3.8"`; we pull it in only at the
 # `flui-view` dev boundary so non-test builds do not link it.
 bon = { workspace = true }
-# Phase 3 §U34 (SC-014 column! 17-children compile-fail): trybuild
-# drives the `tests/ui/` compile-fail corpus. Declared directly
+# trybuild drives the `tests/ui/` compile-fail corpus (the column!
+# 17-children compile-fail case). Declared directly
 # rather than via workspace deps — the workspace's `Cargo.toml`
 # does not pin trybuild yet, and this is currently the only
 # consumer. Pattern mirrors `crates/flui-types/Cargo.toml:35`.
@@ -79,12 +91,15 @@ path = "tests/error_view_recovery.rs"
 [features]
 default = []
 # Enable test utilities like MockBuildContext + the
-# `ReconcileEventCollector` Layer fixture (plan §U14). Downstream
+# `ReconcileEventCollector` Layer fixture. Downstream
 # test crates flip this to install the collector. Pulls in the
 # optional `tracing-subscriber` dep at build time.
 test-utils = ["dep:tracing-subscriber"]
+# Narrow cross-crate seam for framework composition roots (`flui-app` and the
+# widget hot-reload pipeline). Not an application-facing API contract.
+runtime-internals = []
 
-# The `legacy-downcast` feature flag was retired in Phase 3 §U27
+# The `legacy-downcast` feature flag was retired
 # (FR-021): the pre-FR-021 inline `downcast_ref::<V>()` body inside
 # `ElementCore::update_view` is gone — `dispatch_view_update`
 # (TypeId-keyed `Box::downcast::<V>`) is the only path now.
@@ -96,15 +111,15 @@ test-utils = ["dep:tracing-subscriber"]
 ignored-paths = ["tests/ui/*.rs"]
 
 [[bench]]
-name = "s1_key_storage"
+name = "key_storage_shape"
 harness = false
 
 [[bench]]
-name = "s2_static_path"
+name = "static_path_algorithm"
 harness = false
 
 [[bench]]
-name = "sc012_global_key_reparent"
+name = "global_key_reparent_latency"
 harness = false
 
 [lints]

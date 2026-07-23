@@ -36,7 +36,10 @@ pub trait Curve {
 
     /// Returns a new curve that is the flipped version of this one.
     ///
-    /// Flipping swaps the output: `transform(t)` becomes `1.0 - transform(t)`.
+    /// Flipping rotates the curve 180°: `transform(t)` becomes
+    /// `1.0 - transform(1.0 - t)`, turning an ease-in into an ease-out. A curve
+    /// symmetric about the centre (like [`Linear`]) is its own flip. Flutter's
+    /// `Curve.flipped` / `FlippedCurve` (`curves.dart:1247`).
     #[must_use]
     fn flipped(self) -> FlippedCurve<Self>
     where
@@ -889,11 +892,14 @@ impl Curve2D for CatmullRomSpline {
 // Curve Modifiers
 // ============================================================================
 
-/// A curve that is the flipped version of another curve.
+/// A curve that is the flipped version of another curve: the 180° rotation
+/// `1.0 - curve.transform(1.0 - t)`, which turns an ease-in into an ease-out
+/// while still mapping `0.0 → 0.0` and `1.0 → 1.0`.
 ///
-/// Flipping swaps the output: `transform(t)` becomes `1.0 - transform(t)`.
-///
-/// Similar to Flutter's `FlippedCurve`.
+/// Flutter's `FlippedCurve` (`curves.dart:1239-1253`). Historical note: this
+/// type once computed the vertical mirror `1.0 - curve.transform(t)` under the
+/// same name — a divergence that inverted every consumer expecting Flutter's
+/// rotation (a `CurvedAnimation` reverse-curve default, most visibly).
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct FlippedCurve<C: Curve> {
@@ -913,7 +919,7 @@ impl<C: Curve> FlippedCurve<C> {
 impl<C: Curve> Curve for FlippedCurve<C> {
     #[inline]
     fn transform(&self, t: f32) -> f32 {
-        1.0 - self.curve.transform(t)
+        1.0 - self.curve.transform(1.0 - t)
     }
 }
 
@@ -1116,6 +1122,18 @@ impl Curves {
 /// `Curve` does not require `Debug`; use a concrete named type when the type
 /// name is load-bearing.
 ///
+/// `PartialEq`/`Eq` are reference equality (`Arc::ptr_eq`) — `Curve` carries
+/// no structural-equality bound, so this is the only comparison available for
+/// an erased `dyn Curve`. This deliberately mirrors Dart's unoverridden
+/// `Curve.==` (identity), which is what lets Flutter's own implicit-animation
+/// staleness check (`ImplicitlyAnimatedWidgetState.didUpdateWidget`,
+/// `implicit_animations.dart` `didUpdateWidget` (curve swap via `_createCurve`) at tag `3.44.0`) compare a repeated
+/// `Curves.easeInOut` reference as unchanged: the Dart compiler canonicalizes
+/// repeated `const` expressions to one object. Two `ArcCurve`s built from
+/// separate `ArcCurve::new(...)` calls compare unequal even when they wrap the
+/// same curve *value* — callers who want a stable comparison across rebuilds
+/// must reuse the same `ArcCurve` handle (clone it), not reconstruct it.
+///
 /// # Examples
 ///
 /// ```
@@ -1129,6 +1147,15 @@ impl Curves {
 /// [`CurvedAnimation`]: crate::CurvedAnimation
 #[derive(Clone)]
 pub struct ArcCurve(Arc<dyn Curve + Send + Sync>);
+
+impl PartialEq for ArcCurve {
+    /// Reference equality (`Arc::ptr_eq`) — see the type doc's *why*.
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for ArcCurve {}
 
 impl ArcCurve {
     /// Wrap `curve` in a reference-counted erased handle.
@@ -1294,10 +1321,24 @@ mod tests {
 
     #[test]
     fn test_flipped_curve() {
-        let curve = FlippedCurve::new(Linear);
-        assert_eq!(curve.transform(0.0), 1.0);
-        assert_eq!(curve.transform(0.5), 0.5);
-        assert_eq!(curve.transform(1.0), 0.0);
+        // Flutter's `FlippedCurve` is the 180° rotation `1 - curve(1 - t)`
+        // (`curves.dart:1247`): endpoints are preserved and Linear is its own
+        // flip. The vertical mirror `1 - curve(t)` — which this type once
+        // computed — would read 1.0 at t = 0.
+        let linear = FlippedCurve::new(Linear);
+        assert_eq!(linear.transform(0.0), 0.0);
+        assert_eq!(linear.transform(0.5), 0.5);
+        assert_eq!(linear.transform(1.0), 1.0);
+
+        // An asymmetric curve pins the rotation: flipping fastOutSlowIn reads
+        // `1 - fos(1 - t)`, not `1 - fos(t)`.
+        let eased = FlippedCurve::new(Curves::FastOutSlowIn);
+        let expected = 1.0 - Curves::FastOutSlowIn.transform(1.0 - 0.3);
+        assert!((eased.transform(0.3) - expected).abs() < 1e-6);
+        assert!(
+            (eased.transform(0.3) - (1.0 - Curves::FastOutSlowIn.transform(0.3))).abs() > 0.1,
+            "the vertical mirror is a different curve"
+        );
     }
 
     #[test]

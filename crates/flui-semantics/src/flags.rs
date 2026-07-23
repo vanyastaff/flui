@@ -97,10 +97,10 @@ pub enum SemanticsFlag {
 
     /// Indicates that this node has expandable state — paired with
     /// [`Self::IsExpanded`] to express "this is expandable, and it is
-    /// currently expanded / collapsed." Added in U17 alongside the
-    /// removal of the `Expand` / `Collapse` `SemanticsAction` variants
-    /// to match Flutter's wire format: collapse-state lives on the
-    /// flag word, not as a discrete action.
+    /// currently expanded / collapsed." Added alongside the removal of
+    /// the `Expand` / `Collapse` `SemanticsAction` variants to match
+    /// Flutter's wire format: collapse-state lives on the flag word,
+    /// not as a discrete action.
     HasExpandedState = 1 << 27,
 }
 

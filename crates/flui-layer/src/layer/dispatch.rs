@@ -1,6 +1,6 @@
 //! Generated `is_*` / `as_*` / `as_*_mut` accessors for the [`Layer`] enum.
 //!
-//! Mythos Step 4 collapsed ~600 LOC of hand-written boilerplate (19 variants
+//! This module collapsed ~600 LOC of hand-written boilerplate (19 variants
 //! × 3 methods = 57 nearly-identical methods) into a single
 //! `gen_layer_accessors!` macro invocation defined here.
 //!

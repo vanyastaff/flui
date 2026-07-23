@@ -11,6 +11,8 @@
 //! the latter would silently reset the in-flight retarget state on every
 //! unrelated rebuild.
 
+use std::cell::Cell;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -31,12 +33,14 @@ struct SizeProbe {
     vsync: Vsync,
     side: Arc<Mutex<f32>>,
     alignment: Arc<Mutex<Alignment>>,
+    on_end: Option<Rc<dyn Fn()>>,
 }
 
 struct SizeProbeState {
     vsync: Vsync,
     side: Arc<Mutex<f32>>,
     alignment: Arc<Mutex<Alignment>>,
+    on_end: Option<Rc<dyn Fn()>>,
 }
 
 impl StatefulView for SizeProbe {
@@ -47,6 +51,7 @@ impl StatefulView for SizeProbe {
             vsync: self.vsync.clone(),
             side: Arc::clone(&self.side),
             alignment: Arc::clone(&self.alignment),
+            on_end: self.on_end.clone(),
         }
     }
 }
@@ -55,12 +60,13 @@ impl ViewState<SizeProbe> for SizeProbeState {
     fn build(&self, _view: &SizeProbe, _ctx: &dyn BuildContext) -> impl IntoView {
         let side = *self.side.lock();
         let alignment = *self.alignment.lock();
-        VsyncScope::new(
-            self.vsync.clone(),
-            AnimatedSize::new(RUN)
-                .alignment(alignment)
-                .child(SizedBox::new(side, side)),
-        )
+        let mut animated = AnimatedSize::new(RUN)
+            .alignment(alignment)
+            .child(SizedBox::new(side, side));
+        if let Some(on_end) = self.on_end.clone() {
+            animated = animated.on_end(move || on_end());
+        }
+        VsyncScope::new(self.vsync.clone(), animated)
     }
 }
 
@@ -76,6 +82,7 @@ fn animated_size_first_frame_snaps_to_child_size_with_no_motion() {
         vsync: vsync.clone(),
         side: Arc::clone(&side),
         alignment: Arc::new(Mutex::new(Alignment::CENTER)),
+        on_end: None,
     };
     let laid = lay_out_animated(probe, loose(200.0), vsync);
 
@@ -96,6 +103,7 @@ fn animated_size_interpolates_to_a_new_child_size_over_frames() {
         vsync: vsync.clone(),
         side: Arc::clone(&side),
         alignment: Arc::new(Mutex::new(Alignment::CENTER)),
+        on_end: None,
     };
     let mut laid = lay_out_animated(probe, loose(200.0), vsync);
 
@@ -150,6 +158,7 @@ fn animated_size_unrelated_rebuild_does_not_reset_in_flight_animation() {
         vsync: vsync.clone(),
         side: Arc::clone(&side),
         alignment: Arc::clone(&alignment),
+        on_end: None,
     };
     let mut laid = lay_out_animated(probe, loose(200.0), vsync);
 
@@ -204,5 +213,37 @@ fn animated_size_unrelated_rebuild_does_not_reset_in_flight_animation() {
         "the animation must still converge to the target after the \
          unrelated rebuild, got {}",
         width(&laid),
+    );
+}
+
+#[test]
+fn animated_size_on_end_accepts_owner_local_rc_state() {
+    let vsync = Vsync::new();
+    let side = Arc::new(Mutex::new(20.0));
+    let calls = Rc::new(Cell::new(0));
+    let calls_for_callback = Rc::clone(&calls);
+    let probe = SizeProbe {
+        vsync: vsync.clone(),
+        side: Arc::clone(&side),
+        alignment: Arc::new(Mutex::new(Alignment::CENTER)),
+        on_end: Some(Rc::new(move || {
+            calls_for_callback.set(calls_for_callback.get() + 1);
+        })),
+    };
+    let mut laid = lay_out_animated(probe, loose(200.0), vsync);
+
+    *side.lock() = 100.0;
+    laid.pump();
+    laid.pump_for(FRAME);
+    assert_eq!(calls.get(), 0, "the run has not completed yet");
+
+    for _ in 0..5 {
+        laid.pump_for(FRAME);
+    }
+
+    assert_eq!(
+        calls.get(),
+        1,
+        "on_end fired from the owner plane and captured Rc<Cell<_>>"
     );
 }

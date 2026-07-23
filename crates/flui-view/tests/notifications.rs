@@ -1,6 +1,5 @@
 //! Acceptance + edge-case tests for `BuildContext::dispatch_notification`
-//! and the object-safe `ElementBase::on_notification` handler protocol
-//! (plan U13 / R10 / AE6).
+//! and the object-safe `ElementBase::on_notification` handler protocol.
 //!
 //! Flutter parity: `notification_listener.dart:67` (`Notification.dispatch`)
 //! and `notification_listener.dart:127` (`_NotificationElement.onNotification`)
@@ -8,15 +7,20 @@
 //! `onNotification(notification)` callback, and stops bubbling when a
 //! listener returns `true`.
 //!
-//! Plan §D3: single `dyn` boundary at dispatch. `Notification` is a marker
+//! Single `dyn` boundary at dispatch. `Notification` is a marker
 //! trait; `ElementBase::on_notification(type_id, &dyn Any) -> bool` is the
 //! object-safe handler that lives on every Element. The typed
 //! `NotifiableElement<N>` extension wrapper is sugar — internally the
 //! dispatcher only walks via the object-safe shape.
 //!
-//! Tree shape under test (AE6): Root[NotificationListener] →
+//! Tree shape under test: Root[NotificationListener] →
 //! NotificationListener[middle] → DummyChild. From the child the test
 //! dispatches via `ctx.dispatch_notification(ScrollNotification {..})`.
+
+// ADR-0027: ElementBuildContext's current test/prod seam still takes
+// Arc<RwLock<ElementTree/BuildOwner>>. The owner graph is !Send; do not restore
+// Send + Sync to satisfy clippy. Future UiRealm/Rc migration should remove this.
+#![allow(clippy::arc_with_non_send_sync)]
 
 use std::{
     marker::PhantomData,
@@ -54,7 +58,7 @@ impl Notification for FooNotification {}
 // Test fixtures
 // ============================================================================
 
-/// Leaf StatelessView used as the dispatching descendant in the AE6 shape.
+/// Leaf StatelessView used as the dispatching descendant in the test tree shape.
 #[derive(Clone)]
 struct DummyChild;
 
@@ -114,7 +118,7 @@ impl<N: Notification> View for NotificationListener<N> {
 
 /// Hand-rolled `ElementBase` impl that overrides `on_notification` to
 /// match the marker-trait dispatch protocol. Used only by integration
-/// tests — production NotificationListener wiring is out of scope for U13.
+/// tests — production NotificationListener wiring is out of scope here.
 ///
 /// The element keeps just enough state to participate in the ancestor
 /// walk (depth + lifecycle) and to expose its `view_type_id`. Building
@@ -208,7 +212,7 @@ fn create_tree_and_owner() -> (Arc<RwLock<ElementTree>>, Arc<RwLock<BuildOwner>>
 }
 
 // ============================================================================
-// AE6: happy path — listener fires and bubble stops on `true` return
+// Happy path — listener fires and bubble stops on `true` return
 // ============================================================================
 
 #[test]

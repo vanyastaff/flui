@@ -1,7 +1,7 @@
 //! Text measurement helpers: `measure_text`, `measure_inline_span`,
 //! `style_to_attrs`.
 //!
-//! Mythos chain U6 extracted these from the 1,243-LOC
+//! Extracted from the 1,243-LOC
 //! `text_layout.rs` god module. Measurement is shape-then-compute on
 //! a transient cosmic-text `Buffer`; reuses the global `FONT_SYSTEM`
 //! singleton from [`super::layout`].

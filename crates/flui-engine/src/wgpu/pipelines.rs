@@ -24,8 +24,8 @@
 //!
 //! ## Disambiguation from the deleted `pipelines.rs`
 //!
-//! A previous `pipelines.rs` (deleted in cycle 4, E-6 — see `mod.rs` comment)
-//! contained a colliding `PipelineCache` + `PipelineBuilder` pair with zero
+//! A previous `pipelines.rs` (deleted — see `mod.rs` comment) contained a
+//! colliding `PipelineCache` + `PipelineBuilder` pair with zero
 //! non-self consumers. **This file is not a resurrection of that module.** It
 //! introduces a distinct type (`PipelineSet`) that *composes* the live
 //! [`PipelineCache`] from `pipeline.rs` (singular) and adds the nine named

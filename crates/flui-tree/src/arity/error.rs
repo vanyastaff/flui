@@ -2,10 +2,10 @@
 //!
 //! This module provides the error type for arity constraint violations.
 //!
-//! Cycle 3 T-7: simplified to use `&'static str` arity descriptions
-//! instead of the `RuntimeArity` enum, which was part of the zombie
-//! storage machinery the cycle deleted. The error is now self-
-//! describing without requiring the consumer to import a runtime
+//! This was simplified to use `&'static str` arity descriptions
+//! instead of the `RuntimeArity` enum, which was part of the storage
+//! machinery removed as unused surface. The error is now
+//! self-describing without requiring the consumer to import a runtime
 //! arity wrapper.
 
 use thiserror::Error;

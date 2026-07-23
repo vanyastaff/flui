@@ -1,19 +1,24 @@
-//! SC-003 GlobalKey reparenting test — locks the §U17 wiring.
+//! GlobalKey reparenting test — locks the inactive-queue
+//! reactivation wiring.
 //!
-//! The §U17 commit (inactive-queue reactivation path) emits a
+//! The inactive-queue reactivation path emits a
 //! `ReconcileEvent::Reparent` with `from_parent: None` when an
 //! element registered under a `GlobalKey` is pulled back from the
 //! `BuildOwner::inactive_elements` queue and re-attached at a new
-//! (parent, slot). This file is the SC-003 end-to-end lock for that
+//! (parent, slot). This file is the end-to-end lock for that
 //! path: it observes the event stream via the
 //! `ReconcileEventCollector` and asserts the disposition
 //! distribution matches the contract.
 //!
-//! Cross-parent same-frame ACTIVE reparent (ADV-1 case 2) is locked here too:
+//! Cross-parent same-frame ACTIVE reparent (case 2 below) is locked here too:
 //! the tree forgets the active element from its old parent, moves it under the
 //! new parent, and emits `from_parent: Some(old_parent)`.
 
 #![cfg(feature = "test-utils")]
+// ADR-0027: ElementBuildContext's current test/prod seam still takes
+// Arc<RwLock<ElementTree/BuildOwner>>. The owner graph is !Send; do not restore
+// Send + Sync to satisfy clippy. Future UiRealm/Rc migration should remove this.
+#![allow(clippy::arc_with_non_send_sync)]
 
 use std::sync::Arc;
 
@@ -139,10 +144,10 @@ fn direct_children_in_slot_order(
 }
 
 // ============================================================================
-// SC-003 tests
+// GlobalKey reparent tests
 // ============================================================================
 
-/// Covers SC-003: when a `GlobalKey`-tagged element migrates through
+/// When a `GlobalKey`-tagged element migrates through
 /// the inactive-queue reactivation path, the collector observes EXACTLY
 /// ONE `Reparent` event with the contract-mandated field shape
 /// (`from_parent: None`, `parent: new_parent`, `child_key:
@@ -150,7 +155,7 @@ fn direct_children_in_slot_order(
 /// migrated subtree.
 #[test]
 #[serial_test::serial(global_key_registry)]
-fn covers_sc003_reparent_emits_single_reparent_event() {
+fn reparent_emits_single_reparent_event() {
     let (tree, owner) = fresh_tree();
 
     // Two parents so the migration has a non-trivial destination.
@@ -245,7 +250,7 @@ fn covers_sc003_reparent_emits_single_reparent_event() {
     let reparent = reparent_events[0];
 
     // Contract: from_parent is None for the inactive-queue path
-    // (ADV-1 case 1). Cross-parent ACTIVE reparent (case 2) is tested
+    // (case 1). Cross-parent ACTIVE reparent (case 2) is tested
     // separately below and emits from_parent: Some(...).
     assert!(
         reparent.from_parent.is_none(),
@@ -287,10 +292,9 @@ fn covers_sc003_reparent_emits_single_reparent_event() {
         "reparented subtree must not emit Unmount; saw {unmount_count}",
     );
 
-    // State preservation sanity (the SC-003 contract proper — proven
-    // by the existing `global_key_state_migrates_to_new_parent_slot`
-    // test; here we re-check the migrated ElementId is the same as
-    // the original).
+    // State preservation sanity (proven by the existing
+    // `global_key_state_migrates_to_new_parent_slot` test; here we
+    // re-check the migrated ElementId is the same as the original).
     assert_eq!(
         migrated_id, original_id,
         "ElementId must survive migration through the inactive queue",
@@ -299,13 +303,13 @@ fn covers_sc003_reparent_emits_single_reparent_event() {
     flui_view::test_only_clear_global_key_registry();
 }
 
-/// Covers SC-003 (state-preservation half): state mutated BEFORE the
+/// State-preservation half: state mutated BEFORE the
 /// reparent survives the migration. Pairs with the event-shape
 /// assertions above — together they prove the wiring is functional
 /// AND observable.
 #[test]
 #[serial_test::serial(global_key_registry)]
-fn covers_sc003_state_preserved_across_reparent() {
+fn state_preserved_across_reparent() {
     let (tree, owner) = fresh_tree();
 
     let parent_a = tree
@@ -375,13 +379,13 @@ fn covers_sc003_state_preserved_across_reparent() {
     flui_view::test_only_clear_global_key_registry();
 }
 
-/// Covers SC-003 / ADV-1 case 2: a new parent can claim a GlobalKey element
+/// Case 2: a new parent can claim a GlobalKey element
 /// that is still ACTIVE under another parent in the same frame. The old parent
 /// forgets the child, the element id/state survive, and the trace event records
 /// `from_parent: Some(old_parent)`.
 #[test]
 #[serial_test::serial(global_key_registry)]
-fn covers_sc003_active_to_active_reparent_emits_from_parent_and_preserves_state() {
+fn active_to_active_reparent_emits_from_parent_and_preserves_state() {
     let (tree, owner) = fresh_tree();
 
     let parent_a = tree

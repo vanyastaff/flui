@@ -16,17 +16,24 @@ use std::time::{Duration, Instant};
 use flui_animation::{AnimationController, Vsync};
 use flui_binding::HeadlessBinding;
 use flui_foundation::{ElementId, RenderId};
+use flui_geometry::Matrix4;
 use flui_interaction::PointerId;
 use flui_interaction::events::{
     PointerEvent, PointerType, make_cancel_event_for_id, make_down_event_for_id,
     make_move_event_for_id, make_up_event_for_id,
 };
-use flui_objects::{RenderOpacity, RenderTransform};
+use flui_objects::{
+    RenderAnimatedOpacity, RenderClipOval, RenderClipPath, RenderClipRRect, RenderClipRect,
+    RenderFittedBox, RenderImage, RenderOpacity, RenderParagraph, RenderTransform,
+};
 use flui_rendering::constraints::{BoxConstraints, SliverGeometry};
 use flui_rendering::pipeline::PipelineOwner;
+use flui_rendering::storage::IntrinsicDimension;
 use flui_rendering::testing::inspect;
 use flui_types::geometry::px;
-use flui_types::{Offset, Size};
+use flui_types::painting::Clip;
+use flui_types::styling::BorderRadius;
+use flui_types::{Offset, Pixels, Rect, Size};
 use flui_view::{BuildOwner, ElementTree, View};
 use flui_widgets::GestureArenaScope;
 use parking_lot::RwLock;
@@ -59,19 +66,57 @@ pub fn tight(width: f32, height: f32) -> BoxConstraints {
 /// `constraints`. Panics on any pipeline error so a regression is loud.
 pub fn lay_out(root: impl View, constraints: BoxConstraints) -> LaidOut {
     let pipeline_owner = Arc::new(RwLock::new(PipelineOwner::new()));
+    lay_out_with_pipeline_owner_and_binding(
+        root,
+        constraints,
+        pipeline_owner,
+        HeadlessBinding::new(),
+    )
+}
+
+/// [`lay_out`] with a caller-provided pipeline owner, for probes that must retain
+/// the same owner before their lifecycle callback is mounted.
+pub fn lay_out_with_pipeline_owner(
+    root: impl View,
+    constraints: BoxConstraints,
+    pipeline_owner: Arc<RwLock<PipelineOwner>>,
+) -> LaidOut {
+    lay_out_with_pipeline_owner_and_binding(
+        root,
+        constraints,
+        pipeline_owner,
+        HeadlessBinding::new(),
+    )
+}
+
+fn lay_out_with_pipeline_owner_and_binding(
+    root: impl View,
+    constraints: BoxConstraints,
+    pipeline_owner: Arc<RwLock<PipelineOwner>>,
+    mut binding: HeadlessBinding,
+) -> LaidOut {
     let mut build_owner = BuildOwner::new();
     let mut tree = ElementTree::new();
 
-    let root_id = tree.mount_root_with_pipeline_owner(
-        &root,
-        Some(Arc::clone(&pipeline_owner)),
-        &mut build_owner.element_owner_mut(),
-    );
+    // The binding is created FIRST so its async driver can be installed on the
+    // `BuildOwner` before the mount `build_scope` below. `FutureBuilder` /
+    // `StreamBuilder` subscribe in `init_state`, which runs inside that pass — with
+    // no driver installed they would silently never poll.
+    binding.install_build_capabilities(&mut build_owner);
 
-    // Reconcile + mount the whole subtree (children's render objects attach to
-    // their parent render objects during this pass).
-    build_owner.schedule_build_for(root_id, 0);
-    build_owner.build_scope(&mut tree);
+    let root_id = binding.enter_owner_scope(|| {
+        let root_id = tree.mount_root_with_pipeline_owner(
+            &root,
+            Some(Arc::clone(&pipeline_owner)),
+            &mut build_owner.element_owner_mut(),
+        );
+
+        // Reconcile + mount the whole subtree (children's render objects attach to
+        // their parent render objects during this pass).
+        build_owner.schedule_build_for(root_id, 0);
+        build_owner.build_scope(&mut tree);
+        root_id
+    });
 
     // The render-tree root is the single render object with no render parent —
     // works whether the root widget is itself a `RenderView` (e.g. `Padding`)
@@ -99,19 +144,25 @@ pub fn lay_out(root: impl View, constraints: BoxConstraints) -> LaidOut {
         guard.set_root_id(Some(root_render_id));
         // Setting fresh root constraints marks the root dirty for layout.
         guard.set_root_constraints(Some(constraints));
-        // Mirror the production frame path: swap the owner out (leaving a
-        // Default placeholder under the still-shared Arc), run all phases by
-        // value, then restore.
-        let owner = std::mem::take(&mut *guard);
-        let (owner, result) = owner.run_frame();
-        result.expect("headless frame should succeed");
-        *guard = owner;
+    }
+
+    {
+        // Mirror the production frame path exactly: `HeadlessBinding::pump_frame`
+        // and `AppBinding::draw_frame` both run the ADR-0017 layout<->build
+        // fixpoint, not a bare `PipelineOwner::run_frame`. Bootstrapping with
+        // `run_frame` here would leave a `LayoutBuilder`'s child unbuilt on the
+        // very frame these tests assert about.
+        binding.enter_owner_scope(|| {
+            build_owner
+                .run_frame_with_layout_builders(&mut tree, &pipeline_owner)
+                .expect("headless frame should succeed");
+        });
     }
 
     // Bootstrap done (mounted, rooted, first frame run): hand the three owners to
-    // a tree-bound binding, keeping our own clone of the shared pipeline-owner Arc
+    // the tree-bound binding, keeping our own clone of the shared pipeline-owner Arc
     // for geometry reads. `pump`/`tick`/`pump_for` route through the binding.
-    let binding = HeadlessBinding::with_tree(build_owner, tree, Arc::clone(&pipeline_owner));
+    binding.bind_tree(build_owner, tree, Arc::clone(&pipeline_owner));
 
     LaidOut {
         binding,
@@ -136,6 +187,10 @@ pub fn lay_out_animated(root: impl View, constraints: BoxConstraints, vsync: Vsy
 }
 
 impl LaidOut {
+    /// Run an owner-side action under the headless binding's local runtime scope.
+    pub fn enter_owner_scope<R>(&self, callback: impl FnOnce() -> R) -> R {
+        self.binding.enter_owner_scope(callback)
+    }
     /// The render id of the root widget's render object.
     pub fn root(&self) -> RenderId {
         self.root_render_id
@@ -195,6 +250,34 @@ impl LaidOut {
             .expect("render node should have an offset after layout")
     }
 
+    /// The screen-space (root-local) offset of `id`, by summing paint offsets
+    /// up the render-tree ancestry.
+    ///
+    /// Use this instead of [`offset`](Self::offset) when the node whose own
+    /// parent-relative offset carries a change (e.g. scroll translation) is
+    /// not `id` itself but some ancestor of it (a sliver adapter, say) — a
+    /// bare `offset(id)` would silently read 0 in that case. Only valid when
+    /// every node between the root and `id` translates (no scale/rotation),
+    /// which holds for the box-protocol trees these tests build.
+    pub fn absolute_offset(&self, id: RenderId) -> Offset {
+        let owner = self.pipeline_owner.read();
+        let render_tree = owner.render_tree();
+        let mut x = 0.0f32;
+        let mut y = 0.0f32;
+        let mut current = id;
+        loop {
+            if let Some(node_offset) = inspect::render_offset(&owner, current) {
+                x += node_offset.dx.get();
+                y += node_offset.dy.get();
+            }
+            match render_tree.parent(current) {
+                Some(parent) => current = parent,
+                None => break,
+            }
+        }
+        offset(x, y)
+    }
+
     /// Drive one more frame after external state has changed — the headless
     /// equivalent of what `setState` schedules: mark the root dirty, then pump a
     /// zero-time frame (rebuild the subtree + re-run layout/paint). Used by the
@@ -239,16 +322,132 @@ impl LaidOut {
         self.binding.pump_frame(dt);
     }
 
+    /// The binding's **own** scheduler — never `Scheduler::instance()`.
+    ///
+    /// `pump_for` drives this one; a post-frame callback parked anywhere else is
+    /// never drained.
+    pub fn binding_scheduler(&self) -> flui_scheduler::Scheduler {
+        self.binding.scheduler().clone()
+    }
+
+    /// The binding's gesture arena — needed to re-wrap a replacement root in
+    /// a matching `GestureArenaScope` when a test swaps the root via
+    /// `pump_widget` and must keep the *scope's own element* stable (a root
+    /// element type change does not run the normal unmount/dispose path;
+    /// see the arena-scoped mid-drag unmount tests for why).
+    pub fn arena(&self) -> flui_interaction::arena::GestureArena {
+        self.binding.arena().clone()
+    }
+
+    /// The shared pipeline owner, so a post-frame callback can read committed
+    /// geometry from inside the frame.
+    pub fn pipeline_owner(&self) -> Arc<RwLock<PipelineOwner>> {
+        Arc::clone(&self.pipeline_owner)
+    }
+
     /// The committed opacity of a [`RenderOpacity`] node (e.g. the one a
-    /// `FadeTransition` builds). Panics if `id` is not a `RenderOpacity`.
+    /// `FadeTransition` builds) or a [`RenderAnimatedOpacity`] node (the one
+    /// `AnimatedOpacity` builds). The latter reads the composed animation's
+    /// raw `f32` value (`RenderAnimatedOpacity::opacity_value`), not the
+    /// quantized `u8` alpha cache — the `1/255` rounding would blow the
+    /// implicit-animation tests' `< 1e-4` tolerance. Panics if `id` is
+    /// neither.
     pub fn opacity(&self, id: RenderId) -> f32 {
+        let mut owner = self.pipeline_owner.write();
+        let node = owner
+            .render_tree_mut()
+            .get_mut(id)
+            .expect("render node should exist");
+        if let Some(render) = node.downcast_render_object_mut::<RenderOpacity>() {
+            return render.opacity();
+        }
+        if let Some(render) = node.downcast_render_object_mut::<RenderAnimatedOpacity>() {
+            return render.opacity_value();
+        }
+        panic!("render node should be a RenderOpacity or RenderAnimatedOpacity");
+    }
+
+    /// The [`RenderOpacity`] node's `paint_alpha()` — `None` when the node
+    /// paints via a fast-path passthrough (opacity `1.0`, no `OpacityLayer`
+    /// needed) or when it is fully transparent without
+    /// `always_needs_compositing` (opacity `0.0`, subtree skipped, also no
+    /// layer needed); `Some(alpha)` otherwise. This is the exact quantity the
+    /// pipeline reads through `&dyn RenderObject<BoxProtocol>` to decide
+    /// whether to allocate a compositing layer. Panics if `id` is not a
+    /// `RenderOpacity`.
+    pub fn opacity_paint_alpha(&self, id: RenderId) -> Option<u8> {
+        use flui_rendering::traits::RenderBox;
+
+        let mut owner = self.pipeline_owner.write();
+        let node = owner
+            .render_tree_mut()
+            .get_mut(id)
+            .expect("render node should exist");
+        let render = node
+            .downcast_render_object_mut::<RenderOpacity>()
+            .expect("render node should be a RenderOpacity");
+        render.paint_alpha()
+    }
+
+    /// Whether the [`RenderOpacity`] node at `id` suppresses painting its
+    /// child entirely — Flutter's `RenderOpacity.paint`: `if (_alpha == 0)
+    /// return;`. Panics if `id` is not a `RenderOpacity`.
+    pub fn opacity_skip_paint(&self, id: RenderId) -> bool {
+        use flui_rendering::traits::RenderBox;
+
+        let mut owner = self.pipeline_owner.write();
+        let node = owner
+            .render_tree_mut()
+            .get_mut(id)
+            .expect("render node should exist");
+        let render = node
+            .downcast_render_object_mut::<RenderOpacity>()
+            .expect("render node should be a RenderOpacity");
+        render.skip_paint()
+    }
+
+    /// The [`Clip`] behavior of a clip-family render node (`RenderClipRect`,
+    /// `RenderClipRRect`, `RenderClipOval`, `RenderClipPath`) or a
+    /// [`RenderFittedBox`] (which stores `clip_behavior` today even though
+    /// active clip-painting is still pending — see its module doc). Panics
+    /// if `id` is none of the five.
+    pub fn clip_behavior(&self, id: RenderId) -> Clip {
+        let mut owner = self.pipeline_owner.write();
+        let node = owner
+            .render_tree_mut()
+            .get_mut(id)
+            .expect("render node should exist");
+        if let Some(render) = node.downcast_render_object_mut::<RenderClipRect>() {
+            return render.clip_behavior();
+        }
+        if let Some(render) = node.downcast_render_object_mut::<RenderClipRRect>() {
+            return render.clip_behavior();
+        }
+        if let Some(render) = node.downcast_render_object_mut::<RenderClipOval>() {
+            return render.clip_behavior();
+        }
+        if let Some(render) = node.downcast_render_object_mut::<RenderClipPath>() {
+            return render.clip_behavior();
+        }
+        if let Some(render) = node.downcast_render_object_mut::<RenderFittedBox>() {
+            return render.clip_behavior();
+        }
+        panic!(
+            "render node should be a clip-family render object (Rect/RRect/Oval/Path) or a RenderFittedBox"
+        );
+    }
+
+    /// The installed [`BorderRadius`] of a `RenderClipRRect` node. Panics if
+    /// `id` is not a `RenderClipRRect`, or it carries no border radius.
+    pub fn clip_rrect_border_radius(&self, id: RenderId) -> BorderRadius {
         let mut owner = self.pipeline_owner.write();
         owner
             .render_tree_mut()
             .get_mut(id)
-            .and_then(|node| node.downcast_render_object_mut::<RenderOpacity>())
-            .map(|render| render.opacity())
-            .expect("render node should be a RenderOpacity")
+            .and_then(|node| node.downcast_render_object_mut::<RenderClipRRect>())
+            .expect("render node should be a RenderClipRRect")
+            .border_radius()
+            .expect("RenderClipRRect should carry a border radius")
     }
 
     /// The x-scale (matrix `[0][0]`) of a [`RenderTransform`] node — the factor a
@@ -279,6 +478,119 @@ impl LaidOut {
             .expect("render node should be a RenderTransform")
     }
 
+    /// One intrinsic dimension of a box-protocol render node at `extent`,
+    /// queried through the live pipeline — Flutter's
+    /// `RenderBox.getMinIntrinsicWidth`/`getMaxIntrinsicWidth`/
+    /// `getMinIntrinsicHeight`/`getMaxIntrinsicHeight` family, all four of
+    /// which route through the same `computeMinIntrinsicWidth`-style
+    /// dispatch on the Dart side.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `id` is stale, foreign, or a sliver node (box intrinsics are
+    /// undefined there) — see [`PipelineOwner::box_intrinsic_dimension`].
+    pub fn intrinsic_dimension(
+        &self,
+        id: RenderId,
+        dimension: IntrinsicDimension,
+        extent: f32,
+    ) -> f32 {
+        self.pipeline_owner
+            .write()
+            .box_intrinsic_dimension(id, dimension, extent)
+            .expect("box_intrinsic_dimension should succeed for a live box-protocol node")
+    }
+
+    /// The composed translate-then-scale transform of a [`RenderFittedBox`]
+    /// node — the same matrix `paint_transform` hands the pipeline and
+    /// `hit_test` inverts. Panics if `id` is not a `RenderFittedBox`.
+    pub fn fitted_box_transform(&self, id: RenderId) -> Matrix4 {
+        let mut owner = self.pipeline_owner.write();
+        owner
+            .render_tree_mut()
+            .get_mut(id)
+            .and_then(|node| node.downcast_render_object_mut::<RenderFittedBox>())
+            .map(|render| render.effective_transform())
+            .expect("render node should be a RenderFittedBox")
+    }
+
+    /// Whether a [`RenderImage`] node currently holds a decoded image (as
+    /// opposed to the empty placeholder it paints nothing for). Panics if
+    /// `id` is not a `RenderImage`.
+    pub fn image_has_image(&self, id: RenderId) -> bool {
+        let mut owner = self.pipeline_owner.write();
+        owner
+            .render_tree_mut()
+            .get_mut(id)
+            .and_then(|node| node.downcast_render_object_mut::<RenderImage>())
+            .map(|render| render.image().is_some())
+            .expect("render node should be a RenderImage")
+    }
+
+    /// The forced logical width of a [`RenderImage`] node (`Image::width`),
+    /// or `None` when unset — used to prove a builder's config actually
+    /// reaches the render object it currently owns after a rebuild/reorder
+    /// (not just at initial creation). Panics if `id` is not a `RenderImage`.
+    pub fn image_width(&self, id: RenderId) -> Option<Pixels> {
+        let mut owner = self.pipeline_owner.write();
+        owner
+            .render_tree_mut()
+            .get_mut(id)
+            .and_then(|node| node.downcast_render_object_mut::<RenderImage>())
+            .map(|render| render.width())
+            .expect("render node should be a RenderImage")
+    }
+
+    /// The destination rectangle [`RenderImage::paint_rect_in`] computes for
+    /// its CURRENT committed box size — where the image content actually
+    /// paints once `fit`/`alignment` are applied, not merely the box's own
+    /// size. `None` when the node carries no image (nothing to paint) or a
+    /// degenerate (zero) intrinsic size. Panics if `id` is not a
+    /// `RenderImage`.
+    pub fn image_paint_rect(&self, id: RenderId) -> Option<Rect> {
+        let box_size = self.size(id);
+        let mut owner = self.pipeline_owner.write();
+        owner
+            .render_tree_mut()
+            .get_mut(id)
+            .and_then(|node| node.downcast_render_object_mut::<RenderImage>())
+            .map(|render| render.paint_rect_in(box_size))
+            .expect("render node should be a RenderImage")
+    }
+
+    /// The paint-space left edge of a `RenderParagraph` node's first laid-out
+    /// line — where `TextAlign` actually shifts the glyph run, as opposed to
+    /// the node's own box (which stays whatever size layout constrained it
+    /// to, regardless of alignment).
+    ///
+    /// Backed by [`TextPainter::get_boxes_for_selection`], which folds in
+    /// the alignment-driven paint offset (unlike `get_line_metrics`, whose
+    /// `left` is the pre-alignment layout-local value). Panics if `id` is
+    /// not a `RenderParagraph`, carries no text, or has no laid-out line —
+    /// all of which indicate the paragraph was queried before layout ran.
+    pub fn paragraph_first_line_left(&self, id: RenderId) -> f32 {
+        let mut owner = self.pipeline_owner.write();
+        let node = owner
+            .render_tree_mut()
+            .get_mut(id)
+            .expect("render node should exist");
+        let paragraph = node
+            .downcast_render_object_mut::<RenderParagraph>()
+            .expect("render node should be a RenderParagraph");
+        let text_len = paragraph
+            .painter()
+            .text()
+            .expect("a laid-out RenderParagraph carries a text span")
+            .to_plain_text()
+            .len();
+        paragraph
+            .painter()
+            .get_boxes_for_selection(0, text_len)
+            .first()
+            .map(|text_box| text_box.rect.left().get())
+            .expect("a laid-out non-empty paragraph has at least one selection box")
+    }
+
     /// Replace the root widget with `new_root` and drive a frame — Flutter's
     /// `tester.pumpWidget(w2)` called a second time (root-swap).
     ///
@@ -297,14 +609,22 @@ impl LaidOut {
     /// `render_type_name` (the short, crate-unqualified type name such as
     /// `"RenderConstrainedBox"` or `"RenderCenter"`). Returns all matching ids
     /// in slab-iteration order (not geometry order).
+    ///
+    /// Compares **base** names — the part before any `<...>` — on both
+    /// sides: `Diagnosticable::to_diagnostics_node`'s short name keeps full
+    /// generic fidelity (a `RenderViewport<ScrollPosition>` node names
+    /// itself exactly that), but a caller querying "by render type" wants
+    /// the base name regardless of which generic argument a render object
+    /// happens to be monomorphized over.
     pub fn find_all_by_render_type(&self, render_type_name: &str) -> Vec<RenderId> {
         let owner = self.pipeline_owner.read();
+        let queried = base_type_name(render_type_name);
         owner
             .render_tree()
             .iter()
             .filter_map(|(id, _node)| {
                 let diagnostics = owner.debug_node_diagnostics(id)?;
-                (diagnostics.name() == Some(render_type_name)).then_some(id)
+                (diagnostics.name().map(base_type_name) == Some(queried)).then_some(id)
             })
             .collect()
     }
@@ -366,32 +686,63 @@ impl LaidOut {
     /// Hit-test at root-local `(x, y)` and dispatch `event` to the entries hit
     /// there — the route step a binding runs before the arena lifecycle. The
     /// event already carries the pointer id; `(x, y)` is the hit-test position.
+    ///
+    /// Both the hit-test AND the dispatch run inside the binding's
+    /// interaction-lane scope: production (`crates/flui-app/src/app/runner.rs`,
+    /// `realm.enter(|realm| event.run(realm))`) hit-tests and dispatches from
+    /// inside the same lane entry, and hit-testing itself can now resolve
+    /// lane-registered owner-local state (`ClipPath`'s custom path clipper via
+    /// `resolve_path_clip_target`) — scoping only the dispatch half left
+    /// `hit_test` silently falling back to the default (whole-box) clip
+    /// whenever a caller hit-tested outside an active lane.
     pub fn route_event(&self, event: &PointerEvent, x: f32, y: f32) {
         use flui_rendering::hit_testing::HitTestResult;
 
         let position = Offset::new(px(x), px(y));
-        let owner = self.pipeline_owner.read();
         let mut result = HitTestResult::new();
-        owner.hit_test(position, &mut result);
-        result.dispatch(event);
+        self.binding.enter_owner_scope(|| {
+            // Scoped to the hit-test only: `dispatch` below can run
+            // gesture-callback code that itself acquires `pipeline_owner.read()`
+            // (e.g. a widget querying committed layout from inside its own
+            // pointer-signal/gesture handler). `parking_lot::RwLock` read locks
+            // are not safely reentrant on the same thread once a writer is
+            // queued — holding this guard across `dispatch` risks a
+            // same-thread self-deadlock that production avoids by dropping its
+            // own guard before dispatch.
+            {
+                let owner = self.pipeline_owner.read();
+                owner.hit_test(position, &mut result);
+            }
+            result.dispatch(event);
+        });
     }
 
     /// Hit-test at root-local `(x, y)` and dispatch a synthetic pointer-down
     /// event there — the headless analogue of a platform pointer-down reaching
     /// the framework (`AppBinding::handle_input` → hit_test → dispatch). Used by
     /// the `Listener` test to assert its callback fires.
+    ///
+    /// See [`route_event`](Self::route_event) for why hit-testing runs inside
+    /// the lane scope alongside dispatch.
     pub fn dispatch_pointer_down(&self, x: f32, y: f32) {
         use flui_rendering::hit_testing::HitTestResult;
 
         let position = Offset::new(px(x), px(y));
-        let owner = self.pipeline_owner.read();
         let mut result = HitTestResult::new();
-        owner.hit_test(position, &mut result);
         let event = flui_interaction::events::make_down_event(
             position,
             flui_interaction::events::PointerType::Mouse,
         );
-        result.dispatch(&event);
+        self.binding.enter_owner_scope(|| {
+            // See `route_event`'s comment: the read guard must not span
+            // `dispatch`, which can reenter `pipeline_owner.read()` from a
+            // gesture callback.
+            {
+                let owner = self.pipeline_owner.read();
+                owner.hit_test(position, &mut result);
+            }
+            result.dispatch(&event);
+        });
     }
 
     /// As [`dispatch_pointer_down`](Self::dispatch_pointer_down), but a
@@ -400,14 +751,21 @@ impl LaidOut {
         use flui_rendering::hit_testing::HitTestResult;
 
         let position = Offset::new(px(x), px(y));
-        let owner = self.pipeline_owner.read();
         let mut result = HitTestResult::new();
-        owner.hit_test(position, &mut result);
         let event = flui_interaction::events::make_up_event(
             position,
             flui_interaction::events::PointerType::Mouse,
         );
-        result.dispatch(&event);
+        self.binding.enter_owner_scope(|| {
+            // See `route_event`'s comment: the read guard must not span
+            // `dispatch`, which can reenter `pipeline_owner.read()` from a
+            // gesture callback.
+            {
+                let owner = self.pipeline_owner.read();
+                owner.hit_test(position, &mut result);
+            }
+            result.dispatch(&event);
+        });
     }
 
     /// A pointer-move to `(x, y)` — to drive slop / drag handling.
@@ -415,14 +773,21 @@ impl LaidOut {
         use flui_rendering::hit_testing::HitTestResult;
 
         let position = Offset::new(px(x), px(y));
-        let owner = self.pipeline_owner.read();
         let mut result = HitTestResult::new();
-        owner.hit_test(position, &mut result);
         let event = flui_interaction::events::make_move_event(
             position,
             flui_interaction::events::PointerType::Mouse,
         );
-        result.dispatch(&event);
+        self.binding.enter_owner_scope(|| {
+            // See `route_event`'s comment: the read guard must not span
+            // `dispatch`, which can reenter `pipeline_owner.read()` from a
+            // gesture callback.
+            {
+                let owner = self.pipeline_owner.read();
+                owner.hit_test(position, &mut result);
+            }
+            result.dispatch(&event);
+        });
     }
 
     /// A pointer-cancel routed to the entries hit at `(x, y)` — the headless
@@ -431,13 +796,20 @@ impl LaidOut {
         use flui_rendering::hit_testing::HitTestResult;
 
         let position = Offset::new(px(x), px(y));
-        let owner = self.pipeline_owner.read();
         let mut result = HitTestResult::new();
-        owner.hit_test(position, &mut result);
         let event = flui_interaction::events::make_cancel_event(
             flui_interaction::events::PointerType::Mouse,
         );
-        result.dispatch(&event);
+        self.binding.enter_owner_scope(|| {
+            // See `route_event`'s comment: the read guard must not span
+            // `dispatch`, which can reenter `pipeline_owner.read()` from a
+            // gesture callback.
+            {
+                let owner = self.pipeline_owner.read();
+                owner.hit_test(position, &mut result);
+            }
+            result.dispatch(&event);
+        });
     }
 
     /// Hit-test at root-local `(x, y)` and dispatch a synthetic secondary-button
@@ -449,15 +821,22 @@ impl LaidOut {
         use flui_rendering::hit_testing::HitTestResult;
 
         let position = Offset::new(px(x), px(y));
-        let owner = self.pipeline_owner.read();
         let mut result = HitTestResult::new();
-        owner.hit_test(position, &mut result);
         let event = flui_interaction::events::make_down_event_with_button(
             position,
             flui_interaction::events::PointerType::Mouse,
             PointerButton::Secondary,
         );
-        result.dispatch(&event);
+        self.binding.enter_owner_scope(|| {
+            // See `route_event`'s comment: the read guard must not span
+            // `dispatch`, which can reenter `pipeline_owner.read()` from a
+            // gesture callback.
+            {
+                let owner = self.pipeline_owner.read();
+                owner.hit_test(position, &mut result);
+            }
+            result.dispatch(&event);
+        });
     }
 
     /// As [`dispatch_secondary_down`](Self::dispatch_secondary_down), but a
@@ -467,15 +846,22 @@ impl LaidOut {
         use flui_rendering::hit_testing::HitTestResult;
 
         let position = Offset::new(px(x), px(y));
-        let owner = self.pipeline_owner.read();
         let mut result = HitTestResult::new();
-        owner.hit_test(position, &mut result);
         let event = flui_interaction::events::make_up_event_with_button(
             position,
             flui_interaction::events::PointerType::Mouse,
             PointerButton::Secondary,
         );
-        result.dispatch(&event);
+        self.binding.enter_owner_scope(|| {
+            // See `route_event`'s comment: the read guard must not span
+            // `dispatch`, which can reenter `pipeline_owner.read()` from a
+            // gesture callback.
+            {
+                let owner = self.pipeline_owner.read();
+                owner.hit_test(position, &mut result);
+            }
+            result.dispatch(&event);
+        });
     }
 }
 
@@ -490,7 +876,6 @@ impl LaidOut {
 /// gesture deadlines with no `thread::sleep`.
 pub struct LaidOutScoped {
     laid: LaidOut,
-    binding: HeadlessBinding,
     /// Next contact's pointer id (1-based; `0` is not a valid `PointerId`). Each
     /// `dispatch_pointer_down` allocates a fresh id so two sequential taps use
     /// distinct ids — what a real `GestureBinding` does per contact, and what
@@ -511,10 +896,11 @@ pub struct LaidOutScoped {
 pub fn lay_out_with_arena(root: impl View, constraints: BoxConstraints) -> LaidOutScoped {
     let binding = HeadlessBinding::new();
     let scoped = GestureArenaScope::new(binding.arena().clone(), root);
-    let laid = lay_out(scoped, constraints);
+    let pipeline_owner = Arc::new(RwLock::new(PipelineOwner::new()));
+    let laid =
+        lay_out_with_pipeline_owner_and_binding(scoped, constraints, pipeline_owner, binding);
     LaidOutScoped {
         laid,
-        binding,
         next_pointer: Cell::new(1),
         current_pointer: Cell::new(0),
     }
@@ -526,10 +912,19 @@ impl LaidOutScoped {
         &self.laid
     }
 
+    /// Reconcile the root against `new_root` — the scoped analogue of
+    /// [`LaidOut::pump_widget`], for tests that need both gesture dispatch
+    /// (arena-scoped) AND a later reconfigure/unmount of the same tree, e.g.
+    /// swapping a gesture-driven widget away mid-animation to prove its
+    /// `dispose` unregisters every controller it registered with `Vsync`.
+    pub fn pump_widget(&mut self, new_root: impl View) {
+        self.laid.pump_widget(new_root);
+    }
+
     /// Advance the virtual clock by `dt` and fire any gesture deadline that has
     /// now elapsed — the deterministic, sleep-free frame tick.
     pub fn pump(&mut self, dt: Duration) {
-        self.binding.pump_frame(dt);
+        self.laid.binding.pump_frame(dt);
     }
 
     /// Spin until `Instant::now()` returns a value strictly greater than the
@@ -582,7 +977,8 @@ impl LaidOutScoped {
         Self::advance_gesture_clock();
         let pointer = self.begin_contact();
         let event = make_down_event_for_id(pointer, offset(x, y), PointerType::Mouse);
-        self.binding
+        self.laid
+            .binding
             .dispatch_pointer(&event, |e| self.laid.route_event(e, x, y));
     }
 
@@ -591,7 +987,8 @@ impl LaidOutScoped {
     pub fn dispatch_pointer_up(&self, x: f32, y: f32) {
         let pointer = self.current_contact();
         let event = make_up_event_for_id(pointer, offset(x, y), PointerType::Mouse);
-        self.binding
+        self.laid
+            .binding
             .dispatch_pointer(&event, |e| self.laid.route_event(e, x, y));
     }
 
@@ -604,7 +1001,8 @@ impl LaidOutScoped {
         Self::advance_gesture_clock();
         let pointer = self.current_contact();
         let event = make_move_event_for_id(pointer, offset(x, y), PointerType::Mouse);
-        self.binding
+        self.laid
+            .binding
             .dispatch_pointer(&event, |e| self.laid.route_event(e, x, y));
     }
 
@@ -613,7 +1011,8 @@ impl LaidOutScoped {
     pub fn dispatch_pointer_cancel(&self, x: f32, y: f32) {
         let pointer = self.current_contact();
         let event = make_cancel_event_for_id(pointer, PointerType::Mouse);
-        self.binding
+        self.laid
+            .binding
             .dispatch_pointer(&event, |e| self.laid.route_event(e, x, y));
     }
 
@@ -645,4 +1044,14 @@ pub fn size(width: f32, height: f32) -> Size {
 /// Convenience: an `Offset` in logical pixels.
 pub fn offset(dx: f32, dy: f32) -> Offset {
     Offset::new(px(dx), px(dy))
+}
+
+/// The part of `type_name` before its first `<`, if any — the base name
+/// ignoring generic parameters ("RenderViewport<ScrollPosition>" ->
+/// "RenderViewport"; "RenderConstrainedBox" -> "RenderConstrainedBox"
+/// unchanged). Mirrors `flui_foundation::debug`'s private helper of the
+/// same name (not public — this harness has its own tiny copy rather than
+/// growing the library's public surface for a test-only concern).
+fn base_type_name(type_name: &str) -> &str {
+    type_name.split('<').next().unwrap_or(type_name)
 }

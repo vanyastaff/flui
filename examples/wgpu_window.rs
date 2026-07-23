@@ -241,10 +241,7 @@ fn main() {
     // Register input callback for logging
     window.on_input(Box::new(|input| {
         tracing::trace!("Input: {:?}", input);
-        flui_platform::traits::DispatchEventResult {
-            propagate: true,
-            default_prevented: false,
-        }
+        flui_platform::traits::DispatchEventResult::resolved(true, false)
     }));
 
     // Request first frame
@@ -252,7 +249,7 @@ fn main() {
 
     tracing::info!("Setup complete - starting event loop with wgpu rendering");
 
-    platform.run(Box::new(move || {
+    platform.run(Box::new(move |_platform| {
         tracing::info!("Platform ready");
         // Keep window and gpu alive via closure capture
         let _window = &window;

@@ -1,48 +1,55 @@
 //! [`ImageProvider`] trait and built-in implementations for the
 //! [`Image`](crate::Image) widget.
 //!
-//! # Sync-first design
+//! # Sync-first, async-capable design
 //!
-//! [`ImageProvider::resolve`] is synchronous because the FLUI view layer has
-//! no async rebuild path today. When async loading lands, a companion
-//! supertrait will be added:
+//! [`ImageProvider::resolve`] is synchronous and remains the required
+//! baseline — the FLUI view layer's most common image sources (an
+//! already-decoded [`PixelImage`], in-memory bytes, a local file) have no
+//! reason to leave the thread. [`resolve_async`](ImageProvider::resolve_async)
+//! and [`cache_key`](ImageProvider::cache_key) are defaulted extension
+//! points: a provider that never overrides them behaves exactly as before
+//! (`resolve_async`'s default is `Box::pin(future::ready(self.resolve()))` —
+//! sync-in-async-clothing, evaluated blocking at the poll site, same thread
+//! as today; `cache_key`'s default `None` keeps the provider on the
+//! sync-only path). `AssetImage` (behind the `asset-images` feature) and
+//! `NetworkImage` (behind `network-images`) override both to genuinely load
+//! off-thread.
 //!
-//! ```text
-//! pub trait AsyncImageProvider: ImageProvider {
-//!     async fn resolve_async(&self) -> Result<PixelImage, ImageProviderError>;
-//! }
-//! ```
-//!
-//! Existing sync implementations satisfy the async version trivially via
-//! `future::ready(self.resolve())`, keeping backward compatibility. The sync
-//! [`resolve`](ImageProvider::resolve) always remains the required baseline.
+//! FLUI's `Image` widget is a one-shot resolver, not a port of Flutter's
+//! `ImageStream`: it has no chunk/progress events and no multi-frame
+//! (animated-image) support, because FLUI's `Image` view is single-frame.
+//! This is a documented divergence from `widgets/image.dart`, to revisit when
+//! animated images land.
 //!
 //! # Deferred functionality
 //!
-//! - **Network loading** (`NetworkImage`, behind the `network-images` feature) — returns
-//!   [`ImageProviderError::AsyncNotWired`] until the async path lands.
-//! - **Image cache** — will be integrated when the scheduler gains async
-//!   rebuild support.
+//! Not yet built (tracked, not silently missing): `frameBuilder`,
+//! `loadingBuilder`, `errorBuilder` (an error currently renders the same
+//! empty box as no data, with a `tracing::warn!`), `gaplessPlayback`,
+//! `ImageConfiguration`/`devicePixelRatio`-based cache-key scaling, an
+//! `evict`/`clearLiveImages` cache-management API, and font unification.
 
+use std::future::Future;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use thiserror::Error;
 
 use flui_types::painting::Image as PixelImage;
 
-/// Describes how to obtain a decoded image synchronously.
+use super::cache_key::ImageCacheKey;
+
+/// Describes how to obtain a decoded image, synchronously or asynchronously.
 ///
-/// The [`Image`](crate::Image) widget calls [`resolve`](Self::resolve) when
-/// creating or updating its render object. On error the widget renders an
-/// empty box — no panic.
-///
-/// # Extension point
-///
-/// An `AsyncImageProvider: ImageProvider` supertrait will be added when the
-/// FLUI view layer gains an async rebuild path. All existing sync providers
-/// will remain compatible; the async version defaults to
-/// `future::ready(self.resolve())`.
+/// The [`Image`](crate::Image) widget calls [`cache_key`](Self::cache_key) to
+/// decide which path to take: `None` means synchronous-only, and it calls
+/// [`resolve`](Self::resolve) when creating or updating its render object;
+/// `Some(key)` means it probes the decode cache for `key` and, on a miss,
+/// awaits [`resolve_async`](Self::resolve_async) through a
+/// [`FutureBuilder`](crate::FutureBuilder). On error the widget renders an
+/// empty box — no panic, but a `tracing::warn!` so the failure is observable.
 ///
 /// # Object safety
 ///
@@ -51,8 +58,9 @@ use flui_types::painting::Image as PixelImage;
 pub trait ImageProvider: std::fmt::Debug + Send + Sync {
     /// Synchronously decode and return the image.
     ///
-    /// Called on every widget rebuild. For expensive providers (file I/O,
-    /// decoding), pre-decode once and supply the result via
+    /// Called on every widget rebuild for a provider whose
+    /// [`cache_key`](Self::cache_key) is `None`. For expensive providers
+    /// (file I/O, decoding), pre-decode once and supply the result via
     /// [`DirectImageProvider`] or [`Image::from_image`](crate::Image::from_image).
     ///
     /// # Errors
@@ -61,10 +69,47 @@ pub trait ImageProvider: std::fmt::Debug + Send + Sync {
     /// [`Image`](crate::Image) renders an empty box on error rather than
     /// propagating or panicking.
     fn resolve(&self) -> Result<PixelImage, ImageProviderError>;
+
+    /// Asynchronously decode and return the image.
+    ///
+    /// The default implementation is sync-in-async-clothing: it evaluates
+    /// [`resolve`](Self::resolve) — blocking — at the poll site, on whatever
+    /// thread polls the returned future (the same thread [`resolve`](Self::resolve)
+    /// would have run on today). Override this to genuinely move work off
+    /// thread; a provider that does so should also override
+    /// [`cache_key`](Self::cache_key) to return `Some`, or [`Image`](crate::Image)
+    /// never calls this method at all.
+    fn resolve_async(
+        &self,
+    ) -> Pin<Box<dyn Future<Output = Result<PixelImage, ImageProviderError>> + Send + 'static>>
+    {
+        Box::pin(std::future::ready(self.resolve()))
+    }
+
+    /// The cache/coalescing/subscription identity for asynchronous
+    /// resolution, or `None` to stay on the synchronous-only path.
+    ///
+    /// The default `None` preserves today's behavior exactly: [`Image`](crate::Image)
+    /// never probes the decode cache, never spawns a load, and always calls
+    /// [`resolve`](Self::resolve) directly. A provider backed by genuinely
+    /// asynchronous I/O (disk via a background runtime, network) overrides
+    /// this to opt into the cached/coalesced/[`FutureBuilder`](crate::FutureBuilder)-driven
+    /// path.
+    ///
+    /// Note: [`Image`](crate::Image) only *acts* on a `Some` key — probing
+    /// the decode cache and wrapping in a `FutureBuilder` — when the
+    /// `asset-images` feature is enabled (the cache/coalescing engine's
+    /// dependencies, `lru`/`futures-util`, are pulled in only by that
+    /// feature). A custom provider overriding this method without
+    /// `asset-images` enabled falls back to [`resolve`](Self::resolve).
+    fn cache_key(&self) -> Option<ImageCacheKey> {
+        None
+    }
 }
 
-/// Errors returned by [`ImageProvider::resolve`].
-#[derive(Debug, Error)]
+/// Errors returned by [`ImageProvider::resolve`] and
+/// [`ImageProvider::resolve_async`].
+#[derive(Debug, Clone, Error)]
 #[non_exhaustive]
 pub enum ImageProviderError {
     /// Image decoding requires the `flui-widgets/images` feature.
@@ -97,16 +142,78 @@ pub enum ImageProviderError {
         reason: String,
     },
 
-    /// The provider requires async I/O, which is not yet integrated with the
-    /// FLUI view-layer rebuild path.
+    /// The provider only supports asynchronous resolution
+    /// ([`ImageProvider::resolve_async`]); a synchronous
+    /// [`resolve`](ImageProvider::resolve) call found no cached result to
+    /// fall back on.
     ///
-    /// Pre-decode the image externally and supply the result via
-    /// [`Image::from_image`](crate::Image::from_image) as a workaround.
-    #[error("`{provider_name}` requires async I/O, not yet wired to the FLUI view layer")]
-    AsyncNotWired {
-        /// Name of the provider requiring async I/O.
+    /// This is not a transient failure — it is `resolve`'s honest answer for
+    /// a provider whose source (an unloaded asset, an unfetched URL) cannot
+    /// be read without leaving the calling thread. [`Image`](crate::Image)
+    /// never hits this path: it dispatches on
+    /// [`cache_key`](ImageProvider::cache_key) to call `resolve_async`
+    /// instead. A caller invoking `resolve` directly on such a provider (e.g.
+    /// a custom async provider used without the `asset-images` feature,
+    /// where `Image` cannot act on `cache_key`) should pre-decode externally
+    /// and supply the result via [`Image::from_image`](crate::Image::from_image).
+    #[error("`{provider_name}` has no synchronously available result; use resolve_async")]
+    RequiresAsyncResolve {
+        /// Name of the async-only provider.
         provider_name: &'static str,
     },
+
+    /// The image source (an asset path or a URL) could not be found.
+    ///
+    /// Distinct from [`FileNotFound`](Self::FileNotFound): this variant
+    /// covers `AssetImage`/`NetworkImage`'s asynchronous sources, backed by
+    /// a `flui-assets::AssetError::NotFound`. `path` may be a URL, not
+    /// necessarily a filesystem path, so a `PathBuf` would misrepresent it.
+    #[error("image source not found: {path}")]
+    SourceNotFound {
+        /// The asset path or URL that could not be found.
+        path: String,
+    },
+
+    /// The underlying `flui-assets` load failed for a reason other than "not
+    /// found" — a read error, a failed HTTP request, an unsupported format,
+    /// or any other asset-loading failure surfaced by `flui-assets`.
+    ///
+    /// Distinct from [`DecodeFailed`](Self::DecodeFailed): this means the
+    /// load itself failed, so bytes may never have reached a decoder at all
+    /// — reporting it as a decode failure would misdiagnose the cause (e.g.
+    /// a refused network connection is not a decode problem).
+    #[error("failed to load image source: {reason}")]
+    AssetLoadFailed {
+        /// The underlying `flui-assets::AssetError`'s message.
+        reason: String,
+    },
+}
+
+/// Maps a `flui-assets::AssetError` onto the closest honest
+/// [`ImageProviderError`] — never [`DecodeFailed`](ImageProviderError::DecodeFailed),
+/// since a `flui-assets` load failure (missing file, refused connection,
+/// unsupported format, …) happens before any bytes reach a decoder. Shared by
+/// `AssetImage` and `NetworkImage`.
+///
+/// As of `flui-assets` 0.2, `ImageAsset::load`'s file-read branch wraps I/O
+/// errors — including "not found" — as `AssetError::LoadFailed`, not
+/// `AssetError::NotFound`, so [`SourceNotFound`](ImageProviderError::SourceNotFound)
+/// is not reachable through a missing local file today; a missing file
+/// currently surfaces as [`AssetLoadFailed`](ImageProviderError::AssetLoadFailed)
+/// with the underlying I/O message preserved. The match here still handles
+/// `NotFound` correctly so this stays honest if that upstream distinction is
+/// added later — the important, load-bearing guarantee this function makes
+/// today is only "never mislabel a load failure as `DecodeFailed`".
+#[cfg(feature = "asset-images")]
+impl ImageProviderError {
+    pub(crate) fn from_asset_error(source: String, error: flui_assets::AssetError) -> Self {
+        if matches!(error, flui_assets::AssetError::NotFound { .. }) {
+            return Self::SourceNotFound { path: source };
+        }
+        Self::AssetLoadFailed {
+            reason: error.to_string(),
+        }
+    }
 }
 
 /// An [`ImageProvider`] backed by an already-decoded [`PixelImage`].
@@ -228,54 +335,6 @@ impl ImageProvider for FileImage {
     }
 }
 
-/// A typed placeholder for HTTP/HTTPS image loading.
-///
-/// [`resolve`](ImageProvider::resolve) always returns
-/// [`ImageProviderError::AsyncNotWired`] because network I/O requires async
-/// scheduling that is not yet integrated with the FLUI view-layer rebuild
-/// path.
-///
-/// The type is stable so widget trees can reference network images today;
-/// they will load automatically when the async path lands.
-///
-/// **Workaround**: fetch the image bytes externally, decode them, and supply
-/// the result via [`Image::from_image`](crate::Image::from_image).
-///
-/// Prefer [`Image::network`](crate::Image::network) as the ergonomic
-/// constructor.
-#[cfg(feature = "network-images")]
-#[derive(Debug, Clone)]
-pub struct NetworkImage {
-    url: String,
-}
-
-#[cfg(feature = "network-images")]
-impl NetworkImage {
-    /// Creates a stub provider for `url`.
-    ///
-    /// [`resolve`](ImageProvider::resolve) always fails with
-    /// [`ImageProviderError::AsyncNotWired`] until network loading is
-    /// integrated with the view layer.
-    pub fn new(url: impl Into<String>) -> Self {
-        Self { url: url.into() }
-    }
-
-    /// Returns the URL this provider will load when async loading is
-    /// available.
-    pub fn url(&self) -> &str {
-        &self.url
-    }
-}
-
-#[cfg(feature = "network-images")]
-impl ImageProvider for NetworkImage {
-    fn resolve(&self) -> Result<PixelImage, ImageProviderError> {
-        Err(ImageProviderError::AsyncNotWired {
-            provider_name: "NetworkImage",
-        })
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Internal decode helper
 // ---------------------------------------------------------------------------
@@ -285,6 +344,10 @@ impl ImageProvider for NetworkImage {
 /// Gated on the `images` feature. Returns
 /// [`ImageProviderError::DecoderUnavailable`] when the feature is absent so
 /// the widget renders an empty box without a compile error.
+///
+/// Used by [`MemoryImage`] and [`FileImage`] only — `AssetImage`/`NetworkImage`
+/// (`asset-images`/`network-images` features) decode through `flui-assets`'
+/// own `image`-crate usage instead, not this helper.
 fn decode_bytes(bytes: &[u8]) -> Result<PixelImage, ImageProviderError> {
     #[cfg(feature = "images")]
     {

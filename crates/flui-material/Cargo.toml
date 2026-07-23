@@ -1,0 +1,71 @@
+[package]
+name = "flui-material"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Material Design theming foundation for FLUI — ColorScheme, Typography/TextTheme, ThemeData, and the Theme inherited widget"
+repository.workspace = true
+keywords = ["ui", "material", "theme", "flutter", "flui"]
+categories = ["gui"]
+
+[dependencies]
+# `Theme` is an `InheritedView` that implements `flui-widgets`' `InheritedTheme`
+# trait and wraps `BoxedView`/`IntoView` — the widget-authoring spine.
+flui-widgets = { path = "../flui-widgets", version = "0.2.0" }
+# `InheritedView`, `impl_inherited_view!`, `BuildContext`, `View` — the
+# element-tree primitives `Theme` is built on.
+flui-view = { path = "../flui-view", version = "0.2.0" }
+# `Color`, `Brightness`, `TextStyle` and friends — the value types
+# `ColorScheme`/`TextTheme`/`ThemeData` are built from.
+flui-types = { path = "../flui-types", version = "0.2.0" }
+# `Material` wraps `RenderPhysicalShape` (`RenderPhysicalModelBase<PathClip>`)
+# — the clip+shadow+fill render object it configures.
+flui-objects = { path = "../flui-objects", version = "0.2.0" }
+# `BoxProtocol` — `Material`'s `RenderView::Protocol`.
+flui-rendering = { path = "../flui-rendering", version = "0.2.0" }
+# `Listenable` — `InkWell` subscribes to its `WidgetStatesController`
+# (`WidgetState`/`WidgetStateProperty`/`WidgetStatesController` themselves
+# live in `flui-widgets`, per Flutter's own `MaterialState` → `WidgetState`
+# split — already a dependency).
+flui-foundation = { path = "../flui-foundation", version = "0.2.0" }
+# `AnimationController`/`Vsync` — `InkWell`'s ~100ms press-deactivation
+# timer (see `ink_well.rs`'s module doc, "Press-state timing").
+flui-animation = { path = "../flui-animation", version = "0.2.0" }
+# `FocusNode` — `InkWell::focus_node`'s external-node pass-through.
+flui-interaction = { path = "../flui-interaction", version = "0.2.0" }
+# `PostFrameHandle` — `ScaffoldMessenger` defers a tick-driven `SnackBar`
+# `on_closed` callback out of the build phase through it (trigger #22).
+flui-scheduler = { path = "../flui-scheduler", version = "0.2.0" }
+tracing = { workspace = true }
+
+[dev-dependencies]
+# Integration tests mount a real widget tree (`Theme` + a `SizedBox` leaf)
+# through the render pipeline to prove `Theme::of`/`maybe_of` and rebuild
+# scoping end-to-end.
+flui-rendering = { path = "../flui-rendering", version = "0.2.0", features = ["testing"] }
+flui-objects = { path = "../flui-objects", version = "0.2.0", features = ["testing"] }
+flui-binding = { path = "../flui-binding", version = "0.2.0" }
+# `DrawCommand` — the selection-controls' painter unit tests
+# (`checkbox`/`switch`/`radio`) record a real paint pass and pattern-match
+# its recorded circle commands; `flui_rendering::pipeline` re-exports
+# `Canvas`/`DisplayList` from this crate but not the `DrawCommand` enum
+# itself.
+flui-painting = { path = "../flui-painting", version = "0.2.0" }
+# `make_down_event`/`make_up_event`/`make_move_event` — synthetic pointer
+# events `tests/common` dispatches to drive `InkWell`'s hover/tap at the
+# widget level.
+flui-interaction = { path = "../flui-interaction", version = "0.2.0", features = ["testing"] }
+parking_lot = { workspace = true }
+
+# The parity test suite lives in a subdirectory so `mod *_test;` works via
+# Cargo's single-binary test model (mirrors flui-widgets' `tests/parity/`).
+# Auto-discovery misses subdirectory main files, so the target is declared
+# explicitly.
+[[test]]
+name = "parity"
+path = "tests/parity/main.rs"
+
+[lints]
+workspace = true

@@ -50,11 +50,18 @@ impl RenderView for ClipRect {
     type Protocol = BoxProtocol;
     type RenderObject = RenderClipRect;
 
-    fn create_render_object(&self) -> Self::RenderObject {
+    fn create_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+    ) -> Self::RenderObject {
         RenderClipRect::new(self.clip_behavior)
     }
 
-    fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+    fn update_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+        render_object: &mut Self::RenderObject,
+    ) {
         render_object.set_clip_behavior(self.clip_behavior);
     }
 

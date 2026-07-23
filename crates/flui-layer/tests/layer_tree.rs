@@ -1,13 +1,14 @@
 //! Integration tests for `LayerTree` + `LayerNode`.
 //!
-//! Extracted from `src/tree/layer_tree.rs` inline tests in Mythos Step 7 so
+//! Extracted from `src/tree/layer_tree.rs` inline tests so
 //! the production module stays focused on storage logic. Test scenarios are
 //! preserved verbatim; the `use super::*; use crate::layer::CanvasLayer;`
 //! pair becomes `use flui_layer::*;` for integration access.
 
 use flui_foundation::ElementId;
 use flui_layer::{CanvasLayer, Layer, LayerNode, LayerTree};
-// Cycle 3 T-2: `tree.remove(id)` resolves through the unified trait.
+// `tree.remove(id)` resolves through the unified `TreeWrite` trait
+// rather than an inherent method.
 use flui_tree::TreeWrite;
 use flui_types::{Offset, geometry::px};
 
@@ -161,11 +162,11 @@ fn test_layer_node_with_offset() {
 
 #[test]
 fn test_layer_node_needs_compositing_delegates_to_enum() {
-    // After U1: needs_compositing() delegates to the Layer enum method.
-    // The pre-U1 cached field defaulted to `true` for every variant, which
-    // diverged from `Layer::needs_compositing` — Canvas/Picture/Offset and
-    // friends actually return `false`. Asserting the post-delegation
-    // contract here locks the answer to the variant-computed value.
+    // needs_compositing() delegates to the Layer enum method. The previous
+    // cached field defaulted to `true` for every variant, which diverged
+    // from `Layer::needs_compositing` — Canvas/Picture/Offset and friends
+    // actually return `false`. Asserting the delegation contract here locks
+    // the answer to the variant-computed value.
     let canvas = LayerNode::new(Layer::from(CanvasLayer::new()));
     assert!(
         !canvas.needs_compositing(),

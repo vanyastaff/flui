@@ -68,7 +68,7 @@ impl<V: View + Clone> RootRenderView<V> {
     }
 }
 
-impl<V: View + Clone + Send + Sync + 'static> View for RootRenderView<V> {
+impl<V: View + Clone + 'static> View for RootRenderView<V> {
     fn create_element(&self) -> crate::element::ElementKind {
         crate::element::ElementKind::Root(Box::new(RootRenderElement::new(self)))
     }
@@ -118,7 +118,7 @@ pub struct RootRenderElement<V: View + Clone> {
     needs_build: bool,
 }
 
-impl<V: View + Clone + Send + Sync + 'static> RootRenderElement<V> {
+impl<V: View + Clone + 'static> RootRenderElement<V> {
     /// Create a new RootRenderElement.
     pub fn new(view: &RootRenderView<V>) -> Self {
         Self {
@@ -149,7 +149,7 @@ impl<V: View + Clone + Send + Sync + 'static> RootRenderElement<V> {
     }
 }
 
-impl<V: View + Clone + Send + Sync + 'static> std::fmt::Debug for RootRenderElement<V> {
+impl<V: View + Clone + 'static> std::fmt::Debug for RootRenderElement<V> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RootRenderElement")
             .field("lifecycle", &self.lifecycle)
@@ -164,7 +164,7 @@ impl<V: View + Clone + Send + Sync + 'static> std::fmt::Debug for RootRenderElem
 // ElementBase Implementation
 // ============================================================================
 
-impl<V: View + Clone + Send + Sync + 'static> ElementBase for RootRenderElement<V> {
+impl<V: View + Clone + 'static> ElementBase for RootRenderElement<V> {
     fn view_type_id(&self) -> TypeId {
         TypeId::of::<RootRenderView<V>>()
     }
@@ -243,10 +243,10 @@ impl<V: View + Clone + Send + Sync + 'static> ElementBase for RootRenderElement<
     fn unmount(&mut self, _element_owner: &mut crate::ElementOwner<'_>) {
         // Detach from PipelineOwner's RenderTree
         if let (Some(pipeline_owner), Some(render_id)) = (&self.pipeline_owner, self.render_id) {
-            // Cycle 3 T-1: cascade-by-default `remove` brings the whole
-            // RenderTree subtree down with the root element. The
-            // pre-cycle non-cascade `remove` (now `remove_shallow`)
-            // would have orphaned descendants in the slab.
+            // `remove` cascades by default, bringing the whole RenderTree
+            // subtree down with the root element. The non-cascading
+            // variant (`remove_shallow`) would orphan descendants in the
+            // slab instead.
 
             let mut owner = pipeline_owner.write();
             owner.set_root_id(None);
@@ -280,12 +280,19 @@ impl<V: View + Clone + Send + Sync + 'static> ElementBase for RootRenderElement<
             // Update configuration if size changed
             if let (Some(pipeline_owner), Some(render_id)) = (&self.pipeline_owner, self.render_id)
             {
-                // U2 exemplar refactor: mutable access to the render object goes
+                // Mutable access to the render object goes
                 // through `&mut RenderTree` (`render_tree_mut().get_mut`) rather
                 // than acquiring a per-node `RwLock` write guard. The pipeline
                 // owner is still locked via its outer `Arc<RwLock<PipelineOwner>>`
                 // (shared-infrastructure lock, allowed per `docs/PORT.md`).
                 let mut owner = pipeline_owner.write();
+                // Read the owner's real DPR before re-deriving the config —
+                // `mount` sources the DPR the same way (`device_pixel_ratio()`).
+                // A hard-coded `1.0` here would halve the root's scale on
+                // every update after the first on any HiDPI (2x+) display,
+                // since the config `mount` built with the real DPR would be
+                // silently overwritten by this one.
+                let dpr = owner.device_pixel_ratio();
                 if let Some(node) = owner.render_tree_mut().get_mut(render_id) {
                     // RenderView uses BoxProtocol
                     let render_object = node.box_render_object_mut();
@@ -294,8 +301,8 @@ impl<V: View + Clone + Send + Sync + 'static> ElementBase for RootRenderElement<
                         .downcast_mut::<RenderViewObject>()
                     {
                         let (width, height) = self.view.size;
-                        let physical_size = Size::new(px(width), px(height));
-                        let config = ViewConfiguration::from_size(physical_size, 1.0);
+                        let logical_size = Size::new(px(width), px(height));
+                        let config = ViewConfiguration::from_size(logical_size, dpr);
                         render_view.set_configuration(config);
                     }
                 }
@@ -337,6 +344,27 @@ impl<V: View + Clone + Send + Sync + 'static> ElementBase for RootRenderElement<
             .map(|po| Arc::clone(po) as Arc<dyn Any + Send + Sync>)
     }
 
+    /// The root's own `RenderId`, once `mount` has created its `RenderView`.
+    ///
+    /// The `ElementBase` trait default is `None` — every non-render behavior
+    /// keeps it, but `RootRenderElement` DOES own a render node and must
+    /// override it here (not just the inherent `Self::render_id` at line
+    /// ~147). Without this override, `ElementTree::reorder_render_children_after_build`'s
+    /// depth-first walk reads `node.element().render_id()` through `&dyn
+    /// ElementBase` — which dispatches to the trait method, not the inherent
+    /// one — sees `None` for the root, and propagates `render_ancestor =
+    /// None` past it instead of `Some(root_render_id)`. That corrupts the
+    /// FIRST render descendant's `desired_parent` entry to `None`, and the
+    /// walk's own parent-sync step then calls `set_parent(None)` on it,
+    /// clobbering the correct link `RenderBehavior::on_mount` had just set.
+    /// This was the root-hop parent-link defect: the child→parent render
+    /// edge was `None` from the very first mount even though the parent→child
+    /// edge existed, because the reorder pass silently treated the root as if
+    /// it had no render object at all.
+    fn render_id(&self) -> Option<RenderId> {
+        self.render_id
+    }
+
     fn child_render_id(&self) -> Option<RenderId> {
         // The root's child attaches its RenderObject under the RenderView.
         self.render_id
@@ -361,7 +389,7 @@ impl<V: View + Clone + Send + Sync + 'static> ElementBase for RootRenderElement<
 // RenderObjectElement Implementation
 // ============================================================================
 
-impl<V: View + Clone + Send + Sync + 'static> RenderObjectElement for RootRenderElement<V> {
+impl<V: View + Clone + 'static> RenderObjectElement for RootRenderElement<V> {
     fn render_object_any(&self) -> Option<&dyn Any> {
         // With RenderTree, we don't have direct access to RenderObject
         // Use render_id and access via PipelineOwner.render_tree()
@@ -390,23 +418,15 @@ impl<V: View + Clone + Send + Sync + 'static> RenderObjectElement for RootRender
                 slot
             );
 
-            // Set parent-child relationship in RenderTree
+            // Set parent-child relationship in RenderTree. `adopt_child`
+            // writes both link directions in one call — see
+            // `RenderTree::adopt_child`.
             if let (Some(pipeline_owner), Some(parent_id)) = (&self.pipeline_owner, self.render_id)
             {
-                let mut owner = pipeline_owner.write();
-                let render_tree = owner.render_tree_mut();
-
-                // Update child's parent
-                if let Some(child_node) = render_tree.get_mut(*child_render_id) {
-                    child_node.set_parent(Some(parent_id));
-                }
-
-                // Add child to parent's children list
-                if let Some(parent_node) = render_tree.get_mut(parent_id) {
-                    parent_node.add_child(*child_render_id);
-                    // Parent-child relationships are fully managed by NodeLinks
-                    // No need to notify render objects directly
-                }
+                pipeline_owner
+                    .write()
+                    .render_tree_mut()
+                    .adopt_child(parent_id, *child_render_id);
             }
         }
     }
@@ -432,21 +452,15 @@ impl<V: View + Clone + Send + Sync + 'static> RenderObjectElement for RootRender
                 slot
             );
 
-            // Clear parent-child relationship in RenderTree
+            // Clear parent-child relationship in RenderTree. `drop_child`
+            // clears both link directions in one call — see
+            // `RenderTree::drop_child`.
             if let (Some(pipeline_owner), Some(parent_id)) = (&self.pipeline_owner, self.render_id)
             {
-                let mut owner = pipeline_owner.write();
-                let render_tree = owner.render_tree_mut();
-
-                // Remove child from parent's children list
-                if let Some(parent_node) = render_tree.get_mut(parent_id) {
-                    parent_node.remove_child(*child_render_id);
-                }
-
-                // Clear child's parent
-                if let Some(child_node) = render_tree.get_mut(*child_render_id) {
-                    child_node.set_parent(None);
-                }
+                pipeline_owner
+                    .write()
+                    .render_tree_mut()
+                    .drop_child(parent_id, *child_render_id);
             }
         }
     }
@@ -465,7 +479,7 @@ impl<V: View + Clone + Send + Sync + 'static> RenderObjectElement for RootRender
 // RenderTreeRootElement Implementation
 // ============================================================================
 
-impl<V: View + Clone + Send + Sync + 'static> RenderTreeRootElement for RootRenderElement<V> {
+impl<V: View + Clone + 'static> RenderTreeRootElement for RootRenderElement<V> {
     fn pipeline_owner(&self) -> Option<Arc<dyn Any + Send + Sync>> {
         self.pipeline_owner
             .as_ref()
@@ -484,7 +498,7 @@ impl<V: View + Clone + Send + Sync + 'static> RenderTreeRootElement for RootRend
     // `pipeline_owner.render_tree_mut()`, calls `set_root_id`, and
     // requests a visual update; unmount inverts that sequence. The
     // pre-Mythos `attach_to_pipeline_owner` / `detach_from_pipeline_owner`
-    // trait stubs were removed in framework-spine-repair U15 because
+    // trait stubs were removed during the framework spine repair because
     // their bodies were panicking placeholders (Constitution Principle 6
     // forbids panic in production paths) and they had zero callers in
     // the workspace.
@@ -506,11 +520,19 @@ mod tests {
         type Protocol = BoxProtocol;
         type RenderObject = RenderSizedBox;
 
-        fn create_render_object(&self) -> Self::RenderObject {
+        fn create_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+        ) -> Self::RenderObject {
             RenderSizedBox::shrink()
         }
 
-        fn update_render_object(&self, _render_object: &mut Self::RenderObject) {}
+        fn update_render_object(
+            &self,
+            _ctx: &crate::RenderObjectContext<'_>,
+            _render_object: &mut Self::RenderObject,
+        ) {
+        }
     }
 
     impl View for TestView {

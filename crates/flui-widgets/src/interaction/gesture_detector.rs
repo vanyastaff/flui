@@ -1,13 +1,13 @@
 //! [`GestureDetector`] — recognizes high-level gestures (tap, long-press,
 //! double-tap, and pan/drag) from the raw pointer stream a [`Listener`] delivers.
 
-use std::sync::{Arc, Mutex};
+use std::{cell::RefCell, rc::Rc, sync::Arc};
 
 use flui_interaction::arena::{GestureArena, SweepModel};
 use flui_interaction::{
-    DoubleTapGestureRecognizer, DragAxis, DragEndDetails, DragGestureRecognizer, DragStartDetails,
-    DragUpdateDetails, GestureRecognizer, LongPressGestureRecognizer, PointerEvent,
-    PointerEventExt, TapGestureRecognizer,
+    DoubleTapGestureRecognizer, DragAxis, DragDownDetails, DragEndDetails, DragGestureRecognizer,
+    DragStartDetails, DragUpdateDetails, GestureRecognizer, LongPressGestureRecognizer,
+    PointerEvent, PointerEventExt, TapGestureRecognizer,
 };
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_view::prelude::*;
@@ -16,11 +16,20 @@ use crate::{GestureArenaScope, Listener};
 
 /// A no-argument gesture callback (Flutter's `onTap` / `onLongPress` /
 /// `onDoubleTap`) — fired with no details when the gesture is recognized.
-type GestureCallback = Arc<dyn Fn() + Send + Sync>;
+type GestureCallback = Rc<dyn Fn()>;
 /// Pan callbacks carry the drag's details (position, delta, velocity).
-type PanStartHandler = Arc<dyn Fn(DragStartDetails) + Send + Sync>;
-type PanUpdateHandler = Arc<dyn Fn(DragUpdateDetails) + Send + Sync>;
-type PanEndHandler = Arc<dyn Fn(DragEndDetails) + Send + Sync>;
+type PanStartHandler = Rc<dyn Fn(DragStartDetails)>;
+type PanUpdateHandler = Rc<dyn Fn(DragUpdateDetails)>;
+type PanEndHandler = Rc<dyn Fn(DragEndDetails)>;
+/// Horizontal-drag callbacks carry the same detail types as pan, but the
+/// underlying recognizer is axis-constrained ([`DragAxis::Horizontal`])
+/// rather than free — see [`GestureDetector`]'s docs on why this and
+/// `on_pan_*` are mutually exclusive on one detector.
+type HorizontalDragDownHandler = Rc<dyn Fn(DragDownDetails)>;
+type HorizontalDragStartHandler = Rc<dyn Fn(DragStartDetails)>;
+type HorizontalDragUpdateHandler = Rc<dyn Fn(DragUpdateDetails)>;
+type HorizontalDragEndHandler = Rc<dyn Fn(DragEndDetails)>;
+type HorizontalDragCancelHandler = Rc<dyn Fn()>;
 
 /// Detects gestures on its child and invokes the matching callback.
 ///
@@ -45,13 +54,42 @@ type PanEndHandler = Arc<dyn Fn(DragEndDetails) + Send + Sync>;
 ///   `on_double_tap` under a scope.
 /// - **pan/drag** (`on_pan_start` / `on_pan_update` / `on_pan_end`) — a contact
 ///   that moves past the drag slop, reported with running deltas and a release
-///   velocity.
+///   velocity. Free axis: recognized on any direction of travel.
+/// - **horizontal drag** (`on_horizontal_drag_down` / `on_horizontal_drag_start`
+///   / `on_horizontal_drag_update` / `on_horizontal_drag_end` /
+///   `on_horizontal_drag_cancel`) — a contact that moves past the drag slop on
+///   the horizontal axis specifically. A separate, axis-constrained
+///   [`DragGestureRecognizer`] ([`DragAxis::Horizontal`]) from the free-axis pan
+///   recognizer above; see the [conflict](#pan-and-horizontal-drag-conflict)
+///   note on why the two are mutually exclusive on one detector.
 ///
 /// Only the recognizers whose callback is set participate in the arena for a
 /// contact (Flutter parity: a recognizer is constructed only when its callback
 /// is non-null). They compete in one arena: a quick down→up resolves to the tap
 /// (the front member), a hold resolves to the long-press, a drag past slop hands
-/// off to the pan recognizer — so at most one gesture fires per contact.
+/// off to whichever drag-family recognizer is configured — so at most one
+/// gesture fires per contact.
+///
+/// # Pan and horizontal-drag conflict
+///
+/// Configuring both `on_pan_*` and `on_horizontal_drag_*` on the same detector
+/// is a `debug_assert!` failure: FLUI's pan recognizer is already
+/// [`DragAxis::Free`] — it spans the horizontal axis too — so it would compete
+/// directly with the horizontal recognizer for the exact same horizontal
+/// motion, and which family wins becomes registration-order-dependent rather
+/// than deterministic.
+///
+/// Flutter's oracle (`widgets/gesture_detector.dart`, tag `3.44.0`) asserts the
+/// analogous case only when a `pan`/`scale` family AND **both**
+/// `onVerticalDrag*` AND `onHorizontalDrag*` are configured together (vertical
+/// alone or horizontal alone combines fine there, because the oracle's pan
+/// recognizer, unlike this one, only becomes ambiguous once both single-axis
+/// families are present to jointly cover every direction pan already covers).
+/// FLUI has no `on_vertical_drag_*` family yet, so this detector tightens the
+/// guard to `on_pan_*` + `on_horizontal_drag_*` alone — that pairing is already
+/// redundant here without waiting for a vertical family to complete the
+/// overlap. Combine the two into one family instead: `on_horizontal_drag_*`
+/// alone, or `on_pan_*` alone.
 ///
 /// # Arena acquisition
 ///
@@ -85,6 +123,11 @@ pub struct GestureDetector {
     on_pan_start: Option<PanStartHandler>,
     on_pan_update: Option<PanUpdateHandler>,
     on_pan_end: Option<PanEndHandler>,
+    on_horizontal_drag_down: Option<HorizontalDragDownHandler>,
+    on_horizontal_drag_start: Option<HorizontalDragStartHandler>,
+    on_horizontal_drag_update: Option<HorizontalDragUpdateHandler>,
+    on_horizontal_drag_end: Option<HorizontalDragEndHandler>,
+    on_horizontal_drag_cancel: Option<HorizontalDragCancelHandler>,
     /// How the underlying [`Listener`] participates in hit-testing.
     behavior: HitTestBehavior,
     child: Child,
@@ -100,6 +143,11 @@ impl Default for GestureDetector {
             on_pan_start: None,
             on_pan_update: None,
             on_pan_end: None,
+            on_horizontal_drag_down: None,
+            on_horizontal_drag_start: None,
+            on_horizontal_drag_update: None,
+            on_horizontal_drag_end: None,
+            on_horizontal_drag_cancel: None,
             behavior: HitTestBehavior::DeferToChild,
             child: Child::empty(),
         }
@@ -116,6 +164,26 @@ impl std::fmt::Debug for GestureDetector {
             .field("on_pan_start", &self.on_pan_start.is_some())
             .field("on_pan_update", &self.on_pan_update.is_some())
             .field("on_pan_end", &self.on_pan_end.is_some())
+            .field(
+                "on_horizontal_drag_down",
+                &self.on_horizontal_drag_down.is_some(),
+            )
+            .field(
+                "on_horizontal_drag_start",
+                &self.on_horizontal_drag_start.is_some(),
+            )
+            .field(
+                "on_horizontal_drag_update",
+                &self.on_horizontal_drag_update.is_some(),
+            )
+            .field(
+                "on_horizontal_drag_end",
+                &self.on_horizontal_drag_end.is_some(),
+            )
+            .field(
+                "on_horizontal_drag_cancel",
+                &self.on_horizontal_drag_cancel.is_some(),
+            )
             .field("behavior", &self.behavior)
             .finish_non_exhaustive()
     }
@@ -130,16 +198,16 @@ impl GestureDetector {
     /// Called when the child is tapped (a primary-button down + up without
     /// moving past the touch slop).
     #[must_use]
-    pub fn on_tap(mut self, callback: impl Fn() + Send + Sync + 'static) -> Self {
-        self.on_tap = Some(Arc::new(callback));
+    pub fn on_tap(mut self, callback: impl Fn() + 'static) -> Self {
+        self.on_tap = Some(Rc::new(callback));
         self
     }
 
     /// Called when the child receives a secondary-button tap (right-click down
     /// + up without moving past the touch slop).
     #[must_use]
-    pub fn on_secondary_tap(mut self, callback: impl Fn() + Send + Sync + 'static) -> Self {
-        self.on_secondary_tap = Some(Arc::new(callback));
+    pub fn on_secondary_tap(mut self, callback: impl Fn() + 'static) -> Self {
+        self.on_secondary_tap = Some(Rc::new(callback));
         self
     }
 
@@ -151,8 +219,8 @@ impl GestureDetector {
     /// detector (no scope) never recognizes a long press — see
     /// [arena acquisition](Self#arena-acquisition).
     #[must_use]
-    pub fn on_long_press(mut self, callback: impl Fn() + Send + Sync + 'static) -> Self {
-        self.on_long_press = Some(Arc::new(callback));
+    pub fn on_long_press(mut self, callback: impl Fn() + 'static) -> Self {
+        self.on_long_press = Some(Rc::new(callback));
         self
     }
 
@@ -167,37 +235,82 @@ impl GestureDetector {
     /// fires `on_tap` once. The give-up is binding-polled, so combine the two
     /// under a scope.
     #[must_use]
-    pub fn on_double_tap(mut self, callback: impl Fn() + Send + Sync + 'static) -> Self {
-        self.on_double_tap = Some(Arc::new(callback));
+    pub fn on_double_tap(mut self, callback: impl Fn() + 'static) -> Self {
+        self.on_double_tap = Some(Rc::new(callback));
         self
     }
 
     /// Called once when a pan/drag begins (the contact crosses the drag slop).
     #[must_use]
-    pub fn on_pan_start(
-        mut self,
-        callback: impl Fn(DragStartDetails) + Send + Sync + 'static,
-    ) -> Self {
-        self.on_pan_start = Some(Arc::new(callback));
+    pub fn on_pan_start(mut self, callback: impl Fn(DragStartDetails) + 'static) -> Self {
+        self.on_pan_start = Some(Rc::new(callback));
         self
     }
 
     /// Called for each pointer move while a pan/drag is in progress, carrying
     /// the incremental delta since the previous update.
     #[must_use]
-    pub fn on_pan_update(
-        mut self,
-        callback: impl Fn(DragUpdateDetails) + Send + Sync + 'static,
-    ) -> Self {
-        self.on_pan_update = Some(Arc::new(callback));
+    pub fn on_pan_update(mut self, callback: impl Fn(DragUpdateDetails) + 'static) -> Self {
+        self.on_pan_update = Some(Rc::new(callback));
         self
     }
 
     /// Called once when the pan/drag ends (pointer up), carrying the release
     /// velocity.
     #[must_use]
-    pub fn on_pan_end(mut self, callback: impl Fn(DragEndDetails) + Send + Sync + 'static) -> Self {
-        self.on_pan_end = Some(Arc::new(callback));
+    pub fn on_pan_end(mut self, callback: impl Fn(DragEndDetails) + 'static) -> Self {
+        self.on_pan_end = Some(Rc::new(callback));
+        self
+    }
+
+    /// Called when a pointer that might begin a horizontal drag contacts the
+    /// screen — before any movement threshold is met. Mutually exclusive with
+    /// `on_pan_*` on one detector; see the type docs.
+    #[must_use]
+    pub fn on_horizontal_drag_down(mut self, callback: impl Fn(DragDownDetails) + 'static) -> Self {
+        self.on_horizontal_drag_down = Some(Rc::new(callback));
+        self
+    }
+
+    /// Called once when a horizontal drag begins (the contact crosses the
+    /// drag slop on the horizontal axis). Mutually exclusive with `on_pan_*`
+    /// on one detector; see the type docs.
+    #[must_use]
+    pub fn on_horizontal_drag_start(
+        mut self,
+        callback: impl Fn(DragStartDetails) + 'static,
+    ) -> Self {
+        self.on_horizontal_drag_start = Some(Rc::new(callback));
+        self
+    }
+
+    /// Called for each pointer move while a horizontal drag is in progress,
+    /// carrying the incremental delta since the previous update. Mutually
+    /// exclusive with `on_pan_*` on one detector; see the type docs.
+    #[must_use]
+    pub fn on_horizontal_drag_update(
+        mut self,
+        callback: impl Fn(DragUpdateDetails) + 'static,
+    ) -> Self {
+        self.on_horizontal_drag_update = Some(Rc::new(callback));
+        self
+    }
+
+    /// Called once when the horizontal drag ends (pointer up), carrying the
+    /// release velocity. Mutually exclusive with `on_pan_*` on one detector;
+    /// see the type docs.
+    #[must_use]
+    pub fn on_horizontal_drag_end(mut self, callback: impl Fn(DragEndDetails) + 'static) -> Self {
+        self.on_horizontal_drag_end = Some(Rc::new(callback));
+        self
+    }
+
+    /// Called when the horizontal drag is cancelled (e.g. the arena rejects
+    /// it). Mutually exclusive with `on_pan_*` on one detector; see the type
+    /// docs.
+    #[must_use]
+    pub fn on_horizontal_drag_cancel(mut self, callback: impl Fn() + 'static) -> Self {
+        self.on_horizontal_drag_cancel = Some(Rc::new(callback));
         self
     }
 
@@ -228,6 +341,18 @@ struct PanCallbacks {
     end: Option<PanEndHandler>,
 }
 
+/// The horizontal-drag callbacks the axis-constrained recognizer reads,
+/// refreshed from the view on every `build`. Mirrors [`PanCallbacks`] plus the
+/// `down`/`cancel` pair Flutter's `onHorizontalDrag*` family also exposes.
+#[derive(Clone, Default)]
+struct HorizontalDragCallbacks {
+    down: Option<HorizontalDragDownHandler>,
+    start: Option<HorizontalDragStartHandler>,
+    update: Option<HorizontalDragUpdateHandler>,
+    end: Option<HorizontalDragEndHandler>,
+    cancel: Option<HorizontalDragCancelHandler>,
+}
+
 /// The recognizers + the arena they share, built once in
 /// [`GestureDetectorState::init_state`] against the ambient (or private) arena.
 ///
@@ -254,6 +379,9 @@ struct Recognizers {
     /// Pan/drag recognizer (free axis) — wins by attrition when a move past the
     /// slop makes the tap reject itself.
     drag: Arc<DragGestureRecognizer>,
+    /// Horizontal-drag recognizer (axis-constrained) — mutually exclusive with
+    /// `drag` on one detector, see [`GestureDetector`]'s conflict doc.
+    horizontal_drag: Arc<DragGestureRecognizer>,
 }
 
 /// Persistent gesture state: the recognizers + their shared arena survive
@@ -265,15 +393,17 @@ struct Recognizers {
 pub struct GestureDetectorState {
     /// The live `on_tap`, refreshed each `build`. The recognizer reads THIS slot
     /// rather than a frozen capture, so a rebuild with a new closure is honored.
-    tap_slot: Arc<Mutex<Option<GestureCallback>>>,
+    tap_slot: Rc<RefCell<Option<GestureCallback>>>,
     /// The live `on_secondary_tap`, refreshed each `build`.
-    secondary_tap_slot: Arc<Mutex<Option<GestureCallback>>>,
+    secondary_tap_slot: Rc<RefCell<Option<GestureCallback>>>,
     /// The live `on_long_press`, refreshed each `build`.
-    long_press_slot: Arc<Mutex<Option<GestureCallback>>>,
+    long_press_slot: Rc<RefCell<Option<GestureCallback>>>,
     /// The live `on_double_tap`, refreshed each `build`.
-    double_tap_slot: Arc<Mutex<Option<GestureCallback>>>,
+    double_tap_slot: Rc<RefCell<Option<GestureCallback>>>,
     /// The live pan callbacks, refreshed each `build`.
-    pan_slot: Arc<Mutex<PanCallbacks>>,
+    pan_slot: Rc<RefCell<PanCallbacks>>,
+    /// The live horizontal-drag callbacks, refreshed each `build`.
+    horizontal_drag_slot: Rc<RefCell<HorizontalDragCallbacks>>,
     /// The recognizers + arena, built once in `init_state`. `None` only in the
     /// window between `create_state` and the first `init_state` — never observed
     /// by `build`, which always runs after `init_state`.
@@ -295,14 +425,21 @@ impl StatefulView for GestureDetector {
         // Allocate the live callback slots only — recognizers are built in
         // `init_state`, which has the context needed to read the ambient arena.
         GestureDetectorState {
-            tap_slot: Arc::new(Mutex::new(self.on_tap.clone())),
-            secondary_tap_slot: Arc::new(Mutex::new(self.on_secondary_tap.clone())),
-            long_press_slot: Arc::new(Mutex::new(self.on_long_press.clone())),
-            double_tap_slot: Arc::new(Mutex::new(self.on_double_tap.clone())),
-            pan_slot: Arc::new(Mutex::new(PanCallbacks {
+            tap_slot: Rc::new(RefCell::new(self.on_tap.clone())),
+            secondary_tap_slot: Rc::new(RefCell::new(self.on_secondary_tap.clone())),
+            long_press_slot: Rc::new(RefCell::new(self.on_long_press.clone())),
+            double_tap_slot: Rc::new(RefCell::new(self.on_double_tap.clone())),
+            pan_slot: Rc::new(RefCell::new(PanCallbacks {
                 start: self.on_pan_start.clone(),
                 update: self.on_pan_update.clone(),
                 end: self.on_pan_end.clone(),
+            })),
+            horizontal_drag_slot: Rc::new(RefCell::new(HorizontalDragCallbacks {
+                down: self.on_horizontal_drag_down.clone(),
+                start: self.on_horizontal_drag_start.clone(),
+                update: self.on_horizontal_drag_update.clone(),
+                end: self.on_horizontal_drag_end.clone(),
+                cancel: self.on_horizontal_drag_cancel.clone(),
             })),
             recognizers: None,
         }
@@ -328,66 +465,99 @@ impl ViewState<GestureDetector> for GestureDetectorState {
         // Each recognizer reads its live slot OUT before invoking it, so a slot
         // lock is never held across user code (no re-entrancy / poison hazard).
         let tap = {
-            let primary_slot = Arc::clone(&self.tap_slot);
-            let secondary_slot = Arc::clone(&self.secondary_tap_slot);
+            let primary_slot = Rc::clone(&self.tap_slot);
+            let secondary_slot = Rc::clone(&self.secondary_tap_slot);
             TapGestureRecognizer::new(arena.clone())
                 .with_on_tap(move |_details| {
-                    if let Some(handler) = primary_slot.lock().ok().and_then(|guard| guard.clone())
-                    {
+                    if let Some(handler) = primary_slot.borrow().clone() {
                         handler();
                     }
                 })
                 .with_on_secondary_tap(move |_details| {
-                    if let Some(handler) =
-                        secondary_slot.lock().ok().and_then(|guard| guard.clone())
-                    {
+                    if let Some(handler) = secondary_slot.borrow().clone() {
                         handler();
                     }
                 })
         };
 
         let long_press = {
-            let slot = Arc::clone(&self.long_press_slot);
+            let slot = Rc::clone(&self.long_press_slot);
             LongPressGestureRecognizer::new(arena.clone()).with_on_long_press(move || {
-                if let Some(handler) = slot.lock().ok().and_then(|guard| guard.clone()) {
+                if let Some(handler) = slot.borrow().clone() {
                     handler();
                 }
             })
         };
 
         let double_tap = {
-            let slot = Arc::clone(&self.double_tap_slot);
+            let slot = Rc::clone(&self.double_tap_slot);
             DoubleTapGestureRecognizer::new(arena.clone()).with_on_double_tap(move |_details| {
-                if let Some(handler) = slot.lock().ok().and_then(|guard| guard.clone()) {
+                if let Some(handler) = slot.borrow().clone() {
                     handler();
                 }
             })
         };
 
         let drag = {
-            let start_slot = Arc::clone(&self.pan_slot);
-            let update_slot = Arc::clone(&self.pan_slot);
-            let end_slot = Arc::clone(&self.pan_slot);
+            let start_slot = Rc::clone(&self.pan_slot);
+            let update_slot = Rc::clone(&self.pan_slot);
+            let end_slot = Rc::clone(&self.pan_slot);
             DragGestureRecognizer::new(arena.clone(), DragAxis::Free)
                 .with_on_start(move |details| {
-                    let callback = start_slot.lock().ok().and_then(|guard| guard.start.clone());
+                    let callback = start_slot.borrow().start.clone();
                     if let Some(callback) = callback {
                         callback(details);
                     }
                 })
                 .with_on_update(move |details| {
-                    let callback = update_slot
-                        .lock()
-                        .ok()
-                        .and_then(|guard| guard.update.clone());
+                    let callback = update_slot.borrow().update.clone();
                     if let Some(callback) = callback {
                         callback(details);
                     }
                 })
                 .with_on_end(move |details| {
-                    let callback = end_slot.lock().ok().and_then(|guard| guard.end.clone());
+                    let callback = end_slot.borrow().end.clone();
                     if let Some(callback) = callback {
                         callback(details);
+                    }
+                })
+        };
+
+        let horizontal_drag = {
+            let down_slot = Rc::clone(&self.horizontal_drag_slot);
+            let start_slot = Rc::clone(&self.horizontal_drag_slot);
+            let update_slot = Rc::clone(&self.horizontal_drag_slot);
+            let end_slot = Rc::clone(&self.horizontal_drag_slot);
+            let cancel_slot = Rc::clone(&self.horizontal_drag_slot);
+            DragGestureRecognizer::new(arena.clone(), DragAxis::Horizontal)
+                .with_on_down(move |details| {
+                    let callback = down_slot.borrow().down.clone();
+                    if let Some(callback) = callback {
+                        callback(details);
+                    }
+                })
+                .with_on_start(move |details| {
+                    let callback = start_slot.borrow().start.clone();
+                    if let Some(callback) = callback {
+                        callback(details);
+                    }
+                })
+                .with_on_update(move |details| {
+                    let callback = update_slot.borrow().update.clone();
+                    if let Some(callback) = callback {
+                        callback(details);
+                    }
+                })
+                .with_on_end(move |details| {
+                    let callback = end_slot.borrow().end.clone();
+                    if let Some(callback) = callback {
+                        callback(details);
+                    }
+                })
+                .with_on_cancel(move || {
+                    let callback = cancel_slot.borrow().cancel.clone();
+                    if let Some(callback) = callback {
+                        callback();
                     }
                 })
         };
@@ -399,28 +569,38 @@ impl ViewState<GestureDetector> for GestureDetectorState {
             long_press,
             double_tap,
             drag,
+            horizontal_drag,
         });
     }
 
     fn build(&self, view: &GestureDetector, _ctx: &dyn BuildContext) -> impl IntoView {
+        assert_no_pan_horizontal_drag_conflict(view);
+
         // Refresh the live callbacks the recognizers read, so a rebuild with new
         // closures is honored (the recognizers themselves persist).
-        if let Ok(mut slot) = self.tap_slot.lock() {
-            slot.clone_from(&view.on_tap);
-        }
-        if let Ok(mut slot) = self.secondary_tap_slot.lock() {
-            slot.clone_from(&view.on_secondary_tap);
-        }
-        if let Ok(mut slot) = self.long_press_slot.lock() {
-            slot.clone_from(&view.on_long_press);
-        }
-        if let Ok(mut slot) = self.double_tap_slot.lock() {
-            slot.clone_from(&view.on_double_tap);
-        }
-        if let Ok(mut slot) = self.pan_slot.lock() {
+        self.tap_slot.borrow_mut().clone_from(&view.on_tap);
+        self.secondary_tap_slot
+            .borrow_mut()
+            .clone_from(&view.on_secondary_tap);
+        self.long_press_slot
+            .borrow_mut()
+            .clone_from(&view.on_long_press);
+        self.double_tap_slot
+            .borrow_mut()
+            .clone_from(&view.on_double_tap);
+        {
+            let mut slot = self.pan_slot.borrow_mut();
             slot.start.clone_from(&view.on_pan_start);
             slot.update.clone_from(&view.on_pan_update);
             slot.end.clone_from(&view.on_pan_end);
+        }
+        {
+            let mut slot = self.horizontal_drag_slot.borrow_mut();
+            slot.down.clone_from(&view.on_horizontal_drag_down);
+            slot.start.clone_from(&view.on_horizontal_drag_start);
+            slot.update.clone_from(&view.on_horizontal_drag_update);
+            slot.end.clone_from(&view.on_horizontal_drag_end);
+            slot.cancel.clone_from(&view.on_horizontal_drag_cancel);
         }
 
         // `init_state` runs exactly once before the first `build`, so the
@@ -444,8 +624,32 @@ impl ViewState<GestureDetector> for GestureDetectorState {
             recognizers.long_press.dispose();
             recognizers.double_tap.dispose();
             recognizers.drag.dispose();
+            recognizers.horizontal_drag.dispose();
         }
     }
+}
+
+/// Debug-only conflict guard for `on_pan_*` and `on_horizontal_drag_*` — see
+/// [`GestureDetector`]'s "Pan and horizontal-drag conflict" doc section for
+/// the full rationale and the divergence from Flutter's literal condition.
+/// Only `start`/`update`/`end` count toward "configured", matching the
+/// oracle's own `haveHorizontalDrag`/`havePan` checks (`down`/`cancel` don't
+/// participate there either).
+fn assert_no_pan_horizontal_drag_conflict(view: &GestureDetector) {
+    let have_pan =
+        view.on_pan_start.is_some() || view.on_pan_update.is_some() || view.on_pan_end.is_some();
+    let have_horizontal_drag = view.on_horizontal_drag_start.is_some()
+        || view.on_horizontal_drag_update.is_some()
+        || view.on_horizontal_drag_end.is_some();
+    debug_assert!(
+        !(have_pan && have_horizontal_drag),
+        "GestureDetector: on_pan_* and on_horizontal_drag_* are both configured on one \
+         detector. FLUI's pan recognizer is DragAxis::Free — it already spans the horizontal \
+         axis — so it competes directly with the horizontal recognizer for the same \
+         horizontal motion, and which family wins the arena becomes registration-order- \
+         dependent rather than deterministic. Use on_horizontal_drag_* alone, or on_pan_* \
+         alone.",
+    );
 }
 
 impl GestureDetectorState {
@@ -466,11 +670,13 @@ impl GestureDetectorState {
             long_press: Arc::clone(&recognizers.long_press),
             double_tap: Arc::clone(&recognizers.double_tap),
             drag: Arc::clone(&recognizers.drag),
-            tap_slot: Arc::clone(&self.tap_slot),
-            secondary_tap_slot: Arc::clone(&self.secondary_tap_slot),
-            long_press_slot: Arc::clone(&self.long_press_slot),
-            double_tap_slot: Arc::clone(&self.double_tap_slot),
-            pan_slot: Arc::clone(&self.pan_slot),
+            horizontal_drag: Arc::clone(&recognizers.horizontal_drag),
+            tap_slot: Rc::clone(&self.tap_slot),
+            secondary_tap_slot: Rc::clone(&self.secondary_tap_slot),
+            long_press_slot: Rc::clone(&self.long_press_slot),
+            double_tap_slot: Rc::clone(&self.double_tap_slot),
+            pan_slot: Rc::clone(&self.pan_slot),
+            horizontal_drag_slot: Rc::clone(&self.horizontal_drag_slot),
         };
 
         let down = group.clone();
@@ -496,11 +702,13 @@ struct RecognizerGroup {
     long_press: Arc<LongPressGestureRecognizer>,
     double_tap: Arc<DoubleTapGestureRecognizer>,
     drag: Arc<DragGestureRecognizer>,
-    tap_slot: Arc<Mutex<Option<GestureCallback>>>,
-    secondary_tap_slot: Arc<Mutex<Option<GestureCallback>>>,
-    long_press_slot: Arc<Mutex<Option<GestureCallback>>>,
-    double_tap_slot: Arc<Mutex<Option<GestureCallback>>>,
-    pan_slot: Arc<Mutex<PanCallbacks>>,
+    horizontal_drag: Arc<DragGestureRecognizer>,
+    tap_slot: Rc<RefCell<Option<GestureCallback>>>,
+    secondary_tap_slot: Rc<RefCell<Option<GestureCallback>>>,
+    long_press_slot: Rc<RefCell<Option<GestureCallback>>>,
+    double_tap_slot: Rc<RefCell<Option<GestureCallback>>>,
+    pan_slot: Rc<RefCell<PanCallbacks>>,
+    horizontal_drag_slot: Rc<RefCell<HorizontalDragCallbacks>>,
 }
 
 impl RecognizerGroup {
@@ -522,9 +730,19 @@ impl RecognizerGroup {
 
     /// The drag recognizer participates iff any pan callback is set.
     fn drag_active(&self) -> bool {
-        self.pan_slot
-            .lock()
-            .is_ok_and(|pan| pan.start.is_some() || pan.update.is_some() || pan.end.is_some())
+        let pan = self.pan_slot.borrow();
+        pan.start.is_some() || pan.update.is_some() || pan.end.is_some()
+    }
+
+    /// The horizontal-drag recognizer participates iff any horizontal-drag
+    /// callback is set.
+    fn horizontal_drag_active(&self) -> bool {
+        let horizontal = self.horizontal_drag_slot.borrow();
+        horizontal.down.is_some()
+            || horizontal.start.is_some()
+            || horizontal.update.is_some()
+            || horizontal.end.is_some()
+            || horizontal.cancel.is_some()
     }
 
     /// Register every participating recognizer for this contact (tap first so it
@@ -551,6 +769,9 @@ impl RecognizerGroup {
         if self.drag_active() {
             self.drag.add_pointer(pointer, position);
         }
+        if self.horizontal_drag_active() {
+            self.horizontal_drag.add_pointer(pointer, position);
+        }
         if self.self_close {
             self.arena.close(pointer);
         }
@@ -570,10 +791,87 @@ impl RecognizerGroup {
         if self.drag_active() {
             self.drag.handle_event(event);
         }
+        if self.horizontal_drag_active() {
+            self.horizontal_drag.handle_event(event);
+        }
     }
 }
 
 /// `true` when the no-argument callback slot currently holds a handler.
-fn slot_is_some(slot: &Arc<Mutex<Option<GestureCallback>>>) -> bool {
-    slot.lock().is_ok_and(|guard| guard.is_some())
+fn slot_is_some(slot: &Rc<RefCell<Option<GestureCallback>>>) -> bool {
+    slot.borrow().is_some()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn on_horizontal_drag_builders_store_the_callback() {
+        let detector = GestureDetector::new()
+            .on_horizontal_drag_down(|_| {})
+            .on_horizontal_drag_start(|_| {})
+            .on_horizontal_drag_update(|_| {})
+            .on_horizontal_drag_end(|_| {})
+            .on_horizontal_drag_cancel(|| {});
+
+        assert!(detector.on_horizontal_drag_down.is_some());
+        assert!(detector.on_horizontal_drag_start.is_some());
+        assert!(detector.on_horizontal_drag_update.is_some());
+        assert!(detector.on_horizontal_drag_end.is_some());
+        assert!(detector.on_horizontal_drag_cancel.is_some());
+    }
+
+    #[test]
+    fn default_detector_has_no_horizontal_drag_callbacks() {
+        let detector = GestureDetector::new();
+        assert!(detector.on_horizontal_drag_down.is_none());
+        assert!(detector.on_horizontal_drag_start.is_none());
+        assert!(detector.on_horizontal_drag_update.is_none());
+        assert!(detector.on_horizontal_drag_end.is_none());
+        assert!(detector.on_horizontal_drag_cancel.is_none());
+    }
+
+    #[test]
+    fn conflict_guard_is_silent_with_only_horizontal_drag_configured() {
+        let detector = GestureDetector::new().on_horizontal_drag_start(|_| {});
+        // Must not panic — no `on_pan_*` is configured alongside it.
+        assert_no_pan_horizontal_drag_conflict(&detector);
+    }
+
+    #[test]
+    fn conflict_guard_is_silent_with_only_pan_configured() {
+        let detector = GestureDetector::new().on_pan_start(|_| {});
+        assert_no_pan_horizontal_drag_conflict(&detector);
+    }
+
+    #[test]
+    fn conflict_guard_ignores_down_and_cancel_alone() {
+        // Flutter parity: `haveHorizontalDrag`/`havePan` only look at
+        // start/update/end — down/cancel alone (paired with the other
+        // family's start/update/end) must not trip the guard.
+        let detector = GestureDetector::new()
+            .on_pan_start(|_| {})
+            .on_horizontal_drag_down(|_| {})
+            .on_horizontal_drag_cancel(|| {});
+        assert_no_pan_horizontal_drag_conflict(&detector);
+    }
+
+    #[test]
+    #[should_panic(expected = "on_pan_* and on_horizontal_drag_* are both configured")]
+    fn conflict_guard_panics_when_pan_and_horizontal_drag_coexist() {
+        let detector = GestureDetector::new()
+            .on_pan_start(|_| {})
+            .on_horizontal_drag_start(|_| {});
+        assert_no_pan_horizontal_drag_conflict(&detector);
+    }
+
+    #[test]
+    #[should_panic(expected = "on_pan_* and on_horizontal_drag_* are both configured")]
+    fn conflict_guard_panics_with_update_and_end_variants_too() {
+        let detector = GestureDetector::new()
+            .on_pan_update(|_| {})
+            .on_horizontal_drag_end(|_| {});
+        assert_no_pan_horizontal_drag_conflict(&detector);
+    }
 }

@@ -18,6 +18,10 @@ autotests = false
 # Authoring spine: View/Element traits, BuildContext, ViewSeq, keys, derives
 # (also transitively re-exports flui-foundation's ElementId/RenderId).
 flui-view = { path = "../flui-view", version = "0.2.0" }
+# Re-exported as `flui_widgets::Stream` so a `StreamBuilder` consumer can name the
+# trait without depending on futures-core directly. Trait-only: no
+# executor, no combinators, no proc macros.
+futures-core = { workspace = true }
 # Concrete RenderBox catalog every render-object widget wraps (also re-exports
 # the flex/stack config enums it owns from flui-types).
 flui-objects = { path = "../flui-objects", version = "0.2.0" }
@@ -25,8 +29,17 @@ flui-objects = { path = "../flui-objects", version = "0.2.0" }
 flui-rendering = { path = "../flui-rendering", version = "0.2.0" }
 # Animation primitives (`Animation<T>`) for transition widgets (`FadeTransition`).
 flui-animation = { path = "../flui-animation", version = "0.2.0" }
+# `NavigatorState::init_state` stores a `PostFrameHandle` so a
+# `HeroController` can schedule its measurement. No cycle: flui-view already
+# depends on flui-scheduler.
+flui-scheduler = { path = "../flui-scheduler", version = "0.2.0" }
 # `Listenable` — the subscription `AnimatedView`/`FadeTransition` returns.
 flui-foundation = { path = "../flui-foundation", version = "0.2.0" }
+# `WidgetStates` — the interactive-state bitset `WidgetStateProperty`/
+# `WidgetStatesController` are built on. Already a workspace dependency
+# (flui-rendering's dirty-flag storage); same house style for a small,
+# closed set of boolean flags.
+bitflags = { workspace = true }
 # Gesture recognizers + arena that `GestureDetector` drives.
 flui-interaction = { path = "../flui-interaction", version = "0.2.0" }
 # Styling + typography + layout value types (Alignment, Color, BoxDecoration,
@@ -34,6 +47,10 @@ flui-interaction = { path = "../flui-interaction", version = "0.2.0" }
 flui-types = { path = "../flui-types", version = "0.2.0" }
 # Geometry primitives (EdgeInsets, Matrix4, Pixels, px).
 flui-geometry = { path = "../flui-geometry", version = "0.2.0" }
+# `Overlay`'s entry list and its published `RebuildHandle` live behind private
+# `Mutex`es: the list is mutated from outside the tree, and
+# `ViewState::build` takes `&self`.
+parking_lot = { workspace = true }
 # Typed error variants for `ImageProviderError` via `#[derive(Error)]`.
 thiserror = { workspace = true }
 # Structured diagnostics for image-provider failures — `tracing::warn!` on
@@ -43,6 +60,19 @@ tracing = { workspace = true }
 # feature to avoid pulling in the decode library for apps that only use
 # `Image::from_image` (pre-decoded `PixelImage`).
 image = { workspace = true, optional = true }
+# Byte-loading/decode + a background tokio runtime for `AssetImage`/
+# `NetworkImage`'s async resolution (`ImageProvider::resolve_async`).
+# Optional: only the `asset-images`/`network-images` features pull it in.
+flui-assets = { path = "../flui-assets", version = "0.2.0", optional = true }
+# In-flight image-load coalescing (`image::decode_cache`): `Shared` lets two
+# `Image` widgets mounted with the same provider key await ONE load. `alloc`
+# only — no executor, no I/O, no proc-macros (see the workspace-level comment
+# on why this is the one place the `futures-core`-only policy isn't enough).
+futures-util = { workspace = true, optional = true }
+# Count-bounded LRU backing the same decode cache — no time-based eviction,
+# unlike `flui-assets`' own moka byte-loader cache. See
+# `crate::image::decode_cache`'s module doc.
+lru = { workspace = true, optional = true }
 
 [dev-dependencies]
 # Integration tests drive the real layout pipeline through the render harness.
@@ -62,6 +92,11 @@ flui-binding = { path = "../flui-binding", version = "0.2.0" }
 parking_lot = { workspace = true }
 # Deterministic paint/layout snapshot assertions.
 insta = { workspace = true }
+# Compile-time ownership-boundary assertions for ADR-0027.
+static_assertions = { workspace = true }
+# `#[tokio::test]` for the `image::decode_cache` coalescing unit tests
+# (`asset-images` feature) and the async `Image` widget integration tests.
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 # All root tests/*.rs files, consolidated into one binary via `#[path]` module
 # declarations in tests/main.rs (autotests = false above disables the per-file
@@ -84,10 +119,16 @@ default = []
 # Required by `MemoryImage` and `FileImage`; `DirectImageProvider` compiles
 # without it.
 images = ["dep:image"]
-# Exposes the HTTP/HTTPS image-provider placeholder while async image loading is
-# still being wired through the view layer. Off by default so stable builds do
-# not advertise a constructor that always resolves to `AsyncNotWired`.
-network-images = []
+# Async, `flui-assets`-backed asset-file image loading: `AssetImage` resolves
+# through an injected `Arc<flui_assets::AssetRegistry>` on a background tokio
+# runtime, decoded via the same `image` crate `images` activates. Pulls in
+# `flui-assets` (with its own `images` feature), plus `futures-util`/`lru` for
+# the decode cache and load-coalescing engine (`image::decode_cache`).
+asset-images = ["dep:flui-assets", "flui-assets/images", "images", "dep:futures-util", "dep:lru"]
+# Async network image loading: rewires `NetworkImage::resolve_async` through
+# `flui-assets`' `NetworkLoader` (reqwest). Implies `asset-images` — both
+# share the same decode cache, coalescing engine, and background runtime.
+network-images = ["asset-images", "flui-assets/network"]
 serde = ["flui-types/serde"]
 
 [lints]

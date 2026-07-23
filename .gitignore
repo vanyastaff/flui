@@ -211,3 +211,4 @@ flamegraph.svg
 # Serena MCP — keep the shared project config (`.serena/project.yml`), ignore the
 # per-developer cache + local override. The cache/`project.local.yml` ignores live
 # in `.serena/.gitignore` (committed); nothing more is needed at the repo root.
+.tokensave

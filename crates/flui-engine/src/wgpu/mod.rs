@@ -3,7 +3,7 @@
 //! This module provides GPU-accelerated rendering using wgpu
 //! (Vulkan/Metal/DX12/WebGPU).
 //!
-//! # Math-backend policy (N-geom PR 2, Option D — §U16)
+//! # Math-backend policy
 //!
 //! This engine layer uses `glam` (`Vec2`/`Mat4`/`vec4`, with `bytemuck` Pod)
 //! **directly** for GPU and paint hot-path math. That is intentional and
@@ -97,20 +97,20 @@ pub(crate) mod gamma;
 /// modes (unpremul DST → blend in straight sRGB → clamp → emit premul).
 /// [`mode::ModePipeline`] owns the pipeline and bind-group layout.
 pub(crate) mod mode;
-// Cycle 4 wave 5 E-10: `buffers.rs` deleted. Module hosted
-// `DynamicBuffer` (auto-growing vertex/instance buffer) and
-// `BufferManager` (5-buffer GPU resource bag). Workspace grep
-// returned zero non-self consumers in any crate; the wgpu module
-// graph went through `buffer_pool.rs` (live, distinct logic --
-// reusable per-frame allocations) instead. The whole module was
-// dead code masked by the `pub use buffers::{...}` re-export at
-// `wgpu/mod.rs:148`, which itself had zero consumers (item-level
-// audit revealed both layers were dead).
+// `buffers.rs` was deleted. The module hosted `DynamicBuffer`
+// (auto-growing vertex/instance buffer) and `BufferManager`
+// (5-buffer GPU resource bag). Workspace grep returned zero non-self
+// consumers in any crate; the wgpu module graph went through
+// `buffer_pool.rs` (live, distinct logic -- reusable per-frame
+// allocations) instead. The whole module was dead code masked by a
+// `pub use buffers::{...}` re-export elsewhere in this file, which
+// itself had zero consumers (a closer look revealed both layers were
+// dead).
 #[cfg(debug_assertions)]
 mod debug;
 /// Gradient + shadow + blur instance descriptors consumed by `painter`'s
 /// instanced-batch pipelines. The previous module-level `#[allow(dead_code)]`
-/// reflex was removed in cycle 4 E-4 alongside the forward-looking helpers
+/// reflex was removed alongside the forward-looking helpers
 /// (`ShadowParams::elevation_*`, `BlurIntensity`, `LinearGradientBuilder`,
 /// the parallel `effects::BlurParams`); any zombie that returns lands as an
 /// item-level lint, not a broad module suppression.
@@ -120,7 +120,7 @@ mod external_texture_registry;
 pub mod font_loader;
 /// GPU instance-buffer types: `RectInstance`, `CircleInstance`,
 /// `ArcInstance`, `TextureInstance`, gradient instances. All
-/// surviving items are consumed by `painter`. Cycle 4 E-5
+/// surviving items are consumed by `painter`. A cleanup pass
 /// deleted the 6 forward-looking shortcuts the previous
 /// module-level `#[allow(dead_code)]` was masking (`RectInstance::rounded_rect`,
 /// `RectInstance::with_clip_rsuperellipse`, `RectInstance::with_transform`,
@@ -145,7 +145,7 @@ pub mod path_cache;
 /// `PipelineCache` (get_or_create, viewport_bind_group_layout), and
 /// `pipeline_key_from_paint`. Unused constants/methods/cache helpers deleted.
 mod pipeline;
-// Cycle 4 E-6: the parallel `pipelines.rs` (with its own `PipelineCache` +
+// The parallel `pipelines.rs` (with its own `PipelineCache` +
 // `PipelineBuilder` structs, name-colliding with `pipeline.rs`) was deleted.
 // The `pipelines.rs` introduced by T3 is distinct: it defines `PipelineSet`,
 // which *composes* the live `PipelineCache` from `pipeline.rs` (singular) and
@@ -169,13 +169,13 @@ mod renderer;
 pub(super) mod replay;
 pub(crate) mod resources;
 /// Shader cache for offscreen pipelines (`OffscreenRenderer` mask /
-/// blur / morph). Cycle 4 E-7 dropped the module-level
+/// blur / morph). A cleanup pass dropped the module-level
 /// `#[allow(dead_code)]` mask: the only forward-looking helper
 /// (`ShaderCache::clear`) is now gated behind
 /// `#[cfg(feature = "devtools")]`, so default-build dead-code
 /// surfaces as an item-level lint rather than a broad module
-/// suppression. The audit also mentioned `cached_count` but no such
-/// method existed -- only `clear`.
+/// suppression. An earlier design-review pass had also mentioned a
+/// `cached_count` method, but no such method existed -- only `clear`.
 mod shader_compiler;
 /// naga_oil shader composition helper: resolves `#import` directives
 /// in WGSL at pipeline-init time via [`shader_composer::compose_wgsl_shader`].
@@ -236,7 +236,7 @@ mod shape_blend_tests;
 #[cfg(all(test, feature = "enable-wgpu-tests"))]
 mod gradient_image_blend_tests;
 
-// color_matrix_filter_tests contains F1-F6 GPU readback tests for the
+// color_matrix_filter_tests contains GPU readback tests for the
 // color-matrix filter pass (identity, swap-R↔B, translucent premul roundtrip,
 // transpose-bug discriminator, brightness on translucent, nested opacity).
 #[cfg(all(test, feature = "enable-wgpu-tests"))]
@@ -292,7 +292,7 @@ mod scenebuilder_filter_chain_tests;
 // ============================================================================
 
 // ----------------------------------------------------------------------------
-// Cycle 4 wave 5 E-10: surface trim
+// Public re-export surface trim
 //
 // Workspace ripgrep of `flui_engine::wgpu::<Name>` returned consumers
 // ONLY for `Renderer` (4 callsites in flui-app); every other
@@ -347,4 +347,4 @@ pub use offscreen::OffscreenRenderer;
 #[cfg(feature = "enable-wgpu-tests")]
 pub use texture_pool::{PooledTexture, TexturePool};
 
-// Painter (WgpuPainter is the concrete implementation; Painter trait deleted in Mythos U5)
+// Painter (WgpuPainter is the concrete implementation; the `Painter` trait was deleted)

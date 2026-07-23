@@ -59,16 +59,23 @@ impl<C: ViewSeq> fmt::Debug for Flow<C> {
 
 impl<C> flui_view::RenderView for Flow<C>
 where
-    C: ViewSeq + Clone + Send + Sync + 'static,
+    C: ViewSeq + Clone + 'static,
 {
     type Protocol = BoxProtocol;
     type RenderObject = RenderFlow;
 
-    fn create_render_object(&self) -> Self::RenderObject {
+    fn create_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+    ) -> Self::RenderObject {
         RenderFlow::new(self.delegate.clone()).with_clip_behavior(self.clip_behavior)
     }
 
-    fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+    fn update_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+        render_object: &mut Self::RenderObject,
+    ) {
         // The `DelegateChange` return is discarded today — same
         // "framework marks paint/layout unconditionally, future-proofing
         // only" caveat `CustomPaint::update_render_object` already
@@ -145,27 +152,71 @@ mod tests {
     #[test]
     fn create_render_object_defaults_to_hard_edge_clip() {
         let flow: Flow = Flow::new(delegate(), Vec::new());
-        let render_object = flow.create_render_object();
+        let render_object = flow.create_render_object(&flui_view::RenderObjectContext::detached());
         assert_eq!(render_object.clip_behavior(), Clip::HardEdge);
     }
 
     #[test]
     fn create_render_object_applies_an_overridden_clip_behavior() {
         let flow: Flow = Flow::new(delegate(), Vec::new()).clip_behavior(Clip::None);
-        let render_object = flow.create_render_object();
+        let render_object = flow.create_render_object(&flui_view::RenderObjectContext::detached());
         assert_eq!(render_object.clip_behavior(), Clip::None);
     }
 
     #[test]
     fn update_render_object_applies_a_changed_clip_behavior() {
         let flow: Flow = Flow::new(delegate(), Vec::new());
-        let mut render_object = flow.create_render_object();
+        let mut render_object =
+            flow.create_render_object(&flui_view::RenderObjectContext::detached());
         assert_eq!(render_object.clip_behavior(), Clip::HardEdge);
 
         let updated: Flow = Flow::new(delegate(), Vec::new()).clip_behavior(Clip::None);
-        updated.update_render_object(&mut render_object);
+        updated.update_render_object(
+            &flui_view::RenderObjectContext::detached(),
+            &mut render_object,
+        );
 
         assert_eq!(render_object.clip_behavior(), Clip::None);
+    }
+
+    /// Every `Clip` variant, not just `None`/`HardEdge` (already covered
+    /// above) — the render object's clip behavior must default to
+    /// `HardEdge` and then track a rebuild for each variant in turn.
+    ///
+    /// Flutter parity: `flow_test.dart` `'Flow can set and update
+    /// clipBehavior'` and `'Flow.unwrapped can set and update
+    /// clipBehavior'` — `for (final Clip clip in Clip.values) { ...
+    /// expect(renderObject.clipBehavior, clip); }`. FLUI has a single `Flow`
+    /// constructor with no `Flow.unwrapped` equivalent (Flutter's default
+    /// `Flow()` wraps every child in a `RepaintBoundary` via
+    /// `RepaintBoundary.wrapAll`, a paint-isolation optimization `Flow::new`
+    /// here does not perform), so this one test covers both oracle cases —
+    /// see `tests/parity/flow_test.rs`'s module docs for the full
+    /// reconciliation.
+    #[test]
+    fn update_render_object_applies_every_clip_variant() {
+        let flow: Flow = Flow::new(delegate(), Vec::new());
+        let mut render_object =
+            flow.create_render_object(&flui_view::RenderObjectContext::detached());
+        assert_eq!(render_object.clip_behavior(), Clip::HardEdge);
+
+        for clip in [
+            Clip::None,
+            Clip::HardEdge,
+            Clip::AntiAlias,
+            Clip::AntiAliasWithSaveLayer,
+        ] {
+            let updated: Flow = Flow::new(delegate(), Vec::new()).clip_behavior(clip);
+            updated.update_render_object(
+                &flui_view::RenderObjectContext::detached(),
+                &mut render_object,
+            );
+            assert_eq!(
+                render_object.clip_behavior(),
+                clip,
+                "clip_behavior must track a rebuild to {clip:?}"
+            );
+        }
     }
 
     #[test]

@@ -1,5 +1,5 @@
 //! Integration tests for `GridView::builder` (RenderSliverGridLazy → the
-//! lazy-sliver element-wiring backend, U4.3).
+//! lazy-sliver element-wiring backend).
 //!
 //! Mirrors `lazy_list.rs`'s frame-sequence model: `pump_frame` calls
 //! `service_child_requests` after `run_frame`, so two `tick` calls settle a
@@ -320,5 +320,65 @@ fn lazy_grid_view_builder_none_at_k_caps_build_count() {
     assert_eq!(
         geometry.max_paint_extent, 200.0,
         "None-at-K must cap max paint extent with the same effective child count"
+    );
+}
+
+// ============================================================================
+// Test — builder swap refreshes resident tiles end to end (FLUI-added)
+// ============================================================================
+
+/// FLUI-added — the Flutter grid corpus has no builder-closure-swap case (it
+/// exercises only scroll-driven eviction/rebuild), so this carries no oracle
+/// citation. It guards the `SliverGridLazyAdaptorBehavior::on_view_updated` →
+/// `needs_resident_refresh` wiring that the two `service`-level unit tests
+/// bypass by setting the flag by hand: a `pump_widget` that keeps the grid
+/// shape but hands the builder a fresh label set at every index must refresh
+/// the already-resident tiles in place. Deleting the `on_view_updated` wiring
+/// leaves the pre-swap labels resident and fails this test — the produce half
+/// of the fix the unit tests cannot see.
+#[test]
+fn lazy_grid_view_builder_swap_refreshes_resident_tiles() {
+    fn grid(labels: &'static [&'static str]) -> impl View {
+        GridView::builder(two_column_delegate(), labels.len(), move |i| {
+            labels
+                .get(i)
+                .map(|label| SizedBox::square(100.0).child(Text::new(*label)).boxed())
+        })
+    }
+
+    let mut laid = lay_out(grid(&["A0", "A1", "A2", "A3"]), tight(200.0, 200.0));
+    laid.tick();
+    laid.tick();
+
+    assert!(
+        laid.find_text("A0").is_some(),
+        "pre-swap tile 0 must show A0"
+    );
+    assert!(
+        laid.find_text("A3").is_some(),
+        "pre-swap tile 3 must show A3"
+    );
+
+    // Swap the builder closure for the same grid shape (same delegate, same
+    // item_count) with a fresh label at every index.
+    laid.pump_widget(grid(&["B0", "B1", "B2", "B3"]));
+    laid.tick();
+    laid.tick();
+
+    assert!(
+        laid.find_text("B0").is_some(),
+        "resident tile 0 must refresh to B0 after the builder swap"
+    );
+    assert!(
+        laid.find_text("B3").is_some(),
+        "resident tile 3 must refresh to B3 after the builder swap"
+    );
+    assert!(
+        laid.find_text("A0").is_none(),
+        "stale pre-swap label A0 must be gone after the refresh"
+    );
+    assert!(
+        laid.find_text("A3").is_none(),
+        "stale pre-swap label A3 must be gone after the refresh"
     );
 }

@@ -3,7 +3,7 @@
 //! `height`, `compute_distance_to_actual_baseline`,
 //! `did_exceed_max_lines`.
 //!
-//! Mythos chain U7 extracted these from the 990-LOC `text_painter.rs`
+//! Extracted from the 990-LOC `text_painter.rs`
 //! god module.
 
 use flui_types::{

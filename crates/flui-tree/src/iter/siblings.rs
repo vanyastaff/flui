@@ -11,8 +11,8 @@ use crate::{depth::INLINE_TREE_DEPTH, traits::TreeNav};
 
 /// Children collected from the parent for sibling iteration.
 ///
-/// Audit T-20: stack-allocated for typical sibling counts (32-wide
-/// flex/row layouts fit inline); spills to heap for wider rows.
+/// Stack-allocated for typical sibling counts (32-wide flex/row
+/// layouts fit inline); spills to heap for wider rows.
 type SiblingsChildren<I> = SmallVec<[I; INLINE_TREE_DEPTH]>;
 
 /// Direction for sibling iteration.
@@ -83,7 +83,7 @@ pub enum SiblingsDirection {
 pub struct Siblings<'a, I: TreeId, T: TreeNav<I>> {
     _tree: &'a T,
     /// Parent's children list (owned). Stack-allocated for typical
-    /// sibling counts (audit T-20).
+    /// sibling counts.
     children: SiblingsChildren<I>,
     /// Current index in siblings list
     current_index: Option<usize>,
@@ -270,7 +270,7 @@ impl<I: TreeId, T: TreeNav<I>> std::iter::ExactSizeIterator for Siblings<'_, I, 
 #[derive(Debug)]
 pub struct AllSiblings<'a, I: TreeId, T: TreeNav<I>> {
     _tree: &'a T,
-    /// Parent's children list (owned). Stack-allocated (audit T-20).
+    /// Parent's children list (owned). Stack-allocated.
     children: SiblingsChildren<I>,
     /// Current index in siblings list
     index: usize,

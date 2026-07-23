@@ -132,7 +132,7 @@ impl Matrix4 {
     /// Borrows the column-major storage as a `glam::Mat4` for delegated math.
     ///
     /// Both types are column-major, so this is a direct reinterpret of the 16
-    /// floats (Option D backend, N-geom PR 2).
+    /// floats (Option D backend).
     #[inline]
     #[must_use]
     fn to_glam(self) -> Mat4 {
@@ -623,7 +623,7 @@ impl Matrix4 {
 ///
 /// Matrices are applied right-to-left: `A * B` transforms first by `B`, then by
 /// `A`. Delegates to `glam::Mat4`'s SIMD-accelerated column-major product
-/// (Option D, N-geom PR 2 — replaces the hand-rolled scalar/SSE/NEON paths).
+/// (Option D — replaces the hand-rolled scalar/SSE/NEON paths).
 impl Mul for Matrix4 {
     type Output = Self;
 

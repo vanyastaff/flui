@@ -518,8 +518,7 @@ impl BuildTarget {
 fn main() {
     let cli = Cli::parse();
 
-    // Initialize logging (merged from flui-log into flui_foundation::log in
-    // D-block PR-C-1 U2).
+    // Initialize logging (merged from flui-log into flui_foundation::log).
     let log_level = if cli.verbose {
         flui_foundation::log::Level::DEBUG
     } else {

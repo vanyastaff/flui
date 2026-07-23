@@ -9,13 +9,12 @@
 //!   `layout_extent`, `max_paint_extent`, `set_sliver_geometry`) on
 //!   `RenderState<SliverProtocol>`
 //!
-//! **D-block PR-A1 U14 migration (2026-05-23):** the prior `OnceCell`-backed
-//! `set_geometry` panicked on second invocation, which made frame-2 re-layout
-//! a crash. Flutter `.flutter/.../object.dart` straight-assigns `_size` each
-//! layout pass; we mirror that semantics via `Option<T>`. `set_geometry`,
-//! `set_size`, `set_sliver_geometry` now take `&mut self`; production callers
-//! (`RenderEntry::layout`, RenderBox/RenderSliver impls) already hold a mut
-//! state borrow.
+//! The prior `OnceCell`-backed `set_geometry` panicked on second invocation,
+//! which made frame-2 re-layout a crash. Flutter `.flutter/.../object.dart`
+//! straight-assigns `_size` each layout pass; we mirror that semantics via
+//! `Option<T>`. `set_geometry`, `set_size`, `set_sliver_geometry` take
+//! `&mut self`; production callers (`RenderEntry::layout`, RenderBox/RenderSliver
+//! impls) already hold a mut state borrow.
 
 use super::RenderState;
 use crate::constraints::SliverGeometry;
@@ -59,9 +58,9 @@ impl<P: Protocol> RenderState<P> {
     /// Idempotent — overwrites any prior value. Flutter `_size = size`
     /// straight-assignment semantics.
     ///
-    /// **D-block PR-A1 U14**: prior `OnceCell`-backed implementation panicked
-    /// on second invocation, which made re-layout a crash. See module-level
-    /// doc for rationale.
+    /// The prior `OnceCell`-backed implementation panicked on second
+    /// invocation, which made re-layout a crash. See module-level doc
+    /// for rationale.
     ///
     /// # Example
     ///
@@ -210,8 +209,8 @@ impl RenderState<BoxProtocol> {
 
     /// Convenience method for setting size (box protocol).
     ///
-    /// **D-block PR-A1 U14**: signature changed to `&mut self` alongside
-    /// `set_geometry` migration.
+    /// Signature takes `&mut self`, matching `set_geometry`'s move off
+    /// the panic-on-second-write `OnceCell` storage.
     ///
     /// # Example
     ///
@@ -287,8 +286,8 @@ impl RenderState<SliverProtocol> {
 
     /// Sets sliver geometry (convenience wrapper for `set_geometry()`).
     ///
-    /// **D-block PR-A1 U14**: signature changed to `&mut self` alongside
-    /// `set_geometry` migration.
+    /// Signature takes `&mut self`, matching `set_geometry`'s move off
+    /// the panic-on-second-write `OnceCell` storage.
     ///
     /// # Example
     ///

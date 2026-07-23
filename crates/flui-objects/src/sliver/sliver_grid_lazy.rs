@@ -2,7 +2,7 @@
 //!
 //! # Design
 //!
-//! Combines the **request-strategy seam** of `RenderSliverList` (U4.2/U4.3)
+//! Combines the **request-strategy seam** of `RenderSliverList`
 //! with the **delegate-windowed geometry** of the eager `RenderSliverGrid`.
 //!
 //! Because the delegate makes scroll extent deterministic
@@ -23,7 +23,7 @@
 //!
 //! # Lifecycle
 //!
-//! Inert until a U4.3 `ChildManager` is wired (via `SliverGridLazy` view).
+//! Inert until a `ChildManager` is wired (via `SliverGridLazy` view).
 //! Until then, `request_child_build` emits requests that nothing services, so
 //! absent tiles never appear.  This matches `RenderSliverList`'s posture.
 
@@ -50,8 +50,9 @@ use flui_rendering::{
 /// A request-strategy lazily-virtualized 2-D grid sliver.
 ///
 /// Layout geometry is delegated to a [`SliverGridDelegate`]; children are
-/// built on demand by the element tree's `ChildManager` (U4.3) in response to
-/// [`SliverLayoutContext::request_child_build`] calls emitted during layout.
+/// built on demand by the element tree's `ChildManager` (not yet wired) in
+/// response to [`SliverLayoutContext::request_child_build`] calls emitted
+/// during layout.
 ///
 /// # Construction
 ///
@@ -264,6 +265,13 @@ impl RenderSliver for RenderSliverGridLazy {
             max_paint_extent: scroll_extent,
             cache_extent,
             hit_test_extent: paint_extent,
+            // See the identical fix/comment on eager `RenderSliverGrid`
+            // (`sliver_grid.rs`): omitting this left `visible` at
+            // `SliverGeometry::ZERO`'s `false` unconditionally, which blocked
+            // the viewport's hit-test walk (`sliver_child_is_visible`,
+            // `flui-rendering/src/pipeline/owner/accessors.rs`) from ever
+            // reaching a lazy grid's children.
+            visible: paint_extent > 0.0,
             has_visual_overflow: scroll_extent > paint_extent
                 || constraints.scroll_offset > 0.0
                 || constraints.overlap != 0.0,

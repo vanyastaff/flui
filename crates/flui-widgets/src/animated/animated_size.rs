@@ -16,11 +16,17 @@
 //! by `Align`, would silently wipe the in-flight animation state on every
 //! unrelated rebuild).
 
+use std::cell::Cell;
+use std::rc::Rc;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use flui_animation::curve::{ArcCurve, Curve};
-use flui_animation::{AnimationController, Curves, Scheduler, Vsync, VsyncRegistration};
+use flui_animation::{
+    Animation, AnimationController, AnimationStatus, Curves, Scheduler, Vsync, VsyncRegistration,
+};
+use flui_foundation::ListenerId;
 use flui_objects::RenderAnimatedSize;
 use flui_rendering::protocol::BoxProtocol;
 use flui_types::{Alignment, painting::Clip};
@@ -43,7 +49,7 @@ pub struct AnimatedSize {
     reverse_duration: Option<Duration>,
     curve: ArcCurve,
     clip_behavior: Clip,
-    on_end: Option<Arc<dyn Fn() + Send + Sync>>,
+    on_end: Option<Rc<dyn Fn()>>,
     child: Child,
 }
 
@@ -107,8 +113,8 @@ impl AnimatedSize {
 
     /// Sets a callback fired each time a resize run completes.
     #[must_use]
-    pub fn on_end(mut self, on_end: impl Fn() + Send + Sync + 'static) -> Self {
-        self.on_end = Some(Arc::new(on_end));
+    pub fn on_end(mut self, on_end: impl Fn() + 'static) -> Self {
+        self.on_end = Some(Rc::new(on_end));
         self
     }
 }
@@ -125,12 +131,15 @@ impl std::fmt::Debug for AnimatedSize {
 
 /// State for [`AnimatedSize`] — owns the persistent [`AnimationController`]
 /// that `RenderAnimatedSize` subscribes to directly in its own `attach`
-/// (ADR-0013 D2: the render object is handed an already-built controller and
-/// never sees a `Vsync`/`Scheduler` itself).
+/// (the render object is handed an already-built controller and never sees
+/// a `Vsync`/`Scheduler` itself).
 pub struct AnimatedSizeState {
     controller: AnimationController,
     vsync: Option<Vsync>,
     vsync_registration: Option<VsyncRegistration>,
+    status_listener_id: Option<ListenerId>,
+    completed_runs: Arc<AtomicU64>,
+    delivered_completed_runs: Cell<u64>,
     child: Child,
 }
 
@@ -159,6 +168,9 @@ impl StatefulView for AnimatedSize {
             controller,
             vsync: None,
             vsync_registration: None,
+            status_listener_id: None,
+            completed_runs: Arc::new(AtomicU64::new(0)),
+            delivered_completed_runs: Cell::new(0),
             child: self.child.clone(),
         }
     }
@@ -166,6 +178,16 @@ impl StatefulView for AnimatedSize {
 
 impl ViewState<AnimatedSize> for AnimatedSizeState {
     fn init_state(&mut self, ctx: &dyn BuildContext) {
+        let completed_runs = Arc::clone(&self.completed_runs);
+        let rebuild = ctx.rebuild_handle();
+        self.status_listener_id =
+            Some(self.controller.add_status_listener(Arc::new(move |status| {
+                if status == AnimationStatus::Completed {
+                    completed_runs.fetch_add(1, Ordering::SeqCst);
+                    rebuild.schedule();
+                }
+            })));
+
         if let Some(vsync) = ctx.get::<VsyncScope, _>(|scope| scope.vsync().clone()) {
             self.vsync_registration = Some(vsync.register(self.controller.clone()));
             self.vsync = Some(vsync);
@@ -173,12 +195,22 @@ impl ViewState<AnimatedSize> for AnimatedSizeState {
     }
 
     fn build(&self, view: &AnimatedSize, _ctx: &dyn BuildContext) -> impl IntoView {
+        let completed_runs = self.completed_runs.load(Ordering::SeqCst);
+        let delivered_runs = self.delivered_completed_runs.get();
+        if completed_runs > delivered_runs {
+            self.delivered_completed_runs.set(completed_runs);
+            if let Some(on_end) = view.on_end.as_ref() {
+                for _ in delivered_runs..completed_runs {
+                    on_end();
+                }
+            }
+        }
+
         AnimatedSizeRenderView {
             controller: self.controller.clone(),
             curve: view.curve.clone(),
             alignment: view.alignment,
             clip_behavior: view.clip_behavior,
-            on_end: view.on_end.clone(),
             child: self.child.clone(),
         }
     }
@@ -194,6 +226,9 @@ impl ViewState<AnimatedSize> for AnimatedSizeState {
     }
 
     fn dispose(&mut self) {
+        if let Some(id) = self.status_listener_id.take() {
+            self.controller.remove_status_listener(id);
+        }
         if let (Some(vsync), Some(registration)) = (&self.vsync, self.vsync_registration) {
             vsync.unregister(registration);
         }
@@ -214,7 +249,6 @@ struct AnimatedSizeRenderView {
     curve: ArcCurve,
     alignment: Alignment,
     clip_behavior: Clip,
-    on_end: Option<Arc<dyn Fn() + Send + Sync>>,
     child: Child,
 }
 
@@ -231,17 +265,23 @@ impl RenderView for AnimatedSizeRenderView {
     type Protocol = BoxProtocol;
     type RenderObject = RenderAnimatedSize;
 
-    fn create_render_object(&self) -> Self::RenderObject {
+    fn create_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+    ) -> Self::RenderObject {
         RenderAnimatedSize::new(
             self.controller.clone(),
             self.curve.clone(),
             self.alignment,
             self.clip_behavior,
-            self.on_end.clone(),
         )
     }
 
-    fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+    fn update_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+        render_object: &mut Self::RenderObject,
+    ) {
         // Targeted setters only. `render_object` is the SAME persistent
         // instance across every rebuild (only `create_render_object` builds a
         // new one) — the controller is not re-passed here, it is the
@@ -250,7 +290,6 @@ impl RenderView for AnimatedSizeRenderView {
         render_object.set_alignment(self.alignment);
         render_object.set_curve(self.curve.clone());
         render_object.set_clip_behavior(self.clip_behavior);
-        render_object.set_on_end(self.on_end.clone());
     }
 
     fn has_children(&self) -> bool {
@@ -281,25 +320,28 @@ mod tests {
             curve: ArcCurve::new(Curves::Linear),
             alignment,
             clip_behavior,
-            on_end: None,
             child: Child::empty(),
         }
     }
 
     #[test]
     fn create_render_object_installs_the_given_alignment_and_clip_behavior() {
-        let render_object = render_view(Alignment::BOTTOM_RIGHT, Clip::None).create_render_object();
+        let render_object = render_view(Alignment::BOTTOM_RIGHT, Clip::None)
+            .create_render_object(&flui_view::RenderObjectContext::detached());
         assert_eq!(render_object.alignment(), Alignment::BOTTOM_RIGHT);
         assert_eq!(render_object.clip_behavior(), Clip::None);
     }
 
     #[test]
     fn update_render_object_reconfigures_alignment_and_clip_behavior_via_targeted_setters() {
-        let mut render_object =
-            render_view(Alignment::CENTER, Clip::HardEdge).create_render_object();
+        let mut render_object = render_view(Alignment::CENTER, Clip::HardEdge)
+            .create_render_object(&flui_view::RenderObjectContext::detached());
         assert_eq!(render_object.alignment(), Alignment::CENTER);
 
-        render_view(Alignment::TOP_LEFT, Clip::AntiAlias).update_render_object(&mut render_object);
+        render_view(Alignment::TOP_LEFT, Clip::AntiAlias).update_render_object(
+            &flui_view::RenderObjectContext::detached(),
+            &mut render_object,
+        );
 
         assert_eq!(render_object.alignment(), Alignment::TOP_LEFT);
         assert_eq!(render_object.clip_behavior(), Clip::AntiAlias);

@@ -172,7 +172,7 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + DowncastSync + Send + Sync
     /// Performs layout with a protocol-erased layout context.
     ///
     /// Called by `RenderEntry::layout_leaf_only()` (leaf path) and the
-    /// pipeline's `layout_dirty_root` (U20, parent+children
+    /// pipeline's `layout_dirty_root` (the parent+children
     /// disjoint-borrow path). Returns either the computed geometry on
     /// success, or a typed [`RenderError`] on contract violation.
     ///
@@ -184,12 +184,12 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + DowncastSync + Send + Sync
     ///
     /// # Signature evolution
     ///
-    /// 1. **Pre-U19** — `fn perform_layout_raw(&mut self, constraints:
+    /// 1. **Originally** — `fn perform_layout_raw(&mut self, constraints:
     ///    ProtocolConstraints<P>) -> ProtocolGeometry<P>`. Blanket impl
     ///    shipped as a no-op returning `*self.size()` because the trait
-    ///    surface didn't carry children (companion memo D5).
+    ///    surface didn't carry children.
     ///
-    /// 2. **D-block PR-A1b U19 (PR #141)** — signature changed to
+    /// 2. **Next revision** — signature changed to
     ///    `fn perform_layout_raw(&mut self, ctx: &mut <P as Protocol>::LayoutCtxErased<'_>) -> ProtocolGeometry<P>`
     ///    so the blanket impl can construct a typed [`BoxLayoutCtx`]
     ///    with children access. Contract-violation signalling went
@@ -197,14 +197,14 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + DowncastSync + Send + Sync
     ///    caught by `catch_unwind` in `RenderEntry::layout_leaf_only` —
     ///    `panic_any` was a niche escape hatch with hidden control flow.
     ///
-    ///    The PR #141 review (finding #5) called this out as a
-    ///    Constitution Principle 6 violation — using panic primitives
-    ///    for an error condition the caller can structurally handle.
+    ///    That shape was flagged as unsound API design — using panic
+    ///    primitives for an error condition the caller can structurally
+    ///    handle.
     ///
-    /// 3. **Current shape (this PR, follow-up to #141 #5 Option A)** —
-    ///    signature returns `RenderResult<ProtocolGeometry<P>>` so
-    ///    contract violations propagate as typed `Err(RenderError::...)`
-    ///    directly through `?`. `panic_any` removed; `catch_unwind` in
+    /// 3. **Current shape** — signature returns
+    ///    `RenderResult<ProtocolGeometry<P>>` so contract violations
+    ///    propagate as typed `Err(RenderError::...)` directly through
+    ///    `?`. `panic_any` removed; `catch_unwind` in
     ///    `RenderEntry::layout_leaf_only` retained only to wrap genuine
     ///    runtime panics from third-party user widget code into
     ///    [`RenderError::Poisoned`].
@@ -479,6 +479,61 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + DowncastSync + Send + Sync
         None
     }
 
+    /// Composes onto `transform` the mapping from child `child`'s local
+    /// coordinate space into **this** object's local coordinate space.
+    ///
+    /// Flutter's `RenderObject.applyPaintTransform` (`object.dart:3639`), whose
+    /// `RenderBox` override translates by the child's `BoxParentData.offset`
+    /// (`box.dart:3014`). It is what [`PipelineOwner::transform_to`] composes at
+    /// every step of an ancestor walk.
+    ///
+    /// # Why the extra parameters
+    ///
+    /// A Flutter render object owns its children and their parent data, so
+    /// `applyPaintTransform(child, transform)` can read the offset off the child.
+    /// A FLUI render object owns neither: children live in the
+    /// [`RenderTree`](crate::storage::RenderTree) and geometry lives in
+    /// [`RenderState`](crate::storage::RenderState). The pipeline therefore hands
+    /// in what the object cannot reach — the child's committed paint offset and
+    /// this node's own laid-out size.
+    ///
+    /// # The default is the paint pipeline's own composition
+    ///
+    /// `paint_subtree_impl` wraps children in [`paint_transform`]'s layer and then
+    /// paints each child at its committed offset, so child-local → parent-local is
+    /// `paint_transform · translate(child_offset)`. The default body is exactly
+    /// that, which means every object whose paint follows the pipeline's default
+    /// path gets a correct transform **without overriding anything**.
+    ///
+    /// Override only when paint *deviates*: an object that calls
+    /// `PaintCx::paint_child_at` (an `offset_override`, so the committed offset is
+    /// not what paints) or that pushes a per-child transform scope. In this
+    /// repository that is `RenderFractionalTranslation` and `RenderFlow`.
+    ///
+    /// # Convention
+    ///
+    /// Compose on the **right**: `*transform *= step`. `transform`
+    /// maps this object's local space into some outer ancestor's; the step maps
+    /// the child's into this object's. Do **not** use [`Matrix4::translate`],
+    /// which pre-multiplies.
+    ///
+    /// [`paint_transform`]: RenderObject::paint_transform
+    /// [`PipelineOwner::transform_to`]: crate::pipeline::PipelineOwner::transform_to
+    /// [`Matrix4::translate`]: flui_types::Matrix4::translate
+    fn apply_paint_transform(
+        &self,
+        child: usize,
+        child_offset: flui_types::Offset,
+        size: flui_types::Size,
+        transform: &mut flui_types::Matrix4,
+    ) {
+        let _ = child;
+        if let Some(matrix) = self.paint_transform(size) {
+            *transform *= matrix;
+        }
+        *transform *= flui_types::Matrix4::translation(child_offset.dx.0, child_offset.dy.0, 0.0);
+    }
+
     /// Returns the transform matrix for hit testing.
     ///
     /// If `Some(matrix)`, the hit-test pipeline pushes this transform
@@ -489,21 +544,22 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + DowncastSync + Send + Sync
         None
     }
 
-    /// The pointer-event handler this render object contributes to its hit
+    /// The data-only pointer target this render object contributes to its hit
     /// entry, if any.
     ///
-    /// When a hit lands on this node, the pipeline attaches the returned handler
-    /// to the node's [`HitTestEntry`](crate::hit_testing::HitTestEntry);
-    /// [`HitTestResult::dispatch`](crate::hit_testing::HitTestResult) then
-    /// invokes it with the (locally-transformed) [`PointerEvent`], honoring the
-    /// returned [`EventPropagation`]. Default `None` — only a render object that
-    /// listens for pointer events (e.g. `RenderListener`) overrides it. This is
-    /// the arena analogue of Flutter's `RenderPointerListener` registering
-    /// itself as the `HitTestEntry`'s target.
+    /// When a hit lands on this node, the pipeline attaches the returned
+    /// identity to the node's [`HitTestEntry`](crate::hit_testing::HitTestEntry);
+    /// pointer dispatch resolves it through the owner-local interaction lane
+    /// and invokes the registered handler with the locally transformed
+    /// [`PointerEvent`]. Delivery is leaf-first to every target with no
+    /// propagation result (ADR-0027). Default `None` — only a render object
+    /// that listens for pointer events (e.g. `RenderListener`) overrides it.
+    /// The executable callback never lives in render storage; this is the
+    /// arena analogue of Flutter's `RenderPointerListener` registering itself
+    /// as the `HitTestEntry`'s target.
     ///
     /// [`PointerEvent`]: crate::hit_testing::PointerEvent
-    /// [`EventPropagation`]: crate::hit_testing::EventPropagation
-    fn pointer_event_handler(&self) -> Option<crate::hit_testing::PointerEventHandler> {
+    fn pointer_target(&self) -> Option<crate::hit_testing::PointerTarget> {
         None
     }
 
@@ -542,7 +598,7 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + DowncastSync + Send + Sync
     /// object's entire child subtree.
     ///
     /// Consulted by `flui-rendering`'s `run_semantics` assembly walk
-    /// (ADR-0014 D5) before it recurses into children — the least-privilege
+    /// (ADR-0014) before it recurses into children — the least-privilege
     /// counterpart of Flutter's `visitChildrenForSemantics` override that
     /// `RenderExcludeSemantics` uses to visit no children while excluding.
     /// This node's own config is still built and merged/boundary-decided
@@ -634,9 +690,9 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + DowncastSync + Send + Sync
     /// concrete type name. Concrete impls may override to provide a
     /// shorter / more human-readable name.
     ///
-    /// Mythos Step 12 (2026-05-20): introduced alongside the
-    /// `std::panic::catch_unwind` plumbing that turns trait-call panics
-    /// into `RenderError::Poisoned` rather than process aborts.
+    /// Introduced 2026-05-20 alongside the `std::panic::catch_unwind`
+    /// plumbing that turns trait-call panics into `RenderError::Poisoned`
+    /// rather than process aborts.
     fn debug_name(&self) -> &'static str {
         core::any::type_name::<Self>()
     }
@@ -645,7 +701,7 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + DowncastSync + Send + Sync
     // Pipeline Integration
     // ========================================================================
     //
-    // Historical note (U2 exemplar refactor, see docs/PORT.md): the trait
+    // Historical note (see docs/PORT.md): the trait
     // formerly carried a `set_was_repaint_boundary(&mut self, bool)` method.
     // It was a leaky abstraction -- framework bookkeeping that only existed
     // on the trait because Flutter's Dart classes are flat. The bit now lives
@@ -655,12 +711,12 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + DowncastSync + Send + Sync
     // trait object. Removing the method also removes the only paint-phase
     // `&mut` access to the trait surface.
 
-    // Cycle 4 wave 5 R-21: `insert_into_pipeline` convenience method
-    // removed. It was a default trait method gated by `Self: Sized`
-    // (so unusable through `dyn RenderObject<P>`) that wrapped a
-    // single line: `owner.insert(self)`. Workspace grep showed zero
-    // production callsites -- the trait was paying compile-time and
-    // API-stability cost for a convenience that earned nothing.
+    // The `insert_into_pipeline` convenience method has been removed.
+    // It was a default trait method gated by `Self: Sized` (so unusable
+    // through `dyn RenderObject<P>`) that wrapped a single line:
+    // `owner.insert(self)`. A workspace grep showed zero production
+    // callsites -- the trait was paying compile-time and API-stability
+    // cost for a convenience that earned nothing.
     //
     // Direct equivalent: `owner.insert(Box::new(render_object))`,
     // see [`crate::pipeline::PipelineOwner::insert`]. The real
@@ -748,7 +804,7 @@ mod tests {
         assert!(!leaf.skip_paint());
         assert_eq!(leaf.paint_transform(Size::ZERO), None);
         assert_eq!(leaf.hit_test_transform(Size::ZERO), None);
-        assert!(leaf.pointer_event_handler().is_none());
+        assert!(leaf.pointer_target().is_none());
         assert_eq!(leaf.mouse_cursor(), CursorIcon::Default);
         assert!(
             leaf.mouse_tracker_annotation(flui_foundation::RenderId::new(1))

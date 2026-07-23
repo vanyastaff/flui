@@ -121,106 +121,98 @@ impl WgpuEmbedder {
 }
 ```
 
-## Integration 2: flui_rendering → flui_interaction
+## Integration 2: flui_rendering/flui_objects → flui_interaction
 
-### Layer Implementation
-
-Layers need to implement `HitTestable`:
-
-```rust
-// crates/flui_engine/src/layer/canvas_layer.rs (or similar)
-
-use flui_interaction::{HitTestable, HitTestResult, HitTestEntry};
-
-pub struct CanvasLayer {
-    bounds: Rect,
-    offset: Offset,
-    event_handler: Option<Arc<dyn Fn(&PointerEvent) + Send + Sync>>,
-    children: Vec<Box<dyn Layer>>,
-}
-
-impl HitTestable for CanvasLayer {
-    fn hit_test(&self, position: Offset, result: &mut HitTestResult) -> bool {
-        // Transform position to local coordinates
-        let local_pos = position - self.offset;
-
-        // Check bounds
-        if !self.bounds.contains(local_pos) {
-            return false;
-        }
-
-        // Hit test children (back to front)
-        let mut hit = false;
-        for child in self.children.iter().rev() {
-            if child.hit_test(local_pos, result) {
-                hit = true;
-            }
-        }
-
-        // Add our own entry if we have a handler
-        if let Some(handler) = &self.event_handler {
-            let entry = HitTestEntry::with_handler(
-                local_pos,
-                self.bounds,
-                handler.clone(),
-            );
-            result.add(entry);
-            hit = true;
-        }
-
-        hit
-    }
-}
-```
-
-### RenderPointerListener
+Hit-test storage is data-only. A render object must not store executable
+pointer callbacks in its `HitTestEntry`; it stores only the owner-local
+`PointerTarget` identity. The executable handler is registered through
+`RenderObjectContext` while the corresponding `RenderView` is created,
+updated, or unmounted.
 
 ```rust
-// crates/flui_rendering/src/objects/interaction/pointer_listener.rs
-
-use flui_interaction::{HitTestable, HitTestResult, HitTestEntry};
+use flui_interaction::PointerTarget;
+use flui_rendering::hit_testing::{HitTestBehavior, HitTestEntry};
+use flui_view::RenderObjectContext;
 
 pub struct RenderPointerListener {
-    bounds: Rect,
-    on_pointer_down: Option<Arc<dyn Fn(&PointerEvent) + Send + Sync>>,
-    on_pointer_up: Option<Arc<dyn Fn(&PointerEvent) + Send + Sync>>,
-    on_pointer_move: Option<Arc<dyn Fn(&PointerEvent) + Send + Sync>>,
+    target: Option<PointerTarget>,
+    behavior: HitTestBehavior,
 }
 
-// When creating layer:
 impl RenderPointerListener {
-    pub fn create_layer(&self) -> Box<dyn Layer> {
-        let callbacks = self.callbacks.clone();
-        
-        // Create handler that dispatches to appropriate callback
-        let handler = Arc::new(move |event: &PointerEvent| {
-            match event {
-                PointerEvent::Down(_) => {
-                    if let Some(cb) = &callbacks.on_pointer_down {
-                        cb(event);
-                    }
-                }
-                PointerEvent::Up(_) => {
-                    if let Some(cb) = &callbacks.on_pointer_up {
-                        cb(event);
-                    }
-                }
-                PointerEvent::Move(_) => {
-                    if let Some(cb) = &callbacks.on_pointer_move {
-                        cb(event);
-                    }
-                }
-                _ => {}
-            }
-        });
+    pub fn new(target: Option<PointerTarget>, behavior: HitTestBehavior) -> Self {
+        Self { target, behavior }
+    }
 
-        Box::new(PointerListenerLayer {
-            bounds: self.bounds,
-            handler,
-        })
+    pub fn set_target(&mut self, target: Option<PointerTarget>) {
+        self.target = target;
+    }
+
+    pub fn hit_entry(&self, render_id: flui_foundation::RenderId) -> HitTestEntry {
+        let mut entry = HitTestEntry::new(render_id);
+        if let Some(target) = self.target {
+            entry = entry.pointer_target(target);
+        }
+        entry
     }
 }
 ```
+
+The widget side owns callback composition and lane registration:
+
+```rust
+use flui_interaction::{PointerEvent, PointerTarget};
+use flui_view::RenderObjectContext;
+
+pub struct ListenerState {
+    target: Option<PointerTarget>,
+}
+
+impl ListenerState {
+    pub fn create_render_object(
+        &mut self,
+        ctx: &RenderObjectContext<'_>,
+    ) -> RenderPointerListener {
+        let target = ctx
+            .register_pointer(|event: &PointerEvent| {
+                // Dispatch to on_pointer_down / on_pointer_up / ...
+            })
+            .ok();
+        self.target = target;
+        RenderPointerListener::new(target, HitTestBehavior::DeferToChild)
+    }
+
+    pub fn update_render_object(
+        &mut self,
+        ctx: &RenderObjectContext<'_>,
+        render: &mut RenderPointerListener,
+    ) {
+        match self.target {
+            Some(target) => {
+                let _ = ctx.replace_pointer(target, |event: &PointerEvent| {
+                    // Dispatch to the updated callback set.
+                });
+                render.set_target(Some(target));
+            }
+            None => {
+                self.target = ctx.register_pointer(|event: &PointerEvent| {}).ok();
+                render.set_target(self.target);
+            }
+        }
+    }
+
+    pub fn unmount(&mut self, ctx: &RenderObjectContext<'_>) {
+        if let Some(target) = self.target.take() {
+            let _ = ctx.unregister_pointer(target);
+        }
+    }
+}
+```
+
+Dispatch resolves each `PointerTarget` through the active owner lane and then
+invokes every target in leaf-first order with its locally transformed
+`PointerEvent`. Ordinary pointer delivery has no `EventPropagation::Stop`;
+scroll/pointer-signal arbitration is the separate claiming path.
 
 ## Integration 3: flui_gestures → flui_interaction
 

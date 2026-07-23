@@ -34,8 +34,11 @@
 //! v1 uses a synchronous `Fn()` completion model rather than Dart's `Future`
 //! because the view layer has no async executor.
 
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::{
+    rc::Rc,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use flui_animation::{Animation, AnimationController, Scheduler, Vsync, VsyncRegistration};
 use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback, ListenerId};
@@ -46,7 +49,7 @@ use flui_view::{BuildContext, BuildContextExt, Child, IntoView, ViewExt, ViewSta
 
 use crate::animated::VsyncScope;
 use crate::scroll::single_child_scroll_view::SingleChildScrollView;
-use crate::scroll::{ClampingScrollPhysics, ScrollController, SharedScrollPhysics};
+use crate::scroll::{ClampingScrollPhysics, ScrollController, ScrollMetrics, SharedScrollPhysics};
 use crate::{AnimatedBuilder, ColoredBox, GestureDetector, Positioned, Stack};
 
 // ---------------------------------------------------------------------------
@@ -256,7 +259,7 @@ pub struct RefreshIndicator {
     /// Caller handle for querying state and calling `finish()`.
     controller: RefreshController,
     /// Fired when the user releases after an over-threshold pull.
-    on_refresh: Arc<dyn Fn() + Send + Sync>,
+    on_refresh: Rc<dyn Fn()>,
     /// Minimum overscroll distance (logical pixels) to trigger refresh.
     threshold_px: f32,
     /// Scroll boundary / fling behaviour.
@@ -281,7 +284,7 @@ impl Default for RefreshIndicator {
         Self {
             child: Child::empty(),
             controller: RefreshController::new(),
-            on_refresh: Arc::new(|| {}),
+            on_refresh: Rc::new(|| {}),
             threshold_px: DEFAULT_THRESHOLD_PX,
             physics: Arc::new(ClampingScrollPhysics::default()),
             scroll_controller: ScrollController::new(),
@@ -329,8 +332,8 @@ impl RefreshIndicator {
     /// by calling [`RefreshController::finish`] on the controller provided to
     /// [`controller`](Self::controller).
     #[must_use]
-    pub fn on_refresh(mut self, f: impl Fn() + Send + Sync + 'static) -> Self {
-        self.on_refresh = Arc::new(f);
+    pub fn on_refresh(mut self, f: impl Fn() + 'static) -> Self {
+        self.on_refresh = Rc::new(f);
         self
     }
 
@@ -513,11 +516,8 @@ impl ViewState<RefreshIndicator> for RefreshIndicatorState {
                             sc_update.set_pixels(sc_update.min_scroll_extent());
                         } else {
                             rc_update.set_pull_distance_px(0.0);
-                            let clamped = ph_update.apply_boundary_conditions(
-                                proposed,
-                                sc_update.min_scroll_extent(),
-                                sc_update.max_scroll_extent(),
-                            );
+                            let metrics = ScrollMetrics::from(&sc_update.position());
+                            let clamped = ph_update.apply_boundary_conditions(&metrics, proposed);
                             sc_update.set_pixels(clamped);
                         }
                     })
@@ -541,12 +541,10 @@ impl ViewState<RefreshIndicator> for RefreshIndicatorState {
                                 // so spring-back still works without measurable velocity.
                                 if bounded.is_nan() { 0.0 } else { bounded }
                             };
-                            if let Some(sim) = ph_end.create_ballistic_simulation(
-                                fling_vel_px_per_sec,
-                                sc_end.pixels(),
-                                sc_end.min_scroll_extent(),
-                                sc_end.max_scroll_extent(),
-                            ) {
+                            let metrics = ScrollMetrics::from(&sc_end.position());
+                            if let Some(sim) =
+                                ph_end.create_ballistic_simulation(&metrics, fling_vel_px_per_sec)
+                            {
                                 let _ = fc_fling.animate_with(sim);
                             }
                         }

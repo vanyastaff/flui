@@ -714,7 +714,7 @@ mod tests {
             self.calls.push("restore_layer".to_string());
         }
 
-        // Cycle 4 E-9: push/pop methods moved to impl LayerStateStack below.
+        // The push/pop methods live in `impl LayerStateStack` below, not here.
 
         // ===== Performance Overlay (recorded) =====
         fn add_performance_overlay(
@@ -729,9 +729,10 @@ mod tests {
         }
     }
 
-    // Cycle 4 E-9: layer-tree state-stack impl split into a dedicated
-    // trait. MockRenderer records each push/pop as a string for the
-    // ordering assertions in the test suite.
+    // The layer-tree state-stack methods are implemented on their own
+    // dedicated `LayerStateStack` trait rather than on `CommandRenderer`.
+    // MockRenderer records each push/pop as a string for the ordering
+    // assertions in the test suite.
     impl LayerStateStack for MockRenderer {
         fn push_clip_rect(&mut self, _rect: &Rect<Pixels>, _clip_behavior: Clip) {
             self.calls.push("push_clip_rect".to_string());

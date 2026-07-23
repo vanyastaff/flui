@@ -15,9 +15,12 @@
 //! Key-routing tests serialize themselves around the global `FocusManager`
 //! singleton and clean up their registered nodes before returning.
 
-use std::sync::{
-    Arc, Mutex, MutexGuard,
-    atomic::{AtomicUsize, Ordering},
+use std::{
+    rc::Rc,
+    sync::{
+        Arc, Mutex, MutexGuard,
+        atomic::{AtomicUsize, Ordering},
+    },
 };
 
 use flui_foundation::Listenable;
@@ -86,7 +89,7 @@ impl Drop for FocusGuard {
 /// exactly, and these tests would fail if any branch were removed or the
 /// wrong method were called.
 fn make_editable_text_handler(controller: TextEditingController) -> KeyEventCallback {
-    Arc::new(move |event| {
+    Rc::new(move |event| {
         if event.state != KeyState::Down {
             return false;
         }
@@ -462,6 +465,53 @@ fn editable_text_mounts_single_render_editable() {
     assert!(
         laid.find_all_by_render_type("RenderParagraph").is_empty(),
         "EditableText must not split text/caret into temporary paragraphs"
+    );
+}
+
+/// Proves `EditableTextState`'s `FocusManager` listener (`init_state`, step
+/// 4) actually reaches the mounted render tree: requesting focus on the
+/// node the field published via [`TextEditingController::focus_node_id`]
+/// schedules a rebuild that flips `RenderEditable`'s `show_caret` — the
+/// same live-focus-observation seam `flui_material::TextField` reuses to
+/// keep its `InputDecorator` in sync with real focus transitions.
+///
+/// Previously unproven: every other focus test above asserts on
+/// `FocusManager`/`TextEditingController` state directly, never on whether a
+/// live focus change reaches *rendered output* through a headless
+/// `tick()` — this closes that gap.
+#[test]
+fn requesting_focus_via_the_controllers_published_node_reveals_the_caret_after_a_tick() {
+    let _focus_serial = focus_test_guard();
+    let controller = TextEditingController::with_text("hi");
+
+    let mut laid = crate::common::lay_out(
+        EditableText::new(controller.clone()),
+        crate::common::tight(120.0, 40.0),
+    );
+    let editable = laid.find_by_render_type("RenderEditable");
+    let show_caret_flag = |laid: &crate::common::LaidOut| -> Option<String> {
+        laid.pipeline_owner()
+            .read()
+            .debug_node_diagnostics(editable)
+            .and_then(|diagnostics| diagnostics.get_property("show_caret").map(str::to_string))
+    };
+
+    assert_eq!(
+        show_caret_flag(&laid),
+        None,
+        "an unfocused field must not show the caret"
+    );
+
+    let node_id = controller
+        .focus_node_id()
+        .expect("EditableText publishes its focus node on mount");
+    FocusManager::global().request_focus(node_id);
+    laid.tick();
+
+    assert_eq!(
+        show_caret_flag(&laid),
+        Some("show caret".to_string()),
+        "requesting focus via the controller's published node must reveal the caret after a tick"
     );
 }
 

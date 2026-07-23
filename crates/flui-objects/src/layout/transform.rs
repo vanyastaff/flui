@@ -38,7 +38,9 @@ pub struct RenderTransform {
     transform: Matrix4,
     /// Origin for the transformation as alignment.
     alignment: Alignment,
-    /// Explicit origin offset (overrides alignment if set).
+    /// Explicit origin offset, added to (not overriding) `alignment`'s own
+    /// contribution — see `compute_origin`'s doc comment for the additive
+    /// pivot formula.
     origin: Option<Offset>,
     /// Whether we have a child.
     has_child: bool,
@@ -103,6 +105,12 @@ impl RenderTransform {
     }
 
     /// Sets the alignment for the transform origin.
+    ///
+    /// Also resets `origin` to `None` — callers that want both an alignment
+    /// AND an explicit origin must call [`with_origin`](Self::with_origin)
+    /// AFTER this, not before (see `compute_origin`'s additive formula:
+    /// `origin` still combines with whatever `alignment` is set here, it's
+    /// only a prior `with_origin` call that this clears).
     pub fn with_alignment(mut self, alignment: Alignment) -> Self {
         self.alignment = alignment;
         self.origin = None;

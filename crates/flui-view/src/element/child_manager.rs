@@ -47,8 +47,7 @@ use crate::{ElementOwner, tree::ElementTree};
 /// manager `Arc`s out of the registry before calling `service` (releasing
 /// the registry lock before the potentially long service call, and avoiding
 /// re-entrancy deadlocks when `service` triggers `on_mount`/`on_unmount`).
-pub(crate) type ChildManagerRegistry =
-    Arc<Mutex<HashMap<RenderId, Arc<Mutex<dyn ChildManager + Send>>>>>;
+pub(crate) type ChildManagerRegistry = Arc<Mutex<HashMap<RenderId, Arc<Mutex<dyn ChildManager>>>>>;
 
 /// Object-safe hook called by [`BuildOwner::service_child_requests`] after each
 /// layout pass to build missing lazy children and evict off-band ones.
@@ -67,7 +66,7 @@ pub(crate) type ChildManagerRegistry =
 /// the registry arc to cross thread boundaries (required by `Arc<Mutex<…>>`).
 ///
 /// [`BuildOwner::service_child_requests`]: crate::BuildOwner::service_child_requests
-pub(crate) trait ChildManager: Send {
+pub(crate) trait ChildManager {
     /// Build any requested lazy children and evict those outside the retain band.
     ///
     /// # Parameters

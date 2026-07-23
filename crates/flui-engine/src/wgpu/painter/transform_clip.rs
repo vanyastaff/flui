@@ -121,7 +121,7 @@ impl WgpuPainter {
     /// with the bounding rect + per-corner radii, applies a bounding-rect
     /// scissor for early rasterizer rejection, and relies on
     /// `rect_instanced.wgsl`'s per-pixel SDF evaluation to clip pixels
-    /// outside the iOS-squircle curve (wired in U9 / U10).
+    /// outside the iOS-squircle curve.
     #[allow(
         clippy::similar_names,
         reason = "tl_r/tr_r/br_r/bl_r mirror the rsuperellipse-corner field names; renaming would obscure intent"
@@ -153,16 +153,16 @@ impl WgpuPainter {
         // for hardware-accelerated clipping. Path clipping will be implemented
         // in a future version with proper stencil buffer support.
 
-        // Cycle 4 E-1: pre-cycle this path emitted a debug-only
-        // `tracing::trace!` and returned silently. Production scrapes
-        // never saw the missing clip — content rendered without the
-        // intended clip. Upgrade to release-build `tracing::warn!` so
-        // any consumer that hits the path gets a visible signal.
+        // This path used to emit a debug-only `tracing::trace!` and
+        // return silently. Production scrapes never saw the missing
+        // clip — content rendered without the intended clip. Upgrade
+        // to release-build `tracing::warn!` so any consumer that hits
+        // the path gets a visible signal.
         tracing::warn!(
             "WgpuPainter::clip_path: path clipping not implemented; \
              content will render without the intended clip. \
              Use ClipRect or ClipRRect for hardware-accelerated clipping. \
-             Path clipping requires stencil-buffer support (cycle 4 E-1)"
+             Path clipping requires stencil-buffer support"
         );
     }
 }

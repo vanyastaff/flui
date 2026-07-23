@@ -10,7 +10,7 @@
 //!
 //! Flutter reference: <https://api.flutter.dev/flutter/gestures/ForcePressGestureRecognizer-class.html>
 
-use std::sync::Arc;
+use std::{cell::RefCell, rc::Rc, sync::Arc};
 
 use flui_types::{Offset, geometry::Pixels, gestures::ForcePressDetails};
 use parking_lot::Mutex;
@@ -27,16 +27,16 @@ pub const FORCE_PRESS_START_PRESSURE: f32 = 0.4;
 pub const FORCE_PRESS_PEAK_PRESSURE: f32 = 0.85;
 
 /// Callback for force press start events
-pub type ForcePressStartCallback = Arc<dyn Fn(ForcePressDetails) + Send + Sync>;
+pub type ForcePressStartCallback = Rc<dyn Fn(ForcePressDetails)>;
 
 /// Callback for force press update events
-pub type ForcePressUpdateCallback = Arc<dyn Fn(ForcePressDetails) + Send + Sync>;
+pub type ForcePressUpdateCallback = Rc<dyn Fn(ForcePressDetails)>;
 
 /// Callback for force press peak events
-pub type ForcePressPeakCallback = Arc<dyn Fn(ForcePressDetails) + Send + Sync>;
+pub type ForcePressPeakCallback = Rc<dyn Fn(ForcePressDetails)>;
 
 /// Callback for force press end events
-pub type ForcePressEndCallback = Arc<dyn Fn(ForcePressDetails) + Send + Sync>;
+pub type ForcePressEndCallback = Rc<dyn Fn(ForcePressDetails)>;
 
 /// Recognizes force press gestures based on pressure sensitivity
 ///
@@ -76,7 +76,7 @@ pub struct ForcePressGestureRecognizer {
     state: RecognizerBase,
 
     /// Callbacks
-    callbacks: Arc<Mutex<ForcePressCallbacks>>,
+    callbacks: Rc<RefCell<ForcePressCallbacks>>,
 
     /// Current gesture state
     gesture_state: Arc<Mutex<ForcePressState>>,
@@ -146,7 +146,7 @@ impl ForcePressGestureRecognizer {
     pub fn new(arena: crate::arena::GestureArena) -> Arc<Self> {
         Arc::new(Self {
             state: RecognizerBase::new(arena),
-            callbacks: Arc::new(Mutex::new(ForcePressCallbacks::default())),
+            callbacks: Rc::new(RefCell::new(ForcePressCallbacks::default())),
             gesture_state: Arc::new(Mutex::new(ForcePressState::default())),
             settings: Arc::new(Mutex::new(GestureSettings::default())),
             start_pressure: FORCE_PRESS_START_PRESSURE,
@@ -161,7 +161,7 @@ impl ForcePressGestureRecognizer {
     ) -> Arc<Self> {
         Arc::new(Self {
             state: RecognizerBase::new(arena),
-            callbacks: Arc::new(Mutex::new(ForcePressCallbacks::default())),
+            callbacks: Rc::new(RefCell::new(ForcePressCallbacks::default())),
             gesture_state: Arc::new(Mutex::new(ForcePressState::default())),
             settings: Arc::new(Mutex::new(settings)),
             start_pressure: FORCE_PRESS_START_PRESSURE,
@@ -206,9 +206,9 @@ impl ForcePressGestureRecognizer {
     /// Called when pressure first exceeds the start threshold.
     pub fn with_on_start(
         self: Arc<Self>,
-        callback: impl Fn(ForcePressDetails) + Send + Sync + 'static,
+        callback: impl Fn(ForcePressDetails) + 'static,
     ) -> Arc<Self> {
-        self.callbacks.lock().on_start = Some(Arc::new(callback));
+        self.callbacks.borrow_mut().on_start = Some(Rc::new(callback));
         self
     }
 
@@ -217,9 +217,9 @@ impl ForcePressGestureRecognizer {
     /// Called whenever pressure changes while force press is active.
     pub fn with_on_update(
         self: Arc<Self>,
-        callback: impl Fn(ForcePressDetails) + Send + Sync + 'static,
+        callback: impl Fn(ForcePressDetails) + 'static,
     ) -> Arc<Self> {
-        self.callbacks.lock().on_update = Some(Arc::new(callback));
+        self.callbacks.borrow_mut().on_update = Some(Rc::new(callback));
         self
     }
 
@@ -228,9 +228,9 @@ impl ForcePressGestureRecognizer {
     /// Called once when pressure first exceeds the peak threshold.
     pub fn with_on_peak(
         self: Arc<Self>,
-        callback: impl Fn(ForcePressDetails) + Send + Sync + 'static,
+        callback: impl Fn(ForcePressDetails) + 'static,
     ) -> Arc<Self> {
-        self.callbacks.lock().on_peak = Some(Arc::new(callback));
+        self.callbacks.borrow_mut().on_peak = Some(Rc::new(callback));
         self
     }
 
@@ -239,9 +239,9 @@ impl ForcePressGestureRecognizer {
     /// Called when pressure drops below start threshold or pointer is released.
     pub fn with_on_end(
         self: Arc<Self>,
-        callback: impl Fn(ForcePressDetails) + Send + Sync + 'static,
+        callback: impl Fn(ForcePressDetails) + 'static,
     ) -> Arc<Self> {
-        self.callbacks.lock().on_end = Some(Arc::new(callback));
+        self.callbacks.borrow_mut().on_end = Some(Rc::new(callback));
         self
     }
 
@@ -292,7 +292,7 @@ impl ForcePressGestureRecognizer {
             drop(state);
 
             // Call on_start callback
-            if let Some(callback) = self.callbacks.lock().on_start.clone() {
+            if let Some(callback) = self.callbacks.borrow().on_start.clone() {
                 callback(details);
             }
         }
@@ -315,7 +315,7 @@ impl ForcePressGestureRecognizer {
                     let details = Self::create_details(&state);
                     drop(state);
 
-                    if let Some(callback) = self.callbacks.lock().on_end.clone() {
+                    if let Some(callback) = self.callbacks.borrow().on_end.clone() {
                         callback(details);
                     }
 
@@ -335,7 +335,7 @@ impl ForcePressGestureRecognizer {
                 let details = Self::create_details(&state);
                 drop(state);
 
-                if let Some(callback) = self.callbacks.lock().on_start.clone() {
+                if let Some(callback) = self.callbacks.borrow().on_start.clone() {
                     callback(details);
                 }
             }
@@ -348,7 +348,7 @@ impl ForcePressGestureRecognizer {
                     state.phase = ForcePressPhase::Peaked;
                     drop(state);
 
-                    if let Some(callback) = self.callbacks.lock().on_peak.clone() {
+                    if let Some(callback) = self.callbacks.borrow().on_peak.clone() {
                         callback(details.clone());
                     }
                 } else {
@@ -356,7 +356,7 @@ impl ForcePressGestureRecognizer {
                 }
 
                 // Call update callback
-                if let Some(callback) = self.callbacks.lock().on_update.clone() {
+                if let Some(callback) = self.callbacks.borrow().on_update.clone() {
                     callback(details);
                 }
 
@@ -372,7 +372,7 @@ impl ForcePressGestureRecognizer {
                 drop(state);
 
                 // Call update callback
-                if let Some(callback) = self.callbacks.lock().on_update.clone() {
+                if let Some(callback) = self.callbacks.borrow().on_update.clone() {
                     callback(details);
                 }
 
@@ -398,7 +398,7 @@ impl ForcePressGestureRecognizer {
             let details = Self::create_details(&state);
             drop(state);
 
-            if let Some(callback) = self.callbacks.lock().on_end.clone() {
+            if let Some(callback) = self.callbacks.borrow().on_end.clone() {
                 callback(details);
             }
 
@@ -416,7 +416,7 @@ impl ForcePressGestureRecognizer {
         let details = Self::create_details(&state);
         drop(state);
 
-        if let Some(callback) = self.callbacks.lock().on_end.clone() {
+        if let Some(callback) = self.callbacks.borrow().on_end.clone() {
             callback(details);
         }
 
@@ -432,7 +432,7 @@ impl ForcePressGestureRecognizer {
             let details = Self::create_details(&state);
             drop(state);
 
-            if let Some(callback) = self.callbacks.lock().on_end.clone() {
+            if let Some(callback) = self.callbacks.borrow().on_end.clone() {
                 callback(details);
             }
 
@@ -504,7 +504,7 @@ impl GestureRecognizer for ForcePressGestureRecognizer {
         // gestures/recognizer.dart:485-493 disposing GestureRecognizer
         // clears arena state for tracked pointers).
         self.state.reject();
-        let mut callbacks = self.callbacks.lock();
+        let mut callbacks = self.callbacks.borrow_mut();
         callbacks.on_start = None;
         callbacks.on_update = None;
         callbacks.on_peak = None;
@@ -565,7 +565,7 @@ impl GestureArenaMember for ForcePressGestureRecognizer {
             let details = Self::create_details(&state);
             drop(state);
 
-            if let Some(callback) = self.callbacks.lock().on_end.clone() {
+            if let Some(callback) = self.callbacks.borrow().on_end.clone() {
                 callback(details);
             }
         } else {

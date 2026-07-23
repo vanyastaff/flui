@@ -1,5 +1,5 @@
-//! Acceptance + edge-case tests for the U11 ancestor-finder trio and
-//! the U12 render-object finder on `BuildContext`:
+//! Acceptance + edge-case tests for the ancestor-finder trio and
+//! the render-object finder on `BuildContext`:
 //!
 //! - `find_ancestor_view` / `find_ancestor` (R6) — nearest View match.
 //! - `find_ancestor_state` / `find_state` (R7) — nearest State match.
@@ -9,12 +9,17 @@
 //!   `RenderElement` ancestor.
 //!
 //! Test fixtures use the same `mount_root` / `insert` shape as
-//! `inherited_dependency.rs`. The dependent-tracking concerns of U9/U10
-//! are out of scope here: these finders are read-only walks per Flutter
+//! `inherited_dependency.rs`. The dependent-tracking concerns of the
+//! inherited-lookup APIs are out of scope here: these finders are read-only walks per Flutter
 //! parity (`framework.dart:5122-5160` —
 //! `findAncestorWidgetOfExactType<T>`,
 //! `findAncestorStateOfType<T>`, `findRootAncestorStateOfType<T>`,
 //! `findAncestorRenderObjectOfType<T>`).
+
+// ADR-0027: ElementBuildContext's current test/prod seam still takes
+// Arc<RwLock<ElementTree/BuildOwner>>. The owner graph is !Send; do not restore
+// Send + Sync to satisfy clippy. Future UiRealm/Rc migration should remove this.
+#![allow(clippy::arc_with_non_send_sync)]
 
 use std::sync::Arc;
 
@@ -103,11 +108,18 @@ impl RenderView for SizedBoxView {
     type Protocol = flui_rendering::protocol::BoxProtocol;
     type RenderObject = RenderSizedBox;
 
-    fn create_render_object(&self) -> Self::RenderObject {
+    fn create_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+    ) -> Self::RenderObject {
         RenderSizedBox::new(Some(px(self.width)), Some(px(self.height)))
     }
 
-    fn update_render_object(&self, _render_object: &mut Self::RenderObject) {
+    fn update_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+        _render_object: &mut Self::RenderObject,
+    ) {
         // RenderSizedBox doesn't carry mutable dimensions post-creation;
         // tests don't depend on update_render_object semantics.
     }

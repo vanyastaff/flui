@@ -6,7 +6,7 @@ Event routing, hit testing, focus management, and gesture recognition.
 
 - **EventRouter** — routes pointer/keyboard events via hit testing
 - **HitTest** — spatial hit testing (sealed `HitTestable` trait)
-- **FocusManager / FocusScope** — keyboard focus (global singleton, `FocusTraversalPolicy`)
+- **FocusManager / FocusScope** — keyboard focus (owner-thread TLS manager, `FocusTraversalPolicy`)
 - **GestureArena** — resolves conflicts between competing gesture recognizers
 - **GestureRecognizers** — Tap, Drag, Scale, LongPress, ForcePress
 - **PointerEventResampler** — raw input resampling

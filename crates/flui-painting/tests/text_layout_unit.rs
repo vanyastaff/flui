@@ -1,5 +1,6 @@
 //! TextLayout unit tests extracted from
-//! `crates/flui-painting/src/text_layout/mod.rs` during Mythos chain U8.
+//! `crates/flui-painting/src/text_layout/mod.rs` during the text-layout
+//! module split.
 
 use flui_painting::{
     LineInfo, TextLayout, detect_text_direction, measure_inline_span, measure_text,

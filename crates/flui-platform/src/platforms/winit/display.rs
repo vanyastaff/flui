@@ -10,6 +10,7 @@ use crate::traits::{DisplayId, PlatformDisplay};
 /// Winit display wrapper
 ///
 /// Wraps `winit::monitor::MonitorHandle` to provide display information.
+#[derive(Debug)]
 pub struct WinitDisplay {
     monitor: MonitorHandle,
     id: DisplayId,
@@ -68,8 +69,7 @@ impl PlatformDisplay for WinitDisplay {
     fn refresh_rate(&self) -> f64 {
         self.monitor
             .refresh_rate_millihertz()
-            .map(|mhz| mhz as f64 / 1000.0)
-            .unwrap_or(60.0)
+            .map_or(60.0, |mhz| mhz as f64 / 1000.0)
     }
 
     fn is_primary(&self) -> bool {

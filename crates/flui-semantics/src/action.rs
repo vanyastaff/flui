@@ -88,7 +88,7 @@ pub enum SemanticsAction {
     /// Focus action.
     Focus = 1 << 22,
 
-    // NOTE (U17): variants `Unfocus`, `Expand`, `Collapse` were removed
+    // NOTE: variants `Unfocus`, `Expand`, `Collapse` were removed
     // from this enum to match Flutter's `dart:ui.SemanticsAction` wire
     // format. The expand/collapse state lives on `SemanticsFlag` as
     // `HasExpandedState` + `IsExpanded`; un-focus is folded into the

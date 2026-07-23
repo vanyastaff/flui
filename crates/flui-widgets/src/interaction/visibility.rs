@@ -5,7 +5,8 @@ use std::fmt;
 use flui_view::prelude::StatelessView;
 use flui_view::{BoxedView, BuildContext, IntoView, ViewExt};
 
-use crate::interaction::Offstage;
+use crate::animated::TickerMode;
+use crate::interaction::{ExcludeFocus, Offstage};
 use crate::layout::SizedBox;
 
 /// Controls whether its child is shown, hidden, or hidden while keeping its
@@ -20,21 +21,25 @@ use crate::layout::SizedBox;
 ///
 /// 2. **State-preserving (`maintain_state = true`):** the child is always in
 ///    the tree, wrapped in an [`Offstage`] widget whose `offstage` flag is the
-///    inverse of `visible`. This keeps the child's state alive and allows it
-///    to snap back to its last state when made visible again. Paint and
-///    hit-testing are suppressed by `Offstage` when `offstage = true`.
+///    inverse of `visible`. By default, an inner [`TickerMode`] also mutes
+///    descendant animations while hidden. This keeps the child's state alive
+///    and allows it to snap back to its last state when made visible again.
+///    Paint and hit-testing are suppressed by `Offstage` when hidden.
+///    Hidden focus behavior is configured by [`ExcludeFocus`].
 ///
 /// 3. **Interactive-while-hidden (`maintain_interactivity = true`, requires
 ///    `maintain_state = true`):** deferred — full support requires
-///    `maintainSize` and a `TickerMode` widget, neither of which exist in FLUI
-///    yet. Setting `maintain_interactivity = true` is accepted but has no
-///    additional effect beyond `maintain_state` behaviour; see the divergence
-///    note below.
+///    `maintainSize`. Setting `maintain_interactivity = true` is accepted but
+///    has no additional effect beyond `maintain_state` behaviour; see the
+///    divergence note below.
 ///
 /// Flutter parity: `widgets/indexed_stack.dart` `Visibility`.
 ///
 /// **Divergences from Flutter:**
-/// - `maintainAnimation` (requires `TickerMode`) — deferred.
+/// - `maintainAnimation` controls descendants registered through an ambient
+///   `VsyncScope`, as production `AppBinding` roots provide. Without an ambient
+///   scope, FLUI's `TickerMode` intentionally passes its child through so an
+///   undriven nested registry cannot swallow wall-clock fallback animations.
 /// - `maintainSize` (requires `maintainAnimation`) — deferred.
 /// - `maintainInteractivity` (requires `maintainSize` in Flutter) — accepted
 ///   but currently a no-op beyond `maintain_state`; full semantics deferred
@@ -45,6 +50,8 @@ use crate::layout::SizedBox;
 pub struct Visibility {
     visible: bool,
     maintain_state: bool,
+    maintain_animation: bool,
+    maintain_focusability: bool,
     maintain_interactivity: bool,
     replacement: BoxedView,
     child: BoxedView,
@@ -58,6 +65,8 @@ impl Visibility {
         Self {
             visible: true,
             maintain_state: false,
+            maintain_animation: false,
+            maintain_focusability: false,
             maintain_interactivity: false,
             replacement: SizedBox::shrink().boxed(),
             child: child.into_view().boxed(),
@@ -79,6 +88,35 @@ impl Visibility {
     #[must_use]
     pub fn maintain_state(mut self, maintain_state: bool) -> Self {
         self.maintain_state = maintain_state;
+        self
+    }
+
+    /// Keep descendant animations running while the child is hidden (default
+    /// `false`).
+    ///
+    /// Requires `maintain_state = true`. Debug builds check this invariant when
+    /// the completed widget builds, so either builder method may be called
+    /// first. Dynamically changing this flag can change the wrapper shape,
+    /// remount the child, and lose its state.
+    ///
+    /// Animation muting applies to descendants registered through an ambient
+    /// `VsyncScope`; production `AppBinding` roots provide that scope.
+    #[must_use]
+    pub fn maintain_animation(mut self, maintain_animation: bool) -> Self {
+        self.maintain_animation = maintain_animation;
+        self
+    }
+
+    /// Keep retained descendants focusable while the child is hidden (default
+    /// `false`).
+    ///
+    /// Requires `maintain_state = true` and is only effective while hidden.
+    /// With the default `false`, hiding a retained subtree clears its primary
+    /// focus to `None`; FLUI does not yet perform Flutter's enclosing-scope
+    /// previously-focused-child fallback.
+    #[must_use]
+    pub fn maintain_focusability(mut self, maintain_focusability: bool) -> Self {
+        self.maintain_focusability = maintain_focusability;
         self
     }
 
@@ -107,6 +145,8 @@ impl fmt::Debug for Visibility {
         f.debug_struct("Visibility")
             .field("visible", &self.visible)
             .field("maintain_state", &self.maintain_state)
+            .field("maintain_animation", &self.maintain_animation)
+            .field("maintain_focusability", &self.maintain_focusability)
             .field("maintain_interactivity", &self.maintain_interactivity)
             .finish_non_exhaustive()
     }
@@ -114,28 +154,46 @@ impl fmt::Debug for Visibility {
 
 impl StatelessView for Visibility {
     fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
-        // Flutter oracle: `indexed_stack.dart` `Visibility.build` lines 452–473.
+        debug_assert!(
+            self.maintain_state || !self.maintain_animation,
+            "maintain_animation requires maintain_state"
+        );
+        debug_assert!(
+            self.maintain_state || !self.maintain_focusability,
+            "maintain_focusability requires maintain_state"
+        );
+
+        // Flutter oracle: `indexed_stack.dart` `Visibility.build`.
         //
-        // Non-maintainSize path (maintainAnimation/maintainSize deferred):
-        //   maintainState=true  → Offstage(offstage: !visible, child)
+        // Non-maintainSize path:
+        //   maintainState=true  → Offstage(offstage: !visible,
+        //                           TickerMode(enabled: visible, child))
+        //                         unless maintainAnimation=true
         //   maintainState=false → visible ? child : replacement
         //
         // `maintain_interactivity` is accepted but has no additional effect
         // until `maintainSize` is implemented (documented divergence above).
         let result: BoxedView = if self.maintain_state {
+            let focusable_child = ExcludeFocus::new(self.child.clone())
+                .excluding(!self.visible && !self.maintain_focusability)
+                .into_view()
+                .boxed();
+            let child = if self.maintain_animation {
+                focusable_child
+            } else {
+                TickerMode::new(focusable_child)
+                    .enabled(self.visible)
+                    .into_view()
+                    .boxed()
+            };
             // `Offstage` is a fresh struct (not yet boxed), so `.boxed()` wraps
             // it once — correct.
-            Offstage::new()
-                .offstage(!self.visible)
-                .child(self.child.clone())
-                .boxed()
+            Offstage::new().offstage(!self.visible).child(child).boxed()
         } else if self.visible {
-            // `self.child` is already a `BoxedView`; do NOT call `.boxed()` again
-            // — doing so double-wraps (`BoxedView(BoxedView(inner))`) and
-            // corrupts element identity on rebuild.
+            // The stored child is already type-erased for this return path.
             self.child.clone()
         } else {
-            // Same reasoning: `self.replacement` is already `BoxedView`.
+            // The stored replacement is already type-erased for this return path.
             self.replacement.clone()
         };
         result

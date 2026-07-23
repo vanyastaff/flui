@@ -1,4 +1,4 @@
-//! kurbo bridge (N-geom PR 3, U8) — gated behind `feature = "kurbo"`.
+//! kurbo bridge — gated behind `feature = "kurbo"`.
 //!
 //! kurbo is the Linebender curve/path crate (also Vello's geometry layer) and
 //! is **`f64`**, whereas flui-geometry is **`f32`**. The two directions are

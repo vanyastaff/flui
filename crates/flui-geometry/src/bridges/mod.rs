@@ -3,7 +3,7 @@
 //!
 //! Currently:
 //! - [`kurbo`] (`feature = "kurbo"`) — f64 Bézier/curve interop for the painting
-//!   layer and the future Vello raster backend (N-geom PR 3, U8).
+//!   layer and the future Vello raster backend.
 
 #[cfg(feature = "kurbo")]
 pub mod kurbo;

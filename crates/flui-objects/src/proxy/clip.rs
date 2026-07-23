@@ -45,22 +45,24 @@
 //! path — and the sealed trait prevents downstream crates from adding
 //! shapes the engine cannot render.
 //!
-//! Custom clipper logic (Flutter's `CustomClipper<T>.getClip(size)`)
-//! is modelled as an `Option<Arc<dyn Fn(Size) -> S + Send + Sync>>` —
-//! preserved as a behavioural extension point but typed at compile
-//! time per shape rather than via an abstract class.
+//! Custom clipping is split at the ownership boundary. Render objects store
+//! data-only shape configuration (`BorderRadius` for rounded rectangles) or an
+//! owner-lane [`PathClipTarget`] for path factories; executable clipper
+//! callbacks never live in render storage.
 
-use std::{fmt, sync::Arc};
+use std::{fmt, marker::PhantomData};
 
 use flui_tree::Single;
 use flui_types::{
     Offset, Pixels, Point, Rect, Size,
     geometry::RRect,
     painting::{Clip, Path},
+    styling::BorderRadius,
 };
 
 use flui_rendering::{
     context::{BoxHitTestContext, BoxLayoutContext},
+    hit_testing::{PathClipTarget, resolve_path_clip_target},
     parent_data::BoxParentData,
     traits::RenderBox,
 };
@@ -152,6 +154,24 @@ pub trait ClipGeometry: sealed::Sealed + Clone + fmt::Debug + Send + Sync + 'sta
     /// clip region. Used for hit testing: anything outside the clip
     /// shape is unreachable.
     fn contains(&self, position: Point<Pixels>) -> bool;
+
+    /// Resolves an owner-local path clip target for this geometry, when the
+    /// shape supports it.
+    ///
+    /// Only [`Path`] implements this; other clip geometries remain pure data
+    /// and ignore owner-lane path targets.
+    fn resolve_path_clip_target(_target: PathClipTarget, _size: Size) -> Option<Self> {
+        None
+    }
+
+    /// Resolves a data-only rounded-rect border-radius source for this
+    /// geometry, when the shape supports it.
+    ///
+    /// Only [`RRect`] implements this; other clip geometries remain pure
+    /// defaults or owner-lane path targets.
+    fn resolve_rrect_border_radius(_border_radius: BorderRadius, _size: Size) -> Option<Self> {
+        None
+    }
 
     /// Opens this clip as a layer scope on the paint context — the
     /// clip covers everything recorded inside `f`, child subtrees
@@ -264,6 +284,17 @@ impl ClipGeometry for RRect {
         true
     }
 
+    fn resolve_rrect_border_radius(border_radius: BorderRadius, size: Size) -> Option<Self> {
+        let bounds = Rect::from_origin_size(Point::ZERO, size);
+        Some(RRect::from_rect_and_corners(
+            bounds,
+            border_radius.top_left,
+            border_radius.top_right,
+            border_radius.bottom_right,
+            border_radius.bottom_left,
+        ))
+    }
+
     fn with_clip_scope(
         &self,
         ctx: &mut flui_rendering::context::PaintCx<'_, Single>,
@@ -324,6 +355,16 @@ impl ClipGeometry for Path {
         self.contains(position)
     }
 
+    fn resolve_path_clip_target(target: PathClipTarget, size: Size) -> Option<Self> {
+        match resolve_path_clip_target(target, size) {
+            Ok(path) => Some(path),
+            Err(error) => {
+                tracing::debug!(?error, "path clip target resolution failed");
+                None
+            }
+        }
+    }
+
     fn with_clip_scope(
         &self,
         ctx: &mut flui_rendering::context::PaintCx<'_, Single>,
@@ -333,16 +374,6 @@ impl ClipGeometry for Path {
         ctx.with_clip_path(self.clone(), clip_behavior, f);
     }
 }
-
-// =============================================================================
-// CustomClipper — Flutter's CustomClipper<T> analog
-// =============================================================================
-
-/// A type-erased function that produces a clip shape for a given box size.
-///
-/// This is the Rust analog of Flutter's `CustomClipper<T>.getClip(size)`.
-/// Stored as `Arc` so the containing `RenderClip<S>` remains `Clone`.
-pub type CustomClipper<S> = Arc<dyn Fn(Size) -> S + Send + Sync + 'static>;
 
 // =============================================================================
 // RenderClip<S> — generic clip render object
@@ -359,19 +390,25 @@ pub type CustomClipper<S> = Arc<dyn Fn(Size) -> S + Send + Sync + 'static>;
 /// * [`RenderClipOval`] — inscribed-ellipse clip.
 /// * [`RenderClipPath`] — arbitrary path clip.
 ///
-/// # Custom clippers
+/// # Custom clip sources
 ///
 /// By default the clip uses the entire box (`S::default_for_size(size)`).
-/// Provide a [`CustomClipper`] via [`Self::with_clipper`] to compute a
-/// shape from the box's runtime size — equivalent to Flutter's
-/// `customClipper` field.
+/// `RenderClipRRect` can carry a data-only [`BorderRadius`], and
+/// `RenderClipPath` can carry a data-only owner-lane [`PathClipTarget`].
 pub struct RenderClip<S: ClipGeometry> {
     /// The clip behavior to use when applying the shape.
     clip_behavior: Clip,
-    /// Optional custom clipper closure (`None` = use `S::default_for_size`).
-    clipper: Option<CustomClipper<S>>,
+    /// Optional rounded-rect border radius. Only meaningful for
+    /// `RenderClipRRect`; other `RenderClip<S>` instantiations ignore it.
+    rrect_border_radius: Option<BorderRadius>,
+    /// Optional owner-local path clip target. Only meaningful for
+    /// `RenderClipPath`; other `RenderClip<S>` instantiations ignore it.
+    path_clip_target: Option<PathClipTarget>,
     /// Whether we have a child (tracked for hit testing).
     has_child: bool,
+    /// Keeps the generic shape parameter part of the render object's type even
+    /// when all runtime clip sources are data tokens.
+    shape: PhantomData<S>,
 }
 
 impl<S: ClipGeometry> RenderClip<S> {
@@ -380,8 +417,10 @@ impl<S: ClipGeometry> RenderClip<S> {
     pub fn new(clip_behavior: Clip) -> Self {
         Self {
             clip_behavior,
-            clipper: None,
+            rrect_border_radius: None,
+            path_clip_target: None,
             has_child: false,
+            shape: PhantomData,
         }
     }
 
@@ -413,28 +452,7 @@ impl<S: ClipGeometry> RenderClip<S> {
     /// Returns whether a custom clipper has been installed.
     #[inline]
     pub fn has_custom_clipper(&self) -> bool {
-        self.clipper.is_some()
-    }
-
-    /// Sets a custom clipper closure (builder).
-    #[must_use]
-    pub fn with_clipper<F>(mut self, clipper: F) -> Self
-    where
-        F: Fn(Size) -> S + Send + Sync + 'static,
-    {
-        self.clipper = Some(Arc::new(clipper));
-        self
-    }
-
-    /// Replaces the custom clipper; returns true if the slot was changed.
-    pub fn set_clipper<F>(&mut self, clipper: Option<F>) -> bool
-    where
-        F: Fn(Size) -> S + Send + Sync + 'static,
-    {
-        let new_some = clipper.is_some();
-        let old_some = self.clipper.is_some();
-        self.clipper = clipper.map(|c| Arc::new(c) as CustomClipper<S>);
-        new_some != old_some
+        self.rrect_border_radius.is_some() || self.path_clip_target.is_some()
     }
 
     /// Computes the clip shape for the given laid-out `size`.
@@ -445,10 +463,52 @@ impl<S: ClipGeometry> RenderClip<S> {
     /// `default_for_size` dispatch) per paint/hit-test, which is
     /// negligible relative to the canvas / hit-test work that follows.
     fn resolve_clip(&self, size: Size) -> S {
-        match &self.clipper {
-            Some(c) => (c)(size),
-            None => S::default_for_size(size),
+        self.rrect_border_radius
+            .and_then(|border_radius| S::resolve_rrect_border_radius(border_radius, size))
+            .or_else(|| {
+                self.path_clip_target
+                    .and_then(|target| S::resolve_path_clip_target(target, size))
+            })
+            .unwrap_or_else(|| S::default_for_size(size))
+    }
+}
+
+impl RenderClip<RRect> {
+    /// Returns the data-only border radius used to compute the rounded-rect
+    /// clip, if one is installed.
+    #[must_use]
+    pub const fn border_radius(&self) -> Option<BorderRadius> {
+        self.rrect_border_radius
+    }
+
+    /// Builder: sets the data-only rounded-rect border radius.
+    #[must_use]
+    pub fn with_border_radius(mut self, border_radius: BorderRadius) -> Self {
+        self.rrect_border_radius = Some(border_radius);
+        self
+    }
+
+    /// Replaces the data-only rounded-rect border radius; returns true if it
+    /// changed.
+    pub fn set_border_radius(&mut self, border_radius: Option<BorderRadius>) -> bool {
+        if self.rrect_border_radius == border_radius {
+            return false;
         }
+        self.rrect_border_radius = border_radius;
+        true
+    }
+}
+
+impl RenderClip<Path> {
+    /// Returns the owner-local path clip target, if one is installed.
+    #[must_use]
+    pub const fn path_clip_target(&self) -> Option<PathClipTarget> {
+        self.path_clip_target
+    }
+
+    /// Sets the owner-local path clip target.
+    pub fn set_path_clip_target(&mut self, target: Option<PathClipTarget>) {
+        self.path_clip_target = target;
     }
 }
 
@@ -457,8 +517,10 @@ impl<S: ClipGeometry> Clone for RenderClip<S> {
     fn clone(&self) -> Self {
         Self {
             clip_behavior: self.clip_behavior,
-            clipper: self.clipper.clone(),
+            rrect_border_radius: self.rrect_border_radius,
+            path_clip_target: self.path_clip_target,
             has_child: self.has_child,
+            shape: PhantomData,
         }
     }
 }
@@ -467,7 +529,15 @@ impl<S: ClipGeometry> fmt::Debug for RenderClip<S> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RenderClip")
             .field("clip_behavior", &self.clip_behavior)
-            .field("has_custom_clipper", &self.clipper.is_some())
+            .field(
+                "has_custom_clipper",
+                &(self.rrect_border_radius.is_some() || self.path_clip_target.is_some()),
+            )
+            .field(
+                "has_rrect_border_radius",
+                &self.rrect_border_radius.is_some(),
+            )
+            .field("has_path_clip_target", &self.path_clip_target.is_some())
             .field("has_child", &self.has_child)
             .finish()
     }
@@ -492,7 +562,7 @@ impl<S: ClipGeometry> flui_foundation::Diagnosticable for RenderClip<S> {
         builder.add_enum("clip_behavior", self.clip_behavior);
         builder.add_flag(
             "custom_clipper",
-            self.clipper.is_some(),
+            self.rrect_border_radius.is_some() || self.path_clip_target.is_some(),
             "has custom clipper",
         );
     }
@@ -572,6 +642,7 @@ pub type RenderClipPath = RenderClip<Path>;
 #[cfg(test)]
 mod tests {
     use flui_types::geometry::px;
+    use flui_types::styling::BorderRadiusExt;
 
     use super::*;
 
@@ -730,6 +801,39 @@ mod tests {
         );
     }
 
+    #[test]
+    fn render_clip_path_resolves_owner_local_path_target() {
+        use std::cell::Cell;
+        use std::rc::Rc;
+
+        use flui_interaction::InteractionLane;
+
+        let lane = InteractionLane::try_new().expect("lane");
+        let handle = lane.dispatch_handle();
+        let calls = Rc::new(Cell::new(0));
+        lane.enter(|| {
+            let calls_for_clipper = Rc::clone(&calls);
+            let target = handle
+                .register_path_clipper(move |size| {
+                    calls_for_clipper.set(calls_for_clipper.get() + 1);
+                    let mut path = Path::new();
+                    path.add_rect(Rect::from_origin_size(Point::ZERO, size));
+                    path
+                })
+                .expect("register path clipper");
+
+            let mut node = RenderClipPath::anti_alias();
+            node.set_path_clip_target(Some(target));
+            assert!(node.has_custom_clipper());
+
+            let path = node.resolve_clip(Size::new(px(20.0), px(30.0)));
+
+            assert!(path.contains(Point::new(px(10.0), px(10.0))));
+        });
+
+        assert_eq!(calls.get(), 1);
+    }
+
     // ---------- RenderClip<S> generic ------------------------------------
 
     #[test]
@@ -753,15 +857,15 @@ mod tests {
     }
 
     #[test]
-    fn with_clipper_installs_custom_function() {
-        // A 20-pixel inset clip rect.
-        let node: RenderClipRect = RenderClip::anti_alias().with_clipper(|size| {
-            Rect::from_origin_size(
-                Point::new(px(20.0), px(20.0)),
-                Size::new(size.width - px(40.0), size.height - px(40.0)),
-            )
-        });
+    fn rrect_border_radius_installs_data_only_clip_source() {
+        let radius = BorderRadius::circular(px(12.0));
+        let node: RenderClipRRect = RenderClip::anti_alias().with_border_radius(radius);
         assert!(node.has_custom_clipper());
+        assert_eq!(node.border_radius(), Some(radius));
+
+        let resolved = node.resolve_clip(Size::new(px(100.0), px(50.0)));
+        assert_eq!(resolved.top_left.x, px(12.0));
+        assert_eq!(resolved.top_right.x, px(12.0));
     }
 
     #[test]
@@ -773,21 +877,21 @@ mod tests {
     }
 
     #[test]
-    fn clone_is_supported_even_with_clipper() {
-        let node: RenderClipRect =
-            RenderClip::anti_alias().with_clipper(|s| Rect::from_origin_size(Point::ZERO, s));
+    fn clone_is_supported_even_with_data_clip_source() {
+        let node: RenderClipRRect =
+            RenderClip::anti_alias().with_border_radius(BorderRadius::circular(px(8.0)));
         let cloned = node.clone();
         assert!(cloned.has_custom_clipper());
         assert_eq!(cloned.clip_behavior(), node.clip_behavior());
+        assert_eq!(cloned.border_radius(), node.border_radius());
     }
 
     #[test]
-    fn debug_format_does_not_expose_clipper_internals() {
+    fn debug_format_summarizes_clip_sources() {
         let node: RenderClipRect = RenderClip::anti_alias();
         let dbg = format!("{node:?}");
         assert!(dbg.contains("RenderClip"));
         assert!(dbg.contains("clip_behavior"));
-        // Clipper is summarised as a boolean, not the closure body.
         assert!(dbg.contains("has_custom_clipper"));
     }
 

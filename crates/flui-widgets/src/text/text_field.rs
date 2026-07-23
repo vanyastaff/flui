@@ -1,5 +1,16 @@
-//! [`TextField`] — an [`EditableText`] with border decoration and
-//! tap-to-focus behavior.
+//! [`TextField`] — an [`EditableText`] with a plain border decoration and
+//! tap-to-focus behavior, for callers with no `Theme` ancestor.
+//!
+//! **Not a Flutter-parity port.** Flutter has no widgets-layer text field —
+//! `material/text_field.dart`'s `TextField` is the *only* oracle, and its
+//! parity claim belongs to
+//! [`flui_material::TextField`](https://docs.rs/flui-material) (M3
+//! decoration via `InputDecorator`, live focus/enabled/error plumbing, theme
+//! colors). This type is this crate's own plain stand-in: a fixed 1px
+//! gray-border box with no theming, no label/hint/helper/error slots, and no
+//! state-table colors — for a widgets-only tree with no `Theme` above it to
+//! decorate from. Prefer `flui_material::TextField` whenever a `Theme` is
+//! available.
 
 use flui_geometry::{EdgeInsets, px};
 use flui_types::styling::{Border, BorderSide, BorderStyle, BoxDecoration};
@@ -16,11 +27,11 @@ use crate::text::editable_text::EditableText;
 // TextField
 // ============================================================================
 
-/// A decorated, tap-to-focus single-line text input field.
-///
-/// Flutter parity: `material/text_field.dart` `TextField` — wraps
-/// [`EditableText`] with a [`DecoratedBox`] border and a [`GestureDetector`]
-/// that requests focus on tap.
+/// A plain decorated, tap-to-focus single-line text input field — wraps
+/// [`EditableText`] with a fixed [`DecoratedBox`] border and a
+/// [`GestureDetector`] that requests focus on tap. See the module docs: this
+/// is a theme-free stand-in, not the Material `TextField` — prefer
+/// `flui_material::TextField` whenever a `Theme` ancestor is available.
 ///
 /// # DEFERRED (v1)
 ///
@@ -36,6 +47,7 @@ use crate::text::editable_text::EditableText;
 /// - Focus decoration changes (highlighted border on focus)
 #[derive(Clone, Debug, StatelessView)]
 pub struct TextField {
+    // PORT-CHECK-OK-SP3: deliberate theme-free stand-in for a widgets-only tree; the M3 field is flui_material::TextField — see this module's docs
     /// Controller that owns the text buffer and caret position.
     controller: TextEditingController,
     /// Height of the caret bar, forwarded to [`EditableText`].
@@ -82,20 +94,6 @@ impl TextField {
 
 impl StatelessView for TextField {
     fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
-        // The EditableText inside this field owns its FocusNode.  We need to
-        // call `request_focus()` on it from the GestureDetector's on_tap, but
-        // we do not have a handle to the FocusNode from outside the state.
-        //
-        // For v1 the pragmatic path: walk the root scope's children for the
-        // first node that has a registered key handler (= this field's
-        // EditableText node).  This heuristic is correct for single-field
-        // forms.
-        //
-        // # DEFERRED (v1)
-        // Multi-field forms require a stable focus-node reference stored in
-        // the controller or a more precise hit-test-level focus-request
-        // mechanism.
-
         let editable = EditableText::new(self.controller.clone())
             .caret_height(self.caret_height)
             .caret_color(self.caret_color);
@@ -106,7 +104,7 @@ impl StatelessView for TextField {
         let controller = self.controller.clone();
         GestureDetector::new()
             .on_tap(move || {
-                focus_first_text_node_in_root_scope(&controller);
+                focus_field(&controller);
             })
             .child(decorated)
     }
@@ -127,38 +125,15 @@ fn field_border_decoration() -> BoxDecoration<Pixels> {
         ))))
 }
 
-/// Ask the `FocusManager` to focus the node that was registered by the
-/// `EditableTextState` for `_controller`.
-///
-/// `EditableTextState::init_state` attaches the node to the root scope and
-/// registers a key handler keyed by the node's id.  We identify the node by
-/// searching the root scope's children for the first one that has a registered
-/// key handler — since `TextField` wraps exactly one `EditableText`, this is
-/// unambiguous in the single-field case.
-///
-/// # DEFERRED (v1)
-/// The `_controller` parameter is reserved for a future implementation that
-/// stores the focus-node id directly on the controller, enabling multi-field
-/// disambiguation without the scope-search heuristic.
-fn focus_first_text_node_in_root_scope(_controller: &TextEditingController) {
+/// Focus the field driven by `controller` — the node its `EditableTextState`
+/// published on mount. Precise for multi-field forms, where the
+/// old root-scope walk could only ever find the first field. A no-op while the
+/// field is unmounted, since an unmounted node cannot take focus.
+fn focus_field(controller: &TextEditingController) {
     use flui_interaction::routing::FocusManager;
 
-    let manager = FocusManager::global();
-    let root_scope = manager.root_scope();
-
-    // Walk the root scope's children for the first attached node that has a
-    // registered key handler (= the EditableText's node).
-    // `root_scope` is `&Arc<FocusScopeNode>`.  Its underlying `FocusNode`
-    // carries the list of attached child FocusNodes.
-    let target_id = root_scope
-        .as_focus_node()
-        .children()
-        .into_iter()
-        .find(|node| manager.has_key_handler(node.id()))
-        .map(|node| node.id());
-
-    if let Some(node_id) = target_id {
-        manager.request_focus(node_id);
+    if let Some(node_id) = controller.focus_node_id() {
+        FocusManager::global().request_focus(node_id);
     }
 }
 
@@ -166,65 +141,53 @@ fn focus_first_text_node_in_root_scope(_controller: &TextEditingController) {
 mod tests {
     #![allow(clippy::float_cmp)] // unit tests assert exact set-then-read values, not computed floats
 
-    use std::sync::Arc;
-
-    use flui_interaction::routing::{FocusManager, FocusNode};
+    use flui_interaction::routing::FocusManager;
 
     use super::*;
 
-    /// Attaches a node with a registered key handler to the root scope on
-    /// construction (mimicking `EditableTextState::init_state`), and detaches
-    /// and unregisters it on drop -- so a test panic still leaves the global
-    /// `FocusManager` singleton clean for the next test.
-    struct AttachedNode {
-        node: Arc<FocusNode>,
-    }
-
-    impl AttachedNode {
-        fn new(label: &'static str) -> Self {
-            let manager = FocusManager::global();
-            let node = FocusNode::with_debug_label(label);
-            manager.root_scope().attach_node(&node);
-            manager.register_key_handler(node.id(), Arc::new(|_event| false));
-            Self { node }
-        }
-    }
-
-    impl Drop for AttachedNode {
-        fn drop(&mut self) {
-            let manager = FocusManager::global();
-            if self.node.has_primary_focus() {
-                manager.unfocus();
-            }
-            manager.unregister_key_handler(self.node.id());
-            manager.root_scope().detach_node(self.node.id());
-        }
-    }
-
+    /// The tap focuses **its own** field. Each mounted
+    /// `EditableText` publishes its focus node on its controller; with two
+    /// fields, focusing through the second controller must land on the second
+    /// node — exactly what the old first-node-with-a-key-handler root-scope
+    /// walk could not do. Unmounting withdraws the node, making the tap a
+    /// no-op.
+    ///
+    /// Red-check: point `focus_field` at the old root-scope walk — the second
+    /// tap lands on the *first* field and the disambiguation assertion fails.
     #[test]
-    fn focus_first_text_node_in_root_scope_focuses_the_attached_node() {
-        let attached = AttachedNode::new("text-field-under-test");
-        assert!(!attached.node.has_primary_focus(), "not focused yet");
+    fn a_tap_focuses_the_fields_own_node_not_the_first_registered() {
+        use flui_view::ViewExt;
 
-        focus_first_text_node_in_root_scope(&TextEditingController::new());
+        let _guard = crate::test_harness::FOCUS_TEST_LOCK.lock();
+        let manager = FocusManager::global();
+        manager.unfocus();
 
-        assert!(
-            attached.node.has_primary_focus(),
-            "the only attached node with a key handler must be focused",
+        let first = TextEditingController::new();
+        let second = TextEditingController::new();
+        let mut harness = crate::test_harness::mount(crate::Column::new(vec![
+            TextField::new(first.clone()).into_view().boxed(),
+            TextField::new(second.clone()).into_view().boxed(),
+        ]));
+
+        let first_id = first.focus_node_id().expect("the first field published");
+        let second_id = second.focus_node_id().expect("the second field published");
+        assert_ne!(first_id, second_id);
+
+        focus_field(&second);
+        assert_eq!(
+            manager.primary_focus(),
+            Some(second_id),
+            "the tap focuses its own field, not the first with a key handler"
         );
-    }
+        focus_field(&first);
+        assert_eq!(manager.primary_focus(), Some(first_id));
 
-    #[test]
-    fn focus_first_text_node_in_root_scope_is_a_no_op_with_no_attached_nodes() {
-        // No AttachedNode constructed -- the root scope has no key-handler
-        // children. Must not panic and must not focus anything.
-        focus_first_text_node_in_root_scope(&TextEditingController::new());
-        assert!(
-            !FocusManager::global()
-                .root_scope()
-                .as_focus_node()
-                .has_primary_focus()
-        );
+        // Unmount: both fields withdraw, and a late tap is a no-op.
+        harness.swap_root(crate::Column::new(Vec::<flui_view::BoxedView>::new()));
+        assert_eq!(first.focus_node_id(), None, "unmount withdraws the node");
+        manager.unfocus();
+        focus_field(&second);
+        assert_eq!(manager.primary_focus(), None, "a late tap is a no-op");
     }
 
     #[test]

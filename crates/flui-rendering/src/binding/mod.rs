@@ -17,8 +17,8 @@
 //! flui_app::RenderingFlutterBinding implements RendererBinding
 //! ```
 //!
-//! Mythos Step 4 (2026-05-20): the three-trait stack (`PipelineManifold`,
-//! `HitTestDispatcher`, `ViewHitTestable`) was collapsed. See
+//! The three-trait stack (`PipelineManifold`, `HitTestDispatcher`,
+//! `ViewHitTestable`) was collapsed on 2026-05-20. See
 //! `docs/designs/2026-05-20-mythos-flui-rendering-redesign.md` Section 12.
 
 use std::sync::Arc;
@@ -26,7 +26,6 @@ use std::sync::Arc;
 use parking_lot::RwLock;
 
 use flui_interaction::MouseTracker;
-use flui_layer::LayerTree;
 
 use crate::{
     hit_testing::HitTestResult,
@@ -59,7 +58,8 @@ use crate::{
 /// - Managing the root [`PipelineOwner`] tree
 /// - Managing [`RenderView`]s (add/remove)
 /// - Creating [`ViewConfiguration`]s for views
-/// - Coordinating frame production via [`draw_frame`](Self::draw_frame)
+/// - Declaring the first-frame deferral gate via
+///   [`send_frames_to_engine`](Self::send_frames_to_engine)
 /// - Managing [`MouseTracker`] for hover events
 /// - Responding to visual-update requests from pipeline owners
 /// - Tracking semantics-enabled state and its listeners
@@ -78,12 +78,17 @@ use crate::{
 /// 6. **Compositing** - Send layers to GPU
 /// 7. **Semantics** - `PipelineOwner::<Semantics>::run_semantics`
 ///
-/// Mythos Step 7 (2026-05-20) lifted these phase methods out of
-/// `PipelineOwner<Idle>` and onto their phase-typed impls. The
+/// These phase methods were lifted out of `PipelineOwner<Idle>` and
+/// onto their phase-typed impls on 2026-05-20. The
 /// orchestrator is [`PipelineOwner::<Idle>::run_frame`], which
 /// composes the four phase transitions and returns the owner back at
-/// `Idle` plus the produced layer tree.
-pub trait RendererBinding: Send + Sync {
+/// `Idle` plus the produced layer tree. Pumping that orchestrator and
+/// gating step 6 on [`send_frames_to_engine`](Self::send_frames_to_engine)
+/// is the implementer's job, not a trait default — see that method's
+/// doc for why. The production incarnation is
+/// `AppBinding::render_frame_entered` (`flui-app`), which consults
+/// `RenderingFlutterBinding::send_frames_to_engine` before presenting.
+pub trait RendererBinding {
     // ========================================================================
     // Pipeline / Manifold (formerly PipelineManifold)
     // ========================================================================
@@ -127,8 +132,7 @@ pub trait RendererBinding: Send + Sync {
     ///
     /// This is the root of the PipelineOwner tree. Multi-window scenarios
     /// own multiple PipelineOwner instances side-by-side; the previous
-    /// `PipelineOwner::adopt_child` hierarchical API was removed in
-    /// Mythos Step 9.
+    /// `PipelineOwner::adopt_child` hierarchical API was removed.
     fn root_pipeline_owner(&self) -> &RwLock<PipelineOwner>;
 
     /// Creates the root pipeline owner.
@@ -140,18 +144,19 @@ pub trait RendererBinding: Send + Sync {
     }
 
     // ========================================================================
-    // RenderView Management (R-6 reshape — cycle 4 Wave 2 U-1)
+    // RenderView Management
     // ========================================================================
     //
-    // Pre-cycle this section exposed `render_views()` returning a
+    // This section used to expose `render_views()` returning a
     // `&RwLock<HashMap<u64, Arc<RwLock<RenderView>>>>` — a triple-lock
     // topology baked into the trait surface. Every consumer had to reason
     // about the outer `HashMap` lock, the inner `Arc<RwLock<RenderView>>`
-    // lock, and the implicit map-entry refcount. Cycle 4 R-6 audit
-    // flagged it as a Cycle-2 PR #100/U22 newtype-getter violation at
-    // trait level.
+    // lock, and the implicit map-entry refcount. An audit flagged it as a
+    // newtype-getter violation at trait level: a getter returning a raw
+    // lock forces every caller to re-derive its own locking discipline
+    // instead of the trait stating what operation is needed.
     //
-    // Post-cycle the trait surface exposes four primitives:
+    // The trait surface now exposes four primitives instead:
     //   - `render_view(id)`         — single lookup, refcount bump
     //   - `render_view_ids()`       — owned `Vec<u64>` snapshot
     //   - `insert_render_view`      — single-write
@@ -240,14 +245,10 @@ pub trait RendererBinding: Send + Sync {
 
     /// Returns the mouse tracker for hover notification.
     ///
-    /// Cycle 4 U-6: the return type changed from
-    /// `&RwLock<MouseTracker>` to `&MouseTracker`. The interaction-
-    /// side [`flui_interaction::MouseTracker`] is `Clone` with
-    /// interior mutability (`Arc<Mutex<inner>>`), so the outer
-    /// `RwLock` wrapper the rendering-side tracker required is
-    /// double-wrapping. Implementers now expose the tracker
-    /// directly; callers needing a snapshot clone the handle
-    /// (cheap -- `Arc`-bump).
+    /// The return type is `&MouseTracker` rather than `&RwLock<MouseTracker>`.
+    /// The interaction-side [`flui_interaction::MouseTracker`] is
+    /// owner-local, so executable mouse callbacks do not force the whole
+    /// binding to be `Send + Sync`.
     fn mouse_tracker(&self) -> &MouseTracker;
 
     // ========================================================================
@@ -258,53 +259,24 @@ pub trait RendererBinding: Send + Sync {
     ///
     /// If false, the framework does all frame work but doesn't render.
     /// Used for deferring the first frame until ready.
-    fn send_frames_to_engine(&self) -> bool {
-        true
-    }
-
-    /// Pump the rendering pipeline to generate a frame, returning the
-    /// produced layer tree.
     ///
-    /// The single authoritative frame path: consume the owner out of
-    /// the `RwLock`, drive it through `run_frame` (all four phase
-    /// transitions; semantics included), put it back, and hand the
-    /// produced `LayerTree` to the caller. The caller — a platform
-    /// binding or embedder — wraps the tree in a `Scene` and submits
-    /// it to the renderer (`AppBinding::render_frame` is the
-    /// production incarnation: `draw_frame → Scene::new →
-    /// Renderer::render_scene`).
+    /// # Flutter Equivalence
     ///
-    /// Returns `None` when the frame is deferred
-    /// ([`Self::send_frames_to_engine`] is `false` — Flutter's
-    /// deferred-first-frame mechanism; pipeline work still runs so
-    /// warm-up costs are paid early), when the pipeline produced no
-    /// tree (no root), or when a phase errored (logged, frame
-    /// dropped, owner restored for the next frame).
-    fn draw_frame(&self) -> Option<LayerTree> {
-        let root_owner = self.root_pipeline_owner();
-
-        // Consume the owner through the typestate transitions.
-        let layer_tree = {
-            let mut guard = root_owner.write();
-            let owner = std::mem::take(&mut *guard);
-            let (owner, result) = owner.run_frame();
-            *guard = owner;
-            match result {
-                Ok(layer_tree) => layer_tree,
-                Err(e) => {
-                    tracing::error!(error = ?e, "draw_frame: pipeline failed, dropping frame");
-                    None
-                }
-            }
-        };
-
-        if self.send_frames_to_engine() {
-            layer_tree
-        } else {
-            // Deferred: the work ran (warm-up), the output is withheld.
-            None
-        }
-    }
+    /// Corresponds to `RendererBinding.sendFramesToEngine` (oracle tag
+    /// `3.44.0`, `packages/flutter/lib/src/rendering/binding.dart`):
+    /// `_firstFrameSent || _firstFrameDeferredCount == 0`.
+    ///
+    /// This is a **required** method (no default) deliberately: the
+    /// deferral counter behind it is per-binding state (a nested
+    /// defer/allow counter plus a latching "first frame already sent"
+    /// flag), and a `true`-returning default previously let an
+    /// implementer silently skip wiring the counter at all — the exact
+    /// drift this trait method's history was flagged for. The one
+    /// production implementation lives on `RenderingFlutterBinding`
+    /// (`flui-app`'s `crates/flui-app/src/bindings/renderer_binding.rs`);
+    /// implement this by delegating to that same counter rather than
+    /// growing a second one.
+    fn send_frames_to_engine(&self) -> bool;
 
     // ========================================================================
     // Metrics Handling
@@ -316,11 +288,11 @@ pub trait RendererBinding: Send + Sync {
     fn handle_metrics_changed(&self) {
         let mut force_frame = false;
 
-        // R-6 reshape: ids-then-lookup iteration. The outer-container
-        // lock is released between snapshot collection and per-view
-        // writes; previously this method held the read-lock on the
-        // container for the duration of every view's write-lock, which
-        // is the exact nested-lock topology the audit flagged.
+        // Ids-then-lookup iteration: the outer-container lock is released
+        // between snapshot collection and per-view writes. Previously this
+        // method held the read-lock on the container for the duration of
+        // every view's write-lock, which is the exact nested-lock topology
+        // the trait reshape above was meant to avoid.
         for view_id in self.render_view_ids() {
             if let Some(view) = self.render_view(view_id) {
                 let mut view_guard = view.write();
@@ -364,12 +336,11 @@ pub trait RendererBinding: Send + Sync {
         action: flui_semantics::SemanticsAction,
         _args: Option<flui_semantics::ActionArgs>,
     ) {
-        // Cycle 4 R-2: pre-cycle the body panicked via `unimplemented!()`
-        // — a Constitution Principle 6 violation reachable from every
-        // assistive-tech action dispatch. Post-cycle: emit a
-        // `tracing::warn!` with the action context and return without
-        // panicking. When `SemanticsOwner` integration lands the warn
-        // is swapped for the real dispatch.
+        // This body used to panic via `unimplemented!()` — a Constitution
+        // Principle 6 violation reachable from every assistive-tech action
+        // dispatch. It now emits a `tracing::warn!` with the action context
+        // and returns without panicking. When `SemanticsOwner` integration
+        // lands, the warning is swapped for the real dispatch.
         if self.render_view(view_id).is_some() {
             tracing::warn!(
                 view_id,
@@ -508,16 +479,10 @@ mod tests {
     // Verify the trait is object-safe.
     fn _assert_renderer_binding_object_safe(_: &dyn RendererBinding) {}
 
-    #[test]
-    fn test_renderer_binding_send_sync() {
-        fn assert_send_sync<T: Send + Sync + ?Sized>() {}
-        assert_send_sync::<dyn RendererBinding>();
-    }
-
     /// Minimal `RendererBinding` implementer exercising the trait's default
     /// methods (`add_render_view_with_config`, `create_view_configuration_for`,
-    /// `draw_frame`, `handle_metrics_changed`) and the free `debug_dump_*`
-    /// functions, none of which had any test coverage.
+    /// `handle_metrics_changed`) and the free `debug_dump_*` functions, plus
+    /// its own wiring of the required `send_frames_to_engine` method.
     struct TestBinding {
         owner: RwLock<PipelineOwner>,
         views: RwLock<HashMap<u64, Arc<RwLock<RenderView>>>>,
@@ -588,6 +553,26 @@ mod tests {
         }
     }
 
+    /// `send_frames_to_engine` is a **required** trait method (no default)
+    /// precisely so each implementer wires its own deferral state instead of
+    /// inheriting a `true`-returning stub. This asserts `TestBinding`'s
+    /// minimal wiring actually reflects `send_frames`, not a trait-level
+    /// default silently masking an unwired knob.
+    #[test]
+    fn send_frames_to_engine_reflects_the_implementers_own_state() {
+        let binding = TestBinding::new();
+        assert!(
+            binding.send_frames_to_engine(),
+            "TestBinding::new defaults send_frames to true"
+        );
+
+        binding.send_frames.store(false, Ordering::SeqCst);
+        assert!(!binding.send_frames_to_engine());
+
+        binding.send_frames.store(true, Ordering::SeqCst);
+        assert!(binding.send_frames_to_engine());
+    }
+
     #[test]
     fn add_render_view_with_config_derives_and_inserts() {
         let binding = TestBinding::new();
@@ -645,22 +630,6 @@ mod tests {
 
         binding.handle_metrics_changed();
         assert_eq!(binding.visual_update_calls.load(Ordering::SeqCst), 1);
-    }
-
-    #[test]
-    fn draw_frame_withholds_output_when_deferred_but_still_runs_pipeline_work() {
-        let binding = TestBinding::new();
-        binding.send_frames.store(false, Ordering::SeqCst);
-
-        // No root attached, so there is nothing to layout/paint regardless;
-        // the point of this test is that a deferred frame reports `None`.
-        assert!(binding.draw_frame().is_none());
-    }
-
-    #[test]
-    fn draw_frame_returns_none_when_pipeline_has_no_root() {
-        let binding = TestBinding::new();
-        assert!(binding.draw_frame().is_none());
     }
 
     #[test]

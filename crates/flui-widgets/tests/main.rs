@@ -96,8 +96,6 @@ mod table;
 mod text;
 #[path = "text_field.rs"]
 mod text_field;
-#[path = "theme.rs"]
-mod theme;
 #[path = "visibility.rs"]
 mod visibility;
 #[path = "wrap.rs"]

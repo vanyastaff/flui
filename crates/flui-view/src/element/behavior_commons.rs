@@ -3,9 +3,9 @@
 //!
 //! Free functions extracted from the per-behavior `perform_build` /
 //! `on_mount` / `on_unmount` / `on_update` bodies so each impl carries
-//! only its behavior-specific path (plan §U16, brainstorm R23).
+//! only its behavior-specific path.
 //!
-//! ## Design (plan §D6, locked)
+//! ## Design (locked)
 //!
 //! These are **free functions**, not inherent methods on
 //! `Element<V, A, B>` and not blanket-trait helpers. Rationale:
@@ -23,7 +23,7 @@
 //!
 //! ## Scope
 //!
-//! REFACTOR-FIRST (plan U16 execution note). No behavior change. Existing
+//! REFACTOR-FIRST. No behavior change. Existing
 //! integration tests in `crates/flui-view/tests/*` cover the
 //! end-to-end behavior; the per-helper tests below pin the helpers
 //! themselves so a future regression in extraction quality is caught
@@ -53,7 +53,7 @@ pub(crate) fn should_build_with_trace<V, A>(
     behavior_name: &'static str,
 ) -> bool
 where
-    V: Clone + Send + Sync + 'static,
+    V: Clone + 'static,
     A: ElementArity,
 {
     if core.should_build() {
@@ -68,8 +68,8 @@ where
 /// Run a user `build()` closure under [`std::panic::catch_unwind`] and,
 /// on a caught panic, substitute the registered `ErrorView`.
 ///
-/// This is the producer half of the `ErrorView` recovery path (plan
-/// §U7, origin R9) — the receiver (`ErrorView` + `FlutterError` +
+/// This is the producer half of the `ErrorView` recovery path — the
+/// receiver (`ErrorView` + `FlutterError` +
 /// `set_error_view_builder`) already exists; this wires the catch that
 /// feeds it. Mirrors Flutter's `ComponentElement.performRebuild`
 /// (`framework.dart:5810-5859`), whose first `try/catch` wraps `build()`
@@ -110,7 +110,7 @@ pub(crate) fn build_or_recover<V, A, F>(
     build: F,
 ) -> Box<dyn View>
 where
-    V: Clone + Send + Sync + 'static,
+    V: Clone + 'static,
     A: ElementArity,
     F: FnOnce() -> Box<dyn View>,
 {
@@ -165,7 +165,7 @@ pub(crate) fn single_child_views<V, A, R>(
     behavior_name: &'static str,
 ) -> Vec<Box<dyn View>>
 where
-    V: Clone + Send + Sync + 'static,
+    V: Clone + 'static,
     A: ElementArity,
     R: IntoView,
 {
@@ -198,7 +198,7 @@ pub(crate) fn proxy_style_views<V, A, F>(
     get_child: F,
 ) -> Vec<Box<dyn View>>
 where
-    V: Clone + Send + Sync + 'static,
+    V: Clone + 'static,
     A: ElementArity,
     F: FnOnce(&V) -> &dyn View,
 {
@@ -227,7 +227,7 @@ pub(crate) fn mark_render_needs_layout_and_paint<V, A>(
     render_id: Option<RenderId>,
     behavior_name: &'static str,
 ) where
-    V: Clone + Send + Sync + 'static,
+    V: Clone + 'static,
     A: ElementArity,
 {
     if let Some(render_id) = render_id
@@ -235,13 +235,13 @@ pub(crate) fn mark_render_needs_layout_and_paint<V, A>(
     {
         let mut owner = pipeline_owner.write();
 
-        // D-block PR-A1 U16: migrate from direct add_node_needing_layout to
-        // PipelineOwner::mark_needs_layout (new in U15) so the layout-side
+        // Migrate from direct add_node_needing_layout to
+        // PipelineOwner::mark_needs_layout so the layout-side
         // mark propagates up to the nearest relayout boundary per Flutter
         // markNeedsLayout semantics. Paint side stays on the direct primitive
         // — Flutter's markNeedsPaint is its own walk with different boundary
-        // semantics (repaint vs relayout boundary) and is out of D-block
-        // scope (Core.2 paint catalog work).
+        // semantics (repaint vs relayout boundary) and is out of scope here
+        // (Core.2 paint catalog work).
         let tree_depth = owner.render_tree().depth(render_id).unwrap_or(0);
         owner.mark_needs_layout(render_id);
         owner.add_node_needing_paint(render_id, tree_depth as usize);
@@ -262,17 +262,16 @@ pub(crate) fn remove_render_object_from_tree<V, A>(
     render_id: Option<RenderId>,
     behavior_name: &'static str,
 ) where
-    V: Clone + Send + Sync + 'static,
+    V: Clone + 'static,
     A: ElementArity,
 {
     if let Some(render_id) = render_id
         && let Some(pipeline_owner) = core.pipeline_owner()
     {
-        // Cycle 3 T-1: `TreeWrite::remove` now cascades by default. The
-        // pre-cycle inherent `RenderTree::remove` was the non-cascade
-        // primitive (now renamed `remove_shallow`). Element unmount
-        // wants the cascade — when a parent element unmounts, all
-        // descendant render objects must come down with it.
+        // `TreeWrite::remove` cascades by default; the non-cascading
+        // primitive is `RenderTree::remove_shallow`. Element unmount wants
+        // the cascade — when a parent element unmounts, all descendant
+        // render objects must come down with it.
 
         let mut owner = pipeline_owner.write();
         // Dispose protocol: evict dirty entries, then free the slots.

@@ -1,6 +1,6 @@
 //! Canvas state stack: save/restore + save_layer family.
 //!
-//! Mythos chain U4 extracted these from the 3,305-LOC `canvas.rs` god
+//! These were extracted from the 3,305-LOC `canvas.rs` god
 //! module into a focused file. The state stack carries:
 //!
 //! - The current transform matrix (snapshotted by `save()`).
@@ -62,8 +62,7 @@ impl Canvas {
     ///
     /// Must be balanced with `restore()`. Unbalanced saves at
     /// `finish()` time fire `debug_assert!` (caught during tests) and
-    /// `tracing::warn!` (release observability) per the Mythos chain
-    /// U10 strengthening.
+    /// `tracing::warn!` (release observability).
     #[inline]
     pub fn save(&mut self) {
         self.save_stack.push(CanvasState {

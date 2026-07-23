@@ -3,9 +3,8 @@
 //! `HitTestBehavior` contract — `DeferToChild` (the default) fires only when a
 //! descendant is hit, `Opaque` fires for any pointer within bounds.
 
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
-
+use std::cell::Cell;
+use std::rc::Rc;
 use crate::common::{lay_out, size, tight};
 use flui_interaction::events::pointer::{
     PointerButtons, PointerGesture, PointerGestureEvent, PointerInfo, PointerState, PointerType,
@@ -18,28 +17,25 @@ use flui_widgets::{ColoredBox, Listener, PointerPanZoomEvent, SizedBox};
 
 /// A counter callback + a readable handle.
 fn counter() -> (
-    Arc<AtomicUsize>,
-    impl Fn(&flui_widgets::prelude::PointerEvent) + Send + Sync,
+    Rc<Cell<usize>>,
+    impl Fn(&flui_widgets::prelude::PointerEvent) + 'static,
 ) {
-    let count = Arc::new(AtomicUsize::new(0));
-    let in_cb = Arc::clone(&count);
+    let count = Rc::new(Cell::new(0));
+    let in_cb = Rc::clone(&count);
     (count, move |_event| {
-        in_cb.fetch_add(1, Ordering::SeqCst);
+        in_cb.set(in_cb.get() + 1);
     })
 }
 
-fn pan_zoom_counter() -> (
-    Arc<AtomicUsize>,
-    impl Fn(&PointerPanZoomEvent) + Send + Sync,
-) {
-    let count = Arc::new(AtomicUsize::new(0));
-    let in_cb = Arc::clone(&count);
+fn pan_zoom_counter() -> (Rc<Cell<usize>>, impl Fn(&PointerPanZoomEvent) + 'static) {
+    let count = Rc::new(Cell::new(0));
+    let in_cb = Rc::clone(&count);
     (count, move |event| {
         assert!(
             event.is_update(),
             "current FLUI PointerEvent::Gesture conversion should produce pan/zoom updates",
         );
-        in_cb.fetch_add(1, Ordering::SeqCst);
+        in_cb.set(in_cb.get() + 1);
     })
 }
 
@@ -60,7 +56,7 @@ fn default_listener_fires_on_pointer_landing_on_a_hittable_child() {
 
     laid.dispatch_pointer_down(20.0, 20.0);
     assert_eq!(
-        downs.load(Ordering::SeqCst),
+        downs.get(),
         1,
         "DeferToChild fires when the pointer lands on a hittable child",
     );
@@ -82,7 +78,7 @@ fn default_listener_does_not_fire_without_a_hittable_target() {
 
     laid.dispatch_pointer_down(20.0, 20.0);
     assert_eq!(
-        downs.load(Ordering::SeqCst),
+        downs.get(),
         0,
         "DeferToChild must NOT fire when no descendant is hit",
     );
@@ -103,11 +99,7 @@ fn opaque_listener_fires_within_bounds_even_without_a_hittable_child() {
     );
 
     laid.dispatch_pointer_down(20.0, 20.0);
-    assert_eq!(
-        downs.load(Ordering::SeqCst),
-        1,
-        "Opaque fires for any pointer within bounds",
-    );
+    assert_eq!(downs.get(), 1, "Opaque fires for any pointer within bounds");
 }
 
 #[test]
@@ -125,24 +117,12 @@ fn listener_routes_down_and_up_to_their_own_callbacks() {
     );
 
     laid.dispatch_pointer_down(40.0, 40.0);
-    assert_eq!(
-        downs.load(Ordering::SeqCst),
-        1,
-        "down routes to on_pointer_down"
-    );
-    assert_eq!(
-        ups.load(Ordering::SeqCst),
-        0,
-        "down does not invoke on_pointer_up"
-    );
+    assert_eq!(downs.get(), 1, "down routes to on_pointer_down");
+    assert_eq!(ups.get(), 0, "down does not invoke on_pointer_up");
 
     laid.dispatch_pointer_up(40.0, 40.0);
-    assert_eq!(ups.load(Ordering::SeqCst), 1, "up routes to on_pointer_up");
-    assert_eq!(
-        downs.load(Ordering::SeqCst),
-        1,
-        "up does not re-invoke on_pointer_down",
-    );
+    assert_eq!(ups.get(), 1, "up routes to on_pointer_up");
+    assert_eq!(downs.get(), 1, "up does not re-invoke on_pointer_down");
 }
 
 #[test]
@@ -176,19 +156,19 @@ fn listener_routes_buttonless_move_to_hover_callback() {
     laid.route_event(&event, 40.0, 40.0);
 
     assert_eq!(
-        hovers.load(Ordering::SeqCst),
+        hovers.get(),
         1,
         "buttonless PointerEvent::Move should route to on_pointer_hover",
     );
     assert_eq!(
-        moves.load(Ordering::SeqCst),
+        moves.get(),
         0,
         "buttonless hover must not route to on_pointer_move",
     );
 
     laid.dispatch_pointer_move(40.0, 40.0);
     assert_eq!(
-        moves.load(Ordering::SeqCst),
+        moves.get(),
         1,
         "pressed-button PointerEvent::Move should still route to on_pointer_move",
     );
@@ -213,7 +193,7 @@ fn listener_routes_scroll_to_pointer_signal_callback() {
     laid.route_event(&event, 40.0, 40.0);
 
     assert_eq!(
-        signals.load(Ordering::SeqCst),
+        signals.get(),
         1,
         "scroll events are FLUI's concrete pointer-signal payload",
     );
@@ -244,7 +224,7 @@ fn listener_routes_gesture_to_pan_zoom_update_callback() {
     laid.route_event(&event, 40.0, 40.0);
 
     assert_eq!(
-        updates.load(Ordering::SeqCst),
+        updates.get(),
         1,
         "PointerEvent::Gesture should route through Listener's pan/zoom update callback",
     );

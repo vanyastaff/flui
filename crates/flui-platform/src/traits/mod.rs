@@ -7,9 +7,10 @@
 mod capabilities;
 mod display;
 mod embedder;
+mod haptics;
 mod input;
-mod lifecycle;
 mod platform;
+mod text_input;
 mod window;
 
 pub use capabilities::{
@@ -17,6 +18,7 @@ pub use capabilities::{
 };
 pub use display::{DisplayId, PlatformDisplay};
 pub use embedder::PlatformEmbedder;
+pub use haptics::PlatformHaptics;
 pub use input::{
     // Platform utilities
     BasicVelocityTracker,
@@ -44,11 +46,11 @@ pub use input::{
 };
 // Re-export keyboard-types for convenience
 pub use keyboard_types::NamedKey;
-pub use lifecycle::{DefaultLifecycle, LifecycleEvent, LifecycleState, PlatformLifecycle};
 pub use platform::{
-    Clipboard, ClipboardItem, PathPromptOptions, Platform, PlatformExecutor, WindowEvent, WindowId,
-    WindowMode, WindowOptions,
+    Clipboard, ClipboardItem, PathPromptOptions, Platform, PlatformExecutor, PlatformReadyCallback,
+    WindowEvent, WindowId, WindowMode, WindowOptions,
 };
+pub use text_input::PlatformTextInput;
 #[cfg(feature = "winit-backend")]
 pub use window::WinitWindow;
 pub use window::{PlatformWindow, WindowAppearance, WindowBackgroundAppearance, WindowBounds};

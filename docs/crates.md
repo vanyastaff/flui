@@ -2,7 +2,7 @@
 
 # Crates Map
 
-> **Scope.** This page describes the **current** workspace as it is built today. The **target** crate decomposition that is not yet present (including `flui-material`, `flui-cupertino`, `flui-localizations`, and the formal `flui` facade) is defined in [`FOUNDATIONS.md` Part IV](FOUNDATIONS.md); the migration is sequenced in [`ROADMAP.md`](ROADMAP.md).
+> **Scope.** This page describes the **current** workspace as it is built today. `flui-localizations`, `flui-material`, and `flui-cupertino` (Catalog.1) have landed; the remaining target crate decomposition — the formal `flui` facade — is defined in [`FOUNDATIONS.md` Part IV](FOUNDATIONS.md); the migration is sequenced in [`ROADMAP.md`](ROADMAP.md).
 
 The FLUI workspace contains 20+ crates organized into a strict layered DAG. This page is the canonical inventory: what each crate does, what layer it sits in, and whether it is currently active.
 
@@ -63,7 +63,10 @@ These crates compose the rendering substrate without knowing about each other.
 |-------|--------|---------|
 | `flui-view` | ✅ ACTIVE | View + Element tree, `BuildContext`, view trait |
 | `flui-objects` | ✅ ACTIVE | Concrete `RenderBox` / `RenderSliver` catalog that `flui-widgets` wraps |
-| `flui-widgets` | ✅ ACTIVE | User-facing Flutter-style widget catalog (configuration objects over `flui-objects`) |
+| `flui-widgets` | ✅ ACTIVE | User-facing Flutter-style widget catalog (configuration objects over `flui-objects`); owns the `Localizations`/`Directionality`/`WidgetsLocalizations` ambient-theming and localization substrate |
+| `flui-localizations` | ✅ ACTIVE | Global (multi-language) localized resources — `GlobalWidgetsLocalizations`, the analog of Flutter's `flutter_localizations`. Depends on `flui-widgets` (implements its `LocalizationsDelegate`/`WidgetsLocalizations` traits) |
+| `flui-material` | ✅ ACTIVE | Material Design theming foundation — `ColorScheme`, `Typography`/`TextTheme`, `ThemeData`, and the `Theme` inherited widget (constants-first M3 baseline; `fromSeed` deferred). Depends on `flui-widgets` (implements its `InheritedTheme` trait) |
+| `flui-cupertino` | ✅ ACTIVE | iOS-style (Cupertino) theming foundation — `CupertinoDynamicColor`/`CupertinoColors`, `CupertinoTextThemeData`, `CupertinoThemeData`, the `CupertinoTheme` inherited widget, and `CupertinoButton` (constants-first V1; brightness-only dynamic-color resolution, one component). Depends on `flui-widgets` (implements its `InheritedTheme` trait); independent sibling of `flui-material` (ADR-0028 — neither depends on the other) |
 | `flui-binding` | ✅ ACTIVE | Deterministic non-singleton headless frame driver: `HeadlessBinding::pump_frame(dt)` advances a virtual `ManualClock` and polls clock-bound gesture-arena deadlines — sleep-free time-based gesture tests (long-press, double-tap). Animation-controller ticks (Phase 3) and tree-rebuild integration (Phase 1b) are deferred. |
 | `flui-assets` | ✅ ACTIVE | Asset loading, caching, image decoding |
 | `flui-build` | ✅ ACTIVE | Async cross-platform build pipeline (`PlatformBuilder` typestate) |

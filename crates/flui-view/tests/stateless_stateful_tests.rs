@@ -58,11 +58,19 @@ impl flui_view::RenderView for LeafView {
     type Protocol = BoxProtocol;
     type RenderObject = RenderSizedBox;
 
-    fn create_render_object(&self) -> Self::RenderObject {
+    fn create_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+    ) -> Self::RenderObject {
         RenderSizedBox::shrink()
     }
 
-    fn update_render_object(&self, _render_object: &mut Self::RenderObject) {}
+    fn update_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+        _render_object: &mut Self::RenderObject,
+    ) {
+    }
 }
 
 impl View for LeafView {
@@ -487,22 +495,6 @@ fn test_stateful_element_is_reasonably_sized() {
     let size = std::mem::size_of::<StatefulElement<CounterView>>();
     // Should be less than 512 bytes
     assert!(size < 512, "StatefulElement is too large: {size} bytes");
-}
-
-// ============================================================================
-// Thread Safety Tests
-// ============================================================================
-
-#[test]
-fn test_stateless_element_send_sync() {
-    fn assert_send_sync<T: Send + Sync>() {}
-    assert_send_sync::<StatelessElement<SimpleStatelessView>>();
-}
-
-#[test]
-fn test_stateful_element_send_sync() {
-    fn assert_send_sync<T: Send + Sync>() {}
-    assert_send_sync::<StatefulElement<CounterView>>();
 }
 
 // ============================================================================

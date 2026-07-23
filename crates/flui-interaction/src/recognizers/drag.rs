@@ -9,7 +9,7 @@
 //!
 //! Flutter reference: <https://api.flutter.dev/flutter/gestures/DragGestureRecognizer-class.html>
 
-use std::{sync::Arc, time::Instant};
+use std::{cell::RefCell, rc::Rc, sync::Arc, time::Instant};
 
 use flui_types::{
     Offset,
@@ -84,7 +84,10 @@ pub struct DragUpdateDetails {
     pub local_position: Offset<Pixels>,
     /// Delta since last update
     pub delta: Offset<PixelDelta>,
-    /// Total delta since drag started
+    /// `delta` projected onto the recognizer's primary axis. Flutter parity:
+    /// `DragUpdateDetails.primaryDelta` — "the amount the pointer has moved
+    /// along the primary axis **since the previous call to onUpdate**", i.e.
+    /// per-event, not cumulative since the drag started.
     pub primary_delta: f32,
     /// Pointer device kind
     pub kind: PointerType,
@@ -108,15 +111,15 @@ pub struct DragEndDetails {
 pub use crate::processing::Velocity;
 
 /// Callback fired when a pointer contacts the screen and might begin a drag.
-pub type DragDownCallback = Arc<dyn Fn(DragDownDetails) + Send + Sync>;
+pub type DragDownCallback = Rc<dyn Fn(DragDownDetails)>;
 /// Callback fired when the drag is recognized (slop crossed and arena won).
-pub type DragStartCallback = Arc<dyn Fn(DragStartDetails) + Send + Sync>;
+pub type DragStartCallback = Rc<dyn Fn(DragStartDetails)>;
 /// Callback fired for each pointer move while the drag is in progress.
-pub type DragUpdateCallback = Arc<dyn Fn(DragUpdateDetails) + Send + Sync>;
+pub type DragUpdateCallback = Rc<dyn Fn(DragUpdateDetails)>;
 /// Callback fired when the pointer lifts and the drag completes.
-pub type DragEndCallback = Arc<dyn Fn(DragEndDetails) + Send + Sync>;
+pub type DragEndCallback = Rc<dyn Fn(DragEndDetails)>;
 /// Callback fired when the gesture is cancelled (e.g. the arena rejects it).
-pub type DragCancelCallback = Arc<dyn Fn() + Send + Sync>;
+pub type DragCancelCallback = Rc<dyn Fn()>;
 
 /// Recognizes drag gestures
 ///
@@ -158,7 +161,7 @@ pub struct DragGestureRecognizer {
     start_behavior: DragStartBehavior,
 
     /// Callbacks
-    callbacks: Arc<Mutex<DragCallbacks>>,
+    callbacks: Rc<RefCell<DragCallbacks>>,
 
     /// Current drag state
     drag_state: Arc<Mutex<DragState>>,
@@ -203,8 +206,6 @@ struct DragState {
     last_position: Option<Offset<Pixels>>,
     /// Last update time (for velocity calculation)
     last_time: Option<Instant>,
-    /// Total delta since start
-    total_delta: Offset<PixelDelta>,
     /// Velocity tracker
     velocity_tracker: VelocityTracker,
 }
@@ -225,7 +226,6 @@ impl Default for DragState {
             start_position: None,
             last_position: None,
             last_time: None,
-            total_delta: Offset::new(PixelDelta::ZERO, PixelDelta::ZERO),
             velocity_tracker: VelocityTracker::new(),
         }
     }
@@ -238,7 +238,7 @@ impl DragGestureRecognizer {
             state: RecognizerBase::new(arena),
             axis,
             start_behavior: DragStartBehavior::default(),
-            callbacks: Arc::new(Mutex::new(DragCallbacks::default())),
+            callbacks: Rc::new(RefCell::new(DragCallbacks::default())),
             drag_state: Arc::new(Mutex::new(DragState::default())),
             settings: Arc::new(Mutex::new(GestureSettings::default())),
         })
@@ -254,7 +254,7 @@ impl DragGestureRecognizer {
             state: RecognizerBase::new(arena),
             axis,
             start_behavior: DragStartBehavior::default(),
-            callbacks: Arc::new(Mutex::new(DragCallbacks::default())),
+            callbacks: Rc::new(RefCell::new(DragCallbacks::default())),
             drag_state: Arc::new(Mutex::new(DragState::default())),
             settings: Arc::new(Mutex::new(settings)),
         })
@@ -319,45 +319,39 @@ impl DragGestureRecognizer {
     /// movement threshold is met.
     pub fn with_on_down(
         self: Arc<Self>,
-        callback: impl Fn(DragDownDetails) + Send + Sync + 'static,
+        callback: impl Fn(DragDownDetails) + 'static,
     ) -> Arc<Self> {
-        self.callbacks.lock().on_down = Some(Arc::new(callback));
+        self.callbacks.borrow_mut().on_down = Some(Rc::new(callback));
         self
     }
 
     /// Set the drag start callback
     pub fn with_on_start(
         self: Arc<Self>,
-        callback: impl Fn(DragStartDetails) + Send + Sync + 'static,
+        callback: impl Fn(DragStartDetails) + 'static,
     ) -> Arc<Self> {
-        self.callbacks.lock().on_start = Some(Arc::new(callback));
+        self.callbacks.borrow_mut().on_start = Some(Rc::new(callback));
         self
     }
 
     /// Set the drag update callback
     pub fn with_on_update(
         self: Arc<Self>,
-        callback: impl Fn(DragUpdateDetails) + Send + Sync + 'static,
+        callback: impl Fn(DragUpdateDetails) + 'static,
     ) -> Arc<Self> {
-        self.callbacks.lock().on_update = Some(Arc::new(callback));
+        self.callbacks.borrow_mut().on_update = Some(Rc::new(callback));
         self
     }
 
     /// Set the drag end callback
-    pub fn with_on_end(
-        self: Arc<Self>,
-        callback: impl Fn(DragEndDetails) + Send + Sync + 'static,
-    ) -> Arc<Self> {
-        self.callbacks.lock().on_end = Some(Arc::new(callback));
+    pub fn with_on_end(self: Arc<Self>, callback: impl Fn(DragEndDetails) + 'static) -> Arc<Self> {
+        self.callbacks.borrow_mut().on_end = Some(Rc::new(callback));
         self
     }
 
     /// Set the drag cancel callback
-    pub fn with_on_cancel(
-        self: Arc<Self>,
-        callback: impl Fn() + Send + Sync + 'static,
-    ) -> Arc<Self> {
-        self.callbacks.lock().on_cancel = Some(Arc::new(callback));
+    pub fn with_on_cancel(self: Arc<Self>, callback: impl Fn() + 'static) -> Arc<Self> {
+        self.callbacks.borrow_mut().on_cancel = Some(Rc::new(callback));
         self
     }
 
@@ -368,7 +362,6 @@ impl DragGestureRecognizer {
         state.start_time = Some(Instant::now());
         state.last_position = Some(position);
         state.last_time = Some(Instant::now());
-        state.total_delta = Offset::new(PixelDelta::ZERO, PixelDelta::ZERO);
         state.velocity_tracker.reset();
         state
             .velocity_tracker
@@ -376,7 +369,7 @@ impl DragGestureRecognizer {
         drop(state); // Release lock before callback
 
         // Call on_down callback (pointer contact before drag starts)
-        if let Some(callback) = self.callbacks.lock().on_down.clone() {
+        if let Some(callback) = self.callbacks.borrow().on_down.clone() {
             let details = DragDownDetails {
                 global_position: position,
                 local_position: position,
@@ -421,7 +414,7 @@ impl DragGestureRecognizer {
                             .add_position(Instant::now(), position);
                         drop(state); // Release lock before calling callback
 
-                        if let Some(callback) = self.callbacks.lock().on_start.clone() {
+                        if let Some(callback) = self.callbacks.borrow().on_start.clone() {
                             let details = DragStartDetails {
                                 global_position: start_position,
                                 local_position: start_position,
@@ -437,18 +430,24 @@ impl DragGestureRecognizer {
                 // Update drag
                 if let Some(last_pos) = state.last_position {
                     let delta = (position - last_pos).to_delta();
-                    state.total_delta += delta;
                     state.last_position = Some(position);
                     state.last_time = Some(Instant::now());
                     state
                         .velocity_tracker
                         .add_position(Instant::now(), position);
 
-                    let primary_delta = self.calculate_primary_delta(state.total_delta.to_pixels());
+                    // Per-event, matching `delta` above — not accumulated
+                    // across the whole drag. Flutter's `primaryDelta` reports
+                    // movement "since the previous call to onUpdate"; an
+                    // earlier revision passed a running total here, making
+                    // every update after the first report the wrong
+                    // magnitude (and, once the drag reverses direction, the
+                    // wrong sign) for any drag with 3+ move events.
+                    let primary_delta = self.calculate_primary_delta(delta.to_pixels());
 
                     drop(state); // Release lock before calling callback
 
-                    if let Some(callback) = self.callbacks.lock().on_update.clone() {
+                    if let Some(callback) = self.callbacks.borrow().on_update.clone() {
                         let details = DragUpdateDetails {
                             global_position: position,
                             local_position: position,
@@ -476,7 +475,7 @@ impl DragGestureRecognizer {
             state.state = DragPhase::Ready;
             drop(state); // Release lock before calling callback
 
-            if let Some(callback) = self.callbacks.lock().on_end.clone() {
+            if let Some(callback) = self.callbacks.borrow().on_end.clone() {
                 let details = DragEndDetails {
                     velocity,
                     global_position: position,
@@ -501,7 +500,7 @@ impl DragGestureRecognizer {
             state.state = DragPhase::Cancelled;
             drop(state);
 
-            if let Some(callback) = self.callbacks.lock().on_cancel.clone() {
+            if let Some(callback) = self.callbacks.borrow().on_cancel.clone() {
                 callback();
             }
 
@@ -598,7 +597,7 @@ impl GestureRecognizer for DragGestureRecognizer {
         // gestures/recognizer.dart:485-493 disposing GestureRecognizer
         // clears arena state for tracked pointers).
         self.state.reject();
-        let mut callbacks = self.callbacks.lock();
+        let mut callbacks = self.callbacks.borrow_mut();
         callbacks.on_down = None;
         callbacks.on_start = None;
         callbacks.on_update = None;
@@ -853,6 +852,61 @@ mod tests {
             make_move_event(Offset::new(Pixels(15.0), Pixels(50.0)), PointerType::Touch);
         recognizer.handle_event(&move_event2);
         assert!(*started.lock());
+    }
+
+    #[test]
+    fn primary_delta_is_per_event_not_cumulative_since_drag_start() {
+        // Flutter parity: `DragUpdateDetails.primaryDelta` is the movement
+        // "since the previous call to onUpdate" — per event. A prior
+        // revision of this recognizer instead reported the running total
+        // since the drag started, which is only correct for a drag's first
+        // update; any later update, or a reversal in direction, reported the
+        // wrong magnitude (or wrong sign).
+        let arena = GestureArena::new();
+        let reported = Arc::new(Mutex::new(Vec::<f32>::new()));
+        let reported_clone = reported.clone();
+
+        let recognizer = DragGestureRecognizer::new(arena, DragAxis::Horizontal).with_on_update(
+            move |details| {
+                reported_clone.lock().push(details.primary_delta);
+            },
+        );
+
+        let pointer = PointerId::PRIMARY;
+        recognizer.add_pointer(pointer, Offset::new(Pixels(5.0), Pixels(400.0)));
+
+        // Cross slop (down=5 -> 30, no update fires — start only).
+        recognizer.handle_event(&make_move_event(
+            Offset::new(Pixels(30.0), Pixels(400.0)),
+            PointerType::Touch,
+        ));
+        assert!(
+            reported.lock().is_empty(),
+            "slop-crossing move fires on_start, not on_update"
+        );
+
+        // First real update: 30 -> 185, delta = +155.
+        recognizer.handle_event(&make_move_event(
+            Offset::new(Pixels(185.0), Pixels(400.0)),
+            PointerType::Touch,
+        ));
+        assert_eq!(*reported.lock(), vec![155.0]);
+
+        // Second update reverses direction: 185 -> 150, delta = -35.
+        // Cumulative-since-start would report 150 - 30 = 120 instead.
+        recognizer.handle_event(&make_move_event(
+            Offset::new(Pixels(150.0), Pixels(400.0)),
+            PointerType::Touch,
+        ));
+        assert_eq!(*reported.lock(), vec![155.0, -35.0]);
+
+        // Third update returns to the slop-crossing position: 150 -> 30,
+        // delta = -120. Cumulative-since-start would report 30 - 30 = 0.
+        recognizer.handle_event(&make_move_event(
+            Offset::new(Pixels(30.0), Pixels(400.0)),
+            PointerType::Touch,
+        ));
+        assert_eq!(*reported.lock(), vec![155.0, -35.0, -120.0]);
     }
 
     #[test]

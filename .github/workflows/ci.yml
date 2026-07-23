@@ -37,7 +37,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Install Rust stable + rustfmt
         uses: dtolnay/rust-toolchain@stable
@@ -49,7 +49,7 @@ jobs:
         with:
           # Pin versions — unpinned tools surface unrelated breakage on
           # release day. Bump deliberately. `ripgrep` is required by
-          # scripts/port-check.sh (the 21 refusal triggers + FR-033 all
+          # scripts/port-check.sh (the 22 refusal triggers + FR-033 all
           # run through `rg`).
           tool: typos-cli@1.28,taplo-cli@0.10,ripgrep@14
 
@@ -65,7 +65,7 @@ jobs:
       - name: workspace inventory drift check
         run: bash scripts/check-workspace-inventory.sh
 
-      - name: scripts/port-check.sh (21 refusal triggers + FR-033)
+      - name: scripts/port-check.sh (22 refusal triggers + FR-033)
         run: bash scripts/port-check.sh -v
 
   # ─────────────────────────────────────────────────────────────────────────
@@ -80,7 +80,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Install Rust stable + clippy
         uses: dtolnay/rust-toolchain@stable
@@ -134,7 +134,7 @@ jobs:
       CARGO_PROFILE_DEV_DEBUG: line-tables-only
       CARGO_PROFILE_TEST_DEBUG: line-tables-only
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       # The full-workspace debug build of all lib+test targets (incl. the wgpu/
       # glyphon/lyon/naga GPU stack and criterion/proptest/insta/trybuild dev-
@@ -182,16 +182,38 @@ jobs:
       # integration dirs carry the Core.0/Core.2 exit-gate suites
       # (flui-rendering 37 files, flui-widgets 51, flui-view 26) and were
       # previously never executed in CI (the invocation was `--lib` only).
-      # `--test-threads=1` guards the documented pre-existing flui-app
-      # singleton-state flake (CLAUDE.md). flui-platform tests are excluded
-      # until the spawned STATUS_HEAP_CORRUPTION investigation lands a fix.
-      - name: cargo nextest run (lib + integration, --test-threads 1)
+      # Runs fully parallel: nextest gives each test its own process, so the
+      # flui-app process-global binding cannot leak across tests, and the
+      # in-process semantics-flag race is serialized by `SEMANTICS_TEST_LOCK`
+      # in flui-app. flui-platform tests are excluded until the spawned
+      # STATUS_HEAP_CORRUPTION investigation lands a fix.
+      - name: cargo nextest run (lib + integration)
         run: >
           cargo nextest run
           --workspace
           --exclude flui-platform
           --no-fail-fast
-          --test-threads 1
+
+      # flui-assets and flui-widgets both default to `default = []`, so the
+      # workspace-default run above never compiles their `images`/`network`
+      # decode-and-cache paths or the Image widget's own file-decode test —
+      # exactly the gap that let the Business.1 flui-assets↔Image
+      # verification tests go CI-dead once. Explicit feature-gated run, same
+      # precedent as `cargo clippy -p flui-engine --features
+      # enable-wgpu-tests` above.
+      #
+      # `asset-images`/`network-images` extend the same gap to the
+      # flui-assets↔Image ASYNC bridge (`AssetImage`/`NetworkImage`,
+      # `image::decode_cache`): those tests only compile under their own
+      # feature, so they need their own explicit run too, or they are as
+      # CI-dead as the sync path was before this block existed.
+      - name: cargo nextest run (flui-assets full, flui-widgets images)
+        run: |
+          cargo nextest run -p flui-assets --features full
+          cargo nextest run -p flui-widgets --features images --test image
+          cargo nextest run -p flui-widgets --features asset-images --lib
+          cargo nextest run -p flui-widgets --features asset-images --test image_async
+          cargo nextest run -p flui-widgets --features network-images --test image_network
 
   # ─────────────────────────────────────────────────────────────────────────
   # gpu-test (PILOT) — actually RUN the `enable-wgpu-tests` readback/oracle
@@ -234,7 +256,7 @@ jobs:
       # was enumerated (not a silently-missing-adapter skip).
       RUST_LOG: wgpu_hal=info,wgpu_core=info
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -279,7 +301,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -309,7 +331,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -336,7 +358,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Install cargo-deny
         uses: taiki-e/install-action@v2
@@ -361,7 +383,7 @@ jobs:
       CARGO_PROFILE_DEV_DEBUG: line-tables-only
       CARGO_PROFILE_TEST_DEBUG: line-tables-only
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -388,7 +410,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Install Rust 1.96 (declared MSRV)
         uses: dtolnay/rust-toolchain@master
@@ -426,7 +448,7 @@ jobs:
       # business; this job exists solely to catch undefined behavior.
       RUSTFLAGS: ""
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Install Rust nightly + miri
         uses: dtolnay/rust-toolchain@nightly

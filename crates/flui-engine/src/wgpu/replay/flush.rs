@@ -19,6 +19,82 @@ use super::super::{
 };
 use super::GpuReplay;
 
+// =============================================================================
+// Scissor clamping
+// =============================================================================
+//
+// Every recorded scissor is captured against the frame's full viewport, but a
+// flush can target a smaller offscreen attachment (a grown-bounds opacity
+// layer, an SSAA supersample tile). `opacity_layer.rs::render_segment_to_grown_offscreen`
+// and `ssaa.rs`'s tile remap intersect each recorded scissor with the
+// attachment's local bounds and, on an empty intersection, emit a deliberate
+// off-target sentinel — `(full_w, full_h, 1, 1)` — to mean "fully clipped,
+// draw nothing". That sentinel's origin sits exactly on the attachment's far
+// edge, so `x + w` / `y + h` overshoot the attachment by one pixel: passed
+// straight to `set_scissor_rect` it fails wgpu's scissor-containment
+// validation. `TexturePool::acquire` sizes the offscreen target to the exact
+// requested bounds, so no margin absorbs the overshoot by accident — every
+// consumer of a recorded scissor must clamp it before calling
+// `set_scissor_rect`, not just the tessellated-geometry path.
+
+/// Clamp a `(x, y, w, h)` scissor rect (physical pixels) to fit inside a
+/// `(full_w, full_h)` render attachment.
+///
+/// Returns `None` when the clamped rect has zero area — the region has no
+/// visible intersection with the attachment and the caller must skip its
+/// draw call. Returns `Some` with the rect clamped to
+/// `[0, full_w) × [0, full_h)` otherwise (a no-op for an already in-bounds
+/// rect).
+fn clamp_scissor_to_attachment(
+    x: u32,
+    y: u32,
+    w: u32,
+    h: u32,
+    full_w: u32,
+    full_h: u32,
+) -> Option<(u32, u32, u32, u32)> {
+    let clamped_x = x.min(full_w);
+    let clamped_y = y.min(full_h);
+    let clamped_w = w.min(full_w - clamped_x);
+    let clamped_h = h.min(full_h - clamped_y);
+    if clamped_w == 0 || clamped_h == 0 {
+        None
+    } else {
+        Some((clamped_x, clamped_y, clamped_w, clamped_h))
+    }
+}
+
+/// Set `render_pass`'s scissor rect for one draw region, clamped to the
+/// attachment, and report whether the caller should issue its draw call.
+///
+/// `scissor` is `None` for "no active clip" (the full attachment) or
+/// `Some((x, y, w, h))` for a recorded per-region clip in full-viewport
+/// device-pixel space. Returns `false` when the clamped region has no
+/// visible area, in which case the caller must skip its `draw_indexed` call
+/// rather than pass a possibly out-of-bounds rect to wgpu.
+///
+/// This is the only place in this module that calls
+/// `RenderPass::set_scissor_rect` — every batch and texture flush path below
+/// routes through it, so a new direct call can't silently reintroduce an
+/// unclamped scissor. `set_clamped_scissor_is_the_only_scissor_rect_call_site`
+/// in the `tests` module pins that invariant with a source scan.
+fn set_clamped_scissor(
+    render_pass: &mut wgpu::RenderPass<'_>,
+    scissor: ScissorRect,
+    full_w: u32,
+    full_h: u32,
+) -> bool {
+    let clamped = match scissor {
+        Some((x, y, w, h)) => clamp_scissor_to_attachment(x, y, w, h, full_w, full_h),
+        None => Some((0, 0, full_w, full_h)),
+    };
+    let Some((x, y, w, h)) = clamped else {
+        return false;
+    };
+    render_pass.set_scissor_rect(x, y, w, h);
+    true
+}
+
 // GPU rendering routinely converts between numeric types for pixel coordinates,
 // color channels, buffer indices, and instance counts; flush methods also carry
 // many GPU-handle parameters.
@@ -254,8 +330,9 @@ impl GpuReplay {
             let buf_start = shadow_offset;
             let buf_end = buf_start + shadow_size as u64;
             render_pass.set_vertex_buffer(1, instance_buffer.slice(buf_start..buf_end));
-            render_pass.set_scissor_rect(0, 0, full_w, full_h);
-            render_pass.draw_indexed(0..6, 0, 0..segment.shadow_batch.len() as u32);
+            if set_clamped_scissor(&mut render_pass, None, full_w, full_h) {
+                render_pass.draw_indexed(0..6, 0, 0..segment.shadow_batch.len() as u32);
+            }
         }
 
         // --- Rectangles (per-scissor-region) ---
@@ -266,12 +343,9 @@ impl GpuReplay {
             render_pass.set_vertex_buffer(1, instance_buffer.slice(buf_start..buf_end));
 
             for region in &segment.rect_scissors {
-                if let Some((x, y, w, h)) = region.scissor {
-                    render_pass.set_scissor_rect(x, y, w, h);
-                } else {
-                    render_pass.set_scissor_rect(0, 0, full_w, full_h);
+                if set_clamped_scissor(&mut render_pass, region.scissor, full_w, full_h) {
+                    render_pass.draw_indexed(0..6, 0, region.start..region.start + region.count);
                 }
-                render_pass.draw_indexed(0..6, 0, region.start..region.start + region.count);
             }
         }
 
@@ -283,12 +357,9 @@ impl GpuReplay {
             render_pass.set_vertex_buffer(1, instance_buffer.slice(buf_start..buf_end));
 
             for region in &segment.circle_scissors {
-                if let Some((x, y, w, h)) = region.scissor {
-                    render_pass.set_scissor_rect(x, y, w, h);
-                } else {
-                    render_pass.set_scissor_rect(0, 0, full_w, full_h);
+                if set_clamped_scissor(&mut render_pass, region.scissor, full_w, full_h) {
+                    render_pass.draw_indexed(0..6, 0, region.start..region.start + region.count);
                 }
-                render_pass.draw_indexed(0..6, 0, region.start..region.start + region.count);
             }
         }
 
@@ -300,12 +371,9 @@ impl GpuReplay {
             render_pass.set_vertex_buffer(1, instance_buffer.slice(buf_start..buf_end));
 
             for region in &segment.arc_scissors {
-                if let Some((x, y, w, h)) = region.scissor {
-                    render_pass.set_scissor_rect(x, y, w, h);
-                } else {
-                    render_pass.set_scissor_rect(0, 0, full_w, full_h);
+                if set_clamped_scissor(&mut render_pass, region.scissor, full_w, full_h) {
+                    render_pass.draw_indexed(0..6, 0, region.start..region.start + region.count);
                 }
-                render_pass.draw_indexed(0..6, 0, region.start..region.start + region.count);
             }
         }
 
@@ -442,12 +510,9 @@ impl GpuReplay {
             render_pass.set_vertex_buffer(1, instance_buffer.slice(linear_start..linear_end));
 
             for region in &segment.linear_grad_scissors {
-                if let Some((x, y, w, h)) = region.scissor {
-                    render_pass.set_scissor_rect(x, y, w, h);
-                } else {
-                    render_pass.set_scissor_rect(0, 0, full_w, full_h);
+                if set_clamped_scissor(&mut render_pass, region.scissor, full_w, full_h) {
+                    render_pass.draw_indexed(0..6, 0, region.start..region.start + region.count);
                 }
-                render_pass.draw_indexed(0..6, 0, region.start..region.start + region.count);
             }
         }
 
@@ -464,12 +529,9 @@ impl GpuReplay {
             render_pass.set_vertex_buffer(1, instance_buffer.slice(radial_start..radial_end));
 
             for region in &segment.radial_grad_scissors {
-                if let Some((x, y, w, h)) = region.scissor {
-                    render_pass.set_scissor_rect(x, y, w, h);
-                } else {
-                    render_pass.set_scissor_rect(0, 0, full_w, full_h);
+                if set_clamped_scissor(&mut render_pass, region.scissor, full_w, full_h) {
+                    render_pass.draw_indexed(0..6, 0, region.start..region.start + region.count);
                 }
-                render_pass.draw_indexed(0..6, 0, region.start..region.start + region.count);
             }
         }
 
@@ -486,12 +548,9 @@ impl GpuReplay {
             render_pass.set_vertex_buffer(1, instance_buffer.slice(sweep_start..sweep_end));
 
             for region in &segment.sweep_grad_scissors {
-                if let Some((x, y, w, h)) = region.scissor {
-                    render_pass.set_scissor_rect(x, y, w, h);
-                } else {
-                    render_pass.set_scissor_rect(0, 0, full_w, full_h);
+                if set_clamped_scissor(&mut render_pass, region.scissor, full_w, full_h) {
+                    render_pass.draw_indexed(0..6, 0, region.start..region.start + region.count);
                 }
-                render_pass.draw_indexed(0..6, 0, region.start..region.start + region.count);
             }
         }
 
@@ -588,10 +647,10 @@ impl GpuReplay {
                 active_key = Some(batch.pipeline_key);
             }
 
-            if let Some((x, y, w, h)) = batch.scissor {
-                render_pass.set_scissor_rect(x, y, w, h);
-            } else {
-                render_pass.set_scissor_rect(0, 0, full_w, full_h);
+            if !set_clamped_scissor(&mut render_pass, batch.scissor, full_w, full_h) {
+                // Fully clipped (a zero-area clamp, or the SSAA/opacity-layer
+                // remap's off-target sentinel) — nothing to draw for this batch.
+                continue;
             }
 
             let start = batch.index_start;
@@ -930,13 +989,9 @@ impl GpuReplay {
         );
 
         let (full_w, full_h) = viewport_size;
-        if let Some((x, y, w, h)) = scissor {
-            render_pass.set_scissor_rect(x, y, w, h);
-        } else {
-            render_pass.set_scissor_rect(0, 0, full_w, full_h);
+        if set_clamped_scissor(&mut render_pass, scissor, full_w, full_h) {
+            render_pass.draw_indexed(0..6, 0, 0..self.texture_batch.len() as u32);
         }
-
-        render_pass.draw_indexed(0..6, 0, 0..self.texture_batch.len() as u32);
         drop(render_pass);
         self.texture_batch.clear();
     }
@@ -1036,14 +1091,97 @@ impl GpuReplay {
         );
 
         let (full_w, full_h) = viewport_size;
-        if let Some((x, y, w, h)) = scissor {
-            render_pass.set_scissor_rect(x, y, w, h);
-        } else {
-            render_pass.set_scissor_rect(0, 0, full_w, full_h);
+        if set_clamped_scissor(&mut render_pass, scissor, full_w, full_h) {
+            render_pass.draw_indexed(0..6, 0, 0..self.texture_batch.len() as u32);
         }
-
-        render_pass.draw_indexed(0..6, 0, 0..self.texture_batch.len() as u32);
         drop(render_pass);
         self.texture_batch.clear();
+    }
+}
+
+// =============================================================================
+// Tests
+// =============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::clamp_scissor_to_attachment;
+
+    /// The off-target sentinel `(full_w, full_h, 1, 1)` that
+    /// `opacity_layer.rs`'s `render_segment_to_grown_offscreen` and
+    /// `ssaa.rs`'s tile remap emit for a fully-clipped region must clamp to
+    /// `None` — its origin already sits on the attachment's far edge, so any
+    /// non-zero extent overshoots.
+    #[test]
+    fn sentinel_rect_at_the_far_edge_clamps_to_none() {
+        let full_w = 800;
+        let full_h = 600;
+        let clamped = clamp_scissor_to_attachment(full_w, full_h, 1, 1, full_w, full_h);
+        assert_eq!(
+            clamped, None,
+            "the off-target sentinel (full_w, full_h, 1, 1) must clamp to None (fully clipped), \
+             not an out-of-bounds Some(...) that wgpu's scissor validation would reject"
+        );
+    }
+
+    /// A rect whose right/bottom edge overshoots the attachment by one pixel
+    /// clamps down to the visible remainder rather than being rejected or
+    /// passed through unclamped.
+    #[test]
+    fn rect_one_pixel_past_the_edge_clamps_to_the_visible_remainder() {
+        let full_w = 800;
+        let full_h = 600;
+        // Right edge at x=795+10=805, one past full_w=800 (and analogously
+        // for the bottom edge at y=595+10=605, one past full_h=600).
+        let clamped = clamp_scissor_to_attachment(795, 595, 10, 10, full_w, full_h);
+        assert_eq!(
+            clamped,
+            Some((795, 595, 5, 5)),
+            "a rect overshooting the attachment must clamp its extent down to the visible \
+             remainder, keeping the same origin"
+        );
+    }
+
+    /// An already in-bounds rect passes through unchanged (the common case —
+    /// clamping must be a no-op when nothing needs clamping).
+    #[test]
+    fn in_bounds_rect_passes_through_unchanged() {
+        let full_w = 800;
+        let full_h = 600;
+        let clamped = clamp_scissor_to_attachment(10, 10, 100, 100, full_w, full_h);
+        assert_eq!(clamped, Some((10, 10, 100, 100)));
+    }
+
+    /// Every scissor-consuming flush site must route through
+    /// `set_clamped_scissor` rather than calling `RenderPass::set_scissor_rect`
+    /// directly — a direct call bypasses the attachment clamp entirely and
+    /// the unit tests above, which only exercise the pure clamp function,
+    /// cannot catch that kind of bypass.
+    ///
+    /// Red-check: reverting any one flush site (e.g. the rect-scissor loop in
+    /// `flush_all_instanced_batches`) back to a bare
+    /// `render_pass.set_scissor_rect(x, y, w, h)` / `else` pair raises the
+    /// count below to 2 and fails this assertion, while every other test in
+    /// the suite (including the three above) still passes.
+    #[test]
+    fn set_clamped_scissor_is_the_only_scissor_rect_call_site() {
+        const SOURCE: &str = include_str!("flush.rs");
+        // Exclude this `tests` module itself: its own doc comments and this
+        // assertion's message reference `set_scissor_rect` in prose, and this
+        // test's `SOURCE` scan would otherwise count its own search needle.
+        let (production_source, _) = SOURCE
+            .split_once("mod tests {")
+            .expect("this module scans its own enclosing file");
+
+        let call_sites = production_source
+            .matches("render_pass.set_scissor_rect(")
+            .count();
+        assert_eq!(
+            call_sites, 1,
+            "expected exactly one call to `render_pass.set_scissor_rect` in flush.rs — inside \
+             `set_clamped_scissor`. Every batch/texture flush path must route through that \
+             helper so the attachment clamp can't be bypassed by a new direct call; found \
+             {call_sites}"
+        );
     }
 }

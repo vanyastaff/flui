@@ -246,7 +246,7 @@ mod tests {
         // The callback cannot implement `PartialEq`; equality is computed
         // only on `data`, silently ignoring the handler — the trap.
         #[allow(dead_code)] // held to model a real callback-carrying view
-        handler: std::sync::Arc<dyn Fn() + Send + Sync>,
+        handler: std::rc::Rc<dyn Fn()>,
     }
 
     impl PartialEq for ViewWithCallback {
@@ -271,11 +271,11 @@ mod tests {
     fn stale_closure_tripwire_documents_known_limitation() {
         let a = Memo::new(ViewWithCallback {
             data: 1,
-            handler: std::sync::Arc::new(|| {}),
+            handler: std::rc::Rc::new(|| {}),
         });
         let b = Memo::new(ViewWithCallback {
             data: 1, // same data, different handler
-            handler: std::sync::Arc::new(|| {}),
+            handler: std::rc::Rc::new(|| {}),
         });
 
         // KNOWN LIMITATION: data equal → skip fires → stale handler kept.

@@ -347,7 +347,7 @@ fn main() {
         "color filter demo ready — 5 columns: unfiltered | Mode/Multiply | LinearToSrgb | SrgbToLinear | Grayscale"
     );
 
-    platform.run(Box::new(move || {
+    platform.run(Box::new(move |_platform| {
         // Keep resources alive through the event loop.
         let _window = &window;
         let _renderer = &renderer;

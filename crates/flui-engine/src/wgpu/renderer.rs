@@ -173,6 +173,21 @@ struct WindowedGpuStack {
 }
 
 /// Cross-platform GPU renderer
+///
+/// `Send` (see the `unsafe impl Send` below, justified there) but
+/// deliberately never `Sync`: the raster owner
+/// (`crate::raster_owner::RasterOwner`) has sole mutable access to the
+/// `Renderer`/`Surface`/`Device`/`Queue` it wraps, and a shared `&Renderer`
+/// across threads would defeat that single-mutator contract. No field
+/// grants `Sync` today, so this already holds without a marker type; the
+/// doctest below pins the contract so a future field addition that
+/// accidentally makes every field `Sync` fails loudly at compile time
+/// instead of silently reopening `Arc<Renderer>` shared-mutation:
+///
+/// ```compile_fail
+/// fn assert_sync<T: Sync>() {}
+/// assert_sync::<flui_engine::wgpu::Renderer>();
+/// ```
 pub struct Renderer {
     // `instance` and `adapter` are kept alive for the lifetime of the renderer
     // because `wgpu::Surface<'static>` and `wgpu::Device` depend on them. They
@@ -917,21 +932,33 @@ impl Renderer {
         }
     }
 
-    /// Select present mode based on capabilities
+    /// Select present mode based on capabilities.
+    ///
+    /// Fifo (vsync-blocked present) is the default. `render_scene`'s blocking
+    /// `get_current_texture()`/`present()` pair against Fifo is the
+    /// steady-state pacing mechanism for the whole frame loop: every
+    /// PRESENTED frame blocks at display cadence, which is what lets
+    /// `flui-app`'s runner drop its fixed frame-budget sleep in favor of a
+    /// real vsync block (see the frame-pacing ADR). Mailbox (triple
+    /// buffering, uncapped present, lower latency) is a documented future
+    /// opt-in for latency-sensitive apps that accept trading pacing for
+    /// responsiveness — it is not the default because pairing an uncapped
+    /// present mode with a wake-driven redraw loop reproduces the exact
+    /// busy-spin (~30 000 fps, observed) this pacing model exists to avoid.
+    ///
+    /// NB: Fifo does not cure live-resize wobble either — it blocks on
+    /// vsync and ghosts a stale frame during the modal resize loop, same as
+    /// Mailbox stretching the in-flight frame. The wobble is inherent
+    /// flip-model DWM compositing; the only real fix is DXGI_SCALING_NONE,
+    /// which wgpu 29 does not expose.
     fn select_present_mode(surface_caps: &wgpu::SurfaceCapabilities) -> wgpu::PresentMode {
-        // Prefer Mailbox (triple buffering, low latency) > Fifo (vsync).
-        // NB: neither cures live-resize wobble — Mailbox stretches the in-flight
-        // frame, Fifo blocks on vsync and ghosts a stale frame during the modal
-        // resize loop. The wobble is inherent flip-model DWM compositing; the only
-        // real fix is DXGI_SCALING_NONE, which wgpu 29 does not expose.
-        if surface_caps
-            .present_modes
-            .contains(&wgpu::PresentMode::Mailbox)
-        {
-            wgpu::PresentMode::Mailbox
-        } else {
-            wgpu::PresentMode::Fifo // Always supported
-        }
+        debug_assert!(
+            surface_caps
+                .present_modes
+                .contains(&wgpu::PresentMode::Fifo),
+            "BUG: wgpu guarantees Fifo is always a supported present mode"
+        );
+        wgpu::PresentMode::Fifo
     }
 
     /// Resize the surface
@@ -1045,7 +1072,15 @@ impl Renderer {
     /// For scenes containing `BackdropFilterLayer`, the render flow supports
     /// mid-frame flush: painter batches are submitted early so the surface
     /// texture can be copied, blurred, and composited before continuing.
-    pub fn render_scene(&mut self, scene: &flui_layer::Scene) -> Result<(), EngineError> {
+    /// Renders `scene` and returns whether it actually reached `present()`.
+    ///
+    /// `Ok(false)` covers every path that skips presentation without error —
+    /// no damage, or the surface reporting `Occluded` — and carries no vsync
+    /// signal: Fifo's blocking present never engaged, so the caller got no
+    /// pacing out of this call. `Ok(true)` means `present()` ran, which
+    /// (under the default Fifo present mode) blocked until the next vsync —
+    /// the steady-state pacing the frame loop relies on.
+    pub fn render_scene(&mut self, scene: &flui_layer::Scene) -> Result<bool, EngineError> {
         // Fine-grained damage tracking is the caller's responsibility: the
         // application layer calls `mark_dirty()` / `mark_full_repaint()` after
         // input events or state changes. When flui-view is wired up, widgets
@@ -1067,15 +1102,15 @@ impl Renderer {
 
         // Check if we need to render at all
         if !self.damage_tracker.has_damage() && !self.damage_tracker.needs_full_repaint() {
-            // Nothing changed — skip this frame entirely
+            // Nothing changed — skip this frame entirely; no present, no vsync block.
             tracing::trace!("Skipping frame: no damage");
-            return Ok(());
+            return Ok(false);
         }
 
         // Acquire the swapchain texture; returns None when the frame should be
         // skipped (Occluded), or Err for unrecoverable surface states.
         let Some(output) = self.acquire_surface_texture()? else {
-            return Ok(());
+            return Ok(false);
         };
 
         let view = output
@@ -1194,7 +1229,7 @@ impl Renderer {
         // Reset damage for next frame
         self.damage_tracker.reset();
 
-        Ok(())
+        Ok(true)
     }
 
     /// Acquire the current swapchain texture, handling device-lost and all
@@ -1357,9 +1392,9 @@ impl Renderer {
         } else {
             Backend::new(&mut painter)
         };
-        // Cycle 4 U-8: bind the frame render target so the
-        // DisplayList-level `render_backdrop_filter` path (U-9)
-        // can flush + blur the same target the layer-level path uses.
+        // Bind the frame render target so the DisplayList-level
+        // `render_backdrop_filter` path can flush + blur the same
+        // target the layer-level path uses.
         // When intermediate-active, `render_view`/`render_texture` point
         // at the intermediate; otherwise they point at the swapchain.
         // Without this bind, that command path falls back to passthrough
@@ -1510,7 +1545,7 @@ impl Renderer {
     /// the surface supports `COPY_SRC`, enabling mid-frame flush + blur.
     /// `FollowerLayer` is handled specially too — its render-time position
     /// is resolved against `link_registry` and the already-fully-built
-    /// `tree` (design research plan §4) before its children render.
+    /// `tree` before its children render.
     ///
     /// # Occlusion culling
     ///
@@ -3160,7 +3195,7 @@ mod tests {
     // pixel-readback proof.
     //
     // Render-object-harness-level testing cannot check on-screen positioning
-    // (design research plan §6, "explicitly out of harness scope") — these
+    // (explicitly out of harness scope) — these
     // tests exercise the REAL `render_layer_recursive` Follower special case
     // (not a hand-rolled stand-in) against a real GPU texture, reading back
     // actual rendered pixels.
@@ -3204,7 +3239,7 @@ mod tests {
 
     /// (a) A `Layer::Follower` linked to a `Layer::Leader` under a DIFFERENT
     /// `Layer::Offset` ancestor (the cross-repaint-boundary case that
-    /// motivated the whole render-time-resolution design, plan §4) must
+    /// motivated the whole render-time-resolution design) must
     /// render its subtree at the LEADER's resolved position, not at its own
     /// natural (pre-resolution) tree position.
     #[test]
@@ -3356,7 +3391,7 @@ mod tests {
     /// (b) An unlinked Follower (no `Layer::Leader` registered under its
     /// `link`) with `show_when_unlinked = true` renders its subtree at its
     /// own `target_offset` — the plain paint-origin-relative fallback, NOT
-    /// routed through `calculate_offset` (plan §7.4).
+    /// routed through `calculate_offset`.
     #[test]
     fn follower_gpu_unlinked_show_when_unlinked_true_renders_at_target_offset() {
         use super::super::backend::Backend;
@@ -3724,7 +3759,7 @@ mod tests {
         );
     }
 
-    /// THE TRAP regression test (design research plan §4): a `ShaderMask`
+    /// THE TRAP regression test: a `ShaderMask`
     /// whose `bounds()` origin is NOT `(0, 0)` and which sits under a
     /// non-zero-offset `Layer::Offset` ancestor must still render its masked
     /// content at the CORRECT on-screen position — not shifted/clipped by a

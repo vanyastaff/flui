@@ -13,6 +13,14 @@ pub struct ArboardClipboard {
     clipboard: Mutex<arboard::Clipboard>,
 }
 
+impl std::fmt::Debug for ArboardClipboard {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // `arboard::Clipboard` does not implement `Debug`; there is nothing
+        // else worth printing about this wrapper.
+        f.debug_struct("ArboardClipboard").finish_non_exhaustive()
+    }
+}
+
 impl ArboardClipboard {
     /// Create a new clipboard instance
     pub fn new() -> Result<Self, arboard::Error> {
@@ -49,7 +57,7 @@ impl Clipboard for ArboardClipboard {
         let mut clipboard = self.clipboard.lock();
 
         match clipboard.set_text(&text) {
-            Ok(_) => {
+            Ok(()) => {
                 tracing::debug!(len = text.len(), "Wrote text to clipboard");
             }
             Err(err) => {

@@ -1,8 +1,9 @@
 //! [`ListView`] — a scrollable list of fixed-height items (static or lazy-built).
 
 use std::fmt;
-use std::sync::Arc;
+use std::rc::Rc;
 
+use flui_rendering::view::ScrollPosition;
 use flui_types::layout::{Axis, AxisDirection};
 use flui_view::prelude::StatelessView;
 use flui_view::seq::ViewSeq;
@@ -11,6 +12,17 @@ use flui_view::{BoxedView, BuildContext, IntoView, ViewExt};
 use crate::scroll::{
     ShrinkWrappingViewport, SliverChildBuilderDelegate, SliverFixedExtentList, SliverList, Viewport,
 };
+
+/// Where the composed [`Viewport`] gets its scroll offset from — mirrors
+/// [`Viewport`]'s own `OffsetSource`, since this widget is a thin
+/// pixels-or-position passthrough onto it. Not shared with `Viewport`'s
+/// private enum of the same name; duplicated per composing widget, matching
+/// [`crate::SingleChildScrollView`]'s template.
+#[derive(Clone, Debug)]
+enum OffsetSource {
+    Pixels(f32),
+    Position(ScrollPosition),
+}
 
 /// A scrollable list that lays out its children sequentially along
 /// `scroll_direction`.
@@ -24,8 +36,8 @@ use crate::scroll::{
 /// - **Lazy** ([`ListView::builder`]): children built on demand from a
 ///   closure, only for the viewport-visible + cache band. Backed by
 ///   [`SliverList`] (variable-height, element-owned). Wired into both
-///   `HeadlessBinding::pump_frame` and the production `AppBinding::draw_frame`
-///   (U4.3 + U4.4 convergence).
+///   `HeadlessBinding::pump_frame` and the production `AppBinding::draw_frame`,
+///   where the child-manager wiring and its test coverage converge.
 ///
 ///   **First-frame settling (Flutter divergence):** lazy children are built
 ///   *after* the frame's paint, so the first frame a viewport band appears it
@@ -49,7 +61,7 @@ pub struct ListView {
     /// Per-item extent estimate for the lazy variant ([`ListView::builder`]).
     /// Seeds the virtualizer until real measurements arrive.
     item_extent_estimate: f32,
-    offset: f32,
+    offset_source: OffsetSource,
     shrink_wrap: bool,
     /// Children for the static variant. Empty in the lazy variant.
     children: Vec<BoxedView>,
@@ -69,7 +81,7 @@ impl ListView {
             scroll_direction: Axis::Vertical,
             item_extent,
             item_extent_estimate: item_extent,
-            offset: 0.0,
+            offset_source: OffsetSource::Pixels(0.0),
             shrink_wrap: false,
             children: children.into_boxed_vec(),
             builder_source: None,
@@ -92,13 +104,13 @@ impl ListView {
     /// Panics if `item_extent_estimate` is not finite and positive.
     pub fn builder<F>(item_count: usize, item_extent_estimate: f32, builder: F) -> Self
     where
-        F: Fn(usize) -> Option<BoxedView> + Send + Sync + 'static,
+        F: Fn(usize) -> Option<BoxedView> + 'static,
     {
         Self {
             scroll_direction: Axis::Vertical,
             item_extent: item_extent_estimate,
             item_extent_estimate,
-            offset: 0.0,
+            offset_source: OffsetSource::Pixels(0.0),
             shrink_wrap: false,
             children: Vec::new(),
             builder_source: Some(SliverChildBuilderDelegate::new(item_count, builder)),
@@ -113,9 +125,27 @@ impl ListView {
     }
 
     /// Set the programmatic scroll offset in logical pixels.
+    ///
+    /// Pixels mode: the composed [`Viewport`] (or [`ShrinkWrappingViewport`]
+    /// under [`ListView::shrink_wrap`]) owns a private `ScrollPosition` and
+    /// this value is pushed into it on every rebuild. Mutually exclusive with
+    /// [`ListView::position`] — whichever is called last wins.
     #[must_use]
     pub fn offset(mut self, offset: f32) -> Self {
-        self.offset = offset;
+        self.offset_source = OffsetSource::Pixels(offset);
+        self
+    }
+
+    /// Inject a shared [`ScrollPosition`] as the composed [`Viewport`]'s (or
+    /// [`ShrinkWrappingViewport`]'s, under [`ListView::shrink_wrap`]) offset
+    /// — see [`Viewport::position`] for the full contract, including under
+    /// shrink-wrap: [`ShrinkWrappingViewport::position`] mirrors it exactly,
+    /// so `RenderShrinkWrappingViewport`'s committed content extents flush
+    /// back into `position` the same way `RenderViewport`'s do. Mutually
+    /// exclusive with [`ListView::offset`] — whichever is called last wins.
+    #[must_use]
+    pub fn position(mut self, position: ScrollPosition) -> Self {
+        self.offset_source = OffsetSource::Position(position);
         self
     }
 
@@ -135,7 +165,7 @@ impl fmt::Debug for ListView {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut s = f.debug_struct("ListView");
         s.field("scroll_direction", &self.scroll_direction)
-            .field("offset", &self.offset)
+            .field("offset_source", &self.offset_source)
             .field("shrink_wrap", &self.shrink_wrap);
         if self.builder_source.is_some() {
             s.field("item_extent_estimate", &self.item_extent_estimate);
@@ -166,22 +196,26 @@ impl StatelessView for ListView {
             SliverList::new(
                 delegate.item_count,
                 self.item_extent_estimate,
-                Arc::clone(&delegate.builder),
+                Rc::clone(&delegate.builder),
             )
             .boxed()
         } else {
             SliverFixedExtentList::new(self.item_extent, self.children.clone()).boxed()
         };
         if self.shrink_wrap {
-            ShrinkWrappingViewport::new((sliver,))
-                .axis_direction(axis_direction)
-                .offset(self.offset)
-                .boxed()
+            let viewport = ShrinkWrappingViewport::new((sliver,)).axis_direction(axis_direction);
+            match &self.offset_source {
+                OffsetSource::Pixels(pixels) => viewport.offset(*pixels),
+                OffsetSource::Position(position) => viewport.position(position.clone()),
+            }
+            .boxed()
         } else {
-            Viewport::new((sliver,))
-                .axis_direction(axis_direction)
-                .offset(self.offset)
-                .boxed()
+            let viewport = Viewport::new((sliver,)).axis_direction(axis_direction);
+            match &self.offset_source {
+                OffsetSource::Pixels(pixels) => viewport.offset(*pixels),
+                OffsetSource::Position(position) => viewport.position(position.clone()),
+            }
+            .boxed()
         }
     }
 }
@@ -196,7 +230,7 @@ mod tests {
         let debug = format!("{:?}", ListView::new(50.0, Vec::<BoxedView>::new()));
         assert!(
             debug.contains("scroll_direction: Vertical")
-                && debug.contains("offset: 0.0")
+                && debug.contains("offset_source: Pixels(0.0)")
                 && debug.contains("shrink_wrap: false")
                 && debug.contains("item_extent: 50.0"),
             "Debug output must reflect the static constructor's defaults, got: {debug}",
@@ -245,9 +279,40 @@ mod tests {
         );
         assert!(
             debug.contains("scroll_direction: Horizontal")
-                && debug.contains("offset: 12.5")
+                && debug.contains("offset_source: Pixels(12.5)")
                 && debug.contains("shrink_wrap: true"),
             "Debug output must reflect the overridden builder values, got: {debug}",
+        );
+    }
+
+    #[test]
+    fn position_overrides_a_prior_offset_and_offset_overrides_a_prior_position() {
+        use flui_rendering::view::ScrollPosition;
+
+        let position = ScrollPosition::new(30.0);
+        let position_debug = format!(
+            "{:?}",
+            ListView::new(50.0, Vec::<BoxedView>::new())
+                .offset(12.5)
+                .position(position)
+        );
+        assert!(
+            position_debug.contains("offset_source: Position(")
+                && !position_debug.contains("Pixels("),
+            "the last call (.position) must win over an earlier .offset call, got: \
+             {position_debug}",
+        );
+
+        let offset_debug = format!(
+            "{:?}",
+            ListView::new(50.0, Vec::<BoxedView>::new())
+                .position(ScrollPosition::new(30.0))
+                .offset(12.5)
+        );
+        assert!(
+            offset_debug.contains("offset_source: Pixels(12.5)"),
+            "the last call (.offset) must win over an earlier .position call, got: \
+             {offset_debug}",
         );
     }
 }

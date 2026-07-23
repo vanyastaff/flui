@@ -101,7 +101,10 @@ impl RenderView for OverflowBox {
     type Protocol = BoxProtocol;
     type RenderObject = RenderConstrainedOverflowBox;
 
-    fn create_render_object(&self) -> Self::RenderObject {
+    fn create_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+    ) -> Self::RenderObject {
         RenderConstrainedOverflowBox::new(
             self.alignment,
             self.min_width,
@@ -112,7 +115,11 @@ impl RenderView for OverflowBox {
         )
     }
 
-    fn update_render_object(&self, render_object: &mut Self::RenderObject) {
+    fn update_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+        render_object: &mut Self::RenderObject,
+    ) {
         render_object.set_alignment(self.alignment);
         render_object.set_min_width(self.min_width);
         render_object.set_max_width(self.max_width);

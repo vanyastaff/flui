@@ -76,6 +76,9 @@ parking_lot = { workspace = true }
 smallvec = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+# Raster mailbox + dedicated ack channel — bounded, typed
+# backpressure, same precedent as PipelineOwnerHandle's dirty channel.
+crossbeam-channel = { workspace = true }
 
 # Image loading (optional)
 image = { workspace = true, optional = true }

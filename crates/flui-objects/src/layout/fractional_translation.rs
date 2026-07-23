@@ -23,7 +23,8 @@
 //! the docstring.
 
 use flui_tree::Single;
-use flui_types::{Offset, Size, geometry::px};
+use flui_types::geometry::Lerp;
+use flui_types::{Matrix4, Offset, Size, geometry::px};
 
 use flui_rendering::{
     context::{BoxHitTestContext, BoxLayoutContext},
@@ -71,6 +72,22 @@ impl TranslationFraction {
             px(size.width.get() * self.dx),
             px(size.height.get() * self.dy),
         )
+    }
+}
+
+impl Lerp for TranslationFraction {
+    /// Component-wise linear interpolation — the fraction itself is a plain
+    /// unitless `f32` pair, so this is the same `a + (b - a) * t` every other
+    /// `Lerp` scalar uses. Lets an `Animation<TranslationFraction>` (e.g.
+    /// `flui-widgets`' `SlideTransition`) drive a `Tween<TranslationFraction>`
+    /// directly instead of animating pixel-typed offsets and dividing back
+    /// out by a size that may not be known yet.
+    #[inline]
+    fn lerp_to(&self, other: &Self, t: f32) -> Self {
+        Self {
+            dx: self.dx + (other.dx - self.dx) * t,
+            dy: self.dy + (other.dy - self.dy) * t,
+        }
     }
 }
 
@@ -193,6 +210,29 @@ impl RenderBox for RenderFractionalTranslation {
         // child is laid out at the origin here, so the override IS the
         // pixel translation.
         ctx.paint_child_at(self.pixel_offset(ctx.size()));
+    }
+
+    /// Flutter's `RenderFractionalTranslation.applyPaintTransform`
+    /// (`proxy_box.dart`): `transform.translate(translation.dx * size.width,
+    /// translation.dy * size.height)`.
+    ///
+    /// **The default would be wrong here.** `perform_layout` positions the child
+    /// at `Offset::ZERO` and `paint` shifts it with `paint_child_at` — an
+    /// `offset_override`. The child's *committed* offset, which the default
+    /// composes, is zero and says nothing about where the child paints.
+    ///
+    /// Unlike `hit_test`, this ignores `transform_hit_tests`: Flutter's
+    /// `applyPaintTransform` is unconditional, because it answers "where does the
+    /// child paint", not "where can it be hit".
+    fn apply_paint_transform(
+        &self,
+        _child: usize,
+        _child_offset: Offset,
+        size: Size,
+        transform: &mut Matrix4,
+    ) {
+        let offset = self.pixel_offset(size);
+        *transform *= Matrix4::translation(offset.dx.0, offset.dy.0, 0.0);
     }
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {

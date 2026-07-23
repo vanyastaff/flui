@@ -1,11 +1,11 @@
 //! Core arity trait definition.
 //!
-//! Cycle 3 T-7: simplified from the pre-cycle "Arity + accessor + GAT
+//! This was simplified from an earlier "Arity + accessor + GAT
 //! iterator + slice conversion" surface (~160 LOC, ~12 associated
-//! items + methods) to a pure compile-time marker trait. The
-//! pre-cycle machinery depended on `ChildrenAccess`, `RuntimeArity`,
+//! items + methods) down to a pure compile-time marker trait. That
+//! earlier machinery depended on `ChildrenAccess`, `RuntimeArity`, and
 //! `PerformanceHint` — all deleted alongside `accessors.rs`,
-//! `runtime.rs`, `arity_storage.rs`, `storage.rs` as zombie surface.
+//! `runtime.rs`, `arity_storage.rs`, and `storage.rs` as unused surface.
 //!
 //! Concrete render objects attach the marker to their child storage
 //! (plain `Option<C>` / `Vec<C>` / fixed array) at the type level

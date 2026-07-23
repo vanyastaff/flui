@@ -5,7 +5,7 @@
 //! rather than an internal adaptor type. Re-exported here for the widgets API.
 
 use std::fmt;
-use std::sync::Arc;
+use std::rc::Rc;
 
 use flui_view::BoxedView;
 
@@ -41,7 +41,7 @@ pub use flui_view::element::SliverList;
 #[derive(Clone)]
 pub struct SliverChildBuilderDelegate {
     pub(crate) item_count: usize,
-    pub(crate) builder: Arc<dyn Fn(usize) -> Option<BoxedView> + Send + Sync>,
+    pub(crate) builder: Rc<dyn Fn(usize) -> Option<BoxedView>>,
 }
 
 impl SliverChildBuilderDelegate {
@@ -54,11 +54,11 @@ impl SliverChildBuilderDelegate {
     #[must_use]
     pub fn new<F>(item_count: usize, builder: F) -> Self
     where
-        F: Fn(usize) -> Option<BoxedView> + Send + Sync + 'static,
+        F: Fn(usize) -> Option<BoxedView> + 'static,
     {
         Self {
             item_count,
-            builder: Arc::new(builder),
+            builder: Rc::new(builder),
         }
     }
 }

@@ -68,11 +68,19 @@ impl RenderView for KeyedLeafBox {
     type Protocol = BoxProtocol;
     type RenderObject = RenderSizedBox;
 
-    fn create_render_object(&self) -> Self::RenderObject {
+    fn create_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+    ) -> Self::RenderObject {
         RenderSizedBox::shrink()
     }
 
-    fn update_render_object(&self, _render_object: &mut Self::RenderObject) {}
+    fn update_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+        _render_object: &mut Self::RenderObject,
+    ) {
+    }
 }
 
 impl View for KeyedLeafBox {
@@ -100,11 +108,19 @@ impl RenderView for GlobalLeafBox {
     type Protocol = BoxProtocol;
     type RenderObject = RenderSizedBox;
 
-    fn create_render_object(&self) -> Self::RenderObject {
+    fn create_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+    ) -> Self::RenderObject {
         RenderSizedBox::shrink()
     }
 
-    fn update_render_object(&self, _render_object: &mut Self::RenderObject) {}
+    fn update_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+        _render_object: &mut Self::RenderObject,
+    ) {
+    }
 }
 
 impl View for GlobalLeafBox {
@@ -147,11 +163,19 @@ impl RenderView for MultiBox {
     type Protocol = BoxProtocol;
     type RenderObject = RenderSizedBox;
 
-    fn create_render_object(&self) -> Self::RenderObject {
+    fn create_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+    ) -> Self::RenderObject {
         RenderSizedBox::shrink()
     }
 
-    fn update_render_object(&self, _render_object: &mut Self::RenderObject) {}
+    fn update_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+        _render_object: &mut Self::RenderObject,
+    ) {
+    }
 
     fn has_children(&self) -> bool {
         !self.children.is_empty()
@@ -184,7 +208,7 @@ fn direct_children_in_slot_order(tree: &ElementTree, parent: ElementId) -> Vec<E
     children.into_iter().map(|(_, id)| id).collect()
 }
 
-/// Locks the §U15 contract: `ElementTree::insert` /
+/// Locks the contract: `ElementTree::insert` /
 /// `mount_root_with_pipeline_owner` MUST stamp `set_self_id` BEFORE
 /// `mount`. The production variable-arity test below proves the stamp is
 /// then visible when `BuildOwner::build_scope` emits reconciliation events
@@ -197,7 +221,7 @@ fn set_self_id_fires_on_insert_no_panic() {
 
     // Mount root. ElementTree::mount_root_with_pipeline_owner calls
     // `element.set_self_id(id)` immediately after slab insertion
-    // (per the §U15 wiring in element_tree.rs:223).
+    // (per the wiring in element_tree.rs:223).
     let root_view = KeyedLeafBox::new(1);
     let root_id = tree.mount_root(&root_view, &mut owner.element_owner_mut());
     assert_eq!(root_id, ElementId::new(1), "root must occupy slab[0]");
@@ -208,7 +232,7 @@ fn set_self_id_fires_on_insert_no_panic() {
     let child_id = tree.insert(&child_view, root_id, 0, &mut owner.element_owner_mut());
     assert_eq!(child_id, ElementId::new(2), "child must occupy slab[1]");
 
-    // If §U15's debug_assert ever fires (perform_build before
+    // If the debug_assert ever fires (perform_build before
     // set_self_id), THIS TEST would panic. The fact that mount +
     // insert returned cleanly is the lock that the assert's
     // precondition (set_self_id called before lifecycle work observes

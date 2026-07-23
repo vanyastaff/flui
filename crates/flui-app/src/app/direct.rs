@@ -61,8 +61,10 @@ use crate::embedder::PlatformWindowHandle;
 ///
 /// # Platform Support
 ///
-/// Currently supports desktop platforms (Windows, macOS, Linux).
-/// Uses `flui_platform::current_platform()` for platform selection.
+/// Dead on arrival on the winit backend (Linux) — see the "Open window" note
+/// in the body for why. Native (non-winit) Windows/macOS backends are
+/// unaffected. Uses `flui_platform::current_platform()` for platform
+/// selection.
 pub fn run_direct(
     config: AppConfig,
     render_fn: impl FnMut(&mut SceneBuilder<'_>, f32, f32) + Send + 'static,
@@ -85,6 +87,16 @@ pub fn run_direct(
     let platform = flui_platform::current_platform()?;
 
     // 1. Open window
+    //
+    // NOTE: like the pre-fix `run_desktop`, this opens the window before
+    // `run()` starts the event loop. On the winit backend (Linux) that no
+    // longer hangs — `WinitPlatform::open_window` now fails fast with a
+    // clear error when called before the event loop is running — but it
+    // still can't work: this `?` will bubble that error out of `run_direct`
+    // immediately, before any window ever opens. Known, deliberately
+    // out-of-scope follow-up: `run_direct` needs the same on_ready-driven
+    // reorder `run_desktop` received (see `runner.rs`'s `run_desktop`), not
+    // attempted here.
     let options: WindowOptions = (&config).into();
     let window = platform
         .open_window(options)
@@ -179,10 +191,12 @@ pub fn run_direct(
         }
     }));
 
-    // 6. Register input callback (triggers redraw on any input)
-    window.on_input(Box::new(move |_input: PlatformInput| DispatchEventResult {
-        propagate: false,
-        default_prevented: false,
+    // 6. Register input callback. This is a no-op stub: it neither inspects
+    // the input nor requests a redraw (`resolved(false, false)`). Direct mode
+    // has no widget tree to dispatch input into; a caller who needs input
+    // handling drives it from inside `render_fn` via its own state.
+    window.on_input(Box::new(move |_input: PlatformInput| {
+        DispatchEventResult::resolved(false, false)
     }));
 
     // 7. Lifecycle callbacks
@@ -205,7 +219,7 @@ pub fn run_direct(
     tracing::info!("Direct render mode initialized, entering event loop");
 
     // 9. Run event loop (takes ownership of platform)
-    platform.run(Box::new(|| {
+    platform.run(Box::new(|_platform| {
         tracing::info!("FLUI direct render mode ready");
     }));
 

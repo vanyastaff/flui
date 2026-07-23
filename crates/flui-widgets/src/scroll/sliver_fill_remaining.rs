@@ -64,11 +64,18 @@ impl RenderView for SliverFillRemaining {
     type Protocol = SliverProtocol;
     type RenderObject = RenderSliverFillRemaining;
 
-    fn create_render_object(&self) -> Self::RenderObject {
+    fn create_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+    ) -> Self::RenderObject {
         RenderSliverFillRemaining::new()
     }
 
-    fn update_render_object(&self, _render_object: &mut Self::RenderObject) {
+    fn update_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+        _render_object: &mut Self::RenderObject,
+    ) {
         // No configurable fields on RenderSliverFillRemaining.
     }
 
@@ -126,11 +133,18 @@ impl RenderView for SliverFillRemainingWithScrollable {
     type Protocol = SliverProtocol;
     type RenderObject = RenderSliverFillRemainingWithScrollable;
 
-    fn create_render_object(&self) -> Self::RenderObject {
+    fn create_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+    ) -> Self::RenderObject {
         RenderSliverFillRemainingWithScrollable::new()
     }
 
-    fn update_render_object(&self, _render_object: &mut Self::RenderObject) {
+    fn update_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+        _render_object: &mut Self::RenderObject,
+    ) {
         // No configurable fields on RenderSliverFillRemainingWithScrollable.
     }
 
@@ -184,11 +198,18 @@ impl RenderView for SliverFillRemainingAndOverscroll {
     type Protocol = SliverProtocol;
     type RenderObject = RenderSliverFillRemainingAndOverscroll;
 
-    fn create_render_object(&self) -> Self::RenderObject {
+    fn create_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+    ) -> Self::RenderObject {
         RenderSliverFillRemainingAndOverscroll::new()
     }
 
-    fn update_render_object(&self, _render_object: &mut Self::RenderObject) {
+    fn update_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+        _render_object: &mut Self::RenderObject,
+    ) {
         // No configurable fields on RenderSliverFillRemainingAndOverscroll.
     }
 

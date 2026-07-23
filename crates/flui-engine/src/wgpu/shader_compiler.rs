@@ -5,13 +5,13 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-// Cycle 4 E-7 (extended): `bytemuck::{Pod, Zeroable}` imports
-// dropped alongside the deletion of the 5 dead uniform helpers (see
-// comment block above the `#[cfg(test)] mod tests` declaration).
-// `Shader` is retained -- `ShaderType::from_shader` (live, 1
-// callsite in offscreen.rs) still pattern-matches on the enum
-// variants. `Color` is needed only by the test module below; it is
-// imported there under the same cfg gate so default builds skip it.
+// The `bytemuck::{Pod, Zeroable}` imports were dropped alongside the
+// deletion of the 5 dead uniform helpers (see comment block above
+// the `#[cfg(test)] mod tests` declaration). `Shader` is retained --
+// `ShaderType::from_shader` (live, 1 callsite in offscreen.rs) still
+// pattern-matches on the enum variants. `Color` is needed only by
+// the test module below; it is imported there under the same cfg
+// gate so default builds skip it.
 use flui_types::painting::Shader;
 use parking_lot::RwLock;
 
@@ -244,30 +244,30 @@ impl Default for ShaderCache {
     }
 }
 
-// Cycle 4 E-7 (extended): the 5 forward-looking uniform helpers
-// (`SolidMaskUniforms`, `LinearGradientUniforms`,
-// `RadialGradientUniforms`, `SweepGradientUniforms`, and the
-// `create_uniforms_from_shader` dispatcher) were deleted alongside
-// dropping the module-level `#[allow(dead_code)]` mask. The 4
-// `*Uniforms` structs existed only to be constructed from
-// `create_uniforms_from_shader`, which itself had zero workspace
-// consumers -- the shader-mask integration that was supposed to
-// drive them never materialized. When that integration lands it
-// will define its own uniform buffer shapes inline next to the
-// concrete bind-group layout consumer, not as forward-bait helpers.
+// The 5 forward-looking uniform helpers (`SolidMaskUniforms`,
+// `LinearGradientUniforms`, `RadialGradientUniforms`,
+// `SweepGradientUniforms`, and the `create_uniforms_from_shader`
+// dispatcher) were deleted alongside dropping the module-level
+// `#[allow(dead_code)]` mask. The 4 `*Uniforms` structs existed only
+// to be constructed from `create_uniforms_from_shader`, which itself
+// had zero workspace consumers -- the shader-mask integration that
+// was supposed to drive them never materialized. When that
+// integration lands it will define its own uniform buffer shapes
+// inline next to the concrete bind-group layout consumer, not as
+// forward-bait helpers.
 //
-// PR #112 review fix: the previous version of this comment block
-// had three orphan attributes above it -- `/// Uniform data for
-// solid mask shader`, `#[repr(C)]`, `#[derive(Debug, Clone, Copy,
-// Pod, Zeroable)]` -- left behind when `SolidMaskUniforms` was
+// A later review fix caught that the previous version of this
+// comment block had three orphan attributes above it -- `/// Uniform
+// data for solid mask shader`, `#[repr(C)]`, `#[derive(Debug, Clone,
+// Copy, Pod, Zeroable)]` -- left behind when `SolidMaskUniforms` was
 // deleted. Under `--features enable-wgpu-tests` those attributes
 // attached to the `mod tests` declaration below (where `#[derive]`
 // is not valid + `Pod`/`Zeroable` are no longer in scope) and
 // blocked compilation. Removed.
 #[cfg(all(test, feature = "enable-wgpu-tests"))]
 mod tests {
-    // Cycle 4 PR #112 review fix: `Color` was dropped from the
-    // file-level imports in the E-7 cleanup but the tests below
+    // `Color` was dropped from the file-level imports when the dead
+    // uniform helpers above were cleaned up, but the tests below
     // still reference `Color::WHITE` / `Color::RED` / etc. Bring
     // the import back here under the same cfg gate so default
     // builds skip it.
@@ -350,14 +350,13 @@ mod tests {
         assert_eq!(radial.shader_type, ShaderType::RadialGradientMask);
     }
 
-    // Cycle 4 PR #112 review fix: the 4 tests
-    // (`test_solid_mask_uniforms`, `test_linear_gradient_uniforms`,
-    // `test_radial_gradient_uniforms`, `test_create_uniforms_from_shader`)
-    // that exercised the deleted `SolidMaskUniforms` /
-    // `LinearGradientUniforms` / `RadialGradientUniforms` /
-    // `create_uniforms_from_shader` items were removed alongside the
-    // E-7 production-side deletion. The pre-fix commit landed the
-    // production deletion but left the test bodies referencing
-    // unresolved symbols -- only visible under
-    // `--features enable-wgpu-tests`.
+    // The 4 tests (`test_solid_mask_uniforms`,
+    // `test_linear_gradient_uniforms`, `test_radial_gradient_uniforms`,
+    // `test_create_uniforms_from_shader`) that exercised the deleted
+    // `SolidMaskUniforms` / `LinearGradientUniforms` /
+    // `RadialGradientUniforms` / `create_uniforms_from_shader` items
+    // were removed alongside the production-side deletion above. An
+    // earlier commit had landed the production deletion but left the
+    // test bodies referencing unresolved symbols -- only visible
+    // under `--features enable-wgpu-tests`.
 }

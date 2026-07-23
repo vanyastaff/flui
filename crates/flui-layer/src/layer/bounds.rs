@@ -1,6 +1,6 @@
 //! The [`LayerBounds`] trait and its 11 production impls.
 //!
-//! Extracted from `layer/mod.rs` in Mythos Step 6. The trait is a thin
+//! Extracted from `layer/mod.rs`. The trait is a thin
 //! capability sigil that lets generic tree-walk code ask "does this layer
 //! type expose a `bounds()` accessor?" without matching every variant of the
 //! [`Layer`] enum. Each impl forwards to the inherent `bounds()` method on

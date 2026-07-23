@@ -11,7 +11,7 @@
 //!   macro in `tuple_impls.rs`. Each tuple position keeps its
 //!   concrete `View` type to the boundary; the per-position
 //!   callback in [`ViewSeq::for_each`] pays exactly one `&dyn View`
-//!   `dyn`-call per child — `SC-007` dispatch-cost model.
+//!   `dyn`-call per child.
 //! - **Dynamic `Vec` path** — `Vec<V: View>: ViewSeq` for the
 //!   homogeneous case and `Vec<BoxedView>: ViewSeq` for the
 //!   heterogeneous case, the canonical shape for every scrolling
@@ -26,9 +26,8 @@
 //! retains at the outer `match self.kind { … }` dispatch in the
 //! element-storage layer.
 //!
-//! Phase 3 §U25 lands the trait + impls. Phase 3 §U26 ships the
-//! `column!` / `row!` macros (`crates/flui-view/src/macros/mod.rs`)
-//! that expand to the tuple form and the friendly FR-034
+//! The `column!` / `row!` macros (`crates/flui-view/src/macros/mod.rs`)
+//! expand to the tuple form and emit the friendly FR-034
 //! `compile_error!` at >16 children.
 
 mod tuple_impls;
@@ -75,12 +74,12 @@ pub trait ViewSeq {
     /// declaration order. Tuple-static impls expand to an explicit
     /// sequence of `f(i, &self.i)` calls — each call site is
     /// monomorphic per position, the closure inlines, and the tuple
-    /// element is concrete (`SC-007`).
+    /// element is concrete.
     ///
     /// The `&dyn View` parameter pays one `dyn`-call per child at
-    /// the closure boundary; this is the per-child cost `SC-007`
-    /// acknowledges and is sanctioned by FR-029 point 1 (the
-    /// element-storage enum's inner `Box<dyn …>`).
+    /// the closure boundary; this per-child cost is sanctioned by
+    /// FR-029 point 1 (the element-storage enum's inner
+    /// `Box<dyn …>`).
     fn for_each<F: FnMut(usize, &dyn View)>(&self, f: F);
 
     /// Consume into the dynamic-path representation.
@@ -88,9 +87,8 @@ pub trait ViewSeq {
     /// Used by call sites that need ID-based reconciler input — the
     /// keyed reconciler entry point operates on a `Vec<BoxedView>`
     /// slice. The call site allocates exactly one `Vec<BoxedView>`
-    /// per `Variable`-arity parent rebuild; this is the linear cost
-    /// the `SC-006` linearity bench measures (and it is dominated
-    /// by the per-child reconcile work for any non-trivial child
-    /// count).
+    /// per `Variable`-arity parent rebuild; this is a linear cost
+    /// (dominated by the per-child reconcile work for any
+    /// non-trivial child count).
     fn into_boxed_vec(self) -> Vec<BoxedView>;
 }

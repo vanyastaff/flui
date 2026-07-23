@@ -45,11 +45,11 @@ impl RenderView for ColoredBoxView {
     type Protocol = BoxProtocol;
     type RenderObject = RenderColoredBox;
 
-    fn create_render_object(&self) -> Self::RenderObject {
+    fn create_render_object(&self, _ctx: &flui_view::RenderObjectContext<'_>) -> Self::RenderObject {
         RenderColoredBox::new(self.color, Size::new(px(self.width), px(self.height)))
     }
 
-    fn update_render_object(&self, _render_object: &mut Self::RenderObject) {
+    fn update_render_object(&self, _ctx: &flui_view::RenderObjectContext<'_>, _render_object: &mut Self::RenderObject) {
         // RenderColoredBox is immutable after creation — on update, the element
         // will recreate it (hot restart remounts the whole tree anyway).
     }

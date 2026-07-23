@@ -30,7 +30,7 @@ use crate::{
 /// 3. Win/lose in gesture arena
 /// 4. Call user callbacks on successful recognition
 /// 5. `dispose()` - Clean up when done
-pub trait GestureRecognizer: GestureArenaMember + Send + Sync {
+pub trait GestureRecognizer: GestureArenaMember {
     /// Add a new pointer to track
     ///
     /// Called when a pointer goes down. The recognizer should add itself to the

@@ -49,7 +49,7 @@ fn fill_rule_for(fill_type: flui_types::painting::PathFillType) -> FillRule {
 
 /// Errors that can occur during tessellation
 ///
-/// Cycle 4: `#[non_exhaustive]` future-compat marker.
+/// `#[non_exhaustive]` future-compat marker.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum TessellationError {
@@ -58,13 +58,13 @@ pub enum TessellationError {
 
     #[error("Stroke tessellation failed: {0}")]
     StrokeFailed(String),
-    // Cycle 4 wave 5 E-10: `InvalidPath` variant dropped. Workspace
-    // grep returned zero constructors -- the tessellator's surface
-    // builders (`Path::builder().begin(...).line_to(...).build()`)
-    // can't produce invalid lyon `Path`s through the live entry
-    // points, and the analogous `TessellationError::InvalidPath` in
-    // `flui-painting` is a separate type (different message body)
-    // wired only on the painting-side path builder.
+    // No `InvalidPath` variant: a workspace-wide search found no code that
+    // would need to construct one. The tessellator's surface builders
+    // (`Path::builder().begin(...).line_to(...).build()`) cannot produce an
+    // invalid lyon `Path` through their live entry points, and the
+    // similarly-named `TessellationError::InvalidPath` in `flui-painting` is
+    // a separate type (different message body) used only by the
+    // painting-side path builder.
 }
 
 pub type Result<T> = std::result::Result<T, TessellationError>;
@@ -271,12 +271,11 @@ impl Tessellator {
         ))
     }
 
-    // Cycle 4 wave 5 E-10: `tessellate_rect` and
-    // `tessellate_rounded_rect` deleted. Both were forward-looking
-    // convenience wrappers that built a tiny `lyon::Path` then
-    // forwarded to `tessellate_fill`; zero production callsites in
-    // the workspace (painter drives rects through the instancing
-    // path, not lyon tessellation). The two unit tests that
+    // `tessellate_rect` and `tessellate_rounded_rect` were removed. Both
+    // were forward-looking convenience wrappers that built a tiny
+    // `lyon::Path` and forwarded it to `tessellate_fill`, but nothing in the
+    // workspace called them: the painter draws rects through the
+    // instancing path, not lyon tessellation. The two unit tests that
     // exercised them were deleted alongside the methods.
 
     /// Tessellate a circle
@@ -941,12 +940,11 @@ impl Tessellator {
         Ok((all_vertices, all_indices))
     }
 
-    // Cycle 4 wave 5 E-10: `tessellate_flui_path_dashed_stroke`
-    // deleted. Workspace grep returned zero callers; the live
-    // dashed-stroke entry point is `tessellate_dashed_stroke` on
-    // a lyon `Path` (used by painter's outline pipeline). The
-    // FLUI-to-lyon conversion lives in the `IntoLyonPath` trait
-    // below -- a caller can do
+    // `tessellate_flui_path_dashed_stroke` was removed: a workspace-wide
+    // search found no callers. The live dashed-stroke entry point is
+    // `tessellate_dashed_stroke` on a lyon `Path` (used by the painter's
+    // outline pipeline). The FLUI-to-lyon conversion lives in the
+    // `IntoLyonPath` trait below -- a caller can do
     // `tessellate_dashed_stroke(&flui_path.to_lyon_path(), paint, dp)`
     // in one line if the helper is needed again, but no one needs
     // it today.
@@ -1082,10 +1080,6 @@ impl IntoLyonPath for flui_types::painting::path::Path {
                 }
 
                 PathCommand::AddArc(rect, start_angle, sweep_angle) => {
-                    // Start new subpath for arc using lyon Arc primitive
-                    if has_begun {
-                        builder.end(false);
-                    }
                     let center = rect.center();
                     let rx = (rect.width() / 2.0).0;
                     let ry = (rect.height() / 2.0).0;
@@ -1098,9 +1092,21 @@ impl IntoLyonPath for flui_types::painting::path::Path {
                         x_rotation: lyon::geom::Angle::radians(0.0),
                     };
 
+                    // An arc appended to an open contour *continues* it: move
+                    // along the contour to the arc's start, then trace the arc.
+                    // `Path::from_rrect` builds a rounded rectangle as one
+                    // contour (edge, corner arc, edge, corner arc, …); starting
+                    // a fresh subpath per arc instead fragments it, and each open
+                    // fragment's implicit fill-closure chord renders as a
+                    // diagonal slash across the corner. Only open a new subpath
+                    // when nothing is in progress (a standalone arc).
                     let arc_start = arc.from();
-                    builder.begin(arc_start);
-                    has_begun = true;
+                    if has_begun {
+                        builder.line_to(arc_start);
+                    } else {
+                        builder.begin(arc_start);
+                        has_begun = true;
+                    }
 
                     arc.for_each_cubic_bezier(&mut |cubic| {
                         builder.cubic_bezier_to(cubic.ctrl1, cubic.ctrl2, cubic.to);
@@ -1287,6 +1293,33 @@ mod cpu_tests {
         tess.set_max_scale(-4.0);
         assert!((tess.fill_tolerance() - DEVICE_FILL_TOLERANCE).abs() < 1e-6);
     }
+
+    /// A rounded rectangle must convert to ONE continuous lyon contour, not a
+    /// separate subpath per corner. `Path::from_rrect` traces edge → corner arc
+    /// → edge → corner arc as a single outline; when `AddArc` opened a fresh
+    /// subpath, that outline fragmented into the top edge plus four detached
+    /// arcs, and each open fragment's implicit fill-closure chord painted a
+    /// diagonal slash across the corner (seen on every Material `Card`). Guard
+    /// the single-contour invariant at the lyon-conversion boundary.
+    #[test]
+    fn rounded_rect_converts_to_one_contour_not_per_corner_subpaths() {
+        use flui_types::geometry::rrect::RRect;
+        use flui_types::painting::path::Path as FluiPath;
+
+        let rrect = RRect::from_xywh_circular(px(0.0), px(0.0), px(120.0), px(80.0), px(12.0));
+        let lyon_path = FluiPath::from_rrect(rrect).to_lyon_path();
+
+        let contour_starts = lyon_path
+            .iter()
+            .filter(|event| matches!(event, lyon::path::PathEvent::Begin { .. }))
+            .count();
+
+        assert_eq!(
+            contour_starts, 1,
+            "a rounded rectangle must be one contour; {contour_starts} subpaths \
+             means the corner arcs fragmented the outline into diagonal-slashed pieces",
+        );
+    }
 }
 
 #[cfg(all(test, feature = "enable-wgpu-tests"))]
@@ -1298,12 +1331,11 @@ mod tests {
         Pixels(v)
     }
 
-    // Cycle 4 wave 5 E-10: `test_tessellate_rect` and
-    // `test_tessellate_rounded_rect` deleted alongside the methods
-    // they exercised. No production callsite drove them; their
-    // assertions (`!vertices.is_empty()` etc.) were trivially true
-    // for any non-degenerate input -- they documented the shape of
-    // the wrapper, not behavior worth pinning.
+    // `test_tessellate_rect` and `test_tessellate_rounded_rect` were
+    // removed alongside the methods they exercised. No production code
+    // called them, and their assertions (`!vertices.is_empty()` etc.)
+    // were trivially true for any non-degenerate input -- they documented
+    // the shape of the wrapper, not behavior worth pinning down.
 
     #[test]
     fn test_tessellate_circle() {

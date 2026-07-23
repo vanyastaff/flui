@@ -1,3 +1,4 @@
+mod animated_opacity;
 mod backdrop_filter;
 mod clip;
 mod colored_box;
@@ -10,7 +11,9 @@ mod physical_model;
 mod repaint_boundary;
 mod semantics;
 mod shader_mask;
+mod subtree_anchor;
 
+pub use animated_opacity::*;
 pub use backdrop_filter::*;
 pub use clip::*;
 pub use colored_box::*;
@@ -23,3 +26,4 @@ pub use physical_model::*;
 pub use repaint_boundary::*;
 pub use semantics::*;
 pub use shader_mask::*;
+pub use subtree_anchor::*;

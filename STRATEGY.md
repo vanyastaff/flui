@@ -56,6 +56,6 @@ _Why it serves the approach:_ approach #3 буквально — DX day-1 без
 ## Not working on
 
 - **Async в render hot path** — `tokio::spawn` / `async fn` ограничены scheduler/IO/build pipeline. Layout/paint синхронны, frame budget critical. Bun-прецедент: rewrite без async подтвердил жизнеспособность.
-- **Реинвент Flutter widget tree mental model** — порт, не редизайн. Любая попытка "сделать лучше через React signals / SwiftUI declarative" откатывается к Flutter-семантике.
+- **Реинвент Flutter widget tree mental model** — порт, не редизайн. Любая попытка "сделать лучше через React signals / SwiftUI declarative" откатывается к Flutter-семантике. Это правило про widget-tree semantics, **не** про топологию процесса: multi-window ownership, runtime/scheduling topology, concurrency и presentation architecture — санкционированные leapfrog-зоны (ADR-0027, модель `UiRealm`); Flutter здесь behavioral reference, а не топологический образец.
 - **Heavy dep tree** — каждая workspace dependency = транзитивные хвосты, binary size, compile time. После MVP — diet (`cargo bloat`, `cargo tree --duplicates`) baseline.
 - **Telemetry / analytics в библиотеке** — никаких opt-out пингов. Метрики приходят через GH issues + external PR contributors, не через runtime instrumentation.

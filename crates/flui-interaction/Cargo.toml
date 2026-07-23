@@ -28,23 +28,25 @@ smallvec = { workspace = true }
 
 # Logging
 tracing = { workspace = true }
+thiserror = { workspace = true }
 dpi = "0.1.2"
 
 # Async runtime
 tokio = { workspace = true, features = ["time", "sync", "macros", "rt"] }
 
 [dev-dependencies]
+static_assertions = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 # `tracing-subscriber` is a dev-only dependency — the observability tests
 # install a `fmt::TestWriter` subscriber to exercise span emission on hot
 # paths. End users configure their subscriber at the app boundary via
 # `flui_foundation::log::Logger`, not via this crate.
 tracing-subscriber = { workspace = true }
-# Criterion — hot-path regression guards. Four benches cover VelocityTracker
+# Criterion — hot-path regression guards. Benches cover VelocityTracker
 # (per-pointer-move), GestureArena (per-pointer-up), TapGestureRecognizer
-# (per-pointer-event), and PointerEventResampler (per-raw-input). Each follows
-# the workspace benchmark template at
-# `rust-studio/.../templates/benchmark-report.md`.
+# (per-pointer-event), PointerEventResampler (per-raw-input), and
+# InteractionLane route resolution/invocation. Each follows the workspace
+# benchmark template at `rust-studio/.../templates/benchmark-report.md`.
 criterion = { workspace = true }
 # Property tests for the pure-math substrate (LSQ solver, velocity tracker).
 # Same version as the rest of the workspace (flui-types / flui-geometry).
@@ -67,6 +69,10 @@ harness = false
 
 [[bench]]
 name = "pointer_resampler_bench"
+harness = false
+
+[[bench]]
+name = "pointer_route_bench"
 harness = false
 
 [features]

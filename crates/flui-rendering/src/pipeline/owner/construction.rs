@@ -135,7 +135,7 @@ impl PipelineOwner<Idle> {
     }
 
     // ========================================================================
-    // Full-frame orchestrator (Mythos Step 7)
+    // Full-frame orchestrator
     // ========================================================================
 
     /// Runs a full frame: layout -> compositing-bits -> paint -> semantics.
@@ -148,7 +148,7 @@ impl PipelineOwner<Idle> {
     /// the type system enforces the ordering. There is no runtime branch
     /// that could call `run_paint` before `run_layout`.
     ///
-    /// # Mythos Step 12 -- error handling
+    /// # Error handling
     ///
     /// If any phase returns [`crate::error::RenderError`] (most notably
     /// [`crate::error::RenderError::Poisoned`] from a panicking render

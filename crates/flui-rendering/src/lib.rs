@@ -57,19 +57,19 @@
 pub mod binding;
 pub mod constraints;
 pub mod context;
-// Cycle 4 R-16 partial un-gate: `sliver_grid_delegate` is promoted to
-// the default build because `RenderSliverGrid` now ships unconditionally
-// in `flui-objects`. `custom_painter`, `flow_delegate`, and
-// `single_child_layout_delegate` and `multi_child_layout_delegate` are promoted
-// the same way now that `RenderCustomPaint`, `RenderFlow`,
-// `RenderCustomSingleChildLayoutBox`, and `RenderCustomMultiChildLayoutBox`
-// ship unconditionally too (ADR-0007 amendments). The remaining companion-less
-// delegate (`custom_clipper`) stays gated inside `delegates/mod.rs` until its
+// `sliver_grid_delegate` is part of the default build because
+// `RenderSliverGrid` now ships unconditionally in `flui-objects`.
+// `custom_painter`, `flow_delegate`, `single_child_layout_delegate`, and
+// `multi_child_layout_delegate` are unconditional the same way now that
+// `RenderCustomPaint`, `RenderFlow`, `RenderCustomSingleChildLayoutBox`,
+// and `RenderCustomMultiChildLayoutBox` ship unconditionally too
+// (ADR-0007 amendments). The remaining companion-less delegate
+// (`custom_clipper`) stays gated inside `delegates/mod.rs` until its
 // render object lands — opt in via `--features experimental-delegates`.
 pub mod delegates;
 pub mod error;
 pub mod hit_testing;
-// Cycle 4 U-6 deleted the rendering-side `input` module entirely.
+// The rendering-side `input` module has been removed entirely.
 // Canonical `MouseTracker` + `MouseTrackerAnnotation` + cursor types
 // live in `flui_interaction` (Flutter's `gestures/mouse_tracker.dart`
 // equivalent). Consumers go through `flui_interaction::MouseTracker`
@@ -82,19 +82,19 @@ pub use flui_semantics as semantics;
 // `objects` module removed: concrete render objects live in the `flui-objects`
 // crate (see ADR-0008 / flui-objects extraction). flui-rendering now exports
 // only engine primitives (traits, pipeline, protocol, contexts, arena).
-pub mod slivers; // PORT-CHECK-OK-SP4: sliver protocol + objects; the cross-crate consumer is the future flui-view scrollable widgets (ADR-0003 U4 / ROADMAP Core.1). This branch removed the façade flui-view→render coupling, which is what surfaced the module as cross-crate-consumer-less.
+pub mod slivers; // PORT-CHECK-OK-SP4: sliver protocol + objects; the cross-crate consumer is the future flui-view scrollable widgets (see ADR-0003 / ROADMAP Core.1). This branch removed the façade flui-view→render coupling, which is what surfaced the module as cross-crate-consumer-less.
 pub mod storage;
 // Promoted from `cfg(test) pub(crate)` to the `testing` feature so
 // flui-objects' test crate can reach NoopSliver cross-crate when it enables
 // `features = ["testing"]`. Part of the custom-object-authoring test-support
-// contract (see docs/adr/ADR-0007 and flui-objects extraction plan §7).
+// contract (see docs/adr/ADR-0007 and the flui-objects extraction plan).
 #[cfg(any(test, feature = "testing"))]
 pub mod test_support;
 // Protocol-agnostic windowing math (ADR-0003). Its public surface names no
 // render/sliver/protocol type, so it stays a general-purpose abstraction and is
 // cheaply extractable into a standalone crate once a 2nd direct consumer
 // appears. The `SliverConstraints -> ScrollWindow` adapter lives outside it.
-pub mod virtualization; // PORT-CHECK-OK-SP4: agnostic windowing core; intra-crate consumer is RenderSliverListLazy + the criterion bench (both excluded from the cross-crate consumer search); cross-crate consumers are future flui-view lazy widgets / a standalone flui-virtualization crate (ADR-0003 U4).
+pub mod virtualization; // PORT-CHECK-OK-SP4: agnostic windowing core; intra-crate consumer is RenderSliverListLazy + the criterion bench (both excluded from the cross-crate consumer search); cross-crate consumers are future flui-view lazy widgets / a standalone flui-virtualization crate (see ADR-0003).
 // Render-object test harness. Compiled only for this crate's own tests
 // (`cfg(test)`) or when a consumer enables the `testing` feature. Builds
 // real `PipelineOwner` trees through the production pipeline and exposes a
@@ -132,23 +132,23 @@ pub mod prelude {
     };
     // Error types
     pub use crate::error::{RenderError, RenderResult};
-    // Hit testing. Cycle 4 U-3 removed the parallel
-    // `BoxHitTestEntry`/`BoxHitTestResult`/`SliverHitTestEntry`/
-    // `SliverHitTestResult` exports here; the protocol-canonical
-    // versions live in `crate::protocol` and are re-exported alongside
-    // each `BoxProtocol`/`SliverProtocol` (see lib.rs protocol prelude).
-    // Cycle 4 U-5 dropped `PointerEventKind` alongside the deletion of
-    // the rendering-side `target.rs` module; canonical pointer-event
-    // types live in `flui_interaction::events` (re-exported at line 82
-    // via `flui_interaction::{HitTestTarget, ...}`).
+    // Hit testing. The parallel `BoxHitTestEntry`/`BoxHitTestResult`/
+    // `SliverHitTestEntry`/`SliverHitTestResult` exports that used to live
+    // here have been removed; the protocol-canonical versions live in
+    // `crate::protocol` and are re-exported alongside each
+    // `BoxProtocol`/`SliverProtocol` (see lib.rs protocol prelude).
+    // `PointerEventKind` was dropped alongside the deletion of the
+    // rendering-side `target.rs` module; canonical pointer-event types
+    // live in `flui_interaction::events` (re-exported at line 82 via
+    // `flui_interaction::{HitTestTarget, ...}`).
     pub use crate::hit_testing::MatrixTransformPart;
-    // Mouse-tracking surface (cycle 4 U-6: migrated from the deleted
-    // rendering-side `input` module to `flui_interaction`'s canonical
-    // types). `MouseCursorSession` / `PointerEnterEvent` /
-    // `PointerExitEvent` / `PointerHoverEvent` / `MouseTrackerHitTest`
-    // were rendering-specific helpers without flui-interaction-side
-    // equivalents; consumers needing them migrated to
-    // `flui_interaction::events`-based pointer-event handling.
+    // Mouse-tracking surface, migrated from the deleted rendering-side
+    // `input` module to `flui_interaction`'s canonical types.
+    // `MouseCursorSession` / `PointerEnterEvent` / `PointerExitEvent` /
+    // `PointerHoverEvent` / `MouseTrackerHitTest` were rendering-specific
+    // helpers without flui-interaction-side equivalents; consumers
+    // needing them migrated to `flui_interaction::events`-based
+    // pointer-event handling.
     pub use flui_interaction::{CursorIcon, MouseTracker, MouseTrackerAnnotation};
     // Protocol adapters for RenderBox -> RenderObject<BoxProtocol> bridging
     pub use crate::protocol::IntoRenderObject;
@@ -180,8 +180,8 @@ pub mod prelude {
         },
     };
     // Grid, custom-paint, flow, and custom-layout delegates — always available
-    // because their companion render objects ship in the default build (Cycle 4
-    // R-16 partial un-gate; ADR-0007 amendments).
+    // because their companion render objects ship in the default build
+    // (ADR-0007 amendments).
     pub use crate::delegates::{
         AspectRatioDelegate, CenterLayoutDelegate, CustomPainter, FlowDelegate,
         FlowPaintingContext, MultiChildLayoutContext, MultiChildLayoutDelegate, SemanticsBuilder,
@@ -189,7 +189,7 @@ pub mod prelude {
         SliverGridDelegateWithMaxCrossAxisExtent, SliverGridLayout,
     };
     // Remaining companion-less delegates still gated until their render
-    // objects land (Cycle 4 R-16).
+    // objects land.
     #[cfg(feature = "experimental-delegates")]
     pub use crate::delegates::{CustomClipper, RectClipper};
 }
