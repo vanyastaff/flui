@@ -106,6 +106,22 @@ name = "widgets_it"
 path = "tests/main.rs"
 harness = true
 
+# Keep the historical image test target names alive for CI feature-gated runs.
+[[test]]
+name = "image"
+path = "tests/image_target.rs"
+harness = true
+
+[[test]]
+name = "image_async"
+path = "tests/image_async.rs"
+harness = true
+
+[[test]]
+name = "image_network"
+path = "tests/image_network.rs"
+harness = true
+
 # The parity test suite lives in a subdirectory so `mod harness; mod *_test;`
 # work via Cargo's single-binary test model. Auto-discovery misses subdirectory
 # main files, so the target is declared explicitly.
