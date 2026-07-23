@@ -13,8 +13,13 @@ use crate::testing::parent_data::ParentDataSeed;
 
 use crate::parent_data::ParentData;
 use crate::pipeline::phase::PipelinePhase;
+use crate::storage::RenderTree;
 
-use super::{PipelineOwner, subtree_arena::ensure_stack};
+use super::{
+    PipelineOwner,
+    poison::{LayoutFailureKind, LayoutPoison},
+    subtree_arena::ensure_stack,
+};
 
 // ============================================================================
 // Phase-generic query methods on PipelineOwner
@@ -49,9 +54,16 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     ) -> crate::error::RenderResult<f32> {
         #[cfg(any(test, feature = "testing"))]
         let parent_data_seeds = self.parent_data_seeds.clone();
-        let mut slots = self.acquire_query_slots(id)?;
-        intrinsic_query(
+        let Self {
+            render_tree,
+            layout_poison,
+            ..
+        } = self;
+        let mut slots = acquire_query_slots(render_tree, id)?;
+        let mut cx = QueryPoisonCx::new(layout_poison);
+        let result = intrinsic_query(
             &mut slots,
+            &mut cx,
             id,
             dimension,
             extent,
@@ -59,7 +71,22 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             &parent_data_seeds,
             #[cfg(not(any(test, feature = "testing")))]
             &(),
-        )
+        );
+        // The walk root's own failure is recorded exactly like a dirty
+        // root's in `run_layout`: the failure closures only see
+        // parent/child pairs, so the root of the query must be counted
+        // here or it would never accrue budget itself.
+        if let Err(e) = &result {
+            cx.note_failure(id, id, e);
+        }
+        drop(slots);
+        let QueryPoisonCx {
+            failures,
+            successes,
+            ..
+        } = cx;
+        apply_query_poison_drain(render_tree, layout_poison, failures, successes);
+        result
     }
 
     /// The size a box subtree WOULD take under `constraints`, memoized
@@ -75,16 +102,31 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     ) -> crate::error::RenderResult<flui_types::Size> {
         #[cfg(any(test, feature = "testing"))]
         let parent_data_seeds = self.parent_data_seeds.clone();
-        let mut slots = self.acquire_query_slots(id)?;
-        dry_layout_query(
+        let Self {
+            render_tree,
+            layout_poison,
+            ..
+        } = self;
+        let mut slots = acquire_query_slots(render_tree, id)?;
+        let mut cx = QueryPoisonCx::new(layout_poison);
+        let result = dry_layout_query(
             &mut slots,
+            &mut cx,
             id,
             constraints,
             #[cfg(any(test, feature = "testing"))]
             &parent_data_seeds,
             #[cfg(not(any(test, feature = "testing")))]
             &(),
-        )
+        );
+        drop(slots);
+        let QueryPoisonCx {
+            failures,
+            successes,
+            ..
+        } = cx;
+        apply_query_poison_drain(render_tree, layout_poison, failures, successes);
+        result
     }
 
     /// The dry baseline of a box node for `constraints`, memoized per
@@ -103,9 +145,16 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     ) -> crate::error::RenderResult<Option<f32>> {
         #[cfg(any(test, feature = "testing"))]
         let parent_data_seeds = self.parent_data_seeds.clone();
-        let mut slots = self.acquire_query_slots(id)?;
-        dry_baseline_query(
+        let Self {
+            render_tree,
+            layout_poison,
+            ..
+        } = self;
+        let mut slots = acquire_query_slots(render_tree, id)?;
+        let mut cx = QueryPoisonCx::new(layout_poison);
+        let result = dry_baseline_query(
             &mut slots,
+            &mut cx,
             id,
             constraints,
             baseline,
@@ -113,44 +162,54 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             &parent_data_seeds,
             #[cfg(not(any(test, feature = "testing")))]
             &(),
-        )
-    }
-
-    /// Acquires the take-out borrow map for a memoizing query walk:
-    /// disjoint `&mut` over the subtree (the same `get_subtree_mut`
-    /// primitive the layout walk uses) plus each node's child-id
-    /// snapshot. A node is moved OUT of its slot while its own
-    /// computation runs, so re-entry — a child-link cycle — is
-    /// detectable instead of UB.
-    fn acquire_query_slots(
-        &mut self,
-        id: RenderId,
-    ) -> crate::error::RenderResult<rustc_hash::FxHashMap<RenderId, QuerySlot<'_>>> {
-        let ids = self.render_tree.collect_subtree_ids(id);
-        let nodes = self
-            .render_tree
-            .get_subtree_mut(&ids)
-            .ok_or(crate::error::RenderError::NodeNotFound(id))?;
-        Ok(ids
-            .iter()
-            .zip(nodes)
-            .map(|(&node_id, node)| {
-                let children = node.children().to_vec();
-                (
-                    node_id,
-                    QuerySlot {
-                        node: Some(node),
-                        children,
-                    },
-                )
-            })
-            .collect())
+        );
+        drop(slots);
+        let QueryPoisonCx {
+            failures,
+            successes,
+            ..
+        } = cx;
+        apply_query_poison_drain(render_tree, layout_poison, failures, successes);
+        result
     }
 }
 
 // ============================================================================
-// QuerySlot and free query functions
+// QuerySlot, poison context, and free query functions
 // ============================================================================
+
+/// Acquires the take-out borrow map for a memoizing query walk:
+/// disjoint `&mut` over the subtree (the same `get_subtree_mut`
+/// primitive the layout walk uses) plus each node's child-id
+/// snapshot. A node is moved OUT of its slot while its own
+/// computation runs, so re-entry — a child-link cycle — is
+/// detectable instead of UB.
+///
+/// Free function (not a method) so callers can hold a
+/// `&mut LayoutPoison` from the same owner across the walk.
+fn acquire_query_slots(
+    render_tree: &mut RenderTree,
+    id: RenderId,
+) -> crate::error::RenderResult<rustc_hash::FxHashMap<RenderId, QuerySlot<'_>>> {
+    let ids = render_tree.collect_subtree_ids(id);
+    let nodes = render_tree
+        .get_subtree_mut(&ids)
+        .ok_or(crate::error::RenderError::NodeNotFound(id))?;
+    Ok(ids
+        .iter()
+        .zip(nodes)
+        .map(|(&node_id, node)| {
+            let children = node.children().to_vec();
+            (
+                node_id,
+                QuerySlot {
+                    node: Some(node),
+                    children,
+                },
+            )
+        })
+        .collect())
+}
 
 /// One node's slot in a memoizing query walk: the disjoint `&mut`
 /// borrow plus a snapshot of the node's child ids. The node is moved
@@ -160,6 +219,103 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
 pub(super) struct QuerySlot<'a> {
     pub(super) node: Option<&'a mut crate::storage::RenderNode>,
     pub(super) children: Vec<RenderId>,
+}
+
+/// Poison context threaded through the query walks: a read-only view
+/// of the owner's [`LayoutPoison`] for skip checks plus the failure /
+/// success sinks the walk records into. Kept as one bundle so the
+/// recursive free functions stay readable. Records are drained into
+/// the owner's poison table by [`apply_query_poison_drain`] after the
+/// walk's borrows are released.
+pub(super) struct QueryPoisonCx<'a> {
+    poison: &'a LayoutPoison,
+    failures: Vec<(RenderId, RenderId, LayoutFailureKind)>,
+    successes: Vec<RenderId>,
+}
+
+impl<'a> QueryPoisonCx<'a> {
+    fn new(poison: &'a LayoutPoison) -> Self {
+        Self {
+            poison,
+            failures: Vec::new(),
+            successes: Vec::new(),
+        }
+    }
+
+    /// True while `id` is layout-poisoned (the intrinsic query must
+    /// skip it, returning its last-good cached value or 0.0).
+    #[inline]
+    fn is_poisoned(&self, id: RenderId) -> bool {
+        self.poison.is_poisoned(id)
+    }
+
+    /// Records a child-query failure swallowed at a recursion closure:
+    /// `parent` is the node whose own measurement invoked the query,
+    /// `failed` the child whose query returned `err`.
+    fn note_failure(
+        &mut self,
+        parent: RenderId,
+        failed: RenderId,
+        err: &crate::error::RenderError,
+    ) {
+        self.failures
+            .push((parent, failed, LayoutFailureKind::of(err)));
+    }
+
+    /// Records a child-query success, but only for a node with open
+    /// (not yet poisoned) failure records — the poison skip returns
+    /// cached/0.0 through the same `Ok` channel, and that stand-in
+    /// must not be misread as a recovery.
+    fn note_success(&mut self, id: RenderId) {
+        if self.poison.has_open_failures(id) {
+            self.successes.push(id);
+        }
+    }
+}
+
+/// Feeds a finished query walk's failure/success sinks into the
+/// owner's poison table. On a 0 → 1 poison transition the failed
+/// node's `NEEDS_LAYOUT` is cleared (its last committed geometry
+/// stands, so paint shows last-good content rather than skipping the
+/// node forever); parent flags are NOT touched here — unlike the
+/// layout walk, an out-of-layout probe never set them.
+///
+/// Takes the sinks unpacked (rather than the whole [`QueryPoisonCx`])
+/// so the caller's shared borrow of the poison table has ended before
+/// `layout_poison` is taken mutably.
+fn apply_query_poison_drain(
+    render_tree: &RenderTree,
+    layout_poison: &mut LayoutPoison,
+    failures: Vec<(RenderId, RenderId, LayoutFailureKind)>,
+    successes: Vec<RenderId>,
+) {
+    for succeeded in successes {
+        layout_poison.note_success(succeeded);
+    }
+    for (parent, failed, kind, first_report) in layout_poison.note_failures(failures) {
+        if let Some(node) = render_tree.get(failed) {
+            node.clear_needs_layout();
+        }
+        if first_report {
+            tracing::error!(
+                ?failed,
+                ?parent,
+                ?kind,
+                "layout poison engaged: intrinsic query failed with a structural \
+                 error (or exhausted its retry budget); the node is skipped in \
+                 later queries until freshly invalidated (mark_needs_layout). \
+                 Its last-good cached value (or 0.0) stands in.",
+            );
+        } else {
+            tracing::debug!(
+                ?failed,
+                ?parent,
+                ?kind,
+                "layout poison re-engaged after a fresh invalidation; the \
+                 node's intrinsic query still fails and stays skipped.",
+            );
+        }
+    }
 }
 
 /// Builds the per-child parent-data slice for the current node's children,
@@ -205,21 +361,28 @@ fn parent_data_refs(owned: &[Option<Box<dyn ParentData>>]) -> Vec<Option<&dyn Pa
 /// store the result. Errors inside the child callback are stashed and
 /// re-raised after the object call returns (the raw callback channel
 /// is infallible by design — same convention as the hit-test walk).
+///
+/// `cx` carries the layout-poison table: a poisoned node is skipped
+/// (its last-good cached value, or 0.0 when it never succeeded, stands
+/// in) and child-query failures feed the same retry budget the layout
+/// walk uses.
 pub(super) fn intrinsic_query(
     slots: &mut rustc_hash::FxHashMap<RenderId, QuerySlot<'_>>,
+    cx: &mut QueryPoisonCx<'_>,
     id: RenderId,
     dimension: crate::storage::IntrinsicDimension,
     extent: f32,
     #[cfg(any(test, feature = "testing"))] parent_data_seeds: &FxHashMap<RenderId, ParentDataSeed>,
     #[cfg(not(any(test, feature = "testing")))] parent_data_seeds: &(),
 ) -> crate::error::RenderResult<f32> {
-    ensure_stack(|| intrinsic_query_impl(slots, id, dimension, extent, parent_data_seeds))
+    ensure_stack(|| intrinsic_query_impl(slots, cx, id, dimension, extent, parent_data_seeds))
 }
 
 /// Body of [`intrinsic_query`]; split out so every recursion level
 /// enters through the [`ensure_stack`] probe.
 fn intrinsic_query_impl(
     slots: &mut rustc_hash::FxHashMap<RenderId, QuerySlot<'_>>,
+    cx: &mut QueryPoisonCx<'_>,
     id: RenderId,
     dimension: crate::storage::IntrinsicDimension,
     extent: f32,
@@ -241,6 +404,30 @@ fn intrinsic_query_impl(
         );
         return Ok(0.0);
     };
+
+    // Layout-poison skip: do not re-measure a node that exhausted its
+    // retry budget until it is freshly invalidated. The cache is only
+    // written on success, so a hit is a real previously computed
+    // answer; a miss falls back to 0.0 — the same value the
+    // error-swallow path used before the poison mechanism existed. The
+    // slot is restored before returning, exactly like the error path
+    // below.
+    if cx.is_poisoned(id) {
+        let value = node
+            .as_box()
+            .and_then(|entry| {
+                entry
+                    .state()
+                    .layout_cache()
+                    .peek_intrinsic(dimension, extent)
+            })
+            .unwrap_or(0.0);
+        if let Some(slot) = slots.get_mut(&id) {
+            slot.node = Some(node);
+        }
+        return Ok(value);
+    }
+
     let children = slot.children.clone();
 
     let result = (|| {
@@ -269,15 +456,21 @@ fn intrinsic_query_impl(
             let mut child_query =
                 |index: usize, dim: crate::storage::IntrinsicDimension, ext: f32| -> f32 {
                     let Some(&child_id) = children.get(index) else {
-                        child_err.get_or_insert(crate::error::RenderError::contract_violation(
+                        let err = crate::error::RenderError::contract_violation(
                             "intrinsic child query",
                             "child index out of range for this node's children",
-                        ));
+                        );
+                        cx.note_failure(id, id, &err);
+                        child_err.get_or_insert(err);
                         return 0.0;
                     };
-                    match intrinsic_query(slots, child_id, dim, ext, parent_data_seeds) {
-                        Ok(v) => v,
+                    match intrinsic_query(slots, cx, child_id, dim, ext, parent_data_seeds) {
+                        Ok(v) => {
+                            cx.note_success(child_id);
+                            v
+                        }
                         Err(err) => {
+                            cx.note_failure(id, child_id, &err);
                             child_err.get_or_insert(err);
                             0.0
                         }
@@ -311,20 +504,26 @@ fn intrinsic_query_impl(
 
 /// Recursive memoized dry-layout query; same skeleton as
 /// [`intrinsic_query`] with `(constraints → Size)` payloads.
+///
+/// `cx` is threaded through only so intrinsic sub-queries keep their
+/// poison skip; dry-layout's own collapse sites do not feed the retry
+/// budget (out of the intrinsic channel's scope).
 pub(super) fn dry_layout_query(
     slots: &mut rustc_hash::FxHashMap<RenderId, QuerySlot<'_>>,
+    cx: &mut QueryPoisonCx<'_>,
     id: RenderId,
     constraints: crate::constraints::BoxConstraints,
     #[cfg(any(test, feature = "testing"))] parent_data_seeds: &FxHashMap<RenderId, ParentDataSeed>,
     #[cfg(not(any(test, feature = "testing")))] parent_data_seeds: &(),
 ) -> crate::error::RenderResult<flui_types::Size> {
-    ensure_stack(|| dry_layout_query_impl(slots, id, constraints, parent_data_seeds))
+    ensure_stack(|| dry_layout_query_impl(slots, cx, id, constraints, parent_data_seeds))
 }
 
 /// Body of [`dry_layout_query`]; split out so every recursion level
 /// enters through the [`ensure_stack`] probe.
 fn dry_layout_query_impl(
     slots: &mut rustc_hash::FxHashMap<RenderId, QuerySlot<'_>>,
+    cx: &mut QueryPoisonCx<'_>,
     id: RenderId,
     constraints: crate::constraints::BoxConstraints,
     #[cfg(any(test, feature = "testing"))] parent_data_seeds: &FxHashMap<RenderId, ParentDataSeed>,
@@ -381,7 +580,7 @@ fn dry_layout_query_impl(
                 };
                 match request {
                     DryLayoutChildRequest::DryLayout(c) => {
-                        match dry_layout_query(slots, child_id, c, parent_data_seeds) {
+                        match dry_layout_query(slots, cx, child_id, c, parent_data_seeds) {
                             Ok(v) => DryLayoutChildResponse::DryLayout(v),
                             Err(err) => {
                                 child_err.get_or_insert(err);
@@ -390,7 +589,7 @@ fn dry_layout_query_impl(
                         }
                     }
                     DryLayoutChildRequest::Intrinsic(dim, e) => {
-                        match intrinsic_query(slots, child_id, dim, e, parent_data_seeds) {
+                        match intrinsic_query(slots, cx, child_id, dim, e, parent_data_seeds) {
                             Ok(v) => DryLayoutChildResponse::Intrinsic(v),
                             Err(err) => {
                                 child_err.get_or_insert(err);
@@ -425,22 +624,27 @@ fn dry_layout_query_impl(
 
 /// Recursive memoized dry-baseline query; same skeleton as
 /// [`dry_layout_query`] with `(constraints, baseline → Option<f32>)`
-/// payloads.
+/// payloads. `cx` is threaded through for intrinsic sub-queries only
+/// (see [`dry_layout_query`]).
 pub(super) fn dry_baseline_query(
     slots: &mut rustc_hash::FxHashMap<RenderId, QuerySlot<'_>>,
+    cx: &mut QueryPoisonCx<'_>,
     id: RenderId,
     constraints: crate::constraints::BoxConstraints,
     baseline: crate::traits::TextBaseline,
     #[cfg(any(test, feature = "testing"))] parent_data_seeds: &FxHashMap<RenderId, ParentDataSeed>,
     #[cfg(not(any(test, feature = "testing")))] parent_data_seeds: &(),
 ) -> crate::error::RenderResult<Option<f32>> {
-    ensure_stack(|| dry_baseline_query_impl(slots, id, constraints, baseline, parent_data_seeds))
+    ensure_stack(|| {
+        dry_baseline_query_impl(slots, cx, id, constraints, baseline, parent_data_seeds)
+    })
 }
 
 /// Body of [`dry_baseline_query`]; split out so every recursion level
 /// enters through the [`ensure_stack`] probe.
 fn dry_baseline_query_impl(
     slots: &mut rustc_hash::FxHashMap<RenderId, QuerySlot<'_>>,
+    cx: &mut QueryPoisonCx<'_>,
     id: RenderId,
     constraints: crate::constraints::BoxConstraints,
     baseline: crate::traits::TextBaseline,
@@ -505,7 +709,7 @@ fn dry_baseline_query_impl(
                 };
                 match request {
                     DryBaselineChildRequest::Baseline(c, b) => {
-                        match dry_baseline_query(slots, child_id, c, b, parent_data_seeds) {
+                        match dry_baseline_query(slots, cx, child_id, c, b, parent_data_seeds) {
                             Ok(v) => DryBaselineChildResponse::Baseline(v),
                             Err(err) => {
                                 child_err.get_or_insert(err);
@@ -514,7 +718,7 @@ fn dry_baseline_query_impl(
                         }
                     }
                     DryBaselineChildRequest::DryLayout(c) => {
-                        match dry_layout_query(slots, child_id, c, parent_data_seeds) {
+                        match dry_layout_query(slots, cx, child_id, c, parent_data_seeds) {
                             Ok(v) => DryBaselineChildResponse::DryLayout(v),
                             Err(err) => {
                                 child_err.get_or_insert(err);
@@ -523,7 +727,7 @@ fn dry_baseline_query_impl(
                         }
                     }
                     DryBaselineChildRequest::Intrinsic(dim, e) => {
-                        match intrinsic_query(slots, child_id, dim, e, parent_data_seeds) {
+                        match intrinsic_query(slots, cx, child_id, dim, e, parent_data_seeds) {
                             Ok(v) => DryBaselineChildResponse::Intrinsic(v),
                             Err(err) => {
                                 child_err.get_or_insert(err);

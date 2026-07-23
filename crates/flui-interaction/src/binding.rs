@@ -829,6 +829,16 @@ impl GestureBinding {
         self.arena.poll_deadlines();
     }
 
+    /// Whether any recognizer in the arena has an armed time-based deadline.
+    ///
+    /// The frame loop reads this right after [`tick_deadlines`](Self::tick_deadlines)
+    /// to decide whether another frame must be requested: the tick only runs on
+    /// frames, so without a frame scheduled at the deadline an idle app would
+    /// never fire a held long-press or an expired double-tap window.
+    pub fn has_pending_deadlines(&self) -> bool {
+        self.arena.has_pending_deadlines()
+    }
+
     // ========================================================================
     // Internal Methods
     // ========================================================================

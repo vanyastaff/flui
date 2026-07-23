@@ -126,6 +126,40 @@ impl LayoutPoison {
         Some(first_report)
     }
 
+    /// Records a whole walk's failure records, deduplicated to **one
+    /// failure count per failed node per walk**: a node that fails both
+    /// `perform_layout` and an intrinsic query in the same pass burns its
+    /// budget once, not twice. On a kind conflict for the same node,
+    /// Structural wins (the more permanent signal). `records` items are
+    /// `(parent, failed, kind)`.
+    ///
+    /// Returns one `(parent, failed, kind, first_report)` per NEWLY
+    /// poisoned node so the caller can apply node state (clear
+    /// `NEEDS_LAYOUT` where appropriate) and log the transition once.
+    pub(super) fn note_failures(
+        &mut self,
+        records: Vec<(RenderId, RenderId, LayoutFailureKind)>,
+    ) -> Vec<(RenderId, RenderId, LayoutFailureKind, bool)> {
+        let mut merged: FxHashMap<RenderId, (RenderId, LayoutFailureKind)> = FxHashMap::default();
+        for (parent, failed, kind) in records {
+            merged
+                .entry(failed)
+                .and_modify(|(_, existing)| {
+                    if kind == LayoutFailureKind::Structural {
+                        *existing = LayoutFailureKind::Structural;
+                    }
+                })
+                .or_insert((parent, kind));
+        }
+        merged
+            .into_iter()
+            .filter_map(|(failed, (parent, kind))| {
+                self.note_failure(failed, kind)
+                    .map(|first_report| (parent, failed, kind, first_report))
+            })
+            .collect()
+    }
+
     /// Records a successful layout for `id`, clearing its failure record.
     /// No-op when the node has no record (the common case).
     #[inline]
@@ -240,5 +274,41 @@ mod tests {
             LayoutFailureKind::of(&retriable),
             LayoutFailureKind::Retriable
         );
+    }
+
+    #[test]
+    fn note_failures_counts_each_node_once_per_walk() {
+        let mut poison = LayoutPoison::default();
+        // The same node fails twice in one walk (e.g. layout + intrinsic):
+        // one budget tick, not two.
+        let transitions = poison.note_failures(vec![
+            (id(1), id(2), LayoutFailureKind::Retriable),
+            (id(1), id(2), LayoutFailureKind::Retriable),
+            (id(1), id(3), LayoutFailureKind::Retriable),
+        ]);
+        assert!(transitions.is_empty(), "nothing poisons below budget");
+        // Second walk: id(2) reaches 2 of 3 — still below budget — proving
+        // the duplicate in walk one counted once (twice would be 3 already).
+        let transitions = poison.note_failures(vec![(id(1), id(2), LayoutFailureKind::Retriable)]);
+        assert!(transitions.is_empty(), "id(2) must be at 2, not 3");
+        // Third walk: id(2) hits the budget of 3, while id(3) is at 2.
+        let transitions = poison.note_failures(vec![(id(1), id(2), LayoutFailureKind::Retriable)]);
+        assert_eq!(transitions.len(), 1);
+        assert_eq!(transitions[0].1, id(2));
+        assert!(poison.is_poisoned(id(2)));
+        assert!(!poison.is_poisoned(id(3)));
+    }
+
+    #[test]
+    fn note_failures_structural_wins_kind_conflicts() {
+        let mut poison = LayoutPoison::default();
+        // Same node, mixed kinds in one walk: the structural record must
+        // dominate, poisoning immediately.
+        let transitions = poison.note_failures(vec![
+            (id(1), id(2), LayoutFailureKind::Retriable),
+            (id(1), id(2), LayoutFailureKind::Structural),
+        ]);
+        assert_eq!(transitions.len(), 1);
+        assert!(poison.is_poisoned(id(2)));
     }
 }

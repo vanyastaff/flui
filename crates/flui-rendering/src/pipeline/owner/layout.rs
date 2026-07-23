@@ -710,19 +710,20 @@ impl PipelineOwner<Layout> {
         drop(arena);
 
         // Poison bookkeeping for the walk's descendant failures/successes.
-        // A success clears the node's failure record; a failure increments
-        // it, and on the 0 → 1 poison transition the failed node AND its
-        // direct layout parent have their NEEDS_LAYOUT flags cleared: the
+        // A success clears the node's failure record; failures are deduped
+        // to one count per node per walk (a node failing both layout and
+        // an intrinsic query in one pass burns its budget once), and on
+        // the 0 → 1 poison transition the failed node AND its direct
+        // layout parent have their NEEDS_LAYOUT flags cleared: the
         // parent's geometry with the poisoned child's stand-in size is the
         // same value any further retry would produce, so keeping the flag
         // would only hide the subtree from paint without changing it.
         for succeeded in layout_successes {
             self.layout_poison.note_success(succeeded);
         }
-        for (parent, failed, kind) in layout_failures {
-            let Some(first_report) = self.layout_poison.note_failure(failed, kind) else {
-                continue;
-            };
+        for (parent, failed, kind, first_report) in
+            self.layout_poison.note_failures(layout_failures)
+        {
             if let Some(node) = self.render_tree.get(failed) {
                 node.clear_needs_layout();
             }

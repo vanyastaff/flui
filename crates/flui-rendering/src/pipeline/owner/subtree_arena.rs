@@ -202,12 +202,13 @@ pub(super) struct SubtreeArena<'tree> {
     /// success sink below so a skip's stand-in `Ok` is never mistaken for
     /// a recovery.
     layout_poison: &'tree LayoutPoison,
-    /// Descendant layout failures swallowed by the layout-child callbacks
-    /// during this walk: `(direct layout parent, failed node, kind)`
-    /// triples.  The callbacks must return a geometry, so the typed error
-    /// cannot propagate through `perform_layout`; this sink carries the
-    /// failure identity to `layout_dirty_root`, which feeds the poison
-    /// counters after the walk.  Same `Mutex` discipline as the other
+    /// Descendant layout AND intrinsic-measurement failures swallowed by
+    /// the layout-child / intrinsic-child callbacks during this walk:
+    /// `(direct layout parent, failed node, kind)` triples.  The callbacks
+    /// must return a geometry / measured value, so the typed error cannot
+    /// propagate through `perform_layout`; this sink carries the failure
+    /// identity to `layout_dirty_root`, which feeds the poison counters
+    /// after the walk.  Same `Mutex` discipline as the other
     /// sinks.  Empty unless a descendant errored this walk.
     layout_failures: Mutex<
         Vec<(
@@ -1085,8 +1086,12 @@ unsafe fn layout_subtree_borrowed_impl(
             // `id`).  No two concurrent reborrows of the same NodePtr.
             match unsafe { box_intrinsic_query_borrowed(arena_for_cb, child_id, dimension, extent) }
             {
-                Ok(value) => value,
+                Ok(value) => {
+                    arena_for_cb.note_layout_success(child_id);
+                    value
+                }
                 Err(err) => {
+                    arena_for_cb.note_layout_failure(id, child_id, &err);
                     descendant_error_for_intrinsics_cb
                         .store(true, std::sync::atomic::Ordering::Relaxed);
                     tracing::error!(
@@ -1095,7 +1100,8 @@ unsafe fn layout_subtree_borrowed_impl(
                         ?err,
                         "layout_dirty_root: box child intrinsic query failed; \
                          returning 0.0 to caller's perform_layout. \
-                         Parent NEEDS_LAYOUT preserved for next-frame retry.",
+                         The failure is recorded against the child's retry \
+                         budget (layout poison).",
                     );
                     0.0
                 }
@@ -1283,6 +1289,31 @@ unsafe fn box_intrinsic_query_borrowed_impl(
         return Err(crate::error::RenderError::NodeNotFound(id));
     };
 
+    // Layout-poison skip: a node that exhausted its retry budget is not
+    // re-measured until freshly invalidated. Its last-good cached value
+    // for exactly this `(dimension, extent)` stands in — the intrinsic
+    // cache is only written on success, so a hit is a real previously
+    // computed answer; a miss falls back to 0.0, the same value the
+    // error-swallow path used before the poison mechanism existed.
+    //
+    // SAFETY: the cycle guard is held, so no `&mut` of this slot is live
+    // on an ancestor frame (re-entry would have been rejected at
+    // `LayoutCycleGuard::enter`).  The shared reborrow is the only live
+    // borrow of the slot.
+    if arena.layout_poison.is_poisoned(id) {
+        let node: &RenderNode = unsafe { &*node_ptr };
+        let value = node
+            .as_box()
+            .and_then(|entry| {
+                entry
+                    .state()
+                    .layout_cache()
+                    .peek_intrinsic(dimension, extent)
+            })
+            .unwrap_or(0.0);
+        return Ok(value);
+    }
+
     // SAFETY: this is the only live reborrow of `id` in this intrinsic
     // query frame.  Recursive callbacks target child slots; cycle guard
     // rejects attempts to revisit an in-flight ancestor.
@@ -1339,18 +1370,24 @@ unsafe fn box_intrinsic_query_borrowed_impl(
         let mut child_query =
             |index: usize, dim: crate::storage::IntrinsicDimension, ext: f32| -> f32 {
                 let Some(&child_id) = child_ids.get(index) else {
-                    child_err.get_or_insert(crate::error::RenderError::contract_violation(
+                    let err = crate::error::RenderError::contract_violation(
                         "sliver box child intrinsic query",
                         "child index out of range for this node's children",
-                    ));
+                    );
+                    arena.note_layout_failure(id, id, &err);
+                    child_err.get_or_insert(err);
                     return 0.0;
                 };
                 // SAFETY: the child query targets a child slot distinct from the
                 // current box node; the pre-acquired subtree arena is still live;
                 // `LayoutCycleGuard` will reject re-entry into any ancestor slot.
                 match unsafe { box_intrinsic_query_borrowed(arena, child_id, dim, ext) } {
-                    Ok(value) => value,
+                    Ok(value) => {
+                        arena.note_layout_success(child_id);
+                        value
+                    }
                     Err(err) => {
+                        arena.note_layout_failure(id, child_id, &err);
                         child_err.get_or_insert(err);
                         0.0
                     }
@@ -1638,8 +1675,12 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
             // layout callback, routed through the Box intrinsic bridge.
             match unsafe { box_intrinsic_query_borrowed(arena_for_cb, child_id, dimension, extent) }
             {
-                Ok(value) => value,
+                Ok(value) => {
+                    arena_for_cb.note_layout_success(child_id);
+                    value
+                }
                 Err(err) => {
+                    arena_for_cb.note_layout_failure(id, child_id, &err);
                     descendant_error_for_intrinsic_cb
                         .store(true, std::sync::atomic::Ordering::Relaxed);
                     tracing::error!(
@@ -1648,7 +1689,8 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
                         ?err,
                         "layout_dirty_root: box intrinsic query failed from sliver parent; \
                          returning 0.0 to caller's perform_layout. \
-                         Parent NEEDS_LAYOUT preserved for next-frame retry.",
+                         The failure is recorded against the child's retry \
+                         budget (layout poison).",
                     );
                     0.0
                 }

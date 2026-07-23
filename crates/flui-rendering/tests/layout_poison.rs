@@ -21,11 +21,16 @@ use std::sync::{
 use flui_foundation::RenderId;
 use flui_objects::RenderPadding;
 use flui_rendering::{
+    constraints::{BoxConstraints, SliverGeometry},
+    context::{BoxLayoutContext, PaintCx, SliverHitTestContext, SliverLayoutContext},
     error::RenderError,
+    parent_data::{BoxParentData, ParentData, SliverParentData},
     protocol::{BoxProtocol, ProtocolGeometry},
-    testing::{FrameRun, Probe, RenderTester, box_node},
-    traits::{HitTestOutcome, RenderObject},
+    storage::IntrinsicDimension,
+    testing::{FrameRun, Probe, RenderTester, box_node, sliver_node},
+    traits::{HitTestOutcome, RenderBox, RenderObject, RenderSliver},
 };
+use flui_tree::{Leaf, Single};
 use flui_types::{Size, geometry::px};
 
 // ============================================================================
@@ -363,4 +368,372 @@ fn structural_failure_at_dirty_root_poisons_and_bounds_retries() {
         !owner.has_dirty_nodes(),
         "no layout/paint work may remain after the storm",
     );
+}
+
+// ============================================================================
+// Intrinsic-measurement poison — fixtures
+// ============================================================================
+
+/// A leaf sliver used to make a Box child's intrinsic query fail with
+/// `ProtocolMismatch` (box intrinsics are undefined on sliver nodes).
+/// Lays out to an empty geometry; never painted (it keeps NEEDS_LAYOUT,
+/// so the paint phase skips it).
+#[derive(Debug, Default)]
+struct StubLeafSliver;
+
+impl flui_foundation::Diagnosticable for StubLeafSliver {}
+
+impl RenderSliver for StubLeafSliver {
+    type Arity = Leaf;
+    type ParentData = SliverParentData;
+
+    fn perform_layout(
+        &mut self,
+        _ctx: &mut SliverLayoutContext<'_, Leaf, SliverParentData>,
+    ) -> SliverGeometry {
+        SliverGeometry::ZERO
+    }
+
+    fn hit_test(&self, _ctx: &mut SliverHitTestContext<'_, Leaf, SliverParentData>) -> bool {
+        false
+    }
+}
+
+/// A box parent that probes its only child's intrinsic width on every
+/// `perform_layout` and sizes itself from the answer (falling back to
+/// the child's laid-out width when the probe yields 0.0).
+#[derive(Debug, Default)]
+struct IntrinsicProbingParent;
+
+impl flui_foundation::Diagnosticable for IntrinsicProbingParent {}
+
+impl RenderBox for IntrinsicProbingParent {
+    type Arity = Single;
+    type ParentData = BoxParentData;
+
+    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) -> Size {
+        let probed = ctx.child_intrinsic(0, IntrinsicDimension::MinWidth, 100.0);
+        let child_size = ctx.layout_child(0, *ctx.constraints());
+        let width = if probed > 0.0 {
+            px(probed)
+        } else {
+            child_size.width
+        };
+        ctx.constraints()
+            .constrain(Size::new(width, child_size.height))
+    }
+
+    fn paint(&self, _ctx: &mut PaintCx<'_, Single>) {}
+}
+
+/// A box node whose intrinsic measurement counts every computation and,
+/// while `fail` is set, routes the measurement through its first child —
+/// a child the test deliberately makes unmeasurable (a sliver, or a
+/// stale link). While not failing it reports a fixed 40px intrinsic.
+#[derive(Debug)]
+struct CountingIntrinsicBox {
+    attempts: Arc<AtomicUsize>,
+    fail: bool,
+}
+
+impl flui_foundation::Diagnosticable for CountingIntrinsicBox {}
+
+impl RenderObject<BoxProtocol> for CountingIntrinsicBox {
+    fn perform_layout_raw(
+        &mut self,
+        _ctx: &mut <BoxProtocol as flui_rendering::protocol::Protocol>::LayoutCtxErased<'_>,
+    ) -> flui_rendering::error::RenderResult<ProtocolGeometry<BoxProtocol>> {
+        Ok(Size::new(px(40.0), px(40.0)))
+    }
+
+    fn intrinsic_raw(
+        &self,
+        dimension: IntrinsicDimension,
+        extent: f32,
+        _child_count: usize,
+        _child_parent_data: &[Option<&dyn ParentData>],
+        child_query: &mut (dyn FnMut(usize, IntrinsicDimension, f32) -> f32 + Send + Sync),
+    ) -> f32 {
+        self.attempts.fetch_add(1, Ordering::Relaxed);
+        if self.fail {
+            child_query(0, dimension, extent)
+        } else {
+            40.0
+        }
+    }
+
+    fn paint_raw(
+        &self,
+        _recorder: &mut flui_rendering::context::FragmentRecorder,
+        _child_count: usize,
+        _size: Size,
+    ) {
+    }
+
+    fn hit_test_raw(
+        &self,
+        _position: flui_rendering::protocol::ProtocolPosition<BoxProtocol>,
+        _child_count: usize,
+        _size: Size,
+        _hit_child: &mut (
+                 dyn FnMut(
+            usize,
+            Option<flui_rendering::protocol::ProtocolPosition<BoxProtocol>>,
+        ) -> bool
+                     + Send
+                     + Sync
+             ),
+    ) -> HitTestOutcome {
+        HitTestOutcome::miss()
+    }
+}
+
+/// Mounts `IntrinsicProbingParent → CountingIntrinsicBox(fail) →
+/// StubLeafSliver` and runs the first frame, which probes (and fails)
+/// the child's intrinsic once with a structural `ProtocolMismatch`.
+fn mount_failing_intrinsic() -> (FrameRun, RenderId, RenderId, Arc<AtomicUsize>) {
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let run = RenderTester::mount(
+        box_node(IntrinsicProbingParent).child(
+            box_node(CountingIntrinsicBox {
+                attempts: Arc::clone(&attempts),
+                fail: true,
+            })
+            .label("measured")
+            .child(sliver_node(StubLeafSliver)),
+        ),
+    )
+    .with_constraints(BoxConstraints::new(px(0.0), px(200.0), px(0.0), px(200.0)))
+    .run_frame();
+    let measured = run.id("measured");
+    let root = run.root();
+    (run, root, measured, attempts)
+}
+
+// ============================================================================
+// (a) Permanently-failing intrinsic probe poisons after the bound
+// ============================================================================
+
+/// A permanently-failing intrinsic query must be bounded exactly like a
+/// failing `perform_layout`: after the first structural failure the
+/// measured child is poisoned and the probe is skipped inside every
+/// later layout pass, even when a per-frame invalidation source keeps
+/// re-dirtying the probing parent. Without the fix the child's intrinsic
+/// recomputation runs on every re-marked frame — this assertion fails
+/// without it.
+#[test]
+fn permanent_intrinsic_failure_is_poisoned_after_bounded_retries() {
+    let (mut run, root, _measured, attempts) = mount_failing_intrinsic();
+    assert_eq!(
+        attempts.load(Ordering::Relaxed),
+        1,
+        "frame 1 measures the failing child exactly once",
+    );
+
+    // Simulate a per-frame invalidation source: re-dirty the probing
+    // parent every frame and pump. The failing child's intrinsic must
+    // NOT be recomputed — it is poisoned and the query is skipped.
+    for _ in 0..5 {
+        run.owner_mut().mark_needs_layout(root);
+        run.pump();
+    }
+    assert_eq!(
+        attempts.load(Ordering::Relaxed),
+        1,
+        "a poisoned node's intrinsic must not be recomputed inside later \
+         layout passes; without a retry bound this count grows by one per frame",
+    );
+
+    run.pump_idle_frames(2);
+}
+
+// ============================================================================
+// (b) Un-poison: fix the object + re-invalidate → intrinsic succeeds again
+// ============================================================================
+
+/// The poison must not make a legitimately-fixed node stuck: fixing the
+/// measurement condition AND re-invalidating the node lifts the poison,
+/// the next probe recomputes (and re-caches) successfully, and the
+/// parent sizes itself from the recovered intrinsic.
+#[test]
+fn fresh_invalidation_lifts_intrinsic_poison_and_recovers() {
+    let (mut run, root, measured, attempts) = mount_failing_intrinsic();
+    assert_eq!(attempts.load(Ordering::Relaxed), 1);
+
+    // Prove the probe is skipped while the node's inputs are unchanged.
+    run.owner_mut().mark_needs_layout(root);
+    run.pump();
+    assert_eq!(
+        attempts.load(Ordering::Relaxed),
+        1,
+        "poisoned node must not be re-measured while unchanged",
+    );
+
+    // Fix the error condition AND re-invalidate the node itself.
+    run.update::<CountingIntrinsicBox>(measured, |b| b.fail = false);
+    run.pump();
+    assert_eq!(
+        attempts.load(Ordering::Relaxed),
+        2,
+        "a fresh invalidation lifts the poison and re-measures",
+    );
+    assert_eq!(
+        run.box_geometry(root),
+        Size::new(px(40.0), px(40.0)),
+        "the parent sizes itself from the recovered 40px intrinsic",
+    );
+
+    // The success cleared the failure record: the next probe hits the
+    // re-cached value without recomputing.
+    run.owner_mut().mark_needs_layout(root);
+    run.pump();
+    assert_eq!(
+        attempts.load(Ordering::Relaxed),
+        2,
+        "a recovered measurement is re-cached, not recomputed every pass",
+    );
+    run.pump_idle_frames(2);
+}
+
+// ============================================================================
+// (c) Transient intrinsic failure does not poison
+// ============================================================================
+
+/// A retriable-class intrinsic failure (here `NodeNotFound` from a
+/// deliberately stale child link) that fails below the retry budget and
+/// then succeeds must never engage the poison: the node keeps being
+/// measured and recovers.
+#[test]
+fn transient_intrinsic_failure_does_not_poison() {
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let mut owner = flui_rendering::pipeline::PipelineOwner::new();
+    let parent = owner.insert(Box::new(IntrinsicProbingParent));
+    let measured = owner
+        .insert_child_render_object(
+            parent,
+            Box::new(CountingIntrinsicBox {
+                attempts: Arc::clone(&attempts),
+                fail: true,
+            }),
+        )
+        .expect("measured child insert");
+    // A child link whose id is not in the tree: the intrinsic sub-query
+    // fails with NodeNotFound — the retriable error class.
+    owner
+        .render_tree_mut()
+        .get_mut(measured)
+        .expect("measured in tree")
+        .add_child(RenderId::new(999));
+    owner.set_root_id(Some(parent));
+    owner.set_root_constraints(Some(BoxConstraints::new(
+        px(0.0),
+        px(200.0),
+        px(0.0),
+        px(200.0),
+    )));
+
+    // Frame 1: the probe fails once (retriable) — no poison.
+    let (o, result) = owner.run_frame();
+    owner = o;
+    assert!(result.is_ok(), "descendant failure is isolated: {result:?}");
+    assert_eq!(attempts.load(Ordering::Relaxed), 1);
+
+    // Frame 2: still below the budget, so the probe still RUNS — a
+    // single transient failure must not poison the node.
+    owner.mark_needs_layout(parent);
+    let (o, result) = owner.run_frame();
+    owner = o;
+    assert!(result.is_ok());
+    assert_eq!(
+        attempts.load(Ordering::Relaxed),
+        2,
+        "a retriable intrinsic failure below the budget must not poison",
+    );
+
+    // Fix the condition and re-invalidate: the probe succeeds.
+    owner
+        .render_tree_mut()
+        .get_mut(measured)
+        .expect("measured in tree")
+        .downcast_render_object_mut::<CountingIntrinsicBox>()
+        .expect("measured is a CountingIntrinsicBox")
+        .fail = false;
+    owner.mark_needs_layout(measured);
+    let (o, result) = owner.run_frame();
+    owner = o;
+    assert!(result.is_ok());
+    assert_eq!(
+        attempts.load(Ordering::Relaxed),
+        3,
+        "the recovered node is measured again",
+    );
+    assert!(
+        !owner.has_dirty_nodes(),
+        "pipeline must settle after recovery",
+    );
+}
+
+// ============================================================================
+// Public probe path (PipelineOwner::box_intrinsic_dimension)
+// ============================================================================
+
+/// The frame-independent probe API feeds the same budget: a permanently
+/// failing intrinsic query through `box_intrinsic_dimension` poisons the
+/// node (the error surfaces once), later probes return the stand-in
+/// value without recomputing, and a fresh invalidation after a fix
+/// recomputes and re-caches.
+#[test]
+fn public_probe_intrinsic_failure_poisons_and_recovers() {
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let mut owner = flui_rendering::pipeline::PipelineOwner::new();
+    let measured = owner.insert(Box::new(CountingIntrinsicBox {
+        attempts: Arc::clone(&attempts),
+        fail: true,
+    }));
+    owner
+        .insert_sliver_child_render_object(measured, Box::new(StubLeafSliver))
+        .expect("sliver child insert");
+
+    // First probe: the structural failure surfaces AND poisons the node.
+    let err = owner
+        .box_intrinsic_dimension(measured, IntrinsicDimension::MinWidth, 100.0)
+        .expect_err("the structural intrinsic failure must surface as Err");
+    assert!(
+        matches!(err, RenderError::ProtocolMismatch { .. }),
+        "expected ProtocolMismatch, got {err:?}",
+    );
+    assert_eq!(attempts.load(Ordering::Relaxed), 1);
+
+    // Second probe: skipped — the stand-in value without recomputing.
+    let value = owner
+        .box_intrinsic_dimension(measured, IntrinsicDimension::MinWidth, 100.0)
+        .expect("a poisoned probe returns the stand-in value");
+    assert_eq!(value, 0.0, "never-succeeded node falls back to 0.0");
+    assert_eq!(
+        attempts.load(Ordering::Relaxed),
+        1,
+        "a poisoned node is not re-measured by the public probe",
+    );
+
+    // Fix + fresh invalidation: recompute and re-cache.
+    owner
+        .render_tree_mut()
+        .get_mut(measured)
+        .expect("measured in tree")
+        .downcast_render_object_mut::<CountingIntrinsicBox>()
+        .expect("measured is a CountingIntrinsicBox")
+        .fail = false;
+    owner.mark_needs_layout(measured);
+    let value = owner
+        .box_intrinsic_dimension(measured, IntrinsicDimension::MinWidth, 100.0)
+        .expect("recovered probe succeeds");
+    assert_eq!(value, 40.0);
+    assert_eq!(attempts.load(Ordering::Relaxed), 2);
+
+    // The recovered value is re-cached: no third computation.
+    let value = owner
+        .box_intrinsic_dimension(measured, IntrinsicDimension::MinWidth, 100.0)
+        .expect("cached probe succeeds");
+    assert_eq!(value, 40.0);
+    assert_eq!(attempts.load(Ordering::Relaxed), 2);
 }
