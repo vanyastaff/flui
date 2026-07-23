@@ -86,6 +86,11 @@ test *args:
     cargo test --workspace {{args}}
 
 [group("test")]
+[doc("Run the workspace test scope used by CI")]
+test-ci:
+    cargo test --workspace --exclude flui-platform
+
+[group("test")]
 [doc("Test a single crate (e.g. just test-crate flui-tree)")]
 test-crate crate *args:
     cargo test -p {{crate}} {{args}}
@@ -333,7 +338,7 @@ watch-test crate="":
 
 [group("ci")]
 [doc("Run local CI gates (fmt-check + inventory + port-check + clippy + test + doctests)")]
-ci: fmt-check inventory-check port-check clippy test test-doc
+ci: fmt-check inventory-check port-check clippy test-ci test-doc
 
 # =============================================================================
 # Maintenance
