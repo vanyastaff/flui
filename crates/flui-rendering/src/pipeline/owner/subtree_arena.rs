@@ -1869,10 +1869,9 @@ mod tests {
     /// This is gate (c) from the adversarial test spec in the plan.
     #[test]
     fn check_thread_panics_on_wrong_thread() {
-        // Leaked so the arena may be moved into the spawned thread: the
-        // thread-handle closure requires `'static`, and a test-scope leak
-        // of an empty table is the simplest way to satisfy it.
-        let poison: &'static LayoutPoison = Box::leak(Box::new(LayoutPoison::default()));
+        // Scoped thread borrows the stack-allocated poison table: the
+        // scope guarantees the join before `poison` goes out of scope.
+        let poison = LayoutPoison::default();
         let arena: SubtreeArena<'_> = SubtreeArena {
             by_id: HashMap::new(),
             #[cfg(any(test, feature = "testing"))]
@@ -1881,7 +1880,7 @@ mod tests {
             pending_removes: Mutex::new(Vec::new()),
             pending_child_requests: Mutex::new(Vec::new()),
             pending_retain_bands: Mutex::new(Vec::new()),
-            layout_poison: poison,
+            layout_poison: &poison,
             layout_failures: Mutex::new(Vec::new()),
             layout_successes: Mutex::new(Vec::new()),
             owner_thread: std::thread::current().id(),
@@ -1892,19 +1891,19 @@ mod tests {
         // We use catch_unwind inside the thread to capture the panic and
         // relay it to the test thread via a channel.
         let (sender, receiver) = std::sync::mpsc::channel::<bool>();
-        std::thread::spawn(move || {
-            // arena.check_thread() is private — trigger it via arena.get(),
-            // which calls check_thread() before any HashMap lookup.
-            let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                // RenderId::new(1) produces a valid id that won't be in the
-                // empty map, but check_thread fires before the HashMap lookup.
-                arena.get(RenderId::new(1));
-            }))
-            .is_err();
-            sender.send(panicked).ok();
-        })
-        .join()
-        .ok();
+        std::thread::scope(|s| {
+            s.spawn(|| {
+                // arena.check_thread() is private — trigger it via arena.get(),
+                // which calls check_thread() before any HashMap lookup.
+                let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    // RenderId::new(1) produces a valid id that won't be in the
+                    // empty map, but check_thread fires before the HashMap lookup.
+                    arena.get(RenderId::new(1));
+                }))
+                .is_err();
+                sender.send(panicked).ok();
+            });
+        });
 
         let panicked = receiver.recv().expect("thread must send result");
         assert!(panicked, "check_thread must panic on wrong-thread access");
