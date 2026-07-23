@@ -9,9 +9,7 @@
 //! Without the fix the directly-rendered `SizedBox` (slot 1) would attach first
 //! and land at render-index 0, inverting the layout.
 
-mod common;
-
-use common::{lay_out, offset, size, tight};
+use crate::common::{lay_out, offset, size, tight};
 use flui_widgets::prelude::{BuildContext, IntoView, StatelessView};
 use flui_widgets::row;
 use flui_widgets::{Row, SizedBox};

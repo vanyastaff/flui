@@ -3,14 +3,12 @@
 //! `crates/flui-widgets/src/interaction/visibility.rs` (Flutter oracle:
 //! `widgets/indexed_stack.dart`).
 
-mod common;
-
+use crate::common::{lay_out, lay_out_animated, loose, size};
 use std::any::TypeId;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
-use common::{lay_out, lay_out_animated, loose, size};
 use flui_animation::{Animation, AnimationController, Vsync, VsyncRegistration};
 use flui_interaction::{FocusManager, FocusNode};
 use flui_scheduler::Scheduler;

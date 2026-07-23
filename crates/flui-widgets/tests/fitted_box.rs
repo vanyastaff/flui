@@ -11,9 +11,7 @@
 //! alignment math itself is already covered by `RenderFittedBox`'s own
 //! harness tests in `flui-objects`.
 
-mod common;
-
-use common::{lay_out, loose, size, tight};
+use crate::common::{lay_out, loose, size, tight};
 use flui_types::layout::BoxFit;
 use flui_widgets::{FittedBox, SizedBox};
 

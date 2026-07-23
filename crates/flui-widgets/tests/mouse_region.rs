@@ -1,13 +1,11 @@
 //! `MouseRegion` widget coverage over `RenderMouseRegion`.
 
-mod common;
-
 use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},
 };
 
-use common::{lay_out, loose, size, tight};
+use crate::common::{lay_out, loose, size, tight};
 use flui_widgets::{MouseRegion, SizedBox};
 
 #[test]

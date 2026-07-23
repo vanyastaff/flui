@@ -2,13 +2,11 @@
 //! `AnimationController` — the third transition over the shared spine, proving
 //! the value reaches a `Transform` rotation matrix each tick.
 
-mod common;
-
 use std::f32::consts::FRAC_PI_2;
 use std::sync::Arc;
 use std::time::Duration;
 
-use common::{lay_out, size, tight};
+use crate::common::{lay_out, size, tight};
 use flui_animation::{Animation, AnimationController};
 use flui_scheduler::Scheduler;
 use flui_widgets::{RotationTransition, SizedBox};

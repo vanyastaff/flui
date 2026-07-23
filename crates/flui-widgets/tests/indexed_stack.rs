@@ -1,8 +1,6 @@
 //! `IndexedStack` widget parity — widget surface over `RenderIndexedStack`.
 
-mod common;
-
-use common::{lay_out, loose, offset, size};
+use crate::common::{lay_out, loose, offset, size};
 use flui_widgets::row;
 use flui_widgets::{IndexedStack, Positioned, SizedBox, StackFit};
 
@@ -48,7 +46,7 @@ fn indexed_stack_positioned_child_keeps_stack_parent_data() {
                 .top(8.0),
         ])
         .fit(StackFit::Expand),
-        common::tight(100.0, 80.0),
+        crate::common::tight(100.0, 80.0),
     );
 
     let child = laid.only_child(laid.root());

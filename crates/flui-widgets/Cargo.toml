@@ -10,6 +10,9 @@ repository.workspace = true
 readme = "README.md"
 keywords = ["ui", "widget", "flutter", "flui", "gui"]
 categories = ["gui"]
+# Root tests/*.rs are consolidated into the single `widgets_it` binary below
+# (one link of the wgpu stack instead of 49) — disable per-file auto-discovery.
+autotests = false
 
 [dependencies]
 # Authoring spine: View/Element traits, BuildContext, ViewSeq, keys, derives
@@ -94,6 +97,30 @@ static_assertions = { workspace = true }
 # `#[tokio::test]` for the `image::decode_cache` coalescing unit tests
 # (`asset-images` feature) and the async `Image` widget integration tests.
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+# All root tests/*.rs files, consolidated into one binary via `#[path]` module
+# declarations in tests/main.rs (autotests = false above disables the per-file
+# auto-discovered binaries that each linked the whole wgpu stack).
+[[test]]
+name = "widgets_it"
+path = "tests/main.rs"
+harness = true
+
+# Keep the historical image test target names alive for CI feature-gated runs.
+[[test]]
+name = "image"
+path = "tests/image_target.rs"
+harness = true
+
+[[test]]
+name = "image_async"
+path = "tests/image_async.rs"
+harness = true
+
+[[test]]
+name = "image_network"
+path = "tests/image_network.rs"
+harness = true
 
 # The parity test suite lives in a subdirectory so `mod harness; mod *_test;`
 # work via Cargo's single-binary test model. Auto-discovery misses subdirectory

@@ -8,12 +8,10 @@
 //! 5. `ScrollController::animate_to` (ADR-0037) — curve-driven animation,
 //!    grab-to-cancel, and jump_to-cancels-in-flight.
 
-mod common;
-
 use std::sync::Arc;
 use std::time::Duration;
 
-use common::{LaidOutScoped, lay_out, lay_out_with_arena, size, tight};
+use crate::common::{LaidOutScoped, lay_out, lay_out_with_arena, size, tight};
 use flui_animation::{Curves, Vsync};
 use flui_rendering::constraints::BoxConstraints;
 use flui_types::Color;

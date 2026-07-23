@@ -3,12 +3,10 @@
 //! per-detector arena through the hit-test + dispatch path (the detector closes
 //! the arena itself, so no global GestureBinding is needed).
 
-mod common;
-
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use common::{lay_out, tight};
+use crate::common::{lay_out, tight};
 use flui_types::Color;
 use flui_widgets::{ColoredBox, GestureDetector, SizedBox};
 

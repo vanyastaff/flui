@@ -8,6 +8,10 @@ authors.workspace = true
 repository.workspace = true
 readme = "README.md"
 description = "Platform abstraction layer for FLUI - cross-platform window and input handling"
+# Single-binary integration-test consolidation: every root test file is a
+# module of `tests/main.rs` (one link of the full dep stack instead of 11
+# separate binaries). See the `[[test]] name = "platform_it"` target below.
+autotests = false
 
 [dependencies]
 flui-types = { path = "../flui-types", version = "0.2.0" }
@@ -143,6 +147,19 @@ workspace = true
 
 [dev-dependencies]
 tracing-subscriber = { workspace = true }
+
+[[test]]
+name = "platform_it"
+path = "tests/main.rs"
+
+# Deliberately its own process: these tests WRITE the process-wide
+# `FLUI_HEADLESS` env var (`unsafe env::set_var`/`remove_var`) to exercise
+# headless-backend selection; env vars are process-global, so isolation —
+# not opt-in locking — keeps the rest of the suite (which READS
+# `FLUI_HEADLESS`) from racing the mutation.
+[[test]]
+name = "headless"
+path = "tests/headless.rs"
 
 # Re-export dependencies that might be needed by consumers
 [package.metadata.docs.rs]

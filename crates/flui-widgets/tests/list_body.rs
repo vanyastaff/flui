@@ -1,8 +1,6 @@
 //! `ListBody` widget parity over `RenderListBody`.
 
-mod common;
-
-use common::{lay_out, offset, size};
+use crate::common::{lay_out, offset, size};
 use flui_rendering::constraints::BoxConstraints;
 use flui_types::{geometry::px, layout::Axis};
 use flui_widgets::row;

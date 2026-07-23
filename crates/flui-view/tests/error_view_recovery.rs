@@ -39,16 +39,11 @@ use flui_view::{
 /// Serializes the tests in this file.
 ///
 /// `set_error_view_builder` / `clear_error_view_builder` mutate a
-/// process-global `RwLock<Option<ErrorViewBuilder>>` in `flui-view`.
-/// `cargo test` runs integration tests in parallel by default, so two
-/// tests racing on the global builder produce cross-talk — a test that
-/// expects the default-fallback path can see a builder set by a
-/// neighbouring test. Holding this mutex across each test gives the
-/// global builder cell a single writer at a time.
-///
-/// Poison-tolerant: if one test fails its assertions and panics, the
-/// remaining tests still run a useful body — we extract the inner
-/// guard via `into_inner` either way.
+/// process-global `RwLock<Option<ErrorViewBuilder>>` in `flui-view`, so this
+/// file's tests serialize among themselves behind one mutex — and the whole
+/// file deliberately stays its OWN [[test]] binary (excluded from view_it):
+/// process isolation is what keeps other tests' induced panics from ever
+/// seeing an installed counting builder. Poison-tolerant via into_inner.
 static GLOBAL_BUILDER_GUARD: Mutex<()> = Mutex::new(());
 
 fn acquire_builder_guard() -> std::sync::MutexGuard<'static, ()> {

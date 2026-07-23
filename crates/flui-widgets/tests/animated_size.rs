@@ -11,14 +11,12 @@
 //! the latter would silently reset the in-flight retarget state on every
 //! unrelated rebuild.
 
-mod common;
-
 use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
-use common::{lay_out_animated, loose};
+use crate::common::{lay_out_animated, loose};
 use flui_animation::Vsync;
 use flui_types::Alignment;
 use flui_view::prelude::{BuildContext, StatefulView};
@@ -72,7 +70,7 @@ impl ViewState<SizeProbe> for SizeProbeState {
     }
 }
 
-fn width(laid: &common::LaidOut) -> f32 {
+fn width(laid: &crate::common::LaidOut) -> f32 {
     laid.size(laid.current_root()).width.get()
 }
 

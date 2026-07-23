@@ -1,10 +1,8 @@
 //! `Table` widget smoke coverage over `RenderTable`.
 
-mod common;
-
 use std::collections::HashMap;
 
-use common::{lay_out, offset, size, tight};
+use crate::common::{lay_out, offset, size, tight};
 use flui_types::geometry::px;
 use flui_types::layout::{TableCellVerticalAlignment, TableColumnWidth};
 use flui_view::ViewExt;

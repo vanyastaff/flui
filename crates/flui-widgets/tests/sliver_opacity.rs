@@ -3,9 +3,7 @@
 //! child's geometry unchanged), mirroring `tests/sliver_padding`-style tests
 //! in `tests/scroll.rs` for the `Viewport`-mounting convention slivers need.
 
-mod common;
-
-use common::{lay_out, tight};
+use crate::common::{lay_out, tight};
 use flui_widgets::{SizedBox, SliverOpacity, SliverToBoxAdapter, Viewport};
 
 #[test]

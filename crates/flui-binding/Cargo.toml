@@ -10,6 +10,12 @@ readme = "README.md"
 description = "Deterministic headless frame driver (pump_frame) over the gesture arena + virtual clock for FLUI"
 keywords = ["ui", "gesture", "headless", "testing"]
 categories = ["gui"]
+# Single-binary integration-test consolidation: every root test file is a
+# module of `tests/main.rs` (one link of the full dep stack instead of 2
+# separate binaries). See the `[[test]] name = "binding_it"` target below.
+# Ambient-state note: no root test writes process-global state (each test
+# drives its own `HeadlessBinding` instance), so no isolated targets.
+autotests = false
 
 [lints]
 workspace = true
@@ -48,3 +54,7 @@ flui-foundation = { path = "../flui-foundation", version = "0.2.0" }
 # feature is NOT required: `add_pointer`/`poll_deadlines` are part of the release
 # API, so the deterministic deadline test runs against the public surface.
 flui-types = { path = "../flui-types", version = "0.2.0" }
+
+[[test]]
+name = "binding_it"
+path = "tests/main.rs"

@@ -8,13 +8,11 @@
 //! arena (so a held press rejects the tap), and per-recognizer participation
 //! gating (so an unconfigured recognizer never steals a contact).
 
-mod common;
-
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use common::{lay_out, lay_out_with_arena, tight};
+use crate::common::{lay_out, lay_out_with_arena, tight};
 use flui_types::Color;
 use flui_widgets::{ColoredBox, GestureDetector};
 

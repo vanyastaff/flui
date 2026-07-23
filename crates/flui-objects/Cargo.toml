@@ -8,6 +8,13 @@ license.workspace = true
 description = "Concrete RenderBox/RenderSliver catalog for Flui (the object catalog atop flui-rendering's engine)"
 repository.workspace = true
 readme = "README.md"
+# Single-binary integration-test consolidation. The binary keeps the name
+# `render_object_harness` — docs and muscle memory reference
+# `cargo test -p flui-objects --test render_object_harness` — and
+# `harness_snapshot.rs` is mounted into it via `#[path] mod` (its insta
+# snapshots were renamed for the new module path). Ambient-state note: no
+# root test writes process-global state, so no isolated targets.
+autotests = false
 
 [dependencies]
 flui-rendering = { path = "../flui-rendering", version = "0.2.0" }
@@ -33,6 +40,10 @@ flui-types = { path = "../flui-types", version = "0.2.0" }
 insta = { workspace = true }
 flui-scheduler = { path = "../flui-scheduler", version = "0.2.0" }
 flui-interaction = { path = "../flui-interaction", version = "0.2.0", features = ["testing"] }
+
+[[test]]
+name = "render_object_harness"
+path = "tests/render_object_harness.rs"
 
 [lints]
 workspace = true

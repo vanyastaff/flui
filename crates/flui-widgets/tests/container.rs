@@ -2,9 +2,7 @@
 //! `StatelessView::build` composes the right widget stack so padding,
 //! sizing, and alignment combine exactly as Flutter's `Container` does.
 
-mod common;
-
-use common::{lay_out, loose, offset, size};
+use crate::common::{lay_out, loose, offset, size};
 use flui_geometry::EdgeInsets;
 use flui_types::Alignment;
 use flui_widgets::{Container, SizedBox};

@@ -1,12 +1,10 @@
 //! `CustomMultiChildLayout` widget smoke coverage over
 //! `RenderCustomMultiChildLayoutBox` plus `LayoutId` parent-data delivery.
 
-mod common;
-
 use std::any::Any;
 use std::sync::Arc;
 
-use common::{lay_out, loose, offset, size};
+use crate::common::{lay_out, loose, offset, size};
 use flui_rendering::constraints::BoxConstraints;
 use flui_types::{Offset, Size};
 use flui_widgets::{

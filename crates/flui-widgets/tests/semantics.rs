@@ -1,8 +1,6 @@
 //! Widget-level coverage for the accessibility semantics wrappers.
 
-mod common;
-
-use common::{lay_out, loose, size};
+use crate::common::{lay_out, loose, size};
 use flui_widgets::{ExcludeSemantics, MergeSemantics, Semantics, SizedBox};
 
 #[test]

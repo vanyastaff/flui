@@ -9,6 +9,10 @@ description = "View traits and abstractions for FLUI framework"
 repository.workspace = true
 keywords = ["ui", "view", "widget", "flui", "framework"]
 categories = ["gui"]
+# Single-binary integration-test consolidation: every root test file is a
+# module of `tests/main.rs` (one link of the full dep stack instead of 24
+# separate binaries). See the `[[test]] name = "view_it"` target below.
+autotests = false
 
 [dependencies]
 flui-foundation = { path = "../flui-foundation", version = "0.2.0" }
@@ -72,6 +76,17 @@ bon = { workspace = true }
 # does not pin trybuild yet, and this is currently the only
 # consumer. Pattern mirrors `crates/flui-types/Cargo.toml:35`.
 trybuild = "1.0"
+
+[[test]]
+name = "view_it"
+path = "tests/main.rs"
+
+# Deliberately its own process: these tests install a counting error-view
+# builder into flui-view's process-global cell; isolation (not opt-in locks)
+# is what keeps the rest of the suite's induced panics from polluting it.
+[[test]]
+name = "error_view_recovery"
+path = "tests/error_view_recovery.rs"
 
 [features]
 default = []

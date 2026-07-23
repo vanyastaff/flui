@@ -19,9 +19,9 @@
 // (docs/PANIC-POLICY.md); style items here are ship-wave debt.
 #![allow(clippy::unwrap_used)]
 
-mod common;
-
 use std::sync::{Arc, Mutex};
+
+mod common;
 
 use common::{lay_out, loose};
 use flui_material::{ColorSchemeOverrides, Theme, ThemeData, ThemeDataOverrides};
