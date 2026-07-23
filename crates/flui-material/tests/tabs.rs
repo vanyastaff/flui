@@ -19,6 +19,7 @@ use flui_material::{
 use flui_rendering::constraints::BoxConstraints;
 use flui_types::Color;
 use flui_types::geometry::px;
+use flui_view::ErrorView;
 
 fn two_tabs() -> Vec<Tab> {
     vec![Tab::new().text("One"), Tab::new().text("Two")]
@@ -383,19 +384,21 @@ fn zero_tab_bar_mounts_a_48px_box() {
 ///
 /// The panic itself happens inside `build()`, which this crate's build-error
 /// boundary (`flui_view::element::behavior_commons::build_or_recover`)
-/// catches and substitutes a render-less `ErrorView` for — so `#[should_panic]`
-/// around the mount call would not observe THAT panic message directly. With
-/// `TabBar` mounted as the sole root here, the substitution leaves nothing
-/// to render, so `lay_out` itself panics next ("render root") — the same
-/// documented mechanism `flui-cupertino/tests/tab_scaffold.rs`'s
-/// `out_of_range_controller_index_panics_instead_of_silently_hiding_every_tab`
-/// exercises for an identical reason.
+/// catches and substitutes with `ErrorView`; `#[should_panic]` around the
+/// mount call therefore would not observe the original panic. The shared
+/// harness's production focus anchor can retain a render root after that
+/// recovery, so the test asserts the element-level `ErrorView` directly.
 #[test]
-#[should_panic(expected = "render root")]
-fn a_tab_bar_with_no_controller_and_no_default_tab_controller_ancestor_panics() {
-    let _ = lay_out(
+fn a_tab_bar_with_no_controller_and_no_default_tab_controller_ancestor_builds_an_error() {
+    let mut laid = lay_out(
         themed(ThemeData::light(), TabBar::secondary(two_tabs())),
         tight(200.0, 48.0),
+    );
+
+    assert_eq!(
+        laid.count_elements_by_view_type::<ErrorView>(),
+        1,
+        "a TabBar with no controller source must recover as exactly one ErrorView"
     );
 }
 

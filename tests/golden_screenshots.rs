@@ -43,7 +43,7 @@ use flui_rendering::pipeline::PipelineOwner;
 use flui_types::Size;
 use flui_types::geometry::px;
 use flui_view::{BuildOwner, ElementTree, IntoView};
-use flui_widgets::VsyncScope;
+use flui_widgets::{FocusRoot, GestureArenaScope, VsyncScope};
 use parking_lot::RwLock;
 
 /// A single channel may differ by up to this much (0–255) before a pixel counts
@@ -82,7 +82,9 @@ fn render_demo<V: IntoView + 'static>(root_view: V) -> Option<Vec<u8>> {
     let pipeline_owner = Arc::new(RwLock::new(PipelineOwner::new()));
     binding.install_build_capabilities(&mut build_owner);
 
-    let scoped_root = VsyncScope::new(binding.vsync().clone(), root_view);
+    let focused_root = FocusRoot::new(root_view);
+    let animated_root = VsyncScope::new(binding.vsync().clone(), focused_root);
+    let scoped_root = GestureArenaScope::new(binding.arena().clone(), animated_root);
     binding.enter_owner_scope(|| {
         let root_element = element_tree.mount_root_with_pipeline_owner(
             &scoped_root,

@@ -7,6 +7,7 @@
 
 #![allow(dead_code)] // each test binary uses a different subset of the harness
 
+use std::any::TypeId;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
@@ -72,7 +73,12 @@ pub fn lay_out(root: impl View, constraints: BoxConstraints) -> LaidOut {
         root_id
     });
 
-    let root_render_id = {
+    // `FocusRoot` installs one transparent traversal anchor as the
+    // presentation render root. Keep that parentless node as the pipeline
+    // root while exposing the caller's logical render root to geometry tests.
+    // A recovered `ErrorView` is render-less, so its anchor legitimately has
+    // no child; element-level error tests do not ask for root geometry.
+    let (presentation_render_root_id, root_render_id) = {
         let owner = pipeline_owner.read();
         let render_tree = owner.render_tree();
         let mut roots = render_tree
@@ -86,12 +92,17 @@ pub fn lay_out(root: impl View, constraints: BoxConstraints) -> LaidOut {
             roots.next().is_none(),
             "expected exactly one render-tree root after mount",
         );
-        root
+        let children = render_tree.children(root);
+        assert!(
+            children.len() <= 1,
+            "the presentation traversal anchor must wrap at most one logical render root",
+        );
+        (root, children.first().copied().unwrap_or(root))
     };
 
     {
         let mut guard = pipeline_owner.write();
-        guard.set_root_id(Some(root_render_id));
+        guard.set_root_id(Some(presentation_render_root_id));
         guard.set_root_constraints(Some(constraints));
     }
 
@@ -172,6 +183,20 @@ impl LaidOut {
     /// [`lay_out_animated`]), then rebuilds whatever that scheduled.
     pub fn pump_for(&mut self, dt: Duration) {
         self.binding.pump_frame(dt);
+    }
+
+    /// Count live elements whose concrete view type is `V`.
+    ///
+    /// The presentation's focus anchor can retain a render root after a
+    /// descendant build recovers as `ErrorView`, so build-error assertions
+    /// inspect the element tree directly.
+    pub fn count_elements_by_view_type<V: View>(&mut self) -> usize {
+        let expected = TypeId::of::<V>();
+        self.binding
+            .tree_mut()
+            .iter_nodes()
+            .filter(|(_id, node)| node.element().view_type_id() == expected)
+            .count()
     }
 
     /// Register `controller` with the binding so [`pump`](Self::pump) /

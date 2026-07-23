@@ -47,7 +47,7 @@ use flui_rendering::testing::inspect;
 use flui_types::geometry::px;
 use flui_types::{Offset, Size};
 use flui_view::{BuildOwner, ElementTree};
-use flui_widgets::VsyncScope;
+use flui_widgets::{FocusRoot, GestureArenaScope, VsyncScope};
 use parking_lot::RwLock;
 
 /// Root constraints the demo is mounted under: wide/tall enough that the
@@ -94,7 +94,9 @@ impl MountedDemo {
         // needs the owner already wired to `binding`'s scheduler.
         binding.install_build_capabilities(&mut build_owner);
 
-        let scoped_root = VsyncScope::new(binding.vsync().clone(), root_view);
+        let focused_root = FocusRoot::new(root_view);
+        let animated_root = VsyncScope::new(binding.vsync().clone(), focused_root);
+        let scoped_root = GestureArenaScope::new(binding.arena().clone(), animated_root);
 
         binding.enter_owner_scope(|| {
             let root_element = tree.mount_root_with_pipeline_owner(
@@ -156,22 +158,26 @@ impl MountedDemo {
 
     /// Hit-test at root-local `(x, y)` and dispatch a synthetic pointer-down.
     fn tap_down(&self, x: f32, y: f32) {
-        self.dispatch_at(make_down_event(offset(x, y), PointerType::Mouse), x, y);
+        self.dispatch_pointer(make_down_event(offset(x, y), PointerType::Mouse));
     }
 
     /// Hit-test at root-local `(x, y)` and dispatch a synthetic pointer-up —
     /// paired with [`tap_down`](Self::tap_down) at the same position, this
     /// completes a tap (`TapGestureRecognizer` fires `on_tap`).
     fn tap_up(&self, x: f32, y: f32) {
-        self.dispatch_at(make_up_event(offset(x, y), PointerType::Mouse), x, y);
+        self.dispatch_pointer(make_up_event(offset(x, y), PointerType::Mouse));
     }
 
-    fn dispatch_at(&self, event: flui_interaction::PointerEvent, x: f32, y: f32) {
-        let position = offset(x, y);
+    fn hit_test(&self, position: Offset) -> HitTestResult {
         let owner = self.pipeline_owner.read();
         let mut result = HitTestResult::new();
         owner.hit_test(position, &mut result);
-        self.binding.enter_owner_scope(|| result.dispatch(&event));
+        result
+    }
+
+    fn dispatch_pointer(&self, event: flui_interaction::PointerEvent) {
+        self.binding
+            .dispatch_pointer(&event, |position| self.hit_test(position));
     }
 
     /// A full tap (down + up) at `(x, y)`.
@@ -188,21 +194,21 @@ impl MountedDemo {
     /// unrelated tests this change must not perturb.
     fn drag_down(&self, x: f32, y: f32) {
         advance_gesture_clock();
-        self.dispatch_at(make_down_event(offset(x, y), PointerType::Mouse), x, y);
+        self.dispatch_pointer(make_down_event(offset(x, y), PointerType::Mouse));
     }
 
     /// Hit-test at root-local `(x, y)` and dispatch a synthetic pointer-move,
     /// advancing the gesture clock first (see [`advance_gesture_clock`]).
     fn drag_move(&self, x: f32, y: f32) {
         advance_gesture_clock();
-        self.dispatch_at(make_move_event(offset(x, y), PointerType::Mouse), x, y);
+        self.dispatch_pointer(make_move_event(offset(x, y), PointerType::Mouse));
     }
 
     /// Hit-test at root-local `(x, y)` and dispatch a synthetic pointer-up —
     /// pairs with [`drag_down`](Self::drag_down)/[`drag_move`](Self::drag_move)
     /// to complete a drag gesture.
     fn drag_up(&self, x: f32, y: f32) {
-        self.dispatch_at(make_up_event(offset(x, y), PointerType::Mouse), x, y);
+        self.dispatch_pointer(make_up_event(offset(x, y), PointerType::Mouse));
     }
 
     /// Compares base names (before any `<...>`) on both sides — a
@@ -464,15 +470,21 @@ fn dragging_inside_the_list_box_scrolls_its_items() {
     let offset_before = demo.absolute_position(item0);
     let (anchor_x, anchor_y) = demo.list_box_center();
 
-    // The slop-crossing move (> DRAG_SLOP) fires on_pan_start; per
-    // `DragGestureRecognizer::handle_move`, that move's own delta is
-    // swallowed (used only to fix the drag's start position), so it must not
-    // count toward the expected scroll delta. Only the two subsequent moves,
-    // each already in the `Started` phase, fire on_pan_update.
+    // This hit path has one arena member: the list's pan recognizer. Closing
+    // the arena after Down therefore schedules that sole member as the
+    // deferred default winner, and the binding drains the resolution before
+    // returning from the Down transaction. The drag is already Started when
+    // the first move arrives, so every move contributes its full delta.
+    //
+    // This is Flutter's `GestureArenaManager.close` +
+    // `DragGestureRecognizer.onlyAcceptDragOnThreshold == false` behavior.
+    // A competing tap recognizer would keep the arena unresolved until the
+    // drag crosses slop and would instead re-anchor `DragStartBehavior::Start`
+    // at the crossing position.
     const SLOP_CROSSING_DELTA: f32 = DRAG_SLOP + 7.0; // 25.0, safely > 18.0
     const UPDATE_DELTA_1: f32 = 20.0;
     const UPDATE_DELTA_2: f32 = 25.0;
-    let expected_scroll_delta = UPDATE_DELTA_1 + UPDATE_DELTA_2;
+    let expected_scroll_delta = SLOP_CROSSING_DELTA + UPDATE_DELTA_1 + UPDATE_DELTA_2;
 
     demo.drag_down(anchor_x, anchor_y);
     demo.drag_move(anchor_x, anchor_y - SLOP_CROSSING_DELTA);
@@ -496,8 +508,8 @@ fn dragging_inside_the_list_box_scrolls_its_items() {
 
     assert!(
         (moved_up_by - expected_scroll_delta).abs() < 1.0,
-        "dragging up {expected_scroll_delta}px worth of post-slop deltas must move item 0's \
-         paint position up by the same amount (the slop-crossing move's delta is swallowed): \
+        "dragging a lone recognizer up by {expected_scroll_delta}px must move item 0's paint \
+         position up by the same amount: \
          before={offset_before:?}, after={offset_after:?}, moved_up_by={moved_up_by}"
     );
 }

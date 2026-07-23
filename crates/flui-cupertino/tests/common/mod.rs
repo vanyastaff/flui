@@ -6,6 +6,7 @@
 
 #![allow(dead_code)] // each test binary uses a different subset of the harness
 
+use std::any::TypeId;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -20,6 +21,7 @@ use flui_rendering::testing::inspect;
 use flui_types::geometry::px;
 use flui_types::{Offset, Size};
 use flui_view::{BuildOwner, ElementTree, View};
+use flui_widgets::{FocusRoot, GestureArenaScope};
 use parking_lot::RwLock;
 
 /// A mounted widget tree, holding the element + render trees alive inside a
@@ -52,6 +54,7 @@ pub fn lay_out(root: impl View, constraints: BoxConstraints) -> LaidOut {
     // The binding is created FIRST so its async driver can be installed on
     // the `BuildOwner` before the mount `build_scope` below.
     binding.install_build_capabilities(&mut build_owner);
+    let root = GestureArenaScope::new(binding.arena().clone(), FocusRoot::new(root));
 
     let root_id = binding.enter_owner_scope(|| {
         let root_id = tree.mount_root_with_pipeline_owner(
@@ -64,7 +67,12 @@ pub fn lay_out(root: impl View, constraints: BoxConstraints) -> LaidOut {
         root_id
     });
 
-    let root_render_id = {
+    // `FocusRoot` installs one transparent traversal anchor as the
+    // presentation render root. Keep that parentless node as the pipeline
+    // root while exposing the caller's logical render root to geometry tests.
+    // A recovered `ErrorView` is render-less, so its anchor legitimately has
+    // no child; element-level error tests do not ask for root geometry.
+    let (presentation_render_root_id, root_render_id) = {
         let owner = pipeline_owner.read();
         let render_tree = owner.render_tree();
         let mut roots = render_tree
@@ -78,12 +86,17 @@ pub fn lay_out(root: impl View, constraints: BoxConstraints) -> LaidOut {
             roots.next().is_none(),
             "expected exactly one render-tree root after mount",
         );
-        root
+        let children = render_tree.children(root);
+        assert!(
+            children.len() <= 1,
+            "the presentation traversal anchor must wrap at most one logical render root",
+        );
+        (root, children.first().copied().unwrap_or(root))
     };
 
     {
         let mut guard = pipeline_owner.write();
-        guard.set_root_id(Some(root_render_id));
+        guard.set_root_id(Some(presentation_render_root_id));
         guard.set_root_constraints(Some(constraints));
     }
 
@@ -122,7 +135,8 @@ impl LaidOut {
     /// Replace the root widget with `new_root` and drive a frame — Flutter's
     /// `tester.pumpWidget(w2)` called a second time (root-swap).
     pub fn pump_widget(&mut self, new_root: impl View) {
-        self.binding.swap_root_view(self.root_element_id, &new_root);
+        let scoped = GestureArenaScope::new(self.binding.arena().clone(), FocusRoot::new(new_root));
+        self.binding.swap_root_view(self.root_element_id, &scoped);
         self.binding.pump_frame(Duration::ZERO);
     }
 
@@ -154,6 +168,20 @@ impl LaidOut {
         self.binding.pump_frame(dt);
     }
 
+    /// Count live elements whose concrete view type is `V`.
+    ///
+    /// Build failures are recovered in the element tree as `ErrorView`
+    /// children and need not remove an outer presentation wrapper's render
+    /// root, so render-tree inspection alone cannot observe that recovery.
+    pub fn count_elements_by_view_type<V: View>(&mut self) -> usize {
+        let expected = TypeId::of::<V>();
+        self.binding
+            .tree_mut()
+            .iter_nodes()
+            .filter(|(_id, node)| node.element().view_type_id() == expected)
+            .count()
+    }
+
     /// Register `controller` with the binding so [`pump`](Self::pump) /
     /// [`tick`](Self::tick) / [`pump_for`](Self::pump_for) advances it.
     pub fn register_controller(&mut self, controller: AnimationController) {
@@ -176,15 +204,16 @@ impl LaidOut {
     /// hit-tests that should have failed — the owner scope must wrap the
     /// whole hit-test + dispatch sequence, matching how a real frame runs
     /// (`AppBinding::handle_input` executes entirely inside the lane).
-    fn route_event(&self, event: &flui_interaction::PointerEvent, x: f32, y: f32) {
-        let position = Offset::new(px(x), px(y));
-        self.binding.enter_owner_scope(|| {
-            let owner = self.pipeline_owner.read();
-            let mut result = HitTestResult::new();
-            owner.hit_test(position, &mut result);
-            drop(owner);
-            result.dispatch(event);
-        });
+    fn hit_test(&self, position: Offset) -> HitTestResult {
+        let owner = self.pipeline_owner.read();
+        let mut result = HitTestResult::new();
+        owner.hit_test(position, &mut result);
+        result
+    }
+
+    fn route_event(&self, event: &flui_interaction::PointerEvent) {
+        self.binding
+            .dispatch_pointer(event, |position| self.hit_test(position));
     }
 
     /// Dispatch a synthetic pointer-down at `(x, y)` — the headless analogue
@@ -192,7 +221,7 @@ impl LaidOut {
     pub fn dispatch_pointer_down(&self, x: f32, y: f32) {
         let position = Offset::new(px(x), px(y));
         let event = make_down_event(position, PointerType::Mouse);
-        self.route_event(&event, x, y);
+        self.route_event(&event);
     }
 
     /// As [`dispatch_pointer_down`](Self::dispatch_pointer_down), but a
@@ -200,14 +229,14 @@ impl LaidOut {
     pub fn dispatch_pointer_up(&self, x: f32, y: f32) {
         let position = Offset::new(px(x), px(y));
         let event = make_up_event(position, PointerType::Mouse);
-        self.route_event(&event, x, y);
+        self.route_event(&event);
     }
 
     /// A pointer-move to `(x, y)` — drives hover enter/exit.
     pub fn dispatch_pointer_move(&self, x: f32, y: f32) {
         let position = Offset::new(px(x), px(y));
         let event = make_move_event(position, PointerType::Mouse);
-        self.route_event(&event, x, y);
+        self.route_event(&event);
     }
 
     /// Every render node whose short type name (generic parameters stripped)

@@ -31,7 +31,7 @@ use flui_rendering::pipeline::PipelineOwner;
 use flui_types::geometry::px;
 use flui_types::{Offset, Size};
 use flui_view::{BuildOwner, ElementTree};
-use flui_widgets::{MediaQuery, MediaQueryData, VsyncScope};
+use flui_widgets::{FocusRoot, GestureArenaScope, MediaQuery, MediaQueryData, VsyncScope};
 use parking_lot::RwLock;
 
 /// The mounted root's logical width.
@@ -91,7 +91,9 @@ impl MountedDemo {
 
         binding.install_build_capabilities(&mut build_owner);
 
-        let scoped_root = VsyncScope::new(binding.vsync().clone(), wrapped_root);
+        let focused_root = FocusRoot::new(wrapped_root);
+        let animated_root = VsyncScope::new(binding.vsync().clone(), focused_root);
+        let scoped_root = GestureArenaScope::new(binding.arena().clone(), animated_root);
 
         binding.enter_owner_scope(|| {
             let root_element = tree.mount_root_with_pipeline_owner(
@@ -155,20 +157,24 @@ impl MountedDemo {
         self.binding.pump_frame(dt);
     }
 
-    fn dispatch_at(&self, event: flui_interaction::PointerEvent, x: f32, y: f32) {
-        let position = offset(x, y);
+    fn hit_test(&self, position: Offset) -> HitTestResult {
         let owner = self.pipeline_owner.read();
         let mut result = HitTestResult::new();
         owner.hit_test(position, &mut result);
-        self.binding.enter_owner_scope(|| result.dispatch(&event));
+        result
+    }
+
+    fn dispatch_pointer(&self, event: flui_interaction::PointerEvent) {
+        self.binding
+            .dispatch_pointer(&event, |position| self.hit_test(position));
     }
 
     fn tap_down(&self, x: f32, y: f32) {
-        self.dispatch_at(make_down_event(offset(x, y), PointerType::Mouse), x, y);
+        self.dispatch_pointer(make_down_event(offset(x, y), PointerType::Mouse));
     }
 
     fn tap_up(&self, x: f32, y: f32) {
-        self.dispatch_at(make_up_event(offset(x, y), PointerType::Mouse), x, y);
+        self.dispatch_pointer(make_up_event(offset(x, y), PointerType::Mouse));
     }
 
     /// A full tap (down + up) at `(x, y)`.
@@ -183,47 +189,23 @@ impl MountedDemo {
         self.tap(position.dx.get() + 1.0, position.dy.get() + 1.0);
     }
 
-    /// Hit-tests `(x, y)` and dispatches a synthetic pointer-down, returning
-    /// the resolved [`HitTestResult`] so the rest of the gesture can be
-    /// routed through the **same** targets — real pointer input captures the
-    /// hit-test path at down and routes every subsequent move/up for that
-    /// pointer through it regardless of where the pointer travels
-    /// afterward (`flui_app::AppBinding::handle_input`'s own
-    /// `GestureBinding::handle_pointer_event` only re-hit-tests on a fresh
-    /// pointer). A **fresh** hit-test per move (as
-    /// `tests/material_demo.rs`'s own `drag_move` helper does) only happens
-    /// to work there because that test's drag stays within one wide
-    /// scrollable's bounds the whole time; an edge-swipe-back gesture
-    /// starts inside a 20px-wide strip (`BACK_GESTURE_WIDTH`) and moves the
-    /// pointer far outside it, so re-hit-testing each move would silently
-    /// stop reaching the detector partway through the drag.
-    fn begin_drag(&self, x: f32, y: f32) -> HitTestResult {
+    /// Start a drag through the binding-owned input pipeline. The binding
+    /// captures the Down route and reuses it for every subsequent Move/Up,
+    /// even after an edge swipe leaves the detector's narrow hit-test strip.
+    fn begin_drag(&self, x: f32, y: f32) {
         advance_gesture_clock();
-        let position = offset(x, y);
-        let mut result = HitTestResult::new();
-        {
-            let owner = self.pipeline_owner.read();
-            owner.hit_test(position, &mut result);
-        }
-        self.binding
-            .enter_owner_scope(|| result.dispatch(&make_down_event(position, PointerType::Mouse)));
-        result
+        self.dispatch_pointer(make_down_event(offset(x, y), PointerType::Mouse));
     }
 
-    /// Dispatches a synthetic pointer-move at `(x, y)` through `result` (the
-    /// [`HitTestResult`] [`begin_drag`](Self::begin_drag) captured), not a
-    /// fresh hit-test — see that method's doc.
-    fn continue_drag(&self, result: &HitTestResult, x: f32, y: f32) {
+    /// Continue the binding-captured drag route at `(x, y)`.
+    fn continue_drag(&self, x: f32, y: f32) {
         advance_gesture_clock();
-        let event = make_move_event(offset(x, y), PointerType::Mouse);
-        self.binding.enter_owner_scope(|| result.dispatch(&event));
+        self.dispatch_pointer(make_move_event(offset(x, y), PointerType::Mouse));
     }
 
-    /// Dispatches a synthetic pointer-up at `(x, y)` through `result`,
-    /// completing the drag started by [`begin_drag`](Self::begin_drag).
-    fn end_drag(&self, result: &HitTestResult, x: f32, y: f32) {
-        let event = make_up_event(offset(x, y), PointerType::Mouse);
-        self.binding.enter_owner_scope(|| result.dispatch(&event));
+    /// Complete the binding-captured drag route at `(x, y)`.
+    fn end_drag(&self, x: f32, y: f32) {
+        self.dispatch_pointer(make_up_event(offset(x, y), PointerType::Mouse));
     }
 
     /// The unique `RenderParagraph` node whose plain-text content is `text`.
@@ -541,12 +523,12 @@ fn edge_swipe_from_the_left_pops_the_details_route() {
     // pop direction, since every sample moves further right than the last)
     // agree on "pop", so the outcome does not depend on exactly how large a
     // velocity the real-clock-timed samples happen to produce.
-    let drag = demo.begin_drag(5.0, 400.0);
-    demo.continue_drag(&drag, 60.0, 400.0);
-    demo.continue_drag(&drag, 140.0, 400.0);
-    demo.continue_drag(&drag, 220.0, 400.0);
-    demo.continue_drag(&drag, 300.0, 400.0);
-    demo.end_drag(&drag, 300.0, 400.0);
+    demo.begin_drag(5.0, 400.0);
+    demo.continue_drag(60.0, 400.0);
+    demo.continue_drag(140.0, 400.0);
+    demo.continue_drag(220.0, 400.0);
+    demo.continue_drag(300.0, 400.0);
+    demo.end_drag(300.0, 400.0);
 
     for _ in 0..SWIPE_PUMPS {
         demo.pump(FRAME);

@@ -18,6 +18,7 @@ use flui_cupertino::{
 use flui_scheduler::Scheduler;
 use flui_types::Color;
 use flui_types::geometry::px;
+use flui_view::ErrorView;
 use flui_view::prelude::*;
 use flui_widgets::prelude::EdgeInsets;
 use flui_widgets::{Icon, IconData, MediaQuery, MediaQueryData, SizedBox, VsyncScope};
@@ -430,33 +431,45 @@ fn tapping_a_tab_item_switches_the_active_tab() {
 /// `debug_assert!` in `tab_scaffold.rs`'s `build` (test binaries build in
 /// debug profile, so it is live).
 ///
-/// This test asserts the panic message from `lay_out`'s own "the mounted
-/// subtree should have a render root" check, **not** the `debug_assert!`'s
-/// own message: this crate's build-error boundary
+/// This test observes the `ErrorView` substituted by this crate's build-error
+/// boundary
 /// (`flui_view::element::behavior_commons::build_or_recover`) catches a
-/// panicking `build()` and substitutes a render-less `ErrorView` for the
+/// panicking `build()` and substitutes an `ErrorView` for the
 /// whole subtree — the same recovery `flui-material/tests/theme.rs` and
 /// `flui-widgets/tests/visibility.rs` document for exactly this reason
 /// ("a panic inside build() is caught by the framework's build-error
 /// boundary... so #[should_panic] around the harness would not observe
-/// it"). With `CupertinoTabScaffold` mounted as the sole root here, that
-/// substitution leaves nothing at all to render, so `lay_out` itself panics
-/// — a loud, unmistakable mount failure, not the old silent
-/// every-tab-hidden mis-render.
+/// it"). The presentation harness now wraps the scaffold in the production
+/// gesture/focus scopes, so those outer elements can retain a render root
+/// after the scaffold itself recovers; the element-level `ErrorView` is the
+/// direct, stable evidence of the failed build.
 ///
 /// Red-check: delete the `debug_assert!` in `CupertinoTabScaffoldState::build`
-/// — this test stops panicking entirely (the scaffold instead mounts
-/// successfully with every tab hidden and `tab_builder` uncalled for index 5).
+/// — no `ErrorView` is built (the scaffold instead mounts successfully with
+/// every tab hidden and `tab_builder` uncalled for index 5).
 #[test]
-#[should_panic(expected = "render root")]
-fn out_of_range_controller_index_panics_instead_of_silently_hiding_every_tab() {
+fn out_of_range_controller_index_builds_an_error_instead_of_silently_hiding_every_tab() {
+    let builder_calls = Rc::new(Cell::new(0_u32));
+    let calls = Rc::clone(&builder_calls);
     let controller = CupertinoTabController::new(5);
-    let scaffold = CupertinoTabScaffold::new(two_tab_bar(), controller, |_ctx, _index| {
+    let scaffold = CupertinoTabScaffold::new(two_tab_bar(), controller, move |_ctx, _index| {
+        calls.set(calls.get() + 1);
         SizedBox::new(10.0, 10.0).into_view().boxed()
     });
 
-    let _ = lay_out(
+    let mut laid = lay_out(
         MediaQuery::new(MediaQueryData::default(), scaffold),
         tight(400.0, 800.0),
+    );
+
+    assert_eq!(
+        laid.count_elements_by_view_type::<ErrorView>(),
+        1,
+        "the out-of-range index must recover as exactly one ErrorView"
+    );
+    assert_eq!(
+        builder_calls.get(),
+        0,
+        "an invalid current index must fail before invoking any tab builder"
     );
 }
