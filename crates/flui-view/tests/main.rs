@@ -13,6 +13,8 @@
 
 #[path = "ancestor_finders.rs"]
 mod ancestor_finders;
+#[path = "boxed_view_conditional_return.rs"]
+mod boxed_view_conditional_return;
 #[path = "build_context_tests.rs"]
 mod build_context_tests;
 #[path = "build_owner_tests.rs"]
@@ -23,6 +25,8 @@ mod derive_bon_stack;
 mod derive_smoke;
 #[path = "dispatch_shim.rs"]
 mod dispatch_shim;
+#[path = "element_kind_non_exhaustive_smoke.rs"]
+mod element_kind_non_exhaustive_smoke;
 #[path = "element_slot_integration.rs"]
 mod element_slot_integration;
 #[path = "element_tree_tests.rs"]
@@ -33,6 +37,8 @@ mod flutter_parity_key_equality;
 mod global_key;
 #[path = "global_key_reparent.rs"]
 mod global_key_reparent;
+#[path = "greeting_widget_loc_golden.rs"]
+mod greeting_widget_loc_golden;
 #[path = "inherited_dependency.rs"]
 mod inherited_dependency;
 #[path = "key_roundtrip.rs"]
@@ -43,12 +49,6 @@ mod lifecycle_tests;
 mod notifications;
 #[path = "production_reconcile_emits.rs"]
 mod production_reconcile_emits;
-#[path = "sc001_loc_golden.rs"]
-mod sc001_loc_golden;
-#[path = "sc009_boxed_view_conditional.rs"]
-mod sc009_boxed_view_conditional;
-#[path = "sc011_non_exhaustive_smoke.rs"]
-mod sc011_non_exhaustive_smoke;
 #[path = "stateless_stateful_tests.rs"]
 mod stateless_stateful_tests;
 #[path = "trybuild_ui.rs"]

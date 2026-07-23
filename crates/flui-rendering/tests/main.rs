@@ -8,12 +8,16 @@
 mod animation_pipeline;
 #[path = "attach_detach_lifecycle.rs"]
 mod attach_detach_lifecycle;
+#[path = "compositing_bits_walk.rs"]
+mod compositing_bits_walk;
 #[path = "cross_protocol_layout.rs"]
 mod cross_protocol_layout;
 #[path = "decorated_box_pipeline.rs"]
 mod decorated_box_pipeline;
 #[path = "deep_tree_stack.rs"]
 mod deep_tree_stack;
+#[path = "dirty_queue_dedup.rs"]
+mod dirty_queue_dedup;
 #[path = "dispose_eviction.rs"]
 mod dispose_eviction;
 #[path = "dpr_pipeline.rs"]
@@ -28,8 +32,16 @@ mod harness_self_test;
 mod hit_test_pipeline;
 #[path = "intrinsics_cache.rs"]
 mod intrinsics_cache;
+#[path = "layout_cycle_guard.rs"]
+mod layout_cycle_guard;
+#[path = "layout_dirty_root.rs"]
+mod layout_dirty_root;
 #[path = "layout_offset_commit.rs"]
 mod layout_offset_commit;
+#[path = "layout_raw_bridge.rs"]
+mod layout_raw_bridge;
+#[path = "paint_dirty_flag_discipline.rs"]
+mod paint_dirty_flag_discipline;
 #[path = "paint_fragment_snapshot.rs"]
 mod paint_fragment_snapshot;
 #[path = "pipeline_scenarios.rs"]
@@ -40,6 +52,8 @@ mod render_viewport;
 mod repaint_handle;
 #[path = "root_resize_repaint.rs"]
 mod root_resize_repaint;
+#[path = "run_layout_wiring.rs"]
+mod run_layout_wiring;
 #[path = "semantics_assembly.rs"]
 mod semantics_assembly;
 #[path = "sliver_direction_matrix.rs"]
@@ -58,21 +72,9 @@ mod sliver_grid;
 mod sliver_hit_direction_matrix;
 #[path = "sliver_to_box_adapter.rs"]
 mod sliver_to_box_adapter;
-#[path = "u19_bridge.rs"]
-mod u19_bridge;
-#[path = "u20_layout_dirty_root.rs"]
-mod u20_layout_dirty_root;
-#[path = "u21_layout_cycle.rs"]
-mod u21_layout_cycle;
 #[path = "u21b_cyclic_intrinsic_query.rs"]
 mod u21b_cyclic_intrinsic_query;
-#[path = "u22_dirty_dedup.rs"]
-mod u22_dirty_dedup;
-#[path = "u23_run_layout_wiring.rs"]
-mod u23_run_layout_wiring;
-#[path = "u34_compositing_bits_walk.rs"]
-mod u34_compositing_bits_walk;
-#[path = "u35_paint_dirty_flag_discipline.rs"]
-mod u35_paint_dirty_flag_discipline;
 #[path = "u3c_lazy_sliver_contract.rs"]
 mod u3c_lazy_sliver_contract;
+#[path = "zz_scratch_m2_repro.rs"]
+mod zz_scratch_m2_repro;

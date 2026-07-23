@@ -720,9 +720,8 @@ fn animated_container_curve_only_change_reapplies_the_new_curve_mid_flight() {
         use_threshold_curve: Arc::clone(&use_threshold_curve),
     };
     let mut laid = lay_out_animated(probe, loose(200.0), vsync);
-    let width = |laid: &crate::common::LaidOut| -> f32 {
-        laid.size(laid.current_root()).width.get()
-    };
+    let width =
+        |laid: &crate::common::LaidOut| -> f32 { laid.size(laid.current_root()).width.get() };
     assert!(
         (width(&laid) - 20.0).abs() < 1e-3,
         "starts at the initial 20px width"
