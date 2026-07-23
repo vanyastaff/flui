@@ -220,11 +220,6 @@ impl<V: View + Clone + 'static> ElementBase for RootRenderElement<V> {
             owner.set_root_id(Some(render_id));
             self.render_id = Some(render_id);
 
-            // Add to dirty lists
-            owner.add_node_needing_layout(render_id, 0);
-            owner.add_node_needing_paint(render_id, 0);
-            owner.request_visual_update();
-
             tracing::debug!(
                 "RootRenderElement::mount created RenderView render_id={:?} size={}x{}",
                 render_id,

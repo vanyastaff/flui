@@ -38,7 +38,8 @@
 //!
 //! - **Newtype IDs**: Type-safe `PointerId` prevents mixing with other IDs
 //! - **SmallVec**: Inline storage avoids heap allocation for typical cases
-//! - **Lock-free**: DashMap for concurrent access
+//! - **Exact generations**: stale entry handles cannot resolve a reused pointer
+//! - **Owner affinity**: executable callbacks never acquire a cross-thread API
 //!
 //! Flutter reference: <https://api.flutter.dev/flutter/gestures/GestureArenaManager-class.html>
 
@@ -51,8 +52,14 @@ pub use signal_resolver::{PointerSignalResolver, SignalPriority};
 pub use team::{GestureArenaTeam, TeamEntry};
 
 use std::{
-    sync::Arc,
-    time::{Duration, Instant},
+    any::Any,
+    collections::VecDeque,
+    panic::{AssertUnwindSafe, catch_unwind, resume_unwind},
+    sync::{
+        Arc, Weak,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::Instant,
 };
 
 use dashmap::DashMap;
@@ -62,12 +69,6 @@ use tracing::instrument;
 
 use crate::ids::PointerId;
 use flui_foundation::{MonotonicClock, SystemClock};
-
-/// Default timeout for gesture disambiguation (100ms).
-///
-/// If no recognizer accepts within this time, the first member wins.
-/// This matches Flutter's default arena timeout behavior.
-pub const DEFAULT_DISAMBIGUATION_TIMEOUT: Duration = Duration::from_millis(100);
 
 // ============================================================================
 // GestureDisposition enum
@@ -207,25 +208,153 @@ impl<T: crate::sealed::CustomGestureRecognizer> GestureArenaMember for T {
 /// entry.resolve(GestureDisposition::Accepted);
 /// ```
 ///
-/// # Thread Safety
-///
-/// `GestureArenaEntry` is `Send + Sync` and can be safely shared across
-/// threads. Multiple calls to `resolve` are safe (subsequent calls are no-ops
-/// if the arena is already resolved).
+/// The handle is owner-affine because gesture callbacks are owner-local.
+/// Multiple calls to `resolve` are safe; stale or already-resolved entries are
+/// no-ops.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct ArenaGeneration(u64);
+
+struct ArenaSlot {
+    pointer: PointerId,
+    generation: ArenaGeneration,
+    data: Mutex<ArenaEntryData>,
+}
+
+impl ArenaSlot {
+    fn new(pointer: PointerId, generation: ArenaGeneration) -> Self {
+        Self {
+            pointer,
+            generation,
+            data: Mutex::new(ArenaEntryData::new()),
+        }
+    }
+}
+
 #[derive(Clone)]
+/// A stale-safe handle for one member in one arena generation.
+///
+/// Resolving a handle after its pointer ID has been reused cannot affect the
+/// replacement arena.
 pub struct GestureArenaEntry {
     arena: GestureArena,
+    pointer: PointerId,
+    generation: ArenaGeneration,
+    slot: Weak<ArenaSlot>,
+    member: Weak<dyn GestureArenaMember>,
+}
+
+/// Registration of one recognizer whose timer must outlive arena resolution.
+///
+/// Flutter's primary-pointer deadlines are scheduled independently from the
+/// gesture arena: a lone long press can win the arena's default resolution on
+/// Down and still fire after its hold timeout. FLUI drives those timers from
+/// the owner frame clock, so this token keeps only the polling registration
+/// alive. The registry itself stores a weak recognizer identity and therefore
+/// cannot keep an unmounted recognizer alive or form an arena cycle.
+pub(crate) struct GestureDeadlineRegistration {
+    registry: Weak<DeadlineRegistry>,
+    id: u64,
+}
+
+impl Drop for GestureDeadlineRegistration {
+    fn drop(&mut self) {
+        if let Some(registry) = self.registry.upgrade() {
+            registry.unregister(self.id);
+        }
+    }
+}
+
+struct DeadlineWatcher {
+    id: u64,
+    pointer: PointerId,
+    member: Weak<dyn GestureArenaMember>,
+}
+
+struct DeadlinePoll {
+    registration: Option<u64>,
     pointer: PointerId,
     member: Arc<dyn GestureArenaMember>,
 }
 
+struct DeadlineRegistry {
+    next_id: AtomicU64,
+    watchers: Mutex<Vec<DeadlineWatcher>>,
+}
+
+impl DeadlineRegistry {
+    fn new() -> Self {
+        Self {
+            next_id: AtomicU64::new(1),
+            watchers: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn register(
+        self: &Arc<Self>,
+        pointer: PointerId,
+        member: &Arc<dyn GestureArenaMember>,
+    ) -> GestureDeadlineRegistration {
+        let id = self
+            .next_id
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+            .unwrap_or_else(|_| panic!("BUG: gesture deadline registration ID exhausted"));
+        self.watchers.lock().push(DeadlineWatcher {
+            id,
+            pointer,
+            member: Arc::downgrade(member),
+        });
+        GestureDeadlineRegistration {
+            registry: Arc::downgrade(self),
+            id,
+        }
+    }
+
+    fn unregister(&self, id: u64) {
+        self.watchers.lock().retain(|watcher| watcher.id != id);
+    }
+
+    fn contains(&self, id: u64) -> bool {
+        self.watchers.lock().iter().any(|watcher| watcher.id == id)
+    }
+
+    fn snapshot(&self) -> SmallVec<[DeadlinePoll; 8]> {
+        let mut watchers = self.watchers.lock();
+        let mut live = SmallVec::new();
+        watchers.retain(|watcher| {
+            if let Some(member) = watcher.member.upgrade() {
+                live.push(DeadlinePoll {
+                    registration: Some(watcher.id),
+                    pointer: watcher.pointer,
+                    member,
+                });
+                true
+            } else {
+                false
+            }
+        });
+        live
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.watchers.lock().len()
+    }
+}
+
 impl GestureArenaEntry {
     /// Create a new arena entry handle.
-    fn new(arena: GestureArena, pointer: PointerId, member: Arc<dyn GestureArenaMember>) -> Self {
+    fn new(
+        arena: GestureArena,
+        pointer: PointerId,
+        slot: &Arc<ArenaSlot>,
+        member: &Arc<dyn GestureArenaMember>,
+    ) -> Self {
         Self {
             arena,
             pointer,
-            member,
+            generation: slot.generation,
+            slot: Arc::downgrade(slot),
+            member: Arc::downgrade(member),
         }
     }
 
@@ -236,8 +365,32 @@ impl GestureArenaEntry {
     ///
     /// It's safe to call this on an arena that has already been resolved.
     pub fn resolve(&self, disposition: GestureDisposition) {
+        let (Some(slot), Some(member)) = (self.slot.upgrade(), self.member.upgrade()) else {
+            return;
+        };
         self.arena
-            .resolve_entry(self.pointer, &self.member, disposition);
+            .resolve_entry(self.pointer, &slot, member, disposition);
+    }
+
+    /// Hold this exact arena generation against a pointer-up sweep.
+    pub fn hold(&self) {
+        if let Some(slot) = self.slot.upgrade() {
+            GestureArena::hold_slot(&slot);
+        }
+    }
+
+    /// Release a hold on this exact arena generation.
+    pub fn release(&self) {
+        if let Some(slot) = self.slot.upgrade() {
+            self.arena.release_slot(&slot);
+        }
+    }
+
+    /// Sweep this exact arena generation.
+    pub fn sweep(&self) {
+        if let Some(slot) = self.slot.upgrade() {
+            self.arena.sweep_slot(&slot);
+        }
     }
 
     /// Get the pointer ID for this entry.
@@ -248,8 +401,8 @@ impl GestureArenaEntry {
 
     /// Get the member for this entry.
     #[inline]
-    pub fn member(&self) -> &Arc<dyn GestureArenaMember> {
-        &self.member
+    pub fn member(&self) -> Option<Arc<dyn GestureArenaMember>> {
+        self.member.upgrade()
     }
 }
 
@@ -257,6 +410,7 @@ impl std::fmt::Debug for GestureArenaEntry {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("GestureArenaEntry")
             .field("pointer", &self.pointer)
+            .field("generation", &self.generation)
             .finish_non_exhaustive()
     }
 }
@@ -291,11 +445,6 @@ struct ArenaEntryData {
     eager_winner: Option<Arc<dyn GestureArenaMember>>,
     /// Whether sweep is pending (requested while held).
     has_pending_sweep: bool,
-    /// Winners of the arena (if resolved). Multiple winners possible with
-    /// teams.
-    winners: SmallVec<[Arc<dyn GestureArenaMember>; 2]>,
-    /// When this arena entry was created (for timeout calculation).
-    created_at: Instant,
 }
 
 impl std::fmt::Debug for ArenaEntryData {
@@ -307,8 +456,6 @@ impl std::fmt::Debug for ArenaEntryData {
             .field("is_resolved", &self.is_resolved)
             .field("has_eager_winner", &self.eager_winner.is_some())
             .field("has_pending_sweep", &self.has_pending_sweep)
-            .field("winner_count", &self.winners.len())
-            .field("age_ms", &self.created_at.elapsed().as_millis())
             .finish()
     }
 }
@@ -324,6 +471,13 @@ impl std::fmt::Debug for ArenaEntryData {
 /// methods dispatch them after releasing the lock.
 type PendingNotifications = SmallVec<[(Arc<dyn GestureArenaMember>, GestureDisposition); 4]>;
 
+enum ArenaFollowUp {
+    None,
+    RemoveEmpty,
+    DeferDefault,
+    ResolveInFavorOf(Arc<dyn GestureArenaMember>),
+}
+
 impl ArenaEntryData {
     fn new() -> Self {
         Self {
@@ -333,38 +487,24 @@ impl ArenaEntryData {
             is_resolved: false,
             eager_winner: None,
             has_pending_sweep: false,
-            winners: SmallVec::new(),
-            created_at: Instant::now(),
         }
     }
 
-    /// Close the arena - no more members can be added.
-    /// If there's an eager winner, resolve immediately.
-    #[must_use]
-    fn close(&mut self) -> PendingNotifications {
+    /// Close membership and report the resolution work the manager must run.
+    fn close(&mut self) -> ArenaFollowUp {
         if !self.is_open || self.is_resolved {
-            return SmallVec::new();
+            return ArenaFollowUp::None;
         }
         self.is_open = false;
-
-        // If we have an eager winner, resolve in their favor
-        if let Some(winner) = self.eager_winner.take() {
-            self.resolve(Some(winner))
-        } else if self.members.len() == 1 {
-            // Single member wins automatically
-            let winner = self.members[0].clone();
-            self.resolve(Some(winner))
-        } else {
-            SmallVec::new()
-        }
+        self.follow_up()
     }
 
     /// Accept gesture for a member.
     /// If arena is open, store as eager winner. If closed, resolve immediately.
     #[must_use]
-    fn accept(&mut self, member: Arc<dyn GestureArenaMember>) -> PendingNotifications {
+    fn accept(&mut self, member: Arc<dyn GestureArenaMember>) -> ArenaFollowUp {
         if self.is_resolved {
-            return SmallVec::new();
+            return ArenaFollowUp::None;
         }
 
         if self.is_open {
@@ -373,83 +513,70 @@ impl ArenaEntryData {
                 self.eager_winner = Some(member);
             }
             // If already have eager winner, ignore subsequent accepts
-            SmallVec::new()
+            ArenaFollowUp::None
         } else {
-            // Arena closed, resolve immediately
-            self.resolve(Some(member))
+            ArenaFollowUp::ResolveInFavorOf(member)
         }
     }
 
     /// Reject gesture for a member.
     #[must_use]
-    fn reject(&mut self, member: &Arc<dyn GestureArenaMember>) -> PendingNotifications {
+    fn reject(
+        &mut self,
+        member: Arc<dyn GestureArenaMember>,
+    ) -> (PendingNotifications, ArenaFollowUp) {
         let mut pending = SmallVec::new();
         if self.is_resolved {
-            return pending;
+            return (pending, ArenaFollowUp::None);
         }
 
-        // Remove from members
-        self.members.retain(|m| !Arc::ptr_eq(m, member));
+        let Some(index) = self
+            .members
+            .iter()
+            .position(|entry| Arc::ptr_eq(entry, &member))
+        else {
+            return (pending, ArenaFollowUp::None);
+        };
+        let rejected = self.members.remove(index);
 
         // Remove from eager winner if it was this member
         if let Some(ref eager) = self.eager_winner
-            && Arc::ptr_eq(eager, member)
+            && Arc::ptr_eq(eager, &member)
         {
             self.eager_winner = None;
         }
 
         // Defer the member's rejection callback (dispatched after the entry
         // lock is released to avoid arena re-entrancy deadlock).
-        pending.push((member.clone(), GestureDisposition::Rejected));
+        pending.push((rejected, GestureDisposition::Rejected));
 
-        // If only one member left and arena is closed, they win
-        if !self.is_open && self.members.len() == 1 {
-            let winner = self.members[0].clone();
-            pending.extend(self.resolve(Some(winner)));
-        }
-
-        pending
+        let follow_up = if self.is_open {
+            ArenaFollowUp::None
+        } else {
+            self.follow_up()
+        };
+        (pending, follow_up)
     }
 
-    /// Try to resolve the arena if conditions are met.
-    /// Called after close or reject operations.
-    #[must_use]
-    fn try_to_resolve(&mut self) -> PendingNotifications {
+    fn follow_up(&self) -> ArenaFollowUp {
         if self.is_resolved || self.is_open {
-            return SmallVec::new();
+            return ArenaFollowUp::None;
         }
 
         if self.members.len() == 1 {
-            // Single member wins automatically
-            let winner = self.members[0].clone();
-            self.resolve(Some(winner))
+            ArenaFollowUp::DeferDefault
         } else if self.members.is_empty() {
-            // No members left - resolve with no winner
-            self.is_resolved = true;
-            SmallVec::new()
-        } else if let Some(eager) = self.eager_winner.take() {
-            // Eager winner wins
-            self.resolve(Some(eager))
+            ArenaFollowUp::RemoveEmpty
+        } else if let Some(eager) = self.eager_winner.clone() {
+            ArenaFollowUp::ResolveInFavorOf(eager)
         } else {
-            SmallVec::new()
+            ArenaFollowUp::None
         }
-    }
-
-    /// Check if this arena has exceeded the given timeout.
-    #[inline]
-    fn has_timed_out(&self, timeout: Duration) -> bool {
-        self.created_at.elapsed() >= timeout
-    }
-
-    /// Get the elapsed time since this arena was created.
-    #[inline]
-    fn elapsed(&self) -> Duration {
-        self.created_at.elapsed()
     }
 
     /// Add a member to this arena.
     fn add(&mut self, member: Arc<dyn GestureArenaMember>) {
-        if !self.is_resolved {
+        if self.is_open && !self.is_resolved {
             self.members.push(member);
         }
     }
@@ -466,67 +593,86 @@ impl ArenaEntryData {
 
     /// Resolve the arena with a single winner.
     ///
-    /// Returns the member notifications to dispatch once the entry lock is
-    /// released (winner -> `Accepted`, everyone else -> `Rejected`).
+    /// Losers are reported in registration order before winner callbacks.
     #[must_use]
     fn resolve(&mut self, winner: Option<Arc<dyn GestureArenaMember>>) -> PendingNotifications {
-        let mut pending = SmallVec::new();
         if self.is_resolved {
-            return pending;
+            return PendingNotifications::new();
         }
 
         self.is_resolved = true;
+        let members = std::mem::take(&mut self.members);
+        self.eager_winner = None;
+        let mut losers = PendingNotifications::new();
+        let mut accepted = PendingNotifications::new();
 
-        // Build winners list
-        if let Some(w) = winner {
-            self.winners.push(w);
-        }
-
-        // Collect member notifications; the caller dispatches them after the
-        // entry lock is released (arena re-entrancy safety).
-        for member in &self.members {
-            // Check if this member is a winner
-            let is_winner = self.winners.iter().any(|w| Arc::ptr_eq(member, w));
-            let disposition = if is_winner {
-                GestureDisposition::Accepted
+        // Flutter's explicit/eager resolution rejects every loser before
+        // accepting the winner. This ordering is observable when callbacks
+        // re-enter or panic.
+        for member in members {
+            let is_winner = winner
+                .as_ref()
+                .is_some_and(|winner| Arc::ptr_eq(&member, winner));
+            if is_winner {
+                accepted.push((member, GestureDisposition::Accepted));
             } else {
-                GestureDisposition::Rejected
-            };
-            pending.push((member.clone(), disposition));
+                losers.push((member, GestureDisposition::Rejected));
+            }
         }
 
-        pending
+        losers.extend(accepted);
+        losers
     }
 
     /// Resolve the arena with multiple winners (team resolution).
     #[must_use]
     fn resolve_team(&mut self, winners: &[Arc<dyn GestureArenaMember>]) -> PendingNotifications {
-        let mut pending = SmallVec::new();
         if self.is_resolved {
-            return pending;
+            return PendingNotifications::new();
         }
 
         self.is_resolved = true;
+        let members = std::mem::take(&mut self.members);
+        self.eager_winner = None;
+        let mut losers = PendingNotifications::new();
+        let mut accepted = PendingNotifications::new();
 
-        // Add all specified winners
-        for winner in winners {
-            if !self.winners.iter().any(|w| Arc::ptr_eq(w, winner)) {
-                self.winners.push(winner.clone());
+        // Reject all losers before accepting any team member.
+        for member in members {
+            let is_winner = winners.iter().any(|winner| Arc::ptr_eq(&member, winner));
+            if is_winner {
+                accepted.push((member, GestureDisposition::Accepted));
+            } else {
+                losers.push((member, GestureDisposition::Rejected));
             }
         }
 
-        // Collect member notifications (dispatched after the entry lock is
-        // released).
-        for member in &self.members {
-            let is_winner = self.winners.iter().any(|w| Arc::ptr_eq(member, w));
-            let disposition = if is_winner {
-                GestureDisposition::Accepted
-            } else {
-                GestureDisposition::Rejected
-            };
-            pending.push((member.clone(), disposition));
-        }
+        losers.extend(accepted);
+        losers
+    }
 
+    /// Flutter sweep ordering is intentionally different from an explicit
+    /// resolution: the front member is accepted first, then later members are
+    /// rejected in registration order.
+    #[must_use]
+    fn sweep(&mut self) -> PendingNotifications {
+        let mut pending = PendingNotifications::new();
+        if self.is_resolved {
+            return pending;
+        }
+        self.is_resolved = true;
+        let mut members = std::mem::take(&mut self.members);
+        self.eager_winner = None;
+        if members.is_empty() {
+            return pending;
+        }
+        let winner = members.remove(0);
+        pending.push((winner, GestureDisposition::Accepted));
+        pending.extend(
+            members
+                .into_iter()
+                .map(|member| (member, GestureDisposition::Rejected)),
+        );
         pending
     }
 }
@@ -541,11 +687,10 @@ impl ArenaEntryData {
 /// *binding* — not a recognizer — drives `close(pointer)` on pointer-down and
 /// `sweep(pointer)` on pointer-up (`gestures/binding.dart` `handleEvent`).
 ///
-/// - [`SelfDriven`](Self::SelfDriven) — the historical private-arena default. A
-///   recognizer (or a detector owning a private arena) closes/sweeps the arena
-///   itself, so [`RecognizerBase::stop_tracking`] sweeps on up. Used by every
-///   standalone recognizer path and a `GestureDetector` with no
-///   `GestureArenaScope` above it.
+/// - [`SelfDriven`](Self::SelfDriven) — a low-level recognizer owns its private
+///   arena lifecycle, so [`RecognizerBase::stop_tracking`] sweeps on up. This
+///   model is for standalone recognizer use and focused recognizer tests, never
+///   a presentation widget subtree.
 /// - [`BindingDriven`](Self::BindingDriven) — a binding owns the arena and runs
 ///   the close/sweep lifecycle after routing each pointer event to the hit-test
 ///   path. Recognizers below it must *not* self-sweep: a tap's own
@@ -559,7 +704,7 @@ impl ArenaEntryData {
 /// [`RecognizerBase::stop_tracking`]: crate::recognizers::RecognizerBase::stop_tracking
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SweepModel {
-    /// The recognizer / detector owns the lifecycle (private arena).
+    /// A standalone recognizer owns the lifecycle of its private arena.
     SelfDriven,
     /// A binding owns the lifecycle (shared arena).
     BindingDriven,
@@ -576,7 +721,7 @@ pub enum SweepModel {
 /// — the route-before-sweep order is load-bearing (it lets a double-tap's
 /// first-up `hold` run before the sweep, so the sweep observes the hold
 /// and defers).
-/// Shared by the headless binding and any future production `GestureBinding`.
+/// Shared by the headless binding and the production `GestureBinding`.
 pub fn run_pointer_lifecycle(arena: &GestureArena, event: &crate::events::PointerEvent) {
     use crate::events::PointerEvent;
     let pointer = crate::events::extract_pointer_id(event);
@@ -595,10 +740,9 @@ pub fn run_pointer_lifecycle(arena: &GestureArena, event: &crate::events::Pointe
 ///
 /// Manages conflict resolution between competing gesture recognizers.
 ///
-/// # Thread Safety
-///
-/// GestureArena is thread-safe and uses DashMap for lock-free concurrent
-/// access.
+/// The arena is intentionally owner-affine: recognizer callbacks may capture
+/// owner-local UI state. Internal maps provide keyed storage, not a promise of
+/// cross-thread callback dispatch.
 ///
 /// # Example
 ///
@@ -641,8 +785,17 @@ pub fn run_pointer_lifecycle(arena: &GestureArena, event: &crate::events::Pointe
 /// ```
 #[derive(Clone)]
 pub struct GestureArena {
-    /// Map from pointer ID to arena entry (lock-free concurrent HashMap).
-    entries: Arc<DashMap<PointerId, Mutex<ArenaEntryData>>>,
+    /// Map from pointer ID to the active exact-generation arena slot.
+    entries: Arc<DashMap<PointerId, Arc<ArenaSlot>>>,
+    /// Held arenas detached from the active pointer map during an Up
+    /// transaction. Exact entry tokens can still release these generations,
+    /// while a reused pointer ID opens a fresh active slot.
+    retained: Arc<DashMap<ArenaGeneration, Arc<ArenaSlot>>>,
+    /// Typed replacement for Flutter's single-member microtask closure queue.
+    deferred: Arc<Mutex<VecDeque<DeferredResolution>>>,
+    /// Owner-frame deadline polling, independent from arena-slot lifetime.
+    deadlines: Arc<DeadlineRegistry>,
+    next_generation: Arc<AtomicU64>,
     /// The time source deadline-driven recognizers read `now()` from. Defaults
     /// to the OS clock; a headless frame driver injects a `ManualClock` so a
     /// deadline (e.g. long-press) elapses deterministically without sleeping.
@@ -652,7 +805,108 @@ pub struct GestureArena {
     sweep_model: SweepModel,
 }
 
+struct DeferredResolution {
+    pointer: PointerId,
+    generation: ArenaGeneration,
+    slot: Weak<ArenaSlot>,
+}
+
+pub(crate) struct DetachedArenaBatch {
+    pointer: PointerId,
+    slots: SmallVec<[Arc<ArenaSlot>; 2]>,
+}
+
 impl GestureArena {
+    fn allocate_slot(&self, pointer: PointerId) -> Arc<ArenaSlot> {
+        let generation = ArenaGeneration(
+            self.next_generation
+                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |generation| {
+                    generation.checked_add(1)
+                })
+                .unwrap_or_else(|_| panic!("BUG: gesture arena generation exhausted")),
+        );
+        Arc::new(ArenaSlot::new(pointer, generation))
+    }
+
+    fn current_slot(&self, pointer: PointerId) -> Option<Arc<ArenaSlot>> {
+        self.entries
+            .get(&pointer)
+            .map(|entry| Arc::clone(entry.value()))
+    }
+
+    fn remove_current_slot(&self, pointer: PointerId, slot: &Arc<ArenaSlot>) -> bool {
+        use dashmap::mapref::entry::Entry;
+
+        match self.entries.entry(pointer) {
+            Entry::Occupied(entry) if Arc::ptr_eq(entry.get(), slot) => {
+                entry.remove();
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn remove_retained_slot(&self, slot: &Arc<ArenaSlot>) -> bool {
+        use dashmap::mapref::entry::Entry;
+
+        match self.retained.entry(slot.generation) {
+            Entry::Occupied(entry) if Arc::ptr_eq(entry.get(), slot) => {
+                entry.remove();
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn remove_exact_slot(&self, pointer: PointerId, slot: &Arc<ArenaSlot>) -> bool {
+        self.remove_current_slot(pointer, slot) || self.remove_retained_slot(slot)
+    }
+
+    fn is_live_slot(&self, pointer: PointerId, slot: &Arc<ArenaSlot>) -> bool {
+        self.entries
+            .get(&pointer)
+            .is_some_and(|entry| Arc::ptr_eq(entry.value(), slot))
+            || self
+                .retained
+                .get(&slot.generation)
+                .is_some_and(|entry| Arc::ptr_eq(entry.value(), slot))
+    }
+
+    fn queue_default_resolution(&self, pointer: PointerId, slot: &Arc<ArenaSlot>) {
+        if self.is_live_slot(pointer, slot) {
+            self.deferred.lock().push_back(DeferredResolution {
+                pointer,
+                generation: slot.generation,
+                slot: Arc::downgrade(slot),
+            });
+        }
+    }
+
+    fn collect_follow_up(
+        &self,
+        pointer: PointerId,
+        slot: &Arc<ArenaSlot>,
+        follow_up: ArenaFollowUp,
+    ) -> PendingNotifications {
+        match follow_up {
+            ArenaFollowUp::None => PendingNotifications::new(),
+            ArenaFollowUp::RemoveEmpty => {
+                slot.data.lock().is_resolved = true;
+                self.remove_exact_slot(pointer, slot);
+                PendingNotifications::new()
+            }
+            ArenaFollowUp::DeferDefault => {
+                self.queue_default_resolution(pointer, slot);
+                PendingNotifications::new()
+            }
+            ArenaFollowUp::ResolveInFavorOf(winner) => {
+                let pending = slot.data.lock().resolve(Some(winner));
+                self.remove_exact_slot(pointer, slot);
+                pending
+            }
+        }
+    }
+
     /// Create a new gesture arena driven by the real OS clock.
     #[inline]
     pub fn new() -> Self {
@@ -668,6 +922,10 @@ impl GestureArena {
     pub fn with_clock(clock: Arc<dyn MonotonicClock>) -> Self {
         Self {
             entries: Arc::new(DashMap::new()),
+            retained: Arc::new(DashMap::new()),
+            deferred: Arc::new(Mutex::new(VecDeque::new())),
+            deadlines: Arc::new(DeadlineRegistry::new()),
+            next_generation: Arc::new(AtomicU64::new(1)),
             clock,
             sweep_model: SweepModel::SelfDriven,
         }
@@ -679,11 +937,15 @@ impl GestureArena {
     /// added to it never self-sweep in `stop_tracking` — the binding runs the
     /// close/sweep lifecycle via [`run_pointer_lifecycle`] after routing each
     /// pointer event. This is the arena a [`HeadlessBinding`](https://docs.rs/flui-binding)
-    /// (or a future production `GestureBinding`) hands down to a subtree.
+    /// or production `GestureBinding` hands down to a subtree.
     #[inline]
     pub fn binding_driven(clock: Arc<dyn MonotonicClock>) -> Self {
         Self {
             entries: Arc::new(DashMap::new()),
+            retained: Arc::new(DashMap::new()),
+            deferred: Arc::new(Mutex::new(VecDeque::new())),
+            deadlines: Arc::new(DeadlineRegistry::new()),
+            next_generation: Arc::new(AtomicU64::new(1)),
             clock,
             sweep_model: SweepModel::BindingDriven,
         }
@@ -694,6 +956,10 @@ impl GestureArena {
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             entries: Arc::new(DashMap::with_capacity(capacity)),
+            retained: Arc::new(DashMap::with_capacity(capacity)),
+            deferred: Arc::new(Mutex::new(VecDeque::new())),
+            deadlines: Arc::new(DeadlineRegistry::new()),
+            next_generation: Arc::new(AtomicU64::new(1)),
             clock: Arc::new(SystemClock),
             sweep_model: SweepModel::SelfDriven,
         }
@@ -701,9 +967,10 @@ impl GestureArena {
 
     /// Who owns this arena's close/sweep lifecycle.
     ///
-    /// [`SelfDriven`](SweepModel::SelfDriven) for a private arena (the
-    /// recognizer sweeps itself); [`BindingDriven`](SweepModel::BindingDriven)
-    /// for a binding-owned shared arena.
+    /// [`SelfDriven`](SweepModel::SelfDriven) for a low-level private arena
+    /// (the recognizer sweeps itself);
+    /// [`BindingDriven`](SweepModel::BindingDriven) for a binding-owned shared
+    /// presentation arena.
     #[inline]
     pub fn sweep_model(&self) -> SweepModel {
         self.sweep_model
@@ -714,6 +981,19 @@ impl GestureArena {
     #[inline]
     pub fn now(&self) -> Instant {
         self.clock.now()
+    }
+
+    /// Register a time-based recognizer with the owner frame clock.
+    ///
+    /// The returned token controls the active lifetime. Arena resolution does
+    /// not remove it; the recognizer drops it when its deadline fires or the
+    /// pointer sequence terminates.
+    pub(crate) fn register_deadline_member(
+        &self,
+        pointer: PointerId,
+        member: &Arc<dyn GestureArenaMember>,
+    ) -> GestureDeadlineRegistration {
+        self.deadlines.register(pointer, member)
     }
 
     /// Add a member to the arena for a specific pointer.
@@ -759,19 +1039,26 @@ impl GestureArena {
         pointer: PointerId,
         member: Arc<dyn GestureArenaMember>,
     ) -> GestureArenaEntry {
-        // Insert-or-get and add the member under the SAME entry handle, so a
-        // concurrent sweep cannot remove the slot between creation and member
-        // insertion (a second `get()` could miss, silently dropping the
-        // member while still returning a live `GestureArenaEntry`). Lock
-        // ordering (shard guard then inner `Mutex`) matches every other call
-        // site, and the critical section is a single `SmallVec` push.
-        self.entries
-            .entry(pointer)
-            .or_insert_with(|| Mutex::new(ArenaEntryData::new()))
-            .lock()
-            .add(member.clone());
+        use dashmap::mapref::entry::Entry;
 
-        GestureArenaEntry::new(self.clone(), pointer, member)
+        // Keep the occupied shard guard until membership is recorded. This
+        // makes slot selection and membership insertion one transaction even
+        // if a future embedding widens the current owner-local boundary.
+        let slot = match self.entries.entry(pointer) {
+            Entry::Occupied(entry) => {
+                let slot = Arc::clone(entry.get());
+                slot.data.lock().add(member.clone());
+                slot
+            }
+            Entry::Vacant(entry) => {
+                let slot = self.allocate_slot(pointer);
+                slot.data.lock().add(member.clone());
+                entry.insert(Arc::clone(&slot));
+                slot
+            }
+        };
+
+        GestureArenaEntry::new(self.clone(), pointer, &slot, &member)
     }
 
     /// Close the arena for a pointer (no more members can be added).
@@ -791,17 +1078,11 @@ impl GestureArena {
         )
     )]
     pub fn close(&self, pointer: PointerId) {
-        let pending = if let Some(entry_ref) = self.entries.get(&pointer) {
-            let mut entry = entry_ref.lock();
-
-            if entry.is_held {
-                return; // Arena is held open
-            }
-
-            entry.close()
-        } else {
+        let Some(slot) = self.current_slot(pointer) else {
             return;
         };
+        let follow_up = slot.data.lock().close();
+        let pending = self.collect_follow_up(pointer, &slot, follow_up);
         Self::dispatch_pending(pending, pointer);
     }
 
@@ -811,12 +1092,27 @@ impl GestureArena {
     /// arena). See [`PendingNotifications`].
     #[inline]
     fn dispatch_pending(pending: PendingNotifications, pointer: PointerId) {
+        if let Some(payload) = Self::dispatch_pending_capturing(pending, pointer) {
+            resume_unwind(payload);
+        }
+    }
+
+    fn dispatch_pending_capturing(
+        pending: PendingNotifications,
+        pointer: PointerId,
+    ) -> Option<Box<dyn Any + Send>> {
+        let mut first_panic = None;
         for (member, disposition) in pending {
-            match disposition {
+            let candidate = catch_unwind(AssertUnwindSafe(|| match disposition {
                 GestureDisposition::Accepted => member.accept_gesture(pointer),
                 GestureDisposition::Rejected => member.reject_gesture(pointer),
-            }
+            }))
+            .err();
+            Self::preserve_first_panic(&mut first_panic, candidate, pointer);
+            let drop_candidate = catch_unwind(AssertUnwindSafe(|| drop(member))).err();
+            Self::preserve_first_panic(&mut first_panic, drop_candidate, pointer);
         }
+        first_panic
     }
 
     /// Internal method: resolve an entry with given disposition.
@@ -825,25 +1121,18 @@ impl GestureArena {
     fn resolve_entry(
         &self,
         pointer: PointerId,
-        member: &Arc<dyn GestureArenaMember>,
+        slot: &Arc<ArenaSlot>,
+        member: Arc<dyn GestureArenaMember>,
         disposition: GestureDisposition,
     ) {
-        let pending = if let Some(entry_ref) = self.entries.get(&pointer) {
-            let mut entry = entry_ref.lock();
-
+        let (mut pending, follow_up) = {
+            let mut entry = slot.data.lock();
             match disposition {
-                GestureDisposition::Accepted => entry.accept(member.clone()),
-                GestureDisposition::Rejected => {
-                    let mut pending = entry.reject(member);
-                    if !entry.is_open {
-                        pending.extend(entry.try_to_resolve());
-                    }
-                    pending
-                }
+                GestureDisposition::Accepted => (PendingNotifications::new(), entry.accept(member)),
+                GestureDisposition::Rejected => entry.reject(member),
             }
-        } else {
-            return;
         };
+        pending.extend(self.collect_follow_up(pointer, slot, follow_up));
         Self::dispatch_pending(pending, pointer);
     }
 
@@ -856,11 +1145,11 @@ impl GestureArena {
     ///
     /// Prefer using [`GestureArenaEntry::resolve`] instead of this method.
     pub fn accept(&self, pointer: PointerId, member: Arc<dyn GestureArenaMember>) {
-        let pending = if let Some(entry_ref) = self.entries.get(&pointer) {
-            entry_ref.lock().accept(member)
-        } else {
+        let Some(slot) = self.current_slot(pointer) else {
             return;
         };
+        let follow_up = slot.data.lock().accept(member);
+        let pending = self.collect_follow_up(pointer, &slot, follow_up);
         Self::dispatch_pending(pending, pointer);
     }
 
@@ -873,73 +1162,53 @@ impl GestureArena {
     ///
     /// Prefer using [`GestureArenaEntry::resolve`] instead of this method.
     pub fn reject(&self, pointer: PointerId, member: &Arc<dyn GestureArenaMember>) {
-        let pending = if let Some(entry_ref) = self.entries.get(&pointer) {
-            let mut entry = entry_ref.lock();
-            let mut pending = entry.reject(member);
-            if !entry.is_open {
-                pending.extend(entry.try_to_resolve());
-            }
-            pending
-        } else {
+        let Some(slot) = self.current_slot(pointer) else {
             return;
         };
-        Self::dispatch_pending(pending, pointer);
+        self.resolve_entry(pointer, &slot, member.clone(), GestureDisposition::Rejected);
     }
 
     /// Hold the arena open for a pointer (delay resolution).
     ///
     /// Used when a recognizer needs more time to decide.
     pub fn hold(&self, pointer: PointerId) {
-        if let Some(entry_ref) = self.entries.get(&pointer) {
-            entry_ref.lock().hold();
+        if let Some(slot) = self.current_slot(pointer) {
+            slot.data.lock().hold();
+        }
+    }
+
+    fn hold_slot(slot: &Arc<ArenaSlot>) {
+        let mut entry = slot.data.lock();
+        if !entry.is_resolved {
+            entry.hold();
         }
     }
 
     /// Release the hold on an arena.
     ///
-    /// If the arena was waiting to close, it will close now. If a sweep was
-    /// pending (deferred while held), the deferred sweep drains and the entry
-    /// is removed.
-    ///
-    /// # Contract
-    ///
-    /// The caller is responsible for ensuring the entry is already resolved
-    /// (or has no members) before the deferred sweep drains. Releasing an
-    /// unresolved multi-member entry causes the entry to be silently removed
-    /// without invoking `accept_gesture` or `reject_gesture` on any member.
-    /// The correct pattern: resolve (or `reject_member` until one winner
-    /// remains) *before* calling `release`, so `has_pending_sweep` drains a
-    /// settled entry.
+    /// If a sweep was attempted while held, the deferred sweep runs now.
+    /// Releasing never closes membership; `close` always does that during
+    /// Down dispatch, independent of the hold state.
     pub fn release(&self, pointer: PointerId) {
-        let mut pending = PendingNotifications::new();
+        let retained = self
+            .retained
+            .iter()
+            .filter(|entry| entry.value().pointer == pointer)
+            .min_by_key(|entry| entry.key().0)
+            .map(|entry| Arc::clone(entry.value()));
+        if let Some(slot) = retained.or_else(|| self.current_slot(pointer)) {
+            self.release_slot(&slot);
+        }
+    }
+
+    fn release_slot(&self, slot: &Arc<ArenaSlot>) {
         let should_sweep = {
-            if let Some(entry_ref) = self.entries.get(&pointer) {
-                let mut entry = entry_ref.lock();
-                entry.release();
-
-                // If arena was waiting to close, close it now
-                if !entry.is_held && !entry.is_resolved {
-                    pending = entry.close();
-                }
-
-                // Check if sweep was pending
-                if entry.has_pending_sweep {
-                    entry.has_pending_sweep = false;
-                    true
-                } else {
-                    false
-                }
-            } else {
-                false
-            }
+            let mut entry = slot.data.lock();
+            entry.release();
+            std::mem::take(&mut entry.has_pending_sweep)
         };
-
-        // Dispatch deferred notifications after releasing the entry lock.
-        Self::dispatch_pending(pending, pointer);
-
-        // Execute pending sweep outside the lock
         if should_sweep {
-            self.entries.remove(&pointer);
+            self.sweep_slot(slot);
         }
     }
 
@@ -962,11 +1231,11 @@ impl GestureArena {
         )
     )]
     pub fn resolve(&self, pointer: PointerId, winner: Option<Arc<dyn GestureArenaMember>>) {
-        let pending = if let Some(entry_ref) = self.entries.get(&pointer) {
-            entry_ref.lock().resolve(winner)
-        } else {
+        let Some(slot) = self.current_slot(pointer) else {
             return;
         };
+        let pending = slot.data.lock().resolve(winner);
+        self.remove_exact_slot(pointer, &slot);
         Self::dispatch_pending(pending, pointer);
     }
 
@@ -979,32 +1248,10 @@ impl GestureArena {
     /// (Flutter parity: `GestureArenaEntry.resolve(rejected)` withdraws the
     /// caller without rejecting its competitors).
     pub fn reject_member(&self, pointer: PointerId, member: &Arc<dyn GestureArenaMember>) {
-        let pending = if let Some(entry_ref) = self.entries.get(&pointer) {
-            entry_ref.lock().reject(member)
-        } else {
+        let Some(slot) = self.current_slot(pointer) else {
             return;
         };
-        Self::dispatch_pending(pending, pointer);
-    }
-
-    /// Remove the entry for `pointer` only if it has **settled** — a winner has
-    /// been resolved, or no members remain.
-    ///
-    /// Unlike [`sweep`](Self::sweep), this never force-resolves a still-open
-    /// competition (first-member-wins): an entry that still has rivals is left
-    /// untouched. It is the teardown a withdrawing member uses (after
-    /// [`reject_member`](Self::reject_member)) to clean up the shared entry
-    /// without disturbing the members still competing for the pointer.
-    pub fn remove_if_settled(&self, pointer: PointerId) {
-        let settled = if let Some(entry_ref) = self.entries.get(&pointer) {
-            let entry = entry_ref.lock();
-            entry.is_resolved || entry.members.is_empty()
-        } else {
-            return;
-        };
-        if settled {
-            self.entries.remove(&pointer);
-        }
+        self.resolve_entry(pointer, &slot, member.clone(), GestureDisposition::Rejected);
     }
 
     /// Resolve the arena with multiple winners.
@@ -1020,11 +1267,11 @@ impl GestureArena {
     /// arena.resolve_team(pointer, &[tap_recognizer, double_tap_recognizer]);
     /// ```
     pub fn resolve_team(&self, pointer: PointerId, winners: &[Arc<dyn GestureArenaMember>]) {
-        let pending = if let Some(entry_ref) = self.entries.get(&pointer) {
-            entry_ref.lock().resolve_team(winners)
-        } else {
+        let Some(slot) = self.current_slot(pointer) else {
             return;
         };
+        let pending = slot.data.lock().resolve_team(winners);
+        self.remove_exact_slot(pointer, &slot);
         Self::dispatch_pending(pending, pointer);
     }
 
@@ -1043,31 +1290,143 @@ impl GestureArena {
         )
     )]
     pub fn sweep(&self, pointer: PointerId) {
-        // Check if held - if so, mark pending sweep
-        let pending = if let Some(entry_ref) = self.entries.get(&pointer) {
-            let mut entry = entry_ref.lock();
+        if let Some(slot) = self.current_slot(pointer) {
+            self.sweep_slot(&slot);
+        }
+    }
 
+    fn sweep_slot(&self, slot: &Arc<ArenaSlot>) {
+        let pending = {
+            let mut entry = slot.data.lock();
             if entry.is_held {
                 entry.has_pending_sweep = true;
+                if !self
+                    .entries
+                    .get(&slot.pointer)
+                    .is_some_and(|current| Arc::ptr_eq(current.value(), slot))
+                {
+                    self.retained.insert(slot.generation, Arc::clone(slot));
+                }
                 return;
             }
-
-            // Force resolve if not resolved yet (first member wins)
-            if !entry.is_resolved && !entry.members.is_empty() {
-                let winner = entry.members[0].clone();
-                entry.resolve(Some(winner))
-            } else {
-                PendingNotifications::new()
-            }
-        } else {
-            PendingNotifications::new()
+            entry.sweep()
         };
+        self.remove_exact_slot(slot.pointer, slot);
+        Self::dispatch_pending(pending, slot.pointer);
+    }
 
-        // Dispatch notifications after releasing the entry lock, before
-        // removing the slot.
-        Self::dispatch_pending(pending, pointer);
+    /// Tear down one interrupted pointer sequence without choosing a winner.
+    ///
+    /// Lifecycle loss and explicit cache invalidation can arrive without a
+    /// matching pointer Cancel. Remove the slot before notifying recognizers,
+    /// so re-entrancy or a panicking rejection callback cannot leave a stale
+    /// competition behind.
+    pub fn abandon(&self, pointer: PointerId) {
+        let batch = self.detach(pointer);
+        Self::abandon_detached(batch);
+    }
 
-        self.entries.remove(&pointer);
+    /// Remove every generation for `pointer` from maps visible to new input.
+    /// The returned owned batch keeps members alive until the caller finishes
+    /// its causal route/lifecycle transaction.
+    pub(crate) fn detach(&self, pointer: PointerId) -> DetachedArenaBatch {
+        let mut slots = SmallVec::new();
+        if let Some((_, slot)) = self.entries.remove(&pointer) {
+            slots.push(slot);
+        }
+
+        let mut retained_generations: SmallVec<[ArenaGeneration; 2]> = self
+            .retained
+            .iter()
+            .filter(|entry| entry.value().pointer == pointer)
+            .map(|entry| *entry.key())
+            .collect();
+        retained_generations.sort_unstable_by_key(|generation| generation.0);
+        for generation in retained_generations {
+            if let Some((_, slot)) = self.retained.remove(&generation) {
+                slots.push(slot);
+            }
+        }
+
+        DetachedArenaBatch { pointer, slots }
+    }
+
+    /// Run pointer-up sweep semantics over an already detached batch.
+    pub(crate) fn sweep_detached(&self, batch: DetachedArenaBatch) {
+        let mut first_panic = None;
+        for slot in batch.slots {
+            let pending = {
+                let mut entry = slot.data.lock();
+                if entry.is_held {
+                    entry.has_pending_sweep = true;
+                    self.retained.insert(slot.generation, Arc::clone(&slot));
+                    continue;
+                }
+                entry.sweep()
+            };
+            let candidate = Self::dispatch_pending_capturing(pending, batch.pointer);
+            Self::preserve_first_panic(&mut first_panic, candidate, batch.pointer);
+        }
+        if let Some(payload) = first_panic {
+            resume_unwind(payload);
+        }
+    }
+
+    /// Reject every member of an already detached batch without a winner.
+    pub(crate) fn abandon_detached(batch: DetachedArenaBatch) {
+        let mut first_panic = None;
+        for slot in batch.slots {
+            let pending = slot.data.lock().resolve(None);
+            let candidate = Self::dispatch_pending_capturing(pending, batch.pointer);
+            Self::preserve_first_panic(&mut first_panic, candidate, batch.pointer);
+        }
+        if let Some(payload) = first_panic {
+            resume_unwind(payload);
+        }
+    }
+
+    /// Tear down every interrupted pointer sequence without choosing winners.
+    ///
+    /// All slots are detached first. Recognizer notifications keep their
+    /// normal stop-on-unwind behavior while the binding still ends with no
+    /// live arena state.
+    pub(crate) fn abandon_all(&self) {
+        let mut pointers: Vec<PointerId> = self.entries.iter().map(|entry| *entry.key()).collect();
+        pointers.extend(self.retained.iter().map(|entry| entry.value().pointer));
+        pointers.sort_unstable();
+        pointers.dedup();
+        let batches: Vec<_> = pointers
+            .into_iter()
+            .map(|pointer| self.detach(pointer))
+            .collect();
+
+        let mut first_panic = None;
+        for batch in batches {
+            for slot in batch.slots {
+                let pending = slot.data.lock().resolve(None);
+                let candidate = Self::dispatch_pending_capturing(pending, batch.pointer);
+                Self::preserve_first_panic(&mut first_panic, candidate, batch.pointer);
+            }
+        }
+        if let Some(payload) = first_panic {
+            resume_unwind(payload);
+        }
+    }
+
+    fn preserve_first_panic(
+        first: &mut Option<Box<dyn Any + Send>>,
+        candidate: Option<Box<dyn Any + Send>>,
+        pointer: PointerId,
+    ) {
+        let Some(candidate) = candidate else {
+            return;
+        };
+        if first.is_none() {
+            *first = Some(candidate);
+        } else {
+            tracing::error!(?pointer, "arena phase panicked after an earlier failure");
+            std::mem::forget(candidate);
+        }
     }
 
     /// Poll every active member's time-based deadline (e.g. long-press hold).
@@ -1076,219 +1435,179 @@ impl GestureArena {
     /// the per-entry locks *before* polling, because a deadline hook may fire
     /// user callbacks and re-enter the arena to resolve — invoking it under the
     /// entry lock would re-introduce the arena re-entrancy deadlock. A member
-    /// that tracks several pointers is polled once per pointer; `poll_deadline`
-    /// is contractually idempotent, so the duplicate polls are harmless.
+    /// Explicit deadline registrations remain visible after arena resolution,
+    /// matching Flutter timers whose lifetime is independent from the arena.
+    /// Exact recognizer identities are de-duplicated, so a registered member
+    /// that is also still competing is polled only once.
     ///
     /// Complexity: O(P + M) where P is the number of open arenas and M the
     /// total active members — both bounded by the simultaneous-pointer cap.
     pub fn poll_deadlines(&self) {
-        let mut members: SmallVec<[Arc<dyn GestureArenaMember>; 8]> = SmallVec::new();
+        let mut members: SmallVec<[DeadlinePoll; 8]> = SmallVec::new();
         for entry in self.entries.iter() {
-            members.extend(entry.value().lock().members.iter().cloned());
+            let pointer = entry.value().pointer;
+            for member in &entry.value().data.lock().members {
+                if !members
+                    .iter()
+                    .any(|existing| Arc::ptr_eq(&existing.member, member))
+                {
+                    members.push(DeadlinePoll {
+                        registration: None,
+                        pointer,
+                        member: Arc::clone(member),
+                    });
+                }
+            }
         }
-        for member in members {
-            member.poll_deadline();
+        for entry in self.retained.iter() {
+            let pointer = entry.value().pointer;
+            for member in &entry.value().data.lock().members {
+                if !members
+                    .iter()
+                    .any(|existing| Arc::ptr_eq(&existing.member, member))
+                {
+                    members.push(DeadlinePoll {
+                        registration: None,
+                        pointer,
+                        member: Arc::clone(member),
+                    });
+                }
+            }
         }
+        for poll in self.deadlines.snapshot() {
+            if !members
+                .iter()
+                .any(|existing| Arc::ptr_eq(&existing.member, &poll.member))
+            {
+                members.push(poll);
+            }
+        }
+
+        let mut first_panic = None;
+        for poll in members {
+            if poll
+                .registration
+                .is_some_and(|id| !self.deadlines.contains(id))
+            {
+                continue;
+            }
+            let candidate = catch_unwind(AssertUnwindSafe(|| poll.member.poll_deadline())).err();
+            Self::preserve_first_panic(&mut first_panic, candidate, poll.pointer);
+        }
+        if let Some(payload) = first_panic {
+            resume_unwind(payload);
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn deadline_member_count(&self) -> usize {
+        self.deadlines.len()
     }
 
     /// Get the number of active arenas.
     #[inline]
     pub fn len(&self) -> usize {
-        self.entries.len()
+        self.entries.len() + self.retained.len()
     }
 
     /// Check if arena is empty.
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
+        self.entries.is_empty() && self.retained.is_empty()
     }
 
     /// Check if an arena exists for a pointer.
     #[inline]
     pub fn contains(&self, pointer: PointerId) -> bool {
         self.entries.contains_key(&pointer)
+            || self
+                .retained
+                .iter()
+                .any(|entry| entry.value().pointer == pointer)
     }
 
-    /// Get the primary winner for a pointer (if resolved).
-    ///
-    /// Returns the first winner. Use [`winners`](Self::winners) to get all
-    /// winners when team resolution is used.
-    pub fn winner(&self, pointer: PointerId) -> Option<Arc<dyn GestureArenaMember>> {
-        self.entries
-            .get(&pointer)
-            .and_then(|entry_ref| entry_ref.lock().winners.first().cloned())
+    /// Whether `pointer` currently has a slot accepting this sequence's arena
+    /// lifecycle (excluding held generations retained from earlier contacts).
+    pub(crate) fn has_active(&self, pointer: PointerId) -> bool {
+        self.entries.contains_key(&pointer)
     }
 
-    /// Get all winners for a pointer (if resolved).
-    ///
-    /// Returns all winners including team members. Empty if not resolved or no
-    /// winners.
-    pub fn winners(&self, pointer: PointerId) -> Vec<Arc<dyn GestureArenaMember>> {
-        self.entries
-            .get(&pointer)
-            .map(|entry_ref| entry_ref.lock().winners.to_vec())
-            .unwrap_or_default()
-    }
-
-    /// Get the number of winners for a pointer.
-    pub fn winner_count(&self, pointer: PointerId) -> usize {
-        self.entries
-            .get(&pointer)
-            .map_or(0, |entry_ref| entry_ref.lock().winners.len())
-    }
-
-    /// Check if an arena is resolved.
-    pub fn is_resolved(&self, pointer: PointerId) -> bool {
-        self.entries
-            .get(&pointer)
-            .is_some_and(|entry_ref| entry_ref.lock().is_resolved)
+    fn inspection_slot(&self, pointer: PointerId) -> Option<Arc<ArenaSlot>> {
+        self.current_slot(pointer).or_else(|| {
+            self.retained
+                .iter()
+                .filter(|entry| entry.value().pointer == pointer)
+                .min_by_key(|entry| entry.key().0)
+                .map(|entry| Arc::clone(entry.value()))
+        })
     }
 
     /// Check if an arena is held.
     pub fn is_held(&self, pointer: PointerId) -> bool {
-        self.entries
-            .get(&pointer)
-            .is_some_and(|entry_ref| entry_ref.lock().is_held)
+        self.inspection_slot(pointer)
+            .is_some_and(|slot| slot.data.lock().is_held)
     }
 
     /// Check if an arena is open (accepting new members).
     pub fn is_open(&self, pointer: PointerId) -> bool {
-        self.entries
-            .get(&pointer)
-            .is_some_and(|entry_ref| entry_ref.lock().is_open)
+        self.inspection_slot(pointer)
+            .is_some_and(|slot| slot.data.lock().is_open)
     }
 
     /// Check if an arena has an eager winner.
     pub fn has_eager_winner(&self, pointer: PointerId) -> bool {
-        self.entries
-            .get(&pointer)
-            .is_some_and(|entry_ref| entry_ref.lock().eager_winner.is_some())
+        self.inspection_slot(pointer)
+            .is_some_and(|slot| slot.data.lock().eager_winner.is_some())
     }
 
     /// Check if sweep is pending for an arena.
     pub fn has_pending_sweep(&self, pointer: PointerId) -> bool {
-        self.entries
-            .get(&pointer)
-            .is_some_and(|entry_ref| entry_ref.lock().has_pending_sweep)
+        self.inspection_slot(pointer)
+            .is_some_and(|slot| slot.data.lock().has_pending_sweep)
     }
 
     /// Get the number of members in an arena.
     pub fn member_count(&self, pointer: PointerId) -> usize {
-        self.entries
-            .get(&pointer)
-            .map_or(0, |entry_ref| entry_ref.lock().members.len())
+        self.inspection_slot(pointer)
+            .map_or(0, |slot| slot.data.lock().members.len())
     }
 
-    // ========================================================================
-    // Timeout-based disambiguation
-    // ========================================================================
-
-    /// Check if an arena has exceeded its timeout.
+    /// Drain single-member default resolutions queued by `close`/`reject`.
     ///
-    /// Returns `true` if the arena exists, is not resolved, and has been
-    /// waiting longer than the specified timeout.
-    pub fn has_timed_out(&self, pointer: PointerId, timeout: Duration) -> bool {
-        self.entries.get(&pointer).is_some_and(|entry_ref| {
-            let entry = entry_ref.lock();
-            !entry.is_resolved && entry.has_timed_out(timeout)
-        })
-    }
+    /// This is a typed owner-boundary queue, not an arbitrary closure
+    /// executor. Each token carries the exact arena generation; rejection,
+    /// explicit resolution, teardown, or pointer-ID reuse makes it stale.
+    pub fn drain_deferred_resolutions(&self) -> usize {
+        let queued = std::mem::take(&mut *self.deferred.lock());
+        let mut resolved = 0;
+        let mut first_panic = None;
 
-    /// Check if an arena has exceeded the default timeout.
-    ///
-    /// Uses [`DEFAULT_DISAMBIGUATION_TIMEOUT`] (100ms).
-    #[inline]
-    pub fn has_default_timeout(&self, pointer: PointerId) -> bool {
-        self.has_timed_out(pointer, DEFAULT_DISAMBIGUATION_TIMEOUT)
-    }
-
-    /// Get the elapsed time for an arena.
-    ///
-    /// Returns `None` if the arena doesn't exist.
-    pub fn elapsed(&self, pointer: PointerId) -> Option<Duration> {
-        self.entries
-            .get(&pointer)
-            .map(|entry_ref| entry_ref.lock().elapsed())
-    }
-
-    /// Force resolve an arena due to timeout.
-    ///
-    /// If the arena is not held and has timed out:
-    /// - If there's at least one member, the first member wins
-    /// - If there are no members, the arena is resolved with no winner
-    ///
-    /// Returns `true` if the arena was force-resolved.
-    pub fn force_resolve_if_timed_out(&self, pointer: PointerId, timeout: Duration) -> bool {
-        let pending = if let Some(entry_ref) = self.entries.get(&pointer) {
-            let mut entry = entry_ref.lock();
-
-            // Skip if already resolved or held
-            if entry.is_resolved || entry.is_held {
-                return false;
+        for token in queued {
+            let Some(slot) = token.slot.upgrade() else {
+                continue;
+            };
+            if slot.generation != token.generation || !self.is_live_slot(token.pointer, &slot) {
+                continue;
             }
 
-            // Check timeout
-            if !entry.has_timed_out(timeout) {
-                return false;
-            }
-
-            tracing::trace!(
-                ?pointer,
-                elapsed_ms = entry.elapsed().as_millis(),
-                member_count = entry.members.len(),
-                "Force resolving arena due to timeout"
-            );
-
-            // First member wins (if any)
-            let winner = entry.members.first().cloned();
-            entry.resolve(winner)
-        } else {
-            return false;
-        };
-
-        Self::dispatch_pending(pending, pointer);
-        true
-    }
-
-    /// Force resolve with default timeout.
-    ///
-    /// Uses [`DEFAULT_DISAMBIGUATION_TIMEOUT`] (100ms).
-    #[inline]
-    pub fn force_resolve_if_default_timeout(&self, pointer: PointerId) -> bool {
-        self.force_resolve_if_timed_out(pointer, DEFAULT_DISAMBIGUATION_TIMEOUT)
-    }
-
-    /// Check all arenas and force resolve any that have timed out.
-    ///
-    /// Returns the number of arenas that were force-resolved.
-    ///
-    /// This should be called periodically (e.g., on each frame) to handle
-    /// disambiguation timeouts.
-    pub fn resolve_timed_out_arenas(&self, timeout: Duration) -> usize {
-        let mut resolved_count = 0;
-
-        // Collect pointers to check (avoid holding iteration lock during resolve)
-        let pointers: Vec<PointerId> = self.entries.iter().map(|e| *e.key()).collect();
-
-        for pointer in pointers {
-            if self.force_resolve_if_timed_out(pointer, timeout) {
-                resolved_count += 1;
-            }
+            let pending = {
+                let mut entry = slot.data.lock();
+                if entry.is_open || entry.is_resolved || entry.members.len() != 1 {
+                    continue;
+                }
+                let winner = entry.members[0].clone();
+                entry.resolve(Some(winner))
+            };
+            self.remove_exact_slot(token.pointer, &slot);
+            resolved += 1;
+            let candidate = Self::dispatch_pending_capturing(pending, token.pointer);
+            Self::preserve_first_panic(&mut first_panic, candidate, token.pointer);
         }
 
-        if resolved_count > 0 {
-            tracing::trace!(count = resolved_count, "Force resolved timed out arenas");
+        if let Some(payload) = first_panic {
+            resume_unwind(payload);
         }
-
-        resolved_count
-    }
-
-    /// Check all arenas with default timeout.
-    ///
-    /// Uses [`DEFAULT_DISAMBIGUATION_TIMEOUT`] (100ms).
-    #[inline]
-    pub fn resolve_default_timed_out_arenas(&self) -> usize {
-        self.resolve_timed_out_arenas(DEFAULT_DISAMBIGUATION_TIMEOUT)
+        resolved
     }
 }
 
@@ -1309,6 +1628,9 @@ impl std::fmt::Debug for GestureArena {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    static_assertions::assert_not_impl_any!(GestureArena: Send, Sync);
+    static_assertions::assert_not_impl_any!(GestureArenaEntry: Send, Sync);
 
     // Mock arena member for testing - implement sealed trait
     struct MockMember {
@@ -1368,6 +1690,70 @@ mod tests {
         }
     }
 
+    struct PanickingAcceptMember;
+
+    impl crate::sealed::arena_member::Sealed for PanickingAcceptMember {}
+
+    impl GestureArenaMember for PanickingAcceptMember {
+        fn accept_gesture(&self, _pointer: PointerId) {
+            panic!("accept panic");
+        }
+
+        fn reject_gesture(&self, _pointer: PointerId) {}
+    }
+
+    struct PanickingAcceptAndDropMember;
+
+    impl crate::sealed::arena_member::Sealed for PanickingAcceptAndDropMember {}
+
+    impl GestureArenaMember for PanickingAcceptAndDropMember {
+        fn accept_gesture(&self, _pointer: PointerId) {
+            panic!("callback panic wins");
+        }
+
+        fn reject_gesture(&self, _pointer: PointerId) {}
+    }
+
+    impl Drop for PanickingAcceptAndDropMember {
+        fn drop(&mut self) {
+            panic!("member drop panic");
+        }
+    }
+
+    struct OrderedMember {
+        name: &'static str,
+        calls: Arc<Mutex<Vec<&'static str>>>,
+        panic_on_accept: bool,
+    }
+
+    struct ReentrantAddMember {
+        arena: GestureArena,
+        fresh: Arc<MockMember>,
+    }
+
+    impl crate::sealed::arena_member::Sealed for ReentrantAddMember {}
+
+    impl GestureArenaMember for ReentrantAddMember {
+        fn accept_gesture(&self, _pointer: PointerId) {}
+
+        fn reject_gesture(&self, pointer: PointerId) {
+            self.arena.add(pointer, self.fresh.clone());
+        }
+    }
+
+    impl crate::sealed::arena_member::Sealed for OrderedMember {}
+
+    impl GestureArenaMember for OrderedMember {
+        fn accept_gesture(&self, _pointer: PointerId) {
+            self.calls.lock().push(self.name);
+            assert!(!self.panic_on_accept, "winner callback panic");
+        }
+
+        fn reject_gesture(&self, _pointer: PointerId) {
+            self.calls.lock().push(self.name);
+        }
+    }
+
     #[test]
     fn reject_gesture_reentering_arena_does_not_deadlock() {
         use std::{sync::mpsc, time::Duration};
@@ -1410,8 +1796,173 @@ mod tests {
         let _entry = arena.add(pointer, member.clone());
         arena.close(pointer);
 
+        assert!(!member.was_accepted());
+        assert_eq!(arena.drain_deferred_resolutions(), 1);
         assert!(member.was_accepted());
         assert!(!member.was_rejected());
+    }
+
+    #[test]
+    fn close_marks_a_held_arena_closed() {
+        let arena = GestureArena::new();
+        let pointer = PointerId::PRIMARY;
+        arena.add(pointer, Arc::new(MockMember::new()));
+        arena.hold(pointer);
+
+        arena.close(pointer);
+
+        assert!(arena.is_held(pointer));
+        assert!(
+            !arena.is_open(pointer),
+            "hold defers only sweep; it must not keep membership open"
+        );
+    }
+
+    #[test]
+    fn close_defers_a_lone_default_winner() {
+        let arena = GestureArena::new();
+        let pointer = PointerId::PRIMARY;
+        let member = Arc::new(MockMember::new());
+        arena.add(pointer, member.clone());
+
+        arena.close(pointer);
+
+        assert!(
+            !member.was_accepted(),
+            "Flutter resolves the final member from a deferred microtask boundary"
+        );
+        assert!(arena.contains(pointer));
+    }
+
+    #[test]
+    fn explicit_resolution_removes_slot_rejects_losers_then_finishes_panicking_winner() {
+        let arena = GestureArena::new();
+        let pointer = PointerId::PRIMARY;
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let winner = Arc::new(OrderedMember {
+            name: "winner.accept",
+            calls: Arc::clone(&calls),
+            panic_on_accept: true,
+        });
+        let loser = Arc::new(OrderedMember {
+            name: "loser.reject",
+            calls: Arc::clone(&calls),
+            panic_on_accept: false,
+        });
+        arena.add(pointer, winner.clone());
+        arena.add(pointer, loser);
+        arena.close(pointer);
+
+        let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            arena.resolve(pointer, Some(winner));
+        }));
+
+        assert!(unwind.is_err(), "the earliest callback panic must resume");
+        assert_eq!(
+            calls.lock().as_slice(),
+            ["loser.reject", "winner.accept"],
+            "all losers are rejected in registration order before the winner is accepted"
+        );
+        assert!(
+            !arena.contains(pointer),
+            "the exact slot must be gone before any member callback"
+        );
+    }
+
+    #[test]
+    fn sweep_finishes_peers_and_preserves_callback_panic_over_member_drop_panic() {
+        let arena = GestureArena::new();
+        let pointer = PointerId::PRIMARY;
+        let peer = Arc::new(MockMember::new());
+        arena.add(pointer, Arc::new(PanickingAcceptAndDropMember));
+        arena.add(pointer, peer.clone());
+        arena.close(pointer);
+
+        let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            arena.sweep(pointer);
+        }));
+        let payload = unwind.expect_err("the first callback panic must resume");
+
+        assert_eq!(payload.downcast_ref::<&str>(), Some(&"callback panic wins"));
+        assert!(peer.was_rejected(), "later peers must still be notified");
+        assert!(arena.is_empty());
+    }
+
+    #[test]
+    fn stale_entry_cannot_resolve_a_reused_pointer_slot() {
+        let arena = GestureArena::new();
+        let pointer = PointerId::PRIMARY;
+        let old = Arc::new(MockMember::new());
+        let stale_entry = arena.add(pointer, old);
+        arena.close(pointer);
+        arena.sweep(pointer);
+
+        let fresh = Arc::new(MockMember::new());
+        let competitor = Arc::new(MockMember::new());
+        arena.add(pointer, fresh.clone());
+        arena.add(pointer, competitor.clone());
+        arena.close(pointer);
+
+        stale_entry.resolve(GestureDisposition::Accepted);
+
+        assert!(arena.contains(pointer));
+        assert!(!fresh.was_rejected());
+        assert!(!competitor.was_rejected());
+    }
+
+    #[test]
+    fn rejecting_the_lone_member_cancels_its_deferred_default_win() {
+        let arena = GestureArena::new();
+        let pointer = PointerId::PRIMARY;
+        let member = Arc::new(MockMember::new());
+        let entry = arena.add(pointer, member.clone());
+        arena.close(pointer);
+
+        entry.resolve(GestureDisposition::Rejected);
+
+        assert!(member.was_rejected());
+        assert_eq!(arena.drain_deferred_resolutions(), 0);
+        assert!(!member.was_accepted());
+        assert!(!arena.contains(pointer));
+    }
+
+    #[test]
+    fn deferred_token_never_resolves_a_reused_pointer_generation() {
+        let arena = GestureArena::new();
+        let pointer = PointerId::PRIMARY;
+        let old = Arc::new(MockMember::new());
+        arena.add(pointer, old.clone());
+        arena.close(pointer);
+        arena.abandon(pointer);
+
+        let fresh = Arc::new(MockMember::new());
+        arena.add(pointer, fresh.clone());
+        arena.close(pointer);
+
+        assert_eq!(arena.drain_deferred_resolutions(), 1);
+        assert!(!old.was_accepted());
+        assert!(fresh.was_accepted());
+    }
+
+    #[test]
+    fn resolution_callback_adds_only_to_a_fresh_pointer_generation() {
+        let arena = GestureArena::new();
+        let pointer = PointerId::PRIMARY;
+        let fresh = Arc::new(MockMember::new());
+        let reentrant = Arc::new(ReentrantAddMember {
+            arena: arena.clone(),
+            fresh: fresh.clone(),
+        });
+        let winner = Arc::new(MockMember::new());
+        arena.add(pointer, reentrant);
+        arena.add(pointer, winner.clone());
+        arena.close(pointer);
+
+        arena.resolve(pointer, Some(winner));
+
+        assert_eq!(arena.member_count(pointer), 1);
+        assert!(!fresh.was_rejected());
+        assert!(arena.is_open(pointer));
     }
 
     #[test]
@@ -1456,7 +2007,9 @@ mod tests {
         assert!(!member1.was_accepted());
         assert!(member1.was_rejected());
 
-        // member2 wins by default (only one left)
+        // member2 wins by default at the deferred owner boundary.
+        assert!(!member2.was_accepted());
+        assert_eq!(arena.drain_deferred_resolutions(), 1);
         assert!(member2.was_accepted());
         assert!(!member2.was_rejected());
     }
@@ -1492,13 +2045,16 @@ mod tests {
         arena.hold(pointer);
         arena.close(pointer);
 
-        // Should not resolve yet (held)
+        // Close queues the default winner; hold affects only sweep.
         assert!(!member.was_accepted());
         assert!(arena.is_held(pointer));
 
         arena.release(pointer);
-
-        // Should resolve now
+        assert!(
+            !member.was_accepted(),
+            "release is not a resolution boundary"
+        );
+        assert_eq!(arena.drain_deferred_resolutions(), 1);
         assert!(member.was_accepted());
     }
 
@@ -1576,119 +2132,10 @@ mod tests {
         assert!(member2.was_accepted());
         assert!(member3.was_rejected());
 
-        // Should have 2 winners
-        let winners = arena.winners(pointer);
-        assert_eq!(winners.len(), 2);
-    }
-
-    #[test]
-    fn test_arena_winners_empty_when_not_resolved() {
-        let arena = GestureArena::new();
-        let pointer = PointerId::PRIMARY;
-
-        arena.add(pointer, Arc::new(MockMember::new()));
-
-        assert!(arena.winners(pointer).is_empty());
-        assert_eq!(arena.winner_count(pointer), 0);
-    }
-
-    // ========================================================================
-    // Timeout tests
-    // ========================================================================
-
-    #[test]
-    fn test_default_disambiguation_timeout_is_100ms() {
-        assert_eq!(DEFAULT_DISAMBIGUATION_TIMEOUT, Duration::from_millis(100));
-    }
-
-    #[test]
-    fn test_arena_elapsed_returns_duration() {
-        let arena = GestureArena::new();
-        let pointer = PointerId::PRIMARY;
-
-        // No arena yet
-        assert!(arena.elapsed(pointer).is_none());
-
-        arena.add(pointer, Arc::new(MockMember::new()));
-
-        // Should have elapsed time
-        let elapsed = arena.elapsed(pointer);
-        assert!(elapsed.is_some());
-        assert!(elapsed.unwrap() < Duration::from_secs(1)); // Should be very short
-    }
-
-    #[test]
-    fn test_arena_has_timed_out_false_initially() {
-        let arena = GestureArena::new();
-        let pointer = PointerId::PRIMARY;
-
-        arena.add(pointer, Arc::new(MockMember::new()));
-
-        // Should not have timed out immediately with default timeout
-        assert!(!arena.has_timed_out(pointer, DEFAULT_DISAMBIGUATION_TIMEOUT));
-        assert!(!arena.has_default_timeout(pointer));
-    }
-
-    #[test]
-    fn test_arena_has_timed_out_with_zero_duration() {
-        let arena = GestureArena::new();
-        let pointer = PointerId::PRIMARY;
-
-        arena.add(pointer, Arc::new(MockMember::new()));
-
-        // Zero duration should always be timed out
-        assert!(arena.has_timed_out(pointer, Duration::ZERO));
-    }
-
-    #[test]
-    fn test_arena_has_timed_out_false_for_resolved() {
-        let arena = GestureArena::new();
-        let pointer = PointerId::PRIMARY;
-
-        let member = Arc::new(MockMember::new());
-        arena.add(pointer, member.clone());
-        arena.resolve(pointer, Some(member));
-
-        // Already resolved, so should not report timed out
-        assert!(!arena.has_timed_out(pointer, Duration::ZERO));
-    }
-
-    #[test]
-    fn test_force_resolve_if_timed_out() {
-        let arena = GestureArena::new();
-        let pointer = PointerId::PRIMARY;
-
-        let member = Arc::new(MockMember::new());
-        arena.add(pointer, member.clone());
-
-        // With zero timeout, should force resolve immediately
-        let resolved = arena.force_resolve_if_timed_out(pointer, Duration::ZERO);
-
-        assert!(resolved);
-        assert!(arena.is_resolved(pointer));
-        assert!(member.was_accepted()); // First member wins
-    }
-
-    #[test]
-    fn test_force_resolve_first_member_wins() {
-        let arena = GestureArena::new();
-        let pointer = PointerId::PRIMARY;
-
-        let member1 = Arc::new(MockMember::new());
-        let member2 = Arc::new(MockMember::new());
-        let member3 = Arc::new(MockMember::new());
-
-        arena.add(pointer, member1.clone());
-        arena.add(pointer, member2.clone());
-        arena.add(pointer, member3.clone());
-
-        // Force resolve with zero timeout
-        arena.force_resolve_if_timed_out(pointer, Duration::ZERO);
-
-        // First member should win
-        assert!(member1.was_accepted());
-        assert!(member2.was_rejected());
-        assert!(member3.was_rejected());
+        assert!(
+            !arena.contains(pointer),
+            "explicit team resolution removes the exact slot"
+        );
     }
 
     #[test]
@@ -1714,6 +2161,8 @@ mod tests {
             bowing_out.was_rejected(),
             "the withdrawing member is rejected"
         );
+        assert!(!survivor.was_accepted(), "default win is deferred");
+        assert_eq!(arena.drain_deferred_resolutions(), 1);
         assert!(
             survivor.was_accepted(),
             "the sole remaining member wins — withdrawal must not reject competitors",
@@ -1725,9 +2174,9 @@ mod tests {
     fn test_reject_member_keeps_a_three_way_competition_open() {
         // With THREE members competing, one withdrawing must leave the other two
         // STILL competing — never force-resolve to the front member. Guards the
-        // withdrawing-member teardown: `remove_if_settled` must NOT tear down an
-        // unresolved entry that still has rivals (the latent bug a recogniser's
-        // `stop_tracking()`→`sweep()` would have caused for 3+ members).
+        // Withdrawing must NOT tear down an unresolved entry that still has
+        // rivals (the latent bug a recogniser's `stop_tracking()`→`sweep()`
+        // would have caused for 3+ members).
         let arena = GestureArena::new();
         let pointer = PointerId::PRIMARY;
 
@@ -1741,7 +2190,6 @@ mod tests {
 
         let withdrawing: Arc<dyn GestureArenaMember> = bowing_out.clone();
         arena.reject_member(pointer, &withdrawing);
-        arena.remove_if_settled(pointer); // the teardown a withdrawing member runs
 
         assert!(
             bowing_out.was_rejected(),
@@ -1755,136 +2203,11 @@ mod tests {
             !rival_b.was_accepted() && !rival_b.was_rejected(),
             "rival B keeps competing — not resolved either way",
         );
-        assert!(
-            !arena.is_resolved(pointer),
-            "the entry is not force-resolved"
-        );
+        assert_eq!(arena.member_count(pointer), 2);
         assert!(
             !arena.is_empty(),
             "the entry survives — two rivals are still in it"
         );
-    }
-
-    #[test]
-    fn test_force_resolve_does_nothing_if_held() {
-        let arena = GestureArena::new();
-        let pointer = PointerId::PRIMARY;
-
-        let member = Arc::new(MockMember::new());
-        arena.add(pointer, member.clone());
-        arena.hold(pointer);
-
-        // Should not force resolve when held
-        let resolved = arena.force_resolve_if_timed_out(pointer, Duration::ZERO);
-
-        assert!(!resolved);
-        assert!(!arena.is_resolved(pointer));
-        assert!(!member.was_accepted());
-    }
-
-    #[test]
-    fn test_force_resolve_does_nothing_if_already_resolved() {
-        let arena = GestureArena::new();
-        let pointer = PointerId::PRIMARY;
-
-        let member = Arc::new(MockMember::new());
-        arena.add(pointer, member.clone());
-        arena.resolve(pointer, Some(member.clone()));
-
-        // Already resolved, should return false
-        let resolved = arena.force_resolve_if_timed_out(pointer, Duration::ZERO);
-        assert!(!resolved);
-    }
-
-    #[test]
-    fn test_force_resolve_does_nothing_if_not_timed_out() {
-        let arena = GestureArena::new();
-        let pointer = PointerId::PRIMARY;
-
-        let member = Arc::new(MockMember::new());
-        arena.add(pointer, member.clone());
-
-        // With a very long timeout, should not force resolve
-        let resolved = arena.force_resolve_if_timed_out(pointer, Duration::from_hours(1));
-
-        assert!(!resolved);
-        assert!(!arena.is_resolved(pointer));
-    }
-
-    #[test]
-    fn test_resolve_timed_out_arenas() {
-        let arena = GestureArena::new();
-
-        let pointer1 = PointerId::PRIMARY;
-        let pointer2 = PointerId::new(2).expect("nonzero pointer id");
-        let pointer3 = PointerId::new(3).expect("nonzero pointer id");
-
-        let member1 = Arc::new(MockMember::new());
-        let member2 = Arc::new(MockMember::new());
-        let member3 = Arc::new(MockMember::new());
-
-        arena.add(pointer1, member1.clone());
-        arena.add(pointer2, member2.clone());
-        arena.add(pointer3, member3.clone());
-
-        // Already resolve pointer2
-        arena.resolve(pointer2, Some(member2.clone()));
-
-        // Hold pointer3
-        arena.hold(pointer3);
-
-        // Resolve all timed out arenas with zero timeout
-        let count = arena.resolve_timed_out_arenas(Duration::ZERO);
-
-        // Only pointer1 should be force resolved (pointer2 already resolved, pointer3
-        // held)
-        assert_eq!(count, 1);
-        assert!(arena.is_resolved(pointer1));
-        assert!(arena.is_resolved(pointer2)); // Was already resolved
-        assert!(!arena.is_resolved(pointer3)); // Still held
-
-        assert!(member1.was_accepted());
-        assert!(!member3.was_accepted());
-    }
-
-    #[test]
-    fn test_resolve_default_timed_out_arenas() {
-        let arena = GestureArena::new();
-        let pointer = PointerId::PRIMARY;
-
-        arena.add(pointer, Arc::new(MockMember::new()));
-
-        // Should not resolve with default timeout (just created)
-        let count = arena.resolve_default_timed_out_arenas();
-        assert_eq!(count, 0);
-    }
-
-    #[test]
-    fn test_force_resolve_with_no_members() {
-        let arena = GestureArena::new();
-        let pointer = PointerId::PRIMARY;
-
-        // Create empty arena entry by adding and then we test empty case
-        // Note: We need to create an arena entry first
-        arena.add(pointer, Arc::new(MockMember::new()));
-
-        // This tests the force resolve path, member should win
-        let resolved = arena.force_resolve_if_timed_out(pointer, Duration::ZERO);
-        assert!(resolved);
-    }
-
-    #[test]
-    fn test_force_resolve_if_default_timeout() {
-        let arena = GestureArena::new();
-        let pointer = PointerId::PRIMARY;
-
-        let member = Arc::new(MockMember::new());
-        arena.add(pointer, member.clone());
-
-        // Should not resolve immediately (not timed out yet)
-        let resolved = arena.force_resolve_if_default_timeout(pointer);
-        assert!(!resolved);
-        assert!(!arena.is_resolved(pointer));
     }
 
     // ========================================================================
@@ -1912,7 +2235,7 @@ mod tests {
 
         assert!(member1.was_accepted());
         assert!(member2.was_rejected());
-        assert!(arena.is_resolved(pointer));
+        assert!(!arena.contains(pointer));
     }
 
     #[test]
@@ -1950,14 +2273,14 @@ mod tests {
         // Close arena first (no eager winner, no single member - stays unresolved)
         arena.close(pointer);
         assert!(!arena.is_open(pointer));
-        assert!(!arena.is_resolved(pointer));
+        assert_eq!(arena.member_count(pointer), 2);
 
         // Accept after close resolves immediately
         entry1.resolve(GestureDisposition::Accepted);
 
         assert!(member1.was_accepted());
         assert!(member2.was_rejected());
-        assert!(arena.is_resolved(pointer));
+        assert!(!arena.contains(pointer));
     }
 
     #[test]
@@ -1982,6 +2305,8 @@ mod tests {
 
         // Close - member2 is only one left, wins
         arena.close(pointer);
+        assert!(!member2.was_accepted());
+        assert_eq!(arena.drain_deferred_resolutions(), 1);
         assert!(member2.was_accepted());
     }
 
@@ -2022,6 +2347,25 @@ mod tests {
     }
 
     #[test]
+    fn deferred_release_removes_the_slot_before_notifying_members() {
+        let arena = GestureArena::new();
+        let pointer = PointerId::PRIMARY;
+        arena.add(pointer, Arc::new(PanickingAcceptMember));
+        arena.hold(pointer);
+        arena.sweep(pointer);
+
+        let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            arena.release(pointer);
+        }));
+
+        assert!(unwind.is_err(), "the member panic must propagate");
+        assert!(
+            !arena.contains(pointer),
+            "a deferred sweep must remove its slot before arbitrary callbacks"
+        );
+    }
+
+    #[test]
     fn test_sweep_immediate_when_not_held() {
         let arena = GestureArena::new();
         let pointer = PointerId::PRIMARY;
@@ -2053,7 +2397,7 @@ mod tests {
     }
 
     #[test]
-    fn test_release_closes_arena_if_open() {
+    fn release_does_not_close_an_open_arena() {
         let arena = GestureArena::new();
         let pointer = PointerId::PRIMARY;
 
@@ -2067,9 +2411,9 @@ mod tests {
 
         arena.release(pointer);
 
-        // Release should close and resolve single member
-        assert!(member.was_accepted());
-        assert!(arena.is_resolved(pointer));
+        assert!(arena.is_open(pointer));
+        assert!(!arena.is_held(pointer));
+        assert!(!member.was_accepted());
     }
 
     // ========================================================================
@@ -2096,7 +2440,8 @@ mod tests {
 
         let entry = arena.add(pointer, member_dyn.clone());
 
-        assert!(Arc::ptr_eq(entry.member(), &member_dyn));
+        let entry_member = entry.member().expect("active member");
+        assert!(Arc::ptr_eq(&entry_member, &member_dyn));
     }
 
     #[test]
@@ -2148,6 +2493,25 @@ mod tests {
     }
 
     #[test]
+    fn generation_exhaustion_panics_instead_of_reusing_an_old_token() {
+        let arena = GestureArena::new();
+        arena
+            .next_generation
+            .store(u64::MAX, std::sync::atomic::Ordering::Relaxed);
+
+        let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            arena.add(PointerId::PRIMARY, Arc::new(MockMember::new()));
+        }));
+
+        let payload = unwind.expect_err("generation exhaustion must be explicit");
+        assert_eq!(
+            payload.downcast_ref::<&str>(),
+            Some(&"BUG: gesture arena generation exhausted")
+        );
+        assert!(arena.is_empty());
+    }
+
+    #[test]
     fn run_pointer_lifecycle_closes_on_down_and_sweeps_on_up() {
         use crate::events::{PointerType, make_down_event, make_up_event};
         use flui_types::{Offset, geometry::px};
@@ -2157,11 +2521,16 @@ mod tests {
         let member = Arc::new(MockMember::new());
         arena.add(pointer, member.clone());
 
-        // Down closes the arena (single member wins on close).
+        // Down closes the arena and queues the lone default winner.
         let down = make_down_event(Offset::new(px(1.0), px(1.0)), PointerType::Touch);
         run_pointer_lifecycle(&arena, &down);
         assert!(!arena.is_open(pointer), "down must close the arena");
-        assert!(member.was_accepted(), "the single member wins on close");
+        assert!(
+            !member.was_accepted(),
+            "close must return before acceptance"
+        );
+        assert_eq!(arena.drain_deferred_resolutions(), 1);
+        assert!(member.was_accepted());
 
         // Up sweeps the (resolved) entry away.
         let up = make_up_event(Offset::new(px(1.0), px(1.0)), PointerType::Touch);

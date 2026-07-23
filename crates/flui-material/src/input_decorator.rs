@@ -431,7 +431,7 @@ impl ViewState<InputDecorator> for InputDecoratorState {
         // hover-controller listener below — never called from `build`.
         let rebuild = ctx.rebuild_handle();
         self.hover_listener = Some(self.hover.add_listener(Arc::new(move || {
-            rebuild.schedule();
+            rebuild.schedule(flui_view::RebuildReason::StateChange);
         })));
     }
 

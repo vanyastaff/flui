@@ -460,7 +460,7 @@ mod tests {
             // Reconcile + mount the whole subtree, so a `StatelessView` root
             // has produced its render-object descendants. Same shape as
             // `flui-widgets`' `tests/common::lay_out`.
-            owner.schedule_build_for(root, 0);
+            owner.schedule_build_for(root, 0, crate::RebuildReason::InitialMount);
             owner.build_scope(&mut tree);
 
             // The render root is the single render node with no render parent —
@@ -832,7 +832,8 @@ mod tests {
         let root = h.root;
         let depth = h.tree.get(root).map_or(0, |node| node.depth);
         h.tree.mark_needs_build(root);
-        h.owner.schedule_build_for(root, depth);
+        h.owner
+            .schedule_build_for(root, depth, crate::RebuildReason::ParentUpdate);
         h.frame();
 
         assert_eq!(

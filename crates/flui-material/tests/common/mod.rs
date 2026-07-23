@@ -7,6 +7,7 @@
 
 #![allow(dead_code)] // each test binary uses a different subset of the harness
 
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -21,12 +22,14 @@ use flui_rendering::testing::inspect;
 use flui_types::geometry::px;
 use flui_types::{Offset, Size};
 use flui_view::{BuildOwner, ElementTree, View};
+use flui_widgets::{FocusRoot, GestureArenaScope};
 use parking_lot::RwLock;
 
 /// A mounted widget tree, holding the element + render trees alive inside a
 /// tree-bound [`HeadlessBinding`], re-driven via [`LaidOut::pump`]/[`LaidOut::pump_for`].
 pub struct LaidOut {
     binding: HeadlessBinding,
+    focus_manager: Rc<flui_interaction::FocusManager>,
     pipeline_owner: Arc<RwLock<PipelineOwner>>,
     root_render_id: RenderId,
     root_element_id: ElementId,
@@ -47,8 +50,12 @@ pub fn tight(width: f32, height: f32) -> BoxConstraints {
 pub fn lay_out(root: impl View, constraints: BoxConstraints) -> LaidOut {
     let pipeline_owner = Arc::new(RwLock::new(PipelineOwner::new()));
     let mut build_owner = BuildOwner::new();
+    let focus_manager = build_owner.focus_manager();
     let mut tree = ElementTree::new();
     let mut binding = HeadlessBinding::new();
+    // Match AppBinding's production root: every detector in the mounted tree
+    // competes in the binding-owned arena instead of inventing private arenas.
+    let root = GestureArenaScope::new(binding.arena().clone(), FocusRoot::new(root));
 
     // The binding is created FIRST so its async driver can be installed on
     // the `BuildOwner` before the mount `build_scope` below.
@@ -60,7 +67,7 @@ pub fn lay_out(root: impl View, constraints: BoxConstraints) -> LaidOut {
             Some(Arc::clone(&pipeline_owner)),
             &mut build_owner.element_owner_mut(),
         );
-        build_owner.schedule_build_for(root_id, 0);
+        build_owner.schedule_build_for(root_id, 0, flui_view::RebuildReason::InitialMount);
         build_owner.build_scope(&mut tree);
         root_id
     });
@@ -98,6 +105,7 @@ pub fn lay_out(root: impl View, constraints: BoxConstraints) -> LaidOut {
 
     LaidOut {
         binding,
+        focus_manager,
         pipeline_owner,
         root_render_id,
         root_element_id: root_id,
@@ -115,6 +123,11 @@ pub fn lay_out_animated(root: impl View, constraints: BoxConstraints, vsync: Vsy
 }
 
 impl LaidOut {
+    /// Focus manager that owns this mounted presentation.
+    pub fn focus_manager(&self) -> Rc<flui_interaction::FocusManager> {
+        Rc::clone(&self.focus_manager)
+    }
+
     /// The render id of the root widget's render object.
     pub fn root(&self) -> RenderId {
         self.root_render_id
@@ -123,7 +136,13 @@ impl LaidOut {
     /// Replace the root widget with `new_root` and drive a frame — Flutter's
     /// `tester.pumpWidget(w2)` called a second time (root-swap).
     pub fn pump_widget(&mut self, new_root: impl View) {
-        self.binding.swap_root_view(self.root_element_id, &new_root);
+        // `lay_out` mounts a GestureArenaScope as the actual root. Preserve
+        // that environmental root on every replacement; swapping the scope
+        // itself for `new_root` would remount the whole application subtree,
+        // bypass `did_update_view`, and silently move rebuilt gesture widgets
+        // onto private arenas.
+        let scoped = GestureArenaScope::new(self.binding.arena().clone(), FocusRoot::new(new_root));
+        self.binding.swap_root_view(self.root_element_id, &scoped);
         self.binding.pump_frame(Duration::ZERO);
     }
 
@@ -133,9 +152,11 @@ impl LaidOut {
         if let Some(node) = self.binding.tree_mut().get_mut(self.root_element_id) {
             node.element_mut().mark_needs_build();
         }
-        self.binding
-            .build_owner_mut()
-            .schedule_build_for(self.root_element_id, 0);
+        self.binding.build_owner_mut().schedule_build_for(
+            self.root_element_id,
+            0,
+            flui_view::RebuildReason::StateChange,
+        );
         self.binding.pump_frame(Duration::ZERO);
     }
 
@@ -159,8 +180,8 @@ impl LaidOut {
         self.binding.register_controller(controller);
     }
 
-    /// Hit-test at root-local `(x, y)` and dispatch `event` to the entries
-    /// hit there — the route step a binding runs before the arena lifecycle.
+    /// Hit-test at a root-local position and return the canonical data-only
+    /// path to the binding-owned input pipeline.
     ///
     /// The hit-test itself, not just the dispatch, runs inside
     /// `enter_owner_scope`: a render object's `hit_test` can resolve an
@@ -175,15 +196,11 @@ impl LaidOut {
     /// hit-tests that should have failed — the owner scope must wrap the
     /// whole hit-test + dispatch sequence, matching how a real frame runs
     /// (`AppBinding::handle_input` executes entirely inside the lane).
-    fn route_event(&self, event: &flui_interaction::PointerEvent, x: f32, y: f32) {
-        let position = Offset::new(px(x), px(y));
-        self.binding.enter_owner_scope(|| {
-            let owner = self.pipeline_owner.read();
-            let mut result = HitTestResult::new();
-            owner.hit_test(position, &mut result);
-            drop(owner);
-            result.dispatch(event);
-        });
+    fn hit_test(&self, position: Offset) -> HitTestResult {
+        let owner = self.pipeline_owner.read();
+        let mut result = HitTestResult::new();
+        owner.hit_test(position, &mut result);
+        result
     }
 
     /// Dispatch a synthetic pointer-down at `(x, y)` — the headless analogue
@@ -191,7 +208,8 @@ impl LaidOut {
     pub fn dispatch_pointer_down(&self, x: f32, y: f32) {
         let position = Offset::new(px(x), px(y));
         let event = make_down_event(position, PointerType::Mouse);
-        self.route_event(&event, x, y);
+        self.binding
+            .dispatch_pointer(&event, |position| self.hit_test(position));
     }
 
     /// As [`dispatch_pointer_down`](Self::dispatch_pointer_down), but a
@@ -199,14 +217,16 @@ impl LaidOut {
     pub fn dispatch_pointer_up(&self, x: f32, y: f32) {
         let position = Offset::new(px(x), px(y));
         let event = make_up_event(position, PointerType::Mouse);
-        self.route_event(&event, x, y);
+        self.binding
+            .dispatch_pointer(&event, |position| self.hit_test(position));
     }
 
     /// A pointer-move to `(x, y)` — drives hover enter/exit.
     pub fn dispatch_pointer_move(&self, x: f32, y: f32) {
         let position = Offset::new(px(x), px(y));
         let event = make_move_event(position, PointerType::Mouse);
-        self.route_event(&event, x, y);
+        self.binding
+            .dispatch_pointer(&event, |position| self.hit_test(position));
     }
 
     /// Every render node whose short type name (generic parameters stripped)

@@ -157,10 +157,6 @@ pub struct SemanticsBinding {
     #[allow(clippy::type_complexity)]
     announce_callback: RwLock<Option<Arc<dyn Fn(&str, Assertiveness) + Send + Sync>>>,
 
-    /// Callback for semantics action events.
-    #[allow(clippy::type_complexity)]
-    action_callback: RwLock<Option<Arc<dyn Fn(SemanticsActionEvent) + Send + Sync>>>,
-
     /// Callback for semantics events dispatched via
     /// [`SemanticsService::send_event`]. Set by the platform embedder when
     /// the accessibility surface is brought up; cleared when the platform
@@ -177,7 +173,6 @@ impl SemanticsBinding {
             platform_semantics_enabled: AtomicBool::new(false),
             accessibility_features: RwLock::new(AccessibilityFeatures::default()),
             announce_callback: RwLock::new(None),
-            action_callback: RwLock::new(None),
             event_callback: RwLock::new(None),
         }
     }
@@ -265,31 +260,6 @@ impl SemanticsBinding {
         }
     }
 
-    // ========== Action Events ==========
-
-    /// Sets the callback for semantics action events.
-    pub fn set_action_callback<F>(&self, callback: F)
-    where
-        F: Fn(SemanticsActionEvent) + Send + Sync + 'static,
-    {
-        *self.action_callback.write() = Some(Arc::new(callback));
-    }
-
-    /// Dispatches a semantics action event.
-    ///
-    /// This is called by the platform when an assistive technology
-    /// requests an action on a semantics node.
-    pub fn dispatch_action(&self, event: SemanticsActionEvent) {
-        // Clone-and-release: pull the Arc out of the read-lock and invoke
-        // outside the lock guard so the callback can reach back into the
-        // binding (e.g. read accessibility features) without deadlocking
-        // on its own lock.
-        let cb = self.action_callback.read().as_ref().map(Arc::clone);
-        if let Some(cb) = cb {
-            cb(event);
-        }
-    }
-
     // ========== Semantics Events ==========
 
     /// Sets the callback for semantics events dispatched via
@@ -354,50 +324,6 @@ impl std::fmt::Debug for SemanticsBinding {
             )
             .field("accessibility_features", &self.accessibility_features())
             .finish()
-    }
-}
-
-// ============================================================================
-// SemanticsActionEvent
-// ============================================================================
-
-/// An event representing a semantics action request from the platform.
-///
-/// This is sent when an assistive technology (like a screen reader)
-/// requests an action on a semantics node.
-#[derive(Debug, Clone)]
-pub struct SemanticsActionEvent {
-    /// The ID of the semantics node.
-    pub node_id: u64,
-
-    /// The action to perform.
-    pub action: crate::SemanticsAction,
-
-    /// Optional arguments for the action.
-    pub arguments: Option<crate::ActionArgs>,
-}
-
-impl SemanticsActionEvent {
-    /// Creates a new semantics action event.
-    pub fn new(node_id: u64, action: crate::SemanticsAction) -> Self {
-        Self {
-            node_id,
-            action,
-            arguments: None,
-        }
-    }
-
-    /// Creates a new semantics action event with arguments.
-    pub fn with_arguments(
-        node_id: u64,
-        action: crate::SemanticsAction,
-        arguments: crate::ActionArgs,
-    ) -> Self {
-        Self {
-            node_id,
-            action,
-            arguments: Some(arguments),
-        }
     }
 }
 
@@ -603,26 +529,6 @@ mod tests {
 
         binding.announce("Another message", Assertiveness::Assertive);
         assert_eq!(call_count.load(Ordering::SeqCst), 2);
-    }
-
-    #[test]
-    fn test_semantics_action_event() {
-        use crate::SemanticsAction;
-
-        let event = SemanticsActionEvent::new(42, SemanticsAction::Tap);
-        assert_eq!(event.node_id, 42);
-        assert_eq!(event.action, SemanticsAction::Tap);
-        assert!(event.arguments.is_none());
-
-        let event = SemanticsActionEvent::with_arguments(
-            10,
-            SemanticsAction::SetText,
-            crate::ActionArgs::SetText {
-                text: "Hello".to_string(),
-            },
-        );
-        assert_eq!(event.node_id, 10);
-        assert!(event.arguments.is_some());
     }
 
     #[test]

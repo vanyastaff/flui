@@ -121,9 +121,9 @@ use flui_animation::{Curves, Vsync};
 use flui_types::layout::Axis;
 use flui_view::prelude::StatelessView;
 use flui_view::{BuildContext, IntoView, ViewExt};
-use flui_widgets::{GestureArenaScope, PageController, PageView, SizedBox, VsyncScope};
+use flui_widgets::{PageController, PageView, SizedBox, VsyncScope};
 
-use crate::common::{lay_out, lay_out_with_arena, loose, tight};
+use crate::common::{LaidOut, lay_out, loose, tight};
 
 /// Five identical, distinguishable-by-index-only pages — geometry/state
 /// assertions read `PageController`, not page content, so the pages
@@ -136,7 +136,7 @@ fn pages(count: usize) -> Vec<flui_view::BoxedView> {
 
 /// Drags the pointer horizontally by `total_delta_x` px (negative = finger
 /// moves left, INCREASING `pixels` per `Scrollable`'s convention), split into
-/// multiple bounded down/move/move/up sessions so every dispatched
+/// multiple bounded down/move/up sessions so every dispatched
 /// coordinate stays on-canvas within a 300px-wide viewport.
 ///
 /// `LaidOut::route_event` re-hit-tests at the exact `(x, y)` of every
@@ -147,24 +147,19 @@ fn pages(count: usize) -> Vec<flui_view::BoxedView> {
 /// separate down/up cycle, like a user re-gripping mid-scroll) keeps every
 /// coordinate within `[50, 250]` while still accumulating onto the SAME
 /// underlying `ScrollPosition` across sessions.
-fn drag_horizontal_by(scoped: &crate::common::LaidOutScoped, total_delta_x: f32, y: f32) {
+fn drag_horizontal_by(scoped: &LaidOut, total_delta_x: f32, y: f32) {
     const START_X: f32 = 150.0;
     const MAX_CHUNK: f32 = 100.0;
-    const SLOP: f32 = 20.0;
 
     let mut remaining = total_delta_x;
     while remaining.abs() > f32::EPSILON {
         let chunk = remaining.clamp(-MAX_CHUNK, MAX_CHUNK);
-        let slop_offset = if chunk < 0.0 { -SLOP } else { SLOP };
-        // The slop-crossing move reports no delta (matches the established
-        // convention throughout this file); the SECOND move's delta from
-        // THAT position is what `on_pan_update` sees — so the final position
-        // must be `slop_offset + chunk` past `START_X`, not just `chunk`
-        // past it, for this session to contribute exactly `chunk`.
-        let final_x = START_X + slop_offset + chunk;
+        // PageView has no competing recognizer in these fixtures. Closing
+        // the Down arena therefore starts its drag by default, and the first
+        // Move contributes exactly this chunk.
+        let final_x = START_X + chunk;
         scoped.dispatch_pointer_down(START_X, y);
-        scoped.dispatch_pointer_move(START_X + slop_offset, y); // crosses slop, starts
-        scoped.dispatch_pointer_move(final_x, y); // fires on_pan_update with delta == chunk
+        scoped.dispatch_pointer_move(final_x, y);
         scoped.dispatch_pointer_up(final_x, y);
         remaining -= chunk;
     }
@@ -266,13 +261,12 @@ fn resize_keeps_the_page_across_a_viewport_dimension_change() {
 fn dragging_past_half_reads_the_next_page_dragging_below_half_reads_the_current_page() {
     let controller = PageController::new();
     let widget = PageView::new(pages(5)).controller(controller.clone());
-    let scoped = lay_out_with_arena(widget, tight(300.0, 300.0));
+    let scoped = lay_out(widget, tight(300.0, 300.0));
 
     scoped.dispatch_pointer_down(200.0, 100.0);
-    scoped.dispatch_pointer_move(180.0, 100.0); // -20px: crosses slop, starts
 
-    // -100px more (total 100px, page 0.333): short of half.
-    scoped.dispatch_pointer_move(80.0, 100.0);
+    // -100px total (page 0.333): short of half.
+    scoped.dispatch_pointer_move(100.0, 100.0);
     assert_eq!(
         controller.page(),
         Some(100.0 / 300.0),
@@ -281,7 +275,7 @@ fn dragging_past_half_reads_the_next_page_dragging_below_half_reads_the_current_
     );
 
     // -60px more (total 160px, page 0.533): past half.
-    scoped.dispatch_pointer_move(20.0, 100.0);
+    scoped.dispatch_pointer_move(40.0, 100.0);
     let page_after_crossing = controller
         .page()
         .expect("page() must be Some once laid out");
@@ -290,7 +284,7 @@ fn dragging_past_half_reads_the_next_page_dragging_below_half_reads_the_current_
         "160px of 300 (page 0.533) is past the halfway mark; got {page_after_crossing}"
     );
 
-    scoped.dispatch_pointer_up(20.0, 100.0);
+    scoped.dispatch_pointer_up(40.0, 100.0);
 }
 
 /// Same halfway drag as above, read through `on_page_changed` instead of
@@ -312,20 +306,19 @@ fn on_page_changed_fires_exactly_once_per_crossing() {
         .on_page_changed(move |page| {
             log_cb.lock().expect("not poisoned").push(page);
         });
-    let scoped = lay_out_with_arena(widget, tight(300.0, 300.0));
+    let scoped = lay_out(widget, tight(300.0, 300.0));
 
     scoped.dispatch_pointer_down(200.0, 100.0);
-    scoped.dispatch_pointer_move(180.0, 100.0); // -20px: crosses slop, starts
 
-    // -100px more (total 100px, page 0.333): short of half — no fire.
-    scoped.dispatch_pointer_move(80.0, 100.0);
+    // -100px total (page 0.333): short of half — no fire.
+    scoped.dispatch_pointer_move(100.0, 100.0);
     assert!(
         log.lock().expect("not poisoned").is_empty(),
         "short of the halfway mark must not fire on_page_changed"
     );
 
     // -60px more (total 160px, page 0.533): past half — fires once, page 1.
-    scoped.dispatch_pointer_move(20.0, 100.0);
+    scoped.dispatch_pointer_move(40.0, 100.0);
     assert_eq!(
         *log.lock().expect("not poisoned"),
         vec![1],
@@ -334,14 +327,14 @@ fn on_page_changed_fires_exactly_once_per_crossing() {
 
     // -20px more (total 180px, page 0.6): still rounds to page 1 — no
     // redundant re-fire.
-    scoped.dispatch_pointer_move(0.0, 100.0);
+    scoped.dispatch_pointer_move(20.0, 100.0);
     assert_eq!(
         *log.lock().expect("not poisoned"),
         vec![1],
         "further movement within the same rounded page must not re-fire on_page_changed"
     );
 
-    scoped.dispatch_pointer_up(0.0, 100.0);
+    scoped.dispatch_pointer_up(20.0, 100.0);
 }
 
 // ============================================================================
@@ -363,13 +356,12 @@ fn a_full_drag_and_release_settles_the_page_view_through_the_real_gesture_and_sp
     let widget = PageView::new(pages(5)).controller(controller.clone());
     let vsync = Vsync::new();
     let wrapped = VsyncScope::new(vsync.clone(), widget);
-    let mut scoped = lay_out_with_arena(wrapped, tight(300.0, 300.0));
+    let mut scoped = lay_out(wrapped, tight(300.0, 300.0));
     scoped.adopt_vsync(vsync);
 
     scoped.dispatch_pointer_down(250.0, 100.0);
-    scoped.dispatch_pointer_move(230.0, 100.0); // -20px: crosses slop, starts
-    scoped.dispatch_pointer_move(70.0, 100.0); // -160px more (total 160px, page 0.533)
-    scoped.dispatch_pointer_up(70.0, 100.0);
+    scoped.dispatch_pointer_move(90.0, 100.0); // -160px total (page 0.533)
+    scoped.dispatch_pointer_up(90.0, 100.0);
 
     // Pump enough frames for the spring (mass 0.5, stiffness 100.0, damping
     // ratio 1.1 — overdamped) to settle, mirroring
@@ -734,10 +726,9 @@ fn swapping_the_controller_then_disposing_does_not_leak_or_collide_across_notifi
 /// rebuild, not just an absence of a spurious `on_page_changed` fire (a
 /// silent controller-field reset alone doesn't itself fire anything — no
 /// gesture moves the position when the rebuild happens). This drags to an
-/// unambiguous page (pixels 300.0, page 1), rebuilds with no controller (still
-/// wrapped in the SAME outer `GestureArenaScope<PageView>` root type, so this
-/// is a genuine `pump_widget` update — see `PageViewHost`'s doc for why a bare
-/// root type swap wouldn't be), then drags 650px further via
+/// unambiguous page (pixels 300.0, page 1), rebuilds with no controller
+/// (`LaidOut::pump_widget` preserves the outer presentation scope), then
+/// drags 650px further via
 /// [`drag_horizontal_by`]'s bounded chunks — which, since `on_page_changed`
 /// fires at EVERY rounded-page crossing (not just the final one, see
 /// `on_page_changed_fires_exactly_once_per_crossing`), reports every page it
@@ -759,7 +750,7 @@ fn a_parent_rebuild_with_no_explicit_controller_keeps_the_current_page() {
     let widget = PageView::new(pages(5)).on_page_changed(move |page| {
         log_cb.lock().expect("not poisoned").push(page);
     });
-    let mut scoped = lay_out_with_arena(widget, tight(300.0, 300.0));
+    let mut scoped = lay_out(widget, tight(300.0, 300.0));
 
     // Phase 1: drag to pixels = 300.0 exactly (page 1.0).
     drag_horizontal_by(&scoped, -300.0, 100.0);
@@ -769,18 +760,12 @@ fn a_parent_rebuild_with_no_explicit_controller_keeps_the_current_page() {
         "sanity: the first drag reached page 1"
     );
 
-    // Parent rebuild with NO explicit controller: a fresh `PageView` value,
-    // re-wrapped in a matching `GestureArenaScope` so the root's own
-    // concrete type stays identical across the swap (`PageViewHost`'s doc
-    // explains why a bare type change wouldn't reconcile as an update).
+    // Parent rebuild with NO explicit controller: a fresh `PageView` value.
+    // The scoped harness reapplies its matching GestureArenaScope.
     let log_cb2 = Arc::clone(&log);
-    let rewrapped = GestureArenaScope::new(
-        scoped.laid().arena(),
-        PageView::new(pages(5)).on_page_changed(move |page| {
-            log_cb2.lock().expect("not poisoned").push(page);
-        }),
-    );
-    scoped.pump_widget(rewrapped);
+    scoped.pump_widget(PageView::new(pages(5)).on_page_changed(move |page| {
+        log_cb2.lock().expect("not poisoned").push(page);
+    }));
 
     // Phase 2: drag 650px further, in bounded chunks (see
     // `drag_horizontal_by`'s docs) — which cross MULTIPLE page boundaries
@@ -813,11 +798,10 @@ fn vertical_page_view_drag_crosses_to_the_next_page() {
     let widget = PageView::new(pages(5))
         .controller(controller.clone())
         .scroll_direction(Axis::Vertical);
-    let scoped = lay_out_with_arena(widget, tight(300.0, 300.0));
+    let scoped = lay_out(widget, tight(300.0, 300.0));
 
     scoped.dispatch_pointer_down(100.0, 200.0);
-    scoped.dispatch_pointer_move(100.0, 180.0); // -20px dy: crosses slop, starts
-    scoped.dispatch_pointer_move(100.0, 20.0); // -160px dy more: pixels = 160.0
+    scoped.dispatch_pointer_move(100.0, 40.0); // -160px dy: pixels = 160.0
 
     let page = controller
         .page()
@@ -829,7 +813,7 @@ fn vertical_page_view_drag_crosses_to_the_next_page() {
         160.0 / 300.0
     );
 
-    scoped.dispatch_pointer_up(100.0, 20.0);
+    scoped.dispatch_pointer_up(100.0, 40.0);
 }
 
 // ============================================================================
@@ -851,7 +835,7 @@ fn animate_to_page_lands_on_the_page() {
     let widget = PageView::new(pages(5)).controller(controller.clone());
     let vsync = Vsync::new();
     let wrapped = VsyncScope::new(vsync.clone(), widget);
-    let mut scoped = lay_out_with_arena(wrapped, tight(300.0, 300.0));
+    let mut scoped = lay_out(wrapped, tight(300.0, 300.0));
     scoped.adopt_vsync(vsync);
 
     controller.animate_to_page(3, Duration::from_millis(100), Arc::new(Curves::Linear));
@@ -887,7 +871,7 @@ fn next_page_and_previous_page_navigate_and_clamp_at_the_ends() {
     let widget = PageView::new(pages(5)).controller(controller.clone());
     let vsync = Vsync::new();
     let wrapped = VsyncScope::new(vsync.clone(), widget);
-    let mut scoped = lay_out_with_arena(wrapped, tight(300.0, 300.0));
+    let mut scoped = lay_out(wrapped, tight(300.0, 300.0));
     scoped.adopt_vsync(vsync);
 
     // Ordinary step: page 0 -> 1.

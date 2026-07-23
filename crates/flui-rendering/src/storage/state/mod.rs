@@ -136,7 +136,7 @@ pub type SliverRenderState = RenderState<SliverProtocol>;
 ///
 /// Boundary-aware dirty propagation is **not** performed here. Production
 /// dirty marking goes through `PipelineOwner::add_node_needing_layout /
-/// add_node_needing_paint` invoked from `flui-view` and `flui-hot-reload`.
+/// mark_needs_paint` invoked from `flui-view` and `flui-hot-reload`.
 ///
 /// # Memory Layout
 ///

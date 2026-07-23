@@ -295,7 +295,7 @@ impl Renderer {
     /// ```
     pub async fn new<W>(window: &W) -> EngineResult<Self>
     where
-        W: raw_window_handle::HasWindowHandle + raw_window_handle::HasDisplayHandle,
+        W: raw_window_handle::HasWindowHandle + raw_window_handle::HasDisplayHandle + ?Sized,
     {
         // Extract raw handles before calling the GPU stack builder.
         // `window_handle()` and `display_handle()` are safe trait methods; no

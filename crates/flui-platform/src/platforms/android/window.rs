@@ -10,6 +10,7 @@ use std::sync::{
 };
 
 use android_activity::AndroidApp;
+use cursor_icon::CursorIcon;
 use flui_types::geometry::{DevicePixels, Pixels, Point, Size, device_px, px};
 
 use crate::{shared::WindowCallbacks, traits::*};
@@ -97,6 +98,10 @@ impl PlatformWindow for AndroidWindow {
 
     fn is_visible(&self) -> bool {
         self.app.native_window().is_some()
+    }
+
+    fn set_cursor(&self, _cursor: CursorIcon) -> Result<(), CursorError> {
+        Err(CursorError::Unsupported)
     }
 
     // ==================== Callback Registration ====================

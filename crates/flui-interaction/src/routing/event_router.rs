@@ -4,10 +4,9 @@
 //! It uses hit testing for pointer events and focus management for keyboard
 //! events.
 
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, rc::Rc};
 
 use flui_types::geometry::Pixels;
-use parking_lot::RwLock;
 
 use super::{
     focus::FocusManager,
@@ -30,7 +29,8 @@ use crate::{
 /// ```rust,ignore
 /// use flui_interaction::EventRouter;
 ///
-/// let mut router = EventRouter::new();
+/// let focus_manager = FocusManager::new();
+/// let mut router = EventRouter::new(focus_manager);
 ///
 /// // Route pointer event
 /// router.route_event(&mut root_layer, &Event::Pointer(pointer_event));
@@ -41,7 +41,9 @@ use crate::{
 #[derive(Debug)]
 pub struct EventRouter {
     /// Pointer state tracking (for drag gestures)
-    pointer_state: Arc<RwLock<HashMap<PointerId, PointerStateTracking>>>,
+    pointer_state: HashMap<PointerId, PointerStateTracking>,
+    /// Explicit presentation-local keyboard focus owner.
+    focus_manager: Rc<FocusManager>,
 }
 
 /// State for a single pointer (finger/mouse)
@@ -59,9 +61,10 @@ struct PointerStateTracking {
 
 impl EventRouter {
     /// Create a new event router
-    pub fn new() -> Self {
+    pub fn new(focus_manager: Rc<FocusManager>) -> Self {
         Self {
-            pointer_state: Arc::new(RwLock::new(HashMap::new())),
+            pointer_state: HashMap::new(),
+            focus_manager,
         }
     }
 
@@ -77,7 +80,7 @@ impl EventRouter {
                 self.route_pointer_event(root, pointer_event);
             }
             Event::Keyboard(key_event) | Event::Key(key_event) => {
-                Self::route_key_event(root, key_event);
+                self.route_key_event(root, key_event);
             }
             Event::Scroll(scroll_event_data) => {
                 Self::route_scroll_event(root, scroll_event_data);
@@ -104,7 +107,7 @@ impl EventRouter {
                 );
 
                 // Store pointer state for drag tracking
-                self.pointer_state.write().insert(
+                self.pointer_state.insert(
                     pointer_id,
                     PointerStateTracking {
                         is_down: true,
@@ -121,13 +124,12 @@ impl EventRouter {
                 // Check if this is a drag (pointer is down)
                 let is_dragging = self
                     .pointer_state
-                    .read()
                     .get(&pointer_id)
                     .is_some_and(|s| s.is_down);
 
                 if is_dragging {
                     // Send to original down target (drag continuity)
-                    if let Some(state) = self.pointer_state.read().get(&pointer_id)
+                    if let Some(state) = self.pointer_state.get(&pointer_id)
                         && let Some(target) = &state.down_target
                     {
                         target.dispatch(event);
@@ -140,14 +142,14 @@ impl EventRouter {
                 }
 
                 // Update last position
-                if let Some(state) = self.pointer_state.write().get_mut(&pointer_id) {
+                if let Some(state) = self.pointer_state.get_mut(&pointer_id) {
                     state.last_position = position;
                 }
             }
 
             PointerEvent::Up(_) => {
                 // Send to original down target
-                if let Some(state) = self.pointer_state.write().remove(&pointer_id)
+                if let Some(state) = self.pointer_state.remove(&pointer_id)
                     && let Some(target) = state.down_target
                 {
                     target.dispatch(event);
@@ -156,7 +158,7 @@ impl EventRouter {
 
             PointerEvent::Cancel(_) => {
                 // Cancel drag
-                if let Some(state) = self.pointer_state.write().remove(&pointer_id)
+                if let Some(state) = self.pointer_state.remove(&pointer_id)
                     && let Some(target) = state.down_target
                 {
                     target.dispatch(event);
@@ -179,11 +181,11 @@ impl EventRouter {
     /// 2. Focused node's handler
     ///
     /// Returns `true` if the event was handled.
-    fn route_key_event(_root: &mut dyn HitTestable, event: &KeyEvent) -> bool {
-        let handled = FocusManager::global().dispatch_key_event(event);
+    fn route_key_event(&self, _root: &mut dyn HitTestable, event: &KeyEvent) -> bool {
+        let handled = self.focus_manager.dispatch_key_event(event);
 
         if !handled {
-            if FocusManager::global().focused().is_some() {
+            if self.focus_manager.primary_focus().is_some() {
                 tracing::trace!("Key event not handled by focused element");
             } else {
                 tracing::trace!("No focused element for key event");
@@ -225,7 +227,7 @@ impl EventRouter {
 
     /// Clear all pointer state (useful for testing or window focus loss)
     pub fn clear_pointer_state(&mut self) {
-        self.pointer_state.write().clear();
+        self.pointer_state.clear();
     }
 }
 
@@ -233,12 +235,6 @@ impl EventRouter {
 #[inline]
 fn get_pointer_id(event: &PointerEvent) -> PointerId {
     crate::events::extract_pointer_id(event)
-}
-
-impl Default for EventRouter {
-    fn default() -> Self {
-        Self::new()
-    }
 }
 
 #[cfg(test)]
@@ -267,15 +263,15 @@ pub(crate) mod tests {
 
     #[test]
     fn test_event_router_creation() {
-        let router = EventRouter::new();
-        assert!(router.pointer_state.read().is_empty());
+        let router = EventRouter::new(FocusManager::new());
+        assert!(router.pointer_state.is_empty());
     }
 
     #[test]
     fn test_pointer_down_up_tracking() {
         use crate::events::make_up_event;
 
-        let mut router = EventRouter::new();
+        let mut router = EventRouter::new(FocusManager::new());
         let mut layer = MockLayer {
             bounds: Rect::from_xywh(Pixels(0.0), Pixels(0.0), Pixels(100.0), Pixels(100.0)),
         };
@@ -285,24 +281,24 @@ pub(crate) mod tests {
         router.route_event(&mut layer, &Event::Pointer(down));
 
         // Should track pointer
-        assert_eq!(router.pointer_state.read().len(), 1);
+        assert_eq!(router.pointer_state.len(), 1);
 
         // Up event
         let up = make_up_event(Offset::new(Pixels(50.0), Pixels(50.0)), PointerType::Mouse);
         router.route_event(&mut layer, &Event::Pointer(up));
 
         // Should clear pointer
-        assert_eq!(router.pointer_state.read().len(), 0);
+        assert_eq!(router.pointer_state.len(), 0);
     }
 
     #[test]
     fn test_clear_pointer_state() {
         use crate::ids::PointerId;
 
-        let mut router = EventRouter::new();
+        let mut router = EventRouter::new(FocusManager::new());
 
         // Add some state
-        router.pointer_state.write().insert(
+        router.pointer_state.insert(
             PointerId::PRIMARY,
             PointerStateTracking {
                 is_down: true,
@@ -312,6 +308,6 @@ pub(crate) mod tests {
         );
 
         router.clear_pointer_state();
-        assert!(router.pointer_state.read().is_empty());
+        assert!(router.pointer_state.is_empty());
     }
 }

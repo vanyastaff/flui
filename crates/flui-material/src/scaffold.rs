@@ -729,7 +729,7 @@ impl ScaffoldState {
             .enable_open_drag_gesture(view.enable_open_drag_gesture)
             .on_open_changed(move |opened| {
                 set_opened(&handle, opened);
-                rebuild.schedule();
+                rebuild.schedule(flui_view::RebuildReason::StateChange);
                 if let Some(callback) = &on_changed {
                     callback(opened);
                 }

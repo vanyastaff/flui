@@ -133,7 +133,7 @@ fn bench_resolve_conflict(c: &mut Criterion) {
             arena.close(pointer);
             eager.resolve(flui_interaction::arena::GestureDisposition::Accepted);
             competitor.resolve(flui_interaction::arena::GestureDisposition::Rejected);
-            black_box(arena.winner(pointer).is_some());
+            black_box(arena.is_empty());
         });
     });
 }

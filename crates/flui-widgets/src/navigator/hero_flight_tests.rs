@@ -790,7 +790,7 @@ impl Mover {
     fn grow(&self) {
         self.tall.store(true, Ordering::SeqCst);
         if let Some(rebuild) = self.rebuild.lock().as_ref() {
-            rebuild.schedule();
+            rebuild.schedule(flui_view::RebuildReason::AnimationTick);
         }
     }
 }
@@ -1121,7 +1121,7 @@ impl HeroGate {
     fn remove_hero(&self) {
         self.present.store(false, Ordering::SeqCst);
         if let Some(rebuild) = self.rebuild.lock().as_ref() {
-            rebuild.schedule();
+            rebuild.schedule(flui_view::RebuildReason::AnimationTick);
         }
     }
 }

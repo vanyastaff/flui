@@ -14,8 +14,8 @@ categories = ["gui", "accessibility"]
 [features]
 default = []
 # Exposes test-only constructors (e.g. `SemanticsOwner::new_without_callback`)
-# to integration tests in downstream crates without leaking into production
-# builds. Per PR #93 testing-feature-gate pattern in flui-interaction.
+# to integration tests in downstream crates without leaking them into
+# production builds.
 testing = []
 
 [dependencies]
@@ -45,6 +45,9 @@ smallvec = "1.15"
 
 # Fast hashing for SemanticsId HashMap keys
 rustc-hash = "2.1"
+
+# Typed public errors
+thiserror.workspace = true
 
 [dev-dependencies]
 

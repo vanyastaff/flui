@@ -16,6 +16,7 @@ View and Element tree: immutable Views → mutable Elements → RenderObjects. T
 
 - **`test-utils` feature** — enables `MockBuildContext` + `ReconcileEventCollector` tracing Layer fixture. Downstream test crates opt in.
 - **GlobalKey activation is scoped** — production lookups resolve only inside `UiRealm::enter`; the TLS stack supports nested entry and restores on unwind. Legacy integration fixtures using the manual test adapter remain `#[serial]` until that adapter is retired.
+- **Focus ownership is explicit** — every `BuildOwner` owns one concrete `Rc<FocusManager>`; presentation composition passes the same manager into `WidgetsBinding::with_focus_manager`. `BuildContext::focus_manager()` is acquired only from `init_state` / `did_change_dependencies` and is guarded by port-check trigger #22.
 - **`trybuild` compile-fail tests** — `tests/ui/` corpus exercises derive macro error messages (e.g., `column_17_compile_error.rs`).
 - **No `Box<dyn View>` as struct fields** in element child collections — enforced by port-check trigger #6.
 - **No `downcast_ref::<V>()` in update-dispatch path** — enforced by FR-033. `dispatch_view_update` (TypeId-keyed `Box::downcast::<V>`) is the only path.

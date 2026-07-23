@@ -178,6 +178,9 @@ enum RealmEvent {
     // its `on_active_status_change` registration).
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     WindowVisibility(bool),
+    /// Drive a lifecycle target that requires owner-local realm cleanup (most
+    /// notably Detached during platform shutdown).
+    LifecycleTarget(AppLifecycleState),
     Frame(Box<dyn FnOnce(&super::ui_realm::UiRealm)>),
 }
 
@@ -185,7 +188,7 @@ enum RealmEvent {
 impl RealmEvent {
     fn run(self, realm: &super::ui_realm::UiRealm) {
         match self {
-            Self::Input(input) => AppBinding::instance().handle_input(input),
+            Self::Input(input) => AppBinding::instance().handle_input_entered(realm, input),
             Self::Resize {
                 size,
                 scale_factor,
@@ -215,6 +218,9 @@ impl RealmEvent {
                     (old, derive_lifecycle_state(state.visible, state.focused))
                 });
                 emit_lifecycle_transition(realm, old, new);
+            }
+            Self::LifecycleTarget(new) => {
+                emit_lifecycle_transition(realm, Scheduler::instance().lifecycle_state(), new);
             }
             Self::Frame(run) => run(realm),
         }
@@ -327,15 +333,159 @@ fn emit_lifecycle_transition(
     old: AppLifecycleState,
     new: AppLifecycleState,
 ) {
+    let mut first_panic = None;
     for step in lifecycle_ladder(old, new) {
-        Scheduler::instance().handle_app_lifecycle_state_change(step);
-        realm.widgets().handle_app_lifecycle_state_changed(step);
+        let presentation_panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            realm.handle_presentation_lifecycle(step);
+        }))
+        .err();
+        preserve_first_lifecycle_panic(
+            &mut first_panic,
+            presentation_panic,
+            "presentation lifecycle transition",
+        );
+
+        let gesture_cleanup_panic = if matches!(
+            step,
+            AppLifecycleState::Hidden | AppLifecycleState::Paused | AppLifecycleState::Detached
+        ) {
+            // A hidden or suspended platform is not required to send the Up
+            // or Cancel matching an in-flight Down. Drain this realm's input
+            // transaction before lifecycle observers can retain stale gesture
+            // state into the next visible frame.
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                realm.gestures().handle_lifecycle_pause();
+            }))
+            .err()
+        } else {
+            None
+        };
+        preserve_first_lifecycle_panic(&mut first_panic, gesture_cleanup_panic, "gesture cleanup");
+
+        let scheduler_panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            Scheduler::instance().handle_app_lifecycle_state_change(step);
+        }))
+        .err();
+        preserve_first_lifecycle_panic(
+            &mut first_panic,
+            scheduler_panic,
+            "scheduler lifecycle dispatch",
+        );
+
+        let widgets_panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            realm.widgets().handle_app_lifecycle_state_changed(step);
+        }))
+        .err();
+        preserve_first_lifecycle_panic(
+            &mut first_panic,
+            widgets_panic,
+            "widgets lifecycle dispatch",
+        );
+    }
+
+    // Every sink has now observed (or attempted) the complete synthesized
+    // ladder. The earliest payload keeps transaction ordering deterministic.
+    if let Some(payload) = first_panic {
+        std::panic::resume_unwind(payload);
+    }
+}
+
+#[cfg(not(target_os = "ios"))]
+fn preserve_first_lifecycle_panic(
+    first: &mut Option<Box<dyn std::any::Any + Send>>,
+    candidate: Option<Box<dyn std::any::Any + Send>>,
+    phase: &'static str,
+) {
+    let Some(candidate) = candidate else {
+        return;
+    };
+    if first.is_none() {
+        *first = Some(candidate);
+    } else {
+        tracing::error!(
+            phase,
+            "lifecycle phase panicked after an earlier phase; only the first panic is resumed"
+        );
+        // A secondary user panic may carry a payload whose destructor also
+        // panics. Leaking that exceptional payload prevents it from replacing
+        // the first lifecycle failure or aborting while the first unwinds.
+        std::mem::forget(candidate);
     }
 }
 
 #[cfg(all(test, not(target_os = "ios")))]
 mod lifecycle_derivation_tests {
-    use super::{AppLifecycleState, derive_lifecycle_state, lifecycle_ladder};
+    use std::{
+        panic::{AssertUnwindSafe, catch_unwind},
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicBool, Ordering},
+        },
+    };
+
+    use flui_foundation::HasInstance;
+    use flui_interaction::{
+        HitTestEntry, HitTestResult, InteractionLane, RenderId,
+        events::{PointerType, make_down_event, make_move_event},
+    };
+    use flui_types::geometry::{Offset, Pixels};
+    use flui_view::WidgetsBindingObserver;
+
+    use super::{
+        AppBinding, AppLifecycleState, Scheduler, derive_lifecycle_state,
+        emit_lifecycle_transition, lifecycle_ladder,
+    };
+
+    struct GestureStateObserver {
+        cleanup_committed: Arc<AtomicBool>,
+        hidden_saw_cleanup: AtomicBool,
+    }
+
+    impl WidgetsBindingObserver for GestureStateObserver {
+        fn did_change_app_lifecycle_state(&self, state: AppLifecycleState) {
+            if state == AppLifecycleState::Hidden {
+                self.hidden_saw_cleanup.store(
+                    self.cleanup_committed.load(Ordering::Acquire),
+                    Ordering::Release,
+                );
+            }
+        }
+    }
+
+    struct LifecycleSeen(Mutex<Vec<AppLifecycleState>>);
+
+    impl WidgetsBindingObserver for LifecycleSeen {
+        fn did_change_app_lifecycle_state(&self, state: AppLifecycleState) {
+            self.0.lock().expect("lifecycle log lock").push(state);
+        }
+    }
+
+    struct SetCleanupOnDrop(Arc<AtomicBool>);
+
+    impl Drop for SetCleanupOnDrop {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::Release);
+        }
+    }
+
+    struct PanicOnLifecycleRouteDrop;
+
+    impl Drop for PanicOnLifecycleRouteDrop {
+        fn drop(&mut self) {
+            panic!("lifecycle route cleanup panic");
+        }
+    }
+
+    struct PanickingLifecycleObserver(Arc<AtomicBool>);
+
+    impl WidgetsBindingObserver for PanickingLifecycleObserver {
+        fn did_change_app_lifecycle_state(&self, state: AppLifecycleState) {
+            if state == AppLifecycleState::Hidden {
+                self.0.store(true, Ordering::Release);
+                panic!("widgets lifecycle listener panic");
+            }
+        }
+    }
 
     #[test]
     fn derivation_truth_table() {
@@ -499,6 +649,169 @@ mod lifecycle_derivation_tests {
             vec![AppLifecycleState::Paused, AppLifecycleState::Detached]
         );
     }
+
+    #[test]
+    fn hidden_transition_drains_the_realms_interrupted_pointer_sequence() {
+        let app = AppBinding::new();
+        let realm = super::super::ui_realm::UiRealm::for_test(&app);
+        let lane = InteractionLane::try_new().expect("test interaction lane");
+        let handle = lane.dispatch_handle();
+        let cleanup_committed = Arc::new(AtomicBool::new(false));
+        let observer = Arc::new(GestureStateObserver {
+            cleanup_committed: Arc::clone(&cleanup_committed),
+            hidden_saw_cleanup: AtomicBool::new(false),
+        });
+        let observer_handle: Arc<dyn WidgetsBindingObserver> = observer.clone();
+        realm.widgets().add_observer(observer_handle.clone());
+
+        realm.enter(|realm| {
+            lane.enter(|| {
+                realm
+                    .gestures()
+                    .set_resampling_enabled(true)
+                    .expect("test realm has no active pointer before configuration");
+                let owner = SetCleanupOnDrop(Arc::clone(&cleanup_committed));
+                let target = handle
+                    .register_pointer(move |_| {
+                        let _keep_owner_alive = &owner;
+                    })
+                    .expect("register lifecycle target");
+                let mut result = HitTestResult::new();
+                result.add(HitTestEntry::new(RenderId::new(1)).pointer_target(target));
+                let down =
+                    make_down_event(Offset::new(Pixels(8.0), Pixels(13.0)), PointerType::Touch);
+                realm.gestures().handle_pointer_event(&down, |_| result);
+                let move_event =
+                    make_move_event(Offset::new(Pixels(9.0), Pixels(14.0)), PointerType::Touch);
+                realm
+                    .gestures()
+                    .handle_pointer_event(&move_event, |_| HitTestResult::new());
+                handle
+                    .unregister_pointer(target)
+                    .expect("cached route retains lifecycle target");
+                assert_eq!(realm.gestures().active_pointer_count(), 1);
+                assert_eq!(realm.gestures().active_resampler_count(), 1);
+                assert_eq!(realm.gestures().pending_move_count(), 1);
+
+                emit_lifecycle_transition(
+                    realm,
+                    AppLifecycleState::Resumed,
+                    AppLifecycleState::Hidden,
+                );
+
+                assert_eq!(realm.gestures().active_pointer_count(), 0);
+                assert_eq!(realm.gestures().active_resampler_count(), 0);
+                assert_eq!(realm.gestures().pending_move_count(), 0);
+                assert!(realm.gestures().arena().is_empty());
+                assert!(
+                    observer.hidden_saw_cleanup.load(Ordering::Acquire),
+                    "lifecycle observers must see gesture teardown already committed"
+                );
+
+                // Do not leak the scheduler singleton's lifecycle state into
+                // another in-process test.
+                emit_lifecycle_transition(
+                    realm,
+                    AppLifecycleState::Hidden,
+                    AppLifecycleState::Resumed,
+                );
+            });
+        });
+        realm.widgets().remove_observer(&observer_handle);
+    }
+
+    #[test]
+    fn multi_step_lifecycle_commits_the_target_before_the_first_panic_resumes() {
+        let app = AppBinding::new();
+        let realm = super::super::ui_realm::UiRealm::for_test(&app);
+        let lane = InteractionLane::try_new().expect("test interaction lane");
+        let handle = lane.dispatch_handle();
+        let observer = Arc::new(LifecycleSeen(Mutex::new(Vec::new())));
+        let observer_handle: Arc<dyn WidgetsBindingObserver> = observer.clone();
+        realm.widgets().add_observer(observer_handle.clone());
+        let scheduler_listener_panicked = Arc::new(AtomicBool::new(false));
+        let scheduler_probe = Arc::clone(&scheduler_listener_panicked);
+        let scheduler_listener =
+            Scheduler::instance().add_lifecycle_state_listener(Arc::new(move |state| {
+                if state == AppLifecycleState::Hidden {
+                    scheduler_probe.store(true, Ordering::Release);
+                    panic!("scheduler lifecycle listener panic");
+                }
+            }));
+        let widget_listener_panicked = Arc::new(AtomicBool::new(false));
+        let panicking_observer: Arc<dyn WidgetsBindingObserver> = Arc::new(
+            PanickingLifecycleObserver(Arc::clone(&widget_listener_panicked)),
+        );
+        realm.widgets().add_observer(panicking_observer.clone());
+
+        realm.enter(|realm| {
+            lane.enter(|| {
+                let owner = PanicOnLifecycleRouteDrop;
+                let target = handle
+                    .register_pointer(move |_| {
+                        let _keep_owner_alive = &owner;
+                    })
+                    .expect("register lifecycle target");
+                let mut result = HitTestResult::new();
+                result.add(HitTestEntry::new(RenderId::new(1)).pointer_target(target));
+                let down =
+                    make_down_event(Offset::new(Pixels(3.0), Pixels(5.0)), PointerType::Touch);
+                realm.gestures().handle_pointer_event(&down, |_| result);
+                handle
+                    .unregister_pointer(target)
+                    .expect("cached route retains lifecycle target");
+
+                let unwind = catch_unwind(AssertUnwindSafe(|| {
+                    emit_lifecycle_transition(
+                        realm,
+                        AppLifecycleState::Resumed,
+                        AppLifecycleState::Paused,
+                    );
+                }));
+                let payload = unwind.expect_err("route cleanup panic must propagate");
+
+                assert_eq!(
+                    payload.downcast_ref::<&str>(),
+                    Some(&"lifecycle route cleanup panic")
+                );
+                assert_eq!(
+                    *observer.0.lock().expect("lifecycle log lock"),
+                    vec![
+                        AppLifecycleState::Inactive,
+                        AppLifecycleState::Hidden,
+                        AppLifecycleState::Paused,
+                    ],
+                    "the complete synthesized ladder must reach widget observers"
+                );
+                assert_eq!(realm.gestures().active_pointer_count(), 0);
+                assert_eq!(
+                    Scheduler::instance().lifecycle_state(),
+                    AppLifecycleState::Paused,
+                    "the target state must commit before the first panic resumes"
+                );
+                assert!(
+                    scheduler_listener_panicked.load(Ordering::Acquire),
+                    "scheduler lifecycle sink must run after cleanup"
+                );
+                assert!(
+                    widget_listener_panicked.load(Ordering::Acquire),
+                    "widgets lifecycle sink must run after a scheduler listener panic"
+                );
+
+                assert!(
+                    Scheduler::instance().remove_lifecycle_state_listener(scheduler_listener),
+                    "test scheduler listener must be removable"
+                );
+                realm.widgets().remove_observer(&panicking_observer);
+                realm.widgets().remove_observer(&observer_handle);
+                emit_lifecycle_transition(
+                    realm,
+                    AppLifecycleState::Paused,
+                    AppLifecycleState::Resumed,
+                );
+            });
+        });
+    }
 }
 
 #[cfg(not(target_os = "ios"))]
@@ -661,6 +974,12 @@ fn queued_hot_reload_hook(
 mod realm_dispatch_tests {
     use std::{cell::RefCell, rc::Rc};
 
+    use flui_interaction::{
+        HitTestResult,
+        events::{PointerType, make_down_event},
+    };
+    use flui_types::geometry::{Offset, Pixels};
+
     use super::*;
 
     fn install_test_realm() -> RealmDispatcher {
@@ -701,6 +1020,51 @@ mod realm_dispatch_tests {
                  value from a prior realm"
             );
         });
+        teardown_platform_realm();
+    }
+
+    #[test]
+    fn detached_realm_event_cancels_an_interrupted_pointer_sequence() {
+        let dispatcher = install_test_realm();
+        dispatch_platform_realm(
+            dispatcher,
+            RealmEvent::LifecycleTarget(AppLifecycleState::Resumed),
+        )
+        .expect("test realm resumes");
+        dispatch_platform_realm(
+            dispatcher,
+            RealmEvent::Frame(Box::new(|realm| {
+                let down =
+                    make_down_event(Offset::new(Pixels(4.0), Pixels(6.0)), PointerType::Touch);
+                realm
+                    .gestures()
+                    .handle_pointer_event(&down, |_| HitTestResult::new());
+                assert_eq!(realm.gestures().active_pointer_count(), 1);
+            })),
+        )
+        .expect("pointer sequence starts");
+
+        dispatch_platform_realm(
+            dispatcher,
+            RealmEvent::LifecycleTarget(AppLifecycleState::Detached),
+        )
+        .expect("Detached lifecycle dispatches through the realm");
+        dispatch_platform_realm(
+            dispatcher,
+            RealmEvent::Frame(Box::new(|realm| {
+                assert_eq!(realm.gestures().active_pointer_count(), 0);
+                assert_eq!(realm.gestures().active_resampler_count(), 0);
+                assert_eq!(realm.gestures().pending_move_count(), 0);
+                assert!(realm.gestures().arena().is_empty());
+            })),
+        )
+        .expect("clean state remains observable");
+
+        dispatch_platform_realm(
+            dispatcher,
+            RealmEvent::LifecycleTarget(AppLifecycleState::Resumed),
+        )
+        .expect("test realm lifecycle restores");
         teardown_platform_realm();
     }
 
@@ -1357,8 +1721,6 @@ where
     };
     use parking_lot::Mutex;
 
-    use crate::embedder::PlatformWindowHandle;
-
     tracing::info!("Starting desktop platform via flui-platform");
 
     let worker_driver = config
@@ -1452,10 +1814,7 @@ where
 
         // 2. Create GPU renderer directly (no DesktopEmbedder)
         let phys_size = window.physical_size();
-        let renderer = pollster::block_on(async {
-            let handle = PlatformWindowHandle(window.as_ref());
-            Renderer::new(&handle).await
-        });
+        let renderer = pollster::block_on(Renderer::new(window.as_ref()));
         let mut renderer = match renderer {
             Ok(r) => r,
             Err(e) => {
@@ -1476,18 +1835,20 @@ where
         AppBinding::instance()
             .render_pipeline_mut()
             .set_device_pixel_ratio(scale_factor);
-        let ui_realm =
-            match super::ui_realm::UiRealm::new(AppBinding::instance().frame_wake_callback()) {
-                Ok(realm) => realm,
-                Err(e) => {
-                    tracing::error!(error = %e, "UiRealm construction failed");
-                    *bootstrap_error_slot.borrow_mut() =
-                        Some(anyhow::anyhow!(e).context("UiRealm construction failed"));
-                    platform.quit();
-                    return;
-                }
-            };
-        ui_realm.bind_to_app(AppBinding::instance());
+        let ui_realm = match super::ui_realm::UiRealm::new(
+            AppBinding::instance(),
+            AppBinding::instance().frame_wake_callback(),
+            Arc::clone(&window),
+        ) {
+            Ok(realm) => realm,
+            Err(e) => {
+                tracing::error!(error = %e, "UiRealm construction failed");
+                *bootstrap_error_slot.borrow_mut() =
+                    Some(anyhow::anyhow!(e).context("UiRealm construction failed"));
+                platform.quit();
+                return;
+            }
+        };
         let logical = window.logical_size();
         let attach = ui_realm.enter(|realm| {
             AppBinding::instance().attach_root_widget_with_size(
@@ -1550,6 +1911,7 @@ where
         //
         tracing::info!(
             realm_id = ?ui_realm.realm_id(),
+            presentation_id = ?ui_realm.presentation_id(),
             inbox_capacity = ui_realm.command_sender().capacity(),
             "UiRealm constructed"
         );
@@ -1561,7 +1923,7 @@ where
         // 4. Wrap renderer for callback sharing
         let renderer = Arc::new(Mutex::new(renderer));
 
-        // 5. Register input callback -> AppBinding::handle_input()
+        // 5. Register input callback -> entered realm input dispatch
         window.on_input(Box::new(move |input: PlatformInput| {
             let _ = dispatch_platform_realm(realm_dispatch, RealmEvent::Input(input));
             DispatchEventResult::resolved(false, true)
@@ -1732,13 +2094,9 @@ where
 
         // 8. Lifecycle callbacks
         //
-        // ADR-0035 (PR1): Started/Terminating call the canonical
-        // `flui_scheduler::Scheduler` lifecycle directly rather than
-        // round-tripping through `RealmEvent`/`dispatch_platform_realm` —
-        // neither needs `&UiRealm` access, and both already run on the
-        // realm's owner thread (the platform event-loop thread), so the
-        // debug_assert below is the cheap, in-scope way to verify that
-        // invariant instead of teaching the scheduler about realm ownership.
+        // Detached is dispatched through the realm because shutdown must
+        // cancel any pointer sequence whose platform Up/Cancel will never
+        // arrive before lifecycle observers run.
 
         // Platform quit -> Detached (frames disabled, listeners notified).
         platform.on_quit(Box::new(move || {
@@ -1748,7 +2106,17 @@ where
                 realm_dispatch.owner_thread,
                 "platform on_quit must fire on the realm's owner thread"
             );
-            Scheduler::instance().handle_app_lifecycle_state_change(AppLifecycleState::Detached);
+            if let Err(error) = dispatch_platform_realm(
+                realm_dispatch,
+                RealmEvent::LifecycleTarget(AppLifecycleState::Detached),
+            ) {
+                tracing::warn!(
+                    ?error,
+                    "realm unavailable during Detached lifecycle dispatch"
+                );
+                Scheduler::instance()
+                    .handle_app_lifecycle_state_change(AppLifecycleState::Detached);
+            }
         }));
 
         // Window close -> log and let the platform handle quit
@@ -1799,7 +2167,7 @@ where
         // through, so a backend whose `request_redraw` re-enters `AppBinding`
         // synchronously (headless, in this crate's own tests) cannot
         // deadlock on that same lock — the same clone-then-call discipline
-        // `TextInputPlatformBridge`/`perform_haptic_feedback` follow.
+        // used by direct platform capabilities.
         AppBinding::instance().wake_frame();
 
         tracing::info!("Desktop platform initialized with callbacks");
@@ -1905,8 +2273,6 @@ where
     };
     use parking_lot::Mutex;
 
-    use crate::embedder::PlatformWindowHandle;
-
     tracing::info!("Starting Android platform via flui-platform");
 
     // Hot-reload: build plugin path from app's internal data directory
@@ -1934,10 +2300,7 @@ where
 
     // 2. Create GPU renderer (Vulkan backend on Android)
     let phys_size = window.physical_size();
-    let renderer = pollster::block_on(async {
-        let handle = PlatformWindowHandle(window.as_ref());
-        Renderer::new(&handle).await
-    });
+    let renderer = pollster::block_on(Renderer::new(window.as_ref()));
     let mut renderer = match renderer {
         Ok(r) => r,
         Err(e) => {
@@ -1953,15 +2316,17 @@ where
     AppBinding::instance()
         .render_pipeline_mut()
         .set_device_pixel_ratio(scale_factor);
-    let ui_realm = match super::ui_realm::UiRealm::new(AppBinding::instance().frame_wake_callback())
-    {
+    let ui_realm = match super::ui_realm::UiRealm::new(
+        AppBinding::instance(),
+        AppBinding::instance().frame_wake_callback(),
+        Arc::clone(&window),
+    ) {
         Ok(realm) => realm,
         Err(error) => {
             tracing::error!(%error, "UiRealm construction failed");
             return;
         }
     };
-    ui_realm.bind_to_app(AppBinding::instance());
     let logical = window.logical_size();
     let attach = ui_realm.enter(|realm| {
         AppBinding::instance().attach_root_widget_with_size(
@@ -1980,7 +2345,7 @@ where
     // 4. Wrap renderer for callback sharing
     let renderer = Arc::new(Mutex::new(renderer));
 
-    // 5. Register input callback -> AppBinding::handle_input()
+    // 5. Register input callback -> entered realm input dispatch
     window.on_input(Box::new(move |input: PlatformInput| {
         let _ = dispatch_platform_realm(realm_dispatch, RealmEvent::Input(input));
         DispatchEventResult::resolved(false, true)
@@ -2098,11 +2463,8 @@ where
 
     // 8. Lifecycle callbacks
     //
-    // ADR-0035 (PR1): Started/Terminating call the canonical
-    // `flui_scheduler::Scheduler` lifecycle directly — see `run_desktop`'s
-    // identical comment for why this bypasses `RealmEvent`/
-    // `dispatch_platform_realm` and why the debug_assert lives here rather
-    // than in the scheduler.
+    // Detached is realm-dispatched so interrupted gesture state is drained
+    // before lifecycle observers run.
 
     // Platform quit -> Detached (frames disabled, listeners notified).
     platform.on_quit(Box::new(move || {
@@ -2112,7 +2474,16 @@ where
             realm_dispatch.owner_thread,
             "platform on_quit must fire on the realm's owner thread"
         );
-        Scheduler::instance().handle_app_lifecycle_state_change(AppLifecycleState::Detached);
+        if let Err(error) = dispatch_platform_realm(
+            realm_dispatch,
+            RealmEvent::LifecycleTarget(AppLifecycleState::Detached),
+        ) {
+            tracing::warn!(
+                ?error,
+                "realm unavailable during Detached lifecycle dispatch"
+            );
+            Scheduler::instance().handle_app_lifecycle_state_change(AppLifecycleState::Detached);
+        }
     }));
 
     // Window close (fired by Android Destroy event)
@@ -2169,8 +2540,8 @@ where
     // the window out from under `active_window`'s lock before calling
     // through, so a backend whose `request_redraw` re-enters `AppBinding`
     // synchronously (headless, in this crate's own tests) cannot deadlock
-    // on that same lock — the same clone-then-call discipline
-    // `TextInputPlatformBridge`/`perform_haptic_feedback` follow.
+    // on that same lock — the same clone-then-call discipline used by
+    // direct platform capabilities.
     AppBinding::instance().wake_frame();
 
     tracing::info!("Android platform initialized with callbacks (hot-reload enabled)");
@@ -2213,8 +2584,6 @@ where
     };
     use parking_lot::Mutex;
 
-    use crate::embedder::PlatformWindowHandle;
-
     tracing::info!("Starting web platform via flui-platform");
 
     let platform = flui_platform::current_platform().expect("Failed to initialize web platform");
@@ -2227,11 +2596,9 @@ where
 
     // 1. Open window (creates canvas) before run() since run() takes ownership
     let options: WindowOptions = (&config).into();
-    let window: Arc<dyn flui_platform::PlatformWindow> = Arc::from(
-        platform
-            .open_window(options)
-            .expect("Failed to create canvas window"),
-    );
+    let window = platform
+        .open_window(options)
+        .expect("Failed to create canvas window");
 
     // 2. Shared renderer slot — starts as None, filled async once the WebGPU
     //    adapter is available. `Option` lets the frame callback skip frames that
@@ -2246,8 +2613,7 @@ where
     // browser platform installs RAF and returns immediately, and startup can
     // also return early before the window reaches AppBinding.
     wasm_bindgen_futures::spawn_local(async move {
-        let handle = PlatformWindowHandle(renderer_window.as_ref());
-        let mut r = match Renderer::new(&handle).await {
+        let mut r = match Renderer::new(renderer_window.as_ref()).await {
             Ok(r) => r,
             Err(e) => {
                 tracing::error!("GPU init failed: {:?}", e);
@@ -2265,15 +2631,17 @@ where
     AppBinding::instance()
         .render_pipeline_mut()
         .set_device_pixel_ratio(scale_factor);
-    let ui_realm = match super::ui_realm::UiRealm::new(AppBinding::instance().frame_wake_callback())
-    {
+    let ui_realm = match super::ui_realm::UiRealm::new(
+        AppBinding::instance(),
+        AppBinding::instance().frame_wake_callback(),
+        Arc::clone(&window),
+    ) {
         Ok(realm) => realm,
         Err(error) => {
             tracing::error!(%error, "UiRealm construction failed");
             return;
         }
     };
-    ui_realm.bind_to_app(AppBinding::instance());
     let logical = window.logical_size();
     let attach = ui_realm.enter(|realm| {
         AppBinding::instance().attach_root_widget_with_size(
@@ -2404,11 +2772,8 @@ where
 
     // 6. Lifecycle callbacks
     //
-    // ADR-0035 (PR1): Started/Terminating call the canonical
-    // `flui_scheduler::Scheduler` lifecycle directly — see `run_desktop`'s
-    // identical comment for why this bypasses `RealmEvent`/
-    // `dispatch_platform_realm` and why the debug_assert lives here rather
-    // than in the scheduler.
+    // Detached is realm-dispatched so interrupted gesture state is drained
+    // before lifecycle observers run.
     platform.on_quit(Box::new(move || {
         tracing::info!("Web platform quit");
         debug_assert_eq!(
@@ -2416,7 +2781,16 @@ where
             realm_dispatch.owner_thread,
             "platform on_quit must fire on the realm's owner thread"
         );
-        Scheduler::instance().handle_app_lifecycle_state_change(AppLifecycleState::Detached);
+        if let Err(error) = dispatch_platform_realm(
+            realm_dispatch,
+            RealmEvent::LifecycleTarget(AppLifecycleState::Detached),
+        ) {
+            tracing::warn!(
+                ?error,
+                "realm unavailable during Detached lifecycle dispatch"
+            );
+            Scheduler::instance().handle_app_lifecycle_state_change(AppLifecycleState::Detached);
+        }
     }));
 
     window.on_close(Box::new(move || {
@@ -2437,7 +2811,7 @@ where
     // anything resolving `active_window` during that frame (an autofocus
     // `EditableText` attaching its IME client, for instance) must not see
     // `None`.
-    AppBinding::instance().set_shared_window(window);
+    AppBinding::instance().set_window(window);
 
     debug_assert_eq!(
         std::thread::current().id(),

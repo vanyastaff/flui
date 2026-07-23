@@ -7,18 +7,15 @@
 //!    Verify buffer mutations, UTF-8 correctness, listener wiring, and clone
 //!    sharing.
 //!
-//! 2. **Key-routing tests** — use `FocusManager::global()` + `FocusNode` to
+//! 2. **Key-routing tests** — use an isolated `FocusManager` + `FocusNode` to
 //!    verify that keyboard events dispatched through the focus system reach the
 //!    controller when the node is focused, and are silently ignored when it is
 //!    not.
 //!
-//! Key-routing tests serialize themselves around the global `FocusManager`
-//! singleton and clean up their registered nodes before returning.
-
 use std::{
     rc::Rc,
     sync::{
-        Arc, Mutex, MutexGuard,
+        Arc,
         atomic::{AtomicUsize, Ordering},
     },
 };
@@ -28,7 +25,7 @@ use flui_geometry::EdgeInsets;
 use flui_interaction::testing::input::KeyEventBuilder;
 use flui_interaction::{
     events::{Code, Key, KeyState, NamedKey},
-    routing::{FocusManager, FocusNode, KeyEventCallback},
+    routing::{FocusAttachment, FocusManager, FocusNode, KeyEventHandler, KeyEventResult},
 };
 use flui_types::{Size, geometry::px};
 use flui_widgets::{EditableText, TextEditingController, TextField};
@@ -39,47 +36,42 @@ mod common;
 // Helpers
 // ============================================================================
 
-static FOCUS_TEST_LOCK: Mutex<()> = Mutex::new(());
-
-fn focus_test_guard() -> MutexGuard<'static, ()> {
-    let guard = FOCUS_TEST_LOCK
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    FocusManager::global().unfocus();
-    guard
-}
-
-/// A guard that unregisters the key handler and detaches the focus node from
-/// the root scope when dropped, ensuring the global `FocusManager` singleton
-/// is left clean for the next test even on panic.
+/// Owns one isolated focus fixture and detaches it on drop.
 struct FocusGuard {
-    node: Arc<FocusNode>,
+    manager: Rc<FocusManager>,
+    node: Rc<FocusNode>,
+    attachment: FocusAttachment,
 }
 
 impl FocusGuard {
-    /// Attach `node` to the root scope and register `handler` for it.
-    fn attach(node: Arc<FocusNode>, handler: KeyEventCallback) -> Self {
-        let manager = FocusManager::global();
-        manager.root_scope().attach_node(&node);
-        manager.register_key_handler(node.id(), handler);
-        Self { node }
+    /// Attach `node` to `manager` and install its node-owned handler.
+    fn attach(manager: Rc<FocusManager>, node: Rc<FocusNode>, handler: KeyEventHandler) -> Self {
+        node.set_on_key_event(handler);
+        let attachment = manager
+            .root_scope()
+            .attach_node(&node)
+            .expect("test node attaches to its isolated manager");
+        Self {
+            manager,
+            node,
+            attachment,
+        }
     }
 
     /// Focus this node so key dispatch is routed to its handler.
     fn request_focus(&self) {
-        FocusManager::global().request_focus(self.node.id());
+        self.node.request_focus();
     }
 }
 
 impl Drop for FocusGuard {
     fn drop(&mut self) {
-        let manager = FocusManager::global();
         // Clear primary focus if we held it, so subsequent tests start clean.
         if self.node.has_primary_focus() {
-            manager.unfocus();
+            self.manager.unfocus();
         }
-        manager.unregister_key_handler(self.node.id());
-        manager.root_scope().detach_node(self.node.id());
+        self.node.clear_on_key_event();
+        let _ = self.attachment.detach();
     }
 }
 
@@ -90,41 +82,41 @@ impl Drop for FocusGuard {
 /// This is the behavior under test — it mirrors `editable_text::build_key_handler`
 /// exactly, and these tests would fail if any branch were removed or the
 /// wrong method were called.
-fn make_editable_text_handler(controller: TextEditingController) -> KeyEventCallback {
+fn make_editable_text_handler(controller: TextEditingController) -> KeyEventHandler {
     Rc::new(move |event| {
         if event.state != KeyState::Down {
-            return false;
+            return KeyEventResult::Ignored;
         }
         match &event.key {
             Key::Character(character_string) => {
                 controller.insert_str(character_string.as_str());
-                true
+                KeyEventResult::Handled
             }
             Key::Named(NamedKey::Backspace) => {
                 controller.backspace();
-                true
+                KeyEventResult::Handled
             }
             Key::Named(NamedKey::Delete) => {
                 controller.delete_forward();
-                true
+                KeyEventResult::Handled
             }
             Key::Named(NamedKey::ArrowLeft) => {
                 controller.move_caret_left();
-                true
+                KeyEventResult::Handled
             }
             Key::Named(NamedKey::ArrowRight) => {
                 controller.move_caret_right();
-                true
+                KeyEventResult::Handled
             }
             Key::Named(NamedKey::Home) => {
                 controller.move_caret_home();
-                true
+                KeyEventResult::Handled
             }
             Key::Named(NamedKey::End) => {
                 controller.move_caret_end();
-                true
+                KeyEventResult::Handled
             }
-            Key::Named(_) => false,
+            Key::Named(_) => KeyEventResult::Ignored,
         }
     })
 }
@@ -310,19 +302,17 @@ fn remove_listener_stops_notifications() {
 // 2. Key-routing tests — FocusManager dispatch → controller
 // ============================================================================
 //
-// These tests use `FocusManager::global()` (the process-wide singleton).
-// They run safely under `--test-threads 1`; each test registers a fresh
-// `FocusNode`, runs its assertions, then drops the `FocusGuard` which
-// unregisters the node and clears primary focus — leaving the singleton
-// pristine for the next test.
+// Each test owns a fresh manager, node, and generation-checked attachment, so
+// these fixtures are naturally parallel-safe.
 
 #[test]
 fn focused_character_key_inserts_into_controller() {
-    let _focus_serial = focus_test_guard();
+    let manager = FocusManager::new();
     let controller = TextEditingController::new();
     let node = FocusNode::with_debug_label("test-field");
     let guard = FocusGuard::attach(
-        Arc::clone(&node),
+        Rc::clone(&manager),
+        Rc::clone(&node),
         make_editable_text_handler(controller.clone()),
     );
     guard.request_focus();
@@ -331,7 +321,7 @@ fn focused_character_key_inserts_into_controller() {
         .with_key(Key::Character("h".to_string()))
         .with_state(KeyState::Down)
         .build();
-    FocusManager::global().dispatch_key_event(&event);
+    manager.dispatch_key_event(&event);
 
     assert_eq!(
         controller.text(),
@@ -342,13 +332,14 @@ fn focused_character_key_inserts_into_controller() {
 
 #[test]
 fn focused_backspace_key_deletes_char_before_caret() {
-    let _focus_serial = focus_test_guard();
+    let manager = FocusManager::new();
     let controller = TextEditingController::new();
     controller.insert_str("hi");
 
     let node = FocusNode::with_debug_label("test-field");
     let guard = FocusGuard::attach(
-        Arc::clone(&node),
+        Rc::clone(&manager),
+        Rc::clone(&node),
         make_editable_text_handler(controller.clone()),
     );
     guard.request_focus();
@@ -357,7 +348,7 @@ fn focused_backspace_key_deletes_char_before_caret() {
         .with_key(Key::Named(NamedKey::Backspace))
         .with_state(KeyState::Down)
         .build();
-    FocusManager::global().dispatch_key_event(&event);
+    manager.dispatch_key_event(&event);
 
     assert_eq!(
         controller.text(),
@@ -368,13 +359,14 @@ fn focused_backspace_key_deletes_char_before_caret() {
 
 #[test]
 fn focused_arrow_keys_move_the_caret() {
-    let _focus_serial = focus_test_guard();
+    let manager = FocusManager::new();
     let controller = TextEditingController::new();
     controller.insert_str("abc"); // caret at 3
 
     let node = FocusNode::with_debug_label("test-field");
     let guard = FocusGuard::attach(
-        Arc::clone(&node),
+        Rc::clone(&manager),
+        Rc::clone(&node),
         make_editable_text_handler(controller.clone()),
     );
     guard.request_focus();
@@ -383,7 +375,7 @@ fn focused_arrow_keys_move_the_caret() {
         .with_key(Key::Named(NamedKey::ArrowLeft))
         .with_state(KeyState::Down)
         .build();
-    FocusManager::global().dispatch_key_event(&left);
+    manager.dispatch_key_event(&left);
     assert_eq!(
         controller.caret_byte_offset(),
         2,
@@ -394,7 +386,7 @@ fn focused_arrow_keys_move_the_caret() {
         .with_key(Key::Named(NamedKey::ArrowRight))
         .with_state(KeyState::Down)
         .build();
-    FocusManager::global().dispatch_key_event(&right);
+    manager.dispatch_key_event(&right);
     assert_eq!(
         controller.caret_byte_offset(),
         3,
@@ -404,11 +396,12 @@ fn focused_arrow_keys_move_the_caret() {
 
 #[test]
 fn key_up_events_are_not_consumed_by_the_handler() {
-    let _focus_serial = focus_test_guard();
+    let manager = FocusManager::new();
     let controller = TextEditingController::new();
     let node = FocusNode::with_debug_label("test-field");
     let guard = FocusGuard::attach(
-        Arc::clone(&node),
+        Rc::clone(&manager),
+        Rc::clone(&node),
         make_editable_text_handler(controller.clone()),
     );
     guard.request_focus();
@@ -418,7 +411,7 @@ fn key_up_events_are_not_consumed_by_the_handler() {
         .with_key(Key::Character("a".to_string()))
         .with_state(KeyState::Up)
         .build();
-    let consumed = FocusManager::global().dispatch_key_event(&up_event);
+    let consumed = manager.dispatch_key_event(&up_event);
 
     assert_eq!(controller.text(), "", "KeyUp must not insert text");
     assert!(
@@ -429,12 +422,13 @@ fn key_up_events_are_not_consumed_by_the_handler() {
 
 #[test]
 fn unfocused_field_does_not_receive_key_events() {
-    let _focus_serial = focus_test_guard();
+    let manager = FocusManager::new();
     let controller = TextEditingController::new();
     let node = FocusNode::with_debug_label("test-field");
     // Register the handler but DO NOT request focus.
     let _guard = FocusGuard::attach(
-        Arc::clone(&node),
+        Rc::clone(&manager),
+        Rc::clone(&node),
         make_editable_text_handler(controller.clone()),
     );
 
@@ -443,7 +437,7 @@ fn unfocused_field_does_not_receive_key_events() {
         .with_key(Key::Character("x".to_string()))
         .with_state(KeyState::Down)
         .build();
-    FocusManager::global().dispatch_key_event(&event);
+    manager.dispatch_key_event(&event);
 
     assert_eq!(
         controller.text(),
@@ -454,10 +448,13 @@ fn unfocused_field_does_not_receive_key_events() {
 
 #[test]
 fn editable_text_mounts_single_render_editable() {
-    let _focus_serial = focus_test_guard();
     let controller = TextEditingController::with_text("hello");
+    let focus_node = FocusNode::with_debug_label("mounted editable");
 
-    let laid = common::lay_out(EditableText::new(controller), common::tight(120.0, 40.0));
+    let laid = common::lay_out(
+        EditableText::new(controller, focus_node),
+        common::tight(120.0, 40.0),
+    );
     let editable = laid.find_by_render_type("RenderEditable");
 
     assert_eq!(laid.size(editable), Size::new(px(120.0), px(40.0)));
@@ -469,7 +466,7 @@ fn editable_text_mounts_single_render_editable() {
 
 /// Proves `EditableTextState`'s `FocusManager` listener (`init_state`, step
 /// 4) actually reaches the mounted render tree: requesting focus on the
-/// node the field published via [`TextEditingController::focus_node_id`]
+/// explicit node supplied to the field
 /// schedules a rebuild that flips `RenderEditable`'s `show_caret` — the
 /// same live-focus-observation seam `flui_material::TextField` reuses to
 /// keep its `InputDecorator` in sync with real focus transitions.
@@ -479,12 +476,12 @@ fn editable_text_mounts_single_render_editable() {
 /// live focus change reaches *rendered output* through a headless
 /// `tick()` — this closes that gap.
 #[test]
-fn requesting_focus_via_the_controllers_published_node_reveals_the_caret_after_a_tick() {
-    let _focus_serial = focus_test_guard();
+fn requesting_focus_via_the_explicit_node_reveals_the_caret_after_a_tick() {
     let controller = TextEditingController::with_text("hi");
+    let focus_node = FocusNode::with_debug_label("caret reveal");
 
     let mut laid = common::lay_out(
-        EditableText::new(controller.clone()),
+        EditableText::new(controller, Rc::clone(&focus_node)),
         common::tight(120.0, 40.0),
     );
     let editable = laid.find_by_render_type("RenderEditable");
@@ -501,10 +498,7 @@ fn requesting_focus_via_the_controllers_published_node_reveals_the_caret_after_a
         "an unfocused field must not show the caret"
     );
 
-    let node_id = controller
-        .focus_node_id()
-        .expect("EditableText publishes its focus node on mount");
-    FocusManager::global().request_focus(node_id);
+    focus_node.request_focus();
     laid.tick();
 
     assert_eq!(
@@ -523,7 +517,6 @@ fn requesting_focus_via_the_controllers_published_node_reveals_the_caret_after_a
 
 #[test]
 fn text_field_deflates_editable_text_by_its_content_padding() {
-    let _focus_serial = focus_test_guard();
     let controller = TextEditingController::with_text("hello");
 
     let laid = common::lay_out(
@@ -543,7 +536,6 @@ fn text_field_deflates_editable_text_by_its_content_padding() {
 
 #[test]
 fn text_field_default_content_padding_matches_its_documented_default() {
-    let _focus_serial = focus_test_guard();
     let controller = TextEditingController::new();
 
     // Default content_padding is symmetric(8 vertical, 12 horizontal) per

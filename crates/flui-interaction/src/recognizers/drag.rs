@@ -34,15 +34,15 @@ use crate::{
 /// - [`Down`](Self::Down): the initial position reported in
 ///   [`DragStartDetails`] is the pointer's position at the down event.
 /// - [`Start`](Self::Start): the initial position is the pointer's position
-///   when the recogniser crosses the slop threshold (i.e. the moment the
-///   drag actually starts). This is the Flutter default and usually what
-///   users expect for scrollable content.
+///   when the recognizer wins the arena. With competitors this is usually the
+///   slop-crossing position; a lone recognizer can win the deferred default
+///   while still at the Down position.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[non_exhaustive]
 pub enum DragStartBehavior {
     /// Use the pointer's down position as the drag's initial position.
     Down,
-    /// Use the position at slop-crossing as the drag's initial position.
+    /// Use the position at arena acceptance as the drag's initial position.
     /// Flutter default — matches `DragGestureRecognizer.dragStartBehavior`.
     #[default]
     Start,
@@ -112,7 +112,7 @@ pub use crate::processing::Velocity;
 
 /// Callback fired when a pointer contacts the screen and might begin a drag.
 pub type DragDownCallback = Rc<dyn Fn(DragDownDetails)>;
-/// Callback fired when the drag is recognized (slop crossed and arena won).
+/// Callback fired when the drag is recognized by the gesture arena.
 pub type DragStartCallback = Rc<dyn Fn(DragStartDetails)>;
 /// Callback fired for each pointer move while the drag is in progress.
 pub type DragUpdateCallback = Rc<dyn Fn(DragUpdateDetails)>;
@@ -123,10 +123,9 @@ pub type DragCancelCallback = Rc<dyn Fn()>;
 
 /// Recognizes drag gestures
 ///
-/// A drag is defined as:
-/// - Pointer down
-/// - Pointer moves beyond DRAG_SLOP (18px)
-/// - Continuous movement until pointer up
+/// A drag begins when this recognizer wins its pointer's arena. Movement past
+/// the device slop explicitly claims victory when other recognizers are still
+/// competing; a lone recognizer can win by the arena's deferred default.
 ///
 /// # Example
 ///
@@ -156,8 +155,8 @@ pub struct DragGestureRecognizer {
     /// When to fix the drag's initial position.
     ///
     /// - [`DragStartBehavior::Down`]: position is the down-event position.
-    /// - [`DragStartBehavior::Start`]: position is the slop-crossing
-    ///   position (Flutter default).
+    /// - [`DragStartBehavior::Start`]: position is where arena acceptance
+    ///   happens (Flutter default).
     start_behavior: DragStartBehavior,
 
     /// Callbacks
@@ -206,6 +205,9 @@ struct DragState {
     last_position: Option<Offset<Pixels>>,
     /// Last update time (for velocity calculation)
     last_time: Option<Instant>,
+    /// Device kind captured at Down, needed when arena acceptance arrives
+    /// without another pointer event.
+    device_kind: Option<PointerType>,
     /// Velocity tracker
     velocity_tracker: VelocityTracker,
 }
@@ -215,7 +217,6 @@ enum DragPhase {
     Ready,
     Possible, // Pointer down but haven't moved beyond slop yet
     Started,  // Drag in progress
-    Cancelled,
 }
 
 impl Default for DragState {
@@ -226,6 +227,7 @@ impl Default for DragState {
             start_position: None,
             last_position: None,
             last_time: None,
+            device_kind: None,
             velocity_tracker: VelocityTracker::new(),
         }
     }
@@ -360,8 +362,10 @@ impl DragGestureRecognizer {
         let mut state = self.drag_state.lock();
         state.state = DragPhase::Possible;
         state.start_time = Some(Instant::now());
+        state.start_position = None;
         state.last_position = Some(position);
         state.last_time = Some(Instant::now());
+        state.device_kind = Some(kind);
         state.velocity_tracker.reset();
         state
             .velocity_tracker
@@ -385,51 +389,29 @@ impl DragGestureRecognizer {
 
         match state.state {
             DragPhase::Possible => {
-                // Check if moved beyond slop
-                if let Some(initial_pos) = self.state.initial_position() {
-                    let delta = position - initial_pos;
-                    let distance = self.calculate_primary_delta(delta);
+                let Some(initial_pos) = self.state.initial_position() else {
+                    return;
+                };
+                let distance = self.calculate_primary_delta(position - initial_pos);
+                let now = Instant::now();
+                state.last_position = Some(position);
+                state.last_time = Some(now);
+                state.device_kind = Some(kind);
+                state.velocity_tracker.add_position(now, position);
+                let should_accept = distance.abs() > self.min_drag_distance();
+                drop(state);
 
-                    if distance.abs() > self.min_drag_distance() {
-                        // Start drag!
-                        //
-                        // The drag's initial position depends on
-                        // `start_behavior`:
-                        // - `Down`: the down-event position (`initial_pos`).
-                        // - `Start`: the slop-crossing position
-                        //   (`position`) — matches Flutter's default and
-                        //   prevents the in-flight motion from being
-                        //   counted as a "drag" before the user actually
-                        //   committed to it.
-                        let start_position = match self.start_behavior {
-                            DragStartBehavior::Down => initial_pos,
-                            DragStartBehavior::Start => position,
-                        };
-                        state.state = DragPhase::Started;
-                        state.start_position = Some(start_position);
-                        state.last_position = Some(position);
-                        state.last_time = Some(Instant::now());
-                        state
-                            .velocity_tracker
-                            .add_position(Instant::now(), position);
-                        drop(state); // Release lock before calling callback
-
-                        if let Some(callback) = self.callbacks.borrow().on_start.clone() {
-                            let details = DragStartDetails {
-                                global_position: start_position,
-                                local_position: start_position,
-                                kind,
-                                timestamp: Instant::now(),
-                            };
-                            callback(details);
-                        }
-                    }
+                // Crossing slop is a request to win, not permission to invoke
+                // callbacks. Arena acceptance can be delayed by competitors;
+                // `accept_gesture` is the sole start transition.
+                if should_accept {
+                    self.state.accept_tracked();
                 }
             }
             DragPhase::Started => {
                 // Update drag
                 if let Some(last_pos) = state.last_position {
-                    let delta = (position - last_pos).to_delta();
+                    let delta = self.project_delta(position - last_pos);
                     state.last_position = Some(position);
                     state.last_time = Some(Instant::now());
                     state
@@ -459,7 +441,67 @@ impl DragGestureRecognizer {
                     }
                 }
             }
-            _ => {}
+            DragPhase::Ready => {}
+        }
+    }
+
+    /// Transition a possible drag after the arena has accepted it.
+    ///
+    /// State is committed before application code so a reentrant callback
+    /// observes `Started`, and the callback never runs under a recognizer lock.
+    fn begin_accepted_drag(&self) {
+        let (start_details, initial_update) = {
+            let mut state = self.drag_state.lock();
+            if state.state != DragPhase::Possible {
+                return;
+            }
+            let Some(initial) = self.state.initial_position() else {
+                return;
+            };
+            let accepted_position = state.last_position.unwrap_or(initial);
+            let start_position = match self.start_behavior {
+                DragStartBehavior::Down => initial,
+                DragStartBehavior::Start => accepted_position,
+            };
+            let timestamp = state.last_time.unwrap_or_else(Instant::now);
+            let kind = state.device_kind.unwrap_or(PointerType::Touch);
+            state.state = DragPhase::Started;
+            state.start_position = Some(start_position);
+            state.last_position = Some(accepted_position);
+            let start_details = DragStartDetails {
+                global_position: start_position,
+                local_position: start_position,
+                kind,
+                timestamp,
+            };
+
+            // Flutter's `_checkDrag`: `Down` preserves the contact position
+            // for onStart and immediately flushes movement accumulated while
+            // the arena was unresolved. `Start` re-anchors at acceptance and
+            // deliberately emits no synthetic first update.
+            let initial_update = (self.start_behavior == DragStartBehavior::Down)
+                .then(|| self.project_delta(accepted_position - initial))
+                .filter(|delta| delta.dx.0 != 0.0 || delta.dy.0 != 0.0)
+                .map(|delta| {
+                    let corrected_position = initial + delta.to_pixels();
+                    DragUpdateDetails {
+                        global_position: corrected_position,
+                        local_position: corrected_position,
+                        primary_delta: self.calculate_primary_delta(delta.to_pixels()),
+                        delta,
+                        kind,
+                    }
+                });
+            (start_details, initial_update)
+        };
+
+        if let Some(callback) = self.callbacks.borrow().on_start.clone() {
+            callback(start_details);
+        }
+        if let (Some(details), Some(callback)) =
+            (initial_update, self.callbacks.borrow().on_update.clone())
+        {
+            callback(details);
         }
     }
 
@@ -472,23 +514,33 @@ impl DragGestureRecognizer {
             let velocity = state.velocity_tracker.get_velocity();
             let primary_velocity = self.calculate_primary_velocity(velocity.pixels_per_second);
 
-            state.state = DragPhase::Ready;
-            drop(state); // Release lock before calling callback
+            let callback = self.callbacks.borrow().on_end.clone();
+            *state = DragState::default();
+            drop(state);
 
-            if let Some(callback) = self.callbacks.borrow().on_end.clone() {
-                let details = DragEndDetails {
+            // Retire tracking before application code can unwind or start
+            // another pointer sequence on this recognizer.
+            self.state.stop_tracking();
+            if let Some(callback) = callback {
+                callback(DragEndDetails {
                     velocity,
                     global_position: position,
                     local_position: position,
                     primary_velocity,
-                };
-                callback(details);
+                });
             }
-
-            self.state.stop_tracking();
         } else {
-            // Didn't start dragging - just cancel
-            state.state = DragPhase::Ready;
+            // A pointer that lifts before this recognizer wins is no longer a
+            // candidate. Flutter's didStopTrackingLastPointer resolves
+            // rejected and emits onCancel; leaving the entry live lets sweep
+            // incorrectly choose this drag over a competing tap.
+            let callback = self.callbacks.borrow().on_cancel.clone();
+            *state = DragState::default();
+            drop(state);
+            self.state.reject();
+            if let Some(callback) = callback {
+                callback();
+            }
         }
     }
 
@@ -496,15 +548,50 @@ impl DragGestureRecognizer {
     fn handle_cancel(&self) {
         let mut state = self.drag_state.lock();
 
-        if state.state != DragPhase::Ready {
-            state.state = DragPhase::Cancelled;
-            drop(state);
+        match state.state {
+            DragPhase::Ready => {}
+            DragPhase::Possible => {
+                let callback = self.callbacks.borrow().on_cancel.clone();
+                *state = DragState::default();
+                drop(state);
 
-            if let Some(callback) = self.callbacks.borrow().on_cancel.clone() {
-                callback();
+                self.state.reject();
+                if let Some(callback) = callback {
+                    callback();
+                }
             }
+            DragPhase::Started => {
+                // Flutter's `didStopTrackingLastPointer` ends an accepted
+                // drag even when the terminal event is PointerCancel.
+                let position = state.last_position.unwrap_or(Offset::ZERO);
+                let velocity = state.velocity_tracker.get_velocity();
+                let primary_velocity = self.calculate_primary_velocity(velocity.pixels_per_second);
+                let callback = self.callbacks.borrow().on_end.clone();
+                *state = DragState::default();
+                drop(state);
 
-            self.state.reject();
+                self.state.stop_tracking();
+                if let Some(callback) = callback {
+                    callback(DragEndDetails {
+                        velocity,
+                        global_position: position,
+                        local_position: position,
+                        primary_velocity,
+                    });
+                }
+            }
+        }
+    }
+
+    /// Project movement onto the recognizer's configured axis.
+    ///
+    /// Flutter's horizontal and vertical recognizers report an axis-pure
+    /// `DragUpdateDetails.delta`; only a pan recognizer retains both axes.
+    fn project_delta(&self, delta: Offset<Pixels>) -> Offset<PixelDelta> {
+        match self.axis {
+            DragAxis::Vertical => Offset::new(PixelDelta(0.0), PixelDelta(delta.dy.0)),
+            DragAxis::Horizontal => Offset::new(PixelDelta(delta.dx.0), PixelDelta(0.0)),
+            DragAxis::Free => delta.to_delta(),
         }
     }
 
@@ -550,13 +637,12 @@ impl DragGestureRecognizer {
 }
 
 impl GestureRecognizer for DragGestureRecognizer {
-    fn add_pointer(&self, pointer: PointerId, position: Offset<Pixels>) {
+    fn add_pointer(self: &Arc<Self>, pointer: PointerId, position: Offset<Pixels>) {
         if !self.state.assert_not_disposed("add_pointer") {
             return;
         }
         // Start tracking this pointer
-        let recognizer = Arc::new(self.clone());
-        self.state.start_tracking(pointer, position, &recognizer);
+        self.state.start_tracking(pointer, position, self);
 
         // Handle pointer down
         self.handle_down(position, PointerType::Touch);
@@ -627,14 +713,13 @@ impl crate::recognizers::OneSequenceGestureRecognizer for DragGestureRecognizer 
             .unwrap_or_default()
     }
 
-    fn resolve_pointer(&self, _pointer: PointerId, disposition: crate::arena::GestureDisposition) {
+    fn resolve_pointer(&self, pointer: PointerId, disposition: crate::arena::GestureDisposition) {
         match disposition {
             crate::arena::GestureDisposition::Accepted => {
-                // No-op — Drag callbacks fire from event handlers, not arena
-                // resolution. accept_gesture below mirrors.
+                self.begin_accepted_drag();
             }
             crate::arena::GestureDisposition::Rejected => {
-                self.state.reject();
+                self.reject_gesture(pointer);
             }
         }
     }
@@ -645,14 +730,30 @@ impl crate::recognizers::OneSequenceGestureRecognizer for DragGestureRecognizer 
 }
 
 impl GestureArenaMember for DragGestureRecognizer {
-    fn accept_gesture(&self, _pointer: PointerId) {
-        // We won the arena - gesture is accepted
-        // Drag can continue
+    fn accept_gesture(&self, pointer: PointerId) {
+        if self.state.primary_pointer() == Some(pointer) {
+            self.begin_accepted_drag();
+        }
     }
 
-    fn reject_gesture(&self, _pointer: PointerId) {
-        // We lost the arena - cancel the drag
-        self.handle_cancel();
+    fn reject_gesture(&self, pointer: PointerId) {
+        if self.state.primary_pointer() != Some(pointer) {
+            return;
+        }
+        let callback = {
+            let mut state = self.drag_state.lock();
+            let callback = (state.state != DragPhase::Ready)
+                .then(|| self.callbacks.borrow().on_cancel.clone())
+                .flatten();
+            *state = DragState::default();
+            callback
+        };
+        // The arena already resolved this entry. Clear only local tracking;
+        // resolving it again is unnecessary re-entrancy.
+        self.state.stop_tracking();
+        if let Some(callback) = callback {
+            callback();
+        }
     }
 }
 
@@ -661,12 +762,109 @@ mod tests {
     use super::*;
     use crate::{arena::GestureArena, events::make_move_event};
 
+    struct PassiveCompetitor;
+
+    impl crate::sealed::arena_member::Sealed for PassiveCompetitor {}
+
+    impl GestureArenaMember for PassiveCompetitor {
+        fn accept_gesture(&self, _pointer: PointerId) {}
+
+        fn reject_gesture(&self, _pointer: PointerId) {}
+    }
+
+    fn close_with_competitor(arena: &GestureArena, pointer: PointerId) {
+        arena.add(pointer, Arc::new(PassiveCompetitor));
+        arena.close(pointer);
+    }
+
     #[test]
     fn test_drag_recognizer_creation() {
         let arena = GestureArena::new();
         let recognizer = DragGestureRecognizer::new(arena, DragAxis::Vertical);
 
         assert_eq!(recognizer.primary_pointer(), None);
+    }
+
+    #[test]
+    fn lone_drag_starts_only_after_deferred_default_acceptance() {
+        let arena = GestureArena::new();
+        let starts = Arc::new(Mutex::new(0_u32));
+        let callback_starts = Arc::clone(&starts);
+        let recognizer = DragGestureRecognizer::new(arena.clone(), DragAxis::Horizontal)
+            .with_on_start(move |_| *callback_starts.lock() += 1);
+        let pointer = PointerId::PRIMARY;
+
+        recognizer.add_pointer(pointer, Offset::new(Pixels(10.0), Pixels(20.0)));
+        arena.close(pointer);
+        assert_eq!(
+            *starts.lock(),
+            0,
+            "close queues Flutter's single-member default instead of calling inline"
+        );
+
+        assert_eq!(arena.drain_deferred_resolutions(), 1);
+        assert_eq!(
+            *starts.lock(),
+            1,
+            "arena acceptance, not raw movement, owns the start transition"
+        );
+        assert!(arena.is_empty());
+    }
+
+    #[test]
+    fn up_before_acceptance_rejects_drag_and_preserves_the_competitor() {
+        struct Winner(Arc<Mutex<u32>>);
+
+        impl crate::sealed::arena_member::Sealed for Winner {}
+
+        impl GestureArenaMember for Winner {
+            fn accept_gesture(&self, _pointer: PointerId) {
+                *self.0.lock() += 1;
+            }
+
+            fn reject_gesture(&self, _pointer: PointerId) {}
+        }
+
+        let arena = GestureArena::new();
+        let cancels = Arc::new(Mutex::new(0_u32));
+        let callback_cancels = Arc::clone(&cancels);
+        let recognizer = DragGestureRecognizer::new(arena.clone(), DragAxis::Horizontal)
+            .with_on_cancel(move || *callback_cancels.lock() += 1);
+        let accepted = Arc::new(Mutex::new(0_u32));
+        let pointer = PointerId::PRIMARY;
+        let position = Offset::new(Pixels(10.0), Pixels(20.0));
+
+        recognizer.add_pointer(pointer, position);
+        arena.add(pointer, Arc::new(Winner(Arc::clone(&accepted))));
+        arena.close(pointer);
+        recognizer.handle_event(&crate::events::make_up_event(position, PointerType::Touch));
+        arena.drain_deferred_resolutions();
+
+        assert_eq!(*cancels.lock(), 1);
+        assert_eq!(
+            *accepted.lock(),
+            1,
+            "the possible drag must withdraw instead of stealing the Up sweep"
+        );
+        assert_eq!(recognizer.primary_pointer(), None);
+        assert!(arena.is_empty());
+    }
+
+    #[test]
+    fn panicking_cancel_callback_cannot_strand_drag_tracking() {
+        let arena = GestureArena::new();
+        let recognizer = DragGestureRecognizer::new(arena.clone(), DragAxis::Free)
+            .with_on_cancel(|| panic!("drag cancel panic"));
+        recognizer.add_pointer(PointerId::PRIMARY, Offset::new(Pixels(1.0), Pixels(2.0)));
+        arena.close(PointerId::PRIMARY);
+
+        let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            recognizer.handle_event(&crate::events::make_cancel_event(PointerType::Touch));
+        }));
+
+        assert!(unwind.is_err());
+        assert_eq!(recognizer.primary_pointer(), None);
+        assert!(arena.is_empty());
     }
 
     #[test]
@@ -678,7 +876,7 @@ mod tests {
         let started_clone = started.clone();
         let updated_clone = updated.clone();
 
-        let recognizer = DragGestureRecognizer::new(arena, DragAxis::Vertical)
+        let recognizer = DragGestureRecognizer::new(arena.clone(), DragAxis::Vertical)
             .with_on_start(move |_details| {
                 *started_clone.lock() = true;
             })
@@ -691,6 +889,7 @@ mod tests {
 
         // Start tracking
         recognizer.add_pointer(pointer, start_pos);
+        close_with_competitor(&arena, pointer);
 
         // Move vertically beyond slop
         let moved_pos = Offset::new(Pixels(100.0), Pixels(130.0)); // 30px down
@@ -746,7 +945,7 @@ mod tests {
         let start_reported = Arc::new(Mutex::new(None::<Offset<Pixels>>));
 
         let start_clone = start_reported.clone();
-        let recognizer = DragGestureRecognizer::new(arena, DragAxis::Free)
+        let recognizer = DragGestureRecognizer::new(arena.clone(), DragAxis::Free)
             .with_drag_start_behavior(DragStartBehavior::Down)
             .with_on_start(move |d| {
                 *start_clone.lock() = Some(d.global_position);
@@ -755,6 +954,7 @@ mod tests {
         let pointer = PointerId::PRIMARY;
         let down_pos = Offset::new(Pixels(50.0), Pixels(50.0));
         recognizer.add_pointer(pointer, down_pos);
+        close_with_competitor(&arena, pointer);
 
         // Cross slop with one big move (50→80 → 30px travel).
         let move_event =
@@ -772,7 +972,7 @@ mod tests {
         let start_reported = Arc::new(Mutex::new(None::<Offset<Pixels>>));
 
         let start_clone = start_reported.clone();
-        let recognizer = DragGestureRecognizer::new(arena, DragAxis::Free)
+        let recognizer = DragGestureRecognizer::new(arena.clone(), DragAxis::Free)
             // Default is already Start; this makes the test explicit.
             .with_drag_start_behavior(DragStartBehavior::Start)
             .with_on_start(move |d| {
@@ -782,6 +982,7 @@ mod tests {
         let pointer = PointerId::PRIMARY;
         let down_pos = Offset::new(Pixels(50.0), Pixels(50.0));
         recognizer.add_pointer(pointer, down_pos);
+        close_with_competitor(&arena, pointer);
 
         let crossing_pos = Offset::new(Pixels(80.0), Pixels(80.0));
         let move_event = make_move_event(crossing_pos, PointerType::Touch);
@@ -793,6 +994,70 @@ mod tests {
     }
 
     #[test]
+    fn drag_start_behavior_down_flushes_the_axis_projected_pending_delta() {
+        let arena = GestureArena::new();
+        let calls = Arc::new(Mutex::new(Vec::<&'static str>::new()));
+        let updates = Arc::new(Mutex::new(Vec::<DragUpdateDetails>::new()));
+        let calls_for_start = Arc::clone(&calls);
+        let calls_for_update = Arc::clone(&calls);
+        let updates_for_callback = Arc::clone(&updates);
+        let recognizer = DragGestureRecognizer::new(arena.clone(), DragAxis::Horizontal)
+            .with_drag_start_behavior(DragStartBehavior::Down)
+            .with_on_start(move |_| calls_for_start.lock().push("start"))
+            .with_on_update(move |details| {
+                calls_for_update.lock().push("update");
+                updates_for_callback.lock().push(details);
+            });
+
+        let pointer = PointerId::PRIMARY;
+        let down = Offset::new(Pixels(10.0), Pixels(20.0));
+        recognizer.add_pointer(pointer, down);
+        close_with_competitor(&arena, pointer);
+
+        recognizer.handle_event(&make_move_event(
+            Offset::new(Pixels(40.0), Pixels(70.0)),
+            PointerType::Touch,
+        ));
+
+        assert_eq!(*calls.lock(), vec!["start", "update"]);
+        let reported = updates.lock();
+        assert_eq!(reported.len(), 1);
+        assert_eq!(
+            reported[0].delta,
+            Offset::new(PixelDelta(30.0), PixelDelta(0.0)),
+            "a horizontal recognizer must flush only the pending x component"
+        );
+        assert_eq!(reported[0].primary_delta, 30.0);
+        assert_eq!(
+            reported[0].global_position,
+            Offset::new(Pixels(40.0), Pixels(20.0)),
+            "the initial Down-behavior update uses the axis-corrected position"
+        );
+    }
+
+    #[test]
+    fn cancel_after_acceptance_ends_the_drag_instead_of_cancelling_it() {
+        let arena = GestureArena::new();
+        let ends = Arc::new(Mutex::new(0_u32));
+        let cancels = Arc::new(Mutex::new(0_u32));
+        let ends_for_callback = Arc::clone(&ends);
+        let cancels_for_callback = Arc::clone(&cancels);
+        let recognizer = DragGestureRecognizer::new(arena.clone(), DragAxis::Vertical)
+            .with_on_end(move |_| *ends_for_callback.lock() += 1)
+            .with_on_cancel(move || *cancels_for_callback.lock() += 1);
+        let pointer = PointerId::PRIMARY;
+
+        recognizer.add_pointer(pointer, Offset::new(Pixels(5.0), Pixels(5.0)));
+        arena.close(pointer);
+        assert_eq!(arena.drain_deferred_resolutions(), 1);
+        recognizer.handle_event(&crate::events::make_cancel_event(PointerType::Touch));
+
+        assert_eq!(*ends.lock(), 1);
+        assert_eq!(*cancels.lock(), 0);
+        assert_eq!(recognizer.primary_pointer(), None);
+    }
+
+    #[test]
     fn per_axis_vertical_uses_vertical_slop() {
         let arena = GestureArena::new();
         let started = Arc::new(Mutex::new(false));
@@ -800,13 +1065,15 @@ mod tests {
 
         // Tune vertical slop to 25px (greater than the default 18).
         let settings = GestureSettings::touch_defaults().with_pan_slop_vertical(25.0);
-        let recognizer = DragGestureRecognizer::with_settings(arena, DragAxis::Vertical, settings)
-            .with_on_start(move |_| {
-                *started_clone.lock() = true;
-            });
+        let recognizer =
+            DragGestureRecognizer::with_settings(arena.clone(), DragAxis::Vertical, settings)
+                .with_on_start(move |_| {
+                    *started_clone.lock() = true;
+                });
 
         let pointer = PointerId::PRIMARY;
         recognizer.add_pointer(pointer, Offset::new(Pixels(0.0), Pixels(0.0)));
+        close_with_competitor(&arena, pointer);
 
         // 20px vertical move — under 25px vertical slop, no start yet.
         let move_event =
@@ -832,13 +1099,14 @@ mod tests {
         // the horizontal projection of the delta).
         let settings = GestureSettings::touch_defaults().with_pan_slop_horizontal(10.0);
         let recognizer =
-            DragGestureRecognizer::with_settings(arena, DragAxis::Horizontal, settings)
+            DragGestureRecognizer::with_settings(arena.clone(), DragAxis::Horizontal, settings)
                 .with_on_start(move |_| {
                     *started_clone.lock() = true;
                 });
 
         let pointer = PointerId::PRIMARY;
         recognizer.add_pointer(pointer, Offset::new(Pixels(0.0), Pixels(0.0)));
+        close_with_competitor(&arena, pointer);
 
         // Move 50px down, 5px right — horizontal projection (5px) is under
         // the 10px horizontal slop, no start.
@@ -866,14 +1134,14 @@ mod tests {
         let reported = Arc::new(Mutex::new(Vec::<f32>::new()));
         let reported_clone = reported.clone();
 
-        let recognizer = DragGestureRecognizer::new(arena, DragAxis::Horizontal).with_on_update(
-            move |details| {
+        let recognizer = DragGestureRecognizer::new(arena.clone(), DragAxis::Horizontal)
+            .with_on_update(move |details| {
                 reported_clone.lock().push(details.primary_delta);
-            },
-        );
+            });
 
         let pointer = PointerId::PRIMARY;
         recognizer.add_pointer(pointer, Offset::new(Pixels(5.0), Pixels(400.0)));
+        close_with_competitor(&arena, pointer);
 
         // Cross slop (down=5 -> 30, no update fires — start only).
         recognizer.handle_event(&make_move_event(

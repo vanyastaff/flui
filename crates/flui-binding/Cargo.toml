@@ -17,6 +17,8 @@ workspace = true
 [dependencies]
 # The virtual clock (`ManualClock`) + clock-bound gesture arena (deadline polling).
 flui-interaction = { path = "../flui-interaction", version = "0.2.0" }
+# Canonical hit-test positions accepted by the production input pipeline.
+flui-types = { path = "../flui-types", version = "0.2.0" }
 # The element tree + build owner this binding drives each frame (`build_scope`
 # drains the external inbox an animation/listenable tick fills).
 flui-view = { path = "../flui-view", version = "0.2.0" }
@@ -33,6 +35,8 @@ flui-scheduler = { path = "../flui-scheduler", version = "0.2.0" }
 # both hold (render-object attachment shares the owner; the binding does not own
 # it exclusively).
 parking_lot = { workspace = true }
+# Reports secondary panics without replacing the first transaction unwind.
+tracing = { workspace = true }
 
 [dev-dependencies]
 static_assertions.workspace = true
@@ -43,8 +47,3 @@ flui-interaction = { path = "../flui-interaction", version = "0.2.0", features =
 # of release builds.
 flui-view = { path = "../flui-view", version = "0.2.0", features = ["test-utils"] }
 flui-foundation = { path = "../flui-foundation", version = "0.2.0" }
-# The long-press deadline recognizer + settings exercised by the pump_frame test,
-# plus the geometry/offset types for the synthetic pointer-down. The `testing`
-# feature is NOT required: `add_pointer`/`poll_deadlines` are part of the release
-# API, so the deterministic deadline test runs against the public surface.
-flui-types = { path = "../flui-types", version = "0.2.0" }

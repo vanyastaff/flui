@@ -28,34 +28,12 @@ use std::sync::{Arc, Mutex};
 
 use flui_engine::wgpu::Renderer;
 use flui_layer::{CanvasLayer, LayerTree, Scene, SceneBuilder};
-use flui_platform::{WindowOptions, current_platform, traits::PlatformWindow};
+use flui_platform::{WindowOptions, current_platform};
 use flui_types::{
     Color, Offset,
     geometry::{Rect, Size, px},
     painting::{BlendMode, ColorFilter, Paint},
 };
-
-// ── Window-handle bridge (mirrors filter_demo.rs) ────────────────────────────
-
-struct PlatformWindowHandle {
-    window: Arc<dyn PlatformWindow>,
-}
-
-impl raw_window_handle::HasWindowHandle for PlatformWindowHandle {
-    fn window_handle(
-        &self,
-    ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
-        self.window.window_handle()
-    }
-}
-
-impl raw_window_handle::HasDisplayHandle for PlatformWindowHandle {
-    fn display_handle(
-        &self,
-    ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
-        self.window.display_handle()
-    }
-}
 
 // ── Color filter definitions ─────────────────────────────────────────────────
 
@@ -284,11 +262,9 @@ fn main() {
         max_size: None,
     };
 
-    let window: Arc<dyn PlatformWindow> = Arc::from(
-        platform
-            .open_window(options)
-            .expect("failed to open window"),
-    );
+    let window = platform
+        .open_window(options)
+        .expect("failed to open window");
 
     tracing::info!(
         physical_size = ?window.physical_size(),
@@ -296,12 +272,8 @@ fn main() {
         "window created"
     );
 
-    let handle = PlatformWindowHandle {
-        window: window.clone(),
-    };
-
     let mut renderer =
-        pollster::block_on(Renderer::new(&handle)).expect("failed to create GPU renderer");
+        pollster::block_on(Renderer::new(window.as_ref())).expect("failed to create GPU renderer");
 
     let physical = window.physical_size();
     renderer.resize(physical.width.0 as u32, physical.height.0 as u32);

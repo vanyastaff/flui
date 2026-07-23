@@ -168,7 +168,7 @@ use std::time::Duration;
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_widgets::{GestureDetector, ScrollController, Scrollbar, SizedBox};
 
-use crate::common::{lay_out, lay_out_with_arena, size, tight};
+use crate::common::{lay_out, size, tight};
 
 /// The proportional thumb-size/offset formula
 /// (`thumb_fraction = viewport / (viewport + scroll_extent)`,
@@ -346,7 +346,7 @@ fn scrollbar_thumb_drag_clamps_at_min_scroll_extent() {
         .thumb_width(20.0)
         .child(SizedBox::new(300.0, 300.0));
 
-    let scoped = lay_out_with_arena(widget, tight(300.0, 300.0));
+    let scoped = lay_out(widget, tight(300.0, 300.0));
 
     assert_eq!(
         controller.pixels(),
@@ -445,11 +445,10 @@ fn scrollbar_thumb_is_interactive_when_scroll_extent_is_a_tiny_positive_amount()
         .controller(controller.clone())
         .child(SizedBox::new(300.0, 300.0));
 
-    let scoped = lay_out_with_arena(widget, tight(300.0, 300.0));
+    let scoped = lay_out(widget, tight(300.0, 300.0));
 
     assert!(
         !scoped
-            .laid()
             .find_all_by_render_type("RenderDecoratedBox")
             .is_empty(),
         "a thumb must be mounted even for a 1px scroll_extent"
@@ -506,7 +505,7 @@ fn tapping_the_thumb_blocks_content_but_the_track_area_passes_through() {
         .child(content);
 
     // At pixels=0: thumb_height=150 -> thumb x=[280,300], y=[0,150].
-    let scoped = lay_out_with_arena(widget, tight(300.0, 300.0));
+    let scoped = lay_out(widget, tight(300.0, 300.0));
 
     // Tap on the thumb (inside x=[280,300], y=[0,150]): must NOT reach content.
     scoped.dispatch_pointer_down(297.0, 10.0);
@@ -561,11 +560,10 @@ fn resizing_to_a_non_scrollable_extent_hides_the_thumb_and_stale_taps_are_inert(
         .thumb_width(20.0)
         .child(SizedBox::new(300.0, 300.0));
 
-    let mut scoped = lay_out_with_arena(widget, tight(300.0, 300.0));
+    let mut scoped = lay_out(widget, tight(300.0, 300.0));
 
     assert!(
         !scoped
-            .laid()
             .find_all_by_render_type("RenderDecoratedBox")
             .is_empty(),
         "the thumb must be present before the resize"
@@ -573,11 +571,10 @@ fn resizing_to_a_non_scrollable_extent_hides_the_thumb_and_stale_taps_are_inert(
 
     // Shrink content to exactly the viewport: max_scroll_extent -> 0.
     controller.update_dimensions(300.0, 0.0, 0.0);
-    scoped.pump(Duration::ZERO);
+    scoped.pump_for(Duration::ZERO);
 
     assert!(
         scoped
-            .laid()
             .find_all_by_render_type("RenderDecoratedBox")
             .is_empty(),
         "the thumb must disappear once max_scroll_extent reaches min_scroll_extent"

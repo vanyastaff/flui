@@ -426,20 +426,22 @@ impl ForcePressGestureRecognizer {
     /// Handle cancel event
     fn handle_cancel(&self) {
         let mut state = self.gesture_state.lock();
+        let callback =
+            if state.phase == ForcePressPhase::Started || state.phase == ForcePressPhase::Peaked {
+                self.callbacks
+                    .borrow()
+                    .on_end
+                    .clone()
+                    .map(|callback| (callback, Self::create_details(&state)))
+            } else {
+                None
+            };
+        *state = ForcePressState::default();
+        drop(state);
 
-        if state.phase == ForcePressPhase::Started || state.phase == ForcePressPhase::Peaked {
-            state.phase = ForcePressPhase::Ended;
-            let details = Self::create_details(&state);
-            drop(state);
-
-            if let Some(callback) = self.callbacks.borrow().on_end.clone() {
-                callback(details);
-            }
-
-            self.reset();
-        } else {
-            drop(state);
-            self.reset();
+        self.state.reject();
+        if let Some((callback, details)) = callback {
+            callback(details);
         }
     }
 
@@ -457,13 +459,12 @@ impl ForcePressGestureRecognizer {
 }
 
 impl GestureRecognizer for ForcePressGestureRecognizer {
-    fn add_pointer(&self, pointer: PointerId, position: Offset<Pixels>) {
+    fn add_pointer(self: &Arc<Self>, pointer: PointerId, position: Offset<Pixels>) {
         if !self.state.assert_not_disposed("add_pointer") {
             return;
         }
         // Start tracking this pointer
-        let recognizer = Arc::new(self.clone());
-        self.state.start_tracking(pointer, position, &recognizer);
+        self.state.start_tracking(pointer, position, self);
     }
 
     fn handle_event(&self, event: &PointerEvent) {
@@ -599,6 +600,27 @@ mod tests {
         assert_eq!(recognizer.primary_pointer(), None);
         assert_eq!(recognizer.start_pressure(), FORCE_PRESS_START_PRESSURE);
         assert_eq!(recognizer.peak_pressure(), FORCE_PRESS_PEAK_PRESSURE);
+    }
+
+    #[test]
+    fn panicking_cancel_callback_cannot_strand_force_press_tracking() {
+        let arena = GestureArena::new();
+        let recognizer = ForcePressGestureRecognizer::new(arena.clone())
+            .with_on_end(|_| panic!("force press cancel panic"));
+        let position = Offset::new(Pixels(1.0), Pixels(2.0));
+        recognizer.add_pointer(PointerId::PRIMARY, position);
+        arena.close(PointerId::PRIMARY);
+        recognizer.handle_down(position, 0.5);
+
+        let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            recognizer.handle_event(&crate::events::make_cancel_event(
+                crate::events::PointerType::Touch,
+            ));
+        }));
+
+        assert!(unwind.is_err());
+        assert_eq!(recognizer.primary_pointer(), None);
+        assert!(arena.is_empty());
     }
 
     #[test]

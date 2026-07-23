@@ -82,6 +82,10 @@ flui-scheduler = { path = "../flui-scheduler", version = "0.2.0" }
 # Constructs `PointerEvent`s (make_down_event, behind the `testing` feature) for
 # the `Listener` dispatch test.
 flui-interaction = { path = "../flui-interaction", version = "0.2.0", features = ["testing"] }
+# Test-only recording `PlatformTextInput` used by the widget harness. The
+# production widget crate reaches this capability through flui-interaction's
+# concrete weak `TextInputHandle` and has no platform dependency.
+flui-platform = { path = "../flui-platform", version = "0.2.0" }
 # Headless frame driver: provides the shared clock-bound arena a `GestureArenaScope`
 # hands to detectors, and `pump_frame` to poll deadline-driven gestures in tests.
 flui-binding = { path = "../flui-binding", version = "0.2.0" }

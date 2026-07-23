@@ -316,7 +316,7 @@ impl ViewState<DemoHome> for DemoHomeState {
                 .behavior(HitTestBehavior::Opaque)
                 .on_tap(move || {
                     count_for_tap.set(count_for_tap.get() + 1);
-                    rebuild_for_count.schedule();
+                    rebuild_for_count.schedule(flui_view::RebuildReason::StateChange);
                 })
                 .child(
                     Container::new()
@@ -362,7 +362,7 @@ impl ViewState<DemoHome> for DemoHomeState {
                 let proposed = scroll_controller_for_drag.pixels() - details.delta.dy.get();
                 scroll_controller_for_drag.jump_to(proposed);
                 scroll_offset_for_drag.set(scroll_controller_for_drag.pixels());
-                rebuild_for_drag.schedule();
+                rebuild_for_drag.schedule(flui_view::RebuildReason::StateChange);
             })
             .child(
                 SizedBox::height(LIST_BOX_HEIGHT).child(
@@ -404,7 +404,7 @@ impl ViewState<DemoHome> for DemoHomeState {
             .behavior(HitTestBehavior::Opaque)
             .on_tap(move || {
                 expanded_for_tap.set(!expanded_for_tap.get());
-                rebuild_for_toggle.schedule();
+                rebuild_for_toggle.schedule(flui_view::RebuildReason::StateChange);
             })
             .child(
                 // An empty `Text` filler, not `SizedBox` — a `SizedBox`

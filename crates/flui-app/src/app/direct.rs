@@ -38,7 +38,6 @@ use flui_types::{Size, geometry::px};
 use parking_lot::Mutex;
 
 use super::AppConfig;
-use crate::embedder::PlatformWindowHandle;
 
 /// Run a FLUI application in direct rendering mode.
 ///
@@ -104,10 +103,7 @@ pub fn run_direct(
 
     // 2. Create GPU renderer
     let phys_size = window.physical_size();
-    let renderer = pollster::block_on(async {
-        let handle = PlatformWindowHandle(window.as_ref());
-        Renderer::new(&handle).await
-    });
+    let renderer = pollster::block_on(Renderer::new(window.as_ref()));
     let mut renderer = match renderer {
         Ok(r) => r,
         Err(e) => {

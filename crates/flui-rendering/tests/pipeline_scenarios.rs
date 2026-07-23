@@ -253,7 +253,7 @@ fn paint_only_then_layout_invalidations_round_trip() {
     assert!(run.painted(), "frame 1 paints");
 
     // Frame 2: paint-only invalidation — no layout change, fresh tree.
-    run.owner_mut().add_node_needing_paint(child, 1);
+    run.owner_mut().mark_needs_paint(child);
     let report = run.pump();
     assert!(report.painted, "paint-only frame repaints");
     assert_eq!(

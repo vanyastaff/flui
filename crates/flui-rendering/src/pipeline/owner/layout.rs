@@ -147,7 +147,7 @@ impl PipelineOwner<Layout> {
                 // leaves stale pixels on screen. One entry per dirty
                 // root suffices — run_paint walks the whole tree from
                 // the root, so triggering the phase is what matters.
-                self.add_node_needing_paint(dirty_node.id, dirty_node.depth);
+                self.mark_needs_paint(dirty_node.id);
             }
 
             // exit_phase clears debug_doing_layout AND drains
@@ -349,7 +349,7 @@ impl PipelineOwner<Layout> {
                 // (e.g. a snap-animation controller) of its handle.
                 self.attach_inserted_node(child_id);
                 self.add_node_needing_layout(child_id, child_depth);
-                self.add_node_needing_paint(child_id, child_depth);
+                self.mark_needs_paint(parent_id);
                 // `mark_needs_layout` (not `add_node_needing_layout`) so the
                 // parent's NEEDS_LAYOUT flag is actually set and its relayout
                 // boundary is enqueued — the dirty-root walk skips queued

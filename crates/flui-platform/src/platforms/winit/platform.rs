@@ -22,8 +22,8 @@
 //! the event-loop thread. `Platform::run`'s `on_ready` callback is invoked
 //! synchronously from [`WinitApp::resumed`] — one such callback — so a call
 //! to `open_window` made from inside `on_ready` cannot go through the
-//! cross-thread [`WindowRequestQueue`] path: that queue's only consumer,
-//! `about_to_wait`, is a *later* dispatch on the same thread and cannot run
+//! cross-thread owner-control lane: that lane's only consumer is a *later*
+//! dispatch on the same thread and cannot run
 //! until `resumed` (and therefore `on_ready`) returns, which would deadlock
 //! forever. [`ACTIVE_EVENT_LOOP`] publishes the live `ActiveEventLoop` for
 //! the exact duration of the `on_ready` call so `open_window` can create the
@@ -49,7 +49,8 @@ use std::{
     collections::HashMap,
     path::{Path, PathBuf},
     ptr::NonNull,
-    sync::Arc,
+    sync::{Arc, mpsc::SyncSender},
+    thread::{self, ThreadId},
 };
 
 use anyhow::Result;
@@ -64,11 +65,12 @@ use winit::{
 
 use super::{
     clipboard::ArboardClipboard,
+    control::{ControlCommand, ControlReceiver, ControlSendError, ControlSender, control_lane},
     display::WinitDisplay,
     events as winit_events,
-    window_requests::{WindowRequest, WindowRequestQueue},
 };
 use crate::{
+    executor::BackgroundExecutor,
     shared::PlatformHandlers,
     traits::{
         Clipboard, DesktopCapabilities, Platform, PlatformCapabilities, PlatformDisplay,
@@ -76,6 +78,49 @@ use crate::{
         WindowOptions, WinitWindow,
     },
 };
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OpenWindowStateError {
+    NotRunning,
+    Starting,
+    OwnerWouldBlock,
+    Stopped,
+}
+
+enum WinitRunState {
+    New {
+        quit_requested: bool,
+    },
+    Starting {
+        owner_thread: ThreadId,
+        control: ControlSender,
+    },
+    Running {
+        owner_thread: ThreadId,
+        control: ControlSender,
+    },
+    Stopped,
+}
+
+impl WinitRunState {
+    fn control_for_open_window(
+        &self,
+        caller_thread: ThreadId,
+    ) -> Result<ControlSender, OpenWindowStateError> {
+        match self {
+            Self::New { .. } => Err(OpenWindowStateError::NotRunning),
+            Self::Starting { owner_thread, .. } if *owner_thread == caller_thread => {
+                Err(OpenWindowStateError::OwnerWouldBlock)
+            }
+            Self::Starting { .. } => Err(OpenWindowStateError::Starting),
+            Self::Running { owner_thread, .. } if *owner_thread == caller_thread => {
+                Err(OpenWindowStateError::OwnerWouldBlock)
+            }
+            Self::Running { control, .. } => Ok(control.clone()),
+            Self::Stopped => Err(OpenWindowStateError::Stopped),
+        }
+    }
+}
 
 /// Winit-based platform implementation
 ///
@@ -119,16 +164,10 @@ struct WinitPlatformState {
     handlers: PlatformHandlers,
 
     /// Background executor
-    background_executor: Arc<SimpleExecutor>,
-
-    /// Foreground executor
-    foreground_executor: Arc<SimpleExecutor>,
+    background_executor: Arc<BackgroundExecutor>,
 
     /// Clipboard
     clipboard: Arc<ArboardClipboard>,
-
-    /// Window request queue
-    window_requests: Arc<WindowRequestQueue>,
 
     /// Map of winit window IDs to platform window IDs
     window_id_map: HashMap<WinitWindowId, WindowId>,
@@ -145,11 +184,8 @@ struct WinitPlatformState {
     /// Next window ID to allocate
     next_window_id: u64,
 
-    /// Whether platform is running
-    is_running: bool,
-
-    /// Whether quit was requested
-    should_quit: bool,
+    /// Event-loop ownership and control-lane lifecycle.
+    run_state: WinitRunState,
 
     /// Current cursor position per window (physical)
     cursor_positions: HashMap<WindowId, winit::dpi::PhysicalPosition<f64>>,
@@ -171,17 +207,16 @@ impl WinitPlatformState {
 
         Self {
             handlers: PlatformHandlers::new(),
-            background_executor: Arc::new(SimpleExecutor::new("background")),
-            foreground_executor: Arc::new(SimpleExecutor::new("foreground")),
+            background_executor: Arc::new(BackgroundExecutor::new()),
             clipboard,
-            window_requests: Arc::new(WindowRequestQueue::new()),
             window_id_map: HashMap::new(),
             windows: HashMap::new(),
             displays: Vec::new(),
             active_window: None,
             next_window_id: 1,
-            is_running: false,
-            should_quit: false,
+            run_state: WinitRunState::New {
+                quit_requested: false,
+            },
             cursor_positions: HashMap::new(),
             current_modifiers: KeyboardModifiers::empty(),
         }
@@ -263,20 +298,77 @@ impl WinitPlatform {
         tracing::info!("Creating winit event loop");
 
         let event_loop = EventLoop::builder().build()?;
+        let event_loop_proxy = event_loop.create_proxy();
+        let wake_owner = Arc::new(move || {
+            if event_loop_proxy.send_event(()).is_err() {
+                tracing::trace!("winit event loop closed before its wake was delivered");
+            }
+        });
+        let (control, receiver) = control_lane(wake_owner);
+        let owner_thread = thread::current().id();
+        let quit_requested = self.install_control_lane(owner_thread, control.clone())?;
 
         let mut app = WinitApp {
-            platform: self,
+            platform: Arc::clone(&self),
             on_ready: Some(on_ready),
+            control: receiver,
+            quit_notified: false,
         };
+        if quit_requested {
+            control.request_quit();
+        }
 
-        event_loop.run_app(&mut app)?;
+        let result = event_loop.run_app(&mut app);
+        app.finish_shutdown();
+        result?;
 
         Ok(())
     }
 
+    fn install_control_lane(&self, owner_thread: ThreadId, control: ControlSender) -> Result<bool> {
+        self.with_state(|state| {
+            let previous = std::mem::replace(&mut state.run_state, WinitRunState::Stopped);
+            match previous {
+                WinitRunState::New { quit_requested } => {
+                    state.run_state = WinitRunState::Starting {
+                        owner_thread,
+                        control,
+                    };
+                    Ok(quit_requested)
+                }
+                other => {
+                    state.run_state = other;
+                    Err(anyhow::anyhow!(
+                        "the winit event loop can only be started once"
+                    ))
+                }
+            }
+        })
+    }
+
+    fn mark_running(&self) {
+        self.with_state(|state| {
+            let previous = std::mem::replace(&mut state.run_state, WinitRunState::Stopped);
+            state.run_state = match previous {
+                WinitRunState::Starting {
+                    owner_thread,
+                    control,
+                } => WinitRunState::Running {
+                    owner_thread,
+                    control,
+                },
+                other => other,
+            };
+        });
+    }
+
+    fn mark_stopped(&self) {
+        self.with_state(|state| state.run_state = WinitRunState::Stopped);
+    }
+
     /// Create a winit window immediately using a live `ActiveEventLoop` and
-    /// register it in platform state. Shared by the cross-thread queued path
-    /// (`WinitApp::process_window_requests`) and `open_window`'s same-thread
+    /// register it in platform state. Shared by the cross-thread control lane
+    /// and `open_window`'s same-thread
     /// fast path (see the module-level doc on same-thread window creation).
     fn create_window_now(
         &self,
@@ -317,21 +409,17 @@ impl WinitPlatform {
         Ok(platform_id)
     }
 
-    /// Look up a previously-created window by [`WindowId`] and wrap it as a
-    /// `PlatformWindow` handle for the caller. Named `window_by_id` (not
-    /// `window_handle`) to avoid colliding with
-    /// `PlatformWindow::window_handle` — the unrelated `raw_window_handle`
-    /// accessor `WinitWindowHandle` implements below for GPU surface
-    /// creation.
-    fn window_by_id(&self, window_id: WindowId) -> Result<Box<dyn PlatformWindow>> {
+    /// Look up a previously-created window by [`WindowId`] and return the
+    /// exact stored allocation as a [`PlatformWindow`]. Named `window_by_id`
+    /// (not `window_handle`) to avoid colliding with the unrelated
+    /// [`PlatformWindow::window_handle`] raw GPU-handle accessor.
+    fn window_by_id(&self, window_id: WindowId) -> Result<Arc<dyn PlatformWindow>> {
         self.with_state(|state| {
             state
                 .windows
                 .get(&window_id)
                 .ok_or_else(|| anyhow::anyhow!("Window not found in state"))
-                .map(|win| {
-                    Box::new(WinitWindowHandle { inner: win.clone() }) as Box<dyn PlatformWindow>
-                })
+                .map(|window| Arc::clone(window) as Arc<dyn PlatformWindow>)
         })
     }
 }
@@ -375,6 +463,37 @@ fn with_active_event_loop<R>(event_loop: &ActiveEventLoop, f: impl FnOnce() -> R
 struct WinitApp {
     platform: Arc<WinitPlatform>,
     on_ready: Option<PlatformReadyCallback>,
+    control: ControlReceiver,
+    quit_notified: bool,
+}
+
+/// Completes a dequeued window request even if owner-side processing unwinds.
+struct OpenWindowReplyGuard {
+    response: Option<SyncSender<anyhow::Result<WindowId>>>,
+}
+
+impl OpenWindowReplyGuard {
+    fn new(response: SyncSender<anyhow::Result<WindowId>>) -> Self {
+        Self {
+            response: Some(response),
+        }
+    }
+
+    fn complete(mut self, result: anyhow::Result<WindowId>) -> bool {
+        self.response
+            .take()
+            .is_some_and(|response| response.send(result).is_ok())
+    }
+}
+
+impl Drop for OpenWindowReplyGuard {
+    fn drop(&mut self) {
+        if let Some(response) = self.response.take() {
+            let _ = response.send(Err(anyhow::anyhow!(
+                "winit event-loop owner stopped before completing the window request"
+            )));
+        }
+    }
 }
 
 impl ApplicationHandler for WinitApp {
@@ -390,22 +509,20 @@ impl ApplicationHandler for WinitApp {
 
         // Call on_ready callback once. `ACTIVE_EVENT_LOOP` is published for
         // this exact nested call so `open_window` can create windows
-        // directly instead of deadlocking on the cross-thread queue (see the
+        // directly instead of deadlocking on the cross-thread lane (see the
         // module-level doc).
         if let Some(on_ready) = self.on_ready.take() {
             tracing::info!("Calling on_ready callback");
             let platform = Arc::clone(&self.platform);
             with_active_event_loop(event_loop, || on_ready(&*platform));
-
-            self.platform.with_state(|state| {
-                state.is_running = true;
-            });
         }
+
+        self.platform.mark_running();
     }
 
     fn window_event(
         &mut self,
-        _event_loop: &ActiveEventLoop,
+        event_loop: &ActiveEventLoop,
         window_id: WinitWindowId,
         event: WinitWindowEvent,
     ) {
@@ -438,7 +555,7 @@ impl ApplicationHandler for WinitApp {
                 }
 
                 // Notify platform handler
-                self.platform.with_state(|state| {
+                let should_exit = self.platform.with_state(|state| {
                     state
                         .handlers
                         .invoke_window_event(WindowEvent::CloseRequested {
@@ -450,11 +567,12 @@ impl ApplicationHandler for WinitApp {
                     state.windows.remove(&platform_id);
                     state.cursor_positions.remove(&platform_id);
 
-                    // Quit if no windows remain
-                    if state.windows.is_empty() {
-                        state.should_quit = true;
-                    }
+                    state.windows.is_empty()
                 });
+
+                if should_exit {
+                    self.request_exit(event_loop);
+                }
             }
             WinitWindowEvent::Resized(physical_size) => {
                 use flui_types::geometry::{Size, device_px, px};
@@ -651,37 +769,101 @@ impl ApplicationHandler for WinitApp {
         // change can't silently turn the wake-driven frame loop into a
         // busy poll.
         event_loop.set_control_flow(winit::event_loop::ControlFlow::Wait);
+    }
 
-        // Process pending window creation requests
-        self.process_window_requests(event_loop);
+    fn user_event(&mut self, event_loop: &ActiveEventLoop, (): ()) {
+        self.process_control(event_loop);
+    }
 
-        // Check if we should quit
-        let should_quit = self.platform.with_state(|state| state.should_quit);
-        if should_quit {
-            tracing::info!("Quitting event loop");
-            event_loop.exit();
-        }
+    fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
+        self.finish_shutdown();
     }
 }
 
 // Helper methods for WinitApp
 impl WinitApp {
-    /// Process pending window creation requests
-    fn process_window_requests(&mut self, event_loop: &ActiveEventLoop) {
-        let requests = self
-            .platform
-            .with_state(|state| state.window_requests.drain_pending());
+    fn process_control(&mut self, event_loop: &ActiveEventLoop) {
+        if self.control.take_quit_requested() {
+            self.request_exit(event_loop);
+            return;
+        }
 
-        for request in requests {
-            tracing::debug!("Processing window creation request");
+        let drain_budget = self.control.begin_drain();
+        for _ in 0..drain_budget {
+            if self.control.take_quit_requested() {
+                self.request_exit(event_loop);
+                return;
+            }
 
-            let result = self.platform.create_window_now(event_loop, request.options);
-
-            // Send response back
-            if let Err(err) = request.response.send(result) {
-                tracing::error!(?err, "Failed to send window creation response");
+            let Some(command) = self.control.try_recv() else {
+                break;
+            };
+            match command {
+                ControlCommand::OpenWindow { options, response } => {
+                    let reply = OpenWindowReplyGuard::new(response);
+                    tracing::debug!("Processing window creation request");
+                    let result = self.platform.create_window_now(event_loop, options);
+                    if !reply.complete(result) {
+                        tracing::debug!("window requester was dropped before the response");
+                    }
+                }
             }
         }
+
+        if self.control.take_quit_requested() {
+            self.request_exit(event_loop);
+        }
+    }
+
+    fn request_exit(&mut self, event_loop: &ActiveEventLoop) {
+        tracing::info!("Quitting event loop");
+        event_loop.exit();
+        self.finish_shutdown();
+    }
+
+    fn finish_shutdown(&mut self) {
+        self.close_owner_lane();
+        self.notify_quit_once();
+    }
+
+    fn close_owner_lane(&mut self) {
+        self.control.stop_accepting();
+        self.reject_pending_commands();
+        self.platform.mark_stopped();
+    }
+
+    fn reject_pending_commands(&self) {
+        // Admission is closed and the lane is bounded to CONTROL_CAPACITY, so
+        // draining to empty is finite and includes every accepted command.
+        while let Some(command) = self.control.try_recv() {
+            match command {
+                ControlCommand::OpenWindow { response, .. } => {
+                    let _ = OpenWindowReplyGuard::new(response).complete(Err(anyhow::anyhow!(
+                        "winit event-loop owner is shutting down"
+                    )));
+                }
+            }
+        }
+    }
+
+    fn notify_quit_once(&mut self) {
+        if self.quit_notified {
+            return;
+        }
+        self.quit_notified = true;
+
+        let callback = self.platform.with_state(|state| state.handlers.quit.take());
+        if let Some(mut callback) = callback {
+            callback();
+        }
+    }
+}
+
+impl Drop for WinitApp {
+    fn drop(&mut self) {
+        // Drop may run while user code is unwinding. Close only framework
+        // resources here; user callbacks run exclusively from explicit finish.
+        self.close_owner_lane();
     }
 }
 
@@ -690,28 +872,10 @@ impl Platform for WinitPlatform {
         self.with_state(|state| state.background_executor.clone())
     }
 
-    fn foreground_executor(&self) -> Arc<dyn PlatformExecutor> {
-        self.with_state(|state| state.foreground_executor.clone())
-    }
-
     fn run(self: Box<Self>, on_ready: PlatformReadyCallback) {
         tracing::info!("Starting winit event loop via Platform::run()");
-
-        let event_loop = match EventLoop::builder().build() {
-            Ok(el) => el,
-            Err(e) => {
-                tracing::error!("Failed to create winit event loop: {:?}", e);
-                return;
-            }
-        };
-
         let platform = Arc::new(*self);
-        let mut app = WinitApp {
-            platform,
-            on_ready: Some(on_ready),
-        };
-
-        if let Err(e) = event_loop.run_app(&mut app) {
+        if let Err(e) = platform.run_event_loop(on_ready) {
             tracing::error!("Winit event loop error: {:?}", e);
         }
     }
@@ -719,20 +883,29 @@ impl Platform for WinitPlatform {
     fn quit(&self) {
         tracing::info!("Quit requested");
 
-        self.with_state(|state| {
-            state.should_quit = true;
-            state.handlers.invoke_quit();
+        let control = self.with_state(|state| match &mut state.run_state {
+            WinitRunState::New { quit_requested } => {
+                *quit_requested = true;
+                None
+            }
+            WinitRunState::Starting { control, .. } | WinitRunState::Running { control, .. } => {
+                Some(control.clone())
+            }
+            WinitRunState::Stopped => None,
         });
+        if let Some(control) = control {
+            control.request_quit();
+        }
     }
 
-    fn open_window(&self, options: WindowOptions) -> Result<Box<dyn PlatformWindow>> {
+    fn open_window(&self, options: WindowOptions) -> Result<Arc<dyn PlatformWindow>> {
         tracing::info!(?options, "Requesting window creation");
 
         // Same-thread fast path: called synchronously from inside `on_ready`
         // (see `WinitApp::resumed`), where a live `ActiveEventLoop` is
         // published for exactly this nested call. Create the window
-        // directly instead of enqueuing — the queue's only consumer,
-        // `about_to_wait`, cannot run until this call returns, and would
+        // directly instead of enqueuing — the lane's `user_event` consumer
+        // cannot run until this call returns, and would
         // deadlock forever otherwise (see the module-level doc).
         if let Some(event_loop_ptr) = ACTIVE_EVENT_LOOP.with(Cell::get) {
             tracing::debug!("Creating window on event-loop thread (same-thread fast path)");
@@ -748,33 +921,43 @@ impl Platform for WinitPlatform {
             return self.window_by_id(window_id);
         }
 
-        // Fail fast instead of deadlocking: the cross-thread path below
-        // blocks on a response that only `about_to_wait` can send, and
-        // `about_to_wait` cannot run until the event loop has started
-        // pumping — i.e. until `on_ready` has returned and set
-        // `is_running`. Calling `open_window` before `Platform::run` (or
-        // synchronously from something other than `on_ready`, which hits
-        // this same window) used to hang forever; reject it instead.
-        let is_running = self.with_state(|state| state.is_running);
-        if !is_running {
-            anyhow::bail!(
-                "open_window called before Platform::run — on the winit backend, \
-                 create windows inside run()'s on_ready callback"
-            );
-        }
+        let control = self
+            .with_state(|state| {
+                state
+                    .run_state
+                    .control_for_open_window(thread::current().id())
+            })
+            .map_err(|error| match error {
+                OpenWindowStateError::NotRunning => anyhow::anyhow!(
+                    "open_window called before Platform::run — on the winit backend, \
+                     create the first windows inside run()'s on_ready callback"
+                ),
+                OpenWindowStateError::Starting => anyhow::anyhow!(
+                    "open_window called from another thread before winit finished on_ready"
+                ),
+                OpenWindowStateError::OwnerWouldBlock => anyhow::anyhow!(
+                    "open_window cannot block the winit event-loop owner outside on_ready"
+                ),
+                OpenWindowStateError::Stopped => {
+                    anyhow::anyhow!("open_window called after the winit event loop stopped")
+                }
+            })?;
 
-        // Cross-thread path: enqueue a request and block until the event
-        // loop's `about_to_wait` dispatch drains it and creates the window.
-        let (response_tx, response_rx) = std::sync::mpsc::sync_channel(1);
-        let request_sender = self.with_state(|state| state.window_requests.sender());
-        let request = WindowRequest {
-            options,
-            response: response_tx,
-        };
-
-        request_sender
-            .send(request)
-            .map_err(|_| anyhow::anyhow!("Failed to send window creation request"))?;
+        // The command crosses threads as data only. The owner creates the
+        // window and completes this one-shot without exposing winit's
+        // thread-affine event-loop capability.
+        let response_rx = control
+            .request_open_window(options)
+            .map_err(|error| match error {
+                ControlSendError::Full { capacity, rejected } => {
+                    drop(rejected);
+                    anyhow::anyhow!("winit owner-control lane is full (capacity {capacity})")
+                }
+                ControlSendError::OwnerGone { rejected } => {
+                    drop(rejected);
+                    anyhow::anyhow!("winit event-loop owner is no longer available")
+                }
+            })?;
 
         tracing::debug!("Waiting for window creation response");
 
@@ -913,161 +1096,244 @@ impl Platform for WinitPlatform {
     }
 }
 
-// ==================== Simple Implementations ====================
+#[cfg(test)]
+mod tests {
+    use std::{
+        panic::{AssertUnwindSafe, catch_unwind},
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+    };
 
-/// Simple executor implementation
-struct SimpleExecutor {
-    name: String,
-}
+    use super::{
+        OpenWindowReplyGuard, OpenWindowStateError, WinitApp, WinitPlatform, WinitRunState,
+    };
+    use crate::{
+        platforms::winit::control::{ControlCommand, control_lane},
+        traits::{Platform, WindowOptions},
+    };
 
-impl SimpleExecutor {
-    fn new(name: &str) -> Self {
-        Self {
-            name: name.to_string(),
+    #[test]
+    fn winit_owner_thread_open_outside_active_event_loop_is_rejected() {
+        let owner_thread = std::thread::current().id();
+        let (control, _receiver) = control_lane(Arc::new(|| {}));
+        let run_state = WinitRunState::Running {
+            owner_thread,
+            control,
+        };
+
+        assert_eq!(
+            run_state
+                .control_for_open_window(owner_thread)
+                .expect_err("the owner must never block waiting on its own event loop"),
+            OpenWindowStateError::OwnerWouldBlock
+        );
+    }
+
+    #[test]
+    fn winit_quit_callback_runs_once_on_owner_outside_platform_state_lock() {
+        let platform = Arc::new(WinitPlatform::new());
+        let owner_thread = std::thread::current().id();
+        let callback_count = Arc::new(AtomicUsize::new(0));
+        let callback_count_for_handler = Arc::clone(&callback_count);
+        let state_for_handler = Arc::clone(&platform.state);
+        platform.on_quit(Box::new(move || {
+            assert_eq!(std::thread::current().id(), owner_thread);
+            assert!(
+                state_for_handler.try_lock().is_some(),
+                "quit callback must run after releasing platform state"
+            );
+            callback_count_for_handler.fetch_add(1, Ordering::Relaxed);
+        }));
+        let (control, receiver) = control_lane(Arc::new(|| {}));
+        platform.with_state(|state| {
+            state.run_state = WinitRunState::Running {
+                owner_thread,
+                control,
+            };
+        });
+        let platform_for_worker = Arc::clone(&platform);
+        std::thread::spawn(move || platform_for_worker.quit())
+            .join()
+            .expect("quit requester does not panic");
+        assert_eq!(
+            callback_count.load(Ordering::Relaxed),
+            0,
+            "the requesting thread only signals the owner"
+        );
+        assert!(receiver.take_quit_requested());
+        let mut app = WinitApp {
+            platform,
+            on_ready: None,
+            control: receiver,
+            quit_notified: false,
+        };
+
+        app.notify_quit_once();
+        app.notify_quit_once();
+
+        assert_eq!(callback_count.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn winit_shutdown_replies_to_admitted_requests_before_app_drop() {
+        let platform = Arc::new(WinitPlatform::new());
+        let (sender, receiver) = control_lane(Arc::new(|| {}));
+        let replies: Vec<_> = (0..3)
+            .map(|index| {
+                sender
+                    .request_open_window(WindowOptions {
+                        title: format!("pending-{index}"),
+                        ..WindowOptions::default()
+                    })
+                    .expect("request is admitted before shutdown")
+            })
+            .collect();
+        let mut app = WinitApp {
+            platform,
+            on_ready: None,
+            control: receiver,
+            quit_notified: false,
+        };
+
+        app.finish_shutdown();
+
+        assert_eq!(app.control.pending_count(), 0);
+        for reply in replies {
+            let result = reply
+                .try_recv()
+                .expect("shutdown responds while WinitApp is still alive");
+            assert!(result.is_err());
         }
     }
-}
 
-impl PlatformExecutor for SimpleExecutor {
-    fn spawn(&self, task: Box<dyn FnOnce() + Send>) {
-        tracing::debug!(executor = %self.name, "Spawning task");
-        // TODO: Use actual thread pool or async runtime
-        std::thread::spawn(task);
-    }
-}
+    #[test]
+    fn winit_app_drop_during_unwind_closes_the_owner_lane() {
+        let platform = Arc::new(WinitPlatform::new());
+        let (sender, receiver) = control_lane(Arc::new(|| {}));
+        platform.with_state(|state| {
+            state.run_state = WinitRunState::Running {
+                owner_thread: std::thread::current().id(),
+                control: sender.clone(),
+            };
+        });
+        let replies: Vec<_> = (0..3)
+            .map(|index| {
+                sender
+                    .request_open_window(WindowOptions {
+                        title: format!("unwind-{index}"),
+                        ..WindowOptions::default()
+                    })
+                    .expect("request is admitted before owner unwind")
+            })
+            .collect();
 
-// ==================== Window Handle (delegates to Arc<WinitWindow>) ====================
+        let platform_for_unwind = Arc::clone(&platform);
+        let unwind = catch_unwind(AssertUnwindSafe(move || {
+            let _app = WinitApp {
+                platform: platform_for_unwind,
+                on_ready: None,
+                control: receiver,
+                quit_notified: false,
+            };
+            panic!("exercise WinitApp unwind cleanup");
+        }));
+        assert!(unwind.is_err());
 
-/// A handle that delegates `PlatformWindow` through `Arc<WinitWindow>`.
-///
-/// This exists because `open_window()` returns `Box<dyn PlatformWindow>`
-/// while the platform internally stores `Arc<WinitWindow>`. The handle
-/// delegates all trait methods to the shared `WinitWindow`.
-struct WinitWindowHandle {
-    inner: Arc<WinitWindow>,
-}
-
-impl PlatformWindow for WinitWindowHandle {
-    fn physical_size(&self) -> flui_types::geometry::Size<flui_types::geometry::DevicePixels> {
-        self.inner.physical_size()
-    }
-
-    fn logical_size(&self) -> flui_types::geometry::Size<flui_types::geometry::Pixels> {
-        self.inner.logical_size()
-    }
-
-    fn scale_factor(&self) -> f64 {
-        self.inner.scale_factor()
-    }
-
-    fn request_redraw(&self) {
-        self.inner.request_redraw();
-    }
-
-    fn is_focused(&self) -> bool {
-        self.inner.is_focused()
-    }
-
-    fn is_visible(&self) -> bool {
-        self.inner.is_visible()
-    }
-
-    fn set_title(&self, title: &str) {
-        self.inner.set_title(title);
-    }
-
-    fn minimize(&self) {
-        self.inner.minimize();
+        for reply in replies {
+            assert!(
+                reply
+                    .try_recv()
+                    .expect("owner unwind returns an explicit result, not disconnect")
+                    .is_err()
+            );
+        }
+        assert!(platform.with_state(|state| matches!(&state.run_state, WinitRunState::Stopped)));
+        assert!(matches!(
+            sender
+                .request_open_window(WindowOptions::default())
+                .expect_err("closed owner lane rejects new work"),
+            crate::platforms::winit::control::ControlSendError::OwnerGone { .. }
+        ));
     }
 
-    fn maximize(&self) {
-        self.inner.maximize();
+    #[test]
+    fn winit_panicking_quit_callback_runs_after_idempotent_owner_close() {
+        let platform = Arc::new(WinitPlatform::new());
+        let (sender, receiver) = control_lane(Arc::new(|| {}));
+        platform.with_state(|state| {
+            state.run_state = WinitRunState::Running {
+                owner_thread: std::thread::current().id(),
+                control: sender.clone(),
+            };
+        });
+        let replies: Vec<_> = (0..3)
+            .map(|index| {
+                sender
+                    .request_open_window(WindowOptions {
+                        title: format!("quit-panic-{index}"),
+                        ..WindowOptions::default()
+                    })
+                    .expect("request is admitted before quit")
+            })
+            .collect();
+        let callback_count = Arc::new(AtomicUsize::new(0));
+        let callback_count_for_handler = Arc::clone(&callback_count);
+        let platform_for_handler = Arc::clone(&platform);
+        platform.on_quit(Box::new(move || {
+            callback_count_for_handler.fetch_add(1, Ordering::Relaxed);
+            assert!(
+                platform_for_handler
+                    .with_state(|state| matches!(&state.run_state, WinitRunState::Stopped))
+            );
+            panic!("exercise panicking quit callback cleanup");
+        }));
+        let mut app = WinitApp {
+            platform: Arc::clone(&platform),
+            on_ready: None,
+            control: receiver,
+            quit_notified: false,
+        };
+
+        let first_finish = catch_unwind(AssertUnwindSafe(|| app.finish_shutdown()));
+        assert!(first_finish.is_err(), "user callback panic must propagate");
+        for reply in replies {
+            assert!(
+                reply
+                    .try_recv()
+                    .expect("owner closes queued request before invoking user code")
+                    .is_err()
+            );
+        }
+        assert!(platform.with_state(|state| matches!(&state.run_state, WinitRunState::Stopped)));
+        assert_eq!(callback_count.load(Ordering::Relaxed), 1);
+
+        let second_finish = catch_unwind(AssertUnwindSafe(|| app.finish_shutdown()));
+        assert!(second_finish.is_ok(), "owner close is idempotent");
+        assert_eq!(callback_count.load(Ordering::Relaxed), 1);
     }
 
-    fn restore(&self) {
-        self.inner.restore();
-    }
+    #[test]
+    fn winit_in_flight_reply_guard_returns_explicit_error_during_unwind() {
+        let (sender, receiver) = control_lane(Arc::new(|| {}));
+        let reply = sender
+            .request_open_window(WindowOptions::default())
+            .expect("request is admitted");
+        assert_eq!(receiver.begin_drain(), 1);
+        let ControlCommand::OpenWindow { response, .. } =
+            receiver.try_recv().expect("owner dequeues request");
 
-    fn toggle_fullscreen(&self) {
-        self.inner.toggle_fullscreen();
-    }
-
-    fn close(&self) {
-        self.inner.close();
-    }
-
-    fn on_input(
-        &self,
-        callback: Box<
-            dyn FnMut(crate::traits::PlatformInput) -> crate::traits::DispatchEventResult + Send,
-        >,
-    ) {
-        self.inner.on_input(callback);
-    }
-
-    fn on_request_frame(&self, callback: Box<dyn FnMut() + Send>) {
-        self.inner.on_request_frame(callback);
-    }
-
-    fn on_resize(
-        &self,
-        callback: Box<
-            dyn FnMut(flui_types::geometry::Size<flui_types::geometry::Pixels>, f32) + Send,
-        >,
-    ) {
-        self.inner.on_resize(callback);
-    }
-
-    fn on_moved(&self, callback: Box<dyn FnMut() + Send>) {
-        self.inner.on_moved(callback);
-    }
-
-    fn on_close(&self, callback: Box<dyn FnOnce() + Send>) {
-        self.inner.on_close(callback);
-    }
-
-    fn on_should_close(&self, callback: Box<dyn FnMut() -> bool + Send>) {
-        self.inner.on_should_close(callback);
-    }
-
-    fn on_active_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
-        self.inner.on_active_status_change(callback);
-    }
-
-    fn on_visibility_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
-        self.inner.on_visibility_status_change(callback);
-    }
-
-    fn on_hover_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
-        self.inner.on_hover_status_change(callback);
-    }
-
-    fn on_appearance_changed(&self, callback: Box<dyn FnMut() + Send>) {
-        self.inner.on_appearance_changed(callback);
-    }
-
-    // Delegate to `WinitWindow`'s own overrides — without these, GPU surface
-    // creation (`Renderer::new`) falls through to the `PlatformWindow` trait
-    // defaults (`Err(HandleError::Unavailable)`) even though the underlying
-    // `winit::window::Window` supports both handles directly.
-    fn window_handle(
-        &self,
-    ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
-        self.inner.window_handle()
-    }
-
-    fn display_handle(
-        &self,
-    ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
-        self.inner.display_handle()
-    }
-
-    #[cfg(feature = "winit-backend")]
-    fn as_winit(&self) -> Option<&Arc<winit::window::Window>> {
-        self.inner.as_winit()
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
+        let unwind = catch_unwind(AssertUnwindSafe(move || {
+            let _reply_guard = OpenWindowReplyGuard::new(response);
+            panic!("exercise in-flight reply unwind");
+        }));
+        assert!(unwind.is_err());
+        assert!(
+            reply
+                .try_recv()
+                .expect("reply guard returns explicit error instead of disconnect")
+                .is_err()
+        );
     }
 }

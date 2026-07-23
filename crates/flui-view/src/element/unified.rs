@@ -509,7 +509,8 @@ where
     {
         f(&mut self.behavior.state);
         self.core.mark_dirty();
-        self.core.schedule_self_build(owner);
+        self.core
+            .schedule_self_build(owner, crate::RebuildReason::StateChange);
     }
 }
 
@@ -524,20 +525,6 @@ where
     /// Get the provided data.
     pub fn data(&self) -> &V::Data {
         self.behavior.data()
-    }
-
-    /// Register a dependent element with its tree depth.
-    ///
-    /// `depth` is the dependent's depth in the element tree, used by
-    /// `BuildOwner::schedule_build_for` when this InheritedElement
-    /// rebuilds with `update_should_notify == true`.
-    pub fn add_dependent(&mut self, element: ElementId, depth: usize) {
-        self.behavior.add_dependent(element, depth);
-    }
-
-    /// Remove a dependent element.
-    pub fn remove_dependent(&mut self, element: ElementId) {
-        self.behavior.remove_dependent(element);
     }
 
     /// Get all dependent elements as an id -> depth map.

@@ -1,8 +1,7 @@
 //! Executor System Example
 //!
-//! Demonstrates background and foreground executor usage for async task
-//! execution. Shows how to run CPU-intensive work on background threads and
-//! update UI safely on the foreground thread.
+//! Demonstrates background executor usage for asynchronous and CPU-intensive
+//! work away from the UI owner thread.
 
 // Target-level lint relaxations — crate-level allows don't reach this
 // target. `unwrap` in test/example code: a panic IS the failure report
@@ -18,10 +17,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use flui_platform::{
-    PlatformExecutor,
-    executor::{BackgroundExecutor, ForegroundExecutor},
-};
+use flui_platform::executor::BackgroundExecutor;
 
 fn main() {
     // Initialize tracing for observability
@@ -34,16 +30,10 @@ fn main() {
     // Example 1: Background executor for CPU-intensive work
     example_background_cpu_work();
 
-    // Example 2: Background work with foreground callback
-    example_background_with_ui_update();
-
-    // Example 3: Parallel background tasks
+    // Example 2: Parallel background tasks
     example_parallel_background_tasks();
 
-    // Example 4: Foreground task queue and batching
-    example_foreground_task_batching();
-
-    // Example 5: Async/await integration
+    // Example 3: Async/await integration
     example_async_await_integration();
 
     println!("\n=== All Examples Complete ===");
@@ -86,46 +76,9 @@ fn example_background_cpu_work() {
     println!("Total time: {:?}", start.elapsed());
 }
 
-/// Example 2: Background work with foreground UI update callback
-fn example_background_with_ui_update() {
-    println!("\n--- Example 2: Background + Foreground Callback ---");
-
-    let background_executor = BackgroundExecutor::new();
-    let foreground_executor = ForegroundExecutor::new();
-
-    let ui_state = Arc::new(AtomicU32::new(0));
-    let ui_state_bg = Arc::clone(&ui_state);
-    let foreground_clone = foreground_executor.clone();
-
-    // Simulate loading data in background
-    background_executor
-        .spawn(async move {
-            println!("Background: Loading data...");
-            tokio::time::sleep(Duration::from_millis(100)).await;
-
-            let data = 42u32; // Simulated loaded data
-
-            // Schedule UI update on foreground thread via PlatformExecutor trait
-            PlatformExecutor::spawn(
-                &foreground_clone,
-                Box::new(move || {
-                    println!("Foreground: Updating UI with loaded data: {data}");
-                    ui_state_bg.store(data, Ordering::SeqCst);
-                }),
-            );
-        })
-        .detach();
-
-    // Simulate event loop draining foreground tasks
-    thread::sleep(Duration::from_millis(150));
-    foreground_executor.drain_tasks();
-
-    println!("UI state updated to: {}", ui_state.load(Ordering::SeqCst));
-}
-
-/// Example 3: Parallel background tasks
+/// Example 2: Parallel background tasks
 fn example_parallel_background_tasks() {
-    println!("\n--- Example 3: Parallel Background Tasks ---");
+    println!("\n--- Example 2: Parallel Background Tasks ---");
 
     let executor = BackgroundExecutor::new();
     let completed_count = Arc::new(AtomicU32::new(0));
@@ -158,41 +111,9 @@ fn example_parallel_background_tasks() {
     );
 }
 
-/// Example 4: Foreground task batching and ordering
-fn example_foreground_task_batching() {
-    println!("\n--- Example 4: Foreground Task Batching ---");
-
-    let executor = ForegroundExecutor::new();
-    let execution_order = Arc::new(std::sync::Mutex::new(Vec::new()));
-
-    // Queue multiple UI updates via PlatformExecutor trait
-    for i in 0..5 {
-        let order_clone = Arc::clone(&execution_order);
-        PlatformExecutor::spawn(
-            &executor,
-            Box::new(move || {
-                order_clone.lock().unwrap().push(i);
-            }),
-        );
-    }
-
-    println!(
-        "Queued {} tasks, pending count: {}",
-        5,
-        executor.pending_count()
-    );
-
-    // Process all tasks in single batch (typical event loop behavior)
-    executor.drain_tasks();
-
-    let order = execution_order.lock().unwrap();
-    println!("Tasks executed in FIFO order: {:?}", *order);
-    assert_eq!(*order, vec![0, 1, 2, 3, 4]);
-}
-
-/// Example 5: Async/await integration with Tokio
+/// Example 3: Async/await integration with Tokio
 fn example_async_await_integration() {
-    println!("\n--- Example 5: Async/Await Integration ---");
+    println!("\n--- Example 3: Async/Await Integration ---");
 
     let executor = BackgroundExecutor::new();
 

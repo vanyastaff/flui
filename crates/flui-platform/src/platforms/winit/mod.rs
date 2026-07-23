@@ -1,10 +1,10 @@
 //! Winit-based platform implementation
 
 mod clipboard;
+mod control;
 mod display;
 mod events;
 mod platform;
-mod window_requests;
 
 pub use clipboard::ArboardClipboard;
 pub use display::WinitDisplay;

@@ -284,7 +284,7 @@ fn an_owner_local_post_frame_callback_observes_committed_geometry() {
         .lock()
         .as_ref()
         .expect("init_state captured a rebuild handle")
-        .schedule();
+        .schedule(flui_view::RebuildReason::StateChange);
 
     laid.pump_for(Duration::from_millis(16));
 

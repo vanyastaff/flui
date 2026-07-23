@@ -6,6 +6,7 @@
 use std::{path::PathBuf, sync::Arc};
 
 use anyhow::Result;
+use cursor_icon::CursorIcon;
 use flui_types::{
     HapticFeedback,
     geometry::{Bounds, DevicePixels, Pixels, Point, Size},
@@ -13,10 +14,9 @@ use flui_types::{
 use parking_lot::Mutex;
 
 use crate::{
-    cursor::CursorStyle,
     shared::{PlatformHandlers, WindowCallbacks},
     traits::{
-        Clipboard, ClipboardItem, DesktopCapabilities, DispatchEventResult, Platform,
+        Clipboard, ClipboardItem, CursorError, DesktopCapabilities, DispatchEventResult, Platform,
         PlatformCapabilities, PlatformDisplay, PlatformExecutor, PlatformHaptics, PlatformInput,
         PlatformReadyCallback, PlatformTextInput, PlatformWindow, WindowAppearance,
         WindowBackgroundAppearance, WindowBounds, WindowEvent, WindowId, WindowOptions,
@@ -38,13 +38,10 @@ pub struct HeadlessPlatform {
 struct HeadlessState {
     handlers: PlatformHandlers,
     background_executor: Arc<TestExecutor>,
-    foreground_executor: Arc<TestExecutor>,
     clipboard: Arc<MockClipboard>,
     active_window: Option<WindowId>,
     is_running: bool,
     windows: Vec<MockWindow>,
-    // US3 state
-    cursor_style: CursorStyle,
     appearance: WindowAppearance,
     keyboard_layout: String,
     opened_urls: Vec<String>,
@@ -56,12 +53,10 @@ impl HeadlessPlatform {
         let state = HeadlessState {
             handlers: PlatformHandlers::new(),
             background_executor: Arc::new(TestExecutor::new("background")),
-            foreground_executor: Arc::new(TestExecutor::new("foreground")),
             clipboard: Arc::new(MockClipboard::new()),
             active_window: None,
             is_running: false,
             windows: Vec::new(),
-            cursor_style: CursorStyle::default(),
             appearance: WindowAppearance::default(),
             keyboard_layout: "en-US".to_string(),
             opened_urls: Vec::new(),
@@ -99,10 +94,6 @@ impl Platform for HeadlessPlatform {
         self.with_state(|state| state.background_executor.clone())
     }
 
-    fn foreground_executor(&self) -> Arc<dyn PlatformExecutor> {
-        self.with_state(|state| state.foreground_executor.clone())
-    }
-
     fn run(self: Box<Self>, on_ready: PlatformReadyCallback) {
         tracing::info!("Starting headless platform (no event loop)");
 
@@ -125,7 +116,7 @@ impl Platform for HeadlessPlatform {
         });
     }
 
-    fn open_window(&self, options: WindowOptions) -> Result<Box<dyn PlatformWindow>> {
+    fn open_window(&self, options: WindowOptions) -> Result<Arc<dyn PlatformWindow>> {
         tracing::info!(?options, "Creating mock window");
 
         self.with_state(|state| {
@@ -140,7 +131,7 @@ impl Platform for HeadlessPlatform {
                 .handlers
                 .invoke_window_event(WindowEvent::Created(window_id));
 
-            Ok(Box::new(window) as Box<dyn PlatformWindow>)
+            Ok(Arc::new(window) as Arc<dyn PlatformWindow>)
         })
     }
 
@@ -193,12 +184,6 @@ impl Platform for HeadlessPlatform {
 
     fn window_appearance(&self) -> WindowAppearance {
         self.with_state(|state| state.appearance)
-    }
-
-    fn set_cursor_style(&self, style: CursorStyle) {
-        self.with_state(|state| {
-            state.cursor_style = style;
-        });
     }
 
     fn write_to_clipboard(&self, item: ClipboardItem) {
@@ -261,6 +246,7 @@ struct MockWindowState {
     hovered: bool,
     modifiers: keyboard_types::Modifiers,
     appearance: WindowAppearance,
+    cursor: CursorIcon,
 }
 
 impl Clone for MockWindowState {
@@ -276,6 +262,7 @@ impl Clone for MockWindowState {
             hovered: self.hovered,
             modifiers: self.modifiers,
             appearance: self.appearance,
+            cursor: self.cursor,
         }
     }
 }
@@ -298,6 +285,7 @@ impl MockWindow {
                 hovered: false,
                 modifiers: keyboard_types::Modifiers::empty(),
                 appearance: WindowAppearance::default(),
+                cursor: CursorIcon::default(),
             })),
             callbacks: Arc::new(WindowCallbacks::new()),
             text_input: Arc::new(FakeTextInput::new()),
@@ -495,6 +483,11 @@ impl crate::traits::PlatformWindow for MockWindow {
         // No-op in headless mode
     }
 
+    fn set_cursor(&self, cursor: CursorIcon) -> Result<(), CursorError> {
+        self.state.lock().cursor = cursor;
+        Ok(())
+    }
+
     // ==================== Callbacks (US1) ====================
 
     fn on_input(&self, callback: Box<dyn FnMut(PlatformInput) -> DispatchEventResult + Send>) {
@@ -542,9 +535,9 @@ impl crate::traits::PlatformWindow for MockWindow {
 /// [`PlatformWindow::text_input`].
 ///
 /// Every `set_ime_allowed`/`set_ime_cursor_area` call is appended to an
-/// in-memory history so a test can assert exactly what the IME bridge
-/// (`flui-app`'s `AppBinding::attach_text_input`/`detach_text_input`) told
-/// the platform to do, rather than only that the call didn't panic.
+/// in-memory history so a test can assert exactly what a presentation-owned
+/// text-input session told the platform to do, rather than only that the call
+/// didn't panic.
 #[derive(Default)]
 pub struct FakeTextInput {
     state: Mutex<FakeTextInputState>,
@@ -599,10 +592,6 @@ impl PlatformTextInput for FakeTextInput {
 
     fn set_ime_cursor_area(&self, area: Bounds<Pixels>) {
         self.state.lock().cursor_area_calls.push(area);
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
     }
 }
 
@@ -998,6 +987,7 @@ mod tests {
         use flui_types::geometry::{Bounds, Point, Size, px};
 
         let window = MockWindow::new(WindowId(0), WindowOptions::default());
+        let fake = Arc::clone(&window.text_input);
         let text_input = window.text_input().expect("headless backend supports IME");
 
         text_input.set_ime_allowed(true);
@@ -1005,18 +995,14 @@ mod tests {
             Point::new(px(10.0), px(20.0)),
             Size::new(px(30.0), px(40.0)),
         ));
-        text_input.set_ime_allowed(false);
+        window
+            .text_input()
+            .expect("headless backend supports IME")
+            .set_ime_allowed(false);
 
         // A second accessor call must reach the SAME fake, not a fresh one —
         // otherwise every caller would see its own writes disappear.
-        let fake = window
-            .text_input()
-            .expect("headless backend supports IME")
-            .as_any()
-            .downcast_ref::<FakeTextInput>()
-            .expect("headless PlatformTextInput is a FakeTextInput")
-            .ime_allowed_calls();
-        assert_eq!(fake, vec![true, false]);
+        assert_eq!(fake.ime_allowed_calls(), vec![true, false]);
     }
 
     #[test]
@@ -1069,12 +1055,19 @@ mod tests {
     }
 
     #[test]
-    fn test_set_cursor_style() {
-        let platform = HeadlessPlatform::new();
-        platform.set_cursor_style(CursorStyle::IBeam);
-        platform.with_state(|state| {
-            assert_eq!(state.cursor_style, CursorStyle::IBeam);
-        });
+    fn cursor_state_is_owned_by_each_exact_window() {
+        let first = MockWindow::new(WindowId(1), WindowOptions::default());
+        let second = MockWindow::new(WindowId(2), WindowOptions::default());
+
+        first
+            .set_cursor(CursorIcon::Pointer)
+            .expect("headless window supports cursor selection");
+        second
+            .set_cursor(CursorIcon::Text)
+            .expect("headless window supports cursor selection");
+
+        assert_eq!(first.state.lock().cursor, CursorIcon::Pointer);
+        assert_eq!(second.state.lock().cursor, CursorIcon::Text);
     }
 
     #[test]

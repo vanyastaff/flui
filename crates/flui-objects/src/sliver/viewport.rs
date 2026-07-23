@@ -1544,7 +1544,6 @@ mod offset_listener_tests {
             .handle()
             .request_mark_dirty(
                 flui_foundation::RenderId::new(999_999),
-                0,
                 flui_rendering::pipeline::DirtyKind::Paint,
             )
             .expect("the first send into a freshly-drained 1-capacity channel must fit");

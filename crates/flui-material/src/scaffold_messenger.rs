@@ -368,7 +368,7 @@ struct MessengerCore {
 impl MessengerCore {
     fn schedule_rebuild_on_scaffolds(&self) {
         for rebuild in self.scaffolds.borrow().values() {
-            rebuild.schedule();
+            rebuild.schedule(flui_view::RebuildReason::StateChange);
         }
     }
 
@@ -496,7 +496,7 @@ impl MessengerCore {
         }
         if let Some(rebuild) = self.rebuild.borrow().clone() {
             controller.add_status_listener(Arc::new(move |_status| {
-                rebuild.schedule();
+                rebuild.schedule(flui_view::RebuildReason::AnimationTick);
             }));
         }
         self.last_duration_status.set(AnimationStatus::Dismissed);
@@ -637,7 +637,7 @@ impl ScaffoldMessengerHandle {
         self.shared
             .entry_controller
             .add_status_listener(Arc::new(move |_status| {
-                rebuild_for_listener.schedule();
+                rebuild_for_listener.schedule(flui_view::RebuildReason::AnimationTick);
             }));
         *self.shared.rebuild.borrow_mut() = Some(rebuild);
         *self.shared.post_frame.borrow_mut() = ctx.post_frame_handle();
@@ -679,7 +679,7 @@ impl ScaffoldMessengerHandle {
     /// `:211-223`).
     pub(crate) fn register_scaffold(&self, element_id: ElementId, rebuild: RebuildHandle) {
         if !self.shared.queue.borrow().is_empty() {
-            rebuild.schedule();
+            rebuild.schedule(flui_view::RebuildReason::StateChange);
         }
         self.shared
             .scaffolds

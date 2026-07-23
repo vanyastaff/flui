@@ -7,11 +7,15 @@ impl ViewState<Async> for AsyncState {
     fn init_state(&mut self, ctx: &dyn BuildContext) {
         self.handle = Some(ctx.rebuild_handle());
         self.post_frame = ctx.post_frame_handle();
+        self.text_input = ctx.text_input_handle();
+        self.focus = Some(ctx.focus_manager());
     }
 
     fn did_change_dependencies(&mut self, ctx: &dyn BuildContext) {
         self.handle = Some(ctx.rebuild_handle());
         self.post_frame = ctx.post_frame_handle();
+        self.text_input = ctx.text_input_handle();
+        self.focus = Some(ctx.focus_manager());
     }
 
     // `build` only READS state the callback wrote. It never acquires a handle.
@@ -30,6 +34,9 @@ impl AsyncState {
         }
         if let Some(post_frame) = &self.post_frame {
             post_frame.schedule(|_timing| {});
+        }
+        if let Some(focus) = &self.focus {
+            focus.unfocus();
         }
     }
 }

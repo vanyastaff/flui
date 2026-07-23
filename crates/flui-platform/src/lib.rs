@@ -33,7 +33,7 @@
 //! - **Lifecycle**: Event loop, quit
 //! - **Windows**: Creation, management, events
 //! - **Displays**: Monitor enumeration and information
-//! - **Executors**: Background and foreground task execution
+//! - **Executor**: Thread-safe background task execution
 //! - **Clipboard**: Read/write operations
 //! - **Callbacks**: Event handler registration
 //!
@@ -95,7 +95,6 @@
 //! - **In-Memory Clipboard**: Full clipboard API with in-memory storage
 //! - **Mock Displays**: Single virtual display at 1920x1080
 //! - **Background Executor**: Async task execution with tokio runtime
-//! - **Foreground Executor**: Channel-based task queue for main thread
 //! - **Fast Tests**: <100ms overhead, suitable for rapid test iteration
 //! - **Parallel Safe**: Thread-safe, no race conditions in parallel test
 //!   execution
@@ -155,7 +154,6 @@
 #![deny(missing_docs)]
 
 pub mod config;
-pub mod cursor;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod executor;
 pub mod platforms;
@@ -168,11 +166,11 @@ pub mod window; // PORT-CHECK-OK-SP4: window API surface; binding entry for plat
 // ==================== Platform Detection ====================
 
 pub use config::{FullscreenMonitor, WindowConfiguration};
-// Re-export cursor types
-pub use cursor::CursorStyle;
+// One cursor vocabulary is shared by widgets, interaction, and platforms.
+pub use cursor_icon::CursorIcon;
 // Re-export executor types
 #[cfg(not(target_arch = "wasm32"))]
-pub use executor::{BackgroundExecutor, ForegroundExecutor};
+pub use executor::BackgroundExecutor;
 // Mobile platforms
 #[cfg(target_os = "android")]
 pub use platforms::AndroidPlatform;
@@ -200,7 +198,7 @@ pub use shared::{PlatformHandlers, WindowCallbacks};
 pub use task::{Priority, Task, TaskLabel};
 // Re-export core traits
 pub use traits::{
-    Clipboard, ClipboardItem, DesktopCapabilities, DispatchEventResult, DisplayId,
+    Clipboard, ClipboardItem, CursorError, DesktopCapabilities, DispatchEventResult, DisplayId,
     MobileCapabilities, PathPromptOptions, Platform, PlatformCapabilities, PlatformDisplay,
     PlatformEmbedder, PlatformExecutor, PlatformHaptics, PlatformReadyCallback, PlatformTextInput,
     PlatformWindow, WebCapabilities, WindowAppearance, WindowBackgroundAppearance, WindowBounds,

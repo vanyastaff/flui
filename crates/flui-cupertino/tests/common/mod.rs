@@ -59,7 +59,7 @@ pub fn lay_out(root: impl View, constraints: BoxConstraints) -> LaidOut {
             Some(Arc::clone(&pipeline_owner)),
             &mut build_owner.element_owner_mut(),
         );
-        build_owner.schedule_build_for(root_id, 0);
+        build_owner.schedule_build_for(root_id, 0, flui_view::RebuildReason::InitialMount);
         build_owner.build_scope(&mut tree);
         root_id
     });
@@ -132,9 +132,11 @@ impl LaidOut {
         if let Some(node) = self.binding.tree_mut().get_mut(self.root_element_id) {
             node.element_mut().mark_needs_build();
         }
-        self.binding
-            .build_owner_mut()
-            .schedule_build_for(self.root_element_id, 0);
+        self.binding.build_owner_mut().schedule_build_for(
+            self.root_element_id,
+            0,
+            flui_view::RebuildReason::StateChange,
+        );
         self.binding.pump_frame(Duration::ZERO);
     }
 

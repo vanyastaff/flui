@@ -118,6 +118,9 @@ pub mod effects;
 mod effects_pipeline;
 mod external_texture_registry;
 pub mod font_loader;
+/// Windowless GPU capture: rasterize a `LayerTree` to an offscreen texture and
+/// read the pixels back (golden-image / screenshot tooling).
+pub mod headless;
 /// GPU instance-buffer types: `RectInstance`, `CircleInstance`,
 /// `ArcInstance`, `TextureInstance`, gradient instances. All
 /// surviving items are consumed by `painter`. A cleanup pass
@@ -326,6 +329,8 @@ pub use crate::{
 };
 #[cfg(debug_assertions)]
 pub use debug::DebugBackend;
+// Windowless capture (golden-image / screenshot tooling).
+pub use headless::HeadlessRenderer;
 // Layer rendering (external via lib.rs re-export at crate root)
 pub use layer_render::LayerRender;
 pub use painter::WgpuPainter;

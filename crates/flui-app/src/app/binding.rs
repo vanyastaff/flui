@@ -20,70 +20,65 @@
 //! ```text
 //! AppBinding (transitional process host)
 //!   ├── renderer: RendererBinding      (render tree, pipeline)
-//!   ├── gestures: GestureBinding       (hit testing, pointer coalescing)
 //!   └── scheduler: Scheduler           (frame callbacks)
 //!
 //! UiRealm (owner-affine)
-//!   └── widgets: WidgetsBinding        (element tree, build)
+//!   ├── widgets: WidgetsBinding        (element tree, build)
+//!   └── gestures: GestureBinding       (single-presentation input state)
 //! ```
 
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, AtomicU64, Ordering},
+use std::{
+    any::Any,
+    marker::PhantomData,
+    panic::{AssertUnwindSafe, catch_unwind, resume_unwind},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+    },
 };
 
 use flui_animation::Vsync;
 use flui_engine::{EngineError, RasterBackend};
 use flui_foundation::HasInstance;
-use flui_interaction::{
-    ClientToken, ImeEventCallback, OpaqueWindowHandle, TextInputRegistry, binding::GestureBinding,
-    routing::FocusManager,
-};
 use flui_layer::Scene;
 use flui_platform::traits::{Clipboard, PlatformInput, PlatformWindow};
 use flui_rendering::binding::RendererBinding;
 use flui_rendering::constraints::BoxConstraints;
 use flui_scheduler::{AppLifecycleState, Scheduler};
-use flui_types::{
-    HapticFeedback, Size,
-    geometry::{Bounds, Pixels, px},
-};
+use flui_types::{HapticFeedback, Size, geometry::px};
 use flui_view::View;
-use flui_widgets::VsyncScope;
+use flui_widgets::{FocusRoot, GestureArenaScope, VsyncScope};
 use parking_lot::{Mutex, RwLock};
 
 use crate::bindings::RenderingFlutterBinding;
 
-/// Transitional process service host.
+/// Process service host for state shared by every presentation.
 ///
-/// AppBinding coordinates the specialized process services that remain during
-/// the ADR-0027 migration:
+/// AppBinding owns only services whose state is intentionally process-wide:
 /// - [`RendererBinding`] - Manages render tree and pipeline
-/// - [`GestureBinding`] - Manages hit testing, pointer coalescing, and gestures
 /// - [`Scheduler`] - Manages frame scheduling
 ///
 /// The runner-owned `UiRealm` separately owns the element tree, BuildOwner,
-/// and widget build phase.
+/// widget build phase, and the gesture state for its current presentation.
 ///
 /// # Input Handling
 ///
-/// Platform events enter through [`handle_input()`](Self::handle_input):
-/// - Pointer events → `GestureBinding::handle_pointer_event()` (with
-///   coalescing)
-/// - Keyboard events → `FocusManager::dispatch_key_event()`
+/// Platform events enter through the crate-private, already-entered realm
+/// dispatch seam:
+/// - Pointer events → the realm's `GestureBinding::handle_pointer_event()`
+///   (with coalescing)
+/// - Keyboard events → [`flui_interaction::FocusManager::dispatch_key_event`]
 ///
 /// # Thread affinity
 ///
-/// AppBinding is a transitional owner-thread host accessed via `instance()`.
-/// It is thread-local during the ADR-0027 migration so owner-local gesture and
-/// widget state do not have to implement `Send + Sync` just to satisfy a
-/// process-global static.
+/// AppBinding is an owner-thread host accessed via `instance()`. Renderer,
+/// focus, and scheduler callbacks are installed and driven on that same owner
+/// thread. A zero-sized owner-affinity marker makes it structurally
+/// `!Send + !Sync`; this contract does not depend on the incidental auto traits
+/// of its current service fields.
 pub struct AppBinding {
     /// Renderer binding (render tree, layout/paint phases)
     renderer: RwLock<RenderingFlutterBinding>,
-
-    /// Gesture binding (input handling, hit testing, pointer coalescing)
-    gestures: GestureBinding,
 
     /// Whether a redraw is needed
     needs_redraw: Arc<AtomicBool>,
@@ -140,6 +135,13 @@ pub struct AppBinding {
     /// Vsync tick and the Scheduler).
     start: web_time::Instant,
 
+    /// Structural owner-thread affinity for the transitional host.
+    ///
+    /// `*const ()` is `!Send + !Sync`; carrying it through `PhantomData`
+    /// prevents a future field refactor from silently widening the public
+    /// `AppBinding` auto-trait surface while `instance()` remains thread-local.
+    _owner_affine: PhantomData<*const ()>,
+
     /// Test-only injectable clock, stored as the f64 bits in a u64 atomic.
     ///
     /// When set (non-zero bit pattern), `now_secs()` returns this value
@@ -171,137 +173,6 @@ impl FrameWakeHandle {
     }
 }
 
-/// Bridges [`TextInputRegistry`] (`flui-interaction`) client attach/detach
-/// to the platform's `PlatformTextInput` capability (`flui-platform`), so
-/// attaching an IME client automatically enables platform IME composition
-/// and detaching automatically disables it. Without this bridge, every call
-/// site (PR2's `EditableText`) would need to re-derive the
-/// enable-on-attach/disable-only-if-still-active rule itself — and could get
-/// the stale-detach guard wrong.
-///
-/// `flui-interaction` cannot depend on `flui-platform` (see
-/// `TextInputRegistry`'s module doc), so `flui-app` — which depends on both
-/// — is where this wiring has to live.
-struct ImeBackend;
-
-impl ImeBackend {
-    fn attach(window: &Arc<dyn PlatformWindow>, callback: ImeEventCallback) -> ClientToken {
-        let token = TextInputRegistry::global()
-            .attach(OpaqueWindowHandle::new(Arc::clone(window)), callback);
-        if let Some(text_input) = window.text_input() {
-            text_input.set_ime_allowed(true);
-        }
-        token
-    }
-
-    fn detach(window: Option<&Arc<dyn PlatformWindow>>, token: ClientToken) {
-        if !TextInputRegistry::global().detach(token) {
-            return;
-        }
-        if let Some(text_input) = window.and_then(|window| window.text_input()) {
-            text_input.set_ime_allowed(false);
-        }
-    }
-}
-
-/// A `'static`, `Arc`-cloneable handle onto exactly the state
-/// [`ImeBackend::attach`]/[`ImeBackend::detach`] need — the active-window
-/// slot — without borrowing `&AppBinding` itself.
-///
-/// [`UiRealm::bind_to_app`](super::ui_realm::UiRealm::bind_to_app) installs
-/// this (via [`AppBinding::text_input_platform_bridge`]) into the
-/// [`flui_interaction::TextInputHandle`] capability, instead of a closure
-/// that re-resolves [`AppBinding::instance`] on every call. That distinction
-/// is load-bearing, not stylistic: `bind_to_app` is also called from test
-/// code with a standalone `AppBinding::new()` instance (`UiRealm::for_test`,
-/// isolated from the process-wide singleton on purpose), and a closure
-/// hard-coding `AppBinding::instance()` would silently attach to the WRONG
-/// binding there — the singleton, which never had `set_window` called on it
-/// in that test — rather than the specific `app` `bind_to_app` was given.
-/// Cloning the `Arc<Mutex<..>>` active-window slot ties the installed handle
-/// to the correct binding either way, production singleton or test instance.
-#[derive(Clone)]
-pub(crate) struct TextInputPlatformBridge {
-    active_window: Arc<Mutex<Option<Arc<dyn PlatformWindow>>>>,
-}
-
-impl TextInputPlatformBridge {
-    pub(crate) fn attach(&self, callback: ImeEventCallback) -> Option<ClientToken> {
-        let window = self.active_window.lock().as_ref().cloned()?;
-        Some(ImeBackend::attach(&window, callback))
-    }
-
-    pub(crate) fn detach(&self, token: ClientToken) {
-        let window = self.active_window.lock().as_ref().cloned();
-        ImeBackend::detach(window.as_ref(), token);
-    }
-
-    /// Tell the platform IME where to draw its candidate window (ADR-0032).
-    /// Clones the active window's `Arc<dyn PlatformTextInput>` out from
-    /// under the lock before calling through — the same clone-then-call
-    /// discipline [`AppBinding::perform_haptic_feedback`] follows, so a slow
-    /// or reentrant backend call never holds `active_window` for anyone
-    /// else. Silent no-op with no active window, or a backend with no
-    /// `PlatformTextInput` capability.
-    pub(crate) fn set_cursor_area(&self, area: Bounds<Pixels>) {
-        let window = self.active_window.lock().as_ref().cloned();
-        if let Some(text_input) = window.and_then(|window| window.text_input()) {
-            text_input.set_ime_cursor_area(area);
-        }
-    }
-}
-
-/// A `'static`, `Arc`-cloneable handle onto exactly the state
-/// [`HotReloadBridge::apply`] needs — the shared pipeline owner and the
-/// `needs_redraw` flag — without borrowing `&AppBinding` itself.
-///
-/// [`UiRealm::bind_to_app`](super::ui_realm::UiRealm::bind_to_app) installs
-/// this (via [`AppBinding::hot_reload_bridge`]) so `UiRealm::drain_commands`'s
-/// `UiCommand::HotReload` arm applies against the app the realm was actually
-/// bound to. This is the same stale-binding class
-/// [`TextInputPlatformBridge`] exists to prevent for IME callbacks: hitting
-/// `AppBinding::instance()` directly from that arm would silently reassemble
-/// the process-wide singleton's tree instead of a standalone test instance's
-/// (`UiRealm::for_test`) — wrong under `for_test`, and a trap for a future
-/// multi-realm binding.
-#[derive(Clone)]
-pub(crate) struct HotReloadBridge {
-    pipeline: Arc<RwLock<flui_rendering::pipeline::PipelineOwner>>,
-    needs_redraw: Arc<AtomicBool>,
-}
-
-impl HotReloadBridge {
-    /// Reassembles the element and render trees and requests a redraw.
-    /// Mirrors [`AppBinding::perform_hot_reload_entered`] but through the
-    /// bound app's own handles rather than `&AppBinding`.
-    pub(crate) fn apply(
-        &self,
-        realm: &super::ui_realm::UiRealm,
-        tier: flui_hot_reload::HotReloadTier,
-    ) {
-        use flui_hot_reload::HotReloadTier;
-
-        match tier {
-            HotReloadTier::HotReload => {
-                realm.widgets().perform_reassemble();
-                self.pipeline.write().reassemble();
-                self.needs_redraw.store(true, Ordering::Relaxed);
-                tracing::info!("Hot reload applied — element and render trees reassembled");
-            }
-            HotReloadTier::HotRestart => {
-                tracing::warn!(
-                    "HotRestart requested — root remount not yet implemented; \
-                     falling back to reassemble (state may be stale)"
-                );
-                self.apply(realm, HotReloadTier::HotReload);
-            }
-            HotReloadTier::FullRestart => {
-                tracing::debug!("FullRestart is handled by the CLI process supervisor");
-            }
-        }
-    }
-}
-
 /// Outcome of one build+layout+paint pass, distinguishing "nothing was
 /// dirty" from "the pipeline failed" — both produce no layer tree, but only
 /// the latter must force a retry rather than being treated as a settled,
@@ -315,6 +186,27 @@ enum FramePaintOutcome {
     /// panicked and was caught by `catch_unwind`); the frame was dropped and
     /// must be retried.
     Errored,
+}
+
+fn preserve_first_input_panic(
+    first: &mut Option<Box<dyn Any + Send>>,
+    candidate: Option<Box<dyn Any + Send>>,
+    phase: &'static str,
+) {
+    let Some(candidate) = candidate else {
+        return;
+    };
+    if first.is_none() {
+        *first = Some(candidate);
+    } else {
+        tracing::error!(
+            phase,
+            "input phase panicked after an earlier phase; only the first panic is resumed"
+        );
+        // A panic payload may itself panic while being dropped. Leaking only
+        // the secondary exceptional payload keeps the original failure stable.
+        std::mem::forget(candidate);
+    }
 }
 
 impl AppBinding {
@@ -339,7 +231,7 @@ impl AppBinding {
             Arc::new(RwLock::new(flui_rendering::pipeline::PipelineOwner::new()));
 
         // Idle-wake wiring: a dirty mark (mark_needs_layout /
-        // add_node_needing_paint) fires this callback so a quiescent
+        // mark_needs_paint) fires this callback so a quiescent
         // event loop produces the frame — without it, work scheduled
         // while the app is idle (an async image decode, a timer-driven
         // setState) would sit in the dirty queues until some unrelated
@@ -369,7 +261,6 @@ impl AppBinding {
 
         Self {
             renderer: RwLock::new(renderer),
-            gestures: GestureBinding::new(),
             needs_redraw,
             initialized: AtomicBool::new(false),
             frames_rendered: AtomicU64::new(0),
@@ -379,6 +270,7 @@ impl AppBinding {
             platform_clipboard: Arc::new(Mutex::new(None)),
             vsync_slot: Mutex::new(Vsync::new()),
             start: web_time::Instant::now(),
+            _owner_affine: PhantomData,
             #[cfg(test)]
             now_secs_override: AtomicU64::new(0),
         }
@@ -387,8 +279,8 @@ impl AppBinding {
     /// Get the singleton instance.
     ///
     /// Creates the owner-thread instance on first call. The leaked allocation
-    /// preserves the historical `&'static Self` API while avoiding a
-    /// process-global `Sync` requirement for owner-local interaction state.
+    /// preserves the historical `&'static Self` API while the explicit
+    /// owner-affinity marker prevents the binding from crossing threads.
     pub fn instance() -> &'static Self {
         thread_local! {
             static INSTANCE: &'static AppBinding = {
@@ -542,6 +434,14 @@ impl AppBinding {
     /// must drive it. Nesting with the **same** registry (i.e. the binding's
     /// `vsync()`) is harmless.
     ///
+    /// # Gesture-arena auto-wrap
+    ///
+    /// The outer root wrapper is a [`GestureArenaScope`] carrying the entered
+    /// realm's binding-owned arena. Every `GestureDetector` in the tree therefore
+    /// joins the same per-pointer competition before the binding closes it after
+    /// Down dispatch. Gesture consumers reject a missing or self-driven scope;
+    /// no private fallback arena exists.
+    ///
     /// # Errors
     ///
     /// Forwards every [`AttachError`](flui_view::AttachError) the
@@ -577,11 +477,14 @@ impl AppBinding {
     where
         V: View + Clone + 'static,
     {
-        // Auto-wrap: inject a VsyncScope carrying the binding's registry so
-        // every implicitly-animated widget below can register its controller
-        // without any app-author boilerplate. VsyncScope is an InheritedView
-        // with no render object, so the render/hit-test root is unchanged.
-        let wrapped = VsyncScope::new(self.vsync(), view.clone());
+        // Install the realm's three exact owner-driven capabilities.
+        // GestureArenaScope is outermost so every descendant recognizer shares
+        // one binding-driven arena, VsyncScope carries the animation registry,
+        // and FocusRoot publishes the presentation's exact focus tree. These
+        // wrappers have no render object, so the render root is unchanged.
+        let focused = FocusRoot::new(view.clone());
+        let animated = VsyncScope::new(self.vsync(), focused);
+        let wrapped = GestureArenaScope::new(realm.gestures().arena().clone(), animated);
         let widgets = realm.widgets();
         widgets.attach_root_widget(&wrapped)?;
         self.initialized.store(true, Ordering::Relaxed);
@@ -598,8 +501,8 @@ impl AppBinding {
     /// window size instead of the 800×600 fallback. This is the runner's
     /// bootstrap entry point.
     ///
-    /// See [`attach_root_widget`](Self::attach_root_widget) for the
-    /// implicit-animation auto-wrap invariant.
+    /// See [`attach_root_widget`](Self::attach_root_widget) for the root
+    /// gesture-arena and implicit-animation auto-wrap invariants.
     ///
     /// # Errors
     ///
@@ -628,8 +531,11 @@ impl AppBinding {
     where
         V: View + Clone + 'static,
     {
-        // Auto-wrap: same VsyncScope injection as attach_root_widget.
-        let wrapped = VsyncScope::new(self.vsync(), view.clone());
+        // Same GestureArenaScope(VsyncScope(FocusRoot(view))) ownership stack
+        // as attach_root_widget.
+        let focused = FocusRoot::new(view.clone());
+        let animated = VsyncScope::new(self.vsync(), focused);
+        let wrapped = GestureArenaScope::new(realm.gestures().arena().clone(), animated);
         let widgets = realm.widgets();
         widgets.attach_root_widget_with_size(&wrapped, width, height)?;
         self.initialized.store(true, Ordering::Relaxed);
@@ -646,15 +552,14 @@ impl AppBinding {
     ///
     /// Apply reload while the realm owner is at an Idle commit point.
     ///
-    /// Delegates to [`HotReloadBridge::apply`] against THIS app's own
-    /// pipeline/redraw handles — the single implementation both this method
-    /// and `UiRealm::drain_commands`'s hot-reload arm share.
     pub(crate) fn perform_hot_reload_entered(
         &self,
         realm: &super::ui_realm::UiRealm,
         tier: flui_hot_reload::HotReloadTier,
     ) {
-        self.hot_reload_bridge().apply(realm, tier);
+        if realm.apply_hot_reload(tier) {
+            self.request_redraw();
+        }
     }
 
     // ========================================================================
@@ -682,15 +587,6 @@ impl AppBinding {
         &self,
     ) -> parking_lot::RwLockWriteGuard<'_, flui_rendering::pipeline::PipelineOwner> {
         self.shared_pipeline_owner.write()
-    }
-
-    // ========================================================================
-    // Gesture Binding Access
-    // ========================================================================
-
-    /// Get the gesture binding.
-    pub fn gestures(&self) -> &GestureBinding {
-        &self.gestures
     }
 
     // ========================================================================
@@ -812,16 +708,7 @@ impl AppBinding {
     /// Store the active platform window.
     ///
     /// Called by the runner after all callbacks have been registered.
-    pub fn set_window(&self, window: Box<dyn PlatformWindow>) {
-        self.set_shared_window(Arc::from(window));
-    }
-
-    /// Store an already shared platform window.
-    ///
-    /// The web runner clones this owner into asynchronous WebGPU
-    /// initialization so the native canvas handle outlives every surface
-    /// operation, including early-return paths during app startup.
-    pub(crate) fn set_shared_window(&self, window: Arc<dyn PlatformWindow>) {
+    pub fn set_window(&self, window: Arc<dyn PlatformWindow>) {
         *self.active_window.lock() = Some(window);
         tracing::debug!("Active window stored in AppBinding");
     }
@@ -832,74 +719,6 @@ impl AppBinding {
     /// Returns `None` if no window is set.
     pub fn with_window<R>(&self, f: impl FnOnce(&dyn PlatformWindow) -> R) -> Option<R> {
         self.active_window.lock().as_ref().map(|w| f(w.as_ref()))
-    }
-
-    // ========================================================================
-    // IME (text input)
-    // ========================================================================
-
-    /// Attach an IME client on the active window, via
-    /// [`TextInputRegistry::global`]. Enables platform IME composition
-    /// (`PlatformTextInput::set_ime_allowed(true)`) through the window's
-    /// `text_input()` capability, if the backend supports one.
-    ///
-    /// Returns `None` if there is no active window yet (the caller attached
-    /// before `set_window`/`set_shared_window` ran).
-    pub fn attach_text_input(&self, callback: ImeEventCallback) -> Option<ClientToken> {
-        self.text_input_platform_bridge().attach(callback)
-    }
-
-    /// Detach the IME client identified by `token`.
-    ///
-    /// The registry side always runs; the platform `set_ime_allowed(false)`
-    /// call additionally requires `token` to still be the registry's active
-    /// client (see [`TextInputRegistry::detach`]'s stale-token guard) — that
-    /// guard is what keeps a replaced field's dispose/blur handler from
-    /// disabling IME for the field that replaced it.
-    pub fn detach_text_input(&self, token: ClientToken) {
-        self.text_input_platform_bridge().detach(token);
-    }
-
-    /// Tell the platform IME where to draw its candidate window, in
-    /// window-root-space logical pixels (ADR-0032) — `flui-widgets`'
-    /// `EditableText` post-frame loop is the only production caller, via
-    /// the `TextInputHandle::set_cursor_area` capability
-    /// `UiRealm::bind_to_app` installs.
-    ///
-    /// Routes through `text_input_platform_bridge` rather than reading
-    /// `self.active_window` directly, for the same per-instance-targeting
-    /// reason [`attach_text_input`](Self::attach_text_input) does (see
-    /// `TextInputPlatformBridge`'s doc) — but follows
-    /// [`perform_haptic_feedback`](Self::perform_haptic_feedback)'s exact
-    /// clone-the-capability-out-of-the-lock-then-call-outside-it discipline
-    /// (see `TextInputPlatformBridge::set_cursor_area`). Silent no-op with
-    /// no active window yet, or a backend with no `PlatformTextInput`
-    /// capability.
-    pub fn set_ime_cursor_area(&self, area: Bounds<Pixels>) {
-        self.text_input_platform_bridge().set_cursor_area(area);
-    }
-
-    /// A `'static`, `Arc`-cloneable handle onto this specific binding's
-    /// active-window slot — see [`TextInputPlatformBridge`]'s doc for why
-    /// [`UiRealm::bind_to_app`](super::ui_realm::UiRealm::bind_to_app)
-    /// installs THIS instead of a closure that re-resolves
-    /// [`AppBinding::instance`].
-    pub(crate) fn text_input_platform_bridge(&self) -> TextInputPlatformBridge {
-        TextInputPlatformBridge {
-            active_window: Arc::clone(&self.active_window),
-        }
-    }
-
-    /// A cloneable capability onto this app's pipeline + redraw flag, for
-    /// [`UiRealm::bind_to_app`](super::ui_realm::UiRealm::bind_to_app) to
-    /// install so hot-reload commands drained later apply against THIS app,
-    /// not whichever `AppBinding::instance()` resolves to at drain time. See
-    /// [`HotReloadBridge`]'s doc for why that distinction matters.
-    pub(crate) fn hot_reload_bridge(&self) -> HotReloadBridge {
-        HotReloadBridge {
-            pipeline: Arc::clone(&self.shared_pipeline_owner),
-            needs_redraw: Arc::clone(&self.needs_redraw),
-        }
     }
 
     // ========================================================================
@@ -918,7 +737,7 @@ impl AppBinding {
     ///
     /// `perform` runs *after* `with_window`'s `active_window` guard is
     /// dropped — only the cheap `Arc` clone out of `haptics()` happens
-    /// under the lock, matching `TextInputPlatformBridge::attach`'s
+    /// under the lock, matching the presentation-owned text-input path's
     /// clone-then-release shape. A backend whose `perform` blocks or
     /// re-enters the binding must not stall every other window accessor
     /// for the duration of one haptic call.
@@ -961,8 +780,8 @@ impl AppBinding {
     /// Access the installed platform clipboard, if any.
     ///
     /// Clones the `Arc` out of `platform_clipboard`'s lock and drops the
-    /// guard before returning — the same clone-then-call discipline
-    /// `TextInputPlatformBridge` and
+    /// guard before returning — the same clone-then-call discipline the
+    /// presentation-owned text-input capability and
     /// [`perform_haptic_feedback`](Self::perform_haptic_feedback) follow —
     /// so a caller's `read_text`/`write_text` call, even one that re-enters
     /// `AppBinding::clipboard()`, never finds the lock still held.
@@ -984,14 +803,11 @@ impl AppBinding {
     /// Test-only: a clone of the exact `Arc<Mutex<...>>` slot [`clipboard`]
     /// reads from.
     ///
-    /// `AppBinding` itself is neither `Send` nor `Sync` (it embeds
-    /// `GestureBinding`'s arena, which holds `Arc<dyn GestureArenaMember>`),
-    /// so a fake [`Clipboard`] impl — which must be `Send + Sync` per the
-    /// trait bound — cannot hold a reference back to the binding to prove
-    /// [`clipboard`](Self::clipboard)'s reentrant-call safety. The slot
-    /// itself has no such restriction, so a test's fake clipboard can
-    /// reproduce `clipboard`'s exact lock-then-clone-then-drop sequence
-    /// directly against it instead.
+    /// A fake [`Clipboard`] stored in this slot must be `'static + Send + Sync`,
+    /// so it cannot safely borrow the owner binding back through the slot it
+    /// occupies. Cloning the slot lets the test reproduce
+    /// [`clipboard`](Self::clipboard)'s exact lock-then-clone-then-drop
+    /// sequence without a self-reference.
     #[cfg(test)]
     pub(crate) fn platform_clipboard_slot(&self) -> Arc<Mutex<Option<Arc<dyn Clipboard>>>> {
         Arc::clone(&self.platform_clipboard)
@@ -1313,16 +1129,21 @@ impl AppBinding {
         realm: &super::ui_realm::UiRealm,
         renderer: &mut R,
     ) -> bool {
-        // 1. Flush coalesced pointer moves (GestureBinding handles coalescing)
-        self.gestures.flush_pending_moves();
+        // 1. Settle any lone arena member queued by an earlier event whose
+        //    owner boundary could not finish (for example, after a panic).
+        realm.gestures().drain_deferred_arena_resolutions();
 
-        // 1b. Advance recognizer deadlines so a held-still pointer past its
+        // 2. Flush coalesced pointer moves on the same realm-owned binding
+        //    that accepted this presentation's platform input.
+        realm.gestures().flush_pending_moves();
+
+        // 3. Advance recognizer deadlines so a held-still pointer past its
         //     timeout (e.g. long press) fires without a further input event.
-        self.gestures.tick_deadlines();
+        realm.gestures().tick_deadlines();
 
-        // 2. Draw frame (build + layout + paint → Scene). The surface
+        // 4. Draw frame (build + layout + paint → Scene). The surface
         // reports PHYSICAL pixels; the framework lays out in LOGICAL
-        // pixels — the paint root's DPR transform bridges back. A
+        // pixels — the paint root's DPR transform maps them back. A
         // physical-sized layout at DPR 2 would paint everything double
         // size (the "red box covers a quarter of the window" bug).
         let (width, height) = renderer.size();
@@ -1331,7 +1152,20 @@ impl AppBinding {
             BoxConstraints::tight(Size::new(px(width as f32 / dpr), px(height as f32 / dpr)));
         let outcome = self.draw_frame_entered(realm, constraints);
 
-        // 3. Render scene to GPU — gated by the first-frame deferral
+        // 5. Re-hit-test stationary pointing devices against the freshly
+        // laid-out tree. This emits structural enter/exit/cursor transitions
+        // only; hover requires an actual pointer move.
+        realm
+            .gestures()
+            .mouse_tracker()
+            .update_all_devices(|position| {
+                let renderer_binding = self.renderer.read();
+                let mut result = flui_interaction::routing::HitTestResult::new();
+                renderer_binding.hit_test_in_view(&mut result, position, 0);
+                result
+            });
+
+        // 6. Render scene to GPU — gated by the first-frame deferral
         // counter (oracle `RendererBinding.drawFrame`, tag `3.44.0`; full
         // citation in `crates/flui-app/src/bindings/renderer_binding.rs`
         // above `defer_first_frame`). Build/layout/paint above (step 2)
@@ -1446,7 +1280,7 @@ impl AppBinding {
             }
         }
 
-        // 4. Mark rendered — unless this frame was dropped rather than
+        // 7. Mark rendered — unless this frame was dropped rather than
         // settled, in which case `wake_frame()` re-arms `needs_redraw` AND
         // schedules an actual platform wake (see `retry_needed` above).
         if retry_needed {
@@ -1460,51 +1294,75 @@ impl AppBinding {
 
     /// Check if there is pending work.
     pub(crate) fn has_pending_work(&self, realm: &super::ui_realm::UiRealm) -> bool {
-        realm.widgets().has_pending_builds() || self.shared_pipeline_owner.read().has_dirty_nodes()
+        realm.widgets().has_pending_builds()
+            || realm.gestures().has_pending_motion()
+            || self.shared_pipeline_owner.read().has_dirty_nodes()
     }
 
     // ========================================================================
     // Input Handling
     // ========================================================================
 
-    /// Handle a platform input event.
+    /// Handle a platform input event while `realm` is already entered.
     ///
-    /// This is the single entry point for all input from the platform layer.
-    /// Routes pointer events to `GestureBinding`, keyboard events to
-    /// `FocusManager`, and IME composition/commit events to
-    /// `TextInputRegistry`.
+    /// This is the single runner entry point for platform input. Pointer
+    /// events go to the entered realm's gesture state; IME and keyboard events
+    /// go to the same presentation's text-input and focus owners.
     ///
-    /// Pointer events are coalesced by `GestureBinding` — high-frequency move
-    /// events are stored and flushed once per frame via
-    /// `flush_pending_moves()` in `render_frame()`.
-    pub fn handle_input(&self, input: PlatformInput) {
+    /// Pointer events are coalesced by the realm-owned `GestureBinding` —
+    /// high-frequency move events are stored and flushed from the same realm
+    /// once per frame via [`Self::render_frame_entered`].
+    pub(crate) fn handle_input_entered(
+        &self,
+        realm: &super::ui_realm::UiRealm,
+        input: PlatformInput,
+    ) {
         match input {
             PlatformInput::Ime(ime_event) => {
-                TextInputRegistry::global().dispatch(&ime_event);
+                realm.text_input().dispatch(&ime_event);
                 self.request_redraw();
             }
             PlatformInput::Pointer(pointer_event) => {
-                self.gestures
-                    .handle_pointer_event(&pointer_event, |position| {
-                        // A single canonical `HitTestResult` flows through both
-                        // rendering traversal and gesture dispatch: the
-                        // rendering crate re-exports
-                        // `flui_interaction::routing::HitTestResult`, so the
-                        // same instance crosses both layers without conversion
-                        // (no per-hit bridge that could silently drop targets).
-                        let renderer = self.renderer.read();
-                        let mut result = flui_interaction::routing::HitTestResult::new();
-                        let offset = flui_types::Offset::new(position.dx, position.dy);
-                        renderer.hit_test_in_view(&mut result, offset, 0);
-                        if !result.is_empty() {
-                            tracing::debug!(hits = result.len(), "Hit test found targets");
-                        }
-                        result
-                    });
+                let routing_panic = catch_unwind(AssertUnwindSafe(|| {
+                    realm
+                        .gestures()
+                        .handle_pointer_event(&pointer_event, |position| {
+                            // A single canonical `HitTestResult` flows through both
+                            // rendering traversal and gesture dispatch: the
+                            // rendering crate re-exports
+                            // `flui_interaction::routing::HitTestResult`, so the
+                            // same instance crosses both layers without conversion
+                            // (no per-hit indirection that could silently drop targets).
+                            let renderer = self.renderer.read();
+                            let mut result = flui_interaction::routing::HitTestResult::new();
+                            let offset = flui_types::Offset::new(position.dx, position.dy);
+                            renderer.hit_test_in_view(&mut result, offset, 0);
+                            if !result.is_empty() {
+                                tracing::debug!(hits = result.len(), "Hit test found targets");
+                            }
+                            result
+                        });
+                }))
+                .err();
+                let deferred_panic = catch_unwind(AssertUnwindSafe(|| {
+                    realm.gestures().drain_deferred_arena_resolutions();
+                }))
+                .err();
+
+                let mut first_panic = None;
+                preserve_first_input_panic(&mut first_panic, routing_panic, "pointer routing");
+                preserve_first_input_panic(
+                    &mut first_panic,
+                    deferred_panic,
+                    "deferred arena resolution",
+                );
                 self.request_redraw();
+                if let Some(payload) = first_panic {
+                    resume_unwind(payload);
+                }
             }
             PlatformInput::Keyboard(keyboard_event) => {
-                FocusManager::global().dispatch_key_event(&keyboard_event);
+                realm.focus_manager().dispatch_key_event(&keyboard_event);
                 self.request_redraw();
             }
         }
@@ -1557,6 +1415,8 @@ mod tests {
     // lives on the `BuildContextExt` extension trait.
     use flui_view::BuildContextExt as _;
 
+    static_assertions::assert_not_impl_any!(AppBinding: Send, Sync);
+
     #[test]
     fn test_singleton() {
         let binding1 = AppBinding::instance();
@@ -1602,7 +1462,6 @@ mod tests {
             handle
                 .request_mark_dirty(
                     flui_foundation::RenderId::new(1),
-                    0,
                     flui_rendering::pipeline::DirtyKind::Paint,
                 )
                 .expect("dirty request should enqueue");
@@ -1878,6 +1737,12 @@ mod tests {
             fn is_visible(&self) -> bool {
                 true
             }
+            fn set_cursor(
+                &self,
+                _cursor: flui_platform::CursorIcon,
+            ) -> Result<(), flui_platform::CursorError> {
+                Ok(())
+            }
             // Trait default impls cover the remaining callback-registration
             // methods; only the required methods above need bodies.
             fn as_any(&self) -> &dyn std::any::Any {
@@ -1892,7 +1757,7 @@ mod tests {
 
         let binding = AppBinding::new();
         binding.mark_rendered();
-        binding.set_window(Box::new(window));
+        binding.set_window(Arc::new(window));
 
         binding.wake_frame();
 
@@ -1905,49 +1770,169 @@ mod tests {
     }
 
     #[test]
-    fn input_dispatches_through_the_exposed_gesture_binding() {
-        use std::sync::atomic::{AtomicBool, Ordering};
-
+    fn realm_input_dispatch_keeps_gesture_state_isolated() {
         use flui_interaction::PointerId;
-        use flui_interaction::events::{PointerType, make_down_event_for_id};
-        use flui_interaction::routing::{HitTestResult, PointerRouteHandler};
+        use flui_interaction::events::{PointerType, make_down_event_for_id, make_up_event_for_id};
+        use flui_interaction::routing::PointerRouteHandler;
         use flui_types::geometry::{Offset, Pixels};
 
-        // A handler registered on the gesture binding the public accessor
-        // exposes must observe an event dispatched through that same binding —
-        // proving registration and dispatch share ONE authoritative gesture
-        // binding / arena, with no separate global instance to diverge.
-        let app = AppBinding::instance();
-
-        // A test-local pointer id keeps this isolated from other tests that
-        // share the `AppBinding` singleton (its arena / router / hit-test maps),
-        // and a per-pointer route is scoped to that id (unlike a global handler).
+        let app = AppBinding::new();
+        let realm_a = test_realm(&app);
+        let realm_b = test_realm(&app);
         let pointer = PointerId::new(9001).expect("nonzero pointer id");
+        let position = Offset::new(Pixels(10.0), Pixels(10.0));
 
-        let fired = Arc::new(AtomicBool::new(false));
-        let f = fired.clone();
-        let handler: PointerRouteHandler = Rc::new(move |_| f.store(true, Ordering::Relaxed));
-        app.gestures().pointer_router().add_route(pointer, handler);
+        let fired = Rc::new(Cell::new(0));
+        let fired_by_route = Rc::clone(&fired);
+        let handler: PointerRouteHandler = Rc::new(move |_| {
+            fired_by_route.set(fired_by_route.get() + 1);
+        });
+        realm_a
+            .gestures()
+            .pointer_router()
+            .add_route(pointer, handler);
 
-        // Dispatch straight through the accessor-exposed binding via the
-        // explicit-result path, which bypasses hit testing (no renderer lock,
-        // no simultaneous-pointer cap that other tests could exhaust).
-        let event = make_down_event_for_id(
+        let down_b = make_down_event_for_id(pointer, position, PointerType::Touch);
+        realm_b.enter(|realm| {
+            app.handle_input_entered(realm, PlatformInput::Pointer(down_b));
+        });
+
+        assert_eq!(
+            fired.get(),
+            0,
+            "a route registered in realm A must not observe realm B input"
+        );
+        assert_eq!(realm_a.gestures().active_pointer_count(), 0);
+        assert_eq!(realm_b.gestures().active_pointer_count(), 1);
+
+        let down_a = make_down_event_for_id(pointer, position, PointerType::Touch);
+        realm_a.enter(|realm| {
+            app.handle_input_entered(realm, PlatformInput::Pointer(down_a));
+        });
+
+        assert_eq!(
+            fired.get(),
+            1,
+            "realm A must dispatch through its own router"
+        );
+        assert_eq!(realm_a.gestures().active_pointer_count(), 1);
+        assert_eq!(realm_b.gestures().active_pointer_count(), 1);
+
+        let up_b = make_up_event_for_id(pointer, position, PointerType::Touch);
+        realm_b.enter(|realm| {
+            app.handle_input_entered(realm, PlatformInput::Pointer(up_b));
+        });
+        let up_a = make_up_event_for_id(pointer, position, PointerType::Touch);
+        realm_a.enter(|realm| {
+            app.handle_input_entered(realm, PlatformInput::Pointer(up_a));
+        });
+
+        realm_a
+            .gestures()
+            .pointer_router()
+            .remove_all_routes(pointer);
+        assert_eq!(realm_a.gestures().active_pointer_count(), 0);
+        assert_eq!(realm_b.gestures().active_pointer_count(), 0);
+    }
+
+    struct CountingArenaAcceptance(Arc<AtomicU64>);
+
+    impl flui_interaction::sealed::CustomGestureRecognizer for CountingArenaAcceptance {
+        fn on_arena_accept(&self, _pointer: flui_interaction::PointerId) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+
+        fn on_arena_reject(&self, _pointer: flui_interaction::PointerId) {}
+    }
+
+    #[test]
+    fn pointer_input_boundary_drains_a_lone_deferred_winner() {
+        use flui_interaction::events::{PointerType, make_down_event_for_id};
+        use flui_interaction::routing::PointerRouteHandler;
+        use flui_types::geometry::{Offset, Pixels};
+
+        let app = AppBinding::new();
+        let realm = test_realm(&app);
+        let pointer = flui_interaction::PointerId::new(9002).expect("nonzero pointer id");
+        let accepted = Arc::new(AtomicU64::new(0));
+        let arena = realm.gestures().arena().clone();
+        let accepted_by_member = Arc::clone(&accepted);
+        let handler: PointerRouteHandler = Rc::new(move |event| {
+            if matches!(event, flui_interaction::PointerEvent::Down(_)) {
+                arena.add(
+                    pointer,
+                    Arc::new(CountingArenaAcceptance(Arc::clone(&accepted_by_member))),
+                );
+            }
+        });
+        realm
+            .gestures()
+            .pointer_router()
+            .add_route(pointer, Rc::clone(&handler));
+
+        let down = make_down_event_for_id(
             pointer,
             Offset::new(Pixels(10.0), Pixels(10.0)),
             PointerType::Touch,
         );
-        app.gestures()
-            .handle_pointer_event_with_result(&event, &HitTestResult::new());
+        realm.enter(|realm| {
+            app.handle_input_entered(realm, PlatformInput::Pointer(down));
+        });
 
-        assert!(
-            fired.load(Ordering::Relaxed),
-            "the binding AppBinding::gestures() exposes must dispatch the event it is handed"
+        assert_eq!(accepted.load(Ordering::SeqCst), 1);
+        assert!(realm.gestures().arena().is_empty());
+        realm
+            .gestures()
+            .pointer_router()
+            .remove_route(pointer, &handler);
+    }
+
+    #[test]
+    fn root_gesture_scope_arbitrates_overlapping_detectors_once() {
+        use flui_interaction::arena::SweepModel;
+        use flui_interaction::events::{PointerType, make_down_event, make_up_event};
+        use flui_types::geometry::{Offset, Pixels};
+        use flui_widgets::{GestureDetector, HitTestBehavior, SizedBox};
+
+        let app = AppBinding::new();
+        let realm = test_realm(&app);
+        let outer_taps = Rc::new(Cell::new(0));
+        let inner_taps = Rc::new(Cell::new(0));
+
+        let inner_count = Rc::clone(&inner_taps);
+        let inner = GestureDetector::new()
+            .on_tap(move || inner_count.set(inner_count.get() + 1))
+            .behavior(HitTestBehavior::Opaque)
+            .child(SizedBox::new(100.0, 100.0));
+        let outer_count = Rc::clone(&outer_taps);
+        let root = GestureDetector::new()
+            .on_tap(move || outer_count.set(outer_count.get() + 1))
+            .behavior(HitTestBehavior::Opaque)
+            .child(inner);
+
+        app.attach_root_widget(&realm, &root)
+            .expect("a fresh binding must attach the detector tree");
+        let _ = app.draw_frame(&realm, test_constraints());
+
+        let position = Offset::new(Pixels(10.0), Pixels(10.0));
+        let down = make_down_event(position, PointerType::Touch);
+        let up = make_up_event(position, PointerType::Touch);
+        realm.enter(|realm| {
+            app.handle_input_entered(realm, PlatformInput::Pointer(down));
+            app.handle_input_entered(realm, PlatformInput::Pointer(up));
+        });
+
+        assert_eq!(
+            outer_taps.get() + inner_taps.get(),
+            1,
+            "overlapping detectors must compete in one arena; private arenas let both taps fire"
         );
-
-        // Shared process singleton — clean up this pointer's route + arena entry.
-        app.gestures().pointer_router().remove_all_routes(pointer);
-        app.gestures().sweep_arena(pointer);
+        assert_eq!(
+            realm.gestures().arena().sweep_model(),
+            SweepModel::BindingDriven,
+            "the root scope must expose the production binding-owned arena"
+        );
+        assert_eq!(realm.gestures().active_pointer_count(), 0);
     }
 
     // ========================================================================
@@ -2473,6 +2458,66 @@ mod tests {
             "after clearing dirty nodes has_pending_work() must be false so a \
              settled lazy-list app does not loop forever",
         );
+    }
+
+    #[test]
+    fn resampled_contact_motion_keeps_the_frame_wake_gate_open() {
+        use std::time::Duration;
+
+        use flui_interaction::{
+            events::{PointerType, make_down_event, make_move_event, make_up_event},
+            processing::SamplingClock,
+            routing::HitTestResult,
+        };
+        use flui_types::geometry::{Offset, Pixels};
+
+        let binding = AppBinding::new();
+        let realm = test_realm(&binding);
+        binding.mark_rendered();
+        binding
+            .shared_pipeline_owner
+            .write()
+            .clear_all_dirty_nodes();
+
+        realm.enter(|realm| {
+            realm
+                .gestures()
+                .set_resampling_enabled(true)
+                .expect("test configures sampling before Down");
+            realm.gestures().set_sampling_clock(SamplingClock::Manual {
+                period: Duration::from_millis(8),
+            });
+
+            let position = Offset::new(Pixels(8.0), Pixels(13.0));
+            realm
+                .gestures()
+                .handle_pointer_event(&make_down_event(position, PointerType::Touch), |_| {
+                    HitTestResult::new()
+                });
+            realm
+                .gestures()
+                .handle_pointer_event(&make_move_event(position, PointerType::Touch), |_| {
+                    HitTestResult::new()
+                });
+
+            assert_eq!(
+                realm.gestures().flush_pending_moves(),
+                0,
+                "manual sampling has no implicit frame timestamp"
+            );
+            assert!(realm.gestures().has_pending_motion());
+            assert!(
+                binding.has_pending_work(realm),
+                "a sequence-owned sample waiting for frame time must keep the runner awake"
+            );
+
+            realm
+                .gestures()
+                .handle_pointer_event(&make_up_event(position, PointerType::Touch), |_| {
+                    HitTestResult::new()
+                });
+            assert!(!realm.gestures().has_pending_motion());
+        });
     }
 
     // ========================================================================
@@ -3440,76 +3485,47 @@ mod tests {
         }
     }
 
-    /// `AppBinding::attach_text_input`/`detach_text_input` (the `ImeBackend`
-    /// bridge) end-to-end against a headless window backed by
-    /// `flui_platform::FakeTextInput`, plus `handle_input`'s
-    /// `PlatformInput::Ime` → `TextInputRegistry` dispatch.
-    mod ime_binding_bridge {
+    /// Presentation-owned text input end-to-end against a headless
+    /// `FakeTextInput`, including realm-routed IME dispatch.
+    mod presentation_text_input {
         use std::cell::RefCell;
 
         use flui_types::ImeEvent;
+        use flui_types::geometry::Bounds;
 
         use super::*;
+        use crate::app::ui_realm::UiRealm;
 
-        /// `TextInputRegistry::global()` is a thread-local singleton
-        /// (matching `FocusManager`'s shape). Rust's default test harness
-        /// reuses worker threads across tests, so two of these tests could
-        /// otherwise observe each other's leftover attach/detach state on a
-        /// shared thread — the same class of hazard `SEMANTICS_TEST_LOCK`
-        /// guards against in `renderer_binding.rs` (AGENTS.md, "Testing
-        /// quirks"). Held for each test's duration.
-        static TEXT_INPUT_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-        /// A headless window plus a live handle to the same
-        /// `FakeTextInput` its `PlatformWindow::text_input()` returns, so a
-        /// test can drive the binding and assert exactly what the platform
-        /// side recorded.
-        fn headless_window_with_ime() -> (
-            Box<dyn PlatformWindow>,
+        /// A concrete headless recorder and the same value viewed through the
+        /// platform capability supplied to the presentation.
+        fn headless_text_input() -> (
+            Arc<flui_platform::FakeTextInput>,
             Arc<dyn flui_platform::traits::PlatformTextInput>,
         ) {
-            let platform = flui_platform::headless_platform();
-            let window = platform
-                .open_window(flui_platform::traits::WindowOptions::default())
-                .expect("headless platform always opens a window");
-            let text_input = window
-                .text_input()
-                .expect("headless backend supports PlatformTextInput");
-            (window, text_input)
-        }
-
-        fn fake_text_input(
-            text_input: &Arc<dyn flui_platform::traits::PlatformTextInput>,
-        ) -> &flui_platform::FakeTextInput {
-            text_input
-                .as_any()
-                .downcast_ref::<flui_platform::FakeTextInput>()
-                .expect("the headless backend's PlatformTextInput is a FakeTextInput")
+            let fake = Arc::new(flui_platform::FakeTextInput::new());
+            let capability: Arc<dyn flui_platform::traits::PlatformTextInput> = fake.clone();
+            (fake, capability)
         }
 
         /// Attach records `set_ime_allowed(true)`; preedit/commit events
-        /// routed through `handle_input` reach the attached client with the
+        /// routed through `handle_input_entered` reach the attached client with the
         /// exact delivered strings; detach from the still-active token
         /// records `set_ime_allowed(false)`.
         #[test]
         fn attach_dispatch_and_active_detach_round_trip_through_the_platform() {
-            let _guard = TEXT_INPUT_TEST_LOCK
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-
-            let (window, text_input) = headless_window_with_ime();
-            let fake = fake_text_input(&text_input);
+            let (fake, text_input) = headless_text_input();
 
             let binding = AppBinding::new();
-            binding.set_window(window);
+            let realm = UiRealm::for_test_with_text_input(&binding, Some(Arc::clone(&text_input)));
+            let handle = realm.text_input_handle();
 
             let received = Rc::new(RefCell::new(Vec::new()));
             let sink = Rc::clone(&received);
-            let token = binding
-                .attach_text_input(Rc::new(move |event: &ImeEvent| {
+            let token = handle
+                .attach(Rc::new(move |event: &ImeEvent| {
                     sink.borrow_mut().push(event.clone());
                 }))
-                .expect("attach_text_input must succeed once a window is set");
+                .expect("headless presentation supports text input");
 
             assert_eq!(
                 fake.last_ime_allowed(),
@@ -3517,11 +3533,19 @@ mod tests {
                 "attach must enable platform IME composition"
             );
 
-            binding.handle_input(PlatformInput::Ime(ImeEvent::Preedit {
-                text: "ni".to_string(),
-                cursor: Some((0, 2)),
-            }));
-            binding.handle_input(PlatformInput::Ime(ImeEvent::Commit("你好".to_string())));
+            realm.enter(|realm| {
+                binding.handle_input_entered(
+                    realm,
+                    PlatformInput::Ime(ImeEvent::Preedit {
+                        text: "ni".to_string(),
+                        cursor: Some((0, 2)),
+                    }),
+                );
+                binding.handle_input_entered(
+                    realm,
+                    PlatformInput::Ime(ImeEvent::Commit("你好".to_string())),
+                );
+            });
 
             assert_eq!(
                 received.borrow().as_slice(),
@@ -3532,10 +3556,13 @@ mod tests {
                     },
                     ImeEvent::Commit("你好".to_string()),
                 ],
-                "handle_input must deliver the exact ImeEvent payload to the attached client"
+                "handle_input_entered must deliver the exact ImeEvent payload to the attached client"
             );
 
-            binding.detach_text_input(token);
+            assert_eq!(
+                handle.detach(token).expect("presentation remains open"),
+                flui_interaction::DetachOutcome::Detached
+            );
             assert_eq!(
                 fake.last_ime_allowed(),
                 Some(false),
@@ -3543,105 +3570,90 @@ mod tests {
             );
         }
 
-        /// The stale-detach race named in `TextInputRegistry`'s module doc:
+        /// The stale-detach race named in `TextInputOwner`'s module doc:
         /// field A attaches, field B attaches (replacing A), and A's
         /// now-stale detach must record NOTHING on the platform side —
         /// only B's later, active-token detach may disable IME.
         #[test]
         fn a_stale_detach_records_nothing_on_the_platform() {
-            let _guard = TEXT_INPUT_TEST_LOCK
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-
-            let (window, text_input) = headless_window_with_ime();
-            let fake = fake_text_input(&text_input);
+            let (fake, text_input) = headless_text_input();
 
             let binding = AppBinding::new();
-            binding.set_window(window);
+            let realm = UiRealm::for_test_with_text_input(&binding, Some(Arc::clone(&text_input)));
+            let handle = realm.text_input_handle();
 
-            let token_a = binding
-                .attach_text_input(Rc::new(|_event: &ImeEvent| {}))
-                .expect("attach_text_input must succeed once a window is set");
+            let token_a = handle
+                .attach(Rc::new(|_event: &ImeEvent| {}))
+                .expect("supported presentation");
             assert_eq!(fake.ime_allowed_calls(), vec![true]);
 
-            let token_b = binding
-                .attach_text_input(Rc::new(|_event: &ImeEvent| {}))
-                .expect("attach_text_input must succeed once a window is set");
+            let token_b = handle
+                .attach(Rc::new(|_event: &ImeEvent| {}))
+                .expect("supported presentation");
             assert_eq!(
                 fake.ime_allowed_calls(),
-                vec![true, true],
-                "attach-replaces still enables IME for the new client"
+                vec![true],
+                "replacement on one presentation keeps the already-enabled IME session"
             );
 
-            binding.detach_text_input(token_a);
+            assert_eq!(
+                handle.detach(token_a).expect("presentation remains open"),
+                flui_interaction::DetachOutcome::Stale
+            );
             assert_eq!(
                 fake.ime_allowed_calls(),
-                vec![true, true],
+                vec![true],
                 "a stale detach (token_a, already replaced by token_b) records nothing"
             );
 
-            binding.detach_text_input(token_b);
+            assert_eq!(
+                handle.detach(token_b).expect("presentation remains open"),
+                flui_interaction::DetachOutcome::Detached
+            );
             assert_eq!(
                 fake.ime_allowed_calls(),
-                vec![true, true, false],
+                vec![true, false],
                 "the active token's detach still disables IME"
             );
         }
 
         /// End-to-end proof of the literal ADR-0030 claim `flui-widgets`'
-        /// own `editable_text::tests` cannot make on their own (they wire
-        /// `TextInputHandle` straight to `TextInputRegistry::global()`, with
-        /// no `flui-app`/`PlatformWindow` involved — see that module's
-        /// doc): a real, mounted `flui_widgets::EditableText`, focused
-        /// through the same `FocusManager` singleton production keyboard
-        /// routing uses, attaches through `AppBinding::attach_text_input`
-        /// (via the `BuildContext::text_input_handle` capability
-        /// `UiRealm::bind_to_app` installs) and actually toggles the
-        /// platform's `set_ime_allowed` on the `FakeTextInput` — not merely
-        /// the registry.
-        ///
-        /// Red-check: skip `UiRealm::bind_to_app`'s `set_text_input_handle`
-        /// call — `EditableText::init_state`'s `ctx.text_input_handle()`
-        /// then returns `None`, no attach happens, and this test's first
-        /// assertion fails (`fake.last_ime_allowed()` stays `None`).
+        /// own `editable_text::tests` cannot make on their own: a real mounted
+        /// `EditableText` receives the weak handle of this presentation's
+        /// directly owned platform capability.
         #[test]
         fn a_mounted_editable_text_toggles_platform_ime_on_focus_and_blur() {
-            let _guard = TEXT_INPUT_TEST_LOCK
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            FocusManager::global().unfocus();
-
-            let (window, text_input) = headless_window_with_ime();
-            let fake = fake_text_input(&text_input);
+            let (fake, text_input) = headless_text_input();
 
             let binding = AppBinding::new();
-            binding.set_window(window);
-            let realm = test_realm(&binding);
+            let realm = UiRealm::for_test_with_text_input(&binding, Some(Arc::clone(&text_input)));
 
             let controller = flui_widgets::TextEditingController::new();
+            let focus_node = flui_interaction::FocusNode::with_debug_label("app-ime-integration");
             realm
                 .enter(|realm| {
                     binding.attach_root_widget(
                         realm,
-                        &flui_widgets::EditableText::new(controller.clone()),
+                        &flui_widgets::EditableText::new(
+                            controller.clone(),
+                            Rc::clone(&focus_node),
+                        ),
                     )
                 })
                 .expect("attach succeeds");
             let _ = binding.draw_frame(&realm, test_constraints());
 
-            let node_id = controller
-                .focus_node_id()
-                .expect("a mounted, enabled EditableText publishes its focus node");
-
-            FocusManager::global().request_focus(node_id);
+            assert!(focus_node.is_attached());
+            focus_node.request_focus();
+            assert!(focus_node.has_primary_focus());
             assert_eq!(
                 fake.last_ime_allowed(),
                 Some(true),
-                "focusing a mounted EditableText must attach through AppBinding \
+                "focusing a mounted EditableText must attach through its presentation \
                  and enable platform IME composition"
             );
 
-            FocusManager::global().unfocus();
+            focus_node.unfocus();
             assert_eq!(
                 fake.last_ime_allowed(),
                 Some(false),
@@ -3649,19 +3661,11 @@ mod tests {
             );
         }
 
-        /// `AppBinding::set_ime_cursor_area` (ADR-0032) reaches the active
-        /// window's `PlatformTextInput` capability — the real-path proof
-        /// `flui-widgets`' own IME cursor-area tests cannot make on their
-        /// own (their harness wires `TextInputHandle` straight to an
-        /// in-crate recorder, with no `flui-app`/`PlatformWindow` involved;
-        /// see `test_harness`'s `mount_with_ime` doc). This exercises
-        /// exactly the plumbing `UiRealm::bind_to_app`'s installed third
-        /// closure calls through: `AppBinding::set_ime_cursor_area` ->
-        /// `TextInputPlatformBridge::set_cursor_area` ->
-        /// `PlatformTextInput::set_ime_cursor_area`.
-        ///
+        /// `TextInputHandle::set_cursor_area` reaches this presentation's
+        /// exact `PlatformTextInput` capability through the same
+        /// `PresentationState` ownership path used in production.
         /// Deliberately does not mount a widget tree: this test proves the
-        /// bridge FORWARDS an already-computed `Bounds` to the platform, not
+        /// owner forwards an already-computed `Bounds` to the platform, not
         /// that a real `EditableText` computes the right one — that's the
         /// widget-level geometry/dedupe/lifecycle coverage
         /// (`flui-widgets`' `editable_text` module carries it). A bare
@@ -3673,42 +3677,42 @@ mod tests {
         /// above — so mounting one here would work; it is simply
         /// unnecessary for what this test asserts.)
         ///
-        /// Red-check: turning `AppBinding::set_ime_cursor_area` into a
-        /// no-op (dropping the `text_input_platform_bridge().
-        /// set_cursor_area` call) makes `fake.cursor_area_calls()` stay
-        /// empty.
         #[test]
-        fn set_ime_cursor_area_reaches_the_active_windows_platform_capability() {
-            let (window, text_input) = headless_window_with_ime();
-            let fake = fake_text_input(&text_input);
+        fn set_ime_cursor_area_reaches_the_presentations_platform_capability() {
+            let (fake, text_input) = headless_text_input();
 
             let binding = AppBinding::new();
-            binding.set_window(window);
+            let realm = UiRealm::for_test_with_text_input(&binding, Some(Arc::clone(&text_input)));
 
             let area = Bounds::new(
                 flui_types::Point::new(px(10.0), px(20.0)),
                 Size::new(px(2.0), px(18.0)),
             );
-            binding.set_ime_cursor_area(area);
+            realm
+                .text_input_handle()
+                .set_cursor_area(area)
+                .expect("headless presentation supports text input");
 
             assert_eq!(
                 fake.cursor_area_calls(),
                 vec![area],
-                "set_ime_cursor_area must call through to the active window's \
-                 PlatformTextInput::set_ime_cursor_area with the exact area"
+                "set_ime_cursor_area must call through to the presentation-owned \
+                 PlatformTextInput capability with the exact area"
             );
         }
 
-        /// No active window yet (the loop's first tick fires before
-        /// `set_window` ran) is a silent no-op — the same degradation
-        /// contract `perform_haptic_feedback` documents, not a panic.
+        /// A presentation without IME support reports a typed error.
         #[test]
-        fn set_ime_cursor_area_with_no_active_window_is_a_silent_no_op() {
+        fn set_ime_cursor_area_without_platform_support_is_typed() {
             let binding = AppBinding::new();
-            binding.set_ime_cursor_area(Bounds::new(
-                flui_types::Point::new(px(0.0), px(0.0)),
-                Size::new(px(1.0), px(1.0)),
-            ));
+            let realm = test_realm(&binding);
+            assert_eq!(
+                realm.text_input_handle().set_cursor_area(Bounds::new(
+                    flui_types::Point::new(px(0.0), px(0.0)),
+                    Size::new(px(1.0), px(1.0)),
+                )),
+                Err(flui_interaction::TextInputError::Unsupported)
+            );
         }
     }
 
@@ -3716,14 +3720,14 @@ mod tests {
     /// window backed by `flui_platform::FakeHaptics`, plus the two silent
     /// no-op degradation cases (no active window; a window with no
     /// `PlatformHaptics` capability).
-    mod haptics_binding_bridge {
+    mod haptics_capability {
         use super::*;
 
         /// A headless window plus a live handle to the same `FakeHaptics`
         /// its `PlatformWindow::haptics()` returns, so a test can drive
         /// the binding and assert exactly what the platform side recorded.
         fn headless_window_with_haptics() -> (
-            Box<dyn PlatformWindow>,
+            Arc<dyn PlatformWindow>,
             Arc<dyn flui_platform::traits::PlatformHaptics>,
         ) {
             let platform = flui_platform::headless_platform();
@@ -3775,6 +3779,13 @@ mod tests {
             fn is_visible(&self) -> bool {
                 true
             }
+
+            fn set_cursor(
+                &self,
+                _cursor: flui_platform::CursorIcon,
+            ) -> Result<(), flui_platform::CursorError> {
+                Ok(())
+            }
         }
 
         /// Real-path proof: `perform_haptic_feedback` reads the binding's
@@ -3817,7 +3828,7 @@ mod tests {
         #[test]
         fn perform_haptic_feedback_on_a_window_without_haptics_is_a_silent_no_op() {
             let binding = AppBinding::new();
-            binding.set_window(Box::new(BareWindow));
+            binding.set_window(Arc::new(BareWindow));
 
             binding.perform_haptic_feedback(HapticFeedback::MediumImpact);
         }
@@ -3831,7 +3842,7 @@ mod tests {
     /// a standalone `AppBinding::new()` rather than touching
     /// `AppBinding::instance()`'s singleton, so none of them need
     /// `SEMANTICS_TEST_LOCK` (or an equivalent) — the same reasoning
-    /// `haptics_binding_bridge`'s tests above rely on.
+    /// `haptics_capability`'s tests above rely on.
     mod platform_clipboard_reachability {
         use super::*;
 
@@ -3907,17 +3918,15 @@ mod tests {
         /// `clipboard()` uses must not deadlock — proof that `clipboard()`
         /// drops `platform_clipboard`'s lock guard before the caller can
         /// touch the returned capability (the same clone-then-call
-        /// discipline `TextInputPlatformBridge` and
+        /// discipline the presentation-owned text-input path and
         /// `perform_haptic_feedback` follow).
         ///
         /// The fake clipboard reproduces `clipboard()`'s exact
         /// lock-then-clone-then-drop sequence directly against
         /// [`AppBinding::platform_clipboard_slot`]'s clone of the same
-        /// underlying `Arc<Mutex<...>>`, rather than holding a reference
-        /// back to `AppBinding` itself: `AppBinding` embeds `GestureBinding`
-        /// (an `Arc<dyn GestureArenaMember>` arena), so it is neither `Send`
-        /// nor `Sync` — and `Clipboard: Send + Sync` means no type that
-        /// implements it can hold one.
+        /// underlying `Arc<Mutex<...>>`, rather than creating a self-reference
+        /// from a `'static + Send + Sync` clipboard back into the owner binding
+        /// whose slot stores that clipboard.
         ///
         /// Constructed and driven entirely on one dedicated background
         /// thread, purely to bound a potential hang: a same-thread

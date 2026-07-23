@@ -158,7 +158,7 @@ pub const SNACK_BAR_ADDED_MESSAGE: &str = "Item added";
 /// `flui_material::back_button::back_arrow_icon_data`.
 #[must_use]
 pub fn settings_icon_data() -> IconData {
-    IconData::new(0xE8B8).with_font_family("MaterialIcons")
+    IconData::new(0xE8B8).with_font_family("Material Icons")
 }
 
 /// The `tab` glyph's codepoint from the classic `MaterialIcons` font table —
@@ -170,7 +170,7 @@ pub fn settings_icon_data() -> IconData {
 /// [`settings_icon_data`]; `pub` for the identical reason.
 #[must_use]
 pub fn tabs_icon_data() -> IconData {
-    IconData::new(0xE8D2).with_font_family("MaterialIcons")
+    IconData::new(0xE8D2).with_font_family("Material Icons")
 }
 
 /// The Material demo root: a `Navigator` shell over the home route.
@@ -351,7 +351,7 @@ impl ViewState<MaterialDemoHome> for MaterialDemoHomeState {
                     InkWell::new(Padding::new(EdgeInsets::all(px(12.0))).child(Text::new(label)))
                         .on_tap(move || {
                             selected_for_tap.borrow_mut().replace(label_for_tap.clone());
-                            rebuild_for_tap.schedule();
+                            rebuild_for_tap.schedule(flui_view::RebuildReason::StateChange);
                         }),
                 )
                 .boxed()
@@ -462,7 +462,7 @@ fn open_add_item_dialog(
                             .borrow_mut()
                             .push(format!("{ITEM_LABEL_PREFIX}{next_index}"));
                         navigator_for_add.pop();
-                        rebuild_for_add.schedule();
+                        rebuild_for_add.schedule(flui_view::RebuildReason::StateChange);
                         messenger_for_add
                             .show_snack_bar(SnackBar::new(Text::new(SNACK_BAR_ADDED_MESSAGE)));
                     })
@@ -488,7 +488,7 @@ fn settings_route() -> PageRoute<()> {
 
 /// The `Counter` tab's content: a live count display plus an `Increment`
 /// button. `count` lives in an `Rc<Cell<i32>>` on [`CounterTabState`] (the
-/// same closure-captures-shared-state-then-`rebuild.schedule()` shape
+/// same closure-captures-shared-state-then-`rebuild.schedule(reason)` shape
 /// [`open_add_item_dialog`]'s `Add` action and the card-tap handler in
 /// [`MaterialDemoHomeState::build`] already use) — `TabBarView`'s
 /// keep-alive `Offstage` retention (not unmount) is what lets `count`
@@ -533,7 +533,7 @@ impl ViewState<CounterTab> for CounterTabState {
             Text::new(format!("{COUNTER_LABEL_PREFIX}{displayed_count}")),
             ElevatedButton::new(Text::new(COUNTER_INCREMENT_LABEL)).on_pressed(move || {
                 count_for_tap.set(count_for_tap.get() + 1);
-                rebuild.schedule();
+                rebuild.schedule(flui_view::RebuildReason::StateChange);
             }),
         ]))
     }

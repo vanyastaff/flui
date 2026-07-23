@@ -13,7 +13,7 @@ mod common;
 use std::sync::Arc;
 use std::time::Duration;
 
-use common::{LaidOutScoped, lay_out, lay_out_with_arena, size, tight};
+use common::{LaidOut, lay_out, size, tight};
 use flui_animation::{Curves, Vsync};
 use flui_rendering::constraints::BoxConstraints;
 use flui_types::Color;
@@ -21,7 +21,7 @@ use flui_types::geometry::px;
 use flui_view::prelude::StatelessView;
 use flui_view::{BuildContext, IntoView, ViewExt};
 use flui_widgets::{
-    BouncingScrollPhysics, ClampingScrollPhysics, ColoredBox, CustomScrollView, GestureArenaScope,
+    BouncingScrollPhysics, ClampingScrollPhysics, ColoredBox, CustomScrollView, GestureDetector,
     GridView, ListView, ScrollController, ScrollMetrics, ScrollPhysics, Scrollable,
     SharedScrollPhysics, SingleChildScrollView, SizedBox, SliverFixedExtentList, VsyncScope,
 };
@@ -644,42 +644,40 @@ fn scrollable_drag_up_increases_scroll_offset() {
         .physics(physics)
         .child(SizedBox::new(300.0, 800.0));
 
-    let scoped = lay_out_with_arena(widget, tight(300.0, 300.0));
+    let scoped = lay_out(widget, tight(300.0, 300.0));
 
     // Starting position: top of content.
     assert_eq!(controller.pixels(), 0.0, "initial scroll offset must be 0");
 
-    // Simulate an upward pan: finger starts at y=200, first move to y=150 (50 px
-    // upward, well past the 18 px drag slop — crosses slop, transitions to
-    // Started, fires on_pan_start). Second move to y=140 fires on_pan_update
-    // (on_update fires only after the slop-crossing move, in Started state).
+    // With no competing recognizer, the arena awards the drag after Down.
+    // The first 50px upward move is therefore delivered in full.
     scoped.dispatch_pointer_down(150.0, 200.0);
-    scoped.dispatch_pointer_move(150.0, 150.0); // slop-crossing: 50 px > 18 px
-    scoped.dispatch_pointer_move(150.0, 140.0); // in-progress update: delta dy = -10
-    scoped.dispatch_pointer_up(150.0, 140.0);
+    scoped.dispatch_pointer_move(150.0, 150.0);
+    scoped.dispatch_pointer_up(150.0, 150.0);
 
-    assert!(
-        controller.pixels() > 0.0,
-        "scroll offset must increase after dragging up 50 px; \
-         got {:.1} — check that on_pan_update is wired to set_pixels",
-        controller.pixels()
+    assert_eq!(
+        controller.pixels(),
+        50.0,
+        "an upward 50px finger move must increase the scroll offset by exactly 50px"
     );
 }
 
-/// A drag that does NOT cross the drag slop (< 18 px) must not move the
-/// scroll position — only a genuine drag past the threshold triggers scrolling.
+/// With a tap recognizer competing below the Scrollable, a sub-slop move
+/// leaves the arena unresolved and must not move the scroll position.
 #[test]
-fn scrollable_sub_slop_drag_does_not_move_scroll_offset() {
+fn scrollable_sub_slop_drag_waits_while_a_tap_competitor_remains() {
     let controller = ScrollController::new();
     controller.update_dimensions(300.0, 0.0, 500.0);
 
-    let widget = Scrollable::new()
-        .controller(controller.clone())
-        .child(SizedBox::new(300.0, 800.0));
+    let widget = GestureDetector::new().on_tap(|| {}).child(
+        Scrollable::new()
+            .controller(controller.clone())
+            .child(SizedBox::new(300.0, 800.0)),
+    );
 
-    let scoped = lay_out_with_arena(widget, tight(300.0, 300.0));
+    let scoped = lay_out(widget, tight(300.0, 300.0));
 
-    // Move only 5 px — below the 18 px drag slop; no drag recognized.
+    // Move only 5px — below the 18px drag slop while tap still competes.
     scoped.dispatch_pointer_down(150.0, 150.0);
     scoped.dispatch_pointer_move(150.0, 145.0);
     scoped.dispatch_pointer_up(150.0, 145.0);
@@ -687,7 +685,31 @@ fn scrollable_sub_slop_drag_does_not_move_scroll_offset() {
     assert_eq!(
         controller.pixels(),
         0.0,
-        "a sub-slop movement must not change the scroll offset"
+        "a sub-slop movement must not move while a tap competitor remains"
+    );
+}
+
+/// Without a competitor, Flutter's arena awards the lone drag recognizer
+/// after Down and `onlyAcceptDragOnThreshold` remains false. Its first
+/// sub-slop move is therefore a real scroll update.
+#[test]
+fn scrollable_lone_drag_applies_the_first_sub_slop_move() {
+    let controller = ScrollController::new();
+    controller.update_dimensions(300.0, 0.0, 500.0);
+
+    let widget = Scrollable::new()
+        .controller(controller.clone())
+        .child(SizedBox::new(300.0, 800.0));
+    let scoped = lay_out(widget, tight(300.0, 300.0));
+
+    scoped.dispatch_pointer_down(150.0, 150.0);
+    scoped.dispatch_pointer_move(150.0, 145.0);
+    scoped.dispatch_pointer_up(150.0, 145.0);
+
+    assert_eq!(
+        controller.pixels(),
+        5.0,
+        "the lone recognizer's first -5px move must scroll forward by 5px"
     );
 }
 
@@ -706,15 +728,13 @@ fn scrollable_drag_up_at_max_extent_is_clamped_by_physics() {
         .physics(physics)
         .child(SizedBox::new(300.0, 800.0));
 
-    let scoped = lay_out_with_arena(widget, tight(300.0, 300.0));
+    let scoped = lay_out(widget, tight(300.0, 300.0));
 
-    // Drag upward: first move crosses slop (transitions Possible→Started, fires
-    // on_pan_start). Second move fires on_pan_update — proposes 510 (past max) →
-    // clamped physics holds at 500. Without the second move on_update never fires.
+    // The lone drag starts after Down. A 10px upward move proposes 510,
+    // and clamping physics holds it at 500.
     scoped.dispatch_pointer_down(150.0, 200.0);
-    scoped.dispatch_pointer_move(150.0, 140.0); // 60 px upward: slop-crossing
-    scoped.dispatch_pointer_move(150.0, 130.0); // additional 10 px: fires on_update
-    scoped.dispatch_pointer_up(150.0, 130.0);
+    scoped.dispatch_pointer_move(150.0, 190.0);
+    scoped.dispatch_pointer_up(150.0, 190.0);
 
     assert!(
         controller.pixels() <= 500.0,
@@ -754,9 +774,9 @@ fn scrollable_position_mode_relayouts_from_external_mutation_with_no_pixels_push
         .controller(controller.clone())
         .child(SizedBox::new(300.0, 800.0));
 
-    let mut scoped = lay_out_with_arena(widget, tight(300.0, 300.0));
-    let box_before = scoped.laid().find_by_render_type("RenderConstrainedBox");
-    let offset_before = scoped.laid().absolute_offset(box_before);
+    let mut scoped = lay_out(widget, tight(300.0, 300.0));
+    let box_before = scoped.find_by_render_type("RenderConstrainedBox");
+    let offset_before = scoped.absolute_offset(box_before);
 
     // External mutation of the shared `ScrollPosition` — no gesture, no
     // `update_render_object` pixels push.
@@ -764,10 +784,10 @@ fn scrollable_position_mode_relayouts_from_external_mutation_with_no_pixels_push
 
     // `AnimatedBuilder`'s subscription to the same listenable schedules a
     // rebuild when `set_pixels` notifies; this drains it and re-runs layout.
-    scoped.pump(Duration::ZERO);
+    scoped.pump_for(Duration::ZERO);
 
-    let box_after = scoped.laid().find_by_render_type("RenderConstrainedBox");
-    let offset_after = scoped.laid().absolute_offset(box_after);
+    let box_after = scoped.find_by_render_type("RenderConstrainedBox");
+    let offset_after = scoped.absolute_offset(box_after);
 
     assert_ne!(
         offset_before, offset_after,
@@ -857,7 +877,7 @@ fn scrollable_content_dimension_feedback_supplies_extents_and_notifies_a_listene
         .controller(controller.clone())
         .child(SizedBox::new(300.0, 800.0));
 
-    let mut scoped = lay_out_with_arena(widget, tight(300.0, 300.0));
+    let mut scoped = lay_out(widget, tight(300.0, 300.0));
 
     // Extents write through to the shared state SYNCHRONOUSLY during layout
     // (only the listener notification is deferred) — readable immediately,
@@ -877,7 +897,7 @@ fn scrollable_content_dimension_feedback_supplies_extents_and_notifies_a_listene
 
     // Drive a completed frame: drains the scheduler's post-frame queue,
     // firing the coalesced flush.
-    scoped.pump(Duration::ZERO);
+    scoped.pump_for(Duration::ZERO);
 
     assert!(
         listener_fired.load(std::sync::atomic::Ordering::SeqCst) >= 1,
@@ -931,7 +951,7 @@ fn scrollable_viewport_builder_composes_a_custom_viewport_with_working_drag_and_
             },
         ));
 
-    let scoped = lay_out_with_arena(widget, tight(300.0, 300.0));
+    let scoped = lay_out(widget, tight(300.0, 300.0));
 
     // No update_dimensions anywhere: extents must arrive from the custom
     // viewport's own layout — the same feedback loop the SCSV fast path
@@ -964,10 +984,10 @@ fn scrollable_viewport_builder_composes_a_custom_viewport_with_working_drag_and_
 /// Wrap `widget` in a [`VsyncScope`] so its `ScrollableState::init_state` can
 /// register the fling controller, then lay it out under `constraints` with a
 /// gesture arena. Adopts the same vsync in the tree binding so
-/// [`LaidOutScoped::pump_for`] ticks the fling animation deterministically.
-fn fling_scoped(widget: Scrollable, vsync: Vsync, constraints: BoxConstraints) -> LaidOutScoped {
+/// [`LaidOut::pump_for`] ticks the fling animation deterministically.
+fn fling_scoped(widget: Scrollable, vsync: Vsync, constraints: BoxConstraints) -> LaidOut {
     let wrapped = VsyncScope::new(vsync.clone(), widget);
-    let mut scoped = lay_out_with_arena(wrapped, constraints);
+    let mut scoped = lay_out(wrapped, constraints);
     scoped.adopt_vsync(vsync);
     scoped
 }
@@ -1149,7 +1169,7 @@ fn pan_start_during_fling_halts_momentum() {
     // fires on_start in the DragGestureRecognizer FSM).
     scoped.dispatch_pointer_move(150.0, 250.0);
     // Cancel to avoid triggering on_pan_end (and a new fling).
-    scoped.dispatch_pointer_cancel(150.0, 250.0);
+    scoped.dispatch_pointer_cancel();
 
     let pixels_after_grab = controller.pixels();
 
@@ -1271,7 +1291,7 @@ fn scrollable_grab_during_animate_to_halts_it() {
     // starting a new fling).
     scoped.dispatch_pointer_down(150.0, 200.0);
     scoped.dispatch_pointer_move(150.0, 250.0); // 50px downward: past the 18px slop
-    scoped.dispatch_pointer_cancel(150.0, 250.0);
+    scoped.dispatch_pointer_cancel();
 
     let pixels_after_grab = controller.pixels();
 
@@ -1462,25 +1482,14 @@ fn scrollable_reinstalls_the_stop_hook_after_a_controller_swap() {
          before the swap; got {old_pixels_mid_fling:.2}"
     );
 
-    // Swap to a DIFFERENT controller, re-wrapped in a matching
-    // `GestureArenaScope` (`fling_scoped`/`lay_out_with_arena` mounted the
-    // root as `GestureArenaScope<VsyncScope<Scrollable>>` — a root element
-    // TYPE change does not run the normal update/dispose path, so the
-    // replacement must keep that exact same outer shape for this to
-    // reconcile as an UPDATE through `did_update_view`, not a remount; same
-    // pattern `tests/parity/page_view_test.rs`'s
-    // `a_parent_rebuild_with_no_explicit_controller_keeps_the_current_page`
-    // uses).
-    let rewrapped = GestureArenaScope::new(
-        scoped.laid().arena(),
-        VsyncScope::new(
-            vsync,
-            Scrollable::new()
-                .controller(new_controller.clone())
-                .child(SizedBox::new(300.0, 5000.0)),
-        ),
-    );
-    scoped.pump_widget(rewrapped);
+    // Swap to a DIFFERENT controller. The scoped harness preserves the
+    // outer GestureArenaScope, so this reconciles through did_update_view.
+    scoped.pump_widget(VsyncScope::new(
+        vsync,
+        Scrollable::new()
+            .controller(new_controller.clone())
+            .child(SizedBox::new(300.0, 5000.0)),
+    ));
 
     // The fling is STILL running on the shared `fling_controller` post-swap,
     // but its value listener now writes into the NEW controller — the OLD
@@ -1554,16 +1563,12 @@ fn scrollable_reinstalls_the_fling_listener_after_a_controller_swap() {
     // `scrollable_reinstalls_the_stop_hook_after_a_controller_swap` above,
     // but with NO pre-swap gesture: the very first fling this test ever
     // drives is via `animate_to` on the NEW controller, after the swap.
-    let rewrapped = GestureArenaScope::new(
-        scoped.laid().arena(),
-        VsyncScope::new(
-            vsync,
-            Scrollable::new()
-                .controller(new_controller.clone())
-                .child(SizedBox::new(300.0, 5000.0)),
-        ),
-    );
-    scoped.pump_widget(rewrapped);
+    scoped.pump_widget(VsyncScope::new(
+        vsync,
+        Scrollable::new()
+            .controller(new_controller.clone())
+            .child(SizedBox::new(300.0, 5000.0)),
+    ));
 
     let new_pixels_before = new_controller.pixels();
 
@@ -1641,7 +1646,7 @@ fn disposing_a_scrollable_clears_the_controllers_pending_command_before_a_reatta
     controller.update_dimensions(300.0, 0.0, 4700.0);
 
     let vsync = Vsync::new();
-    let mut scoped = lay_out_with_arena(
+    let mut scoped = lay_out(
         VsyncScope::new(
             vsync.clone(),
             ScrollableHost {
@@ -1656,37 +1661,24 @@ fn disposing_a_scrollable_clears_the_controllers_pending_command_before_a_reatta
     // Queue an animate_to but dispose before ANY pump services it.
     controller.animate_to(1000.0, Duration::from_millis(100), Arc::new(Curves::Linear));
 
-    // Unmount: `show: false` toggles the INNER build output. Re-wrapped in a
-    // matching `GestureArenaScope` (`lay_out_with_arena` mounted the root as
-    // `GestureArenaScope<VsyncScope<ScrollableHost>>` — a root element TYPE
-    // change does not run the normal update/dispose path, so the
-    // replacement must keep that exact same outer shape for this to
-    // reconcile as a genuine update that runs `Scrollable`'s dispose, not a
-    // remount).
-    let unmounted = GestureArenaScope::new(
-        scoped.laid().arena(),
-        VsyncScope::new(
-            vsync.clone(),
-            ScrollableHost {
-                controller: controller.clone(),
-                show: false,
-            },
-        ),
-    );
-    scoped.pump_widget(unmounted);
+    // Unmount: `show: false` toggles the inner build output. The scoped
+    // harness retains its GestureArenaScope around this matching inner root.
+    scoped.pump_widget(VsyncScope::new(
+        vsync.clone(),
+        ScrollableHost {
+            controller: controller.clone(),
+            show: false,
+        },
+    ));
 
     // Re-attach the SAME controller to a brand-new mounted Scrollable.
-    let reattached = GestureArenaScope::new(
-        scoped.laid().arena(),
-        VsyncScope::new(
-            vsync,
-            ScrollableHost {
-                controller: controller.clone(),
-                show: true,
-            },
-        ),
-    );
-    scoped.pump_widget(reattached);
+    scoped.pump_widget(VsyncScope::new(
+        vsync,
+        ScrollableHost {
+            controller: controller.clone(),
+            show: true,
+        },
+    ));
 
     for _ in 0..10 {
         scoped.pump_for(Duration::from_millis(16));
@@ -1729,7 +1721,7 @@ fn scrollbar_thumb_drag_moves_scroll_offset_proportionally() {
         .thumb_width(20.0)
         .child(SizedBox::new(300.0, 300.0));
 
-    let scoped = lay_out_with_arena(widget, tight(300.0, 300.0));
+    let scoped = lay_out(widget, tight(300.0, 300.0));
 
     assert_eq!(controller.pixels(), 0.0, "initial scroll offset must be 0");
 
@@ -1737,15 +1729,11 @@ fn scrollbar_thumb_drag_moves_scroll_offset_proportionally() {
     //   thumb_fraction = 300 / 600 = 0.5, thumb_height = 150, available_track = 150
     //   thumb_top = 0, thumb x = [280, 300], thumb y = [0, 150]
     //
-    // Sequence:
-    //   Down at (290, 10)       — inside thumb
-    //   Move to (290, 60)  +50  — slop-crossing (>18 px): fires on_pan_start (no-op)
-    //   Move to (290, 110) +50  — fires on_pan_update(delta_y=50) → content_delta=100
-    //   Up   at (290, 110)      — within new thumb y=[50,200] after scroll, within widget
+    // The thumb has no competing recognizer, so its first +50px move is an
+    // update and maps to +100 content pixels.
     scoped.dispatch_pointer_down(290.0, 10.0);
     scoped.dispatch_pointer_move(290.0, 60.0);
-    scoped.dispatch_pointer_move(290.0, 110.0);
-    scoped.dispatch_pointer_up(290.0, 110.0);
+    scoped.dispatch_pointer_up(290.0, 60.0);
 
     let final_pixels = controller.pixels();
     assert!(
@@ -1779,18 +1767,16 @@ fn scrollbar_thumb_drag_clamps_at_max_scroll_extent() {
         .thumb_width(20.0)
         .child(SizedBox::new(300.0, 300.0));
 
-    let scoped = lay_out_with_arena(widget, tight(300.0, 300.0));
+    let scoped = lay_out(widget, tight(300.0, 300.0));
 
-    // Thumb at pixels=0 occupies x=[280,300], y=[0,200].
-    // Slop-crossing: DOWN -> MOVE(+30) crosses 18px threshold.
-    // Four on_pan_update calls of +30 track-px each accumulate 180 content-px -> clamped to 150.
+    // Thumb at pixels=0 occupies x=[280,300], y=[0,200]. Four +30px
+    // updates accumulate 180 content pixels and clamp to 150.
     scoped.dispatch_pointer_down(290.0, 10.0);
-    scoped.dispatch_pointer_move(290.0, 40.0); // +30 px: slop-crossing -> on_pan_start
-    scoped.dispatch_pointer_move(290.0, 70.0); // +30 px -> on_pan_update: pixels=45
-    scoped.dispatch_pointer_move(290.0, 100.0); // +30 px -> on_pan_update: pixels=90
-    scoped.dispatch_pointer_move(290.0, 130.0); // +30 px -> on_pan_update: pixels=135
-    scoped.dispatch_pointer_move(290.0, 160.0); // +30 px -> on_pan_update: proposed=180, clamped=150
-    scoped.dispatch_pointer_up(290.0, 160.0);
+    scoped.dispatch_pointer_move(290.0, 40.0); // pixels=45
+    scoped.dispatch_pointer_move(290.0, 70.0); // pixels=90
+    scoped.dispatch_pointer_move(290.0, 100.0); // pixels=135
+    scoped.dispatch_pointer_move(290.0, 130.0); // proposed=180, clamped=150
+    scoped.dispatch_pointer_up(290.0, 130.0);
 
     assert!(
         controller.pixels() <= 150.0,
@@ -1837,23 +1823,18 @@ fn refresh_indicator_over_threshold_pull_fires_on_refresh() {
         })
         .child(SizedBox::new(300.0, 800.0));
 
-    let scoped = lay_out_with_arena(widget, tight(300.0, 300.0));
+    let scoped = lay_out(widget, tight(300.0, 300.0));
 
     assert!(!refresh_ctrl.is_refreshing(), "must start in idle state");
 
     // Pull down from the top: finger moves DOWN (y increases), delta.dy > 0, so
     // proposed = pixels - delta.dy = 0 - positive < min_scroll_extent -> overscroll.
     //
-    // Sequence:
-    //   Down at (150,  50)        -- inside widget, upper area
-    //   Move to (150, 100) +50    -- slop-crossing: on_pan_start fires (stops fling)
-    //   Move to (150, 170) +70    -- on_pan_update: proposed = 0 - 70 = -70 < 0
-    //                              -> overscroll = 70 > threshold (50) tracked
-    //   Up   at (150, 170)        -- on_pan_end: pull (70) >= threshold (50) -> fires
+    // A lone +70px move produces 70px of overscroll, above the 50px
+    // threshold, then release triggers refresh.
     scoped.dispatch_pointer_down(150.0, 50.0);
-    scoped.dispatch_pointer_move(150.0, 100.0); // slop-crossing: dy=+50, on_pan_start fires
-    scoped.dispatch_pointer_move(150.0, 170.0); // dy=+70: proposed=0-70=-70<0 -> overscroll=70
-    scoped.dispatch_pointer_up(150.0, 170.0);
+    scoped.dispatch_pointer_move(150.0, 120.0);
+    scoped.dispatch_pointer_up(150.0, 120.0);
 
     assert!(
         refreshed.load(Ordering::SeqCst),
@@ -1888,14 +1869,12 @@ fn refresh_indicator_under_threshold_pull_does_not_fire_on_refresh() {
         })
         .child(SizedBox::new(300.0, 800.0));
 
-    let scoped = lay_out_with_arena(widget, tight(300.0, 300.0));
+    let scoped = lay_out(widget, tight(300.0, 300.0));
 
-    // Pull only 30 px past top — below the 80 px threshold.
-    // Finger moves DOWN (y increases): slop-crossing +50, then +30 actual overscroll.
+    // Pull only 30px past top — below the 80px threshold.
     scoped.dispatch_pointer_down(150.0, 50.0);
-    scoped.dispatch_pointer_move(150.0, 100.0); // slop-crossing: dy=+50
-    scoped.dispatch_pointer_move(150.0, 130.0); // dy=+30: proposed=0-30=-30 -> overscroll=30<80
-    scoped.dispatch_pointer_up(150.0, 130.0);
+    scoped.dispatch_pointer_move(150.0, 80.0);
+    scoped.dispatch_pointer_up(150.0, 80.0);
 
     assert!(
         !refreshed.load(Ordering::SeqCst),
@@ -1931,13 +1910,12 @@ fn refresh_indicator_finish_dismisses_spinner() {
         })
         .child(SizedBox::new(300.0, 800.0));
 
-    let scoped = lay_out_with_arena(widget, tight(300.0, 300.0));
+    let scoped = lay_out(widget, tight(300.0, 300.0));
 
     // Trigger a refresh with an over-threshold pull (finger moves DOWN: y increases).
     scoped.dispatch_pointer_down(150.0, 50.0);
-    scoped.dispatch_pointer_move(150.0, 100.0); // slop-crossing: dy=+50
-    scoped.dispatch_pointer_move(150.0, 170.0); // dy=+70: overscroll=70>=threshold(50)
-    scoped.dispatch_pointer_up(150.0, 170.0);
+    scoped.dispatch_pointer_move(150.0, 120.0); // +70: overscroll >= threshold
+    scoped.dispatch_pointer_up(150.0, 120.0);
 
     assert!(
         refreshed.load(Ordering::SeqCst),

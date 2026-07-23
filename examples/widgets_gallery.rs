@@ -35,8 +35,8 @@ fn faded_avatar(color: Color) -> Opacity {
 
 /// The gallery root: a dark padded surface with a title, a row of circular
 /// avatars, a faded row, and a centred "card".
-#[derive(Clone, StatelessView)]
-struct Gallery;
+#[derive(Clone, Debug, StatelessView)]
+pub struct Gallery;
 
 impl StatelessView for Gallery {
     fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {

@@ -353,7 +353,7 @@ impl TapAndDragGestureRecognizer {
 }
 
 impl GestureRecognizer for TapAndDragGestureRecognizer {
-    fn add_pointer(&self, pointer: PointerId, position: Offset<Pixels>) {
+    fn add_pointer(self: &Arc<Self>, pointer: PointerId, position: Offset<Pixels>) {
         // per-impl span (trait fn disallows `#[instrument]`).
         let _span = tracing::info_span!(
             "tap_and_drag.add_pointer",
@@ -363,8 +363,7 @@ impl GestureRecognizer for TapAndDragGestureRecognizer {
         if !self.state.assert_not_disposed("add_pointer") {
             return;
         }
-        let recogniser = Arc::new(self.clone());
-        self.state.start_tracking(pointer, position, &recogniser);
+        self.state.start_tracking(pointer, position, self);
 
         // Initialise drag state for the new pointer.
         {
@@ -607,15 +606,15 @@ impl TapAndDragGestureRecognizer {
         if phase == Phase::Ready || phase == Phase::Finished {
             return;
         }
-        // We were mid-gesture; fire cancel and stop tracking.
+        // We were mid-gesture. Withdraw and reset before invoking user code.
         let cb = self.callbacks.borrow().on_cancel.clone();
-        if let Some(cb) = cb {
-            cb();
-        }
         let _ = position; // Currently unused — cancel details don't carry position.
         *self.phase.lock() = Phase::Finished;
         self.state.reject();
         self.reset();
+        if let Some(cb) = cb {
+            cb();
+        }
     }
 }
 
@@ -857,6 +856,23 @@ mod tests {
         assert!(*cancelled.lock());
         // Explicitly drop the recogniser to verify no Drop-induced hang.
         drop(rec);
+    }
+
+    #[test]
+    fn panicking_cancel_callback_cannot_strand_tap_and_drag_tracking() {
+        let arena = GestureArena::new();
+        let recognizer = TapAndDragGestureRecognizer::new(arena.clone())
+            .with_on_cancel(|| panic!("tap and drag cancel panic"));
+        recognizer.add_pointer(PointerId::PRIMARY, Offset::new(Pixels(1.0), Pixels(2.0)));
+        arena.close(PointerId::PRIMARY);
+
+        let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            recognizer.handle_event(&crate::events::make_cancel_event(PointerType::Touch));
+        }));
+
+        assert!(unwind.is_err());
+        assert_eq!(recognizer.primary_pointer(), None);
+        assert!(arena.is_empty());
     }
 
     #[test]

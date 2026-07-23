@@ -170,7 +170,6 @@ raw-window-handle = "0.6"
 pollster = "0.4"
 # Trait-only `Stream`. NOT `futures`/`futures-util`: no executor, no
 # combinators, no proc macros — just the trait `StreamBuilder` polls by hand.
-# Already in the graph via wgpu's `flume`, so it vendors nothing new.
 futures-core = { version = "0.3", default-features = false, features = ["std"] }
 # Used by flui-widgets' image decode cache to coalesce concurrent async image
 # loads: `FutureExt::shared()` lets N `Image` widgets mounted with the same
@@ -390,6 +389,12 @@ tracing-subscriber.workspace = true
 
 [features]
 default = []
+
+# Golden-image regression tests (`tests/golden_screenshots.rs`). Off by default:
+# they need a GPU and the committed goldens are reference-machine specific, so
+# the normal `cargo nextest` run must not attempt them. Run with
+# `--features golden` on a consistent GPU; regenerate with `UPDATE_GOLDENS=1`.
+golden = []
 
 # === Core Features ===
 # Serialization support across all crates

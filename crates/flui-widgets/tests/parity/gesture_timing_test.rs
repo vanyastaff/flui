@@ -4,8 +4,8 @@
 //! `packages/flutter/test/gestures/double_tap_test.dart`, and
 //! `packages/flutter/test/gestures/arena_test.dart`. These are the timer- and
 //! arena-driven cases from the raw recognizer test suites, ported at the
-//! `GestureDetector` widget level through [`common::lay_out_with_arena`]'s
-//! [`common::LaidOutScoped`] harness — a [`flui_widgets::GestureArenaScope`]
+//! `GestureDetector` widget level through [`common::lay_out`]'s canonical
+//! presentation harness — a [`flui_widgets::GestureArenaScope`]
 //! over a [`flui_binding::HeadlessBinding`] whose virtual clock drives every
 //! gesture deadline deterministically (no `thread::sleep`; `pump(dt)` advances
 //! the clock and polls deadlines in the same step Flutter's `tester.async.elapse`
@@ -42,7 +42,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use crate::common::{lay_out_with_arena, tight};
+use crate::common::{lay_out, tight};
 use flui_types::Color;
 use flui_widgets::{ColoredBox, GestureDetector};
 
@@ -65,7 +65,7 @@ fn long_press_boundary_does_not_fire_before_deadline_fires_after() {
     let presses = Arc::new(AtomicUsize::new(0));
     let in_cb = Arc::clone(&presses);
 
-    let mut scoped = lay_out_with_arena(
+    let mut scoped = lay_out(
         GestureDetector::new()
             .on_long_press(move || {
                 in_cb.fetch_add(1, Ordering::SeqCst);
@@ -77,7 +77,7 @@ fn long_press_boundary_does_not_fire_before_deadline_fires_after() {
     scoped.dispatch_pointer_down(50.0, 50.0);
 
     // 1ms short of the 500ms deadline: must not have fired yet.
-    scoped.pump(Duration::from_millis(499));
+    scoped.pump_for(Duration::from_millis(499));
     assert_eq!(
         presses.load(Ordering::SeqCst),
         0,
@@ -85,7 +85,7 @@ fn long_press_boundary_does_not_fire_before_deadline_fires_after() {
     );
 
     // Crossing the deadline (total 501ms) fires exactly once.
-    scoped.pump(Duration::from_millis(2));
+    scoped.pump_for(Duration::from_millis(2));
     assert_eq!(
         presses.load(Ordering::SeqCst),
         1,
@@ -93,7 +93,7 @@ fn long_press_boundary_does_not_fire_before_deadline_fires_after() {
     );
 
     // Continuing to hold well past the deadline does not fire again.
-    scoped.pump(Duration::from_secs(1));
+    scoped.pump_for(Duration::from_secs(1));
     assert_eq!(
         presses.load(Ordering::SeqCst),
         1,
@@ -117,7 +117,7 @@ fn long_press_release_before_deadline_cancels_permanently() {
     let presses = Arc::new(AtomicUsize::new(0));
     let in_cb = Arc::clone(&presses);
 
-    let mut scoped = lay_out_with_arena(
+    let mut scoped = lay_out(
         GestureDetector::new()
             .on_long_press(move || {
                 in_cb.fetch_add(1, Ordering::SeqCst);
@@ -127,7 +127,7 @@ fn long_press_release_before_deadline_cancels_permanently() {
     );
 
     scoped.dispatch_pointer_down(50.0, 50.0);
-    scoped.pump(Duration::from_millis(300));
+    scoped.pump_for(Duration::from_millis(300));
     assert_eq!(
         presses.load(Ordering::SeqCst),
         0,
@@ -143,7 +143,7 @@ fn long_press_release_before_deadline_cancels_permanently() {
 
     // Advancing virtual time past where the (now-cancelled) deadline would
     // have fired must not resurrect it.
-    scoped.pump(Duration::from_secs(1));
+    scoped.pump_for(Duration::from_secs(1));
     assert_eq!(
         presses.load(Ordering::SeqCst),
         0,
@@ -160,7 +160,7 @@ fn long_press_move_past_slop_before_deadline_cancels() {
     let presses = Arc::new(AtomicUsize::new(0));
     let in_cb = Arc::clone(&presses);
 
-    let mut scoped = lay_out_with_arena(
+    let mut scoped = lay_out(
         GestureDetector::new()
             .on_long_press(move || {
                 in_cb.fetch_add(1, Ordering::SeqCst);
@@ -170,7 +170,7 @@ fn long_press_move_past_slop_before_deadline_cancels() {
     );
 
     scoped.dispatch_pointer_down(50.0, 50.0);
-    scoped.pump(Duration::from_millis(300));
+    scoped.pump_for(Duration::from_millis(300));
 
     // 40px vertical move — well past the pinned 18px slop.
     scoped.dispatch_pointer_move(50.0, 90.0);
@@ -182,9 +182,9 @@ fn long_press_move_past_slop_before_deadline_cancels() {
 
     // Even holding the (now off-slop) contact past where the deadline would
     // have fired, then releasing, must not fire the cancelled gesture.
-    scoped.pump(Duration::from_secs(1));
+    scoped.pump_for(Duration::from_secs(1));
     scoped.dispatch_pointer_up(50.0, 90.0);
-    scoped.pump(Duration::from_millis(300));
+    scoped.pump_for(Duration::from_millis(300));
     assert_eq!(
         presses.load(Ordering::SeqCst),
         0,
@@ -201,7 +201,7 @@ fn long_press_move_after_deadline_does_not_cancel_already_fired_press() {
     let presses = Arc::new(AtomicUsize::new(0));
     let in_cb = Arc::clone(&presses);
 
-    let mut scoped = lay_out_with_arena(
+    let mut scoped = lay_out(
         GestureDetector::new()
             .on_long_press(move || {
                 in_cb.fetch_add(1, Ordering::SeqCst);
@@ -211,7 +211,7 @@ fn long_press_move_after_deadline_does_not_cancel_already_fired_press() {
     );
 
     scoped.dispatch_pointer_down(50.0, 50.0);
-    scoped.pump(Duration::from_millis(600));
+    scoped.pump_for(Duration::from_millis(600));
     assert_eq!(
         presses.load(Ordering::SeqCst),
         1,
@@ -227,7 +227,7 @@ fn long_press_move_after_deadline_does_not_cancel_already_fired_press() {
     );
 
     scoped.dispatch_pointer_up(50.0, 95.0);
-    scoped.pump(Duration::from_millis(300));
+    scoped.pump_for(Duration::from_millis(300));
     assert_eq!(
         presses.load(Ordering::SeqCst),
         1,
@@ -257,7 +257,7 @@ fn double_tap_window_boundary_second_tap_inside_fires_double_outside_fires_two_s
     let double_taps = Arc::new(AtomicUsize::new(0));
     let (tap_cb, double_cb) = (Arc::clone(&taps), Arc::clone(&double_taps));
 
-    let mut inside = lay_out_with_arena(
+    let mut inside = lay_out(
         GestureDetector::new()
             .on_tap(move || {
                 tap_cb.fetch_add(1, Ordering::SeqCst);
@@ -271,7 +271,7 @@ fn double_tap_window_boundary_second_tap_inside_fires_double_outside_fires_two_s
 
     inside.dispatch_pointer_down(50.0, 50.0);
     inside.dispatch_pointer_up(50.0, 50.0);
-    inside.pump(Duration::from_millis(299));
+    inside.pump_for(Duration::from_millis(299));
     inside.dispatch_pointer_down(50.0, 50.0);
     inside.dispatch_pointer_up(50.0, 50.0);
 
@@ -293,7 +293,7 @@ fn double_tap_window_boundary_second_tap_inside_fires_double_outside_fires_two_s
     let double_taps = Arc::new(AtomicUsize::new(0));
     let (tap_cb, double_cb) = (Arc::clone(&taps), Arc::clone(&double_taps));
 
-    let mut outside = lay_out_with_arena(
+    let mut outside = lay_out(
         GestureDetector::new()
             .on_tap(move || {
                 tap_cb.fetch_add(1, Ordering::SeqCst);
@@ -309,7 +309,7 @@ fn double_tap_window_boundary_second_tap_inside_fires_double_outside_fires_two_s
     outside.dispatch_pointer_up(50.0, 50.0);
     // The window elapses with no second contact: the held first tap gives up
     // and fires standalone (arena_test.dart's hold -> release ordering).
-    outside.pump(Duration::from_millis(301));
+    outside.pump_for(Duration::from_millis(301));
     assert_eq!(
         taps.load(Ordering::SeqCst),
         1,
@@ -320,7 +320,7 @@ fn double_tap_window_boundary_second_tap_inside_fires_double_outside_fires_two_s
     outside.dispatch_pointer_up(50.0, 50.0);
     // The second tap starts its own inter-tap window (nothing follows it), so
     // it too must lapse before it fires standalone.
-    outside.pump(Duration::from_millis(301));
+    outside.pump_for(Duration::from_millis(301));
     assert_eq!(
         taps.load(Ordering::SeqCst),
         2,
@@ -349,7 +349,7 @@ fn double_tap_second_tap_far_from_first_is_not_a_double_tap() {
 
     // A larger canvas so the second tap can land >100px from the first while
     // staying inside the hit-testable child.
-    let scoped = lay_out_with_arena(
+    let scoped = lay_out(
         GestureDetector::new()
             .on_double_tap(move || {
                 in_cb.fetch_add(1, Ordering::SeqCst);
@@ -421,7 +421,7 @@ fn overlapping_contact_replacing_the_held_primary_pointer_drops_its_late_win() {
     let double_taps = Arc::new(AtomicUsize::new(0));
     let (tap_cb, double_cb) = (Arc::clone(&taps), Arc::clone(&double_taps));
 
-    let mut scoped = lay_out_with_arena(
+    let mut scoped = lay_out(
         GestureDetector::new()
             .on_tap(move || {
                 tap_cb.fetch_add(1, Ordering::SeqCst);
@@ -454,7 +454,7 @@ fn overlapping_contact_replacing_the_held_primary_pointer_drops_its_late_win() {
     // already abandoned that pointer's sequence when the second contact took
     // over — Flutter parity: the held pointer's late win is dropped, not
     // fired as a second `on_tap`.
-    scoped.pump(Duration::from_millis(301));
+    scoped.pump_for(Duration::from_millis(301));
     assert_eq!(
         taps.load(Ordering::SeqCst),
         1,
@@ -485,7 +485,7 @@ fn arena_rejection_cascade_pan_wins_over_tap_and_long_press() {
     let (tap_cb, press_cb, start_cb) =
         (Arc::clone(&taps), Arc::clone(&presses), Arc::clone(&starts));
 
-    let mut scoped = lay_out_with_arena(
+    let mut scoped = lay_out(
         GestureDetector::new()
             .on_tap(move || {
                 tap_cb.fetch_add(1, Ordering::SeqCst);
@@ -514,7 +514,7 @@ fn arena_rejection_cascade_pan_wins_over_tap_and_long_press() {
     // Hold well past the long-press deadline, then release: the long press
     // lost the arena to the pan and must never fire, no matter how long the
     // contact is held afterward.
-    scoped.pump(Duration::from_millis(600));
+    scoped.pump_for(Duration::from_millis(600));
     scoped.dispatch_pointer_up(50.0, 80.0);
 
     assert_eq!(

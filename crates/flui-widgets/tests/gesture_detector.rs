@@ -1,7 +1,7 @@
 //! End-to-end gesture recognition: a `GestureDetector`'s `on_tap` fires when the
 //! user taps (pointer down then up) its child. Drives the real recognizer +
-//! per-detector arena through the hit-test + dispatch path (the detector closes
-//! the arena itself, so no global GestureBinding is needed).
+//! presentation-owned arena through the hit-test + binding dispatch path. The
+//! binding alone closes and sweeps the shared arena.
 
 mod common;
 
@@ -109,7 +109,7 @@ fn gesture_detector_cancel_aborts_the_tap_without_wedging_the_detector() {
 
     // A cancelled contact must NOT tap...
     laid.dispatch_pointer_down(50.0, 50.0);
-    laid.dispatch_pointer_cancel(50.0, 50.0);
+    laid.dispatch_pointer_cancel();
     assert_eq!(
         taps.load(Ordering::SeqCst),
         0,
@@ -355,9 +355,10 @@ fn horizontal_drag_fires_down_start_update_end_for_horizontal_motion() {
     );
 }
 
-/// A purely vertical move must not cross the horizontal recognizer's slop —
-/// `DragGestureRecognizer::calculate_primary_delta` projects onto the
-/// horizontal axis only (`crates/flui-interaction/src/recognizers/drag.rs`).
+/// With a free-axis drag competing in the same presentation arena, a purely
+/// vertical move must resolve to that competitor rather than the horizontal
+/// recognizer. A lone recognizer wins Flutter's deferred default after Down,
+/// so axis disambiguation is observable only under real competition.
 ///
 /// Red-check: change the recognizer's axis to `DragAxis::Free` — a vertical
 /// move now crosses its (any-direction) slop and `starts` becomes `1`.
@@ -367,11 +368,13 @@ fn horizontal_drag_does_not_fire_for_purely_vertical_motion() {
     let start_cb = Arc::clone(&starts);
 
     let laid = lay_out(
-        GestureDetector::new()
-            .on_horizontal_drag_start(move |_details| {
-                start_cb.fetch_add(1, Ordering::SeqCst);
-            })
-            .child(ColoredBox::new(Color::rgb(10, 20, 30))),
+        GestureDetector::new().on_pan_start(|_| {}).child(
+            GestureDetector::new()
+                .on_horizontal_drag_start(move |_details| {
+                    start_cb.fetch_add(1, Ordering::SeqCst);
+                })
+                .child(ColoredBox::new(Color::rgb(10, 20, 30))),
+        ),
         tight(200.0, 200.0),
     );
 
@@ -386,15 +389,16 @@ fn horizontal_drag_does_not_fire_for_purely_vertical_motion() {
     );
 }
 
-/// Flutter parity: a cancelled contact (`onHorizontalDragCancel`) must not
-/// leave the recognizer wedged — the next contact still drags normally.
-/// Mirrors `gesture_detector_cancel_aborts_the_tap_without_wedging_the_detector`
-/// for the horizontal-drag family.
+/// Flutter parity: once a drag has won its arena, `PointerCancel` follows
+/// `didStopTrackingLastPointer`'s accepted branch and fires `onEnd`, not
+/// `onCancel`. The terminal event must still leave the recognizer reusable.
 #[test]
-fn horizontal_drag_cancel_fires_and_does_not_wedge_the_detector() {
+fn horizontal_drag_pointer_cancel_after_acceptance_ends_and_does_not_wedge_the_detector() {
     let cancels = Arc::new(AtomicUsize::new(0));
+    let ends = Arc::new(AtomicUsize::new(0));
     let starts = Arc::new(AtomicUsize::new(0));
-    let (cancel_cb, start_cb) = (Arc::clone(&cancels), Arc::clone(&starts));
+    let (cancel_cb, end_cb, start_cb) =
+        (Arc::clone(&cancels), Arc::clone(&ends), Arc::clone(&starts));
 
     let laid = lay_out(
         GestureDetector::new()
@@ -404,6 +408,9 @@ fn horizontal_drag_cancel_fires_and_does_not_wedge_the_detector() {
             .on_horizontal_drag_cancel(move || {
                 cancel_cb.fetch_add(1, Ordering::SeqCst);
             })
+            .on_horizontal_drag_end(move |_details| {
+                end_cb.fetch_add(1, Ordering::SeqCst);
+            })
             .child(ColoredBox::new(Color::rgb(10, 20, 30))),
         tight(200.0, 200.0),
     );
@@ -412,21 +419,50 @@ fn horizontal_drag_cancel_fires_and_does_not_wedge_the_detector() {
     laid.dispatch_pointer_move(80.0, 100.0);
     assert_eq!(starts.load(Ordering::SeqCst), 1, "the drag started");
 
-    laid.dispatch_pointer_cancel(80.0, 100.0);
+    laid.dispatch_pointer_cancel();
+    assert_eq!(
+        ends.load(Ordering::SeqCst),
+        1,
+        "a PointerCancel after arena acceptance ends the active drag"
+    );
     assert_eq!(
         cancels.load(Ordering::SeqCst),
-        1,
-        "a cancel mid-drag fires on_horizontal_drag_cancel"
+        0,
+        "on_horizontal_drag_cancel is reserved for a sequence rejected before acceptance"
     );
 
-    // A fresh contact afterward still drags normally.
+    // A fresh contact afterward still completes normally.
     laid.dispatch_pointer_down(20.0, 100.0);
     laid.dispatch_pointer_move(80.0, 100.0);
+    laid.dispatch_pointer_up(80.0, 100.0);
     assert_eq!(
         starts.load(Ordering::SeqCst),
         2,
         "a drag after a cancel still starts (the cancel did not wedge the recognizer)",
     );
+    assert_eq!(ends.load(Ordering::SeqCst), 2);
+}
+
+/// A cancel while a tap competitor still keeps the drag unaccepted follows
+/// the possible branch and fires `on_horizontal_drag_cancel`.
+#[test]
+fn horizontal_drag_cancel_before_acceptance_fires_cancel() {
+    let cancels = Arc::new(AtomicUsize::new(0));
+    let cancels_for_callback = Arc::clone(&cancels);
+    let laid = lay_out(
+        GestureDetector::new()
+            .on_tap(|| {})
+            .on_horizontal_drag_cancel(move || {
+                cancels_for_callback.fetch_add(1, Ordering::SeqCst);
+            })
+            .child(ColoredBox::new(Color::rgb(10, 20, 30))),
+        tight(200.0, 200.0),
+    );
+
+    laid.dispatch_pointer_down(20.0, 100.0);
+    laid.dispatch_pointer_cancel();
+
+    assert_eq!(cancels.load(Ordering::SeqCst), 1);
 }
 
 #[test]

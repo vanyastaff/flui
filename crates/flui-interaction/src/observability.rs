@@ -46,7 +46,7 @@
 //! ```
 
 /// Span name for the `RecognizerBase` lifecycle methods
-/// ([`crate::recognizers::RecognizerBase::start_tracking`], [`accept`](crate::recognizers::RecognizerBase::accept),
+/// ([`crate::recognizers::RecognizerBase::start_tracking`], [`accept_tracked`](crate::recognizers::RecognizerBase::accept_tracked),
 /// [`reject`](crate::recognizers::RecognizerBase::reject), etc.).
 ///
 /// Use as the `name` of a manually-entered `tracing::info_span!` or as a
@@ -70,7 +70,7 @@ pub enum GestureEvent {
     RecognizerAdded,
     /// A `RecognizerBase::handle_event` was invoked.
     EventReceived,
-    /// `RecognizerBase::accept` won the arena.
+    /// `RecognizerBase::accept_tracked` won the arena.
     ArenaAccepted,
     /// `RecognizerBase::reject` lost the arena or was rejected explicitly.
     ArenaRejected,
@@ -252,7 +252,7 @@ mod tests {
         // "this doesn't panic and the span machinery runs".
         tracing::subscriber::with_default(subscriber, || {
             base.start_tracking(pointer, position, &recognizer);
-            base.accept(&recognizer);
+            base.accept_tracked();
         });
     }
 }

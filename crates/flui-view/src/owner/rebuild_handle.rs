@@ -13,15 +13,15 @@
 //!
 //! `RebuildHandle` is a thin newtype over the channel `AnimatedView` has always
 //! used: [`ExternalBuildScheduler`] + an [`ElementId`]. Calling
-//! [`schedule`](RebuildHandle::schedule) inserts the id into
-//! `BuildOwner::external_inbox` (a `HashSet`, so a burst of calls between frames
-//! collapses to one entry) and, only if the id was newly queued, asks the
-//! binding for a frame. `BuildOwner::build_scope` drains that inbox at frame
-//! start, marks each drained element dirty, and rebuilds it — on the frame
-//! thread, in the build phase.
+//! [`schedule`](RebuildHandle::schedule) inserts the id and a typed
+//! [`RebuildReason`](super::RebuildReason) into `BuildOwner::external_inbox`.
+//! A burst of calls between frames collapses to one entry while retaining every
+//! distinct cause; only the first asks the binding for a frame.
+//! `BuildOwner::build_scope` drains that inbox at frame start, marks each
+//! drained element dirty, and rebuilds it on the frame thread.
 //!
-//! So `schedule()` **never touches the element tree, the render tree, or the
-//! pipeline**. It writes to a mutex-guarded set and calls one `Fn()`. Everything
+//! So `schedule(reason)` **never touches the element tree, the render tree, or the
+//! pipeline**. It writes to a mutex-guarded map and calls one `Fn()`. Everything
 //! that mutates a tree happens later, synchronously, inside `build_scope`.
 //!
 //! # Where it may be acquired
@@ -46,6 +46,7 @@
 
 use flui_foundation::ElementId;
 
+use super::RebuildReason;
 use super::build_owner::ExternalBuildScheduler;
 
 /// The live half of a [`RebuildHandle`].
@@ -65,7 +66,7 @@ struct Active {
 /// [`schedule`](Self::schedule) from a completion callback on any thread.
 ///
 /// The rebuild itself runs on the frame thread during the next frame's build
-/// phase. Nothing is mutated at `schedule()` time beyond the shared inbox.
+/// phase. Nothing is mutated at `schedule(reason)` time beyond the shared inbox.
 ///
 /// # Example
 ///
@@ -75,7 +76,8 @@ struct Active {
 ///     std::thread::spawn(move || {
 ///         let value = expensive();
 ///         *shared.lock() = Some(value);
-///         handle.schedule(); // rebuilds on the next frame, on the frame thread
+///         handle.schedule(RebuildReason::StateChange);
+///         // Rebuilds on the next frame, on the frame thread.
 ///     });
 /// }
 /// ```
@@ -109,13 +111,14 @@ impl RebuildHandle {
     ///
     /// Callable from **any thread**. Idempotent between frames: repeated calls
     /// collapse to a single queued rebuild and a single frame request, because
-    /// the inbox is a set.
+    /// the inbox is a map keyed by element id. Distinct reasons are retained
+    /// even though the element itself is rebuilt only once.
     ///
     /// Inert when the handle is inert, and harmless when the element has since
     /// been unmounted — `build_scope` skips ids whose node is gone.
-    pub fn schedule(&self) {
+    pub fn schedule(&self, reason: RebuildReason) {
         if let Some(active) = &self.inner {
-            active.scheduler.schedule(active.element);
+            active.scheduler.schedule(active.element, reason);
         }
     }
 
@@ -161,7 +164,7 @@ mod tests {
     use flui_types::geometry::px;
 
     use crate::{
-        BuildOwner, RebuildHandle,
+        BuildOwner, RebuildHandle, RebuildReason,
         context::BuildContext,
         tree::ElementTree,
         view::{IntoView, RenderView, StatefulView, View, ViewState},
@@ -261,7 +264,7 @@ mod tests {
         let root = tree.mount_root(&view, &mut owner.element_owner_mut());
 
         // `init_state` runs during the first build.
-        owner.schedule_build_for(root, 0);
+        owner.schedule_build_for(root, 0, RebuildReason::InitialMount);
         owner.build_scope(&mut tree);
 
         let handle = captured
@@ -282,7 +285,7 @@ mod tests {
         let builds_after_mount = builds.load(Ordering::Relaxed);
         assert_eq!(owner.pending_external_builds(), 0);
 
-        handle.schedule();
+        handle.schedule(RebuildReason::StateChange);
         assert_eq!(owner.pending_external_builds(), 1, "queued, not yet built");
         assert_eq!(
             builds.load(Ordering::Relaxed),
@@ -302,8 +305,8 @@ mod tests {
 
     // ── 2. coalescing ───────────────────────────────────────────────────────
 
-    /// The inbox is a set: a burst between frames costs one queued rebuild and
-    /// one frame request.
+    /// The inbox is keyed by element id: a burst between frames costs one
+    /// queued rebuild and one frame request while retaining distinct causes.
     #[test]
     fn rebuild_handle_repeated_schedules_coalesce_to_one_rebuild() {
         let (mut owner, mut tree, handle, builds, _root) = mount();
@@ -317,10 +320,17 @@ mod tests {
 
         let before = builds.load(Ordering::Relaxed);
         for _ in 0..5 {
-            handle.schedule();
+            handle.schedule(RebuildReason::AsyncCompletion);
         }
+        handle.schedule(RebuildReason::StateChange);
 
         assert_eq!(owner.pending_external_builds(), 1, "one inbox slot");
+        let reasons = owner
+            .pending_rebuild_reasons(handle.element_id().expect("active"))
+            .expect("the queued element must expose its causes");
+        assert_eq!(reasons.len(), 2);
+        assert!(reasons.contains(RebuildReason::AsyncCompletion));
+        assert!(reasons.contains(RebuildReason::StateChange));
         assert_eq!(
             frames.load(Ordering::Relaxed),
             1,
@@ -333,7 +343,7 @@ mod tests {
 
     // ── 3. cross-thread ─────────────────────────────────────────────────────
 
-    /// `schedule()` is callable from another thread and rebuilds on the frame
+    /// `schedule(reason)` is callable from another thread and rebuilds on the frame
     /// thread. Nothing is built off-thread: the build counter cannot move until
     /// `build_scope` runs here.
     #[test]
@@ -342,7 +352,7 @@ mod tests {
         let before = builds.load(Ordering::Relaxed);
 
         let worker = std::thread::spawn(move || {
-            handle.schedule();
+            handle.schedule(RebuildReason::AsyncCompletion);
             std::thread::current().id()
         });
         let worker_thread = worker.join().expect("worker must not panic");
@@ -371,7 +381,7 @@ mod tests {
         tree.remove(root, &mut owner.element_owner_mut());
         assert!(tree.get(root).is_none(), "element is gone");
 
-        handle.schedule();
+        handle.schedule(RebuildReason::StateChange);
         owner.build_scope(&mut tree);
 
         assert_eq!(
@@ -388,7 +398,7 @@ mod tests {
         let handle = RebuildHandle::inert();
         assert!(!handle.is_active());
         assert_eq!(handle.element_id(), None);
-        handle.schedule(); // must not panic
+        handle.schedule(RebuildReason::StateChange); // must not panic
     }
 
     // ── 5. frame request ────────────────────────────────────────────────────
@@ -409,7 +419,7 @@ mod tests {
         let handle_with_hook = owner.rebuild_handle(root);
         assert_eq!(frames.load(Ordering::Relaxed), 0);
 
-        handle_with_hook.schedule();
+        handle_with_hook.schedule(RebuildReason::StateChange);
         assert_eq!(
             frames.load(Ordering::Relaxed),
             1,
@@ -418,7 +428,7 @@ mod tests {
 
         // The pre-hook handle still schedules (same inbox), but the id is
         // already queued, so no second frame request.
-        handle.schedule();
+        handle.schedule(RebuildReason::StateChange);
         assert_eq!(frames.load(Ordering::Relaxed), 1);
     }
 

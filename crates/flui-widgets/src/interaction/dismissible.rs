@@ -579,7 +579,7 @@ impl ViewState<Dismissible> for DismissibleState {
         let rebuild_for_value = rebuild.clone();
         self.move_value_listener_id =
             Some(self.move_controller.add_listener(Arc::new(move || {
-                rebuild_for_value.schedule();
+                rebuild_for_value.schedule(flui_view::RebuildReason::AnimationTick);
             })));
 
         let move_completed_runs = Arc::clone(&self.drag.move_completed_runs);
@@ -588,7 +588,7 @@ impl ViewState<Dismissible> for DismissibleState {
             move |status| {
                 if status == AnimationStatus::Completed {
                     move_completed_runs.fetch_add(1, Ordering::SeqCst);
-                    rebuild_for_status.schedule();
+                    rebuild_for_status.schedule(flui_view::RebuildReason::AnimationTick);
                 }
             },
         )));
@@ -673,7 +673,7 @@ impl ViewState<Dismissible> for DismissibleState {
             // Verified, not assumed, safe to do from a layout-phase closure:
             // - `RebuildHandle::schedule()`'s own contract (`rebuild_handle.rs`)
             //   states it "never touches the element tree, the render tree, or
-            //   the pipeline. It writes to a mutex-guarded set and calls one
+            //   the pipeline. It writes to a mutex-guarded map and calls one
             //   `Fn()`" — callable from any thread, any phase, by design.
             // - `BuildOwner::service_layout_builders` (`owner/layout_builder.rs`,
             //   the fixpoint that actually invokes this closure) calls
@@ -688,7 +688,7 @@ impl ViewState<Dismissible> for DismissibleState {
             //   `scripts/check-frame-capability-scope.sh`) governs *acquiring*
             //   `rebuild_handle()`/`post_frame_handle()` from `build`/`layout`/
             //   `paint` (an unbounded-rebuild-loop hazard); it says nothing
-            //   about *calling* `.schedule()` on a handle already acquired in
+            //   about *calling* `.schedule(reason)` on a handle already acquired in
             //   `init_state` (this one), which is exactly what every listener
             //   callback in this file already does.
             deliver_move_completion(
@@ -1206,7 +1206,7 @@ fn start_resize_animation(
         } else {
             progress_ticks.fetch_add(1, Ordering::SeqCst);
         }
-        rebuild_for_resize.schedule();
+        rebuild_for_resize.schedule(flui_view::RebuildReason::AnimationTick);
     }));
     *drag.resize_listener_id.borrow_mut() = Some(listener_id);
 
@@ -1671,7 +1671,7 @@ mod tests {
         let mut owner = BuildOwner::new();
         let mut tree = ElementTree::new();
         let root = tree.mount_root(&view, &mut owner.element_owner_mut());
-        owner.schedule_build_for(root, 0);
+        owner.schedule_build_for(root, 0, flui_view::RebuildReason::InitialMount);
         owner.build_scope(&mut tree);
 
         captured

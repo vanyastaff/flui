@@ -3,7 +3,6 @@
 
 use std::{cell::RefCell, rc::Rc, sync::Arc};
 
-use flui_interaction::arena::{GestureArena, SweepModel};
 use flui_interaction::{
     DoubleTapGestureRecognizer, DragAxis, DragDownDetails, DragEndDetails, DragGestureRecognizer,
     DragStartDetails, DragUpdateDetails, GestureRecognizer, LongPressGestureRecognizer,
@@ -45,13 +44,12 @@ type HorizontalDragCancelHandler = Rc<dyn Fn()>;
 ///   long-press deadline. Deadline-driven: it needs a [`GestureArenaScope`] +
 ///   binding above to poll the deadline (see [arena acquisition](#arena-acquisition)).
 /// - **double tap** (`on_double_tap`) — two quick taps within the double-tap
-///   window. Combines correctly with `on_tap` under a [`GestureArenaScope`] +
-///   binding: the double-tap recognizer holds the arena across the inter-tap
+///   window. Combines correctly with `on_tap`: the double-tap recognizer holds
+///   the presentation arena across the inter-tap
 ///   window, so the binding's first-up sweep is deferred and the front-member
 ///   tap cannot win early — two quick taps fire `on_double_tap` once (not `on_tap`
-///   twice), and a lone tap is held until the window closes, then fires `on_tap`
-///   once. Standalone (no scope), the inter-tap give-up is not polled, so prefer
-///   `on_double_tap` under a scope.
+///   twice), and a lone tap is held until the window closes, then fires
+///   `on_tap` once.
 /// - **pan/drag** (`on_pan_start` / `on_pan_update` / `on_pan_end`) — a contact
 ///   that moves past the drag slop, reported with running deltas and a release
 ///   velocity. Free axis: recognized on any direction of travel.
@@ -94,19 +92,12 @@ type HorizontalDragCancelHandler = Rc<dyn Fn()>;
 /// # Arena acquisition
 ///
 /// In `init_state` the detector reads an ambient [`GestureArenaScope`] via
-/// `ctx.get::<GestureArenaScope, _>(..)`:
-/// - **Some(scope)** — build all recognizers against the shared, clock-bound
-///   arena (which answers [`SweepModel::BindingDriven`]) and poll its deadlines
-///   each frame on the binding's virtual clock, so a long-press resolves
-///   deterministically. The binding drives the *close*-on-down / *sweep*-on-up
-///   lifecycle after routing each event to the whole hit-test path, so
-///   overlapping detectors genuinely compete in the one arena (the recognizers
-///   below never self-sweep), and `on_tap` + `on_double_tap` combine correctly.
-/// - **None** (standalone) — build against a private [`GestureArena`] the
-///   detector closes itself on down. Tap / secondary-tap / pan are fully
-///   functional this way (byte-for-byte the historical behavior); the
-///   deadline-driven gestures (long-press hold, double-tap give-up) are inert
-///   without a binding to poll them — a documented limitation.
+/// [`GestureArenaScope::of`]. All recognizers use the presentation's shared,
+/// clock-bound arena. The binding drives the *close*-on-down /
+/// *sweep*-on-up lifecycle after routing each event to the whole hit-test path,
+/// so overlapping detectors genuinely compete in one arena and
+/// `on_tap` + `on_double_tap` combine correctly. Mounting outside that scope is
+/// an invariant violation; there is no private-arena execution mode.
 ///
 /// # Hit behavior
 ///
@@ -214,10 +205,9 @@ impl GestureDetector {
     /// Called when the child is long-pressed (the contact held still past the
     /// long-press deadline).
     ///
-    /// Deadline-driven: this fires only when a [`GestureArenaScope`] + binding
-    /// above the detector polls the hold deadline each frame. A standalone
-    /// detector (no scope) never recognizes a long press — see
-    /// [arena acquisition](Self#arena-acquisition).
+    /// Deadline-driven: the presentation binding polls the shared arena's hold
+    /// deadline each frame. The detector must be mounted beneath
+    /// [`GestureArenaScope`]; see [arena acquisition](Self#arena-acquisition).
     #[must_use]
     pub fn on_long_press(mut self, callback: impl Fn() + 'static) -> Self {
         self.on_long_press = Some(Rc::new(callback));
@@ -227,13 +217,11 @@ impl GestureDetector {
     /// Called when the child is double-tapped (two quick taps within the
     /// double-tap window). The inter-tap timing reads the arena clock.
     ///
-    /// Combines correctly with [`on_tap`](Self::on_tap) under a
-    /// [`GestureArenaScope`] + binding: the double-tap recognizer holds the arena
-    /// across the inter-tap window, so the binding's first-up sweep is deferred
-    /// and the tap cannot win early. Two quick taps fire `on_double_tap` once
-    /// (never `on_tap` twice); a lone tap is held until the window closes, then
-    /// fires `on_tap` once. The give-up is binding-polled, so combine the two
-    /// under a scope.
+    /// Combines correctly with [`on_tap`](Self::on_tap): the double-tap
+    /// recognizer holds the presentation arena across the inter-tap window, so
+    /// the binding's first-up sweep is deferred and the tap cannot win early.
+    /// Two quick taps fire `on_double_tap` once (never `on_tap` twice); a lone
+    /// tap is held until the window closes, then fires `on_tap` once.
     #[must_use]
     pub fn on_double_tap(mut self, callback: impl Fn() + 'static) -> Self {
         self.on_double_tap = Some(Rc::new(callback));
@@ -353,21 +341,14 @@ struct HorizontalDragCallbacks {
     cancel: Option<HorizontalDragCancelHandler>,
 }
 
-/// The recognizers + the arena they share, built once in
-/// [`GestureDetectorState::init_state`] against the ambient (or private) arena.
+/// The recognizers, built once in [`GestureDetectorState::init_state`] against
+/// the presentation arena.
 ///
 /// They are not built in `create_state` because that has no `BuildContext` and
 /// so cannot read the ambient [`GestureArenaScope`]; a recognizer's arena is
 /// captured at construction and is not swappable, so construction must wait for
 /// the live context `init_state` receives.
 struct Recognizers {
-    /// The arena the recognizers compete in. Shared (from a `GestureArenaScope`)
-    /// when `self_close` is `false`, else private to this detector.
-    arena: GestureArena,
-    /// `true` when this detector owns a private arena and must `close` it itself
-    /// on down; `false` when a binding owns the shared arena and closes it after
-    /// dispatching the down to the whole hit-test path.
-    self_close: bool,
     /// Tap recognizer — added to the arena FIRST so it is the front member that
     /// wins an ambiguous quick tap on sweep.
     tap: Arc<TapGestureRecognizer>,
@@ -448,19 +429,7 @@ impl StatefulView for GestureDetector {
 
 impl ViewState<GestureDetector> for GestureDetectorState {
     fn init_state(&mut self, ctx: &dyn BuildContext) {
-        // Read the ambient arena WITHOUT registering a dependency: the handle
-        // never changes, and `get` (unlike `depend_on`) is legal here — Flutter
-        // forbids `dependOnInheritedWidgetOfExactType` in `initState`, and the
-        // no-dependency lookup sidesteps that rule.
-        let arena = ctx
-            .get::<GestureArenaScope, _>(|scope| scope.arena().clone())
-            .unwrap_or_else(GestureArena::new);
-        // The arena's sweep model decides who owns close-on-down / sweep-on-up:
-        // a binding-owned (shared) arena answers `BindingDriven` and runs the
-        // lifecycle itself; a private `GestureArena::new()` answers `SelfDriven`,
-        // so this detector closes it. Deriving the flag from the arena keeps the
-        // two halves symmetric and subsumes a separate bool.
-        let self_close = arena.sweep_model() == SweepModel::SelfDriven;
+        let arena = GestureArenaScope::of(ctx);
 
         // Each recognizer reads its live slot OUT before invoking it, so a slot
         // lock is never held across user code (no re-entrancy / poison hazard).
@@ -563,8 +532,6 @@ impl ViewState<GestureDetector> for GestureDetectorState {
         };
 
         self.recognizers = Some(Recognizers {
-            arena,
-            self_close,
             tap,
             long_press,
             double_tap,
@@ -664,8 +631,6 @@ impl GestureDetectorState {
     /// does not let its tap recognizer steal the first up.
     fn make_listener(&self, recognizers: &Recognizers) -> Listener {
         let group = RecognizerGroup {
-            arena: recognizers.arena.clone(),
-            self_close: recognizers.self_close,
             tap: Arc::clone(&recognizers.tap),
             long_press: Arc::clone(&recognizers.long_press),
             double_tap: Arc::clone(&recognizers.double_tap),
@@ -696,8 +661,6 @@ impl GestureDetectorState {
 /// the [`Listener`] callbacks. One shared bundle, cloned once per callback.
 #[derive(Clone)]
 struct RecognizerGroup {
-    arena: GestureArena,
-    self_close: bool,
     tap: Arc<TapGestureRecognizer>,
     long_press: Arc<LongPressGestureRecognizer>,
     double_tap: Arc<DoubleTapGestureRecognizer>,
@@ -745,11 +708,10 @@ impl RecognizerGroup {
             || horizontal.cancel.is_some()
     }
 
-    /// Register every participating recognizer for this contact (tap first so it
-    /// is the arena's front member), then — in standalone mode only — close the
-    /// arena. In shared mode the binding closes the arena after the down has been
-    /// dispatched to the entire hit-test path, so overlapping detectors all add
-    /// their recognizers before the single close.
+    /// Register every participating recognizer for this contact (tap first so
+    /// it is the arena's front member). The binding closes the arena only after
+    /// Down has reached the entire hit-test path, so overlapping detectors can
+    /// all join before the single close.
     fn handle_down(&self, event: &PointerEvent) {
         let pointer = event.pointer_id();
         let position = event.position();
@@ -771,9 +733,6 @@ impl RecognizerGroup {
         }
         if self.horizontal_drag_active() {
             self.horizontal_drag.add_pointer(pointer, position);
-        }
-        if self.self_close {
-            self.arena.close(pointer);
         }
     }
 

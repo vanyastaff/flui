@@ -84,11 +84,11 @@ pub const INCREMENT_BUTTON_LABEL: &str = "Increment";
 /// bundled icon font in this substrate) — the same accepted gap
 /// `examples/material_demo/tree.rs::settings_icon_data` already documents.
 fn home_icon_data() -> IconData {
-    IconData::new(0xF3A1)
+    IconData::new(0xF447).with_font_family("CupertinoIcons")
 }
 
 fn settings_icon_data() -> IconData {
-    IconData::new(0xF411)
+    IconData::new(0xF411).with_font_family("CupertinoIcons")
 }
 
 /// The Details route, pushed by the Home tab's middle button.
@@ -219,7 +219,7 @@ impl ViewState<SettingsTab> for SettingsTabState {
             Text::new(format!("Count: {}", self.count.get())),
             CupertinoButton::new(Text::new(INCREMENT_BUTTON_LABEL)).on_pressed(move || {
                 count_for_tap.set(count_for_tap.get() + 1);
-                rebuild.schedule();
+                rebuild.schedule(flui_view::RebuildReason::StateChange);
             }),
         ])))
         .navigation_bar(CupertinoNavigationBar::new().middle(Text::new(SETTINGS_NAV_TITLE)))

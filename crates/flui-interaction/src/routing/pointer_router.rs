@@ -36,6 +36,7 @@ use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use smallvec::SmallVec;
 
+use super::interaction_lane::RoutePanic;
 use crate::{events::PointerEvent, ids::PointerId};
 
 /// Handler for routed pointer events.
@@ -168,7 +169,7 @@ impl PointerRouter {
 
     /// Add a global handler that receives all pointer events.
     ///
-    /// Global handlers are called before per-pointer handlers.
+    /// Global handlers are called after per-pointer handlers.
     /// Useful for logging, debugging, or modal event capture.
     pub fn add_global_handler(&self, handler: GlobalPointerHandler) {
         self.global_handlers.borrow_mut().push(handler);
@@ -199,27 +200,35 @@ impl PointerRouter {
     /// Route a pointer event to all registered handlers.
     ///
     /// Delivery order:
-    /// 1. Global handlers (in registration order)
-    /// 2. Per-pointer handlers (in registration order)
+    /// 1. Per-pointer handlers (in registration order)
+    /// 2. Global handlers (in registration order)
     ///
-    /// All handlers receive the event regardless of what others do.
+    /// Every handler is isolated from unwinding in its peers. All callbacks
+    /// still registered when their turn arrives receive the event, then the
+    /// first captured panic resumes after the complete router snapshot has run.
     ///
     /// # Reentrancy Safety
     ///
-    /// Handlers added or removed *during* dispatch take effect on the next
-    /// event — current dispatch sees a snapshot of registration state taken
-    /// before the first handler fires. This matches Flutter
+    /// Dispatch snapshots the candidate callbacks before the first handler
+    /// fires, so additions take effect on the next event. Before invoking each
+    /// candidate it checks the live registry, so a callback removed before its
+    /// turn is skipped in the current event. This matches Flutter
     /// [`pointer_router.dart::route`](https://github.com/flutter/flutter/blob/master/packages/flutter/lib/src/gestures/pointer_router.dart)
-    /// behavior and eliminates the prior 2+N+M registration checks per event.
+    /// behavior.
     ///
     /// Dispatch order is **per-pointer handlers first, then global handlers**
     /// matching Flutter `pointer_router.dart:124` ordering. Per-pointer
     /// handlers run in their registration order (insertion order in the
     /// HashMap entry's Vec); global handlers fire afterward.
-    ///
-    /// Total lock acquisitions per event: 2 `read()`s (one per category),
-    /// down from 2+N+M.
     pub fn route(&self, event: &PointerEvent) {
+        if let Some(panic) = self.route_capturing_panics(event) {
+            panic.resume();
+        }
+    }
+
+    /// Route every callback while returning the first captured panic to the
+    /// binding transaction that owns later hit-route/lifecycle cleanup.
+    pub(crate) fn route_capturing_panics(&self, event: &PointerEvent) -> Option<RoutePanic> {
         let pointer = get_pointer_id(event);
 
         // Snapshot per-pointer handlers (clone the `Rc`s) so the borrow is
@@ -232,19 +241,68 @@ impl PointerRouter {
             .map(|h| h.iter().cloned().collect())
             .unwrap_or_default();
 
-        // Per-pointer handlers first (Flutter ordering).
-        for handler in &pointer_handlers {
-            handler(event);
-        }
-
-        // Snapshot global handlers likewise.
+        // Snapshot global handlers before the first callback for the same
+        // reentrancy contract as the per-pointer snapshot.
         let global_handlers: SmallVec<[GlobalPointerHandler; 4]> =
             self.global_handlers.borrow().iter().cloned().collect();
 
-        // Global handlers after per-pointer.
-        for handler in &global_handlers {
-            handler(event);
+        let mut first_panic = None;
+
+        // Per-pointer handlers first (Flutter ordering).
+        for handler in pointer_handlers {
+            if self.contains_route(pointer, &handler) {
+                let delivered = RoutePanic::capture(|| handler(event));
+                RoutePanic::preserve_first(
+                    &mut first_panic,
+                    delivered,
+                    "per-pointer router callback",
+                );
+            }
+
+            // Removing a callback during dispatch can leave the snapshot as
+            // its final owner. Capture that destructor independently so the
+            // rest of the already-snapshotted router transaction still runs.
+            let snapshot_cleanup = RoutePanic::capture(|| drop(handler));
+            RoutePanic::preserve_first(
+                &mut first_panic,
+                snapshot_cleanup,
+                "per-pointer router snapshot cleanup",
+            );
         }
+
+        // Global handlers after per-pointer.
+        for handler in global_handlers {
+            if self.contains_global_handler(&handler) {
+                let delivered = RoutePanic::capture(|| handler(event));
+                RoutePanic::preserve_first(&mut first_panic, delivered, "global router callback");
+            }
+
+            let snapshot_cleanup = RoutePanic::capture(|| drop(handler));
+            RoutePanic::preserve_first(
+                &mut first_panic,
+                snapshot_cleanup,
+                "global router snapshot cleanup",
+            );
+        }
+
+        first_panic
+    }
+
+    /// Whether a snapshotted per-pointer callback is still registered.
+    fn contains_route(&self, pointer: PointerId, handler: &PointerRouteHandler) -> bool {
+        self.routes.borrow().get(&pointer).is_some_and(|handlers| {
+            handlers
+                .iter()
+                .any(|candidate| Rc::ptr_eq(candidate, handler))
+        })
+    }
+
+    /// Whether a snapshotted global callback is still registered.
+    fn contains_global_handler(&self, handler: &GlobalPointerHandler) -> bool {
+        self.global_handlers
+            .borrow()
+            .iter()
+            .any(|candidate| Rc::ptr_eq(candidate, handler))
     }
 
     /// Check if any handlers are registered for a pointer.
@@ -591,17 +649,38 @@ mod tests {
         let event = make_event(0, Offset::new(Pixels(50.0), Pixels(50.0)));
         router.route(&event); // Should not deadlock
 
-        // Current semantics (snapshot-then-dispatch matching Flutter):
-        // handler2 IS called because the dispatch snapshot was taken before
-        // any handler fired. Removal takes effect on the next event.
-        // Previously FLUI checked still-registered per-handler at 2+N+M
-        // lock count; that contract removed for perf parity with Flutter.
-        assert_eq!(handler2_called.get(), 1);
+        // Flutter snapshots additions, but consults the live registration map
+        // before each invocation. A handler removed before its turn is skipped
+        // in this same dispatch.
+        assert_eq!(handler2_called.get(), 0);
 
         // Second dispatch sees post-removal snapshot — handler2 not called.
         let event2 = make_event(0, Offset::new(Pixels(50.0), Pixels(50.0)));
         router.route(&event2);
-        assert_eq!(handler2_called.get(), 1);
+        assert_eq!(handler2_called.get(), 0);
+    }
+
+    #[test]
+    fn removing_a_later_global_handler_skips_it_in_the_current_dispatch() {
+        let router = Rc::new(PointerRouter::new());
+        let later_called = Rc::new(Cell::new(0));
+        let later_count = Rc::clone(&later_called);
+        let later: GlobalPointerHandler = Rc::new(move |_| {
+            later_count.set(later_count.get() + 1);
+        });
+
+        let router_for_first = Rc::clone(&router);
+        let later_for_remove = Rc::clone(&later);
+        let first: GlobalPointerHandler = Rc::new(move |_| {
+            router_for_first.remove_global_handler(&later_for_remove);
+        });
+        router.add_global_handler(first);
+        router.add_global_handler(later);
+
+        let event = make_event(0, Offset::new(Pixels(50.0), Pixels(50.0)));
+        router.route(&event);
+
+        assert_eq!(later_called.get(), 0);
     }
 
     #[test]

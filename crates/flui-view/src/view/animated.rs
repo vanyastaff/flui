@@ -421,7 +421,7 @@ mod tests {
         let root = tree.mount_root(&view, &mut owner.element_owner_mut());
 
         // Initial build.
-        owner.schedule_build_for(root, 0);
+        owner.schedule_build_for(root, 0, crate::RebuildReason::InitialMount);
         owner.build_scope(&mut tree);
         let after_initial = build_count.load(Ordering::SeqCst);
         assert!(
@@ -464,7 +464,7 @@ mod tests {
         let mut owner = crate::BuildOwner::new();
         let root = tree.mount_root(&view, &mut owner.element_owner_mut());
 
-        owner.schedule_build_for(root, 0);
+        owner.schedule_build_for(root, 0, crate::RebuildReason::InitialMount);
         owner.build_scope(&mut tree);
         let after_initial = build_count.load(Ordering::SeqCst);
         assert!(

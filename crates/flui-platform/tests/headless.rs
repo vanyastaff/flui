@@ -168,7 +168,6 @@ fn test_t069_all_tests_pass_in_headless_mode() {
 
     // Executors
     let _bg_executor = platform.background_executor();
-    let _fg_executor = platform.foreground_executor();
 
     // Displays
     let displays = platform.displays();

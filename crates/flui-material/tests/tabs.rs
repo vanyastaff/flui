@@ -38,7 +38,7 @@ fn themed(theme: ThemeData, child: impl flui_view::prelude::IntoView) -> Theme {
 
 /// Unmounting a `TabBar` removes its listener from the (outliving)
 /// `TabController` it was subscribed to — without `TabBarState::dispose`,
-/// every unmount leaks an `Rc` closure that calls `rebuild.schedule()` on a
+/// every unmount leaks an `Rc` closure that calls `rebuild.schedule(reason)` on a
 /// `RebuildHandle` whose element no longer exists, and repeated mount/unmount
 /// cycles against a long-lived controller (an explicit `TabBar::controller`
 /// shared with a sibling, or a `DefaultTabController` that outlives one

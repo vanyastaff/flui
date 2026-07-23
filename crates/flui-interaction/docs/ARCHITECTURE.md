@@ -40,41 +40,37 @@ crate-root `team.rs` and `signal_resolver.rs` (the back-compat shims at
 
 | Subsystem | One-paragraph description |
 |---|---|
-| `arena` | Conflict resolution between competing recognisers. Tracks per-pointer `SmallVec<[Arc<dyn GestureArenaMember>; 4]>` (inline for ≤ 4 members — the common case), `DashMap<PointerId, Mutex<ArenaEntryData>>` for concurrent access, and a lifecycle (Open → Held → Closed → Resolved). Eager acceptors win when the arena closes; teams enable multi-winner resolution. |
+| `arena` | Owner-local conflict resolution between competing recognisers. Tracks per-pointer `SmallVec<[Arc<dyn GestureArenaMember>; 4]>` (inline for ≤ 4 members), exact generational slots, held generations detached across pointer-ID reuse, and a lifecycle (Open → Held → Closed → Resolved). Eager acceptors win when the arena closes; teams enable multi-winner resolution. |
 | `recognizers` | The 11+ recogniser types. Each implements `GestureRecognizer` (the `add_pointer` / `handle_event` / `dispose` lifecycle) and gets `GestureArenaMember` for free via the `CustomGestureRecognizer` blanket impl. State machines are kept inline per file (TapState, LongPressPhase, etc.) — no shared trait-object dispatch. |
 | `processing` | Per-pointer derived data: `VelocityTracker` (LSQ fit on 20-sample circular buffer, 100 ms horizon, 40 ms stationary gate), `PointerEventResampler` (frame-rate adaptation with 100-event cap and 1 ms minimum sample interval), `InputPredictor` (kalman-style pointer extrapolation), `RawInputHandler` (low-level stream adapter), and the shared `lsq_solver` + `sampling_clock` helpers. |
 | `routing` | Event dispatch infrastructure: `EventRouter`, `PointerRouter`, owner-thread TLS `FocusManager`, `FocusScopeNode` / reading-order Tab traversal, `MouseTracker` (enter/exit/hover), hit testing, and the `TransformGuard` stack-RAII for the transform stack. Off the per-pointer hot path. |
-| `binding` | `GestureBinding` — the top-level glue that hosts the `GestureArena` and dispatches `PointerEvent`s from the platform layer to the recogniser set. Re-exports the W3C `PointerEvent` type from `ui-events`. |
+| `binding` | `GestureBinding` — owner-local glue that hosts the arena, resolves and retains the Down hit route, coalesces/resamples Moves, and runs route → arena lifecycle ordering. Contact generations prevent frame-delayed samples from crossing a reused platform pointer ID. |
 | `timer` | `GestureTimer` / `GestureTimerService` — async timer for the long-press 500 ms deadline and similar gesture-timed waits. `global_timer_service()` is the crate-level singleton; the tokio runtime backs the async side. |
 | `observability` | Observability substrate. `GestureEvent` is a typed `Display` enum of recogniser / arena event names; `SPAN_RECOGNIZER` and `SPAN_ARENA` are span-name constants; `pointer_event_kind` summarises a `PointerEvent` to a short string for span fields. `#[tracing::instrument]` is applied on `RecognizerBase` start_tracking / stop_tracking and on every public `GestureArena` method. |
 
-## Thread safety
+## Ownership and synchronization
 
-`flui-interaction` runs in the event-dispatch layer; per strategy
-clause "sync hot path", the per-pointer event loop is single-threaded.
-Sync primitives in this crate are limited to per-recogniser `Mutex`
-fields and the shared `GestureArena`'s `DashMap` + inner `Mutex`. No
-primitive sits inside `handle_event` on a per-event basis. The static
-`AssertSendSync` block at the bottom of `src/lib.rs:341-372`
-compile-time-asserts the listed shared types are `Send + Sync`. Focus callbacks
-and manager state are owner-local and are not covered by that guarantee.
+The synchronous pointer pipeline belongs to one `UiRealm`. `GestureBinding`,
+`GestureArena`, recognizers, pointer routes, and executable callbacks are
+intentionally `!Send + !Sync`; callbacks may capture `Rc` widget state.
+`Arc` in recognizer and arena internals provides stable identity, not a
+cross-thread execution contract.
 
-| Site | Primitive | Category | Notes |
-|---|---|---|---|
-| `GestureArena::entries` (`src/arena/mod.rs:503`) | `Arc<DashMap<PointerId, Mutex<ArenaEntryData>>>` | Shared infrastructure | DashMap for lock-free concurrent insert/lookup; inner `parking_lot::Mutex` for the per-pointer state mutation. Allowed per [`docs/PORT.md` lock-decision table](../docs/PORT.md). |
-| `RecognizerBase::primary_pointer`, `initial_position`, `disposed` (`src/recognizers/recognizer.rs:68-74`) | `Arc<parking_lot::Mutex<...>>` | Per-recogniser state | Each recogniser's mutable state is independently locked. `parking_lot::Mutex` chosen over std for the no-poison semantics. |
-| `TapGestureRecognizer::callbacks`, `gesture_state`, `pending_down`, `pending_up`, `accepted` (`src/recognizers/tap.rs:117-144`) | `Arc<parking_lot::Mutex<...>>` | Per-recogniser state | Deferred-callback state. Five independent mutexes to keep lock contention local. |
-| `LongPressGestureRecognizer::callbacks`, `gesture_state` (`src/recognizers/long_press.rs:107-110`) | `Arc<parking_lot::Mutex<...>>` | Per-recogniser state | `try_fire_timer` runs under `gesture_state` lock. |
-| `PointerEventResampler::inner` (`src/processing/resampler.rs:90`) | `Arc<parking_lot::Mutex<ResamplerInner>>` | Shared infrastructure | Single lock per resampler; the queue is bounded to 100 events (`MAX_BUFFERED_EVENTS`). |
-| `PointerEventResampler` is the only place with an `Arc<Mutex<...>>` in the `processing/` hot path — the `VelocityTracker` is `Send + Sync` via plain fields (no shared state) and is rebuilt per-pointer at the call site. |
-| `FocusManager::global()` (`src/routing/focus.rs`) | `thread_local!` owner-thread state plus internal `parking_lot::RwLock` fields | Owner-thread state | Returns the stable manager for the current owner thread. Off any hot path; Tab traversal reads the active `FocusScopeNode`, then writes primary focus once. |
-| `GestureTimerService` global (`src/timer.rs`) | `parking_lot::Mutex` + `once_cell::sync::Lazy` | Process-wide singleton | Async timer scaffold; **unused by any recogniser** — deadlines are polled inline via `Instant::now()`. |
-| Static `AssertSendSync` impls (`src/lib.rs:341-372`) | None (compile-time trait bound) | Type-system guarantee | Compile-asserts `Send + Sync` for all public types listed in the block. |
+The data plane is separate. Pointer events, hit paths, IDs, transforms, and
+opaque route targets remain `Send + Sync` where the renderer or embedder needs
+them. Compile-time assertions in `src/lib.rs` cover only those data types.
 
-No `unsafe impl Send/Sync` in this crate. The sealed-trait pattern
-(`sealed::arena_member::Sealed` supertrait on `GestureArenaMember`)
-prevents downstream implementations from accidentally breaking the
-`Send + Sync` invariant.
+| Site | Primitive | Reason |
+|---|---|---|
+| Arena slots | keyed maps + per-slot `parking_lot::Mutex` | exact slot transactions and callback-free state mutation; callbacks run after unlocking |
+| Recognizer state | small `parking_lot::Mutex` fields | interior mutation behind stable `Arc` identity on the owner lane |
+| Pointer router / interaction lane | `Rc` + `RefCell` | explicitly owner-local executable callbacks |
+| Pointer resampler | `Arc<parking_lot::Mutex<ResamplerInner>>` | bounded data queue; sampling materializes a batch and unlocks before dispatch |
+| Focus manager | transitional owner-thread state | scheduled to move from ambient TLS into presentation ownership |
+
+There is no `unsafe impl Send/Sync` in this crate. The sealed extension traits
+preserve lifecycle invariants, while negative compile-time assertions prevent
+the executable gesture graph from accidentally becoming cross-thread.
 
 ## Mapping decisions
 
@@ -97,8 +93,8 @@ a refusal trigger, or a precedent plan).
 
 | Command | Purpose |
 |---|---|
-| `cargo test -p flui-interaction --lib` | 339 unit tests across arena / recognisers / processing / routing / timer (the +2 over the prior 337 baseline are long-press regression tests). |
-| `cargo test --doc -p flui-interaction` | 11 runnable doc-tests. 72 `rust,ignore` doc-tests remain — these are illustrative; the next doc-test sweep should target `processing::InputPredictor`, `routing::FocusManager`, and the `testing` module builders. |
+| `cargo test -p flui-interaction --all-features` | Unit, integration, feature-gated testing helpers, and doctests across arena / recognisers / processing / routing / timer. |
+| `cargo test --doc -p flui-interaction` | Runnable public examples; illustrative `rust,ignore` snippets stay excluded until their surrounding framework fixtures exist. |
 | `cargo bench -p flui-interaction` | 4 Criterion benches. All use `black_box` on inputs and outputs. Hot-path regression guards; baseline numbers to be captured in the next release. |
 | `cargo clippy -p flui-interaction --lib --tests --benches -- -D warnings` | Lint gate — zero warnings. |
 | `cargo fmt -p flui-interaction --check` | Format gate. |

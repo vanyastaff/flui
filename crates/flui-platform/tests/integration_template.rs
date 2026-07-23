@@ -43,6 +43,8 @@
 // (docs/PANIC-POLICY.md); style items here are ship-wave debt.
 #![allow(clippy::ignore_without_reason)]
 
+use std::sync::Arc;
+
 use flui_platform::{WindowOptions, current_platform};
 use flui_types::geometry::{Size, px};
 
@@ -64,7 +66,7 @@ fn get_test_platform() -> Box<dyn flui_platform::Platform> {
 }
 
 /// Create a test window with default options
-fn create_test_window() -> Result<Box<dyn flui_platform::PlatformWindow>, anyhow::Error> {
+fn create_test_window() -> Result<Arc<dyn flui_platform::PlatformWindow>, anyhow::Error> {
     let platform = get_test_platform();
     let options = WindowOptions {
         title: "Integration Test Window".to_string(),
@@ -295,17 +297,6 @@ fn test_executor_integration() {
     );
 
     tracing::info!("✓ Executor integration validated");
-
-    // TODO: Add foreground executor + UI update integration
-    // Example:
-    // ```rust
-    // let fg_executor = platform.foreground_executor();
-    // fg_executor.spawn(Box::new(move || {
-    //     // Update UI state on main thread
-    //     window.request_redraw();
-    // }));
-    // fg_executor.drain_tasks();
-    // ```
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -353,7 +344,7 @@ where
 #[allow(dead_code)]
 fn with_window<F>(test_fn: F) -> Result<(), anyhow::Error>
 where
-    F: FnOnce(Box<dyn flui_platform::PlatformWindow>) -> Result<(), anyhow::Error>,
+    F: FnOnce(Arc<dyn flui_platform::PlatformWindow>) -> Result<(), anyhow::Error>,
 {
     init_tracing();
     let window = create_test_window()?;

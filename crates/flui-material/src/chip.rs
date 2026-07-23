@@ -146,24 +146,6 @@
 //! identical alpha value (there is no per-slot variation to preserve by
 //! keeping them separate).
 //!
-//! # Nested tap targets: a local `GestureArenaScope`
-//!
-//! The delete icon's `InkWell` sits nested inside the chip body's own
-//! `InkWell` — two independent tappable regions on one hit-test path. A
-//! bare `GestureDetector` with no ambient `GestureArenaScope` above it
-//! builds its recognizers against a private arena it closes itself, which
-//! is exactly right when it's the only detector in play but means two such
-//! *standalone* detectors on the same path resolve completely
-//! independently: a tap on the delete icon would fire both `on_deleted` and
-//! the chip's own `on_pressed`/`on_selected`. Both [`Chip`] and
-//! [`FilterChip`] close this by wrapping their whole built subtree in a
-//! fresh, local `GestureArenaScope` (see this module's own
-//! `wrap_local_gesture_arena`) so the two `InkWell`s genuinely compete —
-//! confirmed by mounting a real tree and dispatching a real tap (see
-//! `tests/chip.rs`'s delete-vs-chip-tap coverage), not merely inferred from
-//! the tap-vs-long-press precedent `crates/flui-widgets/tests/gesture_detector_advanced.rs`
-//! establishes for a different pair of gesture types.
-//!
 //! # Deferred (named, not silently dropped)
 //!
 //! - **Avatar/delete/selection/enable animation** — every transition snaps
@@ -276,11 +258,11 @@ fn disabled_content_opacity(enabled: bool) -> f32 {
 const _: () = assert!(PADDING * 2.0 < CHIP_HEIGHT);
 
 fn cancel_icon_data() -> IconData {
-    IconData::new(DELETE_ICON_CANCEL_CODEPOINT).with_font_family("MaterialIcons")
+    IconData::new(DELETE_ICON_CANCEL_CODEPOINT).with_font_family("Material Icons")
 }
 
 fn clear_icon_data() -> IconData {
-    IconData::new(DELETE_ICON_CLEAR_CODEPOINT).with_font_family("MaterialIcons")
+    IconData::new(DELETE_ICON_CLEAR_CODEPOINT).with_font_family("Material Icons")
 }
 
 /// Builds the PURE (never-combined) [`WidgetStates`] query set the M3
@@ -650,12 +632,10 @@ impl StatelessView for Chip {
             )
             .child(Material::new(background_color).shape(shape).child(ink_well));
 
-        wrap_local_gesture_arena(
-            Semantics::new()
-                .button(self.on_pressed.is_some())
-                .enabled(self.enabled)
-                .child(container),
-        )
+        Semantics::new()
+            .button(self.on_pressed.is_some())
+            .enabled(self.enabled)
+            .child(container)
     }
 }
 
@@ -930,13 +910,11 @@ impl StatelessView for FilterChip {
             )
             .child(Material::new(background_color).shape(shape).child(ink_well));
 
-        wrap_local_gesture_arena(
-            Semantics::new()
-                .selected(selected)
-                .button(true)
-                .enabled(enabled)
-                .child(container),
-        )
+        Semantics::new()
+            .selected(selected)
+            .button(true)
+            .enabled(enabled)
+            .child(container)
     }
 }
 
@@ -976,43 +954,6 @@ fn chip_content_constraints(padding: EdgeInsets, label_padding: EdgeInsets) -> B
         chip_content_min_height(padding, label_padding),
         Pixels::INFINITY,
     )
-}
-
-/// Wraps a chip's whole built subtree in a fresh, local
-/// [`flui_widgets::GestureArenaScope`] so its two nested [`InkWell`]s (the
-/// delete button, inside the outer chip-body [`InkWell`]) genuinely compete
-/// for a tap instead of both firing.
-///
-/// [`flui_widgets::GestureDetector`]'s own module docs document the
-/// fallback this closes a real gap in: with **no** ambient
-/// `GestureArenaScope` above it, a `GestureDetector` builds its recognizers
-/// against a *private* arena it closes itself — correct in isolation, but
-/// when TWO such standalone detectors both sit on the same hit-test path
-/// (exactly what a delete icon nested inside a tappable chip produces), each
-/// resolves its own tap independently, so a tap on the delete icon fires
-/// BOTH `on_deleted` and the chip's own `on_pressed`/`on_selected`. Neither
-/// `flui-app`'s binding nor any ancestor this crate's components mount
-/// installs a `GestureArenaScope` anywhere today — confirmed by grepping the
-/// workspace for it outside `flui-widgets` itself — so a real app has this
-/// exact double-fire bug for any nested tap targets, not just this one.
-/// Fixing that project-wide is out of scope here; this closes it locally,
-/// the same way any composed widget with more than one nested tap target
-/// must.
-///
-/// Constructing a fresh [`flui_interaction::arena::GestureArena::new`] on
-/// every `build()` call is safe despite [`Chip`]/[`FilterChip`] being
-/// stateless (no persistent slot to cache it in): a descendant
-/// `GestureDetector` reads its ambient scope exactly once, in its own
-/// `init_state` (first mount) — see that type's own "Arena acquisition" doc
-/// section — never on a later rebuild. So only the arena captured at first
-/// mount is ever actually used; every subsequent rebuild's
-/// freshly-constructed (and immediately discarded)
-/// [`flui_interaction::arena::GestureArena`] is inert. This mirrors the
-/// same "cheap to reconstruct, only the first read matters" contract
-/// `GestureArenaScope::update_should_notify` documents (always `false`)
-/// already relies on.
-fn wrap_local_gesture_arena(child: impl IntoView) -> flui_widgets::GestureArenaScope {
-    flui_widgets::GestureArenaScope::new(flui_interaction::arena::GestureArena::new(), child)
 }
 
 /// Strokes a chip's resolved [`MaterialShape`] as an inset ring — the same

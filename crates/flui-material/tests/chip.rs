@@ -34,7 +34,7 @@ use common::{lay_out, loose};
 use flui_material::chip::CHIP_ICON_SIZE;
 use flui_material::{Chip, ChipThemeData, FilterChip, Theme, ThemeData, ThemeDataOverrides};
 use flui_types::Color;
-use flui_widgets::Text;
+use flui_widgets::{GestureDetector, HitTestBehavior, Text};
 
 /// `_ChipDefaultsM3`/`_FilterChipDefaultsM3.padding` (`chip.dart`/
 /// `filter_chip.dart`, oracle tag `3.44.0`, `EdgeInsets.all(8.0)`) — a
@@ -143,20 +143,8 @@ fn tap_fires_on_selected_with_the_flipped_value_for_a_filter_chip() {
 // (b) Delete-icon vs. chip-body tap separation — nested InkWells.
 // ------------------------------------------------------------------
 
-/// Mutation-run: dropping `chip.rs`'s `wrap_local_gesture_arena` call (so
-/// `Chip::build` returns its `Semantics` tree directly, with no local
-/// `GestureArenaScope`) was confirmed to make this test fail —
-/// `presses.borrow()` reads `1` instead of the expected `0`, meaning BOTH
-/// the delete button's `InkWell` and the chip body's own `InkWell` fired
-/// independently for the same contact. That is not a hypothetical: it is
-/// the exact `GestureDetector` "standalone" fallback (no ambient
-/// `GestureArenaScope` above it, so each detector closes its own private
-/// arena — see `GestureDetector`'s own module docs, "Arena acquisition")
-/// that this crate's plain `common::lay_out` harness exercises with no
-/// scope wrapper, and — confirmed by grepping the workspace — that no
-/// `flui-app`/binding-level ancestor installs anywhere either, so this was
-/// a real, previously unverified double-fire defect for any nested tap
-/// target, not a test-harness artifact.
+/// The shared root arena installed by the binding makes the nested delete
+/// target and chip body compete exactly as they do in a production `UiRealm`.
 #[test]
 fn tapping_the_delete_icon_fires_on_deleted_only_not_the_chip_tap() {
     let presses = Rc::new(RefCell::new(0_u32));
@@ -227,6 +215,32 @@ fn tapping_elsewhere_on_the_chip_fires_the_chip_tap_only_not_on_deleted() {
         *deletions.borrow(),
         0,
         "a tap away from the delete icon must NOT fire on_deleted",
+    );
+}
+
+#[test]
+fn ancestor_detector_and_chip_compete_in_the_binding_root_arena() {
+    let ancestor_taps = Rc::new(RefCell::new(0_u32));
+    let chip_taps = Rc::new(RefCell::new(0_u32));
+    let ancestor_counter = Rc::clone(&ancestor_taps);
+    let chip_counter = Rc::clone(&chip_taps);
+    let chip = Chip::new(Text::new("Tag")).on_pressed(move || {
+        *chip_counter.borrow_mut() += 1;
+    });
+    let root = GestureDetector::new()
+        .on_tap(move || *ancestor_counter.borrow_mut() += 1)
+        .behavior(HitTestBehavior::Opaque)
+        .child(chip);
+    let laid = lay_out(themed(root), loose(300.0));
+
+    let (x, y) = chip_only_point();
+    laid.dispatch_pointer_down(x, y);
+    laid.dispatch_pointer_up(x, y);
+
+    assert_eq!(
+        *ancestor_taps.borrow() + *chip_taps.borrow(),
+        1,
+        "an ancestor detector and Chip must arbitrate in one binding-owned arena",
     );
 }
 

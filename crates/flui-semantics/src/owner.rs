@@ -6,8 +6,18 @@
 use std::sync::Arc;
 
 use flui_foundation::SemanticsId;
+use rustc_hash::FxHashSet;
+use smallvec::SmallVec;
+use thiserror::Error;
 
-use crate::{node::SemanticsNode, tree::SemanticsTree, update::SemanticsNodeData};
+use crate::{
+    action::{ActionArgs, SemanticsAction, SemanticsActionHandler, SemanticsActionRequest},
+    identity::AccessibilityNodeId,
+    node::SemanticsNode,
+    snapshot::{SemanticsSnapshot, SemanticsSnapshotError},
+    tree::SemanticsTree,
+    update::SemanticsNodeData,
+};
 
 // ============================================================================
 // CALLBACK TYPE
@@ -18,6 +28,97 @@ use crate::{node::SemanticsNode, tree::SemanticsTree, update::SemanticsNodeData}
 /// Called when the semantics tree changes and needs to be sent to the platform.
 /// The callback receives a list of changed semantics nodes with their data.
 pub type SemanticsUpdateCallback = Arc<dyn Fn(&[SemanticsNodeUpdate]) + Send + Sync>;
+
+// ============================================================================
+// ACTION RESOLUTION
+// ============================================================================
+
+/// Why an accessibility action could not be resolved against the current tree.
+///
+/// Platform routers intentionally treat these outcomes as graceful drops:
+/// assistive technologies may act on an older snapshot after a node has been
+/// removed or its actions changed. Keeping the reason typed makes that
+/// forgiving behavior observable without turning stale platform input into a
+/// panic.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum SemanticsActionError {
+    /// No rooted semantics result is currently available.
+    #[error("no rooted semantics tree is available")]
+    SemanticsUnavailable,
+
+    /// The stable identity from the platform snapshot is no longer live.
+    #[error("accessibility node {node_id} is no longer present")]
+    NodeNotFound {
+        /// Stable platform-facing node identity.
+        node_id: AccessibilityNodeId,
+    },
+
+    /// A malformed tree exposes the same stable identity more than once.
+    #[error("accessibility node identity {node_id} resolves to multiple live nodes")]
+    AmbiguousNode {
+        /// Duplicated platform-facing node identity.
+        node_id: AccessibilityNodeId,
+    },
+
+    /// The current node no longer exposes the requested action.
+    #[error("accessibility node {node_id} does not expose action {action:?}")]
+    UnsupportedAction {
+        /// Stable platform-facing node identity.
+        node_id: AccessibilityNodeId,
+        /// Action absent from the node's effective action mask.
+        action: SemanticsAction,
+    },
+}
+
+/// A resolved action whose handler has been cloned out of the semantics tree.
+///
+/// Resolution and invocation are deliberately separate. A caller may resolve
+/// this value while holding an outer `PipelineOwner` lock, release that lock,
+/// and only then call [`Self::invoke`]. Reentrant handlers therefore cannot
+/// deadlock by reaching back into the render pipeline.
+#[must_use = "resolved semantics actions must be invoked or intentionally dropped"]
+pub struct SemanticsActionInvocation {
+    node_id: AccessibilityNodeId,
+    action: SemanticsAction,
+    arguments: Option<ActionArgs>,
+    handler: SemanticsActionHandler,
+}
+
+impl std::fmt::Debug for SemanticsActionInvocation {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("SemanticsActionInvocation")
+            .field("node_id", &self.node_id)
+            .field("action", &self.action)
+            .field("arguments", &self.arguments)
+            .field("handler", &"<callback>")
+            .finish()
+    }
+}
+
+impl SemanticsActionInvocation {
+    /// Stable identity of the node whose handler was resolved.
+    #[inline]
+    #[must_use]
+    pub const fn node_id(&self) -> AccessibilityNodeId {
+        self.node_id
+    }
+
+    /// Action passed to the handler.
+    #[inline]
+    #[must_use]
+    pub const fn action(&self) -> SemanticsAction {
+        self.action
+    }
+
+    /// Invoke the cloned handler.
+    ///
+    /// No semantics-tree borrow is held while user code runs.
+    pub fn invoke(self) {
+        (self.handler)(self.action, self.arguments);
+    }
+}
 
 // ============================================================================
 // SEMANTICS NODE UPDATE
@@ -79,6 +180,7 @@ impl SemanticsNodeUpdate {
 /// 1. Managing the semantics tree
 /// 2. Tracking dirty nodes that need updates
 /// 3. Flushing updates to the platform accessibility services
+/// 4. Producing immutable full-tree snapshots for adapter handoff
 ///
 /// # Flutter Protocol
 ///
@@ -213,6 +315,88 @@ impl SemanticsOwner {
         &mut self.tree
     }
 
+    /// Builds an owned, callback-free snapshot of the complete rooted tree.
+    ///
+    /// Unlike the legacy dirty-node callback, this path never derives an
+    /// external identifier from the rebuild-local [`SemanticsId`]. Every node
+    /// must carry the generational render identity of the boundary that formed
+    /// it, otherwise a typed [`SemanticsSnapshotError`] is returned.
+    pub fn snapshot(&self) -> Result<SemanticsSnapshot, SemanticsSnapshotError> {
+        SemanticsSnapshot::from_tree(&self.tree)
+    }
+
+    /// Resolves a platform request against the current rooted semantics tree.
+    ///
+    /// The lookup uses the stable accessibility identity exported in the
+    /// latest snapshot. It never interprets that value as a rebuild-local
+    /// [`SemanticsId`]. Only effective actions are routable, so
+    /// `blocks_user_actions` applies identically to snapshot export and input
+    /// dispatch.
+    ///
+    /// The returned invocation owns an `Arc` clone of the handler and may be
+    /// invoked after any outer owner lock has been released.
+    pub fn resolve_action(
+        &self,
+        request: SemanticsActionRequest,
+    ) -> Result<SemanticsActionInvocation, SemanticsActionError> {
+        let root = self
+            .tree
+            .root()
+            .ok_or(SemanticsActionError::SemanticsUnavailable)?;
+
+        // Traverse only the rooted result: orphaned arena entries were never
+        // exported and must not remain actionable. The visited set also makes
+        // malformed repeated edges/cycles finite; snapshot validation reports
+        // those structural errors separately.
+        let mut pending = SmallVec::<[SemanticsId; 32]>::new();
+        let mut visited = FxHashSet::default();
+        let mut resolved = None;
+        pending.push(root);
+
+        while let Some(id) = pending.pop() {
+            if !visited.insert(id) {
+                continue;
+            }
+            let Some(node) = self.tree.get(id) else {
+                continue;
+            };
+            pending.extend(node.children().iter().rev().copied());
+
+            if node.accessibility_id() != Some(request.node_id) {
+                continue;
+            }
+            if resolved.is_some() {
+                return Err(SemanticsActionError::AmbiguousNode {
+                    node_id: request.node_id,
+                });
+            }
+            resolved = Some(node);
+        }
+
+        let node = resolved.ok_or(SemanticsActionError::NodeNotFound {
+            node_id: request.node_id,
+        })?;
+        let action_is_effective =
+            node.config().effective_actions_as_bits() & request.action.value() != 0;
+        let Some(handler) = action_is_effective
+            .then(|| node.config().action_handler(request.action))
+            .flatten()
+            .map(Arc::clone)
+        else {
+            return Err(SemanticsActionError::UnsupportedAction {
+                node_id: request.node_id,
+                action: request.action,
+            });
+        };
+
+        Ok(SemanticsActionInvocation {
+            node_id: request.node_id,
+            action: request.action,
+            arguments: request.arguments,
+            handler,
+        })
+    }
+
     // ========== Root Management ==========
 
     /// Get the root SemanticsNode ID.
@@ -326,9 +510,9 @@ impl SemanticsOwner {
     ///   own backing allocation is amortized to zero after the first
     ///   dirty frame.
     ///
-    /// PR #100 followup: pre-followup the loop went through a
-    /// `dirty_nodes().collect::<Vec<_>>()` intermediate to decouple the
-    /// borrow from the mutable `updates_buffer`. The new
+    /// The loop previously went through a
+    /// `dirty_nodes().collect::<Vec<_>>()` intermediate to decouple the borrow
+    /// from the mutable `updates_buffer`. The current
     /// `SemanticsTree::iter_dirty` returns `(id, &SemanticsNode)` pairs
     /// so the per-node `tree.get(id)?` re-lookup goes away too — both
     /// borrows live on the same iterator step.
@@ -407,7 +591,11 @@ impl Default for SemanticsOwner {
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    use flui_foundation::RenderId;
+    use parking_lot::Mutex;
+
     use super::*;
+    use crate::{AccessibilityNodeId, SemanticsActionRequest};
 
     #[test]
     fn test_semantics_owner_new() {
@@ -617,5 +805,268 @@ mod tests {
         assert_eq!(update.id, SemanticsId::new(1));
         assert_eq!(update.parent, Some(SemanticsId::new(2)));
         assert_eq!(update.children.len(), 2);
+    }
+
+    #[test]
+    fn snapshot_rejects_a_node_without_stable_render_identity() {
+        let mut owner = SemanticsOwner::new_without_callback();
+        let root = owner.insert(SemanticsNode::new());
+        owner.set_root(Some(root));
+
+        assert_eq!(
+            owner.snapshot().expect_err("identity is required"),
+            SemanticsSnapshotError::MissingAccessibilityIdentity { node: root },
+        );
+    }
+
+    #[test]
+    fn snapshot_rejects_a_missing_root() {
+        let owner = SemanticsOwner::new_without_callback();
+
+        assert_eq!(
+            owner.snapshot().expect_err("a rooted result is required"),
+            SemanticsSnapshotError::MissingRoot,
+        );
+    }
+
+    #[test]
+    fn snapshot_rejects_an_edge_to_a_missing_node() {
+        let mut owner = SemanticsOwner::new_without_callback();
+        let mut root_node = SemanticsNode::new().with_source_render_id(RenderId::new(1));
+        let missing = SemanticsId::new(99);
+        root_node.add_child(missing);
+        let root = owner.insert(root_node);
+        owner.set_root(Some(root));
+
+        assert_eq!(
+            owner.snapshot().expect_err("every child edge must resolve"),
+            SemanticsSnapshotError::MissingNode { node: missing },
+        );
+    }
+
+    #[test]
+    fn snapshot_rejects_duplicate_accessibility_identity() {
+        let render_id = RenderId::new(7);
+        let mut owner = SemanticsOwner::new_without_callback();
+        let root = owner.insert(SemanticsNode::new().with_source_render_id(render_id));
+        let duplicate = owner.insert(SemanticsNode::new().with_source_render_id(render_id));
+        owner.add_child(root, duplicate);
+        owner.set_root(Some(root));
+
+        assert_eq!(
+            owner
+                .snapshot()
+                .expect_err("one stable identity cannot name two live nodes"),
+            SemanticsSnapshotError::DuplicateAccessibilityIdentity {
+                id: render_id.into(),
+                first_node: root,
+                duplicate_node: duplicate,
+            },
+        );
+    }
+
+    #[test]
+    fn snapshot_rejects_a_node_reached_by_two_paths() {
+        let mut owner = SemanticsOwner::new_without_callback();
+        let root = owner.insert(SemanticsNode::new().with_source_render_id(RenderId::new(1)));
+        let left = owner.insert(SemanticsNode::new().with_source_render_id(RenderId::new(2)));
+        let right = owner.insert(SemanticsNode::new().with_source_render_id(RenderId::new(3)));
+        let repeated = owner.insert(SemanticsNode::new().with_source_render_id(RenderId::new(4)));
+        owner.add_child(root, left);
+        owner.add_child(root, right);
+        owner.add_child(left, repeated);
+        owner
+            .get_mut(right)
+            .expect("right node must remain live")
+            .add_child(repeated);
+        owner.set_root(Some(root));
+
+        assert_eq!(
+            owner
+                .snapshot()
+                .expect_err("a semantics result must be a tree"),
+            SemanticsSnapshotError::RepeatedNode { node: repeated },
+        );
+    }
+
+    #[test]
+    fn snapshot_rejects_a_cycle() {
+        let mut owner = SemanticsOwner::new_without_callback();
+        let root = owner.insert(SemanticsNode::new().with_source_render_id(RenderId::new(1)));
+        let child = owner.insert(SemanticsNode::new().with_source_render_id(RenderId::new(2)));
+        owner.add_child(root, child);
+        owner
+            .get_mut(child)
+            .expect("child must remain live")
+            .add_child(root);
+        owner.set_root(Some(root));
+
+        assert_eq!(
+            owner.snapshot().expect_err("cycles cannot be snapshotted"),
+            SemanticsSnapshotError::RepeatedNode { node: root },
+        );
+    }
+
+    #[test]
+    fn snapshot_is_owned_preorder_data_and_is_send_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<SemanticsSnapshot>();
+        assert_send_sync::<crate::SemanticsNodeSnapshot>();
+
+        let mut owner = SemanticsOwner::new_without_callback();
+        let mut root_node = SemanticsNode::new().with_source_render_id(RenderId::new(1));
+        root_node.config_mut().set_label("Root");
+        let root = owner.insert(root_node);
+
+        let mut child_node = SemanticsNode::new().with_source_render_id(RenderId::new(2));
+        child_node.config_mut().set_label("Child");
+        let child = owner.insert(child_node);
+        owner.add_child(root, child);
+        owner.set_root(Some(root));
+
+        let snapshot = owner.snapshot().expect("all nodes have render identities");
+        owner.clear();
+
+        assert_eq!(snapshot.root(), AccessibilityNodeId::from(RenderId::new(1)));
+        assert_eq!(
+            snapshot
+                .nodes()
+                .iter()
+                .map(crate::SemanticsNodeSnapshot::id)
+                .collect::<Vec<_>>(),
+            vec![
+                AccessibilityNodeId::from(RenderId::new(1)),
+                AccessibilityNodeId::from(RenderId::new(2)),
+            ],
+        );
+        assert_eq!(
+            snapshot
+                .node(AccessibilityNodeId::from(RenderId::new(2)))
+                .and_then(|node| node.label())
+                .map(crate::AttributedString::as_str),
+            Some("Child"),
+            "clearing the owner must not invalidate owned snapshot strings",
+        );
+    }
+
+    #[test]
+    fn action_resolution_clones_the_handler_without_invoking_it() {
+        let target = AccessibilityNodeId::from(RenderId::new(7));
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let calls_in_handler = Arc::clone(&calls);
+        let mut node = SemanticsNode::new().with_source_render_id(RenderId::new(7));
+        node.config_mut().add_action(
+            SemanticsAction::SetText,
+            Arc::new(move |action, arguments| {
+                calls_in_handler.lock().push((action, arguments));
+            }),
+        );
+
+        let mut owner = SemanticsOwner::new_without_callback();
+        let root = owner.insert(node);
+        owner.set_root(Some(root));
+
+        let invocation = owner
+            .resolve_action(SemanticsActionRequest::with_arguments(
+                target,
+                SemanticsAction::SetText,
+                ActionArgs::SetText {
+                    text: "updated".to_owned(),
+                },
+            ))
+            .expect("the exported action must resolve");
+        assert!(
+            calls.lock().is_empty(),
+            "resolution must not call user code while the owner may be borrowed"
+        );
+
+        invocation.invoke();
+        assert_eq!(
+            calls.lock().as_slice(),
+            &[(
+                SemanticsAction::SetText,
+                Some(ActionArgs::SetText {
+                    text: "updated".to_owned(),
+                }),
+            )],
+        );
+    }
+
+    #[test]
+    fn action_resolution_applies_the_effective_action_mask() {
+        let render_id = RenderId::new(3);
+        let target = AccessibilityNodeId::from(render_id);
+        let mut node = SemanticsNode::new().with_source_render_id(render_id);
+        node.config_mut()
+            .add_action(SemanticsAction::Tap, Arc::new(|_, _| {}));
+        node.config_mut().set_blocks_user_actions(true);
+
+        let mut owner = SemanticsOwner::new_without_callback();
+        let root = owner.insert(node);
+        owner.set_root(Some(root));
+
+        assert_eq!(
+            owner
+                .resolve_action(SemanticsActionRequest::new(target, SemanticsAction::Tap,))
+                .expect_err("blocked pointer actions must not remain routable"),
+            SemanticsActionError::UnsupportedAction {
+                node_id: target,
+                action: SemanticsAction::Tap,
+            },
+        );
+    }
+
+    #[test]
+    fn action_resolution_ignores_orphaned_and_stale_snapshot_nodes() {
+        let root_render_id = RenderId::new(1);
+        let orphan_render_id = RenderId::new(2);
+        let stale_render_id = RenderId::new(99);
+        let mut owner = SemanticsOwner::new_without_callback();
+        let root = owner.insert(SemanticsNode::new().with_source_render_id(root_render_id));
+        let mut orphan = SemanticsNode::new().with_source_render_id(orphan_render_id);
+        orphan
+            .config_mut()
+            .add_action(SemanticsAction::Tap, Arc::new(|_, _| {}));
+        let _orphan = owner.insert(orphan);
+        owner.set_root(Some(root));
+
+        for target in [
+            AccessibilityNodeId::from(orphan_render_id),
+            AccessibilityNodeId::from(stale_render_id),
+        ] {
+            assert_eq!(
+                owner
+                    .resolve_action(SemanticsActionRequest::new(target, SemanticsAction::Tap,))
+                    .expect_err("nodes absent from the rooted snapshot are stale"),
+                SemanticsActionError::NodeNotFound { node_id: target },
+            );
+        }
+    }
+
+    #[test]
+    fn action_resolution_rejects_duplicate_platform_identity() {
+        let render_id = RenderId::new(5);
+        let target = AccessibilityNodeId::from(render_id);
+        let mut first = SemanticsNode::new().with_source_render_id(render_id);
+        first
+            .config_mut()
+            .add_action(SemanticsAction::Tap, Arc::new(|_, _| {}));
+        let mut duplicate = SemanticsNode::new().with_source_render_id(render_id);
+        duplicate
+            .config_mut()
+            .add_action(SemanticsAction::Tap, Arc::new(|_, _| {}));
+
+        let mut owner = SemanticsOwner::new_without_callback();
+        let root = owner.insert(first);
+        let child = owner.insert(duplicate);
+        owner.add_child(root, child);
+        owner.set_root(Some(root));
+
+        assert_eq!(
+            owner
+                .resolve_action(SemanticsActionRequest::new(target, SemanticsAction::Tap,))
+                .expect_err("ambiguous identity must never choose a handler arbitrarily"),
+            SemanticsActionError::AmbiguousNode { node_id: target },
+        );
     }
 }

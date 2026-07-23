@@ -25,8 +25,6 @@ use std::sync::Arc;
 
 use parking_lot::RwLock;
 
-use flui_interaction::MouseTracker;
-
 use crate::{
     hit_testing::HitTestResult,
     pipeline::PipelineOwner,
@@ -60,7 +58,6 @@ use crate::{
 /// - Creating [`ViewConfiguration`]s for views
 /// - Declaring the first-frame deferral gate via
 ///   [`send_frames_to_engine`](Self::send_frames_to_engine)
-/// - Managing [`MouseTracker`] for hover events
 /// - Responding to visual-update requests from pipeline owners
 /// - Tracking semantics-enabled state and its listeners
 /// - Routing hit tests to the correct view's render tree
@@ -240,18 +237,6 @@ pub trait RendererBinding {
     }
 
     // ========================================================================
-    // Mouse Tracker
-    // ========================================================================
-
-    /// Returns the mouse tracker for hover notification.
-    ///
-    /// The return type is `&MouseTracker` rather than `&RwLock<MouseTracker>`.
-    /// The interaction-side [`flui_interaction::MouseTracker`] is
-    /// owner-local, so executable mouse callbacks do not force the whole
-    /// binding to be `Send + Sync`.
-    fn mouse_tracker(&self) -> &MouseTracker;
-
-    // ========================================================================
     // Frame Production
     // ========================================================================
 
@@ -315,48 +300,6 @@ pub trait RendererBinding {
     /// Called when platform brightness changes.
     fn handle_platform_brightness_changed(&self) {
         // Default: no-op. Override to handle brightness changes.
-    }
-
-    // ========================================================================
-    // Semantics Actions
-    // ========================================================================
-
-    /// Performs a semantics action on a node.
-    ///
-    /// # Arguments
-    ///
-    /// * `view_id` - The view containing the semantics node
-    /// * `node_id` - The semantics node ID
-    /// * `action` - The action to perform
-    /// * `args` - Optional action arguments
-    fn perform_semantics_action(
-        &self,
-        view_id: u64,
-        node_id: i32,
-        action: flui_semantics::SemanticsAction,
-        _args: Option<flui_semantics::ActionArgs>,
-    ) {
-        // This body used to panic via `unimplemented!()` — a Constitution
-        // Principle 6 violation reachable from every assistive-tech action
-        // dispatch. It now emits a `tracing::warn!` with the action context
-        // and returns without panicking. When `SemanticsOwner` integration
-        // lands, the warning is swapped for the real dispatch.
-        if self.render_view(view_id).is_some() {
-            tracing::warn!(
-                view_id,
-                node_id,
-                action = ?action,
-                "perform_semantics_action: SemanticsOwner integration pending; \
-                 action is a no-op until RenderView ↔ SemanticsOwner plumbing lands"
-            );
-        } else {
-            tracing::debug!(
-                view_id,
-                node_id,
-                action = ?action,
-                "perform_semantics_action: view not found"
-            );
-        }
     }
 }
 
@@ -470,7 +413,6 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-    use flui_interaction::MouseTracker;
     use flui_types::{Size, geometry::px};
 
     use super::*;
@@ -486,7 +428,6 @@ mod tests {
     struct TestBinding {
         owner: RwLock<PipelineOwner>,
         views: RwLock<HashMap<u64, Arc<RwLock<RenderView>>>>,
-        mouse_tracker: MouseTracker,
         visual_update_calls: AtomicUsize,
         send_frames: AtomicBool,
     }
@@ -496,7 +437,6 @@ mod tests {
             Self {
                 owner: RwLock::new(PipelineOwner::new()),
                 views: RwLock::new(HashMap::new()),
-                mouse_tracker: MouseTracker::new(),
                 visual_update_calls: AtomicUsize::new(0),
                 send_frames: AtomicBool::new(true),
             }
@@ -542,10 +482,6 @@ mod tests {
 
         fn remove_render_view_by_id(&self, view_id: u64) -> Option<Arc<RwLock<RenderView>>> {
             self.views.write().remove(&view_id)
-        }
-
-        fn mouse_tracker(&self) -> &MouseTracker {
-            &self.mouse_tracker
         }
 
         fn send_frames_to_engine(&self) -> bool {

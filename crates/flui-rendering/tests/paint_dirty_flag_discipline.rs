@@ -151,9 +151,7 @@ fn repaint_boundary_isolates_subtree_paint() {
 
     // Mark ONLY the leaf dirty for paint (simulate a re-paint request).
     let mut owner = owner.into_idle();
-    let leaf_depth = owner.render_tree().depth(leaf_id).unwrap_or(0) as usize;
-    owner.render_tree().get(leaf_id).unwrap().mark_paint_flag();
-    owner.add_node_needing_paint(leaf_id, leaf_depth);
+    owner.mark_needs_paint(leaf_id);
 
     // Frame 2: run paint again (skip layout/compositing — only paint dirty).
     // Transition through the required phases.
@@ -230,9 +228,7 @@ fn unpainted_unreached_nodes_still_clear_flag() {
 
     // Mark ONLY the leaf dirty for paint.
     let mut owner = owner.into_idle();
-    let leaf_depth = owner.render_tree().depth(leaf_id).unwrap_or(0) as usize;
-    owner.render_tree().get(leaf_id).unwrap().mark_paint_flag();
-    owner.add_node_needing_paint(leaf_id, leaf_depth);
+    owner.mark_needs_paint(leaf_id);
 
     // Frame 2: paint phase only (transition through required phases).
     let owner = owner.into_layout();
@@ -302,14 +298,13 @@ fn paint_skips_node_that_still_needs_layout() {
         "first paint must record child picture ops",
     );
 
-    let root_depth = owner.render_tree().depth(root_id).unwrap_or(0) as usize;
     let mut owner = owner.into_idle();
     owner
         .render_tree()
         .get(child_id)
         .expect("child")
         .mark_layout_flag();
-    owner.add_node_needing_paint(root_id, root_depth);
+    owner.mark_needs_paint(root_id);
 
     let owner = owner.into_layout();
     let owner = owner.into_compositing();

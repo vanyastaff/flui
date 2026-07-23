@@ -30,6 +30,7 @@ futures-core = { workspace = true }
 # Core dependencies
 parking_lot.workspace = true
 slab = "0.4"
+smallvec.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 

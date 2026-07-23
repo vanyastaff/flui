@@ -34,7 +34,7 @@ fn mouse_region_with_child_sizes_to_child() {
 }
 
 #[test]
-fn mouse_region_hover_callback_fires_on_pointer_move() {
+fn mouse_region_hover_callback_fires_on_hover_move() {
     let hovers = Arc::new(AtomicUsize::new(0));
     let in_callback = Arc::clone(&hovers);
     let laid = lay_out(
@@ -46,7 +46,7 @@ fn mouse_region_hover_callback_fires_on_pointer_move() {
         tight(60.0, 30.0),
     );
 
-    laid.dispatch_pointer_move(10.0, 10.0);
+    laid.dispatch_pointer_hover(10.0, 10.0);
     assert_eq!(
         hovers.load(Ordering::SeqCst),
         1,

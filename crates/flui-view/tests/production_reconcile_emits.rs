@@ -248,7 +248,7 @@ fn variable_arity_reorder_through_build_scope_preserves_ids_and_emits_parent_id(
     let root_v1 = MultiBox::keyed(&[1, 2, 3]);
     let root_id = tree.mount_root(&root_v1, &mut owner.element_owner_mut());
 
-    owner.schedule_build_for(root_id, 0);
+    owner.schedule_build_for(root_id, 0, flui_view::RebuildReason::InitialMount);
     owner.build_scope(&mut tree);
     let before = direct_children_in_slot_order(&tree, root_id);
     assert_eq!(before.len(), 3);
@@ -256,7 +256,7 @@ fn variable_arity_reorder_through_build_scope_preserves_ids_and_emits_parent_id(
 
     let root_v2 = MultiBox::keyed(&[3, 1, 2]);
     tree.update(root_id, &root_v2, &mut owner.element_owner_mut());
-    owner.schedule_build_for(root_id, 0);
+    owner.schedule_build_for(root_id, 0, flui_view::RebuildReason::ParentUpdate);
 
     let events = capture(|| {
         owner.build_scope(&mut tree);
@@ -314,7 +314,7 @@ fn active_global_key_move_through_build_scope_updates_render_parent_links() {
         &mut owner.element_owner_mut(),
     );
 
-    owner.schedule_build_for(root_id, 0);
+    owner.schedule_build_for(root_id, 0, flui_view::RebuildReason::InitialMount);
     owner.build_scope(&mut tree);
 
     let parents = direct_children_in_slot_order(&tree, root_id);
@@ -349,7 +349,11 @@ fn active_global_key_move_through_build_scope_updates_render_parent_links() {
 
     let parent_b_v2 = MultiBox::host(2, vec![GlobalLeafBox::new(global.clone()).boxed()]);
     tree.update(parent_b, &parent_b_v2, &mut owner.element_owner_mut());
-    owner.schedule_build_for(parent_b, tree.get(parent_b).unwrap().depth());
+    owner.schedule_build_for(
+        parent_b,
+        tree.get(parent_b).unwrap().depth(),
+        flui_view::RebuildReason::ParentUpdate,
+    );
 
     let events = capture(|| {
         owner.build_scope(&mut tree);

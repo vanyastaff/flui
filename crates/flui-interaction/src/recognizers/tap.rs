@@ -564,26 +564,26 @@ impl TapGestureRecognizer {
         let current_state = *self.gesture_state.lock();
 
         if current_state == TapState::Down {
-            *self.gesture_state.lock() = TapState::Cancelled;
+            let button = self
+                .pending_down
+                .lock()
+                .take()
+                .map(|pending| pending.button);
+            let cancel_cb =
+                button.and_then(|button| self.callbacks.borrow().cancel(button).cloned());
+            *self.pending_up.lock() = None;
+            *self.gesture_state.lock() = TapState::Ready;
 
-            // Call per-button cancel callback for the button that initiated
-            // the down.
-            let button = self.pending_down.lock().as_ref().map(|p| p.button);
-            if let Some(btn) = button {
-                let cancel_cb = self.callbacks.borrow().cancel(btn).cloned();
-                if let Some(cb) = cancel_cb {
-                    let details = TapDetails {
-                        global_position: position,
-                        local_position: position,
-                        kind,
-                    };
-                    cb(details);
-                }
-            }
-
-            // Reject in arena
+            // Withdraw and clear tracking before user code can unwind or start
+            // another sequence from the callback.
             self.state.reject();
-            *self.pending_down.lock() = None;
+            if let Some(cb) = cancel_cb {
+                cb(TapDetails {
+                    global_position: position,
+                    local_position: position,
+                    kind,
+                });
+            }
         }
     }
 
@@ -643,7 +643,7 @@ impl TapGestureRecognizer {
 }
 
 impl GestureRecognizer for TapGestureRecognizer {
-    fn add_pointer(&self, pointer: PointerId, position: Offset<Pixels>) {
+    fn add_pointer(self: &Arc<Self>, pointer: PointerId, position: Offset<Pixels>) {
         // per-impl span (trait fn disallows `#[instrument]`).
         let _span = tracing::info_span!(
             "tap.add_pointer",
@@ -669,10 +669,8 @@ impl GestureRecognizer for TapGestureRecognizer {
         *self.accepted.lock() = None;
         *self.pending_up.lock() = None;
         *self.sequence_pointer.lock() = Some(pointer);
-        // Start tracking this pointer
-        // Create Arc from self for arena tracking
-        let recognizer = Arc::new(self.clone());
-        self.state.start_tracking(pointer, position, &recognizer);
+        // Start tracking this exact recognizer allocation.
+        self.state.start_tracking(pointer, position, self);
 
         // Stage the down so the documented `add_pointer` = "pointer is down"
         // contract holds: a subsequent up fires the tap even when no separate
@@ -888,6 +886,24 @@ mod tests {
     }
     fn tertiary_down(p: Offset<Pixels>) -> PointerEvent {
         crate::events::make_down_event_with_button(p, PointerType::Touch, PointerButton::Auxiliary)
+    }
+
+    #[test]
+    fn panicking_cancel_callback_cannot_strand_tap_tracking() {
+        let arena = GestureArena::new();
+        let recognizer = TapGestureRecognizer::new(arena.clone())
+            .with_on_tap_cancel(|_| panic!("tap cancel panic"));
+        let position = pos(1.0, 2.0);
+        recognizer.add_pointer(PointerId::PRIMARY, position);
+        arena.close(PointerId::PRIMARY);
+
+        let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            recognizer.handle_event(&crate::events::make_cancel_event(PointerType::Touch));
+        }));
+
+        assert!(unwind.is_err());
+        assert_eq!(recognizer.primary_pointer(), None);
+        assert!(arena.is_empty());
     }
     fn primary_up(p: Offset<Pixels>) -> PointerEvent {
         crate::events::make_up_event_with_button(p, PointerType::Touch, PointerButton::Primary)

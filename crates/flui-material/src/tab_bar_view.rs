@@ -205,7 +205,7 @@ impl TabBarViewState {
                 .clone()
                 .expect("init_state runs before the first build");
             let id = resolved.add_listener(move || {
-                rebuild.schedule();
+                rebuild.schedule(flui_view::RebuildReason::AnimationTick);
             });
             *self.listener_id.borrow_mut() = Some(id);
             *self.controller.borrow_mut() = Some(resolved.clone());
@@ -223,7 +223,7 @@ impl ViewState<TabBarView> for TabBarViewState {
     /// Unregisters this view's listener from whatever controller it's
     /// currently subscribed to — without this, a controller that outlives
     /// this view keeps firing a dead `Rc` closure that calls
-    /// `rebuild.schedule()` on a `RebuildHandle` whose element no longer
+    /// `rebuild.schedule(reason)` on a `RebuildHandle` whose element no longer
     /// exists (see `crate::tabs::TabBarState::dispose`'s doc comment for the
     /// identical leak on `TabBar`'s side).
     fn dispose(&mut self) {

@@ -13,19 +13,14 @@
 //!
 //! # Live plumbing — what's wired and how
 //!
-//! - **Focus**: the oracle rebuilds on `_effectiveFocusNode`'s own
-//!   `addListener(_handleFocusChanged)` (`text_field.dart:1273`). This
-//!   substrate has no ambient `FocusNode` field to listen on directly —
-//!   instead it registers with the process-wide
-//!   [`FocusManager::add_listener`](flui_interaction::routing::FocusManager::add_listener)
-//!   in `init_state` and compares against
-//!   [`TextEditingController::focus_node_id`](flui_widgets::TextEditingController::focus_node_id)
-//!   — the node [`EditableText`] itself
-//!   published on mount — exactly the seam
-//!   `EditableTextState`'s own internal focus listener uses to drive its
-//!   caret visibility. A match/mismatch schedules a rebuild via
-//!   [`BuildContext::rebuild_handle`], never from inside `build`
-//!   (ADR-0018).
+//! - **Focus**: the state owns its effective [`FocusNode`] (or retains the
+//!   caller-provided node), passes that exact node to [`EditableText`], and
+//!   listens to the node directly. This matches the oracle's
+//!   `_effectiveFocusNode.addListener(_handleFocusChanged)`
+//!   (`text_field.dart:1273`) without ambient manager lookup, controller
+//!   metadata, or an ID registry. The listener schedules a rebuild through a
+//!   [`RebuildHandle`](flui_view::RebuildHandle) acquired in `init_state`,
+//!   never from inside `build` (ADR-0018).
 //! - **Hover**: the oracle owns `_isHovering` at the `TextField` level via
 //!   its own outer `MouseRegion` and threads it into
 //!   `InputDecorator.isHovering` (`text_field.dart:1463-1470,1773,1797-1800`).
@@ -60,7 +55,7 @@
 //!
 //! # Controller identity — swapping the controller on a live field is unsupported
 //!
-//! `TextFieldState` (this widget) and `EditableTextState` (the interior)
+//! `MaterialTextFieldState` (this widget) and `EditableTextState` (the interior)
 //! each pin their *own* clone of the controller at `create_state` time and
 //! read `self.controller` in `build`, never `view.controller`. A parent that
 //! swaps in a different [`TextEditingController`] on an already-mounted
@@ -129,7 +124,8 @@ use std::sync::Arc;
 
 use flui_foundation::ListenerId;
 use flui_foundation::notifier::Listenable;
-use flui_interaction::routing::FocusManager;
+use flui_interaction::FocusNode;
+use flui_view::RebuildHandle;
 use flui_view::prelude::*;
 use flui_widgets::{EditableText, GestureDetector, TextEditingController};
 
@@ -143,9 +139,10 @@ use crate::theme::Theme;
 /// The Material single-line text field — [`EditableText`] decorated by
 /// [`InputDecorator`], with live focus/enabled/error plumbing. See the
 /// module docs for exactly what's wired and what's deferred.
-#[derive(Clone, Debug, StatefulView)]
+#[derive(Clone, Debug)]
 pub struct TextField {
     controller: TextEditingController,
+    external_focus_node: Option<Rc<FocusNode>>,
     decoration: InputDecoration,
     enabled: Option<bool>,
 }
@@ -160,9 +157,18 @@ impl TextField {
     pub fn new(controller: TextEditingController) -> Self {
         Self {
             controller,
+            external_focus_node: None,
             decoration: InputDecoration::default(),
             enabled: None,
         }
+    }
+
+    /// Use a caller-owned focus node instead of the node owned by this
+    /// field's state.
+    #[must_use]
+    pub fn focus_node(mut self, focus_node: Rc<FocusNode>) -> Self {
+        self.external_focus_node = Some(focus_node);
+        self
     }
 
     /// Set the field's decoration — label, hint, helper/error text, and
@@ -187,66 +193,104 @@ impl TextField {
 }
 
 // ============================================================================
-// TextFieldState
+// MaterialTextFieldState
 // ============================================================================
 
-/// Persistent state behind [`TextField`] — owns the live controller/focus
-/// listeners described in the module docs.
-pub struct TextFieldState {
+impl View for TextField {
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateful(self)
+    }
+}
+
+/// Persistent state behind [`TextField`] — owns the effective focus node and
+/// the live controller/focus listeners described in the module docs.
+pub struct MaterialTextFieldState {
     controller: TextEditingController,
+    focus_node: Rc<FocusNode>,
+    rebuild: Option<RebuildHandle>,
     controller_listener_id: Option<ListenerId>,
     focus_listener_id: Option<ListenerId>,
 }
 
-impl std::fmt::Debug for TextFieldState {
+impl std::fmt::Debug for MaterialTextFieldState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("TextFieldState")
+        f.debug_struct("MaterialTextFieldState")
             .field("controller", &self.controller)
+            .field("focus_node", &self.focus_node.id())
             .finish_non_exhaustive()
     }
 }
 
 impl StatefulView for TextField {
-    type State = TextFieldState;
+    type State = MaterialTextFieldState;
 
     fn create_state(&self) -> Self::State {
-        TextFieldState {
+        MaterialTextFieldState {
             controller: self.controller.clone(),
+            focus_node: self.external_focus_node.as_ref().map_or_else(
+                || FocusNode::with_debug_label("MaterialTextField"),
+                Rc::clone,
+            ),
+            rebuild: None,
             controller_listener_id: None,
             focus_listener_id: None,
         }
     }
 }
 
-impl ViewState<TextField> for TextFieldState {
+impl MaterialTextFieldState {
+    fn install_focus_listener(&mut self) {
+        let rebuild = self
+            .rebuild
+            .as_ref()
+            .expect("BUG: MaterialTextFieldState must retain its rebuild handle")
+            .clone();
+        self.focus_listener_id = Some(self.focus_node.add_listener(Rc::new(move || {
+            rebuild.schedule(flui_view::RebuildReason::StateChange);
+        })));
+    }
+}
+
+impl ViewState<TextField> for MaterialTextFieldState {
     fn init_state(&mut self, ctx: &dyn BuildContext) {
         // ADR-0018: `rebuild_handle()` is acquired here, fired later from
         // the listeners below — never called from `build`.
         let rebuild = ctx.rebuild_handle();
+        self.rebuild = Some(rebuild.clone());
 
         // Rebuild on every edit — `is_empty` (fed to `InputDecorator`) is
         // recomputed fresh in `build`, so a text change must trigger one.
         let rebuild_on_edit = rebuild.clone();
         self.controller_listener_id = Some(self.controller.add_listener(Arc::new(move || {
-            rebuild_on_edit.schedule();
+            rebuild_on_edit.schedule(flui_view::RebuildReason::StateChange);
         })));
 
-        // Rebuild exactly when *this field's own* published node transitions
-        // into or out of primary focus — mirrors `EditableTextState`'s own
-        // `FocusManager` listener (step 4 of its `init_state`).
-        let controller_for_focus = self.controller.clone();
-        self.focus_listener_id = Some(FocusManager::global().add_listener(Rc::new(
-            move |previous, current| {
-                let Some(node_id) = controller_for_focus.focus_node_id() else {
-                    return;
-                };
-                let was_focused = previous == Some(node_id);
-                let now_focused = current == Some(node_id);
-                if was_focused != now_focused {
-                    rebuild.schedule();
-                }
-            },
-        )));
+        // The effective node is the single source of focus truth for the
+        // decorated field and its EditableText child.
+        self.install_focus_listener();
+    }
+
+    fn did_update_view(&mut self, old_view: &TextField, new_view: &TextField) {
+        let focus_node_changed = match (
+            old_view.external_focus_node.as_ref(),
+            new_view.external_focus_node.as_ref(),
+        ) {
+            (Some(old), Some(new)) => !Rc::ptr_eq(old, new),
+            (None, None) => false,
+            (Some(_), None) | (None, Some(_)) => true,
+        };
+        if !focus_node_changed {
+            return;
+        }
+
+        if let Some(id) = self.focus_listener_id.take() {
+            self.focus_node.remove_listener(id);
+        }
+        self.focus_node = new_view.external_focus_node.as_ref().map_or_else(
+            || FocusNode::with_debug_label("MaterialTextField"),
+            Rc::clone,
+        );
+        self.install_focus_listener();
     }
 
     fn dispose(&mut self) {
@@ -254,8 +298,9 @@ impl ViewState<TextField> for TextFieldState {
             self.controller.remove_listener(id);
         }
         if let Some(id) = self.focus_listener_id.take() {
-            FocusManager::global().remove_listener(id);
+            self.focus_node.remove_listener(id);
         }
+        self.rebuild = None;
     }
 
     fn build(&self, view: &TextField, ctx: &dyn BuildContext) -> impl IntoView {
@@ -277,10 +322,7 @@ impl ViewState<TextField> for TextFieldState {
         // `is_empty`/`focused` tracking the NEW controller while the actual
         // `EditableText` interior keeps typing into the OLD one).
         let is_empty = self.controller.text().is_empty();
-        let focused = self
-            .controller
-            .focus_node_id()
-            .is_some_and(|node_id| FocusManager::global().has_focus(node_id));
+        let focused = self.focus_node.has_focus();
 
         // The oracle's null-coalescing chain (`widget.enabled ??
         // decoration?.enabled ?? true`, `text_field.dart:1183`), narrowed to
@@ -292,39 +334,25 @@ impl ViewState<TextField> for TextFieldState {
         let mut decoration = view.decoration.clone();
         decoration.enabled = effective_enabled;
 
-        let mut editable = EditableText::new(self.controller.clone())
+        let mut editable = EditableText::new(self.controller.clone(), Rc::clone(&self.focus_node))
             .enabled(effective_enabled)
             .caret_color(caret_color);
         if let Some(text_style) = theme.text_theme.body_large.clone() {
             editable = editable.text_style(text_style);
         }
 
-        let controller_for_tap = self.controller.clone();
+        let focus_node = Rc::clone(&self.focus_node);
 
         GestureDetector::new()
-            .on_tap(move || focus_field(&controller_for_tap))
+            .on_tap(move || {
+                focus_node.request_focus();
+            })
             .child(
                 InputDecorator::new(decoration)
                     .focused(focused)
                     .is_empty(is_empty)
                     .child(editable),
             )
-    }
-}
-
-// ============================================================================
-// Helpers
-// ============================================================================
-
-/// Focus the field driven by `controller` — the node its `EditableTextState`
-/// published on mount (see
-/// [`TextEditingController::focus_node_id`](flui_widgets::TextEditingController::focus_node_id)).
-/// A no-op while the field is unmounted or disabled (a disabled field
-/// withholds its published node — see `EditableText::enabled`'s doc
-/// comment).
-fn focus_field(controller: &TextEditingController) {
-    if let Some(node_id) = controller.focus_node_id() {
-        FocusManager::global().request_focus(node_id);
     }
 }
 
@@ -336,6 +364,7 @@ mod tests {
     fn new_decorates_with_default_decoration_and_no_enabled_override() {
         let field = TextField::new(TextEditingController::new());
         assert_eq!(field.decoration, InputDecoration::default());
+        assert!(field.external_focus_node.is_none());
         assert_eq!(
             field.enabled, None,
             "no override set: enabled resolution must fall through to decoration.enabled"
@@ -357,12 +386,14 @@ mod tests {
     }
 
     #[test]
-    fn focus_field_is_a_no_op_when_the_controller_has_no_published_node() {
-        // No `EditableText` has mounted for this controller, so it has
-        // never published a focus node — `focus_field` must not panic or
-        // touch `FocusManager` in a way that would focus something.
-        let controller = TextEditingController::new();
-        assert_eq!(controller.focus_node_id(), None);
-        focus_field(&controller); // Must not panic.
+    fn focus_node_builder_retains_exact_identity() {
+        let focus_node = FocusNode::with_debug_label("external");
+        let field = TextField::new(TextEditingController::new()).focus_node(Rc::clone(&focus_node));
+        assert!(
+            field
+                .external_focus_node
+                .as_ref()
+                .is_some_and(|held| Rc::ptr_eq(held, &focus_node))
+        );
     }
 }
