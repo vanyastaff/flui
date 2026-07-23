@@ -6,9 +6,7 @@
 //! flex-splitting and offset behavior `tests/flex_parent_data.rs` already
 //! proves for `Expanded` directly.
 
-mod common;
-
-use common::{lay_out, offset, size, tight};
+use crate::common::{lay_out, offset, size, tight};
 use flui_widgets::row;
 use flui_widgets::{Row, SizedBox, Spacer};
 

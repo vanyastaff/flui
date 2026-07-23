@@ -2,9 +2,7 @@
 //! (zero-size while hidden), while [`RepaintBoundary`]/[`IgnorePointer`]/
 //! [`AbsorbPointer`] are layout pass-throughs.
 
-mod common;
-
-use common::{lay_out, loose, size};
+use crate::common::{lay_out, loose, size};
 use flui_widgets::{FractionalTranslation, IgnorePointer, Offstage, RepaintBoundary, SizedBox};
 
 #[test]

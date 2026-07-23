@@ -1,9 +1,7 @@
 //! Layout parity tests for [`Stack`], [`AspectRatio`], and
 //! [`FractionallySizedBox`].
 
-mod common;
-
-use common::{lay_out, loose, offset, size, tight};
+use crate::common::{lay_out, loose, offset, size, tight};
 use flui_view::ViewExt;
 use flui_widgets::{AspectRatio, FractionallySizedBox, SizedBox, Stack};
 

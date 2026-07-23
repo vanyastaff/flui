@@ -4,9 +4,7 @@
 //! callback — the render-object harness exercises the math; these prove the
 //! widget→render wiring and the live pipeline path).
 
-mod common;
-
-use common::{lay_out, loose, tight};
+use crate::common::{lay_out, loose, tight};
 use flui_geometry::px;
 use flui_types::Size;
 use flui_widgets::{

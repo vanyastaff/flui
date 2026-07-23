@@ -7,12 +7,10 @@
 //! `RenderSliverGridLazy::perform_layout`, the second lays out the now-built
 //! tiles.
 
-mod common;
-
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use common::{lay_out, tight};
+use crate::common::{lay_out, tight};
 use flui_rendering::delegates::{SliverGridDelegate, SliverGridDelegateWithFixedCrossAxisCount};
 use flui_view::ViewExt;
 use flui_widgets::prelude::*;

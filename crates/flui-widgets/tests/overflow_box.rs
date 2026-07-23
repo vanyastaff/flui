@@ -7,9 +7,7 @@
 //! (and requested size) through on rebuild -- a widget instance built with
 //! a NEW `alignment` value silently kept its FIRST alignment forever.
 
-mod common;
-
-use common::{lay_out, loose, offset, size};
+use crate::common::{lay_out, loose, offset, size};
 use flui_types::Alignment;
 use flui_widgets::{OverflowBox, SizedBox, SizedOverflowBox};
 

@@ -30,8 +30,6 @@ use flui_interaction::{
 use flui_types::{Size, geometry::px};
 use flui_widgets::{EditableText, TextEditingController, TextField};
 
-mod common;
-
 // ============================================================================
 // Helpers
 // ============================================================================
@@ -451,9 +449,9 @@ fn editable_text_mounts_single_render_editable() {
     let controller = TextEditingController::with_text("hello");
     let focus_node = FocusNode::with_debug_label("mounted editable");
 
-    let laid = common::lay_out(
+    let laid = crate::common::lay_out(
         EditableText::new(controller, focus_node),
-        common::tight(120.0, 40.0),
+        crate::common::tight(120.0, 40.0),
     );
     let editable = laid.find_by_render_type("RenderEditable");
 
@@ -480,12 +478,12 @@ fn requesting_focus_via_the_explicit_node_reveals_the_caret_after_a_tick() {
     let controller = TextEditingController::with_text("hi");
     let focus_node = FocusNode::with_debug_label("caret reveal");
 
-    let mut laid = common::lay_out(
+    let mut laid = crate::common::lay_out(
         EditableText::new(controller, Rc::clone(&focus_node)),
-        common::tight(120.0, 40.0),
+        crate::common::tight(120.0, 40.0),
     );
     let editable = laid.find_by_render_type("RenderEditable");
-    let show_caret_flag = |laid: &common::LaidOut| -> Option<String> {
+    let show_caret_flag = |laid: &crate::common::LaidOut| -> Option<String> {
         laid.pipeline_owner()
             .read()
             .debug_node_diagnostics(editable)
@@ -519,9 +517,9 @@ fn requesting_focus_via_the_explicit_node_reveals_the_caret_after_a_tick() {
 fn text_field_deflates_editable_text_by_its_content_padding() {
     let controller = TextEditingController::with_text("hello");
 
-    let laid = common::lay_out(
+    let laid = crate::common::lay_out(
         TextField::new(controller).content_padding(EdgeInsets::all(px(10.0))),
-        common::tight(200.0, 100.0),
+        crate::common::tight(200.0, 100.0),
     );
 
     // The overall field fills the tight constraint given to it...
@@ -541,7 +539,10 @@ fn text_field_default_content_padding_matches_its_documented_default() {
     // Default content_padding is symmetric(8 vertical, 12 horizontal) per
     // `TextField::new`'s doc comment -- deflates width by 24 (12+12) and
     // height by 16 (8+8).
-    let laid = common::lay_out(TextField::new(controller), common::tight(300.0, 60.0));
+    let laid = crate::common::lay_out(
+        TextField::new(controller),
+        crate::common::tight(300.0, 60.0),
+    );
 
     let editable = laid.find_by_render_type("RenderEditable");
     assert_eq!(laid.size(editable), Size::new(px(276.0), px(44.0)));

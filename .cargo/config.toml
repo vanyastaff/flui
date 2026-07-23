@@ -16,8 +16,13 @@ jobs = 8
 [target.x86_64-pc-windows-msvc]
 rustflags = ["-C", "link-arg=/DEBUG:NONE"] # Faster release builds
 
-# Linux - use mold linker if available (10x faster than ld)
-# NOTE: Disabled - mold not available in this environment
+# Linux — faster linkers, opt in locally by uncommenting ONE block.
+# Kept commented in the committed config: not every environment (or every
+# GitHub runner image) ships them, and a missing linker fails builds with a
+# cryptic error. lld is the safer bet (apt install lld); mold is the fastest.
+# [target.x86_64-unknown-linux-gnu]
+# rustflags = ["-C", "link-arg=-fuse-ld=lld"]
+#
 # [target.x86_64-unknown-linux-gnu]
 # linker = "clang"
 # rustflags = ["-C", "link-arg=-fuse-ld=mold"]

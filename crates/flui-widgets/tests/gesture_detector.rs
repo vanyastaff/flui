@@ -3,12 +3,10 @@
 //! presentation-owned arena through the hit-test + binding dispatch path. The
 //! binding alone closes and sweeps the shared arena.
 
-mod common;
-
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use common::{lay_out, tight};
+use crate::common::{lay_out, tight};
 use flui_types::Color;
 use flui_widgets::{ColoredBox, GestureDetector, SizedBox};
 

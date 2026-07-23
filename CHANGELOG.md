@@ -42,6 +42,13 @@ file records the repo-consumer-visible summary.
 - Lockfile: `wgpu` 29.0.3 → 29.0.4, `anyhow` → 1.0.103, `crossbeam-epoch`
   → 0.9.20, `swash` → 0.2.9 (off a yanked version). `clippy.toml` gains
   `msrv = "1.96"` so MSRV-aware lints track the declared floor.
+- **One integration-test binary per heavy crate**: flui-widgets (49 → 1 +
+  the pre-existing `parity` target), flui-rendering (36 → 1), flui-view
+  (24 → 1) — each root `tests/*.rs` used to statically link the whole wgpu
+  stack into its own binary (~5.9 GB across 188 executables). Files stay in
+  place as `#[path]` modules; test parity proven exactly (550/782/252 tests
+  unchanged). Bevy-style `dynamic_linking` (`flui-dylib`) noted as the next
+  lever if needed.
 - **Dev profile `debug = 1` → `"line-tables-only"`**: panic backtraces keep
   file:line, the variable/scope DWARF that ballooned `target/debug/deps`
   toward ~20 GB is gone, and the local default now matches what CI has built

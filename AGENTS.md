@@ -122,7 +122,7 @@ This project uses **`justfile`** for build automation. Install [`just`](https://
 ```bash
 just test-crate flui-tree                    # Test one crate
 just test-name flui-tree element_id          # Run one test with stdout
-cargo test -p flui-rendering --test render_object_harness  # Run a specific integration test
+cargo test -p flui-objects --test render_object_harness  # Run a specific integration test (catalog guard)
 ```
 
 ### Format & lint (run before any commit)

@@ -13,9 +13,7 @@
 //! probe-cache/`FutureBuilder`-wrap/coalescing dispatch that only exists once
 //! a provider's `cache_key()` returns `Some`.
 
-mod common;
-
-use common::{lay_out, loose, size, tight};
+use crate::common::{lay_out, loose, size, tight};
 use flui_types::geometry::px;
 use flui_types::painting::Image as PixelImage;
 use flui_widgets::{Image, ImageAlignment, ImageFit};

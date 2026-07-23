@@ -1,9 +1,7 @@
 //! Layout tests for the clip widgets — clipping affects painting only, so
 //! layout is a pass-through (the child's size).
 
-mod common;
-
-use common::{lay_out, loose, size};
+use crate::common::{lay_out, loose, size};
 use flui_types::Size;
 use flui_types::painting::Path;
 use flui_widgets::{ClipOval, ClipPath, ClipRRect, ClipRect, SizedBox};

@@ -3,9 +3,7 @@
 //! [`Text`](flui_widgets::Text) uses, and that styling actually reaches the
 //! shaped glyph run (not just the top-level span).
 
-mod common;
-
-use common::{lay_out, loose, tight};
+use crate::common::{lay_out, loose, tight};
 use flui_types::typography::{FontWeight, TextSpan, TextStyle};
 use flui_widgets::{Center, Padding, RichText};
 
@@ -32,7 +30,7 @@ fn rich_text_composes_as_a_leaf_child() {
         Padding::all(4.0).child(Center::new().child(RichText::new(TextSpan::new("composed")))),
         tight(300.0, 200.0),
     );
-    assert_eq!(laid.size(laid.root()), common::size(300.0, 200.0));
+    assert_eq!(laid.size(laid.root()), crate::common::size(300.0, 200.0));
 
     let center = laid.only_child(laid.root());
     let rich_text = laid.only_child(center);

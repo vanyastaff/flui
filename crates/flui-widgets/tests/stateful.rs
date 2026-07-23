@@ -4,12 +4,10 @@
 //! to the new size — proving the retained element keeps identity while its
 //! configuration updates.
 
-mod common;
-
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use common::{lay_out, loose, size};
+use crate::common::{lay_out, loose, size};
 use flui_widgets::SizedBox;
 use flui_widgets::prelude::*;
 

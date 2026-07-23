@@ -10,6 +10,12 @@ description = "Canvas-based painting abstraction for FLUI - records drawing comm
 keywords = ["gui", "canvas", "painting", "2d-graphics", "rendering"]
 categories = ["graphics", "gui", "rendering"]
 readme = "README.md"
+# Single-binary integration-test consolidation: every root test file is a
+# module of `tests/main.rs` (one link of the full dep stack instead of 12
+# separate binaries). See the `[[test]] name = "painting_it"` target below.
+# Ambient-state note: no root test writes process-global state (the lazy
+# `FONT_SYSTEM` `OnceLock` is benign once-init), so no isolated targets.
+autotests = false
 
 [dependencies]
 flui-types = { path = "../flui-types", version = "0.2.0" }
@@ -35,6 +41,10 @@ serde = ["dep:serde", "flui-types/serde"]
 # builder for `DisplayList`s plus diagnostics helpers. Off by default;
 # enabled for this crate's dev targets via the self dev-dependency above.
 testing = []
+
+[[test]]
+name = "painting_it"
+path = "tests/main.rs"
 
 [lints]
 workspace = true

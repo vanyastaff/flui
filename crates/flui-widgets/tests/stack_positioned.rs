@@ -3,9 +3,7 @@
 //! place and stretch the child. Proves the ParentDataView seam for the Stack
 //! family end-to-end (offsets and resolved sizes).
 
-mod common;
-
-use common::{lay_out, offset, size, tight};
+use crate::common::{lay_out, offset, size, tight};
 use flui_types::Alignment;
 use flui_widgets::row;
 use flui_widgets::{Positioned, SizedBox, Stack, StackFit};
@@ -63,7 +61,7 @@ fn positioned_with_both_edges_stretches_the_child() {
 fn stack_sizes_to_the_largest_child_and_top_left_aligns_by_default() {
     let laid = lay_out(
         Stack::new(row![SizedBox::new(60.0, 40.0), SizedBox::new(100.0, 80.0)]),
-        common::loose(1000.0),
+        crate::common::loose(1000.0),
     );
 
     let root = laid.root();
@@ -84,7 +82,7 @@ fn stack_center_alignment_centers_each_non_positioned_child() {
     let laid = lay_out(
         Stack::new(row![SizedBox::new(60.0, 40.0), SizedBox::new(100.0, 80.0)])
             .alignment(Alignment::CENTER),
-        common::loose(1000.0),
+        crate::common::loose(1000.0),
     );
 
     let root = laid.root();

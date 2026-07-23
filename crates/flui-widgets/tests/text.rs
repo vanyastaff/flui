@@ -2,9 +2,7 @@
 //! through `RenderParagraph` (a non-empty box), and that it composes as a leaf
 //! inside other widgets.
 
-mod common;
-
-use common::{lay_out, loose, tight};
+use crate::common::{lay_out, loose, tight};
 use flui_types::typography::{TextDirection, TextStyle};
 use flui_widgets::{Center, DefaultTextStyle, Padding, Text};
 
@@ -33,7 +31,7 @@ fn text_composes_as_a_leaf_child() {
         Padding::all(4.0).child(Center::new().child(Text::new("composed"))),
         tight(300.0, 200.0),
     );
-    assert_eq!(laid.size(laid.root()), common::size(300.0, 200.0));
+    assert_eq!(laid.size(laid.root()), crate::common::size(300.0, 200.0));
 
     let center = laid.only_child(laid.root());
     let text = laid.only_child(center);
