@@ -52,7 +52,7 @@ fn node_depth<P: crate::pipeline::PipelinePhase>(owner: &PipelineOwner<P>, id: R
 fn mark_needs_paint<P: crate::pipeline::PipelinePhase>(owner: &mut PipelineOwner<P>, id: RenderId) {
     let depth = node_depth(owner, id);
     owner.add_node_needing_compositing_bits_update(id, depth);
-    owner.add_node_needing_paint(id, depth);
+    owner.mark_needs_paint(id);
 }
 
 /// Downcasts the render object at `id` to `T` and runs `edit`.

@@ -23,16 +23,14 @@ use flui_view::prelude::*;
 use flui_widgets::icon::IconData;
 use flui_widgets::{Icon, MediaQuery, MediaQueryData, SizedBox, Text};
 
-/// The render-tree node for `CustomMultiChildLayout` (the scaffold's own
-/// `Material` surface is the mounted root; this is that root's only child).
+/// The render-tree node for the scaffold's `CustomMultiChildLayout`.
+///
+/// The shared harness adds the production focus anchor outside the mounted
+/// view, so this is resolved by render type instead of assuming a fixed depth
+/// below the presentation root.
 fn layout_root(laid: &common::LaidOut) -> flui_foundation::RenderId {
-    let root = laid.root();
-    assert_eq!(
-        laid.find_by_render_type("RenderCustomMultiChildLayoutBox"),
-        Some(laid.only_child(root)),
-        "Scaffold must wrap exactly one CustomMultiChildLayout in its own Material surface",
-    );
-    laid.only_child(root)
+    laid.find_by_render_type("RenderCustomMultiChildLayoutBox")
+        .expect("Scaffold must mount exactly one CustomMultiChildLayout")
 }
 
 /// A body that records the ambient [`MediaQueryData`] it observes at build

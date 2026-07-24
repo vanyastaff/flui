@@ -52,6 +52,7 @@
 use std::{
     future::Future,
     pin::Pin,
+    rc::Rc,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -59,6 +60,7 @@ use std::{
 };
 
 use flui_foundation::ElementId;
+use flui_interaction::FocusManager;
 use flui_rendering::pipeline::PipelineOwner;
 use parking_lot::RwLock;
 
@@ -494,8 +496,11 @@ pub enum AttachError {
 }
 
 impl WidgetsBinding {
-    /// Create a new WidgetsBinding (owned by its `UiRealm` in production,
-    /// by `HeadlessBinding` or the test harness otherwise).
+    /// Create a binding with a fresh, isolated focus manager.
+    ///
+    /// Production presentation composition should use
+    /// [`Self::with_focus_manager`] so its input dispatcher and element tree
+    /// receive the same manager.
     ///
     /// # GlobalKey registry ownership
     ///
@@ -509,8 +514,16 @@ impl WidgetsBinding {
     /// non-singleton binding drove the frames.) The owning runtime activates
     /// the handle only while entering this realm.
     pub fn new() -> Self {
+        Self::with_focus_manager(FocusManager::new())
+    }
+
+    /// Create a binding using the presentation's exact focus manager.
+    ///
+    /// The manager is passed directly into the binding's `BuildOwner`; no
+    /// ambient registry or later setter participates in focus ownership.
+    pub fn with_focus_manager(focus_manager: Rc<FocusManager>) -> Self {
         let inner = Arc::new(RwLock::new(WidgetsBindingInner {
-            build_owner: BuildOwner::new(),
+            build_owner: BuildOwner::with_focus_manager(focus_manager),
             element_tree: ElementTree::new(),
             root_element: None,
             pipeline_owner: None,
@@ -757,7 +770,9 @@ impl WidgetsBinding {
         inner.root_element = Some(root_id);
 
         // Schedule initial build
-        inner.build_owner.schedule_build_for(root_id, 0);
+        inner
+            .build_owner
+            .schedule_build_for(root_id, 0, crate::RebuildReason::InitialMount);
         inner.build_scheduled = true;
 
         tracing::debug!(?root_id, "Root widget attached");
@@ -814,7 +829,11 @@ impl WidgetsBinding {
             // Now mark all as dirty
             for (id, depth) in elements_to_mark {
                 inner.element_tree.mark_needs_build(id);
-                inner.build_owner.schedule_build_for(id, depth);
+                inner.build_owner.schedule_build_for(
+                    id,
+                    depth,
+                    crate::RebuildReason::AnimationTick,
+                );
             }
 
             if !inner.build_scheduled {
@@ -1462,8 +1481,9 @@ impl std::fmt::Debug for WidgetsBinding {
 mod tests {
     use crate::view::IntoView;
     use crate::view::ViewExt;
-    use std::any::TypeId;
+    use std::{any::TypeId, rc::Rc};
 
+    use flui_interaction::FocusManager;
     use flui_objects::RenderSizedBox;
     use flui_rendering::protocol::BoxProtocol;
 
@@ -1562,6 +1582,25 @@ mod tests {
         let binding1 = WidgetsBinding::new();
         let binding2 = WidgetsBinding::new();
         assert!(!Arc::ptr_eq(&binding1.inner, &binding2.inner));
+    }
+
+    #[test]
+    fn bindings_have_isolated_focus_managers() {
+        let first = WidgetsBinding::new();
+        let second = WidgetsBinding::new();
+        let first_focus = first.with_build_owner(BuildOwner::focus_manager);
+        let second_focus = second.with_build_owner(BuildOwner::focus_manager);
+
+        assert!(!Rc::ptr_eq(&first_focus, &second_focus));
+    }
+
+    #[test]
+    fn binding_preserves_the_exact_focus_manager() {
+        let focus_manager = FocusManager::new();
+        let binding = WidgetsBinding::with_focus_manager(Rc::clone(&focus_manager));
+        let binding_focus = binding.with_build_owner(BuildOwner::focus_manager);
+
+        assert!(Rc::ptr_eq(&binding_focus, &focus_manager));
     }
 
     #[test]
@@ -2219,7 +2258,7 @@ mod tests {
 
         let dummy_id = flui_foundation::ElementId::new(1);
         binding.with_build_owner_mut(|bo| {
-            bo.schedule_build_for(dummy_id, 0);
+            bo.schedule_build_for(dummy_id, 0, crate::RebuildReason::StateChange);
         });
 
         assert!(

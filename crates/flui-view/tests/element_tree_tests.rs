@@ -284,7 +284,7 @@ fn test_deactivate_element() {
     let view = TestView { id: 1 };
 
     let id = tree.mount_root(&view, &mut owner.element_owner_mut());
-    tree.deactivate(id);
+    tree.deactivate(id, &mut owner.element_owner_mut());
 
     let node = tree.get(id).unwrap();
     assert_eq!(node.element().lifecycle(), Lifecycle::Inactive);
@@ -297,8 +297,8 @@ fn test_activate_element() {
     let view = TestView { id: 1 };
 
     let id = tree.mount_root(&view, &mut owner.element_owner_mut());
-    tree.deactivate(id);
-    tree.activate(id);
+    tree.deactivate(id, &mut owner.element_owner_mut());
+    tree.activate(id, &mut owner.element_owner_mut());
 
     let node = tree.get(id).unwrap();
     assert_eq!(node.element().lifecycle(), Lifecycle::Active);
@@ -567,8 +567,8 @@ fn test_operations_on_empty_tree() {
     // These should not panic
     tree.update(fake_id, &TestView { id: 0 }, &mut owner.element_owner_mut());
     tree.mark_needs_build(fake_id);
-    tree.deactivate(fake_id);
-    tree.activate(fake_id);
+    tree.deactivate(fake_id, &mut owner.element_owner_mut());
+    tree.activate(fake_id, &mut owner.element_owner_mut());
 
     assert!(tree.is_empty());
 }

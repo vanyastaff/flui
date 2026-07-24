@@ -85,19 +85,45 @@
 // Ship bar (wave 3): every public item is documented; keep it that way.
 #![deny(missing_docs)]
 
+use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::sync::Arc;
 use std::time::Duration;
 
 use flui_animation::{AnimationController, Vsync};
-use flui_interaction::arena::{GestureArena, run_pointer_lifecycle};
+use flui_interaction::ManualClock;
+use flui_interaction::arena::GestureArena;
+use flui_interaction::routing::MouseTracker;
 use flui_interaction::{
-    InteractionDispatchError, InteractionDispatchHandle, InteractionLane, PointerEvent,
+    GestureBinding, HitTestResult, InteractionDispatchError, InteractionDispatchHandle,
+    InteractionLane, PointerEvent,
 };
-use flui_interaction::{ManualClock, MonotonicClock};
 use flui_rendering::pipeline::PipelineOwner;
 use flui_scheduler::{BoxedTask, LocalPostFrameLane, Scheduler, TaskToken};
+use flui_types::geometry::{Offset, Pixels};
 use flui_view::{BuildOwner, ElementId, ElementTree, View};
 use parking_lot::RwLock;
+
+fn preserve_first_pointer_panic(
+    first: &mut Option<Box<dyn std::any::Any + Send>>,
+    candidate: Option<Box<dyn std::any::Any + Send>>,
+    phase: &'static str,
+) {
+    let Some(candidate) = candidate else {
+        return;
+    };
+    if first.is_none() {
+        *first = Some(candidate);
+    } else {
+        tracing::error!(
+            phase,
+            "pointer phase panicked after an earlier phase; only the first panic is resumed"
+        );
+        // Panic payloads are arbitrary user values. A secondary payload with a
+        // panicking destructor must not replace the first failure or abort its
+        // unwind, so this exceptional value is deliberately leaked.
+        std::mem::forget(candidate);
+    }
+}
 
 /// The mounted tree triple a tree-bound [`HeadlessBinding`] drives each frame.
 ///
@@ -116,10 +142,10 @@ struct TreeBinding {
 
 /// A deterministic, non-singleton headless frame driver.
 ///
-/// Owns the single virtual time authority ([`ManualClock`]) and a clock-bound
-/// [`GestureArena`] whose deadline checks read that clock; optionally also owns a
-/// mounted tree triple (via [`with_tree`](Self::with_tree)) and drives a
-/// restart-aware animation-controller registry ([`Vsync`]). Drive it with
+/// Owns the single virtual time authority ([`ManualClock`]) and one complete
+/// clock-bound [`GestureBinding`]; optionally also owns a mounted tree triple
+/// (via [`with_tree`](Self::with_tree)) and drives a restart-aware
+/// animation-controller registry ([`Vsync`]). Drive it with
 /// [`pump_frame`](Self::pump_frame).
 ///
 /// # Thread ownership
@@ -136,9 +162,10 @@ struct TreeBinding {
 pub struct HeadlessBinding {
     /// The single virtual time authority. Every time-based read flows from here.
     clock: ManualClock,
-    /// The shared, clock-bound arena. Deadline-driven recognizers added to it (via
-    /// [`arena`](Self::arena)) resolve against the virtual clock.
-    arena: GestureArena,
+    /// The canonical input owner. Its arena, pointer routes, coalescing queues,
+    /// resamplers, and mouse tracker all observe this binding's virtual clock
+    /// and owner lane.
+    gestures: GestureBinding,
     /// The controller registry ticked each frame on the virtual timeline,
     /// restart-aware. Shared (`Arc`-backed): a `VsyncScope` hands the same
     /// registry to a widget subtree so an implicitly-animated widget registers
@@ -160,14 +187,12 @@ pub struct HeadlessBinding {
 
 impl HeadlessBinding {
     /// Create a headless binding with a fresh virtual clock and a clock-bound,
-    /// binding-owned gesture arena.
+    /// binding-owned input pipeline.
     ///
-    /// The arena is built via
-    /// `GestureArena::binding_driven(Arc::new(clock.clone()))`, so the arena and
-    /// the binding observe the *same* virtual timeline (the clock's elapsed
-    /// counter is `Arc`-backed and shared across clones) AND the recognizers
-    /// below never self-sweep — this binding runs the close/sweep lifecycle in
-    /// [`dispatch_pointer`](Self::dispatch_pointer).
+    /// `GestureBinding::with_clock` makes its arena and recognizers observe the
+    /// same virtual timeline. The headless runtime therefore exercises the
+    /// production routing/coalescing/mouse-tracking owner instead of maintaining
+    /// a harness-only arena lifecycle.
     #[must_use]
     pub fn new() -> Self {
         Self::try_new().expect("BUG: interaction lane identity exhausted")
@@ -181,14 +206,13 @@ impl HeadlessBinding {
     /// interaction lane identity space has no unused value remaining.
     pub fn try_new() -> Result<Self, InteractionDispatchError> {
         let clock = ManualClock::new();
-        let arena =
-            GestureArena::binding_driven(Arc::new(clock.clone()) as Arc<dyn MonotonicClock>);
+        let gestures = GestureBinding::with_clock(Arc::new(clock.clone()));
         let scheduler = Scheduler::new();
         let local_post_frame = scheduler.local_post_frame_lane();
         let interaction_lane = InteractionLane::try_new()?;
         Ok(Self {
             clock,
-            arena,
+            gestures,
             vsync: Vsync::new(),
             tree: None,
             scheduler,
@@ -395,7 +419,19 @@ impl HeadlessBinding {
     /// dependency — so the wiring lives one layer up.
     #[must_use]
     pub fn arena(&self) -> &GestureArena {
-        &self.arena
+        self.gestures.arena()
+    }
+
+    /// The complete owner-local input pipeline driven by this binding.
+    #[must_use]
+    pub fn gestures(&self) -> &GestureBinding {
+        &self.gestures
+    }
+
+    /// Per-device mouse-region state owned by this binding's input pipeline.
+    #[must_use]
+    pub fn mouse_tracker(&self) -> &MouseTracker {
+        self.gestures.mouse_tracker()
     }
 
     /// The virtual clock this binding advances each frame.
@@ -408,22 +444,47 @@ impl HeadlessBinding {
         &self.clock
     }
 
-    /// Route a pointer event to the hit-test path, then run the arena's
-    /// close/sweep lifecycle — Flutter's `GestureBinding.handleEvent` order.
+    /// Route a pointer event through the complete binding-owned input pipeline.
     ///
-    /// `route` delivers the event to the framework (hit-test + dispatch, which
-    /// drives every hit `Listener`'s `add_pointer` / `handle_event`); the closure
-    /// keeps this binding rendering-agnostic, since `flui-binding` cannot name
-    /// `HitTestResult`. The route runs **first**, then the arena is closed on
-    /// `Down` and swept on `Up` / `Cancel`. The route-before-sweep order is
-    /// load-bearing: it lets a double-tap's first-up `hold` run before the sweep,
-    /// so the sweep observes the hold and defers — and lets every overlapping
-    /// detector add its recognizers before the single `close`.
-    pub fn dispatch_pointer(&self, event: &PointerEvent, route: impl FnOnce(&PointerEvent)) {
+    /// `hit_test` returns the canonical data-only path at the requested
+    /// position. `GestureBinding` owns Down-route capture, contact routing,
+    /// move coalescing, arena close/sweep, resampling, and mouse tracking; this
+    /// headless binding does not reproduce any of those protocols.
+    ///
+    /// For deterministic test ergonomics, a queued move is flushed at the end
+    /// of this input transaction. Production leaves that queue for the next
+    /// frame; both paths execute the same canonical queue and dispatch code.
+    ///
+    /// A routing panic is resumed only after deferred arena resolution has had
+    /// its required event-boundary chance to run. If both panic, routing wins
+    /// deterministically and the later panic is traced.
+    pub fn dispatch_pointer(
+        &self,
+        event: &PointerEvent,
+        hit_test: impl FnOnce(Offset<Pixels>) -> HitTestResult,
+    ) {
         self.local_post_frame.enter(|| {
             self.interaction_lane.enter(|| {
-                route(event);
-                run_pointer_lifecycle(&self.arena, event);
+                let route_panic = catch_unwind(AssertUnwindSafe(|| {
+                    self.gestures.handle_pointer_event(event, hit_test);
+                    self.gestures.flush_pending_moves();
+                }))
+                .err();
+                let deferred_panic = catch_unwind(AssertUnwindSafe(|| {
+                    self.gestures.drain_deferred_arena_resolutions();
+                }))
+                .err();
+
+                let mut first_panic = None;
+                preserve_first_pointer_panic(&mut first_panic, route_panic, "pointer routing");
+                preserve_first_pointer_panic(
+                    &mut first_panic,
+                    deferred_panic,
+                    "deferred arena resolution",
+                );
+                if let Some(payload) = first_panic {
+                    resume_unwind(payload);
+                }
             });
         });
     }
@@ -465,7 +526,7 @@ impl HeadlessBinding {
             tree_binding.tree.update(root_id, new_root, &mut owner);
             // Guarantee the element is in the dirty heap even if `dispatch_view_update`
             // only set the internal atomic flag (not the owner's dirty heap).
-            owner.schedule_build_for(root_id, 0);
+            owner.schedule_build_for(root_id, 0, flui_view::RebuildReason::RootChange);
         }));
     }
 
@@ -480,37 +541,40 @@ impl HeadlessBinding {
     /// 1. **Advance the virtual clock.** Everything time-based reads from here, so
     ///    the new instant must be visible before anything observes it — the
     ///    analogue of `fakeAsync.elapse(dt)`.
-    /// 2. **Fire gesture deadlines** at the new time. Flutter fires due `Timer`s
+    /// 2. **Drain deferred arena defaults.** This is the frame-boundary fallback
+    ///    for a lone member queued at a previous event boundary that unwound.
+    /// 3. **Fire gesture deadlines** at the new time. Flutter fires due `Timer`s
     ///    inside `elapse`, *ahead* of `handleBeginFrame`; a deadline (e.g. a
     ///    long-press) that has now elapsed resolves here, before any later frame
     ///    work — so the deadline poll is the first thing after the clock moves.
     ///
-    /// 3. **Tick registered animation controllers** on the virtual timeline. A
+    /// 4. **Tick registered animation controllers** on the virtual timeline. A
     ///    controller's `tick_at` notifies its listeners, which mark the dependent
     ///    `AnimatedView` dirty into the `BuildOwner`'s external inbox.
-    /// 4. **Rebuild the tree** (tree-bound only): `BuildOwner::build_scope` drains
+    /// 5. **Rebuild the tree** (tree-bound only): `BuildOwner::build_scope` drains
     ///    that inbox at its start and reconciles.
-    /// 5. **Run the pipeline frame** (tree-bound only): `PipelineOwner::run_frame`
+    /// 6. **Run the pipeline frame** (tree-bound only): `PipelineOwner::run_frame`
     ///    lays out, paints, and composites.
     ///
     /// # The load-bearing invariant
     ///
     /// **Everything that can dirty the tree runs before `build_scope`.** A gesture
-    /// deadline callback (step 2) may `setState` or start a controller; a
-    /// controller tick (step 3) routes through `notify_listeners` → the
+    /// deferred/default or deadline callback (steps 2–3) may `setState` or
+    /// start a controller; a controller tick (step 4) routes through
+    /// `notify_listeners` → the
     /// `AnimatedView`'s mark-dirty callback → the `BuildOwner`'s external inbox,
-    /// which `build_scope` (step 4) drains at its very start. If step 3 ran *after*
-    /// step 4, a tick's inbox entry would miss this frame's drain and rebuild only
+    /// which `build_scope` (step 5) drains at its very start. If step 4 ran *after*
+    /// step 5, a tick's inbox entry would miss this frame's drain and rebuild only
     /// next frame — a one-frame animation lag. The order is what makes an
     /// animation visible **same-frame**.
     ///
-    /// Steps 4–5 run only when the binding is tree-bound
-    /// ([`with_tree`](Self::with_tree)); a gesture-only binding stops after step 3,
+    /// Steps 5–6 run only when the binding is tree-bound
+    /// ([`with_tree`](Self::with_tree)); a gesture-only binding stops after step 4,
     /// so a bare controller can still be driven deterministically.
     pub fn pump_frame(&mut self, dt: Duration) {
         let Self {
             clock,
-            arena,
+            gestures,
             vsync,
             tree,
             scheduler,
@@ -522,18 +586,23 @@ impl HeadlessBinding {
                 // 1. Advance the virtual clock. Every subsequent read sees the new instant.
                 clock.advance(dt);
 
-                // 2. Fire gesture deadlines at the NEW time. A long-press deadline that has
-                //    now elapsed fires here, inside the frame.
-                arena.poll_deadlines();
+                // 2. Settle a lone default winner left by an earlier event boundary.
+                gestures.drain_deferred_arena_resolutions();
 
-                // 3. Tick the registered controllers on the virtual timeline. The
+                // 3. Dispatch the frame-coalesced pointer batch, then fire
+                //    gesture deadlines at the NEW time. A long-press deadline that has
+                //    now elapsed fires here, inside the frame.
+                gestures.flush_pending_moves();
+                gestures.tick_deadlines();
+
+                // 4. Tick the registered controllers on the virtual timeline. The
                 //    registry is restart-aware: it re-anchors each controller's run on a
                 //    `run_generation` bump and ticks only running controllers with the
                 //    raw seconds elapsed since that run's anchor.
                 let now_secs = clock.elapsed().as_secs_f64();
                 vsync.tick_all(now_secs);
 
-                // 4-7. THE shared frame ordering:
+                // 5-8. THE shared frame ordering:
                 //
                 //      begin (transient + microtasks + ONE async-driver poll)
                 //   -> handle_draw_frame (persistent callbacks)

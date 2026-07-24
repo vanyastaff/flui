@@ -15,16 +15,31 @@ use std::{
 use flui_types::geometry::{Offset, Pixels};
 use smallvec::SmallVec;
 
-pub use super::interaction_lane::{MouseEnterCallback, MouseExitCallback, MouseRegionTarget};
+pub use super::interaction_lane::{
+    MouseEnterCallback, MouseExitCallback, MouseHoverCallback, MouseRegionTarget,
+};
 use super::{HitTestResult, active_dispatch_handle};
 use crate::{
-    events::{CursorIcon, InputEvent, PointerEvent, PointerEventExt},
+    events::{CursorIcon, PointerEvent, PointerEventExt, PointerType},
     ids::RegionId,
     routing::interaction_lane::MouseRegionCell,
 };
 
 /// Device ID type (re-exported from events).
 pub use crate::events::DeviceId;
+
+/// How a pointer move participates in the mouse-region protocol.
+///
+/// Both variants refresh enter/exit/cursor state from a fresh hit test.
+/// Only `Hover` invokes `MouseRegion::on_hover`; contact motion continues to
+/// the gesture route captured at Down.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PointerMotionKind {
+    /// Motion without an active Down sequence.
+    Hover,
+    /// Motion inside an active Down-to-Up sequence.
+    Contact,
+}
 
 /// Data-plane annotation for a mouse-sensitive render region.
 ///
@@ -64,6 +79,8 @@ struct ResolvedMouseTrackerAnnotation {
 /// State for a single mouse device.
 #[derive(Debug, Clone)]
 struct DeviceState {
+    /// Device class used by the `mouse_is_connected` query.
+    pointer_type: PointerType,
     /// Last known position.
     last_position: Offset<Pixels>,
     /// Set of regions currently under this device.
@@ -75,8 +92,9 @@ struct DeviceState {
 }
 
 impl DeviceState {
-    fn new(position: Offset<Pixels>) -> Self {
+    fn new(pointer_type: PointerType, position: Offset<Pixels>) -> Self {
         Self {
+            pointer_type,
             last_position: position,
             active_regions: HashSet::new(),
             active_order: Vec::new(),
@@ -118,10 +136,6 @@ struct MouseTrackerInner {
     cursor_change_callback: Option<CursorChangeCallback>,
 }
 
-thread_local! {
-    static GLOBAL_TRACKER: &'static MouseTracker = Box::leak(Box::new(MouseTracker::new()));
-}
-
 impl MouseTracker {
     /// Creates a new owner-local mouse tracker.
     pub fn new() -> Self {
@@ -133,15 +147,6 @@ impl MouseTracker {
                 cursor_change_callback: None,
             })),
         }
-    }
-
-    /// Returns the current thread's mouse tracker instance.
-    ///
-    /// This is owner-local by construction; each UI owner thread gets its own
-    /// leaked singleton instead of forcing the tracker to be `Sync`.
-    #[must_use]
-    pub fn global() -> &'static Self {
-        GLOBAL_TRACKER.with(|tracker| *tracker)
     }
 
     /// Registers a mouse region annotation.
@@ -171,38 +176,52 @@ impl MouseTracker {
         }
     }
 
-    /// Updates tracking state based on an input event.
-    pub fn update_with_event(&self, event: &InputEvent, hit_test_result: &HitTestResult) {
-        let (device_id, position) = {
-            let mut inner = self.inner.borrow_mut();
-            match event {
-                InputEvent::Pointer(pointer_event) => match pointer_event {
-                    PointerEvent::Move(_) => {
-                        let pos = pointer_event.position();
-                        let id = event.device_id().unwrap_or(0);
-                        (id, pos)
-                    }
-                    _ => return,
-                },
-                InputEvent::DeviceAdded {
-                    device_id,
-                    pointer_type: _,
-                } => {
-                    inner.mouse_connected = true;
-                    inner.devices.insert(
-                        *device_id,
-                        DeviceState::new(Offset::new(Pixels::ZERO, Pixels::ZERO)),
-                    );
-                    return;
-                }
-                InputEvent::DeviceRemoved { device_id } => {
-                    inner.devices.remove(device_id);
-                    inner.mouse_connected = !inner.devices.is_empty();
-                    return;
-                }
-                _ => return,
-            }
+    /// Registers a pointing device with an optional initial position.
+    pub fn add_device(
+        &self,
+        device_id: DeviceId,
+        pointer_type: PointerType,
+        position: Offset<Pixels>,
+    ) {
+        let mut inner = self.inner.borrow_mut();
+        inner
+            .devices
+            .entry(device_id)
+            .or_insert_with(|| DeviceState::new(pointer_type, position));
+        inner.mouse_connected = inner
+            .devices
+            .values()
+            .any(|state| state.pointer_type == PointerType::Mouse);
+    }
+
+    /// Removes a pointing device and all hover state associated with it.
+    pub fn remove_device(&self, device_id: DeviceId) {
+        let mut inner = self.inner.borrow_mut();
+        inner.devices.remove(&device_id);
+        inner.mouse_connected = inner
+            .devices
+            .values()
+            .any(|state| state.pointer_type == PointerType::Mouse);
+    }
+
+    /// Updates tracking state from one freshly hit-tested pointer move.
+    pub fn update_with_motion(
+        &self,
+        event: &PointerEvent,
+        kind: PointerMotionKind,
+        hit_test_result: &HitTestResult,
+    ) {
+        if !matches!(event, PointerEvent::Move(_)) {
+            return;
+        }
+        let Some(pointer_type) = event.pointer_type() else {
+            return;
         };
+        if !matches!(pointer_type, PointerType::Mouse | PointerType::Pen) {
+            return;
+        }
+        let device_id = event.device_id();
+        let position = event.position();
 
         let resolved = resolve_hit_test_annotations(hit_test_result);
         let new_regions: HashSet<RegionId> = resolved.order.iter().copied().collect();
@@ -213,11 +232,15 @@ impl MouseTracker {
             for (region_id, annotation) in resolved.annotations {
                 inner.annotations.insert(region_id, annotation);
             }
+            if pointer_type == PointerType::Mouse {
+                inner.mouse_connected = true;
+            }
 
             let state = inner
                 .devices
                 .entry(device_id)
-                .or_insert_with(|| DeviceState::new(position));
+                .or_insert_with(|| DeviceState::new(pointer_type, position));
+            state.pointer_type = pointer_type;
 
             let entered: SmallVec<[RegionId; 4]> = resolved
                 .order
@@ -236,7 +259,6 @@ impl MouseTracker {
             let cursor_changed = state.current_cursor != new_cursor;
             state.last_position = position;
             state.active_regions = new_regions;
-            state.active_order = resolved.order;
             state.current_cursor = new_cursor;
 
             let enter_callbacks: SmallVec<[MouseEnterCallback; 4]> = entered
@@ -257,18 +279,39 @@ impl MouseTracker {
                         .and_then(|ann| ann.cell.snapshot().on_exit)
                 })
                 .collect();
+            let hover_callbacks: SmallVec<[MouseHoverCallback; 4]> =
+                if kind == PointerMotionKind::Hover {
+                    resolved
+                        .order
+                        .iter()
+                        .filter_map(|id| {
+                            inner
+                                .annotations
+                                .get(id)
+                                .and_then(|ann| ann.cell.snapshot().on_hover)
+                        })
+                        .collect()
+                } else {
+                    SmallVec::new()
+                };
             for id in exited {
                 inner.annotations.remove(&id);
             }
             let cursor_callback = cursor_changed
                 .then(|| inner.cursor_change_callback.clone())
                 .flatten();
+            inner
+                .devices
+                .get_mut(&device_id)
+                .expect("BUG: mouse device was inserted earlier in this transaction")
+                .active_order = resolved.order;
 
             DeviceWork {
                 device_id,
                 position,
                 enter_callbacks,
                 exit_callbacks,
+                hover_callbacks,
                 cursor_callback,
                 new_cursor,
             }
@@ -281,10 +324,8 @@ impl MouseTracker {
     /// position and emits enter / exit / cursor-change callbacks for any
     /// region transitions.
     ///
-    /// Hover callbacks are intentionally not emitted here. Flutter's
-    /// `MouseRegion.onHover` is a regular pointer-hover event handled by the
-    /// render object, while `MouseTracker` is responsible for enter/exit and
-    /// cursor updates.
+    /// Hover callbacks are intentionally not emitted here because no pointer
+    /// motion occurred; only structural enter/exit/cursor changes are valid.
     pub fn update_all_devices<F>(&self, hit_test_fn: F)
     where
         F: Fn(Offset<Pixels>) -> HitTestResult,
@@ -363,6 +404,7 @@ impl MouseTracker {
                     position,
                     enter_callbacks,
                     exit_callbacks,
+                    hover_callbacks: SmallVec::new(),
                     cursor_callback,
                     new_cursor,
                 }
@@ -492,6 +534,7 @@ struct DeviceWork {
     position: Offset<Pixels>,
     enter_callbacks: SmallVec<[MouseEnterCallback; 4]>,
     exit_callbacks: SmallVec<[MouseExitCallback; 4]>,
+    hover_callbacks: SmallVec<[MouseHoverCallback; 4]>,
     cursor_callback: Option<CursorChangeCallback>,
     new_cursor: CursorIcon,
 }
@@ -544,6 +587,21 @@ impl DeviceWork {
                 }
             }
         }
+        for callback in self.hover_callbacks {
+            let delivered = catch_unwind(AssertUnwindSafe(|| {
+                callback(self.device_id, self.position);
+            }));
+            if let Err(payload) = delivered {
+                if first_panic.is_none() {
+                    first_panic = Some(payload);
+                } else {
+                    tracing::error!(
+                        "mouse hover callback panicked after an earlier mouse callback already \
+                         panicked; only the first panic is resumed"
+                    );
+                }
+            }
+        }
 
         if let Some(payload) = first_panic {
             resume_unwind(payload);
@@ -565,11 +623,8 @@ mod tests {
         routing::{HitTestEntry, HitTestResult, InteractionLane, MouseRegionCallbacks},
     };
 
-    fn added_event() -> InputEvent {
-        InputEvent::DeviceAdded {
-            device_id: 0,
-            pointer_type: PointerType::Mouse,
-        }
+    fn add_primary_mouse(tracker: &MouseTracker) {
+        tracker.add_device(0, PointerType::Mouse, Offset::ZERO);
     }
 
     #[test]
@@ -581,19 +636,15 @@ mod tests {
     #[test]
     fn mouse_added_event() {
         let tracker = MouseTracker::new();
-        tracker.update_with_event(&added_event(), &HitTestResult::new());
+        add_primary_mouse(&tracker);
         assert!(tracker.mouse_is_connected());
     }
 
     #[test]
     fn mouse_removed_event() {
         let tracker = MouseTracker::new();
-        tracker.update_with_event(&added_event(), &HitTestResult::new());
-
-        tracker.update_with_event(
-            &InputEvent::DeviceRemoved { device_id: 0 },
-            &HitTestResult::new(),
-        );
+        add_primary_mouse(&tracker);
+        tracker.remove_device(0);
 
         assert!(!tracker.mouse_is_connected());
     }
@@ -601,7 +652,7 @@ mod tests {
     #[test]
     fn device_cursor_defaults_to_default() {
         let tracker = MouseTracker::new();
-        tracker.update_with_event(&added_event(), &HitTestResult::new());
+        add_primary_mouse(&tracker);
 
         assert_eq!(tracker.device_cursor(0), CursorIcon::Default);
         assert_eq!(tracker.current_cursor(), CursorIcon::Default);
@@ -633,16 +684,17 @@ mod tests {
 
         let region_id = RenderId::new(1);
         let inside_position = Offset::new(Pixels(10.0), Pixels(10.0));
-        let inside_event =
-            InputEvent::Pointer(make_move_event(inside_position, PointerType::Mouse));
+        let inside_event = make_move_event(inside_position, PointerType::Mouse);
         let mut inside = HitTestResult::new();
         inside.add(
             HitTestEntry::new(region_id)
                 .mouse_annotation(MouseTrackerAnnotation::new(region_id, target)),
         );
 
-        tracker.update_with_event(&added_event(), &HitTestResult::new());
-        lane.enter(|| tracker.update_with_event(&inside_event, &inside));
+        add_primary_mouse(&tracker);
+        lane.enter(|| {
+            tracker.update_with_motion(&inside_event, PointerMotionKind::Hover, &inside);
+        });
         assert_eq!(enters.get(), 1);
         assert_eq!(exits.get(), 0);
 
@@ -652,9 +704,14 @@ mod tests {
                 .expect("unregister target");
         });
         let outside_position = Offset::new(Pixels(80.0), Pixels(10.0));
-        let outside_event =
-            InputEvent::Pointer(make_move_event(outside_position, PointerType::Mouse));
-        lane.enter(|| tracker.update_with_event(&outside_event, &HitTestResult::new()));
+        let outside_event = make_move_event(outside_position, PointerType::Mouse);
+        lane.enter(|| {
+            tracker.update_with_motion(
+                &outside_event,
+                PointerMotionKind::Hover,
+                &HitTestResult::new(),
+            );
+        });
 
         assert_eq!(enters.get(), 1);
         assert_eq!(
@@ -677,7 +734,7 @@ mod tests {
         let region_id = RenderId::new(1);
         let ordinary_id = RenderId::new(2);
         let position = Offset::new(Pixels(10.0), Pixels(10.0));
-        let event = InputEvent::Pointer(make_move_event(position, PointerType::Mouse));
+        let event = make_move_event(position, PointerType::Mouse);
         let mut result = HitTestResult::new();
         result.add(
             HitTestEntry::new(region_id)
@@ -685,12 +742,49 @@ mod tests {
         );
         result.add(HitTestEntry::new(ordinary_id));
 
-        tracker.update_with_event(&added_event(), &HitTestResult::new());
-        lane.enter(|| tracker.update_with_event(&event, &result));
+        add_primary_mouse(&tracker);
+        lane.enter(|| {
+            tracker.update_with_motion(&event, PointerMotionKind::Hover, &result);
+        });
 
         let active = tracker.device_active_regions(0);
         assert!(active.contains(&region_id));
         assert!(!active.contains(&ordinary_id));
+    }
+
+    #[test]
+    fn hover_and_contact_share_tracking_but_only_hover_invokes_on_hover() {
+        let lane = InteractionLane::try_new().expect("lane");
+        let handle = lane.dispatch_handle();
+        let tracker = MouseTracker::new();
+        let hovers = Rc::new(Cell::new(0));
+        let callback_hovers = Rc::clone(&hovers);
+        let target = lane.enter(|| {
+            handle
+                .register_mouse_region(MouseRegionCallbacks {
+                    on_hover: Some(Rc::new(move |_device, _position| {
+                        callback_hovers.set(callback_hovers.get() + 1);
+                    })),
+                    ..MouseRegionCallbacks::default()
+                })
+                .expect("register mouse region")
+        });
+        let region_id = RenderId::new(1);
+        let position = Offset::new(Pixels(10.0), Pixels(10.0));
+        let event = make_move_event(position, PointerType::Mouse);
+        let mut result = HitTestResult::new();
+        result.add(
+            HitTestEntry::new(region_id)
+                .mouse_annotation(MouseTrackerAnnotation::new(region_id, target)),
+        );
+
+        lane.enter(|| {
+            tracker.update_with_motion(&event, PointerMotionKind::Hover, &result);
+            tracker.update_with_motion(&event, PointerMotionKind::Contact, &result);
+        });
+
+        assert_eq!(hovers.get(), 1);
+        assert!(tracker.device_active_regions(0).contains(&region_id));
     }
 
     #[test]
@@ -719,10 +813,10 @@ mod tests {
             (panicking_target, later_target)
         });
 
-        tracker.update_with_event(&added_event(), &HitTestResult::new());
+        add_primary_mouse(&tracker);
 
         let position = Offset::new(Pixels(10.0), Pixels(10.0));
-        let event = InputEvent::Pointer(make_move_event(position, PointerType::Mouse));
+        let event = make_move_event(position, PointerType::Mouse);
         let first_id = RenderId::new(1);
         let second_id = RenderId::new(2);
         let mut inside = HitTestResult::new();
@@ -734,11 +828,15 @@ mod tests {
             HitTestEntry::new(second_id)
                 .mouse_annotation(MouseTrackerAnnotation::new(second_id, later_target)),
         );
-        lane.enter(|| tracker.update_with_event(&event, &inside));
+        lane.enter(|| {
+            tracker.update_with_motion(&event, PointerMotionKind::Hover, &inside);
+        });
 
         let outside = HitTestResult::new();
         let panic = panic::catch_unwind(panic::AssertUnwindSafe(|| {
-            lane.enter(|| tracker.update_with_event(&event, &outside));
+            lane.enter(|| {
+                tracker.update_with_motion(&event, PointerMotionKind::Hover, &outside);
+            });
         }));
 
         assert!(panic.is_err(), "the first mouse callback panic must resume");

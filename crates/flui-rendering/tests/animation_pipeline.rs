@@ -178,7 +178,7 @@ fn animated_opacity_layer_follows_and_zero_alpha_skips() {
             .expect("RenderOpacity")
             .set_opacity(1.0 - ctrl.value());
     }
-    owner.add_node_needing_paint(fade, 0);
+    owner.mark_needs_paint(fade);
     let (next, tree) = frame(owner);
     owner = next;
     let tree = tree.expect("fully-opaque frame paints");
@@ -206,7 +206,7 @@ fn animated_opacity_layer_follows_and_zero_alpha_skips() {
                 .expect("RenderOpacity")
                 .set_opacity(opacity);
         }
-        owner.add_node_needing_paint(fade, 0);
+        owner.mark_needs_paint(fade);
         let (next, tree) = frame(owner);
         owner = next;
         let tree = tree.unwrap_or_else(|| panic!("fade frame {i} must paint"));
@@ -235,7 +235,7 @@ fn animated_opacity_layer_follows_and_zero_alpha_skips() {
             .expect("RenderOpacity")
             .set_opacity(1.0 - ctrl.value());
     }
-    owner.add_node_needing_paint(fade, 0);
+    owner.mark_needs_paint(fade);
     let (_owner, tree) = frame(owner);
     let tree = tree.expect("the zero-alpha frame still produces a (empty) tree");
     assert!(
@@ -306,7 +306,7 @@ fn animated_transform_hits_follow_current_frame_matrix() {
             .expect("RenderTransform")
             .set_transform(Matrix4::scaling(scale, scale, 1.0));
     }
-    owner.add_node_needing_paint(scaler, 0);
+    owner.mark_needs_paint(scaler);
     let (owner, tree) = frame(owner);
     assert!(tree.is_some(), "transform frame paints");
     assert_eq!(

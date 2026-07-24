@@ -20,18 +20,24 @@
 //! generational [`RealmId`], so results stamped for a dead runtime are
 //! droppable by identity, not by convention.
 
-use std::cell::RefCell;
 use std::marker::PhantomData;
 use std::num::NonZeroU32;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use crossbeam_channel::{Receiver, Sender, TrySendError, bounded};
-use flui_foundation::{GenerationGate, HasInstance, RealmId, ResourceGeneration};
-use flui_interaction::InteractionLane;
-use flui_scheduler::{LocalPostFrameLane, Scheduler, SchedulerPhase};
+use flui_foundation::{HasInstance, PresentationId, RealmId};
+use flui_interaction::{FocusManager, GestureBinding, InteractionLane, TextInputOwner};
+#[cfg(test)]
+use flui_platform::traits::PlatformTextInput;
+use flui_platform::traits::PlatformWindow;
+use flui_scheduler::{AppLifecycleState, LocalPostFrameLane, Scheduler, SchedulerPhase};
+use flui_semantics::SemanticsActionRequest;
 use flui_view::WidgetsBinding;
 use flui_widgets::NavigatorCommand;
+
+use super::presentation::PresentationState;
 
 /// Default bound of the owner inbox, matching the pipeline dirty-channel
 /// precedent (`DEFAULT_DIRTY_CHANNEL_CAPACITY`)). Observable at
@@ -114,67 +120,14 @@ impl CommandSendError {
 // Commands
 // ---------------------------------------------------------------------------
 
-/// A worker-result identity stamp, validated at the owner's commit point.
-///
-/// Captured when the job is dispatched; checked when the result is drained
-/// at the commit point: the stamp's window must be the draining realm's
-/// identity and the stamped [`ResourceGeneration`] must still be current on
-/// its [`GenerationGate`]. A failed check drops the result with a trace event
-/// — never a panic, never a partial apply.
-#[derive(Debug, Clone)]
-pub(crate) struct ResultStamp {
-    realm_id: RealmId,
-    gate: GenerationGate,
-    issued: ResourceGeneration,
-}
-
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "worker-result lane is reserved for runtime services"
-    )
-)]
-impl ResultStamp {
-    /// Stamp a job dispatched for `realm_id` against the resource state
-    /// guarded by `gate`, capturing the gate's current generation.
-    #[must_use]
-    pub fn current(realm_id: RealmId, gate: &GenerationGate) -> Self {
-        Self {
-            realm_id,
-            gate: gate.clone(),
-            issued: gate.current(),
-        }
-    }
-
-    /// `true` iff this stamp targets `owner_realm` and its generation is
-    /// still current.
-    #[must_use]
-    pub fn is_fresh(&self, owner_realm: RealmId) -> bool {
-        self.realm_id == owner_realm && self.gate.is_current(self.issued)
-    }
-
-    /// The realm this stamp was issued for.
-    #[must_use]
-    pub fn realm_id(&self) -> RealmId {
-        self.realm_id
-    }
-}
-
 /// A command enqueued for the owner thread.
 pub(crate) enum UiCommand {
     /// Apply a hot-reload reassemble on the owner at the next Idle drain.
     HotReload(flui_hot_reload::HotReloadTier),
+    /// Resolve and invoke an accessibility action on the owner thread.
+    SemanticsAction(SemanticsActionRequest),
     /// Apply a typed navigator mutation on the owner thread.
     Navigation(NavigatorCommand),
-    /// Run on the owner thread at the next Idle drain.
-    Invoke(Box<dyn FnOnce() + Send + 'static>),
-    /// A versioned worker result: applied only if the stamp is fresh at
-    /// drain time, dropped (traced) otherwise.
-    Result {
-        stamp: ResultStamp,
-        apply: Box<dyn FnOnce() + Send + 'static>,
-    },
 }
 
 impl std::fmt::Debug for UiCommand {
@@ -183,15 +136,14 @@ impl std::fmt::Debug for UiCommand {
             UiCommand::HotReload(tier) => {
                 f.debug_tuple("UiCommand::HotReload").field(tier).finish()
             }
+            UiCommand::SemanticsAction(request) => f
+                .debug_tuple("UiCommand::SemanticsAction")
+                .field(request)
+                .finish(),
             UiCommand::Navigation(command) => f
                 .debug_tuple("UiCommand::Navigation")
                 .field(command)
                 .finish(),
-            UiCommand::Invoke(_) => f.write_str("UiCommand::Invoke"),
-            UiCommand::Result { stamp, .. } => f
-                .debug_struct("UiCommand::Result")
-                .field("stamp", stamp)
-                .finish_non_exhaustive(),
         }
     }
 }
@@ -201,11 +153,9 @@ impl std::fmt::Debug for UiCommand {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 #[must_use]
 pub(crate) struct DrainReport {
-    /// Owner commands run (hot reload or crate-internal `invoke`).
+    /// Owner commands successfully applied.
     pub invoked: usize,
-    /// Fresh worker results applied.
-    pub applied: usize,
-    /// Stale or foreign-window results dropped (traced, never applied).
+    /// Commands whose typed owner target is stale or no longer live.
     pub dropped_stale: usize,
 }
 
@@ -256,6 +206,31 @@ impl UiCommandSender {
         self.send(UiCommand::HotReload(tier))
     }
 
+    /// Enqueue an accessibility action for owner-local semantics resolution.
+    ///
+    /// The sender itself selects the target realm/presentation; the request
+    /// carries only the stable node identity exported by that presentation's
+    /// snapshot. Delivery is bounded, FIFO, and committed only at the next
+    /// Idle drain.
+    ///
+    /// # Errors
+    ///
+    /// [`CommandSendError::ChannelFull`] under backpressure,
+    /// [`CommandSendError::OwnerGone`] once the runtime is dropped.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "vended to the platform accessibility adapter in the AccessKit slice"
+        )
+    )]
+    pub(crate) fn send_semantics_action(
+        &self,
+        request: SemanticsActionRequest,
+    ) -> Result<(), CommandSendError> {
+        self.send(UiCommand::SemanticsAction(request))
+    }
+
     /// Enqueue a typed navigation command for owner-thread application.
     ///
     /// This is the ADR-0027 cross-thread navigation ingress. The sender only
@@ -278,58 +253,6 @@ impl UiCommandSender {
         command: NavigatorCommand,
     ) -> Result<(), CommandSendError> {
         self.send(UiCommand::Navigation(command))
-    }
-
-    /// Enqueue `run` for the owner thread and wake it.
-    ///
-    /// This is the foreground-dispatch primitive: "run on the owner thread"
-    /// means the next Idle drain of this realm's inbox — never
-    /// `std::thread::spawn`, never inline on the caller.
-    ///
-    /// Crate-private by design: the cross-thread surface is a
-    /// *closed command vocabulary* — [`Self::request_redraw`],
-    /// [`Self::submit_result`]). A public "run anything on the UI thread"
-    /// escape hatch would let arbitrary code bypass the typed commands; the
-    /// framework's own dispatch needs grow here as crate-internal callers.
-    ///
-    /// # Errors
-    ///
-    /// [`CommandSendError::ChannelFull`] under backpressure (back off and
-    /// retry), [`CommandSendError::OwnerGone`] once the runtime is dropped.
-    // Test-only until all dispatch surfaces stabilize.
-    #[cfg_attr(not(test), expect(dead_code))]
-    pub(crate) fn invoke(
-        &self,
-        run: impl FnOnce() + Send + 'static,
-    ) -> Result<(), CommandSendError> {
-        self.send(UiCommand::Invoke(Box::new(run)))
-    }
-
-    /// Enqueue a stamped worker result; the owner applies it only if the
-    /// stamp is still fresh at drain time.
-    ///
-    /// # Errors
-    ///
-    /// [`CommandSendError::ChannelFull`] under backpressure,
-    /// [`CommandSendError::OwnerGone`] once the runtime is dropped. A *stale*
-    /// result is not a send error — staleness is decided at the owner's
-    /// commit point, and the result is silently (traced) dropped there.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "worker-result lane is reserved for runtime services"
-        )
-    )]
-    pub(crate) fn submit_result(
-        &self,
-        stamp: ResultStamp,
-        apply: impl FnOnce() + Send + 'static,
-    ) -> Result<(), CommandSendError> {
-        self.send(UiCommand::Result {
-            stamp,
-            apply: Box::new(apply),
-        })
     }
 
     /// Request a redraw of the realm's presentation, coalesced: any number of pending
@@ -398,6 +321,12 @@ pub(crate) struct UiRealm {
     local_post_frame: LocalPostFrameLane,
     /// Owner-local interaction callback storage, activated with the realm scope.
     interaction_lane: InteractionLane,
+    /// The current UI-owner presentation domain.
+    ///
+    /// The realm has one presentation until the element tree becomes a forest
+    /// with root-scoped capabilities. The nominal identity exists now so no
+    /// command or resource needs to overload `RealmId` or a native window id.
+    presentation: PresentationState,
     rx: Receiver<UiCommand>,
     /// Prototype for [`Self::command_sender`]: crossbeam receivers cannot
     /// mint senders, so the runtime keeps one sender to clone from. Holding
@@ -405,15 +334,6 @@ pub(crate) struct UiRealm {
     /// with the runtime and every outstanding sender turns `OwnerGone`.
     sender_prototype: UiCommandSender,
     redraw_pending: Arc<AtomicBool>,
-    /// The [`AppBinding`](super::binding::AppBinding) this realm is bound to,
-    /// installed by [`Self::bind_to_app`]. `drain_commands`'s
-    /// `UiCommand::HotReload` arm applies against THIS, never
-    /// `AppBinding::instance()` directly — the latter would silently
-    /// reassemble the wrong (process-singleton) tree for a realm bound to a
-    /// standalone test instance (`UiRealm::for_test`). `RefCell` because
-    /// `bind_to_app` takes `&self`; construction happens before binding, so
-    /// this starts `None`.
-    hot_reload_bridge: RefCell<Option<super::binding::HotReloadBridge>>,
     /// Whether this instance owns the transitional process-wide claim.
     claimed: bool,
     /// `*const ()` is `!Send + !Sync`; `PhantomData` of it makes the runtime
@@ -425,6 +345,7 @@ impl std::fmt::Debug for UiRealm {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("UiRealm")
             .field("realm_id", &self.realm_id)
+            .field("presentation_id", &self.presentation.id())
             .field("pending_commands", &self.rx.len())
             .field(
                 "redraw_pending",
@@ -445,8 +366,12 @@ impl UiRealm {
     ///
     /// [`UiRealmError::AlreadyExists`] while another runtime is live
     /// (transitional at-most-one guard, see module docs).
-    pub(crate) fn new(wake: Arc<dyn Fn() + Send + Sync>) -> Result<Self, UiRealmError> {
-        Self::with_capacity(DEFAULT_COMMAND_CAPACITY, wake)
+    pub(crate) fn new(
+        app: &super::binding::AppBinding,
+        wake: Arc<dyn Fn() + Send + Sync>,
+        window: Arc<dyn PlatformWindow>,
+    ) -> Result<Self, UiRealmError> {
+        Self::with_capacity(app, DEFAULT_COMMAND_CAPACITY, wake, window)
     }
 
     /// [`Self::new`] with an explicit inbox capacity.
@@ -460,14 +385,19 @@ impl UiRealm {
     /// Panics if `capacity == 0` (a zero-capacity inbox could never accept
     /// a command; every sender would spuriously report backpressure).
     pub(crate) fn with_capacity(
+        app: &super::binding::AppBinding,
         capacity: usize,
         wake: Arc<dyn Fn() + Send + Sync>,
+        window: Arc<dyn PlatformWindow>,
     ) -> Result<Self, UiRealmError> {
         assert!(capacity > 0, "UiRealm inbox capacity must be non-zero");
         if REALM_CLAIMED.swap(true, Ordering::AcqRel) {
             return Err(UiRealmError::AlreadyExists);
         }
-        match Self::construct(capacity, wake, true) {
+        let (realm_id, presentation_id) = Self::next_identity();
+        let presentation =
+            PresentationState::new(presentation_id, app.render_pipeline_arc(), window);
+        match Self::construct(capacity, wake, realm_id, presentation, true) {
             Ok(realm) => Ok(realm),
             Err(error) => {
                 REALM_CLAIMED.store(false, Ordering::Release);
@@ -479,24 +409,28 @@ impl UiRealm {
     fn construct(
         capacity: usize,
         wake: Arc<dyn Fn() + Send + Sync>,
+        realm_id: RealmId,
+        presentation: PresentationState,
         claimed: bool,
     ) -> Result<Self, UiRealmError> {
-        let incarnation = NEXT_INCARNATION.fetch_add(1, Ordering::Relaxed);
-        let generation = NonZeroU32::new(incarnation)
-            .expect("BUG: incarnation counter starts at 1 and only increments");
-        // Slot 0 is the single-window slot; a real multi-window `AppRuntime`
-        // registry mints slots once it exists — the shape is the deliverable,
-        // single-window the only instantiation for now.
-        let realm_id = RealmId::new_gen(0, generation);
         let (tx, rx) = bounded(capacity);
         let redraw_pending = Arc::new(AtomicBool::new(false));
         let local_post_frame = Scheduler::instance().local_post_frame_lane();
         let interaction_lane = InteractionLane::try_new()?;
+        let widgets = WidgetsBinding::with_focus_manager(presentation.focus_manager());
+        widgets.set_pipeline_owner(Arc::clone(presentation.pipeline()));
+        widgets.with_build_owner_mut(|owner| {
+            owner.set_async_driver(Scheduler::instance().async_driver().clone());
+            owner.set_post_frame_handle(local_post_frame.post_frame_handle());
+            owner.set_interaction_dispatch_handle(interaction_lane.dispatch_handle());
+            owner.set_text_input_handle(presentation.text_input_handle());
+        });
         Ok(Self {
             realm_id,
-            widgets: WidgetsBinding::new(),
+            widgets,
             local_post_frame,
             interaction_lane,
+            presentation,
             rx,
             sender_prototype: UiCommandSender {
                 tx,
@@ -505,24 +439,60 @@ impl UiRealm {
                 wake,
             },
             redraw_pending,
-            hot_reload_bridge: RefCell::new(None),
             claimed,
             _owner_affine: PhantomData,
         })
     }
 
+    fn next_identity() -> (RealmId, PresentationId) {
+        let incarnation = NEXT_INCARNATION.fetch_add(1, Ordering::Relaxed);
+        let generation = NonZeroU32::new(incarnation)
+            .expect("BUG: incarnation counter starts at 1 and only increments");
+        // Slot 0 is the single-window slot; a real multi-window `AppRuntime`
+        // registry mints slots once it exists — the shape is the deliverable,
+        // single-window the only instantiation for now.
+        (
+            RealmId::new_gen(0, generation),
+            PresentationId::new_gen(0, generation),
+        )
+    }
+
     #[cfg(test)]
     pub(crate) fn for_test(app: &super::binding::AppBinding) -> Self {
-        let realm = Self::construct(DEFAULT_COMMAND_CAPACITY, Arc::new(|| {}), false)
-            .expect("test UiRealm should create an interaction lane");
-        realm.bind_to_app(app);
-        realm
+        Self::for_test_with_text_input(app, None)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_test_with_text_input(
+        app: &super::binding::AppBinding,
+        platform_text_input: Option<Arc<dyn PlatformTextInput>>,
+    ) -> Self {
+        let (realm_id, presentation_id) = Self::next_identity();
+        let presentation = PresentationState::new_for_test(
+            presentation_id,
+            app.render_pipeline_arc(),
+            platform_text_input,
+        );
+        Self::construct(
+            DEFAULT_COMMAND_CAPACITY,
+            Arc::new(|| {}),
+            realm_id,
+            presentation,
+            false,
+        )
+        .expect("test UiRealm should create an interaction lane")
     }
 
     /// This incarnation's generational realm identity.
     #[must_use]
     pub fn realm_id(&self) -> RealmId {
         self.realm_id
+    }
+
+    /// Current presentation incarnation.
+    #[must_use]
+    pub fn presentation_id(&self) -> PresentationId {
+        self.presentation.id()
     }
 
     /// A new cross-thread sender into this runtime's inbox.
@@ -549,36 +519,52 @@ impl UiRealm {
         &self.widgets
     }
 
-    /// Connect the realm-owned widget tree to the transitional app host's
-    /// render pipeline and scheduler services.
-    pub(crate) fn bind_to_app(&self, app: &super::binding::AppBinding) {
-        // Same reasoning as `text_input_platform_bridge` below: install the
-        // bridge tied to THIS `app`, so a later `drain_commands` hot-reload
-        // arm applies against it instead of resolving `AppBinding::instance()`
-        // fresh (and, for `UiRealm::for_test`, wrong).
-        *self.hot_reload_bridge.borrow_mut() = Some(app.hot_reload_bridge());
+    /// Gesture state for the realm's current single presentation.
+    ///
+    /// Crate-private so platform input can only reach it through the entered
+    /// realm dispatch path rather than exposing a second public owner seam.
+    pub(crate) fn gestures(&self) -> &GestureBinding {
+        self.presentation.gestures()
+    }
 
-        self.widgets.set_pipeline_owner(app.render_pipeline_arc());
-        self.widgets.with_build_owner_mut(|owner| {
-            owner.set_async_driver(Scheduler::instance().async_driver().clone());
-            owner.set_post_frame_handle(self.local_post_frame.post_frame_handle());
-            owner.set_interaction_dispatch_handle(self.interaction_lane.dispatch_handle());
-            // `text_input_platform_bridge()` clones an `Arc` onto `app`'s own
-            // active-window slot rather than closing over `app: &AppBinding`
-            // itself (not `'static`) or re-resolving `AppBinding::instance()`
-            // on every call — the latter would silently attach to the WRONG
-            // binding when `bind_to_app` is called with a standalone test
-            // instance (`UiRealm::for_test`) instead of the process-wide
-            // singleton. See `TextInputPlatformBridge`'s doc.
-            let text_input_bridge = app.text_input_platform_bridge();
-            let text_input_bridge_for_detach = text_input_bridge.clone();
-            let text_input_bridge_for_cursor_area = text_input_bridge.clone();
-            owner.set_text_input_handle(flui_interaction::TextInputHandle::new(
-                move |callback| text_input_bridge.attach(callback),
-                move |token| text_input_bridge_for_detach.detach(token),
-                move |area| text_input_bridge_for_cursor_area.set_cursor_area(area),
-            ));
-        });
+    /// Focus state for the realm's current presentation.
+    #[must_use]
+    pub(crate) fn focus_manager(&self) -> Rc<FocusManager> {
+        self.presentation.focus_manager()
+    }
+
+    /// Text-input state for the realm's current single presentation.
+    pub(crate) fn text_input(&self) -> &TextInputOwner {
+        self.presentation.text_input()
+    }
+
+    /// Weak text-input capability for this exact presentation.
+    #[must_use]
+    #[cfg(test)]
+    pub(crate) fn text_input_handle(&self) -> flui_interaction::TextInputHandle {
+        self.presentation.text_input_handle()
+    }
+
+    /// Keep presentation-owned resources aligned with the synthesized
+    /// application lifecycle delivered by the platform runner.
+    pub(crate) fn handle_presentation_lifecycle(&self, state: AppLifecycleState) {
+        match state {
+            AppLifecycleState::Resumed | AppLifecycleState::Inactive => {
+                self.presentation.resume();
+            }
+            AppLifecycleState::Hidden | AppLifecycleState::Paused => {
+                self.presentation.suspend();
+            }
+            AppLifecycleState::Detached => {
+                self.presentation.close();
+            }
+        }
+    }
+
+    /// Reassemble this realm's element tree and exact presentation pipeline.
+    #[must_use]
+    pub(crate) fn apply_hot_reload(&self, tier: flui_hot_reload::HotReloadTier) -> bool {
+        self.presentation.apply_hot_reload(&self.widgets, tier)
     }
 
     /// Consume the coalesced redraw request, if any.
@@ -590,8 +576,8 @@ impl UiRealm {
         self.redraw_pending.swap(false, Ordering::AcqRel)
     }
 
-    /// Drain the inbox on the owner thread: run queued closures and commit
-    /// fresh worker results, in strict FIFO order.
+    /// Drain the closed command inbox on the owner thread in strict FIFO
+    /// order.
     ///
     /// Call only at frame boundaries — immediately before entering
     /// `drive_frame` and/or after it returns — never inside the frame
@@ -619,23 +605,27 @@ impl UiRealm {
             };
             match command {
                 UiCommand::HotReload(tier) => {
-                    // Cloned out of the `RefCell` (`HotReloadBridge` is cheap
-                    // `Arc`-clone `Clone`) BEFORE calling through — the same
-                    // take-out-of-the-slot discipline this method's own inbox
-                    // drain follows. `bridge.apply` runs arbitrary reassemble
-                    // code; holding the `Ref` guard across that call would
-                    // panic on any reentrant `bind_to_app` (the only
-                    // `borrow_mut` on this field) the reassemble triggers.
-                    let bridge = self.hot_reload_bridge.borrow().clone();
-                    if let Some(bridge) = bridge {
-                        bridge.apply(self, tier);
-                        report.invoked += 1;
-                    } else {
-                        tracing::error!(
-                            "hot-reload command dropped: realm was never bound to an \
-                             AppBinding (drain_commands ran before bind_to_app)"
-                        );
-                        report.dropped_stale += 1;
+                    if self.presentation.apply_hot_reload(&self.widgets, tier) {
+                        self.redraw_pending.store(true, Ordering::Release);
+                    }
+                    report.invoked += 1;
+                }
+                UiCommand::SemanticsAction(request) => {
+                    match self.presentation.dispatch_semantics_action(request) {
+                        Ok(()) => {
+                            report.invoked += 1;
+                        }
+                        Err(error) => {
+                            // Flutter deliberately ignores actions for stale
+                            // views/nodes because screen readers may lag behind
+                            // the latest semantics update.
+                            tracing::trace!(
+                                presentation_id = ?self.presentation.id(),
+                                ?error,
+                                "dropping semantics action against a stale snapshot"
+                            );
+                            report.dropped_stale += 1;
+                        }
                     }
                 }
                 UiCommand::Navigation(command) => match command.apply_on_owner() {
@@ -650,23 +640,6 @@ impl UiRealm {
                         report.dropped_stale += 1;
                     }
                 },
-                UiCommand::Invoke(run) => {
-                    run();
-                    report.invoked += 1;
-                }
-                UiCommand::Result { stamp, apply } => {
-                    if stamp.is_fresh(self.realm_id) {
-                        apply();
-                        report.applied += 1;
-                    } else {
-                        tracing::trace!(
-                            stamped_window = ?stamp.realm_id(),
-                            owner_realm = ?self.realm_id,
-                            "dropping stale worker result at commit point"
-                        );
-                        report.dropped_stale += 1;
-                    }
-                }
             }
         }
         report
@@ -675,6 +648,7 @@ impl UiRealm {
 
 impl Drop for UiRealm {
     fn drop(&mut self) {
+        self.presentation.close();
         if self.claimed {
             REALM_CLAIMED.store(false, Ordering::Release);
         }
@@ -683,11 +657,12 @@ impl Drop for UiRealm {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::AtomicUsize;
-    use std::sync::mpsc;
-    use std::thread::ThreadId;
+    use std::sync::atomic::{AtomicBool, AtomicUsize};
 
-    use flui_foundation::GenerationGate;
+    use flui_foundation::RenderId;
+    use flui_semantics::{
+        AccessibilityNodeId, SemanticsAction, SemanticsActionRequest, SemanticsNode, SemanticsOwner,
+    };
     use flui_view::prelude::*;
     use flui_widgets::{NavigatorCommand, NavigatorHandle, SimpleRoute, SizedBox};
 
@@ -716,17 +691,35 @@ mod tests {
         )
     }
 
+    fn test_window() -> Arc<dyn PlatformWindow> {
+        flui_platform::headless_platform()
+            .open_window(flui_platform::WindowOptions::default())
+            .expect("headless platform should create a test window")
+    }
+
+    fn new_runtime(wake: Arc<dyn Fn() + Send + Sync>) -> Result<UiRealm, UiRealmError> {
+        let app = super::super::binding::AppBinding::new();
+        UiRealm::new(&app, wake, test_window())
+    }
+
+    fn new_runtime_with_capacity(
+        capacity: usize,
+        wake: Arc<dyn Fn() + Send + Sync>,
+    ) -> Result<UiRealm, UiRealmError> {
+        let app = super::super::binding::AppBinding::new();
+        UiRealm::with_capacity(&app, capacity, wake, test_window())
+    }
+
     #[test]
     fn senders_are_send_sync() {
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<UiCommandSender>();
-        assert_send_sync::<ResultStamp>();
     }
 
     #[test]
     fn realm_entry_activates_its_global_key_registry() {
         let _claim = REALM_TEST_LOCK.lock();
-        let realm = UiRealm::new(noop_wake()).expect("runtime");
+        let realm = new_runtime(noop_wake()).expect("runtime");
         let key = flui_view::GlobalKey::<()>::new();
         let element = flui_foundation::ElementId::new(17);
         realm
@@ -749,23 +742,39 @@ mod tests {
     }
 
     #[test]
+    fn presentation_and_widget_tree_share_the_exact_focus_owner() {
+        let _claim = REALM_TEST_LOCK.lock();
+        let realm = new_runtime(noop_wake()).expect("runtime");
+
+        let presentation_focus = realm.focus_manager();
+        let widget_focus = realm
+            .widgets()
+            .with_build_owner(flui_view::BuildOwner::focus_manager);
+
+        assert!(
+            Rc::ptr_eq(&presentation_focus, &widget_focus),
+            "keyboard dispatch and every BuildContext must address one focus tree"
+        );
+    }
+
+    #[test]
     fn at_most_one_runtime_second_construction_fails_typed() {
         let _claim = REALM_TEST_LOCK.lock();
-        let first = UiRealm::new(noop_wake()).expect("first runtime claims");
-        let second = UiRealm::new(noop_wake());
+        let first = new_runtime(noop_wake()).expect("first runtime claims");
+        let second = new_runtime(noop_wake());
         assert!(matches!(second, Err(UiRealmError::AlreadyExists)));
         drop(first);
-        let third = UiRealm::new(noop_wake()).expect("claim released on drop");
+        let third = new_runtime(noop_wake()).expect("claim released on drop");
         drop(third);
     }
 
     #[test]
     fn recreated_runtime_gets_fresh_realm_id() {
         let _claim = REALM_TEST_LOCK.lock();
-        let first = UiRealm::new(noop_wake()).expect("first runtime");
+        let first = new_runtime(noop_wake()).expect("first runtime");
         let first_id = first.realm_id();
         drop(first);
-        let second = UiRealm::new(noop_wake()).expect("second incarnation");
+        let second = new_runtime(noop_wake()).expect("second incarnation");
         assert_ne!(
             first_id,
             second.realm_id(),
@@ -774,48 +783,9 @@ mod tests {
     }
 
     #[test]
-    fn cross_thread_invoke_runs_on_owner_thread_in_fifo_order() {
-        let _claim = REALM_TEST_LOCK.lock();
-        let runtime = UiRealm::new(noop_wake()).expect("runtime");
-        let sender = runtime.command_sender();
-        let owner_thread = std::thread::current().id();
-        let (observed_tx, observed_rx) = mpsc::channel::<(usize, ThreadId)>();
-
-        let worker = std::thread::spawn(move || {
-            for sequence in 0..4 {
-                let observed = observed_tx.clone();
-                sender
-                    .invoke(move || {
-                        observed
-                            .send((sequence, std::thread::current().id()))
-                            .expect("test receiver alive");
-                    })
-                    .expect("inbox has room");
-            }
-        });
-        worker.join().expect("sender thread panicked");
-
-        let report = runtime.drain_commands();
-        assert_eq!(report.invoked, 4);
-        let executions: Vec<(usize, ThreadId)> = observed_rx.try_iter().collect();
-        assert_eq!(
-            executions
-                .iter()
-                .map(|(sequence, _)| *sequence)
-                .collect::<Vec<_>>(),
-            vec![0, 1, 2, 3],
-            "drain order must be deterministic FIFO"
-        );
-        assert!(
-            executions.iter().all(|(_, thread)| *thread == owner_thread),
-            "every command must execute on the owner thread"
-        );
-    }
-
-    #[test]
     fn cross_thread_navigation_command_drains_on_owner_thread() {
         let _claim = REALM_TEST_LOCK.lock();
-        let runtime = UiRealm::new(noop_wake()).expect("runtime");
+        let runtime = new_runtime(noop_wake()).expect("runtime");
         let sender = runtime.command_sender();
 
         let navigator = NavigatorHandle::new();
@@ -839,9 +809,91 @@ mod tests {
     }
 
     #[test]
+    fn semantics_action_commits_on_the_owner_after_releasing_the_pipeline_lock() {
+        let app = super::super::binding::AppBinding::new();
+        let realm = UiRealm::for_test(&app);
+        let pipeline = app.render_pipeline_arc();
+        let weak_pipeline = Arc::downgrade(&pipeline);
+        let invoked = Arc::new(AtomicUsize::new(0));
+        let invoked_in_handler = Arc::clone(&invoked);
+        let lock_was_free = Arc::new(AtomicBool::new(false));
+        let lock_was_free_in_handler = Arc::clone(&lock_was_free);
+        let render_id = RenderId::new(7);
+        let target = AccessibilityNodeId::from(render_id);
+
+        let mut node = SemanticsNode::new().with_source_render_id(render_id);
+        node.config_mut().add_action(
+            SemanticsAction::Tap,
+            Arc::new(move |action, arguments| {
+                assert_eq!(action, SemanticsAction::Tap);
+                assert!(arguments.is_none());
+                invoked_in_handler.fetch_add(1, Ordering::SeqCst);
+
+                let pipeline = weak_pipeline
+                    .upgrade()
+                    .expect("bound pipeline must outlive the action");
+                let guard = pipeline.try_write();
+                lock_was_free_in_handler.store(guard.is_some(), Ordering::SeqCst);
+            }),
+        );
+        let mut semantics_owner = SemanticsOwner::new(Arc::new(|_| {}));
+        let root = semantics_owner.insert(node);
+        semantics_owner.set_root(Some(root));
+        pipeline.write().set_semantics_owner(Some(semantics_owner));
+
+        let sender = realm.command_sender();
+        std::thread::spawn(move || {
+            sender
+                .send_semantics_action(SemanticsActionRequest::new(target, SemanticsAction::Tap))
+                .expect("realm inbox has room");
+        })
+        .join()
+        .expect("platform action sender did not panic");
+
+        assert_eq!(
+            invoked.load(Ordering::SeqCst),
+            0,
+            "cross-thread input must wait for the owner's Idle commit point"
+        );
+        let report = realm.drain_commands();
+
+        assert_eq!(report.invoked, 1);
+        assert_eq!(report.dropped_stale, 0);
+        assert_eq!(invoked.load(Ordering::SeqCst), 1);
+        assert!(
+            lock_was_free.load(Ordering::SeqCst),
+            "semantics handlers must run after the PipelineOwner read guard is released"
+        );
+    }
+
+    #[test]
+    fn stale_semantics_action_is_gracefully_dropped() {
+        let app = super::super::binding::AppBinding::new();
+        let realm = UiRealm::for_test(&app);
+        let mut semantics_owner = SemanticsOwner::new(Arc::new(|_| {}));
+        let root =
+            semantics_owner.insert(SemanticsNode::new().with_source_render_id(RenderId::new(1)));
+        semantics_owner.set_root(Some(root));
+        app.render_pipeline_mut()
+            .set_semantics_owner(Some(semantics_owner));
+
+        realm
+            .command_sender()
+            .send_semantics_action(SemanticsActionRequest::new(
+                AccessibilityNodeId::from(RenderId::new(99)),
+                SemanticsAction::Tap,
+            ))
+            .expect("realm inbox has room");
+
+        let report = realm.drain_commands();
+        assert_eq!(report.invoked, 0);
+        assert_eq!(report.dropped_stale, 1);
+    }
+
+    #[test]
     fn dead_navigation_target_is_dropped_at_commit() {
         let _claim = REALM_TEST_LOCK.lock();
-        let runtime = UiRealm::new(noop_wake()).expect("runtime");
+        let runtime = new_runtime(noop_wake()).expect("runtime");
         let sender = runtime.command_sender();
         let target = {
             let navigator = NavigatorHandle::new();
@@ -860,28 +912,36 @@ mod tests {
     #[test]
     fn inbox_reports_backpressure_at_capacity() {
         let _claim = REALM_TEST_LOCK.lock();
-        let runtime = UiRealm::with_capacity(2, noop_wake()).expect("runtime with tiny inbox");
+        let runtime = new_runtime_with_capacity(2, noop_wake()).expect("runtime with tiny inbox");
         let sender = runtime.command_sender();
-        sender.invoke(|| {}).expect("first fits");
-        sender.invoke(|| {}).expect("second fits");
-        let overflow = sender.invoke(|| {}).expect_err("third command is rejected");
+        sender
+            .request_hot_reload(flui_hot_reload::HotReloadTier::FullRestart)
+            .expect("first fits");
+        sender
+            .request_hot_reload(flui_hot_reload::HotReloadTier::FullRestart)
+            .expect("second fits");
+        let overflow = sender
+            .request_hot_reload(flui_hot_reload::HotReloadTier::FullRestart)
+            .expect_err("third command is rejected");
         assert!(matches!(
             overflow,
             CommandSendError::ChannelFull { capacity: 2, .. }
         ));
         // Draining frees the inbox again.
         let _ = runtime.drain_commands();
-        sender.invoke(|| {}).expect("room after drain");
+        sender
+            .request_hot_reload(flui_hot_reload::HotReloadTier::FullRestart)
+            .expect("room after drain");
     }
 
     #[test]
     fn dropped_runtime_yields_owner_gone() {
         let _claim = REALM_TEST_LOCK.lock();
-        let runtime = UiRealm::new(noop_wake()).expect("runtime");
+        let runtime = new_runtime(noop_wake()).expect("runtime");
         let sender = runtime.command_sender();
         drop(runtime);
         assert!(matches!(
-            sender.invoke(|| {}),
+            sender.request_hot_reload(flui_hot_reload::HotReloadTier::FullRestart),
             Err(CommandSendError::OwnerGone { .. })
         ));
     }
@@ -889,86 +949,32 @@ mod tests {
     #[test]
     fn channel_full_retry_preserves_the_rejected_payload() {
         let _claim = REALM_TEST_LOCK.lock();
-        let runtime = UiRealm::with_capacity(1, noop_wake()).expect("runtime");
+        let runtime = new_runtime_with_capacity(1, noop_wake()).expect("runtime");
         let sender = runtime.command_sender();
-        sender.invoke(|| {}).expect("fills inbox");
-        let observed = Arc::new(AtomicUsize::new(0));
-        let observed_in_command = Arc::clone(&observed);
+        sender
+            .request_hot_reload(flui_hot_reload::HotReloadTier::FullRestart)
+            .expect("fills inbox");
+
+        let navigator = NavigatorHandle::new();
+        navigator.seed_initial(test_route("/"));
+        let pushed = navigator.push(test_route("/details"));
         let rejected = sender
-            .invoke(move || {
-                observed_in_command.store(42, Ordering::Relaxed);
-            })
+            .send_navigation(NavigatorCommand::pop(navigator.command_target()))
             .expect_err("inbox full")
             .into_rejected();
 
         let _ = runtime.drain_commands();
         sender.send(rejected).expect("retry fits");
         let _ = runtime.drain_commands();
-        assert_eq!(observed.load(Ordering::Relaxed), 42);
-    }
-
-    #[test]
-    fn stale_generation_result_is_dropped_at_commit() {
-        let _claim = REALM_TEST_LOCK.lock();
-        let runtime = UiRealm::new(noop_wake()).expect("runtime");
-        let sender = runtime.command_sender();
-        let gate = GenerationGate::new();
-        let applied = Arc::new(AtomicUsize::new(0));
-
-        let fresh_stamp = ResultStamp::current(runtime.realm_id(), &gate);
-        let stale_stamp = ResultStamp::current(runtime.realm_id(), &gate);
-        let _invalidated = gate.bump(); // both stamps above die here
-        let current_stamp = ResultStamp::current(runtime.realm_id(), &gate);
-
-        for stamp in [fresh_stamp, stale_stamp, current_stamp] {
-            let applied_in_result = Arc::clone(&applied);
-            sender
-                .submit_result(stamp, move || {
-                    applied_in_result.fetch_add(1, Ordering::Relaxed);
-                })
-                .expect("inbox has room");
-        }
-
-        let report = runtime.drain_commands();
-        assert_eq!(
-            report.applied, 1,
-            "only the current-generation result applies"
-        );
-        assert_eq!(report.dropped_stale, 2);
-        assert_eq!(applied.load(Ordering::Relaxed), 1);
-    }
-
-    #[test]
-    fn foreign_window_result_is_dropped_at_commit() {
-        let _claim = REALM_TEST_LOCK.lock();
-        let gate = GenerationGate::new();
-        // Stamp against the FIRST incarnation, then recreate the runtime:
-        // the stamp must not apply to the successor window.
-        let first = UiRealm::new(noop_wake()).expect("first incarnation");
-        let dead_window_stamp = ResultStamp::current(first.realm_id(), &gate);
-        drop(first);
-
-        let runtime = UiRealm::new(noop_wake()).expect("second incarnation");
-        let sender = runtime.command_sender();
-        let applied = Arc::new(AtomicUsize::new(0));
-        let applied_in_result = Arc::clone(&applied);
-        sender
-            .submit_result(dead_window_stamp, move || {
-                applied_in_result.fetch_add(1, Ordering::Relaxed);
-            })
-            .expect("inbox has room");
-
-        let report = runtime.drain_commands();
-        assert_eq!(report.applied, 0);
-        assert_eq!(report.dropped_stale, 1);
-        assert_eq!(applied.load(Ordering::Relaxed), 0);
+        assert_eq!(navigator.route_ids().len(), 1);
+        assert_eq!(pushed.try_take(), Some(None));
     }
 
     #[test]
     fn redraw_requests_coalesce_to_one_flag_and_one_wake() {
         let _claim = REALM_TEST_LOCK.lock();
         let (wake, wake_count) = counting_wake();
-        let runtime = UiRealm::new(wake).expect("runtime");
+        let runtime = new_runtime(wake).expect("runtime");
         let sender = runtime.command_sender();
 
         sender.request_redraw();
@@ -994,13 +1000,19 @@ mod tests {
     fn every_send_wakes_the_owner() {
         let _claim = REALM_TEST_LOCK.lock();
         let (wake, wake_count) = counting_wake();
-        let runtime = UiRealm::new(wake).expect("runtime");
+        let runtime = new_runtime(wake).expect("runtime");
         let sender = runtime.command_sender();
-        sender.invoke(|| {}).expect("inbox has room");
-        let gate = GenerationGate::new();
+
         sender
-            .submit_result(ResultStamp::current(runtime.realm_id(), &gate), || {})
+            .request_hot_reload(flui_hot_reload::HotReloadTier::FullRestart)
             .expect("inbox has room");
+
+        let navigator = NavigatorHandle::new();
+        navigator.seed_initial(test_route("/"));
+        sender
+            .send_navigation(NavigatorCommand::maybe_pop(navigator.command_target()))
+            .expect("inbox has room");
+
         assert_eq!(wake_count.load(Ordering::Relaxed), 2);
         let _ = runtime.drain_commands();
     }
@@ -1017,20 +1029,11 @@ mod tests {
     /// could interleave.
     static SINGLETON_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-    /// `drain_commands`'s `UiCommand::HotReload` arm must apply against the
-    /// app THIS realm was bound to via `bind_to_app`, never
-    /// `AppBinding::instance()` directly — the exact stale-binding class
-    /// `TextInputPlatformBridge` exists to prevent for IME callbacks. A
-    /// realm built with `UiRealm::for_test` (a standalone, non-singleton
-    /// `AppBinding`) is precisely the case where hard-coding the singleton
-    /// silently reassembles the WRONG (unrelated, windowless) app's tree.
-    ///
-    /// Red-check: revert `drain_commands`'s hot-reload arm to
-    /// `super::binding::AppBinding::instance().perform_hot_reload_entered(self, tier)`
-    /// and this fails — `bound_app.needs_redraw()` stays false while the
-    /// unrelated singleton's flips instead.
+    /// A hot-reload command mutates the exact presentation owned by this
+    /// realm and arms the realm's own redraw request. It never resolves a
+    /// process singleton or another app instance.
     #[test]
-    fn hot_reload_command_applies_to_the_bound_app_not_the_instance_singleton() {
+    fn hot_reload_command_applies_to_the_owned_presentation() {
         let _serialized = SINGLETON_TEST_LOCK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -1054,32 +1057,29 @@ mod tests {
             report.invoked, 1,
             "the hot-reload command must be applied, not dropped as stale"
         );
-        assert!(
-            bound_app.needs_redraw(),
-            "hot reload must apply against the app the realm was bound to via bind_to_app"
-        );
+        assert!(realm.take_redraw_request());
         assert!(
             !singleton.needs_redraw(),
-            "hot reload must NOT reach for AppBinding::instance() when the realm was \
-             bound to a different, standalone app"
+            "hot reload must not reach for AppBinding::instance()"
         );
+        assert!(!bound_app.needs_redraw());
     }
 
-    /// A realm that never called `bind_to_app` (so `hot_reload_bridge` is
-    /// still `None`) must drop a hot-reload command rather than panic or
-    /// silently resolve some other binding.
+    /// Full restart is owned by the process supervisor, so the presentation
+    /// records the command as handled without arming a UI redraw.
     #[test]
-    fn hot_reload_command_on_an_unbound_realm_is_dropped_not_panicked() {
+    fn full_restart_command_does_not_arm_a_presentation_redraw() {
         let _claim = REALM_TEST_LOCK.lock();
-        let runtime = UiRealm::new(noop_wake()).expect("runtime");
+        let runtime = new_runtime(noop_wake()).expect("runtime");
 
         runtime
             .command_sender()
-            .request_hot_reload(flui_hot_reload::HotReloadTier::HotReload)
+            .request_hot_reload(flui_hot_reload::HotReloadTier::FullRestart)
             .expect("inbox has room");
 
         let report = runtime.drain_commands();
-        assert_eq!(report.invoked, 0);
-        assert_eq!(report.dropped_stale, 1);
+        assert_eq!(report.invoked, 1);
+        assert_eq!(report.dropped_stale, 0);
+        assert!(!runtime.take_redraw_request());
     }
 }

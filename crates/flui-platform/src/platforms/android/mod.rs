@@ -169,10 +169,6 @@ impl Platform for AndroidPlatform {
         self.background_executor.clone()
     }
 
-    fn foreground_executor(&self) -> Arc<dyn PlatformExecutor> {
-        self.background_executor.clone()
-    }
-
     fn run(self: Box<Self>, on_ready: Box<dyn FnOnce(&dyn Platform)>) {
         tracing::info!("Starting Android platform event loop");
 
@@ -299,11 +295,11 @@ impl Platform for AndroidPlatform {
         self.running.store(false, Ordering::SeqCst);
     }
 
-    fn open_window(&self, _options: WindowOptions) -> Result<Box<dyn PlatformWindow>> {
+    fn open_window(&self, _options: WindowOptions) -> Result<Arc<dyn PlatformWindow>> {
         let window = Arc::new(AndroidWindow::new(self.app.clone()));
         *self.window.lock() = Some(Arc::clone(&window));
         tracing::info!("Android window created (wrapping ANativeWindow)");
-        Ok(Box::new(window.as_ref().clone()))
+        Ok(window)
     }
 
     fn active_window(&self) -> Option<WindowId> {

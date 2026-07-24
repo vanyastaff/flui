@@ -1,21 +1,24 @@
 #!/usr/bin/env bash
 # -----------------------------------------------------------------------------
-# Port-check trigger #22 — **lifecycle-only frame capabilities** must not be
-# acquired from a build / layout / paint / composite body.
+# Port-check trigger #22 — **lifecycle-only presentation capabilities** must
+# not be acquired from a build / layout / paint / composite body.
 #
-# A frame capability lets code reach into the *next* frame from outside one.
-# Three exist:
+# A lifecycle-only capability lets code affect presentation state outside the
+# build/layout/paint transaction. Four are exposed through `BuildContext`:
 #
 #   rebuild_handle()    ADR-0018 U1 — `RebuildHandle::schedule()` marks an element
 #                       dirty for the next frame.
 #   post_frame_handle() ADR-0021 U2 — `PostFrameHandle::schedule()` queues work for
 #                       the end of the current frame.
 #   text_input_handle() ADR-0030 — `TextInputHandle::attach()`/`detach()` register
-#                       a client with the binding's IME registry; acquiring it
-#                       from `build`/`layout`/`paint` would attach on every
-#                       rebuild instead of once per focus transition.
+#                       a client with the presentation's text-input owner;
+#                       acquiring it from `build`/`layout`/`paint` would attach
+#                       on every rebuild instead of once per focus transition.
+#   focus_manager()     ADR-0037 — returns the presentation's concrete focus
+#                       owner; imperative focus changes synchronously notify
+#                       listeners and may schedule rebuilds.
 #
-# All three must be acquired in `ViewState::init_state` / `did_change_dependencies`,
+# All four must be acquired in `ViewState::init_state` / `did_change_dependencies`,
 # stored, and fired later from a callback.
 #
 # Acquiring one inside `build` and scheduling from it is an unbounded rebuild loop
@@ -43,7 +46,7 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 guarded_fns='build|build_into_views|perform_layout|layout_node_with_children|paint|paint_raw|run_paint|run_layout|run_compositing|compose|composite'
 
 # The capabilities themselves. Adding one here is the whole cost of guarding it.
-capabilities='rebuild_handle|post_frame_handle|text_input_handle'
+capabilities='rebuild_handle|post_frame_handle|text_input_handle|focus_manager'
 
 scan() {
   awk -v guarded="${guarded_fns}" -v caps="${capabilities}" '
@@ -81,7 +84,7 @@ self_test() {
   local fixtures="${repo_root}/scripts/fixtures/frame-capability"
   local status=0
 
-  echo "self-test: rejected fixture (frame capability inside build/layout/paint)"
+  echo "self-test: rejected fixture (presentation capability inside build/layout/paint)"
   if scan "${fixtures}/rejected.rs.fixture" >/dev/null 2>&1; then
     echo "  FAIL: scanner accepted a file it must reject"
     status=1
@@ -89,17 +92,17 @@ self_test() {
     scan "${fixtures}/rejected.rs.fixture" 2>/dev/null | sed 's/^/  /' || true
     local found
     found=$(scan "${fixtures}/rejected.rs.fixture" 2>/dev/null | wc -l || true)
-    if [[ "${found}" -ne 5 ]]; then
-      echo "  FAIL: expected 5 violations (rebuild_handle in build/perform_layout/paint, post_frame_handle in build/paint), got ${found}"
+    if [[ "${found}" -ne 7 ]]; then
+      echo "  FAIL: expected 7 violations across all four lifecycle-only capability tokens, got ${found}"
       status=1
     else
-      echo "  ok: 5 violations reported"
+      echo "  ok: 7 violations reported"
     fi
-    # Both capability tokens must actually be named — a scanner that only ever
-    # matched `rebuild_handle` would still report 5 if the fixture were sloppy.
+    # Every capability token must actually be named — a scanner can otherwise
+    # report the expected count while silently leaving a newer capability open.
     local reported
     reported=$(scan "${fixtures}/rejected.rs.fixture" 2>/dev/null || true)
-    for cap in rebuild_handle post_frame_handle; do
+    for cap in rebuild_handle post_frame_handle text_input_handle focus_manager; do
       if ! grep -q "${cap}()" <<<"${reported}"; then
         echo "  FAIL: scanner never reported a ${cap}() violation"
         status=1

@@ -740,20 +740,25 @@ impl ViewState<DrawerController> for DrawerControllerState {
         // the panel is visible at a stale, already-open-looking position.
         let rebuild_for_value = rebuild.clone();
         self.core.controller.add_listener(Arc::new(move || {
-            rebuild_for_value.schedule();
+            rebuild_for_value.schedule(flui_view::RebuildReason::AnimationTick);
         }));
         let rebuild_for_status = rebuild;
         self.core
             .controller
             .add_status_listener(Arc::new(move |_status| {
-                rebuild_for_status.schedule();
+                rebuild_for_status.schedule(flui_view::RebuildReason::AnimationTick);
             }));
     }
 
     fn did_update_view(&mut self, old_view: &DrawerController, new_view: &DrawerController) {
-        // Flutter parity: `didUpdateWidget` — never snap the value while
-        // the user is dragging or a fling/forward is settling.
-        if self.core.controller.is_animating() {
+        // Flutter parity: `didUpdateWidget` checks
+        // `controller.status.isAnimating`, not the controller's ticker-based
+        // `isAnimating`. Setting `AnimationController.value` during a drag
+        // stops the ticker but intentionally leaves an interior value in a
+        // directional status. That distinction prevents Scaffold's
+        // threshold callback from feeding `is_open` back into this state and
+        // snapping an in-progress drag to an endpoint.
+        if self.core.controller.status().is_running() {
             return;
         }
         if new_view.is_open != old_view.is_open {

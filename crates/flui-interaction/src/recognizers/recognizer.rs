@@ -4,7 +4,7 @@
 //! recognizers.
 
 use std::sync::{
-    Arc, Weak,
+    Arc,
     atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
@@ -13,7 +13,7 @@ use parking_lot::Mutex;
 use tracing::instrument;
 
 use crate::{
-    arena::{GestureArena, GestureArenaMember},
+    arena::{GestureArena, GestureArenaEntry, GestureArenaMember, GestureDisposition},
     events::PointerEvent,
     ids::PointerId,
 };
@@ -35,7 +35,12 @@ pub trait GestureRecognizer: GestureArenaMember {
     ///
     /// Called when a pointer goes down. The recognizer should add itself to the
     /// gesture arena if it wants to compete for this pointer.
-    fn add_pointer(&self, pointer: PointerId, position: Offset<Pixels>);
+    ///
+    /// The receiver is the owning [`Arc`] so the exact recognizer identity is
+    /// registered in the arena. Manufacturing an `Arc` from a cloned struct
+    /// creates a different allocation, makes weak entry handles go stale as
+    /// soon as the arena resolves, and cannot support post-resolution timers.
+    fn add_pointer(self: &Arc<Self>, pointer: PointerId, position: Offset<Pixels>);
 
     /// Handle a pointer event
     ///
@@ -81,14 +86,10 @@ pub struct RecognizerBase {
     /// `assert_not_disposed`, so a lock-free `AtomicBool`.
     disposed: Arc<AtomicBool>,
 
-    /// Weak handle to the exact `Arc<dyn GestureArenaMember>` this recognizer
-    /// registered with the arena in [`start_tracking`](Self::start_tracking).
-    ///
-    /// The arena identifies winners by `Arc::ptr_eq`, so claiming a win
-    /// requires resolving with the *same* allocation that was added — not a
-    /// fresh `Arc::new(self.clone())`. A `Weak` (not `Arc`) avoids a
-    /// self-referential cycle that would leak the recognizer.
-    tracked_member: Arc<Mutex<Option<Weak<dyn GestureArenaMember>>>>,
+    /// Stale-safe handle to the exact member and arena generation registered
+    /// by [`start_tracking`](Self::start_tracking). The handle stores weak
+    /// identities, so retaining it here cannot form a recognizer cycle.
+    tracked_entry: Arc<Mutex<Option<GestureArenaEntry>>>,
 }
 
 impl RecognizerBase {
@@ -99,7 +100,7 @@ impl RecognizerBase {
             primary_pointer: Arc::new(AtomicU64::new(0)),
             initial_position: Arc::new(Mutex::new(None)),
             disposed: Arc::new(AtomicBool::new(false)),
-            tracked_member: Arc::new(Mutex::new(None)),
+            tracked_entry: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -208,12 +209,10 @@ impl RecognizerBase {
         self.set_primary_pointer(Some(pointer));
         self.set_initial_position(Some(position));
 
-        // Register with the arena and remember this exact allocation (as a
-        // `Weak`) so a later `accept_tracked()` can resolve with the same
-        // `Arc` identity the arena matches on via `Arc::ptr_eq`.
+        // Register with the arena and retain the exact slot/member identity.
         let member: Arc<dyn GestureArenaMember> = recognizer.clone();
-        *self.tracked_member.lock() = Some(Arc::downgrade(&member));
-        self.arena.add(pointer, member);
+        let entry = self.arena.add(pointer, member);
+        *self.tracked_entry.lock() = Some(entry);
     }
 
     /// Claim the arena win for the currently-tracked pointer.
@@ -223,25 +222,29 @@ impl RecognizerBase {
     /// competing members receive `reject_gesture`. No-op when not tracking a
     /// pointer or when the arena entry is already resolved or gone.
     pub fn accept_tracked(&self) {
-        let Some(pointer) = self.primary_pointer() else {
-            return;
-        };
-        let Some(member) = self.tracked_member() else {
-            return;
-        };
-        self.arena.resolve(pointer, Some(member));
+        if let Some(entry) = self.tracked_entry.lock().clone() {
+            entry.resolve(GestureDisposition::Accepted);
+        }
     }
 
     /// The exact `Arc<dyn GestureArenaMember>` this recognizer registered with
     /// the arena in [`start_tracking`](Self::start_tracking), upgraded from the
-    /// stored `Weak`.
+    /// stored entry handle.
     ///
     /// Returns `None` once the recognizer is no longer tracking (the member was
     /// dropped). Used by the double-tap lifecycle to resolve the first contact's
     /// entry in favour of the double-tap.
     #[inline]
     pub fn tracked_member(&self) -> Option<Arc<dyn GestureArenaMember>> {
-        self.tracked_member.lock().as_ref().and_then(Weak::upgrade)
+        self.tracked_entry
+            .lock()
+            .as_ref()
+            .and_then(GestureArenaEntry::member)
+    }
+
+    /// The exact stale-safe entry registered for the tracked pointer.
+    pub fn tracked_entry(&self) -> Option<GestureArenaEntry> {
+        self.tracked_entry.lock().clone()
     }
 
     /// Stop tracking (called on success or rejection)
@@ -261,29 +264,15 @@ impl RecognizerBase {
         // would force-resolve a shared entry to the front member before a
         // double-tap (or a peer detector) could complete. Local tracking is
         // cleared in both modes.
-        if let Some(pointer) = self.primary_pointer()
+        if self.primary_pointer().is_some()
             && self.arena.sweep_model() == crate::arena::SweepModel::SelfDriven
+            && let Some(entry) = self.tracked_entry.lock().clone()
         {
-            self.arena.sweep(pointer);
+            entry.sweep();
         }
         self.set_primary_pointer(None);
         self.set_initial_position(None);
-    }
-
-    /// Accept this gesture (win the arena)
-    #[instrument(
-        name = "recognizer.accept",
-        level = "debug",
-        skip(self, recognizer),
-        fields(
-            pointer = ?self.primary_pointer(),
-            event = %crate::observability::GestureEvent::ArenaAccepted,
-        )
-    )]
-    pub fn accept<T: GestureArenaMember + Clone + 'static>(&self, recognizer: &Arc<T>) {
-        if let Some(pointer) = self.primary_pointer() {
-            self.arena.resolve(pointer, Some(recognizer.clone()));
-        }
+        self.tracked_entry.lock().take();
     }
 
     /// Reject this gesture (lose the arena or explicit rejection)
@@ -297,18 +286,15 @@ impl RecognizerBase {
         )
     )]
     pub fn reject(&self) {
-        let Some(pointer) = self.primary_pointer() else {
+        if self.primary_pointer().is_none() {
             return;
-        };
+        }
         // Withdraw ONLY this recognizer from the arena, using the stable member
         // identity captured in `start_tracking`. Resolving the whole entry with
         // no winner (the previous behavior) rejected every *competing* member
         // too, so a recognizer that bowed out of a shared arena (e.g. a tap
         // exceeding its slop) silently killed the drag it was competing with.
-        let member = self.tracked_member.lock().as_ref().and_then(Weak::upgrade);
-        if let Some(member) = member {
-            self.arena.reject_member(pointer, &member);
-        }
+        let entry = self.tracked_entry.lock().take();
         // Clear ONLY this recognizer's local tracking — do NOT `stop_tracking`
         // (it would `sweep`, force-resolving any still-open competition in
         // first-member-wins fashion mid-gesture). Tear the shared entry down
@@ -317,7 +303,9 @@ impl RecognizerBase {
         // one accepts or the pointer lifts.
         self.set_primary_pointer(None);
         self.set_initial_position(None);
-        self.arena.remove_if_settled(pointer);
+        if let Some(entry) = entry {
+            entry.resolve(GestureDisposition::Rejected);
+        }
     }
 }
 

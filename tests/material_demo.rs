@@ -45,7 +45,7 @@ use flui_rendering::testing::inspect;
 use flui_types::geometry::px;
 use flui_types::{Offset, Size};
 use flui_view::{BuildOwner, ElementTree};
-use flui_widgets::{MediaQuery, MediaQueryData, VsyncScope};
+use flui_widgets::{FocusRoot, GestureArenaScope, MediaQuery, MediaQueryData, VsyncScope};
 use parking_lot::RwLock;
 
 /// The mounted root's logical width — wide enough for a card row, narrow
@@ -105,7 +105,9 @@ impl MountedDemo {
         // which needs the owner already wired to `binding`'s scheduler.
         binding.install_build_capabilities(&mut build_owner);
 
-        let scoped_root = VsyncScope::new(binding.vsync().clone(), wrapped_root);
+        let focused_root = FocusRoot::new(wrapped_root);
+        let animated_root = VsyncScope::new(binding.vsync().clone(), focused_root);
+        let scoped_root = GestureArenaScope::new(binding.arena().clone(), animated_root);
 
         binding.enter_owner_scope(|| {
             let root_element = tree.mount_root_with_pipeline_owner(
@@ -113,7 +115,7 @@ impl MountedDemo {
                 Some(Arc::clone(&pipeline_owner)),
                 &mut build_owner.element_owner_mut(),
             );
-            build_owner.schedule_build_for(root_element, 0);
+            build_owner.schedule_build_for(root_element, 0, flui_view::RebuildReason::InitialMount);
             build_owner.build_scope(&mut tree);
         });
 
@@ -167,22 +169,26 @@ impl MountedDemo {
 
     /// Hit-test at root-local `(x, y)` and dispatch a synthetic pointer-down.
     fn tap_down(&self, x: f32, y: f32) {
-        self.dispatch_at(make_down_event(offset(x, y), PointerType::Mouse), x, y);
+        self.dispatch_pointer(make_down_event(offset(x, y), PointerType::Mouse));
     }
 
     /// Hit-test at root-local `(x, y)` and dispatch a synthetic pointer-up —
     /// paired with [`tap_down`](Self::tap_down) at the same position, this
     /// completes a tap.
     fn tap_up(&self, x: f32, y: f32) {
-        self.dispatch_at(make_up_event(offset(x, y), PointerType::Mouse), x, y);
+        self.dispatch_pointer(make_up_event(offset(x, y), PointerType::Mouse));
     }
 
-    fn dispatch_at(&self, event: flui_interaction::PointerEvent, x: f32, y: f32) {
-        let position = offset(x, y);
+    fn hit_test(&self, position: Offset) -> HitTestResult {
         let owner = self.pipeline_owner.read();
         let mut result = HitTestResult::new();
         owner.hit_test(position, &mut result);
-        self.binding.enter_owner_scope(|| result.dispatch(&event));
+        result
+    }
+
+    fn dispatch_pointer(&self, event: flui_interaction::PointerEvent) {
+        self.binding
+            .dispatch_pointer(&event, |position| self.hit_test(position));
     }
 
     /// A full tap (down + up) at `(x, y)`.
@@ -205,21 +211,21 @@ impl MountedDemo {
     /// [`advance_gesture_clock`]).
     fn drag_down(&self, x: f32, y: f32) {
         advance_gesture_clock();
-        self.dispatch_at(make_down_event(offset(x, y), PointerType::Mouse), x, y);
+        self.dispatch_pointer(make_down_event(offset(x, y), PointerType::Mouse));
     }
 
     /// Hit-test at root-local `(x, y)` and dispatch a synthetic pointer-move,
     /// advancing the gesture clock first (see [`advance_gesture_clock`]).
     fn drag_move(&self, x: f32, y: f32) {
         advance_gesture_clock();
-        self.dispatch_at(make_move_event(offset(x, y), PointerType::Mouse), x, y);
+        self.dispatch_pointer(make_move_event(offset(x, y), PointerType::Mouse));
     }
 
     /// Hit-test at root-local `(x, y)` and dispatch a synthetic pointer-up —
     /// pairs with [`drag_down`](Self::drag_down)/[`drag_move`](Self::drag_move)
     /// to complete a drag gesture.
     fn drag_up(&self, x: f32, y: f32) {
-        self.dispatch_at(make_up_event(offset(x, y), PointerType::Mouse), x, y);
+        self.dispatch_pointer(make_up_event(offset(x, y), PointerType::Mouse));
     }
 
     /// The unique `RenderParagraph` node whose plain-text content is `text`.
@@ -265,6 +271,26 @@ impl MountedDemo {
     fn size(&self, id: RenderId) -> Size {
         inspect::box_geometry(&self.pipeline_owner.read(), id)
             .expect("render node should have box geometry after layout")
+    }
+
+    /// The nearest node at or above `id` whose laid-out box equals `size`.
+    ///
+    /// Text is useful for locating a component semantically, but its render
+    /// paragraph sits inside the component's centered content. Walking to the
+    /// enclosing box lets geometry assertions target the component itself.
+    fn nearest_ancestor_with_size(&self, id: RenderId, size: Size) -> Option<RenderId> {
+        let owner = self.pipeline_owner.read();
+        let render_tree = owner.render_tree();
+        let mut current = id;
+        loop {
+            if inspect::box_geometry(&owner, current) == Some(size) {
+                return Some(current);
+            }
+            match render_tree.parent(current) {
+                Some(parent) => current = parent,
+                None => return None,
+            }
+        }
     }
 
     /// The screen-space (root-local) top-left of `id`, by summing paint
@@ -359,7 +385,14 @@ fn scaffold_mounts_with_app_bar_at_top_and_fab_at_the_end_float_position() {
     let fab_glyph = demo
         .find_text(tree::FAB_LABEL)
         .expect("the FAB's '+' label must render");
-    let fab_position = demo.absolute_position(fab_glyph);
+    let fab_size = Size::new(
+        px(flui_material::floating_action_button::FAB_SIZE),
+        px(flui_material::floating_action_button::FAB_SIZE),
+    );
+    let fab = demo
+        .nearest_ancestor_with_size(fab_glyph, fab_size)
+        .expect("the FAB label must be centered inside its 56×56 button box");
+    let fab_position = demo.absolute_position(fab);
 
     // `FloatingActionButtonLocation.endFloat`: 16px from the trailing and
     // bottom edges (`scaffold.rs`'s `FLOATING_ACTION_BUTTON_MARGIN`), with no

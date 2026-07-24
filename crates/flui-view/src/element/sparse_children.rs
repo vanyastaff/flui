@@ -127,7 +127,7 @@ impl SparseChildren {
         // `BuildOwner::service_child_requests` drains an empty heap and the
         // child's own subtree (e.g. Padding(Text)) never expands.
         let child_depth = tree.get(child).map_or(0, ElementNode::depth);
-        owner.schedule_build_for(child, child_depth);
+        owner.schedule_build_for(child, child_depth, crate::RebuildReason::ChildListChange);
 
         tracing::trace!(
             logical_index,
@@ -249,7 +249,11 @@ impl SparseChildren {
                             && node.element().is_dirty()
                         {
                             let depth = node.depth();
-                            owner.schedule_build_for(existing, depth);
+                            owner.schedule_build_for(
+                                existing,
+                                depth,
+                                crate::RebuildReason::ParentUpdate,
+                            );
                         }
                     } else {
                         self.evict(logical_index, tree, owner);

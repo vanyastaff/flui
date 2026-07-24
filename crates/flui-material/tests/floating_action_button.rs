@@ -290,8 +290,9 @@ fn mounted_geometry_in_a_scaffold_slot_is_exactly_56_by_56_at_the_end_float_posi
         tight(400.0, 800.0),
     );
 
-    let root = laid.root();
-    let layout_root = laid.only_child(root);
+    let layout_root = laid
+        .find_by_render_type("RenderCustomMultiChildLayoutBox")
+        .expect("Scaffold's multi-child layout must be mounted");
     // `Scaffold::build` pushes `LayoutId`s in `body`, `floating_action_button`
     // order when both are set and there is no `app_bar` — see `scaffold.rs`.
     let fab = laid.child(layout_root, 1);
@@ -340,8 +341,9 @@ fn a_nonzero_bottom_safe_area_still_clears_the_fab_by_at_least_the_flat_margin()
         tight(400.0, 800.0),
     );
 
-    let root = laid.root();
-    let layout_root = laid.only_child(root);
+    let layout_root = laid
+        .find_by_render_type("RenderCustomMultiChildLayoutBox")
+        .expect("Scaffold's multi-child layout must be mounted");
     let fab = laid.child(layout_root, 1);
 
     assert_eq!(laid.size(fab), common::size(56.0, 56.0));

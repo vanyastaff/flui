@@ -151,6 +151,11 @@ pub(crate) fn reconcile_children_by_id(
 
     // The reconciled id list, built front-to-back in new-view order.
     let mut result: Vec<ElementId> = Vec::with_capacity(new_len);
+    // Scheduling cause for every surviving child. Kept beside the owned result
+    // during reconciliation so fresh mounts and in-place updates remain
+    // distinguishable when the final depth-aware scheduling pass runs.
+    let mut scheduling_reasons: HashMap<ElementId, crate::RebuildReason> =
+        HashMap::with_capacity(new_len);
 
     // ── Phase 1: sync the top of both lists while children match.
     // Same-slot reuse: update the old child in place, keep its id.
@@ -164,6 +169,7 @@ pub(crate) fn reconcile_children_by_id(
             break;
         }
         update_child(tree, old_id, new_views[new_top].as_ref(), owner);
+        scheduling_reasons.insert(old_id, crate::RebuildReason::ParentUpdate);
         // Top scan is same-slot (old_top == new_top throughout): the
         // child neither moved nor was recreated — a `Reuse` disposition.
         emit_event(&ReconcileEvent::reuse(
@@ -256,6 +262,7 @@ pub(crate) fn reconcile_children_by_id(
             // match pulled it across slots (`Reorder`).
             let stayed = slot_of(tree, old_id) == Some(new_slot);
             update_child(tree, old_id, new_view, owner);
+            scheduling_reasons.insert(old_id, crate::RebuildReason::ParentUpdate);
             let key_hash = new_view.key().map(flui_foundation::ViewKey::key_hash);
             let view_type = new_view.view_type_id();
             emit_event(&if stayed {
@@ -270,6 +277,7 @@ pub(crate) fn reconcile_children_by_id(
             // element (`try_retake_global_key`). Emitting `Mount`
             // here too would double-fire on the retake path.
             let new_id = tree.insert(new_view, parent_id, new_slot, owner);
+            scheduling_reasons.insert(new_id, crate::RebuildReason::InitialMount);
             result.push(new_id);
         }
     }
@@ -282,6 +290,7 @@ pub(crate) fn reconcile_children_by_id(
             .expect("phase-2 bottom-scan recorded this slot as a match; it cannot be None");
         let new_idx = new_bottom + offset;
         update_child(tree, old_id, new_views[new_idx].as_ref(), owner);
+        scheduling_reasons.insert(old_id, crate::RebuildReason::ParentUpdate);
         // The bottom slice stays at the tail of both lists; it shifts
         // slot only when the middle changed size, i.e. when the deltas
         // are asymmetric (`old_bottom != new_bottom`) — then `Reorder`,
@@ -349,7 +358,11 @@ pub(crate) fn reconcile_children_by_id(
             && node.element().is_dirty()
         {
             let depth = node.depth();
-            owner.schedule_build_for(id, depth);
+            let reason = scheduling_reasons
+                .get(&id)
+                .copied()
+                .expect("BUG: every reconciled child must have a scheduling cause");
+            owner.schedule_build_for(id, depth, reason);
         }
     }
 

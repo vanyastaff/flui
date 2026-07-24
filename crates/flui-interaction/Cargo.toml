@@ -13,6 +13,9 @@ keywords = ["gui", "ui", "events", "gestures", "interaction"]
 # Flui dependencies
 flui-types = { path = "../flui-types", version = "0.2.0" }
 flui-foundation = { path = "../flui-foundation", version = "0.2.0" }
+# Presentation-owned IME state holds the exact platform capability directly.
+# This removes the former app-layer Any/downcast + closure-bridge path.
+flui-platform = { path = "../flui-platform", version = "0.2.0" }
 
 # UI Events - Cross-platform input event abstraction (W3C compliant)
 ui-events = { workspace = true }

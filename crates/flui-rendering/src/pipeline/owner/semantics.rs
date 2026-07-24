@@ -66,9 +66,13 @@ impl PipelineOwner<Semantics> {
         let should_build = pending_count > 0 || tree_is_empty;
 
         if should_build {
-            let built = self.root_id.and_then(|root| {
-                build_semantics_fragment(&self.render_tree, root, Offset::ZERO, true, false)
-            });
+            let built = match assemble_semantics_root(&self.render_tree, self.root_id) {
+                Ok(built) => built,
+                Err(error) => {
+                    let _ = self.scheduler.exit_phase(PhaseKind::Semantics);
+                    return Err(crate::error::RenderError::semantics(error.to_string()));
+                }
+            };
             if let Some(owner) = self.semantics_owner.as_mut() {
                 rebuild_semantics_owner(owner, built);
                 owner.flush();
@@ -105,134 +109,251 @@ impl PipelineOwner<Semantics> {
 }
 
 struct BuiltSemanticsNode {
+    source_render_id: RenderId,
     config: SemanticsConfiguration,
     rect: Rect<Pixels>,
     children: Vec<BuiltSemanticsNode>,
 }
 
-struct SemanticsFragment {
-    merge_up: Option<(SemanticsConfiguration, Rect<Pixels>)>,
-    nodes: Vec<BuiltSemanticsNode>,
+struct PendingSemanticsNode {
+    source_render_id: RenderId,
+    config: SemanticsConfiguration,
+    rect: Rect<Pixels>,
+    children: Vec<BuiltSemanticsNode>,
 }
 
-impl SemanticsFragment {
-    fn empty() -> Self {
-        Self {
-            merge_up: None,
-            nodes: Vec::new(),
+impl PendingSemanticsNode {
+    fn form(self) -> BuiltSemanticsNode {
+        BuiltSemanticsNode {
+            source_render_id: self.source_render_id,
+            config: self.config,
+            rect: self.rect,
+            children: self.children,
         }
     }
 }
 
-fn build_semantics_fragment(
-    tree: &RenderTree,
-    id: RenderId,
-    origin: Offset,
-    is_root: bool,
-    force_merge: bool,
-) -> Option<SemanticsFragment> {
-    ensure_stack(|| build_semantics_fragment_impl(tree, id, origin, is_root, force_merge))
+enum SemanticsFragment {
+    Pending(PendingSemanticsNode),
+    Formed(BuiltSemanticsNode),
 }
 
-/// Body of [`build_semantics_fragment`].
-///
-/// `force_merge` is `true` while this call is inside an ancestor's
-/// `is_merging_semantics_of_descendants` scope (ADR-0014):
-/// once set, it suppresses this node's own boundary decision for the rest
-/// of the subtree — even a nested node that independently declares
-/// `is_semantics_boundary` folds into the merge-collapsing ancestor's
-/// single node instead of spawning its own. This is the fix for the
-/// conflated `is_semantics_boundary() || has_content()` predicate flagged
-/// in the ADR: boundary-forming and "has content to merge up" are
-/// decided independently here.
-fn build_semantics_fragment_impl(
+#[derive(Debug, Clone, Copy)]
+struct SemanticsAssemblyContext {
+    is_root: bool,
+    parent_requires_explicit_node: bool,
+    merge_into_ancestor: bool,
+}
+
+#[derive(Debug, thiserror::Error)]
+enum SemanticsAssemblyError {
+    #[error("semantics root render object {root:?} is missing from the render tree")]
+    MissingRootRenderObject { root: RenderId },
+
+    #[error(
+        "semantics root assembly produced {actual} fragments; exactly one formed root is required"
+    )]
+    InvalidRootFragmentCount { actual: usize },
+
+    #[error("semantics root {root:?} remained pending instead of forming a node")]
+    PendingRoot { root: RenderId },
+}
+
+fn assemble_semantics_root(
+    tree: &RenderTree,
+    root: Option<RenderId>,
+) -> Result<Option<BuiltSemanticsNode>, SemanticsAssemblyError> {
+    let Some(root) = root else {
+        return Ok(None);
+    };
+
+    let fragments = build_semantics_fragments(
+        tree,
+        root,
+        Offset::ZERO,
+        SemanticsAssemblyContext {
+            is_root: true,
+            parent_requires_explicit_node: false,
+            merge_into_ancestor: false,
+        },
+        false,
+    )
+    .ok_or(SemanticsAssemblyError::MissingRootRenderObject { root })?;
+
+    extract_formed_root(root, fragments).map(Some)
+}
+
+fn extract_formed_root(
+    root: RenderId,
+    fragments: Vec<SemanticsFragment>,
+) -> Result<BuiltSemanticsNode, SemanticsAssemblyError> {
+    if fragments.len() != 1 {
+        return Err(SemanticsAssemblyError::InvalidRootFragmentCount {
+            actual: fragments.len(),
+        });
+    }
+
+    match fragments.into_iter().next() {
+        Some(SemanticsFragment::Formed(root_node)) => Ok(root_node),
+        Some(SemanticsFragment::Pending(_)) => Err(SemanticsAssemblyError::PendingRoot { root }),
+        None => Err(SemanticsAssemblyError::InvalidRootFragmentCount { actual: 0 }),
+    }
+}
+
+fn build_semantics_fragments(
     tree: &RenderTree,
     id: RenderId,
     origin: Offset,
-    is_root: bool,
-    force_merge: bool,
-) -> Option<SemanticsFragment> {
+    context: SemanticsAssemblyContext,
+    ancestor_blocks_user_actions: bool,
+) -> Option<Vec<SemanticsFragment>> {
+    ensure_stack(|| {
+        build_semantics_fragments_impl(tree, id, origin, context, ancestor_blocks_user_actions)
+    })
+}
+
+/// Body of [`build_semantics_fragments`].
+fn build_semantics_fragments_impl(
+    tree: &RenderTree,
+    id: RenderId,
+    origin: Offset,
+    context: SemanticsAssemblyContext,
+    ancestor_blocks_user_actions: bool,
+) -> Option<Vec<SemanticsFragment>> {
     let node = tree.get(id)?;
     let mut config = describe_semantics_configuration(node);
+    let blocks_user_actions = ancestor_blocks_user_actions || config.blocks_user_actions();
+    config.set_blocks_user_actions(blocks_user_actions);
     let rect = node_semantics_rect(node, origin);
 
-    let forms_boundary = !force_merge && (is_root || config.is_semantics_boundary());
-    // Once a `MergeSemantics`-equivalent boundary starts a merge scope,
-    // every descendant — however deep — inherits `force_merge` and can
-    // never spawn its own node (`is_merging_semantics_of_descendants`).
-    let child_force_merge =
-        force_merge || (forms_boundary && config.is_merging_semantics_of_descendants());
+    let contributes =
+        context.is_root || config.is_semantics_boundary() || config.has_been_annotated();
+    let forms_node = !context.merge_into_ancestor
+        && (context.is_root
+            || config.is_semantics_boundary()
+            || (contributes && context.parent_requires_explicit_node));
+    let children_require_explicit_node = context.is_root
+        || config.explicit_child_nodes()
+        || (!contributes && context.parent_requires_explicit_node);
+    let children_merge_into_ancestor =
+        context.merge_into_ancestor || config.is_merging_semantics_of_descendants();
 
-    let mut child_nodes = Vec::new();
-    let mut merge_rect = rect;
-    // `excludes_semantics_subtree` (RenderExcludeSemantics parity) skips
-    // this node's children entirely — the node's own config above is still
-    // built and boundary/merge-decided normally.
+    let mut child_fragments = Vec::with_capacity(node.children().len());
     if !node_excludes_semantics_subtree(node) {
         for &child_id in node.children() {
             let Some(child) = tree.get(child_id) else {
                 continue;
             };
             let child_origin = offset_add(origin, child.offset());
-            let fragment =
-                build_semantics_fragment(tree, child_id, child_origin, false, child_force_merge)
-                    .unwrap_or_else(SemanticsFragment::empty);
-            if let Some((child_config, child_rect)) = fragment.merge_up {
-                config.absorb(&child_config);
-                merge_rect = union_non_zero(merge_rect, child_rect);
-            }
-            child_nodes.extend(fragment.nodes);
+            let mut fragments = build_semantics_fragments(
+                tree,
+                child_id,
+                child_origin,
+                SemanticsAssemblyContext {
+                    is_root: false,
+                    parent_requires_explicit_node: children_require_explicit_node,
+                    merge_into_ancestor: children_merge_into_ancestor,
+                },
+                blocks_user_actions,
+            )
+            .unwrap_or_default();
+            child_fragments.append(&mut fragments);
         }
     }
 
-    if forms_boundary {
-        Some(SemanticsFragment {
-            merge_up: None,
-            nodes: vec![BuiltSemanticsNode {
-                config,
-                rect: merge_rect,
-                children: child_nodes,
-            }],
-        })
-    } else if force_merge || config.has_content() {
-        // Under `force_merge` this node's (possibly empty) config and rect
-        // always bubble up explicitly, even with no content of its own —
-        // otherwise a content-less structural node inside a collapsed
-        // subtree would silently drop its geometry from the merged rect.
-        Some(SemanticsFragment {
-            merge_up: Some((config, merge_rect)),
-            nodes: child_nodes,
-        })
-    } else {
-        Some(SemanticsFragment {
-            merge_up: None,
-            nodes: child_nodes,
-        })
+    if !contributes {
+        return Some(child_fragments);
     }
+
+    let children =
+        merge_child_fragments(&mut config, child_fragments, children_merge_into_ancestor);
+    let pending = PendingSemanticsNode {
+        source_render_id: id,
+        config,
+        rect,
+        children,
+    };
+
+    Some(vec![if forms_node {
+        SemanticsFragment::Formed(pending.form())
+    } else {
+        SemanticsFragment::Pending(pending)
+    }])
 }
 
-fn rebuild_semantics_owner(owner: &mut SemanticsOwner, fragment: Option<SemanticsFragment>) {
+fn merge_child_fragments(
+    config: &mut SemanticsConfiguration,
+    fragments: Vec<SemanticsFragment>,
+    suppress_conflicts: bool,
+) -> Vec<BuiltSemanticsNode> {
+    let conflicts = (!suppress_conflicts).then(|| mark_configuration_conflicts(config, &fragments));
+    let mut children = Vec::with_capacity(fragments.len());
+
+    for (index, fragment) in fragments.into_iter().enumerate() {
+        match fragment {
+            SemanticsFragment::Formed(node) => children.push(node),
+            SemanticsFragment::Pending(pending)
+                if conflicts.as_ref().is_some_and(|conflicts| conflicts[index]) =>
+            {
+                children.push(pending.form());
+            }
+            SemanticsFragment::Pending(pending) => {
+                config.absorb(&pending.config);
+                children.extend(pending.children);
+            }
+        }
+    }
+
+    children
+}
+
+fn mark_configuration_conflicts(
+    parent: &SemanticsConfiguration,
+    fragments: &[SemanticsFragment],
+) -> Vec<bool> {
+    let mut conflicts = vec![false; fragments.len()];
+
+    for (index, fragment) in fragments.iter().enumerate() {
+        let SemanticsFragment::Pending(pending) = fragment else {
+            continue;
+        };
+
+        if !parent.is_compatible_with(&pending.config) {
+            conflicts[index] = true;
+        }
+
+        for sibling_index in 0..index {
+            let SemanticsFragment::Pending(sibling) = &fragments[sibling_index] else {
+                continue;
+            };
+            if !pending.config.is_compatible_with(&sibling.config) {
+                conflicts[index] = true;
+                conflicts[sibling_index] = true;
+            }
+        }
+    }
+
+    conflicts
+}
+
+fn rebuild_semantics_owner(owner: &mut SemanticsOwner, root: Option<BuiltSemanticsNode>) {
     owner.clear();
 
-    let Some(fragment) = fragment else {
+    let Some(root) = root else {
         return;
     };
 
-    let mut root = None;
-    for node in fragment.nodes {
-        let id = insert_built_semantics_node(owner, node);
-        if root.is_none() {
-            root = Some(id);
-        }
-    }
-    owner.set_root(root);
+    let root_id = insert_built_semantics_node(owner, root);
+    owner.set_root(Some(root_id));
 }
 
 fn insert_built_semantics_node(
     owner: &mut SemanticsOwner,
     built: BuiltSemanticsNode,
 ) -> flui_foundation::SemanticsId {
-    let mut node = SemanticsNode::new().with_config(built.config);
+    let mut node = SemanticsNode::new()
+        .with_source_render_id(built.source_render_id)
+        .with_config(built.config);
     node.set_rect(built.rect);
     let id = owner.insert(node);
     for child in built.children {
@@ -278,12 +399,46 @@ fn offset_add(a: Offset, b: Offset) -> Offset {
     Offset::new(a.dx + b.dx, a.dy + b.dy)
 }
 
-fn union_non_zero(a: Rect<Pixels>, b: Rect<Pixels>) -> Rect<Pixels> {
-    if a == Rect::ZERO {
-        b
-    } else if b == Rect::ZERO {
-        a
-    } else {
-        a.union(&b)
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pending_fragment(source_render_id: RenderId) -> SemanticsFragment {
+        SemanticsFragment::Pending(PendingSemanticsNode {
+            source_render_id,
+            config: SemanticsConfiguration::new(),
+            rect: Rect::ZERO,
+            children: Vec::new(),
+        })
+    }
+
+    #[test]
+    fn root_extraction_accepts_exactly_one_formed_fragment() {
+        let root = RenderId::new(1);
+        let SemanticsFragment::Pending(pending) = pending_fragment(root) else {
+            panic!("test fixture must create a pending fragment");
+        };
+
+        let extracted = extract_formed_root(root, vec![SemanticsFragment::Formed(pending.form())])
+            .expect("one formed fragment is a valid root");
+
+        assert_eq!(extracted.source_render_id, root);
+    }
+
+    #[test]
+    fn root_extraction_rejects_pending_or_multiple_fragments() {
+        let root = RenderId::new(1);
+        assert!(matches!(
+            extract_formed_root(root, vec![pending_fragment(root)]),
+            Err(SemanticsAssemblyError::PendingRoot { root: pending_root })
+                if pending_root == root
+        ));
+        assert!(matches!(
+            extract_formed_root(
+                root,
+                vec![pending_fragment(root), pending_fragment(RenderId::new(2))],
+            ),
+            Err(SemanticsAssemblyError::InvalidRootFragmentCount { actual: 2 })
+        ));
     }
 }

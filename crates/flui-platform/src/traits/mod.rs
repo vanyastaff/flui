@@ -53,4 +53,6 @@ pub use platform::{
 pub use text_input::PlatformTextInput;
 #[cfg(feature = "winit-backend")]
 pub use window::WinitWindow;
-pub use window::{PlatformWindow, WindowAppearance, WindowBackgroundAppearance, WindowBounds};
+pub use window::{
+    CursorError, PlatformWindow, WindowAppearance, WindowBackgroundAppearance, WindowBounds,
+};

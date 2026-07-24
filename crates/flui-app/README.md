@@ -26,10 +26,10 @@ run_app(view)                       — bootstrap: window, GPU surface, frame lo
     │
     ▼
 UiRealm (owner-affine, !Send + !Sync)
-    └── WidgetsBinding              — View → Element, BuildOwner, GlobalKey scope
+    ├── WidgetsBinding              — View → Element, BuildOwner, GlobalKey scope
+    └── GestureBinding              — single-presentation pointer state
 
 AppBinding (transitional host)
-    ├── GestureBinding              — pointer events, hit testing, event coalescing
     ├── FocusManager                — keyboard event dispatch
     ├── RenderingFlutterBinding     — layout/paint via PipelineOwner (flui-rendering)
     ├── SemanticsBinding            — accessibility tree flushes (flui-semantics)
@@ -38,8 +38,9 @@ AppBinding (transitional host)
 
 - **Entry points** — `run_app` / `run_app_with_config` bootstrap a platform
   window and hand the root `View` to the runner-owned `UiRealm`, which
-  auto-wraps it in `VsyncScope` so implicit-animation widgets tick with zero
-  boilerplate. `run_direct` bypasses the widget tree for raw
+  auto-wraps it in an outer `GestureArenaScope` plus `VsyncScope`, so competing
+  detectors share the realm arena and implicit-animation widgets tick with
+  zero boilerplate. `run_direct` bypasses the widget tree for raw
   `SceneBuilder`-callback rendering.
 - **Lifecycle** — `flui_scheduler::AppLifecycleState` (resumed, inactive,
   hidden, paused, detached) is the canonical Flutter-parity state; the
@@ -58,8 +59,10 @@ AppBinding (transitional host)
 ## Known architectural debt
 
 `WidgetsBinding` and GlobalKey identity are realm-owned. `AppBinding`,
-`Scheduler`, renderer orchestration, and some gesture/focus services remain
-process-scoped migration debt. Tests mutating those remaining globals must
+`Scheduler`, renderer orchestration, and focus services remain process-scoped
+migration debt. Gesture state is realm-owned but intentionally models one
+presentation per realm; it moves to `PresentationRuntime` only when a second
+real presentation consumer exists. Tests mutating the remaining globals must
 use their existing serialization guard; the guard retires as each service
 moves behind an explicit owner.
 

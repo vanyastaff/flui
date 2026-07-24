@@ -176,10 +176,6 @@ impl Platform for IOSPlatform {
         unimplemented!("iOS GCD executor not implemented")
     }
 
-    fn foreground_executor(&self) -> Arc<dyn PlatformExecutor> {
-        unimplemented!("iOS main queue executor not implemented")
-    }
-
     fn run(self: Box<Self>, _on_finish_launching: Box<dyn FnOnce()>) {
         unimplemented!("iOS UIApplicationMain run loop not implemented")
     }
@@ -200,7 +196,7 @@ impl Platform for IOSPlatform {
         unimplemented!("iOS main screen query not implemented")
     }
 
-    fn open_window(&self, _options: WindowOptions) -> Result<Box<dyn PlatformWindow>> {
+    fn open_window(&self, _options: WindowOptions) -> Result<Arc<dyn PlatformWindow>> {
         unimplemented!("iOS UIWindow creation not implemented")
     }
 

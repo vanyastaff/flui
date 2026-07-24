@@ -99,7 +99,8 @@ use std::{any::Any, cell::Cell, collections::HashMap, rc::Rc, sync::Arc, time::D
 
 use flui_animation::curve::ArcCurve;
 use flui_animation::{Animation, AnimationController, Curves, ProxyAnimation, Scheduler};
-use flui_interaction::{InteractionLane, MouseTracker};
+use flui_interaction::InteractionLane;
+use flui_interaction::routing::{MouseTracker, PointerMotionKind};
 use flui_objects::*;
 use flui_painting::{Canvas, Paint};
 use flui_rendering::{
@@ -110,7 +111,7 @@ use flui_rendering::{
         MultiChildLayoutDelegate, SingleChildLayoutDelegate,
         SliverGridDelegateWithFixedCrossAxisCount,
     },
-    hit_testing::{CursorIcon, HitTestBehavior, HitTestResult, InputEvent, MouseRegionCallbacks},
+    hit_testing::{CursorIcon, HitTestBehavior, HitTestResult, MouseRegionCallbacks},
     layer::LayerLink,
     parent_data::{
         FlexParentData, MultiChildLayoutParentData, SliverMultiBoxAdaptorParentData,
@@ -1034,22 +1035,17 @@ fn harness_mouse_region_opaque_false_adds_entry_without_blocking_lower_sibling()
 }
 
 #[test]
-fn harness_mouse_region_hover_dispatches_move_event_and_tracker_enter_exit() {
+fn harness_mouse_region_uses_one_tracker_target_for_hover_enter_and_exit() {
     let hovers = Rc::new(Cell::new(0));
     let enters = Rc::new(Cell::new(0));
     let exits = Rc::new(Cell::new(0));
     let lane = flui_interaction::InteractionLane::try_new().expect("interaction lane");
-    let (hover_target, mouse_target) = lane.enter(|| {
+    let mouse_target = lane.enter(|| {
         let handle = lane.dispatch_handle();
         let hover_counter = Rc::clone(&hovers);
-        let hover_target = handle
-            .register_pointer(move |_event| {
-                hover_counter.set(hover_counter.get() + 1);
-            })
-            .expect("register mouse-region hover pointer target");
         let enter_counter = Rc::clone(&enters);
         let exit_counter = Rc::clone(&exits);
-        let mouse_target = handle
+        handle
             .register_mouse_region(MouseRegionCallbacks {
                 on_enter: Some(Rc::new(move |_device, _position| {
                     enter_counter.set(enter_counter.get() + 1);
@@ -1057,14 +1053,14 @@ fn harness_mouse_region_hover_dispatches_move_event_and_tracker_enter_exit() {
                 on_exit: Some(Rc::new(move |_device, _position| {
                     exit_counter.set(exit_counter.get() + 1);
                 })),
-                on_hover: None,
+                on_hover: Some(Rc::new(move |_device, _position| {
+                    hover_counter.set(hover_counter.get() + 1);
+                })),
             })
-            .expect("register mouse-region target");
-        (hover_target, mouse_target)
+            .expect("register mouse-region target")
     });
 
     let mut region = RenderMouseRegion::new();
-    region.set_hover_target(Some(hover_target));
     region.set_mouse_region_target(Some(mouse_target));
 
     let run = RenderTester::mount(box_node(region))
@@ -1074,66 +1070,43 @@ fn harness_mouse_region_hover_dispatches_move_event_and_tracker_enter_exit() {
     let mut inside = HitTestResult::new();
     let inside_position = Offset::new(px(10.0), px(10.0));
     run.pipeline().hit_test(inside_position, &mut inside);
-    lane.enter(|| {
-        inside.dispatch(&flui_interaction::events::make_move_event(
-            inside_position,
-            flui_interaction::events::PointerType::Mouse,
-        ));
-    });
-    assert_eq!(
-        hovers.get(),
-        1,
-        "PointerEvent::Move dispatch should invoke RenderMouseRegion's hover handler",
-    );
-
     let tracker = MouseTracker::new();
-    tracker.update_with_event(
-        &InputEvent::DeviceAdded {
-            device_id: 0,
-            pointer_type: flui_interaction::events::PointerType::Mouse,
-        },
-        &HitTestResult::new(),
+    tracker.add_device(
+        0,
+        flui_interaction::events::PointerType::Mouse,
+        Offset::ZERO,
+    );
+    let inside_event = flui_interaction::events::make_move_event(
+        inside_position,
+        flui_interaction::events::PointerType::Mouse,
     );
     lane.enter(|| {
-        tracker.update_with_event(
-            &InputEvent::Pointer(flui_interaction::events::make_move_event(
-                inside_position,
-                flui_interaction::events::PointerType::Mouse,
-            )),
-            &inside,
-        );
+        tracker.update_with_motion(&inside_event, PointerMotionKind::Hover, &inside);
     });
     assert_eq!(enters.get(), 1, "first tracker update enters the region");
+    assert_eq!(hovers.get(), 1, "the same target receives hover");
 
     lane.enter(|| {
-        tracker.update_with_event(
-            &InputEvent::Pointer(flui_interaction::events::make_move_event(
-                inside_position,
-                flui_interaction::events::PointerType::Mouse,
-            )),
-            &inside,
-        );
+        tracker.update_with_motion(&inside_event, PointerMotionKind::Contact, &inside);
     });
     assert_eq!(
         hovers.get(),
         1,
-        "MouseTracker does not deliver hover; hover stays ordinary pointer dispatch",
+        "contact motion refreshes tracking but must not invoke on_hover",
     );
 
     let mut outside = HitTestResult::new();
     let outside_position = Offset::new(px(80.0), px(10.0));
     run.pipeline().hit_test(outside_position, &mut outside);
+    let outside_event = flui_interaction::events::make_move_event(
+        outside_position,
+        flui_interaction::events::PointerType::Mouse,
+    );
     lane.enter(|| {
         lane.dispatch_handle()
             .unregister_mouse_region(mouse_target)
             .expect("unregister mouse target after prior annotation was resolved");
-        tracker.update_with_event(
-            &InputEvent::Pointer(flui_interaction::events::make_move_event(
-                outside_position,
-                flui_interaction::events::PointerType::Mouse,
-            )),
-            &outside,
-        );
+        tracker.update_with_motion(&outside_event, PointerMotionKind::Hover, &outside);
     });
     assert_eq!(
         exits.get(),
@@ -10393,6 +10366,26 @@ fn harness_subtree_anchor_is_layout_paint_and_hit_test_transparent() {
         anchored.hit_first(100.0, 100.0),
         None,
         "and a miss stays a miss"
+    );
+}
+
+/// Identity remains transparent when the child deliberately accepts hits
+/// outside its untransformed layout bounds.
+#[test]
+fn harness_subtree_anchor_preserves_transformed_overflow_hit_testing() {
+    let anchored = RenderTester::mount(
+        box_node(RenderSubtreeAnchor::new(SubtreeAnchor::new())).child(
+            box_node(RenderTransform::translate(100.0, 0.0))
+                .child(box_node(RenderColoredBox::red(40.0, 24.0)).label("child")),
+        ),
+    )
+    .with_constraints(loose(200.0))
+    .run_layout();
+
+    assert_eq!(
+        anchored.hit_first(110.0, 10.0),
+        Some(anchored.id("child")),
+        "the anchor must not add a bounds gate before the transform maps the hit",
     );
 }
 

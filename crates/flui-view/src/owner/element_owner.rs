@@ -35,16 +35,21 @@
 use std::{
     cmp::Reverse,
     collections::{BinaryHeap, HashMap, HashSet},
+    rc::Rc,
     sync::Arc,
 };
 
 use flui_foundation::{ElementId, RenderId};
+use flui_interaction::FocusManager;
 use parking_lot::Mutex;
 
 use flui_objects::LayoutConstraintsCell;
 
+use super::RebuildReason;
 use super::build_owner::{DirtyElement, ExternalBuildScheduler, InactiveElement};
+use super::inherited_dependencies::{InheritedDependencies, ProviderIds};
 use super::layout_builder::{LayoutBuilderEntry, LayoutBuilderRegistry};
+use super::rebuild_reason::RebuildReasons;
 use crate::element::child_manager::{ChildManager, ChildManagerRegistry};
 
 /// Borrowed live-tree access carried by [`ElementOwner`] while a
@@ -110,9 +115,8 @@ pub struct ElementOwner<'a> {
     /// frame start.
     pub(crate) dirty_elements: &'a mut BinaryHeap<Reverse<DirtyElement>>,
 
-    /// Dedup set tracking ids already in `dirty_elements` so a
-    /// reentrant `schedule_build_for` for the same id is a no-op.
-    pub(crate) dirty_set: &'a mut HashSet<ElementId>,
+    /// Accumulated causes for ids already in `dirty_elements`.
+    pub(crate) dirty_reasons: &'a mut HashMap<ElementId, RebuildReasons>,
 
     /// Inactive elements queue (deactivated but not yet unmounted).
     /// Drained by `BuildOwner::finalize_tree` at end-of-frame.
@@ -132,6 +136,9 @@ pub struct ElementOwner<'a> {
     /// `_didChangeDependencies` flag on `StatefulElement`.
     pub(crate) pending_dependency_changes: &'a mut HashSet<ElementId>,
 
+    /// Sparse reverse index for inherited dependency ownership.
+    pub(crate) inherited_dependencies: &'a mut InheritedDependencies,
+
     /// Snapshot of `BuildOwner::on_build_scheduled` so
     /// `schedule_build_for` can fire the visual-update callback
     /// without re-borrowing the owner.
@@ -143,7 +150,7 @@ pub struct ElementOwner<'a> {
     /// Reference to `BuildOwner::external_inbox`, so an element can capture a
     /// clone at mount (via [`Self::external_scheduler`]) for its mark-dirty
     /// callback to push onto from outside a frame.
-    pub(crate) external_inbox: &'a Arc<Mutex<HashSet<ElementId>>>,
+    pub(crate) external_inbox: &'a Arc<Mutex<HashMap<ElementId, RebuildReasons>>>,
 
     /// Reference to `BuildOwner::on_build_scheduled` as the shareable `Arc`
     /// (the [`Self::on_build_scheduled`] field above is the `&dyn Fn` view used
@@ -170,6 +177,12 @@ pub struct ElementOwner<'a> {
     /// `(RenderId -> ElementId + LayoutConstraintsCell)` entry at mount and drop
     /// it at unmount — the same shape as `child_manager_registry`.
     pub(crate) layout_builder_registry: &'a LayoutBuilderRegistry,
+
+    /// The exact focus manager owned by the surrounding `BuildOwner`.
+    ///
+    /// Cloned into each live `BuildCtx`; it is never looked up through
+    /// process-global or thread-local state.
+    pub(crate) focus_manager: &'a Rc<FocusManager>,
 
     /// The binding's async task driver, or `None` when no
     /// binding installed one. Cloned into the live `BuildCtx` so a
@@ -232,16 +245,22 @@ impl ElementOwner<'_> {
     /// Schedule an element for rebuild at the next frame.
     ///
     /// Pushed onto the depth-sorted heap so parents rebuild before
-    /// children. Dedup against `dirty_set` so a reentrant call for the
-    /// same id is a no-op. Fires the `on_build_scheduled` callback on
-    /// fresh inserts so the binding can request a visual update.
-    pub fn schedule_build_for(&mut self, id: ElementId, depth: usize) {
-        if self.dirty_set.insert(id) {
-            self.dirty_elements
-                .push(Reverse(DirtyElement::new(id, depth)));
+    /// children. Reentrant scheduling accumulates the additional cause without
+    /// adding a second heap entry. Fires `on_build_scheduled` only for a fresh
+    /// entry so the binding requests one visual update per element burst.
+    pub fn schedule_build_for(&mut self, id: ElementId, depth: usize, reason: RebuildReason) {
+        match self.dirty_reasons.entry(id) {
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert(RebuildReasons::one(reason));
+                self.dirty_elements
+                    .push(Reverse(DirtyElement::new(id, depth)));
 
-            if let Some(callback) = self.on_build_scheduled {
-                callback();
+                if let Some(callback) = self.on_build_scheduled {
+                    callback();
+                }
+            }
+            std::collections::hash_map::Entry::Occupied(mut entry) => {
+                entry.get_mut().insert(reason);
             }
         }
     }
@@ -287,6 +306,31 @@ impl ElementOwner<'_> {
     /// stale entry behind. No-op if the id is not present.
     pub fn clear_pending_dependency_change(&mut self, id: ElementId) {
         self.pending_dependency_changes.remove(&id);
+    }
+
+    /// Remove an active element from all providers and retain the fact that a
+    /// later activation must run `did_change_dependencies`.
+    pub(crate) fn deactivate_inherited_dependent(&mut self, dependent: ElementId) -> ProviderIds {
+        self.inherited_dependencies.deactivate(dependent)
+    }
+
+    /// Permanently discard a dependent's reverse-index lifecycle state.
+    pub(crate) fn unmount_inherited_dependent(&mut self, dependent: ElementId) -> ProviderIds {
+        self.inherited_dependencies.unmount(dependent)
+    }
+
+    /// Return whether this reactivated element previously had dependencies.
+    pub(crate) fn activate_inherited_dependent(&mut self, dependent: ElementId) -> bool {
+        self.inherited_dependencies.activate(dependent)
+    }
+
+    /// Remove one provider edge when that provider unmounts.
+    pub(crate) fn unregister_inherited_dependency(
+        &mut self,
+        dependent: ElementId,
+        provider: ElementId,
+    ) {
+        self.inherited_dependencies.unregister(dependent, provider);
     }
 
     /// Whether the given id has a pending `did_change_dependencies`
@@ -447,8 +491,8 @@ mod tests {
         let id = ElementId::new(5);
 
         let mut handle = owner.element_owner_mut();
-        handle.schedule_build_for(id, 2);
-        handle.schedule_build_for(id, 2); // duplicate — no-op
+        handle.schedule_build_for(id, 2, RebuildReason::StateChange);
+        handle.schedule_build_for(id, 2, RebuildReason::AnimationTick);
         assert_eq!(handle.dirty_count(), 1);
     }
 
@@ -485,7 +529,7 @@ mod tests {
         // recursive `&mut *handle` reborrows — this is the path
         // `Element::mount` takes when it recurses into child mounts.
         fn recurse(handle: &mut ElementOwner<'_>, depth: usize) {
-            handle.schedule_build_for(ElementId::new(depth + 1), depth);
+            handle.schedule_build_for(ElementId::new(depth + 1), depth, RebuildReason::StateChange);
             if depth < 3 {
                 recurse(&mut *handle, depth + 1);
             }

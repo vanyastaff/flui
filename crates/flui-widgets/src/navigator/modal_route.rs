@@ -48,8 +48,8 @@
 //!
 //! * **Per-route `FocusScope` — landed (ADR-0022).** The page is wrapped in
 //!   `FocusScope::with_external_node` (`routes.dart:1201-1202`) and the current
-//!   route's scope is the `FocusManager`'s *active scope* — FLUI's analogue of
-//!   `setFirstFocus` chaining. Still absent: `traversalEdgeBehavior` (no
+//!   route's scope is installed through the enclosing scope's
+//!   `setFirstFocus` history chain. Still absent: `traversalEdgeBehavior` (no
 //!   node-layer flag) and `requestFocus = false` opt-out.
 //! * **No `BlockSemantics`, no barrier semantics.** No `semanticsDismissible`, no
 //!   `barrierLabel`, no `Semantics(sortKey: OrdinalSortKey(1.0))`. A covered
@@ -96,7 +96,7 @@ use super::subtree::{RouteSubtreeAnchor, RouteSubtreeCell};
 use super::transition_route::{
     TransitionHandle, TransitionRoute, always_complete, always_dismissed,
 };
-use flui_interaction::routing::{FocusManager, FocusScopeNode};
+use flui_interaction::routing::FocusScopeNode;
 
 use crate::{
     AbsorbPointer, ColoredBox, FocusScope, GestureDetector, Offstage, SizedBox, Stack, StackFit,
@@ -197,9 +197,9 @@ struct ModalInner {
 
     /// `_ModalScopeState.focusScopeNode` (`routes.dart:1095`): the per-route
     /// focus scope. The page is wrapped in a `FocusScope::with_external_node`
-    /// over this, and the route lifecycle makes it the manager's **active
-    /// scope** while the route is current — ADR-0022
-    focus_scope: Arc<FocusScopeNode>,
+    /// over this, and the route lifecycle promotes it through native
+    /// first-focus history while the route is current.
+    focus_scope: Rc<FocusScopeNode>,
 }
 
 impl ModalInner {
@@ -278,7 +278,7 @@ impl ModalInner {
         Offstage::new()
             .offstage(self.offstage.load(Ordering::Relaxed))
             .child(FocusScope::with_external_node(
-                Arc::clone(&self.focus_scope),
+                Rc::clone(&self.focus_scope),
                 scope,
             ))
             .boxed()
@@ -288,35 +288,11 @@ impl ModalInner {
     /// focus into it — FLUI's analogue of
     /// `navigator.focusNode.enclosingScope?.setFirstFocus(focusScopeNode)`
     /// (`routes.dart:1692`, `:1137`). Flutter chains focused children so focus
-    /// lands in the current route; FLUI sets the manager's **active scope**
-    /// (which confines `focus_next`/`focus_previous` the same way), then
-    /// restores the scope's remembered focused child, or unfocuses a field
-    /// left focused on a now-covered route so it stops receiving keys.
+    /// lands in the current route. The scope itself resolves its owning
+    /// presentation and updates enclosing-scope history; there is no global
+    /// active-scope override.
     fn activate_focus_scope(&self) {
-        let manager = FocusManager::global();
-        manager.set_active_scope(Some(Arc::clone(&self.focus_scope)));
-        match self.focus_scope.focused_child() {
-            Some(remembered) => manager.request_focus(remembered),
-            None => {
-                if manager.primary_focus().is_some()
-                    && !self.focus_scope.as_focus_node().has_focus()
-                {
-                    manager.unfocus();
-                }
-            }
-        }
-    }
-
-    /// On dispose: release the active scope **only if it is still ours**. A
-    /// popped route's dispose runs when its exit transition ends — after the
-    /// revealed route claimed the active scope via `did_change_next(None)` at
-    /// pop time — so this fires only for a route torn down while current
-    /// (navigator unmount, `remove_route` of the top).
-    fn release_focus_scope(&self) {
-        let manager = FocusManager::global();
-        if Arc::ptr_eq(&manager.active_scope(), &self.focus_scope) {
-            manager.set_active_scope(None);
-        }
+        let _ = self.focus_scope.set_first_focus();
     }
 
     /// The page-facing local-history capability: the registry plus this
@@ -953,7 +929,6 @@ impl<T: Send + Clone + 'static> Route for ModalRoute<T> {
         // Sever local history first: live entries drop un-fired (Flutter
         // GC-drops the list) and late adds become inert (ADR-0025).
         self.inner.local_history.sever();
-        self.inner.release_focus_scope();
         if let Some(binding) = self.binding() {
             binding.withdraw_subtree();
             binding.withdraw_modal();

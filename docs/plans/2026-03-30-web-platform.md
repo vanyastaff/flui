@@ -150,7 +150,6 @@ pub struct WebPlatform {
 struct WebState {
     capabilities: WebCapabilities,
     handlers: PlatformHandlers,
-    foreground_executor: Arc<WebExecutor>,
     background_executor: Arc<WebExecutor>,
     text_system: Arc<WebTextSystem>,
     clipboard: Arc<WebClipboard>,
@@ -172,7 +171,6 @@ impl WebPlatform {
         let state = WebState {
             capabilities: WebCapabilities,
             handlers: PlatformHandlers::new(),
-            foreground_executor: Arc::new(WebExecutor::new()),
             background_executor: Arc::new(WebExecutor::new()),
             text_system: Arc::new(WebTextSystem::new()),
             clipboard: Arc::new(WebClipboard::new()),
@@ -1188,10 +1186,6 @@ impl Platform for WebPlatform {
         self.with_state(|state| state.background_executor.clone())
     }
 
-    fn foreground_executor(&self) -> Arc<dyn PlatformExecutor> {
-        self.with_state(|state| state.foreground_executor.clone())
-    }
-
     fn text_system(&self) -> Arc<dyn PlatformTextSystem> {
         self.with_state(|state| state.text_system.clone())
     }
@@ -1439,8 +1433,6 @@ where
     use flui_scheduler::Scheduler;
     use parking_lot::Mutex;
 
-    use crate::embedder::PlatformWindowHandle;
-
     tracing::info!("Starting web platform via flui-platform");
 
     let platform = flui_platform::current_platform().expect("Failed to initialize web platform");
@@ -1456,10 +1448,7 @@ where
         // 2. Create GPU renderer
         // Note: On web, wgpu uses WebGPU or WebGL2 backend
         let phys_size = window.physical_size();
-        let renderer = pollster::block_on(async {
-            let handle = PlatformWindowHandle(window.as_ref());
-            Renderer::new(&handle).await
-        });
+        let renderer = pollster::block_on(Renderer::new(window.as_ref()));
         let mut renderer = match renderer {
             Ok(r) => r,
             Err(e) => {

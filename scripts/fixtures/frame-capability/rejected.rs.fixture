@@ -3,13 +3,13 @@
 // Not compiled: the `.fixture` extension keeps it out of `cargo` and out of the
 // scanner's own `*.rs` sweep over `crates/`.
 //
-// Every body below acquires a LIFECYCLE-ONLY FRAME CAPABILITY from inside a
-// frame phase. Both capabilities appear, because a scanner that only matched
-// `rebuild_handle` would let `post_frame_handle` through — which is exactly the
-// gap ADR-0021 U2 shipped with.
+// Every body below acquires a LIFECYCLE-ONLY CAPABILITY from inside a frame
+// phase. Every guarded token appears, so adding a capability to the scanner
+// without adding a fixture cannot create a false sense of coverage.
 //
-// Prose mentioning rebuild_handle or post_frame_handle in a comment must NOT
-// count as a violation; this line exists to prove the comment filter works.
+// Prose mentioning rebuild_handle, post_frame_handle, text_input_handle, or
+// focus_manager in a comment must NOT count as a violation; this line proves
+// the comment filter works.
 
 impl StatelessView for Loop {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
@@ -18,6 +18,10 @@ impl StatelessView for Loop {
         handle.schedule();
         // Queues work against the frame that is still building.
         let post = ctx.post_frame_handle();
+        // Re-attaches the IME client on every rebuild.
+        let text_input = ctx.text_input_handle();
+        // Makes imperative focus mutation reachable from build.
+        let focus = ctx.focus_manager();
         Text::new("boom")
     }
 }

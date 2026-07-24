@@ -52,6 +52,7 @@ use std::{
 
 use flui_types::geometry::{Offset, Pixels};
 use parking_lot::Mutex;
+use smallvec::SmallVec;
 
 use crate::{
     events::{PointerEvent, PointerEventExt},
@@ -199,84 +200,107 @@ impl PointerEventResampler {
     where
         F: FnMut(PointerEvent),
     {
-        let mut inner = self.inner.lock();
-
-        // Skip if not tracking or no events
-        if !inner.is_tracked || inner.event_queue.is_empty() {
+        let Some(sample_duration) = next_sample_time.checked_duration_since(sample_time) else {
+            tracing::warn!("ignoring a non-advancing pointer sampling window");
+            return;
+        };
+        if sample_duration.is_zero() {
+            tracing::warn!("ignoring a zero-width pointer sampling window");
             return;
         }
 
-        // Enforce minimum sample interval
-        if let Some(last_time) = inner.last_sample_time
-            && sample_time.duration_since(last_time) < MIN_SAMPLE_INTERVAL
-        {
-            return;
-        }
+        let emitted = {
+            let mut inner = self.inner.lock();
 
-        inner.last_sample_time = Some(sample_time);
-
-        // Process all events up to sample_time
-        while let Some(front) = inner.event_queue.front() {
-            if front.timestamp > sample_time {
-                break; // Future event, wait for next sample
+            // Skip if not tracking or no events
+            if !inner.is_tracked || inner.event_queue.is_empty() {
+                return;
             }
 
-            // Invariant: the loop guard verified `front()` returns `Some`, so
-            // `pop_front` cannot return `None` unless another thread mutates
-            // the queue between the two calls. We hold `&mut inner` via the
-            // enclosing `&mut self` so no concurrent access is possible.
-            let buffered = inner
-                .event_queue
-                .pop_front()
-                .expect("event_queue front returned Some in the loop guard");
-            let event = buffered.event;
-
-            // Update last position for interpolation
-            let position = event.position();
-            inner.last_position = Some(position);
-
-            // Emit the event
-            callback(event);
-        }
-
-        // Interpolate if we have move events pending (Flutter parity:
-        // `resampler.dart _samplePointerPosition` synthesizes a Move at the
-        // interpolated position so recognisers advance smoothly between
-        // sensor samples instead of stalling until the next real event).
-        if !inner.event_queue.is_empty()
-            && inner.last_position.is_some()
-            && let Some(next_event) = inner.event_queue.front()
-            && matches!(next_event.event, PointerEvent::Move(..))
-            && let Some(last_pos) = inner.last_position
-        {
-            let next_pos = next_event.event.position();
-            let total_duration = next_event.timestamp.duration_since(sample_time);
-            let sample_duration = next_sample_time.duration_since(sample_time);
-
-            if total_duration > Duration::ZERO {
-                let t = sample_duration.as_secs_f64() / total_duration.as_secs_f64();
-                let t = t.clamp(0.0, 1.0);
-
-                let interpolated_pos = Offset::new(
-                    last_pos.dx + (next_pos.dx - last_pos.dx) * t as f32,
-                    last_pos.dy + (next_pos.dy - last_pos.dy) * t as f32,
-                );
-
-                // Only emit if position actually changed
-                if interpolated_pos != last_pos {
-                    // Synthesize the interpolated Move from the pending event:
-                    // same pointer/buttons/pressure state, position replaced.
-                    let mut interpolated = next_event.event.clone();
-                    if let PointerEvent::Move(update) = &mut interpolated {
-                        update.current.position = dpi::PhysicalPosition::new(
-                            f64::from(interpolated_pos.dx.get()),
-                            f64::from(interpolated_pos.dy.get()),
-                        );
-                    }
-                    inner.last_position = Some(interpolated_pos);
-                    callback(interpolated);
+            // Enforce minimum sample interval
+            if let Some(last_time) = inner.last_sample_time {
+                let Some(elapsed) = sample_time.checked_duration_since(last_time) else {
+                    tracing::warn!(
+                        pointer_id = ?inner.pointer_id,
+                        "ignoring a regressed pointer sample time"
+                    );
+                    return;
+                };
+                if elapsed < MIN_SAMPLE_INTERVAL {
+                    return;
                 }
             }
+
+            inner.last_sample_time = Some(sample_time);
+            let mut emitted = SmallVec::<[PointerEvent; 4]>::new();
+
+            // Process all events up to sample_time
+            while let Some(front) = inner.event_queue.front() {
+                if front.timestamp > sample_time {
+                    break; // Future event, wait for next sample
+                }
+
+                // The queue cannot change between `front` and `pop_front`
+                // while the state lock is held.
+                let buffered = inner
+                    .event_queue
+                    .pop_front()
+                    .expect("event_queue front returned Some in the loop guard");
+                let event = buffered.event;
+
+                // Update last position for interpolation
+                let position = event.position();
+                inner.last_position = Some(position);
+
+                emitted.push(event);
+            }
+
+            // Interpolate if we have move events pending (Flutter parity:
+            // `resampler.dart _samplePointerPosition` synthesizes a Move at
+            // the interpolated position).
+            if !inner.event_queue.is_empty()
+                && inner.last_position.is_some()
+                && let Some(next_event) = inner.event_queue.front()
+                && matches!(next_event.event, PointerEvent::Move(..))
+                && let Some(last_pos) = inner.last_position
+            {
+                let next_pos = next_event.event.position();
+                let total_duration = next_event.timestamp.duration_since(sample_time);
+                if total_duration > Duration::ZERO {
+                    let t = sample_duration.as_secs_f64() / total_duration.as_secs_f64();
+                    let t = t.clamp(0.0, 1.0);
+
+                    let interpolated_pos = Offset::new(
+                        last_pos.dx + (next_pos.dx - last_pos.dx) * t as f32,
+                        last_pos.dy + (next_pos.dy - last_pos.dy) * t as f32,
+                    );
+
+                    // Only emit if position actually changed
+                    if interpolated_pos != last_pos {
+                        // Synthesize the interpolated Move from the pending
+                        // event: same pointer/buttons/pressure state, position
+                        // replaced.
+                        let mut interpolated = next_event.event.clone();
+                        if let PointerEvent::Move(update) = &mut interpolated {
+                            update.current.position = dpi::PhysicalPosition::new(
+                                f64::from(interpolated_pos.dx.get()),
+                                f64::from(interpolated_pos.dy.get()),
+                            );
+                        }
+                        inner.last_position = Some(interpolated_pos);
+                        emitted.push(interpolated);
+                    }
+                }
+            }
+
+            emitted
+        };
+
+        // User dispatch happens only after the state transaction is complete.
+        // Re-entrant callbacks may therefore add/clear/stop without deadlocking
+        // or mutating the batch currently being emitted.
+        for event in emitted {
+            callback(event);
         }
     }
 
@@ -287,18 +311,25 @@ impl PointerEventResampler {
     where
         F: FnMut(PointerEvent),
     {
-        let mut inner = self.inner.lock();
+        let emitted: SmallVec<[PointerEvent; 4]> = {
+            let mut inner = self.inner.lock();
+            let emitted = inner
+                .event_queue
+                .drain(..)
+                .map(|buffered| buffered.event)
+                .collect();
 
-        // Flush all remaining events
-        while let Some(buffered) = inner.event_queue.pop_front() {
-            callback(buffered.event);
+            // Reset state before callbacks can re-enter this resampler.
+            inner.is_tracked = false;
+            inner.is_down = false;
+            inner.last_position = None;
+            inner.last_sample_time = None;
+            emitted
+        };
+
+        for event in emitted {
+            callback(event);
         }
-
-        // Reset state
-        inner.is_tracked = false;
-        inner.is_down = false;
-        inner.last_position = None;
-        inner.last_sample_time = None;
     }
 
     /// Checks if the pointer is currently down
@@ -314,6 +345,13 @@ impl PointerEventResampler {
     /// Checks if there are pending events in the queue
     pub fn has_pending_events(&self) -> bool {
         !self.inner.lock().event_queue.is_empty()
+    }
+
+    /// Number of input events waiting for a sampling window.
+    #[inline]
+    #[must_use]
+    pub fn pending_event_count(&self) -> usize {
+        self.inner.lock().event_queue.len()
     }
 
     /// Returns the pointer ID this resampler tracks
@@ -342,6 +380,43 @@ mod tests {
         assert!(!resampler.is_down());
         assert!(!resampler.has_pending_events());
         assert_eq!(resampler.pointer_id(), PointerId::PRIMARY);
+    }
+
+    #[test]
+    fn sample_releases_state_lock_before_invoking_callback() {
+        let resampler = PointerEventResampler::new(PointerId::PRIMARY);
+        resampler.start_tracking();
+        resampler.add_event(make_move_event(
+            Offset::new(Pixels(1.0), Pixels(1.0)),
+            PointerType::Touch,
+        ));
+
+        let callback_resampler = resampler.clone();
+        let now = Instant::now();
+        resampler.sample(now, now + Duration::from_millis(16), move |_| {
+            assert!(
+                callback_resampler.inner.try_lock().is_some(),
+                "resampler state must not stay locked across user dispatch"
+            );
+        });
+    }
+
+    #[test]
+    fn stop_releases_state_lock_before_invoking_callback() {
+        let resampler = PointerEventResampler::new(PointerId::PRIMARY);
+        resampler.start_tracking();
+        resampler.add_event(make_move_event(
+            Offset::new(Pixels(1.0), Pixels(1.0)),
+            PointerType::Touch,
+        ));
+
+        let callback_resampler = resampler.clone();
+        resampler.stop(move |_| {
+            assert!(
+                callback_resampler.inner.try_lock().is_some(),
+                "resampler state must not stay locked across stop dispatch"
+            );
+        });
     }
 
     #[test]

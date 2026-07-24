@@ -13,7 +13,7 @@ Versioning: per `docs/release.md` policy.
 - Flex/stack family: `Row`, `Column`, `Flex`, `Expanded`, `Flexible`, `Stack`, `Positioned`.
 - Paint/effect family: `ColoredBox`, `DecoratedBox`, `Opacity`, `ClipRect`, `ClipRRect`, `ClipOval`, `RepaintBoundary`.
 - Scrolling family: `SingleChildScrollView`, `ListView`, `SliverFixedExtentList`, `SliverOpacity`, `SliverPadding`, `SliverToBoxAdapter`, `Viewport`.
-- Pointer family: `Listener` (raw pointer routing with `HitTestBehavior`), `GestureDetector` (`on_tap` plus `on_pan_start`/`on_pan_update`/`on_pan_end`, where tap and pan compete in a per-detector arena).
+- Pointer family: `Listener` (raw pointer routing with `HitTestBehavior`), `GestureDetector` (`on_tap` plus `on_pan_start`/`on_pan_update`/`on_pan_end`, where recognizers compete in the presentation binding's shared arena).
 - Modifiers: `IgnorePointer`, `AbsorbPointer`, `Offstage`.
 - Text widget: `Text` over `RenderParagraph`.
 - Transition family: `FadeTransition`, `ScaleTransition`, `RotationTransition` driven by `flui-animation`.

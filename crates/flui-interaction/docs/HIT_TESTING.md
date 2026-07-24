@@ -30,7 +30,9 @@ the resolved route from Down through Up/Cancel:
 
 1. Down: hit test, resolve route, invoke targets, close gesture arena.
 2. Move: reuse the cached route.
-3. Up/Cancel: invoke cached route, sweep arena, release route.
+3. Up: invoke cached route, sweep arena, release route.
+4. Cancel: invoke cached route so recognizers reject themselves, release route;
+   the binding does not sweep and force a winner.
 
 This preserves Flutter's retained hit-target behavior while keeping render data
 `Send + Sync`. If a target unmounts after Down, new hit tests will miss it, but

@@ -5,7 +5,7 @@
 //!
 //! - **EventRouter**: Routes pointer/keyboard events via hit testing
 //! - **HitTest**: Determines which UI elements are under cursor/touch
-//! - **FocusManager**: Manages keyboard focus for the current owner thread via TLS
+//! - **FocusManager**: Manages keyboard focus for one presentation
 //! - **FocusScope**: Groups focusable elements for keyboard navigation
 //! - **FocusTraversalPolicy**: Determines Tab/Shift+Tab navigation order
 //! - **GestureRecognizers**: High-level gesture detection (Tap, Drag, Scale,
@@ -72,17 +72,20 @@
 //! # Example: Keyboard Focus
 //!
 //! ```rust,ignore
-//! use flui_interaction::{FocusManager, FocusNodeId};
+//! use flui_interaction::{FocusManager, FocusNode};
 //!
-//! let focus_id = FocusNodeId::new(1);
+//! let manager = FocusManager::new();
+//! let node = FocusNode::new();
+//! let attachment = manager.root_scope().attach_node(&node)?;
 //!
 //! // Request focus
-//! FocusManager::global().request_focus(focus_id);
+//! node.request_focus();
 //!
 //! // Check focus
-//! if FocusManager::global().has_focus(focus_id) {
+//! if node.has_primary_focus() {
 //!     println!("We have focus!");
 //! }
+//! # Ok::<(), flui_interaction::FocusTreeError>(())
 //! ```
 //!
 //! # Example: Type-Safe IDs
@@ -119,7 +122,7 @@
 //! - `testing` - Gesture recording/replay, event builders (requires `testing` feature)
 //!
 //! ## Other
-//! - [`MouseTracker`] — Mouse enter/exit/hover tracking
+//! - [`routing::MouseTracker`] — Mouse enter/exit/hover tracking
 //! - [`PointerSignalResolver`] — Pointer signal conflict resolution
 //!
 //! # Separation from Rendering
@@ -197,14 +200,13 @@ pub mod text_input;
 // Re-exports: Gesture Recognition
 // ============================================================================
 pub use arena::{
-    DEFAULT_DISAMBIGUATION_TIMEOUT, GestureArena, GestureArenaEntry, GestureArenaMember,
-    GestureArenaTeam, GestureDisposition, PointerSignalResolver, SignalPriority, SweepModel,
-    TeamEntry, run_pointer_lifecycle,
+    GestureArena, GestureArenaEntry, GestureArenaMember, GestureArenaTeam, GestureDisposition,
+    PointerSignalResolver, SignalPriority, SweepModel, TeamEntry, run_pointer_lifecycle,
 };
 // ============================================================================
 // Re-exports: Other
 // ============================================================================
-pub use binding::GestureBinding;
+pub use binding::{GestureBinding, InvalidSamplingWindow, ResamplingModeChangeError};
 // The monotonic clock primitive now lives in `flui-foundation`; re-exported here
 // because the gesture arena's public API takes a `MonotonicClock` (and tests /
 // the headless binding construct `ManualClock`/`SystemClock` against the arena).
@@ -225,16 +227,9 @@ pub use pan_zoom::{PointerPanZoomEvent, convert_gesture, from_w3c_event};
 // ============================================================================
 // Re-exports: Geometry from flui_types
 // ============================================================================
+pub use flui_types::ImeEvent;
 pub use flui_types::geometry::{Offset, Rect};
 pub use ids::{FocusNodeId, HandlerId, PointerId};
-// Back-compat re-exports — `MouseTracker` lives in `routing` now, but was at
-// the crate root before the move (PR 163). External crates (`flui-rendering`,
-// `flui-app`) import it via `flui_interaction::MouseTracker`; the routing
-// path remains the canonical one for new code.
-pub use routing::{
-    CursorChangeCallback, MouseEnterCallback, MouseExitCallback, MouseHoverCallback, MouseTracker,
-    MouseTrackerAnnotation,
-};
 // ============================================================================
 // Re-exports: Input Processing
 // ============================================================================
@@ -264,10 +259,11 @@ pub use recognizers::drag_variants::{
 // Re-exports: Event Routing
 // ============================================================================
 pub use routing::{
-    EventPropagation, EventRouter, FocusManager, FocusNode, FocusScopeNode, FocusTraversalPolicy,
-    GlobalPointerHandler, HitTestBehavior, HitTestEntry, HitTestResult, HitTestable,
-    InteractionDispatchError, InteractionDispatchHandle, InteractionLane, KeyEventCallback,
-    KeyEventHandler, KeyEventResult, MouseRegionCallbacks, MouseRegionTarget, PathClipTarget,
+    EventPropagation, EventRouter, FocusAttachment, FocusChangeCallback, FocusDetachOutcome,
+    FocusManager, FocusNode, FocusNodeChangeCallback, FocusNodeRegistration, FocusRequestOutcome,
+    FocusScopeNode, FocusTraversalPolicy, FocusTreeError, GlobalPointerHandler, HitTestBehavior,
+    HitTestEntry, HitTestResult, HitTestable, InteractionDispatchError, InteractionDispatchHandle,
+    InteractionLane, KeyEventCallback, KeyEventHandler, KeyEventResult, PathClipTarget,
     PointerRouteHandler, PointerRouter, PointerTarget, ReadingOrderPolicy, RectProvider, RenderId,
     ResolvedRouteToken, ResolvedStep, RoutePanic, RouteResolution, RouteResolutionMiss,
     ScrollTarget, ShaderMaskTarget, TransformGuard, TraversalEdgeBehavior,
@@ -281,7 +277,7 @@ pub use settings::{
     DEFAULT_TOUCH_SLOP, GestureSettings,
 };
 pub use text_input::{
-    ClientToken, ImeEventCallback, OpaqueWindowHandle, TextInputHandle, TextInputRegistry,
+    ClientToken, DetachOutcome, ImeEventCallback, TextInputError, TextInputHandle, TextInputOwner,
 };
 // ============================================================================
 // Re-exports: Testing Utilities (feature-gated)
@@ -322,7 +318,7 @@ pub mod prelude {
     // Events (W3C-compliant)
     pub use crate::events::{CursorIcon, KeyboardEvent, PointerEvent};
     // Advanced interaction
-    pub use crate::routing::{MouseTracker, MouseTrackerAnnotation};
+    pub use crate::routing::{MouseTracker, MouseTrackerAnnotation, PointerMotionKind};
     // Input processing
     pub use crate::processing::{InputPredictor, PointerEventResampler, Velocity, VelocityTracker};
     // Event routing

@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use cursor_icon::CursorIcon;
 use flui_types::geometry::{Bounds, DevicePixels, Pixels, Point, Size, device_px, px};
 use parking_lot::Mutex;
 use wasm_bindgen::JsCast;
@@ -9,8 +10,8 @@ use wasm_bindgen::JsCast;
 use crate::{
     shared::WindowCallbacks,
     traits::{
-        DispatchEventResult, PlatformDisplay, PlatformInput, PlatformWindow, WindowAppearance,
-        WindowBackgroundAppearance, WindowBounds, WindowId,
+        CursorError, DispatchEventResult, PlatformDisplay, PlatformInput, PlatformWindow,
+        WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowId,
     },
 };
 
@@ -237,6 +238,13 @@ impl PlatformWindow for WebWindow {
 
     fn set_background_appearance(&self, _appearance: WindowBackgroundAppearance) {
         // Not applicable for web canvas
+    }
+
+    fn set_cursor(&self, cursor: CursorIcon) -> Result<(), CursorError> {
+        self.canvas
+            .style()
+            .set_property("cursor", cursor.name())
+            .map_err(|error| CursorError::Backend(format!("{error:?}")))
     }
 
     // ==================== Callback Registration ====================

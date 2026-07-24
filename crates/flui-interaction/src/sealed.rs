@@ -64,7 +64,7 @@ use crate::ids::PointerId;
 /// impl CustomGestureRecognizer for SwipePatternRecognizer {
 ///     fn on_arena_accept(&self, pointer: PointerId) {
 ///         // Called when this recognizer wins the arena
-///         println!("Pattern matched!");
+///         tracing::debug!(?pointer, "pattern matched");
 ///     }
 ///
 ///     fn on_arena_reject(&self, pointer: PointerId) {
@@ -74,10 +74,11 @@ use crate::ids::PointerId;
 /// }
 /// ```
 ///
-/// # Thread Safety
+/// # Ownership
 ///
-/// Custom recognizers must be `Send + Sync` to work with the concurrent
-/// gesture arena.
+/// Custom recognizers run synchronously on their UI owner's gesture lane.
+/// They may hold owner-local state; implementing this trait does not promise
+/// `Send` or `Sync`.
 pub trait CustomGestureRecognizer {
     /// Called when this recognizer wins the gesture arena.
     ///

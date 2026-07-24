@@ -10,7 +10,6 @@ use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 
 use crate::{
-    cursor::CursorStyle,
     shared::{PlatformHandlers, WindowCallbacks},
     traits::*,
 };
@@ -26,7 +25,6 @@ pub struct WebPlatform {
 
 struct WebState {
     handlers: PlatformHandlers,
-    foreground_executor: Arc<WebExecutor>,
     background_executor: Arc<WebExecutor>,
     clipboard: Arc<WebClipboard>,
     is_running: bool,
@@ -46,7 +44,6 @@ impl WebPlatform {
 
         let state = WebState {
             handlers: PlatformHandlers::new(),
-            foreground_executor: Arc::new(WebExecutor::new()),
             background_executor: Arc::new(WebExecutor::new()),
             clipboard: Arc::new(WebClipboard::new()),
             is_running: false,
@@ -116,10 +113,6 @@ impl Platform for WebPlatform {
         self.with_state(|s| s.background_executor.clone())
     }
 
-    fn foreground_executor(&self) -> Arc<dyn PlatformExecutor> {
-        self.with_state(|s| s.foreground_executor.clone())
-    }
-
     fn run(self: Box<Self>, on_ready: Box<dyn FnOnce(&dyn Platform)>) {
         tracing::info!("Starting web platform");
 
@@ -142,7 +135,7 @@ impl Platform for WebPlatform {
         });
     }
 
-    fn open_window(&self, options: WindowOptions) -> Result<Box<dyn PlatformWindow>> {
+    fn open_window(&self, options: WindowOptions) -> Result<Arc<dyn PlatformWindow>> {
         tracing::info!(title = %options.title, "Creating web window (canvas)");
 
         let window = WebWindow::new(
@@ -167,7 +160,7 @@ impl Platform for WebPlatform {
                 .invoke_window_event(WindowEvent::Created(WindowId(0)));
         });
 
-        Ok(Box::new(window))
+        Ok(Arc::new(window))
     }
 
     fn active_window(&self) -> Option<WindowId> {
@@ -229,38 +222,6 @@ impl Platform for WebPlatform {
 
     fn on_window_event(&self, callback: Box<dyn FnMut(WindowEvent) + Send>) {
         self.with_state(|s| s.handlers.window_event = Some(callback));
-    }
-
-    fn set_cursor_style(&self, style: CursorStyle) {
-        let css_cursor = match style {
-            CursorStyle::Arrow => "default",
-            CursorStyle::IBeam => "text",
-            CursorStyle::Crosshair => "crosshair",
-            CursorStyle::ClosedHand => "grabbing",
-            CursorStyle::OpenHand => "grab",
-            CursorStyle::PointingHand => "pointer",
-            CursorStyle::ResizeLeft => "w-resize",
-            CursorStyle::ResizeRight => "e-resize",
-            CursorStyle::ResizeLeftRight => "ew-resize",
-            CursorStyle::ResizeUp => "n-resize",
-            CursorStyle::ResizeDown => "s-resize",
-            CursorStyle::ResizeUpDown => "ns-resize",
-            CursorStyle::ResizeUpLeftDownRight => "nwse-resize",
-            CursorStyle::ResizeUpRightDownLeft => "nesw-resize",
-            CursorStyle::ResizeColumn => "col-resize",
-            CursorStyle::ResizeRow => "row-resize",
-            CursorStyle::OperationNotAllowed => "not-allowed",
-            CursorStyle::DragLink => "alias",
-            CursorStyle::DragCopy => "copy",
-            CursorStyle::ContextualMenu => "context-menu",
-            CursorStyle::None => "none",
-        };
-
-        if let Some(document) = web_sys::window().and_then(|w| w.document()) {
-            if let Some(body) = document.body() {
-                let _ = body.style().set_property("cursor", css_cursor);
-            }
-        }
     }
 
     fn app_path(&self) -> Result<std::path::PathBuf> {

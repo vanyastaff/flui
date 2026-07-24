@@ -5,10 +5,12 @@
 
 use std::{
     any::{Any, TypeId},
+    rc::Rc,
     sync::Arc,
 };
 
 use flui_foundation::{ElementId, RenderId};
+use flui_interaction::FocusManager;
 use parking_lot::RwLock;
 
 use super::build_context::BuildContext;
@@ -16,8 +18,8 @@ use crate::{element::Notification, owner::BuildOwner, tree::ElementTree};
 
 /// Concrete BuildContext implementation for Elements.
 ///
-/// `ElementBuildContext` provides the bridge between Elements and the
-/// BuildContext trait, giving Views access to:
+/// `ElementBuildContext` presents one element's owner-local
+/// [`BuildContext`] surface, giving Views access to:
 /// - Element identity and tree position
 /// - InheritedView lookups (O(1) via each node's `inherited` map)
 /// - Ancestor traversal
@@ -25,8 +27,9 @@ use crate::{element::Notification, owner::BuildOwner, tree::ElementTree};
 ///
 /// # Thread Safety
 ///
-/// This struct holds Arc references to shared state, making it safe to
-/// use across threads. The actual tree/owner access is synchronized via RwLock.
+/// The context is owner-local. Its `BuildOwner` contains an `Rc<FocusManager>`,
+/// intentionally making the context `!Send + !Sync` even though tree access is
+/// currently protected by `RwLock`.
 ///
 /// # Flutter Equivalent
 ///
@@ -237,6 +240,10 @@ impl BuildContext for ElementBuildContext {
         self.owner.read().text_input_handle().cloned()
     }
 
+    fn focus_manager(&self) -> Rc<FocusManager> {
+        self.owner.read().focus_manager()
+    }
+
     fn depend_on_inherited(&self, type_id: TypeId, callback: &mut dyn FnMut(&dyn Any)) -> bool {
         // Walk ancestors looking for an Element whose view_type_id
         // matches; the first one is the nearest InheritedView<T>.
@@ -253,23 +260,12 @@ impl BuildContext for ElementBuildContext {
             return false;
         };
 
-        // Acquire a write lock so we can mutate the matched
-        // InheritedElement's dependent map AND invoke the callback with
-        // the inherited view in the same critical section. Reading the
-        // view itself only needs a read lock, but we need write access
-        // to record the dependency, so a single write lock is
-        // sufficient.
+        // Lock owner before tree, matching the frame driver's ownership
+        // order. Both registrations happen before the callback: the
+        // provider's forward notification map and the BuildOwner's sparse
+        // reverse ownership index cannot diverge if user code panics.
+        let mut owner = self.owner.write();
         let mut tree = self.tree.write();
-
-        // Reverse edge on the dependent's own node — the same record
-        // the `build_scope` dep-sink drain writes — so this element's
-        // unmount/deactivate can deregister it from the provider's
-        // map.  Written before the provider-side record and the user
-        // callback: if the callback unwinds, both edges exist and the
-        // purge path stays consistent.
-        if let Some(self_node) = tree.get_mut(self.element_id) {
-            self_node.note_dependent_provider(ancestor_id);
-        }
 
         let Some(node) = tree.get_mut(ancestor_id) else {
             // Tree shape changed between lookup and write-lock; treat
@@ -300,6 +296,8 @@ impl BuildContext for ElementBuildContext {
 
         // Register dependency (id + depth).
         accessor.record_dependent(self_id, self_depth);
+        owner.register_inherited_dependency(self_id, ancestor_id);
+        drop(owner);
 
         // Hand the view out to the callback. The view reference is
         // borrowed for the lifetime of the callback only; it cannot
@@ -549,7 +547,11 @@ impl BuildContext for ElementBuildContext {
 
     fn mark_needs_build(&self) {
         let mut owner = self.owner.write();
-        owner.schedule_build_for(self.element_id, self.depth);
+        owner.schedule_build_for(
+            self.element_id,
+            self.depth,
+            crate::RebuildReason::StateChange,
+        );
     }
 
     fn dispatch_notification(&self, notification: &dyn Notification) {
@@ -628,15 +630,16 @@ pub(crate) struct DependentRecord {
 /// so they are buffered into `dep_sink` and applied by `build_scope` after
 /// the element is restored. `mark_needs_build` during build is a
 /// Flutter-forbidden no-op.
-/// The three things a `BuildContext` is handed that it did not compute itself: two
-/// owned frame capabilities the binding installed, and the render tree the element is
-/// mounted in.
+/// Owner- and presentation-scoped capabilities a `BuildContext` is handed
+/// rather than computing or selecting from ambient state.
 ///
-/// A bundle rather than three parameters, because every one of them is minted at the
-/// same place (`make_build_ctx`) from the same two sources, and threading them
-/// separately made `BuildCtx::new` an eight-argument function.
-#[derive(Clone, Default)]
+/// They are bundled because every field is minted at the same place
+/// (`make_build_ctx`) from the element core and its exact `BuildOwner`;
+/// threading them separately would obscure that shared ownership origin.
+#[derive(Clone)]
 pub(crate) struct BuildCapabilities {
+    /// The exact focus manager owned by the surrounding build owner.
+    pub(crate) focus_manager: Rc<FocusManager>,
     /// The binding's async task driver.
     pub(crate) async_driver: Option<flui_scheduler::AsyncDriver>,
     /// The binding's post-frame capability.
@@ -749,6 +752,10 @@ impl BuildContext for BuildCtx<'_> {
 
     fn text_input_handle(&self) -> Option<flui_interaction::TextInputHandle> {
         self.capabilities.text_input_handle.clone()
+    }
+
+    fn focus_manager(&self) -> Rc<FocusManager> {
+        Rc::clone(&self.capabilities.focus_manager)
     }
 
     fn depend_on_inherited(&self, type_id: TypeId, callback: &mut dyn FnMut(&dyn Any)) -> bool {
@@ -1216,11 +1223,10 @@ mod tests {
     }
 
     /// If the user callback passed to `depend_on_inherited` unwinds, the
-    /// registration must stay consistent: the provider records the
-    /// dependent BEFORE the callback runs, so the reverse edge on the
-    /// dependent's own node must also be written BEFORE the callback —
-    /// otherwise the unwind strands the provider-side entry and unmount
-    /// can never purge it (the leak returns through the panic path).
+    /// registration must stay consistent: the provider record and the
+    /// `BuildOwner` reverse edge are both written BEFORE the callback runs.
+    /// Otherwise the unwind strands the provider-side entry and unmount can
+    /// never purge it (the leak returns through the panic path).
     #[test]
     fn panicking_depend_on_callback_still_allows_unmount_purge() {
         let tree = Arc::new(RwLock::new(ElementTree::new()));
@@ -1259,15 +1265,13 @@ mod tests {
         // The provider-side record was written before the callback ran.
         assert_eq!(provider_dependent_count(&tree.read(), provider_id), 1);
 
-        // Unmount: the purge must still deregister the dependent —
-        // pre-fix the reverse edge was written after the callback, and
-        // the unwind skipped it, stranding this entry at 1 forever.
+        // Unmount: the owner index must still deregister the dependent.
         tree.write()
             .remove(consumer_id, &mut owner.write().element_owner_mut());
         assert_eq!(
             provider_dependent_count(&tree.read(), provider_id),
             0,
-            "the reverse edge must be written before the user callback so \
+            "the owner reverse edge must be written before the user callback so \
              a panicking callback cannot strand the registration",
         );
     }
@@ -1289,8 +1293,37 @@ mod tests {
             &tree,
             &dep_sink,
             crate::RebuildHandle::inert(),
-            BuildCapabilities::default(),
+            BuildCapabilities {
+                focus_manager: FocusManager::new(),
+                async_driver: None,
+                post_frame_handle: None,
+                text_input_handle: None,
+                pipeline_owner: None,
+            },
         );
         ctx.visit_child_elements(&mut |_| {});
+    }
+
+    #[test]
+    fn build_ctx_returns_its_owners_exact_focus_manager() {
+        let focus_manager = FocusManager::new();
+        let tree = ElementTree::new();
+        let dep_sink = parking_lot::Mutex::new(Vec::new());
+        let ctx = BuildCtx::new(
+            ElementId::new(1),
+            0,
+            &tree,
+            &dep_sink,
+            crate::RebuildHandle::inert(),
+            BuildCapabilities {
+                focus_manager: Rc::clone(&focus_manager),
+                async_driver: None,
+                post_frame_handle: None,
+                text_input_handle: None,
+                pipeline_owner: None,
+            },
+        );
+
+        assert!(Rc::ptr_eq(&ctx.focus_manager(), &focus_manager));
     }
 }

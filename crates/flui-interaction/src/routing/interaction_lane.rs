@@ -447,21 +447,21 @@ impl ResolvedHitRoute {
                 LocalEventTransform::NonInvertible => continue,
             };
             let handler = entry.handler_cell.snapshot();
-            let delivered = catch_unwind(AssertUnwindSafe(|| {
+            let delivered = RoutePanic::capture(|| {
                 handler(local_event.as_ref().unwrap_or(event));
-            }));
-            // The handler Rc must not drop inside the unwind bookkeeping below.
-            drop(handler);
-            if let Err(payload) = delivered {
-                if first_panic.is_none() {
-                    first_panic = Some(RoutePanic { payload });
-                } else {
-                    tracing::error!(
-                        "pointer target panicked after an earlier target already panicked; \
-                         only the first panic is resumed"
-                    );
-                }
-            }
+            });
+            RoutePanic::preserve_first(&mut first_panic, delivered, "pointer target");
+
+            // Re-entrant replacement or unregistration can make this snapshot
+            // the callback's final owner. Keep that destructor inside the same
+            // dispatch transaction so later hit targets, the pointer router,
+            // and lifecycle cleanup still run before the first unwind resumes.
+            let snapshot_cleanup = RoutePanic::capture(|| drop(handler));
+            RoutePanic::preserve_first(
+                &mut first_panic,
+                snapshot_cleanup,
+                "pointer target snapshot cleanup",
+            );
         }
         first_panic
     }
@@ -470,9 +470,9 @@ impl ResolvedHitRoute {
 /// The first panic captured while invoking a resolved pointer route.
 ///
 /// The dispatch owner must finish its mandatory cleanup (close the arena on
-/// Down, sweep/release on Up/Cancel, release an ephemeral route) and then call
-/// [`resume`](Self::resume) so the panic propagates under the repository panic
-/// policy.
+/// Down, sweep on Up, release on Up/Cancel, release an ephemeral route) and
+/// then call [`resume`](Self::resume) so the panic propagates under the
+/// repository panic policy.
 #[doc(hidden)]
 #[must_use = "a captured route panic must be resumed after dispatch cleanup"]
 pub struct RoutePanic {
@@ -480,6 +480,45 @@ pub struct RoutePanic {
 }
 
 impl RoutePanic {
+    /// Run one synchronous dispatch phase and retain its return value unless it
+    /// unwinds.
+    pub(crate) fn try_run<T>(run: impl FnOnce() -> T) -> Result<T, Self> {
+        catch_unwind(AssertUnwindSafe(run)).map_err(|payload| Self { payload })
+    }
+
+    /// Capture an unwind from one synchronous dispatch phase.
+    pub(crate) fn capture(run: impl FnOnce()) -> Option<Self> {
+        Self::try_run(run).err()
+    }
+
+    /// Keep transaction ordering deterministic when several phases panic.
+    ///
+    /// The earliest payload is resumed after mandatory cleanup; later payloads
+    /// are reported but deliberately cannot replace it.
+    pub(crate) fn preserve_first(
+        first: &mut Option<Self>,
+        candidate: Option<Self>,
+        phase: &'static str,
+    ) {
+        let Some(candidate) = candidate else {
+            return;
+        };
+        if first.is_none() {
+            *first = Some(candidate);
+        } else {
+            tracing::error!(
+                phase,
+                "dispatch phase panicked after an earlier phase; only the first panic is resumed"
+            );
+            // Panic payloads are arbitrary user values and may themselves
+            // panic in Drop. Discarding a secondary payload normally could
+            // therefore replace the first panic (or abort during unwind).
+            // This exceptional path deliberately leaks it to preserve the
+            // transaction's deterministic first-panic guarantee.
+            std::mem::forget(candidate);
+        }
+    }
+
     /// Continue unwinding with the captured payload.
     pub fn resume(self) -> ! {
         resume_unwind(self.payload)
@@ -1064,7 +1103,18 @@ impl InteractionDispatchHandle {
             .get(&token.route_id)
             .cloned()
             .ok_or(InteractionDispatchError::StaleRoute)?;
-        Ok(route.invoke(event))
+        let mut first_panic = route.invoke(event);
+        // A hit callback may release this token re-entrantly, leaving the
+        // invocation snapshot as the route's final owner. Keep its entry and
+        // HandlerCell destructors in the transaction returned to the binding,
+        // rather than unwinding before the root router and arena lifecycle.
+        let snapshot_cleanup = RoutePanic::capture(|| drop(route));
+        RoutePanic::preserve_first(
+            &mut first_panic,
+            snapshot_cleanup,
+            "resolved pointer route snapshot cleanup",
+        );
+        Ok(first_panic)
     }
 
     /// Release a cached route after its pointer sequence completes.
@@ -1134,7 +1184,7 @@ pub fn resolve_shader_mask_target(
 #[cfg(test)]
 mod tests {
     use std::cell::Cell;
-    use std::panic::{AssertUnwindSafe, catch_unwind};
+    use std::panic::{AssertUnwindSafe, catch_unwind, panic_any};
     use std::rc::Rc;
     use std::sync::atomic::AtomicU64;
     use std::thread::ThreadId;
@@ -1311,6 +1361,31 @@ mod tests {
                 .expect("panic payload is the original &str");
             assert_eq!(message, "first target panic");
         });
+    }
+
+    struct PanickingPayloadDrop;
+
+    impl Drop for PanickingPayloadDrop {
+        fn drop(&mut self) {
+            panic!("secondary payload drop panic");
+        }
+    }
+
+    #[test]
+    fn secondary_panic_payload_cannot_replace_the_first_while_being_discarded() {
+        let resumed = catch_unwind(AssertUnwindSafe(|| {
+            let mut first = RoutePanic::capture(|| panic!("first dispatch panic"));
+            let secondary = RoutePanic::capture(|| panic_any(PanickingPayloadDrop));
+            RoutePanic::preserve_first(&mut first, secondary, "secondary test phase");
+            first.expect("first panic captured").resume();
+        }))
+        .expect_err("the first panic must resume");
+
+        assert_eq!(
+            resumed.downcast_ref::<&str>(),
+            Some(&"first dispatch panic"),
+            "dropping a hostile secondary payload must not replace the first panic"
+        );
     }
 
     struct DropProbe {

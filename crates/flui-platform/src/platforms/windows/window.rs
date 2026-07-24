@@ -3,6 +3,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use anyhow::{Context, Result};
+use cursor_icon::CursorIcon;
 use flui_types::geometry::{Bounds, DevicePixels, Pixels, Point, Size, device_px, px};
 use parking_lot::Mutex;
 use raw_window_handle::{
@@ -174,6 +175,7 @@ impl WindowsWindow {
                 config,
                 is_hovered: std::cell::Cell::new(false),
                 modifiers: std::cell::Cell::new(keyboard_types::Modifiers::empty()),
+                cursor: std::cell::Cell::new(CursorIcon::default()),
                 restore_style: std::cell::Cell::new(0),
             });
             let context_ptr = Box::into_raw(context);
@@ -467,155 +469,44 @@ impl WindowsWindow {
             ctx.mode.get().is_minimized()
         }
     }
-}
 
-impl PlatformWindow for Arc<WindowsWindow> {
-    fn physical_size(&self) -> Size<DevicePixels> {
-        self.as_ref().physical_size()
-    }
+    pub(super) fn apply_native_cursor(cursor: CursorIcon) -> Result<(), CursorError> {
+        let resource = match cursor {
+            CursorIcon::Pointer | CursorIcon::Copy | CursorIcon::Grab | CursorIcon::Grabbing => {
+                IDC_HAND
+            }
+            CursorIcon::Progress => IDC_APPSTARTING,
+            CursorIcon::Wait => IDC_WAIT,
+            CursorIcon::Cell | CursorIcon::Crosshair => IDC_CROSS,
+            CursorIcon::Text | CursorIcon::VerticalText => IDC_IBEAM,
+            CursorIcon::Move | CursorIcon::AllScroll => IDC_SIZEALL,
+            CursorIcon::NoDrop | CursorIcon::NotAllowed => IDC_NO,
+            CursorIcon::EResize
+            | CursorIcon::WResize
+            | CursorIcon::EwResize
+            | CursorIcon::ColResize => IDC_SIZEWE,
+            CursorIcon::NResize
+            | CursorIcon::SResize
+            | CursorIcon::NsResize
+            | CursorIcon::RowResize => IDC_SIZENS,
+            CursorIcon::NeResize | CursorIcon::SwResize | CursorIcon::NeswResize => IDC_SIZENESW,
+            CursorIcon::NwResize | CursorIcon::SeResize | CursorIcon::NwseResize => IDC_SIZENWSE,
+            CursorIcon::Default
+            | CursorIcon::ContextMenu
+            | CursorIcon::Help
+            | CursorIcon::Alias
+            | CursorIcon::ZoomIn
+            | CursorIcon::ZoomOut
+            | CursorIcon::DndAsk => IDC_ARROW,
+            _ => IDC_ARROW,
+        };
 
-    fn logical_size(&self) -> Size<Pixels> {
-        self.as_ref().logical_size()
-    }
-
-    fn scale_factor(&self) -> f64 {
-        self.as_ref().scale_factor() as f64
-    }
-
-    fn request_redraw(&self) {
-        PlatformWindow::request_redraw(self.as_ref())
-    }
-
-    fn is_focused(&self) -> bool {
-        PlatformWindow::is_focused(self.as_ref())
-    }
-
-    fn is_visible(&self) -> bool {
-        PlatformWindow::is_visible(self.as_ref())
-    }
-
-    // Query methods (US2)
-    fn bounds(&self) -> Bounds<Pixels> {
-        PlatformWindow::bounds(self.as_ref())
-    }
-    fn content_size(&self) -> Size<Pixels> {
-        PlatformWindow::content_size(self.as_ref())
-    }
-    fn window_bounds(&self) -> WindowBounds {
-        PlatformWindow::window_bounds(self.as_ref())
-    }
-    fn is_maximized(&self) -> bool {
-        PlatformWindow::is_maximized(self.as_ref())
-    }
-    fn is_fullscreen(&self) -> bool {
-        PlatformWindow::is_fullscreen(self.as_ref())
-    }
-    fn is_active(&self) -> bool {
-        PlatformWindow::is_active(self.as_ref())
-    }
-    fn is_hovered(&self) -> bool {
-        PlatformWindow::is_hovered(self.as_ref())
-    }
-    fn mouse_position(&self) -> Point<Pixels> {
-        PlatformWindow::mouse_position(self.as_ref())
-    }
-    fn modifiers(&self) -> keyboard_types::Modifiers {
-        PlatformWindow::modifiers(self.as_ref())
-    }
-    fn appearance(&self) -> WindowAppearance {
-        PlatformWindow::appearance(self.as_ref())
-    }
-    fn display(&self) -> Option<Arc<dyn PlatformDisplay>> {
-        PlatformWindow::display(self.as_ref())
-    }
-    fn get_title(&self) -> String {
-        PlatformWindow::get_title(self.as_ref())
-    }
-
-    // Control methods (US2)
-    fn set_title(&self, title: &str) {
-        PlatformWindow::set_title(self.as_ref(), title)
-    }
-    fn activate(&self) {
-        PlatformWindow::activate(self.as_ref())
-    }
-    fn minimize(&self) {
-        PlatformWindow::minimize(self.as_ref())
-    }
-    fn maximize(&self) {
-        PlatformWindow::maximize(self.as_ref())
-    }
-    fn restore(&self) {
-        PlatformWindow::restore(self.as_ref())
-    }
-    fn toggle_fullscreen(&self) {
-        PlatformWindow::toggle_fullscreen(self.as_ref())
-    }
-    fn resize(&self, size: Size<Pixels>) {
-        PlatformWindow::resize(self.as_ref(), size)
-    }
-    fn close(&self) {
-        PlatformWindow::close(self.as_ref())
-    }
-    fn set_background_appearance(&self, appearance: WindowBackgroundAppearance) {
-        PlatformWindow::set_background_appearance(self.as_ref(), appearance)
-    }
-
-    // Callbacks (US1)
-    fn on_input(&self, callback: Box<dyn FnMut(PlatformInput) -> DispatchEventResult + Send>) {
-        PlatformWindow::on_input(self.as_ref(), callback)
-    }
-
-    fn on_request_frame(&self, callback: Box<dyn FnMut() + Send>) {
-        PlatformWindow::on_request_frame(self.as_ref(), callback)
-    }
-
-    fn on_resize(&self, callback: Box<dyn FnMut(Size<Pixels>, f32) + Send>) {
-        PlatformWindow::on_resize(self.as_ref(), callback)
-    }
-
-    fn on_moved(&self, callback: Box<dyn FnMut() + Send>) {
-        PlatformWindow::on_moved(self.as_ref(), callback)
-    }
-
-    fn on_close(&self, callback: Box<dyn FnOnce() + Send>) {
-        PlatformWindow::on_close(self.as_ref(), callback)
-    }
-
-    fn on_should_close(&self, callback: Box<dyn FnMut() -> bool + Send>) {
-        PlatformWindow::on_should_close(self.as_ref(), callback)
-    }
-
-    fn on_active_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
-        PlatformWindow::on_active_status_change(self.as_ref(), callback)
-    }
-
-    fn on_visibility_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
-        PlatformWindow::on_visibility_status_change(self.as_ref(), callback)
-    }
-
-    fn on_hover_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
-        PlatformWindow::on_hover_status_change(self.as_ref(), callback)
-    }
-
-    fn on_appearance_changed(&self, callback: Box<dyn FnMut() + Send>) {
-        PlatformWindow::on_appearance_changed(self.as_ref(), callback)
-    }
-
-    fn window_handle(
-        &self,
-    ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
-        PlatformWindow::window_handle(self.as_ref())
-    }
-
-    fn display_handle(
-        &self,
-    ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
-        PlatformWindow::display_handle(self.as_ref())
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self.as_ref()
+        unsafe {
+            let handle = LoadCursorW(None, resource)
+                .map_err(|error| CursorError::Backend(error.to_string()))?;
+            SetCursor(Some(handle));
+        }
+        Ok(())
     }
 }
 
@@ -650,6 +541,21 @@ impl PlatformWindow for WindowsWindow {
 
     fn is_visible(&self) -> bool {
         self.state.lock().visible
+    }
+
+    fn set_cursor(&self, cursor: CursorIcon) -> Result<(), CursorError> {
+        unsafe {
+            let ctx_ptr =
+                GetWindowLongPtrW(self.hwnd, GWLP_USERDATA) as *mut super::platform::WindowContext;
+            let context = ctx_ptr
+                .as_ref()
+                .ok_or_else(|| CursorError::Backend("the native window is closed".to_string()))?;
+            context.cursor.set(cursor);
+            if context.is_hovered.get() {
+                Self::apply_native_cursor(cursor)?;
+            }
+        }
+        Ok(())
     }
 
     // ==================== Query Methods (US2) ====================

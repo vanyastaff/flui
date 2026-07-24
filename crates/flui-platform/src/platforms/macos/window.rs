@@ -8,6 +8,7 @@ use cocoa::{
     base::{BOOL, NO, YES, id, nil},
     foundation::NSRect,
 };
+use cursor_icon::CursorIcon;
 use flui_types::geometry::{Bounds, DevicePixels, Pixels, Point, Size};
 use objc::{
     class,
@@ -26,7 +27,7 @@ use super::view;
 use crate::{
     config::WindowConfiguration,
     shared::WindowCallbacks,
-    traits::{DispatchEventResult, PlatformInput, PlatformWindow, WindowOptions},
+    traits::{CursorError, DispatchEventResult, PlatformInput, PlatformWindow, WindowOptions},
 };
 
 /// macOS window wrapper around NSWindow
@@ -63,6 +64,9 @@ struct MacOSWindowState {
 
     /// Scale factor (1.0 for non-Retina, 2.0 for Retina)
     scale_factor: f64,
+
+    /// Cursor selected by this exact window's presentation.
+    cursor: CursorIcon,
 }
 
 impl MacOSWindow {
@@ -151,6 +155,7 @@ impl MacOSWindow {
                         size: options.size,
                     },
                     scale_factor: scale,
+                    cursor: CursorIcon::default(),
                 })),
                 windows_map: Arc::clone(&windows_map),
                 callbacks,
@@ -349,6 +354,71 @@ impl PlatformWindow for MacOSWindow {
         }
     }
 
+    fn set_cursor(&self, cursor: CursorIcon) -> Result<(), CursorError> {
+        self.state.lock().cursor = cursor;
+
+        // SAFETY: every selector below is an NSCursor class constructor
+        // available on the supported macOS baseline. The returned singleton
+        // remains owned by AppKit and `set` only selects it for the current
+        // pointer location.
+        unsafe {
+            let ns_cursor: id = match cursor {
+                CursorIcon::ContextMenu => msg_send![class!(NSCursor), contextualMenuCursor],
+                CursorIcon::Pointer => msg_send![class!(NSCursor), pointingHandCursor],
+                CursorIcon::Cell | CursorIcon::Crosshair => {
+                    msg_send![class!(NSCursor), crosshairCursor]
+                }
+                CursorIcon::Text => msg_send![class!(NSCursor), IBeamCursor],
+                CursorIcon::VerticalText => {
+                    msg_send![class!(NSCursor), IBeamCursorForVerticalLayout]
+                }
+                CursorIcon::Copy => msg_send![class!(NSCursor), dragCopyCursor],
+                CursorIcon::Move | CursorIcon::Grabbing => {
+                    msg_send![class!(NSCursor), closedHandCursor]
+                }
+                CursorIcon::Grab => msg_send![class!(NSCursor), openHandCursor],
+                CursorIcon::NoDrop | CursorIcon::NotAllowed => {
+                    msg_send![class!(NSCursor), operationNotAllowedCursor]
+                }
+                CursorIcon::EResize
+                | CursorIcon::WResize
+                | CursorIcon::EwResize
+                | CursorIcon::ColResize => {
+                    msg_send![class!(NSCursor), resizeLeftRightCursor]
+                }
+                CursorIcon::NResize
+                | CursorIcon::SResize
+                | CursorIcon::NsResize
+                | CursorIcon::RowResize => {
+                    msg_send![class!(NSCursor), resizeUpDownCursor]
+                }
+                CursorIcon::Default
+                | CursorIcon::Help
+                | CursorIcon::Progress
+                | CursorIcon::Wait
+                | CursorIcon::Alias
+                | CursorIcon::NeResize
+                | CursorIcon::NwResize
+                | CursorIcon::SeResize
+                | CursorIcon::SwResize
+                | CursorIcon::NeswResize
+                | CursorIcon::NwseResize
+                | CursorIcon::AllScroll
+                | CursorIcon::ZoomIn
+                | CursorIcon::ZoomOut
+                | CursorIcon::DndAsk => msg_send![class!(NSCursor), arrowCursor],
+                _ => msg_send![class!(NSCursor), arrowCursor],
+            };
+            if ns_cursor == nil {
+                return Err(CursorError::Backend(
+                    "AppKit returned a null NSCursor".to_string(),
+                ));
+            }
+            let _: () = msg_send![ns_cursor, set];
+        }
+        Ok(())
+    }
+
     // ==================== Callback Registration ====================
 
     fn on_input(&self, callback: Box<dyn FnMut(PlatformInput) -> DispatchEventResult + Send>) {
@@ -405,130 +475,6 @@ impl PlatformWindow for MacOSWindow {
 
     fn as_any(&self) -> &dyn std::any::Any {
         self
-    }
-}
-
-/// Delegating impl so `Arc<MacOSWindow>` can be boxed as a `PlatformWindow`
-/// (mirrors the Windows backend).
-impl PlatformWindow for Arc<MacOSWindow> {
-    fn physical_size(&self) -> Size<DevicePixels> {
-        self.as_ref().physical_size()
-    }
-
-    fn logical_size(&self) -> Size<Pixels> {
-        self.as_ref().logical_size()
-    }
-
-    fn scale_factor(&self) -> f64 {
-        PlatformWindow::scale_factor(self.as_ref())
-    }
-
-    fn request_redraw(&self) {
-        PlatformWindow::request_redraw(self.as_ref())
-    }
-
-    fn is_focused(&self) -> bool {
-        PlatformWindow::is_focused(self.as_ref())
-    }
-
-    fn is_visible(&self) -> bool {
-        PlatformWindow::is_visible(self.as_ref())
-    }
-
-    fn bounds(&self) -> Bounds<Pixels> {
-        PlatformWindow::bounds(self.as_ref())
-    }
-
-    fn get_title(&self) -> String {
-        PlatformWindow::get_title(self.as_ref())
-    }
-
-    fn set_title(&self, title: &str) {
-        PlatformWindow::set_title(self.as_ref(), title)
-    }
-
-    fn activate(&self) {
-        PlatformWindow::activate(self.as_ref())
-    }
-
-    fn minimize(&self) {
-        PlatformWindow::minimize(self.as_ref())
-    }
-
-    fn maximize(&self) {
-        PlatformWindow::maximize(self.as_ref())
-    }
-
-    fn restore(&self) {
-        PlatformWindow::restore(self.as_ref())
-    }
-
-    fn toggle_fullscreen(&self) {
-        PlatformWindow::toggle_fullscreen(self.as_ref())
-    }
-
-    fn resize(&self, size: Size<Pixels>) {
-        PlatformWindow::resize(self.as_ref(), size)
-    }
-
-    fn close(&self) {
-        PlatformWindow::close(self.as_ref())
-    }
-
-    fn on_input(&self, callback: Box<dyn FnMut(PlatformInput) -> DispatchEventResult + Send>) {
-        PlatformWindow::on_input(self.as_ref(), callback)
-    }
-
-    fn on_request_frame(&self, callback: Box<dyn FnMut() + Send>) {
-        PlatformWindow::on_request_frame(self.as_ref(), callback)
-    }
-
-    fn on_resize(&self, callback: Box<dyn FnMut(Size<Pixels>, f32) + Send>) {
-        PlatformWindow::on_resize(self.as_ref(), callback)
-    }
-
-    fn on_moved(&self, callback: Box<dyn FnMut() + Send>) {
-        PlatformWindow::on_moved(self.as_ref(), callback)
-    }
-
-    fn on_close(&self, callback: Box<dyn FnOnce() + Send>) {
-        PlatformWindow::on_close(self.as_ref(), callback)
-    }
-
-    fn on_should_close(&self, callback: Box<dyn FnMut() -> bool + Send>) {
-        PlatformWindow::on_should_close(self.as_ref(), callback)
-    }
-
-    fn on_active_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
-        PlatformWindow::on_active_status_change(self.as_ref(), callback)
-    }
-
-    fn on_visibility_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
-        PlatformWindow::on_visibility_status_change(self.as_ref(), callback)
-    }
-
-    fn on_hover_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
-        PlatformWindow::on_hover_status_change(self.as_ref(), callback)
-    }
-
-    fn on_appearance_changed(&self, callback: Box<dyn FnMut() + Send>) {
-        PlatformWindow::on_appearance_changed(self.as_ref(), callback)
-    }
-
-    fn window_handle(
-        &self,
-    ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
-        PlatformWindow::window_handle(self.as_ref())
-    }
-
-    fn display_handle(
-        &self,
-    ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
-        PlatformWindow::display_handle(self.as_ref())
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self.as_ref()
     }
 }
 

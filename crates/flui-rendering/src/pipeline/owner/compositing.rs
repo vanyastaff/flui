@@ -94,8 +94,8 @@ impl PipelineOwner<Compositing> {
             self.scheduler
                 .retain_paint_queue(&actions.remove_from_paint_queue);
         }
-        for (id, depth) in actions.mark_needs_paint {
-            self.add_node_needing_paint(id, depth);
+        for id in actions.mark_needs_paint {
+            self.mark_needs_paint(id);
         }
 
         // Retain-capacity idiom: `clear()` preserves the Vec's backing
@@ -174,14 +174,12 @@ impl PipelineOwner<Compositing> {
             node.clear_needs_paint();
             actions.remove_from_paint_queue.insert(id);
             node.clear_needs_compositing_bits_update();
-            let depth = self.render_tree.depth(id).unwrap_or(0) as usize;
-            actions.mark_needs_paint.push((id, depth));
+            actions.mark_needs_paint.push(id);
         } else if old_needs_compositing != new_needs_compositing {
             // Flutter object.dart:3252 — compositing shape changed:
             // mark paint dirty so the compositor sees the new shape.
             node.clear_needs_compositing_bits_update();
-            let depth = self.render_tree.depth(id).unwrap_or(0) as usize;
-            actions.mark_needs_paint.push((id, depth));
+            actions.mark_needs_paint.push(id);
         } else {
             // Flutter object.dart:3255 — no shape change: just clear
             // the bits-update flag.
@@ -202,10 +200,10 @@ impl PipelineOwner<Compositing> {
 /// post-walk.
 #[derive(Default)]
 struct CompositingWalkActions {
-    /// `(id, depth)` pairs to enqueue via `add_node_needing_paint`
-    /// after the walk. Either the lost-boundary or compositing-shape-
-    /// changed branch may push here.
-    mark_needs_paint: Vec<(RenderId, usize)>,
+    /// Render objects to invalidate through the boundary-walking
+    /// `mark_needs_paint` path after the walk. Either the lost-boundary or
+    /// compositing-shape-changed branch may push here.
+    mark_needs_paint: Vec<RenderId>,
     /// Ids to drop from `dirty.needs_paint` before the re-enqueue
     /// (lost-boundary branch only — a queued paint targeted the node
     /// as-a-boundary, which it no longer is).

@@ -212,7 +212,11 @@ where
     /// element is not slab-addressable, so `build_scope` could not reach
     /// it anyway); a `debug_assert!` makes that framework-invariant
     /// violation loud in tests.
-    pub(crate) fn schedule_self_build(&self, owner: &mut crate::ElementOwner<'_>) {
+    pub(crate) fn schedule_self_build(
+        &self,
+        owner: &mut crate::ElementOwner<'_>,
+        reason: crate::RebuildReason,
+    ) {
         debug_assert!(
             self.self_id.is_some(),
             "ElementCore::schedule_self_build called before set_self_id: \
@@ -221,7 +225,7 @@ where
              setState can schedule it."
         );
         if let Some(id) = self.self_id {
-            owner.schedule_build_for(id, self.depth);
+            owner.schedule_build_for(id, self.depth, reason);
         }
     }
 
@@ -520,15 +524,15 @@ where
     /// # Example
     ///
     /// ```rust,ignore
-    /// let mark_dirty = core.create_mark_dirty_callback();
+    /// let mark_dirty = core.create_mark_dirty_callback(RebuildReason::AnimationTick);
     /// animation.add_listener(mark_dirty);
     /// ```
-    pub fn create_mark_dirty_callback(&self) -> ListenerCallback {
+    pub fn create_mark_dirty_callback(&self, reason: crate::RebuildReason) -> ListenerCallback {
         let dirty = Arc::clone(&self.dirty);
         let handle = self.rebuild_handle();
         Arc::new(move || {
             dirty.store(true, Ordering::Relaxed);
-            handle.schedule();
+            handle.schedule(reason);
         })
     }
 

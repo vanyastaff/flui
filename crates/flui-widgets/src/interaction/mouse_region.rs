@@ -4,8 +4,8 @@ use std::rc::Rc;
 
 use flui_objects::RenderMouseRegion;
 use flui_rendering::hit_testing::{
-    CursorIcon, DeviceId, HitTestBehavior, InputEvent, MouseEnterCallback, MouseExitCallback,
-    MouseHoverCallback, MouseRegionCallbacks, PointerEvent, PointerEventExt as _,
+    CursorIcon, DeviceId, HitTestBehavior, MouseEnterCallback, MouseExitCallback,
+    MouseHoverCallback, MouseRegionCallbacks,
 };
 use flui_rendering::protocol::BoxProtocol;
 use flui_types::Offset;
@@ -123,68 +123,18 @@ impl MouseRegion {
         }
     }
 
-    fn has_mouse_tracker_callbacks(&self) -> bool {
-        self.on_enter.is_some() || self.on_exit.is_some()
+    fn has_callbacks(&self) -> bool {
+        self.on_enter.is_some() || self.on_hover.is_some() || self.on_exit.is_some()
     }
 
-    /// The owner-local hover adapter: forwards each pointer `Move` landing on
-    /// the region to `on_hover` (FLUI models Flutter's hover stream as `Move`
-    /// events delivered through ordinary pointer dispatch).
-    fn hover_handler(on_hover: MouseHoverCallback) -> impl Fn(&PointerEvent) + 'static {
-        move |event: &PointerEvent| {
-            if matches!(event, PointerEvent::Move(_)) {
-                let device_id = InputEvent::Pointer(event.clone()).device_id().unwrap_or(0);
-                on_hover(device_id, event.position());
-            }
-        }
-    }
-
-    /// Keep the render object's hover target in sync with `on_hover`:
-    /// register on first use, replace inside the existing cell on rebuild,
-    /// unregister when the callback is removed.
-    fn sync_hover_target(
-        &self,
-        ctx: &flui_view::RenderObjectContext<'_>,
-        render_object: &mut RenderMouseRegion,
-    ) {
-        match (self.on_hover.clone(), render_object.hover_target()) {
-            (Some(on_hover), Some(target)) => {
-                if let Err(error) = ctx.replace_pointer(target, Self::hover_handler(on_hover)) {
-                    tracing::warn!(?error, "MouseRegion hover handler replacement failed");
-                }
-            }
-            (Some(on_hover), None) => match ctx.register_pointer(Self::hover_handler(on_hover)) {
-                Ok(target) => render_object.set_hover_target(Some(target)),
-                Err(error) => tracing::debug!(
-                    ?error,
-                    "MouseRegion mounted without an active interaction lane; \
-                         hover events will not be delivered"
-                ),
-            },
-            (None, Some(target)) => {
-                if let Err(error) = ctx.unregister_pointer(target) {
-                    tracing::debug!(?error, "MouseRegion hover target unregistration failed");
-                }
-                render_object.set_hover_target(None);
-            }
-            (None, None) => {}
-        }
-    }
-
-    /// Keep the render object's mouse-region target in sync with enter/exit
-    /// callbacks. Hover is delivered by ordinary pointer dispatch, matching
-    /// Flutter's `RenderMouseRegion.handleEvent`; the same callback set is
-    /// still stored in one owner-local mouse cell so future tracker paths can
-    /// observe replacements consistently.
+    /// Keep the render object's one mouse-region target in sync with the
+    /// complete enter/hover/exit callback set.
     fn sync_mouse_region_target(
         &self,
         ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut RenderMouseRegion,
     ) {
-        match (
-            self.has_mouse_tracker_callbacks(),
-            render_object.mouse_region_target(),
-        ) {
+        match (self.has_callbacks(), render_object.mouse_region_target()) {
             (true, Some(target)) => {
                 if let Err(error) = ctx.replace_mouse_region(target, self.mouse_callbacks()) {
                     tracing::warn!(?error, "MouseRegion callback replacement failed");
@@ -217,7 +167,6 @@ impl RenderView for MouseRegion {
         let mut render_object = RenderMouseRegion::new();
         self.configure(&mut render_object);
         self.sync_mouse_region_target(ctx, &mut render_object);
-        self.sync_hover_target(ctx, &mut render_object);
         render_object
     }
 
@@ -228,7 +177,6 @@ impl RenderView for MouseRegion {
     ) {
         self.configure(render_object);
         self.sync_mouse_region_target(ctx, render_object);
-        self.sync_hover_target(ctx, render_object);
     }
 
     fn did_unmount_render_object(
@@ -236,14 +184,6 @@ impl RenderView for MouseRegion {
         ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
     ) {
-        // Unmount removes the hover target from NEW route resolution; active
-        // cached routes retain their handler cells through Up/Cancel.
-        if let Some(target) = render_object.hover_target() {
-            if let Err(error) = ctx.unregister_pointer(target) {
-                tracing::debug!(?error, "MouseRegion hover target unregistration failed");
-            }
-            render_object.set_hover_target(None);
-        }
         if let Some(target) = render_object.mouse_region_target() {
             if let Err(error) = ctx.unregister_mouse_region(target) {
                 tracing::debug!(?error, "MouseRegion target unregistration failed");

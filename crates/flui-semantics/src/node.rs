@@ -4,15 +4,16 @@
 //! one or more render objects. Non-boundary render objects merge their
 //! semantics into the nearest boundary ancestor.
 
-use flui_foundation::{ElementId, SemanticsId};
+use flui_foundation::{ElementId, RenderId, SemanticsId};
 use flui_types::{
     Matrix4,
     geometry::{Pixels, Rect},
 };
 
 // Use our optimized types from flui-semantics
-use crate::configuration::SemanticsConfiguration;
-use crate::update::SemanticsNodeData;
+use crate::{
+    configuration::SemanticsConfiguration, identity::AccessibilityNodeId, update::SemanticsNodeData,
+};
 
 // ============================================================================
 // SEMANTICS NODE
@@ -45,7 +46,7 @@ use crate::update::SemanticsNodeData;
 /// node.config_mut()
 ///     .add_action(SemanticsAction::Tap, Arc::new(|_, _| {}));
 ///
-/// assert!(node.has_content());
+/// assert!(node.has_been_annotated());
 /// assert!(node.config().has_action(SemanticsAction::Tap));
 /// ```
 #[derive(Debug, Clone, Default)]
@@ -60,6 +61,12 @@ pub struct SemanticsNode {
     // ========== Cross-tree Reference ==========
     /// The render element that owns this semantics node.
     element_id: Option<ElementId>,
+
+    /// The render object that forms this semantics boundary.
+    ///
+    /// This generational identity survives semantics-arena rebuilds and is
+    /// the sole source of the OS-facing [`AccessibilityNodeId`].
+    source_render_id: Option<RenderId>,
 
     // ========== Semantic Configuration ==========
     /// Full semantic configuration (label, flags, actions, etc.).
@@ -90,6 +97,7 @@ impl SemanticsNode {
             parent: None,
             children: Vec::new(),
             element_id: None,
+            source_render_id: None,
             config: SemanticsConfiguration::new(),
             rect: Rect::ZERO,
             transform: None,
@@ -100,6 +108,13 @@ impl SemanticsNode {
     /// Creates a node with an associated element ID.
     pub fn with_element_id(mut self, element_id: ElementId) -> Self {
         self.element_id = Some(element_id);
+        self
+    }
+
+    /// Associates this semantics boundary with its source render object.
+    #[must_use]
+    pub fn with_source_render_id(mut self, render_id: RenderId) -> Self {
+        self.source_render_id = Some(render_id);
         self
     }
 
@@ -156,6 +171,20 @@ impl SemanticsNode {
     /// Sets the associated element ID.
     pub fn set_element_id(&mut self, element_id: Option<ElementId>) {
         self.element_id = element_id;
+    }
+
+    /// Returns the render object that forms this semantics boundary.
+    #[inline]
+    pub fn source_render_id(&self) -> Option<RenderId> {
+        self.source_render_id
+    }
+
+    /// Returns the stable OS-facing identity derived from the source render
+    /// object, or `None` for a manually-created node that has not been bound to
+    /// a render boundary.
+    #[inline]
+    pub fn accessibility_id(&self) -> Option<AccessibilityNodeId> {
+        self.source_render_id.map(AccessibilityNodeId::from)
     }
 
     // ========== Semantic Configuration ==========
@@ -241,24 +270,11 @@ impl SemanticsNode {
         self.dirty = true;
     }
 
-    // ========== Content Checking ==========
+    // ========== Annotation Checking ==========
 
-    /// Returns true if this node has semantic content.
-    ///
-    /// A node has semantic content if it has:
-    /// - A label, value, or hint
-    /// - Any flags set (button, link, etc.)
-    /// - Any supported actions
-    pub fn has_content(&self) -> bool {
-        self.config.has_content()
-    }
-
-    /// Returns true if this node is a semantics boundary.
-    ///
-    /// Boundary nodes create their own semantics node in the tree.
-    /// Non-boundary nodes merge into their parent boundary.
-    pub fn is_semantics_boundary(&self) -> bool {
-        self.config.is_semantics_boundary() || self.has_content()
+    /// Returns whether semantic payload was assigned to this node.
+    pub fn has_been_annotated(&self) -> bool {
+        self.config.has_been_annotated()
     }
 
     // ========== Data Export ==========
@@ -268,7 +284,7 @@ impl SemanticsNode {
         SemanticsNodeData {
             id: (id.get() - 1) as u64,
             flags: self.config.flags().bits(),
-            actions: self.config.actions_as_bits(),
+            actions: self.config.effective_actions_as_bits(),
             label: self.config.label().map(|l| l.string.clone()),
             value: self.config.value().map(|v| v.string.clone()),
             increased_value: self.config.increased_value().map(|v| v.string.clone()),
@@ -279,8 +295,6 @@ impl SemanticsNode {
             rect: self.rect,
             transform: self.transform.unwrap_or(Matrix4::IDENTITY),
             children: self.children.iter().map(|c| (c.get() - 1) as u64).collect(),
-            elevation: self.config.elevation(),
-            thickness: self.config.thickness(),
             platform_view_id: self.config.platform_view_id(),
             max_value_length: self.config.max_value_length(),
             current_value_length: self.config.current_value_length(),
@@ -294,12 +308,13 @@ impl SemanticsNode {
 
     // ========== Merging ==========
 
-    /// Absorbs another node's configuration + rect into this one.
+    /// Absorbs another node's configuration into this one.
     ///
     /// Used when a non-boundary render object's semantics should be merged
     /// into its parent boundary. Delegates to
-    /// [`SemanticsConfiguration::absorb`] for the config side and unions
-    /// the rectangles on the geometry side.
+    /// [`SemanticsConfiguration::absorb`] while preserving this node's source
+    /// render-object geometry. A merged descendant contributes payload, not a
+    /// larger accessibility hit region.
     ///
     /// **Naming**: renamed from `merge` → `absorb` for consistency
     /// with [`SemanticsConfiguration::absorb`] and the Flutter convention
@@ -308,14 +323,6 @@ impl SemanticsNode {
     /// FLUI keeps the convenience but aligns naming).
     pub fn absorb(&mut self, other: &SemanticsNode) {
         self.config.absorb(&other.config);
-
-        // Expand rect to include other's rect
-        if self.rect == Rect::ZERO {
-            self.rect = other.rect;
-        } else if other.rect != Rect::ZERO {
-            self.rect = self.rect.union(&other.rect);
-        }
-
         self.dirty = true;
     }
 }
@@ -340,8 +347,10 @@ mod tests {
         assert!(node.parent().is_none());
         assert!(node.children().is_empty());
         assert!(node.element_id().is_none());
+        assert!(node.source_render_id().is_none());
+        assert!(node.accessibility_id().is_none());
         assert!(node.is_dirty());
-        assert!(!node.has_content());
+        assert!(!node.has_been_annotated());
     }
 
     #[test]
@@ -361,7 +370,7 @@ mod tests {
 
         assert!(node.config().is_button());
         assert_eq!(node.label(), Some("Submit"));
-        assert!(node.has_content());
+        assert!(node.has_been_annotated());
     }
 
     #[test]
@@ -434,7 +443,7 @@ mod tests {
     }
 
     #[test]
-    fn test_semantics_node_absorb() {
+    fn absorbed_semantic_content_preserves_the_receivers_source_rect() {
         let mut node1 = SemanticsNode::new();
         node1.config_mut().set_label("First");
         node1.config_mut().set_button(true);
@@ -449,8 +458,19 @@ mod tests {
 
         assert!(node1.config().is_button());
         assert_eq!(node1.config().is_enabled(), Some(true));
-        // Rect should be union
-        assert_eq!(node1.rect().width(), px(100.0));
+        assert_eq!(
+            node1.rect(),
+            Rect::from_xywh(px(0.0), px(0.0), px(50.0), px(50.0)),
+        );
+    }
+
+    #[test]
+    fn semantic_content_does_not_declare_a_boundary() {
+        let mut node = SemanticsNode::new();
+        node.config_mut().set_label("Content");
+
+        assert!(node.has_been_annotated());
+        assert!(!node.config().is_semantics_boundary());
     }
 
     #[test]
@@ -458,6 +478,13 @@ mod tests {
         let mut node = SemanticsNode::new();
         node.config_mut().set_label("Test Label");
         node.config_mut().set_button(true);
+        node.config_mut()
+            .add_action(SemanticsAction::Tap, Arc::new(|_, _| {}));
+        node.config_mut().add_action(
+            SemanticsAction::DidGainAccessibilityFocus,
+            Arc::new(|_, _| {}),
+        );
+        node.config_mut().set_blocks_user_actions(true);
         node.set_rect(Rect::from_xywh(px(10.0), px(20.0), px(100.0), px(50.0)));
 
         let id = SemanticsId::new(5);
@@ -466,6 +493,10 @@ mod tests {
         assert_eq!(data.id, 4); // id - 1
         assert_eq!(data.label, Some("Test Label".into()));
         assert!(data.flags & SemanticsFlag::IsButton.value() != 0);
+        assert_eq!(
+            data.actions,
+            SemanticsAction::DidGainAccessibilityFocus.value(),
+        );
         assert_eq!(data.rect, node.rect());
     }
 }

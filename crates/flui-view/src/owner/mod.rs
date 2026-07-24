@@ -9,11 +9,14 @@
 
 mod build_owner;
 mod element_owner;
+mod inherited_dependencies;
 mod layout_builder;
 mod rebuild_handle;
+mod rebuild_reason;
 
 pub use build_owner::BuildOwner;
 pub use rebuild_handle::RebuildHandle;
+pub use rebuild_reason::{RebuildReason, RebuildReasons};
 // Internal scheduling handle — `pub(crate)`: captured by `ElementCore` at mount,
 // no public consumer. See `ExternalBuildScheduler`.
 pub(crate) use build_owner::ExternalBuildScheduler;

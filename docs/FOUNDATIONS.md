@@ -191,6 +191,7 @@ graph TD
     scheduler --> foundation
     painting --> foundation
     interaction --> foundation
+    interaction --> platform
     assets --> types
     semantics --> tree
     layer --> painting
@@ -232,6 +233,8 @@ graph TD
 `rendering --> scheduler` (added 2026-07-14): `flui-rendering::view::ScrollPosition` names `flui_scheduler::PostFrameHandle` for its coalesced content-dimension-flush notify (a post-frame callback that fires a scroll listener after `RenderViewport::perform_layout` commits extents, instead of notifying mid-layout). `flui-scheduler` is L2 (Substrate) and depends only on `flui-foundation`, so this is a same-direction extension of the existing `animation --> scheduler` (L3) edge, not a new direction — `flui-rendering` (L4) gains a second, lower-layer dependency, no cycle.
 
 `l10n --> widgets` (added 2026-07-16): the target graph originally drew `l10n --> types` only — `flui-localizations` depending exclusively on the foundation value types, with no concrete consumer yet. Landing the Catalog.1 theming + localizations substrate gave it one: `flui-widgets` now owns the mechanism (`Localizations`, `LocalizationsDelegate`, the `WidgetsLocalizations` trait, `Directionality`) per Flutter's own layering (`widgets/localizations.dart` lives in the `widgets` package, and `flutter_localizations` depends on `widgets`, not the reverse), and `flui-localizations::GlobalWidgetsLocalizations` is a `WidgetsLocalizations` implementor — it must depend on the crate that defines the trait. This is a genuinely new edge (L6 `l10n` gains an L6 sibling dependency on `widgets`, not just its existing L0 `types` dependency), not a same-direction extension like `rendering --> scheduler` above; it does not create a cycle because nothing in `widgets`, `objects`, `view`, `animation`, or `assets` depends on `l10n`. `material`/`cupertino --> l10n` (already in the target graph) still holds: they depend on both `widgets` and `l10n`, and `l10n` itself now depends on `widgets` too — no cycle, since `material`/`cupertino` never appear on `l10n`'s or `widgets`'s dependency side.
+
+`interaction --> platform` (added 2026-07-23; [ADR-0037](adr/ADR-0037-presentation-ownership-domains.md)): `flui-platform` owns the OS-facing `PlatformTextInput` capability and its platform effect; `flui-interaction` owns the owner-local `TextInputOwner`, including client, token, and event-session state, so it names and stores the injected capability directly. Private `flui-app::PresentationState` composes that interaction owner for exactly one presentation. `flui-platform` never depends on `flui-interaction`, so this L2 sibling edge is acyclic and directionally correct: interaction policy depends on the lower-level platform capability contract, never the reverse.
 
 No new edge, but a new guarantee (added 2026-07-16): the `L7 --> L6` direction every `material -->`/`cupertino -->` edge above already draws (design systems depend on the widget catalog, never the reverse) is now a CI-enforced contract, not just a diagram — [ADR-0028](adr/ADR-0028-design-system-decoupling-contract.md) (design-system decoupling contract), guarded by `scripts/check-workspace-inventory.sh`/`just inventory-check`. Any crate below L7 that adds a dependency on `flui-material`/`flui-cupertino` fails CI immediately.
 

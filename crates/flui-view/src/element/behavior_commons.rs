@@ -235,19 +235,11 @@ pub(crate) fn mark_render_needs_layout_and_paint<V, A>(
     {
         let mut owner = pipeline_owner.write();
 
-        // Migrate from direct add_node_needing_layout to
-        // PipelineOwner::mark_needs_layout so the layout-side
-        // mark propagates up to the nearest relayout boundary per Flutter
-        // markNeedsLayout semantics. Paint side stays on the direct primitive
-        // — Flutter's markNeedsPaint is its own walk with different boundary
-        // semantics (repaint vs relayout boundary) and is out of scope here
-        // (Core.2 paint catalog work).
-        let tree_depth = owner.render_tree().depth(render_id).unwrap_or(0);
         owner.mark_needs_layout(render_id);
-        owner.add_node_needing_paint(render_id, tree_depth as usize);
+        owner.mark_needs_paint(render_id);
 
         tracing::debug!(
-            "{}::on_update marked render_id={:?} dirty (layout via mark_needs_layout walk, paint direct)",
+            "{}::on_update marked render_id={:?} dirty through layout and paint boundary walks",
             behavior_name,
             render_id
         );
@@ -430,7 +422,7 @@ mod tests {
             "freshly-mounted stateless element starts dirty"
         );
 
-        build_owner.schedule_build_for(root_id, 0);
+        build_owner.schedule_build_for(root_id, 0, crate::RebuildReason::InitialMount);
         build_owner.build_scope(&mut tree);
 
         let root = tree.get(root_id).unwrap().element();

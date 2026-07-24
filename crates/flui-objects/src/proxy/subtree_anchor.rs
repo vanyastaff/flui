@@ -29,10 +29,11 @@
 //! # It is transparent
 //!
 //! Layout, paint, hit-test, intrinsics and baselines pass straight through to the
-//! single child, exactly as [`RenderRepaintBoundary`](super::RenderRepaintBoundary)
-//! does — **minus** the boundary: this object is *not* a repaint boundary and does
-//! not force compositing. Its only effect is to exist, so that something above it
-//! has a `RenderId` to point at.
+//! single child. Unlike a regular proxy box, the anchor adds no bounds gate of
+//! its own: a transformed child that paints outside the anchor's layout bounds
+//! remains hittable there, just as it was before the identity node was inserted.
+//! This object is not a repaint boundary and does not force compositing. Its only
+//! effect is to exist, so that something above it has a `RenderId` to point at.
 //!
 //! # Flutter equivalence
 //!
@@ -173,13 +174,12 @@ impl RenderBox for RenderSubtreeAnchor {
         ctx.paint_child();
     }
 
-    /// Pure pass-through, as `RenderProxyBox`: `hitTestSelf` is false, so the
-    /// anchor is hit iff its child is. Without this the trait default would absorb
-    /// the hit and never recurse, blocking the whole subtree from pointer events.
+    /// Pure pass-through: the anchor is hit iff its child is.
+    ///
+    /// There is intentionally no `is_within_own_size` gate here. This is an
+    /// identity node, not a clipping or interaction boundary; adding it must not
+    /// make a transformed overflow region unhittable.
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {
-        if !ctx.is_within_own_size() {
-            return false;
-        }
         self.has_child && ctx.hit_test_child_at_offset(0, Offset::ZERO)
     }
 

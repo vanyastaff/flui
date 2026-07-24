@@ -5,8 +5,9 @@
 # documented in docs/PORT.md against the workspace, plus the FR-033
 # sanctioned-dyn-boundary check, the N-geom.U16 engine-glam boundary
 # guard, Cross.H2 canonical-type-home guards, the Cross.H3
-# live-BuildContext guard, and the Cross.H7 speculative scheduler surface
-# guard. Exits non-zero on the first violation outside the whitelist; prints
+# live-BuildContext guard, the Cross.H7 speculative scheduler surface guard,
+# and the ADR-0027/ADR-0037 ownership-surface guards. Exits non-zero on the first
+# violation outside the whitelist; prints
 # the offending file:line and the trigger ID.
 # Triggers
 # #8/#10/#11/#12/#13 added in D-block PR-C-3 §U41-U45
@@ -843,6 +844,56 @@ else
   fi
 fi
 
+# ADR-0027 platform-control guard — the deleted public foreground executor
+# must not return as a second, wake-less UI scheduling surface. Platform owner
+# commands belong to backend-private, bounded, wake-integrated lanes. This is
+# deliberately an extra architecture guard, not a 23rd Flutter-port trigger.
+platform_control_pattern='\b(ForegroundExecutor|foreground_executor|drain_tasks)\b'
+platform_control_hits=$(rg --line-number --column --no-heading \
+  "${platform_control_pattern}" \
+  crates/flui-platform/src \
+  crates/flui-platform/tests \
+  crates/flui-platform/examples \
+  crates/flui-platform/README.md \
+  docs/architecture.md 2>/dev/null || true)
+if [[ -n "${platform_control_hits}" ]]; then
+  echo "VIOLATION ADR-0027/platform-control: deleted public foreground executor surface reintroduced"
+  echo "see docs/PORT.md (ADR-0027 platform-control guard)"
+  echo "${platform_control_hits}"
+  echo ""
+  violations=$((violations + 1))
+else
+  if [[ "${verbose}" -eq 1 ]]; then
+    echo "ok    ADR-0027/platform-control: no public foreground executor or manual drain surface"
+  fi
+fi
+
+# ADR-0037 closed-command guard — a realm inbox is not a generic executor.
+# Worker outcomes must add an owned, typed command variant whose payload can be
+# validated by the presentation owner. Executable closure payloads erase that
+# vocabulary and smuggle arbitrary UI work across the owner boundary.
+check "ADR-0037/closed-ui-commands" \
+  "generic executable payload in UiRealm command protocol" \
+  '\b(ResultStamp|submit_result)\b|UiCommand::Invoke|Box<\s*dyn\s+FnOnce\(\)\s*\+\s*Send' \
+  --type rust \
+  crates/flui-app/src/app/ui_realm.rs
+
+# ADR-0037 focus-owner guard — focus belongs to one presentation.
+#
+# Nodes are owner-affine Rc values attached to the exact FocusManager owned by
+# their UiRealm. Ambient manager lookup, controller-published node IDs,
+# process-wide test locks, and Arc focus nodes all recreate a second ownership
+# model and make independent windows/tests interfere.
+check "ADR-0037/focus-owner" \
+  "ambient or cross-thread focus ownership surface reintroduced" \
+  'FocusManager\s*::\s*(global|new_for_test)\s*\(|\.focus_node_id\s*\(|\b(FOCUS_TEST_LOCK|GLOBAL_FOCUS_LOCK)\b|Arc\s*<\s*Focus(Node|ScopeNode)\s*>' \
+  --type rust \
+  crates/flui-interaction/src \
+  crates/flui-view/src \
+  crates/flui-widgets \
+  crates/flui-material \
+  crates/flui-app
+
 # -----------------------------------------------------------------------------
 # Trigger 12 (D-block PR-C-3 §U44, architecture-correction-plan SP-6) —
 # lock placement in public API.
@@ -1509,14 +1560,16 @@ check "21" \
 # -----------------------------------------------------------------------------
 # Trigger 22 (ADR-0018 U1) — `rebuild_handle()` never acquired in a frame phase.
 #
-# A *frame capability* lets code reach into a frame from outside one:
+# A lifecycle-only capability lets code affect presentation state outside one:
 # `rebuild_handle()` (ADR-0018 U1) dirties an element for the next frame;
 # `post_frame_handle()` (ADR-0021 U2) queues work for the end of the current one.
+# `text_input_handle()` (ADR-0030) reaches the presentation's IME owner; and
+# `focus_manager()` (ADR-0037) reaches its imperative focus owner.
 #
-# Acquiring either inside `build` and scheduling from it is an unbounded rebuild
-# loop, or a callback fired against the frame still running; inside
-# `perform_layout` / `paint` / compositing either would touch the tree after
-# `build_scope` has already run for this frame. FOUNDATIONS.md permits an
+# Acquiring one inside `build` can create an unbounded rebuild loop, attach an
+# IME client repeatedly, or synchronously mutate focus while the tree is being
+# built; inside `perform_layout` / `paint` / compositing it can touch
+# presentation state after `build_scope` has already run. FOUNDATIONS.md permits an
 # out-of-catalog `mark_needs_build` driver ONLY when "gated by a refusal trigger
 # barring signal subscriptions from `build`/`layout`/`paint`" — this is it.
 #
@@ -1529,7 +1582,7 @@ check "21" \
 # -----------------------------------------------------------------------------
 frame_capability_hits=$("${repo_root}/scripts/check-frame-capability-scope.sh" crates 2>/dev/null || true)
 if [[ -n "${frame_capability_hits}" ]]; then
-  echo "VIOLATION 22: a lifecycle-only frame capability (rebuild_handle / post_frame_handle)"
+  echo "VIOLATION 22: a lifecycle-only presentation capability"
   echo "             was acquired inside a build/layout/paint body (ADR-0018 U1, ADR-0021 U2)"
   echo "see ${trigger_doc} (trigger 22)"
   echo "${frame_capability_hits}"
@@ -1537,7 +1590,7 @@ if [[ -n "${frame_capability_hits}" ]]; then
   violations=$((violations + 1))
 else
   if [[ "${verbose}" -eq 1 ]]; then
-    echo "ok    22: rebuild_handle()/post_frame_handle() acquired in build/layout/paint (must be a lifecycle hook)"
+    echo "ok    22: lifecycle-only capabilities acquired only from lifecycle hooks"
   fi
 fi
 
@@ -1550,7 +1603,7 @@ if [[ "${violations}" -gt 0 ]]; then
   exit 1
 fi
 
-echo "port-check: all 22 refusal triggers + FR-033 + FR-033/widgets + N-geom.U16 + Cross.H2 + Cross.H3 + Cross.H7 grep clean"
+echo "port-check: all 22 refusal triggers + FR-033 + FR-033/widgets + N-geom.U16 + Cross.H2 + Cross.H3 + Cross.H7 + ADR-0027/platform-control + ADR-0037/closed-ui-commands + ADR-0037/focus-owner grep clean"
 
 # -----------------------------------------------------------------------------
 # Marker summary (verbose mode only). Non-blocking — markers are Phase B

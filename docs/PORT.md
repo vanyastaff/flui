@@ -208,6 +208,70 @@ Re-exports (`pub use foo::Bar`) do not trip the trigger — only literal `pub <k
 
 **Back-references:** `docs/ROADMAP-TRACKER.md` `H7`, [input/frame-loop repair requirements AE15](brainstorms/input-frame-loop-repair-requirements.md#acceptance-examples).
 
+### ADR-0027 platform-control guard. No public foreground executor
+
+**The deleted `ForegroundExecutor`, `Platform::foreground_executor`, and
+manual `drain_tasks` surface must stay deleted.** UI-owner commands belong to
+backend-private lanes with bounded admission and a real event-loop wake; a
+generic public closure queue cannot state owner affinity, shutdown, or
+backpressure in its API.
+
+**Scope:** `flui-platform` source, tests, examples, and README, plus the current
+platform sketch in `docs/architecture.md`. Dated plans remain historical
+records and are intentionally outside the scan.
+
+**Enforcement:** `scripts/port-check.sh`, reported as
+`ADR-0027/platform-control`. This is an extra architecture guard and does not
+renumber or expand the 22 Flutter-port refusal triggers.
+
+**Back-reference:** [ADR-0027](adr/ADR-0027-owner-affine-ui-realms.md).
+
+### ADR-0037 closed-command guard. A realm inbox is not an executor
+
+`UiRealm` accepts only a closed vocabulary of owned commands. An `Invoke`
+variant, a `Box<dyn FnOnce() + Send>` payload, or a generic stamped
+`submit_result(..., closure)` API is forbidden even when crate-private: it
+erases what work may cross the owner boundary and makes presentation identity,
+staleness, shutdown, and observability properties of arbitrary captured code.
+
+Each worker-result family must introduce a typed command variant with an owned
+payload and validate its presentation/resource generation at the owner commit
+point. If no production consumer exists yet, no speculative result lane is
+kept.
+
+**Scope:** `crates/flui-app/src/app/ui_realm.rs`.
+
+**Enforcement:** `scripts/port-check.sh`, reported as
+`ADR-0037/closed-ui-commands`. This is an extra architecture guard, not a new
+Flutter-port trigger.
+
+**Back-reference:** [ADR-0037](adr/ADR-0037-presentation-ownership-domains.md).
+
+### ADR-0037 focus-owner guard. Focus belongs to one presentation
+
+Every `UiRealm` owns one `Rc<FocusManager>`, and every mounted
+`FocusNode`/`FocusScopeNode` is bound to that exact owner. Ambient
+`FocusManager::global()`/`new_for_test()` lookup, controller-published
+`focus_node_id()` metadata, process-wide focus-test locks, and
+`Arc<FocusNode>`/`Arc<FocusScopeNode>` are forbidden. Each of those shapes
+reintroduces a second ownership model that can couple independent windows,
+realms, or parallel tests.
+
+Widgets retain explicit `Rc` nodes and generation-checked
+`FocusAttachment`s; keyboard input enters through the realm's manager.
+Widget-installed key handlers and geometry providers are owned through
+generation-checked `FocusNodeRegistration`s, so stale cleanup cannot erase a
+newer external writer. Tests use the manager created by their own harness and
+require no global serialization.
+
+**Scope:** interaction, view, widgets, material, and app Rust source and tests.
+
+**Enforcement:** `scripts/port-check.sh`, reported as
+`ADR-0037/focus-owner`. This is an extra architecture guard, not a new
+Flutter-port trigger.
+
+**Back-reference:** [ADR-0037](adr/ADR-0037-presentation-ownership-domains.md).
+
 ### 12. Lock placement in public API
 
 **SP-6 — `RwLock` / `Mutex` / `Arc<RwLock<...>>` in a `pub fn` return type OR a `pub` field of a trait/struct.** Lock types leak the framework's concurrency model across module boundaries; every caller has to reason about lock ordering / poisoning / re-entrancy. SP-6's verdict is that locks should live behind private fields; public APIs should expose immutable snapshots or scoped callbacks.
@@ -362,28 +426,30 @@ Doc-comment mentions ("…tessellated by lyon…") are fine and filtered out by 
 
 **Back-references:** [`docs/designs/2026-06-30-rasterbackend-seam.md`](designs/2026-06-30-rasterbackend-seam.md); `crates/flui-engine/src/wgpu/tessellator.rs`.
 
-### 22. A **lifecycle-only frame capability** acquired inside a `build` / layout / paint body
+### 22. A **lifecycle-only presentation capability** acquired inside a `build` / layout / paint body
 
-**The capabilities.** A *frame capability* lets code reach into a frame from outside one. Two exist, and both are guarded by this trigger:
+**The capabilities.** These capabilities let lifecycle and input callbacks affect a presentation outside the build/layout/paint transaction. Four exist, and all are guarded by this trigger:
 
 | Capability | Introduced | What it does |
 |---|---|---|
 | `rebuild_handle()` | [`ADR-0018`](adr/ADR-0018-async-builder-seam.md) U1 | `RebuildHandle::schedule()` marks its element dirty for the **next** frame. |
 | `post_frame_handle()` | [`ADR-0021`](adr/ADR-0021-hero-flight-seam.md) U2 | `PostFrameHandle::schedule()` queues work for the **end of the current** frame. |
+| `text_input_handle()` | [`ADR-0030`](adr/ADR-0030-platform-text-input-ime-capability.md) | Returns the weak concrete handle to the presentation-owned text-input session. |
+| `focus_manager()` | [`ADR-0037`](adr/ADR-0037-presentation-ownership-domains.md) | Returns the exact `Rc<FocusManager>` owned by the presentation's build owner. |
 
-**Why:** acquiring a handle inside `build` and scheduling from it is an unbounded rebuild loop (rebuild) or a callback fired against the very frame that is still building (post-frame). Acquiring one inside `perform_layout`, `paint`, or a compositing walk would touch the tree *after* `build_scope` has already run for this frame, so the dirty element would be laid out and painted stale.
+**Why:** acquiring a capability inside `build` can create an unbounded rebuild loop, queue a callback against the frame still building, attach an IME client repeatedly, or make synchronous focus mutation part of reconciliation. Acquiring one inside `perform_layout`, `paint`, or a compositing walk can mutate presentation state *after* `build_scope` has already run for this frame, so the current frame observes torn state.
 
 [`FOUNDATIONS.md`](FOUNDATIONS.md) permits an out-of-catalog `mark_needs_build` driver **only** when "gated by a refusal trigger barring signal subscriptions from `build`/`layout`/`paint`". This is that gate.
 
-**Sanctioned shape:** acquire the handle in `ViewState::init_state` or `did_change_dependencies`, store it in the state, and fire it later from a completion callback (any thread). The framework's own `make_build_ctx` mints both outside any guarded body, which is why the trigger scopes to function bodies rather than to the token.
+**Sanctioned shape:** acquire the capability in `ViewState::init_state` or `did_change_dependencies`, store it in the state, and use it later from the callback appropriate to that capability. The framework's own `make_build_ctx` mints the context bundle outside any guarded body, which is why the trigger scopes to function bodies rather than to the token.
 
 **Guarded functions:** `build`, `build_into_views`, `perform_layout`, `layout_node_with_children`, `paint`, `paint_raw`, `run_paint`, `run_layout`, `run_compositing`, `compose`, `composite`.
 
 **Implementation:** a line regex cannot express "inside a function body", so this trigger delegates to [`scripts/check-frame-capability-scope.sh`](../scripts/check-frame-capability-scope.sh) — a brace-depth scanner that enters a guarded function at its opening `{`, leaves at the matching `}`, strips line comments, and flags **any capability token** in between. Adding a new capability is one entry in the scanner's `capabilities` list plus a fixture case. The scanner has its own accept/reject fixtures under `scripts/fixtures/frame-capability/`; run `scripts/check-frame-capability-scope.sh --self-test` to verify the scanner itself.
 
-> **How this trigger nearly shipped a hole.** ADR-0021 U2 added `post_frame_handle()` and documented it as following the same lifecycle-only rule — but the scanner only ever matched the `rebuild_handle` token, so a `ctx.post_frame_handle()` inside `build()` passed port-check. The rule was prose, not a guard. A capability added to `BuildContext` must be added to `capabilities` in the same change; the self-test now asserts that **both** tokens are reported by the rejected fixture, so a scanner that silently matched only one would fail its own self-test.
+> **How this trigger nearly shipped a hole.** ADR-0021 U2 added `post_frame_handle()` and documented it as following the same lifecycle-only rule — but the scanner only ever matched the `rebuild_handle` token, so a `ctx.post_frame_handle()` inside `build()` passed port-check. The rule was prose, not a guard. A capability added to `BuildContext` must be added to `capabilities` in the same change; the self-test asserts that **every** token is reported by the rejected fixture, so a scanner that silently omits a newer capability fails its own self-test.
 
-**Allowlist:** none. Nothing in `crates/` acquires a frame capability in a guarded body today.
+**Allowlist:** none. Nothing in `crates/` acquires a lifecycle-only presentation capability in a guarded body today.
 
 ### Reactive lint promotion
 
@@ -1043,7 +1109,7 @@ just port-check-verbose       # prints "ok" lines for each passing trigger + mar
 just port-markers             # per-file marker breakdown (TODO(port) / PERF(port) / PORT NOTE)
 ```
 
-The underlying script lives at [`scripts/port-check.sh`](../scripts/port-check.sh). It runs one `rg` (ripgrep) pass per trigger — 22 refusal triggers (trigger 22 delegates to a brace-depth scanner rather than a single `rg` pass) plus the FR-033 downcast grep, the FR-033/widgets downcast grep (ADR-0019 U4), and the FR-036 sanctioned-`dyn`-boundary registry (main pattern + type-alias closure) — and filters out doc-comment matches. The marker-budget scan is an additional non-blocking pass in `-v` and `-b` modes. The regexes are derived directly from the trigger entries in this document; when a trigger changes here, the script changes too.
+The underlying script lives at [`scripts/port-check.sh`](../scripts/port-check.sh). It runs one `rg` (ripgrep) pass per trigger — 22 refusal triggers (trigger 22 delegates to a brace-depth scanner rather than a single `rg` pass) plus the FR-033 downcast grep, the FR-033/widgets downcast grep (ADR-0019 U4), the FR-036 sanctioned-`dyn`-boundary registry (main pattern + type-alias closure), and extra named architecture guards including `ADR-0027/platform-control`, `ADR-0037/closed-ui-commands`, and `ADR-0037/focus-owner` — and filters out doc-comment matches except where a guard deliberately treats public docs as part of its surface. The marker-budget scan is an additional non-blocking pass in `-v` and `-b` modes. The regexes are derived directly from the trigger entries in this document; when a trigger changes here, the script changes too.
 
 The marker-budget report is a **non-blocking** addition: it counts `TODO(port)`, `PERF(port)`, and `PORT NOTE` occurrences across `crates/` and prints a per-crate summary. Markers are deliberate deferrals (Phase B work-queue), not violations — the script never fails on marker count.
 

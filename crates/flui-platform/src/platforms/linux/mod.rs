@@ -138,10 +138,6 @@ impl Platform for LinuxPlatform {
         unimplemented!("Linux Tokio executor integration not implemented")
     }
 
-    fn foreground_executor(&self) -> Arc<dyn PlatformExecutor> {
-        unimplemented!("Linux main thread executor not implemented")
-    }
-
     fn run(self: Box<Self>, _on_finish_launching: PlatformReadyCallback) {
         unimplemented!("Linux event loop (Wayland/X11) not implemented")
     }
@@ -162,7 +158,7 @@ impl Platform for LinuxPlatform {
         unimplemented!("Linux primary display query not implemented")
     }
 
-    fn open_window(&self, _options: WindowOptions) -> Result<Box<dyn PlatformWindow>> {
+    fn open_window(&self, _options: WindowOptions) -> Result<Arc<dyn PlatformWindow>> {
         unimplemented!("Linux window creation (Wayland/X11) not implemented")
     }
 

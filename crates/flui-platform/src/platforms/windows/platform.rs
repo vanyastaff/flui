@@ -3,6 +3,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use anyhow::{Context, Result};
+use cursor_icon::CursorIcon;
 use flui_types::geometry::{Bounds, DevicePixels, Point, Size};
 use parking_lot::Mutex;
 use windows::{
@@ -22,7 +23,7 @@ use windows::{
 use super::{display::enumerate_displays, util::*, window::WindowsWindow};
 use crate::{
     config::WindowConfiguration,
-    executor::{BackgroundExecutor, ForegroundExecutor},
+    executor::BackgroundExecutor,
     shared::{PlatformHandlers, WindowCallbacks},
     traits::*,
 };
@@ -51,6 +52,8 @@ pub(super) struct WindowContext {
     pub is_hovered: std::cell::Cell<bool>,
     /// Current keyboard modifiers (T035)
     pub modifiers: std::cell::Cell<keyboard_types::Modifiers>,
+    /// Cursor selected by this exact window's presentation.
+    pub cursor: std::cell::Cell<CursorIcon>,
     /// Window style bits before fullscreen (Windows-specific: WS_OVERLAPPEDWINDOW, etc.)
     ///
     /// Stored here instead of in `WindowMode` to keep the cross-platform enum
@@ -92,9 +95,6 @@ pub struct WindowsPlatform {
 
     /// Background executor for async tasks
     background_executor: Arc<BackgroundExecutor>,
-
-    /// Foreground executor for UI thread tasks
-    foreground_executor: Arc<ForegroundExecutor>,
 
     /// Window configuration (shared across all windows)
     config: WindowConfiguration,
@@ -179,7 +179,6 @@ impl WindowsPlatform {
 
         // Create executors
         let background_executor = Arc::new(BackgroundExecutor::new());
-        let foreground_executor = Arc::new(ForegroundExecutor::new());
 
         tracing::info!("Windows platform initialized with Tokio executors");
 
@@ -188,7 +187,6 @@ impl WindowsPlatform {
             windows: Arc::new(Mutex::new(HashMap::new())),
             handlers: Arc::new(Mutex::new(PlatformHandlers::default())),
             background_executor,
-            foreground_executor,
             config,
         })
     }
@@ -577,6 +575,24 @@ impl WindowsPlatform {
                     LRESULT(0)
                 }
 
+                WM_SETCURSOR => {
+                    if let Some(ctx) = ctx
+                        && (lparam.0 as u32 & 0xffff) == HTCLIENT
+                    {
+                        match WindowsWindow::apply_native_cursor(ctx.cursor.get()) {
+                            Ok(()) => return LRESULT(1),
+                            Err(error) => {
+                                tracing::warn!(
+                                    window_id = ?ctx.window_id,
+                                    ?error,
+                                    "failed to restore the presentation cursor"
+                                );
+                            }
+                        }
+                    }
+                    DefWindowProcW(hwnd, msg, wparam, lparam)
+                }
+
                 WM_LBUTTONDOWN => {
                     if let Some(ctx) = ctx {
                         use ui_events::pointer::PointerButton;
@@ -808,9 +824,6 @@ impl WindowsPlatform {
             let mut msg = MSG::default();
 
             while GetMessageW(&mut msg, None, 0, 0).as_bool() {
-                // Drain foreground executor tasks before processing Windows messages
-                self.foreground_executor.drain_tasks();
-
                 let _ = TranslateMessage(&msg);
                 DispatchMessageW(&msg);
             }
@@ -827,10 +840,6 @@ impl Platform for WindowsPlatform {
 
     fn background_executor(&self) -> Arc<dyn PlatformExecutor> {
         Arc::clone(&self.background_executor) as Arc<dyn PlatformExecutor>
-    }
-
-    fn foreground_executor(&self) -> Arc<dyn PlatformExecutor> {
-        Arc::clone(&self.foreground_executor) as Arc<dyn PlatformExecutor>
     }
 
     // ==================== Lifecycle ====================
@@ -877,7 +886,7 @@ impl Platform for WindowsPlatform {
         enumerate_displays().into_iter().find(|d| d.is_primary())
     }
 
-    fn open_window(&self, options: WindowOptions) -> Result<Box<dyn PlatformWindow>> {
+    fn open_window(&self, options: WindowOptions) -> Result<Arc<dyn PlatformWindow>> {
         tracing::info!("Opening window: {:?}", options.title);
 
         let window = WindowsWindow::new(
@@ -891,7 +900,7 @@ impl Platform for WindowsPlatform {
         // Store window
         self.windows.lock().insert(hwnd_value, window.clone());
 
-        Ok(Box::new(window))
+        Ok(window)
     }
 
     // ==================== Input & Clipboard ====================
@@ -981,44 +990,6 @@ impl Platform for WindowsPlatform {
                 WindowAppearance::Dark
             } else {
                 WindowAppearance::Light
-            }
-        }
-    }
-
-    // ==================== Cursor (US3 T039) ====================
-
-    fn set_cursor_style(&self, style: crate::cursor::CursorStyle) {
-        use crate::cursor::CursorStyle;
-        let cursor_id = match style {
-            CursorStyle::Arrow => IDC_ARROW,
-            CursorStyle::IBeam => IDC_IBEAM,
-            CursorStyle::Crosshair => IDC_CROSS,
-            CursorStyle::ClosedHand | CursorStyle::OpenHand => IDC_HAND,
-            CursorStyle::PointingHand => IDC_HAND,
-            CursorStyle::ResizeLeft | CursorStyle::ResizeRight | CursorStyle::ResizeLeftRight => {
-                IDC_SIZEWE
-            }
-            CursorStyle::ResizeUp | CursorStyle::ResizeDown | CursorStyle::ResizeUpDown => {
-                IDC_SIZENS
-            }
-            CursorStyle::ResizeUpLeftDownRight => IDC_SIZENWSE,
-            CursorStyle::ResizeUpRightDownLeft => IDC_SIZENESW,
-            CursorStyle::ResizeColumn => IDC_SIZEWE,
-            CursorStyle::ResizeRow => IDC_SIZENS,
-            CursorStyle::OperationNotAllowed => IDC_NO,
-            CursorStyle::DragLink | CursorStyle::DragCopy => IDC_HAND,
-            CursorStyle::ContextualMenu => IDC_ARROW,
-            CursorStyle::None => {
-                // Hide cursor
-                unsafe {
-                    SetCursor(None);
-                }
-                return;
-            }
-        };
-        unsafe {
-            if let Ok(cursor) = LoadCursorW(None, cursor_id) {
-                SetCursor(Some(cursor));
             }
         }
     }

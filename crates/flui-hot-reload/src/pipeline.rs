@@ -165,7 +165,7 @@ impl PluginPipeline {
             let layer_tree = {
                 let mut guard = pipeline_owner.write();
                 if let Some(root_id) = guard.root_id() {
-                    guard.add_node_needing_paint(root_id, 0);
+                    guard.mark_needs_paint(root_id);
                 } else {
                     log("draw_frame: WARNING — no root_id in pipeline");
                 }

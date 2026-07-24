@@ -152,7 +152,7 @@ impl BuildOwner {
         for (_, element, _) in &scheduled {
             let depth = tree.get(*element).map_or(0, |node| node.depth);
             tree.mark_needs_build(*element);
-            self.schedule_build_for(*element, depth);
+            self.schedule_build_for(*element, depth, super::RebuildReason::LayoutChange);
         }
 
         // 2. Run the builders — with NO pipeline lock held, so a builder that
