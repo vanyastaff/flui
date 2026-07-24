@@ -18,7 +18,7 @@
 //! `LogicalKeySet` (needs a `HardwareKeyboard`-style pressed-set tracker),
 //! `CharacterActivator` (no consumer), a shared `ShortcutManager`, and
 //! `includeSemantics`. The Intent-mapped [`Shortcuts`] resolves its
-//! [`Actions`](super::actions::Actions) chain from **its own position**, not
+//! [`Actions`] chain from **its own position**, not
 //! the focused leaf's context (ADR-0023's resolve-at-own-position divergence) — visible only when an `Actions`
 //! sits between the focused widget and the `Shortcuts`.
 
@@ -227,7 +227,7 @@ impl StatelessView for CallbackShortcuts {
 // ============================================================================
 
 /// Maps key combinations to [`Intent`]s, dispatched through the enclosing
-/// [`Actions`](super::actions::Actions) chain — Flutter's `Shortcuts`
+/// [`Actions`] chain — Flutter's `Shortcuts`
 /// (`shortcuts.dart:1004`).
 ///
 /// On a key the focused subtree ignored, the **first** matching activator's

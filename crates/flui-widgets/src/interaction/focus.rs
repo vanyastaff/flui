@@ -158,7 +158,7 @@ fn nearest_focus_node(ctx: &dyn BuildContext) -> Option<Rc<FocusNode>> {
 ///
 /// Embedders install exactly one `FocusRoot` around each element-tree root.
 /// It publishes that build owner's root scope as the first
-/// [`FocusParentProvider`] and installs Tab/Shift+Tab traversal against the
+/// `FocusParentProvider` and installs Tab/Shift+Tab traversal against the
 /// same owner-local [`FocusManager`]. Descendant widgets therefore never need
 /// a process-global manager or a build-phase capability fallback.
 #[derive(Clone, Debug, StatefulView)]
@@ -541,7 +541,7 @@ pub struct FocusState {
     /// moves it when the provider changes.
     parent: Option<Rc<FocusNode>>,
     /// Publishes the child's `RenderId` while mounted, so the node's
-    /// [`RectProvider`](flui_interaction::RectProvider) can measure it —
+    /// [`RectProvider`] can measure it —
     /// reading-order traversal sorts by this geometry (ADR-0022).
     anchor: SubtreeAnchor,
     /// The live geometry source, retained so a replacement node receives the

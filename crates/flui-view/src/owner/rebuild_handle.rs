@@ -14,7 +14,7 @@
 //! `RebuildHandle` is a thin newtype over the channel `AnimatedView` has always
 //! used: [`ExternalBuildScheduler`] + an [`ElementId`]. Calling
 //! [`schedule`](RebuildHandle::schedule) inserts the id and a typed
-//! [`RebuildReason`](super::RebuildReason) into `BuildOwner::external_inbox`.
+//! [`RebuildReason`] into `BuildOwner::external_inbox`.
 //! A burst of calls between frames collapses to one entry while retaining every
 //! distinct cause; only the first asks the binding for a frame.
 //! `BuildOwner::build_scope` drains that inbox at frame start, marks each

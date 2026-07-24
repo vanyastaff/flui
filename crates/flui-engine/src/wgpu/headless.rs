@@ -1,14 +1,14 @@
 //! Windowless GPU capture: rasterize a `LayerTree` to an offscreen texture and
 //! read the pixels back to the CPU.
 //!
-//! The on-screen [`Renderer`](super::Renderer) hard-requires a `wgpu::Surface`
+//! The on-screen [`crate::wgpu::Renderer`] hard-requires a `wgpu::Surface`
 //! (its `render_scene` acquires a swapchain texture). Golden-image and
 //! screenshot tooling needs the same raster path against a caller-owned
 //! texture instead — so this module owns a surface-less device and the
 //! layer-tree walk / readback that `Renderer::render_scene` performs between
 //! surface-acquire and present.
 //!
-//! It renders through the sampleable [`RenderTarget`] (unlike the public
+//! It renders through the sampleable `RenderTarget` (unlike the public
 //! [`WgpuPainter::render_to_view`], which is `view_only`), so backdrop-filter
 //! and advanced-blend layers that sample the destination render correctly.
 

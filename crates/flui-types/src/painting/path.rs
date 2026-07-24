@@ -258,8 +258,8 @@ impl Path {
         path
     }
 
-    /// Recovers the originating [`RRect`] when this path is a fully-rounded
-    /// rectangle emitted by [`Self::from_rrect`].
+    /// Recovers the originating [`crate::geometry::RRect`] when this path is a
+    /// fully-rounded rectangle emitted by [`Self::from_rrect`].
     ///
     /// The GPU shadow path uses this to route rounded-rectangle shadows
     /// (Material `Card` / `FloatingActionButton` / `Dialog` / `Chip`, …) through

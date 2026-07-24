@@ -19,7 +19,7 @@
 //!   `_effectiveFocusNode.addListener(_handleFocusChanged)`
 //!   (`text_field.dart:1273`) without ambient manager lookup, controller
 //!   metadata, or an ID registry. The listener schedules a rebuild through a
-//!   [`RebuildHandle`](flui_view::RebuildHandle) acquired in `init_state`,
+//!   [`RebuildHandle`] acquired in `init_state`,
 //!   never from inside `build` (ADR-0018).
 //! - **Hover**: the oracle owns `_isHovering` at the `TextField` level via
 //!   its own outer `MouseRegion` and threads it into
