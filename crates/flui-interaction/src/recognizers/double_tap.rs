@@ -561,6 +561,12 @@ impl GestureArenaMember for DoubleTapGestureRecognizer {
         self.check_timeout();
     }
 
+    fn has_pending_deadline(&self) -> bool {
+        // Armed exactly while `check_timeout` could still fire: the first tap
+        // completed and the inter-tap window is still open.
+        self.gesture_state.lock().phase == DoubleTapPhase::WaitingForSecond
+    }
+
     fn reject_gesture(&self, _pointer: PointerId) {
         // We lost the arena - cancel the gesture
         if let Some(pos) = self.state.initial_position() {
@@ -785,6 +791,40 @@ mod tests {
             *cancelled.lock(),
             "poll_deadlines must drive the double-tap give-up timeout",
         );
+    }
+
+    /// `has_pending_deadline` must agree with what `poll_deadline` acts on:
+    /// armed exactly during the inter-tap `WaitingForSecond` window — not
+    /// before the first tap completes, not after the give-up fires. The frame
+    /// driver's keep-alive reads this through the arena's
+    /// `has_pending_deadlines`, so the aggregate is asserted on the same
+    /// transitions. Driven off a `ManualClock` (no sleep).
+    #[test]
+    fn has_pending_deadline_tracks_the_inter_tap_window() {
+        let clock = flui_foundation::ManualClock::new();
+        let arena = GestureArena::with_clock(Arc::new(clock.clone()));
+        let recognizer =
+            DoubleTapGestureRecognizer::new(arena.clone()).with_on_double_tap_cancel(|_| {});
+
+        // No tap yet: nothing armed.
+        assert!(!recognizer.has_pending_deadline());
+        assert!(!arena.has_pending_deadlines());
+
+        let pointer = PointerId::new(2).expect("nonzero pointer id");
+        let position = Offset::new(px(10.0), px(10.0));
+
+        // Complete the first tap → `WaitingForSecond`: the give-up deadline
+        // is now armed, and visible through the arena aggregate.
+        recognizer.add_pointer(pointer, position);
+        recognizer.handle_event(&make_up_event(position, PointerType::Touch));
+        assert!(recognizer.has_pending_deadline());
+        assert!(arena.has_pending_deadlines());
+
+        // Advance past the window and poll: the give-up fires and disarms.
+        clock.advance(Duration::from_millis(350));
+        arena.poll_deadlines();
+        assert!(!recognizer.has_pending_deadline());
+        assert!(!arena.has_pending_deadlines());
     }
 
     #[test]

@@ -954,6 +954,10 @@ where
     fn record_dependent(&mut self, dependent: ElementId, depth: usize) {
         self.add_dependent(dependent, depth);
     }
+
+    fn remove_dependent(&mut self, dependent: ElementId) {
+        self.remove_dependent(dependent);
+    }
 }
 
 impl<V, A> ElementBehavior<V, A> for InheritedBehavior<V>

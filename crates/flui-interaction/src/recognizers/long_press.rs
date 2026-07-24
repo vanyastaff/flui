@@ -620,6 +620,14 @@ impl GestureArenaMember for LongPressGestureRecognizer {
         }
     }
 
+    fn has_pending_deadline(&self) -> bool {
+        // Armed exactly while `check_timer` could still fire: a contact is
+        // down (`down_time` captured) and the phase is still `Possible` —
+        // the same guard `try_fire_timer` applies before comparing the clock.
+        let state = self.gesture_state.lock();
+        state.phase == LongPressPhase::Possible && state.down_time.is_some()
+    }
+
     fn reject_gesture(&self, _pointer: PointerId) {
         // We lost the arena - cancel the gesture
         if let Some(pos) = self.state.initial_position() {
@@ -894,6 +902,67 @@ mod tests {
         // Second tick — must not refire (phase is now `Started`).
         assert!(!recognizer.check_timer());
         assert_eq!(*started_count.lock(), 1);
+    }
+
+    /// `has_pending_deadline` must agree with what `poll_deadline` acts on:
+    /// armed exactly while a contact is down in the `Possible` phase —
+    /// never before the contact, never after the deadline fires, never after
+    /// the contact ends early. The frame driver's keep-alive reads this
+    /// through `GestureArena::has_pending_deadlines`, so the aggregate is
+    /// asserted on the same transitions. Driven by a `ManualClock` (no sleep).
+    #[test]
+    fn has_pending_deadline_tracks_the_armed_window() {
+        use std::time::Duration;
+
+        let clock = flui_foundation::ManualClock::new();
+        let arena = GestureArena::with_clock(Arc::new(clock.clone()));
+        let recognizer = LongPressGestureRecognizer::with_settings(
+            arena.clone(),
+            GestureSettings::touch_defaults().with_long_press_timeout(Duration::from_millis(500)),
+        )
+        .with_on_long_press(|| {});
+
+        // No contact: nothing armed.
+        assert!(!recognizer.has_pending_deadline());
+        assert!(!arena.has_pending_deadlines());
+
+        let pointer = PointerId::new(2).expect("nonzero pointer id");
+        let position = Offset::new(Pixels(50.0), Pixels(50.0));
+        recognizer.add_pointer(pointer, position);
+
+        // Contact down, deadline not yet reached: armed.
+        assert!(recognizer.has_pending_deadline());
+        assert!(arena.has_pending_deadlines());
+
+        // Cross the deadline and poll: the gesture fires and disarms.
+        clock.advance(Duration::from_millis(600));
+        recognizer.poll_deadline();
+        assert!(!recognizer.has_pending_deadline());
+        assert!(!arena.has_pending_deadlines());
+    }
+
+    #[test]
+    fn has_pending_deadline_disarms_when_the_contact_ends_early() {
+        use std::time::Duration;
+
+        let clock = flui_foundation::ManualClock::new();
+        let arena = GestureArena::with_clock(Arc::new(clock.clone()));
+        let recognizer = LongPressGestureRecognizer::with_settings(
+            arena,
+            GestureSettings::touch_defaults().with_long_press_timeout(Duration::from_millis(500)),
+        )
+        .with_on_long_press(|| {});
+
+        let pointer = PointerId::new(2).expect("nonzero pointer id");
+        let position = Offset::new(Pixels(50.0), Pixels(50.0));
+        recognizer.add_pointer(pointer, position);
+        assert!(recognizer.has_pending_deadline());
+
+        // Up before the deadline cancels the gesture (`Possible` -> `Ready`);
+        // a keep-alive keyed on this predicate must stop requesting frames.
+        let up = crate::events::make_up_event(position, PointerType::Touch);
+        recognizer.handle_event(&up);
+        assert!(!recognizer.has_pending_deadline());
     }
 
     #[test]

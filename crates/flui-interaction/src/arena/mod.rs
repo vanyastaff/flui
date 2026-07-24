@@ -152,6 +152,21 @@ pub trait GestureArenaMember: crate::sealed::arena_member::Sealed {
     /// (long press) override it. Implementations must be idempotent across
     /// frames (firing at most once per deadline).
     fn poll_deadline(&self) {}
+
+    /// Whether a time-based deadline is currently armed and will fire from a
+    /// future [`poll_deadline`](Self::poll_deadline) once the arena clock
+    /// reaches it.
+    ///
+    /// The frame driver reads this once per frame to decide whether another
+    /// frame must be requested: `poll_deadline` only runs on frames, so an
+    /// armed deadline in an otherwise idle app would never fire without a
+    /// frame being scheduled at it. Pure state read — must not invoke user
+    /// callbacks or call back into the arena. The default is `false`; only
+    /// deadline-driven recognizers override it, and their override must agree
+    /// with what `poll_deadline` would act on.
+    fn has_pending_deadline(&self) -> bool {
+        false
+    }
 }
 
 // ============================================================================
@@ -1089,6 +1104,22 @@ impl GestureArena {
         for member in members {
             member.poll_deadline();
         }
+    }
+
+    /// Whether any active member has an armed time-based deadline (see
+    /// [`GestureArenaMember::has_pending_deadline`]).
+    ///
+    /// The frame driver queries this once per frame, beside
+    /// [`poll_deadlines`](Self::poll_deadlines), to keep producing frames
+    /// while a deadline is pending. Members are snapshotted out of the
+    /// per-entry locks before querying — the same discipline `poll_deadlines`
+    /// follows — and the predicate itself is a pure state read.
+    pub fn has_pending_deadlines(&self) -> bool {
+        let mut members: SmallVec<[Arc<dyn GestureArenaMember>; 8]> = SmallVec::new();
+        for entry in self.entries.iter() {
+            members.extend(entry.value().lock().members.iter().cloned());
+        }
+        members.iter().any(|member| member.has_pending_deadline())
     }
 
     /// Get the number of active arenas.

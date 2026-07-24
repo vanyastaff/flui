@@ -14,6 +14,7 @@ mod construction;
 mod diagnostics;
 mod layout;
 mod paint;
+mod poison;
 mod query;
 mod reassemble;
 mod semantics;
@@ -127,6 +128,11 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     /// Disjoint from `render_tree`, so `scheduler.mark_needs_layout(
     /// &mut self.render_tree, id)` compiles as a split borrow.
     scheduler: DirtyTracker,
+
+    /// Bounded-retry poison state for layout failures: consecutive-failure
+    /// counters and poison flags per node, owned here (not per-node) so a
+    /// healthy tree carries zero overhead. See [`poison::LayoutPoison`].
+    layout_poison: poison::LayoutPoison,
 
     /// Constraints to pass to [`Self::layout_dirty_root`] when the
     /// dirty entry is the tree root (`root_id`) and the root has no
@@ -293,6 +299,7 @@ where
         root_id: from.root_id,
         notifier: from.notifier,
         scheduler: from.scheduler,
+        layout_poison: from.layout_poison,
         root_constraints: from.root_constraints,
         semantics_enabled: from.semantics_enabled,
         semantics_owner: from.semantics_owner,

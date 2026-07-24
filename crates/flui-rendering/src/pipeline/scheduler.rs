@@ -169,13 +169,24 @@ impl DirtyTracker {
     /// (separate fields on `PipelineOwner`) so the split borrow compiles at
     /// the call site.
     ///
+    /// `on_invalidated` fires once per visited node (the mark target and
+    /// every ancestor the walk reaches, boundary included). The owner uses
+    /// it to lift layout poison: an invalidation mark is the signal that a
+    /// node's properties, children, or tree position actually changed, so a
+    /// previously poisoned node earns another layout attempt exactly here.
+    ///
     /// The walk is idempotent — a stale call on an already-marked subtree
     /// short-circuits when the flag check repeats. Missing `RenderId`s
     /// (post-removal stale references) are silent no-ops.
     ///
     /// Fires `fire_need_visual_update` on the notifier **only when a new
     /// boundary entry is added** (the Phase-1 wake-on-mark fix).
-    pub(super) fn mark_needs_layout(&mut self, tree: &mut RenderTree, id: RenderId) {
+    pub(super) fn mark_needs_layout(
+        &mut self,
+        tree: &mut RenderTree,
+        id: RenderId,
+        on_invalidated: &mut dyn FnMut(RenderId),
+    ) {
         let mut current = id;
         loop {
             // Snapshot the per-node decision under a short-lived borrow so
@@ -196,6 +207,7 @@ impl DirtyTracker {
                 // correctness without depending on the precise clearing
                 // schedule; idempotence keeps it cheap.
                 node.mark_layout_flag();
+                on_invalidated(current);
                 // Flutter box.dart:2840 — a non-empty layout cache means an
                 // ANCESTOR's layout consumed this node's intrinsics/dry
                 // layout/baseline, so the invalidation must reach that
@@ -1025,7 +1037,7 @@ mod tests {
     #[test]
     fn mark_needs_layout_stale_id_is_silent_noop() {
         let (mut tracker, mut tree) = DirtyTracker::new_test_pair();
-        tracker.mark_needs_layout(&mut tree, RenderId::new(99));
+        tracker.mark_needs_layout(&mut tree, RenderId::new(99), &mut |_| {});
         assert!(tracker.nodes_needing_layout().is_empty());
     }
 

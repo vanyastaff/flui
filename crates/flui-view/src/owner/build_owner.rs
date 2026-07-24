@@ -729,11 +729,7 @@ impl BuildOwner {
                 Err(payload) => std::panic::resume_unwind(payload),
             };
             for record in dep_sink.into_inner() {
-                if let Some(node) = tree.get_mut(record.provider)
-                    && let Some(accessor) = node.element_mut().as_inherited_mut()
-                {
-                    accessor.record_dependent(record.dependent, record.depth);
-                }
+                tree.apply_dependent_record(&record);
             }
 
             // ── Phase 2: reconcile the returned views against the node's
@@ -1441,5 +1437,97 @@ mod tests {
         // Known mapping unaffected by the failed claim on a different
         // hash.
         assert_eq!(owner.element_for_global_key(known), Some(id));
+    }
+
+    /// A keyed stateless view used to drive the REAL GlobalKey retake path
+    /// (`try_retake_global_key`) so the reparent updates the moved subtree's
+    /// node depths through production code.
+    #[derive(Clone)]
+    struct KeyedView {
+        key: crate::GlobalKey<()>,
+    }
+
+    impl crate::StatelessView for KeyedView {
+        fn build(&self, _ctx: &dyn crate::BuildContext) -> impl crate::IntoView {
+            TestView
+        }
+    }
+
+    impl View for KeyedView {
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::stateless(self)
+        }
+
+        fn key(&self) -> Option<&dyn flui_foundation::ViewKey> {
+            Some(&self.key)
+        }
+    }
+
+    /// A GlobalKey reparent to a deeper parent must update the moved
+    /// subtree's node depths, or `rekey_dirty_depths` re-derives a STALE
+    /// depth and a descendant of the moved root drains before its own
+    /// ancestor — violating Flutter's shallowest-first contract. RED without
+    /// the subtree depth update: the descendant keeps its pre-move depth (3)
+    /// and pops before the moved root (8).
+    #[test]
+    #[serial_test::serial(global_key_registry)]
+    fn rekey_after_globalkey_reparent_orders_moved_subtree_shallowest_first() {
+        use parking_lot::RwLock;
+
+        let tree = Arc::new(RwLock::new(ElementTree::new()));
+        let owner = Arc::new(RwLock::new(BuildOwner::new()));
+        crate::test_only_set_global_key_registry(&tree, &owner);
+
+        let root = tree
+            .write()
+            .mount_root(&TestView, &mut owner.write().element_owner_mut());
+        let shallow =
+            tree.write()
+                .insert(&TestView, root, 0, &mut owner.write().element_owner_mut());
+        // A deeper branch to reparent into: root -> d1 -> ... -> d7.
+        let mut deep = root;
+        for _ in 0..7 {
+            deep = tree
+                .write()
+                .insert(&TestView, deep, 0, &mut owner.write().element_owner_mut());
+        }
+
+        // Keyed subtree under `shallow`: k(2) -> c(3).
+        let keyed = KeyedView {
+            key: crate::GlobalKey::new(),
+        };
+        let k = tree
+            .write()
+            .insert(&keyed, shallow, 0, &mut owner.write().element_owner_mut());
+        let c = tree
+            .write()
+            .insert(&TestView, k, 0, &mut owner.write().element_owner_mut());
+        // Direct `insert` does not maintain `child_ids` (the reconciler
+        // does); model the built subtree the reparent walk traverses.
+        tree.write().get_mut(k).unwrap().set_child_ids(vec![c]);
+
+        // Move k under the deep branch via the real retake path
+        // (soft-remove → re-insert with the same GlobalKey).
+        tree.write()
+            .remove(k, &mut owner.write().element_owner_mut());
+        let migrated = tree
+            .write()
+            .insert(&keyed, deep, 0, &mut owner.write().element_owner_mut());
+        assert_eq!(migrated, k, "GlobalKey retake reuses the same ElementId");
+
+        // Schedule the moved ancestor AND its descendant in the same scope
+        // (both with a bogus depth hint, as a `setState` would). Re-keying
+        // must order the ancestor (now depth 8) before the descendant (9) —
+        // not by the descendant's stale pre-move depth.
+        owner.write().schedule_build_for(k, 0);
+        owner.write().schedule_build_for(c, 0);
+        owner.write().rekey_dirty_depths(&tree.read());
+
+        let Reverse(first) = owner.write().dirty_elements.pop().unwrap();
+        let Reverse(second) = owner.write().dirty_elements.pop().unwrap();
+        assert_eq!(first.id(), k, "the moved ancestor (depth 8) drains first");
+        assert_eq!(second.id(), c, "its descendant (depth 9) drains second");
+
+        crate::test_only_clear_global_key_registry();
     }
 }
