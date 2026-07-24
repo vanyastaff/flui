@@ -737,3 +737,235 @@ fn public_probe_intrinsic_failure_poisons_and_recovers() {
     assert_eq!(value, 40.0);
     assert_eq!(attempts.load(Ordering::Relaxed), 2);
 }
+
+// ============================================================================
+// (d) A constraints change grants a poisoned node one fresh attempt
+// ============================================================================
+
+/// A leaf that fails structurally exactly when its incoming constraints
+/// are width-unbounded, laying out 40×40 under bounded ones. Counts
+/// attempts so the test can prove precisely when the pipeline retries.
+#[derive(Debug)]
+struct UnboundedHatingLeaf {
+    attempts: Arc<AtomicUsize>,
+}
+
+impl flui_foundation::Diagnosticable for UnboundedHatingLeaf {}
+
+impl RenderObject<BoxProtocol> for UnboundedHatingLeaf {
+    fn perform_layout_raw(
+        &mut self,
+        ctx: &mut <BoxProtocol as flui_rendering::protocol::Protocol>::LayoutCtxErased<'_>,
+    ) -> flui_rendering::error::RenderResult<ProtocolGeometry<BoxProtocol>> {
+        self.attempts.fetch_add(1, Ordering::Relaxed);
+        if ctx.constraints().max_width.is_infinite() {
+            return Err(RenderError::unbounded_constraint("UnboundedHatingLeaf"));
+        }
+        Ok(Size::new(px(40.0), px(40.0)))
+    }
+
+    fn paint_raw(
+        &self,
+        _recorder: &mut flui_rendering::context::FragmentRecorder,
+        _child_count: usize,
+        _size: Size,
+    ) {
+    }
+
+    fn hit_test_raw(
+        &self,
+        _position: flui_rendering::protocol::ProtocolPosition<BoxProtocol>,
+        _child_count: usize,
+        _size: Size,
+        _hit_child: &mut (
+                 dyn FnMut(
+            usize,
+            Option<flui_rendering::protocol::ProtocolPosition<BoxProtocol>>,
+        ) -> bool
+                     + Send
+                     + Sync
+             ),
+    ) -> HitTestOutcome {
+        HitTestOutcome::miss()
+    }
+}
+
+/// A single-child box parent that hands its child either width-unbounded
+/// or bounded constraints depending on `unbounded`, sizing itself to the
+/// child. Flipping the flag re-offers the child different constraints on
+/// the parent's next layout WITHOUT the child itself ever being marked
+/// dirty — the exact recovery path the poison skip must honor: a child
+/// poisoned under one set of constraints must get a fresh attempt when
+/// an ancestor's layout inputs change, not a stand-in geometry forever.
+#[derive(Debug)]
+struct WidthSwitchParent {
+    unbounded: bool,
+}
+
+impl flui_foundation::Diagnosticable for WidthSwitchParent {}
+
+impl RenderObject<BoxProtocol> for WidthSwitchParent {
+    fn perform_layout_raw(
+        &mut self,
+        ctx: &mut <BoxProtocol as flui_rendering::protocol::Protocol>::LayoutCtxErased<'_>,
+    ) -> flui_rendering::error::RenderResult<ProtocolGeometry<BoxProtocol>> {
+        let child_constraints = if self.unbounded {
+            BoxConstraints::new(px(0.0), px(f32::INFINITY), px(0.0), px(200.0))
+        } else {
+            BoxConstraints::new(px(0.0), px(200.0), px(0.0), px(200.0))
+        };
+        let size = ctx.layout_child(0, child_constraints);
+        Ok(size)
+    }
+
+    fn paint_raw(
+        &self,
+        _recorder: &mut flui_rendering::context::FragmentRecorder,
+        _child_count: usize,
+        _size: Size,
+    ) {
+    }
+
+    fn hit_test_raw(
+        &self,
+        _position: flui_rendering::protocol::ProtocolPosition<BoxProtocol>,
+        _child_count: usize,
+        _size: Size,
+        _hit_child: &mut (
+                 dyn FnMut(
+            usize,
+            Option<flui_rendering::protocol::ProtocolPosition<BoxProtocol>>,
+        ) -> bool
+                     + Send
+                     + Sync
+             ),
+    ) -> HitTestOutcome {
+        HitTestOutcome::miss()
+    }
+}
+
+/// Poisoned under invalid constraints, the child must recover when an
+/// ancestor's re-layout offers different (valid) constraints — even
+/// though nothing ever marks the child itself dirty. Before the
+/// skip learned to compare constraints, the poisoned child kept
+/// contributing `Size::ZERO` under any later constraints.
+#[test]
+fn constraints_change_grants_poisoned_node_one_fresh_attempt() {
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let mut run = RenderTester::mount(
+        box_node(WidthSwitchParent { unbounded: true })
+            .label("parent")
+            .child(
+                box_node(UnboundedHatingLeaf {
+                    attempts: Arc::clone(&attempts),
+                })
+                .label("leaf"),
+            ),
+    )
+    .with_constraints(BoxConstraints::new(px(0.0), px(200.0), px(0.0), px(200.0)))
+    .run_frame();
+    let parent = run.id("parent");
+    let leaf = run.id("leaf");
+    assert_eq!(
+        attempts.load(Ordering::Relaxed),
+        1,
+        "frame 1 fails the leaf once under unbounded constraints",
+    );
+
+    // Re-marking the parent under the SAME (still unbounded)
+    // constraints must NOT re-attempt the leaf: unchanged inputs are
+    // guaranteed to fail again, so the skip serves the stand-in.
+    run.owner_mut().mark_needs_layout(parent);
+    run.pump();
+    assert_eq!(
+        attempts.load(Ordering::Relaxed),
+        1,
+        "a poisoned node must stay skipped while its inputs are unchanged",
+    );
+
+    // Flip the offered constraints and re-mark ONLY the parent. The
+    // child is never marked dirty; the walk must treat the new
+    // constraints as one fresh attempt, and the success must clear the
+    // failure record (pre-fix the leaf kept returning Size::ZERO).
+    run.update::<WidthSwitchParent>(parent, |p| p.unbounded = false);
+    run.pump();
+    assert_eq!(
+        attempts.load(Ordering::Relaxed),
+        2,
+        "changed constraints grant exactly one fresh layout attempt",
+    );
+    assert_eq!(
+        run.box_geometry(leaf),
+        Size::new(px(40.0), px(40.0)),
+        "the leaf recovers under valid constraints",
+    );
+
+    run.pump_idle_frames(2);
+}
+
+/// The dual of the previous test: when a poisoned node's failure does
+/// NOT depend on the offered constraints (a permanent contract
+/// violation), the skip must hold under any constraints — only a fresh
+/// external invalidation re-arms it.
+#[test]
+fn constraint_independent_poison_stays_skipped_under_new_constraints() {
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let mut run = RenderTester::mount(
+        box_node(RenderPadding::all(5.0)).child(
+            box_node(FlakyLeaf {
+                attempts: Arc::clone(&attempts),
+                fail: true,
+                mode: FailMode::Structural,
+            })
+            .label("leaf"),
+        ),
+    )
+    .with_constraints(BoxConstraints::new(px(0.0), px(200.0), px(0.0), px(200.0)))
+    .run_frame();
+    let root = run.root();
+    assert_eq!(attempts.load(Ordering::Relaxed), 1);
+
+    // Resize the window: the root and the leaf now see DIFFERENT
+    // constraints than the failed attempt. The leaf's contract
+    // violation is input-independent — wait, no: the skip compares
+    // constraints, so a resize DOES grant one fresh attempt even for an
+    // input-independent failure. That attempt fails again and the node
+    // re-poisons — exactly one bounded retry per resize, not a storm.
+    run.owner_mut()
+        .set_root_constraints(Some(BoxConstraints::new(
+            px(0.0),
+            px(150.0),
+            px(0.0),
+            px(150.0),
+        )));
+    run.pump();
+    assert_eq!(
+        attempts.load(Ordering::Relaxed),
+        2,
+        "a constraints change grants one fresh attempt; the still-failing \
+         node re-poisons instead of storming",
+    );
+
+    // A second resize to yet another size grants one more attempt
+    // (inputs changed again) — still failing, still bounded.
+    run.owner_mut()
+        .set_root_constraints(Some(BoxConstraints::new(
+            px(0.0),
+            px(100.0),
+            px(0.0),
+            px(100.0),
+        )));
+    run.pump();
+    assert_eq!(attempts.load(Ordering::Relaxed), 3);
+
+    // Re-marking WITHOUT any constraints change: no further attempts.
+    run.owner_mut().mark_needs_layout(root);
+    run.pump();
+    assert_eq!(
+        attempts.load(Ordering::Relaxed),
+        3,
+        "unchanged constraints after re-poisoning must not re-attempt",
+    );
+
+    run.pump_idle_frames(2);
+}

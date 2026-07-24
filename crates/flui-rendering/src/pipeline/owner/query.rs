@@ -229,7 +229,12 @@ pub(super) struct QuerySlot<'a> {
 /// walk's borrows are released.
 pub(super) struct QueryPoisonCx<'a> {
     poison: &'a LayoutPoison,
-    failures: Vec<(RenderId, RenderId, LayoutFailureKind)>,
+    failures: Vec<(
+        RenderId,
+        RenderId,
+        LayoutFailureKind,
+        Option<crate::storage::ErasedConstraints>,
+    )>,
     successes: Vec<RenderId>,
 }
 
@@ -251,7 +256,9 @@ impl<'a> QueryPoisonCx<'a> {
 
     /// Records a child-query failure swallowed at a recursion closure:
     /// `parent` is the node whose own measurement invoked the query,
-    /// `failed` the child whose query returned `err`.
+    /// `failed` the child whose query returned `err`. Intrinsic queries
+    /// carry no layout constraints, so the attempt slot is `None` and
+    /// the entry's previous last-attempt constraints stay intact.
     fn note_failure(
         &mut self,
         parent: RenderId,
@@ -259,7 +266,7 @@ impl<'a> QueryPoisonCx<'a> {
         err: &crate::error::RenderError,
     ) {
         self.failures
-            .push((parent, failed, LayoutFailureKind::of(err)));
+            .push((parent, failed, LayoutFailureKind::of(err), None));
     }
 
     /// Records a child-query success, but only for a node with open
@@ -286,7 +293,12 @@ impl<'a> QueryPoisonCx<'a> {
 fn apply_query_poison_drain(
     render_tree: &RenderTree,
     layout_poison: &mut LayoutPoison,
-    failures: Vec<(RenderId, RenderId, LayoutFailureKind)>,
+    failures: Vec<(
+        RenderId,
+        RenderId,
+        LayoutFailureKind,
+        Option<crate::storage::ErasedConstraints>,
+    )>,
     successes: Vec<RenderId>,
 ) {
     for succeeded in successes {

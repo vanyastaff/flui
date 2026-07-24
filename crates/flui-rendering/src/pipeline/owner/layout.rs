@@ -154,7 +154,11 @@ impl PipelineOwner<Layout> {
                     }
                     Err(e) => {
                         let kind = LayoutFailureKind::of(&e);
-                        match self.layout_poison.note_failure(dirty_node.id, kind) {
+                        match self.layout_poison.note_failure(
+                            dirty_node.id,
+                            kind,
+                            Some(crate::storage::ErasedConstraints::from(constraints)),
+                        ) {
                             // Re-poison after a fresh invalidation lifted
                             // the poison: the caller was already signaled
                             // on the first transition, so skip the node

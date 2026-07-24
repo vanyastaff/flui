@@ -260,6 +260,17 @@ impl BuildContext for ElementBuildContext {
         // to record the dependency, so a single write lock is
         // sufficient.
         let mut tree = self.tree.write();
+
+        // Reverse edge on the dependent's own node — the same record
+        // the `build_scope` dep-sink drain writes — so this element's
+        // unmount/deactivate can deregister it from the provider's
+        // map.  Written before the provider-side record and the user
+        // callback: if the callback unwinds, both edges exist and the
+        // purge path stays consistent.
+        if let Some(self_node) = tree.get_mut(self.element_id) {
+            self_node.note_dependent_provider(ancestor_id);
+        }
+
         let Some(node) = tree.get_mut(ancestor_id) else {
             // Tree shape changed between lookup and write-lock; treat
             // as miss. Should not happen under normal flow.
@@ -295,13 +306,6 @@ impl BuildContext for ElementBuildContext {
         // escape into `build()` because the closure is `FnOnce`.
         let view_any = accessor.view_as_any();
         callback(view_any);
-
-        // Reverse edge on the dependent's own node — the same record the
-        // `build_scope` dep-sink drain writes — so this element's
-        // unmount/deactivate can deregister it from the provider's map.
-        if let Some(self_node) = tree.get_mut(self_id) {
-            self_node.note_dependent_provider(ancestor_id);
-        }
 
         true
     }
@@ -1167,6 +1171,105 @@ mod tests {
     #[test]
     fn context_is_owner_local() {
         assert_not_impl_any!(ElementBuildContext: Send, Sync);
+    }
+
+    /// A theme value + provider fixture for the panic-ordering test below.
+    #[derive(Clone, PartialEq, Debug)]
+    struct CtxTheme(u32);
+
+    #[derive(Clone)]
+    struct CtxThemeProvider {
+        theme: CtxTheme,
+        child: TestView,
+    }
+
+    impl crate::view::InheritedView for CtxThemeProvider {
+        type Data = CtxTheme;
+
+        fn data(&self) -> &Self::Data {
+            &self.theme
+        }
+
+        fn child(&self) -> &dyn View {
+            &self.child
+        }
+
+        fn update_should_notify(&self, old: &Self) -> bool {
+            self.theme != old.theme
+        }
+    }
+
+    impl View for CtxThemeProvider {
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::inherited(self)
+        }
+    }
+
+    fn provider_dependent_count(tree: &ElementTree, provider_id: ElementId) -> usize {
+        tree.get(provider_id)
+            .expect("provider exists")
+            .element()
+            .downcast_ref::<crate::element::InheritedElement<CtxThemeProvider>>()
+            .expect("provider is InheritedElement<CtxThemeProvider>")
+            .dependents()
+            .len()
+    }
+
+    /// If the user callback passed to `depend_on_inherited` unwinds, the
+    /// registration must stay consistent: the provider records the
+    /// dependent BEFORE the callback runs, so the reverse edge on the
+    /// dependent's own node must also be written BEFORE the callback —
+    /// otherwise the unwind strands the provider-side entry and unmount
+    /// can never purge it (the leak returns through the panic path).
+    #[test]
+    fn panicking_depend_on_callback_still_allows_unmount_purge() {
+        let tree = Arc::new(RwLock::new(ElementTree::new()));
+        let owner = Arc::new(RwLock::new(BuildOwner::new()));
+
+        let provider = CtxThemeProvider {
+            theme: CtxTheme(1),
+            child: TestView {
+                name: "leaf".to_string(),
+            },
+        };
+        let provider_id = tree
+            .write()
+            .mount_root(&provider, &mut owner.write().element_owner_mut());
+
+        let consumer_view = TestView {
+            name: "consumer".to_string(),
+        };
+        let consumer_id = tree.write().insert(
+            &consumer_view,
+            provider_id,
+            0,
+            &mut owner.write().element_owner_mut(),
+        );
+
+        let ctx =
+            ElementBuildContext::for_element(consumer_id, tree.clone(), owner.clone()).unwrap();
+
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            ctx.depend_on_inherited(TypeId::of::<CtxThemeProvider>(), &mut |_value| {
+                panic!("user callback blew up")
+            });
+        }));
+        assert!(outcome.is_err(), "the panicking callback must propagate");
+
+        // The provider-side record was written before the callback ran.
+        assert_eq!(provider_dependent_count(&tree.read(), provider_id), 1);
+
+        // Unmount: the purge must still deregister the dependent —
+        // pre-fix the reverse edge was written after the callback, and
+        // the unwind skipped it, stranding this entry at 1 forever.
+        tree.write()
+            .remove(consumer_id, &mut owner.write().element_owner_mut());
+        assert_eq!(
+            provider_dependent_count(&tree.read(), provider_id),
+            0,
+            "the reverse edge must be written before the user callback so \
+             a panicking callback cannot strand the registration",
+        );
     }
 
     /// `BuildCtx` is the context handed to a live `build()`, so it is always
