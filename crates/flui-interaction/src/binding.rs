@@ -330,6 +330,13 @@ pub struct GestureBinding {
     mouse_tracker: MouseTracker,
 
     /// Resolves conflicts between competing gesture recognizers.
+    ///
+    /// Binding-owned ([`SweepModel::BindingDriven`](crate::arena::SweepModel)):
+    /// this binding runs the close-on-down / sweep-on-up lifecycle itself in
+    /// [`handle_pointer_event`](Self::handle_pointer_event), and an app shell
+    /// hands a clone of this handle to the view subtree (via flui-widgets'
+    /// `GestureArenaScope`) so every detector below competes here without any
+    /// recognizer self-closing or self-sweeping the shared arena.
     arena: GestureArena,
 
     /// Default gesture settings (can be overridden per device).
@@ -836,6 +843,16 @@ impl GestureBinding {
     /// never fire (e.g. long-press on a finger held perfectly still).
     pub fn tick_deadlines(&self) {
         self.arena.poll_deadlines();
+    }
+
+    /// Whether any recognizer in the arena has an armed time-based deadline.
+    ///
+    /// The frame loop reads this right after [`tick_deadlines`](Self::tick_deadlines)
+    /// to decide whether another frame must be requested: the tick only runs on
+    /// frames, so without a frame scheduled at the deadline an idle app would
+    /// never fire a held long-press or an expired double-tap window.
+    pub fn has_pending_deadlines(&self) -> bool {
+        self.arena.has_pending_deadlines()
     }
 
     // ========================================================================
@@ -1463,6 +1480,27 @@ mod tests {
         assert_eq!(
             binding.default_settings().touch_slop(),
             settings.touch_slop()
+        );
+    }
+
+    /// The binding's arena must advertise [`SweepModel::BindingDriven`]:
+    /// `handle_pointer_event` closes it on down and sweeps it on up, so a
+    /// recognizer that shares this arena (handed to a view subtree via a
+    /// shell-mounted `GestureArenaScope`) must never run that lifecycle a
+    /// second time — `RecognizerBase::stop_tracking` reads the sweep model
+    /// to decide, and a detector reads it to decide whether to self-close.
+    #[test]
+    fn binding_arena_is_binding_driven() {
+        assert_eq!(
+            GestureBinding::new().arena().sweep_model(),
+            crate::arena::SweepModel::BindingDriven,
+        );
+        assert_eq!(
+            GestureBinding::with_settings(GestureSettings::default())
+                .arena()
+                .sweep_model(),
+            crate::arena::SweepModel::BindingDriven,
+            "with_settings must build the same binding-owned arena as new()",
         );
     }
 

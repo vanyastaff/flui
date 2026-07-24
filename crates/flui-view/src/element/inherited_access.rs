@@ -58,6 +58,8 @@ pub trait InheritedElementAccess {
     ///
     /// The reverse ownership index supplies the exact provider ids, so
     /// lifecycle cleanup never scans the tree or waits for a later
-    /// notification to prune stale entries.
+    /// notification to prune stale entries. This mirrors Flutter's
+    /// `InheritedElement.removeDependent`, invoked from `Element.deactivate`.
+    /// No-op when the id is not registered.
     fn remove_dependent(&mut self, dependent: ElementId);
 }

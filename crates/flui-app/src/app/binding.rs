@@ -973,6 +973,28 @@ impl AppBinding {
             }
         }
 
+        // Gesture-deadline tick + keep-alive — also MUST precede the build
+        // phase: a deadline callback (e.g. `on_long_press`) may setState, and
+        // that dirty entry must be drained by this frame's `build_scope`,
+        // the same ordering argument the vsync tick above carries.
+        //
+        // `tick_deadlines` advances recognizer deadlines (long-press hold,
+        // double-tap give-up) against the arena's clock so a held-still
+        // pointer fires without a further input event. The keep-alive half
+        // is what makes that reachable in an idle app: the tick only runs on
+        // frames, so while any deadline remains armed this requests the NEXT
+        // frame — otherwise the down event's own frames drain, the loop goes
+        // idle, and no frame ever lands at the deadline. Once the deadline
+        // fires or the contact ends, `has_pending_deadlines()` is false and
+        // the window quiesces. Same continuation pattern as the vsync tick
+        // above: `wake_frame` touches only the atomic redraw flag and the
+        // platform window's leaf wake, never a frame-phase scheduling
+        // capability.
+        realm.gestures().tick_deadlines();
+        if realm.gestures().has_pending_deadlines() {
+            self.wake_frame();
+        }
+
         // The async-driver step used to live HERE. It moved into
         // `Scheduler::handle_begin_frame`'s mid-frame slot.
         //
@@ -1137,11 +1159,9 @@ impl AppBinding {
         //    that accepted this presentation's platform input.
         realm.gestures().flush_pending_moves();
 
-        // 3. Advance recognizer deadlines so a held-still pointer past its
-        //     timeout (e.g. long press) fires without a further input event.
-        realm.gestures().tick_deadlines();
-
-        // 4. Draw frame (build + layout + paint → Scene). The surface
+        // 3. Draw frame (build + layout + paint → Scene). `draw_frame_entered`
+        //    advances this realm's recognizer deadlines before its build phase.
+        //    The surface
         // reports PHYSICAL pixels; the framework lays out in LOGICAL
         // pixels — the paint root's DPR transform maps them back. A
         // physical-sized layout at DPR 2 would paint everything double
@@ -1152,7 +1172,7 @@ impl AppBinding {
             BoxConstraints::tight(Size::new(px(width as f32 / dpr), px(height as f32 / dpr)));
         let outcome = self.draw_frame_entered(realm, constraints);
 
-        // 5. Re-hit-test stationary pointing devices against the freshly
+        // 4. Re-hit-test stationary pointing devices against the freshly
         // laid-out tree. This emits structural enter/exit/cursor transitions
         // only; hover requires an actual pointer move.
         realm
@@ -1165,7 +1185,7 @@ impl AppBinding {
                 result
             });
 
-        // 6. Render scene to GPU — gated by the first-frame deferral
+        // 5. Render scene to GPU — gated by the first-frame deferral
         // counter (oracle `RendererBinding.drawFrame`, tag `3.44.0`; full
         // citation in `crates/flui-app/src/bindings/renderer_binding.rs`
         // above `defer_first_frame`). Build/layout/paint above (step 2)
@@ -1296,6 +1316,7 @@ impl AppBinding {
     pub(crate) fn has_pending_work(&self, realm: &super::ui_realm::UiRealm) -> bool {
         realm.widgets().has_pending_builds()
             || realm.gestures().has_pending_motion()
+            || realm.gestures().has_pending_deadlines()
             || self.shared_pipeline_owner.read().has_dirty_nodes()
     }
 
@@ -1583,6 +1604,171 @@ mod tests {
             app.shared_pipeline_owner.read().root_id().is_some(),
             "AppBinding must pass its PipelineOwner to the widgets binding so the \
              root render tree bootstraps; without it the window renders nothing",
+        );
+    }
+
+    /// Gesture-arena auto-wrap regression: the `GestureArenaScope` the shell
+    /// installs around the root must put every `GestureDetector` in the
+    /// gesture binding's ONE shared arena, so two nested detectors on the
+    /// same hit-test path resolve to exactly one winner — a tap on the inner
+    /// target fires the inner `on_tap` and rejects the outer's (Flutter
+    /// parity: front member wins, loser is rejected). Without the shell wrap
+    /// each detector falls back to a private arena it closes itself, and the
+    /// same tap fires BOTH callbacks.
+    ///
+    /// This drives the exact production path, with no manually mounted scope:
+    /// `attach_root_widget_with_size` (what every runner's bootstrap calls)
+    /// for the mount, `draw_frame` for layout, and `handle_input_entered` (what
+    /// every platform input callback calls after entering a realm) for the
+    /// pointer stream.
+    #[test]
+    fn shell_installed_arena_resolves_nested_tap_detectors_to_one_winner() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
+
+        use flui_interaction::events::{PointerType, make_down_event, make_up_event};
+        use flui_types::Color;
+        use flui_types::geometry::px;
+        use flui_widgets::{ColoredBox, GestureDetector};
+
+        let app = AppBinding::new();
+        let realm = test_realm(&app);
+
+        let inner_taps = Arc::new(AtomicUsize::new(0));
+        let outer_taps = Arc::new(AtomicUsize::new(0));
+        let inner = Arc::clone(&inner_taps);
+        let outer = Arc::clone(&outer_taps);
+
+        let root = GestureDetector::new()
+            .on_tap(move || {
+                outer.fetch_add(1, AtomicOrdering::SeqCst);
+            })
+            .child(
+                GestureDetector::new()
+                    .on_tap(move || {
+                        inner.fetch_add(1, AtomicOrdering::SeqCst);
+                    })
+                    .child(ColoredBox::new(Color::rgb(10, 20, 30))),
+            );
+
+        realm
+            .enter(|realm| app.attach_root_widget_with_size(realm, &root, 100.0, 100.0))
+            .expect("attach succeeds");
+        let _ = app.draw_frame(
+            &realm,
+            flui_rendering::constraints::BoxConstraints::tight(flui_types::Size::new(
+                px(100.0),
+                px(100.0),
+            )),
+        );
+
+        // Production input arrives inside the realm (runner.rs's RealmEvent
+        // dispatch enters it before calling handle_input), so the synthetic
+        // tap does the same.
+        let position = flui_types::Offset::new(px(50.0), px(50.0));
+        realm.enter(|realm| {
+            app.handle_input_entered(
+                realm,
+                PlatformInput::Pointer(make_down_event(position, PointerType::Mouse)),
+            );
+            app.handle_input_entered(
+                realm,
+                PlatformInput::Pointer(make_up_event(position, PointerType::Mouse)),
+            );
+        });
+
+        assert_eq!(
+            inner_taps.load(AtomicOrdering::SeqCst),
+            1,
+            "the inner tap recognizer is the arena's front member and wins",
+        );
+        assert_eq!(
+            outer_taps.load(AtomicOrdering::SeqCst),
+            0,
+            "the outer tap recognizer shares the arena and must be rejected — \
+             if both fire, each detector built its own private arena (no shell \
+             GestureArenaScope above the root)",
+        );
+    }
+
+    /// Deadline keep-alive regression: a long-press armed by a pointer down
+    /// must fire at its 500ms deadline even when NO further pointer events or
+    /// redraw requests occur — the frame loop must keep producing frames while
+    /// a recognizer deadline is pending (each frame's deadline tick
+    /// re-requests the next), instead of going idle once the down event's own
+    /// frames drain. Without the keep-alive the deadline tick never runs at
+    /// the deadline and the gesture never fires.
+    ///
+    /// Simulates the runner's render loop against the real
+    /// `SystemClock`-driven gesture arena — consume `needs_redraw`, draw a
+    /// frame, repeat — after mounting through the production shell path
+    /// (`attach_root_widget_with_size`) and delivering the down through
+    /// `handle_input_entered`. The assertion is "fires at all", never "fires
+    /// on time", so a loaded CI machine cannot flake it.
+    #[test]
+    fn long_press_fires_at_its_deadline_with_no_further_input() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
+        use std::time::{Duration, Instant as StdInstant};
+
+        use flui_interaction::events::{PointerType, make_down_event};
+        use flui_types::Color;
+        use flui_types::geometry::px;
+        use flui_widgets::{ColoredBox, GestureDetector};
+
+        let app = AppBinding::new();
+        let realm = test_realm(&app);
+
+        let presses = Arc::new(AtomicUsize::new(0));
+        let in_cb = Arc::clone(&presses);
+        let root = GestureDetector::new()
+            .on_long_press(move || {
+                in_cb.fetch_add(1, AtomicOrdering::SeqCst);
+            })
+            .child(ColoredBox::new(Color::rgb(10, 20, 30)));
+
+        realm
+            .enter(|realm| app.attach_root_widget_with_size(realm, &root, 100.0, 100.0))
+            .expect("attach succeeds");
+        let constraints = flui_rendering::constraints::BoxConstraints::tight(
+            flui_types::Size::new(px(100.0), px(100.0)),
+        );
+        let _ = app.draw_frame(&realm, constraints);
+
+        // Contact down — and nothing else, ever after. Production input
+        // arrives inside the realm (runner.rs's RealmEvent dispatch enters it
+        // before calling handle_input), so the synthetic down does the same.
+        let position = flui_types::Offset::new(px(50.0), px(50.0));
+        realm.enter(|realm| {
+            app.handle_input_entered(
+                realm,
+                PlatformInput::Pointer(make_down_event(position, PointerType::Mouse)),
+            );
+        });
+
+        // Simulated runner loop: the ONLY frame source is `needs_redraw`,
+        // consumed the way the runner consumes it (observe, render). The
+        // default long-press timeout is 500ms; the cap is generous so the
+        // pass/fail signal is purely "did the deadline ever fire".
+        let deadline = StdInstant::now() + Duration::from_secs(5);
+        while presses.load(AtomicOrdering::SeqCst) == 0 {
+            assert!(
+                StdInstant::now() < deadline,
+                "long-press never fired: the frame loop went idle with an armed \
+                 recognizer deadline (no keep-alive frame was requested)",
+            );
+            if app.needs_redraw() {
+                app.mark_rendered();
+                let _ = app.draw_frame(&realm, constraints);
+            } else {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        }
+
+        assert_eq!(
+            presses.load(AtomicOrdering::SeqCst),
+            1,
+            "the held long-press fires exactly once",
         );
     }
 

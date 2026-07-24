@@ -153,6 +153,21 @@ pub trait GestureArenaMember: crate::sealed::arena_member::Sealed {
     /// (long press) override it. Implementations must be idempotent across
     /// frames (firing at most once per deadline).
     fn poll_deadline(&self) {}
+
+    /// Whether a time-based deadline is currently armed and will fire from a
+    /// future [`poll_deadline`](Self::poll_deadline) once the arena clock
+    /// reaches it.
+    ///
+    /// The frame driver reads this once per frame to decide whether another
+    /// frame must be requested: `poll_deadline` only runs on frames, so an
+    /// armed deadline in an otherwise idle app would never fire without a
+    /// frame being scheduled at it. Pure state read — must not invoke user
+    /// callbacks or call back into the arena. The default is `false`; only
+    /// deadline-driven recognizers override it, and their override must agree
+    /// with what `poll_deadline` would act on.
+    fn has_pending_deadline(&self) -> bool {
+        false
+    }
 }
 
 // ============================================================================
@@ -1429,50 +1444,33 @@ impl GestureArena {
         }
     }
 
-    /// Poll every active member's time-based deadline (e.g. long-press hold).
+    /// Snapshot every recognizer whose deadline state is visible to a frame.
     ///
-    /// Call once per frame from the UI thread. Members are snapshotted out of
-    /// the per-entry locks *before* polling, because a deadline hook may fire
-    /// user callbacks and re-enter the arena to resolve — invoking it under the
-    /// entry lock would re-introduce the arena re-entrancy deadlock. A member
-    /// Explicit deadline registrations remain visible after arena resolution,
-    /// matching Flutter timers whose lifetime is independent from the arena.
-    /// Exact recognizer identities are de-duplicated, so a registered member
-    /// that is also still competing is polled only once.
-    ///
-    /// Complexity: O(P + M) where P is the number of open arenas and M the
-    /// total active members — both bounded by the simultaneous-pointer cap.
-    pub fn poll_deadlines(&self) {
+    /// Arena entries, held generations detached during pointer-up, and
+    /// explicit timer registrations all participate. Exact recognizer
+    /// identities are de-duplicated so a timer-owning competitor is queried
+    /// or polled once.
+    fn deadline_members_snapshot(&self) -> SmallVec<[DeadlinePoll; 8]> {
         let mut members: SmallVec<[DeadlinePoll; 8]> = SmallVec::new();
-        for entry in self.entries.iter() {
-            let pointer = entry.value().pointer;
-            for member in &entry.value().data.lock().members {
+        let mut collect_slot = |slot: &ArenaSlot| {
+            for member in &slot.data.lock().members {
                 if !members
                     .iter()
                     .any(|existing| Arc::ptr_eq(&existing.member, member))
                 {
                     members.push(DeadlinePoll {
                         registration: None,
-                        pointer,
+                        pointer: slot.pointer,
                         member: Arc::clone(member),
                     });
                 }
             }
+        };
+        for entry in self.entries.iter() {
+            collect_slot(entry.value());
         }
         for entry in self.retained.iter() {
-            let pointer = entry.value().pointer;
-            for member in &entry.value().data.lock().members {
-                if !members
-                    .iter()
-                    .any(|existing| Arc::ptr_eq(&existing.member, member))
-                {
-                    members.push(DeadlinePoll {
-                        registration: None,
-                        pointer,
-                        member: Arc::clone(member),
-                    });
-                }
-            }
+            collect_slot(entry.value());
         }
         for poll in self.deadlines.snapshot() {
             if !members
@@ -1482,9 +1480,25 @@ impl GestureArena {
                 members.push(poll);
             }
         }
+        members
+    }
 
+    /// Poll every active member's time-based deadline (e.g. long-press hold).
+    ///
+    /// Call once per frame from the UI thread. Members are snapshotted out of
+    /// the per-entry locks *before* polling, because a deadline hook may fire
+    /// user callbacks and re-enter the arena to resolve — invoking it under the
+    /// entry lock would re-introduce the arena re-entrancy deadlock.
+    /// Explicit deadline registrations remain visible after arena resolution,
+    /// matching Flutter timers whose lifetime is independent from the arena.
+    /// Exact recognizer identities are de-duplicated, so a registered member
+    /// that is also still competing is polled only once.
+    ///
+    /// Complexity: O(P + M) where P is the number of open arenas and M the
+    /// total active members — both bounded by the simultaneous-pointer cap.
+    pub fn poll_deadlines(&self) {
         let mut first_panic = None;
-        for poll in members {
+        for poll in self.deadline_members_snapshot() {
             if poll
                 .registration
                 .is_some_and(|id| !self.deadlines.contains(id))
@@ -1502,6 +1516,22 @@ impl GestureArena {
     #[cfg(test)]
     pub(crate) fn deadline_member_count(&self) -> usize {
         self.deadlines.len()
+    }
+
+    /// Whether any live member has an armed time-based deadline (see
+    /// [`GestureArenaMember::has_pending_deadline`]).
+    ///
+    /// The frame driver queries this once per frame, beside
+    /// [`poll_deadlines`](Self::poll_deadlines), to keep producing frames
+    /// while a deadline is pending. Members are snapshotted out of the
+    /// per-entry locks before querying — the same discipline `poll_deadlines`
+    /// follows — and the predicate itself is a pure state read.
+    pub fn has_pending_deadlines(&self) -> bool {
+        self.deadline_members_snapshot().into_iter().any(|poll| {
+            poll.registration
+                .is_none_or(|id| self.deadlines.contains(id))
+                && poll.member.has_pending_deadline()
+        })
     }
 
     /// Get the number of active arenas.
@@ -1665,6 +1695,20 @@ mod tests {
 
         fn reject_gesture(&self, _pointer: PointerId) {
             *self.rejected.lock() = true;
+        }
+    }
+
+    struct PendingDeadlineMember;
+
+    impl crate::sealed::arena_member::Sealed for PendingDeadlineMember {}
+
+    impl GestureArenaMember for PendingDeadlineMember {
+        fn accept_gesture(&self, _pointer: PointerId) {}
+
+        fn reject_gesture(&self, _pointer: PointerId) {}
+
+        fn has_pending_deadline(&self) -> bool {
+            true
         }
     }
 
@@ -2567,5 +2611,39 @@ mod tests {
             !arena.contains(pointer),
             "release drains the deferred sweep"
         );
+    }
+
+    #[test]
+    fn retained_member_keeps_deadline_frames_alive_after_pointer_up() {
+        let arena = GestureArena::binding_driven(Arc::new(SystemClock));
+        let pointer = PointerId::PRIMARY;
+        let pending: Arc<dyn GestureArenaMember> = Arc::new(PendingDeadlineMember);
+
+        arena.add(pointer, pending);
+        arena.add(pointer, Arc::new(MockMember::new()));
+        arena.close(pointer);
+        arena.hold(pointer);
+
+        // GestureBinding detaches the exact pointer generation before routing
+        // Up, then sweeps that detached batch. A held double-tap generation is
+        // retained until its inter-tap timer decides and releases it.
+        let batch = arena.detach(pointer);
+        arena.sweep_detached(batch);
+
+        assert!(
+            arena.has_pending_deadlines(),
+            "a retained recognizer must keep owner frames running until its deadline"
+        );
+    }
+
+    #[test]
+    fn explicit_deadline_registration_keeps_frames_alive_without_an_arena_slot() {
+        let arena = GestureArena::binding_driven(Arc::new(SystemClock));
+        let member: Arc<dyn GestureArenaMember> = Arc::new(PendingDeadlineMember);
+        let registration = arena.register_deadline_member(PointerId::PRIMARY, &member);
+
+        assert!(arena.has_pending_deadlines());
+        drop(registration);
+        assert!(!arena.has_pending_deadlines());
     }
 }

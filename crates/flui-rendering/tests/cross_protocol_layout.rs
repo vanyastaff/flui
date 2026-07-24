@@ -275,21 +275,25 @@ fn cross_protocol_box_parent_lays_out_sliver_padding_with_leaf_child() {
 }
 
 // ============================================================================
-// Test 2 — Negative: layout_sliver_child on a Box child returns ZERO + stays dirty
+// Test 2 — Negative: layout_sliver_child on a Box child returns ZERO + poisons
 // ============================================================================
 
 /// Calling `ctx.layout_sliver_child(0, ...)` when child 0 is a Box-protocol
 /// node triggers a `ProtocolMismatch` error in `layout_sliver_subtree_borrowed_impl`
-/// (`as_sliver_mut()` returns `None`).  The sliver callback sets the
-/// descendant-error flag → parent `NEEDS_LAYOUT` stays set for retry,
-/// and `SliverGeometry::ZERO` is returned to the parent's `perform_layout`.
+/// (`as_sliver_mut()` returns `None`).  The sliver callback collapses the
+/// error and returns `SliverGeometry::ZERO` to the parent's
+/// `perform_layout`.  A protocol mismatch is a structural failure, so the
+/// layout poison engages on the first occurrence: the failed child (and
+/// its direct layout parent) have `NEEDS_LAYOUT` cleared and the child is
+/// skipped in later walks, instead of the parent staying dirty for an
+/// unbounded next-frame retry.
 ///
 /// Assertions:
 /// - `layout_dirty_root` returns `Ok` (parent's own geometry is produced).
 /// - The captured geometry equals `SliverGeometry::ZERO`.
-/// - Parent remains dirty (`needs_layout() == true`).
+/// - Parent's `NEEDS_LAYOUT` is cleared (poison engaged — bounded retry).
 #[test]
-fn cross_protocol_layout_sliver_child_on_box_child_returns_zero_and_keeps_dirty() {
+fn cross_protocol_layout_sliver_child_on_box_child_returns_zero_and_poisons() {
     let sc = make_sliver_constraints();
     let captured: Arc<Mutex<Option<SliverGeometry>>> = Arc::new(Mutex::new(None));
 
@@ -333,8 +337,10 @@ fn cross_protocol_layout_sliver_child_on_box_child_returns_zero_and_keeps_dirty(
         .get(parent_id)
         .expect("parent must remain in the tree after layout");
     assert!(
-        parent_node.needs_layout(),
-        "parent NEEDS_LAYOUT must remain set after descendant ProtocolMismatch \
-         (descendant_error_flag keeps the dirty bit for next-frame retry)"
+        !parent_node.needs_layout(),
+        "a structural descendant failure (ProtocolMismatch) engages the layout \
+         poison on the first occurrence: the failed child is skipped in later \
+         walks and the parent's NEEDS_LAYOUT is cleared — its geometry with \
+         the child's ZERO stand-in is the same value any retry would produce",
     );
 }
