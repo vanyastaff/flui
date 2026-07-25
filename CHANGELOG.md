@@ -87,7 +87,7 @@ file records the repo-consumer-visible summary.
   Linux job compiles (~91 further sites live in the Windows/macOS backends), and
   enabling it before auditing produced comments that stated invariants the code
   does not establish.
-- **`just test-release` is green for the first time.** The recipe now excludes
+- **`just test-release` went from 4 red suites to 1.** The recipe now excludes
   flui-platform, matching the CI `test` job — that crate's suite is red
   independently of the profile (the STATUS_HEAP_CORRUPTION investigation), so
   including it made the recipe permanently red. With that scoped, eleven
@@ -95,6 +95,11 @@ file records the repo-consumer-visible summary.
   in release, where the assertion does not exist; they are now
   `cfg(debug_assertions)`-gated. Two were introduced by this branch, nine
   predated it.
+  One suite is still red and is NOT fixed here: flui-interaction's
+  `eager_dispose_clears_state` has a deliberate release-only branch asserting
+  that a post-`dispose` `add_pointer` does not reach the arena, and it does.
+  Verified red on `main` independently of this branch — a real defect in the
+  recognizer's dispose guard, not a profile artifact.
 
 - **`wasm-check` now passes.** The job had never been green: 11 errors across
   `flui-scheduler` (2), `flui-platform`'s web backend (4) and `flui-app` (5).
