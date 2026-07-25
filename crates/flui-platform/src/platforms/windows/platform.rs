@@ -105,6 +105,16 @@ pub struct WindowsPlatform {
 unsafe impl Send for WindowsPlatform {}
 unsafe impl Sync for WindowsPlatform {}
 
+impl std::fmt::Debug for WindowsPlatform {
+    // Hand-written: `PlatformHandlers` and the executor carry callback payloads
+    // with no meaningful Debug representation.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WindowsPlatform")
+            .field("windows", &self.windows.lock().len())
+            .finish_non_exhaustive()
+    }
+}
+
 impl WindowsPlatform {
     /// Create a new Windows platform instance with default configuration
     pub fn new() -> Result<Self> {

@@ -23,6 +23,7 @@ use crate::traits::Clipboard;
 /// Thread-safe wrapper around Windows Clipboard API.
 /// Opens and closes the clipboard for each operation to avoid blocking other
 /// applications.
+#[derive(Debug)]
 pub struct WindowsClipboard {
     /// Dummy HWND for clipboard operations (we use None which means current
     /// thread) Mutex is used to ensure thread-safe access

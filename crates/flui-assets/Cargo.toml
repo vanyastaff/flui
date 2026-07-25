@@ -30,7 +30,6 @@ lasso = { workspace = true }
 
 # Sync primitives
 parking_lot = { workspace = true }
-once_cell = { workspace = true }
 
 # Error handling
 thiserror = { workspace = true }

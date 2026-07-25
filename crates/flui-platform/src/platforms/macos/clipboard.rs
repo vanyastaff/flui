@@ -29,6 +29,14 @@ unsafe impl Send for MacOSClipboard {}
 // pasteboard calls go through the Mutex.
 unsafe impl Sync for MacOSClipboard {}
 
+impl std::fmt::Debug for MacOSClipboard {
+    // Hand-written: the field is a raw Objective-C `id` for the process-wide
+    // pasteboard singleton, which has no meaningful Debug representation.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MacOSClipboard").finish_non_exhaustive()
+    }
+}
+
 impl MacOSClipboard {
     /// Create a new clipboard instance
     ///

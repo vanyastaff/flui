@@ -8,7 +8,6 @@ license = "MIT OR Apache-2.0"
 # Synchronization
 parking_lot.workspace = true
 dashmap.workspace = true
-once_cell.workspace = true
 
 # Async runtime
 futures.workspace = true

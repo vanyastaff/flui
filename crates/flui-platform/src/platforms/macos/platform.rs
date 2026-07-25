@@ -55,6 +55,16 @@ unsafe impl Send for MacOSPlatform {}
 // pointer is main-thread-affine by AppKit convention.
 unsafe impl Sync for MacOSPlatform {}
 
+impl std::fmt::Debug for MacOSPlatform {
+    // Hand-written: `app` is a raw Objective-C `id` and the handlers/executor
+    // carry callback payloads, none of which have a useful Debug form.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MacOSPlatform")
+            .field("windows", &self.windows.lock().len())
+            .finish_non_exhaustive()
+    }
+}
+
 impl MacOSPlatform {
     /// Create a new macOS platform with default configuration
     pub fn new() -> Result<Self> {

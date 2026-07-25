@@ -5,6 +5,7 @@ name: CI
 #   clippy         — workspace lint with -D warnings
 #   feature-matrix — cargo-hack per-feature clippy (--each-feature --optional-deps), xilem-style
 #   wasm-check     — cargo check --target wasm32-unknown-unknown for the wasm-capable crates
+#   cross-check    — cargo check of flui-platform's windows + macos backends from Linux
 #   test           — build + nextest (lib + integration), ubuntu
 #   gpu-test       — full enable-wgpu-tests readback suite on windows/WARP (merge-blocking)
 #   bench-compile  — criterion benches compile + link
@@ -638,6 +639,41 @@ jobs:
         run: cargo check --workspace --locked --target wasm32-unknown-unknown ${{ env.NO_WASM_PKGS }}
 
   # ─────────────────────────────────────────────────────────────────────────
+  # cross-check — flui-platform's per-OS backends, type-checked from Linux.
+  # `cargo check` does not link, so the Win32 and AppKit backends compile from
+  # any host. Before this job they were only ever built by whoever happened to
+  # develop on that OS: the Windows backend had a hard `missing_docs` error
+  # (`pub mod win32`) and both backends had missing Debug impls that the Linux
+  # and wasm gates structurally could not see. Runs on the whole crate, not
+  # the workspace — flui-platform is the only member with per-OS backends.
+  # ─────────────────────────────────────────────────────────────────────────
+  cross-check:
+    name: cross-check (windows + macos backends)
+    needs: checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust stable + windows/macos targets
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          targets: x86_64-pc-windows-gnu,x86_64-apple-darwin
+
+      - name: Cache cargo registry + target
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          save-if: ${{ github.event_name != 'merge_group' }}
+
+      - name: cargo check (windows backend)
+        run: cargo check -p flui-platform --locked --target x86_64-pc-windows-gnu
+
+      - name: cargo check (macos backend)
+        run: cargo check -p flui-platform --locked --target x86_64-apple-darwin
+
+  # ─────────────────────────────────────────────────────────────────────────
   # ci — aggregator over every job above (tokio pattern). Branch protection
   # requires this ONE check instead of enumerating the graph, so adding or
   # renaming a job never silently drops a gate. `if: always()` so it still
@@ -647,7 +683,7 @@ jobs:
   ci:
     name: ci
     if: always()
-    needs: [checks, clippy, feature-matrix, wasm-check, test, gpu-test, bench-compile, doc, deny, doc-test, msrv, miri]
+    needs: [checks, clippy, feature-matrix, wasm-check, cross-check, test, gpu-test, bench-compile, doc, deny, doc-test, msrv, miri]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

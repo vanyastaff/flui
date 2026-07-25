@@ -84,6 +84,18 @@ wasm-check:
       --exclude flui-web-server --exclude hot-reload-counter-host \
       --exclude hot-reload-counter-logic --exclude hot-reload-counter-types
 
+# `cargo check` does not link, so the per-OS backends in flui-platform can be
+# type-checked from any host. Without this they are only ever compiled by
+# whoever happens to develop on that OS — which is how the Windows backend
+# came to have a hard `missing_docs` error and both backends accumulated
+# missing Debug impls that no gate could see.
+# Requires: rustup target add x86_64-pc-windows-gnu x86_64-apple-darwin
+[group("build")]
+[doc("Type-check flui-platform's Windows and macOS backends from this host (mirrors the CI cross-check job)")]
+cross-check:
+    cargo check -p flui-platform --locked --target x86_64-pc-windows-gnu
+    cargo check -p flui-platform --locked --target x86_64-apple-darwin
+
 # =============================================================================
 # Testing
 # =============================================================================

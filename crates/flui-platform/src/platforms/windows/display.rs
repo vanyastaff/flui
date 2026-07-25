@@ -10,6 +10,7 @@ use windows::core::BOOL;
 use crate::traits::{DisplayId, PlatformDisplay};
 
 /// Windows display implementation
+#[derive(Debug)]
 pub struct WindowsDisplay {
     id: DisplayId,
     name: String,

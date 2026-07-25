@@ -63,6 +63,16 @@ struct WindowState {
     title: String,
 }
 
+impl std::fmt::Debug for WindowsWindow {
+    // Hand-written: `WindowCallbacks` is a callback payload with no meaningful
+    // Debug representation.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WindowsWindow")
+            .field("hwnd", &self.hwnd.0)
+            .finish_non_exhaustive()
+    }
+}
+
 impl WindowsWindow {
     /// Create a new Windows window
     pub fn new(
@@ -222,7 +232,7 @@ impl WindowsWindow {
             let _ = DwmSetWindowAttribute(
                 hwnd,
                 DWMWINDOWATTRIBUTE(38), // DWMWA_SYSTEMBACKDROP_TYPE
-                &mica_value as *const i32 as *const std::ffi::c_void,
+                (&raw const mica_value).cast::<std::ffi::c_void>(),
                 std::mem::size_of::<i32>() as u32,
             );
 
@@ -231,7 +241,7 @@ impl WindowsWindow {
             let _ = DwmSetWindowAttribute(
                 hwnd,
                 DWMWINDOWATTRIBUTE(20), // DWMWA_USE_IMMERSIVE_DARK_MODE
-                &dark_mode_value as *const i32 as *const std::ffi::c_void,
+                (&raw const dark_mode_value).cast::<std::ffi::c_void>(),
                 std::mem::size_of::<i32>() as u32,
             );
 
@@ -240,7 +250,7 @@ impl WindowsWindow {
             let _ = DwmSetWindowAttribute(
                 hwnd,
                 DWMWINDOWATTRIBUTE(33), // DWMWA_WINDOW_CORNER_PREFERENCE
-                &corner_value as *const i32 as *const std::ffi::c_void,
+                (&raw const corner_value).cast::<std::ffi::c_void>(),
                 std::mem::size_of::<i32>() as u32,
             );
 
@@ -867,7 +877,7 @@ impl PlatformWindow for WindowsWindow {
             let _ = DwmSetWindowAttribute(
                 self.hwnd,
                 DWMWINDOWATTRIBUTE(38), // DWMWA_SYSTEMBACKDROP_TYPE
-                &backdrop_value as *const i32 as *const std::ffi::c_void,
+                (&raw const backdrop_value).cast::<std::ffi::c_void>(),
                 std::mem::size_of::<i32>() as u32,
             );
         }
