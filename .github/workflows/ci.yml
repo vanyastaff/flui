@@ -460,8 +460,10 @@ jobs:
         with:
           tool: cargo-deny@0.19
 
+      # `cargo deny` has no `--locked` flag (it reads the committed lockfile by
+      # design); passing it exits 2 with "unexpected argument".
       - name: cargo deny check
-        run: cargo deny check --locked
+        run: cargo deny check
 
   # ─────────────────────────────────────────────────────────────────────────
   # doc-test — run every rustdoc example as a test. nextest does NOT execute
@@ -652,6 +654,14 @@ jobs:
         with:
           save-if: ${{ github.event_name != 'merge_group' }}
 
+      # `dtolnay/rust-toolchain@stable` installs the target for the toolchain
+      # named `stable`, but the committed `rust-toolchain.toml` makes `1.97.1`
+      # the ACTIVE toolchain — a separate rustup install even at the same
+      # version — so the target has to be added again against the pin. Without
+      # this the build fails with E0463 "can't find crate for `core`".
+      - name: Add wasm32 target to the pinned toolchain
+        run: rustup target add wasm32-unknown-unknown
+
       - name: cargo check (wasm32)
         run: cargo check --workspace --locked --target wasm32-unknown-unknown ${{ env.NO_WASM_PKGS }}
 
@@ -688,6 +698,14 @@ jobs:
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           save-if: ${{ github.event_name != 'merge_group' }}
+
+      # `dtolnay/rust-toolchain@stable` installs the target for the toolchain
+      # named `stable`, but the committed `rust-toolchain.toml` makes `1.97.1`
+      # the ACTIVE toolchain — a separate rustup install even at the same
+      # version — so the target has to be added again against the pin. Without
+      # this the build fails with E0463 "can't find crate for `core`".
+      - name: Add cross targets to the pinned toolchain
+        run: rustup target add x86_64-pc-windows-msvc aarch64-apple-darwin
 
       - name: cargo check (windows backend)
         run: cargo check -p flui-platform --locked --all-targets --target x86_64-pc-windows-msvc
