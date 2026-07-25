@@ -82,6 +82,23 @@ impl Lifecycle {
     pub fn can_deactivate(self) -> bool {
         matches!(self, Self::Active)
     }
+
+    /// Returns `true` if `self` may legally become `next`.
+    ///
+    /// The permitted graph is the one this type documents:
+    /// `Initial → Active ⇄ Inactive → Defunct`. **`Defunct` is absorbing** —
+    /// its state has been disposed, so reactivating a defunct element would
+    /// operate on torn-down state. That is the edge this predicate exists to
+    /// catch; the mutators on `ElementCore` assert it in debug builds.
+    ///
+    /// Re-entering the state you are already in is permitted: mount/activate
+    /// are driven by tree walks that can legitimately re-run against an
+    /// already-Active element.
+    #[must_use]
+    #[inline]
+    pub fn can_transition_to(self, next: Self) -> bool {
+        !self.is_defunct() || next == Self::Defunct
+    }
 }
 
 #[cfg(test)]
@@ -91,6 +108,36 @@ mod tests {
     #[test]
     fn test_default_is_initial() {
         assert_eq!(Lifecycle::default(), Lifecycle::Initial);
+    }
+
+    /// The whole 4x4 transition table, stated once so a future edit to
+    /// `can_transition_to` has to argue with every cell rather than with the
+    /// two or three a spot-check would cover.
+    #[test]
+    fn defunct_is_the_only_absorbing_state() {
+        use Lifecycle::{Active, Defunct, Inactive, Initial};
+
+        for from in [Initial, Active, Inactive] {
+            for to in [Initial, Active, Inactive, Defunct] {
+                assert!(
+                    from.can_transition_to(to),
+                    "{from:?} -> {to:?} should be permitted"
+                );
+            }
+        }
+
+        // The edge this predicate exists for: a defunct element has disposed
+        // its state, so nothing may bring it back.
+        for to in [Initial, Active, Inactive] {
+            assert!(
+                !Defunct.can_transition_to(to),
+                "Defunct -> {to:?} must be rejected"
+            );
+        }
+        assert!(
+            Defunct.can_transition_to(Defunct),
+            "unmounting an already-defunct element is idempotent, not illegal"
+        );
     }
 
     #[test]

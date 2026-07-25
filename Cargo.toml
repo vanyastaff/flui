@@ -260,7 +260,25 @@ insta = "1"
 unsafe_code = "warn"
 missing_docs = "warn"
 missing_debug_implementations = "warn"
-rust_2018_idioms = "warn"
+# Lint groups need lower priority so the individual lints below can override
+# them (same reason the clippy table drops `all`/`pedantic` to -1).
+rust_2018_idioms = { level = "warn", priority = -1 }
+# The three below are already clean workspace-wide (measured: zero sites), so
+# `deny` costs nothing today and is purely a regression bar. They are
+# warn-by-default, which on this workspace means "invisible outside CI" — the
+# point of pinning them here is that a crate cannot silently reopen them.
+#
+# unexpected_cfgs: a typo in one of the many `cfg(target_arch = ...)` /
+# `cfg(feature = ...)` gates would otherwise compile to a silently-dead branch —
+# exactly the failure mode that kept the web backend from ever being exercised.
+unexpected_cfgs = "deny"
+# unsafe_op_in_unsafe_fn: edition 2024 already warns; denying states that an
+# `unsafe fn` body is not itself an unsafe block, so each operation inside it
+# still needs its own justified `unsafe { }`.
+unsafe_op_in_unsafe_fn = "deny"
+# unused_must_use: a dropped `Result` from a layout/paint/commit call is silent
+# by construction — there is no log, no panic, just a skipped effect.
+unused_must_use = "deny"
 
 [workspace.lints.clippy]
 # Lint groups need lower priority to allow individual lint overrides

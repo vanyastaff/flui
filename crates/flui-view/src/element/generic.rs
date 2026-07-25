@@ -257,6 +257,12 @@ where
         slot: usize,
         owner: &mut crate::ElementOwner<'_>,
     ) {
+        debug_assert!(
+            self.lifecycle.can_transition_to(Lifecycle::Active),
+            "BUG: active from {:?} — Defunct is absorbing; its state is \
+             already disposed, so this would operate on torn-down state",
+            self.lifecycle
+        );
         self.lifecycle = Lifecycle::Active;
         self.depth = slot;
         self.dirty.store(true, Ordering::Relaxed);
@@ -303,6 +309,12 @@ where
     /// (descendants are independent nodes), not a recursive walk from
     /// here.
     pub fn activate(&mut self) {
+        debug_assert!(
+            self.lifecycle.can_transition_to(Lifecycle::Active),
+            "BUG: active from {:?} — Defunct is absorbing; its state is \
+             already disposed, so this would operate on torn-down state",
+            self.lifecycle
+        );
         self.lifecycle = Lifecycle::Active;
 
         tracing::debug!(
@@ -318,6 +330,12 @@ where
     /// job (descendants are independent nodes), not a recursive walk from
     /// here.
     pub fn deactivate(&mut self) {
+        debug_assert!(
+            self.lifecycle.can_transition_to(Lifecycle::Inactive),
+            "BUG: inactive from {:?} — Defunct is absorbing; its state is \
+             already disposed, so this would operate on torn-down state",
+            self.lifecycle
+        );
         self.lifecycle = Lifecycle::Inactive;
 
         tracing::debug!(
@@ -644,6 +662,40 @@ mod tests {
             core.unmount(&mut owner);
         }
         assert_eq!(core.lifecycle(), Lifecycle::Defunct);
+    }
+
+    /// `Defunct` means the element's state has been disposed, so reactivating
+    /// it operates on torn-down state. `activate()` is public and used to set
+    /// `Active` unconditionally, which made this reachable from outside the
+    /// crate; the debug assertion is what closes it.
+    #[test]
+    #[should_panic(expected = "Defunct is absorbing")]
+    fn reactivating_a_defunct_element_is_rejected() {
+        let mut core = ElementCore::<TestView, Single>::new(TestView { value: 42 });
+        let mut build_owner = crate::BuildOwner::new();
+        {
+            let mut owner = build_owner.element_owner_mut();
+            core.mount(None, 0, &mut owner);
+            core.unmount(&mut owner);
+        }
+        assert_eq!(core.lifecycle(), Lifecycle::Defunct);
+
+        core.activate();
+    }
+
+    /// The deactivate half of the same invariant.
+    #[test]
+    #[should_panic(expected = "Defunct is absorbing")]
+    fn deactivating_a_defunct_element_is_rejected() {
+        let mut core = ElementCore::<TestView, Single>::new(TestView { value: 42 });
+        let mut build_owner = crate::BuildOwner::new();
+        {
+            let mut owner = build_owner.element_owner_mut();
+            core.mount(None, 0, &mut owner);
+            core.unmount(&mut owner);
+        }
+
+        core.deactivate();
     }
 
     #[test]
