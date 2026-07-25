@@ -364,4 +364,25 @@ mod tests {
             }),
         );
     }
+
+    #[test]
+    fn action_request_uses_the_snapshot_identity_and_typed_arguments() {
+        let node_id = AccessibilityNodeId::from(RenderId::new(7));
+        let request = SemanticsActionRequest::with_arguments(
+            node_id,
+            SemanticsAction::SetText,
+            ActionArgs::SetText {
+                text: "Hello".to_owned(),
+            },
+        );
+
+        assert_eq!(request.node_id, node_id);
+        assert_eq!(request.action, SemanticsAction::SetText);
+        assert_eq!(
+            request.arguments,
+            Some(ActionArgs::SetText {
+                text: "Hello".to_owned(),
+            }),
+        );
+    }
 }
