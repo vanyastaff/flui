@@ -166,7 +166,13 @@ pub(crate) enum UiCommand {
     /// Apply a hot-reload reassemble on the owner at the next Idle drain.
     // Only constructed by `request_hot_reload`, whose consumer is the
     // desktop runner — absent from the wasm lib check.
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            dead_code,
+            reason = "consumed only by the desktop runner and tests, neither in the wasm lib check"
+        )
+    )]
     HotReload(flui_hot_reload::HotReloadTier),
     /// Apply a typed navigator mutation on the owner thread.
     Navigation(NavigatorCommand),
@@ -254,7 +260,13 @@ impl UiCommandSender {
     /// normal enqueue-and-wake contract pumps that drain.
     // The desktop runner (`cfg(not(target_arch = "wasm32"))`) is the only
     // non-test consumer, so the wasm lib check sees this as dead.
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            dead_code,
+            reason = "consumed only by the desktop runner and tests, neither in the wasm lib check"
+        )
+    )]
     pub(crate) fn request_hot_reload(
         &self,
         tier: flui_hot_reload::HotReloadTier,
@@ -365,7 +377,13 @@ impl UiCommandSender {
     #[must_use]
     // The desktop runner (`cfg(not(target_arch = "wasm32"))`) is the only
     // non-test consumer, so the wasm lib check sees this as dead.
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            dead_code,
+            reason = "consumed only by the desktop runner and tests, neither in the wasm lib check"
+        )
+    )]
     pub fn capacity(&self) -> usize {
         self.capacity
     }
@@ -414,7 +432,13 @@ pub(crate) struct UiRealm {
     /// with the runtime and every outstanding sender turns `OwnerGone`.
     // The desktop runner (`cfg(not(target_arch = "wasm32"))`) is the only
     // non-test consumer, so the wasm lib check sees this as dead.
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            dead_code,
+            reason = "consumed only by the desktop runner and tests, neither in the wasm lib check"
+        )
+    )]
     sender_prototype: UiCommandSender,
     redraw_pending: Arc<AtomicBool>,
     /// The [`AppBinding`](super::binding::AppBinding) this realm is bound to,
@@ -541,7 +565,13 @@ impl UiRealm {
     #[must_use]
     // The desktop runner (`cfg(not(target_arch = "wasm32"))`) is the only
     // non-test consumer, so the wasm lib check sees this as dead.
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            dead_code,
+            reason = "consumed only by the desktop runner and tests, neither in the wasm lib check"
+        )
+    )]
     pub fn command_sender(&self) -> UiCommandSender {
         self.sender_prototype.clone()
     }

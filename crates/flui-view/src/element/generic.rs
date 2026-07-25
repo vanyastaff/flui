@@ -258,10 +258,9 @@ where
         owner: &mut crate::ElementOwner<'_>,
     ) {
         debug_assert!(
-            self.lifecycle.can_transition_to(Lifecycle::Active),
-            "BUG: active from {:?} — Defunct is absorbing; its state is \
-             already disposed, so this would operate on torn-down state",
-            self.lifecycle
+            !self.lifecycle.is_defunct(),
+            "BUG: mount from Defunct — its state is already disposed, so this \
+             would operate on torn-down state"
         );
         self.lifecycle = Lifecycle::Active;
         self.depth = slot;
@@ -310,9 +309,9 @@ where
     /// here.
     pub fn activate(&mut self) {
         debug_assert!(
-            self.lifecycle.can_transition_to(Lifecycle::Active),
-            "BUG: active from {:?} — Defunct is absorbing; its state is \
-             already disposed, so this would operate on torn-down state",
+            self.lifecycle.can_activate(),
+            "BUG: activate from {:?} — only an Inactive element may be \
+             reactivated; Defunct in particular has disposed its state",
             self.lifecycle
         );
         self.lifecycle = Lifecycle::Active;
@@ -331,9 +330,9 @@ where
     /// here.
     pub fn deactivate(&mut self) {
         debug_assert!(
-            self.lifecycle.can_transition_to(Lifecycle::Inactive),
-            "BUG: inactive from {:?} — Defunct is absorbing; its state is \
-             already disposed, so this would operate on torn-down state",
+            self.lifecycle.can_deactivate(),
+            "BUG: deactivate from {:?} — only an Active element may be \
+             deactivated",
             self.lifecycle
         );
         self.lifecycle = Lifecycle::Inactive;
@@ -673,7 +672,7 @@ mod tests {
     // "did not panic as expected".
     #[test]
     #[cfg(debug_assertions)]
-    #[should_panic(expected = "Defunct is absorbing")]
+    #[should_panic(expected = "only an Inactive element may be reactivated")]
     fn reactivating_a_defunct_element_is_rejected() {
         let mut core = ElementCore::<TestView, Single>::new(TestView { value: 42 });
         let mut build_owner = crate::BuildOwner::new();
@@ -690,7 +689,7 @@ mod tests {
     /// The deactivate half of the same invariant.
     #[test]
     #[cfg(debug_assertions)]
-    #[should_panic(expected = "Defunct is absorbing")]
+    #[should_panic(expected = "only an Active element may be deactivated")]
     fn deactivating_a_defunct_element_is_rejected() {
         let mut core = ElementCore::<TestView, Single>::new(TestView { value: 42 });
         let mut build_owner = crate::BuildOwner::new();

@@ -61,6 +61,38 @@ file records the repo-consumer-visible summary.
   unsymbolicated — `perf`, flamegraph, samply, Tracy and minidumps all resolve
   frames through it. Cost measured on `target/release/flui`: 3 437 096 →
   4 394 832 bytes (+935 KiB, +27.9%); DWARF is still dropped.
+- **Performance overlay wired to `AppConfig`.** `show_performance_overlay` was
+  write-only: the builder set it and nothing read it, while the layer, the
+  rolling stats window and a real wgpu draw path all already existed. The chain
+  is joined in `draw_frame` phase 4. Scope: it reports FPS and average frame
+  time only — the renderer ignores the frame counter and the option mask — and
+  the sampled interval is between *composited* frames, so it is a repaint rate.
+- **`Defunct` is now an absorbing lifecycle state.** `Lifecycle::can_activate` /
+  `can_deactivate` existed but were called only from tests; every mutator
+  assigned unconditionally, so `Defunct → Active` was reachable through the
+  public `ElementCore::activate` and would revive an element whose state was
+  disposed. Both predicates are now asserted (debug-only) in `ElementCore` and
+  in the hand-rolled `RootRenderElement`/`ErrorElement`.
+- **`TextRange` consolidated into flui-types**, whose copy was already a strict
+  superset; the canonical type gains `Clone, Copy, PartialEq, Eq, Hash`. Under
+  0.x this is a breaking change (`cargo semver-checks`: `copy_impl_added` +
+  `struct_missing`) — 0.2.0 → 0.3.0 when published.
+- **`once_cell` dropped as a direct dependency** in favour of
+  `std::sync::{OnceLock, LazyLock}`, which most crates already used. It remains
+  in the lockfile transitively via `ahash` ← `hashbrown` ← `dashmap`.
+- **Workspace lints:** `unexpected_cfgs`, `unsafe_op_in_unsafe_fn` and
+  `unused_must_use` at `deny`, each measured at zero sites first so they are a
+  regression bar rather than a migration. `clippy::undocumented_unsafe_blocks`
+  was tried and reverted — see the note in `Cargo.toml`: it only sees what the
+  Linux job compiles (~91 further sites live in the Windows/macOS backends), and
+  enabling it before auditing produced comments that stated invariants the code
+  does not establish.
+- **`just test-release` is green for the first time.** Eleven
+  `#[should_panic]`-over-`debug_assert!` tests across eight files could not pass
+  in release, where the assertion does not exist; they are now
+  `cfg(debug_assertions)`-gated. Two were introduced by this branch, nine
+  predated it.
+
 - **`wasm-check` now passes.** The job had never been green: 11 errors across
   `flui-scheduler` (2), `flui-platform`'s web backend (4) and `flui-app` (5).
   The `flui-app` five are not dead code — the job runs `cargo check` without

@@ -694,7 +694,13 @@ impl AppBinding {
     /// and `UiRealm::drain_commands`'s hot-reload arm share.
     // The desktop runner (`cfg(not(target_arch = "wasm32"))`) is the only
     // non-test consumer, so the wasm lib check sees this as dead.
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            dead_code,
+            reason = "consumed only by the desktop runner and tests, neither in the wasm lib check"
+        )
+    )]
     pub(crate) fn perform_hot_reload_entered(
         &self,
         realm: &super::ui_realm::UiRealm,
@@ -1002,7 +1008,13 @@ impl AppBinding {
     /// this `Arc` past the platform's own shutdown.
     // The desktop runner (`cfg(not(target_arch = "wasm32"))`) is the only
     // non-test consumer, so the wasm lib check sees this as dead.
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            dead_code,
+            reason = "consumed only by the desktop runner and tests, neither in the wasm lib check"
+        )
+    )]
     pub(crate) fn clear_platform_clipboard(&self) {
         *self.platform_clipboard.lock() = None;
     }
@@ -1013,9 +1025,6 @@ impl AppBinding {
     /// [`AppConfig::show_performance_overlay`](super::AppConfig). Enabling
     /// starts a fresh rolling window, so toggling it at runtime does not
     /// report frame times from before the toggle.
-    // The desktop runner (`cfg(not(target_arch = "wasm32"))`) is the only
-    // non-test consumer, so the wasm lib check sees this as dead.
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(crate) fn set_performance_overlay(&self, enabled: bool) {
         *self.performance_overlay.lock() = enabled.then(PerformanceStats::default);
     }
@@ -1036,8 +1045,9 @@ impl AppBinding {
 
         stats.record_frame();
 
-        // Top-left inset, sized to the text block `Backend::add_performance_overlay`
-        // draws (three labelled rows at 11px).
+        // Top-left inset. The extent is a placeholder that has to match what
+        // `Backend::add_performance_overlay` draws (two rows); owning the
+        // geometry here rather than beside the drawing code is a known wart.
         let mut overlay = PerformanceOverlayLayer::all_stats(Rect::from_ltwh(
             px(8.0),
             px(8.0),

@@ -1061,9 +1061,14 @@ mod lifecycle_tests {
 
         // SAFETY: see `drop_marks_node_disposed`.
         unsafe { ptr::drop_in_place(slot.as_mut_ptr()) };
-        // SAFETY: `drop_in_place` above ran `LayerNode::drop`, which only
-        // flips an `AtomicBool`; the slot is still initialized enough to read
-        // that flag, which is all this does.
+        // SAFETY: `drop_in_place` ran the FULL drop glue — `LayerNode::drop`
+        // (which flips the `disposed` flag) and then every field, including the
+        // `children` Vec's deallocation. Reading `disposed` back is sound on
+        // three premises: the stack slot is still live; no drop glue writes the
+        // `AtomicBool`'s bytes; and every other field stays bytewise valid, so
+        // autoref-ing a `&LayerNode` here forms no invalid reference. The third
+        // is the fragile one — a field whose drop poisons a niche would make
+        // this UB with no signal from the compiler.
         let after_first = unsafe { (*slot.as_ptr()).is_disposed() };
         assert!(after_first, "first drop must flip flag");
 
@@ -1076,9 +1081,8 @@ mod lifecycle_tests {
         // single-drop observation: the flag stays `true`, and
         // `is_disposed` continues to read `true` from the AtomicBool
         // (which has trivial Drop).
-        // SAFETY: same as the first read — the `AtomicBool` has a trivial
-        // Drop, so reading it after the single `drop_in_place` is sound. No
-        // second `drop_in_place` is run (that would double-free the Box).
+        // SAFETY: identical to the first read, on the same three premises. No
+        // second `drop_in_place` is run — that would double-free the Vec.
         let after_second_read = unsafe { (*slot.as_ptr()).is_disposed() };
         assert!(after_second_read);
     }

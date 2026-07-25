@@ -1003,9 +1003,15 @@ unsafe fn layout_subtree_borrowed_impl(
     // reads on child slots (which on a cyclic tree may alias `node_ptr`).
     // -----------------------------------------------------------------------
     let geometry = {
-        // SAFETY: the cycle guard is held, so no other borrow of this slot is
-        // live. This unique reborrow is scoped to the block below, which ends
-        // it before Phase 4 opens shared reads that may alias `node_ptr`.
+        // SAFETY: what validates this unique reborrow is that Phase 1's
+        // `parent_shared` scope has closed and Phase 1b's reads have ended, so
+        // no shared borrow of this slot is live here — see the block comment
+        // above, which states the ordering in full. The cycle guard alone is
+        // NOT sufficient: it establishes only that no ANCESTOR frame holds a
+        // `&mut`. The reborrow is scoped to the block below, which ends it
+        // before Phase 4 opens shared reads that may alias `node_ptr`.
+        //
+        // Nothing derived from Phase 1 may be carried past this line.
         let node_ref: &mut RenderNode = unsafe { &mut *node_ptr };
 
         let entry: &mut RenderEntry<BoxProtocol> = match node_ref.as_box_mut() {

@@ -89,12 +89,20 @@ wasm-check:
 # whoever happens to develop on that OS — which is how the Windows backend
 # came to have a hard `missing_docs` error and both backends accumulated
 # missing Debug impls that no gate could see.
-# Requires: rustup target add x86_64-pc-windows-gnu x86_64-apple-darwin
+#
+# The triples are the ones actually shipped: MSVC (what `gpu-test` runs on
+# windows-latest), not the GNU ABI, and aarch64 for macOS. `--all-targets` so
+# per-OS test targets are compiled too — omitting it is what made live code
+# look dead on wasm32.
+#
+# TYPE-CHECK ONLY: it does not link and runs no tests, and flui-platform is
+# excluded from the test job entirely. Green here means "compiles", nothing more.
+# Requires: rustup target add x86_64-pc-windows-msvc aarch64-apple-darwin
 [group("build")]
-[doc("Type-check flui-platform's Windows and macOS backends from this host (mirrors the CI cross-check job)")]
+[doc("Type-check flui-platform's Windows and macOS backends from this host (mirrors the CI cross-typecheck job)")]
 cross-check:
-    cargo check -p flui-platform --locked --target x86_64-pc-windows-gnu
-    cargo check -p flui-platform --locked --target x86_64-apple-darwin
+    cargo check -p flui-platform --locked --all-targets --target x86_64-pc-windows-msvc
+    cargo check -p flui-platform --locked --all-targets --target aarch64-apple-darwin
 
 # =============================================================================
 # Testing

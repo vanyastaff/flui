@@ -292,11 +292,19 @@ pedantic = { level = "warn", priority = -1 }
 # ship-quality waves. `expect_used` stays off — expect() with the BUG:
 # message convention IS the sanctioned invariant idiom.
 unwrap_used = "warn"
-# Every `unsafe` block and `unsafe impl` states the invariant that makes it
-# sound. This is a restriction lint (not in `all`/`pedantic`), so it has to be
-# named explicitly. The only exemption is the wgsl_bindgen output, allowed at
-# each `include!` bridge in flui-engine because the generator is third-party.
-undocumented_unsafe_blocks = "deny"
+# `undocumented_unsafe_blocks` is deliberately NOT enabled. It was tried and
+# reverted, for two reasons worth recording so it is not re-adopted casually:
+#
+#   * It can only see what the Linux clippy job compiles. The `cfg(windows)` and
+#     `cfg(target_os = "macos")` backends in flui-platform carry ~91 further
+#     undocumented sites that no gate here reaches, so a green workspace run
+#     would license the claim "every unsafe site is documented" while that is
+#     false for two of three desktop targets. Enabling it is only meaningful
+#     once the cross-target job runs `clippy`, not `cargo check`.
+#   * Turning it on first and writing comments to satisfy it produces prose, not
+#     review. That is how several comments in flui-hot-reload came to state
+#     invariants the code does not establish. Document unsafe because the
+#     invariant was checked, not because a lint failed.
 # Allow reasonable exceptions
 cast_precision_loss = "allow"
 module_name_repetitions = "allow"

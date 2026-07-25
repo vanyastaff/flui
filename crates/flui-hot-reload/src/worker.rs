@@ -29,14 +29,23 @@ fn worker_builds() -> &'static Mutex<HashMap<u64, BuildPtr>> {
 #[derive(Clone, Copy)]
 struct BuildPtr(*const ());
 
-// SAFETY: `BuildPtr` wraps a plain function address from the host process. It
-// is never dereferenced as data, and the function it names is only invoked on
-// the main thread during widget builds, so sharing the address across threads
-// introduces no aliasing of anything.
+// SAFETY: a code address is a `Copy` integer as far as these auto traits are
+// concerned — `BuildPtr` is never dereferenced as data, and neither moving nor
+// sharing the value aliases anything. Both impls rest on that alone.
+//
+// Deliberately NOT claimed (an earlier version of this comment claimed both,
+// wrongly): that the address is in the host image, and that the function is
+// only invoked on the main thread. It points into the WORKER dylib, and
+// nothing enforces a calling thread — `get_worker_build_ptr` is public and
+// takes no thread context.
+//
+// The real hazard is lifetime, not threading, and these impls do not address
+// it: `WORKER_BUILDS` is a `'static` map that is never pruned, so after
+// `WorkerPlugin::unload` unmaps the image the stored address dangles and
+// calling it jumps into unmapped memory. Tracked with the plugin-boundary
+// redesign; see the module docs.
 #[allow(unsafe_code)]
 unsafe impl Send for BuildPtr {}
-// SAFETY: as for `Send` above — an immutable function address is trivially
-// shareable; `&BuildPtr` grants no more than reading that address.
 #[allow(unsafe_code)]
 unsafe impl Sync for BuildPtr {}
 

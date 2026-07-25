@@ -32,10 +32,20 @@ pub struct DynLib {
     path: PathBuf,
 }
 
-// SAFETY: the handle is a raw `dlopen` pointer, but it is only ever passed
-// back to `dlsym`/`dlclose`, never dereferenced, and both are thread-safe per
-// POSIX. Ownership is unique — `DynLib` is not `Clone` and `Drop` closes the
-// handle exactly once — so moving it across threads introduces no aliasing.
+// SAFETY: `handle` is an opaque loader handle. It is never dereferenced — it is
+// only handed back to `dlsym`/`dlclose` (or `GetProcAddress`/`FreeLibrary`),
+// which are documented thread-safe on both backends this type covers, so the
+// value itself races with nothing.
+//
+// NOT claimed: that the handle is uniquely owned. `dlopen` on an
+// already-loaded path returns the SAME handle with an incremented reference
+// count, so two `DynLib`s can hold equal handle values. That is sound because
+// each `Drop` decrements exactly once, balancing N opens against N closes —
+// not because `DynLib` is not `Clone`.
+//
+// What this impl does NOT establish, and what callers must not assume: that
+// code or data resolved out of the library outlives `Drop`. See the module
+// note on the plugin boundary.
 #[allow(unsafe_code)]
 unsafe impl Send for DynLib {}
 
@@ -107,8 +117,15 @@ mod sys {
         let c_path = CString::new(path_str).ok()?;
 
         // SAFETY: `c_path` is a NUL-terminated `CString` that outlives the
-        // `dlopen` call, and `dlerror`/`dlopen` are thread-safe per POSIX. The
-        // returned handle is null-checked before it escapes this block.
+        // `dlopen` call, and the returned handle is null-checked before it
+        // escapes this block.
+        //
+        // CAVEAT, not a justification: POSIX does NOT require `dlerror` to be
+        // thread-safe (§2.9.1 lists it among the exemptions). glibc and musl
+        // give it a per-thread slot, so the error read below is sound there,
+        // but on an implementation with a shared slot a concurrent `dlopen`
+        // could rewrite the buffer between `dlerror()` and `CStr::from_ptr`.
+        // `DynLib: Send` makes that reachable; it is unaddressed.
         #[allow(unsafe_code)]
         unsafe {
             // Clear previous error

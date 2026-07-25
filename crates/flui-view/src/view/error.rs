@@ -293,10 +293,22 @@ impl ElementBase for ErrorElement {
     }
 
     fn deactivate(&mut self) {
+        debug_assert!(
+            self.lifecycle.can_deactivate(),
+            "BUG: deactivate from {:?} — only an Active element may be \
+             deactivated",
+            self.lifecycle
+        );
         self.lifecycle = Lifecycle::Inactive;
     }
 
     fn activate(&mut self) {
+        debug_assert!(
+            self.lifecycle.can_activate(),
+            "BUG: activate from {:?} — only an Inactive element may be \
+             reactivated; Defunct in particular has disposed its state",
+            self.lifecycle
+        );
         self.lifecycle = Lifecycle::Active;
     }
 

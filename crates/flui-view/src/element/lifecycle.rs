@@ -71,7 +71,12 @@ impl Lifecycle {
         self.is_active()
     }
 
-    /// Returns `true` if the element can be reactivated.
+    /// Returns `true` if the element can be reactivated — only an `Inactive`
+    /// element can.
+    ///
+    /// In particular `Defunct` cannot: its state has been disposed, so
+    /// reviving it would operate on torn-down state. `ElementCore::activate`
+    /// asserts this in debug builds.
     #[inline]
     pub fn can_activate(self) -> bool {
         matches!(self, Self::Inactive)
@@ -81,23 +86,6 @@ impl Lifecycle {
     #[inline]
     pub fn can_deactivate(self) -> bool {
         matches!(self, Self::Active)
-    }
-
-    /// Returns `true` if `self` may legally become `next`.
-    ///
-    /// The permitted graph is the one this type documents:
-    /// `Initial → Active ⇄ Inactive → Defunct`. **`Defunct` is absorbing** —
-    /// its state has been disposed, so reactivating a defunct element would
-    /// operate on torn-down state. That is the edge this predicate exists to
-    /// catch; the mutators on `ElementCore` assert it in debug builds.
-    ///
-    /// Re-entering the state you are already in is permitted: mount/activate
-    /// are driven by tree walks that can legitimately re-run against an
-    /// already-Active element.
-    #[must_use]
-    #[inline]
-    pub fn can_transition_to(self, next: Self) -> bool {
-        !self.is_defunct() || next == Self::Defunct
     }
 }
 
@@ -110,34 +98,29 @@ mod tests {
         assert_eq!(Lifecycle::default(), Lifecycle::Initial);
     }
 
-    /// The whole 4x4 transition table, stated once so a future edit to
-    /// `can_transition_to` has to argue with every cell rather than with the
-    /// two or three a spot-check would cover.
+    /// Both mutator predicates, over every state, stated once so a future edit
+    /// has to argue with each cell rather than the two or three a spot-check
+    /// would cover.
     #[test]
-    fn defunct_is_the_only_absorbing_state() {
+    fn activate_and_deactivate_admit_exactly_one_state_each() {
         use Lifecycle::{Active, Defunct, Inactive, Initial};
 
-        for from in [Initial, Active, Inactive] {
-            for to in [Initial, Active, Inactive, Defunct] {
-                assert!(
-                    from.can_transition_to(to),
-                    "{from:?} -> {to:?} should be permitted"
-                );
-            }
-        }
-
-        // The edge this predicate exists for: a defunct element has disposed
-        // its state, so nothing may bring it back.
-        for to in [Initial, Active, Inactive] {
-            assert!(
-                !Defunct.can_transition_to(to),
-                "Defunct -> {to:?} must be rejected"
+        for state in [Initial, Active, Inactive, Defunct] {
+            assert_eq!(
+                state.can_activate(),
+                state == Inactive,
+                "only Inactive may be reactivated; {state:?} disagreed"
+            );
+            assert_eq!(
+                state.can_deactivate(),
+                state == Active,
+                "only Active may be deactivated; {state:?} disagreed"
             );
         }
-        assert!(
-            Defunct.can_transition_to(Defunct),
-            "unmounting an already-defunct element is idempotent, not illegal"
-        );
+
+        // The edge these guards exist for: a disposed element stays disposed.
+        assert!(!Defunct.can_activate(), "Defunct must not be revivable");
+        assert!(!Defunct.can_build(), "Defunct must not be buildable");
     }
 
     #[test]

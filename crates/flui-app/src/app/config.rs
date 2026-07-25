@@ -77,8 +77,15 @@ pub struct AppConfig {
     /// frame-pacing ADR.
     pub target_fps: u32,
 
-    /// Whether to show the performance overlay — FPS, average frame time and
-    /// total frame count, drawn over the app's own content.
+    /// Whether to show the performance overlay — FPS and average frame time,
+    /// drawn over the app's own content.
+    ///
+    /// Scope, deliberately narrow: the renderer
+    /// (`flui_engine::wgpu::Backend::add_performance_overlay`) currently draws
+    /// two rows and ignores both the frame counter and the option mask, so
+    /// `PerformanceOverlayOption` has no observable effect yet. The sampled
+    /// interval is between *composited* frames — an idle frame produces no layer
+    /// tree, so it is a repaint rate, not a wall-clock frame rate.
     ///
     /// Flutter's `showPerformanceOverlay`. The bootstrap runner forwards this
     /// to `AppBinding::set_performance_overlay`, which is what actually starts
