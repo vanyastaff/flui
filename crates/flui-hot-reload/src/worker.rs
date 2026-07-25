@@ -29,10 +29,14 @@ fn worker_builds() -> &'static Mutex<HashMap<u64, BuildPtr>> {
 #[derive(Clone, Copy)]
 struct BuildPtr(*const ());
 
-// Build pointers originate from the host process address space and are only
-// invoked on the main thread during widget builds.
+// SAFETY: `BuildPtr` wraps a plain function address from the host process. It
+// is never dereferenced as data, and the function it names is only invoked on
+// the main thread during widget builds, so sharing the address across threads
+// introduces no aliasing of anything.
 #[allow(unsafe_code)]
 unsafe impl Send for BuildPtr {}
+// SAFETY: as for `Send` above — an immutable function address is trivially
+// shareable; `&BuildPtr` grants no more than reading that address.
 #[allow(unsafe_code)]
 unsafe impl Sync for BuildPtr {}
 
@@ -91,6 +95,10 @@ impl WorkerPlugin {
         let lib_path = lib_path.as_ref();
         let lib = DynLib::open(lib_path)?;
 
+        // SAFETY: `lib` was just opened and outlives this block. `flui_worker_init`
+        // is the worker ABI symbol this crate defines, so a library built by the
+        // matching macro exports it with `WorkerInitFn`'s signature; the pointer
+        // is null-checked before the transmute.
         #[allow(unsafe_code)]
         unsafe {
             let init_ptr = lib.symbol("flui_worker_init")?;

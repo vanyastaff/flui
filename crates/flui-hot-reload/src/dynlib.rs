@@ -32,8 +32,10 @@ pub struct DynLib {
     path: PathBuf,
 }
 
-// The handle is a raw pointer but we only use it from a single thread
-// (the main/render thread). This matches the existing ScenePlugin pattern.
+// SAFETY: the handle is a raw `dlopen` pointer, but it is only ever passed
+// back to `dlsym`/`dlclose`, never dereferenced, and both are thread-safe per
+// POSIX. Ownership is unique — `DynLib` is not `Clone` and `Drop` closes the
+// handle exactly once — so moving it across threads introduces no aliasing.
 #[allow(unsafe_code)]
 unsafe impl Send for DynLib {}
 
@@ -69,6 +71,9 @@ impl DynLib {
 
 impl Drop for DynLib {
     fn drop(&mut self) {
+        // SAFETY: `self.handle` is the non-null value `load_library` returned
+        // (it returns `None` on a null handle), `DynLib` is not `Clone`, and
+        // `Drop` runs once — so this is neither a null nor a double close.
         #[allow(unsafe_code)]
         unsafe {
             sys::close_library(self.handle);
@@ -101,6 +106,9 @@ mod sys {
         let path_str = path.to_str()?;
         let c_path = CString::new(path_str).ok()?;
 
+        // SAFETY: `c_path` is a NUL-terminated `CString` that outlives the
+        // `dlopen` call, and `dlerror`/`dlopen` are thread-safe per POSIX. The
+        // returned handle is null-checked before it escapes this block.
         #[allow(unsafe_code)]
         unsafe {
             // Clear previous error
@@ -127,6 +135,11 @@ mod sys {
     pub(super) fn get_symbol(handle: *mut c_void, name: &str) -> Option<*mut c_void> {
         let c_name = CString::new(name).ok()?;
 
+        // SAFETY: `handle` comes from `load_library` and is kept alive by the
+        // owning `DynLib` for the duration of this call; `c_name` is a
+        // NUL-terminated `CString` that outlives it. The result is only
+        // null-checked here — turning it into a callable is the caller's
+        // obligation, documented on `DynLib::symbol`.
         #[allow(unsafe_code)]
         unsafe {
             let ptr = libc::dlsym(handle, c_name.as_ptr());
@@ -139,12 +152,11 @@ mod sys {
     /// `handle` must be a valid library handle returned by `load_library`.
     #[allow(unsafe_code)]
     pub(super) unsafe fn close_library(handle: *mut c_void) {
-        // Edition 2024: unsafe-fn bodies are safe by default; unsafe
-        // calls still require an explicit unsafe block. The caller-side
-        // SAFETY contract is the `# Safety` doc above; this block
-        // documents the call-site obligation: `handle` is the value
-        // returned by `dlopen` in `load_library`, never null, never
-        // double-closed (Library::Drop holds the only handle).
+        // SAFETY: edition 2024 makes unsafe-fn bodies safe by default, so the
+        // call still needs its own block. `handle` is the value `dlopen`
+        // returned in `load_library` — never null, and never double-closed
+        // because `DynLib::drop` owns the only handle. The caller-side
+        // contract is the `# Safety` doc above.
         unsafe {
             libc::dlclose(handle);
         }

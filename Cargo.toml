@@ -292,6 +292,11 @@ pedantic = { level = "warn", priority = -1 }
 # ship-quality waves. `expect_used` stays off — expect() with the BUG:
 # message convention IS the sanctioned invariant idiom.
 unwrap_used = "warn"
+# Every `unsafe` block and `unsafe impl` states the invariant that makes it
+# sound. This is a restriction lint (not in `all`/`pedantic`), so it has to be
+# named explicitly. The only exemption is the wgsl_bindgen output, allowed at
+# each `include!` bridge in flui-engine because the generator is third-party.
+undocumented_unsafe_blocks = "deny"
 # Allow reasonable exceptions
 cast_precision_loss = "allow"
 module_name_repetitions = "allow"

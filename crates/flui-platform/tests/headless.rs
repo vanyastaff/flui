@@ -26,6 +26,7 @@ fn test_t064_flui_headless_environment_variable() {
     );
 
     // Clean up
+    // SAFETY: Tests run serially for env var manipulation
     unsafe { std::env::remove_var("FLUI_HEADLESS") };
 }
 
@@ -182,6 +183,7 @@ fn test_t069_all_tests_pass_in_headless_mode() {
     clipboard.write_text("test".to_string());
     assert_eq!(clipboard.read_text(), Some("test".to_string()));
 
+    // SAFETY: Tests run serially for env var manipulation
     unsafe { std::env::remove_var("FLUI_HEADLESS") };
 }
 

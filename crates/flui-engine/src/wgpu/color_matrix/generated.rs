@@ -55,7 +55,11 @@
     elided_lifetimes_in_paths,
     unused_doc_comments,
     clippy::all,
-    clippy::pedantic
+    clippy::pedantic,
+    // wgsl_bindgen emits `unsafe impl bytemuck::{Pod,Zeroable}` without a
+    // SAFETY comment. The generator is a third-party tool, so the comment
+    // cannot be added at the source; the allow is scoped to the include.
+    clippy::undocumented_unsafe_blocks
 )]
 pub(super) mod color_matrix_gen {
     include!(concat!(env!("OUT_DIR"), "/color_matrix_generated.rs"));

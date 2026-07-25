@@ -84,6 +84,10 @@ impl ScenePlugin {
         let lib_path = lib_path.as_ref();
         let lib = DynLib::open(lib_path)?;
 
+        // SAFETY: `lib` was just opened and stays alive for this block, which
+        // is `try_resolve`'s stated requirement. The symbol-name/type pairs
+        // below are the plugin ABI this crate defines, so a library built by
+        // the matching macro exports them with these signatures.
         #[allow(unsafe_code)]
         unsafe {
             // Try app_plugin! symbols first (flui_app_build)
@@ -148,6 +152,10 @@ impl ScenePlugin {
         version_sym: &str,
         drop_sym: &str,
     ) -> Option<(BuildSceneFn, Option<SceneDropFn>, u32)> {
+        // SAFETY: edition 2024 makes unsafe-fn bodies safe by default, so the
+        // calls still need their own block. The caller guarantees `lib` is a
+        // live library; each pointer is null-checked before being transmuted,
+        // and the signatures are the ABI this crate declares for these names.
         unsafe {
             let build_ptr = lib.symbol(build_sym)?;
             if build_ptr.is_null() {
@@ -172,6 +180,11 @@ impl ScenePlugin {
     /// The plugin allocates a `Box<Scene>` and returns it as a raw pointer.
     /// This method takes ownership back via `Box::from_raw`.
     pub fn build_scene(&self, width: f32, height: f32) -> Scene {
+        // SAFETY: `build_fn` was resolved from the live `DynLib` this struct
+        // owns, so calling it is valid. The plugin ABI specifies that it
+        // returns a `Box<Scene>` leaked with `Box::into_raw`, so reclaiming it
+        // with `Box::from_raw` transfers ownership back exactly once; the null
+        // case is rejected before the conversion.
         #[allow(unsafe_code)]
         unsafe {
             let ptr = (self.build_fn)(width, height);

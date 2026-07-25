@@ -1061,6 +1061,9 @@ mod lifecycle_tests {
 
         // SAFETY: see `drop_marks_node_disposed`.
         unsafe { ptr::drop_in_place(slot.as_mut_ptr()) };
+        // SAFETY: `drop_in_place` above ran `LayerNode::drop`, which only
+        // flips an `AtomicBool`; the slot is still initialized enough to read
+        // that flag, which is all this does.
         let after_first = unsafe { (*slot.as_ptr()).is_disposed() };
         assert!(after_first, "first drop must flip flag");
 
@@ -1073,6 +1076,9 @@ mod lifecycle_tests {
         // single-drop observation: the flag stays `true`, and
         // `is_disposed` continues to read `true` from the AtomicBool
         // (which has trivial Drop).
+        // SAFETY: same as the first read — the `AtomicBool` has a trivial
+        // Drop, so reading it after the single `drop_in_place` is sound. No
+        // second `drop_in_place` is run (that would double-free the Box).
         let after_second_read = unsafe { (*slot.as_ptr()).is_disposed() };
         assert!(after_second_read);
     }

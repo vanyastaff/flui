@@ -314,6 +314,8 @@ pub enum RawWindowHandle {
 
 // SAFETY: Raw window handles are just pointers and can be sent between threads
 unsafe impl Send for RawWindowHandle {}
+// SAFETY: as for `Send` above — the handle is an opaque address that is never
+// dereferenced here, so sharing it across threads adds no aliasing.
 unsafe impl Sync for RawWindowHandle {}
 
 // ============================================================================
