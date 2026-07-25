@@ -69,7 +69,7 @@ flui-widgets = "{version}""#
 name = "{name}"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.96"
+rust-version = "1.97"
 
 [dependencies]
 {deps}

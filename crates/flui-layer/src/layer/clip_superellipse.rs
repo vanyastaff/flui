@@ -141,7 +141,11 @@ impl ClipSuperellipseLayer {
     /// Debug-panics if `clip_behavior` is `Clip::None`.
     #[inline]
     pub fn set_clip_behavior(&mut self, clip_behavior: Clip) {
-        debug_assert!(clip_behavior != Clip::None);
+        debug_assert_ne!(
+            clip_behavior,
+            Clip::None,
+            "a clip layer must clip; use a plain container layer instead of Clip::None"
+        );
         if self.clip_behavior != clip_behavior {
             self.clip_behavior = clip_behavior;
             self.needs_add_to_scene = true;

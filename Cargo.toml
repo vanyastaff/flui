@@ -103,7 +103,7 @@ default-members = [
 [workspace.package]
 version = "0.2.0"
 edition = "2024"
-rust-version = "1.96"
+rust-version = "1.97"
 license = "MIT OR Apache-2.0"
 authors = ["Flui Contributors"]
 repository = "https://github.com/vanyastaff/flui"
@@ -451,4 +451,10 @@ debug = "full"
 opt-level = 3
 lto = "thin"      # Link-time optimization (good balance)
 codegen-units = 1 # Better optimization, slower compile
-strip = "symbols" # Smaller binary
+# `debuginfo`, not `symbols`: stripping the symbol table too leaves release
+# builds unprofilable and crash reports unsymbolicated — `perf`, flamegraph,
+# samply, Tracy and minidumps all resolve frames through it. Since Rust 1.97
+# the default mangling is v0, so retained symbols carry real generic
+# parameters instead of an opaque hash. DWARF is still dropped, which is the
+# bulk of the size.
+strip = "debuginfo"

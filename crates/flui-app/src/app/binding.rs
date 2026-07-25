@@ -680,6 +680,9 @@ impl AppBinding {
     /// Delegates to [`HotReloadBridge::apply`] against THIS app's own
     /// pipeline/redraw handles — the single implementation both this method
     /// and `UiRealm::drain_commands`'s hot-reload arm share.
+    // The desktop runner (`cfg(not(target_arch = "wasm32"))`) is the only
+    // non-test consumer, so the wasm lib check sees this as dead.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(crate) fn perform_hot_reload_entered(
         &self,
         realm: &super::ui_realm::UiRealm,
@@ -985,6 +988,9 @@ impl AppBinding {
     /// loop exits so a torn-down realm does not keep a live platform
     /// resource (arboard on X11 owns a live X11 connection) pinned behind
     /// this `Arc` past the platform's own shutdown.
+    // The desktop runner (`cfg(not(target_arch = "wasm32"))`) is the only
+    // non-test consumer, so the wasm lib check sees this as dead.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(crate) fn clear_platform_clipboard(&self) {
         *self.platform_clipboard.lock() = None;
     }

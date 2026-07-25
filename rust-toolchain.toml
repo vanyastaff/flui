@@ -1,17 +1,31 @@
-# Pinned Rust toolchain for the FLUI workspace.
+# Pinned Rust toolchain for the FLUI workspace — the DEVELOPMENT toolchain.
 #
-# Mirrors `[workspace.package].rust-version` in `Cargo.toml` (MSRV).
+# This is NOT the MSRV. The MSRV is `[workspace.package].rust-version` in
+# `Cargo.toml` and is exercised by exactly one CI job (`msrv`); every other CI
+# job installs the latest stable, which overrides this pin. Pinning a patch
+# release here keeps local builds reproducible and keeps the developer on the
+# same diagnostics the stable CI jobs see — a toolchain pinned *at* the MSRV
+# floor hides new lints and codegen changes until they surface in CI.
+#
+# The channel may therefore run ahead of the MSRV minor. Keep it a patch
+# release of a version >= the declared MSRV.
+#
 # `rustup` will install this exact toolchain automatically on first `cargo`
 # invocation if it is not already available locally.
 #
 # Bump procedure (see docs/PORT.md §MSRV):
-#   1. Bump `channel` here.
-#   2. Bump `[workspace.package].rust-version` in `Cargo.toml` to match.
+#   1. Bump `channel` here (development toolchain — safe, no promise attached).
+#   2. To move the MSRV *floor* (a promise to consumers, expensive to retract),
+#      additionally bump `[workspace.package].rust-version` in `Cargo.toml`,
+#      `msrv` in `clippy.toml`, the `msrv` job's toolchain in
+#      `.github/workflows/ci.yml`, and the `rust-version` line in both
+#      `crates/flui-cli/src/templates/{basic,counter}.rs`.
 #   3. Update doc references (AGENTS.md, README.md, docs/FOUNDATIONS.md,
-#      docs/getting-started.md, openspec/config.yaml).
-#   4. Run `just ci` and update CI matrix if needed.
+#      docs/getting-started.md, docs/testing.md, docs/PORT.md,
+#      openspec/config.yaml).
+#   4. Run `just ci` and update the CI matrix if needed.
 
 [toolchain]
-channel = "1.96.1"
+channel = "1.97.1"
 profile = "default"                # includes rustc, cargo, rustfmt, clippy, rust-docs
 components = ["rustfmt", "clippy"]

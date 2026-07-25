@@ -164,6 +164,9 @@ impl ResultStamp {
 /// A command enqueued for the owner thread.
 pub(crate) enum UiCommand {
     /// Apply a hot-reload reassemble on the owner at the next Idle drain.
+    // Only constructed by `request_hot_reload`, whose consumer is the
+    // desktop runner — absent from the wasm lib check.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     HotReload(flui_hot_reload::HotReloadTier),
     /// Apply a typed navigator mutation on the owner thread.
     Navigation(NavigatorCommand),
@@ -249,6 +252,9 @@ impl UiCommandSender {
     /// Unlike direct platform dispatch, this capability is safe to call from
     /// any thread: delivery occurs at the owner's next Idle drain and the
     /// normal enqueue-and-wake contract pumps that drain.
+    // The desktop runner (`cfg(not(target_arch = "wasm32"))`) is the only
+    // non-test consumer, so the wasm lib check sees this as dead.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(crate) fn request_hot_reload(
         &self,
         tier: flui_hot_reload::HotReloadTier,
@@ -357,6 +363,9 @@ impl UiCommandSender {
 
     /// The inbox's configured capacity.
     #[must_use]
+    // The desktop runner (`cfg(not(target_arch = "wasm32"))`) is the only
+    // non-test consumer, so the wasm lib check sees this as dead.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub fn capacity(&self) -> usize {
         self.capacity
     }
@@ -403,6 +412,9 @@ pub(crate) struct UiRealm {
     /// mint senders, so the runtime keeps one sender to clone from. Holding
     /// it here does not keep the channel alive past the runtime: `rx` drops
     /// with the runtime and every outstanding sender turns `OwnerGone`.
+    // The desktop runner (`cfg(not(target_arch = "wasm32"))`) is the only
+    // non-test consumer, so the wasm lib check sees this as dead.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     sender_prototype: UiCommandSender,
     redraw_pending: Arc<AtomicBool>,
     /// The [`AppBinding`](super::binding::AppBinding) this realm is bound to,
@@ -527,6 +539,9 @@ impl UiRealm {
 
     /// A new cross-thread sender into this runtime's inbox.
     #[must_use]
+    // The desktop runner (`cfg(not(target_arch = "wasm32"))`) is the only
+    // non-test consumer, so the wasm lib check sees this as dead.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub fn command_sender(&self) -> UiCommandSender {
         self.sender_prototype.clone()
     }

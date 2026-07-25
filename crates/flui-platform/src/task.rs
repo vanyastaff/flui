@@ -115,6 +115,11 @@ impl<T: Send + 'static> Future for Task<T> {
     type Output = T;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        // `TaskState::Spawned` — the only arm that consults the waker — does not
+        // exist on wasm32, where every Task is already `Ready`.
+        #[cfg(target_arch = "wasm32")]
+        let _ = cx;
+
         // SAFETY: We only access the inner state through the pin, and TaskState
         // variants are safe to move when accessed through Pin projection.
         let this = unsafe { self.get_unchecked_mut() };

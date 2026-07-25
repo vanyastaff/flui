@@ -232,24 +232,38 @@ production-faithful animation tests. Assert per frame via `Probe` (`offset`,
 
 ## CI Expectations
 
-CI runs the same local gates plus repository-wide source checks:
+CI runs the same local gates plus repository-wide source checks. Every job is
+gated on the fast `checks` job and aggregates into the single required `ci`
+check; all cargo commands run `--locked`; actions are SHA-pinned and the
+workflow files themselves are linted:
 
 ```bash
 cargo fmt --all -- --check
 taplo fmt --check
 typos
+actionlint                                                    # workflow semantics
+zizmor .                                                      # workflow security audit
 bash scripts/check-workspace-inventory.sh
 bash scripts/port-check.sh -v
-cargo clippy --workspace --all-targets -- -D warnings
-cargo nextest run --workspace --exclude flui-platform --no-fail-fast --test-threads 1
-cargo test --workspace --exclude flui-platform --doc
-cargo check --workspace --all-targets           # repeated on Rust 1.96 (MSRV job)
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo hack clippy --workspace --locked --each-feature --optional-deps --keep-going -- -D warnings  # feature-matrix job, then a --tests --benches --examples pass
+cargo check --workspace --locked --target wasm32-unknown-unknown --exclude ...                   # wasm-capable set — just wasm-check
+cargo nextest run --workspace --exclude flui-platform --locked --no-fail-fast
+cargo test --workspace --exclude flui-platform --locked --doc
+cargo check --workspace --all-targets --locked                # repeated on Rust 1.97 (MSRV job)
 cargo miri test -p flui-rendering --lib pipeline::owner::subtree_arena  # advisory
 ```
 
 The `gpu-test` job additionally runs the full `enable-wgpu-tests` readback
 suite on a windows-latest runner (WARP software rasterizer) and is
-merge-blocking.
+merge-blocking. Failing snapshot/readback tests upload debuggable artifacts:
+insta `.snap.new` candidates (`test` job) and readback PNG dumps
+(`gpu-test` job, written when `FLUI_READBACK_DUMP_DIR` is set).
+
+A scheduled `weekly.yml` workflow (Mondays, or manually via
+`workflow_dispatch`) re-checks RustSec advisories against the committed
+lockfile and builds/tests against a fresh `cargo update` — early warning for
+upstream semver breakage. It is not a merge gate.
 
 A change cannot be merged if any of these fail. If you encounter a flaky test, file a fix issue rather than retrying CI.
 

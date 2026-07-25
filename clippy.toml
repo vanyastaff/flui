@@ -8,4 +8,4 @@ allow-expect-in-tests = true
 
 # MSRV-aware lints (e.g. incompatible_msrv, std_instead_of_core) respect the
 # workspace floor instead of assuming latest stable.
-msrv = "1.96"
+msrv = "1.97"

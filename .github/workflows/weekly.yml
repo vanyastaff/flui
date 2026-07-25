@@ -1,0 +1,86 @@
+name: Weekly
+
+# Scheduled maintenance that PR CI cannot catch:
+#   advisories  — new RUSTSEC entries against the committed lockfile (PR CI
+#                 only re-checks advisories when a dependency changes)
+#   latest-deps — upstream semver breakage: fresh `cargo update` + full build
+#                 and test run, so a breaking dependency release surfaces here
+#                 before it lands in someone's PR
+# Runs Monday ~05:17 UTC (off the :00/:30 herd marks). Not a merge gate;
+# failures surface in the Actions tab.
+
+on:
+  schedule:
+    - cron: "17 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  # See ci.yml's env block: the Cargo config knob keeps the warnings gate out
+  # of the rustc fingerprint, so it does not fragment the build cache.
+  CARGO_BUILD_WARNINGS: deny
+  CARGO_INCREMENTAL: 0
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+
+jobs:
+  advisories:
+    name: cargo deny (advisories)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@7572810d7dd469b651bb7793945692cf78da5dd7 # v2.85.0
+        with:
+          tool: cargo-deny@0.19
+
+      - name: cargo deny check advisories
+        run: cargo deny check advisories
+
+  latest-deps:
+    name: latest deps (cargo update + build + nextest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Same reclaim as the PR `test` job — the full-workspace build with
+      # dev-deps approaches the runner's disk ceiling without it.
+      - name: Free disk space (ubuntu)
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          sudo docker image prune --all --force || true
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+
+      - name: Cache cargo registry + target
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@7572810d7dd469b651bb7793945692cf78da5dd7 # v2.85.0
+        with:
+          tool: cargo-nextest@0.9
+
+      - name: cargo update --workspace (fresh lockfile in-memory only)
+        run: cargo update --workspace
+
+      - name: cargo build --workspace
+        run: cargo build --workspace --all-targets
+
+      - name: cargo nextest run (lib + integration)
+        run: cargo nextest run --workspace --exclude flui-platform --no-fail-fast

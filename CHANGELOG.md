@@ -25,7 +25,7 @@ file records the repo-consumer-visible summary.
 - **CI gates**: integration tests now run in CI (previously `--lib` only —
   the Core.0/Core.2 exit-gate suites in `crates/*/tests/` were never
   executed); new `doc-test` job runs every rustdoc example; new `msrv` job
-  verifies the declared 1.96 floor; new advisory `miri` job checks the
+  verifies the declared MSRV floor; new advisory `miri` job checks the
   `flui-rendering` subtree arena (the workspace's densest `unsafe` hot spot);
   the `gpu-test` WARP readback suite is promoted from advisory to
   merge-blocking after 3 consecutive green full-suite runs.
@@ -37,11 +37,40 @@ file records the repo-consumer-visible summary.
 
 ### Changed
 
-- **Toolchain pin 1.96.0 → 1.96.1** (MIR miscompilation fix, cargo HTTP
-  retries, three libssh2 CVEs in cargo). MSRV unchanged at 1.96.
+- **Toolchain 1.96.1 → 1.97.1, MSRV 1.96 → 1.97.** `rust-toolchain.toml` no
+  longer mirrors the MSRV: it is now explicitly the *development* toolchain
+  (a pin at the floor hides new lints and codegen changes from the developer
+  until CI surfaces them), while the floor stays a separate promise checked by
+  the one `msrv` job. Three 1.97 stabilizations earn the bump: **v0 symbol
+  mangling by default** (the release binary now carries 5110 v0 symbols and
+  zero legacy — generic frames demangle with real type parameters instead of
+  an opaque hash), **`build.warnings`** (below), and the integer
+  bit-manipulation APIs (`bit_width`, `isolate_lowest_one`,
+  `isolate_highest_one`, `lowest_one`, `highest_one`) that the render-node
+  dirty-flag bitset is a candidate for. One new pedantic lint
+  (`clippy::manual_assert_eq`) fired at two sites and was fixed.
+- **CI warnings gate: `RUSTFLAGS=-D warnings` → `CARGO_BUILD_WARNINGS=deny`.**
+  `RUSTFLAGS` is part of the rustc fingerprint, so the miri job — which needs
+  a different value — got a disjoint `target/` cache and had to blank the flag
+  wholesale, losing every other check with it. The Cargo knob is applied after
+  compilation: measured, toggling it recompiles nothing while switching
+  `RUSTFLAGS` recompiles. miri now sets `CARGO_BUILD_WARNINGS=warn` and shares
+  the cache.
+- **Release profile: `strip = "symbols"` → `strip = "debuginfo"`.** Stripping
+  the symbol table left release builds unprofilable and crash reports
+  unsymbolicated — `perf`, flamegraph, samply, Tracy and minidumps all resolve
+  frames through it. Cost measured on `target/release/flui`: 3 437 096 →
+  4 394 832 bytes (+935 KiB, +27.9%); DWARF is still dropped.
+- **`wasm-check` now passes.** The job had never been green: 11 errors across
+  `flui-scheduler` (2), `flui-platform`'s web backend (4) and `flui-app` (5).
+  The `flui-app` five are not dead code — the job runs `cargo check` without
+  `--all-targets`, so the desktop runner (`cfg(not(target_arch = "wasm32"))`)
+  and the tests that consume them are absent from the wasm lib check; they
+  carry `#[cfg_attr(target_arch = "wasm32", allow(dead_code))]` naming the
+  consumer rather than a blanket allow.
 - Lockfile: `wgpu` 29.0.3 → 29.0.4, `anyhow` → 1.0.103, `crossbeam-epoch`
   → 0.9.20, `swash` → 0.2.9 (off a yanked version). `clippy.toml` gains
-  `msrv = "1.96"` so MSRV-aware lints track the declared floor.
+  an `msrv` key so MSRV-aware lints track the declared floor.
 - **One integration-test binary per heavy crate**: flui-widgets (49 → 1 +
   the pre-existing `parity` target), flui-rendering (36 → 1), flui-view
   (24 → 1) — each root `tests/*.rs` used to statically link the whole wgpu
