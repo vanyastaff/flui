@@ -74,14 +74,31 @@ jobs:
         with:
           components: rustfmt
 
-      - name: Install CI tools (typos, taplo, ripgrep, actionlint, zizmor)
-        uses: taiki-e/install-action@7572810d7dd469b651bb7793945692cf78da5dd7 # v2.85.0
+      - name: Install CI tools (typos, taplo, ripgrep, zizmor)
+        uses: taiki-e/install-action@3d7d7cd5ac7f994c1892ae0c06165095b9139094 # v2.85.1
         with:
           # Pin versions — unpinned tools surface unrelated breakage on
           # release day. Bump deliberately. `ripgrep` is required by
           # scripts/port-check.sh (the 22 refusal triggers + FR-033 all
           # run through `rg`).
-          tool: typos-cli@1.28,taplo-cli@0.10,ripgrep@14,actionlint@1.7,zizmor@1
+          #
+          # actionlint is NOT here: install-action has no recipe for it and
+          # falls back to cargo-binstall, which cannot resolve a Go tool that
+          # is not on crates.io ("actionlint is not found", exit 76). It is
+          # fetched from its own release below.
+          tool: typos-cli@1.28,taplo-cli@0.10,ripgrep@14,zizmor@1
+
+      - name: Install actionlint
+        env:
+          ACTIONLINT_VERSION: 1.7.7
+        run: |
+          set -euo pipefail
+          curl -fsSL -o actionlint.tar.gz \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          tar -xzf actionlint.tar.gz actionlint
+          install -m 0755 actionlint /usr/local/bin/actionlint
+          rm -f actionlint actionlint.tar.gz
+          actionlint --version
 
       - name: cargo fmt --check
         run: cargo fmt --all -- --check
