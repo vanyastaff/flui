@@ -1432,6 +1432,10 @@ where
         // rest of this function.
         AppBinding::instance().set_platform_clipboard(platform.clipboard());
 
+        // Debug overlay: `Some` stats IS the enable flag, so this is the
+        // single point that turns the frame path's overlay work on.
+        AppBinding::instance().set_performance_overlay(config.show_performance_overlay);
+
         // 1. Open window now that the event loop is running. Window creation is
         // an environment failure (display server hiccup, resource exhaustion),
         // not a `BUG:` invariant, and — unlike platform init above — this DOES
@@ -1926,6 +1930,10 @@ where
     // this platform's `clipboard()` is reachable at all.
     AppBinding::instance().set_platform_clipboard(platform.clipboard());
 
+    // Debug overlay: `Some` stats IS the enable flag, so this is the
+    // single point that turns the frame path's overlay work on.
+    AppBinding::instance().set_performance_overlay(config.show_performance_overlay);
+
     // 1. Open window (wraps the existing ANativeWindow) before run()
     let options: WindowOptions = (&config).into();
     let window = platform
@@ -2224,6 +2232,10 @@ where
     // comment for why there is no later point at which this platform's
     // `clipboard()` is reachable.
     AppBinding::instance().set_platform_clipboard(platform.clipboard());
+
+    // Debug overlay: `Some` stats IS the enable flag, so this is the
+    // single point that turns the frame path's overlay work on.
+    AppBinding::instance().set_performance_overlay(config.show_performance_overlay);
 
     // 1. Open window (creates canvas) before run() since run() takes ownership
     let options: WindowOptions = (&config).into();

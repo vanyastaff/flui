@@ -77,13 +77,17 @@ pub struct AppConfig {
     /// frame-pacing ADR.
     pub target_fps: u32,
 
-    /// Whether to show performance overlay.
+    /// Whether to show the performance overlay — FPS, average frame time and
+    /// total frame count, drawn over the app's own content.
     ///
-    /// Not currently wired: `From<&AppConfig> for flui_platform::WindowOptions`
-    /// drops this field and no overlay widget reads it yet. Intended
-    /// consumer: a future debug overlay (`flui-devtools`'s frame profiler, or
-    /// an equivalent in-tree overlay widget), analogous to Flutter's
-    /// `showPerformanceOverlay`.
+    /// Flutter's `showPerformanceOverlay`. The bootstrap runner forwards this
+    /// to `AppBinding::set_performance_overlay`, which is what actually starts
+    /// the rolling frame-time window; the frame path then appends a
+    /// `PerformanceOverlayLayer` as the root layer's last child. Off costs one
+    /// uncontended lock and a `None` check per frame.
+    ///
+    /// `From<&AppConfig> for flui_platform::WindowOptions` drops this field —
+    /// it is a compositing concern, not a window-creation one.
     pub show_performance_overlay: bool,
 
     /// Whether to enable debug paint.
