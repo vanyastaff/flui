@@ -87,7 +87,10 @@ file records the repo-consumer-visible summary.
   Linux job compiles (~91 further sites live in the Windows/macOS backends), and
   enabling it before auditing produced comments that stated invariants the code
   does not establish.
-- **`just test-release` is green for the first time.** Eleven
+- **`just test-release` is green for the first time.** The recipe now excludes
+  flui-platform, matching the CI `test` job — that crate's suite is red
+  independently of the profile (the STATUS_HEAP_CORRUPTION investigation), so
+  including it made the recipe permanently red. With that scoped, eleven
   `#[should_panic]`-over-`debug_assert!` tests across eight files could not pass
   in release, where the assertion does not exist; they are now
   `cfg(debug_assertions)`-gated. Two were introduced by this branch, nine

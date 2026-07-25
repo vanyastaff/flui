@@ -205,13 +205,13 @@ CI runs on PR + push to main (+ merge queue). All jobs are gated on the fast `ch
 2. **clippy** — `cargo clippy --workspace --all-targets -- -D warnings`
 3. **feature-matrix** — `cargo hack clippy --workspace --each-feature --optional-deps` (libs/bins pass, then tests/benches/examples pass): per-crate feature wiring without workspace feature-unification masking. Local: `just feature-matrix`
 4. **wasm-check** — `cargo check --target wasm32-unknown-unknown` for the wasm-capable crates (7 excluded: mio/uuid CLI stack + dlopen-based hot-reload). Local: `just wasm-check`
-5. **cross-typecheck** — `cargo check -p flui-platform --all-targets` for `x86_64-pc-windows-msvc` and `aarch64-apple-darwin` (the shipped triples). `cargo check` does not link, so the Win32/AppKit backends type-check from Linux; before this job they were only ever compiled by whoever developed on that OS, and the Windows backend did not compile at all. **Type-check only** — no link, no tests, and flui-platform is excluded from the `test` job, so this is the *only* gate on those backends: green means "compiles". Local: `just cross-check` (needs `rustup target add` for both)
+5. **cross-typecheck** — `cargo check -p flui-platform --all-targets` for `x86_64-pc-windows-msvc` and `aarch64-apple-darwin` (the shipped triples). `cargo check` does not link, so the Win32/AppKit backends type-check from Linux; before this job they were only ever compiled by whoever developed on that OS, and the Windows backend did not compile at all. **Type-check only** — no link, no tests, and flui-platform is excluded from the `test` job, so this is the *only* gate on those backends: green means "compiles". Local: `just cross-typecheck` (needs `rustup target add` for both)
 6. **deny** — `cargo deny check` (advisories, bans, licenses, sources; config: `deny.toml`)
 7. **test** — `cargo nextest run --workspace --exclude flui-platform` (lib **and** integration targets; Linux only). On failure, insta `.snap.new` candidates upload as artifacts
 8. **gpu-test** — full `enable-wgpu-tests` readback suite on WARP (windows-latest; merge-blocking). On oracle mismatch the harness dumps the actual frame as PNG (`FLUI_READBACK_DUMP_DIR`), uploaded as an artifact
 9. **doc-test** — `cargo test --workspace --exclude flui-platform --doc` (nextest never runs doctests)
 10. **msrv** — `cargo check --workspace --all-targets` on Rust 1.97 (the declared MSRV; other jobs run latest stable)
-11. **miri** — `cargo miri test -p flui-rendering` scoped to `pipeline::owner::subtree_arena` (advisory while stabilizing)
+11. **miri** — `cargo miri test -p flui-rendering` scoped to `pipeline::owner::subtree_arena` (advisory while stabilizing). **Narrow:** the five tests it runs never enter `layout_subtree_borrowed_impl` nor dereference a real `NodePtr`, so it is not coverage of the layout-walk reborrows
 12. **bench-compile** — `cargo bench -p flui-rendering --no-run`
 13. **doc** — `cargo doc --workspace --no-deps --document-private-items` with `RUSTDOCFLAGS="-D warnings"`
 

@@ -248,10 +248,16 @@ bash scripts/port-check.sh -v
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo hack clippy --workspace --locked --each-feature --optional-deps --keep-going -- -D warnings  # feature-matrix job, then a --tests --benches --examples pass
 cargo check --workspace --locked --target wasm32-unknown-unknown --exclude ...                   # wasm-capable set — just wasm-check
+cargo check -p flui-platform --locked --all-targets --target x86_64-pc-windows-msvc            # cross-typecheck job — just cross-typecheck
+cargo check -p flui-platform --locked --all-targets --target aarch64-apple-darwin              # (type-check only: no link, no tests)
+cargo deny check                                              # advisories / bans / licenses / sources
+cargo bench -p flui-rendering --no-run                        # bench-compile job
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --document-private-items  # doc job
 cargo nextest run --workspace --exclude flui-platform --locked --no-fail-fast
 cargo test --workspace --exclude flui-platform --locked --doc
 cargo check --workspace --all-targets --locked                # repeated on Rust 1.97 (MSRV job)
-cargo miri test -p flui-rendering --lib pipeline::owner::subtree_arena  # advisory
+cargo miri test -p flui-rendering --lib pipeline::owner::subtree_arena  # advisory; NARROW — 5 unit tests,
+                                                              # none enters the layout walk or derefs a real NodePtr
 ```
 
 The `gpu-test` job additionally runs the full `enable-wgpu-tests` readback

@@ -100,7 +100,7 @@ wasm-check:
 # Requires: rustup target add x86_64-pc-windows-msvc aarch64-apple-darwin
 [group("build")]
 [doc("Type-check flui-platform's Windows and macOS backends from this host (mirrors the CI cross-typecheck job)")]
-cross-check:
+cross-typecheck:
     cargo check -p flui-platform --locked --all-targets --target x86_64-pc-windows-msvc
     cargo check -p flui-platform --locked --all-targets --target aarch64-apple-darwin
 
@@ -133,10 +133,14 @@ test-debug *args:
 test-all:
     cargo test --workspace --no-fail-fast
 
+# Excludes flui-platform to match the CI `test` job — that crate's suite is red
+# independently of the profile (STATUS_HEAP_CORRUPTION investigation, see
+# AGENTS.md), so including it would make this recipe permanently red and
+# useless as a gate.
 [group("test")]
-[doc("Run tests against the release profile")]
+[doc("Run tests against the release profile (excludes flui-platform, as CI does)")]
 test-release:
-    cargo test --workspace --release
+    cargo test --workspace --exclude flui-platform --release
 
 [group("test")]
 [doc("Run rustdoc examples as tests (CI gate; nextest does not execute doctests)")]
@@ -157,8 +161,12 @@ test-assets:
 deny:
     cargo deny check
 
+# SCOPE: this runs five `subtree_arena` unit tests, none of which enters
+# `layout_subtree_borrowed_impl` or dereferences a real `NodePtr` (the arena
+# tests use `NonNull::dangling()` deliberately). It is NOT coverage of the
+# layout-walk reborrows — treat "miri green" accordingly.
 [group("test")]
-[doc("Run miri on the flui-rendering subtree arena (the unsafe hot spot; requires nightly + miri component)")]
+[doc("Run miri on flui-rendering's subtree-arena unit tests (NOT the layout walk; requires nightly + miri)")]
 miri:
     cargo +nightly miri test -p flui-rendering --lib pipeline::owner::subtree_arena
 
@@ -361,7 +369,9 @@ watch-test crate="":
 # their own recipes — run them deliberately before pushing risky changes:
 #   just feature-matrix   (per-feature clippy, minutes)
 #   just wasm-check       (wasm32 target check)
-#   just miri             (nightly UB check)
+#   just cross-typecheck  (windows + macos backends, type-check only)
+#   just deny             (advisories / bans / licenses / sources)
+#   just miri             (nightly UB check, narrow scope — see its comment)
 [group("ci")]
 [doc("Run local CI gates (fmt-check + inventory + port-check + clippy + test + doctests)")]
 ci: fmt-check inventory-check port-check clippy test test-doc

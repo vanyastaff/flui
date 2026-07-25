@@ -438,6 +438,20 @@ where
         // enforces via pre-order + reverse-sweep.
         {
             let manager = self.manager.lock();
+            // NOTE: these are pushed WITHOUT `deactivate()`, unlike the
+            // canonical caller in `ElementTree::remove` — `on_unmount` has no
+            // tree handle, only `ElementOwner`. So a sparse child sits in the
+            // inactive queue while its `Lifecycle` is still `Active`, and
+            // `ElementOwner::is_inactive` reports queue membership, not
+            // lifecycle.
+            //
+            // That is sound ONLY because these pushes are unmount-only (the
+            // host is being torn down; `finalize_tree` takes them to `Defunct`)
+            // and because the lazy path registers no GlobalKey, so a sparse
+            // child can never be a `retake_inactive_global_key` candidate —
+            // that function activates from `Inactive` and would trip
+            // `can_activate()`. If key attachment ever lands on sparse
+            // children, they must be deactivated before being queued.
             for (_logical_index, child_id) in manager.sparse_children.iter_built() {
                 owner.push_inactive(child_id, 1);
             }
@@ -867,6 +881,20 @@ where
         // `finalize_tree` unmount them and recurse into their descendants.
         {
             let manager = self.manager.lock();
+            // NOTE: these are pushed WITHOUT `deactivate()`, unlike the
+            // canonical caller in `ElementTree::remove` — `on_unmount` has no
+            // tree handle, only `ElementOwner`. So a sparse child sits in the
+            // inactive queue while its `Lifecycle` is still `Active`, and
+            // `ElementOwner::is_inactive` reports queue membership, not
+            // lifecycle.
+            //
+            // That is sound ONLY because these pushes are unmount-only (the
+            // host is being torn down; `finalize_tree` takes them to `Defunct`)
+            // and because the lazy path registers no GlobalKey, so a sparse
+            // child can never be a `retake_inactive_global_key` candidate —
+            // that function activates from `Inactive` and would trip
+            // `can_activate()`. If key attachment ever lands on sparse
+            // children, they must be deactivated before being queued.
             for (_logical_index, child_id) in manager.sparse_children.iter_built() {
                 owner.push_inactive(child_id, 1);
             }

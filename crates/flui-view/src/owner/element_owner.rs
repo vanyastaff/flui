@@ -321,6 +321,13 @@ impl ElementOwner<'_> {
     /// retake: the GlobalKey registry's `Some(_)` entry could be stale
     /// (the element is still active elsewhere) — only an entry that's
     /// actually in the inactive queue is safe to re-attach.
+    /// Whether `id` is in the inactive QUEUE.
+    ///
+    /// This is queue membership, **not** `Lifecycle`. Callers that queue an
+    /// element for possible revival must call `deactivate()` first (see
+    /// `ElementTree::remove`), because `retake_inactive_global_key` activates
+    /// from `Inactive`. The unmount-only pushes in `sliver_adaptor` leave the
+    /// element `Active` on purpose and rely on never being retake candidates.
     pub fn is_inactive(&self, id: ElementId) -> bool {
         self.inactive_elements.iter().any(|entry| entry.id() == id)
     }

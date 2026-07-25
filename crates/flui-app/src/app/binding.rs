@@ -46,7 +46,7 @@ use flui_rendering::constraints::BoxConstraints;
 use flui_scheduler::{AppLifecycleState, Scheduler};
 use flui_types::{
     HapticFeedback, Size,
-    geometry::{Bounds, Pixels, Rect, px},
+    geometry::{Bounds, Pixels, px},
 };
 use flui_view::View;
 use flui_widgets::{GestureArenaScope, VsyncScope};
@@ -1045,15 +1045,9 @@ impl AppBinding {
 
         stats.record_frame();
 
-        // Top-left inset. The extent is a placeholder that has to match what
-        // `Backend::add_performance_overlay` draws (two rows); owning the
-        // geometry here rather than beside the drawing code is a known wart.
-        let mut overlay = PerformanceOverlayLayer::all_stats(Rect::from_ltwh(
-            px(8.0),
-            px(8.0),
-            px(150.0),
-            px(58.0),
-        ));
+        // Extent owned by flui-layer, which also defines what the renderer draws.
+        let mut overlay =
+            PerformanceOverlayLayer::all_stats(PerformanceOverlayLayer::default_bounds());
         overlay.update_stats(stats);
 
         let overlay_id = layer_tree.insert(Layer::PerformanceOverlay(Box::new(overlay)));

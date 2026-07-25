@@ -2,6 +2,28 @@
 //!
 //! Hot-reload support for FLUI scene and widget plugins via dynamic library loading.
 //!
+//! ## Development-only
+//!
+//! **Do not ship an application that reaches this crate at runtime.** The plugin
+//! boundary is unsound by construction, not by omission:
+//!
+//! * [`ScenePlugin::build_scene`] reclaims, with the host's drop glue and
+//!   allocator, a `Box<Scene>` the plugin allocated. `Scene` is `repr(Rust)`, so
+//!   nothing guarantees the two compilations agree on its layout, and it works
+//!   today only because neither side installs a `#[global_allocator]`. It is an
+//!   `unsafe fn` whose contract the caller cannot fully discharge.
+//! * A returned `Scene` holds `Box<dyn FnOnce>` and `Arc<dyn Any>` whose vtables
+//!   live in the plugin image, and no lifetime ties it to [`dynlib::DynLib`]'s
+//!   `dlclose`.
+//! * [`worker::get_worker_build_ptr`] hands out a code address that dangles after
+//!   [`worker::WorkerPlugin::unload`] — the registry is never pruned.
+//! * The plugin's `flui_*_version` symbol is resolved and never compared against
+//!   a host-expected value, and `flui_scene_drop` — the deallocator that would
+//!   be correct — is resolved and never called.
+//!
+//! Making this sound needs an opaque-handle C ABI, or never unloading the
+//! library, or process isolation. Tracked; until then this is a dev-loop tool.
+//!
 //! ## Two-Layer Architecture
 //!
 //! ```text
@@ -65,7 +87,9 @@
 //! use std::path::Path;
 //!
 //! if let Some(plugin) = ScenePlugin::load(Path::new("/path/to/libflui_scene.so")) {
-//!     let scene = plugin.build_scene(1080.0, 2400.0);
+//!     // SAFETY: see `ScenePlugin::build_scene` — host and plugin must agree
+//!     // on `Scene`'s layout, and the scene must drop before `unload()`.
+//!     let scene = unsafe { plugin.build_scene(1080.0, 2400.0) };
 //!     renderer.render_scene(&scene);
 //!
 //!     // Check for updates later
