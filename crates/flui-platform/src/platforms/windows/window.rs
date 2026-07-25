@@ -767,7 +767,7 @@ impl PlatformWindow for WindowsWindow {
             let result = DwmGetWindowAttribute(
                 self.hwnd,
                 DWMWINDOWATTRIBUTE(20), // DWMWA_USE_IMMERSIVE_DARK_MODE
-                &mut dark_mode as *mut i32 as *mut std::ffi::c_void,
+                (&raw mut dark_mode).cast::<std::ffi::c_void>(),
                 std::mem::size_of::<i32>() as u32,
             );
             if result.is_ok() && dark_mode != 0 {
@@ -1289,7 +1289,7 @@ impl WindowsWindow {
             DwmGetWindowAttribute(
                 self.hwnd,
                 DWMWINDOWATTRIBUTE(attribute),
-                &mut value as *mut T as *mut std::ffi::c_void,
+                (&raw mut value).cast::<std::ffi::c_void>(),
                 std::mem::size_of::<T>() as u32,
             )?;
             Ok(value)

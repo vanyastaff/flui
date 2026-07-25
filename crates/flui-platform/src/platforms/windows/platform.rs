@@ -978,7 +978,7 @@ impl Platform for WindowsPlatform {
                 PCWSTR(value_name.as_ptr()),
                 None,
                 None,
-                Some(&mut data as *mut u32 as *mut u8),
+                Some((&raw mut data).cast::<u8>()),
                 Some(&mut data_size),
             );
             let _ = RegCloseKey(hkey);

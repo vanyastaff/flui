@@ -1816,7 +1816,10 @@ mod tests {
     fn test_diagnostics_node_get_property_f64_strips_unit_suffix() {
         let mut builder = DiagnosticsBuilder::new();
         builder.add_double("item_extent", 25.0, Some("px"));
-        let [property] = builder.build().try_into().ok().unwrap();
+        let [property] = builder
+            .build()
+            .try_into()
+            .expect("one add_double call yields exactly one property");
         let node = DiagnosticsNode::new("RenderSliverFixedExtentList").with_property(property);
         assert_eq!(node.get_property_f64("item_extent"), Some(25.0));
     }
