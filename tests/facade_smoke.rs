@@ -56,7 +56,7 @@ fn prelude_authored_tree_mounts_through_the_headless_pipeline() {
             Some(Arc::clone(&pipeline_owner)),
             &mut build_owner.element_owner_mut(),
         );
-        build_owner.schedule_build_for(root_element, 0);
+        build_owner.schedule_build_for(root_element, 0, flui_view::RebuildReason::InitialMount);
         build_owner.build_scope(&mut tree);
     });
 

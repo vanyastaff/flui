@@ -44,7 +44,13 @@ Every variant carries the same fire-and-forget, best-effort semantics: a silent 
 
 ### 5. Backends
 
-**winit:** no override. `WinitWindow`'s `PlatformWindow` impl inherits the trait default (`None`) with a comment stating this is the permanent correct answer — desktop winit targets have no haptic hardware to drive, not a stub awaiting a backend. (Note: the winit backend's actual `open_window()` return value, `WinitWindowHandle`, does not delegate `text_input()`/`display()` to the inner `WinitWindow` either — a pre-existing gap this PR does not touch, since `haptics()`'s correct answer on both types is the same `None`.)
+**winit:** no override. `WinitWindow`'s `PlatformWindow` impl inherits the trait
+default (`None`) with a comment stating this is the permanent correct answer —
+desktop winit targets have no haptic hardware to drive, not a stub awaiting a
+backend. `open_window()` returns the exact stored `Arc<WinitWindow>` erased to
+`Arc<dyn PlatformWindow>`; the former delegating window wrapper was deleted, so
+`text_input()`, `display()`, cursor state, callbacks, and raw handles cannot
+diverge across two window objects.
 
 **Headless:** `FakeHaptics` (`platforms/headless/platform.rs`, re-exported at the crate root) is a recording fake mirroring `FakeTextInput`'s exact shape: `Mutex<Vec<HapticFeedback>>` history, `new()`, `calls() -> Vec<HapticFeedback>` (delivery order), `last() -> Option<HapticFeedback>`. `MockWindow` stores one `Arc<FakeHaptics>` field, and `haptics()` returns a clone of the *same* `Arc` on every call (a dedicated test proves this, matching the existing `text_input_reaches_the_same_fake_across_calls…` test) — so a test driving the binding and a test asserting on the fake directly observe the same recorded history.
 

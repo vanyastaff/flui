@@ -137,7 +137,7 @@ pub struct InkWell {
     overlay_color: WidgetStateProperty<Option<Color>>,
     shape: MaterialShape,
     states_controller: Option<WidgetStatesController>,
-    focus_node: Option<Arc<FocusNode>>,
+    focus_node: Option<Rc<FocusNode>>,
 }
 
 impl InkWell {
@@ -192,9 +192,9 @@ impl InkWell {
     /// Drives an external [`FocusNode`] instead of a widget-owned one —
     /// Flutter parity: `InkWell.focusNode`. Exposed primarily so a caller
     /// (or a test) can request focus on this `InkWell` from outside the
-    /// widget tree via [`flui_interaction::routing::FocusManager::request_focus`].
+    /// widget tree via [`FocusNode::request_focus`].
     #[must_use]
-    pub fn focus_node(mut self, node: Arc<FocusNode>) -> Self {
+    pub fn focus_node(mut self, node: Rc<FocusNode>) -> Self {
         self.focus_node = Some(node);
         self
     }
@@ -321,7 +321,7 @@ impl ViewState<InkWell> for InkWellState {
         // whose Flutter body is `setState(() {})`.
         let rebuild_for_listener = rebuild.clone();
         self.states_listener = Some(self.states.add_listener(Arc::new(move || {
-            rebuild_for_listener.schedule();
+            rebuild_for_listener.schedule(flui_view::RebuildReason::StateChange);
         })));
 
         self.vsync = ctx.get::<VsyncScope, _>(|scope| scope.vsync().clone());
@@ -362,7 +362,7 @@ impl ViewState<InkWell> for InkWellState {
                 .clone()
                 .expect("init_state runs before the first did_update_view");
             self.states_listener = Some(self.states.add_listener(Arc::new(move || {
-                rebuild.schedule();
+                rebuild.schedule(flui_view::RebuildReason::StateChange);
             })));
         } else if new_view.is_interactive() != old_view.is_interactive() {
             // Flutter parity: `didUpdateWidget`'s `if (enabled !=
@@ -420,34 +420,12 @@ impl ViewState<InkWell> for InkWellState {
         let hover_states_enter = self.states.clone();
         let hover_states_exit = self.states.clone();
         let mouse_region = MouseRegion::new()
-            // `on_hover` (not `on_enter`): both fire the instant the pointer
-            // is over the region, but `on_hover` re-fires on every move
-            // while inside rather than only the outside→inside transition.
-            // `WidgetStatesController::update` no-ops once `Hovered` is
-            // already set, so the repeat calls cost nothing — and unlike
-            // `on_enter`, `on_hover` doesn't depend on `MouseTracker`
-            // computing a genuine enter transition, which needs the
-            // annotation-diffing pass a full `AppBinding` frame pump runs
-            // (`MouseTracker::update_with_event`) but a headless pointer
-            // dispatch does not — see `crates/flui-material/tests/ink_well.rs`'s
-            // module doc ("Spike outcome") for how that was established.
-            //
-            // Named divergence this choice carries: `on_hover` fires only in
-            // response to a `Move` event. A widget that APPEARS under an
-            // already-stationary pointer — mounted there, or scrolled/
-            // animated under it with no pointer motion in between — never
-            // sees `on_hover` fire, so `Hovered` stays unset until the
-            // pointer next moves. The oracle's `MouseTracker` re-hit-tests
-            // after layout changes as well as pointer motion, so it can
-            // catch at least some of this "appeared under the pointer"
-            // class of case that a purely move-driven `on_hover` cannot;
-            // FLUI's `MouseTracker` port has not been audited for whether
-            // it does the same post-layout pass, so this divergence is
-            // stated conservatively rather than bounded precisely.
-            .on_hover(move |_device, _position| {
-                // Oracle: `handleMouseEnter`/hover routing gates
-                // `handleHoverChange` (which updates `WidgetState.hovered`)
-                // on `enabled`.
+            // Flutter 3.44 `_InkResponseState` changes hover state on the
+            // structural MouseRegion enter/exit transitions. FLUI's
+            // presentation-owned MouseTracker also re-hit-tests stationary
+            // devices after layout, so a widget appearing beneath an
+            // unmoved pointer takes the same path as a physical pointer move.
+            .on_enter(move |_device, _position| {
                 if enabled {
                     hover_states_enter.update(WidgetState::Hovered, true);
                 }
@@ -463,7 +441,7 @@ impl ViewState<InkWell> for InkWellState {
                 focus_states.update(WidgetState::Focused, has_focus);
             });
         if let Some(node) = &view.focus_node {
-            focus = focus.focus_node(Arc::clone(node));
+            focus = focus.focus_node(Rc::clone(node));
         }
 
         // GestureDetector wraps MouseRegion wraps Focus wraps the content —
@@ -542,7 +520,7 @@ fn begin_press_deactivation(
     controller.add_status_listener(Arc::new(move |status| {
         if status == AnimationStatus::Completed {
             states_for_listener.update(WidgetState::Pressed, false);
-            rebuild_for_listener.schedule();
+            rebuild_for_listener.schedule(flui_view::RebuildReason::AnimationTick);
         }
     }));
 

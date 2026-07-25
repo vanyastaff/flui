@@ -20,7 +20,6 @@
 //! RenderingFlutterBinding
 //!   ├── root_pipeline_owner   - Root of PipelineOwner tree
 //!   ├── render_views          - Map<ViewId, RenderView>
-//!   ├── mouse_tracker         - Hover event management
 //!   └── semantics integration - Via SemanticsBinding
 //! ```
 //!
@@ -39,7 +38,6 @@ use std::{
 };
 
 use flui_foundation::{BindingBase, HasInstance, impl_binding_singleton};
-use flui_interaction::MouseTracker;
 use flui_painting::PaintingBinding;
 use flui_rendering::{
     binding::RendererBinding,
@@ -48,7 +46,7 @@ use flui_rendering::{
     view::{RenderView, ViewConfiguration},
 };
 use flui_scheduler::Scheduler;
-use flui_semantics::{Assertiveness, SemanticsAction, SemanticsBinding};
+use flui_semantics::{Assertiveness, SemanticsBinding};
 use flui_types::Offset;
 use parking_lot::RwLock;
 
@@ -101,7 +99,6 @@ pub(crate) fn redirty_pipeline_root(pipeline_owner: &RwLock<PipelineOwner>) {
 /// - Managing [`RenderView`]s (add/remove)
 /// - Creating [`ViewConfiguration`]s for views
 /// - Coordinating frame production
-/// - Managing [`MouseTracker`] for hover events
 /// - Integrating with [`SemanticsBinding`] for accessibility
 ///
 /// # Thread Safety
@@ -115,16 +112,6 @@ pub struct RenderingFlutterBinding {
 
     /// Render views managed by this binding (viewId → RenderView).
     render_views: RwLock<HashMap<u64, Arc<RwLock<RenderView>>>>,
-
-    /// Mouse tracker for hover notification.
-    ///
-    /// Switched from the deleted rendering-side
-    /// `flui_rendering::input::MouseTracker` to the canonical
-    /// `flui_interaction::MouseTracker`. The latter is `Clone` with
-    /// `Arc<Mutex<inner>>` interior mutability, so the previous
-    /// `RwLock<...>` outer wrap was dropped -- it was double-wrapping
-    /// the same mutability concern.
-    mouse_tracker: MouseTracker,
 
     /// Whether semantics are enabled.
     semantics_enabled: AtomicBool,
@@ -175,15 +162,9 @@ impl RenderingFlutterBinding {
     /// This allows AppBinding to pass in the same `Arc<RwLock<PipelineOwner>>`
     /// that elements use, ensuring a single PipelineOwner instance at runtime.
     pub fn new_with_pipeline(pipeline_owner: Arc<RwLock<PipelineOwner>>) -> Self {
-        // The dummy `MouseTrackerHitTest` callback that used to be
-        // constructed here is gone -- the canonical
-        // `flui_interaction::MouseTracker` is parameterless. The
-        // hit-test function is passed at the `update_*` call site
-        // by the gesture binding, not stored on the tracker.
         let mut binding = Self {
             root_pipeline_owner: pipeline_owner,
             render_views: RwLock::new(HashMap::new()),
-            mouse_tracker: MouseTracker::new(),
             semantics_enabled: AtomicBool::new(false),
             semantics_listeners: RwLock::new(Vec::new()),
             first_frame_deferred_count: AtomicU32::new(0),
@@ -511,11 +492,10 @@ impl RenderingFlutterBinding {
 
 impl BindingBase for RenderingFlutterBinding {
     fn init_instances(&mut self) {
-        // The gesture binding is owned by `AppBinding` (a plain field), which is
-        // the single authoritative instance driving input and hit testing. We
-        // deliberately do not touch `GestureBinding::instance()` here — a second
-        // lazily-initialized global would be a distinct allocation with its own
-        // arena that never receives the real pointer registrations.
+        // Gesture state is owned by the entered `UiRealm`, which is the
+        // authoritative instance driving input and frame-time coalescing for
+        // its current presentation. This rendering binding deliberately does
+        // not initialize a second gesture singleton with a disconnected arena.
 
         // Initialize scheduler
         let _ = Scheduler::instance();
@@ -611,10 +591,6 @@ impl RendererBinding for RenderingFlutterBinding {
         self.render_views.write().remove(&view_id)
     }
 
-    fn mouse_tracker(&self) -> &MouseTracker {
-        &self.mouse_tracker
-    }
-
     fn send_frames_to_engine(&self) -> bool {
         self.first_frame_sent.load(Ordering::Relaxed)
             || self.first_frame_deferred_count.load(Ordering::Relaxed) == 0
@@ -626,27 +602,6 @@ impl RendererBinding for RenderingFlutterBinding {
         } else {
             // Default configuration for testing
             ViewConfiguration::default()
-        }
-    }
-
-    fn perform_semantics_action(
-        &self,
-        view_id: u64,
-        node_id: i32,
-        action: SemanticsAction,
-        args: Option<flui_semantics::ActionArgs>,
-    ) {
-        // Look up the render view and delegate to its semantics owner
-        let views = self.render_views.read();
-        if let Some(_view) = views.get(&view_id) {
-            // TODO: Get semantics owner from pipeline owner and perform action
-            tracing::debug!(
-                "perform_semantics_action: view={}, node={}, action={:?}, args={:?}",
-                view_id,
-                node_id,
-                action,
-                args
-            );
         }
     }
 }
@@ -919,10 +874,9 @@ mod tests {
                 late_calls_for_listener.fetch_add(1, Ordering::Relaxed);
             });
 
-            // Callbacks must be `Send + Sync` (the listener trait bound), but
-            // `RenderingFlutterBinding` itself is not — it owns a `Rc`-based
-            // `MouseTracker` — so the reentrant call goes back through the
-            // `'static` singleton accessor rather than capturing `binding`.
+            // The listener is `'static`, so the reentrant call resolves the
+            // thread's binding through its singleton accessor instead of
+            // capturing this stack-local reference.
             let late_listener_for_reentrant = late_listener.clone();
             let reentrant_listener: Arc<dyn Fn(bool) + Send + Sync> = Arc::new(move |_enabled| {
                 RenderingFlutterBinding::instance()

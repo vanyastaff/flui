@@ -273,7 +273,7 @@ fn a_destination_lost_mid_flight_does_not_panic_or_leak() {
     assert_eq!(airborne, 1, "a shuttle took off");
     gate.present.store(false, Ordering::SeqCst);
     if let Some(rebuild) = gate.rebuild.lock().as_ref() {
-        rebuild.schedule();
+        rebuild.schedule(flui_view::RebuildReason::StateChange);
     }
 
     // Fly on to completion; the flight fades and lands without panicking or leaking.

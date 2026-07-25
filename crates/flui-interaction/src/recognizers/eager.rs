@@ -36,19 +36,23 @@
 //! let arena = GestureArena::new();
 //! let recognizer = EagerGestureRecognizer::new(arena.clone());
 //!
-//! // The recogniser wins the arena immediately on `add_pointer` —
-//! // no event required. Useful for `AndroidView` / `UiKitView`.
+//! // The recogniser claims the arena immediately on `add_pointer` — no
+//! // pointer event is required. The owner closes the arena after routing Down.
 //! let pointer = PointerId::PRIMARY;
 //! let position = Offset::new(Pixels(50.0), Pixels(50.0));
 //! recognizer.add_pointer(pointer, position);
-//! assert!(arena.is_resolved(pointer));
+//! assert!(arena.contains(pointer));
+//! arena.close(pointer);
+//! assert!(arena.contains(pointer));
+//! arena.drain_deferred_resolutions();
+//! assert!(arena.is_empty());
 //! ```
 //!
-//! # Thread safety
+//! # Ownership
 //!
-//! All fields are `Arc<...>` or `Arc<Mutex<...>>`, so the recogniser is
-//! `Send + Sync` and shares the same lock-during-callback discipline as
-//! [`TapGestureRecognizer`](super::TapGestureRecognizer).
+//! Like the rest of the gesture graph, this recogniser is owner-local.
+//! `Arc` supplies stable arena identity and cheap clones; it does not make
+//! executable callbacks cross-thread.
 //!
 //! # Lifecycle
 //!
@@ -71,8 +75,8 @@ use crate::{
 
 /// Eager gesture recognizer — wins the arena on `add_pointer`.
 ///
-/// See [module-level docs](self) for use cases, thread-safety guarantees,
-/// and Flutter parity notes (`eager.dart:42-68`).
+/// See [module-level docs](self) for use cases, ownership, and Flutter parity
+/// notes (`eager.dart:42-68`).
 #[derive(Debug, Clone)]
 pub struct EagerGestureRecognizer {
     /// Base state (arena, primary-pointer tracking, disposal).
@@ -116,7 +120,7 @@ impl EagerGestureRecognizer {
 }
 
 impl GestureRecognizer for EagerGestureRecognizer {
-    fn add_pointer(&self, pointer: PointerId, position: Offset<Pixels>) {
+    fn add_pointer(self: &Arc<Self>, pointer: PointerId, position: Offset<Pixels>) {
         // per-impl span (trait fn disallows `#[instrument]`).
         let _span = tracing::info_span!(
             "eager.add_pointer",
@@ -126,20 +130,16 @@ impl GestureRecognizer for EagerGestureRecognizer {
         if !self.state.assert_not_disposed("add_pointer") {
             return;
         }
-        // Build a fresh Arc handle for the arena + tracking copy. The
-        // recogniser is `Clone` (all fields are Arc-shared), so `Arc::new`
-        // here is cheap and avoids reusing the caller's handle.
-        let recognizer = Arc::new(self.clone());
         // `start_tracking` adds us to the arena under the pointer slot and
         // records the primary pointer / initial position on the base.
         // No nested lock hold — `start_tracking` returns before the
         // `accept` call below touches the arena again.
-        self.state.start_tracking(pointer, position, &recognizer);
+        self.state.start_tracking(pointer, position, self);
         // Eager accept: resolve the arena in our favor immediately. If
         // the arena is still open we register as the eager winner
         // (auto-resolves on close); if it is already closed we resolve
         // outright. Either way we win before any pointer event arrives.
-        self.state.accept(&recognizer);
+        self.state.accept_tracked();
     }
 
     fn handle_event(&self, event: &PointerEvent) {
@@ -292,12 +292,10 @@ mod tests {
         assert_eq!(recognizer.primary_pointer(), None);
     }
 
-    /// `add_pointer` registers us as the arena's eager winner (or outright
-    /// winner, depending on whether the arena is open at that point). The
-    /// key invariant is that the arena has a resolved winner for the
-    /// pointer — we beat the framework to the punch.
+    /// `add_pointer` registers us as the eager winner without settling the
+    /// open arena. Closing the arena then resolves the claim synchronously.
     #[test]
-    fn eager_add_pointer_wins_arena_immediately() {
+    fn eager_add_pointer_claims_then_wins_when_the_arena_closes() {
         let arena = GestureArena::new();
         let recognizer = EagerGestureRecognizer::new(arena.clone());
 
@@ -306,11 +304,14 @@ mod tests {
 
         recognizer.add_pointer(pointer, position);
 
-        // Either path — eager_winner pinned (arena still open) OR
-        // outright resolved (arena already closed) — leaves the arena
-        // with a winner record for us.
         assert!(arena.contains(pointer));
-        assert!(arena.winner(pointer).is_some());
+        assert!(arena.is_open(pointer));
+
+        arena.close(pointer);
+
+        assert!(arena.contains(pointer));
+        assert_eq!(arena.drain_deferred_resolutions(), 1);
+        assert!(arena.is_empty());
     }
 
     /// When Eager joins a contest that already has a competing member,
@@ -335,17 +336,7 @@ mod tests {
         // Close the arena — the eager winner takes the contest.
         arena.close(pointer);
 
-        // The arena now has a winner; sweep (or any further access) must
-        // not need a force-resolve, i.e. `is_resolved` is true.
-        assert!(arena.is_resolved(pointer));
-        assert!(arena.winner(pointer).is_some());
-
-        // Cleanup the entry so the competitor's reject_gesture is observable.
-        arena.sweep(pointer);
-        // Symmetric coverage: the competitor lost (rejected) AND the
-        // eager recogniser was the actual winner (not accepted). Using
-        // both `was_rejected` and `was_accepted` keeps the test stub
-        // symmetrical and exercises the full arena-conflict path.
+        assert!(arena.is_empty());
         assert!(competitor.was_rejected());
         assert!(!competitor.was_accepted());
     }
@@ -429,7 +420,7 @@ mod tests {
         if !cfg!(debug_assertions) {
             recognizer.add_pointer(PointerId::PRIMARY, pos(1.0, 1.0));
             assert_eq!(recognizer.primary_pointer(), None);
-            assert!(arena.winner(PointerId::PRIMARY).is_none());
+            assert!(!arena.contains(PointerId::PRIMARY));
         }
     }
 

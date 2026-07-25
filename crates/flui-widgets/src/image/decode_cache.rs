@@ -198,6 +198,19 @@ where
 mod tests {
     use super::*;
 
+    /// The production cache is intentionally process-wide, while Rust's unit
+    /// test harness runs this module in parallel. Give every cache test a clean
+    /// transaction so capacity assertions measure their own entries rather
+    /// than whichever sibling happened to populate the global LRU first.
+    static TEST_CACHE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    async fn isolated_cache() -> tokio::sync::MutexGuard<'static, ()> {
+        let guard = TEST_CACHE_LOCK.lock().await;
+        CACHE.entries.lock().clear();
+        CACHE.pending.lock().clear();
+        guard
+    }
+
     fn solid(width: u32, height: u32) -> PixelImage {
         PixelImage::from_rgba8(width, height, vec![0u8; (width * height * 4) as usize])
     }
@@ -207,13 +220,15 @@ mod tests {
         ImageCacheKey::Asset(format!("decode-cache-test-{name}"))
     }
 
-    #[test]
-    fn cached_returns_none_for_an_unknown_key() {
+    #[tokio::test]
+    async fn cached_returns_none_for_an_unknown_key() {
+        let _cache = isolated_cache().await;
         assert_eq!(cached(&fresh_key("unknown")), None);
     }
 
     #[tokio::test]
     async fn load_coalesced_populates_the_sync_cache_on_success() {
+        let _cache = isolated_cache().await;
         let key = fresh_key("populates-cache");
         let image = solid(3, 3);
         let expected = image.clone();
@@ -232,6 +247,7 @@ mod tests {
 
     #[tokio::test]
     async fn load_coalesced_does_not_populate_the_cache_on_failure() {
+        let _cache = isolated_cache().await;
         let key = fresh_key("failure-not-cached");
 
         let result = load_coalesced(key.clone(), || async {
@@ -252,8 +268,9 @@ mod tests {
     /// forever waiting for a completion nobody will ever observe. This is
     /// the leak Flutter's `ImageCache` avoids by removing `_pendingImages`
     /// entries when the last listener detaches, not only on completion.
-    #[test]
-    fn abandoning_the_only_subscriber_before_completion_removes_the_pending_entry() {
+    #[tokio::test]
+    async fn abandoning_the_only_subscriber_before_completion_removes_the_pending_entry() {
+        let _cache = isolated_cache().await;
         let key = fresh_key("abandoned-before-completion");
         let (_release_tx, release_rx) = tokio::sync::oneshot::channel::<()>();
 
@@ -295,6 +312,7 @@ mod tests {
     /// leaving does.
     #[tokio::test]
     async fn dropping_one_of_two_subscribers_keeps_the_entry_alive_for_the_other() {
+        let _cache = isolated_cache().await;
         let key = fresh_key("one-of-two-abandoned");
         let (release_tx, release_rx) = tokio::sync::oneshot::channel::<()>();
         // `Image`'s `PartialEq` is `Arc::ptr_eq` (documented: dimensions plus
@@ -331,6 +349,7 @@ mod tests {
     /// once between them, and both must observe the same decoded image.
     #[tokio::test]
     async fn load_coalesced_shares_one_load_across_concurrent_callers() {
+        let _cache = isolated_cache().await;
         let key = fresh_key("coalesced-concurrent");
         let start_calls = Arc::new(AtomicUsize::new(0));
 
@@ -373,6 +392,7 @@ mod tests {
     /// not silently grow the cache unbounded.
     #[tokio::test]
     async fn cache_entries_beyond_capacity_evict_the_least_recently_used() {
+        let _cache = isolated_cache().await;
         let first_key = fresh_key("evict-pressure-0");
         load_coalesced(first_key.clone(), || async { Ok(solid(1, 1)) })
             .await
@@ -402,6 +422,7 @@ mod tests {
     /// not an off-by-one that starts evicting a step early.
     #[tokio::test]
     async fn cache_retains_exactly_capacity_entries_without_evicting() {
+        let _cache = isolated_cache().await;
         let first_key = fresh_key("at-capacity-0");
         load_coalesced(first_key.clone(), || async { Ok(solid(1, 1)) })
             .await
@@ -426,6 +447,7 @@ mod tests {
     /// `Asset`/`Network` namespace.
     #[tokio::test]
     async fn load_coalesced_does_not_share_loads_across_different_keys() {
+        let _cache = isolated_cache().await;
         let start_calls = Arc::new(AtomicUsize::new(0));
         let make_start = |counter: Arc<AtomicUsize>, image: PixelImage| {
             move || {

@@ -58,21 +58,28 @@ impl HitTestable for MyWidget {
 Keyboard focus with scopes and traversal policies.
 
 ```rust
-use flui_interaction::{FocusManager, FocusNodeId};
+use flui_interaction::{FocusManager, FocusNode};
 
-let node_id = FocusNodeId::new(42);
+// A presentation owns one manager. Widgets normally receive this owner
+// through FocusRoot; there is no process-global focus manager.
+let manager = FocusManager::new();
+let node = FocusNode::new();
+let _attachment = manager
+    .root_scope()
+    .attach_node(&node)
+    .expect("a fresh node must attach to its presentation root");
 
 // Request focus
-FocusManager::global().request_focus(node_id);
+node.request_focus();
 
 // Check focus
-if FocusManager::global().has_focus(node_id) {
+if node.has_primary_focus() {
     // Handle keyboard input
 }
 
 // Tab traversal (defaults to root scope's reading-order policy)
-FocusManager::global().focus_next();      // Tab
-FocusManager::global().focus_previous();  // Shift+Tab
+manager.focus_next();      // Tab
+manager.focus_previous();  // Shift+Tab
 ```
 
 ### Gesture Recognition
@@ -232,6 +239,12 @@ arena.add(pointer_id, drag_recognizer);
 - **Tap vs Drag**: Drag wins if movement > slop threshold
 - **Tap vs Long Press**: Long press wins after timeout
 - **Tap vs Double Tap**: Waits for possible second tap
+
+At runtime, `GestureBinding` owns a `BindingDriven` arena shared with the
+mounted widget tree. It dispatches the full hit path before closing the arena
+on pointer down, sweeps on pointer up, and does not sweep on pointer cancel;
+cancelled recognizers reject themselves so an interrupted gesture cannot be
+turned into a forced first-member win.
 
 ---
 

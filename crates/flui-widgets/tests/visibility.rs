@@ -5,12 +5,13 @@
 
 use crate::common::{lay_out, lay_out_animated, loose, size};
 use std::any::TypeId;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use flui_animation::{Animation, AnimationController, Vsync, VsyncRegistration};
-use flui_interaction::{FocusManager, FocusNode};
+use flui_interaction::FocusNode;
 use flui_scheduler::Scheduler;
 use flui_view::prelude::{BuildContext, StatefulView, StatelessView};
 use flui_view::{
@@ -21,17 +22,15 @@ use parking_lot::Mutex;
 
 const FRAME: Duration = Duration::from_millis(20);
 
-static FOCUS_TEST_LOCK: Mutex<()> = Mutex::new(());
-
 #[derive(Clone, StatefulView)]
 struct FocusLifecycleProbe {
-    node: Arc<FocusNode>,
+    node: Rc<FocusNode>,
     init_count: Arc<AtomicUsize>,
     dispose_count: Arc<AtomicUsize>,
 }
 
 struct FocusLifecycleProbeState {
-    node: Arc<FocusNode>,
+    node: Rc<FocusNode>,
     init_count: Arc<AtomicUsize>,
     dispose_count: Arc<AtomicUsize>,
 }
@@ -41,7 +40,7 @@ impl StatefulView for FocusLifecycleProbe {
 
     fn create_state(&self) -> Self::State {
         FocusLifecycleProbeState {
-            node: Arc::clone(&self.node),
+            node: Rc::clone(&self.node),
             init_count: Arc::clone(&self.init_count),
             dispose_count: Arc::clone(&self.dispose_count),
         }
@@ -65,7 +64,7 @@ impl ViewState<FocusLifecycleProbe> for FocusLifecycleProbeState {
     }
 
     fn build(&self, _view: &FocusLifecycleProbe, _ctx: &dyn BuildContext) -> impl IntoView {
-        Focus::new(SizedBox::new(10.0, 10.0)).focus_node(Arc::clone(&self.node))
+        Focus::new(SizedBox::new(10.0, 10.0)).focus_node(Rc::clone(&self.node))
     }
 }
 
@@ -93,10 +92,6 @@ impl StatelessView for FocusVisibilityHost {
 
 #[test]
 fn visibility_focus_policy_tracks_hidden_state_without_remounting() {
-    let _guard = FOCUS_TEST_LOCK.lock();
-    let manager = FocusManager::global();
-    manager.unfocus();
-
     let node = FocusNode::with_debug_label("visibility-focus-probe");
     let init_count = Arc::new(AtomicUsize::new(0));
     let dispose_count = Arc::new(AtomicUsize::new(0));
@@ -108,12 +103,13 @@ fn visibility_focus_policy_tracks_hidden_state_without_remounting() {
         maintain_focusability: Arc::clone(&maintain_focusability),
         mounted: Arc::clone(&mounted),
         probe: FocusLifecycleProbe {
-            node: Arc::clone(&node),
+            node: Rc::clone(&node),
             init_count: Arc::clone(&init_count),
             dispose_count: Arc::clone(&dispose_count),
         },
     };
     let mut laid = lay_out(host, loose(100.0));
+    let manager = laid.focus_manager();
 
     node.request_focus();
     assert!(node.has_primary_focus());
@@ -121,17 +117,16 @@ fn visibility_focus_policy_tracks_hidden_state_without_remounting() {
 
     visible.store(false, Ordering::Relaxed);
     laid.pump();
-    assert_eq!(manager.primary_focus(), None);
+    assert!(manager.primary_focus().is_none());
     node.request_focus();
-    assert_eq!(manager.primary_focus(), None);
+    assert!(manager.primary_focus().is_none());
     assert_eq!(init_count.load(Ordering::Relaxed), 1);
     assert_eq!(dispose_count.load(Ordering::Relaxed), 0);
 
     visible.store(true, Ordering::Relaxed);
     laid.pump();
-    assert_eq!(
-        manager.primary_focus(),
-        None,
+    assert!(
+        manager.primary_focus().is_none(),
         "showing does not auto-refocus"
     );
     node.request_focus();
@@ -150,7 +145,7 @@ fn visibility_focus_policy_tracks_hidden_state_without_remounting() {
 
     maintain_focusability.store(false, Ordering::Relaxed);
     laid.pump();
-    assert_eq!(manager.primary_focus(), None);
+    assert!(manager.primary_focus().is_none());
     assert_eq!(init_count.load(Ordering::Relaxed), 1);
     assert_eq!(dispose_count.load(Ordering::Relaxed), 0);
 
@@ -514,7 +509,7 @@ fn invalid_maintain_animation_configuration_builds_one_error_child() {
     let mut tree = ElementTree::new();
     let mut owner = BuildOwner::new();
     let root_id = tree.mount_root(&view, &mut owner.element_owner_mut());
-    owner.schedule_build_for(root_id, 0);
+    owner.schedule_build_for(root_id, 0, flui_view::RebuildReason::InitialMount);
     owner.build_scope(&mut tree);
 
     let child_ids: Vec<_> = tree
@@ -538,7 +533,7 @@ fn invalid_maintain_focusability_configuration_builds_one_error_child() {
     let mut tree = ElementTree::new();
     let mut owner = BuildOwner::new();
     let root_id = tree.mount_root(&view, &mut owner.element_owner_mut());
-    owner.schedule_build_for(root_id, 0);
+    owner.schedule_build_for(root_id, 0, flui_view::RebuildReason::InitialMount);
     owner.build_scope(&mut tree);
 
     let child_ids: Vec<_> = tree

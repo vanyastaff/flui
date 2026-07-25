@@ -15,11 +15,9 @@
 //! was added there instead of duplicating it here (see each function's doc
 //! comment in `interaction/shortcuts.rs`/`interaction/actions.rs`).
 //!
-//! `FocusManager::global()` is an owner-thread (thread-local) singleton;
-//! nextest's libtest runner reuses OS threads across many `#[test]`
-//! functions in this binary, so every key-dispatching case below takes
-//! [`SHORTCUTS_TEST_LOCK`] and explicitly `unfocus()`s whatever it attached
-//! — the same convention `focus_test.rs` documents and uses.
+//! Every fixture gets the exact `FocusManager` owned by its mounted
+//! presentation. Tests therefore remain isolated without a process-global
+//! manager or serialization lock.
 //!
 //! ## Ported cases
 //! - `'trigger on key events'` (`CallbackShortcuts` group) — two independent
@@ -217,20 +215,15 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use flui_interaction::events::{Key, KeyEvent, KeyState, Modifiers};
-use flui_interaction::routing::{FocusManager, FocusNode};
+use flui_interaction::routing::FocusNode;
 use flui_view::element::ElementKind;
 use flui_widgets::prelude::*;
 use flui_widgets::{
     Action, ActionOutcome, Actions, CallbackAction, CallbackShortcuts, Focus, Intent, Shortcuts,
     SingleActivator, SizedBox,
 };
-use parking_lot::Mutex;
 
 use crate::common::{lay_out, loose};
-
-/// Conservatively serializes this file's key-dispatch fixtures on top of
-/// `FocusManager::global()`'s owner-thread singleton — see the module doc.
-static SHORTCUTS_TEST_LOCK: Mutex<()> = Mutex::new(());
 
 /// A leaf big enough to mount without tripping a zero-size edge case, and
 /// otherwise inert — geometry is not what these tests assert about.
@@ -261,18 +254,14 @@ fn key_up(character: &str, modifiers: Modifiers) -> KeyEvent {
 /// `'trigger on key events'` (`CallbackShortcuts` group, `shortcuts_test.dart`).
 #[test]
 fn callback_shortcuts_trigger_on_matching_key_events_only() {
-    let _guard = SHORTCUTS_TEST_LOCK.lock();
-    let manager = FocusManager::global();
-    manager.unfocus();
-
     let invoked_a = Rc::new(Cell::new(0));
     let invoked_b = Rc::new(Cell::new(0));
     let field = FocusNode::with_debug_label("two-binding-field");
 
     let a_for_binding = Rc::clone(&invoked_a);
     let b_for_binding = Rc::clone(&invoked_b);
-    let _laid = lay_out(
-        CallbackShortcuts::new(Focus::new(leaf()).focus_node(Arc::clone(&field)))
+    let laid = lay_out(
+        CallbackShortcuts::new(Focus::new(leaf()).focus_node(Rc::clone(&field)))
             .binding(SingleActivator::character("a"), move || {
                 a_for_binding.set(a_for_binding.get() + 1);
             })
@@ -281,6 +270,7 @@ fn callback_shortcuts_trigger_on_matching_key_events_only() {
             }),
         loose(200.0),
     );
+    let manager = laid.focus_manager();
     field.request_focus();
 
     assert!(manager.dispatch_key_event(&key_down("a", Modifiers::empty())));
@@ -298,36 +288,31 @@ fn callback_shortcuts_trigger_on_matching_key_events_only() {
     assert!(!manager.dispatch_key_event(&key_up("b", Modifiers::empty())));
     assert_eq!(invoked_a.get(), 0);
     assert_eq!(invoked_b.get(), 1);
-
-    manager.unfocus();
 }
 
 /// `'nested CallbackShortcuts stop propagation'` (`CallbackShortcuts` group,
 /// `shortcuts_test.dart`).
 #[test]
 fn nested_callback_shortcuts_the_inner_consuming_binding_stops_the_outer() {
-    let _guard = SHORTCUTS_TEST_LOCK.lock();
-    let manager = FocusManager::global();
-    manager.unfocus();
-
     let invoked_outer = Rc::new(Cell::new(0));
     let invoked_inner = Rc::new(Cell::new(0));
     let field = FocusNode::with_debug_label("nested-cs-stop-field");
 
     let outer_for_binding = Rc::clone(&invoked_outer);
     let inner_for_binding = Rc::clone(&invoked_inner);
-    let inner = CallbackShortcuts::new(Focus::new(leaf()).focus_node(Arc::clone(&field))).binding(
+    let inner = CallbackShortcuts::new(Focus::new(leaf()).focus_node(Rc::clone(&field))).binding(
         SingleActivator::character("a"),
         move || {
             inner_for_binding.set(inner_for_binding.get() + 1);
         },
     );
-    let _laid = lay_out(
+    let laid = lay_out(
         CallbackShortcuts::new(inner).binding(SingleActivator::character("a"), move || {
             outer_for_binding.set(outer_for_binding.get() + 1);
         }),
         loose(200.0),
     );
+    let manager = laid.focus_manager();
     field.request_focus();
 
     assert!(manager.dispatch_key_event(&key_down("a", Modifiers::empty())));
@@ -340,8 +325,6 @@ fn nested_callback_shortcuts_the_inner_consuming_binding_stops_the_outer() {
     assert!(!manager.dispatch_key_event(&key_up("a", Modifiers::empty())));
     assert_eq!(invoked_outer.get(), 0);
     assert_eq!(invoked_inner.get(), 1);
-
-    manager.unfocus();
 }
 
 /// `'non-overlapping nested CallbackShortcuts fire appropriately'`
@@ -349,28 +332,25 @@ fn nested_callback_shortcuts_the_inner_consuming_binding_stops_the_outer() {
 /// `CharacterActivator` → `SingleActivator::character` (see module doc).
 #[test]
 fn non_overlapping_nested_callback_shortcuts_each_fire_for_their_own_key() {
-    let _guard = SHORTCUTS_TEST_LOCK.lock();
-    let manager = FocusManager::global();
-    manager.unfocus();
-
     let invoked_outer = Rc::new(Cell::new(0));
     let invoked_inner = Rc::new(Cell::new(0));
     let field = FocusNode::with_debug_label("non-overlapping-cs-field");
 
     let outer_for_binding = Rc::clone(&invoked_outer);
     let inner_for_binding = Rc::clone(&invoked_inner);
-    let inner = CallbackShortcuts::new(Focus::new(leaf()).focus_node(Arc::clone(&field))).binding(
+    let inner = CallbackShortcuts::new(Focus::new(leaf()).focus_node(Rc::clone(&field))).binding(
         SingleActivator::character("a"),
         move || {
             inner_for_binding.set(inner_for_binding.get() + 1);
         },
     );
-    let _laid = lay_out(
+    let laid = lay_out(
         CallbackShortcuts::new(inner).binding(SingleActivator::character("b"), move || {
             outer_for_binding.set(outer_for_binding.get() + 1);
         }),
         loose(200.0),
     );
+    let manager = laid.focus_manager();
     field.request_focus();
 
     assert!(manager.dispatch_key_event(&key_down("a", Modifiers::empty())));
@@ -392,8 +372,6 @@ fn non_overlapping_nested_callback_shortcuts_each_fire_for_their_own_key() {
     assert!(!manager.dispatch_key_event(&key_up("b", Modifiers::empty())));
     assert_eq!(invoked_outer.get(), 1);
     assert_eq!(invoked_inner.get(), 1);
-
-    manager.unfocus();
 }
 
 /// `'Works correctly with Shortcuts too'` (`CallbackShortcuts` group,
@@ -406,10 +384,6 @@ fn callback_shortcuts_interoperate_with_a_nested_shortcuts_actions_pair() {
     struct TestIntentB;
     impl Intent for TestIntentB {}
 
-    let _guard = SHORTCUTS_TEST_LOCK.lock();
-    let manager = FocusManager::global();
-    manager.unfocus();
-
     let invoked_callback_a = Rc::new(Cell::new(0));
     let invoked_callback_b = Rc::new(Cell::new(0));
     let invoked_action_a = Arc::new(AtomicUsize::new(0));
@@ -421,7 +395,7 @@ fn callback_shortcuts_interoperate_with_a_nested_shortcuts_actions_pair() {
     let act_a = Arc::clone(&invoked_action_a);
     let act_b = Arc::clone(&invoked_action_b);
 
-    let innermost = CallbackShortcuts::new(Focus::new(leaf()).focus_node(Arc::clone(&field)))
+    let innermost = CallbackShortcuts::new(Focus::new(leaf()).focus_node(Rc::clone(&field)))
         .binding(SingleActivator::character("a"), move || {
             cb_a.set(cb_a.get() + 1);
         });
@@ -433,7 +407,7 @@ fn callback_shortcuts_interoperate_with_a_nested_shortcuts_actions_pair() {
             cb_b.set(cb_b.get() + 1);
         });
 
-    let _laid = lay_out(
+    let laid = lay_out(
         Actions::new(outer_callback)
             .action(CallbackAction::new(move |_intent: &TestIntentA| {
                 act_a.fetch_add(1, Ordering::SeqCst);
@@ -443,6 +417,7 @@ fn callback_shortcuts_interoperate_with_a_nested_shortcuts_actions_pair() {
             })),
         loose(200.0),
     );
+    let manager = laid.focus_manager();
     field.request_focus();
 
     assert!(manager.dispatch_key_event(&key_down("a", Modifiers::empty())));
@@ -469,8 +444,6 @@ fn callback_shortcuts_interoperate_with_a_nested_shortcuts_actions_pair() {
     );
     assert_eq!(invoked_action_a.load(Ordering::SeqCst), 0);
     assert_eq!(invoked_action_b.load(Ordering::SeqCst), 1);
-
-    manager.unfocus();
 }
 
 // ============================================================================
@@ -487,10 +460,6 @@ fn an_unmatched_key_bubbles_past_an_inner_shortcuts_to_an_outer_one() {
     struct InnerIntent;
     impl Intent for InnerIntent {}
 
-    let _guard = SHORTCUTS_TEST_LOCK.lock();
-    let manager = FocusManager::global();
-    manager.unfocus();
-
     let outer_invoked = Rc::new(Cell::new(0));
     let inner_invoked = Rc::new(Cell::new(0));
     let field = FocusNode::with_debug_label("nested-shortcuts-bubble-field");
@@ -498,12 +467,12 @@ fn an_unmatched_key_bubbles_past_an_inner_shortcuts_to_an_outer_one() {
     let outer_for_action = Rc::clone(&outer_invoked);
     let inner_for_action = Rc::clone(&inner_invoked);
 
-    let inner_shortcuts = Shortcuts::new(Focus::new(leaf()).focus_node(Arc::clone(&field)))
+    let inner_shortcuts = Shortcuts::new(Focus::new(leaf()).focus_node(Rc::clone(&field)))
         .shortcut(SingleActivator::character("z"), InnerIntent);
     let outer_shortcuts = Shortcuts::new(inner_shortcuts)
         .shortcut(SingleActivator::character("s").shift(), OuterIntent);
 
-    let _laid = lay_out(
+    let laid = lay_out(
         Actions::new(outer_shortcuts)
             .action(CallbackAction::new(move |_intent: &OuterIntent| {
                 outer_for_action.set(outer_for_action.get() + 1);
@@ -513,6 +482,7 @@ fn an_unmatched_key_bubbles_past_an_inner_shortcuts_to_an_outer_one() {
             })),
         loose(200.0),
     );
+    let manager = laid.focus_manager();
     field.request_focus();
 
     assert!(
@@ -529,8 +499,6 @@ fn an_unmatched_key_bubbles_past_an_inner_shortcuts_to_an_outer_one() {
         0,
         "the inner Shortcuts' own binding never matched"
     );
-
-    manager.unfocus();
 }
 
 // ============================================================================

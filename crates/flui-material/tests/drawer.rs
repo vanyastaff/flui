@@ -258,17 +258,16 @@ fn mid_drag_panel_offset_follows_the_value_minus_one_times_width_formula() {
         tight(400.0, 800.0),
     );
 
-    // A drag needs TWO move events to accumulate a reported delta: the
-    // FIRST move that crosses the recognizer's slop transitions
-    // Possible -> Started (firing `on_start` — unwired on the closed edge
-    // strip, no value change) at the crossing position itself
-    // (`DragStartBehavior::Start`, the default); only the SECOND move's
-    // delta (from that crossing position) is what `on_horizontal_drag_update`
-    // reports and `_move` applies. 25px comfortably clears the default pan
-    // slop (18px).
+    // With no competing recognizer on the edge strip, closing the arena
+    // after Down accepts the drag by default. `DragStartBehavior::Start`
+    // therefore starts at the down position and the first move contributes
+    // its full delta. Move past 0.5 so Scaffold's threshold callback rebuilds
+    // the controller while the drag is live; `did_update_view` must preserve
+    // the partial value rather than feeding `is_open=true` back as a command
+    // to snap fully open.
+    let value = 0.6;
     laid.dispatch_pointer_down(5.0, 400.0);
-    laid.dispatch_pointer_move(30.0, 400.0); // crosses slop, starts the drag
-    laid.dispatch_pointer_move(30.0 + width / 2.0, 400.0); // +140px reported delta
+    laid.dispatch_pointer_move(5.0 + width * value, 400.0);
 
     // The value change (`set_value`) only *schedules* a rebuild; drain it so
     // the tree reflects the now-not-dismissed status (the open branch,
@@ -278,9 +277,8 @@ fn mid_drag_panel_offset_follows_the_value_minus_one_times_width_formula() {
     let panel = find_panel(&laid, width);
     let dx = laid.absolute_offset(panel).dx.get();
 
-    // value ~= 0.5 (half the width dragged past the slop-crossing point)
-    // => offset = (0.5 - 1) * width.
-    let expected = (0.5 - 1.0) * width;
+    // value ~= 0.6 => offset = (0.6 - 1) * width.
+    let expected = (value - 1.0) * width;
     assert!(
         (dx - expected).abs() < 5.0,
         "mid-drag panel offset must track (value - 1) * width: got {dx}, expected ~{expected}"
@@ -447,7 +445,7 @@ fn scaffold_scope_of_reflects_has_drawer_without_a_scaffold_panic() {
 
 /// Flutter parity: the panel mounts (transitions off the dismissed branch)
 /// the instant the controller leaves `AnimationStatus::Dismissed` — driven
-/// here by the FIRST real drag-update past the slop, which is exactly the
+/// here by the FIRST real drag update, which is exactly the
 /// same status-driven rebuild path `open()`'s fling takes (both change
 /// status via the controller, and `DrawerControllerState`'s status listener
 /// reschedules the build regardless of which call changed it) — see the
@@ -468,12 +466,8 @@ fn mounts_immediately_on_the_first_forward_tick_with_no_flash() {
         themed(
             Scaffold::new()
                 .drawer(Drawer::new())
-                // Widened so the slop-crossing move stays within the
-                // strip's own hit-test bounds — see the module docs'
-                // "harness limitation" note (no pointer capture in this
-                // harness); the default 20px strip has less room than the
-                // 18px default pan slop needs to cross it and still land
-                // inside.
+                // Widened for consistency with the longer drag cases in this
+                // file; the one-pixel probe below also fits the default strip.
                 .drawer_edge_drag_width(100.0),
         ),
         tight(400.0, 800.0),
@@ -485,13 +479,12 @@ fn mounts_immediately_on_the_first_forward_tick_with_no_flash() {
         "closed: only Scaffold's own Material"
     );
 
-    // The smallest possible qualifying drag: one slop-crossing move (no
-    // reported delta) plus one 1px update — the value barely moves off 0,
-    // but the STATUS already left Dismissed, which is what the mount gates
+    // A lone recognizer wins by default when the Down arena closes, so the
+    // first one-pixel move is already a real update. The value barely moves
+    // off 0, but the status leaves Dismissed, which is what the mount gates
     // on (not the value itself).
     laid.dispatch_pointer_down(5.0, 400.0);
-    laid.dispatch_pointer_move(30.0, 400.0);
-    laid.dispatch_pointer_move(31.0, 400.0);
+    laid.dispatch_pointer_move(6.0, 400.0);
     laid.tick();
 
     assert_eq!(
@@ -623,11 +616,10 @@ fn on_drawer_changed_forwards_to_the_app_authors_callback() {
         "no callback before any interaction"
     );
 
-    // Drag past 0.5 (see `mid_drag_panel_offset_follows_the_value_minus_one_times_width_formula`'s
-    // comment for why two moves are needed to report a delta at all).
+    // Drag past 0.5. The first move already reports a delta because the
+    // closed edge strip has no competing recognizer.
     laid.dispatch_pointer_down(5.0, 400.0);
-    laid.dispatch_pointer_move(30.0, 400.0); // crosses slop, no delta yet
-    laid.dispatch_pointer_move(30.0 + 155.0, 400.0); // past 0.5
+    laid.dispatch_pointer_move(185.0, 400.0);
     assert_eq!(
         *events.borrow(),
         vec![true],

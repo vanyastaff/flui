@@ -1103,78 +1103,79 @@ fn navigator_push_and_remove_until_clears_down_to_the_kept_route() {
 }
 
 /// The per-route focus scope. Each `ModalRoute` wraps its page in
-/// `FocusScope::with_external_node` (`routes.dart:1201-1202`) and, while current,
-/// holds the manager's **active scope** (FLUI's analogue of `setFirstFocus`
-/// chaining, `routes.dart:1692`, `:1137`): pushing a cover unfocuses a field left
-/// focused on the covered route, and popping back restores both the active scope
-/// and the remembered field focus.
+/// `FocusScope::with_external_node` (`routes.dart:1201-1202`). When a route
+/// becomes current, `setFirstFocus` moves focus into that route's scope
+/// (`routes.dart:1692`, `:1137`): pushing a cover focuses its first field, and
+/// popping back restores the previous scope's remembered field.
 ///
 /// Red-check: drop the `activate_focus_scope` call from `did_change_next(None)`
-/// — the pop neither reclaims the scope nor restores the field.
+/// — the pop does not restore the revealed route's remembered field.
 #[test]
 fn route_focus_scope_confines_and_restores_keyboard_focus() {
-    use flui_interaction::routing::{FocusManager, FocusNode};
+    use flui_interaction::routing::FocusNode;
 
     use crate::navigator::PageRoute;
     use crate::{Focus, SizedBox as SizedBoxW};
 
-    let _guard = crate::test_harness::FOCUS_TEST_LOCK.lock();
-    let manager = FocusManager::global();
-    manager.unfocus();
-    manager.set_active_scope(None);
-
     let field = FocusNode::with_debug_label("page-a-field");
-    let field_for_page = Arc::clone(&field);
+    let field_for_page = Rc::clone(&field);
     let handle = NavigatorHandle::new();
     handle.seed_initial(PageRoute::<i32>::new(move |_ctx, _p, _s| {
         Focus::new(SizedBoxW::new(10.0, 10.0))
-            .focus_node(Arc::clone(&field_for_page))
+            .focus_node(Rc::clone(&field_for_page))
             .into_view()
             .boxed()
     }));
     let mut harness = mount(Navigator::new(handle.clone()));
+    let manager = harness.focus_manager();
 
-    let scope_a = manager.active_scope();
-    assert_ne!(
-        scope_a.as_focus_node().id(),
-        manager.root_scope().as_focus_node().id(),
-        "the seeded route's scope became the active scope"
-    );
+    let scope_a = field
+        .enclosing_scope()
+        .expect("the field must be attached below its route scope");
 
     field.request_focus();
     assert!(field.has_primary_focus(), "sanity: the field took focus");
 
-    // Cover A: its field must stop receiving keys, and B's scope activates.
-    let _b = handle.push(PageRoute::<i32>::new(|_ctx, _p, _s| {
-        SizedBoxW::new(10.0, 10.0).into_view().boxed()
+    // Cover A: focus moves to B's first field, inside B's distinct scope.
+    let cover = FocusNode::with_debug_label("page-b-field");
+    let cover_for_page = Rc::clone(&cover);
+    let _b = handle.push(PageRoute::<i32>::new(move |_ctx, _p, _s| {
+        Focus::new(SizedBoxW::new(10.0, 10.0))
+            .focus_node(Rc::clone(&cover_for_page))
+            .into_view()
+            .boxed()
     }));
     harness.tick();
     assert!(
         !field.has_primary_focus(),
         "a covered route's field is unfocused"
     );
-    let scope_b = manager.active_scope();
+    assert!(
+        cover.has_primary_focus(),
+        "the covering route receives primary focus"
+    );
+    let scope_b = cover
+        .enclosing_scope()
+        .expect("the covering field must be attached below its route scope");
     assert_ne!(
-        scope_b.as_focus_node().id(),
-        scope_a.as_focus_node().id(),
-        "the pushed route's scope became the active scope"
+        scope_b.id(),
+        scope_a.id(),
+        "each route owns a distinct focus scope"
     );
 
-    // Pop back: A reclaims the active scope AND the remembered field focus.
+    // Pop back: A's scope history restores its remembered field.
     assert!(handle.pop());
     harness.tick();
-    assert_eq!(
-        manager.active_scope().as_focus_node().id(),
-        scope_a.as_focus_node().id(),
-        "the revealed route reclaimed the active scope"
-    );
     assert!(
         field.has_primary_focus(),
         "the remembered field focus is restored on pop"
     );
-
-    manager.unfocus();
-    manager.set_active_scope(None);
+    assert!(
+        manager
+            .primary_focus()
+            .is_some_and(|focused| Rc::ptr_eq(&focused, &field)),
+        "the navigator uses the mounted presentation's focus manager"
+    );
 }
 
 /// `PopScope` — ADR-0019's deferred veto, landed via the route's `PopEntry`
@@ -1771,21 +1772,17 @@ mod local_history {
 fn a_focus_listener_may_call_back_into_the_navigator_during_a_transition() {
     use std::time::Duration;
 
-    use flui_interaction::routing::{FocusManager, FocusNode};
+    use flui_interaction::routing::FocusNode;
 
     use crate::navigator::PageRoute;
     use crate::{Focus, SizedBox as Box2};
-
-    let _guard = crate::test_harness::FOCUS_TEST_LOCK.lock();
-    let manager = FocusManager::global();
-    manager.unfocus();
 
     let built = Built::default();
     let (handle, mut harness) = navigator_with(&built);
 
     let observed: Arc<Mutex<Vec<bool>>> = Arc::new(Mutex::new(Vec::new()));
     let field = FocusNode::with_debug_label("deadlock-field");
-    let field_for_page = Arc::clone(&field);
+    let field_for_page = Rc::clone(&field);
     let observed_for_page = Arc::clone(&observed);
     let navigator = handle.clone();
 
@@ -1794,7 +1791,7 @@ fn a_focus_listener_may_call_back_into_the_navigator_during_a_transition() {
             let observed = Arc::clone(&observed_for_page);
             let navigator = navigator.clone();
             Focus::new(Box2::new(10.0, 10.0))
-                .focus_node(Arc::clone(&field_for_page))
+                .focus_node(Rc::clone(&field_for_page))
                 .on_focus_change(move |_focused| {
                     // The re-entrant read that deadlocks under the lock.
                     observed.lock().push(navigator.can_pop());
@@ -1809,11 +1806,19 @@ fn a_focus_listener_may_call_back_into_the_navigator_during_a_transition() {
 
     // Cover it, then reveal it: the reveal restores the remembered focus
     // from inside the flush, firing the user listener.
+    let cover = FocusNode::with_debug_label("deadlock-cover-field");
+    let cover_for_page = Rc::clone(&cover);
     let _b = handle.push(
-        PageRoute::<i32>::new(|_ctx, _p, _s| Box2::new(10.0, 10.0).into_view().boxed())
-            .transition_duration(Duration::ZERO),
+        PageRoute::<i32>::new(move |_ctx, _p, _s| {
+            Focus::new(Box2::new(10.0, 10.0))
+                .focus_node(Rc::clone(&cover_for_page))
+                .into_view()
+                .boxed()
+        })
+        .transition_duration(Duration::ZERO),
     );
     harness.tick();
+    assert!(cover.has_primary_focus(), "the covering route took focus");
     assert!(handle.pop());
     harness.tick();
 
@@ -1822,8 +1827,6 @@ fn a_focus_listener_may_call_back_into_the_navigator_during_a_transition() {
         "the focus listener must actually have fired — otherwise this test \
          proves nothing about where it runs"
     );
-
-    manager.unfocus();
 }
 
 // ============================================================================

@@ -1,12 +1,18 @@
 //! Owner-entry regressions for the local post-frame lane.
 
 use std::cell::Cell;
+use std::panic::{AssertUnwindSafe, catch_unwind, panic_any};
 use std::rc::Rc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
+};
 use std::time::Duration;
 
 use flui_binding::HeadlessBinding;
-use flui_interaction::InteractionDispatchError;
 use flui_interaction::testing::input::{device_kind_from_button, pointer_down};
+use flui_interaction::{GestureRecognizer, PointerId, TapGestureRecognizer};
+use flui_interaction::{HitTestResult, InteractionDispatchError};
 use flui_types::Offset;
 use flui_types::geometry::px;
 use flui_view::BuildOwner;
@@ -27,6 +33,7 @@ fn pointer_route_runs_inside_the_binding_owner_scope() {
         handle
             .schedule_local(move |_| callback_fired.set(true))
             .expect("the pointer route is an owner entry");
+        HitTestResult::new()
     });
     binding.pump_frame(Duration::ZERO);
 
@@ -69,4 +76,93 @@ fn interaction_targets_are_isolated_between_headless_bindings() {
             Err(InteractionDispatchError::WrongRealm)
         ));
     });
+}
+
+#[test]
+fn pointer_route_panic_still_runs_the_down_arena_lifecycle() {
+    let binding = HeadlessBinding::new();
+    let pointer = PointerId::PRIMARY;
+    let recognizer = TapGestureRecognizer::new(binding.arena().clone());
+    recognizer.add_pointer(pointer, Offset::new(px(4.0), px(7.0)));
+    assert!(binding.arena().is_open(pointer));
+
+    let event = pointer_down(Offset::new(px(4.0), px(7.0)), device_kind_from_button(0));
+    let unwind = catch_unwind(AssertUnwindSafe(|| {
+        binding.dispatch_pointer(&event, |_| panic!("route panic"));
+    }));
+
+    let payload = unwind.expect_err("the route panic must propagate");
+    assert_eq!(payload.downcast_ref::<&str>(), Some(&"route panic"));
+    assert!(
+        !binding.arena().is_open(pointer),
+        "Down must close the arena before the route panic resumes"
+    );
+}
+
+struct CountingMember(Arc<AtomicUsize>);
+
+impl flui_interaction::sealed::CustomGestureRecognizer for CountingMember {
+    fn on_arena_accept(&self, _pointer: PointerId) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
+
+    fn on_arena_reject(&self, _pointer: PointerId) {}
+}
+
+#[test]
+fn pointer_event_boundary_drains_a_lone_deferred_winner() {
+    let binding = HeadlessBinding::new();
+    let accepted = Arc::new(AtomicUsize::new(0));
+    let event = pointer_down(Offset::new(px(4.0), px(7.0)), device_kind_from_button(0));
+
+    binding.dispatch_pointer(&event, |_| {
+        binding.arena().add(
+            PointerId::PRIMARY,
+            Arc::new(CountingMember(accepted.clone())),
+        );
+        HitTestResult::new()
+    });
+
+    assert_eq!(accepted.load(Ordering::SeqCst), 1);
+    assert!(binding.arena().is_empty());
+}
+
+struct PanickingPayloadDrop;
+
+impl Drop for PanickingPayloadDrop {
+    fn drop(&mut self) {
+        panic!("secondary payload drop panic");
+    }
+}
+
+struct LifecyclePanicsWithHostilePayload;
+
+impl flui_interaction::sealed::CustomGestureRecognizer for LifecyclePanicsWithHostilePayload {
+    fn on_arena_accept(&self, _pointer: PointerId) {
+        panic_any(PanickingPayloadDrop);
+    }
+
+    fn on_arena_reject(&self, _pointer: PointerId) {}
+}
+
+#[test]
+fn hostile_secondary_lifecycle_payload_cannot_replace_the_route_panic() {
+    let binding = HeadlessBinding::new();
+    let pointer = PointerId::PRIMARY;
+    binding
+        .arena()
+        .add(pointer, Arc::new(LifecyclePanicsWithHostilePayload));
+    let event = pointer_down(Offset::new(px(2.0), px(3.0)), device_kind_from_button(0));
+
+    let unwind = catch_unwind(AssertUnwindSafe(|| {
+        binding.dispatch_pointer(&event, |_| panic!("first route panic"));
+    }));
+    let payload = unwind.expect_err("the first route panic must propagate");
+
+    assert_eq!(
+        payload.downcast_ref::<&str>(),
+        Some(&"first route panic"),
+        "dropping a hostile secondary payload must not replace the route panic"
+    );
+    assert!(!binding.arena().is_open(pointer));
 }

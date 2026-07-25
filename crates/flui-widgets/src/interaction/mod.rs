@@ -33,7 +33,10 @@ pub use drag_target::{
     DragTargetMove, DragTargetState, DragTargetWillAccept, ErasedDragData,
 };
 pub use draggable::{Draggable, DraggableDetails, DraggableState};
-pub use focus::{ExcludeFocus, Focus, FocusChangeHandler, FocusScope, FocusScopeState, FocusState};
+pub use focus::{
+    ExcludeFocus, Focus, FocusChangeHandler, FocusRoot, FocusRootState, FocusScope,
+    FocusScopeState, FocusState,
+};
 pub(crate) use focus::{enclosing_focus_parent, install_rect_provider};
 pub use gesture_arena_scope::GestureArenaScope;
 pub use gesture_detector::{GestureDetector, GestureDetectorState};
@@ -45,6 +48,9 @@ pub use interactive_viewer::{
 pub use listener::Listener;
 pub use mouse_region::MouseRegion;
 pub use offstage::Offstage;
-pub use shortcuts::{CallbackShortcuts, ShortcutCallback, Shortcuts, SingleActivator};
+pub use shortcuts::{
+    CallbackShortcuts, DefaultFocusTraversal, DefaultFocusTraversalState, ShortcutCallback,
+    Shortcuts, SingleActivator,
+};
 pub use transformation_controller::TransformationController;
 pub use visibility::Visibility;

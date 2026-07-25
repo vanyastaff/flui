@@ -1,7 +1,7 @@
 //! Dirty-queue dedup + mid-phase routing tests.
 //!
-//! Verifies [`PipelineOwner::add_node_needing_layout`] (and paint /
-//! compositing / semantics siblings) dedup against in-queue
+//! Verifies [`PipelineOwner::add_node_needing_layout`] and the paint /
+//! compositing / semantics invalidation paths dedup against in-queue
 //! membership AND route mid-phase marks (when the corresponding
 //! `debug_doing_*` flag is true) into [`mid_layout_marks`] instead of
 //! the active `dirty` queue. The drain helper
@@ -51,9 +51,14 @@ fn repeated_add_layout_dedups_to_single_entry() {
 fn repeated_add_paint_dedups_to_single_entry() {
     let (mut owner, id) = fresh_owner_with_one_node();
     owner.clear_all_dirty_nodes();
+    owner
+        .render_tree()
+        .get(id)
+        .expect("inserted node")
+        .clear_needs_paint();
 
-    owner.add_node_needing_paint(id, 0);
-    owner.add_node_needing_paint(id, 0);
+    owner.mark_needs_paint(id);
+    owner.mark_needs_paint(id);
 
     let paint_entries: Vec<DirtyNode> = owner.nodes_needing_paint().to_vec();
     assert_eq!(

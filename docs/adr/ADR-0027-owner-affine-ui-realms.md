@@ -14,6 +14,8 @@
 
 ---
 
+> **Ownership clarification (2026-07-23):** [ADR-0037](ADR-0037-presentation-ownership-domains.md) defines `PresentationRuntime` as one logical contract implemented by three physical owners (`WindowHost`, owner-local `PresentationState`, and `RasterOwner`), adds generational `PresentationId`, and makes an element forest a hard prerequisite for one-realm/multi-presentation claims. It supersedes any reading of this ADR that would create a shared runtime object or mediation layer.
+
 ## Verdict
 
 > **FLUI is a multi-threaded runtime built from single-writer ownership domains.** Each `UiRealm` has exactly one owner executor and performs its UI transaction serially. Multiple realms may execute concurrently. CPU-intensive pure work, asynchronous I/O, and rasterization execute outside the realm and communicate through bounded ownership-transfer channels and immutable snapshots.
@@ -51,7 +53,11 @@ ADR-0002 (Proposed, 2026-06-09) drew the Send boundary: control plane `!Send`/th
 
 - The entire frame runs inline on one platform event-loop thread; no raster thread; frame core is tokio-free. The widget tree is now owned by `UiRealm`; renderer/gesture/scheduler services remain transitional `AppBinding` singleton state (`Arc<RwLock<PipelineOwner>>` shared by multiple holders; `Arc<Mutex<Renderer>>` in runners).
 - The public `Send + Sync` tax traced to framework seams that fed process-global scheduler/gesture/post-frame services. Zero production code moves views/elements/contexts/callbacks across threads. The ADR-0027 interaction slice has now owner-localized public widget/view authoring callbacks and moved render-stored executable interaction closures behind owner-lane tokens; remaining `Send + Sync` callables are data-plane wake/listener/strategy seams, not user UI ownership. GlobalKey selection is now a realm-entry TLS stack with nested/unwind restoration, not a process-global active registry.
-- Cross-thread delivery is broken today: `ForegroundExecutor` is an unbounded flume queue with no wake (`flui-platform/src/executor.rs:181`), drained only by the Win32 pump, **never drained on macOS**, thread-per-task under winit; no executor shutdown protocol; no thread-identity enforcement at the platform boundary.
+- Cross-thread delivery was broken at decision time: the former public
+  `ForegroundExecutor` was an unbounded, wake-less queue, was drained only by
+  the Win32 pump, and became thread-per-task under winit. The public surface is
+  now removed; winit uses a private bounded owner-control lane with explicit
+  wake, shutdown, backpressure, and compiler-enforced receiver affinity.
 - The correct machinery half-exists and is generalized, not replaced: `PipelineOwnerHandle` (bounded 256, typed `ChannelFull`/`OwnerGone`, wake-on-send, generation-stale drops), `RebuildHandle` set-dedup inbox, `PostFrameHandle`, `AsyncDriver` (one mid-frame poll, `debug_assert_ne!(phase, PersistentCallbacks)`), `Scene: Send` moved by value, `Renderer: Send + !Sync` single-mutator by convention, `RasterBackend` seam.
 
 ### Flutter reference and prior art

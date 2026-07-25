@@ -22,8 +22,9 @@ use flui_view::{BoxedView, InheritedView, impl_inherited_view};
 ///
 /// An implicitly-animated widget with no `VsyncScope` above it still functions:
 /// its controller is created with its own scheduler-ticker (which drives it off
-/// wall-clock time on a real display), it is simply not binding-driven — the
-/// graceful fallback that mirrors a `GestureDetector`'s private arena.
+/// wall-clock time on a real display), it is simply not binding-driven. Gesture
+/// ownership is stricter and unrelated: gesture widgets require their
+/// presentation's `GestureArenaScope`.
 ///
 /// The provided data — the registry handle — never changes for a given scope,
 /// so [`update_should_notify`](InheritedView::update_should_notify) is always

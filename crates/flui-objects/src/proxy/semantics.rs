@@ -170,7 +170,7 @@ impl flui_foundation::Diagnosticable for RenderSemanticsAnnotations {
         );
         builder.add_flag(
             "has_semantics",
-            self.configuration.has_content(),
+            self.configuration.has_been_annotated(),
             "has semantics",
         );
     }
@@ -209,7 +209,7 @@ impl RenderBox for RenderSemanticsAnnotations {
     fn describe_semantics_configuration(&self, config: &mut SemanticsConfiguration) {
         *config = self.configuration.clone();
         config.set_semantics_boundary(self.container);
-        config.set_explicit_children_are_traversal_groups(self.explicit_child_nodes);
+        config.set_explicit_child_nodes(self.explicit_child_nodes);
         config.set_blocks_user_actions(self.block_user_actions);
     }
 
@@ -364,7 +364,7 @@ mod tests {
         node.describe_semantics_configuration(&mut config);
 
         assert!(config.is_semantics_boundary());
-        assert!(config.explicit_children_are_traversal_groups());
+        assert!(config.explicit_child_nodes());
         assert!(config.blocks_user_actions());
         assert_eq!(config.label().map(AttributedString::as_str), Some("Submit"));
         assert!(config.is_button());

@@ -77,8 +77,9 @@ Interaction landed too: `Listener` (raw pointer routing — its handler rides on
 the hit-test entry, with Flutter's `HitTestBehavior`: `DeferToChild` default /
 `Opaque`) and `GestureDetector` (`on_tap` plus `on_pan_start`/`on_pan_update`/
 `on_pan_end`, where a real `TapGestureRecognizer` and `DragGestureRecognizer`
-compete in a per-detector arena — a quick tap wins the front of the arena, a
-move past the slop hands the gesture to the drag and cancels the tap). Not yet
+compete in the presentation binding's shared arena — a quick tap wins the front
+of the arena, a move past the slop hands the gesture to the drag and cancels
+the tap). Not yet
 shipped (tracked): `ClipPath`, `Image`, implicit animations
 (`AnimatedContainer` & friends), and the remaining recognizers
 (double-tap / long-press). See

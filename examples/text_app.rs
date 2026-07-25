@@ -43,7 +43,7 @@ fn greeting() -> TextSpan {
 }
 
 /// Leaf render view producing a [`RenderParagraph`] for the greeting.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct TextLabel;
 
 impl RenderView for TextLabel {
@@ -69,8 +69,8 @@ impl RenderView for TextLabel {
 flui_view::impl_render_view!(TextLabel);
 
 /// Stateless root that builds the label.
-#[derive(Clone)]
-struct App;
+#[derive(Clone, Debug)]
+pub struct App;
 
 impl StatelessView for App {
     fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {

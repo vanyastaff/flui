@@ -15,13 +15,14 @@ Platform abstraction layer. Provides a unified `Platform` trait with concrete im
 
 - **Tests excluded from CI** — STATUS_HEAP_CORRUPTION investigation in progress
 - `desktop` feature (default) enables `winit`; `web` feature for WASM
-- Native async deps (tokio, flume) are `cfg(not(target_arch = "wasm32"))` only
+- Native async deps (tokio) are `cfg(not(target_arch = "wasm32"))` only
 - `raw-window-handle` 0.6 for window handle abstraction
 - Platform-init stubs for linux/ios/android are exempt from port-check trigger #8 (`todo!()` allowed)
 
 ## Features
 
 - `desktop` (default) — winit backend
-- `winit-backend` — legacy, deprecated
+- `winit-backend` — primary Linux backend until native Wayland/X11 lands;
+  optional fallback on Windows/macOS
 - `web` — WASM platform
 - `wayland` / `x11` — Linux display server protocols

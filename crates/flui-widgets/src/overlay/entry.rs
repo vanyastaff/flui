@@ -254,7 +254,7 @@ impl OverlayEntry {
     /// [`remove`]: Self::remove
     pub(crate) fn mark_needs_build(&self) {
         if let Some(handle) = self.inner.rebuild.lock().as_ref() {
-            handle.schedule();
+            handle.schedule(flui_view::RebuildReason::StateChange);
         }
     }
 

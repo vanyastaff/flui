@@ -5,7 +5,7 @@
 //! (`docs/plans/2026-05-20-005-refactor-flui-rendering-zombie-cleanup-plan.md`)
 //! because the `RenderState::mark_needs_*` methods they exercised were
 //! unreachable in production. Production dirty marking goes through
-//! `PipelineOwner::add_node_needing_layout / add_node_needing_paint` invoked
+//! `PipelineOwner::add_node_needing_layout / mark_needs_paint` invoked
 //! from `flui-view` and `flui-hot-reload`. Coverage of the real production
 //! path is tracked separately under Mythos audit Step 4 item 13.
 

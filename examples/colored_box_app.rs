@@ -20,7 +20,7 @@ use flui_objects::RenderColoredBox;
 use flui_view::{BuildContext, IntoView, RenderView, StatelessView, View, ViewExt};
 
 /// Leaf render view producing a red 200×200 [`RenderColoredBox`].
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct ColoredSquare;
 
 impl RenderView for ColoredSquare {
@@ -46,8 +46,8 @@ impl RenderView for ColoredSquare {
 flui_view::impl_render_view!(ColoredSquare);
 
 /// Stateless root that builds the square.
-#[derive(Clone)]
-struct App;
+#[derive(Clone, Debug)]
+pub struct App;
 
 impl StatelessView for App {
     fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {

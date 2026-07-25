@@ -139,7 +139,7 @@ pub use tab_bar_view::{TabBarView, TabBarViewState};
 pub use tab_controller::{DefaultTabController, DefaultTabControllerState, TabController};
 pub use tabs::{Tab, TabBar, TabBarState};
 pub use text_button::TextButton;
-pub use text_field::{TextField, TextFieldState};
+pub use text_field::{MaterialTextFieldState, TextField};
 pub use text_theme::TextTheme;
 pub use theme::Theme;
 pub use theme_data::{

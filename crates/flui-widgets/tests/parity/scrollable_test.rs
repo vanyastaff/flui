@@ -52,16 +52,16 @@ use flui_widgets::{
     SharedScrollPhysics, SizedBox, VsyncScope,
 };
 
-use crate::common::{LaidOutScoped, lay_out_with_arena, tight};
+use crate::common::{LaidOut, lay_out, tight};
 
 /// Wrap `widget` in a [`VsyncScope`] so its `ScrollableState::init_state` can
 /// register the fling controller, then lay it out under `constraints` with a
 /// gesture arena — the same helper `tests/scroll.rs` uses, duplicated here
 /// per that file's own precedent of one small helper per test binary rather
 /// than a shared cross-binary dependency for a handful of call sites.
-fn fling_scoped(widget: Scrollable, vsync: Vsync, constraints: BoxConstraints) -> LaidOutScoped {
+fn fling_scoped(widget: Scrollable, vsync: Vsync, constraints: BoxConstraints) -> LaidOut {
     let wrapped = VsyncScope::new(vsync.clone(), widget);
-    let mut scoped = lay_out_with_arena(wrapped, constraints);
+    let mut scoped = lay_out(wrapped, constraints);
     scoped.adopt_vsync(vsync);
     scoped
 }
@@ -84,7 +84,7 @@ fn scrollable_drag_down_at_min_extent_is_clamped_by_physics() {
         .physics(physics)
         .child(SizedBox::new(300.0, 800.0));
 
-    let scoped = lay_out_with_arena(widget, tight(300.0, 300.0));
+    let scoped = lay_out(widget, tight(300.0, 300.0));
 
     // Downward drag: first move crosses slop (fires on_pan_start), second
     // fires on_pan_update — proposes 20 − 60 = −40 (past the 0 minimum) ->

@@ -27,7 +27,7 @@
 //! box) until font-registration infrastructure lands, regardless of which
 //! icon is requested. Given that pre-existing, already-named rendering gap,
 //! [`back_arrow_icon_data`] carries `Icons.arrow_back`'s exact identity —
-//! codepoint `0xE092`, font family `"MaterialIcons"`, `match_text_direction:
+//! codepoint `0xE092`, font family `"Material Icons"`, `match_text_direction:
 //! true` (`icons.dart`'s `arrow_back` constant, tag `3.44.0`) — rather than
 //! inventing a substitute glyph or a hand-drawn path (no such drawn-path
 //! convention exists in this crate). **Named divergence:** no
@@ -50,7 +50,7 @@ use crate::icon_button::IconButton;
 pub fn back_arrow_icon_data() -> IconData {
     IconData {
         match_text_direction: true,
-        ..IconData::new(0xE092).with_font_family("MaterialIcons")
+        ..IconData::new(0xE092).with_font_family("Material Icons")
     }
 }
 
@@ -124,7 +124,7 @@ mod tests {
     fn back_arrow_icon_data_matches_icons_arrow_back() {
         let icon = back_arrow_icon_data();
         assert_eq!(icon.code_point, 0xE092);
-        assert_eq!(icon.font_family.as_deref(), Some("MaterialIcons"));
+        assert_eq!(icon.font_family.as_deref(), Some("Material Icons"));
         assert!(icon.match_text_direction);
     }
 

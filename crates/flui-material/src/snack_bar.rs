@@ -268,7 +268,7 @@ impl ViewState<SnackBarAction> for SnackBarActionState {
                 if let Some(messenger) = &messenger {
                     messenger.hide_current_snack_bar_because(SnackBarClosedReason::Action);
                 }
-                rebuild.schedule();
+                rebuild.schedule(flui_view::RebuildReason::StateChange);
             });
         }
         button

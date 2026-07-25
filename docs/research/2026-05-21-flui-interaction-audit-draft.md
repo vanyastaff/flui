@@ -57,7 +57,7 @@ authors:
 Архитектура крейта **structurally promising но имеет три большие гнилые зоны**: (a) **parallel state-machine scaffolding**, (b) **half-implemented critical API surface**, (c) **silent drift from Flutter semantics в нескольких hot paths**. Arena, team, velocity tracker — production-grade. Recognizers — single-state-machine port + ad-hoc enums + Mutex-heavy. Focus — two parallel managers одной из которых half-implemented stub. Public surface bloated re-exports.
 
 **Three best things:**
-1. `GestureArena` (1628 LOC) — solid Flutter port: eager winner, hold/release semantics, team resolution. FLUI adds force-timeout (`resolve_timed_out_arenas`) — strict improvement over Flutter. Tests are thorough (~700 LOC).
+1. `GestureArena` (1628 LOC) — solid Flutter port: eager winner, hold/release semantics, team resolution. The former unused force-timeout extension was later removed in favor of causal terminal/deadline progress. Tests are thorough (~700 LOC).
 2. `VelocityTracker` (672 LOC) — Flutter-faithful least-squares polynomial fit with stack-allocated arrays (no heap per estimate), three strategies (LeastSquares/Linear/TwoSample), correct 100ms horizon + exponential weighting. *Rust Performance Book* zero-cost stack alloc.
 3. `TransformGuard` (hit_test.rs:384-399) — RAII-driven push/pop transform stack. Idiomatic Rust over Flutter's manual push/popTransform pairs. Sound Rust-native improvement.
 
@@ -865,7 +865,7 @@ Reference path (gitignored): `C:\Users\vanya\RustroverProjects\flui\.flutter\flu
 
 ### `gestures/arena.dart` (305 LOC) vs `arena.rs` (1628 LOC)
 
-**Parity:** GestureArenaEntry handle pattern, eagerWinner, isOpen/isHeld/hasPendingSweep state, sweep, hold/release. FLUI adds team resolution + timeout-based force resolution + `resolve_timed_out_arenas` (Flutter has no timeout).
+**Parity:** GestureArenaEntry handle pattern, eagerWinner, isOpen/isHeld/hasPendingSweep state, sweep, hold/release. FLUI retains team resolution; the unused timeout-based force-resolution extension was later removed.
 **Drift A (FSM-DRIFT/HIGH):** Flutter's `_tryToResolveArena` (line 251-263) uses `scheduleMicrotask` to defer single-member win by one tick. FLUI resolves synchronously (arena.rs:359-375). Implication: edge cases where another recognizer would `add()` in the same tick are dropped in FLUI. See finding "FLUI arena uses synchronous resolution".
 **Drift B (HIGH):** Flutter's `assert(state.members.contains(member))` (arena.rs:231) — invariant guard before resolve. FLUI doesn't assert this; silently filters via `Arc::ptr_eq` retain.
 **Confirmed correct:** FLUI's `arena.rs:303-309` `if let Some(winner) = self.eager_winner.take()` matches Flutter `arena.dart:259-262` `eagerWinner != null → _resolveInFavorOf`.

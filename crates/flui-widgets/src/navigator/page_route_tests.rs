@@ -16,9 +16,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use flui_animation::{Animation, AnimationStatus};
-use flui_rendering::hit_testing::HitTestResult;
 use flui_types::Color;
-use flui_types::geometry::{Offset, px};
 use flui_types::typography::TextDirection;
 use flui_view::prelude::*;
 use flui_view::{BoxedView, BuildContext};
@@ -592,35 +590,6 @@ fn back_gesture_enabled_route_mounts_and_becomes_pop_gesture_eligible() {
     );
 }
 
-/// Dispatches a synthetic pointer event at `(x, y)` through the harness's
-/// **real** hit-testing pipeline (`PipelineOwner::hit_test` +
-/// `HitTestResult::dispatch`) — the same path `Listener::on_pointer_*`
-/// callbacks fire from in production, so this actually exercises
-/// `back_gesture.rs`'s `Listener` → `DragGestureRecognizer` →
-/// `BackGestureRuntime` wiring, not a bypass of it.
-///
-/// This harness's dispatch re-hit-tests at each call's position (no
-/// pointer-id capture, unlike the real `EventRouter`), so every position in
-/// one gesture must land on the *same* hit-testable target throughout —
-/// see the caller for why that keeps every position inside the 20px-wide
-/// edge strip.
-fn dispatch_pointer_event(
-    harness: &Harness,
-    x: f32,
-    y: f32,
-    make_event: fn(
-        Offset<flui_types::Pixels>,
-        flui_interaction::events::PointerType,
-    ) -> flui_interaction::PointerEvent,
-) {
-    let position = Offset::new(px(x), px(y));
-    let owner = harness.pipeline_owner();
-    let mut result = HitTestResult::new();
-    owner.read().hit_test(position, &mut result);
-    let event = make_event(position, flui_interaction::events::PointerType::Mouse);
-    harness.enter_owner_scope(|| result.dispatch(&event));
-}
-
 /// A real, hit-tested horizontal drag through the mounted tree must move the
 /// controller's value by `delta / route_width` — the harness's fixed 800px
 /// screen (`test_harness.rs`), which the route's page fills
@@ -631,8 +600,8 @@ fn dispatch_pointer_event(
 /// instead.
 ///
 /// Every dispatched position stays inside the 20px-wide, full-height edge
-/// strip on purpose: `dispatch_pointer_event` re-hit-tests at each call (no
-/// pointer-id capture), so a position outside the strip's own bounds would
+/// strip on purpose: the harness re-hit-tests at each call, so a position
+/// outside the strip's own bounds would
 /// simply stop reaching the detector's `Listener` — the same constraint
 /// `gesture_detector_recognizes_a_pan_and_suppresses_the_tap`
 /// (`tests/gesture_detector.rs`) documents for that harness. The
@@ -642,8 +611,8 @@ fn dispatch_pointer_event(
 /// still a clean, exact signal, not a fragile one.
 ///
 /// Red-check: put back `width: Cell::new(BACK_GESTURE_WIDTH)` with no
-/// refresh — the observed value drop becomes ~40x larger (0.4/20 instead of
-/// 0.4/800) and the `< 0.01` assertion fails.
+/// refresh — the observed value drop becomes ~40x larger (18.9/20 instead
+/// of 18.9/800) and the exact expectation fails.
 #[test]
 fn back_gesture_edge_drag_normalizes_against_the_routes_real_width_not_the_hit_strip() {
     let (navigator, mut harness, _bottom) = navigator_with_seed();
@@ -655,29 +624,13 @@ fn back_gesture_edge_drag_normalizes_against_the_routes_real_width_not_the_hit_s
     let controller = transition.controller().expect("installed");
     assert_eq!(controller.value(), 1.0);
 
-    // Down at x=1 (inside [0, 20)); the first move crosses the recognizer's
-    // 18px horizontal slop (`DEFAULT_PAN_SLOP_HORIZONTAL`) and fires
-    // `on_start` with no reported delta (`DragStartBehavior::Start`); the
-    // second, 0.4px further, fires `on_update` with a clean incremental
-    // `primary_delta` of 0.4px — both moves stay inside the 20px strip.
-    dispatch_pointer_event(
-        &harness,
-        1.0,
-        300.0,
-        flui_interaction::events::make_down_event,
-    );
-    dispatch_pointer_event(
-        &harness,
-        19.5,
-        300.0,
-        flui_interaction::events::make_move_event,
-    );
-    dispatch_pointer_event(
-        &harness,
-        19.9,
-        300.0,
-        flui_interaction::events::make_move_event,
-    );
+    // Down at x=1 (inside [0, 20)). This is the arena's lone recognizer, so
+    // Flutter's deferred default accepts it after Down; both subsequent moves
+    // are updates. The total logical movement is therefore 18.9px, and both
+    // positions stay inside the 20px strip.
+    harness.dispatch_pointer_down(1.0, 300.0);
+    harness.dispatch_pointer_move(19.5, 300.0);
+    harness.dispatch_pointer_move(19.9, 300.0);
 
     let dropped = 1.0 - controller.value();
     assert!(
@@ -686,19 +639,14 @@ fn back_gesture_edge_drag_normalizes_against_the_routes_real_width_not_the_hit_s
          — got value={}",
         controller.value()
     );
+    let expected = (19.9 - 1.0) / 800.0;
     assert!(
-        dropped < 0.01,
-        "0.4px over an 800px-wide route should barely move the value \
-         (expected ~0.0005); got a drop of {dropped}, consistent with \
-         normalizing against the 20px hit strip instead (0.4/20 = 0.02)"
+        (dropped - expected).abs() < 1e-4,
+        "18.9px over an 800px-wide route should drop by {expected}; got \
+         {dropped}. Normalizing against the 20px hit strip would be ~0.945"
     );
 
-    dispatch_pointer_event(
-        &harness,
-        19.9,
-        300.0,
-        flui_interaction::events::make_up_event,
-    );
+    harness.dispatch_pointer_up(19.9, 300.0);
 }
 
 /// [`Directionality`] proof for `convert_to_logical`'s sign flip
@@ -740,12 +688,7 @@ fn back_gesture_edge_drag_sign_flips_with_ambient_directionality() {
         let controller = transition.controller().expect("installed");
         assert_eq!(controller.value(), 1.0);
 
-        dispatch_pointer_event(
-            &harness,
-            from_x,
-            300.0,
-            flui_interaction::events::make_down_event,
-        );
+        harness.dispatch_pointer_down(from_x, 300.0);
         // Cross the recognizer's 18px horizontal slop on the first move (no
         // reported delta, `on_start`), then a further move to `to_x` for a
         // clean incremental `primary_delta` — the exact same two-step shape
@@ -753,25 +696,10 @@ fn back_gesture_edge_drag_sign_flips_with_ambient_directionality() {
         // `back_gesture_edge_drag_normalizes_against_the_routes_real_width_not_the_hit_strip`,
         // just mirrored for the leftward direction too.
         let crossing_x = from_x + (to_x - from_x).signum() * 18.5;
-        dispatch_pointer_event(
-            &harness,
-            crossing_x,
-            300.0,
-            flui_interaction::events::make_move_event,
-        );
-        dispatch_pointer_event(
-            &harness,
-            to_x,
-            300.0,
-            flui_interaction::events::make_move_event,
-        );
+        harness.dispatch_pointer_move(crossing_x, 300.0);
+        harness.dispatch_pointer_move(to_x, 300.0);
         let dropped = 1.0 - controller.value();
-        dispatch_pointer_event(
-            &harness,
-            to_x,
-            300.0,
-            flui_interaction::events::make_up_event,
-        );
+        harness.dispatch_pointer_up(to_x, 300.0);
         dropped
     }
 

@@ -566,7 +566,7 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + DowncastSync + Send + Sync
     /// The mouse cursor this render object contributes to its hit entry.
     ///
     /// Default `CursorIcon::Default`; `RenderMouseRegion` overrides this so
-    /// [`MouseTracker`](crate::prelude::MouseTracker) can resolve the active
+    /// [`MouseTracker`](flui_interaction::routing::MouseTracker) can resolve the active
     /// platform cursor from the leaf-first hit-test path.
     fn mouse_cursor(&self) -> CursorIcon {
         CursorIcon::Default

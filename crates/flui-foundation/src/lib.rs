@@ -211,6 +211,8 @@ pub use id::{
     ListenerId,
     Marker,
     ObserverId,
+    // Presentation identity — one presentation-runtime incarnation
+    PresentationId,
     RawId,
     // Realm identity — one UiRealm incarnation
     RealmId,
@@ -279,6 +281,7 @@ pub mod prelude {
         // Observer IDs
         ObserverId,
         Predicate,
+        PresentationId,
         RELEASE_MODE,
         RealmId,
         RenderId,

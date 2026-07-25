@@ -9,7 +9,10 @@
 
 #![allow(dead_code)] // each test binary uses a different subset of the harness
 
+use std::any::TypeId;
 use std::cell::Cell;
+use std::collections::HashSet;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -19,8 +22,9 @@ use flui_foundation::{ElementId, RenderId};
 use flui_geometry::Matrix4;
 use flui_interaction::PointerId;
 use flui_interaction::events::{
-    PointerEvent, PointerType, make_cancel_event_for_id, make_down_event_for_id,
-    make_move_event_for_id, make_up_event_for_id,
+    PointerButtons, PointerEvent, PointerType, make_cancel_event_for_id, make_down_event_for_id,
+    make_down_event_for_id_with_button, make_move_event_for_id, make_up_event_for_id,
+    make_up_event_for_id_with_button,
 };
 use flui_objects::{
     RenderAnimatedOpacity, RenderClipOval, RenderClipPath, RenderClipRRect, RenderClipRect,
@@ -35,7 +39,7 @@ use flui_types::painting::Clip;
 use flui_types::styling::BorderRadius;
 use flui_types::{Offset, Pixels, Rect, Size};
 use flui_view::{BuildOwner, ElementTree, View};
-use flui_widgets::GestureArenaScope;
+use flui_widgets::{FocusRoot, GestureArenaScope};
 use parking_lot::RwLock;
 
 /// A laid-out widget tree, holding the element + render trees alive (inside a
@@ -47,9 +51,17 @@ use parking_lot::RwLock;
 /// frame the binding just ran.
 pub struct LaidOut {
     binding: HeadlessBinding,
+    focus_manager: Rc<flui_interaction::FocusManager>,
     pipeline_owner: Arc<RwLock<PipelineOwner>>,
     root_render_id: RenderId,
     root_element_id: ElementId,
+    /// Concrete identity of the caller's root below the presentation scopes.
+    logical_root_type: TypeId,
+    /// Next contact's pointer id. Every Down gets a fresh identity so
+    /// sequential contacts cannot collide in the binding-owned arena.
+    next_pointer: Cell<u64>,
+    /// Pointer id of the in-flight contact, shared by its Move/Up/Cancel.
+    current_pointer: Cell<u64>,
 }
 
 /// Loose constraints from `0` up to `max × max` on both axes.
@@ -95,7 +107,9 @@ fn lay_out_with_pipeline_owner_and_binding(
     pipeline_owner: Arc<RwLock<PipelineOwner>>,
     mut binding: HeadlessBinding,
 ) -> LaidOut {
+    let logical_root_type = root.view_type_id();
     let mut build_owner = BuildOwner::new();
+    let focus_manager = build_owner.focus_manager();
     let mut tree = ElementTree::new();
 
     // The binding is created FIRST so its async driver can be installed on the
@@ -104,6 +118,7 @@ fn lay_out_with_pipeline_owner_and_binding(
     // no driver installed they would silently never poll.
     binding.install_build_capabilities(&mut build_owner);
 
+    let root = GestureArenaScope::new(binding.arena().clone(), FocusRoot::new(root));
     let root_id = binding.enter_owner_scope(|| {
         let root_id = tree.mount_root_with_pipeline_owner(
             &root,
@@ -113,16 +128,16 @@ fn lay_out_with_pipeline_owner_and_binding(
 
         // Reconcile + mount the whole subtree (children's render objects attach to
         // their parent render objects during this pass).
-        build_owner.schedule_build_for(root_id, 0);
+        build_owner.schedule_build_for(root_id, 0, flui_view::RebuildReason::InitialMount);
         build_owner.build_scope(&mut tree);
         root_id
     });
 
-    // The render-tree root is the single render object with no render parent —
-    // works whether the root widget is itself a `RenderView` (e.g. `Padding`)
-    // or a `StatelessView` whose composition's outermost layer owns it (e.g.
-    // `Container`).
-    let root_render_id = {
+    // `FocusRoot` installs one transparent traversal anchor as the
+    // presentation render root. The pipeline must retain that parentless
+    // anchor, while geometry probes keep their historical meaning: the
+    // caller's logical render root immediately below it.
+    let (presentation_render_root_id, root_render_id) = {
         let owner = pipeline_owner.read();
         let render_tree = owner.render_tree();
         let mut roots = render_tree
@@ -136,12 +151,18 @@ fn lay_out_with_pipeline_owner_and_binding(
             roots.next().is_none(),
             "expected exactly one render-tree root after mount",
         );
-        root
+        let children = render_tree.children(root);
+        assert_eq!(
+            children.len(),
+            1,
+            "the presentation traversal anchor must wrap exactly one logical render root",
+        );
+        (root, children[0])
     };
 
     {
         let mut guard = pipeline_owner.write();
-        guard.set_root_id(Some(root_render_id));
+        guard.set_root_id(Some(presentation_render_root_id));
         // Setting fresh root constraints marks the root dirty for layout.
         guard.set_root_constraints(Some(constraints));
     }
@@ -166,9 +187,13 @@ fn lay_out_with_pipeline_owner_and_binding(
 
     LaidOut {
         binding,
+        focus_manager,
         pipeline_owner,
         root_render_id,
         root_element_id: root_id,
+        logical_root_type,
+        next_pointer: Cell::new(1),
+        current_pointer: Cell::new(0),
     }
 }
 
@@ -187,6 +212,11 @@ pub fn lay_out_animated(root: impl View, constraints: BoxConstraints, vsync: Vsy
 }
 
 impl LaidOut {
+    /// Focus manager that owns this mounted widget tree.
+    pub fn focus_manager(&self) -> Rc<flui_interaction::FocusManager> {
+        Rc::clone(&self.focus_manager)
+    }
+
     /// Run an owner-side action under the headless binding's local runtime scope.
     pub fn enter_owner_scope<R>(&self, callback: impl FnOnce() -> R) -> R {
         self.binding.enter_owner_scope(callback)
@@ -196,21 +226,44 @@ impl LaidOut {
         self.root_render_id
     }
 
-    /// Recompute the current render-tree root (the parentless render node). May
-    /// differ from [`LaidOut::root`] if a rebuild remounted the root subtree.
+    /// Recompute the caller's logical render root below the presentation's
+    /// transparent traversal anchor. May differ from [`LaidOut::root`] if a
+    /// rebuild remounted the caller's root subtree.
     pub fn current_root(&self) -> RenderId {
         let owner = self.pipeline_owner.read();
         let render_tree = owner.render_tree();
-        render_tree
+        let presentation_root = render_tree
             .iter()
             .map(|(id, _)| id)
             .find(|id| render_tree.parent(*id).is_none())
-            .expect("a render-tree root after layout")
+            .expect("a presentation render-tree root after layout");
+        let children = render_tree.children(presentation_root);
+        assert_eq!(
+            children.len(),
+            1,
+            "the presentation traversal anchor must wrap exactly one logical render root",
+        );
+        children[0]
     }
 
-    /// Number of nodes currently in the render tree.
+    /// Number of nodes in the caller's logical render subtree.
+    ///
+    /// Presentation-owned traversal anchors are deliberately excluded: this
+    /// helper measures the widget tree supplied to [`lay_out`], not the
+    /// infrastructure that owns and presents it.
     pub fn render_node_count(&self) -> usize {
-        self.pipeline_owner.read().render_tree().iter().count()
+        let root = self.current_root();
+        let owner = self.pipeline_owner.read();
+        let render_tree = owner.render_tree();
+        let mut pending = vec![root];
+        let mut count = 0;
+
+        while let Some(id) = pending.pop() {
+            count += 1;
+            pending.extend(render_tree.children(id).iter().copied());
+        }
+
+        count
     }
 
     /// Number of elements currently in the element tree (mounted + soft-removed
@@ -288,12 +341,24 @@ impl LaidOut {
     /// drives a frame — so step 1 is a no-op, step 2 finds no crossed deadline,
     /// step 3 ticks the (here empty) registry, then `build_scope` + `run_frame`.
     pub fn pump(&mut self) {
-        if let Some(node) = self.binding.tree_mut().get_mut(self.root_element_id) {
+        let logical_root_type = self.logical_root_type;
+        let (logical_root, logical_depth) = self
+            .binding
+            .tree_mut()
+            .iter_nodes()
+            .filter(|(_, node)| node.element().view_type_id() == logical_root_type)
+            .min_by_key(|(_, node)| node.depth())
+            .map(|(id, node)| (id, node.depth()))
+            .expect("the caller's logical root must remain mounted below presentation scopes");
+
+        if let Some(node) = self.binding.tree_mut().get_mut(logical_root) {
             node.element_mut().mark_needs_build();
         }
-        self.binding
-            .build_owner_mut()
-            .schedule_build_for(self.root_element_id, 0);
+        self.binding.build_owner_mut().schedule_build_for(
+            logical_root,
+            logical_depth,
+            flui_view::RebuildReason::StateChange,
+        );
         self.binding.pump_frame(Duration::ZERO);
     }
 
@@ -314,6 +379,12 @@ impl LaidOut {
         self.binding.register_controller(controller);
     }
 
+    /// Adopt `vsync` into the presentation binding. Descendants must receive
+    /// the same handle through their `VsyncScope`.
+    pub fn adopt_vsync(&mut self, vsync: Vsync) {
+        self.binding.adopt_vsync(vsync);
+    }
+
     /// Advance `dt` of virtual time and drive a frame — the animation-frame
     /// analogue: ticks registered controllers (whose listenable notifications
     /// schedule the dependent `AnimatedView`/`FadeTransition` rebuild into the
@@ -328,15 +399,6 @@ impl LaidOut {
     /// never drained.
     pub fn binding_scheduler(&self) -> flui_scheduler::Scheduler {
         self.binding.scheduler().clone()
-    }
-
-    /// The binding's gesture arena — needed to re-wrap a replacement root in
-    /// a matching `GestureArenaScope` when a test swaps the root via
-    /// `pump_widget` and must keep the *scope's own element* stable (a root
-    /// element type change does not run the normal unmount/dispose path;
-    /// see the arena-scoped mid-drag unmount tests for why).
-    pub fn arena(&self) -> flui_interaction::arena::GestureArena {
-        self.binding.arena().clone()
     }
 
     /// The shared pipeline owner, so a post-frame callback can read committed
@@ -598,17 +660,20 @@ impl LaidOut {
     /// view config on the root element via a split borrow, schedules a rebuild,
     /// then [`pump_frame(ZERO)`](HeadlessBinding::pump_frame) settles the tree.
     pub fn pump_widget(&mut self, new_root: impl View) {
-        self.binding.swap_root_view(self.root_element_id, &new_root);
+        self.logical_root_type = new_root.view_type_id();
+        let root = GestureArenaScope::new(self.binding.arena().clone(), FocusRoot::new(new_root));
+        self.binding.swap_root_view(self.root_element_id, &root);
         self.binding.pump_frame(std::time::Duration::ZERO);
     }
 
     /// All render nodes whose short type name equals `render_type_name`.
     ///
-    /// Walks the live render tree and matches each node's
+    /// Walks the caller's logical render subtree and matches each node's
     /// [`DiagnosticsNode`](flui_foundation::DiagnosticsNode) name against
     /// `render_type_name` (the short, crate-unqualified type name such as
     /// `"RenderConstrainedBox"` or `"RenderCenter"`). Returns all matching ids
-    /// in slab-iteration order (not geometry order).
+    /// in slab-iteration order (not geometry order). Presentation-owned nodes
+    /// above the caller's root are deliberately excluded.
     ///
     /// Compares **base** names — the part before any `<...>` — on both
     /// sides: `Diagnosticable::to_diagnostics_node`'s short name keeps full
@@ -617,12 +682,23 @@ impl LaidOut {
     /// the base name regardless of which generic argument a render object
     /// happens to be monomorphized over.
     pub fn find_all_by_render_type(&self, render_type_name: &str) -> Vec<RenderId> {
+        let logical_root = self.current_root();
         let owner = self.pipeline_owner.read();
+        let render_tree = owner.render_tree();
+        let mut logical_ids = HashSet::new();
+        let mut pending = vec![logical_root];
+        while let Some(id) = pending.pop() {
+            logical_ids.insert(id);
+            pending.extend(render_tree.children(id).iter().copied());
+        }
+
         let queried = base_type_name(render_type_name);
-        owner
-            .render_tree()
+        render_tree
             .iter()
             .filter_map(|(id, _node)| {
+                if !logical_ids.contains(&id) {
+                    return None;
+                }
                 let diagnostics = owner.debug_node_diagnostics(id)?;
                 (diagnostics.name().map(base_type_name) == Some(queried)).then_some(id)
             })
@@ -683,38 +759,56 @@ impl LaidOut {
         found
     }
 
-    /// Hit-test at root-local `(x, y)` and dispatch `event` to the entries hit
-    /// there — the route step a binding runs before the arena lifecycle. The
-    /// event already carries the pointer id; `(x, y)` is the hit-test position.
+    /// Hit-test at a root-local position and return the canonical data-only
+    /// path to the binding-owned input pipeline.
     ///
-    /// Both the hit-test AND the dispatch run inside the binding's
-    /// interaction-lane scope: production (`crates/flui-app/src/app/runner.rs`,
+    /// Hit-testing runs inside the binding's interaction-lane scope:
+    /// production (`crates/flui-app/src/app/runner.rs`,
     /// `realm.enter(|realm| event.run(realm))`) hit-tests and dispatches from
     /// inside the same lane entry, and hit-testing itself can now resolve
     /// lane-registered owner-local state (`ClipPath`'s custom path clipper via
     /// `resolve_path_clip_target`) — scoping only the dispatch half left
     /// `hit_test` silently falling back to the default (whole-box) clip
     /// whenever a caller hit-tested outside an active lane.
-    pub fn route_event(&self, event: &PointerEvent, x: f32, y: f32) {
+    pub fn hit_test_pointer(&self, position: Offset) -> flui_rendering::hit_testing::HitTestResult {
         use flui_rendering::hit_testing::HitTestResult;
 
-        let position = Offset::new(px(x), px(y));
         let mut result = HitTestResult::new();
-        self.binding.enter_owner_scope(|| {
-            // Scoped to the hit-test only: `dispatch` below can run
-            // gesture-callback code that itself acquires `pipeline_owner.read()`
-            // (e.g. a widget querying committed layout from inside its own
-            // pointer-signal/gesture handler). `parking_lot::RwLock` read locks
-            // are not safely reentrant on the same thread once a writer is
-            // queued — holding this guard across `dispatch` risks a
-            // same-thread self-deadlock that production avoids by dropping its
-            // own guard before dispatch.
-            {
-                let owner = self.pipeline_owner.read();
-                owner.hit_test(position, &mut result);
-            }
-            result.dispatch(event);
-        });
+        let owner = self.pipeline_owner.read();
+        owner.hit_test(position, &mut result);
+        result
+    }
+
+    /// Dispatch an already-constructed pointer event through the same complete
+    /// binding pipeline as platform input.
+    pub fn dispatch_pointer_event(&self, event: &PointerEvent) {
+        self.binding
+            .dispatch_pointer(event, |position| self.hit_test_pointer(position));
+    }
+
+    /// Ensure consecutive velocity samples receive distinct timestamps.
+    fn advance_gesture_clock() {
+        let t0 = Instant::now();
+        while Instant::now() == t0 {
+            std::hint::spin_loop();
+        }
+    }
+
+    /// Allocate a fresh pointer id for a new contact and remember it.
+    fn begin_contact(&self) -> PointerId {
+        let id = self.next_pointer.get();
+        self.next_pointer.set(
+            id.checked_add(1)
+                .expect("BUG: headless pointer id space exhausted"),
+        );
+        self.current_pointer.set(id);
+        PointerId::new(id).expect("BUG: headless pointer ids start at one")
+    }
+
+    /// Resolve the pointer id of the in-flight contact.
+    fn current_contact(&self) -> PointerId {
+        PointerId::new(self.current_pointer.get())
+            .expect("BUG: pointer Down must precede Move, Up, or Cancel")
     }
 
     /// Hit-test at root-local `(x, y)` and dispatch a synthetic pointer-down
@@ -722,94 +816,49 @@ impl LaidOut {
     /// the framework (`AppBinding::handle_input` → hit_test → dispatch). Used by
     /// the `Listener` test to assert its callback fires.
     ///
-    /// See [`route_event`](Self::route_event) for why hit-testing runs inside
+    /// See [`hit_test_pointer`](Self::hit_test_pointer) for why hit-testing runs inside
     /// the lane scope alongside dispatch.
     pub fn dispatch_pointer_down(&self, x: f32, y: f32) {
-        use flui_rendering::hit_testing::HitTestResult;
-
-        let position = Offset::new(px(x), px(y));
-        let mut result = HitTestResult::new();
-        let event = flui_interaction::events::make_down_event(
-            position,
-            flui_interaction::events::PointerType::Mouse,
-        );
-        self.binding.enter_owner_scope(|| {
-            // See `route_event`'s comment: the read guard must not span
-            // `dispatch`, which can reenter `pipeline_owner.read()` from a
-            // gesture callback.
-            {
-                let owner = self.pipeline_owner.read();
-                owner.hit_test(position, &mut result);
-            }
-            result.dispatch(&event);
-        });
+        Self::advance_gesture_clock();
+        let event = make_down_event_for_id(self.begin_contact(), offset(x, y), PointerType::Mouse);
+        self.binding
+            .dispatch_pointer(&event, |position| self.hit_test_pointer(position));
     }
 
     /// As [`dispatch_pointer_down`](Self::dispatch_pointer_down), but a
     /// pointer-up — to assert `on_pointer_up` routing.
     pub fn dispatch_pointer_up(&self, x: f32, y: f32) {
-        use flui_rendering::hit_testing::HitTestResult;
-
-        let position = Offset::new(px(x), px(y));
-        let mut result = HitTestResult::new();
-        let event = flui_interaction::events::make_up_event(
-            position,
-            flui_interaction::events::PointerType::Mouse,
-        );
-        self.binding.enter_owner_scope(|| {
-            // See `route_event`'s comment: the read guard must not span
-            // `dispatch`, which can reenter `pipeline_owner.read()` from a
-            // gesture callback.
-            {
-                let owner = self.pipeline_owner.read();
-                owner.hit_test(position, &mut result);
-            }
-            result.dispatch(&event);
-        });
+        let event = make_up_event_for_id(self.current_contact(), offset(x, y), PointerType::Mouse);
+        self.binding
+            .dispatch_pointer(&event, |position| self.hit_test_pointer(position));
     }
 
-    /// A pointer-move to `(x, y)` — to drive slop / drag handling.
+    /// A contact move to `(x, y)` — to drive slop / drag handling.
     pub fn dispatch_pointer_move(&self, x: f32, y: f32) {
-        use flui_rendering::hit_testing::HitTestResult;
-
-        let position = Offset::new(px(x), px(y));
-        let mut result = HitTestResult::new();
-        let event = flui_interaction::events::make_move_event(
-            position,
-            flui_interaction::events::PointerType::Mouse,
-        );
-        self.binding.enter_owner_scope(|| {
-            // See `route_event`'s comment: the read guard must not span
-            // `dispatch`, which can reenter `pipeline_owner.read()` from a
-            // gesture callback.
-            {
-                let owner = self.pipeline_owner.read();
-                owner.hit_test(position, &mut result);
-            }
-            result.dispatch(&event);
-        });
+        Self::advance_gesture_clock();
+        let event =
+            make_move_event_for_id(self.current_contact(), offset(x, y), PointerType::Mouse);
+        self.binding
+            .dispatch_pointer(&event, |position| self.hit_test_pointer(position));
     }
 
-    /// A pointer-cancel routed to the entries hit at `(x, y)` — the headless
-    /// analogue of the platform interrupting the contact that started there.
-    pub fn dispatch_pointer_cancel(&self, x: f32, y: f32) {
-        use flui_rendering::hit_testing::HitTestResult;
+    /// A mouse hover move to `(x, y)` with no active contact.
+    pub fn dispatch_pointer_hover(&self, x: f32, y: f32) {
+        Self::advance_gesture_clock();
+        let mut event =
+            make_move_event_for_id(PointerId::PRIMARY, offset(x, y), PointerType::Mouse);
+        let PointerEvent::Move(update) = &mut event else {
+            unreachable!("the test move constructor must produce PointerEvent::Move");
+        };
+        update.current.buttons = PointerButtons::new();
+        update.current.pressure = 0.0;
+        self.dispatch_pointer_event(&event);
+    }
 
-        let position = Offset::new(px(x), px(y));
-        let mut result = HitTestResult::new();
-        let event = flui_interaction::events::make_cancel_event(
-            flui_interaction::events::PointerType::Mouse,
-        );
-        self.binding.enter_owner_scope(|| {
-            // See `route_event`'s comment: the read guard must not span
-            // `dispatch`, which can reenter `pipeline_owner.read()` from a
-            // gesture callback.
-            {
-                let owner = self.pipeline_owner.read();
-                owner.hit_test(position, &mut result);
-            }
-            result.dispatch(&event);
-        });
+    /// Cancel the in-flight contact on its cached Down route.
+    pub fn dispatch_pointer_cancel(&self) {
+        let event = make_cancel_event_for_id(self.current_contact(), PointerType::Mouse);
+        self.dispatch_pointer_event(&event);
     }
 
     /// Hit-test at root-local `(x, y)` and dispatch a synthetic secondary-button
@@ -818,221 +867,31 @@ impl LaidOut {
     /// assert `on_secondary_tap` fires on right-click.
     pub fn dispatch_secondary_down(&self, x: f32, y: f32) {
         use flui_interaction::events::pointer::PointerButton;
-        use flui_rendering::hit_testing::HitTestResult;
 
-        let position = Offset::new(px(x), px(y));
-        let mut result = HitTestResult::new();
-        let event = flui_interaction::events::make_down_event_with_button(
-            position,
-            flui_interaction::events::PointerType::Mouse,
+        Self::advance_gesture_clock();
+        let event = make_down_event_for_id_with_button(
+            self.begin_contact(),
+            offset(x, y),
+            PointerType::Mouse,
             PointerButton::Secondary,
         );
-        self.binding.enter_owner_scope(|| {
-            // See `route_event`'s comment: the read guard must not span
-            // `dispatch`, which can reenter `pipeline_owner.read()` from a
-            // gesture callback.
-            {
-                let owner = self.pipeline_owner.read();
-                owner.hit_test(position, &mut result);
-            }
-            result.dispatch(&event);
-        });
+        self.binding
+            .dispatch_pointer(&event, |position| self.hit_test_pointer(position));
     }
 
     /// As [`dispatch_secondary_down`](Self::dispatch_secondary_down), but a
     /// secondary-button pointer-up — to complete the right-click gesture.
     pub fn dispatch_secondary_up(&self, x: f32, y: f32) {
         use flui_interaction::events::pointer::PointerButton;
-        use flui_rendering::hit_testing::HitTestResult;
 
-        let position = Offset::new(px(x), px(y));
-        let mut result = HitTestResult::new();
-        let event = flui_interaction::events::make_up_event_with_button(
-            position,
-            flui_interaction::events::PointerType::Mouse,
+        let event = make_up_event_for_id_with_button(
+            self.current_contact(),
+            offset(x, y),
+            PointerType::Mouse,
             PointerButton::Secondary,
         );
-        self.binding.enter_owner_scope(|| {
-            // See `route_event`'s comment: the read guard must not span
-            // `dispatch`, which can reenter `pipeline_owner.read()` from a
-            // gesture callback.
-            {
-                let owner = self.pipeline_owner.read();
-                owner.hit_test(position, &mut result);
-            }
-            result.dispatch(&event);
-        });
-    }
-}
-
-/// A laid-out widget tree wrapped in a [`GestureArenaScope`] over a
-/// [`HeadlessBinding`]'s shared, clock-bound arena — plus the binding that
-/// drives deadlines.
-///
-/// This is the headless analogue of a real `GestureBinding` above the tree: the
-/// detectors below read the binding's arena ambiently, the binding closes that
-/// arena after the down has been dispatched to the whole hit-test path
-/// (`binding.dart` ordering), and `pump` advances the virtual clock + polls
-/// gesture deadlines with no `thread::sleep`.
-pub struct LaidOutScoped {
-    laid: LaidOut,
-    /// Next contact's pointer id (1-based; `0` is not a valid `PointerId`). Each
-    /// `dispatch_pointer_down` allocates a fresh id so two sequential taps use
-    /// distinct ids — what a real `GestureBinding` does per contact, and what
-    /// keeps a genuine double-tap sound (the second down opens its own arena
-    /// entry instead of re-adding clones into the held first entry).
-    next_pointer: Cell<u64>,
-    /// The current contact's pointer id (set on each down) so the matching
-    /// up / move / cancel route to the same id.
-    current_pointer: Cell<u64>,
-}
-
-/// Build `root` wrapped in a [`GestureArenaScope`] over a fresh
-/// [`HeadlessBinding`]'s arena, then lay it out under `constraints`.
-///
-/// The detectors in `root` read the binding's arena in `init_state`, so they
-/// compete in (and have their deadlines polled against) the same arena the
-/// returned binding drives.
-pub fn lay_out_with_arena(root: impl View, constraints: BoxConstraints) -> LaidOutScoped {
-    let binding = HeadlessBinding::new();
-    let scoped = GestureArenaScope::new(binding.arena().clone(), root);
-    let pipeline_owner = Arc::new(RwLock::new(PipelineOwner::new()));
-    let laid =
-        lay_out_with_pipeline_owner_and_binding(scoped, constraints, pipeline_owner, binding);
-    LaidOutScoped {
-        laid,
-        next_pointer: Cell::new(1),
-        current_pointer: Cell::new(0),
-    }
-}
-
-impl LaidOutScoped {
-    /// The underlying laid-out tree, for geometry queries.
-    pub fn laid(&self) -> &LaidOut {
-        &self.laid
-    }
-
-    /// Reconcile the root against `new_root` — the scoped analogue of
-    /// [`LaidOut::pump_widget`], for tests that need both gesture dispatch
-    /// (arena-scoped) AND a later reconfigure/unmount of the same tree, e.g.
-    /// swapping a gesture-driven widget away mid-animation to prove its
-    /// `dispose` unregisters every controller it registered with `Vsync`.
-    pub fn pump_widget(&mut self, new_root: impl View) {
-        self.laid.pump_widget(new_root);
-    }
-
-    /// Advance the virtual clock by `dt` and fire any gesture deadline that has
-    /// now elapsed — the deterministic, sleep-free frame tick.
-    pub fn pump(&mut self, dt: Duration) {
-        self.laid.binding.pump_frame(dt);
-    }
-
-    /// Spin until `Instant::now()` returns a value strictly greater than the
-    /// one returned by the immediately preceding call — i.e. wait until the OS
-    /// high-resolution timer has ticked at least once.
-    ///
-    /// Purpose: `DragGestureRecognizer::handle_move` calls `Instant::now()`
-    /// internally to timestamp each velocity-tracker sample. When several
-    /// `dispatch_pointer_*` calls happen within a single OS timer tick (common
-    /// on systems with ~100 ns QPC resolution), all samples carry the same
-    /// timestamp. The resulting least-squares system is singular and produces
-    /// NaN velocity — which then propagates into scroll-physics simulations.
-    ///
-    /// Calling this before each dispatch that should count toward velocity
-    /// (down and every move) guarantees that consecutive
-    /// `velocity_tracker.add_position(Instant::now(), …)` calls in the
-    /// recognizer receive strictly increasing timestamps.
-    ///
-    /// The busy-wait exits after at most one OS timer period (~100 ns on
-    /// Windows with QPC), so the overhead per dispatch is negligible.
-    fn advance_gesture_clock() {
-        let t0 = Instant::now();
-        while Instant::now() == t0 {
-            std::hint::spin_loop();
-        }
-    }
-
-    /// Allocate a fresh pointer id for a new contact, remembering it as current.
-    fn begin_contact(&self) -> PointerId {
-        let id = self.next_pointer.get();
-        self.next_pointer.set(id + 1);
-        self.current_pointer.set(id);
-        PointerId::new(id).expect("contact ids start at 1")
-    }
-
-    /// The pointer id of the in-flight contact (set by the matching down).
-    fn current_contact(&self) -> PointerId {
-        PointerId::new(self.current_pointer.get()).expect("a down precedes up/move/cancel")
-    }
-
-    /// Dispatch a synthetic pointer-down at `(x, y)` through the binding: route
-    /// to the hit-test path, THEN close the shared arena — `binding.dart`'s
-    /// order (close after the down has reached the whole hit-test path, so every
-    /// overlapping detector has added its recognizers before the single close).
-    /// Each down allocates a fresh contact id.
-    pub fn dispatch_pointer_down(&self, x: f32, y: f32) {
-        // Ensure the OS timer has ticked at least once so the first
-        // velocity-tracker sample (added inside `handle_down`) gets a timestamp
-        // strictly greater than any previously recorded one.
-        Self::advance_gesture_clock();
-        let pointer = self.begin_contact();
-        let event = make_down_event_for_id(pointer, offset(x, y), PointerType::Mouse);
-        self.laid
-            .binding
-            .dispatch_pointer(&event, |e| self.laid.route_event(e, x, y));
-    }
-
-    /// Dispatch a synthetic pointer-up at `(x, y)` for the current contact:
-    /// route, THEN sweep the shared arena (the contact ended).
-    pub fn dispatch_pointer_up(&self, x: f32, y: f32) {
-        let pointer = self.current_contact();
-        let event = make_up_event_for_id(pointer, offset(x, y), PointerType::Mouse);
-        self.laid
-            .binding
-            .dispatch_pointer(&event, |e| self.laid.route_event(e, x, y));
-    }
-
-    /// Dispatch a synthetic pointer-move at `(x, y)` for the current contact (no
-    /// arena close/sweep — a move neither opens nor ends a contact).
-    pub fn dispatch_pointer_move(&self, x: f32, y: f32) {
-        // Advance the gesture clock before each move so consecutive velocity
-        // tracker samples have strictly increasing `Instant::now()` timestamps
-        // (see `advance_gesture_clock` for rationale).
-        Self::advance_gesture_clock();
-        let pointer = self.current_contact();
-        let event = make_move_event_for_id(pointer, offset(x, y), PointerType::Mouse);
-        self.laid
-            .binding
-            .dispatch_pointer(&event, |e| self.laid.route_event(e, x, y));
-    }
-
-    /// Dispatch a synthetic pointer-cancel at `(x, y)` for the current contact:
-    /// route, THEN sweep the shared arena (the contact was interrupted).
-    pub fn dispatch_pointer_cancel(&self, x: f32, y: f32) {
-        let pointer = self.current_contact();
-        let event = make_cancel_event_for_id(pointer, PointerType::Mouse);
-        self.laid
-            .binding
-            .dispatch_pointer(&event, |e| self.laid.route_event(e, x, y));
-    }
-
-    /// Register `vsync` with the tree binding so [`pump_for`](Self::pump_for)
-    /// ticks controllers that state objects registered against it during
-    /// `init_state`. Call this with the same `Vsync` handle that was given to
-    /// the `VsyncScope` wrapping the scrollable widget.
-    pub fn adopt_vsync(&mut self, vsync: Vsync) {
-        self.laid.binding.adopt_vsync(vsync);
-    }
-
-    /// Advance `dt` of virtual animation time through the TREE binding: ticks
-    /// vsync-registered controllers (e.g. a fling controller registered by a
-    /// `ScrollableState`), drains the scheduled rebuild inbox, and re-runs
-    /// layout + paint. Does **not** advance the gesture-arena clock.
-    ///
-    /// Use this to drive ballistic scroll animations in tests after gesture
-    /// events have already started a fling via `dispatch_pointer_up`.
-    pub fn pump_for(&mut self, dt: Duration) {
-        self.laid.binding.pump_frame(dt);
+        self.binding
+            .dispatch_pointer(&event, |position| self.hit_test_pointer(position));
     }
 }
 

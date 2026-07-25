@@ -153,7 +153,7 @@ These are enforced by `scripts/port-check.sh` in CI and locally via `just port-c
 | **Sanctioned `dyn` boundaries only** — see the allowlist in port-check.sh trigger #9 | FR-036 registry |
 | **No locks in public API** (`pub fn -> MutexGuard`, `pub field: Mutex<...>`) | SP-6: locks behind private fields |
 | **No `println!`/`eprintln!`/`dbg!`** in foundation/tree/macros crates | Use `tracing` macros |
-| **No lifecycle-only frame capability inside `build`/`perform_layout`/`paint`** — `rebuild_handle()` (ADR-0018) and `post_frame_handle()` (ADR-0021) are acquired in `ViewState::init_state` / `did_change_dependencies` and fired later | Trigger #22: scheduling from a frame phase is an unbounded rebuild loop, or a callback against the frame still running. Adding a capability to `BuildContext` means adding its token to `scripts/check-frame-capability-scope.sh` in the same change |
+| **No lifecycle-only presentation capability inside `build`/`perform_layout`/`paint`** — `rebuild_handle()` (ADR-0018), `post_frame_handle()` (ADR-0021), `text_input_handle()` (ADR-0030), and `focus_manager()` (ADR-0037) are acquired in `ViewState::init_state` / `did_change_dependencies` and used later | Trigger #22: mutation or scheduling from a frame phase can create an unbounded rebuild loop, re-enter the frame transaction, or leak ownership across presentations. Adding a capability to `BuildContext` means adding its token to `scripts/check-frame-capability-scope.sh` in the same change |
 
 ## Testing Quirks
 
@@ -161,6 +161,7 @@ These are enforced by `scripts/port-check.sh` in CI and locally via `just port-c
 - **`flui-platform` tests are excluded from CI** (STATUS_HEAP_CORRUPTION investigation in progress)
 - **Render-object harness** — every concrete `RenderBox`/`RenderSliver` must have harness tests. See [`crates/flui-rendering/docs/TESTING.md`](crates/flui-rendering/docs/TESTING.md) for the `RenderTester`/`Probe` API and catalog rules. The catalog CI guard (`render_object_harness.rs`) verifies every exported type appears in `RENDER_OBJECT_TYPES` and has a matching `harness_*` test.
 - **Coverage**: `just coverage` (requires `cargo-llvm-cov`)
+- **Visual self-verification (no window needed)** — to *see* what a widget tree renders, capture it to a PNG instead of screenshotting a live window: `cargo run -p flui --example screenshot -- <demo> [width] [height] [out.png]` (`<demo>` = `material` \| `cupertino` \| `vertical-slice`), then open the PNG. It mounts the tree through `HeadlessBinding`, extracts the `LayerTree`, and rasterizes it offscreen via `flui_engine::wgpu::HeadlessRenderer` (`crates/flui-engine/src/wgpu/headless.rs`) — same GPU raster path as on-screen, so shadows/blends match. Add a `match` arm in `examples/screenshot.rs` to cover another tree. This exists because OS screenshot tools can't grab the live window under GNOME/Wayland+Mutter (the wgpu/Vulkan surface never lands in the X11 framebuffer, and `wlr-screencopy`/`grim` is unsupported) — a green harness test is necessary but "MVP reported as parity" hides in the pixels the test never looks at (see [Definition of Done](#definition-of-done-anti-cheating)).
 
 ## Flutter Parity
 

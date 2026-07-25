@@ -102,26 +102,19 @@
 //!    Separately, `pointerDragAnchorStrategy` (anchor at `Offset.zero`) is
 //!    not selectable at all — that is the actual, named deferral for
 //!    *strategy choice*, distinct from the `_lastOffset` divergence above.
-//! 5. **Unmounting mid-drag cancels immediately rather than tracking to the
-//!    real pointer-up.** The oracle's `_disposeRecognizerIfInactive` keeps
-//!    the recognizer alive until every active drag naturally finishes, even
-//!    past `_DraggableState` unmounting. This port's recognizer
-//!    (`MultiDragGestureRecognizer`) is owner-local (`!Send + !Sync`, per
-//!    ADR-0027), while a `DragSession` — the thing that would need to hold a
-//!    reference to it to dispose it later — must be `Send + Sync` to satisfy
-//!    `MultiDragHandle`'s bound; it structurally cannot hold that reference.
-//!    `DraggableState::dispose` therefore disposes the recognizer
-//!    unconditionally on unmount, which cancels any still-active drag right
-//!    there (correctly firing `on_drag_end`/`on_draggable_canceled` — see
-//!    [`DragSession`]'s own docs) instead of continuing to track the pointer
-//!    after the widget is gone.
+//! 5. **Unmounting mid-drag still cancels immediately.** The oracle's
+//!    `_disposeRecognizerIfInactive` transfers the recognizer and overlay
+//!    lifetime to active drag avatars until their real pointer-up. This port
+//!    still keeps both resources on `DraggableState`, so unmount disposes the
+//!    recognizer and removes feedback immediately. `MultiDragHandle` is now
+//!    correctly owner-local, removing the former type-system obstacle; the
+//!    remaining work is a real lifetime transfer, not a threading workaround.
 
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use flui_interaction::arena::GestureArena;
 use flui_interaction::{
     DragUpdateDetails, GestureRecognizer, MultiDragAxis, MultiDragEndDetails,
     MultiDragGestureRecognizer, MultiDragHandle, MultiDragStartCallback, MultiDragUpdateDetails,
@@ -140,13 +133,10 @@ use parking_lot::Mutex;
 use crate::overlay::{InsertPosition, Overlay, OverlayEntry, OverlayHandle};
 use crate::{GestureArenaScope, Listener, Positioned, Stack, StackFit};
 
-/// A no-argument, thread-safe callback — [`Draggable::on_drag_started`] /
-/// [`Draggable::on_drag_completed`]. `Arc<dyn Fn + Send + Sync>` (not the
-/// `Rc`-based shape most `flui-widgets` callbacks use) because it is invoked
-/// from inside a [`MultiDragHandle`] impl, and that trait requires
-/// `Send + Sync + 'static` on its implementor (`flui-interaction`'s
-/// multi-pointer recognizer stores handles behind `Arc<Mutex<_>>`, matching
-/// its per-pointer arena-competition state).
+/// A no-argument callback retained in the current shared drag-config snapshot.
+///
+/// `MultiDragHandle` itself is owner-local; these `Arc` bounds are legacy
+/// storage shape, not a cross-thread callback contract.
 type StartedCallback = Arc<dyn Fn() + Send + Sync>;
 /// Called for each pointer move while a drag is in progress.
 type DragUpdateCallback = Arc<dyn Fn(DragUpdateDetails) + Send + Sync>;
@@ -273,7 +263,12 @@ impl<T: Clone + Send + Sync + 'static> Draggable<T> {
         self
     }
 
-    /// Called when a drag begins (a contact crosses the drag slop).
+    /// Called when the recognizer wins its pointer's arena and starts a drag.
+    ///
+    /// A lone immediate draggable wins by the arena's deferred default after
+    /// Down and therefore starts without movement. With competitors (for
+    /// example, inside a scrollable), movement past the recognizer's slop can
+    /// be what resolves the competition.
     #[must_use]
     pub fn on_drag_started(mut self, callback: impl Fn() + Send + Sync + 'static) -> Self {
         self.on_drag_started = Some(Arc::new(callback));
@@ -341,10 +336,9 @@ pub struct DraggableState<T: Clone + Send + Sync + 'static> {
     overlay: Arc<Mutex<Option<OverlayHandle>>>,
     /// The currently-mounted feedback layer, if any is showing. Owner-local
     /// (`Rc<RefCell<_>>`, not `Arc<Mutex<_>>`): only `on_start`, `build` and
-    /// `dispose` — all owner-thread code — ever touch it. `DragSession`
-    /// cannot hold this directly (`OverlayEntry` is `!Send`); see
-    /// [`FeedbackSignal`]'s docs for the `Send + Sync` bridge it uses
-    /// instead.
+    /// `dispose` — all owner-thread code — ever touch it. It remains
+    /// state-owned in this implementation; [`FeedbackSignal`] lets the active
+    /// session reposition it without retaining the entry itself.
     ///
     /// One slot, not one per session: with `max_simultaneous_drags > 1`,
     /// concurrent drags share this single feedback layer. A later session's
@@ -382,7 +376,7 @@ pub struct DraggableState<T: Clone + Send + Sync + 'static> {
     /// `on_start` at drag-start time. Owner-local (`Rc<RefCell<_>>`): see
     /// [`FeedbackConfig`]'s docs on why it cannot live in [`DragConfig`].
     feedback_config: Rc<RefCell<FeedbackConfig>>,
-    /// Built once in `init_state` against the ambient (or private) arena.
+    /// Built once in `init_state` against the presentation arena.
     recognizer: Option<Arc<MultiDragGestureRecognizer>>,
     /// Ties this state to `Draggable<T>` even though no field stores a `T`
     /// directly (see [`DragConfig`]'s docs on why the session drops it).
@@ -453,12 +447,11 @@ impl FeedbackConfig {
     }
 }
 
-/// The `Send + Sync` bridge between a [`DragSession`] (which must itself be
-/// `Send + Sync` — [`MultiDragHandle`]'s bound) and its feedback layer's real,
-/// mounted content (a [`FeedbackAnchor`], reached through an [`OverlayEntry`],
-/// both `Rc`-backed/owner-local per ADR-0027 and therefore `!Send`).
-/// `DragSession` never touches the `OverlayEntry` — only this handle, which
-/// holds nothing but `Send + Sync`-safe primitives.
+/// Mutable signal shared by one drag session and its mounted feedback anchor.
+///
+/// The signal is owner-local in practice. Its current `Arc<Mutex<_>>` shape is
+/// retained until feedback-entry ownership moves from `DraggableState` into
+/// each session.
 #[derive(Clone)]
 struct FeedbackSignal {
     /// The displacement `feedback` is painted at (`feedback_offset` plus
@@ -509,7 +502,7 @@ impl FeedbackSignal {
         // (or any other) lock still held.
         let handle = self.rebuild.lock().clone();
         if let Some(handle) = handle {
-            handle.schedule();
+            handle.schedule(flui_view::RebuildReason::StateChange);
         }
     }
 }
@@ -524,8 +517,8 @@ impl FeedbackSignal {
 ///
 /// A real, `Rc`-backed `StatefulView` (not a bare closure) specifically so its
 /// `init_state` can acquire a `RebuildHandle` the ADR-0018 way and publish it
-/// to [`FeedbackSignal`] — the one door a `Send + Sync`-bound `DragSession`
-/// has into repositioning this owner-local content.
+/// to [`FeedbackSignal`], allowing the session to reposition this content
+/// without retaining a framework element reference.
 #[derive(Clone)]
 struct FeedbackAnchor {
     feedback: Rc<dyn Fn() -> BoxedView>,
@@ -659,20 +652,11 @@ fn restrict_axis_delta(delta: Offset<PixelDelta>, axis: Option<Axis>) -> Offset<
 /// The `_DragAvatar` analogue: one instance per active drag, held by the
 /// recognizer for the pointer's lifetime.
 ///
-/// **Divergence from the oracle's `_disposeRecognizerIfInactive`:** the
-/// oracle keeps its recognizer alive until every active drag naturally
-/// finishes, even if `_DraggableState` itself unmounts first. This port
-/// cannot: `MultiDragGestureRecognizer` is owner-local (`Rc`/`RefCell`
-/// internally, per ADR-0027) and therefore `!Send + !Sync`, while
-/// `MultiDragHandle` (this session's trait) requires `Send + Sync + 'static`
-/// — a `DragSession` structurally cannot hold a live reference to the
-/// recognizer it came from to dispose it later itself. `DraggableState::dispose`
-/// therefore disposes the recognizer unconditionally, immediately, on
-/// unmount — which cancels any still-active drag right there (`dispose`
-/// calls `.cancel()` on every accepted handle) rather than letting it run to
-/// the user's real pointer-up. `on_drag_end`/`on_draggable_canceled` still
-/// fire correctly for that cancellation (`DragSession::cancel`); what does
-/// NOT happen is tracking the pointer any further after unmount.
+/// **Current divergence from `_disposeRecognizerIfInactive`:** the recognizer
+/// and feedback entry still belong to `DraggableState`, rather than being
+/// transferred to active sessions. Unmount therefore cancels the session
+/// immediately. The handle is owner-local and can carry that ownership in a
+/// future parity pass; no `Send + Sync` constraint prevents it.
 struct DragSession {
     active_count: Arc<AtomicUsize>,
     rebuild: RebuildHandle,
@@ -683,14 +667,12 @@ struct DragSession {
     /// same sum (see the module's divergence note #4 — a named, pinned
     /// divergence, not attempted here). Reported as `DraggableDetails.offset`.
     offset: Mutex<Offset<Pixels>>,
-    /// The `Send + Sync` bridge to this session's feedback layer, if one is
-    /// showing — `None` when there is no ancestor `Overlay`
+    /// Signal to this session's feedback layer, if one is showing — `None`
+    /// when there is no ancestor `Overlay`
     /// (`Overlay::maybe_of` found nothing) or no `feedback` builder is
-    /// configured. `DragSession` cannot hold the `OverlayEntry` itself (it is
-    /// `!Send`, ADR-0027); see [`FeedbackSignal`]'s docs. Actual removal of
-    /// the entry happens in `DraggableState::build`/`dispose`, triggered by
-    /// [`end_active`](Self::end_active)'s `rebuild.schedule()` — this session
-    /// only needs to stop repositioning it, which needs no `Rc` access.
+    /// configured. The entry is still owned by `DraggableState`; actual
+    /// removal happens in `build`/`dispose`, triggered by
+    /// [`end_active`](Self::end_active)'s `rebuild.schedule(reason)`.
     feedback: Option<FeedbackSignal>,
 }
 
@@ -701,7 +683,7 @@ impl DragSession {
     /// layer (see [`feedback`](Self::feedback)'s docs).
     fn end_active(&self) {
         self.active_count.fetch_sub(1, Ordering::AcqRel);
-        self.rebuild.schedule();
+        self.rebuild.schedule(flui_view::RebuildReason::StateChange);
     }
 }
 
@@ -800,9 +782,7 @@ impl<T: Clone + Send + Sync + 'static> StatefulView for Draggable<T> {
 
 impl<T: Clone + Send + Sync + 'static> ViewState<Draggable<T>> for DraggableState<T> {
     fn init_state(&mut self, ctx: &dyn BuildContext) {
-        let arena = ctx
-            .get::<GestureArenaScope, _>(|scope| scope.arena().clone())
-            .unwrap_or_else(GestureArena::new);
+        let arena = GestureArenaScope::of(ctx);
         let rebuild = ctx.rebuild_handle();
 
         // The *initial* resolution, not just re-resolution: `depend_on`
@@ -829,7 +809,7 @@ impl<T: Clone + Send + Sync + 'static> ViewState<Draggable<T>> for DraggableStat
                 }
             }
             active_count.fetch_add(1, Ordering::AcqRel);
-            rebuild.schedule();
+            rebuild.schedule(flui_view::RebuildReason::StateChange);
             if let Some(callback) = config.lock().on_drag_started.clone() {
                 callback();
             }
@@ -913,9 +893,7 @@ impl<T: Clone + Send + Sync + 'static> ViewState<Draggable<T>> for DraggableStat
             currently_active > 0 && view.child_when_dragging.is_some();
 
         // The last active drag just ended (`end_active` schedules exactly
-        // this rebuild): tear down the feedback layer. `DragSession` cannot
-        // do this itself (`OverlayEntry::remove` needs `Rc` access it
-        // structurally lacks — see `feedback`'s docs on `DragSession`).
+        // this rebuild): tear down the state-owned feedback layer.
         if currently_active == 0 {
             // Taken out and the borrow dropped (this statement ends before
             // the `if let` runs) before the framework call below.
@@ -939,12 +917,9 @@ impl<T: Clone + Send + Sync + 'static> ViewState<Draggable<T>> for DraggableStat
         }
     }
 
-    /// Disposes the recognizer unconditionally, even if a drag is still
-    /// active. See `DragSession`'s docs on why this diverges from the
-    /// oracle's `_disposeRecognizerIfInactive` keep-alive: any drag still in
-    /// flight is canceled right here (the recognizer's own `dispose` fires
-    /// `.cancel()` on every accepted handle), rather than tracked to the
-    /// user's real pointer-up.
+    /// Disposes the state-owned recognizer unconditionally, so an in-flight
+    /// drag is canceled here instead of surviving unmount like Flutter's
+    /// `_disposeRecognizerIfInactive` path.
     ///
     /// Also removes the feedback layer directly, if one is still showing:
     /// `recognizer.dispose()`'s `cancel()` calls schedule a rebuild
@@ -986,7 +961,7 @@ mod tests {
     // opaque `Option<Box<dyn MultiDragHandle>>` with no accessor back to the
     // `FeedbackSignal` a `DragSession` captured, so invoking `on_start` twice
     // cannot observe signal identity through its return value alone, and no
-    // `LaidOutScoped` capability can drive two truly concurrent pointer
+    // The headless presentation harness cannot drive two truly concurrent pointer
     // contacts through it end-to-end either (`tests/parity/draggable_test.rs`'s
     // own module doc; each `dispatch_pointer_down` reassigns the harness's
     // single "current contact").
@@ -1042,7 +1017,7 @@ mod tests {
         let mut owner = BuildOwner::new();
         let mut tree = ElementTree::new();
         let root = tree.mount_root(&view, &mut owner.element_owner_mut());
-        owner.schedule_build_for(root, 0);
+        owner.schedule_build_for(root, 0, flui_view::RebuildReason::InitialMount);
         owner.build_scope(&mut tree);
 
         captured

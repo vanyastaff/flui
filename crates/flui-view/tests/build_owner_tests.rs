@@ -4,16 +4,17 @@
 //! registry.
 
 use flui_foundation::ElementId;
-use flui_interaction::{InteractionLane, PointerTarget};
+use flui_interaction::{FocusManager, InteractionLane, PointerTarget};
 use flui_objects::RenderSizedBox;
 use flui_rendering::pipeline::PipelineOwner;
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::{
-    BuildOwner, ElementTree, RenderObjectContext, RenderObjectContextError, RenderView, View,
+    BuildOwner, ElementTree, RebuildReason, RenderObjectContext, RenderObjectContextError,
+    RenderView, View,
 };
 use parking_lot::RwLock;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::{rc::Rc, sync::Arc};
 
 // ============================================================================
 // Test View
@@ -68,6 +69,22 @@ fn test_build_owner_default() {
 
     assert!(!owner.has_dirty_elements());
     assert_eq!(owner.dirty_count(), 0);
+}
+
+#[test]
+fn build_owners_have_isolated_focus_managers() {
+    let first = BuildOwner::new();
+    let second = BuildOwner::new();
+
+    assert!(!Rc::ptr_eq(&first.focus_manager(), &second.focus_manager()));
+}
+
+#[test]
+fn build_owner_preserves_the_exact_focus_manager() {
+    let focus_manager = FocusManager::new();
+    let owner = BuildOwner::with_focus_manager(Rc::clone(&focus_manager));
+
+    assert!(Rc::ptr_eq(&owner.focus_manager(), &focus_manager));
 }
 
 #[derive(Clone)]
@@ -189,7 +206,7 @@ fn test_schedule_build_for_single() {
     let mut owner = BuildOwner::new();
     let id = ElementId::new(1);
 
-    owner.schedule_build_for(id, 0);
+    owner.schedule_build_for(id, 0, RebuildReason::StateChange);
 
     assert!(owner.has_dirty_elements());
     assert_eq!(owner.dirty_count(), 1);
@@ -199,9 +216,9 @@ fn test_schedule_build_for_single() {
 fn test_schedule_build_for_multiple() {
     let mut owner = BuildOwner::new();
 
-    owner.schedule_build_for(ElementId::new(1), 0);
-    owner.schedule_build_for(ElementId::new(2), 1);
-    owner.schedule_build_for(ElementId::new(3), 2);
+    owner.schedule_build_for(ElementId::new(1), 0, RebuildReason::StateChange);
+    owner.schedule_build_for(ElementId::new(2), 1, RebuildReason::StateChange);
+    owner.schedule_build_for(ElementId::new(3), 2, RebuildReason::StateChange);
 
     assert_eq!(owner.dirty_count(), 3);
 }
@@ -212,21 +229,28 @@ fn test_schedule_build_deduplicates() {
     let id = ElementId::new(1);
 
     // Schedule same element multiple times
-    owner.schedule_build_for(id, 0);
-    owner.schedule_build_for(id, 0);
-    owner.schedule_build_for(id, 0);
+    owner.schedule_build_for(id, 0, RebuildReason::StateChange);
+    owner.schedule_build_for(id, 0, RebuildReason::AnimationTick);
+    owner.schedule_build_for(id, 0, RebuildReason::DependencyChange);
 
-    // Should only be counted once
+    // Rebuild once, without erasing the three independent causes.
     assert_eq!(owner.dirty_count(), 1);
+    let reasons = owner
+        .pending_rebuild_reasons(id)
+        .expect("the element is still queued");
+    assert_eq!(reasons.len(), 3);
+    assert!(reasons.contains(RebuildReason::StateChange));
+    assert!(reasons.contains(RebuildReason::AnimationTick));
+    assert!(reasons.contains(RebuildReason::DependencyChange));
 }
 
 #[test]
 fn test_schedule_build_different_depths() {
     let mut owner = BuildOwner::new();
 
-    owner.schedule_build_for(ElementId::new(1), 5);
-    owner.schedule_build_for(ElementId::new(2), 0);
-    owner.schedule_build_for(ElementId::new(3), 10);
+    owner.schedule_build_for(ElementId::new(1), 5, RebuildReason::StateChange);
+    owner.schedule_build_for(ElementId::new(2), 0, RebuildReason::StateChange);
+    owner.schedule_build_for(ElementId::new(3), 10, RebuildReason::StateChange);
 
     assert_eq!(owner.dirty_count(), 3);
 }
@@ -243,7 +267,7 @@ fn test_build_scope_clears_dirty() {
     let view = TestView { id: 1 };
     let root_id = tree.mount_root(&view, &mut owner.element_owner_mut());
 
-    owner.schedule_build_for(root_id, 0);
+    owner.schedule_build_for(root_id, 0, RebuildReason::InitialMount);
     assert!(owner.has_dirty_elements());
 
     owner.build_scope(&mut tree);
@@ -271,9 +295,9 @@ fn test_build_scope_processes_in_depth_order() {
     );
 
     // Schedule in reverse depth order
-    owner.schedule_build_for(grandchild_id, 2);
-    owner.schedule_build_for(root_id, 0);
-    owner.schedule_build_for(child_id, 1);
+    owner.schedule_build_for(grandchild_id, 2, RebuildReason::InitialMount);
+    owner.schedule_build_for(root_id, 0, RebuildReason::InitialMount);
+    owner.schedule_build_for(child_id, 1, RebuildReason::InitialMount);
 
     // Processing should handle all elements
     owner.build_scope(&mut tree);
@@ -290,7 +314,7 @@ fn test_build_scope_skips_removed_elements() {
     let root_id = tree.mount_root(&view, &mut owner.element_owner_mut());
 
     // Schedule element for rebuild
-    owner.schedule_build_for(root_id, 0);
+    owner.schedule_build_for(root_id, 0, RebuildReason::InitialMount);
 
     // Remove element before build
     tree.remove(root_id, &mut owner.element_owner_mut());
@@ -310,10 +334,10 @@ fn test_build_scope_skips_inactive_elements() {
     let root_id = tree.mount_root(&view, &mut owner.element_owner_mut());
 
     // Schedule element for rebuild
-    owner.schedule_build_for(root_id, 0);
+    owner.schedule_build_for(root_id, 0, RebuildReason::InitialMount);
 
     // Deactivate element
-    tree.deactivate(root_id);
+    tree.deactivate(root_id, &mut owner.element_owner_mut());
 
     // Should not rebuild inactive element
     owner.build_scope(&mut tree);
@@ -416,9 +440,9 @@ fn test_depth_ordering_shallowest_first() {
     );
 
     // Schedule in random order
-    owner.schedule_build_for(child_id, 1);
-    owner.schedule_build_for(grandchild_id, 2);
-    owner.schedule_build_for(root_id, 0);
+    owner.schedule_build_for(child_id, 1, RebuildReason::InitialMount);
+    owner.schedule_build_for(grandchild_id, 2, RebuildReason::InitialMount);
+    owner.schedule_build_for(root_id, 0, RebuildReason::InitialMount);
 
     // Verify all get processed
     owner.build_scope(&mut tree);
@@ -432,7 +456,7 @@ fn test_depth_ordering_shallowest_first() {
 #[test]
 fn test_build_owner_debug() {
     let mut owner = BuildOwner::new();
-    owner.schedule_build_for(ElementId::new(1), 0);
+    owner.schedule_build_for(ElementId::new(1), 0, RebuildReason::StateChange);
     owner.register_global_key(123, ElementId::new(2));
 
     let debug_str = format!("{owner:?}");
@@ -466,9 +490,9 @@ fn test_full_build_cycle() {
     tree.mark_needs_build(child2_id);
 
     // Schedule rebuilds
-    owner.schedule_build_for(root_id, 0);
-    owner.schedule_build_for(child1_id, 1);
-    owner.schedule_build_for(child2_id, 1);
+    owner.schedule_build_for(root_id, 0, RebuildReason::StateChange);
+    owner.schedule_build_for(child1_id, 1, RebuildReason::StateChange);
+    owner.schedule_build_for(child2_id, 1, RebuildReason::StateChange);
 
     assert_eq!(owner.dirty_count(), 3);
 
@@ -491,17 +515,17 @@ fn test_multiple_build_cycles() {
     let root_id = tree.mount_root(&view, &mut owner.element_owner_mut());
 
     // First cycle
-    owner.schedule_build_for(root_id, 0);
+    owner.schedule_build_for(root_id, 0, RebuildReason::InitialMount);
     owner.build_scope(&mut tree);
     assert!(!owner.has_dirty_elements());
 
     // Second cycle
-    owner.schedule_build_for(root_id, 0);
+    owner.schedule_build_for(root_id, 0, RebuildReason::StateChange);
     owner.build_scope(&mut tree);
     assert!(!owner.has_dirty_elements());
 
     // Third cycle
-    owner.schedule_build_for(root_id, 0);
+    owner.schedule_build_for(root_id, 0, RebuildReason::StateChange);
     owner.build_scope(&mut tree);
     assert!(!owner.has_dirty_elements());
 }

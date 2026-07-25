@@ -367,15 +367,11 @@ impl RenderNode {
     /// Sets the `NEEDS_PAINT` flag on this node's state — flag-only,
     /// no propagation.
     ///
-    /// Additive helper mirroring
-    /// [`Self::mark_layout_flag`]. NOT used by the dedup path —
-    /// `PipelineOwner::add_node_needing_paint` uses queue-membership
-    /// scanning instead of flag-based dedup (flag-based dedup is
-    /// unsuitable because `RenderState::new()` defaults
-    /// `NEEDS_PAINT = true` and would silently no-op on first add
-    /// for fresh nodes). Kept available for future callers that need
-    /// direct flag manipulation outside the dirty-queue scheduling
-    /// path.
+    /// Additive helper mirroring [`Self::mark_layout_flag`]. The canonical
+    /// owner-side [`PipelineOwner::mark_needs_paint`](crate::pipeline::PipelineOwner::mark_needs_paint)
+    /// walk uses this at every ancestor up to the established repaint
+    /// boundary. Initial attachment is scheduled separately because
+    /// `RenderState::new()` already starts with `NEEDS_PAINT = true`.
     #[inline]
     pub fn mark_paint_flag(&self) {
         match self {

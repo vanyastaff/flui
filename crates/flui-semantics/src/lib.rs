@@ -30,6 +30,10 @@
 //!
 //! - [`SemanticsNode`] - Node with accessibility properties (label, role,
 //!   actions)
+//! - [`AccessibilityNodeId`] - Stable identity derived from a generational
+//!   render-object identity
+//! - [`SemanticsSnapshot`] - Owned, callback-free handoff for accessibility
+//!   adapters
 //! - [`SemanticsConfiguration`] - Builder for semantic properties
 //! - [`SemanticsOwner`] - Manages tree lifecycle and platform updates
 //! - [`SemanticsAction`] - Actions that assistive tech can perform
@@ -64,10 +68,12 @@ pub mod binding;
 pub mod configuration;
 pub mod event;
 pub mod flags;
+pub mod identity;
 pub mod node;
 pub mod owner;
 pub mod properties;
 pub mod role;
+pub mod snapshot;
 pub mod tree;
 pub mod update;
 
@@ -75,14 +81,11 @@ pub mod update;
 // RE-EXPORTS - Action Types
 // ============================================================================
 
-pub use action::{ActionArgs, SemanticsAction, SemanticsActionHandler};
+pub use action::{ActionArgs, SemanticsAction, SemanticsActionHandler, SemanticsActionRequest};
 // ============================================================================
 // RE-EXPORTS - Binding Types
 // ============================================================================
-pub use binding::{
-    AccessibilityFeatures, SemanticsActionEvent, SemanticsBinding, SemanticsHandle,
-    SemanticsService,
-};
+pub use binding::{AccessibilityFeatures, SemanticsBinding, SemanticsHandle, SemanticsService};
 // ============================================================================
 // RE-EXPORTS - Configuration
 // ============================================================================
@@ -96,6 +99,10 @@ pub use event::{SemanticsEvent, SemanticsEventData, SemanticsEventType};
 // ============================================================================
 pub use flags::{SemanticsFlag, SemanticsFlags};
 // ============================================================================
+// RE-EXPORTS - Stable Accessibility Identity
+// ============================================================================
+pub use identity::AccessibilityNodeId;
+// ============================================================================
 // RE-EXPORTS - Foundation Types
 // ============================================================================
 pub use flui_foundation::SemanticsId;
@@ -106,7 +113,10 @@ pub use node::SemanticsNode;
 // ============================================================================
 // RE-EXPORTS - Owner Types
 // ============================================================================
-pub use owner::{SemanticsNodeUpdate, SemanticsOwner, SemanticsUpdateCallback};
+pub use owner::{
+    SemanticsActionError, SemanticsActionInvocation, SemanticsNodeUpdate, SemanticsOwner,
+    SemanticsUpdateCallback,
+};
 // ============================================================================
 // RE-EXPORTS - Property Types
 // ============================================================================
@@ -120,6 +130,10 @@ pub use properties::{
 pub use role::{
     AccessibilityFocusBlockType, Assertiveness, DebugSemanticsDumpOrder, SemanticsRole,
 };
+// ============================================================================
+// RE-EXPORTS - Immutable Snapshots
+// ============================================================================
+pub use snapshot::{SemanticsNodeSnapshot, SemanticsSnapshot, SemanticsSnapshotError};
 // ============================================================================
 // RE-EXPORTS - Tree Types
 // ============================================================================
@@ -148,12 +162,14 @@ pub mod prelude {
     pub use smol_str::SmolStr;
 
     pub use crate::{
-        AccessibilityFeatures, AccessibilityFocusBlockType, ActionArgs, Assertiveness,
-        AttributedString, DebugSemanticsDumpOrder, SemanticsAction, SemanticsActionEvent,
-        SemanticsActionHandler, SemanticsBinding, SemanticsConfiguration, SemanticsEvent,
+        AccessibilityFeatures, AccessibilityFocusBlockType, AccessibilityNodeId, ActionArgs,
+        Assertiveness, AttributedString, DebugSemanticsDumpOrder, SemanticsAction,
+        SemanticsActionError, SemanticsActionHandler, SemanticsActionInvocation,
+        SemanticsActionRequest, SemanticsBinding, SemanticsConfiguration, SemanticsEvent,
         SemanticsEventType, SemanticsFlag, SemanticsFlags, SemanticsHandle, SemanticsId,
-        SemanticsNode, SemanticsNodeData, SemanticsNodeUpdate, SemanticsOwner, SemanticsProperties,
-        SemanticsRole, SemanticsService, SemanticsTag, SemanticsTree, SemanticsTreeUpdate,
+        SemanticsNode, SemanticsNodeData, SemanticsNodeSnapshot, SemanticsNodeUpdate,
+        SemanticsOwner, SemanticsProperties, SemanticsRole, SemanticsService, SemanticsSnapshot,
+        SemanticsSnapshotError, SemanticsTag, SemanticsTree, SemanticsTreeUpdate,
         SemanticsTreeUpdateBuilder, TextDirection,
     };
 }

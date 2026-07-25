@@ -100,6 +100,17 @@ impl DrawBatcher {
             return;
         }
 
+        // Rounded-rectangle shadows (Material Card / FAB / Dialog / Chip, …)
+        // take the analytical single-pass Gaussian path: one instance, a soft
+        // correct penumbra. The multi-layer translated-fill fallback below
+        // bands and hardens exactly at the low elevations Material uses most —
+        // a 1.0-elevation card otherwise gets a single ~0.75px-offset copy,
+        // i.e. no visible soft shadow at all.
+        if let Some(rrect) = path.rrect_hint() {
+            Self::draw_analytic_rrect_shadow(segment, state, &rrect, color, elevation);
+            return;
+        }
+
         // Max 8 layers for performance.
         let num_layers = (blur_radius / 2.0).ceil().min(8.0) as usize;
 
@@ -155,6 +166,49 @@ impl DrawBatcher {
 
             state.restore();
         }
+    }
+
+    /// Emit a rounded-rectangle drop shadow through the analytical Gaussian
+    /// pipeline (`shadow.wgsl`). The world transform is baked into device space
+    /// here — the shadow instance shader carries no model matrix — so the rect,
+    /// corner radius, blur, and offset are all pre-scaled by the CTM.
+    ///
+    /// The elevation → (blur, offset, alpha) curve is a deliberately tuned
+    /// approximation of a Material penumbra, not a 1:1 Skia ambient+key-light
+    /// reproduction — shadow shaping is a sanctioned leapfrog area.
+    fn draw_analytic_rrect_shadow(
+        segment: &mut DrawSegment,
+        state: &GpuStateStack,
+        rrect: &flui_types::geometry::RRect,
+        color: Color,
+        elevation: f32,
+    ) {
+        let scale = state.max_scale();
+
+        // Bake the CTM: device-space AABB from the transformed rect corners.
+        // Material shadows are axis-aligned (no rotation), so the two-corner
+        // AABB is exact.
+        let top_left = state.apply_transform(Point::new(rrect.rect.left(), rrect.rect.top()));
+        let bottom_right =
+            state.apply_transform(Point::new(rrect.rect.right(), rrect.rect.bottom()));
+        let rect_pos = [top_left.x.0, top_left.y.0];
+        let rect_size = [
+            bottom_right.x.0 - top_left.x.0,
+            bottom_right.y.0 - top_left.y.0,
+        ];
+        let corner_radius = rrect.top_left.x.0 * scale;
+
+        // Elevation → shadow shape, in the same device space as `rect_pos`.
+        let blur_sigma = elevation * scale;
+        let offset = glam::Vec2::new(0.0, elevation * 0.5 * scale);
+
+        // Material's `shadowColor` is opaque black, but a real elevation shadow
+        // is a translucent penumbra — soften the core to a Material-like alpha.
+        let alpha = ((f32::from(color.a) / 255.0) * 0.32 * 255.0).round() as u8;
+        let shadow_color = Color::rgba(color.r, color.g, color.b, alpha);
+
+        let params = super::super::effects::ShadowParams::new(offset, blur_sigma, shadow_color);
+        Self::shadow_rect(segment, rect_pos, rect_size, corner_radius, &params);
     }
 
     /// Record a filled or stroked path, using the per-frame tessellation cache

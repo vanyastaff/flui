@@ -166,7 +166,7 @@ fn test_stateless_element_mark_needs_build() {
     let mut owner = BuildOwner::new();
     let root_id = tree.mount_root(&view, &mut owner.element_owner_mut());
 
-    owner.schedule_build_for(root_id, 0);
+    owner.schedule_build_for(root_id, 0, flui_view::RebuildReason::InitialMount);
     owner.build_scope(&mut tree);
     assert!(
         !tree.get(root_id).unwrap().element().is_dirty(),
@@ -182,7 +182,7 @@ fn test_stateless_element_mark_needs_build() {
         "mark_needs_build sets the dirty flag again"
     );
 
-    owner.schedule_build_for(root_id, 0);
+    owner.schedule_build_for(root_id, 0, flui_view::RebuildReason::InitialMount);
     owner.build_scope(&mut tree);
     let element = tree.get(root_id).unwrap().element();
     assert!(!element.is_dirty(), "second build_scope clears dirty again");
@@ -571,7 +571,7 @@ fn live_build_context_reports_authoritative_tree_depth() {
     let mut tree = ElementTree::new();
     let mut owner = BuildOwner::new();
     let root_id = tree.mount_root(&root, &mut owner.element_owner_mut());
-    owner.schedule_build_for(root_id, 0);
+    owner.schedule_build_for(root_id, 0, flui_view::RebuildReason::InitialMount);
     owner.build_scope(&mut tree);
 
     assert_eq!(

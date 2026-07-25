@@ -574,7 +574,7 @@ impl TabBarState {
                 .clone()
                 .expect("init_state runs before the first build");
             let id = resolved.add_listener(move || {
-                rebuild.schedule();
+                rebuild.schedule(flui_view::RebuildReason::AnimationTick);
             });
             *self.listener_id.borrow_mut() = Some(id);
             *self.controller.borrow_mut() = Some(resolved.clone());
@@ -597,11 +597,10 @@ impl ViewState<TabBar> for TabBarState {
     /// `TabBar::controller` shared with a sibling, or any
     /// `DefaultTabController` ancestor that itself outlives one particular
     /// `TabBar` child) keeps firing an `Rc` closure that calls
-    /// `rebuild.schedule()` on a `RebuildHandle` whose element no longer
-    /// exists — a leaked listener per unmount, same class of bug
-    /// `TextFieldState::dispose` guards against for `FocusManager`
-    /// (`crates/flui-material/tests/text_field.rs`'s
-    /// `unmounting_removes_the_focus_listener_from_the_process_wide_manager`).
+    /// `rebuild.schedule(reason)` on a `RebuildHandle` whose element no longer
+    /// exists — a leaked listener per unmount, the same class of lifecycle
+    /// bug `MaterialTextFieldState::dispose` guards against for its exact
+    /// `FocusNode` listener.
     ///
     /// `&mut self` here (unlike `resolve_controller`, called from `build`'s
     /// `&self`) means the `RefCell`s can be read via `get_mut` — a plain

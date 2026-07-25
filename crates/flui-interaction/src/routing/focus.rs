@@ -1,1629 +1,1214 @@
-//! Keyboard focus management
+//! Owner-local keyboard focus manager.
 //!
-//! [`FocusManager`] is an owner-thread singleton that fronts the entire focus
-//! tree machinery — it owns the [`FocusScopeNode`] root, tracks the
-//! primary-focused node, notifies focus-change listeners, and routes
-//! key events through the registered handlers.
-//!
-//! Audit Finding I-4 closure: prior dual structure (`FocusManager`
-//! singleton + private `FocusManagerInner` `Arc<inner>` co-existing with
-//! independent `primary_focus` + listener state) collapsed into a single
-//! singleton owning every focus invariant. [`FocusNode`] / [`FocusScopeNode`]
-//! reach the manager via [`FocusManager::global`] instead of holding a
-//! `Weak<FocusManagerInner>`.
-//!
-//! # Type System Features
-//!
-//! - **Newtype pattern**: [`FocusNodeId`] uses `NonZeroU64` for niche
-//!   optimization (so `Option<FocusNodeId>` is the same 8 bytes).
-//! - **Singleton pattern**: owner-local focus manager via thread-local storage.
-//! - **parking_lot**: High-performance read-write locks.
-//! - **TOCTOU-safe**: Primary-focus updates take a single write lock
-//!   so concurrent `request_focus` callers cannot interleave a stale
-//!   read with a competing write.
-//!
-//! # Flutter parity
-//!
-//! Mirrors [`widgets/focus_manager.dart`](https://api.flutter.dev/flutter/widgets/FocusManager-class.html)
-//! `FocusManager` — singular `_primaryFocus` + `rootScope` + listener
-//! `ChangeNotifier` semantics. FLUI's singleton replaces Flutter's
-//! `WidgetsBinding.focusManager` accessor.
-//!
-//! # Example
-//!
-//! ```rust,ignore
-//! use flui_interaction::{FocusManager, FocusNodeId};
-//!
-//! let my_node = FocusNodeId::new(42);
-//!
-//! // Request focus
-//! FocusManager::global().request_focus(my_node);
-//!
-//! // Check focus
-//! if FocusManager::global().has_focus(my_node) {
-//!     println!("We have focus!");
-//! }
-//!
-//! // Tab navigation (uses the root scope's traversal policy)
-//! FocusManager::global().focus_next();
-//!
-//! // Release focus
-//! FocusManager::global().unfocus();
-//! ```
+//! A [`FocusManager`] is explicitly owned by one presentation. It is neither
+//! global nor thread-local. Nodes reach it only through the weak owner stored
+//! when their subtree is attached below [`FocusManager::root_scope`].
 
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::{collections::HashMap, rc::Rc, sync::Arc};
+use std::{
+    cell::{Cell, RefCell},
+    collections::HashSet,
+    rc::Rc,
+};
 
 use flui_foundation::ListenerId;
 
-use parking_lot::RwLock;
-
 use crate::{
     events::KeyEvent,
-    ids::FocusNodeId,
-    routing::focus_scope::{FocusNode, FocusScopeNode, KeyEventResult, ResolvedStep},
+    routing::focus_scope::{FocusNode, FocusScopeNode, KeyEventResult},
 };
 
-// ============================================================================
-// FocusChangeCallback
-// ============================================================================
+/// Callback invoked after primary focus or its focus-tree ancestry changes.
+pub type FocusChangeCallback = Rc<dyn Fn(Option<Rc<FocusNode>>, Option<Rc<FocusNode>>)>;
 
-/// Owner-local callback invoked when focus changes.
-///
-/// Receives the previous and new focus node IDs.
-pub type FocusChangeCallback = Rc<dyn Fn(Option<FocusNodeId>, Option<FocusNodeId>)>;
-
-/// Owner-local callback for handling key events.
-///
-/// Returns `true` if the event was handled (stops propagation).
+/// Owner-local global key handler.
 pub type KeyEventCallback = Rc<dyn Fn(&KeyEvent) -> bool>;
 
-// ============================================================================
-// FocusManager
-// ============================================================================
-
-/// Global focus manager (singleton).
-///
-/// Tracks which UI element currently has keyboard focus, owns the root
-/// [`FocusScopeNode`] of the focus tree, dispatches key events through
-/// per-node + global handlers, and notifies registered listeners on
-/// focus changes. Only one element can have focus at a time.
-///
-/// # Singleton ownership
-///
-/// `FocusManager::global()` returns the focus manager for the current UI owner
-/// thread. On first access, [`Default`] eagerly creates the
-/// root [`FocusScopeNode`] so consumers can always reach
-/// [`FocusManager::root_scope`] without re-initialization.
-///
-/// # Owner-thread safety
-///
-/// `FocusManager` is owner-local under ADR-0027. The locks protect re-entrant
-/// tree walks on the owner thread; they are not a cross-thread sharing contract.
-/// Primary-focus mutations still take a single write lock to avoid
-/// read-then-write TOCTOU bugs within one dispatch turn.
-///
-/// # Niche Optimization
-///
-/// `FocusNodeId` uses `NonZeroU64`, so `Option<FocusNodeId>` is the same
-/// size as `FocusNodeId` (8 bytes).
-///
-/// # Example
-///
-/// ```rust,ignore
-/// use flui_interaction::{FocusManager, FocusNodeId};
-///
-/// let my_node = FocusNodeId::new(42);
-///
-/// // Request focus
-/// FocusManager::global().request_focus(my_node);
-///
-/// // Check focus
-/// if FocusManager::global().has_focus(my_node) {
-///     println!("We have focus!");
-/// }
-///
-/// // Release focus
-/// FocusManager::global().unfocus();
-/// ```
+/// Presentation-owned focus state and root focus tree.
 pub struct FocusManager {
-    /// Root scope of the focus tree.
-    ///
-    /// Owned directly by the singleton (Flutter parity:
-    /// `FocusManager.rootScope`). Constructed eagerly in [`Default`] so
-    /// the root scope is always present — no Option dance, no
-    /// lazy-construction race.
-    root_scope: Arc<FocusScopeNode>,
-
-    /// Currently focused element (if any) — Flutter's `_primaryFocus`.
-    primary_focus: RwLock<Option<FocusNodeId>>,
-
-    /// Listeners for focus changes, keyed so a caller can remove its own.
-    listeners: RwLock<Vec<(ListenerId, FocusChangeCallback)>>,
-    /// Mint for [`ListenerId`]s, per manager — the `ChangeNotifier` convention.
-    next_listener_id: AtomicUsize,
-
-    /// Key event handlers registered per node.
-    key_handlers: RwLock<HashMap<FocusNodeId, KeyEventCallback>>,
-
-    /// Global key event handlers (called for all key events).
-    global_key_handlers: RwLock<Vec<KeyEventCallback>>,
-
-    /// Override scope used for Tab navigation traversal. When `None`
-    /// (the default), [`FocusManager::focus_next`] / [`FocusManager::focus_previous`] use
-    /// [`FocusManager::root_scope`]. App code can set this to a sub-scope to scope
-    /// traversal (matches Flutter modal-route scope semantics).
-    active_scope: RwLock<Option<Arc<FocusScopeNode>>>,
-}
-
-impl std::fmt::Debug for FocusManager {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("FocusManager")
-            .field("primary_focus", &*self.primary_focus.read())
-            .field("root_scope_id", &self.root_scope.id())
-            .field("listener_count", &self.listeners.read().len())
-            .finish_non_exhaustive()
-    }
-}
-
-impl Default for FocusManager {
-    fn default() -> Self {
-        let root_scope = FocusScopeNode::with_debug_label("Root Focus Scope");
-        // Root scope is attached by definition — it has no parent
-        // because it IS the tree root. Mark attached so child-attach
-        // recursion treats it as live (audit parity with Flutter's
-        // root-scope-always-attached invariant).
-        FocusNode::mark_root_attached(root_scope.as_focus_node());
-        Self {
-            root_scope,
-            primary_focus: RwLock::new(None),
-            listeners: RwLock::new(Vec::new()),
-            next_listener_id: AtomicUsize::new(1),
-            key_handlers: RwLock::new(HashMap::new()),
-            global_key_handlers: RwLock::new(Vec::new()),
-            active_scope: RwLock::new(None),
-        }
-    }
+    root_scope: Rc<FocusScopeNode>,
+    primary_focus: RefCell<Option<Rc<FocusNode>>>,
+    listeners: RefCell<Vec<(ListenerId, FocusChangeCallback)>>,
+    next_listener_id: Cell<usize>,
+    global_key_handlers: RefCell<Vec<KeyEventCallback>>,
+    closed: Cell<bool>,
 }
 
 impl FocusManager {
-    /// Get the global focus manager instance.
-    ///
-    /// This is a per-owner-thread singleton — the same instance is returned
-    /// every time on the current thread.
-    /// On first access the root [`FocusScopeNode`] is constructed.
-    pub fn global() -> &'static FocusManager {
-        thread_local! {
-            static INSTANCE: &'static FocusManager = Box::leak(Box::new(FocusManager::default()));
-        }
-        INSTANCE.with(|manager| *manager)
+    /// Create an isolated focus owner and its attached root scope.
+    #[must_use]
+    pub fn new() -> Rc<Self> {
+        Rc::new_cyclic(|manager| Self {
+            root_scope: FocusScopeNode::new_root(manager.clone()),
+            primary_focus: RefCell::new(None),
+            listeners: RefCell::new(Vec::new()),
+            next_listener_id: Cell::new(1),
+            global_key_handlers: RefCell::new(Vec::new()),
+            closed: Cell::new(false),
+        })
     }
 
-    /// Returns the root focus scope.
-    ///
-    /// Flutter parity: `FocusManager.rootScope`. Always present —
-    /// constructed eagerly in [`Default`]. Use this as the parent
-    /// when attaching focus nodes to the tree.
+    /// Root of this manager's focus tree.
     #[inline]
-    pub fn root_scope(&self) -> &Arc<FocusScopeNode> {
+    pub fn root_scope(&self) -> &Rc<FocusScopeNode> {
         &self.root_scope
     }
 
-    /// Override the active scope for Tab navigation. Pass `None` to
-    /// fall back to the [`Self::root_scope`].
-    ///
-    /// Useful for modal dialogs that need traversal scoped to dialog
-    /// descendants. Flutter equivalent: pushing a scope onto the
-    /// modal-route history.
-    pub fn set_active_scope(&self, scope: Option<Arc<FocusScopeNode>>) {
-        *self.active_scope.write() = scope;
+    /// Current primary focus node.
+    #[inline]
+    pub fn primary_focus(&self) -> Option<Rc<FocusNode>> {
+        self.primary_focus.borrow().clone()
     }
 
-    /// Returns the active focus scope used for traversal. Defaults to
-    /// [`Self::root_scope`] when no override is set.
-    pub fn active_scope(&self) -> Arc<FocusScopeNode> {
-        self.active_scope
-            .read()
-            .clone()
-            .unwrap_or_else(|| self.root_scope.clone())
+    /// Whether this manager currently has primary focus.
+    #[inline]
+    pub fn is_focused(&self) -> bool {
+        self.primary_focus.borrow().is_some()
     }
 
-    /// Create a new focus manager (for testing).
-    ///
-    /// Normally you should use `global()` instead.
-    #[cfg(test)]
-    pub(crate) fn new_for_test() -> Self {
-        Self::default()
+    pub(crate) fn request_focus(&self, node: &Rc<FocusNode>) -> bool {
+        if self.closed.get() || !node.is_attached() || !node.can_request_focus() {
+            return false;
+        }
+        let Some(owner) = node.manager() else {
+            return false;
+        };
+        if !std::ptr::eq(owner.as_ref(), self) {
+            tracing::warn!(
+                node = node.id().get(),
+                "focus request rejected because the node belongs to another manager"
+            );
+            return false;
+        }
+        self.set_primary_focus(Some(Rc::clone(node)));
+        true
     }
 
-    /// Request focus for a node. If another node had focus, it loses
-    /// focus. Focus-change listeners are notified.
-    ///
-    /// Uses a single-write-lock TOCTOU-safe update so concurrent
-    /// callers cannot interleave a stale read with a competing write
-    /// — earlier dual-state design read with a separate read lock
-    /// before writing, allowing races.
-    ///
-    /// Records the new focus in the node's enclosing scope's history
-    /// (Flutter parity: `FocusScopeNode._focusedChild` history).
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// let text_field = FocusNodeId::new(1);
-    /// FocusManager::global().request_focus(text_field);
-    /// ```
-    pub fn request_focus(&self, node_id: FocusNodeId) {
-        self.set_primary_focus(Some(node_id));
-    }
-
-    /// Internal: single-write-lock primary-focus update + scope
-    /// history record + listener notification. Carries the
-    /// TOCTOU-safe pattern migrated from the prior
-    /// `FocusManagerInner::set_primary_focus`.
-    fn set_primary_focus(&self, node_id: Option<FocusNodeId>) {
-        // Single write lock: atomically read previous and write new
-        // (avoids TOCTOU race against concurrent request_focus calls).
+    fn set_primary_focus(&self, node: Option<Rc<FocusNode>>) {
         let previous = {
-            let mut focus = self.primary_focus.write();
-            let previous = *focus;
-            if previous == node_id {
+            let mut primary = self.primary_focus.borrow_mut();
+            let unchanged = match (&*primary, &node) {
+                (Some(previous), Some(next)) => Rc::ptr_eq(previous, next),
+                (None, None) => true,
+                (Some(_), None) | (None, Some(_)) => false,
+            };
+            if unchanged {
                 return;
             }
-            *focus = node_id;
-            previous
+            std::mem::replace(&mut *primary, node.clone())
         };
 
         tracing::trace!(
-            previous = ?previous.map(super::super::ids::FocusNodeId::get),
-            new = ?node_id.map(super::super::ids::FocusNodeId::get),
-            "Focus changed"
+            previous = ?previous.as_ref().map(|node| node.id().get()),
+            new = ?node.as_ref().map(|node| node.id().get()),
+            "focus changed"
         );
 
-        // Record in enclosing scope's history when focusing a node
-        // (mirrors Flutter `_setAsFocusedChildForScope`).
-        if let Some(id) = node_id
-            && let Some(node) = self.find_node(id)
-            && let Some(scope) = node.enclosing_scope()
-        {
-            scope.record_focus(id);
+        if let Some(node) = &node {
+            Self::refresh_focus_history(node);
         }
-
-        self.notify_listeners(previous, node_id);
+        Self::notify_focus_nodes(previous.as_ref(), node.as_ref());
+        self.notify_listeners(previous, node);
     }
 
-    /// Get the currently focused node (if any).
-    #[inline]
-    pub fn focused(&self) -> Option<FocusNodeId> {
-        *self.primary_focus.read()
+    /// Clear an exact primary node without exposing a half-mutated tree to
+    /// callbacks. [`Self::finish_node_replacement`] completes notification
+    /// after the structural transaction is stable.
+    pub(crate) fn clear_primary_for_node_replacement(&self, current: &Rc<FocusNode>) {
+        let mut primary = self.primary_focus.borrow_mut();
+        if primary
+            .as_ref()
+            .is_some_and(|focused| Rc::ptr_eq(focused, current))
+        {
+            primary.take();
+        }
     }
 
-    /// Alias for [`Self::focused`] — matches Flutter's `primaryFocus` getter.
-    #[inline]
-    pub fn primary_focus(&self) -> Option<FocusNodeId> {
-        *self.primary_focus.read()
+    /// Refresh focus history and deliver the deferred half of an atomic node
+    /// replacement.
+    pub(crate) fn finish_node_replacement(
+        &self,
+        previous_primary: Rc<FocusNode>,
+        previous_focus_path: Vec<Rc<FocusNode>>,
+    ) {
+        let current = self.primary_focus();
+        if let Some(primary) = &current {
+            Self::refresh_focus_history(primary);
+        }
+        let current_focus_path = current.as_ref().map_or_else(Vec::new, |primary| {
+            std::iter::once(Rc::clone(primary))
+                .chain(primary.ancestors())
+                .collect()
+        });
+        Self::notify_focus_path_change(previous_focus_path, current_focus_path);
+        let latest = self.primary_focus();
+        let focus_is_unchanged = match (&current, &latest) {
+            (Some(current), Some(latest)) => Rc::ptr_eq(current, latest),
+            (None, None) => true,
+            (Some(_), None) | (None, Some(_)) => false,
+        };
+        if focus_is_unchanged {
+            self.notify_listeners(Some(previous_primary), current);
+        }
     }
 
-    /// Check if a specific node has focus.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// if FocusManager::global().has_focus(my_node) {
-    ///     // Draw focus indicator
-    /// }
-    /// ```
-    #[inline]
-    pub fn has_focus(&self, node_id: FocusNodeId) -> bool {
-        *self.primary_focus.read() == Some(node_id)
-    }
-
-    /// Clear focus (no element focused).
-    ///
-    /// Call this when:
-    /// - User clicks on background
-    /// - Window loses focus
-    /// - Focused element is removed
+    /// Release primary focus.
     pub fn unfocus(&self) {
-        self.set_primary_focus(None);
+        if !self.closed.get() {
+            self.set_primary_focus(None);
+        }
     }
 
-    /// Add a listener for focus changes.
-    ///
-    /// The listener is called whenever focus changes.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// let id = FocusManager::global().add_listener(Rc::new(|prev, new| {
-    ///     println!("Focus changed from {:?} to {:?}", prev, new);
-    /// }));
-    /// // … later, from the owner's teardown:
-    /// FocusManager::global().remove_listener(id);
-    /// ```
+    /// Register a focus or focused-ancestry change listener.
     pub fn add_listener(&self, callback: FocusChangeCallback) -> ListenerId {
-        let id = ListenerId::new(self.next_listener_id.fetch_add(1, Ordering::Relaxed));
-        self.listeners.write().push((id, callback));
+        let id = ListenerId::new(self.next_listener_id.get());
+        let next = self
+            .next_listener_id
+            .get()
+            .checked_add(1)
+            .expect("BUG: focus-manager listener ID space exhausted");
+        self.next_listener_id.set(next);
+        self.listeners.borrow_mut().push((id, callback));
         id
     }
 
-    /// Remove the listener registered under `id`. A no-op for an id that was
-    /// already removed — teardown paths may race shutdown's
-    /// [`clear_listeners`](Self::clear_listeners).
+    /// Remove one focus-change listener.
     pub fn remove_listener(&self, id: ListenerId) {
-        self.listeners.write().retain(|(held, _)| *held != id);
+        self.listeners.borrow_mut().retain(|(held, _)| *held != id);
     }
 
-    /// Remove all listeners. Useful for cleanup during shutdown.
+    /// Remove all focus-change listeners.
     pub fn clear_listeners(&self) {
-        self.listeners.write().clear();
+        self.listeners.borrow_mut().clear();
     }
 
-    /// The number of focus-change listeners currently registered.
-    ///
-    /// Test-only introspection: proves a `dispose`/teardown path actually
-    /// called [`Self::remove_listener`] rather than leaking a registration on
-    /// this process-wide singleton (a real recurring failure mode across
-    /// this workspace's tests, which all share one `FocusManager` per
-    /// thread).
+    /// Number of registered listeners.
     #[cfg(any(test, feature = "testing"))]
     #[must_use]
     pub fn listener_count(&self) -> usize {
-        self.listeners.read().len()
+        self.listeners.borrow().len()
     }
 
-    /// Notify all listeners of a focus change.
-    fn notify_listeners(&self, previous: Option<FocusNodeId>, new: Option<FocusNodeId>) {
-        // Clone the listener Vec so listener invocations can call
-        // `add_listener` / `remove_listener` without deadlocking on
-        // our read lock (Flutter ChangeNotifier reentrancy semantics).
-        let listeners = self.listeners.read().clone();
-        for (_, listener) in &listeners {
-            listener(previous, new);
+    fn notify_listeners(&self, previous: Option<Rc<FocusNode>>, new: Option<Rc<FocusNode>>) {
+        let listeners = self.listeners.borrow().clone();
+        for (_, listener) in listeners {
+            listener(previous.clone(), new.clone());
         }
     }
 
-    /// Locate a focus node by ID by descending from the root scope.
-    ///
-    /// Returns `None` if the node is not attached to the tree.
-    /// O(N) over tree nodes — used during focus-change history
-    /// recording (not on the per-event hot path).
-    pub(crate) fn find_node(&self, id: FocusNodeId) -> Option<Arc<FocusNode>> {
-        let root = self.root_scope.as_focus_node();
-        if root.id() == id {
-            return Some(root.clone());
+    fn notify_focus_nodes(previous: Option<&Rc<FocusNode>>, new: Option<&Rc<FocusNode>>) {
+        let previous_path: Vec<_> = previous
+            .into_iter()
+            .flat_map(|node| node.ancestors())
+            .collect();
+        let new_path: Vec<_> = new.into_iter().flat_map(|node| node.ancestors()).collect();
+        let previous_ids: HashSet<_> = previous_path.iter().map(|node| node.id()).collect();
+        let new_ids: HashSet<_> = new_path.iter().map(|node| node.id()).collect();
+
+        let mut seen = HashSet::new();
+        let mut changed = Vec::new();
+        for node in previous_path {
+            if !new_ids.contains(&node.id()) && seen.insert(node.id()) {
+                changed.push(node);
+            }
         }
-        root.descendants().find(|node| node.id() == id)
+        for node in new_path {
+            if !previous_ids.contains(&node.id()) && seen.insert(node.id()) {
+                changed.push(node);
+            }
+        }
+        for endpoint in [previous, new].into_iter().flatten() {
+            if seen.insert(endpoint.id()) {
+                changed.push(Rc::clone(endpoint));
+            }
+        }
+        for node in changed {
+            node.notify_listeners();
+        }
     }
 
-    /// Transfer focus to the next focusable element via the active
-    /// scope's traversal policy (Tab key). The active scope defaults
-    /// to [`Self::root_scope`] when no override is set via
-    /// [`Self::set_active_scope`].
-    ///
-    /// Returns `true` if focus advanced, `false` if no element is
-    /// currently focused or the traversal policy returned `None`.
+    fn notify_focus_path_change(
+        previous_path: Vec<Rc<FocusNode>>,
+        current_path: Vec<Rc<FocusNode>>,
+    ) {
+        let previous_ids: HashSet<_> = previous_path.iter().map(|node| node.id()).collect();
+        let current_ids: HashSet<_> = current_path.iter().map(|node| node.id()).collect();
+        let mut seen = HashSet::new();
+        let changed = previous_path
+            .into_iter()
+            .filter(|node| !current_ids.contains(&node.id()))
+            .chain(
+                current_path
+                    .into_iter()
+                    .filter(|node| !previous_ids.contains(&node.id())),
+            )
+            .filter(|node| seen.insert(node.id()))
+            .collect::<Vec<_>>();
+
+        for node in changed {
+            node.notify_listeners_after_tree_change();
+        }
+    }
+
+    pub(crate) fn refresh_focus_history(primary: &Rc<FocusNode>) {
+        let mut scope_focus = Rc::clone(primary);
+        for ancestor in primary.ancestors() {
+            if let Some(scope) = ancestor.as_scope() {
+                scope.record_focus(&scope_focus);
+                scope_focus = ancestor;
+            }
+        }
+    }
+
+    /// Move focus forward in the primary node's enclosing traversal scope.
     pub fn focus_next(&self) -> bool {
         self.traverse(true)
     }
 
-    /// Transfer focus to the previous focusable element via the
-    /// active scope's traversal policy (Shift+Tab).
-    ///
-    /// See [`Self::focus_next`] for behavior contract.
+    /// Move focus backward in the primary node's enclosing traversal scope.
     pub fn focus_previous(&self) -> bool {
         self.traverse(false)
     }
 
-    /// One shared traversal body (ADR-0026): resolve a step against the
-    /// active scope's order and edge behavior, then perform the intent against
-    /// **this** manager — instance-scoped, so a test manager never touches the
-    /// singleton. With nothing focused, the resolver falls back to
-    /// policy-ordered first/last (Flutter's `findFirstFocus` fallback,
-    /// `focus_traversal.dart:594-608`) — the first Tab in a fresh app moves
-    /// focus instead of no-opping.
     fn traverse(&self, forward: bool) -> bool {
-        let scope = self.active_scope();
-        let current = *self.primary_focus.read();
-        match scope.step(current, forward) {
-            ResolvedStep::Focus(id) => {
-                self.set_primary_focus(Some(id));
-                true
-            }
-            ResolvedStep::Unfocus => {
-                self.set_primary_focus(None);
-                false
-            }
-            // `step` follows the parent chain itself, so a retry never reaches
-            // here.
-            ResolvedStep::None | ResolvedStep::RetryInParent => false,
+        if self.closed.get() {
+            return false;
         }
+        let current = self.primary_focus();
+        let scope = current
+            .as_ref()
+            .and_then(|node| node.as_scope().or_else(|| node.enclosing_scope()))
+            .unwrap_or_else(|| Rc::clone(&self.root_scope));
+        // A scope may temporarily hold primary focus while an explicit
+        // first-focus intent waits for its first eligible descendant. Treat
+        // that parked scope like "no cursor" so Tab enters its descendants.
+        let cursor = current
+            .as_ref()
+            .filter(|node| !Rc::ptr_eq(node, scope.as_focus_node()));
+        let step = scope.step(cursor, forward);
+        FocusScopeNode::perform_with_manager(self, step)
     }
 
-    /// Check if any element has focus.
-    #[inline]
-    pub fn is_focused(&self) -> bool {
-        self.primary_focus.read().is_some()
-    }
-
-    // ========================================================================
-    // Key Event Handling
-    // ========================================================================
-
-    /// Register a key event handler for a specific node.
-    ///
-    /// The handler is called when the node has focus and receives a key event.
-    /// Returns `true` from the handler to indicate the event was handled.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// let text_field = FocusNodeId::new(1);
-    /// FocusManager::global().register_key_handler(text_field, Rc::new(|event| {
-    ///     println!("Key pressed: {:?}", event);
-    ///     true // Event handled
-    /// }));
-    /// ```
-    pub fn register_key_handler(&self, node_id: FocusNodeId, handler: KeyEventCallback) {
-        self.key_handlers.write().insert(node_id, handler);
-    }
-
-    /// Unregister a key event handler for a node.
-    pub fn unregister_key_handler(&self, node_id: FocusNodeId) {
-        self.key_handlers.write().remove(&node_id);
-    }
-
-    /// Register a global key event handler.
-    ///
-    /// Global handlers are called for all key events, regardless of focus.
-    /// They are called before the focused node's handler.
-    /// Useful for keyboard shortcuts.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// FocusManager::global().add_global_key_handler(Rc::new(|event| {
-    ///     if event.key == Key::Escape {
-    ///         close_modal();
-    ///         return true;
-    ///     }
-    ///     false // Not handled, continue to focused element
-    /// }));
-    /// ```
+    /// Register an owner-local handler that runs before the focus-tree walk.
     pub fn add_global_key_handler(&self, handler: KeyEventCallback) {
-        self.global_key_handlers.write().push(handler);
+        self.global_key_handlers.borrow_mut().push(handler);
     }
 
-    /// Clear all global key handlers.
+    /// Remove all global key handlers.
     pub fn clear_global_key_handlers(&self) {
-        self.global_key_handlers.write().clear();
+        self.global_key_handlers.borrow_mut().clear();
     }
 
-    /// Dispatch a key event to the appropriate handler(s).
-    ///
-    /// Event routing order (ADR-0023; Flutter's `handleKeyMessage` walk,
-    /// `focus_manager.dart:2278-2302`):
-    /// 1. Global handlers (in order added) — stop if any returns `true`.
-    /// 2. A **leaf→root walk** from the primary-focused node up its ancestors.
-    ///    Each node's two channels — its [`FocusNode::set_on_key_event`]
-    ///    handler and its [`register_key_handler`](Self::register_key_handler)
-    ///    map entry — are both invoked and combined
-    ///    ([`KeyEventResult::combine`]): `Ignored` continues to the parent,
-    ///    `Handled` stops the walk and consumes the event, and
-    ///    `SkipRemainingHandlers` stops the walk **without** consuming it.
-    ///
-    /// A focused id that resolves to no attached node (a bare id in tests, or
-    /// a stale id) has no ancestry: only its map entry is consulted — the
-    /// pre-walk behavior.
-    ///
-    /// Returns `true` if the event was consumed.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// let handled = FocusManager::global().dispatch_key_event(&key_event);
-    /// if !handled {
-    ///     // Default handling
-    /// }
-    /// ```
+    /// Dispatch a key event through global handlers, then focused leaf to root.
     pub fn dispatch_key_event(&self, event: &KeyEvent) -> bool {
-        // First, try global handlers — clone so the handler can mutate
-        // the global handler list without deadlocking.
-        let global_handlers = self.global_key_handlers.read().clone();
-        for handler in &global_handlers {
+        if self.closed.get() {
+            return false;
+        }
+
+        let global_handlers = self.global_key_handlers.borrow().clone();
+        for handler in global_handlers {
             if handler(event) {
-                tracing::trace!("Key event handled by global handler");
+                tracing::trace!("key event handled by global focus handler");
                 return true;
             }
         }
 
-        let Some(node_id) = *self.primary_focus.read() else {
-            tracing::trace!("Key event not handled: nothing focused");
+        let Some(focused) = self.primary_focus() else {
+            tracing::trace!("key event ignored because nothing is focused");
             return false;
         };
 
-        // Map an id's `key_handlers` entry onto the walk's result type.
-        let consult_map = |id: FocusNodeId| -> KeyEventResult {
-            match self.key_handlers.read().get(&id).cloned() {
-                Some(handler) if handler(event) => KeyEventResult::Handled,
-                _ => KeyEventResult::Ignored,
-            }
-        };
-
-        let Some(focused) = self.find_node(node_id) else {
-            // No attached node, no ancestry: the map entry alone.
-            let handled = consult_map(node_id) == KeyEventResult::Handled;
-            tracing::trace!(handled, "Key event dispatched to detached focused id");
-            return handled;
-        };
-
-        for node in std::iter::once(Arc::clone(&focused)).chain(focused.ancestors()) {
-            // Both channels are invoked and combined, as Flutter invokes both
-            // `onKeyEvent` and legacy `onKey` per node (`:2282-2287`).
-            let result = node.handle_key_event(event).combine(consult_map(node.id()));
-            match result {
+        for node in std::iter::once(Rc::clone(&focused)).chain(focused.ancestors()) {
+            match node.handle_key_event(event) {
                 KeyEventResult::Ignored => {}
                 KeyEventResult::Handled => {
-                    tracing::trace!(node = node.id().get(), "Key event handled");
+                    tracing::trace!(node = node.id().get(), "key event handled");
                     return true;
                 }
                 KeyEventResult::SkipRemainingHandlers => {
                     tracing::trace!(
                         node = node.id().get(),
-                        "Key event propagation stopped, unconsumed"
+                        "key propagation stopped without consuming the event"
                     );
                     return false;
                 }
             }
         }
 
-        tracing::trace!("Key event not handled");
+        tracing::trace!("key event not handled");
         false
     }
 
-    /// Check if a node has a registered key handler.
-    pub fn has_key_handler(&self, node_id: FocusNodeId) -> bool {
-        self.key_handlers.read().contains_key(&node_id)
+    /// Deterministically retire this focus owner.
+    ///
+    /// Closing is idempotent. It sends the final focus-loss notification,
+    /// clears manager and node callbacks, and tombstones every owned node.
+    /// Tombstoned nodes cannot later attach to a different manager.
+    pub fn close(&self) {
+        if self.closed.replace(true) {
+            return;
+        }
+
+        let previous = self.primary_focus.borrow_mut().take();
+        if let Some(previous) = previous {
+            Self::notify_focus_nodes(Some(&previous), None);
+            self.notify_listeners(Some(previous), None);
+        }
+        self.listeners.borrow_mut().clear();
+        self.global_key_handlers.borrow_mut().clear();
+        FocusNode::close_owned_tree(self.root_scope.as_focus_node());
+    }
+
+    /// Whether deterministic teardown has run.
+    #[inline]
+    pub fn is_closed(&self) -> bool {
+        self.closed.get()
+    }
+}
+
+impl std::fmt::Debug for FocusManager {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FocusManager")
+            .field("primary_focus", &self.primary_focus().map(|node| node.id()))
+            .field("root_scope_id", &self.root_scope.id())
+            .field("listener_count", &self.listeners.borrow().len())
+            .field("closed", &self.closed.get())
+            .finish_non_exhaustive()
+    }
+}
+
+impl Drop for FocusManager {
+    fn drop(&mut self) {
+        self.close();
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::cell::{Cell, RefCell};
+
+    use flui_types::geometry::{Pixels, Rect};
+
     use super::*;
+    use crate::{
+        events::{Key, KeyState, Modifiers},
+        routing::focus_scope::{
+            FocusDetachOutcome, FocusRequestOutcome, FocusTreeError, TraversalEdgeBehavior,
+        },
+    };
 
-    #[test]
-    fn test_focus_manager_singleton() {
-        let manager1 = FocusManager::global();
-        let manager2 = FocusManager::global();
-
-        // Should be the same instance
-        assert!(std::ptr::eq(manager1, manager2));
-    }
-
-    #[test]
-    fn test_focus_manager_has_root_scope() {
-        let manager = FocusManager::new_for_test();
-        // Root scope is always present and attached.
-        assert!(manager.root_scope().as_focus_node().is_attached());
-        assert!(
-            manager.root_scope().as_focus_node().is_scope(),
-            "root backing node must identify as a FocusScopeNode"
-        );
-        // Active scope falls back to root scope.
-        assert_eq!(
-            manager.active_scope().id(),
-            manager.root_scope().id(),
-            "active_scope should default to root_scope"
-        );
-    }
-
-    #[test]
-    fn test_request_focus() {
-        let manager = FocusManager::new_for_test();
-        let node1 = FocusNodeId::new(1);
-        let node2 = FocusNodeId::new(2);
-
-        // Initially no focus
-        assert_eq!(manager.focused(), None);
-        assert!(!manager.is_focused());
-
-        // Request focus for node1
-        manager.request_focus(node1);
-        assert_eq!(manager.focused(), Some(node1));
-        assert!(manager.has_focus(node1));
-        assert!(!manager.has_focus(node2));
-        assert!(manager.is_focused());
-
-        // Request focus for node2 (node1 loses focus)
-        manager.request_focus(node2);
-        assert_eq!(manager.focused(), Some(node2));
-        assert!(!manager.has_focus(node1));
-        assert!(manager.has_focus(node2));
-    }
-
-    #[test]
-    fn a_removed_listener_stops_firing_while_others_keep_firing() {
-        // ADR-0022: per-listener removal. Before this API a widget could
-        // only gate its closure with a disposed flag — the dead callback
-        // stayed registered on the owner-thread manager forever.
-        use std::sync::atomic::{AtomicUsize, Ordering};
-
-        let manager = FocusManager::new_for_test();
-        let removed_hits = Arc::new(AtomicUsize::new(0));
-        let surviving_hits = Arc::new(AtomicUsize::new(0));
-
-        let removed = {
-            let hits = Arc::clone(&removed_hits);
-            manager.add_listener(Rc::new(move |_, _| {
-                hits.fetch_add(1, Ordering::SeqCst);
-            }))
-        };
-        let survivor_hits = Arc::clone(&surviving_hits);
-        let _survivor = manager.add_listener(Rc::new(move |_, _| {
-            survivor_hits.fetch_add(1, Ordering::SeqCst);
-        }));
-
-        manager.request_focus(FocusNodeId::new(1));
-        assert_eq!(removed_hits.load(Ordering::SeqCst), 1);
-        assert_eq!(surviving_hits.load(Ordering::SeqCst), 1);
-
-        manager.remove_listener(removed);
-        manager.request_focus(FocusNodeId::new(2));
-        assert_eq!(
-            removed_hits.load(Ordering::SeqCst),
-            1,
-            "a removed listener must not fire again"
-        );
-        assert_eq!(
-            surviving_hits.load(Ordering::SeqCst),
-            2,
-            "removal must not disturb other listeners"
-        );
-
-        // Removing twice is a harmless no-op.
-        manager.remove_listener(removed);
-        manager.request_focus(FocusNodeId::new(3));
-        assert_eq!(surviving_hits.load(Ordering::SeqCst), 3);
-    }
-
-    #[test]
-    fn test_unfocus() {
-        let manager = FocusManager::new_for_test();
-        let node = FocusNodeId::new(42);
-
-        // Give focus
-        manager.request_focus(node);
-        assert!(manager.has_focus(node));
-
-        // Clear focus
-        manager.unfocus();
-        assert_eq!(manager.focused(), None);
-        assert!(!manager.has_focus(node));
-        assert!(!manager.is_focused());
-    }
-
-    #[test]
-    fn test_has_focus() {
-        let manager = FocusManager::new_for_test();
-        let node1 = FocusNodeId::new(1);
-        let node2 = FocusNodeId::new(2);
-
-        manager.request_focus(node1);
-
-        assert!(manager.has_focus(node1));
-        assert!(!manager.has_focus(node2));
-    }
-
-    #[test]
-    fn test_focus_node_id() {
-        let id1 = FocusNodeId::new(123);
-        let id2 = FocusNodeId::new(123);
-        let id3 = FocusNodeId::new(456);
-
-        assert_eq!(id1, id2);
-        assert_ne!(id1, id3);
-        assert_eq!(id1.get(), 123);
-    }
-
-    #[test]
-    fn test_focus_node_id_niche_optimization() {
-        // Option<FocusNodeId> should be same size as FocusNodeId
-        assert_eq!(
-            std::mem::size_of::<Option<FocusNodeId>>(),
-            std::mem::size_of::<FocusNodeId>()
-        );
-    }
-
-    #[test]
-    fn test_focus_listener() {
-        use std::sync::atomic::{AtomicBool, Ordering};
-
-        let manager = FocusManager::new_for_test();
-        let called = Arc::new(AtomicBool::new(false));
-        let called_clone = called.clone();
-
-        let _listener = manager.add_listener(Rc::new(move |_prev, _new| {
-            called_clone.store(true, Ordering::Relaxed);
-        }));
-
-        let node = FocusNodeId::new(1);
-        manager.request_focus(node);
-
-        assert!(called.load(Ordering::Relaxed));
-    }
-
-    #[test]
-    fn focus_next_and_previous_walk_active_scope_and_record_history() {
-        let manager = FocusManager::new_for_test();
-        let root = manager.root_scope().clone();
-
-        let first = FocusNode::with_debug_label("first");
-        first.set_rect(flui_types::geometry::Rect::from_xywh(
-            flui_types::geometry::Pixels(0.0),
-            flui_types::geometry::Pixels(0.0),
-            flui_types::geometry::Pixels(10.0),
-            flui_types::geometry::Pixels(10.0),
-        ));
-        let second = FocusNode::with_debug_label("second");
-        second.set_rect(flui_types::geometry::Rect::from_xywh(
-            flui_types::geometry::Pixels(20.0),
-            flui_types::geometry::Pixels(0.0),
-            flui_types::geometry::Pixels(10.0),
-            flui_types::geometry::Pixels(10.0),
-        ));
-        let third = FocusNode::with_debug_label("third");
-        third.set_rect(flui_types::geometry::Rect::from_xywh(
-            flui_types::geometry::Pixels(40.0),
-            flui_types::geometry::Pixels(0.0),
-            flui_types::geometry::Pixels(10.0),
-            flui_types::geometry::Pixels(10.0),
-        ));
-
-        root.attach_node(&first);
-        root.attach_node(&second);
-        root.attach_node(&third);
-
-        manager.request_focus(first.id());
-        assert_eq!(manager.focused(), Some(first.id()));
-        assert_eq!(root.focused_child(), Some(first.id()));
-
-        assert!(manager.focus_next());
-        assert_eq!(manager.focused(), Some(second.id()));
-        assert_eq!(root.focused_child(), Some(second.id()));
-        assert!(!manager.has_focus(first.id()));
-        assert!(manager.has_focus(second.id()));
-
-        assert!(manager.focus_previous());
-        assert_eq!(manager.focused(), Some(first.id()));
-        assert_eq!(root.focused_child(), Some(first.id()));
-
-        manager.request_focus(third.id());
-        assert!(manager.focus_next(), "reading-order traversal wraps");
-        assert_eq!(manager.focused(), Some(first.id()));
-    }
-
-    #[test]
-    fn focus_traversal_respects_active_scope_and_skips_unfocusable_nodes() {
-        let manager = FocusManager::new_for_test();
-        let root = manager.root_scope().clone();
-        let outside = FocusNode::with_debug_label("outside");
-        outside.set_rect(flui_types::geometry::Rect::from_xywh(
-            flui_types::geometry::Pixels(0.0),
-            flui_types::geometry::Pixels(0.0),
-            flui_types::geometry::Pixels(10.0),
-            flui_types::geometry::Pixels(10.0),
-        ));
-        root.attach_node(&outside);
-
-        let dialog = FocusScopeNode::with_debug_label("dialog");
-        dialog
-            .as_focus_node()
-            .set_rect(flui_types::geometry::Rect::from_xywh(
-                flui_types::geometry::Pixels(10.0),
-                flui_types::geometry::Pixels(0.0),
-                flui_types::geometry::Pixels(10.0),
-                flui_types::geometry::Pixels(10.0),
+    fn manager_with_nodes(count: usize) -> (Rc<FocusManager>, Vec<Rc<FocusNode>>) {
+        let manager = FocusManager::new();
+        let nodes: Vec<_> = (0..count)
+            .map(|index| FocusNode::with_debug_label(format!("node-{index}")))
+            .collect();
+        for (index, node) in nodes.iter().enumerate() {
+            node.set_rect(Rect::from_xywh(
+                Pixels(index as f32 * 20.0),
+                Pixels(0.0),
+                Pixels(10.0),
+                Pixels(10.0),
             ));
-        root.attach_node(dialog.as_focus_node());
-
-        let first = FocusNode::with_debug_label("first");
-        first.set_rect(flui_types::geometry::Rect::from_xywh(
-            flui_types::geometry::Pixels(0.0),
-            flui_types::geometry::Pixels(0.0),
-            flui_types::geometry::Pixels(10.0),
-            flui_types::geometry::Pixels(10.0),
-        ));
-        let skipped = FocusNode::with_debug_label("skipped");
-        skipped.set_skip_traversal(true);
-        skipped.set_rect(flui_types::geometry::Rect::from_xywh(
-            flui_types::geometry::Pixels(10.0),
-            flui_types::geometry::Pixels(0.0),
-            flui_types::geometry::Pixels(10.0),
-            flui_types::geometry::Pixels(10.0),
-        ));
-        let disabled = FocusNode::with_debug_label("disabled");
-        disabled.set_can_request_focus(false);
-        disabled.set_rect(flui_types::geometry::Rect::from_xywh(
-            flui_types::geometry::Pixels(20.0),
-            flui_types::geometry::Pixels(0.0),
-            flui_types::geometry::Pixels(10.0),
-            flui_types::geometry::Pixels(10.0),
-        ));
-        let second = FocusNode::with_debug_label("second");
-        second.set_rect(flui_types::geometry::Rect::from_xywh(
-            flui_types::geometry::Pixels(30.0),
-            flui_types::geometry::Pixels(0.0),
-            flui_types::geometry::Pixels(10.0),
-            flui_types::geometry::Pixels(10.0),
-        ));
-
-        dialog.attach_node(&first);
-        dialog.attach_node(&skipped);
-        dialog.attach_node(&disabled);
-        dialog.attach_node(&second);
-
-        manager.set_active_scope(Some(dialog.clone()));
-        manager.request_focus(first.id());
-
-        assert!(manager.focus_next());
-        assert_eq!(
-            manager.focused(),
-            Some(second.id()),
-            "active-scope traversal skips skipTraversal/canRequestFocus=false nodes"
-        );
-
-        assert!(manager.focus_next(), "active-scope traversal wraps");
-        assert_eq!(
-            manager.focused(),
-            Some(first.id()),
-            "outside root sibling must not participate while dialog is active"
-        );
-        assert_eq!(dialog.focused_child(), Some(first.id()));
-    }
-
-    #[test]
-    fn test_request_same_focus_no_change() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-
-        let manager = FocusManager::new_for_test();
-        let call_count = Arc::new(AtomicUsize::new(0));
-        let count_clone = call_count.clone();
-
-        manager.add_listener(Rc::new(move |_prev, _new| {
-            count_clone.fetch_add(1, Ordering::Relaxed);
-        }));
-
-        let node = FocusNodeId::new(1);
-
-        // First request triggers listener
-        manager.request_focus(node);
-        assert_eq!(call_count.load(Ordering::Relaxed), 1);
-
-        // Same node again - should not trigger
-        manager.request_focus(node);
-        assert_eq!(call_count.load(Ordering::Relaxed), 1);
-    }
-
-    #[test]
-    fn test_clear_listeners() {
-        use std::sync::atomic::{AtomicBool, Ordering};
-
-        let manager = FocusManager::new_for_test();
-        let called = Arc::new(AtomicBool::new(false));
-        let called_clone = called.clone();
-
-        let _listener = manager.add_listener(Rc::new(move |_prev, _new| {
-            called_clone.store(true, Ordering::Relaxed);
-        }));
-
-        manager.clear_listeners();
-
-        let node = FocusNodeId::new(1);
-        manager.request_focus(node);
-
-        // Listener should not have been called
-        assert!(!called.load(Ordering::Relaxed));
-    }
-
-    #[test]
-    fn test_register_key_handler() {
-        use std::sync::atomic::{AtomicBool, Ordering};
-
-        let manager = FocusManager::new_for_test();
-        let node = FocusNodeId::new(1);
-
-        assert!(!manager.has_key_handler(node));
-
-        let called = Arc::new(AtomicBool::new(false));
-        let called_clone = called.clone();
-
-        manager.register_key_handler(
-            node,
-            Rc::new(move |_event| {
-                called_clone.store(true, Ordering::Relaxed);
-                true
-            }),
-        );
-
-        assert!(manager.has_key_handler(node));
-
-        // Unregister
-        manager.unregister_key_handler(node);
-        assert!(!manager.has_key_handler(node));
-    }
-
-    #[test]
-    fn test_dispatch_key_event_to_focused() {
-        use std::sync::atomic::{AtomicBool, Ordering};
-
-        use crate::{events::keyboard::Code, testing::input::KeyEventBuilder};
-
-        let manager = FocusManager::new_for_test();
-        let node = FocusNodeId::new(1);
-
-        let handled = Arc::new(AtomicBool::new(false));
-        let handled_clone = handled.clone();
-
-        manager.register_key_handler(
-            node,
-            Rc::new(move |_event| {
-                handled_clone.store(true, Ordering::Relaxed);
-                true
-            }),
-        );
-
-        // Focus the node
-        manager.request_focus(node);
-
-        // Create a key event
-        let event = KeyEventBuilder::new(Code::KeyA).build();
-
-        // Dispatch - should be handled
-        let result = manager.dispatch_key_event(&event);
-        assert!(result);
-        assert!(handled.load(Ordering::Relaxed));
-    }
-
-    /// ADR-0023 — the leaf→root walk. A focused child that **ignores** a
-    /// key feeds the enclosing scope's `on_key_event`; one that **handles** it
-    /// starves the scope; `SkipRemainingHandlers` starves the scope *and*
-    /// reports the event unconsumed (`focus_manager.dart:2278-2302`).
-    ///
-    /// Red-check (the earlier, non-bubbling dispatch): consult only the focused node —
-    /// the bubbling arm's ancestor never fires and the first assertion fails.
-    #[test]
-    fn a_focused_child_key_bubbles_by_result_through_its_ancestors() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-
-        use crate::routing::focus_scope::KeyEventResult;
-        use crate::{events::keyboard::Code, testing::input::KeyEventBuilder};
-
-        let manager = FocusManager::new_for_test();
-        let scope = FocusScopeNode::with_debug_label("bubbling-scope");
-        manager.root_scope().attach_node(scope.as_focus_node());
-        let child = FocusNode::with_debug_label("bubbling-child");
-        scope.attach_node(&child);
-
-        let scope_hits = Arc::new(AtomicUsize::new(0));
-        {
-            let hits = Arc::clone(&scope_hits);
-            scope
-                .as_focus_node()
-                .set_on_key_event(Rc::new(move |_event| {
-                    hits.fetch_add(1, Ordering::SeqCst);
-                    KeyEventResult::Handled
-                }));
+            manager.root_scope().attach_node(node).unwrap();
         }
-
-        // `set_primary_focus` needs the node reachable from this manager's
-        // root, which it is; focus the child directly.
-        manager.request_focus(child.id());
-        let event = KeyEventBuilder::new(Code::KeyA).build();
-
-        // 1. The child ignores (no handler): the event bubbles, the scope
-        //    handles, and the dispatch reports consumed.
-        assert!(manager.dispatch_key_event(&event), "the scope consumed it");
-        assert_eq!(scope_hits.load(Ordering::SeqCst), 1, "the ancestor fired");
-
-        // 2. The child handles: the walk stops at the leaf.
-        child.set_on_key_event(Rc::new(|_event| KeyEventResult::Handled));
-        assert!(manager.dispatch_key_event(&event));
-        assert_eq!(
-            scope_hits.load(Ordering::SeqCst),
-            1,
-            "a handled key never reaches the ancestor"
-        );
-
-        // 3. The child skips: the walk stops AND the event is unconsumed.
-        child.set_on_key_event(Rc::new(|_event| KeyEventResult::SkipRemainingHandlers));
-        assert!(
-            !manager.dispatch_key_event(&event),
-            "SkipRemainingHandlers reports the event unconsumed"
-        );
-        assert_eq!(
-            scope_hits.load(Ordering::SeqCst),
-            1,
-            "SkipRemainingHandlers starves the ancestor too"
-        );
-
-        manager.root_scope().detach_node(scope.as_focus_node().id());
+        (manager, nodes)
     }
 
-    /// Both per-node channels — the `on_key_event` field and the
-    /// `register_key_handler` map entry — are invoked and combined per node,
-    /// as Flutter invokes `onKeyEvent` and legacy `onKey` (`:2282-2287`): a
-    /// map-`false` plus field-`Ignored` node lets the key bubble to an
-    /// ancestor's map entry.
+    fn key_event() -> KeyEvent {
+        KeyEvent {
+            state: KeyState::Down,
+            key: Key::Character("a".into()),
+            modifiers: Modifiers::default(),
+            ..KeyEvent::default()
+        }
+    }
+
     #[test]
-    fn the_map_channel_participates_in_the_walk() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
+    fn managers_are_isolated_and_roots_are_bound() {
+        let first = FocusManager::new();
+        let second = FocusManager::new();
 
-        use crate::{events::keyboard::Code, testing::input::KeyEventBuilder};
+        assert!(!Rc::ptr_eq(&first, &second));
+        assert!(first.root_scope().as_focus_node().is_attached());
+        assert!(second.root_scope().as_focus_node().is_attached());
+        assert!(!Rc::ptr_eq(
+            first.root_scope().as_focus_node(),
+            second.root_scope().as_focus_node()
+        ));
+    }
 
-        let manager = FocusManager::new_for_test();
-        let scope = FocusScopeNode::with_debug_label("map-walk-scope");
-        manager.root_scope().attach_node(scope.as_focus_node());
-        let child = FocusNode::with_debug_label("map-walk-child");
-        scope.attach_node(&child);
+    #[test]
+    fn focus_change_is_node_typed_and_manager_local() {
+        let (manager, nodes) = manager_with_nodes(2);
+        let changes = Rc::new(RefCell::new(Vec::new()));
+        let changes_for_listener = Rc::clone(&changes);
+        manager.add_listener(Rc::new(move |previous, next| {
+            changes_for_listener
+                .borrow_mut()
+                .push((previous.map(|node| node.id()), next.map(|node| node.id())));
+        }));
 
-        let scope_hits = Arc::new(AtomicUsize::new(0));
-        {
-            let hits = Arc::clone(&scope_hits);
-            manager.register_key_handler(
-                scope.as_focus_node().id(),
-                Rc::new(move |_event| {
-                    hits.fetch_add(1, Ordering::SeqCst);
-                    true
-                }),
+        assert_eq!(nodes[0].request_focus(), FocusRequestOutcome::Focused);
+        assert_eq!(nodes[1].request_focus(), FocusRequestOutcome::Focused);
+        assert!(Rc::ptr_eq(
+            manager.primary_focus().as_ref().unwrap(),
+            &nodes[1]
+        ));
+        assert_eq!(
+            changes.borrow().as_slice(),
+            &[
+                (None, Some(nodes[0].id())),
+                (Some(nodes[0].id()), Some(nodes[1].id()))
+            ]
+        );
+    }
+
+    #[test]
+    fn detached_request_is_fulfilled_when_bound() {
+        let manager = FocusManager::new();
+        let node = FocusNode::new();
+        assert_eq!(node.request_focus(), FocusRequestOutcome::Queued);
+        let attachment = manager.root_scope().attach_node(&node).unwrap();
+
+        assert!(attachment.is_attached());
+        assert!(node.has_primary_focus());
+    }
+
+    #[test]
+    fn cross_manager_aliasing_is_rejected() {
+        let first = FocusManager::new();
+        let second = FocusManager::new();
+        let node = FocusNode::new();
+        first.root_scope().attach_node(&node).unwrap();
+
+        let error = second.root_scope().attach_node(&node).unwrap_err();
+        assert!(matches!(
+            error,
+            FocusTreeError::AlreadyAttached { .. } | FocusTreeError::ManagerMismatch { .. }
+        ));
+    }
+
+    #[test]
+    fn stale_attachment_cannot_detach_a_reparented_node() {
+        let manager = FocusManager::new();
+        let first_parent = FocusScopeNode::new();
+        let second_parent = FocusScopeNode::new();
+        manager
+            .root_scope()
+            .attach_node(first_parent.as_focus_node())
+            .unwrap();
+        manager
+            .root_scope()
+            .attach_node(second_parent.as_focus_node())
+            .unwrap();
+        let node = FocusNode::new();
+        let stale = first_parent.attach_node(&node).unwrap();
+        let current = second_parent.adopt_node(&node).unwrap();
+
+        assert_eq!(stale.detach(), FocusDetachOutcome::Stale);
+        assert_eq!(current.detach(), FocusDetachOutcome::Detached);
+    }
+
+    #[test]
+    fn replacing_an_attached_ancestor_preserves_descendant_attachment_and_focus() {
+        let manager = FocusManager::new();
+        let old_parent = FocusNode::with_debug_label("old-parent");
+        let old_attachment = manager.root_scope().attach_node(&old_parent).unwrap();
+        let child = FocusNode::with_debug_label("child");
+        let child_attachment = old_parent.attach_node(&child).unwrap();
+        let leaf = FocusNode::with_debug_label("leaf");
+        child.attach_node(&leaf).unwrap();
+        leaf.request_focus();
+
+        let manager_edges = Rc::new(RefCell::new(Vec::new()));
+        let manager_edges_for_listener = Rc::clone(&manager_edges);
+        manager.add_listener(Rc::new(move |previous, current| {
+            manager_edges_for_listener.borrow_mut().push((
+                previous.map(|node| node.id()),
+                current.map(|node| node.id()),
+            ));
+        }));
+        let old_notifications = Rc::new(Cell::new(0));
+        let old_notifications_for_listener = Rc::clone(&old_notifications);
+        old_parent.add_listener(Rc::new(move || {
+            old_notifications_for_listener.set(old_notifications_for_listener.get() + 1);
+        }));
+        let replacement = FocusNode::with_debug_label("replacement");
+        let replacement_notifications = Rc::new(Cell::new(0));
+        let replacement_notifications_for_listener = Rc::clone(&replacement_notifications);
+        replacement.add_listener(Rc::new(move || {
+            replacement_notifications_for_listener
+                .set(replacement_notifications_for_listener.get() + 1);
+        }));
+
+        let replacement_attachment = old_attachment.replace_node(&replacement).unwrap();
+
+        assert!(!old_attachment.is_attached());
+        assert_eq!(old_attachment.detach(), FocusDetachOutcome::Stale);
+        assert!(replacement_attachment.is_attached());
+        assert!(!old_parent.is_attached());
+        assert!(old_parent.parent().is_none());
+        assert!(old_parent.children().is_empty());
+        assert_eq!(
+            replacement.parent().map(|parent| parent.id()),
+            Some(manager.root_scope().id())
+        );
+        assert_eq!(
+            replacement.children().first().map(|node| node.id()),
+            Some(child.id())
+        );
+        assert_eq!(
+            child.parent().map(|parent| parent.id()),
+            Some(replacement.id())
+        );
+        assert!(
+            child_attachment.is_attached(),
+            "replacing an ancestor must not supersede a descendant's attachment"
+        );
+        assert!(leaf.has_primary_focus());
+        assert_eq!(
+            manager_edges.borrow().as_slice(),
+            &[(Some(leaf.id()), Some(leaf.id()))],
+            "focused ancestry changed while primary focus identity stayed stable"
+        );
+        assert_eq!(old_notifications.get(), 1);
+        assert_eq!(replacement_notifications.get(), 1);
+        assert_eq!(
+            replacement_attachment.detach(),
+            FocusDetachOutcome::Detached
+        );
+    }
+
+    #[test]
+    fn replacing_the_primary_node_releases_focus() {
+        let manager = FocusManager::new();
+        let old = FocusNode::with_debug_label("old");
+        let old_attachment = manager.root_scope().attach_node(&old).unwrap();
+        old.request_focus();
+        let replacement = FocusNode::with_debug_label("replacement");
+
+        let replacement_attachment = old_attachment.replace_node(&replacement).unwrap();
+
+        assert!(manager.primary_focus().is_none());
+        assert!(!old.is_attached());
+        assert!(replacement_attachment.is_attached());
+        assert!(!replacement.has_focus());
+    }
+
+    #[test]
+    fn replacement_releases_a_descendant_that_the_new_ancestor_disallows() {
+        let manager = FocusManager::new();
+        let old_parent = FocusNode::with_debug_label("old-parent");
+        let old_attachment = manager.root_scope().attach_node(&old_parent).unwrap();
+        let child = FocusNode::with_debug_label("child");
+        old_parent.attach_node(&child).unwrap();
+        child.request_focus();
+        let replacement = FocusNode::with_debug_label("replacement");
+        replacement.set_descendants_are_focusable(false);
+
+        old_attachment.replace_node(&replacement).unwrap();
+
+        assert!(manager.primary_focus().is_none());
+        assert!(!child.can_request_focus());
+    }
+
+    #[test]
+    fn replacement_notification_reentry_does_not_emit_a_stale_outer_edge() {
+        let manager = FocusManager::new();
+        let old_parent = FocusNode::with_debug_label("old-parent");
+        let old_attachment = manager.root_scope().attach_node(&old_parent).unwrap();
+        let child = FocusNode::with_debug_label("child");
+        old_parent.attach_node(&child).unwrap();
+        let sibling = FocusNode::with_debug_label("sibling");
+        manager.root_scope().attach_node(&sibling).unwrap();
+        child.request_focus();
+
+        let edges = Rc::new(RefCell::new(Vec::new()));
+        let edges_for_listener = Rc::clone(&edges);
+        manager.add_listener(Rc::new(move |previous, current| {
+            edges_for_listener.borrow_mut().push((
+                previous.map(|node| node.id()),
+                current.map(|node| node.id()),
+            ));
+        }));
+        let replacement = FocusNode::with_debug_label("replacement");
+        let sibling_for_listener = Rc::clone(&sibling);
+        let replacement_for_listener = Rc::downgrade(&replacement);
+        let child_for_listener = Rc::downgrade(&child);
+        replacement.add_listener(Rc::new(move || {
+            let replacement = replacement_for_listener.upgrade().unwrap();
+            let child = child_for_listener.upgrade().unwrap();
+            assert_eq!(
+                child.parent().map(|parent| parent.id()),
+                Some(replacement.id()),
+                "callbacks observe the completed structural transaction"
             );
-        }
-        manager.register_key_handler(child.id(), Rc::new(|_event| false));
-
-        manager.request_focus(child.id());
-        let event = KeyEventBuilder::new(Code::KeyA).build();
-        assert!(manager.dispatch_key_event(&event));
-        assert_eq!(
-            scope_hits.load(Ordering::SeqCst),
-            1,
-            "the ancestor's map entry fired after the child's declined"
-        );
-
-        manager.unregister_key_handler(scope.as_focus_node().id());
-        manager.root_scope().detach_node(scope.as_focus_node().id());
-    }
-
-    #[test]
-    fn test_dispatch_key_event_no_focus() {
-        use std::sync::atomic::{AtomicBool, Ordering};
-
-        use crate::{events::keyboard::Code, testing::input::KeyEventBuilder};
-
-        let manager = FocusManager::new_for_test();
-        let node = FocusNodeId::new(1);
-
-        let handled = Arc::new(AtomicBool::new(false));
-        let handled_clone = handled.clone();
-
-        manager.register_key_handler(
-            node,
-            Rc::new(move |_event| {
-                handled_clone.store(true, Ordering::Relaxed);
-                true
-            }),
-        );
-
-        // Don't focus the node
-        let event = KeyEventBuilder::new(Code::KeyA).build();
-
-        // Dispatch - should NOT be handled (no focus)
-        let result = manager.dispatch_key_event(&event);
-        assert!(!result);
-        assert!(!handled.load(Ordering::Relaxed));
-    }
-
-    #[test]
-    fn test_global_key_handler() {
-        use std::sync::atomic::{AtomicBool, Ordering};
-
-        use crate::{events::keyboard::Code, testing::input::KeyEventBuilder};
-
-        let manager = FocusManager::new_for_test();
-
-        let global_handled = Arc::new(AtomicBool::new(false));
-        let global_clone = global_handled.clone();
-
-        manager.add_global_key_handler(Rc::new(move |_event| {
-            global_clone.store(true, Ordering::Relaxed);
-            true
+            sibling_for_listener.request_focus();
         }));
 
-        let event = KeyEventBuilder::new(Code::Escape).build();
+        old_attachment.replace_node(&replacement).unwrap();
 
-        // Global handler should be called even without focus
-        let result = manager.dispatch_key_event(&event);
-        assert!(result);
-        assert!(global_handled.load(Ordering::Relaxed));
-    }
-
-    #[test]
-    fn test_global_handler_priority() {
-        use std::sync::atomic::{AtomicBool, Ordering};
-
-        use crate::{events::keyboard::Code, testing::input::KeyEventBuilder};
-
-        let manager = FocusManager::new_for_test();
-        let node = FocusNodeId::new(1);
-
-        let global_called = Arc::new(AtomicBool::new(false));
-        let global_clone = global_called.clone();
-        let node_called = Arc::new(AtomicBool::new(false));
-        let node_clone = node_called.clone();
-
-        // Global handler that handles the event
-        manager.add_global_key_handler(Rc::new(move |_event| {
-            global_clone.store(true, Ordering::Relaxed);
-            true // Handled - stop propagation
-        }));
-
-        // Node handler
-        manager.register_key_handler(
-            node,
-            Rc::new(move |_event| {
-                node_clone.store(true, Ordering::Relaxed);
-                true
-            }),
-        );
-
-        manager.request_focus(node);
-
-        let event = KeyEventBuilder::new(Code::Enter).build();
-        manager.dispatch_key_event(&event);
-
-        // Global should be called first and handle
-        assert!(global_called.load(Ordering::Relaxed));
-        // Node handler should NOT be called (global handled it)
-        assert!(!node_called.load(Ordering::Relaxed));
-    }
-
-    #[test]
-    fn test_global_handler_passthrough() {
-        use std::sync::atomic::{AtomicBool, Ordering};
-
-        use crate::{events::keyboard::Code, testing::input::KeyEventBuilder};
-
-        let manager = FocusManager::new_for_test();
-        let node = FocusNodeId::new(1);
-
-        let global_called = Arc::new(AtomicBool::new(false));
-        let global_clone = global_called.clone();
-        let node_called = Arc::new(AtomicBool::new(false));
-        let node_clone = node_called.clone();
-
-        // Global handler that does NOT handle the event
-        manager.add_global_key_handler(Rc::new(move |_event| {
-            global_clone.store(true, Ordering::Relaxed);
-            false // Not handled - continue to focused node
-        }));
-
-        // Node handler
-        manager.register_key_handler(
-            node,
-            Rc::new(move |_event| {
-                node_clone.store(true, Ordering::Relaxed);
-                true
-            }),
-        );
-
-        manager.request_focus(node);
-
-        let event = KeyEventBuilder::new(Code::KeyX).build();
-        manager.dispatch_key_event(&event);
-
-        // Both should be called
-        assert!(global_called.load(Ordering::Relaxed));
-        assert!(node_called.load(Ordering::Relaxed));
-    }
-
-    #[test]
-    fn test_clear_global_key_handlers() {
-        use std::sync::atomic::{AtomicBool, Ordering};
-
-        use crate::{events::keyboard::Code, testing::input::KeyEventBuilder};
-
-        let manager = FocusManager::new_for_test();
-
-        let called = Arc::new(AtomicBool::new(false));
-        let called_clone = called.clone();
-
-        manager.add_global_key_handler(Rc::new(move |_event| {
-            called_clone.store(true, Ordering::Relaxed);
-            true
-        }));
-
-        manager.clear_global_key_handlers();
-
-        let event = KeyEventBuilder::new(Code::Tab).build();
-        manager.dispatch_key_event(&event);
-
-        // Handler should not be called (was cleared)
-        assert!(!called.load(Ordering::Relaxed));
-    }
-
-    /// ADR-0026 — the sorted list is the primitive, and the cursor is
-    /// **force-included** even when it is not itself traversable
-    /// (`focus_traversal.dart:487-489`), so a step *from* a `skip_traversal`
-    /// node still knows where it stands. Before the inversion that cursor fell
-    /// out of the candidate set entirely and the step died silently.
-    ///
-    /// Red-check (verified): drop the force-include in
-    /// `sorted_traversal_order` — the cursor is absent from the order,
-    /// `resolve_traversal` reports `None`, and `focus_next` returns `false`.
-    #[test]
-    fn a_skip_traversal_cursor_still_steps_to_the_node_after_it() {
-        use crate::routing::focus_scope::ResolvedStep;
-
-        let manager = FocusManager::new_for_test();
-        let root = manager.root_scope().clone();
-        let at = |x: f32| {
-            flui_types::geometry::Rect::from_xywh(
-                flui_types::geometry::Pixels(x),
-                flui_types::geometry::Pixels(0.0),
-                flui_types::geometry::Pixels(10.0),
-                flui_types::geometry::Pixels(10.0),
-            )
-        };
-
-        // Focusable by request, skipped by Tab — what `Focus::skip_traversal`
-        // builds.
-        let cursor = FocusNode::with_debug_label("skipped-cursor");
-        cursor.set_skip_traversal(true);
-        cursor.set_rect(at(0.0));
-        let after = FocusNode::with_debug_label("after");
-        after.set_rect(at(20.0));
-        root.attach_node(&cursor);
-        root.attach_node(&after);
-
+        assert!(sibling.has_primary_focus());
         assert_eq!(
-            root.resolve_traversal(Some(cursor.id()), true),
-            ResolvedStep::Focus(after.id()),
-            "the cursor is force-included as a position, not as a target"
-        );
-
-        manager.request_focus(cursor.id());
-        assert!(manager.focus_next());
-        assert_eq!(manager.focused(), Some(after.id()));
-
-        // The skipped cursor is never a landing spot: `after` is the only
-        // traversable node, so the ClosedLoop wrap returns to it.
-        assert!(manager.focus_next());
-        assert_eq!(
-            manager.focused(),
-            Some(after.id()),
-            "the wrap skips the non-traversable cursor"
+            edges.borrow().as_slice(),
+            &[(Some(child.id()), Some(sibling.id()))]
         );
     }
 
-    /// A cursor **outside** the active scope resolves to `None` without
-    /// consulting the edge behavior — the three-state result (`Focus` /
-    /// `Unfocus` / `None`) the ADR-0026 review demanded, where one `None`
-    /// used to conflate "true edge" with "cursor not in candidates".
     #[test]
-    fn a_foreign_cursor_resolves_to_none_not_to_the_edge() {
-        use crate::routing::focus_scope::ResolvedStep;
+    fn replacing_a_scope_preserves_children_and_rebuilds_focus_history() {
+        let manager = FocusManager::new();
+        let old_scope = FocusScopeNode::with_debug_label("old-scope");
+        let old_attachment = manager
+            .root_scope()
+            .attach_node(old_scope.as_focus_node())
+            .unwrap();
+        let child = FocusNode::with_debug_label("child");
+        let child_attachment = old_scope.attach_node(&child).unwrap();
+        child.request_focus();
+        let replacement_scope = FocusScopeNode::with_debug_label("replacement-scope");
 
-        let manager = FocusManager::new_for_test();
-        let root = manager.root_scope().clone();
-        let scope = FocusScopeNode::with_debug_label("dialog");
-        root.attach_node(scope.as_focus_node());
-        let inside = FocusNode::with_debug_label("inside");
-        scope.attach_node(&inside);
-        let foreign = FocusNode::with_debug_label("foreign");
-        root.attach_node(&foreign);
+        let replacement_attachment = old_attachment
+            .replace_node(replacement_scope.as_focus_node())
+            .unwrap();
 
+        assert!(replacement_attachment.is_attached());
+        assert!(child_attachment.is_attached());
         assert_eq!(
-            scope.resolve_traversal(Some(foreign.id()), true),
-            ResolvedStep::None,
-            "a cursor the scope does not own decides nothing here — it must \
-             not wrap onto the scope's first node"
+            child.parent().map(|parent| parent.id()),
+            Some(replacement_scope.id())
         );
-    }
-
-    /// `TraversalEdgeBehavior` (`focus_traversal.dart:113-156`), un-hardcoding
-    /// the wraparound the policy used to bake in: `ClosedLoop` wraps (the
-    /// default), `Stop` stays put, `LeaveFlutterView` releases the focus and
-    /// reports the traversal unconsumed.
-    ///
-    /// Red-check: ignore `traversal_edge_behavior()` in `resolve_traversal` —
-    /// `Stop` wraps and its assertions fail.
-    #[test]
-    fn edge_behavior_decides_what_happens_at_the_end_of_the_order() {
-        use crate::routing::focus_scope::TraversalEdgeBehavior;
-
-        let manager = FocusManager::new_for_test();
-        let root = manager.root_scope().clone();
-        let at = |x: f32| {
-            flui_types::geometry::Rect::from_xywh(
-                flui_types::geometry::Pixels(x),
-                flui_types::geometry::Pixels(0.0),
-                flui_types::geometry::Pixels(10.0),
-                flui_types::geometry::Pixels(10.0),
-            )
-        };
-        let first = FocusNode::with_debug_label("first");
-        first.set_rect(at(0.0));
-        let last = FocusNode::with_debug_label("last");
-        last.set_rect(at(20.0));
-        root.attach_node(&first);
-        root.attach_node(&last);
-
-        assert_eq!(
-            root.traversal_edge_behavior(),
-            TraversalEdgeBehavior::ClosedLoop
-        );
-        manager.request_focus(last.id());
-        assert!(manager.focus_next());
-        assert_eq!(manager.focused(), Some(first.id()), "ClosedLoop wraps");
-
-        root.set_traversal_edge_behavior(TraversalEdgeBehavior::Stop);
-        manager.request_focus(last.id());
-        assert!(!manager.focus_next(), "Stop reports no move");
-        assert_eq!(manager.focused(), Some(last.id()), "and focus stays");
-
-        root.set_traversal_edge_behavior(TraversalEdgeBehavior::LeaveFlutterView);
-        assert!(!manager.focus_next(), "LeaveFlutterView reports unconsumed");
-        assert_eq!(manager.focused(), None, "and releases the focus");
-    }
-
-    /// The first Tab in a fresh app must move focus: with nothing focused,
-    /// traversal falls back to policy-ordered first (Flutter's `findFirstFocus`
-    /// fallback, `focus_traversal.dart:594-608`) — in **policy** order, not
-    /// attach order, which is also the `set_first_focus` divergence  fixes.
-    ///
-    /// Red-check (verified): restore the `let Some(current) = … else { return
-    /// false }` guard in `FocusManager::traverse` — the first Tab no-ops.
-    #[test]
-    fn the_first_tab_focuses_the_policy_first_node() {
-        let manager = FocusManager::new_for_test();
-        let root = manager.root_scope().clone();
-        let at = |x: f32| {
-            flui_types::geometry::Rect::from_xywh(
-                flui_types::geometry::Pixels(x),
-                flui_types::geometry::Pixels(0.0),
-                flui_types::geometry::Pixels(10.0),
-                flui_types::geometry::Pixels(10.0),
-            )
-        };
-
-        // Attached second, but leftmost — reading order must win.
-        let rightmost = FocusNode::with_debug_label("rightmost");
-        rightmost.set_rect(at(20.0));
-        let leftmost = FocusNode::with_debug_label("leftmost");
-        leftmost.set_rect(at(0.0));
-        root.attach_node(&rightmost);
-        root.attach_node(&leftmost);
-
-        assert_eq!(manager.focused(), None, "nothing focused yet");
-        assert!(manager.focus_next(), "the first Tab moves focus");
-        assert_eq!(
-            manager.focused(),
-            Some(leftmost.id()),
-            "onto the policy-first node, not the first attached"
-        );
-
-        manager.unfocus();
-        assert!(
-            manager.focus_previous(),
-            "Shift+Tab from nothing focuses last"
-        );
-        assert_eq!(manager.focused(), Some(rightmost.id()));
-    }
-
-    /// `TraversalEdgeBehavior::ParentScope` means **leave this scope and
-    /// continue in the enclosing one** (`focus_traversal.dart:141-149`) — it
-    /// shipped doing the opposite (wrapping inside the scope), which the branch
-    /// review caught.
-    ///
-    /// The enclosing scope's candidate set already contains the inner scope's
-    /// nodes (the walk crosses scope boundaries), so re-resolving there from
-    /// the same cursor steps to the first node *outside* the inner scope. No
-    /// landing on the scope's own invisible backing node.
-    ///
-    /// Red-check: answer the `ParentScope` edge with a wrap — Tab returns to
-    /// the inner scope's first node instead of leaving, and the outside
-    /// assertion fails.
-    #[test]
-    fn parent_scope_leaves_the_scope_instead_of_wrapping_inside_it() {
-        use crate::routing::focus_scope::TraversalEdgeBehavior;
-
-        let manager = FocusManager::new_for_test();
-        let root = manager.root_scope().clone();
-        let at = |x: f32| {
-            flui_types::geometry::Rect::from_xywh(
-                flui_types::geometry::Pixels(x),
-                flui_types::geometry::Pixels(0.0),
-                flui_types::geometry::Pixels(10.0),
-                flui_types::geometry::Pixels(10.0),
-            )
-        };
-
-        // An inner scope holding two fields, and one field outside it, to the
-        // right — so "leaving" and "wrapping" land on different nodes.
-        let inner = FocusScopeNode::with_debug_label("inner");
-        root.attach_node(inner.as_focus_node());
-        let first = FocusNode::with_debug_label("inner-first");
-        first.set_rect(at(0.0));
-        let last = FocusNode::with_debug_label("inner-last");
-        last.set_rect(at(10.0));
-        inner.attach_node(&first);
-        inner.attach_node(&last);
-        let outside = FocusNode::with_debug_label("outside");
-        outside.set_rect(at(20.0));
-        root.attach_node(&outside);
-
-        // Traversal runs in the inner scope, and it asks to leave at its edge.
-        inner.set_traversal_edge_behavior(TraversalEdgeBehavior::ParentScope);
-        manager.set_active_scope(Some(Arc::clone(&inner)));
-        manager.request_focus(last.id());
-
-        assert!(manager.focus_next(), "the step resolved");
-        assert_eq!(
-            manager.focused(),
-            Some(outside.id()),
-            "ParentScope leaves the scope and continues in the enclosing one; \
-             wrapping would have gone back to `inner-first`"
-        );
-
-        // And the default still wraps, so the two behaviors are distinguishable.
-        inner.set_traversal_edge_behavior(TraversalEdgeBehavior::ClosedLoop);
-        manager.request_focus(last.id());
-        assert!(manager.focus_next());
-        assert_eq!(
-            manager.focused(),
-            Some(first.id()),
-            "ClosedLoop stays inside and wraps to the scope's first node"
-        );
-    }
-
-    /// Tab must never land on a scope's backing node: it is focusable and
-    /// un-skipped by construction, carries no geometry, and therefore sorts at
-    /// the origin — i.e. it is exactly where the *first* Tab would go. Flutter
-    /// never gives a scope the primary focus.
-    ///
-    /// Red-check: drop the `!node.is_scope()` clause from `is_traversable` —
-    /// the first Tab focuses the scope node, a keyboard black hole.
-    #[test]
-    fn traversal_never_lands_on_a_scope_node() {
-        let manager = FocusManager::new_for_test();
-        let root = manager.root_scope().clone();
-        let inner = FocusScopeNode::with_debug_label("inner");
-        root.attach_node(inner.as_focus_node());
-        let field = FocusNode::with_debug_label("field");
-        field.set_rect(flui_types::geometry::Rect::from_xywh(
-            flui_types::geometry::Pixels(50.0),
-            flui_types::geometry::Pixels(50.0),
-            flui_types::geometry::Pixels(10.0),
-            flui_types::geometry::Pixels(10.0),
+        assert!(child.has_primary_focus());
+        assert!(Rc::ptr_eq(
+            replacement_scope.focused_child().as_ref().unwrap(),
+            &child
         ));
-        inner.attach_node(&field);
+        assert!(old_scope.focused_child().is_none());
+        assert!(Rc::ptr_eq(
+            manager.root_scope().focused_child().as_ref().unwrap(),
+            replacement_scope.as_focus_node()
+        ));
+    }
 
-        assert!(manager.focus_next(), "the first Tab moves focus");
+    #[test]
+    fn replacement_preconditions_fail_without_mutating_either_tree() {
+        let manager = FocusManager::new();
+        let old = FocusNode::with_debug_label("old");
+        let old_attachment = manager.root_scope().attach_node(&old).unwrap();
+
+        let attached = FocusNode::with_debug_label("attached");
+        manager.root_scope().attach_node(&attached).unwrap();
+        assert!(matches!(
+            old_attachment.replace_node(&attached),
+            Err(FocusTreeError::ReplacementAttached { replacement })
+                if replacement == attached.id()
+        ));
+
+        let nonempty = FocusNode::with_debug_label("nonempty");
+        let offline_child = FocusNode::with_debug_label("offline-child");
+        nonempty.attach_node(&offline_child).unwrap();
+        assert!(matches!(
+            old_attachment.replace_node(&nonempty),
+            Err(FocusTreeError::ReplacementNotEmpty { replacement })
+                if replacement == nonempty.id()
+        ));
+
+        let scope = FocusScopeNode::with_debug_label("scope");
+        assert!(matches!(
+            old_attachment.replace_node(scope.as_focus_node()),
+            Err(FocusTreeError::ReplacementKindMismatch {
+                current,
+                replacement,
+            }) if current == old.id() && replacement == scope.id()
+        ));
+
+        assert!(old_attachment.is_attached());
         assert_eq!(
-            manager.focused(),
-            Some(field.id()),
-            "onto the field — not onto the (zero-rect, first-sorting) scope node"
+            old.parent().map(|parent| parent.id()),
+            Some(manager.root_scope().id())
+        );
+        assert!(attached.is_attached());
+        assert_eq!(
+            nonempty.children().first().map(|node| node.id()),
+            Some(offline_child.id())
+        );
+        assert!(!scope.as_focus_node().is_attached());
+
+        let current_attachment = manager.root_scope().adopt_node(&old).unwrap();
+        let untouched = FocusNode::with_debug_label("untouched");
+        assert!(matches!(
+            old_attachment.replace_node(&untouched),
+            Err(FocusTreeError::StaleAttachment { node }) if node == old.id()
+        ));
+        assert!(current_attachment.is_attached());
+        assert!(!untouched.is_attached());
+    }
+
+    #[test]
+    fn replacement_honors_queued_node_and_scope_focus_intents() {
+        let manager = FocusManager::new();
+        let first_old = FocusNode::with_debug_label("first-old");
+        let first_attachment = manager.root_scope().attach_node(&first_old).unwrap();
+        let queued_node = FocusNode::with_debug_label("queued-node");
+        assert_eq!(queued_node.request_focus(), FocusRequestOutcome::Queued);
+
+        first_attachment.replace_node(&queued_node).unwrap();
+        assert!(queued_node.has_primary_focus());
+
+        let old_scope = FocusScopeNode::with_debug_label("old-scope");
+        let old_scope_attachment = manager
+            .root_scope()
+            .attach_node(old_scope.as_focus_node())
+            .unwrap();
+        let pending_scope = FocusScopeNode::with_debug_label("pending-scope");
+        assert!(pending_scope.set_first_focus());
+
+        old_scope_attachment
+            .replace_node(pending_scope.as_focus_node())
+            .unwrap();
+        assert!(pending_scope.as_focus_node().has_primary_focus());
+
+        let first_descendant = FocusNode::with_debug_label("first-descendant");
+        pending_scope.attach_node(&first_descendant).unwrap();
+        assert!(
+            first_descendant.has_primary_focus(),
+            "the replacement scope keeps its pending first-focus intent"
         );
     }
 
-    /// A node attached to a second parent must leave the first: otherwise it
-    /// sits in two child lists, `descendants()` yields it twice — so it appears
-    /// twice in the traversal order — and the abandoned parent's later detach
-    /// unfocuses a node it no longer owns.
-    ///
-    /// Red-check: stop lifting the node out of its old parent in `attach_child`
-    /// — the node is a child of both scopes and Tab visits it twice.
     #[test]
-    fn attaching_to_a_new_parent_leaves_the_old_one() {
-        let manager = FocusManager::new_for_test();
-        let root = manager.root_scope().clone();
-        let first = FocusScopeNode::with_debug_label("first-parent");
-        let second = FocusScopeNode::with_debug_label("second-parent");
-        root.attach_node(first.as_focus_node());
-        root.attach_node(second.as_focus_node());
+    fn binding_an_offline_subtree_keeps_unchanged_child_attachment_live() {
+        let manager = FocusManager::new();
+        let parent = FocusNode::new();
+        let child = FocusNode::new();
+        let child_attachment = parent.attach_node(&child).unwrap();
 
-        let node = FocusNode::with_debug_label("moved");
-        first.attach_node(&node);
-        second.attach_node(&node);
+        assert!(!child_attachment.is_attached());
+        assert_eq!(child.request_focus(), FocusRequestOutcome::Queued);
+        manager.root_scope().attach_node(&parent).unwrap();
+
+        assert!(child_attachment.is_attached());
+        assert!(child.has_primary_focus());
+        assert_eq!(child_attachment.detach(), FocusDetachOutcome::Detached);
+    }
+
+    #[test]
+    fn focus_history_records_the_child_for_every_ancestor_scope() {
+        let manager = FocusManager::new();
+        let inner = FocusScopeNode::new();
+        manager
+            .root_scope()
+            .attach_node(inner.as_focus_node())
+            .unwrap();
+        let leaf = FocusNode::new();
+        inner.attach_node(&leaf).unwrap();
+
+        leaf.request_focus();
+
+        assert!(Rc::ptr_eq(inner.focused_child().as_ref().unwrap(), &leaf));
+        assert!(Rc::ptr_eq(
+            manager.root_scope().focused_child().as_ref().unwrap(),
+            inner.as_focus_node()
+        ));
+    }
+
+    #[test]
+    fn common_focus_ancestors_are_not_notified_for_a_sibling_move() {
+        let manager = FocusManager::new();
+        let parent = FocusNode::new();
+        let first = FocusNode::new();
+        let second = FocusNode::new();
+        manager.root_scope().attach_node(&parent).unwrap();
+        parent.attach_node(&first).unwrap();
+        parent.attach_node(&second).unwrap();
+        first.request_focus();
+
+        let notifications = Rc::new(Cell::new(0));
+        let notifications_for_listener = Rc::clone(&notifications);
+        parent.add_listener(Rc::new(move || {
+            notifications_for_listener.set(notifications_for_listener.get() + 1);
+        }));
+
+        second.request_focus();
+        assert_eq!(notifications.get(), 0);
+    }
+
+    #[test]
+    fn key_dispatch_walks_leaf_to_root_and_honors_skip() {
+        let manager = FocusManager::new();
+        let parent = FocusNode::new();
+        let child = FocusNode::new();
+        manager.root_scope().attach_node(&parent).unwrap();
+        parent.attach_node(&child).unwrap();
+
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        let leaf_calls = Rc::clone(&calls);
+        child.set_on_key_event(Rc::new(move |_| {
+            leaf_calls.borrow_mut().push("leaf");
+            KeyEventResult::Ignored
+        }));
+        let parent_calls = Rc::clone(&calls);
+        parent.set_on_key_event(Rc::new(move |_| {
+            parent_calls.borrow_mut().push("parent");
+            KeyEventResult::Handled
+        }));
+        child.request_focus();
+
+        assert!(manager.dispatch_key_event(&key_event()));
+        assert_eq!(calls.borrow().as_slice(), &["leaf", "parent"]);
+
+        child.set_on_key_event(Rc::new(|_| KeyEventResult::SkipRemainingHandlers));
+        calls.borrow_mut().clear();
+        assert!(!manager.dispatch_key_event(&key_event()));
+        assert!(calls.borrow().is_empty());
+    }
+
+    #[test]
+    fn key_and_geometry_callbacks_may_replace_themselves() {
+        let manager = FocusManager::new();
+        let node = FocusNode::new();
+        manager.root_scope().attach_node(&node).unwrap();
+
+        let weak_node = Rc::downgrade(&node);
+        node.set_on_key_event(Rc::new(move |_| {
+            weak_node.upgrade().unwrap().clear_on_key_event();
+            KeyEventResult::Ignored
+        }));
+        let weak_node = Rc::downgrade(&node);
+        node.set_rect_provider(Rc::new(move || {
+            weak_node.upgrade().unwrap().clear_rect_provider();
+            Some(Rect::from_xywh(
+                Pixels(1.0),
+                Pixels(2.0),
+                Pixels(3.0),
+                Pixels(4.0),
+            ))
+        }));
+        node.request_focus();
+
+        assert!(!manager.dispatch_key_event(&key_event()));
+        assert_eq!(
+            node.rect(),
+            Rect::from_xywh(Pixels(1.0), Pixels(2.0), Pixels(3.0), Pixels(4.0))
+        );
+    }
+
+    #[test]
+    fn property_registrations_clear_only_the_generation_they_installed() {
+        let node = FocusNode::new();
+        node.set_rect(Rect::from_xywh(
+            Pixels(0.0),
+            Pixels(0.0),
+            Pixels(1.0),
+            Pixels(1.0),
+        ));
+
+        let key_registration = node.register_on_key_event(Rc::new(|_| KeyEventResult::Handled));
+        let rect_registration = node.register_rect_provider(Rc::new(|| {
+            Some(Rect::from_xywh(
+                Pixels(1.0),
+                Pixels(2.0),
+                Pixels(3.0),
+                Pixels(4.0),
+            ))
+        }));
+        assert!(key_registration.is_current());
+        assert!(rect_registration.is_current());
+
+        node.set_on_key_event(Rc::new(|_| KeyEventResult::SkipRemainingHandlers));
+        node.set_rect_provider(Rc::new(|| {
+            Some(Rect::from_xywh(
+                Pixels(5.0),
+                Pixels(6.0),
+                Pixels(7.0),
+                Pixels(8.0),
+            ))
+        }));
+        assert!(!key_registration.is_current());
+        assert!(!rect_registration.is_current());
+
+        drop(key_registration);
+        drop(rect_registration);
+        assert_eq!(
+            node.handle_key_event(&key_event()),
+            KeyEventResult::SkipRemainingHandlers,
+            "a stale key registration cannot erase a later writer"
+        );
+        assert_eq!(
+            node.rect(),
+            Rect::from_xywh(Pixels(5.0), Pixels(6.0), Pixels(7.0), Pixels(8.0)),
+            "a stale geometry registration cannot erase a later writer"
+        );
+    }
+
+    #[test]
+    fn current_property_registrations_clean_up_or_can_relinquish_ownership() {
+        let node = FocusNode::new();
+        node.set_rect(Rect::from_xywh(
+            Pixels(0.0),
+            Pixels(0.0),
+            Pixels(1.0),
+            Pixels(1.0),
+        ));
+
+        let key_registration = node.register_on_key_event(Rc::new(|_| KeyEventResult::Handled));
+        let rect_registration = node.register_rect_provider(Rc::new(|| {
+            Some(Rect::from_xywh(
+                Pixels(1.0),
+                Pixels(2.0),
+                Pixels(3.0),
+                Pixels(4.0),
+            ))
+        }));
+        drop(rect_registration);
+        assert_eq!(
+            node.rect(),
+            Rect::from_xywh(Pixels(0.0), Pixels(0.0), Pixels(1.0), Pixels(1.0)),
+            "dropping a current registration removes its provider"
+        );
+
+        key_registration.relinquish();
+        assert_eq!(
+            node.handle_key_event(&key_event()),
+            KeyEventResult::Handled,
+            "relinquishing transfers the installed handler to the node owner"
+        );
+
+        let replacement = node.register_on_key_event(Rc::new(|_| KeyEventResult::Handled));
+        drop(replacement);
+        assert_eq!(
+            node.handle_key_event(&key_event()),
+            KeyEventResult::Ignored,
+            "dropping a current registration removes its handler"
+        );
+    }
+
+    #[test]
+    fn global_key_handlers_precede_the_focus_tree() {
+        let (manager, nodes) = manager_with_nodes(1);
+        let node_called = Rc::new(Cell::new(false));
+        let node_called_by_handler = Rc::clone(&node_called);
+        nodes[0].set_on_key_event(Rc::new(move |_| {
+            node_called_by_handler.set(true);
+            KeyEventResult::Handled
+        }));
+        nodes[0].request_focus();
+        manager.add_global_key_handler(Rc::new(|_| true));
+
+        assert!(manager.dispatch_key_event(&key_event()));
+        assert!(!node_called.get());
+    }
+
+    #[test]
+    fn traversal_uses_policy_order_and_edge_behavior() {
+        let (manager, nodes) = manager_with_nodes(2);
+        assert!(manager.focus_next());
+        assert!(Rc::ptr_eq(
+            manager.primary_focus().as_ref().unwrap(),
+            &nodes[0]
+        ));
+        assert!(manager.focus_next());
+        assert!(Rc::ptr_eq(
+            manager.primary_focus().as_ref().unwrap(),
+            &nodes[1]
+        ));
+
+        manager
+            .root_scope()
+            .set_traversal_edge_behavior(TraversalEdgeBehavior::Stop);
+        assert!(!manager.focus_next());
+        assert!(Rc::ptr_eq(
+            manager.primary_focus().as_ref().unwrap(),
+            &nodes[1]
+        ));
+    }
+
+    #[test]
+    fn traversal_derives_the_scope_from_primary_focus() {
+        let manager = FocusManager::new();
+        let inner = FocusScopeNode::with_debug_label("inner");
+        manager
+            .root_scope()
+            .attach_node(inner.as_focus_node())
+            .unwrap();
+        inner.set_traversal_edge_behavior(TraversalEdgeBehavior::Stop);
+
+        let inside = FocusNode::with_debug_label("inside");
+        inside.set_rect(Rect::from_xywh(
+            Pixels(0.0),
+            Pixels(0.0),
+            Pixels(10.0),
+            Pixels(10.0),
+        ));
+        inner.attach_node(&inside).unwrap();
+
+        let outside = FocusNode::with_debug_label("outside");
+        outside.set_rect(Rect::from_xywh(
+            Pixels(20.0),
+            Pixels(0.0),
+            Pixels(10.0),
+            Pixels(10.0),
+        ));
+        manager.root_scope().attach_node(&outside).unwrap();
+
+        inside.request_focus();
 
         assert!(
-            first.as_focus_node().children().is_empty(),
-            "the old parent no longer lists the node"
+            !manager.focus_next(),
+            "a Stop edge on the focused node's enclosing scope must win"
         );
-        assert_eq!(second.as_focus_node().children().len(), 1);
-        assert_eq!(
-            node.parent().map(|parent| parent.id()),
-            Some(second.as_focus_node().id())
-        );
-
-        // And the node appears exactly once in the traversal order.
-        let order = root.sorted_traversal_order(None);
-        assert_eq!(
-            order.iter().filter(|held| held.id() == node.id()).count(),
-            1,
-            "a double-parented node would be visited twice"
-        );
+        assert!(inside.has_primary_focus());
+        assert!(!outside.has_primary_focus());
     }
 
-    /// Adopting a node into its own subtree would make it its own ancestor: the
-    /// parent pointers form a cycle, and the very next `enclosing_scope()` walk
-    /// spins forever. Refused, not hung.
-    ///
-    /// Red-check: drop the ancestor guard in `adopt_node` — this test hangs.
     #[test]
-    fn adopting_a_node_into_its_own_subtree_is_refused() {
-        let manager = FocusManager::new_for_test();
-        let root = manager.root_scope().clone();
-        let outer = FocusScopeNode::with_debug_label("outer");
-        root.attach_node(outer.as_focus_node());
+    fn parent_scope_edge_retries_from_the_primary_nodes_scope() {
+        let manager = FocusManager::new();
         let inner = FocusScopeNode::with_debug_label("inner");
-        outer.attach_node(inner.as_focus_node());
+        manager
+            .root_scope()
+            .attach_node(inner.as_focus_node())
+            .unwrap();
+        inner.set_traversal_edge_behavior(TraversalEdgeBehavior::ParentScope);
 
-        // Try to move the outer scope *under its own descendant*.
-        inner.adopt_node(outer.as_focus_node());
+        let inside = FocusNode::with_debug_label("inside");
+        inside.set_rect(Rect::from_xywh(
+            Pixels(0.0),
+            Pixels(0.0),
+            Pixels(10.0),
+            Pixels(10.0),
+        ));
+        inner.attach_node(&inside).unwrap();
 
-        assert_eq!(
-            outer.as_focus_node().parent().map(|parent| parent.id()),
-            Some(root.as_focus_node().id()),
-            "the cyclic move is refused and the tree is unchanged"
-        );
-        // The walks that a cycle would hang still terminate.
-        assert!(inner.as_focus_node().enclosing_scope().is_some());
-        let _ = root.sorted_traversal_order(None);
+        let outside = FocusNode::with_debug_label("outside");
+        outside.set_rect(Rect::from_xywh(
+            Pixels(20.0),
+            Pixels(0.0),
+            Pixels(10.0),
+            Pixels(10.0),
+        ));
+        manager.root_scope().attach_node(&outside).unwrap();
+
+        inside.request_focus();
+
+        assert!(manager.focus_next());
+        assert!(outside.has_primary_focus());
     }
 
-    /// A non-finite rect (a degenerate render transform reaches the focus tree
-    /// now) must leave the traversal order complete and deterministic.
-    ///
-    /// **No red-check is claimed.** The comparator was
-    /// `partial_cmp(..).unwrap_or(Equal)`, which is *not* a total order when a
-    /// NaN is present — `sort_by` is entitled to panic on that ("user-provided
-    /// comparison function does not correctly implement a total order"), but on
-    /// this input it does not, and I could not construct one that does. The fix
-    /// (`total_cmp`) is therefore a correctness fix without a failing test: the
-    /// old code was unsound by contract, not observably broken here. This test
-    /// pins the property that matters — no panic, every candidate present
-    /// exactly once — and would catch a regression that dropped candidates.
     #[test]
-    fn a_non_finite_rect_does_not_panic_the_sort() {
-        let manager = FocusManager::new_for_test();
-        let root = manager.root_scope().clone();
-        let at = |x: f32| {
-            flui_types::geometry::Rect::from_xywh(
-                flui_types::geometry::Pixels(x),
-                flui_types::geometry::Pixels(x),
-                flui_types::geometry::Pixels(10.0),
-                flui_types::geometry::Pixels(10.0),
-            )
-        };
-        // Enough candidates to reach the sort's merge path, which is where a
-        // non-total comparator is detected and panics; a handful of elements
-        // would take the insertion path and hide the defect.
-        const NODES: usize = 40;
-        for index in 0..NODES {
-            let node = FocusNode::new();
-            #[expect(clippy::cast_precision_loss, reason = "test coordinates, exact in f32")]
-            node.set_rect(at((index % 7) as f32 * 10.0));
-            root.attach_node(&node);
-        }
-        // Several poisoned rects, interleaved: one NaN is enough to make
-        // `partial_cmp(..).unwrap_or(Equal)` intransitive.
-        for _ in 0..5 {
-            let poisoned = FocusNode::with_debug_label("nan");
-            poisoned.set_rect(at(f32::NAN));
-            root.attach_node(&poisoned);
-        }
+    fn empty_scope_first_focus_waits_for_the_first_eligible_descendant_once() {
+        let manager = FocusManager::new();
+        let scope = FocusScopeNode::with_debug_label("route");
 
-        // Must not panic, and must still produce every candidate exactly once.
-        let order = root.sorted_traversal_order(None);
-        assert_eq!(order.len(), NODES + 5);
+        assert!(
+            scope.set_first_focus(),
+            "the detached scope accepts the first-focus intent"
+        );
+        manager
+            .root_scope()
+            .attach_node(scope.as_focus_node())
+            .unwrap();
+        assert!(
+            scope.as_focus_node().has_primary_focus(),
+            "the scope parks focus until an eligible descendant exists"
+        );
+
+        let first = FocusNode::with_debug_label("first");
+        first.set_can_request_focus(false);
+        scope.attach_node(&first).unwrap();
+        assert!(scope.as_focus_node().has_primary_focus());
+
+        first.set_can_request_focus(true);
+        assert!(
+            first.has_primary_focus(),
+            "becoming eligible fulfills the pending first-focus intent"
+        );
+
+        let second = FocusNode::with_debug_label("second");
+        scope.attach_node(&second).unwrap();
+        assert!(
+            first.has_primary_focus(),
+            "the fulfilled intent is one-shot"
+        );
+    }
+
+    #[test]
+    fn set_first_focus_restores_the_scopes_remembered_descendant() {
+        let manager = FocusManager::new();
+        let scope = FocusScopeNode::with_debug_label("route");
+        let scope_attachment = manager
+            .root_scope()
+            .attach_node(scope.as_focus_node())
+            .unwrap();
+        let first = FocusNode::with_debug_label("first");
+        let second = FocusNode::with_debug_label("second");
+        scope.attach_node(&first).unwrap();
+        scope.attach_node(&second).unwrap();
+
+        second.request_focus();
+        manager.unfocus();
+
+        assert!(scope.set_first_focus());
+        assert!(
+            second.has_primary_focus(),
+            "route reactivation restores focus history before policy order"
+        );
+
+        assert_eq!(scope_attachment.detach(), FocusDetachOutcome::Detached);
+        assert!(
+            scope.set_first_focus(),
+            "a detached scope queues its remembered descendant"
+        );
+        manager
+            .root_scope()
+            .attach_node(scope.as_focus_node())
+            .unwrap();
+        assert!(
+            second.has_primary_focus(),
+            "reattachment fulfills the remembered descendant request"
+        );
+    }
+
+    #[test]
+    fn close_is_idempotent_and_tombstones_owned_nodes() {
+        let (manager, nodes) = manager_with_nodes(1);
+        nodes[0].request_focus();
+        let attachment = manager.root_scope().adopt_node(&nodes[0]).unwrap();
+
+        manager.close();
+        manager.close();
+
+        assert!(manager.is_closed());
+        assert!(manager.primary_focus().is_none());
+        assert!(!nodes[0].is_attached());
+        assert_eq!(nodes[0].request_focus(), FocusRequestOutcome::OwnerClosed);
+        assert_eq!(attachment.detach(), FocusDetachOutcome::OwnerClosed);
+
+        let other = FocusManager::new();
+        assert!(matches!(
+            other.root_scope().attach_node(&nodes[0]),
+            Err(FocusTreeError::OwnerClosed { .. })
+        ));
+    }
+
+    #[test]
+    fn focus_loss_callback_cannot_detach_a_node_out_of_closing_owner() {
+        let manager = FocusManager::new();
+        let node = FocusNode::new();
+        let attachment = Rc::new(manager.root_scope().attach_node(&node).unwrap());
+        node.request_focus();
+        let callback_outcome = Rc::new(Cell::new(None));
+        let callback_outcome_for_listener = Rc::clone(&callback_outcome);
+        let attachment_for_listener = Rc::clone(&attachment);
+        node.add_listener(Rc::new(move || {
+            callback_outcome_for_listener.set(Some(attachment_for_listener.detach()));
+        }));
+
+        manager.close();
+
+        assert_eq!(
+            callback_outcome.get(),
+            Some(FocusDetachOutcome::OwnerClosed)
+        );
+        assert_eq!(node.request_focus(), FocusRequestOutcome::OwnerClosed);
     }
 }

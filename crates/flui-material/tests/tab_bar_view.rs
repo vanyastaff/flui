@@ -22,6 +22,7 @@ use flui_material::{
     DefaultTabController, Tab, TabBar, TabBarView, TabController, Theme, ThemeData,
 };
 use flui_scheduler::Scheduler;
+use flui_view::ErrorView;
 use flui_view::prelude::*;
 use flui_widgets::{
     Column, CrossAxisAlignment, Expanded, MediaQuery, MediaQueryData, SizedBox, VsyncScope,
@@ -302,39 +303,42 @@ fn unmounting_a_tab_bar_view_removes_its_listener_from_the_controller() {
 /// `_updateTabController`'s `FlutterError`) instead of silently rendering
 /// with no active tab — same documented panic-boundary mechanism as
 /// `crates/flui-material/tests/tabs.rs`'s
-/// `a_tab_bar_with_no_controller_and_no_default_tab_controller_ancestor_panics`
+/// `a_tab_bar_with_no_controller_and_no_default_tab_controller_ancestor_builds_an_error`
 /// and `flui-cupertino/tests/tab_scaffold.rs`'s
-/// `out_of_range_controller_index_panics_instead_of_silently_hiding_every_tab`.
+/// `out_of_range_controller_index_builds_an_error_instead_of_silently_hiding_every_tab`.
 #[test]
-#[should_panic(expected = "render root")]
-fn a_tab_bar_view_with_no_controller_and_no_default_tab_controller_ancestor_panics() {
-    let _ = lay_out(
+fn a_tab_bar_view_with_no_controller_and_no_default_tab_controller_ancestor_builds_an_error() {
+    let mut laid = lay_out(
         MediaQuery::new(
             MediaQueryData::default(),
             TabBarView::new(vec![SizedBox::new(10.0, 10.0).into_view().boxed()]),
         ),
         tight(400.0, 400.0),
     );
+
+    assert_eq!(
+        laid.count_elements_by_view_type::<ErrorView>(),
+        1,
+        "a TabBarView with no controller source must recover as exactly one ErrorView"
+    );
 }
 
 /// The `children.len() != controller.length()` mismatch `debug_assert!` is
 /// live in this crate's own (debug-profile) test build — a length mismatch
-/// panics inside `build`, caught by the framework's build-error boundary,
-/// which leaves nothing to render (same mechanism the previous test's doc
-/// comment cites).
+/// panics inside `build` and the framework's build-error boundary substitutes
+/// an `ErrorView` (same mechanism the previous test's doc comment cites).
 ///
 /// Red-check: delete the `debug_assert!` in `tab_bar_view.rs`'s `build` —
-/// this test stops panicking; the view instead mounts with tab index 2
+/// this test stops producing an `ErrorView`; the view instead mounts with tab index 2
 /// (out of range for the 2-child `Vec`) simply never matching any child, so
 /// every child renders `Offstage`-hidden — the documented release
 /// fall-through this test's sibling assertion (module docs) describes,
 /// silently reached in a build where the assert should have fired instead.
 #[cfg(debug_assertions)]
 #[test]
-#[should_panic(expected = "render root")]
-fn a_children_count_mismatched_with_the_controllers_length_panics() {
+fn a_children_count_mismatched_with_the_controllers_length_builds_an_error() {
     let controller = TabController::new(3, 2);
-    let _ = lay_out(
+    let mut laid = lay_out(
         MediaQuery::new(
             MediaQueryData::default(),
             TabBarView::new(vec![
@@ -344,6 +348,12 @@ fn a_children_count_mismatched_with_the_controllers_length_panics() {
             .controller(controller),
         ),
         tight(400.0, 400.0),
+    );
+
+    assert_eq!(
+        laid.count_elements_by_view_type::<ErrorView>(),
+        1,
+        "a TabBarView/controller length mismatch must recover as exactly one ErrorView"
     );
 }
 

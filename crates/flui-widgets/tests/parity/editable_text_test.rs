@@ -122,17 +122,13 @@
 //!   established geometry-relative text-family precedent (cosmic-text has no
 //!   Ahem).
 
-use flui_interaction::routing::FocusManager;
+use std::rc::Rc;
+
+use flui_interaction::routing::FocusNode;
 use flui_objects::RenderEditable;
 use flui_widgets::{EditableText, TextEditingController};
-use parking_lot::Mutex;
 
 use crate::common::{LaidOut, lay_out, loose};
-
-/// Conservatively serializes this file's focus fixtures on top of
-/// `FocusManager::global()`'s owner-thread singleton — the same convention
-/// `focus_test.rs` and `src/test_harness.rs`'s `FOCUS_TEST_LOCK` use.
-static FOCUS_TEST_LOCK: Mutex<()> = Mutex::new(());
 
 /// Runs `f` against the mounted field's single `RenderEditable`, found by
 /// downcasting the one render object `EditableText` mounts — the external-
@@ -158,16 +154,15 @@ fn with_render_editable<T>(laid: &LaidOut, f: impl FnOnce(&RenderEditable) -> T)
 /// `TextStyle.decoration` to source real underline metrics from).
 #[test]
 fn composing_underline_geometry_appears_while_composing_and_disappears_after_unfocus() {
-    let _guard = FOCUS_TEST_LOCK.lock();
-    FocusManager::global().unfocus();
-
     let controller = TextEditingController::new();
-    let mut laid = lay_out(EditableText::new(controller.clone()), loose(200.0));
-    let node_id = controller
-        .focus_node_id()
-        .expect("an enabled field publishes its node");
+    let focus_node = FocusNode::with_debug_label("parity EditableText");
+    let mut laid = lay_out(
+        EditableText::new(controller.clone(), Rc::clone(&focus_node)),
+        loose(200.0),
+    );
+    let focus_manager = laid.focus_manager();
 
-    FocusManager::global().request_focus(node_id);
+    focus_node.request_focus();
     laid.tick();
 
     assert!(
@@ -192,7 +187,7 @@ fn composing_underline_geometry_appears_while_composing_and_disappears_after_unf
          geometry — the oracle's underlined middle TextSpan"
     );
 
-    FocusManager::global().unfocus();
+    focus_manager.unfocus();
     laid.tick();
 
     assert!(
@@ -208,5 +203,5 @@ fn composing_underline_geometry_appears_while_composing_and_disappears_after_unf
          the oracle's 'underline is cleared when losing focus'"
     );
 
-    FocusManager::global().unfocus();
+    focus_manager.unfocus();
 }

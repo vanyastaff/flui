@@ -280,7 +280,7 @@ impl<T: PartialEq + Clone + 'static> ViewState<Radio<T>> for RadioState {
         // else needs to re-read it later, so it is not stored on `self`.
         let rebuild = ctx.rebuild_handle();
         self.states_listener = Some(self.states.add_listener(std::sync::Arc::new(move || {
-            rebuild.schedule();
+            rebuild.schedule(flui_view::RebuildReason::StateChange);
         })));
     }
 

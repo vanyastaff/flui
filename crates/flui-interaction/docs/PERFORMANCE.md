@@ -26,7 +26,7 @@ tracker.add_position(Instant::now(), position);
 
 // Get velocity (px/s)
 let velocity = tracker.get_velocity();
-println!("Speed: {} px/s", velocity.magnitude());
+tracing::trace!(speed = velocity.magnitude(), "pointer velocity");
 ```
 
 The tracker uses least-squares polynomial regression (Flutter's algorithm),
@@ -70,8 +70,9 @@ resampler.sample(now, next_frame, |resampled| {
 - `MAX_BUFFERED_EVENTS`: 100 events
 - `MIN_SAMPLE_INTERVAL`: 1ms
 
-**Thread Safety:**
-Uses `Arc<Mutex<_>>` internally for safe concurrent access.
+The resampler owns a bounded queue behind `Arc<Mutex<_>>`. Sampling computes
+an owned event batch under the lock and invokes dispatch only after releasing
+it, so owner-local callbacks may safely re-enter input processing.
 
 ### InputPredictor
 
@@ -122,24 +123,23 @@ if predicted.is_confident() {
 
 ## Gesture Arena Performance
 
-### Lock-Free Concurrent Access
+### Owner-Local Keyed Storage
 
-Uses `DashMap` for concurrent arena entries:
+The arena is deliberately `!Send + !Sync`: recognizers and callbacks belong to
+one UI owner. `DashMap` currently supplies keyed entry guards, but is not a
+lock-free or cross-thread API guarantee.
 
 ```rust
-// Multiple threads can add/resolve simultaneously
 let arena = GestureArena::new();
-let arena_clone = arena.clone();
-
-thread::spawn(move || {
-    arena_clone.add(pointer, recognizer);
-});
+let entry = arena.add(pointer, recognizer);
+arena.close(pointer);
+entry.resolve(GestureDisposition::Accepted);
 ```
 
 **Performance Characteristics:**
 - Add member: O(1) amortized
 - Resolve: O(n) where n = members per pointer (typically 2-4)
-- Sweep: O(1)
+- Sweep: O(n), because every member receives its terminal disposition
 
 ### SmallVec Optimization
 
@@ -151,33 +151,40 @@ Arena entries use `SmallVec<[_; 4]>` to avoid heap allocation:
 members: SmallVec<[Arc<dyn GestureArenaMember>; 4]>,
 ```
 
-### Timeout-Based Disambiguation
+### Deferred Default Resolution
 
 ```rust
-// Per-frame check for stuck arenas
-arena.resolve_timed_out_arenas(DEFAULT_DISAMBIGUATION_TIMEOUT);
-
-// Default timeout: 100ms
-pub const DEFAULT_DISAMBIGUATION_TIMEOUT: Duration = Duration::from_millis(100);
+// Closing a lone arena queues a typed, generation-checked default win.
+arena.close(pointer);
+arena.drain_deferred_resolutions(); // event/frame owner boundary
 ```
+
+There is no wall-clock force-resolution fallback. Pointer terminal handling,
+explicit recognizer deadlines, and stale-safe owner-boundary drains own arena
+progress without allowing elapsed time to choose a gesture winner.
 
 ## Memory Characteristics
 
 ### Per-Recognizer Overhead
 
-| Type | Stack | Heap (typical) |
-|------|-------|----------------|
-| `TapGestureRecognizer` | 96 bytes | ~256 bytes (callbacks) |
-| `DragGestureRecognizer` | 160 bytes | ~512 bytes (VelocityTracker + callbacks) |
-| `ScaleGestureRecognizer` | 256 bytes | ~1KB (HashMap + callbacks) |
-| `LongPressGestureRecognizer` | 128 bytes | ~256 bytes |
+Do not treat source-level byte estimates as a contract: enum layout, pointer
+width, enabled features, and compiler version all change them. Measure the
+target build with the supplied Criterion benches. The stable design facts are:
+
+- velocity history and resampler queues are bounded;
+- common arena membership stays inline for up to four members;
+- scale and multi-pointer recognizers grow with active contacts;
+- user callbacks allocate once when configured, not once per event.
 
 ### Callback Storage
 
-Callbacks stored as `Arc<dyn Fn + Send + Sync>`:
+Executable gesture callbacks are owner-local `Rc<dyn Fn...>` values:
 - Single allocation per callback
-- Shared reference across clones
+- Cheap owner-thread clones
 - Freed on dispose or clear
+
+Data-plane capabilities that cross runtime boundaries remain typed,
+non-executable, and `Send + Sync`.
 
 ### Arena Entry Size
 
@@ -190,10 +197,8 @@ struct ArenaEntryData {
     is_resolved: bool,       // 1 byte
     eager_winner: Option<_>, // 16 bytes
     has_pending_sweep: bool, // 1 byte
-    winners: SmallVec<[_; 2]>, // 32 bytes inline
-    created_at: Instant,     // 16 bytes
 }
-// Total: ~140 bytes per pointer (most inline)
+// Most entries remain inline; the exact layout is target-dependent.
 ```
 
 ## Hit Testing Performance
@@ -226,35 +231,32 @@ pub enum HitTestBehavior {
 
 **Opaque** provides early exit for performance-critical paths.
 
-## Thread Safety Model
+## Ownership Model
 
-All public types are `Send + Sync`:
+FLUI separates immutable input data from executable UI behavior:
 
-| Type | Thread Safety |
-|------|---------------|
-| `GestureArena` | `DashMap` (lock-free) |
-| `*GestureRecognizer` | `parking_lot::Mutex` |
-| `VelocityTracker` | Not `Sync` (mutable) |
-| `PointerEventResampler` | `Arc<Mutex<_>>` |
-| `InputPredictor` | Not `Sync` (mutable) |
+| Category | Ownership |
+|----------|-----------|
+| IDs, `HitTestResult`, `HitTestEntry` | Data plane; `Send + Sync` |
+| `PointerEventResampler` | Shareable bounded data helper |
+| `GestureBinding`, arena, recognizers | UI-owner local; `!Send + !Sync` |
+| Pointer/focus/gesture callbacks | UI-owner local; may capture `Rc` |
+| `VelocityTracker`, `InputPredictor` | Mutable value owned by their caller |
 
 ### Recommended Patterns
 
-**Single-threaded (main thread only):**
+**UI-owner path:**
 ```rust
-// Direct usage, no synchronization needed
+// Mutate value types directly on the owning lane.
 let mut tracker = VelocityTracker::new();
 tracker.add_position(now, pos);
 ```
 
-**Multi-threaded (shared recognizers):**
+**Gesture identity:**
 ```rust
-// Arena handles internal synchronization
 let arena = GestureArena::new();
-
-// Recognizers are Arc'd and cloneable
+// Arc provides stable identity inside the owner; it does not grant Send/Sync.
 let recognizer = TapGestureRecognizer::new(arena.clone());
-let recognizer_clone = recognizer.clone();
 ```
 
 ## Benchmarking Recommendations
@@ -309,7 +311,7 @@ fn bench_hit_test_deep_tree(b: &mut Bencher) {
 - [ ] Avoid creating recognizers per-frame
 
 ### Arena Management
-- [ ] Call `resolve_timed_out_arenas` per frame
+- [ ] Drain deferred defaults at event and frame owner boundaries
 - [ ] Use `sweep` on pointer up
 - [ ] Pre-allocate arena with expected capacity
 

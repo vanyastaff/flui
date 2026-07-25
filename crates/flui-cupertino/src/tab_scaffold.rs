@@ -292,11 +292,9 @@ impl ViewState<CupertinoTabScaffold> for CupertinoTabScaffoldState {
         // unwinding to the caller — mirroring Flutter's own
         // `ComponentElement.performRebuild` try/catch → `ErrorWidget.builder`
         // recovery for a `build()`-phase exception. So this crash is loud
-        // (a rendered error, or — when this scaffold is mounted as the sole
-        // render root, as in a headless test — a panic from having nothing
-        // left to render) rather than silent, but it is not a raw unwind out
-        // of `build`; see `tests/tab_scaffold.rs`'s
-        // `out_of_range_controller_index_panics_instead_of_silently_hiding_every_tab`.
+        // (a rendered error) rather than silent, but it is not a raw unwind
+        // out of `build`; see `tests/tab_scaffold.rs`'s
+        // `out_of_range_controller_index_builds_an_error_instead_of_silently_hiding_every_tab`.
         debug_assert!(
             is_valid_tab_index(current_index, tab_count),
             "CupertinoTabScaffold's current index {current_index} is out of bounds for \

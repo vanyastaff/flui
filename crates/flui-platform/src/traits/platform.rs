@@ -13,7 +13,7 @@ use anyhow::Result;
 use flui_types::geometry::{Bounds, DevicePixels, Pixels, Point, Size};
 
 use super::{PlatformCapabilities, PlatformDisplay, PlatformWindow, window::WindowAppearance};
-use crate::{cursor::CursorStyle, task::Task};
+use crate::task::Task;
 
 /// Window creation options
 #[derive(Debug, Clone)]
@@ -176,11 +176,6 @@ pub trait Platform: Send + Sync + 'static {
     /// Background tasks run on a thread pool and can block.
     fn background_executor(&self) -> Arc<dyn PlatformExecutor>;
 
-    /// Get the platform's foreground executor for UI tasks
-    ///
-    /// Foreground tasks run on the main thread and must not block.
-    fn foreground_executor(&self) -> Arc<dyn PlatformExecutor>;
-
     // ==================== Lifecycle ====================
 
     /// Run the platform event loop
@@ -208,9 +203,10 @@ pub trait Platform: Send + Sync + 'static {
 
     /// Create and open a new window
     ///
-    /// Returns a boxed PlatformWindow implementation. The window is owned by
-    /// the platform and will be destroyed when dropped.
-    fn open_window(&self, options: WindowOptions) -> Result<Box<dyn PlatformWindow>>;
+    /// Returns the canonical shared window identity. The platform event loop,
+    /// presentation owner, and raster surface clone this same allocation; no
+    /// boxed forwarding handle or duplicate window wrapper is created.
+    fn open_window(&self, options: WindowOptions) -> Result<Arc<dyn PlatformWindow>>;
 
     /// Get the currently active (focused) window ID
     fn active_window(&self) -> Option<WindowId>;
@@ -264,13 +260,6 @@ pub trait Platform: Send + Sync + 'static {
     /// Whether scrollbars should auto-hide
     fn should_auto_hide_scrollbars(&self) -> bool {
         false
-    }
-
-    // ==================== Cursor (US3) ====================
-
-    /// Set the platform cursor style
-    fn set_cursor_style(&self, style: CursorStyle) {
-        let _ = style;
     }
 
     // ==================== Clipboard (US3 Enhanced) ====================

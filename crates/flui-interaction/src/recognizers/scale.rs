@@ -145,8 +145,6 @@ enum ScalePhase {
     Possible,
     /// Scale gesture started
     Started,
-    /// Cancelled
-    Cancelled,
 }
 
 #[derive(Debug, Clone)]
@@ -365,7 +363,7 @@ impl ScaleGestureRecognizer {
                     }
                 }
             }
-            _ => {}
+            ScalePhase::Ready => {}
         }
     }
 
@@ -456,24 +454,14 @@ impl ScaleGestureRecognizer {
         let mut state = self.gesture_state.lock();
 
         if state.phase == ScalePhase::Started || state.phase == ScalePhase::Possible {
-            state.phase = ScalePhase::Cancelled;
-            state.pointers.clear();
-            state.initial_span = None;
-            state.initial_horizontal_span = None;
-            state.initial_vertical_span = None;
-            state.initial_rotation = None;
-            state.previous_span = None;
-            state.current_rotation = 0.0;
-            state.scale_velocity_tracker.reset();
-            state.last_update_time = None;
+            let callback = self.callbacks.borrow().on_cancel.clone();
+            *state = ScaleState::default();
             drop(state);
 
-            // Call on_cancel callback
-            if let Some(callback) = self.callbacks.borrow().on_cancel.clone() {
+            self.state.reject();
+            if let Some(callback) = callback {
                 callback();
             }
-
-            self.state.reject();
         }
     }
 
@@ -572,14 +560,13 @@ impl ScaleGestureRecognizer {
 }
 
 impl GestureRecognizer for ScaleGestureRecognizer {
-    fn add_pointer(&self, pointer: PointerId, position: Offset<Pixels>) {
+    fn add_pointer(self: &Arc<Self>, pointer: PointerId, position: Offset<Pixels>) {
         if !self.state.assert_not_disposed("add_pointer") {
             return;
         }
         // For the first pointer, track with arena
         if self.gesture_state.lock().pointers.is_empty() {
-            let recognizer = Arc::new(self.clone());
-            self.state.start_tracking(pointer, position, &recognizer);
+            self.state.start_tracking(pointer, position, self);
         }
 
         self.handle_pointer_down(pointer, position);
@@ -687,6 +674,29 @@ mod tests {
         let recognizer = ScaleGestureRecognizer::new(arena);
 
         assert_eq!(recognizer.primary_pointer(), None);
+    }
+
+    #[test]
+    fn panicking_cancel_callback_cannot_strand_scale_tracking() {
+        let arena = GestureArena::new();
+        let recognizer = ScaleGestureRecognizer::new(arena.clone())
+            .with_on_scale_cancel(|| panic!("scale cancel panic"));
+        recognizer.add_pointer(PointerId::PRIMARY, Offset::new(Pixels(1.0), Pixels(2.0)));
+        recognizer.add_pointer(
+            PointerId::new(2).expect("nonzero pointer id"),
+            Offset::new(Pixels(3.0), Pixels(4.0)),
+        );
+        arena.close(PointerId::PRIMARY);
+
+        let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            recognizer.handle_event(&crate::events::make_cancel_event(
+                crate::events::PointerType::Touch,
+            ));
+        }));
+
+        assert!(unwind.is_err());
+        assert_eq!(recognizer.primary_pointer(), None);
+        assert!(arena.is_empty());
     }
 
     #[test]

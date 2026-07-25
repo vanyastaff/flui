@@ -29,10 +29,12 @@ pub(crate) mod mouse_tracker;
 mod pointer_router;
 
 pub use event_router::EventRouter;
-pub use focus::{FocusManager, KeyEventCallback};
+pub use focus::{FocusChangeCallback, FocusManager, KeyEventCallback};
 pub use focus_scope::{
-    FocusNode, FocusNodeId, FocusScopeNode, FocusTraversalPolicy, KeyEventHandler, KeyEventResult,
-    ReadingOrderPolicy, RectProvider, ResolvedStep, TraversalEdgeBehavior,
+    FocusAttachment, FocusDetachOutcome, FocusNode, FocusNodeChangeCallback, FocusNodeId,
+    FocusNodeRegistration, FocusRequestOutcome, FocusScopeNode, FocusTraversalPolicy,
+    FocusTreeError, KeyEventHandler, KeyEventResult, ReadingOrderPolicy, RectProvider,
+    ResolvedStep, TraversalEdgeBehavior,
 };
 pub use hit_test::{
     EventPropagation, HitTestBehavior, HitTestEntry, HitTestResult, HitTestable, RenderId,
@@ -45,5 +47,7 @@ pub use interaction_lane::{
     PointerTarget, ResolvedRouteToken, RoutePanic, RouteResolution, RouteResolutionMiss,
     ScrollTarget, ShaderMaskTarget, resolve_path_clip_target, resolve_shader_mask_target,
 };
-pub use mouse_tracker::{CursorChangeCallback, DeviceId, MouseTracker, MouseTrackerAnnotation};
+pub use mouse_tracker::{
+    CursorChangeCallback, DeviceId, MouseTracker, MouseTrackerAnnotation, PointerMotionKind,
+};
 pub use pointer_router::{GlobalPointerHandler, PointerRouteHandler, PointerRouter};

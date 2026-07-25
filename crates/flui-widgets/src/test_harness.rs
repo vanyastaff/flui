@@ -6,45 +6,48 @@
 //! load-bearing ordering (**binding first, so the async driver is installed before
 //! the mount `build_scope`**) and drops the geometry helpers.
 
+use std::any::TypeId;
+use std::cell::Cell;
+use std::rc::Rc;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use flui_binding::HeadlessBinding;
 use flui_foundation::ElementId;
+use flui_interaction::PointerId;
+use flui_interaction::events::{
+    PointerType, make_down_event_for_id, make_move_event_for_id, make_up_event_for_id,
+};
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::pipeline::PipelineOwner;
-use flui_types::Size;
 use flui_types::geometry::{Bounds, Pixels, px};
+use flui_types::{Offset, Size};
 use flui_view::View;
 use parking_lot::RwLock;
 
 /// A mounted, laid-out widget tree.
 pub(crate) struct Harness {
     binding: HeadlessBinding,
+    /// Focus owner of the exact `BuildOwner` backing this mounted tree.
+    focus_manager: Rc<flui_interaction::FocusManager>,
+    /// Mounted presentation wrapper, retained as the root-swap target.
     root_element: ElementId,
+    /// Concrete type of the caller's logical root below presentation
+    /// infrastructure. Element-structure probes resolve this node lazily.
+    logical_root_type: TypeId,
     pipeline_owner: Arc<RwLock<PipelineOwner>>,
     /// Every `TextInputHandle::set_cursor_area` call recorded by the
     /// installed IME capability, in delivery order. `None` when the harness
     /// was mounted with [`TextInputCapability::Absent`] — there is nothing
     /// to record.
     cursor_area_calls: Option<Arc<parking_lot::Mutex<Vec<Bounds<Pixels>>>>>,
-    /// Held for the harness's whole lifetime as conservative focus-fixture
-    /// serialization across test owners. Each owner thread resolves independent
-    /// TLS focus state; the guard prevents overlapping fixtures rather than
-    /// cross-owner state clobbering. Reentrant, so explicit locking composes.
-    _focus_guard: parking_lot::ReentrantMutexGuard<'static, ()>,
+    /// Every platform IME enable/disable transition recorded by the harness.
+    ime_allowed_calls: Option<Arc<parking_lot::Mutex<Vec<bool>>>>,
+    /// Owner-local state backing the installed IME capability.
+    text_input_owner: Option<Rc<flui_interaction::TextInputOwner>>,
+    next_pointer: Cell<u64>,
+    current_pointer: Cell<u64>,
 }
-
-/// Conservatively serializes mounted focus fixtures across test owners.
-///
-/// **Reentrant**: [`mount`] takes it for the returned [`Harness`]'s lifetime — so a
-/// test never has to remember to — and a focus test that *also* locks it explicitly
-/// (for pre-mount manager setup) nests on the same thread without deadlock. nextest
-/// isolates test *binaries*, not threads inside one. Each owner thread has
-/// independent TLS focus state; the guard is fixture isolation rather than
-/// protection against cross-owner state clobbering.
-pub(crate) static FOCUS_TEST_LOCK: parking_lot::ReentrantMutex<()> =
-    parking_lot::ReentrantMutex::new(());
 
 /// Mount `root` as the render-tree root and drive one frame.
 pub(crate) fn mount(root: impl View) -> Harness {
@@ -57,7 +60,7 @@ pub(crate) fn mount(root: impl View) -> Harness {
 
 /// [`mount`], but with a working `BuildContext::text_input_handle()` — the
 /// only capability [`mount`] withholds by default. The installed handle
-/// wraps `flui_interaction::TextInputRegistry::global()` directly (no
+/// wraps a harness-owned `flui_interaction::TextInputOwner` directly (no
 /// `flui-app`/`PlatformWindow` involved, so `set_ime_allowed` toggling is
 /// out of reach here — that half is covered at the `flui-app` layer); it
 /// exists so `EditableText`'s own attach/detach/dispatch wiring is testable
@@ -101,12 +104,10 @@ pub(crate) fn mount_with_capabilities(
     post_frame: PostFrameCapability,
     text_input: TextInputCapability,
 ) -> Harness {
-    // Conservatively serialize mounted focus fixtures before touching the tree;
-    // held until the Harness drops. Each owner has independent TLS focus state,
-    // so this is fixture isolation, not cross-owner clobber protection.
-    let focus_guard = FOCUS_TEST_LOCK.lock();
+    let logical_root_type = root.view_type_id();
     let pipeline_owner = Arc::new(RwLock::new(PipelineOwner::new()));
     let mut build_owner = flui_view::BuildOwner::new();
+    let focus_manager = build_owner.focus_manager();
     let mut tree = flui_view::ElementTree::new();
 
     let mut binding = HeadlessBinding::new();
@@ -118,35 +119,39 @@ pub(crate) fn mount_with_capabilities(
             build_owner.set_async_driver(binding.scheduler().async_driver().clone());
         }
     }
-    let cursor_area_calls = if text_input == TextInputCapability::Installed {
-        // Attach/detach are zero-capture closures: automatically `Send +
-        // Sync` regardless of `TextInputRegistry`'s own `Rc`-based,
-        // non-`Send` internals — the same reasoning `flui-app`'s production
-        // `AppBinding::instance()` closures rely on (see `TextInputHandle`'s
-        // doc). `set_cursor_area` has no platform window to forward to in
-        // this harness (no `flui-app`/`PlatformWindow` involved — see this
-        // module's doc), so it records into an `Arc<Mutex<_>>` a test can
-        // read back through `Harness::cursor_area_calls` instead.
-        let recorded: Arc<parking_lot::Mutex<Vec<Bounds<Pixels>>>> =
-            Arc::new(parking_lot::Mutex::new(Vec::new()));
-        let recorded_for_closure = Arc::clone(&recorded);
-        build_owner.set_text_input_handle(flui_interaction::TextInputHandle::new(
-            |callback| {
-                Some(
-                    flui_interaction::TextInputRegistry::global()
-                        .attach(flui_interaction::OpaqueWindowHandle::new(()), callback),
-                )
-            },
-            |token| {
-                flui_interaction::TextInputRegistry::global().detach(token);
-            },
-            move |area| recorded_for_closure.lock().push(area),
-        ));
-        Some(recorded)
-    } else {
-        None
-    };
+    let (cursor_area_calls, ime_allowed_calls, text_input_owner) =
+        if text_input == TextInputCapability::Installed {
+            struct HarnessTextInput {
+                cursor_areas: Arc<parking_lot::Mutex<Vec<Bounds<Pixels>>>>,
+                ime_allowed: Arc<parking_lot::Mutex<Vec<bool>>>,
+            }
 
+            impl flui_platform::traits::PlatformTextInput for HarnessTextInput {
+                fn set_ime_allowed(&self, allowed: bool) {
+                    self.ime_allowed.lock().push(allowed);
+                }
+
+                fn set_ime_cursor_area(&self, area: Bounds<Pixels>) {
+                    self.cursor_areas.lock().push(area);
+                }
+            }
+
+            let recorded: Arc<parking_lot::Mutex<Vec<Bounds<Pixels>>>> =
+                Arc::new(parking_lot::Mutex::new(Vec::new()));
+            let ime_allowed = Arc::new(parking_lot::Mutex::new(Vec::new()));
+            let platform: Arc<dyn flui_platform::traits::PlatformTextInput> = // PORT-CHECK-OK-DYN: headless harness supplies the same direct OS-capability boundary as a presentation.
+            Arc::new(HarnessTextInput {
+                cursor_areas: Arc::clone(&recorded),
+                ime_allowed: Arc::clone(&ime_allowed),
+            });
+            let owner = flui_interaction::TextInputOwner::new(Some(platform));
+            build_owner.set_text_input_handle(owner.handle());
+            (Some(recorded), Some(ime_allowed), Some(owner))
+        } else {
+            (None, None, None)
+        };
+
+    let root = crate::GestureArenaScope::new(binding.arena().clone(), crate::FocusRoot::new(root));
     let root_element = binding.enter_owner_scope(|| {
         let root_element = tree.mount_root_with_pipeline_owner(
             &root,
@@ -154,7 +159,7 @@ pub(crate) fn mount_with_capabilities(
             &mut build_owner.element_owner_mut(),
         );
 
-        build_owner.schedule_build_for(root_element, 0);
+        build_owner.schedule_build_for(root_element, 0, flui_view::RebuildReason::InitialMount);
         build_owner.build_scope(&mut tree);
         root_element
     });
@@ -183,17 +188,93 @@ pub(crate) fn mount_with_capabilities(
 
     Harness {
         binding,
+        focus_manager,
         root_element,
+        logical_root_type,
         pipeline_owner,
         cursor_area_calls,
-        _focus_guard: focus_guard,
+        ime_allowed_calls,
+        text_input_owner,
+        next_pointer: Cell::new(1),
+        current_pointer: Cell::new(0),
     }
 }
 
 impl Harness {
+    /// Focus manager that owns this harness's mounted tree.
+    pub(crate) fn focus_manager(&self) -> Rc<flui_interaction::FocusManager> {
+        Rc::clone(&self.focus_manager)
+    }
+
     /// Run an owner-side test action under the binding's full local scope.
     pub(crate) fn enter_owner_scope<R>(&self, callback: impl FnOnce() -> R) -> R {
         self.binding.enter_owner_scope(callback)
+    }
+
+    fn advance_gesture_clock() {
+        let t0 = Instant::now();
+        while Instant::now() == t0 {
+            std::hint::spin_loop();
+        }
+    }
+
+    fn begin_contact(&self) -> PointerId {
+        let id = self.next_pointer.get();
+        self.next_pointer.set(
+            id.checked_add(1)
+                .expect("BUG: headless pointer id space exhausted"),
+        );
+        self.current_pointer.set(id);
+        PointerId::new(id).expect("BUG: headless pointer ids start at one")
+    }
+
+    fn current_contact(&self) -> PointerId {
+        PointerId::new(self.current_pointer.get())
+            .expect("BUG: pointer Down must precede Move, Up, or Cancel")
+    }
+
+    fn hit_test_pointer(
+        &self,
+        position: Offset<Pixels>,
+    ) -> flui_rendering::hit_testing::HitTestResult {
+        use flui_rendering::hit_testing::HitTestResult;
+
+        let mut result = HitTestResult::new();
+        let owner = self.pipeline_owner.read();
+        owner.hit_test(position, &mut result);
+        result
+    }
+
+    pub(crate) fn dispatch_pointer_down(&self, x: f32, y: f32) {
+        Self::advance_gesture_clock();
+        let event = make_down_event_for_id(
+            self.begin_contact(),
+            Offset::new(px(x), px(y)),
+            PointerType::Mouse,
+        );
+        self.binding
+            .dispatch_pointer(&event, |position| self.hit_test_pointer(position));
+    }
+
+    pub(crate) fn dispatch_pointer_move(&self, x: f32, y: f32) {
+        Self::advance_gesture_clock();
+        let event = make_move_event_for_id(
+            self.current_contact(),
+            Offset::new(px(x), px(y)),
+            PointerType::Mouse,
+        );
+        self.binding
+            .dispatch_pointer(&event, |position| self.hit_test_pointer(position));
+    }
+
+    pub(crate) fn dispatch_pointer_up(&self, x: f32, y: f32) {
+        let event = make_up_event_for_id(
+            self.current_contact(),
+            Offset::new(px(x), px(y)),
+            PointerType::Mouse,
+        );
+        self.binding
+            .dispatch_pointer(&event, |position| self.hit_test_pointer(position));
     }
 
     /// Every `TextInputHandle::set_cursor_area` call recorded so far, in
@@ -216,9 +297,41 @@ impl Harness {
             .lock()
             .clone()
     }
+
+    /// Platform IME enable/disable calls in delivery order.
+    pub(crate) fn ime_allowed_calls(&self) -> Vec<bool> {
+        self.ime_allowed_calls
+            .as_ref()
+            .expect("ime_allowed_calls requires mount_with_ime")
+            .lock()
+            .clone()
+    }
+
+    /// Deliver an IME event to this harness's active text client.
+    pub(crate) fn dispatch_ime(&self, event: &flui_types::ImeEvent) {
+        self.text_input_owner
+            .as_ref()
+            .expect("dispatch_ime requires mount_with_ime")
+            .dispatch(event);
+    }
+
+    /// Number of active clients in this harness's presentation-local registry.
+    pub(crate) fn active_ime_clients(&self) -> usize {
+        self.text_input_owner
+            .as_ref()
+            .expect("active_ime_clients requires mount_with_ime")
+            .active_count()
+    }
     /// The root element id.
-    pub(crate) fn root(&self) -> ElementId {
-        self.root_element
+    pub(crate) fn root(&mut self) -> ElementId {
+        let logical_root_type = self.logical_root_type;
+        self.binding
+            .tree_mut()
+            .iter_nodes()
+            .filter(|(_, node)| node.element().view_type_id() == logical_root_type)
+            .min_by_key(|(_, node)| node.element().depth())
+            .map(|(id, _)| id)
+            .expect("the caller's logical root must remain mounted below presentation scopes")
     }
 
     /// Drive a frame **without** dirtying the root, so only what an
@@ -235,7 +348,11 @@ impl Harness {
     /// the root's *type* must not change between frames. Toggling a field on one
     /// root type is how a subtree gets unmounted.
     pub(crate) fn swap_root(&mut self, new_root: impl View) {
-        self.binding.swap_root_view(self.root_element, &new_root);
+        let root = crate::GestureArenaScope::new(
+            self.binding.arena().clone(),
+            crate::FocusRoot::new(new_root),
+        );
+        self.binding.swap_root_view(self.root_element, &root);
         self.binding.pump_frame(Duration::ZERO);
     }
 

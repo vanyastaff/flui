@@ -255,7 +255,7 @@ impl ViewState<ButtonStyleButtonCore> for ButtonStyleButtonCoreState {
 
         let rebuild_for_listener = rebuild.clone();
         self.states_listener = Some(self.states.add_listener(Arc::new(move || {
-            rebuild_for_listener.schedule();
+            rebuild_for_listener.schedule(flui_view::RebuildReason::StateChange);
         })));
 
         self.rebuild = Some(rebuild);

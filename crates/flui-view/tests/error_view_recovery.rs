@@ -150,7 +150,7 @@ fn mount_and_build(view: &dyn View) -> (ElementTree, BuildOwner, flui_view::Elem
     let mut tree = ElementTree::new();
     let mut owner = BuildOwner::new();
     let root_id = tree.mount_root(view, &mut owner.element_owner_mut());
-    owner.schedule_build_for(root_id, 0);
+    owner.schedule_build_for(root_id, 0, flui_view::RebuildReason::InitialMount);
     owner.build_scope(&mut tree);
     (tree, owner, root_id)
 }
@@ -359,7 +359,7 @@ fn repeated_build_after_panic_stays_stable() {
         .unwrap()
         .element_mut()
         .mark_needs_build();
-    owner.schedule_build_for(root_id, 0);
+    owner.schedule_build_for(root_id, 0, flui_view::RebuildReason::InitialMount);
     owner.build_scope(&mut tree);
 
     assert_eq!(

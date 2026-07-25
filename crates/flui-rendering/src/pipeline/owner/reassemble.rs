@@ -29,14 +29,13 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             if let Some(node) = self.render_tree.get_mut(id) {
                 node.reassemble();
             }
-            // Enqueue *and* set per-node dirty flags — `run_layout` skips queue
+            // Enqueue and set the layout flag — `run_layout` skips queue
             // entries whose `needs_layout()` is already false (layout.rs).
             if let Some(node) = self.render_tree.get(id) {
                 node.mark_layout_flag();
-                node.mark_paint_flag();
             }
             self.add_node_needing_layout(id, depth);
-            self.add_node_needing_paint(id, depth);
+            self.mark_needs_paint(id);
         }
 
         tracing::info!(

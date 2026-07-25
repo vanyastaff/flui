@@ -1,39 +1,16 @@
 //! Platform executor implementations
 //!
-//! Provides async executors for background and foreground task execution.
-//! Background executor uses Tokio runtime, foreground executor uses flume
-//! channels. Both return [`Task<T>`] handles for awaiting results.
+//! Provides the background executor used for thread-safe asynchronous work.
+//! It returns [`Task<T>`] handles for awaiting results.
 
 use std::{future::Future, sync::Arc, time::Duration};
 
-use parking_lot::Mutex;
 use tokio::runtime::Runtime;
 
 use crate::{
     task::{Priority, Task},
     traits::PlatformExecutor,
 };
-
-/// Lightweight block_on for foreground futures.
-///
-/// Polls the future in a loop, yielding the thread between polls.
-/// Suitable for futures that resolve quickly (UI updates, oneshot channels,
-/// `async { value }`). Avoids the overhead of creating a full tokio runtime
-/// per task.
-fn simple_block_on<F: Future>(future: F) -> F::Output {
-    use std::pin::pin;
-    use std::task::{Context, Poll, Waker};
-
-    let mut cx = Context::from_waker(Waker::noop());
-    let mut future = pin!(future);
-
-    loop {
-        match future.as_mut().poll(&mut cx) {
-            Poll::Ready(result) => return result,
-            Poll::Pending => std::thread::yield_now(),
-        }
-    }
-}
 
 /// Background executor for multi-threaded async tasks
 ///
@@ -140,142 +117,6 @@ impl Default for BackgroundExecutor {
     }
 }
 
-/// Foreground executor for UI thread task execution
-///
-/// Executes tasks on the main UI thread using a message queue pattern.
-/// Tasks are submitted via an unbounded flume channel and must be
-/// polled/drained by the platform's message loop.
-///
-/// # Architecture
-///
-/// ```text
-/// ┌─────────────┐
-/// │  User Code  │
-/// └──────┬──────┘
-///        │ executor.spawn(future)
-///        ▼
-/// ┌─────────────────────┐
-/// │ Sender (flume)      │
-/// │ (thread-safe queue) │
-/// └──────┬──────────────┘
-///        │ send(task)
-///        ▼
-/// ┌─────────────────────┐
-/// │ Receiver (flume)    │  <-- Platform message loop
-/// │ (polled by UI)      │      calls drain_tasks()
-/// └─────────────────────┘
-/// ```
-#[derive(Clone)]
-pub struct ForegroundExecutor {
-    sender: flume::Sender<Box<dyn FnOnce() + Send>>,
-    #[allow(clippy::type_complexity)]
-    receiver: Arc<Mutex<flume::Receiver<Box<dyn FnOnce() + Send>>>>,
-}
-
-impl ForegroundExecutor {
-    /// Create a new foreground executor with task queue
-    ///
-    /// Returns an executor that queues tasks for UI thread execution.
-    /// The platform should call `drain_tasks()` regularly in the message loop.
-    pub fn new() -> Self {
-        let (sender, receiver) = flume::unbounded();
-
-        tracing::info!("Created ForegroundExecutor with unbounded flume channel");
-
-        ForegroundExecutor {
-            sender,
-            receiver: Arc::new(Mutex::new(receiver)),
-        }
-    }
-
-    /// Spawn a closure to run on the foreground (UI) thread
-    ///
-    /// Returns a [`Task<R>`] that resolves when the closure executes during
-    /// the next `drain_tasks()` call.
-    pub fn spawn<R: Send + 'static>(
-        &self,
-        future: impl Future<Output = R> + Send + 'static,
-    ) -> Task<R> {
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        let sender = self.sender.clone();
-
-        // We need to drive the future on the foreground thread.
-        // Wrap the future execution and result sending in a closure.
-        if let Err(e) = sender.send(Box::new(move || {
-            // Use a lightweight block_on instead of creating a full tokio
-            // runtime per task. Foreground futures are expected to resolve
-            // quickly (UI updates, oneshot channels, async { value }).
-            let result = simple_block_on(future);
-            let _ = tx.send(result);
-        })) {
-            tracing::error!("Failed to send task to foreground executor: {:?}", e);
-        }
-
-        // Return a task that awaits the oneshot result
-        Task::from_handle(tokio::task::spawn(async move {
-            rx.await.expect("Foreground task sender dropped")
-        }))
-    }
-
-    /// Drain and execute all pending tasks
-    ///
-    /// This method should be called regularly by the platform's message loop
-    /// (e.g., in Windows' message pump, macOS' run loop, etc.).
-    ///
-    /// Tasks are executed in FIFO order. If a task spawns new tasks, they
-    /// will be executed in the next drain cycle.
-    pub fn drain_tasks(&self) {
-        let mut total = 0usize;
-        loop {
-            let tasks: Vec<_> = {
-                let receiver = self.receiver.lock();
-                std::iter::from_fn(|| receiver.try_recv().ok()).collect()
-            };
-
-            if tasks.is_empty() {
-                break;
-            }
-
-            total += tasks.len();
-            for task in tasks {
-                task();
-            }
-        }
-
-        if total > 0 {
-            tracing::trace!("Drained {} foreground tasks", total);
-        }
-    }
-
-    /// Get the number of pending tasks
-    pub fn pending_count(&self) -> usize {
-        let receiver = self.receiver.lock();
-        receiver.len()
-    }
-}
-
-impl std::fmt::Debug for ForegroundExecutor {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ForegroundExecutor")
-            .field("pending_tasks", &self.pending_count())
-            .finish_non_exhaustive()
-    }
-}
-
-impl PlatformExecutor for ForegroundExecutor {
-    fn spawn(&self, task: Box<dyn FnOnce() + Send>) {
-        if let Err(e) = self.sender.send(task) {
-            tracing::error!("Failed to send task to foreground executor: {:?}", e);
-        }
-    }
-}
-
-impl Default for ForegroundExecutor {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -327,63 +168,5 @@ mod tests {
             task.await
         });
         assert_eq!(result, 42);
-    }
-
-    #[test]
-    fn test_foreground_executor_spawn_and_drain() {
-        let executor = ForegroundExecutor::new();
-        let flag = Arc::new(AtomicBool::new(false));
-        let flag_clone = Arc::clone(&flag);
-
-        // Use the PlatformExecutor trait method (Box<dyn FnOnce>)
-        PlatformExecutor::spawn(
-            &executor,
-            Box::new(move || {
-                flag_clone.store(true, Ordering::SeqCst);
-            }),
-        );
-
-        assert!(!flag.load(Ordering::SeqCst));
-        executor.drain_tasks();
-        assert!(flag.load(Ordering::SeqCst));
-    }
-
-    #[test]
-    fn test_foreground_executor_multiple_tasks() {
-        let executor = ForegroundExecutor::new();
-        let counter = Arc::new(Mutex::new(0));
-
-        for i in 0..10 {
-            let counter_clone = Arc::clone(&counter);
-            PlatformExecutor::spawn(
-                &executor,
-                Box::new(move || {
-                    let mut count = counter_clone.lock();
-                    *count += i;
-                }),
-            );
-        }
-
-        executor.drain_tasks();
-        assert_eq!(*counter.lock(), 45);
-    }
-
-    #[test]
-    fn test_foreground_executor_clone() {
-        let executor1 = ForegroundExecutor::new();
-        let executor2 = executor1.clone();
-
-        let flag = Arc::new(AtomicBool::new(false));
-        let flag_clone = Arc::clone(&flag);
-
-        PlatformExecutor::spawn(
-            &executor2,
-            Box::new(move || {
-                flag_clone.store(true, Ordering::SeqCst);
-            }),
-        );
-
-        executor1.drain_tasks();
-        assert!(flag.load(Ordering::SeqCst));
     }
 }

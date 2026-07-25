@@ -53,16 +53,35 @@ enum DescendantSemanticsMerge {
 /// ```
 #[derive(Default, Clone)]
 pub struct SemanticsConfiguration {
+    /// Whether a semantic payload setter has touched this configuration.
+    ///
+    /// Structural assembly directives such as boundary formation, explicit
+    /// children, user-action blocking, and tags do not set this bit. Flutter's
+    /// descendant-merging directive deliberately does.
+    has_been_annotated: bool,
+
     /// Whether the semantic information in this configuration is complete.
     ///
     /// If true, children semantics won't be merged into this node.
     is_semantics_boundary: bool,
 
-    /// Whether this configuration blocks semantics from descendant nodes.
+    /// Whether pointer-related user actions from this configuration and its
+    /// subtree are blocked from assistive-technology dispatch.
+    ///
+    /// On a standalone boundary this masks the node's exported action bits.
+    /// When the configuration contributes to an ancestor through absorption,
+    /// the mask applies only to this contributing subtree; actions already
+    /// registered by the receiving ancestor remain available unless that
+    /// ancestor independently blocks them.
     blocks_user_actions: bool,
 
-    /// Whether this is explicitly tagged as a semantic boundary.
-    explicit_children_are_traversal_groups: bool,
+    /// Whether contributing children must form explicit semantics nodes.
+    ///
+    /// Rendering assembly applies this structural directive before immutable
+    /// platform snapshots are produced. It is tree-shape input, not adapter
+    /// payload, so snapshots expose its resulting child nodes rather than the
+    /// directive itself.
+    explicit_child_nodes: bool,
 
     /// How descendant semantics boundary nodes are handled under this
     /// configuration.
@@ -70,7 +89,7 @@ pub struct SemanticsConfiguration {
     /// Set alongside `is_semantics_boundary = true` by `RenderMergeSemantics`
     /// (`MergeSemantics` widget) — Flutter's
     /// `isMergingSemanticsOfDescendants`. The assembly walk
-    /// (`flui-rendering`'s `run_semantics`, ADR-0014) honors this by
+    /// (`flui-rendering`'s `run_semantics`) honors this by
     /// suppressing every descendant's own boundary decision for the rest of
     /// that subtree, absorbing all descendant configs into this one node.
     descendant_semantics_merge: DescendantSemanticsMerge,
@@ -141,12 +160,6 @@ pub struct SemanticsConfiguration {
     /// Current character count for text field.
     current_value_length: Option<i32>,
 
-    /// Elevation for this node (z-order).
-    elevation: f64,
-
-    /// Thickness for this node.
-    thickness: f64,
-
     /// Semantic role for this node.
     ///
     /// Defaults to [`SemanticsRole::None`]. Consumed by the platform
@@ -161,6 +174,17 @@ impl SemanticsConfiguration {
     /// Creates a new empty configuration.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Returns whether this configuration contributes semantic payload.
+    #[inline]
+    pub fn has_been_annotated(&self) -> bool {
+        self.has_been_annotated
+    }
+
+    #[inline]
+    fn mark_annotated(&mut self) {
+        self.has_been_annotated = true;
     }
 
     // ========================================================================
@@ -181,26 +205,31 @@ impl SemanticsConfiguration {
         self.is_semantics_boundary = value;
     }
 
-    /// Returns whether this blocks user actions from descendants.
+    /// Returns whether pointer-related user actions are blocked.
     #[inline]
     pub fn blocks_user_actions(&self) -> bool {
         self.blocks_user_actions
     }
 
-    /// Sets whether this blocks user actions from descendants.
+    /// Sets whether pointer-related user actions from this configuration and
+    /// its subtree are blocked.
+    ///
+    /// On merge, the policy filters only this configuration's contribution;
+    /// it does not remove actions registered by the receiving ancestor.
     pub fn set_blocks_user_actions(&mut self, value: bool) {
         self.blocks_user_actions = value;
     }
 
-    /// Returns whether children are explicitly traversal groups.
+    /// Returns whether contributing children are requested to form explicit
+    /// semantics nodes.
     #[inline]
-    pub fn explicit_children_are_traversal_groups(&self) -> bool {
-        self.explicit_children_are_traversal_groups
+    pub fn explicit_child_nodes(&self) -> bool {
+        self.explicit_child_nodes
     }
 
-    /// Sets whether children are explicitly traversal groups.
-    pub fn set_explicit_children_are_traversal_groups(&mut self, value: bool) {
-        self.explicit_children_are_traversal_groups = value;
+    /// Requests that contributing children form explicit semantics nodes.
+    pub fn set_explicit_child_nodes(&mut self, value: bool) {
+        self.explicit_child_nodes = value;
     }
 
     /// Returns whether the entire descendant subtree merges into this
@@ -218,6 +247,7 @@ impl SemanticsConfiguration {
         } else {
             DescendantSemanticsMerge::SeparateNodes
         };
+        self.mark_annotated();
     }
 
     // ========================================================================
@@ -237,6 +267,7 @@ impl SemanticsConfiguration {
         } else {
             self.flags.clear(flag);
         }
+        self.mark_annotated();
     }
 
     /// Returns the flags.
@@ -540,6 +571,7 @@ impl SemanticsConfiguration {
     /// Sets the label.
     pub fn set_label(&mut self, label: impl Into<AttributedString>) {
         self.label = Some(label.into());
+        self.mark_annotated();
     }
 
     /// Returns the label.
@@ -551,6 +583,7 @@ impl SemanticsConfiguration {
     /// Sets the value.
     pub fn set_value(&mut self, value: impl Into<AttributedString>) {
         self.value = Some(value.into());
+        self.mark_annotated();
     }
 
     /// Returns the value.
@@ -562,6 +595,7 @@ impl SemanticsConfiguration {
     /// Sets the increased value.
     pub fn set_increased_value(&mut self, value: impl Into<AttributedString>) {
         self.increased_value = Some(value.into());
+        self.mark_annotated();
     }
 
     /// Returns the increased value.
@@ -573,6 +607,7 @@ impl SemanticsConfiguration {
     /// Sets the decreased value.
     pub fn set_decreased_value(&mut self, value: impl Into<AttributedString>) {
         self.decreased_value = Some(value.into());
+        self.mark_annotated();
     }
 
     /// Returns the decreased value.
@@ -584,6 +619,7 @@ impl SemanticsConfiguration {
     /// Sets the hint.
     pub fn set_hint(&mut self, hint: impl Into<AttributedString>) {
         self.hint = Some(hint.into());
+        self.mark_annotated();
     }
 
     /// Returns the hint.
@@ -595,6 +631,7 @@ impl SemanticsConfiguration {
     /// Sets the tooltip.
     pub fn set_tooltip(&mut self, tooltip: impl Into<SmolStr>) {
         self.tooltip = Some(tooltip.into());
+        self.mark_annotated();
     }
 
     /// Returns the tooltip.
@@ -610,6 +647,7 @@ impl SemanticsConfiguration {
     /// Sets the text direction.
     pub fn set_text_direction(&mut self, direction: TextDirection) {
         self.text_direction = Some(direction);
+        self.mark_annotated();
     }
 
     /// Returns the text direction.
@@ -625,11 +663,13 @@ impl SemanticsConfiguration {
     /// Adds an action handler.
     pub fn add_action(&mut self, action: SemanticsAction, handler: SemanticsActionHandler) {
         self.actions.insert(action, handler);
+        self.mark_annotated();
     }
 
     /// Removes an action.
     pub fn remove_action(&mut self, action: SemanticsAction) {
         self.actions.remove(&action);
+        self.mark_annotated();
     }
 
     /// Returns whether an action is available.
@@ -638,16 +678,35 @@ impl SemanticsConfiguration {
         self.actions.contains_key(&action)
     }
 
-    /// Returns the action handler for a given action.
+    /// Returns the registered action handler for a given action.
+    ///
+    /// This intentionally exposes registration state for tree assembly. Code
+    /// dispatching an action received from a platform must also verify that the
+    /// action's bit is present in [`Self::effective_actions_as_bits`].
     pub fn action_handler(&self, action: SemanticsAction) -> Option<&SemanticsActionHandler> {
         self.actions.get(&action)
     }
 
-    /// Returns a bitmask of available actions.
+    /// Returns a bitmask of registered actions before blocking policy.
     pub fn actions_as_bits(&self) -> u64 {
         self.actions
             .keys()
             .fold(0u64, |acc, action| acc | action.value())
+    }
+
+    /// Returns the action bits that may be exposed to assistive technology.
+    ///
+    /// When user actions are blocked, pointer and editing actions are removed;
+    /// only accessibility-focus lifecycle actions remain. Platform snapshots,
+    /// legacy node exports, and future action routing must all use this policy
+    /// rather than [`Self::actions_as_bits`].
+    pub fn effective_actions_as_bits(&self) -> u64 {
+        let actions = self.actions_as_bits();
+        if self.blocks_user_actions {
+            actions & UNBLOCKED_USER_ACTIONS_MASK
+        } else {
+            actions
+        }
     }
 
     // ========================================================================
@@ -657,12 +716,27 @@ impl SemanticsConfiguration {
     /// Adds a custom action.
     pub fn add_custom_action(&mut self, action: CustomSemanticsAction) {
         self.custom_actions.push(action);
+        self.mark_annotated();
     }
 
     /// Returns the custom actions.
     #[inline]
     pub fn custom_actions(&self) -> &[CustomSemanticsAction] {
         &self.custom_actions
+    }
+
+    /// Returns custom action metadata backed by an effective handler.
+    ///
+    /// Metadata is construction data, not proof that an operation can be
+    /// dispatched. A blocked or unregistered `CustomAction` bit therefore
+    /// exposes no custom actions to platform adapters.
+    #[inline]
+    pub fn effective_custom_actions(&self) -> &[CustomSemanticsAction] {
+        if (self.effective_actions_as_bits() & SemanticsAction::CustomAction.value()) != 0 {
+            &self.custom_actions
+        } else {
+            &[]
+        }
     }
 
     // ========================================================================
@@ -694,6 +768,7 @@ impl SemanticsConfiguration {
     /// Sets the sort key.
     pub fn set_sort_key(&mut self, key: SemanticsSortKey) {
         self.sort_key = Some(key);
+        self.mark_annotated();
     }
 
     /// Returns the sort key.
@@ -709,6 +784,7 @@ impl SemanticsConfiguration {
     /// Sets hint overrides.
     pub fn set_hint_overrides(&mut self, overrides: SemanticsHintOverrides) {
         self.hint_overrides = Some(overrides);
+        self.mark_annotated();
     }
 
     /// Returns hint overrides.
@@ -724,6 +800,7 @@ impl SemanticsConfiguration {
     /// Sets the scroll position.
     pub fn set_scroll_position(&mut self, position: f64) {
         self.scroll_position = Some(position);
+        self.mark_annotated();
     }
 
     /// Returns the scroll position.
@@ -735,6 +812,7 @@ impl SemanticsConfiguration {
     /// Sets the scroll extent maximum.
     pub fn set_scroll_extent_max(&mut self, max: f64) {
         self.scroll_extent_max = Some(max);
+        self.mark_annotated();
     }
 
     /// Returns the scroll extent maximum.
@@ -746,6 +824,7 @@ impl SemanticsConfiguration {
     /// Sets the scroll extent minimum.
     pub fn set_scroll_extent_min(&mut self, min: f64) {
         self.scroll_extent_min = Some(min);
+        self.mark_annotated();
     }
 
     /// Returns the scroll extent minimum.
@@ -757,6 +836,7 @@ impl SemanticsConfiguration {
     /// Sets the scroll index.
     pub fn set_scroll_index(&mut self, index: i32) {
         self.scroll_index = Some(index);
+        self.mark_annotated();
     }
 
     /// Returns the scroll index.
@@ -768,6 +848,7 @@ impl SemanticsConfiguration {
     /// Sets the scroll child count.
     pub fn set_scroll_child_count(&mut self, count: i32) {
         self.scroll_child_count = Some(count);
+        self.mark_annotated();
     }
 
     /// Returns the scroll child count.
@@ -783,6 +864,7 @@ impl SemanticsConfiguration {
     /// Sets the index in parent.
     pub fn set_index_in_parent(&mut self, index: i32) {
         self.index_in_parent = Some(index);
+        self.mark_annotated();
     }
 
     /// Returns the index in parent.
@@ -798,6 +880,7 @@ impl SemanticsConfiguration {
     /// Sets the platform view ID.
     pub fn set_platform_view_id(&mut self, id: i32) {
         self.platform_view_id = Some(id);
+        self.mark_annotated();
     }
 
     /// Returns the platform view ID.
@@ -813,6 +896,7 @@ impl SemanticsConfiguration {
     /// Sets the maximum value length.
     pub fn set_max_value_length(&mut self, length: i32) {
         self.max_value_length = Some(length);
+        self.mark_annotated();
     }
 
     /// Returns the maximum value length.
@@ -824,38 +908,13 @@ impl SemanticsConfiguration {
     /// Sets the current value length.
     pub fn set_current_value_length(&mut self, length: i32) {
         self.current_value_length = Some(length);
+        self.mark_annotated();
     }
 
     /// Returns the current value length.
     #[inline]
     pub fn current_value_length(&self) -> Option<i32> {
         self.current_value_length
-    }
-
-    // ========================================================================
-    // Elevation
-    // ========================================================================
-
-    /// Sets the elevation.
-    pub fn set_elevation(&mut self, elevation: f64) {
-        self.elevation = elevation;
-    }
-
-    /// Returns the elevation.
-    #[inline]
-    pub fn elevation(&self) -> f64 {
-        self.elevation
-    }
-
-    /// Sets the thickness.
-    pub fn set_thickness(&mut self, thickness: f64) {
-        self.thickness = thickness;
-    }
-
-    /// Returns the thickness.
-    #[inline]
-    pub fn thickness(&self) -> f64 {
-        self.thickness
     }
 
     // ========================================================================
@@ -871,6 +930,7 @@ impl SemanticsConfiguration {
     #[inline]
     pub fn set_role(&mut self, role: SemanticsRole) {
         self.role = role;
+        self.mark_annotated();
     }
 
     /// Returns the [`SemanticsRole`] for this node. Defaults to
@@ -883,7 +943,7 @@ impl SemanticsConfiguration {
     /// Builder-style role setter for chained construction.
     #[must_use]
     pub fn with_role(mut self, role: SemanticsRole) -> Self {
-        self.role = role;
+        self.set_role(role);
         self
     }
 
@@ -891,14 +951,56 @@ impl SemanticsConfiguration {
     // Merging and Copying
     // ========================================================================
 
-    /// Returns whether this configuration has any semantic content.
-    pub fn has_content(&self) -> bool {
-        !self.flags.is_empty()
-            || !self.actions.is_empty()
-            || self.label.is_some()
-            || self.value.is_some()
-            || self.hint.is_some()
-            || !self.custom_actions.is_empty()
+    /// Returns whether this configuration can share one semantics node with
+    /// `other` without dropping modeled information.
+    ///
+    /// The predicate is symmetric. Labels and hints concatenate, disjoint
+    /// actions and flags combine, and first-wins metadata remains compatible.
+    /// Repeated action bits, repeated represented flag/state categories,
+    /// competing non-empty values, platform identities, text-length metadata,
+    /// or explicit roles require separate nodes.
+    ///
+    /// FLUI's current legacy flag word cannot distinguish every authored
+    /// `false` state from an unset state. Compatibility is therefore exact for
+    /// the states represented by marker/truth bits, while repeated authored
+    /// `false` values for marker-less states such as selected or focused remain
+    /// intentionally outside this slice.
+    #[must_use]
+    pub fn is_compatible_with(&self, other: &SemanticsConfiguration) -> bool {
+        if !self.has_been_annotated || !other.has_been_annotated {
+            return true;
+        }
+
+        if self.actions_as_bits() & other.actions_as_bits() != 0
+            || self.flags.bits() & other.flags.bits() != 0
+            || self.platform_view_id.is_some() && other.platform_view_id.is_some()
+            || self.max_value_length.is_some() && other.max_value_length.is_some()
+            || self.current_value_length.is_some() && other.current_value_length.is_some()
+            || self
+                .value
+                .as_ref()
+                .is_some_and(|value| !value.as_str().is_empty())
+                && other
+                    .value
+                    .as_ref()
+                    .is_some_and(|value| !value.as_str().is_empty())
+            || self.has_explicit_role() && other.has_explicit_role()
+        {
+            return false;
+        }
+
+        true
+    }
+
+    fn has_explicit_role(&self) -> bool {
+        self.role != SemanticsRole::None
+            || self.has_flag(SemanticsFlag::IsTextField)
+            || self.has_flag(SemanticsFlag::IsSlider)
+            || self.has_flag(SemanticsFlag::IsLink)
+            || self.has_flag(SemanticsFlag::ScopesRoute)
+            || self.has_flag(SemanticsFlag::IsImage)
+            || self.has_flag(SemanticsFlag::IsKeyboardKey)
+            || (cfg!(target_arch = "wasm32") && self.has_flag(SemanticsFlag::IsHeader))
     }
 
     /// Absorbs the semantic information from another configuration,
@@ -913,7 +1015,8 @@ impl SemanticsConfiguration {
     ///   defined. If `other.blocks_user_actions == true`, only actions in
     ///   the `UNBLOCKED_USER_ACTIONS_MASK` mask cross the boundary; the rest are
     ///   filtered out. Mirrors `_kUnblockedUserActions`.
-    /// - **Custom actions** — concatenate child's after parent's.
+    /// - **Custom actions** — concatenate only metadata backed by an effective
+    ///   `CustomAction` handler at each source.
     /// - **Tags** — merge as a set (deduplication handled by
     ///   `add_tag`).
     /// - **Label / hint** — *concatenate* via [`concat_attributed_string`]
@@ -921,9 +1024,10 @@ impl SemanticsConfiguration {
     ///   semantics produced "Submit" + "loading state" → "Submit",
     ///   losing the child's hint. Flutter joins them into "Submit
     ///   loading state."
-    /// - **Value / increased_value / decreased_value / tooltip /
-    ///   sort_key / text_direction** — first-wins (parent keeps its
-    ///   value if set).
+    /// - **Value / increased_value / decreased_value / tooltip / sort_key /
+    ///   text_direction / hint overrides / scroll metadata / list index /
+    ///   platform view / text lengths** — first-wins (parent keeps its value
+    ///   if set).
     /// - **Role** — merge: parent keeps its role if not `None`;
     ///   otherwise inherits the child's role.
     ///
@@ -931,25 +1035,32 @@ impl SemanticsConfiguration {
     /// only the child's flag controls the action-mask filter applied
     /// to the child's actions during the merge.
     pub fn absorb(&mut self, other: &SemanticsConfiguration) {
+        if !other.has_been_annotated {
+            return;
+        }
+
+        // Metadata already present on the receiver belongs to the receiver's
+        // source. Freeze that source's availability before child handlers are
+        // merged, otherwise a child's CustomAction bit could make unrelated
+        // receiver metadata appear routable.
+        if self.effective_custom_actions().is_empty() {
+            self.custom_actions.clear();
+        }
+
         // ----- flags -----
         self.flags.merge(other.flags());
 
         // ----- actions (blocked / unblocked filter) -----
-        if other.blocks_user_actions {
-            for (action, handler) in &other.actions {
-                if (action.value() & UNBLOCKED_USER_ACTIONS_MASK) != 0 {
-                    self.actions.insert(*action, Arc::clone(handler));
-                }
-            }
-        } else {
-            for (action, handler) in &other.actions {
+        let effective_other_actions = other.effective_actions_as_bits();
+        for (action, handler) in &other.actions {
+            if (action.value() & effective_other_actions) != 0 {
                 self.actions.insert(*action, Arc::clone(handler));
             }
         }
 
         // ----- custom actions -----
         self.custom_actions
-            .extend(other.custom_actions.iter().cloned());
+            .extend(other.effective_custom_actions().iter().cloned());
 
         // ----- tags -----
         for tag in &other.tags {
@@ -1000,11 +1111,43 @@ impl SemanticsConfiguration {
         if self.text_direction.is_none() {
             self.text_direction = other.text_direction;
         }
+        if self.hint_overrides.is_none() {
+            self.hint_overrides.clone_from(&other.hint_overrides);
+        }
+        if self.scroll_position.is_none() {
+            self.scroll_position = other.scroll_position;
+        }
+        if self.scroll_extent_max.is_none() {
+            self.scroll_extent_max = other.scroll_extent_max;
+        }
+        if self.scroll_extent_min.is_none() {
+            self.scroll_extent_min = other.scroll_extent_min;
+        }
+        if self.index_in_parent.is_none() {
+            self.index_in_parent = other.index_in_parent;
+        }
+        if self.scroll_index.is_none() {
+            self.scroll_index = other.scroll_index;
+        }
+        if self.scroll_child_count.is_none() {
+            self.scroll_child_count = other.scroll_child_count;
+        }
+        if self.platform_view_id.is_none() {
+            self.platform_view_id = other.platform_view_id;
+        }
+        if self.max_value_length.is_none() {
+            self.max_value_length = other.max_value_length;
+        }
+        if self.current_value_length.is_none() {
+            self.current_value_length = other.current_value_length;
+        }
 
         // ----- role (parent keeps if non-None, else inherit) -----
         if self.role == SemanticsRole::None {
             self.role = other.role;
         }
+
+        self.has_been_annotated |= other.has_been_annotated;
     }
 
     /// Creates a configuration from properties.
@@ -1136,16 +1279,298 @@ impl std::fmt::Debug for SemanticsConfiguration {
 mod tests {
     use super::*;
 
+    fn populated_first_wins_configuration(prefix: &str, offset: i32) -> SemanticsConfiguration {
+        let mut config = SemanticsConfiguration::new();
+        config.set_value(format!("{prefix} value"));
+        config.set_increased_value(format!("{prefix} increased"));
+        config.set_decreased_value(format!("{prefix} decreased"));
+        config.set_tooltip(format!("{prefix} tooltip"));
+        config.set_sort_key(SemanticsSortKey::named(
+            f64::from(offset),
+            format!("{prefix} sort"),
+        ));
+        config.set_text_direction(if offset % 2 == 0 {
+            TextDirection::Ltr
+        } else {
+            TextDirection::Rtl
+        });
+        config.set_hint_overrides(
+            SemanticsHintOverrides::new()
+                .with_tap_hint(format!("{prefix} tap"))
+                .with_long_press_hint(format!("{prefix} long press")),
+        );
+        config.set_scroll_position(f64::from(offset) + 0.25);
+        config.set_scroll_extent_max(f64::from(offset) + 1.0);
+        config.set_scroll_extent_min(f64::from(offset) - 1.0);
+        config.set_index_in_parent(offset + 2);
+        config.set_scroll_index(offset + 3);
+        config.set_scroll_child_count(offset + 4);
+        config.set_platform_view_id(offset + 5);
+        config.set_max_value_length(offset + 6);
+        config.set_current_value_length(offset + 7);
+        config.set_role(if offset % 2 == 0 {
+            SemanticsRole::ListItem
+        } else {
+            SemanticsRole::Dialog
+        });
+        config
+    }
+
+    fn assert_first_wins_fields(config: &SemanticsConfiguration, prefix: &str, offset: i32) {
+        assert_eq!(
+            config.value().map(AttributedString::as_str),
+            Some(format!("{prefix} value").as_str()),
+        );
+        assert_eq!(
+            config.increased_value().map(AttributedString::as_str),
+            Some(format!("{prefix} increased").as_str()),
+        );
+        assert_eq!(
+            config.decreased_value().map(AttributedString::as_str),
+            Some(format!("{prefix} decreased").as_str()),
+        );
+        assert_eq!(config.tooltip(), Some(format!("{prefix} tooltip").as_str()));
+
+        let sort_key = config.sort_key().expect("sort key must be retained");
+        assert_eq!(sort_key.order, f64::from(offset));
+        assert_eq!(
+            sort_key.name.as_deref(),
+            Some(format!("{prefix} sort").as_str())
+        );
+        assert_eq!(
+            config.text_direction(),
+            Some(if offset % 2 == 0 {
+                TextDirection::Ltr
+            } else {
+                TextDirection::Rtl
+            }),
+        );
+
+        let overrides = config
+            .hint_overrides()
+            .expect("hint overrides must be retained");
+        assert_eq!(
+            overrides.on_tap_hint.as_deref(),
+            Some(format!("{prefix} tap").as_str()),
+        );
+        assert_eq!(
+            overrides.on_long_press_hint.as_deref(),
+            Some(format!("{prefix} long press").as_str()),
+        );
+        assert_eq!(config.scroll_position(), Some(f64::from(offset) + 0.25));
+        assert_eq!(config.scroll_extent_max(), Some(f64::from(offset) + 1.0));
+        assert_eq!(config.scroll_extent_min(), Some(f64::from(offset) - 1.0));
+        assert_eq!(config.index_in_parent(), Some(offset + 2));
+        assert_eq!(config.scroll_index(), Some(offset + 3));
+        assert_eq!(config.scroll_child_count(), Some(offset + 4));
+        assert_eq!(config.platform_view_id(), Some(offset + 5));
+        assert_eq!(config.max_value_length(), Some(offset + 6));
+        assert_eq!(config.current_value_length(), Some(offset + 7));
+        assert_eq!(
+            config.role(),
+            if offset % 2 == 0 {
+                SemanticsRole::ListItem
+            } else {
+                SemanticsRole::Dialog
+            },
+        );
+    }
+
     #[test]
     fn test_configuration_defaults() {
         let config = SemanticsConfiguration::new();
         assert!(!config.is_semantics_boundary());
-        assert!(!config.has_content());
+        assert!(!config.has_been_annotated());
         assert!(!config.is_merging_semantics_of_descendants());
     }
 
-    /// ADR-0014: `is_merging_semantics_of_descendants` is an
-    /// independent additive flag, mirroring the existing
+    #[test]
+    fn structural_directives_and_tags_do_not_annotate_but_merging_does() {
+        let mut config = SemanticsConfiguration::new();
+        config.set_semantics_boundary(true);
+        config.set_blocks_user_actions(true);
+        config.set_explicit_child_nodes(true);
+        config.add_tag(SemanticsTag::new("construction-policy"));
+        assert!(
+            !config.has_been_annotated(),
+            "boundary, blocking, explicit-child, and tag construction policy are not payload",
+        );
+
+        config.set_merging_semantics_of_descendants(true);
+        assert!(
+            config.has_been_annotated(),
+            "Flutter treats merging-descendants as an annotation",
+        );
+    }
+
+    fn assert_compatibility_is_symmetric(
+        left: &SemanticsConfiguration,
+        right: &SemanticsConfiguration,
+        expected: bool,
+    ) {
+        assert_eq!(left.is_compatible_with(right), expected);
+        assert_eq!(right.is_compatible_with(left), expected);
+    }
+
+    #[test]
+    fn compatibility_matches_flutter_for_modeled_fields() {
+        let empty = SemanticsConfiguration::new();
+        let mut label_a = SemanticsConfiguration::new();
+        label_a.set_label("Alpha");
+        let mut label_b = SemanticsConfiguration::new();
+        label_b.set_label("Beta");
+        assert_compatibility_is_symmetric(&empty, &label_a, true);
+        assert_compatibility_is_symmetric(&label_a, &label_b, true);
+
+        let mut tap = SemanticsConfiguration::new();
+        tap.add_action(SemanticsAction::Tap, Arc::new(|_, _| {}));
+        let mut long_press = SemanticsConfiguration::new();
+        long_press.add_action(SemanticsAction::LongPress, Arc::new(|_, _| {}));
+        let mut another_tap = SemanticsConfiguration::new();
+        another_tap.add_action(SemanticsAction::Tap, Arc::new(|_, _| {}));
+        assert_compatibility_is_symmetric(&tap, &long_press, true);
+        assert_compatibility_is_symmetric(&tap, &another_tap, false);
+
+        let mut selected_a = SemanticsConfiguration::new();
+        selected_a.set_selected(true);
+        let mut selected_b = SemanticsConfiguration::new();
+        selected_b.set_selected(true);
+        assert_compatibility_is_symmetric(&selected_a, &selected_b, false);
+
+        let mut value_a = SemanticsConfiguration::new();
+        value_a.set_value("first");
+        let mut value_b = SemanticsConfiguration::new();
+        value_b.set_value("second");
+        let mut empty_value = SemanticsConfiguration::new();
+        empty_value.set_value("");
+        assert_compatibility_is_symmetric(&value_a, &value_b, false);
+        assert_compatibility_is_symmetric(&value_a, &empty_value, true);
+
+        for set_competing_field in [
+            SemanticsConfiguration::set_platform_view_id as fn(&mut SemanticsConfiguration, i32),
+            SemanticsConfiguration::set_max_value_length,
+            SemanticsConfiguration::set_current_value_length,
+        ] {
+            let mut left = SemanticsConfiguration::new();
+            set_competing_field(&mut left, 1);
+            let mut right = SemanticsConfiguration::new();
+            set_competing_field(&mut right, 2);
+            assert_compatibility_is_symmetric(&left, &right, false);
+        }
+
+        let mut dialog = SemanticsConfiguration::new();
+        dialog.set_role(SemanticsRole::Dialog);
+        let mut list_item = SemanticsConfiguration::new();
+        list_item.set_role(SemanticsRole::ListItem);
+        assert_compatibility_is_symmetric(&dialog, &list_item, false);
+
+        for role_flag in [
+            SemanticsFlag::IsTextField,
+            SemanticsFlag::IsSlider,
+            SemanticsFlag::IsLink,
+            SemanticsFlag::ScopesRoute,
+            SemanticsFlag::IsImage,
+            SemanticsFlag::IsKeyboardKey,
+        ] {
+            let mut role_from_flag = SemanticsConfiguration::new();
+            role_from_flag.set_flag(role_flag, true);
+            assert_compatibility_is_symmetric(&dialog, &role_from_flag, false);
+        }
+
+        let mut tooltip_a = SemanticsConfiguration::new();
+        tooltip_a.set_tooltip("First");
+        let mut tooltip_b = SemanticsConfiguration::new();
+        tooltip_b.set_tooltip("Second");
+        assert_compatibility_is_symmetric(&tooltip_a, &tooltip_b, true);
+
+        let mut structural_a = SemanticsConfiguration::new();
+        structural_a.set_semantics_boundary(true);
+        structural_a.set_explicit_child_nodes(true);
+        structural_a.set_blocks_user_actions(true);
+        let mut structural_b = SemanticsConfiguration::new();
+        structural_b.set_semantics_boundary(true);
+        structural_b.set_explicit_child_nodes(true);
+        structural_b.set_blocks_user_actions(true);
+        assert_compatibility_is_symmetric(&structural_a, &structural_b, true);
+    }
+
+    #[test]
+    fn payload_setters_mark_configuration_annotated_even_for_false_and_empty_values() {
+        macro_rules! assert_annotates {
+            ($name:literal, $mutate:expr) => {{
+                let mut config = SemanticsConfiguration::new();
+                $mutate(&mut config);
+                assert!(config.has_been_annotated(), "{} must annotate", $name);
+            }};
+        }
+
+        assert_annotates!("flags", |config: &mut SemanticsConfiguration| config
+            .set_button(false));
+        assert_annotates!("label", |config: &mut SemanticsConfiguration| config
+            .set_label(""));
+        assert_annotates!("value", |config: &mut SemanticsConfiguration| config
+            .set_value(""));
+        assert_annotates!("increased value", |config: &mut SemanticsConfiguration| {
+            config.set_increased_value("");
+        });
+        assert_annotates!("decreased value", |config: &mut SemanticsConfiguration| {
+            config.set_decreased_value("");
+        });
+        assert_annotates!("hint", |config: &mut SemanticsConfiguration| config
+            .set_hint(""));
+        assert_annotates!("tooltip", |config: &mut SemanticsConfiguration| config
+            .set_tooltip(""));
+        assert_annotates!("text direction", |config: &mut SemanticsConfiguration| {
+            config.set_text_direction(TextDirection::Ltr);
+        });
+        assert_annotates!("action add", |config: &mut SemanticsConfiguration| config
+            .add_action(SemanticsAction::Tap, Arc::new(|_, _| {})));
+        assert_annotates!("action remove", |config: &mut SemanticsConfiguration| {
+            config.remove_action(SemanticsAction::Tap);
+        });
+        assert_annotates!("custom action", |config: &mut SemanticsConfiguration| {
+            config.add_custom_action(CustomSemanticsAction::new(1, "Archive"));
+        });
+        assert_annotates!("sort key", |config: &mut SemanticsConfiguration| config
+            .set_sort_key(SemanticsSortKey::new(1.0)));
+        assert_annotates!("hint overrides", |config: &mut SemanticsConfiguration| {
+            config.set_hint_overrides(SemanticsHintOverrides::new().with_tap_hint("Activate"));
+        });
+        assert_annotates!("scroll position", |config: &mut SemanticsConfiguration| {
+            config.set_scroll_position(1.0);
+        });
+        assert_annotates!("scroll maximum", |config: &mut SemanticsConfiguration| {
+            config.set_scroll_extent_max(2.0);
+        });
+        assert_annotates!("scroll minimum", |config: &mut SemanticsConfiguration| {
+            config.set_scroll_extent_min(-2.0);
+        });
+        assert_annotates!("scroll index", |config: &mut SemanticsConfiguration| config
+            .set_scroll_index(3));
+        assert_annotates!(
+            "scroll child count",
+            |config: &mut SemanticsConfiguration| config.set_scroll_child_count(4)
+        );
+        assert_annotates!("index in parent", |config: &mut SemanticsConfiguration| {
+            config.set_index_in_parent(5);
+        });
+        assert_annotates!("platform view", |config: &mut SemanticsConfiguration| {
+            config.set_platform_view_id(6);
+        });
+        assert_annotates!(
+            "maximum value length",
+            |config: &mut SemanticsConfiguration| config.set_max_value_length(7)
+        );
+        assert_annotates!(
+            "current value length",
+            |config: &mut SemanticsConfiguration| config.set_current_value_length(8)
+        );
+        assert_annotates!("role", |config: &mut SemanticsConfiguration| config
+            .set_role(SemanticsRole::None));
+    }
+
+    /// `is_merging_semantics_of_descendants` is an independent additive flag,
+    /// mirroring the existing
     /// `is_semantics_boundary` boolean-config convention (plain getter/setter
     /// pair, not routed through the `SemanticsFlags` bitset).
     #[test]
@@ -1178,7 +1603,7 @@ mod tests {
                 .map(super::super::properties::AttributedString::as_str),
             Some("Submit")
         );
-        assert!(config.has_content());
+        assert!(config.has_been_annotated());
     }
 
     #[test]
@@ -1236,6 +1661,55 @@ mod tests {
     }
 
     #[test]
+    fn blocked_effective_action_mask_keeps_only_accessibility_focus_lifecycle() {
+        for &action in SemanticsAction::values() {
+            let mut config = SemanticsConfiguration::new();
+            config.add_action(action, Arc::new(|_, _| {}));
+            config.set_blocks_user_actions(true);
+
+            let expected = if matches!(
+                action,
+                SemanticsAction::DidGainAccessibilityFocus
+                    | SemanticsAction::DidLoseAccessibilityFocus
+            ) {
+                action.value()
+            } else {
+                0
+            };
+            assert_eq!(
+                config.effective_actions_as_bits(),
+                expected,
+                "unexpected blocked availability for {}",
+                action.name(),
+            );
+        }
+    }
+
+    #[test]
+    fn custom_action_metadata_requires_an_effective_custom_action_handler() {
+        let mut config = SemanticsConfiguration::new();
+        config.add_custom_action(CustomSemanticsAction::new(1, "Archive"));
+        assert_eq!(
+            config.custom_actions().len(),
+            1,
+            "raw construction metadata remains stored"
+        );
+        assert!(
+            config.effective_custom_actions().is_empty(),
+            "metadata alone must not advertise an unavailable operation",
+        );
+
+        config.add_action(SemanticsAction::CustomAction, Arc::new(|_, _| {}));
+        assert_eq!(config.effective_custom_actions().len(), 1);
+
+        config.set_blocks_user_actions(true);
+        assert!(
+            config.effective_custom_actions().is_empty(),
+            "blocking the handler must also hide its metadata",
+        );
+    }
+
+    #[test]
     fn test_configuration_absorb() {
         let mut parent = SemanticsConfiguration::new();
         parent.set_button(true);
@@ -1254,6 +1728,96 @@ mod tests {
             Some("Child label")
         );
         assert_eq!(parent.is_enabled(), Some(true));
+    }
+
+    #[test]
+    fn absorb_adopts_every_modeled_first_wins_field() {
+        let mut parent = SemanticsConfiguration::new();
+        let child = populated_first_wins_configuration("child", 10);
+
+        parent.absorb(&child);
+
+        assert_first_wins_fields(&parent, "child", 10);
+        assert!(parent.has_been_annotated());
+    }
+
+    #[test]
+    fn absorb_preserves_parent_for_every_modeled_first_wins_field() {
+        let mut parent = populated_first_wins_configuration("parent", 20);
+        let child = populated_first_wins_configuration("child", 11);
+
+        parent.absorb(&child);
+
+        assert_first_wins_fields(&parent, "parent", 20);
+    }
+
+    #[test]
+    fn absorb_ignores_unannotated_construction_metadata() {
+        let mut parent = SemanticsConfiguration::new();
+        let mut child = SemanticsConfiguration::new();
+        child.add_tag(SemanticsTag::new("child-tag"));
+
+        parent.absorb(&child);
+
+        assert!(!parent.has_been_annotated());
+        assert!(parent.tags().is_empty());
+    }
+
+    #[test]
+    fn absorb_propagates_annotation_state_even_when_payload_equals_defaults() {
+        let mut parent = SemanticsConfiguration::new();
+        let mut child = SemanticsConfiguration::new();
+        child.set_button(false);
+        assert!(child.flags().is_empty());
+        assert!(child.has_been_annotated());
+
+        parent.absorb(&child);
+
+        assert!(parent.flags().is_empty());
+        assert!(parent.has_been_annotated());
+    }
+
+    #[test]
+    fn absorb_filters_custom_action_metadata_at_each_source() {
+        let mut parent = SemanticsConfiguration::new();
+        parent.add_custom_action(CustomSemanticsAction::new(1, "Parent action"));
+        parent.add_action(SemanticsAction::CustomAction, Arc::new(|_, _| {}));
+
+        let mut blocked_child = SemanticsConfiguration::new();
+        blocked_child.add_custom_action(CustomSemanticsAction::new(2, "Blocked child action"));
+        blocked_child.add_action(SemanticsAction::CustomAction, Arc::new(|_, _| {}));
+        blocked_child.set_blocks_user_actions(true);
+
+        parent.absorb(&blocked_child);
+
+        assert_eq!(
+            parent
+                .effective_custom_actions()
+                .iter()
+                .map(|action| action.id)
+                .collect::<Vec<_>>(),
+            vec![1],
+            "the parent's own CustomAction bit must not make blocked child metadata routable",
+        );
+    }
+
+    #[test]
+    fn absorb_keeps_routable_child_custom_action_metadata() {
+        let mut parent = SemanticsConfiguration::new();
+        let mut child = SemanticsConfiguration::new();
+        child.add_custom_action(CustomSemanticsAction::new(2, "Child action"));
+        child.add_action(SemanticsAction::CustomAction, Arc::new(|_, _| {}));
+
+        parent.absorb(&child);
+
+        assert_eq!(
+            parent
+                .effective_custom_actions()
+                .iter()
+                .map(|action| action.id)
+                .collect::<Vec<_>>(),
+            vec![2],
+        );
     }
 
     #[test]
@@ -1371,19 +1935,25 @@ mod tests {
 
     #[test]
     fn absorb_filters_blocked_actions_to_unblocked_mask() {
-        // Child sets blocks_user_actions = true and registers a Tap (in
-        // the unblocked mask) + a Cut (NOT in the mask). Tap should
-        // cross into parent; Cut should be filtered out.
+        // Pointer actions are blocked; accessibility-focus lifecycle actions
+        // still cross into the parent.
         let mut parent = SemanticsConfiguration::new();
         let mut child = SemanticsConfiguration::new();
         child.set_blocks_user_actions(true);
         child.add_action(SemanticsAction::Tap, Arc::new(|_, _| {}));
-        child.add_action(SemanticsAction::Cut, Arc::new(|_, _| {}));
+        child.add_action(
+            SemanticsAction::DidGainAccessibilityFocus,
+            Arc::new(|_, _| {}),
+        );
 
         parent.absorb(&child);
 
-        assert!(parent.action_handler(SemanticsAction::Tap).is_some());
-        assert!(parent.action_handler(SemanticsAction::Cut).is_none());
+        assert!(parent.action_handler(SemanticsAction::Tap).is_none());
+        assert!(
+            parent
+                .action_handler(SemanticsAction::DidGainAccessibilityFocus)
+                .is_some(),
+        );
     }
 
     #[test]
