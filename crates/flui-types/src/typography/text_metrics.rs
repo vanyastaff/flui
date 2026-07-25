@@ -65,10 +65,11 @@ impl Default for TextPosition {
 ///
 /// Represents a contiguous span of text characters. Start is inclusive, end is
 /// exclusive.
-#[derive(Debug)]
+/// `Copy` because a text range is a value: callers pass and store it freely
+/// (selection, IME composition, parent data) and nothing owns it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TextRange {
-    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// Start offset (inclusive).
     pub start: usize,
     /// End offset (exclusive).

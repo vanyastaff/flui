@@ -5,6 +5,11 @@ use std::hash::{Hash, Hasher};
 use flui_foundation::RenderId;
 use flui_types::Offset;
 pub use flui_types::layout::TableCellVerticalAlignment;
+// `TextRange` used to be declared here as well. flui-types owns the concept and
+// its copy is a strict superset (intersect/union/collapsed on top of
+// len/is_empty/contains), so this module re-exports rather than redeclares —
+// keeping `parent_data::TextRange` a valid path for consumers.
+pub use flui_types::typography::TextRange;
 
 use super::{base::ParentData, container_mixin::ContainerParentDataMixin};
 
@@ -126,44 +131,6 @@ pub struct TextParentData {
     ///
     /// `None` if span doesn't represent a text range (e.g., inline widget).
     pub span: Option<TextRange>,
-}
-
-/// Range of text in a paragraph (start and end character indices).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct TextRange {
-    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
-    /// Start character index (inclusive).
-    pub start: usize,
-
-    /// End character index (exclusive).
-    pub end: usize,
-}
-
-impl TextRange {
-    /// Create text range.
-    pub const fn new(start: usize, end: usize) -> Self {
-        Self { start, end }
-    }
-
-    /// Get length of range.
-    ///
-    /// Returns 0 for inverted ranges (`end < start`) rather than overflowing.
-    #[inline]
-    pub const fn len(&self) -> usize {
-        self.end.saturating_sub(self.start)
-    }
-
-    /// Check if range is empty.
-    #[inline]
-    pub const fn is_empty(&self) -> bool {
-        self.start >= self.end
-    }
-
-    /// Check if range contains index.
-    #[inline]
-    pub const fn contains(&self, index: usize) -> bool {
-        index >= self.start && index < self.end
-    }
 }
 
 impl TextParentData {
