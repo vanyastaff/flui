@@ -207,6 +207,15 @@ mod vertex;
 
 pub(crate) mod layer_render;
 
+// readback_dump is shared test-support for every GPU readback/oracle test in
+// this module: when `FLUI_READBACK_DUMP_DIR` is set, each local readback
+// helper dumps the actual frame as a PNG there (the CI GPU job uploads
+// `<dir>/**/*.png` as an artifact on oracle failure). Compiled for all test
+// builds — not just `enable-wgpu-tests` — so its no-GPU unit tests run on
+// every host; with the env var unset every entry point is a no-op.
+#[cfg(test)]
+mod readback_dump;
+
 #[cfg(test)]
 mod sdf_smoke_test;
 

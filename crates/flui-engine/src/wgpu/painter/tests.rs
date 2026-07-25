@@ -613,6 +613,7 @@ fn render_to_rgba(
     }
     drop(data);
     buffer.unmap();
+    crate::wgpu::readback_dump::dump_frame(size, size, &out);
     out
 }
 

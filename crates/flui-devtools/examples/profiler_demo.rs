@@ -111,15 +111,15 @@ fn main() {
                 FramePhase::Build => total_build += phase.duration_ms(),
                 FramePhase::Layout => total_layout += phase.duration_ms(),
                 FramePhase::Paint => total_paint += phase.duration_ms(),
-                _ => {}
+                FramePhase::Custom(_) => {}
             }
         }
     }
 
     println!("\n⏱️  Total Phase Times:");
-    println!("  Build:  {:.2}ms", total_build);
-    println!("  Layout: {:.2}ms", total_layout);
-    println!("  Paint:  {:.2}ms", total_paint);
+    println!("  Build:  {total_build:.2}ms");
+    println!("  Layout: {total_layout:.2}ms");
+    println!("  Paint:  {total_paint:.2}ms");
 
     // Use built-in summary
     println!("\n");

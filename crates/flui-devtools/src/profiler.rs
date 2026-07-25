@@ -140,7 +140,7 @@ impl FrameStats {
 
     /// Get duration of a specific phase in milliseconds
     pub fn phase_duration_ms(&self, phase: FramePhase) -> Option<f64> {
-        self.phase(phase).map(|p| p.duration_ms())
+        self.phase(phase).map(PhaseInfo::duration_ms)
     }
 }
 
@@ -247,13 +247,13 @@ impl ProfilerInner {
         self.total_frames += 1;
     }
 
-    fn start_phase(&self, _phase: FramePhase) -> Instant {
+    fn start_phase(_phase: FramePhase) -> Instant {
         Instant::now()
     }
 
     fn end_phase(&mut self, phase: FramePhase, duration: Duration) {
         let start_offset = if let Some(frame_start) = self.frame_start {
-            Instant::now() - frame_start - duration
+            frame_start.elapsed().saturating_sub(duration)
         } else {
             Duration::ZERO
         };
@@ -346,7 +346,7 @@ impl Profiler {
     /// # profiler.end_frame();
     /// ```
     pub fn profile_phase(&self, phase: FramePhase) -> PhaseGuard {
-        let start = self.inner.lock().start_phase(phase);
+        let start = ProfilerInner::start_phase(phase);
         PhaseGuard {
             profiler: self.inner.clone(),
             phase,
@@ -546,7 +546,7 @@ mod tests {
 
         let avg_fps = profiler.average_fps();
         // Should be close to 60 FPS (allowing for some variance)
-        assert!(avg_fps > 50.0 && avg_fps < 70.0, "FPS was {}", avg_fps);
+        assert!(avg_fps > 50.0 && avg_fps < 70.0, "FPS was {avg_fps}");
     }
 
     #[test]

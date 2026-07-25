@@ -6,6 +6,11 @@ updates:
     schedule:
       interval: "weekly"
       day: "monday"
+    # Wait 7 days after a release before bumping to it — supply-chain
+    # incidents are usually discovered and yanked within that window
+    # (zizmor dependabot-cooldown audit).
+    cooldown:
+      default-days: 7
     open-pull-requests-limit: 5
     labels: ["dependencies", "cargo"]
     groups:
@@ -21,6 +26,8 @@ updates:
     schedule:
       interval: "weekly"
       day: "monday"
+    cooldown:
+      default-days: 7
     open-pull-requests-limit: 3
     labels: ["dependencies", "github-actions"]
     groups:

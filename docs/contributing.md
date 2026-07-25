@@ -28,7 +28,8 @@ just ci
 
 This expands to formatting, workspace-inventory drift, port-methodology checks,
 Clippy, and the workspace test suite. CI also runs `taplo fmt --check`,
-`typos`, docs, benchmark compilation, and the configured nextest/GPU jobs.
+`typos`, per-feature clippy (cargo-hack), a wasm32 target check, docs,
+benchmark compilation, and the configured nextest/GPU jobs.
 
 See [Testing](testing.md) for per-crate commands, coverage targets, and benchmark setup.
 

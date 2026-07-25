@@ -76,6 +76,14 @@ build-layered:
     cargo build -p flui-build
     cargo build -p flui-cli
 
+[group("build")]
+[doc("Type-check the wasm-capable crates for wasm32-unknown-unknown (mirrors the CI wasm-check job)")]
+wasm-check:
+    cargo check --workspace --locked --target wasm32-unknown-unknown \
+      --exclude flui-assets --exclude flui-build --exclude flui-cli \
+      --exclude flui-web-server --exclude hot-reload-counter-host \
+      --exclude hot-reload-counter-logic --exclude hot-reload-counter-types
+
 # =============================================================================
 # Testing
 # =============================================================================
@@ -153,6 +161,12 @@ clippy:
 [doc("Run clippy and apply auto-fixes (uncommitted changes only)")]
 clippy-fix:
     cargo clippy --workspace --all-targets --fix --allow-dirty -- -D warnings
+
+[group("quality")]
+[doc("Per-feature clippy via cargo-hack (mirrors the CI feature-matrix job; requires cargo-hack)")]
+feature-matrix:
+    cargo hack clippy --workspace --locked --each-feature --optional-deps --keep-going -- -D warnings
+    cargo hack clippy --workspace --locked --each-feature --optional-deps --keep-going --tests --benches --examples -- -D warnings
 
 [group("quality")]
 [doc("Format the entire workspace with rustfmt")]
@@ -294,6 +308,8 @@ setup:
     @echo "Optional, for cross-target builds:"
     @echo "  cargo install --locked wasm-pack       # for examples/web_demo, examples/painting_demo"
     @echo "  cargo install --locked cargo-ndk        # for examples/android_*"
+    @echo "  cargo install --locked cargo-hack       # for just feature-matrix (CI per-feature gate)"
+    @echo "  cargo install --locked zizmor           # workflow security audit (CI checks gate)"
 
 [group("setup")]
 [doc("Show installed Rust toolchain and FLUI workspace info")]
@@ -321,6 +337,11 @@ watch-test crate="":
 # CI aggregate
 # =============================================================================
 
+# `just ci` stays the FAST local gate on purpose. The heavy CI-only jobs have
+# their own recipes — run them deliberately before pushing risky changes:
+#   just feature-matrix   (per-feature clippy, minutes)
+#   just wasm-check       (wasm32 target check)
+#   just miri             (nightly UB check)
 [group("ci")]
 [doc("Run local CI gates (fmt-check + inventory + port-check + clippy + test + doctests)")]
 ci: fmt-check inventory-check port-check clippy test test-doc
