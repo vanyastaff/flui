@@ -70,7 +70,14 @@ members = [
 
 # Default members exclude platform-specific examples/tools. `cargo build
 # --workspace` still builds every workspace member listed above.
+#
+# The root `flui` facade IS listed: it is neither an example nor a tool, and
+# leaving it out made `cargo hack --each-feature` unable to select it —
+# cargo-hack drives the root package via `--manifest-path`, which resolves to
+# default-members, so its `golden` feature failed with "none of the selected
+# packages contains this feature".
 default-members = [
+    ".",
     "crates/flui-geometry",
     "crates/flui-types",
     "crates/flui-foundation",
