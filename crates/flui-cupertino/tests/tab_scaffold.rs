@@ -447,7 +447,11 @@ fn tapping_a_tab_item_switches_the_active_tab() {
 /// Red-check: delete the `debug_assert!` in `CupertinoTabScaffoldState::build`
 /// — this test stops panicking entirely (the scaffold instead mounts
 /// successfully with every tab hidden and `tab_builder` uncalled for index 5).
+// The guard is a `debug_assert!`, so this is only observable where debug
+// assertions are on — without the gate `cargo test --release` reports "did not
+// panic as expected".
 #[test]
+#[cfg(debug_assertions)]
 #[should_panic(expected = "render root")]
 fn out_of_range_controller_index_panics_instead_of_silently_hiding_every_tab() {
     let controller = CupertinoTabController::new(5);

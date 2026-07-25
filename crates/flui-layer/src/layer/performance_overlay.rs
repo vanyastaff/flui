@@ -3,10 +3,11 @@
 //! This module provides the PerformanceOverlayLayer for displaying
 //! performance metrics like frame timings, raster cache, and memory usage.
 
-use std::{
-    collections::VecDeque,
-    time::{Duration, Instant},
-};
+use std::collections::VecDeque;
+
+// `std::time::Instant::now()` panics on wasm32 ('time not implemented on this
+// platform'). Same choice as flui-scheduler / flui-app / flui-devtools.
+use web_time::{Duration, Instant};
 
 use flui_types::geometry::{Pixels, Rect};
 

@@ -491,6 +491,9 @@ fn on_interaction_callbacks_fire_in_order_for_a_wheel_scale() {
 /// (e.g. `'boundary slightly bigger than child'`) and every infinite-margin
 /// test (`'no boundary'`).
 #[test]
+// Debug-only: the guard compiles out in release, where `#[should_panic]`
+// would otherwise report "did not panic as expected".
+#[cfg(debug_assertions)]
 #[should_panic(expected = "boundary_margin must be either fully finite or fully infinite")]
 fn boundary_margin_mixing_finite_and_infinite_edges_is_rejected() {
     let mixed = EdgeInsets {

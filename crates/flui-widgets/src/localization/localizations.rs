@@ -495,6 +495,9 @@ mod tests {
     }
 
     #[test]
+    // Debug-only: the guard compiles out in release, where `#[should_panic]`
+    // would otherwise report "did not panic as expected".
+    #[cfg(debug_assertions)]
     #[should_panic(expected = "requires at least one delegate producing BoxedWidgetsLocalizations")]
     fn new_panics_without_a_widgets_localizations_delegate() {
         // `Localizations::new`'s `debug_assert!` runs at construction time,

@@ -858,6 +858,9 @@ mod tests {
     }
 
     #[test]
+    // Debug-only: the guard compiles out in release, where `#[should_panic]`
+    // would otherwise report "did not panic as expected".
+    #[cfg(debug_assertions)]
     #[should_panic(expected = "on_pan_* and on_horizontal_drag_* are both configured")]
     fn conflict_guard_panics_when_pan_and_horizontal_drag_coexist() {
         let detector = GestureDetector::new()
@@ -867,6 +870,9 @@ mod tests {
     }
 
     #[test]
+    // Debug-only: the guard compiles out in release, where `#[should_panic]`
+    // would otherwise report "did not panic as expected".
+    #[cfg(debug_assertions)]
     #[should_panic(expected = "on_pan_* and on_horizontal_drag_* are both configured")]
     fn conflict_guard_panics_with_update_and_end_variants_too() {
         let detector = GestureDetector::new()

@@ -1717,6 +1717,9 @@ mod tests {
     /// debug-only contract violation (Flutter's `assert(child._parent ==
     /// null)`): it would leave the OLD parent's children list stale.
     #[test]
+    // Debug-only: the guard compiles out in release, where `#[should_panic]`
+    // would otherwise report "did not panic as expected".
+    #[cfg(debug_assertions)]
     #[should_panic(expected = "already has a parent")]
     fn adopt_child_rejects_an_already_parented_child() {
         let mut tree = RenderTree::new();
@@ -1731,6 +1734,9 @@ mod tests {
     /// Adopting a node's own ancestor would close a cycle — rejected the
     /// same way Flutter's `adoptChild` guards against it.
     #[test]
+    // Debug-only: the guard compiles out in release, where `#[should_panic]`
+    // would otherwise report "did not panic as expected".
+    #[cfg(debug_assertions)]
     #[should_panic(expected = "close a cycle")]
     fn adopt_child_rejects_a_cycle() {
         let mut tree = RenderTree::new();
@@ -1801,6 +1807,9 @@ mod tests {
     /// Calling `drop_child` with the wrong parent is a debug-only contract
     /// violation (Flutter's `assert(child._parent == this)`).
     #[test]
+    // Debug-only: the guard compiles out in release, where `#[should_panic]`
+    // would otherwise report "did not panic as expected".
+    #[cfg(debug_assertions)]
     #[should_panic(expected = "current parent does not match")]
     fn drop_child_rejects_the_wrong_parent() {
         let mut tree = RenderTree::new();

@@ -240,7 +240,11 @@ mod tests {
         assert_eq!(root.lifecycle(), crate::element::Lifecycle::Active);
     }
 
+    // Same reason as the lifecycle guards in `generic.rs`: the assertion at
+    // `:163` is a `debug_assert`, so without this gate the test reports "did not
+    // panic as expected" under `cargo test --release`.
     #[test]
+    #[cfg(debug_assertions)]
     #[should_panic(expected = "Root element cannot have a parent")]
     fn test_root_element_mount_with_parent_panics() {
         let mut root = RootElementImpl::new();

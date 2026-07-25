@@ -143,7 +143,9 @@ pub fn enumerate_displays() -> Vec<Arc<dyn PlatformDisplay>> {
             // until all callbacks return, so the pointer is valid and no other
             // reference to `displays` exists concurrently.
             unsafe {
-                let displays = &mut *(lparam.0 as *mut Vec<Arc<dyn PlatformDisplay>>);
+                let displays = &mut *std::ptr::with_exposed_provenance_mut::<
+                    Vec<Arc<dyn PlatformDisplay>>,
+                >(lparam.0 as usize);
 
                 let mut monitor_info: MONITORINFOEXW = std::mem::zeroed();
                 monitor_info.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
@@ -164,7 +166,7 @@ pub fn enumerate_displays() -> Vec<Arc<dyn PlatformDisplay>> {
             None,
             None,
             Some(enum_proc),
-            LPARAM((&raw mut displays).addr() as isize),
+            LPARAM((&raw mut displays).expose_provenance() as isize),
         );
 
         displays

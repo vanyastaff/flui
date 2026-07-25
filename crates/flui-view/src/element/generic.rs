@@ -668,7 +668,11 @@ mod tests {
     /// it operates on torn-down state. `activate()` is public and used to set
     /// `Active` unconditionally, which made this reachable from outside the
     /// crate; the debug assertion is what closes it.
+    // The guard is a `debug_assert`, so this can only be observed where debug
+    // assertions are on — without the gate `cargo test --release` reports
+    // "did not panic as expected".
     #[test]
+    #[cfg(debug_assertions)]
     #[should_panic(expected = "Defunct is absorbing")]
     fn reactivating_a_defunct_element_is_rejected() {
         let mut core = ElementCore::<TestView, Single>::new(TestView { value: 42 });
@@ -685,6 +689,7 @@ mod tests {
 
     /// The deactivate half of the same invariant.
     #[test]
+    #[cfg(debug_assertions)]
     #[should_panic(expected = "Defunct is absorbing")]
     fn deactivating_a_defunct_element_is_rejected() {
         let mut core = ElementCore::<TestView, Single>::new(TestView { value: 42 });

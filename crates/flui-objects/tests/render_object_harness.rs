@@ -824,7 +824,11 @@ fn harness_custom_paint_with_zero_size_child_sizes_to_zero_not_preferred_size() 
 /// message the oracle asserts on has no observable equivalent here. What IS
 /// verified, faithfully: the imbalance is detected and the paint phase is
 /// rejected rather than producing a broken display.
+// Debug-only: the imbalance is detected by a `debug_assert_eq!`
+// (`flui-rendering/src/context/paint_cx.rs`), so in release nothing panics,
+// nothing is poisoned, and this test's own `panic!` arm fires instead.
 #[test]
+#[cfg(debug_assertions)]
 fn harness_custom_paint_unbalanced_save_poisons_the_paint_phase() {
     #[derive(Debug)]
     struct UnbalancedSavePainter;
