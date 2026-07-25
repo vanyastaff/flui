@@ -106,12 +106,22 @@ unsafe impl Send for WindowsPlatform {}
 unsafe impl Sync for WindowsPlatform {}
 
 impl std::fmt::Debug for WindowsPlatform {
-    // Hand-written: `PlatformHandlers` and the executor carry callback payloads
-    // with no meaningful Debug representation.
+    // Hand-written: the remaining fields are raw platform handles and callback
+    // payloads with no useful Debug form.
+    //
+    // `try_lock`, never `lock`: `parking_lot::Mutex` is not reentrant and
+    // BLOCKS rather than panicking, so formatting this value while the same
+    // thread already holds `windows` would deadlock silently — and a Debug
+    // impl gets called from assertion messages and `tracing` fields, which is
+    // exactly where a lock is likely to be held. Same pattern
+    // `parking_lot::Mutex<T>: Debug` itself uses.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("WindowsPlatform")
-            .field("windows", &self.windows.lock().len())
-            .finish_non_exhaustive()
+        let mut out = f.debug_struct("WindowsPlatform");
+        match self.windows.try_lock() {
+            Some(windows) => out.field("windows", &windows.len()),
+            None => out.field("windows", &format_args!("<locked>")),
+        };
+        out.finish_non_exhaustive()
     }
 }
 
