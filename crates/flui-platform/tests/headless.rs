@@ -18,7 +18,9 @@ fn test_t064_flui_headless_environment_variable() {
     // T064: current_platform() returns HeadlessPlatform when FLUI_HEADLESS=1
 
     // Set environment variable
-    // SAFETY: Tests run serially for env var manipulation
+    // SAFETY: no other thread reads the environment concurrently — supplied
+    // by nextest's process-per-test isolation, not by any `--test-threads`
+    // setting. See the file header.
     unsafe { std::env::set_var("FLUI_HEADLESS", "1") };
 
     let platform = current_platform().expect("Failed to get platform");
@@ -30,7 +32,9 @@ fn test_t064_flui_headless_environment_variable() {
     );
 
     // Clean up
-    // SAFETY: Tests run serially for env var manipulation
+    // SAFETY: no other thread reads the environment concurrently — supplied
+    // by nextest's process-per-test isolation, not by any `--test-threads`
+    // setting. See the file header.
     unsafe { std::env::remove_var("FLUI_HEADLESS") };
 }
 
@@ -163,7 +167,9 @@ fn test_t069_all_tests_pass_in_headless_mode() {
     // T069: Verify all existing tests pass in headless mode
     // This is a meta-test that verifies headless mode doesn't break other tests
 
-    // SAFETY: Tests run serially for env var manipulation
+    // SAFETY: no other thread reads the environment concurrently — supplied
+    // by nextest's process-per-test isolation, not by any `--test-threads`
+    // setting. See the file header.
     unsafe { std::env::set_var("FLUI_HEADLESS", "1") };
 
     let platform = current_platform().expect("Failed to get platform");
@@ -186,7 +192,9 @@ fn test_t069_all_tests_pass_in_headless_mode() {
     clipboard.write_text("test".to_string());
     assert_eq!(clipboard.read_text(), Some("test".to_string()));
 
-    // SAFETY: Tests run serially for env var manipulation
+    // SAFETY: no other thread reads the environment concurrently — supplied
+    // by nextest's process-per-test isolation, not by any `--test-threads`
+    // setting. See the file header.
     unsafe { std::env::remove_var("FLUI_HEADLESS") };
 }
 
