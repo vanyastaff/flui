@@ -1046,13 +1046,11 @@ mod lifecycle_tests {
         // not re-deallocate the `Box<CanvasLayer>` (the slab would
         // double-free if Drop ran twice).
         //
-        // Memory safety note: the SECOND `drop_in_place` IS a
-        // double-free at the std::mem level — `Box::drop` is not
-        // idempotent. This test is about the *side-effect* idempotency
-        // of the `LayerNode::drop` flag-flip path, not raw memory
-        // safety. We use `ManuallyDrop<MaybeUninit>` to make the
-        // double `drop_in_place` not a UB on the surrounding type
-        // (the slot is uninit after the first drop).
+        // This test is about the *side-effect* idempotency of the
+        // `LayerNode::drop` flag-flip path, not raw memory safety. Only ONE
+        // `drop_in_place` is run: a second would double-free the `children`
+        // Vec, since drop glue is not idempotent. The flag is instead read
+        // back twice, which is sound on the premises stated at each read.
         use std::mem::MaybeUninit;
         use std::ptr;
 

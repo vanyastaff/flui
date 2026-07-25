@@ -53,6 +53,15 @@ impl Lifecycle {
         matches!(self, Self::Active)
     }
 
+    /// Returns `true` if the element has been created but not yet mounted.
+    ///
+    /// Flutter's `Element.mount` asserts `_lifecycleState == initial`; this is
+    /// the predicate `ElementCore::mount` checks so the contract matches.
+    #[inline]
+    pub fn is_initial(self) -> bool {
+        matches!(self, Self::Initial)
+    }
+
     /// Returns `true` if the element is inactive.
     #[inline]
     pub fn is_inactive(self) -> bool {

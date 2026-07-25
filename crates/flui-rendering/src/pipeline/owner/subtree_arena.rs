@@ -1085,9 +1085,18 @@ unsafe fn layout_subtree_borrowed_impl(
         let cb_ref: LayoutChildCallback<'_> = &cb_owned;
 
         let baseline_cb_owned = move |child_id: RenderId, baseline: crate::traits::TextBaseline| {
+            // A cyclic `children()` edge can name this frame's own slot or an
+            // in-flight ancestor's, and the `&mut *node_ptr` opened below is live
+            // for the whole enclosing block — so a shared reborrow here would be
+            // a foreign read against a live Unique tag. Same gate the four other
+            // child-slot derefs in this file use; this one was missing it.
+            if arena_for_cb.is_in_flight(child_id) {
+                return None;
+            }
             arena_for_cb.get(child_id).and_then(|child_ptr| {
-                // SAFETY: shared reborrow of a distinct child slot after its
-                // layout completed in this walk; no concurrent &mut to the slot.
+                // SAFETY: child `child_id` is NOT in-flight (guard above), so no
+                // `&mut` to its slot is live; this shared reborrow is scoped to
+                // the closure body.
                 let child_node: &RenderNode = unsafe { &*child_ptr.0 };
                 child_node
                     .as_box()

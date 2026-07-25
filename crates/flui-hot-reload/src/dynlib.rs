@@ -171,9 +171,10 @@ mod sys {
     pub(super) unsafe fn close_library(handle: *mut c_void) {
         // SAFETY: edition 2024 makes unsafe-fn bodies safe by default, so the
         // call still needs its own block. `handle` is the value `dlopen`
-        // returned in `load_library` — never null, and never double-closed
-        // because `DynLib::drop` owns the only handle. The caller-side
-        // contract is the `# Safety` doc above.
+        // returned in `load_library`, so it is non-null. Closing is balanced
+        // rather than unique: `dlopen` refcounts, and each `DynLib::drop`
+        // decrements exactly once (see the note on `unsafe impl Send`). The
+        // caller-side contract is the `# Safety` doc above.
         unsafe {
             libc::dlclose(handle);
         }

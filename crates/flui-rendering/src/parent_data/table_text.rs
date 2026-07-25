@@ -5,11 +5,12 @@ use std::hash::{Hash, Hasher};
 use flui_foundation::RenderId;
 use flui_types::Offset;
 pub use flui_types::layout::TableCellVerticalAlignment;
-// `TextRange` used to be declared here as well. flui-types owns the concept and
-// its copy is a strict superset (intersect/union/collapsed on top of
-// len/is_empty/contains), so this module re-exports rather than redeclares —
-// keeping `parent_data::TextRange` a valid path for consumers.
-pub use flui_types::typography::TextRange;
+// `TextRange` used to be declared here as well; flui-types owns the concept and
+// its copy is a strict superset. Imported privately, not re-exported: every
+// other consumer in the workspace already reaches for
+// `flui_types::typography::TextRange` directly, so a `pub use` here would be
+// public surface with no consumer.
+use flui_types::typography::TextRange;
 
 use super::{base::ParentData, container_mixin::ContainerParentDataMixin};
 

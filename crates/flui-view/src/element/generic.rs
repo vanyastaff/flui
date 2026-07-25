@@ -258,9 +258,10 @@ where
         owner: &mut crate::ElementOwner<'_>,
     ) {
         debug_assert!(
-            !self.lifecycle.is_defunct(),
-            "BUG: mount from Defunct — its state is already disposed, so this \
-             would operate on torn-down state"
+            self.lifecycle.is_initial(),
+            "BUG: mount from {:?} — Flutter's contract is that mount runs once, \
+             on a freshly created element; reuse goes through activate()",
+            self.lifecycle
         );
         self.lifecycle = Lifecycle::Active;
         self.depth = slot;

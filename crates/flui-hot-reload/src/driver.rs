@@ -123,7 +123,9 @@ impl HotReloadDriver {
                         kind,
                         self.reload_count
                     );
-                    return self.build_scene(width, height);
+                    // SAFETY: forwarded from this fn's own contract.
+                    #[allow(unsafe_code)]
+                    return unsafe { self.build_scene(width, height) };
                 }
                 tracing::warn!("HotReloadDriver: reload failed — plugin not available");
             }
@@ -135,7 +137,9 @@ impl HotReloadDriver {
                     "HotReloadDriver: plugin now available — loaded from {}",
                     self.lib_path.display()
                 );
-                return self.build_scene(width, height);
+                // SAFETY: forwarded from this fn's own contract.
+                #[allow(unsafe_code)]
+                return unsafe { self.build_scene(width, height) };
             }
         }
 
@@ -146,8 +150,18 @@ impl HotReloadDriver {
     ///
     /// Returns `None` if no plugin is loaded (caller should use a fallback
     /// scene).
-    pub fn build_scene(&self, width: f32, height: f32) -> Option<Scene> {
-        self.plugin.as_ref().map(|p| p.build_scene(width, height))
+    ///
+    /// # Safety
+    ///
+    /// Forwards [`ScenePlugin::build_scene`]'s contract unchanged — see it for
+    /// the obligations the caller must establish about host/plugin agreement
+    /// and about dropping the `Scene` before the library is unloaded.
+    #[allow(unsafe_code)]
+    pub unsafe fn build_scene(&self, width: f32, height: f32) -> Option<Scene> {
+        // SAFETY: the caller of this fn has assumed the same obligations.
+        self.plugin
+            .as_ref()
+            .map(|p| unsafe { p.build_scene(width, height) })
     }
 
     /// Whether a plugin is currently loaded.
@@ -180,11 +194,15 @@ impl HotReloadDriver {
     ///
     /// Convenience method that calls the plugin's `build_scene` if loaded,
     /// otherwise calls the provided fallback function.
-    pub fn build_scene_or<F>(&self, width: f32, height: f32, fallback: F) -> Scene
+    /// # Safety
+    ///
+    /// Forwards [`Self::build_scene`]'s contract unchanged.
+    #[allow(unsafe_code)]
+    pub unsafe fn build_scene_or<F>(&self, width: f32, height: f32, fallback: F) -> Scene
     where
         F: FnOnce(f32, f32) -> Scene,
     {
-        self.build_scene(width, height)
-            .unwrap_or_else(|| fallback(width, height))
+        // SAFETY: the caller of this fn has assumed the same obligations.
+        unsafe { self.build_scene(width, height) }.unwrap_or_else(|| fallback(width, height))
     }
 }

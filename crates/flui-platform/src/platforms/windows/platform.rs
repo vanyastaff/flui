@@ -100,9 +100,21 @@ pub struct WindowsPlatform {
     config: WindowConfiguration,
 }
 
-// SAFETY: HWND is just an integer handle and is safe to send/share between
-// threads. Windows API handles are thread-safe by design.
+// SAFETY, per field: `windows` and `handlers` are `Arc<Mutex<..>>`, the
+// executors are `Arc`-shared and internally synchronized, and `config` is plain
+// data. The only non-`Sync` member is `message_window: HWND`, a bare address
+// that is never dereferenced here.
+//
+// NOT claimed — an earlier version of this comment claimed both, wrongly: that
+// an HWND is "thread-safe by design" (it is thread-AFFINE; its message queue
+// belongs to the creating thread, and `DestroyWindow` must run there), and that
+// the struct is itself just a handle. Sending the struct is sound because the
+// address alone aliases nothing; any Win32 call made through it still owes the
+// thread-affinity obligation, which these impls do not discharge. See the
+// event-loop affinity gap in `docs/audits/2026-07-25-upgrade-pack-audit.md`.
 unsafe impl Send for WindowsPlatform {}
+// SAFETY: as for `Send` — `&WindowsPlatform` grants no more than shared access
+// to already-synchronized members plus a never-dereferenced address.
 unsafe impl Sync for WindowsPlatform {}
 
 impl std::fmt::Debug for WindowsPlatform {

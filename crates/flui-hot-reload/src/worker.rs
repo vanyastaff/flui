@@ -73,6 +73,20 @@ pub fn host_register_fn() -> RegisterWorkerBuildFn {
 }
 
 /// Look up a worker-registered build function by layout fingerprint.
+///
+/// # Safety of the returned pointer
+///
+/// This function is safe — it only reads a map — but the address it returns is
+/// **not guaranteed to be live**. It points into the worker dylib, and
+/// [`WorkerPlugin::unload`] unmaps that image WITHOUT removing the entry (the
+/// registry is a `'static` map that is never pruned). After an unload, or after
+/// a failed reload that already dropped the old library, transmuting and calling
+/// this pointer jumps into unmapped memory.
+///
+/// A caller must therefore establish out of band that no unload has happened
+/// since registration. Fixing this properly means pruning the registry in
+/// `unload` and treating a missing entry as "worker unavailable"; tracked with
+/// the plugin-boundary redesign.
 #[must_use]
 pub fn get_worker_build_ptr(fingerprint: u64) -> Option<*const ()> {
     worker_builds()

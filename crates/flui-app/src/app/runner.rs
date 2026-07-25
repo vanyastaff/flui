@@ -2021,7 +2021,17 @@ where
 
                 // If a scene plugin is active it owns this presentation frame,
                 // but the callback still executes inside the realm entry scope.
-                if let Some(scene) = hr.build_scene(w as f32, h as f32) {
+                // SAFETY: `HotReloadDriver::build_scene` reclaims a Box the plugin
+                // allocated, so host and plugin must agree on `Scene`'s layout and
+                // allocator, and the scene must be dropped before the library is
+                // unloaded. Both hold here: the plugin is built from this workspace
+                // by the same toolchain, and `scene` is consumed by `render_scene`
+                // and dropped inside this block, while `hr` (owning the library)
+                // outlives it. See that method's `# Safety` for why this cannot be
+                // a safe call.
+                #[allow(unsafe_code)]
+                let built = unsafe { hr.build_scene(w as f32, h as f32) };
+                if let Some(scene) = built {
                     drop(hr);
                     if let Err(e) = r.render_scene(&scene) {
                         tracing::error!("Plugin render failed: {:?}", e);

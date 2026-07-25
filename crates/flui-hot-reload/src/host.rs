@@ -185,7 +185,29 @@ impl ScenePlugin {
     ///
     /// The plugin allocates a `Box<Scene>` and returns it as a raw pointer.
     /// This method takes ownership back via `Box::from_raw`.
-    pub fn build_scene(&self, width: f32, height: f32) -> Scene {
+    ///
+    /// # Safety
+    ///
+    /// This cannot be a safe function. It reclaims, with the HOST's drop glue
+    /// and allocator, a `Box<Scene>` that the PLUGIN allocated — and `Scene` is
+    /// `repr(Rust)`, so nothing guarantees the two compilations agree on its
+    /// layout. The caller must establish, out of band, that:
+    ///
+    /// * host and plugin were built by the same compiler from the same source
+    ///   revision with the same features (nothing here checks it — the plugin's
+    ///   `flui_*_version` symbol is resolved and never compared);
+    /// * neither side installs a `#[global_allocator]`, so both `__rust_alloc`
+    ///   implementations bottom out in the same `malloc`;
+    /// * the returned `Scene` is dropped BEFORE the library is unloaded — it
+    ///   holds `Box<dyn FnOnce>` and `Arc<dyn Any>` whose vtables live in the
+    ///   plugin image, so dropping it after `dlclose` is a use-after-free of
+    ///   code. No lifetime ties the two.
+    ///
+    /// The plugin exports `flui_scene_drop`, which is the deallocator that
+    /// *would* discharge the first two obligations; this path bypasses it.
+    /// Treat hot-reload as a development-only path until that is redesigned.
+    #[allow(unsafe_code)]
+    pub unsafe fn build_scene(&self, width: f32, height: f32) -> Scene {
         // SAFETY, to the extent it can be claimed: `build_fn` was resolved from
         // the `DynLib` this struct owns and which outlives the call, and
         // `scene_plugin!` really does return `Box::into_raw(Box::new(scene))`,
