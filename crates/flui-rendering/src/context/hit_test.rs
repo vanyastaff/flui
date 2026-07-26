@@ -164,25 +164,38 @@ where
     // CHILD TESTING
     // ════════════════════════════════════════════════════════════════════════
 
-    /// Tests a child at a caller-supplied position, bypassing the
-    /// transform-stack push.
+    /// Tests a child at a caller-supplied position.
     ///
-    /// This does NOT push anything onto the driver-level `HitTestResult`
-    /// transform stack — the caller is asserting that `position` is
-    /// already local to the child (no reframing happened), so there is
-    /// nothing to push. That is only sound when the child is committed at
-    /// `Offset::ZERO` (e.g. a transparent passthrough that never
-    /// repositions its child).
+    /// # Caller contract
     ///
-    /// If the caller DOES move `position` into the child's own frame, this
-    /// method alone leaves that offset un-recorded, and pushing it via
-    /// `push_offset`/`with_transform` on this ctx does not fix that either
-    /// today — see the ctx-level transform-stack gap tracked in
-    /// `crates/flui-interaction/docs/HIT_TESTING.md` ("Known gaps"). Prefer
+    /// `position` must ALREADY be local to the child: this method hands it
+    /// over verbatim, so any reframing the caller performed is invisible
+    /// here. Whether the driver records that reframing on the
+    /// `HitTestResult` transform stack is decided by the walk, not by this
+    /// method — and today the walk does not push for every parent/child
+    /// pairing:
+    ///
+    /// - box parent → any child, and sliver parent → sliver child: the
+    ///   driver pushes nothing on this path. Sound only when the child is
+    ///   committed at `Offset::ZERO` (a transparent passthrough that never
+    ///   repositions its child); a nonzero offset here silently yields an
+    ///   un-localized position, and the sliver walk carries a
+    ///   `debug_assert!` for exactly that.
+    /// - sliver parent → box child: the driver DOES push the child's paint
+    ///   offset, because crossing into a box frame always decomposes the
+    ///   position into box-local coordinates.
+    ///
+    /// Do not rely on that split. Prefer
     /// [`hit_test_child_at_layout_offset`](Self::hit_test_child_at_layout_offset)
-    /// whenever the child has a real laid-out offset — it resolves and
-    /// pushes that offset through the driver-level walk and cannot
-    /// silently deliver an un-localized position.
+    /// whenever the child has a real laid-out offset — it lets the driver
+    /// resolve and push the offset uniformly and cannot silently deliver an
+    /// un-localized position.
+    ///
+    /// Pushing the offset yourself via this context's `push_offset` /
+    /// `with_transform` does not help: the ctx-level transform stack is
+    /// discarded before it reaches `HitTestEntry.transform` — see the
+    /// "Known gaps" section of
+    /// `crates/flui-interaction/docs/HIT_TESTING.md`.
     pub fn hit_test_child(
         &mut self,
         index: usize,
