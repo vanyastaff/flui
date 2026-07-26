@@ -128,25 +128,54 @@ path and whether it blocks targets visually behind it:
 Typical render-object hit testing still checks children before self so the path
 is leaf-first.
 
-## Known gaps (not this document's transform-stack fix, tracked separately)
+## Ctx-level transform pushes (box protocol)
 
-One call site still pushes nothing onto the `HitTestResult` transform stack
-that this document describes, so a `Listener` under it receives an
-un-localized position — the same class of bug the `with_paint_offset`/
-`with_paint_transform` fix above addresses, just not reachable through this
-path yet:
+`BoxHitTestContext`'s `push_offset`/`push_transform`/`with_transform`/
+`with_offset` (`crates/flui-rendering/src/context/hit_test.rs`) let a render
+object record a FORWARD (paint-direction) transform before recursing into a
+child via `hit_test_child`/`hit_test_child_at_layout_offset`. That push used
+to feed a per-node `BoxHitTestCtx` stack that `hit_test_raw`
+(`crates/flui-rendering/src/traits/render_box.rs`) discarded when the
+context went out of scope, so `RenderFractionalTranslation`
+(`crates/flui-objects/src/layout/fractional_translation.rs`) and
+`RenderFlow` (`crates/flui-objects/src/layout/flow.rs`) delivered
+un-localized positions.
 
-- `crates/flui-rendering/src/context/hit_test.rs:189-225` — the ctx-level
-  `push_offset`/`push_transform`/`with_transform` feed a per-node
-  `BoxHitTestCtx` stack that `hit_test_raw`
-  (`crates/flui-rendering/src/traits/render_box.rs:630-639`) discards, so
-  `RenderFractionalTranslation`
-  (`crates/flui-objects/src/layout/fractional_translation.rs:251`) and
-  `RenderFlow` (`crates/flui-objects/src/layout/flow.rs:395`) deliver
-  un-localized positions today.
+The ctx now hands its accumulated forward transform to the driver's
+`HitTestChildCallback` on every `hit_test_child`/`hit_test_child_at_layout_offset`
+call (`crates/flui-rendering/src/protocol/box_protocol.rs`,
+`BoxHitTestCtx::local_transform_for_driver`); the driver pushes its inverse
+onto the SAME `HitTestResult` this document describes, scoped to that one
+recursive call, via `with_paint_transform` — the identical mechanism the
+walk already uses for `hit_test_transform` and resolved follower offsets
+(`crates/flui-rendering/src/pipeline/owner/accessors.rs`). The sliver
+protocol's ctx-level stack stays a permanent no-op (main-axis position
+covers its needs); its own transform-stack gap (sliver→box edges skipping
+the push) was fixed separately — see "Sliver child transforms" above.
 
-The sliver walk's equivalent gap (`accessors.rs`, sliver→box edge skipping
-the transform-stack push) is fixed — see "Sliver child transforms" above.
+Two more gaps in the same family, found by auditing every caller of every
+`hit_test_child*` variant once the mechanism above started actually
+reaching the driver:
+
+- `HitTestContext::hit_test_child_at_offset` (the box-specific convenience
+  wrapper that subtracts a caller-supplied offset before delegating to
+  `hit_test_child`) computed the child-local position but never pushed the
+  offset it consumed — a bug in the wrapper itself, distinct from the
+  `BoxHitTestCtx`-discarded-on-scope-exit bug fixed above. Its only
+  nonzero-offset caller, `RenderFractionallySizedBox::hit_test`
+  (`crates/flui-objects/src/layout/fractionally_sized_box.rs`), delivered
+  un-localized positions to a fractionally-sized, off-center-aligned child.
+  Fixed by pushing the consumed offset unconditionally (mirroring
+  `hit_test_child_at_layout_offset`): the method always moves the position
+  into the child's frame, so per the rule above it must always push.
+- `RenderFittedBox::hit_test` (`crates/flui-objects/src/layout/fitted_box.rs`)
+  computed a child position through the inverse of its own scale/align
+  matrix and called the raw `hit_test_child` directly, recording nothing —
+  it has no `hit_test_transform` override (the driver-level mechanism
+  `RenderTransform`/`RenderRotatedBox` use) and never pushed a ctx-level
+  transform either (the mechanism `RenderFlow` uses). Fixed by wrapping the
+  child call in `ctx.with_transform`, the same pattern `RenderFlow` already
+  used.
 
 ## Tests
 

@@ -11,6 +11,34 @@
 //! - `'rotated for touch/signal'` —
 //!   [`a_rotated_ancestor_localises_the_delivered_position`].
 //!
+//! Also (not a `listener_test.dart` port; a second, independent defect this
+//! file's fix also closes): [`fractional_translation_true_localises_to_the_shifted_child`]
+//! and [`fractional_translation_false_localises_to_the_unshifted_child`] pin
+//! down `RenderFractionalTranslation`'s ctx-level hit-test transform push,
+//! which used to be discarded before reaching `HitTestEntry.transform` —
+//! see `crates/flui-interaction/docs/HIT_TESTING.md`'s former "Known gaps"
+//! section.
+//!
+//! A third, independent defect (also not a `listener_test.dart` port):
+//! [`fractionally_sized_box_localises_the_delivered_position_to_the_aligned_child`]
+//! pins down `HitTestContext::hit_test_child_at_offset`
+//! (`crates/flui-rendering/src/context/hit_test.rs`) itself — every caller of
+//! that method (`RenderFractionallySizedBox::hit_test` among them) moves the
+//! position into the child's frame but, before the fix, never recorded that
+//! move on the ctx-level transform stack, so descent hit-tested correctly
+//! while the delivered position stayed un-localized.
+//!
+//! A fourth, independent defect surfaced by auditing every caller of the raw
+//! `ctx.hit_test_child` for the same "moves the position but never records
+//! it" shape: [`fitted_box_localises_the_delivered_position_through_the_scale`]
+//! pins down `RenderFittedBox::hit_test`
+//! (`crates/flui-objects/src/layout/fitted_box.rs`), which computed a child
+//! position through the inverse of its own scale/align matrix but never
+//! pushed that matrix anywhere — neither the driver-level `hit_test_transform`
+//! hook (`RenderTransform`/`RenderRotatedBox`'s mechanism) nor the ctx-level
+//! `push_transform`/`with_transform` stack (`Flow`'s mechanism, and now this
+//! one's).
+//!
 //! Not ported:
 //! - `'scaled for touch/signal'` — `Align(topLeft)` contributes a zero offset
 //!   (`TOP_LEFT`'s alignment factor is `(0, 0)` regardless of the size
@@ -68,6 +96,7 @@ use flui_interaction::events::PointerEventExt as _;
 use flui_types::Color;
 use flui_widgets::prelude::*;
 
+use crate::common::{loose, tight};
 use crate::harness;
 
 const TOLERANCE: f32 = 1e-3;
@@ -242,5 +271,194 @@ fn a_rotated_ancestor_localises_the_delivered_position() {
         local,
         local_down,
         "a rotated+offset ancestor must localise back to Flutter's own quoted local position",
+    );
+}
+
+/// `RenderFractionalTranslation::hit_test` (`transform_hit_tests(true)`,
+/// the default) pushes the pixel offset it computed onto the ctx-level
+/// `BoxHitTestContext` transform stack (`ctx.push_offset(offset)`,
+/// `crates/flui-objects/src/layout/fractional_translation.rs:251`) before
+/// delegating to the shifted child. That ctx-level stack lived in a private
+/// `BoxHitTestCtx` that `RenderBox::hit_test_raw`
+/// (`crates/flui-rendering/src/traits/render_box.rs`) discarded when it
+/// went out of scope, so `HitTestEntry.transform` never recorded the
+/// offset even though `hit_test` itself moved `position` by that same
+/// offset to decide which child pixel was hit.
+///
+/// Flutter parity: `RenderFractionalTranslation.hitTestChildren`
+/// (`rendering/proxy_box.dart:3121-3132`) calls
+/// `result.addWithPaintOffset(offset: Offset(translation.dx * size.width,
+/// translation.dy * size.height), position: position, hitTest: ...)` —
+/// the SAME `BoxHitTestResult` the whole walk shares records the offset,
+/// there is no separate context to lose it in.
+///
+/// RED before the fix: a tap on the visually-shifted child delivered the
+/// raw global position instead of the position local to the child's own
+/// box.
+#[test]
+fn fractional_translation_true_localises_to_the_shifted_child() {
+    let (recorded, listener) = recording_listener();
+
+    // 100x100 target, translated by half its own size on both axes ->
+    // painted (and, with `transform_hit_tests(true)`, hit-tested) at
+    // global (50, 50)..(150, 150).
+    let laid = harness::pump_widget(
+        FractionalTranslation::new(0.5, 0.5).child(listener.child(target())),
+        loose(200.0),
+    );
+
+    // Dead center of the shifted child's occupied region.
+    laid.dispatch_pointer_down(100.0, 100.0);
+
+    let local = recorded.get().expect("on_pointer_down must have fired");
+    assert_close(
+        local,
+        (50.0, 50.0),
+        "a tap on the shifted child must localise to the child's own 100x100 box",
+    );
+    assert_ne!(
+        local,
+        (100.0, 100.0),
+        "the recorded position must be LOCAL to the child, not the raw dispatch position"
+    );
+}
+
+/// `transform_hit_tests(false)` is the control: `RenderFractionalTranslation`
+/// takes `ctx.hit_test_child_at_layout_offset(0)`
+/// (`crates/flui-objects/src/layout/fractional_translation.rs:259`), which
+/// the pipeline driver already resolves and pushes correctly — this path
+/// never touched the discarded ctx-level stack, so it must deliver the
+/// correct position both before and after the fix.
+///
+/// Flutter parity: same `hitTestChildren`, `transformHitTests == false`
+/// branch — `addWithPaintOffset(offset: null, ...)` performs no
+/// transform at all, matching a layout-offset-only child test.
+#[test]
+fn fractional_translation_false_localises_to_the_unshifted_child() {
+    let (recorded, listener) = recording_listener();
+
+    let laid = harness::pump_widget(
+        FractionalTranslation::new(0.5, 0.5)
+            .transform_hit_tests(false)
+            .child(listener.child(target())),
+        loose(200.0),
+    );
+
+    // Within the child's ORIGINAL (unshifted) 100x100 bounds.
+    laid.dispatch_pointer_down(30.0, 40.0);
+
+    let local = recorded.get().expect("on_pointer_down must have fired");
+    assert_close(
+        local,
+        (30.0, 40.0),
+        "transform_hit_tests(false) must localise against the child's original, unshifted \
+         layout position",
+    );
+}
+
+/// `RenderFractionallySizedBox::hit_test`
+/// (`crates/flui-objects/src/layout/fractionally_sized_box.rs:319-328`) takes
+/// `ctx.hit_test_child_at_offset(0, self.child_offset)` — the same
+/// alignment-resolved offset `perform_layout` handed to `ctx.position_child`.
+/// `hit_test_child_at_offset` (`crates/flui-rendering/src/context/hit_test.rs`)
+/// subtracts that offset to compute the child-local position it hands to the
+/// child's own `hit_test`, so hit/miss descent was always correct — but,
+/// before the fix, never recorded the offset on the ctx-level transform
+/// stack the way `hit_test_child_at_layout_offset` (and, since the sibling
+/// fix in this same change, the ctx-level `push_offset`/`push_transform`
+/// stack in general) does, so the RECORDED `HitTestEntry.transform` stayed
+/// identity: delivery localized against the raw global dispatch point
+/// instead of the child's own box.
+///
+/// Non-parity regression test — this is a FLUI-internal transform-stack
+/// bookkeeping bug in a single ctx method, not Flutter behavior being ported.
+///
+/// A tight 200×200 `FractionallySizedBox(width_factor: 0.5, height_factor:
+/// 0.5, alignment: CENTER)` constrains its 400×400 child down to a tight
+/// 100×100 (`factor × incoming max` on each axis — see `child_constraints`)
+/// and centers it inside its own 200×200 box, so `child_offset = (50, 50)`.
+/// A tap at the global point `(60, 60)` lands `(10, 10)` inside the child's
+/// own 100×100 box.
+///
+/// RED before the fix: the delivered local position was `(60, 60)` — the
+/// raw global dispatch point, un-localized.
+#[test]
+fn fractionally_sized_box_localises_the_delivered_position_to_the_aligned_child() {
+    let (recorded, listener) = recording_listener();
+
+    let laid =
+        harness::pump_widget(
+            FractionallySizedBox::new()
+                .width_factor(0.5)
+                .height_factor(0.5)
+                .alignment(Alignment::CENTER)
+                .child(listener.child(
+                    ColoredBox::new(Color::rgb(255, 0, 0)).child(SizedBox::new(400.0, 400.0)),
+                )),
+            tight(200.0, 200.0),
+        );
+
+    laid.dispatch_pointer_down(60.0, 60.0);
+
+    let local = recorded.get().expect("on_pointer_down must have fired");
+    assert_close(
+        local,
+        (10.0, 10.0),
+        "a tap on the centered, factor-shrunk child must localise to the child's own 100x100 box",
+    );
+    assert_ne!(
+        local,
+        (60.0, 60.0),
+        "the recorded position must be LOCAL to the child, not the raw dispatch position"
+    );
+}
+
+/// `RenderFittedBox::hit_test` (`crates/flui-objects/src/layout/fitted_box.rs`)
+/// computes the child-local position by inverting `effective_transform()` —
+/// the same scale/align matrix `paint_transform` hands the pipeline — but,
+/// before the fix, called the raw `ctx.hit_test_child` directly with that
+/// computed position, recording nothing: neither a driver-level
+/// `hit_test_transform` override (the mechanism `RenderTransform` and
+/// `RenderRotatedBox` use) nor a ctx-level `push_transform`/`with_transform`
+/// scope (the mechanism `RenderFlow` uses for its own per-child delegate
+/// matrix). Hit/miss descent was still correct — the computed local position
+/// IS where the child sits — but the RECORDED `HitTestEntry.transform` stayed
+/// identity, so delivery localized against the raw global dispatch point.
+///
+/// Non-parity regression test — a FLUI-internal transform-stack bookkeeping
+/// bug, not Flutter behavior being ported.
+///
+/// `FittedBox::fit(BoxFit::Fill)` under tight 100×100 constraints stretches
+/// its unconstrained-intrinsic 50×50 child to exactly fill the box on both
+/// axes (`Fill` never crops or letterboxes): `scale_x = scale_y = 2.0`,
+/// `align_offset = source_offset = Offset::ZERO`, so `effective_transform()`
+/// is a pure `scale(2, 2)`. A tap at the global point `(30, 40)` lands at the
+/// child-local point `(15, 20)` (divide by the scale).
+///
+/// RED before the fix: the delivered local position was `(30, 40)` — the raw
+/// global dispatch point, un-localized.
+#[test]
+fn fitted_box_localises_the_delivered_position_through_the_scale() {
+    let (recorded, listener) = recording_listener();
+
+    let laid = harness::pump_widget(
+        FittedBox::new().fit(BoxFit::Fill).child(
+            listener.child(ColoredBox::new(Color::rgb(255, 0, 0)).child(SizedBox::new(50.0, 50.0))),
+        ),
+        tight(100.0, 100.0),
+    );
+
+    laid.dispatch_pointer_down(30.0, 40.0);
+
+    let local = recorded.get().expect("on_pointer_down must have fired");
+    assert_close(
+        local,
+        (15.0, 20.0),
+        "a tap through a 2x FittedBox scale must localise to the child's own unscaled box",
+    );
+    assert_ne!(
+        local,
+        (30.0, 40.0),
+        "the recorded position must be LOCAL to the child, not the raw dispatch position"
     );
 }

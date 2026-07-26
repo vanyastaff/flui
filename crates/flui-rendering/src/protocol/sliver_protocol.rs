@@ -1310,8 +1310,16 @@ impl SliverHitTestEntry {
 }
 
 /// Driver-supplied child recursion for the sliver hit-test walk.
+///
+/// The third parameter mirrors the box protocol's
+/// [`box_protocol::HitTestChildCallback`](crate::protocol::box_protocol::HitTestChildCallback)
+/// for signature uniformity with the shared `RenderObject::hit_test_raw`
+/// trait method, but `SliverHitTestCtx`'s own transform stack is a no-op
+/// (see its `push_transform`/`pop_transform` impl below — main-axis
+/// position covers the sliver protocol's needs), so this is always
+/// `None` in practice.
 pub type SliverHitTestChildCallback<'a> =
-    &'a mut (dyn FnMut(usize, Option<MainAxisPosition>) -> bool + Send + Sync);
+    &'a mut (dyn FnMut(usize, Option<MainAxisPosition>, Option<Matrix4>) -> bool + Send + Sync);
 
 /// Sliver hit test context implementation.
 pub struct SliverHitTestCtx<'ctx, A: Arity, P: ParentData> {
@@ -1393,14 +1401,14 @@ impl<'ctx, A: Arity, P: ParentData> HitTestContextApi<'ctx, SliverHitTest, A, P>
 
     fn hit_test_child(&mut self, index: usize, position: MainAxisPosition) -> bool {
         match self.child_callback.as_mut() {
-            Some(callback) => callback(index, Some(position)),
+            Some(callback) => callback(index, Some(position), None),
             None => false,
         }
     }
 
     fn hit_test_child_at_layout_offset(&mut self, index: usize) -> bool {
         match self.child_callback.as_mut() {
-            Some(callback) => callback(index, None),
+            Some(callback) => callback(index, None, None),
             None => false,
         }
     }

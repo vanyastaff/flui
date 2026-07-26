@@ -553,11 +553,12 @@ pub use flui_types::layout::TextBaseline;
 /// which demonstrably returned `Size::ZERO` for fresh boxes. The real
 /// bridge is now live.
 ///
-/// `hit_test_raw` is still a placeholder — hit testing flows through
-/// `RenderBox::hit_test()` with `BoxHitTestContext` and is wired
-/// separately by the hit-test pipeline. `paint_raw` is the live paint
-/// bridge: it wraps the pipeline's `FragmentRecorder` in the typed
-/// `PaintCx<T::Arity>` and calls `RenderBox::paint`.
+/// `hit_test_raw` is a live bridge too: it wraps the driver's child
+/// recursion in a typed `BoxHitTestContext` and calls `RenderBox::hit_test`
+/// — see its own doc for the ctx-level transform-stack handoff to the
+/// driver. `paint_raw` is the live paint bridge: it wraps the pipeline's
+/// `FragmentRecorder` in the typed `PaintCx<T::Arity>` and calls
+/// `RenderBox::paint`.
 ///
 /// Note: This requires T to also implement Diagnosticable since `RenderObject<P>`
 /// requires it.
@@ -615,7 +616,11 @@ where
         _child_count: usize,
         size: flui_types::Size,
         hit_child: &mut (
-                 dyn FnMut(usize, Option<crate::protocol::ProtocolPosition<BoxProtocol>>) -> bool
+                 dyn FnMut(
+            usize,
+            Option<crate::protocol::ProtocolPosition<BoxProtocol>>,
+            Option<flui_types::Matrix4>,
+        ) -> bool
                      + Send
                      + Sync
              ),
@@ -627,6 +632,17 @@ where
         // `size` is the node's committed `RenderState` geometry, threaded
         // by the driver so the default bounds gate reads
         // `ctx.is_within_own_size()` (2B field dedup).
+        //
+        // `hit_child`'s third parameter is the ctx-level transform stack's
+        // accumulated forward transform at call time (`BoxHitTestCtx::
+        // local_transform_for_driver`) — `ctx.push_offset`/`push_transform`/
+        // `with_transform` push onto that stack, and the driver folds it
+        // into `HitTestEntry.transform` for exactly the scoped recursive
+        // call (see `RenderObject::hit_test_raw`'s doc and
+        // `crate::context::HitTestContext`'s "Ctx-level pushes ARE
+        // forwarded to the driver" doc). `BoxHitTestCtx` itself never talks
+        // to the driver directly; it only accumulates the stack and hands
+        // the top-of-scope composition to `hit_child` on every call.
         let inner = crate::protocol::BoxHitTestCtx::<T::Arity, T::ParentData>::with_child_callback(
             position, hit_child,
         );

@@ -772,6 +772,7 @@ mod tests {
                      dyn FnMut(
                 usize,
                 Option<crate::protocol::ProtocolPosition<crate::protocol::BoxProtocol>>,
+                Option<flui_types::Matrix4>,
             ) -> bool
                          + Send
                          + Sync

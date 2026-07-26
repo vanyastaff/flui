@@ -169,33 +169,46 @@ where
     /// # Caller contract
     ///
     /// `position` must ALREADY be local to the child: this method hands it
-    /// over verbatim, so any reframing the caller performed is invisible
-    /// here. Whether the driver records that reframing on the
-    /// `HitTestResult` transform stack is decided by the walk, not by this
-    /// method — and today the walk does not push for every parent/child
-    /// pairing:
+    /// over verbatim, so any reframing the caller performed to compute it
+    /// is invisible here — it does not, by itself, tell the driver to
+    /// record anything on the `HitTestResult` transform stack. Whether the
+    /// walk pushes something for THIS call depends on whether a transform
+    /// was pushed on this context before calling (see below) and, absent
+    /// that, on the parent/child pairing:
     ///
-    /// - box parent → any child, and sliver parent → sliver child: the
-    ///   driver pushes nothing on this path. Sound only when the child is
-    ///   committed at `Offset::ZERO` (a transparent passthrough that never
-    ///   repositions its child); a nonzero offset here silently yields an
-    ///   un-localized position, and the sliver walk carries a
-    ///   `debug_assert!` for exactly that.
+    /// - box parent → any child, and sliver parent → sliver child: with no
+    ///   ctx-level push in effect, the driver pushes nothing on this path.
+    ///   Sound only when the child is committed at `Offset::ZERO` (a
+    ///   transparent passthrough that never repositions its child); a
+    ///   nonzero offset here silently yields an un-localized position, and
+    ///   the sliver walk carries a `debug_assert!` for exactly that.
     /// - sliver parent → box child: the driver DOES push the child's paint
     ///   offset, because crossing into a box frame always decomposes the
     ///   position into box-local coordinates.
     ///
-    /// Do not rely on that split. Prefer
+    /// Prefer
     /// [`hit_test_child_at_layout_offset`](Self::hit_test_child_at_layout_offset)
     /// whenever the child has a real laid-out offset — it lets the driver
     /// resolve and push the offset uniformly and cannot silently deliver an
-    /// un-localized position.
+    /// un-localized position. Reach for `push_offset`/`push_transform`/
+    /// `with_transform`/`with_offset` (below) plus this method only when the
+    /// child's effective position was computed some OTHER way — e.g. a
+    /// paint-time-only offset that never lands in `RenderState.offset`
+    /// (`RenderFractionalTranslation`), an inverted delegate-supplied matrix
+    /// (`RenderFlow`), or an inverted scale/alignment matrix
+    /// (`RenderFittedBox`).
     ///
-    /// Pushing the offset yourself via this context's `push_offset` /
-    /// `with_transform` does not help: the ctx-level transform stack is
-    /// discarded before it reaches `HitTestEntry.transform` — see the
-    /// "Known gaps" section of
-    /// `crates/flui-interaction/docs/HIT_TESTING.md`.
+    /// # Ctx-level pushes ARE forwarded to the driver
+    ///
+    /// A transform pushed on this context (`push_offset`, `push_transform`,
+    /// or the `with_offset`/`with_transform` scope helpers) before calling
+    /// this method is folded into the shared `HitTestResult` for the
+    /// duration of the recursive call: the driver pushes its INVERSE
+    /// (mirroring `hit_test_transform`'s own forward-then-invert handling),
+    /// so `HitTestEntry.transform` composes correctly. Only the box
+    /// protocol does this — `BoxHitTestContext`'s ctx-level stack reaches
+    /// the driver; the sliver protocol's ctx-level stack stays a no-op
+    /// (main-axis position covers its needs).
     pub fn hit_test_child(
         &mut self,
         index: usize,
@@ -217,24 +230,45 @@ where
     // ════════════════════════════════════════════════════════════════════════
     // TRANSFORM MANAGEMENT
     // ════════════════════════════════════════════════════════════════════════
+    //
+    // Unlike the driver-level `HitTestResult::push_transform`/`push_offset`
+    // (RAW primitives — the caller supplies the ALREADY-INVERTED,
+    // global-to-local value; see `crates/flui-interaction/docs/HIT_TESTING.md`),
+    // these ctx-level methods take the FORWARD, paint-direction transform —
+    // the same value a render object already computes to know where its
+    // child sits (`RenderFractionalTranslation`'s pixel offset,
+    // `RenderFlow`'s per-child delegate matrix). The bridge from this
+    // context to the driver — `hit_test_child`/`hit_test_child_at_layout_offset`
+    // above — inverts it for you when composing the real
+    // `HitTestEntry.transform`, mirroring `HitTestResult::with_paint_transform`.
+    // A push here only takes effect for hit-test calls made on THIS context
+    // before the matching pop; it does not retroactively affect entries
+    // already added.
 
-    /// Adds a transform to the hit test path.
+    /// Pushes a FORWARD (paint-direction) transform, applied to the next
+    /// `hit_test_child`/`hit_test_child_at_layout_offset` call on this
+    /// context (see the section doc above). Must be paired with
+    /// [`pop_transform`](Self::pop_transform) — prefer
+    /// [`with_transform`](Self::with_transform), which pairs them for you.
     pub fn push_transform(&mut self, transform: Matrix4) {
         self.inner.push_transform(transform);
     }
 
-    /// Removes the most recent transform.
+    /// Removes the most recently pushed transform or offset.
     pub fn pop_transform(&mut self) {
         self.inner.pop_transform();
     }
 
-    /// Adds an offset transform.
+    /// Pushes a FORWARD (paint-direction) offset — see
+    /// [`push_transform`](Self::push_transform)'s doc; a pure translation
+    /// convenience over the same mechanism.
     pub fn push_offset(&mut self, offset: Offset) {
         self.inner.push_offset(offset);
     }
 
-    /// Executes a closure with a pushed transform, automatically popping
-    /// afterward.
+    /// Runs `f` with `transform` pushed (see
+    /// [`push_transform`](Self::push_transform)) and pops it before
+    /// returning.
     pub fn with_transform<F, R>(&mut self, transform: Matrix4, f: F) -> R
     where
         F: FnOnce(&mut Self) -> R,
@@ -245,8 +279,8 @@ where
         result
     }
 
-    /// Executes a closure with a pushed offset, automatically popping
-    /// afterward.
+    /// Runs `f` with `offset` pushed (see
+    /// [`push_offset`](Self::push_offset)) and pops it before returning.
     pub fn with_offset<F, R>(&mut self, offset: Offset, f: F) -> R
     where
         F: FnOnce(&mut Self) -> R,
@@ -345,10 +379,27 @@ where
 
     /// Tests a child at the given offset.
     ///
-    /// Automatically transforms position by subtracting the offset.
+    /// Automatically transforms position by subtracting the offset — and,
+    /// mirroring what [`hit_test_child_at_layout_offset`](Self::hit_test_child_at_layout_offset)
+    /// does for a `RenderState`-owned offset, records that same offset on
+    /// the ctx-level transform stack
+    /// (see the "Ctx-level pushes ARE forwarded to the driver" section on
+    /// [`hit_test_child`](Self::hit_test_child)) so it reaches
+    /// `HitTestEntry.transform`. The push happens unconditionally — this
+    /// method always moves `position` into the child's frame (even when
+    /// `offset` is `Offset::ZERO`, a no-op translation), so per the rule
+    /// this API follows throughout (push the child offset iff the position
+    /// handed to the child was moved into the child's frame), it must
+    /// always push. A previous version of this method moved the position
+    /// but never pushed, which silently dropped it from the recorded
+    /// `HitTestEntry.transform` — see
+    /// `crates/flui-interaction/docs/HIT_TESTING.md`.
     pub fn hit_test_child_at_offset(&mut self, index: usize, offset: Offset) -> bool {
         let local_position = self.position_minus(offset);
-        self.inner.hit_test_child(index, local_position)
+        self.push_offset(offset);
+        let hit = self.inner.hit_test_child(index, local_position);
+        self.pop_transform();
+        hit
     }
 }
 

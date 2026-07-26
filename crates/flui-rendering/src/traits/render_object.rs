@@ -262,6 +262,17 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + DowncastSync + Send + Sync
     /// driver). Returns whether the position hits this node or any
     /// child. Hit entries are recorded by the driver, leaf-first.
     ///
+    /// The third argument is the FORWARD (paint-direction) transform the
+    /// object's own ctx-level transform stack accumulated before this
+    /// child call (`None` when nothing was pushed) — the driver pushes
+    /// its inverse onto the shared `HitTestResult` for the duration of
+    /// the recursive call, exactly like [`hit_test_transform`]'s own
+    /// forward-then-invert handling, so `HitTestEntry.transform` composes
+    /// correctly. Only the box protocol's ctx (`BoxHitTestCtx`) ever
+    /// produces `Some` here today; the sliver protocol keeps a no-op
+    /// transform stack (main-axis position covers its needs) and always
+    /// passes `None`.
+    ///
     /// **Users don't implement this directly.** Protocol traits provide
     /// blanket implementations that create typed contexts and call the
     /// protocol-level `hit_test` (e.g. `RenderBox::hit_test`).
@@ -272,12 +283,18 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + DowncastSync + Send + Sync
     /// bounds gate (`ctx.is_within_own_size()`); the sliver protocol
     /// ignores it (the driver owns the geometry/cross-axis gate). Render
     /// objects no longer cache their own size (2B field dedup).
+    ///
+    /// [`hit_test_transform`]: Self::hit_test_transform
     fn hit_test_raw(
         &self,
         position: ProtocolPosition<P>,
         child_count: usize,
         size: flui_types::Size,
-        hit_child: &mut (dyn FnMut(usize, Option<ProtocolPosition<P>>) -> bool + Send + Sync),
+        hit_child: &mut (
+                 dyn FnMut(usize, Option<ProtocolPosition<P>>, Option<flui_types::Matrix4>) -> bool
+                     + Send
+                     + Sync
+             ),
     ) -> HitTestOutcome;
 
     // ========================================================================
@@ -764,7 +781,15 @@ mod tests {
             _position: flui_types::Offset,
             _child_count: usize,
             _size: Size,
-            _hit_child: &mut (dyn FnMut(usize, Option<flui_types::Offset>) -> bool + Send + Sync),
+            _hit_child: &mut (
+                     dyn FnMut(
+                usize,
+                Option<flui_types::Offset>,
+                Option<flui_types::Matrix4>,
+            ) -> bool
+                         + Send
+                         + Sync
+                 ),
         ) -> HitTestOutcome {
             HitTestOutcome::miss()
         }
