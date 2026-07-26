@@ -542,21 +542,45 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         // stack BEFORE recursing, so child entries captured during
         // hit_test_raw see the correct accumulated transform. The
         // transform stays on the stack until after the parent entry
-        // is added (Flutter parity: pushTransform in hitTest). The hook
-        // gets `own_size` from RenderState for alignment-relative origins.
+        // is added (Flutter parity: `addWithPaintTransform`
+        // (`rendering/box.dart:799-812`) inverts the incoming transform at
+        // line 805 and delegates at line 811 to `addWithRawTransform`,
+        // which pushes the (already-inverted) transform at line 876). The
+        // hook gets `own_size` from RenderState for alignment-relative
+        // origins.
+        //
+        // Pushed as the INVERSE of `hit_test_transform`: `HitTestResult`
+        // composes the global-to-local mapping by left-multiplying each
+        // level's own inverse in descent order (see `HitTestEntry::transform`),
+        // so a caller pushing the forward (paint-direction) matrix here
+        // recorded the wrong composition for any chain mixing this transform
+        // with an outer offset -- correct only when the whole chain
+        // commutes (pure translations). A non-invertible `hit_test_transform`
+        // (e.g. a zero-scale `Transform`) falls back to pushing the
+        // still-singular forward matrix: when the determinant is exactly
+        // zero, the composed chain stays singular, so delivery still
+        // detects and skips it (`LocalEventTransform::capture`). For a
+        // merely near-singular transform (`0 < |det| < f32::EPSILON`, which
+        // `Matrix4::is_invertible` also rejects) the skip is only
+        // threshold-relative, not guaranteed: determinants compose
+        // multiplicatively, so a large-determinant ancestor can lift the
+        // product back above `f32::EPSILON`, and delivery then hands the
+        // entry a garbage local position instead of skipping it -- out of
+        // scope to change that skip behavior here.
         let hit_transform = render_object.hit_test_transform(own_size);
         let has_transform = hit_transform.is_some();
         if let Some(t) = hit_transform {
-            result.push_transform(t);
+            result.push_transform(t.try_inverse().unwrap_or(t));
         }
         // A resolved follower offset rides the SAME transform-stack
         // lifecycle as `hit_test_transform` (ADR-0015) — the same
         // translation the paint/GPU path applies via
         // `backend.push_offset(resolved)` (renderer.rs:1586), lifted to a
         // `Matrix4` (exact and lossless — the composer only ever
-        // shifts coordinate space via translation).
+        // shifts coordinate space via translation). Pushed as the inverse
+        // translation for the same reason as `hit_test_transform` above.
         if let Some(r) = follower_offset {
-            result.push_transform(Matrix4::translation(r.dx.get(), r.dy.get(), 0.0));
+            result.push_transform(Matrix4::translation(-r.dx.get(), -r.dy.get(), 0.0));
         }
 
         // Shift the position handed into this node's own subtree by the

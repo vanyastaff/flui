@@ -222,13 +222,18 @@ fn hit_entry_records_child_paint_offset_transform() {
         "laid-out child offset must contribute a non-identity transform",
     );
 
-    let inverse = transform
-        .try_inverse()
-        .expect("paint-offset transform must be invertible");
-    let (local_x, local_y) = inverse.transform_point(px(20.0), px(20.0));
+    // `transform` is already global-to-local (each level pushes its own
+    // inverse as the walk descends; see `HitTestEntry::transform`'s doc) --
+    // apply it directly. The invertibility check stays as a well-formedness
+    // assertion for this translation-only case.
+    assert!(
+        transform.try_inverse().is_some(),
+        "paint-offset transform must be invertible"
+    );
+    let (local_x, local_y) = transform.transform_point(px(20.0), px(20.0));
     assert!(
         (local_x.get() - 15.0).abs() < 0.01 && (local_y.get() - 15.0).abs() < 0.01,
-        "inverse transform must map global (20,20) to child-local (15,15) through 5px padding",
+        "recorded transform must map global (20,20) to child-local (15,15) through 5px padding",
     );
 }
 

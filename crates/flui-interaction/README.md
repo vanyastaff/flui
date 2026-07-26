@@ -34,14 +34,19 @@ impl HitTestable for MyWidget {
         if !self.bounds.contains(position) {
             return false;
         }
-        
-        // Push transform for children
-        result.push_offset(self.offset);
-        for child in &self.children {
-            child.hit_test(position, result);
-        }
-        result.pop_transform();
-        
+
+        // `with_paint_offset` takes the forward (paint-direction) offset and
+        // pushes its inverse internally, popping automatically when the
+        // closure returns -- the stack accumulates a GLOBAL-TO-LOCAL
+        // mapping as the walk descends, so callers must never push the
+        // forward offset directly (that's what the raw `push_offset`/
+        // `pop_transform` pair does, and it does NOT invert for you).
+        result.with_paint_offset(self.offset, |result| {
+            for child in &self.children {
+                child.hit_test(position, result);
+            }
+        });
+
         // Add self
         result.add(HitTestEntry::new(self.id, position, self.bounds));
         true

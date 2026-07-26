@@ -401,8 +401,8 @@ impl ShaderMaskCell {
 enum LocalEventTransform {
     /// The entry captured no transform; it receives the global event.
     Global,
-    /// Global-to-local inverse computed once at resolution time.
-    Inverse(Matrix4),
+    /// The already-composed global-to-local transform, applied directly.
+    Local(Matrix4),
     /// The captured transform is singular; the entry is skipped, matching the
     /// pre-route dispatch behavior for non-invertible transforms.
     NonInvertible,
@@ -412,9 +412,22 @@ impl LocalEventTransform {
     fn capture(transform: Option<Matrix4>) -> Self {
         match transform {
             None => Self::Global,
-            Some(transform) => transform
-                .try_inverse()
-                .map_or(Self::NonInvertible, Self::Inverse),
+            // `HitTestResult` composes `transform` by left-multiplying each
+            // ancestor level's own inverse as the walk descends (see
+            // `HitTestEntry::transform`'s doc), so it already maps global to
+            // local -- no further inversion here. `is_invertible` is only a
+            // well-formedness probe (cheaper than computing and discarding
+            // the inverse): a degenerate ancestor transform (e.g. a
+            // zero-scale `Transform`) propagates as a singular composed
+            // `transform`, and such an entry must still skip delivery rather
+            // than report a bogus point (unchanged pre-existing behavior).
+            Some(transform) => {
+                if transform.is_invertible() {
+                    Self::Local(transform)
+                } else {
+                    Self::NonInvertible
+                }
+            }
         }
     }
 }
@@ -441,9 +454,7 @@ impl ResolvedHitRoute {
         for entry in &self.entries {
             let local_event = match &entry.local_transform {
                 LocalEventTransform::Global => None,
-                LocalEventTransform::Inverse(inverse) => {
-                    Some(transform_pointer_event(event, inverse))
-                }
+                LocalEventTransform::Local(local) => Some(transform_pointer_event(event, local)),
                 LocalEventTransform::NonInvertible => continue,
             };
             let handler = entry.handler_cell.snapshot();

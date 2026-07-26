@@ -49,7 +49,10 @@ signal. Do not use `EventPropagation` for ordinary pointer delivery.
 
 ## Transform support
 
-`HitTestResult` maintains a transform stack:
+`HitTestResult` maintains a transform stack. It accumulates the
+GLOBAL-TO-LOCAL mapping as the walk descends, so each level must push the
+INVERSE of its own forward (paint-direction) offset/matrix — prefer the
+scope helpers, which invert and pop for you:
 
 ```rust
 use flui_interaction::prelude::*;
@@ -57,19 +60,31 @@ use flui_types::geometry::{Matrix4, Offset};
 
 let mut result = HitTestResult::new();
 
-result.push_offset(Offset::new(10.0.into(), 20.0.into()));
-child.hit_test(position, &mut result);
-result.pop_transform();
+// `with_paint_offset` takes the forward paint offset and pushes its
+// inverse (negated) internally.
+result.with_paint_offset(Offset::new(10.0.into(), 20.0.into()), |result| {
+    child.hit_test(position, result);
+});
 
+// `with_paint_transform` takes the forward paint matrix and pushes its
+// inverse internally (falling back to the singular forward matrix if the
+// transform is not invertible — see its doc).
 let rotation = Matrix4::rotation_z(std::f32::consts::PI / 4.0);
-result.push_transform(rotation);
-child.hit_test(position, &mut result);
-result.pop_transform();
+result.with_paint_transform(rotation, |result| {
+    child.hit_test(position, result);
+});
 ```
 
-Each entry captures the current transform. During dispatch the event is
-transformed into that entry's local coordinate space. Non-invertible transforms
-skip that entry.
+`push_offset`/`push_transform` are the raw primitives underneath — they push
+exactly what they are given, no inversion, and the caller is responsible for
+negating/inverting before calling them. Reach for them directly only when the
+scope-helper's closure shape does not fit; `with_paint_offset`/
+`with_paint_transform` are correct by construction and should be preferred.
+
+Each entry captures the current (already-inverted) transform. During dispatch
+the event is transformed into that entry's local coordinate space.
+Non-invertible transforms compose to a singular matrix and are skipped at
+delivery.
 
 ## HitTestBehavior
 
@@ -82,6 +97,27 @@ path and whether it blocks targets visually behind it:
 
 Typical render-object hit testing still checks children before self so the path
 is leaf-first.
+
+## Known gaps (not this document's transform-stack fix, tracked separately)
+
+Two call sites push nothing onto the `HitTestResult` transform stack that
+this document describes, so a `Listener` under them receives an
+un-localized position — the same class of bug the `with_paint_offset`/
+`with_paint_transform` fix above addresses, just not reachable through
+those two paths yet:
+
+- `crates/flui-rendering/src/context/hit_test.rs:189-225` — the ctx-level
+  `push_offset`/`push_transform`/`with_transform` feed a per-node
+  `BoxHitTestCtx` stack that `hit_test_raw`
+  (`crates/flui-rendering/src/traits/render_box.rs:630-639`) discards, so
+  `RenderFractionalTranslation`
+  (`crates/flui-objects/src/layout/fractional_translation.rs:251`) and
+  `RenderFlow` (`crates/flui-objects/src/layout/flow.rs:395`) deliver
+  un-localized positions today.
+- `crates/flui-rendering/src/pipeline/owner/accessors.rs:820-901` — the
+  sliver walk pushes nothing; `box_hit_offset_from_sliver_position` crosses
+  sliver→box without a `with_paint_offset`, so a `Listener` inside a
+  scrolled sliver gets an un-localized position.
 
 ## Tests
 

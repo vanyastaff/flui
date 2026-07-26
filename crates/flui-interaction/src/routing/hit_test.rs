@@ -110,7 +110,22 @@ pub struct HitTestEntry {
     /// Element/render ID.
     pub target: RenderId,
 
-    /// Transform from global to local coordinates.
+    /// The composed global-to-local transform for this entry's coordinate
+    /// space.
+    ///
+    /// Assembled by [`HitTestResult`] as the walk descends. The raw
+    /// primitives [`HitTestResult::push_offset`] and
+    /// [`HitTestResult::push_transform`] push whatever they are given
+    /// VERBATIM -- they do not invert. It is the higher-level scope helpers
+    /// [`HitTestResult::with_paint_offset`] and
+    /// [`HitTestResult::with_paint_transform`] that push each level's OWN
+    /// INVERSE, so `HitTestResult::last_transform` folds those inverses
+    /// left-multiplied in descent order and the result already maps global
+    /// to local -- no further inversion is needed at delivery. Flutter
+    /// parity: `pushTransform(Matrix4.tryInvert(...))` (`rendering/box.dart`,
+    /// `addWithPaintTransform`/`addWithPaintOffset`), folded by
+    /// `HitTestResult._globalizeTransforms` (`gestures/hit_test.dart`).
+    ///
     /// Set automatically when added to HitTestResult.
     pub transform: Option<Matrix4>,
 
@@ -298,16 +313,40 @@ impl HitTestResult {
         self.path.push(entry);
     }
 
-    /// Pushes a transform matrix onto the stack.
+    /// Pushes a transform matrix onto the stack, VERBATIM -- no inversion.
+    ///
+    /// This is the raw primitive: it pushes exactly the matrix it is given.
+    /// [`HitTestEntry::transform`] is documented (and Flutter's own
+    /// `pushTransform`/`_globalizeTransforms` contract requires) that the
+    /// stack accumulates the GLOBAL-TO-LOCAL mapping as the walk descends,
+    /// so the CALLER is responsible for passing this method the inverse of
+    /// whatever forward (paint-direction) transform the level represents.
+    /// Prefer [`HitTestResult::with_paint_transform`], which computes and
+    /// pushes that inverse for you and pops it automatically. Pushing the
+    /// forward matrix here by mistake is exactly the composition-order bug
+    /// `with_paint_offset`/`with_paint_transform` exist to prevent -- see
+    /// their docs.
     ///
     /// Flutter equivalent: `@protected void pushTransform(Matrix4 transform)`
+    /// (callers invert before calling, e.g. `addWithPaintTransform` in
+    /// `rendering/box.dart`).
     pub fn push_transform(&mut self, transform: Matrix4) {
         self.local_transforms.push(TransformPart::Matrix(transform));
     }
 
-    /// Pushes an offset translation onto the stack.
+    /// Pushes an offset translation onto the stack, VERBATIM -- no negation.
+    ///
+    /// This is the raw primitive: `push_offset(o)` pushes `translate(+o)`
+    /// exactly as given. Same caller-must-invert contract as
+    /// [`HitTestResult::push_transform`] -- for a pure translation the
+    /// inverse of "translate by `offset`" is "translate by `-offset`", so a
+    /// caller composing a global-to-local stack must pass `-offset`, not
+    /// `offset`. Prefer [`HitTestResult::with_paint_offset`], which negates
+    /// and pops for you.
     ///
     /// Flutter equivalent: `@protected void pushOffset(Offset offset)`
+    /// (callers negate before calling, e.g. `addWithPaintOffset` in
+    /// `rendering/box.dart:839` calls `pushOffset(-offset)`).
     pub fn push_offset(&mut self, offset: Offset<Pixels>) {
         self.local_transforms.push(TransformPart::Offset(offset));
     }
@@ -331,6 +370,20 @@ impl HitTestResult {
     /// `rendering/box.dart`: the Flutter code uses a try/finally
     /// pair around the pushOffset/popTransform sequence; Rust
     /// expresses the same scope via a closure.
+    ///
+    /// # Why the offset is negated
+    ///
+    /// `box.dart:839` calls `pushOffset(-offset)`, not `pushOffset(offset)`:
+    /// the transform stack accumulates the GLOBAL-TO-LOCAL mapping as the
+    /// walk descends, so each level must push its own inverse. For a pure
+    /// translation the inverse of "translate by `offset`" is "translate by
+    /// `-offset`". Pushing the forward (un-negated) offset here recorded a
+    /// composed transform that was `inv(B)·inv(A)`'s mirror-image
+    /// `inv(A)·inv(B)` for any chain mixing offsets with a non-commuting
+    /// matrix transform (e.g. a scaled `Transform` ancestor) -- correct only
+    /// when every part in the chain is a pure translation, where the two
+    /// compositions coincide. See `crates/flui-widgets/tests/parity/
+    /// pointer_local_position_test.rs` for the regression this fixes.
     ///
     /// # Why a closure and not a guard
     ///
@@ -359,25 +412,63 @@ impl HitTestResult {
     where
         F: FnOnce(&mut Self) -> R,
     {
-        self.push_offset(offset);
+        self.push_offset(-offset);
         let result = f(self);
         self.pop_transform();
         result
     }
 
-    /// Runs `f` with `transform` pushed onto the transform stack and
-    /// pops the transform before returning.
+    /// Runs `f` with the INVERSE of `transform` pushed onto the transform
+    /// stack and pops it before returning.
     ///
     /// See [`with_paint_offset`](Self::with_paint_offset) for the
     /// Flutter-parity rationale and the closure-vs-guard discussion
-    /// (closure-vs-guard rationale); this is the matrix-typed sibling
-    /// for callers that need a full 4x4 transform rather than a
-    /// paint-offset.
+    /// (closure-vs-guard rationale); this is the matrix-typed sibling for
+    /// callers that need a full 4x4 transform rather than a paint-offset --
+    /// same caller-supplies-the-forward-matrix, callee-inverts-it contract.
+    /// Flutter parity: `BoxHitTestResult.addWithPaintTransform`
+    /// (`rendering/box.dart:799-812`), which inverts via `Matrix4.tryInvert`
+    /// at line 805 before delegating at line 811 to `addWithRawTransform`.
+    ///
+    /// # Known divergences from Flutter
+    ///
+    /// 1. **Non-invertible transforms.** Flutter's `addWithPaintTransform`
+    ///    returns `false` outright when the transform cannot be inverted
+    ///    (the subtree is not visible/hittable). This method instead falls
+    ///    back to pushing the still-singular forward matrix, the same
+    ///    convention `PipelineOwner::hit_test_subtree` already uses for
+    ///    `RenderBox::hit_test_transform`
+    ///    (`crates/flui-rendering/src/pipeline/owner/accessors.rs`:
+    ///    `t.try_inverse().unwrap_or(t)`): when the determinant is exactly
+    ///    zero, the composed chain stays singular, so delivery still
+    ///    detects and skips it (`LocalEventTransform::capture`) without
+    ///    this method needing to thread a `bool` result back through every
+    ///    caller. The skip is only threshold-relative, not guaranteed, for
+    ///    a merely near-singular transform (`0 < |det| < f32::EPSILON`,
+    ///    which `Matrix4::is_invertible` also rejects): determinants
+    ///    compose multiplicatively, so a large-determinant ancestor
+    ///    elsewhere in the chain can lift the product back above
+    ///    `f32::EPSILON`. In that case delivery sees an invertible
+    ///    composite and delivers the entry with a garbage local position --
+    ///    a wider divergence from Flutter's hard refusal than the
+    ///    still-singular fallback above covers by itself.
+    /// 2. **No perspective removal.** `box.dart:805` inverts
+    ///    `PointerEvent.removePerspectiveTransform(transform)`, not
+    ///    `transform` itself -- Flutter strips the perspective row/column
+    ///    before inverting so a perspective-projected transform still
+    ///    inverts to a usable affine map. This method calls
+    ///    `transform.try_inverse()` directly, with no perspective removal.
+    ///    Low reachability today: nothing in the widget layer constructs a
+    ///    perspective (non-affine) transform, so every `transform` reaching
+    ///    this method in practice is already affine. Perspective removal is
+    ///    intentionally not implemented here (out of scope); a
+    ///    perspective-producing widget added later would make this
+    ///    divergence live and worth revisiting.
     pub fn with_paint_transform<F, R>(&mut self, transform: Matrix4, f: F) -> R
     where
         F: FnOnce(&mut Self) -> R,
     {
-        self.push_transform(transform);
+        self.push_transform(transform.try_inverse().unwrap_or(transform));
         let result = f(self);
         self.pop_transform();
         result
@@ -509,8 +600,16 @@ impl HitTestResult {
         for entry in &self.path {
             if let Some(target) = entry.scroll_target {
                 let local_event = if let Some(ref transform) = entry.transform {
-                    if let Some(inverse) = transform.try_inverse() {
-                        transform_scroll_event(event, &inverse)
+                    // `transform` is already global-to-local (see
+                    // `HitTestEntry::transform`'s doc) -- apply it directly.
+                    // `is_invertible` is a well-formedness probe -- it skips
+                    // computing (and discarding) the inverse itself: a
+                    // degenerate ancestor transform makes the composed
+                    // `transform` itself singular, and such an entry must
+                    // still skip delivery rather than report a bogus point
+                    // (unchanged pre-existing behavior).
+                    if transform.is_invertible() {
+                        transform_scroll_event(event, transform)
                     } else {
                         continue;
                     }
@@ -690,11 +789,30 @@ mod tests {
     fn test_hit_test_result_transform_stack() {
         let mut result = HitTestResult::new();
 
+        // `push_offset` is the raw primitive -- it pushes exactly what it is
+        // given, no negation (see its doc). The composed entry transform
+        // must therefore be the FORWARD translation(10, 20), not just
+        // "present": asserting only `.is_some()` (as this test used to)
+        // would pass even if the composition folded the wrong matrix in --
+        // the exact vacuous shape that let the `with_paint_offset`/
+        // `with_paint_transform` direction bug ship undetected.
         result.push_offset(Offset::new(Pixels(10.0), Pixels(20.0)));
         result.add(HitTestEntry::new(RenderId::new(1)));
 
-        // Entry should have captured the transform
-        assert!(result.path()[0].transform.is_some());
+        let transform = result.path()[0]
+            .transform
+            .expect("add() must record a transform");
+        assert_eq!(
+            transform.translation_component(),
+            (10.0, 20.0, 0.0),
+            "push_offset(10, 20) must compose to the forward translation, unnegated"
+        );
+        let (local_x, local_y) = transform.transform_point(Pixels(0.0), Pixels(0.0));
+        assert_eq!(
+            (local_x.0, local_y.0),
+            (10.0, 20.0),
+            "the composed matrix must actually map the origin to (10, 20)"
+        );
 
         result.pop_transform();
     }
@@ -799,9 +917,13 @@ mod tests {
             let mut result = HitTestResult::new();
             // The entry sits in a subtree translated by (10, 20): the handler
             // must observe the event mapped into its local space.
-            result.push_offset(Offset::new(Pixels(10.0), Pixels(20.0)));
-            result.add(HitTestEntry::new(RenderId::new(1)).pointer_target(target));
-            result.pop_transform();
+            // `with_paint_offset` is the production path (the paint-offset
+            // child descent in `PipelineOwner::hit_test_subtree`) -- it
+            // pushes the offset's inverse internally, so the entry's
+            // recorded transform is already global-to-local.
+            result.with_paint_offset(Offset::new(Pixels(10.0), Pixels(20.0)), |result| {
+                result.add(HitTestEntry::new(RenderId::new(1)).pointer_target(target));
+            });
 
             let event = crate::events::make_down_event(
                 Offset::new(Pixels(50.0), Pixels(50.0)),
@@ -810,6 +932,47 @@ mod tests {
             result.dispatch(&event);
         });
         assert_eq!(observed.get(), Offset::new(Pixels(40.0), Pixels(30.0)));
+    }
+
+    #[test]
+    fn dispatch_applies_the_entry_local_transform_via_paint_transform() {
+        use std::cell::Cell;
+        use std::rc::Rc;
+
+        use crate::events::PointerEventExt as _;
+        use crate::routing::InteractionLane;
+
+        let lane = InteractionLane::try_new().expect("lane");
+        let handle = lane.dispatch_handle();
+        let observed = Rc::new(Cell::new(Offset::new(Pixels(0.0), Pixels(0.0))));
+        lane.enter(|| {
+            let position_probe = Rc::clone(&observed);
+            let target = handle
+                .register_pointer(move |event| position_probe.set(event.position()))
+                .expect("register");
+            let mut result = HitTestResult::new();
+            // The entry sits in a subtree scaled 2x from its parent --
+            // matrix-typed sibling of `dispatch_applies_the_entry_local_transform`.
+            // `with_paint_transform` takes the FORWARD (paint-direction)
+            // matrix and must invert it internally before pushing, exactly
+            // like `with_paint_offset` does for a pure translation; without
+            // that inversion the handler would observe the position
+            // multiplied by the scale instead of divided by it. This method
+            // has no production caller yet, so this is the only regression
+            // coverage for the fix.
+            let mut forward = Matrix4::identity();
+            forward.scale(2.0, 2.0, 1.0);
+            result.with_paint_transform(forward, |result| {
+                result.add(HitTestEntry::new(RenderId::new(1)).pointer_target(target));
+            });
+
+            let event = crate::events::make_down_event(
+                Offset::new(Pixels(50.0), Pixels(50.0)),
+                PointerType::Mouse,
+            );
+            result.dispatch(&event);
+        });
+        assert_eq!(observed.get(), Offset::new(Pixels(25.0), Pixels(25.0)));
     }
 
     #[test]
@@ -911,9 +1074,12 @@ mod tests {
                 })
                 .expect("register");
             let mut result = HitTestResult::new();
-            result.push_offset(Offset::new(Pixels(10.0), Pixels(20.0)));
-            result.add(HitTestEntry::new(RenderId::new(1)).scroll_target(target));
-            result.pop_transform();
+            // See `dispatch_applies_the_entry_local_transform`: exercise the
+            // production `with_paint_offset` path, not the raw push/pop pair,
+            // so this proves the fixed (inverse-pushing) contract.
+            result.with_paint_offset(Offset::new(Pixels(10.0), Pixels(20.0)), |result| {
+                result.add(HitTestEntry::new(RenderId::new(1)).scroll_target(target));
+            });
 
             let event = make_scroll_event(
                 Offset::new(Pixels(50.0), Pixels(50.0)),
