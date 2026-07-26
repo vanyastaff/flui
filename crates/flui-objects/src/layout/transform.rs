@@ -230,8 +230,9 @@ impl RenderBox for RenderTransform {
         // position; the inverse was used only for a bounds gate, so any
         // scaled/rotated child hit-tested at the wrong local point.)
 
-        // The pipeline pushes the forward transform onto HitTestResult
-        // via hit_test_transform() before calling hit_test_raw, so
+        // The pipeline pushes the INVERSE of hit_test_transform() onto
+        // HitTestResult before calling hit_test_raw (HitTestResult composes
+        // the global-to-local mapping from each level's own inverse), so
         // child entries capture the correct accumulated transform.
         // No push/pop needed here.
         ctx.hit_test_child(0, Offset::new(tx, ty))

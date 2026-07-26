@@ -72,12 +72,13 @@ pub fn hit_path<P: PipelinePhase + Sync>(
 /// Hit-tests at root-local `(x, y)` (logical pixels) and returns the
 /// leaf-first path of `(RenderId, recorded_transform)` pairs.
 ///
-/// The recorded `Option<Matrix4>` is the globalized global-to-local transform
-/// that `HitTestResult` captures for each entry when
-/// [`hit_test_child_at_layout_offset`] is used.  A `None` transform means
-/// the entry was added without pushing an offset onto the result's transform
-/// stack — i.e. the child was hit-tested via the old `hit_test_child_at_offset`
-/// path that records no transform.
+/// The recorded value is the globalized global-to-local transform that
+/// `HitTestResult::add` unconditionally attaches to every entry
+/// (`crates/flui-interaction/src/routing/hit_test.rs`'s `add`, which sets
+/// `entry.transform = Some(self.last_transform())` regardless of whether any
+/// offset/transform was ever pushed — an empty stack still folds to
+/// `Matrix4::identity()`). The `Option` wrapper exists for the field's
+/// general shape, not because `None` is reachable through this path.
 ///
 /// Pair with [`localize_hit_point`] to assert that the recorded transform
 /// correctly maps a global hit point to the child's local coordinate space.
@@ -101,7 +102,22 @@ pub fn hit_path_with_transforms<P: PipelinePhase + Sync>(
 /// a global hit point, returning the equivalent point in the entry's local
 /// coordinate space.
 ///
-/// Returns `None` when the matrix is singular (non-invertible).
+/// `transform` already maps global to local -- `HitTestResult` composes it by
+/// left-multiplying each ancestor level's own inverse as the walk descends
+/// (see `HitTestEntry::transform`'s doc), so this applies it directly with no
+/// further inversion.
+///
+/// Returns `None` when `transform` is singular (non-invertible). This is
+/// guaranteed whenever a degenerate ancestor transform (e.g. a zero-scale
+/// `Transform`) contributed an exactly-zero determinant somewhere in the
+/// composed chain. For a merely near-singular ancestor (`0 < |det| <
+/// f32::EPSILON`, which `Matrix4::is_invertible` also rejects) the composed
+/// `transform` is not guaranteed to stay singular -- determinants compose
+/// multiplicatively, so a large-determinant ancestor elsewhere in the chain
+/// can lift the product back above `f32::EPSILON`. In that case this
+/// function returns `Some` with a meaningless local point instead of
+/// `None`, so a `Some` result is not proof the whole chain was
+/// well-conditioned.
 ///
 /// # Usage
 ///
@@ -114,10 +130,11 @@ pub fn hit_path_with_transforms<P: PipelinePhase + Sync>(
 /// assert_eq!(local, Offset::new(px(20.0), px(20.0)));
 /// ```
 pub fn localize_hit_point(transform: Matrix4, global_x: f32, global_y: f32) -> Option<Offset> {
-    transform.try_inverse().map(|inverse| {
-        let (local_x, local_y) = inverse.transform_point(Pixels(global_x), Pixels(global_y));
-        Offset::new(local_x, local_y)
-    })
+    if !transform.is_invertible() {
+        return None;
+    }
+    let (local_x, local_y) = transform.transform_point(Pixels(global_x), Pixels(global_y));
+    Some(Offset::new(local_x, local_y))
 }
 
 // ============================================================================

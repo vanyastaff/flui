@@ -544,22 +544,51 @@ impl Matrix4 {
         &mut self.m[col * 4 + row]
     }
 
+    /// Returns whether this matrix has an inverse.
+    ///
+    /// This is exactly the predicate [`try_inverse`](Self::try_inverse) gates
+    /// success on -- `determinant().abs() >= f32::EPSILON` -- computed
+    /// without building the full inverse. `try_inverse` is defined in terms
+    /// of this method, so the cheap probe and the real inversion can never
+    /// disagree about a borderline (near-singular) matrix.
+    ///
+    /// Prefer this over `try_inverse().is_some()` when the inverse itself is
+    /// discarded: callers on a hot path (e.g. once per hit-test entry per
+    /// pointer event) that only need a well-formedness check should not pay
+    /// for `glam::Mat4::inverse()`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_geometry::Matrix4;
+    ///
+    /// assert!(Matrix4::identity().is_invertible());
+    /// assert!(Matrix4::translation(3.0, -1.0, 0.0).is_invertible());
+    ///
+    /// // Zero-scale on one axis collapses the matrix to singular.
+    /// assert!(!Matrix4::scaling(0.0, 1.0, 1.0).is_invertible());
+    /// ```
+    #[must_use]
+    pub fn is_invertible(&self) -> bool {
+        // `glam::Mat4::inverse` returns a matrix of NaNs/inf for a
+        // non-invertible matrix rather than signalling, so this (and
+        // `try_inverse`, below) gate on the determinant explicitly.
+        self.to_glam().determinant().abs() >= f32::EPSILON
+    }
+
     /// Attempts to invert this matrix.
     ///
-    /// Returns `None` if the matrix is singular (determinant is zero).
+    /// Returns `None` if the matrix is singular (see
+    /// [`is_invertible`](Self::is_invertible) for the exact threshold).
     /// Uses Gauss-Jordan elimination for general 4x4 matrices.
     ///
     /// For simple transformations (translation, rotation, uniform scaling),
     /// consider using specialized inverse methods if available.
     pub fn try_inverse(&self) -> Option<Self> {
-        // Guard singularity explicitly: `glam::Mat4::inverse` returns a matrix
-        // of NaNs/inf for a non-invertible matrix rather than signalling, so we
-        // gate on the determinant to preserve the `Option` contract.
-        let g = self.to_glam();
-        if g.determinant().abs() < f32::EPSILON {
-            None
+        if self.is_invertible() {
+            Some(Self::from_glam(self.to_glam().inverse()))
         } else {
-            Some(Self::from_glam(g.inverse()))
+            None
         }
     }
 
@@ -799,5 +828,31 @@ mod glam_backend_tests {
         let singular = Matrix4::scaling(0.0, 1.0, 1.0);
         assert!(singular.try_inverse().is_none());
         assert!(Matrix4::identity().try_inverse().is_some());
+    }
+
+    #[test]
+    fn is_invertible_agrees_with_try_inverse() {
+        let invertible = Matrix4::rotation_z(0.7) * Matrix4::translation(10.0, -3.0, 0.0);
+        assert!(invertible.is_invertible());
+        assert!(invertible.try_inverse().is_some());
+
+        let singular = Matrix4::scaling(0.0, 1.0, 1.0);
+        assert!(!singular.is_invertible());
+        assert!(singular.try_inverse().is_none());
+    }
+
+    #[test]
+    fn is_invertible_matches_try_inverse_at_the_epsilon_boundary() {
+        // A scale just above f32::EPSILON must read as invertible; a scale
+        // just below it must read as singular -- `is_invertible` and
+        // `try_inverse` must never disagree, even this close to the
+        // threshold they share.
+        let just_above = Matrix4::scaling(f32::EPSILON * 2.0, 1.0, 1.0);
+        assert!(just_above.is_invertible());
+        assert!(just_above.try_inverse().is_some());
+
+        let just_below = Matrix4::scaling(f32::EPSILON * 0.5, 1.0, 1.0);
+        assert!(!just_below.is_invertible());
+        assert!(just_below.try_inverse().is_none());
     }
 }
