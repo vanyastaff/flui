@@ -1,12 +1,10 @@
 //! Public `ExcludeFocus` construction and focus-policy behavior.
 
-mod common;
-
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
 
-use common::{lay_out, loose};
+use crate::common::{lay_out, loose};
 use flui_interaction::FocusNode;
 use flui_widgets::prelude::*;
 

@@ -16,13 +16,11 @@
 //! `'gracefully handles transition to other future'`,
 //! `'gracefully handles transition to null future'`).
 
-mod common;
-
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::{Context, Poll, Waker};
 use std::{rc::Rc, sync::Arc};
 
-use common::{lay_out, loose};
+use crate::common::{lay_out, loose};
 use flui_foundation::ConnectionState;
 use parking_lot::Mutex;
 

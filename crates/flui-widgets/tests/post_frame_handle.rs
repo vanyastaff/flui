@@ -8,15 +8,13 @@
 //! The capability is acquired in `init_state` — a lifecycle hook, never `build`
 //! (port-check trigger #22) — and fired by the real `pump_frame` frame order.
 
-mod common;
-
 use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
-use common::{lay_out, loose, tight};
+use crate::common::{lay_out, loose, tight};
 use flui_foundation::HasInstance;
 use flui_scheduler::Scheduler;
 use flui_view::prelude::*;
@@ -260,7 +258,7 @@ fn an_owner_local_post_frame_callback_observes_committed_geometry() {
     let observed = Arc::new(AtomicBool::new(false));
     let desired_width = Arc::new(AtomicUsize::new(32));
     let rebuild = Arc::new(Mutex::new(None));
-    let mut laid = common::lay_out_with_pipeline_owner(
+    let mut laid = crate::common::lay_out_with_pipeline_owner(
         LocalPostFrameProbe {
             pipeline: Arc::clone(&pipeline),
             observed_committed_geometry: Arc::clone(&observed),

@@ -13,15 +13,13 @@
 //! `'Can push, pop, and replace in sequence'`. Expected values are read from
 //! `pages.dart` / `routes.dart`, not from running this code.
 
-mod common;
-
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use common::{lay_out_animated, tight};
+use crate::common::{lay_out_animated, tight};
 use flui_animation::Vsync;
 use flui_types::Color;
 use flui_widgets::prelude::*;

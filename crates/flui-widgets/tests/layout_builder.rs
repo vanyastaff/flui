@@ -14,12 +14,10 @@
 //! `.flutter/packages/flutter/lib/src/widgets/layout_builder.dart`
 //! (`_RenderLayoutBuilder.performLayout`).
 
-mod common;
-
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use common::{lay_out, loose};
+use crate::common::{lay_out, loose};
 use flui_rendering::constraints::BoxConstraints;
 use flui_types::geometry::px;
 use flui_types::{Offset, Size};

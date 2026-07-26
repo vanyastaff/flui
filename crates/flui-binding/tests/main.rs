@@ -10,7 +10,17 @@
 //! flui-binding's integration tests do — both drive a per-test
 //! `HeadlessBinding` instance (no singletons, no env vars, no statics).
 
+#[path = "async_driver.rs"]
+mod async_driver;
 #[path = "controller_restart.rs"]
 mod controller_restart;
+#[path = "layout_builder_seam.rs"]
+mod layout_builder_seam;
 #[path = "long_press_via_pump_frame.rs"]
 mod long_press_via_pump_frame;
+#[path = "owner_scope.rs"]
+mod owner_scope;
+#[path = "post_frame_after_layout.rs"]
+mod post_frame_after_layout;
+#[path = "self_rescheduling_local_post_frame.rs"]
+mod self_rescheduling_local_post_frame;

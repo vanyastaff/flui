@@ -18,13 +18,11 @@
 // tests are separate crates, so repeat it here.
 #![allow(clippy::arc_with_non_send_sync)]
 
-mod common;
-
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use common::{lay_out, loose};
+use crate::common::{lay_out, loose};
 use parking_lot::Mutex;
 
 // Exercise the public prelude import path.

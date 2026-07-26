@@ -3,13 +3,11 @@
 //! *current* animated offset and its `transform_hit_tests` flag, not a
 //! hardcoded snapshot or the render object's own default.
 
-mod common;
-
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use common::{lay_out, loose};
+use crate::common::{lay_out, loose};
 use flui_animation::ext::AnimatableExt;
 use flui_animation::{Animation, AnimationController, Tween};
 use flui_objects::TranslationFraction;

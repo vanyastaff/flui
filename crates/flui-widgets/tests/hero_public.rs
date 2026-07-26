@@ -18,13 +18,11 @@
 //! disappears mid-flight'` (`:1233`), `'Hero push transition interrupted by a pop'`
 //! (`:1063`), `'One route, two heroes, same tag, throws'` (`:1004` — FLUI logs).
 
-mod common;
-
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
-use common::{LaidOut, lay_out_animated, tight};
+use crate::common::{LaidOut, lay_out_animated, tight};
 use flui_animation::{Animatable, Vsync};
 use flui_geometry::Rect;
 use flui_rendering::pipeline::PipelineOwner;

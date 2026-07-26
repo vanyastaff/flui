@@ -12,8 +12,6 @@
 //! `'gracefully handles transition to other stream'`,
 //! `'gracefully handles transition to null stream'`).
 
-mod common;
-
 use std::collections::VecDeque;
 use std::pin::Pin;
 use std::rc::Rc;
@@ -21,7 +19,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::{Context, Poll, Waker};
 
-use common::{lay_out, loose};
+use crate::common::{lay_out, loose};
 use flui_foundation::ConnectionState;
 use flui_widgets::Stream;
 use parking_lot::Mutex;
