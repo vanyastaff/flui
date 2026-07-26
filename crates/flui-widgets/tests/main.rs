@@ -6,6 +6,8 @@ mod common;
 
 #[path = "absorb_pointer.rs"]
 mod absorb_pointer;
+#[path = "animated_builder_swap.rs"]
+mod animated_builder_swap;
 #[path = "animated_size.rs"]
 mod animated_size;
 #[path = "baseline.rs"]
@@ -30,6 +32,8 @@ mod custom_paint;
 mod custom_single_child_layout;
 #[path = "decorated_box.rs"]
 mod decorated_box;
+#[path = "exclude_focus.rs"]
+mod exclude_focus;
 #[path = "fade_transition.rs"]
 mod fade_transition;
 #[path = "fitted_box.rs"]
@@ -40,10 +44,14 @@ mod flex;
 mod flex_parent_data;
 #[path = "flow.rs"]
 mod flow;
+#[path = "future_builder.rs"]
+mod future_builder;
 #[path = "gesture_detector.rs"]
 mod gesture_detector;
 #[path = "gesture_detector_advanced.rs"]
 mod gesture_detector_advanced;
+#[path = "hero_public.rs"]
+mod hero_public;
 #[path = "image.rs"]
 mod image;
 #[path = "implicit_animations.rs"]
@@ -56,6 +64,8 @@ mod inherited_app;
 mod intrinsic_and_overflow;
 #[path = "layout.rs"]
 mod layout;
+#[path = "layout_builder.rs"]
+mod layout_builder;
 #[path = "lazy_grid.rs"]
 mod lazy_grid;
 #[path = "lazy_list.rs"]
@@ -68,12 +78,18 @@ mod listener;
 mod modifiers;
 #[path = "mouse_region.rs"]
 mod mouse_region;
+#[path = "navigator_public.rs"]
+mod navigator_public;
 #[path = "overflow_box.rs"]
 mod overflow_box;
+#[path = "post_frame_handle.rs"]
+mod post_frame_handle;
 #[path = "rich_text.rs"]
 mod rich_text;
 #[path = "rotation_transition.rs"]
 mod rotation_transition;
+#[path = "routes.rs"]
+mod routes;
 #[path = "scale_transition.rs"]
 mod scale_transition;
 #[path = "scroll.rs"]
@@ -82,6 +98,8 @@ mod scroll;
 mod semantics;
 #[path = "shrink_wrapping_viewport.rs"]
 mod shrink_wrapping_viewport;
+#[path = "slide_transition.rs"]
+mod slide_transition;
 #[path = "sliver_opacity.rs"]
 mod sliver_opacity;
 #[path = "spacer.rs"]
@@ -90,6 +108,8 @@ mod spacer;
 mod stack_positioned;
 #[path = "stateful.rs"]
 mod stateful;
+#[path = "stream_builder.rs"]
+mod stream_builder;
 #[path = "table.rs"]
 mod table;
 #[path = "text.rs"]

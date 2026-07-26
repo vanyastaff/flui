@@ -18,12 +18,10 @@
 //! `ChangeNotifier` swap is enough to drive the element-level bug without an
 //! `AnimationController`/`Vsync` in the loop.
 
-mod common;
-
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use common::{lay_out, tight};
+use crate::common::{lay_out, tight};
 use flui_foundation::{ChangeNotifier, Listenable, ListenerId};
 use flui_widgets::{AnimatedBuilder, SizedBox};
 

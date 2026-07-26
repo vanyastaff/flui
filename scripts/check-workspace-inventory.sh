@@ -213,6 +213,79 @@ for package in workspace_packages:
     if raw_manifest.get("lints") != {"workspace": True}:
         errors.append(f"{rel} must set `[lints] workspace = true` (local or missing lint tables bypass workspace lints)")
 
+    # `autotests = false` disables Cargo's default `tests/*.rs` auto-discovery
+    # (commit 820a083c consolidated per-crate integration tests into one
+    # linked binary for build-time/disk reasons). The cost: a test file added
+    # to `tests/` afterward silently never runs unless something declares it
+    # — this bit the workspace for 11+ days across 5 crates before anyone
+    # noticed. Verify every top-level `tests/*.rs` file (excluding `main.rs`
+    # itself, and subdirectory module files like `tests/common/mod.rs` or
+    # `tests/parity/*`, which auto-discovery never touches either way) is
+    # reachable: either declared as its own `[[test]]` target, or `mod`/
+    # `#[path]`-mounted from a declared `[[test]]` target file. Usually that
+    # mounting file is `tests/main.rs`, but it does not have to be —
+    # `flui-objects` has no `tests/main.rs` and mounts a sibling file
+    # (`harness_snapshot.rs`) straight from its sole `[[test]]` target.
+    if raw_package.get("autotests") is False:
+        tests_dir = manifest.parent / "tests"
+        if tests_dir.is_dir():
+            test_targets = raw_manifest.get("test", [])
+            declared_test_paths = {
+                (manifest.parent / target["path"]).resolve()
+                for target in test_targets
+                if isinstance(target, dict) and target.get("path")
+            }
+
+            candidate_test_files = {
+                test_file.resolve()
+                for test_file in tests_dir.glob("*.rs")
+                if test_file.name != "main.rs"
+            }
+
+            mount_source_files = set(declared_test_paths)
+            main_rs = tests_dir / "main.rs"
+            if main_rs.exists():
+                mount_source_files.add(main_rs.resolve())
+
+            # `#[path = "foo.rs"]\nmod foo;` (the mount idiom every consolidated
+            # `tests/main.rs` in this workspace uses) — the explicit path is the
+            # ground truth for what file a `mod` statement resolves to.
+            path_mod_re = re.compile(
+                r'#\[path\s*=\s*"(?P<path>[^"]+)"\]\s*(?:pub\s+)?mod\s+(?P<name>\w+)\s*;'
+            )
+            # A bare `mod foo;` (no `#[path]`) resolves via Rust's default module
+            # resolution: relative to the *mounting file's own* directory. That
+            # default only lands back in `tests_dir` when the mounting file is
+            # `tests/main.rs` itself (a target file living in a subdirectory,
+            # like `flui-objects`' `render_object_harness.rs`, would resolve a
+            # bare `mod foo;` into a nonexistent subdirectory next to itself).
+            any_mod_re = re.compile(r"(?:^|\n)\s*(?:pub\s+)?mod\s+(?P<name>\w+)\s*;")
+
+            reachable_test_files: set[Path] = set()
+            for mount_source in mount_source_files:
+                if not mount_source.is_file():
+                    continue
+                mount_source_text = mount_source.read_text()
+                mount_source_dir = mount_source.parent
+                explicitly_pathed_names: set[str] = set()
+                for match in path_mod_re.finditer(mount_source_text):
+                    explicitly_pathed_names.add(match.group("name"))
+                    reachable_test_files.add((mount_source_dir / match.group("path")).resolve())
+                if mount_source_dir == tests_dir:
+                    for match in any_mod_re.finditer(mount_source_text):
+                        mod_name = match.group("name")
+                        if mod_name in explicitly_pathed_names:
+                            continue
+                        reachable_test_files.add((tests_dir / f"{mod_name}.rs").resolve())
+
+            orphaned_test_files = candidate_test_files - declared_test_paths - reachable_test_files
+            for orphan in sorted(orphaned_test_files):
+                errors.append(
+                    f"{orphan.relative_to(root)} is not reachable: `{name}` sets `autotests = false`, "
+                    "so this file needs its own `[[test]]` target in Cargo.toml, or a `mod`/`#[path]` "
+                    "mount in `tests/main.rs` (or whichever `[[test]]` target file mounts sibling test modules)"
+                )
+
 # Design-system decoupling contract (ADR-0028): core crates never depend on a
 # design system. `flui-material`/`flui-cupertino` depend downward on the
 # widgets substrate (see docs/FOUNDATIONS.md's layer DAG, L7 --> L6); the

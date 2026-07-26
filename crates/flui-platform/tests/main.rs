@@ -24,6 +24,8 @@ mod executor_tests;
 mod integration_template;
 #[path = "performance.rs"]
 mod performance;
+#[path = "window_callback_unwind.rs"]
+mod window_callback_unwind;
 #[path = "window_lifecycle.rs"]
 mod window_lifecycle;
 #[path = "window_modes.rs"]
