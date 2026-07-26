@@ -119,7 +119,7 @@ pub struct HitTestEntry {
     /// VERBATIM -- they do not invert. It is the higher-level scope helpers
     /// [`HitTestResult::with_paint_offset`] and
     /// [`HitTestResult::with_paint_transform`] that push each level's OWN
-    /// INVERSE, so [`HitTestResult::last_transform`] folds those inverses
+    /// INVERSE, so `HitTestResult::last_transform` folds those inverses
     /// left-multiplied in descent order and the result already maps global
     /// to local -- no further inversion is needed at delivery. Flutter
     /// parity: `pushTransform(Matrix4.tryInvert(...))` (`rendering/box.dart`,
