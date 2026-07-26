@@ -234,7 +234,7 @@ doc-open:
 [group("quality")]
 [doc("Build rustdoc with -D warnings (CI gate)")]
 doc-strict:
-    RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
+    RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked --document-private-items
 
 [group("quality")]
 [doc("Check docs/justfile crate inventories against Cargo metadata")]
@@ -388,8 +388,8 @@ watch-test crate="":
 #   just deny             (advisories / bans / licenses / sources)
 #   just miri             (nightly UB check, narrow scope — see its comment)
 [group("ci")]
-[doc("Run local CI gates (fmt-check + inventory + port-check + clippy + test + doctests)")]
-ci: fmt-check inventory-check port-check clippy test-ci test-doc
+[doc("Run local CI gates (fmt-check + inventory + port-check + clippy + test + doctests + rustdoc)")]
+ci: fmt-check inventory-check port-check clippy test-ci test-doc doc-strict
 
 # =============================================================================
 # Maintenance
