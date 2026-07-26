@@ -8,11 +8,14 @@
 //! 5. `ScrollController::animate_to` (ADR-0037) — curve-driven animation,
 //!    grab-to-cancel, and jump_to-cancels-in-flight.
 
+use std::cell::Cell;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::common::{LaidOut, lay_out, size, tight};
+use crate::common::{LaidOut, lay_out, offset, size, tight};
 use flui_animation::{Curves, Vsync};
+use flui_interaction::events::{PointerEvent, PointerEventExt as _};
 use flui_rendering::constraints::BoxConstraints;
 use flui_types::Color;
 use flui_types::geometry::px;
@@ -20,7 +23,7 @@ use flui_view::prelude::StatelessView;
 use flui_view::{BuildContext, IntoView, ViewExt};
 use flui_widgets::{
     BouncingScrollPhysics, ClampingScrollPhysics, ColoredBox, CustomScrollView, GestureDetector,
-    GridView, ListView, ScrollController, ScrollMetrics, ScrollPhysics, Scrollable,
+    GridView, ListView, Listener, ScrollController, ScrollMetrics, ScrollPhysics, Scrollable,
     SharedScrollPhysics, SingleChildScrollView, SizedBox, SliverFixedExtentList, VsyncScope,
 };
 
@@ -1930,5 +1933,416 @@ fn refresh_indicator_finish_dismisses_spinner() {
     assert!(
         !refresh_ctrl.is_refreshing(),
         "spinner must be gone (is_refreshing=false) after finish() is called"
+    );
+}
+
+// ============================================================================
+// Hit-test transform-stack composition through the sliver hit-test walk
+// ============================================================================
+//
+// `PipelineOwner::hit_test_sliver_subtree` computes each child's position and
+// recurses into it, but (before the fix this section pins down) never pushed
+// the paint offset it consumed onto the `HitTestResult` transform stack --
+// unlike the box-side walk, which does for `RenderBox` ancestors
+// (`crates/flui-rendering/src/pipeline/owner/accessors.rs`). A `Listener`
+// living anywhere below a sliver therefore received the raw, un-localized
+// GLOBAL dispatch position instead of one local to its own box -- wrong for
+// any sliver whose child paints at a nonzero offset, the common case for a
+// scrolled list.
+//
+// Flutter's own regression test for the same class of bug --
+// `'SliverMainAxisGroup pointer event positions'`
+// (`packages/flutter/test/widgets/sliver_main_axis_group_test.dart`, tag
+// `3.44.0`, filed as flutter/flutter#173029) -- asserts
+// `TapDownDetails.localPosition` stays scroll-correct through nested slivers.
+// FLUI has no `SliverMainAxisGroup` yet, so these are non-parity regression
+// tests reproducing the same class of defect through the sliver widgets FLUI
+// does have: `ListView` (the sliver->box leg, under a real scroll offset,
+// vertical and horizontal), `SliverPadding` wrapping a `SliverToBoxAdapter`
+// (the sliver->sliver leg), and a reversed `AxisDirection` (the sliver->box
+// leg's sign, not just its axis).
+
+const ROW_COLOR: Color = Color::rgb(200, 30, 30);
+
+/// The `dx`/`dy` local position a `Listener`'s `on_pointer_down` callback
+/// records, readable back by the test.
+type RecordedPosition = Rc<Cell<Option<(f32, f32)>>>;
+
+/// A `Listener` that records the local position its `on_pointer_down`
+/// callback receives into a fresh, independently readable cell.
+fn recording_listener() -> (RecordedPosition, Listener) {
+    let recorded = Rc::new(Cell::new(None));
+    let probe = Rc::clone(&recorded);
+    let listener = Listener::new().on_pointer_down(move |event: &PointerEvent| {
+        let position = event.position();
+        probe.set(Some((position.dx.get(), position.dy.get())));
+    });
+    (recorded, listener)
+}
+
+/// A hit-testable leaf of the given size: `ColoredBox` wraps a childless
+/// `SizedBox` so it actually hit-tests true -- a bare `SizedBox` does not.
+/// See `crates/flui-widgets/tests/parity/pointer_local_position_test.rs::target`
+/// for the same convention.
+fn hit_testable_leaf(width: f32, height: f32) -> ColoredBox {
+    ColoredBox::new(ROW_COLOR).child(SizedBox::new(width, height))
+}
+
+/// Builds `count` rows, each a `Listener` wrapping a `width x height`
+/// hit-testable leaf, alongside a `RecordedPosition` per row (same index).
+fn recording_rows(
+    count: usize,
+    width: f32,
+    height: f32,
+) -> (Vec<RecordedPosition>, Vec<flui_view::BoxedView>) {
+    let mut recorders = Vec::with_capacity(count);
+    let rows = (0..count)
+        .map(|_| {
+            let (recorded, listener) = recording_listener();
+            recorders.push(recorded);
+            listener.child(hit_testable_leaf(width, height)).boxed()
+        })
+        .collect();
+    (recorders, rows)
+}
+
+/// Asserts `actual` is within floating-point tolerance of `expected`.
+fn assert_local_position(actual: (f32, f32), expected: (f32, f32), what: &str) {
+    const TOLERANCE: f32 = 1e-3;
+    assert!(
+        (actual.0 - expected.0).abs() < TOLERANCE && (actual.1 - expected.1).abs() < TOLERANCE,
+        "{what}: expected ({:.4}, {:.4}), got ({:.4}, {:.4})",
+        expected.0,
+        expected.1,
+        actual.0,
+        actual.1,
+    );
+}
+
+/// A `Listener` inside a scrolled `ListView` row must receive a position
+/// local to its OWN box, not the raw global dispatch position.
+///
+/// 10 rows at 50px in a 120px-tall viewport (380px of real scroll range).
+/// Row 3 spans layout y=150..200; after scrolling by 100px it paints at
+/// screen y=50..100, so a tap at screen (100, 60) lands 10px into row 3's
+/// own box.
+#[test]
+fn scrolled_list_view_row_listener_receives_a_locally_transformed_position() {
+    let (recorders, rows) = recording_rows(10, 200.0, 50.0);
+
+    let controller = ScrollController::new();
+    let mut laid = lay_out(
+        ListView::new(50.0, rows).position(controller.position()),
+        tight(200.0, 120.0),
+    );
+
+    laid.dispatch_pointer_down(100.0, 25.0);
+    laid.dispatch_pointer_up(100.0, 25.0);
+    assert_local_position(
+        recorders[0]
+            .get()
+            .expect("row 0's on_pointer_down must have fired for the unscrolled tap"),
+        (100.0, 25.0),
+        "unscrolled tap on row 0",
+    );
+    for (index, recorder) in recorders.iter().enumerate().skip(1) {
+        assert!(
+            recorder.get().is_none(),
+            "only row 0 should have received the unscrolled tap; row {index} also fired"
+        );
+    }
+
+    controller.set_pixels(100.0);
+    laid.pump();
+
+    laid.dispatch_pointer_down(100.0, 60.0);
+    laid.dispatch_pointer_up(100.0, 60.0);
+    assert_local_position(
+        recorders[3]
+            .get()
+            .expect("row 3's on_pointer_down must have fired after scrolling by 100px"),
+        (100.0, 10.0),
+        "scrolled tap on row 3 must localize to its own box, not the raw global dispatch position",
+    );
+}
+
+/// The horizontal-axis sibling of
+/// [`scrolled_list_view_row_listener_receives_a_locally_transformed_position`]
+/// -- proves the sliver->box leg's offset decomposition picks the correct
+/// axis (`LeftToRight`) rather than only ever having been exercised on the
+/// vertical default.
+#[test]
+fn scrolled_horizontal_list_view_column_listener_receives_a_locally_transformed_position() {
+    use flui_widgets::prelude::Axis;
+
+    let (recorders, columns) = recording_rows(10, 50.0, 200.0);
+
+    let controller = ScrollController::new();
+    let mut laid = lay_out(
+        ListView::new(50.0, columns)
+            .scroll_direction(Axis::Horizontal)
+            .position(controller.position()),
+        tight(120.0, 200.0),
+    );
+
+    laid.dispatch_pointer_down(25.0, 100.0);
+    laid.dispatch_pointer_up(25.0, 100.0);
+    assert_local_position(
+        recorders[0]
+            .get()
+            .expect("column 0's on_pointer_down must have fired for the unscrolled tap"),
+        (25.0, 100.0),
+        "unscrolled tap on column 0",
+    );
+    for (index, recorder) in recorders.iter().enumerate().skip(1) {
+        assert!(
+            recorder.get().is_none(),
+            "only column 0 should have received the unscrolled tap; column {index} also fired"
+        );
+    }
+
+    controller.set_pixels(100.0);
+    laid.pump();
+
+    laid.dispatch_pointer_down(60.0, 100.0);
+    laid.dispatch_pointer_up(60.0, 100.0);
+    assert_local_position(
+        recorders[3]
+            .get()
+            .expect("column 3's on_pointer_down must have fired after scrolling by 100px"),
+        (10.0, 100.0),
+        "scrolled tap on column 3 must localize to its own box",
+    );
+}
+
+/// The sliver->sliver leg (`SliverPadding` wrapping a `SliverToBoxAdapter`)
+/// must localize too. FLUI has no `SliverMainAxisGroup` (the sliver Flutter's
+/// own regression test cited above uses), so this reproduces the
+/// sliver->sliver class of the defect through the nested-sliver widgets FLUI
+/// does have.
+///
+/// The first tap is unscrolled: `SliverPadding`'s consumed offset is a fixed
+/// 20px padding constant, deterministic and independent of scroll --
+/// isolating the sliver->sliver leg cleanly. The second tap scrolls PAST the
+/// padding (30px > the 20px padding), so the padding's own consumed offset
+/// drops to 0 and the `SliverToBoxAdapter`->box (sliver->box) leg picks up a
+/// nonzero one instead -- the same nested tree exercises both not-yet-fixed
+/// legs.
+///
+/// Both taps target the same `local_point` inside the leaf's own box; the
+/// global dispatch coordinate is derived from [`LaidOut::absolute_offset`],
+/// which sums committed PAINT offsets set by `perform_layout`/
+/// `position_child` -- entirely independent of the HIT-TEST transform-stack
+/// walk this test exists to check, so recovering `local_point` back out is
+/// not a tautology against the code under test.
+#[test]
+fn scrolled_nested_sliver_listener_receives_a_locally_transformed_position() {
+    use flui_widgets::{SliverPadding, SliverToBoxAdapter, Viewport};
+
+    let (recorded, listener) = recording_listener();
+    let content = listener.child(hit_testable_leaf(160.0, 200.0));
+
+    let controller = ScrollController::new();
+    let widget =
+        Viewport::new((SliverPadding::all(20.0).child(SliverToBoxAdapter::new().child(content)),))
+            .position(controller.position());
+
+    let mut laid = lay_out(widget, tight(200.0, 150.0));
+
+    let padding = laid.only_child(laid.root());
+    let adapter = laid.only_child(padding);
+    let listener = laid.only_child(adapter);
+    let local_point = (10.0_f32, 10.0_f32);
+
+    // Anchors the geometry independently of `absolute_offset`: a 20px
+    // uniform `SliverPadding` places its sliver child at (20, 20)
+    // (cross-axis padding.left, main-axis padding.top) regardless of
+    // scroll, so this can't pass merely because two accumulations of
+    // the same (possibly wrong) `node.offset()` agree with each other.
+    assert_eq!(
+        laid.offset(adapter),
+        offset(20.0, 20.0),
+        "SliverPadding::all(20.0) must place its child 20px in on both axes"
+    );
+    let listener_offset = laid.absolute_offset(listener);
+    laid.dispatch_pointer_down(
+        listener_offset.dx.get() + local_point.0,
+        listener_offset.dy.get() + local_point.1,
+    );
+    laid.dispatch_pointer_up(
+        listener_offset.dx.get() + local_point.0,
+        listener_offset.dy.get() + local_point.1,
+    );
+    assert_local_position(
+        recorded
+            .get()
+            .expect("on_pointer_down must have fired through the padding"),
+        local_point,
+        "sliver->sliver: tap must localize past the SliverPadding offset",
+    );
+
+    recorded.set(None);
+    controller.set_pixels(30.0); // past the 20px padding, into the content
+    laid.pump();
+
+    let listener_offset = laid.absolute_offset(listener);
+    laid.dispatch_pointer_down(
+        listener_offset.dx.get() + local_point.0,
+        listener_offset.dy.get() + local_point.1,
+    );
+    laid.dispatch_pointer_up(
+        listener_offset.dx.get() + local_point.0,
+        listener_offset.dy.get() + local_point.1,
+    );
+    assert_local_position(
+        recorded
+            .get()
+            .expect("on_pointer_down must have fired after scrolling past the padding"),
+        local_point,
+        "sliver->box (within a nested-sliver chain): tap must localize past the \
+         scroll-shifted content offset",
+    );
+}
+
+/// A reversed [`AxisDirection`] (`BottomToTop`) must not flip the localized
+/// sign the wrong way -- `box_hit_offset_from_sliver_position`'s
+/// `right_way_up` branch treats a reversed direction specially, and the
+/// hit-test transform-stack fix must compose with it correctly rather than
+/// only ever having been exercised in the (default) `TopToBottom` direction
+/// the other tests in this section use.
+///
+/// As with the nested-sliver case, the expected local position is derived
+/// from [`LaidOut::absolute_offset`] (paint, not hit-test), so no
+/// hand-derived reversed-axis arithmetic is load-bearing here.
+#[test]
+fn scrolled_reversed_list_row_listener_receives_a_locally_transformed_position() {
+    use flui_types::layout::AxisDirection;
+    use flui_widgets::Viewport;
+
+    let (recorders, rows) = recording_rows(10, 200.0, 50.0);
+
+    let controller = ScrollController::new();
+    let widget = Viewport::new((SliverFixedExtentList::new(50.0, rows),))
+        .axis_direction(AxisDirection::BottomToTop)
+        .position(controller.position());
+    let mut laid = lay_out(widget, tight(200.0, 120.0));
+
+    let list = laid.only_child(laid.root());
+    let row0 = laid.child(list, 0);
+    let local_point = (20.0_f32, 15.0_f32);
+
+    // Anchors the geometry independently of `absolute_offset`: with a
+    // 120px viewport and 50px rows, `BottomToTop` places row 0's top-left
+    // at physical dy = 120 - 50 = 70 unscrolled -- computed from first
+    // principles, not from summing the same `node.offset()` values the
+    // fix under test pushes.
+    let row0_offset = laid.absolute_offset(row0);
+    assert_eq!(
+        row0_offset,
+        offset(0.0, 70.0),
+        "reversed-axis (BottomToTop) row 0 must sit at physical dy = 70 unscrolled"
+    );
+    laid.dispatch_pointer_down(
+        row0_offset.dx.get() + local_point.0,
+        row0_offset.dy.get() + local_point.1,
+    );
+    laid.dispatch_pointer_up(
+        row0_offset.dx.get() + local_point.0,
+        row0_offset.dy.get() + local_point.1,
+    );
+    assert_local_position(
+        recorders[0]
+            .get()
+            .expect("row 0's on_pointer_down must have fired for the reversed-axis unscrolled tap"),
+        local_point,
+        "reversed-axis (BottomToTop), unscrolled",
+    );
+    recorders[0].set(None);
+
+    controller.set_pixels(20.0);
+    laid.pump();
+
+    // Scrolling 20px moves the viewport's visible window, shifting row 0's
+    // physical dy to 120 - 50 - (0 - 20) = 90.
+    let row0_offset = laid.absolute_offset(row0);
+    assert_eq!(
+        row0_offset,
+        offset(0.0, 90.0),
+        "reversed-axis (BottomToTop) row 0 must sit at physical dy = 90 after scrolling by 20px"
+    );
+    laid.dispatch_pointer_down(
+        row0_offset.dx.get() + local_point.0,
+        row0_offset.dy.get() + local_point.1,
+    );
+    laid.dispatch_pointer_up(
+        row0_offset.dx.get() + local_point.0,
+        row0_offset.dy.get() + local_point.1,
+    );
+    assert_local_position(
+        recorders[0]
+            .get()
+            .expect("row 0's on_pointer_down must have fired for the reversed-axis scrolled tap"),
+        local_point,
+        "reversed-axis (BottomToTop), scrolled by 20px",
+    );
+}
+
+/// The sliver->sliver override arm in `accessors.rs`'s `hit_child` closure
+/// (the `Some(child_position)` branch, guarded by a `debug_assert!` that the
+/// child's committed offset is zero) has no driver-level coverage anywhere
+/// else in the workspace. The sole supplier is
+/// `RenderSliverOffstage::hit_test`
+/// (`crates/flui-objects/src/sliver/sliver_offstage.rs`), which forwards its
+/// own main-axis position unchanged to a sliver child; its existing harness
+/// coverage (`flui-objects/tests/render_object_harness.rs`) is
+/// layout/geometry only, never a driven hit test.
+///
+/// Drives a hit through a non-offstage (`visible`) `SliverOffstage` wrapping
+/// a `SliverToBoxAdapter` and confirms the delivered local position, so the
+/// override branch is exercised end to end rather than only by the
+/// `debug_assert!` it carries.
+#[test]
+fn hit_through_a_visible_sliver_offstage_reaches_its_child_at_the_correct_position() {
+    use flui_widgets::{SliverOffstage, SliverToBoxAdapter, Viewport};
+
+    let (recorded, listener) = recording_listener();
+    let content = listener.child(hit_testable_leaf(160.0, 200.0));
+
+    let controller = ScrollController::new();
+    let widget =
+        Viewport::new((SliverOffstage::visible().child(SliverToBoxAdapter::new().child(content)),))
+            .position(controller.position());
+
+    let laid = lay_out(widget, tight(200.0, 150.0));
+
+    let offstage = laid.only_child(laid.root());
+    let adapter = laid.only_child(offstage);
+    let target = laid.only_child(adapter);
+    let local_point = (10.0_f32, 10.0_f32);
+
+    // A visible `SliverOffstage` is a transparent passthrough -- it never
+    // calls `position_child`, so this is the ACTUAL invariant the
+    // `debug_assert!` on the override arm depends on, not merely assumed.
+    assert_eq!(
+        laid.offset(adapter),
+        offset(0.0, 0.0),
+        "a visible SliverOffstage must not reposition its sliver child"
+    );
+
+    let target_offset = laid.absolute_offset(target);
+    laid.dispatch_pointer_down(
+        target_offset.dx.get() + local_point.0,
+        target_offset.dy.get() + local_point.1,
+    );
+    laid.dispatch_pointer_up(
+        target_offset.dx.get() + local_point.0,
+        target_offset.dy.get() + local_point.1,
+    );
+    assert_local_position(
+        recorded
+            .get()
+            .expect("on_pointer_down must have fired through the visible SliverOffstage"),
+        local_point,
+        "sliver->sliver override arm (RenderSliverOffstage): tap must localize to the child's own box",
     );
 }

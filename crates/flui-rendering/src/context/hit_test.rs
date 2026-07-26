@@ -164,7 +164,38 @@ where
     // CHILD TESTING
     // ════════════════════════════════════════════════════════════════════════
 
-    /// Tests a child for hits with position transformation.
+    /// Tests a child at a caller-supplied position.
+    ///
+    /// # Caller contract
+    ///
+    /// `position` must ALREADY be local to the child: this method hands it
+    /// over verbatim, so any reframing the caller performed is invisible
+    /// here. Whether the driver records that reframing on the
+    /// `HitTestResult` transform stack is decided by the walk, not by this
+    /// method — and today the walk does not push for every parent/child
+    /// pairing:
+    ///
+    /// - box parent → any child, and sliver parent → sliver child: the
+    ///   driver pushes nothing on this path. Sound only when the child is
+    ///   committed at `Offset::ZERO` (a transparent passthrough that never
+    ///   repositions its child); a nonzero offset here silently yields an
+    ///   un-localized position, and the sliver walk carries a
+    ///   `debug_assert!` for exactly that.
+    /// - sliver parent → box child: the driver DOES push the child's paint
+    ///   offset, because crossing into a box frame always decomposes the
+    ///   position into box-local coordinates.
+    ///
+    /// Do not rely on that split. Prefer
+    /// [`hit_test_child_at_layout_offset`](Self::hit_test_child_at_layout_offset)
+    /// whenever the child has a real laid-out offset — it lets the driver
+    /// resolve and push the offset uniformly and cannot silently deliver an
+    /// un-localized position.
+    ///
+    /// Pushing the offset yourself via this context's `push_offset` /
+    /// `with_transform` does not help: the ctx-level transform stack is
+    /// discarded before it reaches `HitTestEntry.transform` — see the
+    /// "Known gaps" section of
+    /// `crates/flui-interaction/docs/HIT_TESTING.md`.
     pub fn hit_test_child(
         &mut self,
         index: usize,
@@ -174,9 +205,11 @@ where
     }
 
     /// Tests a child at its laid-out position (`RenderState.offset`)
-    /// — the parent supplies no offset, the driver resolves it. THE
-    /// way to hit-test children positioned during layout; parents no
-    /// longer mirror offsets in their own fields.
+    /// — the parent supplies no offset, the driver resolves it and pushes
+    /// it onto the transform stack. THE safe way to hit-test children
+    /// positioned during layout; parents no longer mirror offsets in their
+    /// own fields, and unlike [`hit_test_child`](Self::hit_test_child) this
+    /// cannot forget the push.
     pub fn hit_test_child_at_layout_offset(&mut self, index: usize) -> bool {
         self.inner.hit_test_child_at_layout_offset(index)
     }
