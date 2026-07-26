@@ -242,10 +242,20 @@ for package in workspace_packages:
                 if test_file.name != "main.rs"
             }
 
+            # Only DECLARED `[[test]]` targets may act as mount sources. An
+            # undeclared `tests/main.rs` is not compiled at all under
+            # `autotests = false`, so trusting its `mod` declarations would let
+            # this guard report every sibling as reachable while none of them
+            # run — the exact failure this check exists to catch, reproduced
+            # inside the check. Flag such a `main.rs` instead of reading it.
             mount_source_files = set(declared_test_paths)
             main_rs = tests_dir / "main.rs"
-            if main_rs.exists():
-                mount_source_files.add(main_rs.resolve())
+            if main_rs.exists() and main_rs.resolve() not in declared_test_paths:
+                errors.append(
+                    f"{main_rs.relative_to(root)} exists but is not a declared `[[test]]` target: "
+                    f"`{name}` sets `autotests = false`, so Cargo never compiles it and the "
+                    "modules it declares do not run. Declare it in Cargo.toml, or delete it"
+                )
 
             # `#[path = "foo.rs"]\nmod foo;` (the mount idiom every consolidated
             # `tests/main.rs` in this workspace uses) — the explicit path is the
