@@ -23,7 +23,6 @@ cursor-icon = { workspace = true }
 
 # Synchronization & Concurrency
 parking_lot = { workspace = true }
-once_cell = { workspace = true }
 dashmap = { workspace = true }
 
 # Collections (optimized for small sizes)

@@ -818,6 +818,9 @@ fn baseline_alignment_without_a_text_baseline_degrades_to_top_instead_of_asserti
 /// genuine production robustness gap, distinct from this test's job of
 /// documenting today's debug-mode behavior; worth a Cross.H filing.
 #[test]
+// Debug-only: the guard compiles out in release, where `#[should_panic]`
+// would otherwise report "did not panic as expected".
+#[cfg(debug_assertions)]
 #[should_panic(expected = "every Table row must have the same number of cells as the first row")]
 fn irregular_row_lengths_trip_the_debug_assert() {
     let _ = harness::pump_widget(

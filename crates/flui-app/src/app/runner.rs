@@ -1794,6 +1794,10 @@ where
         // rest of this function.
         AppBinding::instance().set_platform_clipboard(platform.clipboard());
 
+        // Debug overlay: `Some` stats IS the enable flag, so this is the
+        // single point that turns the frame path's overlay work on.
+        AppBinding::instance().set_performance_overlay(config.show_performance_overlay);
+
         // 1. Open window now that the event loop is running. Window creation is
         // an environment failure (display server hiccup, resource exhaustion),
         // not a `BUG:` invariant, and — unlike platform init above — this DOES
@@ -2292,6 +2296,10 @@ where
     // this platform's `clipboard()` is reachable at all.
     AppBinding::instance().set_platform_clipboard(platform.clipboard());
 
+    // Debug overlay: `Some` stats IS the enable flag, so this is the
+    // single point that turns the frame path's overlay work on.
+    AppBinding::instance().set_performance_overlay(config.show_performance_overlay);
+
     // 1. Open window (wraps the existing ANativeWindow) before run()
     let options: WindowOptions = (&config).into();
     let window = platform
@@ -2378,7 +2386,17 @@ where
 
                 // If a scene plugin is active it owns this presentation frame,
                 // but the callback still executes inside the realm entry scope.
-                if let Some(scene) = hr.build_scene(w as f32, h as f32) {
+                // SAFETY: `HotReloadDriver::build_scene` reclaims a Box the plugin
+                // allocated, so host and plugin must agree on `Scene`'s layout and
+                // allocator, and the scene must be dropped before the library is
+                // unloaded. Both hold here: the plugin is built from this workspace
+                // by the same toolchain, and `scene` is consumed by `render_scene`
+                // and dropped inside this block, while `hr` (owning the library)
+                // outlives it. See that method's `# Safety` for why this cannot be
+                // a safe call.
+                #[allow(unsafe_code)]
+                let built = unsafe { hr.build_scene(w as f32, h as f32) };
+                if let Some(scene) = built {
                     drop(hr);
                     if let Err(e) = r.render_scene(&scene) {
                         tracing::error!("Plugin render failed: {:?}", e);
@@ -2593,6 +2611,10 @@ where
     // comment for why there is no later point at which this platform's
     // `clipboard()` is reachable.
     AppBinding::instance().set_platform_clipboard(platform.clipboard());
+
+    // Debug overlay: `Some` stats IS the enable flag, so this is the
+    // single point that turns the frame path's overlay work on.
+    AppBinding::instance().set_performance_overlay(config.show_performance_overlay);
 
     // 1. Open window (creates canvas) before run() since run() takes ownership
     let options: WindowOptions = (&config).into();

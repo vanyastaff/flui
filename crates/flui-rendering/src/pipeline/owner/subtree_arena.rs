@@ -835,6 +835,8 @@ unsafe fn layout_subtree_borrowed_impl(
     // relies on below.
     if arena.layout_poison.is_poisoned(id) {
         let stand_in = || {
+            // SAFETY: the cycle guard is held, so no `&mut` of this slot is live on
+            // an ancestor frame; this shared reborrow is the only live borrow.
             let node: &RenderNode = unsafe { &*node_ptr };
             node.geometry_box().unwrap_or(flui_types::Size::ZERO)
         };
@@ -864,6 +866,9 @@ unsafe fn layout_subtree_borrowed_impl(
     // used after the `&mut *node_ptr` reborrow opens Phase 2.
     // -----------------------------------------------------------------------
     let (child_ids, needs_layout_flag, cached_geometry, node_protocol, is_leaf) = {
+        // SAFETY: the cycle guard is held, so no `&mut` of this slot is live on
+        // an ancestor frame; this shared reborrow is the only live borrow, and
+        // nothing derived from it outlives the block.
         let parent_shared: &RenderNode = unsafe { &*node_ptr };
         let node_protocol = parent_shared.protocol_name();
         let entry: &RenderEntry<BoxProtocol> = match parent_shared.as_box() {
@@ -998,6 +1003,15 @@ unsafe fn layout_subtree_borrowed_impl(
     // reads on child slots (which on a cyclic tree may alias `node_ptr`).
     // -----------------------------------------------------------------------
     let geometry = {
+        // SAFETY: what validates this unique reborrow is that Phase 1's
+        // `parent_shared` scope has closed and Phase 1b's reads have ended, so
+        // no shared borrow of this slot is live here — see the block comment
+        // above, which states the ordering in full. The cycle guard alone is
+        // NOT sufficient: it establishes only that no ANCESTOR frame holds a
+        // `&mut`. The reborrow is scoped to the block below, which ends it
+        // before Phase 4 opens shared reads that may alias `node_ptr`.
+        //
+        // Nothing derived from Phase 1 may be carried past this line.
         let node_ref: &mut RenderNode = unsafe { &mut *node_ptr };
 
         let entry: &mut RenderEntry<BoxProtocol> = match node_ref.as_box_mut() {
@@ -1071,9 +1085,18 @@ unsafe fn layout_subtree_borrowed_impl(
         let cb_ref: LayoutChildCallback<'_> = &cb_owned;
 
         let baseline_cb_owned = move |child_id: RenderId, baseline: crate::traits::TextBaseline| {
+            // A cyclic `children()` edge can name this frame's own slot or an
+            // in-flight ancestor's, and the `&mut *node_ptr` opened below is live
+            // for the whole enclosing block — so a shared reborrow here would be
+            // a foreign read against a live Unique tag. Same gate the four other
+            // child-slot derefs in this file use; this one was missing it.
+            if arena_for_cb.is_in_flight(child_id) {
+                return None;
+            }
             arena_for_cb.get(child_id).and_then(|child_ptr| {
-                // SAFETY: shared reborrow of a distinct child slot after its
-                // layout completed in this walk; no concurrent &mut to the slot.
+                // SAFETY: child `child_id` is NOT in-flight (guard above), so no
+                // `&mut` to its slot is live; this shared reborrow is scoped to
+                // the closure body.
                 let child_node: &RenderNode = unsafe { &*child_ptr.0 };
                 child_node
                     .as_box()
@@ -1359,6 +1382,8 @@ unsafe fn box_intrinsic_query_borrowed_impl(
     // `LayoutCycleGuard::enter`).  The shared reborrow is the only live
     // borrow of the slot.
     if arena.layout_poison.is_poisoned(id) {
+        // SAFETY: the cycle guard is held, so no `&mut` of this slot is live on
+        // an ancestor frame; this shared reborrow is the only live borrow.
         let node: &RenderNode = unsafe { &*node_ptr };
         let value = node
             .as_box()
@@ -1547,6 +1572,8 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
     // of the slot.
     if arena.layout_poison.is_poisoned(id) {
         let stand_in = || {
+            // SAFETY: the cycle guard is held, so no `&mut` of this slot is live on
+            // an ancestor frame; this shared reborrow is the only live borrow.
             let node: &crate::storage::RenderNode = unsafe { &*node_ptr };
             node.geometry_sliver().unwrap_or(SliverGeometry::ZERO)
         };
@@ -1574,6 +1601,8 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
     // `parent_shared` may be used after the `&mut *node_ptr` reborrow (Phase 2).
     // -----------------------------------------------------------------------
     let (child_ids, node_protocol) = {
+        // SAFETY: the cycle guard rejects re-entry into this slot before any
+        // borrow of it opens, so this shared reborrow is the only live borrow.
         let parent_shared: &crate::storage::RenderNode = unsafe { &*node_ptr };
         let node_protocol = parent_shared.protocol_name();
         let entry: &RenderEntry<SliverProtocol> = match parent_shared.as_sliver() {
@@ -1660,6 +1689,9 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
     // reads on child slots (which on a cyclic tree may alias `node_ptr`).
     // -----------------------------------------------------------------------
     let geometry = {
+        // SAFETY: the cycle guard is held, so no other borrow of this slot is
+        // live. This unique reborrow is scoped to the block below, which ends
+        // it before Phase 4 opens shared reads that may alias `node_ptr`.
         let node_ref: &mut crate::storage::RenderNode = unsafe { &mut *node_ptr };
 
         let entry: &mut RenderEntry<SliverProtocol> = match node_ref.as_sliver_mut() {

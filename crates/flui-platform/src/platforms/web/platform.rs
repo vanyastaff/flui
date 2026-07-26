@@ -37,6 +37,14 @@ struct WebState {
 unsafe impl Send for WebPlatform {}
 unsafe impl Sync for WebPlatform {}
 
+impl std::fmt::Debug for WebPlatform {
+    // Hand-written: the state holds JS-backed handles (executors, clipboard,
+    // callbacks) that carry no meaningful Debug representation.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WebPlatform").finish_non_exhaustive()
+    }
+}
+
 impl WebPlatform {
     /// Create a new Web platform instance
     pub fn new() -> Result<Self> {

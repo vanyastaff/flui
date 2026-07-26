@@ -4,6 +4,8 @@
 
 **Объект:** 28 crates, ~573k строк Rust (включая тесты), wgpu 29, Rust 1.96, edition 2024.
 
+**Дополнение:** разделы 13–32 (toolchain/MSRV, stable-first, Range API, compact bitsets, atomics, invariant testing, WebAssembly, warnings policy, symbol mangling, data-transfer, event-loop affinity, async, конкурентный baseline, devtools, performance overlay, hot reload, features, benchmarks) вынесены в [`2026-07-25-upgrade-pack-audit.md`](2026-07-25-upgrade-pack-audit.md) — двадцать находок, из них восемь новых относительно этого документа.
+
 ---
 
 ## 8.1. Executive summary

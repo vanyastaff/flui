@@ -106,7 +106,7 @@ pub use sliver_variants::{
     TreeSliverNodeParentData,
 };
 // Table and text
-pub use table_text::{TableCellParentData, TableCellVerticalAlignment, TextParentData, TextRange};
+pub use table_text::{TableCellParentData, TableCellVerticalAlignment, TextParentData};
 
 // ============================================================================
 // TYPE COUNTS
@@ -149,7 +149,7 @@ pub mod prelude {
         SliverPhysicalParentData, TreeSliverNodeParentData,
     };
     // Table and text
-    pub use super::{TableCellParentData, TableCellVerticalAlignment, TextParentData, TextRange};
+    pub use super::{TableCellParentData, TableCellVerticalAlignment, TextParentData};
 }
 
 // ============================================================================
@@ -176,7 +176,7 @@ pub mod sliver {
 
 /// Text protocol parent data types.
 pub mod text {
-    pub use super::{TextParentData, TextRange};
+    pub use super::TextParentData;
 }
 
 // ============================================================================

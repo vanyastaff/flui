@@ -370,7 +370,10 @@ impl TextureCache {
         self.cache_misses += 1;
 
         let texture = match &id {
+            #[cfg(feature = "images")]
             TextureId::Path(path) => self.load_from_file(path)?,
+            #[cfg(not(feature = "images"))]
+            TextureId::Path(path) => Self::load_from_file(path)?,
             TextureId::Data(_) => {
                 return Err("Cannot load TextureId::Data without explicit data".to_string());
             }
@@ -607,8 +610,12 @@ impl TextureCache {
         Ok(CachedTexture::new(texture, view, width, height))
     }
 
+    /// Stub used when the `images` feature is off: no GPU work happens, so
+    /// this is an associated function rather than a method — taking `&self`
+    /// here would be an unused receiver (the real loader needs it for
+    /// `device`/`queue`).
     #[cfg(not(feature = "images"))]
-    fn load_from_file(&self, _path: &str) -> Result<CachedTexture, String> {
+    fn load_from_file(_path: &str) -> Result<CachedTexture, String> {
         Err("Image loading disabled: 'images' feature not enabled".to_string())
     }
 

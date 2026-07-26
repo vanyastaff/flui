@@ -2890,6 +2890,9 @@ fn test_ticker_future_poll_new_pending() {
         static VTABLE: RawWakerVTable = RawWakerVTable::new(clone, no_op, no_op, no_op);
         RawWaker::new(std::ptr::null(), &VTABLE)
     }
+    // SAFETY: the vtable's `clone` returns the same no-data waker and the
+    // wake/drop entries are no-ops, so every `RawWakerVTable` contract holds
+    // trivially — the null data pointer is never dereferenced.
     let waker = unsafe { Waker::from_raw(dummy_raw_waker()) };
     let mut cx = Context::from_waker(&waker);
 
@@ -2914,6 +2917,9 @@ fn test_ticker_future_poll_complete_ready() {
         static VTABLE: RawWakerVTable = RawWakerVTable::new(clone, no_op, no_op, no_op);
         RawWaker::new(std::ptr::null(), &VTABLE)
     }
+    // SAFETY: the vtable's `clone` returns the same no-data waker and the
+    // wake/drop entries are no-ops, so every `RawWakerVTable` contract holds
+    // trivially — the null data pointer is never dereferenced.
     let waker = unsafe { Waker::from_raw(dummy_raw_waker()) };
     let mut cx = Context::from_waker(&waker);
 
@@ -2942,6 +2948,9 @@ fn test_ticker_future_or_cancel_poll_pending() {
         static VTABLE: RawWakerVTable = RawWakerVTable::new(clone, no_op, no_op, no_op);
         RawWaker::new(std::ptr::null(), &VTABLE)
     }
+    // SAFETY: the vtable's `clone` returns the same no-data waker and the
+    // wake/drop entries are no-ops, so every `RawWakerVTable` contract holds
+    // trivially — the null data pointer is never dereferenced.
     let waker = unsafe { Waker::from_raw(dummy_raw_waker()) };
     let mut cx = Context::from_waker(&waker);
 
@@ -2970,6 +2979,9 @@ fn test_ticker_future_or_cancel_poll_complete() {
         static VTABLE: RawWakerVTable = RawWakerVTable::new(clone, no_op, no_op, no_op);
         RawWaker::new(std::ptr::null(), &VTABLE)
     }
+    // SAFETY: the vtable's `clone` returns the same no-data waker and the
+    // wake/drop entries are no-ops, so every `RawWakerVTable` contract holds
+    // trivially — the null data pointer is never dereferenced.
     let waker = unsafe { Waker::from_raw(dummy_raw_waker()) };
     let mut cx = Context::from_waker(&waker);
 

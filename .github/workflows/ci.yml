@@ -1,16 +1,35 @@
 name: CI
 
-# Mirrors the Cycle 5 per-wave verification gate (build, clippy `-D warnings`,
-# per-crate lib tests, port-check.sh) on every PR + push to main. Patterns
-# borrowed from linebender/xilem (gated `checks` job, Taplo + Typos + Swatinem
-# cache + taiki-e/install-action for pinned tool versions) and tokio (gated
-# basics → matrix tests; nextest as primary runner).
+# Job graph (every job is gated on the fast `checks` source gate):
+#   checks         — fmt + taplo + typos + inventory + port-check + actionlint + zizmor (seconds, no compile)
+#   clippy         — workspace lint with -D warnings
+#   feature-matrix — cargo-hack per-feature clippy (--each-feature --optional-deps), xilem-style
+#   wasm-check     — cargo check --target wasm32-unknown-unknown for the wasm-capable crates
+#   cross-typecheck — cargo check (no link, no tests) of flui-platform's windows + macos backends
+#   test           — build + nextest (lib + integration), ubuntu
+#   gpu-test       — full enable-wgpu-tests readback suite on windows/WARP (merge-blocking)
+#   bench-compile  — criterion benches compile + link
+#   doc            — rustdoc with RUSTDOCFLAGS=-D warnings
+#   deny           — advisories/bans/licenses/sources
+#   doc-test       — rustdoc examples executed as tests
+#   msrv           — cargo check on the declared 1.97 MSRV
+#   miri           — UB check on flui-rendering's subtree arena (advisory)
+#   ci             — aggregator: the single required check for branch protection
+# Patterns borrowed from linebender/xilem (gated `checks` job, cargo-hack
+# feature matrix, Swatinem cache + taiki-e/install-action for pinned tool
+# versions) and tokio (aggregator `ci` job; nextest as primary runner).
 
 on:
   pull_request:
   push:
     branches: [main]
   merge_group:
+
+# Least-privilege GITHUB_TOKEN: no job in this workflow writes to the repo,
+# issues, or PRs. Artifact upload uses the separate Actions runtime token and
+# is unaffected. zizmor (run in `checks`) audits this file.
+permissions:
+  contents: read
 
 # Cancel in-flight runs when a new commit lands on the same branch.
 concurrency:
@@ -19,39 +38,67 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  # Strict workspace-wide; matches the per-wave gate.
-  RUSTFLAGS: -D warnings
+  RUST_BACKTRACE: 1
+  # Strict workspace-wide; matches the local `just ci` gate.
+  #
+  # `build.warnings` (Cargo 1.97+) rather than `RUSTFLAGS: -D warnings`:
+  # RUSTFLAGS is part of the rustc fingerprint, so every job that needs a
+  # different value (miri, below) gets a disjoint target/ cache and has to
+  # blank the flag wholesale — losing every other check with it. The Cargo
+  # config knob is applied after compilation and does not enter the
+  # fingerprint (measured: toggling it recompiles nothing).
+  CARGO_BUILD_WARNINGS: deny
   RUSTDOCFLAGS: -D warnings
   # CI builds are clean every run; no incremental artifacts to preserve.
   CARGO_INCREMENTAL: 0
 
 jobs:
   # ─────────────────────────────────────────────────────────────────────────
-  # checks — fast source gate. fmt + port-check + typos + Taplo. No compile.
-  # Every downstream job (clippy, test, doc, bench-compile) depends on this, so
-  # a malformed PR fails in seconds before any workspace build starts.
+  # checks — fast source gate. fmt + port-check + typos + Taplo + the workflow
+  # linters (actionlint semantics, zizmor security audit). No compile. Every
+  # downstream job (clippy, test, doc, bench-compile) depends on this, so a
+  # malformed PR fails in seconds before any workspace build starts.
   # Ubuntu only — pure source analysis. clippy lives in its own parallel job.
   # ─────────────────────────────────────────────────────────────────────────
   checks:
-    name: checks (fmt, port-check, typos, taplo)
+    name: checks (fmt, port-check, typos, taplo, actionlint, zizmor)
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install Rust stable + rustfmt
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
           components: rustfmt
 
-      - name: Install CI tools (typos, taplo, ripgrep)
-        uses: taiki-e/install-action@v2
+      - name: Install CI tools (typos, taplo, ripgrep, zizmor)
+        uses: taiki-e/install-action@3d7d7cd5ac7f994c1892ae0c06165095b9139094 # v2.85.1
         with:
           # Pin versions — unpinned tools surface unrelated breakage on
           # release day. Bump deliberately. `ripgrep` is required by
           # scripts/port-check.sh (the 22 refusal triggers + FR-033 all
           # run through `rg`).
-          tool: typos-cli@1.28,taplo-cli@0.10,ripgrep@14
+          #
+          # actionlint is NOT here: install-action has no recipe for it and
+          # falls back to cargo-binstall, which cannot resolve a Go tool that
+          # is not on crates.io ("actionlint is not found", exit 76). It is
+          # fetched from its own release below.
+          tool: typos-cli@1.28,taplo-cli@0.10,ripgrep@14,zizmor@1
+
+      - name: Install actionlint
+        env:
+          ACTIONLINT_VERSION: 1.7.7
+        run: |
+          set -euo pipefail
+          curl -fsSL -o actionlint.tar.gz \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          tar -xzf actionlint.tar.gz actionlint
+          install -m 0755 actionlint /usr/local/bin/actionlint
+          rm -f actionlint actionlint.tar.gz
+          actionlint --version
 
       - name: cargo fmt --check
         run: cargo fmt --all -- --check
@@ -68,6 +115,12 @@ jobs:
       - name: scripts/port-check.sh (22 refusal triggers + FR-033)
         run: bash scripts/port-check.sh -v
 
+      - name: actionlint (workflow semantics)
+        run: actionlint
+
+      - name: zizmor (workflow security audit)
+        run: zizmor .
+
   # ─────────────────────────────────────────────────────────────────────────
   # clippy — workspace lint with -D warnings. Split out of `checks` so it runs
   # in PARALLEL with test/doc/bench-compile instead of gating them: clippy
@@ -80,20 +133,22 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install Rust stable + clippy
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
           components: clippy
 
       - name: Cache cargo registry + target
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           save-if: ${{ github.event_name != 'merge_group' }}
 
       - name: cargo clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
       # Compile (not run) the feature-gated test module so the IR-purity witness
       # (`_DRAW_SEGMENT_IS_CLONE` / `DrawSegment: Clone`) and the deterministic-replay
@@ -102,7 +157,7 @@ jobs:
       # `--tests` ensures the `#[cfg(all(test, feature = "enable-wgpu-tests"))]` block
       # is compiled; `--no-run` (via clippy) is implicit — clippy only type-checks.
       - name: cargo clippy flui-engine --features enable-wgpu-tests (IR-purity witness)
-        run: cargo clippy -p flui-engine --all-targets --features enable-wgpu-tests -- -D warnings
+        run: cargo clippy -p flui-engine --all-targets --locked --features enable-wgpu-tests -- -D warnings
 
   # ─────────────────────────────────────────────────────────────────────────
   # test — workspace build + nextest. Matrix: Linux + Windows.
@@ -134,7 +189,9 @@ jobs:
       CARGO_PROFILE_DEV_DEBUG: line-tables-only
       CARGO_PROFILE_TEST_DEBUG: line-tables-only
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # The full-workspace debug build of all lib+test targets (incl. the wgpu/
       # glyphon/lyon/naga GPU stack and criterion/proptest/insta/trybuild dev-
@@ -153,10 +210,10 @@ jobs:
           df -h /
 
       - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
 
       - name: Cache cargo registry + target
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           save-if: ${{ github.event_name != 'merge_group' }}
           # Per tokio: binary caching breaks on macOS — guard for when macOS
@@ -164,12 +221,12 @@ jobs:
           cache-bin: ${{ matrix.os != 'macos-latest' }}
 
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@7572810d7dd469b651bb7793945692cf78da5dd7 # v2.85.0
         with:
           tool: cargo-nextest@0.9
 
       - name: cargo build --workspace
-        run: cargo build --workspace --all-targets
+        run: cargo build --workspace --all-targets --locked
 
       # Confirm the heavy compile (disk peak) left headroom — the reclaim above
       # measures only around itself, not after the build. If this trends toward
@@ -192,6 +249,7 @@ jobs:
           cargo nextest run
           --workspace
           --exclude flui-platform
+          --locked
           --no-fail-fast
 
       # flui-assets and flui-widgets both default to `default = []`, so the
@@ -209,11 +267,23 @@ jobs:
       # CI-dead as the sync path was before this block existed.
       - name: cargo nextest run (flui-assets full, flui-widgets images)
         run: |
-          cargo nextest run -p flui-assets --features full
-          cargo nextest run -p flui-widgets --features images --test image
-          cargo nextest run -p flui-widgets --features asset-images --lib
-          cargo nextest run -p flui-widgets --features asset-images --test image_async
-          cargo nextest run -p flui-widgets --features network-images --test image_network
+          cargo nextest run -p flui-assets --locked --features full
+          cargo nextest run -p flui-widgets --locked --features images --test image
+          cargo nextest run -p flui-widgets --locked --features asset-images --lib
+          cargo nextest run -p flui-widgets --locked --features asset-images --test image_async
+          cargo nextest run -p flui-widgets --locked --features network-images --test image_network
+
+      # insta writes `<name>.snap.new` next to the snapshot on mismatch.
+      # Upload them so a CI-only snapshot failure is debuggable without a
+      # local repro (same pattern as egui/xilem snapshot artifacts).
+      - name: Upload insta snapshot candidates on failure
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: insta-snap-new
+          path: "**/*.snap.new"
+          if-no-files-found: ignore
+          retention-days: 7
 
   # ─────────────────────────────────────────────────────────────────────────
   # gpu-test (PILOT) — actually RUN the `enable-wgpu-tests` readback/oracle
@@ -255,19 +325,26 @@ jobs:
       # Surface the wgpu adapter selection in the log so the run confirms WARP
       # was enumerated (not a silently-missing-adapter skip).
       RUST_LOG: wgpu_hal=info,wgpu_core=info
+      # Readback oracle mismatches dump the actual frame as PNG into this dir
+      # (flui-engine readback test support, env-gated). Uploaded on failure
+      # below — the WARP software path cannot be exercised on the dev
+      # machine, so the dump is the only way to SEE a CI-only mismatch.
+      FLUI_READBACK_DUMP_DIR: readback-dumps
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
 
       - name: Cache cargo registry + target
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           save-if: ${{ github.event_name != 'merge_group' }}
 
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@7572810d7dd469b651bb7793945692cf78da5dd7 # v2.85.0
         with:
           tool: cargo-nextest@0.9
 
@@ -281,8 +358,20 @@ jobs:
           -p flui-engine
           --features enable-wgpu-tests
           --lib
+          --locked
           --no-fail-fast
           --test-threads 1
+
+      # On oracle mismatch the harness writes `<test>.png` to
+      # $FLUI_READBACK_DUMP_DIR — upload it for post-mortem inspection.
+      - name: Upload readback PNG dumps on failure
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: readback-dumps
+          path: readback-dumps/**/*.png
+          if-no-files-found: ignore
+          retention-days: 7
 
   # ─────────────────────────────────────────────────────────────────────────
   # bench-compile — ensures benchmarks compile and link on both platforms.
@@ -301,19 +390,21 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
 
       - name: Cache cargo registry + target
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           save-if: ${{ github.event_name != 'merge_group' }}
           cache-bin: ${{ matrix.os != 'macos-latest' }}
 
       - name: cargo bench --no-run
-        run: cargo bench -p flui-rendering --no-run
+        run: cargo bench -p flui-rendering --no-run --locked
 
   # ─────────────────────────────────────────────────────────────────────────
   # doc — RUSTDOCFLAGS=-D warnings enforces zero new doc warnings. Gated on
@@ -331,18 +422,20 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
 
       - name: Cache cargo registry + target
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           save-if: ${{ github.event_name != 'merge_group' }}
 
       - name: cargo doc --no-deps
-        run: cargo doc --workspace --no-deps --document-private-items
+        run: cargo doc --workspace --no-deps --locked --document-private-items
 
   # ─────────────────────────────────────────────────────────────────────────
   # deny — cargo-deny over advisories/bans/licenses/sources. deny.toml has
@@ -358,13 +451,17 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install cargo-deny
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@7572810d7dd469b651bb7793945692cf78da5dd7 # v2.85.0
         with:
           tool: cargo-deny@0.19
 
+      # `cargo deny` has no `--locked` flag (it reads the committed lockfile by
+      # design); passing it exits 2 with "unexpected argument".
       - name: cargo deny check
         run: cargo deny check
 
@@ -383,47 +480,51 @@ jobs:
       CARGO_PROFILE_DEV_DEBUG: line-tables-only
       CARGO_PROFILE_TEST_DEBUG: line-tables-only
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
 
       - name: Cache cargo registry + target
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           save-if: ${{ github.event_name != 'merge_group' }}
 
       - name: cargo test --doc
-        run: cargo test --workspace --exclude flui-platform --doc
+        run: cargo test --workspace --exclude flui-platform --locked --doc
 
   # ─────────────────────────────────────────────────────────────────────────
   # msrv — verify the declared MSRV actually compiles the workspace. Every
   # other job installs `dtolnay/rust-toolchain@stable`, which OVERRIDES the
-  # committed rust-toolchain.toml pin — so before this job, the 1.96 floor in
-  # `[workspace.package].rust-version` was never exercised in CI. `check`
-  # (not `test`): MSRV promises "compiles on 1.96", behavior is the stable
+  # committed rust-toolchain.toml pin — so without this job the floor in
+  # `[workspace.package].rust-version` would never be exercised in CI. `check`
+  # (not `test`): MSRV promises "compiles on the floor", behavior is the stable
   # jobs' concern. Bump procedure lives in rust-toolchain.toml's header.
   # ─────────────────────────────────────────────────────────────────────────
   msrv:
-    name: msrv (1.96)
+    name: msrv (1.97)
     needs: checks
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v7
-
-      - name: Install Rust 1.96 (declared MSRV)
-        uses: dtolnay/rust-toolchain@master
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          toolchain: "1.96"
+          persist-credentials: false
+
+      - name: Install Rust 1.97 (declared MSRV)
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master
+        with:
+          toolchain: "1.97"
 
       - name: Cache cargo registry + target
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           save-if: ${{ github.event_name != 'merge_group' }}
 
       - name: cargo check --workspace (MSRV)
-        run: cargo check --workspace --all-targets
+        run: cargo check --workspace --all-targets --locked
 
   # ─────────────────────────────────────────────────────────────────────────
   # miri — undefined-behavior check for the workspace's densest unsafe hot
@@ -441,27 +542,203 @@ jobs:
     timeout-minutes: 30
     continue-on-error: true
     env:
-      # Override the workflow-level `-D warnings`: nightly deprecates APIs
-      # ahead of stable (e.g. `Atomic::fetch_update` -> `try_update`, which
-      # does not exist on the 1.96 MSRV yet), and those deprecation warnings
-      # would fail this job spuriously. Lint enforcement is the stable jobs'
-      # business; this job exists solely to catch undefined behavior.
-      RUSTFLAGS: ""
+      # Relax the workflow-level warnings gate: nightly deprecates APIs ahead
+      # of stable (e.g. `Atomic::fetch_update` -> `try_update`, which does not
+      # exist on the declared MSRV yet), and those deprecation warnings would
+      # fail this job spuriously. Lint enforcement is the stable jobs'
+      # business; this job exists solely to catch undefined behavior. Unlike
+      # the old `RUSTFLAGS: ""` override this keeps the target/ cache shared
+      # with every other job.
+      CARGO_BUILD_WARNINGS: warn
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install Rust nightly + miri
-        uses: dtolnay/rust-toolchain@nightly
+        uses: dtolnay/rust-toolchain@4fd1da8b0805d2d2e936788875a7d65dbd677dc2 # nightly
         with:
           components: miri
 
       - name: Cache cargo registry + target
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           save-if: ${{ github.event_name != 'merge_group' }}
 
-      # `+nightly` is required: the committed rust-toolchain.toml pin (1.96.0)
-      # overrides the job's installed default toolchain, and the pinned stable
-      # has no miri component (first run failed exactly there).
+      # `+nightly` is required: the committed rust-toolchain.toml pin overrides
+      # the job's installed default toolchain, and the pinned stable has no
+      # miri component (first run failed exactly there).
       - name: cargo miri test (subtree_arena)
-        run: cargo +nightly miri test -p flui-rendering --lib pipeline::owner::subtree_arena
+        run: cargo +nightly miri test -p flui-rendering --lib --locked pipeline::owner::subtree_arena
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # feature-matrix — xilem-style per-feature clippy via cargo-hack. The plain
+  # `clippy` job compiles the whole workspace under feature unification with
+  # default features, which can mask a crate that fails to declare a feature
+  # dependency (a sibling crate enables it transitively). cargo-hack checks
+  # each package separately, once per feature plus once per optional dep, so
+  # per-crate feature wiring is actually exercised. Two runs per xilem:
+  # default targets (libs/bins, as downstream users compile them) and
+  # auxiliary targets (tests/benches/examples) — `--all-targets` would compile
+  # libs with dev-dependencies enabled and mask missing feature requirements.
+  # ─────────────────────────────────────────────────────────────────────────
+  feature-matrix:
+    name: feature-matrix (cargo-hack per-feature clippy)
+    needs: checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust stable + clippy
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          components: clippy
+
+      - name: Cache cargo registry + target
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          save-if: ${{ github.event_name != 'merge_group' }}
+
+      - name: Install cargo-hack
+        uses: taiki-e/install-action@7572810d7dd469b651bb7793945692cf78da5dd7 # v2.85.0
+        with:
+          tool: cargo-hack@0.6
+
+      - name: cargo hack clippy (libs/bins, per feature)
+        run: cargo hack clippy --workspace --locked --each-feature --optional-deps --keep-going -- -D warnings
+
+      - name: cargo hack clippy (tests/benches/examples, per feature)
+        run: cargo hack clippy --workspace --locked --each-feature --optional-deps --keep-going --tests --benches --examples -- -D warnings
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # wasm-check — the web platform claim, machine-checked. web_demo /
+  # painting_demo are workspace members but were only ever compiled for the
+  # host target; this checks the wasm-capable set under the real
+  # wasm32-unknown-unknown target. The set was verified crate-by-crate before
+  # wiring (27 of 34 packages green); the excluded seven genuinely cannot
+  # target wasm today — see NO_WASM_PKGS. A crate that gains wasm support is
+  # REMOVED from the exclude list, never worked around.
+  # ─────────────────────────────────────────────────────────────────────────
+  wasm-check:
+    name: wasm-check (wasm32-unknown-unknown)
+    needs: checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      # flui-assets / flui-build / flui-cli / flui-web-server: mio + uuid
+      # (tokio-net / CLI stack) have no wasm32-unknown-unknown support.
+      # hot-reload-counter-*: dlopen-based hot-reload, host-only by design.
+      NO_WASM_PKGS: >-
+        --exclude flui-assets
+        --exclude flui-build
+        --exclude flui-cli
+        --exclude flui-web-server
+        --exclude hot-reload-counter-host
+        --exclude hot-reload-counter-logic
+        --exclude hot-reload-counter-types
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust stable + wasm32 target
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo registry + target
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          save-if: ${{ github.event_name != 'merge_group' }}
+
+      # `dtolnay/rust-toolchain@stable` installs the target for the toolchain
+      # named `stable`, but the committed `rust-toolchain.toml` makes `1.97.1`
+      # the ACTIVE toolchain — a separate rustup install even at the same
+      # version — so the target has to be added again against the pin. Without
+      # this the build fails with E0463 "can't find crate for `core`".
+      - name: Add wasm32 target to the pinned toolchain
+        run: rustup target add wasm32-unknown-unknown
+
+      - name: cargo check (wasm32)
+        run: cargo check --workspace --locked --target wasm32-unknown-unknown ${{ env.NO_WASM_PKGS }}
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # cross-typecheck — flui-platform's per-OS backends, TYPE-CHECKED from Linux.
+  # `cargo check` does not link, so the Win32 and AppKit backends compile from
+  # any host. Before this job they were only ever built by whoever happened to
+  # develop on that OS: the Windows backend had a hard `missing_docs` error
+  # (`pub mod win32`) and both backends had missing Debug impls that the Linux
+  # and wasm gates structurally could not see.
+  #
+  # Named `typecheck`, not `check`, on purpose: it does NOT link and runs NO
+  # tests, and flui-platform is excluded from the `test` job entirely, so this
+  # is the only gate touching those backends. Green means "compiles".
+  # Triples are the shipped ones — MSVC (what `gpu-test` uses) and aarch64
+  # macOS — with `--all-targets` so per-OS test targets compile too.
+  # ─────────────────────────────────────────────────────────────────────────
+  cross-typecheck:
+    name: cross-typecheck (windows + macos backends)
+    needs: checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust stable + windows/macos targets
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          targets: x86_64-pc-windows-msvc,aarch64-apple-darwin
+
+      - name: Cache cargo registry + target
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          save-if: ${{ github.event_name != 'merge_group' }}
+
+      # `dtolnay/rust-toolchain@stable` installs the target for the toolchain
+      # named `stable`, but the committed `rust-toolchain.toml` makes `1.97.1`
+      # the ACTIVE toolchain — a separate rustup install even at the same
+      # version — so the target has to be added again against the pin. Without
+      # this the build fails with E0463 "can't find crate for `core`".
+      - name: Add cross targets to the pinned toolchain
+        run: rustup target add x86_64-pc-windows-msvc aarch64-apple-darwin
+
+      - name: cargo check (windows backend)
+        run: cargo check -p flui-platform --locked --all-targets --target x86_64-pc-windows-msvc
+
+      - name: cargo check (macos backend)
+        run: cargo check -p flui-platform --locked --all-targets --target aarch64-apple-darwin
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # ci — aggregator over every job above (tokio pattern). Branch protection
+  # requires this ONE check instead of enumerating the graph, so adding or
+  # renaming a job never silently drops a gate. `if: always()` so it still
+  # runs when a dependency failed; miri is advisory (continue-on-error turns
+  # its result into `success`).
+  # ─────────────────────────────────────────────────────────────────────────
+  ci:
+    name: ci
+    if: always()
+    needs: [checks, clippy, feature-matrix, wasm-check, cross-typecheck, test, gpu-test, bench-compile, doc, deny, doc-test, msrv, miri]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verify every job succeeded
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          python3 - <<'EOF'
+          import json, os, sys
+          needs = json.loads(os.environ["NEEDS"])
+          for job, data in sorted(needs.items()):
+              print(f"{job}: {data['result']}")
+          bad = {j: d["result"] for j, d in needs.items()
+                 if d["result"] not in ("success", "skipped")}
+          if bad:
+              print(f"::error::required jobs not green: {bad}")
+              sys.exit(1)
+          EOF

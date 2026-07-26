@@ -123,15 +123,23 @@ regex = { workspace = true }
 [dev-dependencies]
 pollster = { workspace = true }
 criterion = { workspace = true }
+# PNG encoding for GPU readback frame dumps (`wgpu::readback_dump` test
+# support). Production texture loading reaches `image` through the optional
+# `images` feature; test diagnostics must not depend on a lib feature combo,
+# so tests get their own unconditional edge to the same workspace pin.
+image = { workspace = true }
 
 [[bench]]
 name = "render_throughput"
 harness = false
+# Drives `WgpuPainter` and the raw `wgpu` API; skipped unless the wgpu
+# backend is compiled in (same mechanism as `offscreen_resource_cache`).
+required-features = ["wgpu-backend"]
 
 [[bench]]
 name = "offscreen_resource_cache"
 harness = false
-required-features = ["enable-wgpu-tests"]
+required-features = ["enable-wgpu-tests", "wgpu-backend"]
 
 [lints]
 workspace = true

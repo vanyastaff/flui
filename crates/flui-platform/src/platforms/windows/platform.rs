@@ -100,10 +100,42 @@ pub struct WindowsPlatform {
     config: WindowConfiguration,
 }
 
-// SAFETY: HWND is just an integer handle and is safe to send/share between
-// threads. Windows API handles are thread-safe by design.
+// SAFETY, per field: `windows` and `handlers` are `Arc<Mutex<..>>`, the
+// executors are `Arc`-shared and internally synchronized, and `config` is plain
+// data. The only non-`Sync` member is `message_window: HWND`, a bare address
+// that is never dereferenced here.
+//
+// NOT claimed — an earlier version of this comment claimed both, wrongly: that
+// an HWND is "thread-safe by design" (it is thread-AFFINE; its message queue
+// belongs to the creating thread, and `DestroyWindow` must run there), and that
+// the struct is itself just a handle. Sending the struct is sound because the
+// address alone aliases nothing; any Win32 call made through it still owes the
+// thread-affinity obligation, which these impls do not discharge. See the
+// event-loop affinity gap in `docs/audits/2026-07-25-upgrade-pack-audit.md`.
 unsafe impl Send for WindowsPlatform {}
+// SAFETY: as for `Send` — `&WindowsPlatform` grants no more than shared access
+// to already-synchronized members plus a never-dereferenced address.
 unsafe impl Sync for WindowsPlatform {}
+
+impl std::fmt::Debug for WindowsPlatform {
+    // Hand-written: the remaining fields are raw platform handles and callback
+    // payloads with no useful Debug form.
+    //
+    // `try_lock`, never `lock`: `parking_lot::Mutex` is not reentrant and
+    // BLOCKS rather than panicking, so formatting this value while the same
+    // thread already holds `windows` would deadlock silently — and a Debug
+    // impl gets called from assertion messages and `tracing` fields, which is
+    // exactly where a lock is likely to be held. Same pattern
+    // `parking_lot::Mutex<T>: Debug` itself uses.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut out = f.debug_struct("WindowsPlatform");
+        match self.windows.try_lock() {
+            Some(windows) => out.field("windows", &windows.len()),
+            None => out.field("windows", &format_args!("<locked>")),
+        };
+        out.finish_non_exhaustive()
+    }
+}
 
 impl WindowsPlatform {
     /// Create a new Windows platform instance with default configuration
@@ -977,7 +1009,7 @@ impl Platform for WindowsPlatform {
                 PCWSTR(value_name.as_ptr()),
                 None,
                 None,
-                Some(&mut data as *mut u32 as *mut u8),
+                Some((&raw mut data).cast::<u8>()),
                 Some(&mut data_size),
             );
             let _ = RegCloseKey(hkey);

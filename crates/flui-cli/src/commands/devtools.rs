@@ -35,7 +35,7 @@ fn launch_devtools_server(port: u16) -> CliResult<()> {
 
     cliclack::log::info(format!(
         "DevTools server started on {}",
-        style(format!("http://localhost:{}", port))
+        style(format!("http://localhost:{port}"))
             .cyan()
             .underlined()
     ))?;
@@ -45,15 +45,13 @@ fn launch_devtools_server(port: u16) -> CliResult<()> {
     // For now, block until Ctrl+C.
     tracing::info!(port, "DevTools server listening");
 
-    // Block on Ctrl+C.
-    let (tx, rx) = std::sync::mpsc::channel();
-    if let Err(e) = ctrlc::set_handler(move || {
-        let _ = tx.send(());
-    }) {
-        tracing::warn!("Failed to register Ctrl+C handler: {e}");
-    }
-
-    let _ = rx.recv();
+    // Block on Ctrl+C via tokio's signal driver (same runtime idiom as `run`).
+    let rt = tokio::runtime::Runtime::new()?;
+    rt.block_on(async {
+        if let Err(e) = tokio::signal::ctrl_c().await {
+            tracing::warn!("Failed to listen for Ctrl+C: {e}");
+        }
+    });
     cliclack::outro("DevTools server stopped")?;
     Ok(())
 }
@@ -81,20 +79,16 @@ fn show_unavailable_message(_port: u16) -> CliResult<()> {
 fn check_port_available(port: u16) -> CliResult<()> {
     use std::net::TcpListener;
 
-    match TcpListener::bind(("127.0.0.1", port)) {
-        Ok(_listener) => {
-            // Port is available — the listener is dropped here, freeing the port.
-            Ok(())
-        }
-        Err(_) => {
-            cliclack::log::error(format!(
-                "Port {} is already in use. Try a different port with --port <PORT>",
-                port
-            ))?;
-            Err(crate::error::CliError::build_failed(
-                "devtools",
-                format!("Port {} is already in use", port),
-            ))
-        }
+    if let Ok(_listener) = TcpListener::bind(("127.0.0.1", port)) {
+        // Port is available — the listener is dropped here, freeing the port.
+        Ok(())
+    } else {
+        cliclack::log::error(format!(
+            "Port {port} is already in use. Try a different port with --port <PORT>"
+        ))?;
+        Err(crate::error::CliError::build_failed(
+            "devtools",
+            format!("Port {port} is already in use"),
+        ))
     }
 }

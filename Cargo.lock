@@ -1470,7 +1470,6 @@ dependencies = [
  "image",
  "lasso",
  "moka",
- "once_cell",
  "parking_lot",
  "reqwest",
  "thiserror 2.0.19",
@@ -1657,7 +1656,6 @@ dependencies = [
  "flui-interaction",
  "flui-platform",
  "flui-types",
- "once_cell",
  "parking_lot",
  "proptest",
  "smallvec",
@@ -1681,6 +1679,7 @@ dependencies = [
  "slab",
  "thiserror 2.0.19",
  "tracing",
+ "web-time",
 ]
 
 [[package]]

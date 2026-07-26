@@ -123,6 +123,15 @@ impl CommandSendError {
 /// A command enqueued for the owner thread.
 pub(crate) enum UiCommand {
     /// Apply a hot-reload reassemble on the owner at the next Idle drain.
+    // Only constructed by `request_hot_reload`, whose consumer is the
+    // desktop runner — absent from the wasm lib check.
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            dead_code,
+            reason = "consumed only by the desktop runner and tests, neither in the wasm lib check"
+        )
+    )]
     HotReload(flui_hot_reload::HotReloadTier),
     /// Resolve and invoke an accessibility action on the owner thread.
     SemanticsAction(SemanticsActionRequest),
@@ -199,6 +208,15 @@ impl UiCommandSender {
     /// Unlike direct platform dispatch, this capability is safe to call from
     /// any thread: delivery occurs at the owner's next Idle drain and the
     /// normal enqueue-and-wake contract pumps that drain.
+    // The desktop runner (`cfg(not(target_arch = "wasm32"))`) is the only
+    // non-test consumer, so the wasm lib check sees this as dead.
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            dead_code,
+            reason = "consumed only by the desktop runner and tests, neither in the wasm lib check"
+        )
+    )]
     pub(crate) fn request_hot_reload(
         &self,
         tier: flui_hot_reload::HotReloadTier,
@@ -280,6 +298,15 @@ impl UiCommandSender {
 
     /// The inbox's configured capacity.
     #[must_use]
+    // The desktop runner (`cfg(not(target_arch = "wasm32"))`) is the only
+    // non-test consumer, so the wasm lib check sees this as dead.
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            dead_code,
+            reason = "consumed only by the desktop runner and tests, neither in the wasm lib check"
+        )
+    )]
     pub fn capacity(&self) -> usize {
         self.capacity
     }
@@ -332,6 +359,15 @@ pub(crate) struct UiRealm {
     /// mint senders, so the runtime keeps one sender to clone from. Holding
     /// it here does not keep the channel alive past the runtime: `rx` drops
     /// with the runtime and every outstanding sender turns `OwnerGone`.
+    // The desktop runner (`cfg(not(target_arch = "wasm32"))`) is the only
+    // non-test consumer, so the wasm lib check sees this as dead.
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            dead_code,
+            reason = "consumed only by the desktop runner and tests, neither in the wasm lib check"
+        )
+    )]
     sender_prototype: UiCommandSender,
     redraw_pending: Arc<AtomicBool>,
     /// Whether this instance owns the transitional process-wide claim.
@@ -491,12 +527,28 @@ impl UiRealm {
 
     /// Current presentation incarnation.
     #[must_use]
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            dead_code,
+            reason = "consumed only by the desktop runner and tests, neither in the wasm lib check"
+        )
+    )]
     pub fn presentation_id(&self) -> PresentationId {
         self.presentation.id()
     }
 
     /// A new cross-thread sender into this runtime's inbox.
     #[must_use]
+    // The desktop runner (`cfg(not(target_arch = "wasm32"))`) is the only
+    // non-test consumer, so the wasm lib check sees this as dead.
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            dead_code,
+            reason = "consumed only by the desktop runner and tests, neither in the wasm lib check"
+        )
+    )]
     pub fn command_sender(&self) -> UiCommandSender {
         self.sender_prototype.clone()
     }

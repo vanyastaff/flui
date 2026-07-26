@@ -3,12 +3,13 @@
 //! This module provides the PerformanceOverlayLayer for displaying
 //! performance metrics like frame timings, raster cache, and memory usage.
 
-use std::{
-    collections::VecDeque,
-    time::{Duration, Instant},
-};
+use std::collections::VecDeque;
 
-use flui_types::geometry::{Pixels, Rect};
+// `std::time::Instant::now()` panics on wasm32 ('time not implemented on this
+// platform'). Same choice as flui-scheduler / flui-app / flui-devtools.
+use web_time::{Duration, Instant};
+
+use flui_types::geometry::{Pixels, Rect, px};
 
 /// Performance statistics for frame timing
 ///
@@ -276,6 +277,17 @@ pub struct PerformanceOverlayLayer {
 }
 
 impl PerformanceOverlayLayer {
+    /// The extent a host should give the overlay when it has no better idea.
+    ///
+    /// Sized to what the renderer actually draws — two labelled rows at 11px
+    /// starting 14px below the top edge, values at x+50 — plus a small inset.
+    /// Both the compositing host and the renderer must agree on this, so it
+    /// lives here, next to the layer, rather than being spelled twice.
+    #[must_use]
+    pub fn default_bounds() -> Rect<Pixels> {
+        Rect::from_ltwh(px(8.0), px(8.0), px(150.0), px(44.0))
+    }
+
     /// Creates a new performance overlay layer.
     ///
     /// # Arguments

@@ -265,6 +265,7 @@ mod tests {
         }
         drop(raw);
         staging.unmap();
+        crate::wgpu::readback_dump::dump_frame(SCENE_SIZE, SCENE_SIZE, &packed);
         packed
     }
 

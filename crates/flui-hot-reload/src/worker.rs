@@ -29,8 +29,21 @@ fn worker_builds() -> &'static Mutex<HashMap<u64, BuildPtr>> {
 #[derive(Clone, Copy)]
 struct BuildPtr(*const ());
 
-// Build pointers originate from the host process address space and are only
-// invoked on the main thread during widget builds.
+// SAFETY: a code address is a `Copy` integer as far as these auto traits are
+// concerned — `BuildPtr` is never dereferenced as data, and neither moving nor
+// sharing the value aliases anything. Both impls rest on that alone.
+//
+// Deliberately NOT claimed (an earlier version of this comment claimed both,
+// wrongly): that the address is in the host image, and that the function is
+// only invoked on the main thread. It points into the WORKER dylib, and
+// nothing enforces a calling thread — `get_worker_build_ptr` is public and
+// takes no thread context.
+//
+// The real hazard is lifetime, not threading, and these impls do not address
+// it: `WORKER_BUILDS` is a `'static` map that is never pruned, so after
+// `WorkerPlugin::unload` unmaps the image the stored address dangles and
+// calling it jumps into unmapped memory. Tracked with the plugin-boundary
+// redesign; see the module docs.
 #[allow(unsafe_code)]
 unsafe impl Send for BuildPtr {}
 #[allow(unsafe_code)]
@@ -60,6 +73,20 @@ pub fn host_register_fn() -> RegisterWorkerBuildFn {
 }
 
 /// Look up a worker-registered build function by layout fingerprint.
+///
+/// # Safety of the returned pointer
+///
+/// This function is safe — it only reads a map — but the address it returns is
+/// **not guaranteed to be live**. It points into the worker dylib, and
+/// [`WorkerPlugin::unload`] unmaps that image WITHOUT removing the entry (the
+/// registry is a `'static` map that is never pruned). After an unload, or after
+/// a failed reload that already dropped the old library, transmuting and calling
+/// this pointer jumps into unmapped memory.
+///
+/// A caller must therefore establish out of band that no unload has happened
+/// since registration. Fixing this properly means pruning the registry in
+/// `unload` and treating a missing entry as "worker unavailable"; tracked with
+/// the plugin-boundary redesign.
 #[must_use]
 pub fn get_worker_build_ptr(fingerprint: u64) -> Option<*const ()> {
     worker_builds()
@@ -91,6 +118,10 @@ impl WorkerPlugin {
         let lib_path = lib_path.as_ref();
         let lib = DynLib::open(lib_path)?;
 
+        // SAFETY: `lib` was just opened and outlives this block. `flui_worker_init`
+        // is the worker ABI symbol this crate defines, so a library built by the
+        // matching macro exports it with `WorkerInitFn`'s signature; the pointer
+        // is null-checked before the transmute.
         #[allow(unsafe_code)]
         unsafe {
             let init_ptr = lib.symbol("flui_worker_init")?;

@@ -959,7 +959,11 @@ use std::{
     task::{Context, Poll},
 };
 
-use event_listener::{Event, Listener};
+use event_listener::Event;
+// `Listener::wait` is the blocking half of the API — absent on wasm32, where
+// there is no thread to park.
+#[cfg(not(target_arch = "wasm32"))]
+use event_listener::Listener;
 
 /// Completion state of a ticker future
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1152,13 +1156,14 @@ impl TickerFuture {
             return;
         }
 
-        // Block on the listener until notified (no thread spawning)
-        // Note: On wasm32, blocking is not possible — call the callback
-        // immediately. The async path (or_cancel) should be used instead.
+        // Block on the listener until notified (no thread spawning).
+        // On wasm32 blocking is not possible: drop the registration and call
+        // the callback immediately. The async path (or_cancel) is the
+        // supported route there.
         #[cfg(not(target_arch = "wasm32"))]
-        {
-            listener.wait();
-        }
+        listener.wait();
+        #[cfg(target_arch = "wasm32")]
+        drop(listener);
         callback();
     }
 }

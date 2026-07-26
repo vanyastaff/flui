@@ -40,7 +40,7 @@ use std::{
 use flui_animation::Vsync;
 use flui_engine::{EngineError, RasterBackend};
 use flui_foundation::HasInstance;
-use flui_layer::Scene;
+use flui_layer::{Layer, LayerTree, PerformanceOverlayLayer, PerformanceStats, Scene};
 use flui_platform::traits::{Clipboard, PlatformInput, PlatformWindow};
 use flui_rendering::binding::RendererBinding;
 use flui_rendering::constraints::BoxConstraints;
@@ -108,6 +108,17 @@ pub struct AppBinding {
     /// platform resource (arboard on X11 owns a live X11 connection) would
     /// stay pinned behind this `Arc` past the event loop's exit.
     platform_clipboard: Arc<Mutex<Option<Arc<dyn Clipboard>>>>,
+
+    /// Performance-overlay state, installed from bootstrap when
+    /// [`AppConfig::show_performance_overlay`](super::AppConfig) is set.
+    ///
+    /// `Some` IS the enable flag: the rolling frame-time window only exists
+    /// while the overlay is on, so "enabled but no stats" is unrepresentable
+    /// and a disabled overlay costs one uncontended lock and a `None` check
+    /// per frame. `record_frame` must be called from the frame path (not from
+    /// the layer's own render) because the sample it takes is the interval
+    /// between composites.
+    performance_overlay: Mutex<Option<PerformanceStats>>,
 
     /// Controller registry for implicit animations (VsyncScope-driven).
     ///
@@ -268,6 +279,7 @@ impl AppBinding {
             shared_pipeline_owner,
             active_window,
             platform_clipboard: Arc::new(Mutex::new(None)),
+            performance_overlay: Mutex::new(None),
             vsync_slot: Mutex::new(Vsync::new()),
             start: web_time::Instant::now(),
             _owner_affine: PhantomData,
@@ -552,6 +564,15 @@ impl AppBinding {
     ///
     /// Apply reload while the realm owner is at an Idle commit point.
     ///
+    // The desktop runner (`cfg(not(target_arch = "wasm32"))`) is the only
+    // non-test consumer, so the wasm lib check sees this as dead.
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            dead_code,
+            reason = "consumed only by the desktop runner and tests, neither in the wasm lib check"
+        )
+    )]
     pub(crate) fn perform_hot_reload_entered(
         &self,
         realm: &super::ui_realm::UiRealm,
@@ -773,8 +794,59 @@ impl AppBinding {
     /// loop exits so a torn-down realm does not keep a live platform
     /// resource (arboard on X11 owns a live X11 connection) pinned behind
     /// this `Arc` past the platform's own shutdown.
+    // The desktop runner (`cfg(not(target_arch = "wasm32"))`) is the only
+    // non-test consumer, so the wasm lib check sees this as dead.
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            dead_code,
+            reason = "consumed only by the desktop runner and tests, neither in the wasm lib check"
+        )
+    )]
     pub(crate) fn clear_platform_clipboard(&self) {
         *self.platform_clipboard.lock() = None;
+    }
+
+    /// Turn the performance overlay on or off.
+    ///
+    /// Called from bootstrap wiring (`runner.rs`) with
+    /// [`AppConfig::show_performance_overlay`](super::AppConfig). Enabling
+    /// starts a fresh rolling window, so toggling it at runtime does not
+    /// report frame times from before the toggle.
+    pub(crate) fn set_performance_overlay(&self, enabled: bool) {
+        *self.performance_overlay.lock() = enabled.then(PerformanceStats::default);
+    }
+
+    /// Record this frame and append the overlay layer to `layer_tree`.
+    ///
+    /// No-op when the overlay is off, or when the tree has no root to parent
+    /// the overlay under (a frame that painted nothing). The overlay is added
+    /// as the root's LAST child so it composites above the app's own content.
+    fn attach_performance_overlay(&self, layer_tree: &mut LayerTree) {
+        let mut slot = self.performance_overlay.lock();
+        let Some(stats) = slot.as_mut() else {
+            return;
+        };
+        let Some(root) = layer_tree.root() else {
+            return;
+        };
+
+        stats.record_frame();
+
+        // Extent owned by flui-layer, which also defines what the renderer draws.
+        let mut overlay =
+            PerformanceOverlayLayer::all_stats(PerformanceOverlayLayer::default_bounds());
+        overlay.update_stats(stats);
+
+        let overlay_id = layer_tree.insert(Layer::PerformanceOverlay(Box::new(overlay)));
+        // `insert` does not link the node — parent and child sides are set
+        // explicitly, same as every other layer-tree insertion.
+        if let Some(node) = layer_tree.get_mut(overlay_id) {
+            node.set_parent(Some(root));
+        }
+        if let Some(root_node) = layer_tree.get_mut(root) {
+            root_node.add_child(overlay_id);
+        }
     }
 
     /// Access the installed platform clipboard, if any.
@@ -1093,7 +1165,11 @@ impl AppBinding {
         let size = constraints.constrain(Size::ZERO);
         let frame_number = self.frames_rendered.load(Ordering::Relaxed) + 1;
 
-        if let Some(layer_tree) = layer_tree {
+        if let Some(mut layer_tree) = layer_tree {
+            // Debug overlay rides on top of the frame's own layers, after
+            // paint has produced them and before the scene is sealed.
+            self.attach_performance_overlay(&mut layer_tree);
+
             // Create scene from layer tree. `Scene` is `Send` (auto-derived
             // from `LayerTree` + `LinkRegistry` + `Vec<CompositionCallback>`
             // whose payload is `FnOnce() + Send + 'static`) but is *not*
@@ -4029,6 +4105,123 @@ mod tests {
     /// `AppBinding::instance()`'s singleton, so none of them need
     /// `SEMANTICS_TEST_LOCK` (or an equivalent) — the same reasoning
     /// `haptics_capability`'s tests above rely on.
+    /// `AppConfig::show_performance_overlay` was a write-only field: the
+    /// builder set it and nothing ever read it, while the layer, its wgpu
+    /// draw path and the rolling stats window all already existed. These
+    /// cover the seam that now joins them. Like the clipboard tests below,
+    /// they build a standalone `AppBinding::new()` and never touch the
+    /// singleton, so no lock is needed.
+    mod performance_overlay_wiring {
+        use super::*;
+        use flui_layer::CanvasLayer;
+
+        /// A one-layer tree standing in for a painted frame.
+        fn tree_with_root() -> (LayerTree, flui_layer::LayerId) {
+            let mut tree = LayerTree::new();
+            let root = tree.insert(Layer::Canvas(Box::new(CanvasLayer::new())));
+            tree.set_root(Some(root));
+            (tree, root)
+        }
+
+        /// Red-check: this fails if `attach_performance_overlay` stops
+        /// honouring the `None` slot and appends unconditionally.
+        #[test]
+        fn overlay_off_leaves_the_layer_tree_untouched() {
+            let binding = AppBinding::new();
+            let (mut tree, root) = tree_with_root();
+
+            binding.attach_performance_overlay(&mut tree);
+
+            assert_eq!(tree.len(), 1, "no layer may be added while overlay is off");
+            assert!(
+                tree.get(root).expect("root node").children().is_empty(),
+                "root must keep no children while overlay is off"
+            );
+        }
+
+        /// Red-check: this fails if the layer is inserted without being
+        /// linked to the root — the tree would still grow, but the child and
+        /// parent assertions catch the orphan.
+        ///
+        /// Scope: these tests exercise `attach_performance_overlay` directly.
+        /// The `draw_frame` call site that invokes it, and the bootstrap
+        /// wiring in `runner.rs` that flips the flag, are NOT covered here —
+        /// both sit behind a full platform/frame loop.
+        #[test]
+        fn overlay_on_appends_a_linked_overlay_layer_to_the_root() {
+            let binding = AppBinding::new();
+            binding.set_performance_overlay(true);
+            let (mut tree, root) = tree_with_root();
+
+            binding.attach_performance_overlay(&mut tree);
+
+            assert_eq!(tree.len(), 2, "exactly one overlay layer is added");
+            let children = tree.get(root).expect("root node").children();
+            let overlay_id = *children.last().expect("overlay is the root's last child");
+            assert!(
+                tree.get_layer(overlay_id)
+                    .expect("overlay layer")
+                    .is_performance_overlay(),
+                "the appended layer is the performance overlay"
+            );
+            assert_eq!(
+                tree.get(overlay_id).expect("overlay node").parent(),
+                Some(root),
+                "the overlay's parent side must be linked too, not just the root's child list"
+            );
+        }
+
+        /// A frame that painted nothing has no root to parent the overlay
+        /// under. Appending it anyway would leave an orphan layer that the
+        /// compositor never walks, and unwrapping the root would panic.
+        #[test]
+        fn overlay_on_a_rootless_tree_is_a_no_op() {
+            let binding = AppBinding::new();
+            binding.set_performance_overlay(true);
+            let mut tree = LayerTree::new();
+
+            binding.attach_performance_overlay(&mut tree);
+
+            assert_eq!(tree.len(), 0, "nothing to parent the overlay under");
+        }
+
+        /// Toggling off must stop the overlay AND drop the window, so a later
+        /// re-enable does not report frame times from before the gap.
+        #[test]
+        fn disabling_the_overlay_stops_appending_and_resets_the_window() {
+            let binding = AppBinding::new();
+            binding.set_performance_overlay(true);
+            let (mut tree, _root) = tree_with_root();
+            binding.attach_performance_overlay(&mut tree);
+            binding.attach_performance_overlay(&mut tree);
+            assert_eq!(tree.len(), 3, "two frames, two overlay layers");
+
+            binding.set_performance_overlay(false);
+            let (mut fresh, _) = tree_with_root();
+            binding.attach_performance_overlay(&mut fresh);
+            assert_eq!(fresh.len(), 1, "disabled overlay adds nothing");
+
+            binding.set_performance_overlay(true);
+            let (mut again, _) = tree_with_root();
+            binding.attach_performance_overlay(&mut again);
+            let overlay_id = *tree_root_children(&again).last().expect("overlay present");
+            let overlay = again.get_layer(overlay_id).expect("overlay layer");
+            let stats = overlay
+                .as_performance_overlay()
+                .expect("performance overlay variant");
+            assert_eq!(
+                stats.total_frames(),
+                1,
+                "re-enabling starts a fresh window rather than resuming the old count"
+            );
+        }
+
+        fn tree_root_children(tree: &LayerTree) -> Vec<flui_layer::LayerId> {
+            let root = tree.root().expect("root");
+            tree.get(root).expect("root node").children().to_vec()
+        }
+    }
+
     mod platform_clipboard_reachability {
         use super::*;
 

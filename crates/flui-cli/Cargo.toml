@@ -24,8 +24,8 @@ flui-build = { path = "../flui-build", version = "0.2.0" }
 flui-hot-reload = { path = "../flui-hot-reload", version = "0.2.0", features = ["source-watch"] }
 
 # Async runtime — `run` blocks on the async build/push pipeline via a
-# multi-thread `Runtime`.
-tokio = { workspace = true, features = ["rt-multi-thread"] }
+# multi-thread `Runtime`; `signal` backs the devtools server's Ctrl+C wait.
+tokio = { workspace = true, features = ["rt-multi-thread", "signal"] }
 
 # Logging (via flui_foundation::log — merged from flui-log)
 flui-foundation = { path = "../flui-foundation", version = "0.2.0" }

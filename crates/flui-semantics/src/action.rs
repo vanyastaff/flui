@@ -341,7 +341,7 @@ mod tests {
         assert_eq!(combined, 3);
         assert!(combined & SemanticsAction::Tap.value() != 0);
         assert!(combined & SemanticsAction::LongPress.value() != 0);
-        assert!(combined & SemanticsAction::ScrollLeft.value() == 0);
+        assert_eq!(combined & SemanticsAction::ScrollLeft.value(), 0);
     }
 
     #[test]

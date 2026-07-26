@@ -63,6 +63,16 @@ pub struct WindowManager {
     next_group_id: u64,
 }
 
+impl std::fmt::Debug for WindowManager {
+    // Hand-written: `WindowInfo` holds raw Objective-C handles.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WindowManager")
+            .field("windows", &self.windows.len())
+            .field("focused_window", &self.focused_window)
+            .finish_non_exhaustive()
+    }
+}
+
 impl WindowManager {
     /// Create a new window manager.
     pub fn new() -> Self {

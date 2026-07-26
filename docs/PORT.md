@@ -962,8 +962,8 @@ When a need arises that the table does not cover, the order of operations is:
 
 ### Version policy
 
-- **Rust toolchain**: pinned to an explicit stable version (currently `channel = "1.96.1"`) in [`rust-toolchain.toml`](../rust-toolchain.toml), kept in lockstep with the MSRV below and bumped by the same PR.
-- **MSRV** (`rust-version` in [`Cargo.toml`](../Cargo.toml)): bumped **no later than 6 weeks** after a new stable release. Rust ships every 6 weeks (current: **1.96**, released 2026-05-25; next: **1.97** ~2026-07-09). The MSRV bump PR is mechanical — bump the field and `rust-toolchain.toml`, update the CI matrix, ship.
+- **Rust toolchain**: the *development* toolchain, pinned to an explicit stable patch release (currently `channel = "1.97.1"`) in [`rust-toolchain.toml`](../rust-toolchain.toml). It is not the MSRV and may run ahead of the MSRV minor — pinning it at the floor hides new lints and codegen changes from the developer until CI surfaces them.
+- **MSRV** (`rust-version` in [`Cargo.toml`](../Cargo.toml)): bumped **no later than 6 weeks** after a new stable release. Rust ships every 6 weeks (current stable: **1.97.1**, released 2026-07-14). The MSRV is a promise to consumers — cheap to give, expensive to retract — so it moves only when a stabilization actually earns it. Bumping it touches `Cargo.toml`, `clippy.toml`, the `msrv` CI job and the two `flui-cli` templates; the full list lives in `rust-toolchain.toml`'s header.
 - **Workspace dependencies**: caret-pinned (`"1.43"`, not `"=1.43.2"`). Patch bumps automatic via `cargo update`. Minor bumps batched monthly; major bumps reviewed individually.
 - **Pinned exceptions**: documented inline in `Cargo.toml` (current: `image` `webp` feature disabled per `image-webp` issue #102; no wgpu pin — tracking latest stable major).
 
@@ -979,7 +979,14 @@ Rust 1.95 (2026-04-16) introduced features directly relevant to this port:
 | `Vec::push_mut` / `insert_mut`, `VecDeque::push_front_mut` / `push_back_mut`, `LinkedList::push_front_mut` / `push_back_mut` | Returns `&mut T` to the inserted slot — useful for chained init like `vec.push_mut(Node::new()).attach(parent_id);`. `LinkedList::insert_mut` was **not** stabilized in 1.95. |
 | `Layout::dangling_ptr` / `repeat` / `repeat_packed` / `extend_packed` | Allocator primitives. Phase B hot-path candidates if/when flui adopts an arena allocator beyond `bumpalo` (currently not a workspace dep). |
 
-Rust 1.96 (~2026-05-28) stabilizations relevant to this port will be added here as they are confirmed and applied. Rust 1.97 will be tracked in this section on release.
+Rust 1.97 (2026-07-09) stabilizations relevant to this port, verified against the installed toolchains rather than release notes:
+
+- **v0 symbol mangling is the default** — generic parameters now appear in symbols instead of an opaque hash (`_RINvCs..._5probe10generic_fnmE` vs `_ZN5probe10generic_fn17h9d9c68...E`). Relevant to profiling and crash symbolication.
+- **`build.warnings` Cargo config** — a warnings gate that, unlike `RUSTFLAGS=-D warnings`, does not enter the rustc fingerprint and therefore does not invalidate the build cache (measured: toggling it recompiles nothing; switching to `RUSTFLAGS` recompiles).
+- **Integer bit manipulation**: `bit_width`, `isolate_lowest_one`, `isolate_highest_one`, `lowest_one`, `highest_one` (plus `NonZero` equivalents). Candidates for the render-node dirty-flag bitset.
+- **`cfg(target_has_atomic_primitive_alignment)`** — target-capability detection for atomics.
+
+Note: `assert_matches!` is **not** stable as of 1.97.1 (verified: `std::assert_matches` is unresolved on both 1.96.1 and 1.97.1), despite appearing in some release-note summaries.
 
 ---
 

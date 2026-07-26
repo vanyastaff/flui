@@ -19,6 +19,9 @@ use super::display::WebDisplay;
 
 /// Web window wrapping a `<canvas>` element
 pub struct WebWindow {
+    // Retained for the multi-window path: the web backend creates a single
+    // canvas today, and `PlatformWindow` exposes no `id()` accessor.
+    #[allow(dead_code)]
     id: WindowId,
     canvas: web_sys::HtmlCanvasElement,
     state: Arc<Mutex<WebWindowState>>,
@@ -118,6 +121,9 @@ impl WebWindow {
     }
 
     /// Update tracked size (called from resize observer / events)
+    // Unused until the web backend registers a ResizeObserver; the platform
+    // currently dispatches only `Created` and `RedrawRequested`.
+    #[allow(dead_code)]
     pub fn update_size(&self, width: f32, height: f32) {
         let mut state = self.state.lock();
         state.width = width;
@@ -125,6 +131,8 @@ impl WebWindow {
     }
 
     /// Update focus state (called from focus/blur events)
+    // Unused until the web backend subscribes to focus/blur on the canvas.
+    #[allow(dead_code)]
     pub fn update_focus(&self, focused: bool) {
         self.state.lock().focused = focused;
     }

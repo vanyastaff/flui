@@ -19,9 +19,14 @@ pub use window_ext::{
     TaskbarProgressState, WindowCornerPreference, WindowsBackdrop, WindowsTheme, WindowsWindowExt,
 };
 
-// Re-export Windows types for examples
+/// The raw Win32 types an example or embedder needs to talk to a FLUI window
+/// directly (DWM frame extension, backdrop attributes, the `HWND` itself).
+///
+/// Re-exported so consumers do not have to depend on a matching `windows`
+/// crate version of their own.
 #[cfg(target_os = "windows")]
 pub mod win32 {
+    #![allow(missing_docs)] // straight re-exports; the `windows` crate documents them
     pub use windows::Win32::{
         Foundation::HWND,
         Graphics::Dwm::{DWMWINDOWATTRIBUTE, DwmExtendFrameIntoClientArea, DwmSetWindowAttribute},

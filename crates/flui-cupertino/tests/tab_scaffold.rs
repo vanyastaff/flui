@@ -448,6 +448,10 @@ fn tapping_a_tab_item_switches_the_active_tab() {
 /// — no `ErrorView` is built (the scaffold instead mounts successfully with
 /// every tab hidden and `tab_builder` uncalled for index 5).
 #[test]
+// Debug-only: the `ErrorView` this asserts on only appears because a
+// `debug_assert!` in `CupertinoTabScaffoldState::build` fires. In release the
+// guard compiles out, no error is built, and the assertion below fails.
+#[cfg(debug_assertions)]
 fn out_of_range_controller_index_builds_an_error_instead_of_silently_hiding_every_tab() {
     let builder_calls = Rc::new(Cell::new(0_u32));
     let calls = Rc::clone(&builder_calls);

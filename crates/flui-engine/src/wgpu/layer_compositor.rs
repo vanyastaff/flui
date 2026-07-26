@@ -393,7 +393,10 @@ mod tests {
     /// A `debug_assert_balanced` call on an unbalanced compositor must panic.
     ///
     /// Mirrors the equivalent test for `GpuStateStack` (T7 pattern).
+    /// Debug-only: the guard it exercises compiles out in release, so without
+    /// the gate `cargo test --release` reports "did not panic as expected".
     #[test]
+    #[cfg(debug_assertions)]
     #[should_panic(expected = "unbalanced save_layer/restore_layer")]
     fn debug_assert_balanced_panics_when_layer_stack_is_not_empty() {
         let mut compositor = LayerCompositor::new();

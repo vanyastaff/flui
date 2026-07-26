@@ -286,10 +286,7 @@ impl MountedDemo {
             if inspect::box_geometry(&owner, current) == Some(size) {
                 return Some(current);
             }
-            match render_tree.parent(current) {
-                Some(parent) => current = parent,
-                None => return None,
-            }
+            current = render_tree.parent(current)?;
         }
     }
 

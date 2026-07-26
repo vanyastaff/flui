@@ -45,6 +45,8 @@ pub struct ObjectKey {
 // 3. The pointer value is derived from Arc::as_ptr() and remains valid as long
 //    as the Arc exists, which is guaranteed by the struct's lifetime
 unsafe impl Send for ObjectKey {}
+// SAFETY: see the `Send` justification above — it covers `Sync` unchanged,
+// since the pointer is never dereferenced and the holder is already Sync.
 unsafe impl Sync for ObjectKey {}
 
 impl ObjectKey {

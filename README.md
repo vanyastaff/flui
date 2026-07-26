@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/vanyastaff/flui/actions/workflows/ci.yml/badge.svg)](https://github.com/vanyastaff/flui/actions/workflows/ci.yml)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](README.md#license)
-[![MSRV: 1.96](https://img.shields.io/badge/MSRV-1.96-orange.svg)](README.md#minimum-supported-rust-version)
+[![MSRV: 1.97](https://img.shields.io/badge/MSRV-1.97-orange.svg)](README.md#minimum-supported-rust-version)
 
 > A modular, Flutter-inspired declarative UI framework for Rust with GPU-accelerated rendering.
 
@@ -22,7 +22,7 @@ See [`docs/crates.md`](docs/crates.md) for the full layered map and per-crate st
 
 ## Quick Start
 
-Prerequisites: Rust 1.96 (edition 2024). The repository is a Cargo workspace consumed by path — clone and build. A `rust-toolchain.toml` is committed, so `rustup` will install and select the correct toolchain automatically.
+Prerequisites: Rust 1.97 (edition 2024). The repository is a Cargo workspace consumed by path — clone and build. A `rust-toolchain.toml` is committed, so `rustup` will install and select the correct toolchain automatically.
 
 ```bash
 git clone https://github.com/vanyastaff/flui
@@ -96,7 +96,7 @@ live under `examples/` and per-target crates (`examples/desktop_scene/`,
 
 ## Minimum Supported Rust Version
 
-The MSRV is **Rust 1.96**, declared as `rust-version` in the workspace
+The MSRV is **Rust 1.97**, declared as `rust-version` in the workspace
 manifest, pinned by `rust-toolchain.toml`, and verified by a dedicated CI job.
 Policy: pre-release, the MSRV may be bumped in any commit when a dependency or
 language feature warrants it; every bump updates the manifest, the toolchain

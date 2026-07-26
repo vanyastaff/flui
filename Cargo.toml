@@ -70,7 +70,14 @@ members = [
 
 # Default members exclude platform-specific examples/tools. `cargo build
 # --workspace` still builds every workspace member listed above.
+#
+# The root `flui` facade IS listed: it is neither an example nor a tool, and
+# leaving it out made `cargo hack --each-feature` unable to select it —
+# cargo-hack drives the root package via `--manifest-path`, which resolves to
+# default-members, so its `golden` feature failed with "none of the selected
+# packages contains this feature".
 default-members = [
+    ".",
     "crates/flui-geometry",
     "crates/flui-types",
     "crates/flui-foundation",
@@ -103,7 +110,7 @@ default-members = [
 [workspace.package]
 version = "0.2.0"
 edition = "2024"
-rust-version = "1.96"
+rust-version = "1.97"
 license = "MIT OR Apache-2.0"
 authors = ["Flui Contributors"]
 repository = "https://github.com/vanyastaff/flui"
@@ -114,7 +121,8 @@ tokio = { version = "1.43" }
 
 # SYNCHRONIZATION - Used by multiple crates
 parking_lot = "0.12"
-once_cell = "1.20"
+# `once_cell` is deliberately absent: `std::sync::{OnceLock, LazyLock}` cover
+# every use this workspace had, and are what the crates already reach for.
 dashmap = "6.1"
 # Bounded typed mailboxes (PipelineOwnerHandle dirty channel, UiRealm
 # owner inbox — bounded queues with typed backpressure only)
@@ -259,7 +267,25 @@ insta = "1"
 unsafe_code = "warn"
 missing_docs = "warn"
 missing_debug_implementations = "warn"
-rust_2018_idioms = "warn"
+# Lint groups need lower priority so the individual lints below can override
+# them (same reason the clippy table drops `all`/`pedantic` to -1).
+rust_2018_idioms = { level = "warn", priority = -1 }
+# The three below are already clean workspace-wide (measured: zero sites), so
+# `deny` costs nothing today and is purely a regression bar. They are
+# warn-by-default, which on this workspace means "invisible outside CI" — the
+# point of pinning them here is that a crate cannot silently reopen them.
+#
+# unexpected_cfgs: a typo in one of the many `cfg(target_arch = ...)` /
+# `cfg(feature = ...)` gates would otherwise compile to a silently-dead branch —
+# exactly the failure mode that kept the web backend from ever being exercised.
+unexpected_cfgs = "deny"
+# unsafe_op_in_unsafe_fn: edition 2024 already warns; denying states that an
+# `unsafe fn` body is not itself an unsafe block, so each operation inside it
+# still needs its own justified `unsafe { }`.
+unsafe_op_in_unsafe_fn = "deny"
+# unused_must_use: a dropped `Result` from a layout/paint/commit call is silent
+# by construction — there is no log, no panic, just a skipped effect.
+unused_must_use = "deny"
 
 [workspace.lints.clippy]
 # Lint groups need lower priority to allow individual lint overrides
@@ -272,6 +298,19 @@ pedantic = { level = "warn", priority = -1 }
 # ship-quality waves. `expect_used` stays off — expect() with the BUG:
 # message convention IS the sanctioned invariant idiom.
 unwrap_used = "warn"
+# `undocumented_unsafe_blocks` is deliberately NOT enabled. It was tried and
+# reverted, for two reasons worth recording so it is not re-adopted casually:
+#
+#   * It can only see what the Linux clippy job compiles. The `cfg(windows)` and
+#     `cfg(target_os = "macos")` backends in flui-platform carry ~91 further
+#     undocumented sites that no gate here reaches, so a green workspace run
+#     would license the claim "every unsafe site is documented" while that is
+#     false for two of three desktop targets. Enabling it is only meaningful
+#     once the cross-target job runs `clippy`, not `cargo check`.
+#   * Turning it on first and writing comments to satisfy it produces prose, not
+#     review. That is how several comments in flui-hot-reload came to state
+#     invariants the code does not establish. Document unsafe because the
+#     invariant was checked, not because a lint failed.
 # Allow reasonable exceptions
 cast_precision_loss = "allow"
 module_name_repetitions = "allow"
@@ -456,4 +495,10 @@ debug = "full"
 opt-level = 3
 lto = "thin"      # Link-time optimization (good balance)
 codegen-units = 1 # Better optimization, slower compile
-strip = "symbols" # Smaller binary
+# `debuginfo`, not `symbols`: stripping the symbol table too leaves release
+# builds unprofilable and crash reports unsymbolicated — `perf`, flamegraph,
+# samply, Tracy and minidumps all resolve frames through it. Since Rust 1.97
+# the default mangling is v0, so retained symbols carry real generic
+# parameters instead of an opaque hash. DWARF is still dropped, which is the
+# bulk of the size.
+strip = "debuginfo"

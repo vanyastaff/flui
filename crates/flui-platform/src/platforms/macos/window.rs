@@ -69,6 +69,16 @@ struct MacOSWindowState {
     cursor: CursorIcon,
 }
 
+impl std::fmt::Debug for MacOSWindow {
+    // Hand-written: `ns_window` is a raw Objective-C `id` and `WindowCallbacks`
+    // is a callback payload; neither has a useful Debug form.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MacOSWindow")
+            .field("ns_window", &(self.ns_window as usize))
+            .finish_non_exhaustive()
+    }
+}
+
 impl MacOSWindow {
     /// Create a new macOS window
     pub fn new(

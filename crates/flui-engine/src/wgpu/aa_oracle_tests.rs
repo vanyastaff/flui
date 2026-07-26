@@ -668,6 +668,11 @@ mod gpu_tests {
                 ]);
             }
         }
+        crate::wgpu::readback_dump::dump_frame(
+            SURFACE_WIDTH,
+            SURFACE_HEIGHT,
+            bytemuck::cast_slice(&pixels),
+        );
         pixels
     }
 

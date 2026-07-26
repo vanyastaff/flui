@@ -53,6 +53,15 @@ impl Lifecycle {
         matches!(self, Self::Active)
     }
 
+    /// Returns `true` if the element has been created but not yet mounted.
+    ///
+    /// Flutter's `Element.mount` asserts `_lifecycleState == initial`; this is
+    /// the predicate `ElementCore::mount` checks so the contract matches.
+    #[inline]
+    pub fn is_initial(self) -> bool {
+        matches!(self, Self::Initial)
+    }
+
     /// Returns `true` if the element is inactive.
     #[inline]
     pub fn is_inactive(self) -> bool {
@@ -71,7 +80,12 @@ impl Lifecycle {
         self.is_active()
     }
 
-    /// Returns `true` if the element can be reactivated.
+    /// Returns `true` if the element can be reactivated — only an `Inactive`
+    /// element can.
+    ///
+    /// In particular `Defunct` cannot: its state has been disposed, so
+    /// reviving it would operate on torn-down state. `ElementCore::activate`
+    /// asserts this in debug builds.
     #[inline]
     pub fn can_activate(self) -> bool {
         matches!(self, Self::Inactive)
@@ -91,6 +105,31 @@ mod tests {
     #[test]
     fn test_default_is_initial() {
         assert_eq!(Lifecycle::default(), Lifecycle::Initial);
+    }
+
+    /// Both mutator predicates, over every state, stated once so a future edit
+    /// has to argue with each cell rather than the two or three a spot-check
+    /// would cover.
+    #[test]
+    fn activate_and_deactivate_admit_exactly_one_state_each() {
+        use Lifecycle::{Active, Defunct, Inactive, Initial};
+
+        for state in [Initial, Active, Inactive, Defunct] {
+            assert_eq!(
+                state.can_activate(),
+                state == Inactive,
+                "only Inactive may be reactivated; {state:?} disagreed"
+            );
+            assert_eq!(
+                state.can_deactivate(),
+                state == Active,
+                "only Active may be deactivated; {state:?} disagreed"
+            );
+        }
+
+        // The edge these guards exist for: a disposed element stays disposed.
+        assert!(!Defunct.can_activate(), "Defunct must not be revivable");
+        assert!(!Defunct.can_build(), "Defunct must not be buildable");
     }
 
     #[test]

@@ -10,6 +10,7 @@ use windows::core::BOOL;
 use crate::traits::{DisplayId, PlatformDisplay};
 
 /// Windows display implementation
+#[derive(Debug)]
 pub struct WindowsDisplay {
     id: DisplayId,
     name: String,
@@ -31,7 +32,7 @@ impl WindowsDisplay {
             let mut monitor_info: MONITORINFOEXW = std::mem::zeroed();
             monitor_info.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
 
-            let _ = GetMonitorInfoW(hmonitor, &mut monitor_info.monitorInfo as *mut _ as *mut _);
+            let _ = GetMonitorInfoW(hmonitor, (&raw mut monitor_info.monitorInfo).cast());
 
             let rc = monitor_info.monitorInfo.rcMonitor;
             let rc_work = monitor_info.monitorInfo.rcWork;
@@ -142,14 +143,14 @@ pub fn enumerate_displays() -> Vec<Arc<dyn PlatformDisplay>> {
             // until all callbacks return, so the pointer is valid and no other
             // reference to `displays` exists concurrently.
             unsafe {
-                let displays = &mut *(lparam.0 as *mut Vec<Arc<dyn PlatformDisplay>>);
+                let displays = &mut *std::ptr::with_exposed_provenance_mut::<
+                    Vec<Arc<dyn PlatformDisplay>>,
+                >(lparam.0 as usize);
 
                 let mut monitor_info: MONITORINFOEXW = std::mem::zeroed();
                 monitor_info.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
 
-                if GetMonitorInfoW(hmonitor, &mut monitor_info.monitorInfo as *mut _ as *mut _)
-                    .as_bool()
-                {
+                if GetMonitorInfoW(hmonitor, (&raw mut monitor_info.monitorInfo).cast()).as_bool() {
                     // MONITORINFOF_PRIMARY = 1
                     let is_primary = (monitor_info.monitorInfo.dwFlags & 1) != 0;
 
@@ -165,7 +166,7 @@ pub fn enumerate_displays() -> Vec<Arc<dyn PlatformDisplay>> {
             None,
             None,
             Some(enum_proc),
-            LPARAM(&mut displays as *mut _ as isize),
+            LPARAM((&raw mut displays).expose_provenance() as isize),
         );
 
         displays

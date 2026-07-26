@@ -1046,13 +1046,11 @@ mod lifecycle_tests {
         // not re-deallocate the `Box<CanvasLayer>` (the slab would
         // double-free if Drop ran twice).
         //
-        // Memory safety note: the SECOND `drop_in_place` IS a
-        // double-free at the std::mem level — `Box::drop` is not
-        // idempotent. This test is about the *side-effect* idempotency
-        // of the `LayerNode::drop` flag-flip path, not raw memory
-        // safety. We use `ManuallyDrop<MaybeUninit>` to make the
-        // double `drop_in_place` not a UB on the surrounding type
-        // (the slot is uninit after the first drop).
+        // This test is about the *side-effect* idempotency of the
+        // `LayerNode::drop` flag-flip path, not raw memory safety. Only ONE
+        // `drop_in_place` is run: a second would double-free the `children`
+        // Vec, since drop glue is not idempotent. The flag is instead read
+        // back twice, which is sound on the premises stated at each read.
         use std::mem::MaybeUninit;
         use std::ptr;
 
@@ -1061,6 +1059,14 @@ mod lifecycle_tests {
 
         // SAFETY: see `drop_marks_node_disposed`.
         unsafe { ptr::drop_in_place(slot.as_mut_ptr()) };
+        // SAFETY: `drop_in_place` ran the FULL drop glue — `LayerNode::drop`
+        // (which flips the `disposed` flag) and then every field, including the
+        // `children` Vec's deallocation. Reading `disposed` back is sound on
+        // three premises: the stack slot is still live; no drop glue writes the
+        // `AtomicBool`'s bytes; and every other field stays bytewise valid, so
+        // autoref-ing a `&LayerNode` here forms no invalid reference. The third
+        // is the fragile one — a field whose drop poisons a niche would make
+        // this UB with no signal from the compiler.
         let after_first = unsafe { (*slot.as_ptr()).is_disposed() };
         assert!(after_first, "first drop must flip flag");
 
@@ -1073,6 +1079,8 @@ mod lifecycle_tests {
         // single-drop observation: the flag stays `true`, and
         // `is_disposed` continues to read `true` from the AtomicBool
         // (which has trivial Drop).
+        // SAFETY: identical to the first read, on the same three premises. No
+        // second `drop_in_place` is run — that would double-free the Vec.
         let after_second_read = unsafe { (*slot.as_ptr()).is_disposed() };
         assert!(after_second_read);
     }

@@ -24,7 +24,6 @@ type OnChangeCallback = Box<dyn Fn(&Path) + Send + Sync>;
 pub struct HotReloader {
     watched_paths: Arc<RwLock<Vec<PathBuf>>>,
     on_change_callback: Arc<RwLock<Option<OnChangeCallback>>>,
-    watcher: Arc<RwLock<Option<SourceWatcher>>>,
     debounce_duration: Duration,
     watch_handle: Arc<RwLock<Option<JoinHandle<()>>>>,
 }
@@ -40,7 +39,6 @@ impl HotReloader {
         Self {
             watched_paths: Arc::new(RwLock::new(Vec::new())),
             on_change_callback: Arc::new(RwLock::new(None)),
-            watcher: Arc::new(RwLock::new(None)),
             debounce_duration: debounce,
             watch_handle: Arc::new(RwLock::new(None)),
         }
@@ -65,7 +63,7 @@ impl HotReloader {
     pub fn watch_blocking(&mut self) -> Result<(), WatchError> {
         self.start_watcher()?;
         loop {
-            thread::sleep(Duration::from_secs(3600));
+            thread::sleep(Duration::from_hours(1));
         }
     }
 
@@ -82,7 +80,6 @@ impl HotReloader {
     /// Stop watching all paths.
     pub fn stop(&mut self) {
         *self.watch_handle.write() = None;
-        *self.watcher.write() = None;
         self.watched_paths.write().clear();
     }
 
@@ -117,7 +114,6 @@ impl HotReloader {
             }
         });
 
-        *self.watcher.write() = None;
         *self.watch_handle.write() = Some(handle);
         Ok(())
     }
@@ -134,7 +130,7 @@ impl std::fmt::Debug for HotReloader {
         f.debug_struct("HotReloader")
             .field("watched_paths", &self.watched_paths.read().len())
             .field("is_watching", &self.is_watching())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 

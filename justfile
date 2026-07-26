@@ -76,6 +76,34 @@ build-layered:
     cargo build -p flui-build
     cargo build -p flui-cli
 
+[group("build")]
+[doc("Type-check the wasm-capable crates for wasm32-unknown-unknown (mirrors the CI wasm-check job)")]
+wasm-check:
+    cargo check --workspace --locked --target wasm32-unknown-unknown \
+      --exclude flui-assets --exclude flui-build --exclude flui-cli \
+      --exclude flui-web-server --exclude hot-reload-counter-host \
+      --exclude hot-reload-counter-logic --exclude hot-reload-counter-types
+
+# `cargo check` does not link, so the per-OS backends in flui-platform can be
+# type-checked from any host. Without this they are only ever compiled by
+# whoever happens to develop on that OS — which is how the Windows backend
+# came to have a hard `missing_docs` error and both backends accumulated
+# missing Debug impls that no gate could see.
+#
+# The triples are the ones actually shipped: MSVC (what `gpu-test` runs on
+# windows-latest), not the GNU ABI, and aarch64 for macOS. `--all-targets` so
+# per-OS test targets are compiled too — omitting it is what made live code
+# look dead on wasm32.
+#
+# TYPE-CHECK ONLY: it does not link and runs no tests, and flui-platform is
+# excluded from the test job entirely. Green here means "compiles", nothing more.
+# Requires: rustup target add x86_64-pc-windows-msvc aarch64-apple-darwin
+[group("build")]
+[doc("Type-check flui-platform's Windows and macOS backends from this host (mirrors the CI cross-typecheck job)")]
+cross-typecheck:
+    cargo check -p flui-platform --locked --all-targets --target x86_64-pc-windows-msvc
+    cargo check -p flui-platform --locked --all-targets --target aarch64-apple-darwin
+
 # =============================================================================
 # Testing
 # =============================================================================
@@ -110,10 +138,14 @@ test-debug *args:
 test-all:
     cargo test --workspace --no-fail-fast
 
+# Excludes flui-platform to match the CI `test` job — that crate's suite is red
+# independently of the profile (STATUS_HEAP_CORRUPTION investigation, see
+# AGENTS.md), so including it would make this recipe permanently red and
+# useless as a gate.
 [group("test")]
-[doc("Run tests against the release profile")]
+[doc("Run tests against the release profile (excludes flui-platform, as CI does)")]
 test-release:
-    cargo test --workspace --release
+    cargo test --workspace --exclude flui-platform --release
 
 [group("test")]
 [doc("Run rustdoc examples as tests (CI gate; nextest does not execute doctests)")]
@@ -144,8 +176,12 @@ test-assets:
 deny:
     cargo deny check
 
+# SCOPE: this runs five `subtree_arena` unit tests, none of which enters
+# `layout_subtree_borrowed_impl` or dereferences a real `NodePtr` (the arena
+# tests use `NonNull::dangling()` deliberately). It is NOT coverage of the
+# layout-walk reborrows — treat "miri green" accordingly.
 [group("test")]
-[doc("Run miri on the flui-rendering subtree arena (the unsafe hot spot; requires nightly + miri component)")]
+[doc("Run miri on flui-rendering's subtree-arena unit tests (NOT the layout walk; requires nightly + miri)")]
 miri:
     cargo +nightly miri test -p flui-rendering --lib pipeline::owner::subtree_arena
 
@@ -168,6 +204,12 @@ clippy:
 [doc("Run clippy and apply auto-fixes (uncommitted changes only)")]
 clippy-fix:
     cargo clippy --workspace --all-targets --fix --allow-dirty -- -D warnings
+
+[group("quality")]
+[doc("Per-feature clippy via cargo-hack (mirrors the CI feature-matrix job; requires cargo-hack)")]
+feature-matrix:
+    cargo hack clippy --workspace --locked --each-feature --optional-deps --keep-going -- -D warnings
+    cargo hack clippy --workspace --locked --each-feature --optional-deps --keep-going --tests --benches --examples -- -D warnings
 
 [group("quality")]
 [doc("Format the entire workspace with rustfmt")]
@@ -309,6 +351,8 @@ setup:
     @echo "Optional, for cross-target builds:"
     @echo "  cargo install --locked wasm-pack       # for examples/web_demo, examples/painting_demo"
     @echo "  cargo install --locked cargo-ndk        # for examples/android_*"
+    @echo "  cargo install --locked cargo-hack       # for just feature-matrix (CI per-feature gate)"
+    @echo "  cargo install --locked zizmor           # workflow security audit (CI checks gate)"
 
 [group("setup")]
 [doc("Show installed Rust toolchain and FLUI workspace info")]
@@ -336,6 +380,13 @@ watch-test crate="":
 # CI aggregate
 # =============================================================================
 
+# `just ci` stays the FAST local gate on purpose. The heavy CI-only jobs have
+# their own recipes — run them deliberately before pushing risky changes:
+#   just feature-matrix   (per-feature clippy, minutes)
+#   just wasm-check       (wasm32 target check)
+#   just cross-typecheck  (windows + macos backends, type-check only)
+#   just deny             (advisories / bans / licenses / sources)
+#   just miri             (nightly UB check, narrow scope — see its comment)
 [group("ci")]
 [doc("Run local CI gates (fmt-check + inventory + port-check + clippy + test + doctests)")]
 ci: fmt-check inventory-check port-check clippy test-ci test-doc

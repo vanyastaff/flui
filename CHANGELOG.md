@@ -25,7 +25,7 @@ file records the repo-consumer-visible summary.
 - **CI gates**: integration tests now run in CI (previously `--lib` only —
   the Core.0/Core.2 exit-gate suites in `crates/*/tests/` were never
   executed); new `doc-test` job runs every rustdoc example; new `msrv` job
-  verifies the declared 1.96 floor; new advisory `miri` job checks the
+  verifies the declared MSRV floor; new advisory `miri` job checks the
   `flui-rendering` subtree arena (the workspace's densest `unsafe` hot spot);
   the `gpu-test` WARP readback suite is promoted from advisory to
   merge-blocking after 3 consecutive green full-suite runs.
@@ -37,11 +37,80 @@ file records the repo-consumer-visible summary.
 
 ### Changed
 
-- **Toolchain pin 1.96.0 → 1.96.1** (MIR miscompilation fix, cargo HTTP
-  retries, three libssh2 CVEs in cargo). MSRV unchanged at 1.96.
+- **Toolchain 1.96.1 → 1.97.1, MSRV 1.96 → 1.97.** `rust-toolchain.toml` no
+  longer mirrors the MSRV: it is now explicitly the *development* toolchain
+  (a pin at the floor hides new lints and codegen changes from the developer
+  until CI surfaces them), while the floor stays a separate promise checked by
+  the one `msrv` job. Three 1.97 stabilizations earn the bump: **v0 symbol
+  mangling by default** (the release binary now carries 5110 v0 symbols and
+  zero legacy — generic frames demangle with real type parameters instead of
+  an opaque hash), **`build.warnings`** (below), and the integer
+  bit-manipulation APIs (`bit_width`, `isolate_lowest_one`,
+  `isolate_highest_one`, `lowest_one`, `highest_one`) that the render-node
+  dirty-flag bitset is a candidate for. One new pedantic lint
+  (`clippy::manual_assert_eq`) fired at two sites and was fixed.
+- **CI warnings gate: `RUSTFLAGS=-D warnings` → `CARGO_BUILD_WARNINGS=deny`.**
+  `RUSTFLAGS` is part of the rustc fingerprint, so the miri job — which needs
+  a different value — got a disjoint `target/` cache and had to blank the flag
+  wholesale, losing every other check with it. The Cargo knob is applied after
+  compilation: measured, toggling it recompiles nothing while switching
+  `RUSTFLAGS` recompiles. miri now sets `CARGO_BUILD_WARNINGS=warn` and shares
+  the cache.
+- **Release profile: `strip = "symbols"` → `strip = "debuginfo"`.** Stripping
+  the symbol table left release builds unprofilable and crash reports
+  unsymbolicated — `perf`, flamegraph, samply, Tracy and minidumps all resolve
+  frames through it. Cost measured on `target/release/flui`: 3 437 096 →
+  4 394 832 bytes (+935 KiB, +27.9%); DWARF is still dropped.
+- **Performance overlay wired to `AppConfig`.** `show_performance_overlay` was
+  write-only: the builder set it and nothing read it, while the layer, the
+  rolling stats window and a real wgpu draw path all already existed. The chain
+  is joined in `draw_frame` phase 4. Scope: it reports FPS and average frame
+  time only — the renderer ignores the frame counter and the option mask — and
+  the sampled interval is between *composited* frames, so it is a repaint rate.
+- **`Defunct` is now an absorbing lifecycle state.** `Lifecycle::can_activate` /
+  `can_deactivate` existed but were called only from tests; every mutator
+  assigned unconditionally, so `Defunct → Active` was reachable through the
+  public `ElementCore::activate` and would revive an element whose state was
+  disposed. Both predicates are now asserted (debug-only) in `ElementCore` and
+  in the hand-rolled `RootRenderElement`/`ErrorElement`.
+- **`TextRange` consolidated into flui-types**, whose copy was already a strict
+  superset; the canonical type gains `Clone, Copy, PartialEq, Eq, Hash`. Under
+  0.x this is a breaking change (`cargo semver-checks`: `copy_impl_added` +
+  `struct_missing`) — 0.2.0 → 0.3.0 when published.
+- **`once_cell` dropped as a direct dependency** in favour of
+  `std::sync::{OnceLock, LazyLock}`, which most crates already used. It remains
+  in the lockfile transitively via `ahash` ← `hashbrown` ← `dashmap`.
+- **Workspace lints:** `unexpected_cfgs`, `unsafe_op_in_unsafe_fn` and
+  `unused_must_use` at `deny`, each measured at zero sites first so they are a
+  regression bar rather than a migration. `clippy::undocumented_unsafe_blocks`
+  was tried and reverted — see the note in `Cargo.toml`: it only sees what the
+  Linux job compiles (~91 further sites live in the Windows/macOS backends), and
+  enabling it before auditing produced comments that stated invariants the code
+  does not establish.
+- **`just test-release` went from 4 red suites to 1.** The recipe now excludes
+  flui-platform, matching the CI `test` job — that crate's suite is red
+  independently of the profile (the STATUS_HEAP_CORRUPTION investigation), so
+  including it made the recipe permanently red. With that scoped, eleven
+  `#[should_panic]`-over-`debug_assert!` tests across eight files could not pass
+  in release, where the assertion does not exist; they are now
+  `cfg(debug_assertions)`-gated. Two were introduced by this branch, nine
+  predated it.
+  One suite is still red and is NOT fixed here: flui-interaction's
+  `eager_dispose_clears_state` has a deliberate release-only branch asserting
+  that a post-`dispose` `add_pointer` does not reach the arena, and it does.
+  Verified red on `main` independently of this branch — a real defect in the
+  recognizer's dispose guard, not a profile artifact.
+
+- **`wasm-check` now passes.** The job had never been green: 11 errors across
+  `flui-scheduler` (2), `flui-platform`'s web backend (4) and `flui-app` (5).
+  The `flui-app` five are not dead code — the job runs `cargo check` without
+  `--all-targets`, so the desktop runner (`cfg(not(target_arch = "wasm32"))`)
+  and the tests that consume them are absent from the wasm lib check; they
+  carry `#[cfg_attr(target_arch = "wasm32", allow(dead_code))]` naming the
+  consumer rather than a blanket allow.
 - Lockfile: `wgpu` 29.0.3 → 29.0.4, `anyhow` → 1.0.103, `crossbeam-epoch`
   → 0.9.20, `swash` → 0.2.9 (off a yanked version). `clippy.toml` gains
-  `msrv = "1.96"` so MSRV-aware lints track the declared floor.
+  an `msrv` key so MSRV-aware lints track the declared floor.
 - **One integration-test binary per heavy crate**: flui-widgets (49 → 1 +
   the pre-existing `parity` target), flui-rendering (36 → 1), flui-view
   (24 → 1) — each root `tests/*.rs` used to statically link the whole wgpu

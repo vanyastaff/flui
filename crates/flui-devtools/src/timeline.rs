@@ -414,8 +414,8 @@ impl Timeline {
             let avg_ms = total_ms / category_events.len() as f64;
 
             println!("\n{} ({} events):", category.name(), category_events.len());
-            println!("  Total: {:.2}ms", total_ms);
-            println!("  Average: {:.2}ms", avg_ms);
+            println!("  Total: {total_ms:.2}ms");
+            println!("  Average: {avg_ms:.2}ms");
 
             // Show longest events
             let mut sorted = category_events.clone();
@@ -543,7 +543,7 @@ mod tests {
 
         // Record more than capacity
         for i in 0..10 {
-            timeline.record_instant(format!("Event {}", i), EventCategory::Custom);
+            timeline.record_instant(format!("Event {i}"), EventCategory::Custom);
         }
 
         // Should only keep last 5

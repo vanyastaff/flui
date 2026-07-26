@@ -335,14 +335,21 @@ pub enum LayerSurfaceLayer {
     Overlay,
 }
 
-/// Anchor flags for layer surfaces.
 #[cfg(feature = "wayland")]
 bitflags::bitflags! {
+    /// Anchor flags for layer surfaces.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     pub struct Anchor: u32 {
+        /// Anchor to the top edge.
         const TOP = 1 << 0;
+
+        /// Anchor to the bottom edge.
         const BOTTOM = 1 << 1;
+
+        /// Anchor to the left edge.
         const LEFT = 1 << 2;
+
+        /// Anchor to the right edge.
         const RIGHT = 1 << 3;
     }
 }
@@ -365,9 +372,16 @@ pub enum KeyboardInteractivity {
 #[cfg(feature = "wayland")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PanelPosition {
+    /// Panel anchored to the top edge.
     Top,
+
+    /// Panel anchored to the bottom edge.
     Bottom,
+
+    /// Panel anchored to the left edge.
     Left,
+
+    /// Panel anchored to the right edge.
     Right,
 }
 
@@ -428,9 +442,9 @@ pub enum X11WindowType {
 // X11 Window State
 // ============================================================================
 
-/// X11 window state flags (EWMH _NET_WM_STATE).
 #[cfg(feature = "x11")]
 bitflags::bitflags! {
+    /// X11 window state flags (EWMH _NET_WM_STATE).
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     pub struct X11WindowState: u32 {
         /// Window is modal.

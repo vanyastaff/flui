@@ -6,7 +6,7 @@
 use super::signal::{SignalId, SubscriptionId};
 use crate::error::SignalError;
 use dashmap::DashMap;
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 use parking_lot::Mutex;
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
@@ -538,7 +538,7 @@ impl Drop for SignalRuntime {
 ///
 /// All signals are stored in this single global instance.
 /// DashMap provides lock-free concurrent access for maximum performance.
-static SIGNAL_RUNTIME: Lazy<SignalRuntime> = Lazy::new(|| {
+static SIGNAL_RUNTIME: LazyLock<SignalRuntime> = LazyLock::new(|| {
     tracing::trace!("Initializing global SignalRuntime");
     SignalRuntime::new()
 });

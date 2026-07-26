@@ -12,6 +12,7 @@ use objc::{class, msg_send, sel, sel_impl};
 use crate::traits::{DisplayId, PlatformDisplay};
 
 /// macOS display wrapper around NSScreen
+#[derive(Debug)]
 pub struct MacOSDisplay {
     id: DisplayId,
     name: String,

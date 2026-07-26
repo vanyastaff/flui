@@ -163,7 +163,14 @@ fn main() {
         let scene = if let Some(ref hr) = hot_reload_frame {
             let mut driver = hr.lock().unwrap();
             driver.poll(w, h);
-            driver.build_scene_or(w, h, build_test_scene)
+            // SAFETY: the plugin is built from this workspace by the same
+            // toolchain, so host and plugin agree on `Scene`'s layout and
+            // allocator, and the returned scene is dropped at the end of this
+            // frame while `driver` (owning the library) lives on. See
+            // `HotReloadDriver::build_scene`'s `# Safety`.
+            #[allow(unsafe_code)]
+            let built = unsafe { driver.build_scene_or(w, h, build_test_scene) };
+            built
         } else {
             build_test_scene(w, h)
         };

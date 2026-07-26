@@ -550,6 +550,7 @@ mod synthetic_op_tests {
                 ]);
             }
         }
+        crate::wgpu::readback_dump::dump_frame(w, h, bytemuck::cast_slice(&pixels));
         pixels
     }
 

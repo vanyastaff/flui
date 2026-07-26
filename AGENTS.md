@@ -74,7 +74,7 @@ FLUI is a Flutter-inspired declarative UI framework for Rust with a three-tree a
 
 ## Tech Stack
 
-- **Rust 1.96**, edition 2024, workspace of ~20 crates (foundation → core → rendering → framework → app layers)
+- **Rust 1.97**, edition 2024, workspace of ~20 crates (foundation → core → rendering → framework → app layers)
 - **Graphics:** `wgpu` 29.x, `lyon`, `glyphon`, `cosmic-text`, `glam`
 - **Platform:** native Win32, AppKit, headless backends + `winit` 0.30 fallback
 - **Diagnostics:** `tracing` only — **no `println!`, `eprintln!`, or `dbg!` in shipped code** (CI enforces this in foundation/tree/macros crates via port-check trigger #15)
@@ -200,23 +200,26 @@ When changing render-tree, sliver, layout, paint, hit-test, semantics, schedulin
 
 ## CI Pipeline
 
-CI runs on PR + push to main. Jobs (all gated on `checks`):
+CI runs on PR + push to main (+ merge queue). All jobs are gated on the fast `checks` source gate and aggregate into a single **`ci`** job — branch protection requires that one check, so *renaming* a job cannot silently drop a gate (`needs` stops resolving). Two holes remain: a job **added** without editing the aggregator's `needs` list is ungated, and the aggregator counts `skipped` as green, so a job that later gains an `if:` becomes a no-op. All cargo invocations run `--locked`; actions are SHA-pinned (dependabot keeps them current, 7-day cooldown); workflow files are linted by actionlint + zizmor. A scheduled `weekly.yml` (Mondays + `workflow_dispatch`) re-checks RustSec advisories against the committed lockfile and builds/tests against a fresh `cargo update` — early warning, not a merge gate. Jobs:
 
-1. **checks** — `cargo fmt --check`, `taplo fmt --check`, `typos`, `scripts/check-workspace-inventory.sh` (incl. the `[lints] workspace = true` drift guard), `port-check.sh`
+1. **checks** — `cargo fmt --check`, `taplo fmt --check`, `typos`, `scripts/check-workspace-inventory.sh` (incl. the `[lints] workspace = true` drift guard), `port-check.sh`, `actionlint`, `zizmor`
 2. **clippy** — `cargo clippy --workspace --all-targets -- -D warnings`
-3. **deny** — `cargo deny check` (advisories, bans, licenses, sources; config: `deny.toml`)
-4. **test** — `cargo nextest run --workspace --exclude flui-platform` (lib **and** integration targets; Linux only)
-5. **gpu-test** — full `enable-wgpu-tests` readback suite on WARP (windows-latest; merge-blocking)
-6. **doc-test** — `cargo test --workspace --exclude flui-platform --doc` (nextest never runs doctests)
-7. **msrv** — `cargo check --workspace --all-targets` on Rust 1.96 (the declared MSRV; other jobs run latest stable)
-8. **miri** — `cargo miri test -p flui-rendering` scoped to `pipeline::owner::subtree_arena` (advisory while stabilizing)
-9. **bench-compile** — `cargo bench -p flui-rendering --no-run`
-10. **doc** — `cargo doc --workspace --no-deps --document-private-items` with `RUSTDOCFLAGS="-D warnings"`
+3. **feature-matrix** — `cargo hack clippy --workspace --each-feature --optional-deps` (libs/bins pass, then tests/benches/examples pass): per-crate feature wiring without workspace feature-unification masking. Local: `just feature-matrix`
+4. **wasm-check** — `cargo check --target wasm32-unknown-unknown` for the wasm-capable crates (7 excluded: mio/uuid CLI stack + dlopen-based hot-reload). Local: `just wasm-check`
+5. **cross-typecheck** — `cargo check -p flui-platform --all-targets` for `x86_64-pc-windows-msvc` and `aarch64-apple-darwin` (the shipped triples). `cargo check` does not link, so the Win32/AppKit backends type-check from Linux; before this job they were only ever compiled by whoever developed on that OS, and the Windows backend did not compile at all. **Type-check only** — no link, no tests, and flui-platform is excluded from the `test` job, so this is the *only* gate on those backends: green means "compiles". Local: `just cross-typecheck` (needs `rustup target add` for both)
+6. **deny** — `cargo deny check` (advisories, bans, licenses, sources; config: `deny.toml`)
+7. **test** — `cargo nextest run --workspace --exclude flui-platform` (lib **and** integration targets; Linux only). On failure, insta `.snap.new` candidates upload as artifacts
+8. **gpu-test** — full `enable-wgpu-tests` readback suite on WARP (windows-latest; merge-blocking). On oracle mismatch the harness dumps the actual frame as PNG (`FLUI_READBACK_DUMP_DIR`), uploaded as an artifact
+9. **doc-test** — `cargo test --workspace --exclude flui-platform --doc` (nextest never runs doctests)
+10. **msrv** — `cargo check --workspace --all-targets` on Rust 1.97 (the declared MSRV; other jobs run latest stable)
+11. **miri** — `cargo miri test -p flui-rendering` scoped to `pipeline::owner::subtree_arena` (advisory while stabilizing). **Narrow:** the five tests it runs never enter `layout_subtree_borrowed_impl` nor dereference a real `NodePtr`, so it is not coverage of the layout-walk reborrows
+12. **bench-compile** — `cargo bench -p flui-rendering --no-run`
+13. **doc** — `cargo doc --workspace --no-deps --document-private-items` with `RUSTDOCFLAGS="-D warnings"`
 
 ## Important Config
 
-- **Toolchain:** pinned in `rust-toolchain.toml` to `1.96.1` with `rustfmt` + `clippy` components
-- **Cargo profiles:** dev `opt-level = 1` (faster runtime) + `debug = "line-tables-only"` (backtrace file:line only — matches CI; variable/type DWARF was the bulk of `target/debug/deps`), deps `opt-level = 2`; `dbg` profile (`inherits = "dev"`, `debug = "full"`) is the opt-in full-type-info build for a step-debugger; release `lto = "thin"`, `codegen-units = 1`, `strip = "symbols"`. Local disk: `target/debug/deps` is the largest consumer on a 28-crate wgpu workspace (incremental is pinned off via `.cargo/config.toml` `[env]`) — artifacts accumulate per RUSTFLAGS/feature/toolchain fingerprint with no size cap; run `just sweep` periodically (cargo-sweep: current-toolchain + 7-day prune). CI sets `CARGO_INCREMENTAL=0` + `CARGO_PROFILE_DEV_DEBUG=line-tables-only` and reclaims ~25 GB of runner bloat before building.
+- **Toolchain:** development toolchain pinned in `rust-toolchain.toml` to `1.97.1` with `rustfmt` + `clippy` components. The pin is deliberately NOT the MSRV floor (`rust-version = "1.97"`), so a future MSRV freeze does not hold the developer back from stable diagnostics; only the `msrv` CI job exercises the floor
+- **Cargo profiles:** dev `opt-level = 1` (faster runtime) + `debug = "line-tables-only"` (backtrace file:line only — matches CI; variable/type DWARF was the bulk of `target/debug/deps`), deps `opt-level = 2`; `dbg` profile (`inherits = "dev"`, `debug = "full"`) is the opt-in full-type-info build for a step-debugger; release `lto = "thin"`, `codegen-units = 1`, `strip = "debuginfo"` (the symbol table is retained so `perf`/flamegraph/minidumps can resolve frames — measured cost +935 KiB; DWARF from the std rlibs is still dropped, 23.5 MB → 4.19 MB). Local disk: `target/debug/deps` is the largest consumer on a 28-crate wgpu workspace (incremental is pinned off via `.cargo/config.toml` `[env]`) — artifacts accumulate per RUSTFLAGS/feature/toolchain fingerprint with no size cap; run `just sweep` periodically (cargo-sweep: current-toolchain + 7-day prune). CI sets `CARGO_INCREMENTAL=0` + `CARGO_PROFILE_DEV_DEBUG=line-tables-only` and reclaims ~25 GB of runner bloat before building.
 - **Build jobs:** 8 (set in `.cargo/config.toml`)
 - **Android examples** require `cargo-ndk` + Android NDK (not in workspace default-members)
 - **WASM examples** require `wasm-pack` (not in workspace default-members); use `just web-server` for the dev server
