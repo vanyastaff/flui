@@ -86,6 +86,36 @@ the event is transformed into that entry's local coordinate space.
 Non-invertible transforms compose to a singular matrix and are skipped at
 delivery.
 
+### Sliver child transforms
+
+The sliver walk (`PipelineOwner::hit_test_subtree_impl`/
+`hit_test_sliver_subtree_impl`, `crates/flui-rendering/src/pipeline/owner/accessors.rs`)
+descends through both sliver→sliver and sliver→box edges. Each edge decides
+independently whether to push a child offset onto the `HitTestResult`
+transform stack, governed by one rule: **push iff the position handed to the
+child was moved into the child's own frame.**
+
+- Sliver→sliver, ordinary path: the position is converted from the parent's
+  main-axis coordinates into the child's via
+  `sliver_hit_position_minus_paint_offset`, so it pushes.
+- Sliver→sliver, override path: an override caller (the sole supplier today
+  is `RenderSliverOffstage::hit_test`, a transparent passthrough) already
+  hands back a sliver-local position and never repositions its child, so
+  nothing is pushed — asserted by a `debug_assert!` on the child's committed
+  offset being `Offset::ZERO`, so a future supplier with a nonzero offset
+  fails loudly instead of silently delivering a wrong position.
+- Sliver→box, both paths: `box_hit_offset_from_sliver_position` always
+  decomposes the main-axis position into box-local coordinates, override or
+  not, so both push.
+
+This matches Flutter, which has no override-position concept for slivers at
+all — every `hitTestChildren` override both repositions and pushes in the
+same call: `RenderSliverHelpers::hitTestBoxChild` and
+`RenderSliverPadding::hitTestChildren` (`rendering/sliver.dart`,
+`rendering/sliver_padding.dart`) always route through
+`SliverHitTestResult::addWithAxisOffset`, which unconditionally pushes
+`paintOffset` when it is non-null.
+
 ## HitTestBehavior
 
 `HitTestBehavior` controls whether a render object contributes itself to the hit
@@ -100,11 +130,11 @@ is leaf-first.
 
 ## Known gaps (not this document's transform-stack fix, tracked separately)
 
-Two call sites push nothing onto the `HitTestResult` transform stack that
-this document describes, so a `Listener` under them receives an
+One call site still pushes nothing onto the `HitTestResult` transform stack
+that this document describes, so a `Listener` under it receives an
 un-localized position — the same class of bug the `with_paint_offset`/
-`with_paint_transform` fix above addresses, just not reachable through
-those two paths yet:
+`with_paint_transform` fix above addresses, just not reachable through this
+path yet:
 
 - `crates/flui-rendering/src/context/hit_test.rs:189-225` — the ctx-level
   `push_offset`/`push_transform`/`with_transform` feed a per-node
@@ -114,10 +144,9 @@ those two paths yet:
   (`crates/flui-objects/src/layout/fractional_translation.rs:251`) and
   `RenderFlow` (`crates/flui-objects/src/layout/flow.rs:395`) deliver
   un-localized positions today.
-- `crates/flui-rendering/src/pipeline/owner/accessors.rs:820-901` — the
-  sliver walk pushes nothing; `box_hit_offset_from_sliver_position` crosses
-  sliver→box without a `with_paint_offset`, so a `Listener` inside a
-  scrolled sliver gets an un-localized position.
+
+The sliver walk's equivalent gap (`accessors.rs`, sliver→box edge skipping
+the transform-stack push) is fixed — see "Sliver child transforms" above.
 
 ## Tests
 

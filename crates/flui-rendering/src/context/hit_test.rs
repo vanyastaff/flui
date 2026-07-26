@@ -164,7 +164,25 @@ where
     // CHILD TESTING
     // ════════════════════════════════════════════════════════════════════════
 
-    /// Tests a child for hits with position transformation.
+    /// Tests a child at a caller-supplied position, bypassing the
+    /// transform-stack push.
+    ///
+    /// This does NOT push anything onto the driver-level `HitTestResult`
+    /// transform stack — the caller is asserting that `position` is
+    /// already local to the child (no reframing happened), so there is
+    /// nothing to push. That is only sound when the child is committed at
+    /// `Offset::ZERO` (e.g. a transparent passthrough that never
+    /// repositions its child).
+    ///
+    /// If the caller DOES move `position` into the child's own frame, this
+    /// method alone leaves that offset un-recorded, and pushing it via
+    /// `push_offset`/`with_transform` on this ctx does not fix that either
+    /// today — see the ctx-level transform-stack gap tracked in
+    /// `crates/flui-interaction/docs/HIT_TESTING.md` ("Known gaps"). Prefer
+    /// [`hit_test_child_at_layout_offset`](Self::hit_test_child_at_layout_offset)
+    /// whenever the child has a real laid-out offset — it resolves and
+    /// pushes that offset through the driver-level walk and cannot
+    /// silently deliver an un-localized position.
     pub fn hit_test_child(
         &mut self,
         index: usize,
@@ -174,9 +192,11 @@ where
     }
 
     /// Tests a child at its laid-out position (`RenderState.offset`)
-    /// — the parent supplies no offset, the driver resolves it. THE
-    /// way to hit-test children positioned during layout; parents no
-    /// longer mirror offsets in their own fields.
+    /// — the parent supplies no offset, the driver resolves it and pushes
+    /// it onto the transform stack. THE safe way to hit-test children
+    /// positioned during layout; parents no longer mirror offsets in their
+    /// own fields, and unlike [`hit_test_child`](Self::hit_test_child) this
+    /// cannot forget the push.
     pub fn hit_test_child_at_layout_offset(&mut self, index: usize) -> bool {
         self.inner.hit_test_child_at_layout_offset(index)
     }

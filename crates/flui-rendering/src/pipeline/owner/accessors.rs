@@ -869,32 +869,65 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             let Some(child_node) = self.render_tree.get(child_id) else {
                 return false;
             };
+            // Rule for whether this closure pushes the child's paint offset
+            // onto the `HitTestResult` transform stack: push iff the
+            // position handed to the child below was moved into the
+            // child's own frame. Flutter parity:
+            // `RenderSliverHelpers::hitTestBoxChild` (`rendering/sliver.dart`)
+            // and `RenderSliverPadding::hitTestChildren`
+            // (`rendering/sliver_padding.dart`) both always push
+            // `paintOffset` via `SliverHitTestResult::addWithAxisOffset`
+            // regardless of how the caller derived the position, because
+            // Flutter's sliver protocol has no override-position concept —
+            // every call site both repositions and pushes.
             if child_node.as_sliver().is_some() {
-                // Explicit positions are already in child sliver coordinates.
-                // The layout-offset fallback starts from physical paint data.
-                let child_position = match override_pos {
-                    Some(position) => position,
-                    None => Self::sliver_hit_position_minus_paint_offset(
+                if let Some(child_position) = override_pos {
+                    // NOT moved into a new frame: an override caller already
+                    // hands back sliver-local coordinates. Holds today only
+                    // because the sole workspace supplier
+                    // (`RenderSliverOffstage::hit_test`) is a transparent
+                    // passthrough that never repositions its child.
+                    debug_assert_eq!(
+                        child_node.offset(),
+                        Offset::ZERO,
+                        "sliver hit-test override skips the transform-stack push, which is \
+                         only sound while the child's committed paint offset is zero; a \
+                         supplier with a nonzero offset must route through the non-override \
+                         path so the offset gets pushed"
+                    );
+                    self.hit_test_sliver_subtree(child_id, child_position, result)
+                } else {
+                    let child_offset = child_node.offset();
+                    let child_position = Self::sliver_hit_position_minus_paint_offset(
                         constraints,
                         &geometry,
                         child_node,
                         position,
-                        child_node.offset(),
-                    ),
-                };
-                self.hit_test_sliver_subtree(child_id, child_position, result)
+                        child_offset,
+                    );
+                    result.with_paint_offset(child_offset, |result| {
+                        self.hit_test_sliver_subtree(child_id, child_position, result)
+                    })
+                }
             } else if let Some(child_entry) = child_node.as_box() {
                 let Some(child_size) = child_entry.state().geometry() else {
                     return false;
                 };
+                // Moved into the child's own box frame in both branches:
+                // `box_hit_offset_from_sliver_position` always decomposes
+                // into box-local coordinates, override or not. Both push.
+                let child_offset = child_node.offset();
+                let child_main_position = override_pos.unwrap_or(position);
                 let child_position = Self::box_hit_offset_from_sliver_position(
                     constraints,
                     &geometry,
                     child_size,
-                    override_pos.unwrap_or(position),
-                    child_node.offset(),
+                    child_main_position,
+                    child_offset,
                 );
-                self.hit_test_subtree(child_id, child_position, result)
+                result.with_paint_offset(child_offset, |result| {
+                    self.hit_test_subtree(child_id, child_position, result)
+                })
             } else {
                 false
             }
