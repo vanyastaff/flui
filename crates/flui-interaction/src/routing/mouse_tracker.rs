@@ -1,9 +1,32 @@
 //! Mouse tracking for hover, enter, and exit events.
 //!
-//! The tracker owns per-device hover state. Executable region callbacks do not
-//! live in render objects or hit-test entries: hit testing contributes a
-//! data-only [`MouseRegionTarget`], and the tracker resolves it through the
-//! active owner-local [`InteractionLane`](super::InteractionLane).
+//! The tracker owns per-device enter/exit/cursor state, gated to
+//! `Mouse | Pen` (Flutter's own `MouseTracker.updateWithEvent` gate,
+//! `rendering/mouse_tracker.dart:302`). `MouseRegion::on_hover` is deliberately
+//! **not** part of that device state machine, and has no device-kind gate,
+//! mirroring `RenderMouseRegion.handleEvent` (`rendering/proxy_box.dart`)
+//! firing `onHover` for any `PointerHoverEvent` reaching a hit-test target.
+//! Executable region callbacks do not live in render objects or hit-test
+//! entries either way: hit testing contributes a data-only
+//! [`MouseRegionTarget`], resolved through the active owner-local
+//! [`InteractionLane`](super::InteractionLane).
+//!
+//! [`MouseTracker::dispatch_hover`] is the self-contained, directly testable
+//! form of that resolve-and-invoke step and remains public for exactly that.
+//! Production `GestureBinding` delivery does NOT call it: a `Listener` and a
+//! nested `MouseRegion` must fire in hit-test order relative to each other
+//! (Flutter's single per-entry `entry.target.handleEvent` loop,
+//! `gestures/binding.dart:496`), so the binding instead resolves and invokes
+//! pointer targets and mouse-hover regions together in one per-entry walk
+//! (`InteractionDispatchHandle::dispatch_hover_interleaved`,
+//! `routing/interaction_lane.rs`) — calling `dispatch_hover` as its own
+//! separate full pass would deliver every ordinary pointer target before
+//! every region regardless of which is actually the hit path's leaf. Both
+//! paths apply the identical gate (a buttons-empty `Move`) and read the same
+//! lane state; they exist because Rust's ownership boundary makes "resolve
+//! once, deliver in one interleaved order" and "a small function that just
+//! does hover" different call shapes, not because the underlying contract
+//! differs.
 
 use std::{
     cell::RefCell,
@@ -18,7 +41,7 @@ use smallvec::SmallVec;
 pub use super::interaction_lane::{
     MouseEnterCallback, MouseExitCallback, MouseHoverCallback, MouseRegionTarget,
 };
-use super::{HitTestResult, active_dispatch_handle};
+use super::{HitTestResult, RoutePanic, active_dispatch_handle};
 use crate::{
     events::{CursorIcon, PointerEvent, PointerEventExt, PointerType},
     ids::RegionId,
@@ -31,8 +54,10 @@ pub use crate::events::DeviceId;
 /// How a pointer move participates in the mouse-region protocol.
 ///
 /// Both variants refresh enter/exit/cursor state from a fresh hit test.
-/// Only `Hover` invokes `MouseRegion::on_hover`; contact motion continues to
-/// the gesture route captured at Down.
+/// Neither invokes `MouseRegion::on_hover` — see
+/// [`MouseTracker::dispatch_hover`] for that, which does not take a `kind`
+/// because it derives the hover/contact distinction from the event itself
+/// (an empty-buttons `Move`, Flutter's `PointerHoverEvent` shape).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PointerMotionKind {
     /// Motion without an active Down sequence.
@@ -222,6 +247,11 @@ impl MouseTracker {
         }
         let device_id = event.device_id();
         let position = event.position();
+        tracing::trace!(
+            device_id,
+            ?kind,
+            "mouse tracker updating enter/exit/cursor state"
+        );
 
         let resolved = resolve_hit_test_annotations(hit_test_result);
         let new_regions: HashSet<RegionId> = resolved.order.iter().copied().collect();
@@ -279,21 +309,6 @@ impl MouseTracker {
                         .and_then(|ann| ann.cell.snapshot().on_exit)
                 })
                 .collect();
-            let hover_callbacks: SmallVec<[MouseHoverCallback; 4]> =
-                if kind == PointerMotionKind::Hover {
-                    resolved
-                        .order
-                        .iter()
-                        .filter_map(|id| {
-                            inner
-                                .annotations
-                                .get(id)
-                                .and_then(|ann| ann.cell.snapshot().on_hover)
-                        })
-                        .collect()
-                } else {
-                    SmallVec::new()
-                };
             for id in exited {
                 inner.annotations.remove(&id);
             }
@@ -311,13 +326,67 @@ impl MouseTracker {
                 position,
                 enter_callbacks,
                 exit_callbacks,
-                hover_callbacks,
                 cursor_callback,
                 new_cursor,
             }
         };
 
         work.invoke();
+    }
+
+    /// Invokes `MouseRegion::on_hover` for every region under a hover-shaped
+    /// pointer move, with no device-kind gate.
+    ///
+    /// Flutter parity: `RenderMouseRegion.handleEvent`
+    /// (`rendering/proxy_box.dart`) fires `onHover` for any
+    /// `PointerHoverEvent` reaching a hit-test target, regardless of device
+    /// kind — unlike `MouseTracker.updateWithEvent`
+    /// (`rendering/mouse_tracker.dart`), which gates enter/exit to
+    /// mouse/stylus only. [`update_with_motion`](Self::update_with_motion)
+    /// keeps that gate for enter/exit; this method carries the ungated hover
+    /// half of the contract, called from the ordinary coalesced-move
+    /// dispatch path rather than the enter/exit device-state machine.
+    ///
+    /// A non-`Move` event, or a `Move` with any button held (a contact drag,
+    /// not a hover), is a no-op — mirroring Flutter's `PointerHoverEvent` vs
+    /// `PointerMoveEvent` split at the event-class level.
+    ///
+    /// Per-target panics are isolated the same way the render tree isolates
+    /// resolved pointer-route dispatch: the first is returned for the caller
+    /// to resume after its own mandatory cleanup, later ones are traced.
+    #[must_use = "a captured hover-callback panic must be resumed after dispatch cleanup"]
+    pub fn dispatch_hover(
+        &self,
+        event: &PointerEvent,
+        hit_test_result: &HitTestResult,
+    ) -> Option<RoutePanic> {
+        let PointerEvent::Move(update) = event else {
+            return None;
+        };
+        if !update.current.buttons.is_empty() {
+            return None;
+        }
+        let device_id = event.device_id();
+        let position = event.position();
+
+        let resolved = resolve_hit_test_annotations(hit_test_result);
+        let hover_callbacks: SmallVec<[MouseHoverCallback; 4]> = resolved
+            .order
+            .iter()
+            .filter_map(|id| {
+                resolved
+                    .annotations
+                    .get(id)
+                    .and_then(|ann| ann.cell.snapshot().on_hover)
+            })
+            .collect();
+
+        let mut first_panic = None;
+        for callback in hover_callbacks {
+            let delivered = RoutePanic::capture(|| callback(device_id, position));
+            RoutePanic::preserve_first(&mut first_panic, delivered, "mouse hover callback");
+        }
+        first_panic
     }
 
     /// Re-runs hit testing for every tracked mouse device at its last known
@@ -404,7 +473,6 @@ impl MouseTracker {
                     position,
                     enter_callbacks,
                     exit_callbacks,
-                    hover_callbacks: SmallVec::new(),
                     cursor_callback,
                     new_cursor,
                 }
@@ -534,7 +602,6 @@ struct DeviceWork {
     position: Offset<Pixels>,
     enter_callbacks: SmallVec<[MouseEnterCallback; 4]>,
     exit_callbacks: SmallVec<[MouseExitCallback; 4]>,
-    hover_callbacks: SmallVec<[MouseHoverCallback; 4]>,
     cursor_callback: Option<CursorChangeCallback>,
     new_cursor: CursorIcon,
 }
@@ -587,22 +654,6 @@ impl DeviceWork {
                 }
             }
         }
-        for callback in self.hover_callbacks {
-            let delivered = catch_unwind(AssertUnwindSafe(|| {
-                callback(self.device_id, self.position);
-            }));
-            if let Err(payload) = delivered {
-                if first_panic.is_none() {
-                    first_panic = Some(payload);
-                } else {
-                    tracing::error!(
-                        "mouse hover callback panicked after an earlier mouse callback already \
-                         panicked; only the first panic is resumed"
-                    );
-                }
-            }
-        }
-
         if let Some(payload) = first_panic {
             resume_unwind(payload);
         }
@@ -752,8 +803,18 @@ mod tests {
         assert!(!active.contains(&ordinary_id));
     }
 
+    /// `update_with_motion` used to be the one place that invoked `on_hover`,
+    /// gated by `kind == PointerMotionKind::Hover`. That behavior moved to
+    /// [`MouseTracker::dispatch_hover`] (Flutter parity: `on_hover` is
+    /// `RenderMouseRegion.handleEvent`'s concern, not `MouseTracker`'s — see
+    /// this module's doc). This test used to assert the old in-tracker
+    /// gating; it now asserts the complementary invariant that motivated the
+    /// move — `update_with_motion` invokes `on_hover` zero times under
+    /// either kind, while still sharing region-tracking state across them.
+    /// See `dispatch_hover_invokes_on_hover_for_a_buttons_empty_move_only`
+    /// below for the relocated behavior.
     #[test]
-    fn hover_and_contact_share_tracking_but_only_hover_invokes_on_hover() {
+    fn update_with_motion_shares_tracking_across_kinds_but_never_invokes_on_hover() {
         let lane = InteractionLane::try_new().expect("lane");
         let handle = lane.dispatch_handle();
         let tracker = MouseTracker::new();
@@ -783,8 +844,78 @@ mod tests {
             tracker.update_with_motion(&event, PointerMotionKind::Contact, &result);
         });
 
-        assert_eq!(hovers.get(), 1);
+        assert_eq!(
+            hovers.get(),
+            0,
+            "update_with_motion must never invoke on_hover -- that moved to dispatch_hover"
+        );
         assert!(tracker.device_active_regions(0).contains(&region_id));
+    }
+
+    /// The relocated half of the split covered above: `dispatch_hover` fires
+    /// `on_hover` for a buttons-empty `Move` (Flutter's `PointerHoverEvent`
+    /// shape) and is a no-op for a `Move` with a button held (a contact
+    /// drag, Flutter's `PointerMoveEvent` shape) -- with no device-kind gate
+    /// and no dependency on prior `update_with_motion` tracking state.
+    #[test]
+    fn dispatch_hover_invokes_on_hover_for_a_buttons_empty_move_only() {
+        use crate::events::PointerButtons;
+
+        let lane = InteractionLane::try_new().expect("lane");
+        let handle = lane.dispatch_handle();
+        let tracker = MouseTracker::new();
+        let hovers = Rc::new(Cell::new(0));
+        let callback_hovers = Rc::clone(&hovers);
+        let target = lane.enter(|| {
+            handle
+                .register_mouse_region(MouseRegionCallbacks {
+                    on_hover: Some(Rc::new(move |_device, _position| {
+                        callback_hovers.set(callback_hovers.get() + 1);
+                    })),
+                    ..MouseRegionCallbacks::default()
+                })
+                .expect("register mouse region")
+        });
+        let region_id = RenderId::new(1);
+        let position = Offset::new(Pixels(10.0), Pixels(10.0));
+        // `make_move_event` defaults `buttons` to `Primary` held (it is meant
+        // for contact-motion tests); a genuine hover-shaped move must clear
+        // it explicitly, matching Flutter's `PointerHoverEvent` (no buttons)
+        // vs `PointerMoveEvent` (buttons held) split.
+        let mut hover_event = make_move_event(position, PointerType::Mouse);
+        let contact_event = make_move_event(position, PointerType::Mouse);
+        let PointerEvent::Move(update) = &mut hover_event else {
+            unreachable!("make_move_event always returns PointerEvent::Move")
+        };
+        update.current.buttons = PointerButtons::new();
+        let mut result = HitTestResult::new();
+        result.add(
+            HitTestEntry::new(region_id)
+                .mouse_annotation(MouseTrackerAnnotation::new(region_id, target)),
+        );
+
+        lane.enter(|| {
+            assert!(tracker.dispatch_hover(&contact_event, &result).is_none());
+        });
+        assert_eq!(
+            hovers.get(),
+            0,
+            "a Move with a button held is a contact drag, not a hover -- no on_hover"
+        );
+
+        lane.enter(|| {
+            assert!(tracker.dispatch_hover(&hover_event, &result).is_none());
+        });
+        assert_eq!(hovers.get(), 1, "a buttons-empty Move is a genuine hover");
+
+        lane.enter(|| {
+            assert!(tracker.dispatch_hover(&hover_event, &result).is_none());
+        });
+        assert_eq!(
+            hovers.get(),
+            2,
+            "dispatch_hover has no device-kind or tracker-state gate -- it fires every call"
+        );
     }
 
     #[test]

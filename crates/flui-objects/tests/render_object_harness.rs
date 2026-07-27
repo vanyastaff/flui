@@ -1080,23 +1080,53 @@ fn harness_mouse_region_uses_one_tracker_target_for_hover_enter_and_exit() {
         flui_interaction::events::PointerType::Mouse,
         Offset::ZERO,
     );
-    let inside_event = flui_interaction::events::make_move_event(
+
+    // `update_with_motion` (enter/exit/cursor tracking) and `dispatch_hover`
+    // (on_hover) are two independent dispatch paths that both resolve the
+    // SAME `MouseRegionTarget` -- one tracker target really does serve all
+    // three callbacks, just not through one call. `make_move_event` defaults
+    // `buttons` to a button held (it targets contact-motion tests), so a
+    // genuine hover-shaped move needs buttons cleared explicitly.
+    let mut hover_event = flui_interaction::events::make_move_event(
         inside_position,
         flui_interaction::events::PointerType::Mouse,
     );
-    lane.enter(|| {
-        tracker.update_with_motion(&inside_event, PointerMotionKind::Hover, &inside);
-    });
-    assert_eq!(enters.get(), 1, "first tracker update enters the region");
-    assert_eq!(hovers.get(), 1, "the same target receives hover");
+    let flui_interaction::events::PointerEvent::Move(hover_update) = &mut hover_event else {
+        unreachable!("make_move_event always returns PointerEvent::Move")
+    };
+    hover_update.current.buttons = flui_interaction::events::PointerButtons::new();
 
     lane.enter(|| {
-        tracker.update_with_motion(&inside_event, PointerMotionKind::Contact, &inside);
+        tracker.update_with_motion(&hover_event, PointerMotionKind::Hover, &inside);
+    });
+    assert_eq!(enters.get(), 1, "first tracker update enters the region");
+    assert_eq!(
+        hovers.get(),
+        0,
+        "on_hover is dispatch_hover's concern, not update_with_motion's",
+    );
+
+    lane.enter(|| {
+        assert!(tracker.dispatch_hover(&hover_event, &inside).is_none());
     });
     assert_eq!(
         hovers.get(),
         1,
-        "contact motion refreshes tracking but must not invoke on_hover",
+        "dispatch_hover resolves the same tracker target enter/exit used",
+    );
+
+    let contact_event = flui_interaction::events::make_move_event(
+        inside_position,
+        flui_interaction::events::PointerType::Mouse,
+    );
+    lane.enter(|| {
+        tracker.update_with_motion(&contact_event, PointerMotionKind::Contact, &inside);
+        assert!(tracker.dispatch_hover(&contact_event, &inside).is_none());
+    });
+    assert_eq!(
+        hovers.get(),
+        1,
+        "a buttons-held move refreshes tracking but must not invoke on_hover",
     );
 
     let mut outside = HitTestResult::new();
