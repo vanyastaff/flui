@@ -64,14 +64,23 @@ pub struct LaidOut {
     current_pointer: Cell<u64>,
 }
 
-/// Default spacing between synthetic pointer samples that record a new
-/// velocity sample (Down, Move, hover-Move, secondary Down) — a plausible
-/// high-frequency pointer-report interval, matching the 8ms sampling period
-/// already assumed elsewhere in the interaction stack (e.g.
-/// `flui_interaction::processing::sampling_clock`). Advancing the binding's
-/// virtual clock by this fixed amount before each such dispatch means the
-/// spacing the velocity tracker records never depends on how much real time
-/// the test process happened to be scheduled between calls.
+/// Default spacing between the synthetic pointer samples that record a
+/// velocity sample — i.e. contact Moves, and only those (see
+/// [`LaidOut::advance_pointer_clock`]).
+///
+/// 8ms is a ~120Hz pointer-report interval: faster than a 60Hz display, which
+/// is what a high-report-rate pointer actually does, and comfortably inside
+/// the velocity tracker's 100ms fit horizon so a short synthetic drag yields
+/// several usable samples. It is deliberately NOT
+/// `flui_interaction::processing::sampling_clock::DEFAULT_SAMPLE_PERIOD`
+/// (16.667ms) — that constant is the *resampling* cadence, the rate at which
+/// coalesced input is replayed toward the frame, a different quantity from
+/// how far apart a test spaces the raw samples it feeds in.
+///
+/// Advancing the binding's virtual clock by this fixed amount before each
+/// such dispatch means the spacing the velocity tracker records never depends
+/// on how much real time the test process happened to be scheduled between
+/// calls.
 const POINTER_SAMPLE_INTERVAL: Duration = Duration::from_millis(8);
 
 /// Loose constraints from `0` up to `max × max` on both axes.

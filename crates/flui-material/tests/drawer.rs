@@ -570,6 +570,76 @@ fn drag_open_then_close_round_trip_updates_the_handles_tracked_state() {
     );
 }
 
+/// `_settle`'s two branches disagree here, which is the whole point: the drag
+/// is released **below** the halfway mark, so the position branch would close
+/// the drawer, while a qualifying opening velocity flings it open. Flutter's
+/// `_settle` checks velocity first (`drawer.dart`), so open is the correct
+/// outcome — and observing it proves the release velocity this harness feeds
+/// the recognizer is real.
+///
+/// Every other drag test in this file deliberately releases *past* 0.5, where
+/// both branches agree and the measured velocity is unobservable — see
+/// `scrim_mounts_when_open_and_a_tap_closes_the_drawer`, whose comment says so
+/// outright. That is why the harness could feed degenerate sample timestamps
+/// for as long as it did without a single test noticing.
+///
+/// Red-check: drop the `clock().advance(POINTER_SAMPLE_INTERVAL)` from
+/// `tests/common::LaidOut::dispatch_pointer_move`. Every velocity sample then
+/// lands on the same instant, the tracker's zero-span guard reports zero
+/// velocity, `_settle` falls through to the position branch, and the drawer
+/// closes instead — failing the assertion below.
+#[test]
+fn a_fast_release_below_halfway_flings_the_drawer_open_rather_than_snapping_shut() {
+    let vsync = Vsync::new();
+    let handle_slot: Rc<RefCell<Option<DrawerHandle>>> = Rc::new(RefCell::new(None));
+    let probe = HandleProbe {
+        slot: Rc::clone(&handle_slot),
+        on_tap: Rc::new(|_handle: &DrawerHandle| {}),
+    };
+
+    let mut laid = lay_out_animated(
+        themed_animated(
+            Scaffold::new()
+                .drawer(Drawer::new())
+                // Widened so the whole drag path stays within the strip's own
+                // hit-test bounds — see the module docs' "harness limitation"
+                // note (no pointer capture in this harness).
+                .drawer_edge_drag_width(400.0)
+                .body(probe),
+            &vsync,
+        ),
+        tight(400.0, 800.0),
+        vsync,
+    );
+    let handle = handle_slot
+        .borrow()
+        .clone()
+        .expect("HandleProbe captures the handle on its first build");
+
+    // Three moves so the least-squares fit gets its `MIN_SAMPLE_SIZE` (3)
+    // samples; the first also spends the recognizer's slop. The last lands at
+    // x=100, i.e. value ~= 100/304 ~= 0.33 — comfortably below the 0.5 the
+    // position branch snaps on. At the harness's 8ms sample spacing the
+    // release velocity is on the order of 10^4 px/s, far above the drawer's
+    // 365 px/s `_kMinFlingVelocity`.
+    laid.dispatch_pointer_down(5.0, 400.0);
+    laid.dispatch_pointer_move(40.0, 400.0);
+    laid.dispatch_pointer_move(70.0, 400.0);
+    laid.dispatch_pointer_move(100.0, 400.0);
+    laid.dispatch_pointer_up(100.0, 400.0);
+
+    for _ in 0..FLING_SETTLE_PUMPS {
+        laid.pump_for(FRAME);
+    }
+
+    assert!(
+        handle.is_drawer_open(),
+        "a fast opening release must fling the drawer open even though it was \
+         let go below halfway; reporting closed means the release velocity \
+         reaching `_settle` was zero"
+    );
+}
+
 // ============================================================================
 // 5. on_drawer_changed: the app author's callback forwards through Scaffold.
 // ============================================================================

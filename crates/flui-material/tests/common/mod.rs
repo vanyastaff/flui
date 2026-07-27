@@ -36,6 +36,16 @@ pub struct LaidOut {
     root_element_id: ElementId,
 }
 
+/// Spacing between the synthetic pointer samples that record a velocity
+/// sample — i.e. contact Moves, and only those.
+///
+/// 8ms is a ~120Hz pointer-report interval: faster than a 60Hz display, as a
+/// high-report-rate pointer genuinely is, and comfortably inside the velocity
+/// tracker's 100ms fit horizon so a short synthetic drag yields several usable
+/// samples. Matches `flui-widgets`' harness so a gesture behaves identically
+/// whichever crate's tests drive it.
+const POINTER_SAMPLE_INTERVAL: Duration = Duration::from_millis(8);
+
 /// Loose constraints from `0` up to `max × max` on both axes.
 pub fn loose(max: f32) -> BoxConstraints {
     BoxConstraints::loose(Size::new(px(max), px(max)))
@@ -246,8 +256,19 @@ impl LaidOut {
             .dispatch_pointer(&event, |position| self.hit_test(position));
     }
 
-    /// A pointer-move to `(x, y)` — drives hover enter/exit.
+    /// A pointer-move to `(x, y)` — drives hover enter/exit and drag.
+    ///
+    /// Advances the binding's virtual clock by [`POINTER_SAMPLE_INTERVAL`]
+    /// first. `DragGestureRecognizer` timestamps its velocity samples from
+    /// `RecognizerBase::now()`, which reads the clock bound to the very
+    /// `GestureArena` this harness hands the tree (`binding.arena()` — see
+    /// `lay_out`); without this, consecutive moves would all land on the same
+    /// instant, the velocity tracker's zero-span guard would report zero
+    /// velocity, and any drag-release this harness drives would silently take
+    /// the position-snap branch instead of the fling branch it was written to
+    /// exercise.
     pub fn dispatch_pointer_move(&self, x: f32, y: f32) {
+        self.binding.clock().advance(POINTER_SAMPLE_INTERVAL);
         let position = Offset::new(px(x), px(y));
         let event = make_move_event(position, PointerType::Mouse);
         self.binding
