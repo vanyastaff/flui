@@ -152,3 +152,6 @@ mod rotated_box_test;
 // ── Business.1 fidelity — pointer hit-test parity ──
 mod pointer_hit_test_test;
 mod pointer_local_position_test;
+
+// ── Business.1 fidelity — MouseRegion parity ────────────────────────────────
+mod mouse_region_test;
