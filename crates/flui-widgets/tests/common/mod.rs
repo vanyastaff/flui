@@ -844,9 +844,15 @@ impl LaidOut {
 
     /// A mouse hover move to `(x, y)` with no active contact.
     pub fn dispatch_pointer_hover(&self, x: f32, y: f32) {
+        self.dispatch_pointer_hover_with_kind(x, y, PointerType::Mouse);
+    }
+
+    /// As [`dispatch_pointer_hover`](Self::dispatch_pointer_hover), but for a
+    /// caller-chosen device kind (e.g. `PointerType::Pen` for stylus tests) —
+    /// the same construction, parameterised instead of hardcoded to `Mouse`.
+    pub fn dispatch_pointer_hover_with_kind(&self, x: f32, y: f32, kind: PointerType) {
         Self::advance_gesture_clock();
-        let mut event =
-            make_move_event_for_id(PointerId::PRIMARY, offset(x, y), PointerType::Mouse);
+        let mut event = make_move_event_for_id(PointerId::PRIMARY, offset(x, y), kind);
         let PointerEvent::Move(update) = &mut event else {
             unreachable!("the test move constructor must produce PointerEvent::Move");
         };

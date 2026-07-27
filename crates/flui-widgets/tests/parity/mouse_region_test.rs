@@ -35,11 +35,12 @@
 //!   pointer ⇒ automatic enter/exit" contract correctly — the mechanism
 //!   exists and is wired at that layer — but this widget-level harness
 //!   cannot observe or prove it.
-//! - **`dispatch_pointer_hover` hardcodes `PointerType::Mouse`.** There is no
-//!   `LaidOut` method for a non-mouse hover device. This file adds a local
-//!   `dispatch_pen_hover` helper (same construction as
-//!   `LaidOut::dispatch_pointer_hover`, `PointerType::Pen` instead) to reach
-//!   the one case that needs it — see [`stylus_hover_delivers_enter_hover_exit_like_a_mouse`].
+//! - **`dispatch_pointer_hover` hardcoded `PointerType::Mouse`.** There was no
+//!   `LaidOut` method for a non-mouse hover device, so this file's harness
+//!   change adds `LaidOut::dispatch_pointer_hover_with_kind` (device-kind
+//!   parameter; `dispatch_pointer_hover` now just calls it with `Mouse`) to
+//!   reach the one case that needs it — see
+//!   [`stylus_hover_delivers_enter_hover_exit_like_a_mouse`].
 //! - **No paint-count, compositing-layer, cursor, or `hasScheduledFrame`
 //!   introspection.** Same category of gap `transform_test.rs` and
 //!   `clip_test.rs` already document for `TransformLayer`/`paints()`
@@ -97,11 +98,13 @@
 //!   equally strong direct check that the delivered `Offset` matches the
 //!   dispatched global position) —
 //!   [`hit_test_transitions_correctly_through_a_2x_transform_scale`]. This is
-//!   the highest-value port in this file: it proves the delivered hit-test
-//!   position under a `Transform::scale` is now correct end-to-end through
-//!   `MouseRegion`, the exact class of bug three hit-test-transform-
-//!   composition fixes just landed for (`b1bb4905`, and the PRs
-//!   `pointer_hit_test_test.rs`/`pointer_local_position_test.rs` cite).
+//!   the highest-value port in this file: the hit-test transform stack
+//!   composes global→local as the walk descends, so the position a region
+//!   receives must be local to it, not an ancestor's untransformed global
+//!   position. `pointer_local_position_test.rs` proves that invariant at the
+//!   lower-level hit-test/dispatch plumbing directly (`Listener` under
+//!   scaled/rotated ancestors); this case proves it holds end-to-end through
+//!   `MouseRegion`'s widget → render-object wiring too.
 //! - `"Callbacks aren't called during build"` (adapted: Flutter's oracle
 //!   drives the rebuild through an internal `setState` inside the
 //!   `HoverClient`/`HoverFeedback` `StatefulWidget`s that own the callbacks;
@@ -118,7 +121,8 @@
 //!   [`opaque_defaults_to_true_and_blocks_the_region_below`].
 //! - `'an empty opaque MouseRegion is effective'` —
 //!   [`a_childless_opaque_mouse_region_still_blocks_everything_beneath_it`].
-//! - `'stylus input works'` (via the local `dispatch_pen_hover` helper —
+//! - `'stylus input works'` (via
+//!   `LaidOut::dispatch_pointer_hover_with_kind(.., PointerType::Pen)` —
 //!   see the harness-capabilities note above) —
 //!   [`stylus_hover_delivers_enter_hover_exit_like_a_mouse`].
 //!
@@ -241,31 +245,12 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use flui_interaction::PointerId;
-use flui_interaction::events::{PointerButtons, PointerType, make_move_event_for_id};
+use flui_interaction::events::PointerType;
 use flui_types::{Alignment, Offset};
 use flui_view::ViewExt;
 use flui_widgets::prelude::*;
 
-use crate::common::LaidOut;
 use crate::harness;
-
-/// Dispatches a stylus/pen-kind hover move — the same construction
-/// [`LaidOut::dispatch_pointer_hover`] uses internally, but with
-/// `PointerType::Pen` in place of the hardcoded `PointerType::Mouse`. There is
-/// no harness method for a non-mouse hover device (see the module doc); this
-/// is test-local rather than a `common/mod.rs` addition because
-/// [`stylus_hover_delivers_enter_hover_exit_like_a_mouse`] is the only case
-/// that needs it.
-fn dispatch_pen_hover(laid: &LaidOut, x: f32, y: f32) {
-    let mut event = make_move_event_for_id(PointerId::PRIMARY, offset(x, y), PointerType::Pen);
-    let flui_interaction::events::PointerEvent::Move(update) = &mut event else {
-        unreachable!("make_move_event_for_id must produce PointerEvent::Move");
-    };
-    update.current.buttons = PointerButtons::new();
-    update.current.pressure = 0.0;
-    laid.dispatch_pointer_event(&event);
-}
 
 fn offset(x: f32, y: f32) -> Offset {
     Offset::new(px(x), px(y))
@@ -810,7 +795,8 @@ fn rebuilding_an_active_region_does_not_refire_enter_or_exit() {
 
 /// Three overlapping regions (A wraps B and C; C sits on top of B and is
 /// opaque by default): hitting the B/C overlap area fires A and C only (C
-/// blocks B); moving out exits C then A.
+/// blocks B, whose own callbacks must never fire); moving out exits C then
+/// A.
 ///
 /// Flutter parity: `group('MouseRegion respects opacity:', ...)` →
 /// `'opaque should default to true'`.
@@ -818,6 +804,7 @@ fn rebuilding_an_active_region_does_not_refire_enter_or_exit() {
 fn opaque_defaults_to_true_and_blocks_the_region_below() {
     let log: Rc<RefCell<Vec<&'static str>>> = Rc::new(RefCell::new(Vec::new()));
     let (ea, ha, xa) = (Rc::clone(&log), Rc::clone(&log), Rc::clone(&log));
+    let (eb, hb, xb) = (Rc::clone(&log), Rc::clone(&log), Rc::clone(&log));
     let (ec, hc, xc) = (Rc::clone(&log), Rc::clone(&log), Rc::clone(&log));
 
     let laid = harness::pump_widget(
@@ -827,12 +814,17 @@ fn opaque_defaults_to_true_and_blocks_the_region_below() {
                 .on_hover(move |_d, _p| ha.borrow_mut().push("hoverA"))
                 .on_exit(move |_d, _p| xa.borrow_mut().push("exitA"))
                 .child(SizedBox::new(150.0, 150.0).child(Stack::new(vec![
-                        Positioned::new(MouseRegion::new())
-                            .left(20.0)
-                            .top(20.0)
-                            .width(80.0)
-                            .height(80.0)
-                            .boxed(),
+                        Positioned::new(
+                            MouseRegion::new()
+                                .on_enter(move |_d, _p| eb.borrow_mut().push("enterB"))
+                                .on_hover(move |_d, _p| hb.borrow_mut().push("hoverB"))
+                                .on_exit(move |_d, _p| xb.borrow_mut().push("exitB")),
+                        )
+                        .left(20.0)
+                        .top(20.0)
+                        .width(80.0)
+                        .height(80.0)
+                        .boxed(),
                         Positioned::new(
                             MouseRegion::new()
                                 .on_enter(move |_d, _p| ec.borrow_mut().push("enterC"))
@@ -850,12 +842,16 @@ fn opaque_defaults_to_true_and_blocks_the_region_below() {
     );
 
     // (75,75) is inside A, B ([20,100]x[20,100]), and C ([50,130]x[50,130]);
-    // C is stacked on top of B and opaque by default, so B never fires.
+    // C is stacked on top of B and opaque by default, so B never fires. B now
+    // carries its own enter/hover/exit callbacks writing distinct labels into
+    // the same log, so if C stopped blocking, "enterB"/"hoverB" would show up
+    // here — this assertion is not satisfied merely by B staying silent for
+    // lack of a callback to fire.
     laid.dispatch_pointer_hover(75.0, 75.0);
     assert_eq!(
         log.borrow().as_slice(),
         &["enterA", "enterC", "hoverC", "hoverA"],
-        "C, opaque by default, must block B underneath"
+        "C, opaque by default, must block B underneath — enterB/hoverB must not appear"
     );
     log.borrow_mut().clear();
 
@@ -933,13 +929,13 @@ fn stylus_hover_delivers_enter_hover_exit_like_a_mouse() {
         harness::screen_of(20.0, 20.0),
     );
 
-    dispatch_pen_hover(&laid, 20.0, 20.0);
+    laid.dispatch_pointer_hover_with_kind(20.0, 20.0, PointerType::Pen);
     assert!(log.borrow().is_empty(), "starts outside the 10x10 box");
 
-    dispatch_pen_hover(&laid, 5.0, 5.0);
+    laid.dispatch_pointer_hover_with_kind(5.0, 5.0, PointerType::Pen);
     assert_eq!(log.borrow().as_slice(), &["enter", "hover"]);
     log.borrow_mut().clear();
 
-    dispatch_pen_hover(&laid, 20.0, 20.0);
+    laid.dispatch_pointer_hover_with_kind(20.0, 20.0, PointerType::Pen);
     assert_eq!(log.borrow().as_slice(), &["exit"]);
 }
