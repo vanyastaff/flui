@@ -711,6 +711,30 @@ impl LaidOut {
     /// itself exactly that), but a caller querying "by render type" wants
     /// the base name regardless of which generic argument a render object
     /// happens to be monomorphized over.
+    pub fn find_all_by_render_type(&self, render_type_name: &str) -> Vec<RenderId> {
+        let logical_root = self.current_root();
+        let owner = self.pipeline_owner.read();
+        let render_tree = owner.render_tree();
+        let mut logical_ids = HashSet::new();
+        let mut pending = vec![logical_root];
+        while let Some(id) = pending.pop() {
+            logical_ids.insert(id);
+            pending.extend(render_tree.children(id).iter().copied());
+        }
+
+        let queried = base_type_name(render_type_name);
+        render_tree
+            .iter()
+            .filter_map(|(id, _node)| {
+                if !logical_ids.contains(&id) {
+                    return None;
+                }
+                let diagnostics = owner.debug_node_diagnostics(id)?;
+                (diagnostics.name().map(base_type_name) == Some(queried)).then_some(id)
+            })
+            .collect()
+    }
+
     /// The composited layer tree from the most recent pumped frame.
     ///
     /// The structural form of [`layer_kinds`](Self::layer_kinds), for the cases
@@ -764,30 +788,6 @@ impl LaidOut {
             }
         }
         kinds
-    }
-
-    pub fn find_all_by_render_type(&self, render_type_name: &str) -> Vec<RenderId> {
-        let logical_root = self.current_root();
-        let owner = self.pipeline_owner.read();
-        let render_tree = owner.render_tree();
-        let mut logical_ids = HashSet::new();
-        let mut pending = vec![logical_root];
-        while let Some(id) = pending.pop() {
-            logical_ids.insert(id);
-            pending.extend(render_tree.children(id).iter().copied());
-        }
-
-        let queried = base_type_name(render_type_name);
-        render_tree
-            .iter()
-            .filter_map(|(id, _node)| {
-                if !logical_ids.contains(&id) {
-                    return None;
-                }
-                let diagnostics = owner.debug_node_diagnostics(id)?;
-                (diagnostics.name().map(base_type_name) == Some(queried)).then_some(id)
-            })
-            .collect()
     }
 
     /// The unique render node whose short type name equals `render_type_name`.

@@ -7,10 +7,15 @@
 //!
 //! Ported cases (7 upstream names, 9 Rust tests — hit-testing under
 //! translation/scale/composition and the alignment+origin combination the
-//! render object's `compute_origin` fix addresses are the portable core; FLUI
-//! has no golden-file/compositing-layer harness, so every `TransformLayer`
-//! matrix/count assertion is dropped, same reason `clip_test.rs` drops
-//! `paints..save()..clipRect()` assertions). Every case below that taps a
+//! render object's `compute_origin` fix addresses are the portable core. The
+//! `TransformLayer` assertions are still dropped, but the reason has split in
+//! two: `LaidOut::layer_kinds` / `LaidOut::layer_tree` now report composited
+//! output, so layer *counts* are measurable — and measuring them exposed a
+//! real paint bug, recorded under the zero-determinant case below. What
+//! remains out of reach is the layer *matrix*: nothing surfaces a composited
+//! layer's own transform, and FLUI has no golden-file harness either, the
+//! separate reason `clip_test.rs` drops `paints..save()..clipRect()`
+//! assertions). Every case below that taps a
 //! target starts from a fresh `AtomicBool::new(false)`, so upstream's pre-tap
 //! `expect(didReceiveTap`/`pointerDown, isFalse)` — asserting only that the
 //! flag is still at its default before any interaction, not a behavior — is
@@ -89,10 +94,19 @@
 //!
 //!   Note the asymmetry this leaves: hit-testing already honours the singular
 //!   case (the three ported cases above pass precisely because `try_inverse`
-//!   returns `None`), while painting does not. The fix is not a test change —
-//!   FLUI centralises the transform push in the paint walk rather than in
-//!   `RenderTransform`, so where the determinant guard belongs is a real
-//!   design call, tracked separately from this port.
+//!   returns `None`), while painting does not.
+//!
+//!   The fix is not a test change, and it belongs on the render object, not in
+//!   the paint walk: `RenderObject::skip_paint` is the existing node-local
+//!   "suppress this subtree entirely" hook, and `RenderOpacity` already uses it
+//!   to express the very same Flutter shape (`if (_alpha == 0) return;`). Two
+//!   details make it exact rather than approximate — `effective_transform`
+//!   wraps the matrix in pure origin translations, which cannot change a
+//!   determinant, so the guard needs no laid-out size; and it must spell out
+//!   `det == 0 || !det.is_finite()` rather than reuse
+//!   `Matrix4::is_invertible`, whose epsilon test answers *true* for an
+//!   infinite scale and would let exactly the non-finite cases below through.
+//!   Tracked separately from this port so the harness change stays reviewable.
 //! - `'Transform.scale'`'s scale-factor assertion (the `m[0][0]` delta only —
 //!   the full composited-layer matrix, including the CENTER-alignment pivot's
 //!   translation component, is a `TransformLayer` assertion, out of scope) —
@@ -149,15 +163,29 @@
 //!   `'Transform.translate/scale/rotate with FilterQuality produces filter
 //!   layer'` (4 cases), `'Transform layers update to match child and
 //!   filterQuality'`, `'Transform layers with filterQuality golden'` — all
-//!   `TransformLayer`/`ImageFilterLayer`/`matchesGoldenFile` assertions; FLUI's
-//!   headless harness has no compositing-layer introspection or golden-image
-//!   capture.
+//!   `TransformLayer`/`ImageFilterLayer`/`matchesGoldenFile` assertions.
+//!
+//!   Layer *counts* among these are no longer harness-blocked
+//!   (`LaidOut::layer_kinds`); what still blocks each is its own missing
+//!   feature or surface: `Transform` has no `filterQuality` at all, so the
+//!   five `ImageFilterLayer` cases have nothing to assert against; the
+//!   layer-matrix halves need a composited layer's own transform, which
+//!   nothing surfaces; and `matchesGoldenFile` needs golden-image capture,
+//!   which does not exist. `'Transform.scale with 0.0 does not paint child
+//!   layers'` is the one case whose blocker is now *measured* rather than
+//!   assumed — see the zero-determinant entry in the Delta ports section
+//!   above, which records the paint bug the measurement exposed.
 //! - `'Transform with nan/inf/-inf value short-circuits rendering'` (3 cases)
-//!   — Flutter's `Transform._computeRotation`/paint path short-circuits to a
-//!   single (root) layer when the matrix carries a non-finite entry; whether
-//!   `RenderTransform` has an equivalent guard is unverified (no layer count
-//!   to assert against either way), and probing it would require the same
-//!   missing layer-count harness.
+//!   — Flutter's paint path short-circuits to a single (root) layer when the
+//!   matrix carries a non-finite entry. This was previously recorded here as
+//!   *unverified* for want of a layer count; it is now measured, and the
+//!   answer is that **`RenderTransform` has no such guard**. A `NAN`, `INFINITY`
+//!   or `NEG_INFINITY` scale composites the identical chain a finite `2.0`
+//!   scale does — the child subtree is painted in full. Same defect, same
+//!   `det == 0 || !det.isFinite` branch of `RenderTransform.paint`
+//!   (`rendering/proxy_box.dart`, 3.44.0), as the zero-determinant case above,
+//!   and blocked on the same design call about where the guard belongs. These
+//!   three cases become portable with that fix, not with a harness change.
 //! - `"Transform.scale() does not accept all three ... to be non-null"`,
 //!   `"Transform.scale() needs at least one of ... to be non-null"` —
 //!   Dart-specific `assert()`-throws tests guarding `Transform.scale`'s

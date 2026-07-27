@@ -4,9 +4,12 @@
 //! `3.44.0`, 15 cases).
 //!
 //! Ported cases (11 upstream names, 11 Rust tests — every geometry, clip-
-//! storage, and hit-test case; FLUI has no golden-file/compositing-layer
-//! harness, so every `getLayers()` layer-count assertion is dropped, same
-//! reason `clip_test.rs`/`transform_test.rs` drop paint-pattern assertions):
+//! storage, and hit-test case. The `getLayers()` layer-count assertions are
+//! dropped, but no longer for want of a harness: `LaidOut::layer_kinds` /
+//! `LaidOut::layer_tree` report composited output now, and what actually
+//! blocks those four cases is `RenderFittedBox`'s missing clip — see "Out of
+//! scope" below. FLUI still has no golden-file harness, the separate reason
+//! `clip_test.rs` drops paint-pattern assertions):
 //! - `'Can size according to aspect ratio'` — [`can_size_according_to_aspect_ratio`].
 //! - `'Can contain child'` — [`can_contain_child`].
 //! - `'Child can cover'` — [`child_can_cover`]. This case exercises
