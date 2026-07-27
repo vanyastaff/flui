@@ -732,11 +732,12 @@ impl ViewState<PageView> for PageViewState {
 // `PageScrollPhysics::create_ballistic_simulation` is tested here at the pure
 // function level (metrics + velocity in, a `Simulation` out) rather than only
 // through a gesture-driven `PageView` in the `parity` integration corpus.
-// Reason: this crate's headless test harness dispatches pointer events with
-// real `Instant::now()` timestamps advanced by only a minimal OS-timer tick
-// (`advance_gesture_clock`), so a synthetic drag's *measured* release
-// velocity is enormous — `Scrollable::on_pan_end` clamps it to Flutter's
-// `kMaxFlingVelocity` (±8,000 px/s), still far above
+// Reason: this crate's headless test harness timestamps synthetic pointer
+// samples off the binding's own virtual clock, advanced by a fixed
+// `POINTER_SAMPLE_INTERVAL` per sample rather than any position input the
+// test chose deliberately — so a synthetic drag's *measured* release
+// velocity is whatever falls out of the pixel deltas a test happened to
+// pick, not a value chosen to land on either side of
 // `PageScrollPhysics::velocity_tolerance_px_per_sec` (20.0). A gesture-driven
 // settle test therefore can't isolate "distance-only rounding" from
 // "velocity-biased" behavior deterministically — exactly the halfway-vs-fling

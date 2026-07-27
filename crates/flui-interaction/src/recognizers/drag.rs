@@ -359,17 +359,22 @@ impl DragGestureRecognizer {
 
     /// Handle pointer down - start tracking
     fn handle_down(&self, position: Offset<Pixels>, kind: PointerType) {
+        // Read the arena's clock, not the OS clock directly: production binds
+        // it to `SystemClock` (so this is `Instant::now()` either way), but a
+        // headless frame driver binds it to a `ManualClock` it advances
+        // explicitly — the same mechanism `LongPressGestureRecognizer` and
+        // `DoubleTapGestureRecognizer` already use — so a test controls
+        // velocity-sample spacing instead of inheriting the wall clock.
+        let now = self.state.now();
         let mut state = self.drag_state.lock();
         state.state = DragPhase::Possible;
-        state.start_time = Some(Instant::now());
+        state.start_time = Some(now);
         state.start_position = None;
         state.last_position = Some(position);
-        state.last_time = Some(Instant::now());
+        state.last_time = Some(now);
         state.device_kind = Some(kind);
         state.velocity_tracker.reset();
-        state
-            .velocity_tracker
-            .add_position(Instant::now(), position);
+        state.velocity_tracker.add_position(now, position);
         drop(state); // Release lock before callback
 
         // Call on_down callback (pointer contact before drag starts)
@@ -393,7 +398,7 @@ impl DragGestureRecognizer {
                     return;
                 };
                 let distance = self.calculate_primary_delta(position - initial_pos);
-                let now = Instant::now();
+                let now = self.state.now();
                 state.last_position = Some(position);
                 state.last_time = Some(now);
                 state.device_kind = Some(kind);
@@ -411,12 +416,11 @@ impl DragGestureRecognizer {
             DragPhase::Started => {
                 // Update drag
                 if let Some(last_pos) = state.last_position {
+                    let now = self.state.now();
                     let delta = self.project_delta(position - last_pos);
                     state.last_position = Some(position);
-                    state.last_time = Some(Instant::now());
-                    state
-                        .velocity_tracker
-                        .add_position(Instant::now(), position);
+                    state.last_time = Some(now);
+                    state.velocity_tracker.add_position(now, position);
 
                     // Per-event, matching `delta` above — not accumulated
                     // across the whole drag. Flutter's `primaryDelta` reports
@@ -463,7 +467,7 @@ impl DragGestureRecognizer {
                 DragStartBehavior::Down => initial,
                 DragStartBehavior::Start => accepted_position,
             };
-            let timestamp = state.last_time.unwrap_or_else(Instant::now);
+            let timestamp = state.last_time.unwrap_or_else(|| self.state.now());
             let kind = state.device_kind.unwrap_or(PointerType::Touch);
             state.state = DragPhase::Started;
             state.start_position = Some(start_position);

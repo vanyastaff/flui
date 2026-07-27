@@ -95,11 +95,12 @@
 //! `fling_velocity_beyond_tolerance_advances_regardless_of_distance`,
 //! `backward_fling_velocity_beyond_tolerance_retreats_regardless_of_distance`)
 //! — not duplicated here as gesture-driven release+settle assertions. Reason:
-//! this crate's headless harness dispatches pointer events with real
-//! `Instant::now()` timestamps advanced by only a minimal OS-timer tick
-//! (`advance_gesture_clock`, `tests/common/mod.rs`), so a synthetic drag's
-//! *measured* release velocity is enormous — `Scrollable::on_pan_end` clamps
-//! it to Flutter's `kMaxFlingVelocity` (±8,000 px/s), still far above
+//! this crate's headless harness timestamps synthetic pointer samples off the
+//! binding's own virtual clock, advanced by a fixed
+//! `POINTER_SAMPLE_INTERVAL` per sample (`tests/common/mod.rs`) rather than
+//! any position input the test chose deliberately — so a synthetic drag's
+//! *measured* release velocity is whatever falls out of the pixel deltas a
+//! test happened to pick, not a value chosen to land on either side of
 //! `PageScrollPhysics::velocity_tolerance_px_per_sec` (20.0). A gesture-driven
 //! settle test can't isolate "distance-only rounding" from "velocity-biased"
 //! behavior deterministically that way — precisely the distinction those four
