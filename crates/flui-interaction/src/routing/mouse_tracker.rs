@@ -3,14 +3,30 @@
 //! The tracker owns per-device enter/exit/cursor state, gated to
 //! `Mouse | Pen` (Flutter's own `MouseTracker.updateWithEvent` gate,
 //! `rendering/mouse_tracker.dart:302`). `MouseRegion::on_hover` is deliberately
-//! **not** part of that device state machine: it is invoked by
-//! [`MouseTracker::dispatch_hover`], with no device-kind gate, mirroring
-//! `RenderMouseRegion.handleEvent` (`rendering/proxy_box.dart`) firing
-//! `onHover` for any `PointerHoverEvent` reaching a hit-test target. Executable
-//! region callbacks do not live in render objects or hit-test entries either
-//! way: hit testing contributes a data-only [`MouseRegionTarget`], and both
-//! methods resolve it through the active owner-local
+//! **not** part of that device state machine, and has no device-kind gate,
+//! mirroring `RenderMouseRegion.handleEvent` (`rendering/proxy_box.dart`)
+//! firing `onHover` for any `PointerHoverEvent` reaching a hit-test target.
+//! Executable region callbacks do not live in render objects or hit-test
+//! entries either way: hit testing contributes a data-only
+//! [`MouseRegionTarget`], resolved through the active owner-local
 //! [`InteractionLane`](super::InteractionLane).
+//!
+//! [`MouseTracker::dispatch_hover`] is the self-contained, directly testable
+//! form of that resolve-and-invoke step and remains public for exactly that.
+//! Production `GestureBinding` delivery does NOT call it: a `Listener` and a
+//! nested `MouseRegion` must fire in hit-test order relative to each other
+//! (Flutter's single per-entry `entry.target.handleEvent` loop,
+//! `gestures/binding.dart:496`), so the binding instead resolves and invokes
+//! pointer targets and mouse-hover regions together in one per-entry walk
+//! (`InteractionDispatchHandle::dispatch_hover_interleaved`,
+//! `routing/interaction_lane.rs`) — calling `dispatch_hover` as its own
+//! separate full pass would deliver every ordinary pointer target before
+//! every region regardless of which is actually the hit path's leaf. Both
+//! paths apply the identical gate (a buttons-empty `Move`) and read the same
+//! lane state; they exist because Rust's ownership boundary makes "resolve
+//! once, deliver in one interleaved order" and "a small function that just
+//! does hover" different call shapes, not because the underlying contract
+//! differs.
 
 use std::{
     cell::RefCell,

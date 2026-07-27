@@ -21,7 +21,7 @@ use flui_types::painting::{Path, Shader};
 use flui_types::{Offset, Pixels, Rect, Size};
 
 use super::hit_test::{EventPropagation, HitTestEntry, transform_pointer_event};
-use crate::events::{DeviceId, PointerEvent, ScrollEventData};
+use crate::events::{DeviceId, PointerEvent, PointerEventExt, ScrollEventData};
 
 static NEXT_LANE_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -476,6 +476,24 @@ impl ResolvedHitRoute {
         }
         first_panic
     }
+}
+
+/// One hit-path entry resolved for
+/// [`InteractionDispatchHandle::dispatch_hover_interleaved`]: whichever of a
+/// pointer-target handler and a mouse-hover callback that entry carries,
+/// captured together so a single per-entry invocation pass can deliver both
+/// in the SAME step rather than as two independent full passes.
+///
+/// Distinct from [`ResolvedHitEntry`]/[`ResolvedHitRoute`] (the batched
+/// pointer-only route Down, cached contact moves, Up, and Cancel dispatch
+/// through): those resolve and invoke pointer targets as their own complete
+/// pass, with no mouse-hover awareness at all, and are cached under a
+/// [`ResolvedRouteToken`] for reuse across a whole pointer sequence. A hover
+/// move never has a cached Down route to reuse, so this type is resolved and
+/// invoked once, inline, with nothing stored in `lane.routes`.
+struct ResolvedHoverInterleavedEntry {
+    pointer: Option<(Rc<HandlerCell>, LocalEventTransform)>,
+    hover_callback: Option<MouseHoverCallback>,
 }
 
 /// The first panic captured while invoking a resolved pointer route.
@@ -1139,6 +1157,159 @@ impl InteractionDispatchHandle {
             .ok_or(InteractionDispatchError::StaleRoute)?;
         drop(removed);
         Ok(())
+    }
+
+    /// Resolve and invoke a hit path's pointer targets and mouse-hover
+    /// regions together, leaf-first, in a single per-entry pass — so a
+    /// `Listener` and a nested `MouseRegion` on the same path fire in
+    /// hit-test order relative to EACH OTHER, matching Flutter's single
+    /// per-entry `entry.target.handleEvent` loop (`gestures/binding.dart:496`,
+    /// `HitTestResult.path` ordered leaf-first per
+    /// `gestures/hit_test.dart:131-132`) instead of two independent full
+    /// passes over the path.
+    ///
+    /// Used only by the coalesced ephemeral hover-move dispatch
+    /// (`GestureBinding::flush_pending_moves_kernel`'s `PendingMove::Hover`
+    /// arm). A hover move never has a cached Down route, so unlike
+    /// [`resolve_pointer_route`](Self::resolve_pointer_route)/
+    /// [`invoke_pointer_route`](Self::invoke_pointer_route) (shared by Down,
+    /// cached contact moves, Up, and Cancel), nothing here is stored in
+    /// `lane.routes` for later reuse or release — resolution and invocation
+    /// both happen in this one call, and every OTHER event kind keeps
+    /// dispatching exactly as before.
+    ///
+    /// Every pointer-target entry is resolved upfront, before any callback
+    /// runs — matching the batched route's re-entrancy guarantee: a callback
+    /// that unregisters a LATER entry's target mid-walk does not suppress
+    /// that later entry, because its handler cell was already captured. A
+    /// foreign-lane pointer target aborts the whole dispatch (matching
+    /// `resolve_pointer_route`'s `?`-propagated validation); a foreign-lane
+    /// or since-unregistered mouse-hover target is skipped and traced
+    /// per-entry instead (matching [`resolve_mouse_region`](Self::resolve_mouse_region)'s
+    /// existing per-annotation behavior), so one absent region does not drop
+    /// its neighbors.
+    pub(super) fn dispatch_hover_interleaved(
+        &self,
+        path: &[HitTestEntry],
+        event: &PointerEvent,
+    ) -> Option<RoutePanic> {
+        if !path
+            .iter()
+            .any(|entry| entry.pointer_target.is_some() || entry.mouse_annotation.is_some())
+        {
+            return None;
+        }
+        let lane = match self.active_lane() {
+            Ok(lane) => lane,
+            Err(error) => {
+                tracing::error!(
+                    ?error,
+                    "hover-interleaved dispatch outside an active interaction lane; \
+                     event not delivered"
+                );
+                return None;
+            }
+        };
+        for target in path.iter().filter_map(|entry| entry.pointer_target) {
+            if let Err(error) = self.validate_lane(target.lane_id) {
+                tracing::error!(
+                    ?error,
+                    "pointer target from a foreign lane during interleaved hover dispatch; \
+                     event not delivered"
+                );
+                return None;
+            }
+        }
+
+        // Mirrors `MouseTracker::dispatch_hover`'s own gate: only a
+        // buttons-empty `Move` carries hover semantics (Flutter's
+        // `PointerHoverEvent` vs `PointerMoveEvent` split at the event-class
+        // level). Gating resolution (not just invocation) means a
+        // non-hover-shaped event never resolves mouse-region callbacks at
+        // all.
+        let hover_qualifies = matches!(
+            event,
+            PointerEvent::Move(update) if update.current.buttons.is_empty()
+        );
+
+        let resolved: Vec<ResolvedHoverInterleavedEntry> = {
+            let targets = lane.targets.borrow();
+            path.iter()
+                .filter_map(|entry| {
+                    let pointer = entry.pointer_target.and_then(|target| {
+                        targets
+                            .get(&target.target_id)
+                            .cloned()
+                            .map(|cell| (cell, LocalEventTransform::capture(entry.transform)))
+                    });
+                    let hover_callback = hover_qualifies
+                        .then_some(entry.mouse_annotation)
+                        .flatten()
+                        .and_then(|annotation| {
+                            match self.resolve_mouse_region(annotation.target) {
+                                Ok(cell) => cell.snapshot().on_hover,
+                                Err(error) => {
+                                    tracing::debug!(
+                                        ?error,
+                                        "mouse-hover target unavailable during interleaved dispatch"
+                                    );
+                                    None
+                                }
+                            }
+                        });
+                    (pointer.is_some() || hover_callback.is_some()).then_some(
+                        ResolvedHoverInterleavedEntry {
+                            pointer,
+                            hover_callback,
+                        },
+                    )
+                })
+                .collect()
+        };
+
+        let device_id = event.device_id();
+        let position = event.position();
+        let mut first_panic = None;
+        for entry in resolved {
+            if let Some((cell, transform)) = entry.pointer {
+                let local_event = match &transform {
+                    LocalEventTransform::Local(local) => {
+                        Some(transform_pointer_event(event, local))
+                    }
+                    LocalEventTransform::Global | LocalEventTransform::NonInvertible => None,
+                };
+                if !matches!(transform, LocalEventTransform::NonInvertible) {
+                    let handler = cell.snapshot();
+                    let delivered = RoutePanic::capture(|| {
+                        handler(local_event.as_ref().unwrap_or(event));
+                    });
+                    RoutePanic::preserve_first(
+                        &mut first_panic,
+                        delivered,
+                        "pointer target (hover-interleaved)",
+                    );
+                    // Same re-entrancy care as `ResolvedHitRoute::invoke`: keep
+                    // the snapshot's destructor inside this transaction rather
+                    // than unwinding before later entries and the caller's
+                    // mandatory cleanup run.
+                    let snapshot_cleanup = RoutePanic::capture(|| drop(handler));
+                    RoutePanic::preserve_first(
+                        &mut first_panic,
+                        snapshot_cleanup,
+                        "pointer target snapshot cleanup (hover-interleaved)",
+                    );
+                }
+            }
+            if let Some(callback) = entry.hover_callback {
+                let delivered = RoutePanic::capture(|| callback(device_id, position));
+                RoutePanic::preserve_first(
+                    &mut first_panic,
+                    delivered,
+                    "mouse hover callback (hover-interleaved)",
+                );
+            }
+        }
+        first_panic
     }
 }
 

@@ -66,14 +66,29 @@
 //! hover delivered `on_hover` in Flutter and nothing at all in FLUI.
 //!
 //! The fix relocates `on_hover` delivery out of the device-state machine
-//! entirely, into `MouseTracker::dispatch_hover` (`mouse_tracker.rs`), called
-//! from the ordinary coalesced pointer-move dispatch path with no
-//! device-kind gate — mirroring `handleEvent` exactly.
+//! entirely, with no device-kind gate — mirroring `handleEvent` exactly —
+//! and rides the ordinary coalesced pointer-move dispatch path rather than
+//! the immediate per-raw-event enter/exit update.
 //! `MouseTracker::update_with_motion` keeps its `Mouse | Pen` gate, now
 //! scoped to enter/exit/cursor only, matching
 //! `MouseTracker.updateWithEvent`'s real scope in Flutter. See
 //! [`detects_hover_from_touch_devices`], now ported below instead of listed
 //! as a divergence.
+//!
+//! Production delivery resolves `on_hover` together with ordinary pointer
+//! targets in one leaf-first pass
+//! (`InteractionDispatchHandle::dispatch_hover_interleaved`,
+//! `crates/flui-interaction/src/routing/interaction_lane.rs`) rather than
+//! calling `MouseTracker::dispatch_hover` as a separate full pass — a
+//! `Listener` and a nested `MouseRegion` must fire in hit-test order
+//! relative to each other, and two independent passes always deliver every
+//! ordinary target before every region regardless of which is actually the
+//! leaf. See
+//! [`hover_fires_leaf_first_through_a_listener_wrapping_a_mouse_region`] and
+//! [`hover_fires_leaf_first_through_a_mouse_region_wrapping_a_listener`].
+//! `MouseTracker::dispatch_hover` itself is unchanged and stays public as
+//! the self-contained, directly testable form of the same resolve-and-invoke
+//! step.
 //!
 //! ### Ported (16 of 43)
 //! - `'hitTestBehavior test - HitTestBehavior.deferToChild/opaque'` —
@@ -256,7 +271,7 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use flui_interaction::events::PointerType;
-use flui_types::{Alignment, Offset};
+use flui_types::{Alignment, Color, Offset};
 use flui_view::ViewExt;
 use flui_widgets::prelude::*;
 
@@ -1002,5 +1017,83 @@ fn detects_hover_from_touch_devices() {
     assert!(
         exits.borrow().is_empty(),
         "on_exit stays gated to Mouse | Pen -- touch must not trigger it"
+    );
+}
+
+// ── Interleaving with other hit-path targets ────────────────────────────────
+
+/// A `Listener`'s `on_pointer_hover` and a nested `MouseRegion`'s `on_hover`
+/// must fire in hit-path order relative to EACH OTHER, not as two separate
+/// full passes over the path (every ordinary pointer target, then every
+/// mouse region). Flutter delivers both through the SAME single per-entry
+/// loop -- `GestureBinding.dispatchEvent`'s `for (final HitTestEntry entry in
+/// hitTestResult.path) { entry.target.handleEvent(...); }`
+/// (`gestures/binding.dart:496`) -- and `HitTestResult.path` is ordered
+/// leaf-first, "the most specific first" (`gestures/hit_test.dart:131-132`).
+/// For `Listener(outer) > MouseRegion(inner)` the inner region is the more
+/// specific target, so its `on_hover` must run before the outer listener's
+/// `on_pointer_hover`.
+///
+/// Not a Flutter-oracle port (no single upstream test isolates this
+/// interleaving); a regression test for FLUI's own two-pass dispatch
+/// (all ordinary targets, then all mouse regions) losing that relative order.
+///
+/// The leaf is a `ColoredBox`, not a bare `SizedBox`: an unpainted `SizedBox`
+/// has no `hitTestSelf` override and no child of its own, so it is correctly
+/// never part of the hit path (matching Flutter) -- a `DeferToChild` listener
+/// wrapping one would never register, which would make this test vacuous
+/// rather than red for the right reason.
+#[test]
+fn hover_fires_leaf_first_through_a_listener_wrapping_a_mouse_region() {
+    let log: Rc<RefCell<Vec<&'static str>>> = Rc::new(RefCell::new(Vec::new()));
+    let (listener_log, region_log) = (Rc::clone(&log), Rc::clone(&log));
+
+    let laid = harness::pump_widget(
+        Listener::new()
+            .on_pointer_hover(move |_event| listener_log.borrow_mut().push("listener"))
+            .child(
+                MouseRegion::new()
+                    .on_hover(move |_device, _position| region_log.borrow_mut().push("region"))
+                    .child(ColoredBox::new(Color::rgb(10, 20, 30))),
+            ),
+        harness::screen_of(20.0, 20.0),
+    );
+
+    laid.dispatch_pointer_hover(10.0, 10.0);
+
+    assert_eq!(
+        log.borrow().as_slice(),
+        &["region", "listener"],
+        "the innermost MouseRegion is the leaf of the hit path and must \
+         receive on_hover before the outer Listener's on_pointer_hover"
+    );
+}
+
+/// As above with the nesting reversed -- pins "leaf-first", not "MouseRegion
+/// always fires first". `MouseRegion(outer) > Listener(inner)`: the inner
+/// `Listener` is now the more specific target and must fire first.
+#[test]
+fn hover_fires_leaf_first_through_a_mouse_region_wrapping_a_listener() {
+    let log: Rc<RefCell<Vec<&'static str>>> = Rc::new(RefCell::new(Vec::new()));
+    let (region_log, listener_log) = (Rc::clone(&log), Rc::clone(&log));
+
+    let laid = harness::pump_widget(
+        MouseRegion::new()
+            .on_hover(move |_device, _position| region_log.borrow_mut().push("region"))
+            .child(
+                Listener::new()
+                    .on_pointer_hover(move |_event| listener_log.borrow_mut().push("listener"))
+                    .child(ColoredBox::new(Color::rgb(10, 20, 30))),
+            ),
+        harness::screen_of(20.0, 20.0),
+    );
+
+    laid.dispatch_pointer_hover(10.0, 10.0);
+
+    assert_eq!(
+        log.borrow().as_slice(),
+        &["listener", "region"],
+        "the innermost Listener is the leaf of the hit path and must receive \
+         on_pointer_hover before the outer MouseRegion's on_hover"
     );
 }

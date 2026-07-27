@@ -688,20 +688,20 @@ impl GestureBinding {
                     }
                 }
                 PendingMove::Hover { event, hit_test } => {
-                    let delivered = self.dispatch_ephemeral(&event, &hit_test);
-                    RoutePanic::preserve_first(&mut first_panic, delivered, "coalesced hover move");
                     // `MouseRegion::on_hover` has no device-kind gate (Flutter
                     // parity: `RenderMouseRegion.handleEvent`, unlike
                     // `MouseTracker.updateWithEvent`'s mouse/stylus-only gate)
                     // and rides the same coalesced dispatch cadence as the
-                    // ordinary hit-test targets above, not the immediate
-                    // per-raw-event enter/exit update.
-                    let hover_delivered = self.mouse_tracker.dispatch_hover(&event, &hit_test);
-                    RoutePanic::preserve_first(
-                        &mut first_panic,
-                        hover_delivered,
-                        "coalesced mouse hover dispatch",
-                    );
+                    // ordinary hit-test targets, not the immediate
+                    // per-raw-event enter/exit update. It interleaves with
+                    // those ordinary targets in ONE per-entry, leaf-first
+                    // walk (`dispatch_ephemeral_with_hover_interleaved`) so a
+                    // `Listener` and a nested `MouseRegion` fire in hit-test
+                    // order relative to each other, not as two separate full
+                    // passes.
+                    let delivered =
+                        self.dispatch_ephemeral_with_hover_interleaved(&event, &hit_test);
+                    RoutePanic::preserve_first(&mut first_panic, delivered, "coalesced hover move");
                     count += 1;
                 }
             }
@@ -1394,6 +1394,31 @@ impl GestureBinding {
         result: &HitTestResult,
     ) -> Option<RoutePanic> {
         let mut first_panic = result.dispatch_capturing_panic(event);
+        let router_panic = self.pointer_router.route_capturing_panics(event);
+        RoutePanic::preserve_first(&mut first_panic, router_panic, "pointer router");
+        first_panic
+    }
+
+    /// As [`dispatch_ephemeral`](Self::dispatch_ephemeral), but every
+    /// ordinary pointer target AND every mouse-hover region on `result`'s
+    /// path deliver together, leaf-first, in one per-entry pass instead of
+    /// [`dispatch_ephemeral`](Self::dispatch_ephemeral)'s ordinary-targets-only
+    /// walk followed by a separate full pass over mouse regions.
+    ///
+    /// Used only for the coalesced hover-move arm of
+    /// [`flush_pending_moves_kernel`](Self::flush_pending_moves_kernel): a
+    /// hover move never has a cached Down route, so this — like
+    /// [`dispatch_ephemeral`](Self::dispatch_ephemeral) — resolves and
+    /// releases everything within this one call, then still runs the root
+    /// pointer router after the walk (Flutter parity: `GestureBinding`'s own
+    /// `handleEvent`, the path's least-specific entry, calls
+    /// `pointerRouter.route(event)` last).
+    fn dispatch_ephemeral_with_hover_interleaved(
+        &self,
+        event: &PointerEvent,
+        result: &HitTestResult,
+    ) -> Option<RoutePanic> {
+        let mut first_panic = result.dispatch_hover_interleaved_capturing_panic(event);
         let router_panic = self.pointer_router.route_capturing_panics(event);
         RoutePanic::preserve_first(&mut first_panic, router_panic, "pointer router");
         first_panic

@@ -585,6 +585,51 @@ impl HitTestResult {
         first_panic
     }
 
+    /// Dispatch a pointer event to every ordinary pointer target AND every
+    /// mouse-hover region on this path together, leaf-first, in a single
+    /// per-entry pass — the interleaved counterpart to
+    /// [`dispatch_capturing_panic`](Self::dispatch_capturing_panic), which
+    /// only knows about ordinary pointer targets.
+    ///
+    /// A `Listener` and a nested `MouseRegion` sharing this path must fire in
+    /// hit-test order relative to EACH OTHER (Flutter's single per-entry
+    /// `entry.target.handleEvent` loop, `gestures/binding.dart:496`); calling
+    /// [`dispatch_capturing_panic`](Self::dispatch_capturing_panic) and
+    /// [`MouseTracker::dispatch_hover`](super::mouse_tracker::MouseTracker::dispatch_hover)
+    /// as two separate full passes always delivers every ordinary target
+    /// before every region, regardless of which is actually the leaf.
+    ///
+    /// Used only by the coalesced ephemeral hover-move dispatch path (see
+    /// [`InteractionDispatchHandle::dispatch_hover_interleaved`](super::interaction_lane::InteractionDispatchHandle::dispatch_hover_interleaved)
+    /// for the resolve/invoke detail); every other event kind keeps
+    /// dispatching through
+    /// [`dispatch_capturing_panic`](Self::dispatch_capturing_panic)
+    /// unchanged.
+    pub(crate) fn dispatch_hover_interleaved_capturing_panic(
+        &self,
+        event: &PointerEvent,
+    ) -> Option<RoutePanic> {
+        if !self
+            .path
+            .iter()
+            .any(|e| e.pointer_target.is_some() || e.mouse_annotation.is_some())
+        {
+            return None;
+        }
+        let handle = match active_dispatch_handle() {
+            Ok(handle) => handle,
+            Err(error) => {
+                tracing::error!(
+                    ?error,
+                    "hover-interleaved dispatch outside an active interaction lane; \
+                     event not delivered"
+                );
+                return None;
+            }
+        };
+        handle.dispatch_hover_interleaved(&self.path, event)
+    }
+
     /// Dispatches a scroll event to all entries.
     pub fn dispatch_scroll(&self, event: &ScrollEventData) -> bool {
         let handle = match active_dispatch_handle() {
