@@ -560,16 +560,24 @@ impl HeadlessBinding {
     ///    `MouseTracker.updateAllDevices` postframe recheck
     ///    (`rendering/mouse_tracker.dart`, called from
     ///    `RendererBinding._handlePersistentFrameCallback`'s
-    ///    `_scheduleMouseTrackerUpdate`). This is what lets a region that
-    ///    appears, moves, or disappears under a **motionless** pointer emit
-    ///    enter/exit with no new pointer motion: the mechanism production
-    ///    already wires (`AppBinding::draw_frame`,
-    ///    `crates/flui-app/src/app/binding.rs`) right after layout/paint,
-    ///    mirrored here against this binding's own tree-bound
-    ///    `PipelineOwner` rather than a caller-supplied hit-test closure —
-    ///    `pump_frame`'s tree-bound branch already owns the same
-    ///    `Arc<RwLock<PipelineOwner>>` production's `hit_test_in_view` wraps,
-    ///    so no new parameter is needed on this already-widely-called method.
+    ///    `_scheduleMouseTrackerUpdate`, still inside the persistent phase,
+    ///    ahead of the post-frame callback queue). This is what lets a
+    ///    region that appears, moves, or disappears under a **motionless**
+    ///    pointer emit enter/exit with no new pointer motion: the mechanism
+    ///    production already wires
+    ///    (`AppBinding::render_frame_entered`,
+    ///    `crates/flui-app/src/app/binding.rs`, driven from inside
+    ///    `Scheduler::drive_frame`'s own pipeline closure —
+    ///    `crates/flui-app/src/app/runner.rs`) right after layout/paint and
+    ///    still inside that same closure, mirrored here against this
+    ///    binding's own tree-bound `PipelineOwner` rather than a
+    ///    caller-supplied hit-test closure — `pump_frame`'s tree-bound
+    ///    branch already owns the same `Arc<RwLock<PipelineOwner>>`
+    ///    production's `hit_test_in_view` wraps, so no new parameter is
+    ///    needed on this already-widely-called method. Step 7 therefore
+    ///    runs inside the same `drive_frame` pipeline closure as step 6,
+    ///    not after it returns — see the inline comment at the call site
+    ///    for why that placement is load-bearing, not cosmetic.
     ///
     /// # The load-bearing invariant
     ///
@@ -639,23 +647,42 @@ impl HeadlessBinding {
                 // the borrow on `self` for the pipeline closure.
                 let scheduler = scheduler.clone();
                 let vsync_time = flui_scheduler::Instant::now();
-                scheduler.drive_frame(vsync_time, || Self::run_pipeline(tree));
+                scheduler.drive_frame(vsync_time, || {
+                    Self::run_pipeline(tree);
 
-                // 9. Re-hit-test every stationary device against the tree
-                //    layout/paint above just committed. Unconditional and
-                //    every frame, matching both the oracle
-                //    (`_scheduleMouseTrackerUpdate`, always posted) and
-                //    production (`AppBinding::draw_frame`, no gate). A
-                //    gesture-only binding has no tree to hit-test, so this
-                //    is a no-op there.
-                if let Some(tree_binding) = tree.as_ref() {
-                    let pipeline_owner = &tree_binding.pipeline_owner;
-                    gestures.mouse_tracker().update_all_devices(|position| {
-                        let mut result = HitTestResult::new();
-                        pipeline_owner.read().hit_test(position, &mut result);
-                        result
-                    });
-                }
+                    // 7. Re-hit-test every stationary device against the
+                    //    tree layout/paint that just committed above,
+                    //    still inside this closure's `PersistentCallbacks`
+                    //    slot — i.e. BEFORE `end_frame` drains post-frame
+                    //    callbacks below, not after `drive_frame` returns.
+                    //    Placement matters: production
+                    //    (`AppBinding::render_frame_entered`,
+                    //    `crates/flui-app/src/app/binding.rs`, invoked from
+                    //    `crates/flui-app/src/app/runner.rs`) calls
+                    //    `update_all_devices` from inside the SAME
+                    //    `drive_frame` pipeline closure it runs its own
+                    //    layout/paint step in, so any post-frame work an
+                    //    enter/exit callback queues (e.g. a rebuild
+                    //    handle) lands in THIS frame's post-frame phase —
+                    //    matching the oracle, where
+                    //    `_scheduleMouseTrackerUpdate` posts
+                    //    `updateAllDevices` from
+                    //    `_handlePersistentFrameCallback`, still inside
+                    //    the persistent phase, ahead of the post-frame
+                    //    queue. Running this after `drive_frame` returns
+                    //    would defer that queued work to a LATER pump
+                    //    instead. Unconditional and every frame; a
+                    //    gesture-only binding has no tree to hit-test, so
+                    //    this is a no-op there.
+                    if let Some(tree_binding) = tree.as_ref() {
+                        let pipeline_owner = &tree_binding.pipeline_owner;
+                        gestures.mouse_tracker().update_all_devices(|position| {
+                            let mut result = HitTestResult::new();
+                            pipeline_owner.read().hit_test(position, &mut result);
+                            result
+                        });
+                    }
+                });
             });
         });
     }

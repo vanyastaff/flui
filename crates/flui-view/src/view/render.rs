@@ -136,14 +136,25 @@ impl<'a> RenderObjectContext<'a> {
             .replace_mouse_region(target, callbacks)?)
     }
 
-    /// Remove a mouse-region target from future annotation resolution.
+    /// Remove a mouse-region target from future annotation resolution,
+    /// without invalidating its shared cell's current contents.
     ///
-    /// Existing tracker state may still retain a strong owner-local cell long
-    /// enough to emit the matching exit callback for a previously active
-    /// annotation. Use
-    /// [`detach_mouse_region`](Self::detach_mouse_region) instead when the
-    /// region's render object is being permanently removed from the tree
-    /// (unmounted) rather than merely rebuilt with an empty callback set.
+    /// A still-mounted region rebuilt with an empty callback set does NOT
+    /// call this — `MouseRegion`'s widget-level sync
+    /// (`crates/flui-widgets/src/interaction/mouse_region.rs`) keeps
+    /// the target registered and calls
+    /// [`replace_mouse_region`](Self::replace_mouse_region) with the empty
+    /// set instead, matching Flutter's `RenderMouseRegion`, which stays a
+    /// valid annotation with null callback fields until `detach()`
+    /// (`rendering/proxy_box.dart`). This method is the lower-level lane
+    /// primitive underneath it: existing tracker state may still retain a
+    /// strong owner-local cell clone long enough to emit a matching exit
+    /// callback for an annotation that was already resolved before this
+    /// call. Use [`detach_mouse_region`](Self::detach_mouse_region) instead
+    /// when the region's render object is being permanently removed from
+    /// the tree (unmounted) — there, the softer contract this method keeps
+    /// would let a stationary device's postframe recheck fire a spurious
+    /// exit for a region that no longer exists.
     ///
     /// # Errors
     ///
@@ -162,8 +173,8 @@ impl<'a> RenderObjectContext<'a> {
     /// [`RenderView::did_unmount_render_object`]
     /// rather than [`unregister_mouse_region`](Self::unregister_mouse_region)
     /// — that method's softer contract (a pending exit may still fire
-    /// against a just-unregistered target) is for a still-mounted region
-    /// rebuilt with an empty callback set, and would let a stationary
+    /// against a just-unregistered target) is for a lower-level lane caller,
+    /// not for this widget-lifecycle case, and would let a stationary
     /// device's postframe recheck fire a spurious exit for a region that no
     /// longer exists.
     ///

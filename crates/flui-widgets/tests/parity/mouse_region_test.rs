@@ -123,27 +123,46 @@
 //! `RenderObject.detach()` walk; a keyed root's existing soft-remove
 //! (parked for `finalize_tree`, descendants untouched) is unchanged.
 //!
-//! A second, narrower fix was needed on top of the reorder:
-//! `MouseTracker` caches a strong `Rc` clone of a mouse-region target's
-//! callback cell (its `annotations` map, keyed by region id) across frames,
-//! so it can resolve an exit callback for a region no longer present in a
-//! fresh hit test. A pre-existing unit test,
-//! `enter_exit_callbacks_are_owner_local_and_exit_uses_previous_annotation`
-//! (`crates/flui-interaction/src/routing/mouse_tracker.rs`), deliberately
-//! asserts that this cached clone must still be able to fire a pending exit
-//! *after* `unregister_mouse_region` — the contract a still-mounted region
-//! rebuilt with an emptied callback set relies on. Reusing that same call
-//! for a genuinely unmounted region would therefore have kept firing the
-//! stale exit even with the reorder fix in place (confirmed empirically:
-//! reverting just this second fix reintroduced the failure). The two cases
-//! needed to diverge, so `InteractionDispatchHandle`/`RenderObjectContext`
-//! gained a second, narrower call —
-//! `detach_mouse_region` — that also invalidates the shared cell's callbacks
-//! in place; `RenderView::did_unmount_render_object` for `MouseRegion` now
-//! calls it instead of the softer `unregister_mouse_region`. This is FLUI's
-//! structural equivalent of Flutter's `validForMouseTracker` flag
-//! (`rendering/proxy_box.dart` `RenderMouseRegion.detach`), which exists for
-//! exactly this reason.
+//! A second, narrower fix was needed on top of the reorder: `MouseTracker`
+//! caches a strong `Rc` clone of a mouse-region target's callback cell (its
+//! `annotations` map, keyed by region id) across frames, so it can resolve
+//! an exit callback for a region no longer present in a fresh hit test. A
+//! permanently unmounted region's render object is gone from the tree for
+//! good, so that cached clone must never fire again once unmount runs —
+//! `InteractionDispatchHandle`/`RenderObjectContext` gained a narrower call,
+//! `detach_mouse_region`, that invalidates the shared cell's callbacks in
+//! place (not just drops the lane's own map entry, which the general-purpose
+//! `unregister_mouse_region` does); `RenderView::did_unmount_render_object`
+//! for `MouseRegion` calls it. This is FLUI's structural equivalent of
+//! Flutter's `validForMouseTracker` flag (`rendering/proxy_box.dart`
+//! `RenderMouseRegion.detach`), which exists for exactly this reason.
+//!
+//! A THIRD bug surfaced once the recheck ran against a still-mounted
+//! region, found by measuring the pointer state across an empty-callback
+//! rebuild rather than assuming the unmount-order fix above was the whole
+//! story: `MouseRegion::sync_mouse_region_target`'s original zero-callbacks
+//! branch called the general-purpose `unregister_mouse_region` — which
+//! drops the lane's own map entry but leaves the shared cell's contents
+//! untouched — and cleared the render object's own `mouse_region_target`.
+//! With no target, `RenderMouseRegion::mouse_tracker_annotation`
+//! (`crates/flui-objects/src/interaction/mouse_region.rs`) stops
+//! contributing an annotation at all, so the very next postframe recheck's
+//! hit test simply does not find the region — indistinguishable, from the
+//! tracker's point of view, from the region having moved away or been
+//! removed. The tracker resolved its still callback-intact cached cell and
+//! fired a stale `on_exit`, even though the region was never removed from
+//! the tree and the pointer never moved. Flutter has no such failure mode:
+//! `RenderMouseRegion.onEnter`/`onHover`/`onExit` are plain nullable fields
+//! on a render object that stays a valid `MouseTrackerAnnotation` for as
+//! long as it is attached (`rendering/proxy_box.dart`) — there is no
+//! "unregister while still attached" step to get wrong. The fix ports that
+//! shape: a still-mounted region now keeps its lane target for its whole
+//! mounted lifetime and replaces its callbacks with the empty set instead
+//! of dropping the registration — see
+//! [`rebuilding_a_hovered_region_down_to_no_callbacks_fires_nothing`],
+//! which pins the corrected behavior (confirmed empirically: reverting only
+//! the widget-level fix, with the recheck and the unmount-order fix both
+//! still in place, reintroduces the stale exit).
 //!
 //! ### Ported (19 of 43)
 //! - `'hitTestBehavior test - HitTestBehavior.deferToChild/opaque'` —
@@ -1141,6 +1160,134 @@ fn stationary_pointer_over_a_region_that_moves_out_triggers_exit_next_frame() {
         &["exit"],
         "a region that moves out from under a stationary pointer must be \
          exited on the very next frame, with no new pointer dispatch"
+    );
+}
+
+/// A still-mounted, still-hit-testable region rebuilt with an empty callback
+/// set must not synthesize a stale exit against the callback set that was
+/// active before the rebuild.
+///
+/// Pins a regression the postframe-recheck wiring above introduced and that
+/// the model, not just the recheck, had to correct: the first version of
+/// `MouseRegion::sync_mouse_region_target` unregistered the lane target the
+/// moment its callback set went empty, which made
+/// `RenderMouseRegion::mouse_tracker_annotation`
+/// (`crates/flui-objects/src/interaction/mouse_region.rs`) stop contributing
+/// an annotation to the very next hit test — the recheck then read that as
+/// "the region departed" and fired the OLD `on_exit`, even though the
+/// region was never removed from the tree and the pointer never moved.
+/// Flutter has no such failure mode: `RenderMouseRegion.onEnter`/`onHover`/
+/// `onExit` are plain nullable fields on a render object that stays a valid
+/// `MouseTrackerAnnotation` for as long as it is attached
+/// (`rendering/proxy_box.dart`) — nulling a field never deregisters
+/// anything. `sync_mouse_region_target` now keeps the lane target
+/// registered across the rebuild and replaces its callbacks with the empty
+/// set instead, matching that.
+///
+/// No Flutter parity id: no `mouse_region_test.dart` case rebuilds a hovered
+/// region down to zero callbacks under a stationary pointer.
+#[test]
+fn rebuilding_a_hovered_region_down_to_no_callbacks_fires_nothing() {
+    let log: Rc<RefCell<Vec<&'static str>>> = Rc::new(RefCell::new(Vec::new()));
+    let (on_enter, on_exit) = (Rc::clone(&log), Rc::clone(&log));
+
+    let mut laid = harness::pump_widget(
+        Align::new(Alignment::CENTER).child(
+            MouseRegion::new()
+                .on_enter(move |_d, _p| on_enter.borrow_mut().push("enter"))
+                .on_exit(move |_d, _p| on_exit.borrow_mut().push("exit"))
+                .child(SizedBox::new(100.0, 100.0)),
+        ),
+        harness::screen_of(300.0, 300.0),
+    );
+
+    laid.dispatch_pointer_hover(150.0, 150.0);
+    assert_eq!(
+        log.borrow().as_slice(),
+        &["enter"],
+        "an ordinary dispatched hover over the mounted region fires enter"
+    );
+    log.borrow_mut().clear();
+
+    // Same region, same position, rebuilt with every callback removed --
+    // still mounted, still hit-testable, at the SAME stationary pointer
+    // position. No new pointer dispatch.
+    laid.pump_widget(
+        Align::new(Alignment::CENTER).child(MouseRegion::new().child(SizedBox::new(100.0, 100.0))),
+    );
+
+    assert_eq!(
+        log.borrow().len(),
+        0,
+        "a still-mounted, still-hit-testable region rebuilt down to no \
+         callbacks must not fire a stale exit against the callback set that \
+         was active before the rebuild; got {:?}",
+        log.borrow()
+    );
+}
+
+/// The postframe recheck runs INSIDE [`HeadlessBinding::pump_frame`]'s own
+/// `Scheduler::drive_frame` pipeline closure, in the same
+/// `PersistentCallbacks` slot as layout/paint — not after `drive_frame`
+/// returns. A post-frame callback an enter/exit callback queues must
+/// therefore land in the SAME frame's post-frame phase, matching production
+/// (`AppBinding::render_frame_entered`, `crates/flui-app/src/app/
+/// binding.rs`, which calls `MouseTracker::update_all_devices` from inside
+/// the same `drive_frame` closure it runs its own layout/paint step in —
+/// see `crates/flui-app/src/app/runner.rs`) and the oracle
+/// (`_scheduleMouseTrackerUpdate` posts `updateAllDevices` from
+/// `_handlePersistentFrameCallback`, still inside the persistent phase,
+/// ahead of the post-frame queue). Running the recheck after `drive_frame`
+/// returns instead — as an earlier version of
+/// [`HeadlessBinding::pump_frame`] did — would defer that queued callback
+/// to a LATER pump.
+///
+/// Goes around [`flui_scheduler::Scheduler::add_post_frame_callback`]
+/// directly rather than through a `StatefulView` rebuild handle: driving
+/// this same ordering question end-to-end through a real widget rebuild is
+/// exactly the "next postframe" cases' missing
+/// `StatefulView`-rebuild-handle-in-callback plumbing (see the not-ported
+/// section below) — disproportionate cost for this one placement check,
+/// which the lower-level scheduler call proves directly.
+#[test]
+fn stationary_enter_queues_a_post_frame_callback_for_the_same_frame() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    let mut laid = harness::pump_widget(
+        Align::new(Alignment::CENTER).child(SizedBox::new(100.0, 100.0)),
+        harness::screen_of(300.0, 300.0),
+    );
+    laid.dispatch_pointer_hover(150.0, 150.0);
+
+    let scheduler = laid.scheduler();
+    let post_frame_fires: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
+    let post_frame_fires_for_enter = Arc::clone(&post_frame_fires);
+
+    // Region mounted under the stationary pointer above -- entered by the
+    // postframe recheck, not by a new pointer dispatch. Its `on_enter`
+    // queues a post-frame callback the same way a widget's rebuild handle
+    // would from inside a real `setState`.
+    laid.pump_widget(
+        Align::new(Alignment::CENTER).child(
+            MouseRegion::new()
+                .on_enter(move |_d, _p| {
+                    let post_frame_fires = Arc::clone(&post_frame_fires_for_enter);
+                    scheduler.add_post_frame_callback(Box::new(move |_timing| {
+                        post_frame_fires.fetch_add(1, Ordering::SeqCst);
+                    }));
+                })
+                .child(SizedBox::new(100.0, 100.0)),
+        ),
+    );
+
+    assert_eq!(
+        post_frame_fires.load(Ordering::SeqCst),
+        1,
+        "a post-frame callback queued from the postframe recheck's enter \
+         callback must fire exactly once, in the SAME pump_widget call that \
+         mounted the region -- not zero times (deferred to a later pump) \
+         and not more than once"
     );
 }
 

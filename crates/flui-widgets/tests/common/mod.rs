@@ -217,6 +217,17 @@ impl LaidOut {
         Rc::clone(&self.focus_manager)
     }
 
+    /// This binding's own scheduler, for a probe that must observe frame
+    /// ordering directly (e.g. whether a callback fired from inside
+    /// [`LaidOut::pump_widget`]'s postframe recheck lands in the SAME
+    /// frame's post-frame phase or a later one). `Scheduler` is `Arc`-backed
+    /// and `Clone`, so cloning it merely shares a handle to the same
+    /// binding-local callback queues [`HeadlessBinding::scheduler`] already
+    /// owns.
+    pub fn scheduler(&self) -> flui_scheduler::Scheduler {
+        self.binding.scheduler().clone()
+    }
+
     /// Run an owner-side action under the headless binding's local runtime scope.
     pub fn enter_owner_scope<R>(&self, callback: impl FnOnce() -> R) -> R {
         self.binding.enter_owner_scope(callback)

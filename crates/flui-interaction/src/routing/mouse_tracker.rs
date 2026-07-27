@@ -709,6 +709,26 @@ mod tests {
         assert_eq!(tracker.current_cursor(), CursorIcon::Default);
     }
 
+    /// Exercises [`InteractionDispatchHandle::unregister_mouse_region`]
+    /// directly, at the lane level — not through
+    /// `MouseRegion`/`RenderMouseRegion`. The `outside_event` fed to the
+    /// second [`MouseTracker::update_with_motion`] call is a genuine change
+    /// of circumstance independent of the unregister: an empty
+    /// `HitTestResult` standing in for the pointer having actually moved off
+    /// the region. That combination — a target unregistered from the lane,
+    /// *and* a fresh hit test that separately no longer finds it — is
+    /// distinct from a still-mounted region rebuilt with an empty callback
+    /// set at a stationary pointer position, which is what
+    /// `rebuilding_a_hovered_region_down_to_no_callbacks_fires_nothing`
+    /// (`crates/flui-widgets/tests/parity/mouse_region_test.rs`) pins:
+    /// `MouseRegion`'s widget-level sync no longer calls
+    /// `unregister_mouse_region` for that case at all (it keeps the target
+    /// registered and replaces its callbacks via `replace_mouse_region`
+    /// instead), so this test's contract — a target already mid-resolution
+    /// can still deliver one last callback against the state that was
+    /// active when it was unregistered — remains correct for what it
+    /// actually tests: the lane-level `unregister_mouse_region` primitive,
+    /// not `MouseRegion`'s rebuild behavior.
     #[test]
     fn enter_exit_callbacks_are_owner_local_and_exit_uses_previous_annotation() {
         let lane = InteractionLane::try_new().expect("lane");

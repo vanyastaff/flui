@@ -1253,12 +1253,19 @@ impl ElementTree {
     ///
     /// The algorithm mirrors `id_reconcile::remove_child` / `collect_subtree_preorder`:
     ///
-    /// 1. Snapshot the subtree in pre-order (parent before children) while all
-    ///    `child_ids` lists are intact.
-    /// 2. For an un-keyed root, free descendants deepest-first via
-    ///    `remove_finalized` BEFORE the root's own removal (step 3). Each
-    ///    element's own `unmount` — e.g. `RenderView::did_unmount_render_object`
-    ///    for `MouseRegion`/`ClipPath`/`Listener`, which unregisters from the
+    /// 1. Peek whether the root is keyed (`registered_global_key_hash`),
+    ///    side-effect-free, before touching anything. A keyed root
+    ///    soft-removes via `remove` and returns immediately — descendants
+    ///    stay untouched, parked for `finalize_tree`'s deferred drain in
+    ///    case the root is reclaimed same-frame via `GlobalKey` — so the
+    ///    subtree snapshot below is never needed for this branch and would
+    ///    be pure wasted work if taken first.
+    /// 2. For an un-keyed root, snapshot the subtree in pre-order (parent
+    ///    before children) while all `child_ids` lists are intact.
+    /// 3. Free descendants deepest-first via `remove_finalized` BEFORE the
+    ///    root's own removal (step 4). Each element's own `unmount` — e.g.
+    ///    `RenderView::did_unmount_render_object` for
+    ///    `MouseRegion`/`ClipPath`/`Listener`, which unregisters from the
     ///    owner-local interaction lane — needs its OWN render object still
     ///    reachable in the render tree to fire at all
     ///    (`RenderBehavior::on_unmount` looks it up by id and silently skips
@@ -1270,17 +1277,30 @@ impl ElementTree {
     ///    orphaning its interaction-lane registration for the life of the
     ///    owner. Processing descendants first makes each one's own render
     ///    removal a no-op by the time the root's cascade reaches it.
-    /// 3. Remove the root via `remove` (soft-removes keyed elements; for a
-    ///    keyed root, descendants are left untouched — parked for
-    ///    `finalize_tree`'s deferred drain in case the root is reclaimed
-    ///    same-frame via `GlobalKey`, exactly as before this function
-    ///    reordered steps 2–3).
+    /// 4. Remove the root via `remove`.
     ///
     /// Complexity: O(n) time + O(n) peak heap for the work-stack (n = subtree
-    /// size), O(h) call-stack for the constant-stack iterative walk.
+    /// size), O(h) call-stack for the constant-stack iterative walk — paid
+    /// only for an un-keyed root; a keyed root is O(1).
     pub(crate) fn remove_subtree(&mut self, id: ElementId, owner: &mut crate::ElementOwner<'_>) {
-        // Snapshot subtree pre-order (parent before children) before touching
-        // any node, while every `child_ids` list is still intact.
+        // A keyed root soft-removes into the inactive queue instead of
+        // freeing outright (`remove`'s own branch, keyed on
+        // `registered_global_key_hash`); descendants stay untouched. Check
+        // this FIRST: it needs no subtree walk, and a keyed root never uses
+        // the snapshot below, so paying for that walk before checking would
+        // be wasted work for every keyed-root removal.
+        let root_is_keyed = self
+            .get(id)
+            .is_some_and(|node| node.registered_global_key_hash().is_some());
+
+        if root_is_keyed {
+            self.remove(id, owner);
+            return;
+        }
+
+        // Un-keyed root: snapshot the subtree pre-order (parent before
+        // children) before touching any node, while every `child_ids` list
+        // is still intact.
         let mut subtree: Vec<ElementId> = Vec::new();
         {
             let mut work_stack: Vec<ElementId> = vec![id];
@@ -1294,26 +1314,11 @@ impl ElementTree {
             }
         }
 
-        // A keyed root soft-removes into the inactive queue instead of
-        // freeing outright (`remove`'s own branch, keyed on
-        // `registered_global_key_hash`); descendants stay untouched exactly
-        // as before this reorder. Peeking the flag here, before touching
-        // anything, is side-effect-free and lets us pick the descendants-
-        // first-or-not branch up front instead of after the fact.
-        let root_is_keyed = self
-            .get(id)
-            .is_some_and(|node| node.registered_global_key_hash().is_some());
-
-        if root_is_keyed {
-            self.remove(id, owner);
-            return;
-        }
-
-        // Un-keyed root: free descendants deepest-first -- `subtree[0]` is
-        // the root itself (removed below, last); iterating the rest in
-        // reverse visits each descendant after all of ITS OWN descendants,
-        // so a nested unmount hook (e.g. a `MouseRegion` two levels down)
-        // always still finds its own render object present.
+        // Free descendants deepest-first -- `subtree[0]` is the root itself
+        // (removed below, last); iterating the rest in reverse visits each
+        // descendant after all of ITS OWN descendants, so a nested unmount
+        // hook (e.g. a `MouseRegion` two levels down) always still finds its
+        // own render object present.
         for &descendant in subtree[1..].iter().rev() {
             self.remove_finalized(descendant, owner);
         }
