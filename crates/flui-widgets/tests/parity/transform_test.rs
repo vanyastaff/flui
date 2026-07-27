@@ -74,6 +74,25 @@
 //!   [`transform_scale_zero_hit_test_misses_the_non_invertible_transform`],
 //!   [`transform_scale_x_zero_hit_test_misses_the_non_invertible_transform`],
 //!   [`transform_scale_y_zero_hit_test_misses_the_non_invertible_transform`].
+//!
+//!   **The layer half of that case is now measurable, and FLUI fails it.**
+//!   `LaidOut::layer_kinds` (see `tests/layer_inspection.rs`) reports the
+//!   composited output, and for all four upstream legs FLUI composites the
+//!   *identical* chain — the child's layers are painted under `scale: 0.0`
+//!   exactly as under `scale: 0.01`. The oracle requires the opposite:
+//!   `RenderTransform.paint` (`rendering/proxy_box.dart`, 3.44.0) computes
+//!   `transform.determinant()` and, when it is `0` or non-finite, clears its
+//!   layer and returns without painting — "if the matrix is singular the
+//!   children would be compressed to a line or single point, instead
+//!   short-circuit and paint nothing." So FLUI paints a subtree that can
+//!   never be visible.
+//!
+//!   Note the asymmetry this leaves: hit-testing already honours the singular
+//!   case (the three ported cases above pass precisely because `try_inverse`
+//!   returns `None`), while painting does not. The fix is not a test change —
+//!   FLUI centralises the transform push in the paint walk rather than in
+//!   `RenderTransform`, so where the determinant guard belongs is a real
+//!   design call, tracked separately from this port.
 //! - `'Transform.scale'`'s scale-factor assertion (the `m[0][0]` delta only —
 //!   the full composited-layer matrix, including the CENTER-alignment pivot's
 //!   translation component, is a `TransformLayer` assertion, out of scope) —

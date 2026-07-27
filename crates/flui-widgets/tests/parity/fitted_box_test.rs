@@ -39,8 +39,21 @@
 //! Out of scope (4 cases): `'FittedBox layers - contain'`, `'FittedBox
 //! layers - cover - horizontal'`, `'FittedBox layers - cover - vertical'`,
 //! `'FittedBox layers - none - clip'` — all four assert `getLayers()`
-//! (`TransformLayer`/`ClipRectLayer`/`OffsetLayer` composition-layer
-//! counts); FLUI's headless harness has no compositing-layer-tree capture.
+//! (`TransformLayer`/`ClipRectLayer`/`OffsetLayer` composition-layer counts).
+//!
+//! The harness reason these once carried is gone: `LaidOut::layer_kinds` /
+//! `LaidOut::layer_tree` now report exactly what a frame composited (see
+//! `tests/layer_inspection.rs`). What blocks them is one layer down and
+//! larger — **`RenderFittedBox` does not clip at all.** Its own module doc
+//! (`crates/flui-objects/src/layout/fitted_box.rs`) says so: `clip_behavior`
+//! is stored and dumped in diagnostics, but "active clipping awaits the
+//! layer-level clip integration". Measured against the four upstream trees,
+//! FLUI composites the identical chain for every one of them — including
+//! `BoxFit::Cover` with `Clip::HardEdge` over an overflowing child, where the
+//! oracle expects a `ClipRectLayer`. Three of the four cases assert a clip
+//! layer that FLUI cannot yet produce, so porting them would pin behavior
+//! that does not exist. They unblock with the clip integration, not with a
+//! test-harness change.
 //!
 //! Framework gap (1 leg, not a full case — folded into the ported
 //! `'Child can be aligned multiple ways in a row'` above rather than double
