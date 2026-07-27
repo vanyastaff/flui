@@ -62,6 +62,8 @@ mod indexed_stack;
 mod inherited_app;
 #[path = "intrinsic_and_overflow.rs"]
 mod intrinsic_and_overflow;
+#[path = "layer_inspection.rs"]
+mod layer_inspection;
 #[path = "layout.rs"]
 mod layout;
 #[path = "layout_builder.rs"]

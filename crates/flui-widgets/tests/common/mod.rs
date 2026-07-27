@@ -735,6 +735,61 @@ impl LaidOut {
             .collect()
     }
 
+    /// The composited layer tree from the most recent pumped frame.
+    ///
+    /// The structural form of [`layer_kinds`](Self::layer_kinds), for the cases
+    /// that need parent/child shape rather than a flat list — upstream's
+    /// `fitted_box_test.dart` walks a single-child *container chain* and asserts
+    /// `firstChild == lastChild` at every step, which a flattened list cannot
+    /// express. Same "a frame must have been pumped" precondition.
+    pub fn layer_tree(&self) -> Option<&flui_rendering::layer::LayerTree> {
+        self.binding.layer_tree()
+    }
+
+    /// The kinds of every layer the most recent pumped frame composited, in
+    /// depth-first pre-order from the root — FLUI's answer to Flutter's
+    /// `tester.layers`.
+    ///
+    /// Layers exist only as a product of **paint**, so this answers questions
+    /// the render tree structurally cannot: whether a widget forced a clip, a
+    /// transform, or an opacity layer into the composited output, and how many.
+    /// `find_all_by_render_type` reports what was *built*; this reports what was
+    /// *composited*, and the two deliberately disagree — a `Transform` whose
+    /// matrix collapses to identity has a render object and no
+    /// `TransformLayer`.
+    ///
+    /// **A frame must have been pumped.** `lay_out` drives the mount frame
+    /// through the pipeline directly and discards its output, and a frame over a
+    /// tree with nothing dirty composites nothing at all — so call
+    /// [`pump`](Self::pump) (or any other pump) before reading, and expect an
+    /// empty vec otherwise. This is stricter than Flutter, where `pumpWidget`
+    /// itself is the frame; the extra call is the honest price of not having the
+    /// mount path retain a tree nothing downstream consumes.
+    pub fn layer_kinds(&self) -> Vec<&'static str> {
+        let Some(tree) = self.binding.layer_tree() else {
+            return Vec::new();
+        };
+        let Some(root) = tree.root() else {
+            return Vec::new();
+        };
+
+        let mut kinds = Vec::with_capacity(tree.len());
+        // Explicit stack rather than recursion: a deep composited tree is
+        // ordinary, and the harness must not be the thing that overflows.
+        let mut stack = vec![root];
+        while let Some(id) = stack.pop() {
+            let Some(layer) = tree.get_layer(id) else {
+                continue;
+            };
+            kinds.push(layer.kind_name());
+            if let Some(children) = tree.children(id) {
+                // Push reversed so siblings pop back in paint order.
+                stack.extend(children.iter().rev().copied());
+            }
+        }
+        kinds
+    }
+
     /// The unique render node whose short type name equals `render_type_name`.
     ///
     /// # Panics

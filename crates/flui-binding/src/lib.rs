@@ -97,6 +97,9 @@ use flui_interaction::{
     GestureBinding, HitTestResult, InteractionDispatchError, InteractionDispatchHandle,
     InteractionLane, PointerEvent,
 };
+// `flui-rendering` re-exports `flui-layer` wholesale, so naming the composited
+// tree costs no extra dependency edge.
+use flui_rendering::layer::LayerTree;
 use flui_rendering::pipeline::PipelineOwner;
 use flui_scheduler::{BoxedTask, LocalPostFrameLane, Scheduler, TaskToken};
 use flui_types::geometry::{Offset, Pixels};
@@ -183,6 +186,21 @@ pub struct HeadlessBinding {
     local_post_frame: LocalPostFrameLane,
     /// Owner-affine interaction callback storage, active across every owner entry.
     interaction_lane: InteractionLane,
+    /// The composited [`LayerTree`] the most recent [`pump_frame`](Self::pump_frame)
+    /// produced, retained rather than dropped.
+    ///
+    /// On screen this value is the frame's whole point — `AppBinding::draw_frame`
+    /// hands it to the compositor. Headlessly there is nothing downstream to hand
+    /// it to, so the pipeline's return value used to be discarded, leaving no way
+    /// to ask what a frame actually composited. Keeping it makes the headless
+    /// frame observable in the same terms as the on-screen one; see
+    /// [`layer_tree`](Self::layer_tree).
+    ///
+    /// `None` before the first frame, and for a gesture-only binding with no
+    /// mounted tree. A frame over a tree with nothing dirty repaints nothing and
+    /// composites nothing, so it also leaves `None` — the field reports what the
+    /// last frame produced, not a cached last-known-good tree.
+    last_layer_tree: Option<LayerTree>,
 }
 
 impl HeadlessBinding {
@@ -218,6 +236,7 @@ impl HeadlessBinding {
             scheduler,
             local_post_frame,
             interaction_lane,
+            last_layer_tree: None,
         })
     }
 
@@ -434,6 +453,24 @@ impl HeadlessBinding {
         self.gestures.mouse_tracker()
     }
 
+    /// The composited layer tree the most recent [`pump_frame`](Self::pump_frame)
+    /// produced, or `None` if that frame composited nothing.
+    ///
+    /// This is the headless counterpart of the value `AppBinding::draw_frame`
+    /// hands the compositor — the same tree, from the same pipeline step, simply
+    /// kept instead of dropped. It answers "what did this frame actually
+    /// composite", which the render tree alone cannot: layers are created by
+    /// *paint*, so a widget that forces a clip, a transform, or an opacity layer
+    /// is visible here and nowhere else.
+    ///
+    /// A frame over a tree with nothing dirty repaints nothing and therefore
+    /// composites nothing, leaving `None` — this reports the last frame's
+    /// output, not the last non-empty output. Mount, then pump, then read.
+    #[must_use]
+    pub fn layer_tree(&self) -> Option<&LayerTree> {
+        self.last_layer_tree.as_ref()
+    }
+
     /// The virtual clock this binding advances each frame.
     ///
     /// Exposed for inspection (`now()` / `elapsed()`). Prefer
@@ -603,6 +640,7 @@ impl HeadlessBinding {
             scheduler,
             local_post_frame,
             interaction_lane,
+            last_layer_tree,
         } = self;
         local_post_frame.enter(|| {
             interaction_lane.enter(|| {
@@ -648,7 +686,7 @@ impl HeadlessBinding {
                 let scheduler = scheduler.clone();
                 let vsync_time = flui_scheduler::Instant::now();
                 scheduler.drive_frame(vsync_time, || {
-                    Self::run_pipeline(tree);
+                    *last_layer_tree = Self::run_pipeline(tree);
 
                     // 7. Re-hit-test every stationary device against the
                     //    tree layout/paint that just committed above,
@@ -690,10 +728,13 @@ impl HeadlessBinding {
     /// The pipeline step: build → layout (with the build-during-layout fixpoint)
     /// → paint, plus the lazy-sliver service pass. Runs inside
     /// [`Scheduler::drive_frame`]'s persistent slot.
-    fn run_pipeline(tree: &mut Option<TreeBinding>) {
-        let Some(tree_binding) = tree.as_mut() else {
-            return;
-        };
+    ///
+    /// Returns the composited [`LayerTree`] this frame produced — `None` for a
+    /// gesture-only binding, and `None` when nothing was dirty enough to
+    /// repaint. `pump_frame` stores it in
+    /// [`last_layer_tree`](Self::last_layer_tree).
+    fn run_pipeline(tree: &mut Option<TreeBinding>) -> Option<LayerTree> {
+        let tree_binding = tree.as_mut()?;
 
         // Drain the build inbox, filled by the vsync tick and the async-driver
         // poll that ran before this closure.
@@ -716,7 +757,7 @@ impl HeadlessBinding {
         // A headless frame over an already-mounted, rooted tree must succeed;
         // a pipeline error here is a regression, surfaced loudly (the harness
         // and production frame path expect the same).
-        result.expect("headless pump_frame: pipeline run_frame should succeed");
+        let layer_tree = result.expect("headless pump_frame: pipeline run_frame should succeed");
 
         // Service lazy-sliver child requests. Layout may have emitted build
         // requests for absent children and retain-band signals for eviction.
@@ -727,6 +768,8 @@ impl HeadlessBinding {
         tree_binding
             .build_owner
             .service_child_requests(&mut tree_binding.tree, &tree_binding.pipeline_owner);
+
+        layer_tree
     }
 }
 
