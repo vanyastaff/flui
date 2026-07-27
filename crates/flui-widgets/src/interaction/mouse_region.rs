@@ -129,18 +129,39 @@ impl MouseRegion {
 
     /// Keep the render object's one mouse-region target in sync with the
     /// complete enter/hover/exit callback set.
+    ///
+    /// A target, once registered, stays registered for as long as the render
+    /// object stays mounted — including across a rebuild that empties the
+    /// callback set down to none. This mirrors Flutter's `RenderMouseRegion`,
+    /// which stays a valid `MouseTrackerAnnotation` with null `onEnter`/
+    /// `onHover`/`onExit` fields for as long as it is attached; there is no
+    /// "unregister while still attached" concept to port
+    /// (`rendering/proxy_box.dart`: `onEnter`/`onHover`/`onExit` are plain
+    /// nullable fields, and `validForMouseTracker` only flips false from
+    /// `detach()`). Dropping the lane registration here instead would make
+    /// `RenderMouseRegion::mouse_tracker_annotation`
+    /// (`crates/flui-objects/src/interaction/mouse_region.rs`) stop
+    /// contributing an annotation to hit-test results the moment callbacks
+    /// are emptied (it requires `Some(target)`), which a stationary
+    /// device's postframe recheck reads as "the region departed" and
+    /// resolves a stale exit against the callback set that was active
+    /// before the rebuild — see
+    /// [`did_unmount_render_object`](Self::did_unmount_render_object) below
+    /// for the call that DOES need to end registration, because there the
+    /// render object is truly leaving the tree.
     fn sync_mouse_region_target(
         &self,
         ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut RenderMouseRegion,
     ) {
-        match (self.has_callbacks(), render_object.mouse_region_target()) {
-            (true, Some(target)) => {
+        match render_object.mouse_region_target() {
+            Some(target) => {
                 if let Err(error) = ctx.replace_mouse_region(target, self.mouse_callbacks()) {
                     tracing::warn!(?error, "MouseRegion callback replacement failed");
                 }
             }
-            (true, None) => match ctx.register_mouse_region(self.mouse_callbacks()) {
+            None if self.has_callbacks() => match ctx.register_mouse_region(self.mouse_callbacks())
+            {
                 Ok(target) => render_object.set_mouse_region_target(Some(target)),
                 Err(error) => tracing::debug!(
                     ?error,
@@ -148,13 +169,7 @@ impl MouseRegion {
                      enter/exit events will not be delivered"
                 ),
             },
-            (false, Some(target)) => {
-                if let Err(error) = ctx.unregister_mouse_region(target) {
-                    tracing::debug!(?error, "MouseRegion target unregistration failed");
-                }
-                render_object.set_mouse_region_target(None);
-            }
-            (false, None) => {}
+            None => {}
         }
     }
 }
@@ -185,8 +200,14 @@ impl RenderView for MouseRegion {
         render_object: &mut Self::RenderObject,
     ) {
         if let Some(target) = render_object.mouse_region_target() {
-            if let Err(error) = ctx.unregister_mouse_region(target) {
-                tracing::debug!(?error, "MouseRegion target unregistration failed");
+            // `detach_mouse_region`, not `unregister_mouse_region`: this
+            // render object is being permanently removed from the tree, so
+            // any pending exit a stationary device's postframe recheck might
+            // otherwise resolve against it must not fire. See
+            // `RenderObjectContext::detach_mouse_region`'s doc for why the
+            // two calls differ.
+            if let Err(error) = ctx.detach_mouse_region(target) {
+                tracing::debug!(?error, "MouseRegion target detach failed");
             }
             render_object.set_mouse_region_target(None);
         }

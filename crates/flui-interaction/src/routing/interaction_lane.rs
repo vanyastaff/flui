@@ -825,20 +825,81 @@ impl InteractionDispatchHandle {
         Ok(())
     }
 
-    /// Remove a mouse-region target from future annotation resolution.
+    /// Remove a mouse-region target from future annotation resolution,
+    /// without touching the target's shared cell contents.
+    ///
+    /// This is a lane-level primitive, not the still-mounted-region case: a
+    /// render object that is merely rebuilt with an empty callback set stays
+    /// registered (see `MouseRegion::sync_mouse_region_target`,
+    /// `crates/flui-widgets/src/interaction/mouse_region.rs`, which calls
+    /// [`replace_mouse_region`](Self::replace_mouse_region) with the empty
+    /// set instead of this method — Flutter's `RenderMouseRegion` has no
+    /// "unregister while attached" concept either, its callback fields are
+    /// just nulled in place). What remains for this method is releasing a
+    /// target this lane no longer wants to resolve fresh annotations
+    /// against. Because it only drops the *lane's* map entry, an existing
+    /// strong `Rc` clone held elsewhere — e.g.
+    /// [`MouseTracker`](super::MouseTracker)'s own per-region cache,
+    /// populated the last time this target was resolved from a hit test —
+    /// keeps observing whatever the cell's contents happen to be until that
+    /// clone is itself dropped, which is how a target already mid-resolution
+    /// can still deliver one last, correctly-scoped callback. Use
+    /// [`detach_mouse_region`](Self::detach_mouse_region) instead when the
+    /// goal is to guarantee no further delivery at all, including from an
+    /// already-cached clone — that is what a permanently unmounted render
+    /// object needs.
     pub fn unregister_mouse_region(
         &self,
         target: MouseRegionTarget,
     ) -> Result<(), InteractionDispatchError> {
+        drop(self.take_mouse_region_cell(target)?);
+        Ok(())
+    }
+
+    /// Remove a mouse-region target AND immediately invalidate its cell's
+    /// callbacks in place, for a region whose render object is being
+    /// permanently detached (unmounted) — see
+    /// [`unregister_mouse_region`](Self::unregister_mouse_region) for the
+    /// softer lane-level primitive and why a still-mounted, rebuilt-with-no-
+    /// callbacks region uses neither of these two methods at all.
+    ///
+    /// [`MouseTracker`](super::MouseTracker) caches an `Rc` clone of this
+    /// same cell across frames (its `annotations` map, keyed by region id)
+    /// so it can resolve an exit callback for a region that no longer
+    /// appears in a fresh hit test. Removing only this lane's own map entry
+    /// leaves that cached clone's callbacks intact, so a stationary
+    /// device's next postframe recheck
+    /// ([`MouseTracker::update_all_devices`](super::MouseTracker::update_all_devices))
+    /// would still invoke the unmounted region's `on_exit` — the spurious
+    /// exit Flutter's `validForMouseTracker` flag
+    /// (`rendering/proxy_box.dart` `RenderMouseRegion.detach`) exists to
+    /// prevent. Overwriting the shared cell's contents here is FLUI's
+    /// equivalent invalidation: every remaining holder of the `Rc`,
+    /// including that cached clone, observes empty callbacks on its next
+    /// `snapshot()`.
+    pub fn detach_mouse_region(
+        &self,
+        target: MouseRegionTarget,
+    ) -> Result<(), InteractionDispatchError> {
+        let cell = self.take_mouse_region_cell(target)?;
+        drop(cell.replace(MouseRegionCallbacks::default()));
+        Ok(())
+    }
+
+    /// Shared removal step for [`unregister_mouse_region`](Self::unregister_mouse_region)
+    /// and [`detach_mouse_region`](Self::detach_mouse_region): take this
+    /// lane's own map entry, leaving the caller to decide whether the
+    /// returned cell's callbacks should also be invalidated in place.
+    fn take_mouse_region_cell(
+        &self,
+        target: MouseRegionTarget,
+    ) -> Result<Rc<MouseRegionCell>, InteractionDispatchError> {
         let lane = self.active_lane()?;
         self.validate_lane(target.lane_id)?;
-        let removed = lane
-            .mouse_targets
+        lane.mouse_targets
             .borrow_mut()
             .remove(&target.target_id)
-            .ok_or(InteractionDispatchError::TargetGone)?;
-        drop(removed);
-        Ok(())
+            .ok_or(InteractionDispatchError::TargetGone)
     }
 
     pub(super) fn resolve_mouse_region(
