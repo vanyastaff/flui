@@ -528,6 +528,20 @@ fn update_child(
 /// active and registered; E3's contract here is that every descendant unmounts
 /// exactly once.
 ///
+/// Order for an unkeyed top: descendants unmount deepest-first BEFORE the
+/// top, not after. An element's own `unmount` (`RenderBehavior::on_unmount`)
+/// looks up its render object by id and calls the view-level
+/// `did_unmount_render_object` hook ONLY if that lookup still succeeds —
+/// which is how `MouseRegion`/`ClipPath`/`Listener` unregister from the
+/// owner-local interaction lane on unmount. The top's own render-object
+/// removal cascades (`PipelineOwner::remove_render_object` recurses over
+/// descendants), so unmounting the top first would delete every descendant's
+/// render object before that descendant's own `unmount` ever ran — silently
+/// skipping its view-level hook and orphaning its interaction-lane
+/// registration for the life of the owner. Freeing descendants first makes
+/// each one's own render-object removal (part of its own `unmount`) a no-op
+/// by the time the top's cascade would otherwise have reached it.
+///
 /// Stale / absent ids are a no-op inside `remove` / `remove_finalized`.
 fn remove_child(tree: &mut ElementTree, id: ElementId, owner: &mut crate::ElementOwner<'_>) {
     // Snapshot the subtree pre-order (parent before children) BEFORE
@@ -537,18 +551,26 @@ fn remove_child(tree: &mut ElementTree, id: ElementId, owner: &mut crate::Elemen
     let mut subtree = Vec::new();
     collect_subtree_preorder(tree, id, &mut subtree);
 
-    // Remove the top. `Some` ⇒ eager (unkeyed) free; `None` ⇒ soft-removed
-    // (keyed) and parked for `finalize_tree`.
-    let removed_eagerly = tree.remove(id, owner).is_some();
-
-    if removed_eagerly {
-        // Free the orphaned descendants deepest-first. `subtree[0]` is the
-        // top (already removed); reverse of pre-order visits every parent
-        // after all of its descendants.
-        for &descendant in subtree[1..].iter().rev() {
-            tree.remove_finalized(descendant, owner);
-        }
+    // A keyed top soft-removes into the inactive queue instead of freeing
+    // outright, leaving descendants untouched for `finalize_tree`'s deferred
+    // drain (same-frame GlobalKey retake window) — peeking the flag before
+    // touching anything lets us pick the descendants-first-or-not branch up
+    // front rather than after the fact.
+    if tree
+        .get(id)
+        .is_some_and(|node| node.registered_global_key_hash().is_some())
+    {
+        tree.remove(id, owner);
+        return;
     }
+
+    // Unkeyed top: free the descendants deepest-first — `subtree[0]` is the
+    // top itself (removed last, below); reverse of pre-order visits every
+    // parent after all of its descendants.
+    for &descendant in subtree[1..].iter().rev() {
+        tree.remove_finalized(descendant, owner);
+    }
+    tree.remove(id, owner);
 }
 
 /// Collect `id` and its whole subtree in pre-order (parent before

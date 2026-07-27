@@ -140,7 +140,10 @@ impl<'a> RenderObjectContext<'a> {
     ///
     /// Existing tracker state may still retain a strong owner-local cell long
     /// enough to emit the matching exit callback for a previously active
-    /// annotation.
+    /// annotation. Use
+    /// [`detach_mouse_region`](Self::detach_mouse_region) instead when the
+    /// region's render object is being permanently removed from the tree
+    /// (unmounted) rather than merely rebuilt with an empty callback set.
     ///
     /// # Errors
     ///
@@ -151,6 +154,28 @@ impl<'a> RenderObjectContext<'a> {
         target: flui_interaction::routing::MouseRegionTarget,
     ) -> Result<(), RenderObjectContextError> {
         Ok(self.dispatch_handle()?.unregister_mouse_region(target)?)
+    }
+
+    /// Remove a mouse-region target AND immediately invalidate its
+    /// callbacks, for a region whose render object is being permanently
+    /// detached (unmounted). Call this from
+    /// [`RenderView::did_unmount_render_object`]
+    /// rather than [`unregister_mouse_region`](Self::unregister_mouse_region)
+    /// — that method's softer contract (a pending exit may still fire
+    /// against a just-unregistered target) is for a still-mounted region
+    /// rebuilt with an empty callback set, and would let a stationary
+    /// device's postframe recheck fire a spurious exit for a region that no
+    /// longer exists.
+    ///
+    /// # Errors
+    ///
+    /// Returns the lane's typed dispatch error for wrong/detached owner state
+    /// or for a target already removed from the active owner lane.
+    pub fn detach_mouse_region(
+        &self,
+        target: flui_interaction::routing::MouseRegionTarget,
+    ) -> Result<(), RenderObjectContextError> {
+        Ok(self.dispatch_handle()?.detach_mouse_region(target)?)
     }
 
     /// Register a path clipper in the active owner lane.

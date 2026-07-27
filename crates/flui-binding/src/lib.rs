@@ -555,6 +555,21 @@ impl HeadlessBinding {
     ///    that inbox at its start and reconciles.
     /// 6. **Run the pipeline frame** (tree-bound only): `PipelineOwner::run_frame`
     ///    lays out, paints, and composites.
+    /// 7. **Re-hit-test every stationary pointing device** (tree-bound only)
+    ///    against the tree this frame just laid out — Flutter's implicit
+    ///    `MouseTracker.updateAllDevices` postframe recheck
+    ///    (`rendering/mouse_tracker.dart`, called from
+    ///    `RendererBinding._handlePersistentFrameCallback`'s
+    ///    `_scheduleMouseTrackerUpdate`). This is what lets a region that
+    ///    appears, moves, or disappears under a **motionless** pointer emit
+    ///    enter/exit with no new pointer motion: the mechanism production
+    ///    already wires (`AppBinding::draw_frame`,
+    ///    `crates/flui-app/src/app/binding.rs`) right after layout/paint,
+    ///    mirrored here against this binding's own tree-bound
+    ///    `PipelineOwner` rather than a caller-supplied hit-test closure —
+    ///    `pump_frame`'s tree-bound branch already owns the same
+    ///    `Arc<RwLock<PipelineOwner>>` production's `hit_test_in_view` wraps,
+    ///    so no new parameter is needed on this already-widely-called method.
     ///
     /// # The load-bearing invariant
     ///
@@ -568,7 +583,7 @@ impl HeadlessBinding {
     /// next frame — a one-frame animation lag. The order is what makes an
     /// animation visible **same-frame**.
     ///
-    /// Steps 5–6 run only when the binding is tree-bound
+    /// Steps 5–7 run only when the binding is tree-bound
     /// ([`with_tree`](Self::with_tree)); a gesture-only binding stops after step 4,
     /// so a bare controller can still be driven deterministically.
     pub fn pump_frame(&mut self, dt: Duration) {
@@ -625,6 +640,22 @@ impl HeadlessBinding {
                 let scheduler = scheduler.clone();
                 let vsync_time = flui_scheduler::Instant::now();
                 scheduler.drive_frame(vsync_time, || Self::run_pipeline(tree));
+
+                // 9. Re-hit-test every stationary device against the tree
+                //    layout/paint above just committed. Unconditional and
+                //    every frame, matching both the oracle
+                //    (`_scheduleMouseTrackerUpdate`, always posted) and
+                //    production (`AppBinding::draw_frame`, no gate). A
+                //    gesture-only binding has no tree to hit-test, so this
+                //    is a no-op there.
+                if let Some(tree_binding) = tree.as_ref() {
+                    let pipeline_owner = &tree_binding.pipeline_owner;
+                    gestures.mouse_tracker().update_all_devices(|position| {
+                        let mut result = HitTestResult::new();
+                        pipeline_owner.read().hit_test(position, &mut result);
+                        result
+                    });
+                }
             });
         });
     }

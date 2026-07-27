@@ -185,8 +185,14 @@ impl RenderView for MouseRegion {
         render_object: &mut Self::RenderObject,
     ) {
         if let Some(target) = render_object.mouse_region_target() {
-            if let Err(error) = ctx.unregister_mouse_region(target) {
-                tracing::debug!(?error, "MouseRegion target unregistration failed");
+            // `detach_mouse_region`, not `unregister_mouse_region`: this
+            // render object is being permanently removed from the tree, so
+            // any pending exit a stationary device's postframe recheck might
+            // otherwise resolve against it must not fire. See
+            // `RenderObjectContext::detach_mouse_region`'s doc for why the
+            // two calls differ.
+            if let Err(error) = ctx.detach_mouse_region(target) {
+                tracing::debug!(?error, "MouseRegion target detach failed");
             }
             render_object.set_mouse_region_target(None);
         }

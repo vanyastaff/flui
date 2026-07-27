@@ -22,19 +22,6 @@
 //!   `#[cfg(test)]` unit tests inside `mouse_tracker.rs` itself. A "mouse
 //!   connects/disconnects" event cannot be synthesized through
 //!   [`LaidOut`](crate::common::LaidOut)'s public dispatch surface.
-//! - **No stationary-device postframe recheck reachable from the widget-test
-//!   harness.** `MouseTracker::update_all_devices` — the mechanism that
-//!   re-hit-tests every tracked device after a frame that changed the tree
-//!   shape, with no new pointer motion (Flutter's implicit
-//!   `MouseTracker.schedulePostFrameCheck`) — is called exactly once in the
-//!   whole workspace: `crates/flui-app/src/app/binding.rs:1257`, inside
-//!   `Presentation::render_frame_entered`. `flui-binding`'s
-//!   `HeadlessBinding::pump_frame` (what `LaidOut::pump_widget`/`pump` drive)
-//!   never calls it. A production FLUI app running through `flui-app`'s real
-//!   frame loop reproduces Flutter's "widget moves under a stationary
-//!   pointer ⇒ automatic enter/exit" contract correctly — the mechanism
-//!   exists and is wired at that layer — but this widget-level harness
-//!   cannot observe or prove it.
 //! - **`dispatch_pointer_hover` hardcoded `PointerType::Mouse`.** There was no
 //!   `LaidOut` method for a non-mouse hover device, so this file's harness
 //!   change adds `LaidOut::dispatch_pointer_hover_with_kind` (device-kind
@@ -90,7 +77,75 @@
 //! the self-contained, directly testable form of the same resolve-and-invoke
 //! step.
 //!
-//! ### Ported (16 of 43)
+//! ### Stationary-device postframe recheck, now wired into the headless
+//! frame path
+//!
+//! `MouseTracker::update_all_devices` — the mechanism that re-hit-tests
+//! every tracked device after a frame that changed the tree shape, with no
+//! new pointer motion (Flutter's implicit `MouseTracker.updateAllDevices`
+//! postframe recheck, `rendering/mouse_tracker.dart:366`) — used to be
+//! called exactly once in the whole workspace:
+//! `crates/flui-app/src/app/binding.rs`, inside the production frame path.
+//! `flui-binding`'s `HeadlessBinding::pump_frame` (what
+//! `LaidOut::pump_widget`/`pump`/`tick` drive) never called it, so this
+//! widget-test harness could not observe or prove Flutter's "widget moves
+//! under a stationary pointer ⇒ automatic enter/exit" contract even though
+//! production reproduced it correctly. `pump_frame` now runs the same
+//! recheck, every frame, unconditionally, for a tree-bound binding —
+//! against its own `PipelineOwner` directly (the tree-bound branch already
+//! owns the same `Arc<RwLock<PipelineOwner>>` production's
+//! `hit_test_in_view` wraps, so no caller-supplied hit-test closure needed
+//! adding to `pump_frame`'s signature). See the doc on
+//! [`HeadlessBinding::pump_frame`](flui_binding::HeadlessBinding::pump_frame)
+//! for the full ordering.
+//!
+//! Wiring the recheck surfaced a real, pre-existing bug, independent of this
+//! file's own scope but directly exposed by exercising the recheck for the
+//! first time: [`removing_a_hovered_region_does_not_synthesize_an_exit`]
+//! (already ported, previously passing only because nothing rechecked a
+//! stationary device) started failing — a removed, still-hovered region's
+//! stale `on_exit` fired spuriously. The root cause was two independent
+//! copies of the same ordering bug, in `ElementTree::remove_subtree`
+//! (`crates/flui-view/src/tree/element_tree.rs`) and `id_reconcile::remove_child`
+//! (`crates/flui-view/src/tree/id_reconcile.rs`, the path an ordinary
+//! `pump_widget` root-swap actually takes): both unmounted the root of a
+//! removed subtree *before* its descendants, and the root's own
+//! render-object removal cascades (`PipelineOwner::remove_render_object`
+//! recurses over descendants), deleting every descendant's render object
+//! before that descendant's own `unmount` — and therefore its
+//! `RenderView::did_unmount_render_object` hook, which is how
+//! `MouseRegion`/`ClipPath`/`Listener` unregister from the owner-local
+//! interaction lane — ever ran. The hook was silently skipped for any
+//! interaction-lane-registering widget nested under a removed ancestor, not
+//! just `MouseRegion`: a permanent registration leak, not merely a
+//! mouse-tracker quirk. Both functions now unmount descendants deepest-first
+//! *before* the (unkeyed) root, mirroring Flutter's own bottom-up
+//! `RenderObject.detach()` walk; a keyed root's existing soft-remove
+//! (parked for `finalize_tree`, descendants untouched) is unchanged.
+//!
+//! A second, narrower fix was needed on top of the reorder:
+//! `MouseTracker` caches a strong `Rc` clone of a mouse-region target's
+//! callback cell (its `annotations` map, keyed by region id) across frames,
+//! so it can resolve an exit callback for a region no longer present in a
+//! fresh hit test. A pre-existing unit test,
+//! `enter_exit_callbacks_are_owner_local_and_exit_uses_previous_annotation`
+//! (`crates/flui-interaction/src/routing/mouse_tracker.rs`), deliberately
+//! asserts that this cached clone must still be able to fire a pending exit
+//! *after* `unregister_mouse_region` — the contract a still-mounted region
+//! rebuilt with an emptied callback set relies on. Reusing that same call
+//! for a genuinely unmounted region would therefore have kept firing the
+//! stale exit even with the reorder fix in place (confirmed empirically:
+//! reverting just this second fix reintroduced the failure). The two cases
+//! needed to diverge, so `InteractionDispatchHandle`/`RenderObjectContext`
+//! gained a second, narrower call —
+//! `detach_mouse_region` — that also invalidates the shared cell's callbacks
+//! in place; `RenderView::did_unmount_render_object` for `MouseRegion` now
+//! calls it instead of the softer `unregister_mouse_region`. This is FLUI's
+//! structural equivalent of Flutter's `validForMouseTracker` flag
+//! (`rendering/proxy_box.dart` `RenderMouseRegion.detach`), which exists for
+//! exactly this reason.
+//!
+//! ### Ported (19 of 43)
 //! - `'hitTestBehavior test - HitTestBehavior.deferToChild/opaque'` —
 //!   [`hit_test_behavior_defer_to_child_then_opaque_toggles_enter`].
 //! - `'hitTestBehavior test - HitTestBehavior.deferToChild and non-opaque'` —
@@ -154,9 +209,20 @@
 //!   `LaidOut::dispatch_pointer_hover_with_kind(.., PointerType::Touch)`) —
 //!   the divergence fix above made this portable; see the section on it —
 //!   [`detects_hover_from_touch_devices`].
+//! - `'triggers pointer enter when widget appears'` — now reachable via the
+//!   postframe-recheck wiring above —
+//!   [`stationary_pointer_over_a_newly_appeared_region_triggers_enter_next_frame`].
+//! - `'triggers pointer enter when widget moves in'` —
+//!   [`stationary_pointer_over_a_region_that_moves_in_triggers_enter_next_frame`].
+//! - `'triggers pointer exit when widget moves out'` (its initial "enter"
+//!   leg, which upstream reaches by connecting a fresh mouse device, is
+//!   replaced by an ordinary dispatched hover — no device connect/disconnect
+//!   primitive exists in this harness, per the capability note above; the
+//!   "moves out while stationary" leg under test is unaffected) —
+//!   [`stationary_pointer_over_a_region_that_moves_out_triggers_exit_next_frame`].
 //!
-//! ### Not ported (27 of 43) {#not-ported}
-//! Grouped by shared reason so the arithmetic stays checkable (16 + 27 = 43)
+//! ### Not ported (24 of 43) {#not-ported}
+//! Grouped by shared reason so the arithmetic stays checkable (19 + 24 = 43)
 //! without repeating each explanation 43 times:
 //!
 //! **No device connect/disconnect primitive** (3): `'triggers pointer enter
@@ -164,18 +230,9 @@
 //! disconnected'`, `'Exit event when unplugging mouse should have a
 //! position'`.
 //!
-//! **No stationary-device postframe recheck reachable from this harness**
-//! (5): `'triggers pointer enter when widget appears'`, `'triggers pointer
-//! enter when widget moves in'`, `'triggers pointer exit when widget moves
-//! out'` (its initial "enter" leg is also an implicit-connect, the first
-//! reason above), `'A MouseRegion mounted under the pointer should take
-//! effect in the next postframe'`, `'A MouseRegion moved into the mouse
-//! should take effect in the next postframe'`.
-//!
-//! **`hasScheduledFrame` has no harness equivalent** (2, one overlapping the
-//! postframe-recheck group above): `'A MouseRegion unmounted under the
-//! pointer should not trigger state change'`, `'No new frames are scheduled
-//! when mouse moves without triggering callbacks'`.
+//! **`hasScheduledFrame` has no harness equivalent** (2): `'A MouseRegion
+//! unmounted under the pointer should not trigger state change'`, `'No new
+//! frames are scheduled when mouse moves without triggering callbacks'`.
 //!
 //! **No cursor introspection surfaced by `LaidOut`** (1) —
 //! `MouseTracker::device_cursor` exists (`mouse_tracker.rs:450`) but nothing
@@ -203,16 +260,34 @@
 //! debugFillProperties when default"`, `"RenderMouseRegion's
 //! debugFillProperties when full"`.
 //!
-//! **`StatefulView`-rebuild-handle-in-callback plumbing, deferred** (2) —
+//! **`StatefulView`-rebuild-handle-in-callback plumbing, deferred** (4) —
 //! same real-but-disproportionate cost as the one case adapted around above
 //! ([`rebuilding_an_active_region_does_not_refire_enter_or_exit`]), but these
-//! two don't clear the "worth the substitution" bar the way that one does:
+//! four don't clear the "worth the substitution" bar the way that one does:
 //! `'MouseRegion activate/deactivate don't duplicate annotations'` (also
 //! needs `GlobalKey`-based deactivate/reactivate), `'detects pointer enter
 //! with closure arguments'` (tests no `MouseRegion` contract beyond
 //! [`detects_pointer_enter`]/[`detects_pointer_exiting`]/
 //! [`removing_a_hovered_region_does_not_synthesize_an_exit`] once the
-//! `StatefulWidget` indirection is stripped away).
+//! `StatefulWidget` indirection is stripped away), and two cases the
+//! postframe-recheck wiring above made only *partially* reachable —
+//! `'A MouseRegion mounted under the pointer should take effect in the next
+//! postframe'` and `'A MouseRegion moved into the mouse should take effect
+//! in the next postframe'`. Upstream drives both through `HoverClient`, a
+//! `StatefulWidget` whose `onHover` callback calls `setState`, so the
+//! specific thing under test — that the state change (and its dependent
+//! text) lands on the *next* frame, not the one that mounted/moved the
+//! region, with no further frame scheduled — needs a real rebuild triggered
+//! *from inside* the enter callback. A bare `Cell`/`RefCell` counter (as
+//! [`stationary_pointer_over_a_newly_appeared_region_triggers_enter_next_frame`]
+//! and
+//! [`stationary_pointer_over_a_region_that_moves_in_triggers_enter_next_frame`]
+//! use) only proves the callback fired on the right frame, which those two
+//! cases already cover; it cannot prove the callback-driven second rebuild
+//! landed on ITS OWN next frame rather than immediately, since a headless
+//! `pump_widget` call would drive both in the same call regardless. Also
+//! still blocked on `hasScheduledFrame`, above, which both cases assert on
+//! directly.
 //!
 //! **`GlobalKey` reparent does not preserve render-object identity in
 //! FLUI** (1) — `'Does not trigger side effects during a reparent'` depends
@@ -249,11 +324,11 @@
 //! disproportionate additional scope for this pass.
 //!
 //! Count check, one primary reason per case, no case counted twice: 3
-//! (connect/disconnect) + 5 (postframe recheck) + 2 (`hasScheduledFrame`) + 1
-//! (cursor introspection) + 2 (compositing) + 6 (paint-count) + 2
-//! (`debugFillProperties`) + 2 (`StatefulView` plumbing) + 1 (`GlobalKey`
-//! reparent) + 1 (`Draggable` regression) + 2 (opacity transition matrix) =
-//! 27 not ported. 16 ported + 27 not ported = 43.
+//! (connect/disconnect) + 2 (`hasScheduledFrame`) + 1 (cursor introspection) +
+//! 2 (compositing) + 6 (paint-count) + 2 (`debugFillProperties`) + 4
+//! (`StatefulView` plumbing) + 1 (`GlobalKey` reparent) + 1 (`Draggable`
+//! regression) + 2 (opacity transition matrix) =
+//! 24 not ported. 19 ported + 24 not ported = 43.
 //!
 //! Widget → render-object mapping:
 //! - `MouseRegion` → `RenderMouseRegion`
@@ -927,6 +1002,145 @@ fn a_childless_opaque_mouse_region_still_blocks_everything_beneath_it() {
         !bottom_region_hovered.get(),
         "the empty opaque region on top must swallow the pointer everywhere in the \
          stack, including inside the bottom region's own bounds"
+    );
+}
+
+// ── Stationary-device postframe recheck ─────────────────────────────────────
+
+/// A region that appears where a stationary pointer already sits is entered
+/// on the very next frame, with no new pointer dispatch — Flutter's implicit
+/// `MouseTracker.updateAllDevices` postframe recheck
+/// (`rendering/mouse_tracker.dart:366`), wired into
+/// [`HeadlessBinding::pump_frame`] (`crates/flui-binding/src/lib.rs`) to
+/// match the production frame path
+/// (`crates/flui-app/src/app/binding.rs`). Enter only, never hover: Flutter's
+/// own `_handleDeviceUpdateMouseEvents` (`mouse_tracker.dart:399-430`), the
+/// handler this recheck drives, synthesizes only enter/exit events — never a
+/// hover — and the upstream oracle test itself asserts `move` (hover) stays
+/// null; `MouseRegion.on_hover` fires only from an actual pointer motion.
+///
+/// Flutter parity: `'triggers pointer enter when widget appears'`.
+#[test]
+fn stationary_pointer_over_a_newly_appeared_region_triggers_enter_next_frame() {
+    let log: Rc<RefCell<Vec<&'static str>>> = Rc::new(RefCell::new(Vec::new()));
+    let (on_enter, on_hover, on_exit) = (Rc::clone(&log), Rc::clone(&log), Rc::clone(&log));
+
+    let mut laid = harness::pump_widget(
+        Align::new(Alignment::CENTER).child(SizedBox::new(100.0, 100.0)),
+        harness::screen_of(300.0, 300.0),
+    );
+
+    // Register the stationary device at the region's future center -- no
+    // region is mounted yet, so nothing fires.
+    laid.dispatch_pointer_hover(150.0, 150.0);
+    assert!(
+        log.borrow().is_empty(),
+        "no region is mounted yet, so the hover must find nothing"
+    );
+
+    laid.pump_widget(
+        Align::new(Alignment::CENTER).child(
+            MouseRegion::new()
+                .on_enter(move |_d, _p| on_enter.borrow_mut().push("enter"))
+                .on_hover(move |_d, _p| on_hover.borrow_mut().push("hover"))
+                .on_exit(move |_d, _p| on_exit.borrow_mut().push("exit"))
+                .child(SizedBox::new(100.0, 100.0)),
+        ),
+    );
+
+    assert_eq!(
+        log.borrow().as_slice(),
+        &["enter"],
+        "a region mounted under a stationary pointer must be entered on the \
+         very next frame, with no new pointer dispatch -- the frame that \
+         mounts it must itself re-hit-test every stationary device; the \
+         postframe recheck synthesizes enter/exit only, never hover"
+    );
+}
+
+/// A region that moves under a stationary pointer (its bounds change via a
+/// rebuild, not a new pointer event) is entered on the very next frame.
+///
+/// Flutter parity: `'triggers pointer enter when widget moves in'`.
+#[test]
+fn stationary_pointer_over_a_region_that_moves_in_triggers_enter_next_frame() {
+    let log: Rc<RefCell<Vec<&'static str>>> = Rc::new(RefCell::new(Vec::new()));
+
+    fn region(log: &Rc<RefCell<Vec<&'static str>>>) -> MouseRegion {
+        let (e, h, x) = (Rc::clone(log), Rc::clone(log), Rc::clone(log));
+        MouseRegion::new()
+            .on_enter(move |_d, _p| e.borrow_mut().push("enter"))
+            .on_hover(move |_d, _p| h.borrow_mut().push("hover"))
+            .on_exit(move |_d, _p| x.borrow_mut().push("exit"))
+            .child(SizedBox::new(100.0, 100.0))
+    }
+
+    // Region spans (0,0)-(100,100) at top-left of a 300x300 screen.
+    let mut laid = harness::pump_widget(
+        Align::new(Alignment::TOP_LEFT).child(region(&log)),
+        harness::screen_of(300.0, 300.0),
+    );
+
+    // The screen's center, where the region will move to below -- outside
+    // the top-left region today, so nothing fires yet.
+    laid.dispatch_pointer_hover(150.0, 150.0);
+    assert!(
+        log.borrow().is_empty(),
+        "the stationary point starts outside the top-left region"
+    );
+
+    // Same region, moved to center via a rebuild -- no new pointer dispatch.
+    laid.pump_widget(Align::new(Alignment::CENTER).child(region(&log)));
+
+    assert_eq!(
+        log.borrow().as_slice(),
+        &["enter"],
+        "a region that moves under a stationary pointer must be entered on \
+         the very next frame, enter/exit only, never hover"
+    );
+}
+
+/// A region that moves out from under a stationary pointer (its bounds
+/// change via a rebuild, not a new pointer event) is exited on the very next
+/// frame.
+///
+/// Flutter parity: `'triggers pointer exit when widget moves out'`.
+#[test]
+fn stationary_pointer_over_a_region_that_moves_out_triggers_exit_next_frame() {
+    let log: Rc<RefCell<Vec<&'static str>>> = Rc::new(RefCell::new(Vec::new()));
+
+    fn region(log: &Rc<RefCell<Vec<&'static str>>>) -> MouseRegion {
+        let (e, h, x) = (Rc::clone(log), Rc::clone(log), Rc::clone(log));
+        MouseRegion::new()
+            .on_enter(move |_d, _p| e.borrow_mut().push("enter"))
+            .on_hover(move |_d, _p| h.borrow_mut().push("hover"))
+            .on_exit(move |_d, _p| x.borrow_mut().push("exit"))
+            .child(SizedBox::new(100.0, 100.0))
+    }
+
+    // Region spans (100,100)-(200,200), centered in a 300x300 screen.
+    let mut laid = harness::pump_widget(
+        Align::new(Alignment::CENTER).child(region(&log)),
+        harness::screen_of(300.0, 300.0),
+    );
+
+    laid.dispatch_pointer_hover(150.0, 150.0);
+    assert_eq!(
+        log.borrow().as_slice(),
+        &["enter", "hover"],
+        "an ordinary dispatched hover still fires enter then hover"
+    );
+    log.borrow_mut().clear();
+
+    // Same region, moved to top-left via a rebuild -- no new pointer
+    // dispatch. The stationary pointer at (150,150) is now outside it.
+    laid.pump_widget(Align::new(Alignment::TOP_LEFT).child(region(&log)));
+
+    assert_eq!(
+        log.borrow().as_slice(),
+        &["exit"],
+        "a region that moves out from under a stationary pointer must be \
+         exited on the very next frame, with no new pointer dispatch"
     );
 }
 

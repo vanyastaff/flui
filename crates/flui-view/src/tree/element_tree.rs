@@ -1246,15 +1246,35 @@ impl ElementTree {
     /// evict a lazy sliver child together with all of its own descendant
     /// elements and render nodes (e.g. a `Container(Padding(Text))` child
     /// produces three elements; a single-node `remove` would leak the inner
-    /// two).
+    /// two). Also the removal path a rebuild takes for any un-keyed child
+    /// whose element type changed (`ElementTree::update`'s can't-reuse
+    /// branch) — e.g. `LaidOut::pump_widget`'s root-swap in the headless
+    /// harness.
     ///
     /// The algorithm mirrors `id_reconcile::remove_child` / `collect_subtree_preorder`:
     ///
     /// 1. Snapshot the subtree in pre-order (parent before children) while all
     ///    `child_ids` lists are intact.
-    /// 2. Remove the root via `remove` (soft-removes keyed elements).
-    /// 3. If the root was eagerly removed (un-keyed), free its descendants
-    ///    deepest-first via `remove_finalized`.
+    /// 2. For an un-keyed root, free descendants deepest-first via
+    ///    `remove_finalized` BEFORE the root's own removal (step 3). Each
+    ///    element's own `unmount` — e.g. `RenderView::did_unmount_render_object`
+    ///    for `MouseRegion`/`ClipPath`/`Listener`, which unregisters from the
+    ///    owner-local interaction lane — needs its OWN render object still
+    ///    reachable in the render tree to fire at all
+    ///    (`RenderBehavior::on_unmount` looks it up by id and silently skips
+    ///    the view-level hook when the lookup misses). Removing the root
+    ///    first would cascade-delete every descendant render node in one
+    ///    shot (`PipelineOwner::remove_render_object` recurses), so a
+    ///    descendant unmounted afterward would find its render object
+    ///    already gone and its own unmount hook would silently never run —
+    ///    orphaning its interaction-lane registration for the life of the
+    ///    owner. Processing descendants first makes each one's own render
+    ///    removal a no-op by the time the root's cascade reaches it.
+    /// 3. Remove the root via `remove` (soft-removes keyed elements; for a
+    ///    keyed root, descendants are left untouched — parked for
+    ///    `finalize_tree`'s deferred drain in case the root is reclaimed
+    ///    same-frame via `GlobalKey`, exactly as before this function
+    ///    reordered steps 2–3).
     ///
     /// Complexity: O(n) time + O(n) peak heap for the work-stack (n = subtree
     /// size), O(h) call-stack for the constant-stack iterative walk.
@@ -1274,18 +1294,30 @@ impl ElementTree {
             }
         }
 
-        // Remove the root; `Some` ⇒ eagerly freed (un-keyed), `None` ⇒
-        // soft-removed (keyed) and parked for `finalize_tree`.
-        let root_removed_eagerly = self.remove(id, owner).is_some();
+        // A keyed root soft-removes into the inactive queue instead of
+        // freeing outright (`remove`'s own branch, keyed on
+        // `registered_global_key_hash`); descendants stay untouched exactly
+        // as before this reorder. Peeking the flag here, before touching
+        // anything, is side-effect-free and lets us pick the descendants-
+        // first-or-not branch up front instead of after the fact.
+        let root_is_keyed = self
+            .get(id)
+            .is_some_and(|node| node.registered_global_key_hash().is_some());
 
-        if root_removed_eagerly {
-            // Free orphaned descendants deepest-first.  `subtree[0]` is the
-            // root (already freed above); iterating in reverse visits each
-            // child after all of its own descendants.
-            for &descendant in subtree[1..].iter().rev() {
-                self.remove_finalized(descendant, owner);
-            }
+        if root_is_keyed {
+            self.remove(id, owner);
+            return;
         }
+
+        // Un-keyed root: free descendants deepest-first -- `subtree[0]` is
+        // the root itself (removed below, last); iterating the rest in
+        // reverse visits each descendant after all of ITS OWN descendants,
+        // so a nested unmount hook (e.g. a `MouseRegion` two levels down)
+        // always still finds its own render object present.
+        for &descendant in subtree[1..].iter().rev() {
+            self.remove_finalized(descendant, owner);
+        }
+        self.remove(id, owner);
     }
 
     /// Fully remove an element that has already been unmounted (e.g.
