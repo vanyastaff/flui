@@ -396,6 +396,17 @@ where
     /// `crates/flui-interaction/docs/HIT_TESTING.md`.
     pub fn hit_test_child_at_offset(&mut self, index: usize, offset: Offset) -> bool {
         let local_position = self.position_minus(offset);
+        // A zero offset is no frame change, so there is nothing to record —
+        // and skipping it keeps the stack EMPTY, which is what lets
+        // `local_transform_for_driver` return `None` and the driver avoid a
+        // `with_paint_transform(IDENTITY)` (a determinant plus a full 4x4
+        // inverse) per level. Most callers pass `Offset::ZERO`: the proxy
+        // render objects (opacity, repaint boundary, listener, mouse region,
+        // absorb/ignore pointer, ...) sit on the pointer hot path and stack
+        // several deep in an ordinary tree.
+        if offset == Offset::ZERO {
+            return self.inner.hit_test_child(index, local_position);
+        }
         self.push_offset(offset);
         let hit = self.inner.hit_test_child(index, local_position);
         self.pop_transform();

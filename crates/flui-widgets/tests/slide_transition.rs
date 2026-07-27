@@ -181,11 +181,18 @@ fn build_delivers_the_animation_localized_position_to_the_child_mid_animation() 
     laid.dispatch_pointer_down(75.0, 60.0);
 
     let local = recorded.get().expect("on_pointer_down must have fired");
-    assert_eq!(
-        local,
-        (25.0, 60.0),
+    // The shift is produced by tween/curve math, so compare within a
+    // tolerance rather than exactly — the same 1e-3 the other delivered-
+    // position tests use. The defect this pins was a 50px miss; any epsilon
+    // far below that still fails on it.
+    const TOLERANCE: f32 = 1e-3;
+    assert!(
+        (local.0 - 25.0).abs() < TOLERANCE && (local.1 - 60.0).abs() < TOLERANCE,
         "the delivered position must be local to the child (global (75, 60) minus the \
-         mid-animation 50px shift on x), not the raw global dispatch position",
+         mid-animation 50px shift on x), not the raw global dispatch position; \
+         got ({:.4}, {:.4})",
+        local.0,
+        local.1,
     );
 
     controller.dispose();
