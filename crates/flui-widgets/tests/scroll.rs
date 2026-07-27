@@ -1042,6 +1042,62 @@ fn scrollable_fling_advances_offset_past_release() {
     );
 }
 
+/// Same gesture as [`scrollable_fling_advances_offset_past_release`], but with
+/// deliberately irregular REAL delays inserted between the dispatch calls —
+/// standing in for the scheduler jitter a loaded CI runner introduces between
+/// one Rust statement and the next. The sleeps are adversarial input, not
+/// synchronization: nothing about this test's outcome should depend on how
+/// long they actually took.
+///
+/// A pointer's own velocity samples must come from the binding's virtual
+/// clock, never from wall time — so however long the real gaps between
+/// `dispatch_pointer_*` calls turn out to be, the recorded sample spacing
+/// (and therefore the fling velocity) is unaffected. This is the deterministic
+/// reproduction of the flake `scrollable_fling_advances_offset_past_release`
+/// hit intermittently under load: that test's own real dispatch gaps were
+/// implicitly whatever the machine happened to schedule; this test makes the
+/// worst case explicit and asserts it still doesn't corrupt the fling.
+#[test]
+fn scrollable_fling_survives_irregular_real_dispatch_timing() {
+    let controller = ScrollController::new();
+    controller.update_dimensions(300.0, 0.0, 4700.0);
+
+    let vsync = Vsync::new();
+    let widget = Scrollable::new()
+        .controller(controller.clone())
+        .child(SizedBox::new(300.0, 5000.0));
+
+    let mut scoped = fling_scoped(widget, vsync, tight(300.0, 300.0));
+
+    scoped.dispatch_pointer_down(150.0, 250.0);
+    // Wildly uneven real gaps — nothing a genuine pointer's report rate would
+    // ever produce, chosen to make the corruption obvious if wall time leaks
+    // into the recorded sample timestamps.
+    std::thread::sleep(Duration::from_millis(2));
+    scoped.dispatch_pointer_move(150.0, 180.0); // 70 px upward: slop-crossing
+    std::thread::sleep(Duration::from_millis(41));
+    scoped.dispatch_pointer_move(150.0, 150.0); // 30 px more: on_pan_update
+    scoped.dispatch_pointer_up(150.0, 150.0);
+
+    let pixels_at_release = controller.pixels();
+    assert!(
+        pixels_at_release > 0.0,
+        "pan drag must advance the offset before release regardless of real \
+         dispatch timing; got {pixels_at_release}"
+    );
+
+    scoped.pump_for(Duration::from_millis(16));
+    scoped.pump_for(Duration::from_millis(16));
+
+    assert!(
+        controller.pixels() > pixels_at_release,
+        "the fling must keep advancing past the release position no matter how \
+         irregular the real time between dispatch calls was; \
+         release={pixels_at_release:.1}, now={:.1}",
+        controller.pixels()
+    );
+}
+
 /// Clamping physics must never allow the fling to carry the scroll position
 /// past `max_scroll_extent` regardless of the initial fling velocity.
 ///

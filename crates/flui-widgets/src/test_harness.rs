@@ -10,7 +10,7 @@ use std::any::TypeId;
 use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use flui_binding::HeadlessBinding;
 use flui_foundation::ElementId;
@@ -211,11 +211,24 @@ impl Harness {
         self.binding.enter_owner_scope(callback)
     }
 
-    fn advance_gesture_clock() {
-        let t0 = Instant::now();
-        while Instant::now() == t0 {
-            std::hint::spin_loop();
-        }
+    /// Advance the binding's virtual clock by a fixed, deterministic sample
+    /// interval before a synthetic Move that records a new velocity sample —
+    /// the same mechanism (and same 8ms rationale) as
+    /// `tests/common::LaidOut::advance_pointer_clock`. `DragGestureRecognizer`
+    /// timestamps its velocity samples from `RecognizerBase::now()`, which
+    /// reads this SAME clock-bound `GestureArena` via `binding.arena()`
+    /// above, so a spin-wait on the real clock (which made sample spacing
+    /// depend on however much wall-clock time the test process happened to
+    /// be scheduled between dispatch calls) is neither necessary nor correct.
+    ///
+    /// Only a Move calls this: `DragGestureRecognizer::handle_down` always
+    /// resets the velocity tracker before recording its own sample, so a Down
+    /// has no predecessor sample to space apart from, and advancing the clock
+    /// there would only cost deadline-timing tests virtual time they did not
+    /// ask to spend.
+    fn advance_pointer_clock(&self) {
+        const POINTER_SAMPLE_INTERVAL: Duration = Duration::from_millis(8);
+        self.binding.clock().advance(POINTER_SAMPLE_INTERVAL);
     }
 
     fn begin_contact(&self) -> PointerId {
@@ -246,7 +259,6 @@ impl Harness {
     }
 
     pub(crate) fn dispatch_pointer_down(&self, x: f32, y: f32) {
-        Self::advance_gesture_clock();
         let event = make_down_event_for_id(
             self.begin_contact(),
             Offset::new(px(x), px(y)),
@@ -257,7 +269,7 @@ impl Harness {
     }
 
     pub(crate) fn dispatch_pointer_move(&self, x: f32, y: f32) {
-        Self::advance_gesture_clock();
+        self.advance_pointer_clock();
         let event = make_move_event_for_id(
             self.current_contact(),
             Offset::new(px(x), px(y)),

@@ -14,7 +14,7 @@ use std::cell::Cell;
 use std::collections::HashSet;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use flui_animation::{AnimationController, Vsync};
 use flui_binding::HeadlessBinding;
@@ -63,6 +63,16 @@ pub struct LaidOut {
     /// Pointer id of the in-flight contact, shared by its Move/Up/Cancel.
     current_pointer: Cell<u64>,
 }
+
+/// Default spacing between synthetic pointer samples that record a new
+/// velocity sample (Down, Move, hover-Move, secondary Down) — a plausible
+/// high-frequency pointer-report interval, matching the 8ms sampling period
+/// already assumed elsewhere in the interaction stack (e.g.
+/// `flui_interaction::processing::sampling_clock`). Advancing the binding's
+/// virtual clock by this fixed amount before each such dispatch means the
+/// spacing the velocity tracker records never depends on how much real time
+/// the test process happened to be scheduled between calls.
+const POINTER_SAMPLE_INTERVAL: Duration = Duration::from_millis(8);
 
 /// Loose constraints from `0` up to `max × max` on both axes.
 pub fn loose(max: f32) -> BoxConstraints {
@@ -797,12 +807,28 @@ impl LaidOut {
             .dispatch_pointer(event, |position| self.hit_test_pointer(position));
     }
 
-    /// Ensure consecutive velocity samples receive distinct timestamps.
-    fn advance_gesture_clock() {
-        let t0 = Instant::now();
-        while Instant::now() == t0 {
-            std::hint::spin_loop();
-        }
+    /// Advance the binding's virtual clock by `dt` before a synthetic Move
+    /// that records a new velocity sample.
+    ///
+    /// `DragGestureRecognizer` timestamps its velocity samples from
+    /// `RecognizerBase::now()`, which reads the SAME clock-bound
+    /// `GestureArena` this harness hands the tree via `GestureArenaScope`
+    /// (`binding.arena()` — see `lay_out`). Advancing that clock explicitly,
+    /// instead of spin-waiting on `Instant::now()` to tick, means consecutive
+    /// samples get a fixed, deterministic spacing no matter how much real
+    /// wall-clock time the test process happens to be scheduled between
+    /// dispatch calls — the previous spin-wait's spacing was exactly that
+    /// real, unscheduled gap, which a loaded CI runner could stretch far
+    /// past a plausible pointer-report interval and corrupt the fling
+    /// velocity's least-squares fit.
+    ///
+    /// Only a Move needs this: `DragGestureRecognizer::handle_down` always
+    /// resets the velocity tracker before recording its own sample, so a Down
+    /// has no predecessor sample to space apart from, and advancing the clock
+    /// there would only cost deadline-timing tests (long-press/double-tap
+    /// window boundaries) virtual time they did not ask to spend.
+    fn advance_pointer_clock(&self, dt: Duration) {
+        self.binding.clock().advance(dt);
     }
 
     /// Allocate a fresh pointer id for a new contact and remember it.
@@ -828,9 +854,9 @@ impl LaidOut {
     /// the `Listener` test to assert its callback fires.
     ///
     /// See [`hit_test_pointer`](Self::hit_test_pointer) for why hit-testing runs inside
-    /// the lane scope alongside dispatch.
+    /// the lane scope alongside dispatch. Spends no virtual clock time — see
+    /// [`advance_pointer_clock`](Self::advance_pointer_clock).
     pub fn dispatch_pointer_down(&self, x: f32, y: f32) {
-        Self::advance_gesture_clock();
         let event = make_down_event_for_id(self.begin_contact(), offset(x, y), PointerType::Mouse);
         self.binding
             .dispatch_pointer(&event, |position| self.hit_test_pointer(position));
@@ -844,9 +870,22 @@ impl LaidOut {
             .dispatch_pointer(&event, |position| self.hit_test_pointer(position));
     }
 
-    /// A contact move to `(x, y)` — to drive slop / drag handling.
+    /// A contact move to `(x, y)` — to drive slop / drag handling. Advances
+    /// the virtual clock by the default [`POINTER_SAMPLE_INTERVAL`] first; use
+    /// [`dispatch_pointer_move_after`](Self::dispatch_pointer_move_after) when
+    /// a test needs to assert against an explicit sample spacing instead.
     pub fn dispatch_pointer_move(&self, x: f32, y: f32) {
-        Self::advance_gesture_clock();
+        self.dispatch_pointer_move_after(x, y, POINTER_SAMPLE_INTERVAL);
+    }
+
+    /// As [`dispatch_pointer_move`](Self::dispatch_pointer_move), but advances
+    /// the virtual clock by a caller-chosen `dt` instead of the default
+    /// sample interval — for a test that builds velocity and needs to say
+    /// explicitly how far apart its samples are (mirrors Flutter's
+    /// `WidgetController.timedDrag`/`flingFrom`, which stamp each synthetic
+    /// move with an explicit `timeStamp` rather than the wall clock).
+    pub fn dispatch_pointer_move_after(&self, x: f32, y: f32, dt: Duration) {
+        self.advance_pointer_clock(dt);
         let event =
             make_move_event_for_id(self.current_contact(), offset(x, y), PointerType::Mouse);
         self.binding
@@ -861,8 +900,10 @@ impl LaidOut {
     /// As [`dispatch_pointer_hover`](Self::dispatch_pointer_hover), but for a
     /// caller-chosen device kind (e.g. `PointerType::Pen` for stylus tests) —
     /// the same construction, parameterised instead of hardcoded to `Mouse`.
+    /// A hover has no tracked contact, so it never reaches
+    /// `DragGestureRecognizer::handle_move`'s velocity sampling and spends no
+    /// virtual clock time.
     pub fn dispatch_pointer_hover_with_kind(&self, x: f32, y: f32, kind: PointerType) {
-        Self::advance_gesture_clock();
         let mut event = make_move_event_for_id(PointerId::PRIMARY, offset(x, y), kind);
         let PointerEvent::Move(update) = &mut event else {
             unreachable!("the test move constructor must produce PointerEvent::Move");
@@ -882,10 +923,11 @@ impl LaidOut {
     /// (right-click) pointer-down event — the headless analogue of a right-mouse
     /// button press reaching the framework. Used by `GestureDetector` tests to
     /// assert `on_secondary_tap` fires on right-click.
+    /// Spends no virtual clock time — see
+    /// [`advance_pointer_clock`](Self::advance_pointer_clock).
     pub fn dispatch_secondary_down(&self, x: f32, y: f32) {
         use flui_interaction::events::pointer::PointerButton;
 
-        Self::advance_gesture_clock();
         let event = make_down_event_for_id_with_button(
             self.begin_contact(),
             offset(x, y),

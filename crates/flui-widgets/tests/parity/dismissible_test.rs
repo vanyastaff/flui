@@ -46,37 +46,38 @@
 //! - **Fling-velocity cases** (`'Horizontal fling triggers dismiss...'` and
 //!   every other `'fling-*'` case, `'... fling item before/after
 //!   movementDuration'`, `'Horizontal/Vertical fling less than threshold'`) —
+//!   still not ported here. At the time this file was written,
 //!   `DragGestureRecognizer::handle_move` (`crates/flui-interaction/src/recognizers/drag.rs`)
-//!   timestamps velocity samples with the real OS clock (`Instant::now()`),
-//!   not the deterministic virtual clock `LaidOut::pump_for` advances for
-//!   gesture *timing* (long-press/double-tap deadlines — see
-//!   `gesture_timing_test.rs`'s module doc). A scripted
-//!   `dispatch_pointer_move` sequence therefore produces a *real* velocity of
-//!   *non-reproducible magnitude* — confirmed empirically while building this
-//!   file: identical test code measured anywhere from ~1.6M to ~4.3M px/s for
-//!   the same 120px drag, run to run. Unlike Flutter's own `WidgetTester`
-//!   (whose synthetic test binding feeds fake timestamps into pointer events
-//!   for exactly this reason), no case here can assert a *specific* fling
-//!   velocity or a bounded settle time — a dedicated virtual-clock seam for
-//!   pointer-velocity sampling would need to land in the shared harness
-//!   first, out of this task's scope.
+//!   timestamped velocity samples with the real OS clock (`Instant::now()`)
+//!   rather than the arena's clock, so a scripted `dispatch_pointer_move`
+//!   sequence produced a *real* velocity of *non-reproducible magnitude* —
+//!   confirmed empirically while building this file: identical test code
+//!   measured anywhere from ~1.6M to ~4.3M px/s for the same 120px drag, run
+//!   to run. That blocker is gone: `DragGestureRecognizer` now reads
+//!   `RecognizerBase::now()`, which resolves to the SAME clock-bound
+//!   `GestureArena` this harness's `HeadlessBinding` owns, and
+//!   `LaidOut::dispatch_pointer_move` advances that clock by a fixed,
+//!   explicit interval per sample — so a scripted drag's release velocity is
+//!   now deterministic and reproducible run to run, the same seam Flutter's
+//!   own `WidgetTester` gets from feeding explicit `timeStamp`s into its
+//!   synthetic pointer events. Porting the fling-velocity cases above is
+//!   newly *possible*, not yet *done* — no case here asserts a specific
+//!   fling velocity or bounded settle time; adding that coverage is
+//!   unstarted follow-up work, out of the scope that landed the clock fix.
 //!
 //!   Every drag-then-release case below neutralizes the *classification*
-//!   instead (it cannot neutralize the magnitude): the release lands at a
-//!   position offset on the CROSS axis by the exact same signed pixel amount
-//!   as the reported primary-axis delta. Whatever the recognizer's opaque
-//!   velocity estimator computes, it is applying the *same* function to two
-//!   proportional (here, identical) position/time series, so the estimated
-//!   `|primary_velocity|` and `|cross_velocity|` come out equal regardless of
-//!   the actual (unpredictable) magnitude — `describe_fling_gesture`'s
-//!   `primary.abs() - cross.abs() < kMinFlingVelocityDelta` gate is satisfied
-//!   unconditionally, so it resolves to `FlingGestureKind::None` and the
-//!   release falls through to the plain threshold-vs-`.forward()`/`.reverse()`
-//!   path this port actually targets. (An earlier attempt — repeating the
-//!   final position 2-3 times before releasing, hoping to drive the estimate
-//!   toward zero — measurably failed: it still produced million-px/s
-//!   estimates, and even flipped the classified *direction* run to run,
-//!   confirming the estimator is not a simple last-sample delta.)
+//!   instead, and still does so deliberately even though the magnitude is no
+//!   longer unpredictable: the release lands at a position offset on the
+//!   CROSS axis by the exact same signed pixel amount as the reported
+//!   primary-axis delta. Whatever the recognizer's velocity estimator
+//!   computes, it is applying the *same* function to two proportional (here,
+//!   identical) position/time series, so the estimated `|primary_velocity|`
+//!   and `|cross_velocity|` come out equal regardless of the magnitude —
+//!   `describe_fling_gesture`'s `primary.abs() - cross.abs() <
+//!   kMinFlingVelocityDelta` gate is satisfied unconditionally, so it
+//!   resolves to `FlingGestureKind::None` and the release falls through to
+//!   the plain threshold-vs-`.forward()`/`.reverse()` path this port actually
+//!   targets.
 //!
 //!   Every test that relies on this lays its `Dismissible` out in a box whose
 //!   CROSS axis has enough headroom for that offset (`horizontal_extent`/
