@@ -57,7 +57,7 @@ thiserror.workspace = true
 crossbeam-channel.workspace = true
 anyhow.workspace = true
 raw-window-handle.workspace = true
-pollster = "0.4"
+pollster = "1.0"
 web-time = "1.1"
 
 # Web/WASM platform (runner spawns the frame loop via spawn_local)
