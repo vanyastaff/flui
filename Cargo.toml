@@ -172,7 +172,7 @@ wgpu-profiler = { version = "0.27", default-features = false }
 # Shader module composition — resolves #import directives in WGSL at build-time or
 # pipeline-init time.  Pins naga ^29, consistent with wgpu 29's naga dep.
 # Used by flui-engine to compose blend_helpers.wgsl into mode.wgsl / advanced_blend.wgsl.
-naga_oil = { version = "0.22", default-features = false }
+naga_oil = { version = "0.23", default-features = false }
 winit = "0.30.12"
 raw-window-handle = "0.6"
 pollster = "0.4"
