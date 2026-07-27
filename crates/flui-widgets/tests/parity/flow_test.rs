@@ -61,8 +61,11 @@
 //!    `FlowDelegate`/`RenderFlow` behavioral contract this slice scopes to,
 //!    so its absence is noted here rather than filed to Cross.H.
 
+use std::cell::Cell;
+use std::rc::Rc;
 use std::sync::Arc;
 
+use flui_interaction::events::PointerEventExt as _;
 use flui_rendering::constraints::BoxConstraints;
 use flui_types::{Color, Matrix4, Size};
 use flui_widgets::row;
@@ -186,6 +189,100 @@ fn flow_hit_test_inverts_each_child_real_transform_after_offset_changes() {
         "with start_offset=50.0, (20,90) now falls outside child 1's real \
          bounds and inside child 0's — matching the oracle's log == [0] \
          after startOffset.value = 50.0",
+    );
+}
+
+/// Positions its single child via a fixed forward (paint-direction)
+/// translation matrix — a minimal `FlowDelegate` for isolating the
+/// hit-test transform-stack composition, as opposed to `StackedFlowDelegate`
+/// above (which exists to test paint-order hit resolution across
+/// overlapping children).
+#[derive(Debug)]
+struct TranslateFlowDelegate {
+    dx: f32,
+    dy: f32,
+}
+
+impl FlowDelegate for TranslateFlowDelegate {
+    fn get_size(&self, constraints: BoxConstraints) -> Size {
+        constraints.biggest()
+    }
+
+    fn get_constraints_for_child(
+        &self,
+        _index: usize,
+        constraints: BoxConstraints,
+    ) -> BoxConstraints {
+        constraints.loosen()
+    }
+
+    fn paint_children(&self, context: &mut FlowPaintingContext<'_, '_>) {
+        for i in 0..context.child_count() {
+            context.paint_child(i, Matrix4::translation(self.dx, self.dy, 0.0));
+        }
+    }
+
+    fn should_relayout(&self, _old_delegate: &dyn FlowDelegate) -> bool {
+        false
+    }
+
+    fn should_repaint(&self, _old_delegate: &dyn FlowDelegate) -> bool {
+        false
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+/// `RenderFlow::hit_test` pushes each child's FORWARD paint transform onto
+/// the ctx-level `BoxHitTestContext` stack (`ctx.with_transform(transform,
+/// ...)`, `crates/flui-objects/src/layout/flow.rs:395-397`) before
+/// delegating to the transformed child. That ctx-level stack lived in a
+/// private `BoxHitTestCtx` that `RenderBox::hit_test_raw`
+/// (`crates/flui-rendering/src/traits/render_box.rs`) discarded when it
+/// went out of scope, so `HitTestEntry.transform` never recorded the
+/// transform even though `hit_test` itself inverted it to decide which
+/// child pixel was hit.
+///
+/// Flutter parity: `RenderFlow.hitTestChildren` (`rendering/flow.dart:428-453`)
+/// calls `result.addWithPaintTransform(transform: transform, position:
+/// position, hitTest: ...)` with the child's `FlowParentData._transform` —
+/// the SAME `BoxHitTestResult` the whole walk shares records it, there is
+/// no separate context to lose it in.
+///
+/// RED before the fix: a tap on the child's transformed location delivered
+/// the raw global position instead of the position local to the child's
+/// own box.
+#[test]
+fn flow_child_transform_localises_the_delivered_pointer_position() {
+    let recorded: Rc<Cell<Option<(f32, f32)>>> = Rc::new(Cell::new(None));
+    let probe = Rc::clone(&recorded);
+
+    let laid = harness::pump_widget(
+        Flow::new(
+            Arc::new(TranslateFlowDelegate { dx: 20.0, dy: 30.0 }),
+            row![
+                Listener::new()
+                    .on_pointer_down(move |event: &flui_widgets::prelude::PointerEvent| {
+                        probe.set(Some((event.position().dx.get(), event.position().dy.get())));
+                    })
+                    .child(SizedBox::new(100.0, 100.0).child(ColoredBox::new(Color::BLUE)))
+            ],
+        ),
+        harness::screen(),
+    );
+
+    // The child is painted at (20, 30); tap a point inside its transformed
+    // 100x100 box.
+    laid.dispatch_pointer_down(40.0, 45.0);
+
+    let local = recorded.get().expect("on_pointer_down must have fired");
+    let expected = (20.0_f32, 15.0_f32);
+    assert!(
+        (local.0 - expected.0).abs() < 1e-3 && (local.1 - expected.1).abs() < 1e-3,
+        "expected the tap to localise to {expected:?} (global (40, 45) minus the child's \
+         (20, 30) paint translation), got {local:?}",
     );
 }
 

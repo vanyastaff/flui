@@ -522,6 +522,7 @@ impl crate::protocol::RenderObject<crate::protocol::BoxProtocol> for RenderViewA
                  dyn FnMut(
             usize,
             Option<crate::protocol::ProtocolPosition<crate::protocol::BoxProtocol>>,
+            Option<flui_types::Matrix4>,
         ) -> bool
                      + Send
                      + Sync
@@ -532,7 +533,7 @@ impl crate::protocol::RenderObject<crate::protocol::BoxProtocol> for RenderViewA
         // empty window region reports a miss instead of a phantom
         // root target.
         for index in (0..child_count).rev() {
-            if hit_child(index, None) {
+            if hit_child(index, None, None) {
                 return crate::traits::HitTestOutcome::from_hit(true);
             }
         }

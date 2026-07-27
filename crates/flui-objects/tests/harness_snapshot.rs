@@ -139,7 +139,13 @@ impl RenderObject<BoxProtocol> for PanicPaintBox {
         _child_count: usize,
         _size: flui_types::Size,
         _hit_child: &mut (
-                 dyn FnMut(usize, Option<ProtocolPosition<BoxProtocol>>) -> bool + Send + Sync
+                 dyn FnMut(
+            usize,
+            Option<ProtocolPosition<BoxProtocol>>,
+            Option<flui_types::Matrix4>,
+        ) -> bool
+                     + Send
+                     + Sync
              ),
     ) -> flui_rendering::traits::HitTestOutcome {
         flui_rendering::traits::HitTestOutcome::miss()

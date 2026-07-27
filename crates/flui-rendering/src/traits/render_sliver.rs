@@ -561,7 +561,11 @@ where
         _child_count: usize,
         size: flui_types::Size,
         hit_child: &mut (
-                 dyn FnMut(usize, Option<crate::protocol::ProtocolPosition<SliverProtocol>>) -> bool
+                 dyn FnMut(
+            usize,
+            Option<crate::protocol::ProtocolPosition<SliverProtocol>>,
+            Option<flui_types::Matrix4>,
+        ) -> bool
                      + Send
                      + Sync
              ),

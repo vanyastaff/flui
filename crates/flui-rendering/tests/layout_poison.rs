@@ -31,7 +31,7 @@ use flui_rendering::{
     traits::{HitTestOutcome, RenderBox, RenderObject, RenderSliver},
 };
 use flui_tree::{Leaf, Single};
-use flui_types::{Size, geometry::px};
+use flui_types::{Matrix4, Size, geometry::px};
 
 // ============================================================================
 // FlakyLeaf — a leaf render object that fails layout on demand
@@ -94,6 +94,7 @@ impl RenderObject<BoxProtocol> for FlakyLeaf {
                  dyn FnMut(
             usize,
             Option<flui_rendering::protocol::ProtocolPosition<BoxProtocol>>,
+            Option<Matrix4>,
         ) -> bool
                      + Send
                      + Sync
@@ -479,6 +480,7 @@ impl RenderObject<BoxProtocol> for CountingIntrinsicBox {
                  dyn FnMut(
             usize,
             Option<flui_rendering::protocol::ProtocolPosition<BoxProtocol>>,
+            Option<Matrix4>,
         ) -> bool
                      + Send
                      + Sync
@@ -781,6 +783,7 @@ impl RenderObject<BoxProtocol> for UnboundedHatingLeaf {
                  dyn FnMut(
             usize,
             Option<flui_rendering::protocol::ProtocolPosition<BoxProtocol>>,
+            Option<Matrix4>,
         ) -> bool
                      + Send
                      + Sync
@@ -835,6 +838,7 @@ impl RenderObject<BoxProtocol> for WidthSwitchParent {
                  dyn FnMut(
             usize,
             Option<flui_rendering::protocol::ProtocolPosition<BoxProtocol>>,
+            Option<Matrix4>,
         ) -> bool
                      + Send
                      + Sync

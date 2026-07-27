@@ -449,14 +449,22 @@ impl RenderBox for RenderFittedBox {
         // both directions), so scaled children receive the correct
         // local point. (The pre-fix shape shifted by align_offset only
         // — any non-unit scale sent the child a wrong local point.)
-        let Some(inverse) = self.effective_transform().try_inverse() else {
+        let transform = self.effective_transform();
+        let Some(inverse) = transform.try_inverse() else {
             // Degenerate scale (zero area) — nothing is visually
             // hittable under a non-invertible transform.
             return false;
         };
         let pos = ctx.offset();
         let (tx, ty) = inverse.transform_point(pos.dx, pos.dy);
-        ctx.hit_test_child(0, Offset::new(tx, ty))
+        // Push the FORWARD (paint-direction) transform onto the ctx-level
+        // stack so the driver folds its inverse into `HitTestEntry.transform`
+        // — this render object has no `hit_test_transform` override (unlike
+        // `RenderTransform`/`RenderRotatedBox`, which record via that
+        // driver-level hook instead), so without this push the descent above
+        // would still land on the right child pixel while the delivered
+        // event position stayed un-localized.
+        ctx.with_transform(transform, |ctx| ctx.hit_test_child(0, Offset::new(tx, ty)))
     }
 
     // The `paint_transform` override is the whole point of RenderFittedBox:

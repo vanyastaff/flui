@@ -1349,7 +1349,33 @@ impl BoxHitTestEntry {
     }
 }
 
-/// Box hit test context implementation.
+/// Driver-supplied child recursion for the box hit-test walk.
+///
+/// `(index, position_override, local_transform)`:
+/// - `position_override`: `Some(p)` tests the child at the exact position
+///   `p` (the parent already transformed it — clip / transform objects);
+///   `None` tests at the child's laid-out position (the driver subtracts
+///   the child's `RenderState.offset`).
+/// - `local_transform`: the FORWARD (paint-direction) transform
+///   [`BoxHitTestCtx`]'s own ctx-level stack accumulated before this call
+///   (`None` when nothing was pushed). The driver pushes its inverse onto
+///   the shared `HitTestResult` for the duration of the recursive call —
+///   see [`BoxHitTestCtx::hit_test_child`] — so a render object that calls
+///   `ctx.push_offset`/`ctx.push_transform`/`ctx.with_transform` before
+///   testing a child gets that push folded into `HitTestEntry.transform`
+///   instead of silently discarded.
+///
+/// Returns whether the child subtree was hit.
+// `Send + Sync` mechanically required by `HitTestContextApi`'s bounds
+// (inherited like `LayoutChildCallback`'s bound); the walk itself
+// is control-plane single-threaded.
+pub type HitTestChildCallback<'a> =
+    &'a mut (dyn FnMut(usize, Option<Offset>, Option<Matrix4>) -> bool + Send + Sync);
+
+/// Box-protocol hit-test context: local-space position, the entry
+/// path under construction, the live child recursion supplied by the
+/// pipeline driver, and the transform stack (with a cached composition,
+/// see [`BoxHitTestCtx::current_transform`]).
 ///
 /// # Transform accumulation
 ///
@@ -1366,23 +1392,20 @@ impl BoxHitTestEntry {
 /// (one full re-fold over the now-shorter stack). Per-call cost
 /// drops from O(stack_depth) to O(1) for queries, and pops stay
 /// O(stack_depth) but amortize across the matched push.
-/// Driver-supplied child recursion for the box hit-test walk.
 ///
-/// `(index, position_override)`: `Some(p)` tests the child at the
-/// exact position `p` (the parent already transformed it — clip /
-/// transform objects); `None` tests at the child's laid-out position
-/// (the driver subtracts the child's `RenderState.offset`). Returns
-/// whether the child subtree was hit.
-// `Send + Sync` mechanically required by `HitTestContextApi`'s bounds
-// (inherited like `LayoutChildCallback`'s bound); the walk itself
-// is control-plane single-threaded.
-pub type HitTestChildCallback<'a> =
-    &'a mut (dyn FnMut(usize, Option<Offset>) -> bool + Send + Sync);
-
-/// Box-protocol hit-test context: local-space position, the entry
-/// path under construction, the live child recursion supplied by the
-/// pipeline driver, and the transform stack (with a cached composition,
-/// see [`BoxHitTestCtx::current_transform`]).
+/// # Reaching the driver
+///
+/// `composed_transform` used to be purely local bookkeeping: nothing ever
+/// read it except [`BoxHitTestCtx::add_self`], which is itself dead in
+/// production (render objects use [`HitTestContext::register_self_hit_entry`]
+/// instead — see that method's doc). [`hit_test_child`](Self::hit_test_child)
+/// and [`hit_test_child_at_layout_offset`](Self::hit_test_child_at_layout_offset)
+/// now hand `composed_transform` to the driver's [`HitTestChildCallback`]
+/// on every call, so a push made via `push_transform`/`push_offset` (or
+/// the `with_transform`/`with_offset` scope helpers) actually reaches
+/// `HitTestEntry.transform`.
+///
+/// [`HitTestContext::register_self_hit_entry`]: crate::context::HitTestContext::register_self_hit_entry
 pub struct BoxHitTestCtx<'ctx, A: Arity, P: ParentData> {
     position: Offset,
     result: BoxHitTestResult,
@@ -1457,6 +1480,22 @@ impl<'ctx, A: Arity, P: ParentData> BoxHitTestCtx<'ctx, A, P> {
             .fold(Matrix4::IDENTITY, |acc, t| acc * *t);
     }
 
+    /// The FORWARD transform to hand the driver for the next child call,
+    /// or `None` when nothing is pushed — an empty stack must stay `None`
+    /// rather than `Some(IDENTITY)` so the driver's hot path (the
+    /// overwhelming majority of render objects, which never touch
+    /// `push_transform`/`push_offset`) skips the `with_paint_transform`
+    /// scope entirely instead of pushing a no-op identity onto the shared
+    /// `HitTestResult` stack on every single child recursion.
+    #[inline]
+    fn local_transform_for_driver(&self) -> Option<Matrix4> {
+        if self.transform_stack.is_empty() {
+            None
+        } else {
+            Some(self.composed_transform)
+        }
+    }
+
     /// Adds self as a hit target with the given render ID.
     pub fn add_self(&mut self, target_id: RenderId) {
         let transform = self.current_transform();
@@ -1489,15 +1528,17 @@ impl<'ctx, A: Arity, P: ParentData> HitTestContextApi<'ctx, BoxHitTest, A, P>
     }
 
     fn hit_test_child(&mut self, index: usize, position: Offset) -> bool {
+        let local_transform = self.local_transform_for_driver();
         match self.child_callback.as_mut() {
-            Some(callback) => callback(index, Some(position)),
+            Some(callback) => callback(index, Some(position), local_transform),
             None => false,
         }
     }
 
     fn hit_test_child_at_layout_offset(&mut self, index: usize) -> bool {
+        let local_transform = self.local_transform_for_driver();
         match self.child_callback.as_mut() {
-            Some(callback) => callback(index, None),
+            Some(callback) => callback(index, None, local_transform),
             None => false,
         }
     }

@@ -593,41 +593,62 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             None => position,
         };
 
-        let mut hit_child = |index: usize, override_pos: Option<Offset>| -> bool {
+        let mut hit_child = |index: usize,
+                             override_pos: Option<Offset>,
+                             local_transform: Option<Matrix4>|
+         -> bool {
             let Some(&child_id) = children.get(index) else {
                 return false;
             };
             let Some(child_node) = self.render_tree.get(child_id) else {
                 return false;
             };
-            if child_node.as_sliver().is_some() {
-                // Explicit positions are already child-local; the layout-offset
-                // fallback starts from the child's physical paint offset.
-                return if let Some(position) = override_pos {
-                    let child_position =
-                        Self::sliver_hit_position_from_offset(child_node, position);
-                    self.hit_test_sliver_subtree(child_id, child_position, result)
+            // `local_transform` is the object's own FORWARD (paint-direction)
+            // transform, accumulated by its ctx-level `push_transform`/
+            // `push_offset` calls (`BoxHitTestCtx::composed_transform`).
+            // `with_paint_transform` pushes its INVERSE onto the shared
+            // `HitTestResult`, matching every other forward-transform push
+            // in this walk (`hit_test_transform` above, the follower offset,
+            // Flutter's own `addWithPaintTransform`). Scoped to exactly this
+            // one child recursion — the ctx that accumulated it already
+            // scoped the push/pop to the same call.
+            let dispatch_child = |result: &mut crate::hit_testing::HitTestResult| -> bool {
+                if child_node.as_sliver().is_some() {
+                    // Explicit positions are already child-local; the layout-offset
+                    // fallback starts from the child's physical paint offset.
+                    return if let Some(position) = override_pos {
+                        let child_position =
+                            Self::sliver_hit_position_from_offset(child_node, position);
+                        self.hit_test_sliver_subtree(child_id, child_position, result)
+                    } else {
+                        if !Self::sliver_child_is_visible(child_node) {
+                            return false;
+                        }
+                        let child_offset = child_node.offset();
+                        result.with_paint_offset(child_offset, |result| {
+                            let child_position = Self::sliver_hit_position_from_paint_offset(
+                                child_node,
+                                position - child_offset,
+                            );
+                            self.hit_test_sliver_subtree(child_id, child_position, result)
+                        })
+                    };
+                }
+                if let Some(child_position) = override_pos {
+                    self.hit_test_subtree(child_id, child_position, result)
                 } else {
-                    if !Self::sliver_child_is_visible(child_node) {
-                        return false;
-                    }
                     let child_offset = child_node.offset();
                     result.with_paint_offset(child_offset, |result| {
-                        let child_position = Self::sliver_hit_position_from_paint_offset(
-                            child_node,
-                            position - child_offset,
-                        );
-                        self.hit_test_sliver_subtree(child_id, child_position, result)
+                        self.hit_test_subtree(child_id, position - child_offset, result)
                     })
-                };
-            }
-            if let Some(child_position) = override_pos {
-                self.hit_test_subtree(child_id, child_position, result)
-            } else {
-                let child_offset = child_node.offset();
-                result.with_paint_offset(child_offset, |result| {
-                    self.hit_test_subtree(child_id, position - child_offset, result)
-                })
+                }
+            };
+
+            match local_transform {
+                Some(local_transform) => {
+                    result.with_paint_transform(local_transform, dispatch_child)
+                }
+                None => dispatch_child(result),
             }
         };
 
@@ -862,7 +883,15 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         // driver-owned (checked above), so the sliver context ignores it.
         let own_size = entry.state().absolute_paint_size();
 
-        let mut hit_child = |index: usize, override_pos: Option<MainAxisPosition>| -> bool {
+        let mut hit_child = |index: usize,
+                             override_pos: Option<MainAxisPosition>,
+                             // The sliver protocol's ctx-level transform stack is a
+                             // permanent no-op (`SliverHitTestCtx::push_transform`) —
+                             // this is threaded only for signature uniformity with
+                             // the shared `RenderObject::hit_test_raw` trait method
+                             // and is always `None`.
+                             _local_transform: Option<Matrix4>|
+         -> bool {
             let Some(&child_id) = children.get(index) else {
                 return false;
             };

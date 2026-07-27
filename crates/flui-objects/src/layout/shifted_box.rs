@@ -196,10 +196,15 @@ impl AligningShiftedBox {
     /// from `RenderState` (committed by [`align_child`]) AND records the paint
     /// offset into the `HitTestResult` so `HitTestResult::dispatch` can localize
     /// pointer/scroll events to the child's coordinate space. This is the
-    /// canonical path (`hit_test_child_at_offset` only transforms the recursive
-    /// descent and would leave handlers on an aligned child receiving parent
-    /// coordinates — Flutter `RenderShiftedBox.hitTestChildren` records the
-    /// offset via `addWithPaintOffset`).
+    /// canonical path — it reads the single `RenderState`-owned offset
+    /// directly rather than a value this object must keep mirrored in its own
+    /// field. (`hit_test_child_at_offset` also records the offset it consumes
+    /// now, but takes it as a caller-supplied parameter that can drift from
+    /// what `RenderState` actually committed; prefer
+    /// `hit_test_child_at_layout_offset` whenever the child's real laid-out
+    /// offset is what you mean to test against — Flutter
+    /// `RenderShiftedBox.hitTestChildren` records the offset via
+    /// `addWithPaintOffset`.)
     ///
     /// [`hit_test_child_at_layout_offset`]: BoxHitTestContext::hit_test_child_at_layout_offset
     /// [`align_child`]: AligningShiftedBox::align_child
