@@ -690,6 +690,18 @@ impl GestureBinding {
                 PendingMove::Hover { event, hit_test } => {
                     let delivered = self.dispatch_ephemeral(&event, &hit_test);
                     RoutePanic::preserve_first(&mut first_panic, delivered, "coalesced hover move");
+                    // `MouseRegion::on_hover` has no device-kind gate (Flutter
+                    // parity: `RenderMouseRegion.handleEvent`, unlike
+                    // `MouseTracker.updateWithEvent`'s mouse/stylus-only gate)
+                    // and rides the same coalesced dispatch cadence as the
+                    // ordinary hit-test targets above, not the immediate
+                    // per-raw-event enter/exit update.
+                    let hover_delivered = self.mouse_tracker.dispatch_hover(&event, &hit_test);
+                    RoutePanic::preserve_first(
+                        &mut first_panic,
+                        hover_delivered,
+                        "coalesced mouse hover dispatch",
+                    );
                     count += 1;
                 }
             }
