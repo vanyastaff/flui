@@ -1,4 +1,4 @@
-//! Dependency-inverted tree observation (ADR-0040; audit 2026-07-25 §26/U3).
+//! Dependency-inverted tree observation (ADR-0040).
 //!
 //! `flui-devtools` cannot depend on the tree crates (that would compile the
 //! whole framework into any app enabling inspection and invert nothing), so

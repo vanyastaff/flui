@@ -44,8 +44,8 @@ pub struct MacOSPlatform {
     /// Window configuration
     config: WindowConfiguration,
 
-    /// ADR-0039 slice 1: records the event-loop owner thread so the
-    /// thread-affine AppKit operations below can `debug_assert` their caller.
+    /// Records the event-loop owner thread so the thread-affine AppKit
+    /// operations below can `debug_assert` their caller (ADR-0039).
     affinity: OwnerAffinity,
 }
 
@@ -53,7 +53,7 @@ pub struct MacOSPlatform {
 ///
 /// On AppKit the owner thread must *be* the process main thread —
 /// `ThreadId` equality against the binding thread cannot express that on
-/// its own (ADR-0039 slice 1), so this asks AppKit directly.
+/// its own, so this asks AppKit directly.
 fn debug_assert_appkit_main_thread(op: &'static str) {
     #[cfg(debug_assertions)]
     {
@@ -109,6 +109,10 @@ impl MacOSPlatform {
 
     /// Create a new macOS platform with custom configuration
     pub fn with_config(config: WindowConfiguration) -> Result<Self> {
+        // AppKit is touched below (`NSApp()`, `setActivationPolicy_`), so
+        // the main-thread requirement starts HERE, not at `run` — check it
+        // before the first AppKit operation rather than after the fact.
+        debug_assert_appkit_main_thread("MacOSPlatform::with_config");
         // SAFETY: must run on the main thread (the platform owns the event
         // loop); `NSApp()` returns the shared application singleton which is
         // nil-checked before use.
@@ -135,9 +139,9 @@ impl MacOSPlatform {
                 config,
                 affinity: OwnerAffinity::new(),
             };
-            // The constructor already documents a main-thread requirement
-            // (see the SAFETY note above), so the owner is known here — bind
-            // early so pre-`run` affine calls are covered too (ADR-0039).
+            // The constructor requires the main thread (checked above), so
+            // the owner is known here — bind early so pre-`run` affine
+            // calls are covered too.
             platform.affinity.bind_current();
             Ok(platform)
         }

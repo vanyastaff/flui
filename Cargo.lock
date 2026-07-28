@@ -1801,6 +1801,7 @@ dependencies = [
  "ui-events",
  "wasm-bindgen",
  "web-sys",
+ "web-time",
  "windows",
  "winit",
 ]

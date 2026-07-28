@@ -16,14 +16,16 @@
 //! - offers carry a single `text/uri-list` representation — files only;
 //! - `Dropped.action` is stamped [`TransferActions::COPY`], the file-manager
 //!   convention, because winit cannot report the real effect;
-//! - `update_drop_feedback` / `conclude_drop` are no-ops — winit has no API
-//!   to answer the OS's hover queries or release protocol resources;
+//! - `update_drop_feedback` is a no-op — winit has no API to answer the
+//!   OS's hover queries; `conclude_drop` has no protocol resources to
+//!   release but does retire the offer locally, so a concluded id goes
+//!   stale as the trait contract promises;
 //! - the drop boundary is heuristic: winit delivers one `DroppedFile` per
 //!   file with no terminator, so the burst is frozen at the first
 //!   `about_to_wait` after at least one `DroppedFile`. A straggler
 //!   `DroppedFile` after that freeze mints a **new** defensive session, so a
 //!   pathological split burst surfaces as two complete drops, never one
-//!   truncated one.;
+//!   truncated one;
 //! - a LOST `HoveredFileCancelled` (known flaky on some X11 setups) leaves
 //!   the unfrozen session live, so the next drag's `HoveredFile` paths
 //!   accumulate into it — two distinct drags can merge into one offer with
@@ -242,7 +244,15 @@ impl WinitDataTransfer {
             if let Some(session) = state.sessions.get_mut(&window)
                 && !session.frozen
             {
-                session.paths.push(path);
+                // winit re-reports every hovered path through the
+                // `DroppedFile` arm at the actual drop, so each file of one
+                // drag arrives twice. The session tracks the drag's file
+                // SET, not the event log — an already-known path only arms
+                // the drop flag. (Linear scan: a drag's file count is
+                // small; worst case O(n²) over the burst.)
+                if !session.paths.contains(&path) {
+                    session.paths.push(path);
+                }
                 session.dropped |= dropped;
                 return None;
             }
@@ -349,9 +359,9 @@ impl DataTransferSource for WinitDataTransfer {
     fn conclude_drop(&self, id: DataTransferId) {
         // winit holds no PROTOCOL resources to release — but table
         // retirement is purely local, and the trait contract promises the
-        // offer goes stale after conclusion. Honor it here so the slice-3
-        // realm authority does not inherit a source that silently keeps
-        // concluded offers redeemable until the next mint.
+        // offer goes stale after conclusion. Honor it here so downstream
+        // consumers never see a source that silently keeps concluded
+        // offers redeemable until the next mint.
         let stale_pending = {
             let mut state = self.state.lock();
             state.table.retire(id);
@@ -501,6 +511,51 @@ mod tests {
                 TransferUri::Path(PathBuf::from("/tmp/a.txt")),
                 TransferUri::Path(PathBuf::from("/tmp/b.txt")),
             ]
+        );
+    }
+
+    #[test]
+    fn hover_then_drop_of_the_same_files_yields_each_path_once() {
+        let source = WinitDataTransfer::new();
+        let offer = entered_offer(
+            source
+                .note_hovered_file(WINDOW, PathBuf::from("/tmp/a.txt"), None)
+                .expect("mint"),
+        );
+        assert!(
+            source
+                .note_hovered_file(WINDOW, PathBuf::from("/tmp/b.txt"), None)
+                .is_none()
+        );
+        // The actual drop re-reports both hovered paths (winit's contract):
+        // they must not double up in the frozen payload.
+        assert!(
+            source
+                .note_dropped_file(WINDOW, PathBuf::from("/tmp/a.txt"), None)
+                .is_none()
+        );
+        assert!(
+            source
+                .note_dropped_file(WINDOW, PathBuf::from("/tmp/b.txt"), None)
+                .is_none()
+        );
+
+        source.freeze_completed(&HashMap::new());
+        let outcome = poll_now(source.request(
+            offer.id(),
+            RepresentationIndex(0),
+            TransferLimits::default(),
+        ));
+        let Poll::Ready(Ok(TransferPayload::UriList(uris))) = outcome else {
+            panic!("frozen offer must deliver its UriList, got {outcome:?}");
+        };
+        assert_eq!(
+            uris,
+            vec![
+                TransferUri::Path(PathBuf::from("/tmp/a.txt")),
+                TransferUri::Path(PathBuf::from("/tmp/b.txt")),
+            ],
+            "each dragged file appears exactly once despite the hover+drop double report",
         );
     }
 

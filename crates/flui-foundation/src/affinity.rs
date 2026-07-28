@@ -3,10 +3,10 @@
 //! Native platform backends (`AppKit`, Win32) own an event loop whose OS
 //! objects are thread-affine, yet the `Platform` trait is `Send + Sync` with
 //! `&self` methods — nothing stops a worker thread from calling `open_window`
-//! on macOS, which is undefined-behavior-class misuse of `AppKit`. The full fix is
-//! the `!Send` `OwnerPlatform` capability (ADR-0039 slices 2–3); this module
-//! is slice 1: a recordable owner identity plus a debug assertion backends
-//! place at the entry of their affine operations.
+//! on macOS, which is undefined-behavior-class misuse of `AppKit`. The full
+//! fix is the `!Send` `OwnerPlatform` capability (ADR-0039); this module is
+//! the runtime backstop beneath it: a recordable owner identity plus a debug
+//! assertion backends place at the entry of their affine operations.
 //!
 //! It lives in `flui-foundation` — not `flui-platform` — so its behavior is
 //! exercised by a test suite CI actually runs (`flui-platform`'s suite is
@@ -26,9 +26,9 @@ use std::thread::{self, ThreadId};
 /// [`debug_assert_owner`] at each affine operation's entry.
 ///
 /// Before binding, [`debug_assert_owner`] is deliberately a no-op: pre-run
-/// flows (e.g. Win32 examples opening a window before `run()`) are legal
-/// until ADR-0039 slice 2 migrates them into `on_ready`, and an unbound
-/// affinity has no owner to check against.
+/// flows (e.g. Win32 examples opening a window before `run()`) stay legal
+/// until the `OwnerPlatform` capability moves them into `on_ready`
+/// (ADR-0039), and an unbound affinity has no owner to check against.
 ///
 /// [`bind_current`]: Self::bind_current
 /// [`debug_assert_owner`]: Self::debug_assert_owner

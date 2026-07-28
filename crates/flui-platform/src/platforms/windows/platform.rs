@@ -119,11 +119,11 @@ pub struct WindowsPlatform {
     /// Window configuration (shared across all windows)
     config: WindowConfiguration,
 
-    /// ADR-0039 slice 1: records the message-loop owner thread so the
-    /// thread-affine Win32 operations below can `debug_assert` their caller.
-    /// Bound at `run` — pre-run window creation (the Win32 examples) is legal
-    /// until ADR-0039 slice 2 migrates it into `on_ready`, and the assert is
-    /// a no-op while unbound.
+    /// Records the owner thread so the thread-affine Win32 operations below
+    /// can `debug_assert` their caller (ADR-0039). Bound at construction —
+    /// the message-only window's queue belongs to the constructing thread —
+    /// and re-asserted by `run`. Pre-run window creation on that same
+    /// thread (the Win32 examples) stays legal.
     affinity: flui_foundation::OwnerAffinity,
 }
 
@@ -241,14 +241,21 @@ impl WindowsPlatform {
 
         tracing::info!("Windows platform initialized with Tokio executors");
 
-        Ok(Self {
+        let platform = Self {
             message_window,
             windows: Arc::new(Mutex::new(HashMap::new())),
             handlers: Arc::new(Mutex::new(PlatformHandlers::default())),
             background_executor,
             config,
             affinity: flui_foundation::OwnerAffinity::new(),
-        })
+        };
+        // The message-only window above was just created on THIS thread, so
+        // its message queue already belongs here — the owner is decided at
+        // construction, not at `run`. A later `run` on another thread trips
+        // the foreign re-bind assertion instead of silently accepting a
+        // thread that cannot service the HWND.
+        platform.affinity.bind_current();
+        Ok(platform)
     }
 
     /// Register the window class for all FLUI windows (idempotent via `Once`).
@@ -905,8 +912,9 @@ impl Platform for WindowsPlatform {
     fn run(self: Box<Self>, on_ready: Box<dyn FnOnce(&dyn Platform)>) {
         tracing::info!("Running Windows platform");
 
-        // ADR-0039 slice 1: the thread that runs the message loop owns every
-        // window created from here on.
+        // Idempotent from the constructing thread; a `run` migrated to a
+        // different thread is a bug the re-bind assertion surfaces (the
+        // message-only window's queue is bound to the constructing thread).
         self.affinity.bind_current();
 
         // Call ready callback

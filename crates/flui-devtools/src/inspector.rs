@@ -1,4 +1,5 @@
-//! Counting/logging tree inspector — the ADR-0040 slice-1 consumer.
+//! Counting/logging tree inspector — the first consumer of the ADR-0040
+//! observation seam.
 //!
 //! Proves the dependency-inverted observation seam end to end with only
 //! `flui-foundation` on the dependency list: install an
@@ -16,12 +17,13 @@ use flui_foundation::observe::{
 /// Number of [`RebuildReason`] variants tracked in the per-cause tallies.
 const REASON_COUNT: usize = 10;
 
-/// Counting/logging [`TreeObserver`] — the slice-1 inspector.
+/// Counting/logging [`TreeObserver`].
 ///
 /// Interior state is private atomics; nothing here exposes a lock (SP-6).
-/// All counter updates use `Relaxed`: bare tallies, no data is published
-/// through them, and the observation contract already serializes emissions
-/// per realm (owner-thread, synchronous).
+/// Counter updates use `Relaxed` (bare tallies; the observation contract
+/// serializes emissions per realm), while the end-of-stream flag is
+/// Release/Acquire so a snapshot that observes the stream end also
+/// observes every count that preceded it.
 #[derive(Debug, Default)]
 pub struct InspectorCounters {
     mounts: AtomicU64,
@@ -49,6 +51,12 @@ impl InspectorCounters {
     /// returns no guard (SP-6).
     #[must_use]
     pub fn snapshot(&self) -> InspectorSnapshot {
+        // Acquire on the final flag FIRST: it pairs with the Release store
+        // in `detached()`, so a snapshot observing `is_final() == true`
+        // also observes every count the emitting thread made before the
+        // stream ended. Counters themselves stay Relaxed — mid-stream
+        // snapshots promise per-counter monotonicity only.
+        let detached = self.detached.load(Ordering::Acquire);
         let mut per_reason = [0u64; REASON_COUNT];
         for (slot, counter) in per_reason.iter_mut().zip(&self.per_reason) {
             *slot = counter.load(Ordering::Relaxed);
@@ -59,7 +67,7 @@ impl InspectorCounters {
             rebuilds: self.rebuilds.load(Ordering::Relaxed),
             moves: self.moves.load(Ordering::Relaxed),
             per_reason,
-            detached: self.detached.load(Ordering::Relaxed),
+            detached,
         }
     }
 }
@@ -91,7 +99,9 @@ impl TreeObserver for InspectorCounters {
     }
 
     fn detached(&self) {
-        self.detached.store(true, Ordering::Relaxed);
+        // Release pairs with the Acquire in `snapshot()`: a reader that
+        // sees the final flag sees every count that preceded it.
+        self.detached.store(true, Ordering::Release);
         tracing::debug!("inspector: stream detached");
     }
 }
