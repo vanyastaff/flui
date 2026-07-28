@@ -14,6 +14,7 @@ use flui_types::{
 use parking_lot::Mutex;
 
 use crate::{
+    data_transfer::{DataTransferSource, NullDataTransferSource},
     shared::{PlatformHandlers, WindowCallbacks},
     traits::{
         Clipboard, ClipboardItem, CursorError, DesktopCapabilities, DispatchEventResult, Platform,
@@ -154,6 +155,12 @@ impl Platform for HeadlessPlatform {
 
     fn clipboard(&self) -> Arc<dyn Clipboard> {
         self.with_state(|state| state.clipboard.clone())
+    }
+
+    fn data_transfer(&self) -> Arc<dyn DataTransferSource> {
+        // Headless gets a real test source with the clipboard transport
+        // (ADR-0038); until then it is inert and honest.
+        Arc::new(NullDataTransferSource)
     }
 
     fn capabilities(&self) -> &dyn PlatformCapabilities {

@@ -10,6 +10,7 @@ use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 
 use crate::{
+    data_transfer::{DataTransferSource, NullDataTransferSource},
     shared::{PlatformHandlers, WindowCallbacks},
     traits::*,
 };
@@ -189,6 +190,13 @@ impl Platform for WebPlatform {
 
     fn clipboard(&self) -> Arc<dyn Clipboard> {
         self.with_state(|s| s.clipboard.clone())
+    }
+
+    fn data_transfer(&self) -> Arc<dyn DataTransferSource> {
+        // The web transport (navigator.clipboard, HTML5 DnD) needs its own
+        // design (ADR-0038 §8) — until then this is inert and honest, not a
+        // degraded fake over the write-cache clipboard.
+        Arc::new(NullDataTransferSource)
     }
 
     fn capabilities(&self) -> &dyn PlatformCapabilities {

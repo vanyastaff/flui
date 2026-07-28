@@ -85,6 +85,11 @@ pub fn start() {
             PlatformInput::Ime(ime_event) => {
                 web_sys::console::log_1(&format!("IME: {ime_event:?}").into());
             }
+            PlatformInput::DragDrop(drag_drop_event) => {
+                // The web backend has no data-transfer transport yet
+                // (ADR-0038 §8), so this arm can only log.
+                web_sys::console::log_1(&format!("DragDrop: {drag_drop_event:?}").into());
+            }
         }
         DispatchEventResult::resolved(false, true)
     }));

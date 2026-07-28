@@ -79,6 +79,7 @@ use std::sync::Arc;
 use anyhow::Result;
 pub use window_ext::*;
 
+use crate::data_transfer::{DataTransferSource, NullDataTransferSource};
 use crate::traits::{
     Clipboard, Platform, PlatformCapabilities, PlatformDisplay, PlatformExecutor,
     PlatformReadyCallback, PlatformWindow, WindowEvent, WindowId, WindowOptions,
@@ -164,6 +165,11 @@ impl Platform for LinuxPlatform {
 
     fn clipboard(&self) -> Arc<dyn Clipboard> {
         unimplemented!("Linux clipboard (wayland-data-device/X11 CLIPBOARD) not implemented")
+    }
+
+    fn data_transfer(&self) -> Arc<dyn DataTransferSource> {
+        // No native Linux transport yet (ADR-0038): inert and honest.
+        Arc::new(NullDataTransferSource)
     }
 
     fn capabilities(&self) -> &dyn PlatformCapabilities {

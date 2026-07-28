@@ -738,6 +738,19 @@ ids! {
         /// platform-internal native handle key — the two are not
         /// interchangeable and neither converts implicitly to the other.
         pub type RealmId Realm;
+
+        /// Data-transfer ID - **generational** key identifying one live
+        /// transfer offer: a clipboard snapshot or an in-progress system
+        /// drag session (ADR-0038).
+        ///
+        /// Generational ([`GenId`]): offers are short-lived and their slots
+        /// are reused; a stale id held by a widget across a drag-cancel or a
+        /// clipboard change must fail the generation check instead of
+        /// silently addressing the next offer (ABA). Minted exclusively by
+        /// the one offer table inside a platform's single
+        /// `DataTransferSource` instance, so every observable id is
+        /// redeemable at the place it was minted.
+        pub type DataTransferId DataTransfer;
     }
 }
 
@@ -1444,6 +1457,27 @@ mod tests {
     #[should_panic(expected = "GenId::new requires n >= 1")]
     fn gen_id_new_zero_panics() {
         let _ = RenderId::new(0);
+    }
+
+    /// `DataTransferId` is a full `GenId` domain: pack/unpack round-trip,
+    /// ABA distinctness across generations, and the niche optimisation.
+    #[test]
+    fn data_transfer_id_is_generational_with_niche() {
+        let generation = NonZeroU32::new(3).unwrap();
+        let id = DataTransferId::new_gen(9, generation);
+        assert_eq!(id.index(), 9);
+        assert_eq!(id.generation(), generation);
+
+        let stale = DataTransferId::new_gen(9, NonZeroU32::new(2).unwrap());
+        assert_ne!(
+            stale, id,
+            "a stale DataTransferId must never compare equal to the slot's live id"
+        );
+
+        assert_eq!(
+            size_of::<DataTransferId>(),
+            size_of::<Option<DataTransferId>>()
+        );
     }
 
     /// `GenId` satisfies `TreeId` without `Identifier` (no `.get()`;

@@ -205,6 +205,8 @@ pub use debug::{
     DiagnosticsProperty, DiagnosticsPropertyKind, DiagnosticsTreeStyle,
 };
 pub use id::{
+    // Data-transfer offer identity (ADR-0038)
+    DataTransferId,
     // Core tree IDs (5-tree architecture)
     ElementId,
     // Scheduler IDs (consumed by flui-scheduler)

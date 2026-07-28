@@ -38,6 +38,7 @@ use super::{
 };
 use crate::{
     config::WindowConfiguration,
+    data_transfer::{DataTransferSource, NullDataTransferSource},
     executor::BackgroundExecutor,
     shared::{PlatformHandlers, WindowCallbacks},
     traits::{
@@ -974,6 +975,12 @@ impl Platform for WindowsPlatform {
 
     fn clipboard(&self) -> Arc<dyn Clipboard> {
         Arc::new(super::WindowsClipboard::new())
+    }
+
+    fn data_transfer(&self) -> Arc<dyn DataTransferSource> {
+        // No Win32 transport yet (IDropTarget/IDataObject land with the
+        // native slices of ADR-0038): inert and honest.
+        Arc::new(NullDataTransferSource)
     }
 
     // ==================== Platform Capabilities ====================

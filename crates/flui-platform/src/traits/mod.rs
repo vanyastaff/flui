@@ -24,6 +24,8 @@ pub use input::{
     BasicVelocityTracker,
     // Event dispatch result
     DispatchEventResult,
+    // System drag-and-drop (ADR-0038)
+    DragDropEvent,
     // W3C event types (re-exported from ui-events)
     Key,
     KeyboardEvent,

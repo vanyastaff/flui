@@ -63,21 +63,36 @@ use winit::{
     window::{WindowAttributes, WindowId as WinitWindowId},
 };
 
+use flui_types::geometry::{Pixels, Point, px};
+
 use super::{
     clipboard::ArboardClipboard,
     control::{ControlCommand, ControlReceiver, ControlSendError, ControlSender, control_lane},
+    data_transfer::WinitDataTransfer,
     display::WinitDisplay,
     events as winit_events,
 };
 use crate::{
+    data_transfer::DataTransferSource,
     executor::BackgroundExecutor,
     shared::PlatformHandlers,
     traits::{
         Clipboard, DesktopCapabilities, Platform, PlatformCapabilities, PlatformDisplay,
-        PlatformExecutor, PlatformReadyCallback, PlatformWindow, WindowEvent, WindowId,
-        WindowOptions, WinitWindow,
+        PlatformExecutor, PlatformInput, PlatformReadyCallback, PlatformWindow, WindowEvent,
+        WindowId, WindowOptions, WinitWindow,
     },
 };
+
+/// Convert a tracked physical cursor position to logical pixels.
+fn logical_cursor_point(
+    position: winit::dpi::PhysicalPosition<f64>,
+    scale_factor: f64,
+) -> Point<Pixels> {
+    Point::new(
+        px((position.x / scale_factor) as f32),
+        px((position.y / scale_factor) as f32),
+    )
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum OpenWindowStateError {
@@ -169,6 +184,12 @@ struct WinitPlatformState {
     /// Clipboard
     clipboard: Arc<ArboardClipboard>,
 
+    /// The one data-transfer source of this platform instance (ADR-0038):
+    /// constructed once here, cloned out by `Platform::data_transfer()`,
+    /// never reconstructed — it owns the single offer table, so ids stay
+    /// redeemable across every clone.
+    data_transfer: Arc<WinitDataTransfer>,
+
     /// Map of winit window IDs to platform window IDs
     window_id_map: HashMap<WinitWindowId, WindowId>,
 
@@ -209,6 +230,7 @@ impl WinitPlatformState {
             handlers: PlatformHandlers::new(),
             background_executor: Arc::new(BackgroundExecutor::new()),
             clipboard,
+            data_transfer: Arc::new(WinitDataTransfer::new()),
             window_id_map: HashMap::new(),
             windows: HashMap::new(),
             displays: Vec::new(),
@@ -555,7 +577,7 @@ impl ApplicationHandler for WinitApp {
                 }
 
                 // Notify platform handler
-                let should_exit = self.platform.with_state(|state| {
+                let (should_exit, transfer) = self.platform.with_state(|state| {
                     state
                         .handlers
                         .invoke_window_event(WindowEvent::CloseRequested {
@@ -567,8 +589,12 @@ impl ApplicationHandler for WinitApp {
                     state.windows.remove(&platform_id);
                     state.cursor_positions.remove(&platform_id);
 
-                    state.windows.is_empty()
+                    (state.windows.is_empty(), Arc::clone(&state.data_transfer))
                 });
+
+                // Retire any drag session addressed at this window; parked
+                // deliveries resolve SourceGone (ADR-0038 offer lifecycle).
+                transfer.forget_window(platform_id);
 
                 if should_exit {
                     self.request_exit(event_loop);
@@ -759,11 +785,38 @@ impl ApplicationHandler for WinitApp {
                     win.callbacks().dispatch_visibility_status_change(!occluded);
                 }
             }
+            WinitWindowEvent::HoveredFile(path) => {
+                self.handle_drag_drop_path(platform_id, window.as_ref(), path, DragPath::Hovered);
+            }
+            WinitWindowEvent::DroppedFile(path) => {
+                self.handle_drag_drop_path(platform_id, window.as_ref(), path, DragPath::Dropped);
+            }
+            WinitWindowEvent::HoveredFileCancelled => {
+                let transfer = self
+                    .platform
+                    .with_state(|state| Arc::clone(&state.data_transfer));
+                let event = transfer.note_hover_cancelled(platform_id);
+                // Lock discipline (ADR-0038 §5): both the platform-state and
+                // transfer locks are released before dispatch, mirroring the
+                // CursorMoved arm.
+                if let (Some(event), Some(win)) = (event, window.as_ref()) {
+                    win.callbacks()
+                        .dispatch_input(PlatformInput::DragDrop(event));
+                }
+            }
             _ => {}
         }
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        // Drop-burst boundary (ADR-0038): winit delivers one `DroppedFile`
+        // per file with no end-of-burst marker, so the first `about_to_wait`
+        // after at least one `DroppedFile` freezes the accumulated list as
+        // the offer's payload and emits `Dropped`. A straggler after this
+        // point mints a new defensive session — two complete drops, never
+        // one truncated one (documented winit approximation ceiling).
+        self.freeze_completed_drops();
+
         // Explicit `Wait`, not a no-op: see the module doc's "Vsync pacing"
         // section. Re-asserted every iteration so an upstream winit default
         // change can't silently turn the wake-driven frame loop into a
@@ -780,8 +833,95 @@ impl ApplicationHandler for WinitApp {
     }
 }
 
+/// Which winit file-drag arm produced a path.
+#[derive(Debug, Clone, Copy)]
+enum DragPath {
+    /// `WindowEvent::HoveredFile` — the drag is still in flight.
+    Hovered,
+    /// `WindowEvent::DroppedFile` — the user released; arm the burst freeze.
+    Dropped,
+}
+
 // Helper methods for WinitApp
 impl WinitApp {
+    /// Shared body of the `HoveredFile`/`DroppedFile` arms: feed the path
+    /// into the drag-session state machine and dispatch any resulting event.
+    ///
+    /// Lock discipline (ADR-0038 §5): platform state is only locked to clone
+    /// out the transfer source and the tracked cursor position; both that
+    /// lock and the source's internal lock are released before
+    /// `dispatch_input` runs, mirroring the CursorMoved arm.
+    fn handle_drag_drop_path(
+        &self,
+        platform_id: WindowId,
+        window: Option<&Arc<WinitWindow>>,
+        path: PathBuf,
+        kind: DragPath,
+    ) {
+        let (transfer, cursor) = self.platform.with_state(|state| {
+            (
+                Arc::clone(&state.data_transfer),
+                state.cursor_positions.get(&platform_id).copied(),
+            )
+        });
+        // Last tracked cursor position, if any — possibly stale on Wayland,
+        // where an external drag grabs the cursor (documented limitation).
+        let position = window
+            .and_then(|win| cursor.map(|cursor| logical_cursor_point(cursor, win.scale_factor())));
+        let event = match kind {
+            DragPath::Hovered => transfer.note_hovered_file(platform_id, path, position),
+            DragPath::Dropped => transfer.note_dropped_file(platform_id, path, position),
+        };
+        if let (Some(event), Some(win)) = (event, window) {
+            win.callbacks()
+                .dispatch_input(PlatformInput::DragDrop(event));
+        }
+    }
+
+    /// Freeze completed drop bursts and dispatch their `Dropped` events.
+    /// Cheap in the steady state: one uncontended lock to observe that no
+    /// session is awaiting the freeze.
+    fn freeze_completed_drops(&self) {
+        let transfer = self
+            .platform
+            .with_state(|state| Arc::clone(&state.data_transfer));
+        let windows = transfer.windows_awaiting_freeze();
+        if windows.is_empty() {
+            return;
+        }
+
+        // Snapshot window handles and cursor positions first; the platform
+        // lock is released before scale-factor reads and dispatch.
+        let mut snapshots: Vec<(WindowId, Arc<WinitWindow>, Option<_>)> = Vec::new();
+        self.platform.with_state(|state| {
+            for window_id in &windows {
+                if let Some(win) = state.windows.get(window_id) {
+                    snapshots.push((
+                        *window_id,
+                        Arc::clone(win),
+                        state.cursor_positions.get(window_id).copied(),
+                    ));
+                }
+            }
+        });
+
+        let mut positions = HashMap::new();
+        let mut handles: HashMap<WindowId, Arc<WinitWindow>> = HashMap::new();
+        for (window_id, win, cursor) in snapshots {
+            if let Some(cursor) = cursor {
+                positions.insert(window_id, logical_cursor_point(cursor, win.scale_factor()));
+            }
+            handles.insert(window_id, win);
+        }
+
+        for (window_id, event) in transfer.freeze_completed(&positions) {
+            if let Some(win) = handles.get(&window_id) {
+                win.callbacks()
+                    .dispatch_input(PlatformInput::DragDrop(event));
+            }
+        }
+    }
+
     fn process_control(&mut self, event_loop: &ActiveEventLoop) {
         if self.control.take_quit_requested() {
             self.request_exit(event_loop);
@@ -1002,6 +1142,12 @@ impl Platform for WinitPlatform {
 
     fn clipboard(&self) -> Arc<dyn Clipboard> {
         self.with_state(|state| state.clipboard.clone())
+    }
+
+    fn data_transfer(&self) -> Arc<dyn DataTransferSource> {
+        // Clones of the ONE source constructed at platform init (ADR-0038
+        // §2): every id it mints stays redeemable at every clone.
+        self.with_state(|state| Arc::clone(&state.data_transfer) as Arc<dyn DataTransferSource>)
     }
 
     fn capabilities(&self) -> &dyn PlatformCapabilities {
