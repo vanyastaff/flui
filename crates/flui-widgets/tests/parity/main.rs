@@ -155,3 +155,6 @@ mod pointer_local_position_test;
 
 // ── Business.1 fidelity — MouseRegion parity ────────────────────────────────
 mod mouse_region_test;
+
+// ── Business.1 fidelity — Align parity ──────────────────────────────────────
+mod align_test;
