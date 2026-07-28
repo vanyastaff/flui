@@ -535,3 +535,105 @@ fn fitted_box_with_zero_size_child_does_not_throw() {
     let id = laid.find_by_render_type("RenderFittedBox");
     assert_eq!(laid.size(id), crate::common::size(0.0, 0.0));
 }
+
+/// A cropping fit under a non-`None` clip composites a clip layer, and
+/// composites it **outside** the fit transform.
+///
+/// Flutter parity: `fitted_box_test.dart` `'FittedBox layers - cover -
+/// horizontal'` / `'- vertical'` (3.44.0), whose `getLayers()` walk reads
+/// `[TransformLayer, ClipRectLayer, TransformLayer, OffsetLayer]` — the
+/// leading `TransformLayer` is upstream's render-view root, so the
+/// `FittedBox`-attributable part is `ClipRectLayer` wrapping `TransformLayer`.
+/// `RenderFittedBox.paint` produces that by wrapping the transformed child
+/// paint in `pushClipRect` when `_hasVisualOverflow && clipBehavior !=
+/// Clip.none`.
+///
+/// The absolute chain does not port: FLUI's composited root is an `Offset`
+/// layer, not a `Transform`, so the two frameworks differ by one layer before
+/// the subject is involved. The *order* is the contract, and it is what this
+/// asserts — a clip nested inside the transform would be stated in this box's
+/// coordinates but applied against the child's scaled ones, clipping the wrong
+/// region.
+#[test]
+fn a_cropping_fit_clips_outside_the_transform() {
+    let mut laid = harness::pump_widget(
+        Center::new().child(
+            SizedBox::new(100.0, 10.0).child(
+                FittedBox::new()
+                    .fit(BoxFit::Cover)
+                    .clip(Clip::HardEdge)
+                    .child(SizedBox::new(10.0, 50.0)),
+            ),
+        ),
+        harness::screen(),
+    );
+    laid.pump();
+
+    let kinds = laid.layer_kinds();
+    let clip_at = kinds.iter().position(|k| *k == "ClipRect");
+    let transform_at = kinds.iter().position(|k| *k == "Transform");
+
+    let clip_at = clip_at.unwrap_or_else(|| {
+        panic!("BoxFit::Cover crops the source, so Clip::HardEdge must composite a clip layer; got {kinds:?}")
+    });
+    let transform_at = transform_at
+        .unwrap_or_else(|| panic!("the fit transform must still be composited; got {kinds:?}"));
+    assert!(
+        clip_at < transform_at,
+        "the clip must wrap the transform, not sit inside it — a clip stated in \
+         this box's coordinates would otherwise be applied against the child's \
+         scaled ones; got {kinds:?}"
+    );
+}
+
+/// The same fit with clipping switched off composites no clip layer, and a
+/// fit that does not crop composites none either.
+///
+/// Flutter parity: `fitted_box_test.dart` `'FittedBox layers - contain'`
+/// (3.44.0) reads `[TransformLayer, TransformLayer, OffsetLayer]` — no
+/// `ClipRectLayer`, because `BoxFit.contain` never crops, so
+/// `_hasVisualOverflow` is false whatever `clipBehavior` says.
+///
+/// Both legs matter: `Clip::None` guards the behavior half of the condition
+/// and a non-cropping fit guards the overflow half, so neither alone can be
+/// dropped without the other silently passing.
+#[test]
+fn no_clip_layer_without_both_a_crop_and_a_clip_behavior() {
+    let mut cropping_but_unclipped = harness::pump_widget(
+        Center::new().child(
+            SizedBox::new(100.0, 10.0).child(
+                FittedBox::new()
+                    .fit(BoxFit::Cover)
+                    .clip(Clip::None)
+                    .child(SizedBox::new(10.0, 50.0)),
+            ),
+        ),
+        harness::screen(),
+    );
+    cropping_but_unclipped.pump();
+    assert!(
+        !cropping_but_unclipped.layer_kinds().contains(&"ClipRect"),
+        "Clip::None must not composite a clip layer even when the fit crops; \
+         got {:?}",
+        cropping_but_unclipped.layer_kinds()
+    );
+
+    let mut clipped_but_not_cropping = harness::pump_widget(
+        Center::new().child(
+            SizedBox::new(100.0, 10.0).child(
+                FittedBox::new()
+                    .fit(BoxFit::Contain)
+                    .clip(Clip::HardEdge)
+                    .child(SizedBox::new(50.0, 50.0)),
+            ),
+        ),
+        harness::screen(),
+    );
+    clipped_but_not_cropping.pump();
+    assert!(
+        !clipped_but_not_cropping.layer_kinds().contains(&"ClipRect"),
+        "BoxFit::Contain never crops, so there is nothing to clip regardless of \
+         clip behavior; got {:?}",
+        clipped_but_not_cropping.layer_kinds()
+    );
+}
