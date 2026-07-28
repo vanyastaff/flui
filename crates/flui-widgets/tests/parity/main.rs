@@ -159,3 +159,7 @@ mod mouse_region_test;
 
 // ── Business.1 fidelity — Align parity ──────────────────────────────────────
 mod align_test;
+
+// ── Business.1 fidelity — Viewport parity (slivers_test.dart Viewport
+//    subject) ────────────────────────────────────────────────────────────
+mod viewport_test;
