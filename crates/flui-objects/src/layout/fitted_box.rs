@@ -15,22 +15,14 @@
 //!   regions. Flutter's `RenderFittedBox` reimplements the same math
 //!   inline; the Rust port keeps the math in one place so the seven
 //!   `BoxFit` variants only have to be debugged once.
-//! * The scale + alignment transform is exposed via
-//!   [`RenderBox::paint_transform`] as a single composed
-//!   [`Matrix4`]. The pipeline wraps the child in a `TransformLayer`
-//!   — no manual canvas-state juggling in `paint`. Flutter does the
-//!   same via its `_transform` layer machinery; the Rust shape just
-//!   makes the matrix a first-class trait return value.
+//! * The scale + alignment transform is a single composed [`Matrix4`]
+//!   (`effective_transform`) that `paint` pushes and
+//!   `apply_paint_transform` folds into coordinate mapping —
+//!   one matrix, two consumers, so paint and `localToGlobal` cannot drift.
+//!   Flutter splits the same two duties the same way.
 //! * `has_visual_overflow()` is a public post-layout query method
 //!   (Flutter keeps the equivalent flag private and only consults it
 //!   internally for clip-decision branching).
-//! * `clip_behavior` is stored and surfaced via the diagnosticable
-//!   dump; **active clipping awaits the layer-level clip integration
-//!   that lands in Wave 3b** (alongside `RenderRepaintBoundary`).
-//!   The default `Clip::None` matches the no-clip behaviour exactly,
-//!   so configurations that need clipping must wait or opt into the
-//!   in-progress wiring. This is documented intentionally — same
-//!   defer pattern as Wave 3a's `RenderClipPath::contains`.
 //!
 //! # Divergence found and fixed (widget-parity port, `parity/fitted_box_test.rs`)
 //!
@@ -58,6 +50,24 @@
 //!    be anything but zero); it is now live for any crop under a
 //!    non-degenerate alignment, including the default `CENTER`.
 //!
+//! # Clipping
+//!
+//! `paint` clips to this box when the fit cropped the source, matching
+//! Flutter's `_hasVisualOverflow && clipBehavior != Clip.none` branch. This
+//! module used to record active clipping as deferred, "awaiting the
+//! layer-level clip integration"; that had gone stale — the machinery
+//! (`PaintCx::with_clip_rect`, already used by `RenderClip` and
+//! `RenderPhysicalModel`) was in place.
+//!
+//! What genuinely blocked it was **ordering**, and it is why `paint` pushes
+//! the fit transform itself rather than leaving it to `paint_transform`: the
+//! paint walk emits a node's `paint_transform` layer *before* replaying the
+//! fragment ops that node's `paint` recorded, so a clip opened in `paint`
+//! would land inside the transform — clipping a rectangle stated in this
+//! box's coordinates against the child's scaled ones. Pushing both from
+//! `paint` puts them the right way round; `apply_paint_transform` then keeps
+//! coordinate mapping working without re-emitting the layer.
+//!
 //! Verified at both layers: `flui-types`' own unit tests pin every
 //! `BoxFit::apply` variant against oracle-computed `(source, destination)`
 //! pairs; this crate's `tests/render_object_harness.rs` drives
@@ -68,7 +78,7 @@
 
 use flui_tree::Single;
 use flui_types::{
-    Alignment, Matrix4, Offset, Size,
+    Alignment, Matrix4, Offset, Point, Rect, Size,
     geometry::px,
     layout::{BoxFit, FittedSizes},
     painting::Clip,
@@ -105,6 +115,13 @@ pub struct RenderFittedBox {
     source_offset: Offset,
     /// True iff the scaled child exceeds `size` on either axis.
     has_visual_overflow: bool,
+    /// True iff the child laid out to a zero-area size.
+    ///
+    /// Tracked separately from `has_child` because a degenerate child is still
+    /// *a* child — intrinsics and layout must keep forwarding to it — but it
+    /// must not paint or be hit-tested, which is a property of its measured
+    /// size and so is only knowable after layout.
+    child_is_empty: bool,
 }
 
 impl RenderFittedBox {
@@ -120,6 +137,7 @@ impl RenderFittedBox {
             align_offset: Offset::ZERO,
             source_offset: Offset::ZERO,
             has_visual_overflow: false,
+            child_is_empty: false,
         }
     }
 
@@ -330,8 +348,10 @@ impl RenderBox for RenderFittedBox {
         // (3) Degenerate child → smallest size, identity transform.
         if child_size.width <= px(0.0) || child_size.height <= px(0.0) {
             self.reset_transform_cache();
+            self.child_is_empty = true;
             return incoming.smallest();
         }
+        self.child_is_empty = false;
 
         // (4) Our size honours the parent constraints while preserving the
         //     child's aspect ratio (Flutter uses
@@ -435,6 +455,10 @@ impl RenderBox for RenderFittedBox {
         if !ctx.is_within_own_size() {
             return false;
         }
+        // Flutter's `hitTestChildren` carries the same pair of guards its
+        // `paint` does: `if (size.isEmpty || (child?.size.isEmpty ?? false))`.
+        // A child that cannot be painted must not be reachable by a pointer
+        // either — the box's own size gate above covers the empty-box half.
         if !self.has_child {
             return false;
         }
@@ -467,26 +491,82 @@ impl RenderBox for RenderFittedBox {
         ctx.with_transform(transform, |ctx| ctx.hit_test_child(0, Offset::new(tx, ty)))
     }
 
-    // The `paint_transform` override is the whole point of RenderFittedBox:
-    // the pipeline reads it through `&dyn RenderObject<BoxProtocol>` via the
-    // blanket impl forwarding here.
-    //
-    // Returns the composed translate-then-scale matrix the pipeline applies via
-    // its `TransformLayer` wrapper. Layout caches the scale factors and
-    // alignment offset, so this method is a pure read and does not need the
-    // driver-supplied `size`.
-    fn paint_transform(&self, _size: Size) -> Option<Matrix4> {
+    /// Paints the child through the fit transform, clipped to this box when
+    /// the fit cropped the source.
+    ///
+    /// Flutter's `RenderFittedBox.paint` wraps the transformed child paint in
+    /// `pushClipRect` when `_hasVisualOverflow && clipBehavior != Clip.none`,
+    /// so the composited chain reads clip-outside-transform
+    /// (`[…, ClipRectLayer, TransformLayer, …]`).
+    ///
+    /// **The order is why this pushes the transform itself instead of leaving
+    /// it to `paint_transform`.** The paint walk emits a node's
+    /// `paint_transform` layer *before* replaying the fragment ops that
+    /// node's `paint` recorded, so a clip opened here would land *inside* the
+    /// transform — clipping a rectangle stated in this box's coordinates
+    /// against the child's scaled ones. Pushing both from `paint`, in this
+    /// order, is what puts them the right way round.
+    ///
+    /// `paint_transform` is retained for coordinate mapping (`transform_to`
+    /// and the `localToGlobal` family read it), which is a separate concern
+    /// from layer emission — Flutter likewise keeps `applyPaintTransform`
+    /// alongside `paint`.
+    fn paint(&self, ctx: &mut flui_rendering::context::PaintCx<'_, Single>) {
         if !self.has_child {
-            return None;
+            return;
         }
-        if self.scale_x == 1.0
-            && self.scale_y == 1.0
-            && self.align_offset == Offset::ZERO
-            && self.source_offset == Offset::ZERO
-        {
-            return None;
+
+        let size = ctx.size();
+        // Flutter: `if (child == null || size.isEmpty || child!.size.isEmpty)
+        // return;`. All three clauses matter — a zero-area child still paints
+        // whatever its own `paint` draws (a `CustomPaint` ignores its size
+        // happily), and the fit transform onto or from a zero extent is
+        // degenerate, so neither a collapsed box nor a collapsed child may
+        // reach the child's paint.
+        if self.child_is_empty || size.width.get() <= 0.0 || size.height.get() <= 0.0 {
+            return;
         }
-        Some(self.effective_transform())
+
+        let transform = self.effective_transform();
+        let paint_transformed_child = |ctx: &mut flui_rendering::context::PaintCx<'_, Single>| {
+            // Not a redundant closure: `paint_child` is inherent on PaintCx for
+            // both `Exact<1>` and `Variable`, so the bare path is ambiguous
+            // (E0034) and the lint's suggested rewrite does not compile.
+            #[allow(clippy::redundant_closure_for_method_calls)]
+            ctx.with_transform(transform, |ctx| ctx.paint_child());
+        };
+
+        if self.has_visual_overflow && self.clip_behavior != Clip::None {
+            let bounds = Rect::from_origin_size(Point::ZERO, size);
+            ctx.with_clip_rect(bounds, self.clip_behavior, paint_transformed_child);
+        } else {
+            paint_transformed_child(ctx);
+        }
+    }
+
+    /// Folds the fit transform into a child-to-parent coordinate mapping.
+    ///
+    /// Deliberately overridden instead of leaving the default, which derives
+    /// the same thing from `paint_transform`. `paint` above emits the
+    /// transform layer itself, so `paint_transform` must stay `None` or the
+    /// paint walk would push a *second* transform around the one `paint`
+    /// already opened — applying the fit twice. Mapping still needs the
+    /// matrix, so it is supplied here.
+    ///
+    /// Flutter splits the same two duties the same way: `RenderFittedBox`
+    /// overrides `paint` and `applyPaintTransform` separately, each
+    /// multiplying in `_transform` for its own purpose.
+    fn apply_paint_transform(
+        &self,
+        _child: usize,
+        child_offset: Offset,
+        _size: Size,
+        transform: &mut Matrix4,
+    ) {
+        if self.has_child {
+            *transform *= self.effective_transform();
+        }
+        *transform *= Matrix4::translation(child_offset.dx.0, child_offset.dy.0, 0.0);
     }
 }
 
@@ -546,9 +626,18 @@ mod tests {
         assert_eq!(RenderFittedBox::align_axis(1.0, 100.0), 100.0);
     }
 
-    /// Transform symmetry: `paint_transform` IS `effective_transform`,
-    /// and the inverse maps a visual point back to the child-local
-    /// point — paint and hit-test cannot disagree.
+    /// Transform symmetry: every consumer of the fit transform reads the
+    /// SAME `effective_transform`, and its inverse maps a visual point back
+    /// to the child-local point — paint, coordinate mapping, and hit-test
+    /// cannot disagree.
+    ///
+    /// Asserted through `apply_paint_transform` rather than `paint_transform`
+    /// because `paint` now emits the transform layer itself (so the box can
+    /// open its clip *outside* that layer). `paint_transform` must therefore
+    /// stay at its `None` default — a `Some` there would make the paint walk
+    /// push a second transform around the one `paint` opened, applying the fit
+    /// twice — and that absence is asserted here so the two cannot drift back
+    /// into double-application.
     #[test]
     fn paint_and_hit_test_share_one_transform() {
         let node = RenderFittedBox {
@@ -560,9 +649,17 @@ mod tests {
         };
 
         assert_eq!(
-            node.paint_transform(Size::ZERO),
-            Some(node.effective_transform()),
-            "paint must hand the pipeline the SAME matrix hit-test inverts",
+            RenderBox::paint_transform(&node, Size::ZERO),
+            None,
+            "paint emits the transform layer itself; a Some here would double it",
+        );
+
+        let mut mapped = Matrix4::IDENTITY;
+        node.apply_paint_transform(0, Offset::ZERO, Size::ZERO, &mut mapped);
+        assert_eq!(
+            mapped,
+            node.effective_transform(),
+            "coordinate mapping must fold in the SAME matrix hit-test inverts",
         );
 
         let inverse = node

@@ -535,3 +535,176 @@ fn fitted_box_with_zero_size_child_does_not_throw() {
     let id = laid.find_by_render_type("RenderFittedBox");
     assert_eq!(laid.size(id), crate::common::size(0.0, 0.0));
 }
+
+/// A cropping fit under a non-`None` clip composites a clip layer, and
+/// composites it **outside** the fit transform.
+///
+/// Flutter parity: `fitted_box_test.dart` `'FittedBox layers - cover -
+/// horizontal'` / `'- vertical'` (3.44.0), whose `getLayers()` walk reads
+/// `[TransformLayer, ClipRectLayer, TransformLayer, OffsetLayer]` — the
+/// leading `TransformLayer` is upstream's render-view root, so the
+/// `FittedBox`-attributable part is `ClipRectLayer` wrapping `TransformLayer`.
+/// `RenderFittedBox.paint` produces that by wrapping the transformed child
+/// paint in `pushClipRect` when `_hasVisualOverflow && clipBehavior !=
+/// Clip.none`.
+///
+/// The absolute chain does not port: FLUI's composited root is an `Offset`
+/// layer, not a `Transform`, so the two frameworks differ by one layer before
+/// the subject is involved. The *order* is the contract, and it is what this
+/// asserts — a clip nested inside the transform would be stated in this box's
+/// coordinates but applied against the child's scaled ones, clipping the wrong
+/// region.
+#[test]
+fn a_cropping_fit_clips_outside_the_transform() {
+    let mut laid = harness::pump_widget(
+        Center::new().child(
+            SizedBox::new(100.0, 10.0).child(
+                FittedBox::new()
+                    .fit(BoxFit::Cover)
+                    .clip(Clip::HardEdge)
+                    .child(SizedBox::new(10.0, 50.0)),
+            ),
+        ),
+        harness::screen(),
+    );
+    laid.pump();
+
+    let kinds = laid.layer_kinds();
+    let clip_at = kinds.iter().position(|k| *k == "ClipRect");
+    let transform_at = kinds.iter().position(|k| *k == "Transform");
+
+    let clip_at = clip_at.unwrap_or_else(|| {
+        panic!("BoxFit::Cover crops the source, so Clip::HardEdge must composite a clip layer; got {kinds:?}")
+    });
+    let transform_at = transform_at
+        .unwrap_or_else(|| panic!("the fit transform must still be composited; got {kinds:?}"));
+    assert!(
+        clip_at < transform_at,
+        "the clip must wrap the transform, not sit inside it — a clip stated in \
+         this box's coordinates would otherwise be applied against the child's \
+         scaled ones; got {kinds:?}"
+    );
+}
+
+/// The same fit with clipping switched off composites no clip layer, and a
+/// fit that does not crop composites none either.
+///
+/// Flutter parity: `fitted_box_test.dart` `'FittedBox layers - contain'`
+/// (3.44.0) reads `[TransformLayer, TransformLayer, OffsetLayer]` — no
+/// `ClipRectLayer`, because `BoxFit.contain` never crops, so
+/// `_hasVisualOverflow` is false whatever `clipBehavior` says.
+///
+/// Both legs matter: `Clip::None` guards the behavior half of the condition
+/// and a non-cropping fit guards the overflow half, so neither alone can be
+/// dropped without the other silently passing.
+#[test]
+fn no_clip_layer_without_both_a_crop_and_a_clip_behavior() {
+    let mut cropping_but_unclipped = harness::pump_widget(
+        Center::new().child(
+            SizedBox::new(100.0, 10.0).child(
+                FittedBox::new()
+                    .fit(BoxFit::Cover)
+                    .clip(Clip::None)
+                    .child(SizedBox::new(10.0, 50.0)),
+            ),
+        ),
+        harness::screen(),
+    );
+    cropping_but_unclipped.pump();
+    assert!(
+        !cropping_but_unclipped.layer_kinds().contains(&"ClipRect"),
+        "Clip::None must not composite a clip layer even when the fit crops; \
+         got {:?}",
+        cropping_but_unclipped.layer_kinds()
+    );
+
+    let mut clipped_but_not_cropping = harness::pump_widget(
+        Center::new().child(
+            SizedBox::new(100.0, 10.0).child(
+                FittedBox::new()
+                    .fit(BoxFit::Contain)
+                    .clip(Clip::HardEdge)
+                    .child(SizedBox::new(50.0, 50.0)),
+            ),
+        ),
+        harness::screen(),
+    );
+    clipped_but_not_cropping.pump();
+    assert!(
+        !clipped_but_not_cropping.layer_kinds().contains(&"ClipRect"),
+        "BoxFit::Contain never crops, so there is nothing to clip regardless of \
+         clip behavior; got {:?}",
+        clipped_but_not_cropping.layer_kinds()
+    );
+}
+
+/// A zero-area child is neither painted nor hit-testable, even when the box
+/// itself has a real size.
+///
+/// Flutter parity: `RenderFittedBox.paint` opens with
+/// `if (child == null || size.isEmpty || child!.size.isEmpty) return;`, and
+/// `hitTestChildren` carries the matching
+/// `if (size.isEmpty || (child?.size.isEmpty ?? false)) return false;`
+/// (`rendering/proxy_box.dart`, 3.44.0).
+///
+/// The child clause is the one under test, so the box is given a real 200×200
+/// size — with an empty box too, the box's own guard would pass this
+/// vacuously. A zero-area child is not inert: it still runs its own `paint`,
+/// and a fit transform onto or from a zero extent is degenerate, so letting it
+/// through paints content at an undefined scale.
+///
+/// Red-check, stated precisely because the two halves are not symmetric:
+/// dropping `self.child_is_empty` from the **paint** guard fails the layer
+/// assertion (composited `["Offset", "Transform"]` — the fit transform opened
+/// around a child with no area). Dropping it from the **hit-test** guard
+/// changes nothing measurable here: a zero-area child fails its own bounds
+/// check anyway, so the tap misses either way. That guard is kept for oracle
+/// parity and as a cheap early-out, not because this test discriminates it —
+/// saying so here rather than letting the tap assertion imply otherwise.
+#[test]
+fn a_zero_area_child_neither_paints_nor_hit_tests() {
+    let taps = Arc::new(AtomicUsize::new(0));
+    let in_cb = Arc::clone(&taps);
+
+    let mut laid = harness::pump_widget(
+        Center::new().child(
+            SizedBox::square(200.0).child(
+                FittedBox::new().child(
+                    SizedBox::shrink().child(
+                        GestureDetector::new()
+                            .behavior(HitTestBehavior::Opaque)
+                            .on_tap(move || {
+                                in_cb.fetch_add(1, Ordering::SeqCst);
+                            }),
+                    ),
+                ),
+            ),
+        ),
+        harness::screen(),
+    );
+
+    let fitted = laid.find_by_render_type("RenderFittedBox");
+    assert_eq!(
+        laid.size(fitted),
+        crate::common::size(200.0, 200.0),
+        "the box itself must have a real size, so this exercises the child \
+         clause rather than the empty-box one"
+    );
+
+    laid.pump();
+    assert!(
+        !laid.layer_kinds().contains(&"Transform"),
+        "a zero-area child must not be painted through the fit transform; \
+         composited {:?}",
+        laid.layer_kinds()
+    );
+
+    let centre = box_point_to_absolute(&laid, fitted, offset(100.0, 100.0));
+    laid.dispatch_pointer_down(centre.dx.get(), centre.dy.get());
+    laid.dispatch_pointer_up(centre.dx.get(), centre.dy.get());
+    assert_eq!(
+        taps.load(Ordering::SeqCst),
+        0,
+        "a child that cannot be painted must not be reachable by a pointer"
+    );
+}
