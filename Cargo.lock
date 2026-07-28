@@ -1780,6 +1780,7 @@ dependencies = [
  "crossbeam-channel",
  "cursor-icon",
  "dpi",
+ "flui-foundation",
  "flui-types",
  "keyboard-types",
  "libc",

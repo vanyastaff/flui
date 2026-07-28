@@ -7,6 +7,7 @@ use cocoa::{
     appkit::{NSApp, NSApplication, NSApplicationActivationPolicyRegular},
     base::{YES, id, nil},
 };
+use flui_foundation::OwnerAffinity;
 use objc::{class, msg_send, sel, sel_impl};
 use parking_lot::Mutex;
 
@@ -41,6 +42,33 @@ pub struct MacOSPlatform {
 
     /// Window configuration
     config: WindowConfiguration,
+
+    /// ADR-0039 slice 1: records the event-loop owner thread so the
+    /// thread-affine AppKit operations below can `debug_assert` their caller.
+    affinity: OwnerAffinity,
+}
+
+/// Debug-only check that the caller is the OS main thread.
+///
+/// On AppKit the owner thread must *be* the process main thread —
+/// `ThreadId` equality against the binding thread cannot express that on
+/// its own (ADR-0039 slice 1), so this asks AppKit directly.
+fn debug_assert_appkit_main_thread(op: &'static str) {
+    #[cfg(debug_assertions)]
+    {
+        // SAFETY: `+[NSThread isMainThread]` is a documented thread-safe
+        // class method with no arguments and a BOOL return.
+        let is_main: objc::runtime::BOOL = unsafe { msg_send![class!(NSThread), isMainThread] };
+        debug_assert!(
+            is_main != objc::runtime::NO,
+            "BUG: `{op}` must run on the AppKit main thread — thread-affine \
+             AppKit APIs are reached through the owner thread (ADR-0039)"
+        );
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        let _ = op;
+    }
 }
 
 // SAFETY: the NSApplication pointer is a process-wide singleton only messaged
@@ -98,13 +126,19 @@ impl MacOSPlatform {
 
             tracing::info!("macOS platform initialized with AppKit");
 
-            Ok(Self {
+            let platform = Self {
                 app,
                 windows: Arc::new(Mutex::new(HashMap::new())),
                 handlers: Arc::new(Mutex::new(PlatformHandlers::default())),
                 background_executor,
                 config,
-            })
+                affinity: OwnerAffinity::new(),
+            };
+            // The constructor already documents a main-thread requirement
+            // (see the SAFETY note above), so the owner is known here — bind
+            // early so pre-`run` affine calls are covered too (ADR-0039).
+            platform.affinity.bind_current();
+            Ok(platform)
         }
     }
 
@@ -120,6 +154,11 @@ impl Platform for MacOSPlatform {
     }
 
     fn run(self: Box<Self>, on_finish_launching: PlatformReadyCallback) {
+        // Idempotent when `with_config` already bound on this thread; trips
+        // a debug assertion if `run` somehow migrated threads (ADR-0039).
+        self.affinity.bind_current();
+        debug_assert_appkit_main_thread("MacOSPlatform::run");
+
         // Call the launch callback. This is an ordinary (safe) call — keep it
         // outside the `unsafe` block below rather than widening that block's
         // scope to cover code that needs no unsafe justification.
@@ -140,6 +179,8 @@ impl Platform for MacOSPlatform {
     }
 
     fn quit(&self) {
+        self.affinity.debug_assert_owner("MacOSPlatform::quit");
+        debug_assert_appkit_main_thread("MacOSPlatform::quit");
         // SAFETY: `self.app` is the live NSApplication singleton.
         unsafe {
             tracing::info!("Requesting application quit");
@@ -148,12 +189,18 @@ impl Platform for MacOSPlatform {
     }
 
     fn open_window(&self, options: WindowOptions) -> Result<Arc<dyn PlatformWindow>> {
+        self.affinity
+            .debug_assert_owner("MacOSPlatform::open_window");
+        debug_assert_appkit_main_thread("MacOSPlatform::open_window");
         let window = MacOSWindow::new(options, Arc::clone(&self.windows), self.config.clone())?;
 
         Ok(window)
     }
 
     fn active_window(&self) -> Option<WindowId> {
+        self.affinity
+            .debug_assert_owner("MacOSPlatform::active_window");
+        debug_assert_appkit_main_thread("MacOSPlatform::active_window");
         // SAFETY: `self.app` is the live NSApplication singleton; `keyWindow`
         // returns nil or a live NSWindow whose pointer value is used as an id.
         unsafe {
@@ -168,10 +215,15 @@ impl Platform for MacOSPlatform {
     }
 
     fn displays(&self) -> Vec<Arc<dyn PlatformDisplay>> {
+        self.affinity.debug_assert_owner("MacOSPlatform::displays");
+        debug_assert_appkit_main_thread("MacOSPlatform::displays");
         display::enumerate_displays()
     }
 
     fn primary_display(&self) -> Option<Arc<dyn PlatformDisplay>> {
+        self.affinity
+            .debug_assert_owner("MacOSPlatform::primary_display");
+        debug_assert_appkit_main_thread("MacOSPlatform::primary_display");
         display::enumerate_displays()
             .into_iter()
             .find(|d| d.is_primary())
