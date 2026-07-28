@@ -6,6 +6,11 @@ name: Weekly
 #   latest-deps — upstream semver breakage: fresh `cargo update` + full build
 #                 and test run, so a breaking dependency release surfaces here
 #                 before it lands in someone's PR
+#   bench       — executes the criterion benches and uploads the numbers as
+#                 an artifact. TREND DATA ONLY, never a gate: shared runners
+#                 are noisy, so the numbers support "did this drift over
+#                 weeks", not "did this PR regress" — real A/B comparisons
+#                 happen locally via `just bench-save` / `just bench-compare`.
 # Runs Monday ~05:17 UTC (off the :00/:30 herd marks). Not a merge gate;
 # failures surface in the Actions tab.
 
@@ -84,3 +89,34 @@ jobs:
 
       - name: cargo nextest run (lib + integration)
         run: cargo nextest run --workspace --exclude flui-platform --no-fail-fast
+
+  bench:
+    name: bench (criterion numbers, trend artifact)
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    # Advisory by design: a noisy-runner outlier must not page anyone.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+
+      - name: Cache cargo registry + target
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+
+      # The script enumerates the real [[bench]] targets (plain `cargo bench`
+      # also selects libtest-harness targets, which reject criterion flags)
+      # and skips the feature-gated GPU benches. --noplot keeps the artifact
+      # to the raw estimates.json files, which is what comparisons consume.
+      - name: Run criterion benches (save weekly baseline)
+        run: bash scripts/bench-collect.sh weekly
+
+      - name: Upload criterion numbers
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: criterion-weekly-${{ github.run_id }}
+          path: target/criterion
+          retention-days: 90
