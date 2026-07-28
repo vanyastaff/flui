@@ -4,25 +4,29 @@
 //!
 //! ## Development-only
 //!
-//! **Do not ship an application that reaches this crate at runtime.** The plugin
-//! boundary is unsound by construction, not by omission:
+//! **Do not ship an application that reaches this crate at runtime.** The
+//! boundary contracts are enforced as far as a dlopen design allows, and the
+//! remaining exposure is documented rather than hidden:
 //!
-//! * [`ScenePlugin::build_scene`] reclaims, with the host's drop glue and
-//!   allocator, a `Box<Scene>` the plugin allocated. `Scene` is `repr(Rust)`, so
-//!   nothing guarantees the two compilations agree on its layout, and it works
-//!   today only because neither side installs a `#[global_allocator]`. It is an
-//!   `unsafe fn` whose contract the caller cannot fully discharge.
-//! * A returned `Scene` holds `Box<dyn FnOnce>` and `Arc<dyn Any>` whose vtables
-//!   live in the plugin image, and no lifetime ties it to [`dynlib::DynLib`]'s
-//!   `dlclose`.
-//! * [`worker::get_worker_build_ptr`] hands out a code address that dangles after
-//!   [`worker::WorkerPlugin::unload`] — the registry is never pruned.
-//! * The plugin's `flui_*_version` symbol is resolved and never compared against
-//!   a host-expected value, and `flui_scene_drop` — the deallocator that would
-//!   be correct — is resolved and never called.
-//!
-//! Making this sound needs an opaque-handle C ABI, or never unloading the
-//! library, or process isolation. Tracked; until then this is a dev-loop tool.
+//! * Layout agreement for the `repr(Rust)` payloads is established by an
+//!   ABI-token handshake ([`abi_token`]): every plugin macro exports
+//!   `flui_*_abi_token`, and each loader refuses a library whose token
+//!   (compiler identity + crate version + payload size/align) differs from
+//!   the host's. Same-token builds from one worktree are the only supported
+//!   configuration.
+//! * Scene memory is allocated AND deallocated inside the plugin image: the
+//!   host moves the value out with `ptr::read` and returns the emptied box
+//!   through `flui_*_free`, so no cross-image allocator or drop-glue pairing
+//!   is assumed.
+//! * The worker build registry is pruned by [`worker::WorkerPlugin`]'s `Drop`
+//!   BEFORE its image unmaps, so [`worker::get_worker_build_ptr`] returning
+//!   `Some` implies a live image; `None` means "worker unavailable".
+//! * What remains, and why this stays a dev-loop tool: a returned `Scene`
+//!   holds `Box<dyn FnOnce>` and `Arc<dyn Any>` whose vtables live in the
+//!   plugin image, and no lifetime ties it to [`dynlib::DynLib`]'s `dlclose`
+//!   — the caller must drop the scene before unloading
+//!   ([`ScenePlugin::build_scene`] stays `unsafe` for exactly this), and the
+//!   token handshake is a strong tripwire, not a proof of layout equality.
 //!
 //! ## Two-Layer Architecture
 //!
@@ -47,8 +51,11 @@
 //!
 //! The plugin builds a real [`flui_layer::Scene`] using normal FLUI APIs.
 //! The macro wraps it with `extern "C"` functions that pass an opaque pointer
-//! (`Box::into_raw`) across the FFI boundary. The host takes ownership back
-//! via `Box::from_raw`. No serialization, no `#[repr(C)]` types needed.
+//! (`Box::into_raw`) across the FFI boundary. The host moves the value out
+//! with `ptr::read` and hands the emptied box back to the plugin's
+//! `flui_*_free`, after the load-time ABI-token handshake has established
+//! that both sides agree on the layout. No serialization, no `#[repr(C)]`
+//! types needed.
 //!
 //! ## Cross-Platform
 //!
@@ -118,6 +125,9 @@ pub mod strategy;
 pub mod dev;
 
 pub mod engine;
+
+mod abi;
+pub use abi::abi_token;
 
 #[cfg(feature = "app-plugin")]
 mod pipeline;

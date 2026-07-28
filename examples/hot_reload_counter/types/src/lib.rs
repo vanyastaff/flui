@@ -19,8 +19,15 @@ type CounterBuildFn = fn(WorkerBuildEnv<'_>, &CounterAppState, &CounterApp) -> B
 
 #[allow(unsafe_code)]
 fn get_counter_build() -> CounterBuildFn {
-    let ptr = flui_hot_reload::get_worker_build_ptr(TYPE_FINGERPRINT)
-        .expect("counter worker not loaded — build the logic crate and set FLUI_WORKER_PLUGIN");
+    // `None` is now a clean "worker unavailable" signal (the registry is
+    // pruned before an image unmaps, and a layout-fingerprint change after a
+    // reload registers under a different key), so this panic is a loud but
+    // safe failure — never a jump into unmapped code.
+    let ptr = flui_hot_reload::get_worker_build_ptr(TYPE_FINGERPRINT).expect(
+        "counter worker unavailable — build the logic crate, set \
+         FLUI_WORKER_PLUGIN, and restart the host if the shared types layout \
+         changed (fingerprint mismatch)",
+    );
     // SAFETY: the worker registers this pointer via host-owned storage in
     // `flui_worker_init` with the same `CounterBuildFn` signature.
     unsafe { std::mem::transmute(ptr) }
