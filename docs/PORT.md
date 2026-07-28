@@ -1085,7 +1085,6 @@ This section indexes **crate-level** `ARCHITECTURE.md` template state. For docum
 | `flui-binding` | Not yet templated | Active |
 | `flui-app` | Not yet templated | Active |
 | `flui-animation` | `crates/flui-animation/docs/ARCHITECTURE.md` (pre-template) | Active |
-| `flui-reactivity` | Not yet templated | Disabled |
 | `flui-devtools` | Not yet templated | Active |
 | `flui-cli` | Not yet templated | Active |
 | `flui-build` | Not yet templated | Active |

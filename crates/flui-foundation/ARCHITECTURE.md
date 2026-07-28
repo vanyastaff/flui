@@ -205,8 +205,6 @@ class TextEditingController extends ValueNotifier<TextEditingValue> {
 }
 ```
 
-**FLUI:** See `flui-reactivity` for signal-based alternative.
-
 ---
 
 ## 6. Collections
@@ -645,7 +643,7 @@ return SynchronousFuture<RestorationBucket?>(_rootBucket);
 | Decision | Flutter | FLUI |
 |----------|---------|------|
 | Tree hierarchy | `DiagnosticableTree` mixin | `Debug` trait + custom traits |
-| State notification | `ChangeNotifier` | Signals (`flui-reactivity`) |
+| State notification | `ChangeNotifier` | `Notifier` / `ChangeNotifier` (this crate) |
 | Error handling | `FlutterError` | `thiserror` + `anyhow` |
 | Identity | `Key` class hierarchy | `Key` trait + impls |
 | IDs | Plain integers | `Id<T: Marker>` (wgpu-style) |
@@ -663,7 +661,7 @@ return SynchronousFuture<RestorationBucket?>(_rootBucket);
 |------|-----------|-------|-----|
 | `BindingBase::INITIALIZED` flag | `&'static AtomicBool` | `binding.rs:135, 180-182` | One-shot initialisation guard for a binding singleton. Set-once, then read-only. Off any hot path. |
 | `GlobalKey` ID counter | `AtomicU64` (static) | `key.rs:140, 462` | Monotonic key allocator. `fetch_add` only, no contention pattern. Off any hot path. |
-| `Notifier::listeners` | `Arc<parking_lot::Mutex<HashMap<ListenerId, ListenerCallback>>>` | `notifier.rs:116, 140` | Listener registry held during register/unregister/notify. Notifier callbacks are invoked outside the lock (clone-then-iterate pattern from [`docs/plans/2026-03-31-core-crates-hardening.md`](../../docs/plans/2026-03-31-core-crates-hardening.md) Task 3). Not on the render hot path; consumed by the build phase and by `flui-reactivity` (currently disabled). |
+| `Notifier::listeners` | `Arc<parking_lot::Mutex<HashMap<ListenerId, ListenerCallback>>>` | `notifier.rs:116, 140` | Listener registry held during register/unregister/notify. Notifier callbacks are invoked outside the lock (clone-then-iterate pattern from [`docs/plans/2026-03-31-core-crates-hardening.md`](../../docs/plans/2026-03-31-core-crates-hardening.md) Task 3). Not on the render hot path; consumed by the build phase. |
 | `Notifier::next_id` | `Arc<AtomicUsize>` | `notifier.rs:117, 141` | Listener-ID allocator. `fetch_add` only. |
 
 No `RwLock` in `flui-foundation`. No primitive listed here sits inside `perform_layout` / `paint` / `View::build`.
@@ -685,6 +683,6 @@ Latent question worth tracking — not a violation:
 Items below are concrete cleanups visible from `flui-foundation` outward. Each is sized for an `/aif-implement` dispatch without out-of-band clarification.
 
 - **`Notifier` re-entrancy semantics** — document the round-N-vs-round-N+1 behaviour described in `## Friction log` in the `Notifier` rustdoc so callers can reason about it. Trivial doc change; no code touch.
-- **Architecture Decision Summary follow-through** — the summary table at the top of this document declares "State notification → Signals (`flui-reactivity`)" but `flui-reactivity` is currently disabled in the workspace. When `flui-reactivity` is re-enabled, audit whether `Notifier`'s public API should be deprecated in favour of the signals surface, or whether both stay as a permanent split (`flui-foundation` for the trait, `flui-reactivity` for the reactive layer). Decision recorded here when made.
+- **State-notification surface decided** — `Notifier`/`ChangeNotifier` in this crate is the state-notification mechanism. The signals crate that the summary table once pointed at (`flui-reactivity`) was removed 2026-07-28 (zero consumers; contract C1 locks the catalog to the setState/Inherited model), so there is no pending split to resolve.
 
 ---

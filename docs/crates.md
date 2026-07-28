@@ -25,12 +25,6 @@ A crate marked **DISABLED** is commented out in `Cargo.toml` `[workspace.members
 | `flui-macros` | ✅ ACTIVE | Proc-macro crate for framework derives and generated boilerplate |
 | `flui-tree` | ✅ ACTIVE | Generic tree abstractions: `TreeRead` / `TreeNav` / `TreeWrite` trio, iterators / slots, arity markers (`Leaf` / `Single` / `Optional` / `Variable`), depth markers. The Cycle-3 audit deleted speculative `visitor` / `diff` modules (~10k LOC zombie surface) — concrete trees adopt the trio directly |
 
-## Layer 2 — Reactivity
-
-| Crate | Status | Purpose |
-|-------|--------|---------|
-| `flui-reactivity` | ⏸️ DISABLED | Signals, hooks, computed values, batched updates |
-
 ## Layer 3 — Painting / Layer / Semantics / Interaction
 
 These crates compose the rendering substrate without knowing about each other.

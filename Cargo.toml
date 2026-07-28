@@ -60,12 +60,12 @@ members = [
     "crates/flui-devtools", # Profiler / inspector / hot-reload protocol
     "crates/flui-build",    # Build orchestration (android / cross)
     "crates/flui-cli",      # `flui` CLI (run / build / devtools / templates)
-    # NOTE: flui-reactivity is excluded — its manifest inherits `any_spawner` from
-    # workspace.dependencies, which is not declared at the root (the reactive
-    # runtime is not wired into the workspace). The crate is standalone-by-design
-    # (0 consumers — "signals locked out by C1"); re-include it only when signals
-    # are integrated into the view layer and its deps are added to the workspace.
-    # "crates/flui-reactivity",
+    # NOTE: there is deliberately NO signals crate. flui-reactivity (a signals/
+    # hooks experiment) was removed 2026-07-28: it had zero consumers, could not
+    # build even standalone (inherited workspace deps that were never declared),
+    # and contract C1 locks the catalog to the setState/Inherited model. Its
+    # process-global runtime also predated the UiRealm model — any future
+    # signals story is a new realm-scoped design, not a revival. History: git.
 ]
 
 # Default members exclude platform-specific examples/tools. `cargo build
