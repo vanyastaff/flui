@@ -221,11 +221,11 @@ impl WindowsBackdrop {
     /// values.
     pub fn to_dwm_value(self) -> i32 {
         match self {
-            WindowsBackdrop::None => 1,    // DWMSBT_NONE
-            WindowsBackdrop::Mica => 2,    // DWMSBT_MAINWINDOW (Mica)
-            WindowsBackdrop::MicaAlt => 4, // DWMSBT_TABBEDWINDOW (Mica Alt)
+            WindowsBackdrop::None => 1, // DWMSBT_NONE
+            WindowsBackdrop::Mica => 2, // DWMSBT_MAINWINDOW (Mica)
+            // DWMSBT_TABBEDWINDOW backs both Mica Alt and Tabbed.
+            WindowsBackdrop::MicaAlt | WindowsBackdrop::Tabbed => 4,
             WindowsBackdrop::Acrylic => 3, // DWMSBT_TRANSIENTWINDOW (Acrylic)
-            WindowsBackdrop::Tabbed => 4,  // DWMSBT_TABBEDWINDOW
         }
     }
 

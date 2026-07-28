@@ -312,7 +312,7 @@ fn test_windows_enum_display_monitors() {
     );
 
     // Verify each display has Windows-specific properties correct
-    for disp in displays.iter() {
+    for disp in &displays {
         let bounds = disp.bounds();
 
         tracing::info!(
@@ -368,7 +368,7 @@ fn test_macos_nsscreen_enumeration() {
     );
 
     // Verify macOS-specific properties
-    for disp in displays.iter() {
+    for disp in &displays {
         let bounds = disp.bounds();
         let scale = disp.scale_factor();
 

@@ -207,7 +207,7 @@ impl WindowManager {
 
     /// Get windows in a group.
     pub fn get_group(&self, group_id: GroupId) -> Option<&[WindowId]> {
-        self.groups.get(&group_id).map(|v| v.as_slice())
+        self.groups.get(&group_id).map(std::vec::Vec::as_slice)
     }
 
     /// Remove window from its group.

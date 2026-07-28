@@ -98,7 +98,7 @@ fn test_windows_mode_transitions() {
             tracing::info!("✓ T017 PASS: Windows mode transitions verified");
         }
         Err(e) => {
-            panic!("Windows platform should support window creation: {}", e);
+            panic!("Windows platform should support window creation: {e}");
         }
     }
 }
@@ -143,7 +143,7 @@ fn test_macos_mode_transitions() {
             tracing::info!("✓ T018 PASS: macOS mode transitions verified");
         }
         Err(e) => {
-            panic!("macOS platform should support window creation: {}", e);
+            panic!("macOS platform should support window creation: {e}");
         }
     }
 }

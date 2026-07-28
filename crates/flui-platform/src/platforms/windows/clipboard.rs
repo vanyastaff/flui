@@ -25,9 +25,9 @@ use crate::traits::Clipboard;
 /// applications.
 #[derive(Debug)]
 pub struct WindowsClipboard {
-    /// Dummy HWND for clipboard operations (we use None which means current
-    /// thread) Mutex is used to ensure thread-safe access
-    _lock: Mutex<()>,
+    /// Serializes clipboard operations on this instance — the Win32
+    /// clipboard is a global resource opened per operation.
+    lock: Mutex<()>,
 }
 
 impl WindowsClipboard {
@@ -35,7 +35,7 @@ impl WindowsClipboard {
     pub fn new() -> Self {
         tracing::debug!("Created Windows clipboard");
         Self {
-            _lock: Mutex::new(()),
+            lock: Mutex::new(()),
         }
     }
 }
@@ -48,7 +48,7 @@ impl Default for WindowsClipboard {
 
 impl Clipboard for WindowsClipboard {
     fn read_text(&self) -> Option<String> {
-        let _guard = self._lock.lock();
+        let _guard = self.lock.lock();
 
         unsafe {
             // Open clipboard (None = current thread's window)
@@ -67,12 +67,13 @@ impl Clipboard for WindowsClipboard {
             }
 
             // Get clipboard data - returns HANDLE which we convert to HGLOBAL
-            let handle_result = GetClipboardData(CF_UNICODETEXT.0 as u32);
-            if let Err(e) = handle_result {
-                tracing::warn!(?e, "Failed to get clipboard data");
-                return None;
-            }
-            let handle = handle_result.unwrap();
+            let handle = match GetClipboardData(CF_UNICODETEXT.0 as u32) {
+                Ok(handle) => handle,
+                Err(e) => {
+                    tracing::warn!(?e, "Failed to get clipboard data");
+                    return None;
+                }
+            };
 
             if handle.is_invalid() {
                 tracing::debug!("Clipboard handle is invalid");
@@ -91,7 +92,10 @@ impl Clipboard for WindowsClipboard {
 
             // Convert wide string to Rust String
             let wide_ptr = ptr as *const u16;
-            let len = (0..).take_while(|&i| *wide_ptr.offset(i) != 0).count();
+            let mut len: usize = 0;
+            while *wide_ptr.add(len) != 0 {
+                len += 1;
+            }
             let wide_slice = std::slice::from_raw_parts(wide_ptr, len);
             let rust_string = String::from_utf16_lossy(wide_slice);
 
@@ -104,7 +108,7 @@ impl Clipboard for WindowsClipboard {
     }
 
     fn write_text(&self, text: String) {
-        let _guard = self._lock.lock();
+        let _guard = self.lock.lock();
 
         unsafe {
             // Open clipboard
@@ -143,7 +147,7 @@ impl Clipboard for WindowsClipboard {
                 return;
             }
 
-            std::ptr::copy_nonoverlapping(wide.as_ptr() as *const u8, ptr as *mut u8, size);
+            std::ptr::copy_nonoverlapping(wide.as_ptr().cast::<u8>(), ptr.cast::<u8>(), size);
 
             let _ = GlobalUnlock(global);
 
@@ -193,7 +197,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // Flaky: clipboard can be modified by other processes
+    #[ignore = "flaky: the clipboard can be modified by other processes"]
     fn test_clipboard_roundtrip() {
         // Note: This test requires clipboard access and may fail in CI
         let clipboard = WindowsClipboard::new();

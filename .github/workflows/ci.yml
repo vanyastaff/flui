@@ -666,16 +666,19 @@ jobs:
         run: cargo check --workspace --locked --target wasm32-unknown-unknown ${{ env.NO_WASM_PKGS }}
 
   # ─────────────────────────────────────────────────────────────────────────
-  # cross-typecheck — flui-platform's per-OS backends, TYPE-CHECKED from Linux.
-  # `cargo check` does not link, so the Win32 and AppKit backends compile from
-  # any host. Before this job they were only ever built by whoever happened to
-  # develop on that OS: the Windows backend had a hard `missing_docs` error
-  # (`pub mod win32`) and both backends had missing Debug impls that the Linux
-  # and wasm gates structurally could not see.
+  # cross-typecheck — flui-platform's per-OS backends, LINTED from Linux.
+  # `cargo clippy` does not link, so the Win32 and AppKit backends compile
+  # from any host. Before this job they were only ever built by whoever
+  # happened to develop on that OS: the Windows backend had a hard
+  # `missing_docs` error (`pub mod win32`) and both backends had missing
+  # Debug impls that the Linux and wasm gates structurally could not see.
   #
-  # Named `typecheck`, not `check`, on purpose: it does NOT link and runs NO
-  # tests, and flui-platform is excluded from the `test` job entirely, so this
-  # is the only gate touching those backends. Green means "compiles".
+  # clippy, not plain check, on purpose: `cfg(windows)`/`cfg(macos)` code is
+  # invisible to every other lint gate, and running only `cargo check` here
+  # let ~80 deny-level lint violations accumulate unseen (found the day this
+  # switched). It still does NOT link and runs NO tests, and flui-platform is
+  # excluded from the `test` job entirely, so this is the only gate touching
+  # those backends. Green means "compiles clean under the workspace lints".
   # Triples are the shipped ones — MSVC (what `gpu-test` uses) and aarch64
   # macOS — with `--all-targets` so per-OS test targets compile too.
   # ─────────────────────────────────────────────────────────────────────────
@@ -707,11 +710,11 @@ jobs:
       - name: Add cross targets to the pinned toolchain
         run: rustup target add x86_64-pc-windows-msvc aarch64-apple-darwin
 
-      - name: cargo check (windows backend)
-        run: cargo check -p flui-platform --locked --all-targets --target x86_64-pc-windows-msvc
+      - name: cargo clippy (windows backend)
+        run: cargo clippy -p flui-platform --locked --all-targets --target x86_64-pc-windows-msvc -- -D warnings
 
-      - name: cargo check (macos backend)
-        run: cargo check -p flui-platform --locked --all-targets --target aarch64-apple-darwin
+      - name: cargo clippy (macos backend)
+        run: cargo clippy -p flui-platform --locked --all-targets --target aarch64-apple-darwin -- -D warnings
 
   # ─────────────────────────────────────────────────────────────────────────
   # ci — aggregator over every job above (tokio pattern). Branch protection

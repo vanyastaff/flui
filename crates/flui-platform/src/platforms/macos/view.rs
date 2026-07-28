@@ -63,7 +63,8 @@ pub fn create_content_view(
         let context = Box::into_raw(Box::new(ViewContext {
             scale_factor,
             callbacks,
-        })) as *mut std::ffi::c_void;
+        }))
+        .cast::<std::ffi::c_void>();
         (*view).set_ivar("context_ptr", context);
 
         view
@@ -197,7 +198,7 @@ fn get_or_create_view_class() -> &'static Class {
             unsafe {
                 let context_ptr: *mut std::ffi::c_void = *this.get_ivar("context_ptr");
                 if !context_ptr.is_null() {
-                    drop(Box::from_raw(context_ptr as *mut ViewContext));
+                    drop(Box::from_raw(context_ptr.cast::<ViewContext>()));
                 }
 
                 let superclass = class!(NSView);
@@ -385,7 +386,7 @@ pub fn update_view_scale_factor(view: id, new_scale_factor: f64) {
     unsafe {
         let context_ptr: *mut std::ffi::c_void = *(*view).get_ivar("context_ptr");
         if !context_ptr.is_null() {
-            let context = &mut *(context_ptr as *mut ViewContext);
+            let context = &mut *context_ptr.cast::<ViewContext>();
             context.scale_factor = new_scale_factor;
             tracing::debug!("Updated view scale factor to {}", new_scale_factor);
         }

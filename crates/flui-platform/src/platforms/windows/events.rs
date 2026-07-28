@@ -15,13 +15,24 @@ use keyboard_types::Modifiers as KeyboardModifiers;
 use ui_events::{
     keyboard::{Code, KeyState, KeyboardEvent, Location},
     pointer::{
-        PointerButton, PointerButtonEvent, PointerEvent, PointerId, PointerInfo, PointerState,
-        PointerType, PointerUpdate,
+        PointerButton, PointerButtonEvent, PointerButtons, PointerEvent, PointerId, PointerInfo,
+        PointerOrientation, PointerState, PointerType, PointerUpdate,
     },
 };
-use windows::Win32::{Foundation::*, UI::Input::KeyboardAndMouse::*};
+use windows::Win32::{
+    Foundation::{LPARAM, WPARAM},
+    UI::Input::KeyboardAndMouse::{
+        VIRTUAL_KEY, VK_0, VK_1, VK_2, VK_3, VK_4, VK_5, VK_6, VK_7, VK_8, VK_9, VK_A, VK_B,
+        VK_BACK, VK_C, VK_CONTROL, VK_D, VK_DELETE, VK_DOWN, VK_E, VK_END, VK_ESCAPE, VK_F, VK_F1,
+        VK_F2, VK_F3, VK_F4, VK_F5, VK_F6, VK_F7, VK_F8, VK_F9, VK_F10, VK_F11, VK_F12, VK_G, VK_H,
+        VK_HOME, VK_I, VK_INSERT, VK_J, VK_K, VK_L, VK_LCONTROL, VK_LEFT, VK_LMENU, VK_LSHIFT,
+        VK_LWIN, VK_M, VK_MENU, VK_N, VK_NEXT, VK_O, VK_P, VK_PRIOR, VK_Q, VK_R, VK_RCONTROL,
+        VK_RETURN, VK_RIGHT, VK_RMENU, VK_RSHIFT, VK_RWIN, VK_S, VK_SHIFT, VK_SPACE, VK_T, VK_TAB,
+        VK_U, VK_UP, VK_V, VK_W, VK_X, VK_Y, VK_Z,
+    },
+};
 
-use super::util::*;
+use super::util::{get_x_lparam, get_y_lparam, is_key_pressed};
 use crate::traits::{Key, PlatformInput, ScrollDelta, device_to_logical};
 
 /// Process-start epoch for monotonic event timestamps.
@@ -176,11 +187,11 @@ fn pointer_state(
     let state = PointerState {
         time: event_timestamp_ms(),
         position: PhysicalPosition::new(logical_x as f64, logical_y as f64),
-        buttons: Default::default(),
+        buttons: PointerButtons::default(),
         modifiers,
         count: 1,
         contact_geometry: PhysicalSize::new(1.0, 1.0),
-        orientation: Default::default(),
+        orientation: PointerOrientation::default(),
         pressure,
         tangential_pressure: 0.0,
         scale_factor: scale_factor as f64,
@@ -311,7 +322,7 @@ mod tests {
 
     #[test]
     fn test_mouse_button_down() {
-        let lparam = LPARAM(((200 << 16) | 100) as isize);
+        let lparam = LPARAM(((0xC8 << 16) | 0x64) as isize); // y=200, x=100
         let event = mouse_button_event(PointerButton::Primary, true, lparam, 1.0);
 
         if let PlatformInput::Pointer(PointerEvent::Down(down_event)) = event {
@@ -325,7 +336,7 @@ mod tests {
 
     #[test]
     fn test_mouse_move() {
-        let lparam = LPARAM(((200 << 16) | 100) as isize);
+        let lparam = LPARAM(((0xC8 << 16) | 0x64) as isize); // y=200, x=100
         let event = mouse_move_event(lparam, 1.0);
 
         if let PlatformInput::Pointer(PointerEvent::Move(move_event)) = event {
