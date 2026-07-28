@@ -528,12 +528,22 @@ impl RenderBox for RenderFittedBox {
         }
 
         let transform = self.effective_transform();
+        // A fit that neither scales nor crops leaves a pure translation, which
+        // is cheaper — and, per the oracle, correct — to apply as a child
+        // offset than as a compositing layer. Flutter's
+        // `_paintChildWithTransform` forks on `MatrixUtils.getAsTranslation`
+        // for exactly this; `BoxFit::None` under an off-centre alignment is
+        // the case that reaches it.
         let paint_transformed_child = |ctx: &mut flui_rendering::context::PaintCx<'_, Single>| {
-            // Not a redundant closure: `paint_child` is inherent on PaintCx for
-            // both `Exact<1>` and `Variable`, so the bare path is ambiguous
-            // (E0034) and the lint's suggested rewrite does not compile.
-            #[allow(clippy::redundant_closure_for_method_calls)]
-            ctx.with_transform(transform, |ctx| ctx.paint_child());
+            if let Some((dx, dy)) = transform.as_translation() {
+                ctx.paint_child_at(Offset::new(px(dx), px(dy)));
+            } else {
+                // Not a redundant closure: `paint_child` is inherent on PaintCx
+                // for both `Exact<1>` and `Variable`, so the bare path is
+                // ambiguous (E0034) and the lint's rewrite does not compile.
+                #[allow(clippy::redundant_closure_for_method_calls)]
+                ctx.with_transform(transform, |ctx| ctx.paint_child());
+            }
         };
 
         if self.has_visual_overflow && self.clip_behavior != Clip::None {

@@ -3,7 +3,7 @@
 //! Flutter source: `packages/flutter/test/widgets/fitted_box_test.dart` (tag
 //! `3.44.0`, 15 cases).
 //!
-//! Ported cases (11 upstream names, 11 Rust tests — every geometry, clip-
+//! Ported cases (15 upstream names, 12 Rust tests — every geometry, clip-
 //! storage, and hit-test case. The `getLayers()` layer-count assertions are
 //! dropped, but no longer for want of a harness: `LaidOut::layer_kinds` /
 //! `LaidOut::layer_tree` report composited output now, and what actually
@@ -39,24 +39,20 @@
 //! - `'FittedBox with zero size child does not throw'` (both legs) —
 //!   [`fitted_box_with_zero_size_child_does_not_throw`].
 //!
-//! Out of scope (4 cases): `'FittedBox layers - contain'`, `'FittedBox
-//! layers - cover - horizontal'`, `'FittedBox layers - cover - vertical'`,
-//! `'FittedBox layers - none - clip'` — all four assert `getLayers()`
-//! (`TransformLayer`/`ClipRectLayer`/`OffsetLayer` composition-layer counts).
+//! `'FittedBox layers - contain'`, `'- cover - horizontal'`, `'- cover -
+//! vertical'`, `'- none - clip'` — ported as
+//! [`fitted_box_composites_the_layer_shape_each_fit_calls_for`], which
+//! carries the per-case table and explains why the raw `getLayers()` lists
+//! cannot be compared entry-for-entry (the two frameworks' composited roots
+//! differ).
 //!
-//! The harness reason these once carried is gone: `LaidOut::layer_kinds` /
-//! `LaidOut::layer_tree` now report exactly what a frame composited (see
-//! `tests/layer_inspection.rs`). What blocks them is one layer down and
-//! larger — **`RenderFittedBox` does not clip at all.** Its own module doc
-//! (`crates/flui-objects/src/layout/fitted_box.rs`) says so: `clip_behavior`
-//! is stored and dumped in diagnostics, but "active clipping awaits the
-//! layer-level clip integration". Measured against the four upstream trees,
-//! FLUI composites the identical chain for every one of them — including
-//! `BoxFit::Cover` with `Clip::HardEdge` over an overflowing child, where the
-//! oracle expects a `ClipRectLayer`. Three of the four cases assert a clip
-//! layer that FLUI cannot yet produce, so porting them would pin behavior
-//! that does not exist. They unblock with the clip integration, not with a
-//! test-harness change.
+//! These four were out of scope through two successive reasons, both of which
+//! turned out to be shallower than the real one. First "no compositing-layer
+//! capture", which the harness gained; then "`RenderFittedBox` does not clip",
+//! which was true but incomplete — the clip machinery existed, and what
+//! actually blocked it was layer *ordering* (see this render object's module
+//! doc). With the fit transform and the clip both emitted from
+//! `RenderFittedBox::paint`, all four shapes are reachable.
 //!
 //! Framework gap (1 leg, not a full case — folded into the ported
 //! `'Child can be aligned multiple ways in a row'` above rather than double
@@ -66,7 +62,7 @@
 //! `Alignment`, with no `AlignmentDirectional` constructor or ambient
 //! `TextDirection` resolution at all.
 //!
-//! Denominator: 11 ported + 4 out of scope = 15 (the RTL leg is a partial
+//! Denominator: 15 ported + 0 out of scope = 15 (the RTL leg is a partial
 //! gap within a ported case, not a 16th case).
 //!
 //! Widget → render-object mapping: `FittedBox` → `RenderFittedBox`
@@ -107,8 +103,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_types::layout::BoxFit;
 use flui_types::painting::Clip;
-use flui_types::{Alignment, Offset};
-use flui_widgets::{Center, ConstrainedBox, FittedBox, GestureDetector, SizedBox};
+use flui_types::{Alignment, Color, Offset};
+use flui_widgets::{
+    Center, ColoredBox, ConstrainedBox, FittedBox, GestureDetector, RepaintBoundary, SizedBox,
+};
 
 use crate::common::offset;
 use crate::harness;
@@ -706,5 +704,123 @@ fn a_zero_area_child_neither_paints_nor_hit_tests() {
         taps.load(Ordering::SeqCst),
         0,
         "a child that cannot be painted must not be reachable by a pointer"
+    );
+}
+
+/// The four upstream `'FittedBox layers'` cases, ported as the layer *shape*
+/// each one asserts.
+///
+/// Flutter source: `fitted_box_test.dart` (3.44.0) `'FittedBox layers -
+/// contain'`, `'- cover - horizontal'`, `'- cover - vertical'`, `'- none -
+/// clip'`. Its local `getLayers()` walks the single-child container chain from
+/// the root and records each layer's type:
+///
+/// | case | upstream `getLayers()` |
+/// |---|---|
+/// | contain | `[Transform, Transform, Offset]` |
+/// | cover (either axis) | `[Transform, ClipRect, Transform, Offset]` |
+/// | none, child overflows | `[Transform, ClipRect, Offset]` |
+/// | none, child fits | `[Transform, Offset]` |
+///
+/// The leading `Transform` is upstream's render-view root; FLUI's composited
+/// root is an `Offset` layer instead, so the chains differ by one entry before
+/// `FittedBox` is involved and the raw lists cannot be compared. What ports is
+/// everything after it — which is where the whole content of these cases lives:
+///
+/// - `Contain` scales, so it composites a transform and never crops.
+/// - `Cover` crops, so `Clip::HardEdge` composites a clip, outside the
+///   transform.
+/// - `None` neither scales nor rotates: the fit reduces to a pure translation,
+///   which is applied as a child offset with **no transform layer at all**
+///   (`_paintChildWithTransform` forks on `MatrixUtils.getAsTranslation`) —
+///   with a clip iff the child overflows.
+///
+/// That last row is the one this file could not express until the fit
+/// transform and the clip both moved into `RenderFittedBox::paint`; it is why
+/// the four cases were out of scope rather than merely unported.
+#[test]
+fn fitted_box_composites_the_layer_shape_each_fit_calls_for() {
+    fn layers(ow: f32, oh: f32, fit: BoxFit, clip: Clip, iw: f32, ih: f32) -> Vec<&'static str> {
+        let mut laid = harness::pump_widget(
+            Center::new().child(SizedBox::new(ow, oh).child(
+                FittedBox::new().fit(fit).clip(clip).child(
+                    SizedBox::new(iw, ih).child(
+                        RepaintBoundary::new().child(ColoredBox::new(Color::rgb(10, 20, 30))),
+                    ),
+                ),
+            )),
+            harness::screen(),
+        );
+        laid.pump();
+        laid.layer_kinds()
+    }
+
+    // Every leg below asserts the ABSENCE of some layer, which a subtree that
+    // composited nothing at all would satisfy for the wrong reason. The child
+    // is a real painted leaf and this pins that it reached the output, so the
+    // absence assertions can only pass because the fit did not call for the
+    // layer — not because there was nothing to paint.
+    for (label, kinds) in [
+        (
+            "contain",
+            layers(100.0, 10.0, BoxFit::Contain, Clip::None, 50.0, 50.0),
+        ),
+        (
+            "cover",
+            layers(100.0, 10.0, BoxFit::Cover, Clip::HardEdge, 10.0, 50.0),
+        ),
+        (
+            "none-overflow",
+            layers(10.0, 50.0, BoxFit::None, Clip::HardEdge, 100.0, 50.0),
+        ),
+        (
+            "none-fits",
+            layers(100.0, 100.0, BoxFit::None, Clip::HardEdge, 10.0, 10.0),
+        ),
+    ] {
+        assert!(
+            kinds.contains(&"Picture"),
+            "{label}: the child must actually paint, or this test's absence \
+             assertions prove nothing; got {kinds:?}"
+        );
+    }
+
+    // `'FittedBox layers - contain'`: scales, never crops.
+    let contain = layers(100.0, 10.0, BoxFit::Contain, Clip::None, 50.0, 50.0);
+    assert!(
+        contain.contains(&"Transform") && !contain.contains(&"ClipRect"),
+        "Contain scales and never crops: a transform, no clip; got {contain:?}"
+    );
+
+    // `'- cover - horizontal'` / `'- cover - vertical'`: crop, so clip outside
+    // the transform.
+    for (label, ow, oh, iw, ih) in [
+        ("horizontal", 100.0, 10.0, 10.0, 50.0),
+        ("vertical", 10.0, 100.0, 50.0, 10.0),
+    ] {
+        let cover = layers(ow, oh, BoxFit::Cover, Clip::HardEdge, iw, ih);
+        let clip_at = cover.iter().position(|k| *k == "ClipRect");
+        let transform_at = cover.iter().position(|k| *k == "Transform");
+        assert!(
+            matches!((clip_at, transform_at), (Some(c), Some(t)) if c < t),
+            "Cover {label} crops, so a clip must wrap the transform; got {cover:?}"
+        );
+    }
+
+    // `'- none - clip'`, overflowing leg: pure translation, so a clip and NO
+    // transform layer.
+    let overflowing = layers(10.0, 50.0, BoxFit::None, Clip::HardEdge, 100.0, 50.0);
+    assert!(
+        overflowing.contains(&"ClipRect") && !overflowing.contains(&"Transform"),
+        "None with an overflowing child clips, and its fit is a pure \
+         translation that must not composite a transform layer; got {overflowing:?}"
+    );
+
+    // `'- none - clip'`, fitting leg: neither.
+    let fitting = layers(100.0, 100.0, BoxFit::None, Clip::HardEdge, 10.0, 10.0);
+    assert!(
+        !fitting.contains(&"ClipRect") && !fitting.contains(&"Transform"),
+        "None with a child that fits neither crops nor scales, so it composites \
+         neither layer; got {fitting:?}"
     );
 }
