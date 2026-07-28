@@ -44,7 +44,11 @@ pub use memory::{
 use parking_lot::Mutex;
 pub use window::AndroidWindow;
 
-use crate::{shared::PlatformHandlers, traits::*};
+use crate::{
+    data_transfer::{DataTransferSource, NullDataTransferSource},
+    shared::PlatformHandlers,
+    traits::*,
+};
 
 /// Android platform implementation using `android-activity`
 ///
@@ -320,6 +324,11 @@ impl Platform for AndroidPlatform {
 
     fn clipboard(&self) -> Arc<dyn Clipboard> {
         self.clipboard.clone()
+    }
+
+    fn data_transfer(&self) -> Arc<dyn DataTransferSource> {
+        // No Android transport yet (ADR-0038): inert and honest.
+        Arc::new(NullDataTransferSource)
     }
 
     fn capabilities(&self) -> &dyn PlatformCapabilities {

@@ -14,6 +14,7 @@ use parking_lot::Mutex;
 use super::{display, window::MacOSWindow};
 use crate::{
     config::WindowConfiguration,
+    data_transfer::{DataTransferSource, NullDataTransferSource},
     executor::BackgroundExecutor,
     shared::PlatformHandlers,
     traits::{
@@ -231,6 +232,12 @@ impl Platform for MacOSPlatform {
 
     fn clipboard(&self) -> Arc<dyn Clipboard> {
         Arc::new(super::MacOSClipboard::new())
+    }
+
+    fn data_transfer(&self) -> Arc<dyn DataTransferSource> {
+        // No AppKit transport yet (NSDraggingDestination/NSPasteboard land
+        // with the native slices of ADR-0038): inert and honest.
+        Arc::new(NullDataTransferSource)
     }
 
     fn capabilities(&self) -> &dyn PlatformCapabilities {

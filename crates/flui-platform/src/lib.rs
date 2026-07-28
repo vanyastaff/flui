@@ -154,6 +154,7 @@
 #![deny(missing_docs)]
 
 pub mod config;
+pub mod data_transfer;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod executor;
 pub mod platforms;
@@ -166,6 +167,9 @@ pub mod window; // PORT-CHECK-OK-SP4: window API surface; binding entry for plat
 // ==================== Platform Detection ====================
 
 pub use config::{FullscreenMonitor, WindowConfiguration};
+// Data-transfer transport (ADR-0038): one source per platform instance,
+// reachable via `Platform::data_transfer()`.
+pub use data_transfer::{DataTransferOffer, DataTransferSource, NullDataTransferSource};
 // One cursor vocabulary is shared by widgets, interaction, and platforms.
 pub use cursor_icon::CursorIcon;
 // Re-export executor types

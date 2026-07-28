@@ -123,6 +123,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 
+use crate::data_transfer::{DataTransferSource, NullDataTransferSource};
 use crate::traits::*;
 
 /// iOS platform implementation (stub)
@@ -202,6 +203,11 @@ impl Platform for IOSPlatform {
 
     fn clipboard(&self) -> Arc<dyn Clipboard> {
         unimplemented!("iOS UIPasteboard not implemented")
+    }
+
+    fn data_transfer(&self) -> Arc<dyn DataTransferSource> {
+        // No iOS transport yet (ADR-0038): inert and honest.
+        Arc::new(NullDataTransferSource)
     }
 
     fn capabilities(&self) -> &dyn PlatformCapabilities {

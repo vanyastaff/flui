@@ -13,7 +13,7 @@ use anyhow::Result;
 use flui_types::geometry::{Bounds, DevicePixels, Pixels, Point, Size};
 
 use super::{PlatformCapabilities, PlatformDisplay, PlatformWindow, window::WindowAppearance};
-use crate::task::Task;
+use crate::{data_transfer::DataTransferSource, task::Task};
 
 /// Window creation options
 #[derive(Debug, Clone)]
@@ -230,6 +230,18 @@ pub trait Platform: Send + Sync + 'static {
 
     /// Get the platform's clipboard interface
     fn clipboard(&self) -> Arc<dyn Clipboard>;
+
+    /// The data-transfer transport (ADR-0038). Contract: returns clones of
+    /// ONE source instance per platform instance — the source owns
+    /// connection-like state (the offer table), and per ADR-0034 §3 such
+    /// state must live behind an `Arc` the platform clones out, never be
+    /// reconstructed per call (two independently minted tables would split
+    /// the id space and let cross-table ids pass each other's generation
+    /// checks). Deliberately a required method with no default body so a
+    /// new backend must make that choice explicitly. Backends without a
+    /// transport return [`crate::data_transfer::NullDataTransferSource`]
+    /// (inert, honest — not fake success).
+    fn data_transfer(&self) -> Arc<dyn DataTransferSource>;
 
     // ==================== App Activation (US3) ====================
 

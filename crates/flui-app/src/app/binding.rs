@@ -1462,6 +1462,16 @@ impl AppBinding {
                 realm.focus_manager().dispatch_key_event(&keyboard_event);
                 self.request_redraw();
             }
+            PlatformInput::DragDrop(drag_drop_event) => {
+                // The transport delivers DnD sessions here (ADR-0038), but
+                // the realm-side routing — drop-target resolution and the
+                // DropFeedback loop — does not exist yet, so the event is
+                // deliberately logged and dropped rather than half-routed.
+                tracing::debug!(
+                    event = ?drag_drop_event,
+                    "drag-and-drop input received; realm routing not implemented yet (ADR-0038), dropping"
+                );
+            }
         }
     }
 }
