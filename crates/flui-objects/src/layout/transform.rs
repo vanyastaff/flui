@@ -1,6 +1,7 @@
 //! RenderTransform - applies a transformation matrix to a single child.
 
 use flui_tree::Single;
+use flui_types::geometry::px;
 use flui_types::{Alignment, Matrix4, Offset, Size};
 
 use flui_rendering::{
@@ -260,12 +261,54 @@ impl RenderBox for RenderTransform {
         determinant == 0.0 || !determinant.is_finite()
     }
 
-    // The whole point of RenderTransform: the pipeline reads these through
-    // `&dyn RenderObject<BoxProtocol>`; the blanket impl forwards here.
-    fn paint_transform(&self, size: Size) -> Option<Matrix4> {
-        // Return the effective transform so the paint walk can apply it.
-        // `size` is the laid-out size from RenderState (origin pivot).
-        Some(self.effective_transform(size))
+    /// Paints the child through the effective transform — or, when that
+    /// transform is a pure translation, at a plain offset with no layer at all.
+    ///
+    /// Flutter's `RenderTransform.paint` takes the same fork on
+    /// `MatrixUtils.getAsTranslation` (`rendering/proxy_box.dart`): a matrix
+    /// that only translates is applied as `super.paint(context, offset +
+    /// childOffset)`, and the node's layer is cleared. A compositing layer per
+    /// `Transform` is not free, and translation is the common case —
+    /// `Transform.translate`, and every `SlideTransition` built on it, paid for
+    /// one on every frame.
+    ///
+    /// The transform is pushed here rather than reported through
+    /// `paint_transform`, which must stay `None`: the paint walk emits a
+    /// node's `paint_transform` layer *before* replaying the fragments its
+    /// `paint` recorded, so reporting it as well would wrap this method's own
+    /// output in a second, identical transform. Coordinate mapping keeps the
+    /// matrix through `apply_paint_transform` below — the same split Flutter
+    /// makes between `paint` and `applyPaintTransform`.
+    fn paint(&self, ctx: &mut flui_rendering::context::PaintCx<'_, Single>) {
+        if !self.has_child {
+            return;
+        }
+
+        let transform = self.effective_transform(ctx.size());
+        if let Some((dx, dy)) = transform.as_translation() {
+            ctx.paint_child_at(Offset::new(px(dx), px(dy)));
+        } else {
+            // Not a redundant closure: `paint_child` is inherent on PaintCx for
+            // both `Exact<1>` and `Variable`, so the bare path is ambiguous
+            // (E0034) and the lint's suggested rewrite does not compile.
+            #[allow(clippy::redundant_closure_for_method_calls)]
+            ctx.with_transform(transform, |ctx| ctx.paint_child());
+        }
+    }
+
+    /// Folds the transform into a child-to-parent coordinate mapping.
+    ///
+    /// Overridden because the default derives this from `paint_transform`,
+    /// which `paint` above requires to stay `None`.
+    fn apply_paint_transform(
+        &self,
+        _child: usize,
+        child_offset: Offset,
+        size: Size,
+        transform: &mut Matrix4,
+    ) {
+        *transform *= self.effective_transform(size);
+        *transform *= Matrix4::translation(child_offset.dx.0, child_offset.dy.0, 0.0);
     }
 
     fn hit_test_transform(&self, size: Size) -> Option<Matrix4> {
@@ -300,19 +343,37 @@ mod tests {
         assert!(!RenderTransform::identity().skip_paint());
     }
 
-    /// Transform symmetry: `paint_transform` hands the pipeline the
-    /// SAME matrix hit-test inverts (`effective_transform` both ways),
-    /// and the inverse maps a visual point to the child-local point.
+    /// Transform symmetry: paint, coordinate mapping, and hit-test all read
+    /// the SAME `effective_transform`, and its inverse maps a visual point to
+    /// the child-local point.
+    ///
+    /// Asserted through `apply_paint_transform` rather than `paint_transform`
+    /// because `paint` emits the transform layer itself (so a pure translation
+    /// can skip the layer entirely). `paint_transform` must therefore stay at
+    /// its `None` default — a `Some` there would make the paint walk push a
+    /// second transform around the one `paint` already opened, applying it
+    /// twice — and that absence is pinned here so the two cannot drift back
+    /// into double-application.
     #[test]
     fn paint_and_hit_test_share_one_transform() {
         let mut node = RenderTransform::scale(2.0, 2.0);
         node.has_child = true;
         // size ZERO ⇒ CENTER-alignment origin is (0,0), so the effective
-        // matrix is the pure scale; both hooks return that same matrix.
+        // matrix is the pure scale.
         let size = Size::ZERO;
+
         assert_eq!(
-            node.paint_transform(size),
-            Some(node.effective_transform(size))
+            RenderBox::paint_transform(&node, size),
+            None,
+            "paint emits the transform layer itself; a Some here would double it",
+        );
+
+        let mut mapped = Matrix4::IDENTITY;
+        node.apply_paint_transform(0, Offset::ZERO, size, &mut mapped);
+        assert_eq!(
+            mapped,
+            node.effective_transform(size),
+            "coordinate mapping must fold in the SAME matrix hit-test inverts",
         );
 
         let inverse = node

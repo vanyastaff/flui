@@ -356,6 +356,41 @@ impl Matrix4 {
         true
     }
 
+    /// This matrix as a pure 2D translation `(dx, dy)`, or `None` if it is
+    /// anything else.
+    ///
+    /// The port of Flutter's `MatrixUtils.getAsTranslation`
+    /// (`painting/matrix_utils.dart`), and deliberately **exact** rather than
+    /// epsilon-tolerant, unlike [`is_translation_only`](Self::is_translation_only):
+    /// the caller's next move is to drop the matrix entirely and shift the
+    /// child by `(dx, dy)` instead, so a matrix that is merely *near* a
+    /// translation must take the general path. Accepting it would silently
+    /// discard the residual scale or skew.
+    ///
+    /// A translation along z also returns `None` — the result is a 2D offset,
+    /// and there is no honest way to express a z component in one.
+    #[must_use]
+    pub fn as_translation(&self) -> Option<(f32, f32)> {
+        // Column-major: columns 0..2 must be the identity basis, the
+        // perspective row zero, and the translation column's z entry zero.
+        let is_identity_basis = self.m[0] == 1.0
+            && self.m[1] == 0.0
+            && self.m[2] == 0.0
+            && self.m[3] == 0.0
+            && self.m[4] == 0.0
+            && self.m[5] == 1.0
+            && self.m[6] == 0.0
+            && self.m[7] == 0.0
+            && self.m[8] == 0.0
+            && self.m[9] == 0.0
+            && self.m[10] == 1.0
+            && self.m[11] == 0.0
+            && self.m[14] == 0.0
+            && self.m[15] == 1.0;
+
+        is_identity_basis.then(|| (self.m[12], self.m[13]))
+    }
+
     /// Returns whether this matrix represents only a translation, using
     /// `f32::EPSILON` as the comparison tolerance.
     #[inline]

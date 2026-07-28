@@ -150,14 +150,26 @@ fn mixed_flex_padding_transform_clip_frame() {
     let tree = run.layer_tree().expect("frame paints");
     let owner = run.owner();
     let scaler_node = owner.render_tree().get(scaler).expect("scaler node");
-    // The production paint walk feeds the laid-out size (from RenderState)
-    // into paint_transform so the alignment origin resolves; mirror that
-    // here instead of reading a cached object field.
+    // The laid-out size (from RenderState) resolves the alignment origin, so
+    // feed it in rather than reading a cached object field.
+    //
+    // Read through `apply_paint_transform` rather than `paint_transform`:
+    // `RenderTransform` emits its layer from `paint` (so a pure translation can
+    // skip the layer entirely), which requires `paint_transform` to stay
+    // `None`. `apply_paint_transform` with a zero child offset yields exactly
+    // the same effective matrix — the one this test then expects to find
+    // conjugated in the composited layer.
     let scaler_size = scaler_node.size().unwrap_or(flui_types::Size::ZERO);
-    let local = scaler_node
-        .box_render_object()
-        .paint_transform(scaler_size)
-        .expect("scale(2,2) reports a paint transform");
+    let local = {
+        let mut m = Matrix4::IDENTITY;
+        scaler_node.box_render_object().apply_paint_transform(
+            0,
+            flui_types::Offset::ZERO,
+            scaler_size,
+            &mut m,
+        );
+        m
+    };
     let expected =
         Matrix4::translation(50.0, 0.0, 0.0) * local * Matrix4::translation(-50.0, 0.0, 0.0);
     assert_ne!(
