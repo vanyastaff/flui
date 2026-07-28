@@ -46,23 +46,11 @@ timeline = []
 # Hot code reload for development
 hot-reload = ["dep:flui-hot-reload"]
 
-# TODO: Add dependencies for these features:
-# network-monitor = ["tokio", "tokio-tungstenite"]
-# memory-profiler = ["dhat"]
-# remote-debug = ["tokio", "tokio-tungstenite"]
-# tracing-support = ["tracing-subscriber"]
-
 # === Convenience Features ===
-# Enable all features
-full = [
-    "profiling",
-    "timeline",
-    "hot-reload",
-    # "network-monitor",
-    # "memory-profiler",
-    # "remote-debug",
-    # "tracing-support",
-]
+# Enable all features. This list is the crate's honest capability inventory —
+# a subsystem that does not exist (inspector, network monitor, memory
+# profiler, remote debug) has no feature here, commented or otherwise.
+full = ["profiling", "timeline", "hot-reload"]
 
 [dev-dependencies]
 
