@@ -144,7 +144,7 @@
 //!   (no `AlignmentDirectional`/`TextDirection` resolution path exists on
 //!   `Transform` at all — its `alignment` field is a bare `Alignment`, never
 //!   an `AlignmentGeometry`).
-//! - `'Composited transform offset'`, `'Transform.rotate'` (the layer-matrix
+//! - `'Transform.rotate'` (the layer-matrix
 //!   half), `'applyPaintTransform of Transform in Padding'`, `'Transform.translate'`
 //!   (the layer-avoidance-optimization half), `'3D transform renders the same
 //!   with or without needsCompositing'`, `'Transform.rotate does not remove
@@ -155,11 +155,26 @@
 //!   filterQuality'`, `'Transform layers with filterQuality golden'` — all
 //!   `TransformLayer`/`ImageFilterLayer`/`matchesGoldenFile` assertions.
 //!
-//!   Layer *counts* are no longer harness-blocked (`LaidOut::layer_kinds`), so
-//!   what remains is named per case rather than blamed on the harness:
-//!   `Transform` has no `filterQuality` at all, so the five `ImageFilterLayer`
-//!   cases have nothing to assert against; the layer-matrix halves need a
-//!   composited layer's own transform, which nothing surfaces; and
+//!   Neither layer *counts* nor layer *matrices* are harness-blocked any
+//!   more — `LaidOut::layer_kinds` reports the former and `LaidOut::layer_tree`
+//!   reaches `TransformLayer::transform` for the latter, which is how
+//!   [`the_composited_transform_layer_folds_in_the_alignment_pivot`] ports
+//!   `'Composited transform offset'`. What remains is named per case:
+//!
+//!   The five `ImageFilterLayer` cases need more than a widget field.
+//!   `Transform` has no `filterQuality`, but the deeper gap is that
+//!   `flui_types::painting::ImageFilter` has no *geometric* matrix variant at
+//!   all (its `Matrix` variant is a 5×4 **colour** matrix); the oracle needs
+//!   `ui.ImageFilter.matrix(m, filterQuality)`, i.e. resampling through a
+//!   transform. Adding the field alone would emit a layer the engine cannot
+//!   honour — a stub that satisfies a layer-shape assertion and changes
+//!   nothing on screen.
+//!
+//!   The remaining layer-matrix halves state upstream's raw values, which are
+//!   parent-relative; FLUI's layers carry global geometry (measured — see the
+//!   ported case above). Porting each means re-deriving its expectation under
+//!   FLUI's convention, case by case, rather than copying a number.
+//!
 //!   `matchesGoldenFile` needs golden-image capture, which does not exist.
 //! - `"Transform.scale() does not accept all three ... to be non-null"`,
 //!   `"Transform.scale() needs at least one of ... to be non-null"` —
@@ -197,12 +212,13 @@
 
 use flui_geometry::Matrix4;
 use flui_rendering::hit_testing::HitTestBehavior;
+use flui_rendering::layer::Layer;
 use flui_types::geometry::px;
 use flui_types::{Alignment, Color, Offset};
 use flui_view::ViewExt;
 use flui_widgets::{
-    Center, ColoredBox, FractionalTranslation, GestureDetector, Positioned, SizedBox, Stack,
-    Transform,
+    Center, ClipRect, ColoredBox, FractionalTranslation, GestureDetector, Positioned,
+    RepaintBoundary, SizedBox, Stack, Transform,
 };
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -936,5 +952,99 @@ fn a_pure_translation_composites_no_transform_layer() {
         "a scale cannot be expressed as an offset and must still composite a \
          transform layer; got {:?}",
         scaled.layer_kinds()
+    );
+}
+
+/// The composited transform layer's matrix folds in the alignment pivot, not
+/// just the raw scale.
+///
+/// Flutter parity: `transform_test.dart` `'Composited transform offset'`
+/// (3.44.0). Upstream retains the `TransformLayer`s, expects two (the first
+/// being the render view's), and asserts the second carries translation
+/// `(100, 75)` — a `Matrix4.diagonal3Values(0.5, 0.5, 1)` over a 400×300 box
+/// under the default `CENTER` alignment.
+///
+/// **The number does not port, and the reason is a layer-space convention, not
+/// a defect.** Measured on this exact tree, FLUI's layers carry *global*
+/// geometry: the `ClipRect` layer's rect is `(200,150)..(600,450)` and the
+/// inner offset layer holds `(200,150)`, both absolute. Upstream's are
+/// parent-relative, so its `ClipRectLayer` absorbs the placement and the
+/// transform beneath it sees a zero paint offset — leaving only the pivot's
+/// contribution, `(100, 75)`. FLUI conjugates about the *global* pivot
+/// instead, so the same widget yields `(200, 150)`. Both compose to the same
+/// thing on screen; only the split between layers differs.
+///
+/// So this asserts the contract with an expectation derived from the widget
+/// geometry rather than copied from the oracle: the box sits at global
+/// `(200, 150)` and is 400×300, so its `CENTER` pivot is global `(400, 300)`,
+/// and a scale of `0.5` about that pivot translates by
+/// `pivot * (1 - scale) = (200, 150)`. Asserting the raw `0.5` scale alone
+/// would pass on a matrix that ignored the pivot entirely, which is the
+/// mistake this case exists to catch.
+///
+/// The red check makes the convention difference exact rather than argued:
+/// dropping the pivot from `RenderTransform::compute_origin` yields
+/// **`(100, 75)`** — upstream's own expected value. The two frameworks differ
+/// by precisely the global-origin conjugation term, which is what the layer
+/// geometry measured above says and what this arithmetic confirms
+/// independently.
+#[test]
+fn the_composited_transform_layer_folds_in_the_alignment_pivot() {
+    const SCALE: f32 = 0.5;
+
+    let mut laid =
+        pump_widget(
+            Center::new().child(SizedBox::new(400.0, 300.0).child(
+                ClipRect::new().child(
+                    Transform::new(Matrix4::scaling(SCALE, SCALE, 1.0)).child(
+                        RepaintBoundary::new().child(ColoredBox::new(Color::rgb(0, 255, 0))),
+                    ),
+                ),
+            )),
+            screen(),
+        );
+    laid.pump();
+
+    let tree = laid.layer_tree().expect("the frame composites a tree");
+    let mut matrices = Vec::new();
+    let mut stack = vec![tree.root().expect("composited root")];
+    while let Some(id) = stack.pop() {
+        if let Some(Layer::Transform(t)) = tree.get_layer(id) {
+            matrices.push(*t.transform());
+        }
+        if let Some(children) = tree.children(id) {
+            stack.extend(children.iter().copied());
+        }
+    }
+
+    assert_eq!(
+        matrices.len(),
+        1,
+        "exactly one transform layer — FLUI's composited root is an Offset \
+         layer, so unlike upstream there is no render-view transform to skip"
+    );
+    let matrix = matrices[0];
+
+    // Derived from the widget geometry, not read back from the render object:
+    // an 800×600 screen centres a 400×300 box at (200, 150), whose CENTER
+    // pivot is therefore global (400, 300).
+    let pivot_x = 200.0 + 400.0 / 2.0;
+    let pivot_y = 150.0 + 300.0 / 2.0;
+    let expected_x = pivot_x * (1.0 - SCALE);
+    let expected_y = pivot_y * (1.0 - SCALE);
+
+    const TOLERANCE: f32 = 1e-3;
+    assert!(
+        (matrix.m[12] - expected_x).abs() < TOLERANCE
+            && (matrix.m[13] - expected_y).abs() < TOLERANCE,
+        "the composited matrix must translate by pivot * (1 - scale) = \
+         ({expected_x}, {expected_y}); got ({}, {})",
+        matrix.m[12],
+        matrix.m[13],
+    );
+    assert!(
+        (matrix.m[0] - SCALE).abs() < TOLERANCE,
+        "and still carry the scale itself; got {}",
+        matrix.m[0]
     );
 }
