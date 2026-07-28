@@ -148,16 +148,18 @@ fn viewport_child_offsets_and_visibility(
     viewport: RenderId,
 ) -> ([Offset; 5], [bool; 5]) {
     let mut offsets = [offset(0.0, 0.0); 5];
-    let mut visibles = [false; 5];
-    for (index, (out_offset, out_visible)) in
-        offsets.iter_mut().zip(visibles.iter_mut()).enumerate()
+    let mut visibility_flags = [false; 5];
+    for (index, (out_offset, out_visible)) in offsets
+        .iter_mut()
+        .zip(visibility_flags.iter_mut())
+        .enumerate()
     {
         let sliver = laid.child(viewport, index);
         let box_child = laid.only_child(sliver);
         *out_offset = laid.absolute_offset(box_child);
         *out_visible = laid.sliver_geometry(sliver).visible;
     }
-    (offsets, visibles)
+    (offsets, visibility_flags)
 }
 
 /// Flutter parity: `slivers_test.dart` `'Viewport basic test'` (tag `3.44.0`)
@@ -244,13 +246,13 @@ fn assert_viewport_state(
     expected_offsets: [Offset; 5],
     expected_visible: [bool; 5],
 ) {
-    let (offsets, visibles) = viewport_child_offsets_and_visibility(laid, laid.root());
+    let (offsets, visibility_flags) = viewport_child_offsets_and_visibility(laid, laid.root());
     assert_eq!(
         offsets, expected_offsets,
         "child absolute offsets at scroll offset {scroll_offset}"
     );
     assert_eq!(
-        visibles, expected_visible,
+        visibility_flags, expected_visible,
         "child sliver geometry.visible at scroll offset {scroll_offset}"
     );
 }
