@@ -20,16 +20,19 @@
 //!    question this unit was scoped to investigate — `LaidOut::sliver_geometry`
 //!    already exposes the identical field.
 //! 2. `'Viewport anchor test'` — **out-of-scope-by-missing-feature, no pin
-//!    possible**: FLUI's `RenderViewport` has no `anchor`/center reverse-side
-//!    layout at all (`crates/flui-objects/src/sliver/viewport.rs`'s own module
-//!    doc: "intentionally smaller than Flutter's full `RenderViewport`:
-//!    center/anchor reverse-side layout... stay out of this PR"), and the
-//!    `Viewport` widget (`crates/flui-widgets/src/scroll/viewport.rs`) exposes
-//!    no `anchor` builder to construct one even if the render object supported
-//!    it — there is no parameter to pass a value into, so unlike a behavior gap
-//!    this can't even be pinned with an `#[ignore]`d red test. Filed as a
-//!    Cross.H "Known gap" entry in `docs/ROADMAP.md` (root cause, file:line,
-//!    and this ledger as the tracking reference) instead of a test stub.
+//!    possible**: FLUI's `RenderViewport` does carry center-sliver
+//!    reverse-side layout (`set_center_sliver_index` splits the children
+//!    into forward/reverse groups in `perform_layout` — its module doc
+//!    predates that and still claims otherwise), but Flutter's `anchor`
+//!    fraction has no equivalent anywhere: the center offset derives from
+//!    the scroll offset alone, with no `mainAxisExtent * anchor` term
+//!    (Flutter's `RenderViewport`, `rendering/viewport.dart`, tag `3.44.0`),
+//!    and the `Viewport` widget (`crates/flui-widgets/src/scroll/viewport.rs`)
+//!    exposes neither `anchor` nor `center` — there is no parameter to pass
+//!    a value into, so unlike a behavior gap this can't even be pinned with
+//!    an `#[ignore]`d red test. Filed as a Cross.H "Known gap" entry in
+//!    `docs/ROADMAP.md` (root cause, file:line, and this ledger as the
+//!    tracking reference) instead of a test stub.
 //! 3. `'Multiple grids and lists'` — **ported, real green**:
 //!    [`multiple_grids_and_lists_scrolling_reveals_each_groups_text_and_clamps_at_max_extent`].
 //!    The oracle drives this with `tester.startGesture`/`gesture.moveBy` pan
@@ -80,11 +83,13 @@
 //!
 //! # Divergence note — case 3's "is this text on screen" predicate
 //!
-//! Flutter's `RenderSliverMultiBoxAdaptor` family (backing `SliverList`,
-//! `SliverFixedExtentList`, and `SliverGrid` uniformly, regardless of
-//! `.list`/`.builder` delegate choice) never creates an `Element` for a child
-//! outside the cache-extended visible window — so `find.text(...)`'s mere
-//! existence check doubles as a visibility check in the oracle. FLUI's three
+//! Flutter's `find.text(...)` defaults `skipOffstage: true` — an
+//! onstage-filtered walk (`SliverMultiBoxAdaptorElement`'s
+//! `debugVisitOnstageChildren` restricts it to children strictly
+//! intersecting the visible window), on top of the
+//! `RenderSliverMultiBoxAdaptor` family never creating an `Element` at all
+//! outside the cache-extended window — the oracle's finder is
+//! visibility-filtered twice over, never a bare existence check. FLUI's three
 //! sliver families diverge from each other AND from Flutter here:
 //! `SliverFixedExtentList` lays out every child unconditionally (documented in
 //! its own module doc); `SliverGrid` windows layout but still keeps every
