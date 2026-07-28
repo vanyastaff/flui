@@ -49,6 +49,8 @@ mod lifecycle_tests;
 mod notifications;
 #[path = "production_reconcile_emits.rs"]
 mod production_reconcile_emits;
+#[path = "reconcile_capture.rs"]
+mod reconcile_capture;
 #[path = "stateless_stateful_tests.rs"]
 mod stateless_stateful_tests;
 #[path = "trybuild_ui.rs"]

@@ -18,38 +18,19 @@
 
 #![cfg(feature = "test-utils")]
 
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use flui_foundation::{ElementId, ValueKey, ViewKey};
 use flui_objects::RenderSizedBox;
 use flui_rendering::pipeline::PipelineOwner;
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::{
-    BuildOwner, ElementTree, GlobalKey, RenderView, View, ViewExt,
-    tree::ReconcileEventKind,
-    tree::test_utils::{CollectedEvent, ReconcileEventCollector},
+    BuildOwner, ElementTree, GlobalKey, RenderView, View, ViewExt, tree::ReconcileEventKind,
 };
 use parking_lot::RwLock;
 use serial_test::serial;
-use tracing::dispatcher::Dispatch;
-use tracing_subscriber::Registry;
-use tracing_subscriber::layer::SubscriberExt;
 
-static GLOBAL_SUBSCRIBER: OnceLock<()> = OnceLock::new();
-
-fn ensure_global_subscriber() {
-    GLOBAL_SUBSCRIBER.get_or_init(|| {
-        let _ = tracing::subscriber::set_global_default(Registry::default());
-    });
-}
-
-fn capture<F: FnOnce()>(body: F) -> Vec<CollectedEvent> {
-    ensure_global_subscriber();
-    let collector = ReconcileEventCollector::new();
-    let subscriber = Registry::default().with(collector.layer());
-    tracing::dispatcher::with_default(&Dispatch::new(subscriber), body);
-    collector.events()
-}
+use crate::reconcile_capture::capture;
 
 #[derive(Clone)]
 struct KeyedLeafBox {
