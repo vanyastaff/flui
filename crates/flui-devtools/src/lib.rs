@@ -1,41 +1,35 @@
 //! FLUI DevTools - Developer tools for FLUI framework
 //!
-//! This crate provides a comprehensive suite of developer tools for debugging,
-//! profiling, and inspecting FLUI applications. Inspired by Flutter DevTools
-//! and React DevTools, it offers:
+//! What this crate actually contains today — three small, feature-gated
+//! subsystems, all standalone (no view/element/render-tree access):
 //!
 //! # Features
 //!
 //! ## 🎯 Performance Profiler (feature: profiling)
 //! - Frame timing and jank detection
-//! - Build/layout/paint phase profiling
-//! - CPU usage tracking
+//! - Build/layout/paint phase profiling, fed manually by the caller
 //! - Performance timeline with markers
 //!
-//! ## ⏱️ Timeline View
+//! ## ⏱️ Timeline View (feature: timeline)
 //! - Event timeline visualization
 //! - Frame boundaries
 //! - Custom trace events
 //!
 //! ## 🔥 Hot Reload (feature: hot-reload)
-//! - Watch file changes
-//! - Trigger rebuilds automatically
-//! - State preservation
+//! - Watch file changes and report them to a callback
+//! - That is all: rebuild triggering and state preservation live in
+//!   `flui-hot-reload` (worker/host split), not here
 //!
-//! ## 🌐 Network Monitor (feature: network-monitor)
-//! - HTTP request tracking
-//! - Response inspection
-//! - Performance metrics
+//! # What this crate is NOT (yet)
 //!
-//! ## 💾 Memory Profiler (feature: memory-profiler)
-//! - Heap allocation tracking
-//! - Memory usage over time
-//! - Leak detection
-//!
-//! ## 🔌 Remote Debug (feature: remote-debug)
-//! - WebSocket-based debugging protocol
-//! - Connect from browser DevTools
-//! - Remote widget inspection
+//! It is not an inspector: it has no dependency on any flui tree crate, so
+//! it cannot observe widgets, elements, render objects, or semantics. Wiring
+//! that up requires an observation seam in the core (dependency inversion —
+//! the core publishes tree events through a narrow trait the devtools can
+//! subscribe to; see the 2026-07-25 audit §26). There is likewise no network
+//! monitor, no memory profiler, and no remote-debug protocol — earlier
+//! versions of this documentation advertised those as features; they were
+//! never implemented.
 //!
 //! # Usage
 //!
@@ -83,15 +77,12 @@
 //! - `default`: no features enabled; opt in via `profiling`, `timeline`, or `hot-reload`
 //! - `profiling`: Performance profiling tools (no external dependencies)
 //! - `timeline`: Timeline view for events
-//! - `hot-reload`: File watching and hot reload
-//! - `network-monitor`: HTTP request monitoring
-//! - `memory-profiler`: Memory usage tracking
-//! - `remote-debug`: WebSocket debugging server
-//! - `tracing-support`: Integration with `tracing` crate
-//! - `full`: All features enabled
+//! - `hot-reload`: File watching (reports changes; nothing more)
+//! - `full`: all of the above
 //!
-//! **Note**: This crate has NO dependency on `flui_core` to avoid circular
-//! dependencies. Widget inspection is available through separate tools.
+//! No other feature exists. The `default = []` boundary is what keeps a
+//! release build at zero devtools overhead: nothing here is compiled, no
+//! port is opened, no background work runs.
 
 // Ship bar (wave 4): every public item is documented; keep it that way.
 #![deny(missing_docs)]
@@ -99,21 +90,10 @@
 mod common;
 #[cfg(feature = "hot-reload")]
 pub mod hot_reload;
-// TODO: Add memory profiler module
-// #[cfg(feature = "memory-profiler")]
-// pub mod memory;
-// TODO: Add network monitor module
-// #[cfg(feature = "network-monitor")]
-// pub mod network;
-// TODO: Add remote debug module
-// #[cfg(feature = "remote-debug")]
-// pub mod remote;
 #[cfg(feature = "profiling")]
 pub mod profiler;
 #[cfg(feature = "timeline")]
 pub mod timeline;
-
-// Feature-gated modules
 
 // Re-exports
 pub use common::*;
@@ -135,10 +115,6 @@ pub mod prelude {
     pub use crate::profiler::{FramePhase, FrameStats, Profiler};
     #[cfg(feature = "timeline")]
     pub use crate::timeline::{Timeline, TimelineEvent};
-
-    // TODO: Add memory profiler re-exports
-    // #[cfg(feature = "memory-profiler")]
-    // pub use crate::memory::{MemoryProfiler, MemorySnapshot};
 }
 
 #[cfg(test)]

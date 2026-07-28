@@ -57,7 +57,7 @@ members = [
     "crates/flui-animation", # Animation system (ACTIVE)
 
     # === DX tooling ===
-    "crates/flui-devtools", # Profiler / inspector / hot-reload protocol
+    "crates/flui-devtools", # Profiler / timeline / file-watch (no tree inspector yet — see the crate docs)
     "crates/flui-build",    # Build orchestration (android / cross)
     "crates/flui-cli",      # `flui` CLI (run / build / devtools / templates)
     # NOTE: there is deliberately NO signals crate. flui-reactivity (a signals/
@@ -441,33 +441,15 @@ default = []
 golden = []
 
 # === Core Features ===
-# Serialization support across all crates
-serde = [
-    # "flui_core/serde",  # Temporarily disabled
-    "flui-types/serde",
-    # "flui-rendering/serde",  # Temporarily disabled
-]
+# Serialization support (flui-types only today; other crates' serde features
+# are opted into per-crate, not through the facade)
+serde = ["flui-types/serde"]
 
-# === Performance Features ===
-# Multi-threaded parallel processing (temporarily disabled)
-# parallel = ["flui_core/parallel"]
-
-# === Profiling & Debug Features ===
-# TODO: Fix puffin dependencies before enabling
-# profiling = ["puffin", "puffin_http", "flui_core/profiling"]
-# tracy = ["tracing-tracy"]
-# full-profiling = ["profiling", "tracy"]
-
-# === DevTools Features ===
-# Developer tools integration (temporarily disabled)
-# devtools = ["flui-engine/devtools"]
-
-# TODO: Re-enable when memory-profiler dependencies are fixed
-# memory-profiler = ["devtools", "flui-engine/memory-profiler"]
-
-# === Convenience Features ===
-# Enable all stable features (temporarily disabled)
-# full = ["serde", "parallel", "devtools"]
+# The facade declares no other features. Earlier revisions carried commented
+# blocks for parallel / profiling / tracy / devtools / memory-profiler /
+# full — all referencing crates or features that do not exist (`flui_core`,
+# `flui-engine/devtools`). A capability that does not exist gets no feature
+# stub here; add the feature in the same change that implements it.
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Build Profiles
