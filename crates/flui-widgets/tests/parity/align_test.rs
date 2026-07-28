@@ -35,12 +35,21 @@
 //! than double-counted): `'Align control test (RTL)'` has no port target, and
 //! `'Align smoke test'`/`'control test (LTR)'` each lose one leg to the same
 //! cause — `Align::new` takes a physical
-//! [`Alignment`](flui_types::Alignment) only. `AlignmentDirectional` exists in
-//! `flui-types` but no widget resolves it against an ambient text direction;
-//! there is no `Directionality` widget to resolve against. The RTL case is
-//! *entirely* about that resolution (`topStart` under RTL must land at
-//! `dx = 700`), so nothing of it survives the drop. This is the same gap
-//! `fitted_box_test.rs` and `transform_test.rs` record for their own widgets.
+//! [`Alignment`](flui_types::Alignment), so a directional alignment cannot be
+//! expressed at the widget surface at all. The RTL case is *entirely* about
+//! resolving `topStart` against the reading direction (it must land at
+//! `dx = 700`), so nothing of it survives the drop.
+//!
+//! The gap is narrower than "no directional support": every part it needs
+//! already exists and is unwired. `AlignmentGeometry`/`AlignmentDirectional`
+//! and `AlignmentGeometry::resolve(is_ltr)` live in
+//! `flui_types::layout::alignment`, and
+//! `flui_widgets::localization::Directionality` is a real inherited widget
+//! with `of`/`maybe_of` — `Dismissible` already reads it
+//! (`Directionality::maybe_of(ctx)`). What is missing is only that `Align`
+//! neither accepts an `AlignmentGeometry` nor consults the ambient direction.
+//! `fitted_box_test.rs` and `transform_test.rs` record the same unwiring for
+//! their own widgets.
 //!
 //! Denominator: 4 ported + 1 out of scope + 1 framework gap = 6.
 //!
