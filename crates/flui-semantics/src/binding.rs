@@ -105,21 +105,26 @@ pub struct SemanticsHandle {
 impl SemanticsHandle {
     /// Creates a new semantics handle.
     fn new(counter: Arc<AtomicUsize>) -> Self {
-        counter.fetch_add(1, Ordering::SeqCst);
+        // Relaxed: bare presence counter. The RMW is atomic on its own, and
+        // no data is published through it — readers only gate whether the
+        // semantics phase runs, and re-check every frame.
+        counter.fetch_add(1, Ordering::Relaxed);
         Self { counter }
     }
 }
 
 impl Drop for SemanticsHandle {
     fn drop(&mut self) {
-        self.counter.fetch_sub(1, Ordering::SeqCst);
+        // Relaxed: nothing is freed or torn down when the count reaches
+        // zero; collection stopping one frame late is acceptable.
+        self.counter.fetch_sub(1, Ordering::Relaxed);
     }
 }
 
 impl std::fmt::Debug for SemanticsHandle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SemanticsHandle")
-            .field("active_handles", &self.counter.load(Ordering::SeqCst))
+            .field("active_handles", &self.counter.load(Ordering::Relaxed))
             .finish()
     }
 }
@@ -185,13 +190,17 @@ impl SemanticsBinding {
     /// - The platform has requested semantics
     /// - There are outstanding `SemanticsHandle`s
     pub fn semantics_enabled(&self) -> bool {
-        self.platform_semantics_enabled.load(Ordering::SeqCst)
-            || self.handle_count.load(Ordering::SeqCst) > 0
+        // Relaxed: this flag/counter pair only gates whether semantics
+        // collection runs. No semantics data is published through these
+        // atomics (the tree lives behind its own locks), and the frame loop
+        // re-reads them every frame, so eventual visibility is enough.
+        self.platform_semantics_enabled.load(Ordering::Relaxed)
+            || self.handle_count.load(Ordering::Relaxed) > 0
     }
 
     /// Returns the number of outstanding semantics handles.
     pub fn outstanding_handles(&self) -> usize {
-        self.handle_count.load(Ordering::SeqCst)
+        self.handle_count.load(Ordering::Relaxed)
     }
 
     /// Creates a new `SemanticsHandle` and enables semantics collection.
@@ -206,13 +215,14 @@ impl SemanticsBinding {
     /// This is typically called by the platform embedder when accessibility
     /// services are activated or deactivated.
     pub fn set_platform_semantics_enabled(&self, enabled: bool) {
+        // Relaxed: the flag carries no payload — see `semantics_enabled`.
         self.platform_semantics_enabled
-            .store(enabled, Ordering::SeqCst);
+            .store(enabled, Ordering::Relaxed);
     }
 
     /// Returns whether the platform has requested semantics.
     pub fn platform_semantics_enabled(&self) -> bool {
-        self.platform_semantics_enabled.load(Ordering::SeqCst)
+        self.platform_semantics_enabled.load(Ordering::Relaxed)
     }
 
     // ========== Accessibility Features ==========

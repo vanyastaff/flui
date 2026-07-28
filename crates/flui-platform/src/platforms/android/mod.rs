@@ -174,10 +174,14 @@ impl Platform for AndroidPlatform {
 
         let mut on_ready = Some(on_ready);
         let mut resumed = false;
-        self.running.store(true, Ordering::SeqCst);
+        // Relaxed everywhere on `running`: it is a bare stop-signal with no
+        // data published through it. The loop re-reads it every iteration,
+        // the Destroy store happens on the loop thread itself, and a
+        // cross-thread `quit()` only needs eventual visibility.
+        self.running.store(true, Ordering::Relaxed);
 
         loop {
-            if !self.running.load(Ordering::SeqCst) {
+            if !self.running.load(Ordering::Relaxed) {
                 break;
             }
 
@@ -230,7 +234,7 @@ impl Platform for AndroidPlatform {
                                 w.callbacks().dispatch_close();
                             }
 
-                            self.running.store(false, Ordering::SeqCst);
+                            self.running.store(false, Ordering::Relaxed);
                         }
                         MainEvent::WindowResized { .. } => {
                             tracing::info!("Android: Window resized");
@@ -292,7 +296,7 @@ impl Platform for AndroidPlatform {
 
     fn quit(&self) {
         tracing::info!("Android: quit requested");
-        self.running.store(false, Ordering::SeqCst);
+        self.running.store(false, Ordering::Relaxed);
     }
 
     fn open_window(&self, _options: WindowOptions) -> Result<Arc<dyn PlatformWindow>> {

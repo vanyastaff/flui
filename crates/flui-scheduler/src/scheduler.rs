@@ -90,6 +90,8 @@ use crate::{
 
 fn next_scheduler_identity() -> u64 {
     static NEXT_IDENTITY: AtomicU64 = AtomicU64::new(1);
+    // Relaxed: pure ID allocation — uniqueness comes from the RMW's own
+    // atomicity; no data is published through this counter.
     NEXT_IDENTITY
         .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |next| {
             next.checked_add(1)
