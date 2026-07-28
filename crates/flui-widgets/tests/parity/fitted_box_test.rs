@@ -103,8 +103,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_types::layout::BoxFit;
 use flui_types::painting::Clip;
-use flui_types::{Alignment, Offset};
-use flui_widgets::{Center, ConstrainedBox, FittedBox, GestureDetector, RepaintBoundary, SizedBox};
+use flui_types::{Alignment, Color, Offset};
+use flui_widgets::{
+    Center, ColoredBox, ConstrainedBox, FittedBox, GestureDetector, RepaintBoundary, SizedBox,
+};
 
 use crate::common::offset;
 use crate::harness;
@@ -740,18 +742,47 @@ fn a_zero_area_child_neither_paints_nor_hit_tests() {
 fn fitted_box_composites_the_layer_shape_each_fit_calls_for() {
     fn layers(ow: f32, oh: f32, fit: BoxFit, clip: Clip, iw: f32, ih: f32) -> Vec<&'static str> {
         let mut laid = harness::pump_widget(
-            Center::new().child(
-                SizedBox::new(ow, oh).child(
-                    FittedBox::new()
-                        .fit(fit)
-                        .clip(clip)
-                        .child(SizedBox::new(iw, ih).child(RepaintBoundary::new())),
+            Center::new().child(SizedBox::new(ow, oh).child(
+                FittedBox::new().fit(fit).clip(clip).child(
+                    SizedBox::new(iw, ih).child(
+                        RepaintBoundary::new().child(ColoredBox::new(Color::rgb(10, 20, 30))),
+                    ),
                 ),
-            ),
+            )),
             harness::screen(),
         );
         laid.pump();
         laid.layer_kinds()
+    }
+
+    // Every leg below asserts the ABSENCE of some layer, which a subtree that
+    // composited nothing at all would satisfy for the wrong reason. The child
+    // is a real painted leaf and this pins that it reached the output, so the
+    // absence assertions can only pass because the fit did not call for the
+    // layer — not because there was nothing to paint.
+    for (label, kinds) in [
+        (
+            "contain",
+            layers(100.0, 10.0, BoxFit::Contain, Clip::None, 50.0, 50.0),
+        ),
+        (
+            "cover",
+            layers(100.0, 10.0, BoxFit::Cover, Clip::HardEdge, 10.0, 50.0),
+        ),
+        (
+            "none-overflow",
+            layers(10.0, 50.0, BoxFit::None, Clip::HardEdge, 100.0, 50.0),
+        ),
+        (
+            "none-fits",
+            layers(100.0, 100.0, BoxFit::None, Clip::HardEdge, 10.0, 10.0),
+        ),
+    ] {
+        assert!(
+            kinds.contains(&"Picture"),
+            "{label}: the child must actually paint, or this test's absence \
+             assertions prove nothing; got {kinds:?}"
+        );
     }
 
     // `'FittedBox layers - contain'`: scales, never crops.
