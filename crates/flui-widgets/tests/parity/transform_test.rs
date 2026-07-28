@@ -5,16 +5,16 @@
 //! - `packages/flutter/test/widgets/basic_test.dart` (tag `3.44.0`), the
 //!   `'FractionalTranslation'` group (4 cases).
 //!
-//! Ported cases (8 upstream names, 10 Rust tests — hit-testing under
+//! Ported cases (9 upstream names, 11 Rust tests — hit-testing under
 //! translation/scale/composition and the alignment+origin combination the
-//! render object's `compute_origin` fix addresses are the portable core. The
-//! `TransformLayer` assertions are still dropped, but the reason has split in
-//! two: `LaidOut::layer_kinds` / `LaidOut::layer_tree` now report composited
-//! output, so layer *counts* are measurable — and measuring them exposed a
-//! real paint bug, recorded under the zero-determinant case below. What
-//! remains out of reach is the layer *matrix*: nothing surfaces a composited
-//! layer's own transform, and FLUI has no golden-file harness either, the
-//! separate reason `clip_test.rs` drops `paints..save()..clipRect()`
+//! render object's `compute_origin` fix addresses are the portable core.
+//! Composited output is fully reachable now: `LaidOut::layer_kinds` reports
+//! layer *counts* — and measuring them exposed a real paint bug, recorded
+//! under the zero-determinant case below — while `LaidOut::layer_tree`
+//! reaches `TransformLayer::transform` for layer *matrices*. The
+//! `TransformLayer` assertions that remain dropped are dropped for their own
+//! reasons, named in "Out of scope"; FLUI still has no golden-file harness,
+//! the separate reason `clip_test.rs` drops `paints..save()..clipRect()`
 //! assertions). Every case below that taps a
 //! target starts from a fresh `AtomicBool::new(false)`, so upstream's pre-tap
 //! `expect(didReceiveTap`/`pointerDown, isFalse)` — asserting only that the
@@ -54,6 +54,13 @@
 //!   [`fractional_translation_hit_test_entirely_inside_the_bounding_box`],
 //!   [`fractional_translation_hit_test_partially_inside_the_bounding_box`],
 //!   [`fractional_translation_hit_test_completely_outside_the_bounding_box`].
+//! - `'Composited transform offset'` — the composited transform layer's matrix
+//!   folds in the alignment pivot, not just the raw scale. Upstream's raw
+//!   translation does not port (its layers are parent-relative where FLUI's
+//!   carry global geometry); the expectation is re-derived from the widget
+//!   geometry instead, and the test's doc records the measurement and the
+//!   arithmetic that pin the difference —
+//!   [`the_composited_transform_layer_folds_in_the_alignment_pivot`].
 //! - `'Transform with nan/inf/-inf value short-circuits rendering'` (3 upstream
 //!   cases, one Rust test covering all three matrix shapes) — a non-finite
 //!   determinant must short-circuit painting. Previously listed out of scope,
@@ -1042,9 +1049,12 @@ fn the_composited_transform_layer_folds_in_the_alignment_pivot() {
         matrix.m[12],
         matrix.m[13],
     );
+    // Both axes: the widget asks for a uniform scale, and asserting only `m[0]`
+    // would accept a matrix that scaled x correctly and y not at all.
     assert!(
-        (matrix.m[0] - SCALE).abs() < TOLERANCE,
-        "and still carry the scale itself; got {}",
-        matrix.m[0]
+        (matrix.m[0] - SCALE).abs() < TOLERANCE && (matrix.m[5] - SCALE).abs() < TOLERANCE,
+        "and still carry the uniform scale itself; got ({}, {})",
+        matrix.m[0],
+        matrix.m[5],
     );
 }
