@@ -23,8 +23,6 @@ Layer 4  ── flui-scheduler, flui-rendering, flui-animation
                 │
 Layer 3  ── flui-painting, flui-layer, flui-semantics, flui-interaction
                 │
-Layer 2  ── flui-reactivity*
-                │
 Layer 1  ── flui-tree, flui-foundation, flui-macros
                 │   (flui-foundation = framework primitives:
                 │    ChangeNotifier, Id system, BindingBase, Key, diagnostics)

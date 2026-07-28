@@ -86,7 +86,7 @@ These nine decisions are the "right contract." Each is committed by the **first 
 
 ### C1 — Reactivity: `setState` canonical, signals out, `memoize` added
 
-Flutter's `setState` + `InheritedWidget` + depth-ordered dirty-element list is the **sole** canonical state model. The catalog crates — `flui-widgets`, `flui-material`, `flui-cupertino` — never take a dependency on `flui-reactivity` (signals). `STRATEGY.md` mandates this explicitly ("реинвент … откатывается к Flutter-семантике"); the ecosystem research confirms it (Xilem converged away from signals; Druid died of the `Data: Clone + PartialEq` constraint-creep). **The one addition:** Xilem's `memoize`, surfaced as the typed `View::can_update` of Part II item 4 plus a `Memo<V>` combinator — Flutter's own internal short-circuit, made first-class. Application state carries **no trait bound beyond `'static`** — the Druid mistake is the one most dangerous trap; do not repeat it. Signals are not banned outright: an *application-author* signal crate that drives `Element::mark_needs_build` from outside the catalog is a permitted post-parity opt-in, gated by a refusal trigger barring signal subscriptions from `build`/`layout`/`paint`. What is locked is the catalog's independence from signals — not a blanket language prohibition.
+Flutter's `setState` + `InheritedWidget` + depth-ordered dirty-element list is the **sole** canonical state model. The catalog crates — `flui-widgets`, `flui-material`, `flui-cupertino` — never take a dependency on a signals crate. `STRATEGY.md` mandates this explicitly ("реинвент … откатывается к Flutter-семантике"); the ecosystem research confirms it (Xilem converged away from signals; Druid died of the `Data: Clone + PartialEq` constraint-creep). **The one addition:** Xilem's `memoize`, surfaced as the typed `View::can_update` of Part II item 4 plus a `Memo<V>` combinator — Flutter's own internal short-circuit, made first-class. Application state carries **no trait bound beyond `'static`** — the Druid mistake is the one most dangerous trap; do not repeat it. Signals are not banned outright: an *application-author* signal crate that drives `Element::mark_needs_build` from outside the catalog is a permitted post-parity opt-in, gated by a refusal trigger barring signal subscriptions from `build`/`layout`/`paint`. What is locked is the catalog's independence from signals — not a blanket language prohibition.
 
 ### C2 — Heterogeneous children: a `ViewSeq` trait with two load-bearing paths
 
@@ -141,11 +141,11 @@ The workspace is healthier than its crate count suggests: most crates are deep m
 
 **No `flui-physics`** — Flutter's `physics` package is already ported into `flui-types/src/physics/`; this overrides the port-phasing research's proposal of a separate crate (~1k LOC of simulation math folded into `flui-types` is the correct shape — a standalone crate would be shallow). **No `flui-services`** — Flutter's `services` is deliberately dissolved; its residue (IME/text-input, system chrome, haptics) becomes capability traits on `flui-platform` (`PlatformTextInput`, `PlatformSystemChrome`, `PlatformHaptics`).
 
-**Target — current libraries plus the remaining catalog/l10n crates and the `flui` facade** (`flui-reactivity` is kept dormant and off the catalog dependency graph):
+**Target — current libraries plus the remaining catalog/l10n crates and the `flui` facade**:
 
 | Layer | Crates |
 |---|---|
-| L0 — Foundation | `flui-geometry`, `flui-types`, `flui-reactivity` (dormant) |
+| L0 — Foundation | `flui-geometry`, `flui-types` |
 | L1 — Framework primitives | `flui-foundation`, `flui-macros` |
 | L2 — Substrate | `flui-tree`, `flui-platform`, `flui-scheduler`, `flui-painting`, `flui-interaction`, `flui-assets` |
 | L3 — Compositing / a11y / animation | `flui-semantics`, `flui-layer`, `flui-animation` |

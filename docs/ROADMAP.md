@@ -116,7 +116,7 @@ FLUI's construction divides into **four architectural layers**. Cross supports a
 - **Catalog** — design-system component libraries. `flui-material` ∥ `flui-cupertino` (independent siblings) + the `flui-localizations` they share. The thing app authors typically import.
 - **App** — `flui-app` + the `flui` facade. The top-level binding wiring platform vsync → frame loop → Catalog. The phase that ships a real app.
 
-One crate directory is deliberately **outside** the workspace: `flui-reactivity` (signals/hooks experiment) is excluded from `[workspace.members]` because signals are locked out by contract C1 — it re-enters only if signals are ever integrated into the view layer (rationale in the root `Cargo.toml` note).
+There is deliberately no signals crate: `flui-reactivity` (a signals/hooks experiment) was removed on 2026-07-28 — zero consumers, could not build standalone, and contract C1 locks the catalog to the setState/Inherited model. Any future signals story is a new realm-scoped design (rationale in the root `Cargo.toml` note; code recoverable from git history).
 
 The phases below sequence construction across these layers. Phase headings use the layer prefix so a reader sees at a glance which layer the work belongs to.
 
