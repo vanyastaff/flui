@@ -502,6 +502,14 @@ struct DragState {
     /// Bumped by `move_controller`'s status listener on every transition to
     /// `Completed`. `Send + Sync` (an atomic), so the listener may touch it
     /// directly; `build()` diffs it against `delivered_move_completions`.
+    ///
+    /// All atomics in this struct use `Relaxed`: they carry bare counts, not
+    /// data publication. Every consumer runs in `build()` after the
+    /// listener's `RebuildHandle::schedule` call, whose queue
+    /// synchronization already orders the listener-side bump before the
+    /// rebuild that reads it; a load racing a concurrent tick can at worst
+    /// miss an increment that the tick's own scheduled rebuild then
+    /// delivers.
     move_completed_runs: Arc<AtomicU64>,
     delivered_move_completions: Cell<u64>,
 
@@ -587,7 +595,7 @@ impl ViewState<Dismissible> for DismissibleState {
         self.move_status_listener_id = Some(self.move_controller.add_status_listener(Arc::new(
             move |status| {
                 if status == AnimationStatus::Completed {
-                    move_completed_runs.fetch_add(1, Ordering::SeqCst);
+                    move_completed_runs.fetch_add(1, Ordering::Relaxed);
                     rebuild_for_status.schedule(flui_view::RebuildReason::AnimationTick);
                 }
             },
@@ -958,7 +966,7 @@ fn ensure_move_controller_registered(
 /// `_handleDragEnd` bypass, which likewise never consults the status
 /// listener for that case.
 fn discard_transient_move_completion(drag: &DragState) {
-    let completed_runs = drag.move_completed_runs.load(Ordering::SeqCst);
+    let completed_runs = drag.move_completed_runs.load(Ordering::Relaxed);
     drag.delivered_move_completions.set(completed_runs);
 }
 
@@ -1170,7 +1178,7 @@ fn deliver_move_completion(
     rebuild: &RebuildHandle,
     constraints: BoxConstraints,
 ) {
-    let completed_runs = drag.move_completed_runs.load(Ordering::SeqCst);
+    let completed_runs = drag.move_completed_runs.load(Ordering::Relaxed);
     if completed_runs <= drag.delivered_move_completions.get() {
         return;
     }
@@ -1202,9 +1210,9 @@ fn start_resize_animation(
     let rebuild_for_resize = rebuild.clone();
     let listener_id = resize_controller.add_listener(Arc::new(move || {
         if resize_ref.is_completed() {
-            completed_flag.store(true, Ordering::SeqCst);
+            completed_flag.store(true, Ordering::Relaxed);
         } else {
-            progress_ticks.fetch_add(1, Ordering::SeqCst);
+            progress_ticks.fetch_add(1, Ordering::Relaxed);
         }
         rebuild_for_resize.schedule(flui_view::RebuildReason::AnimationTick);
     }));
@@ -1223,7 +1231,7 @@ fn start_resize_animation(
 /// fires `on_resize` for every delivered progress tick, or `on_dismissed`
 /// once when the resize controller completes.
 fn deliver_resize_progress(drag: &Rc<DragState>, resolved: &Rc<ResolvedConfig>) {
-    if drag.resize_completed.load(Ordering::SeqCst) {
+    if drag.resize_completed.load(Ordering::Relaxed) {
         if !drag.delivered_resize_dismissal.get() {
             drag.delivered_resize_dismissal.set(true);
             let direction = extent_to_direction(
@@ -1237,7 +1245,7 @@ fn deliver_resize_progress(drag: &Rc<DragState>, resolved: &Rc<ResolvedConfig>) 
         }
         return;
     }
-    let ticks = drag.resize_progress_ticks.load(Ordering::SeqCst);
+    let ticks = drag.resize_progress_ticks.load(Ordering::Relaxed);
     let delivered = drag.delivered_resize_ticks.get();
     if ticks > delivered {
         drag.delivered_resize_ticks.set(ticks);

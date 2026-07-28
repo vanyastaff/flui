@@ -33,6 +33,13 @@
 //! This is sufficient because flags are simple presence indicators with no
 //! dependent data co-located in the atomic.
 //!
+//! No cross-thread reader of these flags exists today — the pipeline is
+//! single-threaded by contract (see `storage/state`), and dirty-marking
+//! flows through `PipelineOwner` on the UI thread. The Acquire/Release
+//! scheme is deliberately conservative so that a future off-thread reader
+//! (e.g. a raster or semantics worker) inherits correct publication
+//! ordering without a re-audit of every call site.
+//!
 //! # Performance
 //!
 //! Atomic flag operations are extremely fast:
