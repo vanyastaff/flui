@@ -251,22 +251,6 @@ impl LaidOut {
     pub fn enter_owner_scope<R>(&self, callback: impl FnOnce() -> R) -> R {
         self.binding.enter_owner_scope(callback)
     }
-
-    /// PROTOTYPE (audit): enable semantics and pump one frame.
-    pub fn probe_enable_semantics(&mut self) {
-        self.pipeline_owner.write().set_semantics_enabled(true);
-        self.pump();
-    }
-
-    /// PROTOTYPE (audit): snapshot of the assembled semantics tree.
-    pub fn probe_semantics_snapshot(&self) -> flui_rendering::semantics::SemanticsSnapshot {
-        let owner = self.pipeline_owner.read();
-        owner
-            .semantics_owner()
-            .expect("semantics enabled")
-            .snapshot()
-            .expect("snapshot")
-    }
     /// The render id of the root widget's render object.
     pub fn root(&self) -> RenderId {
         self.root_render_id
