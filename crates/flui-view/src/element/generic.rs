@@ -54,6 +54,189 @@ use parking_lot::RwLock;
 use super::arity::ElementArity;
 use crate::{element::Lifecycle, owner::ExternalBuildScheduler, view::View};
 
+/// The `V`-independent half of [`ElementCore`]: every field except the view
+/// itself, plus the cold lifecycle transitions, compiled ONCE instead of once
+/// per `Element<V, A, B>` instantiation.
+///
+/// Why this split exists: the lifecycle methods (`mount`/`unmount`/
+/// `activate`/`deactivate`/`set_pipeline_owner_any`/`set_parent_render_id`)
+/// run only when nodes mount or move — never per frame — yet as generic
+/// methods their bodies (dominated by `tracing` callsite machinery) were
+/// duplicated into every one of the 130+ view-type instantiations in
+/// `flui-widgets`, 13.7% of that crate's LLVM lines. The only `V`-dependence
+/// in any of those bodies is `TypeId::of::<V>()` inside a log line, so the
+/// bodies live here, take the `TypeId` as a runtime value, and the generic
+/// methods on [`ElementCore`] are `#[inline]` forwarders. Hot paths
+/// (`should_build`, the dirty flag, view access) stay on the generic type —
+/// they are field reads that inline to nothing either way.
+struct CoreState {
+    /// Current lifecycle state (Initial, Active, Inactive, or Defunct).
+    lifecycle: Lifecycle,
+
+    /// Sibling slot index stamped at mount — NOT the tree depth; see
+    /// [`ElementCore::mount`].
+    depth: usize,
+
+    /// Whether this element needs to rebuild.
+    ///
+    /// Uses `Arc<AtomicBool>` for interior mutability, allowing listener
+    /// callbacks to mark the element dirty without mutable access.
+    dirty: Arc<AtomicBool>,
+
+    /// PipelineOwner for render tree access, propagated from parent elements.
+    pipeline_owner: Option<Arc<RwLock<PipelineOwner>>>,
+
+    /// Parent's RenderId for tree structure.
+    parent_render_id: Option<RenderId>,
+
+    /// This element's own `ElementId`, stamped at slab insertion.
+    self_id: Option<ElementId>,
+
+    /// Handle for scheduling THIS element's rebuild from a listener callback
+    /// fired outside a frame; captured at mount.
+    external_scheduler: Option<ExternalBuildScheduler>,
+}
+
+impl CoreState {
+    fn new() -> Self {
+        Self {
+            lifecycle: Lifecycle::Initial,
+            depth: 0,
+            dirty: Arc::new(AtomicBool::new(true)),
+            pipeline_owner: None,
+            parent_render_id: None,
+            self_id: None,
+            external_scheduler: None,
+        }
+    }
+
+    fn mount(&mut self, slot: usize, owner: &mut crate::ElementOwner<'_>, view_type: TypeId) {
+        debug_assert!(
+            self.lifecycle.is_initial(),
+            "BUG: mount from {:?} — Flutter's contract is that mount runs once, \
+             on a freshly created element; reuse goes through activate()",
+            self.lifecycle
+        );
+        self.lifecycle = Lifecycle::Active;
+        self.depth = slot;
+        self.dirty.store(true, Ordering::Relaxed);
+
+        // Capture the handle that lets an out-of-frame listener tick schedule
+        // THIS element's rebuild (see `create_mark_dirty_callback`). Stamped
+        // here — after `set_self_id` ran at slab insertion — so the callback
+        // built in a behavior's `on_mount` (e.g. `AnimatedBehavior`) already
+        // sees it.
+        self.external_scheduler = Some(owner.external_scheduler());
+
+        // Children will be mounted during perform_build
+        tracing::debug!(
+            "ElementCore::mount lifecycle={:?} depth={} view_type={:?}",
+            self.lifecycle,
+            self.depth,
+            view_type
+        );
+    }
+
+    fn unmount(&mut self, view_type: TypeId) {
+        self.lifecycle = Lifecycle::Defunct;
+
+        tracing::debug!(
+            "ElementCore::unmount lifecycle={:?} view_type={:?}",
+            self.lifecycle,
+            view_type
+        );
+    }
+
+    fn activate(&mut self, view_type: TypeId) {
+        debug_assert!(
+            self.lifecycle.can_activate(),
+            "BUG: activate from {:?} — only an Inactive element may be \
+             reactivated; Defunct in particular has disposed its state",
+            self.lifecycle
+        );
+        self.lifecycle = Lifecycle::Active;
+
+        tracing::debug!(
+            "ElementCore::activate lifecycle={:?} view_type={:?}",
+            self.lifecycle,
+            view_type
+        );
+    }
+
+    fn deactivate(&mut self, view_type: TypeId) {
+        debug_assert!(
+            self.lifecycle.can_deactivate(),
+            "BUG: deactivate from {:?} — only an Active element may be \
+             deactivated",
+            self.lifecycle
+        );
+        self.lifecycle = Lifecycle::Inactive;
+
+        tracing::debug!(
+            "ElementCore::deactivate lifecycle={:?} view_type={:?}",
+            self.lifecycle,
+            view_type
+        );
+    }
+
+    fn set_pipeline_owner_any(&mut self, owner: Arc<dyn Any + Send + Sync>, view_type: TypeId) {
+        if let Ok(pipeline_owner) = owner.downcast::<RwLock<PipelineOwner>>() {
+            self.pipeline_owner = Some(pipeline_owner);
+            tracing::debug!(
+                "ElementCore::set_pipeline_owner_any received PipelineOwner for view_type={:?}",
+                view_type
+            );
+        } else {
+            tracing::warn!(
+                "ElementCore::set_pipeline_owner_any received wrong type for view_type={:?}",
+                view_type
+            );
+        }
+    }
+
+    fn set_parent_render_id(&mut self, parent_id: Option<RenderId>, view_type: TypeId) {
+        self.parent_render_id = parent_id;
+        tracing::debug!(
+            "ElementCore::set_parent_render_id parent_id={:?} for view_type={:?}",
+            parent_id,
+            view_type
+        );
+    }
+
+    fn schedule_self_build(
+        &self,
+        owner: &mut crate::ElementOwner<'_>,
+        reason: crate::RebuildReason,
+    ) {
+        debug_assert!(
+            self.self_id.is_some(),
+            "ElementCore::schedule_self_build called before set_self_id: \
+             a slab-resident element must be stamped with its ElementId at \
+             mount (ElementTree::insert / mount_root_* do this) before any \
+             setState can schedule it."
+        );
+        if let Some(id) = self.self_id {
+            owner.schedule_build_for(id, self.depth, reason);
+        }
+    }
+
+    fn rebuild_handle(&self) -> crate::RebuildHandle {
+        match (self.external_scheduler.clone(), self.self_id) {
+            (Some(scheduler), Some(element)) => crate::RebuildHandle::new(scheduler, element),
+            _ => crate::RebuildHandle::inert(),
+        }
+    }
+
+    fn create_mark_dirty_callback(&self, reason: crate::RebuildReason) -> ListenerCallback {
+        let dirty = Arc::clone(&self.dirty);
+        let handle = self.rebuild_handle();
+        Arc::new(move || {
+            dirty.store(true, Ordering::Relaxed);
+            handle.schedule(reason);
+        })
+    }
+}
+
 /// Generic element core with arity-based child management.
 ///
 /// This struct contains all common element state and lifecycle logic,
@@ -91,16 +274,14 @@ where
     /// and store the current version.
     view: V,
 
-    /// Current lifecycle state.
+    /// Everything `V`-independent — lifecycle, depth, dirty flag, owner
+    /// links — lives in the non-generic [`CoreState`] so its cold methods
+    /// are compiled once, not once per view type. See `CoreState`'s docs.
     ///
-    /// Tracks whether the element is Initial, Active, Inactive, or Defunct.
-    lifecycle: Lifecycle,
-
-    /// Depth in the element tree (root = 0).
-    ///
-    /// Used for build order and z-index calculations.
-    depth: usize,
-
+    /// The `(self_id, depth)` pair stamped here is what `setState` pushes
+    /// onto the dirty heap that
+    /// [`BuildOwner::build_scope`](crate::BuildOwner) drains.
+    //
     // E3 (atomic box→arena swap): the per-element `children: A::Storage`
     // box graph is gone. Children are slab-resident nodes addressed by
     // `ElementId` in the single [`ElementTree`](crate::tree::ElementTree);
@@ -110,45 +291,7 @@ where
     // simply no longer carries storage. The build half returns OWNED child
     // views (`build_into_views`); the reconcile half runs against the slab
     // in `BuildOwner::build_scope`.
-    /// Whether this element needs to rebuild.
-    ///
-    /// Uses `Arc<AtomicBool>` for interior mutability, allowing listener
-    /// callbacks to mark the element dirty without mutable access.
-    /// This is essential for AnimatedBehavior and other reactive patterns.
-    dirty: Arc<AtomicBool>,
-
-    /// PipelineOwner for render tree access.
-    ///
-    /// Propagated from parent elements, used to access RenderTree for
-    /// RenderObjectElements.
-    pipeline_owner: Option<Arc<RwLock<PipelineOwner>>>,
-
-    /// Parent's RenderId for tree structure.
-    ///
-    /// Used by RenderObjectElements to attach their RenderObject
-    /// as a child of the parent's RenderObject.
-    parent_render_id: Option<RenderId>,
-
-    /// This element's own `ElementId` in the surrounding `ElementTree`.
-    ///
-    /// Stamped by `ElementTree::insert` /
-    /// `mount_root_with_pipeline_owner` immediately after slab insertion
-    /// (via [`ElementBase::set_self_id`](crate::ElementBase::set_self_id),
-    /// forwarded to [`Self::set_self_id`]) so the element can schedule its
-    /// OWN rebuild: the element's `set_state_scheduled` pushes
-    /// `(self_id, depth)` onto the dirty heap that
-    /// [`BuildOwner::build_scope`](crate::BuildOwner) drains.
-    self_id: Option<ElementId>,
-
-    /// Handle for scheduling THIS element's rebuild from a listener callback
-    /// fired outside a frame (an animation tick). Captured at
-    /// [`mount`](Self::mount) from the
-    /// [`ElementOwner`](crate::ElementOwner); the mark-dirty callback
-    /// ([`create_mark_dirty_callback`](Self::create_mark_dirty_callback))
-    /// clones it so a `notify_listeners` enqueues `(self_id, depth)` onto the
-    /// inbox `BuildOwner::build_scope` drains. `None` before mount or for a
-    /// hand-rolled element that bypassed `ElementTree` insertion.
-    external_scheduler: Option<ExternalBuildScheduler>,
+    state: CoreState,
 
     /// Phantom data for generic parameter A.
     _phantom: PhantomData<A>,
@@ -171,13 +314,7 @@ where
     pub fn new(view: V) -> Self {
         Self {
             view,
-            lifecycle: Lifecycle::Initial,
-            depth: 0,
-            dirty: Arc::new(AtomicBool::new(true)),
-            pipeline_owner: None,
-            parent_render_id: None,
-            self_id: None,
-            external_scheduler: None,
+            state: CoreState::new(),
             _phantom: PhantomData,
         }
     }
@@ -186,7 +323,7 @@ where
     /// [`crate::tree::ElementTree`] immediately after slab insertion
     /// via [`crate::view::ElementBase::set_self_id`].
     pub(crate) fn set_self_id(&mut self, id: ElementId) {
-        self.self_id = Some(id);
+        self.state.self_id = Some(id);
     }
 
     /// This element's own `ElementId`, stamped at slab insertion via
@@ -198,7 +335,7 @@ where
     /// node (PR-K); the in-flight element is extracted by value during build,
     /// so this id addresses the now-empty slot the walk skips.
     pub(crate) fn self_id(&self) -> Option<ElementId> {
-        self.self_id
+        self.state.self_id
     }
 
     /// Push this element onto the dirty heap so
@@ -217,16 +354,7 @@ where
         owner: &mut crate::ElementOwner<'_>,
         reason: crate::RebuildReason,
     ) {
-        debug_assert!(
-            self.self_id.is_some(),
-            "ElementCore::schedule_self_build called before set_self_id: \
-             a slab-resident element must be stamped with its ElementId at \
-             mount (ElementTree::insert / mount_root_* do this) before any \
-             setState can schedule it."
-        );
-        if let Some(id) = self.self_id {
-            owner.schedule_build_for(id, self.depth, reason);
-        }
+        self.state.schedule_self_build(owner, reason);
     }
 
     // NOTE: the production build/reconcile path reads `self_id` through
@@ -255,36 +383,14 @@ where
     ///   signature so behavior `on_mount` hooks can register global keys,
     ///   child managers, listeners, or other owner-backed resources while
     ///   child reconciliation remains centralized in `BuildOwner::build_scope`.
+    #[inline]
     pub fn mount(
         &mut self,
         _parent: Option<ElementId>,
         slot: usize,
         owner: &mut crate::ElementOwner<'_>,
     ) {
-        debug_assert!(
-            self.lifecycle.is_initial(),
-            "BUG: mount from {:?} — Flutter's contract is that mount runs once, \
-             on a freshly created element; reuse goes through activate()",
-            self.lifecycle
-        );
-        self.lifecycle = Lifecycle::Active;
-        self.depth = slot;
-        self.dirty.store(true, Ordering::Relaxed);
-
-        // Capture the handle that lets an out-of-frame listener tick schedule
-        // THIS element's rebuild (see `create_mark_dirty_callback`). Stamped
-        // here — after `set_self_id` ran at slab insertion — so the callback
-        // built in a behavior's `on_mount` (e.g. `AnimatedBehavior`) already
-        // sees it.
-        self.external_scheduler = Some(owner.external_scheduler());
-
-        // Children will be mounted during perform_build
-        tracing::debug!(
-            "ElementCore::mount lifecycle={:?} depth={} view_type={:?}",
-            self.lifecycle,
-            self.depth,
-            TypeId::of::<V>()
-        );
+        self.state.mount(slot, owner, TypeId::of::<V>());
     }
 
     /// Unmount this element (permanently removed).
@@ -297,14 +403,9 @@ where
     /// split-borrow `owner` handle is kept on the signature so behavior
     /// `on_unmount` hooks (GlobalKey deregistration, dependent-set
     /// cleanup) still run through the unified `Element::unmount`.
+    #[inline]
     pub fn unmount(&mut self, _owner: &mut crate::ElementOwner<'_>) {
-        self.lifecycle = Lifecycle::Defunct;
-
-        tracing::debug!(
-            "ElementCore::unmount lifecycle={:?} view_type={:?}",
-            self.lifecycle,
-            TypeId::of::<V>()
-        );
+        self.state.unmount(TypeId::of::<V>());
     }
 
     /// Activate this element (re-inserted into tree).
@@ -312,20 +413,9 @@ where
     /// Sets lifecycle to Active. E3: child activation is the slab's job
     /// (descendants are independent nodes), not a recursive walk from
     /// here.
+    #[inline]
     pub fn activate(&mut self) {
-        debug_assert!(
-            self.lifecycle.can_activate(),
-            "BUG: activate from {:?} — only an Inactive element may be \
-             reactivated; Defunct in particular has disposed its state",
-            self.lifecycle
-        );
-        self.lifecycle = Lifecycle::Active;
-
-        tracing::debug!(
-            "ElementCore::activate lifecycle={:?} view_type={:?}",
-            self.lifecycle,
-            TypeId::of::<V>()
-        );
+        self.state.activate(TypeId::of::<V>());
     }
 
     /// Deactivate this element (temporarily removed from tree).
@@ -333,20 +423,9 @@ where
     /// Sets lifecycle to Inactive. E3: child deactivation is the slab's
     /// job (descendants are independent nodes), not a recursive walk from
     /// here.
+    #[inline]
     pub fn deactivate(&mut self) {
-        debug_assert!(
-            self.lifecycle.can_deactivate(),
-            "BUG: deactivate from {:?} — only an Active element may be \
-             deactivated",
-            self.lifecycle
-        );
-        self.lifecycle = Lifecycle::Inactive;
-
-        tracing::debug!(
-            "ElementCore::deactivate lifecycle={:?} view_type={:?}",
-            self.lifecycle,
-            TypeId::of::<V>()
-        );
+        self.state.deactivate(TypeId::of::<V>());
     }
 
     // ========================================================================
@@ -402,7 +481,7 @@ where
     /// [`crate::element::dispatch::dispatch_view_update`] after the
     /// view is replaced.
     pub(crate) fn mark_dirty_for_dispatch(&self) {
-        self.dirty.store(true, Ordering::Relaxed);
+        self.state.dirty.store(true, Ordering::Relaxed);
     }
 
     // E3 (atomic box→arena swap): the child-management methods
@@ -430,19 +509,9 @@ where
     ///
     /// * `owner` - `Arc<dyn Any>` that should downcast to
     ///   `Arc<RwLock<PipelineOwner>>`
+    #[inline]
     pub fn set_pipeline_owner_any(&mut self, owner: Arc<dyn Any + Send + Sync>) {
-        if let Ok(pipeline_owner) = owner.downcast::<RwLock<PipelineOwner>>() {
-            self.pipeline_owner = Some(pipeline_owner);
-            tracing::debug!(
-                "ElementCore::set_pipeline_owner_any received PipelineOwner for view_type={:?}",
-                TypeId::of::<V>()
-            );
-        } else {
-            tracing::warn!(
-                "ElementCore::set_pipeline_owner_any received wrong type for view_type={:?}",
-                TypeId::of::<V>()
-            );
-        }
+        self.state.set_pipeline_owner_any(owner, TypeId::of::<V>());
     }
 
     /// Set the parent's RenderId for tree structure.
@@ -450,13 +519,10 @@ where
     /// # Arguments
     ///
     /// * `parent_id` - The parent's RenderId
+    #[inline]
     pub fn set_parent_render_id(&mut self, parent_id: Option<RenderId>) {
-        self.parent_render_id = parent_id;
-        tracing::debug!(
-            "ElementCore::set_parent_render_id parent_id={:?} for view_type={:?}",
-            parent_id,
-            TypeId::of::<V>()
-        );
+        self.state
+            .set_parent_render_id(parent_id, TypeId::of::<V>());
     }
 
     /// The `RenderId` that this element's *children* should attach their
@@ -471,7 +537,7 @@ where
     /// `ElementBase` layer (it returns its own `render_id`), since its
     /// children attach under *it*. Defaults here to the pass-through.
     pub fn child_parent_render_id(&self) -> Option<RenderId> {
-        self.parent_render_id
+        self.state.parent_render_id
     }
 
     // ========================================================================
@@ -480,12 +546,12 @@ where
 
     /// Get the current lifecycle state.
     pub fn lifecycle(&self) -> Lifecycle {
-        self.lifecycle
+        self.state.lifecycle
     }
 
     /// Get the depth in the element tree.
     pub fn depth(&self) -> usize {
-        self.depth
+        self.state.depth
     }
 
     /// Get a reference to the current View.
@@ -502,24 +568,24 @@ where
     ///
     /// Returns `true` if dirty and lifecycle allows building.
     pub fn should_build(&self) -> bool {
-        self.dirty.load(Ordering::Relaxed) && self.lifecycle.can_build()
+        self.state.dirty.load(Ordering::Relaxed) && self.state.lifecycle.can_build()
     }
 
     /// Check if this element is dirty (needs rebuild).
     pub fn is_dirty(&self) -> bool {
-        self.dirty.load(Ordering::Relaxed)
+        self.state.dirty.load(Ordering::Relaxed)
     }
 
     /// Mark this element as needing a rebuild.
     pub fn mark_dirty(&mut self) {
-        self.dirty.store(true, Ordering::Relaxed);
+        self.state.dirty.store(true, Ordering::Relaxed);
     }
 
     /// Clear the dirty flag.
     ///
     /// Should be called after perform_build completes.
     pub fn clear_dirty(&mut self) {
-        self.dirty.store(false, Ordering::Relaxed);
+        self.state.dirty.store(false, Ordering::Relaxed);
     }
 
     /// Create a callback that marks this element dirty AND schedules its
@@ -546,12 +612,7 @@ where
     /// animation.add_listener(mark_dirty);
     /// ```
     pub fn create_mark_dirty_callback(&self, reason: crate::RebuildReason) -> ListenerCallback {
-        let dirty = Arc::clone(&self.dirty);
-        let handle = self.rebuild_handle();
-        Arc::new(move || {
-            dirty.store(true, Ordering::Relaxed);
-            handle.schedule(reason);
-        })
+        self.state.create_mark_dirty_callback(reason)
     }
 
     /// An owned, `'static` [`crate::RebuildHandle`] for this element.
@@ -567,21 +628,18 @@ where
     /// builder ride the same channel.
     #[must_use]
     pub fn rebuild_handle(&self) -> crate::RebuildHandle {
-        match (self.external_scheduler.clone(), self.self_id) {
-            (Some(scheduler), Some(element)) => crate::RebuildHandle::new(scheduler, element),
-            _ => crate::RebuildHandle::inert(),
-        }
+        self.state.rebuild_handle()
     }
 
     /// Get the PipelineOwner, if set.
     pub fn pipeline_owner(&self) -> Option<&Arc<RwLock<PipelineOwner>>> {
         // PORT-CHECK-OK-SP6: ElementCore pipeline_owner accessor; pre-existing SP-6
-        self.pipeline_owner.as_ref()
+        self.state.pipeline_owner.as_ref()
     }
 
     /// Get the parent RenderId, if set.
     pub fn parent_render_id(&self) -> Option<RenderId> {
-        self.parent_render_id
+        self.state.parent_render_id
     }
 
     // E3 (atomic box→arena swap): `visit_children` / `children` /
@@ -600,11 +658,11 @@ where
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ElementCore")
             .field("view_type", &TypeId::of::<V>())
-            .field("lifecycle", &self.lifecycle)
-            .field("depth", &self.depth)
-            .field("dirty", &self.dirty.load(Ordering::Relaxed))
-            .field("has_pipeline_owner", &self.pipeline_owner.is_some())
-            .field("parent_render_id", &self.parent_render_id)
+            .field("lifecycle", &self.state.lifecycle)
+            .field("depth", &self.state.depth)
+            .field("dirty", &self.state.dirty.load(Ordering::Relaxed))
+            .field("has_pipeline_owner", &self.state.pipeline_owner.is_some())
+            .field("parent_render_id", &self.state.parent_render_id)
             .finish_non_exhaustive()
     }
 }
