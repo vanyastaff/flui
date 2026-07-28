@@ -9,7 +9,9 @@
 //!
 //! Flutter reference: <https://api.flutter.dev/flutter/gestures/ScaleGestureRecognizer-class.html>
 
-use std::{cell::RefCell, collections::HashMap, rc::Rc, sync::Arc, time::Instant};
+use std::{cell::RefCell, collections::HashMap, rc::Rc, sync::Arc};
+
+use web_time::Instant;
 
 use flui_types::{Offset, geometry::Pixels};
 use parking_lot::Mutex;

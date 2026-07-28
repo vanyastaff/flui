@@ -31,7 +31,7 @@
 //! - Medium accuracy: 16-32ms (one to two frames)
 //! - Low accuracy: 32-50ms (use with caution)
 
-use std::time::{Duration, Instant};
+use web_time::{Duration, Instant};
 
 use flui_types::geometry::{Offset, Pixels};
 

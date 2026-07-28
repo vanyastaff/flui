@@ -1614,6 +1614,7 @@ dependencies = [
  "tracing-oslog",
  "tracing-subscriber",
  "tracing-wasm",
+ "web-time",
 ]
 
 [[package]]
@@ -1665,6 +1666,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "ui-events",
+ "web-time",
 ]
 
 [[package]]

@@ -16,9 +16,12 @@
 
 use std::fmt;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
+// `std::time::{Duration, Instant}` on native targets; on wasm32 an
+// `Instant` backed by `performance.now()` — the std one panics there,
+// and this clock is what the gesture arena reads on every pointer event.
+use web_time::{Duration, Instant};
 
 /// A monotonic time source — the single authority a deadline- or frame-driven
 /// subsystem reads `now()` from.

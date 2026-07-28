@@ -40,7 +40,7 @@
 //! Flutter reference: `gestures/resampler.dart` (caller-paced sampling
 //! loop) and `scheduler/ticker.dart` (frame-tick clock).
 
-use std::time::{Duration, Instant};
+use web_time::{Duration, Instant};
 
 /// Default sampling period: 60 Hz (Flutter's `kDefaultSamplePeriod`).
 ///

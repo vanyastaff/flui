@@ -39,8 +39,9 @@ use std::{
     cell::{Cell, RefCell},
     collections::HashMap,
     rc::Rc,
-    time::Instant,
 };
+
+use web_time::Instant;
 
 use flui_types::geometry::{Offset, PixelDelta, Pixels, px};
 

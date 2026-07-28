@@ -25,7 +25,7 @@
 //! }
 //! ```
 
-use std::time::{Duration, Instant};
+use web_time::{Duration, Instant};
 
 use flui_types::{Offset, geometry::Pixels};
 use ui_events::pointer::{PointerButton, PointerButtons};
