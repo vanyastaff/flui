@@ -163,6 +163,11 @@ pub mod wasm;
 // docs/plans/2026-05-23-001-feat-pipeline-wiring-d-block-plan.md).
 pub mod log;
 
+// Dependency-inverted tree observation (ADR-0040) + the typed rebuild
+// causes its events carry.
+pub mod observe;
+pub mod rebuild_reason;
+
 // Reactive programming - change notification and observables
 pub mod notifier;
 
@@ -231,6 +236,7 @@ pub use id::{
 pub use key::{Key, KeyRef, Keyed, UniqueKey, ValueKey, ViewKey, WithKey};
 // Change notification (Listenable pattern)
 pub use notifier::{ChangeNotifier, Listenable, ListenerCallback, ValueListenable, ValueNotifier};
+pub use rebuild_reason::{RebuildReason, RebuildReasons};
 // Generic typed channel + unified listener registry
 pub use listener_registry::{ListenerRegistry, ListenerSubscription};
 pub use notifier_generic::{ArgCallback, Notifier};

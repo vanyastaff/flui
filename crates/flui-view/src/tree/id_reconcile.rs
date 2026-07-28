@@ -270,6 +270,14 @@ pub(crate) fn reconcile_children_by_id(
             } else {
                 ReconcileEvent::reorder(parent_id, new_slot, view_type, key_hash)
             });
+            if !stayed {
+                // ADR-0040: a keyed match pulled the child across slots.
+                crate::owner::emit_observation(owner.tree_observer, |o| {
+                    o.element_moved(&flui_foundation::observe::ElementMoved::new(
+                        old_id, parent_id, new_slot,
+                    ));
+                });
+            }
             result.push(old_id);
         } else {
             // `ElementTree::insert` emits the disposition itself — `Mount`
@@ -305,6 +313,14 @@ pub(crate) fn reconcile_children_by_id(
         } else {
             ReconcileEvent::reorder(parent_id, new_idx, view_type, key_hash)
         });
+        if old_bottom != new_bottom {
+            // ADR-0040: the tail slice shifted because the middle resized.
+            crate::owner::emit_observation(owner.tree_observer, |o| {
+                o.element_moved(&flui_foundation::observe::ElementMoved::new(
+                    old_id, parent_id, new_idx,
+                ));
+            });
+        }
         result.push(old_id);
     }
 

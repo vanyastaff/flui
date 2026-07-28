@@ -49,8 +49,8 @@ use super::RebuildReason;
 use super::build_owner::{DirtyElement, ExternalBuildScheduler, InactiveElement};
 use super::inherited_dependencies::{InheritedDependencies, ProviderIds};
 use super::layout_builder::{LayoutBuilderEntry, LayoutBuilderRegistry};
-use super::rebuild_reason::RebuildReasons;
 use crate::element::child_manager::{ChildManager, ChildManagerRegistry};
+use flui_foundation::RebuildReasons;
 
 /// Borrowed live-tree access carried by [`ElementOwner`] while a
 /// `build_scope` drain runs an element's `build()` (PR-K).
@@ -152,6 +152,12 @@ pub struct ElementOwner<'a> {
     /// callback to push onto from outside a frame.
     pub(crate) external_inbox: &'a Arc<Mutex<HashMap<ElementId, RebuildReasons>>>,
 
+    /// The realm's tree-observer slot (ADR-0040), threaded to the tree
+    /// primitives so mount/move/unmount facts are emitted at their funnels.
+    /// `&mut` is load-bearing: the panic-detach policy clears the slot from
+    /// inside the emission helper.
+    pub(crate) tree_observer: &'a mut Option<Arc<dyn flui_foundation::observe::TreeObserver>>,
+
     /// Reference to `BuildOwner::on_build_scheduled` as the shareable `Arc`
     /// (the [`Self::on_build_scheduled`] field above is the `&dyn Fn` view used
     /// for the in-frame fire). An [`ExternalBuildScheduler`] clones this so a
@@ -251,7 +257,7 @@ impl ElementOwner<'_> {
     pub fn schedule_build_for(&mut self, id: ElementId, depth: usize, reason: RebuildReason) {
         match self.dirty_reasons.entry(id) {
             std::collections::hash_map::Entry::Vacant(entry) => {
-                entry.insert(RebuildReasons::one(reason));
+                entry.insert(RebuildReasons::from_reason(reason));
                 self.dirty_elements
                     .push(Reverse(DirtyElement::new(id, depth)));
 

@@ -24,3 +24,5 @@ mod owner_scope;
 mod post_frame_after_layout;
 #[path = "self_rescheduling_local_post_frame.rs"]
 mod self_rescheduling_local_post_frame;
+#[path = "tree_observer_inspector.rs"]
+mod tree_observer_inspector;
