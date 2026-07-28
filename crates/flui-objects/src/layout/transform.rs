@@ -238,6 +238,28 @@ impl RenderBox for RenderTransform {
         ctx.hit_test_child(0, Offset::new(tx, ty))
     }
 
+    fn skip_paint(&self) -> bool {
+        // Flutter `RenderTransform.paint`: "if the matrix is singular the
+        // children would be compressed to a line or single point, instead
+        // short-circuit and paint nothing" — it clears its layer and returns
+        // on `det == 0 || !det.isFinite`. Painting such a subtree records
+        // draw commands and composites layers for output that cannot occupy
+        // a single pixel.
+        //
+        // `self.transform`, not `effective_transform(size)`: the effective
+        // matrix only wraps this one in origin translations, and a
+        // translation's determinant is 1, so the two determinants are equal.
+        // That is what lets the check live on `skip_paint`, which is handed
+        // no laid-out size.
+        //
+        // Spelled out rather than `!self.transform.is_invertible()`: that
+        // helper gates on `det.abs() >= f32::EPSILON`, which answers *true*
+        // for an infinite determinant and would paint exactly the non-finite
+        // cases this must suppress.
+        let determinant = self.transform.determinant();
+        determinant == 0.0 || !determinant.is_finite()
+    }
+
     // The whole point of RenderTransform: the pipeline reads these through
     // `&dyn RenderObject<BoxProtocol>`; the blanket impl forwards here.
     fn paint_transform(&self, size: Size) -> Option<Matrix4> {
@@ -253,6 +275,30 @@ impl RenderBox for RenderTransform {
 
 #[cfg(test)]
 mod tests {
+
+    /// `skip_paint` suppresses exactly the matrices whose children could not
+    /// occupy a single pixel — Flutter's `det == 0 || !det.isFinite`
+    /// short-circuit in `RenderTransform.paint`.
+    ///
+    /// The non-finite half is the reason this cannot delegate to
+    /// [`Matrix4::is_invertible`]: that gates on `det.abs() >= f32::EPSILON`,
+    /// which an infinite determinant satisfies. The `INFINITY` assertions
+    /// below fail against that shortcut and pass against the explicit test.
+    #[test]
+    fn skip_paint_true_for_singular_and_non_finite_matrices() {
+        assert!(RenderTransform::scale(0.0, 0.0).skip_paint());
+        assert!(RenderTransform::scale(0.0, 1.0).skip_paint());
+        assert!(RenderTransform::scale(1.0, 0.0).skip_paint());
+
+        assert!(RenderTransform::scale(f32::NAN, 1.0).skip_paint());
+        assert!(RenderTransform::scale(f32::INFINITY, 1.0).skip_paint());
+        assert!(RenderTransform::scale(f32::NEG_INFINITY, 1.0).skip_paint());
+
+        // Small but visible, and the identity: both must still paint. Without
+        // these an unconditional `true` would satisfy every case above.
+        assert!(!RenderTransform::scale(0.01, 0.01).skip_paint());
+        assert!(!RenderTransform::identity().skip_paint());
+    }
 
     /// Transform symmetry: `paint_transform` hands the pipeline the
     /// SAME matrix hit-test inverts (`effective_transform` both ways),

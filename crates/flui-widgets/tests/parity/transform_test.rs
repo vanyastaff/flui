@@ -5,7 +5,7 @@
 //! - `packages/flutter/test/widgets/basic_test.dart` (tag `3.44.0`), the
 //!   `'FractionalTranslation'` group (4 cases).
 //!
-//! Ported cases (7 upstream names, 9 Rust tests — hit-testing under
+//! Ported cases (8 upstream names, 10 Rust tests — hit-testing under
 //! translation/scale/composition and the alignment+origin combination the
 //! render object's `compute_origin` fix addresses are the portable core. The
 //! `TransformLayer` assertions are still dropped, but the reason has split in
@@ -54,6 +54,13 @@
 //!   [`fractional_translation_hit_test_entirely_inside_the_bounding_box`],
 //!   [`fractional_translation_hit_test_partially_inside_the_bounding_box`],
 //!   [`fractional_translation_hit_test_completely_outside_the_bounding_box`].
+//! - `'Transform with nan/inf/-inf value short-circuits rendering'` (3 upstream
+//!   cases, one Rust test covering all three matrix shapes) — a non-finite
+//!   determinant must short-circuit painting. Previously listed out of scope,
+//!   and recorded there as *unverified*: nothing could observe composited
+//!   output, so whether `RenderTransform` had the guard at all was unknown.
+//!   Measuring it answered no, and the fix rides with this port —
+//!   [`a_non_finite_transform_paints_no_child_content`].
 //!
 //! Delta ports (not named upstream `testWidgets` cases; cited against the
 //! render-object source contract instead — the same convention
@@ -80,33 +87,19 @@
 //!   [`transform_scale_x_zero_hit_test_misses_the_non_invertible_transform`],
 //!   [`transform_scale_y_zero_hit_test_misses_the_non_invertible_transform`].
 //!
-//!   **The layer half of that case is now measurable, and FLUI fails it.**
-//!   `LaidOut::layer_kinds` (see `tests/layer_inspection.rs`) reports the
-//!   composited output, and for all four upstream legs FLUI composites the
-//!   *identical* chain — the child's layers are painted under `scale: 0.0`
-//!   exactly as under `scale: 0.01`. The oracle requires the opposite:
-//!   `RenderTransform.paint` (`rendering/proxy_box.dart`, 3.44.0) computes
-//!   `transform.determinant()` and, when it is `0` or non-finite, clears its
-//!   layer and returns without painting — "if the matrix is singular the
-//!   children would be compressed to a line or single point, instead
-//!   short-circuit and paint nothing." So FLUI paints a subtree that can
-//!   never be visible.
-//!
-//!   Note the asymmetry this leaves: hit-testing already honours the singular
-//!   case (the three ported cases above pass precisely because `try_inverse`
-//!   returns `None`), while painting does not.
-//!
-//!   The fix is not a test change, and it belongs on the render object, not in
-//!   the paint walk: `RenderObject::skip_paint` is the existing node-local
-//!   "suppress this subtree entirely" hook, and `RenderOpacity` already uses it
-//!   to express the very same Flutter shape (`if (_alpha == 0) return;`). Two
-//!   details make it exact rather than approximate — `effective_transform`
-//!   wraps the matrix in pure origin translations, which cannot change a
-//!   determinant, so the guard needs no laid-out size; and it must spell out
-//!   `det == 0 || !det.is_finite()` rather than reuse
-//!   `Matrix4::is_invertible`, whose epsilon test answers *true* for an
-//!   infinite scale and would let exactly the non-finite cases below through.
-//!   Tracked separately from this port so the harness change stays reviewable.
+//!   The **layer** half of that case is ported too, once composited output
+//!   became observable — and measuring it exposed a real paint bug, since
+//!   fixed here. FLUI used to composite the identical chain for all four
+//!   upstream legs: the child was painted under `scale: 0.0` exactly as under
+//!   `scale: 0.01`, and the three non-finite cases below behaved the same
+//!   way. `RenderTransform` now carries the oracle's guard via
+//!   `RenderObject::skip_paint` — see
+//!   [`a_singular_transform_paints_no_child_content_while_a_small_one_still_does`]
+//!   and [`a_non_finite_transform_paints_no_child_content`]. Layer *counts*
+//!   as such still do not port literally: upstream's root chain begins with a
+//!   `TransformLayer` and FLUI's with an `Offset` layer, so the two differ by
+//!   one layer before the subject is involved; both tests assert the contract
+//!   (child content absent vs present) rather than the count.
 //! - `'Transform.scale'`'s scale-factor assertion (the `m[0][0]` delta only —
 //!   the full composited-layer matrix, including the CENTER-alignment pivot's
 //!   translation component, is a `TransformLayer` assertion, out of scope) —
@@ -156,36 +149,18 @@
 //!   (the layer-avoidance-optimization half), `'3D transform renders the same
 //!   with or without needsCompositing'`, `'Transform.rotate does not remove
 //!   layers due to singular short-circuit'`, `'Transform.rotate creates nice
-//!   rotation matrices for 0, 90, 180, 270 degrees'`, `'Transform.scale with
-//!   0.0 does not paint child layers'` (all four `expect(tester.layers,
-//!   hasLength(...))` legs are layer counts — see the Delta ports section
-//!   above for the hit-test probes this port adds instead),
+//!   rotation matrices for 0, 90, 180, 270 degrees'`,
 //!   `'Transform.translate/scale/rotate with FilterQuality produces filter
 //!   layer'` (4 cases), `'Transform layers update to match child and
 //!   filterQuality'`, `'Transform layers with filterQuality golden'` — all
 //!   `TransformLayer`/`ImageFilterLayer`/`matchesGoldenFile` assertions.
 //!
-//!   Layer *counts* among these are no longer harness-blocked
-//!   (`LaidOut::layer_kinds`); what still blocks each is its own missing
-//!   feature or surface: `Transform` has no `filterQuality` at all, so the
-//!   five `ImageFilterLayer` cases have nothing to assert against; the
-//!   layer-matrix halves need a composited layer's own transform, which
-//!   nothing surfaces; and `matchesGoldenFile` needs golden-image capture,
-//!   which does not exist. `'Transform.scale with 0.0 does not paint child
-//!   layers'` is the one case whose blocker is now *measured* rather than
-//!   assumed — see the zero-determinant entry in the Delta ports section
-//!   above, which records the paint bug the measurement exposed.
-//! - `'Transform with nan/inf/-inf value short-circuits rendering'` (3 cases)
-//!   — Flutter's paint path short-circuits to a single (root) layer when the
-//!   matrix carries a non-finite entry. This was previously recorded here as
-//!   *unverified* for want of a layer count; it is now measured, and the
-//!   answer is that **`RenderTransform` has no such guard**. A `NAN`, `INFINITY`
-//!   or `NEG_INFINITY` scale composites the identical chain a finite `2.0`
-//!   scale does — the child subtree is painted in full. Same defect, same
-//!   `det == 0 || !det.isFinite` branch of `RenderTransform.paint`
-//!   (`rendering/proxy_box.dart`, 3.44.0), as the zero-determinant case above,
-//!   and blocked on the same design call about where the guard belongs. These
-//!   three cases become portable with that fix, not with a harness change.
+//!   Layer *counts* are no longer harness-blocked (`LaidOut::layer_kinds`), so
+//!   what remains is named per case rather than blamed on the harness:
+//!   `Transform` has no `filterQuality` at all, so the five `ImageFilterLayer`
+//!   cases have nothing to assert against; the layer-matrix halves need a
+//!   composited layer's own transform, which nothing surfaces; and
+//!   `matchesGoldenFile` needs golden-image capture, which does not exist.
 //! - `"Transform.scale() does not accept all three ... to be non-null"`,
 //!   `"Transform.scale() needs at least one of ... to be non-null"` —
 //!   Dart-specific `assert()`-throws tests guarding `Transform.scale`'s
@@ -223,10 +198,11 @@
 use flui_geometry::Matrix4;
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_types::geometry::px;
-use flui_types::{Alignment, Offset};
+use flui_types::{Alignment, Color, Offset};
 use flui_view::ViewExt;
 use flui_widgets::{
-    Center, FractionalTranslation, GestureDetector, Positioned, SizedBox, Stack, Transform,
+    Center, ColoredBox, FractionalTranslation, GestureDetector, Positioned, SizedBox, Stack,
+    Transform,
 };
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -807,4 +783,104 @@ fn transform_scale_y_zero_hit_test_misses_the_non_invertible_transform() {
         "a Transform::scale(1.0, 0.0) collapses the y axis to a \
          non-invertible matrix; even a tap at the screen center must miss"
     );
+}
+
+/// Whether a singular transform paints its child, asserted on the composited
+/// output — the half of `'Transform.scale with 0.0 does not paint child
+/// layers'` that the three hit-test cases above could not reach.
+///
+/// Flutter parity: `transform_test.dart` (3.44.0), all four legs.
+/// `RenderTransform.paint` (`rendering/proxy_box.dart`) computes
+/// `transform.determinant()` and, when it is `0` or non-finite, clears its
+/// layer and returns — *"if the matrix is singular the children would be
+/// compressed to a line or single point, instead short-circuit and paint
+/// nothing."* Upstream expresses this as `tester.layers` having length 1 (the
+/// root alone) for the three zero legs and 3 for a small-but-non-zero
+/// `scale: 0.01`.
+///
+/// The absolute counts do not port: upstream's root chain is a
+/// `TransformLayer` and FLUI's is an `Offset` layer, so the frameworks differ
+/// by one layer before the subject is even involved. The *contract* ports
+/// exactly, and is what this asserts — the child's painted content is absent
+/// under a singular matrix and present under a merely small one. The `Picture`
+/// leaf is that content: it is where the child's draw commands land.
+///
+/// The non-zero leg is not decoration. Without it a `skip_paint` that returned
+/// `true` unconditionally — suppressing every `Transform` in the framework —
+/// would satisfy the three zero legs.
+#[test]
+fn a_singular_transform_paints_no_child_content_while_a_small_one_still_does() {
+    const SINGULAR: [(&str, f32, f32); 3] = [
+        ("scale(0.0, 0.0)", 0.0, 0.0),
+        ("scale(0.0, 1.0)", 0.0, 1.0),
+        ("scale(1.0, 0.0)", 1.0, 0.0),
+    ];
+
+    for (label, scale_x, scale_y) in SINGULAR {
+        let mut laid = pump_widget(
+            Transform::new(Matrix4::scaling(scale_x, scale_y, 1.0))
+                .child(SizedBox::new(50.0, 50.0).child(ColoredBox::new(Color::rgb(10, 20, 30)))),
+            screen(),
+        );
+        laid.pump();
+
+        let kinds = laid.layer_kinds();
+        assert!(
+            !kinds.contains(&"Picture"),
+            "Transform::{label} is singular, so its child cannot occupy a \
+             single pixel and must not be painted at all; composited {kinds:?}"
+        );
+    }
+
+    let mut laid = pump_widget(
+        Transform::new(Matrix4::scaling(0.01, 0.01, 1.0))
+            .child(SizedBox::new(50.0, 50.0).child(ColoredBox::new(Color::rgb(10, 20, 30)))),
+        screen(),
+    );
+    laid.pump();
+
+    let kinds = laid.layer_kinds();
+    assert!(
+        kinds.contains(&"Picture"),
+        "a small but non-zero scale is still visible and must paint its child; \
+         composited {kinds:?}"
+    );
+}
+
+/// A non-finite matrix entry takes the same short-circuit as a zero
+/// determinant — the other half of the same `det == 0 || !det.isFinite`
+/// branch.
+///
+/// Flutter parity: `transform_test.dart` `'Transform with nan/inf/-inf value
+/// short-circuits rendering'` (3.44.0, 3 cases). This file's module doc used
+/// to record FLUI's behavior here as *unverified* for want of a way to observe
+/// composited output; it is now observable, and this pins it.
+///
+/// `NAN` and `INFINITY` are deliberately separate cases rather than one loop
+/// body's worth of parameters: they reach the guard by different arithmetic
+/// (`NAN` fails every comparison, `INFINITY` compares greater than any
+/// threshold), and an `abs() >= EPSILON`-style invertibility test — the
+/// tempting reuse — rejects the first while accepting the second.
+#[test]
+fn a_non_finite_transform_paints_no_child_content() {
+    for (label, scale_x) in [
+        ("NAN", f32::NAN),
+        ("INFINITY", f32::INFINITY),
+        ("NEG_INFINITY", f32::NEG_INFINITY),
+    ] {
+        let mut laid = pump_widget(
+            Transform::new(Matrix4::scaling(scale_x, 1.0, 1.0))
+                .child(SizedBox::new(50.0, 50.0).child(ColoredBox::new(Color::rgb(10, 20, 30)))),
+            screen(),
+        );
+        laid.pump();
+
+        let kinds = laid.layer_kinds();
+        assert!(
+            !kinds.contains(&"Picture"),
+            "a {label} scale gives a non-finite determinant, which must \
+             short-circuit painting exactly as a zero one does; composited \
+             {kinds:?}"
+        );
+    }
 }
