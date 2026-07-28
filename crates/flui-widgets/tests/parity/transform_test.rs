@@ -884,3 +884,57 @@ fn a_non_finite_transform_paints_no_child_content() {
         );
     }
 }
+
+/// A pure translation composites **no** transform layer — the child is painted
+/// at an offset instead.
+///
+/// Flutter parity: `RenderTransform.paint` forks on
+/// `MatrixUtils.getAsTranslation` (`rendering/proxy_box.dart`, 3.44.0): a
+/// matrix that only translates is applied as `super.paint(context, offset +
+/// childOffset)` with the node's layer cleared, so upstream's
+/// `'Transform.translate'` asserts `layers.length == 1` — the root alone.
+///
+/// A compositing layer per `Transform` is not free, and translation is the
+/// common case: `Transform.translate`, and every `SlideTransition` built on
+/// it, used to pay for one on every frame.
+///
+/// The scaled leg is what makes this discriminating — without it, a `paint`
+/// that never pushed a transform at all would pass.
+#[test]
+fn a_pure_translation_composites_no_transform_layer() {
+    for (label, matrix) in [
+        ("identity", Matrix4::IDENTITY),
+        ("translate(10, 20)", Matrix4::translation(10.0, 20.0, 0.0)),
+    ] {
+        let mut laid = pump_widget(
+            Transform::new(matrix)
+                .child(SizedBox::new(50.0, 50.0).child(ColoredBox::new(Color::rgb(10, 20, 30)))),
+            screen(),
+        );
+        laid.pump();
+
+        let kinds = laid.layer_kinds();
+        assert!(
+            !kinds.contains(&"Transform"),
+            "{label} only translates, so the child should be painted at an \
+             offset rather than through a compositing layer; got {kinds:?}"
+        );
+        assert!(
+            kinds.contains(&"Picture"),
+            "{label} must still paint its child; got {kinds:?}"
+        );
+    }
+
+    let mut scaled = pump_widget(
+        Transform::new(Matrix4::scaling(2.0, 2.0, 1.0))
+            .child(SizedBox::new(50.0, 50.0).child(ColoredBox::new(Color::rgb(10, 20, 30)))),
+        screen(),
+    );
+    scaled.pump();
+    assert!(
+        scaled.layer_kinds().contains(&"Transform"),
+        "a scale cannot be expressed as an offset and must still composite a \
+         transform layer; got {:?}",
+        scaled.layer_kinds()
+    );
+}
