@@ -2136,4 +2136,220 @@ mod tests {
         let bands2 = arena.take_pending_retain_bands();
         assert!(bands2.is_empty(), "second retain-band drain must be empty");
     }
+
+    // ========================================================================
+    // Real-NodePtr walks — the tests the miri gate actually needs
+    // ========================================================================
+    //
+    // The five tests above never dereference a real `NodePtr` (the one they
+    // construct is deliberately dangling), so on their own they give miri
+    // nothing to check about the layout walk's reborrow discipline.  The two
+    // tests below drive `PipelineOwner::layout_dirty_root` over heap-real
+    // nodes so miri interprets the full Phase 1 / 1b / 2+3 / 4 sequence,
+    // including the in-flight gate on the baseline callback (whose absence
+    // is provenance-only UB — invisible to a hardware test run).
+
+    use std::sync::Arc;
+
+    use flui_foundation::Diagnosticable;
+    use flui_tree::{Leaf, Single};
+    use flui_types::{Size, geometry::px};
+
+    use crate::{
+        context::{BoxHitTestContext, BoxLayoutContext},
+        hit_testing::HitTestBehavior,
+        parent_data::BoxParentData,
+        pipeline::PipelineOwner,
+        traits::{RenderBox, TextBaseline},
+    };
+
+    /// Probe cell the test widgets record their baseline query into:
+    /// `None` = the query never ran; `Some(inner)` = it ran and returned
+    /// `inner`.
+    type BaselineProbe = Arc<Mutex<Option<Option<f32>>>>;
+
+    /// Leaf that reports a fixed size and a known baseline.
+    #[derive(Debug)]
+    struct BaselineLeaf;
+
+    impl Diagnosticable for BaselineLeaf {}
+
+    impl RenderBox for BaselineLeaf {
+        type Arity = Leaf;
+        type ParentData = BoxParentData;
+
+        fn perform_layout(&mut self, _ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size {
+            Size::new(px(10.0), px(10.0))
+        }
+
+        fn compute_distance_to_actual_baseline(&self, _baseline: TextBaseline) -> Option<f32> {
+            Some(7.5)
+        }
+
+        fn hit_test(&self, _ctx: &mut BoxHitTestContext<'_, Leaf, BoxParentData>) -> bool {
+            false
+        }
+        fn hit_test_behavior(&self) -> HitTestBehavior {
+            HitTestBehavior::Opaque
+        }
+    }
+
+    /// Single-child parent that lays out its child and then queries the
+    /// child's actual baseline through the erased ctx — the path that
+    /// invokes `baseline_cb_owned`.
+    #[derive(Debug)]
+    struct BaselineReader {
+        probe: BaselineProbe,
+    }
+
+    impl Diagnosticable for BaselineReader {}
+
+    impl RenderBox for BaselineReader {
+        type Arity = Single;
+        type ParentData = BoxParentData;
+
+        fn perform_layout(
+            &mut self,
+            ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>,
+        ) -> Size {
+            let constraints = *ctx.constraints();
+            let child_size = ctx.layout_child(0, constraints);
+            *self.probe.lock() =
+                Some(ctx.child_distance_to_actual_baseline(0, TextBaseline::Alphabetic));
+            child_size
+        }
+
+        fn hit_test(&self, _ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {
+            false
+        }
+        fn hit_test_behavior(&self) -> HitTestBehavior {
+            HitTestBehavior::Opaque
+        }
+    }
+
+    /// Walks a real two-node tree (parent → leaf) through
+    /// `layout_dirty_root`, so every reborrow phase of
+    /// `layout_subtree_borrowed_impl` runs against heap-real `NodePtr`s
+    /// under miri — and asserts the walk's observable outputs: the child's
+    /// size propagates to the returned geometry, the child's geometry
+    /// commits, and the post-layout baseline query reaches the leaf.
+    #[test]
+    fn real_node_ptr_walk_commits_geometry_and_answers_baseline() {
+        let probe: BaselineProbe = Arc::new(Mutex::new(None));
+        let mut pipeline = PipelineOwner::new().into_layout();
+        let parent = pipeline
+            .render_tree_mut()
+            .insert_box(Box::new(BaselineReader {
+                probe: Arc::clone(&probe),
+            }));
+        let leaf = pipeline
+            .render_tree_mut()
+            .insert_box_child(parent, Box::new(BaselineLeaf))
+            .expect("leaf insert");
+
+        let constraints = BoxConstraints::loose(Size::new(px(100.0), px(100.0)));
+        let size = pipeline
+            .layout_dirty_root(parent, constraints)
+            .expect("two-node walk over real NodePtrs must lay out");
+
+        assert_eq!(
+            size,
+            Size::new(px(10.0), px(10.0)),
+            "parent returns the child's laid-out size",
+        );
+        assert_eq!(
+            pipeline
+                .render_tree()
+                .get(leaf)
+                .expect("leaf in tree")
+                .geometry_box(),
+            Some(Size::new(px(10.0), px(10.0))),
+            "child geometry must be committed by the walk",
+        );
+        assert_eq!(
+            *probe.lock(),
+            Some(Some(7.5)),
+            "baseline query after layout_child must reach the laid-out leaf",
+        );
+    }
+
+    /// Single-child parent whose perform_layout ONLY queries the child's
+    /// baseline — used with a cyclic `children()` edge naming the walk
+    /// root, so the query targets a slot whose `&mut` is live on an
+    /// ancestor frame.
+    #[derive(Debug)]
+    struct CyclicBaselineProbe {
+        probe: BaselineProbe,
+    }
+
+    impl Diagnosticable for CyclicBaselineProbe {}
+
+    impl RenderBox for CyclicBaselineProbe {
+        type Arity = Single;
+        type ParentData = BoxParentData;
+
+        fn perform_layout(
+            &mut self,
+            ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>,
+        ) -> Size {
+            *self.probe.lock() =
+                Some(ctx.child_distance_to_actual_baseline(0, TextBaseline::Alphabetic));
+            Size::new(px(5.0), px(5.0))
+        }
+
+        fn hit_test(&self, _ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {
+            false
+        }
+        fn hit_test_behavior(&self) -> HitTestBehavior {
+            HitTestBehavior::Opaque
+        }
+    }
+
+    /// Regression guard for the in-flight gate in `baseline_cb_owned`:
+    /// P1 → P2 where P2's `children()` cyclically names P1, and P2's
+    /// perform_layout queries child 0's baseline while P1's `&mut` is live
+    /// on the ancestor frame.  With the gate, the query answers `None`;
+    /// with the gate removed, the callback derefs a slot with a live
+    /// Unique tag — a foreign read miri rejects (hardware runs pass
+    /// either way, which is why this test must be in the miri filter).
+    #[test]
+    fn baseline_query_on_cyclic_in_flight_edge_answers_none() {
+        let probe: BaselineProbe = Arc::new(Mutex::new(None));
+        let mut pipeline = PipelineOwner::new().into_layout();
+        let p1 = pipeline
+            .render_tree_mut()
+            .insert_box(Box::new(BaselineReader {
+                probe: Arc::new(Mutex::new(None)),
+            }));
+        let p2 = pipeline
+            .render_tree_mut()
+            .insert_box_child(
+                p1,
+                Box::new(CyclicBaselineProbe {
+                    probe: Arc::clone(&probe),
+                }),
+            )
+            .expect("p2 insert");
+        // Cyclic edge: P2's children list now names the in-flight walk root.
+        pipeline
+            .render_tree_mut()
+            .get_mut(p2)
+            .expect("p2 in tree")
+            .add_child(p1);
+
+        let constraints = BoxConstraints::loose(Size::new(px(100.0), px(100.0)));
+        let result = pipeline.layout_dirty_root(p1, constraints);
+
+        assert!(
+            result.is_ok(),
+            "a baseline query on a cyclic edge must degrade, not fail the \
+             walk; got {result:?}",
+        );
+        assert_eq!(
+            *probe.lock(),
+            Some(None),
+            "the baseline query must run and answer None for the in-flight \
+             slot (its &mut is live on the ancestor frame)",
+        );
+    }
 }
