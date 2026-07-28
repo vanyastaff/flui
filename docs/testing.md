@@ -98,6 +98,21 @@ cargo bench -p flui-engine
 
 Benchmark results are written under `target/criterion/` as HTML reports.
 
+Compiling benches (`bench-compile` in CI) proves they build; it does not
+detect a regression — numbers have to be collected and compared. The
+workflow for that:
+
+- **Local A/B (the authoritative comparison).** Run on a quiet machine:
+  `just bench-save before` on the baseline commit, apply the change, then
+  `just bench-save after` and `just bench-compare before after` (needs
+  `critcmp`, e.g. `cargo binstall critcmp`). Criterion also prints its own
+  change estimate against the last run of the same bench.
+- **Weekly trend (advisory).** The `bench` job in `weekly.yml` executes the
+  full suite and uploads `target/criterion` as a 90-day artifact. Shared
+  runners are noisy, so this is drift-over-weeks data — it never gates a
+  merge and a single outlier means nothing. GPU benches self-exclude via
+  their `required-features` gate.
+
 Performance targets defined by the constitution:
 
 - Widget rebuild: < 1 ms for 1000 widgets.

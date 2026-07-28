@@ -35,6 +35,39 @@ The relevant external APIs the crate consumes:
 
 ---
 
+## Supported backend/feature combinations
+
+The GPU-API features (`vulkan`, `metal`, `dx12`, `webgpu`, `gles`) are
+**additive pass-throughs to wgpu's own backend features — not mutually
+exclusive selectors**. Enabling two of them compiles both wgpu backends;
+which one actually runs is decided at runtime-init by
+`Renderer::select_backend()` per `target_os`. No source code in this crate
+cfg-gates on these features, and no `compile_error!` guards a pair — pairs
+are valid by design.
+
+Nobody normally enables them by hand: the per-target dependency entries in
+[`Cargo.toml`](Cargo.toml) feature-unify the right wgpu backend into every
+build automatically.
+
+| Target | Default backend (per-target dep) | Named extras that make sense |
+|---|---|---|
+| Windows | `dx12` | `vulkan` (e.g. for renderdoc), `gles` |
+| macOS / iOS | `metal` | — (MoltenVK via `vulkan` is unsupported) |
+| Linux / Android | `vulkan` | `gles` (older drivers) |
+| wasm32 | `webgpu` + `gles` + `fragile-send-sync-non-atomic-wasm` | — (fixed set; the fragile flag is sound only while the wasm build has no threads) |
+
+The two `compile_error!` guards in [`src/lib.rs`](src/lib.rs) protect exactly
+the combinations that are *not* valid: wasm32 with atomics while the
+fragile-send-sync flag is on, and wasm32 with `gpu-profiler`.
+
+CI coverage: the `feature-matrix` job runs every feature singly
+(`--each-feature`) for the whole workspace, plus a bounded pairwise powerset
+(`--depth 2` over the six backend-adjacent features) for this crate — the one
+place combinations matter. A full powerset is deliberately not run (2^13
+configurations for no known failure mode).
+
+---
+
 ## Mapping decisions
 
 This section records places where the Rust shape diverges from the patterns the GPU APIs themselves suggest, or where the original `flui-engine` code shape diverged from the Mythos-cleaned shape. Each entry follows the "Accepted trade-offs" format established by [`docs/plans/2026-03-31-custom-render-callback-design.md`](../../docs/plans/2026-03-31-custom-render-callback-design.md).

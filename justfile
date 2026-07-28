@@ -84,6 +84,17 @@ wasm-check:
       --exclude flui-web-server --exclude hot-reload-counter-host \
       --exclude hot-reload-counter-logic --exclude hot-reload-counter-types
 
+# `cargo check` does not link, and on wasm32 even a link does not fail on an
+# undefined symbol (rust-lld turns it into an import) — hence the committed
+# import allowlist. Requires wasm-tools (cargo binstall wasm-tools).
+[group("build")]
+[doc("Really link the two wasm cdylibs and check their import surface (mirrors the CI wasm-check link steps)")]
+wasm-link-check:
+    cargo build --locked --target wasm32-unknown-unknown -p flui-web-demo -p flui-painting-demo
+    bash scripts/check-wasm-imports.sh \
+      target/wasm32-unknown-unknown/debug/flui_web_demo.wasm \
+      target/wasm32-unknown-unknown/debug/flui_painting_demo.wasm
+
 # `cargo check` does not link, so the per-OS backends in flui-platform can be
 # type-checked from any host. Without this they are only ever compiled by
 # whoever happens to develop on that OS — which is how the Windows backend
@@ -279,6 +290,21 @@ bench crate:
 [doc("Run benchmarks across the workspace")]
 bench-all:
     cargo bench --workspace
+
+# Criterion writes baselines under target/criterion; this quiet dev box is
+# where real A/B comparisons belong (CI runners are noisy — the weekly job
+# only uploads trend artifacts, it never compares or gates). The script
+# enumerates the real [[bench]] targets because plain `cargo bench` also
+# selects libtest-harness targets, which reject criterion CLI flags.
+[group("bench")]
+[doc("Run every criterion bench and save the numbers under a named baseline (e.g. just bench-save before-fix)")]
+bench-save name:
+    bash scripts/bench-collect.sh {{name}}
+
+[group("bench")]
+[doc("Compare two saved baselines (requires critcmp: cargo binstall critcmp)")]
+bench-compare old new:
+    critcmp {{old}} {{new}}
 
 # =============================================================================
 # Examples

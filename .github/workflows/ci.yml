@@ -3,9 +3,11 @@ name: CI
 # Job graph (every job is gated on the fast `checks` source gate):
 #   checks         — fmt + taplo + typos + inventory + port-check + actionlint + zizmor (seconds, no compile)
 #   clippy         — workspace lint with -D warnings
-#   feature-matrix — cargo-hack per-feature clippy (--each-feature --optional-deps), xilem-style
-#   wasm-check     — cargo check --target wasm32-unknown-unknown for the wasm-capable crates
-#   cross-typecheck — cargo check (no link, no tests) of flui-platform's windows + macos backends
+#   feature-matrix — cargo-hack per-feature clippy (--each-feature --optional-deps), xilem-style,
+#                    plus a bounded backend-feature-pair powerset for flui-engine
+#   wasm-check     — cargo check for the wasm-capable crates + real cdylib link of the two web
+#                    demos + import-surface check against scripts/wasm-import-allowlist.txt
+#   cross-typecheck — cargo clippy (no link, no tests) of flui-platform's windows + macos backends
 #   test           — build + nextest (lib + integration), ubuntu
 #   gpu-test       — full enable-wgpu-tests readback suite on windows/WARP (merge-blocking)
 #   bench-compile  — criterion benches compile + link
@@ -613,6 +615,16 @@ jobs:
       - name: cargo hack clippy (tests/benches/examples, per feature)
         run: cargo hack clippy --workspace --locked --each-feature --optional-deps --keep-going --tests --benches --examples -- -D warnings
 
+      # --each-feature can never see a defect that only appears when two
+      # features combine. flui-engine is the one crate where combinations
+      # matter (its backend features are ADDITIVE by design — enabling two
+      # compiles both wgpu backends), so pairwise coverage there is bounded
+      # and meaningful: depth 2 over the six backend-adjacent features is ~22
+      # configurations, minutes not hours. The full workspace powerset stays
+      # deliberately out (2^N explosion for no known failure mode).
+      - name: cargo hack check flui-engine (backend-feature pairs)
+        run: cargo hack check -p flui-engine --locked --feature-powerset --include-features vulkan,metal,dx12,webgpu,gles,wgpu-backend --depth 2
+
   # ─────────────────────────────────────────────────────────────────────────
   # wasm-check — the web platform claim, machine-checked. web_demo /
   # painting_demo are workspace members but were only ever compiled for the
@@ -664,6 +676,26 @@ jobs:
 
       - name: cargo check (wasm32)
         run: cargo check --workspace --locked --target wasm32-unknown-unknown ${{ env.NO_WASM_PKGS }}
+
+      # `cargo check` does not link. rust-lld resolves a wasm cdylib for
+      # real — and on wasm32 an undefined symbol does not even fail the link
+      # (it becomes an import), so linking alone is still not the full claim.
+      - name: cargo build (wasm cdylibs — real link)
+        run: cargo build --locked --target wasm32-unknown-unknown -p flui-web-demo -p flui-painting-demo
+
+      - name: Install wasm-tools
+        uses: taiki-e/install-action@7572810d7dd469b651bb7793945692cf78da5dd7 # v2.85.0
+        with:
+          tool: wasm-tools@1
+
+      # ...which is why the import surface is a committed, reviewed artifact:
+      # any module outside scripts/wasm-import-allowlist.txt (most notably
+      # `env`, the catch-all for accidental native externs) fails here.
+      - name: Check wasm import surface against the allowlist
+        run: >-
+          bash scripts/check-wasm-imports.sh
+          target/wasm32-unknown-unknown/debug/flui_web_demo.wasm
+          target/wasm32-unknown-unknown/debug/flui_painting_demo.wasm
 
   # ─────────────────────────────────────────────────────────────────────────
   # cross-typecheck — flui-platform's per-OS backends, LINTED from Linux.
