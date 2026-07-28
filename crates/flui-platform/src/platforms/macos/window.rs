@@ -45,7 +45,7 @@ pub struct MacOSWindow {
     callbacks: Arc<WindowCallbacks>,
 
     /// Window configuration
-    _config: WindowConfiguration,
+    config: WindowConfiguration,
 }
 
 // SAFETY: the NSWindow pointer is only messaged from the main thread (AppKit
@@ -169,7 +169,7 @@ impl MacOSWindow {
                 })),
                 windows_map: Arc::clone(&windows_map),
                 callbacks,
-                _config: config,
+                config,
             });
 
             // Create content view for input events
@@ -500,7 +500,7 @@ impl HasWindowHandle for MacOSWindow {
         // SAFETY: `ns_window` is alive for the lifetime of `self`; the
         // returned handle borrows `self`, so the view outlives it.
         let content_view: id = unsafe { msg_send![self.ns_window, contentView] };
-        let ns_view = NonNull::new(content_view as *mut std::ffi::c_void)
+        let ns_view = NonNull::new(content_view.cast::<std::ffi::c_void>())
             .ok_or(raw_window_handle::HandleError::Unavailable)?;
         let handle = AppKitWindowHandle::new(ns_view);
 
@@ -529,7 +529,7 @@ impl Clone for MacOSWindow {
             state: Arc::clone(&self.state),
             windows_map: Arc::clone(&self.windows_map),
             callbacks: Arc::clone(&self.callbacks),
-            _config: self._config.clone(),
+            config: self.config.clone(),
         }
     }
 }
@@ -572,7 +572,7 @@ impl WindowTrait for MacOSWindow {
     }
 
     fn set_title(&mut self, title: &str) {
-        PlatformWindow::set_title(self, title)
+        PlatformWindow::set_title(self, title);
     }
 
     fn position(&self) -> Point<Pixels> {
@@ -602,7 +602,7 @@ impl WindowTrait for MacOSWindow {
     }
 
     fn set_size(&mut self, size: Size<Pixels>) {
-        PlatformWindow::resize(self, size)
+        PlatformWindow::resize(self, size);
     }
 
     fn state(&self) -> WindowState {
@@ -757,7 +757,7 @@ impl WindowTrait for MacOSWindow {
     }
 
     fn focus(&mut self) {
-        PlatformWindow::activate(self)
+        PlatformWindow::activate(self);
     }
 
     fn is_focused(&self) -> bool {
@@ -765,11 +765,11 @@ impl WindowTrait for MacOSWindow {
     }
 
     fn close(&mut self) {
-        PlatformWindow::close(self)
+        PlatformWindow::close(self);
     }
 
     fn request_redraw(&mut self) {
-        PlatformWindow::request_redraw(self)
+        PlatformWindow::request_redraw(self);
     }
 
     fn set_min_size(&mut self, size: Option<Size<Pixels>>) {
@@ -813,8 +813,8 @@ impl WindowTrait for MacOSWindow {
         unsafe {
             let content_view: id = msg_send![self.ns_window, contentView];
             CrossRawWindowHandle::MacOS {
-                ns_view: content_view as *mut std::ffi::c_void,
-                ns_window: self.ns_window as *mut std::ffi::c_void,
+                ns_view: content_view.cast::<std::ffi::c_void>(),
+                ns_window: self.ns_window.cast::<std::ffi::c_void>(),
             }
         }
     }
@@ -962,11 +962,11 @@ impl MacOSWindowExtTrait for MacOSWindow {
             // Window ids are NSWindow pointers (see `WindowTrait::id`)
             let other_ns_window = other_window_id as *mut Object;
 
-            if other_ns_window != nil {
+            if other_ns_window == nil {
+                tracing::warn!("Cannot add tab: window {:?} not found", other_window_id);
+            } else {
                 let _: () = msg_send![self.ns_window, addTabbedWindow:other_ns_window ordered:0]; // NSWindowAbove
                 tracing::debug!("Added tab to window {:p}", other_ns_window);
-            } else {
-                tracing::warn!("Cannot add tab: window {:?} not found", other_window_id);
             }
         }
     }
@@ -1066,7 +1066,7 @@ fn create_window_delegate(window: Weak<MacOSWindow>) -> id {
         let delegate: id = msg_send![delegate, init];
 
         // Store weak pointer to window
-        let window_ptr = Box::into_raw(Box::new(window)) as *mut std::ffi::c_void;
+        let window_ptr = Box::into_raw(Box::new(window)).cast::<std::ffi::c_void>();
         (*delegate).set_ivar("window_ptr", window_ptr);
 
         delegate
@@ -1169,7 +1169,7 @@ fn get_or_create_delegate_class() -> &'static Class {
             unsafe {
                 let window_ptr: *mut std::ffi::c_void = *this.get_ivar("window_ptr");
                 if !window_ptr.is_null() {
-                    drop(Box::from_raw(window_ptr as *mut Weak<MacOSWindow>));
+                    drop(Box::from_raw(window_ptr.cast::<Weak<MacOSWindow>>()));
                 }
                 let superclass = class!(NSObject);
                 let _: () = msg_send![super(this, superclass), dealloc];
@@ -1237,7 +1237,7 @@ unsafe fn get_window_from_delegate(delegate: &Object) -> Option<Arc<MacOSWindow>
     // Box<Weak<MacOSWindow>> pointer owned by the delegate.
     unsafe {
         let window_ptr: *mut std::ffi::c_void = *delegate.get_ivar("window_ptr");
-        let weak_ptr = window_ptr as *mut Weak<MacOSWindow>;
+        let weak_ptr = window_ptr.cast::<Weak<MacOSWindow>>();
         if weak_ptr.is_null() {
             return None;
         }

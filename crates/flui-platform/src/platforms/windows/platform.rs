@@ -8,24 +8,43 @@ use flui_types::geometry::{Bounds, DevicePixels, Point, Size};
 use parking_lot::Mutex;
 use windows::{
     Win32::{
-        Foundation::*,
-        Graphics::Gdi::*,
-        System::LibraryLoader::*,
+        Foundation::{ERROR_CANCELLED, HWND, LPARAM, LRESULT, RECT, WPARAM},
+        Graphics::Gdi::{BeginPaint, EndPaint, HBRUSH, PAINTSTRUCT},
+        System::LibraryLoader::{GetModuleFileNameW, GetModuleHandleW},
         UI::{
-            HiDpi::*,
+            HiDpi::{DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext},
             Input::KeyboardAndMouse::{TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent},
-            WindowsAndMessaging::*,
+            WindowsAndMessaging::{
+                CS_HREDRAW, CS_OWNDC, CS_VREDRAW, CreateWindowExW, DefWindowProcW, DestroyWindow,
+                DispatchMessageW, GWLP_USERDATA, GetForegroundWindow, GetMessageW,
+                GetWindowLongPtrW, HICON, HTCLIENT, HWND_MESSAGE, IDC_ARROW, MSG, PostQuitMessage,
+                RegisterClassW, SW_SHOWNORMAL, SWP_NOACTIVATE, SWP_NOZORDER, SetForegroundWindow,
+                SetWindowLongPtrW, SetWindowPos, TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE,
+                WM_CHAR, WM_CLOSE, WM_CREATE, WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND,
+                WM_INPUTLANGCHANGE, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN,
+                WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE,
+                WM_PAINT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS,
+                WM_SETTINGCHANGE, WM_SIZE, WM_SYSKEYDOWN, WM_SYSKEYUP, WNDCLASSW,
+            },
         },
     },
     core::{PCWSTR, w},
 };
 
-use super::{display::enumerate_displays, util::*, window::WindowsWindow};
+use super::{
+    display::enumerate_displays,
+    util::{WINDOW_CLASS_NAME, get_x_lparam, get_y_lparam, hiword, load_cursor_style},
+    window::WindowsWindow,
+};
 use crate::{
     config::WindowConfiguration,
     executor::BackgroundExecutor,
     shared::{PlatformHandlers, WindowCallbacks},
-    traits::*,
+    traits::{
+        Clipboard, DesktopCapabilities, Platform, PlatformCapabilities, PlatformDisplay,
+        PlatformExecutor, PlatformWindow, WindowAppearance, WindowEvent, WindowId, WindowMode,
+        WindowOptions,
+    },
 };
 
 /// Ensures window class is registered exactly once (sound replacement for
@@ -172,7 +191,7 @@ impl WindowsPlatform {
             use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
             let hr = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
             if hr.is_err() {
-                return Err(anyhow::anyhow!("Failed to initialize COM: {:?}", hr));
+                return Err(anyhow::anyhow!("Failed to initialize COM: {hr:?}"));
             }
         }
 
@@ -190,7 +209,7 @@ impl WindowsPlatform {
         // Create message-only window for platform messages
         let message_window = unsafe {
             let hinstance = GetModuleHandleW(None)
-                .map_err(|e| anyhow::anyhow!("Failed to get module handle: {:?}", e))?;
+                .map_err(|e| anyhow::anyhow!("Failed to get module handle: {e:?}"))?;
 
             CreateWindowExW(
                 WINDOW_EX_STYLE(0),
@@ -206,7 +225,7 @@ impl WindowsPlatform {
                 Some(hinstance.into()),
                 None,
             )
-            .map_err(|e| anyhow::anyhow!("Failed to create message window: {:?}", e))?
+            .map_err(|e| anyhow::anyhow!("Failed to create message window: {e:?}"))?
         };
 
         // Create executors
@@ -246,7 +265,7 @@ impl WindowsPlatform {
                         lpszClassName: WINDOW_CLASS_NAME,
                     };
 
-                    let atom = RegisterClassW(&wc);
+                    let atom = RegisterClassW(&raw const wc);
                     if atom == 0 {
                         return Err(windows::core::Error::from_thread().into());
                     }
@@ -274,10 +293,10 @@ impl WindowsPlatform {
         unsafe {
             // Get window context from GWLP_USERDATA
             let ctx_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut WindowContext;
-            let ctx = if !ctx_ptr.is_null() {
-                Some(&*ctx_ptr)
-            } else {
+            let ctx = if ctx_ptr.is_null() {
                 None
+            } else {
+                Some(&*ctx_ptr)
             };
 
             match msg {
@@ -336,11 +355,13 @@ impl WindowsPlatform {
 
                 WM_PAINT => {
                     let mut ps = PAINTSTRUCT::default();
-                    let hdc = BeginPaint(hwnd, &mut ps);
+                    let hdc = BeginPaint(hwnd, &raw mut ps);
                     if !hdc.is_invalid() {
                         // Skip rendering for minimized windows to save CPU/GPU resources
                         let should_skip = WindowsWindow::should_skip_render(hwnd);
-                        if !should_skip {
+                        if should_skip {
+                            tracing::trace!("Skipping render for minimized window");
+                        } else {
                             // No GDI painting here. This HWND carries a D3D12 flip-model
                             // swapchain (wgpu-on-DX12 is always flip-model). Per Microsoft,
                             // GDI and flip model cannot share an HWND: after the first
@@ -358,10 +379,8 @@ impl WindowsPlatform {
                                     window_id: ctx.window_id,
                                 });
                             }
-                        } else {
-                            tracing::trace!("Skipping render for minimized window");
                         }
-                        let _ = EndPaint(hwnd, &ps);
+                        let _ = EndPaint(hwnd, &raw const ps);
                     }
                     LRESULT(0)
                 }
@@ -389,13 +408,7 @@ impl WindowsPlatform {
                                         size: ctx.last_size.get(),
                                     },
                                 };
-                                if !prev_mode.can_transition_to(&candidate) {
-                                    tracing::warn!(
-                                        "⚠️  Invalid state transition: {:?} -> Minimized (transition ignored)",
-                                        prev_mode
-                                    );
-                                    (prev_mode, None)
-                                } else {
+                                if prev_mode.can_transition_to(&candidate) {
                                     // Save current size before minimizing
                                     if !prev_mode.is_minimized() {
                                         ctx.last_size.set(size);
@@ -406,6 +419,12 @@ impl WindowsPlatform {
                                             window_id: ctx.window_id,
                                         }),
                                     )
+                                } else {
+                                    tracing::warn!(
+                                        "⚠️  Invalid state transition: {:?} -> Minimized (transition ignored)",
+                                        prev_mode
+                                    );
+                                    (prev_mode, None)
                                 }
                             }
                             SIZE_MAXIMIZED => {
@@ -417,13 +436,7 @@ impl WindowsPlatform {
                                         size: ctx.last_size.get(),
                                     },
                                 };
-                                if !prev_mode.can_transition_to(&candidate) {
-                                    tracing::warn!(
-                                        "⚠️  Invalid state transition: {:?} -> Maximized (transition ignored)",
-                                        prev_mode
-                                    );
-                                    (prev_mode, None)
-                                } else {
+                                if prev_mode.can_transition_to(&candidate) {
                                     ctx.last_size.set(size);
                                     (
                                         candidate,
@@ -432,6 +445,12 @@ impl WindowsPlatform {
                                             size,
                                         }),
                                     )
+                                } else {
+                                    tracing::warn!(
+                                        "⚠️  Invalid state transition: {:?} -> Maximized (transition ignored)",
+                                        prev_mode
+                                    );
+                                    (prev_mode, None)
                                 }
                             }
                             SIZE_RESTORED => {
@@ -592,7 +611,7 @@ impl WindowsPlatform {
                             hwndTrack: hwnd,
                             dwHoverTime: 0,
                         };
-                        let _ = TrackMouseEvent(&mut tme);
+                        let _ = TrackMouseEvent(&raw mut tme);
 
                         // Track hover state (T034)
                         ctx.is_hovered.set(true);
@@ -849,21 +868,19 @@ impl WindowsPlatform {
     }
 
     /// Run the Windows message loop (internal implementation)
-    fn run_message_loop(&self) -> Result<()> {
+    fn run_message_loop() {
         tracing::info!("Starting Windows message loop");
 
         unsafe {
             let mut msg = MSG::default();
 
-            while GetMessageW(&mut msg, None, 0, 0).as_bool() {
-                let _ = TranslateMessage(&msg);
-                DispatchMessageW(&msg);
+            while GetMessageW(&raw mut msg, None, 0, 0).as_bool() {
+                let _ = TranslateMessage(&raw const msg);
+                DispatchMessageW(&raw const msg);
             }
 
             tracing::info!("Message loop exited with code: {}", msg.wParam.0);
         }
-
-        Ok(())
     }
 }
 
@@ -882,10 +899,7 @@ impl Platform for WindowsPlatform {
         // Call ready callback
         on_ready(&*self);
 
-        // Run message loop
-        if let Err(e) = self.run_message_loop() {
-            tracing::error!("Message loop error: {:?}", e);
-        }
+        Self::run_message_loop();
     }
 
     fn quit(&self) {
@@ -982,7 +996,9 @@ impl Platform for WindowsPlatform {
 
     fn window_appearance(&self) -> WindowAppearance {
         // Read system theme from registry: AppsUseLightTheme
-        use windows::Win32::System::Registry::*;
+        use windows::Win32::System::Registry::{
+            HKEY, HKEY_CURRENT_USER, KEY_READ, RegCloseKey, RegOpenKeyExW, RegQueryValueExW,
+        };
         unsafe {
             let mut hkey = HKEY::default();
             let subkey: Vec<u16> =
@@ -996,7 +1012,7 @@ impl Platform for WindowsPlatform {
                 PCWSTR(subkey.as_ptr()),
                 Some(0),
                 KEY_READ,
-                &mut hkey,
+                &raw mut hkey,
             );
             if status.is_err() {
                 return WindowAppearance::Light;
@@ -1010,7 +1026,7 @@ impl Platform for WindowsPlatform {
                 None,
                 None,
                 Some((&raw mut data).cast::<u8>()),
-                Some(&mut data_size),
+                Some(&raw mut data_size),
             );
             let _ = RegCloseKey(hkey);
 
@@ -1047,7 +1063,7 @@ impl Platform for WindowsPlatform {
         use windows::Win32::UI::Shell::ShellExecuteW;
         // Use "explorer /select,<path>" to reveal in Explorer
         let path_str = path.to_string_lossy();
-        let arg = format!("/select,{}", path_str);
+        let arg = format!("/select,{path_str}");
         let wide_arg: Vec<u16> = arg.encode_utf16().chain(std::iter::once(0)).collect();
         let explorer: Vec<u16> = "explorer\0".encode_utf16().collect();
         unsafe {
@@ -1092,7 +1108,16 @@ impl Platform for WindowsPlatform {
             // COM file dialogs must run on an STA thread
             let result = std::thread::spawn(move || -> Result<Option<Vec<std::path::PathBuf>>> {
                 unsafe {
-                    use windows::Win32::{System::Com::*, UI::Shell::*};
+                    use windows::Win32::{
+                        System::Com::{
+                            CLSCTX_ALL, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
+                            CoTaskMemFree,
+                        },
+                        UI::Shell::{
+                            FOS_ALLOWMULTISELECT, FOS_FORCEFILESYSTEM, FOS_PATHMUSTEXIST,
+                            FOS_PICKFOLDERS, FileOpenDialog, IFileOpenDialog, SIGDN_FILESYSPATH,
+                        },
+                    };
 
                     let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
 
@@ -1144,12 +1169,22 @@ impl Platform for WindowsPlatform {
         suggested_name: Option<&str>,
     ) -> crate::task::Task<Result<Option<std::path::PathBuf>>> {
         let dir = directory.to_path_buf();
-        let name = suggested_name.map(|s| s.to_string());
+        let name = suggested_name.map(std::string::ToString::to_string);
         let executor = self.background_executor.clone();
         executor.spawn(async move {
             let result = std::thread::spawn(move || -> Result<Option<std::path::PathBuf>> {
                 unsafe {
-                    use windows::Win32::{System::Com::*, UI::Shell::*};
+                    use windows::Win32::{
+                        System::Com::{
+                            CLSCTX_ALL, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
+                            CoTaskMemFree,
+                        },
+                        UI::Shell::{
+                            FOS_FORCEFILESYSTEM, FOS_OVERWRITEPROMPT, FOS_PATHMUSTEXIST,
+                            FileSaveDialog, IFileSaveDialog, IShellItem,
+                            SHCreateItemFromParsingName, SIGDN_FILESYSPATH,
+                        },
+                    };
 
                     let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
 

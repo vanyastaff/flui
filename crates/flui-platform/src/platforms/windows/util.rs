@@ -4,13 +4,13 @@
 use anyhow::{Result, anyhow};
 use flui_types::geometry::{DevicePixels, Pixels, Point, Size, device_px, px};
 use windows::{
-    Win32::{Foundation::*, UI::Input::KeyboardAndMouse::GetAsyncKeyState},
+    Win32::{Foundation::LPARAM, UI::Input::KeyboardAndMouse::GetAsyncKeyState},
     core::{PCWSTR, w},
 };
 
 /// Windows platform window class name (shared across platform.rs and window.rs)
 pub const WINDOW_CLASS_NAME: PCWSTR = w!("FluiWindowClass");
-use windows::Win32::UI::WindowsAndMessaging::*;
+use windows::Win32::UI::WindowsAndMessaging::{HCURSOR, LoadCursorW};
 
 /// Convert LPARAM to X coordinate
 #[inline]
@@ -80,7 +80,7 @@ pub fn to_wide(s: &str) -> Vec<u16> {
 
 /// Load a cursor by style
 pub unsafe fn load_cursor_style(style: PCWSTR) -> Result<HCURSOR> {
-    unsafe { LoadCursorW(None, style).map_err(|e| anyhow!("Failed to load cursor: {}", e)) }
+    unsafe { LoadCursorW(None, style).map_err(|e| anyhow!("Failed to load cursor: {e}")) }
 }
 
 /// Check if a key is pressed
@@ -106,7 +106,7 @@ mod tests {
     #[test]
     fn test_lparam_coordinates() {
         // X=100, Y=200 packed into LPARAM
-        let lparam = LPARAM(((200 << 16) | 100) as isize);
+        let lparam = LPARAM(((0xC8 << 16) | 0x64) as isize); // y=200, x=100
 
         assert_eq!(get_x_lparam(lparam), 100);
         assert_eq!(get_y_lparam(lparam), 200);

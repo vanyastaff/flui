@@ -158,11 +158,11 @@ impl Platform for MacOSPlatform {
         // returns nil or a live NSWindow whose pointer value is used as an id.
         unsafe {
             let key_window: id = msg_send![self.app, keyWindow];
-            if key_window != nil {
+            if key_window == nil {
+                None
+            } else {
                 let ptr = key_window as u64;
                 Some(WindowId(ptr))
-            } else {
-                None
             }
         }
     }

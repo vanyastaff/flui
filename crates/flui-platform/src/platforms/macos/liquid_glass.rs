@@ -62,11 +62,10 @@ impl LiquidGlassMaterial {
     /// These values are calibrated to match Apple's design guidelines.
     pub fn default_blur_radius(self) -> f32 {
         match self {
-            LiquidGlassMaterial::Standard => 30.0,
+            LiquidGlassMaterial::Standard | LiquidGlassMaterial::Popover => 30.0,
             LiquidGlassMaterial::Prominent => 20.0,
             LiquidGlassMaterial::Sidebar => 40.0,
             LiquidGlassMaterial::Menu => 25.0,
-            LiquidGlassMaterial::Popover => 30.0,
             LiquidGlassMaterial::ControlCenter => 35.0,
         }
     }
@@ -95,12 +94,12 @@ impl LiquidGlassMaterial {
     /// is exposed; macOS Tahoe 26 will provide dedicated materials.
     pub(crate) fn to_ns_visual_effect_material(self) -> usize {
         match self {
-            LiquidGlassMaterial::Standard => 18,      // contentBackground
-            LiquidGlassMaterial::Prominent => 13,     // hudWindow
-            LiquidGlassMaterial::Sidebar => 7,        // sidebar
-            LiquidGlassMaterial::Menu => 5,           // menu
-            LiquidGlassMaterial::Popover => 6,        // popover
-            LiquidGlassMaterial::ControlCenter => 13, // hudWindow
+            LiquidGlassMaterial::Standard => 18, // contentBackground
+            // hudWindow
+            LiquidGlassMaterial::Prominent | LiquidGlassMaterial::ControlCenter => 13,
+            LiquidGlassMaterial::Sidebar => 7, // sidebar
+            LiquidGlassMaterial::Menu => 5,    // menu
+            LiquidGlassMaterial::Popover => 6, // popover
         }
     }
 

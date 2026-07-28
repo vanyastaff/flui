@@ -95,14 +95,17 @@ wasm-check:
 # per-OS test targets are compiled too — omitting it is what made live code
 # look dead on wasm32.
 #
-# TYPE-CHECK ONLY: it does not link and runs no tests, and flui-platform is
-# excluded from the test job entirely. Green here means "compiles", nothing more.
+# LINT, NO LINK: clippy (not plain check) because cfg(windows)/cfg(macos)
+# code is invisible to every other lint gate — check-only let ~80 deny-level
+# violations accumulate unseen. It still does not link and runs no tests, and
+# flui-platform is excluded from the test job entirely. Green here means
+# "compiles clean under the workspace lints", nothing more.
 # Requires: rustup target add x86_64-pc-windows-msvc aarch64-apple-darwin
 [group("build")]
-[doc("Type-check flui-platform's Windows and macOS backends from this host (mirrors the CI cross-typecheck job)")]
+[doc("Clippy flui-platform's Windows and macOS backends from this host (mirrors the CI cross-typecheck job)")]
 cross-typecheck:
-    cargo check -p flui-platform --locked --all-targets --target x86_64-pc-windows-msvc
-    cargo check -p flui-platform --locked --all-targets --target aarch64-apple-darwin
+    cargo clippy -p flui-platform --locked --all-targets --target x86_64-pc-windows-msvc -- -D warnings
+    cargo clippy -p flui-platform --locked --all-targets --target aarch64-apple-darwin -- -D warnings
 
 # =============================================================================
 # Testing

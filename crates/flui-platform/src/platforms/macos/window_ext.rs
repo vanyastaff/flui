@@ -212,8 +212,7 @@ impl MacOSWindowLevel {
     pub fn to_ns_value(self) -> isize {
         match self {
             MacOSWindowLevel::Normal => 0,
-            MacOSWindowLevel::Floating => 3,
-            MacOSWindowLevel::TornOffMenu => 3,
+            MacOSWindowLevel::Floating | MacOSWindowLevel::TornOffMenu => 3,
             MacOSWindowLevel::ModalPanel => 8,
             MacOSWindowLevel::MainMenu => 24,
             MacOSWindowLevel::Status => 25,

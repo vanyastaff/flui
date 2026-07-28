@@ -74,7 +74,7 @@ impl MacOSDisplay {
 
             Self {
                 id: DisplayId(display_id),
-                name: format!("Display {}", display_id),
+                name: format!("Display {display_id}"),
                 bounds,
                 usable_bounds,
                 scale_factor: scale,

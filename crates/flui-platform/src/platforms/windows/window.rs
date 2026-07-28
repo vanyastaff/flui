@@ -12,10 +12,27 @@ use raw_window_handle::{
 };
 use windows::{
     Win32::{
-        Foundation::*,
-        Graphics::Gdi::*,
-        System::LibraryLoader::*,
-        UI::{HiDpi::*, WindowsAndMessaging::*},
+        Foundation::{FALSE, HWND, POINT, RECT, TRUE},
+        Graphics::Gdi::{
+            HRGN, InvalidateRect, MONITOR_DEFAULTTOPRIMARY, MonitorFromWindow, ScreenToClient,
+            UpdateWindow,
+        },
+        System::LibraryLoader::GetModuleHandleW,
+        UI::{
+            HiDpi::{GetDpiForSystem, GetDpiForWindow},
+            WindowsAndMessaging::{
+                CW_USEDEFAULT, CreateWindowExW, DestroyWindow, GCLP_HBRBACKGROUND, GWL_STYLE,
+                GWLP_USERDATA, GetClientRect, GetCursorPos, GetForegroundWindow, GetWindowLongPtrW,
+                GetWindowPlacement, IDC_APPSTARTING, IDC_ARROW, IDC_CROSS, IDC_HAND, IDC_IBEAM,
+                IDC_NO, IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE, IDC_SIZEWE, IDC_WAIT,
+                IsZoomed, LoadCursorW, SW_HIDE, SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE, SW_SHOW,
+                SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
+                SetClassLongPtrW, SetCursor, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos,
+                SetWindowTextW, ShowWindow, WINDOWPLACEMENT, WS_EX_APPWINDOW, WS_MAXIMIZEBOX,
+                WS_MINIMIZEBOX, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_SYSMENU, WS_THICKFRAME,
+                WS_VISIBLE,
+            },
+        },
     },
     core::HSTRING,
 };
@@ -23,7 +40,11 @@ use windows::{
 use super::util::{USER_DEFAULT_SCREEN_DPI, WINDOW_CLASS_NAME, logical_to_device};
 use crate::{
     shared::{PlatformHandlers, WindowCallbacks},
-    traits::*,
+    traits::{
+        CursorError, DispatchEventResult, PlatformDisplay, PlatformInput, PlatformWindow,
+        WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowId, WindowMode,
+        WindowOptions,
+    },
 };
 
 /// Windows window wrapper
@@ -227,7 +248,7 @@ impl WindowsWindow {
                 cyTopHeight: -1,
                 cyBottomHeight: -1,
             };
-            let _ = DwmExtendFrameIntoClientArea(hwnd, &margins);
+            let _ = DwmExtendFrameIntoClientArea(hwnd, &raw const margins);
 
             // 2. Enable Mica backdrop (Windows 11+)
             let mica_value: i32 = 2; // DWMSBT_MAINWINDOW
@@ -308,7 +329,16 @@ impl WindowsWindow {
     /// WindowsWindow::toggle_fullscreen_for_hwnd(hwnd);
     /// ```
     pub fn toggle_fullscreen_for_hwnd(hwnd: HWND) {
-        use windows::Win32::{Graphics::Gdi::*, UI::WindowsAndMessaging::*};
+        use windows::Win32::{
+            Graphics::Gdi::{
+                GetMonitorInfoW, MONITOR_DEFAULTTOPRIMARY, MONITORINFO, MonitorFromWindow,
+            },
+            UI::WindowsAndMessaging::{
+                GWL_STYLE, GWLP_USERDATA, GetWindowLongPtrW, GetWindowRect, HWND_TOP,
+                SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOZORDER, SetWindowLongPtrW, SetWindowPos,
+                WS_POPUP, WS_VISIBLE,
+            },
+        };
 
         unsafe {
             // Get WindowContext from GWLP_USERDATA
@@ -322,120 +352,117 @@ impl WindowsWindow {
 
             let current_mode = ctx.mode.get();
 
-            match current_mode {
-                WindowMode::Fullscreen { restore_bounds } => {
-                    // Exit fullscreen - restore previous style and bounds
-                    tracing::info!("Exiting fullscreen mode");
+            if let WindowMode::Fullscreen { restore_bounds } = current_mode {
+                // Exit fullscreen - restore previous style and bounds
+                tracing::info!("Exiting fullscreen mode");
 
-                    // Validate transition
-                    let candidate = WindowMode::Normal;
-                    if !current_mode.can_transition_to(&candidate) {
-                        tracing::warn!("Cannot exit fullscreen: invalid state transition");
-                        return;
-                    }
-
-                    // Restore window style from WindowContext
-                    let restore_style = ctx.restore_style.get();
-                    SetWindowLongPtrW(hwnd, GWL_STYLE, restore_style as isize);
-
-                    // Restore window position and size
-                    SetWindowPos(
-                        hwnd,
-                        None,
-                        restore_bounds.origin.x.0,
-                        restore_bounds.origin.y.0,
-                        restore_bounds.size.width.0,
-                        restore_bounds.size.height.0,
-                        SWP_FRAMECHANGED | SWP_NOZORDER | SWP_NOACTIVATE,
-                    )
-                    .ok();
-
-                    // Update state
-                    ctx.mode.set(WindowMode::Normal);
-
-                    // Dispatch ExitFullscreen event
-                    ctx.dispatch_event(crate::traits::WindowEvent::ExitFullscreen {
-                        window_id: ctx.window_id,
-                        size: restore_bounds.size,
-                    });
+                // Validate transition
+                let candidate = WindowMode::Normal;
+                if !current_mode.can_transition_to(&candidate) {
+                    tracing::warn!("Cannot exit fullscreen: invalid state transition");
+                    return;
                 }
-                _ => {
-                    // Enter fullscreen - save current state and go borderless on monitor
-                    tracing::info!("Entering fullscreen mode");
 
-                    // Get current window rect
-                    let mut rect = RECT::default();
-                    GetWindowRect(hwnd, &mut rect).ok();
+                // Restore window style from WindowContext
+                let restore_style = ctx.restore_style.get();
+                SetWindowLongPtrW(hwnd, GWL_STYLE, restore_style as isize);
 
-                    // Save current style to WindowContext
-                    let current_style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
-                    ctx.restore_style.set(current_style);
+                // Restore window position and size
+                SetWindowPos(
+                    hwnd,
+                    None,
+                    restore_bounds.origin.x.0,
+                    restore_bounds.origin.y.0,
+                    restore_bounds.size.width.0,
+                    restore_bounds.size.height.0,
+                    SWP_FRAMECHANGED | SWP_NOZORDER | SWP_NOACTIVATE,
+                )
+                .ok();
 
-                    // Save current bounds
-                    let restore_bounds = Bounds {
-                        origin: Point::new(DevicePixels(rect.left), DevicePixels(rect.top)),
-                        size: Size::new(
-                            DevicePixels(rect.right - rect.left),
-                            DevicePixels(rect.bottom - rect.top),
-                        ),
-                    };
+                // Update state
+                ctx.mode.set(WindowMode::Normal);
 
-                    // Validate transition
-                    let candidate = WindowMode::Fullscreen { restore_bounds };
-                    if !current_mode.can_transition_to(&candidate) {
-                        tracing::warn!(
-                            "Cannot enter fullscreen: invalid state transition from {:?}",
-                            current_mode
-                        );
-                        return;
-                    }
+                // Dispatch ExitFullscreen event
+                ctx.dispatch_event(crate::traits::WindowEvent::ExitFullscreen {
+                    window_id: ctx.window_id,
+                    size: restore_bounds.size,
+                });
+            } else {
+                // Enter fullscreen - save current state and go borderless on monitor
+                tracing::info!("Entering fullscreen mode");
 
-                    // Get monitor containing this window
-                    let monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTOPRIMARY);
-                    let mut monitor_info = MONITORINFO {
-                        cbSize: std::mem::size_of::<MONITORINFO>() as u32,
-                        ..Default::default()
-                    };
-                    let _ = GetMonitorInfoW(monitor, &mut monitor_info);
+                // Get current window rect
+                let mut rect = RECT::default();
+                GetWindowRect(hwnd, &raw mut rect).ok();
 
-                    let monitor_rect = monitor_info.rcMonitor;
+                // Save current style to WindowContext
+                let current_style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
+                ctx.restore_style.set(current_style);
 
-                    // Set borderless style
-                    let fullscreen_style = WS_POPUP | WS_VISIBLE;
-                    SetWindowLongPtrW(hwnd, GWL_STYLE, fullscreen_style.0 as isize);
+                // Save current bounds
+                let restore_bounds = Bounds {
+                    origin: Point::new(DevicePixels(rect.left), DevicePixels(rect.top)),
+                    size: Size::new(
+                        DevicePixels(rect.right - rect.left),
+                        DevicePixels(rect.bottom - rect.top),
+                    ),
+                };
 
-                    // Position window to cover entire monitor
-                    SetWindowPos(
-                        hwnd,
-                        Some(HWND_TOP),
-                        monitor_rect.left,
-                        monitor_rect.top,
-                        monitor_rect.right - monitor_rect.left,
-                        monitor_rect.bottom - monitor_rect.top,
-                        SWP_FRAMECHANGED | SWP_NOACTIVATE,
-                    )
-                    .ok();
-
-                    // Update state
-                    ctx.mode.set(candidate);
-
-                    // Dispatch Fullscreen event
-                    let size = Size::new(
-                        flui_types::geometry::DevicePixels(monitor_rect.right - monitor_rect.left),
-                        flui_types::geometry::DevicePixels(monitor_rect.bottom - monitor_rect.top),
+                // Validate transition
+                let candidate = WindowMode::Fullscreen { restore_bounds };
+                if !current_mode.can_transition_to(&candidate) {
+                    tracing::warn!(
+                        "Cannot enter fullscreen: invalid state transition from {:?}",
+                        current_mode
                     );
-                    ctx.dispatch_event(crate::traits::WindowEvent::Fullscreen {
-                        window_id: ctx.window_id,
-                        size,
-                    });
+                    return;
                 }
+
+                // Get monitor containing this window
+                let monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTOPRIMARY);
+                let mut monitor_info = MONITORINFO {
+                    cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+                    ..Default::default()
+                };
+                let _ = GetMonitorInfoW(monitor, &raw mut monitor_info);
+
+                let monitor_rect = monitor_info.rcMonitor;
+
+                // Set borderless style
+                let fullscreen_style = WS_POPUP | WS_VISIBLE;
+                SetWindowLongPtrW(hwnd, GWL_STYLE, fullscreen_style.0 as isize);
+
+                // Position window to cover entire monitor
+                SetWindowPos(
+                    hwnd,
+                    Some(HWND_TOP),
+                    monitor_rect.left,
+                    monitor_rect.top,
+                    monitor_rect.right - monitor_rect.left,
+                    monitor_rect.bottom - monitor_rect.top,
+                    SWP_FRAMECHANGED | SWP_NOACTIVATE,
+                )
+                .ok();
+
+                // Update state
+                ctx.mode.set(candidate);
+
+                // Dispatch Fullscreen event
+                let size = Size::new(
+                    flui_types::geometry::DevicePixels(monitor_rect.right - monitor_rect.left),
+                    flui_types::geometry::DevicePixels(monitor_rect.bottom - monitor_rect.top),
+                );
+                ctx.dispatch_event(crate::traits::WindowEvent::Fullscreen {
+                    window_id: ctx.window_id,
+                    size,
+                });
             }
         }
     }
 
     /// Toggle fullscreen mode for this window
     pub fn toggle_fullscreen(&self) {
-        Self::toggle_fullscreen_for_hwnd(self.hwnd)
+        Self::toggle_fullscreen_for_hwnd(self.hwnd);
     }
 
     /// Check if the window is currently in fullscreen mode
@@ -501,13 +528,8 @@ impl WindowsWindow {
             | CursorIcon::RowResize => IDC_SIZENS,
             CursorIcon::NeResize | CursorIcon::SwResize | CursorIcon::NeswResize => IDC_SIZENESW,
             CursorIcon::NwResize | CursorIcon::SeResize | CursorIcon::NwseResize => IDC_SIZENWSE,
-            CursorIcon::Default
-            | CursorIcon::ContextMenu
-            | CursorIcon::Help
-            | CursorIcon::Alias
-            | CursorIcon::ZoomIn
-            | CursorIcon::ZoomOut
-            | CursorIcon::DndAsk => IDC_ARROW,
+            // Default, ContextMenu, Help, Alias, ZoomIn, ZoomOut, DndAsk and
+            // every future variant fall back to the arrow cursor.
             _ => IDC_ARROW,
         };
 
@@ -577,7 +599,7 @@ impl PlatformWindow for WindowsWindow {
     fn content_size(&self) -> Size<Pixels> {
         unsafe {
             let mut rect = RECT::default();
-            if GetClientRect(self.hwnd, &mut rect).is_ok() {
+            if GetClientRect(self.hwnd, &raw mut rect).is_ok() {
                 let scale = self.state.lock().scale_factor;
                 Size::new(
                     px((rect.right - rect.left) as f32 / scale),
@@ -635,8 +657,8 @@ impl PlatformWindow for WindowsWindow {
     fn mouse_position(&self) -> Point<Pixels> {
         unsafe {
             let mut cursor_pos = POINT::default();
-            if GetCursorPos(&mut cursor_pos).is_ok()
-                && ScreenToClient(self.hwnd, &mut cursor_pos).as_bool()
+            if GetCursorPos(&raw mut cursor_pos).is_ok()
+                && ScreenToClient(self.hwnd, &raw mut cursor_pos).as_bool()
             {
                 let scale = self.state.lock().scale_factor;
                 Point::new(
@@ -739,7 +761,7 @@ impl PlatformWindow for WindowsWindow {
     }
 
     fn toggle_fullscreen(&self) {
-        WindowsWindow::toggle_fullscreen(self)
+        WindowsWindow::toggle_fullscreen(self);
     }
 
     fn resize(&self, size: Size<Pixels>) {
@@ -773,9 +795,10 @@ impl PlatformWindow for WindowsWindow {
             use windows::Win32::Graphics::Dwm::{DWMWINDOWATTRIBUTE, DwmSetWindowAttribute};
 
             let backdrop_value: i32 = match appearance {
-                WindowBackgroundAppearance::Opaque => 1,       // DWMSBT_NONE
-                WindowBackgroundAppearance::Transparent => 1,  // No native transparent, use NONE
-                WindowBackgroundAppearance::Blurred => 3,      // DWMSBT_TRANSIENTWINDOW (Acrylic)
+                // DWMSBT_NONE — Windows has no native transparent backdrop,
+                // so Transparent also maps to NONE.
+                WindowBackgroundAppearance::Opaque | WindowBackgroundAppearance::Transparent => 1,
+                WindowBackgroundAppearance::Blurred => 3, // DWMSBT_TRANSIENTWINDOW (Acrylic)
                 WindowBackgroundAppearance::MicaBackdrop => 2, // DWMSBT_MAINWINDOW (Mica)
                 WindowBackgroundAppearance::MicaAltBackdrop => 4, // DWMSBT_TABBEDWINDOW (Mica Alt)
             };
@@ -1150,7 +1173,8 @@ impl WindowTrait for WindowsWindow {
 
     fn raw_window_handle(&self) -> CrossRawWindowHandle {
         unsafe {
-            let hinstance = GetModuleHandleW(None).unwrap();
+            let hinstance = GetModuleHandleW(None)
+                .expect("BUG: GetModuleHandleW(None) cannot fail for the current process image");
             CrossRawWindowHandle::Windows {
                 hwnd: self.hwnd.0,
                 hinstance: hinstance.0,
@@ -1167,7 +1191,7 @@ impl WindowsWindow {
                 length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
                 ..Default::default()
             };
-            GetWindowPlacement(self.hwnd, &mut placement).ok();
+            GetWindowPlacement(self.hwnd, &raw mut placement).ok();
             placement
         }
     }
@@ -1180,7 +1204,7 @@ impl WindowsWindow {
             DwmSetWindowAttribute(
                 self.hwnd,
                 DWMWINDOWATTRIBUTE(attribute),
-                value as *const T as *const std::ffi::c_void,
+                std::ptr::from_ref::<T>(value).cast::<std::ffi::c_void>(),
                 std::mem::size_of::<T>() as u32,
             )
         }
@@ -1233,7 +1257,7 @@ impl WindowsWindowExtTrait for WindowsWindow {
     fn backdrop(&self) -> WindowsBackdrop {
         unsafe {
             match self.get_dwm_attribute::<i32>(dwm_attributes::DWMWA_SYSTEMBACKDROP_TYPE) {
-                Ok(1) => WindowsBackdrop::None,
+                // Ok(1) is DWMSBT_NONE — covered by the fallback arm.
                 Ok(2) => WindowsBackdrop::Mica,
                 Ok(3) => WindowsBackdrop::Acrylic,
                 Ok(4) => WindowsBackdrop::MicaAlt,
@@ -1310,7 +1334,7 @@ impl WindowsWindowExtTrait for WindowsWindow {
     fn corner_preference(&self) -> WindowCornerPreference {
         unsafe {
             match self.get_dwm_attribute::<i32>(dwm_attributes::DWMWA_WINDOW_CORNER_PREFERENCE) {
-                Ok(0) => WindowCornerPreference::Default,
+                // Ok(0) is DWMCP_DEFAULT — covered by the fallback arm.
                 Ok(1) => WindowCornerPreference::DoNotRound,
                 Ok(2) => WindowCornerPreference::Round,
                 Ok(3) => WindowCornerPreference::RoundSmall,
@@ -1332,7 +1356,7 @@ impl WindowsWindowExtTrait for WindowsWindow {
                 fTransitionOnMaximized: FALSE,
             };
 
-            if let Err(e) = DwmEnableBlurBehindWindow(self.hwnd, &bb) {
+            if let Err(e) = DwmEnableBlurBehindWindow(self.hwnd, &raw const bb) {
                 tracing::warn!("Failed to enable blur behind: {:?}", e);
             } else {
                 tracing::debug!("Blur behind: {}", enable);
@@ -1358,7 +1382,7 @@ impl WindowsWindowExtTrait for WindowsWindow {
 
     fn set_dark_mode(&mut self, dark_mode: bool) {
         unsafe {
-            let dark_mode_value: i32 = if dark_mode { 1 } else { 0 };
+            let dark_mode_value: i32 = i32::from(dark_mode);
             if let Err(e) = self.set_dwm_attribute(
                 dwm_attributes::DWMWA_USE_IMMERSIVE_DARK_MODE,
                 &dark_mode_value,
@@ -1418,7 +1442,7 @@ impl WindowsWindowExtTrait for WindowsWindow {
                 }
             } else {
                 // Reset to default (0xFFFFFFFF means use default)
-                let default_color: u32 = 0xFFFFFFFF;
+                let default_color: u32 = 0xFFFF_FFFF;
                 self.set_dwm_attribute(dwm_attributes::DWMWA_CAPTION_COLOR, &default_color)
                     .ok();
             }
@@ -1478,7 +1502,7 @@ mod tests {
     use super::*;
 
     #[test]
-    #[ignore] // Requires WindowsPlatform to register window class
+    #[ignore = "requires WindowsPlatform to register the window class"]
     fn test_window_creation() {
         let options = WindowOptions {
             title: "Test Window".to_string(),

@@ -3,7 +3,11 @@
 use std::sync::Arc;
 
 use flui_types::geometry::{Bounds, DevicePixels, Point, Size};
-use windows::Win32::{Foundation::*, Graphics::Gdi::*, UI::HiDpi::*};
+use windows::Win32::{
+    Foundation::{LPARAM, RECT, TRUE},
+    Graphics::Gdi::{EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFOEXW},
+    UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI},
+};
 // BOOL moved from Win32::Foundation to windows_core in windows 0.62
 use windows::core::BOOL;
 
@@ -40,7 +44,7 @@ impl WindowsDisplay {
             // Get DPI for this monitor
             let mut dpi_x = 96u32;
             let mut dpi_y = 96u32;
-            let _ = GetDpiForMonitor(hmonitor, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y);
+            let _ = GetDpiForMonitor(hmonitor, MDT_EFFECTIVE_DPI, &raw mut dpi_x, &raw mut dpi_y);
             let scale_factor = dpi_x as f64 / 96.0;
 
             // Convert device name from wide string

@@ -37,7 +37,7 @@ use ui_events::{
     keyboard::{Code, KeyState, KeyboardEvent, Location},
     pointer::{
         PointerButton, PointerButtonEvent, PointerButtons, PointerEvent, PointerId, PointerInfo,
-        PointerScrollEvent, PointerState, PointerType, PointerUpdate,
+        PointerOrientation, PointerScrollEvent, PointerState, PointerType, PointerUpdate,
     },
 };
 
@@ -120,64 +120,66 @@ pub unsafe fn convert_ns_event(
             }
 
             // Mouse button events
-            NSEventType::NSLeftMouseDown => convert_mouse_button(
+            NSEventType::NSLeftMouseDown => Some(convert_mouse_button(
                 ns_event,
                 scale_factor,
                 view_height,
                 PointerButton::Primary,
                 true,
-            ),
+            )),
 
-            NSEventType::NSLeftMouseUp => convert_mouse_button(
+            NSEventType::NSLeftMouseUp => Some(convert_mouse_button(
                 ns_event,
                 scale_factor,
                 view_height,
                 PointerButton::Primary,
                 false,
-            ),
+            )),
 
-            NSEventType::NSRightMouseDown => convert_mouse_button(
+            NSEventType::NSRightMouseDown => Some(convert_mouse_button(
                 ns_event,
                 scale_factor,
                 view_height,
                 PointerButton::Secondary,
                 true,
-            ),
+            )),
 
-            NSEventType::NSRightMouseUp => convert_mouse_button(
+            NSEventType::NSRightMouseUp => Some(convert_mouse_button(
                 ns_event,
                 scale_factor,
                 view_height,
                 PointerButton::Secondary,
                 false,
-            ),
+            )),
 
-            NSEventType::NSOtherMouseDown => convert_mouse_button(
+            NSEventType::NSOtherMouseDown => Some(convert_mouse_button(
                 ns_event,
                 scale_factor,
                 view_height,
                 PointerButton::Auxiliary,
                 true,
-            ),
+            )),
 
-            NSEventType::NSOtherMouseUp => convert_mouse_button(
+            NSEventType::NSOtherMouseUp => Some(convert_mouse_button(
                 ns_event,
                 scale_factor,
                 view_height,
                 PointerButton::Auxiliary,
                 false,
-            ),
+            )),
 
             // Mouse movement events
             NSEventType::NSMouseMoved
             | NSEventType::NSLeftMouseDragged
             | NSEventType::NSRightMouseDragged
             | NSEventType::NSOtherMouseDragged => {
-                convert_mouse_move(ns_event, scale_factor, view_height)
+                Some(convert_mouse_move(ns_event, scale_factor, view_height))
             }
 
             // Scroll events
-            NSEventType::NSScrollWheel => convert_scroll_event(ns_event, scale_factor, view_height),
+            NSEventType::NSScrollWheel => {
+                Some(convert_scroll_event(ns_event, scale_factor, view_height))
+            }
 
             // Mouse enter/exit carry no useful position payload in the W3C
             // model — Enter/Leave only identify the pointer.
@@ -229,7 +231,7 @@ unsafe fn extract_key(ns_event: id) -> Key {
             return Key::Named(NamedKey::Unidentified);
         }
 
-        let chars_str = std::ffi::CStr::from_ptr(chars_ptr as *const _)
+        let chars_str = std::ffi::CStr::from_ptr(chars_ptr.cast())
             .to_str()
             .unwrap_or("");
 
@@ -342,7 +344,7 @@ unsafe fn pointer_state(ns_event: id, scale_factor: f64, view_height: f64) -> Po
             modifiers,
             count: 1,
             contact_geometry: PhysicalSize::new(1.0, 1.0),
-            orientation: Default::default(),
+            orientation: PointerOrientation::default(),
             pressure: 0.0,
             tangential_pressure: 0.0,
             scale_factor,
@@ -361,7 +363,7 @@ unsafe fn convert_mouse_button(
     view_height: f64,
     button: PointerButton,
     is_down: bool,
-) -> Option<PlatformInput> {
+) -> PlatformInput {
     // SAFETY: caller guarantees `ns_event` validity; forwarded to
     // `pointer_state` under the same contract.
     unsafe {
@@ -380,7 +382,7 @@ unsafe fn convert_mouse_button(
             PointerEvent::Up(button_event)
         };
 
-        Some(PlatformInput::Pointer(event))
+        PlatformInput::Pointer(event)
     }
 }
 
@@ -389,22 +391,18 @@ unsafe fn convert_mouse_button(
 /// # Safety
 ///
 /// `ns_event` must be a valid, live `NSEvent*` of a mouse-move event.
-unsafe fn convert_mouse_move(
-    ns_event: id,
-    scale_factor: f64,
-    view_height: f64,
-) -> Option<PlatformInput> {
+unsafe fn convert_mouse_move(ns_event: id, scale_factor: f64, view_height: f64) -> PlatformInput {
     // SAFETY: caller guarantees `ns_event` validity; forwarded to
     // `pointer_state` under the same contract.
     unsafe {
         let state = pointer_state(ns_event, scale_factor, view_height);
 
-        Some(PlatformInput::Pointer(PointerEvent::Move(PointerUpdate {
+        PlatformInput::Pointer(PointerEvent::Move(PointerUpdate {
             pointer: primary_mouse_info(),
             current: state,
             coalesced: Vec::new(),
             predicted: Vec::new(),
-        })))
+        }))
     }
 }
 
@@ -413,11 +411,7 @@ unsafe fn convert_mouse_move(
 /// # Safety
 ///
 /// `ns_event` must be a valid, live `NSEvent*` of a scroll-wheel event.
-unsafe fn convert_scroll_event(
-    ns_event: id,
-    scale_factor: f64,
-    view_height: f64,
-) -> Option<PlatformInput> {
+unsafe fn convert_scroll_event(ns_event: id, scale_factor: f64, view_height: f64) -> PlatformInput {
     // SAFETY: caller guarantees `ns_event` validity; `scrollingDeltaX/Y` and
     // `hasPreciseScrollingDeltas` are documented NSEvent getters.
     unsafe {
@@ -438,13 +432,11 @@ unsafe fn convert_scroll_event(
             ScrollDelta::LineDelta(delta_x as f32, delta_y as f32)
         };
 
-        Some(PlatformInput::Pointer(PointerEvent::Scroll(
-            PointerScrollEvent {
-                pointer: primary_mouse_info(),
-                state,
-                delta,
-            },
-        )))
+        PlatformInput::Pointer(PointerEvent::Scroll(PointerScrollEvent {
+            pointer: primary_mouse_info(),
+            state,
+            delta,
+        }))
     }
 }
 
