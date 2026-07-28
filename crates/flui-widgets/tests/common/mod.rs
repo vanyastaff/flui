@@ -844,6 +844,28 @@ impl LaidOut {
         found
     }
 
+    /// Find every `RenderParagraph` node whose plain-text content equals
+    /// `text`.
+    ///
+    /// The multi-match counterpart to [`Self::find_text`], which panics on
+    /// more than one match — use this instead when a scene legitimately
+    /// repeats the same text content (e.g. `findsNWidgets(n)`-style oracle
+    /// assertions counting sibling items). `find_text`'s own single-match
+    /// behavior is unchanged. Returns an empty `Vec` when nothing matches.
+    pub fn find_all_text(&self, text: &str) -> Vec<RenderId> {
+        let owner = self.pipeline_owner.read();
+        owner
+            .render_tree()
+            .iter()
+            .filter_map(|(id, _node)| {
+                let diagnostics = owner.debug_node_diagnostics(id)?;
+                (diagnostics.name() == Some("RenderParagraph")
+                    && diagnostics.get_property("text") == Some(text))
+                .then_some(id)
+            })
+            .collect()
+    }
+
     /// Hit-test at a root-local position and return the canonical data-only
     /// path to the binding-owned input pipeline.
     ///

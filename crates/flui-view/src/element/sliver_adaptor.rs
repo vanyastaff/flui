@@ -114,6 +114,93 @@ impl SliverList {
             builder,
         }
     }
+
+    /// Construct a lazy-sliver adaptor that interleaves `item_count` items
+    /// with separators placed between them.
+    ///
+    /// Mirrors Flutter's `SliverList.separated` named constructor
+    /// (`widgets/sliver.dart` `SliverList.separated`, tag `3.44.0`): even
+    /// logical indices delegate to `item_builder(index / 2)`, odd logical
+    /// indices to `separator_builder((index - 1) / 2)`. The effective child
+    /// count is `2 * item_count - 1` for `item_count > 0`, and `0` when
+    /// `item_count` is `0` — Flutter's own `math.max(0, itemCount * 2 - 1)`.
+    ///
+    /// This is an inherent `SliverList` constructor, not a `flui-widgets`
+    /// wrapper type, because `.separated` produces the exact same
+    /// `SliverList` view FLUI already has — just a different interleaving
+    /// builder — mirroring how Flutter's own `.builder`/`.separated`/`.list`
+    /// all construct one `SliverList` widget class.
+    ///
+    /// # Panics
+    ///
+    /// Panics under the same condition as [`SliverList::new`]
+    /// (`item_extent_estimate` must be finite and positive), and when
+    /// `item_count` is large enough that the interleaved child count
+    /// `2 * item_count - 1` overflows `usize`.
+    pub fn separated(
+        item_count: usize,
+        item_extent_estimate: f32,
+        item_builder: Rc<dyn Fn(usize) -> Option<BoxedView>>,
+        separator_builder: Rc<dyn Fn(usize) -> Option<BoxedView>>,
+    ) -> Self {
+        let child_count = item_count
+            .checked_mul(2)
+            .expect("BUG: item_count so large the interleaved child count overflows usize")
+            .saturating_sub(1);
+        let builder: Rc<dyn Fn(usize) -> Option<BoxedView>> = Rc::new(move |index: usize| {
+            // Out-of-range consultation answers `None` before either
+            // user builder runs — `SliverChildBuilderDelegate.build`'s own
+            // index guard (`widgets/scroll_delegate.dart`, tag `3.44.0`).
+            if index >= child_count {
+                return None;
+            }
+            if index.is_multiple_of(2) {
+                (item_builder)(index / 2)
+            } else {
+                // Flutter's `SliverList.separated` asserts the separator
+                // builder returns a widget; a `None` here would silently
+                // truncate the list at the first separator instead.
+                let separator = (separator_builder)((index - 1) / 2);
+                debug_assert!(
+                    separator.is_some(),
+                    "separator_builder must return a view for every in-range index"
+                );
+                separator
+            }
+        });
+        Self::new(child_count, item_extent_estimate, builder)
+    }
+
+    /// Construct a lazy-sliver adaptor over a fixed list of pre-built child
+    /// views.
+    ///
+    /// Mirrors Flutter's `SliverList.list` named constructor
+    /// (`widgets/sliver.dart` `SliverList.list`, tag `3.44.0`), backed by
+    /// `SliverChildListDelegate`: logical index `i` serves `children[i]`.
+    ///
+    /// FLUI's lazy-adaptor protocol may re-consult the builder for an
+    /// already-resident index (`SparseChildren::refresh_resident`, driven by
+    /// `SliverListAdaptorManager`'s internal `needs_resident_refresh` flag),
+    /// so an owned `Vec<BoxedView>` cannot be handed out by value more than
+    /// once. Each call instead clones the stored [`BoxedView`] — a real,
+    /// deep `dyn_clone` of the underlying view (`BoxedView`'s own `Clone`
+    /// impl, `crates/flui-view/src/view/into_view.rs`), not a shared handle
+    /// — which mirrors Flutter's own semantics: `SliverChildListDelegate.build`
+    /// hands back the same immutable `Widget` value on every call, and
+    /// FLUI's clone reproduces an equivalent view every time.
+    ///
+    /// # Panics
+    ///
+    /// Panics under the same condition as [`SliverList::new`].
+    pub fn list(item_extent_estimate: f32, children: Vec<BoxedView>) -> Self {
+        let children = Rc::new(children);
+        let item_count = children.len();
+        let builder: Rc<dyn Fn(usize) -> Option<BoxedView>> = {
+            let children = Rc::clone(&children);
+            Rc::new(move |index: usize| children.get(index).cloned())
+        };
+        Self::new(item_count, item_extent_estimate, builder)
+    }
 }
 
 impl std::fmt::Debug for SliverList {
@@ -970,6 +1057,7 @@ pub(crate) type SliverGridLazyAdaptorElement =
 #[cfg(test)]
 mod tests {
     use std::any::TypeId;
+    use std::cell::RefCell;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -1116,6 +1204,123 @@ mod tests {
         assert!((view.builder)(3).is_some());
         assert!((view.builder)(5).is_none());
         assert_eq!(call_count.load(Ordering::Relaxed), 2);
+    }
+
+    // -------------------------------------------------------------------------
+    // `SliverList::separated`
+    // -------------------------------------------------------------------------
+
+    /// `SliverList::separated` reports the interleaved child count:
+    /// `2 * item_count - 1` for `item_count > 0`.
+    #[test]
+    fn separated_reports_interleaved_child_count() {
+        let view = SliverList::separated(3, 48.0, make_builder(3), make_builder(3));
+        assert_eq!(view.item_count, 5, "2*3-1 = 5 interleaved logical slots");
+    }
+
+    /// `SliverList::separated` with zero items produces zero children —
+    /// Flutter's own `math.max(0, itemCount * 2 - 1)` clamps rather than
+    /// underflowing.
+    #[test]
+    fn separated_with_zero_items_has_zero_children() {
+        let view = SliverList::separated(0, 48.0, make_builder(0), make_builder(0));
+        assert_eq!(view.item_count, 0);
+    }
+
+    /// `SliverList::separated` maps even logical indices to item indices
+    /// `0, 1, 2, ...` in order and odd logical indices to separator indices
+    /// `0, 1, ...` in order — the exact arithmetic Flutter's
+    /// `SliverList.separated` uses (`index.isEven ? index ~/ 2 : (index - 1)
+    /// ~/ 2`, `widgets/sliver.dart`, tag `3.44.0`).
+    #[test]
+    fn separated_maps_logical_index_to_item_and_separator_index_correctly() {
+        let item_indices: Rc<RefCell<Vec<usize>>> = Rc::new(RefCell::new(Vec::new()));
+        let item_indices_probe = Rc::clone(&item_indices);
+        let item_builder: Rc<dyn Fn(usize) -> Option<BoxedView>> = Rc::new(move |idx: usize| {
+            item_indices_probe.borrow_mut().push(idx);
+            Some(BoxedView(Box::new(ItemView)))
+        });
+
+        let separator_indices: Rc<RefCell<Vec<usize>>> = Rc::new(RefCell::new(Vec::new()));
+        let separator_indices_probe = Rc::clone(&separator_indices);
+        let separator_builder: Rc<dyn Fn(usize) -> Option<BoxedView>> =
+            Rc::new(move |idx: usize| {
+                separator_indices_probe.borrow_mut().push(idx);
+                Some(BoxedView(Box::new(ItemView)))
+            });
+
+        let view = SliverList::separated(3, 48.0, item_builder, separator_builder);
+        for logical_index in 0..view.item_count {
+            (view.builder)(logical_index);
+        }
+
+        assert_eq!(
+            *item_indices.borrow(),
+            vec![0, 1, 2],
+            "even logical indices 0,2,4 must map to item indices 0,1,2 in order"
+        );
+        assert_eq!(
+            *separator_indices.borrow(),
+            vec![0, 1],
+            "odd logical indices 1,3 must map to separator indices 0,1 in order"
+        );
+    }
+
+    /// `SliverList::separated` panics on a non-positive extent estimate,
+    /// same as [`SliverList::new`].
+    #[test]
+    fn separated_panics_on_zero_estimate() {
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            SliverList::separated(3, 0.0, make_builder(3), make_builder(3))
+        }));
+        assert!(result.is_err(), "zero estimate must panic");
+    }
+
+    // -------------------------------------------------------------------------
+    // `SliverList::list`
+    // -------------------------------------------------------------------------
+
+    /// `SliverList::list` reports the children count and serves each index
+    /// from the stored list; an out-of-range index returns `None`.
+    #[test]
+    fn list_serves_children_by_index_and_reports_their_count() {
+        let children = vec![
+            BoxedView(Box::new(ItemView)),
+            BoxedView(Box::new(OtherItemView)),
+        ];
+        let view = SliverList::list(48.0, children);
+
+        assert_eq!(view.item_count, 2);
+        assert!((view.builder)(0).is_some());
+        assert!((view.builder)(1).is_some());
+        assert!(
+            (view.builder)(2).is_none(),
+            "an index past the end of the list must return None"
+        );
+    }
+
+    /// `SliverList::list`'s builder can be called more than once for the
+    /// same index without panicking or exhausting the list — the shape
+    /// `SparseChildren::refresh_resident` needs when it re-consults the
+    /// builder for an already-resident child.
+    #[test]
+    fn list_builder_can_be_called_more_than_once_for_the_same_index() {
+        let children = vec![BoxedView(Box::new(ItemView))];
+        let view = SliverList::list(48.0, children);
+
+        assert!((view.builder)(0).is_some());
+        assert!((view.builder)(0).is_some());
+        assert!((view.builder)(0).is_some());
+    }
+
+    /// `SliverList::list` panics on a non-positive extent estimate, same as
+    /// [`SliverList::new`].
+    #[test]
+    fn list_panics_on_zero_estimate() {
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            SliverList::list(0.0, vec![BoxedView(Box::new(ItemView))])
+        }));
+        assert!(result.is_err(), "zero estimate must panic");
     }
 
     /// `SliverList` is `Clone` (required by `View` + `RenderView`).
