@@ -3,8 +3,8 @@
 //! Flutter source: `packages/flutter/test/widgets/align_test.dart` (tag
 //! `3.44.0`, 6 cases).
 //!
-//! Ported cases (4 upstream names, 4 Rust tests) plus 1 delta port
-//! ([`a_size_factor_applies_only_to_its_own_axis`], 5 Rust tests total):
+//! Ported cases (5 upstream names, 5 Rust tests) plus 1 delta port
+//! ([`a_size_factor_applies_only_to_its_own_axis`], 6 Rust tests total):
 //! - `'Align smoke test'` — [`align_smoke_test_survives_root_swaps`]. Upstream
 //!   pumps five trees in a row and asserts nothing; what it actually guards is
 //!   that each swap reconciles without panicking, including swapping a
@@ -19,6 +19,8 @@
 //!   physical `Alignment.topLeft`. Only the physical leg has a port target, and
 //!   under LTR the two are the same alignment by definition, so no assertion is
 //!   lost — only the proof that the *resolution* happens.
+//! - `'Align control test (RTL)'` —
+//!   [`align_places_a_child_at_the_top_right_when_start_resolves_rtl`].
 //! - `'Align widthFactor'` — [`align_width_factor_shrinks_to_a_fraction`].
 //! - `'Align heightFactor'` — [`align_height_factor_shrinks_to_a_fraction`].
 //!
@@ -31,14 +33,24 @@
 //! [`align_width_factor_shrinks_to_a_fraction`] exercises from the other
 //! direction (a `Row` giving unbounded width).
 //!
-//! Framework gap (1 case, plus 2 legs folded into ported cases above rather
-//! than double-counted): `'Align control test (RTL)'` has no port target, and
-//! `'Align smoke test'`/`'control test (LTR)'` each lose one leg to the same
-//! cause — `Align::new` takes a physical
+//! Framework gap (2 legs folded into ported cases rather than double-counted;
+//! no case is lost to it): `Align::new` takes a physical
 //! [`Alignment`](flui_types::Alignment), so a directional alignment cannot be
-//! expressed at the widget surface at all. The RTL case is *entirely* about
-//! resolving `topStart` against the reading direction (it must land at
-//! `dx = 700`), so nothing of it survives the drop.
+//! expressed at the widget surface and the ambient direction is never read.
+//! That costs the `AlignmentDirectional` leg of `'Align smoke test'` and of
+//! `'control test (LTR)'` — under LTR the latter's two legs are the same
+//! alignment by definition, so no assertion is lost, only the proof that the
+//! *resolution* happens.
+//!
+//! `'Align control test (RTL)'` is ported rather than dropped, using the
+//! technique the rest of this corpus already uses for the same gap (see
+//! `fractionally_sized_box_test.rs` and `overflow_box_test.rs`): resolve the
+//! directional alignment at the call site with
+//! `AlignmentDirectional::resolve(false)` — the same resolution the oracle's
+//! build phase performs internally — and assert the identical resulting
+//! position. That proves the resolution math and `Align`'s placement agree
+//! with the oracle; what it does not prove is that a `Directionality`
+//! ancestor would be consulted, since no widget-surface path reads one.
 //!
 //! The gap is narrower than "no directional support": every part it needs
 //! already exists and is unwired. `AlignmentGeometry`/`AlignmentDirectional`
@@ -51,12 +63,13 @@
 //! `fitted_box_test.rs` and `transform_test.rs` record the same unwiring for
 //! their own widgets.
 //!
-//! Denominator: 4 ported + 1 out of scope + 1 framework gap = 6.
+//! Denominator: 5 ported + 1 out of scope = 6.
 //!
 //! Widget → render-object mapping: `Align` → `RenderAlign`
 //! (`crates/flui-objects/src/layout/align.rs`).
 
 use flui_types::Alignment;
+use flui_types::layout::AlignmentDirectional;
 use flui_widgets::{Align, Column, Row, SizedBox, column, row};
 
 use crate::common::size;
@@ -195,4 +208,45 @@ fn a_size_factor_applies_only_to_its_own_axis() {
         "width shrink-wraps to factor x child; height has no factor and a \
          bounded constraint, so it fills"
     );
+}
+
+/// Flutter parity: `align_test.dart` `'Align control test (RTL)'` (3.44.0).
+///
+/// Upstream places a 100×80 child with `AlignmentDirectional.topStart` under
+/// `TextDirection.rtl` and asserts it spans `dx` 700..800 — the *right* edge of
+/// an 800-wide screen, because `start` is the right under RTL.
+///
+/// `Align` takes a resolved [`Alignment`] and never reads an ambient
+/// direction, so the resolution is performed at the call site with
+/// `AlignmentDirectional::resolve(false)` — the same step the oracle's build
+/// phase performs internally. `fractionally_sized_box_test.rs` and
+/// `overflow_box_test.rs` port their own RTL cases exactly this way.
+///
+/// What this proves: `AlignmentDirectional::resolve`'s RTL math and `Align`'s
+/// placement agree with the oracle, on the oracle's own numbers. What it does
+/// not prove: that a `Directionality` ancestor would be consulted — no
+/// widget-surface path reads one. Resolving to `TOP_RIGHT` by hand instead
+/// would assert placement while quietly skipping the resolution, so the
+/// directional constant is deliberately kept in the test.
+#[test]
+fn align_places_a_child_at_the_top_right_when_start_resolves_rtl() {
+    let resolved = AlignmentDirectional::TOP_START.resolve(false);
+    assert_eq!(
+        resolved,
+        Alignment::TOP_RIGHT,
+        "under RTL, start is the right edge — the premise the placement below tests"
+    );
+
+    let laid = harness::pump_widget(
+        Align::new(resolved).child(SizedBox::new(100.0, 80.0)),
+        harness::screen(),
+    );
+
+    let align = laid.find_by_render_type("RenderAlign");
+    let child = laid.only_child(align);
+    let left = laid.absolute_offset(child).dx.get();
+    let right = left + laid.size(child).width.get();
+
+    assert_eq!(left, 700.0, "the oracle's getTopLeft().dx");
+    assert_eq!(right, 800.0, "the oracle's getBottomRight().dx");
 }

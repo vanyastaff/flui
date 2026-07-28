@@ -1078,3 +1078,72 @@ fn unmounting_mid_drag_does_not_panic_or_double_unregister() {
 // behavior fails reproducibly. Tracked as a framework-level follow-up, not a
 // `Dismissible`-level one — the plain (never-dragged) unmount case above
 // proves `dispose` itself is correctly wired.
+
+// ==== TEMPORARY AUDIT PROBE — REMOVE ====
+
+/// Probe: a scripted fast fling BELOW the 40% dismiss threshold.
+#[test]
+fn probe_fling_below_threshold_dismisses() {
+    let dismissed = Arc::new(AtomicUsize::new(0));
+    let cb = Arc::clone(&dismissed);
+    let widget = Dismissible::new(child())
+        .direction(DismissDirection::EndToStart)
+        .on_dismissed(move |_d| {
+            cb.fetch_add(1, Ordering::SeqCst);
+        });
+
+    let vsync = Vsync::new();
+    let mut scoped = lay_out_with_vsync(widget, vsync, horizontal_extent());
+
+    // Down, then three 10px leftward moves spaced by the default 8ms sample
+    // interval => 1250 px/s primary, 0 cross. Total extent -30px = 15% of
+    // 200px, well BELOW the 40% default threshold.
+    scoped.dispatch_pointer_down(180.0, 250.0);
+    scoped.dispatch_pointer_move(170.0, 250.0);
+    scoped.dispatch_pointer_move(160.0, 250.0);
+    scoped.dispatch_pointer_move(150.0, 250.0);
+    scoped.dispatch_pointer_up(150.0, 250.0);
+    settle_one_frame(&mut scoped);
+
+    settle_for(&mut scoped, 1000);
+    settle_for(&mut scoped, 1000);
+
+    assert_eq!(
+        dismissed.load(Ordering::SeqCst),
+        1,
+        "PROBE: a 30px (15%) drag released at ~1250px/s must dismiss via the fling path"
+    );
+}
+
+/// Probe control: the SAME 30px distance, slow (100ms per sample, past the
+/// tracker's horizon) => ~0 velocity => no fling => spring back, no dismiss.
+#[test]
+fn probe_slow_drag_same_distance_does_not_dismiss() {
+    let dismissed = Arc::new(AtomicUsize::new(0));
+    let cb = Arc::clone(&dismissed);
+    let widget = Dismissible::new(child())
+        .direction(DismissDirection::EndToStart)
+        .on_dismissed(move |_d| {
+            cb.fetch_add(1, Ordering::SeqCst);
+        });
+
+    let vsync = Vsync::new();
+    let mut scoped = lay_out_with_vsync(widget, vsync, horizontal_extent());
+
+    let slow = Duration::from_millis(120);
+    scoped.dispatch_pointer_down(180.0, 250.0);
+    scoped.dispatch_pointer_move_after(170.0, 250.0, slow);
+    scoped.dispatch_pointer_move_after(160.0, 250.0, slow);
+    scoped.dispatch_pointer_move_after(150.0, 250.0, slow);
+    scoped.dispatch_pointer_up(150.0, 250.0);
+    settle_one_frame(&mut scoped);
+
+    settle_for(&mut scoped, 1000);
+    settle_for(&mut scoped, 1000);
+
+    assert_eq!(
+        dismissed.load(Ordering::SeqCst),
+        0,
+        "PROBE: the same 30px drag released slowly must spring back, not dismiss"
+    );
+}
