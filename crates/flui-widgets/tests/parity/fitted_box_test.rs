@@ -637,3 +637,74 @@ fn no_clip_layer_without_both_a_crop_and_a_clip_behavior() {
         clipped_but_not_cropping.layer_kinds()
     );
 }
+
+/// A zero-area child is neither painted nor hit-testable, even when the box
+/// itself has a real size.
+///
+/// Flutter parity: `RenderFittedBox.paint` opens with
+/// `if (child == null || size.isEmpty || child!.size.isEmpty) return;`, and
+/// `hitTestChildren` carries the matching
+/// `if (size.isEmpty || (child?.size.isEmpty ?? false)) return false;`
+/// (`rendering/proxy_box.dart`, 3.44.0).
+///
+/// The child clause is the one under test, so the box is given a real 200×200
+/// size — with an empty box too, the box's own guard would pass this
+/// vacuously. A zero-area child is not inert: it still runs its own `paint`,
+/// and a fit transform onto or from a zero extent is degenerate, so letting it
+/// through paints content at an undefined scale.
+///
+/// Red-check, stated precisely because the two halves are not symmetric:
+/// dropping `self.child_is_empty` from the **paint** guard fails the layer
+/// assertion (composited `["Offset", "Transform"]` — the fit transform opened
+/// around a child with no area). Dropping it from the **hit-test** guard
+/// changes nothing measurable here: a zero-area child fails its own bounds
+/// check anyway, so the tap misses either way. That guard is kept for oracle
+/// parity and as a cheap early-out, not because this test discriminates it —
+/// saying so here rather than letting the tap assertion imply otherwise.
+#[test]
+fn a_zero_area_child_neither_paints_nor_hit_tests() {
+    let taps = Arc::new(AtomicUsize::new(0));
+    let in_cb = Arc::clone(&taps);
+
+    let mut laid = harness::pump_widget(
+        Center::new().child(
+            SizedBox::square(200.0).child(
+                FittedBox::new().child(
+                    SizedBox::shrink().child(
+                        GestureDetector::new()
+                            .behavior(HitTestBehavior::Opaque)
+                            .on_tap(move || {
+                                in_cb.fetch_add(1, Ordering::SeqCst);
+                            }),
+                    ),
+                ),
+            ),
+        ),
+        harness::screen(),
+    );
+
+    let fitted = laid.find_by_render_type("RenderFittedBox");
+    assert_eq!(
+        laid.size(fitted),
+        crate::common::size(200.0, 200.0),
+        "the box itself must have a real size, so this exercises the child \
+         clause rather than the empty-box one"
+    );
+
+    laid.pump();
+    assert!(
+        !laid.layer_kinds().contains(&"Transform"),
+        "a zero-area child must not be painted through the fit transform; \
+         composited {:?}",
+        laid.layer_kinds()
+    );
+
+    let centre = box_point_to_absolute(&laid, fitted, offset(100.0, 100.0));
+    laid.dispatch_pointer_down(centre.dx.get(), centre.dy.get());
+    laid.dispatch_pointer_up(centre.dx.get(), centre.dy.get());
+    assert_eq!(
+        taps.load(Ordering::SeqCst),
+        0,
+        "a child that cannot be painted must not be reachable by a pointer"
+    );
+}

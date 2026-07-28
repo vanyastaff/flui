@@ -115,6 +115,13 @@ pub struct RenderFittedBox {
     source_offset: Offset,
     /// True iff the scaled child exceeds `size` on either axis.
     has_visual_overflow: bool,
+    /// True iff the child laid out to a zero-area size.
+    ///
+    /// Tracked separately from `has_child` because a degenerate child is still
+    /// *a* child — intrinsics and layout must keep forwarding to it — but it
+    /// must not paint or be hit-tested, which is a property of its measured
+    /// size and so is only knowable after layout.
+    child_is_empty: bool,
 }
 
 impl RenderFittedBox {
@@ -130,6 +137,7 @@ impl RenderFittedBox {
             align_offset: Offset::ZERO,
             source_offset: Offset::ZERO,
             has_visual_overflow: false,
+            child_is_empty: false,
         }
     }
 
@@ -340,8 +348,10 @@ impl RenderBox for RenderFittedBox {
         // (3) Degenerate child → smallest size, identity transform.
         if child_size.width <= px(0.0) || child_size.height <= px(0.0) {
             self.reset_transform_cache();
+            self.child_is_empty = true;
             return incoming.smallest();
         }
+        self.child_is_empty = false;
 
         // (4) Our size honours the parent constraints while preserving the
         //     child's aspect ratio (Flutter uses
@@ -445,6 +455,10 @@ impl RenderBox for RenderFittedBox {
         if !ctx.is_within_own_size() {
             return false;
         }
+        // Flutter's `hitTestChildren` carries the same pair of guards its
+        // `paint` does: `if (size.isEmpty || (child?.size.isEmpty ?? false))`.
+        // A child that cannot be painted must not be reachable by a pointer
+        // either — the box's own size gate above covers the empty-box half.
         if !self.has_child {
             return false;
         }
@@ -503,10 +517,13 @@ impl RenderBox for RenderFittedBox {
         }
 
         let size = ctx.size();
-        // A collapsed box (or a collapsed child) has nothing to show, and the
-        // fit transform would be degenerate — Flutter's
-        // `if (size.isEmpty || child.size.isEmpty) return;`.
-        if size.width.get() <= 0.0 || size.height.get() <= 0.0 {
+        // Flutter: `if (child == null || size.isEmpty || child!.size.isEmpty)
+        // return;`. All three clauses matter — a zero-area child still paints
+        // whatever its own `paint` draws (a `CustomPaint` ignores its size
+        // happily), and the fit transform onto or from a zero extent is
+        // degenerate, so neither a collapsed box nor a collapsed child may
+        // reach the child's paint.
+        if self.child_is_empty || size.width.get() <= 0.0 || size.height.get() <= 0.0 {
             return;
         }
 
