@@ -24,9 +24,8 @@ Three rules, in priority order. They override convenience, never each other.
 You need to...
 ├── Understand the project → read this file + README.md
 ├── Work on a specific crate → read crates/<crate>/AGENTS.md
-├── Find a symbol/function → use Serena (find_symbol, symbol_overview)
-├── Find where something is called → use Serena (find_references)
-├── Rename across files → use Serena (rename_symbol) — NOT grep+replace
+├── Find a symbol, or its callers → rust-analyzer LSP if available, else rg
+├── Rename across files → LSP rename if available; else find every call site with rg first
 ├── Understand port methodology → read docs/PORT.md
 ├── Add a dependency → check workspace deps in root Cargo.toml
 ├── Run tests for one crate → `just test-crate <crate-name>`
@@ -49,22 +48,21 @@ You need to...
 
 ---
 
-## MCP Servers — When to Use What
+## Code Navigation
 
-| Tool | Use When | Don't Use When |
-|------|----------|----------------|
-| **Serena find_symbol** | Looking for a struct/fn/trait definition | You already know the exact file:line |
-| **Serena find_references** | Finding all callers of a function | You need to search for a string literal (use grep) |
-| **Serena rename_symbol** | Renaming across the codebase | Renaming a local variable in one function (use edit) |
-| **Serena symbol_overview** | Getting file structure/outline | You need to read the full file (use read) |
-| **rust-analyzer-mcp** | Hover info, diagnostics, code actions | Symbol search (use Serena) |
-| **rust-mcp-server** | cargo check/clippy/test for a crate | Symbol-level code navigation (use Serena) |
-| **rust-docs** | Crate documentation, dependency trees | Local crate code (use Serena) |
-| **cratesio** | Searching crates.io for packages | Local workspace queries |
-| **grep** | Searching for string patterns, log messages | Finding symbol definitions (use Serena) |
-| **read** | Reading a known file | Exploring unknown code structure (use Serena) |
+This repo declares exactly one MCP server in `.mcp.json` — **cratesio**, for crates.io package,
+version, and docs.rs lookups. It answers questions about *external* crates only; it knows nothing
+about this workspace. Everything else is local tooling:
 
-**Rule of thumb:** If you're about to do 3+ grep/read calls to find something, use Serena instead.
+- **A symbol's definition, its callers, or a rename** — the rust-analyzer LSP when its binary is on
+  PATH; otherwise `rg` for the name, then `read` the hits. A rename without an LSP means finding
+  every call site with `rg` first — never a blind search-and-replace.
+- **String literals, log messages, comments, attributes** — `rg`, always. An LSP can't see them.
+- **A file you can already name** — `read` it. Don't search for what you can open.
+
+Individual developers may have extra servers configured at user scope (a code-graph server, a
+notes vault); those are personal setup, not a repo contract — never assume one is present, and
+never make a workflow here depend on it.
 
 ---
 
@@ -74,67 +72,34 @@ FLUI is a Flutter-inspired declarative UI framework for Rust with a three-tree a
 
 ## Tech Stack
 
-- **Rust 1.97**, edition 2024, workspace of ~20 crates (foundation → core → rendering → framework → app layers)
-- **Graphics:** `wgpu` 29.x, `lyon`, `glyphon`, `cosmic-text`, `glam`
-- **Platform:** native Win32, AppKit, headless backends + `winit` 0.30 fallback
+Versions and the dependency set live in the root `Cargo.toml` (`[workspace.dependencies]`) — read
+them there. What the manifest can't tell you:
+
+- **Layering:** crates form a DAG, foundation → core → rendering → framework → app. Dependencies
+  point one way down that DAG; see [`docs/FOUNDATIONS.md`](docs/FOUNDATIONS.md)
+- **Platform:** native Win32, AppKit, and headless backends, with `winit` only as a fallback
 - **Diagnostics:** `tracing` only — **no `println!`, `eprintln!`, or `dbg!` in shipped code** (CI enforces this in foundation/tree/macros crates via port-check trigger #15)
 - **Errors:** `thiserror` (libraries), `anyhow` (applications); panics only per [`docs/PANIC-POLICY.md`](docs/PANIC-POLICY.md) — `expect("BUG: <invariant>")` for internal invariants, never bare `unwrap()` on production paths (`clippy::unwrap_used` gates this)
-- **Async runtime:** `tokio` 1.43 LTS
-
-## Key Entry Points
-
-| File | Purpose |
-|------|---------|
-| `Cargo.toml` | Workspace manifest with `[workspace.dependencies]` — all shared deps pinned here |
-| `crates/flui-types/src/lib.rs` | Foundation types and unit system |
-| `crates/flui-geometry/src/lib.rs` | Geometry primitives (Point, Rect, Size, transforms) |
-| `crates/flui-engine/src/lib.rs` | GPU rendering engine entry |
-| `crates/flui-rendering/src/lib.rs` | Render tree — the densest crate |
-| `crates/flui-view/src/lib.rs` | View + Element tree |
-| `crates/flui-app/src/lib.rs` | Application framework entry |
-| `examples/hello_world.rs` | Minimal desktop bootstrap |
+Of the crate roots, `crates/flui-rendering/src/lib.rs` is by far the densest — budget accordingly.
 
 ## Build & Development Commands
 
-This project uses **`justfile`** for build automation. Install [`just`](https://just.systems) and run `just` for the full recipe list.
+This project uses **`justfile`** for build automation. Install [`just`](https://just.systems) and
+run `just --list` for the full recipe set — every recipe is categorised and documented there, so
+don't look for a duplicate list here.
 
-### Most-used recipes
+**`just ci` is the gate to run before any commit.** It chains `fmt-check` → `inventory-check` →
+`port-check` → `clippy` → `test` → `test-doc`; running the pieces individually is for narrowing a
+failure, not a substitute.
 
-| Recipe | What it does |
-|--------|-------------|
-| `just check` | Fast type-check (no codegen) |
-| `just build` | Build the workspace |
-| `just test` | Run all tests |
-| `just clippy` | Lint gate: `cargo clippy --workspace --all-targets -- -D warnings` |
-| `just fmt` | Format with rustfmt |
-| `just fmt-check` | Format check (CI gate) |
-| `just inventory-check` | Docs / justfile crate inventory drift guard (incl. `[lints] workspace = true` on every crate) |
-| `just ci` | Full local CI: `fmt-check` → `inventory-check` → `port-check` → `clippy` → `test` → `test-doc` |
-| `just test-doc` | Run rustdoc examples as tests (nextest never executes doctests) |
-| `just miri` | Miri over the `flui-rendering` subtree arena (unsafe hot spot; needs nightly + miri) |
-| `just deny` | Dependency audit — advisories/bans/licenses/sources (needs cargo-deny; config `deny.toml`) |
-| `just example-hello` | Platform smoke test |
-| `just port-check` | Port-methodology refusal triggers |
-| `just port-check-verbose` | Per-trigger pass/fail + marker totals |
-
-### Single-crate and single-test commands
+Two invocations `just --list` won't teach you:
 
 ```bash
-just test-crate flui-tree                    # Test one crate
-just test-name flui-tree element_id          # Run one test with stdout
-cargo test -p flui-objects --test render_object_harness  # Run a specific integration test (catalog guard)
+cargo test -p flui-objects --test render_object_harness  # catalog guard for render objects
+just port-check-verbose                                  # per-trigger pass/fail + marker totals
 ```
 
-### Format & lint (run before any commit)
-
-```bash
-just fmt-check    # rustfmt
-just inventory-check
-just port-check
-just clippy       # clippy with -D warnings
-```
-
-Additionally, CI gates on:
+Additionally, CI gates on two checks with no `just` recipe:
 - **`taplo fmt --check`** — TOML formatting (config: `.taplo.toml`)
 - **`typos`** — spell checking (config: `typos.toml`)
 
@@ -185,36 +150,36 @@ When changing render-tree, sliver, layout, paint, hit-test, semantics, schedulin
 
 ## AI Context Files
 
-| File | Purpose |
-|------|---------|
-| `AGENTS.md` | This file — what every agent needs to know |
-| `CLAUDE.md` | Thin shim that imports `@AGENTS.md` so Claude Code auto-loads this guide — keep substance here, not there |
-| `.mcp.json` | MCP servers (Serena, rust-analyzer, cratesio, etc.) |
-| `mimocode.jsonc` | MiMoCode runtime config |
-| `.pi/settings.json` | Pi runtime settings |
-| `STRATEGY.md` | Product strategy and port rules |
-| `justfile` | All build/test/lint recipes |
-| `.taplo.toml` | TOML formatter config |
-| `typos.toml` | Spell-check config |
-| `deny.toml` | cargo-deny (license, advisory, bans) |
+`AGENTS.md` (this file) is the cross-tool guide, shared by every agent runtime. `CLAUDE.md`,
+`mimocode.jsonc`, and `.pi/settings.json` are thin per-runtime shims that point back here —
+**keep the substance in this file**, or the runtimes drift apart. `STRATEGY.md` carries product
+strategy and the port rules behind the Prime Directive.
 
 ## CI Pipeline
 
-CI runs on PR + push to main (+ merge queue). All jobs are gated on the fast `checks` source gate and aggregate into a single **`ci`** job — branch protection requires that one check, so *renaming* a job cannot silently drop a gate (`needs` stops resolving). Two holes remain: a job **added** without editing the aggregator's `needs` list is ungated, and the aggregator counts `skipped` as green, so a job that later gains an `if:` becomes a no-op. All cargo invocations run `--locked`; actions are SHA-pinned (dependabot keeps them current, 7-day cooldown); workflow files are linted by actionlint + zizmor. A scheduled `weekly.yml` (Mondays + `workflow_dispatch`) re-checks RustSec advisories against the committed lockfile and builds/tests against a fresh `cargo update` — early warning, not a merge gate. Jobs:
+CI runs on PR + push to main (+ merge queue). All jobs are gated on the fast `checks` source gate and aggregate into a single **`ci`** job — branch protection requires that one check, so *renaming* a job cannot silently drop a gate (`needs` stops resolving). Two holes remain: a job **added** without editing the aggregator's `needs` list is ungated, and the aggregator counts `skipped` as green, so a job that later gains an `if:` becomes a no-op. All cargo invocations run `--locked`; actions are SHA-pinned (dependabot keeps them current, 7-day cooldown); workflow files are linted by actionlint + zizmor. A scheduled `weekly.yml` (Mondays + `workflow_dispatch`) re-checks RustSec advisories against the committed lockfile and builds/tests against a fresh `cargo update` — early warning, not a merge gate.
 
-1. **checks** — `cargo fmt --check`, `taplo fmt --check`, `typos`, `scripts/check-workspace-inventory.sh` (incl. the `[lints] workspace = true` drift guard), `port-check.sh`, `actionlint`, `zizmor`
-2. **clippy** — `cargo clippy --workspace --all-targets -- -D warnings`
-3. **feature-matrix** — `cargo hack clippy --workspace --each-feature --optional-deps` (libs/bins pass, then tests/benches/examples pass): per-crate feature wiring without workspace feature-unification masking. Local: `just feature-matrix`
-4. **wasm-check** — `cargo check --target wasm32-unknown-unknown` for the wasm-capable crates (7 excluded: mio/uuid CLI stack + dlopen-based hot-reload). Local: `just wasm-check`
-5. **cross-typecheck** — `cargo check -p flui-platform --all-targets` for `x86_64-pc-windows-msvc` and `aarch64-apple-darwin` (the shipped triples). `cargo check` does not link, so the Win32/AppKit backends type-check from Linux; before this job they were only ever compiled by whoever developed on that OS, and the Windows backend did not compile at all. **Type-check only** — no link, no tests, and flui-platform is excluded from the `test` job, so this is the *only* gate on those backends: green means "compiles". Local: `just cross-typecheck` (needs `rustup target add` for both)
-6. **deny** — `cargo deny check` (advisories, bans, licenses, sources; config: `deny.toml`)
-7. **test** — `cargo nextest run --workspace --exclude flui-platform` (lib **and** integration targets; Linux only). On failure, insta `.snap.new` candidates upload as artifacts
-8. **gpu-test** — full `enable-wgpu-tests` readback suite on WARP (windows-latest; merge-blocking). On oracle mismatch the harness dumps the actual frame as PNG (`FLUI_READBACK_DUMP_DIR`), uploaded as an artifact
-9. **doc-test** — `cargo test --workspace --exclude flui-platform --doc` (nextest never runs doctests)
-10. **msrv** — `cargo check --workspace --all-targets` on Rust 1.97 (the declared MSRV; other jobs run latest stable)
-11. **miri** — `cargo miri test -p flui-rendering` scoped to `pipeline::owner::subtree_arena` (advisory while stabilizing). **Narrow:** the five tests it runs never enter `layout_subtree_borrowed_impl` nor dereference a real `NodePtr`, so it is not coverage of the layout-walk reborrows
-12. **bench-compile** — `cargo bench -p flui-rendering --no-run`
-13. **doc** — `cargo doc --workspace --no-deps --document-private-items` with `RUSTDOCFLAGS="-D warnings"`
+The job list and its exact commands live in `.github/workflows/ci.yml` — read them there. What the
+workflow file does *not* tell you, and what you will misjudge without it:
+
+- **cross-typecheck is the only gate on the Win32 and AppKit backends.** It type-checks
+  `flui-platform` for `x86_64-pc-windows-msvc` and `aarch64-apple-darwin`, and `cargo check` does
+  not link — no link, no tests, and `flui-platform` is excluded from the `test` job. Green means
+  "compiles", nothing more. Before this job existed those backends were only ever compiled by
+  whoever happened to develop on that OS, and the Windows one did not compile at all.
+- **miri is far narrower than its name suggests.** It covers `pipeline::owner::subtree_arena` only,
+  and the five tests it runs never enter `layout_subtree_borrowed_impl` nor dereference a real
+  `NodePtr` — so it is *not* coverage of the layout-walk reborrows. Advisory while stabilizing.
+- **feature-matrix exists because workspace feature unification hides broken per-crate wiring.** A
+  crate whose features only resolve thanks to a sibling's dependency passes a normal build and
+  fails here.
+- **wasm-check excludes 7 crates** — the mio/uuid CLI stack and the dlopen-based hot-reload path,
+  none of which can work on wasm32.
+- **gpu-test runs the readback suite on WARP** (windows-latest) and is merge-blocking. On an oracle
+  mismatch the harness dumps the actual frame as a PNG to `FLUI_READBACK_DUMP_DIR` and uploads it
+  as an artifact — fetch that before theorising about a pixel diff.
+- **test failures upload insta `.snap.new` candidates as artifacts** — review them rather than
+  regenerating snapshots blind.
 
 ## Important Config
 
