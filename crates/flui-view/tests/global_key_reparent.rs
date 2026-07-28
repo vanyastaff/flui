@@ -26,15 +26,11 @@ use flui_foundation::ViewKey;
 use flui_view::{
     BuildContext, BuildOwner, ElementTree, GlobalKey, IntoView, StatefulView, View, ViewExt,
     ViewState,
-    tree::{
-        ReconcileEventKind,
-        test_utils::{CollectedEvent, ReconcileEventCollector},
-    },
+    tree::{ReconcileEventKind, test_utils::CollectedEvent},
 };
 use parking_lot::RwLock;
-use tracing::dispatcher::Dispatch;
-use tracing_subscriber::Registry;
-use tracing_subscriber::layer::SubscriberExt;
+
+use crate::reconcile_capture::capture;
 
 // ============================================================================
 // Fixtures — a stateful keyed counter widget so state survival is
@@ -121,13 +117,6 @@ fn fresh_tree() -> (Arc<RwLock<ElementTree>>, Arc<RwLock<BuildOwner>>) {
     let owner = Arc::new(RwLock::new(BuildOwner::new()));
     flui_view::test_only_set_global_key_registry(&tree, &owner);
     (tree, owner)
-}
-
-fn capture<F: FnOnce()>(body: F) -> Vec<CollectedEvent> {
-    let collector = ReconcileEventCollector::new();
-    let subscriber = Registry::default().with(collector.layer());
-    tracing::dispatcher::with_default(&Dispatch::new(subscriber), body);
-    collector.events()
 }
 
 fn direct_children_in_slot_order(
