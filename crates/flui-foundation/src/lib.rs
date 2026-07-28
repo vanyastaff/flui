@@ -146,6 +146,7 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 // Core modules - fundamental types with minimal dependencies
+pub mod affinity;
 pub mod async_snapshot;
 pub mod binding;
 pub mod callbacks;
@@ -178,6 +179,7 @@ pub mod debug;
 
 // Core types - IDs for all tree levels
 // Binding infrastructure
+pub use affinity::OwnerAffinity;
 pub use async_snapshot::{AsyncSnapshot, ConnectionState};
 pub use binding::{BindingBase, HasInstance, check_instance};
 // Callbacks

@@ -117,6 +117,13 @@ pub struct WindowsPlatform {
 
     /// Window configuration (shared across all windows)
     config: WindowConfiguration,
+
+    /// ADR-0039 slice 1: records the message-loop owner thread so the
+    /// thread-affine Win32 operations below can `debug_assert` their caller.
+    /// Bound at `run` — pre-run window creation (the Win32 examples) is legal
+    /// until ADR-0039 slice 2 migrates it into `on_ready`, and the assert is
+    /// a no-op while unbound.
+    affinity: flui_foundation::OwnerAffinity,
 }
 
 // SAFETY, per field: `windows` and `handlers` are `Arc<Mutex<..>>`, the
@@ -239,6 +246,7 @@ impl WindowsPlatform {
             handlers: Arc::new(Mutex::new(PlatformHandlers::default())),
             background_executor,
             config,
+            affinity: flui_foundation::OwnerAffinity::new(),
         })
     }
 
@@ -896,6 +904,10 @@ impl Platform for WindowsPlatform {
     fn run(self: Box<Self>, on_ready: Box<dyn FnOnce(&dyn Platform)>) {
         tracing::info!("Running Windows platform");
 
+        // ADR-0039 slice 1: the thread that runs the message loop owns every
+        // window created from here on.
+        self.affinity.bind_current();
+
         // Call ready callback
         on_ready(&*self);
 
@@ -903,6 +915,9 @@ impl Platform for WindowsPlatform {
     }
 
     fn quit(&self) {
+        // PostQuitMessage posts to the CALLING thread's message queue — off
+        // the owner thread it silently quits nothing (ADR-0039).
+        self.affinity.debug_assert_owner("WindowsPlatform::quit");
         tracing::info!("Quitting Windows platform");
         unsafe {
             PostQuitMessage(0);
@@ -912,6 +927,8 @@ impl Platform for WindowsPlatform {
     // ==================== Window Management ====================
 
     fn active_window(&self) -> Option<WindowId> {
+        self.affinity
+            .debug_assert_owner("WindowsPlatform::active_window");
         unsafe {
             let hwnd = GetForegroundWindow();
             if hwnd.is_invalid() {
@@ -933,6 +950,10 @@ impl Platform for WindowsPlatform {
     }
 
     fn open_window(&self, options: WindowOptions) -> Result<Arc<dyn PlatformWindow>> {
+        // An HWND's message queue belongs to the creating thread; a window
+        // minted off the owner thread is silently mis-affined (ADR-0039).
+        self.affinity
+            .debug_assert_owner("WindowsPlatform::open_window");
         tracing::info!("Opening window: {:?}", options.title);
 
         let window = WindowsWindow::new(

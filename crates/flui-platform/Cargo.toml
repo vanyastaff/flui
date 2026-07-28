@@ -15,6 +15,10 @@ autotests = false
 
 [dependencies]
 flui-types = { path = "../flui-types", version = "0.2.0" }
+# OwnerAffinity: the ADR-0039 slice-1 owner-thread backstop. Layer-legal
+# (foundation sits below platform in the DAG) and deliberately hosted there
+# so its tests run in CI, which flui-platform's own suite does not.
+flui-foundation = { path = "../flui-foundation", version = "0.2.0" }
 
 # UI Events - W3C compliant event types
 ui-events = { workspace = true }
