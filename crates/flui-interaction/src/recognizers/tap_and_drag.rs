@@ -373,7 +373,7 @@ impl GestureRecognizer for TapAndDragGestureRecognizer {
             ds.tap_viable = true;
             ds.velocity_tracker.reset();
             ds.velocity_tracker
-                .add_position(std::time::Instant::now(), position);
+                .add_position(web_time::Instant::now(), position);
         }
         *self.phase.lock() = Phase::Down;
     }
@@ -479,7 +479,7 @@ impl TapAndDragGestureRecognizer {
                         ds.last = Some(position);
                         ds.velocity_tracker.reset();
                         ds.velocity_tracker
-                            .add_position(std::time::Instant::now(), position);
+                            .add_position(web_time::Instant::now(), position);
                     }
 
                     let start_cb = self.callbacks.borrow().on_drag_start.clone();
@@ -523,7 +523,7 @@ impl TapAndDragGestureRecognizer {
                     let mut ds = self.drag_state.lock();
                     ds.last = Some(position);
                     ds.velocity_tracker
-                        .add_position(std::time::Instant::now(), position);
+                        .add_position(web_time::Instant::now(), position);
                 }
                 let cb = self.callbacks.borrow().on_drag_update.clone();
                 if let Some(cb) = cb {

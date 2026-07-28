@@ -56,7 +56,9 @@
 //! | Arena entries | one | one per pointer |
 //! | Tap → drag use case | yes | no (use [`TapAndDragGestureRecognizer`](crate::recognizers::TapAndDragGestureRecognizer)) |
 
-use std::{cell::RefCell, collections::HashMap, rc::Rc, sync::Arc, time::Instant};
+use std::{cell::RefCell, collections::HashMap, rc::Rc, sync::Arc};
+
+use web_time::Instant;
 
 use flui_types::{
     Offset,

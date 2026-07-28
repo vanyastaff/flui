@@ -44,11 +44,9 @@
 //! let _has_pending = resampler.has_pending_events();
 //! ```
 
-use std::{
-    collections::VecDeque,
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::{collections::VecDeque, sync::Arc};
+
+use web_time::{Duration, Instant};
 
 use flui_types::geometry::{Offset, Pixels};
 use parking_lot::Mutex;

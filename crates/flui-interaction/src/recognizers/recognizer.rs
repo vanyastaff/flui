@@ -115,7 +115,7 @@ impl RecognizerBase {
     /// production; a headless frame driver's virtual clock in tests, so a
     /// deadline elapses deterministically without a wall-clock sleep.
     #[inline]
-    pub fn now(&self) -> std::time::Instant {
+    pub fn now(&self) -> web_time::Instant {
         self.arena.now()
     }
 

@@ -590,8 +590,8 @@ impl GestureBinding {
     /// `next_sample_time <= sample_time`.
     pub fn flush_pending_moves_at(
         &self,
-        sample_time: std::time::Instant,
-        next_sample_time: std::time::Instant,
+        sample_time: web_time::Instant,
+        next_sample_time: web_time::Instant,
     ) -> Result<usize, InvalidSamplingWindow> {
         if next_sample_time <= sample_time {
             return Err(InvalidSamplingWindow);
@@ -601,7 +601,7 @@ impl GestureBinding {
 
     fn flush_pending_moves_kernel(
         &self,
-        sample_window: Option<(std::time::Instant, std::time::Instant)>,
+        sample_window: Option<(web_time::Instant, web_time::Instant)>,
     ) -> usize {
         if self.tearing_down_all_pointers.get() || !self.tearing_down_pointers.borrow().is_empty() {
             return 0;

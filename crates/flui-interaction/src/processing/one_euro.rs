@@ -26,7 +26,7 @@
 //! Defaults here (`min_cutoff = 1.0 Hz`, `beta = 0.007`, `d_cutoff = 1.0 Hz`)
 //! are the paper's recommended starting point for 60–120 Hz pointer input.
 
-use std::time::Instant;
+use web_time::Instant;
 
 use flui_types::geometry::{Offset, Pixels};
 

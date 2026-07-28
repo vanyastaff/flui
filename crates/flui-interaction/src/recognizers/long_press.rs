@@ -11,12 +11,9 @@
 //!
 //! Flutter reference: <https://api.flutter.dev/flutter/gestures/LongPressGestureRecognizer-class.html>
 
-use std::{
-    cell::RefCell,
-    rc::Rc,
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::{cell::RefCell, rc::Rc, sync::Arc};
+
+use web_time::{Duration, Instant};
 
 use flui_types::{Offset, geometry::Pixels};
 use parking_lot::Mutex;

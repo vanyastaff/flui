@@ -61,13 +61,12 @@
 //! timer.cancel();
 //! ```
 
-use std::{
-    sync::{
-        Arc,
-        atomic::{AtomicBool, AtomicU64, Ordering},
-    },
-    time::{Duration, Instant},
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, AtomicU64, Ordering},
 };
+
+use web_time::{Duration, Instant};
 
 use parking_lot::Mutex;
 use smallvec::SmallVec;

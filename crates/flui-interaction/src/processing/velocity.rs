@@ -31,7 +31,7 @@
 //! # Example
 //!
 //! ```rust
-//! use std::time::{Duration, Instant};
+//! use web_time::{Duration, Instant};
 //!
 //! use flui_interaction::processing::VelocityTracker;
 //! use flui_types::geometry::{Offset, Pixels};
@@ -54,7 +54,7 @@
 //! let _fling = tracker.get_fling_velocity(false);
 //! ```
 
-use std::time::{Duration, Instant};
+use web_time::{Duration, Instant};
 
 use flui_types::geometry::{Offset, Pixels};
 pub use flui_types::gestures::{PointerDeviceKind, Velocity, VelocityEstimate};

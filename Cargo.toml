@@ -128,6 +128,11 @@ dashmap = "6.1"
 # owner inbox — bounded queues with typed backpressure only)
 crossbeam-channel = "0.5"
 
+# TIME - std::time re-export on native; performance.now()-backed Instant on
+# wasm32 (std Instant::now() panics there). Single source so every crate's
+# Instant is the same type per target.
+web-time = "1.1"
+
 # COLLECTIONS - Used by multiple crates
 smallvec = { version = "1.13", features = ["serde", "union", "const_generics"] }
 

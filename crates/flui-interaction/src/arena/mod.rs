@@ -59,13 +59,13 @@ use std::{
         Arc, Weak,
         atomic::{AtomicU64, Ordering},
     },
-    time::Instant,
 };
 
 use dashmap::DashMap;
 use parking_lot::Mutex;
 use smallvec::SmallVec;
 use tracing::instrument;
+use web_time::Instant;
 
 use crate::ids::PointerId;
 use flui_foundation::{MonotonicClock, SystemClock};
