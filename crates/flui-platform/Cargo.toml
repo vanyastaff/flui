@@ -20,6 +20,8 @@ flui-types = { path = "../flui-types", version = "0.2.0" }
 # hosted in foundation so its tests run in CI (flui-platform's suite does
 # not) — and the generational DataTransferId for the ADR-0038 transport.
 flui-foundation = { path = "../flui-foundation", version = "0.2.0" }
+# Wasm-safe Instant for input timestamps (std re-export on native).
+web-time = { workspace = true }
 
 # UI Events - W3C compliant event types
 ui-events = { workspace = true }

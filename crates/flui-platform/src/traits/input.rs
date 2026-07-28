@@ -49,7 +49,10 @@
 // Platform-specific utilities
 // ============================================================================
 use std::collections::VecDeque;
-use std::time::Instant;
+// web-time: std::time re-export on native; performance.now()-backed on
+// wasm32, where std::time::Instant::now() panics — this module is in the
+// wasm-check set and timestamps must be mintable there.
+use web_time::Instant;
 
 use flui_foundation::DataTransferId;
 use flui_types::geometry::{Offset, PixelDelta, Pixels, Point};
@@ -363,7 +366,7 @@ pub trait TimestampProvider {
     }
 }
 
-/// Default timestamp provider using std::time::Instant
+/// Default timestamp provider using the wasm-safe monotonic clock
 #[derive(Debug)]
 pub struct SystemTimestamp;
 

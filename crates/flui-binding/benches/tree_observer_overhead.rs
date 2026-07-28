@@ -1,12 +1,12 @@
-//! The audit-§30 "inspector overhead" benchmark, previously unwritable
-//! because no observation seam existed (ADR-0040 made it writable; slice 1
-//! ships it as the check on the zero-cost-when-off claim).
+//! Overhead check on ADR-0040's zero-cost-when-off claim: what does the
+//! tree-observation seam cost a frame with no observer installed, and what
+//! does a live one add?
 //!
 //! Three scenarios over the same rebuild-heavy drive (keyed rotation of 64
 //! render children through the production `build_scope` path each
 //! iteration): observer absent (the `Option` null-check off path), a no-op
 //! observer (emission + `catch_unwind` frame, empty body), and the
-//! devtools counting inspector (the real slice-1 consumer).
+//! devtools counting inspector (the first real consumer).
 
 // Bench binary: criterion's generated main has no docs (house precedent:
 // the flui-view benches carry the same allow).
