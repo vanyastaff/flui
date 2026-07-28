@@ -20,16 +20,22 @@
 //! - That is all: rebuild triggering and state preservation live in
 //!   `flui-hot-reload` (worker/host split), not here
 //!
+//! ## 🔎 Inspector counters (feature: inspector)
+//! - A counting/logging `TreeObserver` (ADR-0040 seam) — tallies element
+//!   mounts, moves, rebuilds (per cause), and unmounts of a running realm
+//! - Depends only on `flui-foundation`; installed via
+//!   `WidgetsBinding::install_tree_observer` by the embedder
+//!
 //! # What this crate is NOT (yet)
 //!
-//! It is not an inspector: it has no dependency on any flui tree crate, so
-//! it cannot observe widgets, elements, render objects, or semantics. Wiring
-//! that up requires an observation seam in the core (dependency inversion —
-//! the core publishes tree events through a narrow trait the devtools can
-//! subscribe to; see the 2026-07-25 audit §26). There is likewise no network
-//! monitor, no memory profiler, and no remote-debug protocol — earlier
-//! versions of this documentation advertised those as features; they were
-//! never implemented.
+//! It is not a full inspector: it still has no dependency on any flui tree
+//! crate and cannot walk widgets, elements, render objects, or semantics.
+//! What exists (feature `inspector`) is the *event* half of ADR-0040's
+//! dependency-inverted seam — structural observations pushed by the core.
+//! Pull-shaped inspection (state versions, dependency edges, memory) waits
+//! on its own future seam. There is likewise no network monitor, no memory
+//! profiler, and no remote-debug protocol — earlier versions of this
+//! documentation advertised those as features; they were never implemented.
 //!
 //! # Usage
 //!
@@ -78,6 +84,7 @@
 //! - `profiling`: Performance profiling tools (no external dependencies)
 //! - `timeline`: Timeline view for events
 //! - `hot-reload`: File watching (reports changes; nothing more)
+//! - `inspector`: Counting/logging tree observer over the ADR-0040 seam
 //! - `full`: all of the above
 //!
 //! No other feature exists. The `default = []` boundary is what keeps a
@@ -90,6 +97,8 @@
 mod common;
 #[cfg(feature = "hot-reload")]
 pub mod hot_reload;
+#[cfg(feature = "inspector")]
+pub mod inspector;
 #[cfg(feature = "profiling")]
 pub mod profiler;
 #[cfg(feature = "timeline")]
@@ -111,6 +120,8 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub mod prelude {
     #[cfg(feature = "hot-reload")]
     pub use crate::hot_reload::HotReloader;
+    #[cfg(feature = "inspector")]
+    pub use crate::inspector::{InspectorCounters, InspectorSnapshot};
     #[cfg(feature = "profiling")]
     pub use crate::profiler::{FramePhase, FrameStats, Profiler};
     #[cfg(feature = "timeline")]

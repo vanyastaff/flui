@@ -21,6 +21,8 @@ serde_json = { workspace = true }
 flui-hot-reload = { path = "../flui-hot-reload", version = "0.2.0", optional = true, features = [
     "source-watch",
 ] }
+flui-foundation = { path = "../flui-foundation", version = "0.2.0", optional = true }
+tracing = { workspace = true, optional = true }
 
 # Data structures
 parking_lot = { workspace = true }
@@ -46,11 +48,16 @@ timeline = []
 # Hot code reload for development
 hot-reload = ["dep:flui-hot-reload"]
 
+# Counting/logging tree inspector over the ADR-0040 observation seam.
+# Depends ONLY on flui-foundation (dependency inversion) — still zero
+# access to the trees themselves.
+inspector = ["dep:flui-foundation", "dep:tracing"]
+
 # === Convenience Features ===
 # Enable all features. This list is the crate's honest capability inventory —
 # a subsystem that does not exist (inspector, network monitor, memory
 # profiler, remote debug) has no feature here, commented or otherwise.
-full = ["profiling", "timeline", "hot-reload"]
+full = ["profiling", "timeline", "hot-reload", "inspector"]
 
 [dev-dependencies]
 

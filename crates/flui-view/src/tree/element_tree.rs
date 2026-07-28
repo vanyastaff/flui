@@ -591,6 +591,16 @@ impl ElementTree {
             self.nodes[slab_index].registered_global_key_hash = Some(hash);
         }
 
+        // ADR-0040: a fresh root was minted and mounted.
+        crate::owner::emit_observation(owner.tree_observer, |o| {
+            o.element_mounted(&flui_foundation::observe::ElementMounted::new(
+                id,
+                None,
+                0,
+                view.view_type_id(),
+            ));
+        });
+
         self.root = Some(id);
         id
     }
@@ -705,6 +715,18 @@ impl ElementTree {
             view.view_type_id(),
             view.key().map(ViewKey::key_hash),
         ));
+
+        // ADR-0040: same single-mint funnel as the tracing Mount above — the
+        // GlobalKey-retake early-return can never reach this point, so a
+        // retake never double-fires as a mount.
+        crate::owner::emit_observation(owner.tree_observer, |o| {
+            o.element_mounted(&flui_foundation::observe::ElementMounted::new(
+                id,
+                Some(parent),
+                slot,
+                view.view_type_id(),
+            ));
+        });
 
         // A freshly-attached render child reads the parent-data its nearest
         // ancestor `ParentDataView` (`Expanded`, `Positioned`) contributes — the
@@ -1228,6 +1250,12 @@ impl ElementTree {
         self.unmount_inherited_dependencies(id, owner);
         self.nodes[index].element_mut().unmount(owner);
 
+        // ADR-0040: `Element::unmount` ran and the slot is about to free —
+        // one of the two primitives every unmount path bottoms out in.
+        crate::owner::emit_observation(owner.tree_observer, |o| {
+            o.element_unmounted(&flui_foundation::observe::ElementUnmounted::new(id));
+        });
+
         let node = self.nodes.remove(index);
         // Slot freed → bump its generation so any straggler id that still
         // names this slot can never resolve to its next occupant (ABA guard).
@@ -1353,6 +1381,12 @@ impl ElementTree {
         self.unmount_inherited_dependencies(id, owner);
         self.nodes[index].element_mut().unmount(owner);
 
+        // ADR-0040: the second of the two unmount primitives (finalize
+        // drains, subtree evictions, root detach all bottom out here).
+        crate::owner::emit_observation(owner.tree_observer, |o| {
+            o.element_unmounted(&flui_foundation::observe::ElementUnmounted::new(id));
+        });
+
         let node = self.nodes.remove(index);
         // Slot freed → bump its generation (ABA guard, see `remove`).
         self.bump_generation(index);
@@ -1362,6 +1396,34 @@ impl ElementTree {
         }
 
         Some(node)
+    }
+
+    /// Replay the live tree as synthetic `ElementMounted` events, in
+    /// pre-order (parent before children, `child_ids` slot order) — the
+    /// baseline for a mid-run observer attach (ADR-0040 §3).
+    ///
+    /// Walks from the root via `child_ids`, so soft-removed keyed elements
+    /// parked in the inactive queue are NOT replayed. The caller
+    /// (`WidgetsBinding::install_tree_observer`) holds the realm write lock
+    /// across replay + install, so no mutation can interleave.
+    pub fn replay_mounts(&self, observer: &dyn flui_foundation::observe::TreeObserver) {
+        let Some(root) = self.root else {
+            return;
+        };
+        let mut stack: Vec<ElementId> = vec![root];
+        while let Some(id) = stack.pop() {
+            let Some(node) = self.get(id) else {
+                continue;
+            };
+            observer.element_mounted(&flui_foundation::observe::ElementMounted::new(
+                id,
+                node.parent(),
+                node.slot(),
+                node.element().view_type_id(),
+            ));
+            // Reverse push keeps pre-order on a LIFO stack.
+            stack.extend(node.child_ids().iter().rev().copied());
+        }
     }
 
     /// Update an element with a new view.
@@ -1635,6 +1697,15 @@ fn retake_inactive_global_key(
         from_parent: None,
     });
 
+    // ADR-0040: identity and state survived — a move, never a second mount.
+    crate::owner::emit_observation(owner.tree_observer, |o| {
+        o.element_moved(&flui_foundation::observe::ElementMoved::new(
+            candidate_id,
+            new_parent,
+            new_slot,
+        ));
+    });
+
     Some(candidate_id)
 }
 
@@ -1726,6 +1797,15 @@ fn retake_active_global_key(
         view.view_type_id(),
         hash,
     ));
+
+    // ADR-0040: cross-parent move of a live element.
+    crate::owner::emit_observation(owner.tree_observer, |o| {
+        o.element_moved(&flui_foundation::observe::ElementMoved::new(
+            candidate_id,
+            new_parent,
+            new_slot,
+        ));
+    });
 
     Some(candidate_id)
 }

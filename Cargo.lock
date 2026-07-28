@@ -1480,9 +1480,12 @@ dependencies = [
 name = "flui-binding"
 version = "0.2.0"
 dependencies = [
+ "criterion",
  "flui-animation",
+ "flui-devtools",
  "flui-foundation",
  "flui-interaction",
+ "flui-objects",
  "flui-rendering",
  "flui-scheduler",
  "flui-types",
@@ -1562,10 +1565,12 @@ dependencies = [
 name = "flui-devtools"
 version = "0.2.0"
 dependencies = [
+ "flui-foundation",
  "flui-hot-reload",
  "parking_lot",
  "serde",
  "serde_json",
+ "tracing",
  "web-time",
  "windows-sys 0.61.2",
 ]

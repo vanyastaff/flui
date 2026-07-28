@@ -53,6 +53,12 @@ flui-interaction = { path = "../flui-interaction", version = "0.2.0", features =
 # of release builds.
 flui-view = { path = "../flui-view", version = "0.2.0", features = ["test-utils"] }
 flui-foundation = { path = "../flui-foundation", version = "0.2.0" }
+# ADR-0040 slice 1: the end-to-end observation-seam test drives a real tree
+# against the devtools inspector — this crate is the one that links both
+# halves (acyclic: flui-devtools depends only on flui-foundation).
+flui-devtools = { path = "../flui-devtools", version = "0.2.0", features = ["inspector"] }
+flui-objects = { workspace = true }
+criterion = { workspace = true }
 # The long-press deadline recognizer + settings exercised by the pump_frame test,
 # plus the geometry/offset types for the synthetic pointer-down. The `testing`
 # feature is NOT required: `add_pointer`/`poll_deadlines` are part of the release
@@ -62,3 +68,7 @@ flui-types = { path = "../flui-types", version = "0.2.0" }
 [[test]]
 name = "binding_it"
 path = "tests/main.rs"
+
+[[bench]]
+name = "tree_observer_overhead"
+harness = false

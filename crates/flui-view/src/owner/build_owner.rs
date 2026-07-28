@@ -13,7 +13,7 @@ use std::{
     sync::Arc,
 };
 
-use flui_foundation::{ElementId, RenderId};
+use flui_foundation::{ElementId, RebuildReasons, RenderId};
 use flui_interaction::FocusManager;
 use parking_lot::{Mutex, RwLock};
 
@@ -21,7 +21,7 @@ use crate::{
     element::child_manager::{ChildManager, ChildManagerRegistry},
     owner::{
         RebuildReason, inherited_dependencies::InheritedDependencies,
-        layout_builder::LayoutBuilderRegistry, rebuild_reason::RebuildReasons,
+        layout_builder::LayoutBuilderRegistry,
     },
     tree::ElementTree,
     view::View,
@@ -68,7 +68,7 @@ impl ExternalBuildScheduler {
             let mut inbox = self.inbox.lock();
             match inbox.entry(id) {
                 std::collections::hash_map::Entry::Vacant(entry) => {
-                    entry.insert(RebuildReasons::one(reason));
+                    entry.insert(RebuildReasons::from_reason(reason));
                     true
                 }
                 std::collections::hash_map::Entry::Occupied(mut entry) => {
@@ -223,6 +223,11 @@ pub struct BuildOwner {
     /// [`ElementNode`](crate::tree::ElementNode).
     pub(crate) inherited_dependencies: InheritedDependencies,
 
+    /// The realm's tree-observer slot (ADR-0040). `None` = observation off
+    /// (one branch per emission site). `pub(crate)` for the
+    /// [`ElementOwner`](super::ElementOwner) split-borrow.
+    pub(crate) tree_observer: Option<Arc<dyn flui_foundation::observe::TreeObserver>>,
+
     /// Whether we're currently in a build phase.
     #[cfg(debug_assertions)]
     building: bool,
@@ -361,6 +366,7 @@ impl BuildOwner {
             inactive_elements: Vec::new(),
             pending_dependency_changes: std::collections::HashSet::new(),
             inherited_dependencies: InheritedDependencies::default(),
+            tree_observer: None,
             #[cfg(debug_assertions)]
             building: false,
             #[cfg(debug_assertions)]
@@ -472,7 +478,7 @@ impl BuildOwner {
     pub fn schedule_build_for(&mut self, id: ElementId, depth: usize, reason: RebuildReason) {
         match self.dirty_reasons.entry(id) {
             std::collections::hash_map::Entry::Vacant(entry) => {
-                entry.insert(RebuildReasons::one(reason));
+                entry.insert(RebuildReasons::from_reason(reason));
                 self.dirty_elements
                     .push(Reverse(DirtyElement::new(id, depth)));
 
@@ -558,7 +564,36 @@ impl BuildOwner {
             post_frame_handle: &self.post_frame_handle,
             text_input_handle: &self.text_input_handle,
             interaction_dispatch: &self.interaction_dispatch,
+            tree_observer: &mut self.tree_observer,
         }
+    }
+
+    /// Install the realm's tree observer, replacing any previous one
+    /// (ADR-0040). A replaced observer receives `detached()` first, and the
+    /// replacement is logged so competing tools discover each other.
+    ///
+    /// Install at realm setup or via
+    /// `WidgetsBinding::install_tree_observer` — never from a frame phase.
+    pub fn set_tree_observer(&mut self, observer: Arc<dyn flui_foundation::observe::TreeObserver>) {
+        if let Some(previous) = self.tree_observer.replace(observer) {
+            tracing::debug!("tree observer replaced; notifying the outgoing observer");
+            previous.detached();
+        }
+    }
+
+    /// Remove the observer (realm teardown — install/clear symmetry).
+    /// Fires `detached()` on the outgoing observer. Idempotent.
+    pub fn clear_tree_observer(&mut self) {
+        if let Some(previous) = self.tree_observer.take() {
+            previous.detached();
+        }
+    }
+
+    /// The installed observer, if any. Clones the `Arc` out — no reference
+    /// into private state, no guard (SP-6).
+    #[must_use]
+    pub fn tree_observer(&self) -> Option<Arc<dyn flui_foundation::observe::TreeObserver>> {
+        self.tree_observer.clone()
     }
 
     /// Record the reverse half of an inherited dependency registration.
@@ -815,6 +850,7 @@ impl BuildOwner {
                     post_frame_handle: &self.post_frame_handle,
                     text_input_handle: &self.text_input_handle,
                     interaction_dispatch: &self.interaction_dispatch,
+                    tree_observer: &mut self.tree_observer,
                 };
                 if needs_did_change {
                     element
@@ -840,6 +876,23 @@ impl BuildOwner {
                 // dropped — the build did not complete.
                 Err(payload) => std::panic::resume_unwind(payload),
             };
+
+            // ADR-0040: the build ran to completion (the resume_unwind branch
+            // can no longer take it) and the slot is restored — safe window
+            // for third-party observer code, and a parent's rebuilt event
+            // precedes the child mutations its build produced (phase 2).
+            if self.tree_observer.is_some() {
+                let view_type_id = tree.get(id).map(|node| node.element().view_type_id());
+                if let Some(view_type_id) = view_type_id {
+                    super::emit_observation(&mut self.tree_observer, |o| {
+                        o.element_rebuilt(&flui_foundation::observe::ElementRebuilt::new(
+                            id,
+                            view_type_id,
+                            reasons,
+                        ));
+                    });
+                }
+            }
             for record in dep_sink.into_inner() {
                 let Some(node) = tree.get_mut(record.provider) else {
                     continue;
@@ -874,6 +927,7 @@ impl BuildOwner {
                 post_frame_handle: &self.post_frame_handle,
                 text_input_handle: &self.text_input_handle,
                 interaction_dispatch: &self.interaction_dispatch,
+                tree_observer: &mut self.tree_observer,
             };
             crate::tree::id_reconcile::reconcile_children_by_id(
                 tree,
@@ -1041,6 +1095,7 @@ impl BuildOwner {
                 post_frame_handle: &self.post_frame_handle,
                 text_input_handle: &self.text_input_handle,
                 interaction_dispatch: &self.interaction_dispatch,
+                tree_observer: &mut self.tree_observer,
             };
 
             let did_work = manager_arc.lock().service(
@@ -1170,6 +1225,7 @@ impl BuildOwner {
             post_frame_handle: &self.post_frame_handle,
             text_input_handle: &self.text_input_handle,
             interaction_dispatch: &self.interaction_dispatch,
+            tree_observer: &mut self.tree_observer,
         };
 
         // Finalize all elements (deepest first - already sorted by collect order).

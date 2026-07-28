@@ -39,6 +39,8 @@ pub enum RebuildReason {
 }
 
 impl RebuildReason {
+    /// Every variant in stable diagnostic order — the backing table for
+    /// [`RebuildReasons::iter`].
     pub(crate) const ALL: [Self; 10] = [
         Self::InitialMount,
         Self::ParentUpdate,
@@ -83,9 +85,9 @@ impl fmt::Display for RebuildReason {
 /// Compact set of causes accumulated for one pending element rebuild.
 ///
 /// Scheduling the same element several times still produces one build, but it
-/// does not erase causality: every distinct reason remains in this set. Values
-/// returned by [`BuildOwner::pending_rebuild_reasons`](super::BuildOwner::pending_rebuild_reasons)
-/// are snapshots and never expose the owner's internal queue or lock.
+/// does not erase causality: every distinct reason remains in this set. A
+/// value handed out by an owner is a snapshot — copying it out neither
+/// guards nor exposes the owner's internal queue or lock.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct RebuildReasons(u16);
 
@@ -96,15 +98,14 @@ impl RebuildReasons {
         Self(reason.bit())
     }
 
-    pub(crate) const fn one(reason: RebuildReason) -> Self {
-        Self::from_reason(reason)
-    }
-
-    pub(crate) fn insert(&mut self, reason: RebuildReason) {
+    /// Add `reason` to the set. Value-semantic bitset union — there is no
+    /// invariant to protect, so this is public for out-of-crate emitters.
+    pub fn insert(&mut self, reason: RebuildReason) {
         self.0 |= reason.bit();
     }
 
-    pub(crate) fn merge(&mut self, other: Self) {
+    /// Union `other` into the set.
+    pub fn merge(&mut self, other: Self) {
         self.0 |= other.0;
     }
 
@@ -156,7 +157,7 @@ mod tests {
 
     #[test]
     fn accumulated_reasons_are_unique_and_stably_ordered() {
-        let mut reasons = RebuildReasons::one(RebuildReason::AnimationTick);
+        let mut reasons = RebuildReasons::from_reason(RebuildReason::AnimationTick);
         reasons.insert(RebuildReason::DependencyChange);
         reasons.insert(RebuildReason::AnimationTick);
 

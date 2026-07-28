@@ -636,6 +636,40 @@ impl WidgetsBinding {
         f(&mut self.inner.write().build_owner)
     }
 
+    /// Atomic seeded observer install (ADR-0040 §3): under ONE `inner`
+    /// write guard, replay the current tree into `observer`
+    /// (`ElementTree::replay_mounts`), then install it as the realm's
+    /// observer. Every frame drive also holds the `inner` write lock, so no
+    /// tree mutation can interleave between replay and install — the
+    /// consumer's baseline is exact.
+    ///
+    /// A panic during replay aborts the install: nothing is registered and
+    /// the aborted install is logged (the observer proved untrustworthy
+    /// before it was ever installed).
+    pub fn install_tree_observer(
+        &self,
+        observer: std::sync::Arc<dyn flui_foundation::observe::TreeObserver>,
+    ) {
+        let mut inner = self.inner.write();
+        let replay_ok = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            inner.element_tree.replay_mounts(&*observer);
+        }))
+        .is_ok();
+        if replay_ok {
+            inner.build_owner.set_tree_observer(observer);
+        } else {
+            tracing::error!(
+                "TreeObserver panicked during seeded replay; install aborted, nothing registered"
+            );
+        }
+    }
+
+    /// Symmetric removal (install/clear symmetry); fires `detached()` on
+    /// the outgoing observer. Idempotent.
+    pub fn remove_tree_observer(&self) {
+        self.inner.write().build_owner.clear_tree_observer();
+    }
+
     // ========================================================================
     // Element Tree Access
     // ========================================================================

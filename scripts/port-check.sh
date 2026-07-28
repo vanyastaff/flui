@@ -1162,6 +1162,9 @@ fi
 #   #5 error chains + observer/animation + owned callback storage:
 #      Error, std::error::Error, core::error::Error, Listenable,
 #      Animation, WidgetsBindingObserver, Fn, FnMut, FnOnce
+#   5. Observer patterns — TreeObserver (ADR-0040): dependency inversion
+#      REQUIRES type erasure here; the emitter crates cannot name the
+#      concrete devtools type below them in the DAG.
 #      (Fn/FnMut/FnOnce included via allowlist rather than per-site
 #      markers — see commit body of Phase 3.1 §U30 for the plan-time-
 #      vs-reality rationale; 96 owned-callback storage sites would have
@@ -1213,7 +1216,7 @@ fi
 #   `GlobalWidgetsLocalizations`) behind the trait every `Localizations::of`
 #   caller depends on — Flutter parity: `Localizations.of<WidgetsLocalizations>`
 #   is keyed by the abstract interface, never the concrete runtime class.
-fr036_allowed='dyn\s+(\$crate::|[a-zA-Z_][a-zA-Z0-9_]*::)*(View|ViewKey|BuildContext|ElementBase|ElementBehavior|StatelessElementBase|StatefulElementBase|ProxyElementBase|InheritedElementBase|RenderElementBase|RootElementBase|ErrorElementBase|InheritedElementAccess|RenderObjectTrait|RenderObject|Listenable|Notification|NotifiableElement|WidgetsBindingObserver|Animation|Animatable|BoxedView|ViewObject|Any|Error|GestureArenaMember|MonotonicClock|FocusTraversalPolicy|SliverGridDelegate|SingleChildLayoutDelegate|MultiChildLayoutDelegate|MultiChildLayoutContext|FlowDelegate|CustomPainter|ParentData|LogicalIndexParentData|CustomClipper|RendererBinding|HitTestable|Debug|Fn|FnMut|FnOnce|BoxLayoutCtxErased|SliverLayoutCtxErased|ChildManager|Future|Stream|ErasedRoute|NavigatorObserver|Simulation|ScrollPhysics|ImageProvider|ErasedLocalizationsDelegate|WidgetsLocalizations)\b'
+fr036_allowed='dyn\s+(\$crate::|[a-zA-Z_][a-zA-Z0-9_]*::)*(View|ViewKey|BuildContext|ElementBase|ElementBehavior|StatelessElementBase|StatefulElementBase|ProxyElementBase|InheritedElementBase|RenderElementBase|RootElementBase|ErrorElementBase|InheritedElementAccess|RenderObjectTrait|RenderObject|Listenable|Notification|NotifiableElement|WidgetsBindingObserver|TreeObserver|Animation|Animatable|BoxedView|ViewObject|Any|Error|GestureArenaMember|MonotonicClock|FocusTraversalPolicy|SliverGridDelegate|SingleChildLayoutDelegate|MultiChildLayoutDelegate|MultiChildLayoutContext|FlowDelegate|CustomPainter|ParentData|LogicalIndexParentData|CustomClipper|RendererBinding|HitTestable|Debug|Fn|FnMut|FnOnce|BoxLayoutCtxErased|SliverLayoutCtxErased|ChildManager|Future|Stream|ErasedRoute|NavigatorObserver|Simulation|ScrollPhysics|ImageProvider|ErasedLocalizationsDelegate|WidgetsLocalizations)\b'
 
 # Framework crates under enforcement.
 fr036_scope=(
