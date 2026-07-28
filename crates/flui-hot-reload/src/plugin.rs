@@ -21,6 +21,11 @@
 ///   detection)
 /// - `flui_scene_drop(ptr)` — drops a Scene previously returned by
 ///   `flui_scene_build`
+/// - `flui_scene_free(ptr)` — deallocates the box WITHOUT dropping the Scene
+///   (the host moves the value out with `ptr::read` first, so allocation and
+///   deallocation both happen inside the plugin image)
+/// - `flui_scene_abi_token() -> u64` — the plugin-side
+///   [`abi_token`](crate::abi_token); the host refuses to load on mismatch
 ///
 /// # Example
 ///
@@ -84,6 +89,37 @@ macro_rules! scene_plugin {
                 }
             }
         }
+
+        /// Deallocate the box behind `ptr` WITHOUT dropping the `Scene` inside.
+        ///
+        /// The host consumes the scene with `ptr::read` and then hands the
+        /// now-logically-empty box back here, so the memory is released by the
+        /// same image (and the same allocator/layout knowledge) that allocated
+        /// it.
+        ///
+        /// # Safety
+        ///
+        /// `ptr` must come from `flui_scene_build`, and the host must have
+        /// already moved the `Scene` value out — after this call the pointee
+        /// is gone. Passing null is safe (no-op).
+        #[unsafe(no_mangle)]
+        pub extern "C" fn flui_scene_free(ptr: *mut ::std::ffi::c_void) {
+            if !ptr.is_null() {
+                #[allow(unsafe_code)]
+                unsafe {
+                    drop(::std::boxed::Box::from_raw(
+                        ptr as *mut ::std::mem::MaybeUninit<::flui_layer::Scene>,
+                    ));
+                }
+            }
+        }
+
+        /// Plugin-side ABI-compatibility token; the host refuses to load this
+        /// library unless it equals the host's own token.
+        #[unsafe(no_mangle)]
+        pub extern "C" fn flui_scene_abi_token() -> u64 {
+            $crate::abi_token()
+        }
     };
 }
 
@@ -127,6 +163,13 @@ macro_rules! hot_reload_worker {
         pub extern "C" fn flui_worker_fingerprint() -> u64 {
             $fp
         }
+
+        /// Worker-side ABI-compatibility token; the host refuses to load this
+        /// library unless it equals the host's own token.
+        #[unsafe(no_mangle)]
+        pub extern "C" fn flui_worker_abi_token() -> u64 {
+            $crate::abi_token()
+        }
     };
 }
 
@@ -150,6 +193,10 @@ macro_rules! hot_reload_worker {
 ///   detection)
 /// - `flui_app_drop(ptr)` — drops a Scene previously returned by
 ///   `flui_app_build`
+/// - `flui_app_free(ptr)` — deallocates the box WITHOUT dropping the Scene
+///   (host moves the value out first; see `scene_plugin!`)
+/// - `flui_app_abi_token() -> u64` — plugin-side
+///   [`abi_token`](crate::abi_token); the host refuses to load on mismatch
 ///
 /// # Example
 ///
@@ -225,6 +272,32 @@ macro_rules! app_plugin {
                     drop(::std::boxed::Box::from_raw(ptr as *mut ::flui_layer::Scene));
                 }
             }
+        }
+
+        /// Deallocate the box behind `ptr` WITHOUT dropping the `Scene` inside.
+        ///
+        /// # Safety
+        ///
+        /// `ptr` must come from `flui_app_build`, and the host must have
+        /// already moved the `Scene` value out — after this call the pointee
+        /// is gone. Passing null is safe (no-op).
+        #[no_mangle]
+        pub extern "C" fn flui_app_free(ptr: *mut ::std::ffi::c_void) {
+            if !ptr.is_null() {
+                #[allow(unsafe_code)]
+                unsafe {
+                    drop(::std::boxed::Box::from_raw(
+                        ptr as *mut ::std::mem::MaybeUninit<::flui_layer::Scene>,
+                    ));
+                }
+            }
+        }
+
+        /// Plugin-side ABI-compatibility token; the host refuses to load this
+        /// library unless it equals the host's own token.
+        #[no_mangle]
+        pub extern "C" fn flui_app_abi_token() -> u64 {
+            $crate::abi_token()
         }
     };
 }

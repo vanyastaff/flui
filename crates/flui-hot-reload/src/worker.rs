@@ -25,8 +25,16 @@ fn worker_builds() -> &'static Mutex<HashMap<u64, BuildPtr>> {
     WORKER_BUILDS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+/// While a [`WorkerPlugin`] init call is in flight, collects the
+/// `(fingerprint, ptr)` pairs it registers, so the plugin can prune exactly
+/// those entries when it unloads. `None` outside an init call — a registration
+/// arriving then still lands in the map but belongs to no plugin (and is
+/// logged), so it can never be pruned; workers must register from
+/// `flui_worker_init` only.
+static REGISTRATION_SESSION: Mutex<Option<Vec<(u64, BuildPtr)>>> = Mutex::new(None);
+
 /// Type-erased function pointer — safe to store in a `Sync` static.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 struct BuildPtr(*const ());
 
 // SAFETY: a code address is a `Copy` integer as far as these auto traits are
@@ -39,11 +47,11 @@ struct BuildPtr(*const ());
 // nothing enforces a calling thread — `get_worker_build_ptr` is public and
 // takes no thread context.
 //
-// The real hazard is lifetime, not threading, and these impls do not address
-// it: `WORKER_BUILDS` is a `'static` map that is never pruned, so after
-// `WorkerPlugin::unload` unmaps the image the stored address dangles and
-// calling it jumps into unmapped memory. Tracked with the plugin-boundary
-// redesign; see the module docs.
+// Lifetime: the address is only as live as the worker image it points into.
+// [`WorkerPlugin`]'s `Drop` prunes this plugin's entries from `WORKER_BUILDS`
+// BEFORE `DynLib::drop` unmaps the image, so a map hit implies the image is
+// still mapped (single-threaded host loop; a caller racing an unload from
+// another thread is outside the supported dev-loop).
 #[allow(unsafe_code)]
 unsafe impl Send for BuildPtr {}
 #[allow(unsafe_code)]
@@ -59,10 +67,24 @@ extern "C" fn host_register_worker_build(fingerprint: u64, build: *const ()) {
         );
         return;
     }
+    let ptr = BuildPtr(build);
     worker_builds()
         .lock()
         .expect("worker build registry poisoned")
-        .insert(fingerprint, BuildPtr(build));
+        .insert(fingerprint, ptr);
+    if let Some(session) = &mut *REGISTRATION_SESSION
+        .lock()
+        .expect("worker registration session poisoned")
+    {
+        session.push((fingerprint, ptr));
+    } else {
+        tracing::warn!(
+            fingerprint,
+            "worker build registered outside flui_worker_init — the entry \
+             cannot be pruned on unload and will dangle after the image is \
+             unmapped"
+        );
+    }
     tracing::debug!(fingerprint, "worker build registered in host");
 }
 
@@ -74,19 +96,17 @@ pub fn host_register_fn() -> RegisterWorkerBuildFn {
 
 /// Look up a worker-registered build function by layout fingerprint.
 ///
-/// # Safety of the returned pointer
+/// Returns `None` when no live worker has registered this fingerprint —
+/// including after an unload or a failed reload: [`WorkerPlugin`]'s `Drop`
+/// prunes its own registrations from the registry BEFORE the image is
+/// unmapped, so a `Some` here points into a still-mapped image. Treat `None`
+/// as "worker unavailable" and fall back (or fail loudly), never cache a
+/// previously returned pointer across frames.
 ///
-/// This function is safe — it only reads a map — but the address it returns is
-/// **not guaranteed to be live**. It points into the worker dylib, and
-/// [`WorkerPlugin::unload`] unmaps that image WITHOUT removing the entry (the
-/// registry is a `'static` map that is never pruned). After an unload, or after
-/// a failed reload that already dropped the old library, transmuting and calling
-/// this pointer jumps into unmapped memory.
-///
-/// A caller must therefore establish out of band that no unload has happened
-/// since registration. Fixing this properly means pruning the registry in
-/// `unload` and treating a missing entry as "worker unavailable"; tracked with
-/// the plugin-boundary redesign.
+/// The one unpruned case: a registration made outside `flui_worker_init`
+/// (logged as a warning at registration time) belongs to no plugin and WILL
+/// dangle after that image unloads — workers must register from their init
+/// hook only.
 #[must_use]
 pub fn get_worker_build_ptr(fingerprint: u64) -> Option<*const ()> {
     worker_builds()
@@ -99,6 +119,7 @@ pub fn get_worker_build_ptr(fingerprint: u64) -> Option<*const ()> {
 type WorkerInitFn = extern "C" fn(RegisterWorkerBuildFn);
 type WorkerVersionFn = extern "C" fn() -> u32;
 type WorkerFingerprintFn = extern "C" fn() -> u64;
+type WorkerAbiTokenFn = extern "C" fn() -> u64;
 
 /// A loaded hot-reload worker dylib (`my_app_logic.dll`).
 #[allow(missing_debug_implementations)]
@@ -108,12 +129,17 @@ pub struct WorkerPlugin {
     fingerprint_fn: Option<WorkerFingerprintFn>,
     version: u32,
     mtime: u64,
+    /// The `(fingerprint, ptr)` pairs this plugin's init hook registered in
+    /// `WORKER_BUILDS` — pruned by `Drop` before the image is unmapped.
+    registered: Mutex<Vec<(u64, BuildPtr)>>,
 }
 
 impl WorkerPlugin {
     /// Load a worker from `lib_path` and call its `flui_worker_init` hook.
     ///
-    /// Returns `None` when the file is missing, unloadable, or lacks worker symbols.
+    /// Returns `None` when the file is missing, unloadable, lacks worker
+    /// symbols, or fails the ABI-token handshake (built by a different
+    /// compiler or source revision than this host — see [`crate::abi_token`]).
     pub fn load(lib_path: impl AsRef<Path>) -> Option<Self> {
         let lib_path = lib_path.as_ref();
         let lib = DynLib::open(lib_path)?;
@@ -129,6 +155,33 @@ impl WorkerPlugin {
                 return None;
             }
             let init_fn: WorkerInitFn = std::mem::transmute(init_ptr);
+
+            // ABI handshake before calling anything else in the image: build
+            // pointers registered by init are transmuted to typed fn pointers
+            // whose argument types are `repr(Rust)`, so layout agreement must
+            // be established first.
+            let Some(token_ptr) = lib.symbol("flui_worker_abi_token") else {
+                tracing::error!(
+                    path = %lib_path.display(),
+                    "worker refused: no ABI-token symbol — rebuild it against \
+                     this tree (the ownership-safe worker ABI requires it)"
+                );
+                return None;
+            };
+            let token_fn: WorkerAbiTokenFn = std::mem::transmute(token_ptr);
+            let worker_token = token_fn();
+            let host_token = crate::abi_token();
+            if worker_token != host_token {
+                tracing::error!(
+                    worker_token,
+                    host_token,
+                    path = %lib_path.display(),
+                    "worker refused: ABI token mismatch — host and worker were \
+                     built by different compilers or source revisions; rebuild \
+                     both from one worktree with one toolchain"
+                );
+                return None;
+            }
 
             let version = lib.symbol("flui_worker_version").map_or(0, |ptr| {
                 let version_fn: WorkerVersionFn = std::mem::transmute(ptr);
@@ -146,6 +199,7 @@ impl WorkerPlugin {
                 fingerprint_fn,
                 version,
                 mtime,
+                registered: Mutex::new(Vec::new()),
             };
             plugin.init();
             tracing::info!(
@@ -157,9 +211,25 @@ impl WorkerPlugin {
         }
     }
 
-    /// Re-run the worker's registration hook (`flui_worker_init`).
+    /// Re-run the worker's registration hook (`flui_worker_init`), recording
+    /// what it registers so `Drop` can prune exactly those entries.
     pub fn init(&self) {
+        {
+            let mut session = REGISTRATION_SESSION
+                .lock()
+                .expect("worker registration session poisoned");
+            *session = Some(Vec::new());
+        }
         (self.init_fn)(host_register_fn());
+        let registered_now = REGISTRATION_SESSION
+            .lock()
+            .expect("worker registration session poisoned")
+            .take()
+            .unwrap_or_default();
+        self.registered
+            .lock()
+            .expect("worker registration list poisoned")
+            .extend(registered_now);
     }
 
     /// Type-layout fingerprint exported by the worker (0 when absent).
@@ -175,6 +245,7 @@ impl WorkerPlugin {
     /// Unload the worker library.
     pub fn unload(self) {
         tracing::info!(version = self.version, "Worker plugin unloaded");
+        // Drop prunes this plugin's registry entries, then DynLib unmaps.
     }
 
     /// Path this worker was loaded from.
@@ -188,6 +259,36 @@ impl WorkerPlugin {
     }
 }
 
+impl Drop for WorkerPlugin {
+    fn drop(&mut self) {
+        // Prune this plugin's registrations BEFORE `self.lib` drops (fields
+        // drop in declaration order; `lib` is declared first but `Drop::drop`
+        // runs before ANY field drops), so `get_worker_build_ptr` can never
+        // observe an address into an unmapped image. An entry is removed only
+        // while it still holds the pointer this plugin registered — a newer
+        // plugin that re-registered the same fingerprint keeps its (live)
+        // entry.
+        let registered = std::mem::take(
+            &mut *self
+                .registered
+                .lock()
+                .expect("worker registration list poisoned"),
+        );
+        if registered.is_empty() {
+            return;
+        }
+        let mut builds = worker_builds()
+            .lock()
+            .expect("worker build registry poisoned");
+        for (fingerprint, ptr) in registered {
+            if builds.get(&fingerprint) == Some(&ptr) {
+                builds.remove(&fingerprint);
+                tracing::debug!(fingerprint, "worker build pruned on unload");
+            }
+        }
+    }
+}
+
 /// Result of polling a [`WorkerReloadDriver`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorkerPollOutcome {
@@ -198,6 +299,21 @@ pub enum WorkerPollOutcome {
     Reloaded {
         /// How many reloads since the driver was created (includes the first load).
         reload_count: u32,
+    },
+
+    /// The dylib reloaded, but its layout fingerprint changed: the shared
+    /// `types` crate's layout no longer matches what the host was compiled
+    /// against, so the host must NOT call the newly registered build fns with
+    /// its old-layout state. Lookups keyed by the host's compiled-in
+    /// fingerprint miss the new registrations, degrading to "worker
+    /// unavailable" (this is the producer of the degradation
+    /// [`crate::HotReloadOutcome::Degraded`] names). Restart the host to pick
+    /// up the new layout.
+    Degraded {
+        /// Fingerprint the previous worker reported.
+        old_fingerprint: u64,
+        /// Fingerprint the reloaded worker reports.
+        new_fingerprint: u64,
     },
 
     /// An update was detected but reload failed (file locked / missing symbols).
@@ -317,7 +433,30 @@ impl WorkerReloadDriver {
             if let Some(ref plugin) = self.plugin {
                 self.loaded_path = load_path;
                 self.reload_count += 1;
+                let old_fingerprint = self.last_fingerprint;
                 self.last_fingerprint = plugin.fingerprint();
+                // A changed fingerprint means the shared `types` layout moved
+                // under the host: surface the degradation instead of
+                // reporting a healthy reload. (The old worker's registry
+                // entries were pruned on its unload, and the host's
+                // fingerprint-keyed lookups miss the new ones, so builds
+                // degrade to "worker unavailable" rather than calling across
+                // an incompatible layout.)
+                if old_fingerprint != DEFAULT_FINGERPRINT
+                    && self.last_fingerprint != old_fingerprint
+                {
+                    tracing::warn!(
+                        old_fingerprint,
+                        new_fingerprint = self.last_fingerprint,
+                        "WorkerReloadDriver: worker layout fingerprint changed \
+                         — degraded to worker-unavailable; restart the host to \
+                         adopt the new layout"
+                    );
+                    return WorkerPollOutcome::Degraded {
+                        old_fingerprint,
+                        new_fingerprint: self.last_fingerprint,
+                    };
+                }
                 tracing::info!(
                     reload = self.reload_count,
                     fingerprint = self.last_fingerprint,
@@ -350,5 +489,97 @@ impl WorkerReloadDriver {
         }
 
         WorkerPollOutcome::NoChange
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The registry mutex plus the session mutex are process-global; tests
+    /// that touch them must not interleave.
+    static REGISTRY_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    /// Runs `body` with a fresh registration session, returning what it
+    /// registered — the same bracket `WorkerPlugin::init` uses.
+    fn with_session<R>(body: impl FnOnce() -> R) -> (R, Vec<(u64, BuildPtr)>) {
+        *REGISTRATION_SESSION.lock().unwrap() = Some(Vec::new());
+        let out = body();
+        let session = REGISTRATION_SESSION
+            .lock()
+            .unwrap()
+            .take()
+            .unwrap_or_default();
+        (out, session)
+    }
+
+    /// Mirrors `WorkerPlugin::drop`'s prune loop without needing a dylib.
+    fn prune(registered: Vec<(u64, BuildPtr)>) {
+        let mut builds = worker_builds().lock().unwrap();
+        for (fingerprint, ptr) in registered {
+            if builds.get(&fingerprint) == Some(&ptr) {
+                builds.remove(&fingerprint);
+            }
+        }
+    }
+
+    #[test]
+    fn unload_prunes_exactly_the_sessions_registrations() {
+        let _guard = REGISTRY_TEST_LOCK.lock().unwrap();
+        let fp_a = 0xA11C_E001;
+        let fp_b = 0xA11C_E002;
+        let addr_one = 0x1000 as *const ();
+        let addr_two = 0x2000 as *const ();
+
+        let ((), session) = with_session(|| {
+            host_register_worker_build(fp_a, addr_one);
+            host_register_worker_build(fp_b, addr_two);
+        });
+        assert_eq!(session.len(), 2, "both registrations recorded");
+        assert_eq!(get_worker_build_ptr(fp_a), Some(addr_one));
+        assert_eq!(get_worker_build_ptr(fp_b), Some(addr_two));
+
+        prune(session);
+        assert_eq!(
+            get_worker_build_ptr(fp_a),
+            None,
+            "a pruned fingerprint must read as worker-unavailable",
+        );
+        assert_eq!(get_worker_build_ptr(fp_b), None);
+    }
+
+    #[test]
+    fn prune_keeps_a_fingerprint_a_newer_session_re_registered() {
+        let _guard = REGISTRY_TEST_LOCK.lock().unwrap();
+        let fp = 0xA11C_E003;
+        let old_addr = 0x3000 as *const ();
+        let new_addr = 0x4000 as *const ();
+
+        let ((), old_session) = with_session(|| host_register_worker_build(fp, old_addr));
+        // Reload: the new worker re-registers the same fingerprint before the
+        // old plugin's entries are pruned (out-of-order drop).
+        let ((), _new_session) = with_session(|| host_register_worker_build(fp, new_addr));
+
+        prune(old_session);
+        assert_eq!(
+            get_worker_build_ptr(fp),
+            Some(new_addr),
+            "the newer registration must survive the older session's prune",
+        );
+
+        // Cleanup so other tests see an empty registry.
+        worker_builds().lock().unwrap().remove(&fp);
+    }
+
+    #[test]
+    fn null_registration_is_rejected_and_not_recorded() {
+        let _guard = REGISTRY_TEST_LOCK.lock().unwrap();
+        let fp = 0xA11C_E004;
+        let ((), session) = with_session(|| host_register_worker_build(fp, std::ptr::null()));
+        assert!(
+            session.is_empty(),
+            "null pointer must not enter the session"
+        );
+        assert_eq!(get_worker_build_ptr(fp), None);
     }
 }

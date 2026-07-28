@@ -30,6 +30,20 @@ type SceneVersionFn = extern "C" fn() -> u32;
 /// Function pointer: `flui_scene_drop(ptr)`
 type SceneDropFn = unsafe extern "C" fn(*mut std::ffi::c_void);
 
+/// Function pointer: `flui_scene_free(ptr)` — deallocate without dropping.
+type SceneFreeFn = unsafe extern "C" fn(*mut std::ffi::c_void);
+
+/// Function pointer: `flui_scene_abi_token() -> u64`
+type AbiTokenFn = extern "C" fn() -> u64;
+
+/// One resolved symbol family (`flui_app_*` or `flui_scene_*`), token-checked.
+struct ResolvedSceneFamily {
+    build_fn: BuildSceneFn,
+    free_fn: SceneFreeFn,
+    drop_fn: Option<SceneDropFn>,
+    version: u32,
+}
+
 /// Which symbol convention the loaded plugin uses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PluginKind {
@@ -65,6 +79,15 @@ pub enum PluginKind {
 pub struct ScenePlugin {
     lib: DynLib,
     build_fn: BuildSceneFn,
+    /// The deallocate-only entry (`flui_*_free`): releases the box a build
+    /// call returned after the host has moved the `Scene` value out, so the
+    /// memory is freed by the image that allocated it. Mandatory — `load`
+    /// refuses a plugin without it.
+    free_fn: SceneFreeFn,
+    /// The drop-and-deallocate entry (`flui_*_drop`), for a scene the host
+    /// decides not to consume. Currently every host path consumes, so this is
+    /// resolved-but-idle; kept because it is the correct disposal for an
+    /// unconsumed pointer.
     #[allow(dead_code)]
     drop_fn: Option<SceneDropFn>,
     kind: PluginKind,
@@ -91,44 +114,39 @@ impl ScenePlugin {
         #[allow(unsafe_code)]
         unsafe {
             // Try app_plugin! symbols first (flui_app_build)
-            if let Some(result) =
-                Self::try_resolve(&lib, "flui_app_build", "flui_app_version", "flui_app_drop")
-            {
+            if let Some(resolved) = Self::try_resolve(&lib, "flui_app") {
                 let mtime = dynlib::file_mtime(lib_path);
                 tracing::info!(
                     "App plugin loaded (version {}) from {}",
-                    result.2,
+                    resolved.version,
                     lib_path.display()
                 );
                 return Some(ScenePlugin {
                     lib,
-                    build_fn: result.0,
-                    drop_fn: result.1,
+                    build_fn: resolved.build_fn,
+                    free_fn: resolved.free_fn,
+                    drop_fn: resolved.drop_fn,
                     kind: PluginKind::App,
-                    version: result.2,
+                    version: resolved.version,
                     mtime,
                 });
             }
 
             // Fall back to scene_plugin! symbols (flui_scene_build)
-            if let Some(result) = Self::try_resolve(
-                &lib,
-                "flui_scene_build",
-                "flui_scene_version",
-                "flui_scene_drop",
-            ) {
+            if let Some(resolved) = Self::try_resolve(&lib, "flui_scene") {
                 let mtime = dynlib::file_mtime(lib_path);
                 tracing::info!(
                     "Scene plugin loaded (version {}) from {}",
-                    result.2,
+                    resolved.version,
                     lib_path.display()
                 );
                 return Some(ScenePlugin {
                     lib,
-                    build_fn: result.0,
-                    drop_fn: result.1,
+                    build_fn: resolved.build_fn,
+                    free_fn: resolved.free_fn,
+                    drop_fn: resolved.drop_fn,
                     kind: PluginKind::Scene,
-                    version: result.2,
+                    version: resolved.version,
                     mtime,
                 });
             }
@@ -138,102 +156,128 @@ impl ScenePlugin {
         }
     }
 
-    /// Try to resolve a set of build/version/drop symbols from the library.
+    /// Try to resolve one symbol family (`flui_app` / `flui_scene`) from the
+    /// library, enforcing the ABI handshake.
     ///
-    /// Returns `(build_fn, drop_fn, version)` if the build symbol is found.
+    /// Refuses (returns `None`, with a log) when the family's `_free` or
+    /// `_abi_token` symbol is missing — a library that predates them cannot
+    /// discharge the ownership contract — or when the plugin's token differs
+    /// from the host's (different compiler, source revision, or crate
+    /// version: `repr(Rust)` layout agreement is then unestablished).
     ///
     /// # Safety
     ///
     /// Caller must ensure `lib` is a valid loaded library.
     #[allow(unsafe_code)]
-    unsafe fn try_resolve(
-        lib: &DynLib,
-        build_sym: &str,
-        version_sym: &str,
-        drop_sym: &str,
-    ) -> Option<(BuildSceneFn, Option<SceneDropFn>, u32)> {
+    unsafe fn try_resolve(lib: &DynLib, family: &str) -> Option<ResolvedSceneFamily> {
         // SAFETY: edition 2024 makes unsafe-fn bodies safe by default, so the
         // calls still need their own block. The caller guarantees `lib` is a
         // live library, and each symbol/type pair is the ABI this crate
         // declares for that name.
         //
-        // On null: only `build_ptr` is checked at its use site. `drop_fn` and
-        // `version` transmute straight out of `lib.symbol(..)` — sound because
+        // On null: only `build_ptr` is checked at its use site. The other
+        // transmutes come straight out of `lib.symbol(..)` — sound because
         // `get_symbol` maps a null `dlsym` result to `None`, so a `Some` is
-        // already non-null. The earlier wording claimed a site-level check
-        // that is not there.
+        // already non-null.
         unsafe {
-            let build_ptr = lib.symbol(build_sym)?;
+            let build_ptr = lib.symbol(&format!("{family}_build"))?;
             if build_ptr.is_null() {
                 return None;
             }
             let build_fn: BuildSceneFn = std::mem::transmute(build_ptr);
 
-            let drop_fn: Option<SceneDropFn> =
-                lib.symbol(drop_sym).map(|ptr| std::mem::transmute(ptr));
+            // ABI handshake FIRST: nothing else about the library may be
+            // trusted (not even calling its version fn is interesting) until
+            // the layout premise is established.
+            let Some(token_ptr) = lib.symbol(&format!("{family}_abi_token")) else {
+                tracing::error!(
+                    family,
+                    path = %lib.path().display(),
+                    "plugin refused: no ABI-token symbol — rebuild it against \
+                     this tree (the ownership-safe plugin ABI requires it)"
+                );
+                return None;
+            };
+            let token_fn: AbiTokenFn = std::mem::transmute(token_ptr);
+            let plugin_token = token_fn();
+            let host_token = crate::abi_token();
+            if plugin_token != host_token {
+                tracing::error!(
+                    family,
+                    plugin_token,
+                    host_token,
+                    path = %lib.path().display(),
+                    "plugin refused: ABI token mismatch — host and plugin \
+                     were built by different compilers or source revisions; \
+                     rebuild both from one worktree with one toolchain"
+                );
+                return None;
+            }
 
-            let version = lib.symbol(version_sym).map_or(0, |ptr| {
+            let Some(free_ptr) = lib.symbol(&format!("{family}_free")) else {
+                tracing::error!(
+                    family,
+                    path = %lib.path().display(),
+                    "plugin refused: no deallocate-only symbol — rebuild it \
+                     against this tree"
+                );
+                return None;
+            };
+            let free_fn: SceneFreeFn = std::mem::transmute(free_ptr);
+
+            let drop_fn: Option<SceneDropFn> = lib
+                .symbol(&format!("{family}_drop"))
+                .map(|ptr| std::mem::transmute::<*mut std::ffi::c_void, SceneDropFn>(ptr));
+
+            let version = lib.symbol(&format!("{family}_version")).map_or(0, |ptr| {
                 let version_fn: SceneVersionFn = std::mem::transmute(ptr);
                 version_fn()
             });
 
-            Some((build_fn, drop_fn, version))
+            Some(ResolvedSceneFamily {
+                build_fn,
+                free_fn,
+                drop_fn,
+                version,
+            })
         }
     }
 
     /// Build a scene by calling the plugin's `flui_scene_build` function.
     ///
-    /// The plugin allocates a `Box<Scene>` and returns it as a raw pointer.
-    /// This method takes ownership back via `Box::from_raw`.
+    /// The plugin allocates a `Box<Scene>` and returns it raw; this method
+    /// moves the `Scene` value out with `ptr::read` and hands the emptied box
+    /// back to the plugin's `flui_*_free`, so allocation and deallocation
+    /// both happen inside the plugin image. Layout agreement between the two
+    /// `repr(Rust)` compilations is established at `load` by the ABI-token
+    /// handshake (same compiler, same crate revision — see [`crate::abi_token`]).
     ///
     /// # Safety
     ///
-    /// This cannot be a safe function. It reclaims, with the HOST's drop glue
-    /// and allocator, a `Box<Scene>` that the PLUGIN allocated — and `Scene` is
-    /// `repr(Rust)`, so nothing guarantees the two compilations agree on its
-    /// layout. The caller must establish, out of band, that:
-    ///
-    /// * host and plugin were built by the same compiler from the same source
-    ///   revision with the same features (nothing here checks it — the plugin's
-    ///   `flui_*_version` symbol is resolved and never compared);
-    /// * neither side installs a `#[global_allocator]`, so both `__rust_alloc`
-    ///   implementations bottom out in the same `malloc`;
-    /// * the returned `Scene` is dropped BEFORE the library is unloaded — it
-    ///   holds `Box<dyn FnOnce>` and `Arc<dyn Any>` whose vtables live in the
-    ///   plugin image, so dropping it after `dlclose` is a use-after-free of
-    ///   code. No lifetime ties the two.
-    ///
-    /// The plugin exports `flui_scene_drop`, which is the deallocator that
-    /// *would* discharge the first two obligations; this path bypasses it.
-    /// Treat hot-reload as a development-only path until that is redesigned.
+    /// One obligation remains with the caller, and it is why this stays an
+    /// `unsafe fn`: the returned `Scene` holds `Box<dyn FnOnce>` and
+    /// `Arc<dyn Any>` whose vtables live in the plugin image, so the caller
+    /// must drop it BEFORE the library is unloaded. No lifetime ties the
+    /// scene to the [`DynLib`]; dropping it after `dlclose` is a
+    /// use-after-free of code. Development-only tooling either way.
     #[allow(unsafe_code)]
     pub unsafe fn build_scene(&self, width: f32, height: f32) -> Scene {
-        // SAFETY, to the extent it can be claimed: `build_fn` was resolved from
-        // the `DynLib` this struct owns and which outlives the call, and
-        // `scene_plugin!` really does return `Box::into_raw(Box::new(scene))`,
-        // so exactly one `Box::from_raw` is correct arity. Null is rejected
-        // first.
-        //
-        // This is NOT sufficient, and saying otherwise would be dishonest. The
-        // load-bearing premises are unestablished:
-        //   * `Scene` is `repr(Rust)`. Nothing guarantees the host and the
-        //     plugin — separate compilations, each with its own copy of
-        //     flui-layer, loaded `RTLD_LOCAL` — agree on its layout.
-        //   * the `Box` is allocated by the plugin and freed here, by the
-        //     host's drop glue and `__rust_dealloc`. That works only because
-        //     neither side installs a `#[global_allocator]` and both bottom
-        //     out in the one shared libc `malloc`.
-        //   * `Scene` holds `Box<dyn FnOnce>` and `Arc<dyn Any>` whose vtables
-        //     live in the plugin image, so dropping it after `unload` is a
-        //     use-after-free of code. No lifetime ties the two.
-        // The plugin exports `flui_scene_drop` — the deallocator that would be
-        // correct — and this path bypasses it. Redesign tracked; treat
-        // hot-reload as a development-only path until then.
+        // SAFETY: `build_fn`/`free_fn` were resolved from the `DynLib` this
+        // struct owns, which outlives the call. The plugin macro returns
+        // `Box::into_raw(Box::new(scene))`, so `ptr` addresses one live,
+        // initialized `Scene`; the load-time token handshake establishes that
+        // both compilations agree on `Scene`'s layout, making the `ptr::read`
+        // a valid move. After the read the box's contents are logically moved
+        // out, and `free_fn` deallocates without dropping (it reads the slot
+        // as `MaybeUninit<Scene>`), in the image that allocated it — no
+        // cross-image allocator or drop-glue mismatch remains.
         #[allow(unsafe_code)]
         unsafe {
             let ptr = (self.build_fn)(width, height);
             assert!(!ptr.is_null(), "flui_scene_build returned null");
-            *Box::from_raw(ptr.cast::<Scene>())
+            let scene = std::ptr::read(ptr.cast::<Scene>());
+            (self.free_fn)(ptr);
+            scene
         }
     }
 
