@@ -176,12 +176,15 @@ test-assets:
 deny:
     cargo deny check
 
-# SCOPE: this runs five `subtree_arena` unit tests, none of which enters
-# `layout_subtree_borrowed_impl` or dereferences a real `NodePtr` (the arena
-# tests use `NonNull::dangling()` deliberately). It is NOT coverage of the
-# layout-walk reborrows — treat "miri green" accordingly.
+# SCOPE: the `subtree_arena` unit tests include two real-NodePtr walks that
+# drive `layout_dirty_root` through every reborrow phase of
+# `layout_subtree_borrowed_impl` — one straight parent→leaf pass, one cyclic
+# `children()` edge that exercises the in-flight gate on the baseline
+# callback (removing that gate makes miri fail this suite). Still narrow:
+# only this module, only box layout — sliver walks and intrinsics queries
+# are not interpreted here.
 [group("test")]
-[doc("Run miri on flui-rendering's subtree-arena unit tests (NOT the layout walk; requires nightly + miri)")]
+[doc("Run miri on flui-rendering's subtree-arena tests, incl. real layout walks (requires nightly + miri)")]
 miri:
     cargo +nightly miri test -p flui-rendering --lib pipeline::owner::subtree_arena
 
