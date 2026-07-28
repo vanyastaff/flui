@@ -23,7 +23,12 @@
 //!   `about_to_wait` after at least one `DroppedFile`. A straggler
 //!   `DroppedFile` after that freeze mints a **new** defensive session, so a
 //!   pathological split burst surfaces as two complete drops, never one
-//!   truncated one.
+//!   truncated one.;
+//! - a LOST `HoveredFileCancelled` (known flaky on some X11 setups) leaves
+//!   the unfrozen session live, so the next drag's `HoveredFile` paths
+//!   accumulate into it — two distinct drags can merge into one offer with
+//!   no second `Entered`. Bounded per window; the session resolves at the
+//!   next freeze or teardown either way.
 //!
 //! Native backends (Win32 `IDropTarget`, AppKit `NSDraggingDestination`,
 //! Wayland `wl_data_device`) remove every one of these ceilings — the trait
@@ -342,11 +347,27 @@ impl DataTransferSource for WinitDataTransfer {
     }
 
     fn conclude_drop(&self, id: DataTransferId) {
-        // Documented no-op: winit holds no protocol resources to release,
-        // and offer retirement stays with this source's own lifecycle (next
-        // session mint, hover cancel, window teardown) until the realm-side
-        // conclusion authority lands (ADR-0038 §7).
-        tracing::trace!(%id, "winit holds no drop resources; conclude_drop ignored");
+        // winit holds no PROTOCOL resources to release — but table
+        // retirement is purely local, and the trait contract promises the
+        // offer goes stale after conclusion. Honor it here so the slice-3
+        // realm authority does not inherit a source that silently keeps
+        // concluded offers redeemable until the next mint.
+        let stale_pending = {
+            let mut state = self.state.lock();
+            state.table.retire(id);
+            // Drop any session still tracking this offer (a frozen session
+            // whose drop the consumer has now concluded).
+            let window = state
+                .sessions
+                .iter()
+                .find(|(_, session)| session.id == id)
+                .map(|(window, _)| *window);
+            window.and_then(|window| state.sessions.remove(&window))
+        };
+        // Parked completers (if any survived the freeze) resolve from their
+        // Drop — outside the lock, so a waker cannot re-enter this source.
+        drop(stale_pending);
+        tracing::trace!(%id, "drop concluded; offer retired");
     }
 }
 
