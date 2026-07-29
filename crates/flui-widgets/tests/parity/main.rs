@@ -175,3 +175,6 @@ mod sliver_opacity_test;
 
 // ── Physical-layer widgets — PhysicalModel / PhysicalShape parity ──────────
 mod physical_model_test;
+
+// ── Business.1 fidelity — Row parity (row_test.dart) ────────────────────────
+mod row_test;

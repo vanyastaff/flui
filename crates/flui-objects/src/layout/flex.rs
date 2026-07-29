@@ -196,7 +196,16 @@ impl RenderFlex {
     }
 
     /// Sets the spacing between children.
+    ///
+    /// Debug-asserts `spacing >= 0.0` — Flutter's `RenderFlex` asserts the
+    /// same (`rendering/flex.dart`, tag `3.44.0`); a NaN also fails the
+    /// comparison. Negative spacing would subtract main-axis extent and
+    /// overlap children.
     pub fn with_spacing(mut self, spacing: f32) -> Self {
+        debug_assert!(
+            spacing >= 0.0,
+            "flex spacing must be non-negative and not NaN, got {spacing}"
+        );
         self.spacing = spacing;
         self
     }
