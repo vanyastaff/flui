@@ -172,3 +172,6 @@ mod sliver_list_correction_test;
 //    override contract + the SliverOpacity 'painting & semantics' subject) ─
 mod error_widget_test;
 mod sliver_opacity_test;
+
+// ── Physical-layer widgets — PhysicalModel / PhysicalShape parity ──────────
+mod physical_model_test;
