@@ -99,6 +99,7 @@ pub mod navigator;
 // resolve its intra-doc links in the crate root.)
 mod overlay;
 pub mod paint;
+pub mod physical_model;
 pub mod scroll;
 pub mod semantics;
 pub mod stack;
@@ -198,6 +199,7 @@ pub use navigator::{
 // the crate — `Navigator` and `Draggable`'s feedback layer are its callers.
 pub use overlay::{Overlay, OverlayEntry, OverlayEntryId, OverlayHandle};
 pub use paint::{ColoredBox, CustomPaint, DecoratedBox, Opacity, RepaintBoundary};
+pub use physical_model::{PhysicalModel, PhysicalShape};
 pub use scroll::{
     BouncingScrollPhysics, ClampingScrollPhysics, CustomScrollView, GridView, ListView,
     PageController, PageScrollPhysics, PageView, PageViewState, RefreshController,
@@ -304,9 +306,9 @@ pub mod prelude {
         MediaQueryData, MergeSemantics, MouseRegion, Navigator, NavigatorHandle, NextFocusAction,
         NextFocusIntent, Offstage, Opacity, OverflowBox, OverflowBoxFit, Overlay, OverlayEntry,
         OverlayEntryId, OverlayHandle, Padding, PageController, PageRoute, PageScrollPhysics,
-        PageView, PopScope, PopupRoute, Positioned, PreferredSize, PreferredSizeView,
-        PreviousFocusAction, PreviousFocusIntent, RepaintBoundary, RichText, RotatedBox, Row,
-        SafeArea, ScrollController, Scrollable, Scrollbar, Semantics, Shortcuts,
+        PageView, PhysicalModel, PhysicalShape, PopScope, PopupRoute, Positioned, PreferredSize,
+        PreferredSizeView, PreviousFocusAction, PreviousFocusIntent, RepaintBoundary, RichText,
+        RotatedBox, Row, SafeArea, ScrollController, Scrollable, Scrollbar, Semantics, Shortcuts,
         ShrinkWrappingViewport, SimpleRoute, SingleActivator, SingleChildScrollView, SizedBox,
         SizedOverflowBox, SliverChildBuilderDelegate, SliverFillRemaining,
         SliverFillRemainingAndOverscroll, SliverFillRemainingWithScrollable, SliverFillViewport,

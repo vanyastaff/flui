@@ -921,13 +921,13 @@ mod tests {
     // test: `set_path_clip_target` now compares the full
     // `Option<PathClipTarget>`, not just its `is_some()` presence.
     //
-    // FLUI has no `RenderPhysicalShape`-consuming widget wired up yet (no
-    // `PhysicalShape` view exists in `flui-widgets`), so this cannot be
-    // ported at the oracle's own fidelity (`debugNeedsPaint` after a real
-    // `layout()`/`pumpFrame()`) — there is no `mark_needs_paint()` consumer
-    // of this setter's return value to observe yet. This tests the setter's
-    // own change-detection contract instead, the precondition any future
-    // widget-diff layer will rely on.
+    // The `PhysicalShape` view (`flui-widgets`) ignores this setter's
+    // returned change flag — its repaint comes from the element layer's
+    // unconditional needs-layout/paint mark after `update_render_object` —
+    // so the oracle's own observable (`debugNeedsPaint` flipped by the
+    // setter) still has no consumer to port against. This tests the
+    // setter's own change-detection contract instead, the precondition a
+    // flag-consuming diff layer would rely on.
     #[test]
     fn set_path_clip_target_detects_target_swap_not_just_presence() {
         let lane = InteractionLane::try_new().expect("lane");

@@ -28,8 +28,8 @@ use flui_interaction::events::{
 };
 use flui_objects::{
     RenderAnimatedOpacity, RenderClipOval, RenderClipPath, RenderClipRRect, RenderClipRect,
-    RenderFittedBox, RenderImage, RenderOpacity, RenderParagraph, RenderSliverOpacity,
-    RenderTransform,
+    RenderFittedBox, RenderImage, RenderOpacity, RenderParagraph, RenderPhysicalModel,
+    RenderPhysicalShape, RenderSliverOpacity, RenderTransform,
 };
 use flui_rendering::constraints::{BoxConstraints, SliverGeometry};
 use flui_rendering::pipeline::PipelineOwner;
@@ -537,10 +537,11 @@ impl LaidOut {
     }
 
     /// The [`Clip`] behavior of a clip-family render node (`RenderClipRect`,
-    /// `RenderClipRRect`, `RenderClipOval`, `RenderClipPath`) or a
+    /// `RenderClipRRect`, `RenderClipOval`, `RenderClipPath`), a
     /// [`RenderFittedBox`] (which stores `clip_behavior` today even though
-    /// active clip-painting is still pending — see its module doc). Panics
-    /// if `id` is none of the five.
+    /// active clip-painting is still pending — see its module doc), or a
+    /// physical-model render node (`RenderPhysicalModel`,
+    /// `RenderPhysicalShape`). Panics if `id` is none of the seven.
     pub fn clip_behavior(&self, id: RenderId) -> Clip {
         let mut owner = self.pipeline_owner.write();
         let node = owner
@@ -562,8 +563,15 @@ impl LaidOut {
         if let Some(render) = node.downcast_render_object_mut::<RenderFittedBox>() {
             return render.clip_behavior();
         }
+        if let Some(render) = node.downcast_render_object_mut::<RenderPhysicalModel>() {
+            return render.clip_behavior();
+        }
+        if let Some(render) = node.downcast_render_object_mut::<RenderPhysicalShape>() {
+            return render.clip_behavior();
+        }
         panic!(
-            "render node should be a clip-family render object (Rect/RRect/Oval/Path) or a RenderFittedBox"
+            "render node should be a clip-family render object (Rect/RRect/Oval/Path), a \
+             RenderFittedBox, or a physical-model render object (Model/Shape)"
         );
     }
 
