@@ -56,12 +56,16 @@
 //! sole assertion each makes) + 1 out of scope (named, both blockers cited)
 //! — no narrowing.**
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+
 use flui_types::Color;
 use flui_types::Point;
 use flui_types::Rect;
 use flui_types::Size;
+use flui_types::geometry::px;
 use flui_types::painting::{Clip, Path};
-use flui_widgets::{PhysicalModel, PhysicalShape};
+use flui_widgets::{GestureDetector, HitTestBehavior, PhysicalModel, PhysicalShape, SizedBox};
 
 use crate::harness::{pump_widget, screen};
 
@@ -120,4 +124,93 @@ fn physical_shape_update_render_object_transitions_clip_behavior_to_anti_alias()
         PhysicalShape::new(whole_box_clipper, Color::BLACK).clip_behavior(Clip::AntiAlias),
     );
     assert_eq!(laid.clip_behavior(id), Clip::AntiAlias);
+}
+
+/// FLUI-added (no oracle counterpart in `physical_model_test.dart`): the
+/// proxy layout half the two `updateRenderObject` cases never touch — a
+/// `PhysicalModel` with a child must mount the child and adopt its size
+/// (a wrapper that silently dropped or mis-parented its child would pass
+/// the childless configuration tests above).
+#[test]
+fn physical_model_lays_out_its_child_as_a_proxy() {
+    let laid = pump_widget(
+        PhysicalModel::new(Color::BLACK).child(SizedBox::new(42.0, 42.0)),
+        crate::common::loose(800.0),
+    );
+    let id = laid.find_by_render_type("RenderPhysicalModel");
+    assert_eq!(
+        laid.size(id),
+        Size::new(px(42.0), px(42.0)),
+        "PhysicalModel must adopt its child's size (proxy layout)"
+    );
+}
+
+/// FLUI-added: the `PhysicalShape` sibling of
+/// [`physical_model_lays_out_its_child_as_a_proxy`].
+#[test]
+fn physical_shape_lays_out_its_child_as_a_proxy() {
+    let laid = pump_widget(
+        PhysicalShape::new(whole_box_clipper, Color::BLACK).child(SizedBox::new(42.0, 42.0)),
+        crate::common::loose(800.0),
+    );
+    let id = laid.find_by_render_type("RenderPhysicalShape");
+    assert_eq!(
+        laid.size(id),
+        Size::new(px(42.0), px(42.0)),
+        "PhysicalShape must adopt its child's size (proxy layout)"
+    );
+}
+
+/// FLUI-added: proves the custom clipper genuinely REACHES the render
+/// object through the live owner-lane registration — a registration or
+/// replacement failure leaves `RenderPhysicalShape` on its whole-box
+/// fallback, which this test distinguishes: hit-testing honors the shape
+/// (the render object always tests its path, matching Flutter's
+/// `RenderPhysicalModelBase.hitTest`), so a tap outside the custom
+/// sub-rect must MISS while a tap inside HITS — under the fallback both
+/// taps would fire. Same pattern as `clip_test.rs`'s `'ClipPath'`
+/// hit-test ports.
+#[test]
+fn physical_shape_custom_clipper_registers_live_and_clips_hit_tests() {
+    let did_tap = Arc::new(AtomicBool::new(false));
+    let clip_evaluations = Arc::new(AtomicU32::new(0));
+    let (tap_cb, eval_cb) = (Arc::clone(&did_tap), Arc::clone(&clip_evaluations));
+
+    let laid = pump_widget(
+        PhysicalShape::new(
+            move |_size: Size| {
+                eval_cb.fetch_add(1, Ordering::SeqCst);
+                let mut path = Path::new();
+                path.add_rect(Rect::from_ltwh(px(50.0), px(50.0), px(100.0), px(100.0)));
+                path
+            },
+            Color::BLACK,
+        )
+        .child(
+            GestureDetector::new()
+                .behavior(HitTestBehavior::Opaque)
+                .on_tap(move || tap_cb.store(true, Ordering::SeqCst)),
+        ),
+        screen(),
+    );
+
+    laid.dispatch_pointer_down(10.0, 10.0);
+    laid.dispatch_pointer_up(10.0, 10.0);
+    assert!(
+        !did_tap.load(Ordering::SeqCst),
+        "a tap outside the custom clip rect (50,50,100,100) must not reach \
+         the child — firing here means the whole-box fallback is in effect \
+         and the live clipper registration silently failed"
+    );
+    assert!(
+        clip_evaluations.load(Ordering::SeqCst) > 0,
+        "hit-testing must actually evaluate the registered custom clipper"
+    );
+
+    laid.dispatch_pointer_down(100.0, 100.0);
+    laid.dispatch_pointer_up(100.0, 100.0);
+    assert!(
+        did_tap.load(Ordering::SeqCst),
+        "a tap inside the custom clip rect must reach the child"
+    );
 }

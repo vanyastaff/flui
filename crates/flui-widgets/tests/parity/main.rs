@@ -173,5 +173,5 @@ mod sliver_list_correction_test;
 mod error_widget_test;
 mod sliver_opacity_test;
 
-// ── Business.1 fidelity front — PhysicalModel / PhysicalShape parity ───────
+// ── Physical-layer widgets — PhysicalModel / PhysicalShape parity ──────────
 mod physical_model_test;

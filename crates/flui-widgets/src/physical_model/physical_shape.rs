@@ -12,9 +12,10 @@ use flui_view::{Child, IntoView, RenderView, View, impl_render_view};
 
 /// The user-supplied clip-shape function: maps the laid-out box size to the
 /// [`Path`] to clip against — Flutter's `CustomClipper<Path>` (`clipper`).
-/// Owner-local under ADR-0027; render storage receives only a data-plane
-/// target token, the same convention [`ClipPath`](crate::ClipPath) uses for
-/// its own `Fn(Size) -> Path` clipper.
+/// The closure stays owner-local (UI-realm affine, never sent across
+/// threads); render storage receives only a data-plane target token — the
+/// same convention [`ClipPath`](crate::ClipPath) uses for its own
+/// `Fn(Size) -> Path` clipper.
 type PathClipper = Rc<dyn Fn(Size) -> Path>;
 
 /// A physical layer that clips its child to an arbitrary [`Path`] computed
