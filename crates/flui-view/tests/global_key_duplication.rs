@@ -44,6 +44,12 @@
 //! carrying the key), because the subject is the element tree's keyed
 //! reconciliation, not any widget's layout.
 
+// ADR-0027: the test/prod seam still hands `Arc<RwLock<ElementTree/BuildOwner>>`
+// around, and the owner graph is `!Send`. Do not restore `Send + Sync` to
+// satisfy clippy — the sibling `global_key.rs` carries the same waiver for the
+// same reason, and a future UiRealm/`Rc` migration removes both.
+#![allow(clippy::arc_with_non_send_sync)]
+
 use std::sync::Arc;
 
 use flui_foundation::ViewKey;
