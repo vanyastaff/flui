@@ -40,7 +40,7 @@
 //!
 //! ## No textDirection (9)
 //! 1. `'Row with one Flexible child - no textDirection'` — **out of
-//!    scope**, Cross.H (asserts the `FlutterError`).
+//!    scope**, Cross.H (asserts the debug `AssertionError`).
 //! 2. `'Row with default main axis parameters - no textDirection'` — **out
 //!    of scope**, Cross.H.
 //! 3. `'Row with MainAxisAlignment.center - no textDirection'` — **out of
@@ -57,7 +57,7 @@
 //!    Cross.H.
 //! 9. `'Row MainAxisSize.min layout at zero size - no textDirection'` —
 //!    **duplicate, not separately ported.** Unlike cases 1–8, this one does
-//!    NOT set `textDirection` and does NOT expect a `FlutterError` — with a
+//!    NOT set `textDirection` and does NOT expect an `AssertionError` — with a
 //!    single child under `MainAxisSize.min` the free main-axis space is
 //!    always zero, so `mainAxisAlignment` has nothing to resolve and
 //!    `RenderFlex._debugHasNecessaryDirections` never fires. Its assertion
