@@ -124,15 +124,14 @@ impl std::fmt::Debug for RenderSliverGrid {
 impl Diagnosticable for RenderSliverGrid {
     fn debug_fill_properties(&self, properties: &mut flui_foundation::DiagnosticsBuilder) {
         properties.add_int("child_count", self.child_count as i64, None);
-        match self.laid_out_band {
-            Some((first, last)) => {
-                properties.add_int("laid_out_band_first", first as i64, None);
-                properties.add_int("laid_out_band_last", last as i64, None);
-            }
-            None => {
-                properties.add_flag("laid_out_band", false, "no band laid out yet");
-            }
-        }
+        // `add_enum` (not `add_flag`) because `add_flag` only ever emits a
+        // property when its `bool` is `true` (`crates/flui-foundation/src/
+        // debug.rs`) — an `add_flag("laid_out_band", false, ...)` arm for the
+        // `None` case would silently emit nothing at all, leaving the dump
+        // unable to distinguish "no band yet" from "field doesn't exist".
+        // `add_enum` is unconditional and formats via `Debug`, so both
+        // `None` and `Some((first, last))` show up as-is.
+        properties.add_enum("laid_out_band", self.laid_out_band);
     }
 }
 
@@ -245,12 +244,12 @@ impl RenderSliver for RenderSliverGrid {
             }
         }
 
-        // Commit the window `hit_test` will read — deliberately the LAST
-        // thing this function does, after both loops above (which call into
-        // the caller-supplied `grid_delegate` and the pipeline's own child
-        // layout/position machinery) have run to completion. `None` when the
-        // window is empty (`first_in_band > last_in_band`, e.g. scrolled
-        // past all content).
+        // Commit the window `hit_test`/`paint` will read — deliberately the
+        // LAST thing this function does, after both loops above (which call
+        // into the caller-supplied `grid_delegate` and the pipeline's own
+        // child layout/position machinery) have run to completion. `None`
+        // when the window is empty (`first_in_band > last_in_band`, e.g.
+        // scrolled past all content).
         //
         // Load-bearing ordering, not a style choice: this crate's pipeline
         // wraps each render object's `perform_layout` call in `catch_unwind`
@@ -269,14 +268,49 @@ impl RenderSliver for RenderSliverGrid {
         // pointing at a window whose offsets were only partially (or never)
         // refreshed this pass, reopening the exact stale-rect class this
         // field exists to close.
-        self.laid_out_band =
-            (first_in_band <= last_in_band).then_some((first_in_band, last_in_band));
+        //
+        // The `geometry.validation_error().is_none()` guard covers a THIRD
+        // way this pass can fail to land, distinct from a panic: even a
+        // normal, panic-free `return` from this function is not the pipeline's
+        // last word on it. The caller validates the returned `SliverGeometry`
+        // AFTER this function returns
+        // (`SliverProtocol::validate_layout_output`,
+        // `crates/flui-rendering/src/pipeline/owner/subtree_arena.rs`), and
+        // only commits this pass's child offsets to `RenderState` (a SEPARATE
+        // step, after that validation) when it passes. A rejected geometry
+        // (NaN/non-finite/negative extents — reachable from a delegate whose
+        // `SliverGridLayout` produces one, e.g. a NaN `main_axis_stride`)
+        // means the position loop's `ctx.position_child` calls above never
+        // actually land — so this field must not commit either, or it would
+        // describe a band whose offsets the pipeline silently declined to
+        // write. Predicting the caller's own check here keeps both commits
+        // gated on the identical condition.
+        if geometry.validation_error().is_none() {
+            self.laid_out_band =
+                (first_in_band <= last_in_band).then_some((first_in_band, last_in_band));
+        }
 
         geometry
     }
 
     fn paint(&self, ctx: &mut PaintCx<'_, Variable>) {
-        ctx.paint_children();
+        // Gated on `laid_out_band`, not `ctx.paint_children()`'s
+        // `0..child_count`: the paint driver's box-child dispatch
+        // (`crates/flui-rendering/src/pipeline/owner/paint.rs`) has the
+        // identical shape to the pre-fix `hit_test` walk — it reads
+        // `child_node.offset()` unconditionally for box-typed children (the
+        // `geometry.visible` cull a few lines above it only applies to
+        // sliver-typed children). Painting every arena-resident child would
+        // draw an out-of-band tile at its stale, no-longer-current rect —
+        // the same defect this type's `hit_test` gate closes, just for
+        // pixels instead of taps. Order stays forward (paint back-to-front;
+        // `hit_test` walks the same window in reverse, front-to-back).
+        let Some((first_in_band, last_in_band)) = self.laid_out_band else {
+            return;
+        };
+        for index in first_in_band..=last_in_band {
+            ctx.paint_child(index);
+        }
     }
 
     fn hit_test(&self, ctx: &mut SliverHitTestContext<'_, Variable, Self::ParentData>) -> bool {
