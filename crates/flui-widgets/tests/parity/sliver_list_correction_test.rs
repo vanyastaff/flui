@@ -63,13 +63,17 @@
 //! dy))`. Flutter's own `WidgetController.dragFrom`
 //! (`flutter_test/lib/src/controller.dart`, tag `3.44.0`) splits a
 //! pure-vertical drag into a `kDragSlopDefault` (`20.0`) px slop-crossing
-//! move (eaten — Flutter's real `VerticalDragGestureRecognizer` only starts
-//! once cumulative movement exceeds `kTouchSlop`, `18.0` px, and reports the
-//! POST-move position as the drag's start) followed by the remaining
-//! distance — a well-known Flutter testing quirk where the realized scroll
-//! delta is `dy.abs() - 20.0`, not `dy.abs()`.
+//! move followed by the remainder — but whether any of that distance is
+//! ultimately eaten by the recognizer is version-dependent internals, and
+//! for THIS oracle it is pinned by the oracle's own expectations: after the
+//! first `-750` drag, `item28` (top `1344 - pixels`) is asserted onstage,
+//! which requires `pixels > 744` — a slop-eaten `730` would fail the
+//! oracle in Flutter itself — and the first post-swap window `[12, 19]`
+//! requires `pixels > 1224`, which only a full-`750` base satisfies. The
+//! effective realized delta in the oracle is therefore the FULL `dy`, and
+//! porting the raw `dy` is the faithful choice, not an approximation.
 //!
-//! This does **not** carry over to FLUI's `Scrollable` unmodified, and this
+//! FLUI's `Scrollable` realizes exactly that, and this
 //! was verified empirically, not assumed: `Scrollable`'s `GestureDetector`
 //! (`crates/flui-widgets/src/scroll/scrollable.rs`) is the ONLY gesture
 //! recognizer registered for its pointer in every scene in this file, so
@@ -305,7 +309,8 @@ fn settle_dense(laid: &mut LaidOut) {
 /// Scrollable>, Offset(0.0, dy))` — the raw `dy`, unmodified. See this
 /// module's "Drag-slop arithmetic" doc for why FLUI's sole-recognizer
 /// `Scrollable` realizes the FULL `dy` as scroll delta (confirmed
-/// empirically), unlike Flutter's own drag-slop-adjusted `dy.abs() - 20.0`.
+/// empirically) — matching the effective delta the oracle's own expected
+/// windows pin for Flutter's `tester.drag` here.
 /// The intermediate waypoint at `dy / 2.0` is not load-bearing (every move
 /// fires a real `on_pan_update` here, so the total is the sum regardless of
 /// how many moves it's split across) — kept only so a velocity sample
