@@ -134,6 +134,16 @@ macro_rules! forward_single_child_box_queries {
         ) -> Option<f32> {
             $crate::context::proxy_queries::forward_dry_baseline(constraints, baseline, ctx)
         }
+
+        // The live counterpart of the dry-baseline forward above. It is a flag
+        // rather than a forwarding body because
+        // `compute_distance_to_actual_baseline` takes no context: the driver
+        // walks to the child on this object's behalf. Both forwards live in
+        // this one macro so a proxy cannot answer the dry and live queries
+        // differently.
+        fn forwards_baseline_to_only_child(&self) -> bool {
+            true
+        }
     };
 }
 

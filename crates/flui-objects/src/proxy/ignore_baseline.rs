@@ -39,17 +39,13 @@ use flui_rendering::{
 ///
 /// Flutter parity: `RenderIgnoreBaseline` (`proxy_box.dart`, tag `3.44.0`).
 #[derive(Debug, Clone, Default)]
-pub struct RenderIgnoreBaseline {
-    /// Whether a child was attached at the last layout — gates hit-testing so
-    /// a childless proxy does not absorb hits.
-    has_child: bool,
-}
+pub struct RenderIgnoreBaseline;
 
 impl RenderIgnoreBaseline {
     /// Creates a baseline-hiding proxy.
     #[must_use]
     pub fn new() -> Self {
-        Self::default()
+        Self
     }
 }
 
@@ -62,10 +58,8 @@ impl RenderBox for RenderIgnoreBaseline {
     fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) -> Size {
         let constraints = *ctx.constraints();
         if ctx.child_count() > 0 {
-            self.has_child = true;
             ctx.layout_child(0, constraints)
         } else {
-            self.has_child = false;
             constraints.smallest()
         }
     }
@@ -78,7 +72,7 @@ impl RenderBox for RenderIgnoreBaseline {
         if !ctx.is_within_own_size() {
             return false;
         }
-        self.has_child && ctx.hit_test_child_at_offset(0, Offset::ZERO)
+        ctx.hit_test_child_at_offset(0, Offset::ZERO)
     }
 
     /// Always `None` — this is the whole point of the type. The child's own

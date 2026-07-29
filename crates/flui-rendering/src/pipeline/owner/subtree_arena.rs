@@ -1090,18 +1090,37 @@ unsafe fn layout_subtree_borrowed_impl(
             // for the whole enclosing block — so a shared reborrow here would be
             // a foreign read against a live Unique tag. Same gate the four other
             // child-slot derefs in this file use; this one was missing it.
-            if arena_for_cb.is_in_flight(child_id) {
-                return None;
+            // A pure proxy has no baseline of its own and cannot reach its
+            // child from `actual_baseline_raw` (that query takes no context),
+            // so it flags the forward and the walk continues here — mirroring
+            // Flutter's `RenderProxyBoxMixin.computeDistanceToActualBaseline`.
+            // Bounded so a malformed proxy chain cannot spin: past the bound
+            // the query answers `None`, the same as an absent baseline.
+            const MAX_PROXY_HOPS: usize = 64;
+            let mut node_id = child_id;
+            for _ in 0..MAX_PROXY_HOPS {
+                if arena_for_cb.is_in_flight(node_id) {
+                    return None;
+                }
+                let next = arena_for_cb.get(node_id).and_then(|node_ptr| {
+                    // SAFETY: `node_id` is NOT in-flight (guard above), so no
+                    // `&mut` to its slot is live; this shared reborrow is
+                    // scoped to the closure body.
+                    let node: &RenderNode = unsafe { &*node_ptr.0 };
+                    let entry = node.as_box()?;
+                    if entry.render_object().forwards_baseline_to_only_child() {
+                        // Walk on; a proxy with no child has no baseline.
+                        return node.children().first().copied().map(Err);
+                    }
+                    Some(Ok(entry.render_object().actual_baseline_raw(baseline)))
+                });
+                match next {
+                    Some(Ok(found)) => return found,
+                    Some(Err(grandchild)) => node_id = grandchild,
+                    None => return None,
+                }
             }
-            arena_for_cb.get(child_id).and_then(|child_ptr| {
-                // SAFETY: child `child_id` is NOT in-flight (guard above), so no
-                // `&mut` to its slot is live; this shared reborrow is scoped to
-                // the closure body.
-                let child_node: &RenderNode = unsafe { &*child_ptr.0 };
-                child_node
-                    .as_box()
-                    .and_then(|entry| entry.render_object().actual_baseline_raw(baseline))
-            })
+            None
         };
         let baseline_cb_ref: ActualBaselineChildCallback<'_> = &baseline_cb_owned;
 
@@ -2271,6 +2290,94 @@ mod tests {
             Some(Some(7.5)),
             "baseline query after layout_child must reach the laid-out leaf",
         );
+    }
+
+    /// Pure single-child proxy: no baseline of its own, forwards to its only
+    /// child through the driver flag rather than through a query it cannot
+    /// issue.
+    #[derive(Debug)]
+    struct BaselineForwardingProxy;
+
+    impl Diagnosticable for BaselineForwardingProxy {}
+
+    impl RenderBox for BaselineForwardingProxy {
+        type Arity = Single;
+        type ParentData = BoxParentData;
+
+        fn perform_layout(
+            &mut self,
+            ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>,
+        ) -> Size {
+            let constraints = *ctx.constraints();
+            ctx.layout_child(0, constraints)
+        }
+
+        fn forwards_baseline_to_only_child(&self) -> bool {
+            true
+        }
+    }
+
+    /// The baseline walk hops through nested proxies to the first node that
+    /// answers for itself, re-checking the in-flight guard at every hop.
+    ///
+    /// Miri covers this: each hop dereferences a real `NodePtr`, so a hop that
+    /// reborrowed a slot with a live `&mut` would be a foreign read against a
+    /// Unique tag.
+    #[test]
+    fn baseline_query_hops_through_nested_proxies_to_the_first_real_baseline() {
+        let probe: BaselineProbe = Arc::new(Mutex::new(None));
+        let mut pipeline = PipelineOwner::new().into_layout();
+        let parent = pipeline
+            .render_tree_mut()
+            .insert_box(Box::new(BaselineReader {
+                probe: Arc::clone(&probe),
+            }));
+        let outer_proxy = pipeline
+            .render_tree_mut()
+            .insert_box_child(parent, Box::new(BaselineForwardingProxy))
+            .expect("outer proxy insert");
+        let inner_proxy = pipeline
+            .render_tree_mut()
+            .insert_box_child(outer_proxy, Box::new(BaselineForwardingProxy))
+            .expect("inner proxy insert");
+        pipeline
+            .render_tree_mut()
+            .insert_box_child(inner_proxy, Box::new(BaselineLeaf))
+            .expect("leaf insert");
+
+        let constraints = BoxConstraints::loose(Size::new(px(100.0), px(100.0)));
+        pipeline
+            .layout_dirty_root(parent, constraints)
+            .expect("proxy chain must lay out");
+
+        assert_eq!(
+            *probe.lock(),
+            Some(Some(7.5)),
+            "the query must walk both proxies and reach the leaf's baseline, \
+             not stop at the first proxy's own `None`",
+        );
+    }
+
+    /// A proxy that flags the forward but has no child has no baseline —
+    /// the walk ends rather than reading past the end of an empty child list.
+    #[test]
+    fn baseline_query_through_a_childless_proxy_answers_none() {
+        let probe: BaselineProbe = Arc::new(Mutex::new(None));
+        let mut pipeline = PipelineOwner::new().into_layout();
+        let parent = pipeline
+            .render_tree_mut()
+            .insert_box(Box::new(BaselineReader {
+                probe: Arc::clone(&probe),
+            }));
+        pipeline
+            .render_tree_mut()
+            .insert_box_child(parent, Box::new(BaselineForwardingProxy))
+            .expect("proxy insert");
+
+        let constraints = BoxConstraints::loose(Size::new(px(100.0), px(100.0)));
+        let _ = pipeline.layout_dirty_root(parent, constraints);
+
+        assert_eq!(*probe.lock(), Some(None));
     }
 
     /// Single-child parent whose perform_layout ONLY queries the child's

@@ -2411,6 +2411,83 @@ fn harness_ignore_baseline_hides_its_child_from_a_baseline_row() {
     );
 }
 
+/// `RenderIgnoreBaseline` is the one single-child proxy that does *not*
+/// forward its child's baseline — swapping it for an ordinary proxy over the
+/// identical tree changes the row's height and its children's offsets.
+///
+/// This is what makes the type load-bearing rather than a no-op wrapper:
+/// every other proxy raises `forwards_baseline_to_only_child`, so without the
+/// deliberate `None` overrides the two trees below would lay out identically.
+#[test]
+fn harness_ignore_baseline_differs_from_an_ordinary_proxy_over_the_same_tree() {
+    let baseline_row_with = |wrapper: TreeNode| {
+        RenderTester::mount(
+            box_node(
+                RenderFlex::row()
+                    .with_cross_axis_alignment(CrossAxisAlignment::Baseline)
+                    .with_text_baseline(TextBaseline::Alphabetic),
+            )
+            .child(
+                wrapper.label("wrapper").child(
+                    box_node(SizedBaselineProbe {
+                        box_size: Size::new(px(100.0), px(50.0)),
+                        alphabetic_offset: Some(40.0),
+                    })
+                    .label("wrapped"),
+                ),
+            )
+            .child(
+                box_node(SizedBaselineProbe {
+                    box_size: Size::new(px(100.0), px(60.0)),
+                    alphabetic_offset: Some(10.0),
+                })
+                .label("bare"),
+            ),
+        )
+        .with_constraints(loose(1000.0))
+        .run_layout()
+    };
+
+    let forwarding = baseline_row_with(box_node(RenderOpacity::new(1.0)));
+    let ignoring = baseline_row_with(box_node(RenderIgnoreBaseline::new()));
+
+    assert_eq!(
+        forwarding.box_geometry(forwarding.root()).height,
+        px(90.0),
+        "an ordinary proxy passes the 40px ascent up: 40 + 50",
+    );
+    assert_eq!(
+        ignoring.box_geometry(ignoring.root()).height,
+        px(60.0),
+        "RenderIgnoreBaseline withholds it, leaving only the bare child's \
+         10 + 50 against the raw 60",
+    );
+    assert_eq!(
+        forwarding.offset(forwarding.id("bare")).dy,
+        px(30.0),
+        "with the wrapped baseline visible, the bare child drops to meet it",
+    );
+    assert_eq!(
+        ignoring.offset(ignoring.id("bare")).dy,
+        px(0.0),
+        "with it hidden, the bare child defines the baseline and stays put",
+    );
+}
+
+/// A childless `RenderIgnoreBaseline` must not absorb a hit that lands inside
+/// its own bounds — there is nothing under it to receive the pointer.
+#[test]
+fn harness_ignore_baseline_childless_does_not_absorb_a_hit() {
+    let run = RenderTester::mount(box_node(RenderIgnoreBaseline::new()).label("proxy"))
+        .with_constraints(BoxConstraints::tight(Size::new(px(50.0), px(50.0))))
+        .run_layout();
+
+    assert!(
+        !run.hit(10.0, 10.0).contains(&run.id("proxy")),
+        "a childless pass-through proxy has nothing to hit",
+    );
+}
+
 /// The proxy passes layout, hit-testing and intrinsics straight through — it
 /// hides the baseline and nothing else.
 #[test]
@@ -2454,24 +2531,21 @@ fn harness_ignore_baseline_passes_size_hits_and_intrinsics_through() {
     );
 }
 
-/// Pins Flutter's contract that a pure proxy forwards its child's live
-/// baseline, so a proxy-wrapped child still participates in a parent's
-/// baseline alignment.
+/// A pure proxy forwards its child's live baseline, so a proxy-wrapped child
+/// still participates in a parent's baseline alignment — and the row's dry
+/// size agrees with the size it commits.
 ///
-/// **Currently red — a known gap, see `docs/ROADMAP.md` Cross.H (search
-/// `RenderProxyBoxMixin`).** FLUI's proxies forward the *dry* baseline (via
-/// `forward_single_child_box_queries!`) but not the live one: the live query
-/// takes no context, so a proxy has no way to reach its child and falls back
-/// to the trait default `None`. The two answers therefore disagree — this test
-/// asserts the reference behavior (`RenderProxyBoxMixin
-/// .computeDistanceToActualBaseline` forwards to the child, `proxy_box.dart`
-/// tag `3.44.0`), and will pass once the gap closes.
+/// Flutter parity: `RenderProxyBoxMixin.computeDistanceToActualBaseline`
+/// (`rendering/proxy_box.dart`, tag `3.44.0`) forwards to `child`. FLUI's
+/// proxies cannot forward from that method — it takes no context — so
+/// `forward_single_child_box_queries!` raises
+/// `forwards_baseline_to_only_child` and the layout driver walks to the child
+/// instead.
 ///
-/// The consequence is visible in sizes, not just baselines: the same tree
-/// dry-measures 90px and commits 60px.
+/// Without the live forward the same tree dry-measures 90px and commits 60px:
+/// the dry pass sees the (already forwarded) dry baseline while layout sees
+/// `None`.
 #[test]
-#[ignore = "known gap: FLUI proxies forward the dry baseline but not the live \
-            one — see docs/ROADMAP.md Cross.H (RenderProxyBoxMixin)"]
 fn harness_proxy_forwards_its_child_live_baseline_into_a_baseline_row() {
     let mut run = RenderTester::mount(
         box_node(
@@ -2503,7 +2577,7 @@ fn harness_proxy_forwards_its_child_live_baseline_into_a_baseline_row() {
         run.box_geometry(run.root()).height,
         px(90.0),
         "the proxy-wrapped child's ascent (40) must reach the row, giving \
-         40 + 50; FLUI currently sizes to the raw 60",
+         40 + 50 — not the raw max height of 60",
     );
     assert_eq!(
         run.offset(run.id("bare")).dy,
@@ -2513,8 +2587,8 @@ fn harness_proxy_forwards_its_child_live_baseline_into_a_baseline_row() {
     assert_eq!(
         run.dry_layout(run.root(), loose(1000.0)),
         run.box_geometry(run.root()),
-        "and the dry pass — which already sees the forwarded dry baseline — \
-         must agree with what layout commits",
+        "and the dry pass — which sees the forwarded dry baseline — must \
+         agree with what layout commits",
     );
 }
 

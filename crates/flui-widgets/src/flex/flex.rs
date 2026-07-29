@@ -14,7 +14,13 @@ use crate::support::generic_render_view_element;
 
 /// Shared main/cross-axis configuration for the flex family, with Flutter's
 /// defaults (`MainAxisAlignment::Start`, `CrossAxisAlignment::Center`,
-/// `MainAxisSize::Max`, `spacing: 0.0`, `TextBaseline::Alphabetic`).
+/// `MainAxisSize::Max`, `spacing: 0.0`).
+///
+/// `text_baseline` is FLUI's own default rather than a ported one: Flutter's
+/// `textBaseline` is nullable and required only under
+/// `CrossAxisAlignment.baseline`, which it enforces by throwing. FLUI carries a
+/// plain [`TextBaseline`], so it defaults to `Alphabetic` — the value that
+/// makes the required case work and that every other alignment ignores.
 #[derive(Clone, Copy, Debug)]
 struct FlexStyle {
     main_axis_alignment: MainAxisAlignment,
