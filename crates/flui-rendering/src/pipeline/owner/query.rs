@@ -588,6 +588,9 @@ fn dry_layout_query_impl(
                         DryLayoutChildRequest::Intrinsic(_, _) => {
                             DryLayoutChildResponse::Intrinsic(0.0)
                         }
+                        DryLayoutChildRequest::Baseline(_, _) => {
+                            DryLayoutChildResponse::Baseline(None)
+                        }
                     };
                 };
                 match request {
@@ -606,6 +609,15 @@ fn dry_layout_query_impl(
                             Err(err) => {
                                 child_err.get_or_insert(err);
                                 DryLayoutChildResponse::Intrinsic(0.0)
+                            }
+                        }
+                    }
+                    DryLayoutChildRequest::Baseline(c, b) => {
+                        match dry_baseline_query(slots, cx, child_id, c, b, parent_data_seeds) {
+                            Ok(v) => DryLayoutChildResponse::Baseline(v),
+                            Err(err) => {
+                                child_err.get_or_insert(err);
+                                DryLayoutChildResponse::Baseline(None)
                             }
                         }
                     }

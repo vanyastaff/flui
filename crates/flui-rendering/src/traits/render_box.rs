@@ -286,6 +286,22 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
         None
     }
 
+    /// Whether this box answers a live baseline query with its only child's.
+    ///
+    /// Set by `forward_single_child_box_queries!` for pure proxies, which
+    /// place their child at their own origin and therefore share its baseline.
+    /// This method exists because [`Self::compute_distance_to_actual_baseline`]
+    /// takes no context and so cannot reach the child; the layout driver walks
+    /// to the child on this object's behalf. See
+    /// [`RenderObject::forwards_baseline_to_only_child`].
+    ///
+    /// An object that overrides `compute_distance_to_actual_baseline` to a real
+    /// value — or, like `RenderIgnoreBaseline`, deliberately to `None` — must
+    /// leave this `false`.
+    fn forwards_baseline_to_only_child(&self) -> bool {
+        false
+    }
+
     /// Computes the dry baseline for the given constraints — where the
     /// first baseline WOULD sit after a layout with these constraints.
     /// Memoized per `(constraints, baseline)` by the pipeline
@@ -720,6 +736,10 @@ where
 
     fn actual_baseline_raw(&self, baseline: crate::traits::TextBaseline) -> Option<f32> {
         T::compute_distance_to_actual_baseline(self, baseline)
+    }
+
+    fn forwards_baseline_to_only_child(&self) -> bool {
+        <T as RenderBox>::forwards_baseline_to_only_child(self)
     }
 
     // Effect-layer and lifecycle forwards — mirror the `actual_baseline_raw`

@@ -66,6 +66,13 @@ pub enum DryLayoutChildRequest {
     DryLayout(BoxConstraints),
     /// Intrinsic dimension value: `(dimension, extent)`.
     Intrinsic(IntrinsicDimension, f32),
+    /// Dry baseline distance under `constraints`, for a baseline kind.
+    ///
+    /// A container whose *size* depends on where its children's baselines
+    /// fall — a baseline-aligned `RenderFlex`, whose cross extent is the
+    /// tallest ascent plus the deepest descent — must ask this during dry
+    /// layout, or its dry size disagrees with the size it commits.
+    Baseline(BoxConstraints, TextBaseline),
 }
 
 /// Answers to [`DryLayoutChildRequest`].
@@ -78,6 +85,8 @@ pub enum DryLayoutChildResponse {
     DryLayout(Size),
     /// Child intrinsic value for a given dimension + extent.
     Intrinsic(f32),
+    /// Child dry baseline distance, or `None` when it reports no baseline.
+    Baseline(Option<f32>),
 }
 
 // ============================================================================
@@ -401,7 +410,28 @@ impl<'a> BoxDryLayoutCtx<'a> {
     pub fn child_dry_layout(&mut self, index: usize, constraints: BoxConstraints) -> Size {
         match (self.query)(index, DryLayoutChildRequest::DryLayout(constraints)) {
             DryLayoutChildResponse::DryLayout(size) => size,
-            DryLayoutChildResponse::Intrinsic(_) => Size::ZERO,
+            DryLayoutChildResponse::Intrinsic(_) | DryLayoutChildResponse::Baseline(_) => {
+                Size::ZERO
+            }
+        }
+    }
+
+    /// The dry baseline the child would report under `constraints`.
+    ///
+    /// For containers whose own dry size depends on child baselines; see
+    /// [`DryLayoutChildRequest::Baseline`].
+    pub fn child_dry_baseline(
+        &mut self,
+        index: usize,
+        constraints: BoxConstraints,
+        baseline: TextBaseline,
+    ) -> Option<f32> {
+        match (self.query)(
+            index,
+            DryLayoutChildRequest::Baseline(constraints, baseline),
+        ) {
+            DryLayoutChildResponse::Baseline(v) => v,
+            DryLayoutChildResponse::DryLayout(_) | DryLayoutChildResponse::Intrinsic(_) => None,
         }
     }
 
@@ -418,7 +448,7 @@ impl<'a> BoxDryLayoutCtx<'a> {
     ) -> f32 {
         match (self.query)(index, DryLayoutChildRequest::Intrinsic(dimension, extent)) {
             DryLayoutChildResponse::Intrinsic(v) => v,
-            DryLayoutChildResponse::DryLayout(_) => 0.0,
+            DryLayoutChildResponse::DryLayout(_) | DryLayoutChildResponse::Baseline(_) => 0.0,
         }
     }
 
@@ -483,6 +513,10 @@ pub mod test_support {
                 ),
                 DryLayoutChildRequest::Intrinsic(dim, extent) => panic!(
                     "leaf object queried intrinsic of child {index} ({dim:?} @ {extent}) \
+                         during dry layout — a childless compute_dry_layout must not consult children"
+                ),
+                DryLayoutChildRequest::Baseline(constraints, baseline) => panic!(
+                    "leaf object dry-baselined child {index} ({constraints:?}, {baseline:?}) \
                          during dry layout — a childless compute_dry_layout must not consult children"
                 ),
             }
@@ -634,6 +668,7 @@ mod tests {
                 DryLayoutChildRequest::Intrinsic(_, extent) => {
                     DryLayoutChildResponse::Intrinsic(extent * 2.0)
                 }
+                DryLayoutChildRequest::Baseline(..) => DryLayoutChildResponse::Baseline(Some(7.0)),
             }
         };
         let mut ctx = BoxDryLayoutCtx::new(1, &[], &mut query);
@@ -642,6 +677,14 @@ mod tests {
         assert_eq!(
             ctx.child_dry_layout(0, BoxConstraints::tight(Size::ZERO)),
             expected_size
+        );
+        assert_eq!(
+            ctx.child_dry_baseline(
+                0,
+                BoxConstraints::tight(Size::ZERO),
+                TextBaseline::Alphabetic
+            ),
+            Some(7.0)
         );
         assert_eq!(
             ctx.child_intrinsic(0, IntrinsicDimension::MinWidth, 21.0),
@@ -666,6 +709,7 @@ mod tests {
                     DryLayoutChildRequest::Intrinsic(..) => {
                         DryLayoutChildResponse::DryLayout(Size::new(px(1.0), px(1.0)))
                     }
+                    DryLayoutChildRequest::Baseline(..) => DryLayoutChildResponse::Intrinsic(2.0),
                 }
             };
         let mut ctx = BoxDryLayoutCtx::new(1, &[], &mut always_wrong_kind);
@@ -677,6 +721,16 @@ mod tests {
         assert_eq!(
             ctx.child_intrinsic(0, IntrinsicDimension::MinWidth, 1.0),
             0.0
+        );
+        assert_eq!(
+            ctx.child_dry_baseline(
+                0,
+                BoxConstraints::tight(Size::ZERO),
+                TextBaseline::Alphabetic
+            ),
+            None,
+            "a driver answering a baseline probe with the wrong variant must \
+             read as 'no baseline', not as a bogus distance"
         );
     }
 

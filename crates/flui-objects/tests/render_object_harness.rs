@@ -54,6 +54,7 @@
 //! | `RenderTable` | `harness_table_*` | yes | yes | yes | yes | column widths |
 //! | `RenderAbsorbPointer` | `harness_absorb_pointer_*` | yes | yes | — | yes | — |
 //! | `RenderIgnorePointer` | `harness_ignore_pointer_*` | yes | yes | — | yes | — |
+//! | `RenderIgnoreBaseline` | `harness_ignore_baseline_*` | yes | yes | — | yes | baseline hidden |
 //! | `RenderListener` | `harness_listener_*` | yes | yes | — | yes | — |
 //! | `RenderMouseRegion` | `harness_mouse_region_*` | yes | yes | — | yes | cursor/annotation |
 //! | `RenderSliverFixedExtentList` | `harness_sliver_fixed_extent_list_*` | yes | — | — | yes | — |
@@ -192,6 +193,7 @@ const RENDER_OBJECT_TYPES: &[&str] = &[
     "RenderTheater",
     "RenderAbsorbPointer",
     "RenderIgnorePointer",
+    "RenderIgnoreBaseline",
     "RenderListener",
     "RenderMouseRegion",
     "RenderSliverFixedExtentList",
@@ -2165,6 +2167,428 @@ fn harness_flex_row_baseline_aligns_text_and_box() {
     assert!(
         (text_y - box_y).abs() < 0.5,
         "baseline row should align text and box on the same cross offset (text={text_y}, box={box_y})",
+    );
+}
+
+/// Leaf render object with independently settable per-kind baseline offsets
+/// and a fixed size — the deterministic (size, baseline) pair the flex
+/// cross-extent tests need, mirroring Flutter's `_RenderBaselineTester`.
+#[derive(Debug)]
+struct SizedBaselineProbe {
+    box_size: Size,
+    alphabetic_offset: Option<f32>,
+}
+
+impl flui_foundation::Diagnosticable for SizedBaselineProbe {
+    fn debug_fill_properties(&self, _properties: &mut flui_foundation::DiagnosticsBuilder) {}
+}
+
+impl RenderBox for SizedBaselineProbe {
+    type Arity = flui_tree::Leaf;
+    type ParentData = flui_rendering::parent_data::BoxParentData;
+
+    fn perform_layout(
+        &mut self,
+        ctx: &mut flui_rendering::context::BoxLayoutContext<
+            '_,
+            flui_tree::Leaf,
+            flui_rendering::parent_data::BoxParentData,
+        >,
+    ) -> Size {
+        ctx.constraints().constrain(self.box_size)
+    }
+
+    fn compute_dry_layout(
+        &self,
+        constraints: BoxConstraints,
+        _ctx: &mut flui_rendering::context::BoxDryLayoutCtx<'_>,
+    ) -> Size {
+        constraints.constrain(self.box_size)
+    }
+
+    fn compute_distance_to_actual_baseline(&self, baseline: TextBaseline) -> Option<f32> {
+        match baseline {
+            TextBaseline::Alphabetic => self.alphabetic_offset,
+            TextBaseline::Ideographic => None,
+        }
+    }
+
+    fn compute_dry_baseline(
+        &self,
+        _constraints: BoxConstraints,
+        baseline: TextBaseline,
+        _ctx: &mut flui_rendering::context::BoxDryBaselineCtx<'_>,
+    ) -> Option<f32> {
+        match baseline {
+            TextBaseline::Alphabetic => self.alphabetic_offset,
+            TextBaseline::Ideographic => None,
+        }
+    }
+}
+
+/// Builds the two-child baseline row both cross-extent tests start from:
+/// a 100x50 child whose baseline sits at 40 (ascent 40, descent 10) beside a
+/// 100x60 child whose baseline sits at 10 (ascent 10, descent 50).
+///
+/// Aligning the two baselines stacks the tallest ascent over the deepest
+/// descent: 40 + 50 = 90, taller than either child (50, 60).
+fn baseline_row_spec() -> TreeNode {
+    box_node(
+        RenderFlex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Baseline)
+            .with_text_baseline(TextBaseline::Alphabetic),
+    )
+    .child(
+        box_node(SizedBaselineProbe {
+            box_size: Size::new(px(100.0), px(50.0)),
+            alphabetic_offset: Some(40.0),
+        })
+        .label("deep_ascent"),
+    )
+    .child(
+        box_node(SizedBaselineProbe {
+            box_size: Size::new(px(100.0), px(60.0)),
+            alphabetic_offset: Some(10.0),
+        })
+        .label("deep_descent"),
+    )
+}
+
+/// A baseline-aligned row is as tall as its tallest ascent plus its deepest
+/// descent — which exceeds every individual child's height, because aligning
+/// the baselines pushes the shallow-ascent child down.
+///
+/// Flutter parity: `RenderFlex._computeSizes` accumulates an `_AscentDescent`
+/// pair over the baseline-aligned children and folds `ascent + descent` into
+/// the cross extent (tag `3.44.0`). Sizing the row to `max(child heights)`
+/// instead leaves the pushed-down child hanging out of the bottom of its own
+/// parent.
+#[test]
+fn harness_flex_baseline_row_is_as_tall_as_max_ascent_plus_max_descent() {
+    let run = RenderTester::mount(baseline_row_spec())
+        .with_constraints(loose(1000.0))
+        .run_layout();
+
+    assert_eq!(
+        run.box_geometry(run.root()).height,
+        px(90.0),
+        "row height must be max ascent (40) + max descent (50), not the \
+         tallest child (60)",
+    );
+    assert_eq!(
+        run.offset(run.id("deep_ascent")).dy,
+        px(0.0),
+        "the child with the deepest ascent defines the common baseline and \
+         stays at the top",
+    );
+    assert_eq!(
+        run.offset(run.id("deep_descent")).dy,
+        px(30.0),
+        "the shallow-ascent child shifts down by 40 - 10 to meet that baseline",
+    );
+    assert_eq!(
+        run.offset(run.id("deep_descent")).dy + run.box_geometry(run.id("deep_descent")).height,
+        px(90.0),
+        "the pushed-down child must end exactly at the row's bottom edge — \
+         its overhang is what the extra cross extent accounts for",
+    );
+}
+
+/// A child with no baseline still contributes its raw height, so one taller
+/// than the whole ascent/descent stack sets the row's height on its own.
+///
+/// Flutter parity: `RenderFlex._computeSizes` accumulates every child's cross
+/// extent into `accumulatedSize` and then takes the max against `ascent +
+/// descent` (tag `3.44.0`) — the reference calls this out in `basic_test.dart`
+/// `'baseline aligned children account for a larger, no-baseline child size'`,
+/// a regression test for flutter/flutter#58898.
+#[test]
+fn harness_flex_baseline_row_still_grows_for_a_taller_child_with_no_baseline() {
+    let run = RenderTester::mount(
+        baseline_row_spec().child(
+            box_node(SizedBaselineProbe {
+                box_size: Size::new(px(100.0), px(250.0)),
+                alphabetic_offset: None,
+            })
+            .label("no_baseline"),
+        ),
+    )
+    .with_constraints(loose(1000.0))
+    .run_layout();
+
+    assert_eq!(
+        run.box_geometry(run.root()).height,
+        px(250.0),
+        "a 250px child with no baseline outgrows the 90px ascent+descent \
+         stack and sets the row's height",
+    );
+    assert_eq!(
+        run.offset(run.id("no_baseline")).dy,
+        px(0.0),
+        "a child with no baseline is not shifted — it sits at the cross start",
+    );
+    assert_eq!(
+        run.offset(run.id("deep_descent")).dy,
+        px(30.0),
+        "the baseline-aligned children keep their relative alignment",
+    );
+}
+
+/// The dry size of a baseline-aligned row equals the size it commits — the
+/// dry pass queries child baselines the same way `perform_layout` does.
+///
+/// Without dry baselines the dry pass falls back to `max(child heights)` and
+/// silently under-reports by 30px here, breaking the crate-wide invariant that
+/// a dry query answers what layout will commit.
+#[test]
+fn harness_flex_baseline_row_dry_size_matches_the_committed_size() {
+    let mut run = RenderTester::mount(baseline_row_spec())
+        .with_constraints(loose(1000.0))
+        .run_layout();
+
+    let committed = run.box_geometry(run.root());
+    assert_eq!(
+        run.dry_layout(run.root(), loose(1000.0)),
+        committed,
+        "dry layout must report the same size the row committed",
+    );
+}
+
+/// A `RenderIgnoreBaseline` reports no baseline of its own, and its wrapped
+/// child neither aligns to nor grows a baseline-aligned row: the row falls
+/// back to the remaining children's ascent/descent stack, and the wrapped
+/// child sits flush at the cross start.
+///
+/// Flutter parity: `RenderIgnoreBaseline` (`proxy_box.dart`, tag `3.44.0`)
+/// nulls both baseline queries; `basic_test.dart` `'Row and IgnoreBaseline
+/// (with ignored baseline)'` pins the row-level consequence.
+#[test]
+fn harness_ignore_baseline_hides_its_child_from_a_baseline_row() {
+    let run = RenderTester::mount(
+        box_node(
+            RenderFlex::row()
+                .with_cross_axis_alignment(CrossAxisAlignment::Baseline)
+                .with_text_baseline(TextBaseline::Alphabetic),
+        )
+        .child(
+            box_node(RenderIgnoreBaseline::new())
+                .label("ignored")
+                .child(
+                    box_node(SizedBaselineProbe {
+                        box_size: Size::new(px(100.0), px(50.0)),
+                        alphabetic_offset: Some(40.0),
+                    })
+                    .label("hidden_child"),
+                ),
+        )
+        .child(
+            box_node(SizedBaselineProbe {
+                box_size: Size::new(px(100.0), px(60.0)),
+                alphabetic_offset: Some(10.0),
+            })
+            .label("visible"),
+        ),
+    )
+    .with_constraints(loose(1000.0))
+    .run_layout();
+
+    assert_eq!(
+        run.offset(run.id("ignored")).dy,
+        px(0.0),
+        "the wrapped child is not baseline-aligned — it sits at the cross start",
+    );
+    assert_eq!(
+        run.offset(run.id("visible")).dy,
+        px(0.0),
+        "with only one baseline left in the row, that child defines the common \
+         baseline and is not shifted either",
+    );
+    assert_eq!(
+        run.box_geometry(run.root()).height,
+        px(60.0),
+        "the row is sized by the surviving ascent (10) + descent (50) and the \
+         raw heights — the hidden child's 40px ascent must not stretch it to 90",
+    );
+}
+
+/// `RenderIgnoreBaseline` is the one single-child proxy that does *not*
+/// forward its child's baseline — swapping it for an ordinary proxy over the
+/// identical tree changes the row's height and its children's offsets.
+///
+/// This is what makes the type load-bearing rather than a no-op wrapper:
+/// every other proxy raises `forwards_baseline_to_only_child`, so without the
+/// deliberate `None` overrides the two trees below would lay out identically.
+#[test]
+fn harness_ignore_baseline_differs_from_an_ordinary_proxy_over_the_same_tree() {
+    let baseline_row_with = |wrapper: TreeNode| {
+        RenderTester::mount(
+            box_node(
+                RenderFlex::row()
+                    .with_cross_axis_alignment(CrossAxisAlignment::Baseline)
+                    .with_text_baseline(TextBaseline::Alphabetic),
+            )
+            .child(
+                wrapper.label("wrapper").child(
+                    box_node(SizedBaselineProbe {
+                        box_size: Size::new(px(100.0), px(50.0)),
+                        alphabetic_offset: Some(40.0),
+                    })
+                    .label("wrapped"),
+                ),
+            )
+            .child(
+                box_node(SizedBaselineProbe {
+                    box_size: Size::new(px(100.0), px(60.0)),
+                    alphabetic_offset: Some(10.0),
+                })
+                .label("bare"),
+            ),
+        )
+        .with_constraints(loose(1000.0))
+        .run_layout()
+    };
+
+    let forwarding = baseline_row_with(box_node(RenderOpacity::new(1.0)));
+    let ignoring = baseline_row_with(box_node(RenderIgnoreBaseline::new()));
+
+    assert_eq!(
+        forwarding.box_geometry(forwarding.root()).height,
+        px(90.0),
+        "an ordinary proxy passes the 40px ascent up: 40 + 50",
+    );
+    assert_eq!(
+        ignoring.box_geometry(ignoring.root()).height,
+        px(60.0),
+        "RenderIgnoreBaseline withholds it, leaving only the bare child's \
+         10 + 50 against the raw 60",
+    );
+    assert_eq!(
+        forwarding.offset(forwarding.id("bare")).dy,
+        px(30.0),
+        "with the wrapped baseline visible, the bare child drops to meet it",
+    );
+    assert_eq!(
+        ignoring.offset(ignoring.id("bare")).dy,
+        px(0.0),
+        "with it hidden, the bare child defines the baseline and stays put",
+    );
+}
+
+/// A childless `RenderIgnoreBaseline` must not absorb a hit that lands inside
+/// its own bounds — there is nothing under it to receive the pointer.
+#[test]
+fn harness_ignore_baseline_childless_does_not_absorb_a_hit() {
+    let run = RenderTester::mount(box_node(RenderIgnoreBaseline::new()).label("proxy"))
+        .with_constraints(BoxConstraints::tight(Size::new(px(50.0), px(50.0))))
+        .run_layout();
+
+    assert!(
+        !run.hit(10.0, 10.0).contains(&run.id("proxy")),
+        "a childless pass-through proxy has nothing to hit",
+    );
+}
+
+/// The proxy passes layout, hit-testing and intrinsics straight through — it
+/// hides the baseline and nothing else.
+#[test]
+fn harness_ignore_baseline_passes_size_hits_and_intrinsics_through() {
+    let mut run = RenderTester::mount(
+        box_node(RenderIgnoreBaseline::new()).label("proxy").child(
+            box_node(SizedBaselineProbe {
+                box_size: Size::new(px(80.0), px(40.0)),
+                alphabetic_offset: Some(30.0),
+            })
+            .label("child"),
+        ),
+    )
+    .with_constraints(loose(1000.0))
+    .run_layout();
+
+    let proxy = run.id("proxy");
+    assert_eq!(
+        run.box_geometry(proxy),
+        Size::new(px(80.0), px(40.0)),
+        "the proxy adopts its child's size",
+    );
+    assert_eq!(
+        run.offset(run.id("child")),
+        Offset::ZERO,
+        "the child is not shifted",
+    );
+    assert!(
+        run.hit(10.0, 10.0).contains(&run.id("child")),
+        "a hit inside the box must reach the child through the proxy",
+    );
+    assert_eq!(
+        run.dry_baseline(proxy, loose(1000.0), TextBaseline::Alphabetic),
+        None,
+        "the dry baseline is hidden even though the child reports 30",
+    );
+    assert_eq!(
+        run.dry_layout(proxy, loose(1000.0)),
+        Size::new(px(80.0), px(40.0)),
+        "dry layout still forwards to the child",
+    );
+}
+
+/// A pure proxy forwards its child's live baseline, so a proxy-wrapped child
+/// still participates in a parent's baseline alignment — and the row's dry
+/// size agrees with the size it commits.
+///
+/// Flutter parity: `RenderProxyBoxMixin.computeDistanceToActualBaseline`
+/// (`rendering/proxy_box.dart`, tag `3.44.0`) forwards to `child`. FLUI's
+/// proxies cannot forward from that method — it takes no context — so
+/// `forward_single_child_box_queries!` raises
+/// `forwards_baseline_to_only_child` and the layout driver walks to the child
+/// instead.
+///
+/// Without the live forward the same tree dry-measures 90px and commits 60px:
+/// the dry pass sees the (already forwarded) dry baseline while layout sees
+/// `None`.
+#[test]
+fn harness_proxy_forwards_its_child_live_baseline_into_a_baseline_row() {
+    let mut run = RenderTester::mount(
+        box_node(
+            RenderFlex::row()
+                .with_cross_axis_alignment(CrossAxisAlignment::Baseline)
+                .with_text_baseline(TextBaseline::Alphabetic),
+        )
+        .child(
+            box_node(RenderOpacity::new(1.0)).label("proxy").child(
+                box_node(SizedBaselineProbe {
+                    box_size: Size::new(px(100.0), px(50.0)),
+                    alphabetic_offset: Some(40.0),
+                })
+                .label("under_proxy"),
+            ),
+        )
+        .child(
+            box_node(SizedBaselineProbe {
+                box_size: Size::new(px(100.0), px(60.0)),
+                alphabetic_offset: Some(10.0),
+            })
+            .label("bare"),
+        ),
+    )
+    .with_constraints(loose(1000.0))
+    .run_layout();
+
+    assert_eq!(
+        run.box_geometry(run.root()).height,
+        px(90.0),
+        "the proxy-wrapped child's ascent (40) must reach the row, giving \
+         40 + 50 — not the raw max height of 60",
+    );
+    assert_eq!(
+        run.offset(run.id("bare")).dy,
+        px(30.0),
+        "the bare child must drop to meet the wrapped child's baseline",
+    );
+    assert_eq!(
+        run.dry_layout(run.root(), loose(1000.0)),
+        run.box_geometry(run.root()),
+        "and the dry pass — which sees the forwarded dry baseline — must \
+         agree with what layout commits",
     );
 }
 

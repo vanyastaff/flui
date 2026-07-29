@@ -756,6 +756,35 @@ impl LaidOut {
             .expect("a laid-out non-empty paragraph has at least one selection box")
     }
 
+    /// The alphabetic baseline the `RenderParagraph` at `id` reported at its
+    /// last layout — the distance from its top edge down to the line the
+    /// glyphs sit on.
+    ///
+    /// Flutter's oracle derives this from the `FlutterTest` font's fixed 0.75
+    /// ascent ratio and hard-codes the result. FLUI shapes with whatever real
+    /// font the machine resolves, so the number is not portable; tests that
+    /// need it read the measured value here and assert the layout *relation*
+    /// the oracle asserts (row height = tallest ascent + deepest descent,
+    /// child shift = tallest ascent − own ascent) rather than the oracle's
+    /// font-specific constants.
+    ///
+    /// Panics if `id` is not a laid-out `RenderParagraph`.
+    pub fn text_baseline(&self, id: RenderId) -> f32 {
+        let mut owner = self.pipeline_owner.write();
+        let node = owner
+            .render_tree_mut()
+            .get_mut(id)
+            .expect("render node should exist");
+        let paragraph = node
+            .downcast_render_object_mut::<RenderParagraph>()
+            .expect("render node should be a RenderParagraph");
+        flui_rendering::traits::RenderBox::compute_distance_to_actual_baseline(
+            paragraph,
+            flui_rendering::traits::TextBaseline::Alphabetic,
+        )
+        .expect("a laid-out RenderParagraph reports an alphabetic baseline")
+    }
+
     /// Replace the root widget with `new_root` and drive a frame — Flutter's
     /// `tester.pumpWidget(w2)` called a second time (root-swap).
     ///

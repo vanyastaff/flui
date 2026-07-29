@@ -393,6 +393,27 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + DowncastSync + Send + Sync
         None
     }
 
+    /// Whether this object has no baseline of its own and answers a live
+    /// baseline query with its only child's.
+    ///
+    /// A pure proxy places its child at its own origin, so the child's
+    /// baseline is also its own. [`Self::actual_baseline_raw`] cannot express
+    /// that — it takes no context and so has no route to the child — and
+    /// returning `None` would silently drop a wrapped `Text` out of a parent's
+    /// baseline alignment. The layout driver reads this flag and walks to the
+    /// only child instead.
+    ///
+    /// Default: `false`. Box objects override via
+    /// [`RenderBox::forwards_baseline_to_only_child`](crate::traits::RenderBox::forwards_baseline_to_only_child),
+    /// which `forward_single_child_box_queries!` sets alongside the dry-baseline
+    /// forward so the two answers cannot drift apart.
+    ///
+    /// Mirrors Flutter's `RenderProxyBoxMixin.computeDistanceToActualBaseline`,
+    /// which forwards to `child` (`rendering/proxy_box.dart`).
+    fn forwards_baseline_to_only_child(&self) -> bool {
+        false
+    }
+
     // ========================================================================
     // Optimization Boundaries
     // ========================================================================
