@@ -6,8 +6,10 @@ use flui_rendering::protocol::BoxProtocol;
 use flui_types::{Alignment, Axis, painting::Clip};
 use flui_view::{Child, IntoView, RenderView, View, impl_render_view};
 
-/// Removes the constraints imposed on `child` — on `constrained_axis` if
-/// set, otherwise on both axes — letting it render at its natural size.
+/// Removes the constraints imposed on `child` — on both axes, or, when
+/// `constrained_axis` is set, on every axis *except* that one (the named
+/// axis keeps its incoming constraint) — letting the child render at its
+/// natural size on the freed axis.
 ///
 /// This box then attempts to adopt the child's size, within the limits of
 /// its own incoming constraints. If it ends up a different size than the

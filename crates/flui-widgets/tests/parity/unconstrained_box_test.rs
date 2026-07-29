@@ -2,9 +2,9 @@
 //!
 //! Flutter source: `packages/flutter/test/widgets/basic_test.dart` (tag
 //! `3.44.0`), the `'UnconstrainedBox'` group (3 cases: a plain `test` for
-//! `toString`, plus 2 `testWidgets` cases) — plus the scout-flagged
-//! appendable `'ConstraintsTransformBox' > 'toString'` from the same file's
-//! adjacent `group`.
+//! `toString`, plus 2 `testWidgets` cases) — plus one appendable case,
+//! `'toString'`, from the adjacent `'ConstraintsTransformBox'` group in the
+//! same file.
 //!
 //! Widget → render-object mapping: `UnconstrainedBox`
 //! (`crates/flui-widgets/src/layout/unconstrained_box.rs`) →
@@ -19,7 +19,7 @@
 //! module doc for the full mapping and the narrowed `constrained_axis`
 //! design).
 //!
-//! ## Ledger (3 upstream cases + 1 scout-flagged appendable)
+//! ## Ledger (3 upstream cases + 1 appendable from the adjacent group)
 //! 1. `'UnconstrainedBox toString'` — **ported at contract level** (not Dart
 //!    string formatting — see the doc comment on each test): both `test`
 //!    sub-assertions are ported as one case each —
@@ -55,7 +55,8 @@
 //!    — see [`unconstrained_box_reports_overflow_as_a_queryable_flag`] for
 //!    that half, ported as a stand-in.
 //!
-//! Scout-flagged appendable (1 of 1): `'ConstraintsTransformBox' > 'toString'`
+//! Appendable from the adjacent group (1 of 1):
+//! `'ConstraintsTransformBox' > 'toString'`
 //! — **out of scope**, no equivalent widget. FLUI carries no
 //! `ConstraintsTransformBox` widget at all (see the render-object mapping
 //! above); `UnconstrainedBox` targets `RenderConstraintsTransformBox`

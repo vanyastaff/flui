@@ -585,7 +585,7 @@ impl LaidOut {
     /// layout — `RenderFittedBox::has_visual_overflow` or
     /// `RenderConstraintsTransformBox::has_visual_overflow` (both a plain
     /// queryable flag, in place of Flutter's debug-mode overflow-indicator
-    /// paint neither render object implements — see each type's own module
+    /// paint that neither render object implements — see each type's own module
     /// doc). Panics if `id` is neither.
     pub fn has_visual_overflow(&self, id: RenderId) -> bool {
         let mut owner = self.pipeline_owner.write();
