@@ -3709,6 +3709,36 @@ fn harness_decorated_box_wraps_child() {
 }
 
 #[test]
+fn harness_decorated_box_circle_shape_hit_test_misses_the_corner() {
+    // BoxShape::Circle inscribes the circle in the shorter side (here: the
+    // full 100x100 square, r=50, centered at (50,50)). (4,4) is inside the
+    // 100x100 bounding rect but far outside the inscribed circle
+    // (distance from center ~= 65 > 50), so it must MISS -- there is no
+    // child to fall back to, so a hit at (4,4) means the decoration's own
+    // shape (a plain rect fallback) wrongly claimed the corner.
+    let run = RenderTester::mount(box_node(RenderDecoratedBox::new(
+        BoxDecoration::with_color(Color::RED).set_shape(BoxShape::Circle),
+    )))
+    .with_size(Size::new(px(100.0), px(100.0)))
+    .run_frame();
+
+    assert_eq!(
+        run.hit_first(4.0, 4.0),
+        None,
+        "a BoxShape::Circle decoration must not claim its corners as hits"
+    );
+
+    // Paired positive assertion: without this, `hit_test_self` returning
+    // `false` unconditionally (never testing the circle at all, just
+    // rejecting everything) would also make the corner-miss assertion
+    // above pass.
+    assert!(
+        run.hit_first(50.0, 50.0).is_some(),
+        "the center of a BoxShape::Circle decoration must still hit"
+    );
+}
+
+#[test]
 fn harness_decorated_box_hit_tests_child_before_decoration_shape() {
     // Flutter tests the child before hitTestSelf: a rounded decoration excludes
     // the rect's corners from its own shape, but a child hittable in a cut
