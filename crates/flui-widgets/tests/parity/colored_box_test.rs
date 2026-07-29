@@ -115,7 +115,7 @@
 //! painting capability. Filed as a new `docs/ROADMAP.md` Cross.H entry
 //! (search `ColoredBox` there).
 //!
-//! ### Bonus case (scout-flagged, same oracle file): `'Wrap implements
+//! ### Bonus case (adjacent group, same oracle file): `'Wrap implements
 //! debugFillProperties'`
 //!
 //! **Out of scope**, not trivially portable. The oracle expects 8 diagnostics
