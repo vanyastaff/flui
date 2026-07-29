@@ -18,7 +18,7 @@
 //! transform is therefore narrowed from an arbitrary function to a
 //! `constrained_axis: Option<Axis>` field — a Rust-native, illegal-states-free
 //! shape (Prime Directive #1: structure is Rust-native, behavior stays
-//! loyal) — computed by [`Self::transform_constraints`]:
+//! loyal) — computed by [`RenderConstraintsTransformBox::transform_constraints`]:
 //!
 //! | `constrained_axis` | Flutter transform | Effect |
 //! |---|---|---|
@@ -37,7 +37,7 @@
 //! diagnostic) when the child overflows AND `clipBehavior == Clip.none`. FLUI
 //! has no equivalent debug-paint/diagnostic-error machinery anywhere in
 //! `flui-rendering`/`flui-objects` (confirmed repo-wide, not just here) — see
-//! `docs/ROADMAP.md` Cross.H. [`Self::has_visual_overflow`] is exposed as a
+//! `docs/ROADMAP.md` Cross.H. [`RenderConstraintsTransformBox::has_visual_overflow`] is exposed as a
 //! plain queryable flag instead, matching the precedent already established
 //! by [`super::fitted_box::RenderFittedBox::has_visual_overflow`].
 
