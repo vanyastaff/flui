@@ -28,8 +28,8 @@ use flui_interaction::events::{
 };
 use flui_objects::{
     RenderAnimatedOpacity, RenderClipOval, RenderClipPath, RenderClipRRect, RenderClipRect,
-    RenderFittedBox, RenderImage, RenderOpacity, RenderParagraph, RenderPhysicalModel,
-    RenderPhysicalShape, RenderSliverOpacity, RenderTransform,
+    RenderConstraintsTransformBox, RenderFittedBox, RenderImage, RenderOpacity, RenderParagraph,
+    RenderPhysicalModel, RenderPhysicalShape, RenderSliverOpacity, RenderTransform,
 };
 use flui_rendering::constraints::{BoxConstraints, SliverGeometry};
 use flui_rendering::pipeline::PipelineOwner;
@@ -539,9 +539,11 @@ impl LaidOut {
     /// The [`Clip`] behavior of a clip-family render node (`RenderClipRect`,
     /// `RenderClipRRect`, `RenderClipOval`, `RenderClipPath`), a
     /// [`RenderFittedBox`] (which stores `clip_behavior` today even though
-    /// active clip-painting is still pending — see its module doc), or a
+    /// active clip-painting is still pending — see its module doc), a
     /// physical-model render node (`RenderPhysicalModel`,
-    /// `RenderPhysicalShape`). Panics if `id` is none of the seven.
+    /// `RenderPhysicalShape`), or a [`RenderConstraintsTransformBox`]
+    /// (`UnconstrainedBox`'s render object). Panics if `id` is none of the
+    /// eight.
     pub fn clip_behavior(&self, id: RenderId) -> Clip {
         let mut owner = self.pipeline_owner.write();
         let node = owner
@@ -569,10 +571,35 @@ impl LaidOut {
         if let Some(render) = node.downcast_render_object_mut::<RenderPhysicalShape>() {
             return render.clip_behavior();
         }
+        if let Some(render) = node.downcast_render_object_mut::<RenderConstraintsTransformBox>() {
+            return render.clip_behavior();
+        }
         panic!(
             "render node should be a clip-family render object (Rect/RRect/Oval/Path), a \
-             RenderFittedBox, or a physical-model render object (Model/Shape)"
+             RenderFittedBox, a physical-model render object (Model/Shape), or a \
+             RenderConstraintsTransformBox"
         );
+    }
+
+    /// Whether the render node at `id` reported visual overflow at its last
+    /// layout — `RenderFittedBox::has_visual_overflow` or
+    /// `RenderConstraintsTransformBox::has_visual_overflow` (both a plain
+    /// queryable flag, in place of Flutter's debug-mode overflow-indicator
+    /// paint neither render object implements — see each type's own module
+    /// doc). Panics if `id` is neither.
+    pub fn has_visual_overflow(&self, id: RenderId) -> bool {
+        let mut owner = self.pipeline_owner.write();
+        let node = owner
+            .render_tree_mut()
+            .get_mut(id)
+            .expect("render node should exist");
+        if let Some(render) = node.downcast_render_object_mut::<RenderFittedBox>() {
+            return render.has_visual_overflow();
+        }
+        if let Some(render) = node.downcast_render_object_mut::<RenderConstraintsTransformBox>() {
+            return render.has_visual_overflow();
+        }
+        panic!("render node should be a RenderFittedBox or RenderConstraintsTransformBox");
     }
 
     /// The installed [`BorderRadius`] of a `RenderClipRRect` node. Panics if

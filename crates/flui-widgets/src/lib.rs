@@ -176,7 +176,7 @@ pub use layout::{
     CustomSingleChildLayout, FittedBox, Flow, FractionalTranslation, FractionallySizedBox,
     IntrinsicHeight, IntrinsicWidth, LayoutBuilder, LayoutId, LimitedBox, ListBody, OverflowBox,
     Padding, PreferredSize, PreferredSizeView, RotatedBox, SizedBox, SizedOverflowBox, Table,
-    TableCell, TableRow, Transform,
+    TableCell, TableRow, Transform, UnconstrainedBox,
 };
 // `OverflowBoxFit` configures `OverflowBox`'s size policy; exposed at crate root
 // so consumers don't need to reach into `flui_objects`.
@@ -315,7 +315,7 @@ pub mod prelude {
         SliverFixedExtentList, SliverGrid, SliverIgnorePointer, SliverList, SliverOffstage,
         SliverOpacity, SliverPadding, SliverToBoxAdapter, Spacer, Stack, StreamBuilder, Table,
         TableCell, TableRow, Text, TextEditingController, TextField, TextFieldState, TickerMode,
-        Transform, ValueListenableBuilder, Viewport, Visibility, WidgetState,
+        Transform, UnconstrainedBox, ValueListenableBuilder, Viewport, Visibility, WidgetState,
         WidgetStateConstraint, WidgetStateProperty, WidgetStates, WidgetStatesController,
         WidgetsLocalizations, Wrap,
     };

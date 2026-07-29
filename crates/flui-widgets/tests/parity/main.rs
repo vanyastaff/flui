@@ -186,3 +186,7 @@ mod grid_view_interaction_test;
 // ── Business.1 fidelity — ColoredBox parity (basic_test.dart ColoredBox
 //    group) ───────────────────────────────────────────────────────────────
 mod colored_box_test;
+
+// ── Business.1 fidelity — UnconstrainedBox parity (basic_test.dart
+//    UnconstrainedBox group) ───────────────────────────────────────────────
+mod unconstrained_box_test;

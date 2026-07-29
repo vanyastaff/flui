@@ -3,7 +3,7 @@
 //! This crate contains all ready-to-use render objects, organized into domain
 //! families. It sits directly above the [`flui_rendering`] engine crate (which
 //! owns traits, pipeline, arena, protocol, and contexts) and validates that the
-//! engine's custom-object-authoring API is complete — 74 real objects compiling
+//! engine's custom-object-authoring API is complete — 75 real objects compiling
 //! from outside the engine crate proves the authoring surface needs no additions.
 //!
 //! # Organization
@@ -48,7 +48,7 @@ pub use layout::{
 pub use layout::{
     AspectRatioFactor, FractionFactor, LayoutConstraintsCell, RenderAlign, RenderAnimatedSize,
     RenderAspectRatio, RenderBaseline, RenderCenter, RenderConstrainedBox,
-    RenderConstrainedOverflowBox, RenderCustomMultiChildLayoutBox,
+    RenderConstrainedOverflowBox, RenderConstraintsTransformBox, RenderCustomMultiChildLayoutBox,
     RenderCustomSingleChildLayoutBox, RenderFittedBox, RenderFlex, RenderFlow,
     RenderFractionalTranslation, RenderFractionallySizedBox, RenderIndexedStack,
     RenderIntrinsicHeight, RenderIntrinsicWidth, RenderLayoutBuilder, RenderLimitedBox,

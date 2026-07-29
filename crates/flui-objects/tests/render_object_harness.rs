@@ -78,6 +78,7 @@
 //! | `RenderIntrinsicHeight` | `harness_intrinsic_height_*` | yes | — | — | yes | queries |
 //! | `RenderConstrainedOverflowBox` | `harness_constrained_overflow_box_*` | yes | — | — | yes | — |
 //! | `RenderSizedOverflowBox` | `harness_sized_overflow_box_*` | yes | — | — | yes | — |
+//! | `RenderConstraintsTransformBox` | `harness_constraints_transform_box_*` | yes | — | yes | yes | intrinsics |
 //! | `RenderRotatedBox` | `harness_rotated_box_*` | yes | yes | — | yes | paint transform |
 //! | `RenderAnimatedSize` | `harness_render_animated_size_*` | yes | — | yes | yes | state machine |
 //! | `RenderSliverScrollingPersistentHeader` | `harness_sliver_persistent_header_scrolling_*` | yes | — | — | — | — |
@@ -215,6 +216,7 @@ const RENDER_OBJECT_TYPES: &[&str] = &[
     "RenderIntrinsicHeight",
     "RenderConstrainedOverflowBox",
     "RenderSizedOverflowBox",
+    "RenderConstraintsTransformBox",
     "RenderRotatedBox",
     "RenderAnimatedSize",
     "RenderSliverScrollingPersistentHeader",
@@ -8514,6 +8516,422 @@ fn harness_sized_overflow_box_self_describes() {
         &run.diagnostics(),
         "RenderSizedOverflowBox",
         &["requested_width", "requested_height"],
+    );
+}
+
+// ============================================================================
+// RenderConstraintsTransformBox
+// ============================================================================
+
+#[test]
+fn harness_constraints_transform_box_no_child_adopts_smallest() {
+    let run = RenderTester::mount(box_node(RenderConstraintsTransformBox::new(
+        Alignment::CENTER,
+        None,
+        Clip::None,
+    )))
+    .with_constraints(BoxConstraints::new(px(10.0), px(200.0), px(5.0), px(100.0)))
+    .run_layout();
+
+    assert_eq!(
+        run.box_geometry(run.root()),
+        Size::new(px(10.0), px(5.0)),
+        "a childless box must report constraints.smallest()",
+    );
+}
+
+#[test]
+fn harness_constraints_transform_box_unconstrained_axis_adopts_and_clamps_child_size() {
+    let run = RenderTester::mount(
+        box_node(RenderConstraintsTransformBox::new(
+            Alignment::CENTER,
+            None,
+            Clip::None,
+        ))
+        .child(box_node(RenderColoredBox::red(200.0, 150.0)).label("child")),
+    )
+    .with_constraints(BoxConstraints::new(px(0.0), px(100.0), px(0.0), px(80.0)))
+    .run_layout();
+
+    assert_eq!(
+        run.box_geometry(run.id("child")),
+        Size::new(px(200.0), px(150.0)),
+        "an unconstrained child must lay out to its full preferred size",
+    );
+    assert_eq!(
+        run.box_geometry(run.root()),
+        Size::new(px(100.0), px(80.0)),
+        "the box's own size must clamp the child size back into the incoming constraints",
+    );
+}
+
+#[test]
+fn harness_constraints_transform_box_horizontal_axis_keeps_width_frees_height() {
+    let run = RenderTester::mount(
+        box_node(RenderConstraintsTransformBox::new(
+            Alignment::CENTER,
+            Some(Axis::Horizontal),
+            Clip::None,
+        ))
+        .child(box_node(RenderColoredBox::red(50.0, 150.0)).label("child")),
+    )
+    .with_constraints(BoxConstraints::new(px(0.0), px(100.0), px(0.0), px(80.0)))
+    .run_layout();
+
+    assert_eq!(
+        run.box_geometry(run.id("child")),
+        Size::new(px(50.0), px(150.0)),
+        "width stays constrained (the child's 50 already fits under max 100); \
+         height is freed so the child keeps its full preferred height",
+    );
+    assert_eq!(
+        run.box_geometry(run.root()),
+        Size::new(px(50.0), px(80.0)),
+        "the box adopts the child's width but clamps the overflowing height",
+    );
+}
+
+#[test]
+fn harness_constraints_transform_box_vertical_axis_keeps_height_frees_width() {
+    let run = RenderTester::mount(
+        box_node(RenderConstraintsTransformBox::new(
+            Alignment::CENTER,
+            Some(Axis::Vertical),
+            Clip::None,
+        ))
+        .child(box_node(RenderColoredBox::red(150.0, 50.0)).label("child")),
+    )
+    .with_constraints(BoxConstraints::new(px(0.0), px(100.0), px(0.0), px(80.0)))
+    .run_layout();
+
+    assert_eq!(
+        run.box_geometry(run.id("child")),
+        Size::new(px(150.0), px(50.0)),
+        "height stays constrained (the child's 50 already fits under max 80); \
+         width is freed so the child keeps its full preferred width",
+    );
+    assert_eq!(
+        run.box_geometry(run.root()),
+        Size::new(px(100.0), px(50.0)),
+        "the box adopts the child's height but clamps the overflowing width",
+    );
+}
+
+#[test]
+fn harness_constraints_transform_box_reports_overflow_when_child_exceeds_own_size() {
+    let mut run = RenderTester::mount(
+        box_node(RenderConstraintsTransformBox::new(
+            Alignment::CENTER,
+            None,
+            Clip::None,
+        ))
+        .child(box_node(RenderColoredBox::red(200.0, 200.0)).label("child")),
+    )
+    .with_constraints(BoxConstraints::new(px(0.0), px(50.0), px(0.0), px(50.0)))
+    .run_layout();
+
+    let root = run.root();
+    let node = run
+        .owner_mut()
+        .render_tree_mut()
+        .get_mut(root)
+        .and_then(|node| node.downcast_render_object_mut::<RenderConstraintsTransformBox>())
+        .expect("root should be a RenderConstraintsTransformBox");
+    assert!(
+        node.has_visual_overflow(),
+        "a 200x200 child inside a 50x50 box must be reported as overflowing"
+    );
+}
+
+#[test]
+fn harness_constraints_transform_box_clips_when_overflowing_and_clip_behavior_set() {
+    let run = RenderTester::mount(
+        box_node(RenderConstraintsTransformBox::new(
+            Alignment::CENTER,
+            None,
+            Clip::AntiAlias,
+        ))
+        .child(box_node(RenderColoredBox::red(200.0, 200.0)).label("child")),
+    )
+    .with_constraints(BoxConstraints::new(px(0.0), px(50.0), px(0.0), px(50.0)))
+    .run_frame();
+
+    assert!(
+        run.structure().contains(&"ClipRect"),
+        "an overflowing child under a non-None clip_behavior must push a real \
+         clip layer; structure: {:?}",
+        run.structure(),
+    );
+}
+
+#[test]
+fn harness_constraints_transform_box_does_not_clip_when_clip_behavior_is_none() {
+    let run = RenderTester::mount(
+        box_node(RenderConstraintsTransformBox::new(
+            Alignment::CENTER,
+            None,
+            Clip::None,
+        ))
+        .child(box_node(RenderColoredBox::red(200.0, 200.0)).label("child")),
+    )
+    .with_constraints(BoxConstraints::new(px(0.0), px(50.0), px(0.0), px(50.0)))
+    .run_frame();
+
+    assert!(
+        !run.structure().contains(&"ClipRect"),
+        "Clip::None must never push a clip layer, even when the child \
+         overflows; structure: {:?}",
+        run.structure(),
+    );
+}
+
+/// Proves the width/height probe passed to the child's cross-axis intrinsic
+/// query is the TRANSFORMED extent, not a bare passthrough of the caller's
+/// value — the same fidelity bar `RenderIntrinsicWidth`/`RenderIntrinsicHeight`
+/// pin with the same [`ExtentEchoProbe`] child (see that struct's doc).
+#[test]
+fn harness_constraints_transform_box_horizontal_axis_forwards_width_extent_to_height_intrinsics() {
+    let mut run = RenderTester::mount(
+        box_node(RenderConstraintsTransformBox::new(
+            Alignment::CENTER,
+            Some(Axis::Horizontal),
+            Clip::None,
+        ))
+        .child(box_node(ExtentEchoProbe).label("child")),
+    )
+    .with_constraints(loose(200.0))
+    .run_layout();
+
+    let node = run.root();
+    assert_eq!(
+        run.min_intrinsic_height(node, 77.0),
+        77.0,
+        "width stays constrained, so the probed width extent (77) must reach \
+         the child's height-intrinsic query unmodified",
+    );
+    assert_eq!(run.max_intrinsic_height(node, 77.0), 77.0);
+}
+
+#[test]
+fn harness_constraints_transform_box_unconstrained_frees_width_extent_to_infinity_for_height_intrinsics()
+ {
+    let mut run = RenderTester::mount(
+        box_node(RenderConstraintsTransformBox::new(
+            Alignment::CENTER,
+            None,
+            Clip::None,
+        ))
+        .child(box_node(ExtentEchoProbe).label("child")),
+    )
+    .with_constraints(loose(200.0))
+    .run_layout();
+
+    let node = run.root();
+    assert_eq!(
+        run.min_intrinsic_height(node, 77.0),
+        f32::INFINITY,
+        "both axes freed, so the width extent reaching the child's \
+         height-intrinsic query must be infinite, not the probed 77",
+    );
+}
+
+#[test]
+fn harness_constraints_transform_box_vertical_axis_forwards_height_extent_to_width_intrinsics() {
+    let mut run = RenderTester::mount(
+        box_node(RenderConstraintsTransformBox::new(
+            Alignment::CENTER,
+            Some(Axis::Vertical),
+            Clip::None,
+        ))
+        .child(box_node(ExtentEchoProbeSwapped).label("child")),
+    )
+    .with_constraints(loose(200.0))
+    .run_layout();
+
+    let node = run.root();
+    assert_eq!(
+        run.min_intrinsic_width(node, 77.0),
+        77.0,
+        "height stays constrained, so the probed height extent (77) must reach \
+         the child's width-intrinsic query unmodified",
+    );
+    assert_eq!(run.max_intrinsic_width(node, 77.0), 77.0);
+}
+
+/// The signature scenario's OFFSET half: a 200x150 child centered in a
+/// 100x80 box sits at (-50, -35) — negative, half the overhang on each
+/// side. Sizes alone can't distinguish centering from top-left pinning.
+#[test]
+fn harness_constraints_transform_box_centers_an_overflowing_child_at_a_negative_offset() {
+    let run = RenderTester::mount(
+        box_node(RenderConstraintsTransformBox::new(
+            Alignment::CENTER,
+            None,
+            Clip::None,
+        ))
+        .child(box_node(RenderColoredBox::red(200.0, 150.0)).label("child")),
+    )
+    .with_constraints(BoxConstraints::new(px(0.0), px(100.0), px(0.0), px(80.0)))
+    .run_layout();
+
+    assert_eq!(
+        run.offset(run.id("child")),
+        Offset::new(px(-50.0), px(-35.0)),
+        "centering must split the overhang evenly into negative offsets",
+    );
+}
+
+/// Overflow is the aligned child RECT leaving the box, not a size
+/// comparison: an out-of-range alignment (documented as supported by
+/// `Alignment`) pushes a smaller-than-box child fully outside — Flutter's
+/// `RelativeRect.fromRect(...).hasInsets` reports overflow and clips; a
+/// size-only check would say the 40x40 child "fits" the 100x100 box.
+#[test]
+fn harness_constraints_transform_box_out_of_range_alignment_overflows_a_smaller_child() {
+    let mut run = RenderTester::mount(
+        box_node(RenderConstraintsTransformBox::new(
+            Alignment::new(3.0, 0.0),
+            None,
+            Clip::HardEdge,
+        ))
+        .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
+    )
+    .with_constraints(BoxConstraints::tight(Size::new(px(100.0), px(100.0))))
+    .run_frame();
+
+    let root = run.root();
+    let node = run
+        .owner_mut()
+        .render_tree_mut()
+        .get_mut(root)
+        .and_then(|node| node.downcast_render_object_mut::<RenderConstraintsTransformBox>())
+        .expect("root should be a RenderConstraintsTransformBox");
+    assert!(
+        node.has_visual_overflow(),
+        "a 40x40 child pushed to x=120 by Alignment(3.0, 0.0) leaves the \
+         100x100 box and must be reported as overflowing",
+    );
+    assert!(
+        run.structure().contains(&"ClipRect"),
+        "the out-of-range overflow must be clipped under Clip::HardEdge",
+    );
+}
+
+/// Hit-testing follows Flutter's `RenderShiftedBox` contract: the box's own
+/// size gates first, then the child is tested at its aligned offset — the
+/// clip does NOT participate. A point inside the box lands on the
+/// overflowing child; a point outside the box misses even where the child
+/// visually protrudes.
+#[test]
+fn harness_constraints_transform_box_hit_tests_inside_own_bounds_only() {
+    let run = RenderTester::mount(
+        box_node(RenderConstraintsTransformBox::new(
+            Alignment::CENTER,
+            None,
+            Clip::HardEdge,
+        ))
+        .child(box_node(RenderColoredBox::red(200.0, 150.0)).label("child")),
+    )
+    .with_constraints(BoxConstraints::new(px(0.0), px(100.0), px(0.0), px(80.0)))
+    .run_layout();
+
+    assert!(
+        !run.hit(10.0, 10.0).is_empty(),
+        "a point inside the box must hit the (overflowing, clipped) child",
+    );
+    assert!(
+        run.hit(150.0, 40.0).is_empty(),
+        "a point outside the box's own 100x80 bounds must miss, even though \
+         the child's un-clipped extent would cover it",
+    );
+}
+
+/// Live baseline queries route through the recorded child baseline shifted
+/// by the aligned offset (`child_baseline + offset.dy`, Flutter's
+/// `RenderShiftedBox` contract) — without the override the recorded
+/// baselines would be dead writes and every live query would return `None`.
+#[test]
+fn harness_constraints_transform_box_serves_the_live_child_baseline_shifted_by_alignment() {
+    use flui_rendering::context::{BoxDryBaselineCtx, BoxDryLayoutCtx, BoxLayoutContext};
+    use flui_rendering::parent_data::BoxParentData;
+    use flui_tree::Leaf;
+
+    #[derive(Debug)]
+    struct FixedBaselineProbe;
+
+    impl flui_foundation::Diagnosticable for FixedBaselineProbe {
+        fn debug_fill_properties(&self, _properties: &mut flui_foundation::DiagnosticsBuilder) {}
+    }
+
+    impl RenderBox for FixedBaselineProbe {
+        type Arity = Leaf;
+        type ParentData = BoxParentData;
+
+        fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size {
+            ctx.constraints().constrain(Size::new(px(40.0), px(40.0)))
+        }
+
+        fn compute_dry_layout(
+            &self,
+            constraints: BoxConstraints,
+            _ctx: &mut BoxDryLayoutCtx<'_>,
+        ) -> Size {
+            constraints.constrain(Size::new(px(40.0), px(40.0)))
+        }
+
+        fn compute_distance_to_actual_baseline(&self, _baseline: TextBaseline) -> Option<f32> {
+            Some(20.0)
+        }
+
+        fn compute_dry_baseline(
+            &self,
+            _constraints: BoxConstraints,
+            _baseline: TextBaseline,
+            _ctx: &mut BoxDryBaselineCtx<'_>,
+        ) -> Option<f32> {
+            Some(20.0)
+        }
+    }
+
+    let mut run = RenderTester::mount(
+        box_node(RenderConstraintsTransformBox::new(
+            Alignment::CENTER,
+            None,
+            Clip::None,
+        ))
+        .child(box_node(FixedBaselineProbe).label("child")),
+    )
+    .with_constraints(BoxConstraints::tight(Size::new(px(100.0), px(100.0))))
+    .run_layout();
+
+    let root = run.root();
+    let node = run
+        .owner_mut()
+        .render_tree_mut()
+        .get_mut(root)
+        .and_then(|node| node.downcast_render_object_mut::<RenderConstraintsTransformBox>())
+        .expect("root should be a RenderConstraintsTransformBox");
+    assert_eq!(
+        node.compute_distance_to_actual_baseline(TextBaseline::Alphabetic),
+        Some(50.0),
+        "child baseline 20 + centered offset dy 30 must serve 50 live",
+    );
+}
+
+#[test]
+fn harness_constraints_transform_box_self_describes() {
+    let run = RenderTester::mount(box_node(RenderConstraintsTransformBox::new(
+        Alignment::TOP_LEFT,
+        Some(Axis::Horizontal),
+        Clip::AntiAlias,
+    )))
+    .with_constraints(loose(200.0))
+    .run_layout();
+
+    assert_descendant_properties(
+        &run.diagnostics(),
+        "RenderConstraintsTransformBox",
+        &["alignment", "constrained_axis", "clip_behavior"],
     );
 }
 
