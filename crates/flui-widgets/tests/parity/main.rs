@@ -178,3 +178,7 @@ mod physical_model_test;
 
 // ── Business.1 fidelity — Row parity (row_test.dart) ────────────────────────
 mod row_test;
+
+// ── Business.1 fidelity — GridView interaction parity (grid_view_test.dart,
+//    distinct oracle from grid_view_test.rs's grid_view_layout_test.dart) ──
+mod grid_view_interaction_test;
