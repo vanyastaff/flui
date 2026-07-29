@@ -167,3 +167,8 @@ mod viewport_test;
 // ── Business.1 fidelity front — SliverList scrollOffsetCorrection parity
 //    (slivers_test.dart SliverList scroll-offset-correction subject) ──────
 mod sliver_list_correction_test;
+
+// ── Business.1 fidelity front — slivers_test.dart closeout (ErrorWidget
+//    override contract + the SliverOpacity 'painting & semantics' subject) ─
+mod error_widget_test;
+mod sliver_opacity_test;

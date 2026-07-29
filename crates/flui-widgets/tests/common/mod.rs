@@ -28,7 +28,8 @@ use flui_interaction::events::{
 };
 use flui_objects::{
     RenderAnimatedOpacity, RenderClipOval, RenderClipPath, RenderClipRRect, RenderClipRect,
-    RenderFittedBox, RenderImage, RenderOpacity, RenderParagraph, RenderTransform,
+    RenderFittedBox, RenderImage, RenderOpacity, RenderParagraph, RenderSliverOpacity,
+    RenderTransform,
 };
 use flui_rendering::constraints::{BoxConstraints, SliverGeometry};
 use flui_rendering::pipeline::PipelineOwner;
@@ -495,6 +496,43 @@ impl LaidOut {
         let render = node
             .downcast_render_object_mut::<RenderOpacity>()
             .expect("render node should be a RenderOpacity");
+        render.skip_paint()
+    }
+
+    /// The [`RenderSliverOpacity`] node's `paint_alpha()` — the sliver-protocol
+    /// analog of [`opacity_paint_alpha`](Self::opacity_paint_alpha) (same
+    /// fast-path rule: `None` at full opacity or full transparency without
+    /// `always_needs_compositing`, `Some(alpha)` for a genuine partial
+    /// blend). Panics if `id` is not a `RenderSliverOpacity`.
+    pub fn sliver_opacity_paint_alpha(&self, id: RenderId) -> Option<u8> {
+        use flui_rendering::traits::RenderSliver;
+
+        let mut owner = self.pipeline_owner.write();
+        let node = owner
+            .render_tree_mut()
+            .get_mut(id)
+            .expect("render node should exist");
+        let render = node
+            .downcast_render_object_mut::<RenderSliverOpacity>()
+            .expect("render node should be a RenderSliverOpacity");
+        render.paint_alpha()
+    }
+
+    /// Whether the [`RenderSliverOpacity`] node at `id` suppresses painting
+    /// its child entirely — the sliver-protocol analog of
+    /// [`opacity_skip_paint`](Self::opacity_skip_paint). Panics if `id` is
+    /// not a `RenderSliverOpacity`.
+    pub fn sliver_opacity_skip_paint(&self, id: RenderId) -> bool {
+        use flui_rendering::traits::RenderSliver;
+
+        let mut owner = self.pipeline_owner.write();
+        let node = owner
+            .render_tree_mut()
+            .get_mut(id)
+            .expect("render node should exist");
+        let render = node
+            .downcast_render_object_mut::<RenderSliverOpacity>()
+            .expect("render node should be a RenderSliverOpacity");
         render.skip_paint()
     }
 
