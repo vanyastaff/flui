@@ -6,6 +6,7 @@ use flui_objects::{
     CrossAxisAlignment, FlexDirection, MainAxisAlignment, MainAxisSize, RenderFlex,
 };
 use flui_rendering::protocol::BoxProtocol;
+use flui_types::typography::TextBaseline;
 use flui_view::BoxedView;
 use flui_view::seq::ViewSeq;
 
@@ -13,13 +14,14 @@ use crate::support::generic_render_view_element;
 
 /// Shared main/cross-axis configuration for the flex family, with Flutter's
 /// defaults (`MainAxisAlignment::Start`, `CrossAxisAlignment::Center`,
-/// `MainAxisSize::Max`, `spacing: 0.0`).
+/// `MainAxisSize::Max`, `spacing: 0.0`, `TextBaseline::Alphabetic`).
 #[derive(Clone, Copy, Debug)]
 struct FlexStyle {
     main_axis_alignment: MainAxisAlignment,
     cross_axis_alignment: CrossAxisAlignment,
     main_axis_size: MainAxisSize,
     spacing: f32,
+    text_baseline: TextBaseline,
 }
 
 impl Default for FlexStyle {
@@ -29,6 +31,7 @@ impl Default for FlexStyle {
             cross_axis_alignment: CrossAxisAlignment::Center,
             main_axis_size: MainAxisSize::Max,
             spacing: 0.0,
+            text_baseline: TextBaseline::Alphabetic,
         }
     }
 }
@@ -43,6 +46,7 @@ impl FlexStyle {
             .with_cross_axis_alignment(self.cross_axis_alignment)
             .with_main_axis_size(self.main_axis_size)
             .with_spacing(self.spacing)
+            .with_text_baseline(self.text_baseline)
     }
 }
 
@@ -69,6 +73,15 @@ macro_rules! flex_style_builders {
         #[must_use]
         pub fn main_axis_size(mut self, size: MainAxisSize) -> Self {
             self.style.main_axis_size = size;
+            self
+        }
+
+        /// Which baseline to align children on under
+        /// [`CrossAxisAlignment::Baseline`]; ignored under every other cross
+        /// alignment. Defaults to [`TextBaseline::Alphabetic`].
+        #[must_use]
+        pub fn text_baseline(mut self, baseline: TextBaseline) -> Self {
+            self.style.text_baseline = baseline;
             self
         }
 
