@@ -3443,6 +3443,12 @@ fn harness_decorated_box_paints_the_fill_rect_even_at_zero_size() {
          fill DrawRect unconditionally; commands:\n{}",
         painted.join("\n"),
     );
+    assert!(
+        rects[0].contains("0.00x0.00"),
+        "the unconditional fill must be the zero-AREA rect itself, not some \
+         other draw; got: {}",
+        rects[0],
+    );
 }
 
 /// Oracle-pinning twin of
@@ -3457,27 +3463,35 @@ fn harness_decorated_box_paints_the_fill_rect_even_at_zero_size() {
             even at zero size; Flutter's ColoredBox skips the paint entirely \
             in that case -- see docs/ROADMAP.md Cross.H"]
 fn harness_decorated_box_should_skip_the_fill_rect_at_zero_size_like_flutter() {
-    let run = RenderTester::mount(box_node(RenderDecoratedBox::new(
-        BoxDecoration::with_color(Color::RED),
-    )))
-    .with_size(Size::ZERO)
-    .run_frame();
+    // Flutter's guard is `size > Size.zero`, which is false when EITHER
+    // dimension is zero — all three degenerate shapes must skip.
+    for degenerate in [
+        Size::ZERO,
+        Size::new(px(0.0), px(100.0)),
+        Size::new(px(100.0), px(0.0)),
+    ] {
+        let run = RenderTester::mount(box_node(RenderDecoratedBox::new(
+            BoxDecoration::with_color(Color::RED),
+        )))
+        .with_size(degenerate)
+        .run_frame();
 
-    let painted = run
-        .display_commands()
-        .into_iter()
-        .map(|cmd| cmd.line)
-        .collect::<Vec<_>>();
-    let rects = painted
-        .iter()
-        .filter(|line| line.contains("DrawRect"))
-        .collect::<Vec<_>>();
-    assert!(
-        rects.is_empty(),
-        "Flutter's ColoredBox skips its fill paint entirely at zero size; \
-         commands:\n{}",
-        painted.join("\n"),
-    );
+        let painted = run
+            .display_commands()
+            .into_iter()
+            .map(|cmd| cmd.line)
+            .collect::<Vec<_>>();
+        let rects = painted
+            .iter()
+            .filter(|line| line.contains("DrawRect"))
+            .collect::<Vec<_>>();
+        assert!(
+            rects.is_empty(),
+            "Flutter's ColoredBox skips its fill paint entirely whenever \
+             either dimension is zero ({degenerate:?}); commands:\n{}",
+            painted.join("\n"),
+        );
+    }
 }
 
 #[test]
