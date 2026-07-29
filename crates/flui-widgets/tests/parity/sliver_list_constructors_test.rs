@@ -135,7 +135,7 @@ use flui_types::Color;
 use flui_view::{BoxedView, View, ViewExt};
 use flui_widgets::{Container, CustomScrollView, GestureDetector, SizedBox, SliverList, Text};
 
-use crate::common::LaidOut;
+use crate::common::{LaidOut, settle_lazy};
 use crate::harness;
 
 // ============================================================================
@@ -198,16 +198,6 @@ fn tap_target(
             ),
         )
         .boxed()
-}
-
-/// Drives the lazy virtualizer's request → service → re-layout settle
-/// sequence to completion — two ticks, the same convention
-/// `sliver_list_test.rs`'s own `settle` documents: lazy children build
-/// *after* paint, so a scene needs one tick to emit build requests and a
-/// second to re-lay-out with them built.
-fn settle(laid: &mut LaidOut) {
-    laid.tick();
-    laid.tick();
 }
 
 /// Taps 'Index 0' then 'Index 1' and asserts each tap fires only its own
@@ -316,7 +306,7 @@ fn sliver_list_builder_hit_tests_children_by_position() {
         sliver_list_builder_tap_scene(Arc::clone(&counter0), Arc::clone(&counter1)),
         harness::screen(),
     );
-    settle(&mut laid);
+    settle_lazy(&mut laid);
 
     assert_taps_are_mutually_exclusive(&laid, &counter0, &counter1);
 }
@@ -377,7 +367,7 @@ fn sliver_list_separated_hit_tests_children_by_position() {
         sliver_list_separated_tap_scene(Arc::clone(&counter0), Arc::clone(&counter1)),
         harness::screen(),
     );
-    settle(&mut laid);
+    settle_lazy(&mut laid);
 
     assert_taps_are_mutually_exclusive(&laid, &counter0, &counter1);
 }
@@ -424,7 +414,7 @@ fn sliver_list_separated_count_scene() -> impl View {
 #[test]
 fn sliver_list_separated_has_correct_number_of_children() {
     let mut laid = harness::pump_widget(sliver_list_separated_count_scene(), harness::screen());
-    settle(&mut laid);
+    settle_lazy(&mut laid);
 
     assert_eq!(
         laid.find_all_text("item").len(),
@@ -472,7 +462,7 @@ fn sliver_list_list_hit_tests_children_by_position() {
         sliver_list_list_tap_scene(Arc::clone(&counter0), Arc::clone(&counter1)),
         harness::screen(),
     );
-    settle(&mut laid);
+    settle_lazy(&mut laid);
 
     assert_taps_are_mutually_exclusive(&laid, &counter0, &counter1);
 }

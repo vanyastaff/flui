@@ -1040,6 +1040,24 @@ impl LaidOut {
     }
 }
 
+/// Drives a lazy sliver adaptor's (`SliverList`/`SliverGrid`) request ->
+/// service -> re-layout settle sequence to completion: two ticks.
+///
+/// Lazy children build **after** paint, not during layout as Flutter does
+/// (`SliverChildBuilderDelegate`'s "First-frame settling" doc,
+/// `crates/flui-widgets/src/scroll/sliver_list.rs`) — so a triggering change
+/// (initial mount, a root swap via [`LaidOut::pump_widget`], or a
+/// scroll-position change) needs one tick to emit build requests for the
+/// newly-demanded residents and a second to re-lay-out with them actually
+/// built. Call this after every such change, not only the initial mount —
+/// this is the one settle helper every lazy-sliver parity test shares
+/// (previously duplicated verbatim across `viewport_test.rs`,
+/// `sliver_list_test.rs`, and `sliver_list_constructors_test.rs`).
+pub fn settle_lazy(laid: &mut LaidOut) {
+    laid.tick();
+    laid.tick();
+}
+
 /// Convenience: a `Size` in logical pixels.
 pub fn size(width: f32, height: f32) -> Size {
     Size::new(px(width), px(height))
