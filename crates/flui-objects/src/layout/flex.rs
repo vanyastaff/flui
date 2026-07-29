@@ -84,6 +84,15 @@ struct FlexSizes {
     /// query `ctx.child_dry_baseline(i, child_constraints[i], …)` using the
     /// same constraint that was used during the sizing pass.
     child_constraints: Vec<BoxConstraints>,
+    /// Each child's distance to `self.text_baseline`, as reported right after
+    /// it was measured — `None` for a child with no such baseline, and
+    /// all-`None` unless the flex is baseline-aligned.
+    ///
+    /// Sizing needs these (a baseline-aligned child contributes ascent +
+    /// descent to the cross extent, not its raw cross size), and positioning
+    /// needs the same values; they are collected once here so the two agree by
+    /// construction and each child is queried exactly once.
+    alignment_baselines: Vec<Option<f32>>,
 }
 
 /// A render object that lays out children in a flex layout (row or column).
@@ -307,22 +316,39 @@ impl RenderFlex {
         max
     }
 
+    /// Whether children are positioned by their baselines — only ever true for
+    /// a horizontal flex, since a column has no shared baseline to align to.
+    ///
+    /// Mirrors Flutter's `RenderFlex._isBaselineAligned`, which gates both the
+    /// baseline queries during sizing and the cross-axis offset formula.
+    fn is_baseline_aligned(&self) -> bool {
+        self.cross_axis_alignment == CrossAxisAlignment::Baseline
+            && self.direction == FlexDirection::Horizontal
+    }
+
     /// Core two-pass flex sizing algorithm shared by `perform_layout` and
     /// `compute_dry_layout`.
     ///
     /// Takes the incoming `constraints`, per-child `flex_factors` and
     /// `flex_fits` (length == child_count), and a `measure` callback that
-    /// returns the size a child reports for given `BoxConstraints`.  Does NOT
-    /// position children — the caller is responsible for that.
+    /// returns the size a child reports for given `BoxConstraints` **and** its
+    /// distance to `self.text_baseline` at that size.  Does NOT position
+    /// children — the caller is responsible for that.
     ///
-    /// Mirrors Flutter `RenderFlex.performLayout` up to (but not including)
-    /// the offset-assignment loop (`flex.dart:1339+`).
+    /// The callback returns the baseline alongside the size because a
+    /// baseline-aligned child's contribution to the cross extent is its ascent
+    /// and descent, not its raw cross size, and the reference queries the
+    /// baseline immediately after laying the child out. Callers that are not
+    /// baseline-aligned return `None` — mirroring the reference, which nulls
+    /// out the baseline kind unless [`Self::is_baseline_aligned`].
+    ///
+    /// Mirrors Flutter `RenderFlex._computeSizes`.
     fn compute_sizes(
         &self,
         constraints: BoxConstraints,
         flex_factors: &[Option<i32>],
         flex_fits: &[FlexFit],
-        mut measure: impl FnMut(usize, BoxConstraints) -> Size,
+        mut measure: impl FnMut(usize, BoxConstraints) -> (Size, Option<f32>),
     ) -> FlexSizes {
         let child_count = flex_factors.len();
 
@@ -348,6 +374,7 @@ impl RenderFlex {
                 child_sizes: Vec::new(),
                 total_main: Pixels::ZERO,
                 child_constraints: Vec::new(),
+                alignment_baselines: Vec::new(),
             };
         }
 
@@ -392,13 +419,36 @@ impl RenderFlex {
         let mut child_sizes: Vec<Option<Size>> = vec![None; child_count];
         let mut inflexible_main = Pixels::ZERO;
         let mut max_cross = Pixels::ZERO;
+        let mut alignment_baselines: Vec<Option<f32>> = vec![None; child_count];
+        // Running (max ascent, max descent) over the children that reported a
+        // baseline. `None` while no child has; folded into the cross extent
+        // once every child is sized.
+        let mut ascent_descent: Option<(f32, f32)> = None;
+
+        // Records a measured child: its raw cross size feeds `max_cross`, and,
+        // if it reported a baseline, its ascent/descent feed the running pair.
+        let accumulate_cross =
+            |child_size: Size,
+             baseline: Option<f32>,
+             max_cross: &mut Pixels,
+             ascent_descent: &mut Option<(f32, f32)>| {
+                *max_cross = (*max_cross).max(self.cross_size(child_size));
+                if let Some(ascent) = baseline {
+                    let descent = self.cross_size(child_size).get() - ascent;
+                    *ascent_descent = Some(match *ascent_descent {
+                        None => (ascent, descent),
+                        Some((a, d)) => (a.max(ascent), d.max(descent)),
+                    });
+                }
+            };
 
         for i in 0..child_count {
             if flex_factors[i].is_none() || flex_factors[i] == Some(0) {
-                let child_size = measure(i, non_flex_constraints);
+                let (child_size, baseline) = measure(i, non_flex_constraints);
                 child_sizes[i] = Some(child_size);
+                alignment_baselines[i] = baseline;
                 inflexible_main += self.main_size(child_size);
-                max_cross = max_cross.max(self.cross_size(child_size));
+                accumulate_cross(child_size, baseline, &mut max_cross, &mut ascent_descent);
             }
         }
 
@@ -417,10 +467,11 @@ impl RenderFlex {
         if !can_flex && total_flex > 0 {
             for i in 0..child_count {
                 if matches!(flex_factors[i], Some(f) if f > 0) {
-                    let child_size = measure(i, non_flex_constraints);
+                    let (child_size, baseline) = measure(i, non_flex_constraints);
                     child_sizes[i] = Some(child_size);
+                    alignment_baselines[i] = baseline;
                     inflexible_main += self.main_size(child_size);
-                    max_cross = max_cross.max(self.cross_size(child_size));
+                    accumulate_cross(child_size, baseline, &mut max_cross, &mut ascent_descent);
                 }
             }
         }
@@ -465,11 +516,24 @@ impl RenderFlex {
                         ),
                     };
                     child_constraints[i] = allocated_constraints;
-                    let child_size = measure(i, allocated_constraints);
+                    let (child_size, baseline) = measure(i, allocated_constraints);
                     child_sizes[i] = Some(child_size);
-                    max_cross = max_cross.max(self.cross_size(child_size));
+                    alignment_baselines[i] = baseline;
+                    accumulate_cross(child_size, baseline, &mut max_cross, &mut ascent_descent);
                 }
             }
+        }
+
+        // Baseline-aligned children stack ascent-above-descent rather than
+        // sitting flush at the cross start, so the extent they need is the
+        // tallest ascent plus the deepest descent — which can exceed every
+        // individual child's own cross size. Children with no baseline (and
+        // every child when the flex is not baseline-aligned) still contribute
+        // their raw cross size through `max_cross`, so a tall no-baseline child
+        // continues to win. Mirrors Flutter's `_AscentDescent` accumulation
+        // folded into `accumulatedSize` in `RenderFlex._computeSizes`.
+        if let Some((ascent, descent)) = ascent_descent {
+            max_cross = max_cross.max(px(ascent + descent));
         }
 
         // ── Container size ────────────────────────────────────────────────────
@@ -500,6 +564,7 @@ impl RenderFlex {
             child_sizes,
             total_main,
             child_constraints,
+            alignment_baselines,
         }
     }
 
@@ -637,8 +702,16 @@ impl RenderBox for RenderFlex {
             flex_fits.push(fit);
         }
 
+        // Only queried when the flex is baseline-aligned; all-`None` otherwise
+        // (and then ignored by `compute_child_offsets`).
+        let baseline_aligned = self.is_baseline_aligned();
+        let text_baseline = self.text_baseline;
         let flex_sizes = self.compute_sizes(constraints, &flex_factors, &flex_fits, |i, c| {
-            ctx.layout_child(i, c)
+            let child_size = ctx.layout_child(i, c);
+            let baseline = baseline_aligned
+                .then(|| ctx.child_distance_to_actual_baseline(i, text_baseline))
+                .flatten();
+            (child_size, baseline)
         });
 
         // Zero-child case: no positioning loop needed.
@@ -648,22 +721,8 @@ impl RenderBox for RenderFlex {
         }
 
         // ── Positioning pass ─────────────────────────────────────────────────
-        // Collect per-child alignment baselines (self.text_baseline kind).
-        // Only queried when CrossAxisAlignment::Baseline is active on a horizontal
-        // flex; all-None otherwise (ignored by compute_child_offsets).
-        let alignment_baselines: Vec<Option<f32>> = (0..child_count)
-            .map(|i| {
-                if self.direction == FlexDirection::Horizontal
-                    && self.cross_axis_alignment == CrossAxisAlignment::Baseline
-                {
-                    ctx.child_distance_to_actual_baseline(i, self.text_baseline)
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        let child_offsets = self.compute_child_offsets(&flex_sizes, &alignment_baselines);
+        let alignment_baselines = &flex_sizes.alignment_baselines;
+        let child_offsets = self.compute_child_offsets(&flex_sizes, alignment_baselines);
 
         // Reset recorded baselines; they are populated in the loop below.
         self.reported_baselines = [None; 2];
@@ -730,8 +789,14 @@ impl RenderBox for RenderFlex {
             flex_fits.push(fit);
         }
 
+        let baseline_aligned = self.is_baseline_aligned();
+        let text_baseline = self.text_baseline;
         self.compute_sizes(constraints, &flex_factors, &flex_fits, |i, c| {
-            ctx.child_dry_layout(i, c)
+            let child_size = ctx.child_dry_layout(i, c);
+            let baseline = baseline_aligned
+                .then(|| ctx.child_dry_baseline(i, c, text_baseline))
+                .flatten();
+            (child_size, baseline)
         })
         .size
     }
@@ -779,24 +844,18 @@ impl RenderBox for RenderFlex {
             flex_fits.push(fit);
         }
 
+        let baseline_aligned = self.is_baseline_aligned();
+        let text_baseline = self.text_baseline;
         let flex_sizes = self.compute_sizes(constraints, &flex_factors, &flex_fits, |i, c| {
-            ctx.child_dry_layout(i, c)
+            let child_size = ctx.child_dry_layout(i, c);
+            let baseline = baseline_aligned
+                .then(|| ctx.child_dry_baseline(i, c, text_baseline))
+                .flatten();
+            (child_size, baseline)
         });
 
-        // Collect alignment baselines for Baseline cross-axis positioning.
-        let alignment_baselines: Vec<Option<f32>> = (0..child_count)
-            .map(|i| {
-                if self.direction == FlexDirection::Horizontal
-                    && self.cross_axis_alignment == CrossAxisAlignment::Baseline
-                {
-                    ctx.child_dry_baseline(i, flex_sizes.child_constraints[i], self.text_baseline)
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        let child_offsets = self.compute_child_offsets(&flex_sizes, &alignment_baselines);
+        let alignment_baselines = &flex_sizes.alignment_baselines;
+        let child_offsets = self.compute_child_offsets(&flex_sizes, alignment_baselines);
 
         // Apply highest (horizontal) / first (vertical) formula to dry baselines.
         let mut reported = None::<f32>;
