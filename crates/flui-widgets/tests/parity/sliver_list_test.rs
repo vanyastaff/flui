@@ -204,7 +204,7 @@ use flui_types::layout::AxisDirection;
 use flui_view::{BoxedView, View, ViewExt};
 use flui_widgets::{ScrollController, SizedBox, SliverList, Text, Viewport};
 
-use crate::common::LaidOut;
+use crate::common::{LaidOut, settle_lazy};
 use crate::harness;
 
 // ============================================================================
@@ -343,16 +343,6 @@ fn sliver_list_shrinking_tail_scene(
         .position(controller.position())
 }
 
-/// Drives the lazy virtualizer's request → service → re-layout settle
-/// sequence to completion. Two ticks, matching the established convention
-/// in `list_view_test.rs` (see that file's module doc for the rationale:
-/// lazy children build *after* paint, so a triggering change needs one
-/// tick to emit build requests and a second to re-lay-out with them built).
-fn settle(laid: &mut LaidOut) {
-    laid.tick();
-    laid.tick();
-}
-
 /// Whether `id`'s absolute paint rect overlaps the viewport's own on-screen
 /// band `[0, viewport_height)` on the main (vertical) axis — the FLUI
 /// equivalent of Flutter's `find.text(..., skipOffstage: true)` (the
@@ -416,7 +406,7 @@ fn sliver_list_reverse_children_keeps_scroll_offset_and_shows_reversed_window() 
         sliver_list_scene(items.clone(), ITEM_HEIGHT, &controller),
         harness::screen_of(800.0, VIEWPORT_HEIGHT),
     );
-    settle(&mut laid);
+    settle_lazy(&mut laid);
 
     assert_eq!(controller.pixels(), SCROLL_POSITION);
     assert!(laid.find_text("Tile 0").is_none());
@@ -426,7 +416,7 @@ fn sliver_list_reverse_children_keeps_scroll_offset_and_shows_reversed_window() 
 
     let reversed: Vec<i32> = items.iter().rev().copied().collect();
     laid.pump_widget(sliver_list_scene(reversed, ITEM_HEIGHT, &controller));
-    settle(&mut laid);
+    settle_lazy(&mut laid);
 
     assert_eq!(controller.pixels(), SCROLL_POSITION);
     assert!(laid.find_text("Tile 19").is_none());
@@ -436,7 +426,7 @@ fn sliver_list_reverse_children_keeps_scroll_offset_and_shows_reversed_window() 
 
     controller.jump_to(0.0);
     laid.pump();
-    settle(&mut laid);
+    settle_lazy(&mut laid);
 
     assert_eq!(controller.pixels(), 0.0);
     assert!(laid.find_text("Tile 19").is_some());
@@ -468,7 +458,7 @@ fn sliver_list_replace_children_keeps_scroll_offset_and_shows_new_values() {
         sliver_list_scene(items.clone(), ITEM_HEIGHT, &controller),
         harness::screen_of(800.0, VIEWPORT_HEIGHT),
     );
-    settle(&mut laid);
+    settle_lazy(&mut laid);
 
     assert_eq!(controller.pixels(), SCROLL_POSITION);
     assert!(laid.find_text("Tile 18").is_some());
@@ -476,7 +466,7 @@ fn sliver_list_replace_children_keeps_scroll_offset_and_shows_new_values() {
 
     let shifted: Vec<i32> = items.iter().map(|value| value + 100).collect();
     laid.pump_widget(sliver_list_scene(shifted, ITEM_HEIGHT, &controller));
-    settle(&mut laid);
+    settle_lazy(&mut laid);
 
     assert_eq!(controller.pixels(), SCROLL_POSITION);
     assert!(laid.find_text("Tile 18").is_none());
@@ -486,7 +476,7 @@ fn sliver_list_replace_children_keeps_scroll_offset_and_shows_new_values() {
 
     controller.jump_to(0.0);
     laid.pump();
-    settle(&mut laid);
+    settle_lazy(&mut laid);
 
     assert_eq!(controller.pixels(), 0.0);
     assert!(laid.find_text("Tile 100").is_some());
@@ -531,7 +521,7 @@ fn sliver_list_replace_with_shorter_list_shifts_scroll_offset_by_removed_extent(
         sliver_list_scene(items.clone(), ITEM_HEIGHT, &controller),
         harness::screen_of(800.0, VIEWPORT_HEIGHT),
     );
-    settle(&mut laid);
+    settle_lazy(&mut laid);
 
     assert_eq!(controller.pixels(), scroll_position);
     assert!(!is_onstage_text(&laid, "Tile 17", VIEWPORT_HEIGHT));
@@ -540,7 +530,7 @@ fn sliver_list_replace_with_shorter_list_shifts_scroll_offset_by_removed_extent(
 
     let shorter: Vec<i32> = items[..items.len() - 1].to_vec();
     laid.pump_widget(sliver_list_scene(shorter, ITEM_HEIGHT, &controller));
-    settle(&mut laid);
+    settle_lazy(&mut laid);
 
     assert_eq!(controller.pixels(), scroll_position - ITEM_HEIGHT);
     assert!(is_onstage_text(&laid, "Tile 17", VIEWPORT_HEIGHT));
@@ -585,7 +575,7 @@ fn sliver_list_reordering_two_items_keeps_both_visible() {
         sliver_list_indexed_scene(vec!["1".to_string(), "2".to_string()]),
         harness::screen_of(800.0, 500.0),
     );
-    settle(&mut laid);
+    settle_lazy(&mut laid);
 
     let tile1 = laid
         .find_text("Tile 1")
@@ -607,7 +597,7 @@ fn sliver_list_reordering_two_items_keeps_both_visible() {
         "2".to_string(),
         "1".to_string(),
     ]));
-    settle(&mut laid);
+    settle_lazy(&mut laid);
 
     let tile1 = laid
         .find_text("Tile 1")
@@ -666,11 +656,11 @@ fn sliver_list_recalculates_offset_when_item_prepended_while_scrolled_to_end() {
         sliver_list_scene(items.clone(), ITEM_HEIGHT, &controller),
         harness::screen_of(800.0, VIEWPORT_HEIGHT),
     );
-    settle(&mut laid);
+    settle_lazy(&mut laid);
 
     controller.jump_to(DRAG_CLAMPED_OFFSET);
     laid.pump();
-    settle(&mut laid);
+    settle_lazy(&mut laid);
 
     assert_eq!(controller.pixels(), DRAG_CLAMPED_OFFSET);
     assert!(!is_onstage_text(&laid, "Tile 15", VIEWPORT_HEIGHT));
@@ -681,7 +671,7 @@ fn sliver_list_recalculates_offset_when_item_prepended_while_scrolled_to_end() {
 
     items.insert(0, -1);
     laid.pump_widget(sliver_list_scene(items.clone(), ITEM_HEIGHT, &controller));
-    settle(&mut laid);
+    settle_lazy(&mut laid);
 
     assert_eq!(controller.pixels(), DRAG_CLAMPED_OFFSET);
     assert!(!is_onstage_text(&laid, "Tile 14", VIEWPORT_HEIGHT));
@@ -693,7 +683,7 @@ fn sliver_list_recalculates_offset_when_item_prepended_while_scrolled_to_end() {
 
     controller.jump_to(0.0);
     laid.pump();
-    settle(&mut laid);
+    settle_lazy(&mut laid);
 
     assert_eq!(controller.pixels(), 0.0);
     assert!(is_onstage_text(&laid, "Tile -1", VIEWPORT_HEIGHT));
@@ -733,11 +723,11 @@ fn sliver_list_recalculates_offset_when_items_swapped_while_scrolled_to_end() {
         sliver_list_scene(items.clone(), ITEM_HEIGHT, &controller),
         harness::screen_of(800.0, VIEWPORT_HEIGHT),
     );
-    settle(&mut laid);
+    settle_lazy(&mut laid);
 
     controller.jump_to(DRAG_CLAMPED_OFFSET);
     laid.pump();
-    settle(&mut laid);
+    settle_lazy(&mut laid);
 
     assert_eq!(controller.pixels(), DRAG_CLAMPED_OFFSET);
     assert!(!is_onstage_text(&laid, "Tile 15", VIEWPORT_HEIGHT));
@@ -750,7 +740,7 @@ fn sliver_list_recalculates_offset_when_items_swapped_while_scrolled_to_end() {
     // child with a layout offset the virtualizer cannot dead-reckon.
     items.swap(3, 19);
     laid.pump_widget(sliver_list_scene(items.clone(), ITEM_HEIGHT, &controller));
-    settle(&mut laid);
+    settle_lazy(&mut laid);
 
     assert_eq!(controller.pixels(), DRAG_CLAMPED_OFFSET);
     assert!(!is_onstage_text(&laid, "Tile 14", VIEWPORT_HEIGHT));
@@ -807,11 +797,11 @@ fn sliver_list_falls_back_to_initial_child_when_no_valid_layout_offset_survives(
         sliver_list_shrinking_tail_scene(true, &controller),
         harness::screen_of(800.0, VIEWPORT_HEIGHT),
     );
-    settle(&mut laid);
+    settle_lazy(&mut laid);
 
     controller.jump_to(DRAG_CLAMPED_OFFSET);
     laid.pump();
-    settle(&mut laid);
+    settle_lazy(&mut laid);
 
     assert_eq!(controller.pixels(), DRAG_CLAMPED_OFFSET);
     assert!(!is_onstage_text(&laid, "Tile 17", VIEWPORT_HEIGHT));
@@ -821,7 +811,7 @@ fn sliver_list_falls_back_to_initial_child_when_no_valid_layout_offset_survives(
     assert!(is_onstage_text(&laid, "Marker 1", VIEWPORT_HEIGHT));
 
     laid.pump_widget(sliver_list_shrinking_tail_scene(false, &controller));
-    settle(&mut laid);
+    settle_lazy(&mut laid);
 
     // Layout must complete without panicking/hanging even though both
     // resident children lose their layout offset in the same pass — the

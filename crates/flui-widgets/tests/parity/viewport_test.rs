@@ -125,7 +125,7 @@ use flui_widgets::{
     Text, Viewport,
 };
 
-use crate::common::{LaidOut, lay_out, offset, size, tight};
+use crate::common::{LaidOut, lay_out, offset, settle_lazy, size, tight};
 
 // ============================================================================
 // Case 1 — 'Viewport basic test'
@@ -362,17 +362,6 @@ fn assert_on_screen(laid: &LaidOut, scroll_offset: f32, expected: [bool; 4]) {
     );
 }
 
-/// Drives the lazy `SliverList` virtualizer's request -> service -> re-layout
-/// settle sequence to completion — two ticks, the same convention
-/// `sliver_list_constructors_test.rs`'s own `settle` documents: lazy children
-/// build *after* paint, so a scroll-position change needs one tick to emit
-/// build requests for the newly-demanded residents and a second to re-lay-out
-/// with them actually built.
-fn settle(laid: &mut LaidOut) {
-    laid.tick();
-    laid.tick();
-}
-
 /// Flutter parity: `slivers_test.dart` `'Multiple grids and lists'` (tag
 /// `3.44.0`) — see this module's doc comment for the gesture-to-`jump_to`
 /// substitution and the final-offset clamp derivation.
@@ -383,18 +372,18 @@ fn multiple_grids_and_lists_scrolling_reveals_each_groups_text_and_clamps_at_max
         multiple_grids_and_lists_scene().position(controller.position()),
         tight(SCENE_WIDTH, SCENE_HEIGHT),
     );
-    settle(&mut laid);
+    settle_lazy(&mut laid);
 
     assert_on_screen(&laid, controller.pixels(), [true, false, false, false]);
 
     controller.jump_to(70.0);
     laid.pump();
-    settle(&mut laid);
+    settle_lazy(&mut laid);
     assert_on_screen(&laid, controller.pixels(), [false, true, false, false]);
 
     controller.jump_to(140.0);
     laid.pump();
-    settle(&mut laid);
+    settle_lazy(&mut laid);
     assert_on_screen(&laid, controller.pixels(), [false, false, true, false]);
 
     // Oracle drags a further -70 (cumulative -210 across 3 `moveBy(Offset(0.0,
@@ -414,7 +403,7 @@ fn multiple_grids_and_lists_scrolling_reveals_each_groups_text_and_clamps_at_max
     // (`scroll_controller_test.rs`).
     controller.jump_to(210.0);
     laid.pump();
-    settle(&mut laid);
+    settle_lazy(&mut laid);
     let max_scroll_extent = 11.0 * ITEM_EXTENT - SCENE_HEIGHT;
     assert_eq!(
         controller.pixels(),

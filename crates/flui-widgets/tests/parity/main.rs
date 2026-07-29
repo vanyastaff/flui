@@ -163,3 +163,7 @@ mod align_test;
 // ── Business.1 fidelity — Viewport parity (slivers_test.dart Viewport
 //    subject) ────────────────────────────────────────────────────────────
 mod viewport_test;
+
+// ── Business.1 fidelity front — SliverList scrollOffsetCorrection parity
+//    (slivers_test.dart SliverList scroll-offset-correction subject) ──────
+mod sliver_list_correction_test;
