@@ -28,6 +28,41 @@
 //! Geometry oracle (offstage = true):
 //!   Same render-node count (child still laid out); geometry reported to
 //!   viewport is SliverGeometry::ZERO.
+//!
+//! ## Cross-reference: `slivers_test.dart`'s own `SliverOffstage` group
+//!
+//! `packages/flutter/test/widgets/slivers_test.dart` (tag `3.44.0`) carries
+//! its own `group('SliverOffstage - ')` with `'offstage true'` (line 732)
+//! and `'offstage false'` (line 751) — a DIFFERENT oracle file from the one
+//! cited above (`sliver_test.dart`, singular). Read both: the scenarios
+//! coincide. `'offstage true'` pumps `SliverOffstage(sliver:
+//! SliverToBoxAdapter(child: Text('a')))` (offstage defaults `true`) and
+//! asserts the child is absent from `find.byType(Text)`/semantics (Flutter's
+//! default finder skips offstage elements) while `renderSliver.geometry!.
+//! scrollExtent == 0.0`; `'offstage false'` passes `offstage: false` and
+//! asserts the opposite (`Text` found, semantics present, non-zero
+//! `scrollExtent`, `paints..paragraph()`). Both rest on the SAME underlying
+//! contract this file's own `sliver_offstage_hidden_child_remains_in_render_tree`
+//! / `sliver_offstage_visible_with_child_builds_three_render_nodes` already
+//! pin: the child stays laid out and present in the render tree regardless
+//! of the flag, and only the reported geometry/paint/finder-visibility
+//! collapses when hidden. The split across FLUI's suites: this file's
+//! render-node-count assertions pin the child-stays-mounted half, and the
+//! geometry-collapse half (`scrollExtent == 0` offstage, child extent
+//! onstage) is pinned at render level by
+//! `harness_sliver_offstage_hidden_reports_zero_geometry` /
+//! `harness_sliver_offstage_visible_reports_child_geometry`
+//! (`crates/flui-objects/tests/render_object_harness.rs`). Two oracle
+//! observables remain UNASSERTED on the FLUI side: the onstage
+//! `paints..paragraph()` check (no paint-command assertion exists in
+//! either suite for this widget) and the hidden child's exclusion from
+//! default finders (Flutter's `skipOffstage` onstage walk — the same
+//! standing no-semantics-assertions harness gap as the semantics-tree
+//! check). Accounted per-file even though covered elsewhere — the same
+//! "cite the port, don't re-port it" precedent this crate's own render-
+//! object-catalog and `overlay_test.rs` cross-references already establish
+//! for a scenario ported once but named by more than one oracle file/case —
+//! no new test added, this is a documentation-only cross-reference.
 
 use flui_widgets::{CustomScrollView, SizedBox, SliverOffstage};
 
