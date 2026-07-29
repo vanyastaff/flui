@@ -188,8 +188,15 @@
 //!    painted") via geometry instead of a canvas-call interceptor.
 //! 10. `'GridView in zero context'` — **ported, real green**:
 //!     [`grid_view_in_zero_context_renders_no_onstage_children`].
-//! 11. `'GridView in unbounded context'` — **ported, real green**:
-//!     [`grid_view_in_unbounded_context_shrink_wrap_renders_all_children`].
+//! 11. `'GridView in unbounded context'` — **partial: current-behavior
+//!     green + oracle pin red**. A shrink-wrapped grid in an unbounded
+//!     context COLLAPSES to zero height today (the delegate's cell
+//!     arithmetic overflows on the unbounded window and pipeline
+//!     resilience recovers into the degraded geometry; Cross.H filed):
+//!     [`grid_view_in_unbounded_context_shrink_wrap_collapses_to_zero_height`]
+//!     pins what is,
+//!     [`grid_view_in_unbounded_context_shrink_wrap_sizes_the_viewport_to_content`]
+//!     (`#[ignore]`d) pins the oracle's content-sized expectation.
 //! 12. `'GridView.builder control test'` — **ported, real green**:
 //!     [`grid_view_builder_control_test_shrink_wrap_builds_exactly_viewport_fit`].
 //!     Lazy path, but Finding 2's residency-vs-onstage distinction still
@@ -466,7 +473,7 @@ fn tap_text(laid: &LaidOut, text: &str) {
 /// "laid out this frame" gate — so the SAME stale geometry this helper
 /// works around can mis-route a real tap to an invisible, offscreen tile
 /// after a one-shot scroll jump (confirmed: `jump_to(0.0)` from the max
-/// scroll extent, then a tap at fresh 'Alaska''s on-screen position, hit
+/// scroll extent, then a tap at the on-screen position of fresh 'Alaska', hit
 /// stale 'Tennessee' instead). Tracked as a `docs/ROADMAP.md` Cross.H
 /// production-defect entry (search "RenderSliverGrid::hit_test" there); not
 /// fixed here, out of scope for this port. Stepping through the cache
@@ -989,13 +996,53 @@ fn grid_view_in_zero_context_renders_no_onstage_children() {
 /// vacuity risk regardless of mount strategy — only absence checks do, per
 /// Finding 2).
 #[test]
-fn grid_view_in_unbounded_context_shrink_wrap_renders_all_children() {
+fn grid_view_in_unbounded_context_shrink_wrap_collapses_to_zero_height() {
     let children: Vec<BoxedView> = (0..20).map(|i| Text::new(format!("{i}")).boxed()).collect();
     let root = SingleChildScrollView::new().child(GridView::count(4, children).shrink_wrap(true));
     let laid = harness::pump_widget(root, harness::screen());
 
+    // CURRENT-BEHAVIOR PIN of a real divergence (Cross.H: shrink-wrapped
+    // grid collapses in an unbounded context). The load-bearing observable
+    // is GEOMETRY, not residency — the eager path mounts all 20 children
+    // no matter what, so the residency asserts below can never fail on
+    // this gap alone. What actually happens today: the delegate's cell
+    // arithmetic is fed the unbounded main-axis window and overflows (a
+    // debug-build panic pipeline resilience catches — stderr shows it —
+    // same recovery family as the delegate-validation entry), and the
+    // shrink-wrapping viewport commits ZERO height instead of its 1000px
+    // content. Flutter sizes to content; the `#[ignore]`d twin below pins
+    // that expectation and fails on this exact assert until the gap
+    // closes.
+    let viewport_id = laid.find_by_render_type("RenderShrinkWrappingViewport");
+    assert_eq!(
+        laid.size(viewport_id),
+        size(800.0, 0.0),
+        "pins the CURRENT collapsed geometry; if this starts failing, the \
+         shrink-wrap gap closed — un-ignore the twin and retire this pin"
+    );
     assert!(laid.find_text("0").is_some(), "item 0 must be found");
     assert!(laid.find_text("19").is_some(), "item 19 must be found");
+}
+
+/// The oracle's actual expectation for the case above: a shrink-wrapped
+/// 4-column, 20-item grid in an unbounded context sizes its viewport to
+/// its content — 200px square cells, 5 rows, 800x1000.
+#[test]
+#[ignore = "known gap: a shrink-wrapped grid in an unbounded context collapses to \
+            zero height (delegate cell arithmetic overflows on the unbounded \
+            window; pipeline resilience recovers into the degraded geometry) — \
+            docs/ROADMAP.md Cross.H, this file case 11"]
+fn grid_view_in_unbounded_context_shrink_wrap_sizes_the_viewport_to_content() {
+    let children: Vec<BoxedView> = (0..20).map(|i| Text::new(format!("{i}")).boxed()).collect();
+    let root = SingleChildScrollView::new().child(GridView::count(4, children).shrink_wrap(true));
+    let laid = harness::pump_widget(root, harness::screen());
+
+    let viewport_id = laid.find_by_render_type("RenderShrinkWrappingViewport");
+    assert_eq!(
+        laid.size(viewport_id),
+        size(800.0, 1000.0),
+        "shrink_wrap must size the grid's viewport to its content extent"
+    );
 }
 
 // ============================================================================
@@ -1064,13 +1111,23 @@ fn grid_view_builder_with_undefined_item_count_scrolls_in_more_items() {
     assert!(laid.find_text("0").is_some());
     assert!(laid.find_text("11").is_some());
 
+    // Residency alone can't prove the reveal (20 items x 200px rows fit
+    // inside the cache-extended window, so item 13 is resident from the
+    // start): pin the onstage TRANSITION instead. Row 3's top sits exactly
+    // at the 600px viewport edge pre-scroll — offstage under the strict
+    // intersection — and moves to y=300 after the 300px jump.
+    assert!(
+        !is_onstage_text_v(&laid, "13", 600.0),
+        "item 13 must start offstage (its row top sits exactly at the viewport edge)"
+    );
+
     controller.jump_to(300.0);
     laid.pump();
     common::settle_lazy(&mut laid);
 
     assert!(
-        laid.find_text("13").is_some(),
-        "item 13 must be built once the scroll reveals it"
+        is_onstage_text_v(&laid, "13", 600.0),
+        "item 13 must be on screen once the scroll reveals it"
     );
 }
 
