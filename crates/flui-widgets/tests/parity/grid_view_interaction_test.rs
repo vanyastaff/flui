@@ -453,33 +453,64 @@ fn tap_text(laid: &LaidOut, text: &str) {
 /// Moves `controller` from its CURRENT position to `target` in steps smaller
 /// than `RenderSliverGrid`'s cache extent (`DEFAULT_CACHE_EXTENT` = 250px,
 /// `crates/flui-objects/src/sliver/viewport.rs`), pumping a frame after each
-/// step — the substitute for `tester.drag`/`tester.fling` this file's
-/// module doc (Finding 3) promises, refined here: the eager grid path only
-/// refreshes a child's committed geometry/offset while that child sits
-/// inside the CURRENT frame's cache-extended layout band
-/// (`RenderSliverGrid::perform_layout`'s windowed layout, module doc
-/// Finding 1). A single teleporting `jump_to` can therefore leave a
-/// previously-onstage child's geometry frozen at its STALE pre-jump value —
-/// confirmed empirically (a one-shot `jump_to(4000.0)` from a fresh mount
-/// left a since-scrolled-away child's absolute offset unchanged from its
-/// pre-scroll value, misreading as still-onstage to a geometry-based probe;
-/// the identical final position reached via two smaller steps refreshed it
-/// correctly).
+/// step — the substitute for `tester.drag`/`tester.fling` this file's module
+/// doc (Finding 3) promises, refined here: the EAGER grid path
+/// (`RenderSliverGrid`, backing `GridView::count`/`.extent` with a plain
+/// children list — see this file's Finding 1) only refreshes a child's
+/// committed geometry/offset while that child sits inside the CURRENT
+/// frame's cache-extended layout band, and never evicts a child once it
+/// falls out of band (it stays arena-resident forever). A single
+/// teleporting `jump_to` can therefore leave a previously-onstage child's
+/// geometry frozen at its STALE pre-jump value — confirmed empirically (a
+/// one-shot `jump_to(4000.0)` from a fresh mount left a since-scrolled-away
+/// child's absolute offset unchanged from its pre-scroll value, misreading
+/// as still-onstage to a geometry-based probe like [`is_onstage_text_v`];
+/// the identical final position reached via smaller steps refreshed it
+/// correctly, because a bounded scroll delta stays inside — or close to —
+/// the cache-extended band each step, keeping every in-play tile's geometry
+/// current as it goes).
 ///
-/// This IS a production defect, not merely a test-harness observability
-/// quirk: `RenderSliverGrid::hit_test` iterates every ever-attached tile
-/// unconditionally (not just the current frame's laid-out window), and the
-/// per-child box hit-test dispatch reads a child's committed offset with no
-/// "laid out this frame" gate — so the SAME stale geometry this helper
-/// works around can mis-route a real tap to an invisible, offscreen tile
-/// after a one-shot scroll jump (confirmed: `jump_to(0.0)` from the max
-/// scroll extent, then a tap at the on-screen position of fresh 'Alaska', hit
-/// stale 'Tennessee' instead). Tracked as a `docs/ROADMAP.md` Cross.H
-/// production-defect entry (search "RenderSliverGrid::hit_test" there); not
-/// fixed here, out of scope for this port. Stepping through the cache
-/// window, exactly as a real drag/fling always does, keeps every tile's
-/// geometry fresh and sidesteps the observable symptom for this file's own
-/// tests, but does not fix the underlying gate.
+/// This same staleness used to be a PRODUCTION defect too, not merely a
+/// test-harness observability quirk: `RenderSliverGrid::hit_test` walked
+/// every ever-attached tile unconditionally (not just the current frame's
+/// laid-out window), so a stale offscreen tile's stale rect could win a tap
+/// meant for the fresh tile now painting there (confirmed: `jump_to(0.0)`
+/// from the max scroll extent, then a tap at the on-screen position of
+/// fresh 'Alaska', hit stale 'Tennessee' instead). **Fixed**: `hit_test` now
+/// gates on `RenderSliverGrid::laid_out_band`, the exact window
+/// `perform_layout` committed on its most recent pass (`docs/ROADMAP.md`
+/// Cross.H, search "RenderSliverGrid::hit_test"). That fix does not touch
+/// the geometry-staleness half documented above — a stale child's
+/// `RenderState.offset` is still never cleared or refreshed until it comes
+/// back in band, `hit_test` just no longer considers it. That staleness is
+/// NOT test-probe-only either: the semantics phase is a real production
+/// reader of the same stale committed geometry — `PipelineOwner::
+/// run_semantics`'s `build_semantics_fragments_impl` walk composes every
+/// arena-resident child's `offset()`/geometry with no laid-out-band gate at
+/// all, so an a11y-enabled app sees the identical stale rect a raw jump
+/// leaves behind (open as its own `docs/ROADMAP.md` Cross.H entry, search
+/// "build_semantics_fragments_impl"). This file's own geometry-reading
+/// probes (`is_onstage_text_v`, `tile_center`) are just how a test WITHOUT
+/// semantics enabled happens to observe that same staleness — not the only
+/// thing it affects. So this helper stays load-bearing for any test (like
+/// the two `.count`/`.extent` control tests above) that reads a
+/// POSSIBLY-out-of-band child's geometry directly after a large jump.
+/// Empirically re-verified after the hit-test fix landed: switching every
+/// call site in this file to a raw one-shot `jump_to` turns
+/// `grid_view_extent_control_test_taps_route_by_position_across_scroll` red
+/// (a stale 'Alabama' misreads as onstage) — the remaining call sites keep
+/// the sweep for that reason.
+///
+/// The scroll-jump geometry test below (case 5,
+/// [`grid_view_extent_horizontal_large_scroll_jump_tile_geometry_and_onstage_band`])
+/// no longer needs it and uses a raw `jump_to` instead: it runs through
+/// `GridView::builder` (the element-owned LAZY path, `RenderSliverGridLazy`
+/// — this file's Finding 1 only describes the eager list-of-children
+/// constructors), whose out-of-band children are genuinely evicted from the
+/// render tree each pass (`SparseChildren::retain_band`,
+/// `crates/flui-view/src/element/sparse_children.rs`) rather than left
+/// stale — an evicted child has no geometry to misread at all, so neither
+/// half of this helper's problem statement applies there.
 fn jump_to_swept(laid: &mut LaidOut, controller: &ScrollController, target: f32) {
     const STEP: f32 = 100.0; // comfortably under the 250px cache extent
     loop {
@@ -705,6 +736,11 @@ fn grid_view_extent_control_test_taps_route_by_position_across_scroll() {
 /// see the module doc). Since this case's own subject is scroll-jump
 /// geometry, not build laziness, routing through the lazy constructor here
 /// does not weaken anything the oracle actually asserts.
+///
+/// Scrolls via a raw one-shot `ScrollController::jump_to` (not
+/// [`jump_to_swept`] — see that helper's doc for why this case is exempt:
+/// the LAZY (`RenderSliverGridLazy`) path genuinely evicts out-of-band
+/// children instead of leaving them stale).
 #[test]
 fn grid_view_extent_horizontal_large_scroll_jump_tile_geometry_and_onstage_band() {
     let delegate: Arc<dyn SliverGridDelegate> = Arc::new(
@@ -744,7 +780,8 @@ fn grid_view_extent_horizontal_large_scroll_jump_tile_geometry_and_onstage_band(
         );
     }
 
-    jump_to_swept(&mut laid, &controller, 3025.0);
+    controller.jump_to(3025.0);
+    laid.pump();
     common::settle_lazy(&mut laid);
     for i in 33..45 {
         assert!(
@@ -759,7 +796,8 @@ fn grid_view_extent_horizontal_large_scroll_jump_tile_geometry_and_onstage_band(
         );
     }
 
-    jump_to_swept(&mut laid, &controller, 975.0);
+    controller.jump_to(975.0);
+    laid.pump();
     common::settle_lazy(&mut laid);
     for i in 9..21 {
         assert!(

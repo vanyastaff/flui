@@ -57,7 +57,7 @@
 //! | `RenderListener` | `harness_listener_*` | yes | yes | — | yes | — |
 //! | `RenderMouseRegion` | `harness_mouse_region_*` | yes | yes | — | yes | cursor/annotation |
 //! | `RenderSliverFixedExtentList` | `harness_sliver_fixed_extent_list_*` | yes | — | — | yes | — |
-//! | `RenderSliverGrid` | `harness_render_sliver_grid_*` | yes | — | — | yes | — |
+//! | `RenderSliverGrid` | `harness_render_sliver_grid_*` | yes | yes | — | yes | — |
 //! | `RenderSliverGridLazy` | `harness_render_sliver_grid_lazy_*` | yes | — | — | yes | — |
 //! | `RenderSliverPadding` | `harness_sliver_padding_*` | yes | — | — | yes | — |
 //! | `RenderSliverToBoxAdapter` | `harness_sliver_to_box_adapter_*` | yes | — | — | yes | — |
@@ -104,12 +104,12 @@ use flui_interaction::routing::{MouseTracker, PointerMotionKind};
 use flui_objects::*;
 use flui_painting::{Canvas, Paint};
 use flui_rendering::{
-    constraints::BoxConstraints,
+    constraints::{BoxConstraints, SliverConstraints},
     context::BoxIntrinsicsCtx,
     delegates::{
         CustomPainter, FlowDelegate, FlowPaintingContext, MultiChildLayoutContext,
-        MultiChildLayoutDelegate, SingleChildLayoutDelegate,
-        SliverGridDelegateWithFixedCrossAxisCount,
+        MultiChildLayoutDelegate, SingleChildLayoutDelegate, SliverGridDelegate,
+        SliverGridDelegateWithFixedCrossAxisCount, SliverGridLayout,
     },
     hit_testing::{CursorIcon, HitTestBehavior, HitTestResult, MouseRegionCallbacks},
     layer::LayerLink,
@@ -5506,6 +5506,222 @@ fn harness_render_sliver_grid_lays_out_two_column_grid() {
     let tree = run.diagnostics();
     let sliver_node_diag = tree.find_descendant("RenderSliverGrid").unwrap();
     assert_has_committed_geometry(sliver_node_diag);
+}
+
+/// Regression for the stale-rect hit-test defect (`docs/ROADMAP.md` Cross.H):
+/// `RenderSliverGrid` never evicts out-of-band children (it is eager — see
+/// the type's module doc), so a child whose committed offset was set on an
+/// EARLIER layout pass keeps that offset once it falls out of the windowed
+/// band. Before the `laid_out_band` gate, `hit_test` walked `0..child_count`
+/// unconditionally and so could still route a tap to that stale rect.
+///
+/// 15 single-column (`cross_axis_count = 1`) tiles, each 100px tall, in a
+/// 200×200 viewport with the default 250px cache extent:
+///
+/// - First layout at `scroll_offset = 1000.0` bands rows `[7, 14]` — tile10's
+///   committed offset is `10*100 - 1000 = 0`.
+/// - Second layout (jump back to the top) at `scroll_offset = 0.0` bands rows
+///   `[0, 4]` — tile0's FRESH offset is `0*100 - 0 = 0`: the exact same
+///   on-screen rect tile10 is still (pre-fix) claiming, because tile10 (now
+///   out of band) is left untouched by the second pass's position loop.
+///
+/// `.rev()` order means the unguarded walk reaches index 10 before index 0,
+/// so it used to resolve a tap over that shared rect to the stale tile10
+/// instead of the fresh tile0.
+#[test]
+fn harness_render_sliver_grid_hit_test_ignores_stale_out_of_band_offset() {
+    const TILE_LABELS: [&str; 15] = [
+        "tile0", "tile1", "tile2", "tile3", "tile4", "tile5", "tile6", "tile7", "tile8", "tile9",
+        "tile10", "tile11", "tile12", "tile13", "tile14",
+    ];
+    let delegate = SliverGridDelegateWithFixedCrossAxisCount::new(1).with_main_axis_extent(100.0);
+    let mut run = RenderTester::mount(viewport_with_scroll(
+        1000.0,
+        sliver_node(RenderSliverGrid::new(Arc::new(delegate)))
+            .label("grid")
+            .children(
+                TILE_LABELS
+                    .iter()
+                    .map(|&label| box_node(RenderColoredBox::red(200.0, 100.0)).label(label)),
+            ),
+    ))
+    .with_size(Size::new(px(200.0), px(200.0)))
+    .run_layout();
+
+    let vp_id = run.id("viewport");
+    let tile0 = run.id("tile0");
+    let tile10 = run.id("tile10");
+
+    // First pass, band [7, 14]: tile10 receives a real, freshly-positioned
+    // offset — the precondition for it to later look "plausibly valid" once
+    // stale.
+    assert_eq!(
+        run.offset(tile10),
+        Offset::new(px(0.0), px(0.0)),
+        "tile10 = row 10 at scroll_offset=1000: 10*100 - 1000 = 0",
+    );
+
+    // Jump back to the top — beyond the cache window in the other direction.
+    // New band is [0, 4]; tile10 falls out of band and keeps its stale
+    // scroll_offset=1000 committed rect (this sliver never evicts).
+    run.update::<RenderViewport<ScrollableViewportOffset>>(vp_id, |vp| {
+        vp.offset_mut().set_pixels(0.0);
+    });
+    run.relayout();
+
+    assert_eq!(
+        run.offset(tile0),
+        Offset::new(px(0.0), px(0.0)),
+        "tile0 = row 0 at scroll_offset=0: fresh offset is (0, 0)",
+    );
+    assert_eq!(
+        run.offset(tile10),
+        Offset::new(px(0.0), px(0.0)),
+        "tile10 is out of band this pass and must still report its stale \
+         (0, 0) rect from the first layout — the precondition this test \
+         exercises; if this fails, the scenario no longer reproduces the bug",
+    );
+
+    // The tap must resolve to the fresh in-band tile0, never the stale
+    // out-of-band tile10, even though both report the identical rect.
+    let hit = run.hit_first(50.0, 50.0);
+    assert_eq!(
+        hit,
+        Some(tile0),
+        "a tap over the fresh tile0 rect must not resolve to stale tile10 \
+         (got {hit:?}) — hit_test must only walk the committed laid_out_band, \
+         not every arena-resident child",
+    );
+}
+
+/// Regression for a NARROWER, review-caught defect in the same fix:
+/// `laid_out_band` must be committed as the LAST thing `perform_layout`
+/// does, after the layout and position loops — not right after computing
+/// `first_in_band`/`last_in_band`, before either loop runs. The pipeline
+/// wraps every render object's `perform_layout` call in `catch_unwind`
+/// (`crates/flui-rendering/src/pipeline/owner/subtree_arena.rs`); if the
+/// caller-supplied `grid_delegate` panics partway through a pass, an EARLY
+/// commit would have already pointed `laid_out_band` at a window whose
+/// offsets that (aborted) pass never got to (re)write — reopening the exact
+/// stale-rect class the fix closes, just from a different trigger.
+///
+/// `SliverGridLayout::compute_max_scroll_offset` divides by
+/// `cross_axis_count` (`(child_count - 1) / self.cross_axis_count`) with no
+/// zero guard — an unconditional (not debug-only) integer division-by-zero
+/// panic for any delegate whose `get_layout` returns `cross_axis_count: 0`.
+/// `SliverGridDelegate` is a public trait implemented by caller code, and
+/// nothing in its contract (or `SliverGridLayout`'s public fields) rules out
+/// a degenerate return value, so this is a real, externally reachable panic
+/// site — not a contrived one.
+#[test]
+fn harness_render_sliver_grid_hit_test_keeps_pre_panic_band_after_a_poisoned_relayout() {
+    #[derive(Debug)]
+    struct ZeroCrossAxisCountDelegate;
+
+    impl SliverGridDelegate for ZeroCrossAxisCountDelegate {
+        fn get_layout(&self, _constraints: SliverConstraints) -> SliverGridLayout {
+            SliverGridLayout {
+                cross_axis_count: 0,
+                main_axis_stride: 100.0,
+                cross_axis_stride: 100.0,
+                child_main_axis_extent: 100.0,
+                child_cross_axis_extent: 100.0,
+                reverse_cross_axis: false,
+            }
+        }
+
+        fn should_relayout(&self, _old_delegate: &dyn SliverGridDelegate) -> bool {
+            true
+        }
+
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+    }
+
+    // Pass 1: an ordinary 2-column delegate lays out and positions all 4
+    // tiles for real — the "last successful pass" this test's assertions
+    // must survive back to.
+    let mut run = RenderTester::mount(viewport(
+        sliver_node(RenderSliverGrid::new(Arc::new(
+            SliverGridDelegateWithFixedCrossAxisCount::new(2),
+        )))
+        .label("grid")
+        .child(box_node(RenderColoredBox::red(100.0, 100.0)).label("tile0"))
+        .child(box_node(RenderColoredBox::green(100.0, 100.0)).label("tile1"))
+        .child(box_node(RenderColoredBox::blue(100.0, 100.0)).label("tile2"))
+        .child(box_node(RenderColoredBox::red(100.0, 100.0)).label("tile3")),
+    ))
+    .with_size(Size::new(px(200.0), px(200.0)))
+    .run_layout();
+
+    let grid_id = run.id("grid");
+    let tile0 = run.id("tile0");
+    assert_eq!(
+        run.offset(tile0),
+        Offset::new(px(0.0), px(0.0)),
+        "pass 1 must position tile0 normally before the poisoned pass 2",
+    );
+    let band_before = (
+        run.descendant_property("RenderSliverGrid", "laid_out_band_first"),
+        run.descendant_property("RenderSliverGrid", "laid_out_band_last"),
+    );
+    assert!(
+        band_before.0.is_some() && band_before.1.is_some(),
+        "pass 1 must commit a non-empty laid_out_band before the poisoned pass 2",
+    );
+
+    // Pass 2: swap in the poisoned delegate and relayout directly (not via
+    // `LayoutRun::relayout`, which `.expect()`s success on the OVERALL frame
+    // — orthogonal to this test, since the pipeline's own per-node
+    // resilience (the same "recovers into a degraded tree" posture
+    // `docs/ROADMAP.md`'s Cross.H documents elsewhere for a sibling
+    // delegate-validation gap) catches this panic and keeps the frame
+    // `Ok`; only THIS render object's own state is at risk, which is what
+    // the rest of this test verifies directly).
+    run.update::<RenderSliverGrid>(grid_id, |grid| {
+        grid.set_grid_delegate(Arc::new(ZeroCrossAxisCountDelegate));
+    });
+    let result = run.owner_mut().run_layout();
+    assert!(
+        result.is_ok(),
+        "the pipeline's per-node catch_unwind must keep the overall pass Ok even \
+         when one render object's delegate panics; got {result:?}",
+    );
+    let band_after = (
+        run.descendant_property("RenderSliverGrid", "laid_out_band_first"),
+        run.descendant_property("RenderSliverGrid", "laid_out_band_last"),
+    );
+    assert_eq!(
+        band_after, band_before,
+        "the poisoned pass 2 (which never reached its own commit statement) must \
+         leave `laid_out_band` exactly as pass 1 committed it — a change here means \
+         the commit is (again) reachable before the panic point",
+    );
+
+    // tile0's offset must be UNCHANGED from pass 1: the panic in
+    // `compute_max_scroll_offset` fires before either loop in `perform_layout`
+    // runs, so pass 2 never called `ctx.position_child` at all.
+    assert_eq!(
+        run.offset(tile0),
+        Offset::new(px(0.0), px(0.0)),
+        "pass 2 panicked before its position loop ran; tile0's committed \
+         offset must still be pass 1's",
+    );
+
+    // The actual regression: hit_test must keep resolving against pass 1's
+    // committed band. Committing `laid_out_band` early (right after
+    // computing `first_in_band`/`last_in_band`, before either loop) would
+    // have pointed it at pass 2's `[0, 0]` window — a window pass 2's panic
+    // meant nothing was ever positioned in — leaving hit_test blind to
+    // tile0's still-perfectly-valid rect.
+    assert_eq!(
+        run.hit_first(50.0, 50.0),
+        Some(tile0),
+        "hit_test must keep resolving against the LAST SUCCESSFUL pass's \
+         band after a poisoned relayout, not a band the poisoned pass never \
+         finished positioning",
+    );
 }
 
 // Render-level parity oracle: `rendering/sliver_cache_test.dart`'s
