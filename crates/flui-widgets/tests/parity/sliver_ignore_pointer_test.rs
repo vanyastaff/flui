@@ -78,8 +78,8 @@
 //! | 11 | `'Can override ErrorWidget.build'` | `error_widget_test.rs` | accounted; contract ported, exact mechanism pinned as a gap |
 //! | 12 | `'…auto-correct scroll offset - super fast'` | `sliver_fixed_extent_list_test.rs` (case 4) | OOS — needs `.builder` |
 //! | 13 | `'…auto-correct scroll offset - reasonable'` | `sliver_fixed_extent_list_test.rs` (case 5) | OOS — needs `.builder` |
-//! | 14 | `'offstage true'` | `sliver_offstage_test.rs` (cross-ref) | covered — render-node-count equivalent |
-//! | 15 | `'offstage false'` | `sliver_offstage_test.rs` (cross-ref) | covered — render-node-count equivalent |
+//! | 14 | `'offstage true'` | `sliver_offstage_test.rs` (cross-ref) | covered in part (mounted + geometry halves); paint/finder-exclusion halves unported |
+//! | 15 | `'offstage false'` | `sliver_offstage_test.rs` (cross-ref) | covered in part (mounted + geometry halves); paint/finder-exclusion halves unported |
 //! | 16 | `'painting & semantics'` (`SliverOpacity`) | `sliver_opacity_test.rs` | ported, real green (paint half); semantics half OOS |
 //! | 17 | `'ignores pointer events'` | `sliver_ignore_pointer_test.rs` (this file) | ported, real green (pointer half, combined with #20); semantics half OOS |
 //! | 18 | `'ignores semantics'` | `sliver_ignore_pointer_test.rs` (this file) | OOS — semantics half unportable; pointer half subsumed by #21 |

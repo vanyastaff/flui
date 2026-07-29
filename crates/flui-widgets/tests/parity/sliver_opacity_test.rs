@@ -23,12 +23,14 @@
 //! seven legs collapse to exactly three DISTINCT paint-observable states
 //! (`1.0`, `0.0`, `0.1` — the `alwaysIncludeSemantics` toggle and the two
 //! repeated `0.0`/`0.1` legs change only the semantics assertion, never the
-//! paint one) plus one semantics-only axis (`alwaysIncludeSemantics`,
-//! confirmed by reading `RenderSliverOpacity`
-//! (`crates/flui-objects/src/sliver/sliver_opacity.rs`): its own
-//! `always_needs_compositing` field is a DIFFERENT concept — compositing-
-//! layer stability for animated opacity, not "paint anyway" — so nothing on
-//! the paint side varies with it either):
+//! paint one) plus one semantics-only axis (`alwaysIncludeSemantics`).
+//! FLUI's `RenderSliverOpacity` has no analog of that semantics knob; its
+//! `always_needs_compositing` field
+//! (`crates/flui-objects/src/sliver/sliver_opacity.rs`) is a paint-side
+//! concept — set, it forces `paint_alpha` to report a layer at every alpha
+//! and disables the `alpha == 0` skip fast path — and every leg below holds
+//! it at its default `false`, so the three paint legs exercise the same
+//! paint behavior the oracle's pump cycles do:
 //!
 //! - **Paint-behavior legs** (does the node emit an alpha layer, does it
 //!   suppress painting its child) — ported below, same split

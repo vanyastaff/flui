@@ -52,9 +52,13 @@
 //! onstage) is pinned at render level by
 //! `harness_sliver_offstage_hidden_reports_zero_geometry` /
 //! `harness_sliver_offstage_visible_reports_child_geometry`
-//! (`crates/flui-objects/tests/render_object_harness.rs`) — together they
-//! cover the oracle's observables; Flutter's semantics-tree assertion has
-//! no harness equivalent (standing gap). Accounted per-file even though covered elsewhere — the same
+//! (`crates/flui-objects/tests/render_object_harness.rs`). Two oracle
+//! observables remain UNASSERTED on the FLUI side: the onstage
+//! `paints..paragraph()` check (no paint-command assertion exists in
+//! either suite for this widget) and the hidden child's exclusion from
+//! default finders (Flutter's `skipOffstage` onstage walk — the same
+//! standing no-semantics-assertions harness gap as the semantics-tree
+//! check). Accounted per-file even though covered elsewhere — the same
 //! "cite the port, don't re-port it" precedent this crate's own render-
 //! object-catalog and `overlay_test.rs` cross-references already establish
 //! for a scenario ported once but named by more than one oracle file/case —
