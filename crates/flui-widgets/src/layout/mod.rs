@@ -26,6 +26,7 @@ mod sized_box;
 mod sized_overflow_box;
 mod table;
 mod transform;
+mod unconstrained_box;
 
 pub use align::Align;
 pub use aspect_ratio::AspectRatio;
@@ -51,3 +52,4 @@ pub use sized_box::SizedBox;
 pub use sized_overflow_box::SizedOverflowBox;
 pub use table::{Table, TableCell, TableRow};
 pub use transform::Transform;
+pub use unconstrained_box::UnconstrainedBox;
