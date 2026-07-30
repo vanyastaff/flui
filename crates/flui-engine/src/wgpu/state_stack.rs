@@ -463,10 +463,27 @@ impl GpuStateStack {
             (min_x, min_y, max_x - min_x, max_y - min_y)
         };
 
-        let r_tl = rrect.top_left.x.0.max(rrect.top_left.y.0);
-        let r_tr = rrect.top_right.x.0.max(rrect.top_right.y.0);
-        let r_br = rrect.bottom_right.x.0.max(rrect.bottom_right.y.0);
-        let r_bl = rrect.bottom_left.x.0.max(rrect.bottom_left.y.0);
+        // The radii live in the same space as the bounds, so they have to make
+        // the same trip. Transforming the bounds alone leaves them in logical
+        // pixels while the SDF evaluates against a device-pixel rect: at the
+        // root `scale(dpr)` of any HiDPI display a 100×100 circular clip
+        // becomes 200×200 with 50-pixel corners — a rounded square, not a
+        // circle. Derive the per-axis factors from what the bounds actually
+        // did rather than decomposing the matrix, so a translation-only or
+        // identity transform yields exactly 1.0 and the values stay bit-equal
+        // to the untransformed path.
+        let (scale_x, scale_y) = if rect.width().0 > 0.0 && rect.height().0 > 0.0 {
+            (w / rect.width().0, h / rect.height().0)
+        } else {
+            (1.0, 1.0)
+        };
+        // Each corner collapses its rx/ry to one radius (the SDF slot carries
+        // one per corner), and scaling before the collapse keeps that choice
+        // meaningful under a non-uniform scale.
+        let r_tl = (rrect.top_left.x.0 * scale_x).max(rrect.top_left.y.0 * scale_y);
+        let r_tr = (rrect.top_right.x.0 * scale_x).max(rrect.top_right.y.0 * scale_y);
+        let r_br = (rrect.bottom_right.x.0 * scale_x).max(rrect.bottom_right.y.0 * scale_y);
+        let r_bl = (rrect.bottom_left.x.0 * scale_x).max(rrect.bottom_left.y.0 * scale_y);
 
         self.current_rrect_clip = [x, y, w, h, r_tl, r_tr, r_br, r_bl];
         // Clearing the superellipse clip prevents `apply_active_clip` from
@@ -876,6 +893,58 @@ mod tests {
             w, 0,
             "a clip rect entirely past the right edge must clamp to zero width, not leave a \
              residual extent past the surface bound"
+        );
+    }
+
+    /// A scaled circular clip must stay a circle.
+    ///
+    /// `clip_rrect` transforms the bounds through the CTM. If the radii do not
+    /// make the same trip they stay in logical pixels while the SDF evaluates
+    /// against a device-pixel rect — so at the root `scale(dpr)` of any HiDPI
+    /// display a circular clip renders as a rounded square. The invariant that
+    /// makes it a circle is `radius == shorter_side / 2`, and it has to hold
+    /// after the transform, not just before it.
+    #[test]
+    fn a_scaled_circular_clip_keeps_its_radius_proportional_to_its_bounds() {
+        let mut stack = GpuStateStack::new_for_test();
+        let surface = (400u32, 400u32);
+
+        let circle = RRect::from_rect_circular(
+            Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0)),
+            px(50.0),
+        );
+
+        stack.scale(2.0, 2.0);
+        stack.clip_rrect(circle, surface);
+
+        let clip = stack.current_rrect_clip;
+        let (w, h) = (clip[2], clip[3]);
+        assert_eq!((w, h), (200.0, 200.0), "the bounds scale with the CTM");
+        for (corner, radius) in ["tl", "tr", "br", "bl"].iter().zip(&clip[4..8]) {
+            assert!(
+                (radius - w / 2.0).abs() < 0.01,
+                "corner {corner} must stay at half the scaled side ({}), got {radius} — a \
+                 smaller radius is a rounded square wearing a circle's bounds",
+                w / 2.0,
+            );
+        }
+    }
+
+    /// The untransformed path must be untouched by the scaling fix.
+    #[test]
+    fn an_unscaled_clip_keeps_its_radii_bit_exact() {
+        let mut stack = GpuStateStack::new_for_test();
+        let rrect = RRect::from_rect_circular(
+            Rect::from_xywh(px(10.0), px(20.0), px(80.0), px(40.0)),
+            px(7.5),
+        );
+
+        stack.clip_rrect(rrect, (400, 400));
+
+        assert_eq!(
+            stack.current_rrect_clip,
+            [10.0, 20.0, 80.0, 40.0, 7.5, 7.5, 7.5, 7.5],
+            "an identity CTM must divide out to exactly 1.0, not to 0.999…",
         );
     }
 }

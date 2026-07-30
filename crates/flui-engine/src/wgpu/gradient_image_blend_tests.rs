@@ -572,6 +572,88 @@ mod gpu_tests {
         }
     }
 
+    /// The same clip under a scaling CTM — the HiDPI case.
+    ///
+    /// `clip_rrect` transforms its bounds through the CTM, so the radii must
+    /// travel with them. When they did not, the root `scale(dpr)` of any
+    /// HiDPI display turned a circular clip into a rounded square: bounds
+    /// doubled, corners did not. That is invisible at DPR 1, which is exactly
+    /// what the identity-transform test above runs at.
+    #[test]
+    fn a_clipped_image_stays_circular_under_a_scaling_transform() {
+        let (device, queue) = acquire_test_device_and_queue();
+        let (surface_texture, surface_view) = create_sampleable_surface(&device);
+
+        let backdrop = Color::rgba(0, 0, 255, 255);
+        clear_surface_to_color(
+            &device,
+            &queue,
+            &surface_view,
+            wgpu::Color {
+                r: 0.0,
+                g: 0.0,
+                b: 1.0,
+                a: 1.0,
+            },
+        );
+
+        let source_color = Color::rgba(255, 0, 0, 255);
+        let source_image = solid_color_image(source_color);
+
+        // Half-size in logical units, doubled by the CTM — the same device
+        // pixels as the unscaled case, reached the way a HiDPI frame reaches
+        // them.
+        let logical_side = (SURFACE_WIDTH / 2) as f32;
+        let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
+        painter.save();
+        painter.scale(2.0, 2.0);
+        painter.clip_rrect(flui_types::geometry::RRect::from_rect_circular(
+            Rect::from_xywh(px(0.0), px(0.0), px(logical_side), px(logical_side)),
+            px(logical_side / 2.0),
+        ));
+        painter.draw_image(
+            &source_image,
+            Rect::from_xywh(px(0.0), px(0.0), px(logical_side), px(logical_side)),
+            BlendMode::SrcOver,
+        );
+        painter.restore();
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Scaled circular image clip encoder"),
+        });
+        painter
+            .render(
+                RenderTarget::sampleable(&surface_view, &surface_texture),
+                &mut encoder,
+            )
+            .expect("painter.render must succeed for the scaled circular image clip");
+        queue.submit(std::iter::once(encoder.finish()));
+
+        let readback = readback_pixels(&device, &queue, &surface_texture);
+        let width = SURFACE_WIDTH as usize;
+        let at = |col: usize, row: usize| readback[row * width + col];
+
+        assert_pixel_within_tolerance(
+            "scaled circular image clip — centre is the image",
+            at(width / 2, width / 2),
+            [source_color.r, source_color.g, source_color.b, 255],
+            2,
+        );
+        for (col, row) in [
+            (1, 1),
+            (width - 2, 1),
+            (1, width - 2),
+            (width - 2, width - 2),
+        ] {
+            assert_pixel_within_tolerance(
+                &format!("scaled circular image clip — corner ({col},{row}) keeps the backdrop"),
+                at(col, row),
+                [backdrop.r, backdrop.g, backdrop.b, 255],
+                2,
+            );
+        }
+    }
+
     // ── GI3: 2-tile repeat — single backdrop read ─────────────────────────────
 
     /// GI3: A 2-tile image repeat with an advanced blend mode must blend BOTH tiles
