@@ -337,6 +337,12 @@ pub fn dispatch_command<R: CommandRenderer + ?Sized>(command: &DrawCommand, rend
         DrawCommand::RestoreLayer { transform } => {
             renderer.restore_layer(transform);
         }
+        DrawCommand::Save { .. } => {
+            renderer.save_state();
+        }
+        DrawCommand::Restore { .. } => {
+            renderer.restore_state();
+        }
         // `DrawCommand` is `#[non_exhaustive]` so downstream crates
         // (this one) must handle the open-set shape. When a new
         // variant lands in flui-painting before flui-engine grows the

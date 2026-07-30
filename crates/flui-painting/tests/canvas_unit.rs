@@ -127,7 +127,11 @@ fn test_canvas_finish_clean_after_balanced_save_restore() {
     canvas.translate(50.0, 50.0);
     canvas.restore();
     let display_list = canvas.finish();
-    assert_eq!(display_list.len(), 0);
+    // The pair records its scope bracket — `translate` mutates the canvas
+    // transform rather than emitting a command, so the two here are exactly
+    // `Save` and `Restore`. What this test is about is that the balance does
+    // not trip the imbalance assert in `finish`.
+    assert_eq!(display_list.len(), 2);
 }
 
 /// `Canvas::reset()` must clear commands, transform, clip stack, and
@@ -159,7 +163,8 @@ fn test_canvas_clear_commands_preserves_state() {
     canvas.translate(25.0, 25.0);
     let rect = Rect::from_ltrb(px(0.0), px(0.0), px(10.0), px(10.0));
     canvas.draw_rect(rect, &Paint::fill(Color::BLUE));
-    assert_eq!(canvas.display_list().len(), 1);
+    // `Save` from the outstanding save(), plus the rect.
+    assert_eq!(canvas.display_list().len(), 2);
     let before_count = canvas.save_count();
 
     canvas.clear_commands();
@@ -172,7 +177,14 @@ fn test_canvas_clear_commands_preserves_state() {
     // trip the unrestored-save debug_assert.
     canvas.restore();
     let dl = canvas.finish();
-    assert_eq!(dl.len(), 0);
+    // One command, and it is an unmatched `Restore`: `clear_commands` drops the
+    // recorded `Save` while deliberately preserving the save *stack*, so the
+    // pop that balances the CPU-side stack has no opening command left to
+    // close. A backend replaying this fragment alone sees a stack underflow
+    // (it warns and ignores). That is inherent to clearing a recording
+    // mid-scope, not a defect in the pair — callers who clear commands are
+    // expected to restart the recording, not splice it onto the old one.
+    assert_eq!(dl.len(), 1);
 }
 
 // ===== draw_polyline =====

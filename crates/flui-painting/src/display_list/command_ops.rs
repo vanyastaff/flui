@@ -91,7 +91,9 @@ impl DrawCommand {
             | Self::DrawTextSpan { .. }
             | Self::DrawGradient { .. }
             | Self::DrawGradientRRect { .. }
-            | Self::RestoreLayer { .. } => self.clone(),
+            | Self::RestoreLayer { .. }
+            | Self::Save { .. }
+            | Self::Restore { .. } => self.clone(),
 
             // Paint commands: Apply opacity to paint field
             //
@@ -613,7 +615,10 @@ impl DrawCommand {
             DrawCommand::SaveLayer {
                 bounds, transform, ..
             } => bounds.map(|b| transform.transform_rect(&b)),
-            DrawCommand::RestoreLayer { .. } => None,
+            // Scope markers draw nothing, so they contribute no bounds.
+            DrawCommand::RestoreLayer { .. }
+            | DrawCommand::Save { .. }
+            | DrawCommand::Restore { .. } => None,
         }
     }
 
@@ -628,7 +633,15 @@ impl DrawCommand {
             | DrawCommand::ClipRSuperellipse { .. }
             | DrawCommand::ClipPath { .. } => CommandKind::Clip,
 
-            DrawCommand::SaveLayer { .. } | DrawCommand::RestoreLayer { .. } => CommandKind::Layer,
+            // The scope markers are `Layer` too: they are the plain-state
+            // siblings of `SaveLayer`/`RestoreLayer`, and the `_ => Draw`
+            // fallback below would otherwise make `is_draw()` true for a
+            // command that draws nothing — skewing `draw_commands()` and
+            // `count_by_kind()` for every recording that uses a scope.
+            DrawCommand::SaveLayer { .. }
+            | DrawCommand::RestoreLayer { .. }
+            | DrawCommand::Save { .. }
+            | DrawCommand::Restore { .. } => CommandKind::Layer,
 
             DrawCommand::ShaderMask { .. } | DrawCommand::BackdropFilter { .. } => {
                 CommandKind::Effect
@@ -743,7 +756,9 @@ impl DrawCommand {
             | DrawCommand::DrawPaint { transform, .. }
             | DrawCommand::DrawAtlas { transform, .. }
             | DrawCommand::SaveLayer { transform, .. }
-            | DrawCommand::RestoreLayer { transform, .. } => *transform,
+            | DrawCommand::RestoreLayer { transform, .. }
+            | DrawCommand::Save { transform, .. }
+            | DrawCommand::Restore { transform, .. } => *transform,
         }
     }
 
@@ -821,7 +836,9 @@ impl DrawCommand {
             | DrawCommand::DrawPaint { transform, .. }
             | DrawCommand::DrawAtlas { transform, .. }
             | DrawCommand::SaveLayer { transform, .. }
-            | DrawCommand::RestoreLayer { transform, .. } => transform,
+            | DrawCommand::RestoreLayer { transform, .. }
+            | DrawCommand::Save { transform, .. }
+            | DrawCommand::Restore { transform, .. } => transform,
         }
     }
 

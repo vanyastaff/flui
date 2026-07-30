@@ -714,6 +714,14 @@ mod tests {
             self.calls.push("restore_layer".to_string());
         }
 
+        fn save_state(&mut self) {
+            self.calls.push("save_state".to_string());
+        }
+
+        fn restore_state(&mut self) {
+            self.calls.push("restore_state".to_string());
+        }
+
         // The push/pop methods live in `impl LayerStateStack` below, not here.
 
         // ===== Performance Overlay (recorded) =====

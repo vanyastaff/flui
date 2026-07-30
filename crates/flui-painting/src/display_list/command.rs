@@ -447,6 +447,39 @@ pub enum DrawCommand {
         /// Transform at recording time (for consistency).
         transform: Matrix4,
     },
+
+    /// Push the backend's transform + clip state.
+    ///
+    /// The counterpart to [`DrawCommand::Restore`], and the plain-state
+    /// sibling of [`DrawCommand::SaveLayer`] — no offscreen target, no
+    /// compositing, just a scope marker.
+    ///
+    /// It exists because a clip has to be *undoable*. `ClipRect`/`ClipRRect`
+    /// and friends narrow the backend's current clip, and without a marker
+    /// saying when that narrowing ends, a clip applied for one subtree keeps
+    /// applying to every command recorded after it — including siblings that
+    /// never asked to be clipped.
+    ///
+    /// Carries the recording-time transform like every other variant, per this
+    /// enum's stated invariant — the backend's own stack is what actually
+    /// holds the saved state, so this field is for consistency and for
+    /// `transform()`/`transform_mut()`, not a second source of truth.
+    Save {
+        /// Transform at recording time (for consistency).
+        transform: Matrix4,
+    },
+
+    /// Pop the transform + clip state pushed by the matching
+    /// [`DrawCommand::Save`].
+    ///
+    /// Emitted by `Canvas::restore` for a plain `save()`. A `save_layer()` is
+    /// closed by [`DrawCommand::RestoreLayer`] instead — that path composites
+    /// an offscreen target and manages its own state — so exactly one of the
+    /// two is recorded per balanced pair, never both.
+    Restore {
+        /// Transform at recording time (for consistency).
+        transform: Matrix4,
+    },
 }
 
 /// Categories of drawing commands.
@@ -492,7 +525,7 @@ mod contract_freeze {
 
     /// Frozen count of `DrawCommand` variants. Bump only via the change
     /// protocol in the module comment above.
-    const FROZEN_DRAWCOMMAND_VARIANT_COUNT: usize = 31;
+    const FROZEN_DRAWCOMMAND_VARIANT_COUNT: usize = 33;
 
     /// Exhaustive — NO wildcard arm. This is the compile-time freeze guard:
     /// the function only exists to force the exhaustiveness check; the
@@ -530,6 +563,8 @@ mod contract_freeze {
             DrawCommand::DrawAtlas { .. } => "DrawAtlas",
             DrawCommand::SaveLayer { .. } => "SaveLayer",
             DrawCommand::RestoreLayer { .. } => "RestoreLayer",
+            DrawCommand::Save { .. } => "Save",
+            DrawCommand::Restore { .. } => "Restore",
         }
     }
 
@@ -540,7 +575,7 @@ mod contract_freeze {
         // pins the count as a second, human-readable signal and keeps the
         // helper from being dead code.
         assert_eq!(
-            FROZEN_DRAWCOMMAND_VARIANT_COUNT, 31,
+            FROZEN_DRAWCOMMAND_VARIANT_COUNT, 33,
             "DrawCommand contract count changed — follow the change protocol in \
              the module comment + docs/designs/2026-06-30-scene-drawcommand-contract.md"
         );

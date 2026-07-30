@@ -1,7 +1,7 @@
 ---
 title: "Scene / DrawCommand contract freeze"
 status: frozen
-contract_version: 1
+contract_version: 2
 date: 2026-06-30
 roadmap: Core.0 N11
 guards:
@@ -118,3 +118,4 @@ to be a major contract revision.
 | Contract version | Date | Change |
 |---|---|---|
 | 1 | 2026-06-30 | Initial freeze at 31 `DrawCommand` variants. Guard installed. |
+| 2 | 2026-07-30 | Added `Save` and `Restore` (33 variants). Additive, so downstream stays source-compatible via `#[non_exhaustive]`. The vocabulary had `SaveLayer`/`RestoreLayer` but no plain-state pair, so `Canvas::save`/`restore` recorded nothing: a `clip_*` narrowed the backend's state with no marker for when the narrowing ended, and the clip kept applying to every later command — including siblings. `CommandRenderer` grows `save_state`/`restore_state` accordingly. |

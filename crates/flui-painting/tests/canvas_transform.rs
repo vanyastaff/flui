@@ -115,7 +115,9 @@ fn test_transform_with_save_restore() {
     canvas.draw_rect(rect2, &paint);
 
     let display_list = canvas.finish();
-    assert_eq!(display_list.len(), 2);
+    // `Save`, the rect drawn under the rotation, `Restore`, then the rect
+    // drawn after it — the bracket is what keeps the rotation off the second.
+    assert_eq!(display_list.len(), 4);
 }
 
 #[test]

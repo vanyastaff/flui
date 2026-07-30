@@ -344,6 +344,22 @@ pub trait CommandRenderer {
     /// Restore canvas state and composite the saved layer
     fn restore_layer(&mut self, transform: &Matrix4);
 
+    // ===== Plain State Scope =====
+
+    /// Push the current transform + clip state.
+    ///
+    /// The plain-state sibling of [`Self::save_layer`]: no offscreen target,
+    /// no compositing. A backend that narrows its clip on `clip_*` needs this
+    /// marker to know which narrowings to undo, and [`Self::restore_state`] to
+    /// undo them.
+    fn save_state(&mut self);
+
+    /// Pop the state pushed by the matching [`Self::save_state`].
+    ///
+    /// Unbalanced pops are a recording bug, not a rendering one — a backend
+    /// should report and ignore rather than corrupt its stack.
+    fn restore_state(&mut self);
+
     // ===== Performance Overlay =====
 
     /// Add a performance overlay to the scene
