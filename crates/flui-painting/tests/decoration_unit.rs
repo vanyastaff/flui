@@ -449,42 +449,52 @@ fn circle_non_uniform_border_paints_nothing_not_a_square_frame() {
 }
 
 #[test]
-fn circle_image_paints_unclipped_with_no_recorded_clip_command() {
-    // Circular image clipping is UNIMPLEMENTED (see `paint_box_decoration`'s
-    // image step): `Canvas::save()` never records anything and `restore()`
-    // only closes a `save_layer()` scope (`is_layer`), so a `ClipRRect`
-    // pushed here would never be closed -- it would leak onto the image and
-    // every later sibling command in the same `PictureLayer`. Separately,
-    // even a properly scoped `clip_rrect` would not clip an IMAGE: the
-    // rounded-SDF clip only reaches a draw through
-    // `GpuStateStack::apply_active_clip`, and the wgpu image batch never
-    // calls it (only the `RectInstance` paths in `batches/shapes.rs` do) --
-    // an image would only ever get the coarse bounding-box scissor, a
-    // SQUARE, not a circle. So the honest behavior is: no clip command
-    // recorded at all, and the image paints unclipped.
+fn a_circular_decoration_image_is_clipped_to_the_circle_and_the_clip_is_closed() {
+    // The two things that used to make this impossible are both gone: a plain
+    // `save()`/`restore()` now records a scope the backend can unwind, and the
+    // wgpu image batch routes its instances through `apply_active_clip`, so a
+    // rounded-SDF clip actually reaches a textured quad instead of only the
+    // coarse bounding-box scissor.
+    //
+    // What is asserted is the recording, which is what this crate owns: the
+    // clip is a circle inscribed in the shorter side, it is opened inside a
+    // scope, and the scope closes before anything else is drawn — a clip that
+    // outlived it would silently narrow the border painted next, and every
+    // sibling after that.
     let rect = square_rect(); // r = 50, side = 100
     let image = Image::from_rgba8(2, 2, vec![255; 2 * 2 * 4]);
     let decoration =
         BoxDecoration::with_image(DecorationImage::new(image)).set_shape(BoxShape::Circle);
     let cmds = commands_in(rect, &decoration);
 
+    let clip_index = cmds
+        .iter()
+        .position(|c| matches!(c, DrawCommand::ClipRRect { .. }))
+        .unwrap_or_else(|| panic!("the image must be clipped to the circle; commands: {cmds:?}"));
+
+    let DrawCommand::ClipRRect { rrect, .. } = &cmds[clip_index] else {
+        unreachable!("position() matched this variant")
+    };
+    assert_eq!(
+        rrect.rect.width(),
+        px(100.0),
+        "the clip spans the inscribed circle's diameter; commands: {cmds:?}",
+    );
+    assert_eq!(
+        rrect.top_left.x,
+        px(50.0),
+        "radii of half the shorter side make the rrect SDF an exact circle;          commands: {cmds:?}",
+    );
+
     assert!(
-        !cmds.iter().any(|c| matches!(
-            c,
-            DrawCommand::ClipRect { .. }
-                | DrawCommand::ClipRRect { .. }
-                | DrawCommand::ClipRSuperellipse { .. }
-                | DrawCommand::ClipPath { .. }
-        )),
-        "a circular decoration image must not record ANY clip command until \
-         circular image clipping is actually implemented (an unbalanced \
-         save()/clip_rrect()/restore() pair would leak onto later commands, \
-         and clip_rrect does not reach the image batch anyway); commands: {cmds:?}"
+        matches!(cmds[clip_index - 1], DrawCommand::Save { .. }),
+        "the clip must be opened inside a scope; commands: {cmds:?}",
     );
     assert!(
-        cmds.iter()
-            .any(|c| matches!(c, DrawCommand::DrawImage { .. })),
-        "the image must still be painted, unclipped; commands: {cmds:?}"
+        cmds[clip_index..]
+            .iter()
+            .any(|c| matches!(c, DrawCommand::Restore { .. })),
+        "and the scope must close, or the clip narrows every later sibling;          commands: {cmds:?}",
     );
 }
 

@@ -42,21 +42,15 @@ static WARN_CIRCLE_BORDER_RADIUS: Once = Once::new();
 /// rationale as [`WARN_CIRCLE_BORDER_RADIUS`].
 static WARN_CIRCLE_NON_UNIFORM_BORDER: Once = Once::new();
 
-/// One-shot gate for the "decoration image on a circle paints unclipped"
-/// warning (see the image step of `paint_box_decoration` below) — same
-/// per-frame-spam rationale as [`WARN_CIRCLE_BORDER_RADIUS`].
-static WARN_CIRCLE_IMAGE_UNCLIPPED: Once = Once::new();
-
 /// The decoration's resolved silhouette: the one shape used for the
-/// background fill, the shadow cast, the border, and hit testing.
+/// background fill, the shadow cast, the border, hit testing, and — on a
+/// circle — the image clip.
 ///
-/// **Not the image.** The decoration image is painted into the full
-/// rectangular destination whatever this resolves to — on a circle it
-/// only decides whether to warn, never to clip. Clipping it would need a
-/// route this layer does not have (see the image step of
-/// `paint_box_decoration`), so a circular decoration image renders as a
-/// square. Do not read this type as "the shape everything is confined
-/// to"; it is the shape the four sites listed above agree on.
+/// **The image is the partial case.** A circular decoration clips its image
+/// to the circle; a rounded-rect one still paints its image to the full rect,
+/// where Flutter would clip it too. That difference is deliberate and named
+/// at the image step of `paint_box_decoration`, not an oversight of this
+/// type.
 ///
 /// Resolved once per paint/hit-test call (`resolve_silhouette`) rather
 /// than re-derived at each paint site. Resolving once is what keeps
@@ -178,42 +172,40 @@ pub fn paint_box_decoration(
 
     // 3. Decoration image (above the background, below the border).
     //
-    // Flutter clips the image to the circle
-    // (`box_decoration.dart:543-551` `_paintBackgroundImage`). Clipping a
-    // circular image is UNIMPLEMENTED here — this used to route through
-    // `canvas.save()` + `clip_rrect` + `canvas.restore()` on an inscribed
-    // square, but that construction is broken two independent ways, neither
-    // fixable within this crate:
+    // Flutter clips the image to the decoration's shape
+    // (`box_decoration.dart` `_paintBackgroundImage`). On a circle this
+    // routes through a scoped SDF clip: `save` opens a scope the backend can
+    // unwind, `clip_rrect` with radii at half the shorter side narrows it to
+    // the circle, and `restore` closes it so the border painted afterwards is
+    // untouched.
     //
-    // 1. `Canvas::save()` (`canvas/state.rs`) records nothing in the
-    //    display list, and `restore()` only emits a `RestoreLayer` command
-    //    when the saved state came from `save_layer()` (`is_layer`, which
-    //    plain `save()` always sets to `false`). There is no plain
-    //    Save/Restore `DrawCommand` variant, so the `ClipRRect` this used
-    //    to push was never closed — it would leak onto the image AND every
-    //    following sibling command in the same `PictureLayer`.
-    // 2. Even a properly scoped clip would not clip an image: the rounded
-    //    SDF clip only reaches a draw through
-    //    `GpuStateStack::apply_active_clip`, whose only call sites are the
-    //    `RectInstance` paths in `flui-engine`'s `wgpu/batches/shapes.rs`.
-    //    `wgpu/batches/images.rs` never calls it, so an image only ever
-    //    gets the coarse bounding-box scissor — a SQUARE, not a circle.
-    //
-    // Fixing this needs either a `FragmentScope` clip route in
-    // `flui-rendering` or `apply_active_clip` support in the image batch;
-    // both are out of scope here. The image paints unclipped (a square)
-    // instead, with a one-shot warning.
+    // The clip is a distance field, not tessellated geometry, so the circle
+    // is exact — the ~6% diagonal bulge that rules out drrect for a circular
+    // *ring* does not apply to a clip.
     if let Some(image) = &decoration.image {
-        if matches!(&silhouette, Silhouette::Circle(_)) {
-            WARN_CIRCLE_IMAGE_UNCLIPPED.call_once(|| {
-                tracing::warn!(
-                    "BoxDecoration: a decoration image on a BoxShape::Circle is painted \
-                     unclipped (a square, not a circle); circular image clipping is not \
-                     implemented yet (this warn fires once per process)"
+        match &silhouette {
+            Silhouette::Circle(circle) => {
+                let diameter = circle.radius * 2.0;
+                let bounds = Rect::from_xywh(
+                    circle.center.x - circle.radius,
+                    circle.center.y - circle.radius,
+                    diameter,
+                    diameter,
                 );
-            });
+                canvas.save();
+                canvas.clip_rrect(RRect::from_rect_circular(bounds, circle.radius));
+                paint_decoration_image(canvas, rect, image);
+                canvas.restore();
+            }
+            // A rounded-rect decoration still paints its image to the full
+            // rect. Flutter clips that case too; closing it is the same
+            // mechanism as above, but it changes what existing rounded
+            // decorations render, and no readback oracle covers a clipped
+            // image yet — so it is named here rather than changed blind.
+            Silhouette::RRect(_) | Silhouette::Rect => {
+                paint_decoration_image(canvas, rect, image);
+            }
         }
-        paint_decoration_image(canvas, rect, image);
     }
 
     // 4. Border (on top).

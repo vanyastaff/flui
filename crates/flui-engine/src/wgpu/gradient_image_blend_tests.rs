@@ -483,6 +483,95 @@ mod gpu_tests {
         }
     }
 
+    // ── Circular image clip ───────────────────────────────────────────────────
+    //
+    // Lives beside the blend cases because it needs the same image-readback
+    // harness (device, sampleable surface, pixel readback), not because it is
+    // a blend test.
+
+    /// A rounded-rect SDF clip must actually reach a textured quad.
+    ///
+    /// The image batch built its instances without ever consulting the active
+    /// clip, so an image took only the coarse bounding-box scissor — a square.
+    /// Nothing in the recording API could observe that; it is visible only in
+    /// pixels, which is why this is a readback test rather than a unit test on
+    /// the command stream.
+    ///
+    /// The clip here is a circle inscribed in the surface, expressed as an
+    /// rrect with radii at half the side. Corners fall outside it and must keep
+    /// the backdrop; the centre falls inside and must show the image.
+    #[test]
+    fn a_clipped_image_keeps_the_backdrop_outside_the_clip() {
+        let (device, queue) = acquire_test_device_and_queue();
+        let (surface_texture, surface_view) = create_sampleable_surface(&device);
+
+        let backdrop = Color::rgba(0, 0, 255, 255);
+        clear_surface_to_color(
+            &device,
+            &queue,
+            &surface_view,
+            wgpu::Color {
+                r: 0.0,
+                g: 0.0,
+                b: 1.0,
+                a: 1.0,
+            },
+        );
+
+        let source_color = Color::rgba(255, 0, 0, 255);
+        let source_image = solid_color_image(source_color);
+
+        let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
+        let side = SURFACE_WIDTH as f32;
+        let radius = side / 2.0;
+        painter.save();
+        painter.clip_rrect(flui_types::geometry::RRect::from_rect_circular(
+            Rect::from_xywh(px(0.0), px(0.0), px(side), px(side)),
+            px(radius),
+        ));
+        painter.draw_image(&source_image, full_surface_bounds(), BlendMode::SrcOver);
+        painter.restore();
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Circular image clip encoder"),
+        });
+        painter
+            .render(
+                RenderTarget::sampleable(&surface_view, &surface_texture),
+                &mut encoder,
+            )
+            .expect("painter.render must succeed for the circular image clip");
+        queue.submit(std::iter::once(encoder.finish()));
+
+        let readback = readback_pixels(&device, &queue, &surface_texture);
+        let width = SURFACE_WIDTH as usize;
+        let at = |col: usize, row: usize| readback[row * width + col];
+
+        // Centre: inside the circle, so the image wins.
+        assert_pixel_within_tolerance(
+            "circular image clip — centre is the image",
+            at(width / 2, width / 2),
+            [source_color.r, source_color.g, source_color.b, 255],
+            2,
+        );
+
+        // Corners: outside the inscribed circle by ~0.29 × radius, far beyond
+        // any AA band, so an unclipped image would show up here as red.
+        for (col, row) in [
+            (1, 1),
+            (width - 2, 1),
+            (1, width - 2),
+            (width - 2, width - 2),
+        ] {
+            assert_pixel_within_tolerance(
+                &format!("circular image clip — corner ({col},{row}) keeps the backdrop"),
+                at(col, row),
+                [backdrop.r, backdrop.g, backdrop.b, 255],
+                2,
+            );
+        }
+    }
+
     // ── GI3: 2-tile repeat — single backdrop read ─────────────────────────────
 
     /// GI3: A 2-tile image repeat with an advanced blend mode must blend BOTH tiles

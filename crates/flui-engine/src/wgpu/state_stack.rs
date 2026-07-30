@@ -39,8 +39,6 @@ use flui_types::{
     geometry::{Pixels, RRect, px},
 };
 
-use super::instancing::RectInstance;
-
 /// The four parallel GPU draw-state stacks, plus their cached top-of-stack
 /// values.
 ///
@@ -570,7 +568,10 @@ impl GpuStateStack {
     ///
     /// Centralises the per-instance clip-kind selection so the two
     /// `rect`/`rrect` batch-build sites do not drift apart.
-    pub(super) fn apply_active_clip(&self, instance: RectInstance) -> RectInstance {
+    pub(super) fn apply_active_clip<I: super::instancing::ClippableInstance>(
+        &self,
+        instance: I,
+    ) -> I {
         // Exact equality against the all-zero "no clip active" sentinel is
         // intentional: the field is set bit-exact to `[0.0; 12]` whenever
         // the clip is cleared, never via arithmetic that would introduce
