@@ -64,8 +64,24 @@ pub struct RenderSliverPadding {
 
 impl RenderSliverPadding {
     /// Creates a sliver-padding render object with the given insets.
+    ///
+    /// # Panics
+    ///
+    /// Debug builds panic if any inset is negative: the padded geometry adds
+    /// these insets to the child's scroll extent and offsets the child by the
+    /// leading one, so a negative inset would place the child ahead of its own
+    /// paint origin and shrink the sliver below the extent it actually
+    /// occupies. Mirrors the Dart `assert(padding.isNonNegative)`, and like it
+    /// is stripped from a release build.
+    ///
+    /// The message carries no inset values because a `const fn` may only panic
+    /// with a literal — formatting is not available in a const context.
     #[must_use]
     pub const fn new(padding: EdgeInsets) -> Self {
+        debug_assert!(
+            padding.is_non_negative(),
+            "RenderSliverPadding insets must be non-negative"
+        );
         Self { padding }
     }
 
@@ -94,7 +110,26 @@ impl RenderSliverPadding {
     }
 
     /// Updates the padding; returns `true` iff the value changed.
+    ///
+    /// # Panics
+    ///
+    /// Debug builds panic if any *incoming* inset is negative, for the reason
+    /// given on [`RenderSliverPadding::new`].
+    ///
+    /// **Documented divergence.** Dart's `RenderSliverPadding` setter asserts
+    /// `padding.isNonNegative` — the getter, i.e. the value already stored —
+    /// so upstream the check inspects the outgoing value and a negative one
+    /// assigned to a previously-valid object passes unnoticed. Its box
+    /// counterpart in `shifted_box.dart` asserts `value.isNonNegative`, which
+    /// is the check both were meant to be. FLUI asserts the incoming value in
+    /// both: the invariant being protected is a property of what gets stored,
+    /// and a guard that can only fire on a value it is too late to reject is
+    /// not one worth porting.
     pub fn set_padding(&mut self, padding: EdgeInsets) -> bool {
+        debug_assert!(
+            padding.is_non_negative(),
+            "RenderSliverPadding insets must be non-negative, got {padding:?}"
+        );
         if self.padding == padding {
             return false;
         }
@@ -504,6 +539,33 @@ mod tests {
         assert!(!p.set_padding(EdgeInsets::all(px(4.0)))); // no-op
         assert!(p.set_padding(EdgeInsets::all(px(5.0))));
         assert_eq!(p.padding(), EdgeInsets::all(px(5.0)));
+    }
+
+    #[test]
+    fn zero_padding_is_accepted() {
+        // The invariant is non-*negative*, not positive: zero on every side is
+        // the identity padding and must not trip the guard.
+        let mut p = RenderSliverPadding::new(EdgeInsets::all(px(0.0)));
+        assert!(p.set_padding(EdgeInsets::all(px(1.0))));
+        assert!(p.set_padding(EdgeInsets::all(px(0.0))));
+    }
+
+    // The negative-inset guard is a `debug_assert!`, mirroring the Dart
+    // `assert(padding.isNonNegative)` that is likewise stripped from a release
+    // build — so these only have a panic to observe under `debug_assertions`.
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "non-negative")]
+    fn new_rejects_a_negative_inset() {
+        let _ = RenderSliverPadding::new(EdgeInsets::new(px(-1.0), px(0.0), px(0.0), px(0.0)));
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "non-negative")]
+    fn set_padding_rejects_a_negative_inset() {
+        let mut p = RenderSliverPadding::all(4.0);
+        let _ = p.set_padding(EdgeInsets::new(px(0.0), px(0.0), px(0.0), px(-2.0)));
     }
 
     // ────────────────────────────────────────────────────────────────────────
