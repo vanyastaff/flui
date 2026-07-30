@@ -633,7 +633,15 @@ impl DrawCommand {
             | DrawCommand::ClipRSuperellipse { .. }
             | DrawCommand::ClipPath { .. } => CommandKind::Clip,
 
-            DrawCommand::SaveLayer { .. } | DrawCommand::RestoreLayer { .. } => CommandKind::Layer,
+            // The scope markers are `Layer` too: they are the plain-state
+            // siblings of `SaveLayer`/`RestoreLayer`, and the `_ => Draw`
+            // fallback below would otherwise make `is_draw()` true for a
+            // command that draws nothing — skewing `draw_commands()` and
+            // `count_by_kind()` for every recording that uses a scope.
+            DrawCommand::SaveLayer { .. }
+            | DrawCommand::RestoreLayer { .. }
+            | DrawCommand::Save { .. }
+            | DrawCommand::Restore { .. } => CommandKind::Layer,
 
             DrawCommand::ShaderMask { .. } | DrawCommand::BackdropFilter { .. } => {
                 CommandKind::Effect

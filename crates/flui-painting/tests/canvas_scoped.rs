@@ -326,3 +326,42 @@ fn a_scoped_clip_is_closed_before_later_drawing() {
          follows is what bounds it",
     );
 }
+
+/// A scope marker is not a draw.
+///
+/// `kind()` has a `_ => Draw` fallback, so a new variant that is not listed
+/// explicitly silently becomes a drawing command — which would make
+/// `is_draw()` true for `Save`/`Restore` and inflate every draw count and
+/// filter over a recording that uses a scope.
+#[test]
+fn scope_markers_are_classified_as_layer_not_draw() {
+    let mut canvas = Canvas::new();
+    canvas.with_save(|c| {
+        c.draw_rect(
+            Rect::from_xywh(px(0.0), px(0.0), px(10.0), px(10.0)),
+            &Paint::fill(Color::RED),
+        );
+    });
+
+    let draws = canvas
+        .display_list()
+        .iter()
+        .filter(|command| command.is_draw())
+        .count();
+    assert_eq!(
+        draws, 1,
+        "only the rect is a draw; the Save/Restore bracket is not",
+    );
+
+    for command in canvas.display_list() {
+        if matches!(
+            command,
+            DrawCommand::Save { .. } | DrawCommand::Restore { .. }
+        ) {
+            assert_eq!(
+                command.kind(),
+                flui_painting::display_list::CommandKind::Layer
+            );
+        }
+    }
+}

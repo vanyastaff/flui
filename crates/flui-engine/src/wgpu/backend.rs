@@ -1330,10 +1330,22 @@ impl CommandRenderer for Backend<'_> {
     }
 
     fn save_state(&mut self) {
+        // Both of these push/pop the SAME painter stack the lazy
+        // `active_transform` save uses, so the deferred save has to be settled
+        // before the scope moves the stack under it. Otherwise a later
+        // `flush_active_transform` pops whichever save happens to be on top —
+        // the scope's, not its own — and the absolute matrix lands on the wrong
+        // CTM while the scope silently never closes.
+        self.flush_active_transform();
         self.painter.save();
     }
 
     fn restore_state(&mut self) {
+        // Symmetric, and the ordering matters in the other direction: the lazy
+        // save was pushed *inside* this scope, so it must come off first or the
+        // pop below takes it and leaves `active_transform` pointing at a save
+        // that is already gone.
+        self.flush_active_transform();
         self.painter.restore();
     }
 
