@@ -48,16 +48,22 @@ static WARN_CIRCLE_NON_UNIFORM_BORDER: Once = Once::new();
 static WARN_CIRCLE_IMAGE_UNCLIPPED: Once = Once::new();
 
 /// The decoration's resolved silhouette: the one shape used for the
-/// background fill, the shadow cast, the image clip, the border, and
-/// hit testing.
+/// background fill, the shadow cast, the border, and hit testing.
+///
+/// **Not the image.** The decoration image is painted into the full
+/// rectangular destination whatever this resolves to — on a circle it
+/// only decides whether to warn, never to clip. Clipping it would need a
+/// route this layer does not have (see the image step of
+/// `paint_box_decoration`), so a circular decoration image renders as a
+/// square. Do not read this type as "the shape everything is confined
+/// to"; it is the shape the four sites listed above agree on.
 ///
 /// Resolved once per paint/hit-test call (`resolve_silhouette`) rather
-/// than re-derived at each of the five paint sites. Resolving once is
-/// what keeps the five sites from disagreeing about the shape, and it
-/// also means the `border_radius`-on-circle conflict is detected in one
-/// place rather than at every site that would have re-derived it (the
-/// warning itself fires at most once per process — see
-/// [`WARN_CIRCLE_BORDER_RADIUS`]).
+/// than re-derived at each paint site. Resolving once is what keeps
+/// those sites from disagreeing about the shape, and it also means the
+/// `border_radius`-on-circle conflict is detected in one place rather
+/// than at every site that would have re-derived it (the warning itself
+/// fires at most once per process — see [`WARN_CIRCLE_BORDER_RADIUS`]).
 enum Silhouette {
     /// `BoxShape::Rectangle`, no border radius. Carries no payload: the
     /// plain paint rect is already in scope as the outer `rect`
@@ -310,13 +316,28 @@ fn paint_circle_shadow(canvas: &mut Canvas, circle: Circle<Pixels>, shadow: &Box
 /// skipped rather than clamped, since clamping paints a disc **outside**
 /// the fill instead of a ring inside it (see the guard below).
 ///
-/// A non-uniform border on a circle is UNIMPLEMENTED. Flutter defines
-/// it for the single-visible-side case
-/// (`box_border.dart:301-343`), but that is deferred to a follow-up
-/// task; this warns (at most once per process,
-/// [`WARN_CIRCLE_NON_UNIFORM_BORDER`]) and paints nothing rather than
-/// falling through to the per-side strip painter below, which would draw
-/// a square frame around a circular fill.
+/// A non-uniform border on a circle is UNIMPLEMENTED, and the blocker is
+/// a missing primitive rather than missing work here.
+///
+/// Flutter paints a subset of these: `Border.paint` accepts a
+/// non-uniform border on a circle when exactly one distinct *visible*
+/// colour is present and no side is a hairline, and routes it to
+/// `BoxBorder.paintNonUniformBorder` (`box_border.dart`, tag `3.44.0`).
+/// That function does not walk the sides as arcs — it builds an `RRect`
+/// from the circle's bounding rect, deflates and inflates it by each
+/// side's stroke inset/outset, and emits a single `drawDRRect`. So a
+/// border visible on one side only comes out as a crescent of varying
+/// thickness, not as a constant-width arc.
+///
+/// Reproducing that here would mean a `draw_drrect` whose corners are a
+/// true circle. FLUI's tessellates each 90° corner with one quadratic
+/// Bézier, which bulges roughly 6% on the diagonals — the same reason
+/// the uniform path above strokes a circle instead of inscribing a
+/// rounded rect. Emitting it anyway would put a visibly non-circular
+/// ring around a circular fill, so this warns (at most once per process,
+/// [`WARN_CIRCLE_NON_UNIFORM_BORDER`]) and paints nothing. Falling
+/// through to the per-side strip painter below is not an option either:
+/// that draws a square frame around a circular fill.
 fn paint_circle_border(
     canvas: &mut Canvas,
     circle: Circle<Pixels>,
@@ -325,8 +346,11 @@ fn paint_circle_border(
     if !border.is_uniform() {
         WARN_CIRCLE_NON_UNIFORM_BORDER.call_once(|| {
             tracing::warn!(
-                "non-uniform border on a BoxShape::Circle is not painted \
-                 (unimplemented; this warn fires once per process)"
+                "non-uniform border on a BoxShape::Circle is not painted; \
+                 Flutter renders the single-visible-colour form of it via \
+                 drawDRRect, which needs a drrect whose corners are a true \
+                 circle -- ours approximates each corner with one quadratic \
+                 Bezier (this warn fires once per process)"
             );
         });
         return;
