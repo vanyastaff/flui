@@ -31,7 +31,22 @@ pub struct RenderPadding {
 
 impl RenderPadding {
     /// Creates a new padding render object.
+    ///
+    /// # Panics
+    ///
+    /// Debug builds panic if any inset is negative. Layout deflates the
+    /// incoming constraints by these insets and then re-inflates the child's
+    /// size by them, so a negative inset would hand the child constraints
+    /// larger than its parent's and report a size that does not contain it —
+    /// the guard rejects that at the point the value enters, not later where
+    /// the geometry is already wrong. Mirrors the Dart
+    /// `assert(padding.isNonNegative)`, and like it is stripped from a release
+    /// build, where the negative inset is applied as given.
     pub fn new(padding: EdgeInsets) -> Self {
+        debug_assert!(
+            padding.is_non_negative(),
+            "RenderPadding insets must be non-negative, got {padding:?}"
+        );
         Self {
             padding,
             has_child: false,
@@ -55,7 +70,16 @@ impl RenderPadding {
     }
 
     /// Sets the padding.
+    ///
+    /// # Panics
+    ///
+    /// Debug builds panic if any inset is negative, for the reason given on
+    /// [`RenderPadding::new`].
     pub fn set_padding(&mut self, padding: EdgeInsets) {
+        debug_assert!(
+            padding.is_non_negative(),
+            "RenderPadding insets must be non-negative, got {padding:?}"
+        );
         self.padding = padding;
     }
 
@@ -247,5 +271,32 @@ mod tests {
         // symmetric(vertical=10.0, horizontal=20.0)
         assert_eq!(insets.horizontal_total(), px(40.0)); // left + right = 20.0 + 20.0
         assert_eq!(insets.vertical_total(), px(20.0)); // top + bottom = 10.0 + 10.0
+    }
+
+    #[test]
+    fn zero_padding_is_accepted() {
+        // The invariant is non-*negative*, not positive: zero on every side is
+        // the identity padding and must not trip the guard.
+        let mut p = RenderPadding::new(EdgeInsets::all(px(0.0)));
+        p.set_padding(EdgeInsets::all(px(0.0)));
+        assert_eq!(p.padding(), EdgeInsets::all(px(0.0)));
+    }
+
+    // The negative-inset guard is a `debug_assert!`, mirroring the Dart
+    // `assert(padding.isNonNegative)` that is likewise stripped from a release
+    // build — so these only have a panic to observe under `debug_assertions`.
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "non-negative")]
+    fn new_rejects_a_negative_inset() {
+        let _ = RenderPadding::new(EdgeInsets::new(px(0.0), px(-1.0), px(0.0), px(0.0)));
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "non-negative")]
+    fn set_padding_rejects_a_negative_inset() {
+        let mut p = RenderPadding::all(4.0);
+        p.set_padding(EdgeInsets::new(px(0.0), px(0.0), px(-3.0), px(0.0)));
     }
 }

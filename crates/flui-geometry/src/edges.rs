@@ -311,12 +311,14 @@ impl Edges<super::units::Pixels> {
     /// ```
     #[must_use]
     #[inline]
-    pub fn is_non_negative(&self) -> bool {
-        use super::units::px;
-        self.left >= px(0.0)
-            && self.top >= px(0.0)
-            && self.right >= px(0.0)
-            && self.bottom >= px(0.0)
+    pub const fn is_non_negative(&self) -> bool {
+        // Compared as raw `f32` rather than through `PartialOrd` on `Pixels`,
+        // because a trait-method call is not permitted in a `const fn` — and
+        // being const lets `const fn` constructors assert this invariant.
+        self.left.get() >= 0.0
+            && self.top.get() >= 0.0
+            && self.right.get() >= 0.0
+            && self.bottom.get() >= 0.0
     }
 
     /// Clamp all edge values to be non-negative.
