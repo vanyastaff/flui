@@ -1346,12 +1346,17 @@ mod cpu_tests {
     /// its whole outline on one radius, a stroked one straddles the path
     /// with an inner and an outer contour half a stroke-width apart.
     fn vertex_radius_band(vertices: &[Vertex], center: (f32, f32)) -> (f32, f32) {
-        vertices.iter().fold((f32::MAX, 0.0_f32), |(lo, hi), v| {
-            let dx = v.position[0] - center.0;
-            let dy = v.position[1] - center.1;
-            let r = dx.hypot(dy);
-            (lo.min(r), hi.max(r))
-        })
+        // Seed the bounds from the identities, not from plausible-looking
+        // numbers: a `0.0` upper seed would survive any input that never
+        // exceeds it and turn the assertion into one that cannot fail.
+        vertices
+            .iter()
+            .fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), v| {
+                let dx = v.position[0] - center.0;
+                let dy = v.position[1] - center.1;
+                let r = dx.hypot(dy);
+                (lo.min(r), hi.max(r))
+            })
     }
 
     /// A stroked circle must come back as a ring.
@@ -1424,9 +1429,11 @@ mod cpu_tests {
 
         // Cross the ellipse on its minor axis: the vertical extent runs from
         // `ry - w/2` to `ry + w/2` about the centre.
-        let (top, bottom) = vertices.iter().fold((f32::MAX, 0.0_f32), |(lo, hi), v| {
-            (lo.min(v.position[1]), hi.max(v.position[1]))
-        });
+        let (top, bottom) = vertices
+            .iter()
+            .fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), v| {
+                (lo.min(v.position[1]), hi.max(v.position[1]))
+            });
         assert!(
             (bottom - top - (40.0 + stroke_width)).abs() < 0.5,
             "stroked height should be 2*ry + stroke_width = {}, got {}",
