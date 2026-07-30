@@ -368,6 +368,14 @@ impl CommandRenderer for DebugBackend {
         self.log_command("restore_layer", "");
     }
 
+    fn save_state(&mut self) {
+        self.log_command("save_state", "");
+    }
+
+    fn restore_state(&mut self) {
+        self.log_command("restore_state", "");
+    }
+
     // The layer-tree push/pop methods live in
     // `impl LayerStateStack for DebugBackend` below, not here — see the
     // `LayerStateStack` trait doc comment in `traits.rs` for why they are

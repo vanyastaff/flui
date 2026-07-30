@@ -70,6 +70,13 @@ impl Canvas {
             clip_depth: self.clip_stack.len(),
             is_layer: false,
         });
+        // The backend needs the scope marker too, not just this stack: a clip
+        // recorded after this point narrows the backend's state, and only a
+        // matching `Restore` tells it when to stop. Without the pair, the
+        // clip_stack below would unwind on the CPU while the GPU kept clipping.
+        self.display_list.push(DrawCommand::Save {
+            transform: self.transform,
+        });
     }
 
     /// Restores the most recently saved state.
@@ -83,8 +90,16 @@ impl Canvas {
     #[inline]
     pub fn restore(&mut self) {
         if let Some(state) = self.save_stack.pop() {
+            // Exactly one closing command per opening one: `save_layer`
+            // recorded a `SaveLayer` and is closed by `RestoreLayer`, which
+            // composites the offscreen target and unwinds its own state; a
+            // plain `save` recorded a `Save` and is closed by `Restore`.
             if state.is_layer {
                 self.display_list.push(DrawCommand::RestoreLayer {
+                    transform: self.transform,
+                });
+            } else {
+                self.display_list.push(DrawCommand::Restore {
                     transform: self.transform,
                 });
             }

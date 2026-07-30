@@ -1329,6 +1329,14 @@ impl CommandRenderer for Backend<'_> {
         self.painter.restore_layer();
     }
 
+    fn save_state(&mut self) {
+        self.painter.save();
+    }
+
+    fn restore_state(&mut self) {
+        self.painter.restore();
+    }
+
     // ===== Layer Tree Operations split out =====
     //
     // push_clip_* / push_offset / push_transform / push_opacity /

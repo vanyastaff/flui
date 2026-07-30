@@ -91,7 +91,9 @@ impl DrawCommand {
             | Self::DrawTextSpan { .. }
             | Self::DrawGradient { .. }
             | Self::DrawGradientRRect { .. }
-            | Self::RestoreLayer { .. } => self.clone(),
+            | Self::RestoreLayer { .. }
+            | Self::Save { .. }
+            | Self::Restore { .. } => self.clone(),
 
             // Paint commands: Apply opacity to paint field
             //
@@ -613,7 +615,10 @@ impl DrawCommand {
             DrawCommand::SaveLayer {
                 bounds, transform, ..
             } => bounds.map(|b| transform.transform_rect(&b)),
-            DrawCommand::RestoreLayer { .. } => None,
+            // Scope markers draw nothing, so they contribute no bounds.
+            DrawCommand::RestoreLayer { .. }
+            | DrawCommand::Save { .. }
+            | DrawCommand::Restore { .. } => None,
         }
     }
 
@@ -743,7 +748,9 @@ impl DrawCommand {
             | DrawCommand::DrawPaint { transform, .. }
             | DrawCommand::DrawAtlas { transform, .. }
             | DrawCommand::SaveLayer { transform, .. }
-            | DrawCommand::RestoreLayer { transform, .. } => *transform,
+            | DrawCommand::RestoreLayer { transform, .. }
+            | DrawCommand::Save { transform, .. }
+            | DrawCommand::Restore { transform, .. } => *transform,
         }
     }
 
@@ -821,7 +828,9 @@ impl DrawCommand {
             | DrawCommand::DrawPaint { transform, .. }
             | DrawCommand::DrawAtlas { transform, .. }
             | DrawCommand::SaveLayer { transform, .. }
-            | DrawCommand::RestoreLayer { transform, .. } => transform,
+            | DrawCommand::RestoreLayer { transform, .. }
+            | DrawCommand::Save { transform, .. }
+            | DrawCommand::Restore { transform, .. } => transform,
         }
     }
 
