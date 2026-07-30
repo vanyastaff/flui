@@ -477,13 +477,25 @@ impl GpuStateStack {
         } else {
             (1.0, 1.0)
         };
-        // Each corner collapses its rx/ry to one radius (the SDF slot carries
-        // one per corner), and scaling before the collapse keeps that choice
-        // meaningful under a non-uniform scale.
-        let r_tl = (rrect.top_left.x.0 * scale_x).max(rrect.top_left.y.0 * scale_y);
-        let r_tr = (rrect.top_right.x.0 * scale_x).max(rrect.top_right.y.0 * scale_y);
-        let r_br = (rrect.bottom_right.x.0 * scale_x).max(rrect.bottom_right.y.0 * scale_y);
-        let r_bl = (rrect.bottom_left.x.0 * scale_x).max(rrect.bottom_left.y.0 * scale_y);
+        // This slot carries ONE radius per corner, so an elliptical corner is
+        // not representable in it. Under a non-uniform scale — `scale(2, 1)`
+        // turning a circle into an ellipse with radii (100, 50) — the two
+        // scaled axes have to collapse to a scalar, and a bare `max` would
+        // hand the shader a radius larger than the box's own half-height. The
+        // rounded-box SDF is degenerate there and clips visibly INWARD.
+        //
+        // So collapse, then clamp to the largest radius the box can hold. The
+        // result is the largest well-formed rounded shape inside the intended
+        // ellipse: still a divergence under non-uniform scale, but a bounded
+        // one instead of a broken one. Carrying rx/ry per corner through the
+        // instance and both shaders is the real fix and a format change of its
+        // own; the superellipse slot above already has the room for it.
+        let max_radius = (w * 0.5).min(h * 0.5).max(0.0);
+        let collapse = |rx: f32, ry: f32| (rx * scale_x).max(ry * scale_y).min(max_radius);
+        let r_tl = collapse(rrect.top_left.x.0, rrect.top_left.y.0);
+        let r_tr = collapse(rrect.top_right.x.0, rrect.top_right.y.0);
+        let r_br = collapse(rrect.bottom_right.x.0, rrect.bottom_right.y.0);
+        let r_bl = collapse(rrect.bottom_left.x.0, rrect.bottom_left.y.0);
 
         self.current_rrect_clip = [x, y, w, h, r_tl, r_tr, r_br, r_bl];
         // Clearing the superellipse clip prevents `apply_active_clip` from
@@ -542,9 +554,30 @@ impl GpuStateStack {
         let br_r = rse.br_radius();
         let bl_r = rse.bl_radius();
 
+        // Same rule as `clip_rrect`: radii live in the bounds' space and must
+        // make the same trip, or the shader compares logical-pixel corners
+        // against a device-pixel rect. Unlike the rrect slot, this one carries
+        // rx and ry per corner, so the per-axis scale is exact here rather
+        // than an approximation.
+        let (scale_x, scale_y) = if rect.width().0 > 0.0 && rect.height().0 > 0.0 {
+            (w / rect.width().0, h / rect.height().0)
+        } else {
+            (1.0, 1.0)
+        };
+
         self.current_rsuperellipse_clip = [
-            x, y, w, h, tl_r.x.0, tl_r.y.0, tr_r.x.0, tr_r.y.0, br_r.x.0, br_r.y.0, bl_r.x.0,
-            bl_r.y.0,
+            x,
+            y,
+            w,
+            h,
+            tl_r.x.0 * scale_x,
+            tl_r.y.0 * scale_y,
+            tr_r.x.0 * scale_x,
+            tr_r.y.0 * scale_y,
+            br_r.x.0 * scale_x,
+            br_r.y.0 * scale_y,
+            bl_r.x.0 * scale_x,
+            bl_r.y.0 * scale_y,
         ];
         // Clear the rrect clip to prevent `apply_active_clip` from falling
         // back to it. Mirror of the corresponding clear in `clip_rrect`.
@@ -946,5 +979,65 @@ mod tests {
             [10.0, 20.0, 80.0, 40.0, 7.5, 7.5, 7.5, 7.5],
             "an identity CTM must divide out to exactly 1.0, not to 0.999…",
         );
+    }
+
+    /// The superellipse slot has room for per-axis radii, so its scaling is
+    /// exact — no collapse, no clamp.
+    #[test]
+    fn a_scaled_superellipse_clip_scales_each_radius_axis() {
+        use flui_types::geometry::RSuperellipse;
+
+        let mut stack = GpuStateStack::new_for_test();
+        let rse = RSuperellipse::from_rect_circular(
+            Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0)),
+            px(20.0),
+        );
+
+        stack.scale(2.0, 3.0);
+        stack.clip_rsuperellipse(rse, (600, 600));
+
+        let clip = stack.current_rsuperellipse_clip;
+        assert_eq!((clip[2], clip[3]), (200.0, 300.0), "bounds follow the CTM");
+        for (i, corner) in ["tl", "tr", "br", "bl"].iter().enumerate() {
+            let (rx, ry) = (clip[4 + i * 2], clip[5 + i * 2]);
+            assert!(
+                (rx - 40.0).abs() < 0.01 && (ry - 60.0).abs() < 0.01,
+                "corner {corner} must scale per axis (40, 60), got ({rx}, {ry}) — leaving \
+                 either in logical pixels leaks the clip on a HiDPI display",
+            );
+        }
+    }
+
+    /// A non-uniform scale cannot be represented in the rrect slot's single
+    /// radius per corner, so the collapse must at least stay well-formed.
+    ///
+    /// `scale(2, 1)` turns a circular clip into a 200×100 box whose intended
+    /// corners are (100, 50). The scalar collapse picks 100, which exceeds the
+    /// box's own half-height — a rounded-box SDF with a radius larger than its
+    /// half-extent is degenerate and clips inward, eating the image. Clamping
+    /// to the largest radius the box can hold keeps it a bounded divergence
+    /// rather than a broken one.
+    #[test]
+    fn a_non_uniform_scale_clamps_the_collapsed_radius_to_the_box() {
+        let mut stack = GpuStateStack::new_for_test();
+        let circle = RRect::from_rect_circular(
+            Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0)),
+            px(50.0),
+        );
+
+        stack.scale(2.0, 1.0);
+        stack.clip_rrect(circle, (400, 400));
+
+        let clip = stack.current_rrect_clip;
+        let (w, h) = (clip[2], clip[3]);
+        assert_eq!((w, h), (200.0, 100.0));
+        for radius in &clip[4..8] {
+            assert!(
+                *radius <= h / 2.0 + 0.01,
+                "a radius of {radius} exceeds the half-height {} — the SDF is degenerate \
+                 there and clips inward",
+                h / 2.0,
+            );
+        }
     }
 }
