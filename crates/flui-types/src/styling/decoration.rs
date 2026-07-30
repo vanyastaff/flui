@@ -172,6 +172,13 @@ pub struct BoxDecoration<T: Unit> {
     ///
     /// The shape cannot be interpolated: `lerp` switches discretely at
     /// `t == 0.5` (Flutter parity, `box_decoration.dart:209-211,314`).
+    ///
+    /// `serde(default)` is load-bearing, not decoration: this field was
+    /// added after the type was already serializable, so a payload
+    /// written without it would otherwise fail to deserialize with a
+    /// missing-field error. Deriving `Default` on [`BoxShape`] does not
+    /// give serde that behaviour on its own.
+    #[cfg_attr(feature = "serde", serde(default))]
     pub shape: BoxShape,
 }
 
@@ -405,5 +412,26 @@ mod tests {
         assert_eq!(BoxDecoration::lerp(&b, &a, 0.0).shape, BoxShape::Circle);
         assert_eq!(BoxDecoration::lerp(&b, &a, 0.5).shape, BoxShape::Rectangle);
         assert_eq!(BoxDecoration::lerp(&b, &a, 1.0).shape, BoxShape::Rectangle);
+    }
+
+    /// A payload written before `shape` existed must still load, as the
+    /// rectangle it was. Without `serde(default)` on the field, serde
+    /// rejects it outright — `BoxShape: Default` does not reach the
+    /// derive on its own.
+    #[cfg(feature = "serde")]
+    #[test]
+    fn a_decoration_serialized_before_shape_existed_still_deserializes() {
+        let legacy = r#"{
+            "color": null,
+            "image": null,
+            "border": null,
+            "border_radius": null,
+            "box_shadow": null,
+            "gradient": null
+        }"#;
+
+        let decoration: BoxDecoration<crate::geometry::Pixels> =
+            serde_json::from_str(legacy).expect("a pre-shape payload must still deserialize");
+        assert_eq!(decoration.shape, BoxShape::Rectangle);
     }
 }
