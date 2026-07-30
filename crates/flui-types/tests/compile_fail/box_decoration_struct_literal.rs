@@ -3,8 +3,9 @@
 //!
 //! This is what lets the type grow a field without breaking callers — the
 //! reason `shape` was a source-breaking change before the attribute landed.
-//! The functional-update form (`..Default::default()`) is rejected too, which
-//! is the part that is easy to assume still works.
+//! The functional-update form (`..BoxDecoration::new()` below, and equally
+//! `..Default::default()`) is rejected too, which is the part that is easy to
+//! assume still works.
 
 use flui_types::geometry::Pixels;
 use flui_types::styling::{BoxDecoration, Color};

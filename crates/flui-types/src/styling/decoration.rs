@@ -124,8 +124,8 @@ pub trait Decoration: std::fmt::Debug {
 /// struct literal. Flutter's `BoxDecoration` has grown fields steadily —
 /// `shape`, `backgroundBlendMode`, `image` all arrived after the type
 /// existed — and each one would otherwise be a source-breaking change for
-/// every caller that spelled out the braces. Closing the literal now costs
-/// two call sites; leaving it open costs every future field.
+/// every caller that spelled out the braces. Keeping construction on the
+/// constructors is what lets a new field be additive.
 ///
 /// # Examples
 ///

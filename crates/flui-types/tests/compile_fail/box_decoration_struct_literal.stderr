@@ -1,22 +1,22 @@
 error[E0639]: cannot create non-exhaustive struct using struct expression
-  --> tests/compile_fail/box_decoration_struct_literal.rs:14:21
+  --> tests/compile_fail/box_decoration_struct_literal.rs:15:21
    |
-14 |       let _explicit = BoxDecoration::<Pixels> {
+15 |       let _explicit = BoxDecoration::<Pixels> {
    |  _____________________^
-15 | |         color: Some(Color::RED),
-16 | |         image: None,
-17 | |         border: None,
+16 | |         color: Some(Color::RED),
+17 | |         image: None,
+18 | |         border: None,
 ...  |
-21 | |         shape: Default::default(),
-22 | |     };
+22 | |         shape: Default::default(),
+23 | |     };
    | |_____^
 
 error[E0639]: cannot create non-exhaustive struct using struct expression
-  --> tests/compile_fail/box_decoration_struct_literal.rs:25:20
+  --> tests/compile_fail/box_decoration_struct_literal.rs:26:20
    |
-25 |       let _updated = BoxDecoration::<Pixels> {
+26 |       let _updated = BoxDecoration::<Pixels> {
    |  ____________________^
-26 | |         color: Some(Color::RED),
-27 | |         ..BoxDecoration::new()
-28 | |     };
+27 | |         color: Some(Color::RED),
+28 | |         ..BoxDecoration::new()
+29 | |     };
    | |_____^
