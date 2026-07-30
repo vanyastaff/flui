@@ -553,14 +553,12 @@ impl ViewState<CupertinoButton> for CupertinoButtonState {
             Some(_) if !enabled => Some(view.disabled_color.resolve(ctx)),
             other => other,
         };
-        let decoration = BoxDecoration::<Pixels> {
-            color: fill_color,
-            border_radius: Some(
+        let decoration = BoxDecoration::<Pixels>::new()
+            .set_color(fill_color)
+            .set_border_radius(Some(
                 view.border_radius
                     .unwrap_or_else(|| size_border_radius(view.size_style)),
-            ),
-            ..BoxDecoration::new()
-        };
+            ));
 
         // An explicit `minimum_size` (including `(0.0, 0.0)`, which
         // genuinely removes the floor) passes straight through unmodified —
