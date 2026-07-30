@@ -598,6 +598,22 @@ pub struct TextureInstance {
     /// [cos(angle), sin(angle), translate_x, translate_y]
     /// For no rotation: [1.0, 0.0, 0.0, 0.0]
     pub transform: [f32; 4],
+
+    /// SDF clip rounded rectangle, same layout and sentinel as
+    /// [`RectInstance::clip_rrect`]: `[x, y, width, height, radius_tl,
+    /// radius_tr, radius_br, radius_bl]`, all zeros meaning no clip.
+    ///
+    /// A circular clip is this slot with every radius at half the shorter
+    /// side — and because the fragment shader evaluates it as a signed
+    /// distance rather than tessellating it, that is an exact circle, not a
+    /// Bézier approximation of one.
+    pub clip_rrect: [f32; 8],
+
+    /// Clip-kind flag selecting which SDF to evaluate against `clip_rrect`.
+    /// `0` none, `1` rounded box, `2` rounded superellipse — identical
+    /// encoding to [`RectInstance::clip_kind`], including the `[u32; 4]`
+    /// padding for 16-byte vec4 alignment.
+    pub clip_kind: [u32; 4],
 }
 
 impl TextureInstance {
@@ -618,6 +634,8 @@ impl TextureInstance {
             src_uv: [0.0, 0.0, 1.0, 1.0], // Full texture
             tint: tint.to_f32_array(),
             transform: [1.0, 0.0, 0.0, 0.0], // No rotation
+            clip_rrect: [0.0; 8],
+            clip_kind: [0; 4],
         }
     }
 
@@ -643,6 +661,8 @@ impl TextureInstance {
             src_uv,
             tint: tint.to_f32_array(),
             transform: [1.0, 0.0, 0.0, 0.0],
+            clip_rrect: [0.0; 8],
+            clip_kind: [0; 4],
         }
     }
 
@@ -677,6 +697,8 @@ impl TextureInstance {
             src_uv,
             tint,
             transform: [1.0, 0.0, 0.0, 0.0],
+            clip_rrect: [0.0; 8],
+            clip_kind: [0; 4],
         }
     }
 
@@ -692,6 +714,12 @@ impl TextureInstance {
             4 => Float32x4,
             // Transform (location 5)
             5 => Float32x4,
+            // Clip rrect part 1: [x, y, width, height] (location 6)
+            6 => Float32x4,
+            // Clip rrect part 2: [radius_tl, radius_tr, radius_br, radius_bl] (location 7)
+            7 => Float32x4,
+            // Clip kind: [kind, _pad, _pad, _pad] (location 8) — 0=none, 1=rrect, 2=rsuperellipse
+            8 => Uint32x4,
         ];
 
         wgpu::VertexBufferLayout {
@@ -699,6 +727,77 @@ impl TextureInstance {
             step_mode: wgpu::VertexStepMode::Instance,
             attributes: ATTRIBUTES,
         }
+    }
+}
+
+/// An instance type that can carry the active SDF clip.
+///
+/// Exists so [`GpuStateStack::apply_active_clip`] can decide *once* which of
+/// the two clip slots wins and hand the answer to any instance kind, instead
+/// of each batch re-deriving that branch order and drifting from the others.
+///
+/// [`GpuStateStack::apply_active_clip`]: super::state_stack::GpuStateStack::apply_active_clip
+pub trait ClippableInstance {
+    /// Attach a rounded-rect SDF clip (`clip_kind = 1`), or clear the clip
+    /// when the slot is the all-zero "no clip" sentinel.
+    #[must_use]
+    fn with_clip_rrect(self, clip: [f32; 8]) -> Self;
+
+    /// Attach a rounded-superellipse SDF clip (`clip_kind = 2`), or clear the
+    /// clip when the slot is the all-zero sentinel.
+    #[must_use]
+    fn with_clip_rsuperellipse(self, superellipse_clip: [f32; 12]) -> Self;
+}
+
+impl ClippableInstance for RectInstance {
+    fn with_clip_rrect(self, clip: [f32; 8]) -> Self {
+        RectInstance::with_clip_rrect(self, clip)
+    }
+
+    fn with_clip_rsuperellipse(self, superellipse_clip: [f32; 12]) -> Self {
+        RectInstance::with_clip_rsuperellipse(self, superellipse_clip)
+    }
+}
+
+impl ClippableInstance for TextureInstance {
+    fn with_clip_rrect(mut self, clip: [f32; 8]) -> Self {
+        self.clip_rrect = clip;
+        // Exact equality against the bit-exact `[0.0; 8]` sentinel, matching
+        // `RectInstance` — the slot is assigned, never computed, so no ULP slop.
+        #[expect(
+            clippy::float_cmp,
+            reason = "exact comparison against the bit-exact `[0.0; 8]` 'no clip' sentinel"
+        )]
+        let is_empty = clip == [0.0; 8];
+        self.clip_kind = if is_empty { [0; 4] } else { [1, 0, 0, 0] };
+        self
+    }
+
+    fn with_clip_rsuperellipse(mut self, superellipse_clip: [f32; 12]) -> Self {
+        #[expect(
+            clippy::float_cmp,
+            reason = "exact comparison against the bit-exact `[0.0; 12]` 'no clip' sentinel"
+        )]
+        let is_empty = superellipse_clip == [0.0; 12];
+        if is_empty {
+            self.clip_rrect = [0.0; 8];
+            self.clip_kind = [0; 4];
+            return self;
+        }
+        // Same per-corner rx/ry averaging as `RectInstance`, so both instance
+        // kinds approximate the squircle identically rather than in two ways.
+        self.clip_rrect = [
+            superellipse_clip[0],
+            superellipse_clip[1],
+            superellipse_clip[2],
+            superellipse_clip[3],
+            0.5 * (superellipse_clip[4] + superellipse_clip[5]),
+            0.5 * (superellipse_clip[6] + superellipse_clip[7]),
+            0.5 * (superellipse_clip[8] + superellipse_clip[9]),
+            0.5 * (superellipse_clip[10] + superellipse_clip[11]),
+        ];
+        self.clip_kind = [2, 0, 0, 0];
+        self
     }
 }
 
@@ -959,11 +1058,13 @@ mod tests {
 
     #[test]
     fn test_texture_instance_size() {
-        // Verify struct is tightly packed for GPU
-        assert_eq!(
-            std::mem::size_of::<TextureInstance>(),
-            16 * 4 // 16 floats = 64 bytes
-        );
+        // Tightly packed for the GPU, and the count must match `desc()`:
+        // dst_rect + src_uv + tint + transform (4 vec4s) + the clip slot
+        // (clip_rrect is 2 vec4s, clip_kind 1 uvec4) = 7 * 16 bytes. A
+        // mismatch here means an attribute in the vertex layout has no
+        // storage behind it, which reads as garbage clip bounds on the GPU
+        // rather than as a compile error.
+        assert_eq!(std::mem::size_of::<TextureInstance>(), 7 * 16);
     }
 
     #[test]

@@ -125,10 +125,10 @@ impl DrawBatcher {
             Rect::from_ltrb(top_left.x, top_left.y, bottom_right.x, bottom_right.y);
 
         // Create texture instance (full UV mapping, no rotation, white tint).
-        let instance = super::super::instancing::TextureInstance::new(
+        let instance = state.apply_active_clip(super::super::instancing::TextureInstance::new(
             transformed_rect,
             flui_types::Color::WHITE,
-        );
+        ));
 
         // Store the ID in the IR. Resolution happens at replay time in
         // flush_segment_external_images, which calls
@@ -216,16 +216,16 @@ impl DrawBatcher {
             Ok(cached_texture) => {
                 // Preserve atlas UVs when the image is packed into the shared atlas.
                 let instance = if let Some(uv_rect) = cached_texture.uv_rect {
-                    super::super::instancing::TextureInstance::with_uv(
+                    state.apply_active_clip(super::super::instancing::TextureInstance::with_uv(
                         transformed_rect,
                         uv_rect,
                         flui_types::styling::Color::WHITE,
-                    )
+                    ))
                 } else {
-                    super::super::instancing::TextureInstance::new(
+                    state.apply_active_clip(super::super::instancing::TextureInstance::new(
                         transformed_rect,
                         flui_types::styling::Color::WHITE,
-                    )
+                    ))
                 };
 
                 // ── Advanced (dst-read) diversion ─────────────────────────────
@@ -374,13 +374,18 @@ impl DrawBatcher {
                             Rect::from_ltrb(top_left.x, top_left.y, bottom_right.x, bottom_right.y);
 
                         let instance = if let Some(uv_rect) = cached_texture.uv_rect {
-                            super::super::instancing::TextureInstance::with_uv(
-                                tr,
-                                uv_rect,
-                                Color::WHITE,
+                            state.apply_active_clip(
+                                super::super::instancing::TextureInstance::with_uv(
+                                    tr,
+                                    uv_rect,
+                                    Color::WHITE,
+                                ),
                             )
                         } else {
-                            super::super::instancing::TextureInstance::new(tr, Color::WHITE)
+                            state.apply_active_clip(super::super::instancing::TextureInstance::new(
+                                tr,
+                                Color::WHITE,
+                            ))
                         };
                         shape_seg.cached_images.push((
                             texture_id.clone(),
@@ -777,13 +782,20 @@ impl DrawBatcher {
                     ) {
                         Ok(cached_texture) => {
                             let instance = if let Some(uv_rect) = cached_texture.uv_rect {
-                                super::super::instancing::TextureInstance::with_uv(
-                                    tr,
-                                    uv_rect,
-                                    Color::WHITE,
+                                state.apply_active_clip(
+                                    super::super::instancing::TextureInstance::with_uv(
+                                        tr,
+                                        uv_rect,
+                                        Color::WHITE,
+                                    ),
                                 )
                             } else {
-                                super::super::instancing::TextureInstance::new(tr, Color::WHITE)
+                                state.apply_active_clip(
+                                    super::super::instancing::TextureInstance::new(
+                                        tr,
+                                        Color::WHITE,
+                                    ),
+                                )
                             };
                             shape_segment.cached_images.push((
                                 texture_id,
@@ -1228,10 +1240,12 @@ impl DrawBatcher {
                         let transformed_dst =
                             Rect::from_ltrb(top_left.x, top_left.y, bottom_right.x, bottom_right.y);
 
-                        let instance = super::super::instancing::TextureInstance::with_uv(
-                            transformed_dst,
-                            src_uv,
-                            tint,
+                        let instance = state.apply_active_clip(
+                            super::super::instancing::TextureInstance::with_uv(
+                                transformed_dst,
+                                src_uv,
+                                tint,
+                            ),
                         );
                         shape_segment.cached_images.push((
                             cache_id.clone(),
@@ -1302,8 +1316,9 @@ impl DrawBatcher {
 
                     // Create texture instance and route through cached_images so it is
                     // flushed by flush_segment_cached_images (not the orphaned texture_batch).
-                    let instance =
-                        super::super::instancing::TextureInstance::with_uv(dst_rect, src_uv, tint);
+                    let instance = state.apply_active_clip(
+                        super::super::instancing::TextureInstance::with_uv(dst_rect, src_uv, tint),
+                    );
                     segment.cached_images.push((
                         cache_id.clone(),
                         instance,
@@ -1396,8 +1411,11 @@ impl DrawBatcher {
         let transformed_dst =
             Rect::from_ltrb(top_left.x, top_left.y, bottom_right.x, bottom_right.y);
 
-        let instance =
-            super::super::instancing::TextureInstance::with_uv(transformed_dst, src_uv, tint);
+        let instance = state.apply_active_clip(super::super::instancing::TextureInstance::with_uv(
+            transformed_dst,
+            src_uv,
+            tint,
+        ));
 
         // Push the ID into the IR. Resolution to a `wgpu::TextureView` happens
         // at replay time in flush_segment_external_images.
