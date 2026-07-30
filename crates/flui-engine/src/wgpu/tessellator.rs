@@ -278,6 +278,25 @@ impl Tessellator {
     // instancing path, not lyon tessellation. The two unit tests that
     // exercised them were deleted alongside the methods.
 
+    /// Tessellates `path` as a fill or as an outline according to
+    /// `paint.style`.
+    ///
+    /// Every shape helper that accepts a whole [`Paint`] routes through
+    /// here. Filling unconditionally is not a lesser approximation of a
+    /// stroke, it is a different shape: a stroked circle asked for a ring
+    /// and a fill hands back a disc in the stroke colour, which covers
+    /// whatever it was supposed to outline. The batch layer decides
+    /// *whether* a shape is tessellated at all (instanced SDF paths take
+    /// filled `SrcOver` shapes); once it has decided to tessellate, the
+    /// style must survive the trip.
+    fn dispatch_on_style(&mut self, path: &Path, paint: &Paint) -> Result<(Vec<Vertex>, Vec<u32>)> {
+        if paint.style == flui_painting::PaintStyle::Fill {
+            self.tessellate_fill(path, paint, FillRule::NonZero)
+        } else {
+            self.tessellate_stroke(path, paint)
+        }
+    }
+
     /// Tessellate a circle
     pub fn tessellate_circle(
         &mut self,
@@ -295,7 +314,7 @@ impl Tessellator {
 
         let path = path_builder.build();
         // Convex shape: fill rule is moot; pass the FLUI default.
-        self.tessellate_fill(&path, paint, FillRule::NonZero)
+        self.dispatch_on_style(&path, paint)
     }
 
     /// Tessellate an ellipse
@@ -316,7 +335,7 @@ impl Tessellator {
 
         let path = path_builder.build();
         // Convex shape: fill rule is moot; pass the FLUI default.
-        self.tessellate_fill(&path, paint, FillRule::NonZero)
+        self.dispatch_on_style(&path, paint)
     }
 
     /// Tessellate an arc (pie slice or arc stroke)
@@ -639,7 +658,7 @@ impl Tessellator {
 
         let path = path_builder.build();
         // Convex rounded rect: fill rule is moot; pass the FLUI default.
-        self.tessellate_fill(&path, paint, FillRule::NonZero)
+        self.dispatch_on_style(&path, paint)
     }
 
     /// Tessellate a stroked rectangle
@@ -1318,6 +1337,123 @@ mod cpu_tests {
             contour_starts, 1,
             "a rounded rectangle must be one contour; {contour_starts} subpaths \
              means the corner arcs fragmented the outline into diagonal-slashed pieces",
+        );
+    }
+
+    /// Distance of every emitted vertex from `center`, as `(min, max)`.
+    ///
+    /// The discriminator between a ring and a disc: a filled circle puts
+    /// its whole outline on one radius, a stroked one straddles the path
+    /// with an inner and an outer contour half a stroke-width apart.
+    fn vertex_radius_band(vertices: &[Vertex], center: (f32, f32)) -> (f32, f32) {
+        vertices.iter().fold((f32::MAX, 0.0_f32), |(lo, hi), v| {
+            let dx = v.position[0] - center.0;
+            let dy = v.position[1] - center.1;
+            let r = dx.hypot(dy);
+            (lo.min(r), hi.max(r))
+        })
+    }
+
+    /// A stroked circle must come back as a ring.
+    ///
+    /// The batch layer sends stroked circles here precisely because the
+    /// instanced SDF path only handles filled ones; tessellating them as a
+    /// fill returned a disc in the stroke colour, so a 4px border on a
+    /// radius-25 decoration painted over the entire background it was
+    /// supposed to outline.
+    #[test]
+    fn a_stroked_circle_tessellates_to_a_ring_not_a_disc() {
+        let mut tessellator = Tessellator::new();
+        let center = Point::new(px(50.0), px(50.0));
+        let radius = 25.0;
+        let stroke_width = 4.0;
+
+        let (vertices, indices) = tessellator
+            .tessellate_circle(center, radius, &Paint::stroke(Color::BLUE, stroke_width))
+            .expect("stroked circle tessellation should succeed");
+        assert!(!indices.is_empty());
+
+        let (inner, outer) = vertex_radius_band(&vertices, (50.0, 50.0));
+        assert!(
+            (inner - (radius - stroke_width / 2.0)).abs() < 0.5,
+            "inner edge should sit half a stroke inside the radius, got {inner}"
+        );
+        assert!(
+            (outer - (radius + stroke_width / 2.0)).abs() < 0.5,
+            "outer edge should sit half a stroke outside the radius, got {outer}"
+        );
+        assert!(
+            outer - inner > stroke_width / 2.0,
+            "a ring spans two contours; a disc would collapse the band to ~0 \
+             (inner {inner}, outer {outer})"
+        );
+    }
+
+    /// The same contract for the filled case: one contour, no band.
+    #[test]
+    fn a_filled_circle_keeps_its_outline_on_a_single_radius() {
+        let mut tessellator = Tessellator::new();
+        let center = Point::new(px(50.0), px(50.0));
+
+        let (vertices, _) = tessellator
+            .tessellate_circle(center, 25.0, &Paint::fill(Color::BLUE))
+            .expect("filled circle tessellation should succeed");
+
+        let (inner, outer) = vertex_radius_band(&vertices, (50.0, 50.0));
+        assert!(
+            outer - inner < 0.5,
+            "a fill traces one contour, got a band of {} ({inner}..{outer})",
+            outer - inner
+        );
+    }
+
+    /// Ellipses share the circle's defect and its fix.
+    #[test]
+    fn a_stroked_ellipse_tessellates_to_a_ring_not_a_disc() {
+        let mut tessellator = Tessellator::new();
+        let center = Point::new(px(60.0), px(40.0));
+        let stroke_width = 6.0;
+
+        let (vertices, _) = tessellator
+            .tessellate_ellipse(
+                center,
+                Point::new(px(30.0), px(20.0)),
+                &Paint::stroke(Color::RED, stroke_width),
+            )
+            .expect("stroked ellipse tessellation should succeed");
+
+        // Cross the ellipse on its minor axis: the vertical extent runs from
+        // `ry - w/2` to `ry + w/2` about the centre.
+        let (top, bottom) = vertices.iter().fold((f32::MAX, 0.0_f32), |(lo, hi), v| {
+            (lo.min(v.position[1]), hi.max(v.position[1]))
+        });
+        assert!(
+            (bottom - top - (40.0 + stroke_width)).abs() < 0.5,
+            "stroked height should be 2*ry + stroke_width = {}, got {}",
+            40.0 + stroke_width,
+            bottom - top
+        );
+    }
+
+    /// Rounded rects too — `shapes.rs` routes the stroked branch here.
+    #[test]
+    fn a_stroked_rrect_tessellates_outside_its_own_bounds() {
+        use flui_types::geometry::rrect::RRect;
+
+        let mut tessellator = Tessellator::new();
+        let rrect = RRect::from_xywh_circular(px(10.0), px(10.0), px(100.0), px(60.0), px(8.0));
+        let stroke_width = 5.0;
+
+        let (vertices, _) = tessellator
+            .tessellate_rrect(rrect, &Paint::stroke(Color::GREEN, stroke_width))
+            .expect("stroked rrect tessellation should succeed");
+
+        let left = vertices
+            .iter()
+            .fold(f32::MAX, |acc, v| acc.min(v.position[0]));
+        assert!(
+            (left - (10.0 - stroke_width / 2.0)).abs() < 0.5,
+            "a centred stroke reaches half a width outside the left edge, got {left}"
         );
     }
 }
