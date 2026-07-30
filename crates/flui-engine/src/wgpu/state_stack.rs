@@ -451,6 +451,21 @@ impl GpuStateStack {
         let transform = self.current_transform;
         let rect = rrect.rect;
 
+        // A rotated or skewed CTM has no representation in this slot: the
+        // shader evaluates an axis-aligned box, and the bounds below are
+        // derived from two corners, which for a rotated rect is not even its
+        // AABB — a 45° rotation collapses them onto one vertical, giving a
+        // ZERO-width clip that erases everything it covers. Leaving the slot
+        // empty and relying on the coarse scissor over-includes, which is the
+        // survivable direction of wrong; a clip carried in local space with
+        // its own transform is what would represent this properly.
+        if !self.is_axis_aligned() {
+            self.current_rrect_clip = [0.0; 8];
+            self.current_rsuperellipse_clip = [0.0; 12];
+            self.clip_rect(rrect.rect, surface_size);
+            return;
+        }
+
         let (x, y, w, h) = if transform == glam::Mat4::IDENTITY {
             (rect.left().0, rect.top().0, rect.width().0, rect.height().0)
         } else {
@@ -472,6 +487,16 @@ impl GpuStateStack {
         // did rather than decomposing the matrix, so a translation-only or
         // identity transform yields exactly 1.0 and the values stay bit-equal
         // to the untransformed path.
+        // Only meaningful when the CTM is axis-aligned. Under rotation or
+        // skew the bounds above are the AABB of a rotated rect, so this ratio
+        // is the AABB's aspect change and not a scale at all — at 45° it would
+        // inflate every radius by ~1.41 for no reason. The SDF slot cannot
+        // express a rotated clip either way (the shader evaluates an
+        // axis-aligned box), so that case keeps its radii untouched: still an
+        // approximation, but the same one it was before, rather than a new
+        // and larger distortion layered on top. Representing a rotated clip
+        // properly needs the clip carried in local space with its own
+        // transform — a change to the instance format, not to this line.
         let (scale_x, scale_y) = if rect.width().0 > 0.0 && rect.height().0 > 0.0 {
             (w / rect.width().0, h / rect.height().0)
         } else {
@@ -536,6 +561,15 @@ impl GpuStateStack {
     ) {
         let transform = self.current_transform;
         let rect = rse.outer_rect();
+
+        // Same bail-out as `clip_rrect`, for the same reason: this slot is
+        // axis-aligned in the shader and its bounds cannot survive a rotation.
+        if !self.is_axis_aligned() {
+            self.current_rsuperellipse_clip = [0.0; 12];
+            self.current_rrect_clip = [0.0; 8];
+            self.clip_rect(rect, surface_size);
+            return;
+        }
 
         let (x, y, w, h) = if transform == glam::Mat4::IDENTITY {
             (rect.left().0, rect.top().0, rect.width().0, rect.height().0)
@@ -1039,5 +1073,34 @@ mod tests {
                 h / 2.0,
             );
         }
+    }
+
+    /// A rotated CTM must leave the SDF slot empty rather than fill it with
+    /// something the shader cannot represent.
+    ///
+    /// The bounds are derived from two corners, which for a rotated rect is
+    /// not even its AABB: a 45° rotation puts both on one vertical, giving a
+    /// zero-width box. Combined with the radius clamp that is a clip which
+    /// erases everything it covers. Falling back to the coarse scissor
+    /// over-includes instead, which is the survivable direction of wrong.
+    #[test]
+    fn a_rotated_clip_populates_no_sdf_slot() {
+        let mut stack = GpuStateStack::new_for_test();
+        let rrect = RRect::from_rect_circular(
+            Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0)),
+            px(10.0),
+        );
+
+        stack.rotate(std::f32::consts::FRAC_PI_4);
+        stack.clip_rrect(rrect, (400, 400));
+
+        assert_eq!(
+            stack.current_rrect_clip, [0.0; 8],
+            "a rotated clip must not populate the axis-aligned SDF slot",
+        );
+        assert!(
+            stack.current_scissor().is_some(),
+            "the coarse scissor still applies — the clip is loosened, not dropped",
+        );
     }
 }

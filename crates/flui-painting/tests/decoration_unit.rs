@@ -467,12 +467,28 @@ fn a_circular_decoration_image_is_clipped_to_the_circle_and_the_clip_is_closed()
         BoxDecoration::with_image(DecorationImage::new(image)).set_shape(BoxShape::Circle);
     let cmds = commands_in(rect, &decoration);
 
-    let clip_index = cmds
-        .iter()
-        .position(|c| matches!(c, DrawCommand::ClipRRect { .. }))
-        .unwrap_or_else(|| panic!("the image must be clipped to the circle; commands: {cmds:?}"));
+    // Assert the whole bracket in order rather than "a clip exists somewhere":
+    // Save opens the scope, the clip narrows it, the image draws inside it,
+    // and Restore closes it before the border. Any other order is a clip that
+    // either does not apply to the image or does not stop after it.
+    let position = |predicate: fn(&DrawCommand) -> bool| cmds.iter().position(predicate);
 
-    let DrawCommand::ClipRRect { rrect, .. } = &cmds[clip_index] else {
+    let save = position(|c| matches!(c, DrawCommand::Save { .. }))
+        .unwrap_or_else(|| panic!("the image must be drawn inside a scope; commands: {cmds:?}"));
+    let clip = position(|c| matches!(c, DrawCommand::ClipRRect { .. }))
+        .unwrap_or_else(|| panic!("the image must be clipped to the circle; commands: {cmds:?}"));
+    let image = position(|c| matches!(c, DrawCommand::DrawImage { .. }))
+        .unwrap_or_else(|| panic!("the decoration image must be drawn; commands: {cmds:?}"));
+    let restore = position(|c| matches!(c, DrawCommand::Restore { .. }))
+        .unwrap_or_else(|| panic!("the scope must close; commands: {cmds:?}"));
+
+    assert!(
+        save < clip && clip < image && image < restore,
+        "expected Save < ClipRRect < DrawImage < Restore, got {save} < {clip} < {image} < \
+         {restore}; commands: {cmds:?}",
+    );
+
+    let DrawCommand::ClipRRect { rrect, .. } = &cmds[clip] else {
         unreachable!("position() matched this variant")
     };
     assert_eq!(
@@ -483,18 +499,8 @@ fn a_circular_decoration_image_is_clipped_to_the_circle_and_the_clip_is_closed()
     assert_eq!(
         rrect.top_left.x,
         px(50.0),
-        "radii of half the shorter side make the rrect SDF an exact circle;          commands: {cmds:?}",
-    );
-
-    assert!(
-        matches!(cmds[clip_index - 1], DrawCommand::Save { .. }),
-        "the clip must be opened inside a scope; commands: {cmds:?}",
-    );
-    assert!(
-        cmds[clip_index..]
-            .iter()
-            .any(|c| matches!(c, DrawCommand::Restore { .. })),
-        "and the scope must close, or the clip narrows every later sibling;          commands: {cmds:?}",
+        "radii of half the shorter side make the rrect SDF an exact circle; \
+         commands: {cmds:?}",
     );
 }
 
