@@ -261,9 +261,9 @@ fn the_relocation_verdict_is_the_same_whichever_parent_claims_the_key_first() {
     }
 }
 
-/// **Divergence, pinned.** When the first parent claims the key *back* — the
-/// shape that proves the optimistic graft was wrong — FLUI grafts it again and
-/// never reports anything. The oracle rejects this tree.
+/// **Divergence, pinned.** When the first parent claims the key *back* — a
+/// tree the oracle rejects outright — FLUI grafts it again and never reports
+/// anything.
 ///
 /// Flutter parity: `framework_test.dart` `'GlobalKey duplication 1 - double
 /// appearance'` and the ordering variants `'7 - appearing later'`, `'8 -
@@ -279,8 +279,17 @@ fn the_relocation_verdict_is_the_same_whichever_parent_claims_the_key_first() {
 /// with whichever parent asked last. Filed in `docs/ROADMAP.md` Cross.H
 /// (search `_debugVerifyGlobalKeyReservation`).
 ///
-/// This asserts the current behaviour, so it fails the day the verification
-/// lands — which is the intent.
+/// What this pins is the graft, not the absent verification — and the two must
+/// not be conflated. `retake_active_global_key` unlinks the element from the
+/// previous parent before relinking it, so no two parents' child lists ever
+/// name it at once, and a bare sequence of inserts crosses no build/finalize
+/// boundary. A reservation check modelled on Flutter's records the *declaring*
+/// parent during build and verifies at the frame boundary, so it would not
+/// necessarily fire on this shape: treat this as a description of today's
+/// relocation semantics, not as a canary that goes red when Cross.H closes.
+/// Pinning the gap itself needs two parents whose *build output* carries the
+/// key, driven through `build_scope` and `finalize_tree`; that test does not
+/// exist yet.
 #[test]
 #[serial_test::serial(global_key_registry)]
 fn two_parents_claiming_the_key_in_turn_are_never_reported_as_a_duplicate() {
