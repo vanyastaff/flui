@@ -35,6 +35,8 @@ mod element_tree_tests;
 mod flutter_parity_key_equality;
 #[path = "global_key.rs"]
 mod global_key;
+#[path = "global_key_duplication.rs"]
+mod global_key_duplication;
 #[path = "global_key_reparent.rs"]
 mod global_key_reparent;
 #[path = "greeting_widget_loc_golden.rs"]
