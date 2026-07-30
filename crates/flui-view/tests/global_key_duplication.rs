@@ -36,7 +36,8 @@
 //! oracle's message text or its diagnostic machinery. Where FLUI's verdict
 //! differs, the test says so and asserts what FLUI actually does — never a
 //! narrowed version of the oracle's expectation. The gap is filed in
-//! `docs/ROADMAP.md` Cross.H (search `_debugVerifyGlobalKeyReservation`).
+//! `docs/ROADMAP.md` under the foundation-hardening gaps (search
+//! `_debugVerifyGlobalKeyReservation`).
 //!
 //! Structural substitution: the oracle expresses its trees as
 //! `Stack`/`Container` hierarchies through `pumpWidget`. These ports drive
@@ -312,8 +313,8 @@ fn the_relocation_verdict_is_the_same_whichever_parent_claims_the_key_first() {
 ///
 /// FLUI has no end-of-frame verification, so each claim is just another graft:
 /// the element ping-pongs between the parents and the tree is silently left
-/// with whichever parent asked last. Filed in `docs/ROADMAP.md` Cross.H
-/// (search `_debugVerifyGlobalKeyReservation`).
+/// with whichever parent asked last. Filed in `docs/ROADMAP.md` (search
+/// `_debugVerifyGlobalKeyReservation`).
 ///
 /// What this pins is the graft, not the absent verification — and the two must
 /// not be conflated. `retake_active_global_key` unlinks the element from the
@@ -322,7 +323,8 @@ fn the_relocation_verdict_is_the_same_whichever_parent_claims_the_key_first() {
 /// boundary. A reservation check modelled on Flutter's records the *declaring*
 /// parent during build and verifies at the frame boundary, so it would not
 /// necessarily fire on this shape: treat this as a description of today's
-/// relocation semantics, not as a canary that goes red when Cross.H closes.
+/// relocation semantics, not as a canary that goes red when the verification
+/// lands.
 /// The canary is
 /// [`two_parents_declaring_one_key_survive_a_whole_frame_unreported`] below,
 /// which drives the frame boundary a reservation check would hook into.
@@ -382,7 +384,8 @@ impl View for KeyedParent {
     }
 }
 
-/// **The Cross.H canary.** Two parents each *build* a child carrying the same
+/// **The canary for the missing end-of-frame duplicate-key verification.**
+/// Two parents each *build* a child carrying the same
 /// key; a whole frame runs — `build_scope` then `finalize_tree` — and nothing
 /// is reported. The oracle rejects exactly this tree.
 ///
@@ -402,7 +405,7 @@ impl View for KeyedParent {
 ///
 /// The assertions describe today's behaviour: exactly one keyed element
 /// survives, held by whichever parent built last, and the frame completes
-/// without a panic. When Cross.H closes, the frame will instead report a
+/// without a panic. Once the verification lands, the frame will instead report a
 /// duplicate and this test goes red — which is the point of keeping it.
 #[test]
 #[serial_test::serial(global_key_registry)]
@@ -448,18 +451,34 @@ fn two_parents_declaring_one_key_survive_a_whole_frame_unreported() {
     let a_children = children_of(&tree, parent_a);
     let b_children = children_of(&tree, parent_b);
 
-    // Precondition, not decoration: if neither parent built, the frame proved
-    // nothing and the silence below would be vacuous.
     assert_eq!(
         a_children.len() + b_children.len(),
         1,
-        "both parents declared the key and exactly one element exists — the \
-         duplicate is real and unreported (a: {a_children:?}, b: {b_children:?})",
+        "one keyed element for two declarations — the duplicate is real and \
+         unreported (a: {a_children:?}, b: {b_children:?})",
     );
-    assert!(
-        a_children.is_empty() && b_children.len() == 1,
-        "the later-built parent holds it, the earlier one is left empty \
-         (a: {a_children:?}, b: {b_children:?})",
+
+    // That count alone would also hold if only ONE parent had ever built, so
+    // it cannot be the whole proof. The state settles it: `create_state` runs
+    // once, at the first mount, so the surviving state carries the tag of the
+    // parent that built FIRST, while the parent now holding the child is the
+    // one that built LAST. Different values mean both parents ran and the
+    // second took the element from the first — which is the duplicate.
+    //
+    // Deliberately not asserting *which* parent wins: `DirtyElement::cmp`
+    // orders the dirty heap by depth alone, so two siblings at the same depth
+    // have no defined build order. Pinning one would be pinning heap
+    // incidentals, and would break on a change that leaves this gap exactly as
+    // it is.
+    let creator_tag = key
+        .with_current_state(|state: &KeyedState| state.tag)
+        .expect("the surviving element still carries state");
+    let holder_tag = if a_children.is_empty() { 2 } else { 1 };
+    assert_ne!(
+        creator_tag, holder_tag,
+        "both parents built: one created the keyed element (tag {creator_tag}) \
+         and the other took it over (tag {holder_tag}) — a frame in which only \
+         one parent built would leave these equal",
     );
 
     flui_view::test_only_clear_global_key_registry();
