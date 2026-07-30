@@ -966,10 +966,7 @@ fn grid_view_one_line_paints_only_onstage_tiles() {
     let green = Color::rgb(0, 255, 0);
     let make_tile = || {
         Container::new()
-            .decoration(BoxDecoration {
-                color: Some(green),
-                ..Default::default()
-            })
+            .decoration(BoxDecoration::with_color(green))
             .boxed()
     };
     let children: Vec<BoxedView> = vec![make_tile(), make_tile(), make_tile(), make_tile()];

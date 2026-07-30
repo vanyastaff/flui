@@ -117,6 +117,16 @@ pub trait Decoration: std::fmt::Debug {
 ///
 /// Generic over unit type `T` for full type safety.
 ///
+/// # Construction
+///
+/// This type is `#[non_exhaustive]`: build it with [`BoxDecoration::new`] (or
+/// one of the `with_*` constructors) and the `set_*` chain, never with a
+/// struct literal. Flutter's `BoxDecoration` has grown fields steadily —
+/// `shape`, `backgroundBlendMode`, `image` all arrived after the type
+/// existed — and each one would otherwise be a source-breaking change for
+/// every caller that spelled out the braces. Closing the literal now costs
+/// two call sites; leaving it open costs every future field.
+///
 /// # Examples
 ///
 /// ```
@@ -139,6 +149,7 @@ pub trait Decoration: std::fmt::Debug {
 /// ```
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[non_exhaustive]
 pub struct BoxDecoration<T: Unit> {
     /// The color to fill the box with.
     pub color: Option<Color>,
