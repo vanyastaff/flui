@@ -12,13 +12,101 @@
 //! display list, never rasterized — the same contract as the rest of
 //! the fragment paint model.
 
+use std::sync::Once;
+
 use flui_types::{
     Color, Offset, Pixels, Point, RRect, Rect,
+    geometry::Circle,
     painting::{Paint, Path, Shader},
     styling::{BoxDecoration, BoxShadow, Gradient},
 };
 
 use crate::canvas::Canvas;
+
+/// One-shot gate for the "`border_radius` ignored on `BoxShape::Circle`"
+/// warning (see `resolve_silhouette` below).
+///
+/// `resolve_silhouette` runs from `paint_box_decoration` on every frame AND
+/// from `box_decoration_hit_test` on every pointer event, so an ungated
+/// `tracing::warn!` here would spam at frame-and-input rate for any
+/// decoration that keeps a mismatched `border_radius` set across rebuilds
+/// (e.g. an `AnimatedContainer` interpolating other fields). This is a
+/// static-misconfiguration notice, not a per-event diagnostic — Flutter's
+/// own `debugAssertIsValid` only ever fires once, at construction — so a
+/// process-lifetime `Once` gate is the right frequency, matching the
+/// precedent at `flui_rendering::delegates::custom_painter::WARN_ONCE`.
+static WARN_CIRCLE_BORDER_RADIUS: Once = Once::new();
+
+/// One-shot gate for the "non-uniform border on a circle is unimplemented"
+/// warning (see `paint_circle_border` below) — same per-frame-spam
+/// rationale as [`WARN_CIRCLE_BORDER_RADIUS`].
+static WARN_CIRCLE_NON_UNIFORM_BORDER: Once = Once::new();
+
+/// One-shot gate for the "decoration image on a circle paints unclipped"
+/// warning (see the image step of `paint_box_decoration` below) — same
+/// per-frame-spam rationale as [`WARN_CIRCLE_BORDER_RADIUS`].
+static WARN_CIRCLE_IMAGE_UNCLIPPED: Once = Once::new();
+
+/// The decoration's resolved silhouette: the one shape used for the
+/// background fill, the shadow cast, the border, and hit testing.
+///
+/// **Not the image.** The decoration image is painted into the full
+/// rectangular destination whatever this resolves to — on a circle it
+/// only decides whether to warn, never to clip. Clipping it would need a
+/// route this layer does not have (see the image step of
+/// `paint_box_decoration`), so a circular decoration image renders as a
+/// square. Do not read this type as "the shape everything is confined
+/// to"; it is the shape the four sites listed above agree on.
+///
+/// Resolved once per paint/hit-test call (`resolve_silhouette`) rather
+/// than re-derived at each paint site. Resolving once is what keeps
+/// those sites from disagreeing about the shape, and it also means the
+/// `border_radius`-on-circle conflict is detected in one place rather
+/// than at every site that would have re-derived it (the warning itself
+/// fires at most once per process — see [`WARN_CIRCLE_BORDER_RADIUS`]).
+enum Silhouette {
+    /// `BoxShape::Rectangle`, no border radius. Carries no payload: the
+    /// plain paint rect is already in scope as the outer `rect`
+    /// parameter at every call site that matches on this variant.
+    Rect,
+    /// `BoxShape::Rectangle` with a border radius.
+    RRect(RRect),
+    /// `BoxShape::Circle`, inscribed in the rect's shorter side.
+    Circle(Circle<Pixels>),
+}
+
+/// Resolves `decoration`'s silhouette against `rect`.
+///
+/// `BoxShape::Circle` wins over `border_radius` unconditionally —
+/// Flutter treats the combination as invalid
+/// (`box_decoration.dart:134-137`'s `debugAssertIsValid`, a debug-only
+/// assert). A `debug_assert!` here would make "the circle wins in
+/// release" an untestable claim in every build profile that runs with
+/// assertions on (this crate's own test suite included), so this warns
+/// via `tracing` instead — testable in every profile — and paints the
+/// circle regardless. The warn fires at most once per process
+/// ([`WARN_CIRCLE_BORDER_RADIUS`]): this function is called from both
+/// `paint_box_decoration` (every frame) and `box_decoration_hit_test`
+/// (every pointer event), and an ungated warn would spam at that rate.
+fn resolve_silhouette(rect: Rect<Pixels>, decoration: &BoxDecoration<Pixels>) -> Silhouette {
+    if decoration.shape.is_circle() {
+        if decoration.border_radius.is_some() {
+            WARN_CIRCLE_BORDER_RADIUS.call_once(|| {
+                tracing::warn!(
+                    "BoxDecoration: `border_radius` is ignored when `shape` is \
+                     `BoxShape::Circle`; the circle wins (this warn fires once \
+                     per process)"
+                );
+            });
+        }
+        let radius = rect.shortest_side() / 2.0;
+        return Silhouette::Circle(Circle::new(rect.center(), radius));
+    }
+    match decoration_rrect(rect, decoration) {
+        Some(rrect) => Silhouette::RRect(rrect),
+        None => Silhouette::Rect,
+    }
+}
 
 /// Paints `decoration` into `rect` on `canvas` in Flutter's order:
 /// shadows, then background color/gradient, then the decoration image,
@@ -28,7 +116,7 @@ pub fn paint_box_decoration(
     rect: Rect<Pixels>,
     decoration: &BoxDecoration<Pixels>,
 ) {
-    let rrect = decoration_rrect(rect, decoration);
+    let silhouette = resolve_silhouette(rect, decoration);
 
     // 1. Shadows (behind everything). Inset shadows are an inner-glow
     //    effect drawn INSIDE the shape above the background — a
@@ -41,7 +129,11 @@ pub fn paint_box_decoration(
                 tracing::warn!(?shadow.color, "inset box shadows are not painted yet");
                 continue;
             }
-            paint_shadow(canvas, rect, rrect, shadow);
+            match &silhouette {
+                Silhouette::Circle(circle) => paint_circle_shadow(canvas, *circle, shadow),
+                Silhouette::RRect(rrect) => paint_shadow(canvas, rect, Some(*rrect), shadow),
+                Silhouette::Rect => paint_shadow(canvas, rect, None, shadow),
+            }
         }
     }
 
@@ -49,32 +141,95 @@ pub fn paint_box_decoration(
     //    "if gradient is specified, color has no effect").
     if let Some(gradient) = &decoration.gradient {
         let shader = resolve_gradient(gradient, rect);
-        match &rrect {
-            Some(rrect) => canvas.draw_gradient_rrect(*rrect, shader),
-            None => canvas.draw_gradient(rect, shader),
+        match &silhouette {
+            Silhouette::Circle(circle) => {
+                // No dedicated `DrawGradientCircle` command exists (unlike
+                // `DrawGradientRRect`); route through `draw_circle`'s
+                // existing shader-paint dispatch instead, which the wgpu
+                // backend already renders as an exact circle (`circle()`'s
+                // `paint.has_shader()` branch calls `dispatch_shader_rect`
+                // with `[radius; 4]` corners — an exact circle through the
+                // same `sdRoundedBox` identity `DrawGradientRRect` uses).
+                // The fill color is unreachable except as the fallback for
+                // a stopless shader (`dispatch_shader_rect` returning
+                // `false` when the gradient has no color stops —
+                // `Gradient::new` does not validate that, so this is
+                // reachable from safe input). `Color::TRANSPARENT` keeps
+                // that fallback consistent with the rect/rrect gradient
+                // paths: `render_gradient`/`render_gradient_rrect`
+                // early-return and paint NOTHING on an empty color list
+                // (`wgpu/backend.rs`); a solid fallback color here would
+                // make the circle the only gradient-silhouette that paints
+                // something visible from a stopless shader.
+                let paint = Paint::fill(Color::TRANSPARENT).with_shader(shader);
+                canvas.draw_circle(circle.center, circle.radius, &paint);
+            }
+            Silhouette::RRect(rrect) => canvas.draw_gradient_rrect(*rrect, shader),
+            Silhouette::Rect => canvas.draw_gradient(rect, shader),
         }
     } else if let Some(color) = decoration.color {
         let paint = Paint::fill(color);
-        match &rrect {
-            Some(rrect) => canvas.draw_rrect(*rrect, &paint),
-            None => canvas.draw_rect(rect, &paint),
+        match &silhouette {
+            Silhouette::Circle(circle) => canvas.draw_circle(circle.center, circle.radius, &paint),
+            Silhouette::RRect(rrect) => canvas.draw_rrect(*rrect, &paint),
+            Silhouette::Rect => canvas.draw_rect(rect, &paint),
         }
     }
 
     // 3. Decoration image (above the background, below the border).
+    //
+    // Flutter clips the image to the circle
+    // (`box_decoration.dart:543-551` `_paintBackgroundImage`). Clipping a
+    // circular image is UNIMPLEMENTED here — this used to route through
+    // `canvas.save()` + `clip_rrect` + `canvas.restore()` on an inscribed
+    // square, but that construction is broken two independent ways, neither
+    // fixable within this crate:
+    //
+    // 1. `Canvas::save()` (`canvas/state.rs`) records nothing in the
+    //    display list, and `restore()` only emits a `RestoreLayer` command
+    //    when the saved state came from `save_layer()` (`is_layer`, which
+    //    plain `save()` always sets to `false`). There is no plain
+    //    Save/Restore `DrawCommand` variant, so the `ClipRRect` this used
+    //    to push was never closed — it would leak onto the image AND every
+    //    following sibling command in the same `PictureLayer`.
+    // 2. Even a properly scoped clip would not clip an image: the rounded
+    //    SDF clip only reaches a draw through
+    //    `GpuStateStack::apply_active_clip`, whose only call sites are the
+    //    `RectInstance` paths in `flui-engine`'s `wgpu/batches/shapes.rs`.
+    //    `wgpu/batches/images.rs` never calls it, so an image only ever
+    //    gets the coarse bounding-box scissor — a SQUARE, not a circle.
+    //
+    // Fixing this needs either a `FragmentScope` clip route in
+    // `flui-rendering` or `apply_active_clip` support in the image batch;
+    // both are out of scope here. The image paints unclipped (a square)
+    // instead, with a one-shot warning.
     if let Some(image) = &decoration.image {
+        if matches!(&silhouette, Silhouette::Circle(_)) {
+            WARN_CIRCLE_IMAGE_UNCLIPPED.call_once(|| {
+                tracing::warn!(
+                    "BoxDecoration: a decoration image on a BoxShape::Circle is painted \
+                     unclipped (a square, not a circle); circular image clipping is not \
+                     implemented yet (this warn fires once per process)"
+                );
+            });
+        }
         paint_decoration_image(canvas, rect, image);
     }
 
     // 4. Border (on top).
     if let Some(border) = &decoration.border {
-        paint_border(canvas, rect, rrect, border);
+        match &silhouette {
+            Silhouette::Circle(circle) => paint_circle_border(canvas, *circle, border),
+            Silhouette::RRect(rrect) => paint_border(canvas, rect, Some(*rrect), border),
+            Silhouette::Rect => paint_border(canvas, rect, None, border),
+        }
     }
 }
 
-/// Hit test against the decoration's geometry: inside the rounded
-/// rect when a border radius is set, inside the plain rect otherwise
-/// (Flutter `BoxDecoration.hitTest`).
+/// Hit test against the decoration's geometry: inside the circle when
+/// `shape` is `BoxShape::Circle`, inside the rounded rect when a
+/// border radius is set, inside the plain rect otherwise (Flutter
+/// `BoxDecoration.hitTest`).
 #[must_use]
 pub fn box_decoration_hit_test(
     rect: Rect<Pixels>,
@@ -85,9 +240,10 @@ pub fn box_decoration_hit_test(
     if !rect.contains(point) {
         return false;
     }
-    match decoration_rrect(rect, decoration) {
-        Some(rrect) => rrect_contains(&rrect, point),
-        None => true,
+    match resolve_silhouette(rect, decoration) {
+        Silhouette::Circle(circle) => circle.contains(point),
+        Silhouette::RRect(rrect) => rrect_contains(&rrect, point),
+        Silhouette::Rect => true,
     }
 }
 
@@ -102,6 +258,137 @@ fn decoration_rrect(rect: Rect<Pixels>, decoration: &BoxDecoration<Pixels>) -> O
             radius.bottom_left,
         )
     })
+}
+
+/// The circle-shape shadow silhouette: the fill circle's radius
+/// inflated by the spread radius and its center displaced by the
+/// shadow offset — Flutter re-derives `rect.shortestSide / 2` from
+/// `rect.shift(offset).inflate(spread)` (`box_decoration.dart:448-462`
+/// `_paintShadows` -> `_paintBox`), which is equivalent to inflating
+/// the radius directly for a square rect. `Circle::inflate` clamps the
+/// radius at 0, so a spread large enough to invert the circle degrades
+/// to a zero-radius point rather than panicking in `Canvas::draw_shadow`.
+///
+/// **Documented divergence from Flutter:** for a spread radius large
+/// enough to invert the rect (e.g. a 100×100 rect with
+/// `spread_radius = -1000`), Flutter's re-derivation inflates the RECT
+/// first — `rect.inflate(-1000)` yields `LTRB(1000, 1000, -900, -900)` —
+/// and only then takes `shortestSide / 2` of that inverted rect, landing
+/// on radius **950** (`math.min((-900 - 1000).abs(), (-900 - 1000).abs())
+/// / 2`). FLUI instead clamps `Circle::inflate`'s radius at 0, yielding
+/// radius **0** for the same input — a deliberate choice, not a missed
+/// case: Flutter's 950-radius shadow for a -1000 spread on a 100px box is
+/// arguably the more surprising number, and FLUI's own rect/rrect shadow
+/// path (`paint_shadow` below) does not clamp its `RRect::inflate` at all,
+/// so the two silhouettes already disagree on this edge case independent
+/// of this function. Clamping the circle path does not introduce a new
+/// inconsistency; it just avoids a shadow radius nearly an order of
+/// magnitude larger than the box it decorates.
+fn paint_circle_shadow(canvas: &mut Canvas, circle: Circle<Pixels>, shadow: &BoxShadow<Pixels>) {
+    let silhouette = circle
+        .inflate(shadow.spread_radius)
+        .translate(shadow.offset.into());
+    canvas.draw_shadow(
+        &Path::circle(silhouette.center, silhouette.radius.get()),
+        shadow.color,
+        shadow.blur_radius.get(),
+    );
+}
+
+/// Paints a uniform border on a circle as a STROKED circle (Flutter
+/// `box_border.dart:346-350` `_paintUniformBorderWithCircle`,
+/// `drawCircle(center, (shortestSide + strokeOffset) / 2, side.toPaint())`),
+/// NOT `draw_drrect` on an inscribed rounded rect: `tessellate_drrect`
+/// approximates each 90-degree corner with a single quadratic Bezier,
+/// which bulges the ring outward by about 6% on the diagonals relative
+/// to `draw_circle`'s exact SDF fill, so the two shapes would visibly
+/// disagree.
+///
+/// The stroke is centered so its OUTER edge lands exactly on the fill
+/// radius, matching the inside-stroke convention `paint_border` above
+/// already uses for the rect/rrect path (a filled outer/inner pair via
+/// `draw_drrect`) rather than Flutter's `strokeAlign`, which FLUI's
+/// `BorderSide` does not thread through this call. A width *exactly* at
+/// the diameter still satisfies that invariant — the stroke centers at
+/// radius 0 and spans `±radius`, so it paints a full disc in the border
+/// color. Only a width that *exceeds* the diameter is unsatisfiable
+/// (it would need a negative stroke-center radius), and that case is
+/// skipped rather than clamped, since clamping paints a disc **outside**
+/// the fill instead of a ring inside it (see the guard below).
+///
+/// A non-uniform border on a circle is UNIMPLEMENTED, and the blocker is
+/// a missing primitive rather than missing work here.
+///
+/// Flutter paints a subset of these: `Border.paint` accepts a
+/// non-uniform border on a circle when exactly one distinct *visible*
+/// colour is present and no side is a hairline, and routes it to
+/// `BoxBorder.paintNonUniformBorder` (`box_border.dart`, tag `3.44.0`).
+/// That function does not walk the sides as arcs — it builds an `RRect`
+/// from the circle's bounding rect, deflates and inflates it by each
+/// side's stroke inset/outset, and emits a single `drawDRRect`. So a
+/// border visible on one side only comes out as a crescent of varying
+/// thickness, not as a constant-width arc.
+///
+/// Reproducing that here would mean a `draw_drrect` whose corners are a
+/// true circle. FLUI's tessellates each 90° corner with one quadratic
+/// Bézier, which bulges roughly 6% on the diagonals — the same reason
+/// the uniform path above strokes a circle instead of inscribing a
+/// rounded rect. Emitting it anyway would put a visibly non-circular
+/// ring around a circular fill, so this warns (at most once per process,
+/// [`WARN_CIRCLE_NON_UNIFORM_BORDER`]) and paints nothing. Falling
+/// through to the per-side strip painter below is not an option either:
+/// that draws a square frame around a circular fill.
+fn paint_circle_border(
+    canvas: &mut Canvas,
+    circle: Circle<Pixels>,
+    border: &flui_types::styling::Border<Pixels>,
+) {
+    if !border.is_uniform() {
+        WARN_CIRCLE_NON_UNIFORM_BORDER.call_once(|| {
+            tracing::warn!(
+                "non-uniform border on a BoxShape::Circle is not painted; \
+                 Flutter renders the single-visible-colour form of it via \
+                 drawDRRect, which needs a drrect whose corners are a true \
+                 circle -- ours approximates each corner with one quadratic \
+                 Bezier (this warn fires once per process)"
+            );
+        });
+        return;
+    }
+    let Some(side) = border.top else {
+        return;
+    };
+    let width = side.width.get();
+    if width <= 0.0 {
+        return;
+    }
+    let diameter = circle.radius.get() * 2.0;
+    if width > diameter {
+        // Past the diameter the invariant is unsatisfiable: the stroke
+        // center would need a negative radius, and pinning it at 0 while
+        // keeping the full `width` puts the stroke's outer edge at
+        // `width / 2 > radius` -- a disc bulging OUTSIDE the fill rather
+        // than a ring inside it. Skip instead of painting that.
+        //
+        // Exactly AT the diameter is not this case and must not be folded
+        // into it: `radius - width / 2` is 0, and a stroke of width
+        // `2 * radius` centered there spans `±radius`, landing its outer
+        // edge exactly on the fill radius. That is a full disc in the
+        // border color, which is the correct rendering of a border as
+        // thick as the shape -- skipping it would silently drop the
+        // border color instead.
+        //
+        // Divergence from Flutter, deliberate: Flutter's
+        // `_paintUniformBorderWithCircle` (`box_border.dart:346-350`) has
+        // no such guard and `BorderSide` only asserts `width >= 0`, so an
+        // over-wide border there reaches `drawCircle` with a zero-or-
+        // negative radius. FLUI declines to paint rather than depend on a
+        // backend's handling of a degenerate radius.
+        return;
+    }
+    let stroke_radius = circle.radius.get() - width / 2.0;
+    let paint = Paint::stroke(side.color, width);
+    canvas.draw_circle(circle.center, Pixels(stroke_radius), &paint);
 }
 
 /// One box shadow: the casting silhouette is the decoration's shape

@@ -319,6 +319,27 @@ where
     pub fn size(&self) -> Size<T> {
         Size::new(self.width(), self.height())
     }
+
+    /// The lesser of the magnitudes of [`Self::width`] and
+    /// [`Self::height`] (Flutter parity: `Rect.shortestSide`,
+    /// `math.min(width.abs(), height.abs())`).
+    ///
+    /// Uses the absolute value so an inverted rectangle (`min > max` on
+    /// either axis) still yields a non-negative side length.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_geometry::{Rect, px};
+    ///
+    /// let rect = Rect::from_xywh(px(0.0), px(0.0), px(200.0), px(100.0));
+    /// assert_eq!(rect.shortest_side(), px(100.0));
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn shortest_side(&self) -> T {
+        self.width().abs().min(self.height().abs())
+    }
 }
 
 impl<T: NumericUnit> Rect<T>

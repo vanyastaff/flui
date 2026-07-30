@@ -4,7 +4,7 @@
 pub use crate::painting::{BlendMode, BoxFit, ColorFilter, ImageRepeat};
 use crate::{
     geometry::traits::{NumericUnit, Unit},
-    layout::Alignment,
+    layout::{Alignment, BoxShape},
     painting::Image,
     styling::{Border, BorderRadius, BorderRadiusExt, BoxShadow, Color, Gradient},
 };
@@ -159,6 +159,27 @@ pub struct BoxDecoration<T: Unit> {
     ///
     /// If this is specified, `color` has no effect.
     pub gradient: Option<Gradient>,
+
+    /// The shape to fill the background, gradient, and image into, and
+    /// to cast as the box shadow.
+    ///
+    /// If this is [`BoxShape::Circle`], `border_radius` is ignored (a
+    /// warning is logged — at most once per process, since resolving the
+    /// silhouette runs on every paint and every hit test — rather than
+    /// asserting, so the fallback is observable in every build profile).
+    /// The circle is inscribed in the shorter of the paint rect's two
+    /// sides.
+    ///
+    /// The shape cannot be interpolated: `lerp` switches discretely at
+    /// `t == 0.5` (Flutter parity, `box_decoration.dart:209-211,314`).
+    ///
+    /// `serde(default)` is load-bearing, not decoration: this field was
+    /// added after the type was already serializable, so a payload
+    /// written without it would otherwise fail to deserialize with a
+    /// missing-field error. Deriving `Default` on [`BoxShape`] does not
+    /// give serde that behaviour on its own.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub shape: BoxShape,
 }
 
 impl<T: Unit> BoxDecoration<T> {
@@ -172,6 +193,7 @@ impl<T: Unit> BoxDecoration<T> {
             border_radius: None,
             box_shadow: None,
             gradient: None,
+            shape: BoxShape::Rectangle,
         }
     }
 
@@ -185,6 +207,7 @@ impl<T: Unit> BoxDecoration<T> {
             border_radius: None,
             box_shadow: None,
             gradient: None,
+            shape: BoxShape::Rectangle,
         }
     }
 
@@ -198,6 +221,7 @@ impl<T: Unit> BoxDecoration<T> {
             border_radius: None,
             box_shadow: None,
             gradient: Some(gradient),
+            shape: BoxShape::Rectangle,
         }
     }
 
@@ -211,6 +235,7 @@ impl<T: Unit> BoxDecoration<T> {
             border_radius: None,
             box_shadow: None,
             gradient: None,
+            shape: BoxShape::Rectangle,
         }
     }
 
@@ -246,6 +271,13 @@ impl<T: Unit> BoxDecoration<T> {
     #[inline]
     pub fn set_gradient(mut self, gradient: Option<Gradient>) -> Self {
         self.gradient = gradient;
+        self
+    }
+
+    /// Creates a copy of this decoration with the given shape.
+    #[inline]
+    pub const fn set_shape(mut self, shape: BoxShape) -> Self {
+        self.shape = shape;
         self
     }
 }
@@ -306,6 +338,10 @@ where
             b.image.clone()
         };
 
+        // Not interpolatable (Flutter parity, box_decoration.dart:209-211):
+        // discrete switch at the midpoint, same as the image crossfade above.
+        let shape = if t < 0.5 { a.shape } else { b.shape };
+
         Self {
             color,
             image,
@@ -313,6 +349,7 @@ where
             border_radius,
             box_shadow,
             gradient,
+            shape,
         }
     }
 }
@@ -336,5 +373,65 @@ where
     #[inline]
     fn lerp_decoration(a: &Self, b: &Self, t: f32) -> Option<Self> {
         Some(BoxDecoration::lerp(a, b, t))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::geometry::Pixels;
+
+    /// `BoxDecoration::lerp`'s `shape` field is NOT interpolated (Flutter
+    /// parity, `box_decoration.dart:209-211,314`): it switches discretely
+    /// at the midpoint (`shape = if t < 0.5 { a.shape } else { b.shape }`
+    /// above). This branch had zero coverage before -- it could regress to
+    /// always picking `a`, always picking `b`, or an actual interpolation
+    /// without any test failing.
+    #[test]
+    fn lerp_shape_switches_discretely_at_the_midpoint() {
+        let a = BoxDecoration::<Pixels>::new().set_shape(BoxShape::Rectangle);
+        let b = BoxDecoration::<Pixels>::new().set_shape(BoxShape::Circle);
+
+        // t < 0.5: `a`'s shape.
+        assert_eq!(BoxDecoration::lerp(&a, &b, 0.0).shape, BoxShape::Rectangle);
+        assert_eq!(BoxDecoration::lerp(&a, &b, 0.25).shape, BoxShape::Rectangle);
+        assert_eq!(
+            BoxDecoration::lerp(&a, &b, 0.499).shape,
+            BoxShape::Rectangle
+        );
+
+        // t == 0.5 exactly: the switch already happened (`t < 0.5` is
+        // false at 0.5), so this lands on `b`'s shape, not `a`'s.
+        assert_eq!(BoxDecoration::lerp(&a, &b, 0.5).shape, BoxShape::Circle);
+
+        // t > 0.5: `b`'s shape.
+        assert_eq!(BoxDecoration::lerp(&a, &b, 0.75).shape, BoxShape::Circle);
+        assert_eq!(BoxDecoration::lerp(&a, &b, 1.0).shape, BoxShape::Circle);
+
+        // And the reverse direction, to catch an accidental `a`/`b` swap.
+        assert_eq!(BoxDecoration::lerp(&b, &a, 0.0).shape, BoxShape::Circle);
+        assert_eq!(BoxDecoration::lerp(&b, &a, 0.5).shape, BoxShape::Rectangle);
+        assert_eq!(BoxDecoration::lerp(&b, &a, 1.0).shape, BoxShape::Rectangle);
+    }
+
+    /// A payload written before `shape` existed must still load, as the
+    /// rectangle it was. Without `serde(default)` on the field, serde
+    /// rejects it outright — `BoxShape: Default` does not reach the
+    /// derive on its own.
+    #[cfg(feature = "serde")]
+    #[test]
+    fn a_decoration_serialized_before_shape_existed_still_deserializes() {
+        let legacy = r#"{
+            "color": null,
+            "image": null,
+            "border": null,
+            "border_radius": null,
+            "box_shadow": null,
+            "gradient": null
+        }"#;
+
+        let decoration: BoxDecoration<crate::geometry::Pixels> =
+            serde_json::from_str(legacy).expect("a pre-shape payload must still deserialize");
+        assert_eq!(decoration.shape, BoxShape::Rectangle);
     }
 }
