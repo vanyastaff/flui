@@ -36,7 +36,8 @@
 //! oracle's message text or its diagnostic machinery. Where FLUI's verdict
 //! differs, the test says so and asserts what FLUI actually does — never a
 //! narrowed version of the oracle's expectation. The gap is filed in
-//! `docs/ROADMAP.md` Cross.H (search `_debugVerifyGlobalKeyReservation`).
+//! `docs/ROADMAP.md` under the foundation-hardening gaps (search
+//! `_debugVerifyGlobalKeyReservation`).
 //!
 //! Structural substitution: the oracle expresses its trees as
 //! `Stack`/`Container` hierarchies through `pumpWidget`. These ports drive
@@ -103,7 +104,43 @@ impl StatefulView for Keyed {
 
 impl ViewState<Keyed> for KeyedState {
     fn build(&self, _view: &Keyed, _ctx: &dyn BuildContext) -> impl IntoView {
-        Filler.boxed()
+        Leaf.boxed()
+    }
+}
+
+/// A terminal leaf — a render view, so building it mounts a render object and
+/// stops.
+///
+/// It exists because [`Filler`] cannot be a build *output*. `Filler::build`
+/// returns `self.clone()`, which is harmless for the tests that only call
+/// `ElementTree::insert` (nothing ever builds it) and non-terminating the
+/// moment a real build pass runs: each Filler builds another Filler, forever.
+/// Anything reached through `build_scope` in this file must bottom out here.
+#[derive(Clone)]
+struct Leaf;
+
+impl flui_view::RenderView for Leaf {
+    type Protocol = flui_rendering::protocol::BoxProtocol;
+    type RenderObject = flui_objects::RenderSizedBox;
+
+    fn create_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+    ) -> Self::RenderObject {
+        flui_objects::RenderSizedBox::shrink()
+    }
+
+    fn update_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+        _render_object: &mut Self::RenderObject,
+    ) {
+    }
+}
+
+impl View for Leaf {
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::render_variable(self)
     }
 }
 
@@ -276,8 +313,8 @@ fn the_relocation_verdict_is_the_same_whichever_parent_claims_the_key_first() {
 ///
 /// FLUI has no end-of-frame verification, so each claim is just another graft:
 /// the element ping-pongs between the parents and the tree is silently left
-/// with whichever parent asked last. Filed in `docs/ROADMAP.md` Cross.H
-/// (search `_debugVerifyGlobalKeyReservation`).
+/// with whichever parent asked last. Filed in `docs/ROADMAP.md` (search
+/// `_debugVerifyGlobalKeyReservation`).
 ///
 /// What this pins is the graft, not the absent verification — and the two must
 /// not be conflated. `retake_active_global_key` unlinks the element from the
@@ -286,10 +323,11 @@ fn the_relocation_verdict_is_the_same_whichever_parent_claims_the_key_first() {
 /// boundary. A reservation check modelled on Flutter's records the *declaring*
 /// parent during build and verifies at the frame boundary, so it would not
 /// necessarily fire on this shape: treat this as a description of today's
-/// relocation semantics, not as a canary that goes red when Cross.H closes.
-/// Pinning the gap itself needs two parents whose *build output* carries the
-/// key, driven through `build_scope` and `finalize_tree`; that test does not
-/// exist yet.
+/// relocation semantics, not as a canary that goes red when the verification
+/// lands.
+/// The canary is
+/// [`two_parents_declaring_one_key_survive_a_whole_frame_unreported`] below,
+/// which drives the frame boundary a reservation check would hook into.
 #[test]
 #[serial_test::serial(global_key_registry)]
 fn two_parents_claiming_the_key_in_turn_are_never_reported_as_a_duplicate() {
@@ -315,6 +353,132 @@ fn two_parents_claiming_the_key_in_turn_are_never_reported_as_a_duplicate() {
     assert!(
         children_of(&tree, parents[1]).is_empty(),
         "and the other is left empty — no duplicate is ever reported",
+    );
+
+    flui_view::test_only_clear_global_key_registry();
+}
+
+/// A parent whose *build output* carries the key — the oracle's `Container`
+/// with a keyed child, expressed through the build path rather than by a
+/// direct tree insert. This is what makes a reservation check observable:
+/// the key is declared by a build, which is where Flutter records it.
+#[derive(Clone)]
+struct KeyedParent {
+    key: GlobalKey<KeyedState>,
+    tag: i32,
+}
+
+impl StatelessView for KeyedParent {
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        Keyed {
+            key: self.key.clone(),
+            tag: self.tag,
+        }
+        .boxed()
+    }
+}
+
+impl View for KeyedParent {
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateless(self)
+    }
+}
+
+/// **The canary for the missing end-of-frame duplicate-key verification.**
+/// Two parents each *build* a child carrying the same
+/// key; a whole frame runs — `build_scope` then `finalize_tree` — and nothing
+/// is reported. The oracle rejects exactly this tree.
+///
+/// Flutter parity: `framework_test.dart` `'GlobalKey duplication 1 - double
+/// appearance'` and the ordering variants `'7'`–`'10'` (3.44.0), all of which
+/// expect a `FlutterError`. Flutter records the losing parent during build
+/// (`_debugTrackElementThatWillNeedToBeRebuiltDueToGlobalKeyShenanigans`) and
+/// verifies at the frame boundary (`_debugVerifyGlobalKeyReservation` after
+/// `buildScope`, `_debugVerifyIllFatedPopulation` in `finalizeTree`).
+///
+/// Why this shape rather than a sequence of inserts: the graft
+/// (`retake_active_global_key`) unlinks the child from its previous parent
+/// before relinking it, so raw inserts never leave two parents claiming the
+/// key and never cross a frame boundary — a reservation check need not fire on
+/// them at all. Here both parents genuinely declare the key in one frame, so a
+/// check placed where Flutter places it *must* see the conflict.
+///
+/// The assertions describe today's behaviour: exactly one keyed element
+/// survives, held by whichever parent built last, and the frame completes
+/// without a panic. Once the verification lands, the frame will instead report a
+/// duplicate and this test goes red — which is the point of keeping it.
+#[test]
+#[serial_test::serial(global_key_registry)]
+fn two_parents_declaring_one_key_survive_a_whole_frame_unreported() {
+    let (tree, owner) = fresh_tree();
+    flui_view::test_only_set_global_key_registry(&tree, &owner);
+    let key = GlobalKey::<KeyedState>::new();
+
+    let root = tree
+        .write()
+        .mount_root(&Filler, &mut owner.write().element_owner_mut());
+    let parent_a = tree.write().insert(
+        &KeyedParent {
+            key: key.clone(),
+            tag: 1,
+        },
+        root,
+        0,
+        &mut owner.write().element_owner_mut(),
+    );
+    let parent_b = tree.write().insert(
+        &KeyedParent {
+            key: key.clone(),
+            tag: 2,
+        },
+        root,
+        1,
+        &mut owner.write().element_owner_mut(),
+    );
+
+    // Drive the boundary a reservation check would hook into. Both guards must
+    // be held across the call — `build_scope` takes `&mut` to each — which is
+    // why nothing inside may re-enter these locks.
+    {
+        let mut owner_guard = owner.write();
+        owner_guard.schedule_build_for(parent_a, 1, flui_view::RebuildReason::InitialMount);
+        owner_guard.schedule_build_for(parent_b, 1, flui_view::RebuildReason::InitialMount);
+        let mut tree_guard = tree.write();
+        owner_guard.build_scope(&mut tree_guard);
+        owner_guard.finalize_tree(&mut tree_guard);
+    }
+
+    let a_children = children_of(&tree, parent_a);
+    let b_children = children_of(&tree, parent_b);
+
+    assert_eq!(
+        a_children.len() + b_children.len(),
+        1,
+        "one keyed element for two declarations — the duplicate is real and \
+         unreported (a: {a_children:?}, b: {b_children:?})",
+    );
+
+    // That count alone would also hold if only ONE parent had ever built, so
+    // it cannot be the whole proof. The state settles it: `create_state` runs
+    // once, at the first mount, so the surviving state carries the tag of the
+    // parent that built FIRST, while the parent now holding the child is the
+    // one that built LAST. Different values mean both parents ran and the
+    // second took the element from the first — which is the duplicate.
+    //
+    // Deliberately not asserting *which* parent wins: `DirtyElement::cmp`
+    // orders the dirty heap by depth alone, so two siblings at the same depth
+    // have no defined build order. Pinning one would be pinning heap
+    // incidentals, and would break on a change that leaves this gap exactly as
+    // it is.
+    let creator_tag = key
+        .with_current_state(|state: &KeyedState| state.tag)
+        .expect("the surviving element still carries state");
+    let holder_tag = if a_children.is_empty() { 2 } else { 1 };
+    assert_ne!(
+        creator_tag, holder_tag,
+        "both parents built: one created the keyed element (tag {creator_tag}) \
+         and the other took it over (tag {holder_tag}) — a frame in which only \
+         one parent built would leave these equal",
     );
 
     flui_view::test_only_clear_global_key_registry();
