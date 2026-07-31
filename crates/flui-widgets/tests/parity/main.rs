@@ -210,3 +210,6 @@ mod fade_transition_test;
 
 // ── DefaultTextStyle parity (default_text_style_test.dart) ─────────────────
 mod default_text_style_test;
+
+// ── Directionality parity (directionality_test.dart) ────────────────────────
+mod directionality_test;

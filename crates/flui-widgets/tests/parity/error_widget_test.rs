@@ -117,19 +117,21 @@ use flui_widgets::SizedBox;
 use crate::common;
 use crate::harness;
 
-/// Serializes this file's own `ERROR_VIEW_BUILDER` mutations. `cargo
-/// nextest` gives every `#[test]` fn its own process (no cross-test race is
-/// even possible there — see this crate's `AGENTS.md` testing-quirks note),
-/// but the `cargo test` fallback runs the whole `parity` binary
-/// single-process, multi-threaded; this file is the only one under
-/// `tests/parity/` that touches the global builder, so a scoped guard plus
-/// an explicit restore at the end of every test that installs one is a
-/// defensive no-op under nextest and a real safety net under the fallback —
-/// same precedent `crates/flui-view/tests/error_view_recovery.rs` already
-/// established for the identical global.
+/// Serializes `ERROR_VIEW_BUILDER` mutations across every file under
+/// `tests/parity/` that installs a custom builder. `cargo nextest` gives
+/// every `#[test]` fn its own process (no cross-test race is even possible
+/// there — see this crate's `AGENTS.md` testing-quirks note), but the
+/// `cargo test` fallback runs the whole `parity` binary single-process,
+/// multi-threaded; a scoped guard plus an explicit restore at the end of
+/// every test that installs one is a defensive no-op under nextest and a
+/// real safety net under the fallback — same precedent
+/// `crates/flui-view/tests/error_view_recovery.rs` already established for
+/// the identical global. `pub(crate)` so sibling files (currently
+/// `directionality_test.rs`) share the SAME lock instead of racing a second,
+/// independent one.
 static ERROR_BUILDER_GUARD: Mutex<()> = Mutex::new(());
 
-fn acquire_error_builder_guard() -> std::sync::MutexGuard<'static, ()> {
+pub(crate) fn acquire_error_builder_guard() -> std::sync::MutexGuard<'static, ()> {
     match ERROR_BUILDER_GUARD.lock() {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
