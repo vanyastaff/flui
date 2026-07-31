@@ -75,6 +75,7 @@ mod stack_test;
 
 // ── Business.1 fidelity front — Navigator/routes parity (family 3) ──────────
 mod navigator_test;
+mod pop_scope_test;
 
 // ── Business.1 fidelity front — Hero parity (family 3, heroes) ──────────────
 mod heroes_test;
