@@ -55,6 +55,13 @@
 //! the convention `sliver_fixed_extent_list_test.rs` established. Inverting it
 //! to assert what FLUI does today would make the defect the expected result and
 //! turn the eventual fix into a red "regression".
+//!
+//! **The gap has a second half**, and the pin cannot go green without it:
+//! `RenderBehavior::on_update` marks the subject needs-layout unconditionally
+//! on every re-pump, so the subject invalidates itself no matter what the
+//! delegate answered. No fixture can isolate the delegate decision at widget
+//! level until that mark is gated on the change-flag — which is also why the
+//! resize case below pins a size rather than a scheduling decision.
 
 use std::any::Any;
 use std::sync::{Arc, Mutex};
@@ -287,25 +294,36 @@ fn should_relayout_is_consulted_when_the_delegate_is_replaced() {
     );
 }
 
-/// **Divergence pin, asserting the oracle.** Flutter skips the relayout when
-/// `shouldRelayout` answers false, so `get_constraints_for_child` is never
-/// reached after the swap. FLUI reaches it anyway.
+/// **Divergence pin, asserting the oracle — and it needs TWO fixes, not one.**
+///
+/// Flutter skips the relayout when `shouldRelayout` answers false, so
+/// `get_constraints_for_child` is never reached after the swap. FLUI reaches
+/// it anyway, and there are two independent reasons, either of which is enough
+/// on its own:
+///
+/// 1. `RenderCustomSingleChildLayoutBox::set_delegate` returns Flutter's
+///    verdict correctly, but `update_render_object` discards it.
+/// 2. `RenderBehavior::on_update` (`flui-view`, `element/behavior.rs`) calls
+///    `mark_render_needs_layout_and_paint` **unconditionally** after applying
+///    the new configuration — so every re-pump marks the subject dirty
+///    regardless of what any delegate said.
+///
+/// This is why the fixture is not the problem and no arrangement of
+/// "unchanged" ancestors or children can isolate the delegate decision here:
+/// the subject invalidates *itself* through its own update path. A
+/// widget-level assertion of this contract only becomes constructible once
+/// that blanket invalidation is gated on the change-flag. **Do not unignore
+/// this after fixing only (1)** — it will still fail, and that failure is not
+/// a regression.
 ///
 /// Ignored rather than inverted: writing the assertion the other way round
-/// would lock today's defect in as the expected result, and would then go red
-/// as a "regression" the day someone actually fixes it. Asserting the oracle
-/// and quarantining keeps the expectation pointing at the contract — unignore
-/// it when the gap below closes.
-///
-/// The gap: `RenderCustomSingleChildLayoutBox::set_delegate` returns Flutter's
-/// verdict correctly, but `update_render_object` discards it and the
-/// render-behavior update marks needs-layout unconditionally. Filed in
-/// `docs/ROADMAP.md` under the foundation-hardening gaps (search
+/// would lock today's behaviour in as the expected result and turn the
+/// eventual fix into a red "regression". Filed in `docs/ROADMAP.md` (search
 /// `should_relayout`).
 #[test]
-#[ignore = "divergence pin: the delegate change-flag is discarded, so a false \
-            should_relayout does not suppress the relayout — see the \
-            should_relayout gap in docs/ROADMAP.md"]
+#[ignore = "divergence pin: needs BOTH the discarded set_delegate verdict and \
+            the unconditional needs-layout mark in RenderBehavior::on_update \
+            fixed — see the should_relayout gap in docs/ROADMAP.md"]
 fn a_false_should_relayout_prevents_relayout_pin() {
     let (first, _first_recording) = RecordingDelegate::recording_pair(false);
     let mut laid = harness::pump_widget(build_frame(first), harness::screen());
@@ -333,6 +351,12 @@ fn a_false_should_relayout_prevents_relayout_pin() {
 
 /// A delegate that reports a different size resizes the render object on the
 /// next pump.
+///
+/// This pins the *size*, which is what the oracle's case asserts. It does not
+/// prove that the delegate's `should_relayout` verdict is what scheduled the
+/// layout — `RenderBehavior::on_update` marks the subject dirty on every
+/// re-pump regardless, so the relayout would happen either way. The scheduling
+/// half is the quarantined pin above.
 #[test]
 fn replacing_the_delegate_resizes_the_render_object() {
     let mut laid = harness::pump_widget(
