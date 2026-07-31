@@ -207,3 +207,6 @@ mod rich_text_test;
 
 // ── FadeTransition parity (fade_transition_test.dart) ──────────────────────
 mod fade_transition_test;
+
+// ── DefaultTextStyle parity (default_text_style_test.dart) ─────────────────
+mod default_text_style_test;
