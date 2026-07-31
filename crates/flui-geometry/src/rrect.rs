@@ -598,7 +598,7 @@ mod tests {
     }
 
     #[test]
-    fn inflate_treats_each_radius_axis_independently() {
+    fn inset_clamps_each_radius_axis_independently() {
         let rrect = RRect::from_rect_and_radius(
             Rect::from_ltrb(px(0.0), px(0.0), px(40.0), px(40.0)),
             Radius::elliptical(px(9.0), px(3.0)),

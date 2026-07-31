@@ -438,9 +438,10 @@ impl Edges<super::units::Pixels> {
     /// Each edge moves outward by its own inset, and each corner radius grows
     /// by the two insets that meet at it — `left` and `top` at the top-left
     /// corner, `right` and `top` at the top-right, and so on. Growing the radii
-    /// with the rect is what keeps the corner's shape; passing them through
-    /// unchanged (as `RRect::inflate` does) leaves a rounded rect whose
-    /// corners no longer fit the box they belong to.
+    /// with the rect is what keeps the corner's shape: leaving them unchanged
+    /// would produce a rounded rect whose corners no longer fit the box they
+    /// belong to. `RRect::inflate` follows the same rule for its uniform
+    /// delta.
     ///
     /// Radii are clamped per axis at zero, which is reachable here only via a
     /// negative inset.
