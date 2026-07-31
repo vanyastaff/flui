@@ -72,8 +72,11 @@
 //!    widget at all (implicit-animation wrapper that tweens `TextStyle`
 //!    across a `Duration`), so there is no build target for this case's
 //!    two-pump-plus-tick sequence to run against. This is a widget-level
-//!    gap, not a narrowable field gap — flagging for `qa-lead` rather than
-//!    stubbing a same-named type that does not animate.
+//!    gap, not a narrowable field one: no subset of the case is reachable by
+//!    asserting less. The case becomes portable when an implicit-animation
+//!    wrapper that tweens `TextStyle` across a `Duration` exists — until then
+//!    a same-named type that does not animate would make the port green
+//!    while testing nothing the oracle tests.
 
 use flui_rendering::constraints::BoxConstraints;
 use flui_types::geometry::px;
