@@ -194,3 +194,6 @@ mod colored_box_test;
 // ── Business.1 fidelity — UnconstrainedBox parity (basic_test.dart
 //    UnconstrainedBox group) ───────────────────────────────────────────────
 mod unconstrained_box_test;
+
+// ── Business.1 fidelity — ListBody parity (list_body_test.dart) ────────────
+mod list_body_test;
