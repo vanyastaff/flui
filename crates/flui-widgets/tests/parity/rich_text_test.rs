@@ -75,9 +75,15 @@
 //!    assert `IntrinsicHeight` against — inventing a text-only intrinsic
 //!    height case here would not be porting this oracle case, it would be
 //!    a different, unrelated assertion.
-//! 5. `'RichText implements debugFillProperties'` — **ported at contract
-//!    level**, narrowed to the 4 of 11 oracle sub-assertions FLUI's
-//!    `RichText` actually has fields for. `View` has no widget-level
+//! 5. `'RichText implements debugFillProperties'` — **not ported; substituted,
+//!    and the substitution cannot catch what the oracle catches.** The
+//!    oracle's subject is the WIDGET's own `debugFillProperties`. FLUI's
+//!    `RichText` has no widget-level diagnostics at all, so there is nothing
+//!    to regress and nothing to assert against; what the test below actually
+//!    covers is configuration *forwarding* into the mounted
+//!    `RenderParagraph`'s diagnostics — real coverage, a different claim.
+//!    Narrowed further to the 4 of 11 oracle sub-assertions FLUI's
+//!    `RichText` even has fields for. `View` has no widget-level
 //!    diagnostics of its own — only render objects implement
 //!    `Diagnosticable` (`grep -rn 'impl.*Diagnosticable for'
 //!    crates/flui-widgets/src` → no matches; the same standing gap
