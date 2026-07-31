@@ -40,6 +40,9 @@ mod custom_paint_test;
 // ── Business.1 slice — CustomSingleChildLayout ───────────────────────────────
 mod custom_single_child_layout_test;
 
+// ── Business.1 slice — CustomMultiChildLayout ─────────────────────────────
+mod custom_multi_child_layout_test;
+
 // ── Business.1 slice 2 — CustomScrollView + eager sliver-fill wrappers ───────
 mod custom_scroll_view_test;
 mod sliver_fill_remaining_test;

@@ -101,6 +101,12 @@ static_assertions = { workspace = true }
 # `#[tokio::test]` for the `image::decode_cache` coalescing unit tests
 # (`asset-images` feature) and the async `Image` widget integration tests.
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+# Thread-local subscriber (`tracing::subscriber::with_default`) that captures
+# a `tracing::error!` diagnostic's text for the custom_multi_child_layout_test
+# divergence pin -- the panic itself is caught and poisoned by the render
+# pipeline before it ever reaches the test, so the original message is only
+# observable through the diagnostic log, not a propagated panic or Result.
+tracing-subscriber = { workspace = true }
 
 # All root tests/*.rs files, consolidated into one binary via `#[path]` module
 # declarations in tests/main.rs (autotests = false above disables the per-file
