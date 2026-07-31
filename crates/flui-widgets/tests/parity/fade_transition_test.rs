@@ -188,12 +188,13 @@ impl ViewState<CountingChild> for CountingChildState {
 /// every single frame that advances the running controller costs a full
 /// rebuild of the child subtree.
 #[test]
-#[ignore = "divergence pin: FadeTransition (crates/flui-widgets/src/transitions/fade_transition.rs) \
-            is a StatefulView+AnimatedView that rebuilds its child subtree on every \
-            animation tick, instead of updating a persistent RenderAnimatedOpacity \
-            directly the way Flutter's real (SingleChildRenderObjectWidget) \
-            FadeTransition does -- see the module doc's architecture section and \
-            'Production bug filed by this port'"]
+#[ignore = "divergence pin: FadeTransition rebuilds its subtree every tick \
+            instead of driving a render object subscribed to the animation \
+            the way Flutter's SingleChildRenderObjectWidget FadeTransition \
+            does -- see the module doc's architecture section. NOTE the \
+            instrument's blind spot, documented on the test: it counts the \
+            CHILD's builds, so child-build memoization would turn this green \
+            without the divergence being fixed"]
 fn ticking_the_opacity_animation_never_rebuilds_the_widget_tree() {
     let scheduler = Arc::new(Scheduler::new());
     let controller = AnimationController::new(Duration::from_secs(2), scheduler);
@@ -211,6 +212,8 @@ fn ticking_the_opacity_animation_never_rebuilds_the_widget_tree() {
     );
 
     let after_initial_mount = build_count.load(Ordering::Relaxed);
+    let subject = laid.find_by_render_type("RenderOpacity");
+    let opacity_at_rest = laid.opacity(subject);
     assert!(
         after_initial_mount >= 1,
         "the child must build at least once during the initial mount"
@@ -253,6 +256,14 @@ fn ticking_the_opacity_animation_never_rebuilds_the_widget_tree() {
         "sanity: the render tree's committed opacity must reach 1.0 -- the tree \
          DID observe the animation's value, just (per the divergence above) via \
          full rebuilds rather than a direct render-object update"
+    );
+
+    assert_ne!(
+        laid.opacity(subject),
+        opacity_at_rest,
+        "precondition: the animation must actually have advanced — without \
+         this the build-count assertion below could pass simply because \
+         nothing ticked",
     );
 
     assert_eq!(

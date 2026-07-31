@@ -205,5 +205,5 @@ mod list_body_test;
 // ── Business.1 fidelity — RichText parity (rich_text_test.dart) ────────────
 mod rich_text_test;
 
-// ── Business.1 fidelity — FadeTransition parity (fade_transition_test.dart) ─
+// ── FadeTransition parity (fade_transition_test.dart) ──────────────────────
 mod fade_transition_test;
