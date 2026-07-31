@@ -432,20 +432,36 @@ impl RRect {
         }
     }
 
-    /// Inflates the rectangle by delta pixels (outward).
+    /// Moves the edges *and the corner radii* outward by `delta`.
+    ///
+    /// The radii have to travel with the edges: a corner keeps its shape only
+    /// if its radius grows by the same amount the box did. Holding them fixed
+    /// produces a rounded rect whose corners are too tight for the box they
+    /// bound, which shows up as a border of uneven thickness wherever an
+    /// inflated and a deflated copy are drawn as a ring.
+    ///
+    /// Each radius axis is clamped at zero independently, so a `delta` past one
+    /// axis's radius squares the corner off on that axis alone.
     #[inline]
     #[must_use]
     pub fn inflate(&self, delta: Pixels) -> Self {
+        let grow = |radius: Radius<Pixels>| {
+            Radius::new(
+                (radius.x + delta).max(Pixels::ZERO),
+                (radius.y + delta).max(Pixels::ZERO),
+            )
+        };
         Self::new(
             self.rect.inflate(delta, delta),
-            self.top_left,
-            self.top_right,
-            self.bottom_right,
-            self.bottom_left,
+            grow(self.top_left),
+            grow(self.top_right),
+            grow(self.bottom_right),
+            grow(self.bottom_left),
         )
     }
 
-    /// Insets the rectangle by delta pixels (inward).
+    /// Moves the edges and corner radii inward by `delta` — see
+    /// [`Self::inflate`], of which this is the negation.
     #[inline]
     #[must_use]
     pub fn inset(&self, delta: Pixels) -> Self {
@@ -538,5 +554,58 @@ mod tests {
         );
         assert_eq!(moved.top_left, rrect.top_left);
         assert_eq!(moved.bottom_right, rrect.bottom_right);
+    }
+
+    #[test]
+    fn inflate_moves_the_radii_with_the_edges() {
+        // Growing the box by `delta` without growing the radii leaves corners
+        // too tight for the box they now bound. Concretely: this rrect's
+        // corners are already the full half-side, so it is a circle -- and it
+        // has to stay one after inflating.
+        let rrect = RRect::from_rect_and_radius(
+            Rect::from_ltrb(px(0.0), px(0.0), px(40.0), px(40.0)),
+            Radius::circular(px(20.0)),
+        );
+        let bigger = rrect.inflate(px(5.0));
+
+        assert_eq!(
+            bigger.rect,
+            Rect::from_ltrb(px(-5.0), px(-5.0), px(45.0), px(45.0))
+        );
+        assert_eq!(bigger.top_left, Radius::circular(px(25.0)));
+        assert_eq!(bigger.bottom_right, Radius::circular(px(25.0)));
+    }
+
+    #[test]
+    fn inset_shrinks_the_radii_and_clamps_them_at_zero() {
+        let rrect = RRect::from_rect_and_radius(
+            Rect::from_ltrb(px(0.0), px(0.0), px(40.0), px(40.0)),
+            Radius::circular(px(6.0)),
+        );
+
+        // The common case: an inner ring for a 2 px border.
+        let inner = rrect.inset(px(2.0));
+        assert_eq!(
+            inner.rect,
+            Rect::from_ltrb(px(2.0), px(2.0), px(38.0), px(38.0))
+        );
+        assert_eq!(inner.top_left, Radius::circular(px(4.0)));
+
+        // Past the radius the corner squares off rather than inverting.
+        let squared = rrect.inset(px(10.0));
+        assert_eq!(squared.top_left, Radius::circular(px(0.0)));
+        assert_eq!(squared.bottom_left, Radius::circular(px(0.0)));
+    }
+
+    #[test]
+    fn inset_clamps_each_radius_axis_independently() {
+        let rrect = RRect::from_rect_and_radius(
+            Rect::from_ltrb(px(0.0), px(0.0), px(40.0), px(40.0)),
+            Radius::elliptical(px(9.0), px(3.0)),
+        );
+
+        // Only the y axis reaches the clamp.
+        let squared = rrect.inset(px(5.0));
+        assert_eq!(squared.top_left, Radius::elliptical(px(4.0), px(0.0)));
     }
 }

@@ -433,6 +433,82 @@ impl Edges<super::units::Pixels> {
         )
     }
 
+    /// Inflates a rounded rectangle by these edge insets.
+    ///
+    /// Each edge moves outward by its own inset, and each corner radius grows
+    /// by the two insets that meet at it — `left` and `top` at the top-left
+    /// corner, `right` and `top` at the top-right, and so on. Growing the radii
+    /// with the rect is what keeps the corner's shape: leaving them unchanged
+    /// would produce a rounded rect whose corners no longer fit the box they
+    /// belong to. `RRect::inflate` follows the same rule for its uniform
+    /// delta.
+    ///
+    /// Radii are clamped per axis at zero, which is reachable here only via a
+    /// negative inset.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_geometry::{Edges, RRect, Radius, Rect, px};
+    ///
+    /// let rect = Rect::from_ltrb(px(10.0), px(10.0), px(90.0), px(90.0));
+    /// let rrect = RRect::from_rect_circular(rect, px(8.0));
+    /// let inflated = Edges::all(px(4.0)).inflate_rrect(rrect);
+    ///
+    /// assert_eq!(inflated.rect.left(), px(6.0));
+    /// assert_eq!(inflated.top_left, Radius::circular(px(12.0)));
+    /// ```
+    #[must_use]
+    #[inline]
+    pub fn inflate_rrect(&self, rrect: super::rrect::RRect) -> super::rrect::RRect {
+        super::rrect::RRect::from_rect_and_corners(
+            self.inflate_rect(rrect.rect),
+            offset_radius(rrect.top_left, self.left, self.top),
+            offset_radius(rrect.top_right, self.right, self.top),
+            offset_radius(rrect.bottom_right, self.right, self.bottom),
+            offset_radius(rrect.bottom_left, self.left, self.bottom),
+        )
+    }
+
+    /// Deflates a rounded rectangle by these edge insets.
+    ///
+    /// The mirror of [`Self::inflate_rrect`]: each edge moves inward and each
+    /// corner radius shrinks by the two insets meeting at it, clamped per axis
+    /// at zero so a corner squared off by a large inset stays square rather
+    /// than inverting.
+    ///
+    /// Together the two are what turns a shape plus per-side border widths into
+    /// the outer/inner pair a ring is drawn from.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_geometry::{Edges, RRect, Radius, Rect, px};
+    ///
+    /// let rect = Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(100.0));
+    /// let rrect = RRect::from_rect_circular(rect, px(8.0));
+    /// let deflated = Edges::all(px(3.0)).deflate_rrect(rrect);
+    ///
+    /// assert_eq!(deflated.rect.left(), px(3.0));
+    /// assert_eq!(deflated.top_left, Radius::circular(px(5.0)));
+    ///
+    /// // An inset past the radius squares the corner off; it never goes
+    /// // negative.
+    /// let squared = Edges::all(px(20.0)).deflate_rrect(rrect);
+    /// assert_eq!(squared.top_left, Radius::circular(px(0.0)));
+    /// ```
+    #[must_use]
+    #[inline]
+    pub fn deflate_rrect(&self, rrect: super::rrect::RRect) -> super::rrect::RRect {
+        super::rrect::RRect::from_rect_and_corners(
+            self.deflate_rect(rrect.rect),
+            offset_radius(rrect.top_left, -self.left, -self.top),
+            offset_radius(rrect.top_right, -self.right, -self.top),
+            offset_radius(rrect.bottom_right, -self.right, -self.bottom),
+            offset_radius(rrect.bottom_left, -self.left, -self.bottom),
+        )
+    }
+
     /// Inflates a size by these edge insets.
     ///
     /// Increases the size by adding horizontal and vertical insets.
@@ -532,6 +608,22 @@ impl Edges<super::units::Pixels> {
             left: self.left,
         }
     }
+}
+
+/// A corner radius shifted by `dx`/`dy` and clamped per axis at zero.
+///
+/// The two axes clamp independently: an inset large enough to square off a
+/// corner horizontally does not also flatten it vertically.
+#[inline]
+fn offset_radius(
+    radius: super::rrect::Radius<super::units::Pixels>,
+    dx: super::units::Pixels,
+    dy: super::units::Pixels,
+) -> super::rrect::Radius<super::units::Pixels> {
+    super::rrect::Radius::new(
+        (radius.x + dx).max(super::units::Pixels::ZERO),
+        (radius.y + dy).max(super::units::Pixels::ZERO),
+    )
 }
 
 // Arithmetic operators
