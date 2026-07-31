@@ -313,9 +313,17 @@ struct OuterMaybeDirectionalityProbe {
 impl StatelessView for OuterMaybeDirectionalityProbe {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
         lock(&self.outer_log).push(Directionality::maybe_of(ctx));
+        // TWO nested providers with conflicting directions. With only one in
+        // the tree, an implementation that returned *any* matching ancestor
+        // would satisfy the inner assertion, so the test could not support a
+        // "nearest" claim. The outer Ltr is what makes the inner Rtl result
+        // evidence of nearest-wins rather than found-something.
         Directionality::new(
-            TextDirection::Rtl,
-            MaybeDirectionalityProbe::new(&self.inner_log),
+            TextDirection::Ltr,
+            Directionality::new(
+                TextDirection::Rtl,
+                MaybeDirectionalityProbe::new(&self.inner_log),
+            ),
         )
     }
 }
@@ -368,7 +376,8 @@ fn directionality_maybe_of_finds_the_nearest_ancestor_and_is_none_above_it() {
     assert_eq!(
         *lock(&inner_log),
         vec![Some(TextDirection::Rtl)],
-        "inside the Directionality subtree, maybe_of must find the RTL ancestor"
+        "the NEAREST provider wins: the inner Rtl, not the outer Ltr that also \
+         encloses the probe"
     );
 }
 
@@ -482,19 +491,26 @@ fn directionality_of_finds_the_nearest_ancestor_and_recovers_from_a_missing_one(
     // the oracle's `Directionality.of(hasDirectionality.currentContext!) ==
     // TextDirection.rtl` assertion.
     let ok_log: Arc<Mutex<Vec<TextDirection>>> = Arc::new(Mutex::new(Vec::new()));
+    // Nested providers with conflicting directions: with a single provider the
+    // assertion would hold for any implementation that returned some matching
+    // ancestor, which is not what "nearest" claims.
     let _laid_ok = harness::pump_widget(
         Directionality::new(
-            TextDirection::Rtl,
-            DirectionalityOfProbe {
-                log: Arc::clone(&ok_log),
-            },
+            TextDirection::Ltr,
+            Directionality::new(
+                TextDirection::Rtl,
+                DirectionalityOfProbe {
+                    log: Arc::clone(&ok_log),
+                },
+            ),
         ),
         harness::screen(),
     );
     assert_eq!(
         *lock(&ok_log),
         vec![TextDirection::Rtl],
-        "Directionality::of must return the nearest ancestor's direction"
+        "Directionality::of must return the NEAREST ancestor's direction — the \
+         inner Rtl, not the outer Ltr"
     );
 
     // Failure half: no ancestor. See this test's doc comment for why this
