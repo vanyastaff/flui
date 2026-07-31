@@ -117,7 +117,8 @@ where
 }
 
 /// The actual `RenderListBody`-backed render-object widget. Its
-/// `AxisDirection` is already resolved by [`ListBody::build`] — kept private
+/// `AxisDirection` is already resolved by [`ListBody`]'s `StatelessView::build`
+/// — kept private
 /// so `Directionality` is only ever read at the `BuildContext` seam that can
 /// see it, never assumed to be reachable from a bare `RenderView`.
 #[derive(Clone)]
