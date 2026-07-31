@@ -201,3 +201,6 @@ mod unconstrained_box_test;
 
 // ── Business.1 fidelity — ListBody parity (list_body_test.dart) ────────────
 mod list_body_test;
+
+// ── Business.1 fidelity — RichText parity (rich_text_test.dart) ────────────
+mod rich_text_test;
