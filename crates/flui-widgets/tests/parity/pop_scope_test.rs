@@ -30,23 +30,12 @@
 //!    the one that isn't — the route stays current and only the scope is
 //!    conditionally rebuilt out of its subtree:
 //!    [`removing_pop_scope_by_rebuild_stops_vetoing_while_the_route_stays_current`].
-//! 6. `'identical PopScopes'` — not portable. The assertion is about Dart
-//!    `const`-widget canonicalization: two `const PopScope(canPop: false,
-//!    child: Text('hello'))` literals with identical arguments are the *same*
-//!    constant object, so `ModalRoute` only ever sees one registered
-//!    `PopEntry`, and removing either sibling from the tree leaves that one
-//!    entry (and the veto) in place — the test's whole point is that
-//!    `usePopScope1 = false` does *not* lift the veto, because the surviving
-//!    `usePopScope2` scope is secretly the same object. FLUI views are
-//!    per-call values with no `const` canonicalization step; two sibling
-//!    `PopScope`s here are always two distinct `PopEntry` registrations, so
-//!    removing one always *does* lift its half of the veto (only the
-//!    remaining one keeps vetoing, for the ordinary reason that it's still
-//!    mounted). Porting the oracle's assertion verbatim would require FLUI to
-//!    secretly merge the two scopes into one registration — a divergence this
-//!    port would be inventing, not one that exists. Nothing here is a gap in
-//!    FLUI's `PopScope`; it's a widget-identity model Dart's `const` has that
-//!    Rust values don't.
+//! 6. `'identical PopScopes'` — ported:
+//!    [`identical_sibling_pop_scopes_register_and_deregister_independently`].
+//!    Initially declared unportable on the strength of the oracle's own stale
+//!    comment ("has only ever registered one PopScopeInterface"); its
+//!    assertions say the opposite and they are the contract. See that test's
+//!    doc for what the scene can and cannot distinguish.
 //!
 //! ## Divergences from the oracle, named
 //!
@@ -61,7 +50,8 @@
 //! - Flutter's `StatefulBuilder` + `setState` toggling `canPop` / a scope's
 //!   presence has no FLUI widget equivalent. Each test below rebuilds the
 //!   same spot with a small local `StatefulView` that captures a
-//!   [`RebuildHandle`] in `init_state` (ADR-0018) and reads a shared `Cell`
+//!   [`RebuildHandle`] in `init_state` — the handle must be acquired during
+//!   state init, not during build — and reads a shared `Cell`
 //!   mutated from outside the tree — the Rust-shaped `setState`.
 //!
 //! Widget → type mapping: `PopScope` → `PopScope` (unchanged name);
@@ -72,7 +62,9 @@ use std::rc::Rc;
 
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
-use flui_widgets::{Navigator, NavigatorHandle, PageRoute, PopScope, SimpleRoute, SizedBox};
+use flui_widgets::{
+    Column, Navigator, NavigatorHandle, PageRoute, PopScope, SimpleRoute, SizedBox,
+};
 
 use crate::common::{lay_out, loose};
 
@@ -82,7 +74,8 @@ use crate::common::{lay_out, loose};
 
 /// Where a [`ViewState::init_state`] parks the [`RebuildHandle`] it captured,
 /// so code outside the tree can schedule that element's rebuild later —
-/// Flutter's `StateSetter` (`setState`), minted through ADR-0018 instead of a
+/// Flutter's `StateSetter` (`setState`), minted from a rebuild handle captured
+/// during state init instead of a
 /// Dart closure.
 #[derive(Clone, Default)]
 struct RebuildSink(Rc<RefCell<Option<RebuildHandle>>>);
@@ -184,6 +177,60 @@ impl ViewState<ConditionalPopScope> for ConditionalPopScopeState {
         } else {
             SizedBox::new(10.0, 10.0).into_view().boxed()
         }
+    }
+}
+
+/// Two sibling `PopScope`s, each removable independently — the oracle's
+/// `identical PopScopes` scene.
+#[derive(Clone)]
+struct TwoPopScopes {
+    first: Rc<Cell<bool>>,
+    second: Rc<Cell<bool>>,
+    sink: RebuildSink,
+}
+
+impl View for TwoPopScopes {
+    fn create_element(&self) -> ElementKind {
+        ElementKind::stateful(self)
+    }
+}
+
+impl StatefulView for TwoPopScopes {
+    type State = TwoPopScopesState;
+
+    fn create_state(&self) -> Self::State {
+        TwoPopScopesState { view: self.clone() }
+    }
+}
+
+struct TwoPopScopesState {
+    view: TwoPopScopes,
+}
+
+impl ViewState<TwoPopScopes> for TwoPopScopesState {
+    fn init_state(&mut self, ctx: &dyn BuildContext) {
+        self.view.sink.capture(ctx);
+    }
+
+    fn build(&self, view: &TwoPopScopes, _ctx: &dyn BuildContext) -> impl IntoView {
+        let mut children: Vec<BoxedView> = Vec::new();
+        if view.first.get() {
+            children.push(
+                PopScope::new(SizedBox::new(10.0, 10.0))
+                    .can_pop(false)
+                    .into_view()
+                    .boxed(),
+            );
+        }
+        if view.second.get() {
+            children.push(
+                PopScope::new(SizedBox::new(10.0, 10.0))
+                    .can_pop(false)
+                    .into_view()
+                    .boxed(),
+            );
+        }
+        Column::new(children).into_view().boxed()
     }
 }
 
@@ -465,5 +512,80 @@ fn removing_pop_scope_by_rebuild_stops_vetoing_while_the_route_stays_current() {
         Some(root_id),
         "same route identity throughout: this is a rebuild removing the \
          scope, never a pop of the route it lived in"
+    );
+}
+
+// ============================================================================
+// Case 6 — 'identical PopScopes'
+// ============================================================================
+
+/// Two structurally identical sibling `PopScope`s register, and deregister,
+/// independently: removing one leaves the veto standing, removing the second
+/// lifts it.
+///
+/// The oracle's prose says the route "has only ever registered one
+/// PopScopeInterface" and that removing one makes it think both are gone. Its
+/// **assertions say the opposite**, and the assertions are the contract:
+/// `doNotPop` still holds after the first is removed, and only the second
+/// removal yields `bubble`. That is two independent registrations, which is
+/// exactly what FLUI does — Dart's `const` canonicalization gives the two
+/// slots one *widget* value, but each slot still mounts its own element and
+/// state, so each registers its own entry.
+///
+/// This case was initially declared unportable on the strength of that stale
+/// comment; reading the assertions instead of the prose is what makes it
+/// portable.
+///
+/// **What it does NOT prove, despite the tempting reading.** It does not
+/// distinguish two independent registrations from a single collapsed one.
+/// Verified by simulating the collapse — making `PopEntryRegistry::register`
+/// ignore a second entry — and watching this test still pass. The reason is
+/// keyless reconciliation: removing the first child makes the surviving
+/// element the one at index 0, which under collapse is precisely the element
+/// that registered, so a veto survives either way. The oracle's own scene has
+/// the same blind spot, which is probably how its comment came to contradict
+/// its assertions. What this pins is the observable sequence — vetoed, still
+/// vetoed after one removal, bubbling after both — and nothing more.
+#[test]
+fn identical_sibling_pop_scopes_register_and_deregister_independently() {
+    let first = Rc::new(Cell::new(true));
+    let second = Rc::new(Cell::new(true));
+    let sink = RebuildSink::default();
+    let view = TwoPopScopes {
+        first: Rc::clone(&first),
+        second: Rc::clone(&second),
+        sink: sink.clone(),
+    };
+
+    let handle = NavigatorHandle::new();
+    handle.seed_initial(PageRoute::<i32>::new(move |_ctx, _p, _s| {
+        view.clone().into_view().boxed()
+    }));
+    let mut laid = lay_out(Navigator::new(handle.clone()), loose(400.0));
+    let root_id = handle.current().expect("root seeded");
+
+    assert!(handle.maybe_pop(), "two vetoing scopes: handled, refused");
+
+    first.set(false);
+    sink.schedule();
+    laid.tick();
+    assert!(
+        handle.maybe_pop(),
+        "removing ONE identical scope must leave the other's veto standing — \
+         if the two collapsed into a single registration this would bubble",
+    );
+    assert_eq!(handle.route_ids(), vec![root_id]);
+
+    second.set(false);
+    sink.schedule();
+    laid.tick();
+    assert!(
+        !handle.maybe_pop(),
+        "with both removed the veto is gone and the pop bubbles",
+    );
+    assert_eq!(
+        handle.route_ids(),
+        vec![root_id],
+        "the route itself never left the stack",
     );
 }
