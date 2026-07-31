@@ -27,12 +27,13 @@
 //!    [`list_body_up_lays_out_bottom_to_top_stretched_to_parent_width`].
 //! 3. `'ListBody right'` — ported, real green:
 //!    [`list_body_right_lays_out_left_to_right_stretched_to_parent_height`].
-//!    LTR ambient direction, non-reverse; see "Divergence found by this
-//!    port" below for why this case passing does not, on its own, prove FLUI
-//!    resolves ambient direction at all.
-//! 4. `'ListBody left'` — **divergence pin**, asserting the oracle:
-//!    [`list_body_left_lays_out_right_to_left_pin`]. See "Divergence found by
-//!    this port" below.
+//!    LTR ambient direction, non-reverse; on its own this case cannot
+//!    distinguish "reads Directionality and got LTR" from "ignores
+//!    Directionality and defaults to LTR" — see "Divergence found by this
+//!    port" below for why case 4 is the one that actually proves the read.
+//! 4. `'ListBody left'` — ported, real green:
+//!    [`list_body_left_lays_out_right_to_left`]. See "Divergence found by
+//!    this port" below for the bug this case catches.
 //! 5. `'Limited space along main axis error'` — ported, real green, but via
 //!    an observable that needed empirical discovery, not the mechanism the
 //!    module doc originally assumed — see "The layout-poisoning gap found by
@@ -89,10 +90,10 @@
 //! `PipelineOwner` query? a diagnostics counter?), which is a `flui-rendering`
 //! design question this test file has no standing to answer.
 //!
-//! ## Divergence found by this port
+//! ## Divergence found by this port — fixed
 //!
 //! `ListBody::axis_direction` (`crates/flui-widgets/src/layout/list_body.rs`)
-//! computes its `AxisDirection` from `main_axis` and `reverse` alone:
+//! used to compute its `AxisDirection` from `main_axis` and `reverse` alone:
 //!
 //! ```text
 //! fn axis_direction(&self) -> AxisDirection {
@@ -105,38 +106,53 @@
 //! reverse)` (`widgets/basic.dart`), which for `Axis.horizontal` reads
 //! `Directionality.of(context)` and flips the resulting `AxisDirection`
 //! between `left`/`right` depending on the ambient `TextDirection`. FLUI's
-//! version never looks at `Directionality` at all: for `Axis::Horizontal`
-//! with `reverse: false` it is unconditionally `AxisDirection::LeftToRight`,
-//! regardless of what `Directionality` ancestor is in scope.
+//! old version never looked at `Directionality` at all: for
+//! `Axis::Horizontal` with `reverse: false` it was unconditionally
+//! `AxisDirection::LeftToRight`, regardless of what `Directionality`
+//! ancestor was in scope.
 //!
-//! The root cause is structural, not a one-line oversight:
+//! The root cause was structural, not a one-line oversight:
 //! `flui_view::RenderObjectContext` (`crates/flui-view/src/view/render.rs`)
 //! — the only context `RenderView::create_render_object`/
 //! `update_render_object` ever receive — carries nothing but an optional
 //! interaction-dispatch handle. There is no ambient inherited-data lookup
 //! capability at that call site at all, so no leaf `RenderView` in
 //! `flui-widgets` can consult `Directionality` while building its render
-//! object. This is not `ListBody`-specific: `Flex`/`Row`/`Column`
+//! object.
+//!
+//! The fix does not widen `RenderObjectContext` — every other FLUI widget
+//! that needs ambient inherited data (`Text` reading `DefaultTextStyle` and
+//! delegating to `RichText`, `Dismissible` reading `Directionality` in its
+//! own `build`) resolves it the same way: at the `BuildContext` seam
+//! (`build`), not at the render-object seam. `ListBody`
+//! (`crates/flui-widgets/src/layout/list_body.rs`) is now a composing
+//! `StatelessView`: its `build` resolves `Directionality::maybe_of(ctx)`
+//! (defaulting to `Ltr` with no ancestor, matching every other FLUI widget
+//! that reads `Directionality`) through `resolve_axis_direction` — the exact
+//! `getAxisDirectionFromAxisReverseAndDirectionality` rule, including the
+//! `reverse` flip on both the LTR and RTL base cases — and hands the
+//! already-resolved `AxisDirection` to a private `ListBodyRenderView`, the
+//! actual `RenderListBody`-backed `RenderView`. The render object itself
+//! needed no change: its `AxisDirection::RightToLeft` branch was already
+//! correct (`harness_list_body_horizontal_right_to_left_stretches_height`,
+//! `crates/flui-objects/tests/render_object_harness.rs`); the widget layer
+//! simply never selected it before.
+//!
+//! Effect before the fix: a horizontal `ListBody` with `reverse: false` under
+//! an RTL `Directionality` ancestor laid out its children left-to-right
+//! instead of Flutter's right-to-left — a real content-mirroring defect for
+//! RTL locales, not a cosmetic one. Case 3 above (`'ListBody right'`) passed
+//! even before this fix, but only because its ambient direction is LTR,
+//! which coincided with FLUI's old hardcoded default; it never exercised, and
+//! could not have caught, this gap. Case 4 (RTL ambient) is the one that
+//! actually proves the read, and now passes for real.
+//!
+//! Not fixed here: `Flex`/`Row`/`Column`
 //! (`crates/flui-widgets/src/flex/flex.rs`) share the identical gap —
 //! grepping that file for `text_direction`/`Directionality`/`TextDirection`
-//! returns zero hits, confirming FLUI's flex family has no RTL-aware
-//! `textDirection` concept at all yet either.
-//!
-//! Effect: a horizontal `ListBody` with `reverse: false` under an RTL
-//! `Directionality` ancestor lays out its children left-to-right instead of
-//! Flutter's right-to-left — a real content-mirroring defect for RTL
-//! locales, not a cosmetic one. Case 3 above (`'ListBody right'`) passes
-//! today, but only because its ambient direction is LTR, which coincides
-//! with FLUI's hardcoded default; it does not exercise, and cannot catch,
-//! this gap. Only case 4 (RTL ambient) does, which is why it is pinned
-//! rather than silently folded into "already covered by case 3".
-//!
-//! Not fixed here: closing this gap means widening `RenderObjectContext`
-//! with an ambient-lookup capability — a `flui-view` architecture change
-//! spanning every `RenderView` impl that would need it (`ListBody` today,
-//! `Flex`/`Row`/`Column` eventually) — not a `flui-widgets`-local, test-only
-//! fix. Reported for `flui-view`/`flui-widgets` maintainers to design
-//! against, not patched silently here.
+//! returns zero hits, confirming FLUI's flex family still has no RTL-aware
+//! `textDirection` concept. Reported for `flui-widgets` maintainers to port
+//! next using the same `build`-seam pattern; out of scope for this change.
 
 use flui_foundation::RenderId;
 use flui_types::layout::Axis;
@@ -315,40 +331,35 @@ fn list_body_right_lays_out_left_to_right_stretched_to_parent_height() {
 }
 
 // ============================================================================
-// Case 4 (divergence pin) — 'ListBody left'
+// Case 4 — 'ListBody left'
 // ============================================================================
 
 /// Flutter parity: `list_body_test.dart` `'ListBody left'` (tag `3.44.0`).
 ///
-/// **`#[ignore]`d divergence pin, verified failing.** Asserts the oracle's
-/// behaviour: a horizontal, non-reversed `ListBody` under an RTL
-/// `Directionality` lays its children out right to left — the first child
-/// (`children[0]`) ends up rightmost, at `x = 600`, and the last ends up
-/// leftmost, at `x = 0`.
+/// Asserts the oracle's behaviour: a horizontal, non-reversed `ListBody`
+/// under an RTL `Directionality` lays its children out right to left — the
+/// first child (`children[0]`) ends up rightmost, at `x = 600`, and the last
+/// ends up leftmost, at `x = 0`.
 ///
-/// FLUI's `ListBody::axis_direction` ignores `Directionality` entirely (see
-/// the module doc's "Divergence found by this port"), so it resolves
+/// Before the fix (see the module doc's "Divergence found by this port"),
+/// FLUI's `ListBody` ignored `Directionality` entirely and resolved
 /// `Axis::Horizontal` + `reverse: false` to `AxisDirection::LeftToRight`
 /// unconditionally — identical to case 3's LTR scene above, even though this
 /// scene's ambient direction is RTL. The render object's own
-/// `AxisDirection::RightToLeft` branch is correct and is exercised — by
+/// `AxisDirection::RightToLeft` branch was already correct and already
+/// exercised — by
 /// `harness_list_body_horizontal_right_to_left_stretches_height`
 /// (`crates/flui-objects/tests/render_object_harness.rs`), which drives the
-/// render object directly. Note what that means: the render object handles
-/// RTL, and nothing in the widget layer ever asks it to. The defect is
-/// entirely in `axis_direction` never selecting that branch from ambient
-/// direction.
+/// render object directly. Only the widget layer never selected that branch.
 ///
-/// Captured failure (this pin run once un-ignored, verbatim from the
-/// harness): the first assertion fails with
-/// `left: (0.0, 0.0, 200.0, 600.0), right: (600.0, 0.0, 200.0, 600.0)` —
-/// FLUI places `children[0]` at the LTR position `x = 0` instead of the
-/// oracle's RTL position `x = 600`.
+/// Captured failure before the fix (this test run with the old
+/// `AxisDirection::from_axis(self.main_axis, self.reverse)` body, verbatim
+/// from the harness): the first assertion failed with `left: (0.0, 0.0,
+/// 200.0, 600.0), right: (600.0, 0.0, 200.0, 600.0)` — FLUI placed
+/// `children[0]` at the LTR position `x = 0` instead of the oracle's RTL
+/// position `x = 600`.
 #[test]
-#[ignore = "divergence pin: ListBody::axis_direction never consults ambient \
-            Directionality (RenderObjectContext has no inherited-data lookup \
-            capability) — see the module doc's 'Divergence found by this port'"]
-fn list_body_left_lays_out_right_to_left_pin() {
+fn list_body_left_lays_out_right_to_left() {
     let laid = harness::pump_widget(
         Row::new(row![Directionality::new(
             TextDirection::Rtl,
