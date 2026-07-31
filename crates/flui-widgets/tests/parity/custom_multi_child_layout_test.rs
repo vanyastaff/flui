@@ -812,25 +812,40 @@ fn position_child_on_a_non_existent_id_leaves_the_subject_unlaidout() {
 /// `CustomMultiChildLayout` that was never wrapped in `LayoutId` carries
 /// `MultiChildLayoutParentData::default()` (`id: None`), and
 /// `RenderCustomMultiChildLayoutBox::child_slots` rejects that before the
-/// delegate's `perform_layout` ever runs -- so even a delegate that never
-/// touches its children (like `PreferredSizeDelegate`) still surfaces the
-/// failure.
+/// delegate's `perform_layout` ever runs.
+///
+/// Asserting the absent geometry alone would NOT guard that validation.
+/// Every layout violation in this render object funnels into the same
+/// poisoned-node state, so a delegate that lays out nothing would produce an
+/// identical observable through the forgotten-child path instead — the test
+/// would pass with the missing-id check deleted. The diagnostic text is what
+/// separates the two causes, so that is what this asserts.
 #[test]
-fn a_child_without_a_layout_id_leaves_the_subject_unlaidout() {
-    let laid = harness::pump_widget(
-        Center::new().child(CustomMultiChildLayout::new(
-            Arc::new(PreferredSizeDelegate {
-                preferred_size: Size::new(px(10.0), px(10.0)),
-            }),
-            vec![SizedBox::new(100.0, 100.0).boxed()],
-        )),
-        harness::screen(),
-    );
+fn a_child_without_a_layout_id_names_the_missing_id_in_the_captured_log() {
+    let (laid, log_text) = pump_and_capture_log(|| {
+        Center::new()
+            .child(CustomMultiChildLayout::new(
+                Arc::new(PreferredSizeDelegate {
+                    preferred_size: Size::new(px(10.0), px(10.0)),
+                }),
+                vec![SizedBox::new(100.0, 100.0).boxed()],
+            ))
+            .boxed()
+    });
+
     let subject = laid.find_by_render_type("RenderCustomMultiChildLayoutBox");
     assert!(
         has_no_committed_geometry(&laid, subject),
         "a child with no LayoutId-supplied id must never let the subject \
          commit a valid geometry",
+    );
+    assert!(
+        log_text.contains("must have an id in its parent data"),
+        "the diagnostic must name the missing-id cause verbatim, not merely \
+         report some layout failure — absent geometry alone is also what the \
+         forgotten-child path produces (whose diagnostic reads `missing id`), \
+         so without this the test would pass with the id validation deleted; \
+         captured log: {log_text}",
     );
 }
 
