@@ -14,10 +14,11 @@
 //! 1. `'Control test for CustomSingleChildLayout'` — ported, real green:
 //!    [`control_test_delegate_sees_the_incoming_constraints_and_the_laid_out_child`].
 //! 2. `'Test SingleChildDelegate shouldRelayout method'` — ported as **three
-//!    separate assertions**, and the middle leg is a **pinned divergence**:
+//!    separate assertions**, the first two real green and the last an
+//!    `#[ignore]`d divergence pin asserting the oracle:
 //!    [`should_relayout_is_not_called_on_the_first_layout`],
 //!    [`should_relayout_is_consulted_when_the_delegate_is_replaced`],
-//!    [`a_false_should_relayout_does_not_prevent_relayout_pin`].
+//!    [`a_false_should_relayout_prevents_relayout_pin`].
 //! 3. `'Delegate can change size'` — ported, real green:
 //!    [`replacing_the_delegate_resizes_the_render_object`].
 //! 4. `'Can use listener for relayout'` — **out of scope by missing feature,
@@ -44,11 +45,16 @@
 //!
 //! The visible cost is wasted work rather than a wrong picture: a delegate
 //! that answers "nothing changed" still gets a full re-layout, so this is a
-//! performance divergence, not a correctness one — which is why it is pinned
-//! rather than fixed here. Fixing it means threading the change-flag out of
-//! `update_render_object` into the needs-layout decision, which is a shared
-//! render-behavior contract touching every delegate-driven render object, not
-//! this widget alone.
+//! performance divergence, not a correctness one — which is why it is
+//! quarantined rather than fixed here. Fixing it means threading the
+//! change-flag out of `update_render_object` into the needs-layout decision,
+//! which is a shared render-behavior contract touching every delegate-driven
+//! render object, not this widget alone.
+//!
+//! The pin asserts the **oracle's** behaviour and carries `#[ignore]`, matching
+//! the convention `sliver_fixed_extent_list_test.rs` established. Inverting it
+//! to assert what FLUI does today would make the defect the expected result and
+//! turn the eventual fix into a red "regression".
 
 use std::any::Any;
 use std::sync::{Arc, Mutex};
@@ -281,16 +287,26 @@ fn should_relayout_is_consulted_when_the_delegate_is_replaced() {
     );
 }
 
-/// **Pinned divergence.** The oracle asserts that a `false` answer *suppresses*
-/// the relayout — `getConstraintsForChild` is never called again after the swap.
-/// FLUI asks the delegate and then lays out regardless.
+/// **Divergence pin, asserting the oracle.** Flutter skips the relayout when
+/// `shouldRelayout` answers false, so `get_constraints_for_child` is never
+/// reached after the swap. FLUI reaches it anyway.
 ///
-/// `set_delegate` computes Flutter's verdict correctly and returns it; the
-/// caller drops it, and the render-behavior update marks needs-layout
-/// unconditionally. So this asserts what FLUI does today, and goes red when the
-/// change-flag is threaded through — which is the intent.
+/// Ignored rather than inverted: writing the assertion the other way round
+/// would lock today's defect in as the expected result, and would then go red
+/// as a "regression" the day someone actually fixes it. Asserting the oracle
+/// and quarantining keeps the expectation pointing at the contract — unignore
+/// it when the gap below closes.
+///
+/// The gap: `RenderCustomSingleChildLayoutBox::set_delegate` returns Flutter's
+/// verdict correctly, but `update_render_object` discards it and the
+/// render-behavior update marks needs-layout unconditionally. Filed in
+/// `docs/ROADMAP.md` under the foundation-hardening gaps (search
+/// `should_relayout`).
 #[test]
-fn a_false_should_relayout_does_not_prevent_relayout_pin() {
+#[ignore = "divergence pin: the delegate change-flag is discarded, so a false \
+            should_relayout does not suppress the relayout — see the \
+            should_relayout gap in docs/ROADMAP.md"]
+fn a_false_should_relayout_prevents_relayout_pin() {
     let (first, _first_recording) = RecordingDelegate::recording_pair(false);
     let mut laid = harness::pump_widget(build_frame(first), harness::screen());
 
@@ -305,11 +321,9 @@ fn a_false_should_relayout_does_not_prevent_relayout_pin() {
     assert!(
         recording
             .constraints_from_get_constraints_for_child
-            .is_some(),
-        "DIVERGENCE from the oracle, pinned: Flutter skips layout when \
-         shouldRelayout answers false, so getConstraintsForChild is never \
-         reached; FLUI lays out anyway because the verdict is discarded. \
-         Wasted work rather than a wrong picture — see the module doc.",
+            .is_none(),
+        "the oracle skips layout when should_relayout answers false, so \
+         get_constraints_for_child must never be reached after the swap",
     );
 }
 
