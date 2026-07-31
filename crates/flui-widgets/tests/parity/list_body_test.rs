@@ -331,12 +331,13 @@ fn list_body_right_lays_out_left_to_right_stretched_to_parent_height() {
 /// `Axis::Horizontal` + `reverse: false` to `AxisDirection::LeftToRight`
 /// unconditionally — identical to case 3's LTR scene above, even though this
 /// scene's ambient direction is RTL. The render object's own
-/// `AxisDirection::RightToLeft` branch is correct (it is exercised, and
-/// passes, by the `main_axis(Axis::Horizontal)` + `.reverse(true)` case in
-/// the non-parity `crates/flui-widgets/tests/list_body.rs` suite's sibling
-/// coverage and by this port's own render-object-level construction tests);
-/// the defect is entirely in the widget layer never selecting that branch
-/// from ambient RTL.
+/// `AxisDirection::RightToLeft` branch is correct and is exercised — by
+/// `harness_list_body_horizontal_right_to_left_stretches_height`
+/// (`crates/flui-objects/tests/render_object_harness.rs`), which drives the
+/// render object directly. Note what that means: the render object handles
+/// RTL, and nothing in the widget layer ever asks it to. The defect is
+/// entirely in `axis_direction` never selecting that branch from ambient
+/// direction.
 ///
 /// Captured failure (this pin run once un-ignored, verbatim from the
 /// harness): the first assertion fails with
