@@ -281,12 +281,21 @@ impl MultiDragGestureRecognizer {
 
     /// Slop threshold for the given pointer kind.
     ///
-    /// `GestureSettings` currently exposes one `pan_slop` knob that all
-    /// pointer kinds share — Flutter's `computeHitSlop` per-device split
-    /// (touch/mouse/pen/trackpad) is collapsed here until a per-device
-    /// slop field is added. The pre-existing settings shape is the
-    /// contract this method respects.
-    fn slop_for(&self, _kind: PointerType) -> f32 {
+    /// Flutter parity: `gestures/multidrag.dart` (tag `3.44.0`) — every
+    /// `MultiDragPointerState` variant (`_ImmediatePointerState`,
+    /// `_HorizontalPointerState`, `_VerticalPointerState`,
+    /// `_DelayedPointerState`) checks `computeHitSlop(kind, gestureSettings)`
+    /// regardless of axis; unlike `PanGestureRecognizer`, none of them use
+    /// `computePanSlop`. `computeHitSlop` (`gestures/events.dart`)
+    /// special-cases exactly `PointerDeviceKind.mouse` as "precise" — every
+    /// other kind resolves through the configured settings profile. A
+    /// precise (mouse) pointer always gets the fixed
+    /// `kPrecisePointerHitSlop` constant, unconditionally; `with_settings`
+    /// customization has no effect on it.
+    fn slop_for(&self, kind: PointerType) -> f32 {
+        if kind == PointerType::Mouse {
+            return crate::settings::DEFAULT_MOUSE_SLOP;
+        }
         self.settings.lock().pan_slop()
     }
 
@@ -361,6 +370,14 @@ impl MultiDragGestureRecognizer {
             let delta = (position - state.last_position).to_delta();
             state.last_position = position;
             state.kind = kind;
+            // Recompute the threshold from the live event's kind, not the
+            // kind captured at Down (`add_pointer` cannot report kind at
+            // all — see `GestureRecognizer::add_pointer`'s signature — so
+            // the pointer's real kind is only known from the first Move
+            // event onward, exactly like `Self::slop_for`'s Flutter
+            // reference recomputes `computeHitSlop` on every check rather
+            // than caching it).
+            state.slop = self.slop_for(kind);
             state.velocity_tracker.add_position(timestamp, position);
 
             if let Some(client) = state.client.clone() {
@@ -829,6 +846,50 @@ mod tests {
             *rejected.lock(),
             "competing member should be rejected when multi-drag wins the arena"
         );
+    }
+
+    /// Flutter parity: `gestures/multidrag.dart` (tag `3.44.0`) —
+    /// `_ImmediatePointerState.checkForResolutionAfterMove` calls
+    /// `computeHitSlop(kind, gestureSettings)`, which returns
+    /// `kPrecisePointerHitSlop` (1.0px) for `PointerDeviceKind.mouse` and
+    /// `kTouchSlop` (18.0px, via the touch-tier settings) for everything
+    /// else. A 10px move — above the mouse constant, below the touch one —
+    /// must cross slop for a mouse pointer and not for a touch pointer.
+    #[test]
+    fn mouse_pointer_crosses_slop_at_a_distance_touch_does_not() {
+        for (kind, should_cross) in [(PointerType::Mouse, true), (PointerType::Touch, false)] {
+            let arena = crate::arena::GestureArena::new();
+            let rec = MultiDragGestureRecognizer::new(arena.clone(), MultiDragAxis::Free)
+                .with_on_start(Rc::new(|_pointer, _pos| {
+                    Some(Box::new(counting_handle(Arc::new(AtomicUsize::new(0)))) as _)
+                }));
+
+            let p = pointer_id(11);
+            rec.add_pointer(p, Offset::new(Pixels(0.0), Pixels(0.0)));
+
+            let rejected = Arc::new(Mutex::new(false));
+            arena.add(
+                p,
+                Arc::new(RejectableMember {
+                    rejected: rejected.clone(),
+                }),
+            );
+            arena.close(p);
+
+            // 10px: above the mouse precise slop (1.0px) but below the
+            // touch slop (18.0px).
+            rec.handle_event(&make_move_event_for_id(
+                p,
+                Offset::new(Pixels(10.0), Pixels(0.0)),
+                kind,
+            ));
+
+            assert_eq!(
+                *rejected.lock(),
+                should_cross,
+                "{kind:?} pointer moving 10px: expected slop-cross = {should_cross}",
+            );
+        }
     }
 
     #[test]
