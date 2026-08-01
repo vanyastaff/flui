@@ -22,17 +22,25 @@
 //!
 //! # Cross.H: flex text-direction gap
 //!
-//! `RenderFlex` (`crates/flui-objects/src/layout/flex.rs`) carries no
-//! `text_direction` field at all, and `Row`/`Column`/`Flex`
-//! (`crates/flui-widgets/src/flex/flex.rs`) lay out unconditionally as if
-//! `TextDirection.ltr`, with no ambient `Directionality` lookup and no
-//! "direction required" assertion. This blocks two whole axes of the
-//! oracle: the 8 `- RTL` cases (mirrored positions) and 8 of the 9 `- no
-//! textDirection` cases (a debug `AssertionError` (plain `assert`s in `flex.dart`, not a `FlutterError` construction), "has a null
-//! textDirection", from `RenderFlex._debugHasNecessaryDirections`,
-//! `rendering/flex.dart`, tag `3.44.0`). Filed as an extension of the
-//! existing shifted-box `AlignmentDirectional`/ambient-`Directionality` gap
-//! in `docs/ROADMAP.md`'s Cross.H section — see there for the shared root
+//! `RenderFlex` (`crates/flui-objects/src/layout/flex.rs`) now carries a
+//! `text_direction: TextDirection` field, and `Row`/`Column`/`Flex`
+//! (`crates/flui-widgets/src/flex/flex.rs`) resolve the ambient
+//! `Directionality` in `StatelessView::build` and hand the resolved value to
+//! a private `FlexRenderView` — the same composing-widget pattern
+//! `ListBody` uses (`crates/flui-widgets/src/layout/list_body.rs`). This
+//! unblocks the 8 `- RTL` cases below (mirrored positions).
+//!
+//! The 8 `- no textDirection` cases remain **out of scope**: they assert a
+//! debug `AssertionError` (plain `assert`s in `flex.dart`, not a
+//! `FlutterError` construction), "has a null textDirection", from
+//! `RenderFlex._debugHasNecessaryDirections` (`rendering/flex.dart`, tag
+//! `3.44.0`), fired when there is no `Directionality` ancestor at all. FLUI
+//! has no nullable `TextDirection` to assert against — every FLUI widget
+//! that consults `Directionality` defaults to `Ltr` with no ancestor instead
+//! of requiring one (the same divergence `ListBody`'s own parity port
+//! documents). Filed as an extension of the existing shifted-box
+//! `AlignmentDirectional`/ambient-`Directionality` gap in
+//! `docs/ROADMAP.md`'s Cross.H section — see there for the shared root
 //! cause, not repeated here.
 //!
 //! # Ledger (29 case names — every `testWidgets` in `row_test.dart` at tag
@@ -118,21 +126,22 @@
 //!     Also accounts for cases 9 and 27 (see their entries above/below).
 //!
 //! ## RTL (9)
-//! 19. `'Row with one Flexible child - RTL'` — **out of scope**, Cross.H
-//!     (mirrored positions require `RenderFlex` to resolve `TextDirection`).
-//! 20. `'Row with default main axis parameters - RTL'` — **out of scope**,
-//!     Cross.H.
-//! 21. `'Row with MainAxisAlignment.center - RTL'` — **out of scope**,
-//!     Cross.H.
-//! 22. `'Row with MainAxisAlignment.end - RTL'` — **out of scope**,
-//!     Cross.H.
-//! 23. `'Row with MainAxisAlignment.spaceBetween - RTL'` — **out of
-//!     scope**, Cross.H.
-//! 24. `'Row with MainAxisAlignment.spaceAround - RTL'` — **out of scope**,
-//!     Cross.H.
-//! 25. `'Row with MainAxisAlignment.spaceEvenly - RTL'` — **out of scope**,
-//!     Cross.H.
-//! 26. `'Row and MainAxisSize.min - RTL'` — **out of scope**, Cross.H.
+//! 19. `'Row with one Flexible child - RTL'` — **ported**:
+//!     [`row_with_one_flexible_child_rtl_packs_children_from_the_right`].
+//! 20. `'Row with default main axis parameters - RTL'` — **ported**:
+//!     [`row_default_main_axis_parameters_rtl_positions_children_from_the_right`].
+//! 21. `'Row with MainAxisAlignment.center - RTL'` — **ported**:
+//!     [`row_main_axis_alignment_center_rtl_centers_the_children_block`].
+//! 22. `'Row with MainAxisAlignment.end - RTL'` — **ported**:
+//!     [`row_main_axis_alignment_end_rtl_pushes_children_to_the_far_edge`].
+//! 23. `'Row with MainAxisAlignment.spaceBetween - RTL'` — **ported**:
+//!     [`row_main_axis_alignment_space_between_rtl_flushes_the_first_and_last_children_to_the_edges`].
+//! 24. `'Row with MainAxisAlignment.spaceAround - RTL'` — **ported**:
+//!     [`row_main_axis_alignment_space_around_rtl_gives_edge_children_half_gaps`].
+//! 25. `'Row with MainAxisAlignment.spaceEvenly - RTL'` — **ported**:
+//!     [`row_main_axis_alignment_space_evenly_rtl_distributes_free_space_symmetrically`].
+//! 26. `'Row and MainAxisSize.min - RTL'` — **ported**:
+//!     [`row_main_axis_size_min_rtl_shrink_wraps_and_positions_from_the_right`].
 //! 27. `'Row MainAxisSize.min layout at zero size - RTL'` — **duplicate,
 //!     not separately ported.** Like case 9, this checks only
 //!     `renderBox.size == Size(100, 0)` — `parentData.offset` (the one
@@ -146,11 +155,10 @@
 //! 29. `'Can update Row.spacing value'` — **ported**:
 //!     [`row_spacing_rebuild_changes_the_total_main_axis_extent`].
 //!
-//! **Total: 29 case names = 29 accounted for above** — 8 newly ported + 3
-//! cross-file duplicates against `flex_test.rs` (cases 10, 16, 17) + 2
-//! in-file duplicates folded into case 18 (cases 9, 27) + 16 out of scope
-//! under the Cross.H flex text-direction gap (8 `- no textDirection` error
-//! cases + 8 `- RTL` cases).
+//! **Total: 29 case names = 29 accounted for above** — 16 newly ported (8
+//! LTR + 8 RTL) + 3 cross-file duplicates against `flex_test.rs` (cases 10,
+//! 16, 17) + 2 in-file duplicates folded into case 18 (cases 9, 27) + 8 out
+//! of scope under the Cross.H "no textDirection assertion" divergence.
 //!
 //! # Implementation addition: `Row`/`Column`/`Flex::spacing`
 //!
@@ -172,6 +180,7 @@
 //! [`row_spacing_rebuild_changes_the_total_main_axis_extent`] below.
 
 use flui_rendering::testing::inspect::render_diagnostics;
+use flui_types::typography::TextDirection;
 use flui_view::ViewExt;
 use flui_widgets::prelude::*;
 
@@ -380,6 +389,263 @@ fn row_main_axis_size_min_layout_at_zero_size_collapses_the_child_to_zero_height
         "the child must keep its natural 100px width but collapse to 0px \
          height under the zero-sized ancestor's tight cross-axis constraint"
     );
+}
+
+// ------------------------------------------------------------------
+// RTL — an ambient `Directionality(TextDirection::Rtl)` flips a `Row`'s main
+// axis: `Start` packs children against the right edge instead of the left,
+// and the visual order reverses (the first child in list order ends up
+// right-most). Every case below is the exact LTR case above, mirrored, from
+// row_test.dart's `- RTL` variants (tag `3.44.0`).
+// ------------------------------------------------------------------
+
+/// `Flexible` (loose fit)/`Expanded` still take their natural/allocated
+/// width under RTL — only the main-axis *position* mirrors.
+///
+/// Flutter parity: row_test.dart `'Row with one Flexible child - RTL'` —
+/// `child0` (100px) ends up right-most at `dx` 700, the `Expanded` child
+/// (600px, filling the remaining space) at `dx` 100, and `child2` (100px)
+/// flush against the left edge at `dx` 0.
+#[test]
+fn row_with_one_flexible_child_rtl_packs_children_from_the_right() {
+    let laid = harness::pump_widget(
+        Center::new().child(Directionality::new(
+            TextDirection::Rtl,
+            Row::new(vec![
+                SizedBox::new(100.0, 100.0).boxed(),
+                Expanded::new(SizedBox::new(100.0, 100.0)).boxed(),
+                SizedBox::new(100.0, 100.0).boxed(),
+            ]),
+        )),
+        harness::screen(),
+    );
+
+    let flex_id = laid.find_by_render_type("RenderFlex");
+    assert_eq!(laid.size(flex_id), size(800.0, 100.0));
+    assert_eq!(laid.offset(laid.child(flex_id, 0)), offset(700.0, 0.0));
+    assert_eq!(laid.size(laid.child(flex_id, 0)), size(100.0, 100.0));
+    assert_eq!(laid.offset(laid.child(flex_id, 1)), offset(100.0, 0.0));
+    assert_eq!(laid.size(laid.child(flex_id, 1)), size(600.0, 100.0));
+    assert_eq!(laid.offset(laid.child(flex_id, 2)), offset(0.0, 0.0));
+    assert_eq!(laid.size(laid.child(flex_id, 2)), size(100.0, 100.0));
+}
+
+/// Default `Row` (`MainAxisAlignment::Start`) under RTL packs children
+/// against the right edge, in list order — the mirror image of the LTR
+/// default case above.
+///
+/// Flutter parity: row_test.dart `'Row with default main axis parameters -
+/// RTL'` — three `SizedBox(100, 100)` children land at `dx` 700 / 600 / 500.
+#[test]
+fn row_default_main_axis_parameters_rtl_positions_children_from_the_right() {
+    let laid = harness::pump_widget(
+        Center::new().child(Directionality::new(
+            TextDirection::Rtl,
+            Row::new(vec![
+                SizedBox::new(100.0, 100.0).boxed(),
+                SizedBox::new(100.0, 100.0).boxed(),
+                SizedBox::new(100.0, 100.0).boxed(),
+            ]),
+        )),
+        harness::screen(),
+    );
+
+    let flex_id = laid.find_by_render_type("RenderFlex");
+    assert_eq!(laid.size(flex_id), size(800.0, 100.0));
+    assert_eq!(laid.offset(laid.child(flex_id, 0)), offset(700.0, 0.0));
+    assert_eq!(laid.offset(laid.child(flex_id, 1)), offset(600.0, 0.0));
+    assert_eq!(laid.offset(laid.child(flex_id, 2)), offset(500.0, 0.0));
+    for i in 0..3 {
+        assert_eq!(laid.size(laid.child(flex_id, i)), size(100.0, 100.0));
+    }
+}
+
+/// `MainAxisAlignment::Center` is direction-symmetric — RTL centers the same
+/// block the LTR case does, just built with the RTL-visiting formula.
+///
+/// Flutter parity: row_test.dart `'Row with MainAxisAlignment.center - RTL'`
+/// — two `SizedBox(100, 100)` children land at `dx` 400 / 300 (mirrored from
+/// the LTR case's 300 / 400).
+#[test]
+fn row_main_axis_alignment_center_rtl_centers_the_children_block() {
+    let laid = harness::pump_widget(
+        Center::new().child(Directionality::new(
+            TextDirection::Rtl,
+            Row::new(vec![
+                SizedBox::new(100.0, 100.0).boxed(),
+                SizedBox::new(100.0, 100.0).boxed(),
+            ])
+            .main_axis_alignment(MainAxisAlignment::Center),
+        )),
+        harness::screen(),
+    );
+
+    let flex_id = laid.find_by_render_type("RenderFlex");
+    assert_eq!(laid.size(flex_id), size(800.0, 100.0));
+    assert_eq!(laid.offset(laid.child(flex_id, 0)), offset(400.0, 0.0));
+    assert_eq!(laid.offset(laid.child(flex_id, 1)), offset(300.0, 0.0));
+    assert_eq!(laid.size(laid.child(flex_id, 0)), size(100.0, 100.0));
+    assert_eq!(laid.size(laid.child(flex_id, 1)), size(100.0, 100.0));
+}
+
+/// `MainAxisAlignment::End` under RTL packs children against the **left**
+/// edge — `End` and `Start` swap physical edges under RTL, and the LTR
+/// case's `End` (right edge) numbers become this case's `Start` numbers.
+///
+/// Flutter parity: row_test.dart `'Row with MainAxisAlignment.end - RTL'` —
+/// three `SizedBox(100, 100)` children land at `dx` 200 / 100 / 0.
+#[test]
+fn row_main_axis_alignment_end_rtl_pushes_children_to_the_far_edge() {
+    let laid = harness::pump_widget(
+        Center::new().child(Directionality::new(
+            TextDirection::Rtl,
+            Row::new(vec![
+                SizedBox::new(100.0, 100.0).boxed(),
+                SizedBox::new(100.0, 100.0).boxed(),
+                SizedBox::new(100.0, 100.0).boxed(),
+            ])
+            .main_axis_alignment(MainAxisAlignment::End),
+        )),
+        harness::screen(),
+    );
+
+    let flex_id = laid.find_by_render_type("RenderFlex");
+    assert_eq!(laid.size(flex_id), size(800.0, 100.0));
+    assert_eq!(laid.offset(laid.child(flex_id, 0)), offset(200.0, 0.0));
+    assert_eq!(laid.offset(laid.child(flex_id, 1)), offset(100.0, 0.0));
+    assert_eq!(laid.offset(laid.child(flex_id, 2)), offset(0.0, 0.0));
+    assert_eq!(laid.size(laid.child(flex_id, 0)), size(100.0, 100.0));
+    assert_eq!(laid.size(laid.child(flex_id, 1)), size(100.0, 100.0));
+    assert_eq!(laid.size(laid.child(flex_id, 2)), size(100.0, 100.0));
+}
+
+/// `MainAxisAlignment::SpaceBetween` still flushes the first and last
+/// children to the row's own edges under RTL — but "first"/"last" now read
+/// right-to-left, so `child0` (list order) lands at the right edge instead
+/// of the left.
+///
+/// Flutter parity: row_test.dart `'Row with MainAxisAlignment.spaceBetween -
+/// RTL'` — three `SizedBox(100, 100)` children land at `dx` 700 / 350 / 0.
+#[test]
+fn row_main_axis_alignment_space_between_rtl_flushes_the_first_and_last_children_to_the_edges() {
+    let laid = harness::pump_widget(
+        Center::new().child(Directionality::new(
+            TextDirection::Rtl,
+            Row::new(vec![
+                SizedBox::new(100.0, 100.0).boxed(),
+                SizedBox::new(100.0, 100.0).boxed(),
+                SizedBox::new(100.0, 100.0).boxed(),
+            ])
+            .main_axis_alignment(MainAxisAlignment::SpaceBetween),
+        )),
+        harness::screen(),
+    );
+
+    let flex_id = laid.find_by_render_type("RenderFlex");
+    assert_eq!(laid.size(flex_id), size(800.0, 100.0));
+    assert_eq!(laid.offset(laid.child(flex_id, 0)), offset(700.0, 0.0));
+    assert_eq!(laid.offset(laid.child(flex_id, 1)), offset(350.0, 0.0));
+    assert_eq!(laid.offset(laid.child(flex_id, 2)), offset(0.0, 0.0));
+    assert_eq!(laid.size(laid.child(flex_id, 0)), size(100.0, 100.0));
+    assert_eq!(laid.size(laid.child(flex_id, 1)), size(100.0, 100.0));
+    assert_eq!(laid.size(laid.child(flex_id, 2)), size(100.0, 100.0));
+}
+
+/// `MainAxisAlignment::SpaceAround`'s half-share edges swap sides under RTL,
+/// same as `SpaceBetween` above.
+///
+/// Flutter parity: row_test.dart `'Row with MainAxisAlignment.spaceAround -
+/// RTL'` — four `SizedBox(100, 100)` children land at `dx` 650 / 450 / 250 /
+/// 50.
+#[test]
+fn row_main_axis_alignment_space_around_rtl_gives_edge_children_half_gaps() {
+    let laid = harness::pump_widget(
+        Center::new().child(Directionality::new(
+            TextDirection::Rtl,
+            Row::new(vec![
+                SizedBox::new(100.0, 100.0).boxed(),
+                SizedBox::new(100.0, 100.0).boxed(),
+                SizedBox::new(100.0, 100.0).boxed(),
+                SizedBox::new(100.0, 100.0).boxed(),
+            ])
+            .main_axis_alignment(MainAxisAlignment::SpaceAround),
+        )),
+        harness::screen(),
+    );
+
+    let flex_id = laid.find_by_render_type("RenderFlex");
+    assert_eq!(laid.size(flex_id), size(800.0, 100.0));
+    assert_eq!(laid.offset(laid.child(flex_id, 0)), offset(650.0, 0.0));
+    assert_eq!(laid.offset(laid.child(flex_id, 1)), offset(450.0, 0.0));
+    assert_eq!(laid.offset(laid.child(flex_id, 2)), offset(250.0, 0.0));
+    assert_eq!(laid.offset(laid.child(flex_id, 3)), offset(50.0, 0.0));
+    for i in 0..4 {
+        assert_eq!(laid.size(laid.child(flex_id, i)), size(100.0, 100.0));
+    }
+}
+
+/// `MainAxisAlignment::SpaceEvenly` is symmetric under RTL just like
+/// `Center` — the gap formula is unchanged, only the visiting order (and
+/// therefore which child sits in which gap) mirrors.
+///
+/// Flutter parity: row_test.dart `'Row with MainAxisAlignment.spaceEvenly -
+/// RTL'` — three `SizedBox(200, 100)` children land at `dx` 550 / 300 / 50.
+#[test]
+fn row_main_axis_alignment_space_evenly_rtl_distributes_free_space_symmetrically() {
+    let laid = harness::pump_widget(
+        Center::new().child(Directionality::new(
+            TextDirection::Rtl,
+            Row::new(vec![
+                SizedBox::new(200.0, 100.0).boxed(),
+                SizedBox::new(200.0, 100.0).boxed(),
+                SizedBox::new(200.0, 100.0).boxed(),
+            ])
+            .main_axis_alignment(MainAxisAlignment::SpaceEvenly),
+        )),
+        harness::screen(),
+    );
+
+    let flex_id = laid.find_by_render_type("RenderFlex");
+    assert_eq!(laid.size(flex_id), size(800.0, 100.0));
+    assert_eq!(laid.offset(laid.child(flex_id, 0)), offset(550.0, 0.0));
+    assert_eq!(laid.offset(laid.child(flex_id, 1)), offset(300.0, 0.0));
+    assert_eq!(laid.offset(laid.child(flex_id, 2)), offset(50.0, 0.0));
+    for i in 0..3 {
+        assert_eq!(laid.size(laid.child(flex_id, i)), size(200.0, 100.0));
+    }
+}
+
+/// `MainAxisSize::Min` shrink-wraps the same way under RTL; with zero free
+/// space, `Start`/`End` agree — the only RTL-specific signal is the visiting
+/// order, which reverses which child sits at which end.
+///
+/// Flutter parity: row_test.dart `'Row and MainAxisSize.min - RTL'` — a
+/// 100px and a 150px child shrink-wrap to a 250px row, with `child0` (100px)
+/// right-most at `dx` 150 and `child1` (150px) flush left at `dx` 0.
+#[test]
+fn row_main_axis_size_min_rtl_shrink_wraps_and_positions_from_the_right() {
+    let laid = harness::pump_widget(
+        Center::new().child(Directionality::new(
+            TextDirection::Rtl,
+            Row::new(vec![
+                SizedBox::new(100.0, 100.0).boxed(),
+                SizedBox::new(150.0, 100.0).boxed(),
+            ])
+            .main_axis_size(MainAxisSize::Min),
+        )),
+        harness::screen(),
+    );
+
+    let flex_id = laid.find_by_render_type("RenderFlex");
+    assert_eq!(
+        laid.size(flex_id),
+        size(250.0, 100.0),
+        "MainAxisSize::Min must shrink-wrap to 100 + 150 = 250px regardless of direction"
+    );
+    assert_eq!(laid.offset(laid.child(flex_id, 0)), offset(150.0, 0.0));
+    assert_eq!(laid.size(laid.child(flex_id, 0)), size(100.0, 100.0));
+    assert_eq!(laid.offset(laid.child(flex_id, 1)), offset(0.0, 0.0));
+    assert_eq!(laid.size(laid.child(flex_id, 1)), size(150.0, 100.0));
 }
 
 /// A `Row` built with no explicit `.spacing()` call mounts a `RenderFlex`
