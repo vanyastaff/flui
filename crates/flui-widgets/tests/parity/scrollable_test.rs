@@ -48,10 +48,11 @@ use std::time::Duration;
 use flui_animation::Vsync;
 use flui_rendering::constraints::BoxConstraints;
 use flui_types::typography::TextDirection;
-use flui_widgets::prelude::Axis;
+use flui_view::ViewExt;
+use flui_widgets::prelude::{Axis, AxisDirection};
 use flui_widgets::{
     BouncingScrollPhysics, ClampingScrollPhysics, Directionality, ScrollController, Scrollable,
-    SharedScrollPhysics, SizedBox, VsyncScope,
+    SharedScrollPhysics, SizedBox, SliverFixedExtentList, Viewport, VsyncScope,
 };
 
 use crate::common::{LaidOut, lay_out, tight};
@@ -322,5 +323,197 @@ fn horizontal_fling_under_rtl_directionality_continues_the_opposite_way_of_ltr()
         "under RTL Directionality the fling must keep advancing (decreasing) past the \
          release point after two animation frames — the opposite of the LTR control's \
          continued increase; release={rtl_at_release:.1}, after_pump={rtl_after_pump:.1}"
+    );
+}
+
+// ============================================================================
+// Explicit axis_direction override
+// ============================================================================
+//
+// `Scrollable::axis_direction` lets a `.viewport_builder` composition hand
+// `Scrollable` a pre-resolved `AxisDirection` directly, bypassing ambient
+// `Directionality` resolution entirely — the one case
+// `Scrollable::build`'s own fallback (`view.axis_direction.unwrap_or_else`,
+// which only ever consults `Directionality`) structurally cannot serve:
+// composed content whose `AxisDirection` doesn't reduce to "ambient
+// Directionality + scroll_direction + reverse: false". Both tests below set
+// the override to a value CONTRADICTING what ambient resolution would
+// produce in that same scene, so a silent fallback to ambient (dropping
+// `view.axis_direction`) flips the sign and fails with the OTHER case's
+// expected value — verified by that exact falsification on both tests
+// before this comment was written.
+
+/// The drag-delta half. `.axis_direction(LeftToRight)` under an RTL
+/// `Directionality` ancestor (ambient alone would resolve `RightToLeft`)
+/// must still orient by `LeftToRight` (not reversed). `.axis_direction(
+/// RightToLeft)` with NO `Directionality` ancestor at all (ambient would
+/// default to `LeftToRight`) must still orient by `RightToLeft` (reversed).
+/// Composed via `.viewport_builder`, `Scrollable::axis_direction`'s actual
+/// reason to exist, over the same `Viewport`-over-`SliverFixedExtentList`
+/// fixture `scrollable_viewport_builder_composes_a_custom_viewport_with_working_drag_and_feedback`
+/// (`tests/scroll.rs`) uses, oriented horizontally instead of vertically.
+///
+/// Falsified by replacing `Scrollable::build`'s `view.axis_direction
+/// .unwrap_or_else(...)` with the unconditional ambient resolution (i.e.
+/// dropping `view.axis_direction`): the RTL-ambient case (override
+/// `LeftToRight`) landed on 100.0 — the ambient-derived `RightToLeft`
+/// value — instead of 200.0, and the no-ambient case (override
+/// `RightToLeft`) landed on 200.0 — the ambient-derived `LeftToRight` value
+/// — instead of 100.0. Each run produced exactly the OTHER case's expected
+/// value, confirming both assertions exercise the override, not the
+/// fallback. Restored byte-identically; both green again.
+#[test]
+fn scrollable_axis_direction_override_governs_the_drag_delta_not_ambient_directionality() {
+    fn dragged_pixels(explicit: AxisDirection, ambient: Option<TextDirection>) -> f32 {
+        let controller = ScrollController::new();
+        controller.update_dimensions(300.0, 0.0, 300.0);
+        controller.set_pixels(150.0);
+
+        let scrollable = Scrollable::new()
+            .controller(controller.clone())
+            .scroll_direction(Axis::Horizontal)
+            .axis_direction(explicit)
+            .viewport_builder(std::rc::Rc::new(move |position| {
+                let cols: Vec<_> = (0..12)
+                    .map(|_| SizedBox::new(50.0, 300.0).boxed())
+                    .collect();
+                Viewport::new((SliverFixedExtentList::new(50.0, cols),))
+                    .axis_direction(explicit)
+                    .position(position)
+                    .boxed()
+            }));
+
+        let scoped = match ambient {
+            Some(direction) => lay_out(
+                Directionality::new(direction, scrollable),
+                tight(300.0, 300.0),
+            ),
+            None => lay_out(scrollable, tight(300.0, 300.0)),
+        };
+
+        // Single 50px leftward drag: no competing recognizer, delivered in
+        // full — same pattern used throughout this file.
+        scoped.dispatch_pointer_down(200.0, 150.0);
+        scoped.dispatch_pointer_move(150.0, 150.0);
+        scoped.dispatch_pointer_up(150.0, 150.0);
+
+        controller.pixels()
+    }
+
+    // Override LeftToRight; ambient Directionality is RTL (would resolve
+    // RightToLeft if the override were ignored). A 50px leftward drag under
+    // (not reversed) LeftToRight increases pixels: 150 -> 200.
+    let ltr_override_under_rtl_ambient =
+        dragged_pixels(AxisDirection::LeftToRight, Some(TextDirection::Rtl));
+    assert_eq!(
+        ltr_override_under_rtl_ambient, 200.0,
+        "an explicit LeftToRight override under an RTL Directionality ancestor must orient \
+         by LeftToRight (not reversed), not the ambient RightToLeft; got \
+         {ltr_override_under_rtl_ambient:.1}"
+    );
+
+    // Override RightToLeft; no Directionality ancestor at all (ambient
+    // would default to LeftToRight if the override were ignored). The SAME
+    // 50px leftward drag under (reversed) RightToLeft decreases pixels:
+    // 150 -> 100.
+    let rtl_override_under_no_ambient = dragged_pixels(AxisDirection::RightToLeft, None);
+    assert_eq!(
+        rtl_override_under_no_ambient, 100.0,
+        "an explicit RightToLeft override with no Directionality ancestor must orient by \
+         RightToLeft (reversed), not the ambient default LeftToRight; got \
+         {rtl_override_under_no_ambient:.1}"
+    );
+}
+
+/// The fling-velocity half, same override-vs-ambient-contradiction shape as
+/// the drag test above. Composed over a longer strip (100 columns, 5000px
+/// content, 4700px `max_scroll_extent`) so a two-frame fling settle window
+/// never approaches either boundary.
+///
+/// Falsified the same way as the drag test: dropping `view.axis_direction`
+/// from `Scrollable::build` made the RTL-ambient case (override
+/// `LeftToRight`) DECREASE after release instead of increase, and the
+/// no-ambient case (override `RightToLeft`) INCREASE instead of decrease —
+/// each flipping to the other case's expected direction. Restored
+/// byte-identically; both green again.
+#[test]
+fn scrollable_axis_direction_override_governs_the_fling_velocity_not_ambient_directionality() {
+    fn fling_pixels(explicit: AxisDirection, ambient: Option<TextDirection>) -> (f32, f32, f32) {
+        let controller = ScrollController::new();
+        controller.update_dimensions(300.0, 0.0, 4700.0);
+        controller.set_pixels(2000.0);
+
+        let vsync = Vsync::new();
+        let scrollable = Scrollable::new()
+            .controller(controller.clone())
+            .scroll_direction(Axis::Horizontal)
+            .axis_direction(explicit)
+            .viewport_builder(std::rc::Rc::new(move |position| {
+                let cols: Vec<_> = (0..100)
+                    .map(|_| SizedBox::new(50.0, 300.0).boxed())
+                    .collect();
+                Viewport::new((SliverFixedExtentList::new(50.0, cols),))
+                    .axis_direction(explicit)
+                    .position(position)
+                    .boxed()
+            }));
+        let wrapped = VsyncScope::new(vsync.clone(), scrollable);
+
+        let mut scoped = match ambient {
+            Some(direction) => {
+                lay_out(Directionality::new(direction, wrapped), tight(300.0, 300.0))
+            }
+            None => lay_out(wrapped, tight(300.0, 300.0)),
+        };
+        scoped.adopt_vsync(vsync);
+
+        let start_pixels = controller.pixels();
+
+        // Leftward drag well past the 18px slop, same magnitude as the
+        // ambient-Directionality fling test above.
+        scoped.dispatch_pointer_down(250.0, 150.0);
+        scoped.dispatch_pointer_move(150.0, 150.0); // 100px leftward: slop-crossing
+        scoped.dispatch_pointer_move(100.0, 150.0); // 50px more: on_pan_update
+        scoped.dispatch_pointer_up(100.0, 150.0);
+
+        let pixels_at_release = controller.pixels();
+
+        scoped.pump_for(Duration::from_millis(16));
+        scoped.pump_for(Duration::from_millis(16));
+
+        (start_pixels, pixels_at_release, controller.pixels())
+    }
+
+    // Override LeftToRight under an RTL ambient: must behave as the
+    // non-reversed control (increase, then keep increasing).
+    let (ltr_start, ltr_at_release, ltr_after_pump) =
+        fling_pixels(AxisDirection::LeftToRight, Some(TextDirection::Rtl));
+    assert!(
+        ltr_at_release > ltr_start,
+        "an explicit LeftToRight override under an RTL Directionality ancestor must \
+         increase pixels before release, not decrease like the ambient RightToLeft would \
+         ({ltr_start} -> {ltr_at_release})"
+    );
+    assert!(
+        ltr_after_pump > ltr_at_release,
+        "the LeftToRight override's fling must keep advancing (increasing) past release; \
+         release={ltr_at_release:.1}, after_pump={ltr_after_pump:.1}"
+    );
+
+    // Override RightToLeft with no Directionality ancestor: must behave as
+    // the reversed control (decrease, then keep decreasing), not the
+    // ambient default LeftToRight.
+    let (rtl_start, rtl_at_release, rtl_after_pump) =
+        fling_pixels(AxisDirection::RightToLeft, None);
+    assert!(
+        rtl_at_release < rtl_start,
+        "an explicit RightToLeft override with no Directionality ancestor must decrease \
+         pixels before release, not increase like the ambient default LeftToRight would \
+         ({rtl_start} -> {rtl_at_release})"
+    );
+    assert!(
+        rtl_after_pump < rtl_at_release,
+        "the RightToLeft override's fling must keep advancing (decreasing) past release; \
+         release={rtl_at_release:.1}, after_pump={rtl_after_pump:.1}"
     );
 }
