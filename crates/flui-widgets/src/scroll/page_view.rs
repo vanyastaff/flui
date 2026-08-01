@@ -670,6 +670,13 @@ impl ViewState<PageView> for PageViewState {
             .controller(controller.scroll_controller())
             .physics(physics)
             .scroll_direction(scroll_direction)
+            // The inner `Viewport` below is built with this SAME
+            // `axis_direction` — handing it to `Scrollable` too keeps drag
+            // and fling gesture orientation in sync with what actually
+            // paints under RTL `Directionality` (see `Scrollable::
+            // axis_direction`'s docs; `Scrollable` cannot see into an
+            // arbitrary `viewport_builder`'s content to derive this itself).
+            .axis_direction(axis_direction)
             .viewport_builder(Rc::new(move |position: ScrollPosition| {
                 let sliver = SliverFillViewport::new(viewport_fraction, children.clone());
                 let mut viewport = Viewport::new((sliver,))
