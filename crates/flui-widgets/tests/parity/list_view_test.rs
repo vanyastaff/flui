@@ -24,15 +24,27 @@
 //!   (`crates/flui-objects/src/sliver/sliver_list.rs`), so this instead
 //!   asserts the property upstream's exact log is really checking: a large
 //!   jump does not force-build every index it skipped over.
+//!
+//! Divergence found and fixed by this port: `ListView::build`
+//! (`crates/flui-widgets/src/scroll/list_view.rs`) hardcoded
+//! `AxisDirection::LeftToRight` for `Axis::Horizontal`, ignoring the ambient
+//! `Directionality` entirely — a horizontal `ListView` under an RTL ancestor
+//! laid its items out left-to-right instead of Flutter's right-to-left
+//! (`ScrollView.getDirection`, `widgets/scroll_view.dart`, delegating to
+//! `getAxisDirectionFromAxisReverseAndDirectionality`,
+//! `widgets/basic.dart:4513-4527`). See
+//! [`horizontal_under_rtl_directionality_lays_the_first_item_out_at_the_right_edge`]
+//! for the oracle and the falsifying geometry.
 
 use std::cell::RefCell;
 use std::collections::HashSet;
 use std::rc::Rc;
 
 use crate::common::{lay_out, tight};
+use flui_types::typography::TextDirection;
 use flui_view::ViewExt;
 use flui_widgets::prelude::Axis;
-use flui_widgets::{ListView, ScrollController, SizedBox};
+use flui_widgets::{Directionality, ListView, ScrollController, SizedBox};
 
 /// A `ListView.builder` over 3 items that all fit in the viewport builds
 /// all 3 items after the two-tick lazy-settle sequence.
@@ -176,4 +188,56 @@ fn large_scroll_jump_settles_the_new_window_without_materializing_the_skipped_ba
         "a large jump must build items in the new visible window (around index 20); \
          built indices: {built:?}"
     );
+}
+
+/// A horizontal, non-reversed `ListView` under an RTL `Directionality`
+/// resolves its `AxisDirection` to `RightToLeft`: the first item
+/// (`children[0]`) paints at the viewport's TRAILING (right) edge, and each
+/// later item sits progressively further LEFT — the mirror image of the LTR
+/// case, not just "the same layout with a flipped default."
+///
+/// Flutter parity: `ScrollView.getDirection` (`widgets/scroll_view.dart`)
+/// delegates to `getAxisDirectionFromAxisReverseAndDirectionality`
+/// (`widgets/basic.dart:4513-4527`), which for `Axis.horizontal` reads
+/// `Directionality.of(context)` and maps RTL to `AxisDirection.left`.
+///
+/// Oracle: `RenderSliverFixedExtentList` positions each child through the
+/// same shared per-child paint-offset rule every sliver uses —
+/// `crates/flui-rendering/src/constraints/sliver_layout.rs`'s
+/// `child_paint_offset` (ported from `RenderSliverMultiBoxAdaptorMixin`'s
+/// child-positioning contract): for a not-right-way-up sliver (RTL, forward
+/// growth), `main_axis_delta = paint_extent - child_main_extent -
+/// child_main_axis_position`, where `child_main_axis_position = layout_offset
+/// - scroll_offset`. Three 100px-wide items in an exactly-filled 300px-wide
+/// viewport (`scroll_offset = 0`, `paint_extent = 300`):
+/// - item 0: `layout_offset = 0` → `300 - 100 - 0 = 200`
+/// - item 1: `layout_offset = 100` → `300 - 100 - 100 = 100`
+/// - item 2: `layout_offset = 200` → `300 - 100 - 200 = 0`
+///
+/// Before the fix, `ListView::build` hardcoded `AxisDirection::LeftToRight`
+/// for `Axis::Horizontal`, so this test failed with item 0 at `x = 0.0`
+/// (the LTR position) instead of the RTL oracle's `x = 200.0` — see the
+/// module doc's "Divergence found and fixed by this port".
+#[test]
+fn horizontal_under_rtl_directionality_lays_the_first_item_out_at_the_right_edge() {
+    let items: Vec<flui_view::BoxedView> =
+        (0..3).map(|_| SizedBox::new(100.0, 50.0).boxed()).collect();
+    let laid = lay_out(
+        Directionality::new(
+            TextDirection::Rtl,
+            ListView::new(100.0, items).scroll_direction(Axis::Horizontal),
+        ),
+        tight(300.0, 50.0),
+    );
+
+    let list_sliver = laid.find_by_render_type("RenderSliverFixedExtentList");
+    let expected_x = [200.0, 100.0, 0.0];
+    for (index, expected_x) in expected_x.into_iter().enumerate() {
+        let item = laid.child(list_sliver, index);
+        assert_eq!(
+            laid.offset(item).dx.get(),
+            expected_x,
+            "item {index}'s local x offset within the sliver must match the RTL oracle"
+        );
+    }
 }

@@ -3,11 +3,12 @@
 
 use std::fmt;
 
-use flui_types::layout::{Axis, AxisDirection};
+use flui_types::layout::Axis;
 use flui_view::prelude::StatelessView;
 use flui_view::seq::ViewSeq;
 use flui_view::{BoxedView, BuildContext, IntoView, ViewExt};
 
+use crate::localization::axis_direction_from_axis_reverse_and_directionality;
 use crate::scroll::{ShrinkWrappingViewport, Viewport};
 
 /// A scrollable area whose scroll body is composed from an arbitrary list of
@@ -26,8 +27,16 @@ use crate::scroll::{ShrinkWrappingViewport, Viewport};
 /// Set [`CustomScrollView::shrink_wrap`] when the scroll view is placed under
 /// unbounded constraints in the scroll axis.
 ///
+/// A horizontal `scroll_direction` resolves its `AxisDirection` from the
+/// ambient [`Directionality`] (`RightToLeft` under an RTL ancestor), matching
+/// `ScrollView.getDirection` (`widgets/scroll_view.dart`); the vertical axis
+/// never consults it. `CustomScrollView` has no `reverse` flag yet, unlike
+/// [`SingleChildScrollView`].
+///
 /// Flutter parity: `widgets/scroll_view.dart` `CustomScrollView`.
 ///
+/// [`Directionality`]: crate::Directionality
+/// [`SingleChildScrollView`]: crate::SingleChildScrollView
 /// [`ListView`]: crate::ListView
 /// [`GridView`]: crate::GridView
 /// [`SliverToBoxAdapter`]: crate::SliverToBoxAdapter
@@ -92,11 +101,14 @@ impl fmt::Debug for CustomScrollView {
 }
 
 impl StatelessView for CustomScrollView {
-    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
-        let axis_direction = match self.scroll_direction {
-            Axis::Vertical => AxisDirection::TopToBottom,
-            Axis::Horizontal => AxisDirection::LeftToRight,
-        };
+    fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
+        // `reverse` isn't modeled on `CustomScrollView` yet (unlike
+        // `SingleChildScrollView`), so it's always `false` here — the
+        // resolution still consults ambient `Directionality` for a
+        // horizontal `scroll_direction`, matching `ScrollView.getDirection`
+        // (`widgets/scroll_view.dart`).
+        let axis_direction =
+            axis_direction_from_axis_reverse_and_directionality(ctx, self.scroll_direction, false);
         if self.shrink_wrap {
             ShrinkWrappingViewport::new(self.slivers.clone())
                 .axis_direction(axis_direction)
