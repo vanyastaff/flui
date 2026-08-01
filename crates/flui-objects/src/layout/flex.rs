@@ -709,15 +709,19 @@ impl RenderFlex {
         // measured in the same local (always-increasing-rightward) coordinate
         // space. `offsets` is written by real child index so the caller sees
         // one `Offset` per child regardless of visiting order.
+        // `step` counts placement positions along the main axis; `i` is the
+        // real child index occupying that position — the same sequence for
+        // both orders, derived rather than boxed behind `dyn Iterator` so
+        // this layout path stays allocation- and dispatch-free.
         let mut offsets = vec![Offset::ZERO; child_count];
-        let visiting_order: Box<dyn Iterator<Item = usize>> = if flip_main_axis {
-            Box::new((0..child_count).rev())
-        } else {
-            Box::new(0..child_count)
-        };
 
         let mut main_offset = leading_space;
-        for i in visiting_order {
+        for step in 0..child_count {
+            let i = if flip_main_axis {
+                child_count - 1 - step
+            } else {
+                step
+            };
             let child_size = flex_sizes.child_sizes[i].unwrap_or(Size::ZERO);
 
             let cross_offset = match effective_cross_axis_alignment {
