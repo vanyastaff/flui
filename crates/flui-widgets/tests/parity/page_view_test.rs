@@ -9,7 +9,7 @@
 //! `crates/flui-widgets/src/scroll/page_view.rs`'s module docs record the
 //! exact V1 boundary (eager children, listener-based `on_page_changed`, no
 //! `pageSnapping: false`/`reverse`/`padEnds`/`allowImplicitScrolling`/
-//! `PageStorage`/`viewport_fraction > 1.0` centering). **15
+//! `PageStorage`/`viewport_fraction > 1.0` centering). **17
 //! tests ported below**, covering the portable core:
 //!
 //! - `initial_page_lands_on_first_layout` — `initialPage` seeding on the very
@@ -72,6 +72,16 @@
 //!   coverage (the horizontal axis dominates the rest of this file, but
 //!   `PageView::scroll_direction` is not axis-agnostic-by-construction — a
 //!   `dy`-vs-`dx` mixup would only show up in a real vertical drag).
+//! - `horizontal_page_view_drag_under_rtl_directionality_crosses_to_the_next_page_on_the_opposite_physical_drag`
+//!   and `horizontal_page_view_fling_under_rtl_directionality_continues_the_opposite_way_of_ltr`
+//!   — RTL `Directionality` coverage for both gesture halves. `PageView`
+//!   composes `Scrollable` (`crates/flui-widgets/src/scroll/page_view.rs`),
+//!   handing it the SAME resolved `AxisDirection` its own inner `Viewport`
+//!   uses, so a real drag/fling through `PageView` itself — not just a bare
+//!   `Scrollable` — must orient the same way under RTL. Not Flutter ports
+//!   (no corresponding upstream `testWidgets` case); regression coverage for
+//!   the `axisDirectionIsReversed` gesture-orientation fix, read through
+//!   `PageController` the same way the halfway-threshold tests above do.
 //! - `animate_to_page_lands_on_the_page` (ADR-0037) — page → pixels
 //!   through the guarded formula, then a real curve/duration animation
 //!   pumped to completion. Cross-checked against `'PageController control
@@ -120,9 +130,10 @@ use std::time::Duration;
 
 use flui_animation::{Curves, Vsync};
 use flui_types::layout::Axis;
+use flui_types::typography::TextDirection;
 use flui_view::prelude::StatelessView;
 use flui_view::{BuildContext, IntoView, ViewExt};
-use flui_widgets::{PageController, PageView, SizedBox, VsyncScope};
+use flui_widgets::{Directionality, PageController, PageView, SizedBox, VsyncScope};
 
 use crate::common::{LaidOut, lay_out, loose, tight};
 
@@ -336,6 +347,188 @@ fn on_page_changed_fires_exactly_once_per_crossing() {
     );
 
     scoped.dispatch_pointer_up(20.0, 100.0);
+}
+
+// ============================================================================
+// Gesture orientation under RTL Directionality
+// ============================================================================
+//
+// `PageView` composes `Scrollable` (`crates/flui-widgets/src/scroll/page_view.rs`,
+// `PageViewState::build`), handing it the SAME `axis_direction` its own
+// inner `Viewport` uses. The two tests below drive an actual `PageView`
+// (not a bare `Scrollable`) through both gesture halves under RTL
+// `Directionality`, so a regression in that wiring — not just in
+// `Scrollable`'s own `on_pan_update`/`on_pan_end` sign math, already covered
+// generically by `scrollable_test.rs`'s
+// `horizontal_drag_under_rtl_directionality_moves_the_offset_opposite_of_ltr`/
+// `horizontal_fling_under_rtl_directionality_continues_the_opposite_way_of_ltr`
+// — would be caught here too: e.g. `PageView` passing a `scroll_direction`
+// to `Scrollable` that disagrees with the `axis_direction` it separately
+// resolved, or the reverse.
+//
+// Both start `PageController::with_params(2, 1.0)` at the middle page (2 of
+// 0..=4, pixels 600) rather than page 0, so a drag toward EITHER
+// neighbor is a plain in-bounds move — no boundary clamp can mask a
+// wrong-signed drag/fling the way starting at the 0 minimum would.
+
+/// The drag-delta half. Same 160px, past-the-160px-halfway-mark distance
+/// (viewport_fraction 1.0 -> half a 300px page = 150px) that
+/// `dragging_past_half_reads_the_next_page_dragging_below_half_reads_the_current_page`
+/// uses under (default) LTR — reused here as this test's own LTR control,
+/// since the drag distance/assertion shape needs no change to be reused
+/// starting from page 2 instead of page 0 (`2 + 160/300`, not `0 +
+/// 160/300`).
+///
+/// Oracle: `axisDirectionIsReversed` (`painting/basic_types.dart`) +
+/// `ScrollDragController.update` (`widgets/scroll_activity.dart`) — a
+/// horizontal, non-reversed (`LeftToRight`) `PageView` and one under RTL
+/// `Directionality` (`RightToLeft`, reversed) must move the SAME physical
+/// drag toward OPPOSITE pages.
+#[test]
+fn horizontal_page_view_drag_under_rtl_directionality_crosses_to_the_next_page_on_the_opposite_physical_drag()
+ {
+    fn page_after_drag(directionality: Option<TextDirection>, total_delta_x: f32) -> f32 {
+        let controller = PageController::with_params(2, 1.0);
+        let page_view = PageView::new(pages(5)).controller(controller.clone());
+        let scoped = match directionality {
+            Some(direction) => lay_out(
+                Directionality::new(direction, page_view),
+                tight(300.0, 300.0),
+            ),
+            None => lay_out(page_view, tight(300.0, 300.0)),
+        };
+        drag_horizontal_by(&scoped, total_delta_x, 100.0);
+        controller
+            .page()
+            .expect("page() must be Some once laid out")
+    }
+
+    // LTR control: a 160px LEFTWARD drag (dx = -160), the exact distance
+    // `dragging_past_half_reads_the_next_page_dragging_below_half_reads_the_current_page`
+    // uses, must read page 2.533 (2 + 160/300) — advancing toward page 3.
+    let ltr_page = page_after_drag(None, -160.0);
+    assert!(
+        (ltr_page - (2.0 + 160.0 / 300.0)).abs() < 1e-4,
+        "LTR control: a 160px leftward drag from page 2 must read page 2.533, advancing \
+         toward page 3; got {ltr_page}"
+    );
+
+    // SAME leftward drag under RTL Directionality: PageView resolves
+    // RightToLeft (reversed), so the fixed Scrollable now DECREASES pixels
+    // on a leftward drag instead of increasing them — page 1.467 (2 -
+    // 160/300), retreating toward page 1 instead of advancing toward page 3.
+    let rtl_same_direction_page = page_after_drag(Some(TextDirection::Rtl), -160.0);
+    assert!(
+        (rtl_same_direction_page - (2.0 - 160.0 / 300.0)).abs() < 1e-4,
+        "under RTL Directionality the SAME leftward drag must retreat toward page 1 \
+         (page 1.467), the opposite of the LTR control's advance toward page 3; \
+         got {rtl_same_direction_page}"
+    );
+
+    // The RTL-correct direction — a 160px RIGHTWARD drag, the mirror image
+    // of the LTR control's leftward drag — is what advances toward page 3
+    // under RTL, landing on the SAME page value as the LTR control.
+    let rtl_opposite_direction_page = page_after_drag(Some(TextDirection::Rtl), 160.0);
+    assert!(
+        (rtl_opposite_direction_page - (2.0 + 160.0 / 300.0)).abs() < 1e-4,
+        "under RTL Directionality a 160px RIGHTWARD drag (the mirror image of the LTR \
+         control's leftward drag) must read page 2.533, matching the LTR control's \
+         advance toward page 3; got {rtl_opposite_direction_page}"
+    );
+}
+
+/// The fling-velocity half. `PageScrollPhysics::create_ballistic_simulation`
+/// (this file's own physics-unit tests, `crates/flui-widgets/src/scroll/page_view.rs`)
+/// takes the fling velocity `Scrollable::on_pan_end` computes — the SAME
+/// axis-direction-aware sign this fix applies — so a released `PageView`
+/// drag must keep moving in the direction the drag itself established,
+/// mirrored under RTL the same way
+/// `horizontal_fling_under_rtl_directionality_continues_the_opposite_way_of_ltr`
+/// (`scrollable_test.rs`) pins for a bare `Scrollable`. This drives it
+/// through an actual `PageView` to exercise `PageView`'s own `Scrollable`
+/// wiring, not just the shared `Scrollable` code path.
+///
+/// This does NOT assert which page the fling settles on — this file's own
+/// module doc ("Why 'past half'/'below half'/'fling velocity' aren't ALSO
+/// gesture-driven release+settle tests") explains why this harness's
+/// synthetic drags can't be steered to land a *measured* release velocity on
+/// a chosen side of `PageScrollPhysics::velocity_tolerance_px_per_sec`
+/// deterministically; that distinction stays pinned at the physics-unit
+/// level (`fling_velocity_beyond_tolerance_advances_regardless_of_distance`
+/// and its backward sibling). This test only needs the fully deterministic
+/// half: live pixels keep moving consistently after release, and that
+/// direction flips between LTR and RTL for the identical physical drag.
+#[test]
+fn horizontal_page_view_fling_under_rtl_directionality_continues_the_opposite_way_of_ltr() {
+    fn fling_pixels(directionality: Option<TextDirection>) -> (f32, f32, f32) {
+        let controller = PageController::with_params(2, 1.0);
+        let page_view = PageView::new(pages(5)).controller(controller.clone());
+        let vsync = Vsync::new();
+        let wrapped = VsyncScope::new(vsync.clone(), page_view);
+        let mut scoped = match directionality {
+            Some(direction) => {
+                lay_out(Directionality::new(direction, wrapped), tight(300.0, 300.0))
+            }
+            None => lay_out(wrapped, tight(300.0, 300.0)),
+        };
+        scoped.adopt_vsync(vsync);
+
+        let start_pixels = controller.scroll_controller().pixels();
+
+        // Leftward drag well past the 18px slop, mirroring
+        // `horizontal_fling_under_rtl_directionality_continues_the_opposite_way_of_ltr`
+        // (`scrollable_test.rs`).
+        scoped.dispatch_pointer_down(250.0, 100.0);
+        scoped.dispatch_pointer_move(150.0, 100.0); // 100px leftward: slop-crossing
+        scoped.dispatch_pointer_move(100.0, 100.0); // 50px more: on_pan_update
+        scoped.dispatch_pointer_up(100.0, 100.0);
+
+        let pixels_at_release = controller.scroll_controller().pixels();
+
+        // Same two-pump settle window as the `Scrollable`-level fling test.
+        scoped.pump_for(Duration::from_millis(16));
+        scoped.pump_for(Duration::from_millis(16));
+
+        (
+            start_pixels,
+            pixels_at_release,
+            controller.scroll_controller().pixels(),
+        )
+    }
+
+    let (ltr_start, ltr_at_release, ltr_after_pump) = fling_pixels(None);
+    assert_eq!(
+        ltr_start, 600.0,
+        "sanity: PageController::with_params(2, 1.0) must land on page 2 (pixels 600) \
+         on the first layout, same as initial_page_lands_on_first_layout pins"
+    );
+    assert!(
+        ltr_at_release > ltr_start,
+        "LTR control: a leftward drag on a horizontal PageView must increase pixels \
+         before release ({ltr_start} -> {ltr_at_release})"
+    );
+    assert!(
+        ltr_after_pump > ltr_at_release,
+        "LTR control: the fling must keep advancing (increasing) past the release point \
+         after two animation frames; release={ltr_at_release:.1}, after_pump={ltr_after_pump:.1}"
+    );
+
+    let (rtl_start, rtl_at_release, rtl_after_pump) = fling_pixels(Some(TextDirection::Rtl));
+    assert_eq!(
+        rtl_start, 600.0,
+        "sanity: same initial-page seeding under RTL"
+    );
+    assert!(
+        rtl_at_release < rtl_start,
+        "under RTL Directionality the SAME leftward drag must DECREASE pixels before \
+         release ({rtl_start} -> {rtl_at_release}), the opposite of the LTR control"
+    );
+    assert!(
+        rtl_after_pump < rtl_at_release,
+        "under RTL Directionality the fling must keep advancing (decreasing) past the \
+         release point after two animation frames — the opposite of the LTR control's \
+         continued increase; release={rtl_at_release:.1}, after_pump={rtl_after_pump:.1}"
+    );
 }
 
 // ============================================================================

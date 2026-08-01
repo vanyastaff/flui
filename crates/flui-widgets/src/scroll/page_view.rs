@@ -671,11 +671,21 @@ impl ViewState<PageView> for PageViewState {
             .physics(physics)
             .scroll_direction(scroll_direction)
             // The inner `Viewport` below is built with this SAME
-            // `axis_direction` — handing it to `Scrollable` too keeps drag
-            // and fling gesture orientation in sync with what actually
-            // paints under RTL `Directionality` (see `Scrollable::
-            // axis_direction`'s docs; `Scrollable` cannot see into an
-            // arbitrary `viewport_builder`'s content to derive this itself).
+            // `axis_direction`. Handing it to `Scrollable` explicitly (rather
+            // than relying on `Scrollable`'s own ambient-`Directionality`
+            // fallback, which currently resolves to the identical value here
+            // — same helper, same `ctx`-visible `Directionality` ancestor,
+            // same `reverse: false`, verified by deleting this line: every
+            // test still passes) keeps this composition correct BY
+            // CONSTRUCTION rather than by that coincidence: `PageView`'s own
+            // module docs list `reverse` as a deferred feature, and once
+            // added, this explicit value (not the fallback's hardcoded
+            // `reverse: false`) is what must reach `Scrollable`'s gesture
+            // code. `Scrollable::axis_direction`'s docs cover the general
+            // case: any `.viewport_builder` composing content whose
+            // `AxisDirection` doesn't reduce to "ambient `Directionality` +
+            // this `scroll_direction` + `reverse: false`" needs this to stay
+            // correct.
             .axis_direction(axis_direction)
             .viewport_builder(Rc::new(move |position: ScrollPosition| {
                 let sliver = SliverFillViewport::new(viewport_fraction, children.clone());
