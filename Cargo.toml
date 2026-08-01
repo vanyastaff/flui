@@ -456,8 +456,20 @@ serde = ["flui-types/serde"]
 # ═══════════════════════════════════════════════════════════════════════════════
 
 [profile.dev]
-opt-level = 1      # Some optimization for faster runtime
-incremental = true # Faster rebuilds
+opt-level = 1 # Some optimization for faster runtime
+# This key — not `.cargo/config.toml`'s `[env] CARGO_INCREMENTAL = "0"` — is what
+# actually turns incremental off. `[env]` sets variables for the processes Cargo
+# *executes*; it does not feed back into Cargo's own profile resolution, so with
+# that pin in place and this key reading `true`, `cargo build -v` still emitted
+# `-C incremental=<target>/debug/incremental`. The workspace-wide intent recorded
+# in `.cargo/config.toml` (sccache cannot cache per-CGU incremental artifacts, and
+# CI already runs with it off) only lands here.
+#
+# Opting back in still works: `CARGO_INCREMENTAL=1` in the real environment reaches
+# Cargo and overrides this. Under an sccache wrapper it then hard-errors
+# ("incremental compilation is prohibited") rather than silently degrading — the
+# correct outcome for a cache that cannot serve those artifacts.
+incremental = false
 # `line-tables-only` keeps file:line in panic backtraces and profiler stacks
 # but drops ALL variable/scope/type DWARF — on this 28-crate wgpu/cosmic-text/
 # lyon/naga workspace that debuginfo was the bulk of `target/debug/deps`
@@ -470,6 +482,15 @@ debug = "line-tables-only"
 
 [profile.dev.package."*"]
 opt-level = 2 # Optimize dependencies (they don't change often)
+# No debuginfo at all for dependencies — they inherited `line-tables-only` from
+# `dev`, and wgpu/naga/cosmic-text/lyon are the bulk of the dependency graph.
+# Stepping into a dep is rare enough to raise this for one package when needed.
+#
+# Caveat that applies to every `debug =` key in this file: a global `-C debuginfo=`
+# rustflag (via `RUSTFLAGS` or a user-level `config.toml`) overrides it silently and
+# without error — rustflags append after Cargo's profile flags and the last one wins.
+# If dependency debuginfo reappears, look there before suspecting this setting.
+debug = false
 
 # Opt-in full-debuginfo profile. Inherits `dev` but restores `debug = 2` so a
 # step-debugger (RustRover / lldb / gdb) sees complete type info. Use sparingly —
