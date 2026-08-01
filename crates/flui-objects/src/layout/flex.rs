@@ -1,6 +1,7 @@
 //! RenderFlex - lays out children in a row or column.
 
 use flui_tree::Variable;
+use flui_types::typography::TextDirection;
 use flui_types::{Offset, Pixels, Size, geometry::px};
 
 use flui_rendering::{
@@ -121,6 +122,18 @@ pub struct RenderFlex {
     main_axis_size: MainAxisSize,
     /// Cross axis alignment.
     cross_axis_alignment: CrossAxisAlignment,
+    /// Resolves which physical edge `Start`/`End` mean, and which order
+    /// children are laid out in.
+    ///
+    /// A horizontal flex (`Row`) consults this for its **main** axis: under
+    /// `Rtl` children are laid out right-to-left (`RenderFlex._flipMainAxis`,
+    /// `rendering/flex.dart`). A vertical flex (`Column`) consults this for
+    /// its **cross** axis instead (`_flipCrossAxis`) — its main axis is
+    /// governed by `VerticalDirection`, which FLUI does not yet model, so a
+    /// `Column`'s main axis never flips. Defaults to `Ltr`, matching every
+    /// other FLUI render object that has no ambient `Directionality` to fall
+    /// back on.
+    text_direction: TextDirection,
     /// Baseline kind used when [`CrossAxisAlignment::Baseline`] is selected.
     text_baseline: TextBaseline,
     /// Spacing between children.
@@ -150,6 +163,7 @@ impl Default for RenderFlex {
             main_axis_alignment: MainAxisAlignment::Start,
             main_axis_size: MainAxisSize::Max,
             cross_axis_alignment: CrossAxisAlignment::Start,
+            text_direction: TextDirection::Ltr,
             text_baseline: TextBaseline::Alphabetic,
             spacing: 0.0,
             child_count: 0,
@@ -204,6 +218,15 @@ impl RenderFlex {
         self
     }
 
+    /// Sets the ambient text direction that resolves `Start`/`End` and child
+    /// order: a horizontal flex (`Row`) flips its main axis under `Rtl`; a
+    /// vertical flex (`Column`) flips its cross axis instead. Defaults to
+    /// `Ltr`.
+    pub fn with_text_direction(mut self, text_direction: TextDirection) -> Self {
+        self.text_direction = text_direction;
+        self
+    }
+
     /// Sets the spacing between children.
     ///
     /// Debug-asserts `spacing >= 0.0` — Flutter's `RenderFlex` asserts the
@@ -232,6 +255,31 @@ impl RenderFlex {
     /// Returns true if this is a vertical layout.
     pub fn is_vertical(&self) -> bool {
         self.direction == FlexDirection::Vertical
+    }
+
+    /// Returns the ambient text direction used to resolve `Start`/`End`.
+    pub fn text_direction(&self) -> TextDirection {
+        self.text_direction
+    }
+
+    /// Whether the main axis is laid out and iterated in reverse.
+    ///
+    /// Mirrors Flutter `RenderFlex._flipMainAxis` (`rendering/flex.dart`):
+    /// only a horizontal flex (`Row`) consults `text_direction` here — a
+    /// vertical flex's main axis is governed by `VerticalDirection`, which
+    /// FLUI does not model, so it never flips.
+    fn flip_main_axis(&self) -> bool {
+        self.direction == FlexDirection::Horizontal && self.text_direction.is_rtl()
+    }
+
+    /// Whether the cross axis's `Start`/`End` offsets are swapped.
+    ///
+    /// Mirrors Flutter `RenderFlex._flipCrossAxis`: only a vertical flex
+    /// (`Column`) consults `text_direction` here — a horizontal flex's cross
+    /// axis is governed by `VerticalDirection` instead, so a `Row` never
+    /// flips its cross axis from `text_direction` alone.
+    fn flip_cross_axis(&self) -> bool {
+        self.direction == FlexDirection::Vertical && self.text_direction.is_rtl()
     }
 
     /// Extracts main axis extent from a size.
@@ -597,7 +645,19 @@ impl RenderFlex {
         // do not shift children by negative offsets under End/Center/Space*.
         let free_space = (main_extent - flex_sizes.total_main).max(Pixels::ZERO);
 
-        let (mut main_offset, between_space) = match self.main_axis_alignment {
+        // Flutter flex.dart: `MainAxisAlignment._distributeSpace` derives `end`'s
+        // leading space from `start`'s formula with the flip inverted, which is
+        // equivalent to swapping Start/End up front and reusing one formula
+        // table below. Center/SpaceBetween/SpaceAround/SpaceEvenly are already
+        // symmetric, so flipping never changes their case.
+        let flip_main_axis = self.flip_main_axis();
+        let effective_main_axis_alignment = match (self.main_axis_alignment, flip_main_axis) {
+            (MainAxisAlignment::Start, true) => MainAxisAlignment::End,
+            (MainAxisAlignment::End, true) => MainAxisAlignment::Start,
+            (alignment, _) => alignment,
+        };
+
+        let (leading_space, between_space) = match effective_main_axis_alignment {
             MainAxisAlignment::Start => (Pixels::ZERO, Pixels::ZERO),
             MainAxisAlignment::End => (free_space, Pixels::ZERO),
             MainAxisAlignment::Center => (free_space / 2.0, Pixels::ZERO),
@@ -618,6 +678,16 @@ impl RenderFlex {
             }
         };
 
+        // Same Start/End swap for the cross axis (`_flipCrossAxis`); unlike
+        // the main axis this never reorders children, it only changes which
+        // physical edge each child's own offset is measured from.
+        let effective_cross_axis_alignment =
+            match (self.cross_axis_alignment, self.flip_cross_axis()) {
+                (CrossAxisAlignment::Start, true) => CrossAxisAlignment::End,
+                (CrossAxisAlignment::End, true) => CrossAxisAlignment::Start,
+                (alignment, _) => alignment,
+            };
+
         // Flutter flex.dart: baseline cross-axis alignment applies to rows only.
         // Find the maximum alignment-baseline distance — all children shift down
         // so their baselines land on the same horizontal level.
@@ -632,12 +702,29 @@ impl RenderFlex {
             None
         };
 
-        let mut offsets = Vec::with_capacity(child_count);
+        // Flutter flex.dart's offset loop walks from `topLeftChild` (last
+        // child, iterating `childBefore`) when `flipMainAxis`, instead of the
+        // usual first-child-forward order — the visual placement order
+        // reverses under RTL even though each child's own offset is still
+        // measured in the same local (always-increasing-rightward) coordinate
+        // space. `offsets` is written by real child index so the caller sees
+        // one `Offset` per child regardless of visiting order.
+        // `step` counts placement positions along the main axis; `i` is the
+        // real child index occupying that position — the same sequence for
+        // both orders, derived rather than boxed behind `dyn Iterator` so
+        // this layout path stays allocation- and dispatch-free.
+        let mut offsets = vec![Offset::ZERO; child_count];
 
-        for (i, slot) in flex_sizes.child_sizes.iter().enumerate() {
-            let child_size = slot.unwrap_or(Size::ZERO);
+        let mut main_offset = leading_space;
+        for step in 0..child_count {
+            let i = if flip_main_axis {
+                child_count - 1 - step
+            } else {
+                step
+            };
+            let child_size = flex_sizes.child_sizes[i].unwrap_or(Size::ZERO);
 
-            let cross_offset = match self.cross_axis_alignment {
+            let cross_offset = match effective_cross_axis_alignment {
                 CrossAxisAlignment::Start | CrossAxisAlignment::Stretch => Pixels::ZERO,
                 CrossAxisAlignment::End => cross_extent - self.cross_size(child_size),
                 CrossAxisAlignment::Center => (cross_extent - self.cross_size(child_size)) / 2.0,
@@ -650,7 +737,7 @@ impl RenderFlex {
                 }
             };
 
-            offsets.push(self.offset(main_offset, cross_offset));
+            offsets[i] = self.offset(main_offset, cross_offset);
             main_offset += self.main_size(child_size) + px(self.spacing) + between_space;
         }
 
@@ -679,6 +766,7 @@ impl flui_foundation::Diagnosticable for RenderFlex {
         if self.cross_axis_alignment == CrossAxisAlignment::Baseline {
             properties.add_enum("text_baseline", self.text_baseline);
         }
+        properties.add_default_enum("text_direction", self.text_direction, TextDirection::Ltr);
         properties.add_default_double("spacing", self.spacing, 0.0, Some("px"));
     }
 }

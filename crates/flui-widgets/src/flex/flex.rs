@@ -7,9 +7,11 @@ use flui_objects::{
 };
 use flui_rendering::protocol::BoxProtocol;
 use flui_types::typography::TextBaseline;
+use flui_types::typography::TextDirection;
 use flui_view::BoxedView;
 use flui_view::seq::ViewSeq;
 
+use crate::localization::Directionality;
 use crate::support::generic_render_view_element;
 
 /// Shared main/cross-axis configuration for the flex family, with Flutter's
@@ -43,7 +45,10 @@ impl Default for FlexStyle {
 }
 
 impl FlexStyle {
-    fn build(self, direction: FlexDirection) -> RenderFlex {
+    /// `text_direction` is the already-resolved ambient direction — see
+    /// [`FlexRenderView`] for why it must be resolved before this call
+    /// rather than looked up here.
+    fn build(self, direction: FlexDirection, text_direction: TextDirection) -> RenderFlex {
         let base = match direction {
             FlexDirection::Horizontal => RenderFlex::row(),
             FlexDirection::Vertical => RenderFlex::column(),
@@ -53,6 +58,7 @@ impl FlexStyle {
             .with_main_axis_size(self.main_axis_size)
             .with_spacing(self.spacing)
             .with_text_baseline(self.text_baseline)
+            .with_text_direction(text_direction)
     }
 }
 
@@ -113,6 +119,20 @@ macro_rules! flex_style_builders {
 /// Generic over `C: ViewSeq`: a static `column!`/`row!` tuple keeps each child
 /// monomorphic (the contract-C2 fast path), while a `Vec<BoxedView>` carries a
 /// dynamic, runtime-sized child list.
+///
+/// Resolves the ambient [`Directionality`] the way Flutter's `RenderFlex`
+/// does (`rendering/flex.dart`): a horizontal flex (`Row`) consults it for
+/// its *main* axis (`Start`/`End` and child order flip under `Rtl`); a
+/// vertical flex (`Column`) consults it for its *cross* axis instead — its
+/// main axis is governed by `VerticalDirection`, which FLUI does not model.
+/// Defaults to [`TextDirection::Ltr`] with no ancestor, matching every other
+/// FLUI widget that consults `Directionality`. That ambient read only exists
+/// inside a `BuildContext`, so `Flex` is a composing widget: `build` resolves
+/// the direction once and hands the *already-resolved* [`TextDirection`] to a
+/// private render-object widget — `flui_view::RenderObjectContext` (the only
+/// context `RenderView::create_render_object`/`update_render_object` ever
+/// receive) carries no ambient-lookup capability, so a bare `RenderView` can
+/// never read `Directionality` itself.
 #[derive(Clone)]
 pub struct Flex<C = Vec<BoxedView>> {
     direction: FlexDirection,
@@ -143,38 +163,29 @@ impl<C: ViewSeq> fmt::Debug for Flex<C> {
     }
 }
 
-impl<C> flui_view::RenderView for Flex<C>
+impl<C> flui_view::View for Flex<C>
 where
     C: ViewSeq + Clone + 'static,
 {
-    type Protocol = BoxProtocol;
-    type RenderObject = RenderFlex;
-
-    fn create_render_object(
-        &self,
-        _ctx: &flui_view::RenderObjectContext<'_>,
-    ) -> Self::RenderObject {
-        self.style.build(self.direction)
-    }
-
-    fn update_render_object(
-        &self,
-        _ctx: &flui_view::RenderObjectContext<'_>,
-        render_object: &mut Self::RenderObject,
-    ) {
-        *render_object = self.style.build(self.direction);
-    }
-
-    fn has_children(&self) -> bool {
-        !self.children.is_empty()
-    }
-
-    fn visit_child_views(&self, visitor: &mut dyn FnMut(&dyn flui_view::View)) {
-        self.children.for_each(|_index, child| visitor(child));
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateless(self)
     }
 }
 
-generic_render_view_element!(Flex);
+impl<C> flui_view::StatelessView for Flex<C>
+where
+    C: ViewSeq + Clone + 'static,
+{
+    fn build(&self, ctx: &dyn flui_view::BuildContext) -> impl flui_view::IntoView {
+        let text_direction = Directionality::maybe_of(ctx).unwrap_or(TextDirection::Ltr);
+        FlexRenderView {
+            direction: self.direction,
+            style: self.style,
+            text_direction,
+            children: self.children.clone(),
+        }
+    }
+}
 
 /// Lays out children horizontally (Flutter's `Row`).
 #[derive(Clone)]
@@ -204,38 +215,29 @@ impl<C: ViewSeq> fmt::Debug for Row<C> {
     }
 }
 
-impl<C> flui_view::RenderView for Row<C>
+impl<C> flui_view::View for Row<C>
 where
     C: ViewSeq + Clone + 'static,
 {
-    type Protocol = BoxProtocol;
-    type RenderObject = RenderFlex;
-
-    fn create_render_object(
-        &self,
-        _ctx: &flui_view::RenderObjectContext<'_>,
-    ) -> Self::RenderObject {
-        self.style.build(FlexDirection::Horizontal)
-    }
-
-    fn update_render_object(
-        &self,
-        _ctx: &flui_view::RenderObjectContext<'_>,
-        render_object: &mut Self::RenderObject,
-    ) {
-        *render_object = self.style.build(FlexDirection::Horizontal);
-    }
-
-    fn has_children(&self) -> bool {
-        !self.children.is_empty()
-    }
-
-    fn visit_child_views(&self, visitor: &mut dyn FnMut(&dyn flui_view::View)) {
-        self.children.for_each(|_index, child| visitor(child));
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateless(self)
     }
 }
 
-generic_render_view_element!(Row);
+impl<C> flui_view::StatelessView for Row<C>
+where
+    C: ViewSeq + Clone + 'static,
+{
+    fn build(&self, ctx: &dyn flui_view::BuildContext) -> impl flui_view::IntoView {
+        let text_direction = Directionality::maybe_of(ctx).unwrap_or(TextDirection::Ltr);
+        FlexRenderView {
+            direction: FlexDirection::Horizontal,
+            style: self.style,
+            text_direction,
+            children: self.children.clone(),
+        }
+    }
+}
 
 /// Lays out children vertically (Flutter's `Column`).
 #[derive(Clone)]
@@ -265,7 +267,44 @@ impl<C: ViewSeq> fmt::Debug for Column<C> {
     }
 }
 
-impl<C> flui_view::RenderView for Column<C>
+impl<C> flui_view::View for Column<C>
+where
+    C: ViewSeq + Clone + 'static,
+{
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateless(self)
+    }
+}
+
+impl<C> flui_view::StatelessView for Column<C>
+where
+    C: ViewSeq + Clone + 'static,
+{
+    fn build(&self, ctx: &dyn flui_view::BuildContext) -> impl flui_view::IntoView {
+        let text_direction = Directionality::maybe_of(ctx).unwrap_or(TextDirection::Ltr);
+        FlexRenderView {
+            direction: FlexDirection::Vertical,
+            style: self.style,
+            text_direction,
+            children: self.children.clone(),
+        }
+    }
+}
+
+/// The actual `RenderFlex`-backed render-object widget shared by [`Flex`],
+/// [`Row`], and [`Column`]. Its [`TextDirection`] is already resolved by the
+/// composing widget's `StatelessView::build` — kept private so
+/// `Directionality` is only ever read at the `BuildContext` seam that can see
+/// it, never assumed to be reachable from a bare `RenderView`.
+#[derive(Clone)]
+struct FlexRenderView<C> {
+    direction: FlexDirection,
+    style: FlexStyle,
+    text_direction: TextDirection,
+    children: C,
+}
+
+impl<C> flui_view::RenderView for FlexRenderView<C>
 where
     C: ViewSeq + Clone + 'static,
 {
@@ -276,7 +315,7 @@ where
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,
     ) -> Self::RenderObject {
-        self.style.build(FlexDirection::Vertical)
+        self.style.build(self.direction, self.text_direction)
     }
 
     fn update_render_object(
@@ -284,7 +323,7 @@ where
         _ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
     ) {
-        *render_object = self.style.build(FlexDirection::Vertical);
+        *render_object = self.style.build(self.direction, self.text_direction);
     }
 
     fn has_children(&self) -> bool {
@@ -296,22 +335,46 @@ where
     }
 }
 
-generic_render_view_element!(Column);
+generic_render_view_element!(FlexRenderView);
 
 #[cfg(test)]
 mod tests {
     //! `RenderFlex` exposes no public `spacing` getter, so wiring is verified
     //! through its derived `Debug` output — the same technique
     //! `crate::wrap::Wrap`'s own builder-wiring tests use for `RenderWrap`.
+    //!
+    //! `Row`/`Column` are composing `StatelessView`s (their `build` resolves
+    //! `Directionality` before delegating to `FlexRenderView`), so these tests
+    //! construct `FlexRenderView` directly with `TextDirection::Ltr` — the
+    //! same value `build` falls back to with no ambient `Directionality` —
+    //! rather than going through a `BuildContext`. `Directionality`
+    //! resolution itself is covered by the RTL parity tests in
+    //! `crates/flui-widgets/tests/parity/row_test.rs` and
+    //! `crates/flui-widgets/tests/parity/column_test.rs`.
 
     use flui_view::RenderView;
 
     use super::*;
 
+    fn as_render_view<C: ViewSeq + Clone + 'static>(
+        direction: FlexDirection,
+        style: FlexStyle,
+        children: C,
+    ) -> FlexRenderView<C> {
+        FlexRenderView {
+            direction,
+            style,
+            text_direction: TextDirection::Ltr,
+            children,
+        }
+    }
+
     #[test]
     fn row_spacing_defaults_to_zero() {
         let row: Row = Row::new(Vec::new());
-        let render_object = row.create_render_object(&flui_view::RenderObjectContext::detached());
+        let render_view = as_render_view(FlexDirection::Horizontal, row.style, row.children);
+        let render_object =
+            render_view.create_render_object(&flui_view::RenderObjectContext::detached());
         let debug = format!("{render_object:?}");
         assert!(
             debug.contains("spacing: 0.0"),
@@ -322,7 +385,9 @@ mod tests {
     #[test]
     fn row_spacing_builder_reaches_render_flex() {
         let row: Row = Row::new(Vec::new()).spacing(8.0);
-        let render_object = row.create_render_object(&flui_view::RenderObjectContext::detached());
+        let render_view = as_render_view(FlexDirection::Horizontal, row.style, row.children);
+        let render_object =
+            render_view.create_render_object(&flui_view::RenderObjectContext::detached());
         let debug = format!("{render_object:?}");
         assert!(
             debug.contains("spacing: 8.0"),
@@ -337,12 +402,16 @@ mod tests {
     #[test]
     fn row_update_render_object_pushes_updated_spacing() {
         let initial: Row = Row::new(Vec::new()).spacing(1.0);
+        let initial_view =
+            as_render_view(FlexDirection::Horizontal, initial.style, initial.children);
         let mut render_object =
-            initial.create_render_object(&flui_view::RenderObjectContext::detached());
+            initial_view.create_render_object(&flui_view::RenderObjectContext::detached());
         assert!(format!("{render_object:?}").contains("spacing: 1.0"));
 
         let updated: Row = Row::new(Vec::new()).spacing(9.0);
-        updated.update_render_object(
+        let updated_view =
+            as_render_view(FlexDirection::Horizontal, updated.style, updated.children);
+        updated_view.update_render_object(
             &flui_view::RenderObjectContext::detached(),
             &mut render_object,
         );
@@ -364,8 +433,9 @@ mod tests {
     #[test]
     fn column_spacing_builder_reaches_render_flex() {
         let column: Column = Column::new(Vec::new()).spacing(6.0);
+        let render_view = as_render_view(FlexDirection::Vertical, column.style, column.children);
         let render_object =
-            column.create_render_object(&flui_view::RenderObjectContext::detached());
+            render_view.create_render_object(&flui_view::RenderObjectContext::detached());
         assert!(
             format!("{render_object:?}").contains("spacing: 6.0"),
             "Column::spacing(6.0) must reach RenderFlex via the shared macro"
