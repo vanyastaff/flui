@@ -4,11 +4,12 @@ use std::fmt;
 use std::rc::Rc;
 
 use flui_rendering::view::ScrollPosition;
-use flui_types::layout::{Axis, AxisDirection};
+use flui_types::layout::Axis;
 use flui_view::prelude::StatelessView;
 use flui_view::seq::ViewSeq;
 use flui_view::{BoxedView, BuildContext, IntoView, ViewExt};
 
+use crate::localization::axis_direction_from_axis_reverse_and_directionality;
 use crate::scroll::{
     ShrinkWrappingViewport, SliverChildBuilderDelegate, SliverFixedExtentList, SliverList, Viewport,
 };
@@ -50,6 +51,12 @@ enum OffsetSource {
 /// Both modes compose a [`Viewport`] over their respective sliver, or a
 /// [`ShrinkWrappingViewport`] when [`ListView::shrink_wrap`] is enabled.
 /// `offset` is a programmatic scroll position in logical pixels.
+///
+/// A horizontal `scroll_direction` resolves its `AxisDirection` from the
+/// ambient [`Directionality`](crate::Directionality) (`RightToLeft` under an
+/// RTL ancestor), matching `ScrollView.getDirection`
+/// (`widgets/scroll_view.dart`); the vertical axis never consults it.
+/// `ListView` has no `reverse` flag yet.
 ///
 /// Flutter parity: `widgets/scroll_view.dart` `ListView` and
 /// `ListView.builder`.
@@ -179,11 +186,13 @@ impl fmt::Debug for ListView {
 }
 
 impl StatelessView for ListView {
-    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
-        let axis_direction = match self.scroll_direction {
-            Axis::Vertical => AxisDirection::TopToBottom,
-            Axis::Horizontal => AxisDirection::LeftToRight,
-        };
+    fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
+        // `reverse` isn't modeled on `ListView` yet, so it's always `false`
+        // here — the resolution still consults ambient `Directionality` for
+        // a horizontal `scroll_direction`, matching `ScrollView.getDirection`
+        // (`widgets/scroll_view.dart`).
+        let axis_direction =
+            axis_direction_from_axis_reverse_and_directionality(ctx, self.scroll_direction, false);
         // Both arms produce `Viewport<(BoxedView,)>` by boxing the sliver so
         // the opaque return type is the same concrete type in both branches.
         //

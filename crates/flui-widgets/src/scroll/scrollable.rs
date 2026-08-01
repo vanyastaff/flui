@@ -20,6 +20,16 @@
 //! `on_pan_start` halts any in-flight fling via `stop()`, so grabbing a
 //! scrolling list feels physically correct.
 //!
+//! # Gesture orientation
+//!
+//! `on_pan_update`/`on_pan_end` orient the drag delta and fling velocity by
+//! the resolved [`AxisDirection`] (see [`Scrollable::axis_direction`]), not
+//! the bare [`Axis`] alone: a horizontal `Scrollable` under an RTL ambient
+//! `Directionality` resolves `RightToLeft` and flips the sign relative to
+//! the default `LeftToRight` case, matching `axisDirectionIsReversed`
+//! (`painting/basic_types.dart`) and `ScrollDragController.update`/`.end`
+//! (`widgets/scroll_activity.dart`).
+//!
 //! # `animate_to` servicing (ADR-0037)
 //!
 //! [`ScrollController::animate_to`]/[`jump_to`](ScrollController::jump_to)
@@ -46,11 +56,12 @@ use flui_animation::{Animation, AnimationController, Scheduler, Vsync, VsyncRegi
 use flui_foundation::{Listenable, ListenerId};
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_rendering::view::ScrollPosition;
-use flui_types::layout::Axis;
+use flui_types::layout::{Axis, AxisDirection};
 use flui_view::prelude::StatefulView;
 use flui_view::{BoxedView, BuildContext, BuildContextExt, Child, IntoView, ViewExt, ViewState};
 
 use crate::animated::VsyncScope;
+use crate::localization::axis_direction_from_axis_reverse_and_directionality;
 use crate::scroll::{ClampingScrollPhysics, ScrollController, ScrollMetrics, SharedScrollPhysics};
 use crate::{AnimatedBuilder, GestureDetector, SingleChildScrollView};
 
@@ -108,6 +119,18 @@ pub struct Scrollable {
     physics: SharedScrollPhysics,
     /// The axis along which the child scrolls.
     scroll_direction: Axis,
+    /// Overrides the resolved [`AxisDirection`] used to orient gesture
+    /// deltas/velocity, bypassing this widget's own ambient-`Directionality`
+    /// resolution. `None` (the default) means: resolve it the same way the
+    /// `.child()` fast path's internally-composed [`SingleChildScrollView`]
+    /// does — [`axis_direction_from_axis_reverse_and_directionality`] against
+    /// `scroll_direction` with `reverse: false`. Set this explicitly when
+    /// composing a [`Scrollable::viewport_builder`] whose content already
+    /// resolved its own `AxisDirection` (e.g. [`PageView`](crate::PageView)):
+    /// passing that SAME value here keeps gesture orientation in sync with
+    /// what the composed content actually paints, instead of `Scrollable`
+    /// re-deriving a value that has no visibility into the builder's content.
+    axis_direction: Option<AxisDirection>,
     /// The content to make scrollable.
     child: Child,
     /// Overrides the scrollable content's composition entirely; `None`
@@ -120,6 +143,7 @@ impl std::fmt::Debug for Scrollable {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Scrollable")
             .field("scroll_direction", &self.scroll_direction)
+            .field("axis_direction", &self.axis_direction)
             .field("controller", &self.controller)
             .field("physics", &self.physics)
             .field("has_viewport_builder", &self.viewport_builder.is_some())
@@ -133,6 +157,7 @@ impl Default for Scrollable {
             controller: ScrollController::new(),
             physics: Arc::new(ClampingScrollPhysics::new()),
             scroll_direction: Axis::Vertical,
+            axis_direction: None,
             child: Child::empty(),
             viewport_builder: None,
         }
@@ -168,6 +193,19 @@ impl Scrollable {
     #[must_use]
     pub fn scroll_direction(mut self, axis: Axis) -> Self {
         self.scroll_direction = axis;
+        self
+    }
+
+    /// Override the resolved [`AxisDirection`] gestures are oriented by
+    /// (default: `None`, resolved from ambient `Directionality` — see the
+    /// field docs). Pass the exact `AxisDirection` a
+    /// [`Scrollable::viewport_builder`]'s composed content resolved for
+    /// itself, so a drag in a given physical direction moves the offset the
+    /// way that content actually paints (Flutter parity:
+    /// `axisDirectionIsReversed`, `painting/basic_types.dart`).
+    #[must_use]
+    pub fn axis_direction(mut self, direction: AxisDirection) -> Self {
+        self.axis_direction = Some(direction);
         self
     }
 
@@ -361,10 +399,19 @@ impl ViewState<Scrollable> for ScrollableState {
         self.install_flush_handle(ctx);
     }
 
-    fn build(&self, view: &Scrollable, _ctx: &dyn BuildContext) -> impl IntoView {
+    fn build(&self, view: &Scrollable, ctx: &dyn BuildContext) -> impl IntoView {
         let scroll_controller = view.controller.clone();
         let physics = view.physics.clone();
         let scroll_direction = view.scroll_direction;
+        // No explicit override: resolve the same way the `.child()` fast
+        // path's internally-composed `SingleChildScrollView` resolves its
+        // own `AxisDirection` — same helper, same ambient `Directionality`
+        // ancestor, same `reverse: false` — so the two stay in agreement
+        // without `Scrollable` needing to see what `SingleChildScrollView`
+        // computed. See `axis_direction`'s field docs for the override case.
+        let axis_direction = view.axis_direction.unwrap_or_else(|| {
+            axis_direction_from_axis_reverse_and_directionality(ctx, scroll_direction, false)
+        });
         let child = view.child.clone();
         let viewport_builder = view.viewport_builder.clone();
         let fling_controller = self.fling_controller.clone();
@@ -419,9 +466,15 @@ impl ViewState<Scrollable> for ScrollableState {
                     let _ = fling_stop.stop();
                 })
                 .on_pan_update(move |details| {
-                    // Flutter convention: a downward finger drag (positive delta
-                    // on the scroll axis) moves the viewport toward the START of
-                    // the content, so the offset DECREASES.
+                    // Flutter convention: a downward/rightward finger drag
+                    // (positive delta on the scroll axis) moves the viewport
+                    // toward the axis's START, so the offset DECREASES — but
+                    // only for a NOT-reversed `AxisDirection` (`down`/`right`).
+                    // For a reversed one (`up`/`left`, e.g. `RightToLeft`
+                    // under RTL `Directionality`) the sign flips, mirroring
+                    // `ScrollDragController.update`'s `if (_reversed) { offset
+                    // = -offset; }` (`widgets/scroll_activity.dart`) ahead of
+                    // `ScrollPosition.applyUserOffset`'s `pixels - delta`.
                     //
                     // `apply_boundary_conditions` enforces the physics limits
                     // (hard clamp or spring resistance) before committing.
@@ -429,18 +482,33 @@ impl ViewState<Scrollable> for ScrollableState {
                         Axis::Vertical => details.delta.dy.get(),
                         Axis::Horizontal => details.delta.dx.get(),
                     };
-                    let proposed = ctrl_update.pixels() - raw_delta;
+                    let signed_delta = if axis_direction.is_reversed() {
+                        -raw_delta
+                    } else {
+                        raw_delta
+                    };
+                    let proposed = ctrl_update.pixels() - signed_delta;
                     let metrics = ScrollMetrics::from(&ctrl_update.position());
                     let clamped = phys_update.apply_boundary_conditions(&metrics, proposed);
                     ctrl_update.set_pixels(clamped);
                 })
                 .on_pan_end(move |details| {
-                    // Pointer velocity is in "screen coordinates": positive dy =
-                    // finger moving down. Scroll offset increases when the finger
-                    // moves UP, so we negate to convert to scroll velocity.
-                    let fling_velocity_px_per_sec = match scroll_direction {
-                        Axis::Vertical => -details.velocity.pixels_per_second.dy.get(),
-                        Axis::Horizontal => -details.velocity.pixels_per_second.dx.get(),
+                    // Pointer velocity is in "screen coordinates": positive dy/dx
+                    // = finger moving down/right. For a NOT-reversed axis
+                    // direction the scroll offset increases when the finger
+                    // moves the opposite way, so we negate; for a reversed one
+                    // (`up`/`left`) the two negations cancel — mirroring
+                    // `ScrollDragController.end`'s `double velocity =
+                    // -details.primaryVelocity!; if (_reversed) { velocity =
+                    // -velocity; }` (`widgets/scroll_activity.dart`).
+                    let raw_velocity = match scroll_direction {
+                        Axis::Vertical => details.velocity.pixels_per_second.dy.get(),
+                        Axis::Horizontal => details.velocity.pixels_per_second.dx.get(),
+                    };
+                    let fling_velocity_px_per_sec = if axis_direction.is_reversed() {
+                        raw_velocity
+                    } else {
+                        -raw_velocity
                     };
                     // Cap at Flutter's `kMaxFlingVelocity` (8 000 px/s). The LSQ
                     // velocity tracker can produce astronomically large velocities

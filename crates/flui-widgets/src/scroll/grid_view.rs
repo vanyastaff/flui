@@ -9,11 +9,12 @@ use flui_rendering::delegates::{
     SliverGridDelegateWithMaxCrossAxisExtent,
 };
 use flui_rendering::view::ScrollPosition;
-use flui_types::layout::{Axis, AxisDirection};
+use flui_types::layout::Axis;
 use flui_view::prelude::StatelessView;
 use flui_view::seq::ViewSeq;
 use flui_view::{BoxedView, BuildContext, IntoView, ViewExt};
 
+use crate::localization::axis_direction_from_axis_reverse_and_directionality;
 use crate::scroll::{
     ShrinkWrappingViewport, SliverChildBuilderDelegate, SliverGrid, SliverGridLazy, Viewport,
 };
@@ -54,6 +55,12 @@ enum OffsetSource {
 /// gesture-driven scrolling is provided by [`Scrollable`](crate::Scrollable).
 /// Set [`GridView::shrink_wrap`] when the grid is placed under unbounded
 /// constraints in the scroll axis.
+///
+/// A horizontal `scroll_direction` resolves its `AxisDirection` from the
+/// ambient [`Directionality`](crate::Directionality) (`RightToLeft` under an
+/// RTL ancestor), matching `ScrollView.getDirection`
+/// (`widgets/scroll_view.dart`); the vertical axis never consults it.
+/// `GridView` has no `reverse` flag yet.
 ///
 /// Flutter parity: `widgets/scroll_view.dart` `GridView.count`,
 /// `GridView.extent`, and `GridView.builder`.
@@ -196,11 +203,13 @@ impl fmt::Debug for GridView {
 }
 
 impl StatelessView for GridView {
-    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
-        let axis_direction = match self.scroll_direction {
-            Axis::Vertical => AxisDirection::TopToBottom,
-            Axis::Horizontal => AxisDirection::LeftToRight,
-        };
+    fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
+        // `reverse` isn't modeled on `GridView` yet, so it's always `false`
+        // here — the resolution still consults ambient `Directionality` for
+        // a horizontal `scroll_direction`, matching `ScrollView.getDirection`
+        // (`widgets/scroll_view.dart`).
+        let axis_direction =
+            axis_direction_from_axis_reverse_and_directionality(ctx, self.scroll_direction, false);
 
         let sliver: BoxedView = if let Some(ref delegate) = self.builder_source {
             // Lazy variant: wire SliverGridLazy (element-owned request strategy).

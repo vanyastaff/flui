@@ -16,7 +16,11 @@
 //! - Flutter asserts via `tester.renderObjectList<RenderBox>(find.byType(DecoratedBox))`;
 //!   FLUI uses `find_all_by_render_type("RenderSliverGrid")` and
 //!   `render_node_count()` since the type-finder operates on render objects.
-//! - FLUI omits `Directionality` (not required by the layout machinery).
+//! - These node-count cases place no `Directionality` ancestor; `GridView`
+//!   now resolves a horizontal `scroll_direction` from it (defaulting to
+//!   `Ltr` with none), same as `ListView`/`CustomScrollView`/`PageView`/
+//!   `SingleChildScrollView` — see `crates/flui-widgets/tests/parity/
+//!   list_view_test.rs` for the RTL geometry oracle this family shares.
 //!
 //! Geometry cross-check:
 //! `SliverGridDelegateWithMaxCrossAxisExtent(max=100)` on a 200-wide viewport:

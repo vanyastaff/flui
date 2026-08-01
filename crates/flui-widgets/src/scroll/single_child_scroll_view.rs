@@ -1,10 +1,11 @@
 //! [`SingleChildScrollView`] — makes a single child scrollable along one axis.
 
 use flui_rendering::view::ScrollPosition;
-use flui_types::layout::{Axis, AxisDirection};
+use flui_types::layout::Axis;
 use flui_view::prelude::StatelessView;
 use flui_view::{BuildContext, Child, IntoView};
 
+use crate::localization::axis_direction_from_axis_reverse_and_directionality;
 use crate::scroll::{SliverToBoxAdapter, Viewport};
 
 /// Where the composed [`Viewport`] gets its scroll offset from — mirrors
@@ -27,10 +28,13 @@ enum OffsetSource {
 /// `scroll_direction` defaults to [`Axis::Vertical`]. `offset` is a programmatic
 /// scroll position; gesture-driven scrolling arrives with the
 /// `Scrollable`/`ScrollController` layer. `reverse` flips which edge scroll
-/// position `0.0` anchors to (Flutter parity:
-/// `getAxisDirectionFromAxisReverseAndDirectionality`, `LTR`-only here — no
-/// `Directionality` lookup, matching this widget's existing left-to-right-only
-/// horizontal support).
+/// position `0.0` anchors to. `AxisDirection` is resolved the way
+/// `getAxisDirectionFromAxisReverseAndDirectionality` (`widgets/basic.dart`)
+/// does: a horizontal `scroll_direction` reads the ambient
+/// [`Directionality`](crate::Directionality) (`RightToLeft` under an RTL
+/// ancestor, defaulting to `LeftToRight` with no ancestor), and `reverse`
+/// flips whichever base direction that resolves to — including the vertical
+/// axis, which never consults `Directionality` itself.
 #[derive(Clone, Debug, StatelessView)]
 pub struct SingleChildScrollView {
     scroll_direction: Axis,
@@ -103,13 +107,12 @@ impl SingleChildScrollView {
 }
 
 impl StatelessView for SingleChildScrollView {
-    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
-        let axis_direction = match (self.scroll_direction, self.reverse) {
-            (Axis::Vertical, false) => AxisDirection::TopToBottom,
-            (Axis::Vertical, true) => AxisDirection::BottomToTop,
-            (Axis::Horizontal, false) => AxisDirection::LeftToRight,
-            (Axis::Horizontal, true) => AxisDirection::RightToLeft,
-        };
+    fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
+        let axis_direction = axis_direction_from_axis_reverse_and_directionality(
+            ctx,
+            self.scroll_direction,
+            self.reverse,
+        );
         let adapter = match self.child.clone().into_inner() {
             Some(boxed) => SliverToBoxAdapter::new().child(boxed),
             None => SliverToBoxAdapter::new(),

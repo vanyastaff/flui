@@ -44,6 +44,18 @@
 //! `AxisDirection` values, so no `flui-objects`/`flui-rendering` change was
 //! needed (tripwire not crossed).
 //!
+//! Second divergence found and fixed by this port: that `(scroll_direction,
+//! reverse)` mapping ignored the ambient `Directionality` entirely, always
+//! resolving `Axis::Horizontal` + `reverse: false` to
+//! `AxisDirection::LeftToRight` — a horizontal, non-reversed
+//! `SingleChildScrollView` under an RTL ancestor scrolled left-to-right
+//! instead of Flutter's right-to-left
+//! (`getAxisDirectionFromAxisReverseAndDirectionality`,
+//! `widgets/basic.dart:4513-4527`). See
+//! [`horizontal_under_rtl_directionality_lays_out_right_to_left`] and
+//! [`horizontal_reverse_under_rtl_directionality_cancels_back_to_left_to_right`]
+//! for the oracle and the `reverse`/`Directionality` interaction.
+//!
 //! Overlap: `tests/scroll.rs`
 //! `single_child_scroll_view_lays_child_out_unbounded_on_scroll_axis` and
 //! `_horizontal_lays_child_unbounded_on_width` already cover "child sized
@@ -52,8 +64,9 @@
 //! that case and instead cites the upstream test on those two functions.
 
 use crate::common::{lay_out, offset, size, tight};
+use flui_types::typography::TextDirection;
 use flui_widgets::prelude::Axis;
-use flui_widgets::{SingleChildScrollView, SizedBox};
+use flui_widgets::{Directionality, SingleChildScrollView, SizedBox};
 
 /// An offset far past `max_scroll_extent` clamps to the maximum; an offset
 /// below `min_scroll_extent` (0) clamps to zero. Read indirectly through the
@@ -168,6 +181,86 @@ fn reverse_horizontal_flips_to_right_to_left_not_bottom_to_top() {
         laid.offset(child),
         offset(-300.0, 0.0),
         "horizontal reverse must shift on the X axis (RightToLeft), not the Y axis"
+    );
+}
+
+/// A horizontal, non-reversed `SingleChildScrollView` under an RTL
+/// `Directionality` resolves to the SAME `AxisDirection::RightToLeft` as
+/// `reverse_horizontal_flips_to_right_to_left_not_bottom_to_top` above gets
+/// from `reverse(true)` under the (default) LTR ancestor — RTL alone, with no
+/// `reverse`, already flips the content.
+///
+/// Flutter parity: `getAxisDirectionFromAxisReverseAndDirectionality`
+/// (`widgets/basic.dart:4513-4527`) maps `scrollDirection: Axis.horizontal,
+/// reverse: false` under an RTL `Directionality` to `AxisDirection.left` —
+/// the identical `AxisDirection` the sibling test reaches via `reverse: true`
+/// under LTR instead. Same child-offset math as that test:
+/// `main_axis_delta = paint_extent - child_main_extent -
+/// child_main_axis_position` = `300 - 600 - 0 = -300`.
+///
+/// Before the fix, `SingleChildScrollView::build` never consulted
+/// `Directionality` — this scene resolved to the default
+/// `AxisDirection::LeftToRight` regardless of the RTL ancestor, so this test
+/// failed with the child at `offset(0.0, 0.0)` (the LTR position) instead of
+/// the oracle's `offset(-300.0, 0.0)` — see the module doc's second
+/// "divergence found and fixed by this port".
+#[test]
+fn horizontal_under_rtl_directionality_lays_out_right_to_left() {
+    let laid = lay_out(
+        Directionality::new(
+            TextDirection::Rtl,
+            SingleChildScrollView::new()
+                .scroll_direction(Axis::Horizontal)
+                .child(SizedBox::new(600.0, 200.0)),
+        ),
+        tight(300.0, 200.0),
+    );
+    let child = laid.only_child(laid.only_child(laid.root()));
+    assert_eq!(
+        laid.offset(child),
+        offset(-300.0, 0.0),
+        "a horizontal SingleChildScrollView under RTL Directionality (no reverse) must \
+         resolve to AxisDirection::RightToLeft, same as reverse(true) under LTR"
+    );
+}
+
+/// `reverse(true)` under an RTL `Directionality` cancels the RTL base
+/// direction back to `AxisDirection::LeftToRight` — the double-flip case: two
+/// direction-reversing inputs (an RTL ambient direction AND an explicit
+/// `reverse`) compose back to the ORIGINAL forward direction, not to a
+/// doubled or unchanged reversal.
+///
+/// Flutter parity: `getAxisDirectionFromAxisReverseAndDirectionality`
+/// (`widgets/basic.dart:4513-4527`) computes the RTL base direction
+/// (`AxisDirection.left`) first, THEN applies `flipAxisDirection` because
+/// `reverse` is true — `flipAxisDirection(AxisDirection.left) ==
+/// AxisDirection.right`, i.e. `AxisDirection.right` in Flutter's own naming
+/// (`AxisDirection::LeftToRight` in FLUI's). Same child-offset math as
+/// `reverse_flips_which_edge_the_child_anchors_to`'s forward case:
+/// `main_axis_delta = child_main_axis_position = 0 - 0 = 0`.
+///
+/// This is the case most likely to get the flip order wrong: computing
+/// `reverse` first and RTL second (or applying `reverse` twice) would land on
+/// `AxisDirection::RightToLeft` again instead of cancelling back to
+/// `LeftToRight`.
+#[test]
+fn horizontal_reverse_under_rtl_directionality_cancels_back_to_left_to_right() {
+    let laid = lay_out(
+        Directionality::new(
+            TextDirection::Rtl,
+            SingleChildScrollView::new()
+                .scroll_direction(Axis::Horizontal)
+                .reverse(true)
+                .child(SizedBox::new(600.0, 200.0)),
+        ),
+        tight(300.0, 200.0),
+    );
+    let child = laid.only_child(laid.only_child(laid.root()));
+    assert_eq!(
+        laid.offset(child),
+        offset(0.0, 0.0),
+        "reverse(true) under RTL Directionality must cancel back to \
+         AxisDirection::LeftToRight, matching the plain forward/LTR rest position"
     );
 }
 

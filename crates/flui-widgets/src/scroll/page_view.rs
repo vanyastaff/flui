@@ -47,11 +47,12 @@ use flui_foundation::{Listenable, ListenerId};
 use flui_rendering::view::{
     CacheExtentStyle, DimensionChangePolicy, ScrollPosition, ViewportOffset,
 };
-use flui_types::layout::{Axis, AxisDirection};
+use flui_types::layout::Axis;
 use flui_view::prelude::StatefulView;
 use flui_view::seq::ViewSeq;
 use flui_view::{BoxedView, BuildContext, IntoView, ViewExt, ViewState};
 
+use crate::localization::axis_direction_from_axis_reverse_and_directionality;
 use crate::scroll::{
     ClampingScrollPhysics, ScrollController, ScrollMetrics, ScrollPhysics, Scrollable,
     SharedScrollPhysics, SliverFillViewport, Viewport,
@@ -427,7 +428,11 @@ type OnPageChanged = Arc<dyn Fn(usize) + Send + Sync>;
 /// Each child fills [`PageController::viewport_fraction`] of the viewport
 /// along [`PageView::scroll_direction`]. `PageView` is pure composition over
 /// [`Scrollable`] + [`PageScrollPhysics`] + [`Viewport`] +
-/// [`SliverFillViewport`] — no new render objects.
+/// [`SliverFillViewport`] — no new render objects. A horizontal
+/// `scroll_direction` resolves its `AxisDirection` from the ambient
+/// [`Directionality`](crate::Directionality) (`RightToLeft` under an RTL
+/// ancestor), matching `ScrollView.getDirection` (`widgets/scroll_view.dart`);
+/// the vertical axis never consults it.
 ///
 /// # Flutter parity
 ///
@@ -646,14 +651,17 @@ impl ViewState<PageView> for PageViewState {
         self.register_page_listener();
     }
 
-    fn build(&self, view: &PageView, _ctx: &dyn BuildContext) -> impl IntoView {
+    fn build(&self, view: &PageView, ctx: &dyn BuildContext) -> impl IntoView {
         let controller = self.controller.clone();
         let viewport_fraction = controller.viewport_fraction();
         let scroll_direction = view.scroll_direction;
-        let axis_direction = match scroll_direction {
-            Axis::Horizontal => AxisDirection::LeftToRight,
-            Axis::Vertical => AxisDirection::TopToBottom,
-        };
+        // `reverse` isn't modeled on `PageView` yet (see the module docs'
+        // deferred-divergences list), so it's always `false` here — the
+        // resolution still consults ambient `Directionality` for a
+        // horizontal `scroll_direction`, matching `ScrollView.getDirection`
+        // (`widgets/scroll_view.dart`).
+        let axis_direction =
+            axis_direction_from_axis_reverse_and_directionality(ctx, scroll_direction, false);
         let children = view.children.clone();
         let cache_extent = view.cache_extent;
         let physics: SharedScrollPhysics = Arc::new(PageScrollPhysics::new(viewport_fraction));
@@ -662,6 +670,23 @@ impl ViewState<PageView> for PageViewState {
             .controller(controller.scroll_controller())
             .physics(physics)
             .scroll_direction(scroll_direction)
+            // The inner `Viewport` below is built with this SAME
+            // `axis_direction`. Handing it to `Scrollable` explicitly (rather
+            // than relying on `Scrollable`'s own ambient-`Directionality`
+            // fallback, which currently resolves to the identical value here
+            // — same helper, same `ctx`-visible `Directionality` ancestor,
+            // same `reverse: false`, verified by deleting this line: every
+            // test still passes) keeps this composition correct BY
+            // CONSTRUCTION rather than by that coincidence: `PageView`'s own
+            // module docs list `reverse` as a deferred feature, and once
+            // added, this explicit value (not the fallback's hardcoded
+            // `reverse: false`) is what must reach `Scrollable`'s gesture
+            // code. `Scrollable::axis_direction`'s docs cover the general
+            // case: any `.viewport_builder` composing content whose
+            // `AxisDirection` doesn't reduce to "ambient `Directionality` +
+            // this `scroll_direction` + `reverse: false`" needs this to stay
+            // correct.
+            .axis_direction(axis_direction)
             .viewport_builder(Rc::new(move |position: ScrollPosition| {
                 let sliver = SliverFillViewport::new(viewport_fraction, children.clone());
                 let mut viewport = Viewport::new((sliver,))

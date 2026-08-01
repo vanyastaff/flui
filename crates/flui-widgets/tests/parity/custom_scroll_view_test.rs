@@ -10,8 +10,6 @@
 //! - Each sliver child is wired directly into the viewport as a sliver child.
 //!
 //! Divergence:
-//! - Flutter wraps `CustomScrollView` in a `Directionality`; FLUI's layout
-//!   pipeline has no text-direction concept at this level.
 //! - Flutter tests cover keyboard scroll, focus, and overscroll physics; those
 //!   require `ScrollController` integration not yet exercised in this harness.
 //!   Geometry/structure assertions are used here (Phase-2 scope).

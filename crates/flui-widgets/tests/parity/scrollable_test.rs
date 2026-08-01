@@ -47,9 +47,12 @@ use std::time::Duration;
 
 use flui_animation::Vsync;
 use flui_rendering::constraints::BoxConstraints;
+use flui_types::typography::TextDirection;
+use flui_view::ViewExt;
+use flui_widgets::prelude::{Axis, AxisDirection};
 use flui_widgets::{
-    BouncingScrollPhysics, ClampingScrollPhysics, ScrollController, Scrollable,
-    SharedScrollPhysics, SizedBox, VsyncScope,
+    BouncingScrollPhysics, ClampingScrollPhysics, Directionality, ScrollController, Scrollable,
+    SharedScrollPhysics, SizedBox, SliverFixedExtentList, Viewport, VsyncScope,
 };
 
 use crate::common::{LaidOut, lay_out, tight};
@@ -157,5 +160,360 @@ fn bouncing_physics_top_overscroll_springs_back_to_min_extent() {
         (-1.0..=1.0).contains(&final_pixels),
         "bouncing spring-back must return scroll to within 1 px of the minimum (0); \
          got {final_pixels:.3}"
+    );
+}
+
+// ============================================================================
+// Gesture orientation under RTL Directionality
+// ============================================================================
+//
+// A horizontal scroll view's *layout* now resolves its `AxisDirection` from
+// ambient `Directionality` (RTL -> `RightToLeft`), but `Scrollable`'s gesture
+// code oriented drags/flings by the bare `Axis` alone, unconditionally
+// negating as if the axis were always non-reversed (`LeftToRight`/
+// `TopToBottom`). Under RTL that leaves content moving AGAINST the finger.
+//
+// Oracle: `axisDirectionIsReversed` (`painting/basic_types.dart`) — `up` and
+// `left` are reversed, `down` and `right` are not — feeding
+// `ScrollDragController.update`'s `if (_reversed) { offset = -offset; }` and
+// `.end`'s `double velocity = -details.primaryVelocity!; if (_reversed) {
+// velocity = -velocity; }` (`widgets/scroll_activity.dart`), both ahead of
+// `ScrollPosition.applyUserOffset`'s `pixels - delta`. FLUI's
+// `AxisDirection::is_reversed` (`crates/flui-types/src/layout/axis.rs`)
+// already implements the identical `RightToLeft | BottomToTop => true`
+// rule, so `Scrollable` only needed to consult it.
+
+/// The drag-delta half of the defect (`on_pan_update`). Builds a horizontal
+/// `Scrollable` with (LTR, the default) and without (RTL) an ambient
+/// `Directionality`, drags the SAME physical distance in both, and asserts
+/// the offset moves in OPPOSITE directions.
+///
+/// LTR resolves `LeftToRight` (not reversed): `pixels -= raw_delta`, so a
+/// 50px LEFTWARD drag (`raw_delta = -50`) increases the offset by 50 — the
+/// same "drag toward the axis start increases the offset" convention
+/// `scrollable_drag_up_increases_scroll_offset` (`tests/scroll.rs`) pins for
+/// the vertical (`TopToBottom`, also not reversed) case.
+///
+/// RTL resolves `RightToLeft` (reversed): `pixels += raw_delta`, so the
+/// SAME 50px leftward drag DECREASES the offset by 50 instead — the mirror
+/// image, not a smaller/larger version of the LTR case.
+#[test]
+fn horizontal_drag_under_rtl_directionality_moves_the_offset_opposite_of_ltr() {
+    fn dragged_pixels(directionality: Option<TextDirection>) -> f32 {
+        let controller = ScrollController::new();
+        controller.update_dimensions(300.0, 0.0, 500.0);
+        // Midpoint start: a ±50px move from here never clips against either
+        // boundary, so a difference between the LTR and RTL runs can only
+        // come from the sign the gesture code applies, not from clamping.
+        controller.set_pixels(250.0);
+
+        let scrollable = Scrollable::new()
+            .controller(controller.clone())
+            .scroll_direction(Axis::Horizontal)
+            .child(SizedBox::new(800.0, 300.0));
+
+        let scoped = match directionality {
+            Some(direction) => lay_out(
+                Directionality::new(direction, scrollable),
+                tight(300.0, 300.0),
+            ),
+            None => lay_out(scrollable, tight(300.0, 300.0)),
+        };
+
+        // A single 50px leftward drag: with no competing recognizer the
+        // arena awards the drag after Down, so this first move is delivered
+        // in full — same pattern as `scrollable_drag_up_increases_scroll_offset`
+        // (`tests/scroll.rs`).
+        scoped.dispatch_pointer_down(200.0, 150.0);
+        scoped.dispatch_pointer_move(150.0, 150.0);
+        scoped.dispatch_pointer_up(150.0, 150.0);
+
+        controller.pixels()
+    }
+
+    let ltr_pixels = dragged_pixels(None);
+    assert_eq!(
+        ltr_pixels, 300.0,
+        "LTR control: a 50px leftward drag on a non-reversed (LeftToRight) horizontal \
+         Scrollable must increase the offset by 50 (250 -> 300); got {ltr_pixels:.1}"
+    );
+
+    let rtl_pixels = dragged_pixels(Some(TextDirection::Rtl));
+    assert_eq!(
+        rtl_pixels, 200.0,
+        "under RTL Directionality the SAME physical leftward drag must move the offset \
+         the OPPOSITE way (250 -> 200), not the LTR-control direction; got {rtl_pixels:.1}"
+    );
+}
+
+/// The independent fling/velocity half of the same defect (`on_pan_end`) —
+/// the sign bug in `on_pan_update` and the sign bug in `on_pan_end` are two
+/// separate `match scroll_direction` arms in `Scrollable::build`
+/// (`crates/flui-widgets/src/scroll/scrollable.rs`), so a fix that only
+/// covers the drag-delta test above would leave this half uncovered.
+///
+/// A fast horizontal drag released mid-gesture must keep advancing the
+/// offset in the SAME direction the drag itself established: LTR continues
+/// increasing past the release point (mirroring
+/// `scrollable_fling_advances_offset_past_release` in `tests/scroll.rs`);
+/// RTL continues DECREASING past its (already-decreasing) release point —
+/// the mirror image, not a fling that reverses direction on release.
+#[test]
+fn horizontal_fling_under_rtl_directionality_continues_the_opposite_way_of_ltr() {
+    fn fling_pixels(directionality: Option<TextDirection>) -> (f32, f32, f32) {
+        let controller = ScrollController::new();
+        // Large extent keeps the fling well clear of either boundary so
+        // clamping physics never masks a wrong-signed velocity.
+        controller.update_dimensions(300.0, 0.0, 4700.0);
+        let start_pixels = 2000.0;
+        controller.set_pixels(start_pixels);
+
+        let scrollable = Scrollable::new()
+            .controller(controller.clone())
+            .scroll_direction(Axis::Horizontal)
+            .child(SizedBox::new(5000.0, 300.0));
+
+        let vsync = Vsync::new();
+        let wrapped = VsyncScope::new(vsync.clone(), scrollable);
+        let mut scoped = match directionality {
+            Some(direction) => {
+                lay_out(Directionality::new(direction, wrapped), tight(300.0, 300.0))
+            }
+            None => lay_out(wrapped, tight(300.0, 300.0)),
+        };
+        scoped.adopt_vsync(vsync);
+
+        // Leftward drag well past the 18px slop, mirroring
+        // `scrollable_fling_advances_offset_past_release`'s magnitude: first
+        // move crosses slop (on_pan_start), second fires on_pan_update.
+        scoped.dispatch_pointer_down(250.0, 150.0);
+        scoped.dispatch_pointer_move(150.0, 150.0); // 100px leftward: slop-crossing
+        scoped.dispatch_pointer_move(100.0, 150.0); // 50px more: on_pan_update
+        scoped.dispatch_pointer_up(100.0, 150.0);
+
+        let pixels_at_release = controller.pixels();
+
+        // Same two-pump settle window as `scrollable_fling_advances_offset_past_release`.
+        scoped.pump_for(Duration::from_millis(16));
+        scoped.pump_for(Duration::from_millis(16));
+
+        (start_pixels, pixels_at_release, controller.pixels())
+    }
+
+    let (ltr_start, ltr_at_release, ltr_after_pump) = fling_pixels(None);
+    assert!(
+        ltr_at_release > ltr_start,
+        "LTR control: a leftward drag on a non-reversed horizontal Scrollable must \
+         increase the offset before release ({ltr_start} -> {ltr_at_release})"
+    );
+    assert!(
+        ltr_after_pump > ltr_at_release,
+        "LTR control: the fling must keep advancing (increasing) past the release point \
+         after two animation frames; release={ltr_at_release:.1}, after_pump={ltr_after_pump:.1}"
+    );
+
+    let (rtl_start, rtl_at_release, rtl_after_pump) = fling_pixels(Some(TextDirection::Rtl));
+    assert!(
+        rtl_at_release < rtl_start,
+        "under RTL Directionality the SAME leftward drag must DECREASE the offset before \
+         release ({rtl_start} -> {rtl_at_release}), the opposite of the LTR control"
+    );
+    assert!(
+        rtl_after_pump < rtl_at_release,
+        "under RTL Directionality the fling must keep advancing (decreasing) past the \
+         release point after two animation frames — the opposite of the LTR control's \
+         continued increase; release={rtl_at_release:.1}, after_pump={rtl_after_pump:.1}"
+    );
+}
+
+// ============================================================================
+// Explicit axis_direction override
+// ============================================================================
+//
+// `Scrollable::axis_direction` lets a `.viewport_builder` composition hand
+// `Scrollable` a pre-resolved `AxisDirection` directly, bypassing ambient
+// `Directionality` resolution entirely — the one case
+// `Scrollable::build`'s own fallback (`view.axis_direction.unwrap_or_else`,
+// which only ever consults `Directionality`) structurally cannot serve:
+// composed content whose `AxisDirection` doesn't reduce to "ambient
+// Directionality + scroll_direction + reverse: false". Both tests below set
+// the override to a value CONTRADICTING what ambient resolution would
+// produce in that same scene, so a silent fallback to ambient (dropping
+// `view.axis_direction`) flips the sign and fails with the OTHER case's
+// expected value — verified by that exact falsification on both tests
+// before this comment was written.
+
+/// The drag-delta half. `.axis_direction(LeftToRight)` under an RTL
+/// `Directionality` ancestor (ambient alone would resolve `RightToLeft`)
+/// must still orient by `LeftToRight` (not reversed). `.axis_direction(
+/// RightToLeft)` with NO `Directionality` ancestor at all (ambient would
+/// default to `LeftToRight`) must still orient by `RightToLeft` (reversed).
+/// Composed via `.viewport_builder`, `Scrollable::axis_direction`'s actual
+/// reason to exist, over the same `Viewport`-over-`SliverFixedExtentList`
+/// fixture `scrollable_viewport_builder_composes_a_custom_viewport_with_working_drag_and_feedback`
+/// (`tests/scroll.rs`) uses, oriented horizontally instead of vertically.
+///
+/// Falsified by replacing `Scrollable::build`'s `view.axis_direction
+/// .unwrap_or_else(...)` with the unconditional ambient resolution (i.e.
+/// dropping `view.axis_direction`): the RTL-ambient case (override
+/// `LeftToRight`) landed on 100.0 — the ambient-derived `RightToLeft`
+/// value — instead of 200.0, and the no-ambient case (override
+/// `RightToLeft`) landed on 200.0 — the ambient-derived `LeftToRight` value
+/// — instead of 100.0. Each run produced exactly the OTHER case's expected
+/// value, confirming both assertions exercise the override, not the
+/// fallback. Restored byte-identically; both green again.
+#[test]
+fn scrollable_axis_direction_override_governs_the_drag_delta_not_ambient_directionality() {
+    fn dragged_pixels(explicit: AxisDirection, ambient: Option<TextDirection>) -> f32 {
+        let controller = ScrollController::new();
+        controller.update_dimensions(300.0, 0.0, 300.0);
+        controller.set_pixels(150.0);
+
+        let scrollable = Scrollable::new()
+            .controller(controller.clone())
+            .scroll_direction(Axis::Horizontal)
+            .axis_direction(explicit)
+            .viewport_builder(std::rc::Rc::new(move |position| {
+                let cols: Vec<_> = (0..12)
+                    .map(|_| SizedBox::new(50.0, 300.0).boxed())
+                    .collect();
+                Viewport::new((SliverFixedExtentList::new(50.0, cols),))
+                    .axis_direction(explicit)
+                    .position(position)
+                    .boxed()
+            }));
+
+        let scoped = match ambient {
+            Some(direction) => lay_out(
+                Directionality::new(direction, scrollable),
+                tight(300.0, 300.0),
+            ),
+            None => lay_out(scrollable, tight(300.0, 300.0)),
+        };
+
+        // Single 50px leftward drag: no competing recognizer, delivered in
+        // full — same pattern used throughout this file.
+        scoped.dispatch_pointer_down(200.0, 150.0);
+        scoped.dispatch_pointer_move(150.0, 150.0);
+        scoped.dispatch_pointer_up(150.0, 150.0);
+
+        controller.pixels()
+    }
+
+    // Override LeftToRight; ambient Directionality is RTL (would resolve
+    // RightToLeft if the override were ignored). A 50px leftward drag under
+    // (not reversed) LeftToRight increases pixels: 150 -> 200.
+    let ltr_override_under_rtl_ambient =
+        dragged_pixels(AxisDirection::LeftToRight, Some(TextDirection::Rtl));
+    assert_eq!(
+        ltr_override_under_rtl_ambient, 200.0,
+        "an explicit LeftToRight override under an RTL Directionality ancestor must orient \
+         by LeftToRight (not reversed), not the ambient RightToLeft; got \
+         {ltr_override_under_rtl_ambient:.1}"
+    );
+
+    // Override RightToLeft; no Directionality ancestor at all (ambient
+    // would default to LeftToRight if the override were ignored). The SAME
+    // 50px leftward drag under (reversed) RightToLeft decreases pixels:
+    // 150 -> 100.
+    let rtl_override_under_no_ambient = dragged_pixels(AxisDirection::RightToLeft, None);
+    assert_eq!(
+        rtl_override_under_no_ambient, 100.0,
+        "an explicit RightToLeft override with no Directionality ancestor must orient by \
+         RightToLeft (reversed), not the ambient default LeftToRight; got \
+         {rtl_override_under_no_ambient:.1}"
+    );
+}
+
+/// The fling-velocity half, same override-vs-ambient-contradiction shape as
+/// the drag test above. Composed over a longer strip (100 columns, 5000px
+/// content, 4700px `max_scroll_extent`) so a two-frame fling settle window
+/// never approaches either boundary.
+///
+/// Falsified the same way as the drag test: dropping `view.axis_direction`
+/// from `Scrollable::build` made the RTL-ambient case (override
+/// `LeftToRight`) DECREASE after release instead of increase, and the
+/// no-ambient case (override `RightToLeft`) INCREASE instead of decrease —
+/// each flipping to the other case's expected direction. Restored
+/// byte-identically; both green again.
+#[test]
+fn scrollable_axis_direction_override_governs_the_fling_velocity_not_ambient_directionality() {
+    fn fling_pixels(explicit: AxisDirection, ambient: Option<TextDirection>) -> (f32, f32, f32) {
+        let controller = ScrollController::new();
+        controller.update_dimensions(300.0, 0.0, 4700.0);
+        controller.set_pixels(2000.0);
+
+        let vsync = Vsync::new();
+        let scrollable = Scrollable::new()
+            .controller(controller.clone())
+            .scroll_direction(Axis::Horizontal)
+            .axis_direction(explicit)
+            .viewport_builder(std::rc::Rc::new(move |position| {
+                let cols: Vec<_> = (0..100)
+                    .map(|_| SizedBox::new(50.0, 300.0).boxed())
+                    .collect();
+                Viewport::new((SliverFixedExtentList::new(50.0, cols),))
+                    .axis_direction(explicit)
+                    .position(position)
+                    .boxed()
+            }));
+        let wrapped = VsyncScope::new(vsync.clone(), scrollable);
+
+        let mut scoped = match ambient {
+            Some(direction) => {
+                lay_out(Directionality::new(direction, wrapped), tight(300.0, 300.0))
+            }
+            None => lay_out(wrapped, tight(300.0, 300.0)),
+        };
+        scoped.adopt_vsync(vsync);
+
+        let start_pixels = controller.pixels();
+
+        // Leftward drag well past the 18px slop, same magnitude as the
+        // ambient-Directionality fling test above.
+        scoped.dispatch_pointer_down(250.0, 150.0);
+        scoped.dispatch_pointer_move(150.0, 150.0); // 100px leftward: slop-crossing
+        scoped.dispatch_pointer_move(100.0, 150.0); // 50px more: on_pan_update
+        scoped.dispatch_pointer_up(100.0, 150.0);
+
+        let pixels_at_release = controller.pixels();
+
+        scoped.pump_for(Duration::from_millis(16));
+        scoped.pump_for(Duration::from_millis(16));
+
+        (start_pixels, pixels_at_release, controller.pixels())
+    }
+
+    // Override LeftToRight under an RTL ambient: must behave as the
+    // non-reversed control (increase, then keep increasing).
+    let (ltr_start, ltr_at_release, ltr_after_pump) =
+        fling_pixels(AxisDirection::LeftToRight, Some(TextDirection::Rtl));
+    assert!(
+        ltr_at_release > ltr_start,
+        "an explicit LeftToRight override under an RTL Directionality ancestor must \
+         increase pixels before release, not decrease like the ambient RightToLeft would \
+         ({ltr_start} -> {ltr_at_release})"
+    );
+    assert!(
+        ltr_after_pump > ltr_at_release,
+        "the LeftToRight override's fling must keep advancing (increasing) past release; \
+         release={ltr_at_release:.1}, after_pump={ltr_after_pump:.1}"
+    );
+
+    // Override RightToLeft with no Directionality ancestor: must behave as
+    // the reversed control (decrease, then keep decreasing), not the
+    // ambient default LeftToRight.
+    let (rtl_start, rtl_at_release, rtl_after_pump) =
+        fling_pixels(AxisDirection::RightToLeft, None);
+    assert!(
+        rtl_at_release < rtl_start,
+        "an explicit RightToLeft override with no Directionality ancestor must decrease \
+         pixels before release, not increase like the ambient default LeftToRight would \
+         ({rtl_start} -> {rtl_at_release})"
+    );
+    assert!(
+        rtl_after_pump < rtl_at_release,
+        "the RightToLeft override's fling must keep advancing (decreasing) past release; \
+         release={rtl_at_release:.1}, after_pump={rtl_after_pump:.1}"
     );
 }
