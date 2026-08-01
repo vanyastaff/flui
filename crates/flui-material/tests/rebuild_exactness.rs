@@ -33,6 +33,23 @@
 //! short-circuits `Element.updateChild`), not reconstructed — `StaticChild`
 //! is FLUI's explicit, opt-in equivalent (see `View::should_skip_rebuild`'s
 //! doc comment on `Memo<V>`, the general-purpose version of this opt-out).
+//!
+//! ## Falsification evidence (both directions, both restored)
+//!
+//! This test was independently red-checked against the production paths it
+//! depends on, each perturbation restored byte-identically afterward:
+//!
+//! - Forcing `Theme::update_should_notify` (`crates/flui-material/src/theme.rs`)
+//!   to always return `false` fails the *dependent* assertion below
+//!   (`left: 1, right: 2` on leaf 0) — proving the dependents' counters
+//!   genuinely move on a real pass and this is not a vacuously-passing test
+//!   where nothing ever rebuilds.
+//! - Neutralizing the `should_skip_rebuild` memoization bail in
+//!   `dispatch_view_update` (`crates/flui-view/src/element/dispatch.rs`,
+//!   the exact channel `StaticChild` above relies on) fails the
+//!   *non-dependent* assertion (`left: 2, right: 1` on leaf 1) — proving a
+//!   coarse "everything rebuilds" regression is caught, not silently
+//!   absorbed by an assertion that only checks the dependent side.
 
 #![allow(clippy::unwrap_used)]
 
