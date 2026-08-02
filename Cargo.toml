@@ -477,13 +477,18 @@ cupertino = ["dep:flui-cupertino"]
 # `flui::localizations` — the global (multi-language) implementations of the
 # catalogs' localization contracts. The catalogs own the contracts and never
 # depend back on this package (docs/workspace-layers.toml `forbidden_edge`);
-# the facade re-exporting it does not change that direction.
+# the facade re-exporting it does not change that direction. Future Material
+# and Cupertino implementations inside flui-localizations must use independent
+# optional features, so enabling one catalog's translations never compiles the
+# other catalog accidentally.
 localizations = ["dep:flui-localizations"]
 
 # Development-only reload machinery, off in an ordinary production graph. This
 # forwards to `flui-app`'s own feature, which is what actually makes the
 # `flui-hot-reload` edge appear; `cargo tree -p flui-app` shows no
-# `flui-hot-reload` without it.
+# `flui-hot-reload` without it. Desktop and Android runners consume the
+# capability; unsupported runners still compile with the feature enabled so
+# Cargo feature unification cannot turn a cross-target build into an error.
 hot-reload = ["flui-app/hot-reload"]
 
 # Golden-image regression tests (`tests/golden_screenshots.rs`). Off by default:

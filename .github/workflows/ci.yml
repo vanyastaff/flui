@@ -701,6 +701,11 @@ jobs:
       - name: cargo check (wasm32)
         run: cargo check --workspace --locked --target wasm32-unknown-unknown ${{ env.NO_WASM_PKGS }}
 
+      # No dlopen-based runner exists on web, but the public feature must still
+      # be cfg-complete: enabling it cannot expose desktop-only imports.
+      - name: cargo check facade hot-reload feature (wasm32)
+        run: cargo check -p flui --locked --target wasm32-unknown-unknown --no-default-features --features hot-reload
+
       # `cargo check` does not link. rust-lld resolves a wasm cdylib for
       # real — and on wasm32 an undefined symbol does not even fail the link
       # (it becomes an import), so linking alone is still not the full claim.

@@ -27,6 +27,8 @@ web = []
 # `cargo tree -p flui-app` and no target of this crate imports it. Everything
 # that would touch it goes through `app::hot_reload`, which has a real and an
 # inert implementation; the inert one names no `flui_hot_reload` item at all.
+# Desktop and Android install drivers. Web and iOS remain compile-safe when
+# feature unification enables this feature, but do not install a driver yet.
 hot-reload = ["dep:flui-hot-reload"]
 
 # === Debug Features ===

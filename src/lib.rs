@@ -38,7 +38,7 @@
 //! | `material` | **on** | `flui::material` and the Material half of [`prelude`] |
 //! | `cupertino` | off | `flui::cupertino` |
 //! | `localizations` | off | `flui::localizations` |
-//! | `hot-reload` | off | the development reload machinery inside [`app`] |
+//! | `hot-reload` | off | desktop/Android development reload machinery inside [`app`] |
 //!
 //! `default = ["material"]` keeps the documented Material-first quick start
 //! working out of the box. Turning defaults off (`default-features = false`)
@@ -47,6 +47,9 @@
 //! **absent**, not empty — `flui::cupertino` without the `cupertino` feature is
 //! an unresolved-import error at the use site, which is the diagnostic you
 //! want.
+//! Web and iOS do not yet install reload drivers. The additive `hot-reload`
+//! feature remains compile-safe on those targets so workspace feature
+//! unification cannot break an otherwise supported cross-target build.
 //!
 //! # Using a design system
 //!

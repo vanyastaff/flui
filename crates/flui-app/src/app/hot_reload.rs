@@ -57,16 +57,42 @@ pub(crate) use disabled::{RebuildHookGuard, WorkerReload};
 mod enabled {
     #[cfg(target_os = "android")]
     use std::path::Path;
+    #[cfg(any(
+        target_os = "android",
+        all(
+            not(target_os = "android"),
+            not(target_os = "ios"),
+            not(target_arch = "wasm32")
+        )
+    ))]
     use std::sync::Arc;
 
     #[cfg(target_os = "android")]
     use flui_hot_reload::HotReloadDriver;
+    #[cfg(all(
+        not(target_os = "android"),
+        not(target_os = "ios"),
+        not(target_arch = "wasm32")
+    ))]
     use flui_hot_reload::{
         HotReloadTier, RebuildHookRegistration, WorkerPollOutcome, WorkerReloadDriver, engine::env,
         register_request_rebuild,
     };
+    #[cfg(any(
+        target_os = "android",
+        all(
+            not(target_os = "android"),
+            not(target_os = "ios"),
+            not(target_arch = "wasm32")
+        )
+    ))]
     use parking_lot::Mutex;
 
+    #[cfg(all(
+        not(target_os = "android"),
+        not(target_os = "ios"),
+        not(target_arch = "wasm32")
+    ))]
     use crate::app::{
         AppConfig,
         binding::AppBinding,
@@ -261,13 +287,14 @@ mod disabled {
         not(target_arch = "wasm32")
     ))]
     impl WorkerReload {
-        pub(crate) fn from_config(config: &AppConfig) -> Self {
-            // A configured worker plugin that silently does nothing is worse
-            // than a missing feature, so say so once at bootstrap.
-            if config.worker_plugin_path.is_some() {
+        pub(crate) fn from_config(_config: &AppConfig) -> Self {
+            // The typed configuration API does not exist without the feature,
+            // but the CLI may still leave its environment variable behind.
+            // Surface that mismatch instead of silently ignoring it.
+            if std::env::var_os("FLUI_WORKER_PLUGIN").is_some() {
                 tracing::warn!(
-                    "a worker plugin path is configured, but flui-app was built without the \
-                     `hot-reload` feature — the plugin will not be loaded"
+                    "FLUI_WORKER_PLUGIN is set, but flui-app was built without the `hot-reload` \
+                     feature — the plugin will not be loaded"
                 );
             }
             Self

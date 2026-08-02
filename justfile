@@ -84,6 +84,10 @@ wasm-check:
       --exclude flui-assets --exclude flui-build --exclude flui-cli \
       --exclude flui-web-server --exclude hot-reload-counter-host \
       --exclude hot-reload-counter-logic --exclude hot-reload-counter-types
+    # The development feature has no web runner integration, but enabling it
+    # must remain a well-formed build rather than exposing native-only imports.
+    cargo check -p flui --locked --target wasm32-unknown-unknown \
+      --no-default-features --features hot-reload
 
 # `cargo check` does not link, and on wasm32 even a link does not fail on an
 # undefined symbol (rust-lld turns it into an import) — hence the committed
@@ -250,9 +254,12 @@ facade-combos:
                  "--no-default-features --features material,cupertino" \
                  "--no-default-features --features localizations" \
                  "--no-default-features --features material,localizations" \
+                 "--no-default-features --features cupertino,localizations" \
+                 "--no-default-features --features material,cupertino,localizations" \
                  "--no-default-features --features hot-reload" \
                  "--no-default-features --features golden" \
                  "--no-default-features --features serde" \
+                 "--all-features" \
                  ""; do
         echo "==> cargo clippy -p flui --locked --all-targets ${combo:-(default features)}"
         # shellcheck disable=SC2086
@@ -267,6 +274,13 @@ facade-combos:
     fi
     if ! cargo tree -p flui-app --locked -e normal --features hot-reload | grep -q flui-hot-reload; then
         echo "the hot-reload feature did not bring in flui-hot-reload" >&2
+        exit 1
+    fi
+    # The first-party host is the executable contract for `flui run`. A direct
+    # dependency on flui-hot-reload does not activate flui-app's feature.
+    if ! cargo tree -p hot-reload-counter-host --locked -e features -i flui-app \
+        | grep -q 'flui-app feature "hot-reload"'; then
+        echo "hot-reload-counter-host does not enable flui-app/hot-reload" >&2
         exit 1
     fi
 

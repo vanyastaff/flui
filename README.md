@@ -59,12 +59,14 @@ flui = { path = "…", default-features = false }
 | `material` | **on** | `flui::material` and the Material half of `flui::prelude` |
 | `cupertino` | off | `flui::cupertino` |
 | `localizations` | off | `flui::localizations` — global (multi-language) resources |
-| `hot-reload` | off | development reload machinery; absent from an ordinary production graph |
+| `hot-reload` | off | desktop/Android development reload machinery; absent from an ordinary production graph |
 
 A module whose feature is off is *absent*, not empty. Every supported
 combination is compiled in isolation by CI (`just facade-combos`), so a
 combination cannot pass only because a sibling crate happened to enable a
-feature.
+feature. Web and iOS currently have no hot-reload runner integration; enabling
+the additive feature there remains compile-safe but does not install a reload
+driver.
 
 ## Key Features
 
