@@ -10,7 +10,7 @@ fn install_succeeds_once_then_reports_the_slot_as_taken() {
     // First: an empty slot, so the demand is satisfiable.
     let ownership = flui_log::setup(&LogConfig::default(), SubscriberPolicy::Install)
         .expect("the slot is empty on entry to this binary");
-    assert_eq!(ownership, SubscriberOwnership::Installed);
+    assert_eq!(ownership.ownership, SubscriberOwnership::Installed);
 
     // Second: the slot is now taken, and `Install` must say so as a value.
     let error = flui_log::setup(&LogConfig::default(), SubscriberPolicy::Install)

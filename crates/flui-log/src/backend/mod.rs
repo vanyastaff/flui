@@ -32,6 +32,10 @@ use core::marker::PhantomData;
 use tracing::span::{Attributes, Id, Record};
 use tracing::subscriber::Interest;
 use tracing::{Event, Metadata, Subscriber};
+#[cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))]
+use tracing_subscriber::fmt::format::{Compact, DefaultFields, Format};
+#[cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))]
+use tracing_subscriber::fmt::writer::BoxMakeWriter;
 use tracing_subscriber::layer::{Context, Layer};
 use tracing_subscriber::registry::LookupSpan;
 
@@ -45,7 +49,7 @@ pub use logcat::LogcatPriority;
 /// therefore never constructed.
 enum Sink<S> {
     #[cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))]
-    Compact(Box<tracing_subscriber::fmt::Layer<S>>),
+    Compact(Box<tracing_subscriber::fmt::Layer<S, DefaultFields, Format<Compact>, BoxMakeWriter>>),
 
     #[cfg(all(
         feature = "hierarchical",
@@ -141,15 +145,15 @@ impl<S> core::fmt::Debug for Sink<S> {
 /// a `dyn` boundary of its own.
 ///
 /// ```rust,no_run
-/// use flui_log::{LogConfig, PlatformLayer, SubscriberPolicy, install_subscriber};
-/// use tracing_subscriber::{Registry, layer::SubscriberExt as _};
+/// use flui_log::{InstallPolicy, LogBridgePolicy, LogConfig, PlatformLayer, install_subscriber};
+/// use tracing_subscriber::{Registry, layer::SubscriberExt as _, Layer as _};
 ///
 /// let config = LogConfig::default();
+/// let filter = config.env_filter()?;
 /// let subscriber = Registry::default()
-///     .with(config.filter().env_filter()?)
-///     .with(PlatformLayer::platform_default(&config));
+///     .with(PlatformLayer::platform_default(&config).with_filter(filter));
 /// // ... stack further layers here ...
-/// install_subscriber(subscriber, SubscriberPolicy::Auto)?;
+/// install_subscriber(subscriber, InstallPolicy::Auto, LogBridgePolicy::Auto)?;
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 #[derive(Debug)]
@@ -178,6 +182,18 @@ where
         }
     }
 
+    /// Compact desktop output written to stderr.
+    ///
+    /// Command-line composition roots use this so diagnostics never corrupt
+    /// stdout protocols such as shell completions or JSON output.
+    #[cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))]
+    #[must_use]
+    pub fn desktop_compact_stderr() -> Self {
+        Self {
+            sink: compact_sink(BoxMakeWriter::new(std::io::stderr)),
+        }
+    }
+
     /// Android logcat, tagged with the event target and falling back to the
     /// identity's display name.
     #[cfg(target_os = "android")]
@@ -198,9 +214,30 @@ where
     /// in the unified log**: `os_log`'s `%{private}` redaction applies to
     /// interpolated arguments, and there are none. Treat a tracing field on an
     /// Apple platform as readable by anyone holding the device's log archive,
-    /// and keep secrets and personal data out of them. This crate cannot make
-    /// that decision on the producer's behalf — the value must not be recorded
-    /// in the first place.
+    /// and keep secrets and personal data out of them.
+    ///
+    /// This is a convention, not yet a contract: nothing fails to build when a
+    /// producer records a rendered string or a user-chosen path. Making the
+    /// distinction typed — private by default, with the backend redacting
+    /// rather than publishing what it was not told about — is tracked in
+    /// <https://github.com/vanyastaff/flui/issues/572>, which also records why
+    /// it likely means leaving `tracing-oslog` behind. Until that lands, the
+    /// value must not be recorded in the first place.
+    ///
+    /// # Grouping
+    ///
+    /// Subsystem and category are fixed when this layer is built. Unlike
+    /// logcat's tag, they are **not** derived from the event's target, so
+    /// `log stream --predicate` selects a FLUI application as a whole rather
+    /// than one crate within it, and the emitting crate appears only inside the
+    /// formatted message.
+    ///
+    /// This is why the logcat sink normalises a record bridged from `log` and
+    /// this one has nothing to normalise: there, the target *is* the tag, so
+    /// leaving it as the literal `"log"` would collapse every `wgpu` and `naga`
+    /// line into one bucket. Here the target was never the grouping key.
+    /// Per-crate selection on Apple needs a different mechanism — a category
+    /// per subsystem area — and is not something normalisation can supply.
     #[cfg(any(
         target_os = "ios",
         all(target_os = "macos", feature = "apple-unified-logging")
@@ -267,18 +304,25 @@ fn desktop_sink<S>(format: crate::DesktopFormat) -> Sink<S> {
         // `with_target(true)` diverges from the historical backend, which hid
         // the target. The target is the exact string a `RUST_LOG` directive
         // matches on, so hiding it left an author guessing at what to write.
-        crate::DesktopFormat::Compact => Sink::Compact(Box::new(
-            tracing_subscriber::fmt::layer()
-                .with_target(true)
-                .with_level(true)
-                .with_line_number(true),
-        )),
+        crate::DesktopFormat::Compact => compact_sink(BoxMakeWriter::new(std::io::stdout)),
 
         #[cfg(feature = "hierarchical")]
         crate::DesktopFormat::Hierarchical => {
             Sink::Hierarchical(tracing_forest::ForestLayer::default())
         }
     }
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))]
+fn compact_sink<S>(writer: BoxMakeWriter) -> Sink<S> {
+    Sink::Compact(Box::new(
+        tracing_subscriber::fmt::layer()
+            .compact()
+            .with_writer(writer)
+            .with_target(true)
+            .with_level(true)
+            .with_line_number(true),
+    ))
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -358,5 +402,17 @@ where
 
     fn on_id_change(&self, old: &Id, new: &Id, context: Context<'_, S>) {
         dispatch_sink!(&self.sink, sink => Layer::<S>::on_id_change(sink, old, new, context));
+    }
+
+    #[allow(
+        unsafe_code,
+        reason = "forwards tracing-subscriber's type-erased layer lookup without changing the pointer"
+    )]
+    unsafe fn downcast_raw(&self, id: core::any::TypeId) -> Option<*const ()> {
+        dispatch_sink!(&self.sink, sink => {
+            // SAFETY: the inner layer owns the downcast contract; this wrapper
+            // returns its pointer unchanged and does not dereference it.
+            unsafe { Layer::<S>::downcast_raw(sink, id) }
+        })
     }
 }

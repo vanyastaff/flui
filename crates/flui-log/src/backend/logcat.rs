@@ -109,11 +109,13 @@ pub(crate) fn logcat_message(rendered: &str) -> CString {
 }
 
 #[cfg(target_os = "android")]
-pub(crate) use android::LogcatLayer;
+pub(crate) use android::{LogcatLayer, write_to_logcat};
 
 #[cfg(target_os = "android")]
 mod android {
+    use tracing::span::{Attributes, Id, Record};
     use tracing::{Event, Subscriber};
+    use tracing_log::NormalizeEvent as _;
     use tracing_subscriber::Layer;
     use tracing_subscriber::layer::Context;
     use tracing_subscriber::registry::LookupSpan;
@@ -121,16 +123,41 @@ mod android {
     use super::{LogcatPriority, logcat_message, logcat_tag};
     use crate::backend::record::FieldRecorder;
 
+    /// Write one already-rendered line to logcat under an already-resolved tag.
+    ///
+    /// The single FFI call site in the crate, so its safety argument is made
+    /// once. Both the layer and the emergency path in
+    /// [`crate::report_to_logcat`] go through here, and both resolve their tag
+    /// with [`logcat_tag`] first so the fallback chain stays in one place.
+    pub(crate) fn write_to_logcat(priority: LogcatPriority, tag: &std::ffi::CStr, rendered: &str) {
+        let message = logcat_message(rendered);
+
+        // The workspace warns on `unsafe_code`; logcat has no safe binding.
+        #[allow(unsafe_code, reason = "logcat is only reachable through NDK FFI")]
+        // SAFETY: `__android_log_write` takes a priority integer and two
+        // NUL-terminated C strings, reads them, and returns. `tag` and
+        // `message` are owned `CString`s that outlive the call, so both
+        // pointers are non-null, aligned, and NUL-terminated for its whole
+        // duration. The function is thread-safe and does not retain or mutate
+        // either pointer.
+        unsafe {
+            android_log_sys::__android_log_write(priority as i32, tag.as_ptr(), message.as_ptr());
+        }
+    }
+
     /// Writes events to Android's logcat.
     ///
-    /// Spans are deliberately not tracked: logcat has no span concept, and the
-    /// per-span bookkeeping would be pure overhead on the platform least able
-    /// to absorb it. Span *fields* still reach logcat when an event carries
-    /// them.
+    /// Span fields are retained in registry extensions and prefixed to events
+    /// in the current scope. Logcat has no native span concept, but dropping
+    /// that context would force every event producer to repeat presentation and
+    /// frame identifiers manually.
     #[derive(Debug, Clone)]
     pub(crate) struct LogcatLayer {
         display_name: String,
     }
+
+    #[derive(Debug)]
+    struct SpanFields(FieldRecorder);
 
     impl LogcatLayer {
         pub(crate) fn new(display_name: impl Into<String>) -> Self {
@@ -144,34 +171,57 @@ mod android {
     where
         S: Subscriber + for<'lookup> LookupSpan<'lookup>,
     {
-        fn on_event(&self, event: &Event<'_>, _context: Context<'_, S>) {
+        fn on_new_span(&self, attributes: &Attributes<'_>, id: &Id, context: Context<'_, S>) {
+            let Some(span) = context.span(id) else {
+                return;
+            };
+            let mut fields = FieldRecorder::new();
+            attributes.record(&mut fields);
+            span.extensions_mut().insert(SpanFields(fields));
+        }
+
+        fn on_record(&self, id: &Id, values: &Record<'_>, context: Context<'_, S>) {
+            let Some(span) = context.span(id) else {
+                return;
+            };
+            let mut extensions = span.extensions_mut();
+            if let Some(fields) = extensions.get_mut::<SpanFields>() {
+                values.record(&mut fields.0);
+            }
+        }
+
+        fn on_event(&self, event: &Event<'_>, context: Context<'_, S>) {
             let mut recorder = FieldRecorder::new();
+
+            if let Some(scope) = context.event_scope(event) {
+                for span in scope.from_root() {
+                    let extensions = span.extensions();
+                    if let Some(fields) = extensions.get::<SpanFields>() {
+                        recorder.push_rendered_fields(fields.0.as_str());
+                    }
+                }
+            }
+
             event.record(&mut recorder);
             let rendered = recorder.into_string();
             if rendered.is_empty() {
                 return;
             }
 
-            let metadata = event.metadata();
+            // A record that arrived through the `log` bridge carries the static
+            // per-level callsite, whose target is the literal `"log"`; its real
+            // target lives in a `log.target` field. Tagging logcat from the raw
+            // metadata would file every `wgpu` and `naga` record under the tag
+            // `log`, which is precisely the grouping `adb logcat wgpu:S` exists
+            // to use. `normalized_metadata` returns `Some` only for bridged
+            // records, so the native path is unaffected.
+            let normalized = event.normalized_metadata();
+            let metadata = normalized.as_ref().unwrap_or_else(|| event.metadata());
+
             let priority = LogcatPriority::for_level(*metadata.level());
             let tag = logcat_tag(metadata.target(), &self.display_name);
-            let message = logcat_message(&rendered);
 
-            // The workspace warns on `unsafe_code`; logcat has no safe binding.
-            #[allow(unsafe_code, reason = "logcat is only reachable through NDK FFI")]
-            // SAFETY: `__android_log_write` takes a priority integer and two
-            // NUL-terminated C strings, reads them, and returns. `tag` and
-            // `message` are owned `CString`s that outlive the call, so both
-            // pointers are non-null, aligned, and NUL-terminated for its whole
-            // duration. The function is thread-safe and does not retain or
-            // mutate either pointer.
-            unsafe {
-                android_log_sys::__android_log_write(
-                    priority as i32,
-                    tag.as_ptr(),
-                    message.as_ptr(),
-                );
-            }
+            write_to_logcat(priority, &tag, &rendered);
         }
     }
 }

@@ -10,6 +10,7 @@
 use std::sync::{Arc, Mutex};
 
 use tracing::{Event, Subscriber};
+use tracing_log::NormalizeEvent as _;
 use tracing_subscriber::Layer;
 use tracing_subscriber::layer::Context;
 use tracing_subscriber::registry::LookupSpan;
@@ -19,6 +20,15 @@ use tracing_subscriber::registry::LookupSpan;
 pub struct CapturedEvent {
     pub level: String,
     pub target: String,
+
+    /// The target a native sink sees after normalising a bridged record.
+    ///
+    /// Equal to `target` for an event emitted through `tracing`. For one that
+    /// arrived through the `log` facade, `target` is the literal `"log"` — the
+    /// static per-level callsite `tracing-log` dispatches through — and this is
+    /// the record's real target.
+    pub normalized_target: String,
+
     pub fields: Vec<(String, String)>,
 }
 
@@ -66,12 +76,15 @@ where
         event.record(&mut FieldCollector(&mut fields));
 
         let metadata = event.metadata();
+        let normalized = event.normalized_metadata();
+
         self.events
             .lock()
             .expect("BUG: the capture mutex is only locked by the test's own threads")
             .push(CapturedEvent {
                 level: metadata.level().to_string(),
                 target: metadata.target().to_owned(),
+                normalized_target: normalized.as_ref().unwrap_or(metadata).target().to_owned(),
                 fields,
             });
     }

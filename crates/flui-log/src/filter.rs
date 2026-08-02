@@ -45,6 +45,13 @@ pub enum FilterError {
         source: ParseError,
     },
 
+    /// The environment variable was present but was not valid Unicode.
+    #[error("the `{env_var}` environment variable is not valid Unicode")]
+    EnvironmentNotUnicode {
+        /// Name of the consulted variable.
+        env_var: String,
+    },
+
     /// The configured directive string does not parse.
     #[error("the configured filter directive {directives:?} is invalid: {source}")]
     Configured {
@@ -120,11 +127,12 @@ impl FilterConfig {
         self.env_var.as_deref()
     }
 
-    /// Resolve the configuration into an [`EnvFilter`].
+    /// Resolve the configuration into an [`EnvFilter`], reading the configured
+    /// environment variable.
     ///
-    /// A non-empty value in the configured environment variable wins; otherwise
-    /// the configured directives are used. Either way exactly one filter is
-    /// produced, and nothing downstream adds a second one.
+    /// A non-blank value in that variable wins; otherwise the configured
+    /// directives are used. Either way exactly one filter is produced, and
+    /// nothing downstream adds a second one.
     ///
     /// # Errors
     ///
@@ -132,11 +140,48 @@ impl FilterConfig {
     /// a directive string that does not parse, and [`FilterError::Configured`]
     /// when the configured directives do not.
     pub fn env_filter(&self) -> Result<EnvFilter, FilterError> {
+        let from_environment = match &self.env_var {
+            Some(env_var) => match std::env::var(env_var) {
+                Ok(value) => Some(value),
+                Err(std::env::VarError::NotPresent) => None,
+                Err(std::env::VarError::NotUnicode(_)) => {
+                    return Err(FilterError::EnvironmentNotUnicode {
+                        env_var: env_var.clone(),
+                    });
+                }
+            },
+            None => None,
+        };
+
+        self.env_filter_from(from_environment.as_deref())
+    }
+
+    /// Resolve the configuration against an explicitly supplied environment
+    /// value instead of reading the process environment.
+    ///
+    /// `env_value` is what the configured variable holds, or `None` if it is
+    /// unset. Two reasons this is public rather than a test hook: a host that
+    /// already resolved its configuration elsewhere can feed it in directly,
+    /// and the resolution rules become testable without mutating process-global
+    /// state — `std::env::set_var` is `unsafe` in edition 2024 precisely
+    /// because another thread may be reading the environment at the same time,
+    /// which under a threaded test runner is not a hypothetical.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FilterError::Environment`] when `env_value` does not parse,
+    /// and [`FilterError::Configured`] when the configured directives do not.
+    pub fn env_filter_from(&self, env_value: Option<&str>) -> Result<EnvFilter, FilterError> {
+        // Trim once and use the *trimmed* value. Testing `value.trim()` for
+        // emptiness and then parsing the untrimmed original made
+        // `RUST_LOG=' info '` a hard error: a directive string is not
+        // whitespace-tolerant, and a trailing newline or a shell quoting
+        // accident is not a configuration mistake worth failing over.
         if let Some(env_var) = &self.env_var
-            && let Ok(value) = std::env::var(env_var)
-            && !value.trim().is_empty()
+            && let Some(directives) = env_value.map(str::trim)
+            && !directives.is_empty()
         {
-            return EnvFilter::try_new(&value).map_err(|source| FilterError::Environment {
+            return EnvFilter::try_new(directives).map_err(|source| FilterError::Environment {
                 env_var: env_var.clone(),
                 source,
             });
@@ -194,5 +239,91 @@ mod tests {
     fn without_env_var_ignores_the_environment() {
         let config = FilterConfig::new("warn").without_env_var();
         assert_eq!(config.env_var(), None);
+    }
+
+    // --- environment resolution
+    //
+    // Driven through `env_filter_from` rather than `std::env::set_var`, so the
+    // cases are deterministic, order-independent, and safe under a threaded
+    // test runner. `tests/env_var_is_read_and_trimmed.rs` covers the wiring to
+    // the real process environment in a process of its own.
+
+    /// The maximum level a resolved filter admits — the observable difference
+    /// between "the directives took effect" and "they were ignored".
+    fn max_level(config: &FilterConfig, env_value: Option<&str>) -> Option<LevelFilter> {
+        let filter = config
+            .env_filter_from(env_value)
+            .expect("the directives under test are valid");
+        <EnvFilter as Layer<Registry>>::max_level_hint(&filter)
+    }
+
+    #[test]
+    fn surrounding_whitespace_in_the_environment_value_is_trimmed() {
+        // `RUST_LOG=' info,flui_view=trace '` — a trailing newline from a
+        // `.env` file or a shell quoting accident. Testing the trimmed value
+        // for emptiness and then parsing the untrimmed one made this a hard
+        // `ParseLevelFilterError`.
+        let config = FilterConfig::new("error");
+
+        assert_eq!(
+            max_level(&config, Some(" info,flui_view=trace ")),
+            Some(LevelFilter::TRACE),
+            "a padded environment value must resolve exactly as its trimmed form does"
+        );
+    }
+
+    #[test]
+    fn a_padded_value_resolves_identically_to_its_trimmed_form() {
+        let config = FilterConfig::new("error");
+
+        assert_eq!(
+            max_level(&config, Some("\t info,wgpu=warn \n")),
+            max_level(&config, Some("info,wgpu=warn")),
+            "whitespace around the value must make no difference to the result"
+        );
+    }
+
+    #[test]
+    fn a_whitespace_only_value_falls_through_to_the_configured_directives() {
+        // Blank is "unset", not "invalid": it must reach the configured
+        // directives rather than produce an error.
+        let config = FilterConfig::new("flui_view=debug");
+
+        assert_eq!(
+            max_level(&config, Some("   \t\n  ")),
+            Some(LevelFilter::DEBUG),
+            "a blank environment value must not override, and must not error"
+        );
+    }
+
+    #[test]
+    fn an_unset_variable_falls_through_to_the_configured_directives() {
+        let config = FilterConfig::new("flui_view=debug");
+        assert_eq!(max_level(&config, None), Some(LevelFilter::DEBUG));
+    }
+
+    #[test]
+    fn a_genuinely_malformed_environment_value_is_still_reported() {
+        // Trimming must not become "repair the value". Anything that is not
+        // just surrounding whitespace still fails, and names the variable.
+        let error = FilterConfig::new("info")
+            .env_filter_from(Some(" =not a directive= "))
+            .expect_err("`=not a directive=` must not parse, padded or otherwise");
+
+        match error {
+            FilterError::Environment { env_var, .. } => assert_eq!(env_var, "RUST_LOG"),
+            other => panic!("expected `FilterError::Environment`, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_disabled_env_var_ignores_even_a_supplied_value() {
+        let config = FilterConfig::new("warn").without_env_var();
+
+        assert_eq!(
+            max_level(&config, Some("trace")),
+            Some(LevelFilter::WARN),
+            "`without_env_var` must mean the configured directives always win"
+        );
     }
 }

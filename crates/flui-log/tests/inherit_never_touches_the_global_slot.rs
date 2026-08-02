@@ -14,7 +14,7 @@ fn inherit_leaves_an_empty_slot_empty_however_many_times_it_runs() {
     for attempt in 1..=5 {
         let ownership = flui_log::setup(&LogConfig::default(), SubscriberPolicy::Inherit)
             .unwrap_or_else(|error| panic!("`Inherit` cannot fail (attempt {attempt}): {error}"));
-        assert_eq!(ownership, SubscriberOwnership::Inherited);
+        assert_eq!(ownership.ownership, SubscriberOwnership::Unchanged);
     }
 
     // The proof: the host can still claim the slot afterwards. If any of those

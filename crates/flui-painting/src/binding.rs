@@ -458,14 +458,21 @@ impl PaintingBinding {
     }
 
     /// Evicts a specific asset from the cache.
-    #[tracing::instrument(skip(self))]
+    ///
+    /// The asset key is deliberately not recorded on the span: for a file or
+    /// network provider it is a path or URL chosen at runtime, and this span is
+    /// at INFO — the level most likely to be enabled on a real device.
+    #[tracing::instrument(skip(self, asset))]
     pub fn evict(&self, asset: &str) {
         self.image_cache.evict(asset);
         self.image_cache.clear_live_images();
     }
 
     /// Handles a system message (e.g., font change notification).
-    #[tracing::instrument(skip(self))]
+    ///
+    /// `message_type` is a channel discriminant today, but the name sits close
+    /// enough to a payload that it is not auto-captured onto the span.
+    #[tracing::instrument(skip(self, message_type))]
     pub fn handle_system_message(&self, message_type: &str) {
         if message_type == "fontsChange" {
             tracing::debug!("System fonts changed");

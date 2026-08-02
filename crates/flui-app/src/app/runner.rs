@@ -33,7 +33,7 @@ where
     // empty. An application that configured its own subscriber before calling
     // `run_app` keeps it, and a second `run_app` in one process is a no-op
     // rather than a panic.
-    let _ownership = super::logging::init_logging(super::logging::EntryPoint::Managed, &config);
+    let _installation = super::logging::init_managed_logging(&config);
 
     // `target_fps` is logged as advisory, not enforced: the desktop runner's
     // steady-state pacing comes from the GPU-side blocking Fifo present
@@ -830,11 +830,7 @@ fn dispatch_platform_realm(
     event: RealmEvent,
 ) -> Result<(), RealmDispatchError> {
     if std::thread::current().id() != dispatcher.owner_thread {
-        tracing::error!(
-            { flui_foundation::diagnostics::REALM_ID } = ?dispatcher.realm_id,
-            ?dispatcher,
-            "rejecting realm callback on non-owner thread"
-        );
+        tracing::error!(?dispatcher, "rejecting realm callback on non-owner thread");
         return Err(RealmDispatchError::WrongThread);
     }
     let realm = PLATFORM_REALM_HOST.with(|slot| {
@@ -1903,8 +1899,7 @@ where
         // idle loop produces the frame whose drain observes it.
         //
         tracing::info!(
-            realm_id = ?ui_realm.realm_id(),
-            presentation_id = ?ui_realm.presentation_id(),
+            { flui_foundation::diagnostics::PRESENTATION_ID } = ui_realm.presentation_id().as_u64(),
             inbox_capacity = ui_realm.command_sender().capacity(),
             "UiRealm constructed"
         );
@@ -2241,7 +2236,7 @@ pub fn run_app_android_with_config<V>(app: android_activity::AndroidApp, root: V
 where
     V: View + StatelessView + Clone + 'static,
 {
-    let _ownership = super::logging::init_logging(super::logging::EntryPoint::Managed, &config);
+    let _installation = super::logging::init_managed_logging(&config);
 
     tracing::info!(
         title = %config.title,

@@ -1187,7 +1187,13 @@ impl Platform for WinitPlatform {
     }
 
     fn reveal_path(&self, path: &Path) {
-        tracing::info!(?path, "Revealing path");
+        // The extension, not the path. This is a document the user picked, so
+        // its name is their data; what a trace needs is that the call happened
+        // and roughly on what.
+        tracing::info!(
+            extension = ?path.extension(),
+            "Revealing path"
+        );
 
         #[cfg(target_os = "windows")]
         {
@@ -1215,7 +1221,11 @@ impl Platform for WinitPlatform {
     }
 
     fn open_path(&self, path: &Path) {
-        tracing::info!(?path, "Opening path");
+        // See `reveal_path`: user-chosen document, extension only.
+        tracing::info!(
+            extension = ?path.extension(),
+            "Opening path"
+        );
 
         #[cfg(target_os = "windows")]
         {

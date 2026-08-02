@@ -349,8 +349,15 @@ pub fn dispatch_command<R: CommandRenderer + ?Sized>(command: &DrawCommand, rend
         // matching `render_*` method, fall through with a warn rather
         // than crashing the frame.
         _ => {
+            // Deliberately no `?command` field. Today no unhandled variant
+            // carries text, but `DrawCommand` is `#[non_exhaustive]`: the
+            // moment flui-painting adds a text-bearing variant ahead of
+            // flui-engine, `?command` would print the drawn string into a
+            // `warn` record — and a tracing field is world-readable in the
+            // device log archive. The message already says what to fix, and
+            // the variant is named by the compiler error a developer gets
+            // when they add the matching `render_*` method.
             tracing::warn!(
-                ?command,
                 "dispatch_command: unhandled DrawCommand variant; flui-engine needs an update"
             );
         }

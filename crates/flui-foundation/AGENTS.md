@@ -8,7 +8,7 @@ Foundation types and utilities used across the FLUI ecosystem. Minimal dependenc
 - **Keys**: `Key`, `ValueKey`, `UniqueKey` for widget identity
 - **Change notification**: `ChangeNotifier`, `Listenable` trait, `ListenerId`
 - **Callbacks**: `VoidCallback`, `ValueChanged` type aliases
-- **Diagnostic vocabulary**: `diagnostics` — the structured `tracing` field names (`runtime_id`, `realm_id`, `presentation_id`, `frame_id`, `worker_id`) every framework crate emits and every collector joins on
+- **Diagnostic vocabulary**: `diagnostics` — durable structured `tracing` field names already emitted across crate boundaries. Today this includes `presentation_id`; internal runtime topology is deliberately not part of the schema
 - **Notifications**: base abstractions for event bubbling
 
 ## Key constraints

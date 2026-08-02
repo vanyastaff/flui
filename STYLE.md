@@ -409,8 +409,9 @@ it. Adapt the callback boundary and dispatch back to the owner.
   fail or wait.
 - A graceful shutdown has a documented deadline and escalation path; the OS
   remains free to force-kill the process.
-- Never call user callbacks after their owning realm, presentation, or worker
-  has begun destruction.
+- Never call user callbacks after the scope that owns them has begun
+  destruction. State the ownership property, not the name of whichever type
+  currently implements it.
 
 ## 13. Rendering and frame-pipeline code
 
@@ -489,6 +490,9 @@ Correctness comes first, followed by measurement, then optimization.
 - Shipped code uses `tracing`; never `println!`, `eprintln!`, or `dbg!`.
 - Library crates emit events and spans but do not install subscribers.
 - Subscriber ownership belongs to composition roots.
+- Separate process-global facilities require separate ownership policies;
+  permission to install a tracing subscriber does not imply permission to claim
+  the `log` facade, a panic hook, or an exporter.
 - Use structured fields instead of interpolating machine-readable values into
   the message.
 - Event targets and field names consumed by devtools are contracts and require
@@ -502,8 +506,24 @@ Correctness comes first, followed by measurement, then optimization.
 - Do not log secrets, clipboard contents, text input, file contents, access
   tokens, or precise location by default.
 - Native logging backends MUST document privacy and field mapping.
-- Correlation fields use the shared runtime, realm, presentation, frame, and
-  worker vocabulary rather than ad hoc names.
+- Correlation fields name the real owner or operation an event belongs to, and
+  MUST NOT encode the runtime's internal topology. A field name is read by log
+  sinks, devtools, exporters, crash reports, and hand-written filters, so it
+  becomes a consumer-visible format long before the type it was named after is
+  stable; naming a field for an internal construct turns that construct's
+  removal into a format migration for everyone downstream.
+- One spelling per concept. A field name shared across crates is defined once as
+  a constant in `flui_foundation::diagnostics` and referenced, so `presentation`
+  and `presentation_id` cannot diverge without a compile error. A constant is
+  added when the concept is durable AND something already emits it — a name with
+  no emitter is a guess about a design that has not been made.
+- Stable identifier fields use their canonical numeric representation, not
+  `Debug`. Debug formatting is for people and may include type names or change
+  without a schema migration; collectors need the same primitive value on every
+  event and platform.
+- Filters are scoped to the sink they govern. A native-console filter MUST NOT
+  sit below the whole subscriber registry and accidentally clip timeline,
+  metrics, crash, or test-capture layers with independent retention policies.
 - A recoverable error is not both logged and returned unless the log represents
   a distinct decision made at that layer.
 

@@ -8,8 +8,9 @@
 
 mod support;
 
-use flui_log::{LogConfig, PlatformLayer, SubscriberOwnership, SubscriberPolicy};
+use flui_log::{InstallPolicy, LogConfig, PlatformLayer, SubscriberOwnership};
 use support::CaptureLayer;
+use tracing_subscriber::Layer as _;
 use tracing_subscriber::Registry;
 use tracing_subscriber::layer::SubscriberExt as _;
 
@@ -27,13 +28,19 @@ fn a_module_trace_directive_reaches_the_backend() {
         .build();
 
     let subscriber = Registry::default()
-        .with(config.env_filter().expect("the directives parse"))
-        .with(PlatformLayer::platform_default(&config))
+        .with(
+            PlatformLayer::platform_default(&config)
+                .with_filter(config.env_filter().expect("the directives parse")),
+        )
         .with(capture.clone());
 
-    let ownership = flui_log::install_subscriber(subscriber, SubscriberPolicy::Install)
-        .expect("the slot is empty on entry to this binary");
-    assert_eq!(ownership, SubscriberOwnership::Installed);
+    let installation = flui_log::install_subscriber(
+        subscriber,
+        InstallPolicy::Install,
+        flui_log::LogBridgePolicy::Auto,
+    )
+    .expect("the slot is empty on entry to this binary");
+    assert_eq!(installation.ownership, SubscriberOwnership::Installed);
 
     tracing::trace!(reached = true, "trace must survive the filter");
     tracing::debug!(reached = true, "debug must survive the filter");

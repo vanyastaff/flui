@@ -39,7 +39,7 @@ pub const APPLE_CATEGORY: &str = "flui";
 /// Display name used when the application supplies none.
 pub const DEFAULT_DISPLAY_NAME: &str = "flui";
 
-/// Reasons an [`AppIdentity`] or [`BundleId`] cannot be built.
+/// Reasons an [`AppIdentity`] or [`AppleBundleId`] cannot be built.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 #[non_exhaustive]
 pub enum IdentityError {
@@ -61,8 +61,8 @@ pub enum IdentityError {
 
     /// A label contained something other than an ASCII letter, digit, or `-`.
     #[error(
-        "bundle identifier `{identifier}` contains {character:?}; labels accept ASCII letters, \
-         digits, and `-`"
+        "Apple bundle identifier `{identifier}` contains {character:?}; labels accept ASCII \
+         letters, digits, and `-`"
     )]
     InvalidCharacter {
         /// The rejected identifier.
@@ -72,7 +72,7 @@ pub enum IdentityError {
     },
 
     /// A label started or ended with `-`.
-    #[error("bundle identifier `{0}` has a label starting or ending with `-`")]
+    #[error("Apple bundle identifier `{0}` has a label starting or ending with `-`")]
     HyphenAtLabelEdge(String),
 
     /// The display name was empty or only whitespace.
@@ -89,18 +89,18 @@ pub enum IdentityError {
 
 /// A validated reverse-DNS bundle identifier.
 ///
-/// Parsed, not merely checked: once constructed, the value is known to be a
-/// legal subsystem name, so the Apple backend never has to re-inspect it.
+/// Parsed, not merely checked: once constructed, the value is known to be legal
+/// as an Apple subsystem, so the Apple backend never has to re-inspect it.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct BundleId(String);
+pub struct AppleBundleId(String);
 
-impl BundleId {
+impl AppleBundleId {
     /// Parse a reverse-DNS bundle identifier such as `com.example.app`.
     ///
     /// Accepts two or more `.`-separated labels of ASCII letters, digits, and
-    /// interior hyphens. This is the intersection of what Apple accepts for a
-    /// subsystem and what Android accepts for a package name, so one validated
-    /// value serves both platforms.
+    /// interior hyphens. Android package identifiers intentionally use a
+    /// different type once a consumer needs them; platform grammars are not
+    /// forced into an artificial intersection.
     ///
     /// # Errors
     ///
@@ -147,7 +147,7 @@ impl BundleId {
     }
 }
 
-impl fmt::Display for BundleId {
+impl fmt::Display for AppleBundleId {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(&self.0)
     }
@@ -157,14 +157,14 @@ impl fmt::Display for BundleId {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppIdentity {
     display_name: String,
-    bundle_id: Option<BundleId>,
+    apple_bundle_id: Option<AppleBundleId>,
 }
 
 impl Default for AppIdentity {
     fn default() -> Self {
         Self {
             display_name: DEFAULT_DISPLAY_NAME.to_owned(),
-            bundle_id: None,
+            apple_bundle_id: None,
         }
     }
 }
@@ -173,7 +173,7 @@ impl AppIdentity {
     /// Build an identity from a human-facing display name.
     ///
     /// The display name is the logcat fallback tag. It is **not** promoted to a
-    /// bundle identifier — call [`AppIdentity::with_bundle_id`] for that.
+    /// bundle identifier — call [`AppIdentity::with_apple_bundle_id`] for that.
     ///
     /// # Errors
     ///
@@ -190,14 +190,14 @@ impl AppIdentity {
         }
         Ok(Self {
             display_name,
-            bundle_id: None,
+            apple_bundle_id: None,
         })
     }
 
     /// Attach the application's real reverse-DNS bundle identifier.
     #[must_use]
-    pub fn with_bundle_id(mut self, bundle_id: BundleId) -> Self {
-        self.bundle_id = Some(bundle_id);
+    pub fn with_apple_bundle_id(mut self, bundle_id: AppleBundleId) -> Self {
+        self.apple_bundle_id = Some(bundle_id);
         self
     }
 
@@ -211,8 +211,8 @@ impl AppIdentity {
     /// The declared bundle identifier, if the application supplied one.
     #[inline]
     #[must_use]
-    pub fn bundle_id(&self) -> Option<&BundleId> {
-        self.bundle_id.as_ref()
+    pub fn apple_bundle_id(&self) -> Option<&AppleBundleId> {
+        self.apple_bundle_id.as_ref()
     }
 
     /// Subsystem reported to Apple's unified logging.
@@ -223,9 +223,9 @@ impl AppIdentity {
     #[inline]
     #[must_use]
     pub fn apple_subsystem(&self) -> &str {
-        self.bundle_id
+        self.apple_bundle_id
             .as_ref()
-            .map_or(UNIDENTIFIED_APPLE_SUBSYSTEM, BundleId::as_str)
+            .map_or(UNIDENTIFIED_APPLE_SUBSYSTEM, AppleBundleId::as_str)
     }
 }
 
@@ -235,20 +235,38 @@ mod tests {
 
     #[test]
     fn accepts_reverse_dns() {
-        let bundle_id = BundleId::new("com.example.app").expect("`com.example.app` is reverse-DNS");
+        let bundle_id =
+            AppleBundleId::new("com.example.app").expect("`com.example.app` is reverse-DNS");
         assert_eq!(bundle_id.as_str(), "com.example.app");
     }
 
     #[test]
     fn accepts_two_labels_digits_and_interior_hyphen() {
-        assert!(BundleId::new("dev.flui").is_ok());
-        assert!(BundleId::new("com.example2.my-app").is_ok());
+        assert!(AppleBundleId::new("dev.flui").is_ok());
+        assert!(AppleBundleId::new("com.example2.my-app").is_ok());
+    }
+
+    #[test]
+    fn accepts_a_digit_initial_label_apple_allows() {
+        assert!(AppleBundleId::new("com.2example.app").is_ok());
+    }
+
+    #[test]
+    fn rejects_an_underscore() {
+        // Not part of Apple's bundle-identifier character set.
+        assert_eq!(
+            AppleBundleId::new("com.example.my_app"),
+            Err(IdentityError::InvalidCharacter {
+                identifier: "com.example.my_app".to_owned(),
+                character: '_',
+            })
+        );
     }
 
     #[test]
     fn rejects_single_label() {
         assert_eq!(
-            BundleId::new("flui"),
+            AppleBundleId::new("flui"),
             Err(IdentityError::NotReverseDns("flui".to_owned()))
         );
     }
@@ -256,7 +274,7 @@ mod tests {
     #[test]
     fn rejects_empty_label() {
         assert_eq!(
-            BundleId::new("com..app"),
+            AppleBundleId::new("com..app"),
             Err(IdentityError::EmptyLabel {
                 identifier: "com..app".to_owned(),
                 position: 1,
@@ -269,7 +287,7 @@ mod tests {
         // The exact shape the historical `com.{display_name}.app` synthesis
         // produced for a display name like "My Game".
         assert_eq!(
-            BundleId::new("com.My Game.app"),
+            AppleBundleId::new("com.My Game.app"),
             Err(IdentityError::InvalidCharacter {
                 identifier: "com.My Game.app".to_owned(),
                 character: ' ',
@@ -280,7 +298,7 @@ mod tests {
     #[test]
     fn rejects_hyphen_at_label_edge() {
         assert_eq!(
-            BundleId::new("com.-example.app"),
+            AppleBundleId::new("com.-example.app"),
             Err(IdentityError::HyphenAtLabelEdge(
                 "com.-example.app".to_owned()
             ))
@@ -291,7 +309,7 @@ mod tests {
     fn display_name_is_not_promoted_to_a_subsystem() {
         let identity = AppIdentity::new("My Game").expect("a display name may contain spaces");
         assert_eq!(identity.display_name(), "My Game");
-        assert_eq!(identity.bundle_id(), None);
+        assert_eq!(identity.apple_bundle_id(), None);
         assert_eq!(identity.apple_subsystem(), UNIDENTIFIED_APPLE_SUBSYSTEM);
     }
 
@@ -299,7 +317,7 @@ mod tests {
     fn declared_bundle_id_becomes_the_subsystem() {
         let identity = AppIdentity::new("My Game")
             .expect("a display name may contain spaces")
-            .with_bundle_id(BundleId::new("com.example.mygame").expect("reverse-DNS"));
+            .with_apple_bundle_id(AppleBundleId::new("com.example.mygame").expect("reverse-DNS"));
         assert_eq!(identity.apple_subsystem(), "com.example.mygame");
     }
 

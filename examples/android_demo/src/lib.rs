@@ -143,17 +143,44 @@ fn build_test_scene(width: f32, height: f32) -> Scene {
     Scene::new(Size::new(px(width), px(height)), tree, Some(root_id), 1)
 }
 
+/// Logcat fallback tag when an event carries no usable target.
+const DISPLAY_NAME: &str = "flui_android_demo";
+
+/// Built-in filter, used when `RUST_LOG` is unset or rejected.
+const LOG_DIRECTIVES: &str = "info,flui_engine=debug,wgpu=warn";
+
 /// Android entry point — called by NativeActivity when the library is loaded.
 #[no_mangle]
 fn android_main(app: AndroidApp) {
-    // Install the logcat backend. `Auto` rather than a demand: this entry
-    // point can be reached more than once in a process lifetime, and a
-    // subscriber somebody else installed must survive.
+    // Install the logcat backend. `Auto` rather than a demand: this entry point
+    // can be reached more than once in a process lifetime, and a subscriber
+    // somebody else installed must survive.
+    //
+    // The result is NOT discarded. `FilterConfig` honours `RUST_LOG`, and
+    // `setprop log.tag` / a wrapper script can put a malformed value there on a
+    // real device. Dropping the error would leave the process with no
+    // subscriber at all, and every diagnostic after this point — including the
+    // one explaining why — would vanish. On a phone that is indistinguishable
+    // from the framework having died silently.
+    let identity = flui_log::AppIdentity::new(DISPLAY_NAME).unwrap_or_default();
     let config = flui_log::LogConfig::builder()
-        .identity(flui_log::AppIdentity::new("flui_android_demo").unwrap_or_default())
-        .directives("info,flui_engine=debug,wgpu=warn")
+        .identity(identity.clone())
+        .directives(LOG_DIRECTIVES)
         .build();
-    let _ = flui_log::setup(&config, flui_log::SubscriberPolicy::Auto);
+
+    let setup = flui_log::setup_with_env_fallback(&config, flui_log::SubscriberPolicy::Auto)
+        .expect("BUG: LOG_DIRECTIVES must be a valid filter directive string");
+
+    if let Some(error) = setup.rejected_env_override {
+        // Straight to logcat, not through `tracing`: reporting a logging
+        // failure through the logging system is how the report gets lost. The
+        // fallback above did install a subscriber, so this is belt-and-braces —
+        // but it is the belt that survives the braces failing.
+        flui_log::report_to_logcat(
+            &identity,
+            &format!("RUST_LOG was rejected, using built-in directives instead: {error}"),
+        );
+    }
 
     tracing::info!("FLUI Android Demo starting — Scene Render (hot-reload enabled)");
 

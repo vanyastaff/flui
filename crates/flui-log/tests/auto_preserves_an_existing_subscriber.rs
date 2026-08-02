@@ -15,7 +15,7 @@ fn auto_preserves_a_subscriber_the_application_installed() {
     let ownership = flui_log::setup(&LogConfig::default(), SubscriberPolicy::Auto)
         .expect("`Auto` never fails on a taken slot");
 
-    assert_eq!(ownership, SubscriberOwnership::Inherited);
+    assert_eq!(ownership.ownership, SubscriberOwnership::Unchanged);
 
     // Ownership is only a claim until an event proves where it landed. The
     // host's subscriber accepts every level, so a `trace!` arriving there is

@@ -17,7 +17,7 @@ fn auto_installs_the_platform_default_into_an_empty_slot() {
     let ownership = flui_log::setup(&LogConfig::default(), SubscriberPolicy::Auto)
         .expect("the default directives parse and the slot is empty");
 
-    assert_eq!(ownership, SubscriberOwnership::Installed);
+    assert_eq!(ownership.ownership, SubscriberOwnership::Installed);
 
     // `Installed` has to mean the slot is genuinely taken, not just that the
     // call returned that word. Nothing else can claim it now.

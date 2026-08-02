@@ -1531,6 +1531,7 @@ dependencies = [
  "tokio",
  "toml 0.9.12+spec-1.1.0",
  "tracing",
+ "tracing-subscriber",
  "which 8.0.4",
 ]
 
@@ -1698,10 +1699,10 @@ name = "flui-log"
 version = "0.2.0"
 dependencies = [
  "android_log-sys",
- "flui-foundation",
  "thiserror 2.0.19",
  "tracing",
  "tracing-forest",
+ "tracing-log",
  "tracing-oslog",
  "tracing-subscriber",
  "tracing-wasm",
@@ -1876,6 +1877,7 @@ dependencies = [
  "smol_str 0.3.6",
  "thiserror 2.0.19",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

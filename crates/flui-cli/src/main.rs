@@ -524,6 +524,27 @@ impl BuildTarget {
 /// `Auto` rather than `Install`: a wrapper script or an embedding harness that
 /// set up a subscriber before invoking the CLI keeps it, and this never aborts
 /// the command over a logging detail.
+fn install_cli_logging(
+    config: &flui_log::LogConfig,
+) -> Result<flui_log::SubscriberInstallation, flui_log::SetupError> {
+    use tracing_subscriber::Layer as _;
+    use tracing_subscriber::layer::SubscriberExt as _;
+
+    let filter = config.env_filter()?;
+
+    #[cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))]
+    let platform = flui_log::PlatformLayer::desktop_compact_stderr();
+    #[cfg(any(target_os = "android", target_os = "ios", target_arch = "wasm32"))]
+    let platform = flui_log::PlatformLayer::platform_default(config);
+
+    let subscriber = tracing_subscriber::Registry::default().with(platform.with_filter(filter));
+    flui_log::install_subscriber(
+        subscriber,
+        flui_log::InstallPolicy::Auto,
+        config.log_bridge_policy(),
+    )
+}
+
 fn init_logging(verbose: bool) {
     // `-v` raises FLUI's own crates to debug and leaves the dependency stack
     // alone. `RUST_LOG` still overrides the whole thing, and nothing narrows it
@@ -538,18 +559,24 @@ fn init_logging(verbose: bool) {
         .directives(directives)
         .build();
 
-    match flui_log::setup(&config, flui_log::SubscriberPolicy::Auto) {
-        Ok(_ownership) => {}
-        Err(error) => {
-            // An unparsable RUST_LOG must not stop the command. Fall back to
-            // directives that are known good and report it once a subscriber
-            // exists to report through.
+    let rejected = match install_cli_logging(&config) {
+        Ok(_) => None,
+        Err(flui_log::SetupError::Filter(
+            error @ (flui_log::FilterError::Environment { .. }
+            | flui_log::FilterError::EnvironmentNotUnicode { .. }),
+        )) => {
             let fallback = flui_log::LogConfig::builder()
                 .filter(flui_log::FilterConfig::new(directives).without_env_var())
                 .build();
-            let _ = flui_log::setup(&fallback, flui_log::SubscriberPolicy::Auto);
-            tracing::warn!(%error, "log filter configuration was rejected; using CLI defaults");
+            install_cli_logging(&fallback)
+                .expect("BUG: the CLI's built-in directive literals must parse");
+            Some(error)
         }
+        Err(error) => panic!("BUG: CLI diagnostics setup failed: {error}"),
+    };
+
+    if let Some(error) = rejected {
+        tracing::warn!(%error, "the RUST_LOG filter was rejected; using CLI defaults");
     }
 }
 

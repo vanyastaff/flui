@@ -189,6 +189,28 @@ pub enum ImageProviderError {
     },
 }
 
+impl ImageProviderError {
+    /// The variant name, with no interpolated path or reason.
+    ///
+    /// `Display` deliberately names the file that failed, because that is what
+    /// a developer reading an error needs. That makes it unsuitable for a
+    /// `tracing` field: an image path is usually a document the user chose, and
+    /// a field is world-readable in Apple's unified log and in logcat. Log this
+    /// instead, and let the path reach the developer through the error value.
+    #[must_use]
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::DecoderUnavailable => "decoder-unavailable",
+            Self::DecodeFailed { .. } => "decode-failed",
+            Self::FileNotFound { .. } => "file-not-found",
+            Self::ReadFailed { .. } => "read-failed",
+            Self::RequiresAsyncResolve { .. } => "requires-async-resolve",
+            Self::SourceNotFound { .. } => "source-not-found",
+            Self::AssetLoadFailed { .. } => "asset-load-failed",
+        }
+    }
+}
+
 /// Maps a `flui-assets::AssetError` onto the closest honest
 /// [`ImageProviderError`] — never [`DecodeFailed`](ImageProviderError::DecodeFailed),
 /// since a `flui-assets` load failure (missing file, refused connection,

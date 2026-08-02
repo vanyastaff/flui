@@ -26,13 +26,19 @@ question gets an explicit answer instead of a panic:
 | `Auto` | Installs the platform default *only* if the slot is empty; an existing subscriber is preserved |
 | `Install` | Demands the slot, and returns a typed error if it is taken |
 
-Each returns a `SubscriberOwnership` (`Installed` or `Inherited`) saying what
-actually happened.
+Each returns a `SubscriberInstallation`: `ownership` is `Installed` or
+`Unchanged`, and `log_bridge` reports whether the compatibility bridge for
+dependencies using the `log` facade was installed or an existing logger was
+preserved.
+
+The two global slots have separate policies. `LogBridgePolicy::Auto` installs
+`LogTracer` when possible; `LogBridgePolicy::Inherit` leaves the `log` facade
+untouched for a host that owns it independently of tracing.
 
 ```rust,no_run
 use flui_log::{LogConfig, SubscriberPolicy};
 
-let ownership = flui_log::setup(&LogConfig::default(), SubscriberPolicy::Auto)?;
+let installation = flui_log::setup(&LogConfig::default(), SubscriberPolicy::Auto)?;
 # Ok::<(), flui_log::SetupError>(())
 ```
 
@@ -42,17 +48,17 @@ let ownership = flui_log::setup(&LogConfig::default(), SubscriberPolicy::Auto)?;
 pieces and installs the result itself:
 
 ```rust,no_run
-use flui_log::{LogConfig, PlatformLayer, SubscriberPolicy, install_subscriber};
-use tracing_subscriber::{Registry, layer::SubscriberExt as _};
+use flui_log::{InstallPolicy, LogBridgePolicy, LogConfig, PlatformLayer, install_subscriber};
+use tracing_subscriber::{Registry, layer::SubscriberExt as _, Layer as _};
 
 let config = LogConfig::builder().directives("info,flui_view=trace").build();
+let filter = config.env_filter()?;
 
 let subscriber = Registry::default()
-    .with(config.env_filter()?)
-    .with(PlatformLayer::platform_default(&config));
+    .with(PlatformLayer::platform_default(&config).with_filter(filter));
 //  .with(my_timeline_layer)   <- devtools stacks here
 
-install_subscriber(subscriber, SubscriberPolicy::Install)?;
+install_subscriber(subscriber, InstallPolicy::Install, LogBridgePolicy::Auto)?;
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
@@ -69,6 +75,13 @@ macOS keeps the desktop backend on purpose: unified logging there would make
 `cargo run` print nothing. A bundled macOS app enables the
 `apple-unified-logging` feature and asks for `PlatformLayer::apple_unified_logging`.
 
+Bridged `log` records are normalized before Android chooses a logcat tag, so a
+record from `wgpu` remains filterable and groupable as `wgpu` rather than
+appearing under the synthetic `log` target. Apple unified logging does not map
+Rust targets to categories at all: the application subsystem and the stable
+`flui` category are fixed for the sink, while `log.target` remains part of the
+rendered fields.
+
 ### Apple privacy
 
 `tracing-oslog` renders each event into one already-formatted string, so every
@@ -76,12 +89,17 @@ field FLUI emits is **public** in the unified log — `%{private}` redaction
 applies to interpolated arguments and there are none. Keep secrets and personal
 data out of tracing fields on Apple platforms.
 
+This is a convention today, not a contract enforced by the type system. Making
+it one — private by default, backend-redacted — is tracked in
+[#572](https://github.com/vanyastaff/flui/issues/572).
+
 ## Filtering
 
-`RUST_LOG` (or a configured variable) wins over the built-in directives, and
-nothing narrows the result afterwards. `RUST_LOG=flui_view=trace` really does
-deliver `TRACE`: there is no level knob in this crate's API, and every native
-backend is pinned wide open, so a second ceiling has nowhere to come from.
+`RUST_LOG` (or a configured variable) wins over the built-in directives. Its
+filter is attached to the native sink rather than globally to the registry, so
+timeline, metrics, and capture layers can choose independent filters. Within
+the native sink nothing narrows the result afterwards:
+`RUST_LOG=flui_view=trace` really does deliver `TRACE`.
 
 ## Features
 

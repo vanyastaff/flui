@@ -128,7 +128,12 @@ impl CommandRenderer for DebugBackend {
         _paint: &Paint,
         _transform: &Matrix4,
     ) {
-        self.log_command("render_text", &format!("text='{text}', offset={offset:?}"));
+        // Length, not content: this backend is `cfg(debug_assertions)`, which
+        // is exactly the build a developer installs on a real device.
+        self.log_command(
+            "render_text",
+            &format!("text_len={}, offset={offset:?}", text.len()),
+        );
     }
 
     fn render_text_span(

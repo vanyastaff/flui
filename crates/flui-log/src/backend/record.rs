@@ -52,6 +52,20 @@ impl FieldRecorder {
         self.output
     }
 
+    /// Borrow the rendered fields without consuming the recorder.
+    pub(crate) fn as_str(&self) -> &str {
+        &self.output
+    }
+
+    /// Append fields that another recorder already rendered.
+    pub(crate) fn push_rendered_fields(&mut self, fields: &str) {
+        if fields.is_empty() {
+            return;
+        }
+        self.begin_field();
+        self.output.push_str(fields);
+    }
+
     /// Place the event's message ahead of everything recorded so far.
     pub(crate) fn push_message(&mut self, message: &str) {
         if self.output.is_empty() {
@@ -123,25 +137,41 @@ mod tests {
     fn message_then_fields() {
         let mut recorder = FieldRecorder::new();
         recorder.push_message("presentation committed");
-        recorder.push_field("frame_id", "42");
-        recorder.push_field("realm_id", "primary");
+        recorder.push_field("batch", "42");
+        recorder.push_field("phase", "commit");
 
         assert_eq!(
             recorder.into_string(),
-            "presentation committed | frame_id=42 realm_id=primary"
+            "presentation committed | batch=42 phase=commit"
         );
     }
 
     #[test]
     fn fields_before_the_message_still_read_message_first() {
         let mut recorder = FieldRecorder::new();
-        recorder.push_field("realm_id", "primary");
-        recorder.push_field("frame_id", "7");
+        recorder.push_field("phase", "commit");
+        recorder.push_field("batch", "7");
         recorder.push_message("late message");
 
         assert_eq!(
             recorder.into_string(),
-            "late message | realm_id=primary frame_id=7"
+            "late message | phase=commit batch=7"
+        );
+    }
+
+    #[test]
+    fn rendered_span_fields_can_be_prefixed_to_an_event() {
+        let mut span = FieldRecorder::new();
+        span.push_field("presentation_id", "42");
+
+        let mut event = FieldRecorder::new();
+        event.push_rendered_fields(span.as_str());
+        event.push_message("frame committed");
+        event.push_field("frame_id", "7");
+
+        assert_eq!(
+            event.into_string(),
+            "frame committed | presentation_id=42 frame_id=7"
         );
     }
 
@@ -155,12 +185,12 @@ mod tests {
     #[test]
     fn a_real_event_renders_message_first_then_its_fields() {
         let rendered = capture_rendered_events(|| {
-            tracing::info!(realm_id = "primary", frame_id = 7_u64, "frame committed");
+            tracing::info!(phase = "commit", batch = 7_u64, "frame committed");
         });
 
         assert_eq!(
             rendered,
-            vec!["frame committed | realm_id=primary frame_id=7".to_owned()]
+            vec!["frame committed | phase=commit batch=7".to_owned()]
         );
     }
 
@@ -174,29 +204,21 @@ mod tests {
     }
 
     #[test]
-    fn every_correlation_field_survives_rendering() {
+    fn arbitrary_structured_fields_survive_rendering() {
         let rendered = capture_rendered_events(|| {
             tracing::info!(
-                runtime_id = 1_u64,
-                realm_id = 2_u64,
-                presentation_id = 3_u64,
-                frame_id = 4_u64,
-                worker_id = 5_u64,
+                batch = 1_u64,
+                generation = 2_u64,
+                attempt = 3_u64,
                 "frame committed"
             );
         });
 
         let line = rendered.first().expect("exactly one event was emitted");
-        for (name, value) in [
-            ("runtime_id", 1),
-            ("realm_id", 2),
-            ("presentation_id", 3),
-            ("frame_id", 4),
-            ("worker_id", 5),
-        ] {
+        for (name, value) in [("batch", 1), ("generation", 2), ("attempt", 3)] {
             assert!(
                 line.contains(&format!("{name}={value}")),
-                "correlation field `{name}` was dropped from {line:?}"
+                "structured field `{name}` was dropped from {line:?}"
             );
         }
     }

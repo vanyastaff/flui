@@ -18,6 +18,7 @@ workspace = true
 [dependencies]
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+tracing-log = { workspace = true }
 thiserror = { workspace = true }
 
 # Hierarchical desktop output. Optional because a hierarchical tree is a
@@ -52,12 +53,6 @@ hierarchical = ["dep:tracing-forest"]
 # Apple unified logging as a selectable backend on macOS (always available on
 # iOS, where it is the default).
 apple-unified-logging = ["dep:tracing-oslog"]
-
-[dev-dependencies]
-# The correlation-field test asserts that the vocabulary `flui-foundation`
-# defines survives the stack this crate builds. A dev edge, deliberately: the
-# shipped crate has no in-workspace dependencies at all.
-flui-foundation = { path = "../flui-foundation", version = "0.2.0" }
 
 [package.metadata.docs.rs]
 all-features = true

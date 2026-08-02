@@ -169,7 +169,12 @@ anyhow = "1.0"
 # subscriber, and only composition roots (flui-app, flui-cli, the facade)
 # depend on it. Framework libraries depend on `tracing` and nothing more.
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "ansi"] }
+# `tracing-log` is listed although it is already in tracing-subscriber's default
+# set: it is what makes the `fmt` layer show a bridged record's real target
+# instead of the literal `"log"`. Left implicit, a future `default-features =
+# false` would silently relabel every `wgpu`/`naga` line in desktop output.
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "ansi", "tracing-log"] }
+tracing-log = "0.2"
 tracing-forest = { version = "0.3", features = ["smallvec"] }
 # Native log sinks. Each is target-gated in the crates that use them.
 android_log-sys = "0.3"

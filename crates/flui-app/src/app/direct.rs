@@ -72,7 +72,7 @@ pub fn run_direct(
     // backend only into an empty slot. The historical code called
     // `Logger::init`, which panicked the moment a host — or a second
     // `run_direct` in the same process — already owned the subscriber.
-    let _ownership = super::logging::init_logging(super::logging::EntryPoint::Managed, &config);
+    let _installation = super::logging::init_managed_logging(&config);
 
     tracing::info!(
         title = %config.title,

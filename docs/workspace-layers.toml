@@ -33,6 +33,13 @@
 #      the edges that would close the cycle actually exist.
 #   6. Nothing under `crates/` may depend on a member outside `crates/`
 #      (examples and tools are terminal consumers).
+#   6b. `[[standalone_root]]` classifies a package that owns a process but is
+#      not a library anybody links — an example app, a device demo. It gets no
+#      layer, because nothing depends on it. It exists so a restricted crate's
+#      `allowed_dependents` can name it: such a package is a composition root
+#      in the same sense `flui-app` is, and may install a subscriber.
+#      Every `Cargo.toml` in the repository is checked against these rules,
+#      including packages deliberately excluded from `workspace.members`.
 #   7. Planned entries have a validated status (`gated` or `sanctioned`) and
 #      required gate metadata. A `gated` crate may not have a Cargo manifest
 #      until its gate is satisfied and the entry is replaced by `[[member]]`.
@@ -132,7 +139,7 @@ note = "Proc-macro crate for framework derives."
 name = "flui-log"
 layer = 2
 disposition = "keep"
-allowed_dependents = ["flui-app", "flui-cli", "flui"]
+allowed_dependents = ["flui-app", "flui-cli", "flui", "flui-android-demo"]
 why = """
 Composition-only. It assembles a subscriber — native sink selection, filter \
 policy, application identity, and the process-global install — which is an \
@@ -142,7 +149,9 @@ framework crates depend on `tracing` and nothing else, so replacing or removing 
 the default backend never touches an instrumentation call site. It has no \
 in-workspace dependencies at all, which is why it sits this low; the layer rule \
 alone would therefore let the entire workspace above it depend on it, and this \
-restriction is what stops that.\
+restriction is what stops that. `flui-android-demo` is on the list as a \
+[[standalone_root]]: it owns `android_main`, does not go through `flui-app` or \
+the facade, and therefore installs the logcat backend itself.\
 """
 note = """
 Desktop `fmt` (optionally hierarchical via `tracing-forest`), Android logcat, \
@@ -402,6 +411,30 @@ why = "`GlobalMaterialLocalizations` implements Material's localization contract
 from = "flui-localizations"
 to = "flui-cupertino"
 why = "`GlobalCupertinoLocalizations` implements Cupertino's localization contract."
+
+# =============================================================================
+# Standalone composition roots
+# =============================================================================
+#
+# Packages that own a process without being a library anybody links. They get
+# no layer — nothing depends on them — but they are composition roots, so a
+# restricted crate may name them in `allowed_dependents`.
+#
+# These are deliberately outside `workspace.members` (an Android build needs an
+# external NDK bootstrap), which is exactly why they must be classified here:
+# `cargo metadata` cannot see them, so without this the dependency contract
+# would simply not apply to them and would silently appear to pass.
+
+[[standalone_root]]
+name = "flui-android-demo"
+path = "examples/android_demo"
+why = """
+Owns `android_main` and drives flui-engine/flui-platform directly; it never \
+touches `flui-app` or the facade, so it installs the logcat backend itself. \
+Routing it through the facade to avoid a direct `flui-log` edge would pull the \
+entire widget framework into a raw scene demo — the dependency the exclusion \
+exists to avoid.\
+"""
 
 # =============================================================================
 # Planned / gated crates

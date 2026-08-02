@@ -58,7 +58,16 @@ impl FontLoader {
         let bytes = std::fs::read(path)
             .map_err(|e| crate::error::EngineError::resource_io(format!("font load {path}"), e))?;
         font_system.db_mut().load_font_data(bytes);
-        tracing::debug!(path, "Loaded font from file");
+        // File name, not the full path: a font path embeds the user's home
+        // directory, and a tracing field is world-readable in the device log
+        // archive. The name is what identifies the font.
+        tracing::debug!(
+            font_file = std::path::Path::new(path)
+                .file_name()
+                .and_then(std::ffi::OsStr::to_str)
+                .unwrap_or("<unnamed>"),
+            "Loaded font from file"
+        );
         Ok(())
     }
 
@@ -99,8 +108,9 @@ impl FontLoader {
                             count += 1;
                         }
                         Err(err) => {
+                            // See `load_file`: file name only.
                             tracing::warn!(
-                                path = %path.display(),
+                                font_file = ?path.file_name(),
                                 %err,
                                 "Failed to read font file, skipping"
                             );
@@ -109,7 +119,9 @@ impl FontLoader {
                 }
             }
         }
-        tracing::info!(count, dir, "Loaded fonts from directory");
+        // The directory a font scan walked is a system path, but on desktop it
+        // still carries the home directory. Count only.
+        tracing::info!(count, "Loaded fonts from directory");
         Ok(count)
     }
 }

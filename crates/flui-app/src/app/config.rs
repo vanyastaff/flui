@@ -2,7 +2,28 @@
 
 use std::path::PathBuf;
 
+use flui_log::AppIdentity;
 use flui_types::{Size, geometry::px};
+
+/// Default diagnostics policy for a managed application.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DiagnosticsProfile {
+    /// Developer-oriented diagnostics with framework debug events enabled.
+    Development,
+
+    /// Shipped-application diagnostics limited to actionable warnings/errors.
+    Production,
+}
+
+impl Default for DiagnosticsProfile {
+    fn default() -> Self {
+        if cfg!(debug_assertions) {
+            Self::Development
+        } else {
+            Self::Production
+        }
+    }
+}
 
 /// Application configuration.
 ///
@@ -18,6 +39,15 @@ use flui_types::{Size, geometry::px};
 /// ```
 #[derive(Debug, Clone)]
 pub struct AppConfig {
+    /// Process-level application identity used by native diagnostics sinks.
+    ///
+    /// This is deliberately independent from [`Self::title`]: a multi-window
+    /// application has one identity and may give every window a different title.
+    pub application_identity: AppIdentity,
+
+    /// Diagnostics defaults for a managed application.
+    pub diagnostics_profile: DiagnosticsProfile,
+
     // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// Window title.
     pub title: String,
@@ -115,6 +145,9 @@ pub struct AppConfig {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
+            application_identity: AppIdentity::new("FLUI App")
+                .expect("BUG: the default application identity is valid"),
+            diagnostics_profile: DiagnosticsProfile::default(),
             title: "FLUI App".to_string(),
             size: Size::new(px(800.0), px(600.0)),
             min_size: None,
@@ -140,6 +173,18 @@ impl AppConfig {
     /// Set the window title.
     pub fn with_title(mut self, title: impl Into<String>) -> Self {
         self.title = title.into();
+        self
+    }
+
+    /// Set the process-level identity used by native diagnostics sinks.
+    pub fn with_application_identity(mut self, identity: AppIdentity) -> Self {
+        self.application_identity = identity;
+        self
+    }
+
+    /// Select development or production diagnostics defaults explicitly.
+    pub fn with_diagnostics_profile(mut self, profile: DiagnosticsProfile) -> Self {
+        self.diagnostics_profile = profile;
         self
     }
 
@@ -233,6 +278,7 @@ mod tests {
     fn test_default_config() {
         let config = AppConfig::default();
         assert_eq!(config.title, "FLUI App");
+        assert_eq!(config.application_identity.display_name(), "FLUI App");
         assert_eq!(config.target_fps, 60);
         assert!(config.resizable);
         assert!(config.worker_plugin_path.is_none());

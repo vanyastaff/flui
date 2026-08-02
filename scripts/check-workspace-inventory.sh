@@ -443,14 +443,6 @@ forbidden_pairs = {
     (edge["from"], edge["to"]): edge["why"] for edge in policy.get("forbidden_edge", [])
 }
 
-for restricted, permitted in sorted(allowed_dependents_of.items()):
-    for name in sorted(permitted):
-        if name not in layer_of:
-            errors.append(
-                f"{policy_rel} member `{restricted}` permits `{name}` as a dependent, but "
-                f"`{name}` is not a classified member"
-            )
-
 for source, target in sorted(same_layer_allowed):
     if source not in layer_of or target not in layer_of:
         errors.append(f"{policy_rel} same_layer_edge `{source} -> {target}` names an unclassified crate")
@@ -634,6 +626,135 @@ for planned_name, entry in planned_by_name.items():
             + " ".join(entry["gate"].split())
         )
 
+# -----------------------------------------------------------------------------
+# Repository-wide restriction sweep.
+#
+# Everything above is driven by `cargo metadata`, which only knows about
+# `workspace.members`. The Android example packages are deliberately excluded
+# from the workspace (they need an external NDK bootstrap), and in-workspace
+# examples and tools carry no layer, so the loop above skipped both — silently.
+# A guard that quietly passes on whatever it cannot classify is worse than no
+# guard, because the contract then reads as covered when it is not.
+#
+# So: parse every `Cargo.toml` in the repository directly and apply the
+# `allowed_dependents` restriction to all of them. Normal edges only, matching
+# the contract above; a `path` dependency (or a `workspace = true` one that
+# resolves to a path) is an in-repository edge whoever declared it.
+standalone_roots: dict[str, dict] = {}
+required_standalone_fields = {"name", "path", "why"}
+for entry in policy.get("standalone_root", []):
+    missing_fields = sorted(required_standalone_fields - set(entry))
+    if missing_fields:
+        errors.append(
+            f"{policy_rel} standalone_root entry is missing required fields: "
+            + ", ".join(missing_fields)
+        )
+        continue
+
+    standalone_name = entry["name"]
+    if standalone_name in standalone_roots:
+        errors.append(f"{policy_rel} lists standalone_root `{standalone_name}` more than once")
+        continue
+    if standalone_name in layer_of:
+        errors.append(
+            f"{policy_rel} lists `{standalone_name}` as both [[standalone_root]] and "
+            "[[member]]; a package under `crates/` is a member, not a standalone root"
+        )
+        continue
+    if not str(entry["why"]).strip():
+        errors.append(
+            f"{policy_rel} standalone_root `{standalone_name}` must say why it owns a process"
+        )
+
+    standalone_manifest = root / str(entry["path"]) / "Cargo.toml"
+    if not standalone_manifest.is_file():
+        errors.append(
+            f"{policy_rel} standalone_root `{standalone_name}` declares path "
+            f"`{entry['path']}`, which has no Cargo.toml"
+        )
+    else:
+        declared = tomllib.loads(standalone_manifest.read_text()).get("package", {}).get("name")
+        if declared != standalone_name:
+            errors.append(
+                f"{policy_rel} standalone_root `{standalone_name}` points at "
+                f"`{entry['path']}`, whose package is named `{declared}`"
+            )
+    standalone_roots[standalone_name] = entry
+
+# Names permitted in an `allowed_dependents` list: classified members plus
+# declared standalone roots.
+classifiable = set(layer_of) | set(standalone_roots)
+for restricted, permitted in sorted(allowed_dependents_of.items()):
+    for name in sorted(permitted):
+        if name not in classifiable:
+            errors.append(
+                f"{policy_rel} member `{restricted}` permits `{name}` as a dependent, but "
+                f"`{name}` is neither a classified member nor a [[standalone_root]]"
+            )
+
+workspace_dependency_table = root_manifest.get("workspace", {}).get("dependencies", {})
+
+
+def in_repository_normal_dependencies(manifest_data: dict) -> set[str]:
+    """Normal in-repository dependency names declared by one manifest.
+
+    Covers `[dependencies]` and every `[target.'cfg(...)'.dependencies]` table.
+    Dev and build tables are out of scope, matching the contract above.
+    """
+    tables = [manifest_data.get("dependencies", {})]
+    for target_table in manifest_data.get("target", {}).values():
+        tables.append(target_table.get("dependencies", {}))
+
+    found: set[str] = set()
+    for table in tables:
+        for name, spec in table.items():
+            if isinstance(spec, dict) and "path" in spec:
+                found.add(name)
+            elif isinstance(spec, dict) and spec.get("workspace") is True:
+                inherited = workspace_dependency_table.get(name)
+                if isinstance(inherited, dict) and "path" in inherited:
+                    found.add(name)
+    return found
+
+
+checked_manifests = 0
+for manifest in sorted(root.rglob("Cargo.toml")):
+    relative = manifest.relative_to(root)
+    if "target" in relative.parts:
+        continue
+
+    try:
+        manifest_data = tomllib.loads(manifest.read_text())
+    except tomllib.TOMLDecodeError as error:
+        errors.append(f"{relative} is not valid TOML: {error}")
+        continue
+
+    package_name = manifest_data.get("package", {}).get("name")
+    if package_name is None:
+        continue  # virtual manifest
+
+    checked_manifests += 1
+
+    # Members are covered by the metadata-driven loop above, which resolves
+    # dependency kinds properly; checking them twice would double-report.
+    if package_name in layer_of:
+        continue
+
+    for target in sorted(in_repository_normal_dependencies(manifest_data)):
+        permitted = allowed_dependents_of.get(target)
+        if permitted is not None and package_name not in permitted:
+            classification = (
+                "a [[standalone_root]]"
+                if package_name in standalone_roots
+                else f"not classified in {policy_rel}"
+            )
+            errors.append(
+                f"{relative} declares the normal edge `{package_name} -> {target}`, but "
+                f"`{target}` is restricted to {sorted(permitted)} in {policy_rel} "
+                f"(`{package_name}` is {classification}): "
+                f"{restriction_reason.get(target, '')}"
+            )
+
 if errors:
     print("workspace-inventory: drift detected", file=sys.stderr)
     for error in errors:
@@ -643,6 +764,8 @@ if errors:
 print(
     f"workspace-inventory: {len(active_crates)} active crates covered; "
     f"{len(layer_of)} members across {len(layer_names)} layers, "
-    f"{sum(len(targets) for targets in normal_edges.values())} normal edges checked"
+    f"{sum(len(targets) for targets in normal_edges.values())} normal edges checked; "
+    f"{checked_manifests} manifests swept for restricted edges "
+    f"({len(standalone_roots)} standalone roots)"
 )
 PY

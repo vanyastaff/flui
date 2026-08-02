@@ -131,7 +131,7 @@ test *args:
 [group("test")]
 [doc("Run the workspace test scope used by CI")]
 test-ci:
-    cargo test --workspace --exclude flui-platform
+    cargo nextest run --workspace --exclude flui-platform --locked --no-fail-fast
 
 [group("test")]
 [doc("Test a single crate (e.g. just test-crate flui-tree)")]

@@ -3,17 +3,25 @@
 use tracing::Subscriber;
 use tracing_subscriber::layer::SubscriberExt as _;
 use tracing_subscriber::registry::LookupSpan;
-use tracing_subscriber::{EnvFilter, Registry};
+use tracing_subscriber::{EnvFilter, Layer as _, Registry};
 
 use crate::backend::PlatformLayer;
 use crate::filter::{FilterConfig, FilterError};
 use crate::identity::AppIdentity;
+use crate::ownership::LogBridgePolicy;
 
 /// Shape of the desktop formatter's output.
 ///
 /// Consulted only by the desktop backend; the native sinks have their own,
 /// non-negotiable formats.
+///
+/// Non-exhaustive because one variant is behind a feature flag, so this enum's
+/// shape is not a constant of the API — any crate anywhere in the graph
+/// enabling `hierarchical` adds a variant to everyone's build through feature
+/// unification. Requiring the wildcard arm up front is what stops that from
+/// turning into a downstream compile error nobody asked for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
 pub enum DesktopFormat {
     /// One line per event.
     #[default]
@@ -33,6 +41,7 @@ pub struct LogConfig {
     identity: AppIdentity,
     filter: FilterConfig,
     desktop_format: DesktopFormat,
+    log_bridge_policy: LogBridgePolicy,
 }
 
 impl LogConfig {
@@ -65,6 +74,13 @@ impl LogConfig {
         self.desktop_format
     }
 
+    /// Whether managed setup may install the `log` compatibility bridge.
+    #[inline]
+    #[must_use]
+    pub fn log_bridge_policy(&self) -> LogBridgePolicy {
+        self.log_bridge_policy
+    }
+
     /// Resolve the filter. Equivalent to `config.filter().env_filter()`.
     ///
     /// # Errors
@@ -73,6 +89,12 @@ impl LogConfig {
     /// [`FilterConfig::env_filter`](crate::FilterConfig::env_filter).
     pub fn env_filter(&self) -> Result<EnvFilter, FilterError> {
         self.filter.env_filter()
+    }
+
+    pub(crate) fn without_env_override(&self) -> Self {
+        let mut fallback = self.clone();
+        fallback.filter = FilterConfig::new(self.filter.directives()).without_env_var();
+        fallback
     }
 
     /// Build the platform's default sink as a composable layer.
@@ -84,8 +106,7 @@ impl LogConfig {
         PlatformLayer::platform_default(self)
     }
 
-    /// Build FLUI's default subscriber: a registry, the resolved filter, and
-    /// the platform sink.
+    /// Build FLUI's default subscriber: a registry and a filtered native sink.
     ///
     /// Nothing global happens here. The result is an ordinary value that a
     /// caller can stack further layers onto before handing it to
@@ -112,9 +133,8 @@ impl LogConfig {
         FilterError,
     > {
         let filter = self.env_filter()?;
-        let registry = Registry::default().with(filter);
         let platform = PlatformLayer::platform_default(self);
-        Ok(registry.with(platform))
+        Ok(Registry::default().with(platform.with_filter(filter)))
     }
 }
 
@@ -151,6 +171,12 @@ impl LogConfigBuilder {
         self
     }
 
+    /// Set whether managed setup may install the `log` compatibility bridge.
+    pub fn log_bridge_policy(mut self, policy: LogBridgePolicy) -> Self {
+        self.config.log_bridge_policy = policy;
+        self
+    }
+
     /// Finish the configuration.
     #[must_use]
     pub fn build(self) -> LogConfig {
@@ -161,7 +187,7 @@ impl LogConfigBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::identity::{BundleId, UNIDENTIFIED_APPLE_SUBSYSTEM};
+    use crate::identity::{AppleBundleId, UNIDENTIFIED_APPLE_SUBSYSTEM};
 
     #[test]
     fn defaults_are_the_documented_ones() {
@@ -169,6 +195,7 @@ mod tests {
         assert_eq!(config.filter().directives(), "info,wgpu=warn");
         assert_eq!(config.filter().env_var(), Some("RUST_LOG"));
         assert_eq!(config.desktop_format(), DesktopFormat::Compact);
+        assert_eq!(config.log_bridge_policy(), LogBridgePolicy::Auto);
         assert_eq!(
             config.identity().apple_subsystem(),
             UNIDENTIFIED_APPLE_SUBSYSTEM
@@ -179,16 +206,18 @@ mod tests {
     fn the_builder_carries_every_field_through() {
         let identity = AppIdentity::new("My Game")
             .expect("a display name may contain spaces")
-            .with_bundle_id(BundleId::new("com.example.mygame").expect("reverse-DNS"));
+            .with_apple_bundle_id(AppleBundleId::new("com.example.mygame").expect("reverse-DNS"));
 
         let config = LogConfig::builder()
             .identity(identity)
             .directives("warn,flui_view=trace")
+            .log_bridge_policy(LogBridgePolicy::Inherit)
             .build();
 
         assert_eq!(config.identity().display_name(), "My Game");
         assert_eq!(config.identity().apple_subsystem(), "com.example.mygame");
         assert_eq!(config.filter().directives(), "warn,flui_view=trace");
+        assert_eq!(config.log_bridge_policy(), LogBridgePolicy::Inherit);
     }
 
     #[test]

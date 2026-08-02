@@ -26,9 +26,9 @@ responsibility, not a wider one.
 
 | Module | Owns |
 |---|---|
-| `identity` | `AppIdentity`, `BundleId` — the names the native sinks index by |
+| `identity` | `AppIdentity`, `AppleBundleId` — the names the native sinks index by |
 | `filter` | `FilterConfig` → one `EnvFilter`, and nothing else |
-| `ownership` | `SubscriberPolicy`, `SubscriberOwnership`, `install_subscriber` |
+| `ownership` | setup/install policies, installation outcome, and the `log` compatibility bridge |
 | `config` | `LogConfig`, `DesktopFormat`, and the default subscriber stack |
 | `backend` | `PlatformLayer` and the per-target sinks |
 
@@ -40,6 +40,10 @@ responsibility, not a wider one.
   The historical logger stacked a `LevelFilter` seeded from a field defaulting
   to `INFO` beside the `EnvFilter`, so `RUST_LOG=flui_view=trace` selected
   events that were then discarded. Adding any level parameter reintroduces it.
+- **Filters belong to sinks.** Attach the native `EnvFilter` with
+  `PlatformLayer::with_filter`; do not place it below the entire registry. A
+  global filter would silently clip independently configured timeline,
+  metrics, or capture layers.
 - **A display name is not a bundle identifier.** `AppIdentity` keeps them
   separate on purpose. The historical code synthesised `com.{display_name}.app`,
   which produced illegal identifiers and could file a FLUI app's logs under a
@@ -47,7 +51,13 @@ responsibility, not a wider one.
   identifier gets the fixed `UNIDENTIFIED_APPLE_SUBSYSTEM`, never a guess.
 - **Nothing here panics on a taken subscriber slot.** `Install` returns
   `SetupError::SubscriberAlreadyInstalled`; `Auto` returns
-  `SubscriberOwnership::Inherited`. An embedded host owns its own observability.
+  `SubscriberOwnership::Unchanged`. An embedded host owns its own observability.
+- **An existing `log` logger is host-owned.** Install `LogTracer` only after
+  FLUI wins the tracing subscriber slot. If another logger already exists,
+  preserve it and report `LogBridgeStatus::ExistingLoggerPreserved`.
+- **The two global slots have separate permission.** A host may let FLUI install
+  tracing while reserving the `log` facade for later. Preserve
+  `LogBridgePolicy::Inherit`; it must not inspect or claim the logger slot.
 - **`Inherit` must not even read the global slot.** `setup` short-circuits
   before building a subscriber. If that changes, `tests/inherit_never_touches_the_global_slot.rs`
   is what catches it.
@@ -56,6 +66,13 @@ responsibility, not a wider one.
   scoped subscriber anywhere in the process would convince `Auto` that the global
   slot was taken forever. `set_global_default`'s own `Result` is the exact
   signal, with no window between the question and the answer.
+- **A tracing field is world-readable on a device.** Apple's unified log and
+  logcat publish every field verbatim; `os_log`'s `%{private}` has nothing to
+  redact because `tracing-oslog` pre-formats. Log a length, a count, an
+  identifier, or a discriminant — never a rendered string, a user-chosen path,
+  or an announcement. Enforcing this in the type system is
+  [#572](https://github.com/vanyastaff/flui/issues/572); until then it is a
+  convention a reviewer has to hold.
 - **macOS is a desktop.** It keeps the `fmt` backend; unified logging there
   would make `cargo run` print nothing. `os_log` on macOS is opt-in through the
   `apple-unified-logging` feature.
