@@ -253,14 +253,14 @@ impl PresentationState {
                 widgets.perform_reassemble();
                 self.pipeline.write().reassemble();
                 tracing::info!(
-                    presentation_id = ?self.id,
+                    { flui_foundation::diagnostics::PRESENTATION_ID } = self.id.as_u64(),
                     "hot reload reassembled element and render trees"
                 );
                 true
             }
             HotReloadTier::HotRestart => {
                 tracing::warn!(
-                    presentation_id = ?self.id,
+                    { flui_foundation::diagnostics::PRESENTATION_ID } = self.id.as_u64(),
                     "HotRestart root remount is not implemented; applying reassemble"
                 );
                 widgets.perform_reassemble();
@@ -269,7 +269,7 @@ impl PresentationState {
             }
             HotReloadTier::FullRestart => {
                 tracing::debug!(
-                    presentation_id = ?self.id,
+                    { flui_foundation::diagnostics::PRESENTATION_ID } = self.id.as_u64(),
                     "FullRestart is owned by the CLI process supervisor"
                 );
                 false
@@ -294,7 +294,7 @@ impl PresentationState {
             && !matches!(error, CursorError::Unsupported)
         {
             tracing::warn!(
-                presentation_id = ?self.id,
+                { flui_foundation::diagnostics::PRESENTATION_ID } = self.id.as_u64(),
                 ?error,
                 "failed to restore the default cursor while closing the presentation"
             );

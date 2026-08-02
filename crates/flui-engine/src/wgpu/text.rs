@@ -520,7 +520,17 @@ impl TextRenderer {
     /// Buffers are cached by `(text, font_size)` to avoid re-layout when the
     /// same string appears in subsequent frames.
     pub fn add_text(&mut self, text: &str, position: Point<Pixels>, font_size: f32, color: Color) {
-        tracing::trace!(text, ?position, font_size, ?color, "TextRenderer::add_text");
+        // `text_len`, never `text`. This string is every label, message body,
+        // and text-field value the UI draws, and a tracing field is world-
+        // readable in Apple's unified log and in logcat. The length and the
+        // geometry are what a rendering trace is actually for.
+        tracing::trace!(
+            text_len = text.len(),
+            ?position,
+            font_size,
+            ?color,
+            "TextRenderer::add_text"
+        );
 
         let key = TextCacheKey::new(text, font_size);
         self.ensure_plain_buffer(&key);

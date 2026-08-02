@@ -27,8 +27,10 @@ flui-hot-reload = { path = "../flui-hot-reload", version = "0.2.0", features = [
 # multi-thread `Runtime`; `signal` backs the devtools server's Ctrl+C wait.
 tokio = { workspace = true, features = ["rt-multi-thread", "signal"] }
 
-# Logging (via flui_foundation::log — merged from flui-log)
-flui-foundation = { path = "../flui-foundation", version = "0.2.0" }
+# Logging backend. The CLI chooses and installs its own subscriber policy and
+# reuses flui-log's backend construction; it is a composition root, so this
+# normal edge is sanctioned — see docs/workspace-layers.toml.
+flui-log = { workspace = true }
 
 # CLI framework
 clap = { version = "4.5", features = ["derive", "cargo", "env", "color"] }
@@ -42,6 +44,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 
 tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
 toml = "0.9"
 
 # Utilities

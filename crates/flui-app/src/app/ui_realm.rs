@@ -672,7 +672,8 @@ impl UiRealm {
                             // views/nodes because screen readers may lag behind
                             // the latest semantics update.
                             tracing::trace!(
-                                presentation_id = ?self.presentation.id(),
+                                { flui_foundation::diagnostics::PRESENTATION_ID } =
+                                    self.presentation.id().as_u64(),
                                 ?error,
                                 "dropping semantics action against a stale snapshot"
                             );

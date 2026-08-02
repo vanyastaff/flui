@@ -210,9 +210,11 @@ impl Image {
         let image = match self.provider.resolve() {
             Ok(decoded) => Some(decoded),
             Err(err) => {
+                // Neither `?provider` nor `%err`: the provider's `Debug` holds
+                // the file path or URL, and the error's `Display` interpolates
+                // it. For a user-picked photo that is their data.
                 tracing::warn!(
-                    provider = ?self.provider,
-                    error = %err,
+                    error_kind = err.kind(),
                     "image provider failed to resolve; showing empty placeholder box"
                 );
                 None
@@ -268,8 +270,9 @@ impl Image {
         let builder: SnapshotBuilder<PixelImage, crate::image::ImageProviderError> =
             std::rc::Rc::new(move |_ctx, snapshot| {
                 if let Some(err) = snapshot.error() {
+                    // See `build_sync`: the error's `Display` carries the path.
                     tracing::warn!(
-                        error = %err,
+                        error_kind = err.kind(),
                         "image provider failed to resolve asynchronously; showing empty \
                          placeholder box"
                     );

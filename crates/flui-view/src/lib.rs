@@ -175,8 +175,6 @@ pub use element::{RootElement, RootElementImpl};
 pub use element::{StatefulBehavior, StatelessBehavior};
 // Re-export from flui-foundation
 pub use flui_foundation::{ElementId, RenderId};
-// Logging re-exports from flui_foundation::log (merged from flui-log).
-pub use flui_foundation::log::{Level, Logger, debug, error, info, trace, warn};
 // Keys
 pub use key::{GlobalKey, GlobalKeyId, ObjectKey, ValueKey};
 // Legacy test-only handle for `GlobalKey::current_*` lookup. Production code
@@ -206,8 +204,10 @@ pub use view::{
 /// use flui_view::prelude::*;
 /// ```
 pub mod prelude {
-    pub use flui_foundation::log::{debug, error, info, trace, warn};
+    // Straight from `tracing`. A framework crate emits events and has no
+    // opinion about where they go, so nothing here reaches the backend.
     pub use flui_foundation::{ElementId, RenderId};
+    pub use tracing::{debug, error, info, trace, warn};
     // The proc-macro derives ship from `flui-macros` but are surfaced
     // here so a single `use flui_view::prelude::*;` picks them up
     // alongside the supporting trait.

@@ -381,8 +381,12 @@ impl SemanticsService {
         if SemanticsBinding::is_initialized() {
             SemanticsBinding::instance().announce(message, assertiveness);
         } else {
+            // `message_len`, never `message`. A live-region announcement is
+            // written to be read aloud to the user and routinely carries their
+            // data ("Message from Alice: ...", a balance, a validation echo);
+            // a tracing field is world-readable in the device log archive.
             tracing::debug!(
-                message = message,
+                message_len = message.len(),
                 assertiveness = ?assertiveness,
                 "SemanticsService::announce (binding not initialized)"
             );
@@ -407,8 +411,10 @@ impl SemanticsService {
         if SemanticsBinding::is_initialized() {
             SemanticsBinding::instance().dispatch_event(&event);
         } else {
+            // The type, not the payload: `SemanticsEventData::String` carries
+            // tooltip and announcement text, which `?event` would print.
             tracing::debug!(
-                event = ?event,
+                event_type = ?event.event_type(),
                 "SemanticsService::send_event (binding not initialized)"
             );
         }

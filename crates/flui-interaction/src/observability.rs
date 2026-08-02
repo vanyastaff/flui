@@ -4,8 +4,9 @@
 //! `flui-interaction` — typed [`GestureEvent`] names + [`SPAN_RECOGNIZER`] /
 //! [`SPAN_ARENA`] span-name constants — and a small test-only subscriber
 //! helper. The crate emits events via [`tracing`]; **consumers wire their
-//! own subscriber** at the application boundary via
-//! [`flui_foundation::log::Logger`]. Per
+//! own subscriber** at the application boundary — `flui-app` and `flui-cli`
+//! do that through `flui-log`, and an embedded host does it however it
+//! already does. `flui-interaction` depends on neither. Per
 //! [`docs/architecture.md`](../docs/architecture.md) policy:
 //!
 //! > **Logging:** `tracing` only — never `println!`, `eprintln!`, or `dbg!`.
@@ -20,11 +21,11 @@
 //!
 //! # How to consume
 //!
-//! Apps configure their subscriber via
-//! `flui_foundation::log::Logger::default().init()`. `flui-interaction`
-//! emits the events; the subscriber (`tracing-subscriber` fmt, tracy,
-//! opentelemetry, devtools, …) decides what to do with them. To filter
-//! on a specific event kind:
+//! A managed application gets a subscriber from `run_app`; anything else calls
+//! `flui_log::setup` (or installs its own). `flui-interaction` emits the
+//! events; the subscriber (`tracing-subscriber` fmt, tracy, opentelemetry,
+//! devtools, …) decides what to do with them. To filter on a specific event
+//! kind:
 //!
 //! ```bash
 //! RUST_LOG=info,flui_interaction::arena=debug,flui_interaction::recognizers=trace cargo run

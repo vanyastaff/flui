@@ -12,12 +12,13 @@
 mod binding;
 mod config;
 pub mod direct;
+pub(crate) mod logging;
 pub(crate) mod presentation;
 pub mod runner;
 pub(crate) mod ui_realm;
 
 pub use binding::AppBinding;
-pub use config::AppConfig;
+pub use config::{AppConfig, DiagnosticsProfile};
 pub use direct::run_direct;
 #[cfg(target_os = "android")]
 pub use runner::{run_app_android, run_app_android_with_config};

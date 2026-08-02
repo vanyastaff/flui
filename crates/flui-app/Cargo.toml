@@ -33,6 +33,10 @@ flui-rendering = { path = "../flui-rendering", version = "0.2.0" }
 flui-objects = { path = "../flui-objects", version = "0.2.0" }
 flui-types = { path = "../flui-types", version = "0.2.0" }
 flui-foundation = { path = "../flui-foundation", version = "0.2.0" }
+# Composition-only logging backend. `flui-app` is a composition root, so it is
+# one of the three crates allowed a normal edge here — see
+# docs/workspace-layers.toml. No framework crate may add this dependency.
+flui-log = { workspace = true }
 flui-interaction = { path = "../flui-interaction", version = "0.2.0" }
 flui-scheduler = { path = "../flui-scheduler", version = "0.2.0" }
 flui-painting = { path = "../flui-painting", version = "0.2.0" }

@@ -29,8 +29,11 @@ pub fn run_app_with_config_impl<V>(root: V, config: AppConfig)
 where
     V: View + StatelessView + Clone + 'static,
 {
-    // Initialize logging
-    init_logging();
+    // Managed startup: install FLUI's default backend only if the slot is
+    // empty. An application that configured its own subscriber before calling
+    // `run_app` keeps it, and a second `run_app` in one process is a no-op
+    // rather than a panic.
+    let _installation = super::logging::init_managed_logging(&config);
 
     // `target_fps` is logged as advisory, not enforced: the desktop runner's
     // steady-state pacing comes from the GPU-side blocking Fifo present
@@ -71,24 +74,6 @@ where
     {
         run_web(root, config);
     }
-}
-
-/// Initialize logging based on environment.
-fn init_logging() {
-    // Use flui_foundation::log for cross-platform logging (desktop, Android, iOS, WASM).
-    // Module was merged from the standalone flui-log crate.
-    let filter = std::env::var("RUST_LOG").unwrap_or_else(|_| {
-        "info,flui_app=debug,flui_view=debug,flui_rendering=debug,wgpu=warn".to_string()
-    });
-
-    flui_foundation::log::Logger::new()
-        .with_filter(&filter)
-        // TRACE ceiling: the per-target filter (RUST_LOG / the default
-        // string above) decides what's emitted — a DEBUG ceiling here
-        // silently made every trace! unreachable no matter what the
-        // user put in RUST_LOG.
-        .with_level(flui_foundation::log::Level::TRACE)
-        .init();
 }
 
 // ============================================================================
@@ -1914,8 +1899,7 @@ where
         // idle loop produces the frame whose drain observes it.
         //
         tracing::info!(
-            realm_id = ?ui_realm.realm_id(),
-            presentation_id = ?ui_realm.presentation_id(),
+            { flui_foundation::diagnostics::PRESENTATION_ID } = ui_realm.presentation_id().as_u64(),
             inbox_capacity = ui_realm.command_sender().capacity(),
             "UiRealm constructed"
         );
@@ -2252,7 +2236,7 @@ pub fn run_app_android_with_config<V>(app: android_activity::AndroidApp, root: V
 where
     V: View + StatelessView + Clone + 'static,
 {
-    init_logging();
+    let _installation = super::logging::init_managed_logging(&config);
 
     tracing::info!(
         title = %config.title,

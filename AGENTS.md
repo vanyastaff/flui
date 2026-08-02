@@ -42,6 +42,8 @@ You need to...
 | Add a new feature | `docs/ROADMAP.md` (is it planned?) | `crates/<crate>/AGENTS.md`, `docs/FOUNDATIONS.md` |
 | Change render/layout/paint | `crates/flui-rendering/AGENTS.md` | `.flutter/` reference, `docs/PORT.md` |
 | Understand error handling | `crates/flui-foundation/AGENTS.md` | `thiserror` in libs, `anyhow` in bins |
+| Touch logging setup or a log backend | `crates/flui-log/AGENTS.md` | `docs/workspace-layers.toml` (only composition roots may depend on it) |
+| Write or review Rust code | `STYLE.md` | Crate `AGENTS.md`, relevant architecture contract |
 | Add a cross-crate dep | `docs/workspace-layers.toml` (the checked layer policy) | Root `Cargo.toml` `[workspace.dependencies]`, `docs/FOUNDATIONS.md` Part IV |
 | Add a new crate | `docs/workspace-layers.toml` — classify it *first*; `[[planned]]` records gated extractions | `docs/crates.md` "Adding a New Crate", [ADR-0041](docs/adr/ADR-0041-workspace-topology-contract.md) |
 | Understand GPU rendering | `crates/flui-engine/AGENTS.md` | `crates/flui-engine/ARCHITECTURE.md` |
@@ -79,7 +81,7 @@ them there. What the manifest can't tell you:
 - **Layering:** crates form a DAG, foundation → core → rendering → framework → app. Dependencies
   point one way down that DAG; see [`docs/FOUNDATIONS.md`](docs/FOUNDATIONS.md)
 - **Platform:** native Win32, AppKit, and headless backends, with `winit` only as a fallback
-- **Diagnostics:** `tracing` only — **no `println!`, `eprintln!`, or `dbg!` in shipped code** (CI enforces this in foundation/tree/macros crates via port-check trigger #15)
+- **Diagnostics:** `tracing` only — **no `println!`, `eprintln!`, or `dbg!` in shipped code** (CI enforces this in foundation/tree/macros crates via port-check trigger #15). *Emitting* is universal; *installing a subscriber* is a composition-root decision that lives in `flui-log` and never in a library
 - **Errors:** `thiserror` (libraries), `anyhow` (applications); panics only per [`docs/PANIC-POLICY.md`](docs/PANIC-POLICY.md) — `expect("BUG: <invariant>")` for internal invariants, never bare `unwrap()` on production paths (`clippy::unwrap_used` gates this)
 Of the crate roots, `crates/flui-rendering/src/lib.rs` is by far the densest — budget accordingly.
 
@@ -118,6 +120,7 @@ These are enforced by `scripts/port-check.sh` in CI and locally via `just port-c
 | **No `From<f32>` for unit wrappers** in flui-geometry | Unit-barrier escape hatch guard |
 | **Sanctioned `dyn` boundaries only** — see the allowlist in port-check.sh trigger #9 | FR-036 registry |
 | **No locks in public API** (`pub fn -> MutexGuard`, `pub field: Mutex<...>`) | SP-6: locks behind private fields |
+| **No dependency on `flui-log` outside `flui-app`, `flui-cli`, and the facade** | Libraries emit through `tracing` and must not reach the backend; `just inventory-check` enforces the `allowed_dependents` list in `docs/workspace-layers.toml` |
 | **No `println!`/`eprintln!`/`dbg!`** in foundation/tree/macros crates | Use `tracing` macros |
 | **No lifecycle-only presentation capability inside `build`/`perform_layout`/`paint`** — `rebuild_handle()` (ADR-0018), `post_frame_handle()` (ADR-0021), `text_input_handle()` (ADR-0030), and `focus_manager()` (ADR-0037) are acquired in `ViewState::init_state` / `did_change_dependencies` and used later | Trigger #22: mutation or scheduling from a frame phase can create an unbounded rebuild loop, re-enter the frame transaction, or leak ownership across presentations. Adding a capability to `BuildContext` means adding its token to `scripts/check-frame-capability-scope.sh` in the same change |
 
@@ -147,6 +150,7 @@ When changing render-tree, sliver, layout, paint, hit-test, semantics, schedulin
 | **Testing** | `docs/testing.md` | Build/test/coverage commands |
 | **Panic policy** | `docs/PANIC-POLICY.md` | When `expect("BUG: …")` is allowed vs. `Result`; `clippy::unwrap_used` gate |
 | **Render harness** | `crates/flui-rendering/docs/TESTING.md` | RenderTester API, catalog rules |
+| **Logging ownership** | `crates/flui-log/AGENTS.md` | Subscriber policies, native sinks, who may depend on the backend |
 | **Crate ARCHITECTURE.md** | `crates/flui-{foundation,rendering,engine,layer,painting}/ARCHITECTURE.md` | Per-crate deep architecture |
 
 ## AI Context Files

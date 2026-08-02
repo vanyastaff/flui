@@ -244,8 +244,10 @@ impl super::WgpuPainter {
         font_size: f32,
         paint: &flui_painting::Paint,
     ) {
+        // Length only — see `TextRenderer::add_text`. Logging the string here
+        // as well meant one painted label produced two copies of it.
         tracing::trace!(
-            text,
+            text_len = text.len(),
             ?position,
             font_size,
             color = ?paint.color,

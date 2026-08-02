@@ -1068,6 +1068,7 @@ This section indexes **crate-level** `ARCHITECTURE.md` template state. For docum
 | `flui-types` | Not yet templated | Active |
 | `flui-tree` | Not yet templated | Active |
 | `flui-macros` | Not yet templated | Active |
+| `flui-log` | Not yet templated | Active |
 | `flui-platform` | Not yet templated | Active |
 | [`flui-painting`](../crates/flui-painting/ARCHITECTURE.md) | Templated 2026-05-20 (Mythos chain) | Active |
 | `flui-semantics` | Not yet templated | Active |

@@ -50,6 +50,11 @@ rustc-hash = "2.1"
 thiserror.workspace = true
 
 [dev-dependencies]
+# Test-only: capturing emitted events is how the privacy contract on the
+# announcement/event fallbacks is checked — an accessibility announcement is
+# read aloud to the user and must never reach a log field verbatim. A *dev*
+# edge only; the shipped crate links no subscriber backend.
+tracing-subscriber = { workspace = true }
 
 [lints]
 workspace = true
