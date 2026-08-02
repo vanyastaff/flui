@@ -506,13 +506,19 @@ state: dict[str, int] = {}
 reported_cycles: set[tuple[str, ...]] = set()
 
 
+def canonical_cycle(cycle: list[str]) -> tuple[str, ...]:
+    """Return a rotation-independent key for a closed directed cycle."""
+    nodes = cycle[:-1]
+    return min(tuple(nodes[index:] + nodes[:index]) for index in range(len(nodes)))
+
+
 def find_cycles(node: str, stack: list[str]) -> None:
     state[node] = VISITING
     stack.append(node)
     for neighbour in sorted(adjacency[node]):
         if state.get(neighbour) == VISITING:
             cycle = stack[stack.index(neighbour):] + [neighbour]
-            key = tuple(cycle)
+            key = canonical_cycle(cycle)
             if key not in reported_cycles:
                 reported_cycles.add(key)
                 errors.append(
