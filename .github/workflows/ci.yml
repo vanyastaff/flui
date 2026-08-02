@@ -111,7 +111,7 @@ jobs:
       - name: typos
         run: typos
 
-      - name: workspace inventory drift check
+      - name: workspace inventory + layer topology drift check
         run: bash scripts/check-workspace-inventory.sh
 
       - name: scripts/port-check.sh (22 refusal triggers + FR-033)

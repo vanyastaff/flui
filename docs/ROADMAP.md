@@ -266,6 +266,21 @@ Each phase states: **Goal**, **Status**, what was **Delivered** (for closed work
   This work completes ADR-0027/0037, validates ADR-0039, removes the singleton
   and lock-shaped transitional runtime, and proves multi-window plus host-driven
   execution before those APIs graduate.
+- Three structural preflight tasks precede that plan's conformance matrix and API
+  freeze, defined by the
+  [workspace boundary and logging review](research/2026-08-01-workspace-boundary-and-logging-review.md):
+  [#567](https://github.com/vanyastaff/flui/issues/567) locks the workspace
+  topology contract ([ADR-0041](adr/ADR-0041-workspace-topology-contract.md) —
+  `docs/workspace-layers.toml` is now validated against Cargo's normal edges,
+  `flui-objects`/`flui-localizations`/`flui-devtools` placements corrected, and a
+  `flui-runtime` extraction gated on two proven consumers);
+  [#568](https://github.com/vanyastaff/flui/issues/568) moves process-global
+  subscriber installation out of `flui-foundation` into a restored
+  composition-only logging backend; [#569](https://github.com/vanyastaff/flui/issues/569)
+  feature-gates the optional catalogs and development capabilities and renames the
+  headless driver before its conformance API grows. These are structural
+  preparation only — they do not touch View, Element, Render, reconciliation,
+  layout, paint, or lifecycle behavior.
 - Real-IME manual verification (ibus/fcitx or platform IME) on a machine with one configured, including visual confirmation that the candidate window follows the caret/composing region — the one piece PR1+PR2+the cursor-area loop+the composing-region rendering pass could not machine-verify.
 - Composing-region rendering revisited for multiline once multiline lands (`get_boxes_for_range`'s per-line glyph-index comparison is unverified past a single line today).
 - `PlatformHaptics` landed 2026-07-17 ([ADR-0031](adr/ADR-0031-platform-haptics-capability-and-system-chrome-deferral.md)): `flui_types::HapticFeedback` (Flutter's `HapticFeedback` vocabulary, mirrored 1:1), `flui-platform`'s `PlatformHaptics` capability (reached via `PlatformWindow::haptics()`, per-window not device-global), headless's `FakeHaptics`, and `AppBinding::perform_haptic_feedback` all proven headlessly end-to-end. **Honest gap:** no widget consumer yet — no `BuildContext` capability handle exists, so no Material widget (`InkWell`, `Switch`, …) actually fires haptic feedback today; this is the seam, not the whole path. `PlatformSystemChrome` is explicitly deferred in full (same ADR) — none of its six upstream methods (`setPreferredOrientations`, `setApplicationSwitcherDescription`, `setEnabledSystemUIMode`, `restoreSystemUIOverlays`, `setSystemUIChangeCallback`, `setSystemUIOverlayStyle`) has an honorable desktop surface on the current backend set; reopened when a real Android/iOS backend moves past its stub.

@@ -1,0 +1,408 @@
+# FLUI workspace topology contract.
+#
+# This file is the *authoritative* layer policy for the workspace. It is not
+# documentation about the graph — it is the graph, and
+# `scripts/check-workspace-inventory.sh` (`just inventory-check`, part of
+# `just ci` and the CI `checks` job) validates every **normal** Cargo edge
+# against it. Development and build edges are deliberately out of scope: a
+# dev-dependency is a testing convenience, not an architectural claim, and
+# Cargo tolerates dev-dependency cycles that a normal edge could never form.
+#
+# Decision record: docs/adr/ADR-0041-workspace-topology-contract.md
+# Target graph and rationale: docs/FOUNDATIONS.md (Part IV)
+# Human-readable inventory: docs/crates.md
+# Motivating review: docs/research/2026-08-01-workspace-boundary-and-logging-review.md
+#
+# The rules this file feeds:
+#
+#   1. Every active `crates/*` member and the root `flui` facade must appear
+#      exactly once in `[[member]]`. A new crate cannot be built into the
+#      workspace without being classified here first.
+#   2. Every in-workspace normal edge must point at a *strictly lower* layer,
+#      or be listed in `[[same_layer_edge]]` as an ordered pair. Same-layer
+#      entries are directional: allowing `a -> b` never allows `b -> a`.
+#   3. `[[forbidden_edge]]` pairs fail even when the layer rule would permit
+#      them, so the error message names the contract that was broken.
+#   4. The normal-edge graph, *plus* every `[[projected_edge]]`, must stay
+#      acyclic. This is how the future localization graph is checked before
+#      the edges that would close the cycle actually exist.
+#   5. Nothing under `crates/` may depend on a member outside `crates/`
+#      (examples and tools are terminal consumers).
+#   6. Planned entries have a validated status (`gated` or `sanctioned`) and
+#      required gate metadata. A `gated` crate may not have a Cargo manifest
+#      until its gate is satisfied and the entry is replaced by `[[member]]`.
+#
+# `disposition` classifies each active member for the Runtime.1 milestone:
+#
+#   keep                 — boundary is correct; do not churn it during the sprint
+#   rename               — responsibility is right, the package name is wrong
+#   narrow               — crate keeps existing but loses a responsibility
+#   optionalize          — capability must become removable via a feature
+#   deferred-extraction  — a responsibility leaves this crate later, under a gate
+
+# =============================================================================
+# Layers
+# =============================================================================
+
+[[layer]]
+rank = 0
+name = "Foundation (value types)"
+
+[[layer]]
+rank = 1
+name = "Framework primitives"
+
+[[layer]]
+rank = 2
+name = "Substrate"
+
+[[layer]]
+rank = 3
+name = "Compositing / a11y / animation"
+
+[[layer]]
+rank = 4
+name = "Render machine + render catalog"
+
+[[layer]]
+rank = 5
+name = "Framework spine"
+
+[[layer]]
+rank = 6
+name = "Widget catalog + DX tooling"
+
+[[layer]]
+rank = 7
+name = "Design systems"
+
+[[layer]]
+rank = 8
+name = "Global localizations"
+
+[[layer]]
+rank = 9
+name = "Application / tooling"
+
+[[layer]]
+rank = 10
+name = "Facade"
+
+# =============================================================================
+# Members
+# =============================================================================
+
+[[member]]
+name = "flui-geometry"
+layer = 0
+disposition = "keep"
+note = "Unit-safe coordinate primitives; separate from the broader value catalog."
+
+[[member]]
+name = "flui-types"
+layer = 0
+disposition = "keep"
+note = "Value/unit catalog. Depends on flui-geometry inside L0 (see same_layer_edge)."
+
+[[member]]
+name = "flui-foundation"
+layer = 1
+disposition = "narrow"
+note = """
+Keeps `tracing` emission and shared diagnostic value types. Loses process-global \
+subscriber installation and the platform logging backends to a restored, \
+composition-only `flui-log` (issue #568). Manifest is leaf-like today: \
+`flui-types` is a dev-dependency only.\
+"""
+
+[[member]]
+name = "flui-macros"
+layer = 1
+disposition = "keep"
+note = "Proc-macro crate for framework derives."
+
+[[member]]
+name = "flui-tree"
+layer = 2
+disposition = "keep"
+note = "Tree protocol and arity vocabulary."
+
+[[member]]
+name = "flui-platform"
+layer = 2
+disposition = "narrow"
+note = """
+Retains the event loop, native windows, input, display timing, and OS \
+capabilities. Loses `BackgroundExecutor`/`PlatformExecutor` when host-injected \
+runtime execution lands; web task spawning becomes an implementation of the \
+runtime's default executor, not a per-Platform responsibility.\
+"""
+
+[[member]]
+name = "flui-scheduler"
+layer = 2
+disposition = "narrow"
+note = """
+Reduced to logical update phases, tickers, callback ordering, and owner-local \
+post-frame behavior. Presentation clocks and raster backpressure move to \
+presentation/runtime ownership; workers and durable services move to runtime \
+execution.\
+"""
+
+[[member]]
+name = "flui-painting"
+layer = 2
+disposition = "keep"
+note = "Canvas/DisplayList recording; a distinct retained pipeline product."
+
+[[member]]
+name = "flui-interaction"
+layer = 2
+disposition = "keep"
+note = "Hit-testing, gestures, focus, pointer, owner-local text input. Depends on flui-platform inside L2 (ADR-0037)."
+
+[[member]]
+name = "flui-assets"
+layer = 2
+disposition = "keep"
+note = "Asset loading/decoding; one of the three sanctioned async edges (contract C8)."
+
+[[member]]
+name = "flui-semantics"
+layer = 3
+disposition = "keep"
+note = "Accessibility tree; a distinct retained pipeline product."
+
+[[member]]
+name = "flui-layer"
+layer = 3
+disposition = "keep"
+note = "Compositor input tree; a distinct retained pipeline product."
+
+[[member]]
+name = "flui-animation"
+layer = 3
+disposition = "keep"
+note = "Curves, tweens, controllers, implicit animations."
+
+[[member]]
+name = "flui-engine"
+layer = 4
+disposition = "keep"
+note = "GPU pipeline; owns all wgpu state. Separate from OS-facing flui-platform."
+
+[[member]]
+name = "flui-rendering"
+layer = 4
+disposition = "keep"
+note = "The render machine: RenderObject, RenderBox<Arity>, layout protocol, paint context."
+
+[[member]]
+name = "flui-objects"
+layer = 4
+disposition = "keep"
+note = """
+The concrete render catalog. It sits *above* `flui-rendering` and *below* \
+`flui-view`: `flui-view` names concrete render types (`RenderLayoutBuilder`, \
+`RenderSliverList`, `RenderSliverGridLazy`, `RenderSizedBox`) for framework \
+machinery whose element and render halves cooperate. Previously documented as \
+a peer of `flui-widgets` above `flui-view`, which the real production graph \
+contradicts.\
+"""
+
+[[member]]
+name = "flui-view"
+layer = 5
+disposition = "keep"
+note = "View + Element tree, BuildContext. The framework spine."
+
+[[member]]
+name = "flui-widgets"
+layer = 6
+disposition = "keep"
+note = "Author-facing widget catalog; owns the Localizations/Directionality/WidgetsLocalizations contracts."
+
+[[member]]
+name = "flui-binding"
+layer = 6
+disposition = "rename"
+note = """
+Deterministic headless frame driver. Renamed to `flui-testing` before Runtime.1 \
+grows its conformance harness API (issue #569): `binding` collides conceptually \
+with the transitional `AppBinding` graph Runtime.1 removes, and the package name \
+becomes a public testing contract once conformance tests import it.\
+"""
+
+[[member]]
+name = "flui-hot-reload"
+layer = 6
+disposition = "optionalize"
+note = "Development capability; must be removable from the facade and from flui-app (issue #569)."
+
+[[member]]
+name = "flui-build"
+layer = 6
+disposition = "keep"
+note = "Async cross-platform build pipeline; one of the three sanctioned async edges (contract C8)."
+
+[[member]]
+name = "flui-material"
+layer = 7
+disposition = "keep"
+note = "Terminal design system. Never depends on flui-localizations (see forbidden_edge)."
+
+[[member]]
+name = "flui-cupertino"
+layer = 7
+disposition = "keep"
+note = "Terminal design system, independent sibling of flui-material (ADR-0028)."
+
+[[member]]
+name = "flui-localizations"
+layer = 8
+disposition = "keep"
+note = """
+Shallow today (only `GlobalWidgetsLocalizations`), substantial once generated \
+translations land. It is the *implementation* package: contracts and default \
+English implementations belong to the catalogs that define them, and this crate \
+depends on those catalogs — never the reverse. Sits above the design systems \
+because `GlobalMaterialLocalizations`/`GlobalCupertinoLocalizations` will \
+implement Material's and Cupertino's contracts (see projected_edge).\
+"""
+
+[[member]]
+name = "flui-app"
+layer = 9
+disposition = "narrow"
+note = """
+The private composition root for runtime ownership during Runtime.1. Before the \
+milestone: make hot reload optional and remove parked theme/direct-render \
+surfaces with no supported runtime path (issue #569). `flui-runtime` is \
+extracted only under the gate in [[planned]], not speculatively.\
+"""
+
+[[member]]
+name = "flui-devtools"
+layer = 9
+disposition = "keep"
+note = "Profiler and inspector adapters over `tracing`. Consumes flui-hot-reload; nothing in the framework consumes it."
+
+[[member]]
+name = "flui-cli"
+layer = 9
+disposition = "keep"
+note = "CLI tooling. Depends on flui-devtools inside L9 (see same_layer_edge)."
+
+[[member]]
+name = "flui"
+layer = 10
+disposition = "optionalize"
+note = """
+The facade. Compiles both design systems unconditionally today; must become \
+feature-selective so unused Cupertino, localization data, and hot-reload \
+machinery are removable (issue #569). Manifest is the workspace root \
+`Cargo.toml`, not a `crates/` member.\
+"""
+
+# =============================================================================
+# Sanctioned same-layer edges (ordered pairs — `from -> to` only)
+# =============================================================================
+
+[[same_layer_edge]]
+from = "flui-types"
+to = "flui-geometry"
+why = "Value catalog re-exports the geometry primitives (`flui_types::geometry::*`) split out by PR #138."
+
+[[same_layer_edge]]
+from = "flui-interaction"
+to = "flui-platform"
+why = """
+ADR-0037: flui-platform owns the OS-facing `PlatformTextInput` capability; \
+flui-interaction owns the owner-local `TextInputOwner` and names the injected \
+capability directly. Interaction policy depends on the platform capability \
+contract, never the reverse.\
+"""
+
+[[same_layer_edge]]
+from = "flui-objects"
+to = "flui-rendering"
+why = """
+The render catalog is built on the render machine. Both sit in L4 so that the \
+existing L5+ numbering stays stable, but the edge is directional: \
+`flui-rendering -> flui-objects` remains forbidden, which is the inversion that \
+would actually break the layering.\
+"""
+
+[[same_layer_edge]]
+from = "flui-cli"
+to = "flui-devtools"
+why = "`flui run` drives the profiler/hot-reload orchestration devtools exposes. Devtools never depends on the CLI."
+
+# =============================================================================
+# Forbidden edges (fail even where the layer rule alone would allow them)
+# =============================================================================
+
+[[forbidden_edge]]
+from = "flui-material"
+to = "flui-localizations"
+why = """
+Localization ownership contract: `flui-localizations` implements the catalogs' \
+delegate contracts, so it depends on Material — a dependency back from Material \
+makes the implementation package and its interface owner mutually dependent. \
+The facade may re-export the localizations package behind an optional feature \
+without changing this internal direction.\
+"""
+
+[[forbidden_edge]]
+from = "flui-cupertino"
+to = "flui-localizations"
+why = "Same contract as flui-material: Cupertino defines the delegate contract, flui-localizations implements it."
+
+# =============================================================================
+# Projected edges — do not exist yet; included in the acyclicity check so the
+# future graph is validated before the edges land.
+# =============================================================================
+
+[[projected_edge]]
+from = "flui-localizations"
+to = "flui-material"
+why = "`GlobalMaterialLocalizations` implements Material's localization contract (Flutter's flutter_localizations -> material)."
+
+[[projected_edge]]
+from = "flui-localizations"
+to = "flui-cupertino"
+why = "`GlobalCupertinoLocalizations` implements Cupertino's localization contract."
+
+# =============================================================================
+# Planned / gated crates
+# =============================================================================
+
+[[planned]]
+name = "flui-log"
+status = "sanctioned"
+owner_issue = 568
+gate = """
+Restored as a *composition-only* cross-platform logging backend: the desktop \
+`fmt` layer, Android logcat, Apple unified logging, and the browser \
+console/performance timeline, behind a small setup API. It must be depended on \
+only by composition roots (`flui-app`, `flui-cli`, the facade) and must never \
+become a dependency of View, rendering, widgets, or engine — libraries keep \
+using `tracing` directly. Add it to [[member]] at layer 2 or below when it \
+lands, and drop foundation's `tracing-subscriber`/`tracing-forest`/\
+`android_log-sys`/`tracing-oslog`/`tracing-wasm` normal dependencies in the \
+same change.\
+"""
+
+[[planned]]
+name = "flui-runtime"
+status = "gated"
+owner_issue = 567
+gate = """
+Not created during Runtime.1. `flui-app` is the private composition root for \
+runtime ownership. Extraction requires all three of: (1) a managed entry point \
+and a host-driven/embedded entry point that both drive the *same* proven core; \
+(2) a measurable dependency reduction — a crate that today needs the whole of \
+`flui-app` would need only `flui-runtime`; (3) the extracted boundary being \
+exercised by those two consumers, not inferred from a diagram. A crate created \
+before the second consumer exists freezes a guessed boundary.\
+"""

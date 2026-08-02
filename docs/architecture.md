@@ -11,19 +11,26 @@ For the deep, rule-by-rule guide (anti-patterns, code examples, dependency rules
 20+ crates are organized into a strict directed acyclic graph (DAG). Dependencies flow downward only; circular dependencies are forbidden. Each crate exposes its public API exclusively through `lib.rs` (and an optional `prelude` module). Internal modules default to `pub(crate)`.
 
 ```
-Layer 8  ── flui-app, flui-cli, flui-devtools
-Layer 7  ── flui-hot-reload   (depends on flui-view via `app-plugin` feature)
+Layer 10 ── flui                       (facade)
                 │
-Layer 6  ── flui-view, flui-objects, flui-widgets, flui-binding,
-                │  flui-build, flui-assets
+Layer 9  ── flui-app, flui-devtools, flui-cli
                 │
-Layer 5  ── flui-engine, flui-platform
+Layer 8  ── flui-localizations         (implements the catalogs' delegate contracts)
                 │
-Layer 4  ── flui-scheduler, flui-rendering, flui-animation
+Layer 7  ── flui-material, flui-cupertino
                 │
-Layer 3  ── flui-painting, flui-layer, flui-semantics, flui-interaction
+Layer 6  ── flui-widgets, flui-binding, flui-hot-reload, flui-build
                 │
-Layer 1  ── flui-tree, flui-foundation, flui-macros
+Layer 5  ── flui-view
+                │
+Layer 4  ── flui-engine, flui-rendering, flui-objects
+                │   (objects → rendering, never the reverse)
+Layer 3  ── flui-layer, flui-semantics, flui-animation
+                │
+Layer 2  ── flui-tree, flui-platform, flui-scheduler, flui-painting,
+                │  flui-interaction, flui-assets
+                │  (interaction → platform, never the reverse)
+Layer 1  ── flui-foundation, flui-macros
                 │   (flui-foundation = framework primitives:
                 │    ChangeNotifier, Id system, BindingBase, Key, diagnostics)
 Layer 0  ── flui-geometry, flui-types
@@ -31,13 +38,15 @@ Layer 0  ── flui-geometry, flui-types
                  platform value types; base units)
 ```
 
-Note on `flui-foundation` placement: in the current workspace its Cargo deps are leaf (no internal-crate runtime deps), but its *responsibility* is framework primitives that operate on top of `flui-types`' value types — so it is placed above `flui-types` in the layered table. The target crate graph in [`FOUNDATIONS.md`](FOUNDATIONS.md) Part IV makes that placement an enforced edge.
+**This is not enforced by convention.** [`workspace-layers.toml`](workspace-layers.toml) is the authoritative policy, and `scripts/check-workspace-inventory.sh` (`just inventory-check`, part of `just ci` and the CI `checks` job) validates every **normal** Cargo edge against it: strictly downward unless the ordered pair is an explicit same-layer exemption, no forbidden pairs, acyclic including projected future edges, and every member classified. See [ADR-0041](adr/ADR-0041-workspace-topology-contract.md). Dev-dependencies are out of scope and cross layers freely — a test fixture is not an architectural claim.
+
+Note on `flui-foundation` placement: in the current workspace its Cargo deps are leaf (no internal-crate runtime deps), but its *responsibility* is framework primitives that operate on top of `flui-types`' value types — so it is placed above `flui-types` in the layered table. The target crate graph in [`FOUNDATIONS.md`](FOUNDATIONS.md) Part IV draws that placement as a dashed (not-yet-real) edge.
 
 See [`crates.md`](crates.md) for the full inventory and current status of each crate.
 
 ### Why this structure?
 
-- **The compiler enforces the layout.** Cargo prevents an upward edge at build time, not at review time.
+- **Tooling enforces the layout, not review.** Cargo rejects a dependency *cycle* at build time, but an upward edge that does not close a cycle (`flui-rendering → flui-devtools`, say) builds fine — which is how three placements in this diagram drifted from the code unnoticed. `just inventory-check` closes that gap by comparing the declared layer policy against Cargo's normal edges.
 - **Public API discipline scales.** A consumer cannot reach into another crate's internals because they are `pub(crate)`. Reviewers reject changes that expose internals "just to make it compile" — that is the signal an abstraction is wrong.
 - **Backends slot in via traits.** `Platform`, `PaintBackend`, `RenderBox<A>`, and similar are extension points. Implementations live in dedicated crates, not in widget code.
 
