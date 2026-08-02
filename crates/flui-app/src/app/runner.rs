@@ -29,8 +29,11 @@ pub fn run_app_with_config_impl<V>(root: V, config: AppConfig)
 where
     V: View + StatelessView + Clone + 'static,
 {
-    // Initialize logging
-    init_logging();
+    // Managed startup: install FLUI's default backend only if the slot is
+    // empty. An application that configured its own subscriber before calling
+    // `run_app` keeps it, and a second `run_app` in one process is a no-op
+    // rather than a panic.
+    let _ownership = super::logging::init_logging(super::logging::EntryPoint::Managed, &config);
 
     // `target_fps` is logged as advisory, not enforced: the desktop runner's
     // steady-state pacing comes from the GPU-side blocking Fifo present
@@ -71,24 +74,6 @@ where
     {
         run_web(root, config);
     }
-}
-
-/// Initialize logging based on environment.
-fn init_logging() {
-    // Use flui_foundation::log for cross-platform logging (desktop, Android, iOS, WASM).
-    // Module was merged from the standalone flui-log crate.
-    let filter = std::env::var("RUST_LOG").unwrap_or_else(|_| {
-        "info,flui_app=debug,flui_view=debug,flui_rendering=debug,wgpu=warn".to_string()
-    });
-
-    flui_foundation::log::Logger::new()
-        .with_filter(&filter)
-        // TRACE ceiling: the per-target filter (RUST_LOG / the default
-        // string above) decides what's emitted — a DEBUG ceiling here
-        // silently made every trace! unreachable no matter what the
-        // user put in RUST_LOG.
-        .with_level(flui_foundation::log::Level::TRACE)
-        .init();
 }
 
 // ============================================================================
@@ -845,7 +830,11 @@ fn dispatch_platform_realm(
     event: RealmEvent,
 ) -> Result<(), RealmDispatchError> {
     if std::thread::current().id() != dispatcher.owner_thread {
-        tracing::error!(?dispatcher, "rejecting realm callback on non-owner thread");
+        tracing::error!(
+            { flui_foundation::diagnostics::REALM_ID } = ?dispatcher.realm_id,
+            ?dispatcher,
+            "rejecting realm callback on non-owner thread"
+        );
         return Err(RealmDispatchError::WrongThread);
     }
     let realm = PLATFORM_REALM_HOST.with(|slot| {
@@ -2252,7 +2241,7 @@ pub fn run_app_android_with_config<V>(app: android_activity::AndroidApp, root: V
 where
     V: View + StatelessView + Clone + 'static,
 {
-    init_logging();
+    let _ownership = super::logging::init_logging(super::logging::EntryPoint::Managed, &config);
 
     tracing::info!(
         title = %config.title,

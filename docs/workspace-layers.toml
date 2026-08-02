@@ -21,14 +21,19 @@
 #   2. Every in-workspace normal edge must point at a *strictly lower* layer,
 #      or be listed in `[[same_layer_edge]]` as an ordered pair. Same-layer
 #      entries are directional: allowing `a -> b` never allows `b -> a`.
-#   3. `[[forbidden_edge]]` pairs fail even when the layer rule would permit
+#   3. A member may declare `allowed_dependents`, the complete set of crates
+#      permitted a *normal* edge into it, plus a `why`. Layer depth says who a
+#      crate may depend *on*; it says nothing about who may depend on *it*. A
+#      crate that sits low precisely because it has no dependencies would
+#      otherwise be reachable from the entire workspace above it.
+#   4. `[[forbidden_edge]]` pairs fail even when the layer rule would permit
 #      them, so the error message names the contract that was broken.
-#   4. The normal-edge graph, *plus* every `[[projected_edge]]`, must stay
+#   5. The normal-edge graph, *plus* every `[[projected_edge]]`, must stay
 #      acyclic. This is how the future localization graph is checked before
 #      the edges that would close the cycle actually exist.
-#   5. Nothing under `crates/` may depend on a member outside `crates/`
+#   6. Nothing under `crates/` may depend on a member outside `crates/`
 #      (examples and tools are terminal consumers).
-#   6. Planned entries have a validated status (`gated` or `sanctioned`) and
+#   7. Planned entries have a validated status (`gated` or `sanctioned`) and
 #      required gate metadata. A `gated` crate may not have a Cargo manifest
 #      until its gate is satisfied and the entry is replaced by `[[member]]`.
 #
@@ -107,12 +112,14 @@ note = "Value/unit catalog. Depends on flui-geometry inside L0 (see same_layer_e
 [[member]]
 name = "flui-foundation"
 layer = 1
-disposition = "narrow"
+disposition = "keep"
 note = """
-Keeps `tracing` emission and shared diagnostic value types. Loses process-global \
-subscriber installation and the platform logging backends to a restored, \
-composition-only `flui-log` (issue #568). Manifest is leaf-like today: \
-`flui-types` is a dev-dependency only.\
+Emits `tracing` events and owns the shared diagnostic value types, including \
+the structured field vocabulary in `flui_foundation::diagnostics`. Process-global \
+subscriber installation and the platform logging backends moved to the restored, \
+composition-only `flui-log`, so an embedded host can link foundation without \
+linking `tracing-subscriber` at all. Manifest is leaf-like: `flui-types` is a \
+dev-dependency only.\
 """
 
 [[member]]
@@ -120,6 +127,29 @@ name = "flui-macros"
 layer = 1
 disposition = "keep"
 note = "Proc-macro crate for framework derives."
+
+[[member]]
+name = "flui-log"
+layer = 2
+disposition = "keep"
+allowed_dependents = ["flui-app", "flui-cli", "flui"]
+why = """
+Composition-only. It assembles a subscriber — native sink selection, filter \
+policy, application identity, and the process-global install — which is an \
+application decision, not a library primitive. The crate that preceded it was \
+deleted for becoming the way every library reached the logging macros; \
+framework crates depend on `tracing` and nothing else, so replacing or removing \
+the default backend never touches an instrumentation call site. It has no \
+in-workspace dependencies at all, which is why it sits this low; the layer rule \
+alone would therefore let the entire workspace above it depend on it, and this \
+restriction is what stops that.\
+"""
+note = """
+Desktop `fmt` (optionally hierarchical via `tracing-forest`), Android logcat, \
+Apple unified logging, and the browser console/performance timeline, behind an \
+explicit ownership policy: Inherit installs nothing, Auto preserves an existing \
+subscriber, Install returns a typed error rather than panicking.\
+"""
 
 [[member]]
 name = "flui-tree"
@@ -376,22 +406,6 @@ why = "`GlobalCupertinoLocalizations` implements Cupertino's localization contra
 # =============================================================================
 # Planned / gated crates
 # =============================================================================
-
-[[planned]]
-name = "flui-log"
-status = "sanctioned"
-owner_issue = 568
-gate = """
-Restored as a *composition-only* cross-platform logging backend: the desktop \
-`fmt` layer, Android logcat, Apple unified logging, and the browser \
-console/performance timeline, behind a small setup API. It must be depended on \
-only by composition roots (`flui-app`, `flui-cli`, the facade) and must never \
-become a dependency of View, rendering, widgets, or engine — libraries keep \
-using `tracing` directly. Add it to [[member]] at layer 2 or below when it \
-lands, and drop foundation's `tracing-subscriber`/`tracing-forest`/\
-`android_log-sys`/`tracing-oslog`/`tracing-wasm` normal dependencies in the \
-same change.\
-"""
 
 [[planned]]
 name = "flui-runtime"

@@ -515,19 +515,48 @@ impl BuildTarget {
     }
 }
 
+/// Install the CLI's own subscriber.
+///
+/// The CLI owns its logging policy — it is a composition root, not a library —
+/// but reuses `flui-log`'s backend construction so a `flui run` prints the same
+/// way the application it launches does.
+///
+/// `Auto` rather than `Install`: a wrapper script or an embedding harness that
+/// set up a subscriber before invoking the CLI keeps it, and this never aborts
+/// the command over a logging detail.
+fn init_logging(verbose: bool) {
+    // `-v` raises FLUI's own crates to debug and leaves the dependency stack
+    // alone. `RUST_LOG` still overrides the whole thing, and nothing narrows it
+    // afterwards, so `RUST_LOG=flui_build=trace` reaches TRACE.
+    let directives = if verbose {
+        "info,flui=debug,flui_build=debug,flui_devtools=debug"
+    } else {
+        "info"
+    };
+
+    let config = flui_log::LogConfig::builder()
+        .directives(directives)
+        .build();
+
+    match flui_log::setup(&config, flui_log::SubscriberPolicy::Auto) {
+        Ok(_ownership) => {}
+        Err(error) => {
+            // An unparsable RUST_LOG must not stop the command. Fall back to
+            // directives that are known good and report it once a subscriber
+            // exists to report through.
+            let fallback = flui_log::LogConfig::builder()
+                .filter(flui_log::FilterConfig::new(directives).without_env_var())
+                .build();
+            let _ = flui_log::setup(&fallback, flui_log::SubscriberPolicy::Auto);
+            tracing::warn!(%error, "log filter configuration was rejected; using CLI defaults");
+        }
+    }
+}
+
 fn main() {
     let cli = Cli::parse();
 
-    // Initialize logging (merged from flui-log into flui_foundation::log).
-    let log_level = if cli.verbose {
-        flui_foundation::log::Level::DEBUG
-    } else {
-        flui_foundation::log::Level::INFO
-    };
-
-    flui_foundation::log::Logger::new()
-        .with_level(log_level)
-        .init();
+    init_logging(cli.verbose);
 
     // Dispatch command
     let result: crate::error::CliResult<()> = match cli.command {

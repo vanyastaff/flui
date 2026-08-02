@@ -47,8 +47,14 @@ pub use bindings::{
     GestureBinding, PaintingBinding, PipelineOwner, RenderingFlutterBinding, Scheduler,
     SemanticsBinding, WidgetsBinding,
 };
-// Convenience re-exports from flui_foundation::log (merged from flui-log).
-pub use flui_foundation::log::{Level, Logger, debug, error, info, trace, warn};
+// Logging setup, re-exported because `flui-app` is a composition root: an
+// application configuring its own subscriber should not need to name
+// `flui-log` in its manifest. Framework crates emit through `tracing` and
+// never touch these types.
+pub use flui_log::{
+    AppIdentity, BundleId, FilterConfig, LogConfig, SetupError, SubscriberOwnership,
+    SubscriberPolicy,
+};
 // Convenience re-exports from flui-view
 pub use flui_view::{
     BuildContext, BuildContextExt, BuildOwner, ElementBase, ElementTree, StatefulView,
@@ -68,8 +74,9 @@ pub use flui_view::{
 /// ```
 pub mod prelude {
     // Application types
-    // Logging
-    pub use flui_foundation::log::{debug, error, info, trace, warn};
+    // Logging: the macros come straight from `tracing`, which is where every
+    // FLUI crate emits from. Nothing in the prelude installs a subscriber.
+    pub use tracing::{debug, error, info, trace, warn};
 
     pub use crate::{AppConfig, WidgetsFlutterBinding, run_app, run_app_with_config, run_direct};
     // Bindings

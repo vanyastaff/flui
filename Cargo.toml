@@ -6,6 +6,7 @@ members = [
     "crates/flui-types",      # Base types with Unit system (ACTIVE)
     "crates/flui-foundation", # Foundation types and utilities (ACTIVE)
     "crates/flui-macros",     # Proc-macros (skeleton — derives land as a follow-up)
+    "crates/flui-log",        # Composition-only cross-platform tracing backend (ACTIVE)
     "crates/flui-tree",       # Tree abstractions (ACTIVE)
     "crates/flui-platform",   # Platform abstraction (ACTIVE)
 
@@ -82,6 +83,7 @@ default-members = [
     "crates/flui-types",
     "crates/flui-foundation",
     "crates/flui-macros",
+    "crates/flui-log",
     "crates/flui-tree",
     "crates/flui-platform",
     "crates/flui-painting",
@@ -158,12 +160,26 @@ flui-objects = { path = "crates/flui-objects", version = "0.2.0" }
 # virtual clock; sits above flui-widgets, below flui-app.
 flui-binding = { path = "crates/flui-binding", version = "0.2.0" }
 
-# ERROR HANDLING & LOGGING - Used everywhere
+# ERROR HANDLING - Used everywhere
 thiserror = "2.0"
 anyhow = "1.0"
+
+# TRACING — the emission facade is used everywhere; the *backends* below are
+# composition-only. `flui-log` is the single crate that assembles them into a
+# subscriber, and only composition roots (flui-app, flui-cli, the facade)
+# depend on it. Framework libraries depend on `tracing` and nothing more.
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "ansi"] }
 tracing-forest = { version = "0.3", features = ["smallvec"] }
+# Native log sinks. Each is target-gated in the crates that use them.
+android_log-sys = "0.3"
+tracing-oslog = "0.3"
+tracing-wasm = "0.2"
+
+# COMPOSITION-ONLY LOGGING BACKEND — sits at the substrate layer with no
+# in-workspace dependencies. See docs/workspace-layers.toml for the rule that
+# keeps framework crates off it.
+flui-log = { path = "crates/flui-log", version = "0.2.0" }
 
 # === Shared GPU/Window dependencies ===
 # Used by flui-engine, flui-app, and root examples

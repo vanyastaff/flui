@@ -159,9 +159,10 @@ pub mod id;
 pub mod key;
 pub mod wasm;
 
-// Logging - cross-platform tracing backend (merged from flui-log; see
-// docs/plans/2026-05-23-001-feat-pipeline-wiring-d-block-plan.md).
-pub mod log;
+// Shared field-name vocabulary for structured tracing events. Foundation owns
+// the names because every framework crate emits them; *installing* a subscriber
+// to receive them is a composition-root decision and lives in `flui-log`.
+pub mod diagnostics;
 
 // Dependency-inverted tree observation (ADR-0040) + the typed rebuild
 // causes its events carry.

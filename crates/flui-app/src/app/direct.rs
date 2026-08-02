@@ -68,14 +68,11 @@ pub fn run_direct(
     config: AppConfig,
     render_fn: impl FnMut(&mut SceneBuilder<'_>, f32, f32) + Send + 'static,
 ) -> anyhow::Result<()> {
-    // Initialize logging
-    let filter = std::env::var("RUST_LOG")
-        .unwrap_or_else(|_| "info,flui_app=debug,flui_engine=debug,wgpu=warn".to_string());
-
-    flui_foundation::log::Logger::new()
-        .with_filter(&filter)
-        .with_level(flui_foundation::log::Level::DEBUG)
-        .init();
+    // Managed startup, same contract as `run_app`: install FLUI's default
+    // backend only into an empty slot. The historical code called
+    // `Logger::init`, which panicked the moment a host — or a second
+    // `run_direct` in the same process — already owned the subscriber.
+    let _ownership = super::logging::init_logging(super::logging::EntryPoint::Managed, &config);
 
     tracing::info!(
         title = %config.title,

@@ -1,0 +1,82 @@
+# AGENTS.md — flui-log
+
+Cross-platform logging **backend**. It assembles a `tracing` subscriber; it is
+not how framework code reaches the logging macros.
+
+## The one rule that matters
+
+**Only `flui-app`, `flui-cli`, and the `flui` facade may depend on this crate.**
+
+Every other crate — View, rendering, objects, widgets, engine, painting,
+platform, everything — depends on `tracing` and nothing else. They emit
+structured events and hold no opinion about where those events go, so removing
+or replacing the default backend must never touch an instrumentation call site.
+
+This is enforced mechanically, not by convention: `docs/workspace-layers.toml`
+gives this member an `allowed_dependents` list, and `just inventory-check` (part
+of `just ci` and the CI `checks` job) fails on any other normal edge into it.
+The crate's low layer number reflects that it has *no* in-workspace
+dependencies; it is not permission for the workspace above it to depend on it.
+
+A predecessor crate was deleted in `e3a3c4ff` for becoming exactly that: a
+shallow, universally depended-on wrapper. It came back with a narrower
+responsibility, not a wider one.
+
+## What lives here
+
+| Module | Owns |
+|---|---|
+| `identity` | `AppIdentity`, `BundleId` — the names the native sinks index by |
+| `filter` | `FilterConfig` → one `EnvFilter`, and nothing else |
+| `ownership` | `SubscriberPolicy`, `SubscriberOwnership`, `install_subscriber` |
+| `config` | `LogConfig`, `DesktopFormat`, and the default subscriber stack |
+| `backend` | `PlatformLayer` and the per-target sinks |
+
+## Invariants you can break by accident
+
+- **No second level ceiling.** There is deliberately no `Level` knob anywhere in
+  the API, and every native backend is constructed wide open (`WASMLayer`'s
+  `set_max_level(TRACE)`, `PlatformLayer::max_level_hint` forwarded verbatim).
+  The historical logger stacked a `LevelFilter` seeded from a field defaulting
+  to `INFO` beside the `EnvFilter`, so `RUST_LOG=flui_view=trace` selected
+  events that were then discarded. Adding any level parameter reintroduces it.
+- **A display name is not a bundle identifier.** `AppIdentity` keeps them
+  separate on purpose. The historical code synthesised `com.{display_name}.app`,
+  which produced illegal identifiers and could file a FLUI app's logs under a
+  reverse-DNS name somebody else owns. An application without a declared bundle
+  identifier gets the fixed `UNIDENTIFIED_APPLE_SUBSYSTEM`, never a guess.
+- **Nothing here panics on a taken subscriber slot.** `Install` returns
+  `SetupError::SubscriberAlreadyInstalled`; `Auto` returns
+  `SubscriberOwnership::Inherited`. An embedded host owns its own observability.
+- **`Inherit` must not even read the global slot.** `setup` short-circuits
+  before building a subscriber. If that changes, `tests/inherit_never_touches_the_global_slot.rs`
+  is what catches it.
+- **Do not reach for `tracing::dispatcher::has_been_set`.** It is `#[doc(hidden)]`
+  upstream *and* it is raised by a thread-local `with_default`, so a single
+  scoped subscriber anywhere in the process would convince `Auto` that the global
+  slot was taken forever. `set_global_default`'s own `Result` is the exact
+  signal, with no window between the question and the answer.
+- **macOS is a desktop.** It keeps the `fmt` backend; unified logging there
+  would make `cargo run` print nothing. `os_log` on macOS is opt-in through the
+  `apple-unified-logging` feature.
+
+## Testing
+
+The process-global subscriber slot can be written once per process, so
+`tests/` holds **one scenario per binary** and no binary has more than one test
+that writes the slot. That holds under `cargo test` (process per file) as well
+as `cargo nextest` (process per test), and no test depends on execution order.
+Do not merge two slot-writing scenarios into one file to save a binary.
+
+Backend logic that would otherwise only compile on a device — the logcat level
+mapping, the tag fallback chain, the NUL handling, the field rendering — is
+compiled on **every** target and unit-tested on the CI host, with only the FFI
+call itself behind `cfg(target_os = "android")`. The historical Android tests
+lived inside the `cfg` island, never compiled anywhere, and were asserting
+behaviour the code did not have.
+
+## Out of scope
+
+Crash persistence, remote upload, and the user-visible error surface are
+separate services. This crate may feed them; it must not own their lifecycle or
+product policy.

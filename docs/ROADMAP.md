@@ -149,7 +149,7 @@ Each phase states: **Goal**, **Status**, what was **Delivered** (for closed work
 - **`Scene` / `DrawCommand` contract frozen** with an explicit change protocol (`flui-painting/src/display_list/command.rs`; `docs/designs/2026-06-30-scene-drawcommand-contract.md`), so engine work parallelizes safely.
 - **Physics parity-audited.** `flui-types/src/physics/` (spring/friction/gravity/tolerance) audited against Flutter's `physics` package: two bugs fixed, four intentional divergences documented, behavior tests passing. Report: [`research/2026-06-30-physics-parity-audit.md`](research/2026-06-30-physics-parity-audit.md).
 - **Widget → render-object mapping checklist** delivered at [`research/widget-renderobject-map.md`](research/widget-renderobject-map.md) (it gated Core.2 entry).
-- **Structural do-nows.** The `flui-geometry` split landed; standalone `flui-log` was removed from the workspace.
+- **Structural do-nows.** The `flui-geometry` split landed; the shallow, universally depended-on `flui-log` was removed from the workspace (it later returned as a composition-only backend under issue #568 — narrower responsibility, mechanically restricted dependents).
 - **Standing discipline installed.** `port-check.sh` enforces 22 numbered refusal triggers plus the named guards (FR-033, FR-033/widgets, N-geom.U16, Cross.H2/H3/H7); the gate is green. New mechanically-detectable architecture rules must land in [`PORT.md`](PORT.md) and the script together.
 
 **Exit verification.** `cargo build`/`clippy` green, `bash scripts/port-check.sh -v` exits 0 with all 22 triggers reporting green, zero `unimplemented!()`/`todo!()` in non-test code (grep gate in CI), and the four named integration-test areas exist (layout wiring, keyed-reorder identity, compositing-bits propagation, repaint-boundary dirty-clear). The exact 3-widget `Padding → Center → ColoredBox` tree named in the original exit is covered by equivalent-or-stronger tests (`flui-widgets/tests/layout.rs` per-widget size assertions; `flui-rendering/tests/pipeline_scenarios.rs` deep-chain constraint propagation) rather than one literal composed test.
@@ -304,7 +304,7 @@ Cross is not a phase — it is the substrate that runs alongside Core / Business
 
 ### Cross.0 — Structural do-nows (one-time, upfront) — ✅ done
 
-Bundled into Core.0 because they were cheap-now / catalog-wide-later: the `flui-geometry` split landed, standalone `flui-log` is absent from the workspace, and the refusal-trigger gate has grown to 22 numbered checks plus named guards in `port-check.sh`. Keep [`PORT.md`](PORT.md) and the script aligned as new mechanically-detectable rules land.
+Bundled into Core.0 because they were cheap-now / catalog-wide-later: the `flui-geometry` split landed, the shallow `flui-log` wrapper is gone (a composition-only crate of that name returned under issue #568), and the refusal-trigger gate has grown to 22 numbered checks plus named guards in `port-check.sh`. Keep [`PORT.md`](PORT.md) and the script aligned as new mechanically-detectable rules land.
 
 ### Cross.A — Animation / assets / physics — ✅ mostly done
 

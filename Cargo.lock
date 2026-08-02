@@ -1442,6 +1442,7 @@ dependencies = [
  "flui-hot-reload",
  "flui-interaction",
  "flui-layer",
+ "flui-log",
  "flui-objects",
  "flui-painting",
  "flui-platform",
@@ -1519,8 +1520,8 @@ dependencies = [
  "dirs",
  "flui-build",
  "flui-devtools",
- "flui-foundation",
  "flui-hot-reload",
+ "flui-log",
  "pollster",
  "predicates",
  "serde",
@@ -1607,17 +1608,13 @@ dependencies = [
 name = "flui-foundation"
 version = "0.2.0"
 dependencies = [
- "android_log-sys",
  "flui-types",
  "parking_lot",
  "serde",
  "serde_json",
  "smallvec",
  "tracing",
- "tracing-forest",
- "tracing-oslog",
  "tracing-subscriber",
- "tracing-wasm",
  "web-time",
 ]
 
@@ -1694,6 +1691,20 @@ version = "0.2.0"
 dependencies = [
  "flui-types",
  "flui-widgets",
+]
+
+[[package]]
+name = "flui-log"
+version = "0.2.0"
+dependencies = [
+ "android_log-sys",
+ "flui-foundation",
+ "thiserror 2.0.19",
+ "tracing",
+ "tracing-forest",
+ "tracing-oslog",
+ "tracing-subscriber",
+ "tracing-wasm",
 ]
 
 [[package]]

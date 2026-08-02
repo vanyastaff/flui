@@ -373,6 +373,8 @@ VALID_PLANNED_STATUSES = {"gated", "sanctioned"}
 layer_names = {layer["rank"]: layer["name"] for layer in policy.get("layer", [])}
 
 layer_of: dict[str, int] = {}
+allowed_dependents_of: dict[str, set[str]] = {}
+restriction_reason: dict[str, str] = {}
 for entry in policy.get("member", []):
     member_name = entry["name"]
     if member_name in layer_of:
@@ -389,6 +391,30 @@ for entry in policy.get("member", []):
             f"{entry['disposition']!r}, expected one of {sorted(VALID_DISPOSITIONS)}"
         )
     layer_of[member_name] = entry["layer"]
+
+    # A crate whose *depth* in the layer DAG says nothing about who may use it.
+    # `flui-log` sits low so it can have no in-workspace dependencies, which
+    # under the layer rule alone would let every crate above it depend on it —
+    # the exact shape (a universally depended-on logging wrapper) that got the
+    # original crate deleted. `allowed_dependents` names the complete set of
+    # in-workspace crates permitted a *normal* edge into this member.
+    if "allowed_dependents" in entry:
+        permitted = entry["allowed_dependents"]
+        if not isinstance(permitted, list) or not all(
+            isinstance(name, str) and name for name in permitted
+        ):
+            errors.append(
+                f"{policy_rel} member `{member_name}` declares `allowed_dependents` that is "
+                "not a list of non-empty crate names"
+            )
+            continue
+        if "why" not in entry or not str(entry.get("why", "")).strip():
+            errors.append(
+                f"{policy_rel} member `{member_name}` restricts its dependents but gives no "
+                "`why` — the restriction has to say what it is protecting"
+            )
+        allowed_dependents_of[member_name] = set(permitted)
+        restriction_reason[member_name] = " ".join(str(entry.get("why", "")).split())
 
 # Every active `crates/*` member plus the root `flui` facade is governed by the
 # contract. Adding a crate to the workspace without classifying it here fails
@@ -416,6 +442,14 @@ same_layer_allowed = {
 forbidden_pairs = {
     (edge["from"], edge["to"]): edge["why"] for edge in policy.get("forbidden_edge", [])
 }
+
+for restricted, permitted in sorted(allowed_dependents_of.items()):
+    for name in sorted(permitted):
+        if name not in layer_of:
+            errors.append(
+                f"{policy_rel} member `{restricted}` permits `{name}` as a dependent, but "
+                f"`{name}` is not a classified member"
+            )
 
 for source, target in sorted(same_layer_allowed):
     if source not in layer_of or target not in layer_of:
@@ -456,6 +490,15 @@ for package in workspace_packages:
                 "consumers that nothing under `crates/` may depend on"
             )
             errors.append(f"{rel} (`{name}`) has a normal dependency on {reason}")
+            continue
+
+        permitted = allowed_dependents_of.get(target)
+        if permitted is not None and name not in permitted:
+            errors.append(
+                f"{rel} declares the normal edge `{name} -> {target}`, but `{target}` is "
+                f"restricted to {sorted(permitted)} in {policy_rel}: "
+                f"{restriction_reason.get(target, '')}"
+            )
             continue
 
         why = forbidden_pairs.get((name, target))

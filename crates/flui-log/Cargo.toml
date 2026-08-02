@@ -1,0 +1,64 @@
+[package]
+name = "flui-log"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Composition-only cross-platform tracing backend for FLUI"
+documentation = "https://docs.rs/flui-log"
+readme = "README.md"
+keywords = ["logging", "tracing", "cross-platform", "android", "ios"]
+categories = ["development-tools::debugging", "development-tools::profiling"]
+
+[lints]
+workspace = true
+
+[dependencies]
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+thiserror = { workspace = true }
+
+# Hierarchical desktop output. Optional because a hierarchical tree is a
+# development affordance, not something a shipped application should pay for.
+tracing-forest = { workspace = true, optional = true }
+
+# Android: logcat via the NDK's `__android_log_write`.
+[target.'cfg(target_os = "android")'.dependencies]
+android_log-sys = { workspace = true }
+
+# iOS: Apple unified logging is the *default* backend, so the dependency is
+# unconditional here.
+[target.'cfg(target_os = "ios")'.dependencies]
+tracing-oslog = { workspace = true }
+
+# macOS: unified logging is available but NOT the default — a desktop build
+# that logs to `os_log` prints nothing under `cargo run`, so macOS keeps the
+# desktop backend and opts in through the `apple-unified-logging` feature.
+# `tracing-oslog` compiles a small C shim, so leaving it optional also keeps
+# a macOS type-check from requiring an Apple SDK.
+[target.'cfg(target_os = "macos")'.dependencies]
+tracing-oslog = { workspace = true, optional = true }
+
+# WASM: browser console + performance timeline.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+tracing-wasm = { workspace = true }
+
+[features]
+default = []
+# Hierarchical span-tree desktop output via `tracing-forest`.
+hierarchical = ["dep:tracing-forest"]
+# Apple unified logging as a selectable backend on macOS (always available on
+# iOS, where it is the default).
+apple-unified-logging = ["dep:tracing-oslog"]
+
+[dev-dependencies]
+# The correlation-field test asserts that the vocabulary `flui-foundation`
+# defines survives the stack this crate builds. A dev edge, deliberately: the
+# shipped crate has no in-workspace dependencies at all.
+flui-foundation = { path = "../flui-foundation", version = "0.2.0" }
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

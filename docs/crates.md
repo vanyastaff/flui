@@ -23,7 +23,7 @@ A crate marked **DISABLED** is commented out in `Cargo.toml` `[workspace.members
 
 | Crate | Status | Purpose |
 |-------|--------|---------|
-| `flui-foundation` | ✅ ACTIVE | Framework primitives: `ChangeNotifier` / `Listenable`, `Id` system, `BindingBase`, `Key`, diagnostics, error helpers. Loses process-global subscriber installation and the platform logging backends to a restored, composition-only logging crate ([#568](https://github.com/vanyastaff/flui/issues/568)). |
+| `flui-foundation` | ✅ ACTIVE | Framework primitives: `ChangeNotifier` / `Listenable`, `Id` system, `BindingBase`, `Key`, the shared structured-field vocabulary in `diagnostics`, error helpers. Emits `tracing` events; owns no subscriber. |
 | `flui-macros` | ✅ ACTIVE | Proc-macro crate for framework derives and generated boilerplate |
 
 ## Layer 2 — Substrate
@@ -32,6 +32,7 @@ These crates compose the rendering and platform substrate largely without knowin
 
 | Crate | Status | Purpose |
 |-------|--------|---------|
+| `flui-log` | ✅ ACTIVE | Composition-only cross-platform logging backend: desktop `fmt` (optionally hierarchical), Android logcat, Apple unified logging, browser console/performance timeline, behind an explicit subscriber-ownership policy. **Only `flui-app`, `flui-cli`, and the facade may depend on it** — framework crates use `tracing` directly, and `docs/workspace-layers.toml` enforces that mechanically. |
 | `flui-tree` | ✅ ACTIVE | Generic tree abstractions: `TreeRead` / `TreeNav` / `TreeWrite` trio, iterators / slots, arity markers (`Leaf` / `Single` / `Optional` / `Variable`), depth markers. A workspace audit deleted the unused speculative `visitor` / `diff` modules; concrete trees adopt the trio directly. |
 | `flui-platform` | ✅ ACTIVE | Native Win32 / AppKit / Headless backends + `winit` fallback. Sole home of OS-specific code. Loses `BackgroundExecutor`/`PlatformExecutor` when host-injected runtime execution lands. |
 | `flui-scheduler` | ✅ ACTIVE | Frame scheduling, microtasks, task prioritization. Narrows to logical update phases, tickers, callback ordering, and owner-local post-frame behavior; presentation clocks and raster backpressure move to presentation/runtime ownership. |
@@ -121,6 +122,7 @@ The workspace builds bottom-up automatically. For manual incremental builds:
 cargo build -p flui-geometry
 cargo build -p flui-types
 cargo build -p flui-foundation
+cargo build -p flui-log
 cargo build -p flui-tree
 cargo build -p flui-platform
 # ... continue up the layers

@@ -146,12 +146,14 @@ fn build_test_scene(width: f32, height: f32) -> Scene {
 /// Android entry point — called by NativeActivity when the library is loaded.
 #[no_mangle]
 fn android_main(app: AndroidApp) {
-    // Initialize logging to Android logcat (via flui_foundation::log, merged
-    // from flui-log).
-    flui_foundation::log::Logger::new()
-        .with_filter("info,flui_engine=debug,wgpu=warn")
-        .with_level(flui_foundation::log::Level::DEBUG)
-        .init();
+    // Install the logcat backend. `Auto` rather than a demand: this entry
+    // point can be reached more than once in a process lifetime, and a
+    // subscriber somebody else installed must survive.
+    let config = flui_log::LogConfig::builder()
+        .identity(flui_log::AppIdentity::new("flui_android_demo").unwrap_or_default())
+        .directives("info,flui_engine=debug,wgpu=warn")
+        .build();
+    let _ = flui_log::setup(&config, flui_log::SubscriberPolicy::Auto);
 
     tracing::info!("FLUI Android Demo starting — Scene Render (hot-reload enabled)");
 
