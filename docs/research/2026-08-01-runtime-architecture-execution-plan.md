@@ -63,7 +63,9 @@ Before the runtime conformance matrix freezes transitional APIs, complete the
 three preparation tasks defined by the workspace-boundary review:
 
 1. [#567](https://github.com/vanyastaff/flui/issues/567): lock and mechanically
-   check the real workspace topology;
+   check the real workspace topology — landed as
+   [ADR-0041](../adr/ADR-0041-workspace-topology-contract.md), with
+   `docs/workspace-layers.toml` as the authoritative policy;
 2. [#568](https://github.com/vanyastaff/flui/issues/568): restore the
    cross-platform logging backend outside foundation, move process-global setup
    to composition roots, and prove embedded host inheritance;
@@ -399,6 +401,12 @@ justify them.
 ## Verification gate
 
 - All accepted/proposed runtime ADR clauses have evidence.
+- The workspace topology contract holds: `docs/workspace-layers.toml` and Cargo's
+  normal edges agree under `just inventory-check`, no new crate has been created
+  outside its recorded gate, and every member's disposition still matches what
+  the milestone actually did to it
+  ([ADR-0041](../adr/ADR-0041-workspace-topology-contract.md), derived from the
+  [Workspace Boundary and Logging Review](2026-08-01-workspace-boundary-and-logging-review.md)).
 - `just ci`, `taplo fmt --check`, and `typos` pass.
 - Miri covers owner-local traversal and generation rejection paths.
 - Loom or an equivalent controlled scheduler covers mailbox/shutdown races.

@@ -254,7 +254,7 @@ doc-strict:
     RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked --document-private-items
 
 [group("quality")]
-[doc("Check docs/justfile crate inventories against Cargo metadata")]
+[doc("Check crate inventories + the docs/workspace-layers.toml layer policy against Cargo metadata")]
 inventory-check:
     bash scripts/check-workspace-inventory.sh
 

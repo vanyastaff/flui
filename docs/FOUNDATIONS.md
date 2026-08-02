@@ -139,11 +139,13 @@ The workspace is healthier than its crate count suggests: most crates are deep m
 
 - **Formalize the `flui` facade.** Re-enable and re-scope the facade crate to the *public* surface, add `flui-widgets`/`flui-material`/`flui-cupertino` re-exports (feature-flagged), and provide a `flui::prelude` as those crates land. App authors depend on `flui`; framework authors depend on the granular crates.
 - **Create the design-system crates.** `flui-material` and `flui-cupertino` are terminal catalog crates built on top of `flui-widgets`.
-- **Create `flui-localizations`.** The shared l10n crate is a common ancestor both design-system siblings need; it implements `flui-widgets`' `Localizations`/`WidgetsLocalizations` mechanism (`l10n --> widgets`, added 2026-07-16 — see the amendment below the target graph) rather than defining a parallel one.
+- **Create `flui-localizations`.** The global-translation crate is the *implementation* package sitting above both design-system siblings, not a shared ancestor beneath them: it implements the contracts its dependencies define — `flui-widgets`' `Localizations`/`WidgetsLocalizations` mechanism today, Material's and Cupertino's next — rather than defining a parallel one. See the 2026-07-16 and 2026-08-01 amendments below the target graph; the reverse direction is a CI-enforced forbidden edge.
 
 **No `flui-physics`** — Flutter's `physics` package is already ported into `flui-types/src/physics/`; this overrides the port-phasing research's proposal of a separate crate (~1k LOC of simulation math folded into `flui-types` is the correct shape — a standalone crate would be shallow). **No `flui-services`** — Flutter's `services` is deliberately dissolved; its residue (IME/text-input, system chrome, haptics) becomes capability traits on `flui-platform` (`PlatformTextInput`, `PlatformSystemChrome`, `PlatformHaptics`).
 
 **Target — current libraries plus the remaining catalog/l10n crates and the `flui` facade**:
+
+> **This table is a rendering of [`workspace-layers.toml`](workspace-layers.toml), not the source of truth.** That file is the authoritative layer policy, and `scripts/check-workspace-inventory.sh` validates every **normal** Cargo edge against it — [ADR-0041](adr/ADR-0041-workspace-topology-contract.md). If the two ever disagree, the policy file and Cargo are right and this table is stale, which is exactly the failure the check now refuses (see the placement corrections below the graph).
 
 | Layer | Crates |
 |---|---|
@@ -151,12 +153,13 @@ The workspace is healthier than its crate count suggests: most crates are deep m
 | L1 — Framework primitives | `flui-foundation`, `flui-macros` |
 | L2 — Substrate | `flui-tree`, `flui-platform`, `flui-scheduler`, `flui-painting`, `flui-interaction`, `flui-assets` |
 | L3 — Compositing / a11y / animation | `flui-semantics`, `flui-layer`, `flui-animation` |
-| L4 — Render machine | `flui-engine`, `flui-rendering` |
-| L5 — Framework spine + inspector | `flui-view`, `flui-devtools` |
-| L6 — Catalog + DX tooling | `flui-objects`, `flui-widgets`, `flui-binding`, `flui-localizations`, `flui-hot-reload`, `flui-cli`, `flui-build` |
+| L4 — Render machine + render catalog | `flui-engine`, `flui-rendering`, `flui-objects` |
+| L5 — Framework spine | `flui-view` |
+| L6 — Widget catalog + DX tooling | `flui-widgets`, `flui-binding`, `flui-hot-reload`, `flui-build` |
 | L7 — Design systems | `flui-material`, `flui-cupertino` |
-| L8 — Application | `flui-app` |
-| Facade | **`flui`** (formalized) |
+| L8 — Global localizations | `flui-localizations` |
+| L9 — Application / tooling | `flui-app`, `flui-devtools`, `flui-cli` |
+| Facade (L10) | **`flui`** (formalized) |
 
 ```mermaid
 graph TD
@@ -178,6 +181,9 @@ graph TD
     objects[flui-objects]
     view[flui-view]
     devtools[flui-devtools]
+    cli[flui-cli]
+    build[flui-build]
+    hotreload[flui-hot-reload]
     widgets[flui-widgets]
     binding[flui-binding]
     l10n[flui-localizations]
@@ -187,7 +193,7 @@ graph TD
     facade[flui FACADE]
 
     types --> geometry
-    foundation --> types
+    foundation -.-> types
     tree --> foundation
     platform --> types
     scheduler --> foundation
@@ -209,7 +215,7 @@ graph TD
     objects --> rendering
     objects --> painting
     view --> rendering
-    devtools --> engine
+    view --> objects
     widgets --> view
     widgets --> objects
     widgets --> animation
@@ -218,27 +224,48 @@ graph TD
     binding --> rendering
     binding --> interaction
     binding --> animation
+    hotreload --> view
+    hotreload --> rendering
+    hotreload --> layer
+    material --> widgets
+    cupertino --> widgets
     l10n --> types
     l10n --> widgets
-    material --> widgets
-    material --> l10n
-    cupertino --> widgets
-    cupertino --> l10n
+    l10n -.-> material
+    l10n -.-> cupertino
     app --> engine
     app --> view
-    app --> material
+    app --> widgets
+    app --> hotreload
+    devtools --> hotreload
+    cli --> devtools
+    cli --> build
+    cli --> hotreload
     facade --> app
     facade --> material
+    facade --> cupertino
     facade --> widgets
 ```
 
+Dashed edges are **not present in `Cargo.toml` today**. `foundation -.-> types` is a responsibility placement, not a Cargo edge — `flui-foundation`'s manifest is deliberately leaf-like and takes `flui-types` as a dev-dependency only. `l10n -.-> material` / `l10n -.-> cupertino` are the projected edges that land with `GlobalMaterialLocalizations`/`GlobalCupertinoLocalizations`; they are declared as `[[projected_edge]]` in [`workspace-layers.toml`](workspace-layers.toml) so the acyclicity check validates them before they exist. The graph is the architectural spine, not the full 134-edge set — the complete, checked edge list is whatever `cargo metadata` reports, validated against the policy file.
+
 `rendering --> scheduler` (added 2026-07-14): `flui-rendering::view::ScrollPosition` names `flui_scheduler::PostFrameHandle` for its coalesced content-dimension-flush notify (a post-frame callback that fires a scroll listener after `RenderViewport::perform_layout` commits extents, instead of notifying mid-layout). `flui-scheduler` is L2 (Substrate) and depends only on `flui-foundation`, so this is a same-direction extension of the existing `animation --> scheduler` (L3) edge, not a new direction — `flui-rendering` (L4) gains a second, lower-layer dependency, no cycle.
 
-`l10n --> widgets` (added 2026-07-16): the target graph originally drew `l10n --> types` only — `flui-localizations` depending exclusively on the foundation value types, with no concrete consumer yet. Landing the Catalog.1 theming + localizations substrate gave it one: `flui-widgets` now owns the mechanism (`Localizations`, `LocalizationsDelegate`, the `WidgetsLocalizations` trait, `Directionality`) per Flutter's own layering (`widgets/localizations.dart` lives in the `widgets` package, and `flutter_localizations` depends on `widgets`, not the reverse), and `flui-localizations::GlobalWidgetsLocalizations` is a `WidgetsLocalizations` implementor — it must depend on the crate that defines the trait. This is a genuinely new edge (L6 `l10n` gains an L6 sibling dependency on `widgets`, not just its existing L0 `types` dependency), not a same-direction extension like `rendering --> scheduler` above; it does not create a cycle because nothing in `widgets`, `objects`, `view`, `animation`, or `assets` depends on `l10n`. `material`/`cupertino --> l10n` (already in the target graph) still holds: they depend on both `widgets` and `l10n`, and `l10n` itself now depends on `widgets` too — no cycle, since `material`/`cupertino` never appear on `l10n`'s or `widgets`'s dependency side.
+`l10n --> widgets` (added 2026-07-16): the target graph originally drew `l10n --> types` only — `flui-localizations` depending exclusively on the foundation value types, with no concrete consumer yet. Landing the Catalog.1 theming + localizations substrate gave it one: `flui-widgets` now owns the mechanism (`Localizations`, `LocalizationsDelegate`, the `WidgetsLocalizations` trait, `Directionality`) per Flutter's own layering (`widgets/localizations.dart` lives in the `widgets` package, and `flutter_localizations` depends on `widgets`, not the reverse), and `flui-localizations::GlobalWidgetsLocalizations` is a `WidgetsLocalizations` implementor — it must depend on the crate that defines the trait. It does not create a cycle because nothing in `widgets`, `objects`, `view`, `animation`, or `assets` depends on `l10n`. *(Superseded in part on 2026-08-01: this note originally placed `l10n` in L6 as a sibling of `widgets` and preserved the target graph's `material`/`cupertino --> l10n` direction. Both are corrected below — the direction was backwards, and the fix moves `l10n` above the design systems, which turns this into an ordinary downward edge needing no sibling exemption.)*
 
 `interaction --> platform` (added 2026-07-23; [ADR-0037](adr/ADR-0037-presentation-ownership-domains.md)): `flui-platform` owns the OS-facing `PlatformTextInput` capability and its platform effect; `flui-interaction` owns the owner-local `TextInputOwner`, including client, token, and event-session state, so it names and stores the injected capability directly. Private `flui-app::PresentationState` composes that interaction owner for exactly one presentation. `flui-platform` never depends on `flui-interaction`, so this L2 sibling edge is acyclic and directionally correct: interaction policy depends on the lower-level platform capability contract, never the reverse.
 
 No new edge, but a new guarantee (added 2026-07-16): the `L7 --> L6` direction every `material -->`/`cupertino -->` edge above already draws (design systems depend on the widget catalog, never the reverse) is now a CI-enforced contract, not just a diagram — [ADR-0028](adr/ADR-0028-design-system-decoupling-contract.md) (design-system decoupling contract), guarded by `scripts/check-workspace-inventory.sh`/`just inventory-check`. Any crate below L7 that adds a dependency on `flui-material`/`flui-cupertino` fails CI immediately.
+
+**Placement corrections and the whole-graph guarantee (2026-08-01; [ADR-0041](adr/ADR-0041-workspace-topology-contract.md), issue [#567](https://github.com/vanyastaff/flui/issues/567)).** ADR-0028 mechanically enforced *one* dependency pair. Everything else in this graph was still prose, and three placements had drifted from the code without any check noticing:
+
+- **`flui-objects` moves from the catalog tier down into L4** and gains the `view --> objects` edge. `flui-view` names concrete render types in production — `RenderLayoutBuilder`, `RenderSliverList`, `RenderSliverGridLazy`, `LayoutConstraintsCell`, `RenderSizedBox` — for framework machinery whose element and render halves cooperate (layout builders, lazy slivers). The real graph is `rendering <- objects <- view <- widgets`; the diagram had `objects` as a peer of `widgets` *above* `view`. This is a documentation fix, not a code inversion: `flui-rendering --> flui-objects` stays forbidden, and the `objects -> rendering` intra-L4 edge is a directional exemption, so the inversion that would actually break the layering still fails CI.
+- **`flui-localizations` moves up to L8, above the design systems**, and the `material --> l10n` / `cupertino --> l10n` edges are **reversed**. `flui-localizations` is the *implementation* package: contracts and default English implementations belong to the catalogs that define them (`WidgetsLocalizations` in `flui-widgets`, `GlobalMaterialLocalizations`'s contract in `flui-material`), and the global-translation package depends on those catalogs. The old direction would have made the implementation package and its interface owners mutually dependent the moment global Material/Cupertino translations landed. Both back-edges are now `[[forbidden_edge]]` entries and both forward edges are `[[projected_edge]]` entries, so the check refutes the future cycle today.
+- **`flui-devtools` and `flui-cli` move up to L9.** `devtools --> engine` was never a real edge; `flui-devtools` depends on `flui-foundation` and `flui-hot-reload`, and `flui-cli` consumes `flui-devtools`.
+
+The guarantee: [`workspace-layers.toml`](workspace-layers.toml) is now the authoritative policy, and `scripts/check-workspace-inventory.sh` validates **every** in-workspace normal edge against it — strict downward direction, an ordered-pair allowlist for same-layer edges, named forbidden pairs, acyclicity including projected edges, and mandatory classification of every member. Dev edges stay out of scope by design (a test fixture is not an architectural claim); ADR-0028's narrower design-system rule keeps spanning all dependency kinds.
+
+**No `flui-runtime` yet.** The Runtime.1 execution plan needs a hostable runtime core, and the obvious move is to extract one from `flui-app` up front. That is explicitly deferred: `flui-app` remains the *private* composition root for runtime ownership, and `flui-runtime` may be created only once (1) a managed entry point and a host-driven/embedded entry point both drive the same proven core, (2) the extraction produces a measurable dependency reduction, and (3) those two consumers actually exercise the boundary. A crate created before the second consumer exists freezes a guessed boundary. The gate is recorded as a `[[planned]]` entry with `status = "gated"` in [`workspace-layers.toml`](workspace-layers.toml), and creating `crates/flui-runtime` fails `just inventory-check` with the gate text printed. The same section records the sanctioned restoration of a composition-only `flui-log` (issue [#568](https://github.com/vanyastaff/flui/issues/568)) — the one crate this milestone *does* add, and only because it removes process-global subscriber installation from `flui-foundation`.
 
 The DAG is acyclic and downward-correct. The Constitution **v2.3.0** layer table reflects the pre-PR-C-2 layering snapshot (geometry was in `flui-types`; since [PR #138](https://github.com/vanyastaff/flui/pull/138) it lives in the dedicated `flui-geometry` crate and is re-exported via `flui_types::geometry::*` for compatibility — edition 2024 / Rust 1.96, accurate workspace member list otherwise); the **target graph above** is the forward-looking Part IV decomposition that Part V's roadmap migrates the workspace toward. The constitution remains "current state, locked"; this document is "target state, in progress." Full reasoning and the ordered migration delta: [`research/2026-05-22-crate-decomposition-redesign.md`](research/2026-05-22-crate-decomposition-redesign.md).
 

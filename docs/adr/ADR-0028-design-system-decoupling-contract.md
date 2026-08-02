@@ -8,7 +8,9 @@
 - **Date:** 2026-07-16
 - **Deciders:** @vanyastaff
 - **Scope:** workspace-wide dependency topology — `crates/*/Cargo.toml`, `scripts/check-workspace-inventory.sh`, `docs/FOUNDATIONS.md`
-- **Related:** ADR-0027 (sanctioned leapfrog zones: multi-window ownership, runtime/scheduling topology, concurrency architecture, presentation architecture — this ADR adds **package/dependency topology** as one more); ADR-0022/ADR-0026 (Focus seam — an example of a design-agnostic mechanism already correctly homed in `flui-widgets`); ADR-0009 (flui-widgets as the configuration-object catalog design systems are built on)
+- **Related:** ADR-0027 (sanctioned leapfrog zones: multi-window ownership, runtime/scheduling topology, concurrency architecture, presentation architecture — this ADR adds **package/dependency topology** as one more); ADR-0022/ADR-0026 (Focus seam — an example of a design-agnostic mechanism already correctly homed in `flui-widgets`); ADR-0009 (flui-widgets as the configuration-object catalog design systems are built on); [ADR-0041](ADR-0041-workspace-topology-contract.md) (generalizes this one dependency-graph rule into a checked whole-workspace layer policy)
+
+> **Note (2026-08-01, [ADR-0041](ADR-0041-workspace-topology-contract.md)):** the layer numbers this ADR cites — design systems at L7, the widget catalog at L6 — are unchanged by the topology-contract corrections, and this ADR's rule is unchanged: it still spans **every** dependency kind (normal, dev, build), while ADR-0041's broader layer rule deliberately covers normal edges only. ADR-0041 additionally forbids the reverse localization direction (`flui-material`/`flui-cupertino → flui-localizations`), which this ADR did not cover.
 
 ---
 

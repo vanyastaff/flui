@@ -337,11 +337,203 @@ for package in workspace_packages:
                 "contract): core must never depend on flui-material/flui-cupertino"
             )
 
+# Workspace topology contract (ADR-0041): the declared layer policy in
+# `docs/workspace-layers.toml` is validated against Cargo's *normal* edges.
+#
+# The design-system rule above proves one forbidden pair. It does not prove
+# that the rest of the graph matches the documented architecture, which is how
+# `flui-view -> flui-objects` stayed mis-drawn in `docs/FOUNDATIONS.md` while
+# `cargo metadata` and every inventory check stayed green: member names and
+# metadata inheritance were covered, dependency *direction* was not.
+#
+# Normal edges only, deliberately. A dev-dependency is a testing convenience,
+# not an architectural claim, and Cargo tolerates dev-dependency cycles that a
+# normal edge could never form. (The ADR-0028 check above stays broader — it
+# spans every dependency kind — because an accidental Material dev-dependency
+# in a core crate is itself the coupling smell that rule exists to catch.)
+policy_path = root / "docs" / "workspace-layers.toml"
+policy = tomllib.loads(policy_path.read_text())
+policy_rel = policy_path.relative_to(root)
+
+VALID_DISPOSITIONS = {"keep", "rename", "narrow", "optionalize", "deferred-extraction"}
+
+layer_names = {layer["rank"]: layer["name"] for layer in policy.get("layer", [])}
+
+layer_of: dict[str, int] = {}
+for entry in policy.get("member", []):
+    member_name = entry["name"]
+    if member_name in layer_of:
+        errors.append(f"{policy_rel} lists member `{member_name}` more than once")
+        continue
+    if entry["layer"] not in layer_names:
+        errors.append(
+            f"{policy_rel} member `{member_name}` declares layer {entry['layer']}, "
+            "which has no [[layer]] entry"
+        )
+    if entry["disposition"] not in VALID_DISPOSITIONS:
+        errors.append(
+            f"{policy_rel} member `{member_name}` declares disposition "
+            f"{entry['disposition']!r}, expected one of {sorted(VALID_DISPOSITIONS)}"
+        )
+    layer_of[member_name] = entry["layer"]
+
+# Every active `crates/*` member plus the root `flui` facade is governed by the
+# contract. Adding a crate to the workspace without classifying it here fails
+# the gate — which is what makes the `[[planned]]` extraction gates below
+# enforceable rather than advisory.
+root_package_names = {
+    package["name"]
+    for package in workspace_packages
+    if Path(package["manifest_path"]).resolve().parent == root
+}
+governed_names = set(active_crates) | root_package_names
+
+for missing in sorted(governed_names - set(layer_of)):
+    errors.append(
+        f"{policy_rel} does not classify workspace member `{missing}` — add a [[member]] "
+        "entry with its layer and disposition (see the [[planned]] gates before creating "
+        "a new crate)"
+    )
+for extra in sorted(set(layer_of) - governed_names):
+    errors.append(f"{policy_rel} classifies `{extra}`, which is not an active workspace member")
+
+same_layer_allowed = {
+    (edge["from"], edge["to"]) for edge in policy.get("same_layer_edge", [])
+}
+forbidden_pairs = {
+    (edge["from"], edge["to"]): edge["why"] for edge in policy.get("forbidden_edge", [])
+}
+
+for source, target in sorted(same_layer_allowed):
+    if source not in layer_of or target not in layer_of:
+        errors.append(f"{policy_rel} same_layer_edge `{source} -> {target}` names an unclassified crate")
+    elif layer_of[source] != layer_of[target]:
+        errors.append(
+            f"{policy_rel} same_layer_edge `{source} -> {target}` is not a same-layer pair "
+            f"({layer_of[source]} vs {layer_of[target]}) — it needs no exemption"
+        )
+
+# Normal in-workspace edges, deduplicated across target-specific and optional
+# dependency tables (a `[target.'cfg(...)'.dependencies]` entry is still a real
+# architectural edge, and `cargo metadata` lists it separately).
+workspace_names = {package["name"] for package in workspace_packages}
+normal_edges: dict[str, set[str]] = {}
+for package in workspace_packages:
+    normal_edges[package["name"]] = {
+        dependency["name"]
+        for dependency in package["dependencies"]
+        if dependency.get("kind") is None and dependency["name"] in workspace_names
+    }
+
+for package in workspace_packages:
+    name = package["name"]
+    if name not in layer_of:
+        continue
+    rel = Path(package["manifest_path"]).resolve().relative_to(root)
+
+    for target in sorted(normal_edges[name]):
+        if target == name:
+            continue
+
+        if target not in layer_of:
+            reason = (
+                f"`{target}` is not classified in {policy_rel}"
+                if target in governed_names
+                else f"`{target}` is an example/tool member, and those are terminal "
+                "consumers that nothing under `crates/` may depend on"
+            )
+            errors.append(f"{rel} (`{name}`) has a normal dependency on {reason}")
+            continue
+
+        why = forbidden_pairs.get((name, target))
+        if why is not None:
+            errors.append(
+                f"{rel} declares the forbidden normal edge `{name} -> {target}`: "
+                f"{' '.join(why.split())}"
+            )
+            continue
+
+        source_layer, target_layer = layer_of[name], layer_of[target]
+        if target_layer < source_layer:
+            continue
+        if target_layer == source_layer and (name, target) in same_layer_allowed:
+            continue
+
+        if target_layer == source_layer:
+            errors.append(
+                f"{rel} declares the same-layer normal edge `{name} -> {target}` "
+                f"(both L{source_layer} — {layer_names[source_layer]}) without a "
+                f"[[same_layer_edge]] exemption in {policy_rel}"
+            )
+        else:
+            errors.append(
+                f"{rel} declares the upward normal edge `{name} -> {target}` "
+                f"(L{source_layer} {layer_names[source_layer]} -> L{target_layer} "
+                f"{layer_names[target_layer]}) — dependencies point down the layer DAG"
+            )
+
+# Acyclicity over the normal graph *plus* the projected edges. Cargo already
+# rejects a normal-edge cycle, so the value here is the projection: it proves
+# the future localization graph stays acyclic before the edges that would close
+# a cycle actually exist.
+projected: dict[str, set[str]] = {}
+for edge in policy.get("projected_edge", []):
+    if edge["from"] not in layer_of or edge["to"] not in layer_of:
+        errors.append(f"{policy_rel} projected_edge `{edge['from']} -> {edge['to']}` names an unclassified crate")
+        continue
+    projected.setdefault(edge["from"], set()).add(edge["to"])
+
+adjacency = {
+    name: (normal_edges.get(name, set()) | projected.get(name, set())) & set(layer_of)
+    for name in layer_of
+}
+
+VISITING, DONE = 1, 2
+state: dict[str, int] = {}
+reported_cycles: set[tuple[str, ...]] = set()
+
+
+def find_cycles(node: str, stack: list[str]) -> None:
+    state[node] = VISITING
+    stack.append(node)
+    for neighbour in sorted(adjacency[node]):
+        if state.get(neighbour) == VISITING:
+            cycle = stack[stack.index(neighbour):] + [neighbour]
+            key = tuple(cycle)
+            if key not in reported_cycles:
+                reported_cycles.add(key)
+                errors.append(
+                    f"{policy_rel}: normal + projected dependency cycle " + " -> ".join(cycle)
+                )
+        elif state.get(neighbour) is None:
+            find_cycles(neighbour, stack)
+    stack.pop()
+    state[node] = DONE
+
+
+for node in sorted(adjacency):
+    if state.get(node) is None:
+        find_cycles(node, [])
+
+# A `[[planned]]` crate marked `gated` may not exist yet. Creating it is a
+# contract change: satisfy the gate, then reclassify it as a [[member]].
+for entry in policy.get("planned", []):
+    if entry["status"] == "gated" and entry["name"] in workspace_names:
+        errors.append(
+            f"workspace member `{entry['name']}` exists, but {policy_rel} still marks it "
+            f"`status = \"gated\"` (issue #{entry['owner_issue']}). Extraction gate: "
+            + " ".join(entry["gate"].split())
+        )
+
 if errors:
     print("workspace-inventory: drift detected", file=sys.stderr)
     for error in errors:
         print(f"  - {error}", file=sys.stderr)
     sys.exit(1)
 
-print(f"workspace-inventory: {len(active_crates)} active crates covered")
+print(
+    f"workspace-inventory: {len(active_crates)} active crates covered; "
+    f"{len(layer_of)} members across {len(layer_names)} layers, "
+    f"{sum(len(targets) for targets in normal_edges.values())} normal edges checked"
+)
 PY
