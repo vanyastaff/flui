@@ -23,7 +23,10 @@ debug/
 !.claude/hooks
 !.claude/hooks/*
 
-.agents
+# Local agent runtime mounts/state. Project-authored guidance lives in
+# AGENTS.md and the tracked runtime-specific config files, not in these dirs.
+/.agents/
+/.codex/
 .mimocode/
 
 /%TEMP%/

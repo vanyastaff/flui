@@ -26,6 +26,8 @@ This document is the bedrock under [`ROADMAP.md`](ROADMAP.md). The roadmap seque
 | [`research/2026-05-22-technology-adoption-matrix.md`](research/2026-05-22-technology-adoption-matrix.md) | Per-subsystem behavior/structure adoption decisions |
 | [`research/2026-05-22-architecture-correction-plan.md`](research/2026-05-22-architecture-correction-plan.md) | The systemic-defect inventory + 6 new refusal triggers |
 | [`research/2026-05-22-crate-decomposition-redesign.md`](research/2026-05-22-crate-decomposition-redesign.md) | The target workspace topology |
+| [`research/2026-08-01-ui-runtime-evolution-study.md`](research/2026-08-01-ui-runtime-evolution-study.md) | Cross-framework runtime, multi-window, concurrency, embedding, and frame-pacing evidence |
+| [`research/2026-08-01-runtime-architecture-execution-plan.md`](research/2026-08-01-runtime-architecture-execution-plan.md) | Dependency-ordered completion plan for ADR-0027/0037 and hostable runtime foundations |
 
 **Grounding.** Architecture decisions in this document are graded against *A Philosophy of Software Design* (Ousterhout) — deep vs shallow modules, information hiding, "different layer, different abstraction" — the canonical Rust corpus named in [`CLAUDE.md`](../CLAUDE.md) (*Programming Rust*, *Rust for Rustaceans*, *Rust Atomics and Locks*, *The Rust Performance Book*), and the Rust API Guidelines. [`STRATEGY.md`](../STRATEGY.md) is the product-philosophy anchor: FLUI's product is developer experience, and the success metric is whether an external contributor finds the mental model legible from outside.
 
