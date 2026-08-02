@@ -1258,7 +1258,7 @@ fn pan_start_during_fling_halts_momentum() {
 /// `scrollable_fling_advances_offset_past_release`'s direct `animate_with`
 /// call needs: `animate_to` queues a command rather than driving the fling
 /// controller synchronously (see `scroll_controller.rs`'s module docs), so
-/// pump 1 is what services that queue (`flui-binding::pump_frame` ticks
+/// pump 1 is what services that queue (`flui-testing::pump_frame` ticks
 /// registered controllers BEFORE draining the rebuild that services it —
 /// `AnimationController::animate_to_curved` only runs during pump 1's
 /// rebuild step, too late for pump 1's OWN tick step to see it running).
@@ -1375,7 +1375,7 @@ fn scrollable_grab_during_animate_to_halts_it() {
 /// original target, and must not even transiently show a stale fling-tick
 /// value before the cancellation "catches up" (see `ScrollController`'s
 /// `stop_hook` field docs for the one-frame race a merely QUEUED
-/// cancellation would otherwise leave open, since `flui-binding::pump_frame`
+/// cancellation would otherwise leave open, since `flui-testing::pump_frame`
 /// ticks registered controllers before draining the rebuild queue that
 /// services a queued command).
 ///

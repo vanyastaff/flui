@@ -40,8 +40,12 @@ AppBinding (transitional host)
   window and hand the root `View` to the runner-owned `UiRealm`, which
   auto-wraps it in an outer `GestureArenaScope` plus `VsyncScope`, so competing
   detectors share the realm arena and implicit-animation widgets tick with
-  zero boilerplate. `run_direct` bypasses the widget tree for raw
-  `SceneBuilder`-callback rendering.
+  zero boilerplate.
+- **`run_direct`** — an **experimental, direct-engine** escape hatch that
+  bypasses the widget tree for raw `SceneBuilder`-callback rendering. It is
+  not a supported cross-platform entry point: it does not work on the winit
+  backend (the fix is ADR-0039's `on_ready` reorder), has no input handling,
+  and does no damage tracking.
 - **Lifecycle** — `flui_scheduler::AppLifecycleState` (resumed, inactive,
   hidden, paused, detached) is the canonical Flutter-parity state; the
   runner drives `Scheduler::handle_app_lifecycle_state_change` directly at
@@ -52,9 +56,13 @@ AppBinding (transitional host)
 - **Embedder** (`embedder`) — adapter types connecting the framework to
   windowing, GPU, and input on desktop (Win32/AppKit/headless via
   flui-platform + wgpu); Android/iOS/Web entry points are feature-gated.
-- **Theme** (`theme`) — `AppTheme` pre-tree configuration with semantic
-  `AppColorScheme` tokens; distinct from the in-tree `flui_material::Theme`
-  inherited widget.
+
+This crate deliberately owns **no design tokens**. Colours, typography,
+spacing, radius, and motion belong to `flui-material` / `flui-cupertino`;
+appearance is per-presentation (`MediaQueryData::platform_brightness`) and the
+resolved theme is published by an in-tree inherited widget. See
+[ADR-0042](../../docs/adr/ADR-0042-theming-ownership.md); the app-shell widgets
+that implement it are tracked in issue #573.
 
 ## Known architectural debt
 

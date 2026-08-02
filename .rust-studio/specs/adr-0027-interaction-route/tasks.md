@@ -35,7 +35,7 @@ and navigation ownership contract are complete.
 
 - **Task 1:** `flui-interaction` gains the lane, IDs, registry, routes, errors, and
   auto-trait tests; downstream crates must not consume the inert surface yet.
-- **Task 2:** `flui-app`, `flui-binding`, `flui-view`, and widget test support gain
+- **Task 2:** `flui-app`, `flui-testing`, `flui-view`, and widget test support gain
   lane ownership/activation and `RenderObjectContext`; existing post-frame owner scopes
   must remain intact.
 - **Task 3:** `flui-interaction`, `flui-rendering`, `flui-objects`, `flui-view`,

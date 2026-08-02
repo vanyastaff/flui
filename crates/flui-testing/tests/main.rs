@@ -1,13 +1,13 @@
-//! Single-binary consolidation of flui-binding's root integration tests.
+//! Single-binary consolidation of flui-testing's root integration tests.
 //!
 //! Each former standalone test target linked the full dependency stack
-//! separately; compiling them as modules of one `binding_it` binary cuts
+//! separately; compiling them as modules of one `flui_testing_it` binary cuts
 //! link time and `target/` disk. Source files stay in place (see
 //! `autotests = false` + `[[test]]` in `Cargo.toml`).
 //!
 //! Convention (mirrors `flui-view/tests/main.rs`): tests that WRITE
 //! process-global state get their own [[test]] target instead. None of
-//! flui-binding's integration tests do — both drive a per-test
+//! flui-testing's integration tests do — both drive a per-test
 //! `HeadlessBinding` instance (no singletons, no env vars, no statics).
 
 #[path = "async_driver.rs"]

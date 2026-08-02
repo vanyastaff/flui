@@ -14,7 +14,7 @@ version := `git describe --tags --always --dirty 2>/dev/null || echo "dev"`
 commit  := `git rev-parse --short HEAD 2>/dev/null || echo "unknown"`
 
 # Active workspace members (must match crates/* in Cargo.toml [workspace.members])
-active_crates := "flui-animation flui-app flui-assets flui-binding flui-build flui-cli flui-cupertino flui-devtools flui-engine flui-foundation flui-geometry flui-hot-reload flui-interaction flui-layer flui-localizations flui-log flui-macros flui-material flui-objects flui-painting flui-platform flui-rendering flui-scheduler flui-semantics flui-tree flui-types flui-view flui-widgets"
+active_crates := "flui-animation flui-app flui-assets flui-testing flui-build flui-cli flui-cupertino flui-devtools flui-engine flui-foundation flui-geometry flui-hot-reload flui-interaction flui-layer flui-localizations flui-log flui-macros flui-material flui-objects flui-painting flui-platform flui-rendering flui-scheduler flui-semantics flui-tree flui-types flui-view flui-widgets"
 
 # Default recipe — show help
 [doc("Show available recipes grouped by category")]
@@ -71,7 +71,7 @@ build-layered:
     cargo build -p flui-localizations
     cargo build -p flui-material
     cargo build -p flui-cupertino
-    cargo build -p flui-binding
+    cargo build -p flui-testing
     cargo build -p flui-app
     cargo build -p flui-devtools
     cargo build -p flui-build
@@ -132,6 +132,11 @@ test *args:
 [doc("Run the workspace test scope used by CI")]
 test-ci:
     cargo nextest run --workspace --exclude flui-platform --locked --no-fail-fast
+    # The facade defaults to Material only, so the run above skips
+    # `tests/cupertino_demo.rs` (required-features) and the localizations
+    # assertions in `tests/facade_smoke.rs`. Same precedent as CI's
+    # flui-assets/flui-widgets feature-gated run.
+    cargo nextest run -p flui --locked --features cupertino,localizations --no-fail-fast
 
 [group("test")]
 [doc("Test a single crate (e.g. just test-crate flui-tree)")]
@@ -225,9 +230,45 @@ clippy-fix:
 
 [group("quality")]
 [doc("Per-feature clippy via cargo-hack (mirrors the CI feature-matrix job; requires cargo-hack)")]
-feature-matrix:
+feature-matrix: facade-combos
     cargo hack clippy --workspace --locked --each-feature --optional-deps --keep-going -- -D warnings
     cargo hack clippy --workspace --locked --each-feature --optional-deps --keep-going --tests --benches --examples -- -D warnings
+
+[group("quality")]
+[doc("Compile every supported facade feature combination in isolation")]
+facade-combos:
+    #!/usr/bin/env bash
+    # Each combination is its own cargo invocation on the `flui` package alone.
+    # A `--workspace` build proves nothing here: workspace feature unification
+    # would enable `material` from a sibling and turn a broken combination
+    # green. `--all-targets` is deliberate — a missing `required-features` on an
+    # example or test is exactly the kind of wiring these builds exist to catch.
+    set -euo pipefail
+    for combo in "--no-default-features" \
+                 "--no-default-features --features material" \
+                 "--no-default-features --features cupertino" \
+                 "--no-default-features --features material,cupertino" \
+                 "--no-default-features --features localizations" \
+                 "--no-default-features --features material,localizations" \
+                 "--no-default-features --features hot-reload" \
+                 "--no-default-features --features golden" \
+                 "--no-default-features --features serde" \
+                 ""; do
+        echo "==> cargo clippy -p flui --locked --all-targets ${combo:-(default features)}"
+        # shellcheck disable=SC2086
+        cargo clippy -p flui --locked --all-targets $combo -- -D warnings
+    done
+    # Hot reload must be absent from an ordinary production graph, not merely
+    # unused by it.
+    echo "==> cargo tree -p flui-app: flui-hot-reload must be absent"
+    if cargo tree -p flui-app --locked -e normal | grep -q flui-hot-reload; then
+        echo "flui-hot-reload is in flui-app's default normal dependency graph" >&2
+        exit 1
+    fi
+    if ! cargo tree -p flui-app --locked -e normal --features hot-reload | grep -q flui-hot-reload; then
+        echo "the hot-reload feature did not bring in flui-hot-reload" >&2
+        exit 1
+    fi
 
 [group("quality")]
 [doc("Format the entire workspace with rustfmt")]

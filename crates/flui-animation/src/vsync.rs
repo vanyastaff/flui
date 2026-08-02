@@ -1,7 +1,7 @@
 //! [`Vsync`] — a shared, restart-aware registry that drives
 //! [`AnimationController`]s off a single virtual timeline.
 //!
-//! A deterministic frame driver (e.g. `flui_binding::HeadlessBinding`) owns one
+//! A deterministic frame driver (e.g. `flui_testing::HeadlessBinding`) owns one
 //! `Vsync` and calls [`tick_all`](Vsync::tick_all) once per frame with the
 //! current virtual instant. Controllers reach the same registry ambiently — in
 //! the widget layer a `VsyncScope` inherited-view hands a clone down a subtree,

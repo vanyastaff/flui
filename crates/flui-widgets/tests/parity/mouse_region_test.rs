@@ -86,7 +86,7 @@
 //! postframe recheck, `rendering/mouse_tracker.dart:366`) — used to be
 //! called exactly once in the whole workspace:
 //! `crates/flui-app/src/app/binding.rs`, inside the production frame path.
-//! `flui-binding`'s `HeadlessBinding::pump_frame` (what
+//! `flui-testing`'s `HeadlessBinding::pump_frame` (what
 //! `LaidOut::pump_widget`/`pump`/`tick` drive) never called it, so this
 //! widget-test harness could not observe or prove Flutter's "widget moves
 //! under a stationary pointer ⇒ automatic enter/exit" contract even though
@@ -96,7 +96,7 @@
 //! owns the same `Arc<RwLock<PipelineOwner>>` production's
 //! `hit_test_in_view` wraps, so no caller-supplied hit-test closure needed
 //! adding to `pump_frame`'s signature). See the doc on
-//! [`HeadlessBinding::pump_frame`](flui_binding::HeadlessBinding::pump_frame)
+//! [`HeadlessBinding::pump_frame`](flui_testing::HeadlessBinding::pump_frame)
 //! for the full ordering.
 //!
 //! Wiring the recheck surfaced a real, pre-existing bug, independent of this
@@ -1030,7 +1030,7 @@ fn a_childless_opaque_mouse_region_still_blocks_everything_beneath_it() {
 /// on the very next frame, with no new pointer dispatch — Flutter's implicit
 /// `MouseTracker.updateAllDevices` postframe recheck
 /// (`rendering/mouse_tracker.dart:366`), wired into
-/// [`HeadlessBinding::pump_frame`] (`crates/flui-binding/src/lib.rs`) to
+/// [`HeadlessBinding::pump_frame`] (`crates/flui-testing/src/lib.rs`) to
 /// match the production frame path
 /// (`crates/flui-app/src/app/binding.rs`). Enter only, never hover: Flutter's
 /// own `_handleDeviceUpdateMouseEvents` (`mouse_tracker.dart:399-430`), the

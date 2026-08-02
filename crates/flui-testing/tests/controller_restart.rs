@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use flui_animation::{Animation, AnimationController, AnimationStatus, Scheduler};
-use flui_binding::HeadlessBinding;
+use flui_testing::HeadlessBinding;
 
 /// One frame's worth of virtual time at 20ms — five of these span the 100ms run.
 const FRAME: Duration = Duration::from_millis(20);

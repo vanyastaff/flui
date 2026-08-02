@@ -1,7 +1,14 @@
-//! Facade smoke test — App.1 exit evidence that `flui::prelude::*` alone is
-//! enough to author a real widget tree and mount it through the headless
-//! pipeline, and that `flui::material`/`flui::cupertino` resolve to
-//! constructible values through the facade's re-exports.
+//! Facade smoke test — evidence that `flui::prelude::*` alone is enough to
+//! author a real widget tree and mount it through the headless pipeline, and
+//! that each feature-selected catalog resolves to constructible values through
+//! the facade's re-exports.
+//!
+//! The first test carries **no** catalog requirement on purpose: it is the
+//! `--no-default-features` evidence that a catalog-free application still gets
+//! the full widget layer. The remaining tests are `#[cfg]`-gated per feature,
+//! so every supported combination compiles and runs exactly the assertions its
+//! surface supports — a combination that silently lost a module fails to
+//! compile rather than quietly testing less.
 //!
 //! This lives in the root crate's `tests/` (not `flui-widgets`' own tests)
 //! because it is exercising the `flui` package's own public surface — the
@@ -16,9 +23,9 @@
 use std::sync::Arc;
 
 use flui::prelude::*;
-use flui_binding::HeadlessBinding;
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::pipeline::PipelineOwner;
+use flui_testing::HeadlessBinding;
 use flui_types::Size;
 use flui_types::geometry::px;
 use flui_view::{BuildOwner, ElementTree};
@@ -90,11 +97,16 @@ fn prelude_authored_tree_mounts_through_the_headless_pipeline() {
     });
 }
 
+#[cfg(feature = "material")]
 #[test]
-fn material_and_cupertino_modules_resolve_through_the_facade() {
+fn material_module_resolves_through_the_facade() {
     let material_theme = flui::material::ThemeData::light();
     assert_eq!(material_theme.brightness(), Brightness::Light);
+}
 
+#[cfg(feature = "cupertino")]
+#[test]
+fn cupertino_module_resolves_through_the_facade() {
     let cupertino_theme = flui::cupertino::CupertinoThemeData::new();
     // A fresh theme carries no brightness override (follows the ambient
     // `MediaQuery` instead) and resolves `primary_color` to the documented
@@ -106,4 +118,37 @@ fn material_and_cupertino_modules_resolve_through_the_facade() {
         cupertino_theme.primary_color(),
         flui::cupertino::CupertinoColor::Dynamic(flui::cupertino::CupertinoColors::SYSTEM_BLUE)
     );
+}
+
+/// The documented global-localizations entry point: `flui::localizations`
+/// resolves a delegate that `flui::widgets`' `Localizations` accepts, so a
+/// consumer never has to name `flui-localizations` as a separate dependency.
+#[cfg(feature = "localizations")]
+#[test]
+fn localizations_module_resolves_through_the_facade() {
+    use flui::localizations::{BoxedLocalizationsDelegate, GlobalWidgetsLocalizationsDelegate};
+    use flui::types::platform::Locale;
+    use flui::widgets::{Localizations, SizedBox};
+
+    let delegates = vec![BoxedLocalizationsDelegate::new(
+        GlobalWidgetsLocalizationsDelegate,
+    )];
+    // Arabic is in `RTL_LANGUAGES`, so this is also a live check that the
+    // re-exported delegate is the global one and not a stub.
+    let _localized = Localizations::new(
+        Locale::new("ar", None::<&str>),
+        delegates,
+        SizedBox::shrink(),
+    );
+}
+
+/// The Material half of [`flui::prelude`] appears only with the `material`
+/// feature; the base half is always there. `Container`/`Center`/`Text` above
+/// prove the base half, this proves the Material half is wired to the glob
+/// rather than only reachable at `flui::material`.
+#[cfg(feature = "material")]
+#[test]
+fn prelude_carries_the_material_half_when_the_feature_is_on() {
+    let theme: ThemeData = ThemeData::light();
+    assert_eq!(theme.brightness(), Brightness::Light);
 }

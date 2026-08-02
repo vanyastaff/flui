@@ -14,9 +14,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use flui_binding::HeadlessBinding;
 use flui_interaction::settings::GestureSettings;
 use flui_interaction::{GestureRecognizer, LongPressGestureRecognizer, PointerId};
+use flui_testing::HeadlessBinding;
 use flui_types::Offset;
 use flui_types::geometry::px;
 

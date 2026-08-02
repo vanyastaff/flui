@@ -79,7 +79,7 @@
 //!
 //! Harness note (not a divergence): a `pump_widget`/`pump_for` call ticks
 //! registered controllers on the virtual clock BEFORE running that frame's
-//! build pass (`flui-binding`'s `pump_frame`: `vsync.tick_all` is step 3,
+//! build pass (`flui-testing`'s `pump_frame`: `vsync.tick_all` is step 3,
 //! `build_scope` is step 4-7) — so a `reverse()`/`forward()` call made
 //! DURING a build (as `did_update_view` does) is not observed by
 //! `vsync.tick_all` until the FOLLOWING tick, which then spends itself purely

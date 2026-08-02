@@ -1387,7 +1387,6 @@ dependencies = [
  "anyhow",
  "flui-animation",
  "flui-app",
- "flui-binding",
  "flui-cupertino",
  "flui-engine",
  "flui-foundation",
@@ -1395,12 +1394,14 @@ dependencies = [
  "flui-hot-reload",
  "flui-interaction",
  "flui-layer",
+ "flui-localizations",
  "flui-material",
  "flui-objects",
  "flui-painting",
  "flui-platform",
  "flui-rendering",
  "flui-scheduler",
+ "flui-testing",
  "flui-types",
  "flui-view",
  "flui-widgets",
@@ -1477,25 +1478,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "flui-binding"
-version = "0.2.0"
-dependencies = [
- "criterion",
- "flui-animation",
- "flui-devtools",
- "flui-foundation",
- "flui-interaction",
- "flui-objects",
- "flui-rendering",
- "flui-scheduler",
- "flui-types",
- "flui-view",
- "parking_lot",
- "static_assertions",
- "tracing",
-]
-
-[[package]]
 name = "flui-build"
 version = "0.2.0"
 dependencies = [
@@ -1540,12 +1522,12 @@ name = "flui-cupertino"
 version = "0.2.0"
 dependencies = [
  "flui-animation",
- "flui-binding",
  "flui-foundation",
  "flui-interaction",
  "flui-objects",
  "flui-rendering",
  "flui-scheduler",
+ "flui-testing",
  "flui-types",
  "flui-view",
  "flui-widgets",
@@ -1723,13 +1705,13 @@ name = "flui-material"
 version = "0.2.0"
 dependencies = [
  "flui-animation",
- "flui-binding",
  "flui-foundation",
  "flui-interaction",
  "flui-objects",
  "flui-painting",
  "flui-rendering",
  "flui-scheduler",
+ "flui-testing",
  "flui-types",
  "flui-view",
  "flui-widgets",
@@ -1881,6 +1863,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "flui-testing"
+version = "0.2.0"
+dependencies = [
+ "criterion",
+ "flui-animation",
+ "flui-devtools",
+ "flui-foundation",
+ "flui-interaction",
+ "flui-objects",
+ "flui-rendering",
+ "flui-scheduler",
+ "flui-types",
+ "flui-view",
+ "parking_lot",
+ "static_assertions",
+ "tracing",
+]
+
+[[package]]
 name = "flui-tree"
 version = "0.2.0"
 dependencies = [
@@ -1964,7 +1965,6 @@ dependencies = [
  "bitflags 2.13.1",
  "flui-animation",
  "flui-assets",
- "flui-binding",
  "flui-foundation",
  "flui-geometry",
  "flui-interaction",
@@ -1972,6 +1972,7 @@ dependencies = [
  "flui-platform",
  "flui-rendering",
  "flui-scheduler",
+ "flui-testing",
  "flui-types",
  "flui-view",
  "futures-core",

@@ -4,7 +4,7 @@
 //! and is interactive."
 //!
 //! `#[path]`-includes the exact tree `examples/material_demo/main.rs` runs
-//! (not a duplicate) and mounts it through `flui_binding::HeadlessBinding`'s
+//! (not a duplicate) and mounts it through `flui_testing::HeadlessBinding`'s
 //! public surface, then drives it the way an app author's fingers would: tap
 //! the floating action button, fill and dismiss its dialog, tap a card,
 //! push/pop the settings route, drag the list — asserting on the resulting
@@ -12,7 +12,7 @@
 //!
 //! This test lives in the root crate (not `flui-material`'s own `tests/`)
 //! for the same reason `tests/vertical_slice_demo.rs` does: it re-bootstraps
-//! a headless tree from `flui-view`/`flui-rendering`/`flui-binding`'s public
+//! a headless tree from `flui-view`/`flui-rendering`/`flui-testing`'s public
 //! API only, mirroring `HeadlessBinding`'s own documented mount sequence.
 //! Every helper below (`tap`/`drag_*`/`find_text`/`absolute_position`/
 //! `advance_gesture_clock`) is therefore duplicated from
@@ -33,7 +33,6 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use flui_binding::HeadlessBinding;
 use flui_foundation::RenderId;
 use flui_interaction::events::{PointerType, make_down_event, make_move_event, make_up_event};
 use flui_material::back_button::back_arrow_icon_data;
@@ -42,6 +41,7 @@ use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::hit_testing::HitTestResult;
 use flui_rendering::pipeline::PipelineOwner;
 use flui_rendering::testing::inspect;
+use flui_testing::HeadlessBinding;
 use flui_types::geometry::px;
 use flui_types::{Offset, Size};
 use flui_view::{BuildOwner, ElementTree};

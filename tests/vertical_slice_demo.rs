@@ -1,7 +1,7 @@
 //! Acceptance test for the vertical-slice demo.
 //!
 //! `#[path]`-includes the exact tree `examples/vertical_slice_demo/main.rs`
-//! runs (not a duplicate) and mounts it through `flui_binding::HeadlessBinding`'s
+//! runs (not a duplicate) and mounts it through `flui_testing::HeadlessBinding`'s
 //! public surface, then drives it the way an app author's fingers would: tap
 //! the "+" button, change the list's scroll position, tap the animated box —
 //! asserting on the resulting render tree, not merely "no panic".
@@ -9,7 +9,7 @@
 //! `flui-widgets`' `tests/common` harness lives in a different crate (a
 //! private integration-test module, unreachable from here): this test lives
 //! in the root crate, so it re-bootstraps a headless tree from `flui-view` /
-//! `flui-rendering` / `flui-binding`'s public API only, mirroring the
+//! `flui-rendering` / `flui-testing`'s public API only, mirroring the
 //! sequence `HeadlessBinding`'s own docs describe (mount root -> attach
 //! `PipelineOwner` -> set root constraints -> run one frame -> `bind_tree`).
 //!
@@ -37,13 +37,13 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use flui_binding::HeadlessBinding;
 use flui_foundation::RenderId;
 use flui_interaction::events::{PointerType, make_down_event, make_move_event, make_up_event};
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::hit_testing::HitTestResult;
 use flui_rendering::pipeline::PipelineOwner;
 use flui_rendering::testing::inspect;
+use flui_testing::HeadlessBinding;
 use flui_types::geometry::px;
 use flui_types::{Offset, Size};
 use flui_view::{BuildOwner, ElementTree};

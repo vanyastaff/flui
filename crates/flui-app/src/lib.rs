@@ -17,9 +17,18 @@
 //!   │   └── runner.rs       - platform bootstrap (desktop/android/web run loops)
 //!   │
 //!   ├── bindings/           - Re-exports from other crates
-//!   ├── embedder/           - Platform embedder adapters (window handle, GPU surface)
-//!   └── theme/              - AppTheme/AppColorScheme (parked, unwired)
+//!   └── embedder/           - Platform embedder adapters (window handle, GPU surface)
 //! ```
+//!
+//! # This crate owns no design tokens
+//!
+//! Colours, typography, spacing, radius, and motion are design-system
+//! concerns and live in `flui-material` / `flui-cupertino`. Appearance is
+//! per-presentation: the OS light/dark signal reaches a tree as
+//! `MediaQueryData::platform_brightness`, and the resolved theme is published
+//! by an in-tree inherited widget, separately in each window. See
+//! [ADR-0042](https://github.com/vanyastaff/flui/blob/main/docs/adr/ADR-0042-theming-ownership.md);
+//! the app-shell widgets that implement it are tracked in issue #573.
 //!
 //! Applications normally enter through [`run_app`] or
 //! [`run_app_with_config`]; the runner constructs and owns the UI realm.
@@ -31,7 +40,6 @@
 pub mod app;
 pub mod bindings;
 pub mod embedder; // PORT-CHECK-OK-SP4: embedder API surface; binding entry for app integrators
-pub mod theme; // PORT-CHECK-OK-SP4: theme API surface; binding entry for app integrators
 
 // Primary exports - Flutter naming
 // Legacy alias

@@ -485,7 +485,7 @@ mod tests {
     /// `Scheduler::drive_async_tasks()` (the shared async step) then
     /// `BuildOwner::build_scope()` — `pump_frame`'s body minus the parts a
     /// `StreamBuilder` cannot observe. `flui-view` cannot depend on
-    /// `flui-binding` (that would cycle).
+    /// `flui-testing` (that would cycle).
     struct Harness {
         owner: BuildOwner,
         tree: ElementTree,

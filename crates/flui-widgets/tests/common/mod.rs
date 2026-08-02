@@ -17,7 +17,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use flui_animation::{AnimationController, Vsync};
-use flui_binding::HeadlessBinding;
 use flui_foundation::{ElementId, RenderId};
 use flui_geometry::Matrix4;
 use flui_interaction::PointerId;
@@ -35,6 +34,7 @@ use flui_rendering::constraints::{BoxConstraints, SliverGeometry};
 use flui_rendering::pipeline::PipelineOwner;
 use flui_rendering::storage::IntrinsicDimension;
 use flui_rendering::testing::inspect;
+use flui_testing::HeadlessBinding;
 use flui_types::geometry::px;
 use flui_types::painting::Clip;
 use flui_types::styling::BorderRadius;

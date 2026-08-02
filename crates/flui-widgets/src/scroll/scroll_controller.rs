@@ -32,7 +32,7 @@
 //! [`jump_to`](ScrollController::jump_to) cancels through a SECOND, synchronous path — a
 //! `stop_hook` installed the same way — because a merely queued cancellation
 //! would only take effect on the next rebuild, one frame after
-//! `flui-binding`'s `pump_frame` has already ticked the not-yet-cancelled
+//! `flui-testing`'s `pump_frame` has already ticked the not-yet-cancelled
 //! controller (Flutter parity: `ScrollPosition.jumpTo` calls `goIdle()`
 //! unconditionally and synchronously, even when the value doesn't change).
 //!
@@ -137,7 +137,7 @@ pub struct ScrollController {
     /// immediately.
     ///
     /// Needed alongside `PendingScrollCommand::Cancel`, not instead of it:
-    /// `flui-binding`'s `pump_frame` ticks vsync-registered controllers
+    /// `flui-testing`'s `pump_frame` ticks vsync-registered controllers
     /// *before* draining the rebuild queue that services a merely-queued
     /// pending command (see its "Ordering" doc). Without this hook, `jump_to`
     /// during an active `animate_to`/fling would queue a `Cancel` that only

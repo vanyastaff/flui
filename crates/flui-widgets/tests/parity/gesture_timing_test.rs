@@ -6,7 +6,7 @@
 //! arena-driven cases from the raw recognizer test suites, ported at the
 //! `GestureDetector` widget level through [`common::lay_out`]'s canonical
 //! presentation harness — a [`flui_widgets::GestureArenaScope`]
-//! over a [`flui_binding::HeadlessBinding`] whose virtual clock drives every
+//! over a [`flui_testing::HeadlessBinding`] whose virtual clock drives every
 //! gesture deadline deterministically (no `thread::sleep`; `pump(dt)` advances
 //! the clock and polls deadlines in the same step Flutter's `tester.async.elapse`
 //! plays).

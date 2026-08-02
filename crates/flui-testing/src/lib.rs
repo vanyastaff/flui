@@ -1,4 +1,4 @@
-//! # `flui_binding`
+//! # `flui_testing`
 //!
 //! A deterministic, **non-singleton** headless frame driver for FLUI.
 //!
@@ -55,7 +55,7 @@
 //! use std::sync::atomic::{AtomicBool, Ordering};
 //! use std::time::Duration;
 //!
-//! use flui_binding::HeadlessBinding;
+//! use flui_testing::HeadlessBinding;
 //! use flui_interaction::settings::GestureSettings;
 //! use flui_interaction::{GestureRecognizer, LongPressGestureRecognizer, PointerId};
 //! use flui_types::Offset;
@@ -375,7 +375,7 @@ impl HeadlessBinding {
     ///
     /// Wrap a widget subtree in a `VsyncScope` over `binding.vsync().clone()`
     /// (in `flui-widgets`) so every implicitly-animated widget below registers
-    /// its controller here and is driven by `pump_frame`. `flui-binding` cannot
+    /// its controller here and is driven by `pump_frame`. `flui-testing` cannot
     /// host that scope itself — it has no `flui-widgets` dependency — so the
     /// wiring lives one layer up, exactly as the gesture arena does.
     #[must_use]
@@ -434,7 +434,7 @@ impl HeadlessBinding {
     /// To hand this arena to a whole widget subtree, wrap it in a
     /// `GestureArenaScope` (in `flui-widgets`): every `GestureDetector` below
     /// reads the scope's arena ambiently and competes in / is polled against it.
-    /// `flui-binding` cannot host that scope itself — it has no `flui-view`
+    /// `flui-testing` cannot host that scope itself — it has no `flui-view`
     /// dependency — so the wiring lives one layer up.
     #[must_use]
     pub fn arena(&self) -> &GestureArena {

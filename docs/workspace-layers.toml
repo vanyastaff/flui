@@ -262,14 +262,19 @@ disposition = "keep"
 note = "Author-facing widget catalog; owns the Localizations/Directionality/WidgetsLocalizations contracts."
 
 [[member]]
-name = "flui-binding"
+name = "flui-testing"
 layer = 6
-disposition = "rename"
+disposition = "keep"
 note = """
-Deterministic headless frame driver. Renamed to `flui-testing` before Runtime.1 \
-grows its conformance harness API (issue #569): `binding` collides conceptually \
-with the transitional `AppBinding` graph Runtime.1 removes, and the package name \
-becomes a public testing contract once conformance tests import it.\
+Test-support crate: the deterministic headless frame driver \
+(`HeadlessBinding::pump_frame`) plus the future home for `WidgetTester`, virtual \
+time, fake platform capabilities, deterministic replay, and golden helpers. The \
+package was renamed during the Runtime.1 preflight: the old name collided \
+conceptually with the transitional `AppBinding` graph Runtime.1 removes, and the \
+package name becomes a public testing contract once conformance tests import it. \
+Runtime and \
+framework crates take *development* edges into it only — a normal edge from a \
+shipped library would link the test driver into production.\
 """
 
 [[member]]

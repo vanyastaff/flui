@@ -755,6 +755,62 @@ for manifest in sorted(root.rglob("Cargo.toml")):
                 f"{restriction_reason.get(target, '')}"
             )
 
+# Design tokens never return to `flui-app` (ADR-0042). Colours, typography,
+# spacing, radius, and motion belong to the L7 design systems; `flui-app` is L9
+# application composition. The removed `AppTheme`/`AppColorScheme` surface was
+# design-system-shaped and two layers from its tokens, and its absence is not
+# self-enforcing — a `theme` module is exactly what someone adds when wiring an
+# app shell in the wrong crate. The app shells that legitimately own theme
+# selection live in flui-widgets/flui-material/flui-cupertino (issue #573).
+app_src = root / "crates" / "flui-app" / "src"
+for forbidden in (app_src / "theme", app_src / "theme.rs"):
+    if forbidden.exists():
+        errors.append(
+            f"{forbidden.relative_to(root)} exists — `flui-app` owns no design tokens "
+            "(ADR-0042). Colours/typography/spacing/radius/motion belong to "
+            "flui-material or flui-cupertino; theme selection belongs to the app "
+            "shells tracked in issue #573."
+        )
+
+# The headless test driver package is `flui-testing`. Its pre-Runtime.1 name is
+# reconstructed below rather than written out, because this check is a literal
+# repository-wide text scan and would otherwise flag itself. Nothing describing
+# the *current* workspace may still present the old package as existing. Dated
+# snapshots under docs/research, docs/plans, and docs/audits are records of what
+# was true when they were written and are deliberately exempt — one of them is
+# the review that mandated the rename, and rewriting it would erase the
+# rationale.
+stale_package_name = "flui-" + "binding"
+snapshot_dirs = {
+    root / "docs" / "research",
+    root / "docs" / "plans",
+    root / "docs" / "audits",
+}
+scanned_extensions = {".rs", ".toml", ".md", ".sh", ".yml", ".yaml", ".just", ""}
+for path in sorted(root.rglob("*")):
+    if not path.is_file():
+        continue
+    parts = path.relative_to(root).parts
+    if parts[0] in {"target", ".git"} or "target" in parts:
+        continue
+    if any(snapshot in path.parents for snapshot in snapshot_dirs):
+        continue
+    if path.suffix not in scanned_extensions:
+        continue
+    if path.name == "Cargo.lock":
+        pass
+    elif path.suffix == "" and path.name not in {"justfile"}:
+        continue
+    try:
+        text = path.read_text()
+    except (OSError, UnicodeDecodeError):
+        continue
+    if stale_package_name in text:
+        errors.append(
+            f"{path.relative_to(root)} still names `{stale_package_name}`; the "
+            "package is `flui-testing`"
+        )
+
 if errors:
     print("workspace-inventory: drift detected", file=sys.stderr)
     for error in errors:

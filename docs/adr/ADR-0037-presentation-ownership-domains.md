@@ -317,7 +317,7 @@ A new `flui-presentation` crate is rejected now. The proposed object would eithe
 - force lateral dependency edges or trait indirection merely to compile; or
 - become the forbidden fourth owner.
 
-`flui-app` is already the composition root and may privately coordinate the three owners without changing the public layer graph. `flui-binding` and headless tests compose the same lower-level owner primitives for deterministic testing; a test harness is not evidence that application composition belongs in a new shared crate.
+`flui-app` is already the composition root and may privately coordinate the three owners without changing the public layer graph. `flui-testing` and headless tests compose the same lower-level owner primitives for deterministic testing; a test harness is not evidence that application composition belongs in a new shared crate.
 
 A future extraction requires a deep, policy-free abstraction with at least two production consumers and no new dependency inversion. It must receive its own ADR; this decision does not pre-authorize it.
 

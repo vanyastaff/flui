@@ -1083,7 +1083,7 @@ This section indexes **crate-level** `ARCHITECTURE.md` template state. For docum
 | `flui-localizations` | Not yet templated | Active |
 | `flui-material` | Not yet templated | Active |
 | `flui-cupertino` | Not yet templated | Active |
-| `flui-binding` | Not yet templated | Active |
+| `flui-testing` | Not yet templated | Active |
 | `flui-app` | Not yet templated | Active |
 | `flui-animation` | `crates/flui-animation/docs/ARCHITECTURE.md` (pre-template) | Active |
 | `flui-devtools` | Not yet templated | Active |

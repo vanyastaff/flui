@@ -3,7 +3,7 @@
 //! `CupertinoPageRoute` swipe-back renders and is interactive."
 //!
 //! `#[path]`-includes the exact tree `examples/cupertino_demo/main.rs` runs
-//! (not a duplicate) and mounts it through `flui_binding::HeadlessBinding`'s
+//! (not a duplicate) and mounts it through `flui_testing::HeadlessBinding`'s
 //! public surface, mirroring `tests/material_demo.rs`'s identical harness
 //! shape (that file explains why each helper below is duplicated rather
 //! than shared: neither test crate can see the other's private items).
@@ -21,13 +21,13 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use flui_binding::HeadlessBinding;
 use flui_cupertino::{CupertinoTabController, CupertinoTheme, CupertinoThemeData};
 use flui_foundation::RenderId;
 use flui_interaction::events::{PointerType, make_down_event, make_move_event, make_up_event};
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::hit_testing::HitTestResult;
 use flui_rendering::pipeline::PipelineOwner;
+use flui_testing::HeadlessBinding;
 use flui_types::geometry::px;
 use flui_types::{Offset, Size};
 use flui_view::{BuildOwner, ElementTree};

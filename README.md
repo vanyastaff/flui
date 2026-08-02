@@ -14,7 +14,7 @@ FLUI brings the proven three-tree architecture (View → Element → Render) to 
 
 - ✅ Foundation: `flui-geometry`, `flui-types`, `flui-foundation`, `flui-macros`, `flui-log`, `flui-tree`, `flui-platform`
 - ✅ Core: `flui-painting`, `flui-engine`, `flui-rendering`, `flui-scheduler`, `flui-layer`, `flui-semantics`, `flui-interaction`, `flui-hot-reload`
-- ✅ Framework/application: `flui-view`, `flui-objects`, `flui-widgets`, `flui-localizations`, `flui-material`, `flui-cupertino`, `flui-binding`, `flui-animation`, `flui-assets`, `flui-app` (migration)
+- ✅ Framework/application: `flui-view`, `flui-objects`, `flui-widgets`, `flui-localizations`, `flui-material`, `flui-cupertino`, `flui-testing`, `flui-animation`, `flui-assets`, `flui-app` (migration)
 - ✅ DX/tooling: `flui-devtools` (partial), `flui-cli`, `flui-build`
 
 See [`docs/crates.md`](docs/crates.md) for the full layered map and per-crate status.
@@ -33,6 +33,38 @@ cargo run --example widgets_gallery
 A [`justfile`](justfile) is provided for common tasks — install [`just`](https://just.systems) and run `just` for the recipe list (`just check`, `just test`, `just clippy`, `just ci`, ...). Raw `cargo` commands always work too.
 
 For a step-by-step setup including platform notes (Windows / macOS / Android NDK / WASM), see [`docs/getting-started.md`](docs/getting-started.md).
+
+## Choosing a catalog
+
+The `flui` facade is **Material-first by default** and feature-selective. The
+base surface — the widget catalog, the View/Element layer, animation, and
+`run_app` — needs no feature at all.
+
+```toml
+# Default: the Material catalog, exactly as the quick start teaches it.
+flui = { path = "…" }
+
+# Cupertino only, no Material compiled.
+flui = { path = "…", default-features = false, features = ["cupertino"] }
+
+# Both catalogs.
+flui = { path = "…", default-features = false, features = ["material", "cupertino"] }
+
+# Catalog-free: still gets widgets, navigation, focus, and media information.
+flui = { path = "…", default-features = false }
+```
+
+| Feature | Default | Enables |
+|---|---|---|
+| `material` | **on** | `flui::material` and the Material half of `flui::prelude` |
+| `cupertino` | off | `flui::cupertino` |
+| `localizations` | off | `flui::localizations` — global (multi-language) resources |
+| `hot-reload` | off | development reload machinery; absent from an ordinary production graph |
+
+A module whose feature is off is *absent*, not empty. Every supported
+combination is compiled in isolation by CI (`just facade-combos`), so a
+combination cannot pass only because a sibling crate happened to enable a
+feature.
 
 ## Key Features
 

@@ -19,6 +19,7 @@ use flui_platform::{
 };
 use flui_rendering::pipeline::PipelineOwner;
 use flui_semantics::{SemanticsActionError, SemanticsActionRequest};
+#[cfg(feature = "hot-reload")]
 use flui_view::WidgetsBinding;
 use parking_lot::RwLock;
 
@@ -241,6 +242,7 @@ impl PresentationState {
 
     /// Apply a hot-reload tier to this presentation and its realm-owned
     /// element tree. Returns whether a redraw is required.
+    #[cfg(feature = "hot-reload")]
     pub(crate) fn apply_hot_reload(
         &self,
         widgets: &WidgetsBinding,

@@ -19,7 +19,7 @@ Layer 8  ── flui-localizations         (implements the catalogs' delegate co
                 │
 Layer 7  ── flui-material, flui-cupertino
                 │
-Layer 6  ── flui-widgets, flui-binding, flui-hot-reload, flui-build
+Layer 6  ── flui-widgets, flui-testing, flui-hot-reload, flui-build
                 │
 Layer 5  ── flui-view
                 │

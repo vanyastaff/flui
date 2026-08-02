@@ -857,7 +857,7 @@ impl AnimationController {
     /// `repeat`/`fling`/`animate_with` (i.e. every internal `restart_ticker`
     /// that re-zeros the run epoch).
     ///
-    /// An external, deterministic frame driver (e.g. `flui-binding`'s
+    /// An external, deterministic frame driver (e.g. `flui-testing`'s
     /// `HeadlessBinding`) reads this to detect that a new run's `t = 0` was just
     /// established and re-anchor the virtual instant it feeds to
     /// [`tick_at`](Self::tick_at). Without it, a controller run a *second* time

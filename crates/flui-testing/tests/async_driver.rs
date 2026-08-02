@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::task::{Poll, Waker};
 use std::time::Duration;
 
-use flui_binding::HeadlessBinding;
+use flui_testing::HeadlessBinding;
 use parking_lot::Mutex;
 
 /// A future the test can complete from outside, exposing its waker.

@@ -21,6 +21,14 @@ android = []
 ios = []
 web = []
 
+# === Development capabilities ===
+# Hot reload is a development capability, not part of an ordinary production
+# graph: with this feature off, `flui-hot-reload` is absent from
+# `cargo tree -p flui-app` and no target of this crate imports it. Everything
+# that would touch it goes through `app::hot_reload`, which has a real and an
+# inert implementation; the inert one names no `flui_hot_reload` item at all.
+hot-reload = ["dep:flui-hot-reload"]
+
 # === Debug Features ===
 debug-overlay = []
 performance-overlay = []
@@ -44,7 +52,10 @@ flui-layer = { path = "../flui-layer", version = "0.2.0" }
 flui-semantics = { path = "../flui-semantics", version = "0.2.0" }
 flui-engine = { path = "../flui-engine", version = "0.2.0" }
 flui-platform = { path = "../flui-platform", version = "0.2.0" }
-flui-hot-reload = { path = "../flui-hot-reload", version = "0.2.0", features = ["app-plugin"] }
+# Development-only; see the `hot-reload` feature above.
+flui-hot-reload = { path = "../flui-hot-reload", version = "0.2.0", features = [
+    "app-plugin",
+], optional = true }
 flui-animation = { path = "../flui-animation", version = "0.2.0" }
 # Widget catalog: provides `VsyncScope`, which `AppBinding::attach_root_widget*`
 # auto-wraps the root in so implicit-animation widgets work with zero boilerplate.

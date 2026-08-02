@@ -25,7 +25,7 @@ The naive path (controller lives in State, but `AnimatedView::listenable()` is o
 
 5. **flui-view** `ViewState::did_update_view(&mut self, old_view, new_view)` — add `new_view` param (Flutter's `didUpdateWidget(old)` + `this.widget`). 2 sites: trait default + 1 test. `StatefulBehavior::on_view_updated` forwards `core.view()` as new.
 
-6. **flui-binding**: drive `Vsync` instead of inline `Vec` (refactor A2b); `vsync() -> Vsync`; `adopt_vsync(Vsync)` so the harness shares the scope's vsync. Harness `lay_out` wraps root in `VsyncScope(vsync)` and `adopt_vsync`s it.
+6. **flui-testing**: drive `Vsync` instead of inline `Vec` (refactor A2b); `vsync() -> Vsync`; `adopt_vsync(Vsync)` so the harness shares the scope's vsync. Harness `lay_out` wraps root in `VsyncScope(vsync)` and `adopt_vsync`s it.
 
 ## Discriminating tests
 - `animated_opacity_interpolates_to_new_target_over_frames` — change opacity, pump 5 frames, opacity climbs old→new monotonically, intermediate strictly between.

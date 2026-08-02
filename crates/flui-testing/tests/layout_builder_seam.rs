@@ -9,9 +9,9 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use flui_binding::HeadlessBinding;
 use flui_foundation::{ElementId, RenderId};
 use flui_rendering::pipeline::PipelineOwner;
+use flui_testing::HeadlessBinding;
 use flui_view::{BuildOwner, tree::ElementTree};
 use parking_lot::RwLock;
 

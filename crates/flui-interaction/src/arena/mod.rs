@@ -951,7 +951,7 @@ impl GestureArena {
     /// The returned arena answers [`SweepModel::BindingDriven`], so recognizers
     /// added to it never self-sweep in `stop_tracking` — the binding runs the
     /// close/sweep lifecycle via [`run_pointer_lifecycle`] after routing each
-    /// pointer event. This is the arena a [`HeadlessBinding`](https://docs.rs/flui-binding)
+    /// pointer event. This is the arena a [`HeadlessBinding`](https://docs.rs/flui-testing)
     /// or production `GestureBinding` hands down to a subtree.
     #[inline]
     pub fn binding_driven(clock: Arc<dyn MonotonicClock>) -> Self {

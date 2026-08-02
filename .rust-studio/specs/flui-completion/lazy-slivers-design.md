@@ -101,7 +101,7 @@ an element that materializes the subtree first. Resolve in the architecture desi
 
 ### U4.3 launch-ready notes (verified)
 
-- **Frame-driver insertion point** (`crates/flui-binding/src/lib.rs` `pump_frame`, ~:333): phases are
+- **Frame-driver insertion point** (`crates/flui-testing/src/lib.rs` `pump_frame`, ~:333): phases are
   clock→`poll_deadlines`→`vsync.tick_all`→`build_scope`→`run_frame` (run_frame = layout+paint+composite;
   `layout_dirty_root` drains `pending_child_requests` into the `PipelineOwner` field during it). The U4.3
   post-layout phase slots **after** `run_frame` restores the owner: `pipeline_owner.take_pending_child_requests()`
