@@ -32,7 +32,7 @@ These crates compose the rendering and platform substrate largely without knowin
 
 | Crate | Status | Purpose |
 |-------|--------|---------|
-| `flui-tree` | ✅ ACTIVE | Generic tree abstractions: `TreeRead` / `TreeNav` / `TreeWrite` trio, iterators / slots, arity markers (`Leaf` / `Single` / `Optional` / `Variable`), depth markers. The Cycle-3 audit deleted speculative `visitor` / `diff` modules (~10k LOC zombie surface) — concrete trees adopt the trio directly |
+| `flui-tree` | ✅ ACTIVE | Generic tree abstractions: `TreeRead` / `TreeNav` / `TreeWrite` trio, iterators / slots, arity markers (`Leaf` / `Single` / `Optional` / `Variable`), depth markers. A workspace audit deleted the unused speculative `visitor` / `diff` modules; concrete trees adopt the trio directly. |
 | `flui-platform` | ✅ ACTIVE | Native Win32 / AppKit / Headless backends + `winit` fallback. Sole home of OS-specific code. Loses `BackgroundExecutor`/`PlatformExecutor` when host-injected runtime execution lands. |
 | `flui-scheduler` | ✅ ACTIVE | Frame scheduling, microtasks, task prioritization. Narrows to logical update phases, tickers, callback ordering, and owner-local post-frame behavior; presentation clocks and raster backpressure move to presentation/runtime ownership. |
 | `flui-painting` | ✅ ACTIVE | `Canvas` API, `DisplayList`, paths, paint commands, text recording |

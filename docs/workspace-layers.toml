@@ -28,8 +28,9 @@
 #      the edges that would close the cycle actually exist.
 #   5. Nothing under `crates/` may depend on a member outside `crates/`
 #      (examples and tools are terminal consumers).
-#   6. A `[[planned]]` crate with `status = "gated"` may not be created until
-#      its `gate` is satisfied and this file is updated.
+#   6. Planned entries have a validated status (`gated` or `sanctioned`) and
+#      required gate metadata. A `gated` crate may not have a Cargo manifest
+#      until its gate is satisfied and the entry is replaced by `[[member]]`.
 #
 # `disposition` classifies each active member for the Runtime.1 milestone:
 #

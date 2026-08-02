@@ -98,7 +98,7 @@ current_inventory_files = [
 
 for path in current_inventory_files:
     text = path.read_text()
-    if "flui-log" in text:
+    if "flui-log" in text and "flui-log" not in active_crates:
         errors.append(f"{path.relative_to(root)} still references removed crate `flui-log`")
 
 justfile = (root / "justfile").read_text()
@@ -310,14 +310,20 @@ for package in workspace_packages:
 # script already parses `cargo metadata`'s per-package `dependencies` (see
 # the path/version check above) — the only place in the repo doing that today.
 #
-# `flui-cupertino` does not exist yet; it is guarded pre-emptively so the rule
-# is already live the moment the crate is created, per the owner directive.
+# Keep this set explicit because the guard spans every dependency kind, unlike
+# the normal-edge layer rule below.
 design_system_crates = {"flui-material", "flui-cupertino"}
 # The only crates *allowed* to point at a design system: the design systems
-# themselves (self-deps are nonsensical but harmless to exempt), the
-# application/composition-root crate, and anything outside `crates/`
-# (examples, tools) — matches docs/FOUNDATIONS.md's L7 --> L8/Facade edges.
-design_system_dependents_allowed = design_system_crates | {"flui-app", "flui"}
+# themselves (self-deps are nonsensical but harmless to exempt), the global
+# localization implementation package, the application/composition-root crate,
+# and anything outside `crates/` (examples, tools). The localization exception
+# is directional: ADR-0041 separately forbids material/cupertino ->
+# flui-localizations while permitting flui-localizations -> design systems.
+design_system_dependents_allowed = design_system_crates | {
+    "flui-localizations",
+    "flui-app",
+    "flui",
+}
 
 for package in workspace_packages:
     manifest = Path(package["manifest_path"]).resolve()
@@ -352,10 +358,17 @@ for package in workspace_packages:
 # spans every dependency kind — because an accidental Material dev-dependency
 # in a core crate is itself the coupling smell that rule exists to catch.)
 policy_path = root / "docs" / "workspace-layers.toml"
-policy = tomllib.loads(policy_path.read_text())
 policy_rel = policy_path.relative_to(root)
 
+try:
+    policy = tomllib.loads(policy_path.read_text())
+except (OSError, tomllib.TOMLDecodeError) as error:
+    print("workspace-inventory: drift detected", file=sys.stderr)
+    print(f"  - cannot load {policy_rel}: {error}", file=sys.stderr)
+    sys.exit(1)
+
 VALID_DISPOSITIONS = {"keep", "rename", "narrow", "optionalize", "deferred-extraction"}
+VALID_PLANNED_STATUSES = {"gated", "sanctioned"}
 
 layer_names = {layer["rank"]: layer["name"] for layer in policy.get("layer", [])}
 
@@ -515,12 +528,59 @@ for node in sorted(adjacency):
     if state.get(node) is None:
         find_cycles(node, [])
 
-# A `[[planned]]` crate marked `gated` may not exist yet. Creating it is a
-# contract change: satisfy the gate, then reclassify it as a [[member]].
+# A planned entry is a reviewed extraction decision, so validate its schema
+# instead of letting a typo silently disable a gate. Planned entries are removed
+# when the crate becomes an active, classified member.
+planned_by_name: dict[str, dict] = {}
+required_planned_fields = {"name", "status", "owner_issue", "gate"}
 for entry in policy.get("planned", []):
-    if entry["status"] == "gated" and entry["name"] in workspace_names:
+    missing_fields = sorted(required_planned_fields - set(entry))
+    if missing_fields:
         errors.append(
-            f"workspace member `{entry['name']}` exists, but {policy_rel} still marks it "
+            f"{policy_rel} planned entry is missing required fields: "
+            + ", ".join(missing_fields)
+        )
+        continue
+
+    planned_name = entry["name"]
+    if not isinstance(planned_name, str) or not planned_name:
+        errors.append(f"{policy_rel} planned entry has a non-string or empty `name`")
+        continue
+    if planned_name in planned_by_name:
+        errors.append(f"{policy_rel} lists planned crate `{planned_name}` more than once")
+        continue
+    planned_by_name[planned_name] = entry
+
+    planned_status = entry["status"]
+    if not isinstance(planned_status, str) or planned_status not in VALID_PLANNED_STATUSES:
+        errors.append(
+            f"{policy_rel} planned crate `{planned_name}` declares status "
+            f"{planned_status!r}, expected one of {sorted(VALID_PLANNED_STATUSES)}"
+        )
+    if not isinstance(entry["owner_issue"], int) or entry["owner_issue"] <= 0:
+        errors.append(
+            f"{policy_rel} planned crate `{planned_name}` must declare a positive integer `owner_issue`"
+        )
+    if not isinstance(entry["gate"], str) or not entry["gate"].strip():
+        errors.append(
+            f"{policy_rel} planned crate `{planned_name}` must declare a non-empty string `gate`"
+        )
+    if planned_name in layer_of:
+        errors.append(
+            f"{policy_rel} lists `{planned_name}` as both [[planned]] and [[member]]; "
+            "remove the planned entry when the crate is activated"
+        )
+
+# A `[[planned]]` crate marked `gated` may not have a manifest yet, whether or
+# not it was added to workspace.members. Creating it is a contract change:
+# satisfy the gate, then replace the planned entry with a [[member]] entry.
+for planned_name, entry in planned_by_name.items():
+    planned_manifest = root / "crates" / planned_name / "Cargo.toml"
+    if entry["status"] == "gated" and (
+        planned_manifest.is_file() or planned_name in workspace_names
+    ):
+        errors.append(
+            f"planned crate `{planned_name}` exists, but {policy_rel} still marks it "
             f"`status = \"gated\"` (issue #{entry['owner_issue']}). Extraction gate: "
             + " ".join(entry["gate"].split())
         )
