@@ -288,15 +288,22 @@ impl MultiDragGestureRecognizer {
     /// regardless of axis; unlike `PanGestureRecognizer`, none of them use
     /// `computePanSlop`. `computeHitSlop` (`gestures/events.dart`)
     /// special-cases exactly `PointerDeviceKind.mouse` as "precise" — every
-    /// other kind resolves through the configured settings profile. A
-    /// precise (mouse) pointer always gets the fixed
-    /// `kPrecisePointerHitSlop` constant, unconditionally; `with_settings`
-    /// customization has no effect on it.
+    /// other kind resolves `settings?.touchSlop ?? kTouchSlop`. A precise
+    /// (mouse) pointer always gets the fixed `kPrecisePointerHitSlop`
+    /// constant, unconditionally; `with_settings` customization has no effect
+    /// on it.
+    ///
+    /// The non-mouse arm reads [`GestureSettings::touch_slop`], not
+    /// `pan_slop`: `computeHitSlop` resolves through the *touch* tier, and
+    /// the two differ in the platform profiles
+    /// ([`android_defaults`](GestureSettings::android_defaults) is 8 vs 16,
+    /// [`ios_defaults`](GestureSettings::ios_defaults) 10 vs 20) even though
+    /// they coincide at 18 under [`touch_defaults`](GestureSettings::touch_defaults).
     fn slop_for(&self, kind: PointerType) -> f32 {
         if kind == PointerType::Mouse {
             return crate::settings::DEFAULT_MOUSE_SLOP;
         }
-        self.settings.lock().pan_slop()
+        self.settings.lock().touch_slop()
     }
 
     /// Number of pointers currently tracked (pre- and post-acceptance).
@@ -890,6 +897,50 @@ mod tests {
                 "{kind:?} pointer moving 10px: expected slop-cross = {should_cross}",
             );
         }
+    }
+
+    /// Flutter parity: `computeHitSlop`'s non-mouse arm resolves
+    /// `settings?.touchSlop ?? kTouchSlop` — the *touch* tier, not the pan
+    /// tier. The two coincide at 18.0 under `touch_defaults`, so only a
+    /// profile where they differ can tell them apart:
+    /// `android_defaults` is `touch_slop: 8.0` against `pan_slop: 16.0`.
+    /// A 12px move sits between them, so it must cross slop (reading
+    /// `touch_slop`) rather than stay under it (reading `pan_slop`).
+    #[test]
+    fn non_mouse_slop_reads_the_touch_tier_not_the_pan_tier() {
+        let arena = crate::arena::GestureArena::new();
+        let rec = MultiDragGestureRecognizer::with_settings(
+            arena.clone(),
+            MultiDragAxis::Free,
+            GestureSettings::android_defaults(),
+        )
+        .with_on_start(Rc::new(|_pointer, _pos| {
+            Some(Box::new(counting_handle(Arc::new(AtomicUsize::new(0)))) as _)
+        }));
+
+        let p = pointer_id(12);
+        rec.add_pointer(p, Offset::new(Pixels(0.0), Pixels(0.0)));
+
+        let rejected = Arc::new(Mutex::new(false));
+        arena.add(
+            p,
+            Arc::new(RejectableMember {
+                rejected: rejected.clone(),
+            }),
+        );
+        arena.close(p);
+
+        rec.handle_event(&make_move_event_for_id(
+            p,
+            Offset::new(Pixels(12.0), Pixels(0.0)),
+            PointerType::Touch,
+        ));
+
+        assert!(
+            *rejected.lock(),
+            "a 12px touch move under android_defaults must cross the 8px touch slop; \
+             staying under means the pan tier (16px) was read instead"
+        );
     }
 
     #[test]
