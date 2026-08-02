@@ -25,10 +25,19 @@
 //! accept cancels`, `Moving after accept is ok`, `Inter-tap distance cancels
 //! double tap`) that neither existing file covers.
 //!
-//! Divergence carried over from `gesture_detector_test.rs`: FLUI's touch slop
-//! is pinned at 18.0 regardless of `PointerType` (Flutter varies it per
-//! device); every "past slop" move below uses a delta well clear of 18px so
-//! the assertion holds under that pinned value.
+//! Slop and `PointerType`: `TapGestureRecognizer` / `LongPressGestureRecognizer`
+//! (both `PrimaryPointerGestureRecognizer` in Flutter) never branch on pointer
+//! kind — `recognizer.dart`'s `preAcceptSlopTolerance` always resolves to
+//! `gestureSettings?.touchSlop ?? kTouchSlop` (18.0), so their slop here is
+//! genuinely pinned at 18.0 regardless of `PointerType`. `DragGestureRecognizer`
+//! (the pan in `arena_rejection_cascade_pan_wins_over_tap_and_long_press` below)
+//! is different: it *does* vary by kind (`gestures/events.dart` `computeHitSlop`/
+//! `computePanSlop`, tag `3.44.0` — `kPrecisePointerHitSlop`/`kPrecisePointerPanSlop`
+//! for a mouse pointer). This harness dispatches `PointerType::Mouse`
+//! (`crates/flui-widgets/src/test_harness.rs`), so every "past slop" move below
+//! uses a delta well clear of 18px — clear of both the pinned tap/long-press
+//! threshold and the much smaller mouse-precise pan threshold — so the
+//! assertions hold either way.
 //!
 //! `kPressTimeout` (`gestures/constants.dart`, tag `3.44.0`) — Flutter's 100ms
 //! delay before a tap's `onTapDown` fires "if there's any doubt" — has no

@@ -7,8 +7,10 @@
 //! headless, geometry-only harness:
 //! - Platform-specific momentum-carry heuristics (Android "no momentum
 //!   build", iOS/macOS drag-threshold attenuation and momentum carry/kill) —
-//!   FLUI's `Scrollable` has one fixed 18px drag-slop model, no
-//!   platform-conditional physics variant selection.
+//!   `Scrollable`'s pan recognizer varies its drag-slop by pointer kind
+//!   (`GestureDetector`'s `DragGestureRecognizer`, mouse vs. touch — see
+//!   `crates/flui-interaction/src/recognizers/drag.rs`), but has no
+//!   platform-conditional (Android/iOS/macOS) physics variant selection.
 //! - Mouse pointer-signal scrolling (`PointerScrollEvent`), keyboard
 //!   scrolling, trackpad axis handling — no pointer-signal/keyboard input
 //!   path exists on `Scrollable` yet.

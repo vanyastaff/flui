@@ -33,8 +33,21 @@ pub const DEFAULT_TOUCH_SLOP: f32 = 18.0;
 
 /// Default touch slop for mouse devices (1 logical pixel).
 ///
-/// Mouse input is more precise, so the slop is much smaller.
+/// Mouse input is more precise, so the slop is much smaller. Matches
+/// Flutter's `kPrecisePointerHitSlop` (`gestures/constants.dart`, tag
+/// `3.44.0`) — the threshold `computeHitSlop` returns for
+/// `PointerDeviceKind.mouse`, used by `VerticalDragGestureRecognizer` and
+/// `HorizontalDragGestureRecognizer`.
 pub const DEFAULT_MOUSE_SLOP: f32 = 1.0;
+
+/// Default pan slop for mouse devices (2 logical pixels).
+///
+/// Matches Flutter's `kPrecisePointerPanSlop = kPrecisePointerHitSlop * 2.0`
+/// (`gestures/constants.dart`, tag `3.44.0`) — the threshold
+/// `computePanSlop` returns for `PointerDeviceKind.mouse`, used by
+/// `PanGestureRecognizer` (free-direction drag). Free movement gets double
+/// the axis-constrained hit slop.
+pub const DEFAULT_MOUSE_PAN_SLOP: f32 = DEFAULT_MOUSE_SLOP * 2.0;
 
 /// Default touch slop for pen/stylus devices (8 logical pixels).
 pub const DEFAULT_PEN_SLOP: f32 = 8.0;
@@ -199,7 +212,11 @@ impl GestureSettings {
     pub fn mouse_defaults() -> Self {
         Self {
             touch_slop: DEFAULT_MOUSE_SLOP,
-            pan_slop: DEFAULT_MOUSE_SLOP,
+            // Free-direction pan uses the doubled precise-pointer constant
+            // (`kPrecisePointerPanSlop`); vertical/horizontal drag stays on
+            // the plain hit-slop tier (`kPrecisePointerHitSlop`) — see
+            // `DEFAULT_MOUSE_PAN_SLOP`'s doc comment.
+            pan_slop: DEFAULT_MOUSE_PAN_SLOP,
             pan_slop_vertical: DEFAULT_MOUSE_SLOP,
             pan_slop_horizontal: DEFAULT_MOUSE_SLOP,
             scale_slop: DEFAULT_SCALE_SLOP,
@@ -593,7 +610,11 @@ mod tests {
     fn test_mouse_defaults() {
         let settings = GestureSettings::mouse_defaults();
         assert_eq!(settings.touch_slop(), DEFAULT_MOUSE_SLOP);
-        assert_eq!(settings.pan_slop(), DEFAULT_MOUSE_SLOP);
+        // Free-direction pan slop is double the hit slop for mouse, matching
+        // Flutter's `kPrecisePointerPanSlop = kPrecisePointerHitSlop * 2.0`
+        // (`gestures/constants.dart`, tag 3.44.0) — not the same value as
+        // `touch_slop`, unlike the (coincidentally equal) touch tier.
+        assert_eq!(settings.pan_slop(), DEFAULT_MOUSE_PAN_SLOP);
     }
 
     #[test]

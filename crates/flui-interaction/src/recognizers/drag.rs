@@ -25,7 +25,7 @@ use crate::{
     events::{PointerEvent, PointerType},
     ids::PointerId,
     processing::VelocityTracker,
-    settings::GestureSettings,
+    settings::{DEFAULT_MOUSE_PAN_SLOP, DEFAULT_MOUSE_SLOP, GestureSettings},
     traits::{DragAxis, PointerEventExtTrait},
 };
 
@@ -297,11 +297,30 @@ impl DragGestureRecognizer {
         self.start_behavior
     }
 
-    /// Minimum drag distance for the current axis. Per-axis slop:
+    /// Minimum drag distance for the current axis and pointer `kind`.
+    ///
+    /// Flutter parity: `gestures/events.dart` `computeHitSlop`/`computePanSlop`
+    /// (tag `3.44.0`) special-case exactly `PointerDeviceKind.mouse` as
+    /// "precise" — stylus, trackpad, and unknown all still resolve through
+    /// the configured settings profile alongside touch. A precise (mouse)
+    /// pointer always gets the fixed, much smaller constant, unconditionally
+    /// — [`with_settings`](Self::with_settings) customization has no effect
+    /// on it, matching `computeHitSlop`'s mouse arm never consulting
+    /// `gestureSettings`. For every other kind, per-axis slop:
     /// - [`DragAxis::Vertical`][]: [`GestureSettings::pan_slop_vertical`]
     /// - [`DragAxis::Horizontal`][]: [`GestureSettings::pan_slop_horizontal`]
     /// - [`DragAxis::Free`][]: [`GestureSettings::pan_slop`]
-    fn min_drag_distance(&self) -> f32 {
+    fn min_drag_distance(&self, kind: PointerType) -> f32 {
+        if kind == PointerType::Mouse {
+            return match self.axis {
+                // Vertical/HorizontalDragGestureRecognizer use
+                // `computeHitSlop` (`kPrecisePointerHitSlop`).
+                DragAxis::Vertical | DragAxis::Horizontal => DEFAULT_MOUSE_SLOP,
+                // PanGestureRecognizer uses `computePanSlop`
+                // (`kPrecisePointerPanSlop = kPrecisePointerHitSlop * 2.0`).
+                DragAxis::Free => DEFAULT_MOUSE_PAN_SLOP,
+            };
+        }
         let s = self.settings.lock();
         match self.axis {
             DragAxis::Vertical => s.pan_slop_vertical(),
@@ -405,7 +424,7 @@ impl DragGestureRecognizer {
                 state.last_time = Some(now);
                 state.device_kind = Some(kind);
                 state.velocity_tracker.add_position(now, position);
-                let should_accept = distance.abs() > self.min_drag_distance();
+                let should_accept = distance.abs() > self.min_drag_distance(kind);
                 drop(state);
 
                 // Crossing slop is a request to win, not permission to invoke
@@ -912,6 +931,98 @@ mod tests {
 
         // Should have updated
         assert!(*updated.lock());
+    }
+
+    // ========================================================================
+    // Precise-pointer slop (mouse vs. touch)
+    //
+    // Flutter parity: `gestures/events.dart` `computeHitSlop` (tag `3.44.0`)
+    // returns `kPrecisePointerHitSlop` (1.0 logical px) for
+    // `PointerDeviceKind.mouse`, not `kTouchSlop` (18.0) — every other kind
+    // (stylus, trackpad, unknown, touch) still resolves through the
+    // touch-tier settings. `VerticalDragGestureRecognizer` /
+    // `HorizontalDragGestureRecognizer` (`DragAxis::Vertical` /
+    // `DragAxis::Horizontal` here) call `computeHitSlop` directly.
+    // ========================================================================
+
+    /// Build an untracked drag recognizer with a passive competitor already
+    /// closing the arena, so a slop-crossing move must self-declare
+    /// acceptance rather than winning by the arena's lone-member default.
+    fn vertical_drag_with_competitor(
+        on_start: impl Fn(DragStartDetails) + 'static,
+    ) -> (Arc<DragGestureRecognizer>, GestureArena, PointerId) {
+        let arena = GestureArena::new();
+        let recognizer =
+            DragGestureRecognizer::new(arena.clone(), DragAxis::Vertical).with_on_start(on_start);
+        let pointer = PointerId::PRIMARY;
+        recognizer.add_pointer(pointer, Offset::new(Pixels(100.0), Pixels(100.0)));
+        close_with_competitor(&arena, pointer);
+        (recognizer, arena, pointer)
+    }
+
+    #[test]
+    fn mouse_drag_between_precise_slop_and_touch_slop_starts_the_drag() {
+        let started = Arc::new(Mutex::new(false));
+        let started_clone = started.clone();
+        let (recognizer, ..) = vertical_drag_with_competitor(move |_details| {
+            *started_clone.lock() = true;
+        });
+
+        // 10px down: above the mouse precise slop (1.0px) but below the
+        // touch slop (18.0px) the old, kind-blind code always applied
+        // regardless of the pointer's actual kind — the defect this closes.
+        let moved = Offset::new(Pixels(100.0), Pixels(110.0));
+        recognizer.handle_event(&make_move_event(moved, PointerType::Mouse));
+
+        assert!(
+            *started.lock(),
+            "a 10px mouse drag crosses the 1.0px precise-pointer slop and must start"
+        );
+    }
+
+    #[test]
+    fn touch_drag_of_the_same_distance_does_not_start() {
+        // Control for the test above: the identical 10px move, but with a
+        // touch pointer, must stay under the (unchanged) 18px touch slop —
+        // proving the fix branches on pointer kind rather than lowering the
+        // threshold for everyone.
+        let started = Arc::new(Mutex::new(false));
+        let started_clone = started.clone();
+        let (recognizer, ..) = vertical_drag_with_competitor(move |_details| {
+            *started_clone.lock() = true;
+        });
+
+        let moved = Offset::new(Pixels(100.0), Pixels(110.0));
+        recognizer.handle_event(&make_move_event(moved, PointerType::Touch));
+
+        assert!(
+            !*started.lock(),
+            "a 10px touch drag stays under the 18px touch slop and must not start"
+        );
+    }
+
+    #[test]
+    fn mouse_precise_slop_boundary_holds_from_both_sides() {
+        // Both sides of `kPrecisePointerHitSlop` (1.0px) for a mouse
+        // pointer: 0.9px must not cross it, 1.1px must.
+        let below = Offset::new(Pixels(100.0), Pixels(100.9));
+        let above = Offset::new(Pixels(100.0), Pixels(101.1));
+
+        for (moved, should_start, label) in [(below, false, "0.9px"), (above, true, "1.1px")] {
+            let started = Arc::new(Mutex::new(false));
+            let started_clone = started.clone();
+            let (recognizer, ..) = vertical_drag_with_competitor(move |_details| {
+                *started_clone.lock() = true;
+            });
+
+            recognizer.handle_event(&make_move_event(moved, PointerType::Mouse));
+
+            assert_eq!(
+                *started.lock(),
+                should_start,
+                "{label} vertical move against the 1.0px mouse precise slop",
+            );
+        }
     }
 
     #[test]
