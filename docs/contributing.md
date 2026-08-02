@@ -8,15 +8,18 @@ Welcome! This page is the working agreement for changes to FLUI: how to plan, co
 
 Before opening a PR or even a planning issue, read:
 
-1. [`docs/FOUNDATIONS.md`](FOUNDATIONS.md) — **architecture contract**: target architecture, locked contracts (C1–C9), target crate graph (Part IV).
-2. [`docs/ROADMAP.md`](ROADMAP.md) — **construction plan**: dependency-ordered phases that move the workspace from current state to the target.
-3. [`STRATEGY.md`](../STRATEGY.md) — product strategy and the three port rules ("behavior loyal, structure Rust-native").
-4. [`docs/PORT.md`](PORT.md) — port methodology, refusal triggers, per-crate `ARCHITECTURE.md` template.
-5. [`.specify/memory/constitution.md`](../.specify/memory/constitution.md) — the project constitution (v2.3.0). Non-negotiable rules: layered DAG, `unsafe` boundaries, no `unwrap()` / `println!`, on-demand rendering, etc.
-6. [`.ai-factory/ARCHITECTURE.md`](../.ai-factory/ARCHITECTURE.md) — full architectural rules and anti-patterns.
-7. [`.ai-factory/rules/base.md`](../.ai-factory/rules/base.md) — project base rules (naming, modules, errors, logging, testing, unsafe).
-8. [`CLAUDE.md`](../CLAUDE.md) — Claude Code-specific guidance for this repo (build commands, troubleshooting).
-9. [Architecture overview](architecture.md) and [Crates Map](crates.md) — high-level orientation (current-state).
+1. [`STYLE.md`](../STYLE.md) — **Rust engineering standard**: API design,
+   ownership, safety, concurrency, errors, performance, documentation, and
+   testing.
+2. [`docs/FOUNDATIONS.md`](FOUNDATIONS.md) — **architecture contract**: target architecture, locked contracts (C1–C9), target crate graph (Part IV).
+3. [`docs/ROADMAP.md`](ROADMAP.md) — **construction plan**: dependency-ordered phases that move the workspace from current state to the target.
+4. [`STRATEGY.md`](../STRATEGY.md) — product strategy and the three port rules ("behavior loyal, structure Rust-native").
+5. [`docs/PORT.md`](PORT.md) — port methodology, refusal triggers, per-crate `ARCHITECTURE.md` template.
+6. [`.specify/memory/constitution.md`](../.specify/memory/constitution.md) — the project constitution (v2.3.0). Non-negotiable rules: layered DAG, `unsafe` boundaries, no `unwrap()` / `println!`, on-demand rendering, etc.
+7. [`.ai-factory/ARCHITECTURE.md`](../.ai-factory/ARCHITECTURE.md) — full architectural rules and anti-patterns.
+8. [`.ai-factory/rules/base.md`](../.ai-factory/rules/base.md) — project base rules (naming, modules, errors, logging, testing, unsafe).
+9. [`CLAUDE.md`](../CLAUDE.md) — Claude Code-specific guidance for this repo (build commands, troubleshooting).
+10. [Architecture overview](architecture.md) and [Crates Map](crates.md) — high-level orientation (current-state).
 
 ## Quality Gates
 
@@ -88,13 +91,14 @@ Allowed prefixes: `feat`, `fix`, `refactor`, `test`, `docs`, `chore`. The option
 
 ## Code Style
 
-- **Formatter:** `rustfmt.toml` is authoritative (edition 2024, `max_width = 100`, Tall fn params). Run `cargo fmt --all` before commit.
-- **Linter:** `cargo clippy --workspace --all-targets -- -D warnings` must pass with `clippy::all` and `clippy::pedantic`.
-- **Naming:** snake_case for modules and functions, UpperCamelCase for types and traits, SCREAMING_SNAKE_CASE for constants. Crate names use the `flui-` prefix.
-- **Errors:** library crates use `thiserror`-derived enums; application / CLI / build glue may use `anyhow::Error`. `anyhow` MUST NOT cross a library crate boundary.
-- **Logging:** `tracing` only. No `println!`, `eprintln!`, or `dbg!` in committed code.
-- **`unsafe`:** confined to `flui-platform`, `flui-painting`, `flui-engine`. Every block needs a `// SAFETY:` comment.
-- **`unwrap()` / `expect()`:** disallowed outside tests, examples, and `// SAFETY:`-justified invariants.
+[`STYLE.md`](../STYLE.md) is the single workspace-wide Rust engineering
+standard. It covers naming, API design, ownership, errors and panics, unsafe
+proofs, concurrency, async code, lifecycle, performance, diagnostics,
+documentation, testing, features, and security.
+
+`rustfmt.toml`, `clippy.toml`, workspace lints, crate-local `AGENTS.md` files,
+and accepted ADRs provide the mechanically enforced and subsystem-specific
+parts of that contract. Do not copy a subset into a crate and let it drift.
 
 ## Architectural Constraints
 
