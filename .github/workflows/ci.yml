@@ -1,7 +1,7 @@
 name: CI
 
 # Job graph (every job is gated on the fast `checks` source gate):
-#   checks         — fmt + taplo + typos + inventory + port-check + actionlint + zizmor (seconds, no compile)
+#   checks         — fmt + taplo + typos + inventory + runtime-conformance + port-check + actionlint + zizmor (seconds, no compile)
 #   clippy         — workspace lint with -D warnings
 #   feature-matrix — cargo-hack per-feature clippy (--each-feature --optional-deps), xilem-style,
 #                    plus a bounded backend-feature-pair powerset for flui-engine, plus every
@@ -57,14 +57,15 @@ env:
 
 jobs:
   # ─────────────────────────────────────────────────────────────────────────
-  # checks — fast source gate. fmt + port-check + typos + Taplo + the workflow
+  # checks — fast source gate. fmt + inventory + runtime-conformance +
+  # port-check + typos + Taplo + the workflow
   # linters (actionlint semantics, zizmor security audit). No compile. Every
   # downstream job (clippy, test, doc, bench-compile) depends on this, so a
   # malformed PR fails in seconds before any workspace build starts.
   # Ubuntu only — pure source analysis. clippy lives in its own parallel job.
   # ─────────────────────────────────────────────────────────────────────────
   checks:
-    name: checks (fmt, port-check, typos, taplo, actionlint, zizmor)
+    name: checks (fmt, conformance, port-check, typos, taplo, actionlint, zizmor)
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -114,6 +115,9 @@ jobs:
 
       - name: workspace inventory + layer topology drift check
         run: bash scripts/check-workspace-inventory.sh
+
+      - name: Runtime.1 conformance registry check
+        run: bash scripts/check-runtime-conformance.sh
 
       - name: scripts/port-check.sh (22 refusal triggers + FR-033)
         run: bash scripts/port-check.sh -v

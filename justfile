@@ -314,6 +314,11 @@ doc-strict:
 inventory-check:
     bash scripts/check-workspace-inventory.sh
 
+[group("quality")]
+[doc("Validate the Runtime.1 conformance registry (docs/runtime-conformance.toml) against the source tree")]
+runtime-conformance-check:
+    bash scripts/check-runtime-conformance.sh
+
 # =============================================================================
 # Port methodology
 # =============================================================================
@@ -476,8 +481,8 @@ watch-test crate="":
 #   just deny             (advisories / bans / licenses / sources)
 #   just miri             (nightly UB check, narrow scope — see its comment)
 [group("ci")]
-[doc("Run local CI gates (fmt-check + inventory + port-check + clippy + test + doctests + rustdoc)")]
-ci: fmt-check inventory-check port-check clippy test-ci test-doc doc-strict
+[doc("Run local CI gates (fmt-check + inventory + runtime-conformance + port-check + clippy + test + doctests + rustdoc)")]
+ci: fmt-check inventory-check runtime-conformance-check port-check clippy test-ci test-doc doc-strict
 
 # =============================================================================
 # Maintenance
