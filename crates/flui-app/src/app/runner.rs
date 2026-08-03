@@ -90,6 +90,118 @@ thread_local! {
         const { std::cell::RefCell::new(RealmHost::new()) };
 }
 
+// ============================================================================
+// Loop-scoped owner-platform host (ADR-0039 §6)
+// ============================================================================
+
+#[cfg(not(target_os = "ios"))]
+thread_local! {
+    /// Loop-scoped host for the owner-thread platform capability
+    /// (ADR-0039), *separate from* [`PLATFORM_REALM_HOST`]: a realm's
+    /// teardown must not strand the loop's capability, because the loop may
+    /// host another realm before it exits (hot-restart does exactly this
+    /// today, `install_platform_realm`). Deliberately not cleared by
+    /// `teardown_platform_realm`.
+    ///
+    /// `OwnerPlatform` is not `Clone` (ADR-0039 slice-2 decision record), so
+    /// the only sanctioned way to read this slot is the borrow-style
+    /// [`with_owner_platform`] accessor below — there is no path to a
+    /// durable owned copy that outlives one access.
+    static OWNER_PLATFORM_HOST: std::cell::RefCell<Option<flui_platform::OwnerPlatform>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Installs `owner` in the loop-scoped host. Call once, at the top of each
+/// backend's `on_ready` callback (ADR-0039 §6) — every `run_*` entry point
+/// in this module does so immediately after minting/receiving its
+/// `OwnerPlatform`.
+#[cfg(not(target_os = "ios"))]
+pub(crate) fn install_owner_platform(owner: flui_platform::OwnerPlatform) {
+    OWNER_PLATFORM_HOST.with(|slot| {
+        *slot.borrow_mut() = Some(owner);
+    });
+}
+
+/// Borrow-style access to the loop-scoped owner-platform capability.
+/// `None` if no `OwnerPlatform` is currently installed on this thread
+/// (before `on_ready`, or after the host was cleared).
+///
+/// Three fences (ADR-0039 §6), all landing in this one accessor:
+///
+/// (a) **Borrow, not clone.** `pub(crate)` to `flui-app`'s `app` module,
+///     never re-exported; `OwnerPlatform` isn't `Clone`, so there is no way
+///     to escape this closure with a durable owned copy — every access
+///     re-crosses the fence.
+/// (b) **Static scan.** This function's name carries the scanner token
+///     `owner_platform`, so `scripts/check-frame-capability-scope.sh`
+///     (trigger #22) mechanically rejects any call from inside
+///     `build`/`perform_layout`/`paint`/composite bodies, across every
+///     crate the scanner sweeps.
+/// (c) **Runtime backstop.** `debug_assert!`s the process-global scheduler
+///     is not inside the frame transaction. "Not inside a frame phase" per
+///     the ADR means `TransientCallbacks`/`MidFrameMicrotasks`/
+///     `PersistentCallbacks` are forbidden; `Idle` and `PostFrameCallbacks`
+///     are allowed (legitimate ADR-0021-style post-frame work). This fence
+///     is **vacuous on binding-local frame paths**: headless/test bindings
+///     drive their own binding-local `Scheduler`, never the
+///     `Scheduler::instance()` singleton this checks, so fences (a) and (b)
+///     are the load-bearing ones there — stated here, not hidden.
+#[cfg(not(target_os = "ios"))]
+pub(crate) fn with_owner_platform<R>(
+    f: impl FnOnce(&flui_platform::OwnerPlatform) -> R,
+) -> Option<R> {
+    #[cfg(debug_assertions)]
+    {
+        let phase = Scheduler::instance().phase();
+        debug_assert!(
+            !matches!(
+                phase,
+                flui_scheduler::SchedulerPhase::TransientCallbacks
+                    | flui_scheduler::SchedulerPhase::MidFrameMicrotasks
+                    | flui_scheduler::SchedulerPhase::PersistentCallbacks
+            ),
+            "BUG: with_owner_platform called while the scheduler is inside \
+             the frame transaction (phase {phase:?}) -- owner_platform must \
+             not be acquired from build/layout/paint (ADR-0039 §6, trigger #22)"
+        );
+    }
+    OWNER_PLATFORM_HOST.with(|slot| slot.borrow().as_ref().map(f))
+}
+
+/// Unwind-safe TLS clearing. Arm this guard *before* calling
+/// `Platform::run(...)` on any backend whose `run` returns (winit,
+/// headless, Android) — not inside `on_ready` — so a panic anywhere inside
+/// `on_ready` or later in `run` unwinds through the guard's `Drop` and
+/// cannot leak the host into whatever runs on this thread next (notably,
+/// the next test). Clearing an already-empty slot is a no-op.
+///
+/// Web deliberately arms no guard: the host stays resident for the page's
+/// lifetime (see the web runner's own comment on this). macOS is moot:
+/// `run` never returns there (`terminate:` exits the process).
+#[cfg(not(target_os = "ios"))]
+#[must_use = "the guard must stay alive across the Platform::run(...) call it \
+              guards, or the TLS host clears immediately instead of at loop exit"]
+pub(crate) struct OwnerHostClearGuard {
+    _private: (),
+}
+
+#[cfg(not(target_os = "ios"))]
+impl OwnerHostClearGuard {
+    /// Arms the guard. Call immediately before `Platform::run(...)`.
+    pub(crate) fn arm() -> Self {
+        Self { _private: () }
+    }
+}
+
+#[cfg(not(target_os = "ios"))]
+impl Drop for OwnerHostClearGuard {
+    fn drop(&mut self) {
+        OWNER_PLATFORM_HOST.with(|slot| {
+            slot.borrow_mut().take();
+        });
+    }
+}
+
 #[cfg(not(target_os = "ios"))]
 struct RealmHost {
     realm: Option<super::ui_realm::UiRealm>,
@@ -1682,7 +1794,7 @@ where
 
     use flui_engine::wgpu::Renderer;
     use flui_platform::{
-        Platform, WindowOptions,
+        WindowOptions,
         traits::{DispatchEventResult, PlatformInput},
     };
     use parking_lot::Mutex;
@@ -1737,7 +1849,6 @@ where
     /// actually formats it — rustfmt does not reliably reformat very large
     /// closure literals passed as call arguments.
     fn bootstrap_desktop<V>(
-        platform: &dyn Platform,
         root: V,
         config: AppConfig,
         worker_reload: WorkerReload,
@@ -1748,13 +1859,22 @@ where
     {
         tracing::info!("Platform ready");
 
+        // No `owner: OwnerPlatform` parameter: the caller already installed
+        // it in the loop-scoped host (ADR-0039 §6) before calling this
+        // function, so every owner-thread touch below re-crosses the fenced
+        // `with_owner_platform` accessor instead of holding a private copy
+        // (`OwnerPlatform` isn't `Clone` by design — there is exactly one
+        // instance, and the TLS host is its one sanctioned home for the
+        // rest of the loop's life).
+        fn owner_platform_installed<R>(f: impl FnOnce(&flui_platform::OwnerPlatform) -> R) -> R {
+            with_owner_platform(f)
+                .expect("BUG: bootstrap_desktop runs only after install_owner_platform")
+        }
+
         // 0. Wire the platform clipboard (ADR-0034) before anything else can
-        // observe `AppBinding::clipboard()`. `platform` is `&dyn Platform`
-        // here, still fully intact — `on_ready` runs before `Platform::run`
-        // returns, so this is not the pre-`run()` extraction Android/web
-        // need, just an early call on a reference that stays valid for the
-        // rest of this function.
-        AppBinding::instance().set_platform_clipboard(platform.clipboard());
+        // observe `AppBinding::clipboard()`.
+        let clipboard = owner_platform_installed(|owner| owner.shared().clipboard());
+        AppBinding::instance().set_platform_clipboard(clipboard);
 
         // Debug overlay: `Some` stats IS the enable flag, so this is the
         // single point that turns the frame path's overlay work on.
@@ -1763,17 +1883,21 @@ where
         // 1. Open window now that the event loop is running. Window creation is
         // an environment failure (display server hiccup, resource exhaustion),
         // not a `BUG:` invariant, and — unlike platform init above — this DOES
-        // run inside `on_ready` with a live `platform` and `bootstrap_error_slot`
-        // available, so it gets the same deferred-panic-after-teardown handling
-        // as the GPU/realm/attach failures below instead of an immediate bare
-        // `.expect()` panic mid-`on_ready`.
+        // run inside `on_ready` with a live owner capability and
+        // `bootstrap_error_slot` available, so it gets the same
+        // deferred-panic-after-teardown handling as the GPU/realm/attach
+        // failures below instead of an immediate bare `.expect()` panic
+        // mid-`on_ready`. `Ready` is guaranteed here (ADR-0039 §1).
         let options: WindowOptions = (&config).into();
-        let window = match platform.open_window(options) {
+        let window = match owner_platform_installed(|owner| owner.open_window(options))
+            .and_then(flui_platform::WindowOpen::try_ready)
+        {
             Ok(window) => window,
             Err(error) => {
                 tracing::error!(%error, "Window creation failed");
-                *bootstrap_error_slot.borrow_mut() = Some(error.context("Window creation failed"));
-                platform.quit();
+                *bootstrap_error_slot.borrow_mut() =
+                    Some(anyhow::Error::from(error).context("Window creation failed"));
+                owner_platform_installed(flui_platform::OwnerPlatform::quit);
                 return;
             }
         };
@@ -1787,7 +1911,7 @@ where
                 tracing::error!("GPU init failed: {:?}", e);
                 *bootstrap_error_slot.borrow_mut() =
                     Some(anyhow::anyhow!(e).context("GPU init failed"));
-                platform.quit();
+                owner_platform_installed(flui_platform::OwnerPlatform::quit);
                 return;
             }
         };
@@ -1811,7 +1935,7 @@ where
                 tracing::error!(error = %e, "UiRealm construction failed");
                 *bootstrap_error_slot.borrow_mut() =
                     Some(anyhow::anyhow!(e).context("UiRealm construction failed"));
-                platform.quit();
+                owner_platform_installed(flui_platform::OwnerPlatform::quit);
                 return;
             }
         };
@@ -1828,7 +1952,7 @@ where
             tracing::error!("Root widget attach failed: {:?}", e);
             *bootstrap_error_slot.borrow_mut() =
                 Some(anyhow::anyhow!(e).context("Root widget attach failed"));
-            platform.quit();
+            owner_platform_installed(flui_platform::OwnerPlatform::quit);
             return;
         }
 
@@ -2059,25 +2183,27 @@ where
         // arrive before lifecycle observers run.
 
         // Platform quit -> Detached (frames disabled, listeners notified).
-        platform.on_quit(Box::new(move || {
-            tracing::info!("Platform quit");
-            debug_assert_eq!(
-                std::thread::current().id(),
-                realm_dispatch.owner_thread,
-                "platform on_quit must fire on the realm's owner thread"
-            );
-            if let Err(error) = dispatch_platform_realm(
-                realm_dispatch,
-                RealmEvent::LifecycleTarget(AppLifecycleState::Detached),
-            ) {
-                tracing::warn!(
-                    ?error,
-                    "realm unavailable during Detached lifecycle dispatch"
+        owner_platform_installed(|owner| {
+            owner.shared().on_quit(Box::new(move || {
+                tracing::info!("Platform quit");
+                debug_assert_eq!(
+                    std::thread::current().id(),
+                    realm_dispatch.owner_thread,
+                    "platform on_quit must fire on the realm's owner thread"
                 );
-                Scheduler::instance()
-                    .handle_app_lifecycle_state_change(AppLifecycleState::Detached);
-            }
-        }));
+                if let Err(error) = dispatch_platform_realm(
+                    realm_dispatch,
+                    RealmEvent::LifecycleTarget(AppLifecycleState::Detached),
+                ) {
+                    tracing::warn!(
+                        ?error,
+                        "realm unavailable during Detached lifecycle dispatch"
+                    );
+                    Scheduler::instance()
+                        .handle_app_lifecycle_state_change(AppLifecycleState::Detached);
+                }
+            }));
+        });
 
         // Window close -> log and let the platform handle quit
         // (Windows window proc already calls PostQuitMessage on WM_DESTROY)
@@ -2139,9 +2265,16 @@ where
     // is unreachable beforehand); opening it earlier would deadlock forever
     // waiting for a pump that never started. `on_ready` runs exactly once,
     // synchronously, on this same thread — see `Platform::run`'s doc.
-    platform.run(Box::new(move |platform: &dyn Platform| {
+    //
+    // The owner-host clear guard is armed HERE, before `run(...)`, not
+    // inside `on_ready` — so a panic anywhere inside `on_ready` (or later,
+    // on backends where `run` keeps running after it) unwinds through the
+    // guard and cannot leak the host onto this thread past this call
+    // (ADR-0039 §6, U7).
+    let _owner_host_clear_guard = OwnerHostClearGuard::arm();
+    platform.run(Box::new(move |owner| {
+        install_owner_platform(owner);
         bootstrap_desktop(
-            platform,
             root,
             config,
             worker_reload,
@@ -2246,267 +2379,293 @@ where
 
     let platform: Box<dyn Platform> = Box::new(AndroidPlatform::new(app));
 
-    // 0. Wire the platform clipboard (ADR-0034). Extracted from the `Box`
-    // now, while `platform` is still intact: `platform.run(...)` below takes
-    // `self: Box<Self>` by value, and the `on_ready` closure it invokes
-    // discards its `platform` parameter, so there is no later point at which
-    // this platform's `clipboard()` is reachable at all.
-    AppBinding::instance().set_platform_clipboard(platform.clipboard());
+    /// The actual Android bootstrap: window, GPU, realm, and callback
+    /// wiring. Runs once, synchronously, inside `on_ready` — which this
+    /// backend delivers at the first `Resume` (module doc,
+    /// `platforms/android/mod.rs:13`: "Resumed -> on_ready() -> create
+    /// surface"). Migrated here from before `run()` (ADR-0039 slice 2):
+    /// `on_ready` is `FnOnce` and fires exactly once, matching today's
+    /// once-only pre-run bootstrap semantics exactly — no behavior change
+    /// is intended or made on the subsequent-Resume/surface-recreation
+    /// path, which flows through the backend's existing window/surface
+    /// code untouched by this migration. **Unvalidated on-device**: no
+    /// device and no CI compile target for `target_os = "android"` verify
+    /// this; stated here and in the registry rather than assumed.
+    fn bootstrap_android<V>(root: V, config: AppConfig, hot_reload: ScenePlugin)
+    where
+        V: View + StatelessView + Clone + 'static,
+    {
+        fn owner_platform_installed<R>(f: impl FnOnce(&flui_platform::OwnerPlatform) -> R) -> R {
+            with_owner_platform(f)
+                .expect("BUG: bootstrap_android runs only after install_owner_platform")
+        }
 
-    // Debug overlay: `Some` stats IS the enable flag, so this is the
-    // single point that turns the frame path's overlay work on.
-    AppBinding::instance().set_performance_overlay(config.show_performance_overlay);
+        // 0. Wire the platform clipboard (ADR-0034).
+        let clipboard = owner_platform_installed(|owner| owner.shared().clipboard());
+        AppBinding::instance().set_platform_clipboard(clipboard);
 
-    // 1. Open window (wraps the existing ANativeWindow) before run()
-    let options: WindowOptions = (&config).into();
-    let window = platform
-        .open_window(options)
-        .expect("Failed to create Android window");
+        // Debug overlay: `Some` stats IS the enable flag, so this is the
+        // single point that turns the frame path's overlay work on.
+        AppBinding::instance().set_performance_overlay(config.show_performance_overlay);
 
-    // 2. Create GPU renderer (Vulkan backend on Android)
-    let phys_size = window.physical_size();
-    let renderer = pollster::block_on(Renderer::new(window.as_ref()));
-    let mut renderer = match renderer {
-        Ok(r) => r,
-        Err(e) => {
-            tracing::error!("GPU init failed: {:?}", e);
+        // 1. Open window (wraps the existing ANativeWindow). `Ready` is
+        // guaranteed inside `on_ready` (ADR-0039 §1).
+        let options: WindowOptions = (&config).into();
+        let window = owner_platform_installed(|owner| owner.open_window(options))
+            .and_then(flui_platform::WindowOpen::try_ready)
+            .expect("Failed to create Android window");
+
+        // 2. Create GPU renderer (Vulkan backend on Android)
+        let phys_size = window.physical_size();
+        let renderer = pollster::block_on(Renderer::new(window.as_ref()));
+        let mut renderer = match renderer {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::error!("GPU init failed: {:?}", e);
+                return;
+            }
+        };
+        renderer.resize(phys_size.width.0 as u32, phys_size.height.0 as u32);
+
+        // 3. Mount root widget (used when no plugin is active) at the
+        // LOGICAL size; the paint root's DPR transform maps to physical.
+        let scale_factor = window.scale_factor() as f32;
+        AppBinding::instance()
+            .render_pipeline_mut()
+            .set_device_pixel_ratio(scale_factor);
+        let ui_realm = match super::ui_realm::UiRealm::new(
+            AppBinding::instance(),
+            AppBinding::instance().frame_wake_callback(),
+            Arc::clone(&window),
+        ) {
+            Ok(realm) => realm,
+            Err(error) => {
+                tracing::error!(%error, "UiRealm construction failed");
+                return;
+            }
+        };
+        let logical = window.logical_size();
+        let attach = ui_realm.enter(|realm| {
+            AppBinding::instance().attach_root_widget_with_size(
+                realm,
+                &root,
+                logical.width.0 as f32,
+                logical.height.0 as f32,
+            )
+        });
+        if let Err(e) = attach {
+            tracing::error!("Root widget attach failed: {:?}", e);
             return;
         }
-    };
-    renderer.resize(phys_size.width.0 as u32, phys_size.height.0 as u32);
+        let realm_dispatch = install_platform_realm(ui_realm);
 
-    // 3. Mount root widget (used when no plugin is active) at the
-    // LOGICAL size; the paint root's DPR transform maps to physical.
-    let scale_factor = window.scale_factor() as f32;
-    AppBinding::instance()
-        .render_pipeline_mut()
-        .set_device_pixel_ratio(scale_factor);
-    let ui_realm = match super::ui_realm::UiRealm::new(
-        AppBinding::instance(),
-        AppBinding::instance().frame_wake_callback(),
-        Arc::clone(&window),
-    ) {
-        Ok(realm) => realm,
-        Err(error) => {
-            tracing::error!(%error, "UiRealm construction failed");
-            return;
-        }
-    };
-    let logical = window.logical_size();
-    let attach = ui_realm.enter(|realm| {
-        AppBinding::instance().attach_root_widget_with_size(
-            realm,
-            &root,
-            logical.width.0 as f32,
-            logical.height.0 as f32,
-        )
-    });
-    if let Err(e) = attach {
-        tracing::error!("Root widget attach failed: {:?}", e);
-        return;
-    }
-    let realm_dispatch = install_platform_realm(ui_realm);
+        // 4. Wrap renderer for callback sharing
+        let renderer = Arc::new(Mutex::new(renderer));
 
-    // 4. Wrap renderer for callback sharing
-    let renderer = Arc::new(Mutex::new(renderer));
+        // 5. Register input callback -> entered realm input dispatch
+        window.on_input(Box::new(move |input: PlatformInput| {
+            let _ = dispatch_platform_realm(realm_dispatch, RealmEvent::Input(input));
+            DispatchEventResult::resolved(false, true)
+        }));
 
-    // 5. Register input callback -> entered realm input dispatch
-    window.on_input(Box::new(move |input: PlatformInput| {
-        let _ = dispatch_platform_realm(realm_dispatch, RealmEvent::Input(input));
-        DispatchEventResult::resolved(false, true)
-    }));
+        // 6. Register frame callback -- with hot-reload plugin override
+        let renderer_frame = Arc::clone(&renderer);
+        let hot_reload_frame = hot_reload.clone();
+        window.on_request_frame(Box::new(move || {
+            let renderer_frame = Arc::clone(&renderer_frame);
+            let hot_reload_frame = hot_reload_frame.clone();
+            let _ = dispatch_platform_realm(
+                realm_dispatch,
+                RealmEvent::Frame(Box::new(move |realm| {
+                    // Owner-inbox drain: commands and worker results commit HERE,
+                    // at the frame boundary while the scheduler phase is Idle —
+                    // never inside the frame transaction below. Runs before
+                    // everything else in this callback, including the hot-reload
+                    // plugin scene fast path below, so a command-driven redraw
+                    // request is observed by the very frame its wake produced
+                    // regardless of which rendering path this frame takes.
+                    let inbox_redraw = drain_owner_inbox(realm);
 
-    // 6. Register frame callback -- with hot-reload plugin override
-    let renderer_frame = Arc::clone(&renderer);
-    let hot_reload_frame = hot_reload.clone();
-    window.on_request_frame(Box::new(move || {
-        let renderer_frame = Arc::clone(&renderer_frame);
-        let hot_reload_frame = hot_reload_frame.clone();
-        let _ = dispatch_platform_realm(
-            realm_dispatch,
-            RealmEvent::Frame(Box::new(move |realm| {
-                // Owner-inbox drain: commands and worker results commit HERE,
-                // at the frame boundary while the scheduler phase is Idle —
-                // never inside the frame transaction below. Runs before
-                // everything else in this callback, including the hot-reload
-                // plugin scene fast path below, so a command-driven redraw
-                // request is observed by the very frame its wake produced
-                // regardless of which rendering path this frame takes.
-                let inbox_redraw = drain_owner_inbox(realm);
+                    let mut r = renderer_frame.lock();
+                    let (w, h) = r.size();
 
-                let mut r = renderer_frame.lock();
-                let (w, h) = r.size();
-
-                // If a scene plugin is live it owns this presentation frame,
-                // but the callback still executes inside the realm entry
-                // scope. Always `false` in a build without the `hot-reload`
-                // feature.
-                if hot_reload_frame.try_render_frame(&mut *r, w as f32, h as f32) {
-                    return;
-                }
-                drop(r);
-
-                let binding = AppBinding::instance();
-                let has_pending = binding.has_pending_work(realm);
-                let dirty = inbox_redraw || binding.needs_redraw() || has_pending;
-                let scheduler = Scheduler::instance();
-                match wake_action(scheduler.frames_enabled(), dirty, scheduler.is_frame_scheduled())
-                {
-                    WakeAction::Skip => return,
-                    WakeAction::PumpAsync => {
-                        // Frames disabled: pump only the async driver — no
-                        // begin/draw frame, no tickers, no pipeline, no
-                        // present. See `wake_action`'s doc for why this is
-                        // the only thing keeping a spawned future
-                        // progressing while backgrounded.
-                        //
-                        // `finish_async_pump` MUST run first, not after —
-                        // see `Scheduler::finish_async_pump`'s doc for the
-                        // starvation hazard this ordering avoids.
-                        scheduler.finish_async_pump();
-                        scheduler.drive_async_tasks();
-                        // Unconditional throttle: a self-re-arming task has
-                        // no vsync/present call to bound it here either, and
-                        // this arm has no gate-open signal to make the pace
-                        // conditional the way desktop's does — see
-                        // `NO_PRESENT_FALLBACK_PACE`'s doc.
-                        std::thread::sleep(NO_PRESENT_FALLBACK_PACE);
+                    // If a scene plugin is live it owns this presentation frame,
+                    // but the callback still executes inside the realm entry
+                    // scope. Always `false` in a build without the `hot-reload`
+                    // feature.
+                    if hot_reload_frame.try_render_frame(&mut *r, w as f32, h as f32) {
                         return;
                     }
-                    WakeAction::Render => {}
-                }
+                    drop(r);
 
-                let now = web_time::Instant::now();
-                // Scheduler callbacks and rendering share ONE `UiRealm::enter`
-                // dynamic extent; callbacks may legally resolve realm-local
-                // capabilities throughout the complete frame transaction.
-                scheduler.drive_frame(now, || {
-                    let mut r = renderer_frame.lock();
-                    binding.render_frame_entered(realm, &mut *r);
+                    let binding = AppBinding::instance();
+                    let has_pending = binding.has_pending_work(realm);
+                    let dirty = inbox_redraw || binding.needs_redraw() || has_pending;
+                    let scheduler = Scheduler::instance();
+                    match wake_action(scheduler.frames_enabled(), dirty, scheduler.is_frame_scheduled())
+                    {
+                        WakeAction::Skip => return,
+                        WakeAction::PumpAsync => {
+                            // Frames disabled: pump only the async driver — no
+                            // begin/draw frame, no tickers, no pipeline, no
+                            // present. See `wake_action`'s doc for why this is
+                            // the only thing keeping a spawned future
+                            // progressing while backgrounded.
+                            //
+                            // `finish_async_pump` MUST run first, not after —
+                            // see `Scheduler::finish_async_pump`'s doc for the
+                            // starvation hazard this ordering avoids.
+                            scheduler.finish_async_pump();
+                            scheduler.drive_async_tasks();
+                            // Unconditional throttle: a self-re-arming task has
+                            // no vsync/present call to bound it here either, and
+                            // this arm has no gate-open signal to make the pace
+                            // conditional the way desktop's does — see
+                            // `NO_PRESENT_FALLBACK_PACE`'s doc.
+                            std::thread::sleep(NO_PRESENT_FALLBACK_PACE);
+                            return;
+                        }
+                        WakeAction::Render => {}
+                    }
 
-                    if r.is_device_lost() {
-                        match pollster::block_on(r.recover()) {
-                            Ok(()) => {
-                                tracing::warn!("GPU device lost — recovered successfully");
-                                AppBinding::instance().wake_frame();
-                            }
-                            Err(e) => {
-                                tracing::error!(error = ?e, "GPU device recovery failed; will retry next frame");
+                    let now = web_time::Instant::now();
+                    // Scheduler callbacks and rendering share ONE `UiRealm::enter`
+                    // dynamic extent; callbacks may legally resolve realm-local
+                    // capabilities throughout the complete frame transaction.
+                    scheduler.drive_frame(now, || {
+                        let mut r = renderer_frame.lock();
+                        binding.render_frame_entered(realm, &mut *r);
+
+                        if r.is_device_lost() {
+                            match pollster::block_on(r.recover()) {
+                                Ok(()) => {
+                                    tracing::warn!("GPU device lost — recovered successfully");
+                                    AppBinding::instance().wake_frame();
+                                }
+                                Err(e) => {
+                                    tracing::error!(error = ?e, "GPU device recovery failed; will retry next frame");
+                                }
                             }
                         }
-                    }
-                });
-            })),
-        );
-    }));
+                    });
+                })),
+            );
+        }));
 
-    // 7. Register resize callback -> renderer.resize()
-    let renderer_resize = Arc::clone(&renderer);
-    window.on_resize(Box::new(move |size, scale_factor| {
-        let apply_size = size;
-        let renderer_resize = Arc::clone(&renderer_resize);
-        let _ = dispatch_platform_realm(
-            realm_dispatch,
-            RealmEvent::Resize {
-                size,
-                scale_factor,
-                apply_surface: Box::new(move || {
-                    let w = (apply_size.width.0 * scale_factor) as u32;
-                    let h = (apply_size.height.0 * scale_factor) as u32;
-                    renderer_resize.lock().resize(w, h);
-                }),
-            },
-        );
-    }));
+        // 7. Register resize callback -> renderer.resize()
+        let renderer_resize = Arc::clone(&renderer);
+        window.on_resize(Box::new(move |size, scale_factor| {
+            let apply_size = size;
+            let renderer_resize = Arc::clone(&renderer_resize);
+            let _ = dispatch_platform_realm(
+                realm_dispatch,
+                RealmEvent::Resize {
+                    size,
+                    scale_factor,
+                    apply_surface: Box::new(move || {
+                        let w = (apply_size.width.0 * scale_factor) as u32;
+                        let h = (apply_size.height.0 * scale_factor) as u32;
+                        renderer_resize.lock().resize(w, h);
+                    }),
+                },
+            );
+        }));
 
-    // 8. Lifecycle callbacks
-    //
-    // Detached is realm-dispatched so interrupted gesture state is drained
-    // before lifecycle observers run.
+        // 8. Lifecycle callbacks
+        //
+        // Detached is realm-dispatched so interrupted gesture state is drained
+        // before lifecycle observers run.
 
-    // Platform quit -> Detached (frames disabled, listeners notified).
-    platform.on_quit(Box::new(move || {
-        tracing::info!("Platform quit");
+        // Platform quit -> Detached (frames disabled, listeners notified).
+        owner_platform_installed(|owner| {
+            owner.shared().on_quit(Box::new(move || {
+                tracing::info!("Platform quit");
+                debug_assert_eq!(
+                    std::thread::current().id(),
+                    realm_dispatch.owner_thread,
+                    "platform on_quit must fire on the realm's owner thread"
+                );
+                if let Err(error) = dispatch_platform_realm(
+                    realm_dispatch,
+                    RealmEvent::LifecycleTarget(AppLifecycleState::Detached),
+                ) {
+                    tracing::warn!(
+                        ?error,
+                        "realm unavailable during Detached lifecycle dispatch"
+                    );
+                    Scheduler::instance()
+                        .handle_app_lifecycle_state_change(AppLifecycleState::Detached);
+                }
+            }));
+        });
+
+        // Window close (fired by Android Destroy event)
+        window.on_close(Box::new(move || {
+            tracing::info!("Window closed");
+        }));
+
+        // Window active status. On Android this one callback conflates real
+        // window focus (`MainEvent::GainedFocus`/`LostFocus`) with the app's
+        // actual pause/resume signal (`MainEvent::Resume`/`Pause` currently fire
+        // the identical `dispatch_active_status_change` — see
+        // `flui-platform`'s `platforms/android/mod.rs`); a dedicated
+        // `MainEvent` -> lifecycle callback that tells them apart is a named
+        // follow-up (ADR-0035), not this PR. Until that split lands, this keeps
+        // the existing transport but fixes the mapping: `false` ladders all the
+        // way to `Paused` and `true` back to `Resumed` — Android's
+        // backgrounding signal needs the deeper ladder the desktop/web
+        // `(visible, focused)` derivation (which only ever reaches
+        // `Inactive`/`Hidden`) does not produce.
+        window.on_active_status_change(Box::new(move |resumed| {
+            let target = if resumed {
+                AppLifecycleState::Resumed
+            } else {
+                AppLifecycleState::Paused
+            };
+            let _ = dispatch_platform_realm(
+                realm_dispatch,
+                RealmEvent::Frame(Box::new(move |realm| {
+                    let old = Scheduler::instance().lifecycle_state();
+                    emit_lifecycle_transition(realm, old, target);
+                })),
+            );
+        }));
+
+        // 9. Store window in AppBinding for runtime access — BEFORE marking the
+        // lifecycle Resumed or requesting the initial redraw. Both of those can
+        // synchronously run the first frame through `dispatch_platform_realm`;
+        // if `active_window` were still `None` at that point, anything
+        // resolving it during that frame (an autofocus `EditableText`
+        // attaching its IME client, for instance) would silently no-op instead
+        // of attaching.
+        AppBinding::instance().set_window(window);
+
+        // Mark lifecycle as started (Resumed).
         debug_assert_eq!(
             std::thread::current().id(),
             realm_dispatch.owner_thread,
-            "platform on_quit must fire on the realm's owner thread"
+            "android bootstrap must run on the realm's owner thread"
         );
-        if let Err(error) = dispatch_platform_realm(
-            realm_dispatch,
-            RealmEvent::LifecycleTarget(AppLifecycleState::Detached),
-        ) {
-            tracing::warn!(
-                ?error,
-                "realm unavailable during Detached lifecycle dispatch"
-            );
-            Scheduler::instance().handle_app_lifecycle_state_change(AppLifecycleState::Detached);
-        }
-    }));
+        Scheduler::instance().handle_app_lifecycle_state_change(AppLifecycleState::Resumed);
 
-    // Window close (fired by Android Destroy event)
-    window.on_close(Box::new(move || {
-        tracing::info!("Window closed");
-    }));
+        // 10. Request initial redraw, now that the window is stored.
+        // `wake_frame` (not `with_window(|w| w.request_redraw())`): it clones
+        // the window out from under `active_window`'s lock before calling
+        // through, so a backend whose `request_redraw` re-enters `AppBinding`
+        // synchronously (headless, in this crate's own tests) cannot deadlock
+        // on that same lock — the same clone-then-call discipline used by
+        // direct platform capabilities.
+        AppBinding::instance().wake_frame();
 
-    // Window active status. On Android this one callback conflates real
-    // window focus (`MainEvent::GainedFocus`/`LostFocus`) with the app's
-    // actual pause/resume signal (`MainEvent::Resume`/`Pause` currently fire
-    // the identical `dispatch_active_status_change` — see
-    // `flui-platform`'s `platforms/android/mod.rs`); a dedicated
-    // `MainEvent` -> lifecycle callback that tells them apart is a named
-    // follow-up (ADR-0035), not this PR. Until that split lands, this keeps
-    // the existing transport but fixes the mapping: `false` ladders all the
-    // way to `Paused` and `true` back to `Resumed` — Android's
-    // backgrounding signal needs the deeper ladder the desktop/web
-    // `(visible, focused)` derivation (which only ever reaches
-    // `Inactive`/`Hidden`) does not produce.
-    window.on_active_status_change(Box::new(move |resumed| {
-        let target = if resumed {
-            AppLifecycleState::Resumed
-        } else {
-            AppLifecycleState::Paused
-        };
-        let _ = dispatch_platform_realm(
-            realm_dispatch,
-            RealmEvent::Frame(Box::new(move |realm| {
-                let old = Scheduler::instance().lifecycle_state();
-                emit_lifecycle_transition(realm, old, target);
-            })),
-        );
-    }));
+        tracing::info!("Android platform initialized with callbacks (hot-reload enabled)");
+    }
 
-    // 9. Store window in AppBinding for runtime access — BEFORE marking the
-    // lifecycle Resumed or requesting the initial redraw. Both of those can
-    // synchronously run the first frame through `dispatch_platform_realm`;
-    // if `active_window` were still `None` at that point, anything
-    // resolving it during that frame (an autofocus `EditableText`
-    // attaching its IME client, for instance) would silently no-op instead
-    // of attaching.
-    AppBinding::instance().set_window(window);
-
-    // Mark lifecycle as started (Resumed).
-    debug_assert_eq!(
-        std::thread::current().id(),
-        realm_dispatch.owner_thread,
-        "android bootstrap must run on the realm's owner thread"
-    );
-    Scheduler::instance().handle_app_lifecycle_state_change(AppLifecycleState::Resumed);
-
-    // 10. Request initial redraw, now that the window is stored.
-    // `wake_frame` (not `with_window(|w| w.request_redraw())`): it clones
-    // the window out from under `active_window`'s lock before calling
-    // through, so a backend whose `request_redraw` re-enters `AppBinding`
-    // synchronously (headless, in this crate's own tests) cannot deadlock
-    // on that same lock — the same clone-then-call discipline used by
-    // direct platform capabilities.
-    AppBinding::instance().wake_frame();
-
-    tracing::info!("Android platform initialized with callbacks (hot-reload enabled)");
-
-    // Run the event loop (takes ownership of the platform)
-    platform.run(Box::new(|_platform| {
-        tracing::info!("Android platform ready");
+    // Owner-host clear guard armed BEFORE `run(...)`, not inside `on_ready`
+    // (ADR-0039 §6, U7) — see `run_desktop`'s matching comment.
+    let _owner_host_clear_guard = OwnerHostClearGuard::arm();
+    platform.run(Box::new(move |owner| {
+        install_owner_platform(owner);
+        bootstrap_android(root, config, hot_reload);
     }));
     teardown_platform_realm();
 }
@@ -2546,253 +2705,274 @@ where
 
     let platform = flui_platform::current_platform().expect("Failed to initialize web platform");
 
-    // 0. Wire the platform clipboard (ADR-0034). Extracted from the `Box`
-    // now, while `platform` is still intact — see `run_android`'s identical
-    // comment for why there is no later point at which this platform's
-    // `clipboard()` is reachable.
-    AppBinding::instance().set_platform_clipboard(platform.clipboard());
+    /// The actual web bootstrap: canvas window, renderer, realm, and
+    /// callback wiring. Runs once, synchronously, inside `on_ready` —
+    /// `WebPlatform::run` invokes it before starting the RAF loop
+    /// (ADR-0039 slice 2 migration; behavior-preserving, since `on_ready`
+    /// already runs synchronously on this thread before `run` returns).
+    fn bootstrap_web<V>(root: V, config: AppConfig)
+    where
+        V: View + StatelessView + Clone + 'static,
+    {
+        fn owner_platform_installed<R>(f: impl FnOnce(&flui_platform::OwnerPlatform) -> R) -> R {
+            with_owner_platform(f)
+                .expect("BUG: bootstrap_web runs only after install_owner_platform")
+        }
 
-    // Debug overlay: `Some` stats IS the enable flag, so this is the
-    // single point that turns the frame path's overlay work on.
-    AppBinding::instance().set_performance_overlay(config.show_performance_overlay);
+        // 0. Wire the platform clipboard (ADR-0034).
+        let clipboard = owner_platform_installed(|owner| owner.shared().clipboard());
+        AppBinding::instance().set_platform_clipboard(clipboard);
 
-    // 1. Open window (creates canvas) before run() since run() takes ownership
-    let options: WindowOptions = (&config).into();
-    let window = platform
-        .open_window(options)
-        .expect("Failed to create canvas window");
+        // Debug overlay: `Some` stats IS the enable flag, so this is the
+        // single point that turns the frame path's overlay work on.
+        AppBinding::instance().set_performance_overlay(config.show_performance_overlay);
 
-    // 2. Shared renderer slot — starts as None, filled async once the WebGPU
-    //    adapter is available. `Option` lets the frame callback skip frames that
-    //    arrive before the renderer is ready.
-    let renderer: Arc<Mutex<Option<Renderer>>> = Arc::new(Mutex::new(None));
+        // 1. Open window (creates canvas). `Ready` is guaranteed inside
+        // `on_ready` (ADR-0039 §1).
+        let options: WindowOptions = (&config).into();
+        let window = owner_platform_installed(|owner| owner.open_window(options))
+            .and_then(flui_platform::WindowOpen::try_ready)
+            .expect("Failed to create canvas window");
 
-    let phys_size = window.physical_size();
-    let renderer_init = Arc::clone(&renderer);
-    let renderer_window = Arc::clone(&window);
+        // 2. Shared renderer slot — starts as None, filled async once the WebGPU
+        //    adapter is available. `Option` lets the frame callback skip frames that
+        //    arrive before the renderer is ready.
+        let renderer: Arc<Mutex<Option<Renderer>>> = Arc::new(Mutex::new(None));
 
-    // The future owns a strong window reference. This is required because the
-    // browser platform installs RAF and returns immediately, and startup can
-    // also return early before the window reaches AppBinding.
-    wasm_bindgen_futures::spawn_local(async move {
-        let mut r = match Renderer::new(renderer_window.as_ref()).await {
-            Ok(r) => r,
-            Err(e) => {
-                tracing::error!("GPU init failed: {:?}", e);
+        let phys_size = window.physical_size();
+        let renderer_init = Arc::clone(&renderer);
+        let renderer_window = Arc::clone(&window);
+
+        // The future owns a strong window reference. This is required because the
+        // browser platform installs RAF and returns immediately, and startup can
+        // also return early before the window reaches AppBinding.
+        wasm_bindgen_futures::spawn_local(async move {
+            let mut r = match Renderer::new(renderer_window.as_ref()).await {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::error!("GPU init failed: {:?}", e);
+                    return;
+                }
+            };
+            r.resize(phys_size.width.0 as u32, phys_size.height.0 as u32);
+            tracing::info!("WebGPU renderer initialized");
+            *renderer_init.lock() = Some(r);
+        });
+
+        // 3. Mount root widget at the LOGICAL size; the paint root's DPR
+        // transform maps to the physical canvas.
+        let scale_factor = window.scale_factor() as f32;
+        AppBinding::instance()
+            .render_pipeline_mut()
+            .set_device_pixel_ratio(scale_factor);
+        let ui_realm = match super::ui_realm::UiRealm::new(
+            AppBinding::instance(),
+            AppBinding::instance().frame_wake_callback(),
+            Arc::clone(&window),
+        ) {
+            Ok(realm) => realm,
+            Err(error) => {
+                tracing::error!(%error, "UiRealm construction failed");
                 return;
             }
         };
-        r.resize(phys_size.width.0 as u32, phys_size.height.0 as u32);
-        tracing::info!("WebGPU renderer initialized");
-        *renderer_init.lock() = Some(r);
-    });
-
-    // 3. Mount root widget at the LOGICAL size; the paint root's DPR
-    // transform maps to the physical canvas.
-    let scale_factor = window.scale_factor() as f32;
-    AppBinding::instance()
-        .render_pipeline_mut()
-        .set_device_pixel_ratio(scale_factor);
-    let ui_realm = match super::ui_realm::UiRealm::new(
-        AppBinding::instance(),
-        AppBinding::instance().frame_wake_callback(),
-        Arc::clone(&window),
-    ) {
-        Ok(realm) => realm,
-        Err(error) => {
-            tracing::error!(%error, "UiRealm construction failed");
+        let logical = window.logical_size();
+        let attach = ui_realm.enter(|realm| {
+            AppBinding::instance().attach_root_widget_with_size(
+                realm,
+                &root,
+                logical.width.0 as f32,
+                logical.height.0 as f32,
+            )
+        });
+        if let Err(e) = attach {
+            tracing::error!("Root widget attach failed: {:?}", e);
             return;
         }
-    };
-    let logical = window.logical_size();
-    let attach = ui_realm.enter(|realm| {
-        AppBinding::instance().attach_root_widget_with_size(
-            realm,
-            &root,
-            logical.width.0 as f32,
-            logical.height.0 as f32,
-        )
-    });
-    if let Err(e) = attach {
-        tracing::error!("Root widget attach failed: {:?}", e);
-        return;
-    }
-    let realm_dispatch = install_platform_realm(ui_realm);
+        let realm_dispatch = install_platform_realm(ui_realm);
 
-    // 4. Register input callback
-    window.on_input(Box::new(move |input: PlatformInput| {
-        let _ = dispatch_platform_realm(realm_dispatch, RealmEvent::Input(input));
-        DispatchEventResult::resolved(false, true)
-    }));
+        // 4. Register input callback
+        window.on_input(Box::new(move |input: PlatformInput| {
+            let _ = dispatch_platform_realm(realm_dispatch, RealmEvent::Input(input));
+            DispatchEventResult::resolved(false, true)
+        }));
 
-    // 5. Register frame callback
-    let renderer_frame = Arc::clone(&renderer);
-    window.on_request_frame(Box::new(move || {
-        let renderer_frame = Arc::clone(&renderer_frame);
-        let _ = dispatch_platform_realm(
-            realm_dispatch,
-            RealmEvent::Frame(Box::new(move |realm| {
-                // Owner-inbox drain: commands and worker results commit HERE,
-                // at the frame boundary while the scheduler phase is Idle —
-                // never inside the frame transaction below. Runs before the
-                // dirty gate so a command-driven redraw request is observed
-                // by the very frame its wake produced.
-                let inbox_redraw = drain_owner_inbox(realm);
+        // 5. Register frame callback
+        let renderer_frame = Arc::clone(&renderer);
+        window.on_request_frame(Box::new(move || {
+            let renderer_frame = Arc::clone(&renderer_frame);
+            let _ = dispatch_platform_realm(
+                realm_dispatch,
+                RealmEvent::Frame(Box::new(move |realm| {
+                    // Owner-inbox drain: commands and worker results commit HERE,
+                    // at the frame boundary while the scheduler phase is Idle —
+                    // never inside the frame transaction below. Runs before the
+                    // dirty gate so a command-driven redraw request is observed
+                    // by the very frame its wake produced.
+                    let inbox_redraw = drain_owner_inbox(realm);
 
-                let binding = AppBinding::instance();
-                let has_pending = binding.has_pending_work(realm);
-                let dirty = inbox_redraw || binding.needs_redraw() || has_pending;
-                let scheduler = Scheduler::instance();
-                match wake_action(scheduler.frames_enabled(), dirty, scheduler.is_frame_scheduled())
-                {
-                    WakeAction::Skip => return,
-                    WakeAction::PumpAsync => {
-                        // Frames disabled: pump only the async driver — see
-                        // `wake_action`'s doc for why this is the only thing
-                        // keeping a spawned future progressing while
-                        // backgrounded.
-                        //
-                        // `finish_async_pump` MUST run first, not after —
-                        // see `Scheduler::finish_async_pump`'s doc for the
-                        // starvation hazard this ordering avoids.
-                        //
-                        // No `NO_PRESENT_FALLBACK_PACE` sleep here, unlike
-                        // desktop/Android: this callback is driven by the
-                        // browser's `requestAnimationFrame` loop
-                        // (`start_raf_loop`, `flui-platform`'s web backend),
-                        // which fires unconditionally once per animation
-                        // frame regardless of whether a redraw was
-                        // requested — the browser's own vsync-paced RAF
-                        // cadence already bounds this arm's re-wake rate, so
-                        // an additional sleep would be redundant. It would
-                        // also be unsound here: `wasm32-unknown-unknown` has
-                        // no real OS threads, and blocking the single JS
-                        // thread with `std::thread::sleep` would hang the
-                        // page rather than pace it.
-                        scheduler.finish_async_pump();
-                        scheduler.drive_async_tasks();
-                        return;
+                    let binding = AppBinding::instance();
+                    let has_pending = binding.has_pending_work(realm);
+                    let dirty = inbox_redraw || binding.needs_redraw() || has_pending;
+                    let scheduler = Scheduler::instance();
+                    match wake_action(scheduler.frames_enabled(), dirty, scheduler.is_frame_scheduled())
+                    {
+                        WakeAction::Skip => return,
+                        WakeAction::PumpAsync => {
+                            // Frames disabled: pump only the async driver — see
+                            // `wake_action`'s doc for why this is the only thing
+                            // keeping a spawned future progressing while
+                            // backgrounded.
+                            //
+                            // `finish_async_pump` MUST run first, not after —
+                            // see `Scheduler::finish_async_pump`'s doc for the
+                            // starvation hazard this ordering avoids.
+                            //
+                            // No `NO_PRESENT_FALLBACK_PACE` sleep here, unlike
+                            // desktop/Android: this callback is driven by the
+                            // browser's `requestAnimationFrame` loop
+                            // (`start_raf_loop`, `flui-platform`'s web backend),
+                            // which fires unconditionally once per animation
+                            // frame regardless of whether a redraw was
+                            // requested — the browser's own vsync-paced RAF
+                            // cadence already bounds this arm's re-wake rate, so
+                            // an additional sleep would be redundant. It would
+                            // also be unsound here: `wasm32-unknown-unknown` has
+                            // no real OS threads, and blocking the single JS
+                            // thread with `std::thread::sleep` would hang the
+                            // page rather than pace it.
+                            scheduler.finish_async_pump();
+                            scheduler.drive_async_tasks();
+                            return;
+                        }
+                        WakeAction::Render => {}
                     }
-                    WakeAction::Render => {}
+
+                    let now = web_time::Instant::now();
+                    // Scheduler callbacks and rendering share one realm entry.
+                    scheduler.drive_frame(now, || {
+                        let mut slot = renderer_frame.lock();
+                        let Some(r) = slot.as_mut() else {
+                            return;
+                        };
+
+                        binding.render_frame_entered(realm, r);
+
+                        if r.is_device_lost() {
+                            drop(slot);
+                            let renderer_recover = Arc::clone(&renderer_frame);
+                            wasm_bindgen_futures::spawn_local(async move {
+                                // Never hold the renderer mutex across `.await`.
+                                let Some(mut renderer) = renderer_recover.lock().take() else {
+                                    return;
+                                };
+                                let result = renderer.recover().await;
+                                *renderer_recover.lock() = Some(renderer);
+                                match result {
+                                    Ok(()) => {
+                                        tracing::warn!("GPU device lost — recovered successfully");
+                                        AppBinding::instance().wake_frame();
+                                    }
+                                    Err(e) => {
+                                        tracing::error!(error = ?e, "GPU device recovery failed; will retry next frame");
+                                    }
+                                }
+                            });
+                        }
+                    });
+                })),
+            );
+        }));
+
+        let renderer_resize = Arc::clone(&renderer);
+        window.on_resize(Box::new(move |size, scale_factor| {
+            let apply_size = size;
+            let renderer_resize = Arc::clone(&renderer_resize);
+            let _ = dispatch_platform_realm(
+                realm_dispatch,
+                RealmEvent::Resize {
+                    size,
+                    scale_factor,
+                    apply_surface: Box::new(move || {
+                        if let Some(renderer) = renderer_resize.lock().as_mut() {
+                            let width = (apply_size.width.0 * scale_factor) as u32;
+                            let height = (apply_size.height.0 * scale_factor) as u32;
+                            renderer.resize(width, height);
+                        }
+                    }),
+                },
+            );
+        }));
+
+        // 6. Lifecycle callbacks
+        //
+        // Detached is realm-dispatched so interrupted gesture state is drained
+        // before lifecycle observers run.
+        owner_platform_installed(|owner| {
+            owner.shared().on_quit(Box::new(move || {
+                tracing::info!("Web platform quit");
+                debug_assert_eq!(
+                    std::thread::current().id(),
+                    realm_dispatch.owner_thread,
+                    "platform on_quit must fire on the realm's owner thread"
+                );
+                if let Err(error) = dispatch_platform_realm(
+                    realm_dispatch,
+                    RealmEvent::LifecycleTarget(AppLifecycleState::Detached),
+                ) {
+                    tracing::warn!(
+                        ?error,
+                        "realm unavailable during Detached lifecycle dispatch"
+                    );
+                    Scheduler::instance()
+                        .handle_app_lifecycle_state_change(AppLifecycleState::Detached);
                 }
+            }));
+        });
 
-                let now = web_time::Instant::now();
-                // Scheduler callbacks and rendering share one realm entry.
-                scheduler.drive_frame(now, || {
-                    let mut slot = renderer_frame.lock();
-                    let Some(r) = slot.as_mut() else {
-                        return;
-                    };
+        window.on_close(Box::new(move || {
+            tracing::info!("Canvas window closed");
+            // On web, no explicit quit mechanism needed
+        }));
 
-                    binding.render_frame_entered(realm, r);
+        // No `on_visibility_status_change` registration on web (yet): there is
+        // no occlusion signal wired for this backend in this PR (winit's
+        // `Occluded` is desktop-only) — a DOM `visibilitychange` listener is a
+        // future follow-up, not this PR's scope.
+        window.on_active_status_change(Box::new(move |focused| {
+            let _ = dispatch_platform_realm(realm_dispatch, RealmEvent::WindowFocus(focused));
+        }));
 
-                    if r.is_device_lost() {
-                        drop(slot);
-                        let renderer_recover = Arc::clone(&renderer_frame);
-                        wasm_bindgen_futures::spawn_local(async move {
-                            // Never hold the renderer mutex across `.await`.
-                            let Some(mut renderer) = renderer_recover.lock().take() else {
-                                return;
-                            };
-                            let result = renderer.recover().await;
-                            *renderer_recover.lock() = Some(renderer);
-                            match result {
-                                Ok(()) => {
-                                    tracing::warn!("GPU device lost — recovered successfully");
-                                    AppBinding::instance().wake_frame();
-                                }
-                                Err(e) => {
-                                    tracing::error!(error = ?e, "GPU device recovery failed; will retry next frame");
-                                }
-                            }
-                        });
-                    }
-                });
-            })),
-        );
-    }));
+        // 7. Store window — BEFORE marking the lifecycle Resumed, which can
+        // synchronously run the first frame through `dispatch_platform_realm`;
+        // anything resolving `active_window` during that frame (an autofocus
+        // `EditableText` attaching its IME client, for instance) must not see
+        // `None`.
+        AppBinding::instance().set_window(window);
 
-    let renderer_resize = Arc::clone(&renderer);
-    window.on_resize(Box::new(move |size, scale_factor| {
-        let apply_size = size;
-        let renderer_resize = Arc::clone(&renderer_resize);
-        let _ = dispatch_platform_realm(
-            realm_dispatch,
-            RealmEvent::Resize {
-                size,
-                scale_factor,
-                apply_surface: Box::new(move || {
-                    if let Some(renderer) = renderer_resize.lock().as_mut() {
-                        let width = (apply_size.width.0 * scale_factor) as u32;
-                        let height = (apply_size.height.0 * scale_factor) as u32;
-                        renderer.resize(width, height);
-                    }
-                }),
-            },
-        );
-    }));
-
-    // 6. Lifecycle callbacks
-    //
-    // Detached is realm-dispatched so interrupted gesture state is drained
-    // before lifecycle observers run.
-    platform.on_quit(Box::new(move || {
-        tracing::info!("Web platform quit");
         debug_assert_eq!(
             std::thread::current().id(),
             realm_dispatch.owner_thread,
-            "platform on_quit must fire on the realm's owner thread"
+            "web bootstrap must run on the realm's owner thread"
         );
-        if let Err(error) = dispatch_platform_realm(
-            realm_dispatch,
-            RealmEvent::LifecycleTarget(AppLifecycleState::Detached),
-        ) {
-            tracing::warn!(
-                ?error,
-                "realm unavailable during Detached lifecycle dispatch"
-            );
-            Scheduler::instance().handle_app_lifecycle_state_change(AppLifecycleState::Detached);
-        }
-    }));
+        Scheduler::instance().handle_app_lifecycle_state_change(AppLifecycleState::Resumed);
 
-    window.on_close(Box::new(move || {
-        tracing::info!("Canvas window closed");
-        // On web, no explicit quit mechanism needed
-    }));
+        tracing::info!("Web platform initialized with callbacks");
+    }
 
-    // No `on_visibility_status_change` registration on web (yet): there is
-    // no occlusion signal wired for this backend in this PR (winit's
-    // `Occluded` is desktop-only) — a DOM `visibilitychange` listener is a
-    // future follow-up, not this PR's scope.
-    window.on_active_status_change(Box::new(move |focused| {
-        let _ = dispatch_platform_realm(realm_dispatch, RealmEvent::WindowFocus(focused));
-    }));
-
-    // 7. Store window — BEFORE marking the lifecycle Resumed, which can
-    // synchronously run the first frame through `dispatch_platform_realm`;
-    // anything resolving `active_window` during that frame (an autofocus
-    // `EditableText` attaching its IME client, for instance) must not see
-    // `None`.
-    AppBinding::instance().set_window(window);
-
-    debug_assert_eq!(
-        std::thread::current().id(),
-        realm_dispatch.owner_thread,
-        "web bootstrap must run on the realm's owner thread"
-    );
-    Scheduler::instance().handle_app_lifecycle_state_change(AppLifecycleState::Resumed);
-
-    tracing::info!("Web platform initialized with callbacks");
-
-    // Run the event loop (takes ownership of the platform)
-    platform.run(Box::new(|_platform| {
+    // Run the event loop (takes ownership of the platform). No
+    // `OwnerHostClearGuard` here — deliberately: `WebPlatform::run` installs
+    // the RAF callback and returns immediately, and tearing down the realm
+    // (or the owner host) at that point would destroy it before the first
+    // frame. The host stays owner-TLS resident for the page's lifetime
+    // (ADR-0039 §6/§7 "wasm posture"). An explicit web detach/quit
+    // ownership hook is deferred until the platform exposes a callback
+    // whose lifetime encloses the RAF registration.
+    platform.run(Box::new(move |owner| {
+        install_owner_platform(owner);
+        bootstrap_web(root, config);
         tracing::info!("Web platform ready");
     }));
-    // `WebPlatform::run` installs the RAF callback and returns immediately;
-    // tearing down here would destroy the realm before the first frame. The
-    // host therefore remains owner-TLS resident for the page lifetime. An
-    // explicit web detach/quit ownership hook is deferred until the platform
-    // exposes a callback whose lifetime encloses the RAF registration.
 }
 
 #[cfg(test)]
@@ -2951,5 +3131,99 @@ mod tests {
             "set_window must have taken effect before the initial redraw fires \
              the frame callback that could read active_window",
         );
+    }
+
+    // ========================================================================
+    // Owner-platform host tests (ADR-0039 §6, U7)
+    // ========================================================================
+
+    /// Serializes tests that mutate `Scheduler::instance()`'s process-global
+    /// phase (the repo rule for shared binding/scheduler state — AGENTS.md
+    /// "Testing quirks"). `OWNER_PLATFORM_HOST` itself is `thread_local!`, so
+    /// the install/clear tests below need no lock (the standard library
+    /// test harness runs each `#[test]` on its own thread by default); this
+    /// lock exists only for the one test that drives the process-global
+    /// `Scheduler::instance()` singleton through a real frame.
+    static SCHEDULER_PHASE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn owner_platform_host_installs_and_clears_around_run() {
+        use flui_platform::headless_platform;
+
+        assert!(
+            with_owner_platform(|_| ()).is_none(),
+            "no host installed before any on_ready has run on this thread"
+        );
+
+        // `PlatformReadyCallback` is `Box<dyn FnOnce(OwnerPlatform) + 'static>`,
+        // so the closure below cannot borrow a stack-local `Cell` — `Rc`
+        // gives it an owned handle instead (single-threaded: headless `run`
+        // invokes `on_ready` synchronously, on this same thread).
+        let seen_while_installed = Rc::new(Cell::new(false));
+        let seen_while_installed_for_closure = Rc::clone(&seen_while_installed);
+        {
+            let _clear_guard = OwnerHostClearGuard::arm();
+            let platform = headless_platform();
+            platform.run(Box::new(move |owner| {
+                install_owner_platform(owner);
+                let observed = with_owner_platform(|_owner| true);
+                seen_while_installed_for_closure.set(observed == Some(true));
+            }));
+        } // `_clear_guard` drops here.
+
+        assert!(
+            seen_while_installed.get(),
+            "the accessor must yield Some(_) while a host is installed"
+        );
+        assert!(
+            with_owner_platform(|_| ()).is_none(),
+            "the clear guard must remove the host once its scope ends"
+        );
+    }
+
+    #[test]
+    fn owner_platform_host_panic_in_on_ready_still_clears() {
+        use flui_platform::headless_platform;
+
+        let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _clear_guard = OwnerHostClearGuard::arm();
+            let platform = headless_platform();
+            platform.run(Box::new(|owner| {
+                install_owner_platform(owner);
+                panic!("exercise on_ready panic cleanup");
+            }));
+        }));
+
+        assert!(unwind.is_err(), "on_ready's panic must propagate");
+        assert!(
+            with_owner_platform(|_| ()).is_none(),
+            "a panic inside on_ready must still unwind through the clear guard \
+             (armed before Platform::run, not inside on_ready) rather than \
+             leaking the host onto this thread"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "with_owner_platform called while the scheduler is inside")]
+    #[cfg_attr(
+        not(debug_assertions),
+        ignore = "the fence is a debug_assert!; release builds don't panic"
+    )]
+    fn owner_platform_accessor_fences_the_frame_transaction() {
+        let _serialized = SCHEDULER_PHASE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+        // `drive_frame` leaves the *production* `Scheduler::instance()`
+        // singleton in `PersistentCallbacks` for the duration of its
+        // `pipeline` closure -- a forbidden phase per fence (c). A
+        // panicking pipeline is caught internally and resolved back to
+        // `Idle` via `abort_frame()` before the panic resumes, so this
+        // test's own `#[should_panic]` unwind leaves the singleton clean
+        // for whatever runs on it next -- no hand-rolled restore guard
+        // needed on top of `drive_frame`'s own recovery path.
+        Scheduler::instance().drive_frame(std::time::Instant::now(), || {
+            let _ = with_owner_platform(|_owner| ());
+        });
     }
 }
