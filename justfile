@@ -315,7 +315,7 @@ inventory-check:
     bash scripts/check-workspace-inventory.sh
 
 [group("quality")]
-[doc("Validate the Runtime.1 conformance registry (docs/runtime-conformance.toml) against the source tree")]
+[doc("Validate the Runtime contract registry (docs/runtime-contract.toml) against the source tree")]
 runtime-conformance-check:
     bash scripts/check-runtime-conformance.sh
 

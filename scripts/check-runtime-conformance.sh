@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Validate the Runtime.1 conformance registry (docs/runtime-conformance.toml)
+# Validate the Runtime contract registry (docs/runtime-contract.toml)
 # against the source tree.
 #
-# This is the executable half of the Runtime.1 conformance matrix: the
-# registry records what each runtime ADR clause's state actually is and how
-# every public runtime surface is classified; this script keeps those claims
-# honest. It follows the same shape as scripts/check-workspace-inventory.sh —
+# This is the executable half of the Runtime.1 public contract registry: it
+# records shipped invariants, planned ownership, and classified public runtime
+# boundary families without depending on internal design records. It follows
+# the same shape as scripts/check-workspace-inventory.sh —
 # a thin bash wrapper around an embedded python3 program using the stdlib
 # structural TOML parser (tomllib), never regexes-over-TOML.
 #
@@ -19,14 +19,11 @@
 #     string. A `contains` match proves the symbol/test still exists at that
 #     path — it does NOT prove behavior. Behavior lives in the cited tests,
 #     which `just test` executes.
-#   * Source gates: retired identifiers stay deleted, `run_direct` keeps its
-#     experimental marking, ADR-0039 stays Proposed, no `flui-presentation`
-#     crate appears, and new ambient singletons / public lock-shaped surfaces
-#     in the runtime crates must be registered with an owner. The singleton
-#     and lock nets are textual (`impl_binding_singleton!`, `fn instance() ->
-#     &'static`, `PORT-CHECK-OK-SP6`): a singleton built without those idioms,
-#     or a lock surface port-check trigger #12's grammar misses, is invisible
-#     to them. This is a targeted gate, not full Rust API analysis.
+#   * Source gates: root export declarations are compared with an explicit
+#     manifest; retired identifiers stay deleted; `run_direct` keeps its
+#     experimental marking; and ambient singletons / public lock exceptions
+#     are matched declaration-by-declaration. This is a targeted boundary
+#     gate, not a claim that source text is a Rust semantic API analyzer.
 
 set -euo pipefail
 
@@ -40,12 +37,13 @@ if ! command -v python3 >/dev/null 2>&1; then
 fi
 
 python3 - "${repo_root}" <<'PY'
+import re
 import sys
 import tomllib
 from pathlib import Path
 
 root = Path(sys.argv[1]).resolve()
-registry_path = root / "docs" / "runtime-conformance.toml"
+registry_path = root / "docs" / "runtime-contract.toml"
 registry_rel = registry_path.relative_to(root)
 
 errors: list[str] = []
@@ -63,27 +61,13 @@ except (OSError, tomllib.TOMLDecodeError) as error:
     sys.exit(1)
 
 # ---------------------------------------------------------------------------
-# Contract vocabulary. The registry's [registry] header must agree, so the
-# file and this script cannot drift apart silently.
+# Contract vocabulary.
 # ---------------------------------------------------------------------------
-ADR_SCOPE = ["ADR-0027", "ADR-0037", "ADR-0029", "ADR-0039"]
 VALID_STATES = {"implemented", "partial", "planned", "documented-divergence"}
 VALID_CLASSIFICATIONS = {"stable-candidate", "experimental", "transitional", "removal-target"}
 VALID_DOMAINS = {"application", "realm", "presentation", "raster", "platform", "shared-engine"}
 VALID_EVIDENCE_KINDS = {"symbol", "test", "compile-time", "source-gate"}
 OWNER_ISSUE_MIN, OWNER_ISSUE_MAX = 551, 565
-
-# Floors, not proof of completeness: deleting requirement entries below these
-# counts fails; whether every normative clause is represented remains an
-# editorial judgment recorded in the entries themselves.
-MIN_REQUIREMENTS_PER_ADR = {"ADR-0027": 19, "ADR-0037": 12, "ADR-0029": 7, "ADR-0039": 6}
-
-ADR_FILES = {
-    "ADR-0027": "docs/adr/ADR-0027-owner-affine-ui-realms.md",
-    "ADR-0037": "docs/adr/ADR-0037-presentation-ownership-domains.md",
-    "ADR-0029": "docs/adr/ADR-0029-frame-pacing-swapchain-block-with-fallback-throttle.md",
-    "ADR-0039": "docs/adr/ADR-0039-event-loop-affinity-capability.md",
-}
 
 # Runtime crates covered by the singleton and lock-surface nets.
 RUNTIME_CRATES = ["flui-app", "flui-scheduler", "flui-platform", "flui-engine"]
@@ -93,15 +77,25 @@ RUNTIME_CRATES = ["flui-app", "flui-scheduler", "flui-platform", "flui-engine"]
 SINGLETON_NET_EXEMPT = {Path("crates/flui-foundation/src/binding.rs")}
 
 header = registry.get("registry", {})
-if header.get("adr_scope") != ADR_SCOPE:
-    fail(
-        f"{registry_rel} [registry].adr_scope = {header.get('adr_scope')!r} does not match "
-        f"this script's contract {ADR_SCOPE!r} — update both together, deliberately"
-    )
+if not isinstance(header, dict):
+    fail(f"{registry_rel} [registry] must be a table")
+    header = {}
+if header.get("schema") != 1:
+    fail(f"{registry_rel} [registry].schema must be 1")
 
-for adr, rel in ADR_FILES.items():
-    if not (root / rel).is_file():
-        fail(f"{rel} is missing, but {adr} is in the conformance scope")
+
+def table_array(name: str) -> list[dict]:
+    value = registry.get(name, [])
+    if not isinstance(value, list):
+        fail(f"{registry_rel} `{name}` must be an array of tables (`[[{name}]]`)")
+        return []
+    result: list[dict] = []
+    for index, entry in enumerate(value):
+        if not isinstance(entry, dict):
+            fail(f"{registry_rel} {name}[{index}] must be a table")
+            continue
+        result.append(entry)
+    return result
 
 
 def check_owner_issue(entry: dict, label: str, required: bool) -> None:
@@ -110,7 +104,7 @@ def check_owner_issue(entry: dict, label: str, required: bool) -> None:
         if required:
             fail(f"{label} has no owning issue; partial/planned/transitional work needs exactly one owner in #{OWNER_ISSUE_MIN}-#{OWNER_ISSUE_MAX}")
         return
-    if not isinstance(issue, int) or not (OWNER_ISSUE_MIN <= issue <= OWNER_ISSUE_MAX):
+    if isinstance(issue, bool) or not isinstance(issue, int) or not (OWNER_ISSUE_MIN <= issue <= OWNER_ISSUE_MAX):
         fail(f"{label} declares owner_issue {issue!r}; expected an integer in {OWNER_ISSUE_MIN}-{OWNER_ISSUE_MAX}")
 
 
@@ -129,7 +123,10 @@ def check_citation(file_value: object, contains_value: object, label: str, *, fo
     if forbid_docs and file_value.endswith((".md", ".markdown")):
         fail(f"{label} cites documentation ({file_value}) — documentation is never implementation evidence")
         return
-    path = root / file_value
+    path = (root / file_value).resolve()
+    if not path.is_relative_to(root):
+        fail(f"{label} cites path outside the repository: {file_value}")
+        return
     if not path.is_file():
         fail(f"{label} cites {file_value}, which does not exist")
         return
@@ -143,43 +140,33 @@ def check_citation(file_value: object, contains_value: object, label: str, *, fo
 
 
 # ---------------------------------------------------------------------------
-# Requirements
+# Contracts
 # ---------------------------------------------------------------------------
-requirement_keys: set[str] = set()
-requirements_by_adr: dict[str, int] = {adr: 0 for adr in ADR_SCOPE}
-requirements = registry.get("requirement", [])
+contract_keys: set[str] = set()
+contracts_by_state: dict[str, int] = {state: 0 for state in VALID_STATES}
+contracts = table_array("contract")
 
 # Descriptive kebab-case keys only. Internal process-ID shapes (SC-NNN, U##,
 # T-N/R-N/E-N, P#) are banned by the repo's Agent Rules.
-import re
-
 KEY_RE = re.compile(r"^[a-z][a-z0-9]*(-[a-z0-9]+)+$")
 BANNED_KEY_RE = re.compile(r"(^|-)((sc|u|t|r|e|p)-?\d+)($|-)", re.IGNORECASE)
 
-for index, entry in enumerate(requirements):
+for index, entry in enumerate(contracts):
     key = entry.get("key")
-    label = f"{registry_rel} requirement[{index}]"
+    label = f"{registry_rel} contract[{index}]"
     if not isinstance(key, str) or not key:
         fail(f"{label} has an empty or missing key")
         continue
-    label = f"{registry_rel} requirement `{key}`"
-    if key in requirement_keys:
+    label = f"{registry_rel} contract `{key}`"
+    if key in contract_keys:
         fail(f"{label} is declared more than once")
         continue
-    requirement_keys.add(key)
+    contract_keys.add(key)
     if not KEY_RE.match(key):
         fail(f"{label}: keys are descriptive kebab-case (`focus-per-presentation`), got {key!r}")
     if BANNED_KEY_RE.search(key):
         fail(f"{label}: numbered process-ID keys are banned by the repo's Agent Rules; use a descriptive key")
 
-    adr = entry.get("adr")
-    if adr not in ADR_SCOPE:
-        fail(f"{label} names ADR {adr!r}, which is not in the conformance scope {ADR_SCOPE}")
-    else:
-        requirements_by_adr[adr] += 1
-
-    if not str(entry.get("section", "")).strip():
-        fail(f"{label} has no ADR section reference")
     if not str(entry.get("statement", "")).strip():
         fail(f"{label} has no normative statement")
 
@@ -187,6 +174,7 @@ for index, entry in enumerate(requirements):
     if state not in VALID_STATES:
         fail(f"{label} declares state {state!r}; expected one of {sorted(VALID_STATES)}")
         continue
+    contracts_by_state[state] += 1
 
     domain = entry.get("domain")
     if domain not in VALID_DOMAINS:
@@ -206,6 +194,9 @@ for index, entry in enumerate(requirements):
     kinds_seen: set[str] = set()
     for citation_index, citation in enumerate(evidence):
         citation_label = f"{label} evidence[{citation_index}]"
+        if not isinstance(citation, dict):
+            fail(f"{citation_label} must be a table")
+            continue
         kind = citation.get("kind")
         if kind not in VALID_EVIDENCE_KINDS:
             fail(f"{citation_label} declares kind {kind!r}; expected one of {sorted(VALID_EVIDENCE_KINDS)}")
@@ -222,22 +213,15 @@ for index, entry in enumerate(requirements):
     elif state in {"partial", "planned"}:
         check_owner_issue(entry, label, required=True)
     elif state == "documented-divergence":
-        if not str(entry.get("divergence", entry.get("statement", ""))).strip():
+        if not str(entry.get("divergence", "")).strip():
             fail(f"{label} is a documented divergence with no divergence description")
-
-for adr, minimum in MIN_REQUIREMENTS_PER_ADR.items():
-    if requirements_by_adr.get(adr, 0) < minimum:
-        fail(
-            f"{registry_rel} carries {requirements_by_adr.get(adr, 0)} requirements for {adr}, "
-            f"below the recorded floor of {minimum} — requirements may be reworded, not silently dropped"
-        )
 
 # ---------------------------------------------------------------------------
 # Public surfaces
 # ---------------------------------------------------------------------------
 surface_paths: set[str] = set()
 run_direct_surface: dict | None = None
-for index, entry in enumerate(registry.get("surface", [])):
+for index, entry in enumerate(table_array("surface")):
     path_value = entry.get("path")
     label = f"{registry_rel} surface[{index}]"
     if not isinstance(path_value, str) or not path_value:
@@ -267,6 +251,75 @@ for index, entry in enumerate(registry.get("surface", [])):
     if path_value == "flui_app::run_direct":
         run_direct_surface = entry
 
+# ---------------------------------------------------------------------------
+# Root export manifest
+# ---------------------------------------------------------------------------
+def root_public_declarations(path: Path) -> list[str]:
+    """Return normalized column-zero `pub` declarations from one crate root.
+
+    The manifest intentionally controls export roots, not every item reachable
+    through a public module. Full Rust semantic API extraction requires
+    unstable rustdoc JSON on the pinned toolchain; module families are
+    classified above and their root growth is kept review-visible here.
+    """
+    lines = path.read_text().splitlines()
+    declarations: list[str] = []
+    index = 0
+    while index < len(lines):
+        line = lines[index].split("//", 1)[0].rstrip()
+        if not line.startswith("pub "):
+            index += 1
+            continue
+        parts = [line.strip()]
+        is_use = line.startswith("pub use ")
+        while True:
+            joined = " ".join(parts)
+            if ";" in joined or (not is_use and "{" in joined):
+                break
+            index += 1
+            if index >= len(lines):
+                break
+            continued = lines[index].split("//", 1)[0].strip()
+            if continued:
+                parts.append(continued)
+        declarations.append(" ".join(" ".join(parts).split()))
+        index += 1
+    return declarations
+
+
+export_root_files: set[Path] = set()
+for index, entry in enumerate(table_array("export_root")):
+    label = f"{registry_rel} export_root[{index}]"
+    file_value = entry.get("file")
+    expected = entry.get("declarations")
+    if not isinstance(file_value, str) or not file_value:
+        fail(f"{label} has no file path")
+        continue
+    rel = Path(file_value)
+    if rel in export_root_files:
+        fail(f"{label} duplicates export root {file_value}")
+        continue
+    export_root_files.add(rel)
+    path = root / rel
+    if not path.is_file():
+        fail(f"{label} names missing file {file_value}")
+        continue
+    if not isinstance(expected, list) or not all(isinstance(item, str) and item for item in expected):
+        fail(f"{label} declarations must be a list of non-empty strings")
+        continue
+    if len(expected) != len(set(expected)):
+        fail(f"{label} declarations contain duplicates")
+    actual = root_public_declarations(path)
+    missing = sorted(set(expected) - set(actual))
+    unregistered = sorted(set(actual) - set(expected))
+    for declaration in missing:
+        fail(f"{file_value} no longer exports registered root declaration {declaration!r}")
+    for declaration in unregistered:
+        fail(
+            f"{file_value} has unregistered root export {declaration!r} — classify its boundary family "
+            "and update the explicit export manifest"
+        )
+
 # run_direct must stay registered, experimental, and marked in its module docs.
 if run_direct_surface is None:
     fail(f"{registry_rel} no longer registers surface `flui_app::run_direct`")
@@ -280,15 +333,7 @@ direct_rs = root / "crates" / "flui-app" / "src" / "app" / "direct.rs"
 if not direct_rs.is_file():
     fail("crates/flui-app/src/app/direct.rs is gone; remove or update the run_direct gates deliberately")
 elif "experimental" not in direct_rs.read_text().lower():
-    fail("crates/flui-app/src/app/direct.rs no longer marks run_direct as experimental — ADR-0039 slice 2 owns its stabilization")
-
-# ADR-0039 acceptance belongs to its owning issue; the file must stay Proposed.
-adr_0039 = root / ADR_FILES["ADR-0039"]
-if adr_0039.is_file() and "**Status:** Proposed" not in adr_0039.read_text():
-    fail(
-        f"{ADR_FILES['ADR-0039']} no longer carries `**Status:** Proposed` — accepting/implementing "
-        "ADR-0039 belongs to its owning issue, and this gate plus the registry must be updated with it"
-    )
+    fail("crates/flui-app/src/app/direct.rs no longer marks run_direct as experimental — issue #551 owns its stabilization")
 
 # ---------------------------------------------------------------------------
 # Known advisory / unwired configuration must never look stable.
@@ -299,7 +344,7 @@ VALID_CONFIG_STATUSES = {"unwired", "advisory", "partially-wired"}
 REQUIRED_ADVISORY_FIELDS = {"vsync", "target_fps"}
 
 config_fields: dict[str, dict] = {}
-for index, entry in enumerate(registry.get("config_field", [])):
+for index, entry in enumerate(table_array("config_field")):
     name = entry.get("name")
     label = f"{registry_rel} config_field[{index}]"
     if not isinstance(name, str) or not name:
@@ -333,13 +378,15 @@ for required in sorted(REQUIRED_ADVISORY_FIELDS):
 # Ambient singleton net: every impl_binding_singleton!/manual instance() in
 # the runtime crates must be registered with an owning issue.
 # ---------------------------------------------------------------------------
-singleton_exemptions: dict[Path, dict] = {}
-for index, entry in enumerate(registry.get("singleton_exemption", [])):
+singleton_exemptions: dict[Path, list[str]] = {}
+for index, entry in enumerate(table_array("singleton_exemption")):
     label = f"{registry_rel} singleton_exemption[{index}] `{entry.get('symbol', '?')}`"
-    check_citation(entry.get("file"), entry.get("contains"), label)
+    file_value = entry.get("file")
+    contains = entry.get("contains")
+    check_citation(file_value, contains, label)
     check_owner_issue(entry, label, required=True)
-    if isinstance(entry.get("file"), str):
-        singleton_exemptions[Path(entry["file"])] = entry
+    if isinstance(file_value, str) and isinstance(contains, str):
+        singleton_exemptions.setdefault(Path(file_value), []).append(contains)
 
 SINGLETON_MARKERS = ("impl_binding_singleton!(", "fn instance() -> &'static")
 for crate in RUNTIME_CRATES + [
@@ -357,12 +404,20 @@ for crate in RUNTIME_CRATES + [
             text = rs_file.read_text()
         except (OSError, UnicodeDecodeError):
             continue
-        for marker in SINGLETON_MARKERS:
-            if marker in text and rel not in singleton_exemptions:
+        expected = singleton_exemptions.get(rel, [])
+        for contains in expected:
+            count = text.count(contains)
+            if count != 1:
+                fail(f"{rel} must contain registered singleton declaration {contains!r} exactly once; found {count}")
+        for line_number, line in enumerate(text.splitlines(), start=1):
+            marker = next((candidate for candidate in SINGLETON_MARKERS if candidate in line), None)
+            if marker is None:
+                continue
+            matches = [contains for contains in expected if contains in line]
+            if len(matches) != 1:
                 fail(
-                    f"{rel} contains `{marker}` but is not in the registry's singleton allowlist — "
-                    "a new ambient singleton cannot land without an owning issue "
-                    "(ADR-0027: singleton retirement)"
+                    f"{rel}:{line_number} contains singleton marker `{marker}` but matches "
+                    f"{len(matches)} registered declarations — every ambient singleton needs its own exact entry"
                 )
 
 # ---------------------------------------------------------------------------
@@ -371,8 +426,8 @@ for crate in RUNTIME_CRATES + [
 # scripts/port-check.sh forces the marker onto any public lock surface its
 # grammar can see; this gate forces the marker's file into the registry.)
 # ---------------------------------------------------------------------------
-lock_exempt_files = set()
-for index, entry in enumerate(registry.get("lock_exemption", [])):
+lock_exemptions: dict[Path, list[str]] = {}
+for index, entry in enumerate(table_array("lock_exemption")):
     label = f"{registry_rel} lock_exemption[{index}] `{entry.get('file', '?')}`"
     file_value = entry.get("file")
     if not isinstance(file_value, str) or not (root / file_value).is_file():
@@ -381,7 +436,11 @@ for index, entry in enumerate(registry.get("lock_exemption", [])):
     if not str(entry.get("reason", "")).strip():
         fail(f"{label} has no reason")
     check_owner_issue(entry, label, required=True)
-    lock_exempt_files.add(Path(file_value))
+    markers = entry.get("markers")
+    if not isinstance(markers, list) or not markers or not all(isinstance(marker, str) and marker for marker in markers):
+        fail(f"{label} must declare a non-empty string list `markers`")
+        continue
+    lock_exemptions.setdefault(Path(file_value), []).extend(markers)
 
 for crate in RUNTIME_CRATES:
     crate_src = root / "crates" / crate / "src"
@@ -393,16 +452,25 @@ for crate in RUNTIME_CRATES:
             text = rs_file.read_text()
         except (OSError, UnicodeDecodeError):
             continue
-        if "PORT-CHECK-OK-SP6" in text and rel not in lock_exempt_files:
-            fail(
-                f"{rel} carries a PORT-CHECK-OK-SP6 lock exemption but is not in the registry's "
-                "lock allowlist — a public lock-shaped runtime surface needs an owning issue (SP-6)"
-            )
+        expected = lock_exemptions.get(rel, [])
+        for marker in expected:
+            count = text.count(marker)
+            if count != 1:
+                fail(f"{rel} must contain registered lock marker {marker!r} exactly once; found {count}")
+        for line_number, line in enumerate(text.splitlines(), start=1):
+            if "PORT-CHECK-OK-SP6" not in line:
+                continue
+            matches = [marker for marker in expected if marker in line]
+            if len(matches) != 1:
+                fail(
+                    f"{rel}:{line_number} carries a lock exemption but matches {len(matches)} registered markers — "
+                    "every public lock-shaped declaration needs its own exact entry"
+                )
 
 # ---------------------------------------------------------------------------
 # Process-global guards: existence-pinned so retirement updates the registry.
 # ---------------------------------------------------------------------------
-for index, entry in enumerate(registry.get("process_global_guard", [])):
+for index, entry in enumerate(table_array("process_global_guard")):
     label = f"{registry_rel} process_global_guard `{entry.get('symbol', '?')}`"
     check_citation(entry.get("file"), entry.get("contains"), label)
     check_owner_issue(entry, label, required=True)
@@ -416,7 +484,7 @@ all_rs_files: list[Path] = [
     p for p in sorted((root / "crates").rglob("*.rs")) if "target" not in p.relative_to(root).parts
 ]
 
-for index, entry in enumerate(registry.get("forbidden_pattern", [])):
+for index, entry in enumerate(table_array("forbidden_pattern")):
     pattern = entry.get("pattern")
     label = f"{registry_rel} forbidden_pattern[{index}]"
     if not isinstance(pattern, str) or not pattern:
@@ -442,7 +510,7 @@ for index, entry in enumerate(registry.get("forbidden_pattern", [])):
         if pattern in text:
             fail(f"{rel} contains forbidden pattern `{pattern}`: {' '.join(str(entry.get('why', '')).split())}")
 
-for index, entry in enumerate(registry.get("forbidden_path", [])):
+for index, entry in enumerate(table_array("forbidden_path")):
     path_value = entry.get("path")
     if not isinstance(path_value, str) or not path_value:
         fail(f"{registry_rel} forbidden_path[{index}] has an empty path")
@@ -460,11 +528,12 @@ if errors:
     sys.exit(1)
 
 surface_count = len(surface_paths)
-requirement_count = len(requirement_keys)
-by_adr = ", ".join(f"{adr} {count}" for adr, count in requirements_by_adr.items())
+contract_count = len(contract_keys)
+by_state = ", ".join(f"{state} {contracts_by_state[state]}" for state in sorted(contracts_by_state))
 print(
-    f"runtime-conformance: {requirement_count} requirements ({by_adr}); "
+    f"runtime-conformance: {contract_count} contracts ({by_state}); "
     f"{surface_count} classified surfaces; {len(config_fields)} config fields; "
-    f"{len(singleton_exemptions)} singleton + {len(lock_exempt_files)} lock exemptions verified"
+    f"{sum(map(len, singleton_exemptions.values()))} singleton + "
+    f"{sum(map(len, lock_exemptions.values()))} lock declarations verified"
 )
 PY

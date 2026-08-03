@@ -116,7 +116,7 @@ jobs:
       - name: workspace inventory + layer topology drift check
         run: bash scripts/check-workspace-inventory.sh
 
-      - name: Runtime.1 conformance registry check
+      - name: Runtime contract registry check
         run: bash scripts/check-runtime-conformance.sh
 
       - name: scripts/port-check.sh (22 refusal triggers + FR-033)

@@ -1,14 +1,12 @@
-# Runtime.1 conformance registry.
+# Runtime.1 public contract registry.
 #
-# This file is the *authoritative*, machine-readable inventory of (a) every
-# normative requirement in the runtime ADRs — ADR-0027, ADR-0037, ADR-0029,
-# ADR-0039 — with its verified implementation state, and (b) every public
-# runtime/platform/scheduler/raster surface with its stability classification.
+# This file is the authoritative, machine-readable inventory of the runtime
+# contracts contributors and CI must preserve, together with the public
+# boundary families whose stability must be reviewed before they grow.
 # It is validated by `scripts/check-runtime-conformance.sh`
 # (`just runtime-conformance-check`, part of `just ci` and the CI `checks`
-# job). Markdown is deliberately NOT the source of truth here; prose in the
-# ADRs describes the target architecture, and this file records what is
-# actually true of the tree, cross-checked against the source.
+# job). It deliberately does not depend on internal design records, their
+# numbering, status, or continued presence in this repository.
 #
 # What the checker verifies mechanically (and, honestly, what it cannot):
 #
@@ -20,7 +18,7 @@
 #     least one `test`/`compile-time`/`source-gate` citation, and rejects
 #     `.md` files as evidence — documentation is never implementation
 #     evidence.
-#   - `partial`/`planned` entries require exactly one owning issue in
+#   - `partial`/`planned` contracts require exactly one owning issue in
 #     #551–#565.
 #   - Forbidden patterns/paths (retired intermediaries, a public generic UI
 #     executor, an `unsafe impl Sync for Renderer`, a `flui-presentation`
@@ -52,21 +50,211 @@
 #   removal-target   — scheduled for deletion by its owning issue; do not add
 #                      consumers
 #
-# Ownership domains follow ADR-0027/ADR-0037:
+# Ownership domains:
 #   application | realm | presentation | raster | platform | shared-engine
 
 [registry]
 milestone = "Runtime.1"
-adr_scope = ["ADR-0027", "ADR-0037", "ADR-0029", "ADR-0039"]
+schema = 1
 
-# =============================================================================
-# ADR-0027 — Owner-affine UI realms
-# =============================================================================
+# Root export manifest
+#
+# These declarations are the stable-toolchain boundary of the API gate. The
+# checker compares every column-zero public declaration in each listed crate
+# root. Public modules are classified as boundary families below; this does not
+# pretend to replace compiler-level rustdoc JSON, which is unavailable on the
+# pinned stable toolchain.
 
-[[requirement]]
+[[export_root]]
+file = "src/lib.rs"
+declarations = [
+    "pub use flui_animation as animation;",
+    "pub use flui_app as app;",
+    "pub use flui_cupertino as cupertino;",
+    "pub use flui_foundation as foundation;",
+    "pub use flui_geometry as geometry;",
+    "pub use flui_localizations as localizations;",
+    "pub use flui_material as material;",
+    "pub use flui_types as types;",
+    "pub use flui_view as view;",
+    "pub use flui_widgets as widgets;",
+    "pub use flui_app::run_app;",
+    "pub mod prelude {",
+]
+
+[[export_root]]
+file = "crates/flui-app/src/lib.rs"
+declarations = [
+    "pub mod app;",
+    "pub mod bindings;",
+    "pub mod embedder;",
+    "pub use app::{ AppBinding, AppConfig, DiagnosticsProfile, RootRenderElement, RootRenderView, WidgetsFlutterBinding, run_app, run_app_with_config, run_direct, };",
+    "pub use app::{run_app_android, run_app_android_with_config};",
+    "pub use bindings::{ GestureBinding, PaintingBinding, PipelineOwner, RenderingFlutterBinding, Scheduler, SemanticsBinding, WidgetsBinding, };",
+    "pub use flui_log::{AppIdentity, AppleBundleId};",
+    "pub use flui_view::{ BuildContext, BuildContextExt, BuildOwner, ElementBase, ElementTree, StatefulView, StatelessElement, StatelessView, View, };",
+    "pub mod prelude {",
+]
+
+[[export_root]]
+file = "crates/flui-app/src/app/mod.rs"
+declarations = [
+    "pub mod direct;",
+    "pub mod runner;",
+    "pub use binding::AppBinding;",
+    "pub use config::{AppConfig, DiagnosticsProfile};",
+    "pub use direct::run_direct;",
+    "pub use runner::{run_app_android, run_app_android_with_config};",
+    "pub use runner::{run_app_impl as run_app, run_app_with_config_impl as run_app_with_config};",
+    "pub type WidgetsFlutterBinding = AppBinding;",
+    "pub use flui_view::{RootRenderElement, RootRenderView};",
+]
+
+[[export_root]]
+file = "crates/flui-platform/src/lib.rs"
+declarations = [
+    "pub mod config;",
+    "pub mod data_transfer;",
+    "pub mod executor;",
+    "pub mod platforms;",
+    "pub mod shared;",
+    "pub mod task;",
+    "pub mod traits;",
+    "pub mod window;",
+    "pub use config::{FullscreenMonitor, WindowConfiguration};",
+    "pub use data_transfer::{DataTransferOffer, DataTransferSource, NullDataTransferSource};",
+    "pub use cursor_icon::CursorIcon;",
+    "pub use executor::BackgroundExecutor;",
+    "pub use platforms::AndroidPlatform;",
+    "pub use platforms::IOSPlatform;",
+    "pub use platforms::LinuxPlatform;",
+    "pub use platforms::MacOSPlatform;",
+    "pub use platforms::{FakeHaptics, FakeTextInput, HeadlessPlatform};",
+    "pub use platforms::WebPlatform;",
+    "pub use platforms::WindowsPlatform;",
+    "pub use platforms::WinitPlatform;",
+    "pub use shared::{PlatformHandlers, WindowCallbacks};",
+    "pub use task::{Priority, Task, TaskLabel};",
+    "pub use traits::{ Clipboard, ClipboardItem, CursorError, DesktopCapabilities, DispatchEventResult, DisplayId, MobileCapabilities, PathPromptOptions, Platform, PlatformCapabilities, PlatformDisplay, PlatformEmbedder, PlatformExecutor, PlatformHaptics, PlatformReadyCallback, PlatformTextInput, PlatformWindow, WebCapabilities, WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowEvent, WindowId, WindowMode, WindowOptions, };",
+    "pub fn current_platform() -> anyhow::Result<Box<dyn Platform>> {",
+    "pub fn headless_platform() -> Box<dyn Platform> {",
+]
+
+[[export_root]]
+file = "crates/flui-scheduler/src/lib.rs"
+declarations = [
+    "pub mod budget;",
+    "pub mod config;",
+    "pub mod frame;",
+    "pub mod scheduler;",
+    "pub mod task;",
+    "pub mod ticker;",
+    "pub mod vsync;",
+    "pub mod async_driver;",
+    "pub mod duration;",
+    "pub mod id;",
+    "pub use async_driver::{AsyncDriver, BoxedTask, TaskToken};",
+    "pub use budget::{ AllPhaseStats, BudgetPolicy, FrameBudget, FrameBudgetBuilder, PhaseStats, SharedBudget, };",
+    "pub use config::{ PerformanceMode, PerformanceModeRequestHandle, SERVICE_EXT_TIME_DILATION, SchedulingStrategy, TimingsCallback, default_scheduling_strategy, set_time_dilation, time_dilation, };",
+    "pub use post_frame::{LocalPostFrameLane, LocalPostFrameScheduleError, PostFrameHandle};",
+    "pub use web_time::Instant;",
+    "pub use duration::{FrameDuration, Microseconds, Milliseconds, Percentage, Seconds};",
+    "pub use flui_foundation::{BindingBase, HasInstance};",
+    "pub use frame::{ AppLifecycleState, FrameCallback, FrameId, FramePhase, FrameTiming, FrameTimingBuilder, LifecycleStateCallback, OneShotFrameCallback, PostFrameCallback, RecurringFrameCallback, SchedulerPhase, };",
+    "pub use id::{CallbackId, Id, IdGenerator, Marker, markers};",
+    "pub use scheduler::{FrameCompletionFuture, FrameSkipPolicy, Scheduler, SchedulerBuilder};",
+    "pub use task::{Priority, PriorityCount, Task, TaskId, TaskQueue};",
+    "pub use ticker::{ Ticker, TickerCallback, TickerCanceled, TickerFuture, TickerFutureOrCancel, TickerGroup, TickerId, TickerProvider, TickerState, };",
+    "pub use vsync::{VsyncCallback, VsyncMode, VsyncScheduler, VsyncStats};",
+    "pub mod prelude {",
+]
+
+[[export_root]]
+file = "crates/flui-engine/src/lib.rs"
+declarations = [
+    "pub mod error;",
+    "pub mod traits;",
+    "pub mod commands;",
+    "pub mod raster;",
+    "pub mod raster_owner;",
+    "pub mod wgpu;",
+    "pub use commands::{dispatch_command, dispatch_commands};",
+    "pub use error::{EngineError, EngineResult, Recoverability};",
+    "pub use flui_layer::{ CanvasLayer, DamageRegion, Layer, LayerId, LayerTree, LinkRegistry, Scene, SceneBuilder, SceneCompositor, SceneSnapshot, ShaderMaskLayer, };",
+    "pub use flui_painting::Paint;",
+    "pub use traits::{CommandRenderer, LayerStateStack};",
+    "pub use raster::RasterBackend;",
+    "pub use raster_owner::{ FrameDropReason, PumpOutcome, RasterAck, RasterHandle, RasterOwner, RasterSubmitError, };",
+    "pub use wgpu::DebugBackend;",
+    "pub use wgpu::{Backend, FontLoader, LayerRender, WgpuPainter};",
+]
+
+[[export_root]]
+file = "crates/flui-foundation/src/lib.rs"
+declarations = [
+    "pub mod affinity;",
+    "pub mod async_snapshot;",
+    "pub mod binding;",
+    "pub mod callbacks;",
+    "pub mod clock;",
+    "pub mod consts;",
+    "pub mod epoch;",
+    "pub mod id;",
+    "pub mod key;",
+    "pub mod wasm;",
+    "pub mod diagnostics;",
+    "pub mod observe;",
+    "pub mod rebuild_reason;",
+    "pub mod notifier;",
+    "pub mod listener_registry;",
+    "pub mod notifier_generic;",
+    "pub mod debug;",
+    "pub use affinity::OwnerAffinity;",
+    "pub use async_snapshot::{AsyncSnapshot, ConnectionState};",
+    "pub use binding::{BindingBase, HasInstance, check_instance};",
+    "pub use callbacks::{ FallibleCallback, Predicate, ValueChanged, ValueGetter, ValueSetter, ValueTransformer, VoidCallback, };",
+    "pub use clock::{ManualClock, MonotonicClock, SystemClock};",
+    "pub use consts::{DEBUG_MODE, EPSILON, EPSILON_F32, IS_DESKTOP, IS_MOBILE, IS_WEB, RELEASE_MODE};",
+    "pub use epoch::{FrameEpoch, GenerationGate, ResourceGeneration, SurfaceGeneration};",
+    "pub use debug::{ DebugPaintConfig, DiagnosticLevel, Diagnosticable, DiagnosticsBuilder, DiagnosticsNode, DiagnosticsProperty, DiagnosticsPropertyKind, DiagnosticsTreeStyle, };",
+    "pub use id::{ DataTransferId, ElementId, FrameCallbackId, FrameId, Id, Identifier, LayerId, ListenerId, Marker, ObserverId, PresentationId, RawId, RealmId, RenderId, SemanticsId, TaskId, TickerId, TreeId, ViewId, markers, };",
+    "pub use key::{Key, KeyRef, Keyed, UniqueKey, ValueKey, ViewKey, WithKey};",
+    "pub use notifier::{ChangeNotifier, Listenable, ListenerCallback, ValueListenable, ValueNotifier};",
+    "pub use rebuild_reason::{RebuildReason, RebuildReasons};",
+    "pub use listener_registry::{ListenerRegistry, ListenerSubscription};",
+    "pub use notifier_generic::{ArgCallback, Notifier};",
+    "pub use wasm::WasmNotSendSync;",
+    "pub mod prelude {",
+]
+
+[[export_root]]
+file = "crates/flui-layer/src/lib.rs"
+declarations = [
+    "pub mod damage;",
+    "pub mod layer;",
+    "pub mod testing;",
+    "pub mod tree;",
+    "pub use error::{LayerError, LayerResult};",
+    "pub use compositor::{CompositorStats, SceneBuilder, SceneCompositor};",
+    "pub use flui_foundation::LayerId;",
+    "pub use layer::annotation::{AnnotationEntry, AnnotationResult, AnnotationSearchOptions};",
+    "pub use layer::{ AnnotatedRegionLayer, AnnotationValue, BackdropFilterLayer, CanvasLayer, ClipPathLayer, ClipRRectLayer, ClipRectLayer, ClipSuperellipseLayer, ColorFilterLayer, FollowerLayer, ImageFilterLayer, Layer, LayerBounds, LayerLink, LeaderLayer, OffsetLayer, OpacityLayer, PerformanceOverlayLayer, PerformanceOverlayOption, PerformanceStats, PictureLayer, PlatformViewHitTestBehavior, PlatformViewId, PlatformViewLayer, SemanticLabel, ShaderMaskLayer, SystemUiOverlayStyle, TextureLayer, TransformLayer, };",
+    "pub use link_registry::{LeaderInfo, LinkRegistry, resolve_follower_offset};",
+    "pub use scene::{CompositionCallback, Scene};",
+    "pub use scene_snapshot::{DamageRegion, SceneSnapshot};",
+    "pub use tree::{LayerNode, LayerTree};",
+    "pub mod prelude {",
+    "pub const VERSION: &str = env!(\"CARGO_PKG_VERSION\");",
+]
+
+[[export_root]]
+file = "crates/flui-testing/src/lib.rs"
+declarations = ["pub struct HeadlessBinding {"]
+
+# Owner-affine UI realms
+
+[[contract]]
 key = "realm-owns-ui-session-owner-affine"
-adr = "ADR-0027"
-section = "§1–§2 ownership model / thread-affinity"
 statement = """
 Mutable UI state is scoped to a `UiRealm` — a single-owner UI session that is \
 structurally `!Send + !Sync` — never to the process or the native window.\
@@ -80,10 +268,8 @@ evidence = [
     { kind = "compile-time", file = "crates/flui-app/src/app/ui_realm.rs", contains = "assert_not_impl_any!(UiRealm: Send, Sync)" },
 ]
 
-[[requirement]]
+[[contract]]
 key = "app-runtime-composition-host"
-adr = "ADR-0027"
-section = "§1 ownership model (AppRuntime / SharedEngineServices)"
 statement = """
 One `AppRuntime` per process owns platform event-loop demux, explicit \
 constructor-injected `SharedEngineServices`, and 1..N realms. No such type \
@@ -94,10 +280,8 @@ domain = "application"
 owner_issue = 553
 mechanical = false
 
-[[requirement]]
+[[contract]]
 key = "scheduling-splits-by-level"
-adr = "ADR-0027"
-section = "§1 (scheduling split); execution plan frame-clock item"
 statement = """
 Logical update scheduling (realm `UpdateScheduler`), physical pacing \
 (presentation `FrameClock`), and raster backpressure are separate owners. \
@@ -108,10 +292,8 @@ domain = "realm"
 owner_issue = 556
 mechanical = false
 
-[[requirement]]
+[[contract]]
 key = "transitional-realm-guard-at-most-one"
-adr = "ADR-0027"
-section = "Consequences (at-most-one instance guard)"
 statement = """
 Until singleton retirement, constructing a second `UiRealm` fails with a \
 typed error — a per-realm API over process-global internals would be a lying \
@@ -128,10 +310,8 @@ evidence = [
     { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn at_most_one_runtime_second_construction_fails_typed" },
 ]
 
-[[requirement]]
+[[contract]]
 key = "idle-only-commit-points"
-adr = "ADR-0027"
-section = "§3 message flow and commit points"
 statement = """
 Cross-thread commands and worker results commit only while the realm's \
 scheduler phase is Idle — never inside the frame transaction.\
@@ -145,14 +325,13 @@ evidence = [
     { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn cross_thread_navigation_command_drains_on_owner_thread" },
 ]
 
-[[requirement]]
-key = "reentrancy-fifo-ordered-dispatch"
-adr = "ADR-0027"
-section = "§3 reentrancy gate"
+[[contract]]
+key = "input-and-reentrancy-fifo-ordered-dispatch"
 statement = """
-A platform callback that re-enters while the realm is mid-transaction is \
-queued into a realm-local ordered FIFO and applied at the next permitted \
-anchor; the frame transaction is uninterruptible by construction.\
+Platform input is delivered in causal order and never coalesced. A callback \
+that re-enters while the realm is mid-transaction is queued into a realm-local \
+ordered FIFO and applied at the next permitted anchor; the frame transaction \
+is uninterruptible by construction.\
 """
 state = "implemented"
 domain = "realm"
@@ -164,10 +343,8 @@ evidence = [
     { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn nested_resize_and_window_focus_wait_until_frame_returns" },
 ]
 
-[[requirement]]
+[[contract]]
 key = "wake-contract-enqueue-then-wake"
-adr = "ADR-0027"
-section = "§3 wake contract / §4 coalesced invalidations"
 statement = """
 Enqueue-then-wake is one operation from the sender's perspective; redraw \
 requests coalesce to one flag and one wake; a realm never goes idle with a \
@@ -183,14 +360,11 @@ evidence = [
     { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn redraw_requests_coalesce_to_one_flag_and_one_wake" },
 ]
 
-[[requirement]]
-key = "bounded-lanes-typed-backpressure"
-adr = "ADR-0027"
-section = "§4 queues by reliability class"
+[[contract]]
+key = "owner-inbox-bounded-typed-backpressure"
 statement = """
-No unbounded channels on runtime paths. The owner inbox is bounded; a full \
-lane returns a typed `ChannelFull` carrying the rejected command; a dropped \
-owner returns typed `OwnerGone`.\
+The owner inbox is bounded. A full lane returns a typed `ChannelFull` carrying \
+the rejected command; a dropped owner returns typed `OwnerGone`.\
 """
 state = "implemented"
 domain = "realm"
@@ -202,10 +376,24 @@ evidence = [
     { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn channel_full_retry_preserves_the_rejected_payload" },
 ]
 
-[[requirement]]
+[[contract]]
+key = "owner-inbox-drain-is-bounded-snapshot"
+statement = """
+One owner-inbox drain processes at most the pre-read queue length. Commands \
+arriving during a drain remain for the next deterministic batch, so a producer \
+cannot extend one owner pass indefinitely.\
+"""
+state = "implemented"
+domain = "realm"
+mechanical = true
+mechanism = "source gate pins the pre-read length and bounded loop"
+evidence = [
+    { kind = "symbol", file = "crates/flui-app/src/app/ui_realm.rs", contains = "let pending = self.rx.len();" },
+    { kind = "source-gate", file = "crates/flui-app/src/app/ui_realm.rs", contains = "for _ in 0..pending" },
+]
+
+[[contract]]
 key = "raster-mailbox-protocol-threaded"
-adr = "ADR-0027"
-section = "§5 SceneSnapshot and the raster boundary"
 statement = """
 The raster seam is a capacity-one latest-frame-wins mailbox with identity-\
 stamped acks, stale-`SurfaceGeneration` rejection before render, a lossy \
@@ -224,10 +412,8 @@ evidence = [
     { kind = "test", file = "crates/flui-engine/src/raster_owner.rs", contains = "fn shutdown_handshake_completes_and_thread_joins" },
 ]
 
-[[requirement]]
+[[contract]]
 key = "raster-owner-in-shipping-path"
-adr = "ADR-0027"
-section = "§5 (shipping baseline behind the mailbox seam)"
 statement = """
 The shipping runners must drive frames through the raster-owner mailbox seam \
 with the raster owner as sole `Renderer` owner. Today the desktop/Android \
@@ -242,10 +428,8 @@ evidence = [
     { kind = "symbol", file = "crates/flui-app/src/app/runner.rs", contains = "Arc<Mutex<Option<Renderer>>>" },
 ]
 
-[[requirement]]
+[[contract]]
 key = "freshness-by-work-class"
-adr = "ADR-0027"
-section = "§6 identity, versioning, cancellation"
 statement = """
 Commit-time freshness is per work class (`ResourceGeneration`/\
 `GenerationGate` for assets, `FrameEpoch` + `SurfaceGeneration` for raster, \
@@ -260,10 +444,21 @@ evidence = [
     { kind = "symbol", file = "crates/flui-foundation/src/epoch.rs", contains = "pub struct ResourceGeneration" },
 ]
 
-[[requirement]]
+[[contract]]
+key = "worker-jobs-cancel-with-owner-lifetime"
+statement = """
+Every runtime worker job carries cancellation owned by the realm or service \
+that requested it. Dropping an owner cancels outstanding work, and racing \
+results meet a dead channel or a work-class freshness check rather than \
+mutating replacement state. This has not been adopted across runtime workers.\
+"""
+state = "planned"
+domain = "shared-engine"
+owner_issue = 557
+mechanical = false
+
+[[contract]]
 key = "channel-identity-lifetime-boundary"
-adr = "ADR-0027"
-section = "§6 channel identity"
 statement = """
 A realm's channels are created with the realm and die with it; a recreated \
 realm mints a fresh generational `RealmId`, and senders into the dead realm \
@@ -280,14 +475,12 @@ evidence = [
     { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn late_event_never_crosses_realm_incarnations" },
 ]
 
-[[requirement]]
+[[contract]]
 key = "shutdown-protocol-per-realm"
-adr = "ADR-0027"
-section = "§7 shutdown protocol"
 statement = """
 Per-realm teardown follows detach → refuse → cancel → mailbox close + \
-one-shot completion → renderer teardown → drop. The ADR itself records this \
-as the target protocol: desktop/Android detach their transitional host after \
+one-shot completion → renderer teardown → drop. Today desktop/Android detach \
+their transitional host after \
 loop exit, web cannot detach at all, and full orchestration is unlanded.\
 """
 state = "partial"
@@ -298,10 +491,8 @@ evidence = [
     { kind = "symbol", file = "crates/flui-engine/src/raster_owner.rs", contains = "fn shutdown" },
 ]
 
-[[requirement]]
+[[contract]]
 key = "globalkey-realm-scoped"
-adr = "ADR-0027"
-section = "§8 focus, GlobalKey, multi-realm semantics"
 statement = """
 GlobalKey identity is realm-scoped through a realm-entry activation stack, \
 not a process-global active registry. Deliberate divergence from Flutter's \
@@ -317,10 +508,8 @@ evidence = [
     { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn whole_frame_event_keeps_realm_global_key_scope_active" },
 ]
 
-[[requirement]]
+[[contract]]
 key = "focus-coordination-per-realm"
-adr = "ADR-0027"
-section = "§8 FocusCoordinator"
 statement = """
 One `FocusTree` per presentation with realm-level active-presentation \
 arbitration. The per-presentation `FocusManager` is real (owned by \
@@ -336,14 +525,12 @@ evidence = [
     { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn presentation_and_widget_tree_share_the_exact_focus_owner" },
 ]
 
-[[requirement]]
+[[contract]]
 key = "ui-types-lose-send-sync"
-adr = "ADR-0027"
-section = "§9 public API consequences (bound drop)"
 statement = """
 `View`, `BuildContext`, `ViewState`, and the owner-authored callback aliases \
-carry no `Send + Sync` bounds; the data plane keeps its bounds per the \
-ADR-0002 table.\
+carry no `Send + Sync` bounds; the established data plane keeps its own \
+thread-safety bounds.\
 """
 state = "implemented"
 domain = "realm"
@@ -354,10 +541,8 @@ evidence = [
     { kind = "compile-time", file = "crates/flui-view/src/context/element_build_context.rs", contains = "assert_not_impl_any!(ElementBuildContext: Send, Sync)" },
 ]
 
-[[requirement]]
+[[contract]]
 key = "no-public-generic-ui-executor"
-adr = "ADR-0027"
-section = "§9 closed command vocabulary"
 statement = """
 No public run-a-closure executor targets the owner thread; the cross-thread \
 surface is a closed command vocabulary. The former public \
@@ -372,10 +557,8 @@ evidence = [
     { kind = "source-gate", file = "crates/flui-platform/src/lib.rs", contains = "pub use executor::BackgroundExecutor" },
 ]
 
-[[requirement]]
+[[contract]]
 key = "transitional-realm-types-not-public"
-adr = "ADR-0027"
-section = "§9 current stability posture"
 statement = """
 The transitional `UiRealm`, its dispatcher, command sender, and \
 command/error protocol are `pub(crate)` implementation details of \
@@ -391,10 +574,8 @@ evidence = [
     { kind = "source-gate", file = "crates/flui-app/src/app/mod.rs", contains = "pub(crate) mod presentation" },
 ]
 
-[[requirement]]
+[[contract]]
 key = "parallel-layout-gated"
-adr = "ADR-0027"
-section = "§10 absorbed G1–G4 gates"
 statement = """
 Parallel layout (repaint-boundary subtrees) stays gated behind G1–G4 with a \
 deterministic serial oracle; no parallelization of the control plane, \
@@ -405,21 +586,15 @@ domain = "realm"
 owner_issue = 562
 mechanical = false
 
-# =============================================================================
-# ADR-0037 — Presentation ownership domains
-# =============================================================================
+# Presentation ownership domains
 
-[[requirement]]
-key = "three-owner-presentation-shape"
-adr = "ADR-0037"
-section = "§1 one logical presentation, three physical owners"
+[[contract]]
+key = "window-host-is-explicit-composition-owner"
 statement = """
-A presentation is coordinated by exactly three physical owners — event-loop \
-`WindowHost`, realm-owned `PresentationState`, engine `RasterOwner` — with no \
-fourth mediation object. `PresentationState` exists (crate-private, owner-\
-local); `WindowHost` does not exist as an owner (the runner's TLS host and \
-per-window callbacks stand in), and `RasterOwner` is not in the shipping \
-composition.\
+The event-loop side of a presentation has one explicit `WindowHost` owner for \
+the native window, callback registrations, platform-to-realm routing, and \
+cancellation. Today the runner's TLS host and per-window callbacks stand in; \
+there is no explicit owner object.\
 """
 state = "partial"
 domain = "application"
@@ -429,10 +604,8 @@ evidence = [
     { kind = "symbol", file = "crates/flui-app/src/app/presentation.rs", contains = "pub(crate) struct PresentationState" },
 ]
 
-[[requirement]]
+[[contract]]
 key = "presentation-identity-generational"
-adr = "ADR-0037"
-section = "§2 presentation identity"
 statement = """
 Generational `PresentationId` exists and `AppRuntime` is the only \
 `WindowId → (RealmId, PresentationId)` authority. The ID type is real and \
@@ -447,10 +620,8 @@ evidence = [
     { kind = "symbol", file = "crates/flui-foundation/src/id.rs", contains = "pub struct PresentationId" },
 ]
 
-[[requirement]]
+[[contract]]
 key = "closed-cross-thread-vocabulary"
-adr = "ADR-0037"
-section = "§3 cross-thread traffic"
 statement = """
 Cross-lane traffic is closed, presentation-addressed enums — never `dyn \
 Any`, opaque windows, or `Box<dyn FnOnce()>` payloads. The realm inbox \
@@ -466,16 +637,14 @@ evidence = [
     { kind = "symbol", file = "crates/flui-app/src/app/ui_realm.rs", contains = "enum UiCommand" },
 ]
 
-[[requirement]]
-key = "presentation-state-owner-nucleus"
-adr = "ADR-0037"
-section = "§4 PresentationState"
+[[contract]]
+key = "presentation-state-owner-nucleus-rehomes-from-binding"
 statement = """
 `PresentationState` is private to `flui-app`, stored inside `UiRealm`, \
 structurally `!Send + !Sync`, owning one presentation's pipeline, focus, \
-gestures, mouse tracking, text-input session, and semantics dispatch. \
-Missing from the ADR's field list: frame clock/pacing state, redraw \
-coalescing, element-forest root entry, and cached raster acks.\
+gestures, mouse tracking, text-input session, and semantics dispatch. The \
+remaining presentation-local services move out of the transitional singleton \
+graph when explicit runtime ownership lands.\
 """
 state = "partial"
 domain = "presentation"
@@ -487,10 +656,8 @@ evidence = [
     { kind = "compile-time", file = "crates/flui-app/src/app/presentation.rs", contains = "assert_not_impl_any!(PresentationState: Send, Sync)" },
 ]
 
-[[requirement]]
+[[contract]]
 key = "text-input-direct-ownership"
-adr = "ADR-0037"
-section = "§5 text input"
 statement = """
 Text input is a presentation-owned `TextInputOwner` with a weak-capability \
 `TextInputHandle`; one active client per presentation, token-checked detach, \
@@ -507,10 +674,8 @@ evidence = [
     { kind = "test", file = "crates/flui-app/src/app/presentation.rs", contains = "fn text_input_handle_is_bound_to_the_owned_text_input_state" },
 ]
 
-[[requirement]]
+[[contract]]
 key = "input-domain-per-presentation"
-adr = "ADR-0037"
-section = "§6 focus, gestures, mouse, keyboard"
 statement = """
 Each presentation owns one complete input domain (gesture arena, mouse \
 tracker, focus tree, cursor to the exact window; a closed window drops the \
@@ -527,10 +692,8 @@ evidence = [
     { kind = "test", file = "crates/flui-app/src/app/presentation.rs", contains = "fn mouse_tracker_applies_cursor_to_the_exact_owned_window" },
 ]
 
-[[requirement]]
+[[contract]]
 key = "semantics-two-phase-borrow"
-adr = "ADR-0037"
-section = "§7 semantics command routing"
 statement = """
 Accessibility actions are closed, identity-stamped commands resolved through \
 the presentation's exact pipeline owner in two borrow phases — no action \
@@ -547,10 +710,8 @@ evidence = [
     { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn stale_semantics_action_is_gracefully_dropped" },
 ]
 
-[[requirement]]
+[[contract]]
 key = "surface-generation-single-authority"
-adr = "ADR-0037"
-section = "§8 RasterOwner mints SurfaceGeneration"
 statement = """
 Only `RasterOwner` mints `SurfaceGeneration`, in the ordered command stream \
 that reconfigures the surface; stale frames are rejected before render. True \
@@ -565,10 +726,8 @@ evidence = [
     { kind = "test", file = "crates/flui-engine/src/raster_owner.rs", contains = "fn resize_coalesces_latest_wins" },
 ]
 
-[[requirement]]
+[[contract]]
 key = "presentation-lifecycle-monotonic"
-adr = "ADR-0037"
-section = "§9 lifecycle"
 statement = """
 Each presentation has the explicit Created → SurfaceAttached → Suspended → \
 Closing → Closed lifecycle with typed transitions and idempotent close. \
@@ -584,10 +743,8 @@ evidence = [
     { kind = "test", file = "crates/flui-app/src/app/presentation.rs", contains = "fn lifecycle_transitions_are_typed_and_close_is_idempotent" },
 ]
 
-[[requirement]]
+[[contract]]
 key = "cancellable-platform-callbacks"
-adr = "ADR-0037"
-section = "§10 platform callback lifetime"
 statement = """
 Install-only callbacks are forbidden: delivery is event-loop-owned or \
 registration returns a cancellation token owned by `WindowHost`. Today \
@@ -602,10 +759,8 @@ evidence = [
     { kind = "symbol", file = "crates/flui-platform/src/shared/handlers.rs", contains = "pub on_input: Mutex<Option<Box<dyn FnMut(PlatformInput)" },
 ]
 
-[[requirement]]
+[[contract]]
 key = "multi-presentation-forest-gate"
-adr = "ADR-0037"
-section = "§11 one realm / N presentations gate"
 statement = """
 One-realm/multi-presentation support is gated on a verified element forest; \
 until then a realm holds at most one live `PresentationState`. The gate \
@@ -622,31 +777,26 @@ evidence = [
     { kind = "symbol", file = "crates/flui-app/src/app/ui_realm.rs", contains = "presentation: PresentationState" },
 ]
 
-[[requirement]]
+[[contract]]
 key = "no-flui-presentation-crate"
-adr = "ADR-0037"
-section = "§12 no new crate"
 statement = """
 A `flui-presentation` crate is rejected; `flui-app` privately composes the \
-three owners. Extraction needs its own ADR with two production consumers.\
+three owners. Extraction needs a separately reviewed decision with two \
+production consumers.\
 """
 state = "implemented"
 domain = "application"
 mechanical = true
-mechanism = "forbidden_path check below; ADR-0041 topology contract also gates new crates"
+mechanism = "forbidden_path check below; the workspace topology policy also gates new crates"
 evidence = [
     { kind = "symbol", file = "crates/flui-app/src/app/presentation.rs", contains = "pub(crate) struct PresentationState" },
     { kind = "source-gate", file = "docs/workspace-layers.toml", contains = "flui-app" },
 ]
 
-# =============================================================================
-# ADR-0029 — Frame pacing
-# =============================================================================
+# Frame pacing
 
-[[requirement]]
+[[contract]]
 key = "fifo-default-present-mode"
-adr = "ADR-0029"
-section = "Decision 1 (select_present_mode)"
 statement = """
 `select_present_mode` defaults to Fifo; the blocking `present()` under Fifo \
 is the steady-state pacing mechanism. Mailbox is a documented future opt-in, \
@@ -662,10 +812,8 @@ evidence = [
     { kind = "source-gate", file = "crates/flui-engine/src/wgpu/renderer.rs", contains = "BUG: wgpu guarantees Fifo is always a supported present mode" },
 ]
 
-[[requirement]]
+[[contract]]
 key = "control-flow-wait-pinned"
-adr = "ADR-0029"
-section = "Decision 2 (ControlFlow::Wait)"
 statement = """
 `WinitApp::about_to_wait` sets `ControlFlow::Wait` explicitly every \
 iteration as a defensive pin against a future winit default change. No \
@@ -681,10 +829,8 @@ evidence = [
     { kind = "source-gate", file = "crates/flui-platform/src/platforms/winit/platform.rs", contains = "set_control_flow(winit::event_loop::ControlFlow::Wait)" },
 ]
 
-[[requirement]]
+[[contract]]
 key = "no-present-fallback-throttle"
-adr = "ADR-0029"
-section = "Decision 3 (fallback throttle)"
 statement = """
 The fixed frame-budget sleep is deleted; a coarse fallback throttle applies \
 only when a frame did not present AND a ticker keeps the gate open. The \
@@ -701,10 +847,8 @@ evidence = [
     { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn no_present_fallback_pace_requires_both_no_present_and_an_open_gate" },
 ]
 
-[[requirement]]
+[[contract]]
 key = "idle-renders-zero-frames"
-adr = "ADR-0029"
-section = "Evidence (idle invariant)"
 statement = """
 A wake with frames enabled, nothing dirty, and no scheduled ticker renders \
 zero frames; the redraw gate closes when a controller settles.\
@@ -719,10 +863,8 @@ evidence = [
     { kind = "test", file = "crates/flui-app/src/app/binding.rs", contains = "fn vsync_continuation_keeps_gate_open_while_running_and_closes_on_settle" },
 ]
 
-[[requirement]]
+[[contract]]
 key = "target-fps-advisory-documented"
-adr = "ADR-0029"
-section = "Decision 4 (target_fps audit)"
 statement = """
 `AppConfig::target_fps` is documented as advisory with a full consumer \
 audit, and `AppConfig::vsync` is documented as not controlling the present \
@@ -738,15 +880,11 @@ evidence = [
     { kind = "source-gate", file = "crates/flui-app/src/app/runner.rs", contains = "target_fps_advisory" },
 ]
 
-[[requirement]]
-key = "appconfig-effective-or-removed"
-adr = "ADR-0029"
-section = "Decision 4 + execution-plan frame-clock item"
+[[contract]]
+key = "frame-config-effective-or-removed"
 statement = """
-Every misleading `AppConfig` field is wired end to end or removed; public \
-configuration is fully effective and tested. `vsync`, `fullscreen`, and \
-`debug_paint` are unwired; `target_fps` is advisory; \
-`show_performance_overlay` ignores its option mask.\
+Public frame configuration is wired end to end or removed. `vsync` is unwired \
+and `target_fps` is advisory; neither governs the real presentation clock.\
 """
 state = "planned"
 domain = "application"
@@ -754,43 +892,35 @@ owner_issue = 556
 mechanical = true
 mechanism = "config_field entries below pin each field's non-stable classification"
 
-[[requirement]]
+[[contract]]
+key = "non-frame-app-config-effective-or-removed"
+statement = """
+Remaining public application configuration is effective and tested or removed. \
+`fullscreen` and `debug_paint` are unwired, while the performance overlay \
+ignores its option mask.\
+"""
+state = "planned"
+domain = "application"
+owner_issue = 565
+mechanical = true
+mechanism = "config_field entries below pin each field's non-stable classification"
+
+[[contract]]
 key = "timer-service-for-frozen-tickers"
-adr = "ADR-0029"
-section = "Occlusion semantics"
 statement = """
 Time-based UX (timeout-shaped animations) must not silently freeze with the \
 frame gate; a wall-clock timer service independent of the frame tick is the \
-named correctness seam. Explicitly not solved by ADR-0029.\
+named correctness seam. This is not solved by frame pacing.\
 """
 state = "planned"
 domain = "application"
 owner_issue = 556
 mechanical = false
 
-# =============================================================================
-# ADR-0039 — Event-loop affinity capability (Proposed)
-# =============================================================================
+# Event-loop affinity capability
 
-[[requirement]]
-key = "adr-0039-stays-proposed-until-validated"
-adr = "ADR-0039"
-section = "Status"
-statement = """
-ADR-0039 remains Proposed; its acceptance and implementation (trait split, \
-capability, proxy) belong to the owning issue. The checker fails if the \
-ADR's status line changes without going through that issue.\
-"""
-state = "planned"
-domain = "platform"
-owner_issue = 551
-mechanical = true
-mechanism = "the checker asserts the ADR file still carries the Proposed status line"
-
-[[requirement]]
+[[contract]]
 key = "owner-affinity-runtime-backstop"
-adr = "ADR-0039"
-section = "Slice 1"
 statement = """
 `OwnerAffinity` (bind-once owner thread, debug-assert on owner-affine \
 entry points) lives in `flui-foundation` with CI-run unit tests; macOS and \
@@ -809,10 +939,8 @@ evidence = [
     { kind = "symbol", file = "crates/flui-platform/src/platforms/windows/platform.rs", contains = "debug_assert_owner(\"WindowsPlatform::quit\")" },
 ]
 
-[[requirement]]
+[[contract]]
 key = "owner-platform-capability"
-adr = "ADR-0039"
-section = "§1–§2 (slices 2–3)"
 statement = """
 Owner-thread-only platform operations move off the `Send + Sync` `Platform` \
 trait onto a `!Send + !Sync` `OwnerPlatform` capability handed to \
@@ -824,10 +952,8 @@ domain = "platform"
 owner_issue = 551
 mechanical = false
 
-[[requirement]]
+[[contract]]
 key = "platform-proxy-claim-slot"
-adr = "ADR-0039"
-section = "§3–§4 (PlatformProxy, PendingWindow, DrainGate)"
 statement = """
 Workers reach the owner through a typed, bounded `PlatformProxy` with \
 claim-slot at-most-once replies and per-backend drain-anchor gates. The \
@@ -843,15 +969,13 @@ evidence = [
     { kind = "symbol", file = "crates/flui-platform/src/platforms/winit/control.rs", contains = "enum ControlSendError" },
 ]
 
-[[requirement]]
+[[contract]]
 key = "clipboard-stays-thread-safe"
-adr = "ADR-0039"
-section = "§5 clipboard position"
 statement = """
 `Clipboard` keeps `Send + Sync` and gets no owner-affinity asserts anywhere \
 — plain-text pasteboard operations are documented off-main-safe, and \
-asserting them would panic legitimate ADR-0034 callers. Supersedes \
-ADR-0034's suggested `MacOSClipboard` debug-assert.\
+asserting them would panic legitimate existing cross-thread callers. This \
+supersedes the earlier suggested `MacOSClipboard` debug assertion.\
 """
 state = "implemented"
 domain = "platform"
@@ -862,10 +986,8 @@ evidence = [
     { kind = "source-gate", file = "crates/flui-platform/src/platforms/macos/clipboard.rs", contains = "Clipboard" },
 ]
 
-[[requirement]]
+[[contract]]
 key = "pre-run-flows-migrate-to-on-ready"
-adr = "ADR-0039"
-section = "Slice 2 (pre-run bootstrap migrations)"
 statement = """
 Window creation before `Platform::run` (run_direct, Android bootstrap, web \
 bootstrap, Win32 examples) migrates inside `on_ready`, where every backend \
@@ -924,7 +1046,7 @@ owner = "application composition root (direct-engine escape hatch)"
 failure_semantics = "anyhow::Result; typed fast-fail before any window opens on winit (Linux)"
 consumers = ["examples/direct_render.rs", "examples/aa_showcase.rs"]
 owner_issue = 551
-notes = "Event-loop repair (on_ready reorder) is ADR-0039 slice 2. The checker pins the experimental marking."
+notes = "Event-loop repair (on_ready reorder) is issue #551. The checker pins the experimental marking."
 
 [[surface]]
 path = "flui_app::run_app_android / run_app_android_with_config"
@@ -933,7 +1055,7 @@ kind = "function"
 declared_in = "crates/flui-app/src/app/runner.rs"
 contains = "pub fn run_app_android"
 classification = "experimental"
-thread_affinity = "android_main thread; pre-run bootstrap creates the window/GPU before the loop, contra ADR-0039 slice 2"
+thread_affinity = "android_main thread; pre-run bootstrap creates the window/GPU before the loop, contra issue #551"
 owner = "application composition root (Android runner)"
 failure_semantics = "returns unit; bootstrap failures are logged"
 consumers = ["examples/android_demo (via its own bootstrap)"]
@@ -977,7 +1099,7 @@ owner = "application configuration"
 failure_semantics = "infallible builder; several fields are unwired or advisory (see [[config_field]])"
 consumers = ["run_app_with_config", "run_direct", "examples"]
 owner_issue = 556
-notes = "The type survives; its field set must become fully effective or shrink (ADR-0029 decision 4)."
+notes = "The type survives; its field set must become fully effective or shrink (the effective-configuration contract)."
 
 [[surface]]
 path = "flui_app::bindings re-export bundle (Scheduler, PipelineOwner, GestureBinding, WidgetsBinding, SemanticsBinding, PaintingBinding, RenderingFlutterBinding)"
@@ -1012,7 +1134,7 @@ kind = "trait"
 declared_in = "crates/flui-platform/src/traits/platform.rs"
 contains = "pub trait Platform: Send + Sync + 'static"
 classification = "transitional"
-thread_affinity = "declared Send + Sync, but open_window/quit/activate/displays/window_appearance are owner-thread-only on real OSes — the ADR-0039 defect"
+thread_affinity = "declared Send + Sync, but open_window/quit/activate/displays/window_appearance are owner-thread-only on real OSes — the owner-affinity defect"
 owner = "platform backend (one per process; consumed by run())"
 failure_semantics = "anyhow surface; owner-affinity violations are debug_assert-only (slice 1 backstop)"
 consumers = ["runner bootstrap", "run_direct", "examples"]
@@ -1030,7 +1152,7 @@ owner = "backend run() contract"
 failure_semantics = "infallible callback"
 consumers = ["all six backends", "runner"]
 owner_issue = 551
-notes = "ADR-0039 slice 2 flips this signature to carry OwnerPlatform by value — a breaking change across all backends."
+notes = "issue #551 flips this signature to carry OwnerPlatform by value — a breaking change across all backends."
 
 [[surface]]
 path = "flui_platform::current_platform"
@@ -1081,7 +1203,7 @@ contains = "pub struct Task<T>"
 classification = "removal-target"
 thread_affinity = "Send future wrapper"
 owner = "flagged parallel async definition; TaskToken (flui-scheduler) is the framework's one async mechanism"
-failure_semantics = "drop does not cancel — the defect ADR-0039 §2 refuses to entrench"
+failure_semantics = "drop does not cancel — the defect the owner-affinity contract refuses to entrench"
 consumers = ["prompt_for_paths (Windows)"]
 owner_issue = 557
 
@@ -1107,7 +1229,7 @@ contains = "pub use shared::{PlatformHandlers, WindowCallbacks}"
 classification = "transitional"
 thread_affinity = "callback storage behind mutexes; delivery on the owner thread"
 owner = "per-window / per-platform callback registries"
-failure_semantics = "install-only registration; ADR-0037 §10 requires cancellable registrations"
+failure_semantics = "install-only registration; the callback-lifetime contract requires cancellable registrations"
 consumers = ["all backends", "runner"]
 owner_issue = 551
 
@@ -1119,7 +1241,7 @@ declared_in = "crates/flui-foundation/src/affinity.rs"
 contains = "pub struct OwnerAffinity"
 classification = "experimental"
 thread_affinity = "Send + Sync value; binds one owner ThreadId once, debug-asserts elsewhere"
-owner = "ADR-0039 slice-1 runtime backstop — scaffolding under the future capability type, not the end state"
+owner = "runtime owner-affinity runtime backstop — scaffolding under the future capability type, not the end state"
 failure_semantics = "debug_assert on violation; release builds are unchecked"
 consumers = ["MacOSPlatform", "WindowsPlatform"]
 owner_issue = 551
@@ -1162,7 +1284,7 @@ owner = "fixed-rate vsync simulator — not display-derived pacing, and no produ
 failure_semantics = "typed construction error on zero refresh rate"
 consumers = ["none in production (tests and re-exports only)"]
 owner_issue = 556
-notes = "ADR-0029 moved real pacing to the blocking Fifo present; a fixed-rate simulator on the public surface misleads."
+notes = "the frame-pacing implementation moved real pacing to the blocking Fifo present; a fixed-rate simulator on the public surface misleads."
 
 [[surface]]
 path = "flui_scheduler::{FrameBudget, SharedBudget, BudgetPolicy}"
@@ -1172,7 +1294,7 @@ declared_in = "crates/flui-scheduler/src/budget.rs"
 contains = "pub struct FrameBudget"
 classification = "transitional"
 thread_affinity = "plain data behind the scheduler's mutex"
-owner = "60-FPS-default frame budget — the global default contract ADR-0027's split retires"
+owner = "60-FPS-default frame budget — the global default contract the runtime scheduling split retires"
 failure_semantics = "infallible; budget overruns are advisory statistics"
 consumers = ["Scheduler", "diagnostics"]
 owner_issue = 556
@@ -1198,7 +1320,7 @@ declared_in = "crates/flui-scheduler/src/post_frame.rs"
 contains = "pub struct PostFrameHandle"
 classification = "transitional"
 thread_affinity = "handle is Clone + Send + Sync; local lane is owner-affine; schedule_local accepts non-Send captures only in the active owner scope"
-owner = "post-frame callback lanes (ADR-0021 / ADR-0027 step 2a); the weak TLS ticket registry retires when the Scheduler becomes realm-owned"
+owner = "post-frame callback lanes; the weak TLS ticket registry retires when the Scheduler becomes realm-owned"
 failure_semantics = "typed LocalPostFrameScheduleError outside the owner scope"
 consumers = ["flui-view", "flui-widgets", "UiRealm"]
 owner_issue = 556
@@ -1243,7 +1365,7 @@ declared_in = "crates/flui-engine/src/raster_owner.rs"
 contains = "pub struct RasterHandle"
 classification = "experimental"
 thread_affinity = "RasterHandle is Send + Sync; RasterOwner is the single-threaded owner end"
-owner = "the ADR-0027 §5 mailbox protocol — implemented and threaded-tested, but with zero production consumers until the raster lane lands"
+owner = "the the raster mailbox contract mailbox protocol — implemented and threaded-tested, but with zero production consumers until the raster lane lands"
 failure_semantics = "typed RasterSubmitError {MailboxClosed, ...}; acks carry frame identity; shutdown is a one-shot handshake"
 consumers = ["threaded protocol tests only"]
 owner_issue = 559
@@ -1260,7 +1382,7 @@ owner = "per-presentation per-frame raster package — non_exhaustive, explicitl
 failure_semantics = "identity fields let receivers reject stale frames"
 consumers = ["RasterOwner protocol", "threaded tests"]
 owner_issue = 552
-notes = "Missing the PresentationId field ADR-0037 §2 requires; adding it is additive under non_exhaustive."
+notes = "Missing the PresentationId field the presentation-identity contract requires; adding it is additive under non_exhaustive."
 
 [[surface]]
 path = "flui_foundation::{RealmId, PresentationId, FrameEpoch, SurfaceGeneration, ResourceGeneration, GenerationGate}"
@@ -1282,7 +1404,7 @@ kind = "type"
 declared_in = "crates/flui-testing/src/lib.rs"
 contains = "pub struct HeadlessBinding"
 classification = "experimental"
-thread_affinity = "owner-thread create/use/drop; !Send + !Sync per ADR-0027's intentional break"
+thread_affinity = "owner-thread create/use/drop; !Send + !Sync per the owner-affinity contract"
 owner = "deterministic headless frame driver for tests"
 failure_semantics = "panics on misuse (test driver)"
 consumers = ["crate tests across the workspace", "screenshot example"]
@@ -1319,7 +1441,7 @@ owner_issue = 553
 #
 # The checker hard-requires `vsync` and `target_fps` to be present here and
 # to carry a non-stable classification — they must never be presented as
-# working stable configuration (ADR-0029 decision 4).
+# working stable configuration (the effective-configuration contract).
 
 [[config_field]]
 name = "vsync"
@@ -1425,21 +1547,40 @@ owner_issue = 553
 file = "crates/flui-app/src/app/binding.rs"
 reason = "AppBinding renderer/renderer_mut guards and render_pipeline_arc accessor"
 owner_issue = 553
+markers = [
+    "PORT-CHECK-OK-SP6: AppBinding renderer accessor",
+    "PORT-CHECK-OK-SP6: AppBinding renderer_mut accessor",
+    "PORT-CHECK-OK-SP6: AppBinding render_pipeline_arc accessor",
+]
 
 [[lock_exemption]]
 file = "crates/flui-scheduler/src/scheduler.rs"
 reason = "Scheduler::budget() returns a MutexGuard"
 owner_issue = 556
+markers = ["PORT-CHECK-OK-SP6: FrameBudget guard accessor"]
 
 [[lock_exemption]]
 file = "crates/flui-platform/src/platforms/windows/platform.rs"
 reason = "WindowsPlatform public handlers Arc<Mutex<PlatformHandlers>> field"
 owner_issue = 551
+markers = ["PORT-CHECK-OK-SP6: WindowsPlatform handlers"]
 
 [[lock_exemption]]
 file = "crates/flui-platform/src/shared/handlers.rs"
 reason = "PlatformHandlers public Mutex<Option<Box<dyn FnMut>>> callback storage"
 owner_issue = 551
+markers = [
+    "pub on_input: Mutex<Option<Box<dyn FnMut(PlatformInput)",
+    "pub on_request_frame: Mutex<Option<Box<dyn FnMut()",
+    "pub on_resize: Mutex<Option<Box<dyn FnMut(Size<Pixels>, f32)",
+    "pub on_moved: Mutex<Option<Box<dyn FnMut()",
+    "pub on_close: Mutex<Option<Box<dyn FnOnce()",
+    "pub on_should_close: Mutex<Option<Box<dyn FnMut() -> bool",
+    "pub on_active_status_change: Mutex<Option<Box<dyn FnMut(bool)",
+    "pub on_visibility_status_change: Mutex<Option<Box<dyn FnMut(bool)",
+    "pub on_hover_status_change: Mutex<Option<Box<dyn FnMut(bool)",
+    "pub on_appearance_changed: Mutex<Option<Box<dyn FnMut()",
+]
 
 # =============================================================================
 # Process-global guards (transitional; retire with the singletons)
@@ -1471,35 +1612,35 @@ owner_issue = 553
 
 [[forbidden_pattern]]
 pattern = "ForegroundExecutor"
-why = "ADR-0027 §9: the public generic UI-thread executor was deleted; the closed command vocabulary replaces it"
+why = "the closed-command contract: the public generic UI-thread executor was deleted; the closed command vocabulary replaces it"
 allow_files = []
 
 [[forbidden_pattern]]
 pattern = "TextInputPlatformBridge"
-why = "ADR-0037 §5: the IME intermediary object was deleted in favor of direct presentation ownership"
+why = "the presentation-owned text-input contract: the IME intermediary object was deleted in favor of direct presentation ownership"
 allow_files = []
 
 [[forbidden_pattern]]
 pattern = "OpaqueWindowHandle"
-why = "ADR-0037 §5: opaque-window storage plus downcast was deleted"
+why = "the presentation-owned text-input contract: opaque-window storage plus downcast was deleted"
 allow_files = []
 
 [[forbidden_pattern]]
 pattern = "TextInputRegistry"
-why = "ADR-0037 §5: the process-global text-input registry was deleted"
+why = "the presentation-owned text-input contract: the process-global text-input registry was deleted"
 allow_files = []
 
 [[forbidden_pattern]]
 pattern = "unsafe impl Sync for Renderer"
-why = "ADR-0027 §2: Renderer is Send + !Sync — a single mutator, never shared"
+why = "the renderer single-owner contract: Renderer is Send + !Sync — a single mutator, never shared"
 allow_files = []
 
 [[forbidden_pattern]]
 pattern = "debug_assert_owner"
 scope = "crates/flui-platform/src/platforms/macos/clipboard.rs"
-why = "ADR-0039 §5: clipboard operations are documented off-main-safe; an affinity assert would panic legitimate ADR-0034 callers"
+why = "the clipboard ownership contract: clipboard operations are documented off-main-safe; an affinity assert would panic legitimate existing cross-thread callers"
 allow_files = []
 
 [[forbidden_path]]
 path = "crates/flui-presentation"
-why = "ADR-0037 §12: no flui-presentation crate; flui-app privately composes the three owners"
+why = "the presentation composition contract: no flui-presentation crate; flui-app privately composes the three owners"
