@@ -2270,7 +2270,7 @@ where
     // inside `on_ready` — so a panic anywhere inside `on_ready` (or later,
     // on backends where `run` keeps running after it) unwinds through the
     // guard and cannot leak the host onto this thread past this call
-    // (ADR-0039 §6, U7).
+    // (ADR-0039 §6).
     let _owner_host_clear_guard = OwnerHostClearGuard::arm();
     platform.run(Box::new(move |owner| {
         install_owner_platform(owner);
@@ -2661,7 +2661,7 @@ where
     }
 
     // Owner-host clear guard armed BEFORE `run(...)`, not inside `on_ready`
-    // (ADR-0039 §6, U7) — see `run_desktop`'s matching comment.
+    // (ADR-0039 §6) — see `run_desktop`'s matching comment.
     let _owner_host_clear_guard = OwnerHostClearGuard::arm();
     platform.run(Box::new(move |owner| {
         install_owner_platform(owner);
@@ -3134,7 +3134,7 @@ mod tests {
     }
 
     // ========================================================================
-    // Owner-platform host tests (ADR-0039 §6, U7)
+    // Owner-platform host tests (ADR-0039 §6)
     // ========================================================================
 
     /// Serializes tests that mutate `Scheduler::instance()`'s process-global

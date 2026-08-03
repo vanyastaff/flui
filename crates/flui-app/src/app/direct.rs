@@ -269,7 +269,7 @@ pub fn run_direct(
     }
 
     // Owner-host clear guard armed BEFORE `run(...)`, not inside `on_ready`
-    // (ADR-0039 §6/§7, U7) — see `run_desktop`'s matching comment.
+    // (ADR-0039 §6/§7) — see `run_desktop`'s matching comment.
     let _owner_host_clear_guard = crate::app::runner::OwnerHostClearGuard::arm();
     platform.run(Box::new(move |owner| {
         crate::app::runner::install_owner_platform(owner);
