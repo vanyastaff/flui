@@ -42,9 +42,10 @@ use crate::{
     executor::BackgroundExecutor,
     shared::{PlatformHandlers, WindowCallbacks},
     traits::{
-        Clipboard, DesktopCapabilities, Platform, PlatformCapabilities, PlatformDisplay,
-        PlatformExecutor, PlatformWindow, WindowAppearance, WindowEvent, WindowId, WindowMode,
-        WindowOptions,
+        Clipboard, DesktopCapabilities, OwnerPlatform, Platform, PlatformCapabilities,
+        PlatformDisplay, PlatformExecutor, PlatformReadyCallback, PlatformWindow, WindowAppearance,
+        WindowEvent, WindowId, WindowMode, WindowOptions,
+        owner::{DirectOwnerHooks, OwnerHooks},
     },
 };
 
@@ -909,7 +910,7 @@ impl Platform for WindowsPlatform {
 
     // ==================== Lifecycle ====================
 
-    fn run(self: Box<Self>, on_ready: Box<dyn FnOnce(&dyn Platform)>) {
+    fn run(self: Box<Self>, on_ready: PlatformReadyCallback) -> anyhow::Result<()> {
         tracing::info!("Running Windows platform");
 
         // Idempotent from the constructing thread; a `run` migrated to a
@@ -917,10 +918,19 @@ impl Platform for WindowsPlatform {
         // message-only window's queue is bound to the constructing thread).
         self.affinity.bind_current();
 
-        // Call ready callback
-        on_ready(&*self);
+        // No owner lane on this backend: every `OwnerPlatform::open_window`
+        // call creates directly and is always `Ready` (ADR-0039 slice 2).
+        // `PlatformProxy` is permanently unsupported until slice 3 adopts a
+        // lane here.
+        let platform: Arc<dyn Platform> = Arc::new(*self);
+        let hooks: Arc<dyn OwnerHooks> = Arc::new(DirectOwnerHooks::new(Arc::clone(&platform)));
+        // `on_ready` runs before the message pump starts: on `Err`, skip
+        // the pump entirely and return rather than servicing messages for a
+        // half-built app.
+        on_ready(OwnerPlatform::new(platform, hooks))?;
 
         Self::run_message_loop();
+        Ok(())
     }
 
     fn quit(&self) {

@@ -62,11 +62,14 @@ fn main() {
 
     // Run platform event loop (takes ownership)
     tracing::info!("Starting platform event loop...");
-    platform.run(Box::new(move |_platform| {
-        tracing::info!("Platform ready callback invoked");
-        // Window is already created; keep it alive via the closure capture
-        let _window = window;
-    }));
+    platform
+        .run(Box::new(move |_owner| {
+            tracing::info!("Platform ready callback invoked");
+            // Window is already created; keep it alive via the closure capture
+            let _window = window;
+            Ok(())
+        }))
+        .expect("platform event loop exited with an error");
 
     tracing::info!("Platform shut down successfully!");
 }

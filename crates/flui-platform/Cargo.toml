@@ -50,6 +50,14 @@ raw-window-handle = "0.6"
 # Bitflags for platform-specific flags
 bitflags = "2.6"
 
+# Compile-time auto-trait fences for `OwnerPlatform`/`PlatformProxy`/
+# `PendingWindow` (ADR-0039 §6-8): item-position `assert_not_impl_any!`/
+# `assert_impl_all!` in `traits/owner.rs`, expanded unconditionally by every
+# `cargo check` (including cross-typecheck on win/mac) — not gated behind
+# `#[cfg(test)]` — so this must be a real dependency, not dev-only, or the
+# assertions never expand outside this crate's own test builds.
+static_assertions = { workspace = true }
+
 # Windows platform
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { version = "0.62", features = [
@@ -156,7 +164,6 @@ workspace = true
 
 [dev-dependencies]
 tracing-subscriber = { workspace = true }
-static_assertions = { workspace = true }
 
 [[test]]
 name = "platform_it"

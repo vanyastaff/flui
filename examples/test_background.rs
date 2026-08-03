@@ -22,30 +22,35 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let platform: Box<dyn flui_platform::Platform> = Box::new(WindowsPlatform::new()?);
 
-    let options = WindowOptions {
-        title: "Background Test - Should be BLACK not white".to_string(),
-        size: Size::new(px(800.0), px(600.0)),
-        resizable: true,
-        visible: true,
-        decorated: true,
-        min_size: None,
-        max_size: None,
-    };
+    // Window creation moves inside `on_ready` (ADR-0039 slice 2): `Ready` is
+    // guaranteed there, matching every other backend's contract.
+    platform.run(Box::new(move |owner| {
+        let options = WindowOptions {
+            title: "Background Test - Should be BLACK not white".to_string(),
+            size: Size::new(px(800.0), px(600.0)),
+            resizable: true,
+            visible: true,
+            decorated: true,
+            min_size: None,
+            max_size: None,
+        };
 
-    // Create window before running the event loop (run() takes ownership)
-    let window = platform.open_window(options)?;
+        let window = owner
+            .open_window(options)
+            .and_then(flui_platform::WindowOpen::try_ready)
+            .expect("window creation is always Ready inside on_ready");
 
-    println!("Window created");
-    println!();
-    println!("If background is:");
-    println!("  - WHITE = WM_ERASEBKGND not working (Windows default)");
-    println!("  - BLACK = WM_ERASEBKGND working! (no background drawn)");
-    println!();
+        println!("Window created");
+        println!();
+        println!("If background is:");
+        println!("  - WHITE = WM_ERASEBKGND not working (Windows default)");
+        println!("  - BLACK = WM_ERASEBKGND working! (no background drawn)");
+        println!();
 
-    platform.run(Box::new(move |_platform| {
         // Keep window alive via closure capture
         let _window = window;
-    }));
+        Ok(())
+    }))?;
 
     Ok(())
 }

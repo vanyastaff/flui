@@ -9,6 +9,12 @@ mod display;
 mod embedder;
 mod haptics;
 mod input;
+// The owner-thread capability (ADR-0039): `OwnerPlatform`, `PlatformProxy`,
+// `PendingWindow`, and their typed errors. `pub(crate)` (not private): the
+// `pub(crate)` seams inside it — `OwnerHooks`, `ProxyTransport`,
+// `DirectOwnerHooks`, `ClosedTransport` — are wired up by every backend
+// module, not just this crate's own `traits` tree.
+pub(crate) mod owner;
 mod platform;
 mod text_input;
 mod window;
@@ -48,6 +54,10 @@ pub use input::{
 };
 // Re-export keyboard-types for convenience
 pub use keyboard_types::NamedKey;
+pub use owner::{
+    OpenWindowError, OwnerPlatform, PendingWindow, PlatformProxy, ProxySendError, SharedPlatform,
+    WaitError, WindowOpen,
+};
 pub use platform::{
     Clipboard, ClipboardItem, PathPromptOptions, Platform, PlatformExecutor, PlatformReadyCallback,
     WindowEvent, WindowId, WindowMode, WindowOptions,

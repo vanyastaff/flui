@@ -47,7 +47,10 @@ pub use window::AndroidWindow;
 use crate::{
     data_transfer::{DataTransferSource, NullDataTransferSource},
     shared::PlatformHandlers,
-    traits::*,
+    traits::{
+        owner::{DirectOwnerHooks, OwnerHooks},
+        *,
+    },
 };
 
 /// Android platform implementation using `android-activity`
@@ -61,9 +64,10 @@ use crate::{
 /// #[no_mangle]
 /// fn android_main(app: AndroidApp) {
 ///     let platform = AndroidPlatform::new(app);
-///     platform.run(Box::new(|platform| {
-///         // Platform ready — create window and renderer
-///         let _ = platform;
+///     let _ = platform.run(Box::new(|owner| {
+///         // Platform ready (first Resume) — create window and renderer
+///         let _ = owner;
+///         Ok(())
 ///     }));
 /// }
 /// ```
@@ -173,24 +177,37 @@ impl Platform for AndroidPlatform {
         self.background_executor.clone()
     }
 
-    fn run(self: Box<Self>, on_ready: Box<dyn FnOnce(&dyn Platform)>) {
+    fn run(self: Box<Self>, on_ready: PlatformReadyCallback) -> anyhow::Result<()> {
         tracing::info!("Starting Android platform event loop");
+
+        // Converted once, up front: `on_ready` needs an `Arc<dyn Platform>`
+        // to mint `OwnerPlatform` from (ADR-0039 slice 2), and the rest of
+        // this loop reads through the same `Arc` for its whole lifetime
+        // instead of the original `Box`.
+        let platform = Arc::new(*self);
 
         let mut on_ready = Some(on_ready);
         let mut resumed = false;
+        // Set when `on_ready` returns `Err`: a fallible bootstrap
+        // failure (window creation, GPU init, root-widget attach) has no
+        // other return path back to `run`'s caller. Stopping `running` and
+        // `continue`-ing to the loop's top-of-iteration check exits
+        // promptly instead of continuing to pump input/frame dispatch for
+        // an app that never finished bootstrapping.
+        let mut bootstrap_error: Option<anyhow::Error> = None;
         // Relaxed everywhere on `running`: it is a bare stop-signal with no
         // data published through it. The loop re-reads it every iteration,
         // the Destroy store happens on the loop thread itself, and a
         // cross-thread `quit()` only needs eventual visibility.
-        self.running.store(true, Ordering::Relaxed);
+        platform.running.store(true, Ordering::Relaxed);
 
         loop {
-            if !self.running.load(Ordering::Relaxed) {
+            if !platform.running.load(Ordering::Relaxed) {
                 break;
             }
 
             // Check if we should render before polling
-            let should_render = self
+            let should_render = platform
                 .window
                 .lock()
                 .as_ref()
@@ -204,7 +221,7 @@ impl Platform for AndroidPlatform {
 
             let mut should_call_ready = false;
 
-            self.app.poll_events(Some(timeout), |event| {
+            platform.app.poll_events(Some(timeout), |event| {
                 match event {
                     PollEvent::Main(main_event) => match main_event {
                         MainEvent::Resume { .. } => {
@@ -216,7 +233,7 @@ impl Platform for AndroidPlatform {
                             }
 
                             // Notify window of activation
-                            if let Some(ref w) = *self.window.lock() {
+                            if let Some(ref w) = *platform.window.lock() {
                                 w.callbacks().dispatch_active_status_change(true);
                                 w.request_redraw();
                             }
@@ -226,7 +243,7 @@ impl Platform for AndroidPlatform {
                             resumed = false;
 
                             // Notify window of deactivation
-                            if let Some(ref w) = *self.window.lock() {
+                            if let Some(ref w) = *platform.window.lock() {
                                 w.callbacks().dispatch_active_status_change(false);
                             }
                         }
@@ -234,15 +251,15 @@ impl Platform for AndroidPlatform {
                             tracing::info!("Android: Destroy — shutting down");
 
                             // Dispatch close before stopping
-                            if let Some(ref w) = *self.window.lock() {
+                            if let Some(ref w) = *platform.window.lock() {
                                 w.callbacks().dispatch_close();
                             }
 
-                            self.running.store(false, Ordering::Relaxed);
+                            platform.running.store(false, Ordering::Relaxed);
                         }
                         MainEvent::WindowResized { .. } => {
                             tracing::info!("Android: Window resized");
-                            if let Some(ref w) = *self.window.lock() {
+                            if let Some(ref w) = *platform.window.lock() {
                                 let size = w.logical_size();
                                 let scale = w.scale_factor() as f32;
                                 w.callbacks().dispatch_resize(size, scale);
@@ -251,13 +268,13 @@ impl Platform for AndroidPlatform {
                         }
                         MainEvent::GainedFocus => {
                             tracing::debug!("Android: Gained focus");
-                            if let Some(ref w) = *self.window.lock() {
+                            if let Some(ref w) = *platform.window.lock() {
                                 w.callbacks().dispatch_active_status_change(true);
                             }
                         }
                         MainEvent::LostFocus => {
                             tracing::debug!("Android: Lost focus");
-                            if let Some(ref w) = *self.window.lock() {
+                            if let Some(ref w) = *platform.window.lock() {
                                 w.callbacks().dispatch_active_status_change(false);
                             }
                         }
@@ -273,29 +290,55 @@ impl Platform for AndroidPlatform {
                 }
             });
 
-            // Call on_ready outside of poll_events (FnOnce can't be called in closure)
+            // Call on_ready outside of poll_events (FnOnce can't be called in
+            // closure). Fires once, at the first `Resume` — the module doc's
+            // `Resumed -> on_ready() -> create surface` sequence (ADR-0039
+            // slice 2: the pre-run bootstrap that used to run before this
+            // loop started now runs from here, in `flui-app`'s `on_ready`
+            // migration). No owner lane on this backend: every
+            // `OwnerPlatform::open_window` call creates directly and is
+            // always `Ready`.
             if should_call_ready {
                 if let Some(ready) = on_ready.take() {
-                    ready(&*self);
+                    let owner_platform = Arc::clone(&platform) as Arc<dyn Platform>;
+                    let hooks: Arc<dyn OwnerHooks> =
+                        Arc::new(DirectOwnerHooks::new(Arc::clone(&owner_platform)));
+                    if let Err(error) = ready(OwnerPlatform::new(owner_platform, hooks)) {
+                        tracing::error!(
+                            %error,
+                            "on_ready bootstrap failed; stopping the event loop"
+                        );
+                        bootstrap_error = Some(error);
+                        platform.running.store(false, Ordering::Relaxed);
+                        // Skip input/frame dispatch below for this
+                        // iteration -- the top-of-loop check exits on the
+                        // next pass.
+                        continue;
+                    }
                 }
             }
 
             // Process input events (touch, key) and dispatch through callbacks
             if resumed {
-                self.process_input_events();
+                platform.process_input_events();
             }
 
             // Dispatch frame rendering if resumed and redraw was requested
             if resumed && should_render {
-                if let Some(ref w) = *self.window.lock() {
+                if let Some(ref w) = *platform.window.lock() {
                     w.callbacks().dispatch_request_frame();
                 }
             }
         }
 
         // Invoke quit handlers
-        self.handlers.lock().invoke_quit();
+        platform.handlers.lock().invoke_quit();
         tracing::info!("Android platform event loop finished");
+
+        if let Some(error) = bootstrap_error {
+            return Err(error);
+        }
+        Ok(())
     }
 
     fn quit(&self) {

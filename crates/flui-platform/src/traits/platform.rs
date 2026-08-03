@@ -12,7 +12,9 @@ use std::{
 use anyhow::Result;
 use flui_types::geometry::{Bounds, DevicePixels, Pixels, Point, Size};
 
-use super::{PlatformCapabilities, PlatformDisplay, PlatformWindow, window::WindowAppearance};
+use super::{
+    OwnerPlatform, PlatformCapabilities, PlatformDisplay, PlatformWindow, window::WindowAppearance,
+};
 use crate::{data_transfer::DataTransferSource, task::Task};
 
 /// Window creation options
@@ -136,10 +138,26 @@ impl WindowMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct WindowId(pub u64); // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
 
-/// [`Platform::run`]'s ready callback: invoked once, synchronously, with a
-/// platform handle. Named to keep `Box<dyn FnOnce(&dyn Platform)>` out of
-/// every call site's signature.
-pub type PlatformReadyCallback = Box<dyn FnOnce(&dyn Platform)>;
+/// [`Platform::run`]'s ready callback: invoked once, synchronously, with the
+/// owner-thread capability (ADR-0039). Named to keep
+/// `Box<dyn FnOnce(OwnerPlatform) -> anyhow::Result<()>>` out of every call
+/// site's signature.
+///
+/// Replaces the pre-ADR-0039 `Box<dyn FnOnce(&dyn Platform)>` shape: the
+/// callback now receives [`OwnerPlatform`] by value instead of a borrowed
+/// `&dyn Platform`, so it may stash the capability in owner-thread state for
+/// the rest of the loop's life (e.g. `flui-app`'s `OWNER_PLATFORM_HOST` TLS
+/// slot) rather than being limited to the callback's own stack frame.
+///
+/// Fallible (slice-2 maintainer fix): bootstrap run from inside `on_ready`
+/// (window creation, GPU init, root-widget attach) can fail, and a callback
+/// that swallowed that failure would leave the loop running with a broken
+/// app — Android would keep pumping with no UI, web would install its RAF
+/// loop over a half-built page. Returning `Err` here propagates out of
+/// [`Platform::run`] itself instead: every backend stops entering (or
+/// promptly exits) its loop on `Err` and hands the error back to `run`'s own
+/// caller.
+pub type PlatformReadyCallback = Box<dyn FnOnce(OwnerPlatform) -> anyhow::Result<()>>;
 
 /// Core platform abstraction trait
 ///
@@ -163,11 +181,26 @@ pub type PlatformReadyCallback = Box<dyn FnOnce(&dyn Platform)>;
 /// ```rust,ignore
 /// use flui_platform::{Platform, current_platform};
 ///
-/// let platform = current_platform();
-/// platform.run(Box::new(|platform| {
-///     println!("Platform ready: {}", platform.name());
-/// }));
+/// fn main() -> anyhow::Result<()> {
+///     let platform = current_platform()?;
+///     platform.run(Box::new(|owner| {
+///         println!("Platform ready: {}", owner.shared().name());
+///         Ok(())
+///     }))?;
+///     Ok(())
+/// }
 /// ```
+///
+/// # De-facto crate seal (ADR-0039)
+///
+/// `run`'s `on_ready` callback receives an [`OwnerPlatform`] — a capability
+/// minted only through a `pub(crate)` constructor in this crate. An
+/// out-of-crate `impl Platform` can implement `run` but cannot construct the
+/// `OwnerPlatform` it must hand to `on_ready`, so this trait is de-facto
+/// sealed to backends living inside `flui-platform` even though nothing
+/// marks it `sealed` in the type system. An external-embedder minting seam
+/// is design work tracked separately (#560, `flui-platform` issue tracker);
+/// until then, new backends land in this crate.
 pub trait Platform: Send + Sync + 'static {
     // ==================== Core System ====================
 
@@ -182,16 +215,31 @@ pub trait Platform: Send + Sync + 'static {
     ///
     /// This function takes ownership of the platform and the current thread,
     /// running the platform's event loop. The `on_ready` callback is invoked
-    /// once the platform is initialized and ready to create windows, and is
-    /// passed a platform handle so it can call `open_window`, `on_quit`, and
-    /// other `&self` methods — the outer `Box<dyn Platform>` binding is no
-    /// longer reachable once `run` has taken ownership of it.
+    /// once, synchronously, on the thread that owns (or will own) the event
+    /// loop, and is passed an [`OwnerPlatform`] — the owner-thread capability
+    /// (ADR-0039) — by value: it can call `open_window` and every other
+    /// owner-affine operation, and reach the residual `Send + Sync` surface
+    /// via [`OwnerPlatform::shared`]. `on_ready` may stash the capability in
+    /// owner-thread state for the rest of the loop's life; the outer
+    /// `Box<dyn Platform>` binding is no longer reachable once `run` has
+    /// taken ownership of it.
     ///
     /// Takes `self: Box<Self>` because some backends (e.g. winit) require
     /// ownership of the event loop to run it.
     ///
-    /// This function only returns when the application quits.
-    fn run(self: Box<Self>, on_ready: PlatformReadyCallback);
+    /// This function only returns when the application quits (never, on
+    /// backends whose native run loop does not return control — e.g. macOS,
+    /// where `terminate:` exits the process).
+    ///
+    /// # Errors
+    /// Propagates `on_ready`'s own `Err` (a bootstrap failure — window
+    /// creation, GPU init, root-widget attach — has no other return path
+    /// back to `run`'s caller). Every backend stops entering, or promptly
+    /// exits, its loop on that `Err` rather than continuing with a broken
+    /// app: a returned error means the loop never ran a single iteration
+    /// with `on_ready`'s bootstrap incomplete. A backend may also return its
+    /// own `Err` for a platform-level failure unrelated to `on_ready`.
+    fn run(self: Box<Self>, on_ready: PlatformReadyCallback) -> anyhow::Result<()>;
 
     /// Request the application to quit
     ///

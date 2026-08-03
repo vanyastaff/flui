@@ -319,11 +319,14 @@ fn main() {
         "color filter demo ready — 5 columns: unfiltered | Mode/Multiply | LinearToSrgb | SrgbToLinear | Grayscale"
     );
 
-    platform.run(Box::new(move |_platform| {
-        // Keep resources alive through the event loop.
-        let _window = &window;
-        let _renderer = &renderer;
-    }));
+    platform
+        .run(Box::new(move |_owner| {
+            // Keep resources alive through the event loop.
+            let _window = &window;
+            let _renderer = &renderer;
+            Ok(())
+        }))
+        .expect("platform event loop exited with an error");
 
     tracing::info!("color filter demo finished");
 }

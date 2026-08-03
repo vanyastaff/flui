@@ -27,9 +27,10 @@
 //! use flui_platform::MacOSPlatform;
 //!
 //! let platform = MacOSPlatform::new()?;
-//! platform.run(Box::new(|_platform| {
+//! platform.run(Box::new(|_owner| {
 //!     println!("macOS platform ready!");
-//! }));
+//!     Ok(())
+//! }))?;
 //! ```
 
 // cocoa 0.26 deprecates its entire API surface in favor of the objc2 family;

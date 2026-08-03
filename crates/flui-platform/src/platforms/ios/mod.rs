@@ -177,7 +177,14 @@ impl Platform for IOSPlatform {
         unimplemented!("iOS GCD executor not implemented")
     }
 
-    fn run(self: Box<Self>, _on_finish_launching: Box<dyn FnOnce()>) {
+    fn run(self: Box<Self>, _on_finish_launching: PlatformReadyCallback) -> anyhow::Result<()> {
+        // Pre-existing signature mismatch fixed by the callback flip
+        // (ADR-0039 slice 2): this stub never compiled under any CI target
+        // before (`target_os = "ios"` has no CI compile job) and still
+        // returns `unimplemented!()` -- platform-init stub exemption
+        // (AGENTS.md). The later fallible `on_ready`/`run` flip is likewise
+        // trivial propagation here — `unimplemented!()` unifies with any
+        // return type.
         unimplemented!("iOS UIApplicationMain run loop not implemented")
     }
 

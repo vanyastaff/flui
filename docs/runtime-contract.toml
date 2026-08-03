@@ -136,6 +136,7 @@ declarations = [
     "pub use shared::{PlatformHandlers, WindowCallbacks};",
     "pub use task::{Priority, Task, TaskLabel};",
     "pub use traits::{ Clipboard, ClipboardItem, CursorError, DesktopCapabilities, DispatchEventResult, DisplayId, MobileCapabilities, PathPromptOptions, Platform, PlatformCapabilities, PlatformDisplay, PlatformEmbedder, PlatformExecutor, PlatformHaptics, PlatformReadyCallback, PlatformTextInput, PlatformWindow, WebCapabilities, WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowEvent, WindowId, WindowMode, WindowOptions, };",
+    "pub use traits::{ OpenWindowError, OwnerPlatform, PendingWindow, PlatformProxy, ProxySendError, SharedPlatform, WaitError, WindowOpen, };",
     "pub fn current_platform() -> anyhow::Result<Box<dyn Platform>> {",
     "pub fn headless_platform() -> Box<dyn Platform> {",
 ]
@@ -196,6 +197,7 @@ declarations = [
     "pub mod async_snapshot;",
     "pub mod binding;",
     "pub mod callbacks;",
+    "pub mod claim_slot;",
     "pub mod clock;",
     "pub mod consts;",
     "pub mod epoch;",
@@ -213,6 +215,7 @@ declarations = [
     "pub use async_snapshot::{AsyncSnapshot, ConnectionState};",
     "pub use binding::{BindingBase, HasInstance, check_instance};",
     "pub use callbacks::{ FallibleCallback, Predicate, ValueChanged, ValueGetter, ValueSetter, ValueTransformer, VoidCallback, };",
+    "pub use claim_slot::{ClaimHandle, ClaimOutcome, ClaimSlot, claim_slot};",
     "pub use clock::{ManualClock, MonotonicClock, SystemClock};",
     "pub use consts::{DEBUG_MODE, EPSILON, EPSILON_F32, IS_DESKTOP, IS_MOBILE, IS_WEB, RELEASE_MODE};",
     "pub use epoch::{FrameEpoch, GenerationGate, ResourceGeneration, SurfaceGeneration};",
@@ -945,21 +948,75 @@ statement = """
 Owner-thread-only platform operations move off the `Send + Sync` `Platform` \
 trait onto a `!Send + !Sync` `OwnerPlatform` capability handed to \
 `on_ready`; post-bootstrap owner-thread window creation is deferred through \
-the owner lane, never direct. Nothing of slices 2–3 exists in the tree.\
+the owner lane, never direct. The compile-time "wrong-thread is a compile \
+error" guarantee holds for CAPABILITY HOLDERS: `OwnerPlatform` is `!Send`, \
+and its `shared()` escape hatch returns `SharedPlatform` (`Clone + Send + \
+Sync`, deliberately restricted to the thread-safe residual per §2's "what \
+stays" table -- no owner-affine method is ever added to it), not the \
+ambient `&dyn Platform`/`Arc<dyn Platform>` trait object, which remains \
+`Send + Sync` in full and runtime-checked only (the slice-1 `OwnerAffinity` \
+debug_assert backstop) until slice 3 actually splits the owner-affine \
+methods off the trait. Two more routes of the SAME residual-hazard class, \
+named here rather than left implicit: `headless_platform() -> Box<dyn \
+Platform>` (a free constructor handing out the same full-`Send+Sync` \
+trait object, runtime-checked only, same as `current_platform()`); and the \
+publicly re-exported CONCRETE backend types themselves (`WinitPlatform`, \
+`MacOSPlatform`, `WindowsPlatform`, `WebPlatform`, `AndroidPlatform`, \
+`IOSPlatform`, `LinuxPlatform`, `HeadlessPlatform`) -- an `Arc<WinitPlatform>` \
+(for instance, `WinitPlatform::run_event_loop` is itself `pub` and takes \
+`self: Arc<Self>`) held across the loop lets a worker call `.quit()` (or \
+any other `Platform` method) directly on the concrete type with no `dyn \
+Platform` object involved at all, so the hazard is not merely a trait-object \
+one. All three routes close together, mechanically, only when slice 3 \
+actually moves the owner-affine methods off the `Platform` trait; until \
+then each is a debug_assert-guarded, not compile-error-guarded, misuse \
+surface. Slice 2 lands `OwnerPlatform`/`SharedPlatform`/the fallible \
+callback flip/the flui-app TLS host across every backend; slice 3 (the \
+`OwnerOps` trait-surgery seam, macOS/Windows lane adoption) is not in the \
+tree.\
 """
-state = "planned"
+state = "partial"
 domain = "platform"
 owner_issue = 551
-mechanical = false
+mechanical = true
+mechanism = "item-position auto-trait fences in owner.rs, real (non-dev) static_assertions dependency"
+evidence = [
+    { kind = "symbol", file = "crates/flui-platform/src/traits/owner.rs", contains = "pub struct OwnerPlatform" },
+    { kind = "symbol", file = "crates/flui-platform/src/traits/owner.rs", contains = "pub struct SharedPlatform" },
+    { kind = "symbol", file = "crates/flui-platform/src/traits/owner.rs", contains = "pub enum OpenWindowError" },
+    { kind = "compile-time", file = "crates/flui-platform/src/traits/owner.rs", contains = "assert_not_impl_any!(OwnerPlatform" },
+    { kind = "compile-time", file = "crates/flui-platform/src/traits/owner.rs", contains = "assert_impl_all!(SharedPlatform" },
+    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn owner_platform_host_installs_and_clears_around_run" },
+    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn owner_platform_host_on_ready_error_propagates_and_still_clears" },
+]
 
 [[contract]]
 key = "platform-proxy-claim-slot"
 statement = """
 Workers reach the owner through a typed, bounded `PlatformProxy` with \
-claim-slot at-most-once replies and per-backend drain-anchor gates. The \
-winit-internal `ControlSender` lane exists (bounded, typed \
-`Full`/`OwnerGone`, wake, admission gate) but is backend-private and keeps \
-the weaker buffered one-shot reply.\
+claim-slot at-most-once replies. The winit lane's `ControlSender` composes \
+`flui-foundation`'s `ClaimSlot`/`ClaimHandle` for its reply protocol \
+(bounded, typed `Full`/`OwnerGone` at enqueue; claimed-or-abandoned at \
+resolution) and is `PlatformProxy`'s public transport on that backend. \
+macOS/Windows/web/Android/headless transports are `ClosedTransport`, which \
+returns `ProxySendError::Unsupported` (PERMANENTLY, until slice 3 gives \
+them a lane) for both `open_window` and `request_quit` -- a maintainer fix \
+round correction: the vocabulary originally overloaded `OwnerGone` for this \
+(a name that means "a lane existed and died"), which `Unsupported` now \
+replaces on every lane-less backend; `OwnerGone` is reserved for the winit \
+lane after its loop has actually stopped. `request_quit` itself is now \
+fallible (`Result<(), ProxySendError<()>>`, `#[must_use]`): winit returns \
+`Ok(())` (coalesced, as before) or `OwnerGone` if the loop already stopped; \
+lane-less backends return `Unsupported`. The drain-anchor gate contract \
+(ADR-0039 §4) is scoped to slice 3's lane generalization. \
+Registry-occupancy bound is honest, not admission-time: queued entries ≤ \
+lane capacity (256); delivered-but-unclaimed entries persist as the \
+requester's pinned liability until claim or drop. `ClaimHandle<T>` also \
+implements `Future<Output = ClaimOutcome<T>>` (flui-foundation, CI-run \
+tests), and `PendingWindow` wraps it as its own `Future` -- non-blocking on \
+any thread including the owner, resolving to a typed `OwnerGone` outcome if \
+the owner side (`ClaimSlot`) is dropped before ever delivering (that \
+transition is `ClaimSlot`'s own `Drop`, not just `ClaimHandle`'s).\
 """
 state = "partial"
 domain = "platform"
@@ -967,6 +1024,13 @@ owner_issue = 551
 mechanical = false
 evidence = [
     { kind = "symbol", file = "crates/flui-platform/src/platforms/winit/control.rs", contains = "enum ControlSendError" },
+    { kind = "symbol", file = "crates/flui-foundation/src/claim_slot.rs", contains = "pub struct ClaimSlot" },
+    { kind = "symbol", file = "crates/flui-platform/src/traits/owner.rs", contains = "pub enum ProxySendError" },
+    { kind = "symbol", file = "crates/flui-platform/src/traits/owner.rs", contains = "pub enum WaitError" },
+    { kind = "symbol", file = "crates/flui-foundation/src/claim_slot.rs", contains = "pub enum ClaimOutcome" },
+    { kind = "test", file = "crates/flui-foundation/src/claim_slot.rs", contains = "fn dropped_after_delivery_abandons_with_recoverable_payload" },
+    { kind = "test", file = "crates/flui-foundation/src/claim_slot.rs", contains = "fn blocked_waiter_unblocks_on_owner_drop" },
+    { kind = "test", file = "crates/flui-foundation/src/claim_slot.rs", contains = "fn future_wakes_on_owner_drop" },
 ]
 
 [[contract]]
@@ -991,11 +1055,18 @@ key = "pre-run-flows-migrate-to-on-ready"
 statement = """
 Window creation before `Platform::run` (run_direct, Android bootstrap, web \
 bootstrap, Win32 examples) migrates inside `on_ready`, where every backend \
-guarantees synchronous owner-thread creation. `run_direct` remains broken on \
-the winit backend until this lands and is marked experimental for exactly \
-this reason.\
+guarantees synchronous owner-thread creation. All four flows are migrated \
+in source: `run_direct` now works on the winit backend (previously dead on \
+arrival there) and keeps `experimental` classification pending broader \
+stabilization; Android's migration (window/GPU/realm mount move from \
+before `run()` to the first `Resume`) is behaviorally the backend's \
+documented intent but on-device-unvalidated (no device, no CI compile \
+target for `target_os = "android"`) and gates slice 3's trait-method \
+deletion on that validation. Once-only bootstrap semantics are preserved \
+on every backend (`on_ready` is `FnOnce`, matching today's once-only \
+pre-run bootstrap exactly).\
 """
-state = "planned"
+state = "partial"
 domain = "platform"
 owner_issue = 551
 mechanical = true
@@ -1041,12 +1112,12 @@ kind = "function"
 declared_in = "crates/flui-app/src/app/direct.rs"
 contains = "pub fn run_direct"
 classification = "experimental"
-thread_affinity = "process main thread; opens the window before run(), so it fails fast on the winit backend"
+thread_affinity = "process main thread; window/GPU/callback bootstrap runs inside on_ready, so it now works on the winit backend too"
 owner = "application composition root (direct-engine escape hatch)"
-failure_semantics = "anyhow::Result; typed fast-fail before any window opens on winit (Linux)"
+failure_semantics = "anyhow::Result, returned directly from Platform::run's own Result: on_ready is now fallible, so the old Rc<RefCell<Option<Error>>> bootstrap_error_slot side-channel is redundant and has been removed"
 consumers = ["examples/direct_render.rs", "examples/aa_showcase.rs"]
 owner_issue = 551
-notes = "Event-loop repair (on_ready reorder) is issue #551. The checker pins the experimental marking."
+notes = "Graduating out of experimental is a separate post-slice-3 decision; the checker pins the experimental marking and the word appearing in direct.rs regardless of what the marking describes."
 
 [[surface]]
 path = "flui_app::run_app_android / run_app_android_with_config"
@@ -1055,9 +1126,9 @@ kind = "function"
 declared_in = "crates/flui-app/src/app/runner.rs"
 contains = "pub fn run_app_android"
 classification = "experimental"
-thread_affinity = "android_main thread; pre-run bootstrap creates the window/GPU before the loop, contra issue #551"
+thread_affinity = "android_main thread; window/GPU/realm mount now run inside on_ready, firing at the first Resume (module doc: Resumed -> on_ready() -> create surface); on-device validation is outstanding (no device, no CI compile target)"
 owner = "application composition root (Android runner)"
-failure_semantics = "returns unit; bootstrap failures are logged"
+failure_semantics = "returns unit; a bootstrap failure now propagates through Platform::run's Result and panics rather than the earlier behavior of logging and silently continuing to pump a windowless loop"
 consumers = ["examples/android_demo (via its own bootstrap)"]
 owner_issue = 551
 
@@ -1134,11 +1205,12 @@ kind = "trait"
 declared_in = "crates/flui-platform/src/traits/platform.rs"
 contains = "pub trait Platform: Send + Sync + 'static"
 classification = "transitional"
-thread_affinity = "declared Send + Sync, but open_window/quit/activate/displays/window_appearance are owner-thread-only on real OSes — the owner-affinity defect"
+thread_affinity = "TRANSITIONAL, NOT thread-safe in full: the trait itself is still declared Send + Sync with every owner-affine method still on it (open_window/quit/activate/displays/primary_display/window_appearance/keyboard_layout/active_window) -- slice 2 narrowed only the CAPABILITY SURFACES built on top (OwnerPlatform's own methods, and SharedPlatform's deliberately restricted method list), not this trait. An owner-affine call through a raw &dyn Platform / Arc<dyn Platform> is still guarded only by the slice-1 OwnerAffinity debug_assert backstop, not a compile error, until slice 3 actually moves these methods off the trait. Do not read this entry (or OwnerPlatform's) as implying `dyn Platform` itself became thread-safe -- it did not."
 owner = "platform backend (one per process; consumed by run())"
-failure_semantics = "anyhow surface; owner-affinity violations are debug_assert-only (slice 1 backstop)"
+failure_semantics = "anyhow surface; owner-affinity on the trait's own methods is still a runtime debug_assert (OwnerAffinity), not a compile-time property, until slice 3 moves them off. The compile-time guarantee this issue actually delivers lives on the capability holders: OwnerPlatform is !Send, and its shared() escape hatch returns the restricted SharedPlatform (Clone + Send + Sync, no owner-affine method) rather than this trait's own &dyn Platform."
 consumers = ["runner bootstrap", "run_direct", "examples"]
 owner_issue = 551
+notes = "De-facto crate-sealed post-flip: minting an OwnerPlatform requires the pub(crate) constructor in traits/owner.rs, so an out-of-crate impl Platform cannot supply what its own run() must hand to on_ready. An external-embedder minting seam is #560 design work, not this issue's scope. Same residual class, named on the owner-platform-capability contract rather than repeated here: headless_platform()'s Box<dyn Platform> return, and the publicly re-exported concrete backend types (WinitPlatform et al., whose own pub methods -- e.g. WinitPlatform::run_event_loop -- need no dyn Platform object at all to reach an owner-affine method off-thread)."
 
 [[surface]]
 path = "flui_platform::PlatformReadyCallback"
@@ -1147,12 +1219,82 @@ kind = "type-alias"
 declared_in = "crates/flui-platform/src/traits/platform.rs"
 contains = "pub type PlatformReadyCallback"
 classification = "transitional"
-thread_affinity = "invoked on the event-loop owner thread by every backend"
+thread_affinity = "invoked once, synchronously, on the event-loop owner thread by every backend; carries OwnerPlatform by value"
 owner = "backend run() contract"
-failure_semantics = "infallible callback"
-consumers = ["all six backends", "runner"]
+failure_semantics = "fallible: Box<dyn FnOnce(OwnerPlatform) -> anyhow::Result<()>>. Platform::run itself returns anyhow::Result<()> and propagates on_ready's Err out of it; every backend stops entering (or promptly exits) its loop on Err rather than continuing to run a half-built app."
+consumers = [
+    "all eight backends (winit, windows, macos, web, android, headless, linux stub, ios stub)",
+    "runner",
+]
 owner_issue = 551
-notes = "issue #551 flips this signature to carry OwnerPlatform by value — a breaking change across all backends."
+notes = "Flipped in issue #551 to Box<dyn FnOnce(OwnerPlatform)> -- a breaking change landed across every backend in one PR (pre-1.0, ADR-0027 §9 break-acknowledgement posture). Flipped a second time, to Box<dyn FnOnce(OwnerPlatform) -> anyhow::Result<()>>, across the same eight backends -- a bootstrap failure (window creation, GPU init, root-widget attach) now propagates out of Platform::run instead of leaving the loop running with a broken app. flui-app's bootstrap_desktop/bootstrap_android/bootstrap_web/bootstrap_direct all return anyhow::Result<()>; the old bootstrap_error_slot Rc<RefCell<Option<anyhow::Error>>> side-channel pattern is now redundant everywhere it was used and has been removed."
+
+[[surface]]
+path = "flui_platform::OwnerPlatform"
+crate = "flui-platform"
+kind = "type"
+declared_in = "crates/flui-platform/src/traits/owner.rs"
+contains = "pub struct OwnerPlatform"
+classification = "experimental"
+thread_affinity = "!Send + !Sync by phantom marker; minted only by a backend, on the thread that owns (or will own) its event loop, and handed to on_ready"
+owner = "backend run() contract; stashed loop-scoped in flui-app's OWNER_PLATFORM_HOST TLS"
+failure_semantics = "open_window returns a typed Result<WindowOpen, OpenWindowError>; other methods are infallible or delegate to the residual Platform surface via shared()"
+consumers = ["every backend's on_ready closure", "flui-app runner bootstrap"]
+owner_issue = 551
+notes = "Not Clone by design (ADR-0039 slice-2 decision record) -- the sanctioned way to hold it across callbacks is flui-app's with_owner_platform borrow accessor, never a durable owned copy."
+
+[[surface]]
+path = "flui_platform::SharedPlatform"
+crate = "flui-platform"
+kind = "type"
+declared_in = "crates/flui-platform/src/traits/owner.rs"
+contains = "pub struct SharedPlatform"
+classification = "experimental"
+thread_affinity = "Clone + Send + Sync; every method is safe to call from any thread, including a std::thread::scope worker -- the method list itself is the fence (no owner-affine method is ever added)"
+owner = "OwnerPlatform::shared() mint"
+failure_semantics = "delegates to the residual Platform surface (background_executor, capabilities, name, compositor_name, app_path, clipboard, data_transfer, the five on_* registrations, open_url/reveal_path/open_path, prompt_for_paths/prompt_for_new_path, write_to_clipboard/read_from_clipboard); each keeps its own Platform-trait failure semantics"
+consumers = ["flui-app runner/direct bootstrap (clipboard wiring, on_quit registration)"]
+owner_issue = 551
+notes = "OwnerPlatform::shared() used to return &dyn Platform, which is Send + Sync in full (including the owner-affine methods) until slice 3's trait split -- a worker thread could borrow it and call an owner-affine method off-thread in safe code. SharedPlatform closes that: it wraps Arc<dyn Platform> privately and exposes only the thread-safe residual."
+
+[[surface]]
+path = "flui_platform::PlatformProxy"
+crate = "flui-platform"
+kind = "type"
+declared_in = "crates/flui-platform/src/traits/owner.rs"
+contains = "pub struct PlatformProxy"
+classification = "experimental"
+thread_affinity = "Clone + Send + Sync; callable from any thread, including the owner (is_owner_thread() is diagnostic only)"
+owner = "OwnerPlatform::proxy() mint; carried by workers/realms/tasks that need to reach the owner"
+failure_semantics = "open_window returns Result<PendingWindow, ProxySendError<WindowOptions>>; request_quit returns Result<(), ProxySendError<()>> (#[must_use]). ProxySendError::Unsupported is permanent on lane-less backends (windows/macos/web/android/headless) until slice 3; ProxySendError::OwnerGone is reserved for the winit lane after its loop has actually stopped."
+consumers = ["winit lane (real transport)", "windows/macos/headless/web/android (ClosedTransport)"]
+owner_issue = 551
+
+[[surface]]
+path = "flui_platform::PendingWindow"
+crate = "flui-platform"
+kind = "type"
+declared_in = "crates/flui-platform/src/traits/owner.rs"
+contains = "pub struct PendingWindow"
+classification = "experimental"
+thread_affinity = "Send (statically asserted); wait() type-refuses the owner thread via WaitError::WouldBlockOwner rather than deadlocking on the lane it drains"
+owner = "the requester that received it from OwnerPlatform::open_window or PlatformProxy::open_window"
+failure_semantics = "dropping it disclaims the request (guard-like): the owner skips creation (not yet delivered) or unwinds the created window (already delivered) -- see ClaimSlot's module docs"
+consumers = ["winit lane deferred-open path"]
+owner_issue = 551
+
+[[surface]]
+path = "flui_platform::WindowOpen"
+crate = "flui-platform"
+kind = "type"
+declared_in = "crates/flui-platform/src/traits/owner.rs"
+contains = "pub enum WindowOpen"
+classification = "experimental"
+thread_affinity = "returned by OwnerPlatform::open_window; Ready always holds inside on_ready"
+owner = "OwnerPlatform::open_window's caller"
+failure_semantics = "exhaustive by design (Ready/Pending is the load-bearing two-state deferral model; a third state is a redesign); try_ready() converts Pending into the typed OpenWindowError::NotReady"
+consumers = ["every bootstrap_* function", "examples"]
+owner_issue = 551
 
 [[surface]]
 path = "flui_platform::current_platform"

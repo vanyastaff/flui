@@ -12,7 +12,10 @@ use wasm_bindgen::prelude::*;
 use crate::{
     data_transfer::{DataTransferSource, NullDataTransferSource},
     shared::{PlatformHandlers, WindowCallbacks},
-    traits::*,
+    traits::{
+        owner::{DirectOwnerHooks, OwnerHooks},
+        *,
+    },
 };
 
 use super::{
@@ -122,18 +125,34 @@ impl Platform for WebPlatform {
         self.with_state(|s| s.background_executor.clone())
     }
 
-    fn run(self: Box<Self>, on_ready: Box<dyn FnOnce(&dyn Platform)>) {
+    fn run(self: Box<Self>, on_ready: PlatformReadyCallback) -> anyhow::Result<()> {
         tracing::info!("Starting web platform");
 
         self.with_state(|s| s.is_running = true);
 
-        // Call on_ready synchronously — browser event loop is already running
-        on_ready(&*self);
+        let platform = Arc::new(*self);
+
+        // No owner lane on this backend: every `OwnerPlatform::open_window`
+        // call creates directly and is always `Ready` (ADR-0039 slice 2).
+        // wasm is single-threaded, so `PlatformProxy` staying inert here is
+        // moot rather than a real limitation (ADR-0039 "wasm posture").
+        let hooks: Arc<dyn OwnerHooks> = Arc::new(DirectOwnerHooks::new(
+            Arc::clone(&platform) as Arc<dyn Platform>
+        ));
+
+        // Call on_ready synchronously — browser event loop is already
+        // running. On `Err`, do NOT install the RAF loop over a half-built
+        // page — return the failure instead.
+        on_ready(OwnerPlatform::new(
+            Arc::clone(&platform) as Arc<dyn Platform>,
+            hooks,
+        ))?;
 
         // Start the RAF loop
-        self.start_raf_loop();
+        platform.start_raf_loop();
 
         tracing::info!("Web platform ready");
+        Ok(())
     }
 
     fn quit(&self) {

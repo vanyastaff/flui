@@ -6,26 +6,20 @@
 //!
 //! This is **not** a supported cross-platform application entry point, and it
 //! is not a smaller `run_app`. It is a direct-engine escape hatch for scene
-//! and shader work, with three standing limitations:
+//! and shader work, with two standing limitations:
 //!
-//! - **It does not run on the winit backend**, which is what Linux uses today.
-//!   [`run_direct`] opens its window before starting the event loop, and winit
-//!   cannot create a window outside a running loop — so the call fails fast
-//!   with an error instead of opening anything. The fix is the same
-//!   `on_ready`-driven reorder `run_desktop` already received, required by
-//!   [ADR-0039](https://github.com/vanyastaff/flui/blob/main/docs/adr/ADR-0039-event-loop-affinity-capability.md)'s
-//!   slice 2 ("pre-run flows migrate into `on_ready`", which names this
-//!   function). It is deliberately not attempted here: an event-loop
-//!   architecture change does not belong in a package-surface cleanup.
 //! - **There is no input handling.** The input callback is a no-op stub; a
 //!   caller that needs input drives it from inside `render_fn` via its own
 //!   state.
 //! - **There is no damage tracking**, no widget tree, no layout, no hit test,
 //!   and no semantics — every frame is a full repaint of a caller-built scene.
 //!
-//! Native (non-winit) Windows and macOS backends are unaffected by the first
-//! limitation, and `examples/direct_render.rs` and `examples/aa_showcase.rs`
-//! run there.
+//! Window creation, GPU renderer init, and callback wiring all run inside
+//! `on_ready` (ADR-0039 slice 2), the same reorder `run_desktop` already
+//! received — this function used to open its window *before* starting the
+//! event loop, which failed fast on the winit backend (Linux) instead of
+//! opening anything (winit cannot create a window outside a running loop).
+//! It now runs on every backend, including winit.
 //!
 //! # Example
 //!
@@ -70,9 +64,9 @@ use super::AppConfig;
 /// tree machinery (flui-view, flui-rendering) for direct engine access.
 ///
 /// **Experimental / direct-engine only.** This is not a supported
-/// cross-platform application entry point — see the module docs for the three
-/// standing limitations, including that it does not work on the winit backend.
-/// Use [`run_app`](crate::run_app) for applications.
+/// cross-platform application entry point — see the module docs for the two
+/// standing limitations (no input handling, no damage tracking). Use
+/// [`run_app`](crate::run_app) for applications.
 ///
 /// # Arguments
 ///
@@ -88,10 +82,13 @@ use super::AppConfig;
 ///
 /// # Platform Support
 ///
-/// Dead on arrival on the winit backend (Linux) — see the "Open window" note
-/// in the body for why, and the module docs for the tracked fix. Native
-/// (non-winit) Windows/macOS backends are unaffected. Uses
-/// `flui_platform::current_platform()` for platform selection.
+/// Runs on every backend, including winit (Linux) — bootstrap moved inside
+/// `on_ready` (ADR-0039 slice 2), so the winit backend's requirement of a
+/// running event loop before window creation is satisfied on every target.
+/// Uses `flui_platform::current_platform()` for platform selection.
+///
+/// **Experimental**: this is a direct-engine escape hatch, not a supported
+/// application entry point — see the module docs.
 pub fn run_direct(
     config: AppConfig,
     render_fn: impl FnMut(&mut SceneBuilder<'_>, f32, f32) + Send + 'static,
@@ -110,140 +107,165 @@ pub fn run_direct(
 
     let platform = flui_platform::current_platform()?;
 
-    // 1. Open window
-    //
-    // NOTE: like the pre-fix `run_desktop`, this opens the window before
-    // `run()` starts the event loop. On the winit backend (Linux) that no
-    // longer hangs — `WinitPlatform::open_window` now fails fast with a
-    // clear error when called before the event loop is running — but it
-    // still can't work: this `?` will bubble that error out of `run_direct`
-    // immediately, before any window ever opens. The fix is the on_ready-driven
-    // reorder `run_desktop` already received (see `runner.rs`'s
-    // `bootstrap_desktop`), which ADR-0039's slice 2 requires for exactly this
-    // function. Not attempted here — an event-loop architecture change is not
-    // part of a package-surface cleanup.
-    let options: WindowOptions = (&config).into();
-    let window = platform
-        .open_window(options)
-        .map_err(|e| anyhow::anyhow!("Failed to create window: {e}"))?;
-
-    // 2. Create GPU renderer
-    let phys_size = window.physical_size();
-    let renderer = pollster::block_on(Renderer::new(window.as_ref()));
-    let mut renderer = match renderer {
-        Ok(r) => r,
-        Err(e) => {
-            tracing::error!("GPU init failed: {:?}", e);
-            return Err(anyhow::anyhow!("GPU initialization failed: {e}"));
-        }
-    };
-    renderer.resize(phys_size.width.0 as u32, phys_size.height.0 as u32);
-
-    tracing::info!(
-        gpu = %renderer.capabilities().adapter_name,
-        backend = ?renderer.capabilities().backend,
-        "GPU renderer initialized"
-    );
-
-    // 3. Wrap renderer and render_fn for callback sharing
-    let renderer = Arc::new(Mutex::new(renderer));
-    let render_fn = Arc::new(Mutex::new(render_fn));
-    let frame_counter = Arc::new(std::sync::atomic::AtomicU64::new(0));
-
-    // 4. Register frame callback
-    let renderer_frame = Arc::clone(&renderer);
-    let render_fn_frame = Arc::clone(&render_fn);
-    let frame_counter_frame = Arc::clone(&frame_counter);
-    window.on_request_frame(Box::new(move || {
-        let mut r = renderer_frame.lock();
-        let (w, h) = r.size();
-
-        if w == 0 || h == 0 {
-            return;
+    /// The actual direct-mode bootstrap: window, GPU renderer, and callback
+    /// wiring. Runs once, synchronously, inside `on_ready` (ADR-0039 slice
+    /// 2) — the winit backend can only create a window from inside a
+    /// running event loop, so this can no longer run before `run()` starts
+    /// it (which is what made this function fail fast on that backend
+    /// before this migration).
+    ///
+    /// Returns `Err` on bootstrap failure — `on_ready` itself is fallible
+    /// now, so this propagates straight out of `Platform::run` instead of
+    /// threading the failure out through a
+    /// `Rc<RefCell<Option<anyhow::Error>>>` side channel (the old
+    /// `bootstrap_error_slot` pattern, now redundant and removed: this
+    /// function's own `Result` return is `run_direct`'s answer).
+    fn bootstrap_direct<F>(config: AppConfig, render_fn: F) -> anyhow::Result<()>
+    where
+        F: FnMut(&mut SceneBuilder<'_>, f32, f32) + Send + 'static,
+    {
+        fn owner_platform_installed<R>(f: impl FnOnce(&flui_platform::OwnerPlatform) -> R) -> R {
+            crate::app::runner::with_owner_platform(f)
+                .expect("BUG: bootstrap_direct runs only after install_owner_platform")
         }
 
-        // Mark full repaint every frame in direct mode (no damage tracking)
-        r.mark_full_repaint();
-
-        // Build scene via user closure
-        let mut tree = LayerTree::new();
+        // 1. Open window. `Ready` is guaranteed inside `on_ready`
+        // (ADR-0039 §1).
+        let options: WindowOptions = (&config).into();
+        let window = match owner_platform_installed(|owner| owner.open_window(options))
+            .and_then(flui_platform::WindowOpen::try_ready)
         {
-            let mut builder = SceneBuilder::new(&mut tree);
-            let mut rfn = render_fn_frame.lock();
-            rfn(&mut builder, w as f32, h as f32);
-            // builder dropped here, releasing borrow on tree
-        }
-
-        let root = tree.root();
-        let frame = frame_counter_frame.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let scene = Scene::new(Size::new(px(w as f32), px(h as f32)), tree, root, frame);
-
-        if let Err(e) = r.render_scene(&scene) {
-            if e.recoverability() == Recoverability::Recoverable {
-                tracing::warn!("Recoverable render error (will retry): {}", e);
-            } else {
-                // Covers both Fatal (renderer must be recreated) and
-                // Unrecoverable (surface misconfig / resource I/O / text error:
-                // drop this frame, no blind retry). Neither auto-retries.
-                tracing::error!(error = ?e, "Non-recoverable render error");
+            Ok(window) => window,
+            Err(error) => {
+                tracing::error!(%error, "Window creation failed");
+                return Err(anyhow::Error::from(error).context("Failed to create window"));
             }
-        }
+        };
 
-        // GPU device-loss recovery: same logic as runner.rs frame callbacks.
-        if r.is_device_lost() {
-            match pollster::block_on(r.recover()) {
-                Ok(()) => {
-                    tracing::warn!("GPU device lost — recovered successfully");
-                }
-                Err(e) => {
-                    tracing::error!(error = ?e, "GPU device recovery failed; will retry next frame");
+        // 2. Create GPU renderer
+        let phys_size = window.physical_size();
+        let renderer = pollster::block_on(Renderer::new(window.as_ref()));
+        let mut renderer = match renderer {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::error!("GPU init failed: {:?}", e);
+                return Err(anyhow::anyhow!(e).context("GPU initialization failed"));
+            }
+        };
+        renderer.resize(phys_size.width.0 as u32, phys_size.height.0 as u32);
+
+        tracing::info!(
+            gpu = %renderer.capabilities().adapter_name,
+            backend = ?renderer.capabilities().backend,
+            "GPU renderer initialized"
+        );
+
+        // 3. Wrap renderer and render_fn for callback sharing
+        let renderer = Arc::new(Mutex::new(renderer));
+        let render_fn = Arc::new(Mutex::new(render_fn));
+        let frame_counter = Arc::new(std::sync::atomic::AtomicU64::new(0));
+
+        // 4. Register frame callback
+        let renderer_frame = Arc::clone(&renderer);
+        let render_fn_frame = Arc::clone(&render_fn);
+        let frame_counter_frame = Arc::clone(&frame_counter);
+        window.on_request_frame(Box::new(move || {
+            let mut r = renderer_frame.lock();
+            let (w, h) = r.size();
+
+            if w == 0 || h == 0 {
+                return;
+            }
+
+            // Mark full repaint every frame in direct mode (no damage tracking)
+            r.mark_full_repaint();
+
+            // Build scene via user closure
+            let mut tree = LayerTree::new();
+            {
+                let mut builder = SceneBuilder::new(&mut tree);
+                let mut rfn = render_fn_frame.lock();
+                rfn(&mut builder, w as f32, h as f32);
+                // builder dropped here, releasing borrow on tree
+            }
+
+            let root = tree.root();
+            let frame = frame_counter_frame.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let scene = Scene::new(Size::new(px(w as f32), px(h as f32)), tree, root, frame);
+
+            if let Err(e) = r.render_scene(&scene) {
+                if e.recoverability() == Recoverability::Recoverable {
+                    tracing::warn!("Recoverable render error (will retry): {}", e);
+                } else {
+                    // Covers both Fatal (renderer must be recreated) and
+                    // Unrecoverable (surface misconfig / resource I/O / text error:
+                    // drop this frame, no blind retry). Neither auto-retries.
+                    tracing::error!(error = ?e, "Non-recoverable render error");
                 }
             }
-        }
-    }));
 
-    // 5. Register resize callback
-    let renderer_resize = Arc::clone(&renderer);
-    window.on_resize(Box::new(move |size, scale_factor| {
-        let w = (size.width.0 * scale_factor) as u32;
-        let h = (size.height.0 * scale_factor) as u32;
-        if w > 0 && h > 0 {
-            renderer_resize.lock().resize(w, h);
-            tracing::debug!("Window resized to {}x{} (scale: {})", w, h, scale_factor);
-        }
-    }));
+            // GPU device-loss recovery: same logic as runner.rs frame callbacks.
+            if r.is_device_lost() {
+                match pollster::block_on(r.recover()) {
+                    Ok(()) => {
+                        tracing::warn!("GPU device lost — recovered successfully");
+                    }
+                    Err(e) => {
+                        tracing::error!(error = ?e, "GPU device recovery failed; will retry next frame");
+                    }
+                }
+            }
+        }));
 
-    // 6. Register input callback. This is a no-op stub: it neither inspects
-    // the input nor requests a redraw (`resolved(false, false)`). Direct mode
-    // has no widget tree to dispatch input into; a caller who needs input
-    // handling drives it from inside `render_fn` via its own state.
-    window.on_input(Box::new(move |_input: PlatformInput| {
-        DispatchEventResult::resolved(false, false)
-    }));
+        // 5. Register resize callback
+        let renderer_resize = Arc::clone(&renderer);
+        window.on_resize(Box::new(move |size, scale_factor| {
+            let w = (size.width.0 * scale_factor) as u32;
+            let h = (size.height.0 * scale_factor) as u32;
+            if w > 0 && h > 0 {
+                renderer_resize.lock().resize(w, h);
+                tracing::debug!("Window resized to {}x{} (scale: {})", w, h, scale_factor);
+            }
+        }));
 
-    // 7. Lifecycle callbacks
-    window.on_close(Box::new(|| {
-        tracing::info!("Window closed");
-    }));
+        // 6. Register input callback. This is a no-op stub: it neither inspects
+        // the input nor requests a redraw (`resolved(false, false)`). Direct mode
+        // has no widget tree to dispatch input into; a caller who needs input
+        // handling drives it from inside `render_fn` via its own state.
+        window.on_input(Box::new(move |_input: PlatformInput| {
+            DispatchEventResult::resolved(false, false)
+        }));
 
-    window.on_should_close(Box::new(|| {
-        tracing::debug!("Window close requested, allowing");
-        true
-    }));
+        // 7. Lifecycle callbacks
+        window.on_close(Box::new(|| {
+            tracing::info!("Window closed");
+        }));
 
-    platform.on_quit(Box::new(|| {
-        tracing::info!("Platform quit");
-    }));
+        window.on_should_close(Box::new(|| {
+            tracing::debug!("Window close requested, allowing");
+            true
+        }));
 
-    // 8. Request initial redraw
-    window.request_redraw();
+        owner_platform_installed(|owner| {
+            owner.shared().on_quit(Box::new(|| {
+                tracing::info!("Platform quit");
+            }));
+        });
 
-    tracing::info!("Direct render mode initialized, entering event loop");
+        // 8. Request initial redraw
+        window.request_redraw();
 
-    // 9. Run event loop (takes ownership of platform)
-    platform.run(Box::new(|_platform| {
+        tracing::info!("Direct render mode initialized, entering event loop");
+        Ok(())
+    }
+
+    // Owner-host clear guard armed BEFORE `run(...)`, not inside `on_ready`
+    // (ADR-0039 §6/§7) — see `run_desktop`'s matching comment.
+    let _owner_host_clear_guard = crate::app::runner::OwnerHostClearGuard::arm();
+    platform.run(Box::new(move |owner| {
+        crate::app::runner::install_owner_platform(owner);
+        bootstrap_direct(config, render_fn)?;
         tracing::info!("FLUI direct render mode ready");
-    }));
-
-    Ok(())
+        Ok(())
+    }))
 }

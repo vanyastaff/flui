@@ -112,8 +112,11 @@ pub fn start() {
 
     web_sys::console::log_1(&"FLUI Web Demo ready! Try clicking and typing on the canvas.".into());
 
-    platform.run(Box::new(move |_platform| {
-        // Keep window alive via closure capture
-        let _window = window;
-    }));
+    platform
+        .run(Box::new(move |_owner| {
+            // Keep window alive via closure capture
+            let _window = window;
+            Ok(())
+        }))
+        .expect("platform event loop exited with an error");
 }

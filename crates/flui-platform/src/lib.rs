@@ -46,9 +46,10 @@
 //! use flui_platform::current_platform;
 //!
 //! let platform = current_platform()?;
-//! platform.run(Box::new(|platform| {
-//!     println!("Platform ready: {}", platform.name());
-//! }));
+//! platform.run(Box::new(|owner| {
+//!     println!("Platform ready: {}", owner.shared().name());
+//!     Ok(())
+//! }))?;
 //! ```
 //!
 //! ## Testing with Headless Mode
@@ -208,6 +209,12 @@ pub use traits::{
     PlatformWindow, WebCapabilities, WindowAppearance, WindowBackgroundAppearance, WindowBounds,
     WindowEvent, WindowId, WindowMode, WindowOptions,
 };
+// The owner-thread capability (ADR-0039 slice 2): minted only by a backend,
+// handed to `on_ready`, never re-exported with a public minting seam.
+pub use traits::{
+    OpenWindowError, OwnerPlatform, PendingWindow, PlatformProxy, ProxySendError, SharedPlatform,
+    WaitError, WindowOpen,
+};
 
 /// Get the current platform implementation
 ///
@@ -287,9 +294,10 @@ pub use traits::{
 /// let platform = current_platform()?;
 /// println!("Running on: {}", platform.name());
 ///
-/// platform.run(Box::new(|_platform| {
+/// platform.run(Box::new(|_owner| {
 ///     println!("Platform ready!");
-/// }));
+///     Ok(())
+/// }))?;
 /// ```
 ///
 /// ```rust,ignore

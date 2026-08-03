@@ -139,7 +139,7 @@ impl Platform for LinuxPlatform {
         unimplemented!("Linux Tokio executor integration not implemented")
     }
 
-    fn run(self: Box<Self>, _on_finish_launching: PlatformReadyCallback) {
+    fn run(self: Box<Self>, _on_finish_launching: PlatformReadyCallback) -> anyhow::Result<()> {
         unimplemented!("Linux event loop (Wayland/X11) not implemented")
     }
 

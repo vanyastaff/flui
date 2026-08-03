@@ -4,7 +4,7 @@
 # not be acquired from a build / layout / paint / composite body.
 #
 # A lifecycle-only capability lets code affect presentation state outside the
-# build/layout/paint transaction. Four are exposed through `BuildContext`:
+# build/layout/paint transaction. Five are guarded:
 #
 #   rebuild_handle()    ADR-0018 U1 — `RebuildHandle::schedule()` marks an element
 #                       dirty for the next frame.
@@ -17,9 +17,21 @@
 #   focus_manager()     ADR-0037 — returns the presentation's concrete focus
 #                       owner; imperative focus changes synchronously notify
 #                       listeners and may schedule rebuilds.
+#   owner_platform()    ADR-0039 §6 — `with_owner_platform` in flui-app's
+#                       runner reaches the loop-scoped `!Send` owner-thread
+#                       platform capability; acquiring it from `build`/
+#                       `layout`/`paint` would let presentation code enqueue
+#                       owner-lane platform work (e.g. `open_window`) mid-frame
+#                       transaction, ahead of trigger #22's other four via the
+#                       same ambient-authority hazard.
 #
-# All four must be acquired in `ViewState::init_state` / `did_change_dependencies`,
-# stored, and fired later from a callback.
+# The first four are exposed through `BuildContext`; `owner_platform` is a
+# free function in flui-app, not a `BuildContext` method — the scanner is a
+# textual token match, not a method-call parse, so it is caught the same way.
+# All five must be acquired in `ViewState::init_state` / `did_change_dependencies`
+# (the `BuildContext` four) or outside any guarded body entirely
+# (`owner_platform`, which is composition-root-only, `pub(crate)` to
+# `flui-app`'s app module), stored, and fired later from a callback.
 #
 # Acquiring one inside `build` and scheduling from it is an unbounded rebuild loop
 # (rebuild) or a callback that fires against the very frame that is still running
@@ -46,7 +58,7 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 guarded_fns='build|build_into_views|perform_layout|layout_node_with_children|paint|paint_raw|run_paint|run_layout|run_compositing|compose|composite'
 
 # The capabilities themselves. Adding one here is the whole cost of guarding it.
-capabilities='rebuild_handle|post_frame_handle|text_input_handle|focus_manager'
+capabilities='rebuild_handle|post_frame_handle|text_input_handle|focus_manager|owner_platform'
 
 scan() {
   awk -v guarded="${guarded_fns}" -v caps="${capabilities}" '
@@ -92,17 +104,17 @@ self_test() {
     scan "${fixtures}/rejected.rs.fixture" 2>/dev/null | sed 's/^/  /' || true
     local found
     found=$(scan "${fixtures}/rejected.rs.fixture" 2>/dev/null | wc -l || true)
-    if [[ "${found}" -ne 7 ]]; then
-      echo "  FAIL: expected 7 violations across all four lifecycle-only capability tokens, got ${found}"
+    if [[ "${found}" -ne 8 ]]; then
+      echo "  FAIL: expected 8 violations across all five lifecycle-only capability tokens, got ${found}"
       status=1
     else
-      echo "  ok: 7 violations reported"
+      echo "  ok: 8 violations reported"
     fi
     # Every capability token must actually be named — a scanner can otherwise
     # report the expected count while silently leaving a newer capability open.
     local reported
     reported=$(scan "${fixtures}/rejected.rs.fixture" 2>/dev/null || true)
-    for cap in rebuild_handle post_frame_handle text_input_handle focus_manager; do
+    for cap in rebuild_handle post_frame_handle text_input_handle focus_manager owner_platform; do
       if ! grep -q "${cap}()" <<<"${reported}"; then
         echo "  FAIL: scanner never reported a ${cap}() violation"
         status=1
