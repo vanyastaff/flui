@@ -203,9 +203,11 @@ pub trait Window {
 /// Unique identifier for a window.
 ///
 /// This ID is unique within the application and persists for the window's
-/// lifetime.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct WindowId(pub u64); // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
+/// lifetime. Consolidated onto the canonical definition
+/// (`traits::platform::WindowId`, the one `PlatformWindowEvent::Created`/
+/// `PlatformWindow::id()` use) rather than a second parallel newtype — this
+/// module used to define its own identical `(pub u64)` wrapper.
+pub use crate::traits::WindowId;
 
 impl WindowId {
     /// Create a new window ID.

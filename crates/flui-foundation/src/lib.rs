@@ -227,6 +227,8 @@ pub use id::{
     ListenerId,
     Marker,
     ObserverId,
+    // The full (RealmId, PresentationId) routable address of one presentation
+    PresentationAddress,
     // Presentation identity — one presentation-runtime incarnation
     PresentationId,
     RawId,
@@ -298,6 +300,7 @@ pub mod prelude {
         // Observer IDs
         ObserverId,
         Predicate,
+        PresentationAddress,
         PresentationId,
         RELEASE_MODE,
         RealmId,

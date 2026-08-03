@@ -64,6 +64,15 @@ impl AndroidWindow {
 }
 
 impl PlatformWindow for AndroidWindow {
+    // Android hosts exactly one `AndroidApp` surface for the process's
+    // lifetime (see the struct docs above) — there is no second native
+    // window this identity could ever collide with, so a fixed constant is
+    // this backend's honest identity, not a stand-in for missing
+    // information.
+    fn id(&self) -> WindowId {
+        WindowId(1)
+    }
+
     fn physical_size(&self) -> Size<DevicePixels> {
         let (w, h) = self.native_size();
         Size::new(device_px(w), device_px(h))

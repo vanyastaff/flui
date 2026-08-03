@@ -27,7 +27,9 @@ use super::view;
 use crate::{
     config::WindowConfiguration,
     shared::WindowCallbacks,
-    traits::{CursorError, DispatchEventResult, PlatformInput, PlatformWindow, WindowOptions},
+    traits::{
+        CursorError, DispatchEventResult, PlatformInput, PlatformWindow, WindowId, WindowOptions,
+    },
 };
 
 /// macOS window wrapper around NSWindow
@@ -215,6 +217,10 @@ impl MacOSWindow {
 }
 
 impl PlatformWindow for MacOSWindow {
+    fn id(&self) -> WindowId {
+        WindowId(self.ns_window as u64)
+    }
+
     fn physical_size(&self) -> Size<DevicePixels> {
         let state = self.state.lock();
         let logical = state.bounds.size;

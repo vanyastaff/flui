@@ -361,6 +361,10 @@ impl MockWindow {
 }
 
 impl crate::traits::PlatformWindow for MockWindow {
+    fn id(&self) -> WindowId {
+        self.id
+    }
+
     fn physical_size(&self) -> Size<DevicePixels> {
         use flui_types::geometry::device_px;
 

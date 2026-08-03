@@ -69,6 +69,11 @@ pub enum SemanticsActionError {
         /// Action absent from the node's effective action mask.
         action: SemanticsAction,
     },
+
+    /// The owning presentation has begun or completed teardown; actions are
+    /// refused regardless of whether the node itself still resolves.
+    #[error("presentation is closing or closed; accessibility action refused")]
+    PresentationClosed,
 }
 
 /// A resolved action whose handler has been cloned out of the semantics tree.

@@ -19,9 +19,6 @@ use super::display::WebDisplay;
 
 /// Web window wrapping a `<canvas>` element
 pub struct WebWindow {
-    // Retained for the multi-window path: the web backend creates a single
-    // canvas today, and `PlatformWindow` exposes no `id()` accessor.
-    #[allow(dead_code)]
     id: WindowId,
     canvas: web_sys::HtmlCanvasElement,
     state: Arc<Mutex<WebWindowState>>,
@@ -139,6 +136,10 @@ impl WebWindow {
 }
 
 impl PlatformWindow for WebWindow {
+    fn id(&self) -> WindowId {
+        self.id
+    }
+
     fn physical_size(&self) -> Size<DevicePixels> {
         let state = self.state.lock();
         Size::new(

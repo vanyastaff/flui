@@ -429,12 +429,14 @@ impl WinitPlatform {
 
         let raw_window = Arc::new(event_loop.create_window(attributes)?);
         let winit_id = raw_window.id();
-        let winit_window = Arc::new(WinitWindow::new(raw_window));
+        // Allocate the platform identity before constructing the wrapper so
+        // `WinitWindow` can carry its own `id()` from the start, rather than
+        // being registered under an identity it cannot itself report.
+        let platform_id = self.with_state(WinitPlatformState::allocate_window_id);
+        let winit_window = Arc::new(WinitWindow::new(platform_id, raw_window));
 
-        let platform_id = self.with_state(|state| {
-            let id = state.allocate_window_id();
-            state.register_window(winit_id, id, winit_window.clone());
-            id
+        self.with_state(|state| {
+            state.register_window(winit_id, platform_id, winit_window.clone());
         });
 
         tracing::info!(?platform_id, "Created window");

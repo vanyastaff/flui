@@ -41,6 +41,10 @@ impl TestPresentationWindow {
 
 #[cfg(test)]
 impl PlatformWindow for TestPresentationWindow {
+    fn id(&self) -> flui_platform::traits::WindowId {
+        flui_platform::traits::WindowId(1)
+    }
+
     fn physical_size(&self) -> flui_types::geometry::Size<flui_types::geometry::DevicePixels> {
         flui_types::geometry::Size::default()
     }
@@ -77,6 +81,11 @@ impl PlatformWindow for TestPresentationWindow {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PresentationLifecycle {
     /// Identity exists, but no render surface is attached yet.
+    ///
+    /// Constructor-internal and production-unreachable once construction
+    /// returns: `PresentationState::new` self-attaches its surface before
+    /// handing the value back to its caller, so no arm dispatching on this
+    /// state ever observes `Created` outside that constructor.
     Created,
     /// The presentation accepts input and produces frames.
     SurfaceAttached,
@@ -177,7 +186,6 @@ impl PresentationState {
     }
 
     #[must_use]
-    #[cfg(test)]
     pub(crate) fn lifecycle(&self) -> PresentationLifecycle {
         self.lifecycle.get()
     }
@@ -232,6 +240,12 @@ impl PresentationState {
         &self,
         request: SemanticsActionRequest,
     ) -> Result<(), SemanticsActionError> {
+        if matches!(
+            self.lifecycle.get(),
+            PresentationLifecycle::Closing | PresentationLifecycle::Closed
+        ) {
+            return Err(SemanticsActionError::PresentationClosed);
+        }
         let invocation = {
             let pipeline = self.pipeline.read();
             pipeline.resolve_semantics_action(request)?
@@ -357,6 +371,27 @@ mod tests {
         presentation.close();
         presentation.close();
         assert_eq!(presentation.lifecycle(), PresentationLifecycle::Closed);
+    }
+
+    /// If reverted: remove the lifecycle check from `dispatch_semantics_action`
+    /// and this fails with `Ok(())` instead (the request would resolve
+    /// against a node id that happens not to exist, which is a different,
+    /// pre-existing refusal path — `PresentationClosed` must fire first).
+    #[test]
+    fn semantics_action_after_close_is_refused() {
+        use flui_semantics::{AccessibilityNodeId, SemanticsAction};
+
+        let presentation = presentation();
+        presentation.close();
+
+        let request = SemanticsActionRequest::new(
+            AccessibilityNodeId::from(flui_foundation::RenderId::new(1)),
+            SemanticsAction::Tap,
+        );
+        assert_eq!(
+            presentation.dispatch_semantics_action(request),
+            Err(SemanticsActionError::PresentationClosed)
+        );
     }
 
     #[test]

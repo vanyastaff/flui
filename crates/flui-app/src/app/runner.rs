@@ -227,16 +227,73 @@ impl Drop for OwnerHostClearGuard {
     }
 }
 
+/// A registration-lifetime renderer-surface applier: `FnMut(size,
+/// scale_factor)`. Named so [`RealmHost::surface_applier`]'s field
+/// declaration reads plainly instead of spelling out the boxed closure type
+/// inline.
+#[cfg(not(target_os = "ios"))]
+type SurfaceApplier = Box<dyn FnMut(flui_types::Size<flui_types::geometry::Pixels>, f32)>;
+
+/// Restores a taken [`SurfaceApplier`] back into [`PLATFORM_REALM_HOST`]'s
+/// slot when dropped — including during an unwinding drop, so a panic
+/// inside the applier's own call (caught by `dispatch_platform_realm`'s
+/// outer `catch_unwind`) cannot permanently strand resizing. Without this,
+/// the applier taken out before the call is simply never restored once the
+/// call panics, and every later `Resized` event finds the slot empty
+/// forever, silently coalescing at the `None` arm's trace instead of ever
+/// applying again.
+#[cfg(not(target_os = "ios"))]
+#[must_use = "dropping this immediately restores the applier with no call in between"]
+struct SurfaceApplierRestoreGuard(Option<SurfaceApplier>);
+
+#[cfg(not(target_os = "ios"))]
+impl SurfaceApplierRestoreGuard {
+    fn call(&mut self, size: flui_types::Size<flui_types::geometry::Pixels>, scale_factor: f32) {
+        if let Some(applier) = self.0.as_mut() {
+            applier(size, scale_factor);
+        }
+    }
+}
+
+#[cfg(not(target_os = "ios"))]
+impl Drop for SurfaceApplierRestoreGuard {
+    fn drop(&mut self) {
+        if let Some(applier) = self.0.take() {
+            PLATFORM_REALM_HOST.with(|slot| {
+                slot.borrow_mut().surface_applier = Some(applier);
+            });
+        }
+    }
+}
+
 #[cfg(not(target_os = "ios"))]
 struct RealmHost {
     realm: Option<super::ui_realm::UiRealm>,
-    queue: std::collections::VecDeque<RealmEvent>,
+    queue: std::collections::VecDeque<RealmTask>,
     draining: bool,
     owner_thread: Option<std::thread::ThreadId>,
-    realm_id: Option<flui_foundation::RealmId>,
+    /// This realm incarnation's routable address. A **derived cache** of
+    /// [`super::window_registry::WindowRegistry`] below, not a second
+    /// source of truth — both are written only by
+    /// [`install_platform_realm`]/[`teardown_platform_realm`], inside this
+    /// same TLS borrow, in that order (see `window_registry`'s module doc
+    /// for the full invariant).
+    address: Option<flui_foundation::PresentationAddress>,
+    /// The sole native-window-to-presentation mapping authority (ADR-0037
+    /// §2). Lives here, inside the same thread-local as the realm it
+    /// addresses, rather than as a second free-standing static — a future
+    /// multi-window `AppRuntime` lifts it out unchanged (the type itself
+    /// has no TLS assumption baked in).
+    registry: super::window_registry::WindowRegistry,
+    /// The registration-lifetime renderer-surface applier for a
+    /// [`PlatformToUi::Resized`] event, installed once at realm install by
+    /// [`install_surface_applier`] and cleared at teardown. `take`n out of
+    /// this slot before it is called and restored after (never called
+    /// through a live borrow) — see [`PlatformToUi::run`]'s `Resized` arm.
+    surface_applier: Option<SurfaceApplier>,
 
     /// Single-window `(visible, focused)` tracking for the
-    /// `AppLifecycleState` derivation (see `ADR-0035`) — `RealmEvent::
+    /// `AppLifecycleState` derivation (see `ADR-0035`) — `PlatformToUi::
     /// WindowFocus`/`WindowVisibility` each update one half of this pair and
     /// re-derive. Both default `true`: a window is assumed visible and
     /// focused until a platform callback says otherwise (matches every
@@ -253,7 +310,9 @@ impl RealmHost {
             queue: std::collections::VecDeque::new(),
             draining: false,
             owner_thread: None,
-            realm_id: None,
+            address: None,
+            registry: super::window_registry::WindowRegistry::new(),
+            surface_applier: None,
             visible: true,
             focused: true,
         }
@@ -264,24 +323,41 @@ impl RealmHost {
 #[cfg(not(target_os = "ios"))]
 struct RealmDispatcher {
     owner_thread: std::thread::ThreadId,
-    realm_id: flui_foundation::RealmId,
+    address: flui_foundation::PresentationAddress,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg(not(target_os = "ios"))]
 enum RealmDispatchError {
     WrongThread,
+    /// The realm incarnation this dispatcher was minted for is gone — the
+    /// common path: `realm_id`/`presentation_id` mint from one shared
+    /// counter, so teardown+reinstall always changes both, and this check
+    /// (realm first) catches it before the presentation half is even
+    /// compared.
     StaleRealm,
+    /// The realm is live and matches, but the presentation incarnation does
+    /// not — reachable today only via a forged/mixed address (a dispatcher
+    /// whose presentation half was swapped for another incarnation's), and,
+    /// once one realm can host more than one presentation, via real
+    /// presentation replacement within a live realm. Kept as its own
+    /// variant now: the design-for-N contract, not dead code.
+    StalePresentation,
     RealmUnavailable,
 }
 
+/// Typed, closed cross-thread payload (ADR-0037 §3): every routable
+/// platform-to-UI event. Compile-time evidence that this is a real `Send`
+/// boundary: `static_assertions::assert_impl_all!` is checked in this
+/// module's own tests. If `PlatformInput` ever
+/// stopped being `Send`, that must be fixed in `flui-platform` itself,
+/// never worked around here.
 #[cfg(not(target_os = "ios"))]
-enum RealmEvent {
+enum PlatformToUi {
     Input(flui_platform::traits::PlatformInput),
-    Resize {
+    Resized {
         size: flui_types::Size<flui_types::geometry::Pixels>,
         scale_factor: f32,
-        apply_surface: Box<dyn FnOnce()>,
     },
     /// Window focus changed (winit's `WindowEvent::Focused`, or the
     /// equivalent per-backend signal; same source as the deleted `Active`
@@ -302,21 +378,68 @@ enum RealmEvent {
     WindowVisibility(bool),
     /// Drive a lifecycle target that requires owner-local realm cleanup (most
     /// notably Detached during platform shutdown).
-    LifecycleTarget(AppLifecycleState),
+    Lifecycle(AppLifecycleState),
+}
+
+/// One queued unit of owner-thread work: either a typed cross-thread
+/// [`PlatformToUi`] event, or the co-located frame pump. `Frame` is
+/// deliberately NOT part of the cross-thread vocabulary above — it is
+/// same-thread by construction (the `WrongThread` guard in
+/// [`dispatch_platform_realm`] rejects it from anywhere else) and carries an
+/// owner-local closure, which a cross-thread payload must never do
+/// (ADR-0037 §3 forbids `Box<dyn FnOnce()>` on that boundary). The `Send`
+/// assertion above applies to `PlatformToUi` only; splitting the two types
+/// is what makes that assertion non-vacuous.
+#[cfg(not(target_os = "ios"))]
+enum RealmTask {
+    Event(PlatformToUi),
     Frame(Box<dyn FnOnce(&super::ui_realm::UiRealm)>),
 }
 
 #[cfg(not(target_os = "ios"))]
-impl RealmEvent {
+impl RealmTask {
+    fn run(self, realm: &super::ui_realm::UiRealm) {
+        match self {
+            Self::Event(event) => event.run(realm),
+            Self::Frame(run) => run(realm),
+        }
+    }
+}
+
+#[cfg(not(target_os = "ios"))]
+impl PlatformToUi {
     fn run(self, realm: &super::ui_realm::UiRealm) {
         match self {
             Self::Input(input) => AppBinding::instance().handle_input_entered(realm, input),
-            Self::Resize {
-                size,
-                scale_factor,
-                apply_surface,
-            } => {
-                apply_surface();
+            Self::Resized { size, scale_factor } => {
+                // Take the applier out of the TLS slot, release the borrow,
+                // call it, then restore it — never call through a live
+                // borrow, so a reentrant TLS access from inside the applier
+                // (e.g. a nested dispatch enqueuing further work) cannot hit
+                // an already-mutably-borrowed `RefCell` panic. If the slot is
+                // ever found empty here (no applier installed yet, or
+                // already cleared by teardown) this skips with a trace
+                // instead of unwrapping/panicking; surface application then
+                // coalesces onto the next real applier install.
+                let applier =
+                    PLATFORM_REALM_HOST.with(|slot| slot.borrow_mut().surface_applier.take());
+                match applier {
+                    Some(applier) => {
+                        // The guard restores the applier on drop
+                        // unconditionally — including if `call` below
+                        // panics and the drop runs during unwind — so a
+                        // caught panic in the applier never permanently
+                        // strands resizing.
+                        let mut guard = SurfaceApplierRestoreGuard(Some(applier));
+                        guard.call(size, scale_factor);
+                    }
+                    None => {
+                        tracing::debug!(
+                            "realm resize: surface applier slot is empty; surface application \
+                             coalesces onto the next real applier install"
+                        );
+                    }
+                }
                 AppBinding::instance()
                     .render_pipeline_mut()
                     .set_device_pixel_ratio(scale_factor);
@@ -341,12 +464,25 @@ impl RealmEvent {
                 });
                 emit_lifecycle_transition(realm, old, new);
             }
-            Self::LifecycleTarget(new) => {
+            Self::Lifecycle(new) => {
                 emit_lifecycle_transition(realm, Scheduler::instance().lifecycle_state(), new);
             }
-            Self::Frame(run) => run(realm),
         }
     }
+}
+
+/// Installs `applier` as the registration-lifetime renderer-surface
+/// applier for the current realm host, replacing (never stacking) any
+/// previously-installed one. Call once per realm install, alongside
+/// [`install_platform_realm`], from each backend's bootstrap — never from
+/// inside a frame/event dispatch.
+#[cfg(not(target_os = "ios"))]
+fn install_surface_applier(
+    applier: impl FnMut(flui_types::Size<flui_types::geometry::Pixels>, f32) + 'static,
+) {
+    PLATFORM_REALM_HOST.with(|slot| {
+        slot.borrow_mut().surface_applier = Some(Box::new(applier));
+    });
 }
 
 // ============================================================================
@@ -442,12 +578,12 @@ fn lifecycle_ladder(old: AppLifecycleState, new: AppLifecycleState) -> Vec<AppLi
 /// stream driving both `SchedulerBinding` and `WidgetsBinding` from the same
 /// synthesized sequence of states.
 ///
-/// Installed as a direct call in the same `RealmEvent` handler (never a
+/// Installed as a direct call in the same `PlatformToUi` handler (never a
 /// `Scheduler`-listener closure): a listener captured at bootstrap time would
 /// have to resolve `realm`/`WidgetsBinding` lazily at fire time, which is
 /// exactly the thread-local-resolution/Send-capture trap
 /// `AppBinding::instance()`'s own installer avoids elsewhere in this crate.
-/// `realm` is already in scope here (`RealmEvent::run`'s parameter), so no
+/// `realm` is already in scope here (`PlatformToUi::run`'s parameter), so no
 /// such resolution is needed.
 #[cfg(not(target_os = "ios"))]
 fn emit_lifecycle_transition(
@@ -936,15 +1072,62 @@ mod lifecycle_derivation_tests {
     }
 }
 
+/// Installs `realm`, minting its dispatcher's address by registering
+/// `window` in the single [`super::window_registry::WindowRegistry`]
+/// authority — the registry is the sole mint path for a routable
+/// [`flui_foundation::PresentationAddress`]; no caller of this function ever
+/// names the platform-internal native-handle key type itself.
 #[cfg(not(target_os = "ios"))]
-fn install_platform_realm(realm: super::ui_realm::UiRealm) -> RealmDispatcher {
+fn install_platform_realm(
+    realm: super::ui_realm::UiRealm,
+    window: &std::sync::Arc<dyn flui_platform::traits::PlatformWindow>,
+) -> RealmDispatcher {
     let owner_thread = std::thread::current().id();
-    let realm_id = realm.realm_id();
-    PLATFORM_REALM_HOST.with(|slot| {
+    let address = flui_foundation::PresentationAddress {
+        realm_id: realm.realm_id(),
+        presentation_id: realm.presentation_id(),
+    };
+    let (displaced_realm, displaced_queue, displaced_applier) = PLATFORM_REALM_HOST.with(|slot| {
         let mut state = slot.borrow_mut();
+        // A realm may already be installed here — a reinstall without an
+        // intervening `teardown_platform_realm` (the panic-recovery path: a
+        // mid-`on_ready` failure leaves the old realm/queue/applier/registry
+        // mappings in place, and bootstrap tries again on the same thread).
+        // Remove every registry mapping addressed to the DISPLACED realm —
+        // not just the window being installed now — in this same borrow,
+        // before registering the new window: otherwise the displaced
+        // realm's own window(s) survive as dead entries no later teardown
+        // ever reaches (teardown only ever removes the realm that is
+        // *currently* installed).
+        let previous_address = state.address;
+        let mut removed_window_mappings = 0;
+        if let Some(previous_address) = previous_address {
+            removed_window_mappings = state.registry.remove_realm(previous_address.realm_id).len();
+        }
+        state.registry.register_window(window, address);
+
+        // Mirror `teardown_platform_realm`'s discipline exactly: `mem::take`
+        // the displaced realm, its queue, and its surface applier out from
+        // under this borrow — never let an assignment drop them while the
+        // borrow is still live, and never leave stale-incarnation events
+        // sitting in the queue to be delivered FIFO-first into the new
+        // realm on its first dispatch.
+        let displaced_realm = state.realm.take();
+        let displaced_queue = std::mem::take(&mut state.queue);
+        let displaced_applier = state.surface_applier.take();
+        if displaced_realm.is_some() {
+            tracing::warn!(
+                previous_address = ?previous_address,
+                new_address = ?address,
+                queued_events_discarded = displaced_queue.len(),
+                removed_window_mappings,
+                "install_platform_realm: replacing a realm that was never torn down"
+            );
+        }
         state.realm = Some(realm);
         state.owner_thread = Some(owner_thread);
-        state.realm_id = Some(realm_id);
+        state.address = Some(address);
+        state.draining = false;
         // A second realm installed on this thread (hot-restart, or a
         // sequential test realm) must not inherit whatever `(visible,
         // focused)` the PREVIOUS realm's window last reported — every
@@ -954,17 +1137,24 @@ fn install_platform_realm(realm: super::ui_realm::UiRealm) -> RealmDispatcher {
         // stale `Hidden`/`Inactive` left behind by the last one.
         state.visible = true;
         state.focused = true;
+        (displaced_realm, displaced_queue, displaced_applier)
     });
+    // Destructors may re-enter platform/framework code (the same invariant
+    // `teardown_platform_realm` honors) — drop only after the TLS borrow
+    // above has released.
+    drop(displaced_queue);
+    drop(displaced_realm);
+    drop(displaced_applier);
     RealmDispatcher {
         owner_thread,
-        realm_id,
+        address,
     }
 }
 
 #[cfg(not(target_os = "ios"))]
 fn dispatch_platform_realm(
     dispatcher: RealmDispatcher,
-    event: RealmEvent,
+    event: RealmTask,
 ) -> Result<(), RealmDispatchError> {
     if std::thread::current().id() != dispatcher.owner_thread {
         tracing::error!(?dispatcher, "rejecting realm callback on non-owner thread");
@@ -972,21 +1162,38 @@ fn dispatch_platform_realm(
     }
     let realm = PLATFORM_REALM_HOST.with(|slot| {
         let mut state = slot.borrow_mut();
-        if state.realm_id != Some(dispatcher.realm_id) {
-            return Err(if state.realm_id.is_some() {
-                tracing::debug!(
-                    ?dispatcher,
-                    current_realm_id = ?state.realm_id,
-                    "dropping realm callback: a newer realm replaced the one it was dispatched for"
-                );
-                RealmDispatchError::StaleRealm
-            } else {
+        // Normative compare order (ADR-0037): realm first, then
+        // presentation. `realm_id`/`presentation_id` mint from one shared
+        // counter, so teardown+reinstall always changes both and the realm
+        // check fires first on the common path; `StalePresentation` is
+        // reachable only when the realm half matches but the presentation
+        // half does not (a forged/mixed address today; real presentation
+        // replacement within a live realm once a forest exists).
+        match state.address {
+            None => {
                 tracing::debug!(
                     ?dispatcher,
                     "dropping realm callback: no realm installed (not yet ready, or already torn down)"
                 );
-                RealmDispatchError::RealmUnavailable
-            });
+                return Err(RealmDispatchError::RealmUnavailable);
+            }
+            Some(current) if current.realm_id != dispatcher.address.realm_id => {
+                tracing::debug!(
+                    ?dispatcher,
+                    current_realm_id = ?current.realm_id,
+                    "dropping realm callback: a newer realm replaced the one it was dispatched for"
+                );
+                return Err(RealmDispatchError::StaleRealm);
+            }
+            Some(current) if current.presentation_id != dispatcher.address.presentation_id => {
+                tracing::debug!(
+                    ?dispatcher,
+                    current_address = ?current,
+                    "dropping realm callback: presentation incarnation mismatch within the live realm"
+                );
+                return Err(RealmDispatchError::StalePresentation);
+            }
+            Some(_) => {}
         }
         state.queue.push_back(event);
         if state.draining || state.realm.is_none() {
@@ -1048,11 +1255,28 @@ fn drain_owner_inbox(realm: &super::ui_realm::UiRealm) -> bool {
 fn teardown_platform_realm() {
     let (realm, queued) = PLATFORM_REALM_HOST.with(|slot| {
         let mut state = slot.borrow_mut();
+        // Registry removal first (ADR-0037 §2): stop new routing before the
+        // queued old-generation events below are dropped, and before the
+        // realm/address cache is cleared. The teardown real read: assert
+        // the removed entries include the address this realm installed —
+        // `remove_realm` removes every window mapped to this realm, not
+        // just the first, so a future one-realm-many-windows install still
+        // leaves nothing behind.
+        if let Some(address) = state.address {
+            let removed = state.registry.remove_realm(address.realm_id);
+            debug_assert!(
+                removed
+                    .iter()
+                    .any(|(_, removed_address)| *removed_address == address),
+                "BUG: window_registry teardown read did not include the installed address"
+            );
+        }
         let realm = state.realm.take();
         let queued = std::mem::take(&mut state.queue);
         state.draining = false;
         state.owner_thread = None;
-        state.realm_id = None;
+        state.address = None;
+        state.surface_applier = None;
         (realm, queued)
     });
     // Destructors may re-enter platform/framework code. Drop only after the
@@ -1082,13 +1306,32 @@ mod realm_dispatch_tests {
         HitTestResult,
         events::{PointerType, make_down_event},
     };
+    use flui_platform::traits::PlatformInput;
     use flui_types::geometry::{Offset, Pixels};
 
     use super::*;
 
+    static_assertions::assert_impl_all!(PlatformToUi: Send);
+
+    fn down_input(offset: f32) -> PlatformInput {
+        PlatformInput::Pointer(make_down_event(
+            Offset::new(Pixels(offset), Pixels(offset)),
+            PointerType::Mouse,
+        ))
+    }
+
+    fn test_window() -> std::sync::Arc<dyn flui_platform::traits::PlatformWindow> {
+        flui_platform::headless_platform()
+            .open_window(flui_platform::WindowOptions::default())
+            .expect("headless platform should create a test window")
+    }
+
     fn install_test_realm() -> RealmDispatcher {
         let app = AppBinding::instance();
-        install_platform_realm(super::super::ui_realm::UiRealm::for_test(app))
+        install_platform_realm(
+            super::super::ui_realm::UiRealm::for_test(app),
+            &test_window(),
+        )
     }
 
     /// A second realm installed on the same thread (hot-restart; sequential
@@ -1097,7 +1340,7 @@ mod realm_dispatch_tests {
     /// focused, so a fresh realm's derivation must start from that same
     /// baseline.
     ///
-    /// Red-check: remove the `state.visible = true; state.focused = true;`
+    /// If reverted: remove the `state.visible = true; state.focused = true;`
     /// reset from `install_platform_realm` and this fails — the second
     /// realm reads `visible == false` left behind by the first.
     #[test]
@@ -1127,17 +1370,166 @@ mod realm_dispatch_tests {
         teardown_platform_realm();
     }
 
+    /// Panic-recovery reinstall: `install_platform_realm` called again while
+    /// a realm from a prior incarnation is still installed (a mid-`on_ready`
+    /// failure that never reached `teardown_platform_realm`). The displaced
+    /// realm's queue must never leak stale-incarnation events into the new
+    /// realm, the displaced realm/queue/applier must drop only after the TLS
+    /// borrow releases (a reentrant dispatch triggered by that drop must see
+    /// a clean, already-released borrow — never a double-borrow panic), and
+    /// `draining` must not be left stuck from whatever state the displaced
+    /// realm was in.
+    ///
+    /// If reverted: without `mem::take`-ing the queue before overwriting
+    /// `state.realm`, the pre-existing stale event is delivered to the NEW
+    /// realm FIFO-first and this fails on the `delivered` assertion.
+    #[test]
+    fn reinstall_without_teardown_drops_the_displaced_realm_and_queue_outside_the_borrow() {
+        struct ReenterOnDrop {
+            dispatcher: RealmDispatcher,
+            result: Rc<RefCell<Option<Result<(), RealmDispatchError>>>>,
+        }
+
+        impl Drop for ReenterOnDrop {
+            fn drop(&mut self) {
+                let result =
+                    dispatch_platform_realm(self.dispatcher, RealmTask::Frame(Box::new(|_| {})));
+                *self.result.borrow_mut() = Some(result);
+            }
+        }
+
+        let dispatcher_a = install_test_realm();
+        let reentry_result = Rc::new(RefCell::new(None));
+        let reentry_result_in_probe = Rc::clone(&reentry_result);
+        let probe = ReenterOnDrop {
+            dispatcher: dispatcher_a,
+            result: reentry_result_in_probe,
+        };
+
+        let delivered = Rc::new(RefCell::new(false));
+        let delivered_in_event = Rc::clone(&delivered);
+
+        // Enqueue directly (not through `dispatch_platform_realm`, which
+        // would drain immediately) — this is the stale-incarnation queue
+        // state a mid-`on_ready` panic can leave behind before bootstrap
+        // retries `install_platform_realm` without ever calling
+        // `teardown_platform_realm`. Also force `draining = true`, matching
+        // a realm that was mid-drain when the panic hit.
+        PLATFORM_REALM_HOST.with(|slot| {
+            let mut state = slot.borrow_mut();
+            state.queue.push_back(RealmTask::Frame(Box::new(move |_| {
+                *delivered_in_event.borrow_mut() = true;
+            })));
+            state
+                .queue
+                .push_back(RealmTask::Frame(Box::new(move |_| drop(probe))));
+            state.draining = true;
+        });
+
+        // The panic-recovery reinstall itself: no teardown in between.
+        let dispatcher_b = install_test_realm();
+
+        assert!(
+            !*delivered.borrow(),
+            "a queued event from the displaced incarnation must never reach the new realm"
+        );
+        assert_eq!(
+            *reentry_result.borrow(),
+            Some(Err(RealmDispatchError::StaleRealm)),
+            "the displaced realm/queue must drop only after install_platform_realm's TLS \
+             borrow releases — a drop still inside that borrow would panic this reentrant \
+             dispatch with a double-borrow instead of returning a clean Err"
+        );
+
+        let new_realm_ran = Rc::new(RefCell::new(false));
+        let new_realm_ran_in_event = Rc::clone(&new_realm_ran);
+        dispatch_platform_realm(
+            dispatcher_b,
+            RealmTask::Frame(Box::new(move |_| {
+                *new_realm_ran_in_event.borrow_mut() = true;
+            })),
+        )
+        .expect("the new realm dispatches normally");
+        assert!(
+            *new_realm_ran.borrow(),
+            "draining must not be left stuck from the displaced incarnation — the new \
+             realm must actually drain, not just enqueue forever"
+        );
+        teardown_platform_realm();
+    }
+
+    /// A panic-recovery reinstall under a DIFFERENT native window must
+    /// remove the displaced realm's own window mapping from the registry —
+    /// not just leave it behind alongside the new one.
+    ///
+    /// Both windows are opened from the *same* headless platform instance:
+    /// `HeadlessPlatform` mints window ids from its own instance-local
+    /// counter, so two windows from two separate `headless_platform()` calls
+    /// would alias the same id instead of differing — one instance, two
+    /// `open_window` calls, is what actually produces two distinct windows.
+    ///
+    /// If reverted: skip the registry cleanup for the displaced realm in
+    /// `install_platform_realm` and this fails — the first window still
+    /// resolves, and the registry holds two entries instead of one.
+    #[test]
+    fn reinstall_with_a_different_window_removes_the_old_windows_registry_mapping() {
+        let platform = flui_platform::headless_platform();
+        let first_window = platform
+            .open_window(flui_platform::WindowOptions::default())
+            .expect("headless platform should create the first test window");
+        let second_window = platform
+            .open_window(flui_platform::WindowOptions::default())
+            .expect("headless platform should create the second test window");
+        let first_window_id = first_window.id();
+        let second_window_id = second_window.id();
+        assert_ne!(
+            first_window_id, second_window_id,
+            "the two windows must have distinct ids for this test to mean anything"
+        );
+
+        let app = AppBinding::instance();
+        let _first_dispatcher = install_platform_realm(
+            super::super::ui_realm::UiRealm::for_test(app),
+            &first_window,
+        );
+        // The panic-recovery reinstall itself, under the second window: no
+        // teardown in between.
+        let _second_dispatcher = install_platform_realm(
+            super::super::ui_realm::UiRealm::for_test(app),
+            &second_window,
+        );
+
+        PLATFORM_REALM_HOST.with(|slot| {
+            let state = slot.borrow();
+            assert_eq!(
+                state.registry.resolve(first_window_id),
+                None,
+                "the displaced realm's old window mapping must be removed on reinstall"
+            );
+            assert!(
+                state.registry.resolve(second_window_id).is_some(),
+                "the new window must resolve to the new realm's address"
+            );
+            assert_eq!(
+                state.registry.len(),
+                1,
+                "only the new window's mapping may remain after the reinstall"
+            );
+        });
+        teardown_platform_realm();
+    }
+
     #[test]
     fn detached_realm_event_cancels_an_interrupted_pointer_sequence() {
         let dispatcher = install_test_realm();
         dispatch_platform_realm(
             dispatcher,
-            RealmEvent::LifecycleTarget(AppLifecycleState::Resumed),
+            RealmTask::Event(PlatformToUi::Lifecycle(AppLifecycleState::Resumed)),
         )
         .expect("test realm resumes");
         dispatch_platform_realm(
             dispatcher,
-            RealmEvent::Frame(Box::new(|realm| {
+            RealmTask::Frame(Box::new(|realm| {
                 let down =
                     make_down_event(Offset::new(Pixels(4.0), Pixels(6.0)), PointerType::Touch);
                 realm
@@ -1150,12 +1542,12 @@ mod realm_dispatch_tests {
 
         dispatch_platform_realm(
             dispatcher,
-            RealmEvent::LifecycleTarget(AppLifecycleState::Detached),
+            RealmTask::Event(PlatformToUi::Lifecycle(AppLifecycleState::Detached)),
         )
         .expect("Detached lifecycle dispatches through the realm");
         dispatch_platform_realm(
             dispatcher,
-            RealmEvent::Frame(Box::new(|realm| {
+            RealmTask::Frame(Box::new(|realm| {
                 assert_eq!(realm.gestures().active_pointer_count(), 0);
                 assert_eq!(realm.gestures().active_resampler_count(), 0);
                 assert_eq!(realm.gestures().pending_move_count(), 0);
@@ -1166,7 +1558,7 @@ mod realm_dispatch_tests {
 
         dispatch_platform_realm(
             dispatcher,
-            RealmEvent::LifecycleTarget(AppLifecycleState::Resumed),
+            RealmTask::Event(PlatformToUi::Lifecycle(AppLifecycleState::Resumed)),
         )
         .expect("test realm lifecycle restores");
         teardown_platform_realm();
@@ -1179,12 +1571,12 @@ mod realm_dispatch_tests {
         let outer = Rc::clone(&order);
         dispatch_platform_realm(
             dispatcher,
-            RealmEvent::Frame(Box::new(move |_| {
+            RealmTask::Frame(Box::new(move |_| {
                 outer.borrow_mut().push(1);
                 let nested = Rc::clone(&outer);
                 dispatch_platform_realm(
                     dispatcher,
-                    RealmEvent::Frame(Box::new(move |_| {
+                    RealmTask::Frame(Box::new(move |_| {
                         nested.borrow_mut().push(3);
                     })),
                 )
@@ -1203,22 +1595,182 @@ mod realm_dispatch_tests {
             let mut state = slot.borrow_mut();
             let realm = state.realm.take();
             state.queue.clear();
-            state.realm_id = None;
+            state.address = None;
             drop(state);
             drop(realm);
         });
         assert_eq!(
-            dispatch_platform_realm(stale, RealmEvent::Frame(Box::new(|_| {}))),
+            dispatch_platform_realm(stale, RealmTask::Frame(Box::new(|_| {}))),
             Err(RealmDispatchError::RealmUnavailable)
         );
 
         let current = install_test_realm();
         assert_eq!(
-            dispatch_platform_realm(stale, RealmEvent::Frame(Box::new(|_| {}))),
+            dispatch_platform_realm(stale, RealmTask::Frame(Box::new(|_| {}))),
             Err(RealmDispatchError::StaleRealm)
         );
-        dispatch_platform_realm(current, RealmEvent::Frame(Box::new(|_| {})))
+        dispatch_platform_realm(current, RealmTask::Frame(Box::new(|_| {})))
             .expect("current incarnation dispatches");
+    }
+
+    /// The common path (ADR-0037 compare order, realm first): teardown +
+    /// reinstall mints both a fresh `RealmId` and a fresh `PresentationId`
+    /// from the same shared counter, so a stale dispatcher's realm half
+    /// never matches — the presentation half is never even compared.
+    ///
+    /// If reverted: remove the realm-id compare from `dispatch_platform_realm`
+    /// and this fails — the stale dispatcher's input reaches the new realm.
+    #[test]
+    fn stale_realm_dispatch_is_dropped() {
+        let stale = install_test_realm();
+        teardown_platform_realm();
+        let _current = install_test_realm();
+
+        assert_eq!(
+            dispatch_platform_realm(
+                stale,
+                RealmTask::Event(PlatformToUi::Input(down_input(1.0))),
+            ),
+            Err(RealmDispatchError::StaleRealm)
+        );
+        teardown_platform_realm();
+    }
+
+    /// The design-for-N path (reachable today only via a forged/mixed
+    /// address, since realm/presentation generations always advance
+    /// together): a dispatcher whose realm half matches the live realm but
+    /// whose presentation half names a different incarnation must be
+    /// dropped as `StalePresentation`, and the live realm's own gesture
+    /// state must be completely untouched by the attempt.
+    ///
+    /// If reverted: remove the presentation-id compare from
+    /// `dispatch_platform_realm` and this fails — the forged dispatcher's
+    /// input reaches the live realm's arena.
+    #[test]
+    fn stale_presentation_with_live_realm_is_dropped() {
+        let live = install_test_realm();
+        let live_generation = live.address.presentation_id.generation();
+        let forged_generation = std::num::NonZeroU32::new(live_generation.get() + 1)
+            .expect("live_generation + 1 is nonzero");
+        let forged = RealmDispatcher {
+            owner_thread: live.owner_thread,
+            address: flui_foundation::PresentationAddress {
+                realm_id: live.address.realm_id,
+                presentation_id: flui_foundation::PresentationId::new_gen(0, forged_generation),
+            },
+        };
+
+        assert_eq!(
+            dispatch_platform_realm(
+                forged,
+                RealmTask::Event(PlatformToUi::Input(down_input(1.0))),
+            ),
+            Err(RealmDispatchError::StalePresentation)
+        );
+
+        dispatch_platform_realm(
+            live,
+            RealmTask::Frame(Box::new(|realm| {
+                assert_eq!(
+                    realm.gestures().active_pointer_count(),
+                    0,
+                    "the live realm's gesture state must be untouched by a dropped forged dispatch"
+                );
+            })),
+        )
+        .expect("the live dispatcher still dispatches");
+        teardown_platform_realm();
+    }
+
+    /// The AC-named teardown test: events queued before teardown for a
+    /// removed presentation must never deliver, and the surface applier
+    /// (cleared at the same teardown point) must not fire for a queued
+    /// resize either.
+    ///
+    /// If reverted: have `teardown_platform_realm` run the queue instead of
+    /// dropping it, and both assertions below fail.
+    #[test]
+    fn queued_events_for_a_removed_presentation_never_deliver() {
+        let _dispatcher = install_test_realm();
+        let delivered = Rc::new(RefCell::new(false));
+        let delivered_in_event = Rc::clone(&delivered);
+        let applier_invoked = Rc::new(RefCell::new(false));
+        let applier_invoked_in_closure = Rc::clone(&applier_invoked);
+        install_surface_applier(move |_size, _scale_factor| {
+            *applier_invoked_in_closure.borrow_mut() = true;
+        });
+
+        PLATFORM_REALM_HOST.with(|slot| {
+            let mut state = slot.borrow_mut();
+            state.queue.push_back(RealmTask::Frame(Box::new(move |_| {
+                *delivered_in_event.borrow_mut() = true;
+            })));
+            state
+                .queue
+                .push_back(RealmTask::Event(PlatformToUi::Resized {
+                    size: flui_types::Size::new(
+                        flui_types::geometry::px(100.0),
+                        flui_types::geometry::px(100.0),
+                    ),
+                    scale_factor: 1.0,
+                }));
+        });
+
+        teardown_platform_realm();
+        let _new_realm = install_test_realm();
+
+        assert!(
+            !*delivered.borrow(),
+            "a queued event for a removed presentation must never deliver"
+        );
+        assert!(
+            !*applier_invoked.borrow(),
+            "the surface applier must not fire for a queued resize after teardown"
+        );
+        teardown_platform_realm();
+    }
+
+    /// Borrow-discipline test: a `Resized` event dispatched while the
+    /// registration-lifetime applier slot is empty (no applier installed
+    /// yet, or already torn down) must skip with a trace rather than
+    /// unwrap/panic — the take/call/restore protocol's `None` arm.
+    ///
+    /// A genuinely *nested* re-entrant call (the applier's own call
+    /// triggering another `Resized` dispatch before it returns) cannot
+    /// observe an empty slot here: `dispatch_platform_realm` always defers a
+    /// call made while `draining` to the FIFO queue rather than running it
+    /// synchronously, and by the time that queued event is drained the
+    /// outer call has already restored the slot. The `None` arm exists for
+    /// the case this test exercises directly: a `Resized` event reaching
+    /// [`PlatformToUi::run`] before [`install_surface_applier`] has run (or
+    /// after it has been cleared), never for synchronous reentrancy.
+    ///
+    /// If reverted: replace the `None` arm's trace-and-skip with
+    /// `.expect("applier installed")` and this panics instead of returning
+    /// `Ok`.
+    #[test]
+    fn resized_with_no_applier_installed_skips_instead_of_panicking() {
+        let dispatcher = install_test_realm();
+        // Deliberately no `install_surface_applier` call: the slot starts
+        // (and stays) empty.
+
+        let result = dispatch_platform_realm(
+            dispatcher,
+            RealmTask::Event(PlatformToUi::Resized {
+                size: flui_types::Size::new(
+                    flui_types::geometry::px(20.0),
+                    flui_types::geometry::px(20.0),
+                ),
+                scale_factor: 1.0,
+            }),
+        );
+
+        assert!(
+            result.is_ok(),
+            "a Resized event with no applier installed must not panic; it \
+             coalesces onto the next real applier install instead"
+        );
+        teardown_platform_realm();
     }
 
     #[test]
@@ -1227,7 +1779,7 @@ mod realm_dispatch_tests {
         let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _ = dispatch_platform_realm(
                 dispatcher,
-                RealmEvent::Frame(Box::new(|_| panic!("test panic"))),
+                RealmTask::Frame(Box::new(|_| panic!("test panic"))),
             );
         }));
         assert!(panic.is_err());
@@ -1236,7 +1788,7 @@ mod realm_dispatch_tests {
         let ran_in_event = Rc::clone(&ran);
         dispatch_platform_realm(
             dispatcher,
-            RealmEvent::Frame(Box::new(move |_| {
+            RealmTask::Frame(Box::new(move |_| {
                 *ran_in_event.borrow_mut() = true;
             })),
         )
@@ -1244,11 +1796,64 @@ mod realm_dispatch_tests {
         assert!(*ran.borrow());
     }
 
+    /// A panic inside the surface applier's own call (caught by
+    /// `dispatch_platform_realm`'s outer `catch_unwind`, same as any other
+    /// panicking event) must not permanently strand resizing: the
+    /// `SurfaceApplierRestoreGuard` restores the applier into the TLS slot
+    /// during the unwinding drop, so the next `Resized` still reaches it.
+    ///
+    /// If reverted: revert to restoring the applier only after a successful
+    /// call (no drop guard) and this fails — the second `Resized` silently
+    /// coalesces at the `None` arm instead of calling the applier again.
+    #[test]
+    fn surface_applier_panic_is_caught_and_the_applier_still_applies_next_time() {
+        let dispatcher = install_test_realm();
+        let calls = Rc::new(RefCell::new(0));
+        let calls_in_closure = Rc::clone(&calls);
+        install_surface_applier(move |_size, _scale_factor| {
+            *calls_in_closure.borrow_mut() += 1;
+            assert_ne!(
+                *calls_in_closure.borrow(),
+                1,
+                "surface applier panics on its first call (simulated backend failure)"
+            );
+        });
+
+        let resize_event = |side: f32| {
+            RealmTask::Event(PlatformToUi::Resized {
+                size: flui_types::Size::new(
+                    flui_types::geometry::px(side),
+                    flui_types::geometry::px(side),
+                ),
+                scale_factor: 1.0,
+            })
+        };
+
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = dispatch_platform_realm(dispatcher, resize_event(20.0));
+        }));
+        assert!(
+            panic.is_err(),
+            "the first Resized's applier call must panic"
+        );
+
+        dispatch_platform_realm(dispatcher, resize_event(30.0))
+            .expect("dispatch after the caught panic still succeeds");
+
+        assert_eq!(
+            *calls.borrow(),
+            2,
+            "the second Resized must still reach the applier — a panic on the first call \
+             must not permanently strand resizing"
+        );
+        teardown_platform_realm();
+    }
+
     #[test]
     fn callback_on_wrong_thread_is_rejected() {
         let dispatcher = install_test_realm();
         let result = std::thread::spawn(move || {
-            dispatch_platform_realm(dispatcher, RealmEvent::Frame(Box::new(|_| {})))
+            dispatch_platform_realm(dispatcher, RealmTask::Frame(Box::new(|_| {})))
         })
         .join()
         .expect("worker test thread");
@@ -1260,30 +1865,35 @@ mod realm_dispatch_tests {
         let dispatcher = install_test_realm();
         let order = Rc::new(RefCell::new(Vec::new()));
         let outer = Rc::clone(&order);
+        let applier_calls = Rc::clone(&order);
+        install_surface_applier(move |_size, _scale_factor| {
+            applier_calls.borrow_mut().push(3);
+        });
         dispatch_platform_realm(
             dispatcher,
-            RealmEvent::Frame(Box::new(move |_| {
+            RealmTask::Frame(Box::new(move |_| {
                 outer.borrow_mut().push(1);
-                dispatch_platform_realm(dispatcher, RealmEvent::WindowFocus(true))
-                    .expect("window focus queues");
-                let resize = Rc::clone(&outer);
                 dispatch_platform_realm(
                     dispatcher,
-                    RealmEvent::Resize {
+                    RealmTask::Event(PlatformToUi::WindowFocus(true)),
+                )
+                .expect("window focus queues");
+                dispatch_platform_realm(
+                    dispatcher,
+                    RealmTask::Event(PlatformToUi::Resized {
                         size: flui_types::Size::new(
                             flui_types::geometry::px(640.0),
                             flui_types::geometry::px(480.0),
                         ),
                         scale_factor: 2.0,
-                        apply_surface: Box::new(move || resize.borrow_mut().push(3)),
-                    },
+                    }),
                 )
                 .expect("resize queues");
                 outer.borrow_mut().push(2);
             })),
         )
         .expect("frame dispatches");
-        // Two different `RealmEvent` variants nested inside a `Frame` still
+        // Two different `PlatformToUi` variants nested inside a `Frame` still
         // queue FIFO rather than running immediately — the property
         // `reentrant_frame_event_is_queued_fifo` proves for same-variant
         // nesting, this proves it holds across variant types too.
@@ -1300,7 +1910,7 @@ mod realm_dispatch_tests {
         impl Drop for ReenterOnDrop {
             fn drop(&mut self) {
                 let result =
-                    dispatch_platform_realm(self.dispatcher, RealmEvent::Frame(Box::new(|_| {})));
+                    dispatch_platform_realm(self.dispatcher, RealmTask::Frame(Box::new(|_| {})));
                 assert_eq!(result, Err(RealmDispatchError::RealmUnavailable));
                 *self.dropped.borrow_mut() = true;
             }
@@ -1315,7 +1925,7 @@ mod realm_dispatch_tests {
         PLATFORM_REALM_HOST.with(|slot| {
             slot.borrow_mut()
                 .queue
-                .push_back(RealmEvent::Frame(Box::new(move |_| drop(probe))));
+                .push_back(RealmTask::Frame(Box::new(move |_| drop(probe))));
         });
         teardown_platform_realm();
         assert!(*dropped.borrow());
@@ -1332,12 +1942,12 @@ mod realm_dispatch_tests {
         let sender_a = runtime_a.command_sender();
         let old_a_hook = queued_hot_reload_hook(sender_a.clone());
         let registration_a = register_request_rebuild(queued_hot_reload_hook(sender_a));
-        let _realm_a = install_platform_realm(runtime_a);
+        let _realm_a = install_platform_realm(runtime_a, &test_window());
         teardown_platform_realm();
 
         let runtime_b = super::super::ui_realm::UiRealm::for_test(AppBinding::instance());
         let sender_b = runtime_b.command_sender();
-        let realm_b = install_platform_realm(runtime_b);
+        let realm_b = install_platform_realm(runtime_b, &test_window());
         let registration_b = register_request_rebuild(queued_hot_reload_hook(sender_b));
         drop(registration_a);
 
@@ -1346,7 +1956,7 @@ mod realm_dispatch_tests {
         let after_old_in_frame = Rc::clone(&after_old);
         dispatch_platform_realm(
             realm_b,
-            RealmEvent::Frame(Box::new(move |realm| {
+            RealmTask::Frame(Box::new(move |realm| {
                 *after_old_in_frame.borrow_mut() = Some(realm.drain_commands());
             })),
         )
@@ -1364,7 +1974,7 @@ mod realm_dispatch_tests {
         let after_current_in_frame = Rc::clone(&after_current);
         dispatch_platform_realm(
             realm_b,
-            RealmEvent::Frame(Box::new(move |realm| {
+            RealmTask::Frame(Box::new(move |realm| {
                 *after_current_in_frame.borrow_mut() = Some(realm.drain_commands());
             })),
         )
@@ -1388,13 +1998,13 @@ mod realm_dispatch_tests {
         realm
             .widgets()
             .with_build_owner_mut(|owner| owner.register_global_key(key.id(), element));
-        let dispatcher = install_platform_realm(realm);
+        let dispatcher = install_platform_realm(realm, &test_window());
         let key_after_frame = key.clone();
 
         assert_eq!(key.current_element(), None, "scope starts inactive");
         dispatch_platform_realm(
             dispatcher,
-            RealmEvent::Frame(Box::new(move |_| {
+            RealmTask::Frame(Box::new(move |_| {
                 assert_eq!(key.current_element(), Some(element));
             })),
         )
@@ -1628,7 +2238,7 @@ mod desktop_pacing_tests {
     /// mirrors what `run_desktop`'s frame callback does on a `PumpAsync`
     /// wake, without needing a live window/event loop.
     ///
-    /// Red-check: gate the pump too (only call `drive_async_tasks` when
+    /// If reverted: gate the pump too (only call `drive_async_tasks` when
     /// `wake_action` returns `Render` — a mistaken "no work while
     /// backgrounded" fix) and this fails: the future never completes (RUN
     /// IT — see the test module doc for how this is verified).
@@ -2021,16 +2631,33 @@ where
             "UiRealm constructed"
         );
         let hot_reload_sender = ui_realm.command_sender();
-        let realm_dispatch = install_platform_realm(ui_realm);
+        let realm_dispatch = install_platform_realm(ui_realm, &window);
         *rebuild_registration_slot.borrow_mut() =
             Some(worker_reload.register_rebuild_hook(hot_reload_sender));
 
         // 4. Wrap renderer for callback sharing
         let renderer = Arc::new(Mutex::new(renderer));
 
+        // Install the registration-lifetime surface applier alongside the
+        // realm (cleared together at teardown): a `Resized` event takes it
+        // out of the TLS slot, calls it, and restores it (see
+        // `PlatformToUi::run`'s `Resized` arm) rather than capturing the
+        // renderer inside the event payload itself.
+        {
+            let renderer_resize = Arc::clone(&renderer);
+            install_surface_applier(move |size, scale_factor| {
+                let w = (size.width.0 * scale_factor) as u32;
+                let h = (size.height.0 * scale_factor) as u32;
+                renderer_resize.lock().resize(w, h);
+            });
+        }
+
         // 5. Register input callback -> entered realm input dispatch
         window.on_input(Box::new(move |input: PlatformInput| {
-            let _ = dispatch_platform_realm(realm_dispatch, RealmEvent::Input(input));
+            let _ = dispatch_platform_realm(
+                realm_dispatch,
+                RealmTask::Event(PlatformToUi::Input(input)),
+            );
             DispatchEventResult::resolved(false, true)
         }));
 
@@ -2040,7 +2667,7 @@ where
         window.on_request_frame(Box::new(move || {
         let renderer_frame = Arc::clone(&renderer_frame);
         let worker_reload_frame = worker_reload_frame.clone();
-        let _ = dispatch_platform_realm(realm_dispatch, RealmEvent::Frame(Box::new(move |realm| {
+        let _ = dispatch_platform_realm(realm_dispatch, RealmTask::Frame(Box::new(move |realm| {
             worker_reload_frame.poll_and_apply(realm);
 
             let binding = AppBinding::instance();
@@ -2173,22 +2800,12 @@ where
         })));
     }));
 
-        // 7. Register resize callback -> renderer.resize()
-        let renderer_resize = Arc::clone(&renderer);
+        // 7. Register resize callback -> typed Resized event; the applier
+        // installed above (not this closure) actually touches the renderer.
         window.on_resize(Box::new(move |size, scale_factor| {
-            let apply_size = size;
-            let renderer_resize = Arc::clone(&renderer_resize);
             let _ = dispatch_platform_realm(
                 realm_dispatch,
-                RealmEvent::Resize {
-                    size,
-                    scale_factor,
-                    apply_surface: Box::new(move || {
-                        let w = (apply_size.width.0 * scale_factor) as u32;
-                        let h = (apply_size.height.0 * scale_factor) as u32;
-                        renderer_resize.lock().resize(w, h);
-                    }),
-                },
+                RealmTask::Event(PlatformToUi::Resized { size, scale_factor }),
             );
         }));
 
@@ -2209,7 +2826,7 @@ where
                 );
                 if let Err(error) = dispatch_platform_realm(
                     realm_dispatch,
-                    RealmEvent::LifecycleTarget(AppLifecycleState::Detached),
+                    RealmTask::Event(PlatformToUi::Lifecycle(AppLifecycleState::Detached)),
                 ) {
                     tracing::warn!(
                         ?error,
@@ -2240,10 +2857,16 @@ where
         // compositor never sends it, the window is treated as always
         // visible (the same as before this callback existed).
         window.on_active_status_change(Box::new(move |focused| {
-            let _ = dispatch_platform_realm(realm_dispatch, RealmEvent::WindowFocus(focused));
+            let _ = dispatch_platform_realm(
+                realm_dispatch,
+                RealmTask::Event(PlatformToUi::WindowFocus(focused)),
+            );
         }));
         window.on_visibility_status_change(Box::new(move |visible| {
-            let _ = dispatch_platform_realm(realm_dispatch, RealmEvent::WindowVisibility(visible));
+            let _ = dispatch_platform_realm(
+                realm_dispatch,
+                RealmTask::Event(PlatformToUi::WindowVisibility(visible)),
+            );
         }));
 
         // 9. Store window in AppBinding for runtime access — BEFORE
@@ -2482,14 +3105,29 @@ where
             tracing::error!("Root widget attach failed: {:?}", e);
             return Err(anyhow::anyhow!(e).context("Root widget attach failed"));
         }
-        let realm_dispatch = install_platform_realm(ui_realm);
+        let realm_dispatch = install_platform_realm(ui_realm, &window);
 
         // 4. Wrap renderer for callback sharing
         let renderer = Arc::new(Mutex::new(renderer));
 
+        // Install the registration-lifetime surface applier alongside the
+        // realm (cleared together at teardown) — see the desktop bootstrap's
+        // matching comment for the take/call/restore protocol this feeds.
+        {
+            let renderer_resize = Arc::clone(&renderer);
+            install_surface_applier(move |size, scale_factor| {
+                let w = (size.width.0 * scale_factor) as u32;
+                let h = (size.height.0 * scale_factor) as u32;
+                renderer_resize.lock().resize(w, h);
+            });
+        }
+
         // 5. Register input callback -> entered realm input dispatch
         window.on_input(Box::new(move |input: PlatformInput| {
-            let _ = dispatch_platform_realm(realm_dispatch, RealmEvent::Input(input));
+            let _ = dispatch_platform_realm(
+                realm_dispatch,
+                RealmTask::Event(PlatformToUi::Input(input)),
+            );
             DispatchEventResult::resolved(false, true)
         }));
 
@@ -2501,7 +3139,7 @@ where
             let hot_reload_frame = hot_reload_frame.clone();
             let _ = dispatch_platform_realm(
                 realm_dispatch,
-                RealmEvent::Frame(Box::new(move |realm| {
+                RealmTask::Frame(Box::new(move |realm| {
                     // Owner-inbox drain: commands and worker results commit HERE,
                     // at the frame boundary while the scheduler phase is Idle —
                     // never inside the frame transaction below. Runs before
@@ -2577,22 +3215,12 @@ where
             );
         }));
 
-        // 7. Register resize callback -> renderer.resize()
-        let renderer_resize = Arc::clone(&renderer);
+        // 7. Register resize callback -> typed Resized event; the applier
+        // installed above (not this closure) actually touches the renderer.
         window.on_resize(Box::new(move |size, scale_factor| {
-            let apply_size = size;
-            let renderer_resize = Arc::clone(&renderer_resize);
             let _ = dispatch_platform_realm(
                 realm_dispatch,
-                RealmEvent::Resize {
-                    size,
-                    scale_factor,
-                    apply_surface: Box::new(move || {
-                        let w = (apply_size.width.0 * scale_factor) as u32;
-                        let h = (apply_size.height.0 * scale_factor) as u32;
-                        renderer_resize.lock().resize(w, h);
-                    }),
-                },
+                RealmTask::Event(PlatformToUi::Resized { size, scale_factor }),
             );
         }));
 
@@ -2612,7 +3240,7 @@ where
                 );
                 if let Err(error) = dispatch_platform_realm(
                     realm_dispatch,
-                    RealmEvent::LifecycleTarget(AppLifecycleState::Detached),
+                    RealmTask::Event(PlatformToUi::Lifecycle(AppLifecycleState::Detached)),
                 ) {
                     tracing::warn!(
                         ?error,
@@ -2649,7 +3277,7 @@ where
             };
             let _ = dispatch_platform_realm(
                 realm_dispatch,
-                RealmEvent::Frame(Box::new(move |realm| {
+                RealmTask::Frame(Box::new(move |realm| {
                     let old = Scheduler::instance().lifecycle_state();
                     emit_lifecycle_transition(realm, old, target);
                 })),
@@ -2832,11 +3460,28 @@ where
             tracing::error!("Root widget attach failed: {:?}", e);
             return Err(anyhow::anyhow!(e).context("Root widget attach failed"));
         }
-        let realm_dispatch = install_platform_realm(ui_realm);
+        let realm_dispatch = install_platform_realm(ui_realm, &window);
+
+        // Install the registration-lifetime surface applier alongside the
+        // realm (cleared together at teardown) — see the desktop bootstrap's
+        // matching comment for the take/call/restore protocol this feeds.
+        {
+            let renderer_resize = Arc::clone(&renderer);
+            install_surface_applier(move |size, scale_factor| {
+                if let Some(renderer) = renderer_resize.lock().as_mut() {
+                    let width = (size.width.0 * scale_factor) as u32;
+                    let height = (size.height.0 * scale_factor) as u32;
+                    renderer.resize(width, height);
+                }
+            });
+        }
 
         // 4. Register input callback
         window.on_input(Box::new(move |input: PlatformInput| {
-            let _ = dispatch_platform_realm(realm_dispatch, RealmEvent::Input(input));
+            let _ = dispatch_platform_realm(
+                realm_dispatch,
+                RealmTask::Event(PlatformToUi::Input(input)),
+            );
             DispatchEventResult::resolved(false, true)
         }));
 
@@ -2846,7 +3491,7 @@ where
             let renderer_frame = Arc::clone(&renderer_frame);
             let _ = dispatch_platform_realm(
                 realm_dispatch,
-                RealmEvent::Frame(Box::new(move |realm| {
+                RealmTask::Frame(Box::new(move |realm| {
                     // Owner-inbox drain: commands and worker results commit HERE,
                     // at the frame boundary while the scheduler phase is Idle —
                     // never inside the frame transaction below. Runs before the
@@ -2927,23 +3572,10 @@ where
             );
         }));
 
-        let renderer_resize = Arc::clone(&renderer);
         window.on_resize(Box::new(move |size, scale_factor| {
-            let apply_size = size;
-            let renderer_resize = Arc::clone(&renderer_resize);
             let _ = dispatch_platform_realm(
                 realm_dispatch,
-                RealmEvent::Resize {
-                    size,
-                    scale_factor,
-                    apply_surface: Box::new(move || {
-                        if let Some(renderer) = renderer_resize.lock().as_mut() {
-                            let width = (apply_size.width.0 * scale_factor) as u32;
-                            let height = (apply_size.height.0 * scale_factor) as u32;
-                            renderer.resize(width, height);
-                        }
-                    }),
-                },
+                RealmTask::Event(PlatformToUi::Resized { size, scale_factor }),
             );
         }));
 
@@ -2961,7 +3593,7 @@ where
                 );
                 if let Err(error) = dispatch_platform_realm(
                     realm_dispatch,
-                    RealmEvent::LifecycleTarget(AppLifecycleState::Detached),
+                    RealmTask::Event(PlatformToUi::Lifecycle(AppLifecycleState::Detached)),
                 ) {
                     tracing::warn!(
                         ?error,
@@ -2983,7 +3615,10 @@ where
         // `Occluded` is desktop-only) — a DOM `visibilitychange` listener is a
         // future follow-up, not this PR's scope.
         window.on_active_status_change(Box::new(move |focused| {
-            let _ = dispatch_platform_realm(realm_dispatch, RealmEvent::WindowFocus(focused));
+            let _ = dispatch_platform_realm(
+                realm_dispatch,
+                RealmTask::Event(PlatformToUi::WindowFocus(focused)),
+            );
         }));
 
         // 7. Store window — BEFORE marking the lifecycle Resumed, which can
@@ -3124,7 +3759,7 @@ mod tests {
     /// on the singleton — only THIS test's window, with THIS test's
     /// unmistakable marker size, proves `set_window` ran before the callback.
     ///
-    /// Red-check: swap the order of the two `AppBinding::instance()` calls
+    /// If reverted: swap the order of the two `AppBinding::instance()` calls
     /// below (request the redraw, then store the window — the pre-fix shape)
     /// and this fails: `wake_frame` finds no active window yet, never calls
     /// `request_redraw` on it, and the callback never fires at all.
