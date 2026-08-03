@@ -133,8 +133,20 @@ pub fn alloc_page_aligned(size: usize) -> Result<NonNull<u8>, PageAllocError> {
 pub unsafe fn dealloc_page_aligned(ptr: NonNull<u8>, size: usize) {
     let page_size = get_page_size();
     let aligned_size = (size + page_size - 1) & !(page_size - 1);
-    let layout = Layout::from_size_align_unchecked(aligned_size, page_size);
-    dealloc(ptr.as_ptr(), layout);
+    // SAFETY: `page_size` is stable for the process lifetime (the kernel's page
+    // size cannot change at runtime), and `aligned_size` here is computed with the
+    // exact rounding formula `alloc_page_aligned` used. The caller contract above
+    // requires `size` to match the value originally passed to `alloc_page_aligned`,
+    // whose checked `Layout::from_size_align(aligned_size, page_size)` already
+    // succeeded for this same pair — so `page_size` is confirmed a nonzero power of
+    // two and `aligned_size` does not overflow `isize::MAX` when rounded to that
+    // alignment, making the unchecked reconstruction valid.
+    let layout = unsafe { Layout::from_size_align_unchecked(aligned_size, page_size) };
+    // SAFETY: the caller contract above requires `ptr` to have been allocated by
+    // `alloc_page_aligned` with this same `size` and not used after this call.
+    // `layout` (reconstructed above) is therefore identical to the layout that
+    // allocation used, satisfying `dealloc`'s "same allocator, same layout" contract.
+    unsafe { dealloc(ptr.as_ptr(), layout) };
 }
 
 // ============================================================================
@@ -227,7 +239,14 @@ impl<T> PageAlignedVec<T> {
     /// Only the first `len` elements are guaranteed to be initialized.
     #[inline]
     pub unsafe fn as_slice(&self) -> &[T] {
-        std::slice::from_raw_parts(self.ptr.as_ptr(), self.len)
+        // SAFETY: `self.ptr` was allocated in `with_capacity` for `self.capacity`
+        // elements of `T` and is non-null and suitably aligned for `T`. The type
+        // invariant maintained by `push`/`set_len` is `self.len <= self.capacity`
+        // with elements `0..self.len` initialized, so the first `self.len`
+        // elements starting at `self.ptr` are live, initialized `T` values. The
+        // returned reference borrows `self` immutably, so it cannot alias a
+        // concurrent `&mut` access to the same elements for its lifetime.
+        unsafe { std::slice::from_raw_parts(self.ptr.as_ptr(), self.len) }
     }
 
     /// Get a mutable slice view of the initialized elements.
@@ -237,7 +256,13 @@ impl<T> PageAlignedVec<T> {
     /// Only the first `len` elements are guaranteed to be initialized.
     #[inline]
     pub unsafe fn as_mut_slice(&mut self) -> &mut [T] {
-        std::slice::from_raw_parts_mut(self.ptr.as_ptr(), self.len)
+        // SAFETY: as with `as_slice`, `self.ptr` is a valid, non-null, aligned
+        // allocation for `self.capacity` elements of `T` with the first
+        // `self.len` initialized. The `&mut self` borrow gives this call
+        // exclusive access to the vector for the returned slice's lifetime, so
+        // no other reference to these elements can be alive concurrently,
+        // satisfying `from_raw_parts_mut`'s aliasing requirement.
+        unsafe { std::slice::from_raw_parts_mut(self.ptr.as_ptr(), self.len) }
     }
 
     /// Get the number of initialized elements.
