@@ -1783,6 +1783,31 @@ scope = "crates/flui-platform/src/platforms/macos/clipboard.rs"
 why = "the clipboard ownership contract: clipboard operations are documented off-main-safe; an affinity assert would panic legitimate existing cross-thread callers"
 allow_files = []
 
+[[forbidden_pattern]]
+pattern = "WindowId"
+scope = "crates/flui-app/src"
+why = """
+the single-authority window map contract: WindowId is the platform-internal \
+native-handle key; every routing/business-logic path in flui-app addresses \
+a presentation through UiAddress only, minted by window_registry.rs's \
+register_window/remove_realm (which take a window or a realm id, never a \
+bare WindowId, so runner.rs and friends never name the type). Proxy-gate \
+disclaimer: `let id = window.id();` with an inferred local type defeats a \
+substring scan on its own -- the manual backstop is that no flui-app \
+routing API outside window_registry.rs accepts or returns WindowId. \
+binding.rs and presentation.rs are allow-listed only for their test-only \
+PlatformWindow mock implementations, which must restate the trait's \
+required `fn id(&self) -> WindowId` signature to implement it at all; \
+that is a structural trait-conformance fact, not a routing-logic \
+exception, and neither file's production code may accept or return the \
+type.\
+"""
+allow_files = [
+    "crates/flui-app/src/app/window_registry.rs",
+    "crates/flui-app/src/app/binding.rs",
+    "crates/flui-app/src/app/presentation.rs",
+]
+
 [[forbidden_path]]
 path = "crates/flui-presentation"
 why = "the presentation composition contract: no flui-presentation crate; flui-app privately composes the three owners"
