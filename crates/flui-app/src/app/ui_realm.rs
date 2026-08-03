@@ -121,6 +121,20 @@ impl CommandSendError {
 // ---------------------------------------------------------------------------
 
 /// A command enqueued for the owner thread.
+///
+/// Two addressing classes, by design, not oversight:
+///
+/// - **Presentation-scoped** commands ([`Self::SemanticsAction`]) carry an
+///   explicit `presentation_id` stamp and are validated against the live
+///   presentation at drain time, because the realm's inbox outlives any one
+///   presentation incarnation within it (the eventual element-forest case)
+///   and a sender may have been vended for a presentation that no longer
+///   owns this realm's inbox.
+/// - **Realm-scoped** commands ([`Self::HotReload`], [`Self::Navigation`])
+///   carry no stamp of their own and stay bound by channel identity alone:
+///   a recreated realm mints new channels, and a sender into the dead realm
+///   already gets `OwnerGone` at send — re-stamping realm identity on top of
+///   that would duplicate a structural fact the channel already enforces.
 pub(crate) enum UiCommand {
     /// Apply a hot-reload reassemble on the owner at the next Idle drain.
     // Only constructed by `request_hot_reload`, whose consumer is the
@@ -134,8 +148,15 @@ pub(crate) enum UiCommand {
         )
     )]
     HotReload(flui_hot_reload::HotReloadTier),
-    /// Resolve and invoke an accessibility action on the owner thread.
-    SemanticsAction(SemanticsActionRequest),
+    /// Resolve and invoke an accessibility action on the owner thread,
+    /// addressed to the exact presentation that was live when the sender
+    /// stamped it.
+    SemanticsAction {
+        /// The presentation this action was stamped for.
+        presentation_id: PresentationId,
+        /// The stable node identity and action to resolve.
+        request: SemanticsActionRequest,
+    },
     /// Apply a typed navigator mutation on the owner thread.
     Navigation(NavigatorCommand),
 }
@@ -147,9 +168,13 @@ impl std::fmt::Debug for UiCommand {
             UiCommand::HotReload(tier) => {
                 f.debug_tuple("UiCommand::HotReload").field(tier).finish()
             }
-            UiCommand::SemanticsAction(request) => f
-                .debug_tuple("UiCommand::SemanticsAction")
-                .field(request)
+            UiCommand::SemanticsAction {
+                presentation_id,
+                request,
+            } => f
+                .debug_struct("UiCommand::SemanticsAction")
+                .field("presentation_id", presentation_id)
+                .field("request", request)
                 .finish(),
             UiCommand::Navigation(command) => f
                 .debug_tuple("UiCommand::Navigation")
@@ -185,6 +210,12 @@ pub(crate) struct UiCommandSender {
     tx: Sender<UiCommand>,
     capacity: usize,
     redraw_pending: Arc<AtomicBool>,
+    /// The presentation this sender stamps onto every presentation-scoped
+    /// command it sends (set once, at [`UiRealm::construct`]). For the
+    /// eventual element forest, senders become vended per-presentation with
+    /// different stamps into the same realm inbox — this field is already
+    /// the right shape; only the vending point changes.
+    presentation_id: PresentationId,
     /// Fired after every successful state change so an idle event loop
     /// produces the drain that observes it — the enqueue-then-wake contract,
     /// same as `PipelineOwnerHandle`'s notifier.
@@ -195,6 +226,7 @@ impl std::fmt::Debug for UiCommandSender {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("UiCommandSender")
             .field("capacity", &self.capacity)
+            .field("presentation_id", &self.presentation_id)
             .field("pending", &self.tx.len())
             .field(
                 "redraw_pending",
@@ -249,7 +281,10 @@ impl UiCommandSender {
         &self,
         request: SemanticsActionRequest,
     ) -> Result<(), CommandSendError> {
-        self.send(UiCommand::SemanticsAction(request))
+        self.send(UiCommand::SemanticsAction {
+            presentation_id: self.presentation_id,
+            request,
+        })
     }
 
     /// Enqueue a typed navigation command for owner-thread application.
@@ -454,6 +489,7 @@ impl UiRealm {
     ) -> Result<Self, UiRealmError> {
         let (tx, rx) = bounded(capacity);
         let redraw_pending = Arc::new(AtomicBool::new(false));
+        let presentation_id = presentation.id();
         let local_post_frame = Scheduler::instance().local_post_frame_lane();
         let interaction_lane = InteractionLane::try_new()?;
         let widgets = WidgetsBinding::with_focus_manager(presentation.focus_manager());
@@ -475,6 +511,7 @@ impl UiRealm {
                 tx,
                 capacity,
                 redraw_pending: Arc::clone(&redraw_pending),
+                presentation_id,
                 wake,
             },
             redraw_pending,
@@ -667,7 +704,20 @@ impl UiRealm {
                     }
                     report.invoked += 1;
                 }
-                UiCommand::SemanticsAction(request) => {
+                UiCommand::SemanticsAction {
+                    presentation_id,
+                    request,
+                } => {
+                    if presentation_id != self.presentation.id() {
+                        tracing::trace!(
+                            { flui_foundation::diagnostics::PRESENTATION_ID } =
+                                self.presentation.id().as_u64(),
+                            stamped_presentation_id = presentation_id.as_u64(),
+                            "dropping semantics action stamped for a stale presentation incarnation"
+                        );
+                        report.dropped_stale += 1;
+                        continue;
+                    }
                     match self.presentation.dispatch_semantics_action(request) {
                         Ok(()) => {
                             report.invoked += 1;
@@ -715,6 +765,7 @@ impl Drop for UiRealm {
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroU32;
     use std::sync::atomic::{AtomicBool, AtomicUsize};
 
     use flui_foundation::RenderId;
@@ -946,6 +997,67 @@ mod tests {
         let report = realm.drain_commands();
         assert_eq!(report.invoked, 0);
         assert_eq!(report.dropped_stale, 1);
+    }
+
+    /// Distinct from `stale_semantics_action_is_gracefully_dropped` above:
+    /// that test forges a stale *node* id against a live presentation; this
+    /// one forges a stale *presentation* stamp against a request whose node
+    /// would otherwise resolve — proving the stamp check runs first and
+    /// never lets the request reach `dispatch_semantics_action` (no
+    /// pipeline borrow at all).
+    ///
+    /// Red-check: remove the `presentation_id` comparison from
+    /// `drain_commands` and this fails (`invoked == 1` instead of
+    /// `dropped_stale == 1`).
+    #[test]
+    fn semantics_action_with_stale_presentation_stamp_is_dropped() {
+        let app = super::super::binding::AppBinding::new();
+        let realm = UiRealm::for_test(&app);
+        let render_id = RenderId::new(1);
+        let invoked = Arc::new(AtomicUsize::new(0));
+        let invoked_in_handler = Arc::clone(&invoked);
+        let mut node = SemanticsNode::new().with_source_render_id(render_id);
+        // The action handler is real and would succeed: this test's stamp
+        // check must be what drops the request, not an unrelated resolution
+        // failure (e.g. a node with no registered action at all, which
+        // would drop for the wrong reason and pass even with the stamp
+        // check deleted).
+        node.config_mut().add_action(
+            SemanticsAction::Tap,
+            Arc::new(move |_action, _arguments| {
+                invoked_in_handler.fetch_add(1, Ordering::SeqCst);
+            }),
+        );
+        let mut semantics_owner = SemanticsOwner::new(Arc::new(|_| {}));
+        let root = semantics_owner.insert(node);
+        semantics_owner.set_root(Some(root));
+        app.render_pipeline_mut()
+            .set_semantics_owner(Some(semantics_owner));
+
+        let live = realm.presentation_id();
+        let forged = PresentationId::new_gen(
+            live.index(),
+            NonZeroU32::new(live.generation().get() + 1).expect("nonzero"),
+        );
+        realm
+            .command_sender()
+            .send(UiCommand::SemanticsAction {
+                presentation_id: forged,
+                request: SemanticsActionRequest::new(
+                    AccessibilityNodeId::from(render_id),
+                    SemanticsAction::Tap,
+                ),
+            })
+            .expect("realm inbox has room");
+
+        let report = realm.drain_commands();
+        assert_eq!(report.invoked, 0);
+        assert_eq!(report.dropped_stale, 1);
+        assert_eq!(
+            invoked.load(Ordering::SeqCst),
+            0,
+            "a stale-stamped action must never reach the handler at all"
+        );
     }
 
     #[test]
