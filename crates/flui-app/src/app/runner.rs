@@ -4079,7 +4079,13 @@ mod tests {
     /// `teardown_platform_realm`, or `install_surface_applier` instead, for
     /// the identical reason (all of them `borrow_mut()` the same cell).
     #[test]
-    #[should_panic(expected = "already borrowed")]
+    // Substring match, not the full message: `RefCell`'s panic wording
+    // ("already borrowed: BorrowMutError" vs. "already mutably borrowed:
+    // BorrowError" depending on which side re-enters) has varied across
+    // Rust versions and could vary again; "borrow" is the one substring
+    // present in every variant, so this still fails on an unrelated panic
+    // while staying stable across toolchains.
+    #[should_panic(expected = "borrow")]
     fn with_owner_platform_reentering_dispatch_panics() {
         use flui_platform::headless_platform;
 
