@@ -610,10 +610,14 @@ evidence = [
 [[contract]]
 key = "presentation-identity-generational"
 statement = """
-Generational `PresentationId` exists and `AppRuntime` is the only \
-`WindowId → (RealmId, PresentationId)` authority. The ID type is real and \
-stamped on `PresentationState`; the single-authority window map does not \
-exist and `SceneSnapshot` still lacks a `PresentationId` field.\
+Generational `PresentationId` exists, is stamped on `PresentationState`, \
+`SceneSnapshot`, and every `RasterAck`/`PumpOutcome` variant, and \
+`flui-app`'s private `WindowRegistry` (`window_registry.rs`) is the sole \
+`WindowId -> UiAddress` mint authority, read at install (a self-check) and \
+teardown (`remove_realm`). Remainder: the registry is not yet the routing \
+demux — platform callbacks still deliver through captured addresses rather \
+than a `resolve` lookup — and it is not yet lifted into a public \
+multi-window `AppRuntime`.\
 """
 state = "partial"
 domain = "application"
@@ -621,6 +625,8 @@ owner_issue = 552
 mechanical = false
 evidence = [
     { kind = "symbol", file = "crates/flui-foundation/src/id.rs", contains = "pub struct PresentationId" },
+    { kind = "symbol", file = "crates/flui-app/src/app/window_registry.rs", contains = "pub(crate) struct WindowRegistry" },
+    { kind = "test", file = "crates/flui-app/src/app/window_registry.rs", contains = "fn register_window_replaces_same_window_with_trace" },
 ]
 
 [[contract]]
@@ -628,9 +634,16 @@ key = "closed-cross-thread-vocabulary"
 statement = """
 Cross-lane traffic is closed, presentation-addressed enums — never `dyn \
 Any`, opaque windows, or `Box<dyn FnOnce()>` payloads. The realm inbox \
-(`UiCommand`) is a closed vocabulary today; the full \
-`PlatformToUi`/`UiToPlatform`/`UiToRaster`/`RasterToUi` families with \
-presentation addressing do not exist yet.\
+(`UiCommand`) stamps its presentation-scoped commands with `PresentationId`; \
+the platform-to-realm boundary is the closed, `Send`-asserted `PlatformToUi` \
+family (`Input`/`Resized`/`WindowFocus`/`WindowVisibility`/`Lifecycle`), \
+dispatched only after a realm-then-presentation address compare. The \
+co-located frame pump is deliberately excluded from that typed family (it is \
+same-thread by construction, never a cross-thread payload). \
+`UiToRaster`/`RasterToUi` are deliberately not minted as parallel enums — \
+`RasterHandle`'s methods and `RasterAck` already are that protocol, and \
+`RasterHandle::resize`/`shutdown` are presentation-bound by channel identity \
+the same way a realm's `UiCommand` channel is.\
 """
 state = "partial"
 domain = "platform"
@@ -638,6 +651,10 @@ owner_issue = 552
 mechanical = false
 evidence = [
     { kind = "symbol", file = "crates/flui-app/src/app/ui_realm.rs", contains = "enum UiCommand" },
+    { kind = "symbol", file = "crates/flui-app/src/app/runner.rs", contains = "enum PlatformToUi" },
+    { kind = "compile-time", file = "crates/flui-app/src/app/runner.rs", contains = "assert_impl_all!(PlatformToUi: Send)" },
+    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn stale_realm_dispatch_is_dropped" },
+    { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn stale_presentation_with_live_realm_is_dropped" },
 ]
 
 [[contract]]
@@ -733,9 +750,17 @@ evidence = [
 key = "presentation-lifecycle-monotonic"
 statement = """
 Each presentation has the explicit Created → SurfaceAttached → Suspended → \
-Closing → Closed lifecycle with typed transitions and idempotent close. \
-Gap: resume claims `SurfaceAttached` without awaiting a raster surface ack, \
-because the shipping path has no raster acks to await.\
+Closing → Closed lifecycle with typed transitions and idempotent close, now \
+enforced at the platform input gate: `Closing`/`Closed` refuses all input \
+and accessibility-action dispatch deterministically; `Suspended` drops \
+pointer input only (gesture-arena protection) while keyboard/IME keep \
+flowing, so a flaky or absent occlusion signal never becomes a keystroke \
+blackout; `Created` is constructor-internal and production-unreachable \
+(documented, not given a dead arm pretending to be tested). Gap: resume \
+claims `SurfaceAttached` without awaiting a raster surface ack, because the \
+shipping path has no raster acks to await — and when that gap closes, the \
+ack it awaits must ride a guaranteed lane, never the lossy telemetry \
+channel `RasterAck` already rides.\
 """
 state = "partial"
 domain = "presentation"
@@ -744,6 +769,38 @@ mechanical = false
 evidence = [
     { kind = "symbol", file = "crates/flui-app/src/app/presentation.rs", contains = "enum PresentationLifecycle" },
     { kind = "test", file = "crates/flui-app/src/app/presentation.rs", contains = "fn lifecycle_transitions_are_typed_and_close_is_idempotent" },
+    { kind = "test", file = "crates/flui-app/src/app/binding.rs", contains = "fn pointer_input_is_dropped_while_suspended_but_keyboard_flows" },
+    { kind = "test", file = "crates/flui-app/src/app/binding.rs", contains = "fn all_input_dropped_after_close" },
+    { kind = "test", file = "crates/flui-app/src/app/presentation.rs", contains = "fn semantics_action_after_close_is_refused" },
+]
+
+[[contract]]
+key = "single-native-window-map-authority"
+statement = """
+There is exactly one native-window-to-presentation map in `flui-app`: \
+`WindowRegistry` (`window_registry.rs`), which mints every dispatcher \
+address via `register_window`/`try_register` and is read at install (a \
+self-check) and teardown (`remove_realm`, the teardown real read). \
+`RealmHost.address` is a derived cache of this registry, not a second \
+source of truth — both are written only by `install_platform_realm`/ \
+`teardown_platform_realm`, inside the same TLS borrow, in that order: \
+registry first on install, registry removal first on teardown (so map \
+removal stops new routing before queued old-generation events drop). \
+Remainder: the registry mints and is read at install/teardown, but it is \
+not yet the routing demux — platform callbacks still deliver through \
+per-window closures with captured addresses rather than a `resolve` \
+lookup — and it has not been lifted into a public multi-window \
+`AppRuntime`.\
+"""
+state = "partial"
+domain = "application"
+owner_issue = 552
+mechanical = true
+mechanism = "forbidden_pattern scoped scan confines the WindowId token to window_registry.rs (plus two test-only PlatformWindow-mock allow-listed files) within crates/flui-app/src"
+evidence = [
+    { kind = "symbol", file = "crates/flui-app/src/app/window_registry.rs", contains = "pub(crate) struct WindowRegistry" },
+    { kind = "test", file = "crates/flui-app/src/app/window_registry.rs", contains = "fn remove_realm_returns_the_installed_entry" },
+    { kind = "test", file = "crates/flui-app/src/app/window_registry.rs", contains = "fn try_register_rejects_duplicate_window" },
 ]
 
 [[contract]]
@@ -1357,10 +1414,15 @@ declared_in = "crates/flui-platform/src/traits/platform.rs"
 contains = "pub struct WindowId"
 classification = "transitional"
 thread_affinity = "PlatformWindow: Send + Sync; per-window callbacks deliver on the owner thread"
-owner = "platform-internal native window key and handle — WindowId must never become realm-facing identity"
+owner = "platform-internal native window key and handle — WindowId must never become realm-facing identity; canonical definition (this one) is the only one PlatformWindow::id() returns"
 failure_semantics = "callback installation is install-only today (no cancellation ownership)"
-consumers = ["runner", "presentation state (weak)", "examples"]
+consumers = [
+    "flui-app's window_registry (sole caller of id())",
+    "presentation state (weak)",
+    "examples",
+]
 owner_issue = 552
+notes = "PlatformWindow gained a required id() -> WindowId accessor across all 11 implementors. traits/platform.rs:139 is canonical; src/window.rs's identical parallel definition now re-exports it (`pub use crate::traits::WindowId;`); platforms/macos/window_manager.rs:257 is left as recorded consolidation debt (its own PORT-CHECK-OK-SP3 marker), not touched by this change."
 
 [[surface]]
 path = "flui_platform::{WindowCallbacks, PlatformHandlers}"
@@ -1511,6 +1573,7 @@ owner = "the the raster mailbox contract mailbox protocol — implemented and th
 failure_semantics = "typed RasterSubmitError {MailboxClosed, ...}; acks carry frame identity; shutdown is a one-shot handshake"
 consumers = ["threaded protocol tests only"]
 owner_issue = 559
+notes = "Every RasterAck/PumpOutcome variant now carries presentation_id, echoed from the submitted SceneSnapshot's own stamp (the owner mints epoch/surface-generation feedback, never a presentation identity). Per-variant #[non_exhaustive] added to both enums (enum-level non_exhaustive alone does not block exact-field destructuring); the two former tuple variants (Presented, DeviceLost) became named-field variants since non_exhaustive cannot apply to a tuple/unit variant."
 
 [[surface]]
 path = "flui_layer::{SceneSnapshot, DamageRegion}"
@@ -1524,7 +1587,7 @@ owner = "per-presentation per-frame raster package — non_exhaustive, explicitl
 failure_semantics = "identity fields let receivers reject stale frames"
 consumers = ["RasterOwner protocol", "threaded tests"]
 owner_issue = 552
-notes = "Missing the PresentationId field the presentation-identity contract requires; adding it is additive under non_exhaustive."
+notes = "Now carries presentation_id (realm_id, presentation_id, epoch is the full frame identity — FrameEpoch is only per-realm monotonic, so presentation_id disambiguates same-epoch frames from sibling presentations). The prior note calling this addition additive under non_exhaustive was itself the overclaim corrected here: non_exhaustive makes matching additive, not construction through a positional new() — every field this type gains breaks the positional constructor, which is exactly what happened. Recorded pre-graduation gate: replace the growing positional new() with a builder or an identity-group value before this type leaves experimental."
 
 [[surface]]
 path = "flui_foundation::{RealmId, PresentationId, FrameEpoch, SurfaceGeneration, ResourceGeneration, GenerationGate}"

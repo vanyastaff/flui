@@ -1229,6 +1229,8 @@ mod realm_dispatch_tests {
 
     use super::*;
 
+    static_assertions::assert_impl_all!(PlatformToUi: Send);
+
     fn down_input(offset: f32) -> PlatformInput {
         PlatformInput::Pointer(make_down_event(
             Offset::new(Pixels(offset), Pixels(offset)),
