@@ -292,7 +292,7 @@ impl Platform for AndroidPlatform {
             // always `Ready`.
             if should_call_ready {
                 if let Some(ready) = on_ready.take() {
-                    let owner_platform: Arc<dyn Platform> = Arc::clone(&platform);
+                    let owner_platform = Arc::clone(&platform) as Arc<dyn Platform>;
                     let hooks: Arc<dyn OwnerHooks> =
                         Arc::new(DirectOwnerHooks::new(Arc::clone(&owner_platform)));
                     ready(OwnerPlatform::new(owner_platform, hooks));
