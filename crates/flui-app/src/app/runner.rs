@@ -234,6 +234,38 @@ impl Drop for OwnerHostClearGuard {
 #[cfg(not(target_os = "ios"))]
 type SurfaceApplier = Box<dyn FnMut(flui_types::Size<flui_types::geometry::Pixels>, f32)>;
 
+/// Restores a taken [`SurfaceApplier`] back into [`PLATFORM_REALM_HOST`]'s
+/// slot when dropped — including during an unwinding drop, so a panic
+/// inside the applier's own call (caught by `dispatch_platform_realm`'s
+/// outer `catch_unwind`) cannot permanently strand resizing. Without this,
+/// the applier taken out before the call is simply never restored once the
+/// call panics, and every later `Resized` event finds the slot empty
+/// forever, silently coalescing at the `None` arm's trace instead of ever
+/// applying again.
+#[cfg(not(target_os = "ios"))]
+#[must_use = "dropping this immediately restores the applier with no call in between"]
+struct SurfaceApplierRestoreGuard(Option<SurfaceApplier>);
+
+#[cfg(not(target_os = "ios"))]
+impl SurfaceApplierRestoreGuard {
+    fn call(&mut self, size: flui_types::Size<flui_types::geometry::Pixels>, scale_factor: f32) {
+        if let Some(applier) = self.0.as_mut() {
+            applier(size, scale_factor);
+        }
+    }
+}
+
+#[cfg(not(target_os = "ios"))]
+impl Drop for SurfaceApplierRestoreGuard {
+    fn drop(&mut self) {
+        if let Some(applier) = self.0.take() {
+            PLATFORM_REALM_HOST.with(|slot| {
+                slot.borrow_mut().surface_applier = Some(applier);
+            });
+        }
+    }
+}
+
 #[cfg(not(target_os = "ios"))]
 struct RealmHost {
     realm: Option<super::ui_realm::UiRealm>,
@@ -392,11 +424,14 @@ impl PlatformToUi {
                 let applier =
                     PLATFORM_REALM_HOST.with(|slot| slot.borrow_mut().surface_applier.take());
                 match applier {
-                    Some(mut applier) => {
-                        applier(size, scale_factor);
-                        PLATFORM_REALM_HOST.with(|slot| {
-                            slot.borrow_mut().surface_applier = Some(applier);
-                        });
+                    Some(applier) => {
+                        // The guard restores the applier on drop
+                        // unconditionally — including if `call` below
+                        // panics and the drop runs during unwind — so a
+                        // caught panic in the applier never permanently
+                        // strands resizing.
+                        let mut guard = SurfaceApplierRestoreGuard(Some(applier));
+                        guard.call(size, scale_factor);
                     }
                     None => {
                         tracing::debug!(
@@ -1052,12 +1087,34 @@ fn install_platform_realm(
         realm_id: realm.realm_id(),
         presentation_id: realm.presentation_id(),
     };
-    PLATFORM_REALM_HOST.with(|slot| {
+    let (displaced_realm, displaced_queue, displaced_applier) = PLATFORM_REALM_HOST.with(|slot| {
         let mut state = slot.borrow_mut();
         state.registry.register_window(window, address);
+        // A realm may already be installed here — a reinstall without an
+        // intervening `teardown_platform_realm` (the panic-recovery path: a
+        // mid-`on_ready` failure leaves the old realm/queue/applier in
+        // place, and bootstrap tries again on the same thread). Mirror
+        // `teardown_platform_realm`'s discipline exactly: `mem::take` the
+        // displaced realm, its queue, and its surface applier out from
+        // under this borrow — never let an assignment drop them while the
+        // borrow is still live, and never leave stale-incarnation events
+        // sitting in the queue to be delivered FIFO-first into the new
+        // realm on its first dispatch.
+        let displaced_realm = state.realm.take();
+        let displaced_queue = std::mem::take(&mut state.queue);
+        let displaced_applier = state.surface_applier.take();
+        if displaced_realm.is_some() {
+            tracing::warn!(
+                previous_address = ?state.address,
+                new_address = ?address,
+                queued_events_discarded = displaced_queue.len(),
+                "install_platform_realm: replacing a realm that was never torn down"
+            );
+        }
         state.realm = Some(realm);
         state.owner_thread = Some(owner_thread);
         state.address = Some(address);
+        state.draining = false;
         // A second realm installed on this thread (hot-restart, or a
         // sequential test realm) must not inherit whatever `(visible,
         // focused)` the PREVIOUS realm's window last reported — every
@@ -1067,7 +1124,14 @@ fn install_platform_realm(
         // stale `Hidden`/`Inactive` left behind by the last one.
         state.visible = true;
         state.focused = true;
+        (displaced_realm, displaced_queue, displaced_applier)
     });
+    // Destructors may re-enter platform/framework code (the same invariant
+    // `teardown_platform_realm` honors) — drop only after the TLS borrow
+    // above has released.
+    drop(displaced_queue);
+    drop(displaced_realm);
+    drop(displaced_applier);
     RealmDispatcher {
         owner_thread,
         address,
@@ -1286,6 +1350,94 @@ mod realm_dispatch_tests {
                  value from a prior realm"
             );
         });
+        teardown_platform_realm();
+    }
+
+    /// Panic-recovery reinstall: `install_platform_realm` called again while
+    /// a realm from a prior incarnation is still installed (a mid-`on_ready`
+    /// failure that never reached `teardown_platform_realm`). The displaced
+    /// realm's queue must never leak stale-incarnation events into the new
+    /// realm, the displaced realm/queue/applier must drop only after the TLS
+    /// borrow releases (a reentrant dispatch triggered by that drop must see
+    /// a clean, already-released borrow — never a double-borrow panic), and
+    /// `draining` must not be left stuck from whatever state the displaced
+    /// realm was in.
+    ///
+    /// Red-check: without `mem::take`-ing the queue before overwriting
+    /// `state.realm`, the pre-existing stale event is delivered to the NEW
+    /// realm FIFO-first and this fails on the `delivered` assertion.
+    #[test]
+    fn reinstall_without_teardown_drops_the_displaced_realm_and_queue_outside_the_borrow() {
+        struct ReenterOnDrop {
+            dispatcher: RealmDispatcher,
+            result: Rc<RefCell<Option<Result<(), RealmDispatchError>>>>,
+        }
+
+        impl Drop for ReenterOnDrop {
+            fn drop(&mut self) {
+                let result =
+                    dispatch_platform_realm(self.dispatcher, RealmTask::Frame(Box::new(|_| {})));
+                *self.result.borrow_mut() = Some(result);
+            }
+        }
+
+        let dispatcher_a = install_test_realm();
+        let reentry_result = Rc::new(RefCell::new(None));
+        let reentry_result_in_probe = Rc::clone(&reentry_result);
+        let probe = ReenterOnDrop {
+            dispatcher: dispatcher_a,
+            result: reentry_result_in_probe,
+        };
+
+        let delivered = Rc::new(RefCell::new(false));
+        let delivered_in_event = Rc::clone(&delivered);
+
+        // Enqueue directly (not through `dispatch_platform_realm`, which
+        // would drain immediately) — this is the stale-incarnation queue
+        // state a mid-`on_ready` panic can leave behind before bootstrap
+        // retries `install_platform_realm` without ever calling
+        // `teardown_platform_realm`. Also force `draining = true`, matching
+        // a realm that was mid-drain when the panic hit.
+        PLATFORM_REALM_HOST.with(|slot| {
+            let mut state = slot.borrow_mut();
+            state.queue.push_back(RealmTask::Frame(Box::new(move |_| {
+                *delivered_in_event.borrow_mut() = true;
+            })));
+            state
+                .queue
+                .push_back(RealmTask::Frame(Box::new(move |_| drop(probe))));
+            state.draining = true;
+        });
+
+        // The panic-recovery reinstall itself: no teardown in between.
+        let dispatcher_b = install_test_realm();
+
+        assert!(
+            !*delivered.borrow(),
+            "a queued event from the displaced incarnation must never reach the new realm"
+        );
+        assert_eq!(
+            *reentry_result.borrow(),
+            Some(Err(RealmDispatchError::StaleRealm)),
+            "the displaced realm/queue must drop only after install_platform_realm's TLS \
+             borrow releases — a drop still inside that borrow would panic this reentrant \
+             dispatch with a double-borrow instead of returning a clean Err"
+        );
+
+        let new_realm_ran = Rc::new(RefCell::new(false));
+        let new_realm_ran_in_event = Rc::clone(&new_realm_ran);
+        dispatch_platform_realm(
+            dispatcher_b,
+            RealmTask::Frame(Box::new(move |_| {
+                *new_realm_ran_in_event.borrow_mut() = true;
+            })),
+        )
+        .expect("the new realm dispatches normally");
+        assert!(
+            *new_realm_ran.borrow(),
+            "draining must not be left stuck from the displaced incarnation — the new \
+             realm must actually drain, not just enqueue forever"
+        );
         teardown_platform_realm();
     }
 
@@ -1564,6 +1716,59 @@ mod realm_dispatch_tests {
         )
         .expect("host restored");
         assert!(*ran.borrow());
+    }
+
+    /// A panic inside the surface applier's own call (caught by
+    /// `dispatch_platform_realm`'s outer `catch_unwind`, same as any other
+    /// panicking event) must not permanently strand resizing: the
+    /// `SurfaceApplierRestoreGuard` restores the applier into the TLS slot
+    /// during the unwinding drop, so the next `Resized` still reaches it.
+    ///
+    /// Red-check: revert to restoring the applier only after a successful
+    /// call (no drop guard) and this fails — the second `Resized` silently
+    /// coalesces at the `None` arm instead of calling the applier again.
+    #[test]
+    fn surface_applier_panic_is_caught_and_the_applier_still_applies_next_time() {
+        let dispatcher = install_test_realm();
+        let calls = Rc::new(RefCell::new(0));
+        let calls_in_closure = Rc::clone(&calls);
+        install_surface_applier(move |_size, _scale_factor| {
+            *calls_in_closure.borrow_mut() += 1;
+            assert_ne!(
+                *calls_in_closure.borrow(),
+                1,
+                "surface applier panics on its first call (simulated backend failure)"
+            );
+        });
+
+        let resize_event = |side: f32| {
+            RealmTask::Event(PlatformToUi::Resized {
+                size: flui_types::Size::new(
+                    flui_types::geometry::px(side),
+                    flui_types::geometry::px(side),
+                ),
+                scale_factor: 1.0,
+            })
+        };
+
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = dispatch_platform_realm(dispatcher, resize_event(20.0));
+        }));
+        assert!(
+            panic.is_err(),
+            "the first Resized's applier call must panic"
+        );
+
+        dispatch_platform_realm(dispatcher, resize_event(30.0))
+            .expect("dispatch after the caught panic still succeeds");
+
+        assert_eq!(
+            *calls.borrow(),
+            2,
+            "the second Resized must still reach the applier — a panic on the first call \
+             must not permanently strand resizing"
+        );
+        teardown_platform_realm();
     }
 
     #[test]

@@ -81,6 +81,11 @@ impl PlatformWindow for TestPresentationWindow {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PresentationLifecycle {
     /// Identity exists, but no render surface is attached yet.
+    ///
+    /// Constructor-internal and production-unreachable once construction
+    /// returns: `PresentationState::new` self-attaches its surface before
+    /// handing the value back to its caller, so no arm dispatching on this
+    /// state ever observes `Created` outside that constructor.
     Created,
     /// The presentation accepts input and produces frames.
     SurfaceAttached,
