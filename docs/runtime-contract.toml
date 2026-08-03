@@ -274,14 +274,25 @@ evidence = [
 [[contract]]
 key = "app-runtime-composition-host"
 statement = """
-One `AppRuntime` per process owns platform event-loop demux, explicit \
-constructor-injected `SharedEngineServices`, and 1..N realms. No such type \
-exists; `AppBinding` remains the transitional process-service host.\
+`AppRuntime`, a loop-scoped composition root, now exists: it owns platform \
+event-loop demux, the single realm slot, and `SharedEngineServices` \
+(painting/semantics/scheduler), resolved once, when a realm is actually \
+installed. It is not yet the target statement in full: it is one TLS-scoped \
+instance per owner thread (`APP_RUNTIME` in `runner.rs`), not one per process; it \
+still coexists with `AppBinding` as the transitional process-service host \
+(retiring `AppBinding` is separate follow-up work); and its realm storage is \
+a single slot behind a `RealmId`-keyed accessor, not real 1..N hosting -- \
+that needs the element forest to let a realm host multiple presentations.\
 """
-state = "planned"
+state = "partial"
 domain = "application"
 owner_issue = 553
-mechanical = false
+mechanical = true
+mechanism = "symbol/test existence pinned here; later changes advance disposition further"
+evidence = [
+    { kind = "symbol", file = "crates/flui-app/src/app/runtime.rs", contains = "pub(crate) struct AppRuntime" },
+    { kind = "test", file = "crates/flui-app/src/app/runtime.rs", contains = "fn app_runtime_owns_registry_and_realm_slot" },
+]
 
 [[contract]]
 key = "scheduling-splits-by-level"
@@ -341,7 +352,7 @@ domain = "realm"
 mechanical = true
 mechanism = "test existence pinned here; behavior verified by the cited tests"
 evidence = [
-    { kind = "symbol", file = "crates/flui-app/src/app/runner.rs", contains = "draining: bool" },
+    { kind = "symbol", file = "crates/flui-app/src/app/runtime.rs", contains = "draining: bool" },
     { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn reentrant_frame_event_is_queued_fifo" },
     { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn nested_resize_and_window_focus_wait_until_frame_returns" },
 ]
@@ -472,7 +483,7 @@ domain = "realm"
 mechanical = true
 mechanism = "test existence pinned here"
 evidence = [
-    { kind = "symbol", file = "crates/flui-app/src/app/ui_realm.rs", contains = "static NEXT_INCARNATION" },
+    { kind = "symbol", file = "crates/flui-app/src/app/runtime.rs", contains = "static NEXT_INCARNATION" },
     { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn recreated_runtime_gets_fresh_realm_id" },
     { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn dropped_runtime_yields_owner_gone" },
     { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn late_event_never_crosses_realm_incarnations" },
@@ -596,8 +607,14 @@ key = "window-host-is-explicit-composition-owner"
 statement = """
 The event-loop side of a presentation has one explicit `WindowHost` owner for \
 the native window, callback registrations, platform-to-realm routing, and \
-cancellation. Today the runner's TLS host and per-window callbacks stand in; \
-there is no explicit owner object.\
+cancellation. The loop side now has an explicit owner object — \
+`AppRuntime` (`app/runtime.rs`) — replacing the anonymous TLS struct \
+(`RealmHost`) that used to sit directly in `runner.rs`; the runner's own \
+dispatch functions (`install_platform_realm`, `dispatch_platform_realm`, \
+`teardown_platform_realm`) and per-window callbacks still stand in for the \
+rest of `WindowHost`'s stated responsibilities (routing/cancellation as a \
+method surface on the owner object itself, not free functions closing over \
+its TLS slot) — that reshaping is not claimed here.\
 """
 state = "partial"
 domain = "application"
@@ -605,6 +622,7 @@ owner_issue = 553
 mechanical = false
 evidence = [
     { kind = "symbol", file = "crates/flui-app/src/app/presentation.rs", contains = "pub(crate) struct PresentationState" },
+    { kind = "symbol", file = "crates/flui-app/src/app/runtime.rs", contains = "pub(crate) struct AppRuntime" },
 ]
 
 [[contract]]
@@ -781,16 +799,17 @@ There is exactly one native-window-to-presentation map in `flui-app`: \
 `WindowRegistry` (`window_registry.rs`), which mints every dispatcher \
 address via `register_window`/`try_register` and is read at install (a \
 self-check) and teardown (`remove_realm`, the teardown real read). \
-`RealmHost.address` is a derived cache of this registry, not a second \
-source of truth — both are written only by `install_platform_realm`/ \
-`teardown_platform_realm`, inside the same TLS borrow, in that order: \
-registry first on install, registry removal first on teardown (so map \
-removal stops new routing before queued old-generation events drop). \
-Remainder: the registry mints and is read at install/teardown, but it is \
-not yet the routing demux — platform callbacks still deliver through \
-per-window closures with captured addresses rather than a `resolve` \
-lookup — and it has not been lifted into a public multi-window \
-`AppRuntime`.\
+`AppRuntime.address` (`app/runtime.rs`) is a derived cache of this registry, \
+not a second source of truth — both are written only by \
+`install_platform_realm`/`teardown_platform_realm`, inside the same TLS \
+borrow, in that order: registry first on install, registry removal first on \
+teardown (so map removal stops new routing before queued old-generation \
+events drop). Remainder: the registry mints and is read at install/teardown, \
+but it is not yet the routing demux — platform callbacks still deliver \
+through per-window closures with captured addresses rather than a `resolve` \
+lookup — and `AppRuntime` hosts it as a single-slot owner, not yet the \
+public multi-window registry it grows once the element forest lets a realm \
+host multiple presentations.\
 """
 state = "partial"
 domain = "application"
@@ -1738,6 +1757,104 @@ symbol = "impl_binding_singleton!(SemanticsBinding)"
 file = "crates/flui-semantics/src/binding.rs"
 contains = "impl_binding_singleton!(SemanticsBinding)"
 owner_issue = 553
+
+# =============================================================================
+# Ambient-reach ratchet
+# =============================================================================
+#
+# Two grammars, each judged on code (comments and test-oracle mod blocks
+# stripped first — see `scripts/check-runtime-conformance.sh`):
+#
+#   instance-call  — a production `::instance()` call site. This class is a
+#                    RATCHET: it must shrink to empty as later changes retire
+#                    each remaining singleton (painting, semantics/rendering,
+#                    `AppBinding`, the scheduler), and the checker fails a
+#                    registered entry whose file no longer matches (a stale
+#                    entry left behind after cleanup), the same as it fails
+#                    an unregistered file that newly matches.
+#   ambient-static — a named residual: a global()/OnceLock/LazyLock-backed
+#                    accessor this migration deliberately does not close.
+#                    Carries the hazard in its `note`, not silence.
+#
+# `ui_realm.rs` is deliberately ABSENT from `instance-call`: the claim is
+# that `UiRealm::construct` (and every other constructor) stops calling
+# `Scheduler::instance()` — `RealmServices::resolve()` in `runtime.rs` does
+# that once, and `UiRealm`'s own source never does. This entry list is the
+# ratchet's mechanical proof of that claim: if a future change reintroduces
+# a real `::instance()` call in `ui_realm.rs`, the checker fails until it is
+# either fixed or explicitly registered here.
+
+[[ambient_reach]]
+file = "crates/flui-app/src/app/binding.rs"
+grammar = "instance-call"
+owner_issue = 553
+note = "AppBinding's own AppBinding::instance()/Scheduler::instance() reaches; retired when AppBinding itself is dissolved"
+
+[[ambient_reach]]
+file = "crates/flui-app/src/app/hot_reload.rs"
+grammar = "instance-call"
+owner_issue = 553
+note = "single AppBinding::instance() reach; re-routed through the runtime once AppBinding is dissolved"
+
+[[ambient_reach]]
+file = "crates/flui-app/src/app/runtime.rs"
+grammar = "instance-call"
+owner_issue = 553
+note = "the deliberate resolution seam this file creates: PaintingBinding::instance()/SemanticsBinding::instance()/Scheduler::instance() are called exactly once each, in SharedEngineServices::resolve() and RealmServices::resolve() -- this is the ONE file allowed to still reach for these singletons directly so every other constructor (including UiRealm's) does not have to. Each flips to an owned/injected value as the singleton it names is retired, at which point this entry shrinks accordingly."
+
+[[ambient_reach]]
+file = "crates/flui-app/src/app/runner.rs"
+grammar = "instance-call"
+owner_issue = 553
+note = "AppBinding::instance()/Scheduler::instance() in the platform dispatch/lifecycle-ladder machinery; the AppRuntime skeleton moves ownership (APP_RUNTIME), not these ambient reaches -- retiring AppBinding and the Scheduler singleton retires them"
+
+[[ambient_reach]]
+file = "crates/flui-app/src/bindings/renderer_binding.rs"
+grammar = "instance-call"
+owner_issue = 553
+note = "RenderingFlutterBinding::instance()/AppBinding::instance()/Scheduler::instance() reaches; retired alongside RenderingFlutterBinding, AppBinding, and the Scheduler singleton respectively"
+
+[[ambient_reach]]
+file = "crates/flui-engine/src/wgpu/text.rs"
+grammar = "instance-call"
+owner_issue = 553
+note = "TextRenderer::new constructs a thread-local PaintingBinding via PaintingBinding::instance() to reach the font DB; a SharedFontSystem injection point retires this"
+
+[[ambient_reach]]
+file = "crates/flui-painting/src/binding.rs"
+grammar = "instance-call"
+owner_issue = 553
+note = "PaintingBinding's own instance()-based image_cache() free fn and its tests; retired together with impl_binding_singleton!(PaintingBinding)"
+
+[[ambient_reach]]
+file = "crates/flui-scheduler/src/config.rs"
+grammar = "instance-call"
+owner_issue = 553
+note = "Scheduler::instance() reach in the time-dilation config path; retired together with impl_binding_singleton!(Scheduler)"
+
+[[ambient_reach]]
+file = "crates/flui-semantics/src/binding.rs"
+grammar = "instance-call"
+owner_issue = 553
+note = "SemanticsBinding's own instance()-based SemanticsService::* statics; retired together with the SemanticsBinding type itself"
+
+[[ambient_reach]]
+file = "crates/flui-interaction/src/timer.rs"
+grammar = "ambient-static"
+owner_issue = 553
+note = "global_timer_service(): named residual, unresolved by this migration -- a pending-gesture-timer drop-isolation probe bounds its cross-realm blast radius, but the service itself stays process-global"
+
+[[ambient_reach]]
+file = "crates/flui-assets/src/registry/mod.rs"
+grammar = "ambient-static"
+owner_issue = 553
+note = "AssetRegistry::global(): named residual, out of this migration's scope entirely -- no part of this migration touches flui-assets"
+
+[[ambient_reach]]
+file = "crates/flui-painting/src/text_layout/layout.rs"
+grammar = "ambient-static"
+owner_issue = 553
+note = "shared_font_system()/FONT_SYSTEM: AppRuntime::new() becomes the CONSTRUCTING owner (explicit eager init), but the READ path stays ambient on layout hot paths -- cross-realm register_font staleness mid-layout is a named, bounded hazard (Mutex<FontSystem> makes it staleness not a data race), not closed until fonts get their own owner-local-access/sharding follow-up (ADR-0027 follow-up 6)"
 
 # =============================================================================
 # Public lock-shaped surface allowlist (runtime crates)

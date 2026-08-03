@@ -21,23 +21,23 @@
 //! droppable by identity, not by convention.
 
 use std::marker::PhantomData;
-use std::num::NonZeroU32;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crossbeam_channel::{Receiver, Sender, TrySendError, bounded};
-use flui_foundation::{HasInstance, PresentationId, RealmId};
+use flui_foundation::{PresentationId, RealmId};
 use flui_interaction::{FocusManager, GestureBinding, InteractionLane, TextInputOwner};
 #[cfg(test)]
 use flui_platform::traits::PlatformTextInput;
 use flui_platform::traits::PlatformWindow;
-use flui_scheduler::{AppLifecycleState, LocalPostFrameLane, Scheduler, SchedulerPhase};
+use flui_scheduler::{AppLifecycleState, LocalPostFrameLane, SchedulerPhase};
 use flui_semantics::SemanticsActionRequest;
 use flui_view::WidgetsBinding;
 use flui_widgets::NavigatorCommand;
 
 use super::presentation::PresentationState;
+use super::runtime::{RealmServices, SchedulerRef};
 
 /// Default bound of the owner inbox, matching the pipeline dirty-channel
 /// precedent (`DEFAULT_DIRTY_CHANNEL_CAPACITY`)). Observable at
@@ -46,11 +46,6 @@ const DEFAULT_COMMAND_CAPACITY: usize = 256;
 
 /// Claim flag for the at-most-one-instance transitional guard.
 static REALM_CLAIMED: AtomicBool = AtomicBool::new(false);
-
-/// Monotonic incarnation counter: every successfully constructed runtime
-/// gets a fresh `RealmId` generation, so a recreated realm never compares
-/// equal to its predecessor.
-static NEXT_INCARNATION: AtomicU32 = AtomicU32::new(1);
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -410,6 +405,12 @@ pub(crate) struct UiRealm {
     redraw_pending: Arc<AtomicBool>,
     /// Whether this instance owns the transitional process-wide claim.
     claimed: bool,
+    /// The scheduler this realm was constructed against, resolved once by
+    /// the caller (see `RealmServices::resolve`) and retained only for the
+    /// idle-only commit-gate phase probe in [`Self::drain_commands`] — the
+    /// last remaining reach that used to be a bare `Scheduler::instance()`
+    /// call inside this type.
+    scheduler: SchedulerRef,
     /// `*const ()` is `!Send + !Sync`; `PhantomData` of it makes the runtime
     /// so at zero cost (thread-affinity marker).
     _owner_affine: PhantomData<*const ()>,
@@ -468,10 +469,11 @@ impl UiRealm {
         if REALM_CLAIMED.swap(true, Ordering::AcqRel) {
             return Err(UiRealmError::AlreadyExists);
         }
-        let (realm_id, presentation_id) = Self::next_identity();
+        let (realm_id, presentation_id) = super::runtime::next_identity();
         let presentation =
             PresentationState::new(presentation_id, app.render_pipeline_arc(), window);
-        match Self::construct(capacity, wake, realm_id, presentation, true) {
+        let services = RealmServices::resolve();
+        match Self::construct(capacity, wake, realm_id, presentation, true, services) {
             Ok(realm) => Ok(realm),
             Err(error) => {
                 REALM_CLAIMED.store(false, Ordering::Release);
@@ -480,22 +482,33 @@ impl UiRealm {
         }
     }
 
+    /// Builds the realm from already-resolved pieces. Takes `services:
+    /// RealmServices` rather than reaching for `Scheduler::instance()`
+    /// itself — the last two `Scheduler::instance()` calls this function
+    /// used to make (`local_post_frame_lane()`, `async_driver()`) are now
+    /// the caller's job (`RealmServices::resolve`, in `runtime.rs`), which
+    /// is what makes `UiRealm` perform zero `::instance()` calls.
     fn construct(
         capacity: usize,
         wake: Arc<dyn Fn() + Send + Sync>,
         realm_id: RealmId,
         presentation: PresentationState,
         claimed: bool,
+        services: RealmServices,
     ) -> Result<Self, UiRealmError> {
         let (tx, rx) = bounded(capacity);
         let redraw_pending = Arc::new(AtomicBool::new(false));
         let presentation_id = presentation.id();
-        let local_post_frame = Scheduler::instance().local_post_frame_lane();
+        let RealmServices {
+            local_post_frame,
+            async_driver,
+            scheduler,
+        } = services;
         let interaction_lane = InteractionLane::try_new()?;
         let widgets = WidgetsBinding::with_focus_manager(presentation.focus_manager());
         widgets.set_pipeline_owner(Arc::clone(presentation.pipeline()));
         widgets.with_build_owner_mut(|owner| {
-            owner.set_async_driver(Scheduler::instance().async_driver().clone());
+            owner.set_async_driver(async_driver);
             owner.set_post_frame_handle(local_post_frame.post_frame_handle());
             owner.set_interaction_dispatch_handle(interaction_lane.dispatch_handle());
             owner.set_text_input_handle(presentation.text_input_handle());
@@ -516,21 +529,9 @@ impl UiRealm {
             },
             redraw_pending,
             claimed,
+            scheduler,
             _owner_affine: PhantomData,
         })
-    }
-
-    fn next_identity() -> (RealmId, PresentationId) {
-        let incarnation = NEXT_INCARNATION.fetch_add(1, Ordering::Relaxed);
-        let generation = NonZeroU32::new(incarnation)
-            .expect("BUG: incarnation counter starts at 1 and only increments");
-        // Slot 0 is the single-window slot; a real multi-window `AppRuntime`
-        // registry mints slots once it exists — the shape is the deliverable,
-        // single-window the only instantiation for now.
-        (
-            RealmId::new_gen(0, generation),
-            PresentationId::new_gen(0, generation),
-        )
     }
 
     #[cfg(test)]
@@ -543,7 +544,7 @@ impl UiRealm {
         app: &super::binding::AppBinding,
         platform_text_input: Option<Arc<dyn PlatformTextInput>>,
     ) -> Self {
-        let (realm_id, presentation_id) = Self::next_identity();
+        let (realm_id, presentation_id) = super::runtime::next_identity();
         let presentation = PresentationState::new_for_test(
             presentation_id,
             app.render_pipeline_arc(),
@@ -555,6 +556,7 @@ impl UiRealm {
             realm_id,
             presentation,
             false,
+            RealmServices::resolve(),
         )
         .expect("test UiRealm should create an interaction lane")
     }
@@ -679,7 +681,7 @@ impl UiRealm {
     /// (`UiRealm: !Send + !Sync`), not asserted.
     pub fn drain_commands(&self) -> DrainReport {
         debug_assert_eq!(
-            Scheduler::instance().phase(),
+            self.scheduler.phase(),
             SchedulerPhase::Idle,
             "UiRealm::drain_commands must run at a frame boundary (Idle), \
              never inside the frame transaction"

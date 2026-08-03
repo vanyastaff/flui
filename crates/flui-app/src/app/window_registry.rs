@@ -11,7 +11,7 @@
 //!
 //! # Derived-cache invariant
 //!
-//! `RealmHost.address: Option<PresentationAddress>` (`runner.rs`) is a
+//! `AppRuntime.address: Option<PresentationAddress>` (`app/runtime.rs`) is a
 //! **derived cache** of this registry, not a second source of truth. Both
 //! are written only by `install_platform_realm`/`teardown_platform_realm`,
 //! inside the same TLS borrow, in that order: on install, the registry is
@@ -78,8 +78,8 @@ impl WindowRegistry {
     ///
     /// Replacement (not a hard error) keeps install recoverable after a
     /// mid-`on_ready` panic: `OwnerHostClearGuard` only clears
-    /// `OWNER_PLATFORM_HOST`, not the realm host this registry lives
-    /// inside, and the web host never tears down at all — a hard error here
+    /// `AppRuntime.owner_platform`, not the realm-facing fields this
+    /// registry lives alongside, and the web host never tears down at all — a hard error here
     /// would brick reinstall on either path. A replacement is traced at
     /// `warn` with both addresses so a genuine double-install bug is still
     /// visible; [`Self::try_register`] is the strict alternative for a

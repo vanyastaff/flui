@@ -12,6 +12,9 @@ use flui_foundation::HasInstance;
 #[cfg(not(target_os = "ios"))]
 use flui_scheduler::{AppLifecycleState, Scheduler};
 
+#[cfg(not(target_os = "ios"))]
+use super::runtime::AppRuntime;
+
 /// Run a FLUI application with default configuration.
 ///
 /// This is the internal implementation called by `run_app()`.
@@ -77,48 +80,51 @@ where
 }
 
 // ============================================================================
-// Platform-neutral owner-thread realm host (ADR-0027)
+// Loop-scoped composition root (ADR-0027, ADR-0039 §6)
 // ============================================================================
 
 #[cfg(not(target_os = "ios"))]
 thread_local! {
-    /// Transitional owner-thread host shared by desktop, Android, and wasm.
-    /// The platform callback surface still requires `Send`, so the `!Send`
-    /// realm remains in owner TLS until that seam is retired. Access is only
-    /// through the stamped FIFO dispatcher below.
-    static PLATFORM_REALM_HOST: std::cell::RefCell<RealmHost> =
-        const { std::cell::RefCell::new(RealmHost::new()) };
-}
-
-// ============================================================================
-// Loop-scoped owner-platform host (ADR-0039 §6)
-// ============================================================================
-
-#[cfg(not(target_os = "ios"))]
-thread_local! {
-    /// Loop-scoped host for the owner-thread platform capability
-    /// (ADR-0039), *separate from* [`PLATFORM_REALM_HOST`]: a realm's
-    /// teardown must not strand the loop's capability, because the loop may
-    /// host another realm before it exits (hot-restart does exactly this
-    /// today, `install_platform_realm`). Deliberately not cleared by
-    /// `teardown_platform_realm`.
+    /// The one loop-scoped composition root, shared by desktop, Android, and
+    /// wasm. Absorbs what were, before the `AppRuntime` skeleton existed, two
+    /// separate thread-locals: the transitional realm host (realm slot, queue,
+    /// draining, owner thread, address cache, window registry, surface
+    /// applier, visible/focused) and the loop-scoped `OwnerPlatform` host —
+    /// see [`AppRuntime`]'s own module doc for why one struct correctly
+    /// carries both invariants. The platform callback surface still
+    /// requires `Send`, so the `!Send` realm this holds remains in owner TLS
+    /// until that seam is retired (ADR-0027 follow-up 5); access is only
+    /// through the stamped FIFO dispatcher below and the fenced
+    /// `with_owner_platform` accessor.
     ///
-    /// `OwnerPlatform` is not `Clone` (ADR-0039 slice-2 decision record), so
-    /// the only sanctioned way to read this slot is the borrow-style
-    /// [`with_owner_platform`] accessor below — there is no path to a
-    /// durable owned copy that outlives one access.
-    static OWNER_PLATFORM_HOST: std::cell::RefCell<Option<flui_platform::OwnerPlatform>> =
-        const { std::cell::RefCell::new(None) };
+    /// `AppRuntime::new()` is `const` and side-effect-free (no singleton
+    /// resolution) precisely so this `const` initializer stays true:
+    /// merely *touching* this thread-local -- for any reason, including
+    /// `OwnerHostClearGuard::drop` firing during an unwind on a thread that
+    /// never reached platform init -- can never itself trigger singleton
+    /// construction or full system-font enumeration. Real service
+    /// resolution happens only via the explicit `ensure_services` call in
+    /// `install_platform_realm` below, when a realm is actually installed.
+    static APP_RUNTIME: std::cell::RefCell<AppRuntime> =
+        const { std::cell::RefCell::new(AppRuntime::new()) };
 }
 
 /// Installs `owner` in the loop-scoped host. Call once, at the top of each
 /// backend's `on_ready` callback (ADR-0039 §6) — every `run_*` entry point
 /// in this module does so immediately after minting/receiving its
 /// `OwnerPlatform`.
+///
+/// Deliberately does NOT resolve `SharedEngineServices`: `run_direct`
+/// installs an owner platform and opens a window but never installs a
+/// `UiRealm` (no widget tree, no painting/semantics/scheduler singleton
+/// reach at all), so resolving here would pay for singleton construction
+/// and full system-font enumeration on a path that can never consume
+/// either. `install_platform_realm` is the one call site that resolves —
+/// every realm-hosting backend goes through it, `run_direct` never does.
 #[cfg(not(target_os = "ios"))]
 pub(crate) fn install_owner_platform(owner: flui_platform::OwnerPlatform) {
-    OWNER_PLATFORM_HOST.with(|slot| {
-        *slot.borrow_mut() = Some(owner);
+    APP_RUNTIME.with(|slot| {
+        slot.borrow_mut().owner_platform = Some(owner);
     });
 }
 
@@ -171,6 +177,23 @@ pub(crate) fn install_owner_platform(owner: flui_platform::OwnerPlatform) {
 ///     Ok(())
 /// }));
 /// ```
+///
+/// # No host re-entry
+///
+/// `f` runs while this function holds an immutable `APP_RUNTIME.borrow()`.
+/// Since `AppRuntime` folded the realm-facing state and `owner_platform`
+/// into ONE thread-local `RefCell` (they were two disjoint cells before), `f`
+/// must never call back into any function that touches this same cell:
+/// `dispatch_platform_realm`,
+/// `install_platform_realm`, `teardown_platform_realm`,
+/// `install_surface_applier`, or `install_owner_platform` itself. Any of
+/// those does `slot.borrow_mut()` while this borrow is still live, which is
+/// a guaranteed `BorrowMutError` panic — in every build, not only debug
+/// (`RefCell`'s borrow tracking is not a `debug_assert`). No production
+/// caller does this today (`f` closures only call owner-affine `Platform`
+/// methods), so this is a documented invariant with a regression pin
+/// (`with_owner_platform_reentering_dispatch_panics` below), not a runtime
+/// guard.
 #[cfg(not(target_os = "ios"))]
 pub(crate) fn with_owner_platform<R>(
     f: impl FnOnce(&flui_platform::OwnerPlatform) -> R,
@@ -190,7 +213,7 @@ pub(crate) fn with_owner_platform<R>(
              not be acquired from build/layout/paint (ADR-0039 §6, trigger #22)"
         );
     }
-    OWNER_PLATFORM_HOST.with(|slot| slot.borrow().as_ref().map(f))
+    APP_RUNTIME.with(|slot| slot.borrow().owner_platform.as_ref().map(f))
 }
 
 /// Unwind-safe TLS clearing. Arm this guard *before* calling
@@ -203,6 +226,22 @@ pub(crate) fn with_owner_platform<R>(
 /// Web deliberately arms no guard: the host stays resident for the page's
 /// lifetime (see the web runner's own comment on this). macOS is moot:
 /// `run` never returns there (`terminate:` exits the process).
+///
+/// # No host re-entry, and no eager resolution
+///
+/// `Drop` touches only `owner_platform` (`self.owner_platform.take()`) —
+/// never `dispatch_platform_realm`/`install_platform_realm`/
+/// `teardown_platform_realm`/`install_surface_applier`, all of which would
+/// re-borrow the same `APP_RUNTIME` cell this drop already holds mutably
+/// (see `with_owner_platform`'s own "No host re-entry" doc for the general
+/// rule). Just as importantly, `AppRuntime::new()` is cheap and
+/// side-effect-free specifically so that a bare `.borrow_mut()` here — the
+/// *first* touch of `APP_RUNTIME` on a thread whose `on_ready` panicked
+/// before installing anything — can never trigger `SharedEngineServices`
+/// resolution (singleton construction plus full system-font enumeration)
+/// while already unwinding. A panic during that resolution, on top of the
+/// panic already unwinding, would abort the process instead of propagating
+/// the original failure.
 #[cfg(not(target_os = "ios"))]
 #[must_use = "the guard must stay alive across the Platform::run(...) call it \
               guards, or the TLS host clears immediately instead of at loop exit"]
@@ -221,27 +260,29 @@ impl OwnerHostClearGuard {
 #[cfg(not(target_os = "ios"))]
 impl Drop for OwnerHostClearGuard {
     fn drop(&mut self) {
-        OWNER_PLATFORM_HOST.with(|slot| {
-            slot.borrow_mut().take();
+        APP_RUNTIME.with(|slot| {
+            slot.borrow_mut().owner_platform.take();
         });
     }
 }
 
 /// A registration-lifetime renderer-surface applier: `FnMut(size,
-/// scale_factor)`. Named so [`RealmHost::surface_applier`]'s field
+/// scale_factor)`. Named so [`AppRuntime`]'s `surface_applier` field
 /// declaration reads plainly instead of spelling out the boxed closure type
-/// inline.
+/// inline. `pub(super)` (rather than private) so [`AppRuntime`]'s struct
+/// definition in the sibling `runtime` module can name this type.
 #[cfg(not(target_os = "ios"))]
-type SurfaceApplier = Box<dyn FnMut(flui_types::Size<flui_types::geometry::Pixels>, f32)>;
+pub(super) type SurfaceApplier =
+    Box<dyn FnMut(flui_types::Size<flui_types::geometry::Pixels>, f32)>;
 
-/// Restores a taken [`SurfaceApplier`] back into [`PLATFORM_REALM_HOST`]'s
-/// slot when dropped — including during an unwinding drop, so a panic
-/// inside the applier's own call (caught by `dispatch_platform_realm`'s
-/// outer `catch_unwind`) cannot permanently strand resizing. Without this,
-/// the applier taken out before the call is simply never restored once the
-/// call panics, and every later `Resized` event finds the slot empty
-/// forever, silently coalescing at the `None` arm's trace instead of ever
-/// applying again.
+/// Restores a taken [`SurfaceApplier`] back into [`APP_RUNTIME`]'s slot when
+/// dropped — including during an unwinding drop, so a panic inside the
+/// applier's own call (caught by `dispatch_platform_realm`'s outer
+/// `catch_unwind`) cannot permanently strand resizing. Without this, the
+/// applier taken out before the call is simply never restored once the call
+/// panics, and every later `Resized` event finds the slot empty forever,
+/// silently coalescing at the `None` arm's trace instead of ever applying
+/// again.
 #[cfg(not(target_os = "ios"))]
 #[must_use = "dropping this immediately restores the applier with no call in between"]
 struct SurfaceApplierRestoreGuard(Option<SurfaceApplier>);
@@ -259,62 +300,9 @@ impl SurfaceApplierRestoreGuard {
 impl Drop for SurfaceApplierRestoreGuard {
     fn drop(&mut self) {
         if let Some(applier) = self.0.take() {
-            PLATFORM_REALM_HOST.with(|slot| {
+            APP_RUNTIME.with(|slot| {
                 slot.borrow_mut().surface_applier = Some(applier);
             });
-        }
-    }
-}
-
-#[cfg(not(target_os = "ios"))]
-struct RealmHost {
-    realm: Option<super::ui_realm::UiRealm>,
-    queue: std::collections::VecDeque<RealmTask>,
-    draining: bool,
-    owner_thread: Option<std::thread::ThreadId>,
-    /// This realm incarnation's routable address. A **derived cache** of
-    /// [`super::window_registry::WindowRegistry`] below, not a second
-    /// source of truth — both are written only by
-    /// [`install_platform_realm`]/[`teardown_platform_realm`], inside this
-    /// same TLS borrow, in that order (see `window_registry`'s module doc
-    /// for the full invariant).
-    address: Option<flui_foundation::PresentationAddress>,
-    /// The sole native-window-to-presentation mapping authority (ADR-0037
-    /// §2). Lives here, inside the same thread-local as the realm it
-    /// addresses, rather than as a second free-standing static — a future
-    /// multi-window `AppRuntime` lifts it out unchanged (the type itself
-    /// has no TLS assumption baked in).
-    registry: super::window_registry::WindowRegistry,
-    /// The registration-lifetime renderer-surface applier for a
-    /// [`PlatformToUi::Resized`] event, installed once at realm install by
-    /// [`install_surface_applier`] and cleared at teardown. `take`n out of
-    /// this slot before it is called and restored after (never called
-    /// through a live borrow) — see [`PlatformToUi::run`]'s `Resized` arm.
-    surface_applier: Option<SurfaceApplier>,
-
-    /// Single-window `(visible, focused)` tracking for the
-    /// `AppLifecycleState` derivation (see `ADR-0035`) — `PlatformToUi::
-    /// WindowFocus`/`WindowVisibility` each update one half of this pair and
-    /// re-derive. Both default `true`: a window is assumed visible and
-    /// focused until a platform callback says otherwise (matches every
-    /// backend's actual startup state).
-    visible: bool,
-    focused: bool,
-}
-
-#[cfg(not(target_os = "ios"))]
-impl RealmHost {
-    const fn new() -> Self {
-        Self {
-            realm: None,
-            queue: std::collections::VecDeque::new(),
-            draining: false,
-            owner_thread: None,
-            address: None,
-            registry: super::window_registry::WindowRegistry::new(),
-            surface_applier: None,
-            visible: true,
-            focused: true,
         }
     }
 }
@@ -352,8 +340,11 @@ enum RealmDispatchError {
 /// module's own tests. If `PlatformInput` ever
 /// stopped being `Send`, that must be fixed in `flui-platform` itself,
 /// never worked around here.
+// `pub(super)` because `RealmTask::Event` (also `pub(super)`, for
+// `AppRuntime`'s sake) carries this type in a field the compiler considers
+// reachable at that same visibility.
 #[cfg(not(target_os = "ios"))]
-enum PlatformToUi {
+pub(super) enum PlatformToUi {
     Input(flui_platform::traits::PlatformInput),
     Resized {
         size: flui_types::Size<flui_types::geometry::Pixels>,
@@ -390,8 +381,10 @@ enum PlatformToUi {
 /// (ADR-0037 §3 forbids `Box<dyn FnOnce()>` on that boundary). The `Send`
 /// assertion above applies to `PlatformToUi` only; splitting the two types
 /// is what makes that assertion non-vacuous.
+// `pub(super)` (rather than private) so `AppRuntime`'s `queue` field, defined
+// in the sibling `runtime` module, can name this type.
 #[cfg(not(target_os = "ios"))]
-enum RealmTask {
+pub(super) enum RealmTask {
     Event(PlatformToUi),
     Frame(Box<dyn FnOnce(&super::ui_realm::UiRealm)>),
 }
@@ -421,8 +414,7 @@ impl PlatformToUi {
                 // already cleared by teardown) this skips with a trace
                 // instead of unwrapping/panicking; surface application then
                 // coalesces onto the next real applier install.
-                let applier =
-                    PLATFORM_REALM_HOST.with(|slot| slot.borrow_mut().surface_applier.take());
+                let applier = APP_RUNTIME.with(|slot| slot.borrow_mut().surface_applier.take());
                 match applier {
                     Some(applier) => {
                         // The guard restores the applier on drop
@@ -447,7 +439,7 @@ impl PlatformToUi {
                 tracing::trace!(?size, scale_factor, "realm resize committed");
             }
             Self::WindowFocus(focused) => {
-                let (old, new) = PLATFORM_REALM_HOST.with(|slot| {
+                let (old, new) = APP_RUNTIME.with(|slot| {
                     let mut state = slot.borrow_mut();
                     let old = derive_lifecycle_state(state.visible, state.focused);
                     state.focused = focused;
@@ -456,7 +448,7 @@ impl PlatformToUi {
                 emit_lifecycle_transition(realm, old, new);
             }
             Self::WindowVisibility(visible) => {
-                let (old, new) = PLATFORM_REALM_HOST.with(|slot| {
+                let (old, new) = APP_RUNTIME.with(|slot| {
                     let mut state = slot.borrow_mut();
                     let old = derive_lifecycle_state(state.visible, state.focused);
                     state.visible = visible;
@@ -480,7 +472,7 @@ impl PlatformToUi {
 fn install_surface_applier(
     applier: impl FnMut(flui_types::Size<flui_types::geometry::Pixels>, f32) + 'static,
 ) {
-    PLATFORM_REALM_HOST.with(|slot| {
+    APP_RUNTIME.with(|slot| {
         slot.borrow_mut().surface_applier = Some(Box::new(applier));
     });
 }
@@ -769,7 +761,7 @@ mod lifecycle_derivation_tests {
     /// Occlusion-before-focus-loss and focus-loss-before-occlusion must
     /// converge to the same derived state — the derivation depends only on
     /// the final `(visible, focused)` pair, never on update order.
-    /// Mirrors `RealmHost`'s actual update pattern (mutate one signal,
+    /// Mirrors `AppRuntime`'s actual update pattern (mutate one signal,
     /// re-derive) so this test exercises real ordering, not just two calls
     /// to a pure function with identical arguments.
     struct WindowSignals {
@@ -1087,7 +1079,7 @@ fn install_platform_realm(
         realm_id: realm.realm_id(),
         presentation_id: realm.presentation_id(),
     };
-    let (displaced_realm, displaced_queue, displaced_applier) = PLATFORM_REALM_HOST.with(|slot| {
+    let (displaced_realm, displaced_queue, displaced_applier) = APP_RUNTIME.with(|slot| {
         let mut state = slot.borrow_mut();
         // A realm may already be installed here — a reinstall without an
         // intervening `teardown_platform_realm` (the panic-recovery path: a
@@ -1131,12 +1123,20 @@ fn install_platform_realm(
         // A second realm installed on this thread (hot-restart, or a
         // sequential test realm) must not inherit whatever `(visible,
         // focused)` the PREVIOUS realm's window last reported — every
-        // backend starts a window visible and focused (see `RealmHost::new`
+        // backend starts a window visible and focused (see `AppRuntime::new`
         // and each `MockWindow`/`WinitWindow` constructor), so a fresh
         // realm's derivation must start from that same baseline, not a
         // stale `Hidden`/`Inactive` left behind by the last one.
         state.visible = true;
         state.focused = true;
+        // Explicit, known-point resolution: a realm is actually being
+        // installed, so this thread genuinely needs `SharedEngineServices`
+        // -- unlike `install_owner_platform`, which every backend calls
+        // (including `run_direct`, which never installs a realm and never
+        // needs these services). Idempotent (`ensure_services` caches), so
+        // it does not matter whether a prior realm on this thread already
+        // triggered it.
+        let _ = state.ensure_services();
         (displaced_realm, displaced_queue, displaced_applier)
     });
     // Destructors may re-enter platform/framework code (the same invariant
@@ -1160,7 +1160,7 @@ fn dispatch_platform_realm(
         tracing::error!(?dispatcher, "rejecting realm callback on non-owner thread");
         return Err(RealmDispatchError::WrongThread);
     }
-    let realm = PLATFORM_REALM_HOST.with(|slot| {
+    let realm = APP_RUNTIME.with(|slot| {
         let mut state = slot.borrow_mut();
         // Normative compare order (ADR-0037): realm first, then
         // presentation. `realm_id`/`presentation_id` mint from one shared
@@ -1216,10 +1216,10 @@ fn dispatch_platform_realm(
         let mut next = Some(first);
         while let Some(event) = next {
             realm.enter(|realm| event.run(realm));
-            next = PLATFORM_REALM_HOST.with(|slot| slot.borrow_mut().queue.pop_front());
+            next = APP_RUNTIME.with(|slot| slot.borrow_mut().queue.pop_front());
         }
     }));
-    PLATFORM_REALM_HOST.with(|slot| {
+    APP_RUNTIME.with(|slot| {
         let mut state = slot.borrow_mut();
         state.realm = Some(realm);
         state.draining = false;
@@ -1253,7 +1253,7 @@ fn drain_owner_inbox(realm: &super::ui_realm::UiRealm) -> bool {
 
 #[cfg(all(not(target_os = "ios"), not(target_arch = "wasm32")))]
 fn teardown_platform_realm() {
-    let (realm, queued) = PLATFORM_REALM_HOST.with(|slot| {
+    let (realm, queued) = APP_RUNTIME.with(|slot| {
         let mut state = slot.borrow_mut();
         // Registry removal first (ADR-0037 §2): stop new routing before the
         // queued old-generation events below are dropped, and before the
@@ -1346,7 +1346,7 @@ mod realm_dispatch_tests {
     #[test]
     fn install_platform_realm_resets_stale_visible_focused_from_a_prior_realm() {
         install_test_realm();
-        PLATFORM_REALM_HOST.with(|slot| {
+        APP_RUNTIME.with(|slot| {
             let mut state = slot.borrow_mut();
             state.visible = false;
             state.focused = false;
@@ -1354,7 +1354,7 @@ mod realm_dispatch_tests {
         teardown_platform_realm();
 
         install_test_realm();
-        PLATFORM_REALM_HOST.with(|slot| {
+        APP_RUNTIME.with(|slot| {
             let state = slot.borrow();
             assert!(
                 state.visible,
@@ -1415,7 +1415,7 @@ mod realm_dispatch_tests {
         // retries `install_platform_realm` without ever calling
         // `teardown_platform_realm`. Also force `draining = true`, matching
         // a realm that was mid-drain when the panic hit.
-        PLATFORM_REALM_HOST.with(|slot| {
+        APP_RUNTIME.with(|slot| {
             let mut state = slot.borrow_mut();
             state.queue.push_back(RealmTask::Frame(Box::new(move |_| {
                 *delivered_in_event.borrow_mut() = true;
@@ -1456,6 +1456,49 @@ mod realm_dispatch_tests {
              realm must actually drain, not just enqueue forever"
         );
         teardown_platform_realm();
+    }
+
+    /// `install_platform_realm` only ever touches the realm-facing fields
+    /// (`realm`, `queue`, `owner_thread`, `address`, `surface_applier`,
+    /// `visible`, `focused`) — `owner_platform` is a separate, loop-scoped
+    /// concern that must survive both branches: a fresh install, and a
+    /// replace-without-teardown reinstall that displaces a realm never torn
+    /// down (the same panic-recovery path
+    /// `reinstall_without_teardown_drops_the_displaced_realm_and_queue_outside_the_borrow`
+    /// exercises above).
+    #[test]
+    fn install_platform_realm_never_touches_owner_platform() {
+        use flui_platform::headless_platform;
+
+        let _clear_guard = OwnerHostClearGuard::arm();
+        let platform = headless_platform();
+        let result = platform.run(Box::new(|owner| {
+            install_owner_platform(owner);
+            assert!(
+                with_owner_platform(|_| ()).is_some(),
+                "owner_platform must be installed before the first realm install"
+            );
+
+            // Fresh-install branch.
+            install_test_realm();
+            assert!(
+                with_owner_platform(|_| ()).is_some(),
+                "a fresh realm install must not clear owner_platform"
+            );
+
+            // Replace-without-teardown branch: install a second realm while
+            // the first is still live, without an intervening
+            // `teardown_platform_realm` (the panic-recovery path).
+            install_test_realm();
+            assert!(
+                with_owner_platform(|_| ()).is_some(),
+                "a replace-without-teardown reinstall must not clear owner_platform"
+            );
+
+            teardown_platform_realm();
+            Ok(())
+        }));
+        assert!(result.is_ok(), "on_ready returns Ok here");
     }
 
     /// A panic-recovery reinstall under a DIFFERENT native window must
@@ -1499,7 +1542,7 @@ mod realm_dispatch_tests {
             &second_window,
         );
 
-        PLATFORM_REALM_HOST.with(|slot| {
+        APP_RUNTIME.with(|slot| {
             let state = slot.borrow();
             assert_eq!(
                 state.registry.resolve(first_window_id),
@@ -1591,7 +1634,7 @@ mod realm_dispatch_tests {
     #[test]
     fn late_event_never_crosses_realm_incarnations() {
         let stale = install_test_realm();
-        PLATFORM_REALM_HOST.with(|slot| {
+        APP_RUNTIME.with(|slot| {
             let mut state = slot.borrow_mut();
             let realm = state.realm.take();
             state.queue.clear();
@@ -1700,7 +1743,7 @@ mod realm_dispatch_tests {
             *applier_invoked_in_closure.borrow_mut() = true;
         });
 
-        PLATFORM_REALM_HOST.with(|slot| {
+        APP_RUNTIME.with(|slot| {
             let mut state = slot.borrow_mut();
             state.queue.push_back(RealmTask::Frame(Box::new(move |_| {
                 *delivered_in_event.borrow_mut() = true;
@@ -1922,7 +1965,7 @@ mod realm_dispatch_tests {
             dispatcher,
             dropped: Rc::clone(&dropped),
         };
-        PLATFORM_REALM_HOST.with(|slot| {
+        APP_RUNTIME.with(|slot| {
             slot.borrow_mut()
                 .queue
                 .push_back(RealmTask::Frame(Box::new(move |_| drop(probe))));
@@ -3826,7 +3869,7 @@ mod tests {
 
     /// Serializes tests that mutate `Scheduler::instance()`'s process-global
     /// phase (the repo rule for shared binding/scheduler state — AGENTS.md
-    /// "Testing quirks"). `OWNER_PLATFORM_HOST` itself is `thread_local!`, so
+    /// "Testing quirks"). `APP_RUNTIME` itself is `thread_local!`, so
     /// the install/clear tests below need no lock (the standard library
     /// test harness runs each `#[test]` on its own thread by default); this
     /// lock exists only for the one test that drives the process-global
@@ -3870,6 +3913,30 @@ mod tests {
         );
     }
 
+    /// `install_owner_platform` alone -- the exact path `run_direct` takes,
+    /// which opens a window but never installs a `UiRealm` -- must NOT
+    /// resolve `SharedEngineServices`. Only `install_platform_realm`
+    /// (exercised by the realm-install tests elsewhere in this file) does
+    /// that, so a backend that never hosts a realm never pays for
+    /// painting/semantics/scheduler singleton construction or full
+    /// system-font enumeration it cannot use.
+    #[test]
+    fn install_owner_platform_alone_does_not_resolve_services() {
+        use flui_platform::headless_platform;
+
+        let _clear_guard = OwnerHostClearGuard::arm();
+        let platform = headless_platform();
+        let result = platform.run(Box::new(|owner| {
+            install_owner_platform(owner);
+            assert!(
+                !APP_RUNTIME.with(|slot| slot.borrow().services_resolved()),
+                "install_owner_platform alone must not resolve SharedEngineServices"
+            );
+            Ok(())
+        }));
+        assert!(result.is_ok(), "on_ready returns Ok here");
+    }
+
     #[test]
     fn owner_platform_host_panic_in_on_ready_still_clears() {
         use flui_platform::headless_platform;
@@ -3895,8 +3962,8 @@ mod tests {
     /// `on_ready` returning `Err` must propagate all the way out of
     /// `Platform::run` — not be swallowed into
     /// a bare log while the loop keeps running a half-built app — AND the
-    /// `OWNER_PLATFORM_HOST` TLS clear guard (armed before `run`, per the
-    /// existing unwind-safety contract) must still fire on this ordinary
+    /// `AppRuntime.owner_platform` TLS clear guard (armed before `run`, per
+    /// the existing unwind-safety contract) must still fire on this ordinary
     /// `Err` return, exactly as it does on a panic.
     #[test]
     fn owner_platform_host_on_ready_error_propagates_and_still_clears() {
@@ -3952,15 +4019,16 @@ mod tests {
         });
     }
 
-    /// Hot-restart survival (ADR-0039 §6): `OWNER_PLATFORM_HOST` is
-    /// loop-scoped, deliberately separate from `PLATFORM_REALM_HOST` --
-    /// tearing down a realm on the owner thread must not strand the loop's
-    /// capability, because the loop may host a fresh realm next without
-    /// ever calling `Platform::run` again (hot-restart does exactly this
-    /// today, `install_platform_realm`). `teardown_platform_realm` must
-    /// therefore leave `OWNER_PLATFORM_HOST` untouched.
+    /// Hot-restart survival (ADR-0039 §6): `owner_platform`
+    /// is a loop-scoped `AppRuntime` field, deliberately not cleared by
+    /// `teardown_platform_realm` alongside the realm-facing fields it DOES
+    /// clear (`realm`, `queue`, `owner_thread`, `address`,
+    /// `surface_applier`) -- tearing down a realm on the owner thread must
+    /// not strand the loop's capability, because the loop may host a fresh
+    /// realm next without ever calling `Platform::run` again (hot-restart
+    /// does exactly this today, `install_platform_realm`).
     #[test]
-    fn owner_platform_host_survives_teardown_platform_realm() {
+    fn owner_platform_survives_realm_teardown() {
         use flui_platform::headless_platform;
 
         // `Rc<Cell<_>>`, not a bare local: the `on_ready` closure below is
@@ -3996,8 +4064,57 @@ mod tests {
         );
         assert!(
             after_teardown,
-            "teardown_platform_realm must not clear OWNER_PLATFORM_HOST -- \
+            "teardown_platform_realm must not clear AppRuntime.owner_platform -- \
              the loop may host another realm before it exits (hot-restart)"
         );
+    }
+
+    /// Regression pin for the "No host re-entry" rule on `with_owner_platform`'s
+    /// own rustdoc: since `AppRuntime` folded the realm-facing state and
+    /// `owner_platform` into one `RefCell`, a closure that calls back into
+    /// any function touching that same cell while `with_owner_platform`
+    /// still holds its immutable borrow is a guaranteed `BorrowMutError`
+    /// panic. `dispatch_platform_realm` is the stand-in host op here; the
+    /// same panic would fire for `install_platform_realm`,
+    /// `teardown_platform_realm`, or `install_surface_applier` instead, for
+    /// the identical reason (all of them `borrow_mut()` the same cell).
+    #[test]
+    // Substring match, not the full message: `RefCell`'s panic wording
+    // ("already borrowed: BorrowMutError" vs. "already mutably borrowed:
+    // BorrowError" depending on which side re-enters) has varied across
+    // Rust versions and could vary again; "borrow" is the one substring
+    // present in every variant, so this still fails on an unrelated panic
+    // while staying stable across toolchains.
+    #[should_panic(expected = "borrow")]
+    fn with_owner_platform_reentering_dispatch_panics() {
+        use flui_platform::headless_platform;
+
+        let _clear_guard = OwnerHostClearGuard::arm();
+        let platform = headless_platform();
+        let _ = platform.run(Box::new(|owner| {
+            install_owner_platform(owner);
+            with_owner_platform(|_owner| {
+                // Any host op re-entering here panics: `with_owner_platform`
+                // still holds `APP_RUNTIME.borrow()` for the duration of
+                // this closure, and `dispatch_platform_realm` immediately
+                // tries `slot.borrow_mut()` on the very first line of its
+                // own TLS access.
+                let dispatcher = RealmDispatcher {
+                    owner_thread: std::thread::current().id(),
+                    address: flui_foundation::PresentationAddress {
+                        realm_id: flui_foundation::RealmId::new_gen(
+                            0,
+                            std::num::NonZeroU32::new(1).unwrap(),
+                        ),
+                        presentation_id: flui_foundation::PresentationId::new_gen(
+                            0,
+                            std::num::NonZeroU32::new(1).unwrap(),
+                        ),
+                    },
+                };
+                let _ = dispatch_platform_realm(dispatcher, RealmTask::Frame(Box::new(|_| {})));
+            });
+            Ok(())
+        }));
     }
 }
