@@ -124,16 +124,21 @@ pub fn alloc_page_aligned(size: usize) -> Result<NonNull<u8>, PageAllocError> {
 
     let page_size = get_page_size();
 
-    // Round up to page boundary
-    let aligned_size = (size + page_size - 1) & !(page_size - 1);
+    // Round up to page boundary. `checked_add` (rather than a bare `+`) means
+    // a `size` near `usize::MAX` reports `Err` instead of wrapping to a small
+    // `aligned_size` — including, in the worst case, 0 — under release's
+    // `overflow-checks = false`.
+    let aligned_size = size.checked_add(page_size - 1).ok_or(PageAllocError)? & !(page_size - 1);
 
     // Create aligned layout
     let layout = Layout::from_size_align(aligned_size, page_size).map_err(|_| PageAllocError)?;
 
     // Allocate aligned memory
     // SAFETY: Layout is valid (verified above) and non-zero-size: `size != 0`
-    // was just checked above, and rounding a positive size up to a page
-    // boundary cannot produce 0.
+    // was checked above, and the `checked_add` above returns `Err` rather
+    // than wrapping if rounding `size` up to a page boundary would overflow
+    // — so `aligned_size` is the true ceiling-rounded value, which for any
+    // `size >= 1` is at least one full `page_size`, never 0.
     let ptr = unsafe { alloc(layout) };
 
     NonNull::new(ptr).ok_or(PageAllocError)
@@ -441,7 +446,10 @@ impl<T> Drop for PageAlignedVec<T> {
         // and `align_of::<T>()` (a `T`-level constant), so this layout matches
         // the allocation's layout exactly, satisfying `dealloc`'s "same
         // allocator, same layout" contract.
-        let layout = Layout::from_size_align(self.byte_capacity, align).expect("Invalid layout");
+        let layout = Layout::from_size_align(self.byte_capacity, align).expect(
+            "BUG: byte_capacity/align were already valid Layout inputs when \
+             with_capacity constructed this allocation, and neither is mutated afterward",
+        );
 
         unsafe {
             dealloc(self.ptr.as_ptr() as *mut u8, layout);
@@ -469,31 +477,39 @@ unsafe impl<T: Sync> Sync for PageAlignedVec<T> {}
 ///
 /// This is useful for ensuring Vulkan buffer sizes are page-aligned.
 ///
-/// Note: `align_to_page_size(0)` returns `0`. This is a pure rounding helper
-/// (`(size + page_size - 1) & !(page_size - 1)`), not an allocator, so "0
-/// bytes is already page-aligned" is the coherent answer. This differs from
-/// [`alloc_page_aligned`], which rejects `size == 0` outright because it must
-/// hand back a real allocation.
+/// Returns `None` if `size` is close enough to `usize::MAX` that rounding up
+/// to a page boundary would overflow. This is checked arithmetic rather than
+/// wrapping or saturating: a caller that silently got `usize::MAX`'s wrapped
+/// (small, wrong) or saturated (misleadingly "valid") result in place of an
+/// error would be strictly worse off than one that has to handle `None`.
+///
+/// Note: `align_to_page_size(0)` returns `Some(0)`. This is a pure rounding
+/// helper (`(size + page_size - 1) & !(page_size - 1)`), not an allocator, so
+/// "0 bytes is already page-aligned" is the coherent answer. This differs
+/// from [`alloc_page_aligned`], which rejects `size == 0` outright because it
+/// must hand back a real allocation.
 ///
 /// # Example
 ///
 /// ```rust,ignore
 /// let size = 12345;
-/// let aligned = align_to_page_size(size);
+/// let aligned = align_to_page_size(size).expect("size does not overflow");
 /// assert_eq!(aligned % get_page_size(), 0);
 /// assert!(aligned >= size);
 /// ```
 #[inline]
-pub fn align_to_page_size(size: usize) -> usize {
+pub fn align_to_page_size(size: usize) -> Option<usize> {
     let page_size = get_page_size();
-    (size + page_size - 1) & !(page_size - 1)
+    Some(size.checked_add(page_size - 1)? & !(page_size - 1))
 }
 
 /// Round a size up to the nearest page boundary (u64 version).
+///
+/// See [`align_to_page_size`] for the `None`-on-overflow contract.
 #[inline]
-pub fn align_to_page_size_u64(size: u64) -> u64 {
+pub fn align_to_page_size_u64(size: u64) -> Option<u64> {
     let page_size = get_page_size() as u64;
-    (size + page_size - 1) & !(page_size - 1)
+    Some(size.checked_add(page_size - 1)? & !(page_size - 1))
 }
 
 // ============================================================================
@@ -620,7 +636,7 @@ mod tests {
         ];
 
         for (input, expected) in test_cases {
-            let aligned = align_to_page_size(input);
+            let aligned = align_to_page_size(input).expect("input does not overflow");
             assert_eq!(aligned, expected);
             assert_eq!(aligned % page_size, 0);
             assert!(aligned >= input);
@@ -628,12 +644,25 @@ mod tests {
     }
 
     #[test]
+    fn test_align_to_page_size_overflow() {
+        // Rounding `usize::MAX` up to a page boundary would overflow; checked
+        // arithmetic must report that rather than wrapping to a small,
+        // silently-wrong result.
+        assert_eq!(align_to_page_size(usize::MAX), None);
+    }
+
+    #[test]
     fn test_align_to_page_size_u64() {
         let page_size = get_page_size() as u64;
 
-        let aligned = align_to_page_size_u64(12345);
+        let aligned = align_to_page_size_u64(12345).expect("input does not overflow");
         assert_eq!(aligned % page_size, 0);
         assert!(aligned >= 12345);
+    }
+
+    #[test]
+    fn test_align_to_page_size_u64_overflow() {
+        assert_eq!(align_to_page_size_u64(u64::MAX), None);
     }
 
     #[test]
@@ -668,6 +697,15 @@ mod tests {
     #[test]
     fn test_alloc_page_aligned_rejects_zero_size() {
         assert!(alloc_page_aligned(0).is_err());
+    }
+
+    #[test]
+    fn test_alloc_page_aligned_rejects_overflowing_size() {
+        // `usize::MAX + (page_size - 1)` overflows; under release's
+        // `overflow-checks = false` a bare `+` here would wrap to a tiny
+        // `aligned_size` (in the worst case, 0) and reach the allocator with
+        // it instead of reporting the error.
+        assert!(alloc_page_aligned(usize::MAX).is_err());
     }
 
     #[test]
