@@ -14,6 +14,7 @@
 //! ```text
 //! Pending   ──(owner delivers)──────────▶  Delivered(T)
 //! Pending   ──(requester drops)─────────▶  Abandoned(None)
+//! Pending   ──(owner drops)─────────────▶  OwnerGone
 //! Delivered ──(requester claims)────────▶  Claimed
 //! Delivered ──(requester drops)─────────▶  Abandoned(Some(T))
 //! ```
@@ -32,6 +33,18 @@
 //! that it must unwind rather than relying on a fallible reply send it
 //! never observes failing.
 //!
+//! `ClaimSlot`'s own `Drop` additionally covers owner disconnection: if the
+//! owner side is dropped while the request is still `Pending` (the owner
+//! died, or unwound, without ever calling `deliver`), the slot transitions
+//! to the terminal `OwnerGone` state and wakes whichever consumer-side
+//! primitive is parked on it — a blocked [`ClaimHandle::wait`] and any
+//! registered [`Waker`] both resolve immediately instead
+//! of hanging forever on the owner's `deliver` discipline. This is on top
+//! of (not a replacement for) that discipline: a well-behaved owner still
+//! always calls `deliver` via a panic-safe guard; `OwnerGone` is the
+//! consumer-side backstop for the case where something upstream of that
+//! guard didn't hold up its end.
+//!
 //! This primitive is deliberately generic and carries no `flui-platform`
 //! vocabulary (no `WindowId`, no `OpenWindowError`) — the ADR places its
 //! tests in the winit lane, which CI does not execute; landing the tested
@@ -40,8 +53,11 @@
 //! already established for the runtime-backstop half of ADR-0039).
 
 use std::fmt;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::task::{Context, Poll, Waker};
 
 use parking_lot::{Condvar, Mutex};
 
@@ -59,6 +75,10 @@ enum SlotState<T> {
     Delivered(T),
     Claimed,
     Abandoned(Option<T>),
+    /// The owner side ([`ClaimSlot<T>`]) was dropped while this request was
+    /// still `Pending` — it never called [`ClaimSlot::deliver`]. Reachable
+    /// only from `Pending` (see `ClaimSlot`'s `Drop` impl); terminal.
+    OwnerGone,
 }
 
 struct Inner<T> {
@@ -71,6 +91,12 @@ struct Inner<T> {
     // is redundant against today's single caller. Kept so a future call
     // site added to this type could not silently double-fire the wake.
     wake_fired: AtomicBool,
+    /// The waker of whichever task last polled this handle via the `Future`
+    /// impl (or registered through it), if any. Separate lock from `state`
+    /// so waking a task never happens while `state` is held (the same
+    /// outside-the-lock discipline `notify_abandoned` already follows for
+    /// `wake`) — the woken task may re-enter this module synchronously.
+    waker: Mutex<Option<Waker>>,
 }
 
 impl<T> Inner<T> {
@@ -81,6 +107,17 @@ impl<T> Inner<T> {
     fn notify_abandoned(&self) {
         if !self.wake_fired.swap(true, Ordering::AcqRel) {
             (self.wake)();
+        }
+    }
+
+    /// Wakes whichever task last polled this handle via `Future::poll`, if
+    /// any — called outside `state`'s lock (same discipline as
+    /// `notify_abandoned`) from every transition that changes what a poll
+    /// would observe: delivery, requester abandonment, and owner
+    /// disconnection.
+    fn wake_task(&self) {
+        if let Some(waker) = self.waker.lock().take() {
+            waker.wake();
         }
     }
 }
@@ -98,6 +135,7 @@ impl<T> fmt::Debug for ClaimSlot<T> {
             SlotState::Delivered(_) => "Delivered",
             SlotState::Claimed => "Claimed",
             SlotState::Abandoned(_) => "Abandoned",
+            SlotState::OwnerGone => "OwnerGone",
         };
         f.debug_struct("ClaimSlot").field("state", &state).finish()
     }
@@ -109,6 +147,10 @@ impl<T> ClaimSlot<T> {
     /// even bother producing `T`?" check (the owner lane skips creation
     /// entirely); after delivery it is the "does the sweep need to reclaim
     /// this?" check (paired with [`take_abandoned`](Self::take_abandoned)).
+    ///
+    /// Does not report `OwnerGone` — that transition is this slot's own
+    /// `Drop`, so by the time any code could observe it through this method
+    /// the `ClaimSlot` value is already gone.
     #[must_use]
     pub fn is_abandoned(&self) -> bool {
         matches!(*self.inner.state.lock(), SlotState::Abandoned(_))
@@ -145,6 +187,9 @@ impl<T> ClaimSlot<T> {
     /// Calling `deliver` a second time on the same slot is an owner-side
     /// contract violation (this primitive supports exactly one delivery
     /// per request); it panics rather than silently double-delivering.
+    /// `OwnerGone` is likewise unreachable here — that transition is this
+    /// same `ClaimSlot` value's own `Drop`, so no further method call on it
+    /// can observe it.
     pub fn deliver(&self, value: T) -> Result<(), T> {
         let mut state = self.inner.state.lock();
         match &*state {
@@ -152,6 +197,7 @@ impl<T> ClaimSlot<T> {
                 *state = SlotState::Delivered(value);
                 drop(state);
                 self.inner.delivered.notify_one();
+                self.inner.wake_task();
                 Ok(())
             }
             SlotState::Abandoned(None) => {
@@ -161,7 +207,10 @@ impl<T> ClaimSlot<T> {
                 drop(state);
                 Err(value)
             }
-            SlotState::Delivered(_) | SlotState::Claimed | SlotState::Abandoned(Some(_)) => {
+            SlotState::Delivered(_)
+            | SlotState::Claimed
+            | SlotState::Abandoned(Some(_))
+            | SlotState::OwnerGone => {
                 unreachable!(
                     "BUG: ClaimSlot::deliver called a second time on the same \
                      request — exactly one deliver call per request is the \
@@ -181,7 +230,38 @@ impl<T> ClaimSlot<T> {
         let mut state = self.inner.state.lock();
         match &mut *state {
             SlotState::Abandoned(payload) => payload.take(),
-            SlotState::Pending | SlotState::Delivered(_) | SlotState::Claimed => None,
+            SlotState::Pending
+            | SlotState::Delivered(_)
+            | SlotState::Claimed
+            | SlotState::OwnerGone => None,
+        }
+    }
+}
+
+impl<T> Drop for ClaimSlot<T> {
+    /// Owner-disconnect transition (ADR-0039 §3/slice-2 amendment):
+    /// `Pending -> OwnerGone` if the owner drops this handle without ever
+    /// calling [`deliver`](Self::deliver) — the owner died mid-request, or
+    /// unwound before reaching its `deliver` guard. Wakes both consumer-side
+    /// waiting primitives: a blocked [`ClaimHandle::wait`] (via the
+    /// condvar) and a parked `Future` poll (via the registered
+    /// [`Waker`]), so neither hangs forever on discipline the owner itself
+    /// failed to uphold. A no-op past `Pending` — the request already has a
+    /// resolution (delivered, or already abandoned by the requester) that
+    /// this transition must not clobber.
+    fn drop(&mut self) {
+        let became_owner_gone = {
+            let mut state = self.inner.state.lock();
+            if matches!(*state, SlotState::Pending) {
+                *state = SlotState::OwnerGone;
+                true
+            } else {
+                false
+            }
+        }; // lock released here — notify/wake must never run under it.
+        if became_owner_gone {
+            self.inner.delivered.notify_all();
+            self.inner.wake_task();
         }
     }
 }
@@ -205,55 +285,121 @@ impl<T> fmt::Debug for ClaimHandle<T> {
     }
 }
 
+/// Outcome of resolving a [`ClaimHandle`] — returned by
+/// [`ClaimHandle::wait`] and, wrapped in [`Poll`], by its `Future` impl.
+/// `Delivered`/`AlreadyClaimed`/`OwnerGone` mirror three of the state
+/// diagram's terminal destinations; the fourth, `Abandoned`, is never
+/// reachable through this type (see the `Abandoned` note below).
+#[derive(Debug, PartialEq, Eq)]
+pub enum ClaimOutcome<T> {
+    /// The owner delivered a value; this call/poll claims it.
+    Delivered(T),
+    /// Already claimed by an earlier [`try_take`](ClaimHandle::try_take) (or
+    /// a previous resolution of the same `Future`) on this same handle —
+    /// nothing is left to hand back. A caller-sequencing fact, not a
+    /// slot-invariant violation.
+    AlreadyClaimed,
+    /// The owner side ([`ClaimSlot`]) was dropped before ever delivering.
+    OwnerGone,
+}
+
 impl<T> ClaimHandle<T> {
+    /// Registers `waker` to be woken exactly once, the next time this
+    /// request's outcome changes (delivery, or the owner disconnecting).
+    /// Replaces any previously registered waker — the most recent `poll`
+    /// wins, per the `Future` contract. Called before re-checking `state`
+    /// (not after) so a transition landing between an unguarded check and
+    /// registration can never go unobserved: either the transition already
+    /// happened and the immediate re-check below sees it, or it happens
+    /// later and wakes the now-registered waker.
+    fn register_waker(&self, waker: &Waker) {
+        let mut slot = self.inner.waker.lock();
+        match &*slot {
+            Some(existing) if existing.will_wake(waker) => {}
+            _ => *slot = Some(waker.clone()),
+        }
+    }
+
+    /// The shared non-blocking check behind [`try_take`](Self::try_take) and
+    /// the `Future` impl. `waker` is `Some` only from the `Future` path —
+    /// `try_take` itself never parks anything.
+    fn poll_claim(&mut self, waker: Option<&Waker>) -> Poll<ClaimOutcome<T>> {
+        if let Some(waker) = waker {
+            self.register_waker(waker);
+        }
+        let mut state = self.inner.state.lock();
+        match std::mem::replace(&mut *state, SlotState::Claimed) {
+            SlotState::Delivered(value) => Poll::Ready(ClaimOutcome::Delivered(value)),
+            SlotState::Pending => {
+                *state = SlotState::Pending;
+                Poll::Pending
+            }
+            SlotState::Claimed => {
+                *state = SlotState::Claimed;
+                Poll::Ready(ClaimOutcome::AlreadyClaimed)
+            }
+            SlotState::OwnerGone => {
+                *state = SlotState::OwnerGone;
+                Poll::Ready(ClaimOutcome::OwnerGone)
+            }
+            SlotState::Abandoned(_) => unreachable!(
+                "BUG: ClaimHandle observed Abandoned while still holding the \
+                 sole handle — only this handle's own Drop can abandon it, \
+                 and Drop cannot have run while `self` is alive here"
+            ),
+        }
+    }
+
     /// Non-blocking poll. Returns `Some(T)` exactly once — the first call
     /// observing `Delivered` claims it (`Delivered -> Claimed`) and every
     /// later call (on this handle, or after the request is otherwise
-    /// resolved) returns `None`. Safe on any thread, including the owner.
+    /// resolved, including `OwnerGone`) returns `None`. Safe on any thread,
+    /// including the owner. Callers that need to distinguish "nothing yet"
+    /// from "the owner is gone" should poll the `Future` impl instead (or
+    /// use [`wait`](Self::wait), off the owner thread).
     #[must_use = "discarding Some(value) strands whatever the owner delivered"]
     pub fn try_take(&mut self) -> Option<T> {
-        let mut state = self.inner.state.lock();
-        let current = std::mem::replace(&mut *state, SlotState::Claimed);
-        match current {
-            SlotState::Delivered(value) => Some(value),
-            other @ (SlotState::Pending | SlotState::Claimed | SlotState::Abandoned(_)) => {
-                *state = other;
+        match self.poll_claim(None) {
+            Poll::Ready(ClaimOutcome::Delivered(value)) => Some(value),
+            Poll::Ready(ClaimOutcome::AlreadyClaimed | ClaimOutcome::OwnerGone) | Poll::Pending => {
                 None
             }
         }
     }
 
-    /// Blocks the calling thread until the owner delivers, then claims the
-    /// value.
+    /// Blocks the calling thread until the request resolves — delivery, or
+    /// the owner disconnecting — then claims the outcome.
     ///
-    /// Returns `None` if this handle was already claimed by an earlier
-    /// [`try_take`](Self::try_take) call — `try_take` takes `&mut self`, so
-    /// nothing in the type system stops a caller from following a
-    /// successful `try_take` with a `wait` on the same still-alive handle;
-    /// that is a caller-sequencing fact (there is nothing left to wait
-    /// for), not a slot-invariant violation, so it is reported through the
-    /// return value rather than a panic. Callers that hand this outcome
-    /// to a typed error (e.g. `flui-platform`'s `PendingWindow::wait`) map
-    /// `None` onto their own `#[non_exhaustive]` error enum.
+    /// Returns [`ClaimOutcome::AlreadyClaimed`] if this handle was already
+    /// claimed by an earlier [`try_take`](Self::try_take) call — `try_take`
+    /// takes `&mut self`, so nothing in the type system stops a caller from
+    /// following a successful `try_take` with a `wait` on the same
+    /// still-alive handle; that is a caller-sequencing fact (there is
+    /// nothing left to wait for), not a slot-invariant violation. Callers
+    /// that hand this outcome to a typed error (e.g. `flui-platform`'s
+    /// `PendingWindow::wait`) map each `ClaimOutcome` variant onto their own
+    /// `#[non_exhaustive]` error enum.
     ///
     /// This primitive does not itself refuse the owner thread — callers
     /// that must not block their own owner (e.g. `flui-platform`'s
     /// `PendingWindow::wait`, which drains the very lane this would block
     /// on) are responsible for checking thread identity *before* calling
-    /// `wait` and taking the non-blocking `try_take` path instead.
+    /// `wait` and taking the non-blocking `try_take` path (or the `Future`
+    /// impl, which is always non-blocking) instead.
     ///
     /// # Owner obligation
-    /// `wait` has no "owner disconnected" transition to wake it early —
-    /// unlike a channel's `Receiver`, dropping the owner-side [`ClaimSlot`]
-    /// without ever calling [`deliver`](ClaimSlot::deliver) sends no signal
-    /// here, so a caller blocked in `wait` would block forever. The owner
-    /// must guarantee it always eventually calls `deliver`, typically via a
-    /// panic-safe guard that calls it unconditionally on drop if not
-    /// already called explicitly (`flui-platform`'s `OpenWindowReplyGuard`
-    /// is exactly this guard for the winit lane) — never a bare, fallible
-    /// call site with no fallback.
-    #[must_use = "discarding Some(value) strands whatever the owner delivered"]
-    pub fn wait(self) -> Option<T> {
+    /// The owner must still guarantee it always eventually calls `deliver`,
+    /// typically via a panic-safe guard that calls it unconditionally on
+    /// drop if not already called explicitly (`flui-platform`'s
+    /// `OpenWindowReplyGuard` is exactly this guard for the winit lane).
+    /// `ClaimSlot`'s `Drop` is the backstop for when that discipline is
+    /// broken upstream of the guard (the owner died or unwound before
+    /// `deliver` even had a guard protecting it): a blocked `wait` now
+    /// resolves to [`ClaimOutcome::OwnerGone`] instead of hanging forever —
+    /// the guard is still the primary mechanism, not something this
+    /// backstop makes optional.
+    #[must_use = "discarding a Delivered outcome strands whatever the owner delivered"]
+    pub fn wait(self) -> ClaimOutcome<T> {
         let mut state = self.inner.state.lock();
         loop {
             match &*state {
@@ -263,7 +409,7 @@ impl<T> ClaimHandle<T> {
                     else {
                         unreachable!("BUG: match on &*state just confirmed Delivered")
                     };
-                    return Some(value);
+                    return ClaimOutcome::Delivered(value);
                 }
                 SlotState::Pending => {
                     self.inner.delivered.wait(&mut state);
@@ -271,7 +417,12 @@ impl<T> ClaimHandle<T> {
                 // Already resolved by an earlier `try_take` on this same
                 // handle -- a caller-sequencing fact, not a bug: nothing
                 // left to wait for.
-                SlotState::Claimed => return None,
+                SlotState::Claimed => return ClaimOutcome::AlreadyClaimed,
+                // The owner side dropped without ever delivering (its own
+                // `Drop` set this and woke this condvar) -- resolve rather
+                // than loop forever waiting for a `deliver` that will now
+                // never come.
+                SlotState::OwnerGone => return ClaimOutcome::OwnerGone,
                 SlotState::Abandoned(_) => unreachable!(
                     "BUG: ClaimHandle::wait observed Abandoned while still \
                      holding the sole handle — only this handle's own Drop \
@@ -280,6 +431,20 @@ impl<T> ClaimHandle<T> {
                 ),
             }
         }
+    }
+}
+
+impl<T> Future for ClaimHandle<T> {
+    type Output = ClaimOutcome<T>;
+
+    /// Non-blocking poll; safe on any thread, including the owner (unlike
+    /// [`wait`](Self::wait), which refuses there because it would block on
+    /// the very lane the owner itself drains). Resolves on delivery, on
+    /// owner disconnection ([`ClaimOutcome::OwnerGone`], woken by
+    /// `ClaimSlot`'s `Drop`), or immediately if this handle was already
+    /// claimed by an earlier [`try_take`](Self::try_take).
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        self.poll_claim(Some(cx.waker()))
     }
 }
 
@@ -296,7 +461,9 @@ impl<T> Drop for ClaimHandle<T> {
                     *state = SlotState::Abandoned(Some(value));
                     true
                 }
-                already_resolved @ (SlotState::Claimed | SlotState::Abandoned(_)) => {
+                already_resolved @ (SlotState::Claimed
+                | SlotState::Abandoned(_)
+                | SlotState::OwnerGone) => {
                     *state = already_resolved;
                     false
                 }
@@ -304,6 +471,12 @@ impl<T> Drop for ClaimHandle<T> {
         }; // lock released here — notify_abandoned must never run under it.
         if became_abandoned {
             self.inner.notify_abandoned();
+            // No task can still be parked on this same handle's `Future`
+            // once the handle itself is being dropped, so this is a no-op
+            // in practice — fired anyway for symmetry with `deliver` and
+            // `ClaimSlot`'s `Drop`, which both wake unconditionally on
+            // their own state-changing transitions.
+            self.inner.wake_task();
         }
     }
 }
@@ -322,6 +495,7 @@ pub fn claim_slot<T>(wake: WakeOwner) -> (ClaimSlot<T>, ClaimHandle<T>) {
         delivered: Condvar::new(),
         wake,
         wake_fired: AtomicBool::new(false),
+        waker: Mutex::new(None),
     });
     (
         ClaimSlot {
@@ -333,12 +507,15 @@ pub fn claim_slot<T>(wake: WakeOwner) -> (ClaimSlot<T>, ClaimHandle<T>) {
 
 #[cfg(test)]
 mod tests {
+    use std::future::Future;
+    use std::pin::Pin;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::task::{Context, Poll, Waker};
     use std::thread;
     use std::time::Duration;
 
-    use super::claim_slot;
+    use super::{ClaimOutcome, claim_slot};
 
     fn counting_wake() -> (Arc<dyn Fn() + Send + Sync>, Arc<AtomicUsize>) {
         let count = Arc::new(AtomicUsize::new(0));
@@ -494,18 +671,18 @@ mod tests {
 
         assert_eq!(
             waiter.join().expect("waiter thread does not panic"),
-            Some(123)
+            ClaimOutcome::Delivered(123)
         );
     }
 
     #[test]
-    fn wait_after_a_successful_try_take_on_the_same_handle_returns_none_not_a_panic() {
-        // Regression test (spec-compliance review MAJOR-1): `try_take` takes
-        // `&mut self`, so nothing in the type system stops a caller from
+    fn wait_after_a_successful_try_take_on_the_same_handle_returns_already_claimed_not_a_panic() {
+        // Regression test (foundation claim-slot compliance review): `try_take`
+        // takes `&mut self`, so nothing in the type system stops a caller from
         // following a successful `try_take` with a `wait` on the same
         // still-alive handle. That used to hit an `unreachable!("BUG: ...")`
         // panic through entirely safe public API; `wait` must instead
-        // report "nothing left to wait for" via `None`.
+        // report "nothing left to wait for" via `AlreadyClaimed`.
         let (wake, wake_count) = counting_wake();
         let (slot, mut handle) = claim_slot::<u32>(wake);
 
@@ -514,8 +691,8 @@ mod tests {
 
         assert_eq!(
             handle.wait(),
-            None,
-            "wait on an already-claimed handle must report None, not panic"
+            ClaimOutcome::AlreadyClaimed,
+            "wait on an already-claimed handle must report AlreadyClaimed, not panic"
         );
         assert_eq!(
             wake_count.load(Ordering::Acquire),
@@ -524,13 +701,179 @@ mod tests {
         );
     }
 
+    /// Real second thread, bounded via `recv_timeout`: a `wait()` blocked on
+    /// a request the owner never delivers must not hang forever once the
+    /// owner side (`ClaimSlot`) is dropped — it must unblock with
+    /// `ClaimOutcome::OwnerGone` (ADR-0039 §3/slice-2 amendment). A test
+    /// that used a bare `.join()` would itself hang the test suite if this
+    /// regressed; `recv_timeout` turns that failure mode into a normal
+    /// assertion failure instead.
+    #[test]
+    fn blocked_waiter_unblocks_on_owner_drop() {
+        let (wake, _wake_count) = counting_wake();
+        let (slot, handle) = claim_slot::<u32>(wake);
+        let (result_tx, result_rx) = std::sync::mpsc::channel();
+
+        let waiter = thread::spawn(move || {
+            let outcome = handle.wait();
+            // A join-based test could hang forever if `wait` regressed to
+            // blocking indefinitely; sending through a channel lets the
+            // main thread bound how long it waits instead.
+            let _ = result_tx.send(outcome);
+        });
+
+        // Give the waiter a chance to reach the condvar before the owner
+        // disconnects; not required for correctness (dropping `slot` first
+        // would still resolve `wait` correctly), only to exercise the
+        // blocking path rather than the immediate one.
+        thread::sleep(Duration::from_millis(20));
+        drop(slot);
+
+        let outcome = result_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("wait() must unblock promptly once the owner side drops");
+        assert_eq!(outcome, ClaimOutcome::OwnerGone);
+        waiter.join().expect("waiter thread does not panic");
+    }
+
+    #[test]
+    fn future_resolves_on_deliver() {
+        let (wake, _wake_count) = counting_wake();
+        let (slot, mut handle) = claim_slot::<u32>(wake);
+
+        let (waker, _wake_count_task) = test_waker();
+        let mut cx = Context::from_waker(&waker);
+        assert_eq!(
+            Pin::new(&mut handle).poll(&mut cx),
+            Poll::Pending,
+            "nothing delivered yet"
+        );
+
+        slot.deliver(42).expect("slot is still Pending");
+
+        assert_eq!(
+            Pin::new(&mut handle).poll(&mut cx),
+            Poll::Ready(ClaimOutcome::Delivered(42)),
+            "a re-poll after delivery must resolve, not just the woken task"
+        );
+    }
+
+    /// Distinguishes "the value eventually resolves" from "the registered
+    /// `Waker` actually fires" — a `Future` that only ever resolved on the
+    /// next unconditional re-poll (never truly parking) would still pass a
+    /// resolves-on-deliver test but stall forever under a real executor
+    /// that only re-polls after a wake.
+    #[test]
+    fn future_wakes_not_just_resolves_after_waker_registration() {
+        let (wake, _wake_count) = counting_wake();
+        let (slot, mut handle) = claim_slot::<u32>(wake);
+
+        let (waker, wake_count) = test_waker();
+        let mut cx = Context::from_waker(&waker);
+        assert_eq!(Pin::new(&mut handle).poll(&mut cx), Poll::Pending);
+        assert_eq!(
+            wake_count.count(),
+            0,
+            "registering must not itself count as a wake"
+        );
+
+        slot.deliver(7).expect("slot is still Pending");
+
+        assert_eq!(
+            wake_count.count(),
+            1,
+            "delivery must wake the registered waker directly, not merely \
+             become observable on a hypothetical future poll"
+        );
+        assert_eq!(
+            Pin::new(&mut handle).poll(&mut cx),
+            Poll::Ready(ClaimOutcome::Delivered(7))
+        );
+    }
+
+    #[test]
+    fn future_wakes_on_owner_drop() {
+        let (wake, _wake_count) = counting_wake();
+        let (slot, mut handle) = claim_slot::<u32>(wake);
+
+        let (waker, wake_count) = test_waker();
+        let mut cx = Context::from_waker(&waker);
+        assert_eq!(Pin::new(&mut handle).poll(&mut cx), Poll::Pending);
+
+        drop(slot);
+
+        assert_eq!(
+            wake_count.count(),
+            1,
+            "owner disconnection must wake a parked poll, not just resolve a later one"
+        );
+        assert_eq!(
+            Pin::new(&mut handle).poll(&mut cx),
+            Poll::Ready(ClaimOutcome::OwnerGone)
+        );
+    }
+
+    /// The owner thread is also a legal thread to poll from — unlike
+    /// `wait()`, which must refuse there (callers building on top, e.g.
+    /// `flui-platform`'s `PendingWindow`, check thread identity themselves;
+    /// this primitive's `Future` impl has no such refusal because polling
+    /// never blocks in the first place).
+    #[test]
+    fn owner_thread_poll_never_blocks() {
+        let (wake, _wake_count) = counting_wake();
+        let (_slot, mut handle) = claim_slot::<u32>(wake);
+
+        let (waker, _wake_count_task) = test_waker();
+        let mut cx = Context::from_waker(&waker);
+        // Same thread as the (still-live) owner side `_slot` -- a blocking
+        // `wait()` here would be the exact hazard `PendingWindow::wait`
+        // refuses; `poll` must return immediately regardless.
+        assert_eq!(Pin::new(&mut handle).poll(&mut cx), Poll::Pending);
+    }
+
+    /// Counting `Wake` implementation for tests: no executor, `futures`
+    /// dependency, or hand-rolled `RawWaker`/`unsafe` needed just to prove a
+    /// wake fired — `std::task::Wake` builds a real `Waker` from a safe
+    /// `Arc<impl Wake>` (stable since 1.51).
+    struct CountingWake(AtomicUsize);
+
+    impl CountingWake {
+        fn count(&self) -> usize {
+            self.0.load(Ordering::Acquire)
+        }
+    }
+
+    impl std::task::Wake for CountingWake {
+        fn wake(self: Arc<Self>) {
+            self.wake_by_ref();
+        }
+
+        fn wake_by_ref(self: &Arc<Self>) {
+            self.0.fetch_add(1, Ordering::AcqRel);
+        }
+    }
+
+    fn test_waker() -> (Waker, Arc<CountingWake>) {
+        let inner = Arc::new(CountingWake(AtomicUsize::new(0)));
+        (Waker::from(Arc::clone(&inner)), inner)
+    }
+
     #[test]
     fn panic_during_owner_work_before_delivery_leaves_the_slot_claimable_or_abandoned() {
         // Simulates the owner panicking while producing `T`, *before* ever
         // calling `deliver` — the hazard this test rules out is a wedged
-        // Mutex from a poisoned lock. `parking_lot::Mutex` does not
-        // poison, so a panicking owner thread that never touches the slot
-        // again still leaves it in a state the requester can act on.
+        // `Mutex` from a poisoned lock (`parking_lot::Mutex` does not
+        // poison) AND, since `ClaimSlot`'s own `Drop` now covers owner
+        // disconnection (ADR-0039 §3 slice-2 amendment), a handle left
+        // waiting forever for a `deliver` call that will now never come.
+        //
+        // The panicking thread's `slot` unwinds through `ClaimSlot::drop`
+        // right there, on the owner thread — it observes `Pending` and
+        // transitions straight to `OwnerGone` before this test ever touches
+        // `handle`, so the injected `WakeOwner` callback (`counting_wake`)
+        // correctly never fires here: that callback wakes the *owner*'s
+        // event loop when the *requester* abandons, which is not what
+        // happened in this scenario (the owner is what disconnected).
         let (wake, wake_count) = counting_wake();
         let (slot, handle) = claim_slot::<u32>(wake);
 
@@ -540,14 +883,18 @@ mod tests {
         });
         assert!(owner.join().is_err(), "owner thread panics as designed");
 
-        // The slot was dropped when the panicking thread unwound, so the
-        // requester's abandonment path — not the owner's — resolves this
-        // request the moment the handle itself is dropped.
-        drop(handle);
+        assert_eq!(
+            handle.wait(),
+            ClaimOutcome::OwnerGone,
+            "slot is not wedged: the handle resolves to OwnerGone instead of \
+             blocking forever on a deliver call that will never come"
+        );
         assert_eq!(
             wake_count.load(Ordering::Acquire),
-            1,
-            "slot is not wedged: abandonment still completes and wakes exactly once"
+            0,
+            "the requester never abandoned anything here -- the owner did -- \
+             so the WakeOwner callback (which wakes the owner on requester \
+             abandonment) must not fire"
         );
     }
 }

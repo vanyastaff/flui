@@ -198,7 +198,7 @@ pub use callbacks::{
     VoidCallback,
 };
 // Claim-slot request/reply primitive (ADR-0039 §3)
-pub use claim_slot::{ClaimHandle, ClaimSlot, claim_slot};
+pub use claim_slot::{ClaimHandle, ClaimOutcome, ClaimSlot, claim_slot};
 // Monotonic time source (OS / virtual clock) — foundational primitive injected
 // by deadline- and frame-driven subsystems (gesture arena, headless binding).
 pub use clock::{ManualClock, MonotonicClock, SystemClock};
