@@ -453,7 +453,7 @@ impl WinitPlatform {
     }
 
     /// Takes the global window-event handler out from under the state lock
-    /// so it can be invoked outside it (U6, ADR-0039). Before this hoist,
+    /// so it can be invoked outside it (ADR-0039). Before this hoist,
     /// `invoke_window_event` ran while `with_state`'s lock was held, so a
     /// handler that called an owner-thread platform method (e.g. a
     /// deferred `OwnerPlatform::open_window`) would re-enter this same
@@ -584,10 +584,14 @@ impl OpenWindowReplyGuard {
 impl Drop for OpenWindowReplyGuard {
     fn drop(&mut self) {
         if let Some(reply) = self.reply.take() {
-            let _ = reply.deliver(Err(OpenWindowError::Backend {
-                message: "winit event-loop owner stopped before completing the window request"
-                    .to_string(),
-            }));
+            // `OwnerGone`, not `Backend`: this guard fires when the owner
+            // stops (panics, or drops the guard) before ever completing the
+            // request -- consistent with `reject_pending_commands`'
+            // identical shutdown-path delivery and with `OwnerGone`'s own
+            // documented semantics ("the loop died after the request was
+            // already accepted"). `Backend` means the backend tried and
+            // failed to create the window; that never happened here.
+            let _ = reply.deliver(Err(OpenWindowError::OwnerGone { rejected: None }));
         }
     }
 }
@@ -660,7 +664,7 @@ impl ApplicationHandler for WinitApp {
                 }
 
                 // Lease-take the global handler and invoke it OUTSIDE the
-                // state lock (U6, ADR-0039): preserves today's observable
+                // state lock (ADR-0039): preserves today's observable
                 // ordering (handler invocation still precedes map
                 // removal/`should_exit`) while letting the handler call
                 // owner-thread platform methods (e.g. a deferred
@@ -709,7 +713,7 @@ impl ApplicationHandler for WinitApp {
                     win.callbacks().dispatch_resize(logical, scale);
                 }
 
-                // Notify platform handler (leased outside the state lock, U6).
+                // Notify platform handler (leased outside the state lock).
                 self.platform
                     .lease_window_event_handler()
                     .invoke(WindowEvent::Resized {
@@ -725,7 +729,7 @@ impl ApplicationHandler for WinitApp {
                     win.callbacks().dispatch_request_frame();
                 }
 
-                // Notify platform handler (leased outside the state lock, U6).
+                // Notify platform handler (leased outside the state lock).
                 self.platform
                     .lease_window_event_handler()
                     .invoke(WindowEvent::RedrawRequested {
@@ -742,7 +746,7 @@ impl ApplicationHandler for WinitApp {
                 }
 
                 // Active-window bookkeeping stays under the lock; only the
-                // handler invocation moves outside it (U6).
+                // handler invocation moves outside it.
                 self.platform.with_state(|state| {
                     if focused {
                         state.active_window = Some(platform_id);
@@ -1266,8 +1270,13 @@ impl Platform for WinitPlatform {
 
         tracing::debug!("Waiting for window creation response");
 
+        // This `handle` is freshly minted above and never offered to any
+        // other caller, so `try_take` cannot have claimed it already —
+        // `None` here would mean this fast path itself raced a second
+        // claim attempt, which the code above never performs.
         let window = handle
             .wait()
+            .expect("BUG: this handle is never polled by another caller before wait")
             .map_err(|error| anyhow::anyhow!("winit window creation failed: {error}"))?;
 
         tracing::info!("Window created successfully");
@@ -1417,14 +1426,13 @@ impl Platform for WinitPlatform {
     }
 }
 
-/// [`OwnerHooks`] for the winit backend (ADR-0039 §1, U4/U5). Inside
-/// `on_ready`, `ACTIVE_EVENT_LOOP` is published, so creation is direct and
-/// synchronous; afterwards, this defers through the owner lane instead of
-/// blocking or re-entering backend state — the load-bearing design choice
-/// that lets a call from arbitrary owner-thread callback context (a handler
-/// invoked by [`WinitApp::window_event`], now hoisted outside the state
-/// lock by U6) neither deadlock nor mutate the platform window map
-/// mid-frame.
+/// [`OwnerHooks`] for the winit backend (ADR-0039 §1). Inside `on_ready`,
+/// `ACTIVE_EVENT_LOOP` is published, so creation is direct and synchronous;
+/// afterwards, this defers through the owner lane instead of blocking or
+/// re-entering backend state — the load-bearing design choice that lets a
+/// call from arbitrary owner-thread callback context (a handler invoked by
+/// [`WinitApp::window_event`], now hoisted outside the state lock) neither
+/// deadlock nor mutate the platform window map mid-frame.
 struct WinitOwnerHooks {
     platform: Arc<WinitPlatform>,
     owner_thread: ThreadId,
@@ -1489,7 +1497,7 @@ impl OwnerHooks for WinitOwnerHooks {
 
 /// [`ProxyTransport`] for the winit backend: worker threads reach the owner
 /// lane exactly as the pre-ADR-0039 cross-thread `Platform::open_window`
-/// path already did (U5) — enqueue-and-wake, claim-slot reply.
+/// path already did — enqueue-and-wake, claim-slot reply.
 struct WinitProxyTransport {
     platform: Arc<WinitPlatform>,
     owner_thread: ThreadId,
@@ -1541,6 +1549,7 @@ mod tests {
     use std::{
         collections::HashSet,
         panic::{AssertUnwindSafe, catch_unwind, resume_unwind},
+        path::PathBuf,
         sync::{
             Arc,
             atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -1932,7 +1941,8 @@ mod tests {
             let outcome = catch_unwind(AssertUnwindSafe(|| {
                 wait_for_running(&platform_for_worker);
 
-                let before = platform_for_worker.with_state(|state| state.window_id_map.len());
+                let keys_before: HashSet<_> = platform_for_worker
+                    .with_state(|state| state.window_id_map.keys().copied().collect());
 
                 let handle = control_for_worker
                     .request_open_window(options("orphan-after-delivery"))
@@ -1942,7 +1952,35 @@ mod tests {
                 // actually be created and delivered (the map grows) before
                 // we abandon it -- otherwise we would only be testing the
                 // already-covered dropped-*before*-delivery skip path.
-                wait_for_map_len(&platform_for_worker, before + 1, "window creation");
+                wait_for_map_len(
+                    &platform_for_worker,
+                    keys_before.len() + 1,
+                    "window creation",
+                );
+
+                // Capture the orphan's platform `WindowId` (not just its
+                // winit id) so we can seed and later check state keyed by
+                // it: `cursor_positions`, and a synthetic drag-drop session
+                // via `data_transfer.note_dropped_file`, proving
+                // `unwind_orphan_window` cleans up both, not just the two
+                // window-identity maps.
+                let (orphan_id, data_transfer) = platform_for_worker.with_state(|state| {
+                    let new_winit_id = *state
+                        .window_id_map
+                        .keys()
+                        .find(|id| !keys_before.contains(id))
+                        .expect("a new winit id must have appeared");
+                    let orphan_id = state.window_id_map[&new_winit_id];
+                    state
+                        .cursor_positions
+                        .insert(orphan_id, winit::dpi::PhysicalPosition::new(1.0, 2.0));
+                    (orphan_id, Arc::clone(&state.data_transfer))
+                });
+                data_transfer.note_dropped_file(orphan_id, PathBuf::from("test.txt"), None);
+                assert!(
+                    data_transfer.windows_awaiting_freeze().contains(&orphan_id),
+                    "the seeded drag session must be live before the unwind"
+                );
 
                 // Drop WITHOUT claiming: the claim-slot's
                 // `Delivered -> Abandoned` transition (ADR-0039 §3) -- the
@@ -1950,13 +1988,34 @@ mod tests {
                 // requester that vanished before reading it.
                 drop(handle);
 
-                wait_for_map_len(&platform_for_worker, before, "orphan-window unwind");
+                wait_for_map_len(
+                    &platform_for_worker,
+                    keys_before.len(),
+                    "orphan-window unwind",
+                );
 
-                let windows_len = platform_for_worker.with_state(|state| state.windows.len());
+                let (windows_len, cursor_positions_still_has_orphan) = platform_for_worker
+                    .with_state(|state| {
+                        (
+                            state.windows.len(),
+                            state.cursor_positions.contains_key(&orphan_id),
+                        )
+                    });
                 assert_eq!(
-                    windows_len, before,
+                    windows_len,
+                    keys_before.len(),
                     "unwind_orphan_window must also remove the windows-map entry, \
                      not just window_id_map"
+                );
+                assert!(
+                    !cursor_positions_still_has_orphan,
+                    "unwind_orphan_window must also remove the orphan's \
+                     cursor_positions entry"
+                );
+                assert!(
+                    !data_transfer.windows_awaiting_freeze().contains(&orphan_id),
+                    "unwind_orphan_window's data_transfer.forget_window call must \
+                     retire the orphan's in-flight drag session"
                 );
             }));
 
@@ -2119,6 +2178,7 @@ mod tests {
                     .expect("lane still accepts requests after the straggler event");
                 sentinel
                     .wait()
+                    .expect("this handle is never polled by another caller before wait")
                     .expect("a normal request still completes after the straggler event");
             }));
 
