@@ -369,15 +369,24 @@ impl PendingWindow {
     /// lane the caller itself drains.
     ///
     /// # Errors
-    /// See [`WaitError`].
+    /// See [`WaitError`]. Notably [`WaitError::AlreadyClaimed`] if an
+    /// earlier [`try_take`](Self::try_take) on this same `PendingWindow`
+    /// already claimed the result — `try_take` takes `&mut self`, so
+    /// nothing stops a caller from following a successful `try_take` with a
+    /// `wait` on the same handle; there is nothing left to wait for.
     pub fn wait(self) -> Result<Arc<dyn PlatformWindow>, WaitError> {
         if self.owner_thread == std::thread::current().id() {
             return Err(WaitError::WouldBlockOwner(self));
         }
-        self.handle.wait().map_err(WaitError::Open)
+        match self.handle.wait() {
+            Some(result) => result.map_err(WaitError::Open),
+            None => Err(WaitError::AlreadyClaimed),
+        }
     }
 
     /// Non-blocking poll; safe on any thread.
+    #[must_use = "discarding Some(_) strands whatever the owner delivered \
+                  (a live window, or the typed error explaining why not)"]
     pub fn try_take(&mut self) -> Option<Result<Arc<dyn PlatformWindow>, OpenWindowError>> {
         self.handle.try_take()
     }
@@ -401,6 +410,13 @@ pub enum WaitError {
     /// The request itself failed.
     #[error(transparent)]
     Open(#[from] OpenWindowError),
+    /// An earlier `try_take` on this same `PendingWindow` already claimed
+    /// the result — there is nothing left for `wait` to return. Not a
+    /// slot-invariant violation, just a caller-sequencing fact: `try_take`
+    /// takes `&mut self`, so nothing stops a caller from following a
+    /// successful poll with a `wait` call on the same handle.
+    #[error("the pending window was already claimed by an earlier try_take call")]
+    AlreadyClaimed,
 }
 
 // ============================================================================
