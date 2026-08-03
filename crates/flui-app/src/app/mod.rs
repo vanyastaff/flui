@@ -16,6 +16,7 @@ pub(crate) mod hot_reload;
 pub(crate) mod logging;
 pub(crate) mod presentation;
 pub mod runner;
+pub(crate) mod runtime;
 pub(crate) mod ui_realm;
 pub(crate) mod window_registry;
 
