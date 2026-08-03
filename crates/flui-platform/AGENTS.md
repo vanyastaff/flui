@@ -14,6 +14,11 @@ Platform abstraction layer. Provides a unified `Platform` trait with concrete im
 ## Key constraints
 
 - **Tests excluded from CI** — STATUS_HEAP_CORRUPTION investigation in progress
+- The `winit/` module (including its owner-lane tests) only compiles under the
+  `winit-backend` feature, not `desktop` (default) — a bare
+  `cargo nextest run -p flui-platform` silently skips all of it; use
+  `cargo nextest run -p flui-platform --all-features` (or `--features winit-backend`)
+  to actually build and run it
 - `desktop` feature (default) enables `winit`; `web` feature for WASM
 - Native async deps (tokio) are `cfg(not(target_arch = "wasm32"))` only
 - `raw-window-handle` 0.6 for window handle abstraction
