@@ -373,7 +373,7 @@ mod tests {
         assert_eq!(presentation.lifecycle(), PresentationLifecycle::Closed);
     }
 
-    /// Red-check: remove the lifecycle check from `dispatch_semantics_action`
+    /// If reverted: remove the lifecycle check from `dispatch_semantics_action`
     /// and this fails with `Ok(())` instead (the request would resolve
     /// against a node id that happens not to exist, which is a different,
     /// pre-existing refusal path — `PresentationClosed` must fire first).

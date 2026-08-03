@@ -1006,7 +1006,7 @@ mod tests {
     /// never lets the request reach `dispatch_semantics_action` (no
     /// pipeline borrow at all).
     ///
-    /// Red-check: remove the `presentation_id` comparison from
+    /// If reverted: remove the `presentation_id` comparison from
     /// `drain_commands` and this fails (`invoked == 1` instead of
     /// `dropped_stale == 1`).
     #[test]
