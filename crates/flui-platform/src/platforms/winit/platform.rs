@@ -1539,11 +1539,23 @@ impl ProxyTransport for WinitProxyTransport {
 #[cfg(test)]
 mod tests {
     use std::{
-        panic::{AssertUnwindSafe, catch_unwind},
+        collections::HashSet,
+        panic::{AssertUnwindSafe, catch_unwind, resume_unwind},
         sync::{
             Arc,
-            atomic::{AtomicUsize, Ordering},
+            atomic::{AtomicBool, AtomicUsize, Ordering},
         },
+        thread,
+        time::{Duration, Instant},
+    };
+
+    use flui_types::geometry::{Size, px};
+    use parking_lot::Mutex;
+    use winit::{
+        application::ApplicationHandler,
+        event::WindowEvent as WinitWindowEvent,
+        event_loop::{ActiveEventLoop, EventLoop},
+        window::WindowId as WinitWindowId,
     };
 
     use super::{
@@ -1553,6 +1565,104 @@ mod tests {
         platforms::winit::control::{ControlCommand, control_lane},
         traits::{Platform, WindowOptions},
     };
+
+    fn options(title: impl Into<String>) -> WindowOptions {
+        WindowOptions {
+            title: title.into(),
+            size: Size::new(px(320.0), px(240.0)),
+            visible: false,
+            ..WindowOptions::default()
+        }
+    }
+
+    /// Polls (bounded, 2s) until the owner has reached `Running` — the point
+    /// at which `resumed()` has returned and the owner lane accepts
+    /// deferred, post-bootstrap requests. Real wall-clock, not simulated:
+    /// these lane tests drive an actual winit event loop.
+    fn wait_for_running(platform: &WinitPlatform) {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !platform.with_state(|state| matches!(state.run_state, WinitRunState::Running { .. }))
+        {
+            assert!(
+                Instant::now() < deadline,
+                "owner never reached Running within 2s"
+            );
+            thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    /// Polls (bounded, 2s) until `window_id_map.len() == expected`. Used
+    /// both to detect that a deferred request actually landed (count goes
+    /// up) and that an unwind completed (count goes back down) — a
+    /// deterministic condition, not a blind sleep, even though the exact
+    /// wake-up latency is real wall-clock time.
+    fn wait_for_map_len(platform: &WinitPlatform, expected: usize, what: &str) {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let actual = platform.with_state(|state| state.window_id_map.len());
+            if actual == expected {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "timed out waiting for {what}: window_id_map.len() = {actual}, expected {expected}"
+            );
+            thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    /// Builds a real `EventLoop` for a test running on an ordinary test
+    /// thread, not the process's actual main thread. winit refuses this by
+    /// default (a real cross-platform hazard for production code); Linux
+    /// and Windows offer an explicit opt-out for exactly this situation
+    /// (test harnesses, embedding). AppKit has no such opt-out — main-thread
+    /// affinity there is enforced by the OS, not just winit's own guard —
+    /// so these lane tests are `#[ignore]`d on macOS (see the two callers).
+    ///
+    /// **Only one `EventLoop` may ever exist per process** (a separate,
+    /// permanent winit limitation, not the main-thread one above): a second
+    /// `build()` call anywhere in the same process fails with
+    /// `RecreationAttempt`, even sequentially, even after the first loop
+    /// exited. Every test that calls this must run in its own process —
+    /// `cargo nextest run` gives each test one by default; plain
+    /// `cargo test` runs the whole binary in one process and WILL fail
+    /// whichever of these tests happens to run second. Local-only per the
+    /// ADR-0039 slice-2 plan either way (`flui-platform`'s suite is
+    /// excluded from CI regardless).
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    fn build_test_event_loop() -> EventLoop<()> {
+        #[cfg(target_os = "linux")]
+        {
+            // `EventLoopBuilderExtWayland` adds a same-named, same-effect
+            // `with_any_thread` to this same shared `EventLoopBuilder` (the
+            // backend, X11 or Wayland, is a runtime choice, not this
+            // builder's) -- importing both traits makes the call
+            // ambiguous, so this sets the flag through X11's alone; it
+            // applies regardless of which backend is actually selected at
+            // runtime.
+            use winit::platform::x11::EventLoopBuilderExtX11;
+            let mut builder = EventLoop::builder();
+            EventLoopBuilderExtX11::with_any_thread(&mut builder, true);
+            builder
+                .build()
+                .expect("build a real winit event loop off the main thread")
+        }
+        #[cfg(target_os = "windows")]
+        {
+            use winit::platform::windows::EventLoopBuilderExtWindows;
+            EventLoop::builder()
+                .with_any_thread(true)
+                .build()
+                .expect("build a real winit event loop off the main thread")
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn build_test_event_loop() -> EventLoop<()> {
+        EventLoop::builder()
+            .build()
+            .expect("build a real winit event loop (main-thread only on macOS)")
+    }
 
     #[test]
     fn winit_owner_thread_open_outside_active_event_loop_is_rejected() {
@@ -1779,5 +1889,260 @@ mod tests {
                 .expect("reply guard returns explicit error instead of disconnect")
                 .is_err()
         );
+    }
+
+    /// Drives a REAL winit event loop (this sandbox has a live X11/Wayland
+    /// display) to exercise the actual owner-side path: `create_window_now`
+    /// needs a genuine `ActiveEventLoop`, so the drain/sweep/unwind sequence
+    /// (`process_control` -> `sweep_settled_replies` -> `unwind_orphan_window`)
+    /// cannot be exercised end-to-end with a hand-built `WinitApp` alone the
+    /// way the lower-level claim-slot tests in `control.rs` do.
+    ///
+    /// `on_ready: None` — this test bypasses `OwnerPlatform` entirely and
+    /// drives the lane directly through `ControlSender`, mirroring how a
+    /// deferred post-bootstrap request actually reaches it (`WinitOwnerHooks`/
+    /// `WinitProxyTransport` are thin wrappers over exactly this).
+    #[test]
+    #[cfg_attr(
+        target_os = "macos",
+        ignore = "winit requires AppKit's event loop on the real main thread; \
+                  the test harness runs this on an ordinary test thread"
+    )]
+    fn winit_lane_dropped_after_delivery_unwinds_and_leaves_the_window_gone() {
+        let platform = Arc::new(WinitPlatform::new());
+        let event_loop = build_test_event_loop();
+        let event_loop_proxy = event_loop.create_proxy();
+        let wake_owner: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+            let _ = event_loop_proxy.send_event(());
+        });
+        let (control, receiver) = control_lane(wake_owner);
+        let owner_thread = thread::current().id();
+        platform
+            .install_control_lane(owner_thread, control.clone())
+            .expect("first install succeeds");
+
+        let platform_for_worker = Arc::clone(&platform);
+        let control_for_worker = control.clone();
+        let worker = thread::spawn(move || {
+            // Catch a scenario panic (e.g. a bounded-poll timeout) so
+            // `request_quit()` always runs below -- otherwise a failing
+            // assertion leaves `run_app` parked forever waiting for a quit
+            // that never comes, and the test hangs until nextest's
+            // slow-test SIGKILL instead of failing fast.
+            let outcome = catch_unwind(AssertUnwindSafe(|| {
+                wait_for_running(&platform_for_worker);
+
+                let before = platform_for_worker.with_state(|state| state.window_id_map.len());
+
+                let handle = control_for_worker
+                    .request_open_window(options("orphan-after-delivery"))
+                    .expect("lane accepts the request");
+
+                // Bounded poll, not a blind sleep: the request must
+                // actually be created and delivered (the map grows) before
+                // we abandon it -- otherwise we would only be testing the
+                // already-covered dropped-*before*-delivery skip path.
+                wait_for_map_len(&platform_for_worker, before + 1, "window creation");
+
+                // Drop WITHOUT claiming: the claim-slot's
+                // `Delivered -> Abandoned` transition (ADR-0039 §3) -- the
+                // owner must unwind the window it already created for a
+                // requester that vanished before reading it.
+                drop(handle);
+
+                wait_for_map_len(&platform_for_worker, before, "orphan-window unwind");
+
+                let windows_len = platform_for_worker.with_state(|state| state.windows.len());
+                assert_eq!(
+                    windows_len, before,
+                    "unwind_orphan_window must also remove the windows-map entry, \
+                     not just window_id_map"
+                );
+            }));
+
+            control_for_worker.request_quit();
+            if let Err(payload) = outcome {
+                resume_unwind(payload);
+            }
+        });
+
+        let mut app = WinitApp {
+            platform: Arc::clone(&platform),
+            on_ready: None,
+            control: receiver,
+            quit_notified: false,
+            in_flight_replies: Vec::new(),
+        };
+        event_loop
+            .run_app(&mut app)
+            .expect("event loop runs to completion");
+        worker.join().expect("worker thread does not panic");
+    }
+
+    /// See the module doc on
+    /// [`winit_lane_dropped_after_delivery_unwinds_and_leaves_the_window_gone`]
+    /// for why this needs a real event loop. This test additionally proves
+    /// the winit `window_event` entry's existing unknown-id tolerance
+    /// (`tracing::warn!("Received event for unknown window"); return;`)
+    /// covers a straggler that names an id this lane itself just unwound —
+    /// not merely an id that was never registered at all.
+    #[test]
+    #[cfg_attr(
+        target_os = "macos",
+        ignore = "winit requires AppKit's event loop on the real main thread; \
+                  the test harness runs this on an ordinary test thread"
+    )]
+    fn winit_lane_post_unwind_straggler_event_is_tolerated() {
+        /// Wraps the real `WinitApp` to inject one synthetic `window_event`
+        /// call carrying a stale (already-unwound) `WinitWindowId`, reusing
+        /// the live `&ActiveEventLoop` the wrapping callback already has —
+        /// there is no other way to obtain one outside a running loop.
+        struct StragglerHarness {
+            inner: WinitApp,
+            stale_id: Arc<Mutex<Option<WinitWindowId>>>,
+            inject_now: Arc<AtomicBool>,
+            injected: AtomicBool,
+        }
+
+        impl ApplicationHandler for StragglerHarness {
+            fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+                self.inner.resumed(event_loop);
+            }
+
+            fn window_event(
+                &mut self,
+                event_loop: &ActiveEventLoop,
+                window_id: WinitWindowId,
+                event: WinitWindowEvent,
+            ) {
+                self.inner.window_event(event_loop, window_id, event);
+            }
+
+            fn user_event(&mut self, event_loop: &ActiveEventLoop, (): ()) {
+                self.inner.user_event(event_loop, ());
+                if self.inject_now.load(Ordering::Acquire)
+                    && !self.injected.swap(true, Ordering::AcqRel)
+                    && let Some(stale_id) = *self.stale_id.lock()
+                {
+                    // The straggler: an event for a window this app has
+                    // already fully unregistered. Must not panic -- if it
+                    // did, it would unwind through this real winit callback
+                    // and the test would fail loudly rather than silently.
+                    self.inner
+                        .window_event(event_loop, stale_id, WinitWindowEvent::Focused(true));
+                }
+            }
+
+            fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+                self.inner.about_to_wait(event_loop);
+            }
+
+            fn exiting(&mut self, event_loop: &ActiveEventLoop) {
+                self.inner.exiting(event_loop);
+            }
+        }
+
+        let platform = Arc::new(WinitPlatform::new());
+        let event_loop = build_test_event_loop();
+        let event_loop_proxy = event_loop.create_proxy();
+        let event_loop_proxy_for_inject = event_loop.create_proxy();
+        let wake_owner: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+            let _ = event_loop_proxy.send_event(());
+        });
+        let (control, receiver) = control_lane(wake_owner);
+        let owner_thread = thread::current().id();
+        platform
+            .install_control_lane(owner_thread, control.clone())
+            .expect("first install succeeds");
+
+        let stale_id: Arc<Mutex<Option<WinitWindowId>>> = Arc::new(Mutex::new(None));
+        let inject_now = Arc::new(AtomicBool::new(false));
+
+        let platform_for_worker = Arc::clone(&platform);
+        let control_for_worker = control.clone();
+        let stale_id_for_worker = Arc::clone(&stale_id);
+        let inject_now_for_worker = Arc::clone(&inject_now);
+        let worker = thread::spawn(move || {
+            // See the sibling test's identical comment: `request_quit()`
+            // must run even if a scenario assertion panics, or a failing
+            // poll leaves `run_app` parked forever instead of failing fast.
+            let outcome = catch_unwind(AssertUnwindSafe(|| {
+                wait_for_running(&platform_for_worker);
+
+                let keys_before: HashSet<_> = platform_for_worker
+                    .with_state(|state| state.window_id_map.keys().copied().collect());
+
+                let handle = control_for_worker
+                    .request_open_window(options("straggler-source"))
+                    .expect("lane accepts the request");
+
+                wait_for_map_len(
+                    &platform_for_worker,
+                    keys_before.len() + 1,
+                    "window creation",
+                );
+
+                let new_id = platform_for_worker
+                    .with_state(|state| {
+                        state
+                            .window_id_map
+                            .keys()
+                            .copied()
+                            .find(|id| !keys_before.contains(id))
+                    })
+                    .expect("a new winit id must have appeared");
+                *stale_id_for_worker.lock() = Some(new_id);
+
+                // Abandon without claiming -- same unwind path as the
+                // sibling test, so by the time the map shrinks back,
+                // `new_id` is a genuinely stale id: once valid, now
+                // unregistered.
+                drop(handle);
+                wait_for_map_len(
+                    &platform_for_worker,
+                    keys_before.len(),
+                    "orphan-window unwind",
+                );
+
+                // Arm the injection and wake the loop once more so the
+                // harness's `user_event` fires the straggler `window_event`.
+                inject_now_for_worker.store(true, Ordering::Release);
+                let _ = event_loop_proxy_for_inject.send_event(());
+
+                // If the injected call had panicked inside that callback,
+                // the real winit loop would have unwound through it and
+                // this request would never complete -- proving "no panic"
+                // by the process still being alive to finish a normal
+                // round trip, rather than asserting a negative directly.
+                let sentinel = control_for_worker
+                    .request_open_window(options("post-straggler-sentinel"))
+                    .expect("lane still accepts requests after the straggler event");
+                sentinel
+                    .wait()
+                    .expect("a normal request still completes after the straggler event");
+            }));
+
+            control_for_worker.request_quit();
+            if let Err(payload) = outcome {
+                resume_unwind(payload);
+            }
+        });
+
+        let mut app = StragglerHarness {
+            inner: WinitApp {
+                platform: Arc::clone(&platform),
+                on_ready: None,
+                control: receiver,
+                quit_notified: false,
+                in_flight_replies: Vec::new(),
+            },
+            stale_id,
+            inject_now,
+            injected: AtomicBool::new(false),
+        };
+        event_loop
+            .run_app(&mut app)
+            .expect("event loop runs to completion");
+        worker.join().expect("worker thread does not panic");
     }
 }
