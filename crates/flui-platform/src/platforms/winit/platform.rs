@@ -349,21 +349,13 @@ impl WinitPlatform {
             control.request_quit();
         }
 
-        let result = event_loop.run_app(&mut app);
+        let result = event_loop.run_app(&mut app).map_err(anyhow::Error::from);
         // Taken before `finish_shutdown` only so the borrow shape stays
         // simple — `finish_shutdown` does not touch this field.
         let bootstrap_error = app.bootstrap_error.take();
         app.finish_shutdown();
-        result?;
 
-        // Stashed by `resumed` when `on_ready` returned `Err`: propagate it
-        // now that the loop has actually unwound, rather than the bare
-        // `tracing::error!` a caller could not otherwise observe.
-        if let Some(error) = bootstrap_error {
-            return Err(error);
-        }
-
-        Ok(())
+        combine_shutdown_result(bootstrap_error, result)
     }
 
     fn install_control_lane(&self, owner_thread: ThreadId, control: ControlSender) -> Result<bool> {
@@ -513,6 +505,33 @@ impl Drop for WindowEventHandlerLease<'_> {
     }
 }
 
+/// Combines `event_loop.run_app`'s own result with a stashed `on_ready`
+/// bootstrap failure (`WinitApp::bootstrap_error`).
+///
+/// The bootstrap error is the root cause the whole fallible-`on_ready`
+/// design exists to surface — it is checked and returned FIRST, never
+/// shadowed by a loop-level error that arrives alongside it.
+/// Checking `result` first (the bug this function fixes) would silently
+/// drop the actual bootstrap failure exactly when
+/// [`WinitApp::request_exit`]'s own `event_loop.exit()` call produces a
+/// winit-level error of its own — the one scenario this whole design
+/// exists to get right. When both are present, the loop error is attached
+/// as `.context()` on top of the bootstrap error, so neither is lost: the
+/// bootstrap error's own chain is still reachable via `{:?}`/`.chain()` on
+/// the returned value.
+fn combine_shutdown_result(
+    bootstrap_error: Option<anyhow::Error>,
+    result: Result<()>,
+) -> Result<()> {
+    match bootstrap_error {
+        Some(error) => Err(match result {
+            Ok(()) => error,
+            Err(loop_error) => error.context(loop_error),
+        }),
+        None => result,
+    }
+}
+
 thread_local! {
     /// Published only while `on_ready` executes synchronously inside
     /// [`WinitApp::resumed`], on the winit event-loop thread. See the
@@ -650,7 +669,17 @@ impl ApplicationHandler for WinitApp {
                 // half-built app. `finish_shutdown` (via `request_exit`)
                 // fires quit handlers and closes the owner lane exactly as
                 // any other shutdown path does.
-                tracing::error!(%error, "on_ready bootstrap failed; stopping the event loop");
+                //
+                // Logged once, at `error` level, from `Platform::run`'s own
+                // `inspect_err` once `run_event_loop` has combined this with
+                // whatever `event_loop.run_app` itself returns -- not here,
+                // to avoid double-logging the same failure under two
+                // different (and, at the `run()` site, previously
+                // misleading) messages.
+                tracing::debug!(
+                    "on_ready bootstrap failed; requesting event-loop exit \
+                     (see Platform::run's propagated error for the failure)"
+                );
                 self.bootstrap_error = Some(error);
                 self.request_exit(event_loop);
                 return;
@@ -1215,8 +1244,14 @@ impl Platform for WinitPlatform {
     fn run(self: Box<Self>, on_ready: PlatformReadyCallback) -> anyhow::Result<()> {
         tracing::info!("Starting winit event loop via Platform::run()");
         let platform = Arc::new(*self);
+        // Generic wording, not "Winit event loop error": the propagated
+        // error may be a stashed `on_ready` bootstrap failure (window
+        // creation, GPU init, root-widget attach), a genuine winit-level
+        // error from `event_loop.run_app`, or both combined -- see
+        // `run_event_loop`'s `combine_shutdown_result`. This is the sole
+        // `error`-level log for whichever of those it turns out to be.
         platform.run_event_loop(on_ready).inspect_err(|error| {
-            tracing::error!("Winit event loop error: {:?}", error);
+            tracing::error!("winit Platform::run exited with an error: {:?}", error);
         })
     }
 
@@ -1619,11 +1654,12 @@ mod tests {
     };
 
     use super::{
-        OpenWindowReplyGuard, OpenWindowStateError, WinitApp, WinitPlatform, WinitRunState,
+        OpenWindowReplyGuard, OpenWindowStateError, WinitApp, WinitPlatform, WinitProxyTransport,
+        WinitRunState, combine_shutdown_result,
     };
     use crate::{
         platforms::winit::control::{ControlCommand, control_lane},
-        traits::{Platform, WindowOptions},
+        traits::{Platform, ProxySendError, WindowOptions, owner::ProxyTransport},
     };
 
     fn options(title: impl Into<String>) -> WindowOptions {
@@ -1633,6 +1669,58 @@ mod tests {
             visible: false,
             ..WindowOptions::default()
         }
+    }
+
+    // ========================================================================
+    // combine_shutdown_result
+    // ========================================================================
+    //
+    // Fast, deterministic, no event loop needed -- these pin the exact
+    // combining logic `run_event_loop` calls, independent of whether a real
+    // winit loop can also be driven to produce both error shapes at once
+    // (which it cannot, deterministically, in a test).
+
+    #[test]
+    fn combine_shutdown_result_is_ok_when_neither_side_errors() {
+        assert!(combine_shutdown_result(None, Ok(())).is_ok());
+    }
+
+    #[test]
+    fn combine_shutdown_result_surfaces_a_lone_bootstrap_error() {
+        let error = combine_shutdown_result(Some(anyhow::anyhow!("bootstrap failed")), Ok(()))
+            .expect_err("a stashed bootstrap error must be Err even when the loop exits cleanly");
+        assert_eq!(error.to_string(), "bootstrap failed");
+    }
+
+    #[test]
+    fn combine_shutdown_result_surfaces_a_lone_loop_error() {
+        let error = combine_shutdown_result(None, Err(anyhow::anyhow!("loop failed")))
+            .expect_err("a loop-level error with no bootstrap error must still be Err");
+        assert_eq!(error.to_string(), "loop failed");
+    }
+
+    /// The regression this whole function exists to fix: checking `result`
+    /// before `bootstrap_error` (the pre-fix ordering) would return only
+    /// `loop failed` here and silently drop `bootstrap failed` -- in
+    /// exactly the scenario the fallible-`on_ready` design exists to
+    /// surface. The bootstrap error must still be the primary `Err`
+    /// returned, with the loop error preserved (not lost) in its chain.
+    #[test]
+    fn combine_shutdown_result_keeps_the_bootstrap_error_as_root_cause_when_both_occur() {
+        let error = combine_shutdown_result(
+            Some(anyhow::anyhow!("bootstrap failed")),
+            Err(anyhow::anyhow!("loop failed")),
+        )
+        .expect_err("both a bootstrap and a loop error must still be Err");
+        let chain: Vec<String> = error.chain().map(ToString::to_string).collect();
+        assert!(
+            chain.iter().any(|link| link == "bootstrap failed"),
+            "the bootstrap error (root cause) must survive in the chain, got: {chain:?}"
+        );
+        assert!(
+            chain.iter().any(|link| link == "loop failed"),
+            "the loop error must be attached, not silently dropped, got: {chain:?}"
+        );
     }
 
     /// Polls (bounded, 2s) until the owner has reached `Running` — the point
@@ -2266,5 +2354,125 @@ mod tests {
             .run_app(&mut app)
             .expect("event loop runs to completion");
         worker.join().expect("worker thread does not panic");
+    }
+
+    /// `resumed`'s stashed `bootstrap_error` must survive all the way to the
+    /// value `run_event_loop` returns. This drives a REAL winit event loop
+    /// through the identical sequence `run_event_loop` performs --
+    /// `event_loop.run_app(&mut app)`, take `bootstrap_error`,
+    /// `finish_shutdown`, then `combine_shutdown_result` (the exact
+    /// function `run_event_loop` calls) -- rather than calling
+    /// `run_event_loop` itself, which builds its own `EventLoop` internally
+    /// via a builder with no `with_any_thread` opt-out and so cannot run on
+    /// this non-main test thread (see `build_test_event_loop`'s doc).
+    #[test]
+    #[cfg_attr(
+        target_os = "macos",
+        ignore = "winit requires AppKit's event loop on the real main thread; \
+                  the test harness runs this on an ordinary test thread"
+    )]
+    fn on_ready_failure_propagates_through_the_combined_shutdown_result() {
+        let platform = Arc::new(WinitPlatform::new());
+        let event_loop = build_test_event_loop();
+        let event_loop_proxy = event_loop.create_proxy();
+        let wake_owner: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+            let _ = event_loop_proxy.send_event(());
+        });
+        let (control, receiver) = control_lane(wake_owner);
+        let owner_thread = thread::current().id();
+        platform
+            .install_control_lane(owner_thread, control)
+            .expect("first install succeeds");
+
+        let mut app = WinitApp {
+            platform: Arc::clone(&platform),
+            on_ready: Some(Box::new(|_owner| {
+                Err(anyhow::anyhow!("simulated bootstrap failure"))
+            })),
+            control: receiver,
+            quit_notified: false,
+            in_flight_replies: Vec::new(),
+            bootstrap_error: None,
+        };
+
+        let result = event_loop.run_app(&mut app).map_err(anyhow::Error::from);
+        assert!(
+            result.is_ok(),
+            "on_ready's own Err requests a clean exit; the winit loop \
+             itself does not error in this scenario, got: {result:?}"
+        );
+
+        let bootstrap_error = app.bootstrap_error.take();
+        assert!(
+            bootstrap_error.is_some(),
+            "resumed() must stash on_ready's Err on WinitApp::bootstrap_error"
+        );
+
+        let combined = combine_shutdown_result(bootstrap_error, result);
+        let error = combined.expect_err("the bootstrap failure must propagate as Err");
+        assert!(
+            format!("{error:?}").contains("simulated bootstrap failure"),
+            "the root cause must be reachable from the combined error, got: {error:?}"
+        );
+    }
+
+    /// Nothing previously asserted that winit's REAL `ProxyTransport`
+    /// reports `OwnerGone` -- a lane existed and its loop died -- rather
+    /// than `Unsupported` (reserved for backends with no lane at all,
+    /// `ClosedTransport`) once its loop has actually stopped.
+    #[test]
+    #[cfg_attr(
+        target_os = "macos",
+        ignore = "winit requires AppKit's event loop on the real main thread; \
+                  the test harness runs this on an ordinary test thread"
+    )]
+    fn winit_proxy_reports_owner_gone_not_unsupported_after_loop_stop() {
+        let platform = Arc::new(WinitPlatform::new());
+        let event_loop = build_test_event_loop();
+        let event_loop_proxy = event_loop.create_proxy();
+        let wake_owner: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+            let _ = event_loop_proxy.send_event(());
+        });
+        let (control, receiver) = control_lane(wake_owner);
+        let owner_thread = thread::current().id();
+        platform
+            .install_control_lane(owner_thread, control.clone())
+            .expect("first install succeeds");
+
+        let platform_for_worker = Arc::clone(&platform);
+        let worker = thread::spawn(move || {
+            wait_for_running(&platform_for_worker);
+            control.request_quit();
+        });
+
+        let mut app = WinitApp {
+            platform: Arc::clone(&platform),
+            on_ready: None,
+            control: receiver,
+            quit_notified: false,
+            in_flight_replies: Vec::new(),
+            bootstrap_error: None,
+        };
+        event_loop
+            .run_app(&mut app)
+            .expect("event loop runs to completion");
+        worker.join().expect("worker thread does not panic");
+
+        // The loop has now actually stopped (`finish_shutdown` ->
+        // `close_owner_lane` -> `platform.mark_stopped()`, run_state ==
+        // `Stopped`). A lane existed here and is now gone -- distinct from
+        // a lane-less backend, which reports `Unsupported` instead.
+        let transport = WinitProxyTransport {
+            platform: Arc::clone(&platform),
+            owner_thread,
+        };
+        let error = transport
+            .open_window(options("post-shutdown"))
+            .expect_err("no lane behind a stopped winit loop");
+        assert!(
+            matches!(error, ProxySendError::OwnerGone { .. }),
+            "a stopped winit loop must report OwnerGone (a lane existed and \
+             died), not Unsupported (no lane ever existed here) -- got {error:?}"
+        );
     }
 }

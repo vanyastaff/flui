@@ -399,6 +399,15 @@ pub enum OpenWindowError {
     /// Window creation was deferred; this call site requires `Ready`.
     #[error("window creation was deferred; this call site requires Ready")]
     NotReady(PendingWindow),
+    /// An earlier [`try_take`](PendingWindow::try_take) on this same
+    /// `PendingWindow` already claimed the result — there is nothing left
+    /// to hand back. Not a slot-invariant violation, just a
+    /// caller-sequencing fact (mirrors [`WaitError::AlreadyClaimed`]):
+    /// `try_take` takes `&mut self`, so nothing stops a caller from
+    /// following a successful `try_take` with a poll of the `Future` impl
+    /// on the same handle.
+    #[error("the pending window was already claimed by an earlier try_take call")]
+    AlreadyClaimed,
 }
 
 // ============================================================================
@@ -598,8 +607,10 @@ impl std::future::Future for PendingWindow {
     /// ([`OpenWindowError::OwnerGone`], woken by the underlying
     /// `flui-foundation` `ClaimSlot`'s `Drop`), or immediately if this
     /// `PendingWindow` was already resolved by an earlier
-    /// [`try_take`](Self::try_take) call (mapped onto
-    /// [`OpenWindowError::Backend`] — there is nothing left to hand back).
+    /// [`try_take`](Self::try_take) call
+    /// ([`OpenWindowError::AlreadyClaimed`] — a typed caller-sequencing
+    /// fact, not a fabricated backend failure: there is nothing left to
+    /// hand back, and this is not the backend's fault).
     fn poll(
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
@@ -612,11 +623,7 @@ impl std::future::Future for PendingWindow {
                 std::task::Poll::Ready(Err(OpenWindowError::OwnerGone { rejected: None }))
             }
             std::task::Poll::Ready(ClaimOutcome::AlreadyClaimed) => {
-                std::task::Poll::Ready(Err(OpenWindowError::Backend {
-                    message: "PendingWindow polled after an earlier try_take call already \
-                              claimed its result"
-                        .to_string(),
-                }))
+                std::task::Poll::Ready(Err(OpenWindowError::AlreadyClaimed))
             }
             std::task::Poll::Pending => std::task::Poll::Pending,
         }
