@@ -130,7 +130,7 @@ impl CommandSendError {
 ///   presentation incarnation within it (the eventual element-forest case)
 ///   and a sender may have been vended for a presentation that no longer
 ///   owns this realm's inbox.
-/// - **Realm-scoped** commands ([`Self::HotReload`], [`Self::Navigation`])
+/// - **Realm-scoped** commands (`HotReload`, [`Self::Navigation`])
 ///   carry no stamp of their own and stay bound by channel identity alone:
 ///   a recreated realm mints new channels, and a sender into the dead realm
 ///   already gets `OwnerGone` at send — re-stamping realm identity on top of

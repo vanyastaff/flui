@@ -316,7 +316,8 @@ enum RealmDispatchError {
 
 /// Typed, closed cross-thread payload (ADR-0037 §3): every routable
 /// platform-to-UI event. Compile-time evidence that this is a real `Send`
-/// boundary: [`assert_impl_all!`] is checked below. If `PlatformInput` ever
+/// boundary: `static_assertions::assert_impl_all!` is checked in this
+/// module's own tests. If `PlatformInput` ever
 /// stopped being `Send`, that must be fixed in `flui-platform` itself,
 /// never worked around here.
 #[cfg(not(target_os = "ios"))]
