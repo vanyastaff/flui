@@ -150,6 +150,10 @@ pub mod affinity;
 pub mod async_snapshot;
 pub mod binding;
 pub mod callbacks;
+// Generic at-most-once request/reply primitive (ADR-0039 §3): the winit
+// owner lane's claim-slot reply protocol composes this; its state-machine
+// tests live here so CI actually runs them (same rationale as `affinity`).
+pub mod claim_slot;
 pub mod clock;
 pub mod consts;
 // Monotonic generation/version counters for the window-runtime protocol:
@@ -193,6 +197,8 @@ pub use callbacks::{
     FallibleCallback, Predicate, ValueChanged, ValueGetter, ValueSetter, ValueTransformer,
     VoidCallback,
 };
+// Claim-slot request/reply primitive (ADR-0039 §3)
+pub use claim_slot::{ClaimHandle, ClaimSlot, claim_slot};
 // Monotonic time source (OS / virtual clock) — foundational primitive injected
 // by deadline- and frame-driven subsystems (gesture arena, headless binding).
 pub use clock::{ManualClock, MonotonicClock, SystemClock};
