@@ -4,7 +4,7 @@
 //! seam a `UiRealm` hands to a raster owner (Flutter parity:
 //! `RenderView.compositeFrame` → `FlutterView.render` → dispose).
 
-use flui_foundation::{FrameEpoch, RealmId, SurfaceGeneration};
+use flui_foundation::{FrameEpoch, PresentationId, RealmId, SurfaceGeneration};
 
 use crate::scene::Scene;
 
@@ -32,14 +32,36 @@ pub enum DamageRegion {
 /// window per frame, mirroring Flutter's `RenderView.compositeFrame` →
 /// `FlutterView.render` → dispose sequence.
 ///
-/// `#[non_exhaustive]`: fields are `pub` for direct read/match access, but
-/// external construction goes through [`SceneSnapshot::new`] so a future field
-/// (e.g. presentation timing) is additive, not breaking.
+/// # Frame identity
+///
+/// A frame's full identity is `(realm_id, presentation_id, epoch)`.
+/// [`FrameEpoch`] is per-*realm* monotonic, so two presentations belonging to
+/// the same realm's forest may composite in the same epoch —
+/// `presentation_id` disambiguates them; it is not redundant with `epoch`.
+/// `surface_generation` is a separate axis, scoped *per presentation*: it is
+/// minted by that presentation's own raster seam (ADR-0037 §8), never by the
+/// realm or by frame counting.
+///
+/// # `#[non_exhaustive]` does not make the constructor additive
+///
+/// Fields are `pub` for direct read/match access; `#[non_exhaustive]` makes
+/// *matching* on this struct additive when a field is added later. It does
+/// **not** make *construction* additive: [`SceneSnapshot::new`] is a
+/// positional constructor, so every field this type gains breaks every
+/// external call site — exactly the case the `presentation_id` field added
+/// here demonstrates. Before this type leaves `experimental`, the growing
+/// positional constructor should become a builder or an identity-group value
+/// (`realm_id`/`presentation_id`/`epoch`/`surface_generation` bundled
+/// together) so a future field addition is actually additive.
 #[non_exhaustive]
 #[derive(Debug)]
 pub struct SceneSnapshot {
     /// Identifies which `UiRealm` incarnation produced this frame.
     pub realm_id: RealmId,
+    /// Identifies which presentation incarnation, within that realm,
+    /// composited this frame. Disambiguates same-epoch frames from sibling
+    /// presentations in a realm's forest (see the type docs above).
+    pub presentation_id: PresentationId,
     /// The runtime's per-frame counter at the time this frame was composited.
     pub epoch: FrameEpoch,
     /// The raster surface generation this frame was produced against.
@@ -56,6 +78,7 @@ impl SceneSnapshot {
     #[must_use]
     pub fn new(
         realm_id: RealmId,
+        presentation_id: PresentationId,
         epoch: FrameEpoch,
         surface_generation: SurfaceGeneration,
         damage: DamageRegion,
@@ -63,6 +86,7 @@ impl SceneSnapshot {
     ) -> Self {
         Self {
             realm_id,
+            presentation_id,
             epoch,
             surface_generation,
             damage,
@@ -81,12 +105,14 @@ mod tests {
     #[test]
     fn new_packages_all_fields() {
         let realm_id = RealmId::new(1);
+        let presentation_id = flui_foundation::PresentationId::new(1);
         let epoch = FrameEpoch::ZERO.next();
         let surface_generation = SurfaceGeneration::ZERO;
         let scene = Scene::from_layer(Size::ZERO, crate::Layer::from(CanvasLayer::new()), 0);
 
         let frame = SceneSnapshot::new(
             realm_id,
+            presentation_id,
             epoch,
             surface_generation,
             DamageRegion::Full,
@@ -94,6 +120,7 @@ mod tests {
         );
 
         assert_eq!(frame.realm_id, realm_id);
+        assert_eq!(frame.presentation_id, presentation_id);
         assert_eq!(frame.epoch, epoch);
         assert_eq!(frame.surface_generation, surface_generation);
         assert_eq!(frame.damage, DamageRegion::Full);
