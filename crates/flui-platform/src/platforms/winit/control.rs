@@ -307,6 +307,10 @@ mod tests {
     struct StubWindow;
 
     impl crate::traits::PlatformWindow for StubWindow {
+        fn id(&self) -> crate::traits::WindowId {
+            crate::traits::WindowId(1)
+        }
+
         fn physical_size(&self) -> flui_types::geometry::Size<flui_types::geometry::DevicePixels> {
             flui_types::geometry::Size::default()
         }

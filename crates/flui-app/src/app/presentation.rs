@@ -41,6 +41,10 @@ impl TestPresentationWindow {
 
 #[cfg(test)]
 impl PlatformWindow for TestPresentationWindow {
+    fn id(&self) -> flui_platform::traits::WindowId {
+        flui_platform::traits::WindowId(1)
+    }
+
     fn physical_size(&self) -> flui_types::geometry::Size<flui_types::geometry::DevicePixels> {
         flui_types::geometry::Size::default()
     }

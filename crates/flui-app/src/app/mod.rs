@@ -17,6 +17,7 @@ pub(crate) mod logging;
 pub(crate) mod presentation;
 pub mod runner;
 pub(crate) mod ui_realm;
+pub(crate) mod window_registry;
 
 pub use binding::AppBinding;
 pub use config::{AppConfig, DiagnosticsProfile};

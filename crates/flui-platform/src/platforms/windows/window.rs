@@ -543,6 +543,10 @@ impl WindowsWindow {
 }
 
 impl PlatformWindow for WindowsWindow {
+    fn id(&self) -> WindowId {
+        WindowId(self.hwnd.0 as u64)
+    }
+
     fn physical_size(&self) -> Size<DevicePixels> {
         let state = self.state.lock();
         let logical = state.bounds.size;

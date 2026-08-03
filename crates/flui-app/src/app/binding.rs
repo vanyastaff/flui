@@ -1992,6 +1992,10 @@ mod tests {
         }
 
         impl PlatformWindow for CountingWindow {
+            fn id(&self) -> flui_platform::traits::WindowId {
+                flui_platform::traits::WindowId(1)
+            }
+
             fn physical_size(&self) -> Size<DevicePixels> {
                 Size::new(device_px(800), device_px(600))
             }
@@ -4029,6 +4033,10 @@ mod tests {
         struct BareWindow;
 
         impl PlatformWindow for BareWindow {
+            fn id(&self) -> flui_platform::traits::WindowId {
+                flui_platform::traits::WindowId(1)
+            }
+
             fn physical_size(
                 &self,
             ) -> flui_types::geometry::Size<flui_types::geometry::DevicePixels> {

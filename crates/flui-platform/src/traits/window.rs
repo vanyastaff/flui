@@ -13,6 +13,7 @@ use super::{
     display::PlatformDisplay,
     haptics::PlatformHaptics,
     input::{DispatchEventResult, Modifiers, PlatformInput},
+    platform::WindowId,
     text_input::PlatformTextInput,
 };
 
@@ -90,6 +91,16 @@ use winit::window::Window;
 /// notifications share one causal FIFO across event kinds; see
 /// [`crate::WindowCallbacks`] for nested input return semantics.
 pub trait PlatformWindow: Send + Sync {
+    /// This window's platform-internal identity.
+    ///
+    /// A window that cannot state its identity cannot be demultiplexed
+    /// (ADR-0037 §2): the identity is what lets the demux boundary look up
+    /// which `(RealmId, PresentationId)` a native event belongs to. Every
+    /// implementor must return a real, stable-for-the-window's-lifetime
+    /// value — never a shared sentinel that would make two different
+    /// windows compare equal.
+    fn id(&self) -> WindowId;
+
     /// Get the window size in physical pixels (device pixels)
     fn physical_size(&self) -> Size<DevicePixels>;
 
@@ -389,6 +400,7 @@ impl HasDisplayHandle for dyn PlatformWindow + '_ {
 /// Includes per-window callbacks for event delivery using the causal FIFO
 /// dispatch pattern for reentrancy safety.
 pub struct WinitWindow {
+    id: WindowId,
     window: Arc<Window>,
     is_focused: parking_lot::Mutex<bool>,
     is_visible: parking_lot::Mutex<bool>,
@@ -437,9 +449,11 @@ impl std::fmt::Debug for WinitWindow {
 
 #[cfg(feature = "winit-backend")]
 impl WinitWindow {
-    /// Create a new WinitWindow wrapper
-    pub fn new(window: Arc<Window>) -> Self {
+    /// Create a new WinitWindow wrapper, addressed by the platform-minted
+    /// `id` the caller already allocated for it.
+    pub fn new(id: WindowId, window: Arc<Window>) -> Self {
         Self {
+            id,
             window,
             is_focused: parking_lot::Mutex::new(true),
             is_visible: parking_lot::Mutex::new(true),
@@ -470,6 +484,10 @@ impl WinitWindow {
 
 #[cfg(feature = "winit-backend")]
 impl PlatformWindow for WinitWindow {
+    fn id(&self) -> WindowId {
+        self.id
+    }
+
     fn physical_size(&self) -> Size<DevicePixels> {
         use flui_types::geometry::device_px;
 
@@ -627,6 +645,10 @@ mod tests {
     }
 
     impl PlatformWindow for MockWindow {
+        fn id(&self) -> WindowId {
+            WindowId(1)
+        }
+
         fn physical_size(&self) -> Size<DevicePixels> {
             use flui_types::geometry::device_px;
 
