@@ -460,6 +460,105 @@ _TEST_CFG_RE = re.compile(r"^\s*#\[cfg\(\s*(test\b|all\(\s*test\b)")
 _TEST_MOD_RE = re.compile(r"^\s*(pub(\(crate\))?\s+)?mod\s+\w+\s*\{")
 
 
+def _mask_rust_literals(text: str) -> str:
+    """Replace the contents of every string/char literal with spaces,
+    preserving every newline and the total character layout (so line
+    numbers and column positions stay meaningful downstream).
+
+    This MUST run before both `_strip_line_comments` (a naive
+    `split("//", 1)`) and `_strip_top_level_test_modules` (a naive
+    `{`/`}` count): neither knows about literals, so without this pass a
+    same-line string like `"https://example.com"` truncates everything
+    after it on that line -- including a real `::instance()` call sitting
+    right after the string -- and a string containing an unbalanced brace
+    (`"foo{bar"`) desyncs the brace-depth counter clean through to EOF,
+    blanking every later production reach in the file as a false negative.
+    Both are real, not hypothetical: this function exists because a
+    fixture exercising exactly these two shapes is red without it.
+
+    Handles: normal string literals with backslash escapes; char literals
+    (disambiguated from lifetimes -- `'a'` is masked, `'a` is left alone);
+    and raw (optionally byte-prefixed) strings `r"..."`/`br"..."` with any
+    number of `#` delimiters, including ones that span multiple lines.
+    Deliberately does not understand `/* */` block comments -- pre-existing
+    scope of this checker, unrelated to the literal-masking hazard fixed
+    here.
+    """
+    out: list[str] = []
+    i = 0
+    n = len(text)
+    while i < n:
+        ch = text[i]
+
+        # Raw / byte-raw string: (b)?r(#*)"..."(#*matching), any # depth.
+        if ch in ("r", "b"):
+            j = i
+            if text[j] == "b" and j + 1 < n and text[j + 1] == "r":
+                j += 1
+            if j < n and text[j] == "r":
+                k = j + 1
+                hashes = 0
+                while k < n and text[k] == "#":
+                    hashes += 1
+                    k += 1
+                if k < n and text[k] == '"':
+                    prefix_end = k + 1
+                    out.append(text[i:prefix_end])
+                    closer = '"' + "#" * hashes
+                    end = text.find(closer, prefix_end)
+                    body_end = end if end != -1 else n
+                    body = text[prefix_end:body_end]
+                    out.append("".join("\n" if c == "\n" else " " for c in body))
+                    if end != -1:
+                        out.append(closer)
+                        i = end + len(closer)
+                    else:
+                        i = n
+                    continue
+
+        # Char literal ('c' or an escape like '\n'/'\u{1234}') vs. a
+        # lifetime ('a, 'static, ...), which has no closing quote at all.
+        if ch == "'":
+            if i + 2 < n and text[i + 1] == "\\":
+                k = i + 2
+                limit = min(n, i + 2 + 12)  # bounds \u{10FFFF}'
+                while k < limit and text[k] != "'":
+                    k += 1
+                if k < limit and text[k] == "'":
+                    out.append("'" + " " * (k - (i + 1)) + "'")
+                    i = k + 1
+                    continue
+            elif i + 2 < n and text[i + 2] == "'":
+                out.append("' '")
+                i += 3
+                continue
+            out.append(ch)
+            i += 1
+            continue
+
+        if ch == '"':
+            out.append('"')
+            i += 1
+            while i < n:
+                c = text[i]
+                if c == "\\" and i + 1 < n:
+                    out.append("\n" if text[i + 1] == "\n" else " ")
+                    out.append(" ")
+                    i += 2
+                    continue
+                if c == '"':
+                    out.append('"')
+                    i += 1
+                    break
+                out.append("\n" if c == "\n" else " ")
+                i += 1
+            continue
+
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
 def _strip_line_comments(text: str) -> str:
     return "\n".join(line.split("//", 1)[0] for line in text.splitlines())
 
@@ -506,7 +605,9 @@ def _ambient_reach_code(path: Path) -> str | None:
         raw = path.read_text()
     except (OSError, UnicodeDecodeError):
         return None
-    return _strip_top_level_test_modules(_strip_line_comments(raw))
+    # Literal masking MUST run first -- see `_mask_rust_literals`'s own
+    # docstring for the two failure-open shapes this ordering closes.
+    return _strip_top_level_test_modules(_strip_line_comments(_mask_rust_literals(raw)))
 
 
 ambient_reach_files: dict[str, set[Path]] = {"instance-call": set(), "ambient-static": set()}
