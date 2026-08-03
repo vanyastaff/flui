@@ -40,6 +40,18 @@ pub(crate) struct UiAddress {
 }
 
 /// Errors from [`WindowRegistry::try_register`].
+// The strict path has no production call site yet (today's single-window
+// install always uses the replace semantics of `register_window`); it is
+// reserved for a future multi-window install path that chooses
+// strict-vs-replace per call site, and is exercised by this module's own
+// tests in the meantime.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "reserved for a future multi-window install path; exercised by this module's tests"
+    )
+)]
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub(crate) enum RegistryError {
@@ -127,6 +139,13 @@ impl WindowRegistry {
     /// Not dead code despite zero production call sites today — exercised
     /// by this module's own tests, and reserved for a future multi-window
     /// install path that chooses strict-vs-replace per call site.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "reserved for a future multi-window install path; exercised by this module's tests"
+        )
+    )]
     pub(crate) fn try_register(
         &mut self,
         id: WindowId,
@@ -152,6 +171,16 @@ impl WindowRegistry {
     /// This is the teardown real read: the caller asserts the returned
     /// entry against the address it installed, proving the registry tracked
     /// the same window/address pair for this realm's whole lifetime.
+    // `teardown_platform_realm` (runner.rs) is the only production caller,
+    // and it does not exist on wasm32 — the web host never tears down (see
+    // its own module doc) — so the wasm lib check sees this as dead.
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            dead_code,
+            reason = "consumed only by teardown_platform_realm, which does not exist on wasm32, and by this module's tests"
+        )
+    )]
     pub(crate) fn remove_realm(&mut self, realm_id: RealmId) -> Option<(WindowId, UiAddress)> {
         let position = self
             .entries

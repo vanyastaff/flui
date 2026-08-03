@@ -530,15 +530,15 @@ impl UiRealm {
 
     /// Current presentation incarnation.
     #[must_use]
-    #[cfg_attr(
-        target_arch = "wasm32",
-        expect(
-            dead_code,
-            reason = "consumed only by the desktop runner and tests, neither in the wasm lib check"
-        )
-    )]
     pub fn presentation_id(&self) -> PresentationId {
         self.presentation.id()
+    }
+
+    /// The current presentation's lifecycle state, for the input-gate
+    /// checks at the physical owner (`AppBinding::handle_input_entered`).
+    #[must_use]
+    pub(crate) fn presentation_lifecycle(&self) -> super::presentation::PresentationLifecycle {
+        self.presentation.lifecycle()
     }
 
     /// A new cross-thread sender into this runtime's inbox.

@@ -1415,6 +1415,38 @@ impl AppBinding {
         realm: &super::ui_realm::UiRealm,
         input: PlatformInput,
     ) {
+        // Lifecycle gate at the physical owner (ADR-0037 §9). `Closing`/
+        // `Closed` is a hard gate: no input of any kind is dispatched.
+        // `Suspended` drops pointer input only (gesture-arena protection);
+        // keyboard and IME keep flowing so a flaky or absent occlusion
+        // signal (the web backend wires none) never becomes a keystroke
+        // blackout. `Created` has no arm of its own: it is
+        // constructor-internal and production-unreachable (see
+        // `PresentationState::new`), so it falls through with
+        // `SurfaceAttached` rather than pretending to be a tested case.
+        use super::presentation::PresentationLifecycle;
+        match realm.presentation_lifecycle() {
+            PresentationLifecycle::Closing | PresentationLifecycle::Closed => {
+                tracing::debug!(
+                    { flui_foundation::diagnostics::PRESENTATION_ID } =
+                        realm.presentation_id().as_u64(),
+                    ?input,
+                    "dropping input: presentation is closing or closed"
+                );
+                return;
+            }
+            PresentationLifecycle::Suspended => {
+                if matches!(input, PlatformInput::Pointer(_)) {
+                    tracing::debug!(
+                        { flui_foundation::diagnostics::PRESENTATION_ID } =
+                            realm.presentation_id().as_u64(),
+                        "dropping pointer input while the presentation is suspended"
+                    );
+                    return;
+                }
+            }
+            PresentationLifecycle::Created | PresentationLifecycle::SurfaceAttached => {}
+        }
         match input {
             PlatformInput::Ime(ime_event) => {
                 realm.text_input().dispatch(&ime_event);
@@ -1749,7 +1781,7 @@ mod tests {
             )),
         );
 
-        // Production input arrives inside the realm (runner.rs's RealmEvent
+        // Production input arrives inside the realm (runner.rs's PlatformToUi
         // dispatch enters it before calling handle_input), so the synthetic
         // tap does the same.
         let position = flui_types::Offset::new(px(50.0), px(50.0));
@@ -1775,6 +1807,113 @@ mod tests {
             "the outer tap recognizer shares the arena and must be rejected — \
              if both fire, each detector built its own private arena (no shell \
              GestureArenaScope above the root)",
+        );
+    }
+
+    /// Coordinator ruling (ADR-0037 §9): `Suspended` drops pointer input only
+    /// — gesture-arena protection — while keyboard/IME continue to flow. A
+    /// flaky or absent occlusion signal (the web backend wires none) must
+    /// never become a keystroke blackout.
+    ///
+    /// Red-check: remove the `Suspended` pointer-only arm from
+    /// `handle_input_entered` and the pointer assertions below fail (the
+    /// arena receives the down and `needs_redraw` is armed even though the
+    /// presentation is suspended).
+    #[test]
+    fn pointer_input_is_dropped_while_suspended_but_keyboard_flows() {
+        use flui_interaction::events::{PointerType, make_down_event};
+
+        let app = AppBinding::new();
+        let realm = test_realm(&app);
+        realm.handle_presentation_lifecycle(AppLifecycleState::Hidden);
+
+        let position = flui_types::Offset::new(px(50.0), px(50.0));
+        realm.enter(|realm| {
+            app.handle_input_entered(
+                realm,
+                PlatformInput::Pointer(make_down_event(position, PointerType::Mouse)),
+            );
+        });
+        assert_eq!(
+            realm.gestures().active_pointer_count(),
+            0,
+            "a pointer down while suspended must never reach the gesture arena"
+        );
+        assert!(
+            !app.needs_redraw(),
+            "a dropped pointer event must never arm a redraw"
+        );
+
+        // Keyboard/IME keep flowing while suspended: falling through to the
+        // ordinary dispatch path is observable because that path (unlike the
+        // pointer early-return above) always requests a redraw.
+        realm.enter(|realm| {
+            app.handle_input_entered(
+                realm,
+                PlatformInput::Ime(flui_types::ImeEvent::Commit("suspended-ime".to_string())),
+            );
+        });
+        assert!(
+            app.needs_redraw(),
+            "IME input must keep flowing while the presentation is only suspended"
+        );
+
+        // Resume: pointer flows again.
+        app.mark_rendered();
+        realm.handle_presentation_lifecycle(AppLifecycleState::Resumed);
+        realm.enter(|realm| {
+            app.handle_input_entered(
+                realm,
+                PlatformInput::Pointer(make_down_event(position, PointerType::Mouse)),
+            );
+        });
+        assert_eq!(
+            realm.gestures().active_pointer_count(),
+            1,
+            "pointer input must reach the arena again once resumed"
+        );
+    }
+
+    /// Coordinator ruling (ADR-0037 §9): `Closing`/`Closed` is a hard gate —
+    /// every input kind is dropped, not just pointer.
+    ///
+    /// Red-check: remove the `Closing | Closed` hard-gate arm from
+    /// `handle_input_entered` and the IME assertion below fails (a "closed"
+    /// presentation still dispatches and arms a redraw).
+    #[test]
+    fn all_input_dropped_after_close() {
+        use flui_interaction::events::{PointerType, make_down_event};
+
+        let app = AppBinding::new();
+        let realm = test_realm(&app);
+        realm.handle_presentation_lifecycle(AppLifecycleState::Detached);
+
+        let position = flui_types::Offset::new(px(50.0), px(50.0));
+        realm.enter(|realm| {
+            app.handle_input_entered(
+                realm,
+                PlatformInput::Pointer(make_down_event(position, PointerType::Mouse)),
+            );
+        });
+        assert_eq!(
+            realm.gestures().active_pointer_count(),
+            0,
+            "pointer input must never reach the arena once closed"
+        );
+        assert!(
+            !app.needs_redraw(),
+            "no input at all may reach dispatch once closed"
+        );
+
+        realm.enter(|realm| {
+            app.handle_input_entered(
+                realm,
+                PlatformInput::Ime(flui_types::ImeEvent::Commit("closed-ime".to_string())),
+            );
+        });
+        assert!(
+            !app.needs_redraw(),
+            "IME input must also be dropped once closed — the hard gate covers every kind"
         );
     }
 

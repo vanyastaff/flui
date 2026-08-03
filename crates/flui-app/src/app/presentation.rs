@@ -181,7 +181,6 @@ impl PresentationState {
     }
 
     #[must_use]
-    #[cfg(test)]
     pub(crate) fn lifecycle(&self) -> PresentationLifecycle {
         self.lifecycle.get()
     }
@@ -236,6 +235,12 @@ impl PresentationState {
         &self,
         request: SemanticsActionRequest,
     ) -> Result<(), SemanticsActionError> {
+        if matches!(
+            self.lifecycle.get(),
+            PresentationLifecycle::Closing | PresentationLifecycle::Closed
+        ) {
+            return Err(SemanticsActionError::PresentationClosed);
+        }
         let invocation = {
             let pipeline = self.pipeline.read();
             pipeline.resolve_semantics_action(request)?
@@ -361,6 +366,27 @@ mod tests {
         presentation.close();
         presentation.close();
         assert_eq!(presentation.lifecycle(), PresentationLifecycle::Closed);
+    }
+
+    /// Red-check: remove the lifecycle check from `dispatch_semantics_action`
+    /// and this fails with `Ok(())` instead (the request would resolve
+    /// against a node id that happens not to exist, which is a different,
+    /// pre-existing refusal path — `PresentationClosed` must fire first).
+    #[test]
+    fn semantics_action_after_close_is_refused() {
+        use flui_semantics::{AccessibilityNodeId, SemanticsAction};
+
+        let presentation = presentation();
+        presentation.close();
+
+        let request = SemanticsActionRequest::new(
+            AccessibilityNodeId::from(flui_foundation::RenderId::new(1)),
+            SemanticsAction::Tap,
+        );
+        assert_eq!(
+            presentation.dispatch_semantics_action(request),
+            Err(SemanticsActionError::PresentationClosed)
+        );
     }
 
     #[test]
