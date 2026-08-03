@@ -107,25 +107,21 @@ pub fn run_direct(
 
     let platform = flui_platform::current_platform()?;
 
-    // `on_ready` has no return path back to this function's caller (it runs
-    // synchronously inside `Platform::run`, which returns `()`) — bootstrap
-    // failures thread out through this cell instead, same pattern
-    // `run_desktop`'s `bootstrap_error_slot` uses.
-    let bootstrap_error: std::rc::Rc<std::cell::RefCell<Option<anyhow::Error>>> =
-        std::rc::Rc::new(std::cell::RefCell::new(None));
-    let bootstrap_error_slot = std::rc::Rc::clone(&bootstrap_error);
-
     /// The actual direct-mode bootstrap: window, GPU renderer, and callback
     /// wiring. Runs once, synchronously, inside `on_ready` (ADR-0039 slice
     /// 2) — the winit backend can only create a window from inside a
     /// running event loop, so this can no longer run before `run()` starts
     /// it (which is what made this function fail fast on that backend
     /// before this migration).
-    fn bootstrap_direct<F>(
-        config: AppConfig,
-        render_fn: F,
-        bootstrap_error_slot: std::rc::Rc<std::cell::RefCell<Option<anyhow::Error>>>,
-    ) where
+    ///
+    /// Returns `Err` on bootstrap failure — `on_ready` itself is fallible
+    /// now, so this propagates straight out of `Platform::run` instead of
+    /// threading the failure out through a
+    /// `Rc<RefCell<Option<anyhow::Error>>>` side channel (the old
+    /// `bootstrap_error_slot` pattern, now redundant and removed: this
+    /// function's own `Result` return is `run_direct`'s answer).
+    fn bootstrap_direct<F>(config: AppConfig, render_fn: F) -> anyhow::Result<()>
+    where
         F: FnMut(&mut SceneBuilder<'_>, f32, f32) + Send + 'static,
     {
         fn owner_platform_installed<R>(f: impl FnOnce(&flui_platform::OwnerPlatform) -> R) -> R {
@@ -142,10 +138,7 @@ pub fn run_direct(
             Ok(window) => window,
             Err(error) => {
                 tracing::error!(%error, "Window creation failed");
-                *bootstrap_error_slot.borrow_mut() =
-                    Some(anyhow::Error::from(error).context("Failed to create window"));
-                owner_platform_installed(flui_platform::OwnerPlatform::quit);
-                return;
+                return Err(anyhow::Error::from(error).context("Failed to create window"));
             }
         };
 
@@ -156,10 +149,7 @@ pub fn run_direct(
             Ok(r) => r,
             Err(e) => {
                 tracing::error!("GPU init failed: {:?}", e);
-                *bootstrap_error_slot.borrow_mut() =
-                    Some(anyhow::anyhow!(e).context("GPU initialization failed"));
-                owner_platform_installed(flui_platform::OwnerPlatform::quit);
-                return;
+                return Err(anyhow::anyhow!(e).context("GPU initialization failed"));
             }
         };
         renderer.resize(phys_size.width.0 as u32, phys_size.height.0 as u32);
@@ -266,6 +256,7 @@ pub fn run_direct(
         window.request_redraw();
 
         tracing::info!("Direct render mode initialized, entering event loop");
+        Ok(())
     }
 
     // Owner-host clear guard armed BEFORE `run(...)`, not inside `on_ready`
@@ -273,13 +264,8 @@ pub fn run_direct(
     let _owner_host_clear_guard = crate::app::runner::OwnerHostClearGuard::arm();
     platform.run(Box::new(move |owner| {
         crate::app::runner::install_owner_platform(owner);
-        bootstrap_direct(config, render_fn, bootstrap_error_slot);
+        bootstrap_direct(config, render_fn)?;
         tracing::info!("FLUI direct render mode ready");
-    }));
-
-    if let Some(error) = bootstrap_error.borrow_mut().take() {
-        return Err(error);
-    }
-
-    Ok(())
+        Ok(())
+    }))
 }

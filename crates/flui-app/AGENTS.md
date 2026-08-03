@@ -9,7 +9,7 @@ process services while ADR-0027 extracts the remaining global bindings.
 - **AppBinding / AppConfig** — transitional process host for renderer, lifecycle, focus, and scheduler services; it does not own widget or gesture state
 - **RootRenderElement / RootRenderView** — root of the render/element tree
 - **run_app / run_app_with_config** — the supported entry points for starting the app
-- **run_direct** — experimental direct-engine escape hatch (no widget tree, no input, broken on the winit backend pending ADR-0039's `on_ready` reorder); do not describe it as a supported cross-platform path
+- **run_direct** — experimental direct-engine escape hatch (no widget tree, no input); its bootstrap (window, GPU renderer, callback wiring) now runs inside `on_ready` (ADR-0039 slice 2), so it works on the winit backend too — still `experimental` by policy, not a supported cross-platform application entry point
 - **embedder / overlay** — app-level subsystems (PORT-CHECK-OK-SP4 marked)
 - **Re-exports** — `GestureBinding`, `PaintingBinding`, `PipelineOwner`, `RenderingFlutterBinding`, `Scheduler`, `SemanticsBinding`, `WidgetsBinding` from constituent crates
 

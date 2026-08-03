@@ -1830,13 +1830,6 @@ where
     let rebuild_registration: Rc<RefCell<Option<RebuildHookGuard>>> = Rc::new(RefCell::new(None));
     let rebuild_registration_slot = Rc::clone(&rebuild_registration);
 
-    // Bootstrap can fail fatally (GPU init, `UiRealm` construction, root
-    // widget attach) from inside `on_ready`, which has no return path back
-    // to this function's caller — thread the failure out through this cell
-    // instead, same pattern as `rebuild_registration`.
-    let bootstrap_error: Rc<RefCell<Option<anyhow::Error>>> = Rc::new(RefCell::new(None));
-    let bootstrap_error_slot = Rc::clone(&bootstrap_error);
-
     /// The actual desktop bootstrap: opens the window, initializes the GPU
     /// renderer, mounts the widget tree, and wires every platform/window
     /// callback. Runs exactly once, synchronously, inside `on_ready` (see
@@ -1844,6 +1837,16 @@ where
     /// only create a window from inside a running event loop
     /// (`ActiveEventLoop` is unreachable beforehand, and `open_window` fails
     /// fast rather than deadlock if called too early).
+    ///
+    /// Returns `Err` on any bootstrap failure (GPU init, `UiRealm`
+    /// construction, root widget attach); `on_ready` itself is now fallible,
+    /// so this propagates straight out of `Platform::run` instead of
+    /// threading the failure out through a
+    /// `Rc<RefCell<Option<anyhow::Error>>>` side channel — that pattern is
+    /// now redundant here and has been removed. Every backend stops
+    /// entering (or promptly exits) its loop on this `Err`, so there is no
+    /// need to call `owner.quit()` explicitly on any of the error paths
+    /// below.
     ///
     /// Pulled out of the `on_ready` closure into a named fn so rustfmt
     /// actually formats it — rustfmt does not reliably reformat very large
@@ -1853,8 +1856,8 @@ where
         config: AppConfig,
         worker_reload: WorkerReload,
         rebuild_registration_slot: Rc<RefCell<Option<RebuildHookGuard>>>,
-        bootstrap_error_slot: Rc<RefCell<Option<anyhow::Error>>>,
-    ) where
+    ) -> anyhow::Result<()>
+    where
         V: View + StatelessView + Clone + 'static,
     {
         tracing::info!("Platform ready");
@@ -1883,11 +1886,11 @@ where
         // 1. Open window now that the event loop is running. Window creation is
         // an environment failure (display server hiccup, resource exhaustion),
         // not a `BUG:` invariant, and — unlike platform init above — this DOES
-        // run inside `on_ready` with a live owner capability and
-        // `bootstrap_error_slot` available, so it gets the same
-        // deferred-panic-after-teardown handling as the GPU/realm/attach
-        // failures below instead of an immediate bare `.expect()` panic
-        // mid-`on_ready`. `Ready` is guaranteed here (ADR-0039 §1).
+        // run inside `on_ready` with a live owner capability, so a failure here
+        // gets the same `Err`-propagates-out-of-`run` handling as the
+        // GPU/realm/attach failures below instead of an immediate bare
+        // `.expect()` panic mid-`on_ready`. `Ready` is guaranteed here
+        // (ADR-0039 §1).
         let options: WindowOptions = (&config).into();
         let window = match owner_platform_installed(|owner| owner.open_window(options))
             .and_then(flui_platform::WindowOpen::try_ready)
@@ -1895,10 +1898,7 @@ where
             Ok(window) => window,
             Err(error) => {
                 tracing::error!(%error, "Window creation failed");
-                *bootstrap_error_slot.borrow_mut() =
-                    Some(anyhow::Error::from(error).context("Window creation failed"));
-                owner_platform_installed(flui_platform::OwnerPlatform::quit);
-                return;
+                return Err(anyhow::Error::from(error).context("Window creation failed"));
             }
         };
 
@@ -1909,10 +1909,7 @@ where
             Ok(r) => r,
             Err(e) => {
                 tracing::error!("GPU init failed: {:?}", e);
-                *bootstrap_error_slot.borrow_mut() =
-                    Some(anyhow::anyhow!(e).context("GPU init failed"));
-                owner_platform_installed(flui_platform::OwnerPlatform::quit);
-                return;
+                return Err(anyhow::anyhow!(e).context("GPU init failed"));
             }
         };
         renderer.resize(phys_size.width.0 as u32, phys_size.height.0 as u32);
@@ -1933,10 +1930,7 @@ where
             Ok(realm) => realm,
             Err(e) => {
                 tracing::error!(error = %e, "UiRealm construction failed");
-                *bootstrap_error_slot.borrow_mut() =
-                    Some(anyhow::anyhow!(e).context("UiRealm construction failed"));
-                owner_platform_installed(flui_platform::OwnerPlatform::quit);
-                return;
+                return Err(anyhow::anyhow!(e).context("UiRealm construction failed"));
             }
         };
         let logical = window.logical_size();
@@ -1950,10 +1944,7 @@ where
         });
         if let Err(e) = attach {
             tracing::error!("Root widget attach failed: {:?}", e);
-            *bootstrap_error_slot.borrow_mut() =
-                Some(anyhow::anyhow!(e).context("Root widget attach failed"));
-            owner_platform_installed(flui_platform::OwnerPlatform::quit);
-            return;
+            return Err(anyhow::anyhow!(e).context("Root widget attach failed"));
         }
 
         // 3b. Wire the wake chain (E0a).
@@ -2257,6 +2248,7 @@ where
         AppBinding::instance().wake_frame();
 
         tracing::info!("Desktop platform initialized with callbacks");
+        Ok(())
     }
 
     // Window creation, GPU/renderer setup, and callback wiring all run
@@ -2272,15 +2264,9 @@ where
     // guard and cannot leak the host onto this thread past this call
     // (ADR-0039 §6).
     let _owner_host_clear_guard = OwnerHostClearGuard::arm();
-    platform.run(Box::new(move |owner| {
+    let result = platform.run(Box::new(move |owner| {
         install_owner_platform(owner);
-        bootstrap_desktop(
-            root,
-            config,
-            worker_reload,
-            rebuild_registration_slot,
-            bootstrap_error_slot,
-        );
+        bootstrap_desktop(root, config, worker_reload, rebuild_registration_slot)
     }));
 
     // Event loop exited: drop the runtime now (releases the at-most-one
@@ -2290,11 +2276,10 @@ where
     teardown_platform_realm();
 
     // Surface a fatal bootstrap failure (GPU init, `UiRealm` construction,
-    // root widget attach) now that the event loop has exited — those
-    // failures happen inside `on_ready`, with no return path back here
-    // except through `bootstrap_error`, and quitting the platform on them
-    // (see `bootstrap_desktop`) must not look like a clean exit.
-    if let Some(err) = bootstrap_error.borrow_mut().take() {
+    // root widget attach, or window creation) now that the event loop has
+    // exited — `on_ready`'s `Err` propagates straight out of `Platform::run`;
+    // no side-channel cell is needed to thread it out anymore.
+    if let Err(err) = result {
         panic!("desktop bootstrap failed: {err:?}");
     }
 }
@@ -2391,7 +2376,16 @@ where
     /// code untouched by this migration. **Unvalidated on-device**: no
     /// device and no CI compile target for `target_os = "android"` verify
     /// this; stated here and in the registry rather than assumed.
-    fn bootstrap_android<V>(root: V, config: AppConfig, hot_reload: ScenePlugin)
+    ///
+    /// Returns `Err` on bootstrap failure — `on_ready` itself is fallible
+    /// now, so the Android backend's `run` loop stops (and propagates the
+    /// error out) instead of continuing to pump input/frame
+    /// dispatch for an app that never finished bootstrapping.
+    fn bootstrap_android<V>(
+        root: V,
+        config: AppConfig,
+        hot_reload: ScenePlugin,
+    ) -> anyhow::Result<()>
     where
         V: View + StatelessView + Clone + 'static,
     {
@@ -2411,9 +2405,15 @@ where
         // 1. Open window (wraps the existing ANativeWindow). `Ready` is
         // guaranteed inside `on_ready` (ADR-0039 §1).
         let options: WindowOptions = (&config).into();
-        let window = owner_platform_installed(|owner| owner.open_window(options))
+        let window = match owner_platform_installed(|owner| owner.open_window(options))
             .and_then(flui_platform::WindowOpen::try_ready)
-            .expect("Failed to create Android window");
+        {
+            Ok(window) => window,
+            Err(error) => {
+                tracing::error!(%error, "Failed to create Android window");
+                return Err(anyhow::Error::from(error).context("Failed to create Android window"));
+            }
+        };
 
         // 2. Create GPU renderer (Vulkan backend on Android)
         let phys_size = window.physical_size();
@@ -2422,7 +2422,7 @@ where
             Ok(r) => r,
             Err(e) => {
                 tracing::error!("GPU init failed: {:?}", e);
-                return;
+                return Err(anyhow::anyhow!(e).context("GPU init failed"));
             }
         };
         renderer.resize(phys_size.width.0 as u32, phys_size.height.0 as u32);
@@ -2441,7 +2441,7 @@ where
             Ok(realm) => realm,
             Err(error) => {
                 tracing::error!(%error, "UiRealm construction failed");
-                return;
+                return Err(anyhow::anyhow!(error).context("UiRealm construction failed"));
             }
         };
         let logical = window.logical_size();
@@ -2455,7 +2455,7 @@ where
         });
         if let Err(e) = attach {
             tracing::error!("Root widget attach failed: {:?}", e);
-            return;
+            return Err(anyhow::anyhow!(e).context("Root widget attach failed"));
         }
         let realm_dispatch = install_platform_realm(ui_realm);
 
@@ -2658,16 +2658,24 @@ where
         AppBinding::instance().wake_frame();
 
         tracing::info!("Android platform initialized with callbacks (hot-reload enabled)");
+        Ok(())
     }
 
     // Owner-host clear guard armed BEFORE `run(...)`, not inside `on_ready`
     // (ADR-0039 §6) — see `run_desktop`'s matching comment.
     let _owner_host_clear_guard = OwnerHostClearGuard::arm();
-    platform.run(Box::new(move |owner| {
+    let result = platform.run(Box::new(move |owner| {
         install_owner_platform(owner);
-        bootstrap_android(root, config, hot_reload);
+        bootstrap_android(root, config, hot_reload)
     }));
     teardown_platform_realm();
+
+    // `on_ready`'s `Err` propagates straight out of `Platform::run`; surface
+    // it the same way `run_desktop` does now that the event loop has
+    // exited.
+    if let Err(err) = result {
+        panic!("android bootstrap failed: {err:?}");
+    }
 }
 
 // ============================================================================
@@ -2710,7 +2718,11 @@ where
     /// `WebPlatform::run` invokes it before starting the RAF loop
     /// (ADR-0039 slice 2 migration; behavior-preserving, since `on_ready`
     /// already runs synchronously on this thread before `run` returns).
-    fn bootstrap_web<V>(root: V, config: AppConfig)
+    ///
+    /// Returns `Err` on bootstrap failure — `on_ready` itself is fallible
+    /// now, so `WebPlatform::run` does not install the RAF loop over a
+    /// half-built page.
+    fn bootstrap_web<V>(root: V, config: AppConfig) -> anyhow::Result<()>
     where
         V: View + StatelessView + Clone + 'static,
     {
@@ -2730,9 +2742,15 @@ where
         // 1. Open window (creates canvas). `Ready` is guaranteed inside
         // `on_ready` (ADR-0039 §1).
         let options: WindowOptions = (&config).into();
-        let window = owner_platform_installed(|owner| owner.open_window(options))
+        let window = match owner_platform_installed(|owner| owner.open_window(options))
             .and_then(flui_platform::WindowOpen::try_ready)
-            .expect("Failed to create canvas window");
+        {
+            Ok(window) => window,
+            Err(error) => {
+                tracing::error!(%error, "Failed to create canvas window");
+                return Err(anyhow::Error::from(error).context("Failed to create canvas window"));
+            }
+        };
 
         // 2. Shared renderer slot — starts as None, filled async once the WebGPU
         //    adapter is available. `Option` lets the frame callback skip frames that
@@ -2773,7 +2791,7 @@ where
             Ok(realm) => realm,
             Err(error) => {
                 tracing::error!(%error, "UiRealm construction failed");
-                return;
+                return Err(anyhow::anyhow!(error).context("UiRealm construction failed"));
             }
         };
         let logical = window.logical_size();
@@ -2787,7 +2805,7 @@ where
         });
         if let Err(e) = attach {
             tracing::error!("Root widget attach failed: {:?}", e);
-            return;
+            return Err(anyhow::anyhow!(e).context("Root widget attach failed"));
         }
         let realm_dispatch = install_platform_realm(ui_realm);
 
@@ -2958,6 +2976,7 @@ where
         Scheduler::instance().handle_app_lifecycle_state_change(AppLifecycleState::Resumed);
 
         tracing::info!("Web platform initialized with callbacks");
+        Ok(())
     }
 
     // Run the event loop (takes ownership of the platform). No
@@ -2968,11 +2987,19 @@ where
     // (ADR-0039 §6/§7 "wasm posture"). An explicit web detach/quit
     // ownership hook is deferred until the platform exposes a callback
     // whose lifetime encloses the RAF registration.
-    platform.run(Box::new(move |owner| {
+    let result = platform.run(Box::new(move |owner| {
         install_owner_platform(owner);
-        bootstrap_web(root, config);
+        bootstrap_web(root, config)?;
         tracing::info!("Web platform ready");
+        Ok(())
     }));
+
+    // `on_ready`'s `Err` propagates straight out of `Platform::run`:
+    // `WebPlatform::run` does not install the RAF loop over a half-built
+    // page in that case.
+    if let Err(err) = result {
+        panic!("web bootstrap failed: {err:?}");
+    }
 }
 
 #[cfg(test)]
@@ -3164,11 +3191,13 @@ mod tests {
         {
             let _clear_guard = OwnerHostClearGuard::arm();
             let platform = headless_platform();
-            platform.run(Box::new(move |owner| {
+            let result = platform.run(Box::new(move |owner| {
                 install_owner_platform(owner);
                 let observed = with_owner_platform(|_owner| true);
                 seen_while_installed_for_closure.set(observed == Some(true));
+                Ok(())
             }));
+            assert!(result.is_ok(), "on_ready returns Ok here");
         } // `_clear_guard` drops here.
 
         assert!(
@@ -3188,7 +3217,7 @@ mod tests {
         let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _clear_guard = OwnerHostClearGuard::arm();
             let platform = headless_platform();
-            platform.run(Box::new(|owner| {
+            let _ = platform.run(Box::new(|owner| {
                 install_owner_platform(owner);
                 panic!("exercise on_ready panic cleanup");
             }));
@@ -3200,6 +3229,42 @@ mod tests {
             "a panic inside on_ready must still unwind through the clear guard \
              (armed before Platform::run, not inside on_ready) rather than \
              leaking the host onto this thread"
+        );
+    }
+
+    /// `on_ready` returning `Err` must propagate all the way out of
+    /// `Platform::run` — not be swallowed into
+    /// a bare log while the loop keeps running a half-built app — AND the
+    /// `OWNER_PLATFORM_HOST` TLS clear guard (armed before `run`, per the
+    /// existing unwind-safety contract) must still fire on this ordinary
+    /// `Err` return, exactly as it does on a panic.
+    #[test]
+    fn owner_platform_host_on_ready_error_propagates_and_still_clears() {
+        use flui_platform::headless_platform;
+
+        let result = {
+            let _clear_guard = OwnerHostClearGuard::arm();
+            let platform = headless_platform();
+            platform.run(Box::new(|owner| {
+                install_owner_platform(owner);
+                assert!(
+                    with_owner_platform(|_| ()).is_some(),
+                    "the host is installed while on_ready runs, even on the \
+                     path that is about to fail"
+                );
+                Err(anyhow::anyhow!("simulated bootstrap failure"))
+            }))
+        }; // `_clear_guard` drops here -- before the assertions below.
+
+        assert!(
+            result.is_err(),
+            "on_ready's Err must propagate out of Platform::run, not be \
+             swallowed"
+        );
+        assert!(
+            with_owner_platform(|_| ()).is_none(),
+            "the clear guard must still remove the host on the Err path, \
+             the same as it does on a panic"
         );
     }
 
@@ -3222,7 +3287,7 @@ mod tests {
         // test's own `#[should_panic]` unwind leaves the singleton clean
         // for whatever runs on it next -- no hand-rolled restore guard
         // needed on top of `drive_frame`'s own recovery path.
-        Scheduler::instance().drive_frame(std::time::Instant::now(), || {
+        Scheduler::instance().drive_frame(web_time::Instant::now(), || {
             let _ = with_owner_platform(|_owner| ());
         });
     }
@@ -3247,7 +3312,7 @@ mod tests {
 
         let _clear_guard = OwnerHostClearGuard::arm();
         let platform = headless_platform();
-        platform.run(Box::new(move |owner| {
+        let result = platform.run(Box::new(move |owner| {
             install_owner_platform(owner);
             let before_teardown = with_owner_platform(|_owner| true) == Some(true);
 
@@ -3260,7 +3325,9 @@ mod tests {
 
             let after_teardown = with_owner_platform(|_owner| true) == Some(true);
             observed_for_closure.set((before_teardown, after_teardown));
+            Ok(())
         }));
+        assert!(result.is_ok(), "on_ready returns Ok here");
 
         let (before_teardown, after_teardown) = observed.get();
         assert!(
