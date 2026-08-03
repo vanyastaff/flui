@@ -1,43 +1,30 @@
-//! The single `WindowId -> UiAddress` mapping authority.
+//! The single `WindowId -> PresentationAddress` mapping authority.
 //!
 //! ADR-0037 §2 names one authority for the native-window-to-presentation
 //! map; no second one may live in `AppBinding`, `UiRealm`, an input
 //! registry, or a platform callback. This module is that authority's home.
 //! `WindowId` (the platform-internal native-handle key) is confined to this
 //! file within `flui-app` — every other module addresses a presentation
-//! through [`UiAddress`] only, minted here. The mechanical
+//! through [`PresentationAddress`] only, minted here. The mechanical
 //! `forbidden_pattern` scan in `docs/runtime-contract.toml` confines the
 //! `WindowId` token itself to this one file within `crates/flui-app/src`.
 //!
 //! # Derived-cache invariant
 //!
-//! `RealmHost.address: Option<UiAddress>` (`runner.rs`) is a **derived
-//! cache** of this registry, not a second source of truth. Both are written
-//! only by `install_platform_realm`/`teardown_platform_realm`, inside the
-//! same TLS borrow, in that order: on install, the registry is written
-//! first, then the cache; on teardown, the registry entry is removed first
-//! — so map removal stops new routing before the queued old-generation
-//! events still sitting in the host's queue are dropped (ADR-0037 §2).
+//! `RealmHost.address: Option<PresentationAddress>` (`runner.rs`) is a
+//! **derived cache** of this registry, not a second source of truth. Both
+//! are written only by `install_platform_realm`/`teardown_platform_realm`,
+//! inside the same TLS borrow, in that order: on install, the registry is
+//! written first (which also removes every mapping of a realm displaced by
+//! a panic-recovery reinstall — never just the new window), then the
+//! cache; on teardown, the registry entries are removed first — so map
+//! removal stops new routing before the queued old-generation events still
+//! sitting in the host's queue are dropped (ADR-0037 §2).
 
 use std::sync::Arc;
 
-use flui_foundation::{PresentationId, RealmId};
+use flui_foundation::{PresentationAddress, RealmId};
 use flui_platform::traits::{PlatformWindow, WindowId};
-
-/// One presentation's routable address: which realm incarnation owns it,
-/// and which presentation incarnation within that realm.
-///
-/// Field names match the `RealmDispatcher.realm_id` precedent
-/// (`runner.rs`) and ADR-0037 §7's literal `SemanticsCommand` fields —
-/// `realm_id`/`presentation_id`, not a bare tuple or abbreviated names.
-///
-/// Deliberately `flui-app`-private: it graduates to `flui-foundation` only
-/// when a second crate needs it (rule of three).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct UiAddress {
-    pub(crate) realm_id: RealmId,
-    pub(crate) presentation_id: PresentationId,
-}
 
 /// Errors from [`WindowRegistry::try_register`].
 // The strict path has no production call site yet (today's single-window
@@ -61,21 +48,22 @@ pub(crate) enum RegistryError {
     #[error("window is already mapped to {existing:?}")]
     WindowAlreadyMapped {
         /// The address the window was already mapped to.
-        existing: UiAddress,
+        existing: PresentationAddress,
     },
 }
 
-/// The sole `WindowId -> UiAddress` mint/lookup authority.
+/// The sole `WindowId -> PresentationAddress` mint/lookup authority.
 ///
-/// API designed for N windows, instantiated for exactly one today: storage
-/// is a plain linear-scan `Vec` with no TLS assumption inside the type
-/// itself — a future multi-window `AppRuntime` lifts this struct unchanged.
-/// `WindowId` never crosses this module's boundary except through the
-/// methods below, which take an already-known window/id and hand back an
-/// address; callers outside this file never construct or hold a `WindowId`.
+/// API designed for N windows per realm, instantiated for exactly one
+/// window today: storage is a plain linear-scan `Vec` with no TLS
+/// assumption inside the type itself — a future multi-window `AppRuntime`
+/// lifts this struct unchanged. `WindowId` never crosses this module's
+/// boundary except through the methods below, which take an already-known
+/// window/id and hand back an address; callers outside this file never
+/// construct or hold a `WindowId`.
 #[derive(Debug, Default)]
 pub(crate) struct WindowRegistry {
-    entries: Vec<(WindowId, UiAddress)>,
+    entries: Vec<(WindowId, PresentationAddress)>,
 }
 
 impl WindowRegistry {
@@ -97,6 +85,12 @@ impl WindowRegistry {
     /// visible; [`Self::try_register`] is the strict alternative for a
     /// caller that wants a hard error instead.
     ///
+    /// This only replaces the mapping for the exact same `WindowId` — it
+    /// does **not** remove any *other* window mapped to a realm this
+    /// address's realm is displacing. A caller reinstalling an entire realm
+    /// under a fresh window must call [`Self::remove_realm`] for the
+    /// displaced realm first (see `install_platform_realm`'s use of both).
+    ///
     /// Calls `window.id()` internally so callers never need to name
     /// [`WindowId`] themselves. Performs the install-time self-check read
     /// immediately after inserting: the very next [`Self::resolve`] must
@@ -104,8 +98,8 @@ impl WindowRegistry {
     pub(crate) fn register_window(
         &mut self,
         window: &Arc<dyn PlatformWindow>,
-        address: UiAddress,
-    ) -> Option<UiAddress> {
+        address: PresentationAddress,
+    ) -> Option<PresentationAddress> {
         let id = window.id();
         let displaced = if let Some(entry) = self
             .entries
@@ -149,7 +143,7 @@ impl WindowRegistry {
     pub(crate) fn try_register(
         &mut self,
         id: WindowId,
-        address: UiAddress,
+        address: PresentationAddress,
     ) -> Result<(), RegistryError> {
         if let Some(existing) = self.resolve(id) {
             return Err(RegistryError::WindowAlreadyMapped { existing });
@@ -159,34 +153,57 @@ impl WindowRegistry {
     }
 
     /// Looks up the address currently mapped to `id`, if any.
-    pub(crate) fn resolve(&self, id: WindowId) -> Option<UiAddress> {
+    pub(crate) fn resolve(&self, id: WindowId) -> Option<PresentationAddress> {
         self.entries
             .iter()
             .find(|(existing, _)| *existing == id)
             .map(|(_, address)| *address)
     }
 
-    /// Removes and returns the sole entry for `realm_id`, if one exists.
+    /// Removes and returns **every** entry addressed to `realm_id`.
     ///
-    /// This is the teardown real read: the caller asserts the returned
-    /// entry against the address it installed, proving the registry tracked
-    /// the same window/address pair for this realm's whole lifetime.
-    // `teardown_platform_realm` (runner.rs) is the only production caller,
-    // and it does not exist on wasm32 — the web host never tears down (see
-    // its own module doc) — so the wasm lib check sees this as dead.
-    #[cfg_attr(
-        target_arch = "wasm32",
-        expect(
-            dead_code,
-            reason = "consumed only by teardown_platform_realm, which does not exist on wasm32, and by this module's tests"
-        )
-    )]
-    pub(crate) fn remove_realm(&mut self, realm_id: RealmId) -> Option<(WindowId, UiAddress)> {
-        let position = self
-            .entries
-            .iter()
-            .position(|(_, address)| address.realm_id == realm_id)?;
-        Some(self.entries.remove(position))
+    /// The target model is one realm owning any number of windows, so a
+    /// realm's teardown (or its displacement by a panic-recovery reinstall)
+    /// must not leave a second, third, ... window's mapping behind just
+    /// because only the first one happened to be removed. This is the
+    /// teardown real read: the caller asserts the returned entries against
+    /// the address(es) it installed, proving the registry tracked the same
+    /// window/address pairs for this realm's whole lifetime.
+    // `teardown_platform_realm` and `install_platform_realm` (runner.rs) are
+    // the only production callers, and `teardown_platform_realm` does not
+    // exist on wasm32 — the web host never tears down (see its own module
+    // doc) — so the wasm lib check would see this as dead if
+    // `install_platform_realm`'s reinstall-cleanup call did not also reach
+    // it; kept unconditional since that second call site is not wasm-gated.
+    pub(crate) fn remove_realm(
+        &mut self,
+        realm_id: RealmId,
+    ) -> Vec<(WindowId, PresentationAddress)> {
+        let mut removed = Vec::new();
+        self.entries.retain(|(id, address)| {
+            if address.realm_id == realm_id {
+                removed.push((*id, *address));
+                false
+            } else {
+                true
+            }
+        });
+        removed
+    }
+
+    /// The number of window mappings currently held. Test/introspection
+    /// only — production code never needs to enumerate the registry, only
+    /// resolve or remove by identity.
+    #[cfg(test)]
+    pub(crate) fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Companion to [`Self::len`] (clippy's `len_without_is_empty`); also
+    /// exercised directly by this module's own tests.
+    #[cfg(test)]
+    pub(crate) fn is_empty(&self) -> bool {
+        self.entries.is_empty()
     }
 }
 
@@ -196,25 +213,28 @@ mod tests {
 
     use super::*;
 
-    static_assertions::assert_impl_all!(UiAddress: Send, Sync, Copy);
+    static_assertions::assert_impl_all!(PresentationAddress: Send, Sync, Copy);
 
     #[test]
     fn addresses_compare_by_both_fields() {
-        let one = UiAddress {
+        let one = PresentationAddress {
             realm_id: RealmId::new_gen(0, NonZeroU32::MIN),
-            presentation_id: PresentationId::new_gen(0, NonZeroU32::MIN),
+            presentation_id: flui_foundation::PresentationId::new_gen(0, NonZeroU32::MIN),
         };
-        let same_realm_different_presentation = UiAddress {
+        let same_realm_different_presentation = PresentationAddress {
             realm_id: one.realm_id,
-            presentation_id: PresentationId::new_gen(0, NonZeroU32::new(2).unwrap()),
+            presentation_id: flui_foundation::PresentationId::new_gen(
+                0,
+                NonZeroU32::new(2).unwrap(),
+            ),
         };
         assert_ne!(one, same_realm_different_presentation);
     }
 
-    fn address(slot: u32) -> UiAddress {
-        UiAddress {
+    fn address(slot: u32) -> PresentationAddress {
+        PresentationAddress {
             realm_id: RealmId::new_gen(slot, NonZeroU32::MIN),
-            presentation_id: PresentationId::new_gen(slot, NonZeroU32::MIN),
+            presentation_id: flui_foundation::PresentationId::new_gen(slot, NonZeroU32::MIN),
         }
     }
 
@@ -309,14 +329,54 @@ mod tests {
         let removed = registry.remove_realm(installed.realm_id);
         assert_eq!(
             removed,
-            Some((window.id(), installed)),
-            "teardown must return exactly the entry that was installed"
+            vec![(window.id(), installed)],
+            "teardown must return exactly the entries that were installed"
         );
         assert_eq!(
             registry.resolve(window.id()),
             None,
             "the entry must be gone after removal"
         );
+        assert!(registry.is_empty());
+    }
+
+    /// The target model is one realm owning any number of windows:
+    /// `remove_realm` must remove every mapping addressed to that realm,
+    /// not just the first one found.
+    ///
+    /// If reverted: use `position` + single `remove` instead of `retain` and
+    /// this fails — only the first-registered window's mapping is removed,
+    /// the second survives as a dead entry.
+    #[test]
+    fn remove_realm_removes_every_mapping_for_that_realm_not_just_the_first() {
+        let mut registry = WindowRegistry::new();
+        let realm_address = address(0);
+        let same_realm_second_window = PresentationAddress {
+            realm_id: realm_address.realm_id,
+            presentation_id: flui_foundation::PresentationId::new_gen(1, NonZeroU32::MIN),
+        };
+        let other_realm_address = address(1);
+
+        let window_a = stub_window(100);
+        let window_b = stub_window(101);
+        let window_c = stub_window(102);
+        registry.register_window(&window_a, realm_address);
+        registry.register_window(&window_b, same_realm_second_window);
+        registry.register_window(&window_c, other_realm_address);
+
+        let removed = registry.remove_realm(realm_address.realm_id);
+        assert_eq!(removed.len(), 2, "both same-realm windows must be removed");
+        assert!(removed.contains(&(window_a.id(), realm_address)));
+        assert!(removed.contains(&(window_b.id(), same_realm_second_window)));
+
+        assert_eq!(registry.resolve(window_a.id()), None);
+        assert_eq!(registry.resolve(window_b.id()), None);
+        assert_eq!(
+            registry.resolve(window_c.id()),
+            Some(other_realm_address),
+            "an unrelated realm's window mapping must survive"
+        );
+        assert_eq!(registry.len(), 1);
     }
 
     #[test]

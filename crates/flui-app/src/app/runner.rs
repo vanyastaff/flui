@@ -278,7 +278,7 @@ struct RealmHost {
     /// [`install_platform_realm`]/[`teardown_platform_realm`], inside this
     /// same TLS borrow, in that order (see `window_registry`'s module doc
     /// for the full invariant).
-    address: Option<super::window_registry::UiAddress>,
+    address: Option<flui_foundation::PresentationAddress>,
     /// The sole native-window-to-presentation mapping authority (ADR-0037
     /// §2). Lives here, inside the same thread-local as the realm it
     /// addresses, rather than as a second free-standing static — a future
@@ -323,7 +323,7 @@ impl RealmHost {
 #[cfg(not(target_os = "ios"))]
 struct RealmDispatcher {
     owner_thread: std::thread::ThreadId,
-    address: super::window_registry::UiAddress,
+    address: flui_foundation::PresentationAddress,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1075,7 +1075,7 @@ mod lifecycle_derivation_tests {
 /// Installs `realm`, minting its dispatcher's address by registering
 /// `window` in the single [`super::window_registry::WindowRegistry`]
 /// authority — the registry is the sole mint path for a routable
-/// [`super::window_registry::UiAddress`]; no caller of this function ever
+/// [`flui_foundation::PresentationAddress`]; no caller of this function ever
 /// names the platform-internal native-handle key type itself.
 #[cfg(not(target_os = "ios"))]
 fn install_platform_realm(
@@ -1083,19 +1083,31 @@ fn install_platform_realm(
     window: &std::sync::Arc<dyn flui_platform::traits::PlatformWindow>,
 ) -> RealmDispatcher {
     let owner_thread = std::thread::current().id();
-    let address = super::window_registry::UiAddress {
+    let address = flui_foundation::PresentationAddress {
         realm_id: realm.realm_id(),
         presentation_id: realm.presentation_id(),
     };
     let (displaced_realm, displaced_queue, displaced_applier) = PLATFORM_REALM_HOST.with(|slot| {
         let mut state = slot.borrow_mut();
-        state.registry.register_window(window, address);
         // A realm may already be installed here — a reinstall without an
         // intervening `teardown_platform_realm` (the panic-recovery path: a
-        // mid-`on_ready` failure leaves the old realm/queue/applier in
-        // place, and bootstrap tries again on the same thread). Mirror
-        // `teardown_platform_realm`'s discipline exactly: `mem::take` the
-        // displaced realm, its queue, and its surface applier out from
+        // mid-`on_ready` failure leaves the old realm/queue/applier/registry
+        // mappings in place, and bootstrap tries again on the same thread).
+        // Remove every registry mapping addressed to the DISPLACED realm —
+        // not just the window being installed now — in this same borrow,
+        // before registering the new window: otherwise the displaced
+        // realm's own window(s) survive as dead entries no later teardown
+        // ever reaches (teardown only ever removes the realm that is
+        // *currently* installed).
+        let previous_address = state.address;
+        let mut removed_window_mappings = 0;
+        if let Some(previous_address) = previous_address {
+            removed_window_mappings = state.registry.remove_realm(previous_address.realm_id).len();
+        }
+        state.registry.register_window(window, address);
+
+        // Mirror `teardown_platform_realm`'s discipline exactly: `mem::take`
+        // the displaced realm, its queue, and its surface applier out from
         // under this borrow — never let an assignment drop them while the
         // borrow is still live, and never leave stale-incarnation events
         // sitting in the queue to be delivered FIFO-first into the new
@@ -1105,9 +1117,10 @@ fn install_platform_realm(
         let displaced_applier = state.surface_applier.take();
         if displaced_realm.is_some() {
             tracing::warn!(
-                previous_address = ?state.address,
+                previous_address = ?previous_address,
                 new_address = ?address,
                 queued_events_discarded = displaced_queue.len(),
+                removed_window_mappings,
                 "install_platform_realm: replacing a realm that was never torn down"
             );
         }
@@ -1245,13 +1258,17 @@ fn teardown_platform_realm() {
         // Registry removal first (ADR-0037 §2): stop new routing before the
         // queued old-generation events below are dropped, and before the
         // realm/address cache is cleared. The teardown real read: assert
-        // the removed entry matches the address this realm installed.
+        // the removed entries include the address this realm installed —
+        // `remove_realm` removes every window mapped to this realm, not
+        // just the first, so a future one-realm-many-windows install still
+        // leaves nothing behind.
         if let Some(address) = state.address {
             let removed = state.registry.remove_realm(address.realm_id);
-            debug_assert_eq!(
-                removed.map(|(_, removed_address)| removed_address),
-                Some(address),
-                "BUG: window_registry teardown read did not match the installed address"
+            debug_assert!(
+                removed
+                    .iter()
+                    .any(|(_, removed_address)| *removed_address == address),
+                "BUG: window_registry teardown read did not include the installed address"
             );
         }
         let realm = state.realm.take();
@@ -1323,7 +1340,7 @@ mod realm_dispatch_tests {
     /// focused, so a fresh realm's derivation must start from that same
     /// baseline.
     ///
-    /// Red-check: remove the `state.visible = true; state.focused = true;`
+    /// If reverted: remove the `state.visible = true; state.focused = true;`
     /// reset from `install_platform_realm` and this fails — the second
     /// realm reads `visible == false` left behind by the first.
     #[test]
@@ -1363,7 +1380,7 @@ mod realm_dispatch_tests {
     /// `draining` must not be left stuck from whatever state the displaced
     /// realm was in.
     ///
-    /// Red-check: without `mem::take`-ing the queue before overwriting
+    /// If reverted: without `mem::take`-ing the queue before overwriting
     /// `state.realm`, the pre-existing stale event is delivered to the NEW
     /// realm FIFO-first and this fails on the `delivered` assertion.
     #[test]
@@ -1438,6 +1455,67 @@ mod realm_dispatch_tests {
             "draining must not be left stuck from the displaced incarnation — the new \
              realm must actually drain, not just enqueue forever"
         );
+        teardown_platform_realm();
+    }
+
+    /// A panic-recovery reinstall under a DIFFERENT native window must
+    /// remove the displaced realm's own window mapping from the registry —
+    /// not just leave it behind alongside the new one.
+    ///
+    /// Both windows are opened from the *same* headless platform instance:
+    /// `HeadlessPlatform` mints window ids from its own instance-local
+    /// counter, so two windows from two separate `headless_platform()` calls
+    /// would alias the same id instead of differing — one instance, two
+    /// `open_window` calls, is what actually produces two distinct windows.
+    ///
+    /// If reverted: skip the registry cleanup for the displaced realm in
+    /// `install_platform_realm` and this fails — the first window still
+    /// resolves, and the registry holds two entries instead of one.
+    #[test]
+    fn reinstall_with_a_different_window_removes_the_old_windows_registry_mapping() {
+        let platform = flui_platform::headless_platform();
+        let first_window = platform
+            .open_window(flui_platform::WindowOptions::default())
+            .expect("headless platform should create the first test window");
+        let second_window = platform
+            .open_window(flui_platform::WindowOptions::default())
+            .expect("headless platform should create the second test window");
+        let first_window_id = first_window.id();
+        let second_window_id = second_window.id();
+        assert_ne!(
+            first_window_id, second_window_id,
+            "the two windows must have distinct ids for this test to mean anything"
+        );
+
+        let app = AppBinding::instance();
+        let _first_dispatcher = install_platform_realm(
+            super::super::ui_realm::UiRealm::for_test(app),
+            &first_window,
+        );
+        // The panic-recovery reinstall itself, under the second window: no
+        // teardown in between.
+        let _second_dispatcher = install_platform_realm(
+            super::super::ui_realm::UiRealm::for_test(app),
+            &second_window,
+        );
+
+        PLATFORM_REALM_HOST.with(|slot| {
+            let state = slot.borrow();
+            assert_eq!(
+                state.registry.resolve(first_window_id),
+                None,
+                "the displaced realm's old window mapping must be removed on reinstall"
+            );
+            assert!(
+                state.registry.resolve(second_window_id).is_some(),
+                "the new window must resolve to the new realm's address"
+            );
+            assert_eq!(
+                state.registry.len(),
+                1,
+                "only the new window's mapping may remain after the reinstall"
+            );
+        });
         teardown_platform_realm();
     }
 
@@ -1540,7 +1618,7 @@ mod realm_dispatch_tests {
     /// from the same shared counter, so a stale dispatcher's realm half
     /// never matches — the presentation half is never even compared.
     ///
-    /// Red-check: remove the realm-id compare from `dispatch_platform_realm`
+    /// If reverted: remove the realm-id compare from `dispatch_platform_realm`
     /// and this fails — the stale dispatcher's input reaches the new realm.
     #[test]
     fn stale_realm_dispatch_is_dropped() {
@@ -1565,7 +1643,7 @@ mod realm_dispatch_tests {
     /// dropped as `StalePresentation`, and the live realm's own gesture
     /// state must be completely untouched by the attempt.
     ///
-    /// Red-check: remove the presentation-id compare from
+    /// If reverted: remove the presentation-id compare from
     /// `dispatch_platform_realm` and this fails — the forged dispatcher's
     /// input reaches the live realm's arena.
     #[test]
@@ -1576,7 +1654,7 @@ mod realm_dispatch_tests {
             .expect("live_generation + 1 is nonzero");
         let forged = RealmDispatcher {
             owner_thread: live.owner_thread,
-            address: super::super::window_registry::UiAddress {
+            address: flui_foundation::PresentationAddress {
                 realm_id: live.address.realm_id,
                 presentation_id: flui_foundation::PresentationId::new_gen(0, forged_generation),
             },
@@ -1609,7 +1687,7 @@ mod realm_dispatch_tests {
     /// (cleared at the same teardown point) must not fire for a queued
     /// resize either.
     ///
-    /// Red-check: have `teardown_platform_realm` run the queue instead of
+    /// If reverted: have `teardown_platform_realm` run the queue instead of
     /// dropping it, and both assertions below fail.
     #[test]
     fn queued_events_for_a_removed_presentation_never_deliver() {
@@ -1667,7 +1745,7 @@ mod realm_dispatch_tests {
     /// [`PlatformToUi::run`] before [`install_surface_applier`] has run (or
     /// after it has been cleared), never for synchronous reentrancy.
     ///
-    /// Red-check: replace the `None` arm's trace-and-skip with
+    /// If reverted: replace the `None` arm's trace-and-skip with
     /// `.expect("applier installed")` and this panics instead of returning
     /// `Ok`.
     #[test]
@@ -1724,7 +1802,7 @@ mod realm_dispatch_tests {
     /// `SurfaceApplierRestoreGuard` restores the applier into the TLS slot
     /// during the unwinding drop, so the next `Resized` still reaches it.
     ///
-    /// Red-check: revert to restoring the applier only after a successful
+    /// If reverted: revert to restoring the applier only after a successful
     /// call (no drop guard) and this fails — the second `Resized` silently
     /// coalesces at the `None` arm instead of calling the applier again.
     #[test]
@@ -2160,7 +2238,7 @@ mod desktop_pacing_tests {
     /// mirrors what `run_desktop`'s frame callback does on a `PumpAsync`
     /// wake, without needing a live window/event loop.
     ///
-    /// Red-check: gate the pump too (only call `drive_async_tasks` when
+    /// If reverted: gate the pump too (only call `drive_async_tasks` when
     /// `wake_action` returns `Render` — a mistaken "no work while
     /// backgrounded" fix) and this fails: the future never completes (RUN
     /// IT — see the test module doc for how this is verified).
@@ -3681,7 +3759,7 @@ mod tests {
     /// on the singleton — only THIS test's window, with THIS test's
     /// unmistakable marker size, proves `set_window` ran before the callback.
     ///
-    /// Red-check: swap the order of the two `AppBinding::instance()` calls
+    /// If reverted: swap the order of the two `AppBinding::instance()` calls
     /// below (request the redraw, then store the window — the pre-fix shape)
     /// and this fails: `wake_frame` finds no active window yet, never calls
     /// `request_redraw` on it, and the callback never fires at all.
