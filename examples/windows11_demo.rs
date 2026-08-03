@@ -71,7 +71,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!();
         println!("Close the window to exit");
         println!();
-    }));
+        Ok(())
+    }))?;
 
     Ok(())
 }

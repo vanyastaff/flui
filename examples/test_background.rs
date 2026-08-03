@@ -49,7 +49,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // Keep window alive via closure capture
         let _window = window;
-    }));
+        Ok(())
+    }))?;
 
     Ok(())
 }

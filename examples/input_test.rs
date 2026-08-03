@@ -72,11 +72,14 @@ fn main() {
     tracing::info!("");
     tracing::info!("Waiting for input events...");
 
-    platform.run(Box::new(move |_platform| {
-        tracing::info!("Platform ready, window is open");
-        // Keep window alive via closure capture
-        let _window = window;
-    }));
+    platform
+        .run(Box::new(move |_owner| {
+            tracing::info!("Platform ready, window is open");
+            // Keep window alive via closure capture
+            let _window = window;
+            Ok(())
+        }))
+        .expect("platform event loop exited with an error");
 
     tracing::info!("Application finished!");
 }

@@ -72,7 +72,8 @@ fn main() -> anyhow::Result<()> {
         tracing::info!("Platform ready, window is open");
         // Keep window alive via closure capture
         let _window = window;
-    }));
+        Ok(())
+    }))?;
 
     tracing::info!("Demo finished!");
     Ok(())

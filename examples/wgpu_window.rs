@@ -218,12 +218,15 @@ fn main() {
 
     tracing::info!("Setup complete - starting event loop with wgpu rendering");
 
-    platform.run(Box::new(move |_platform| {
-        tracing::info!("Platform ready");
-        // Keep window and gpu alive via closure capture
-        let _window = &window;
-        let _gpu = &gpu;
-    }));
+    platform
+        .run(Box::new(move |_owner| {
+            tracing::info!("Platform ready");
+            // Keep window and gpu alive via closure capture
+            let _window = &window;
+            let _gpu = &gpu;
+            Ok(())
+        }))
+        .expect("platform event loop exited with an error");
 
     tracing::info!("Application finished");
 }

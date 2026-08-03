@@ -138,7 +138,8 @@ fn main() -> anyhow::Result<()> {
 
         // Keep window alive via closure capture
         let _window = window;
-    }));
+        Ok(())
+    }))?;
 
     println!("Demo finished!");
     Ok(())
