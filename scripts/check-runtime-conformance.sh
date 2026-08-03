@@ -421,6 +421,165 @@ for crate in RUNTIME_CRATES + [
                 )
 
 # ---------------------------------------------------------------------------
+# Ambient-reach ratchet (issue #553): every real (non-comment,
+# non-test-oracle) `::instance()` call site, and every
+# ambient global()/OnceLock/LazyLock-backed zero-arg accessor from a curated
+# marker list, must be named in `[[ambient_reach]]` with an owning issue.
+# Two grammars:
+#
+#   instance-call  -- the literal `::instance()` call syntax.
+#   ambient-static -- a curated marker list of known ambient accessor
+#                     signatures, distinct from the macro-generated `fn
+#                     instance() -> &'static` the singleton net above already
+#                     owns: `AssetRegistry::global()`, `global_timer_service()`,
+#                     `shared_font_system()`.
+#
+# This is a RATCHET, not a ban: `instance-call` is meant to shrink to empty
+# as #553's later slices retire each singleton (checked bidirectionally below
+# -- a registered file with no matching reach left is a stale entry, same as
+# an unregistered one is a missing entry); `ambient-static` carries named,
+# owner-tracked residuals #553 does not close.
+#
+# Both grammars are judged on CODE, not prose or test oracles: line comments
+# are stripped first, and top-level `#[cfg(test)]`/`#[cfg(all(test, ...))]`-
+# gated `mod { ... }` blocks are blanked out by brace depth -- a test that
+# calls `Foo::instance()` to prove NON-interference (this repo's divergence-
+# check idiom, e.g. `ui_realm.rs`'s hot-reload test asserting
+# `AppBinding::instance()` was untouched) is not a production ambient reach.
+# ---------------------------------------------------------------------------
+AMBIENT_REACH_EXEMPT = {Path("crates/flui-foundation/src/binding.rs")}
+AMBIENT_STATIC_MARKERS = (
+    "fn global() -> &'static",
+    "fn global_timer_service() -> &'static",
+    "fn shared_font_system(",
+)
+INSTANCE_CALL_MARKER = "::instance()"
+VALID_AMBIENT_GRAMMARS = {"instance-call", "ambient-static"}
+
+_TEST_CFG_RE = re.compile(r"^\s*#\[cfg\(\s*(test\b|all\(\s*test\b)")
+_TEST_MOD_RE = re.compile(r"^\s*(pub(\(crate\))?\s+)?mod\s+\w+\s*\{")
+
+
+def _strip_line_comments(text: str) -> str:
+    return "\n".join(line.split("//", 1)[0] for line in text.splitlines())
+
+
+def _strip_top_level_test_modules(text: str) -> str:
+    """Blank every `#[cfg(test)]`/`#[cfg(all(test, ...))]`-gated `mod { ... }`
+    block (brace-depth tracked, same technique as
+    check-frame-capability-scope.sh) so the ratchet judges production
+    reachability, not a test module that legitimately still calls a
+    singleton as its own oracle.
+    """
+    lines = text.split("\n")
+    out = list(lines)
+    i = 0
+    n = len(lines)
+    while i < n:
+        if _TEST_CFG_RE.match(lines[i]):
+            j = i + 1
+            while j < n and not lines[j].strip():
+                j += 1
+            if j < n and _TEST_MOD_RE.match(lines[j]):
+                depth = 0
+                seen = False
+                k = j
+                while k < n:
+                    opens = lines[k].count("{")
+                    closes = lines[k].count("}")
+                    if opens:
+                        seen = True
+                    depth += opens - closes
+                    k += 1
+                    if seen and depth <= 0:
+                        break
+                for idx in range(i, k):
+                    out[idx] = ""
+                i = k
+                continue
+        i += 1
+    return "\n".join(out)
+
+
+def _ambient_reach_code(path: Path) -> str | None:
+    try:
+        raw = path.read_text()
+    except (OSError, UnicodeDecodeError):
+        return None
+    return _strip_top_level_test_modules(_strip_line_comments(raw))
+
+
+ambient_reach_files: dict[str, set[Path]] = {"instance-call": set(), "ambient-static": set()}
+for index, entry in enumerate(table_array("ambient_reach")):
+    label = f"{registry_rel} ambient_reach[{index}]"
+    file_value = entry.get("file")
+    grammar = entry.get("grammar")
+    if not isinstance(file_value, str) or not file_value:
+        fail(f"{label} has no file path")
+        continue
+    label = f"{registry_rel} ambient_reach `{file_value}` (grammar {grammar!r})"
+    if grammar not in VALID_AMBIENT_GRAMMARS:
+        fail(f"{label}: expected grammar one of {sorted(VALID_AMBIENT_GRAMMARS)}")
+        continue
+    path = (root / file_value).resolve()
+    if not path.is_relative_to(root) or not path.is_file():
+        fail(f"{label} names a missing file")
+        continue
+    if not str(entry.get("note", "")).strip():
+        fail(f"{label} has no `note` explaining the residual")
+    check_owner_issue(entry, label, required=True)
+    rel = Path(file_value)
+    if rel in ambient_reach_files[grammar]:
+        fail(f"{label} is declared more than once for this grammar")
+    ambient_reach_files[grammar].add(rel)
+
+for crate_dir in sorted((root / "crates").iterdir()):
+    if not crate_dir.is_dir():
+        continue
+    crate_src = crate_dir / "src"
+    if not crate_src.is_dir():
+        continue
+    for rs_file in sorted(crate_src.rglob("*.rs")):
+        rel = rs_file.relative_to(root)
+        if rel in AMBIENT_REACH_EXEMPT:
+            continue
+        code = _ambient_reach_code(rs_file)
+        if code is None:
+            continue
+        if INSTANCE_CALL_MARKER in code and rel not in ambient_reach_files["instance-call"]:
+            fail(
+                f"{rel} contains a production `::instance()` call site with no "
+                "registered `[[ambient_reach]]` entry (grammar \"instance-call\") -- "
+                "every ambient singleton reach must be named with an owning issue"
+            )
+        if any(marker in code for marker in AMBIENT_STATIC_MARKERS) and rel not in ambient_reach_files["ambient-static"]:
+            fail(
+                f"{rel} contains an ambient global()/OnceLock/LazyLock-backed accessor "
+                "with no registered `[[ambient_reach]]` entry (grammar \"ambient-static\") "
+                "-- every named ambient residual must carry an owning issue"
+            )
+
+# Bidirectional: a registered entry whose file no longer contains a matching
+# reach is stale -- the ratchet's "shrinks to empty" claim only holds if
+# retiring the last call site in a file also requires removing its entry.
+for grammar, files in ambient_reach_files.items():
+    marker_check = (
+        (lambda code: INSTANCE_CALL_MARKER in code)
+        if grammar == "instance-call"
+        else (lambda code: any(marker in code for marker in AMBIENT_STATIC_MARKERS))
+    )
+    for rel in sorted(files):
+        path = root / rel
+        if not path.is_file():
+            continue  # already reported missing above
+        code = _ambient_reach_code(path)
+        if code is not None and not marker_check(code):
+            fail(
+                f"{registry_rel} ambient_reach `{rel}` (grammar {grammar!r}) is registered "
+                "but the file no longer contains a matching reach -- remove the stale entry"
+            )
+
+# ---------------------------------------------------------------------------
 # Public lock-shaped surface net: every PORT-CHECK-OK-SP6 marker in the
 # runtime crates must come from a registered file. (Trigger #12 in
 # scripts/port-check.sh forces the marker onto any public lock surface its
