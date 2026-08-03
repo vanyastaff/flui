@@ -956,10 +956,24 @@ stays" table -- no owner-affine method is ever added to it), not the \
 ambient `&dyn Platform`/`Arc<dyn Platform>` trait object, which remains \
 `Send + Sync` in full and runtime-checked only (the slice-1 `OwnerAffinity` \
 debug_assert backstop) until slice 3 actually splits the owner-affine \
-methods off the trait. Slice 2 lands `OwnerPlatform`/`SharedPlatform`/the \
-fallible callback flip/the flui-app TLS host across every backend; slice 3 \
-(the `OwnerOps` trait-surgery seam, macOS/Windows lane adoption) is not in \
-the tree.\
+methods off the trait. Two more routes of the SAME residual-hazard class, \
+named here rather than left implicit: `headless_platform() -> Box<dyn \
+Platform>` (a free constructor handing out the same full-`Send+Sync` \
+trait object, runtime-checked only, same as `current_platform()`); and the \
+publicly re-exported CONCRETE backend types themselves (`WinitPlatform`, \
+`MacOSPlatform`, `WindowsPlatform`, `WebPlatform`, `AndroidPlatform`, \
+`IOSPlatform`, `LinuxPlatform`, `HeadlessPlatform`) -- an `Arc<WinitPlatform>` \
+(for instance, `WinitPlatform::run_event_loop` is itself `pub` and takes \
+`self: Arc<Self>`) held across the loop lets a worker call `.quit()` (or \
+any other `Platform` method) directly on the concrete type with no `dyn \
+Platform` object involved at all, so the hazard is not merely a trait-object \
+one. All three routes close together, mechanically, only when slice 3 \
+actually moves the owner-affine methods off the `Platform` trait; until \
+then each is a debug_assert-guarded, not compile-error-guarded, misuse \
+surface. Slice 2 lands `OwnerPlatform`/`SharedPlatform`/the fallible \
+callback flip/the flui-app TLS host across every backend; slice 3 (the \
+`OwnerOps` trait-surgery seam, macOS/Windows lane adoption) is not in the \
+tree.\
 """
 state = "partial"
 domain = "platform"
@@ -1196,7 +1210,7 @@ owner = "platform backend (one per process; consumed by run())"
 failure_semantics = "anyhow surface; owner-affinity on the trait's own methods is still a runtime debug_assert (OwnerAffinity), not a compile-time property, until slice 3 moves them off. The compile-time guarantee this issue actually delivers lives on the capability holders: OwnerPlatform is !Send, and its shared() escape hatch returns the restricted SharedPlatform (Clone + Send + Sync, no owner-affine method) rather than this trait's own &dyn Platform."
 consumers = ["runner bootstrap", "run_direct", "examples"]
 owner_issue = 551
-notes = "De-facto crate-sealed post-flip: minting an OwnerPlatform requires the pub(crate) constructor in traits/owner.rs, so an out-of-crate impl Platform cannot supply what its own run() must hand to on_ready. An external-embedder minting seam is #560 design work, not this issue's scope."
+notes = "De-facto crate-sealed post-flip: minting an OwnerPlatform requires the pub(crate) constructor in traits/owner.rs, so an out-of-crate impl Platform cannot supply what its own run() must hand to on_ready. An external-embedder minting seam is #560 design work, not this issue's scope. Same residual class, named on the owner-platform-capability contract rather than repeated here: headless_platform()'s Box<dyn Platform> return, and the publicly re-exported concrete backend types (WinitPlatform et al., whose own pub methods -- e.g. WinitPlatform::run_event_loop -- need no dyn Platform object at all to reach an owner-affine method off-thread)."
 
 [[surface]]
 path = "flui_platform::PlatformReadyCallback"
