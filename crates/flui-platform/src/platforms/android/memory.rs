@@ -93,7 +93,17 @@ pub fn is_16kb_page_size() -> bool {
 /// # Returns
 ///
 /// - `Ok(NonNull<u8>)`: Pointer to page-aligned memory
-/// - `Err(AllocError)`: Allocation failed (out of memory)
+/// - `Err(PageAllocError)`: Allocation failed (out of memory), or `size == 0`
+///
+/// # Zero-size requests
+///
+/// `size == 0` returns `Err(PageAllocError)` rather than a dangling pointer:
+/// the global allocator's `alloc` is unsafe to call with a zero-size `Layout`,
+/// and this function's contract is a plain alloc/dealloc pair with no caller-
+/// tracked "did this actually allocate" state to special-case later at
+/// `dealloc_page_aligned` time. Callers that legitimately need a zero-byte
+/// page-aligned buffer should use `PageAlignedVec::with_capacity(0)`, which
+/// handles that case internally without ever calling the global allocator.
 ///
 /// # Safety
 ///
@@ -108,16 +118,27 @@ pub fn is_16kb_page_size() -> bool {
 /// unsafe { dealloc_page_aligned(ptr, 8192); }
 /// ```
 pub fn alloc_page_aligned(size: usize) -> Result<NonNull<u8>, PageAllocError> {
+    if size == 0 {
+        return Err(PageAllocError);
+    }
+
     let page_size = get_page_size();
 
-    // Round up to page boundary
-    let aligned_size = (size + page_size - 1) & !(page_size - 1);
+    // Round up to page boundary. `checked_add` (rather than a bare `+`) means
+    // a `size` near `usize::MAX` reports `Err` instead of wrapping to a small
+    // `aligned_size` — including, in the worst case, 0 — under release's
+    // `overflow-checks = false`.
+    let aligned_size = size.checked_add(page_size - 1).ok_or(PageAllocError)? & !(page_size - 1);
 
     // Create aligned layout
     let layout = Layout::from_size_align(aligned_size, page_size).map_err(|_| PageAllocError)?;
 
     // Allocate aligned memory
-    // SAFETY: Layout is valid (verified above)
+    // SAFETY: Layout is valid (verified above) and non-zero-size: `size != 0`
+    // was checked above, and the `checked_add` above returns `Err` rather
+    // than wrapping if rounding `size` up to a page boundary would overflow
+    // — so `aligned_size` is the true ceiling-rounded value, which for any
+    // `size >= 1` is at least one full `page_size`, never 0.
     let ptr = unsafe { alloc(layout) };
 
     NonNull::new(ptr).ok_or(PageAllocError)
@@ -133,8 +154,20 @@ pub fn alloc_page_aligned(size: usize) -> Result<NonNull<u8>, PageAllocError> {
 pub unsafe fn dealloc_page_aligned(ptr: NonNull<u8>, size: usize) {
     let page_size = get_page_size();
     let aligned_size = (size + page_size - 1) & !(page_size - 1);
-    let layout = Layout::from_size_align_unchecked(aligned_size, page_size);
-    dealloc(ptr.as_ptr(), layout);
+    // SAFETY: `page_size` is stable for the process lifetime (the kernel's page
+    // size cannot change at runtime), and `aligned_size` here is computed with the
+    // exact rounding formula `alloc_page_aligned` used. The caller contract above
+    // requires `size` to match the value originally passed to `alloc_page_aligned`,
+    // whose checked `Layout::from_size_align(aligned_size, page_size)` already
+    // succeeded for this same pair — so `page_size` is confirmed a nonzero power of
+    // two and `aligned_size` does not overflow `isize::MAX` when rounded to that
+    // alignment, making the unchecked reconstruction valid.
+    let layout = unsafe { Layout::from_size_align_unchecked(aligned_size, page_size) };
+    // SAFETY: the caller contract above requires `ptr` to have been allocated by
+    // `alloc_page_aligned` with this same `size` and not used after this call.
+    // `layout` (reconstructed above) is therefore identical to the layout that
+    // allocation used, satisfying `dealloc`'s "same allocator, same layout" contract.
+    unsafe { dealloc(ptr.as_ptr(), layout) };
 }
 
 // ============================================================================
@@ -173,33 +206,86 @@ pub struct PageAlignedVec<T> {
     ptr: NonNull<T>,
     len: usize,
     capacity: usize,
+    /// Exact byte size passed to the allocator (page/align-rounded), stored
+    /// verbatim. `Drop` and `byte_size()` must use this rather than
+    /// recomputing `capacity * size_of::<T>()`, which can undershoot the real
+    /// allocation size whenever `size_of::<T>()` doesn't evenly divide it —
+    /// feeding `dealloc` a too-small layout is undefined behavior.
+    byte_capacity: usize,
 }
 
 impl<T> PageAlignedVec<T> {
     /// Create a new page-aligned vector with the given capacity.
     ///
     /// The actual allocated capacity will be rounded up to the nearest
-    /// page boundary.
+    /// page boundary (or to `align_of::<T>()`, if that exceeds the page size).
     ///
     /// # Panics
     ///
-    /// Panics if allocation fails (out of memory).
+    /// - Panics if allocation fails (out of memory).
+    /// - Panics if the capacity/page-rounding arithmetic overflows `usize`.
+    ///
+    /// # Compile-time errors
+    ///
+    /// Fails to compile if `T` is a zero-sized type. Capacity accounting
+    /// (`capacity = aligned_bytes / size_of::<T>()`) and the GPU-buffer
+    /// contract (`byte_size()` reflecting real device-visible bytes) both need
+    /// a nonzero element stride. `Vec<ZST>` sidesteps the same issue by
+    /// special-casing `capacity()` as `usize::MAX` with no backing allocation
+    /// at all — that shortcut doesn't fit a type whose entire purpose is
+    /// handing real, page-aligned byte spans to Vulkan.
     pub fn with_capacity(capacity: usize) -> Self {
+        const {
+            assert!(
+                std::mem::size_of::<T>() != 0,
+                "PageAlignedVec<T> does not support zero-sized T (see doc comment)"
+            );
+        }
+
         let page_size = get_page_size();
-        let byte_capacity = capacity * std::mem::size_of::<T>();
-        let aligned_capacity = (byte_capacity + page_size - 1) & !(page_size - 1);
+        // The allocation must satisfy both the page-alignment contract this
+        // type advertises and `T`'s own alignment requirement.
+        let align = page_size.max(std::mem::align_of::<T>());
 
-        let layout = Layout::from_size_align(aligned_capacity, page_size)
-            .expect("Invalid layout for page-aligned allocation");
+        let requested_bytes = capacity.checked_mul(std::mem::size_of::<T>()).expect(
+            "BUG: PageAlignedVec capacity overflow: capacity * size_of::<T>() > usize::MAX",
+        );
+        let byte_capacity = requested_bytes
+            .checked_add(align - 1)
+            .expect("BUG: PageAlignedVec capacity overflow: page-rounding overflowed usize::MAX")
+            & !(align - 1);
 
-        // SAFETY: Layout is valid (verified above)
-        let ptr = unsafe { alloc(layout) as *mut T };
-        let ptr = NonNull::new(ptr).expect("Allocation failed");
+        let ptr = if byte_capacity == 0 {
+            // SAFETY: `align` is a nonzero power of two — `page_size` is a
+            // power of two (from `get_page_size`/`sysconf`) and
+            // `align_of::<T>()` is always a power of two, so their max is
+            // too. Using `align` directly as a pointer address therefore
+            // yields a non-null pointer whose address is a multiple of
+            // `align`, satisfying both `align_of::<T>()` and the page-
+            // alignment contract `is_page_aligned` checks. No storage backs
+            // this pointer, but `capacity` is 0 here so `push` can never
+            // write through it, and `as_slice`/`as_mut_slice`/`clear` only
+            // ever read through it with `len == 0` — a zero-length
+            // `slice::from_raw_parts(_mut)` never dereferences its data
+            // pointer — so the lack of a real allocation is never observed.
+            NonNull::new(std::ptr::without_provenance_mut(align))
+                .expect("BUG: page size/alignment is never zero")
+        } else {
+            // SAFETY: `byte_capacity` is nonzero here and rounded up to
+            // `align`, and `align` is a nonzero power of two (see above), so
+            // `Layout::from_size_align` succeeds and `alloc` receives a
+            // valid, non-zero-size layout.
+            let layout = Layout::from_size_align(byte_capacity, align)
+                .expect("Invalid layout for page-aligned allocation");
+            let raw = unsafe { alloc(layout) as *mut T };
+            NonNull::new(raw).expect("Allocation failed")
+        };
 
         Self {
             ptr,
             len: 0,
-            capacity: aligned_capacity / std::mem::size_of::<T>(),
+            capacity: byte_capacity / std::mem::size_of::<T>(),
+            byte_capacity,
         }
     }
 
@@ -227,7 +313,18 @@ impl<T> PageAlignedVec<T> {
     /// Only the first `len` elements are guaranteed to be initialized.
     #[inline]
     pub unsafe fn as_slice(&self) -> &[T] {
-        std::slice::from_raw_parts(self.ptr.as_ptr(), self.len)
+        // SAFETY: `self.ptr` was allocated (or, for a zero-capacity vector,
+        // set to a dangling sentinel — see `with_capacity`) for `self.capacity`
+        // elements of `T`, and is non-null and aligned to
+        // `page_size.max(align_of::<T>())`, which is always >= `align_of::<T>()`
+        // — so it is aligned for `T` regardless of `T`'s own alignment
+        // requirement. The type invariant maintained by `push`/`set_len` is
+        // `self.len <= self.capacity` with elements `0..self.len` initialized,
+        // so the first `self.len` elements starting at `self.ptr` are live,
+        // initialized `T` values. The returned reference borrows `self`
+        // immutably, so it cannot alias a concurrent `&mut` access to the same
+        // elements for its lifetime.
+        unsafe { std::slice::from_raw_parts(self.ptr.as_ptr(), self.len) }
     }
 
     /// Get a mutable slice view of the initialized elements.
@@ -237,7 +334,15 @@ impl<T> PageAlignedVec<T> {
     /// Only the first `len` elements are guaranteed to be initialized.
     #[inline]
     pub unsafe fn as_mut_slice(&mut self) -> &mut [T] {
-        std::slice::from_raw_parts_mut(self.ptr.as_ptr(), self.len)
+        // SAFETY: as with `as_slice`, `self.ptr` is a valid, non-null pointer
+        // aligned to `page_size.max(align_of::<T>())` (so aligned for `T`
+        // regardless of `T`'s own alignment requirement) for `self.capacity`
+        // elements, with the first `self.len` elements initialized. The
+        // `&mut self` borrow gives this call exclusive access to the vector
+        // for the returned slice's lifetime, so no other reference to these
+        // elements can be alive concurrently, satisfying
+        // `from_raw_parts_mut`'s aliasing requirement.
+        unsafe { std::slice::from_raw_parts_mut(self.ptr.as_ptr(), self.len) }
     }
 
     /// Get the number of initialized elements.
@@ -278,11 +383,16 @@ impl<T> PageAlignedVec<T> {
     pub fn push(&mut self, value: T) {
         assert!(self.len < self.capacity, "PageAlignedVec capacity exceeded");
 
-        // SAFETY: len < capacity, so this is valid
+        // SAFETY: `self.len < self.capacity` was just asserted, so
+        // `self.ptr.add(self.len)` lands within the allocation's `capacity`
+        // elements and denotes an as-yet-uninitialized slot (this type's
+        // invariant is that elements `self.len..capacity` are never
+        // initialized), so writing `value` there does not drop or alias a
+        // live `T`.
         unsafe {
             self.ptr.as_ptr().add(self.len).write(value);
-            self.len += 1;
         }
+        self.len += 1;
     }
 
     /// Clear all elements without deallocating.
@@ -296,7 +406,7 @@ impl<T> PageAlignedVec<T> {
 
     /// Get the byte size of the allocation.
     pub fn byte_size(&self) -> usize {
-        self.capacity * std::mem::size_of::<T>()
+        self.byte_capacity
     }
 
     /// Verify that the allocation is page-aligned.
@@ -319,22 +429,44 @@ impl<T> Drop for PageAlignedVec<T> {
         // Drop all initialized elements
         self.clear();
 
-        // Deallocate memory
-        let page_size = get_page_size();
-        let byte_capacity = self.capacity * std::mem::size_of::<T>();
-        let layout = Layout::from_size_align(byte_capacity, page_size).expect("Invalid layout");
+        if self.byte_capacity == 0 {
+            // `with_capacity(0)` never called the allocator (see there) — the
+            // pointer is a dangling sentinel, so there is nothing to free.
+            return;
+        }
 
-        // SAFETY: ptr was allocated with the same layout
+        let page_size = get_page_size();
+        let align = page_size.max(std::mem::align_of::<T>());
+        // SAFETY: `self.byte_capacity` is the exact size that was passed to
+        // `Layout::from_size_align` in `with_capacity` (stored verbatim in the
+        // `byte_capacity` field, never recomputed via `capacity *
+        // size_of::<T>()`, which can undershoot the real allocation size when
+        // `size_of::<T>()` doesn't evenly divide the page/align-rounded size).
+        // `align` is recomputed identically from `page_size` (process-constant)
+        // and `align_of::<T>()` (a `T`-level constant), so this layout matches
+        // the allocation's layout exactly, satisfying `dealloc`'s "same
+        // allocator, same layout" contract.
+        let layout = Layout::from_size_align(self.byte_capacity, align).expect(
+            "BUG: byte_capacity/align were already valid Layout inputs when \
+             with_capacity constructed this allocation, and neither is mutated afterward",
+        );
+
         unsafe {
             dealloc(self.ptr.as_ptr() as *mut u8, layout);
         }
     }
 }
 
-// SAFETY: PageAlignedVec can be sent between threads if T is Send
+// SAFETY: `PageAlignedVec<T>` exclusively owns its buffer — all access goes
+// through `&self`/`&mut self`, which the borrow checker already serializes —
+// and it holds no thread-affine state of its own, so moving it across
+// threads is sound whenever moving its `T` elements across threads is sound.
 unsafe impl<T: Send> Send for PageAlignedVec<T> {}
 
-// SAFETY: PageAlignedVec can be shared between threads if T is Sync
+// SAFETY: shared access through `&PageAlignedVec<T>` only ever exposes `&T`
+// (via `as_ptr`/`as_slice`), and mutation always requires `&mut self`,
+// matching ordinary `&T` aliasing rules exactly, so sharing it across
+// threads is sound whenever `T` is `Sync`.
 unsafe impl<T: Sync> Sync for PageAlignedVec<T> {}
 
 // ============================================================================
@@ -345,25 +477,39 @@ unsafe impl<T: Sync> Sync for PageAlignedVec<T> {}
 ///
 /// This is useful for ensuring Vulkan buffer sizes are page-aligned.
 ///
+/// Returns `None` if `size` is close enough to `usize::MAX` that rounding up
+/// to a page boundary would overflow. This is checked arithmetic rather than
+/// wrapping or saturating: a caller that silently got `usize::MAX`'s wrapped
+/// (small, wrong) or saturated (misleadingly "valid") result in place of an
+/// error would be strictly worse off than one that has to handle `None`.
+///
+/// Note: `align_to_page_size(0)` returns `Some(0)`. This is a pure rounding
+/// helper (`(size + page_size - 1) & !(page_size - 1)`), not an allocator, so
+/// "0 bytes is already page-aligned" is the coherent answer. This differs
+/// from [`alloc_page_aligned`], which rejects `size == 0` outright because it
+/// must hand back a real allocation.
+///
 /// # Example
 ///
 /// ```rust,ignore
 /// let size = 12345;
-/// let aligned = align_to_page_size(size);
+/// let aligned = align_to_page_size(size).expect("size does not overflow");
 /// assert_eq!(aligned % get_page_size(), 0);
 /// assert!(aligned >= size);
 /// ```
 #[inline]
-pub fn align_to_page_size(size: usize) -> usize {
+pub fn align_to_page_size(size: usize) -> Option<usize> {
     let page_size = get_page_size();
-    (size + page_size - 1) & !(page_size - 1)
+    Some(size.checked_add(page_size - 1)? & !(page_size - 1))
 }
 
 /// Round a size up to the nearest page boundary (u64 version).
+///
+/// See [`align_to_page_size`] for the `None`-on-overflow contract.
 #[inline]
-pub fn align_to_page_size_u64(size: u64) -> u64 {
+pub fn align_to_page_size_u64(size: u64) -> Option<u64> {
     let page_size = get_page_size() as u64;
-    (size + page_size - 1) & !(page_size - 1)
+    Some(size.checked_add(page_size - 1)? & !(page_size - 1))
 }
 
 // ============================================================================
@@ -444,7 +590,7 @@ mod tests {
     fn test_page_aligned_vec_push() {
         let mut vec = PageAlignedVec::<u32>::with_capacity(100);
 
-        for i in 0..100 {
+        for i in 0..100u32 {
             vec.push(i);
         }
 
@@ -452,8 +598,8 @@ mod tests {
 
         unsafe {
             let slice = vec.as_slice();
-            for i in 0..100 {
-                assert_eq!(slice[i], i);
+            for i in 0..100u32 {
+                assert_eq!(slice[i as usize], i);
             }
         }
     }
@@ -478,7 +624,9 @@ mod tests {
 
         // Test various sizes
         let test_cases = vec![
-            (0, page_size),
+            // `align_to_page_size` is a pure rounding formula, not an
+            // allocator: 0 bytes rounds to 0 bytes (already page-aligned).
+            (0, 0),
             (1, page_size),
             (page_size - 1, page_size),
             (page_size, page_size),
@@ -488,7 +636,7 @@ mod tests {
         ];
 
         for (input, expected) in test_cases {
-            let aligned = align_to_page_size(input);
+            let aligned = align_to_page_size(input).expect("input does not overflow");
             assert_eq!(aligned, expected);
             assert_eq!(aligned % page_size, 0);
             assert!(aligned >= input);
@@ -496,20 +644,40 @@ mod tests {
     }
 
     #[test]
+    fn test_align_to_page_size_overflow() {
+        // Rounding `usize::MAX` up to a page boundary would overflow; checked
+        // arithmetic must report that rather than wrapping to a small,
+        // silently-wrong result.
+        assert_eq!(align_to_page_size(usize::MAX), None);
+    }
+
+    #[test]
     fn test_align_to_page_size_u64() {
         let page_size = get_page_size() as u64;
 
-        let aligned = align_to_page_size_u64(12345);
+        let aligned = align_to_page_size_u64(12345).expect("input does not overflow");
         assert_eq!(aligned % page_size, 0);
         assert!(aligned >= 12345);
     }
 
     #[test]
+    fn test_align_to_page_size_u64_overflow() {
+        assert_eq!(align_to_page_size_u64(u64::MAX), None);
+    }
+
+    #[test]
     #[should_panic(expected = "capacity exceeded")]
     fn test_page_aligned_vec_push_overflow() {
+        let page_size = get_page_size();
+        // `u8`'s stride (1) evenly divides the page size, so `with_capacity`
+        // rounds the requested capacity up to exactly one page's worth of
+        // elements regardless of the small `10` argument below — pushing
+        // `page_size` elements fills it exactly, and one more must exceed the
+        // real (rounded) capacity.
         let mut vec = PageAlignedVec::<u8>::with_capacity(10);
+        assert_eq!(vec.capacity(), page_size);
 
-        for _ in 0..11 {
+        for _ in 0..=page_size {
             vec.push(0);
         }
     }
@@ -524,5 +692,45 @@ mod tests {
         let vec = PageAlignedVec::<LargeType>::with_capacity(100);
         assert!(vec.is_page_aligned());
         assert!(vec.capacity() >= 100);
+    }
+
+    #[test]
+    fn test_alloc_page_aligned_rejects_zero_size() {
+        assert!(alloc_page_aligned(0).is_err());
+    }
+
+    #[test]
+    fn test_alloc_page_aligned_rejects_overflowing_size() {
+        // `usize::MAX + (page_size - 1)` overflows; under release's
+        // `overflow-checks = false` a bare `+` here would wrap to a tiny
+        // `aligned_size` (in the worst case, 0) and reach the allocator with
+        // it instead of reporting the error.
+        assert!(alloc_page_aligned(usize::MAX).is_err());
+    }
+
+    #[test]
+    fn test_page_aligned_vec_uneven_stride_drop() {
+        // `size_of::<[u8; 3]>() == 3` does not evenly divide the page-rounded
+        // allocation size, so `Drop` must use the stored `byte_capacity`
+        // rather than recomputing `capacity * size_of::<T>()` (the latter
+        // would hand `dealloc` a smaller-than-allocated layout — this is the
+        // scenario miri caught as "incorrect layout on deallocation" before
+        // `byte_capacity` was introduced).
+        let mut vec = PageAlignedVec::<[u8; 3]>::with_capacity(1);
+        vec.push([1, 2, 3]);
+        drop(vec);
+    }
+
+    #[test]
+    fn test_page_aligned_vec_zero_capacity_roundtrip() {
+        // `with_capacity(0)` (and `new()`/`Default`) must not call the global
+        // allocator with a zero-size layout; exercises the dangling
+        // page-aligned sentinel path end-to-end, including `Drop` skipping
+        // `dealloc` for it.
+        let vec = PageAlignedVec::<u32>::with_capacity(0);
+        assert_eq!(vec.capacity(), 0);
+        assert_eq!(vec.byte_size(), 0);
+        assert!(vec.is_page_aligned());
+        drop(vec);
     }
 }
