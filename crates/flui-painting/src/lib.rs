@@ -191,7 +191,7 @@ pub mod testing;
 // flui_painting::canvas::Canvas`.
 
 // Binding
-pub use binding::{CachedImage, ImageCache, ImageHandle, PaintingBinding, image_cache};
+pub use binding::{CachedImage, ImageCache, ImageHandle, PaintingBinding};
 // Primary API types
 pub use canvas::Canvas;
 pub use clip_context::ClipContext;

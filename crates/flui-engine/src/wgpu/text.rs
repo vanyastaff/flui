@@ -14,8 +14,7 @@ use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::hash::{Hash, Hasher};
 
-use flui_foundation::HasInstance;
-use flui_painting::{PaintingBinding, SharedFontSystem};
+use flui_painting::SharedFontSystem;
 use flui_types::{
     geometry::{Pixels, Point},
     styling::Color,
@@ -349,7 +348,7 @@ enum BatchEntry {
 ///
 /// # Example
 /// ```ignore
-/// let mut text_renderer = TextRenderer::new(&device, &queue, surface_format)?;
+/// let mut text_renderer = TextRenderer::new(&device, &queue, surface_format, font_system)?;
 ///
 /// // Add plain text during frame
 /// text_renderer.add_text("Hello, World!", Point::new(10.0, 10.0), 16.0, Color::BLACK);
@@ -358,12 +357,18 @@ enum BatchEntry {
 /// text_renderer.render(&device, &queue, &view, &mut encoder, (800, 600))?;
 /// ```
 pub struct TextRenderer {
-    /// The framework's single shared font system (ADR-0016).
+    /// The framework's single shared font system (ADR-0016), injected by the
+    /// caller rather than resolved ambiently.
     ///
     /// This is a clone of the handle owned by `flui-painting`, so glyphs are
     /// shaped here against the exact same faces that text *measurement* uses:
     /// a font registered via `PaintingBinding::register_font` is visible to
-    /// both paths, with no second database to keep in sync.
+    /// both paths, with no second database to keep in sync. Taking this as a
+    /// constructor parameter (rather than reaching for
+    /// `PaintingBinding::instance()` internally) means constructing a
+    /// `TextRenderer` on a non-owner thread (the raster thread) never has to
+    /// stand up a second, disconnected binding of its own — the caller
+    /// decides which font system this renderer shapes against.
     font_system: SharedFontSystem,
 
     /// Swash cache (rasterizes glyphs)
@@ -426,10 +431,27 @@ impl TextRenderer {
         // Icon fonts: always present, independent of the text-font count above.
         // Neither the OS text fonts nor Roboto carry the private-use glyphs that
         // Material / Cupertino icons resolve to, so `Icon` renders tofu without
-        // these. Loaded exactly once into the process-wide shared DB.
-        static ICON_FONTS_LOADED: std::sync::atomic::AtomicBool =
-            std::sync::atomic::AtomicBool::new(false);
-        if !ICON_FONTS_LOADED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        // these.
+        //
+        // Idempotency is checked per FontSystem INSTANCE (by family-name
+        // presence in `font_system`'s own db), not via a process-global flag.
+        // A process-global `AtomicBool` (the previous shape) is wrong here:
+        // it flips true the first time any `FontSystem` loads the icon
+        // fonts, and every OTHER `FontSystem` afterwards -- including one
+        // constructed independently on a non-owner thread -- reads that
+        // flag as already-satisfied and silently skips loading into its OWN
+        // (empty) db, so `Icon` renders tofu on that instance forever.
+        // Checking this instance's own faces makes the guard correct per
+        // instance: idempotent on a repeat call against the SAME
+        // `FontSystem` (the family is already there), and always loads for a
+        // genuinely different one.
+        const MATERIAL_ICONS_FAMILY: &str = "Material Icons";
+        let icon_fonts_present = font_system.db().faces().any(|face| {
+            face.families
+                .iter()
+                .any(|(name, _)| name == MATERIAL_ICONS_FAMILY)
+        });
+        if !icon_fonts_present {
             const MATERIAL_ICONS: &[u8] =
                 include_bytes!("../../assets/fonts/MaterialIcons-Regular.ttf");
             const CUPERTINO_ICONS: &[u8] = include_bytes!("../../assets/fonts/CupertinoIcons.ttf");
@@ -444,11 +466,22 @@ impl TextRenderer {
         }
     }
 
-    /// Creates a new `TextRenderer` bound to the given wgpu `device`/`queue`.
-    pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, format: wgpu::TextureFormat) -> Self {
+    /// Creates a new `TextRenderer` bound to the given wgpu `device`/`queue`,
+    /// shaping against the injected `font_system`.
+    ///
+    /// `font_system` is a caller-supplied [`SharedFontSystem`] handle rather
+    /// than an ambient lookup: the caller decides which font database this
+    /// renderer shapes against, so constructing a `TextRenderer` on a
+    /// non-owner thread (the raster thread) never has to stand up a second,
+    /// disconnected binding of its own just to reach the font DB.
+    pub fn new(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        format: wgpu::TextureFormat,
+        font_system: SharedFontSystem,
+    ) -> Self {
         tracing::trace!(format = ?format, "TextRenderer::new");
 
-        let font_system = PaintingBinding::instance().font_system();
         font_system.with_mut(Self::ensure_fonts_available);
         let swash_cache = SwashCache::new();
         let cache = Cache::new(device);
@@ -911,7 +944,7 @@ fn build_text_areas<'cache>(
 
 #[cfg(test)]
 mod tests {
-    use super::collect_styled_spans;
+    use super::{FontSystem, TextRenderer, collect_styled_spans};
     use flui_types::typography::{FontWeight, InlineSpan, TextSpan, TextStyle};
 
     /// A bold child of a sized parent must carry both bold weight and the
@@ -1154,12 +1187,52 @@ mod tests {
         );
         assert_eq!(key(None), key(None), "None must be stable");
     }
+
+    /// Regression test for the process-global `ICON_FONTS_LOADED` bug: icon
+    /// fonts must load into EVERY independently constructed `FontSystem`, not
+    /// just the first one `ensure_fonts_available` ever sees.
+    ///
+    /// Red before the per-instance fix: a single process-wide
+    /// `AtomicBool::swap` flipped true on the FIRST call below and stayed
+    /// true for the rest of the process, so the second, independent
+    /// `FontSystem` never got its icon fonts loaded and `has_material_icons`
+    /// on `fs_b` would fail.
+    #[test]
+    fn ensure_fonts_available_loads_icon_fonts_into_every_independent_font_system() {
+        fn has_material_icons(font_system: &FontSystem) -> bool {
+            font_system.db().faces().any(|face| {
+                face.families
+                    .iter()
+                    .any(|(name, _)| name == "Material Icons")
+            })
+        }
+
+        let mut fs_a = FontSystem::new();
+        TextRenderer::ensure_fonts_available(&mut fs_a);
+        assert!(
+            has_material_icons(&fs_a),
+            "the first FontSystem must resolve the Material Icons glyph after \
+             ensure_fonts_available"
+        );
+
+        // A SECOND, independently constructed FontSystem must ALSO receive
+        // the icon fonts -- this is the case the process-global flag broke.
+        let mut fs_b = FontSystem::new();
+        TextRenderer::ensure_fonts_available(&mut fs_b);
+        assert!(
+            has_material_icons(&fs_b),
+            "a second, independent FontSystem must also resolve the Material Icons \
+             glyph -- regression test for the process-global ICON_FONTS_LOADED flag \
+             that silently skipped icon-font loading for every FontSystem after the first"
+        );
+    }
 }
 
 #[cfg(all(test, feature = "enable-wgpu-tests"))]
 mod gpu_tests {
     use std::sync::Arc;
 
+    use flui_painting::PaintingBinding;
     use flui_types::{geometry::Pixels, geometry::Point, styling::Color};
 
     use super::TextRenderer;
@@ -1317,7 +1390,8 @@ mod gpu_tests {
     fn atlas_trim_each_frame_keeps_text_rendering() {
         let (device, queue) = device_queue();
         let (target, view) = make_target(&device);
-        let mut tr = TextRenderer::new(&device, &queue, FORMAT);
+        let font_system = PaintingBinding::new().font_system();
+        let mut tr = TextRenderer::new(&device, &queue, FORMAT, font_system);
         let white = Color::rgba(255, 255, 255, 255);
 
         // Churn: every frame draws DISTINCT glyphs (varying text + size) and

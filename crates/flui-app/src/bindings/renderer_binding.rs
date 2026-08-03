@@ -466,11 +466,19 @@ impl RenderingFlutterBinding {
         SemanticsBinding::instance()
     }
 
-    /// Get the PaintingBinding singleton.
+    /// Returns a fresh [`PaintingBinding`] value.
     ///
-    /// Equivalent to Flutter's `PaintingBinding.instance`.
-    pub fn painting() -> &'static PaintingBinding {
-        PaintingBinding::instance()
+    /// Forced ripple from singleton retirement PR-2 (#553):
+    /// `PaintingBinding`'s singleton-macro invocation is deleted, so
+    /// `PaintingBinding::instance()` no longer exists to return here. This
+    /// is a minimal, compile-preserving fix, not a `RenderingFlutterBinding`
+    /// redesign (PR-3's territory) — every other field/method on this type
+    /// is untouched. `PaintingBinding::new()` is cheap (an `ImageCache` plus
+    /// a `SystemFontsNotifier`, no heavy construction), and the only
+    /// caller, [`Self::handle_memory_pressure`], only needs `&self` access
+    /// for the duration of one call.
+    pub fn painting() -> PaintingBinding {
+        PaintingBinding::new()
     }
 
     // ========================================================================
@@ -505,9 +513,11 @@ impl BindingBase for RenderingFlutterBinding {
         let _ = SemanticsBinding::instance();
         tracing::debug!("SemanticsBinding initialized via RenderingFlutterBinding");
 
-        // Initialize painting binding (image cache, shader warm-up)
-        let _ = PaintingBinding::instance();
-        tracing::debug!("PaintingBinding initialized via RenderingFlutterBinding");
+        // Painting no longer has a process-wide binding to eagerly
+        // initialize here: `PaintingBinding` stopped being a singleton in
+        // singleton retirement PR-2 (#553) — its owned value now lives on
+        // `AppRuntime`'s `SharedEngineServices`, constructed at realm
+        // install (`app/runtime.rs`).
 
         tracing::info!("RenderingFlutterBinding initialized");
     }

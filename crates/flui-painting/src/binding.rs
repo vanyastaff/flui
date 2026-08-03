@@ -25,7 +25,7 @@ use std::{
     },
 };
 
-use flui_foundation::{BindingBase, HasInstance, impl_binding_singleton};
+use flui_foundation::BindingBase;
 use flui_types::{Size, geometry::Pixels};
 use parking_lot::RwLock;
 
@@ -487,21 +487,6 @@ impl BindingBase for PaintingBinding {
     }
 }
 
-// Singleton pattern
-impl_binding_singleton!(PaintingBinding);
-
-// ============================================================================
-// Convenience function
-// ============================================================================
-
-/// Returns the global image cache.
-///
-/// This is a convenience function equivalent to
-/// `PaintingBinding.instance.imageCache`.
-pub fn image_cache() -> &'static ImageCache {
-    PaintingBinding::instance().image_cache()
-}
-
 // ============================================================================
 // Tests
 // ============================================================================
@@ -621,15 +606,8 @@ mod tests {
     }
 
     #[test]
-    fn test_painting_binding_singleton() {
-        let binding1 = PaintingBinding::instance();
-        let binding2 = PaintingBinding::instance();
-        assert!(std::ptr::eq(binding1, binding2));
-    }
-
-    #[test]
     fn register_font_rejects_data_with_no_loadable_faces() {
-        let binding = PaintingBinding::instance();
+        let binding = PaintingBinding::new();
         let err = binding
             .register_font(b"this is plainly not a font file")
             .unwrap_err();
@@ -645,16 +623,21 @@ mod tests {
         // input, not an API/layering coupling — flui-engine still depends on
         // flui-painting, never the reverse).
         const ROBOTO: &[u8] = include_bytes!("../../flui-engine/assets/fonts/Roboto-Regular.ttf");
-        let binding = PaintingBinding::instance();
+        let binding = PaintingBinding::new();
 
         binding
             .register_font(ROBOTO)
             .expect("Roboto-Regular.ttf is a valid TTF with at least one face");
 
-        // A *separately obtained* handle sees the face — proving the ADR-0016
-        // contract that `font_system()` shares one instance rather than
-        // handing out isolated copies.
-        let visible = binding.font_system().with_mut(|font_system| {
+        // A handle obtained from a SEPARATELY CONSTRUCTED `PaintingBinding`
+        // still sees the face — proving the ADR-0016 contract that
+        // `font_system()` shares one process-wide font database keyed off
+        // `FONT_SYSTEM` (`text_layout/layout.rs`), not off `PaintingBinding`
+        // instance identity. `PaintingBinding` itself is a plain owned value
+        // now (no singleton behind it); the sharing invariant this test
+        // pins lives entirely in `shared_font_system()`.
+        let other_binding = PaintingBinding::new();
+        let visible = other_binding.font_system().with_mut(|font_system| {
             font_system.db().faces().any(|face| {
                 face.families
                     .iter()
@@ -663,7 +646,8 @@ mod tests {
         });
         assert!(
             visible,
-            "a registered face must be visible through any font_system() handle"
+            "a registered face must be visible through any font_system() handle, \
+             including one obtained from an entirely different PaintingBinding value"
         );
     }
 }

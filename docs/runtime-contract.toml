@@ -1257,7 +1257,7 @@ contains = "pub use flui_rendering::{binding::RendererBinding, pipeline::Pipelin
 classification = "transitional"
 thread_affinity = "mixed; the singleton graph is owner-thread-local via HasInstance"
 owner = "transitional singleton service graph"
-failure_semantics = "singleton accessors construct lazily per thread; no typed errors"
+failure_semantics = "singleton accessors construct lazily per thread; no typed errors (PaintingBinding excepted: it left the singleton graph in PR-2 and is now a plain constructible value, still re-exported here as a type)"
 consumers = ["flui-app prelude", "flui facade via app module"]
 owner_issue = 553
 
@@ -1558,14 +1558,9 @@ classification = "removal-target"
 thread_affinity = "thread-local singleton storage per implementor"
 owner = "the ambient singleton pattern itself — deleted from runtime paths under the owning issue"
 failure_semantics = "lazily constructs a per-thread instance; cannot fail, which is the problem"
-consumers = [
-    "Scheduler",
-    "RenderingFlutterBinding",
-    "PaintingBinding",
-    "SemanticsBinding",
-    "AppBinding (manual)",
-]
+consumers = ["Scheduler", "RenderingFlutterBinding", "SemanticsBinding", "AppBinding (manual)"]
 owner_issue = 553
+notes = "PaintingBinding stopped implementing HasInstance in singleton retirement PR-2 -- impl_binding_singleton!(PaintingBinding) is deleted; the type is now a plain owned value (SharedEngineServices.painting on AppRuntime)."
 
 [[surface]]
 path = "flui_engine::wgpu::Renderer"
@@ -1747,12 +1742,6 @@ contains = "impl_binding_singleton!(Scheduler)"
 owner_issue = 553
 
 [[singleton_exemption]]
-symbol = "impl_binding_singleton!(PaintingBinding)"
-file = "crates/flui-painting/src/binding.rs"
-contains = "impl_binding_singleton!(PaintingBinding)"
-owner_issue = 553
-
-[[singleton_exemption]]
 symbol = "impl_binding_singleton!(SemanticsBinding)"
 file = "crates/flui-semantics/src/binding.rs"
 contains = "impl_binding_singleton!(SemanticsBinding)"
@@ -1800,7 +1789,7 @@ note = "single AppBinding::instance() reach; re-routed through the runtime once 
 file = "crates/flui-app/src/app/runtime.rs"
 grammar = "instance-call"
 owner_issue = 553
-note = "the deliberate resolution seam this file creates: PaintingBinding::instance()/SemanticsBinding::instance()/Scheduler::instance() are called exactly once each, in SharedEngineServices::resolve() and RealmServices::resolve() -- this is the ONE file allowed to still reach for these singletons directly so every other constructor (including UiRealm's) does not have to. Each flips to an owned/injected value as the singleton it names is retired, at which point this entry shrinks accordingly."
+note = "the deliberate resolution seam this file creates: SemanticsBinding::instance()/Scheduler::instance() are called exactly once each, in SharedEngineServices::resolve() and RealmServices::resolve() -- this is the ONE file allowed to still reach for these singletons directly so every other constructor (including UiRealm's) does not have to. PaintingBinding::instance() completed its flip in singleton retirement PR-2: SharedEngineServices.painting is now an owned PaintingBinding value, constructed via PaintingBinding::new(). Each of the remaining two flips to an owned/injected value as the singleton it names is retired (semantics, then the scheduler), at which point this entry shrinks accordingly."
 
 [[ambient_reach]]
 file = "crates/flui-app/src/app/runner.rs"
@@ -1813,18 +1802,6 @@ file = "crates/flui-app/src/bindings/renderer_binding.rs"
 grammar = "instance-call"
 owner_issue = 553
 note = "RenderingFlutterBinding::instance()/AppBinding::instance()/Scheduler::instance() reaches; retired alongside RenderingFlutterBinding, AppBinding, and the Scheduler singleton respectively"
-
-[[ambient_reach]]
-file = "crates/flui-engine/src/wgpu/text.rs"
-grammar = "instance-call"
-owner_issue = 553
-note = "TextRenderer::new constructs a thread-local PaintingBinding via PaintingBinding::instance() to reach the font DB; a SharedFontSystem injection point retires this"
-
-[[ambient_reach]]
-file = "crates/flui-painting/src/binding.rs"
-grammar = "instance-call"
-owner_issue = 553
-note = "PaintingBinding's own instance()-based image_cache() free fn and its tests; retired together with impl_binding_singleton!(PaintingBinding)"
 
 [[ambient_reach]]
 file = "crates/flui-scheduler/src/config.rs"
@@ -1854,7 +1831,7 @@ note = "AssetRegistry::global(): named residual, out of this migration's scope e
 file = "crates/flui-painting/src/text_layout/layout.rs"
 grammar = "ambient-static"
 owner_issue = 553
-note = "shared_font_system()/FONT_SYSTEM: AppRuntime::new() becomes the CONSTRUCTING owner (explicit eager init), but the READ path stays ambient on layout hot paths -- cross-realm register_font staleness mid-layout is a named, bounded hazard (Mutex<FontSystem> makes it staleness not a data race), not closed until fonts get their own owner-local-access/sharding follow-up (ADR-0027 follow-up 6)"
+note = "shared_font_system()/FONT_SYSTEM: SharedEngineServices::resolve() (invoked from AppRuntime::ensure_services() at realm install) is the CONSTRUCTING owner -- it calls PaintingBinding::font_system() explicitly, eagerly installing the process-wide FontSystem instead of leaving it to whichever text-measurement call happens to run first. The READ path stays ambient on layout hot paths -- cross-realm register_font staleness mid-layout is a named, bounded hazard (Mutex<FontSystem> makes it staleness not a data race), not closed until fonts get their own owner-local-access/sharding follow-up (ADR-0027 follow-up 6). Singleton retirement PR-2 additionally re-scoped ICON_FONTS_LOADED (flui-engine/src/wgpu/text.rs) from a process-global flag to a per-FontSystem family-presence check, and gave TextRenderer::new an injected SharedFontSystem parameter instead of an ambient PaintingBinding::instance() reach -- neither changes this entry's hazard, which is specifically about concurrent register_font mutation, not construction-time ownership."
 
 # =============================================================================
 # Public lock-shaped surface allowlist (runtime crates)

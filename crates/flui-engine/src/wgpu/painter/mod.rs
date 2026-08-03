@@ -10,6 +10,8 @@
 
 use std::sync::Arc;
 
+use flui_painting::PaintingBinding;
+
 use super::{
     command_ir::{DrawItem, DrawSegment, ImageFilterPass, PendingOffscreenTexture, ScissorRect},
     layer_compositor::LayerCompositor,
@@ -146,7 +148,18 @@ impl WgpuPainter {
         let replay = GpuReplay::new(&device, &pipelines, size.0, size.1);
 
         // ===== Text renderer =====
-        let text_renderer = TextRenderer::new(&device, &queue, surface_format);
+        //
+        // `PaintingBinding::new()` here is a cheap, transient value used only
+        // to reach `font_system()` -- that accessor reads the process-wide
+        // `FONT_SYSTEM` (flui-painting's `text_layout/layout.rs`) regardless
+        // of which `PaintingBinding` calls it, so this is the injection
+        // point: `TextRenderer` receives the handle explicitly rather than
+        // resolving `PaintingBinding::instance()` itself, which used to
+        // stand up a second, leaked, thread-local binding on whichever
+        // thread constructed the painter (the raster thread, in the
+        // shipping path).
+        let font_system = PaintingBinding::new().font_system();
+        let text_renderer = TextRenderer::new(&device, &queue, surface_format, font_system);
 
         // ===== Resource managers =====
         let resources = GpuResources::new(Arc::clone(&device), Arc::clone(&queue));
