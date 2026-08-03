@@ -103,8 +103,8 @@ thread_local! {
     /// `OwnerHostClearGuard::drop` firing during an unwind on a thread that
     /// never reached platform init -- can never itself trigger singleton
     /// construction or full system-font enumeration. Real service
-    /// resolution happens only via the explicit `ensure_services` calls in
-    /// `install_owner_platform`/`install_platform_realm` below.
+    /// resolution happens only via the explicit `ensure_services` call in
+    /// `install_platform_realm` below, when a realm is actually installed.
     static APP_RUNTIME: std::cell::RefCell<AppRuntime> =
         const { std::cell::RefCell::new(AppRuntime::new()) };
 }
@@ -113,15 +113,18 @@ thread_local! {
 /// backend's `on_ready` callback (ADR-0039 §6) — every `run_*` entry point
 /// in this module does so immediately after minting/receiving its
 /// `OwnerPlatform`.
+///
+/// Deliberately does NOT resolve `SharedEngineServices`: `run_direct`
+/// installs an owner platform and opens a window but never installs a
+/// `UiRealm` (no widget tree, no painting/semantics/scheduler singleton
+/// reach at all), so resolving here would pay for singleton construction
+/// and full system-font enumeration on a path that can never consume
+/// either. `install_platform_realm` is the one call site that resolves —
+/// every realm-hosting backend goes through it, `run_direct` never does.
 #[cfg(not(target_os = "ios"))]
 pub(crate) fn install_owner_platform(owner: flui_platform::OwnerPlatform) {
     APP_RUNTIME.with(|slot| {
-        let mut state = slot.borrow_mut();
-        state.owner_platform = Some(owner);
-        // Explicit, known-point resolution -- not a TLS-initializer side
-        // effect. Idempotent (`ensure_services` caches), so it does not
-        // matter that `install_platform_realm` below also calls it.
-        let _ = state.ensure_services();
+        slot.borrow_mut().owner_platform = Some(owner);
     });
 }
 
@@ -1126,10 +1129,13 @@ fn install_platform_realm(
         // stale `Hidden`/`Inactive` left behind by the last one.
         state.visible = true;
         state.focused = true;
-        // Explicit, known-point resolution (idempotent with the call in
-        // `install_owner_platform`) -- test call sites that install a realm
-        // directly, without going through `install_owner_platform` first
-        // (e.g. `install_test_realm` below), still get services resolved.
+        // Explicit, known-point resolution: a realm is actually being
+        // installed, so this thread genuinely needs `SharedEngineServices`
+        // -- unlike `install_owner_platform`, which every backend calls
+        // (including `run_direct`, which never installs a realm and never
+        // needs these services). Idempotent (`ensure_services` caches), so
+        // it does not matter whether a prior realm on this thread already
+        // triggered it.
         let _ = state.ensure_services();
         (displaced_realm, displaced_queue, displaced_applier)
     });
@@ -3905,6 +3911,30 @@ mod tests {
             with_owner_platform(|_| ()).is_none(),
             "the clear guard must remove the host once its scope ends"
         );
+    }
+
+    /// `install_owner_platform` alone -- the exact path `run_direct` takes,
+    /// which opens a window but never installs a `UiRealm` -- must NOT
+    /// resolve `SharedEngineServices`. Only `install_platform_realm`
+    /// (exercised by the realm-install tests elsewhere in this file) does
+    /// that, so a backend that never hosts a realm never pays for
+    /// painting/semantics/scheduler singleton construction or full
+    /// system-font enumeration it cannot use.
+    #[test]
+    fn install_owner_platform_alone_does_not_resolve_services() {
+        use flui_platform::headless_platform;
+
+        let _clear_guard = OwnerHostClearGuard::arm();
+        let platform = headless_platform();
+        let result = platform.run(Box::new(|owner| {
+            install_owner_platform(owner);
+            assert!(
+                !APP_RUNTIME.with(|slot| slot.borrow().services_resolved()),
+                "install_owner_platform alone must not resolve SharedEngineServices"
+            );
+            Ok(())
+        }));
+        assert!(result.is_ok(), "on_ready returns Ok here");
     }
 
     #[test]

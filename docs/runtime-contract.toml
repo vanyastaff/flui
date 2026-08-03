@@ -275,14 +275,14 @@ evidence = [
 key = "app-runtime-composition-host"
 statement = """
 `AppRuntime`, a loop-scoped composition root, now exists: it owns platform \
-event-loop demux, the single realm slot, and constructor-resolved \
-`SharedEngineServices` (painting/semantics/scheduler, each resolved once). \
-It is not yet the target statement in full: it is one TLS-scoped instance \
-per owner thread (`APP_RUNTIME` in `runner.rs`), not one per process; it \
+event-loop demux, the single realm slot, and `SharedEngineServices` \
+(painting/semantics/scheduler), resolved once, when a realm is actually \
+installed. It is not yet the target statement in full: it is one TLS-scoped \
+instance per owner thread (`APP_RUNTIME` in `runner.rs`), not one per process; it \
 still coexists with `AppBinding` as the transitional process-service host \
 (retiring `AppBinding` is separate follow-up work); and its realm storage is \
-a single slot behind a `RealmId`-keyed accessor, not real 1..N hosting \
-(#555).\
+a single slot behind a `RealmId`-keyed accessor, not real 1..N hosting -- \
+that needs the element forest to let a realm host multiple presentations.\
 """
 state = "partial"
 domain = "application"

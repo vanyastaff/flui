@@ -330,10 +330,13 @@ impl AppRuntime {
     /// (`runner.rs`), so simply *touching* the thread-local -- for any
     /// reason, on any thread -- can never itself run singleton construction
     /// or full system-font enumeration. Real service resolution happens
-    /// only via the explicit [`Self::ensure_services`] call, from
-    /// `install_owner_platform`/`install_platform_realm` -- the loop's own
-    /// bootstrap points, never from an incidental first touch such as
-    /// `OwnerHostClearGuard::drop` unwinding through a virgin thread.
+    /// only via the explicit [`Self::ensure_services`] call from
+    /// `install_platform_realm` -- when a realm is actually installed --
+    /// never from an incidental first touch such as
+    /// `OwnerHostClearGuard::drop` unwinding through a virgin thread, and
+    /// never from `install_owner_platform` either (every backend calls
+    /// that, including `run_direct`, which never installs a realm and
+    /// never needs these services).
     pub(super) const fn new() -> Self {
         Self {
             realm: None,
@@ -351,9 +354,14 @@ impl AppRuntime {
     }
 
     /// Resolves and caches [`SharedEngineServices`] on first call; returns
-    /// the cached value on every later call. Idempotent, so both
-    /// `install_owner_platform` and `install_platform_realm` can call this
-    /// unconditionally without needing to agree on which one runs first.
+    /// the cached value on every later call. Called only from
+    /// `install_platform_realm`, when a realm is actually about to be
+    /// installed on this thread -- `install_owner_platform` deliberately
+    /// does NOT call this (see its own doc): every backend calls that,
+    /// including `run_direct`, which opens a window but never installs a
+    /// realm and never consumes painting/semantics/scheduler services, so
+    /// resolving there would pay for singleton construction and full
+    /// system-font enumeration for nothing.
     ///
     /// This is the fix for a real hazard the previous shape had: when
     /// `AppRuntime::new()` itself resolved `SharedEngineServices` (singleton
@@ -371,18 +379,31 @@ impl AppRuntime {
         self.services.get_or_init(SharedEngineServices::resolve)
     }
 
+    /// Test-only introspection: whether `SharedEngineServices` has been
+    /// resolved yet. `services` itself is private to this module, and
+    /// `runner.rs`'s tests (a sibling module tree, with the real
+    /// `install_owner_platform`/`install_platform_realm` bootstrap) need to
+    /// assert on it without reaching into a private field directly.
+    #[cfg(test)]
+    pub(super) fn services_resolved(&self) -> bool {
+        self.services.get().is_some()
+    }
+
     /// `RealmId`-keyed lookup: `Some` only when `id` matches the single
-    /// installed realm's identity. Storage is one slot until #555 gives
-    /// `AppRuntime` a real multi-realm registry — the keyed shape is the
-    /// deliverable now, so #555 does not have to reshape this method's
-    /// callers, only its body.
+    /// installed realm's identity. Storage is one slot until the element
+    /// forest lets a realm host multiple presentations and `AppRuntime`
+    /// grows a real multi-realm registry — the keyed shape is the
+    /// deliverable now, so that growth does not have to reshape this
+    /// method's callers, only its body.
     #[cfg_attr(
         not(test),
         expect(
             dead_code,
             reason = "design-for-N accessor; the single production caller \
                       (per-realm dispatch) still addresses the TLS slot \
-                      directly until #555's multi-realm registry lands"
+                      directly until the element forest lets a realm host \
+                      multiple presentations and this grows a real \
+                      multi-realm registry"
         )
     )]
     pub(crate) fn realm(&self, id: RealmId) -> Option<&UiRealm> {
