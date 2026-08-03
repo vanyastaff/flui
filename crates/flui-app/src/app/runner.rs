@@ -174,6 +174,23 @@ pub(crate) fn install_owner_platform(owner: flui_platform::OwnerPlatform) {
 ///     Ok(())
 /// }));
 /// ```
+///
+/// # No host re-entry
+///
+/// `f` runs while this function holds an immutable `APP_RUNTIME.borrow()`.
+/// Since `AppRuntime` folded the realm-facing state and `owner_platform`
+/// into ONE thread-local `RefCell` (issue #553's `AppRuntime` skeleton —
+/// they were two disjoint cells before), `f` must never call back into any
+/// function that touches this same cell: `dispatch_platform_realm`,
+/// `install_platform_realm`, `teardown_platform_realm`,
+/// `install_surface_applier`, or `install_owner_platform` itself. Any of
+/// those does `slot.borrow_mut()` while this borrow is still live, which is
+/// a guaranteed `BorrowMutError` panic — in every build, not only debug
+/// (`RefCell`'s borrow tracking is not a `debug_assert`). No production
+/// caller does this today (`f` closures only call owner-affine `Platform`
+/// methods), so this is a documented invariant with a regression pin
+/// (`with_owner_platform_reentering_dispatch_panics` below), not a runtime
+/// guard.
 #[cfg(not(target_os = "ios"))]
 pub(crate) fn with_owner_platform<R>(
     f: impl FnOnce(&flui_platform::OwnerPlatform) -> R,
@@ -206,6 +223,22 @@ pub(crate) fn with_owner_platform<R>(
 /// Web deliberately arms no guard: the host stays resident for the page's
 /// lifetime (see the web runner's own comment on this). macOS is moot:
 /// `run` never returns there (`terminate:` exits the process).
+///
+/// # No host re-entry, and no eager resolution
+///
+/// `Drop` touches only `owner_platform` (`self.owner_platform.take()`) —
+/// never `dispatch_platform_realm`/`install_platform_realm`/
+/// `teardown_platform_realm`/`install_surface_applier`, all of which would
+/// re-borrow the same `APP_RUNTIME` cell this drop already holds mutably
+/// (see `with_owner_platform`'s own "No host re-entry" doc for the general
+/// rule). Just as importantly, `AppRuntime::new()` is cheap and
+/// side-effect-free specifically so that a bare `.borrow_mut()` here — the
+/// *first* touch of `APP_RUNTIME` on a thread whose `on_ready` panicked
+/// before installing anything — can never trigger `SharedEngineServices`
+/// resolution (singleton construction plus full system-font enumeration)
+/// while already unwinding. A panic during that resolution, on top of the
+/// panic already unwinding, would abort the process instead of propagating
+/// the original failure.
 #[cfg(not(target_os = "ios"))]
 #[must_use = "the guard must stay alive across the Platform::run(...) call it \
               guards, or the TLS host clears immediately instead of at loop exit"]
@@ -1417,6 +1450,49 @@ mod realm_dispatch_tests {
              realm must actually drain, not just enqueue forever"
         );
         teardown_platform_realm();
+    }
+
+    /// `install_platform_realm` only ever touches the realm-facing fields
+    /// (`realm`, `queue`, `owner_thread`, `address`, `surface_applier`,
+    /// `visible`, `focused`) — `owner_platform` is a separate, loop-scoped
+    /// concern that must survive both branches: a fresh install, and a
+    /// replace-without-teardown reinstall that displaces a realm never torn
+    /// down (the same panic-recovery path
+    /// `reinstall_without_teardown_drops_the_displaced_realm_and_queue_outside_the_borrow`
+    /// exercises above).
+    #[test]
+    fn install_platform_realm_never_touches_owner_platform() {
+        use flui_platform::headless_platform;
+
+        let _clear_guard = OwnerHostClearGuard::arm();
+        let platform = headless_platform();
+        let result = platform.run(Box::new(|owner| {
+            install_owner_platform(owner);
+            assert!(
+                with_owner_platform(|_| ()).is_some(),
+                "owner_platform must be installed before the first realm install"
+            );
+
+            // Fresh-install branch.
+            install_test_realm();
+            assert!(
+                with_owner_platform(|_| ()).is_some(),
+                "a fresh realm install must not clear owner_platform"
+            );
+
+            // Replace-without-teardown branch: install a second realm while
+            // the first is still live, without an intervening
+            // `teardown_platform_realm` (the panic-recovery path).
+            install_test_realm();
+            assert!(
+                with_owner_platform(|_| ()).is_some(),
+                "a replace-without-teardown reinstall must not clear owner_platform"
+            );
+
+            teardown_platform_realm();
+            Ok(())
+        }));
+        assert!(result.is_ok(), "on_ready returns Ok here");
     }
 
     /// A panic-recovery reinstall under a DIFFERENT native window must
@@ -3961,5 +4037,48 @@ mod tests {
             "teardown_platform_realm must not clear AppRuntime.owner_platform -- \
              the loop may host another realm before it exits (hot-restart)"
         );
+    }
+
+    /// Regression pin for the "No host re-entry" rule on `with_owner_platform`'s
+    /// own rustdoc: since `AppRuntime` folded the realm-facing state and
+    /// `owner_platform` into one `RefCell`, a closure that calls back into
+    /// any function touching that same cell while `with_owner_platform`
+    /// still holds its immutable borrow is a guaranteed `BorrowMutError`
+    /// panic. `dispatch_platform_realm` is the stand-in host op here; the
+    /// same panic would fire for `install_platform_realm`,
+    /// `teardown_platform_realm`, or `install_surface_applier` instead, for
+    /// the identical reason (all of them `borrow_mut()` the same cell).
+    #[test]
+    #[should_panic(expected = "already borrowed")]
+    fn with_owner_platform_reentering_dispatch_panics() {
+        use flui_platform::headless_platform;
+
+        let _clear_guard = OwnerHostClearGuard::arm();
+        let platform = headless_platform();
+        let _ = platform.run(Box::new(|owner| {
+            install_owner_platform(owner);
+            with_owner_platform(|_owner| {
+                // Any host op re-entering here panics: `with_owner_platform`
+                // still holds `APP_RUNTIME.borrow()` for the duration of
+                // this closure, and `dispatch_platform_realm` immediately
+                // tries `slot.borrow_mut()` on the very first line of its
+                // own TLS access.
+                let dispatcher = RealmDispatcher {
+                    owner_thread: std::thread::current().id(),
+                    address: flui_foundation::PresentationAddress {
+                        realm_id: flui_foundation::RealmId::new_gen(
+                            0,
+                            std::num::NonZeroU32::new(1).unwrap(),
+                        ),
+                        presentation_id: flui_foundation::PresentationId::new_gen(
+                            0,
+                            std::num::NonZeroU32::new(1).unwrap(),
+                        ),
+                    },
+                };
+                let _ = dispatch_platform_realm(dispatcher, RealmTask::Frame(Box::new(|_| {})));
+            });
+            Ok(())
+        }));
     }
 }
