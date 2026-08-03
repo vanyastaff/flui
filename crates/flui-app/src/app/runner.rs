@@ -3226,4 +3226,51 @@ mod tests {
             let _ = with_owner_platform(|_owner| ());
         });
     }
+
+    /// Hot-restart survival (ADR-0039 §6): `OWNER_PLATFORM_HOST` is
+    /// loop-scoped, deliberately separate from `PLATFORM_REALM_HOST` --
+    /// tearing down a realm on the owner thread must not strand the loop's
+    /// capability, because the loop may host a fresh realm next without
+    /// ever calling `Platform::run` again (hot-restart does exactly this
+    /// today, `install_platform_realm`). `teardown_platform_realm` must
+    /// therefore leave `OWNER_PLATFORM_HOST` untouched.
+    #[test]
+    fn owner_platform_host_survives_teardown_platform_realm() {
+        use flui_platform::headless_platform;
+
+        // `Rc<Cell<_>>`, not a bare local: the `on_ready` closure below is
+        // `Box<dyn FnOnce(OwnerPlatform) + 'static>`, so it cannot borrow a
+        // stack local -- see the sibling install/clear test's identical
+        // note. `(bool, bool)` is `Copy`, so `Cell` suffices.
+        let observed = Rc::new(Cell::new((false, false)));
+        let observed_for_closure = Rc::clone(&observed);
+
+        let _clear_guard = OwnerHostClearGuard::arm();
+        let platform = headless_platform();
+        platform.run(Box::new(move |owner| {
+            install_owner_platform(owner);
+            let before_teardown = with_owner_platform(|_owner| true) == Some(true);
+
+            // Simulate hot-restart: a realm's teardown runs on this owner
+            // thread while the loop keeps running (headless `run` returns
+            // immediately either way, but the TLS host's contract does not
+            // depend on that -- it is exercised identically whether the
+            // loop is about to return or about to host another realm).
+            teardown_platform_realm();
+
+            let after_teardown = with_owner_platform(|_owner| true) == Some(true);
+            observed_for_closure.set((before_teardown, after_teardown));
+        }));
+
+        let (before_teardown, after_teardown) = observed.get();
+        assert!(
+            before_teardown,
+            "the host must be installed before teardown runs"
+        );
+        assert!(
+            after_teardown,
+            "teardown_platform_realm must not clear OWNER_PLATFORM_HOST -- \
+             the loop may host another realm before it exits (hot-restart)"
+        );
+    }
 }
