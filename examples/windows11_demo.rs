@@ -40,35 +40,38 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create platform (Box<dyn Platform> - run() takes ownership)
     let platform: Box<dyn Platform> = Box::new(WindowsPlatform::new()?);
 
-    // Create window - Windows 11 features applied automatically!
-    let options = WindowOptions {
-        title: "Windows 11 Features Demo".to_string(),
-        size: Size::new(px(1000.0), px(700.0)),
-        resizable: true,
-        visible: true,
-        decorated: true,
-        min_size: Some(Size::new(px(600.0), px(400.0))),
-        max_size: None,
-    };
+    // Window creation moves inside `on_ready` (ADR-0039 slice 2): `Ready` is
+    // guaranteed there, matching every other backend's contract.
+    platform.run(Box::new(|owner| {
+        let options = WindowOptions {
+            title: "Windows 11 Features Demo".to_string(),
+            size: Size::new(px(1000.0), px(700.0)),
+            resizable: true,
+            visible: true,
+            decorated: true,
+            min_size: Some(Size::new(px(600.0), px(400.0))),
+            max_size: None,
+        };
 
-    let _window = platform.open_window(options)?;
+        let _window = owner
+            .open_window(options)
+            .and_then(flui_platform::WindowOpen::try_ready)
+            .expect("window creation is always Ready inside on_ready");
 
-    println!("✅ Window created successfully!");
-    println!();
-    println!("🎨 Windows 11 features applied automatically:");
-    println!("  ✓ Mica backdrop - translucent background with blur");
-    println!("  ✓ Dark mode title bar - matches your Windows theme");
-    println!("  ✓ Rounded corners - modern Windows 11 style");
-    println!("  ✓ Snap Layouts - hover over maximize button");
-    println!();
-    println!("💡 These features are built into the platform!");
-    println!("   No manual DWM API calls needed in your code.");
-    println!();
-    println!("Close the window to exit");
-    println!();
-
-    // Run the platform event loop
-    platform.run(Box::new(|_platform| {}));
+        println!("✅ Window created successfully!");
+        println!();
+        println!("🎨 Windows 11 features applied automatically:");
+        println!("  ✓ Mica backdrop - translucent background with blur");
+        println!("  ✓ Dark mode title bar - matches your Windows theme");
+        println!("  ✓ Rounded corners - modern Windows 11 style");
+        println!("  ✓ Snap Layouts - hover over maximize button");
+        println!();
+        println!("💡 These features are built into the platform!");
+        println!("   No manual DWM API calls needed in your code.");
+        println!();
+        println!("Close the window to exit");
+        println!();
+    }));
 
     Ok(())
 }

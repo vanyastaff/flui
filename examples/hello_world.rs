@@ -19,8 +19,8 @@ fn main() {
     // displays and create windows once its event loop is pumping (calling
     // either earlier would either report zero displays or hang forever
     // waiting for a loop that hasn't started).
-    platform.run(Box::new(|platform| {
-        let displays = platform.displays();
+    platform.run(Box::new(|owner| {
+        let displays = owner.displays();
         tracing::info!("Found {} display(s):", displays.len());
         for (i, disp) in displays.iter().enumerate() {
             tracing::info!(
@@ -45,9 +45,12 @@ fn main() {
             max_size: None,
         };
 
-        let window = platform
+        // `Ready` is guaranteed inside `on_ready` (ADR-0039 §1).
+        let window = owner
             .open_window(window_options)
-            .expect("Failed to create window");
+            .expect("Failed to create window")
+            .try_ready()
+            .expect("window creation is always Ready inside on_ready");
         tracing::info!("Window created successfully!");
         tracing::info!("   Logical size: {:?}", window.logical_size());
         tracing::info!("   Physical size: {:?}", window.physical_size());

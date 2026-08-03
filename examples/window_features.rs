@@ -30,41 +30,45 @@ fn main() -> anyhow::Result<()> {
     tracing::info!("Platform: {}", platform.name());
     tracing::info!("OS: {}", std::env::consts::OS);
 
-    // Display information
-    let displays = platform.displays();
-    tracing::info!("Displays:");
-    for (i, disp) in displays.iter().enumerate() {
-        tracing::info!(
-            "  {}. {} - {}x{} @ {:.1}x",
-            i + 1,
-            disp.name(),
-            disp.bounds().size.width,
-            disp.bounds().size.height,
-            disp.scale_factor()
-        );
-    }
+    // Display enumeration and window creation both move inside `on_ready`
+    // (ADR-0039 slice 2): the winit backend can only enumerate real
+    // displays and create windows once its event loop is pumping.
+    platform.run(Box::new(move |owner| {
+        let displays = owner.displays();
+        tracing::info!("Displays:");
+        for (i, disp) in displays.iter().enumerate() {
+            tracing::info!(
+                "  {}. {} - {}x{} @ {:.1}x",
+                i + 1,
+                disp.name(),
+                disp.bounds().size.width,
+                disp.bounds().size.height,
+                disp.scale_factor()
+            );
+        }
 
-    // Create window before running the event loop
-    tracing::info!("Creating window...");
-    let window_options = WindowOptions {
-        title: "Window Features Demo".to_string(),
-        size: Size::new(px(1000.0), px(700.0)),
-        resizable: true,
-        visible: true,
-        decorated: true,
-        min_size: Some(Size::new(px(600.0), px(400.0))),
-        max_size: None,
-    };
+        tracing::info!("Creating window...");
+        let window_options = WindowOptions {
+            title: "Window Features Demo".to_string(),
+            size: Size::new(px(1000.0), px(700.0)),
+            resizable: true,
+            visible: true,
+            decorated: true,
+            min_size: Some(Size::new(px(600.0), px(400.0))),
+            max_size: None,
+        };
 
-    let window = platform.open_window(window_options)?;
-    tracing::info!("Window created!");
-    tracing::info!("  Logical size:  {:?}", window.logical_size());
-    tracing::info!("  Physical size: {:?}", window.physical_size());
-    tracing::info!("  Scale factor:  {:.1}x", window.scale_factor());
-    tracing::info!("  Visible:       {}", window.is_visible());
-    tracing::info!("  Focused:       {}", window.is_focused());
+        let window = owner
+            .open_window(window_options)
+            .and_then(flui_platform::WindowOpen::try_ready)
+            .expect("window creation is always Ready inside on_ready");
+        tracing::info!("Window created!");
+        tracing::info!("  Logical size:  {:?}", window.logical_size());
+        tracing::info!("  Physical size: {:?}", window.physical_size());
+        tracing::info!("  Scale factor:  {:.1}x", window.scale_factor());
+        tracing::info!("  Visible:       {}", window.is_visible());
+        tracing::info!("  Focused:       {}", window.is_focused());
 
-    platform.run(Box::new(move |_platform| {
         tracing::info!("Platform ready, window is open");
         // Keep window alive via closure capture
         let _window = window;

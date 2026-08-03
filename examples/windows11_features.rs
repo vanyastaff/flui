@@ -63,75 +63,79 @@ fn main() -> anyhow::Result<()> {
     // Create platform (Box<dyn Platform> - run() takes ownership)
     let platform: Box<dyn flui_platform::Platform> = Box::new(WindowsPlatform::new()?);
 
-    // Create window before running the event loop (run() takes ownership)
-    let window_options = WindowOptions {
-        title: "Windows 11 Features Demo".to_string(),
-        size: Size::new(px(1000.0), px(700.0)),
-        resizable: true,
-        visible: true,
-        decorated: true,
-        min_size: Some(Size::new(px(600.0), px(400.0))),
-        max_size: None,
-    };
+    // Window creation moves inside `on_ready` (ADR-0039 slice 2): `Ready` is
+    // guaranteed there, matching every other backend's contract.
+    platform.run(Box::new(move |owner| {
+        let window_options = WindowOptions {
+            title: "Windows 11 Features Demo".to_string(),
+            size: Size::new(px(1000.0), px(700.0)),
+            resizable: true,
+            visible: true,
+            decorated: true,
+            min_size: Some(Size::new(px(600.0), px(400.0))),
+            max_size: None,
+        };
 
-    let window = platform.open_window(window_options)?;
+        let window = owner
+            .open_window(window_options)
+            .and_then(flui_platform::WindowOpen::try_ready)
+            .expect("window creation is always Ready inside on_ready");
 
-    println!("Window created successfully!");
-    println!("  Logical size: {:?}", window.logical_size());
-    println!("  Physical size: {:?}", window.physical_size());
-    println!("  Scale factor: {:.1}x", window.scale_factor());
-    println!();
+        println!("Window created successfully!");
+        println!("  Logical size: {:?}", window.logical_size());
+        println!("  Physical size: {:?}", window.physical_size());
+        println!("  Scale factor: {:.1}x", window.scale_factor());
+        println!();
 
-    // Show available Windows 11 features
-    println!("Applying Windows 11 features...");
+        // Show available Windows 11 features
+        println!("Applying Windows 11 features...");
 
-    // Note: These features require WindowsWindowExt trait on a
-    // concrete WindowsWindow. The cross-platform PlatformWindow trait
-    // provides set_background_appearance() for basic backdrop support.
-    println!("  Setting Mica backdrop (via set_background_appearance)");
-    println!("  Enabling dark mode");
-    println!("  Setting rounded corners");
-    println!("  Setting custom title bar color");
-    println!();
+        // Note: These features require WindowsWindowExt trait on a
+        // concrete WindowsWindow. The cross-platform PlatformWindow trait
+        // provides set_background_appearance() for basic backdrop support.
+        println!("  Setting Mica backdrop (via set_background_appearance)");
+        println!("  Enabling dark mode");
+        println!("  Setting rounded corners");
+        println!("  Setting custom title bar color");
+        println!();
 
-    // Show available types for reference
-    println!(
-        "Available backdrop types: {:?}",
-        [
-            WindowsBackdrop::None,
-            WindowsBackdrop::Mica,
-            WindowsBackdrop::MicaAlt,
-            WindowsBackdrop::Acrylic,
-            WindowsBackdrop::Tabbed,
-        ]
-    );
-    println!(
-        "Available corner preferences: {:?}",
-        [
-            WindowCornerPreference::Default,
-            WindowCornerPreference::Round,
-            WindowCornerPreference::RoundSmall,
-            WindowCornerPreference::DoNotRound,
-        ]
-    );
-    println!(
-        "Available themes: {:?}",
-        [
-            WindowsTheme::Light,
-            WindowsTheme::Dark,
-            WindowsTheme::System,
-        ]
-    );
-    println!();
+        // Show available types for reference
+        println!(
+            "Available backdrop types: {:?}",
+            [
+                WindowsBackdrop::None,
+                WindowsBackdrop::Mica,
+                WindowsBackdrop::MicaAlt,
+                WindowsBackdrop::Acrylic,
+                WindowsBackdrop::Tabbed,
+            ]
+        );
+        println!(
+            "Available corner preferences: {:?}",
+            [
+                WindowCornerPreference::Default,
+                WindowCornerPreference::Round,
+                WindowCornerPreference::RoundSmall,
+                WindowCornerPreference::DoNotRound,
+            ]
+        );
+        println!(
+            "Available themes: {:?}",
+            [
+                WindowsTheme::Light,
+                WindowsTheme::Dark,
+                WindowsTheme::System,
+            ]
+        );
+        println!();
 
-    println!("All features applied!");
-    println!();
-    println!("Note: Full feature application requires mutable WindowsWindow access.");
-    println!("This demo shows the API - full integration requires event loop.");
-    println!();
-    println!("Hover over the maximize button to see Snap Layouts!");
+        println!("All features applied!");
+        println!();
+        println!("Note: Full feature application requires mutable WindowsWindow access.");
+        println!("This demo shows the API - full integration requires event loop.");
+        println!();
+        println!("Hover over the maximize button to see Snap Layouts!");
 
-    platform.run(Box::new(move |_platform| {
         // Keep window alive via closure capture
         let _window = window;
     }));
