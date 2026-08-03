@@ -144,9 +144,25 @@ impl ControlSender {
         // delivery/claim), reusing the exact same coalesced owner wake as a
         // successful enqueue -- an abandoned-before-drain request wakes the
         // owner promptly so it can skip creating a window nobody wants.
-        let sender_for_wake = self.clone();
+        //
+        // Captures only `wake_pending` + `wake_owner` (both plain `Arc`s
+        // unrelated to the channel), mirroring `Self::wake_owner`'s body
+        // exactly, rather than cloning the whole `ControlSender` (which
+        // holds `commands: Sender<ControlCommand>`). This command is about
+        // to be enqueued into that very channel, so a wake closure that
+        // captured a full `ControlSender` clone would put a `Sender`
+        // reachable from inside its own queued message -- a message the
+        // channel's `Arc`-backed internal state keeps alive until dequeued,
+        // creating a self-reference cycle that a request left in the queue
+        // forever (owner gone, never drained) would leak.
+        let wake_pending_for_slot = Arc::clone(&self.wake_pending);
+        let wake_owner_for_slot = Arc::clone(&self.wake_owner);
         let (slot, handle): (ClaimSlot<OpenWindowResult>, ClaimHandle<OpenWindowResult>) =
-            claim_slot(Arc::new(move || sender_for_wake.wake_owner()));
+            claim_slot(Arc::new(move || {
+                if !wake_pending_for_slot.swap(true, Ordering::AcqRel) {
+                    (wake_owner_for_slot)();
+                }
+            }));
         let command = ControlCommand::OpenWindow {
             options,
             reply: slot,
@@ -379,7 +395,11 @@ mod tests {
             reply.deliver(Ok(Arc::new(StubWindow))).is_ok(),
             "slot is still Pending"
         );
-        let window = worker.join().expect("worker exits").expect("window opens");
+        let window = worker
+            .join()
+            .expect("worker exits")
+            .expect("this handle is never polled by another caller before wait")
+            .expect("window opens");
         assert!(window.is_visible());
     }
 
@@ -536,7 +556,12 @@ mod tests {
                 .is_ok(),
             "slot is still Pending"
         );
-        assert!(handle.wait().is_err());
+        assert!(
+            handle
+                .wait()
+                .expect("this handle is never polled by another caller before wait")
+                .is_err()
+        );
     }
 
     #[test]
