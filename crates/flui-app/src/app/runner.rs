@@ -80,13 +80,13 @@ where
 }
 
 // ============================================================================
-// Loop-scoped composition root (ADR-0027, ADR-0039 §6; issue #553)
+// Loop-scoped composition root (ADR-0027, ADR-0039 §6)
 // ============================================================================
 
 #[cfg(not(target_os = "ios"))]
 thread_local! {
     /// The one loop-scoped composition root, shared by desktop, Android, and
-    /// wasm. Absorbs what were, until issue #553's `AppRuntime` skeleton, two
+    /// wasm. Absorbs what were, before the `AppRuntime` skeleton existed, two
     /// separate thread-locals: the transitional realm host (realm slot, queue,
     /// draining, owner thread, address cache, window registry, surface
     /// applier, visible/focused) and the loop-scoped `OwnerPlatform` host —
@@ -179,9 +179,9 @@ pub(crate) fn install_owner_platform(owner: flui_platform::OwnerPlatform) {
 ///
 /// `f` runs while this function holds an immutable `APP_RUNTIME.borrow()`.
 /// Since `AppRuntime` folded the realm-facing state and `owner_platform`
-/// into ONE thread-local `RefCell` (issue #553's `AppRuntime` skeleton —
-/// they were two disjoint cells before), `f` must never call back into any
-/// function that touches this same cell: `dispatch_platform_realm`,
+/// into ONE thread-local `RefCell` (they were two disjoint cells before), `f`
+/// must never call back into any function that touches this same cell:
+/// `dispatch_platform_realm`,
 /// `install_platform_realm`, `teardown_platform_realm`,
 /// `install_surface_applier`, or `install_owner_platform` itself. Any of
 /// those does `slot.borrow_mut()` while this borrow is still live, which is
@@ -3989,7 +3989,7 @@ mod tests {
         });
     }
 
-    /// Hot-restart survival (ADR-0039 §6; issue #553): `owner_platform`
+    /// Hot-restart survival (ADR-0039 §6): `owner_platform`
     /// is a loop-scoped `AppRuntime` field, deliberately not cleared by
     /// `teardown_platform_realm` alongside the realm-facing fields it DOES
     /// clear (`realm`, `queue`, `owner_thread`, `address`,

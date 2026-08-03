@@ -607,7 +607,7 @@ key = "window-host-is-explicit-composition-owner"
 statement = """
 The event-loop side of a presentation has one explicit `WindowHost` owner for \
 the native window, callback registrations, platform-to-realm routing, and \
-cancellation. Issue #553 gives the loop side an explicit owner object — \
+cancellation. The loop side now has an explicit owner object — \
 `AppRuntime` (`app/runtime.rs`) — replacing the anonymous TLS struct \
 (`RealmHost`) that used to sit directly in `runner.rs`; the runner's own \
 dispatch functions (`install_platform_realm`, `dispatch_platform_realm`, \
@@ -808,7 +808,8 @@ events drop). Remainder: the registry mints and is read at install/teardown, \
 but it is not yet the routing demux — platform callbacks still deliver \
 through per-window closures with captured addresses rather than a `resolve` \
 lookup — and `AppRuntime` hosts it as a single-slot owner, not yet the \
-public multi-window registry #555 gives it.\
+public multi-window registry it grows once the element forest lets a realm \
+host multiple presentations.\
 """
 state = "partial"
 domain = "application"
@@ -1758,7 +1759,7 @@ contains = "impl_binding_singleton!(SemanticsBinding)"
 owner_issue = 553
 
 # =============================================================================
-# Ambient-reach ratchet (issue #553)
+# Ambient-reach ratchet
 # =============================================================================
 #
 # Two grammars, each judged on code (comments and test-oracle mod blocks
@@ -1772,8 +1773,8 @@ owner_issue = 553
 #                    entry left behind after cleanup), the same as it fails
 #                    an unregistered file that newly matches.
 #   ambient-static — a named residual: a global()/OnceLock/LazyLock-backed
-#                    accessor issue #553 deliberately does not close. Carries
-#                    the hazard in its `note`, not silence.
+#                    accessor this migration deliberately does not close.
+#                    Carries the hazard in its `note`, not silence.
 #
 # `ui_realm.rs` is deliberately ABSENT from `instance-call`: the claim is
 # that `UiRealm::construct` (and every other constructor) stops calling
@@ -1841,13 +1842,13 @@ note = "SemanticsBinding's own instance()-based SemanticsService::* statics; ret
 file = "crates/flui-interaction/src/timer.rs"
 grammar = "ambient-static"
 owner_issue = 553
-note = "global_timer_service(): named residual, unresolved by issue #553 -- a pending-gesture-timer drop-isolation probe bounds its cross-realm blast radius, but the service itself stays process-global"
+note = "global_timer_service(): named residual, unresolved by this migration -- a pending-gesture-timer drop-isolation probe bounds its cross-realm blast radius, but the service itself stays process-global"
 
 [[ambient_reach]]
 file = "crates/flui-assets/src/registry/mod.rs"
 grammar = "ambient-static"
 owner_issue = 553
-note = "AssetRegistry::global(): named residual, out of issue #553's scope entirely -- no part of this migration touches flui-assets"
+note = "AssetRegistry::global(): named residual, out of this migration's scope entirely -- no part of this migration touches flui-assets"
 
 [[ambient_reach]]
 file = "crates/flui-painting/src/text_layout/layout.rs"

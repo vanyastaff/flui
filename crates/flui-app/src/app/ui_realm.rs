@@ -409,7 +409,7 @@ pub(crate) struct UiRealm {
     /// the caller (see `RealmServices::resolve`) and retained only for the
     /// idle-only commit-gate phase probe in [`Self::drain_commands`] — the
     /// last remaining reach that used to be a bare `Scheduler::instance()`
-    /// call inside this type (issue #553).
+    /// call inside this type.
     scheduler: SchedulerRef,
     /// `*const ()` is `!Send + !Sync`; `PhantomData` of it makes the runtime
     /// so at zero cost (thread-affinity marker).
@@ -487,8 +487,7 @@ impl UiRealm {
     /// itself — the last two `Scheduler::instance()` calls this function
     /// used to make (`local_post_frame_lane()`, `async_driver()`) are now
     /// the caller's job (`RealmServices::resolve`, in `runtime.rs`), which
-    /// is what makes `UiRealm` perform zero `::instance()` calls (issue
-    /// #553).
+    /// is what makes `UiRealm` perform zero `::instance()` calls.
     fn construct(
         capacity: usize,
         wake: Arc<dyn Fn() + Send + Sync>,

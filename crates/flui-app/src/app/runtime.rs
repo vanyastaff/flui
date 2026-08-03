@@ -1,4 +1,4 @@
-//! `AppRuntime` — the loop-scoped composition root (issue #553).
+//! `AppRuntime` — the loop-scoped composition root.
 //!
 //! # Thesis
 //!
@@ -186,16 +186,18 @@ impl SharedEngineServices {
     fn resolve() -> Self {
         let painting = PaintingBinding::instance();
 
-        // `AppRuntime::new()` is the CONSTRUCTING owner of the free-standing
-        // `FONT_SYSTEM` `OnceLock` slot (`flui-painting/src/text_layout/
-        // layout.rs`) -- initialize it explicitly, here, at a known point,
-        // rather than leaving it to whichever text-measurement call happens
-        // to run first on this thread. The read path stays ambient on
-        // layout hot paths: this is a named exclusion (see this crate's
+        // `SharedEngineServices::resolve()` -- reached only through
+        // `AppRuntime::ensure_services()`, at the realm-install point -- is
+        // the CONSTRUCTING owner of the free-standing `FONT_SYSTEM`
+        // `OnceLock` slot (`flui-painting/src/text_layout/layout.rs`):
+        // initialize it explicitly, here, at a known point, rather than
+        // leaving it to whichever text-measurement call happens to run
+        // first on this thread. The read path stays ambient on layout hot
+        // paths: this is a named exclusion (see this crate's
         // `ambient_reach` entry in `docs/runtime-contract.toml`), not closed
         // here -- injecting the font system into every `perform_layout`
-        // text-measurement call is a separate, larger follow-up (the icon-
-        // font-loading/sharding work tracked against issue #553).
+        // text-measurement call is a separate, larger follow-up (the
+        // icon-font-loading/sharding work).
         let _ = painting.font_system();
 
         Self {
@@ -251,8 +253,8 @@ static NEXT_INCARNATION: AtomicU32 = AtomicU32::new(1);
 
 /// Mints a fresh, process-unique `(RealmId, PresentationId)` pair. Slot 0 is
 /// the single-window slot; a real multi-window `AppRuntime` registry mints
-/// slots once it exists (#555) — the shape is the deliverable now,
-/// single-window the only instantiation.
+/// slots once the element forest lets a realm host multiple presentations —
+/// the shape is the deliverable now, single-window the only instantiation.
 pub(crate) fn next_identity() -> (RealmId, PresentationId) {
     let incarnation = NEXT_INCARNATION.fetch_add(1, Ordering::Relaxed);
     let generation = NonZeroU32::new(incarnation)
@@ -280,7 +282,8 @@ pub(crate) fn next_identity() -> (RealmId, PresentationId) {
 /// # Design-for-N
 ///
 /// The realm-facing API is `RealmId`-keyed ([`AppRuntime::realm`]);
-/// *storage* is a single `Option<UiRealm>` slot until #555 gives this a real
+/// *storage* is a single `Option<UiRealm>` slot until the element forest
+/// lets a realm host multiple presentations and this grows a real
 /// multi-realm registry. `next_identity` above already mints from a shape
 /// that does not need to change when that lands.
 #[cfg(not(target_os = "ios"))]

@@ -421,7 +421,7 @@ for crate in RUNTIME_CRATES + [
                 )
 
 # ---------------------------------------------------------------------------
-# Ambient-reach ratchet (issue #553): every real (non-comment,
+# Ambient-reach ratchet: every real (non-comment,
 # non-test-oracle) `::instance()` call site, and every
 # ambient global()/OnceLock/LazyLock-backed zero-arg accessor from a curated
 # marker list, must be named in `[[ambient_reach]]` with an owning issue.
@@ -435,10 +435,10 @@ for crate in RUNTIME_CRATES + [
 #                     `shared_font_system()`.
 #
 # This is a RATCHET, not a ban: `instance-call` is meant to shrink to empty
-# as #553's later slices retire each singleton (checked bidirectionally below
-# -- a registered file with no matching reach left is a stale entry, same as
-# an unregistered one is a missing entry); `ambient-static` carries named,
-# owner-tracked residuals #553 does not close.
+# as later changes retire each remaining singleton (checked bidirectionally
+# below -- a registered file with no matching reach left is a stale entry,
+# same as an unregistered one is a missing entry); `ambient-static` carries
+# named, owner-tracked residuals this migration does not close.
 #
 # Both grammars are judged on CODE, not prose or test oracles: line comments
 # are stripped first, and top-level `#[cfg(test)]`/`#[cfg(all(test, ...))]`-
