@@ -41,7 +41,7 @@ use flui_animation::Vsync;
 use flui_engine::{EngineError, RasterBackend};
 use flui_foundation::HasInstance;
 use flui_layer::{Layer, LayerTree, PerformanceOverlayLayer, PerformanceStats, Scene};
-use flui_platform::traits::{Clipboard, PlatformInput, PlatformWindow};
+use flui_platform::traits::{Clipboard, DragDropEvent, PlatformInput, PlatformWindow};
 use flui_rendering::binding::RendererBinding;
 use flui_rendering::constraints::BoxConstraints;
 use flui_scheduler::{AppLifecycleState, Scheduler};
@@ -1415,37 +1415,18 @@ impl AppBinding {
         realm: &super::ui_realm::UiRealm,
         input: PlatformInput,
     ) {
-        // Lifecycle gate at the physical owner (ADR-0037 §9). `Closing`/
-        // `Closed` is a hard gate: no input of any kind is dispatched.
-        // `Suspended` drops pointer input only (gesture-arena protection);
-        // keyboard and IME keep flowing so a flaky or absent occlusion
-        // signal (the web backend wires none) never becomes a keystroke
-        // blackout. `Created` has no arm of its own: it is
-        // constructor-internal and production-unreachable (see
-        // `PresentationState::new`), so it falls through with
-        // `SurfaceAttached` rather than pretending to be a tested case.
-        use super::presentation::PresentationLifecycle;
-        match realm.presentation_lifecycle() {
-            PresentationLifecycle::Closing | PresentationLifecycle::Closed => {
-                tracing::debug!(
-                    { flui_foundation::diagnostics::PRESENTATION_ID } =
-                        realm.presentation_id().as_u64(),
-                    ?input,
-                    "dropping input: presentation is closing or closed"
-                );
-                return;
-            }
-            PresentationLifecycle::Suspended => {
-                if matches!(input, PlatformInput::Pointer(_)) {
-                    tracing::debug!(
-                        { flui_foundation::diagnostics::PRESENTATION_ID } =
-                            realm.presentation_id().as_u64(),
-                        "dropping pointer input while the presentation is suspended"
-                    );
-                    return;
-                }
-            }
-            PresentationLifecycle::Created | PresentationLifecycle::SurfaceAttached => {}
+        // Lifecycle gate at the physical owner (ADR-0037 §9), decided by an
+        // explicit, exhaustive policy over (lifecycle, input kind) — see
+        // `input_dropped_by_lifecycle` for the policy itself and why each
+        // arm is what it is.
+        if input_dropped_by_lifecycle(realm.presentation_lifecycle(), &input) {
+            tracing::debug!(
+                { flui_foundation::diagnostics::PRESENTATION_ID } = realm.presentation_id().as_u64(),
+                lifecycle = ?realm.presentation_lifecycle(),
+                input_kind = input_kind(&input),
+                "dropping input due to presentation lifecycle"
+            );
+            return;
         }
         match input {
             PlatformInput::Ime(ime_event) => {
@@ -1500,12 +1481,83 @@ impl AppBinding {
                 // the realm-side routing — drop-target resolution and the
                 // DropFeedback loop — does not exist yet, so the event is
                 // deliberately logged and dropped rather than half-routed.
+                // Only the session-stage discriminator is logged, never the
+                // event itself: it carries the transfer offer (STYLE.md
+                // forbids logging drag-and-drop payloads, same as text-input
+                // content).
                 tracing::debug!(
-                    event = ?drag_drop_event,
+                    drag_drop_kind = drag_drop_kind(&drag_drop_event),
                     "drag-and-drop input received; realm routing not implemented yet (ADR-0038), dropping"
                 );
             }
         }
+    }
+}
+
+/// Whether [`AppBinding::handle_input_entered`] must drop `input` outright,
+/// before ever reaching the per-kind dispatch above, given the
+/// presentation's current lifecycle (ADR-0037 §9).
+///
+/// Explicit and exhaustive over **both** axes — lifecycle and input kind —
+/// with no wildcard on the input axis: adding a `PlatformInput` variant
+/// breaks this match at compile time instead of silently falling through a
+/// `_` arm. (`PlatformInput` is not `#[non_exhaustive]` today; if it becomes
+/// one, this match needs an explicit arm per existing variant plus a
+/// deny-by-default final arm that drops and traces at `warn`, so an unknown
+/// future variant fails safe instead of silently flowing through.)
+///
+/// - `Created`: constructor-internal and production-unreachable post-
+///   construction (`PresentationState::new` self-attaches its surface), but
+///   it must never silently allow input if it were ever reached — no
+///   surface is attached yet.
+/// - `Closing`/`Closed`: teardown has started or finished; no input of any
+///   kind.
+/// - `Suspended`: pointer and drag-drop are dropped (gesture-arena /
+///   no-surface-to-react-to protection); keyboard and IME keep flowing —
+///   the standing web-occlusion rationale: the web backend wires no
+///   occlusion signal at all, so a hard gate here would silently blackout
+///   keystrokes on that backend the moment focus/visibility looks
+///   ambiguous.
+/// - `SurfaceAttached`: nothing is dropped here.
+fn input_dropped_by_lifecycle(
+    lifecycle: super::presentation::PresentationLifecycle,
+    input: &PlatformInput,
+) -> bool {
+    use super::presentation::PresentationLifecycle;
+    match lifecycle {
+        PresentationLifecycle::Created
+        | PresentationLifecycle::Closing
+        | PresentationLifecycle::Closed => true,
+        PresentationLifecycle::Suspended => match input {
+            PlatformInput::Pointer(_) | PlatformInput::DragDrop(_) => true,
+            PlatformInput::Keyboard(_) | PlatformInput::Ime(_) => false,
+        },
+        PresentationLifecycle::SurfaceAttached => false,
+    }
+}
+
+/// A safe, content-free discriminator for a [`PlatformInput`] — never the
+/// payload itself. STYLE.md forbids logging text-input/IME and drag-and-drop
+/// payloads (composition text, keystrokes, dragged offer contents); this is
+/// the only thing about an input event that may reach a trace/log line.
+/// Exhaustive for the same reason as [`input_dropped_by_lifecycle`].
+fn input_kind(input: &PlatformInput) -> &'static str {
+    match input {
+        PlatformInput::Pointer(_) => "pointer",
+        PlatformInput::Keyboard(_) => "keyboard",
+        PlatformInput::Ime(_) => "ime",
+        PlatformInput::DragDrop(_) => "drag_drop",
+    }
+}
+
+/// A safe, content-free discriminator for a [`DragDropEvent`] — never the
+/// carried offer/payload (STYLE.md forbids logging drag-and-drop payloads).
+fn drag_drop_kind(event: &DragDropEvent) -> &'static str {
+    match event {
+        DragDropEvent::Entered { .. } => "entered",
+        DragDropEvent::Moved { .. } => "moved",
+        DragDropEvent::Dropped { .. } => "dropped",
+        DragDropEvent::Exited { .. } => "exited",
     }
 }
 
@@ -1810,12 +1862,12 @@ mod tests {
         );
     }
 
-    /// Coordinator ruling (ADR-0037 §9): `Suspended` drops pointer input only
-    /// — gesture-arena protection — while keyboard/IME continue to flow. A
-    /// flaky or absent occlusion signal (the web backend wires none) must
-    /// never become a keystroke blackout.
+    /// `Suspended` drops pointer input only — gesture-arena protection —
+    /// while keyboard/IME continue to flow (ADR-0037 §9). A flaky or absent
+    /// occlusion signal (the web backend wires none) must never become a
+    /// keystroke blackout.
     ///
-    /// Red-check: remove the `Suspended` pointer-only arm from
+    /// If reverted: remove the `Suspended` pointer-only arm from
     /// `handle_input_entered` and the pointer assertions below fail (the
     /// arena receives the down and `needs_redraw` is armed even though the
     /// presentation is suspended).
@@ -1874,10 +1926,10 @@ mod tests {
         );
     }
 
-    /// Coordinator ruling (ADR-0037 §9): `Closing`/`Closed` is a hard gate —
-    /// every input kind is dropped, not just pointer.
+    /// `Closing`/`Closed` is a hard gate (ADR-0037 §9): every input kind is
+    /// dropped, not just pointer.
     ///
-    /// Red-check: remove the `Closing | Closed` hard-gate arm from
+    /// If reverted: remove the `Closing | Closed` hard-gate arm from
     /// `handle_input_entered` and the IME assertion below fails (a "closed"
     /// presentation still dispatches and arms a redraw).
     #[test]
@@ -1915,6 +1967,75 @@ mod tests {
             !app.needs_redraw(),
             "IME input must also be dropped once closed — the hard gate covers every kind"
         );
+    }
+
+    /// Exhaustively pins `input_dropped_by_lifecycle`'s policy over every
+    /// `(lifecycle, input kind)` pair, including `DragDrop` — previously
+    /// only `Pointer` was checked against a `matches!`, so a `DragDrop` event
+    /// silently flowed through a `Suspended` presentation instead of being
+    /// dropped alongside pointer input for the same no-surface-to-react-to
+    /// reason.
+    ///
+    /// If reverted: restore the old `matches!(input, PlatformInput::Pointer(_))`
+    /// check in place of the exhaustive match and the `Suspended` +
+    /// `DragDrop` case fails (`assert!` sees `false` instead of `true`).
+    #[test]
+    fn input_lifecycle_gate_is_exhaustive_and_explicit() {
+        use flui_interaction::events::{PointerType, make_down_event};
+        use flui_interaction::testing::input::KeyEventBuilder;
+        use flui_platform::traits::DragDropEvent;
+
+        use super::super::presentation::PresentationLifecycle;
+
+        let pointer = PlatformInput::Pointer(make_down_event(
+            flui_types::Offset::new(px(0.0), px(0.0)),
+            PointerType::Mouse,
+        ));
+        let keyboard = PlatformInput::Keyboard(
+            KeyEventBuilder::new(flui_interaction::events::Code::KeyA).build(),
+        );
+        let ime = PlatformInput::Ime(flui_types::ImeEvent::Commit("x".to_string()));
+        let drag_drop = PlatformInput::DragDrop(DragDropEvent::Exited {
+            id: flui_foundation::DataTransferId::new(1),
+        });
+        let every_kind = [&pointer, &keyboard, &ime, &drag_drop];
+
+        for lifecycle in [
+            PresentationLifecycle::Created,
+            PresentationLifecycle::Closing,
+            PresentationLifecycle::Closed,
+        ] {
+            for input in every_kind {
+                assert!(
+                    input_dropped_by_lifecycle(lifecycle, input),
+                    "{lifecycle:?} must reject every input kind, including {input:?}"
+                );
+            }
+        }
+
+        assert!(input_dropped_by_lifecycle(
+            PresentationLifecycle::Suspended,
+            &pointer
+        ));
+        assert!(
+            input_dropped_by_lifecycle(PresentationLifecycle::Suspended, &drag_drop),
+            "DragDrop must be dropped while suspended, the same as Pointer"
+        );
+        assert!(!input_dropped_by_lifecycle(
+            PresentationLifecycle::Suspended,
+            &keyboard
+        ));
+        assert!(!input_dropped_by_lifecycle(
+            PresentationLifecycle::Suspended,
+            &ime
+        ));
+
+        for input in every_kind {
+            assert!(!input_dropped_by_lifecycle(
+                PresentationLifecycle::SurfaceAttached,
+                input
+            ));
+        }
     }
 
     /// Deadline keep-alive regression: a long-press armed by a pointer down
@@ -2631,7 +2752,7 @@ mod tests {
     /// still reaches `AppBinding::instance()` (the real singleton) rather
     /// than the throwaway.
     ///
-    /// Red-check: move the `set_on_frame_scheduled` install back into
+    /// If reverted: move the `set_on_frame_scheduled` install back into
     /// `AppBinding::new()` using a per-construction `wake_handle.into_callback()`
     /// (the original bug this test was written for) and this fails — the
     /// throwaway binding's construction below steals the hook, so the real
@@ -2690,7 +2811,7 @@ mod tests {
     /// spawned OS thread — exactly how a completed async task's waker fires
     /// in production.
     ///
-    /// Red-check: change the hook installed in `instance()` back to
+    /// If reverted: change the hook installed in `instance()` back to
     /// resolving `AppBinding::instance()` inside the closure (fire-time
     /// resolution) and this fails — the spawned thread constructs its own
     /// windowless binding and wakes it instead of `real`.
@@ -3488,7 +3609,7 @@ mod tests {
             realm
         }
 
-        /// Red-check: replace the `retry_needed` branch with an unconditional
+        /// If reverted: replace the `retry_needed` branch with an unconditional
         /// `self.mark_rendered()` (the pre-fix shape) and this fails —
         /// `needs_redraw` comes back `false` after a dropped `SurfaceLost`
         /// frame, so nothing would ever re-drive a static UI back to life.
@@ -3647,7 +3768,7 @@ mod tests {
             realm
         }
 
-        /// Red-check: remove the `send_to_engine` consult in
+        /// If reverted: remove the `send_to_engine` consult in
         /// `render_frame_entered` (fall through to the unconditional present
         /// branch as before this fix) and this fails — `render_scene` gets
         /// called despite the deferral.
@@ -3677,7 +3798,7 @@ mod tests {
             );
         }
 
-        /// Red-check: comment out `allow_first_frame`'s `RepaintHandle`
+        /// If reverted: comment out `allow_first_frame`'s `RepaintHandle`
         /// re-mark (the wake+redirty block) and this fails — `presented`
         /// comes back `false` because the woken frame finds a clean
         /// pipeline (the deferred pass already consumed the dirty work)
@@ -3727,7 +3848,7 @@ mod tests {
         /// `AppBinding::instance()`'s bootstrap installs the real listener
         /// against.
         ///
-        /// Red-check: comment out the redirty call inside
+        /// If reverted: comment out the redirty call inside
         /// `install_frames_reenable_redirty_listener`'s body (leave only
         /// `wake()`) and the final assertion fails — the woken frame finds
         /// a clean pipeline and presents `false` (`FramePaintOutcome::Idle`)
@@ -3793,7 +3914,7 @@ mod tests {
             assert_eq!(backend.render_scene_calls, 2);
         }
 
-        /// Red-check: replace `first_frame_deferred_count.fetch_sub`'s
+        /// If reverted: replace `first_frame_deferred_count.fetch_sub`'s
         /// underflow-checked decrement with an unconditional "count == 0
         /// means open" read that ignores nesting depth, and this fails —
         /// the frame after the FIRST `allow_first_frame()` would present
@@ -3842,7 +3963,7 @@ mod tests {
         /// `allow_first_frame` pair, since `send_frames_to_engine`
         /// short-circuits `true` once sent.
         ///
-        /// Red-check: drop the `!errored` guard around `mark_first_frame_sent`
+        /// If reverted: drop the `!errored` guard around `mark_first_frame_sent`
         /// in `render_frame_entered` and this fails — the errored frame
         /// latches, and the later `defer_first_frame` cannot close the gate.
         #[test]
@@ -4211,7 +4332,7 @@ mod tests {
         /// Real-path proof: `perform_haptic_feedback` reads the binding's
         /// active window and calls through to its `PlatformHaptics`.
         ///
-        /// Red-check: turning `perform_haptic_feedback` into a no-op
+        /// If reverted: turning `perform_haptic_feedback` into a no-op
         /// (dropping the `with_window`/`perform` call) makes this fail —
         /// `fake.calls()` would stay empty.
         #[test]
@@ -4281,7 +4402,7 @@ mod tests {
             (tree, root)
         }
 
-        /// Red-check: this fails if `attach_performance_overlay` stops
+        /// If reverted: this fails if `attach_performance_overlay` stops
         /// honouring the `None` slot and appends unconditionally.
         #[test]
         fn overlay_off_leaves_the_layer_tree_untouched() {
@@ -4297,7 +4418,7 @@ mod tests {
             );
         }
 
-        /// Red-check: this fails if the layer is inserted without being
+        /// If reverted: this fails if the layer is inserted without being
         /// linked to the root — the tree would still grow, but the child and
         /// parent assertions catch the orphan.
         ///
@@ -4391,7 +4512,7 @@ mod tests {
         /// reachable through `AppBinding::clipboard()`, and a write/read
         /// round-trips through the SAME clipboard instance.
         ///
-        /// Red-check: turning `set_platform_clipboard` into a no-op (dropping
+        /// If reverted: turning `set_platform_clipboard` into a no-op (dropping
         /// its `*self.platform_clipboard.lock() = Some(clipboard)` write)
         /// makes this fail — `binding.clipboard()` stays `None` and the
         /// `.expect()` below panics.
