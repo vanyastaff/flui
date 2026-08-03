@@ -26,6 +26,7 @@
 //! *ownership* (one struct, one thread-local slot instead of two), not the
 //! dispatch/teardown semantics those functions implement.
 
+use std::marker::PhantomData;
 use std::num::NonZeroU32;
 use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -50,29 +51,72 @@ use flui_scheduler::{AsyncDriver, LocalPostFrameLane, Scheduler, SchedulerPhase}
 /// `PaintingBinding::font_system` already proves for painting (it returns
 /// `SharedFontSystem` by value, so consumers never observe the `'static`
 /// lifetime).
+///
+/// # Thread affinity
+///
+/// `Scheduler::instance()` is itself thread-local — `impl_binding_singleton!`
+/// `Box::leak`s a *separate* instance per owner thread, so the `&'static`
+/// inside this newtype is only meaningful on the thread that resolved it. A
+/// bare `&'static Scheduler` field would make this struct auto-`Send +
+/// Sync` (a `&'static T` is `Send + Sync` whenever `T: Sync`, regardless of
+/// which thread produced the reference), which would let a `SchedulerRef`
+/// minted on thread A cross to thread B and silently read thread A's phase
+/// there instead of failing to compile or panicking. That is latent today
+/// only because every current holder (`UiRealm`, `AppRuntime`) is itself
+/// already `!Send` for unrelated reasons — it turns actively wrong the
+/// moment either type's ownership model changes to allow crossing threads
+/// while still carrying a `SchedulerRef`. The `PhantomData<*const ()>`
+/// field below is the same zero-cost thread-affinity marker `UiRealm` uses
+/// for itself (`_owner_affine`), and the item-position assertion after this
+/// impl block pins `!Send + !Sync` as a compile-time fact, not a comment.
 #[derive(Clone, Copy)]
-pub(crate) struct SchedulerRef(&'static Scheduler);
+pub(crate) struct SchedulerRef {
+    scheduler: &'static Scheduler,
+    _owner_affine: PhantomData<*const ()>,
+}
 
 impl SchedulerRef {
     fn resolve() -> Self {
-        Self(Scheduler::instance())
+        Self {
+            scheduler: Scheduler::instance(),
+            _owner_affine: PhantomData,
+        }
     }
 
     /// The current scheduler phase — the seam `UiRealm::drain_commands`
     /// reads for its idle-only commit-gate debug assertion, so `UiRealm`
     /// itself never has to call `Scheduler::instance()`.
     pub(crate) fn phase(&self) -> SchedulerPhase {
-        self.0.phase()
+        self.scheduler.phase()
     }
 
     /// Borrow the backing scheduler directly, for the handful of
     /// construction-time calls ([`RealmServices::resolve`]) that need more
-    /// than the phase probe.
+    /// than the phase probe. This is the one place that leaks the
+    /// `&'static` the newtype otherwise exists to contain -- it dies with
+    /// the scheduler-ownership flip: once `Scheduler` becomes an owned,
+    /// realm-local value instead of a `'static` singleton, this method
+    /// simply stops type-checking, which is the point.
     pub(crate) fn get(&self) -> &'static Scheduler {
-        self.0
+        self.scheduler
     }
 }
 
+#[cfg(test)]
+mod scheduler_ref_tests {
+    use super::*;
+
+    // Compile-time fence: a `SchedulerRef` minted on one thread must never
+    // be movable/shareable to another, because the `&'static Scheduler` it
+    // wraps is only meaningful on the thread that resolved it
+    // (`Scheduler::instance()` is thread-local underneath). Widening this
+    // bound is exactly the landmine described on `SchedulerRef`'s own
+    // rustdoc -- it would silently compile a cross-thread phase read.
+    static_assertions::assert_not_impl_any!(SchedulerRef: Send, Sync);
+}
+
+#[cfg(not(target_os = "ios"))]
+use std::cell::OnceCell;
 #[cfg(not(target_os = "ios"))]
 use std::collections::VecDeque;
 #[cfg(not(target_os = "ios"))]
@@ -271,27 +315,23 @@ pub(crate) struct AppRuntime {
     /// Deliberately *not* cleared by realm teardown — the loop may host
     /// another realm before it exits (hot-restart does exactly this).
     pub(super) owner_platform: Option<OwnerPlatform>,
-    /// Process-level engine services, resolved once at construction.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "this change only creates the resolution seam; nothing \
-                      yet reads this field back out (later changes wire \
-                      real consumers)"
-        )
-    )]
-    pub(super) services: SharedEngineServices,
+    /// Process-level engine services. Deliberately **not** resolved in
+    /// [`AppRuntime::new`] -- see [`AppRuntime::ensure_services`] for why.
+    services: OnceCell<SharedEngineServices>,
 }
 
 #[cfg(not(target_os = "ios"))]
 impl AppRuntime {
-    /// Construct the composition root. Called once per owner thread, lazily
-    /// on that thread's first touch of the `APP_RUNTIME` TLS slot — there is
-    /// no eager, process-wide bootstrap step yet. This is the seam this
-    /// change creates, not a compatibility layer: every service it
-    /// `resolve()`s from is still the same singleton it always was.
-    pub(super) fn new() -> Self {
+    /// Construct the composition root: cheap, side-effect-free, `const`.
+    /// Called as the `APP_RUNTIME` TLS slot's own `const` initializer
+    /// (`runner.rs`), so simply *touching* the thread-local -- for any
+    /// reason, on any thread -- can never itself run singleton construction
+    /// or full system-font enumeration. Real service resolution happens
+    /// only via the explicit [`Self::ensure_services`] call, from
+    /// `install_owner_platform`/`install_platform_realm` -- the loop's own
+    /// bootstrap points, never from an incidental first touch such as
+    /// `OwnerHostClearGuard::drop` unwinding through a virgin thread.
+    pub(super) const fn new() -> Self {
         Self {
             realm: None,
             queue: VecDeque::new(),
@@ -303,8 +343,29 @@ impl AppRuntime {
             visible: true,
             focused: true,
             owner_platform: None,
-            services: SharedEngineServices::resolve(),
+            services: OnceCell::new(),
         }
+    }
+
+    /// Resolves and caches [`SharedEngineServices`] on first call; returns
+    /// the cached value on every later call. Idempotent, so both
+    /// `install_owner_platform` and `install_platform_realm` can call this
+    /// unconditionally without needing to agree on which one runs first.
+    ///
+    /// This is the fix for a real hazard the previous shape had: when
+    /// `AppRuntime::new()` itself resolved `SharedEngineServices` (singleton
+    /// construction plus eager system-font enumeration), *any* first touch
+    /// of the TLS slot ran that work -- including
+    /// `OwnerHostClearGuard::drop` firing during an unwind on a thread that
+    /// never got past platform init. A panic inside that resolution path
+    /// would then be a second panic during an unwind already in progress,
+    /// i.e. an abort that masks the original panic. Making `AppRuntime::new`
+    /// infallible/side-effect-free and resolving services only from this
+    /// explicit call restores the old `RealmHost`-era guarantee that merely
+    /// touching the thread-local is always safe to do from within a
+    /// clear-guard drop.
+    pub(super) fn ensure_services(&mut self) -> &SharedEngineServices {
+        self.services.get_or_init(SharedEngineServices::resolve)
     }
 
     /// `RealmId`-keyed lookup: `Some` only when `id` matches the single
@@ -356,17 +417,63 @@ mod app_runtime_tests {
         );
     }
 
-    /// `SharedEngineServices::resolve` must actually populate all three
-    /// fields with live, usable handles -- reading each one here (rather
-    /// than only asserting the struct compiles) is what proves the
-    /// resolution seam works, not just that it type-checks.
+    /// `AppRuntime::new` must NOT resolve `SharedEngineServices` -- that is
+    /// the entire point of moving resolution behind `OnceCell` +
+    /// `ensure_services`. Red before the fix: `new()` used to call
+    /// `SharedEngineServices::resolve()` directly, so `services` was always
+    /// `Some` immediately after construction; this assertion would have
+    /// failed against that shape.
     #[test]
-    fn app_runtime_resolves_all_three_shared_engine_services() {
+    fn app_runtime_new_does_not_resolve_services() {
         let runtime = AppRuntime::new();
 
-        let _painting_image_cache = runtime.services.painting.image_cache();
-        let _semantics_features = runtime.services.semantics.accessibility_features();
-        let _phase = runtime.services.scheduler.phase();
+        assert!(
+            runtime.services.get().is_none(),
+            "AppRuntime::new must not resolve SharedEngineServices -- doing so \
+             makes every first touch of the TLS slot (including an \
+             OwnerHostClearGuard::drop during an unwind) run singleton \
+             construction and full system-font enumeration"
+        );
+    }
+
+    /// `ensure_services` must actually populate all three
+    /// `SharedEngineServices` fields with live, usable handles -- reading
+    /// each one here (rather than only asserting the struct compiles) is
+    /// what proves the resolution seam works, not just that it type-checks.
+    #[test]
+    fn ensure_services_resolves_all_three_and_caches_them() {
+        let mut runtime = AppRuntime::new();
+
+        let services = runtime.ensure_services();
+        let _painting_image_cache = services.painting.image_cache();
+        let _semantics_features = services.semantics.accessibility_features();
+        let _phase = services.scheduler.phase();
+
+        assert!(
+            runtime.services.get().is_some(),
+            "ensure_services must cache the resolved value, not re-resolve on \
+             every call"
+        );
+    }
+
+    /// A `OwnerHostClearGuard`-shaped operation that touches ONLY
+    /// `owner_platform` -- never `ensure_services` -- must leave `services`
+    /// unresolved. Mirrors `OwnerHostClearGuard::drop`'s actual field touch
+    /// (`runner.rs`) without depending on `runner.rs`'s platform machinery.
+    #[test]
+    fn guard_only_arm_and_drop_cycle_never_resolves_services() {
+        let mut runtime = AppRuntime::new();
+
+        // The clear-guard's drop body: `self.owner_platform.take();` and
+        // nothing else.
+        runtime.owner_platform.take();
+
+        assert!(
+            runtime.services.get().is_none(),
+            "a guard-only arm/drop cycle (owner_platform touch only) must \
+             never resolve SharedEngineServices -- that would reintroduce \
+             the double-panic-during-unwind hazard this shape closes"
+        );
     }
 }
 

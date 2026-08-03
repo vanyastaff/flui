@@ -96,8 +96,17 @@ thread_local! {
     /// until that seam is retired (ADR-0027 follow-up 5); access is only
     /// through the stamped FIFO dispatcher below and the fenced
     /// `with_owner_platform` accessor.
+    ///
+    /// `AppRuntime::new()` is `const` and side-effect-free (no singleton
+    /// resolution) precisely so this `const` initializer stays true:
+    /// merely *touching* this thread-local -- for any reason, including
+    /// `OwnerHostClearGuard::drop` firing during an unwind on a thread that
+    /// never reached platform init -- can never itself trigger singleton
+    /// construction or full system-font enumeration. Real service
+    /// resolution happens only via the explicit `ensure_services` calls in
+    /// `install_owner_platform`/`install_platform_realm` below.
     static APP_RUNTIME: std::cell::RefCell<AppRuntime> =
-        std::cell::RefCell::new(AppRuntime::new());
+        const { std::cell::RefCell::new(AppRuntime::new()) };
 }
 
 /// Installs `owner` in the loop-scoped host. Call once, at the top of each
@@ -107,7 +116,12 @@ thread_local! {
 #[cfg(not(target_os = "ios"))]
 pub(crate) fn install_owner_platform(owner: flui_platform::OwnerPlatform) {
     APP_RUNTIME.with(|slot| {
-        slot.borrow_mut().owner_platform = Some(owner);
+        let mut state = slot.borrow_mut();
+        state.owner_platform = Some(owner);
+        // Explicit, known-point resolution -- not a TLS-initializer side
+        // effect. Idempotent (`ensure_services` caches), so it does not
+        // matter that `install_platform_realm` below also calls it.
+        let _ = state.ensure_services();
     });
 }
 
@@ -1079,6 +1093,11 @@ fn install_platform_realm(
         // stale `Hidden`/`Inactive` left behind by the last one.
         state.visible = true;
         state.focused = true;
+        // Explicit, known-point resolution (idempotent with the call in
+        // `install_owner_platform`) -- test call sites that install a realm
+        // directly, without going through `install_owner_platform` first
+        // (e.g. `install_test_realm` below), still get services resolved.
+        let _ = state.ensure_services();
         (displaced_realm, displaced_queue, displaced_applier)
     });
     // Destructors may re-enter platform/framework code (the same invariant
