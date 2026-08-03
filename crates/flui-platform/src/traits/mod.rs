@@ -55,8 +55,8 @@ pub use input::{
 // Re-export keyboard-types for convenience
 pub use keyboard_types::NamedKey;
 pub use owner::{
-    OpenWindowError, OwnerPlatform, PendingWindow, PlatformProxy, ProxySendError, WaitError,
-    WindowOpen,
+    OpenWindowError, OwnerPlatform, PendingWindow, PlatformProxy, ProxySendError, SharedPlatform,
+    WaitError, WindowOpen,
 };
 pub use platform::{
     Clipboard, ClipboardItem, PathPromptOptions, Platform, PlatformExecutor, PlatformReadyCallback,

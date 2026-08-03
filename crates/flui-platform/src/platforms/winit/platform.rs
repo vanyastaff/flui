@@ -54,7 +54,7 @@ use std::{
 };
 
 use anyhow::Result;
-use flui_foundation::ClaimSlot;
+use flui_foundation::{ClaimOutcome, ClaimSlot};
 use keyboard_types::Modifiers as KeyboardModifiers;
 use parking_lot::Mutex;
 use winit::{
@@ -156,7 +156,8 @@ impl WinitRunState {
 ///     // `open_window` is guaranteed `Ready` here — see the module-level
 ///     // doc on same-thread window creation.
 ///     let _window = owner.open_window(Default::default())?.try_ready()?;
-/// }));
+///     Ok(())
+/// }))?;
 /// ```
 pub struct WinitPlatform {
     /// Platform capabilities descriptor. `DesktopCapabilities` is a
@@ -342,14 +343,25 @@ impl WinitPlatform {
             control: receiver,
             quit_notified: false,
             in_flight_replies: Vec::new(),
+            bootstrap_error: None,
         };
         if quit_requested {
             control.request_quit();
         }
 
         let result = event_loop.run_app(&mut app);
+        // Taken before `finish_shutdown` only so the borrow shape stays
+        // simple — `finish_shutdown` does not touch this field.
+        let bootstrap_error = app.bootstrap_error.take();
         app.finish_shutdown();
         result?;
+
+        // Stashed by `resumed` when `on_ready` returned `Err`: propagate it
+        // now that the loop has actually unwound, rather than the bare
+        // `tracing::error!` a caller could not otherwise observe.
+        if let Some(error) = bootstrap_error {
+            return Err(error);
+        }
 
         Ok(())
     }
@@ -550,6 +562,13 @@ struct WinitApp {
     /// until the requester claims or drops it (ADR-0039 §3's honest
     /// registry-occupancy statement — not admission-time bounded).
     in_flight_replies: Vec<(WindowId, ClaimSlot<OpenWindowResult>)>,
+    /// Set when `on_ready` returns `Err` (a fallible bootstrap failure —
+    /// window creation, GPU init, root-widget attach — has no other return
+    /// path back to `Platform::run`'s caller). `resumed` stashes it
+    /// here and requests exit; `run_event_loop` propagates it out of `run`
+    /// once the loop has actually unwound, rather than swallowing it into a
+    /// bare `tracing::error!` while the loop keeps pumping a half-built app.
+    bootstrap_error: Option<anyhow::Error>,
 }
 
 /// Completes a dequeued window request even if owner-side processing
@@ -623,7 +642,19 @@ impl ApplicationHandler for WinitApp {
                 owner_thread,
             });
             let owner = OwnerPlatform::new(platform, hooks);
-            with_active_event_loop(event_loop, || on_ready(owner));
+            if let Err(error) = with_active_event_loop(event_loop, || on_ready(owner)) {
+                // A fallible bootstrap (window creation, GPU init,
+                // root-widget attach) failed with no return path back to
+                // `Platform::run`'s caller except through this stash and an
+                // immediate exit — never continue the loop with a
+                // half-built app. `finish_shutdown` (via `request_exit`)
+                // fires quit handlers and closes the owner lane exactly as
+                // any other shutdown path does.
+                tracing::error!(%error, "on_ready bootstrap failed; stopping the event loop");
+                self.bootstrap_error = Some(error);
+                self.request_exit(event_loop);
+                return;
+            }
         }
 
         self.platform.mark_running();
@@ -1181,12 +1212,12 @@ impl Platform for WinitPlatform {
         self.with_state(|state| state.background_executor.clone())
     }
 
-    fn run(self: Box<Self>, on_ready: PlatformReadyCallback) {
+    fn run(self: Box<Self>, on_ready: PlatformReadyCallback) -> anyhow::Result<()> {
         tracing::info!("Starting winit event loop via Platform::run()");
         let platform = Arc::new(*self);
-        if let Err(e) = platform.run_event_loop(on_ready) {
-            tracing::error!("Winit event loop error: {:?}", e);
-        }
+        platform.run_event_loop(on_ready).inspect_err(|error| {
+            tracing::error!("Winit event loop error: {:?}", error);
+        })
     }
 
     fn quit(&self) {
@@ -1272,12 +1303,23 @@ impl Platform for WinitPlatform {
 
         // This `handle` is freshly minted above and never offered to any
         // other caller, so `try_take` cannot have claimed it already —
-        // `None` here would mean this fast path itself raced a second
-        // claim attempt, which the code above never performs.
-        let window = handle
-            .wait()
-            .expect("BUG: this handle is never polled by another caller before wait")
-            .map_err(|error| anyhow::anyhow!("winit window creation failed: {error}"))?;
+        // `AlreadyClaimed` here would mean this fast path itself raced a
+        // second claim attempt, which the code above never performs.
+        // `OwnerGone` is real, though: the event-loop owner can disconnect
+        // (quit, panic-unwind) while this request is in flight on the lane.
+        let window = match handle.wait() {
+            ClaimOutcome::Delivered(result) => {
+                result.map_err(|error| anyhow::anyhow!("winit window creation failed: {error}"))?
+            }
+            ClaimOutcome::AlreadyClaimed => {
+                unreachable!("BUG: this handle is never polled by another caller before wait")
+            }
+            ClaimOutcome::OwnerGone => {
+                return Err(anyhow::anyhow!(
+                    "winit event-loop owner disconnected before delivering the window"
+                ));
+            }
+        };
 
         tracing::info!("Window created successfully");
         Ok(window)
@@ -1533,9 +1575,17 @@ impl ProxyTransport for WinitProxyTransport {
             })
     }
 
-    fn request_quit(&self) {
-        if let Some(control) = self.control() {
-            control.request_quit();
+    fn request_quit(&self) -> Result<(), ProxySendError<()>> {
+        match self.control() {
+            Some(control) => {
+                control.request_quit();
+                Ok(())
+            }
+            // A lane existed (winit always has one) but the loop already
+            // stopped -- `OwnerGone`, not `Unsupported`: this backend does
+            // support cross-thread quit requests in general, this
+            // particular loop instance is just gone.
+            None => Err(ProxySendError::OwnerGone { rejected: () }),
         }
     }
 
@@ -1558,6 +1608,7 @@ mod tests {
         time::{Duration, Instant},
     };
 
+    use flui_foundation::ClaimOutcome;
     use flui_types::geometry::{Size, px};
     use parking_lot::Mutex;
     use winit::{
@@ -1728,6 +1779,7 @@ mod tests {
             control: receiver,
             quit_notified: false,
             in_flight_replies: Vec::new(),
+            bootstrap_error: None,
         };
 
         app.notify_quit_once();
@@ -1756,6 +1808,7 @@ mod tests {
             control: receiver,
             quit_notified: false,
             in_flight_replies: Vec::new(),
+            bootstrap_error: None,
         };
 
         app.finish_shutdown();
@@ -1798,6 +1851,7 @@ mod tests {
                 control: receiver,
                 quit_notified: false,
                 in_flight_replies: Vec::new(),
+                bootstrap_error: None,
             };
             panic!("exercise WinitApp unwind cleanup");
         }));
@@ -1857,6 +1911,7 @@ mod tests {
             control: receiver,
             quit_notified: false,
             in_flight_replies: Vec::new(),
+            bootstrap_error: None,
         };
 
         let first_finish = catch_unwind(AssertUnwindSafe(|| app.finish_shutdown()));
@@ -2031,6 +2086,7 @@ mod tests {
             control: receiver,
             quit_notified: false,
             in_flight_replies: Vec::new(),
+            bootstrap_error: None,
         };
         event_loop
             .run_app(&mut app)
@@ -2176,10 +2232,15 @@ mod tests {
                 let sentinel = control_for_worker
                     .request_open_window(options("post-straggler-sentinel"))
                     .expect("lane still accepts requests after the straggler event");
-                sentinel
-                    .wait()
-                    .expect("this handle is never polled by another caller before wait")
-                    .expect("a normal request still completes after the straggler event");
+                match sentinel.wait() {
+                    ClaimOutcome::Delivered(result) => {
+                        result.expect("a normal request still completes after the straggler event");
+                    }
+                    ClaimOutcome::AlreadyClaimed => {
+                        panic!("this handle is never polled by another caller before wait")
+                    }
+                    ClaimOutcome::OwnerGone => panic!("the owner never disconnects in this test"),
+                }
             }));
 
             control_for_worker.request_quit();
@@ -2195,6 +2256,7 @@ mod tests {
                 control: receiver,
                 quit_notified: false,
                 in_flight_replies: Vec::new(),
+                bootstrap_error: None,
             },
             stale_id,
             inject_now,

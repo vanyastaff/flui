@@ -125,7 +125,7 @@ impl Platform for WebPlatform {
         self.with_state(|s| s.background_executor.clone())
     }
 
-    fn run(self: Box<Self>, on_ready: PlatformReadyCallback) {
+    fn run(self: Box<Self>, on_ready: PlatformReadyCallback) -> anyhow::Result<()> {
         tracing::info!("Starting web platform");
 
         self.with_state(|s| s.is_running = true);
@@ -141,16 +141,18 @@ impl Platform for WebPlatform {
         ));
 
         // Call on_ready synchronously — browser event loop is already
-        // running.
+        // running. On `Err`, do NOT install the RAF loop over a half-built
+        // page — return the failure instead.
         on_ready(OwnerPlatform::new(
             Arc::clone(&platform) as Arc<dyn Platform>,
             hooks,
-        ));
+        ))?;
 
         // Start the RAF loop
         platform.start_raf_loop();
 
         tracing::info!("Web platform ready");
+        Ok(())
     }
 
     fn quit(&self) {

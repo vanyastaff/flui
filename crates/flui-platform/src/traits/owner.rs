@@ -29,15 +29,20 @@
 
 use std::fmt;
 use std::marker::PhantomData;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::thread::ThreadId;
 
-use flui_foundation::ClaimHandle;
+use flui_foundation::{ClaimHandle, ClaimOutcome};
 use static_assertions::{assert_impl_all, assert_not_impl_any};
 
 use super::{
-    Platform, PlatformDisplay, PlatformWindow, WindowId, WindowOptions, window::WindowAppearance,
+    Clipboard, ClipboardItem, PathPromptOptions, Platform, PlatformCapabilities, PlatformDisplay,
+    PlatformExecutor, PlatformWindow, WindowEvent, WindowId, WindowOptions,
+    window::WindowAppearance,
 };
+use crate::data_transfer::DataTransferSource;
+use crate::task::Task;
 
 // ============================================================================
 // OwnerPlatform
@@ -133,13 +138,16 @@ impl OwnerPlatform {
         self.platform.quit();
     }
 
-    /// Escapes to the residual thread-safe surface (`Send + Sync` methods
-    /// that need no owner-thread proof: `background_executor`, `clipboard`,
-    /// callback registration, and the rest of §2's "stays on `Platform`"
-    /// list).
+    /// Escapes to the residual thread-safe surface: `background_executor`,
+    /// `clipboard`, callback registration, and the rest of §2's "stays on
+    /// `Platform`" list, wrapped in a `Clone + Send + Sync` handle a
+    /// `std::thread::scope` worker can freely hold — see
+    /// [`SharedPlatform`]'s own doc for why this can no longer be
+    /// `&dyn Platform` (that type is still `Send + Sync` in full,
+    /// owner-affine methods included, until slice 3's trait split).
     #[must_use]
-    pub fn shared(&self) -> &dyn Platform {
-        &*self.platform
+    pub fn shared(&self) -> SharedPlatform {
+        SharedPlatform::new(Arc::clone(&self.platform))
     }
 
     /// Mints a cross-thread capability, handed to workers, realms, or
@@ -155,6 +163,166 @@ impl OwnerPlatform {
 // including cross-typecheck on win/mac, because `static_assertions` is a
 // real (non-dev) dependency (see Cargo.toml).
 assert_not_impl_any!(OwnerPlatform: Send, Sync);
+
+// ============================================================================
+// SharedPlatform
+// ============================================================================
+
+/// The thread-safe residual of [`Platform`] — every operation NOT gated on
+/// owner-thread affinity, per ADR-0039 §2's "what stays" table.
+///
+/// `Clone + Send + Sync`: unlike `&dyn Platform` (which is `Platform: Send +
+/// Sync` in full, `open_window`/`quit`/`activate`/`displays`/
+/// `primary_display`/`window_appearance`/`keyboard_layout`/`active_window`
+/// included), a `SharedPlatform` genuinely can cross a `std::thread::scope`
+/// boundary into safe code without smuggling an owner-affine call along
+/// with it — **the method list below IS the fence**: every method on this
+/// type is safe to call from any thread, and no owner-affine method is
+/// ever added to it. Minted only by [`OwnerPlatform::shared`].
+///
+/// The registry (`docs/runtime-contract.toml`) tracks this as the
+/// compile-time-checked half of the owner-platform-capability contract;
+/// `Platform` itself (the trait `dyn` object underneath) remains
+/// runtime-checked (`OwnerAffinity` debug-asserts) until slice 3 splits its
+/// owner-affine methods off entirely.
+#[derive(Clone)]
+pub struct SharedPlatform {
+    platform: Arc<dyn Platform>,
+}
+
+impl fmt::Debug for SharedPlatform {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SharedPlatform")
+            .field("platform", &self.platform.name())
+            .finish_non_exhaustive()
+    }
+}
+
+impl SharedPlatform {
+    pub(crate) fn new(platform: Arc<dyn Platform>) -> Self {
+        Self { platform }
+    }
+
+    /// The platform's background executor for async tasks.
+    #[must_use]
+    pub fn background_executor(&self) -> Arc<dyn PlatformExecutor> {
+        self.platform.background_executor()
+    }
+
+    /// The platform's capabilities descriptor.
+    #[must_use]
+    pub fn capabilities(&self) -> &dyn PlatformCapabilities {
+        self.platform.capabilities()
+    }
+
+    /// The platform's name for debugging/logging.
+    #[must_use]
+    pub fn name(&self) -> &'static str {
+        self.platform.name()
+    }
+
+    /// The compositor name (e.g., "DWM" on Windows).
+    #[must_use]
+    pub fn compositor_name(&self) -> &'static str {
+        self.platform.compositor_name()
+    }
+
+    /// The application's executable path.
+    ///
+    /// # Errors
+    /// Propagates the backend's own lookup failure.
+    pub fn app_path(&self) -> anyhow::Result<PathBuf> {
+        self.platform.app_path()
+    }
+
+    /// The platform's clipboard interface.
+    #[must_use]
+    pub fn clipboard(&self) -> Arc<dyn Clipboard> {
+        self.platform.clipboard()
+    }
+
+    /// The data-transfer transport (ADR-0038).
+    #[must_use]
+    pub fn data_transfer(&self) -> Arc<dyn DataTransferSource> {
+        self.platform.data_transfer()
+    }
+
+    /// Registers a callback for when the application should quit.
+    pub fn on_quit(&self, callback: Box<dyn FnMut() + Send>) {
+        self.platform.on_quit(callback);
+    }
+
+    /// Registers a callback for when the application is reopened (macOS).
+    pub fn on_reopen(&self, callback: Box<dyn FnMut() + Send>) {
+        self.platform.on_reopen(callback);
+    }
+
+    /// Registers a callback for window events.
+    pub fn on_window_event(&self, callback: Box<dyn FnMut(WindowEvent) + Send>) {
+        self.platform.on_window_event(callback);
+    }
+
+    /// Registers a callback for URLs opened by the system.
+    pub fn on_open_urls(&self, callback: Box<dyn FnMut(Vec<String>) + Send>) {
+        self.platform.on_open_urls(callback);
+    }
+
+    /// Registers a callback for keyboard layout changes.
+    pub fn on_keyboard_layout_change(&self, callback: Box<dyn FnMut() + Send>) {
+        self.platform.on_keyboard_layout_change(callback);
+    }
+
+    /// Opens a URL with the system's default handler.
+    pub fn open_url(&self, url: &str) {
+        self.platform.open_url(url);
+    }
+
+    /// Reveals a path in the platform's file manager.
+    pub fn reveal_path(&self, path: &Path) {
+        self.platform.reveal_path(path);
+    }
+
+    /// Opens a path with the system's default application.
+    pub fn open_path(&self, path: &Path) {
+        self.platform.open_path(path);
+    }
+
+    /// Shows a file/directory picker dialog. Returns selected paths, or
+    /// `None` if the user cancelled. Runs asynchronously on a background
+    /// thread.
+    pub fn prompt_for_paths(
+        &self,
+        options: PathPromptOptions,
+    ) -> Task<anyhow::Result<Option<Vec<PathBuf>>>> {
+        self.platform.prompt_for_paths(options)
+    }
+
+    /// Shows a "Save As" dialog for selecting a new file path. Returns the
+    /// selected path, or `None` if the user cancelled.
+    pub fn prompt_for_new_path(
+        &self,
+        directory: &Path,
+        suggested_name: Option<&str>,
+    ) -> Task<anyhow::Result<Option<PathBuf>>> {
+        self.platform.prompt_for_new_path(directory, suggested_name)
+    }
+
+    /// Writes a rich clipboard item (text + metadata).
+    pub fn write_to_clipboard(&self, item: ClipboardItem) {
+        self.platform.write_to_clipboard(item);
+    }
+
+    /// Reads a rich clipboard item.
+    #[must_use]
+    pub fn read_from_clipboard(&self) -> Option<ClipboardItem> {
+        self.platform.read_from_clipboard()
+    }
+}
+
+// Sole registry evidence that `SharedPlatform` genuinely is the thread-safe
+// escape hatch its doc promises — expanded by every `cargo check`, same
+// discipline as `OwnerPlatform`'s `assert_not_impl_any!` above.
+assert_impl_all!(SharedPlatform: Send, Sync, Clone);
 
 /// Result of an owner-thread window-open request.
 #[must_use = "a Pending window creation must be waited on or polled; \
@@ -246,8 +414,8 @@ pub struct PlatformProxy {
 }
 
 impl fmt::Debug for PlatformProxy {
-    // Manual impl: `transport` carries wake/send plumbing with no blanket
-    // `Debug` (api-lead #9).
+    // Manual impl: `transport` is `Arc<dyn ProxyTransport>`, and trait
+    // objects carry no blanket `Debug` impl.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("PlatformProxy")
             .field("is_owner_thread", &self.is_owner_thread())
@@ -276,8 +444,19 @@ impl PlatformProxy {
     }
 
     /// Coalesced, non-starvable quit flag — bypasses queue capacity.
-    pub fn request_quit(&self) {
-        self.transport.request_quit();
+    ///
+    /// The `Result` return is already `#[must_use]` (clippy's
+    /// `double_must_use` rejects a redundant fn-level attribute on top of
+    /// it) — discarding it silently swallows exactly the
+    /// permanent-`Unsupported` signal below.
+    ///
+    /// # Errors
+    /// See [`ProxySendError`]. [`ProxySendError::Unsupported`] is
+    /// **permanent** on lane-less backends (windows/macos/web/android/
+    /// headless) until slice 3 lane adoption — not a transient condition;
+    /// do not retry.
+    pub fn request_quit(&self) -> Result<(), ProxySendError<()>> {
+        self.transport.request_quit()
     }
 
     /// True iff the calling thread is the event-loop owner. Diagnostic
@@ -294,7 +473,9 @@ assert_impl_all!(PlatformProxy: Clone, Send, Sync);
 /// Failure to enqueue a cross-thread request through [`PlatformProxy`].
 ///
 /// Exhaustive: a deliberately closed cross-thread vocabulary (ADR-0027 §4,
-/// ADR-0037 §3).
+/// ADR-0037 §3) — `Unsupported` completes it (ADR-0039 slice-2 amendment b
+/// revision) rather than reopening it; every lane-less backend today maps
+/// onto this one variant instead of overloading `OwnerGone`.
 #[derive(Debug, thiserror::Error)]
 pub enum ProxySendError<T: fmt::Debug> {
     /// The owner lane is at capacity.
@@ -305,18 +486,25 @@ pub enum ProxySendError<T: fmt::Debug> {
         /// The value that could not be enqueued.
         rejected: T,
     },
-    /// The event-loop owner is gone.
-    ///
-    /// On backends without an owner lane (macOS/Win32 until slice 3 lane
-    /// adoption; any single-threaded backend), this variant is returned on
-    /// a *live* loop and is **permanent** there — not a transient condition
-    /// to retry. Do not retry; this is not a transient condition. Treat it
-    /// as a standing "cross-thread platform requests are unsupported on
-    /// this backend today" signal (ADR-0039 slice-2 amendment b); slice 3's
-    /// lane adoption is what makes it literally true everywhere.
+    /// The event-loop owner is gone: a lane existed and its loop has since
+    /// died. Strictly transient-loop-death, never "no lane at all" — see
+    /// [`Unsupported`](Self::Unsupported) for that case.
     #[error("event-loop owner is gone")]
     OwnerGone {
         /// The value that could not be delivered.
+        rejected: T,
+    },
+    /// This backend has no owner lane behind [`PlatformProxy`] at all —
+    /// not "the queue is full", not "the loop died", but "cross-thread
+    /// platform requests are not implemented here". **Permanent** on
+    /// windows/macos/web/android/headless until slice 3 lane adoption (ADR-
+    /// 0039 slice-2 amendment b) — do not retry; this is not a transient
+    /// condition. Treat it as a standing capability signal, the same way a
+    /// missing OS feature would be reported, not a request to back off and
+    /// try again.
+    #[error("cross-thread platform requests are unsupported on this backend")]
+    Unsupported {
+        /// The value that could not be enqueued or delivered.
         rejected: T,
     },
 }
@@ -340,7 +528,7 @@ pub struct PendingWindow {
 
 impl fmt::Debug for PendingWindow {
     // Manual impl: the wrapped `ClaimHandle` carries a wake callback with
-    // no blanket `Debug` (api-lead #9).
+    // no blanket `Debug` impl.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("PendingWindow").finish_non_exhaustive()
     }
@@ -379,8 +567,11 @@ impl PendingWindow {
             return Err(WaitError::WouldBlockOwner(self));
         }
         match self.handle.wait() {
-            Some(result) => result.map_err(WaitError::Open),
-            None => Err(WaitError::AlreadyClaimed),
+            ClaimOutcome::Delivered(result) => result.map_err(WaitError::Open),
+            ClaimOutcome::AlreadyClaimed => Err(WaitError::AlreadyClaimed),
+            ClaimOutcome::OwnerGone => Err(WaitError::Open(OpenWindowError::OwnerGone {
+                rejected: None,
+            })),
         }
     }
 
@@ -389,6 +580,46 @@ impl PendingWindow {
                   (a live window, or the typed error explaining why not)"]
     pub fn try_take(&mut self) -> Option<Result<Arc<dyn PlatformWindow>, OpenWindowError>> {
         self.handle.try_take()
+    }
+}
+
+impl std::future::Future for PendingWindow {
+    type Output = Result<Arc<dyn PlatformWindow>, OpenWindowError>;
+
+    /// Non-blocking poll — safe on any thread, including the owner (unlike
+    /// [`wait`](Self::wait), which refuses there because it would block on
+    /// the very lane the owner itself drains). Intended usage: poll from
+    /// `Idle` (or drive this future via the framework's async driver);
+    /// never from inside a pipeline hot path (build/layout/paint/
+    /// composite) — the same fence every other owner-thread capability in
+    /// this crate observes.
+    ///
+    /// Resolves on delivery, on owner disconnection
+    /// ([`OpenWindowError::OwnerGone`], woken by the underlying
+    /// `flui-foundation` `ClaimSlot`'s `Drop`), or immediately if this
+    /// `PendingWindow` was already resolved by an earlier
+    /// [`try_take`](Self::try_take) call (mapped onto
+    /// [`OpenWindowError::Backend`] — there is nothing left to hand back).
+    fn poll(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        match std::future::Future::poll(std::pin::Pin::new(&mut self.handle), cx) {
+            std::task::Poll::Ready(ClaimOutcome::Delivered(result)) => {
+                std::task::Poll::Ready(result)
+            }
+            std::task::Poll::Ready(ClaimOutcome::OwnerGone) => {
+                std::task::Poll::Ready(Err(OpenWindowError::OwnerGone { rejected: None }))
+            }
+            std::task::Poll::Ready(ClaimOutcome::AlreadyClaimed) => {
+                std::task::Poll::Ready(Err(OpenWindowError::Backend {
+                    message: "PendingWindow polled after an earlier try_take call already \
+                              claimed its result"
+                        .to_string(),
+                }))
+            }
+            std::task::Poll::Pending => std::task::Poll::Pending,
+        }
     }
 }
 
@@ -487,15 +718,20 @@ pub(crate) trait ProxyTransport: Send + Sync {
     ) -> Result<PendingWindow, ProxySendError<WindowOptions>>;
 
     /// Requests application quit — coalesced, non-starvable.
-    fn request_quit(&self);
+    ///
+    /// # Errors
+    /// See [`ProxySendError`]. [`ProxySendError::Unsupported`] on a
+    /// lane-less backend is **permanent** — not a transient condition.
+    fn request_quit(&self) -> Result<(), ProxySendError<()>>;
 
     /// The thread identity of the event-loop owner (diagnostic only).
     fn owner_thread(&self) -> ThreadId;
 }
 
-/// A transport with no lane behind it: every request is refused with the
-/// permanent `OwnerGone` posture (ADR-0039 slice-2 amendment b) until
-/// slice 3 gives the backend a real lane.
+/// A transport with no lane behind it: every request is refused with
+/// [`ProxySendError::Unsupported`] (ADR-0039 slice-2 amendment b) until
+/// slice 3 gives the backend a real lane — permanently, not
+/// `OwnerGone`: no lane ever existed here to die.
 pub(crate) struct ClosedTransport {
     owner_thread: ThreadId,
 }
@@ -511,18 +747,25 @@ impl ProxyTransport for ClosedTransport {
         &self,
         options: WindowOptions,
     ) -> Result<PendingWindow, ProxySendError<WindowOptions>> {
-        tracing::warn!(
+        // `debug!`, not `warn!` (this backend's posture is permanent and
+        // known at compile time, not an anomaly worth surfacing by
+        // default) — a caller probing/retrying `PlatformProxy::open_window`
+        // on a lane-less backend would otherwise flood a `warn!` per
+        // attempt.
+        tracing::debug!(
             "PlatformProxy::open_window on a lane-less backend: permanently \
-             OwnerGone until slice 3 (ADR-0039 amendment b) — do not retry"
+             unsupported until slice 3 (ADR-0039 amendment b) — do not retry"
         );
-        Err(ProxySendError::OwnerGone { rejected: options })
+        Err(ProxySendError::Unsupported { rejected: options })
     }
 
-    fn request_quit(&self) {
-        tracing::warn!(
-            "PlatformProxy::request_quit on a lane-less backend is a no-op \
-             until slice 3 (ADR-0039 amendment b)"
+    fn request_quit(&self) -> Result<(), ProxySendError<()>> {
+        // See `open_window`'s identical `debug!`-not-`warn!` rationale.
+        tracing::debug!(
+            "PlatformProxy::request_quit on a lane-less backend: permanently \
+             unsupported until slice 3 (ADR-0039 amendment b)"
         );
+        Err(ProxySendError::Unsupported { rejected: () })
     }
 
     fn owner_thread(&self) -> ThreadId {
@@ -567,12 +810,35 @@ mod tests {
     }
 
     #[test]
-    fn closed_transport_open_window_is_permanently_owner_gone() {
+    fn closed_transport_open_window_is_permanently_unsupported() {
         let transport = ClosedTransport::new(thread::current().id());
         let error = transport
             .open_window(WindowOptions::default())
             .expect_err("no lane behind a ClosedTransport");
-        assert!(matches!(error, ProxySendError::OwnerGone { .. }));
+        assert!(matches!(error, ProxySendError::Unsupported { .. }));
+    }
+
+    #[test]
+    fn closed_transport_request_quit_is_permanently_unsupported() {
+        let transport = ClosedTransport::new(thread::current().id());
+        let error = transport
+            .request_quit()
+            .expect_err("no lane behind a ClosedTransport");
+        assert!(matches!(
+            error,
+            ProxySendError::Unsupported { rejected: () }
+        ));
+    }
+
+    #[test]
+    fn proxy_request_quit_surfaces_unsupported_on_a_lane_less_backend() {
+        let transport: Arc<dyn ProxyTransport> =
+            Arc::new(ClosedTransport::new(thread::current().id()));
+        let proxy = PlatformProxy::new(transport);
+        assert!(matches!(
+            proxy.request_quit(),
+            Err(ProxySendError::Unsupported { rejected: () })
+        ));
     }
 
     #[test]

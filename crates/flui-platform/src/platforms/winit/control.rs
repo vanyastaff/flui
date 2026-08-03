@@ -220,10 +220,15 @@ impl ControlCommand {
         match self {
             Self::OpenWindow { options, reply } => {
                 // No owner ever saw this request (the enqueue itself
-                // failed); dropping `reply` here is silent (`ClaimSlot` has
-                // no `Drop` side effect -- only the paired `ClaimHandle`'s
-                // drop fires the abandonment wake, and that already
-                // happened at the call site).
+                // failed): the paired `ClaimHandle` (`request_open_window_
+                // after_admission`'s local `handle`) already dropped when
+                // that function returned `Err`, transitioning the slot
+                // `Pending -> Abandoned(None)` and firing the abandonment
+                // wake, before this `reply: ClaimSlot` is ever dropped here.
+                // `ClaimSlot`'s own `Drop` (ADR-0039 §3 slice-2 amendment:
+                // owner-disconnect -> `OwnerGone`) only fires on a slot
+                // still `Pending`, so dropping `reply` here is a no-op --
+                // the request is already resolved.
                 drop(reply);
                 options
             }
@@ -278,6 +283,7 @@ mod tests {
         time::Duration,
     };
 
+    use flui_foundation::ClaimOutcome;
     use flui_types::geometry::{Size, px};
     use static_assertions::{assert_impl_all, assert_not_impl_any};
 
@@ -395,11 +401,13 @@ mod tests {
             reply.deliver(Ok(Arc::new(StubWindow))).is_ok(),
             "slot is still Pending"
         );
-        let window = worker
-            .join()
-            .expect("worker exits")
-            .expect("this handle is never polled by another caller before wait")
-            .expect("window opens");
+        let window = match worker.join().expect("worker exits") {
+            ClaimOutcome::Delivered(result) => result.expect("window opens"),
+            ClaimOutcome::AlreadyClaimed => {
+                panic!("this handle is never polled by another caller before wait")
+            }
+            ClaimOutcome::OwnerGone => panic!("the owner never disconnects in this test"),
+        };
         assert!(window.is_visible());
     }
 
@@ -556,12 +564,13 @@ mod tests {
                 .is_ok(),
             "slot is still Pending"
         );
-        assert!(
-            handle
-                .wait()
-                .expect("this handle is never polled by another caller before wait")
-                .is_err()
-        );
+        match handle.wait() {
+            ClaimOutcome::Delivered(result) => assert!(result.is_err()),
+            ClaimOutcome::AlreadyClaimed => {
+                panic!("this handle is never polled by another caller before wait")
+            }
+            ClaimOutcome::OwnerGone => panic!("the owner never disconnects in this test"),
+        }
     }
 
     #[test]

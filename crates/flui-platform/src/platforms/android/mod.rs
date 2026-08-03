@@ -64,9 +64,10 @@ use crate::{
 /// #[no_mangle]
 /// fn android_main(app: AndroidApp) {
 ///     let platform = AndroidPlatform::new(app);
-///     platform.run(Box::new(|owner| {
+///     let _ = platform.run(Box::new(|owner| {
 ///         // Platform ready (first Resume) — create window and renderer
 ///         let _ = owner;
+///         Ok(())
 ///     }));
 /// }
 /// ```
@@ -176,7 +177,7 @@ impl Platform for AndroidPlatform {
         self.background_executor.clone()
     }
 
-    fn run(self: Box<Self>, on_ready: PlatformReadyCallback) {
+    fn run(self: Box<Self>, on_ready: PlatformReadyCallback) -> anyhow::Result<()> {
         tracing::info!("Starting Android platform event loop");
 
         // Converted once, up front: `on_ready` needs an `Arc<dyn Platform>`
@@ -187,6 +188,13 @@ impl Platform for AndroidPlatform {
 
         let mut on_ready = Some(on_ready);
         let mut resumed = false;
+        // Set when `on_ready` returns `Err`: a fallible bootstrap
+        // failure (window creation, GPU init, root-widget attach) has no
+        // other return path back to `run`'s caller. Stopping `running` and
+        // `continue`-ing to the loop's top-of-iteration check exits
+        // promptly instead of continuing to pump input/frame dispatch for
+        // an app that never finished bootstrapping.
+        let mut bootstrap_error: Option<anyhow::Error> = None;
         // Relaxed everywhere on `running`: it is a bare stop-signal with no
         // data published through it. The loop re-reads it every iteration,
         // the Destroy store happens on the loop thread itself, and a
@@ -295,7 +303,18 @@ impl Platform for AndroidPlatform {
                     let owner_platform = Arc::clone(&platform) as Arc<dyn Platform>;
                     let hooks: Arc<dyn OwnerHooks> =
                         Arc::new(DirectOwnerHooks::new(Arc::clone(&owner_platform)));
-                    ready(OwnerPlatform::new(owner_platform, hooks));
+                    if let Err(error) = ready(OwnerPlatform::new(owner_platform, hooks)) {
+                        tracing::error!(
+                            %error,
+                            "on_ready bootstrap failed; stopping the event loop"
+                        );
+                        bootstrap_error = Some(error);
+                        platform.running.store(false, Ordering::Relaxed);
+                        // Skip input/frame dispatch below for this
+                        // iteration -- the top-of-loop check exits on the
+                        // next pass.
+                        continue;
+                    }
                 }
             }
 
@@ -315,6 +334,11 @@ impl Platform for AndroidPlatform {
         // Invoke quit handlers
         platform.handlers.lock().invoke_quit();
         tracing::info!("Android platform event loop finished");
+
+        if let Some(error) = bootstrap_error {
+            return Err(error);
+        }
+        Ok(())
     }
 
     fn quit(&self) {

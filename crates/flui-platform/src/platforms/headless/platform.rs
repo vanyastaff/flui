@@ -97,7 +97,7 @@ impl Platform for HeadlessPlatform {
         self.with_state(|state| state.background_executor.clone())
     }
 
-    fn run(self: Box<Self>, on_ready: PlatformReadyCallback) {
+    fn run(self: Box<Self>, on_ready: PlatformReadyCallback) -> anyhow::Result<()> {
         tracing::info!("Starting headless platform (no event loop)");
 
         self.with_state(|state| {
@@ -112,10 +112,14 @@ impl Platform for HeadlessPlatform {
         let platform: Arc<dyn Platform> = Arc::new(*self);
         let hooks: Arc<dyn OwnerHooks> = Arc::new(DirectOwnerHooks::new(Arc::clone(&platform)));
 
-        // In headless mode, just call on_ready and return immediately.
-        on_ready(OwnerPlatform::new(platform, hooks));
+        // In headless mode, just call on_ready and return immediately. A
+        // fallible bootstrap has nowhere else to go on this backend since
+        // there is no loop to keep running with a half-built app --
+        // propagate straight out of `run`.
+        on_ready(OwnerPlatform::new(platform, hooks))?;
 
         tracing::info!("Headless platform ready");
+        Ok(())
     }
 
     fn quit(&self) {
