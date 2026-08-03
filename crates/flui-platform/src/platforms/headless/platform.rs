@@ -17,10 +17,12 @@ use crate::{
     data_transfer::{DataTransferSource, NullDataTransferSource},
     shared::{PlatformHandlers, WindowCallbacks},
     traits::{
-        Clipboard, ClipboardItem, CursorError, DesktopCapabilities, DispatchEventResult, Platform,
-        PlatformCapabilities, PlatformDisplay, PlatformExecutor, PlatformHaptics, PlatformInput,
-        PlatformReadyCallback, PlatformTextInput, PlatformWindow, WindowAppearance,
-        WindowBackgroundAppearance, WindowBounds, WindowEvent, WindowId, WindowOptions,
+        Clipboard, ClipboardItem, CursorError, DesktopCapabilities, DispatchEventResult,
+        OwnerPlatform, Platform, PlatformCapabilities, PlatformDisplay, PlatformExecutor,
+        PlatformHaptics, PlatformInput, PlatformReadyCallback, PlatformTextInput, PlatformWindow,
+        WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowEvent, WindowId,
+        WindowOptions,
+        owner::{DirectOwnerHooks, OwnerHooks},
     },
 };
 
@@ -102,8 +104,16 @@ impl Platform for HeadlessPlatform {
             state.is_running = true;
         });
 
-        // In headless mode, just call on_ready and return immediately
-        on_ready(&*self);
+        // No owner lane on this backend: every `OwnerPlatform::open_window`
+        // call creates directly and is always `Ready` (ADR-0039 slice 2).
+        // "For the loop's life" means "until the value is dropped" here,
+        // since `run` returns immediately (ADR-0039 §1) -- there is no
+        // later point on this thread to defer to.
+        let platform: Arc<dyn Platform> = Arc::new(*self);
+        let hooks: Arc<dyn OwnerHooks> = Arc::new(DirectOwnerHooks::new(Arc::clone(&platform)));
+
+        // In headless mode, just call on_ready and return immediately.
+        on_ready(OwnerPlatform::new(platform, hooks));
 
         tracing::info!("Headless platform ready");
     }

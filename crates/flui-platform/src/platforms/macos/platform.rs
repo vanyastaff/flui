@@ -18,9 +18,10 @@ use crate::{
     executor::BackgroundExecutor,
     shared::PlatformHandlers,
     traits::{
-        Clipboard, DesktopCapabilities, Platform, PlatformCapabilities, PlatformDisplay,
-        PlatformExecutor, PlatformReadyCallback, PlatformWindow, WindowEvent, WindowId,
-        WindowOptions,
+        Clipboard, DesktopCapabilities, OwnerPlatform, Platform, PlatformCapabilities,
+        PlatformDisplay, PlatformExecutor, PlatformReadyCallback, PlatformWindow, WindowEvent,
+        WindowId, WindowOptions,
+        owner::{DirectOwnerHooks, OwnerHooks},
     },
 };
 
@@ -164,22 +165,33 @@ impl Platform for MacOSPlatform {
         self.affinity.bind_current();
         debug_assert_appkit_main_thread("MacOSPlatform::run");
 
-        // Call the launch callback. This is an ordinary (safe) call — keep it
-        // outside the `unsafe` block below rather than widening that block's
-        // scope to cover code that needs no unsafe justification.
-        on_finish_launching(&*self);
+        // `app` is a Copy Objective-C object pointer: captured before `self`
+        // moves into the `Arc<dyn Platform>` the capability needs.
+        let app = self.app;
 
-        // SAFETY: runs on the main thread; `self.app` is the live
-        // NSApplication singleton.
+        // No owner lane on this backend: every `OwnerPlatform::open_window`
+        // call creates directly and is always `Ready` (ADR-0039 slice 2).
+        // `run` never returns on macOS (`terminate:` exits the process), so
+        // there is no loop-scoped TLS host to clear here either.
+        //
+        // Call the launch callback. This is an ordinary (safe) call — keep
+        // it outside the `unsafe` block below rather than widening that
+        // block's scope to cover code that needs no unsafe justification.
+        let platform: Arc<dyn Platform> = Arc::new(*self);
+        let hooks: Arc<dyn OwnerHooks> = Arc::new(DirectOwnerHooks::new(Arc::clone(&platform)));
+        on_finish_launching(OwnerPlatform::new(platform, hooks));
+
+        // SAFETY: runs on the main thread; `app` is the live NSApplication
+        // singleton.
         unsafe {
             // Activate the app (bring to foreground)
-            self.app.activateIgnoringOtherApps_(YES);
+            app.activateIgnoringOtherApps_(YES);
 
             // Run the NSApplication event loop. Window lifecycle events are
             // delivered via NSWindowDelegate; input events via the content
             // view's NSResponder chain.
             tracing::info!("Starting NSApplication event loop");
-            self.app.run();
+            app.run();
         }
     }
 

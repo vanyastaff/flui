@@ -12,7 +12,9 @@ use std::{
 use anyhow::Result;
 use flui_types::geometry::{Bounds, DevicePixels, Pixels, Point, Size};
 
-use super::{PlatformCapabilities, PlatformDisplay, PlatformWindow, window::WindowAppearance};
+use super::{
+    OwnerPlatform, PlatformCapabilities, PlatformDisplay, PlatformWindow, window::WindowAppearance,
+};
 use crate::{data_transfer::DataTransferSource, task::Task};
 
 /// Window creation options
@@ -136,10 +138,16 @@ impl WindowMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct WindowId(pub u64); // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
 
-/// [`Platform::run`]'s ready callback: invoked once, synchronously, with a
-/// platform handle. Named to keep `Box<dyn FnOnce(&dyn Platform)>` out of
-/// every call site's signature.
-pub type PlatformReadyCallback = Box<dyn FnOnce(&dyn Platform)>;
+/// [`Platform::run`]'s ready callback: invoked once, synchronously, with the
+/// owner-thread capability (ADR-0039). Named to keep
+/// `Box<dyn FnOnce(OwnerPlatform)>` out of every call site's signature.
+///
+/// Replaces the pre-ADR-0039 `Box<dyn FnOnce(&dyn Platform)>` shape: the
+/// callback now receives [`OwnerPlatform`] by value instead of a borrowed
+/// `&dyn Platform`, so it may stash the capability in owner-thread state for
+/// the rest of the loop's life (e.g. `flui-app`'s `OWNER_PLATFORM_HOST` TLS
+/// slot) rather than being limited to the callback's own stack frame.
+pub type PlatformReadyCallback = Box<dyn FnOnce(OwnerPlatform)>;
 
 /// Core platform abstraction trait
 ///
@@ -164,10 +172,21 @@ pub type PlatformReadyCallback = Box<dyn FnOnce(&dyn Platform)>;
 /// use flui_platform::{Platform, current_platform};
 ///
 /// let platform = current_platform();
-/// platform.run(Box::new(|platform| {
-///     println!("Platform ready: {}", platform.name());
+/// platform.run(Box::new(|owner| {
+///     println!("Platform ready: {}", owner.shared().name());
 /// }));
 /// ```
+///
+/// # De-facto crate seal (ADR-0039)
+///
+/// `run`'s `on_ready` callback receives an [`OwnerPlatform`] — a capability
+/// minted only through a `pub(crate)` constructor in this crate. An
+/// out-of-crate `impl Platform` can implement `run` but cannot construct the
+/// `OwnerPlatform` it must hand to `on_ready`, so this trait is de-facto
+/// sealed to backends living inside `flui-platform` even though nothing
+/// marks it `sealed` in the type system. An external-embedder minting seam
+/// is design work tracked separately (#560, `flui-platform` issue tracker);
+/// until then, new backends land in this crate.
 pub trait Platform: Send + Sync + 'static {
     // ==================== Core System ====================
 
@@ -182,15 +201,21 @@ pub trait Platform: Send + Sync + 'static {
     ///
     /// This function takes ownership of the platform and the current thread,
     /// running the platform's event loop. The `on_ready` callback is invoked
-    /// once the platform is initialized and ready to create windows, and is
-    /// passed a platform handle so it can call `open_window`, `on_quit`, and
-    /// other `&self` methods — the outer `Box<dyn Platform>` binding is no
-    /// longer reachable once `run` has taken ownership of it.
+    /// once, synchronously, on the thread that owns (or will own) the event
+    /// loop, and is passed an [`OwnerPlatform`] — the owner-thread capability
+    /// (ADR-0039) — by value: it can call `open_window` and every other
+    /// owner-affine operation, and reach the residual `Send + Sync` surface
+    /// via [`OwnerPlatform::shared`]. `on_ready` may stash the capability in
+    /// owner-thread state for the rest of the loop's life; the outer
+    /// `Box<dyn Platform>` binding is no longer reachable once `run` has
+    /// taken ownership of it.
     ///
     /// Takes `self: Box<Self>` because some backends (e.g. winit) require
     /// ownership of the event loop to run it.
     ///
-    /// This function only returns when the application quits.
+    /// This function only returns when the application quits (never, on
+    /// backends whose native run loop does not return control — e.g. macOS,
+    /// where `terminate:` exits the process).
     fn run(self: Box<Self>, on_ready: PlatformReadyCallback);
 
     /// Request the application to quit
