@@ -933,24 +933,6 @@ fn teardown_platform_realm() {
 }
 
 #[cfg(all(
-    not(target_os = "android"),
-    not(target_os = "ios"),
-    not(target_arch = "wasm32")
-))]
-fn queued_hot_reload_hook(
-    sender: super::ui_realm::UiCommandSender,
-) -> impl Fn() + Send + Sync + 'static {
-    move || {
-        if let Err(error) = sender.request_hot_reload(flui_hot_reload::HotReloadTier::HotReload) {
-            tracing::warn!(
-                ?error,
-                "ignoring hot-reload request for a dead or busy realm"
-            );
-        }
-    }
-}
-
-#[cfg(all(
     test,
     not(target_os = "android"),
     not(target_os = "ios"),
@@ -1202,9 +1184,12 @@ mod realm_dispatch_tests {
         assert!(*dropped.borrow());
     }
 
+    #[cfg(feature = "hot-reload")]
     #[test]
     fn old_registered_hot_reload_hook_cannot_touch_recreated_realm() {
         use flui_hot_reload::{register_request_rebuild, request_rebuild};
+
+        use crate::app::hot_reload::queued_hot_reload_hook;
 
         let runtime_a = super::super::ui_realm::UiRealm::for_test(AppBinding::instance());
         let sender_a = runtime_a.command_sender();
@@ -1696,25 +1681,19 @@ where
     use std::{cell::RefCell, rc::Rc, sync::Arc};
 
     use flui_engine::wgpu::Renderer;
-    use flui_hot_reload::{
-        HotReloadTier, RebuildHookRegistration, WorkerPollOutcome, WorkerReloadDriver, engine::env,
-        register_request_rebuild,
-    };
     use flui_platform::{
         Platform, WindowOptions,
         traits::{DispatchEventResult, PlatformInput},
     };
     use parking_lot::Mutex;
 
+    use super::hot_reload::{RebuildHookGuard, WorkerReload};
+
     tracing::info!("Starting desktop platform via flui-platform");
 
-    let worker_driver = config
-        .worker_plugin_path
-        .clone()
-        .or_else(|| std::env::var(env::WORKER_PLUGIN).ok().map(Into::into))
-        .map(WorkerReloadDriver::new);
-    let has_worker_driver = worker_driver.is_some();
-    let worker_driver = Arc::new(Mutex::new(worker_driver));
+    // Development reload, if this build has it: with the `hot-reload` feature
+    // off this value is inert and `flui-hot-reload` is not in the graph.
+    let worker_reload = WorkerReload::from_config(&config);
 
     // Platform init is an environment failure (missing display server, unsupported
     // OS, driver problem), not a `BUG:` invariant — no `bootstrap_error_slot` exists
@@ -1736,8 +1715,7 @@ where
     // stay alive until the event loop exits — but it (like the window and
     // every callback below) can only be created from inside `on_ready`, so
     // it is threaded back out through this cell instead of a plain local.
-    let rebuild_registration: Rc<RefCell<Option<RebuildHookRegistration>>> =
-        Rc::new(RefCell::new(None));
+    let rebuild_registration: Rc<RefCell<Option<RebuildHookGuard>>> = Rc::new(RefCell::new(None));
     let rebuild_registration_slot = Rc::clone(&rebuild_registration);
 
     // Bootstrap can fail fatally (GPU init, `UiRealm` construction, root
@@ -1762,9 +1740,8 @@ where
         platform: &dyn Platform,
         root: V,
         config: AppConfig,
-        has_worker_driver: bool,
-        worker_driver: Arc<Mutex<Option<WorkerReloadDriver>>>,
-        rebuild_registration_slot: Rc<RefCell<Option<RebuildHookRegistration>>>,
+        worker_reload: WorkerReload,
+        rebuild_registration_slot: Rc<RefCell<Option<RebuildHookGuard>>>,
         bootstrap_error_slot: Rc<RefCell<Option<anyhow::Error>>>,
     ) where
         V: View + StatelessView + Clone + 'static,
@@ -1905,8 +1882,8 @@ where
         );
         let hot_reload_sender = ui_realm.command_sender();
         let realm_dispatch = install_platform_realm(ui_realm);
-        *rebuild_registration_slot.borrow_mut() = has_worker_driver
-            .then(|| register_request_rebuild(queued_hot_reload_hook(hot_reload_sender)));
+        *rebuild_registration_slot.borrow_mut() =
+            Some(worker_reload.register_rebuild_hook(hot_reload_sender));
 
         // 4. Wrap renderer for callback sharing
         let renderer = Arc::new(Mutex::new(renderer));
@@ -1919,17 +1896,12 @@ where
 
         // 6. Register frame callback -> scheduler + AppBinding::render_frame()
         let renderer_frame = Arc::clone(&renderer);
-        let worker_driver_frame = Arc::clone(&worker_driver);
+        let worker_reload_frame = worker_reload.clone();
         window.on_request_frame(Box::new(move || {
         let renderer_frame = Arc::clone(&renderer_frame);
-        let worker_driver_frame = Arc::clone(&worker_driver_frame);
+        let worker_reload_frame = worker_reload_frame.clone();
         let _ = dispatch_platform_realm(realm_dispatch, RealmEvent::Frame(Box::new(move |realm| {
-            if let Some(ref mut driver) = *worker_driver_frame.lock()
-                && matches!(driver.poll(), WorkerPollOutcome::Reloaded { .. })
-            {
-                AppBinding::instance()
-                    .perform_hot_reload_entered(realm, HotReloadTier::HotReload);
-            }
+            worker_reload_frame.poll_and_apply(realm);
 
             let binding = AppBinding::instance();
             let scheduler = Scheduler::instance();
@@ -2172,8 +2144,7 @@ where
             platform,
             root,
             config,
-            has_worker_driver,
-            worker_driver,
+            worker_reload,
             rebuild_registration_slot,
             bootstrap_error_slot,
         );
@@ -2254,12 +2225,13 @@ where
     use std::{path::PathBuf, sync::Arc};
 
     use flui_engine::wgpu::Renderer;
-    use flui_hot_reload::HotReloadDriver;
     use flui_platform::{
         AndroidPlatform, Platform, WindowOptions,
         traits::{DispatchEventResult, PlatformInput},
     };
     use parking_lot::Mutex;
+
+    use super::hot_reload::ScenePlugin;
 
     tracing::info!("Starting Android platform via flui-platform");
 
@@ -2269,7 +2241,8 @@ where
         .map(|p| p.join("libflui_scene.so"))
         .unwrap_or_else(|| PathBuf::from("/data/local/tmp/libflui_scene.so"));
 
-    let hot_reload = Arc::new(Mutex::new(HotReloadDriver::new(&plugin_path)));
+    // Inert unless this build carries the `hot-reload` feature.
+    let hot_reload = ScenePlugin::new(&plugin_path);
 
     let platform: Box<dyn Platform> = Box::new(AndroidPlatform::new(app));
 
@@ -2345,10 +2318,10 @@ where
 
     // 6. Register frame callback -- with hot-reload plugin override
     let renderer_frame = Arc::clone(&renderer);
-    let hot_reload_frame = Arc::clone(&hot_reload);
+    let hot_reload_frame = hot_reload.clone();
     window.on_request_frame(Box::new(move || {
         let renderer_frame = Arc::clone(&renderer_frame);
-        let hot_reload_frame = Arc::clone(&hot_reload_frame);
+        let hot_reload_frame = hot_reload_frame.clone();
         let _ = dispatch_platform_realm(
             realm_dispatch,
             RealmEvent::Frame(Box::new(move |realm| {
@@ -2363,31 +2336,14 @@ where
 
                 let mut r = renderer_frame.lock();
                 let (w, h) = r.size();
-                let mut hr = hot_reload_frame.lock();
 
-                // Poll for plugin updates (mtime check, auto-reload).
-                hr.poll(w as f32, h as f32);
-
-                // If a scene plugin is active it owns this presentation frame,
-                // but the callback still executes inside the realm entry scope.
-                // SAFETY: `HotReloadDriver::build_scene` reclaims a Box the plugin
-                // allocated, so host and plugin must agree on `Scene`'s layout and
-                // allocator, and the scene must be dropped before the library is
-                // unloaded. Both hold here: the plugin is built from this workspace
-                // by the same toolchain, and `scene` is consumed by `render_scene`
-                // and dropped inside this block, while `hr` (owning the library)
-                // outlives it. See that method's `# Safety` for why this cannot be
-                // a safe call.
-                #[allow(unsafe_code)]
-                let built = unsafe { hr.build_scene(w as f32, h as f32) };
-                if let Some(scene) = built {
-                    drop(hr);
-                    if let Err(e) = r.render_scene(&scene) {
-                        tracing::error!("Plugin render failed: {:?}", e);
-                    }
+                // If a scene plugin is live it owns this presentation frame,
+                // but the callback still executes inside the realm entry
+                // scope. Always `false` in a build without the `hot-reload`
+                // feature.
+                if hot_reload_frame.try_render_frame(&mut *r, w as f32, h as f32) {
                     return;
                 }
-                drop(hr);
                 drop(r);
 
                 let binding = AppBinding::instance();

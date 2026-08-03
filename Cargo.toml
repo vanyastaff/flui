@@ -25,7 +25,7 @@ members = [
     "crates/flui-view",          # View/Element tree (ACTIVE)
     "crates/flui-widgets",       # User-facing widget catalog (ACTIVE — Core.1 slice)
     "crates/flui-localizations", # Global (multi-language) localized resources (ACTIVE — Catalog.1 slice)
-    "crates/flui-binding",       # Headless deterministic frame driver (pump_frame) (ACTIVE — Phase 1)
+    "crates/flui-testing",       # Test-support: headless deterministic frame driver (pump_frame) (ACTIVE)
     "crates/flui-material",      # Material Design theming foundation — ColorScheme/TextTheme/ThemeData/Theme (ACTIVE — Catalog.1 slice)
     "crates/flui-cupertino",     # iOS-style theming foundation — CupertinoDynamicColor/CupertinoTextTheme/CupertinoTheme/CupertinoButton (ACTIVE — Catalog.1 slice)
 
@@ -98,7 +98,7 @@ default-members = [
     "crates/flui-view",
     "crates/flui-widgets",
     "crates/flui-localizations",
-    "crates/flui-binding",
+    "crates/flui-testing",
     "crates/flui-material",
     "crates/flui-cupertino",
     "crates/flui-app",
@@ -156,9 +156,11 @@ flui-macros = { path = "crates/flui-macros", version = "0.2.0" }
 # OBJECT CATALOG — sits above flui-rendering (depends on it), below flui-view/app
 flui-objects = { path = "crates/flui-objects", version = "0.2.0" }
 
-# HEADLESS FRAME DRIVER — deterministic `pump_frame(dt)` over the gesture arena +
-# virtual clock; sits above flui-widgets, below flui-app.
-flui-binding = { path = "crates/flui-binding", version = "0.2.0" }
+# TEST SUPPORT — the deterministic headless frame driver (`pump_frame(dt)` over
+# the gesture arena + virtual clock) and the home for future test harness APIs.
+# Sits above flui-widgets, below flui-app, and is only ever a *dev*-dependency of
+# a shipped library: a normal edge would link the test driver into production.
+flui-testing = { path = "crates/flui-testing", version = "0.2.0" }
 
 # ERROR HANDLING - Used everywhere
 thiserror = "2.0"
@@ -388,12 +390,16 @@ workspace = true
 
 # The facade surface (src/lib.rs): the layers an application author consumes.
 # Lower layers (rendering/painting/engine/platform) stay dev-deps — examples
-# reach them directly, app authors go through the widget layer. The two
-# design systems (flui-material/flui-cupertino) are regular dependencies,
-# not dev-deps: `src/lib.rs` re-exports them as `flui::material`/
-# `flui::cupertino`, and a `[dev-dependencies]` crate is unavailable to the
-# lib target itself. `flui` is on ADR-0028's design-system-dependent
-# allowlist alongside `flui-app` — see `scripts/check-workspace-inventory.sh`.
+# reach them directly, app authors go through the widget layer.
+#
+# The catalogs (flui-material/flui-cupertino) and the global localization
+# implementation (flui-localizations) are *optional* normal dependencies, not
+# dev-deps: `src/lib.rs` re-exports them as `flui::material` /
+# `flui::cupertino` / `flui::localizations`, and a `[dev-dependencies]` crate
+# is unavailable to the lib target itself. Optional means an author who wants
+# neither catalog pays for neither — see `[features]` below. `flui` is on
+# ADR-0028's design-system-dependent allowlist alongside `flui-app` — see
+# `scripts/check-workspace-inventory.sh`.
 [dependencies]
 flui-types = { path = "crates/flui-types", version = "0.2.0" }
 flui-geometry = { path = "crates/flui-geometry", version = "0.2.0" }
@@ -402,8 +408,9 @@ flui-view = { path = "crates/flui-view", version = "0.2.0" }
 flui-widgets = { path = "crates/flui-widgets", version = "0.2.0" }
 flui-animation = { path = "crates/flui-animation", version = "0.2.0" }
 flui-app = { path = "crates/flui-app", version = "0.2.0" }
-flui-material = { path = "crates/flui-material", version = "0.2.0" }
-flui-cupertino = { path = "crates/flui-cupertino", version = "0.2.0" }
+flui-material = { path = "crates/flui-material", version = "0.2.0", optional = true }
+flui-cupertino = { path = "crates/flui-cupertino", version = "0.2.0", optional = true }
+flui-localizations = { path = "crates/flui-localizations", version = "0.2.0", optional = true }
 
 [dev-dependencies]
 # === Foundation Layer ===
@@ -429,8 +436,8 @@ flui-platform = { path = "crates/flui-platform", version = "0.2.0" }
 # === Hot-Reload (for examples) ===
 flui-hot-reload = { path = "crates/flui-hot-reload", version = "0.2.0" }
 
-# === Headless Binding (for the vertical_slice_demo acceptance test) ===
-flui-binding = { path = "crates/flui-binding", version = "0.2.0" }
+# === Test support (for the vertical_slice_demo acceptance test) ===
+flui-testing = { path = "crates/flui-testing", version = "0.2.0" }
 parking_lot.workspace = true
 
 # NOTE: flui-material / flui-cupertino moved to [dependencies] above — the
@@ -453,13 +460,45 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 
 [features]
-default = []
+# Material-first by default: `cargo add flui` keeps working exactly as the
+# README and the crate-level docs teach it. An author who wants a different
+# catalog — or none — turns the default off and selects explicitly. The base
+# widget surface (`flui::widgets`, `flui::prelude` minus the Material glob,
+# `flui::run_app`) needs no feature at all.
+default = ["material"]
+
+# === Catalogs and localization ===
+# Each gates both the Cargo edge and the matching `flui::<module>` re-export.
+# There is deliberately no empty placeholder module when a feature is off:
+# absent means absent, so a missing feature is a name-resolution error at the
+# import site rather than a mystery empty namespace.
+material = ["dep:flui-material"]
+cupertino = ["dep:flui-cupertino"]
+# `flui::localizations` — the global (multi-language) implementations of the
+# catalogs' localization contracts. The catalogs own the contracts and never
+# depend back on this package (docs/workspace-layers.toml `forbidden_edge`);
+# the facade re-exporting it does not change that direction. Future Material
+# and Cupertino implementations inside flui-localizations must use independent
+# optional features, so enabling one catalog's translations never compiles the
+# other catalog accidentally.
+localizations = ["dep:flui-localizations"]
+
+# Development-only reload machinery, off in an ordinary production graph. This
+# forwards to `flui-app`'s own feature, which is what actually makes the
+# `flui-hot-reload` edge appear; `cargo tree -p flui-app` shows no
+# `flui-hot-reload` without it. Desktop and Android runners consume the
+# capability; unsupported runners still compile with the feature enabled so
+# Cargo feature unification cannot turn a cross-target build into an error.
+hot-reload = ["flui-app/hot-reload"]
 
 # Golden-image regression tests (`tests/golden_screenshots.rs`). Off by default:
 # they need a GPU and the committed goldens are reference-machine specific, so
 # the normal `cargo nextest` run must not attempt them. Run with
 # `--features golden` on a consistent GPU; regenerate with `UPDATE_GOLDENS=1`.
-golden = []
+# It enables both catalogs because the golden suite renders the Material and
+# Cupertino demo trees — a `golden` build without them would silently cover
+# less than its name claims.
+golden = ["material", "cupertino"]
 
 # === Core Features ===
 # Serialization support (flui-types only today; other crates' serde features
@@ -471,6 +510,47 @@ serde = ["flui-types/serde"]
 # full — all referencing crates or features that do not exist (`flui_core`,
 # `flui-engine/devtools`). A capability that does not exist gets no feature
 # stub here; add the feature in the same change that implements it.
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Feature-gated targets
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# Examples and tests are otherwise auto-discovered; these entries exist only to
+# attach `required-features`. Without them a `--no-default-features` build would
+# still try to compile the Material demo and fail — the exact false signal the
+# isolated feature builds exist to catch.
+
+[[example]]
+name = "material_demo"
+path = "examples/material_demo/main.rs"
+required-features = ["material"]
+
+[[example]]
+name = "cupertino_demo"
+path = "examples/cupertino_demo/main.rs"
+required-features = ["cupertino"]
+
+# Renders any demo tree offscreen to a PNG; it `#[path]`-includes both catalog
+# demos, so it needs both.
+[[example]]
+name = "screenshot"
+path = "examples/screenshot.rs"
+required-features = ["material", "cupertino"]
+
+[[test]]
+name = "material_demo"
+path = "tests/material_demo.rs"
+required-features = ["material"]
+
+[[test]]
+name = "cupertino_demo"
+path = "tests/cupertino_demo.rs"
+required-features = ["cupertino"]
+
+[[test]]
+name = "golden_screenshots"
+path = "tests/golden_screenshots.rs"
+required-features = ["golden"]
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Build Profiles

@@ -12,7 +12,6 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
-use flui_binding::HeadlessBinding;
 use flui_foundation::ElementId;
 use flui_interaction::PointerId;
 use flui_interaction::events::{
@@ -20,6 +19,7 @@ use flui_interaction::events::{
 };
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::pipeline::PipelineOwner;
+use flui_testing::HeadlessBinding;
 use flui_types::geometry::{Bounds, Pixels, px};
 use flui_types::{Offset, Size};
 use flui_view::View;

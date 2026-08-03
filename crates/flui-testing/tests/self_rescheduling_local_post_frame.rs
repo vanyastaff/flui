@@ -22,8 +22,8 @@ use std::cell::Cell;
 use std::rc::Rc;
 use std::time::Duration;
 
-use flui_binding::HeadlessBinding;
 use flui_scheduler::PostFrameHandle;
+use flui_testing::HeadlessBinding;
 use flui_view::BuildOwner;
 
 /// Schedule one tick that increments `fire_count` and immediately reschedules

@@ -566,6 +566,7 @@ impl AppBinding {
     ///
     // The desktop runner (`cfg(not(target_arch = "wasm32"))`) is the only
     // non-test consumer, so the wasm lib check sees this as dead.
+    #[cfg(feature = "hot-reload")]
     #[cfg_attr(
         target_arch = "wasm32",
         expect(
@@ -2391,7 +2392,7 @@ mod tests {
     /// pipeline committed **in the same frame**.
     ///
     /// This is the production twin of
-    /// `flui-binding`'s `post_frame_callback_runs_after_layout_in_the_same_pumped_frame`.
+    /// `flui-testing`'s `post_frame_callback_runs_after_layout_in_the_same_pumped_frame`.
     /// The runner drains the post-frame queue
     /// `render_frame`, so the callback saw the previous frame's layout.
     ///
@@ -2623,7 +2624,7 @@ mod tests {
     /// whose element and render node do not exist, on every pass, before
     /// anything is built; that prune is the observable side effect.
     ///
-    /// `flui-binding` carries the mirror test for `HeadlessBinding::pump_frame`.
+    /// `flui-testing` carries the mirror test for `HeadlessBinding::pump_frame`.
     /// If either frame path stopped calling the shared helper, exactly one of
     /// the two would fail — which is the headless↔production divergence this
     /// pair exists to catch.

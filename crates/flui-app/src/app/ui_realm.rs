@@ -125,6 +125,7 @@ pub(crate) enum UiCommand {
     /// Apply a hot-reload reassemble on the owner at the next Idle drain.
     // Only constructed by `request_hot_reload`, whose consumer is the
     // desktop runner — absent from the wasm lib check.
+    #[cfg(feature = "hot-reload")]
     #[cfg_attr(
         target_arch = "wasm32",
         expect(
@@ -142,6 +143,7 @@ pub(crate) enum UiCommand {
 impl std::fmt::Debug for UiCommand {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            #[cfg(feature = "hot-reload")]
             UiCommand::HotReload(tier) => {
                 f.debug_tuple("UiCommand::HotReload").field(tier).finish()
             }
@@ -210,6 +212,7 @@ impl UiCommandSender {
     /// normal enqueue-and-wake contract pumps that drain.
     // The desktop runner (`cfg(not(target_arch = "wasm32"))`) is the only
     // non-test consumer, so the wasm lib check sees this as dead.
+    #[cfg(feature = "hot-reload")]
     #[cfg_attr(
         target_arch = "wasm32",
         expect(
@@ -614,6 +617,7 @@ impl UiRealm {
     }
 
     /// Reassemble this realm's element tree and exact presentation pipeline.
+    #[cfg(feature = "hot-reload")]
     #[must_use]
     pub(crate) fn apply_hot_reload(&self, tier: flui_hot_reload::HotReloadTier) -> bool {
         self.presentation.apply_hot_reload(&self.widgets, tier)
@@ -656,6 +660,7 @@ impl UiRealm {
                 break;
             };
             match command {
+                #[cfg(feature = "hot-reload")]
                 UiCommand::HotReload(tier) => {
                     if self.presentation.apply_hot_reload(&self.widgets, tier) {
                         self.redraw_pending.store(true, Ordering::Release);
@@ -967,14 +972,14 @@ mod tests {
         let _claim = REALM_TEST_LOCK.lock();
         let runtime = new_runtime_with_capacity(2, noop_wake()).expect("runtime with tiny inbox");
         let sender = runtime.command_sender();
-        sender
-            .request_hot_reload(flui_hot_reload::HotReloadTier::FullRestart)
-            .expect("first fits");
-        sender
-            .request_hot_reload(flui_hot_reload::HotReloadTier::FullRestart)
-            .expect("second fits");
+        let navigator = NavigatorHandle::new();
+        navigator.seed_initial(test_route("/"));
+        let filler = || NavigatorCommand::maybe_pop(navigator.command_target());
+
+        sender.send_navigation(filler()).expect("first fits");
+        sender.send_navigation(filler()).expect("second fits");
         let overflow = sender
-            .request_hot_reload(flui_hot_reload::HotReloadTier::FullRestart)
+            .send_navigation(filler())
             .expect_err("third command is rejected");
         assert!(matches!(
             overflow,
@@ -982,9 +987,7 @@ mod tests {
         ));
         // Draining frees the inbox again.
         let _ = runtime.drain_commands();
-        sender
-            .request_hot_reload(flui_hot_reload::HotReloadTier::FullRestart)
-            .expect("room after drain");
+        sender.send_navigation(filler()).expect("room after drain");
     }
 
     #[test]
@@ -993,8 +996,10 @@ mod tests {
         let runtime = new_runtime(noop_wake()).expect("runtime");
         let sender = runtime.command_sender();
         drop(runtime);
+        let navigator = NavigatorHandle::new();
+        navigator.seed_initial(test_route("/"));
         assert!(matches!(
-            sender.request_hot_reload(flui_hot_reload::HotReloadTier::FullRestart),
+            sender.send_navigation(NavigatorCommand::maybe_pop(navigator.command_target())),
             Err(CommandSendError::OwnerGone { .. })
         ));
     }
@@ -1004,8 +1009,12 @@ mod tests {
         let _claim = REALM_TEST_LOCK.lock();
         let runtime = new_runtime_with_capacity(1, noop_wake()).expect("runtime");
         let sender = runtime.command_sender();
+        let filler_navigator = NavigatorHandle::new();
+        filler_navigator.seed_initial(test_route("/"));
         sender
-            .request_hot_reload(flui_hot_reload::HotReloadTier::FullRestart)
+            .send_navigation(NavigatorCommand::maybe_pop(
+                filler_navigator.command_target(),
+            ))
             .expect("fills inbox");
 
         let navigator = NavigatorHandle::new();
@@ -1056,12 +1065,11 @@ mod tests {
         let runtime = new_runtime(wake).expect("runtime");
         let sender = runtime.command_sender();
 
-        sender
-            .request_hot_reload(flui_hot_reload::HotReloadTier::FullRestart)
-            .expect("inbox has room");
-
         let navigator = NavigatorHandle::new();
         navigator.seed_initial(test_route("/"));
+        sender
+            .send_navigation(NavigatorCommand::maybe_pop(navigator.command_target()))
+            .expect("inbox has room");
         sender
             .send_navigation(NavigatorCommand::maybe_pop(navigator.command_target()))
             .expect("inbox has room");
@@ -1080,11 +1088,13 @@ mod tests {
     /// its own process; `cargo test` runs them on threads in one process,
     /// where two tests each asserting on the singleton's `needs_redraw` flag
     /// could interleave.
+    #[cfg(feature = "hot-reload")]
     static SINGLETON_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     /// A hot-reload command mutates the exact presentation owned by this
     /// realm and arms the realm's own redraw request. It never resolves a
     /// process singleton or another app instance.
+    #[cfg(feature = "hot-reload")]
     #[test]
     fn hot_reload_command_applies_to_the_owned_presentation() {
         let _serialized = SINGLETON_TEST_LOCK
@@ -1120,6 +1130,7 @@ mod tests {
 
     /// Full restart is owned by the process supervisor, so the presentation
     /// records the command as handled without arming a UI redraw.
+    #[cfg(feature = "hot-reload")]
     #[test]
     fn full_restart_command_does_not_arm_a_presentation_redraw() {
         let _claim = REALM_TEST_LOCK.lock();

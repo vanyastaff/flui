@@ -69,8 +69,8 @@ These crates compose the rendering and platform substrate largely without knowin
 | Crate | Status | Purpose |
 |-------|--------|---------|
 | `flui-widgets` | ✅ ACTIVE | User-facing Flutter-style widget catalog (configuration objects over `flui-objects`); owns the `Localizations`/`Directionality`/`WidgetsLocalizations` ambient-theming and localization substrate |
-| `flui-binding` | ✅ ACTIVE | Deterministic non-singleton headless frame driver: `HeadlessBinding::pump_frame(dt)` advances a virtual `ManualClock` and polls clock-bound gesture-arena deadlines — sleep-free time-based gesture tests (long-press, double-tap). Animation-controller ticks (Phase 3) and tree-rebuild integration (Phase 1b) are deferred. **Renamed to `flui-testing`** by issue [#569](https://github.com/vanyastaff/flui/issues/569), before Runtime.1's conformance harness makes the package name a public testing contract. |
-| `flui-hot-reload` | ✅ ACTIVE | Two-layer hot-reload: runtime `HotReloadDriver` (layer 2, dlopen) + optional `SourceWatcher` (layer 1, `source-watch` feature). See [hot-reload.md](hot-reload.md). Becomes feature-gated (removable) per issue [#569](https://github.com/vanyastaff/flui/issues/569). |
+| `flui-testing` | ✅ ACTIVE | Deterministic non-singleton headless frame driver: `HeadlessBinding::pump_frame(dt)` advances a virtual `ManualClock` and polls clock-bound gesture-arena deadlines — sleep-free time-based gesture tests (long-press, double-tap). It is the workspace's **test-support** package: `WidgetTester`, virtual time, fake platform capabilities, deterministic replay, and golden helpers belong here as they land. Runtime and framework crates take *development* edges into it only. |
+| `flui-hot-reload` | ✅ ACTIVE | Two-layer hot-reload: runtime `HotReloadDriver` (layer 2, dlopen) + optional `SourceWatcher` (layer 1, `source-watch` feature). See [hot-reload.md](hot-reload.md). It is an **optional** dependency of `flui-app` (feature `hot-reload`, off by default) and of the facade (feature `hot-reload`), so an ordinary production graph does not contain it. |
 | `flui-build` | ✅ ACTIVE | Async cross-platform build pipeline (`PlatformBuilder` typestate) |
 
 ## Layer 7 — Design systems
@@ -92,7 +92,7 @@ Neither design system may depend on `flui-localizations` — that direction is a
 
 | Crate | Status | Purpose |
 |-------|--------|---------|
-| `flui-app` | ✅ ACTIVE (migration) | App runner, root widget, application lifecycle. The **private composition root** for runtime ownership during Runtime.1 — a `flui-runtime` crate is not extracted from it until two entry points prove the boundary ([ADR-0041](adr/ADR-0041-workspace-topology-contract.md)). |
+| `flui-app` | ✅ ACTIVE (migration) | App runner, root widget, application lifecycle. The **private composition root** for runtime ownership during Runtime.1 — a `flui-runtime` crate is not extracted from it until two entry points prove the boundary ([ADR-0041](adr/ADR-0041-workspace-topology-contract.md)). Owns **no design tokens** ([ADR-0042](adr/ADR-0042-theming-ownership.md)); hot reload is behind its optional `hot-reload` feature. |
 | `flui-cli` | ✅ ACTIVE | CLI tooling (`flui run` hot-reload orchestration, Android scene deploy). Depends on `flui-devtools` inside this layer. |
 | `flui-devtools` | ✅ ACTIVE (partial) | Profiler; `HotReloader` delegates to `flui-hot-reload` |
 
@@ -100,7 +100,7 @@ Neither design system may depend on `flui-localizations` — that direction is a
 
 | Crate | Status | Purpose |
 |-------|--------|---------|
-| `flui` | ✅ ACTIVE | The root package / app-author facade. Compiles both design systems unconditionally today; feature-selection is issue [#569](https://github.com/vanyastaff/flui/issues/569). |
+| `flui` | ✅ ACTIVE | The root package / app-author facade. Feature-selective: `material` (default), `cupertino`, `localizations`, `hot-reload`. A module whose feature is off is absent, not empty. Every supported combination is compiled in isolation by `just facade-combos` (run by the CI feature-matrix job), so a combination cannot pass through workspace feature unification. |
 
 ## Examples and Tools
 

@@ -172,7 +172,7 @@ This is a **new-crate-vs-in-place** fork (escalation-worthy). Recommendation:
 
 Crate placement — pick one (recommend **B1**, fall back to **B2**):
 
-- **B1 — a new lightweight `flui-binding` crate** between `flui-widgets` and `flui-app`,
+- **B1 — a new lightweight `flui-testing` crate** between `flui-widgets` and `flui-app`,
   depending on `flui-{scheduler,animation,interaction,view,rendering}`. Pro: a real reusable
   home that can grow toward a production headless/embedder binding; keeps flui-widgets'
   surface clean. Con: a new crate (weigh against the small-crate cost — justified here by a
@@ -477,7 +477,7 @@ Phase 3; independent.)*
       source swap; Phase 1–3 = view/rendering/animation orchestration. No hidden cross-domain
       coupling beyond the clock primitive.
 - [x] **Struct split / new crate justified.** No struct split. The only new-crate question is
-      the binding's home (§2, `flui-binding` vs `flui-app testing`) — flagged for confirmation;
+      the binding's home (§2, `flui-testing` vs `flui-app testing`) — flagged for confirmation;
       Phase 0–1 do not block on it.
 - [x] **Forward view (2-year / 3-extension).** The clock generalizes to double-tap, force-press,
       and any future deadline recognizer (read `self.state.now()`); the binding generalizes to a
@@ -491,7 +491,7 @@ Phase 3; independent.)*
 **Verdict: COMPLETE (design).** Recommendation: proceed Phase 0 → 1 → 3 (Phase 2 parallelizable).
 
 ### Delegation plan
-- **chief-architect** (this doc) → confirm the §2 crate-placement fork (`flui-binding` new
+- **chief-architect** (this doc) → confirm the §2 crate-placement fork (`flui-testing` new
   crate vs `flui-app` `testing` feature) with the user before Phase 1 promotes the binding out
   of `tests/common`.
 - **Phase 0** → `cli-ux-lead` is not the owner; route the interaction-crate change to the

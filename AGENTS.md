@@ -179,7 +179,11 @@ workflow file does *not* tell you, and what you will misjudge without it:
   while stabilizing.
 - **feature-matrix exists because workspace feature unification hides broken per-crate wiring.** A
   crate whose features only resolve thanks to a sibling's dependency passes a normal build and
-  fails here.
+  fails here. The same job also runs `just facade-combos`, which compiles every supported `flui`
+  facade feature combination (`material` / `cupertino` / `localizations` / `hot-reload` / `golden`)
+  **on its own**, against the `flui` package alone — a `--workspace` build is not evidence about
+  the facade surface — and asserts via `cargo tree` that `flui-hot-reload` is *absent* from
+  `flui-app`'s default normal graph rather than merely unused by it.
 - **wasm-check excludes 7 crates** — the mio/uuid CLI stack and the dlopen-based hot-reload path,
   none of which can work on wasm32.
 - **gpu-test runs the readback suite on WARP** (windows-latest) and is merge-blocking. On an oracle

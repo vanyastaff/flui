@@ -1,8 +1,31 @@
 //! Direct rendering mode — bypasses the widget tree (flui-view/flui-rendering)
-//! and renders through flui-engine directly.
+//! and renders through flui-engine directly. The caller provides a closure
+//! that builds a `Scene` each frame via `SceneBuilder`.
 //!
-//! This is the simplest way to get pixels on screen with FLUI. The user
-//! provides a closure that builds a `Scene` each frame via `SceneBuilder`.
+//! # Status: experimental, direct-engine only
+//!
+//! This is **not** a supported cross-platform application entry point, and it
+//! is not a smaller `run_app`. It is a direct-engine escape hatch for scene
+//! and shader work, with three standing limitations:
+//!
+//! - **It does not run on the winit backend**, which is what Linux uses today.
+//!   [`run_direct`] opens its window before starting the event loop, and winit
+//!   cannot create a window outside a running loop — so the call fails fast
+//!   with an error instead of opening anything. The fix is the same
+//!   `on_ready`-driven reorder `run_desktop` already received, required by
+//!   [ADR-0039](https://github.com/vanyastaff/flui/blob/main/docs/adr/ADR-0039-event-loop-affinity-capability.md)'s
+//!   slice 2 ("pre-run flows migrate into `on_ready`", which names this
+//!   function). It is deliberately not attempted here: an event-loop
+//!   architecture change does not belong in a package-surface cleanup.
+//! - **There is no input handling.** The input callback is a no-op stub; a
+//!   caller that needs input drives it from inside `render_fn` via its own
+//!   state.
+//! - **There is no damage tracking**, no widget tree, no layout, no hit test,
+//!   and no semantics — every frame is a full repaint of a caller-built scene.
+//!
+//! Native (non-winit) Windows and macOS backends are unaffected by the first
+//! limitation, and `examples/direct_render.rs` and `examples/aa_showcase.rs`
+//! run there.
 //!
 //! # Example
 //!
@@ -46,6 +69,11 @@ use super::AppConfig;
 /// via `SceneBuilder`. This bypasses the entire widget/element/render
 /// tree machinery (flui-view, flui-rendering) for direct engine access.
 ///
+/// **Experimental / direct-engine only.** This is not a supported
+/// cross-platform application entry point — see the module docs for the three
+/// standing limitations, including that it does not work on the winit backend.
+/// Use [`run_app`](crate::run_app) for applications.
+///
 /// # Arguments
 ///
 /// * `config` - Application configuration (title, size, etc.)
@@ -61,9 +89,9 @@ use super::AppConfig;
 /// # Platform Support
 ///
 /// Dead on arrival on the winit backend (Linux) — see the "Open window" note
-/// in the body for why. Native (non-winit) Windows/macOS backends are
-/// unaffected. Uses `flui_platform::current_platform()` for platform
-/// selection.
+/// in the body for why, and the module docs for the tracked fix. Native
+/// (non-winit) Windows/macOS backends are unaffected. Uses
+/// `flui_platform::current_platform()` for platform selection.
 pub fn run_direct(
     config: AppConfig,
     render_fn: impl FnMut(&mut SceneBuilder<'_>, f32, f32) + Send + 'static,
@@ -89,10 +117,11 @@ pub fn run_direct(
     // longer hangs — `WinitPlatform::open_window` now fails fast with a
     // clear error when called before the event loop is running — but it
     // still can't work: this `?` will bubble that error out of `run_direct`
-    // immediately, before any window ever opens. Known, deliberately
-    // out-of-scope follow-up: `run_direct` needs the same on_ready-driven
-    // reorder `run_desktop` received (see `runner.rs`'s `run_desktop`), not
-    // attempted here.
+    // immediately, before any window ever opens. The fix is the on_ready-driven
+    // reorder `run_desktop` already received (see `runner.rs`'s
+    // `bootstrap_desktop`), which ADR-0039's slice 2 requires for exactly this
+    // function. Not attempted here — an event-loop architecture change is not
+    // part of a package-surface cleanup.
     let options: WindowOptions = (&config).into();
     let window = platform
         .open_window(options)

@@ -262,21 +262,26 @@ disposition = "keep"
 note = "Author-facing widget catalog; owns the Localizations/Directionality/WidgetsLocalizations contracts."
 
 [[member]]
-name = "flui-binding"
+name = "flui-testing"
 layer = 6
-disposition = "rename"
+disposition = "keep"
 note = """
-Deterministic headless frame driver. Renamed to `flui-testing` before Runtime.1 \
-grows its conformance harness API (issue #569): `binding` collides conceptually \
-with the transitional `AppBinding` graph Runtime.1 removes, and the package name \
-becomes a public testing contract once conformance tests import it.\
+Test-support crate: the deterministic headless frame driver \
+(`HeadlessBinding::pump_frame`) plus the future home for `WidgetTester`, virtual \
+time, fake platform capabilities, deterministic replay, and golden helpers. The \
+package was renamed during the Runtime.1 preflight: the old name collided \
+conceptually with the transitional `AppBinding` graph Runtime.1 removes, and the \
+package name becomes a public testing contract once conformance tests import it. \
+Runtime and \
+framework crates take *development* edges into it only — a normal edge from a \
+shipped library would link the test driver into production.\
 """
 
 [[member]]
 name = "flui-hot-reload"
 layer = 6
 disposition = "optionalize"
-note = "Development capability; must be removable from the facade and from flui-app (issue #569)."
+note = "Development capability; optional in both flui-app and the facade, and absent from their ordinary production graphs."
 
 [[member]]
 name = "flui-build"
@@ -306,7 +311,9 @@ translations land. It is the *implementation* package: contracts and default \
 English implementations belong to the catalogs that define them, and this crate \
 depends on those catalogs — never the reverse. Sits above the design systems \
 because `GlobalMaterialLocalizations`/`GlobalCupertinoLocalizations` will \
-implement Material's and Cupertino's contracts (see projected_edge).\
+implement Material's and Cupertino's contracts (see projected_edge). Those \
+future catalog edges must be independently optional: selecting Material \
+translations must not compile Cupertino, or vice versa.\
 """
 
 [[member]]
@@ -314,9 +321,10 @@ name = "flui-app"
 layer = 9
 disposition = "narrow"
 note = """
-The private composition root for runtime ownership during Runtime.1. Before the \
-milestone: make hot reload optional and remove parked theme/direct-render \
-surfaces with no supported runtime path (issue #569). `flui-runtime` is \
+The private composition root for runtime ownership during Runtime.1. Its \
+preflight made hot reload optional, removed the parked theme surface under \
+ADR-0042, and classified `run_direct` as an experimental direct-engine escape \
+hatch whose event-loop repair belongs to ADR-0039. `flui-runtime` is \
 extracted only under the gate in [[planned]], not speculatively.\
 """
 
@@ -337,10 +345,11 @@ name = "flui"
 layer = 10
 disposition = "optionalize"
 note = """
-The facade. Compiles both design systems unconditionally today; must become \
-feature-selective so unused Cupertino, localization data, and hot-reload \
-machinery are removable (issue #569). Manifest is the workspace root \
-`Cargo.toml`, not a `crates/` member.\
+The facade. Material is the documented default; Cupertino, global localization \
+implementations, and hot reload are independently selectable so unused \
+catalogs and development machinery remain outside the graph. Supported \
+combinations compile in isolation. Manifest is the workspace root `Cargo.toml`, \
+not a `crates/` member.\
 """
 
 # =============================================================================

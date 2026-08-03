@@ -263,7 +263,7 @@ fn drive_fixpoint<E>(mut pass: impl FnMut() -> Result<bool, E>) -> Result<bool, 
 /// Test-only access to the otherwise crate-private registry.
 ///
 /// Exists because the seam ships **inert** — no widget registers
-/// into it until `LayoutBuilder` lands — so the only way for `flui-binding` / `flui-app` to prove
+/// into it until `LayoutBuilder` lands — so the only way for `flui-testing` / `flui-app` to prove
 /// their frame paths actually run the seam is to plant an entry by hand.
 #[cfg(any(test, feature = "test-utils"))]
 impl BuildOwner {

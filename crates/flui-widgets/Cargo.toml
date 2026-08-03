@@ -91,7 +91,7 @@ flui-interaction = { path = "../flui-interaction", version = "0.2.0", features =
 flui-platform = { path = "../flui-platform", version = "0.2.0" }
 # Headless frame driver: provides the shared clock-bound arena a `GestureArenaScope`
 # hands to detectors, and `pump_frame` to poll deadline-driven gestures in tests.
-flui-binding = { path = "../flui-binding", version = "0.2.0" }
+flui-testing = { path = "../flui-testing", version = "0.2.0" }
 # Shared Arc<RwLock<PipelineOwner>> in the headless layout harness.
 parking_lot = { workspace = true }
 # Deterministic paint/layout snapshot assertions.

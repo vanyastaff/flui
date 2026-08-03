@@ -27,69 +27,111 @@
 //! }
 //! ```
 //!
+//! # Choosing a catalog
+//!
+//! The base surface — [`widgets`], [`view`], [`animation`], [`run_app`], and
+//! the non-Material half of [`prelude`] — needs no feature at all. The design
+//! systems and the global localization implementations are feature-selected:
+//!
+//! | Feature | Default | Enables |
+//! |---|---|---|
+//! | `material` | **on** | `flui::material` and the Material half of [`prelude`] |
+//! | `cupertino` | off | `flui::cupertino` |
+//! | `localizations` | off | `flui::localizations` |
+//! | `hot-reload` | off | desktop/Android development reload machinery inside [`app`] |
+//!
+//! `default = ["material"]` keeps the documented Material-first quick start
+//! working out of the box. Turning defaults off (`default-features = false`)
+//! gives a catalog-free application that still has the full widget layer,
+//! navigation, focus, and media information. A module whose feature is off is
+//! **absent**, not empty — `flui::cupertino` without the `cupertino` feature is
+//! an unresolved-import error at the use site, which is the diagnostic you
+//! want.
+//! Web and iOS do not yet install reload drivers. The additive `hot-reload`
+//! feature remains compile-safe on those targets so workspace feature
+//! unification cannot break an otherwise supported cross-target build.
+//!
 //! # Using a design system
 //!
-//! [`prelude`] curates the everyday `flui-widgets` surface plus the common
-//! Material widgets (see [`prelude`]'s own docs for the curation rule); the
-//! full catalogs live at [`material`] and [`cupertino`]:
+//! [`prelude`] curates the everyday `flui-widgets` surface plus — when the
+//! `material` feature is on — the common Material widgets (see [`prelude`]'s
+//! own docs for the curation rule); the full catalogs live at `flui::material`
+//! and `flui::cupertino`:
 //!
-//! ```no_run
-//! use flui::material::{AppBar, Scaffold, Theme, ThemeData};
-//! use flui::prelude::*;
-//!
-//! #[derive(Clone, StatelessView)]
-//! struct MaterialHello;
-//!
-//! impl StatelessView for MaterialHello {
-//!     fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
-//!         Theme::new(
-//!             ThemeData::light(),
-//!             Scaffold::new()
-//!                 .app_bar(AppBar::new().title(Text::new("FLUI")))
-//!                 .body(Center::new().child(Text::new("Hello, Material!"))),
-//!         )
-//!     }
-//! }
-//!
-//! fn main() {
-//!     flui::run_app(MaterialHello);
-//! }
-//! ```
+#![cfg_attr(
+    feature = "material",
+    doc = r#"```no_run
+use flui::material::{AppBar, Scaffold, Theme, ThemeData};
+use flui::prelude::*;
+
+#[derive(Clone, StatelessView)]
+struct MaterialHello;
+
+impl StatelessView for MaterialHello {
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        Theme::new(
+            ThemeData::light(),
+            Scaffold::new()
+                .app_bar(AppBar::new().title(Text::new("FLUI")))
+                .body(Center::new().child(Text::new("Hello, Material!"))),
+        )
+    }
+}
+
+fn main() {
+    flui::run_app(MaterialHello);
+}
+```"#
+)]
 //!
 //! # Layers
 //!
 //! Each re-exported module is one workspace crate; the layering (no upward
 //! edges) is documented in `docs/FOUNDATIONS.md`:
 //!
-//! | Module | Crate | Layer |
-//! |---|---|---|
-//! | [`types`] | `flui-types` | foundation types + unit system |
-//! | [`geometry`] | `flui-geometry` | geometry primitives |
-//! | [`foundation`] | `flui-foundation` | keys, listenables, diagnostics |
-//! | [`view`] | `flui-view` | View/Element tree |
-//! | [`widgets`] | `flui-widgets` | user-facing widget catalog |
-//! | [`animation`] | `flui-animation` | curves, tweens, tickers |
-//! | [`material`] | `flui-material` | Material Design theming + widget catalog |
-//! | [`cupertino`] | `flui-cupertino` | iOS-style theming + widget catalog |
-//! | [`app`] | `flui-app` | `run_app` + bindings |
+//! | Module | Crate | Feature | Layer |
+//! |---|---|---|---|
+//! | [`types`] | `flui-types` | — | foundation types + unit system |
+//! | [`geometry`] | `flui-geometry` | — | geometry primitives |
+//! | [`foundation`] | `flui-foundation` | — | keys, listenables, diagnostics |
+//! | [`view`] | `flui-view` | — | View/Element tree |
+//! | [`widgets`] | `flui-widgets` | — | user-facing widget catalog |
+//! | [`animation`] | `flui-animation` | — | curves, tweens, tickers |
+//! | `material` | `flui-material` | `material` | Material Design theming + widget catalog |
+//! | `cupertino` | `flui-cupertino` | `cupertino` | iOS-style theming + widget catalog |
+//! | `localizations` | `flui-localizations` | `localizations` | global (multi-language) localized resources |
+//! | [`app`] | `flui-app` | — | `run_app` + bindings |
 //!
 //! Lower layers (rendering, painting, engine, platform) are deliberately not
 //! re-exported: their surfaces are consumed *through* the widget layer and
 //! remain path-dependencies for the rare integrator who needs them directly.
-//! [`material`] and [`cupertino`] sit *above* [`widgets`] (ADR-0028's
+//! `flui::material` and `flui::cupertino` sit *above* [`widgets`] (ADR-0028's
 //! design-system decoupling contract — `material --> widgets`,
 //! `cupertino --> widgets`, never the reverse), which is why `flui` is on
 //! that ADR's allowlist of crates permitted to depend on both: the facade is
-//! the app-level aggregation point, not a core crate.
+//! the app-level aggregation point, not a core crate. `flui::localizations`
+//! sits above both, implementing the catalogs' delegate contracts; the
+//! catalogs never depend back on it.
 
 // Ship bar (wave 4): every public item is documented; keep it that way.
 #![deny(missing_docs)]
 
 pub use flui_animation as animation;
 pub use flui_app as app;
+/// The iOS-style design system (`flui-cupertino`). Requires the `cupertino`
+/// feature.
+#[cfg(feature = "cupertino")]
 pub use flui_cupertino as cupertino;
 pub use flui_foundation as foundation;
 pub use flui_geometry as geometry;
+/// Global (multi-language) implementations of the catalogs' localization
+/// contracts (`flui-localizations`) — FLUI's analog of Flutter's
+/// `flutter_localizations`. Requires the `localizations` feature.
+#[cfg(feature = "localizations")]
+pub use flui_localizations as localizations;
+/// The Material Design system (`flui-material`). Requires the `material`
+/// feature, which is on by default.
+#[cfg(feature = "material")]
 pub use flui_material as material;
 pub use flui_types as types;
 pub use flui_view as view;
@@ -100,41 +142,51 @@ pub use flui_widgets as widgets;
 pub use flui_app::run_app;
 
 /// Everything an application author needs in scope to write widget code:
-/// the widget catalog prelude plus the everyday Material widgets, plus
-/// [`run_app`].
+/// the widget catalog prelude, [`run_app`], and — with the `material` feature
+/// on — the everyday Material widgets.
 ///
-/// # Curation rule
+/// # Two halves
+///
+/// The **base half** ([`flui_widgets::prelude`] plus [`run_app`]) is always
+/// present. It is design-system-neutral, so an application that selects no
+/// catalog still writes ordinary screens off `use flui::prelude::*`.
+///
+/// The **Material half** is `#[cfg(feature = "material")]`. Turning the
+/// feature off removes those names from the glob rather than replacing them
+/// with stubs; a build that was relying on them fails at the use site.
+///
+/// # Curation rule (Material half)
 ///
 /// This module answers "what does *every* app touch" — not "what does
 /// `flui-material` export." A type belongs here when an app author reaches
 /// for it while writing ordinary screens: layout/text/interaction primitives
-/// (via [`flui_widgets::prelude`]), theming ([`material::Theme`],
-/// [`material::ThemeData`], [`material::ColorScheme`], [`material::TextTheme`]),
-/// the app shell ([`material::Scaffold`], [`material::AppBar`],
-/// [`material::Drawer`]), the standard button family, and the common
+/// (via [`flui_widgets::prelude`]), theming (`Theme`, `ThemeData`,
+/// `ColorScheme`, `TextTheme`), the app shell (`Scaffold`, `AppBar`,
+/// `Drawer`), the standard button family, and the common
 /// data-display/feedback/navigation widgets a Material screen composes
-/// ([`material::Card`], [`material::ListTile`], [`material::Dialog`],
-/// [`material::SnackBar`], [`material::NavigationBar`], the tab family, …).
+/// (`Card`, `ListTile`, `Dialog`, `SnackBar`, `NavigationBar`, the tab
+/// family, …).
 ///
 /// It does **not** include: `*State` handles an app never constructs
 /// directly (`InkWellState`, `TabBarState`, …), component-theme override
 /// structs (`AppBarThemeData` and friends — advanced per-widget
-/// customization, reach them at [`material`]), or `flui-material` internals
-/// like the raw M3 type-scale table ([`material::english_like_2021`]).
+/// customization, reach them at `flui::material`), or `flui-material`
+/// internals like the raw M3 type-scale table (`english_like_2021`).
 ///
 /// **`TextField` is deliberately absent.** `flui-widgets` and
 /// `flui-material` each ship a distinct type of that name — a design-agnostic
 /// text-editing primitive and the M3-styled input — so a curated glob cannot
 /// carry both without one silently shadowing the other. [`prelude`] keeps
 /// [`flui_widgets::TextField`] (already part of [`flui_widgets::prelude`]);
-/// reach the Material one explicitly as [`material::TextField`]. The
+/// reach the Material one explicitly as `flui::material::TextField`. The
 /// Cupertino catalog has no such collision
 /// (every type is `Cupertino`-prefixed), but its surface is app-shell-shaped
 /// rather than everyday-widget-shaped (`CupertinoPageScaffold`,
-/// `CupertinoTabScaffold`, …), so it stays at [`cupertino`] rather than
+/// `CupertinoTabScaffold`, …), so it stays at `flui::cupertino` rather than
 /// joining this glob.
 pub mod prelude {
     pub use flui_app::run_app;
+    #[cfg(feature = "material")]
     pub use flui_material::{
         AlertDialog, AppBar, BackButton, Card, Checkbox, Chip, ColorScheme, DefaultTabController,
         Dialog, Divider, Drawer, ElevatedButton, FilledButton, FilterChip, FloatingActionButton,

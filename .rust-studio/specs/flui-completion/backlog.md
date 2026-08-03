@@ -15,7 +15,7 @@ retry cap (it writes prose). Reserve JSON schemas for the BUILD result + REVIEW
 verdict only. Reviewers diff `HEAD..<branch>` (NOT `main` — main is stale; my work
 is on `core1-widgets-slice`). Curate per the review verdicts before merging.
 
-## Wave A — gesture + animation completion (builds on flui-binding Phase 1)
+## Wave A — gesture + animation completion (builds on flui-testing Phase 1)
 
 | # | Unit | Status | Notes |
 |---|------|--------|-------|
@@ -45,7 +45,7 @@ is on `core1-widgets-slice`). Curate per the review verdicts before merging.
 | # | Unit | Status | Notes |
 |---|------|--------|-------|
 | D1 | **TextField / text input** — focus tree, IME, selection, cursor. | DONE v1 (merge `913fec8b`) | TextEditingController (UTF-8-clamped caret + ChangeNotifier) + EditableText (StatefulView, FocusNode + key-handler via existing FocusManager registry, KeyState::Down→edit) + TextField (decoration + tap-to-focus). Reused FocusManager (no flui-interaction changes). 18 tests (controller edits, key-routing, focus-gating). DEFERRED v1 (documented, no fake): IME, drag-selection, clipboard, multi-line, obscureText, formatters, overflow-scroll, multi-field tap-disambiguation. Env note: flui-interaction LIB-TEST build hits sccache rustc-segfault on this machine (not D1 — verified via flui-widgets 18/18). |
-| D2 | **Theme / MediaQuery / responsive** — inherited theming. | DONE (merge `9d909a9f`) | `MediaQuery`/`MediaQueryData` + `Theme`/`ThemeData` InheritedView widgets (`of`/`maybe_of` via depend_on), on the GestureArenaScope/VsyncScope pattern. SP-3 collision with flui-app pre-tree Theme → renamed `AppTheme`/`AppThemeBuilder` (verified self-consistent, zero external consumers; flui-app not compiled — wgpu crashes compiler here — but rename is closed/internal). `Brightness` gained derives. 6 integration tests; 685 widgets+types green. Curated: discarded an agent leak of brightness.rs/lib.rs into main pre-merge. |
+| D2 | **Theme / MediaQuery / responsive** — inherited theming. | DONE (merge `9d909a9f`) | `MediaQuery`/`MediaQueryData` + `Theme`/`ThemeData` InheritedView widgets (`of`/`maybe_of` via depend_on), on the GestureArenaScope/VsyncScope pattern. SP-3 collision with a pre-tree theme surface in flui-app, since removed outright (ADR-0042: flui-app owns no design tokens). `Brightness` gained derives. 6 integration tests; 685 widgets+types green. Curated: discarded an agent leak of brightness.rs/lib.rs into main pre-merge. |
 
 ## Working-state drive (user 2026-06-27: "добить всё до рабочего состояния" — get every infra/DX area actually working, not just compiling)
 
@@ -83,5 +83,5 @@ is on `core1-widgets-slice`). Curate per the review verdicts before merging.
 ## Done this session (pre-run)
 - pan/drag + arena reject fix (`4fea0fbe`); Phase 0 clock + long-press (`4b8f3ff6`);
   dyn-sanction (`82f4b36c`); double-tap clock (`7c141277`); port-check ~4-6x
-  (`3357caf4`); flui-binding Phase 1 (`9813e64c`); VERSION-test de-brittle (`23882bc3`).
+  (`3357caf4`); flui-testing Phase 1 (`9813e64c`); VERSION-test de-brittle (`23882bc3`).
 - (kimi) on_secondary_tap, changelogs, 0.2.0 bump.

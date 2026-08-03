@@ -1,5 +1,5 @@
 [package]
-name = "flui-binding"
+name = "flui-testing"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -7,12 +7,12 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 readme = "README.md"
-description = "Deterministic headless frame driver (pump_frame) over the gesture arena + virtual clock for FLUI"
+description = "Test support for FLUI: a deterministic headless frame driver (pump_frame) over the gesture arena + virtual clock"
 keywords = ["ui", "gesture", "headless", "testing"]
 categories = ["gui"]
 # Single-binary integration-test consolidation: every root test file is a
 # module of `tests/main.rs` (one link of the full dep stack instead of 2
-# separate binaries). See the `[[test]] name = "binding_it"` target below.
+# separate binaries). See the `[[test]] name = "flui_testing_it"` target below.
 # Ambient-state note: no root test writes process-global state (each test
 # drives its own `HeadlessBinding` instance), so no isolated targets.
 autotests = false
@@ -66,7 +66,7 @@ criterion = { workspace = true }
 flui-types = { path = "../flui-types", version = "0.2.0" }
 
 [[test]]
-name = "binding_it"
+name = "flui_testing_it"
 path = "tests/main.rs"
 
 [[bench]]

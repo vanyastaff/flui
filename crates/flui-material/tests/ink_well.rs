@@ -186,7 +186,7 @@ fn pressed_state_clears_after_the_activation_delay_under_an_ambient_vsync() {
     );
 
     // The vsync registry anchors a controller's run at its FIRST tick after
-    // `forward_from`, not at the call itself (`flui-binding`'s
+    // `forward_from`, not at the call itself (`flui-testing`'s
     // `Vsync`/`AnimationController` restart-aware registry) — so a tiny
     // first `pump_for` both anchors the run and proves it hasn't completed
     // in essentially zero elapsed time.

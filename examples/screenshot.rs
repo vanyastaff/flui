@@ -44,11 +44,11 @@ mod widgets_gallery;
 
 use std::sync::Arc;
 
-use flui_binding::HeadlessBinding;
 use flui_engine::wgpu::HeadlessRenderer;
 use flui_layer::LayerTree;
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::pipeline::PipelineOwner;
+use flui_testing::HeadlessBinding;
 use flui_types::Size;
 use flui_types::geometry::px;
 use flui_view::{BuildOwner, ElementTree, IntoView};

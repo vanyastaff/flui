@@ -1,5 +1,6 @@
 //! Application configuration.
 
+#[cfg(feature = "hot-reload")]
 use std::path::PathBuf;
 
 use flui_log::AppIdentity;
@@ -139,6 +140,7 @@ pub struct AppConfig {
     ///
     /// When unset, the desktop runner falls back to `FLUI_WORKER_PLUGIN` for
     /// CLI compatibility.
+    #[cfg(feature = "hot-reload")]
     pub worker_plugin_path: Option<PathBuf>,
 }
 
@@ -159,6 +161,7 @@ impl Default for AppConfig {
             target_fps: 60,
             show_performance_overlay: false,
             debug_paint: false,
+            #[cfg(feature = "hot-reload")]
             worker_plugin_path: None,
         }
     }
@@ -250,6 +253,7 @@ impl AppConfig {
     }
 
     /// Set the hot-reload worker dylib path for host/worker apps.
+    #[cfg(feature = "hot-reload")]
     pub fn with_worker_plugin_path(mut self, path: impl Into<PathBuf>) -> Self {
         self.worker_plugin_path = Some(path.into());
         self
@@ -281,6 +285,7 @@ mod tests {
         assert_eq!(config.application_identity.display_name(), "FLUI App");
         assert_eq!(config.target_fps, 60);
         assert!(config.resizable);
+        #[cfg(feature = "hot-reload")]
         assert!(config.worker_plugin_path.is_none());
     }
 
@@ -298,6 +303,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "hot-reload")]
     fn test_worker_plugin_path() {
         let config = AppConfig::new().with_worker_plugin_path("target/debug/libworker.so");
 

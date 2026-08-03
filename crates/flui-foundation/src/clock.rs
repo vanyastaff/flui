@@ -10,7 +10,7 @@
 //!
 //! Lives in `flui-foundation` (not a single consumer crate) because more than one
 //! layer needs it: the gesture arena (`flui-interaction`) injects it for deadline
-//! resolution, and the headless binding (`flui-binding`) advances it to drive
+//! resolution, and the headless binding (`flui-testing`) advances it to drive
 //! frames — and the scheduler/animation layers can read it without reaching
 //! sideways across the crate graph.
 

@@ -456,7 +456,7 @@ mod tests {
     /// `Scheduler::drive_async_tasks()` (the shared async step) then
     /// `BuildOwner::build_scope()`. Not a bespoke loop — it is `pump_frame`'s
     /// body minus the parts (clock, gestures, pipeline) a `FutureBuilder` cannot
-    /// observe. `flui-view` cannot depend on `flui-binding` (that would cycle).
+    /// observe. `flui-view` cannot depend on `flui-testing` (that would cycle).
     struct Harness {
         owner: BuildOwner,
         tree: ElementTree,

@@ -2,7 +2,7 @@
 //! `examples/material_demo/main.rs` (mounted on a live window through
 //! `flui::run_app`) and the root-crate acceptance test
 //! `tests/material_demo.rs` (mounted headlessly through
-//! `flui_binding::HeadlessBinding`). Both consumers exercise the exact same
+//! `flui_testing::HeadlessBinding`). Both consumers exercise the exact same
 //! tree, so the acceptance test proves the tree the example actually runs.
 //!
 //! Built entirely on the `flui` facade's `flui::material` and

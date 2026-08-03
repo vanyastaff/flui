@@ -4,7 +4,8 @@ name: CI
 #   checks         — fmt + taplo + typos + inventory + port-check + actionlint + zizmor (seconds, no compile)
 #   clippy         — workspace lint with -D warnings
 #   feature-matrix — cargo-hack per-feature clippy (--each-feature --optional-deps), xilem-style,
-#                    plus a bounded backend-feature-pair powerset for flui-engine
+#                    plus a bounded backend-feature-pair powerset for flui-engine, plus every
+#                    supported `flui` facade feature combination compiled in isolation
 #   wasm-check     — cargo check for the wasm-capable crates + real cdylib link of the two web
 #                    demos + import-surface check against scripts/wasm-import-allowlist.txt
 #   cross-typecheck — cargo clippy (no link, no tests) of flui-platform's windows + macos backends
@@ -274,6 +275,15 @@ jobs:
           cargo nextest run -p flui-widgets --locked --features asset-images --lib
           cargo nextest run -p flui-widgets --locked --features asset-images --test image_async
           cargo nextest run -p flui-widgets --locked --features network-images --test image_network
+
+      # The facade is Material-first by default, so the workspace run above
+      # never compiles `tests/cupertino_demo.rs` (gated by
+      # `required-features = ["cupertino"]`) or the facade smoke test's
+      # localizations assertions. Same precedent as the block above: a test
+      # behind a non-default feature needs its own explicit run, or it is
+      # CI-dead.
+      - name: cargo nextest run (facade non-default catalogs)
+        run: cargo nextest run -p flui --locked --features cupertino,localizations --no-fail-fast
 
       # insta writes `<name>.snap.new` next to the snapshot on mismatch.
       # Upload them so a CI-only snapshot failure is debuggable without a
@@ -604,10 +614,12 @@ jobs:
         with:
           save-if: ${{ github.event_name != 'merge_group' }}
 
-      - name: Install cargo-hack
+      # `just` carries the facade combination list, so CI and `just
+      # feature-matrix` cannot drift into testing different sets.
+      - name: Install cargo-hack + just
         uses: taiki-e/install-action@7572810d7dd469b651bb7793945692cf78da5dd7 # v2.85.0
         with:
-          tool: cargo-hack@0.6
+          tool: cargo-hack@0.6,just@1
 
       - name: cargo hack clippy (libs/bins, per feature)
         run: cargo hack clippy --workspace --locked --each-feature --optional-deps --keep-going -- -D warnings
@@ -624,6 +636,18 @@ jobs:
       # deliberately out (2^N explosion for no known failure mode).
       - name: cargo hack check flui-engine (backend-feature pairs)
         run: cargo hack check -p flui-engine --locked --feature-powerset --include-features vulkan,metal,dx12,webgpu,gles,wgpu-backend --depth 2
+
+      # The facade's catalog/localization/hot-reload features are the public
+      # package surface, so each supported combination is compiled ON ITS OWN,
+      # against the `flui` package alone. A `--workspace` build is not evidence
+      # here: workspace feature unification would enable `material` from a
+      # sibling and turn a broken combination green. `--all-targets` is
+      # deliberate — a missing `required-features` on an example or test is
+      # exactly what these builds exist to catch. The `cargo tree` assertions at
+      # the end prove hot reload is *absent* from an ordinary production graph,
+      # not merely unused by it.
+      - name: facade feature combinations (isolated) + hot-reload absence
+        run: just facade-combos
 
   # ─────────────────────────────────────────────────────────────────────────
   # wasm-check — the web platform claim, machine-checked. web_demo /
@@ -676,6 +700,11 @@ jobs:
 
       - name: cargo check (wasm32)
         run: cargo check --workspace --locked --target wasm32-unknown-unknown ${{ env.NO_WASM_PKGS }}
+
+      # No dlopen-based runner exists on web, but the public feature must still
+      # be cfg-complete: enabling it cannot expose desktop-only imports.
+      - name: cargo check facade hot-reload feature (wasm32)
+        run: cargo check -p flui --locked --target wasm32-unknown-unknown --no-default-features --features hot-reload
 
       # `cargo check` does not link. rust-lld resolves a wasm cdylib for
       # real — and on wasm32 an undefined symbol does not even fail the link

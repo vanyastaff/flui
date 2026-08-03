@@ -562,7 +562,7 @@ the destination hero *in the frame it just forced offstage*.
 ### What FLUI does
 
 **Nothing registers the pipeline as a persistent callback.** Grep for
-`add_persistent_callback` across `flui-app`, `flui-binding` and `flui-view`
+`add_persistent_callback` across `flui-app`, `flui-testing` and `flui-view`
 returns nothing. The pipeline is driven by the *bindings*, beside the scheduler
 rather than inside it. The two paths then diverge from Flutter in two different
 ways:
@@ -570,7 +570,7 @@ ways:
 | Path | Order | Consequence |
 |---|---|---|
 | `AppBinding` / runner (`app/runner.rs:279+283`, `:559+562`, `:755+764` — all three sites) | `handle_begin_frame` → **`handle_draw_frame()`** → `binding.render_frame()` | The post-frame queue is drained (`scheduler.rs:685-706`) **before** build/layout/paint. A callback sees the *previous* frame's geometry. **One frame stale.** |
-| `HeadlessBinding::pump_frame` (`flui-binding/src/lib.rs:424-490`) | clock → gestures → `vsync.tick_all` → `drive_async_tasks` → `build_scope` → `run_frame_with_layout_builders` → `service_child_requests` | It never calls `handle_draw_frame` or `handle_begin_frame` at all. The post-frame queue is **never drained**, and no scheduler frame is ever opened, so even calling the drain would be a no-op — `handle_draw_frame` guards on `current_frame` being `Some` (`scheduler.rs:687`). |
+| `HeadlessBinding::pump_frame` (`flui-testing/src/lib.rs:424-490`) | clock → gestures → `vsync.tick_all` → `drive_async_tasks` → `build_scope` → `run_frame_with_layout_builders` → `service_child_requests` | It never calls `handle_draw_frame` or `handle_begin_frame` at all. The post-frame queue is **never drained**, and no scheduler frame is ever opened, so even calling the drain would be a no-op — `handle_draw_frame` guards on `current_frame` being `Some` (`scheduler.rs:687`). |
 
 ### The experiment
 
@@ -625,7 +625,7 @@ callback. Post-frame callbacks are unaffected — they see committed geometry in
 both — and post-frame is the only phase Hero needs. Nothing else in the framework
 registers a persistent callback today, so nothing observes the difference.
 
-**Cost:** touches `flui-scheduler`, `flui-binding`, `flui-app` (three runner call
+**Cost:** touches `flui-scheduler`, `flui-testing`, `flui-app` (three runner call
 sites), and the `handle_draw_frame` tests. It is the kind of cross-crate change §5
 U1 deliberately isolated for the geometry seam, and it deserves the same treatment:
 **its own slice, before U2, with its own gate.**
@@ -750,7 +750,7 @@ so it cannot be forgotten.
 
 | Claim | Evidence |
 |---|---|
-| Headless post-frame sees this frame's committed layout | `flui-binding`: `post_frame_callback_runs_after_layout_in_the_same_pumped_frame` — the callback reads `PipelineOwner::box_size` and is never invoked by the test |
+| Headless post-frame sees this frame's committed layout | `flui-testing`: `post_frame_callback_runs_after_layout_in_the_same_pumped_frame` — the callback reads `PipelineOwner::box_size` and is never invoked by the test |
 | Production post-frame sees this frame's committed layout | `flui-app`: `production_post_frame_callback_observes_this_frames_committed_layout` — drives the real `AppBinding::draw_frame` through `drive_frame` |
 | Headless and production use different `Scheduler` instances, on purpose | `pump_frame_drives_the_binding_local_scheduler_not_the_singleton`; `each_scheduler_instance_polls_only_its_own_async_driver` |
 | No runner site hand-rolls the sequence | `flui-app`: `every_runner_frame_site_uses_the_shared_drive_frame_helper` (source scan) |

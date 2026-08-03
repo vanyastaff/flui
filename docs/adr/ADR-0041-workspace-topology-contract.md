@@ -52,7 +52,7 @@ The Runtime.1 execution plan freezes public runtime surfaces immediately after t
 | L3 — Compositing / a11y / animation | `flui-semantics`, `flui-layer`, `flui-animation` |
 | L4 — Render machine + render catalog | `flui-engine`, `flui-rendering`, `flui-objects` |
 | L5 — Framework spine | `flui-view` |
-| L6 — Widget catalog + DX tooling | `flui-widgets`, `flui-binding`, `flui-hot-reload`, `flui-build` |
+| L6 — Widget catalog + DX tooling | `flui-widgets`, `flui-testing`, `flui-hot-reload`, `flui-build` |
 | L7 — Design systems | `flui-material`, `flui-cupertino` |
 | L8 — Global localizations | `flui-localizations` |
 | L9 — Application / tooling | `flui-app`, `flui-devtools`, `flui-cli` |
@@ -76,7 +76,7 @@ Three placements move relative to the previous Part IV table: `flui-objects` fro
 
 Prime Directive #1 is not amended. The three-tree model, lifecycle, layout/paint/hit-test protocol, and reconciliation stay ported 1:1 from `.flutter/`. This ADR moves nothing in `src/`; it constrains `Cargo.toml`. Package topology is the same sanctioned leapfrog category ADR-0027 opened and ADR-0028 first used — Flutter is the behavioral reference for widget-tree semantics, not for how a Rust workspace is partitioned.
 
-The dispositions recorded here are classifications, not permission to act: `flui-binding`'s rename, `flui-hot-reload`'s and the facade's feature gating, and `flui-foundation`'s logging narrowing are all owned by [#568](https://github.com/vanyastaff/flui/issues/568) and [#569](https://github.com/vanyastaff/flui/issues/569), not by this change.
+The dispositions recorded here are classifications, not permission to act: the test driver's rename to `flui-testing`, `flui-hot-reload`'s and the facade's feature gating, and `flui-foundation`'s logging narrowing were all owned by [#568](https://github.com/vanyastaff/flui/issues/568) and [#569](https://github.com/vanyastaff/flui/issues/569), not by this change — they landed under those issues afterwards.
 
 ## Alternatives rejected
 
@@ -84,4 +84,4 @@ The dispositions recorded here are classifications, not permission to act: `flui
 - **Generate the layer assignment from Cargo instead of declaring it.** A topological sort of the actual graph can never disagree with the actual graph, so it would have caught none of the three defects above. The policy has to be an independent *claim* about intended architecture for the comparison to mean anything.
 - **Put the checks in `scripts/port-check.sh`.** Same reasoning as ADR-0028: port-check's triggers grep `.rs` sources for usage patterns. This is a declared-dependency-graph fact, and `check-workspace-inventory.sh` is the one script already parsing `cargo metadata`'s dependency lists.
 - **Use `cargo-deny`'s `[bans]` list.** Rejected for the same reason ADR-0028 rejected it, now more strongly: `deny.toml` expresses "crate A must not depend on crate B", not a layered partial order with directional exemptions and projected future edges. Encoding eleven layers as pairwise bans would be unreadable and would still not express the acyclicity projection.
-- **Check dev-dependencies against the layer rule too.** Rejected: dev-dependency cycles are legal in Cargo, and this workspace's test wiring already crosses layers deliberately — `flui-binding` (L6) dev-depends on `flui-devtools` (L9), `flui-macros` dev-depends on `flui-foundation` inside L1. Treating a test fixture as an architectural claim would produce noise that trains reviewers to add exemptions, which is how an enforced contract decays into a rubber stamp.
+- **Check dev-dependencies against the layer rule too.** Rejected: dev-dependency cycles are legal in Cargo, and this workspace's test wiring already crosses layers deliberately — `flui-testing` (L6) dev-depends on `flui-devtools` (L9), `flui-macros` dev-depends on `flui-foundation` inside L1. Treating a test fixture as an architectural claim would produce noise that trains reviewers to add exemptions, which is how an enforced contract decays into a rubber stamp.

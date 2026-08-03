@@ -72,7 +72,7 @@ Two independent, load-bearing facts — both verified in-tree, not assumed:
 2. **The `PipelineOwner` is not reachable through its `Arc<RwLock<…>>` during a
    frame.** The binding does
    `let mut guard = pipeline.write(); let owner = std::mem::take(&mut *guard); let (owner, result) = owner.run_frame();`
-   (`crates/flui-binding/src/lib.rs:390-398`; `AppBinding::draw_frame` mirrors
+   (`crates/flui-testing/src/lib.rs:390-398`; `AppBinding::draw_frame` mirrors
    it). For the whole frame the write guard is held **and** the real owner has
    been moved out by value, leaving `Default::default()` behind. Element mount
    needs the `PipelineOwner` to insert render objects; a build re-entered from

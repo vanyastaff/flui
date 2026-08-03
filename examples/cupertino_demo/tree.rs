@@ -2,7 +2,7 @@
 //! `examples/cupertino_demo/main.rs` (mounted on a live window through
 //! `flui_app::run_app`) and the root-crate acceptance test
 //! `tests/cupertino_demo.rs` (mounted headlessly through
-//! `flui_binding::HeadlessBinding`). Both consumers exercise the exact same
+//! `flui_testing::HeadlessBinding`). Both consumers exercise the exact same
 //! tree, so the acceptance test proves the tree the example actually runs.
 //!
 //! Built entirely on `flui-cupertino`'s and `flui-widgets`' public APIs — no

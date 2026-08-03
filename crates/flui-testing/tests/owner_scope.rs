@@ -9,10 +9,10 @@ use std::sync::{
 };
 use std::time::Duration;
 
-use flui_binding::HeadlessBinding;
 use flui_interaction::testing::input::{device_kind_from_button, pointer_down};
 use flui_interaction::{GestureRecognizer, PointerId, TapGestureRecognizer};
 use flui_interaction::{HitTestResult, InteractionDispatchError};
+use flui_testing::HeadlessBinding;
 use flui_types::Offset;
 use flui_types::geometry::px;
 use flui_view::BuildOwner;

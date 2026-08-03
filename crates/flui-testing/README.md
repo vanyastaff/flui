@@ -1,8 +1,8 @@
-# flui-binding
+# flui-testing
 
-**Deterministic headless frame driver for FLUI tests.**
+**Test support for FLUI.** Today: a deterministic headless frame driver.
 
-`flui-binding` provides `HeadlessBinding::pump_frame(dt)`: a non-singleton,
+`flui-testing` provides `HeadlessBinding::pump_frame(dt)`: a non-singleton,
 sleep-free way to advance a FLUI application by exact time steps. A virtual
 `ManualClock` drives the gesture arena's clock-bound deadlines (long-press,
 double-tap windows) and the frame pipeline, so time-based behavior is tested
@@ -21,14 +21,24 @@ assert!(long_press_fired.load(Ordering::SeqCst));
 
 ## Scope
 
-Implemented: virtual-clock frame pumping and gesture-arena deadline polling.
-Deferred (tracked in `docs/ROADMAP.md`): animation-controller ticks (Phase 3)
-and tree-rebuild integration (Phase 1b).
+Implemented: virtual-clock frame pumping, gesture-arena deadline polling,
+restart-aware animation-controller ticking, and tree-bound build/layout/paint
+frames.
+
+This crate is the workspace's **test-support** package, not just one driver. A
+widget tester, fake platform capabilities, deterministic input replay, and
+golden-image helpers belong here as they land, so a test-only API never has to
+be smuggled into a shipped crate behind a `testing` feature.
+
+**Dependency rule.** Runtime and framework crates may take a *development*
+edge into this crate and nothing more. A normal edge would link the test driver
+into production binaries; `docs/workspace-layers.toml` records the rule and
+`just inventory-check` enforces it.
 
 ## Documentation
 
 Every public item is documented (`#![deny(missing_docs)]`); build locally with
-`cargo doc -p flui-binding --open`.
+`cargo doc -p flui-testing --open`.
 
 ## License
 
