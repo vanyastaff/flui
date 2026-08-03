@@ -92,8 +92,8 @@ run `just --list` for the full recipe set — every recipe is categorised and do
 don't look for a duplicate list here.
 
 **`just ci` is the gate to run before any commit.** It chains `fmt-check` → `inventory-check` →
-`port-check` → `clippy` → `test` → `test-doc`; running the pieces individually is for narrowing a
-failure, not a substitute.
+`runtime-conformance-check` → `port-check` → `clippy` → `test` → `test-doc`; running the pieces
+individually is for narrowing a failure, not a substitute.
 
 Two invocations `just --list` won't teach you:
 
@@ -149,6 +149,7 @@ When changing render-tree, sliver, layout, paint, hit-test, semantics, schedulin
 | **Crates map** | `docs/crates.md` | Per-layer crate inventory |
 | **Testing** | `docs/testing.md` | Build/test/coverage commands |
 | **Panic policy** | `docs/PANIC-POLICY.md` | When `expect("BUG: …")` is allowed vs. `Result`; `clippy::unwrap_used` gate |
+| **Runtime contract registry** | `docs/runtime-contract.toml` | Public shipped/planned runtime contracts, classified boundary families, and the checked root-export manifest. It deliberately does not depend on internal design records. Checked by `just runtime-conformance-check`; touching a monitored runtime export means updating it deliberately |
 | **Render harness** | `crates/flui-rendering/docs/TESTING.md` | RenderTester API, catalog rules |
 | **Logging ownership** | `crates/flui-log/AGENTS.md` | Subscriber policies, native sinks, who may depend on the backend |
 | **Crate ARCHITECTURE.md** | `crates/flui-{foundation,rendering,engine,layer,painting}/ARCHITECTURE.md` | Per-crate deep architecture |
