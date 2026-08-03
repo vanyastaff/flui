@@ -4,24 +4,37 @@ use std::{
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
-        mpsc::{Receiver as ResponseReceiver, SyncSender as ResponseSender, sync_channel},
     },
 };
 
 use crossbeam_channel::{Receiver, Sender, TrySendError, bounded};
+use flui_foundation::{ClaimHandle, ClaimSlot, claim_slot};
 use parking_lot::Mutex;
 
-use crate::traits::{WindowId, WindowOptions};
+use crate::traits::{PlatformWindow, WindowOptions, owner::OpenWindowError};
 
 pub(super) const CONTROL_CAPACITY: usize = 256;
 
 type WakeOwner = Arc<dyn Fn() + Send + Sync>;
-type OpenWindowResult = anyhow::Result<WindowId>;
+
+/// The lane's reply payload: the fully resolved window handle, or a typed
+/// failure — exactly `OwnerPlatform`/`PlatformProxy`'s `PendingWindow`
+/// payload (ADR-0039 §3). The owner resolves `WindowId -> Arc<dyn
+/// PlatformWindow>` before delivering, so no caller needs a second lookup.
+pub(super) type OpenWindowResult = Result<Arc<dyn PlatformWindow>, OpenWindowError>;
 
 pub(super) enum ControlCommand {
     OpenWindow {
         options: WindowOptions,
-        response: ResponseSender<OpenWindowResult>,
+        /// The owner-side half of the claim-slot reply protocol
+        /// (`flui-foundation`'s `ClaimSlot`, ADR-0039 §3). Replaces the
+        /// buffered `sync_channel(1)` one-shot: a requester that abandons
+        /// the request *after* the owner delivers no longer leaks the
+        /// created window, because the abandonment transition is visible
+        /// to the owner (see `WinitApp::sweep_settled_replies`) instead of
+        /// riding a reply send that always "succeeds" whether or not
+        /// anyone ever reads it.
+        reply: ClaimSlot<OpenWindowResult>,
     },
 }
 
@@ -36,6 +49,11 @@ impl std::fmt::Debug for ControlCommand {
     }
 }
 
+/// Failure to enqueue a request on the owner lane. Unchanged vocabulary
+/// (registry evidence pin `runtime-contract.toml`): this is the *admission*
+/// failure (lane full, or the owner is already gone at send time) — a
+/// distinct, narrower concern from the claim-slot reply protocol, which
+/// governs what happens after a request is admitted.
 #[derive(Debug)]
 pub(super) enum ControlSendError {
     Full {
@@ -108,7 +126,7 @@ impl ControlSender {
     pub(super) fn request_open_window(
         &self,
         options: WindowOptions,
-    ) -> Result<ResponseReceiver<OpenWindowResult>, ControlSendError> {
+    ) -> Result<ClaimHandle<OpenWindowResult>, ControlSendError> {
         self.request_open_window_after_admission(options, || {})
     }
 
@@ -116,14 +134,23 @@ impl ControlSender {
         &self,
         options: WindowOptions,
         after_admission: impl FnOnce(),
-    ) -> Result<ResponseReceiver<OpenWindowResult>, ControlSendError> {
+    ) -> Result<ClaimHandle<OpenWindowResult>, ControlSendError> {
         let admission = self.admission.lock();
         if !*admission {
             return Err(ControlSendError::OwnerGone { rejected: options });
         }
 
-        let (response, receiver) = sync_channel(1);
-        let command = ControlCommand::OpenWindow { options, response };
+        // The claim slot's wake fires only on abandonment (never on
+        // delivery/claim), reusing the exact same coalesced owner wake as a
+        // successful enqueue -- an abandoned-before-drain request wakes the
+        // owner promptly so it can skip creating a window nobody wants.
+        let sender_for_wake = self.clone();
+        let (slot, handle): (ClaimSlot<OpenWindowResult>, ClaimHandle<OpenWindowResult>) =
+            claim_slot(Arc::new(move || sender_for_wake.wake_owner()));
+        let command = ControlCommand::OpenWindow {
+            options,
+            reply: slot,
+        };
         after_admission();
         // `try_send` cannot block while the shutdown boundary waits for this
         // critical section. Once it returns, the command is either wholly
@@ -134,12 +161,19 @@ impl ControlSender {
         match send_result {
             Ok(()) => {
                 self.wake_owner();
-                Ok(receiver)
+                Ok(handle)
             }
-            Err(TrySendError::Full(rejected)) => Err(ControlSendError::Full {
-                capacity: CONTROL_CAPACITY,
-                rejected: rejected.into_options(),
-            }),
+            Err(TrySendError::Full(rejected)) => {
+                // `handle`'s Drop fires an extra (harmless, self-correcting)
+                // abandonment wake here: no owner ever saw this request, so
+                // the wake is spurious but not incorrect -- the coalescing
+                // flag this call itself never set stays consistent for the
+                // next real enqueue.
+                Err(ControlSendError::Full {
+                    capacity: CONTROL_CAPACITY,
+                    rejected: rejected.into_options(),
+                })
+            }
             Err(TrySendError::Disconnected(rejected)) => Err(ControlSendError::OwnerGone {
                 rejected: rejected.into_options(),
             }),
@@ -168,7 +202,15 @@ impl ControlSender {
 impl ControlCommand {
     fn into_options(self) -> WindowOptions {
         match self {
-            Self::OpenWindow { options, .. } => options,
+            Self::OpenWindow { options, reply } => {
+                // No owner ever saw this request (the enqueue itself
+                // failed); dropping `reply` here is silent (`ClaimSlot` has
+                // no `Drop` side effect -- only the paired `ClaimHandle`'s
+                // drop fires the abandonment wake, and that already
+                // happened at the call site).
+                drop(reply);
+                options
+            }
         }
     }
 }
@@ -224,7 +266,7 @@ mod tests {
     use static_assertions::{assert_impl_all, assert_not_impl_any};
 
     use super::{CONTROL_CAPACITY, ControlCommand, ControlSendError, control_lane};
-    use crate::traits::{WindowId, WindowOptions};
+    use crate::traits::{WindowOptions, owner::OpenWindowError};
 
     assert_impl_all!(super::ControlSender: Clone, Send, Sync);
     assert_not_impl_any!(super::ControlReceiver: Send, Sync);
@@ -234,6 +276,36 @@ mod tests {
             title: title.into(),
             size: Size::new(px(800.0), px(600.0)),
             ..WindowOptions::default()
+        }
+    }
+
+    /// A tiny stand-in `PlatformWindow` so tests can build an
+    /// `Arc<dyn PlatformWindow>` reply payload without depending on a real
+    /// winit window.
+    struct StubWindow;
+
+    impl crate::traits::PlatformWindow for StubWindow {
+        fn physical_size(&self) -> flui_types::geometry::Size<flui_types::geometry::DevicePixels> {
+            flui_types::geometry::Size::default()
+        }
+        fn logical_size(&self) -> flui_types::geometry::Size<flui_types::geometry::Pixels> {
+            flui_types::geometry::Size::default()
+        }
+        fn scale_factor(&self) -> f64 {
+            1.0
+        }
+        fn request_redraw(&self) {}
+        fn is_focused(&self) -> bool {
+            false
+        }
+        fn is_visible(&self) -> bool {
+            true
+        }
+        fn set_cursor(
+            &self,
+            _cursor: cursor_icon::CursorIcon,
+        ) -> Result<(), crate::traits::CursorError> {
+            Ok(())
         }
     }
 
@@ -255,26 +327,28 @@ mod tests {
             .recv_timeout(Duration::from_secs(1))
             .expect("successful enqueue wakes the owner");
         assert_eq!(receiver.begin_drain(), 1, "the command precedes its wake");
-        let ControlCommand::OpenWindow { options, response } =
+        let ControlCommand::OpenWindow { options, reply } =
             receiver.try_recv().expect("queued window request");
         assert_eq!(options.title, "ordered");
         owner_ack_tx
             .send(())
             .expect("release the sending worker after inspection");
-        response
-            .send(Ok(WindowId(7)))
-            .expect("requester keeps its one-shot receiver");
+        assert!(
+            reply.deliver(Ok(Arc::new(StubWindow))).is_ok(),
+            "slot is still Pending"
+        );
 
-        let reply = worker
+        let mut handle = worker
             .join()
             .expect("sending worker does not panic")
             .expect("request is accepted");
+        let window = handle
+            .try_take()
+            .expect("owner already delivered")
+            .expect("window opens");
         assert_eq!(
-            reply
-                .recv()
-                .expect("owner completes the one-shot")
-                .expect("window opens"),
-            WindowId(7)
+            window.physical_size(),
+            flui_types::geometry::Size::default()
         );
     }
 
@@ -288,10 +362,10 @@ mod tests {
         let (sender, receiver) = control_lane(wake);
 
         let worker = thread::spawn(move || {
-            let reply = sender
+            let handle = sender
                 .request_open_window(options("cross-thread"))
                 .expect("owner lane accepts request");
-            reply.recv().expect("owner returns a result")
+            handle.wait()
         });
 
         wake_rx
@@ -299,15 +373,14 @@ mod tests {
             .expect("worker request wakes owner");
         assert_eq!(receiver.begin_drain(), 1);
         assert_eq!(thread::current().id(), owner_thread);
-        let ControlCommand::OpenWindow { response, .. } =
+        let ControlCommand::OpenWindow { reply, .. } =
             receiver.try_recv().expect("owner receives request");
-        response
-            .send(Ok(WindowId(11)))
-            .expect("worker awaits response");
-        assert_eq!(
-            worker.join().expect("worker exits").expect("window opens"),
-            WindowId(11)
+        assert!(
+            reply.deliver(Ok(Arc::new(StubWindow))).is_ok(),
+            "slot is still Pending"
         );
+        let window = worker.join().expect("worker exits").expect("window opens");
+        assert!(window.is_visible());
     }
 
     #[test]
@@ -388,7 +461,8 @@ mod tests {
         assert_eq!(
             wake_count.load(Ordering::Relaxed),
             1,
-            "a rejected command cannot create a wake"
+            "a rejected command's abandonment wake still coalesces onto the \
+             already-pending flag from the queue-filling sends"
         );
     }
 
@@ -444,7 +518,7 @@ mod tests {
 
         receiver.stop_accepting();
         let shutdown_budget = receiver.begin_drain();
-        let reply = worker
+        let handle = worker
             .join()
             .expect("admitting worker does not panic")
             .expect("the request linearized before shutdown");
@@ -453,18 +527,16 @@ mod tests {
             "shutdown snapshot contains every request admitted before the stop boundary"
         );
 
-        let ControlCommand::OpenWindow { response, .. } = receiver
+        let ControlCommand::OpenWindow { reply, .. } = receiver
             .try_recv()
             .expect("the admitted command remains available for rejection");
-        response
-            .send(Err(anyhow::anyhow!("owner stopped")))
-            .expect("requester remains live");
         assert!(
             reply
-                .try_recv()
-                .expect("shutdown completes the response before receiver drop")
-                .is_err()
+                .deliver(Err(OpenWindowError::OwnerGone { rejected: None }))
+                .is_ok(),
+            "slot is still Pending"
         );
+        assert!(handle.wait().is_err());
     }
 
     #[test]
@@ -496,5 +568,45 @@ mod tests {
             !receiver.take_quit_requested(),
             "the owner consumes one quit transition exactly once"
         );
+    }
+
+    #[test]
+    fn winit_control_dropped_handle_before_delivery_abandons_the_slot() {
+        let (sender, receiver) = control_lane(Arc::new(|| {}));
+        let handle = sender
+            .request_open_window(options("abandon-me"))
+            .expect("request is admitted");
+        drop(handle);
+
+        assert_eq!(receiver.begin_drain(), 1);
+        let ControlCommand::OpenWindow { reply, .. } =
+            receiver.try_recv().expect("owner dequeues the request");
+        assert!(
+            reply.is_abandoned(),
+            "the owner must see the abandonment before creating anything"
+        );
+    }
+
+    #[test]
+    fn winit_control_dropped_handle_after_delivery_is_reclaimable() {
+        let (sender, receiver) = control_lane(Arc::new(|| {}));
+        let handle = sender
+            .request_open_window(options("late-abandon"))
+            .expect("request is admitted");
+
+        assert_eq!(receiver.begin_drain(), 1);
+        let ControlCommand::OpenWindow { reply, .. } =
+            receiver.try_recv().expect("owner dequeues the request");
+        assert!(
+            reply.deliver(Ok(Arc::new(StubWindow))).is_ok(),
+            "slot is still Pending"
+        );
+
+        drop(handle); // claimed delivery, never read -- late abandonment
+        let reclaimed = reply
+            .take_abandoned()
+            .expect("the owner must be able to reclaim the orphaned window")
+            .expect("a successful delivery was abandoned, not a Backend error");
+        assert!(reclaimed.is_visible());
     }
 }
