@@ -7,16 +7,27 @@
 //! is acknowledged [`FrameDropReason::Superseded`] immediately, synchronously,
 //! at submit time.
 //!
-//! Two structurally separate channels carry outcomes off this module, never
-//! the owner's general inbox (riding the inbox would deadlock
+//! Three structurally separate mechanisms carry outcomes off this module,
+//! never the owner's general inbox (riding the inbox would deadlock
 //! shutdown, since the inbox flips to drain-and-refuse before an outcome is
 //! ready to send):
 //!
 //! - A **lossy telemetry ack** channel ([`RasterAck`]: presented, dropped,
-//! surface-outdated, device-lost) — useful for diagnostics and
-//! surface-generation feedback, never load-bearing for correctness. A full
-//! channel drops the newest ack and logs it rather than ever blocking the
-//! pump loop.
+//! surface-outdated, device-lost) — useful for diagnostics, never
+//! load-bearing for correctness. A full channel drops the newest ack and
+//! logs it rather than ever blocking the pump loop.
+//! - A **reliable, coalesced [`SurfaceState`] slot** ([`RasterHandle::surface_state`]),
+//! read directly rather than delivered over a channel. `SurfaceOutdated` and
+//! `DeviceLost` are recovery-critical — the generation the consumer's next
+//! frame must be stamped with, and the device-lost recovery trigger — so
+//! they may NOT depend on the lossy ack lane ever actually delivering: a
+//! full ack channel must never leave a consumer stamping frames against a
+//! stale generation, or never learning its device was lost, forever. The
+//! corresponding `RasterAck` variants still exist and still ride the ack
+//! lane too (existing ack-only consumers keep working unchanged), but this
+//! slot is the one a consumer MUST poll to observe these two conditions
+//! reliably. `Presented`/`Dropped` stay lossy-telemetry-only — they carry no
+//! state a consumer cannot simply infer from submitting again.
 //! - A **load-bearing one-shot shutdown-completion** channel, returned
 //! separately from [`RasterOwner::new`]. Kept structurally apart from the
 //! telemetry channel so no volume of lossy acks (e.g. a frame superseded a
@@ -38,7 +49,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crossbeam_channel::{Receiver, Sender, TrySendError, bounded};
-use flui_foundation::{FrameEpoch, PresentationId, SurfaceGeneration};
+use flui_foundation::{FrameEpoch, PresentationAddress, SurfaceGeneration};
 use flui_layer::SceneSnapshot;
 use parking_lot::{Condvar, Mutex};
 
@@ -65,6 +76,31 @@ const ACK_CHANNEL_CAPACITY: usize = 16;
 /// channel) is the point of this design — an unbounded flood of telemetry
 /// acks can never block or displace it.
 const SHUTDOWN_COMPLETE_CHANNEL_CAPACITY: usize = 1;
+
+// ---------------------------------------------------------------------------
+// Reliable, coalesced surface state
+// ---------------------------------------------------------------------------
+
+/// Reliable, coalesced surface state — read directly via
+/// [`RasterHandle::surface_state`], never delivered over the lossy
+/// telemetry ack lane. See the module docs for why `SurfaceOutdated` and
+/// `DeviceLost` need this and `Presented`/`Dropped` do not.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SurfaceState {
+    /// The surface generation the owner currently considers valid — the
+    /// value a consumer's next `SceneSnapshot` must be stamped with.
+    /// Updated every time the owner reconfigures the surface (a coalesced
+    /// resize, or the backend itself reporting the surface outdated),
+    /// unconditionally, regardless of whether the corresponding
+    /// [`RasterAck::SurfaceOutdated`] ever reaches the ack lane.
+    pub required_generation: SurfaceGeneration,
+    /// Whether the owner's GPU device is currently considered lost. Set the
+    /// moment [`RasterAck::DeviceLost`] would fire, cleared the next time a
+    /// frame presents successfully — recovery is the consumer's job, this
+    /// flag only reports the condition reliably.
+    pub device_lost: bool,
+}
 
 // ---------------------------------------------------------------------------
 // Mailbox (private)
@@ -96,6 +132,13 @@ struct MailboxState {
 /// from the ack channel so no volume of telemetry can ever
 /// block or displace the completion signal.
 struct RasterMailbox {
+    /// The exact presentation this owner was bound to at construction
+    /// (ADR-0037). Two different realm incarnations can mint an identical
+    /// `PresentationId`, so this is the full `(realm_id, presentation_id)`
+    /// pair, never `PresentationId` alone — [`RasterHandle::submit`]
+    /// validates every frame against it and rejects a mismatch instead of
+    /// silently accepting a frame addressed to a different presentation.
+    address: PresentationAddress,
     state: Mutex<MailboxState>,
     condvar: Condvar,
     /// Flipped to `false` when the owning [`RasterOwner`] drops, including a
@@ -108,6 +151,9 @@ struct RasterMailbox {
     /// observed empty and shutting down. `try_send`-only, same as
     /// [`Self::send_ack`] — no send in this module ever blocks.
     shutdown_complete_tx: Sender<()>,
+    /// The reliable, coalesced counterpart to the lossy `SurfaceOutdated`/
+    /// `DeviceLost` acks — see the module docs and [`SurfaceState`].
+    surface_state: Mutex<SurfaceState>,
 }
 
 impl RasterMailbox {
@@ -125,6 +171,23 @@ impl RasterMailbox {
             tracing::warn!(?dropped, "raster ack channel full; dropping ack");
         }
     }
+
+    /// Updates the reliable [`SurfaceState`] slot's required generation.
+    /// Called unconditionally alongside every
+    /// `send_ack(RasterAck::SurfaceOutdated { .. })` and every coalesced
+    /// resize — never only on the lossy ack path — so the slot is correct
+    /// regardless of whether that ack lands on the (possibly full) channel.
+    fn set_required_generation(&self, required_generation: SurfaceGeneration) {
+        self.surface_state.lock().required_generation = required_generation;
+    }
+
+    /// Updates the reliable [`SurfaceState`] slot's device-lost flag. Called
+    /// unconditionally alongside every `send_ack(RasterAck::DeviceLost { .. })`
+    /// and on every successful present (which clears it) — never only on
+    /// the lossy ack path.
+    fn set_device_lost(&self, device_lost: bool) {
+        self.surface_state.lock().device_lost = device_lost;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -137,10 +200,12 @@ impl RasterMailbox {
 /// completion rides a separate, guaranteed channel instead of a variant
 /// here.
 ///
-/// Every variant carries the submitting frame's `presentation_id`: the owner
-/// **echoes** the stamp the frame arrived with, it never mints one. This is
-/// the deterministic drop predicate a consumer applies once presentations
-/// are addressed: `ack.presentation_id != live_presentation` means the ack
+/// Every variant carries the submitting frame's full `address` (never bare
+/// `PresentationId` — two different realms can mint an identical
+/// `PresentationId`, so only the full pair is safely distinguishable): the
+/// owner **echoes** the stamp the frame arrived with, it never mints one.
+/// This is the deterministic drop predicate a consumer applies once
+/// presentations are addressed: `ack.address != live_address` means the ack
 /// is stale and must be dropped. The predicate is about the ack's *content*,
 /// not its *delivery* — this channel is lossy telemetry (see the module
 /// docs), so an ack for a live presentation can still simply never arrive.
@@ -152,18 +217,18 @@ pub enum RasterAck {
     Presented {
         /// The presented frame's epoch.
         epoch: FrameEpoch,
-        /// The presented frame's presentation, echoed from the submitted
+        /// The presented frame's address, echoed from the submitted
         /// [`SceneSnapshot`].
-        presentation_id: PresentationId,
+        address: PresentationAddress,
     },
     /// The frame with this epoch was dropped without presenting.
     #[non_exhaustive]
     Dropped {
         /// The dropped frame's epoch.
         epoch: FrameEpoch,
-        /// The dropped frame's presentation, echoed from the submitted
+        /// The dropped frame's address, echoed from the submitted
         /// [`SceneSnapshot`].
-        presentation_id: PresentationId,
+        address: PresentationAddress,
         /// Why it was dropped.
         reason: FrameDropReason,
     },
@@ -176,9 +241,9 @@ pub enum RasterAck {
     SurfaceOutdated {
         /// The rejected frame's epoch.
         epoch: FrameEpoch,
-        /// The rejected frame's presentation, echoed from the submitted
+        /// The rejected frame's address, echoed from the submitted
         /// [`SceneSnapshot`].
-        presentation_id: PresentationId,
+        address: PresentationAddress,
         /// The generation the rejected frame was stamped with.
         stale: SurfaceGeneration,
         /// The owner's current surface generation — the value the consumer
@@ -197,9 +262,9 @@ pub enum RasterAck {
     DeviceLost {
         /// The frame that was being rendered when the device was lost.
         epoch: FrameEpoch,
-        /// The frame's presentation, echoed from the submitted
+        /// The frame's address, echoed from the submitted
         /// [`SceneSnapshot`].
-        presentation_id: PresentationId,
+        address: PresentationAddress,
     },
 }
 
@@ -242,6 +307,19 @@ pub enum RasterSubmitError {
     /// permanently inert.
     #[error("raster owner dropped; frame submit refused")]
     OwnerGone,
+    /// The submitted frame's address does not match the address this owner
+    /// was bound to at construction (ADR-0037). Two different realm
+    /// incarnations can mint an identical `PresentationId` at the same slot,
+    /// so a frame addressed to any other presentation — even one that
+    /// happens to share this owner's `presentation_id` but not its
+    /// `realm_id` — is never silently accepted.
+    #[error("frame address {got:?} does not match this raster owner's bound address {expected:?}")]
+    AddressMismatch {
+        /// The address this owner was constructed with.
+        expected: PresentationAddress,
+        /// The address stamped on the rejected frame.
+        got: PresentationAddress,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -282,10 +360,19 @@ impl RasterHandle {
     ///
     /// # Errors
     ///
-    /// [`RasterSubmitError::ShuttingDown`] once [`Self::shutdown`] has been
-    /// called; [`RasterSubmitError::OwnerGone`] once the owning
-    /// [`RasterOwner`] has dropped.
+    /// [`RasterSubmitError::AddressMismatch`] if `frame.address` does not
+    /// match the address this owner was constructed with — checked first,
+    /// regardless of lifecycle state, since it is a protocol violation, not
+    /// a backpressure/lifecycle condition; [`RasterSubmitError::ShuttingDown`]
+    /// once [`Self::shutdown`] has been called; [`RasterSubmitError::OwnerGone`]
+    /// once the owning [`RasterOwner`] has dropped.
     pub fn submit(&self, frame: SceneSnapshot) -> Result<(), RasterSubmitError> {
+        if frame.address != self.mailbox.address {
+            return Err(RasterSubmitError::AddressMismatch {
+                expected: self.mailbox.address,
+                got: frame.address,
+            });
+        }
         {
             let mut state = self.mailbox.state.lock();
             if state.shutting_down {
@@ -313,7 +400,7 @@ impl RasterHandle {
                 // does block, `ShutdownComplete`, is never sent from here).
                 self.mailbox.send_ack(RasterAck::Dropped {
                     epoch: superseded.epoch,
-                    presentation_id: superseded.presentation_id,
+                    address: superseded.address,
                     reason: FrameDropReason::Superseded,
                 });
             }
@@ -349,6 +436,16 @@ impl RasterHandle {
         drop(state);
         self.mailbox.condvar.notify_all();
     }
+
+    /// The current reliable, coalesced [`SurfaceState`] — the required
+    /// surface generation and device-lost flag, always up to date
+    /// regardless of the lossy ack lane's capacity. See the module docs for
+    /// why `SurfaceOutdated`/`DeviceLost` need this instead of only riding
+    /// [`RasterOwner::new`]'s ack `Receiver`.
+    #[must_use]
+    pub fn surface_state(&self) -> SurfaceState {
+        *self.mailbox.surface_state.lock()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -357,8 +454,8 @@ impl RasterHandle {
 
 /// What one [`RasterOwner::pump`] pass did.
 ///
-/// Every variant carrying a frame identity echoes the pending frame's
-/// `presentation_id`, mirroring [`RasterAck`]'s echo-never-mint contract.
+/// Every variant carrying a frame identity echoes the pending frame's full
+/// `address`, mirroring [`RasterAck`]'s echo-never-mint contract.
 #[non_exhaustive]
 #[must_use]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -371,18 +468,18 @@ pub enum PumpOutcome {
     Presented {
         /// The presented frame's epoch.
         epoch: FrameEpoch,
-        /// The presented frame's presentation, echoed from the submitted
+        /// The presented frame's address, echoed from the submitted
         /// [`SceneSnapshot`].
-        presentation_id: PresentationId,
+        address: PresentationAddress,
     },
     /// The pending frame was dropped without presenting.
     #[non_exhaustive]
     Dropped {
         /// The dropped frame's epoch.
         epoch: FrameEpoch,
-        /// The dropped frame's presentation, echoed from the submitted
+        /// The dropped frame's address, echoed from the submitted
         /// [`SceneSnapshot`].
-        presentation_id: PresentationId,
+        address: PresentationAddress,
         /// Why it was dropped.
         reason: FrameDropReason,
     },
@@ -393,9 +490,9 @@ pub enum PumpOutcome {
     SurfaceOutdated {
         /// The rejected frame's epoch.
         epoch: FrameEpoch,
-        /// The rejected frame's presentation, echoed from the submitted
+        /// The rejected frame's address, echoed from the submitted
         /// [`SceneSnapshot`].
-        presentation_id: PresentationId,
+        address: PresentationAddress,
         /// The generation the rejected frame was stamped with.
         stale: SurfaceGeneration,
         /// The owner's current surface generation.
@@ -406,9 +503,9 @@ pub enum PumpOutcome {
     DeviceLost {
         /// The frame that was being rendered when the device was lost.
         epoch: FrameEpoch,
-        /// The frame's presentation, echoed from the submitted
+        /// The frame's address, echoed from the submitted
         /// [`SceneSnapshot`].
-        presentation_id: PresentationId,
+        address: PresentationAddress,
     },
     /// The mailbox was empty and shutdown had been requested: the
     /// shutdown-completion one-shot channel ([`RasterOwner::new`]) was
@@ -457,17 +554,31 @@ impl<B: RasterBackend> RasterOwner<B> {
     ///   displace it.
     ///
     /// Neither channel rides the mailbox or any other inbox.
+    ///
+    /// `address` binds this owner to the exact presentation it serves
+    /// (ADR-0037): every [`RasterHandle::submit`] validates its frame
+    /// against it and rejects a mismatch with
+    /// [`RasterSubmitError::AddressMismatch`] instead of silently accepting
+    /// a frame addressed to a different presentation.
     #[must_use]
-    pub fn new(backend: B) -> (Self, RasterHandle, Receiver<RasterAck>, Receiver<()>) {
+    pub fn new(
+        backend: B,
+        address: PresentationAddress,
+    ) -> (Self, RasterHandle, Receiver<RasterAck>, Receiver<()>) {
         let (ack_tx, ack_rx) = bounded(ACK_CHANNEL_CAPACITY);
         let (shutdown_complete_tx, shutdown_complete_rx) =
             bounded(SHUTDOWN_COMPLETE_CHANNEL_CAPACITY);
         let mailbox = Arc::new(RasterMailbox {
+            address,
             state: Mutex::new(MailboxState::default()),
             condvar: Condvar::new(),
             owner_alive: AtomicBool::new(true),
             ack_tx,
             shutdown_complete_tx,
+            surface_state: Mutex::new(SurfaceState {
+                required_generation: SurfaceGeneration::ZERO,
+                device_lost: false,
+            }),
         });
         let owner = Self {
             backend,
@@ -513,6 +624,11 @@ impl<B: RasterBackend> RasterOwner<B> {
             // against the pre-resize surface is rejected below rather than
             // rendered into a torn-down swapchain.
             self.current_surface_generation = self.current_surface_generation.next();
+            // Reliable, not just the (possibly-full) ack lane: a resize is
+            // exactly the kind of surface-(re)configure event a consumer
+            // must never miss.
+            self.mailbox
+                .set_required_generation(self.current_surface_generation);
             tracing::debug!(
             surface_generation = ?self.current_surface_generation,
             "raster owner: surface reconfigured by resize"
@@ -552,13 +668,13 @@ impl<B: RasterBackend> RasterOwner<B> {
             );
             self.mailbox.send_ack(RasterAck::SurfaceOutdated {
                 epoch: frame.epoch,
-                presentation_id: frame.presentation_id,
+                address: frame.address,
                 stale,
                 current,
             });
             return PumpOutcome::SurfaceOutdated {
                 epoch: frame.epoch,
-                presentation_id: frame.presentation_id,
+                address: frame.address,
                 stale,
                 current,
             };
@@ -582,18 +698,22 @@ impl<B: RasterBackend> RasterOwner<B> {
             // yet a consumer of any pacing model. Any `Ok` still completes
             // the render attempt with a `Presented` ack.
             Ok(_presented) => {
+                // A successful present is the recovery signal: whatever
+                // device-lost state the reliable slot was carrying no
+                // longer applies.
+                self.mailbox.set_device_lost(false);
                 self.mailbox.send_ack(RasterAck::Presented {
                     epoch: frame.epoch,
-                    presentation_id: frame.presentation_id,
+                    address: frame.address,
                 });
                 PumpOutcome::Presented {
                     epoch: frame.epoch,
-                    presentation_id: frame.presentation_id,
+                    address: frame.address,
                 }
             }
             Err(error) => self.handle_render_failure(
                 frame.epoch,
-                frame.presentation_id,
+                frame.address,
                 frame.surface_generation,
                 error,
             ),
@@ -629,21 +749,20 @@ impl<B: RasterBackend> RasterOwner<B> {
     fn handle_render_failure(
         &mut self,
         epoch: FrameEpoch,
-        presentation_id: PresentationId,
+        address: PresentationAddress,
         stale: SurfaceGeneration,
         error: EngineError,
     ) -> PumpOutcome {
         match error {
             EngineError::DeviceLost => {
                 tracing::warn!(?epoch, "raster owner: GPU device lost");
-                self.mailbox.send_ack(RasterAck::DeviceLost {
-                    epoch,
-                    presentation_id,
-                });
-                PumpOutcome::DeviceLost {
-                    epoch,
-                    presentation_id,
-                }
+                // Reliable, not just the (possibly-full) ack lane: device
+                // loss is exactly the kind of recovery-critical state a
+                // consumer must never miss.
+                self.mailbox.set_device_lost(true);
+                self.mailbox
+                    .send_ack(RasterAck::DeviceLost { epoch, address });
+                PumpOutcome::DeviceLost { epoch, address }
             }
             EngineError::SurfaceLost | EngineError::SurfaceValidation => {
                 // The backend itself detected the surface is gone — a
@@ -654,6 +773,10 @@ impl<B: RasterBackend> RasterOwner<B> {
                 // proactive check in `pump` until the consumer catches up.
                 self.current_surface_generation = self.current_surface_generation.next();
                 let current = self.current_surface_generation;
+                // Same reliability requirement as the resize path above:
+                // the required generation must reach the consumer even if
+                // the ack lane is momentarily full.
+                self.mailbox.set_required_generation(current);
                 tracing::warn!(
                     ?epoch,
                     ?stale,
@@ -662,13 +785,13 @@ impl<B: RasterBackend> RasterOwner<B> {
                 );
                 self.mailbox.send_ack(RasterAck::SurfaceOutdated {
                     epoch,
-                    presentation_id,
+                    address,
                     stale,
                     current,
                 });
                 PumpOutcome::SurfaceOutdated {
                     epoch,
-                    presentation_id,
+                    address,
                     stale,
                     current,
                 }
@@ -677,12 +800,12 @@ impl<B: RasterBackend> RasterOwner<B> {
                 tracing::error!(?epoch, error = %other, "raster owner: frame render failed");
                 self.mailbox.send_ack(RasterAck::Dropped {
                     epoch,
-                    presentation_id,
+                    address,
                     reason: FrameDropReason::RenderFailed,
                 });
                 PumpOutcome::Dropped {
                     epoch,
-                    presentation_id,
+                    address,
                     reason: FrameDropReason::RenderFailed,
                 }
             }
@@ -707,7 +830,7 @@ mod tests {
     use std::sync::Barrier;
     use std::thread;
 
-    use flui_foundation::RealmId;
+    use flui_foundation::{PresentationId, RealmId};
     use flui_layer::{CanvasLayer, DamageRegion, Layer, Scene};
     use flui_types::Size;
     use flui_types::geometry::{Pixels, Rect};
@@ -770,24 +893,41 @@ mod tests {
         }
     }
 
-    /// The presentation every test uses unless it is specifically exercising
-    /// more than one incarnation (tests 8/9 below).
-    fn test_presentation_id() -> PresentationId {
-        PresentationId::new(1)
+    /// The address every test uses unless it is specifically exercising more
+    /// than one incarnation or a mismatched address (see the address tests
+    /// below).
+    fn test_address() -> PresentationAddress {
+        PresentationAddress {
+            realm_id: RealmId::new(1),
+            presentation_id: PresentationId::new(1),
+        }
+    }
+
+    /// Builds an owner bound to [`test_address`] — the address every
+    /// `test_frame`/`test_frame_for` frame carries unless told otherwise, so
+    /// ordinary tests never have to spell the binding out themselves.
+    fn new_owner(
+        backend: FakeBackend,
+    ) -> (
+        RasterOwner<FakeBackend>,
+        RasterHandle,
+        Receiver<RasterAck>,
+        Receiver<()>,
+    ) {
+        RasterOwner::new(backend, test_address())
     }
 
     fn test_frame(epoch: FrameEpoch, surface_generation: SurfaceGeneration) -> SceneSnapshot {
-        test_frame_for(epoch, test_presentation_id(), surface_generation)
+        test_frame_for(epoch, test_address(), surface_generation)
     }
 
     fn test_frame_for(
         epoch: FrameEpoch,
-        presentation_id: PresentationId,
+        address: PresentationAddress,
         surface_generation: SurfaceGeneration,
     ) -> SceneSnapshot {
         SceneSnapshot::new(
-            RealmId::new(1),
-            presentation_id,
+            address,
             epoch,
             surface_generation,
             DamageRegion::Full,
@@ -814,8 +954,7 @@ mod tests {
 
     #[test]
     fn latest_frame_wins_supersedes_pending() {
-        let (owner, handle, ack_rx, shutdown_complete_rx) =
-            RasterOwner::new(FakeBackend::default());
+        let (owner, handle, ack_rx, shutdown_complete_rx) = new_owner(FakeBackend::default());
         let start = Barrier::new(2);
         let epoch1 = FrameEpoch::ZERO.next();
         let epoch2 = epoch1.next();
@@ -843,12 +982,12 @@ mod tests {
             vec![
                 RasterAck::Dropped {
                     epoch: epoch1,
-                    presentation_id: test_presentation_id(),
+                    address: test_address(),
                     reason: FrameDropReason::Superseded,
                 },
                 RasterAck::Presented {
                     epoch: epoch2,
-                    presentation_id: test_presentation_id(),
+                    address: test_address(),
                 },
             ]
         );
@@ -889,8 +1028,7 @@ mod tests {
         // give a regression a real chance of being scheduled into the
         // interesting interleaving.
         for _ in 0..200 {
-            let (owner, handle, ack_rx, shutdown_complete_rx) =
-                RasterOwner::new(FakeBackend::default());
+            let (owner, handle, ack_rx, shutdown_complete_rx) = new_owner(FakeBackend::default());
             let epoch1 = FrameEpoch::ZERO.next();
             let epoch2 = epoch1.next();
 
@@ -950,8 +1088,7 @@ mod tests {
 
     #[test]
     fn presented_acks_arrive_in_submission_order() {
-        let (mut owner, handle, ack_rx, _shutdown_complete_rx) =
-            RasterOwner::new(FakeBackend::default());
+        let (mut owner, handle, ack_rx, _shutdown_complete_rx) = new_owner(FakeBackend::default());
         let epoch1 = FrameEpoch::ZERO.next();
         let epoch2 = epoch1.next();
         let epoch3 = epoch2.next();
@@ -964,7 +1101,7 @@ mod tests {
                 owner.pump(),
                 PumpOutcome::Presented {
                     epoch,
-                    presentation_id: test_presentation_id(),
+                    address: test_address(),
                 }
             );
         }
@@ -975,15 +1112,15 @@ mod tests {
             vec![
                 RasterAck::Presented {
                     epoch: epoch1,
-                    presentation_id: test_presentation_id(),
+                    address: test_address(),
                 },
                 RasterAck::Presented {
                     epoch: epoch2,
-                    presentation_id: test_presentation_id(),
+                    address: test_address(),
                 },
                 RasterAck::Presented {
                     epoch: epoch3,
-                    presentation_id: test_presentation_id(),
+                    address: test_address(),
                 },
             ]
         );
@@ -995,8 +1132,7 @@ mod tests {
 
     #[test]
     fn shutdown_handshake_completes_and_thread_joins() {
-        let (owner, handle, _ack_rx, shutdown_complete_rx) =
-            RasterOwner::new(FakeBackend::default());
+        let (owner, handle, _ack_rx, shutdown_complete_rx) = new_owner(FakeBackend::default());
         let start = Barrier::new(2);
 
         thread::scope(|scope| {
@@ -1025,8 +1161,7 @@ mod tests {
 
     #[test]
     fn submit_after_shutdown_fails_typed() {
-        let (_owner, handle, _ack_rx, _shutdown_complete_rx) =
-            RasterOwner::new(FakeBackend::default());
+        let (_owner, handle, _ack_rx, _shutdown_complete_rx) = new_owner(FakeBackend::default());
         handle.shutdown();
         let err = handle
             .submit(test_frame(FrameEpoch::ZERO.next(), SurfaceGeneration::ZERO))
@@ -1036,8 +1171,7 @@ mod tests {
 
     #[test]
     fn submit_after_owner_dropped_fails_typed() {
-        let (owner, handle, _ack_rx, _shutdown_complete_rx) =
-            RasterOwner::new(FakeBackend::default());
+        let (owner, handle, _ack_rx, _shutdown_complete_rx) = new_owner(FakeBackend::default());
         drop(owner);
         let err = handle
             .submit(test_frame(FrameEpoch::ZERO.next(), SurfaceGeneration::ZERO))
@@ -1052,7 +1186,7 @@ mod tests {
     #[test]
     fn render_failure_acks_dropped_render_failed() {
         let backend = FakeBackend::with_planned([Err(EngineError::NotInitialized)]);
-        let (mut owner, handle, ack_rx, _shutdown_complete_rx) = RasterOwner::new(backend);
+        let (mut owner, handle, ack_rx, _shutdown_complete_rx) = new_owner(backend);
         let epoch = FrameEpoch::ZERO.next();
         handle
             .submit(test_frame(epoch, SurfaceGeneration::ZERO))
@@ -1063,7 +1197,7 @@ mod tests {
             outcome,
             PumpOutcome::Dropped {
                 epoch,
-                presentation_id: test_presentation_id(),
+                address: test_address(),
                 reason: FrameDropReason::RenderFailed,
             }
         );
@@ -1071,7 +1205,7 @@ mod tests {
             ack_rx.try_recv().unwrap(),
             RasterAck::Dropped {
                 epoch,
-                presentation_id: test_presentation_id(),
+                address: test_address(),
                 reason: FrameDropReason::RenderFailed,
             }
         );
@@ -1083,8 +1217,7 @@ mod tests {
 
     #[test]
     fn resize_coalesces_latest_wins() {
-        let (mut owner, handle, _ack_rx, _shutdown_complete_rx) =
-            RasterOwner::new(FakeBackend::default());
+        let (mut owner, handle, _ack_rx, _shutdown_complete_rx) = new_owner(FakeBackend::default());
         handle.resize(100, 100);
         handle.resize(200, 150);
         handle.resize(320, 240);
@@ -1102,7 +1235,7 @@ mod tests {
             outcome,
             PumpOutcome::Presented {
                 epoch,
-                presentation_id: test_presentation_id(),
+                address: test_address(),
             }
         );
         owner.with_backend(|backend| {
@@ -1122,7 +1255,7 @@ mod tests {
     #[test]
     fn device_lost_maps_to_device_lost_ack() {
         let backend = FakeBackend::with_planned([Err(EngineError::DeviceLost)]);
-        let (mut owner, handle, ack_rx, _shutdown_complete_rx) = RasterOwner::new(backend);
+        let (mut owner, handle, ack_rx, _shutdown_complete_rx) = new_owner(backend);
         let epoch = FrameEpoch::ZERO.next();
         handle
             .submit(test_frame(epoch, SurfaceGeneration::ZERO))
@@ -1133,14 +1266,14 @@ mod tests {
             outcome,
             PumpOutcome::DeviceLost {
                 epoch,
-                presentation_id: test_presentation_id(),
+                address: test_address(),
             }
         );
         assert_eq!(
             ack_rx.try_recv().unwrap(),
             RasterAck::DeviceLost {
                 epoch,
-                presentation_id: test_presentation_id(),
+                address: test_address(),
             }
         );
         // Exactly one ack: DeviceLost does not also emit a Dropped ack for
@@ -1155,7 +1288,7 @@ mod tests {
     #[test]
     fn surface_validation_error_maps_to_surface_outdated_ack() {
         let backend = FakeBackend::with_planned([Err(EngineError::SurfaceValidation)]);
-        let (mut owner, handle, ack_rx, _shutdown_complete_rx) = RasterOwner::new(backend);
+        let (mut owner, handle, ack_rx, _shutdown_complete_rx) = new_owner(backend);
         let epoch = FrameEpoch::ZERO.next();
         handle
             .submit(test_frame(epoch, SurfaceGeneration::ZERO))
@@ -1172,7 +1305,7 @@ mod tests {
             outcome,
             PumpOutcome::SurfaceOutdated {
                 epoch,
-                presentation_id: test_presentation_id(),
+                address: test_address(),
                 stale,
                 current,
             }
@@ -1181,7 +1314,7 @@ mod tests {
             ack_rx.try_recv().unwrap(),
             RasterAck::SurfaceOutdated {
                 epoch,
-                presentation_id: test_presentation_id(),
+                address: test_address(),
                 stale,
                 current,
             }
@@ -1191,7 +1324,7 @@ mod tests {
     #[test]
     fn pump_with_empty_mailbox_returns_idle() {
         let (mut owner, _handle, _ack_rx, _shutdown_complete_rx) =
-            RasterOwner::new(FakeBackend::default());
+            new_owner(FakeBackend::default());
         assert_eq!(owner.pump(), PumpOutcome::Idle);
     }
 
@@ -1201,8 +1334,7 @@ mod tests {
 
     #[test]
     fn stale_surface_generation_is_rejected_before_render() {
-        let (mut owner, handle, ack_rx, _shutdown_complete_rx) =
-            RasterOwner::new(FakeBackend::default());
+        let (mut owner, handle, ack_rx, _shutdown_complete_rx) = new_owner(FakeBackend::default());
         handle.resize(800, 600);
         // Stamped against the pre-resize generation (ZERO): the coalesced
         // resize applied inside the same pump bumps the owner's current
@@ -1220,7 +1352,7 @@ mod tests {
             outcome,
             PumpOutcome::SurfaceOutdated {
                 epoch,
-                presentation_id: test_presentation_id(),
+                address: test_address(),
                 stale,
                 current,
             }
@@ -1229,7 +1361,7 @@ mod tests {
             ack_rx.try_recv().unwrap(),
             RasterAck::SurfaceOutdated {
                 epoch,
-                presentation_id: test_presentation_id(),
+                address: test_address(),
                 stale,
                 current,
             }
@@ -1259,8 +1391,7 @@ mod tests {
 
     #[test]
     fn pump_after_shutdown_complete_does_not_resignal() {
-        let (mut owner, handle, ack_rx, shutdown_complete_rx) =
-            RasterOwner::new(FakeBackend::default());
+        let (mut owner, handle, ack_rx, shutdown_complete_rx) = new_owner(FakeBackend::default());
         handle.shutdown();
         assert_eq!(owner.pump(), PumpOutcome::ShutdownComplete);
         assert_eq!(owner.pump(), PumpOutcome::ShutdownComplete);
@@ -1281,18 +1412,21 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Every ack echoes the submitting frame's presentation identity rather
-    // than minting one of its own.
+    // Every ack echoes the submitting frame's full address rather than
+    // minting one of its own.
     // -----------------------------------------------------------------------
 
     #[test]
-    fn acks_echo_the_submitted_frames_presentation_id() {
-        let stamp = PresentationId::new_gen(3, NonZeroU32::new(9).expect("nonzero"));
+    fn acks_echo_the_submitted_frames_address() {
+        let stamp = PresentationAddress {
+            realm_id: RealmId::new(1),
+            presentation_id: PresentationId::new_gen(3, NonZeroU32::new(9).expect("nonzero")),
+        };
 
         // Presented
         {
             let (mut owner, handle, ack_rx, _shutdown_complete_rx) =
-                RasterOwner::new(FakeBackend::default());
+                RasterOwner::new(FakeBackend::default(), stamp);
             let epoch = FrameEpoch::ZERO.next();
             handle
                 .submit(test_frame_for(epoch, stamp, SurfaceGeneration::ZERO))
@@ -1301,14 +1435,14 @@ mod tests {
                 owner.pump(),
                 PumpOutcome::Presented {
                     epoch,
-                    presentation_id: stamp,
+                    address: stamp
                 }
             );
             assert_eq!(
                 ack_rx.try_recv().unwrap(),
                 RasterAck::Presented {
                     epoch,
-                    presentation_id: stamp,
+                    address: stamp
                 }
             );
         }
@@ -1316,7 +1450,7 @@ mod tests {
         // Dropped (Superseded)
         {
             let (owner, handle, ack_rx, _shutdown_complete_rx) =
-                RasterOwner::new(FakeBackend::default());
+                RasterOwner::new(FakeBackend::default(), stamp);
             let epoch1 = FrameEpoch::ZERO.next();
             let epoch2 = epoch1.next();
             handle
@@ -1329,7 +1463,7 @@ mod tests {
                 ack_rx.try_recv().unwrap(),
                 RasterAck::Dropped {
                     epoch: epoch1,
-                    presentation_id: stamp,
+                    address: stamp,
                     reason: FrameDropReason::Superseded,
                 }
             );
@@ -1339,34 +1473,29 @@ mod tests {
         // SurfaceOutdated
         {
             let (mut owner, handle, ack_rx, _shutdown_complete_rx) =
-                RasterOwner::new(FakeBackend::default());
+                RasterOwner::new(FakeBackend::default(), stamp);
             handle.resize(100, 100);
             let epoch = FrameEpoch::ZERO.next();
             handle
                 .submit(test_frame_for(epoch, stamp, SurfaceGeneration::ZERO))
                 .expect("submit");
             let outcome = owner.pump();
-            let PumpOutcome::SurfaceOutdated {
-                presentation_id, ..
-            } = outcome
-            else {
+            let PumpOutcome::SurfaceOutdated { address, .. } = outcome else {
                 panic!("expected SurfaceOutdated, got {outcome:?}");
             };
-            assert_eq!(presentation_id, stamp);
+            assert_eq!(address, stamp);
             let ack = ack_rx.try_recv().unwrap();
-            let RasterAck::SurfaceOutdated {
-                presentation_id, ..
-            } = ack
-            else {
+            let RasterAck::SurfaceOutdated { address, .. } = ack else {
                 panic!("expected a SurfaceOutdated ack, got {ack:?}");
             };
-            assert_eq!(presentation_id, stamp);
+            assert_eq!(address, stamp);
         }
 
         // DeviceLost
         {
             let backend = FakeBackend::with_planned([Err(EngineError::DeviceLost)]);
-            let (mut owner, handle, ack_rx, _shutdown_complete_rx) = RasterOwner::new(backend);
+            let (mut owner, handle, ack_rx, _shutdown_complete_rx) =
+                RasterOwner::new(backend, stamp);
             let epoch = FrameEpoch::ZERO.next();
             handle
                 .submit(test_frame_for(epoch, stamp, SurfaceGeneration::ZERO))
@@ -1375,14 +1504,14 @@ mod tests {
                 owner.pump(),
                 PumpOutcome::DeviceLost {
                     epoch,
-                    presentation_id: stamp,
+                    address: stamp
                 }
             );
             assert_eq!(
                 ack_rx.try_recv().unwrap(),
                 RasterAck::DeviceLost {
                     epoch,
-                    presentation_id: stamp,
+                    address: stamp
                 }
             );
         }
@@ -1396,9 +1525,13 @@ mod tests {
 
     #[test]
     fn late_ack_after_presentation_recreation_fails_the_address_predicate() {
-        let incarnation_one = PresentationId::new_gen(0, NonZeroU32::new(1).expect("nonzero"));
+        let realm_id = RealmId::new(1);
+        let incarnation_one = PresentationAddress {
+            realm_id,
+            presentation_id: PresentationId::new_gen(0, NonZeroU32::new(1).expect("nonzero")),
+        };
         let (mut owner, handle, ack_rx, _shutdown_complete_rx) =
-            RasterOwner::new(FakeBackend::default());
+            RasterOwner::new(FakeBackend::default(), incarnation_one);
         let epoch = FrameEpoch::ZERO.next();
         handle
             .submit(test_frame_for(
@@ -1411,23 +1544,138 @@ mod tests {
             owner.pump(),
             PumpOutcome::Presented {
                 epoch,
-                presentation_id: incarnation_one,
+                address: incarnation_one,
             }
         );
         let ack = ack_rx.try_recv().expect("presented ack arrives");
-        let RasterAck::Presented {
-            presentation_id, ..
-        } = ack
-        else {
+        let RasterAck::Presented { address, .. } = ack else {
             panic!("expected a Presented ack, got {ack:?}");
         };
 
         // The consumer's presentation was torn down and reinstalled while
         // this ack was in flight: same slot, next generation.
-        let live_incarnation = PresentationId::new_gen(0, NonZeroU32::new(2).expect("nonzero"));
+        let live_incarnation = PresentationAddress {
+            realm_id,
+            presentation_id: PresentationId::new_gen(0, NonZeroU32::new(2).expect("nonzero")),
+        };
         assert_ne!(
-            presentation_id, live_incarnation,
+            address, live_incarnation,
             "a late ack's stamp must compare unequal to a recreated live presentation"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // ADR-0037: two different realm incarnations can mint an identical
+    // PresentationId, so RasterOwner must reject a submit whose realm_id
+    // does not match, even when presentation_id happens to agree.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn submit_with_mismatched_realm_id_is_rejected_even_with_matching_presentation_id() {
+        let owner_address = test_address();
+        let (_owner, handle, _ack_rx, _shutdown_complete_rx) = new_owner(FakeBackend::default());
+
+        let mismatched_realm = PresentationAddress {
+            realm_id: RealmId::new(2),
+            presentation_id: owner_address.presentation_id,
+        };
+        let frame = test_frame_for(
+            FrameEpoch::ZERO.next(),
+            mismatched_realm,
+            SurfaceGeneration::ZERO,
+        );
+
+        let error = handle.submit(frame).unwrap_err();
+        assert_eq!(
+            error,
+            RasterSubmitError::AddressMismatch {
+                expected: owner_address,
+                got: mismatched_realm,
+            }
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // The reliable SurfaceState slot must reflect a surface reconfigure even
+    // when the lossy ack lane is full and silently drops the corresponding
+    // SurfaceOutdated ack.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn surface_state_slot_survives_a_full_ack_lane() {
+        let (mut owner, handle, ack_rx, _shutdown_complete_rx) = new_owner(FakeBackend::default());
+
+        // Saturate the lossy ack channel with unrelated Presented acks,
+        // never draining `ack_rx` — exactly the "consumer fell behind"
+        // condition the reliable slot exists for.
+        for _ in 0..ACK_CHANNEL_CAPACITY {
+            let epoch = FrameEpoch::ZERO.next();
+            handle
+                .submit(test_frame(epoch, SurfaceGeneration::ZERO))
+                .expect("submit");
+            assert_eq!(
+                owner.pump(),
+                PumpOutcome::Presented {
+                    epoch,
+                    address: test_address(),
+                }
+            );
+        }
+
+        // The channel is now exactly full of undrained Presented acks.
+        assert_eq!(ack_rx.len(), ACK_CHANNEL_CAPACITY);
+        assert_eq!(
+            handle.surface_state(),
+            SurfaceState {
+                required_generation: SurfaceGeneration::ZERO,
+                device_lost: false,
+            },
+            "no reconfigure has happened yet"
+        );
+
+        // Force a SurfaceOutdated outcome: a resize bumps the generation,
+        // then a frame stamped against the pre-resize generation is
+        // proactively rejected. The channel is still full, so this ack is
+        // the one that gets silently dropped by `send_ack`.
+        handle.resize(800, 600);
+        let epoch = FrameEpoch::ZERO.next();
+        handle
+            .submit(test_frame(epoch, SurfaceGeneration::ZERO))
+            .expect("submit");
+        let current = SurfaceGeneration::ZERO.next();
+        assert_eq!(
+            owner.pump(),
+            PumpOutcome::SurfaceOutdated {
+                epoch,
+                address: test_address(),
+                stale: SurfaceGeneration::ZERO,
+                current,
+            }
+        );
+
+        // The ack itself never landed — the channel was already full and
+        // every slot still holds one of the earlier Presented acks.
+        assert_eq!(ack_rx.len(), ACK_CHANNEL_CAPACITY);
+        assert_eq!(
+            ack_rx
+                .try_recv()
+                .expect("channel still holds Presented acks"),
+            RasterAck::Presented {
+                epoch: FrameEpoch::ZERO.next(),
+                address: test_address(),
+            }
+        );
+
+        // But the reliable slot reflects the reconfigure regardless of
+        // whether its ack was ever delivered.
+        assert_eq!(
+            handle.surface_state(),
+            SurfaceState {
+                required_generation: current,
+                device_lost: false,
+            },
+            "the reliable slot must reflect the reconfigure even though its \
+             ack was dropped by the full lossy channel"
         );
     }
 }

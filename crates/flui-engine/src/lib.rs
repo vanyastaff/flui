@@ -148,6 +148,7 @@ pub use raster::RasterBackend;
 // Raster mailbox + dedicated ack channel boundary.
 pub use raster_owner::{
     FrameDropReason, PumpOutcome, RasterAck, RasterHandle, RasterOwner, RasterSubmitError,
+    SurfaceState,
 };
 #[cfg(all(feature = "wgpu-backend", debug_assertions))]
 pub use wgpu::DebugBackend;
