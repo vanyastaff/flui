@@ -146,6 +146,31 @@ pub(crate) fn install_owner_platform(owner: flui_platform::OwnerPlatform) {
 ///     drive their own binding-local `Scheduler`, never the
 ///     `Scheduler::instance()` singleton this checks, so fences (a) and (b)
 ///     are the load-bearing ones there — stated here, not hidden.
+///
+/// # `owner.shared()`'s method list is a compile-time fence too
+///
+/// Code reached through this accessor that isn't owner-thread-affine goes
+/// through [`OwnerPlatform::shared`](flui_platform::OwnerPlatform::shared),
+/// which returns `SharedPlatform` — a type whose method list IS the fence
+/// (no owner-affine method, e.g. `open_window`, is ever added to it; see
+/// its own rustdoc). This
+/// `compile_fail` doctest is CI-run evidence for that fence: `flui-app`
+/// dev/normal-depends on `flui-platform` and its own doc tests DO run under
+/// `just test-doc`, unlike the equivalent illustration inside
+/// `flui-platform` itself (excluded from that gate, `justfile:177`).
+///
+/// ```compile_fail,E0599
+/// use flui_platform::headless_platform;
+///
+/// let _ = headless_platform().run(Box::new(|owner| {
+///     let shared = owner.shared();
+///     // `SharedPlatform` has no `open_window` — it stays owner-affine on
+///     // `OwnerPlatform` only. Fails with "no method named `open_window`
+///     // found for struct `SharedPlatform`" (E0599).
+///     let _ = shared.open_window(Default::default());
+///     Ok(())
+/// }));
+/// ```
 #[cfg(not(target_os = "ios"))]
 pub(crate) fn with_owner_platform<R>(
     f: impl FnOnce(&flui_platform::OwnerPlatform) -> R,
