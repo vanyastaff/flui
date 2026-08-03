@@ -7,9 +7,9 @@
 // phase. Every guarded token appears, so adding a capability to the scanner
 // without adding a fixture cannot create a false sense of coverage.
 //
-// Prose mentioning rebuild_handle, post_frame_handle, text_input_handle, or
-// focus_manager in a comment must NOT count as a violation; this line proves
-// the comment filter works.
+// Prose mentioning rebuild_handle, post_frame_handle, text_input_handle,
+// focus_manager, or owner_platform in a comment must NOT count as a
+// violation; this line proves the comment filter works.
 
 impl StatelessView for Loop {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
@@ -22,6 +22,9 @@ impl StatelessView for Loop {
         let text_input = ctx.text_input_handle();
         // Makes imperative focus mutation reachable from build.
         let focus = ctx.focus_manager();
+        // Ambient owner-thread platform access from mid-frame presentation
+        // code (ADR-0039 §6) — the same hazard trigger #22 exists to fence.
+        with_owner_platform(|owner| owner.quit());
         Text::new("boom")
     }
 }
