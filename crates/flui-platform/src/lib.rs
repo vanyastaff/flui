@@ -208,6 +208,12 @@ pub use traits::{
     PlatformWindow, WebCapabilities, WindowAppearance, WindowBackgroundAppearance, WindowBounds,
     WindowEvent, WindowId, WindowMode, WindowOptions,
 };
+// The owner-thread capability (ADR-0039 slice 2): minted only by a backend,
+// handed to `on_ready`, never re-exported with a public minting seam.
+pub use traits::{
+    OpenWindowError, OwnerPlatform, PendingWindow, PlatformProxy, ProxySendError, WaitError,
+    WindowOpen,
+};
 
 /// Get the current platform implementation
 ///
