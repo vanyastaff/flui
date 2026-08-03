@@ -1065,6 +1065,42 @@ impl TreeId for PresentationId {
 }
 
 // =========================================================================
+// PresentationAddress — the full routable identity of one presentation
+// =========================================================================
+
+/// The full routable identity of one presentation: which realm incarnation
+/// owns it, and which presentation incarnation within that realm.
+///
+/// `RealmId` and `PresentationId` are each independently generational, but
+/// neither alone is a safe cross-thread address: two different realm
+/// incarnations can mint an identical `PresentationId` (same slot, same
+/// generation) if their presentation counters happen to align, so a
+/// protocol that carries only `PresentationId` cannot distinguish "the
+/// right presentation in realm A" from "a same-numbered presentation in
+/// unrelated realm B." Every protocol that crosses a thread or owner
+/// boundary and needs to address one exact presentation — the raster
+/// mailbox, the platform-to-realm dispatch table, the single native-window
+/// map — carries this full pair, never `PresentationId` alone.
+///
+/// Promoted here (rule of three): `flui-app`, `flui-layer`, and
+/// `flui-engine` each need this exact pair, so it lives in `flui-foundation`
+/// alongside the ids it pairs rather than as a private duplicate in any one
+/// of them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct PresentationAddress {
+    /// Which `UiRealm` incarnation owns this presentation.
+    pub realm_id: RealmId,
+    /// Which presentation incarnation, within that realm, this address
+    /// names.
+    pub presentation_id: PresentationId,
+}
+
+const _: () = {
+    const fn assert_send_sync_copy<T: Send + Sync + Copy>() {}
+    assert_send_sync_copy::<PresentationAddress>();
+};
+
+// =========================================================================
 // ElementId — generational arena key for the element tree
 // =========================================================================
 
