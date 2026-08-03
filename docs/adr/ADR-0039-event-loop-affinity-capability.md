@@ -4,12 +4,12 @@
 
 ---
 
-- **Status:** Proposed (2026-07-28)
+- **Status:** Accepted (2026-08-03)
 - **Date:** 2026-07-28
 - **Deciders:** @vanyastaff
-- **Scope:** `crates/flui-foundation/src` (new `OwnerAffinity` primitive — the slice-1 CI-tested deliverable), `crates/flui-platform/src/traits/platform.rs` (trait split), new `crates/flui-platform/src/traits/owner.rs` (`OwnerPlatform`, `PlatformProxy`, `PendingWindow`), `crates/flui-platform/src/platforms/winit/{platform,control}.rs` (lane generalization + handler-dispatch hoist), `crates/flui-platform/src/platforms/{macos,windows}/platform.rs` (slice-1 asserts), `crates/flui-app/src/app/{runner,direct}.rs` (bootstrap migrations + owner-TLS host), `examples/*` (on_ready migration)
+- **Scope:** `crates/flui-foundation/src` (new `OwnerAffinity` primitive — the slice-1 CI-tested deliverable — and, in slice 2, the `ClaimSlot`/`ClaimHandle` request/reply primitive), `crates/flui-platform/src/traits/platform.rs` (trait split), new `crates/flui-platform/src/traits/owner.rs` (`OwnerPlatform`, `PlatformProxy`, `PendingWindow`), `crates/flui-platform/src/platforms/winit/{platform,control}.rs` (lane generalization + handler-dispatch hoist), `crates/flui-platform/src/platforms/{macos,windows}/platform.rs` (slice-1 asserts), `crates/flui-app/src/app/{runner,direct}.rs` (bootstrap migrations + owner-TLS host), `examples/*` (on_ready migration)
 - **Related:** ADR-0027 (owner-affine UI realms — the sanctioned leapfrog zone this design lives in), ADR-0037 (presentation ownership domains — `PresentationId`, closed cross-thread vocabulary), ADR-0034 (clipboard reachability; named the macOS pasteboard-affinity hazard — §5 supersedes its suggested assert), audit 2026-07-25 §23 (U7)
-- **Numbering note:** `docs/adr/` ends at 0037 at HEAD; this number assumes the in-flight 0038 draft lands first. Renumber at landing if it does not.
+- **Numbering note (resolved):** ADR-0038 landed as 0038; no renumbering was needed.
 
 ---
 
@@ -320,6 +320,93 @@ Proxy verbs beyond `OpenWindow`/`Quit`; macOS monotonic `WindowId` mint; the pro
 **Costs.** `PlatformReadyCallback` is a breaking signature change that must touch all six backends and every embedder/example in one PR (pre-1.0, sanctioned by ADR-0027 §9's break-acknowledgement posture); slice 3 is a second, distinct break class — it removes 13 methods from the public `Platform` trait (8 moved, 5 deleted), breaking any external `Platform` implementor, not just callers; the lane generalization moves `control.rs` (≈500 lines incl. its tests) into shared code that macOS/Windows must wire wakes and drain gates for; the claim-slot protocol is a genuinely richer state machine than a buffered one-shot and carries its own test matrix; two platform-shaped types (`OwnerPlatform`, `PlatformProxy`) join the public API and must document their thread-affinity contracts per ADR-0027 §9.
 
 **Risks.** The Android bootstrap migration shifts GPU init from before the loop to the first `Resume` — behaviorally the backend's documented intent, but unvalidated until it runs on-device; slice 3 is explicitly gated on that validation. The winit handler-dispatch hoist changes what handlers may observe (they run after, not inside, the state update) — existing handler code must be re-audited in that PR. Post-bootstrap owner-thread `open_window` on winit resolves a turn later than the request (`Pending`), which callers must design for; bootstrap callers are unaffected (`Ready` guaranteed in `on_ready`). The orphan-window unwind changes observable behavior for a requester that drops its handle mid-flight (window may flicker open/closed instead of leaking); strictly better, but a release-notes item.
+
+## Amendments (slice 2)
+
+Recorded at acceptance (2026-08-03), alongside the status flip from Proposed:
+slice 2 shipped in one PR and diverges from this ADR's original sketch in
+the ways below. Each is a reconciled decision-record entry from that PR's
+adversarial review, not a silent drift — the Accepted canon this document
+now represents describes the tree slice 2 actually left, not the tree the
+Proposed draft imagined.
+
+(a) **The claim-slot primitive lives in `flui-foundation`, not the winit
+lane.** `ClaimSlot<T>`/`ClaimHandle<T>` (`crates/flui-foundation/src/claim_slot.rs`)
+carry the full Pending/Delivered/Claimed/Abandoned state machine and its
+tests; the winit lane (`platforms/winit/control.rs`) composes them rather
+than owning the machinery. Same rationale slice 1 already established for
+`OwnerAffinity`: the tests run in CI this way, since `flui-platform`'s own
+suite does not.
+
+(b) **Transitional proxy posture is sanctioned in writing, not left to a
+`tracing::warn!`.** On backends without an owner lane (macOS and Win32
+until slice 3; any genuinely single-threaded backend permanently),
+`PlatformProxy` methods return `ProxySendError::OwnerGone` on a *live*
+loop. This is not a lie about liveness — it is a standing, permanent
+contract for that backend today, stated in `ProxySendError::OwnerGone`'s
+own rustdoc ("do not retry; this is not a transient condition") and here:
+the closed `Full`/`OwnerGone` vocabulary is unchanged, and slice 3's lane
+adoption is what makes the posture literally (not just formally) accurate
+everywhere.
+
+(c) **`OwnerPlatform` is not `Clone`.** The loop-scoped TLS host
+(`flui-app`'s `OWNER_PLATFORM_HOST`) is the one sanctioned stash across
+owner-thread callbacks, reached only through the fenced, borrow-style
+`with_owner_platform` accessor — never a durable owned copy. A `Clone`
+impl would be sound (the `!Send` bound survives cloning) but would hollow
+the fences: one Idle-time acquisition could yield a copy that never
+re-crosses fence (b)/(c) again.
+
+(d) **`OwnerHooks`/`ProxyTransport` are the slice-3 `OwnerOps` seed.** Both
+are `pub(crate)` traits in `traits/owner.rs` — `OwnerHooks::open_owner_window`
+dispatches direct-create-vs-defer per backend; `ProxyTransport` backs
+`PlatformProxy`. `OwnerPlatform` carries a private `Arc<dyn OwnerHooks>`
+alongside its `Arc<dyn Platform>` today; slice 3 shrinks the latter to
+`Arc<dyn OwnerOps>` and these seams become that trait's public shape.
+
+(e) **§3's registry-bound statement is corrected.** "The registry is
+bounded by lane capacity" was imprecise: *queued* entries are bounded by
+lane capacity (256); *delivered-but-unclaimed* entries persist past
+dequeue until the requester claims or drops them — each pins one created
+window as the requester's liability, which is the claim-slot contract
+working as designed (a dropped `PendingWindow` unwinds it), not a leak.
+Total registry occupancy is therefore queue-plus-outstanding-deliveries,
+not queue alone. Counting registry occupancy at admission was considered
+and rejected for slice 2 (no consumer needs it, and it would change
+`Full`'s semantics).
+
+(f) **`WindowOpen::expect_ready` is named `try_ready`.** House `try_*`
+convention for a method that returns `Result` rather than panicking; the
+original sketch's `expect_ready` name implied a panic per this codebase's
+panic policy, which the method never does.
+
+(g) **`#[non_exhaustive]` decisions, recorded explicitly:** `OpenWindowError`
+and `WaitError` are `#[non_exhaustive]` (both forecast variant growth —
+`OpenWindowError` when slice 3's moved trait methods adopt this typed
+taxonomy, `WaitError` via its `#[from] OpenWindowError` arm and possible
+future wait modes). `WindowOpen` and `ProxySendError` are deliberately
+exhaustive: `WindowOpen`'s Ready/Pending pair is the load-bearing two-state
+deferral model (a third state is a redesign), and `ProxySendError` is the
+closed cross-thread vocabulary ADR-0027 §4/ADR-0037 §3 already established.
+
+(h) **Fence (c)'s "not inside a frame phase" is spelled out.** Forbidden:
+`SchedulerPhase::TransientCallbacks`, `MidFrameMicrotasks`,
+`PersistentCallbacks`. Allowed: `Idle`, `PostFrameCallbacks` (legitimate
+ADR-0021-style post-frame work must not trip the fence). The fence is
+acknowledged vacuous on binding-local frame paths — headless/test bindings
+drive their own binding-local `Scheduler`, never the `Scheduler::instance()`
+singleton this backstop checks — so fences (a) and (b) carry the load
+there; this is stated in `with_owner_platform`'s own rustdoc, not hidden.
+
+(i) **`Platform` is de-facto crate-sealed post-flip.** Minting an
+`OwnerPlatform` requires the `pub(crate)` constructor in `traits/owner.rs`,
+so an out-of-crate `impl Platform` cannot produce the value its own
+`run()` must hand to `on_ready`. This is recorded as policy (rustdoc on
+the trait, and the registry's surface entry), not enforced by a sealed-trait
+pattern in code. An external-embedder minting seam is design work tracked
+separately (#560); it is out of scope here because no external implementor
+exists yet, and a capability mint open to arbitrary code would gut the
+"minted only by a backend" guarantee this whole design rests on.
 
 ## Follow-ups
 
