@@ -267,6 +267,14 @@ macro_rules! app_plugin {
         static __FLUI_APP_PINNED_THREAD: ::std::sync::OnceLock<::std::thread::ThreadId> =
             ::std::sync::OnceLock::new();
 
+        /// The thread-local pipeline slot's exact type, named once so the
+        /// `thread_local!` declaration and the `needs_drop` assertion right
+        /// below can never drift apart (they'd otherwise be two independent
+        /// spellings of the same type, and only the declaration's copy is
+        /// what's actually load-bearing).
+        type __FluiAppPipelineSlot =
+            ::std::option::Option<::std::mem::ManuallyDrop<$crate::PluginPipeline>>;
+
         ::std::thread_local! {
             /// Thread-confined pipeline storage. `PluginPipeline` bundles a
             /// `WidgetsBinding`/`PipelineOwner` pair that the reference
@@ -297,9 +305,8 @@ macro_rules! app_plugin {
             /// was already the contract `app_plugin!` shipped ("hot restart:
             /// state lost"). This preserves that byte-for-byte; it does not
             /// introduce it.
-            static __FLUI_APP_PIPELINE: ::std::cell::RefCell<
-                ::std::option::Option<::std::mem::ManuallyDrop<$crate::PluginPipeline>>,
-            > = ::std::cell::RefCell::new(::std::option::Option::None);
+            static __FLUI_APP_PIPELINE: ::std::cell::RefCell<__FluiAppPipelineSlot> =
+                ::std::cell::RefCell::new(::std::option::Option::None);
         }
 
         // Compile-time proof the thread-local above truly carries no drop
@@ -308,9 +315,7 @@ macro_rules! app_plugin {
         // something that needs dropping, this fails to compile instead of
         // silently reintroducing the dlclose hazard.
         const _: () = assert!(
-            !::std::mem::needs_drop::<
-                ::std::option::Option<::std::mem::ManuallyDrop<$crate::PluginPipeline>>,
-            >(),
+            !::std::mem::needs_drop::<__FluiAppPipelineSlot>(),
             "app_plugin!'s thread-local pipeline slot must stay drop-glue-free \
              (wrapped in ManuallyDrop) — a droppable thread-local registers a \
              TLS destructor tied to the plugin image, which dlclose cannot \
