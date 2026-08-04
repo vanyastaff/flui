@@ -65,7 +65,6 @@ crates/flui-foundation/src/id.rs 3
 crates/flui-foundation/src/key.rs 4
 crates/flui-hot-reload/src/dev/source_watch.rs 1
 crates/flui-hot-reload/src/driver.rs 1
-crates/flui-hot-reload/src/plugin.rs 1
 crates/flui-interaction/src/binding.rs 1
 crates/flui-interaction/src/ids.rs 2
 crates/flui-interaction/src/processing/resampler.rs 1

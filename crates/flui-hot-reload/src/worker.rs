@@ -45,7 +45,10 @@ struct BuildPtr(*const ());
 // wrongly): that the address is in the host image, and that the function is
 // only invoked on the main thread. It points into the WORKER dylib, and
 // nothing enforces a calling thread — `get_worker_build_ptr` is public and
-// takes no thread context.
+// takes no thread context. This is a distinct, still-open gap from
+// `app_plugin!`'s `flui_app_build` (`plugin.rs`), which pins its calling
+// thread at the C ABI and refuses a foreign-thread call instead of racing
+// one — the worker build-pointer registry has no equivalent guard.
 //
 // Lifetime: the address is only as live as the worker image it points into.
 // [`WorkerPlugin`]'s `Drop` prunes this plugin's entries from `WORKER_BUILDS`
