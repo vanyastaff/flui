@@ -79,6 +79,10 @@ impl PlatformWindow for TestPresentationWindow {
         *self.cursor.lock() = cursor;
         Ok(())
     }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 }
 
 /// Lifecycle of the owner-thread half of a presentation.
@@ -657,9 +661,9 @@ mod tests {
                 .expect("the headless backend's PlatformHaptics is a FakeHaptics")
         }
 
-        /// A minimal `PlatformWindow` implementing only the trait's
-        /// non-default methods, so `haptics()` falls through to the trait
-        /// default (`None`).
+        /// A minimal `PlatformWindow` implementing only the trait's required
+        /// methods (`as_any` has no default; everything else here does), so
+        /// `haptics()` falls through to the trait default (`None`).
         struct BareWindow;
 
         impl PlatformWindow for BareWindow {
@@ -696,6 +700,10 @@ mod tests {
                 _cursor: flui_platform::CursorIcon,
             ) -> Result<(), flui_platform::CursorError> {
                 Ok(())
+            }
+
+            fn as_any(&self) -> &dyn std::any::Any {
+                self
             }
         }
 
