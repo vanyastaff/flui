@@ -135,7 +135,7 @@ test *args:
     cargo test --workspace {{args}}
 
 [group("test")]
-[doc("Run the workspace test scope used by CI (requires xvfb-run for the flui-platform step — apt install xvfb on Debian/Ubuntu)")]
+[doc("Run the workspace test scope used by CI (the flui-platform step needs xvfb-run on Linux — apt install xvfb; skipped with a message on other hosts)")]
 test-ci:
     cargo nextest run --workspace --exclude flui-platform --locked --no-fail-fast
     # The facade defaults to Material only, so the run above skips
@@ -143,18 +143,20 @@ test-ci:
     # assertions in `tests/facade_smoke.rs`. Same precedent as CI's
     # flui-assets/flui-widgets feature-gated run.
     cargo nextest run -p flui --locked --features cupertino,localizations --no-fail-fast
-    # Mirrors CI's dedicated flui-platform step (audit 2026-08-04 §2.1):
+    # Mirrors CI's dedicated flui-platform step, guarded by host OS:
     # `--all-features` is required just to compile the winit backend
     # (crates/flui-platform/AGENTS.md — invisible under `default =
     # ["desktop"]`); `FLUI_HEADLESS=1` routes `current_platform()` to the
     # `HeadlessPlatform` mock so most of the suite needs no display server;
     # a handful of winit-internals unit tests construct `WinitPlatform::new()`
     # directly and need a real (if virtual) X11 connection for clipboard
-    # init, which `xvfb-run` supplies. 171/171 pass, 5x-verified stable.
-    # The Windows-only STATUS_HEAP_CORRUPTION crash (H9,
-    # docs/ROADMAP-TRACKER.md) cannot reproduce here — see AGENTS.md
-    # Testing Quirks for what stays excluded and why.
-    FLUI_HEADLESS=1 xvfb-run -a cargo nextest run -p flui-platform --locked --all-features --no-fail-fast
+    # init, which `xvfb-run` supplies — a Linux-only tool, hence the guard.
+    # On Windows this is not a missing-tool gap: STATUS_HEAP_CORRUPTION
+    # (H9, docs/ROADMAP-TRACKER.md) is an unresolved crash in this crate's
+    # Windows backend, so the tests must not run there at all. 171/171
+    # pass on Linux, 5x-verified stable — see AGENTS.md Testing Quirks for
+    # what stays excluded and why.
+    {{ if os() == "linux" { "FLUI_HEADLESS=1 xvfb-run -a cargo nextest run -p flui-platform --locked --all-features --no-fail-fast" } else if os() == "windows" { "echo 'Skipping flui-platform tests: STATUS_HEAP_CORRUPTION (H9, docs/ROADMAP-TRACKER.md) is an unresolved Windows crash in this crate -- do not run its tests on a Windows host until that investigation lands a fix.'" } else { "echo 'Skipping flui-platform tests on this host: the CI-mirroring invocation needs xvfb-run (Linux-only) for the winit backend X11-dependent tests; see crates/flui-platform/AGENTS.md.'" } }}
 
 [group("test")]
 [doc("Test a single crate (e.g. just test-crate flui-tree)")]
@@ -192,7 +194,7 @@ test-doc:
     # `--all-features` nor a display server (verified locally with and
     # without DISPLAY set), so there is no green-by-construction reason to
     # carve it out — see CI's `doc-test` job comment.
-    cargo test --workspace --doc
+    cargo test --workspace --locked --doc
 
 [group("test")]
 [doc("Golden-image regression tests: render each demo headless and compare to tests/goldens/ (needs a GPU)")]
