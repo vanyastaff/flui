@@ -2078,6 +2078,194 @@ mod realm_dispatch_tests {
         );
         teardown_platform_realm();
     }
+
+    /// The frames-reenable-redirty listener
+    /// (`super::runtime::install_frames_reenable_redirty_listener`) resolves
+    /// `APP_RUNTIME` at fire time instead of capturing one fixed pipeline
+    /// (per its own doc comment) — and had no coverage anywhere until this
+    /// test. A throwaway `Scheduler` drives the lifecycle edges directly,
+    /// independent of `Scheduler::instance()`; `install_test_realm` puts a
+    /// real realm into THIS thread's `APP_RUNTIME`, which is exactly what
+    /// the listener's `APP_RUNTIME.with` lookup needs installed to find.
+    #[test]
+    fn frames_reenable_redirties_root_so_next_frame_paints_not_idle() {
+        use std::cell::Cell;
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        #[derive(Clone)]
+        struct LeafView;
+
+        impl flui_view::RenderView for LeafView {
+            type Protocol = flui_rendering::protocol::BoxProtocol;
+            type RenderObject = flui_objects::RenderSizedBox;
+
+            fn create_render_object(
+                &self,
+                _ctx: &flui_view::RenderObjectContext<'_>,
+            ) -> Self::RenderObject {
+                flui_objects::RenderSizedBox::shrink()
+            }
+
+            fn update_render_object(
+                &self,
+                _ctx: &flui_view::RenderObjectContext<'_>,
+                render_object: &mut Self::RenderObject,
+            ) {
+                *render_object = flui_objects::RenderSizedBox::shrink();
+            }
+        }
+
+        impl View for LeafView {
+            fn create_element(&self) -> flui_view::element::ElementKind {
+                flui_view::element::ElementKind::render_variable(self)
+            }
+        }
+
+        struct CountingRasterBackend {
+            render_scene_calls: u32,
+        }
+
+        impl CountingRasterBackend {
+            fn new() -> Self {
+                Self {
+                    render_scene_calls: 0,
+                }
+            }
+        }
+
+        impl flui_engine::RasterBackend for CountingRasterBackend {
+            fn render_scene(
+                &mut self,
+                _scene: &flui_layer::Scene,
+            ) -> Result<bool, flui_engine::EngineError> {
+                self.render_scene_calls += 1;
+                Ok(true)
+            }
+            fn resize(&mut self, _width: u32, _height: u32) {}
+            fn is_device_lost(&self) -> bool {
+                false
+            }
+            fn mark_dirty(&mut self, _rect: flui_types::Rect<flui_types::geometry::Pixels>) {}
+            fn mark_full_repaint(&mut self) {}
+            fn has_damage(&self) -> bool {
+                true
+            }
+            fn size(&self) -> (u32, u32) {
+                (800, 600)
+            }
+            fn reconfigure_surface(&mut self) -> Result<(), flui_engine::EngineError> {
+                Ok(())
+            }
+        }
+
+        let dispatcher = install_test_realm();
+        dispatch_platform_realm(
+            dispatcher,
+            RealmTask::Frame(Box::new(|realm| {
+                realm
+                    .attach_root_widget(&LeafView)
+                    .expect("attach succeeds");
+            })),
+        )
+        .expect("attach dispatches");
+
+        // Consume the post-attach dirty flag with one real frame first, so
+        // the pipeline is genuinely idle going into the lifecycle dance
+        // below -- otherwise the later paint this test asserts on could be
+        // explained by left-over dirt from attach, not by the redirty under
+        // test.
+        let initial_presented = Rc::new(Cell::new(false));
+        let initial_presented_in_frame = Rc::clone(&initial_presented);
+        dispatch_platform_realm(
+            dispatcher,
+            RealmTask::Frame(Box::new(move |realm| {
+                let mut backend = CountingRasterBackend::new();
+                initial_presented_in_frame.set(realm.render_frame_entered(&mut backend));
+            })),
+        )
+        .expect("initial frame dispatches");
+        assert!(
+            initial_presented.get(),
+            "precondition: the attached root must present on its first frame"
+        );
+
+        let root_is_clean = Rc::new(Cell::new(false));
+        let root_is_clean_in_frame = Rc::clone(&root_is_clean);
+        dispatch_platform_realm(
+            dispatcher,
+            RealmTask::Frame(Box::new(move |realm| {
+                root_is_clean_in_frame.set(!realm.needs_redraw());
+            })),
+        )
+        .expect("clean-check dispatches");
+        assert!(
+            root_is_clean.get(),
+            "precondition: the root must be clean (Idle) going into the lifecycle dance"
+        );
+
+        let scheduler = Scheduler::new();
+        let wake_calls = Arc::new(AtomicU32::new(0));
+        let wake_calls_for_hook = Arc::clone(&wake_calls);
+        super::super::runtime::install_frames_reenable_redirty_listener(
+            &scheduler,
+            Arc::new(move || {
+                wake_calls_for_hook.fetch_add(1, Ordering::Relaxed);
+            }),
+        );
+
+        // enabled -> enabled: a real state change (Resumed -> Inactive) but
+        // no ENABLE edge, so the listener must not wake.
+        scheduler.handle_app_lifecycle_state_change(AppLifecycleState::Inactive);
+        assert_eq!(
+            wake_calls.load(Ordering::Relaxed),
+            0,
+            "an enabled->enabled transition must not wake"
+        );
+
+        // The disable edge: still no wake -- only the RE-enable edge does.
+        scheduler.handle_app_lifecycle_state_change(AppLifecycleState::Hidden);
+        assert_eq!(
+            wake_calls.load(Ordering::Relaxed),
+            0,
+            "the disable edge must not wake"
+        );
+
+        // The re-enable edge: exactly one wake, plus the redirty.
+        scheduler.handle_app_lifecycle_state_change(AppLifecycleState::Resumed);
+        assert_eq!(
+            wake_calls.load(Ordering::Relaxed),
+            1,
+            "the disabled->enabled edge must wake exactly once"
+        );
+
+        let repainted = Rc::new(Cell::new(false));
+        let repainted_in_frame = Rc::clone(&repainted);
+        let render_scene_calls = Rc::new(Cell::new(0u32));
+        let render_scene_calls_in_frame = Rc::clone(&render_scene_calls);
+        dispatch_platform_realm(
+            dispatcher,
+            RealmTask::Frame(Box::new(move |realm| {
+                let mut backend = CountingRasterBackend::new();
+                repainted_in_frame.set(realm.render_frame_entered(&mut backend));
+                render_scene_calls_in_frame.set(backend.render_scene_calls);
+            })),
+        )
+        .expect("post-reenable frame dispatches");
+
+        assert!(
+            repainted.get(),
+            "the re-enable edge must redirty the root so the next frame actually presents, \
+             not stay Idle"
+        );
+        assert_eq!(
+            render_scene_calls.get(),
+            1,
+            "the redirty must produce real paint output, not merely flip a flag \
+             render_frame_entered ignores"
+        );
+
+        teardown_platform_realm();
+    }
 }
 
 // ============================================================================
@@ -3778,16 +3966,6 @@ mod tests {
         assert_eq!(config.size.width, px(800.0));
     }
 
-    /// Serializes tests that read/write `APP_RUNTIME`'s redraw-poke window
-    /// (the repo rule for tests mutating shared thread-local state — AGENTS.md
-    /// "Testing quirks"). This test's callback must be `Send` (the
-    /// `on_request_frame` trait bound), so it cannot capture a bare `!Send`
-    /// `AppRuntime`/`UiRealm` value directly and re-resolve the shared
-    /// `APP_RUNTIME` thread-local instead — exactly the shape that makes a
-    /// stale value from an earlier test on the same pool thread observable
-    /// without this lock.
-    static SINGLETON_WINDOW_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
     /// Bootstrap ordering invariant shared by `bootstrap_desktop`, `run_android`,
     /// and `run_web`: the window must be stored in `AppRuntime`'s redraw-poke
     /// slot before anything that could synchronously observe it (the initial
@@ -3816,14 +3994,21 @@ mod tests {
     /// redraw, then store the window — the pre-fix shape) and this fails:
     /// `wake_frame` finds no window yet, never calls `request_redraw` on it,
     /// and the callback never fires at all.
+    ///
+    /// No test lock: this touches `APP_RUNTIME`, a `thread_local!`, and the
+    /// standard library test harness runs each `#[test]` on its own freshly
+    /// spawned thread — the same reasoning `SCHEDULER_PHASE_TEST_LOCK`'s own
+    /// doc states for the sibling tests below that also touch thread-local
+    /// state. The retired `AppBinding`-era version of this test carried a
+    /// `SINGLETON_WINDOW_TEST_LOCK`; removed rather than ported forward, both
+    /// because the state it guarded (`AppBinding::instance()`'s active
+    /// window) is gone and because a per-test-thread thread-local needs no
+    /// cross-test lock in the first place — the same story this file's
+    /// other thread-local-only tests already tell.
     #[test]
     fn desktop_bootstrap_stores_the_window_before_the_first_synchronous_redraw_observes_it() {
         use std::sync::Arc;
         use std::sync::atomic::{AtomicBool, Ordering};
-
-        let _serialized = SINGLETON_WINDOW_TEST_LOCK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
 
         let marker_size = flui_types::Size::new(px(4001.0), px(4002.0));
 

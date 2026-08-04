@@ -444,8 +444,11 @@ pub(crate) struct UiRealm {
     /// render-retry path all need this, exactly as the retired
     /// `AppBinding::wake_frame` did).
     wake: Arc<dyn Fn() + Send + Sync>,
-    /// Test-only injectable clock, stored as the f64 bits in a u64 atomic.
-    /// See the retired `AppBinding::now_secs_override`'s identical doc.
+    /// Test-only injectable clock, stored as the f64 bits in a u64 atomic
+    /// (rather than an `Option<f64>`/`Cell<f64>`) so [`Self::now_secs`] can
+    /// read it with a single relaxed load; `0u64` is the "not set" sentinel
+    /// (see [`Self::set_now_secs_for_test`] for why a genuine `t=0.0` is
+    /// nudged to the smallest positive subnormal instead).
     #[cfg(test)]
     now_secs_override: AtomicU64,
     rx: Receiver<UiCommand>,
@@ -801,7 +804,7 @@ impl UiRealm {
     }
 
     /// The current presentation's lifecycle state, for the input-gate
-    /// checks at the physical owner (`AppBinding::handle_input_entered`).
+    /// checks at the physical owner ([`Self::handle_input_entered`]).
     #[must_use]
     pub(crate) fn presentation_lifecycle(&self) -> super::presentation::PresentationLifecycle {
         self.presentation.lifecycle()
@@ -862,11 +865,6 @@ impl UiRealm {
     /// Weak text-input capability for this exact presentation.
     #[must_use]
     #[cfg(test)]
-    #[expect(
-        dead_code,
-        reason = "the IME/text-input test module (attach_dispatch_and_active_detach_round_trip_through_the_platform \
-                  and siblings, migrated from the retired AppBinding's test module) is deferred, not yet re-homed here"
-    )]
     pub(crate) fn text_input_handle(&self) -> flui_interaction::TextInputHandle {
         self.presentation.text_input_handle()
     }
@@ -941,14 +939,26 @@ impl UiRealm {
     }
 
     /// A clone of the shared controller registry for implicit animations.
-    /// See the retired `AppBinding::vsync`'s doc for the full invariant.
+    ///
+    /// `Vsync` is `Arc`-backed; cloning is two atomic increments — cheap. App
+    /// code constructs a `VsyncScope` from this clone so every
+    /// implicitly-animated widget below registers its controller here. The
+    /// production frame driver ([`Self::draw_frame_entered`]) ticks all
+    /// registered running controllers once per frame (before the build
+    /// phase) and keeps the frame loop alive until the last one completes.
     pub(crate) fn vsync(&self) -> Vsync {
         self.vsync_slot.lock().clone()
     }
 
-    /// Replace this realm's registry with a pre-existing shared `Vsync`. See
-    /// the retired `AppBinding::set_vsync`'s doc for the customization
-    /// invariant this must preserve.
+    /// Replace this realm's registry with a pre-existing shared `Vsync`.
+    ///
+    /// Use when a `VsyncScope` was built before this realm's registry was
+    /// acquired (the scope needs the handle to pass to descendants, and this
+    /// realm must drive that same registry). Call before any controller is
+    /// registered so no registration is stranded on the discarded registry.
+    /// Never mount a second `VsyncScope` at the root with a *different*
+    /// registry — this realm ticks its own while descendants register into
+    /// the other, leaving them frozen.
     #[expect(
         dead_code,
         reason = "no production caller yet, and no test exercises the \
@@ -974,8 +984,14 @@ impl UiRealm {
         self.vsync_slot.lock().has_running()
     }
 
-    /// Current virtual seconds for the Vsync tick. See the retired
-    /// `AppBinding::now_secs`'s doc for the production/test split.
+    /// Current virtual seconds for the Vsync tick.
+    ///
+    /// Production: `self.start.elapsed().as_secs_f64()` — one monotonic
+    /// origin shared across the Vsync tick and all frame accounting, so
+    /// there is no clock drift between the two. Tests: the injected
+    /// override (`set_now_secs_for_test`, `#[cfg(test)]`-only so it cannot be
+    /// linked from a normal doc build) takes precedence, allowing
+    /// deterministic animation stepping with no wall-clock reads.
     fn now_secs(&self) -> f64 {
         #[cfg(test)]
         {
@@ -987,8 +1003,13 @@ impl UiRealm {
         self.start.elapsed().as_secs_f64()
     }
 
-    /// Inject a deterministic virtual `now_secs` for test frames. See the
-    /// retired `AppBinding::set_now_secs_for_test`'s doc.
+    /// Inject a deterministic virtual `now_secs` for test frames: overrides
+    /// the wall-clock read `now_secs` otherwise takes, so a test can drive
+    /// the Vsync tick and frame accounting from values it controls instead
+    /// of racing real elapsed time. `0.0` is stored as a sentinel-adjusted
+    /// nonzero bit pattern so `now_secs`'s `bits != 0` check (its "no
+    /// override installed" test) cannot mistake an explicit zero override
+    /// for an absent one.
     #[cfg(test)]
     pub(crate) fn set_now_secs_for_test(&self, secs: f64) {
         let bits = secs.to_bits();
@@ -1001,8 +1022,9 @@ impl UiRealm {
     #[expect(
         dead_code,
         reason = "no test in this file's migrated set needs to revert to \
-                  wall-clock mid-test; kept for parity with the retired \
-                  AppBinding::clear_now_secs_for_test"
+                  wall-clock mid-test; kept as the counterpart to \
+                  set_now_secs_for_test for whichever future test needs to \
+                  revert mid-run instead of dropping the whole realm"
     )]
     pub(crate) fn clear_now_secs_for_test(&self) {
         self.now_secs_override.store(0, Ordering::Relaxed);
@@ -1030,10 +1052,14 @@ impl UiRealm {
     }
 
     /// Wake the platform event loop so the next frame is rendered — sets
-    /// `needs_redraw` AND pokes the installed window. See the retired
-    /// `AppBinding::wake_frame`'s doc for the deadlock-safety argument,
-    /// which still holds: this only ever touches `Send + Sync` state
-    /// captured in [`Self::wake`], never this realm's own locks.
+    /// `needs_redraw` AND pokes the installed window.
+    ///
+    /// Deadlock-safety: this only ever touches the `Send + Sync` state
+    /// captured in [`Self::wake`] (an `Arc<AtomicBool>` plus an `Arc<Mutex<Option<Arc<dyn
+    /// PlatformWindow>>>>` on `AppRuntime` — see `FrameWakeHandle` in
+    /// `runtime.rs`), never this realm's own `widgets`/`renderer`/gesture
+    /// locks, so it is safe to call from inside a build/layout/paint
+    /// callback without risking a lock-ordering cycle against those.
     pub(crate) fn wake_frame(&self) {
         (self.wake)();
     }
@@ -1161,9 +1187,24 @@ impl UiRealm {
 
     /// Attach a root widget.
     ///
-    /// See the retired `AppBinding::attach_root_widget`'s doc for the full
-    /// root-bootstrap, implicit-animation auto-wrap, and gesture-arena
-    /// auto-wrap invariants — unchanged by this move.
+    /// This creates the root element and schedules the first build. Forwards
+    /// to [`flui_view::WidgetsBinding::attach_root_widget`] — the single
+    /// root-bootstrap path; every runner entry point calls
+    /// [`Self::attach_root_widget_with_size`] (this method's sized sibling)
+    /// instead, not a separate hand-rolled wiring.
+    ///
+    /// # Implicit-animation and gesture-arena auto-wrap
+    ///
+    /// The realm automatically wraps `view` in a [`VsyncScope`] backed by
+    /// [`Self::vsync`] and a [`GestureArenaScope`] backed by this
+    /// presentation's gesture arena before handing it to the element tree
+    /// (see [`Self::attach_root_widget_entered`]'s body) — every implicitly-
+    /// animated widget and every `GestureDetector` below the root joins this
+    /// realm's own registry/arena with no app-author boilerplate. Never
+    /// mount a second `VsyncScope`/`GestureArenaScope` at the root with a
+    /// *different* registry/arena — this realm ticks/arbitrates its own
+    /// while descendants register into the other, leaving them frozen or
+    /// competing in an arena nothing closes.
     ///
     /// # Errors
     ///
@@ -1203,8 +1244,12 @@ impl UiRealm {
     }
 
     /// Attach a root widget sizing the root view to an explicit logical
-    /// `width` × `height` — the platform window's surface size. See the
-    /// retired `AppBinding::attach_root_widget_with_size`'s doc.
+    /// `width` × `height` — the platform window's surface size.
+    ///
+    /// Identical to [`Self::attach_root_widget`] except the root
+    /// `RenderView` is born at the real window size instead of the
+    /// framework's fallback default. This is the runner's bootstrap entry
+    /// point. See [`Self::attach_root_widget`] for the auto-wrap invariants.
     ///
     /// # Errors
     ///
@@ -1288,9 +1333,12 @@ impl UiRealm {
         }
 
         // The async-driver step lives in `Scheduler::handle_begin_frame`'s
-        // mid-frame slot, not here — see the retired `AppBinding`'s doc for
-        // why (this pipeline runs in `PersistentCallbacks`, where
-        // `drive_async_tasks` debug-asserts it must never poll).
+        // mid-frame slot, not here: this pipeline runs in
+        // `PersistentCallbacks`, where `drive_async_tasks` debug-asserts it
+        // must never poll (polling here could re-enter a frame-phase-only
+        // capability from inside a woken future). One mid-frame poll per
+        // frame, on the right `Scheduler` instance, is enforced by the
+        // scheduler itself.
 
         // Phase 1: Build (WidgetsBinding)
         {
@@ -1365,10 +1413,25 @@ impl UiRealm {
     }
 
     /// Render while the platform dispatcher already owns the realm entry.
-    /// See the retired `AppBinding::render_frame_entered`'s doc for the full
-    /// step-by-step rationale (first-frame deferral gate, damage tracking,
-    /// device-loss/surface-lost handling, the retry-vs-settle distinction) —
-    /// unchanged by this move.
+    /// This keeps scheduler callbacks and the full build/layout/paint/raster
+    /// transaction under one activation instead of creating a nested scope.
+    ///
+    /// Returns whether the frame reached `present()` — needed for the
+    /// runner's no-present fallback throttle: `Fifo` present blocks every
+    /// PRESENTED frame at display cadence, but a frame that never presents
+    /// (nothing dirty, no damage, occluded surface, surface lost) carries no
+    /// such pacing signal.
+    ///
+    /// Step by step: settle any lone arena member queued by an earlier event
+    /// whose owner boundary could not finish (e.g. after a panic); flush
+    /// coalesced pointer moves; draw the frame ([`Self::draw_frame_entered`]);
+    /// re-hit-test stationary pointing devices against the freshly laid-out
+    /// tree; then, gated by [`Self::send_frames_to_engine`] (the first-frame
+    /// deferral counter), mark full-repaint damage and hand the scene to
+    /// `renderer.render_scene`. `SurfaceLost`/`DeviceLost`/`SurfaceValidation`
+    /// and any other render error all count as a dropped (not settled)
+    /// frame, arming a retry via [`Self::wake_frame`] instead of
+    /// [`Self::mark_rendered`]'s idle-clear.
     #[tracing::instrument(level = "debug", skip_all)]
     pub(crate) fn render_frame_entered<R: RasterBackend>(&self, renderer: &mut R) -> bool {
         self.gestures().drain_deferred_arena_resolutions();
@@ -1461,9 +1524,18 @@ impl UiRealm {
     // ========================================================================
 
     /// Handle a platform input event while this realm is already entered.
-    /// See the retired `AppBinding::handle_input_entered`'s doc for the full
-    /// per-kind routing and lifecycle-gate rationale — unchanged by this
-    /// move.
+    ///
+    /// This is the single runner entry point for platform input. Pointer
+    /// events go to this presentation's gesture state; IME and keyboard
+    /// events go to the same presentation's text-input and focus owners.
+    /// [`input_dropped_by_lifecycle`] gates every kind first (ADR-0037 §9):
+    /// `Closing`/`Closed` refuses all input; `Suspended` drops pointer/
+    /// drag-drop only (keyboard/IME keep flowing, so a flaky or absent
+    /// occlusion signal never becomes a keystroke blackout).
+    ///
+    /// Pointer events are coalesced by this presentation's `GestureBinding`
+    /// — high-frequency move events are stored and flushed once per frame
+    /// via [`Self::render_frame_entered`].
     pub(crate) fn handle_input_entered(&self, input: PlatformInput) {
         if input_dropped_by_lifecycle(self.presentation_lifecycle(), &input) {
             tracing::debug!(
@@ -2135,6 +2207,7 @@ mod tests {
     // and the haptics/clipboard/performance-overlay modules (re-homed to
     // `presentation.rs`/`runtime.rs`, whose state now owns them).
     mod frame_pipeline_and_vsync {
+        use std::cell::Cell;
         use std::sync::atomic::{AtomicBool as StdAtomicBool, AtomicUsize};
 
         use flui_engine::EngineError;
@@ -2658,6 +2731,467 @@ mod tests {
                 !realm.needs_redraw(),
                 "IME input must also be dropped once closed — the hard gate covers every kind"
             );
+        }
+
+        /// Exhaustively pins [`input_dropped_by_lifecycle`]'s policy over
+        /// every `(lifecycle, input kind)` pair, including `DragDrop`.
+        ///
+        /// If reverted: restore a `matches!(input, PlatformInput::Pointer(_))`
+        /// check in place of the exhaustive match and the `Suspended` +
+        /// `DragDrop` case fails (`assert!` sees `false` instead of `true`).
+        #[test]
+        fn input_lifecycle_gate_is_exhaustive_and_explicit() {
+            use flui_interaction::events::{PointerType, make_down_event};
+            use flui_interaction::testing::input::KeyEventBuilder;
+            use flui_platform::traits::DragDropEvent;
+
+            use super::super::super::presentation::PresentationLifecycle;
+
+            let pointer = PlatformInput::Pointer(make_down_event(
+                flui_types::Offset::new(px(0.0), px(0.0)),
+                PointerType::Mouse,
+            ));
+            let keyboard = PlatformInput::Keyboard(
+                KeyEventBuilder::new(flui_interaction::events::Code::KeyA).build(),
+            );
+            let ime = PlatformInput::Ime(flui_types::ImeEvent::Commit("x".to_string()));
+            let drag_drop = PlatformInput::DragDrop(DragDropEvent::Exited {
+                id: flui_foundation::DataTransferId::new(1),
+            });
+            let every_kind = [&pointer, &keyboard, &ime, &drag_drop];
+
+            for lifecycle in [
+                PresentationLifecycle::Created,
+                PresentationLifecycle::Closing,
+                PresentationLifecycle::Closed,
+            ] {
+                for input in every_kind {
+                    assert!(
+                        input_dropped_by_lifecycle(lifecycle, input),
+                        "{lifecycle:?} must reject every input kind, including {input:?}"
+                    );
+                }
+            }
+
+            assert!(input_dropped_by_lifecycle(
+                PresentationLifecycle::Suspended,
+                &pointer
+            ));
+            assert!(
+                input_dropped_by_lifecycle(PresentationLifecycle::Suspended, &drag_drop),
+                "DragDrop must be dropped while suspended, the same as Pointer"
+            );
+            assert!(!input_dropped_by_lifecycle(
+                PresentationLifecycle::Suspended,
+                &keyboard
+            ));
+            assert!(!input_dropped_by_lifecycle(
+                PresentationLifecycle::Suspended,
+                &ime
+            ));
+
+            for input in every_kind {
+                assert!(!input_dropped_by_lifecycle(
+                    PresentationLifecycle::SurfaceAttached,
+                    input
+                ));
+            }
+        }
+
+        // ---- Gesture-arena / pointer dispatch --------------------------------
+
+        /// Shell auto-wrap regression: the `GestureArenaScope` `attach_root_widget*`
+        /// installs around the root must put every `GestureDetector` in the
+        /// gesture binding's ONE shared arena, so two nested detectors on the
+        /// same hit-test path resolve to exactly one winner (Flutter parity:
+        /// front member wins, loser is rejected). Without the shell wrap each
+        /// detector falls back to a private arena it closes itself, and the
+        /// same tap fires BOTH callbacks.
+        ///
+        /// Drives the exact production path, with no manually mounted scope:
+        /// `attach_root_widget_with_size` (what every runner's bootstrap
+        /// calls) for the mount, `draw_frame` for layout, and
+        /// `handle_input_entered` (what every platform input callback calls
+        /// after entering a realm) for the pointer stream.
+        #[test]
+        fn shell_installed_arena_resolves_nested_tap_detectors_to_one_winner() {
+            use flui_interaction::events::{PointerType, make_down_event, make_up_event};
+            use flui_types::Color;
+            use flui_widgets::{ColoredBox, GestureDetector};
+
+            let realm = UiRealm::for_test();
+
+            let inner_taps = Arc::new(AtomicUsize::new(0));
+            let outer_taps = Arc::new(AtomicUsize::new(0));
+            let inner = Arc::clone(&inner_taps);
+            let outer = Arc::clone(&outer_taps);
+
+            let root = GestureDetector::new()
+                .on_tap(move || {
+                    outer.fetch_add(1, Ordering::SeqCst);
+                })
+                .child(
+                    GestureDetector::new()
+                        .on_tap(move || {
+                            inner.fetch_add(1, Ordering::SeqCst);
+                        })
+                        .child(ColoredBox::new(Color::rgb(10, 20, 30))),
+                );
+
+            realm
+                .enter(|realm| realm.attach_root_widget_with_size(&root, 100.0, 100.0))
+                .expect("attach succeeds");
+            let _ = realm.draw_frame(test_constraints());
+
+            // Production input arrives inside the realm (runner.rs's
+            // PlatformToUi dispatch enters it before calling handle_input),
+            // so the synthetic tap does the same.
+            let position = flui_types::Offset::new(px(50.0), px(50.0));
+            realm.enter(|realm| {
+                realm.handle_input_entered(PlatformInput::Pointer(make_down_event(
+                    position,
+                    PointerType::Mouse,
+                )));
+                realm.handle_input_entered(PlatformInput::Pointer(make_up_event(
+                    position,
+                    PointerType::Mouse,
+                )));
+            });
+
+            assert_eq!(
+                inner_taps.load(Ordering::SeqCst),
+                1,
+                "the inner tap recognizer is the arena's front member and wins",
+            );
+            assert_eq!(
+                outer_taps.load(Ordering::SeqCst),
+                0,
+                "the outer tap recognizer shares the arena and must be rejected — \
+                 if both fire, each detector built its own private arena (no shell \
+                 GestureArenaScope above the root)",
+            );
+        }
+
+        /// Same auto-wrap invariant as
+        /// `shell_installed_arena_resolves_nested_tap_detectors_to_one_winner`,
+        /// through `attach_root_widget` (the unsized variant) and asserting
+        /// on the arena's `SweepModel` directly.
+        #[test]
+        fn root_gesture_scope_arbitrates_overlapping_detectors_once() {
+            use flui_interaction::arena::SweepModel;
+            use flui_interaction::events::{PointerType, make_down_event, make_up_event};
+            use flui_types::geometry::{Offset, Pixels};
+            use flui_widgets::{GestureDetector, HitTestBehavior, SizedBox};
+
+            let realm = UiRealm::for_test();
+            let outer_taps = Rc::new(Cell::new(0));
+            let inner_taps = Rc::new(Cell::new(0));
+
+            let inner_count = Rc::clone(&inner_taps);
+            let inner = GestureDetector::new()
+                .on_tap(move || inner_count.set(inner_count.get() + 1))
+                .behavior(HitTestBehavior::Opaque)
+                .child(SizedBox::new(100.0, 100.0));
+            let outer_count = Rc::clone(&outer_taps);
+            let root = GestureDetector::new()
+                .on_tap(move || outer_count.set(outer_count.get() + 1))
+                .behavior(HitTestBehavior::Opaque)
+                .child(inner);
+
+            realm
+                .attach_root_widget(&root)
+                .expect("a fresh realm must attach the detector tree");
+            let _ = realm.draw_frame(test_constraints());
+
+            let position = Offset::new(Pixels(10.0), Pixels(10.0));
+            let down = make_down_event(position, PointerType::Touch);
+            let up = make_up_event(position, PointerType::Touch);
+            realm.enter(|realm| {
+                realm.handle_input_entered(PlatformInput::Pointer(down));
+                realm.handle_input_entered(PlatformInput::Pointer(up));
+            });
+
+            assert_eq!(
+                outer_taps.get() + inner_taps.get(),
+                1,
+                "overlapping detectors must compete in one arena; private arenas let both taps fire"
+            );
+            assert_eq!(
+                realm.gestures().arena().sweep_model(),
+                SweepModel::BindingDriven,
+                "the root scope must expose the production binding-owned arena"
+            );
+            assert_eq!(realm.gestures().active_pointer_count(), 0);
+        }
+
+        /// Two independently constructed realms must never observe each
+        /// other's gesture-router registrations or arena state — the
+        /// per-realm isolation `UiRealm::for_test()` (a fully independent
+        /// pipeline/presentation/gesture-binding triple) is supposed to give.
+        #[test]
+        fn realm_input_dispatch_keeps_gesture_state_isolated() {
+            use flui_interaction::PointerId;
+            use flui_interaction::events::{
+                PointerType, make_down_event_for_id, make_up_event_for_id,
+            };
+            use flui_interaction::routing::PointerRouteHandler;
+            use flui_types::geometry::{Offset, Pixels};
+
+            let realm_a = UiRealm::for_test();
+            let realm_b = UiRealm::for_test();
+            let pointer = PointerId::new(9001).expect("nonzero pointer id");
+            let position = Offset::new(Pixels(10.0), Pixels(10.0));
+
+            let fired = Rc::new(Cell::new(0));
+            let fired_by_route = Rc::clone(&fired);
+            let handler: PointerRouteHandler = Rc::new(move |_| {
+                fired_by_route.set(fired_by_route.get() + 1);
+            });
+            realm_a
+                .gestures()
+                .pointer_router()
+                .add_route(pointer, handler);
+
+            let down_b = make_down_event_for_id(pointer, position, PointerType::Touch);
+            realm_b.enter(|realm| {
+                realm.handle_input_entered(PlatformInput::Pointer(down_b));
+            });
+
+            assert_eq!(
+                fired.get(),
+                0,
+                "a route registered in realm A must not observe realm B input"
+            );
+            assert_eq!(realm_a.gestures().active_pointer_count(), 0);
+            assert_eq!(realm_b.gestures().active_pointer_count(), 1);
+
+            let down_a = make_down_event_for_id(pointer, position, PointerType::Touch);
+            realm_a.enter(|realm| {
+                realm.handle_input_entered(PlatformInput::Pointer(down_a));
+            });
+
+            assert_eq!(
+                fired.get(),
+                1,
+                "realm A must dispatch through its own router"
+            );
+            assert_eq!(realm_a.gestures().active_pointer_count(), 1);
+            assert_eq!(realm_b.gestures().active_pointer_count(), 1);
+
+            let up_b = make_up_event_for_id(pointer, position, PointerType::Touch);
+            realm_b.enter(|realm| {
+                realm.handle_input_entered(PlatformInput::Pointer(up_b));
+            });
+            let up_a = make_up_event_for_id(pointer, position, PointerType::Touch);
+            realm_a.enter(|realm| {
+                realm.handle_input_entered(PlatformInput::Pointer(up_a));
+            });
+
+            realm_a
+                .gestures()
+                .pointer_router()
+                .remove_all_routes(pointer);
+            assert_eq!(realm_a.gestures().active_pointer_count(), 0);
+            assert_eq!(realm_b.gestures().active_pointer_count(), 0);
+        }
+
+        struct CountingArenaAcceptance(Arc<AtomicU64>);
+
+        impl flui_interaction::sealed::CustomGestureRecognizer for CountingArenaAcceptance {
+            fn on_arena_accept(&self, _pointer: flui_interaction::PointerId) {
+                self.0.fetch_add(1, Ordering::SeqCst);
+            }
+
+            fn on_arena_reject(&self, _pointer: flui_interaction::PointerId) {}
+        }
+
+        /// A lone arena member that accepts on `Down` must be swept and
+        /// drained by the SAME `handle_input_entered` call, leaving the
+        /// arena empty — no deferred second pass required for the
+        /// one-member case.
+        #[test]
+        fn pointer_input_boundary_drains_a_lone_deferred_winner() {
+            use flui_interaction::events::{PointerType, make_down_event_for_id};
+            use flui_interaction::routing::PointerRouteHandler;
+            use flui_types::geometry::{Offset, Pixels};
+
+            let realm = UiRealm::for_test();
+            let pointer = flui_interaction::PointerId::new(9002).expect("nonzero pointer id");
+            let accepted = Arc::new(AtomicU64::new(0));
+            let arena = realm.gestures().arena().clone();
+            let accepted_by_member = Arc::clone(&accepted);
+            let handler: PointerRouteHandler = Rc::new(move |event| {
+                if matches!(event, flui_interaction::PointerEvent::Down(_)) {
+                    arena.add(
+                        pointer,
+                        Arc::new(CountingArenaAcceptance(Arc::clone(&accepted_by_member))),
+                    );
+                }
+            });
+            realm
+                .gestures()
+                .pointer_router()
+                .add_route(pointer, Rc::clone(&handler));
+
+            let down = make_down_event_for_id(
+                pointer,
+                Offset::new(Pixels(10.0), Pixels(10.0)),
+                PointerType::Touch,
+            );
+            realm.enter(|realm| {
+                realm.handle_input_entered(PlatformInput::Pointer(down));
+            });
+
+            assert_eq!(accepted.load(Ordering::SeqCst), 1);
+            assert!(realm.gestures().arena().is_empty());
+            realm
+                .gestures()
+                .pointer_router()
+                .remove_route(pointer, &handler);
+        }
+
+        /// Deadline keep-alive regression: a long-press armed by a pointer
+        /// down must fire at its 500ms deadline even when NO further pointer
+        /// events or redraw requests occur — the frame loop must keep
+        /// producing frames while a recognizer deadline is pending (each
+        /// frame's deadline tick re-requests the next), instead of going
+        /// idle once the down event's own frames drain. Without the
+        /// keep-alive the deadline tick never runs at the deadline and the
+        /// gesture never fires.
+        ///
+        /// Simulates the runner's render loop against the real
+        /// `SystemClock`-driven gesture arena — consume `needs_redraw`, draw
+        /// a frame, repeat — after mounting through the production shell
+        /// path (`attach_root_widget_with_size`) and delivering the down
+        /// through `handle_input_entered`. The assertion is "fires at all",
+        /// never "fires on time", so a loaded CI machine cannot flake it.
+        ///
+        /// If reverted: remove the `self.gestures().tick_deadlines()` call
+        /// from `draw_frame_entered` and this fails — the frame loop below
+        /// spins on `needs_redraw()`/`draw_frame()` forever with no deadline
+        /// tick ever advancing the recognizer, hitting the 5s timeout.
+        #[test]
+        fn long_press_fires_at_its_deadline_with_no_further_input() {
+            use std::time::{Duration, Instant as StdInstant};
+
+            use flui_interaction::events::{PointerType, make_down_event};
+            use flui_types::Color;
+            use flui_widgets::{ColoredBox, GestureDetector};
+
+            let realm = UiRealm::for_test();
+
+            let presses = Arc::new(AtomicUsize::new(0));
+            let in_cb = Arc::clone(&presses);
+            let root = GestureDetector::new()
+                .on_long_press(move || {
+                    in_cb.fetch_add(1, Ordering::SeqCst);
+                })
+                .child(ColoredBox::new(Color::rgb(10, 20, 30)));
+
+            realm
+                .enter(|realm| realm.attach_root_widget_with_size(&root, 100.0, 100.0))
+                .expect("attach succeeds");
+            let constraints = test_constraints();
+            let _ = realm.draw_frame(constraints);
+
+            // Contact down — and nothing else, ever after. Production input
+            // arrives inside the realm (runner.rs's RealmEvent dispatch
+            // enters it before calling handle_input), so the synthetic down
+            // does the same.
+            let position = flui_types::Offset::new(px(50.0), px(50.0));
+            realm.enter(|realm| {
+                realm.handle_input_entered(PlatformInput::Pointer(make_down_event(
+                    position,
+                    PointerType::Mouse,
+                )));
+            });
+
+            // Simulated runner loop: the ONLY frame source is
+            // `needs_redraw`, consumed the way the runner consumes it
+            // (observe, render). The default long-press timeout is 500ms;
+            // the cap is generous so the pass/fail signal is purely "did the
+            // deadline ever fire".
+            let deadline = StdInstant::now() + Duration::from_secs(5);
+            while presses.load(Ordering::SeqCst) == 0 {
+                assert!(
+                    StdInstant::now() < deadline,
+                    "long-press never fired: the frame loop went idle with an armed \
+                     recognizer deadline (no keep-alive frame was requested)",
+                );
+                if realm.needs_redraw() {
+                    realm.mark_rendered();
+                    let _ = realm.draw_frame(constraints);
+                } else {
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+            }
+
+            assert_eq!(
+                presses.load(Ordering::SeqCst),
+                1,
+                "the held long-press fires exactly once",
+            );
+        }
+
+        /// Resampled (manually clocked) pointer motion that has not yet been
+        /// assigned a frame timestamp must keep `has_pending_work()` true —
+        /// the wake-gate half of the same deadline/motion keep-alive
+        /// contract `long_press_fires_at_its_deadline_with_no_further_input`
+        /// exercises for deadlines.
+        #[test]
+        fn resampled_contact_motion_keeps_the_frame_wake_gate_open() {
+            use std::time::Duration;
+
+            use flui_interaction::{
+                events::{PointerType, make_down_event, make_move_event, make_up_event},
+                processing::SamplingClock,
+                routing::HitTestResult,
+            };
+            use flui_types::geometry::{Offset, Pixels};
+
+            let realm = UiRealm::for_test();
+            realm.mark_rendered();
+            realm.pipeline_for_test().write().clear_all_dirty_nodes();
+
+            realm.enter(|realm| {
+                realm
+                    .gestures()
+                    .set_resampling_enabled(true)
+                    .expect("test configures sampling before Down");
+                realm.gestures().set_sampling_clock(SamplingClock::Manual {
+                    period: Duration::from_millis(8),
+                });
+
+                let position = Offset::new(Pixels(8.0), Pixels(13.0));
+                realm
+                    .gestures()
+                    .handle_pointer_event(&make_down_event(position, PointerType::Touch), |_| {
+                        HitTestResult::new()
+                    });
+                realm
+                    .gestures()
+                    .handle_pointer_event(&make_move_event(position, PointerType::Touch), |_| {
+                        HitTestResult::new()
+                    });
+
+                assert_eq!(
+                    realm.gestures().flush_pending_moves(),
+                    0,
+                    "manual sampling has no implicit frame timestamp"
+                );
+                assert!(realm.gestures().has_pending_motion());
+                assert!(
+                    realm.has_pending_work(),
+                    "a sequence-owned sample waiting for frame time must keep the runner awake"
+                );
+
+                realm
+                    .gestures()
+                    .handle_pointer_event(&make_up_event(position, PointerType::Touch), |_| {
+                        HitTestResult::new()
+                    });
+                assert!(!realm.gestures().has_pending_motion());
+            });
         }
 
         // ---- Vsync wiring (production frame continuation) -------------------
@@ -3212,6 +3746,221 @@ mod tests {
             assert!(
                 realm.send_frames_to_engine(),
                 "a defer registered AFTER the first frame was sent must not re-close the gate"
+            );
+        }
+    }
+
+    // ========================================================================
+    // Presentation-owned text input — migrated from the retired
+    // `AppBinding`'s own test module (`binding.rs`, deleted alongside it).
+    // End-to-end against a headless `FakeTextInput`, including realm-routed
+    // IME dispatch through `handle_input_entered`.
+    // ========================================================================
+    mod presentation_text_input {
+        use std::cell::RefCell;
+
+        use flui_types::ImeEvent;
+        use flui_types::geometry::Bounds;
+
+        use super::*;
+
+        /// A concrete headless recorder and the same value viewed through the
+        /// platform capability supplied to the presentation.
+        fn headless_text_input() -> (
+            Arc<flui_platform::FakeTextInput>,
+            Arc<dyn flui_platform::traits::PlatformTextInput>,
+        ) {
+            let fake = Arc::new(flui_platform::FakeTextInput::new());
+            let capability: Arc<dyn flui_platform::traits::PlatformTextInput> = fake.clone();
+            (fake, capability)
+        }
+
+        fn test_constraints() -> BoxConstraints {
+            BoxConstraints::tight(flui_types::Size::new(px(800.0), px(600.0)))
+        }
+
+        /// Attach records `set_ime_allowed(true)`; preedit/commit events
+        /// routed through `handle_input_entered` reach the attached client
+        /// with the exact delivered strings; detach from the still-active
+        /// token records `set_ime_allowed(false)`.
+        #[test]
+        fn attach_dispatch_and_active_detach_round_trip_through_the_platform() {
+            let (fake, text_input) = headless_text_input();
+
+            let realm = UiRealm::for_test_with_text_input(Some(Arc::clone(&text_input)));
+            let handle = realm.text_input_handle();
+
+            let received = Rc::new(RefCell::new(Vec::new()));
+            let sink = Rc::clone(&received);
+            let token = handle
+                .attach(Rc::new(move |event: &ImeEvent| {
+                    sink.borrow_mut().push(event.clone());
+                }))
+                .expect("headless presentation supports text input");
+
+            assert_eq!(
+                fake.last_ime_allowed(),
+                Some(true),
+                "attach must enable platform IME composition"
+            );
+
+            realm.enter(|realm| {
+                realm.handle_input_entered(PlatformInput::Ime(ImeEvent::Preedit {
+                    text: "ni".to_string(),
+                    cursor: Some((0, 2)),
+                }));
+                realm
+                    .handle_input_entered(PlatformInput::Ime(ImeEvent::Commit("你好".to_string())));
+            });
+
+            assert_eq!(
+                received.borrow().as_slice(),
+                [
+                    ImeEvent::Preedit {
+                        text: "ni".to_string(),
+                        cursor: Some((0, 2)),
+                    },
+                    ImeEvent::Commit("你好".to_string()),
+                ],
+                "handle_input_entered must deliver the exact ImeEvent payload to the attached client"
+            );
+
+            assert_eq!(
+                handle.detach(token).expect("presentation remains open"),
+                flui_interaction::DetachOutcome::Detached
+            );
+            assert_eq!(
+                fake.last_ime_allowed(),
+                Some(false),
+                "detaching the active token must disable platform IME composition"
+            );
+        }
+
+        /// The stale-detach race named in `TextInputOwner`'s module doc:
+        /// field A attaches, field B attaches (replacing A), and A's
+        /// now-stale detach must record NOTHING on the platform side — only
+        /// B's later, active-token detach may disable IME.
+        #[test]
+        fn a_stale_detach_records_nothing_on_the_platform() {
+            let (fake, text_input) = headless_text_input();
+
+            let realm = UiRealm::for_test_with_text_input(Some(Arc::clone(&text_input)));
+            let handle = realm.text_input_handle();
+
+            let token_a = handle
+                .attach(Rc::new(|_event: &ImeEvent| {}))
+                .expect("supported presentation");
+            assert_eq!(fake.ime_allowed_calls(), vec![true]);
+
+            let token_b = handle
+                .attach(Rc::new(|_event: &ImeEvent| {}))
+                .expect("supported presentation");
+            assert_eq!(
+                fake.ime_allowed_calls(),
+                vec![true],
+                "replacement on one presentation keeps the already-enabled IME session"
+            );
+
+            assert_eq!(
+                handle.detach(token_a).expect("presentation remains open"),
+                flui_interaction::DetachOutcome::Stale
+            );
+            assert_eq!(
+                fake.ime_allowed_calls(),
+                vec![true],
+                "a stale detach (token_a, already replaced by token_b) records nothing"
+            );
+
+            assert_eq!(
+                handle.detach(token_b).expect("presentation remains open"),
+                flui_interaction::DetachOutcome::Detached
+            );
+            assert_eq!(
+                fake.ime_allowed_calls(),
+                vec![true, false],
+                "the active token's detach still disables IME"
+            );
+        }
+
+        /// End-to-end proof of the literal ADR-0030 claim `flui-widgets`'
+        /// own `editable_text::tests` cannot make on their own: a real
+        /// mounted `EditableText` receives the weak handle of this realm's
+        /// directly owned platform capability.
+        #[test]
+        fn a_mounted_editable_text_toggles_platform_ime_on_focus_and_blur() {
+            let (fake, text_input) = headless_text_input();
+
+            let realm = UiRealm::for_test_with_text_input(Some(Arc::clone(&text_input)));
+
+            let controller = flui_widgets::TextEditingController::new();
+            let focus_node = flui_interaction::FocusNode::with_debug_label("app-ime-integration");
+            realm
+                .enter(|realm| {
+                    realm.attach_root_widget(&flui_widgets::EditableText::new(
+                        controller.clone(),
+                        Rc::clone(&focus_node),
+                    ))
+                })
+                .expect("attach succeeds");
+            let _ = realm.draw_frame(test_constraints());
+
+            assert!(focus_node.is_attached());
+            focus_node.request_focus();
+            assert!(focus_node.has_primary_focus());
+            assert_eq!(
+                fake.last_ime_allowed(),
+                Some(true),
+                "focusing a mounted EditableText must attach through its presentation \
+                 and enable platform IME composition"
+            );
+
+            focus_node.unfocus();
+            assert_eq!(
+                fake.last_ime_allowed(),
+                Some(false),
+                "blurring the field must detach and disable platform IME composition"
+            );
+        }
+
+        /// `TextInputHandle::set_cursor_area` reaches this realm's exact
+        /// `PlatformTextInput` capability through the same `PresentationState`
+        /// ownership path used in production. Deliberately does not mount a
+        /// widget tree: this test proves the owner forwards an
+        /// already-computed `Bounds` to the platform, not that a real
+        /// `EditableText` computes the right one.
+        #[test]
+        fn set_ime_cursor_area_reaches_the_presentations_platform_capability() {
+            let (fake, text_input) = headless_text_input();
+
+            let realm = UiRealm::for_test_with_text_input(Some(Arc::clone(&text_input)));
+
+            let area = Bounds::new(
+                flui_types::Point::new(px(10.0), px(20.0)),
+                flui_types::Size::new(px(2.0), px(18.0)),
+            );
+            realm
+                .text_input_handle()
+                .set_cursor_area(area)
+                .expect("headless presentation supports text input");
+
+            assert_eq!(
+                fake.cursor_area_calls(),
+                vec![area],
+                "set_ime_cursor_area must call through to the presentation-owned \
+                 PlatformTextInput capability with the exact area"
+            );
+        }
+
+        /// A presentation without IME support reports a typed error.
+        #[test]
+        fn set_ime_cursor_area_without_platform_support_is_typed() {
+            let realm = UiRealm::for_test();
+            assert_eq!(
+                realm.text_input_handle().set_cursor_area(Bounds::new(
+                    flui_types::Point::new(px(0.0), px(0.0)),
+                    flui_types::Size::new(px(1.0), px(1.0)),
+                )),
+                Err(flui_interaction::TextInputError::Unsupported)
             );
         }
     }

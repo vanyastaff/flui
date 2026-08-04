@@ -335,7 +335,7 @@ impl SharedEngineServices {
 /// cross-thread case `AppRuntime::frame_wake_callback`'s own doc warns
 /// against.
 #[cfg(not(target_os = "ios"))]
-fn install_frames_reenable_redirty_listener(
+pub(super) fn install_frames_reenable_redirty_listener(
     scheduler: &Scheduler,
     wake: Arc<dyn Fn() + Send + Sync>,
 ) {
@@ -810,8 +810,11 @@ impl AppRuntime {
     }
 
     /// Test-only: a clone of the exact `Arc<Mutex<...>>` slot [`Self::clipboard`]
-    /// reads from — see the retired `AppBinding::platform_clipboard_slot`'s
-    /// identical rationale.
+    /// reads from. A fake `Clipboard` stored in this slot must be `'static +
+    /// Send + Sync`, so it cannot safely borrow the owner `AppRuntime` back
+    /// through the slot it occupies; cloning the slot instead lets a test
+    /// reproduce [`Self::clipboard`]'s exact lock-then-clone-then-drop
+    /// sequence without a self-reference.
     #[cfg(test)]
     pub(super) fn platform_clipboard_slot(&self) -> Arc<Mutex<Option<Arc<dyn Clipboard>>>> {
         Arc::clone(&self.platform_clipboard)
@@ -820,8 +823,7 @@ impl AppRuntime {
 
 #[cfg(not(target_os = "ios"))]
 impl Drop for AppRuntime {
-    /// The third, last-resort clipboard clear (critic finding 6's
-    /// leak→drop enumeration): the deterministic path is the explicit
+    /// The third, last-resort clipboard clear: the deterministic path is the explicit
     /// `teardown_platform_realm` clear; this is only a backstop for
     /// whatever construction/panic ordering skips it. Idempotent — clearing
     /// an already-empty slot is a no-op — and must never assert platform
@@ -1142,6 +1144,82 @@ mod wake_and_clipboard_tests {
              the platform_clipboard lock it itself just released",
         );
         assert_eq!(text.as_deref(), Some("reentrant"));
+    }
+
+    /// Serializes tests that drive the owner thread's `Scheduler::instance()`
+    /// singleton, mirroring `ui_realm.rs`'s `SINGLETON_FRAME_LOCK` (both
+    /// guard the same kind of state for the same reason).
+    static WAKE_HOOK_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// `ensure_services` must wire the animation-wake hook as the
+    /// install-time-captured `Send + Sync` handle
+    /// [`AppRuntime::frame_wake_callback`] returns, not a callback that
+    /// re-resolves this thread-local `AppRuntime` when the hook fires.
+    ///
+    /// Proof shape: spawn a task on the real `Scheduler::instance()`,
+    /// capture its `Waker`, then fire that `Waker` from an OS thread that
+    /// never touches `runtime`, `APP_RUNTIME`, or `Scheduler::instance()` —
+    /// and observe `needs_redraw` flip on the ORIGINAL runtime anyway. A
+    /// hook built by re-resolving `APP_RUNTIME` at fire time (the shape
+    /// `install_frames_reenable_redirty_listener` uses, safely, only
+    /// because that listener fires solely on its own owner thread) would
+    /// see an empty thread-local on the foreign thread and never flip this
+    /// flag — the revert recipe for this test.
+    #[test]
+    fn ensure_services_installs_a_send_wake_hook_that_survives_a_cross_thread_fire() {
+        use std::sync::mpsc;
+        use std::task::Waker;
+        use std::time::Duration;
+
+        let _serialized = WAKE_HOOK_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+        let mut runtime = AppRuntime::new();
+        let scheduler = runtime.ensure_services().scheduler.get();
+        assert!(!runtime.needs_redraw(), "precondition: no redraw pending");
+
+        let stored_waker: Arc<Mutex<Option<Waker>>> = Arc::new(Mutex::new(None));
+        let stored_for_task = Arc::clone(&stored_waker);
+        let _token = scheduler.spawn_local(Box::pin(std::future::poll_fn(move |cx| {
+            *stored_for_task.lock() = Some(cx.waker().clone());
+            std::task::Poll::<()>::Pending
+        })));
+
+        // `spawn_local` itself already requested (and thus already woke) a
+        // frame; consume that pending flag as a real frame would, so the
+        // cross-thread wake below is the false->true edge under test.
+        scheduler.handle_begin_frame(flui_scheduler::Instant::now());
+        scheduler.drive_async_tasks();
+        runtime.mark_rendered();
+        assert!(
+            !runtime.needs_redraw(),
+            "consuming the spawn-time wake must not leave a stale flag"
+        );
+
+        let waker = stored_waker
+            .lock()
+            .clone()
+            .expect("waker stored by the poll above");
+
+        let (fired_tx, fired_rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            // Deliberately touches nothing but the waker itself: no
+            // `runtime`, no `APP_RUNTIME`, no `Scheduler::instance()` on
+            // this thread.
+            waker.wake();
+            let _ = fired_tx.send(());
+        });
+        fired_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the foreign thread must be able to fire the waker without blocking");
+
+        assert!(
+            runtime.needs_redraw(),
+            "the animation-wake hook ensure_services installed must be a Send handle captured \
+             at install time, not one resolved from a thread-local at fire time -- a foreign \
+             OS thread has no such thread-local to resolve"
+        );
     }
 }
 
