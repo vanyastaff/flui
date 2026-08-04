@@ -113,9 +113,11 @@ wasm-link-check:
 #
 # LINT, NO LINK: clippy (not plain check) because cfg(windows)/cfg(macos)
 # code is invisible to every other lint gate — check-only let ~80 deny-level
-# violations accumulate unseen. It still does not link and runs no tests, and
-# flui-platform is excluded from the test job entirely. Green here means
-# "compiles clean under the workspace lints", nothing more.
+# violations accumulate unseen. It still does not link and runs no tests. The
+# `test` job's dedicated flui-platform step only runs the Linux-buildable
+# backends (headless + winit-on-X11); the Windows/macOS backends this lints
+# are never linked or executed by anything else. Green here means "compiles
+# clean under the workspace lints", nothing more.
 # Requires: rustup target add x86_64-pc-windows-msvc aarch64-apple-darwin
 [group("build")]
 [doc("Clippy flui-platform's Windows and macOS backends from this host (mirrors the CI cross-typecheck job)")]
@@ -133,7 +135,7 @@ test *args:
     cargo test --workspace {{args}}
 
 [group("test")]
-[doc("Run the workspace test scope used by CI")]
+[doc("Run the workspace test scope used by CI (the flui-platform step needs xvfb-run on Linux — apt install xvfb; skipped with a message on other hosts)")]
 test-ci:
     cargo nextest run --workspace --exclude flui-platform --locked --no-fail-fast
     # The facade defaults to Material only, so the run above skips
@@ -141,6 +143,20 @@ test-ci:
     # assertions in `tests/facade_smoke.rs`. Same precedent as CI's
     # flui-assets/flui-widgets feature-gated run.
     cargo nextest run -p flui --locked --features cupertino,localizations --no-fail-fast
+    # Mirrors CI's dedicated flui-platform step, guarded by host OS:
+    # `--all-features` is required just to compile the winit backend
+    # (crates/flui-platform/AGENTS.md — invisible under `default =
+    # ["desktop"]`); `FLUI_HEADLESS=1` routes `current_platform()` to the
+    # `HeadlessPlatform` mock so most of the suite needs no display server;
+    # a handful of winit-internals unit tests construct `WinitPlatform::new()`
+    # directly and need a real (if virtual) X11 connection for clipboard
+    # init, which `xvfb-run` supplies — a Linux-only tool, hence the guard.
+    # On Windows this is not a missing-tool gap: STATUS_HEAP_CORRUPTION
+    # (H9, docs/ROADMAP-TRACKER.md) is an unresolved crash in this crate's
+    # Windows backend, so the tests must not run there at all. 171/171
+    # pass on Linux, 5x-verified stable — see AGENTS.md Testing Quirks for
+    # what stays excluded and why.
+    {{ if os() == "linux" { "FLUI_HEADLESS=1 xvfb-run -a cargo nextest run -p flui-platform --locked --all-features --no-fail-fast" } else if os() == "windows" { "echo 'Skipping flui-platform tests: STATUS_HEAP_CORRUPTION (H9, docs/ROADMAP-TRACKER.md) is an unresolved Windows crash in this crate -- do not run its tests on a Windows host until that investigation lands a fix.'" } else { "echo 'Skipping flui-platform tests on this host: the CI-mirroring invocation needs xvfb-run (Linux-only) for the winit backend X11-dependent tests; see crates/flui-platform/AGENTS.md.'" } }}
 
 [group("test")]
 [doc("Test a single crate (e.g. just test-crate flui-tree)")]
@@ -174,7 +190,11 @@ test-release:
 [group("test")]
 [doc("Run rustdoc examples as tests (CI gate; nextest does not execute doctests)")]
 test-doc:
-    cargo test --workspace --exclude flui-platform --doc
+    # flui-platform is not excluded: its doctests need neither
+    # `--all-features` nor a display server (verified locally with and
+    # without DISPLAY set), so there is no green-by-construction reason to
+    # carve it out — see CI's `doc-test` job comment.
+    cargo test --workspace --locked --doc
 
 [group("test")]
 [doc("Golden-image regression tests: render each demo headless and compare to tests/goldens/ (needs a GPU)")]

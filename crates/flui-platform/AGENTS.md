@@ -13,7 +13,32 @@ Platform abstraction layer. Provides a unified `Platform` trait with concrete im
 
 ## Key constraints
 
-- **Tests excluded from CI** — STATUS_HEAP_CORRUPTION investigation in progress
+- **CI runs this crate's Linux-runnable suite, not a plain `cargo nextest run -p
+  flui-platform`.** The exact command (mirrored by `just test-ci`):
+
+  ```bash
+  FLUI_HEADLESS=1 xvfb-run -a cargo nextest run -p flui-platform --all-features --no-fail-fast
+  ```
+
+  `--all-features` is required just to compile the `winit/` module (see the
+  next bullet). `FLUI_HEADLESS=1` makes `current_platform()` return the
+  `HeadlessPlatform` mock, which is what most tests call through and what
+  fixes tests that otherwise call `open_window` outside `Platform::run`'s
+  `on_ready` callback (a real ordering requirement of the winit event-loop
+  model — calling it earlier panics on every backend, not just headless).
+  `xvfb-run` covers the remainder: a handful of winit-internals unit tests in
+  `src/platforms/winit/platform.rs` construct `WinitPlatform::new()` directly,
+  bypassing the `FLUI_HEADLESS` check, and need a real (if virtual) X11
+  connection for `arboard`'s clipboard init. Without both devices, running on
+  a box with no display fails fast on the clipboard connection; running on a
+  box with a real desktop session instead fails on the `open_window`
+  ordering panics — neither failure mode means the crate is broken, both are
+  fixed by running it the way CI does.
+- **Windows and macOS backends still have zero executing tests anywhere** —
+  `STATUS_HEAP_CORRUPTION` (ROADMAP-TRACKER item H9) is a Windows-only crash
+  that can't reproduce on the Linux CI runners above; `cross-typecheck` lints
+  those backends (clippy, no link, no run) as the only coverage they get
+  until someone debugs H9 on an actual Windows box.
 - The `winit/` module (including its owner-lane tests) only compiles under the
   `winit-backend` feature, not `desktop` (default) — a bare
   `cargo nextest run -p flui-platform` silently skips all of it; use
