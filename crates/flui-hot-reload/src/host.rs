@@ -253,7 +253,7 @@ impl ScenePlugin {
     /// `repr(Rust)` compilations is established at `load` by the ABI-token
     /// handshake (same compiler, same crate revision — see [`crate::abi_token`]).
     ///
-    /// Returns `None` when this is an [`PluginKind::App`] plugin and the
+    /// Returns `None` when this is a [`PluginKind::App`] plugin and the
     /// build function refused the call — the wrong-thread case
     /// `app_plugin!`'s generated `flui_app_build` documents (see its
     /// "Thread affinity" docs): the pipeline is pinned to whichever thread
@@ -289,9 +289,13 @@ impl ScenePlugin {
         unsafe {
             let ptr = (self.build_fn)(width, height);
             if ptr.is_null() {
+                let build_symbol = match self.kind {
+                    PluginKind::App => "flui_app_build",
+                    PluginKind::Scene => "flui_scene_build",
+                };
                 assert!(
                     self.kind == PluginKind::App,
-                    "flui_scene_build returned null — scene_plugin! has no \
+                    "{build_symbol} returned null — scene_plugin! has no \
                      legitimate null path (only app_plugin!'s wrong-thread \
                      refusal does)"
                 );
