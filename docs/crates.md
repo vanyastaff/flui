@@ -138,7 +138,7 @@ A new crate is a topology change, so it starts with the contract, not the direct
 3. Add a `[[member]]` entry to `workspace-layers.toml` with its layer and disposition (`keep` / `rename` / `narrow` / `optionalize` / `deferred-extraction`).
 4. Add the directory under `crates/<flui-name>/` with a standard layout (`Cargo.toml`, `src/lib.rs`, `src/error.rs`).
 5. Add the path to `[workspace.members]` in the root `Cargo.toml`; add it to `default-members` unless the crate is intentionally excluded from default local builds.
-6. Update the layer table in [`AGENTS.md`](../AGENTS.md) if it represents a new responsibility. (There is no `.specify/memory/constitution.md` in this checkout — `AGENTS.md` is where that table lives now.)
+6. There is no separate layer table to maintain: the checked authority is the `[[member]]` entry from step 3 (`workspace-layers.toml`), and the human-readable graph is [`FOUNDATIONS.md` Part IV](FOUNDATIONS.md), updated in step 7. If the crate changes what an agent should read first, extend the decision tables in [`AGENTS.md`](../AGENTS.md).
 7. Update this page (`docs/crates.md`), [`FOUNDATIONS.md` Part IV](FOUNDATIONS.md), and the `active_crates` / `build-layered` inventories in the `justfile`.
 
 ## See Also
