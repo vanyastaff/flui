@@ -4,11 +4,58 @@
 
 ---
 
-- **Status:** Accepted (chief-architect ARCH-GATE: **ACCEPTABLE** — infra decision only. The `Icon` glyph-rendering slice, the engine `TextRenderer` migration, and the bundled-font wiring are separate DEV tasks, each DoD-cross-checked against `.flutter/`.)
+- **Status:** Accepted; **Superseded/Amended 2026-08-04** — the decision to unify the two `FontSystem`s stands and shipped (Slices 1–2 below), but the *mechanism* this doc specifies (`PaintingBinding::instance().font_system()`, an ambient singleton accessor) no longer exists: the painting-singleton retirement removed `PaintingBinding::instance()` entirely. See "Amendment (2026-08-04)" below for the real current shape. (chief-architect ARCH-GATE: **ACCEPTABLE** — infra decision only. The `Icon` glyph-rendering slice, the engine `TextRenderer` migration, and the bundled-font wiring are separate DEV tasks, each DoD-cross-checked against `.flutter/`.)
 - **Date:** 2026-07-02
 - **Deciders:** chief-architect; consult api-design-lead (the new `PaintingBinding::register_font` / `font_system()` public surface + the `flui_painting::FontSystem` re-export that pins the shared type), async-systems/scheduler owner (confirming the shared-lock stays off the async path and layout/paint phases are disjoint), systems-perf-lead (lock-contention and multi-window font-DB sharing), qa-lead (the type-identity failsafe test + the register→measure→paint consistency tests)
 - **Relates to:** **Unblocks the deferred glyph-rendering half of the `Icon` widget** (`docs/research/2026-07-02-icon-widget-plan.md` §"THE GAP", B1.1 — the widget-layer slice shipped honestly with glyph rendering NO-GO pending this ADR). Sibling in spirit to ADR-0011/0012/0013: close a gap by making the correct state *structural* (one source of truth) rather than bolting on a parallel channel that must be kept consistent.
 - **Gate:** ARCH-GATE (this doc) → then per-slice DEV-GATEs (painting API, engine migration, bundled-font wiring, Icon glyph assertion).
+
+---
+
+## Amendment (2026-08-04)
+
+**What changed:** a later, unrelated change (the painting-singleton
+retirement) deleted `PaintingBinding::instance()` and the rest of the
+`BindingBase`/`HasInstance`/`impl_binding_singleton!` ambient-singleton
+machinery workspace-wide. This ADR's Decision and Implementation-progress
+sections (below, left as originally written — this is an amendment note,
+not a rewrite) describe the shared `FontSystem` as reached through
+`PaintingBinding::instance().font_system()`. That accessor path is gone;
+`PaintingBinding` is now a plain value type constructed with
+`PaintingBinding::new()` wherever a caller needs one (`crates/flui-painting/src/binding.rs:382`).
+
+**What did NOT change:** the one-`FontSystem` decision itself. There is
+still exactly one process-wide `FontSystem`, and a font registered anywhere
+is still visible to both layout and every engine instance — the property
+this ADR exists to guarantee.
+
+**The real current shape:**
+
+- A free-standing `static FONT_SYSTEM: OnceLock<Arc<Mutex<FontSystem>>>` in
+  `crates/flui-painting/src/text_layout/layout.rs:48`, behind the
+  crate-private `font_system_arc()` accessor.
+- `PaintingBinding::font_system()` and `PaintingBinding::register_font()`
+  are ordinary instance methods on a value-constructed `PaintingBinding`
+  that delegate straight to that process-global (`crate::text_layout::shared_font_system()`)
+  — they are not the ownership boundary the original Decision text implies.
+- Construction ownership: `SharedEngineServices::resolve()` (invoked from
+  `AppRuntime::ensure_services()` at realm install) is the constructing
+  owner — it calls `PaintingBinding::font_system()` explicitly at realm
+  install, eagerly initializing the process-wide `FontSystem` rather than
+  leaving it to whichever text-measurement call happens to run first.
+- The **read** path stays ambient on layout hot paths — this is a named,
+  bounded, and accepted hazard (cross-realm `register_font` staleness
+  mid-layout is a staleness window, not a data race, because the shared
+  state is `Mutex<FontSystem>`), tracked as a documented ratchet exclusion
+  in `docs/runtime-contract.toml:1779` rather than closed. Closing it (an
+  owner-local-access or font-sharding design) is an ADR-0027 follow-up, not
+  done here.
+
+This amendment does not change any of the Decision, Consequences,
+Alternatives, or Test-plan sections below — they document the original
+call and remain historically accurate for what was decided and why. Read
+them as "why we unified the two `FontSystem`s"; read this section as "how
+that unification is actually wired today."
 
 ---
 

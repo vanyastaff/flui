@@ -16,6 +16,16 @@ crate-type = ["rlib"]
 default = ["desktop"]
 
 # === Platform Features ===
+# Honest note (verified 2026-08-04): these four are no-op selectors today —
+# `rg 'feature\s*=\s*"(desktop|android|ios|web)"' crates/flui-app/src` has
+# zero hits. Platform dispatch in this crate is `#[cfg(target_os = "...")]`
+# on the actual target, not one of these flags; enabling or disabling any of
+# them changes nothing observable. They exist as forward-compatible names for
+# downstream `Cargo.toml`s to opt into (e.g. `default-features = false,
+# features = ["desktop"]`) if/when this crate grows real per-platform gating,
+# and `desktop` staying default keeps that future migration additive. Do not
+# assume enabling one of these turns on platform-specific code — check the
+# actual `#[cfg(target_os = ...)]` gates for that.
 desktop = []
 android = []
 ios = []
@@ -32,6 +42,14 @@ web = []
 hot-reload = ["dep:flui-hot-reload"]
 
 # === Debug Features ===
+# Honest note (verified 2026-08-04): also no-op selectors — zero
+# `feature = "debug-overlay"` / `feature = "performance-overlay"` references
+# in this crate's src. There is one runtime toggle for this, not two:
+# `AppConfig::show_performance_overlay` (`app/config.rs`), which `runner.rs`
+# also calls "the debug overlay" in comments — it is the same overlay under
+# both names, controlled entirely at runtime, not by either compile-time
+# feature. Kept for the same forward-compatible-name reason as the platform
+# features above.
 debug-overlay = []
 performance-overlay = []
 
