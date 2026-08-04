@@ -1937,11 +1937,19 @@ allow_files = []
 pattern = "PR-2"
 why = """
 See the `PR-1` entry above for the shared rationale and the substring-scan \
-caveat. Pre-existing debt on `main` from an earlier (pre-singleton-retirement) \
-blend-mode-routing migration that used the same `PR-N` slice-marker convention \
-in its own comments -- out of scope to fix in the singleton-retirement PR that \
-added this gate, so those files are allowlisted here as named debt rather than \
-silently exempted.\
+caveat. Pre-existing debt on `main` from TWO unrelated earlier migrations \
+that each used the same `PR-N` slice-marker convention in their own \
+comments -- out of scope to fix in the singleton-retirement PR that added \
+this gate, so those files are allowlisted here as named debt rather than \
+silently exempted. `aa_oracle_tests.rs`, `advanced_blend/mod.rs`, \
+`batches/shapes.rs`, `instancing.rs`, and `flui-types/src/styling/color.rs` \
+(the WGSL-port CPU oracle cross-referenced from the shared `Color` type) are \
+the pre-singleton-retirement blend-mode-routing/GPU-port migration in \
+`flui-engine`'s wgpu backend. `flui-view/src/tree/element_tree.rs` is NOT \
+part of that migration -- its `PR-2` marks a separate, unrelated `flui-view` \
+inherited-scope migration (the per-node `inherited` map for `depend_on` \
+resolution); it happens to share the same slice number by coincidence, not \
+by relation.\
 """
 allow_files = [
     "crates/flui-engine/src/wgpu/aa_oracle_tests.rs",

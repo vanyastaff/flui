@@ -495,15 +495,18 @@ impl RenderingFlutterBinding {
 
     /// Attempts to handle memory pressure by clearing the image cache.
     ///
-    /// **Currently inert** — see [`Self::painting`]'s doc comment. This
-    /// clears the throwaway `PaintingBinding`'s own, always-empty
-    /// `ImageCache`, not whatever cache the application is actually using;
-    /// it becomes meaningful again once `RenderingFlutterBinding` is
-    /// re-homed to receive its painting service from the owning runtime.
-    /// Traced at `trace`, not `info`, so this does not read as a real
-    /// memory-pressure response in a production log.
+    /// **Currently inert** — see [`Self::painting`]'s doc comment. Deliberately
+    /// does NOT call `Self::painting().handle_memory_pressure()`: that inner
+    /// method's own `tracing::info!("Memory pressure: clearing image cache")`
+    /// is legitimate for a real, owned `PaintingBinding` value, but firing it
+    /// here — against a throwaway value whose `ImageCache` starts and ends
+    /// empty — would be exactly the false "it worked" signal this method is
+    /// trying not to emit. This becomes meaningful again once
+    /// `RenderingFlutterBinding` is re-homed to receive its painting service
+    /// from the owning runtime. Traced at `trace`, not `info`, so the no-op
+    /// itself does not read as a real memory-pressure response in a
+    /// production log.
     pub fn handle_memory_pressure(&self) {
-        Self::painting().handle_memory_pressure();
         tracing::trace!(
             "RenderingFlutterBinding::handle_memory_pressure: inert no-op on a \
              throwaway PaintingBinding -- see the doc comment on this method \
