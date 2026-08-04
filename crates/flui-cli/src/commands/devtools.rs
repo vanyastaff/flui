@@ -16,7 +16,7 @@ use console::style;
 ///
 /// Neither build reaches a running server: with the `devtools` feature
 /// compiled in this reports what `flui-devtools` provides as a library and
-/// returns [`CliError::NotImplemented`] (nonzero exit); without it, this
+/// returns `CliError::NotImplemented` (nonzero exit); without it, this
 /// shows the same message plus the build instruction.
 pub fn execute(port: u16) -> CliResult<()> {
     cliclack::intro(style(" flui devtools ").on_green().black())?;
@@ -67,7 +67,7 @@ fn report_not_implemented(port: u16) -> CliResult<()> {
 /// Show a message when the `devtools` feature is not compiled in.
 ///
 /// Note: enabling the feature does not change the outcome — see
-/// [`report_not_implemented`], which this build does not compile. There is
+/// `report_not_implemented`, which this build does not compile. There is
 /// no server to gain access to; this only unlocks `flui-devtools` as a
 /// library dependency.
 #[cfg(not(feature = "devtools"))]
