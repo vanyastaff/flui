@@ -126,13 +126,18 @@ impl<T: Send + 'static> Future for Task<T> {
 
         // SAFETY: `get_unchecked_mut` requires that moving the pointee after
         // this call cannot violate a pinning invariant `Task<T>` depends on.
-        // `Task<T>` has no `PhantomPinned` field and neither `TaskState`
-        // variant is self-referential: `Option<T>` and `tokio::task::JoinHandle<T>`
-        // are themselves `Unpin` regardless of `T` (the handle is a plain
-        // index into the runtime, not a borrow into this struct), so nothing
-        // here actually needs to stay pinned — this projection cannot
-        // produce a dangling self-reference because there is no
-        // self-reference to begin with.
+        // `Task<T>` never establishes one: it has no `PhantomPinned` field,
+        // does not pin-project any field (no `pin_project`/manual projection
+        // anywhere in this type), and neither `TaskState` variant is
+        // self-referential — `TaskState::Ready` holds a plain `Option<T>`
+        // that this function freely moves out of via `.take()` below, and
+        // `TaskState::Spawned` holds a `tokio::task::JoinHandle<T>`, which
+        // has an unconditional `Unpin` impl (true regardless of `T`: the
+        // handle is a plain index into the runtime, not a borrow into this
+        // struct or into `T`). `Pin<&mut Self>` is only present here because
+        // it is `Future::poll`'s mandated signature, not because `Task<T>`
+        // itself needs any address to stay fixed — so unwrapping it via
+        // `get_unchecked_mut` gives up nothing this type was relying on.
         let this = unsafe { self.get_unchecked_mut() };
         match &mut this.0 {
             TaskState::Ready(val) => {

@@ -1529,10 +1529,21 @@ impl Drop for WindowsPlatform {
             }
         }
 
-        // SAFETY: `CoUninitialize` takes no arguments; it pairs with the
-        // `CoInitializeEx` call in `with_config` on the same thread — COM's
-        // own reference counting (not memory safety) governs whether this
-        // is the initializing call's matching uninitialize.
+        // SAFETY: `CoUninitialize` takes no arguments, so this call itself
+        // cannot be memory-unsafe regardless of which thread runs it.
+        //
+        // NOT established: that this runs on the same thread that called
+        // `CoInitializeEx` in `with_config`. COM's apartment state is
+        // per-thread, and `CoUninitialize` is only the matching call for
+        // the thread that initialized it — but `WindowsPlatform` is `Send`
+        // (see its impl above), so nothing stops this value being moved to
+        // and dropped on a different thread than the one that constructed
+        // it. If that happens, this does not uninitialize the constructing
+        // thread's COM apartment at all; at worst it leaves that thread's
+        // COM reference count unbalanced (permanently initialized) and/or
+        // calls `CoUninitialize` on a thread whose own apartment state this
+        // struct never tracked — an accounting/leak concern, not memory
+        // unsafety, and not fixed by this comment.
         //
         // Uninitialize COM
         unsafe {
