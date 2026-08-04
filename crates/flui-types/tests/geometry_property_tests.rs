@@ -85,11 +85,46 @@ proptest! {
         let dist_ab = a.distance(b);
         let dist_bc = b.distance(c);
 
-        let epsilon = 1e-4; // Larger epsilon for accumulated error
-        prop_assert!(dist_ac <= dist_ab + dist_bc + epsilon,
+        // The tolerance must scale with magnitude: near-collinear points at
+        // coordinate ~8000 make dist_ac exceed the sum by ~1 ULP of f32
+        // (~0.001 there), which a fixed absolute epsilon cannot cover without
+        // being uselessly loose at small magnitudes. Absolute + relative term.
+        let tolerance = 1e-4 + (dist_ab + dist_bc) * 8.0 * f32::EPSILON;
+        prop_assert!(dist_ac <= dist_ab + dist_bc + tolerance,
             "Triangle inequality violated: dist({:?},{:?})={} > dist({:?},{:?})={} + dist({:?},{:?})={}",
             a, c, dist_ac, a, b, dist_ab, b, c, dist_bc);
     }
+}
+
+/// Near-collinear points at large magnitude where f32 rounding makes the
+/// direct distance exceed the two-leg sum by about one ULP (~0.001 at
+/// coordinate ~8000). Found by proptest in CI; pinned deterministically so
+/// the tolerance can never regress to a purely absolute epsilon.
+#[test]
+fn triangle_inequality_tolerates_one_ulp_at_large_magnitude() {
+    let a = Point::new(Pixels(7882.3926), Pixels(4223.987));
+    let b = Point::new(Pixels(2886.2673), Pixels(1433.5686));
+    let c = Point::new(Pixels(622.8746), Pixels(170.34543));
+
+    let dist_ac = a.distance(c);
+    let dist_ab = a.distance(b);
+    let dist_bc = b.distance(c);
+
+    let absolute_only = 1e-4;
+    assert!(
+        dist_ac > dist_ab + dist_bc + absolute_only,
+        "expected the historical counterexample to violate the absolute-only bound \
+         (dist_ac={dist_ac}, sum={})",
+        dist_ab + dist_bc
+    );
+
+    let tolerance = 1e-4 + (dist_ab + dist_bc) * 8.0 * f32::EPSILON;
+    assert!(
+        dist_ac <= dist_ab + dist_bc + tolerance,
+        "magnitude-scaled tolerance must cover the one-ULP rounding excess \
+         (dist_ac={dist_ac}, bound={})",
+        dist_ab + dist_bc + tolerance
+    );
 }
 
 // ============================================================================
