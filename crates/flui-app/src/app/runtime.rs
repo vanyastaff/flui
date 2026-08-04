@@ -7,10 +7,14 @@
 //! honest claim: `UiRealm` performs zero `::instance()` calls; the services
 //! it consumes are resolved once, here, in [`SharedEngineServices::resolve`].
 //! Other ambient reaches (`renderer_binding.rs`, `binding.rs`,
-//! `hot_reload.rs`, `config.rs`, `text.rs`) are untouched — they remain
-//! until the change that retires each singleton they reach for. This is not
-//! a forwarding shim: no old API is preserved-but-deprecated here, and no
-//! ambient access point this change does not touch is claimed as closed.
+//! `hot_reload.rs`, `config.rs`) are untouched — they remain until the
+//! change that retires each singleton they reach for.
+//! `flui-engine/src/wgpu/text.rs`'s ambient reach for painting has since
+//! closed: `TextRenderer::new` takes an injected `SharedFontSystem`
+//! parameter instead of calling `PaintingBinding::instance()` itself. This
+//! is not a forwarding shim: no old API is preserved-but-deprecated here,
+//! and no ambient access point this change does not touch is claimed as
+//! closed.
 //!
 //! # What lives here vs. in `runner.rs`
 //!
@@ -142,14 +146,21 @@ use super::window_registry::WindowRegistry;
 /// [`SharedEngineServices::resolve`] — never re-resolved on every access, and
 /// never reached ambiently from inside `UiRealm`.
 ///
-/// Every field here is transitional: the type each names is still the
-/// process-global singleton underneath (`PaintingBinding::instance()` and
-/// friends) — only the *resolution point* moves to this one constructor.
-/// Each field's `'static` reference is expected to flip to an owned value
-/// once the change that retires that singleton lands (painting, semantics,
-/// and the scheduler each have their own separate follow-up); until then
-/// these fields are `pub(super)`, not part of any public surface (ADR-0027
-/// §9: transitional runtime types stay `pub(crate)` at most).
+/// `painting` is an OWNED [`PaintingBinding`] value: `PaintingBinding`'s
+/// singleton-macro invocation was deleted as the remaining singletons here
+/// move behind explicit owners one at a time, so this is the first field
+/// here to complete its flip from a `'static` singleton reference to a
+/// plain owned value — the same "flip-containment" shape
+/// `PaintingBinding::font_system` already proved possible (it returns
+/// `SharedFontSystem` by value, so consumers never observed the `'static`
+/// lifetime in the first place). `semantics` and `scheduler` are still the
+/// process-global singleton underneath (`SemanticsBinding::instance()` and
+/// `Scheduler::instance()`) — only the *resolution point* moves to this one
+/// constructor; each flips to an owned value once the change that retires
+/// that singleton lands (semantics and the scheduler each have their own
+/// separate follow-up). Until then these fields are `pub(super)`, not part
+/// of any public surface (ADR-0027 §9: transitional runtime types stay
+/// `pub(crate)` at most).
 #[cfg(not(target_os = "ios"))]
 pub(crate) struct SharedEngineServices {
     #[cfg_attr(
@@ -160,7 +171,7 @@ pub(crate) struct SharedEngineServices {
                       change wires the first real consumer"
         )
     )]
-    pub(super) painting: &'static PaintingBinding,
+    pub(super) painting: PaintingBinding,
     #[cfg_attr(
         not(test),
         expect(
@@ -184,7 +195,7 @@ pub(crate) struct SharedEngineServices {
 #[cfg(not(target_os = "ios"))]
 impl SharedEngineServices {
     fn resolve() -> Self {
-        let painting = PaintingBinding::instance();
+        let painting = PaintingBinding::new();
 
         // `SharedEngineServices::resolve()` -- reached only through
         // `AppRuntime::ensure_services()`, at the realm-install point -- is

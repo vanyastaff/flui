@@ -14,8 +14,7 @@ use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::hash::{Hash, Hasher};
 
-use flui_foundation::HasInstance;
-use flui_painting::{PaintingBinding, SharedFontSystem};
+use flui_painting::SharedFontSystem;
 use flui_types::{
     geometry::{Pixels, Point},
     styling::Color,
@@ -349,7 +348,7 @@ enum BatchEntry {
 ///
 /// # Example
 /// ```ignore
-/// let mut text_renderer = TextRenderer::new(&device, &queue, surface_format)?;
+/// let mut text_renderer = TextRenderer::new(&device, &queue, surface_format, font_system);
 ///
 /// // Add plain text during frame
 /// text_renderer.add_text("Hello, World!", Point::new(10.0, 10.0), 16.0, Color::BLACK);
@@ -358,12 +357,18 @@ enum BatchEntry {
 /// text_renderer.render(&device, &queue, &view, &mut encoder, (800, 600))?;
 /// ```
 pub struct TextRenderer {
-    /// The framework's single shared font system (ADR-0016).
+    /// The framework's single shared font system (ADR-0016), injected by the
+    /// caller rather than resolved ambiently.
     ///
     /// This is a clone of the handle owned by `flui-painting`, so glyphs are
     /// shaped here against the exact same faces that text *measurement* uses:
     /// a font registered via `PaintingBinding::register_font` is visible to
-    /// both paths, with no second database to keep in sync.
+    /// both paths, with no second database to keep in sync. Taking this as a
+    /// constructor parameter (rather than reaching for
+    /// `PaintingBinding::instance()` internally) means constructing a
+    /// `TextRenderer` on a non-owner thread (the raster thread) never has to
+    /// stand up a second, disconnected binding of its own — the caller
+    /// decides which font system this renderer shapes against.
     font_system: SharedFontSystem,
 
     /// Swash cache (rasterizes glyphs)
@@ -426,29 +431,79 @@ impl TextRenderer {
         // Icon fonts: always present, independent of the text-font count above.
         // Neither the OS text fonts nor Roboto carry the private-use glyphs that
         // Material / Cupertino icons resolve to, so `Icon` renders tofu without
-        // these. Loaded exactly once into the process-wide shared DB.
-        static ICON_FONTS_LOADED: std::sync::atomic::AtomicBool =
-            std::sync::atomic::AtomicBool::new(false);
-        if !ICON_FONTS_LOADED.swap(true, std::sync::atomic::Ordering::Relaxed) {
-            const MATERIAL_ICONS: &[u8] =
-                include_bytes!("../../assets/fonts/MaterialIcons-Regular.ttf");
-            const CUPERTINO_ICONS: &[u8] = include_bytes!("../../assets/fonts/CupertinoIcons.ttf");
-            font_system.db_mut().load_font_data(MATERIAL_ICONS.to_vec());
-            font_system
-                .db_mut()
-                .load_font_data(CUPERTINO_ICONS.to_vec());
-            tracing::info!(
-                count = font_system.db().faces().count(),
-                "loaded embedded Material Icons + Cupertino Icons fonts"
-            );
-        }
+        // these.
+        //
+        // Idempotency is checked per FontSystem INSTANCE (by family-name
+        // presence in `font_system`'s own db), not via a process-global flag.
+        // A process-global `AtomicBool` (the previous shape) is wrong here:
+        // it flips true the first time any `FontSystem` loads the icon
+        // fonts, and every OTHER `FontSystem` afterwards -- including one
+        // constructed independently on a non-owner thread -- reads that
+        // flag as already-satisfied and silently skips loading into its OWN
+        // (empty) db, so `Icon` renders tofu on that instance forever.
+        // Checking this instance's own faces makes the guard correct per
+        // instance: idempotent on a repeat call against the SAME
+        // `FontSystem` (the family is already there), and always loads for a
+        // genuinely different one.
+        //
+        // The two embedded fonts are probed and loaded INDEPENDENTLY, each
+        // keyed by its own family name, rather than gating both on a single
+        // "Material Icons present?" check. A single shared gate is wrong the
+        // moment the two faces can appear separately: a system-installed or
+        // previously `register_font`-ed "Material Icons" face (this is a
+        // real family name, not exclusive to the embedded TTF) would make
+        // the combined check see the family as present and skip loading
+        // BOTH fonts -- silently dropping the embedded Material Icons face
+        // update *and* Cupertino Icons entirely, even though nothing ever
+        // provided Cupertino Icons. Each font's presence is real evidence
+        // only for that font.
+        Self::ensure_embedded_font_loaded(
+            font_system,
+            "Material Icons",
+            include_bytes!("../../assets/fonts/MaterialIcons-Regular.ttf"),
+        );
+        Self::ensure_embedded_font_loaded(
+            font_system,
+            "CupertinoIcons",
+            include_bytes!("../../assets/fonts/CupertinoIcons.ttf"),
+        );
     }
 
-    /// Creates a new `TextRenderer` bound to the given wgpu `device`/`queue`.
-    pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, format: wgpu::TextureFormat) -> Self {
+    /// Loads `font_data` into `font_system`'s database unless a face already
+    /// carries `family` — the per-font idempotency check
+    /// [`Self::ensure_fonts_available`]'s doc comment explains.
+    fn ensure_embedded_font_loaded(font_system: &mut FontSystem, family: &str, font_data: &[u8]) {
+        let already_present = font_system
+            .db()
+            .faces()
+            .any(|face| face.families.iter().any(|(name, _)| name == family));
+        if already_present {
+            return;
+        }
+        font_system.db_mut().load_font_data(font_data.to_vec());
+        tracing::info!(
+            family,
+            count = font_system.db().faces().count(),
+            "loaded embedded icon font"
+        );
+    }
+
+    /// Creates a new `TextRenderer` bound to the given wgpu `device`/`queue`,
+    /// shaping against the injected `font_system`.
+    ///
+    /// `font_system` is a caller-supplied [`SharedFontSystem`] handle rather
+    /// than an ambient lookup: the caller decides which font database this
+    /// renderer shapes against, so constructing a `TextRenderer` on a
+    /// non-owner thread (the raster thread) never has to stand up a second,
+    /// disconnected binding of its own just to reach the font DB.
+    pub fn new(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        format: wgpu::TextureFormat,
+        font_system: SharedFontSystem,
+    ) -> Self {
         tracing::trace!(format = ?format, "TextRenderer::new");
 
-        let font_system = PaintingBinding::instance().font_system();
         font_system.with_mut(Self::ensure_fonts_available);
         let swash_cache = SwashCache::new();
         let cache = Cache::new(device);
@@ -911,7 +966,9 @@ fn build_text_areas<'cache>(
 
 #[cfg(test)]
 mod tests {
-    use super::collect_styled_spans;
+    use glyphon::fontdb;
+
+    use super::{FontSystem, TextRenderer, collect_styled_spans};
     use flui_types::typography::{FontWeight, InlineSpan, TextSpan, TextStyle};
 
     /// A bold child of a sized parent must carry both bold weight and the
@@ -1154,12 +1211,117 @@ mod tests {
         );
         assert_eq!(key(None), key(None), "None must be stable");
     }
+
+    /// Constructs a genuinely empty, hermetic `FontSystem`: an empty
+    /// `fontdb::Database` and no system-font scan. `FontSystem::new()` would
+    /// make icon-font assertions vacuous on any machine that happens to
+    /// have a system-installed "Material Icons"/"CupertinoIcons" font (or
+    /// on a machine where a previous test in the same process already
+    /// registered one into a SHARED font system) -- this constructor
+    /// guarantees the test starts from zero faces every time, on every
+    /// machine.
+    fn empty_font_system() -> FontSystem {
+        FontSystem::new_with_locale_and_db("en-US".to_string(), fontdb::Database::new())
+    }
+
+    fn has_family(font_system: &FontSystem, family: &str) -> bool {
+        font_system
+            .db()
+            .faces()
+            .any(|face| face.families.iter().any(|(name, _)| name == family))
+    }
+
+    /// Regression test for the process-global `ICON_FONTS_LOADED` bug: icon
+    /// fonts must load into EVERY independently constructed `FontSystem`, not
+    /// just the first one `ensure_fonts_available` ever sees.
+    ///
+    /// Red before the per-instance fix: a single process-wide
+    /// `AtomicBool::swap` flipped true on the FIRST call below and stayed
+    /// true for the rest of the process, so the second, independent
+    /// `FontSystem` never got its icon fonts loaded and both assertions on
+    /// `fs_b` would fail.
+    #[test]
+    fn ensure_fonts_available_loads_both_icon_fonts_into_every_independent_font_system() {
+        let mut fs_a = empty_font_system();
+        TextRenderer::ensure_fonts_available(&mut fs_a);
+        assert!(
+            has_family(&fs_a, "Material Icons"),
+            "the first FontSystem must resolve the Material Icons glyph after \
+             ensure_fonts_available"
+        );
+        assert!(
+            has_family(&fs_a, "CupertinoIcons"),
+            "the first FontSystem must resolve the Cupertino Icons glyph after \
+             ensure_fonts_available"
+        );
+
+        // A SECOND, independently constructed FontSystem must ALSO receive
+        // BOTH icon fonts -- this is the case the process-global flag broke.
+        let mut fs_b = empty_font_system();
+        TextRenderer::ensure_fonts_available(&mut fs_b);
+        assert!(
+            has_family(&fs_b, "Material Icons"),
+            "a second, independent FontSystem must also resolve the Material Icons \
+             glyph -- regression test for the process-global ICON_FONTS_LOADED flag \
+             that silently skipped icon-font loading for every FontSystem after the first"
+        );
+        assert!(
+            has_family(&fs_b, "CupertinoIcons"),
+            "a second, independent FontSystem must also resolve the Cupertino Icons glyph"
+        );
+    }
+
+    /// Regression test for the single-probe bug: the guard used to check
+    /// ONLY "Material Icons" presence but gated LOADING BOTH embedded fonts
+    /// on that one check. A `FontSystem` that already carries a "Material
+    /// Icons" face -- a real family name that can come from the OS or a
+    /// prior `register_font` call, not exclusively from this crate's
+    /// embedded TTF -- made the combined check see the family as present and
+    /// skip loading Cupertino Icons entirely, even though nothing had ever
+    /// provided it.
+    ///
+    /// Red under the single-probe bug: seeding a "Material Icons" face
+    /// (without touching Cupertino Icons) makes the old combined check
+    /// true, so `ensure_fonts_available` would return early and the
+    /// Cupertino assertion below would fail.
+    #[test]
+    fn ensure_fonts_available_loads_cupertino_icons_even_when_material_icons_already_present() {
+        let mut fs = empty_font_system();
+        // Seed a "Material Icons" face WITHOUT going through
+        // `ensure_fonts_available` -- simulates a system-installed or
+        // previously registered face with that family name, independent of
+        // the fix under test. Reusing the embedded Material Icons TTF here
+        // is just a convenient real, loadable font with that exact family
+        // name; nothing about this test depends on it being THE canonical
+        // embedded copy.
+        fs.db_mut().load_font_data(
+            include_bytes!("../../assets/fonts/MaterialIcons-Regular.ttf").to_vec(),
+        );
+        assert!(
+            has_family(&fs, "Material Icons"),
+            "test setup must have seeded a Material Icons face"
+        );
+        assert!(
+            !has_family(&fs, "CupertinoIcons"),
+            "test setup must not have seeded a Cupertino Icons face"
+        );
+
+        TextRenderer::ensure_fonts_available(&mut fs);
+
+        assert!(
+            has_family(&fs, "CupertinoIcons"),
+            "CupertinoIcons must load even when Material Icons is already present -- \
+             regression test for the single combined-gate bug where checking ONLY \
+             'Material Icons' presence silently skipped loading BOTH fonts"
+        );
+    }
 }
 
 #[cfg(all(test, feature = "enable-wgpu-tests"))]
 mod gpu_tests {
     use std::sync::Arc;
 
+    use flui_painting::PaintingBinding;
     use flui_types::{geometry::Pixels, geometry::Point, styling::Color};
 
     use super::TextRenderer;
@@ -1317,7 +1479,8 @@ mod gpu_tests {
     fn atlas_trim_each_frame_keeps_text_rendering() {
         let (device, queue) = device_queue();
         let (target, view) = make_target(&device);
-        let mut tr = TextRenderer::new(&device, &queue, FORMAT);
+        let font_system = PaintingBinding::new().font_system();
+        let mut tr = TextRenderer::new(&device, &queue, FORMAT, font_system);
         let white = Color::rgba(255, 255, 255, 255);
 
         // Churn: every frame draws DISTINCT glyphs (varying text + size) and

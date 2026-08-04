@@ -466,23 +466,66 @@ impl RenderingFlutterBinding {
         SemanticsBinding::instance()
     }
 
-    /// Get the PaintingBinding singleton.
+    /// Returns a fresh [`PaintingBinding`] value; its `ImageCache` is
+    /// throwaway, but `font_system()` still reaches shared state (see
+    /// below).
     ///
-    /// Equivalent to Flutter's `PaintingBinding.instance`.
-    pub fn painting() -> &'static PaintingBinding {
-        PaintingBinding::instance()
+    /// **Inert by construction, not just as a compile-preserving stopgap.**
+    /// `PaintingBinding` left the ambient-singleton graph as the remaining
+    /// singletons here move behind explicit owners: its real, long-lived
+    /// value now lives on `AppRuntime`'s `SharedEngineServices`
+    /// (`app/runtime.rs`), constructed once at realm install.
+    /// `RenderingFlutterBinding` has no field or accessor reaching that
+    /// runtime-owned value — it is itself still a process-wide singleton,
+    /// structurally unrelated to `AppRuntime` — and adding one here would
+    /// mean inventing a *new* ambient path from one singleton into another,
+    /// which is the opposite of what retiring these singletons is for.
+    /// Until `RenderingFlutterBinding` is re-homed to receive its painting
+    /// service from the owning runtime instead of constructing its own,
+    /// every call to this method returns a brand new `PaintingBinding` whose
+    /// `ImageCache` and `SystemFontsNotifier` start and end empty/unused —
+    /// nothing else in the process observes whatever you do to THOSE two
+    /// fields through this handle. Do not use this to configure or read the
+    /// "real" image cache; there isn't one reachable from here today.
+    ///
+    /// **`font_system()` is the one exception.** Unlike the image cache,
+    /// `PaintingBinding::font_system()` does not read this struct's own
+    /// fields at all — it reaches the process-wide shared `FONT_SYSTEM`
+    /// (`flui-painting`'s `text_layout/layout.rs`), the exact same one every
+    /// other `PaintingBinding` value (including the real one on
+    /// `AppRuntime`) resolves to. So `Self::painting().font_system()...` or
+    /// `Self::painting().register_font(...)` through this "throwaway" value
+    /// DOES mutate real, shared, process-wide font state, visible to every
+    /// other consumer — the isolation this doc comment describes is
+    /// specific to the image cache and font-change notifier, not to
+    /// everything reachable through the returned value.
+    pub fn painting() -> PaintingBinding {
+        PaintingBinding::new()
     }
 
     // ========================================================================
     // Memory Management
     // ========================================================================
 
-    /// Handles memory pressure by clearing caches.
+    /// Currently a no-op: does NOT clear any real image cache.
     ///
-    /// Delegates to PaintingBinding to clear the image cache.
+    /// See [`Self::painting`]'s doc comment for why. This method
+    /// deliberately does NOT call `Self::painting().handle_memory_pressure()`:
+    /// that inner method's own `tracing::info!("Memory pressure: clearing
+    /// image cache")` is legitimate for a real, owned `PaintingBinding`
+    /// value, but firing it here — against a throwaway value whose
+    /// `ImageCache` starts and ends empty — would be exactly the false "it
+    /// worked" signal this method is trying not to emit. This becomes
+    /// meaningful again once `RenderingFlutterBinding` is re-homed to
+    /// receive its painting service from the owning runtime. Traced at
+    /// `trace`, not `info`, so the no-op itself does not read as a real
+    /// memory-pressure response in a production log.
     pub fn handle_memory_pressure(&self) {
-        Self::painting().handle_memory_pressure();
-        tracing::info!("RenderingFlutterBinding: handled memory pressure");
+        tracing::trace!(
+            "RenderingFlutterBinding::handle_memory_pressure: inert no-op on a \
+             throwaway PaintingBinding -- see the doc comment on this method \
+             and on Self::painting"
+        );
     }
 }
 
@@ -505,9 +548,13 @@ impl BindingBase for RenderingFlutterBinding {
         let _ = SemanticsBinding::instance();
         tracing::debug!("SemanticsBinding initialized via RenderingFlutterBinding");
 
-        // Initialize painting binding (image cache, shader warm-up)
-        let _ = PaintingBinding::instance();
-        tracing::debug!("PaintingBinding initialized via RenderingFlutterBinding");
+        // Painting no longer has a process-wide binding to eagerly
+        // initialize here: `PaintingBinding` stopped being a singleton as
+        // the remaining singletons move behind explicit owners -- its owned
+        // value now lives on `AppRuntime`'s `SharedEngineServices`,
+        // constructed at realm install (`app/runtime.rs`). See
+        // `Self::painting`'s doc comment for why `RenderingFlutterBinding`
+        // cannot simply reach that value instead.
 
         tracing::info!("RenderingFlutterBinding initialized");
     }

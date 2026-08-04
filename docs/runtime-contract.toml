@@ -1257,7 +1257,7 @@ contains = "pub use flui_rendering::{binding::RendererBinding, pipeline::Pipelin
 classification = "transitional"
 thread_affinity = "mixed; the singleton graph is owner-thread-local via HasInstance"
 owner = "transitional singleton service graph"
-failure_semantics = "singleton accessors construct lazily per thread; no typed errors"
+failure_semantics = "singleton accessors construct lazily per thread; no typed errors (PaintingBinding excepted: it left the singleton graph and is now a plain constructible value, still re-exported here as a type)"
 consumers = ["flui-app prelude", "flui facade via app module"]
 owner_issue = 553
 
@@ -1558,14 +1558,9 @@ classification = "removal-target"
 thread_affinity = "thread-local singleton storage per implementor"
 owner = "the ambient singleton pattern itself — deleted from runtime paths under the owning issue"
 failure_semantics = "lazily constructs a per-thread instance; cannot fail, which is the problem"
-consumers = [
-    "Scheduler",
-    "RenderingFlutterBinding",
-    "PaintingBinding",
-    "SemanticsBinding",
-    "AppBinding (manual)",
-]
+consumers = ["Scheduler", "RenderingFlutterBinding", "SemanticsBinding", "AppBinding (manual)"]
 owner_issue = 553
+notes = "PaintingBinding no longer implements HasInstance -- its singleton-macro invocation is deleted; the type is now a plain owned value (SharedEngineServices.painting on AppRuntime)."
 
 [[surface]]
 path = "flui_engine::wgpu::Renderer"
@@ -1747,12 +1742,6 @@ contains = "impl_binding_singleton!(Scheduler)"
 owner_issue = 553
 
 [[singleton_exemption]]
-symbol = "impl_binding_singleton!(PaintingBinding)"
-file = "crates/flui-painting/src/binding.rs"
-contains = "impl_binding_singleton!(PaintingBinding)"
-owner_issue = 553
-
-[[singleton_exemption]]
 symbol = "impl_binding_singleton!(SemanticsBinding)"
 file = "crates/flui-semantics/src/binding.rs"
 contains = "impl_binding_singleton!(SemanticsBinding)"
@@ -1800,7 +1789,7 @@ note = "single AppBinding::instance() reach; re-routed through the runtime once 
 file = "crates/flui-app/src/app/runtime.rs"
 grammar = "instance-call"
 owner_issue = 553
-note = "the deliberate resolution seam this file creates: PaintingBinding::instance()/SemanticsBinding::instance()/Scheduler::instance() are called exactly once each, in SharedEngineServices::resolve() and RealmServices::resolve() -- this is the ONE file allowed to still reach for these singletons directly so every other constructor (including UiRealm's) does not have to. Each flips to an owned/injected value as the singleton it names is retired, at which point this entry shrinks accordingly."
+note = "the deliberate resolution seam this file creates: SemanticsBinding::instance()/Scheduler::instance() are called exactly once each, in SharedEngineServices::resolve() and RealmServices::resolve() -- this is the ONE file allowed to still reach for these singletons directly so every other constructor (including UiRealm's) does not have to. PaintingBinding::instance() already completed its flip: SharedEngineServices.painting is now an owned PaintingBinding value, constructed via PaintingBinding::new(). Each of the remaining two flips to an owned/injected value as the singleton it names is retired (semantics, then the scheduler), at which point this entry shrinks accordingly."
 
 [[ambient_reach]]
 file = "crates/flui-app/src/app/runner.rs"
@@ -1813,18 +1802,6 @@ file = "crates/flui-app/src/bindings/renderer_binding.rs"
 grammar = "instance-call"
 owner_issue = 553
 note = "RenderingFlutterBinding::instance()/AppBinding::instance()/Scheduler::instance() reaches; retired alongside RenderingFlutterBinding, AppBinding, and the Scheduler singleton respectively"
-
-[[ambient_reach]]
-file = "crates/flui-engine/src/wgpu/text.rs"
-grammar = "instance-call"
-owner_issue = 553
-note = "TextRenderer::new constructs a thread-local PaintingBinding via PaintingBinding::instance() to reach the font DB; a SharedFontSystem injection point retires this"
-
-[[ambient_reach]]
-file = "crates/flui-painting/src/binding.rs"
-grammar = "instance-call"
-owner_issue = 553
-note = "PaintingBinding's own instance()-based image_cache() free fn and its tests; retired together with impl_binding_singleton!(PaintingBinding)"
 
 [[ambient_reach]]
 file = "crates/flui-scheduler/src/config.rs"
@@ -1854,7 +1831,7 @@ note = "AssetRegistry::global(): named residual, out of this migration's scope e
 file = "crates/flui-painting/src/text_layout/layout.rs"
 grammar = "ambient-static"
 owner_issue = 553
-note = "shared_font_system()/FONT_SYSTEM: AppRuntime::new() becomes the CONSTRUCTING owner (explicit eager init), but the READ path stays ambient on layout hot paths -- cross-realm register_font staleness mid-layout is a named, bounded hazard (Mutex<FontSystem> makes it staleness not a data race), not closed until fonts get their own owner-local-access/sharding follow-up (ADR-0027 follow-up 6)"
+note = "shared_font_system()/FONT_SYSTEM: SharedEngineServices::resolve() (invoked from AppRuntime::ensure_services() at realm install) is the CONSTRUCTING owner -- it calls PaintingBinding::font_system() explicitly, eagerly installing the process-wide FontSystem instead of leaving it to whichever text-measurement call happens to run first. The READ path stays ambient on layout hot paths -- cross-realm register_font staleness mid-layout is a named, bounded hazard (Mutex<FontSystem> makes it staleness not a data race), not closed until fonts get their own owner-local-access/sharding follow-up (ADR-0027 follow-up 6). This migration additionally re-scoped ICON_FONTS_LOADED (flui-engine/src/wgpu/text.rs) from a process-global flag to a per-font, per-FontSystem-instance family-presence check (each embedded icon font probed and loaded independently, so one already-present family never gates the other), and gave TextRenderer::new an injected SharedFontSystem parameter instead of an ambient PaintingBinding::instance() reach -- neither changes this entry's hazard, which is specifically about concurrent register_font mutation, not construction-time ownership."
 
 # =============================================================================
 # Public lock-shaped surface allowlist (runtime crates)
@@ -1932,6 +1909,119 @@ owner_issue = 553
 # Substring scans over crates/**/*.rs (comments included — the strings below
 # are retired identifiers that must not reappear even in prose). `allow_files`
 # lists exact files permitted to contain the pattern.
+
+[[forbidden_pattern]]
+pattern = "PR-1"
+why = """
+plan-slice markers (a private review/planning-history identifier like `PR-N` \
+naming one slice of a multi-PR migration plan) are banned from source comments \
+by AGENTS.md's "no internal process-ID markers" rule -- state the invariant or \
+rationale in plain English instead, since a reader should not need a planning \
+doc that may not outlive the project to understand why the code is shaped this \
+way. This recurred three times across review rounds on the font/paint-ownership \
+slice of singleton retirement before becoming this mechanical gate. The checker \
+(`check-runtime-conformance.sh`) \
+does a plain substring scan, not a regex, so `PR-[0-9]` is enforced as one \
+literal-digit entry per digit (`PR-1` through `PR-6`, matching this migration's \
+six-PR structure) rather than a single character-class pattern; a bare `PR-` \
+prefix was rejected because it collides with the unrelated `DPR-only`/\
+`DPR-scale-only` (device-pixel-ratio) domain term already in the tree. `PR-1` \
+itself has no pre-existing hits (the five sibling entries for the higher \
+digits carry the pre-existing allowlists instead), so this entry is enforced \
+with an empty allowlist from the day it lands -- any future `PR-1` marker is \
+a fresh violation, not inherited debt.\
+"""
+allow_files = []
+
+[[forbidden_pattern]]
+pattern = "PR-2"
+why = """
+See the `PR-1` entry above for the shared rationale and the substring-scan \
+caveat. Pre-existing debt on `main` from TWO unrelated earlier migrations \
+that each used the same `PR-N` slice-marker convention in their own \
+comments -- out of scope to fix in the singleton-retirement PR that added \
+this gate, so those files are allowlisted here as named debt rather than \
+silently exempted. `aa_oracle_tests.rs`, `advanced_blend/mod.rs`, \
+`batches/shapes.rs`, `instancing.rs`, and `flui-types/src/styling/color.rs` \
+(the WGSL-port CPU oracle cross-referenced from the shared `Color` type) are \
+the pre-singleton-retirement blend-mode-routing/GPU-port migration in \
+`flui-engine`'s wgpu backend. `flui-view/src/tree/element_tree.rs` is NOT \
+part of that migration -- its `PR-2` marks a separate, unrelated `flui-view` \
+inherited-scope migration (the per-node `inherited` map for `depend_on` \
+resolution); it happens to share the same slice number by coincidence, not \
+by relation.\
+"""
+allow_files = [
+    "crates/flui-engine/src/wgpu/aa_oracle_tests.rs",
+    "crates/flui-engine/src/wgpu/advanced_blend/mod.rs",
+    "crates/flui-engine/src/wgpu/batches/shapes.rs",
+    "crates/flui-engine/src/wgpu/instancing.rs",
+    "crates/flui-types/src/styling/color.rs",
+    "crates/flui-view/src/tree/element_tree.rs",
+]
+
+[[forbidden_pattern]]
+pattern = "PR-3"
+why = "See the `PR-1` entry above for the shared rationale. Pre-existing debt from the same earlier blend-mode-routing migration; out of scope to fix here."
+allow_files = [
+    "crates/flui-engine/src/wgpu/aa_oracle_tests.rs",
+    "crates/flui-engine/src/wgpu/advanced_blend/mod.rs",
+    "crates/flui-engine/src/wgpu/batches/paths.rs",
+    "crates/flui-engine/src/wgpu/batches/shapes.rs",
+    "crates/flui-engine/src/wgpu/layer_blend_tests.rs",
+    "crates/flui-engine/src/wgpu/mod.rs",
+    "crates/flui-engine/src/wgpu/pipeline.rs",
+    "crates/flui-engine/src/wgpu/replay/mod.rs",
+    "crates/flui-engine/src/wgpu/ssaa.rs",
+]
+
+[[forbidden_pattern]]
+pattern = "PR-4"
+why = "See the `PR-1` entry above for the shared rationale. Pre-existing debt from the same earlier blend-mode-routing migration; out of scope to fix here."
+allow_files = [
+    "crates/flui-engine/src/wgpu/aa_oracle_tests.rs",
+    "crates/flui-engine/src/wgpu/batches/paths.rs",
+    "crates/flui-engine/src/wgpu/batches/shapes.rs",
+    "crates/flui-engine/src/wgpu/mod.rs",
+    "crates/flui-engine/src/wgpu/pipeline.rs",
+    "crates/flui-engine/src/wgpu/replay/mod.rs",
+    "crates/flui-engine/src/wgpu/shape_blend_tests.rs",
+    "crates/flui-engine/src/wgpu/ssaa.rs",
+]
+
+[[forbidden_pattern]]
+pattern = "PR-5"
+why = "See the `PR-1` entry above for the shared rationale. Pre-existing debt from the same earlier blend-mode-routing migration; out of scope to fix here."
+allow_files = [
+    "crates/flui-engine/src/wgpu/backend.rs",
+    "crates/flui-engine/src/wgpu/batches/gradients.rs",
+    "crates/flui-engine/src/wgpu/batches/images.rs",
+    "crates/flui-engine/src/wgpu/batches/mod.rs",
+    "crates/flui-engine/src/wgpu/batches/shapes.rs",
+    "crates/flui-engine/src/wgpu/gradient_image_blend_tests.rs",
+    "crates/flui-engine/src/wgpu/mod.rs",
+    "crates/flui-engine/src/wgpu/painter/draw.rs",
+    "crates/flui-engine/src/wgpu/pipeline.rs",
+]
+
+[[forbidden_pattern]]
+pattern = "PR-6"
+why = "See the `PR-1` entry above for the shared rationale. Pre-existing debt from the same earlier blend-mode-routing migration; out of scope to fix here."
+allow_files = ["crates/flui-engine/src/wgpu/renderer.rs"]
+
+[[forbidden_pattern]]
+pattern = "WU-"
+why = """
+Companion ban to the `PR-N` entries above: `WU-N` (work-unit) is the other \
+plan-slice marker shape banned by AGENTS.md's "no internal process-ID markers" \
+rule. Unlike `PR-`, no bare-prefix collision exists anywhere in the tree today \
+(no `xWU-`-shaped domain term), so this is enforced as a single prefix pattern \
+rather than one entry per digit -- it also catches double-digit work units \
+(`WU-10`+) that a `WU-[0-9]`-per-digit approach would miss. Zero pre-existing \
+hits at the time this gate landed, so the allowlist starts empty; any future \
+`WU-N` marker is a fresh violation, not inherited debt.\
+"""
+allow_files = []
 
 [[forbidden_pattern]]
 pattern = "ForegroundExecutor"
