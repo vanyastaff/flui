@@ -1085,17 +1085,19 @@ impl HasWindowHandle for WindowsWindow {
 
         // SAFETY: `raw_window_handle::WindowHandle::borrow_raw`'s contract
         // requires the wrapped handle to stay valid for the returned
-        // `WindowHandle`'s lifetime, which `'_` ties to `&self` — as long as
-        // this `&WindowsWindow` borrow is live, `self.hwnd` has not been
-        // destroyed by `Drop` (which requires exclusive access to drop the
-        // last `Arc`). `window_proc`-driven destruction (e.g. the user
-        // closing the window) is not fenced by that borrow, so a caller that
-        // holds this handle across such an external `DestroyWindow` still
-        // ends up with a stale-but-not-dereferenced HWND value — the
-        // wgpu/raw-window-handle contract only requires the *value* be
-        // meaningful for calls made while the handle is alive, not that the
-        // OS object outlive it, so this is within the trait's contract as
-        // documented, not a soundness gap.
+        // `WindowHandle`'s lifetime. The `'_` this function returns only
+        // ties to `&self` — i.e. to the `Arc<WindowsWindow>` staying alive —
+        // not to the underlying native HWND staying valid. Those are NOT
+        // the same lifetime: `PlatformWindow::close()` (or the user closing
+        // the window, which reaches `DestroyWindow` through `window_proc`
+        // regardless of which thread requested it) can destroy the native
+        // window while an `Arc<WindowsWindow>`, and therefore a
+        // `WindowHandle` borrowed from it, is still held and used elsewhere
+        // (e.g. by wgpu to (re)create a surface). This is the same
+        // undischarged-HWND-lifetime class as the documented cross-thread
+        // `GWLP_USERDATA` race on this type's `Send`/`Sync` impls above —
+        // a real gap this comment does not close, not a validity claim
+        // this code has actually established.
         Ok(unsafe { raw_window_handle::WindowHandle::borrow_raw(RawWindowHandle::Win32(handle)) })
     }
 }
