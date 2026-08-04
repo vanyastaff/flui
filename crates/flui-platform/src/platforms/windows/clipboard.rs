@@ -181,7 +181,9 @@ impl Clipboard for WindowsClipboard {
             let ptr = GlobalLock(global);
             if ptr.is_null() {
                 tracing::error!("Failed to lock global memory");
-                // Note: memory will be freed when global goes out of scope
+                // The allocation leaks here: windows-rs HGLOBAL has no Drop
+                // (see the SAFETY block above) — a rare, bounded leak on a
+                // failure path, preferred over a double-free hazard.
                 return;
             }
 
@@ -193,12 +195,14 @@ impl Clipboard for WindowsClipboard {
             // After successful SetClipboardData, we must NOT free the memory
             if SetClipboardData(CF_UNICODETEXT.0 as u32, Some(HANDLE(global.0))).is_err() {
                 tracing::error!("Failed to set clipboard data");
-                // On error, memory will be freed when global goes out of scope
+                // The allocation leaks here (HGLOBAL has no Drop) — bounded
+                // failure-path leak, never a double-free.
                 return;
             }
 
-            // Success - clipboard now owns the memory
-            // Prevent HGLOBAL from being freed by forgetting it
+            // Success — the clipboard owns the memory from here on; the
+            // local HGLOBAL is a plain handle newtype with no Drop, so
+            // letting it fall out of scope frees nothing.
             let _ = global;
             tracing::debug!(len = text.len(), "Wrote text to clipboard");
         }
