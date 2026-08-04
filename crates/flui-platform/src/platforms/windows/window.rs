@@ -245,13 +245,14 @@ impl WindowsWindow {
 
             // Show window if requested
             if options.visible {
-                if let Err(error) = ShowWindow(hwnd, SW_SHOW).ok() {
-                    tracing::warn!(
-                        ?hwnd,
-                        ?error,
-                        "ShowWindow(SW_SHOW) failed in WindowsWindow::new"
-                    );
-                }
+                // ShowWindow's return value reports the window's PREVIOUS
+                // visibility state (nonzero if it was already visible), not
+                // success/failure -- a freshly created window is always
+                // previously-hidden, so treating the BOOL as a Result would
+                // warn on every visible window creation. Nothing meaningful
+                // to check here; UpdateWindow below does return a genuine
+                // success/failure BOOL.
+                let _ = ShowWindow(hwnd, SW_SHOW);
                 if let Err(error) = UpdateWindow(hwnd).ok() {
                     tracing::warn!(?hwnd, ?error, "UpdateWindow failed in WindowsWindow::new");
                 }
@@ -903,28 +904,28 @@ impl PlatformWindow for WindowsWindow {
     fn minimize(&self) {
         // SAFETY: `ShowWindow` takes `self.hwnd` and a command constant by
         // value, no pointer arguments.
+        //
+        // Return value is the window's PREVIOUS visibility state (nonzero
+        // if it was already visible before this call), not success/failure
+        // — nothing meaningful to check or warn on.
         unsafe {
-            if let Err(error) = ShowWindow(self.hwnd, SW_MINIMIZE).ok() {
-                tracing::warn!(hwnd = ?self.hwnd, ?error, "ShowWindow(SW_MINIMIZE) failed");
-            }
+            let _ = ShowWindow(self.hwnd, SW_MINIMIZE);
         }
     }
 
     fn maximize(&self) {
-        // SAFETY: see `minimize` above — same call shape.
+        // SAFETY: see `minimize` above — same call shape and return-value
+        // semantics (previous visibility, not success/failure).
         unsafe {
-            if let Err(error) = ShowWindow(self.hwnd, SW_MAXIMIZE).ok() {
-                tracing::warn!(hwnd = ?self.hwnd, ?error, "ShowWindow(SW_MAXIMIZE) failed");
-            }
+            let _ = ShowWindow(self.hwnd, SW_MAXIMIZE);
         }
     }
 
     fn restore(&self) {
-        // SAFETY: see `minimize` above — same call shape.
+        // SAFETY: see `minimize` above — same call shape and return-value
+        // semantics (previous visibility, not success/failure).
         unsafe {
-            if let Err(error) = ShowWindow(self.hwnd, SW_RESTORE).ok() {
-                tracing::warn!(hwnd = ?self.hwnd, ?error, "ShowWindow(SW_RESTORE) failed");
-            }
+            let _ = ShowWindow(self.hwnd, SW_RESTORE);
         }
     }
 
@@ -1232,28 +1233,27 @@ impl WindowTrait for WindowsWindow {
         // SAFETY: `ShowWindow` takes `self.hwnd` and a command constant by
         // value, no pointer arguments; `self.set_fullscreen`/`self.is_fullscreen`
         // carry their own SAFETY contracts documented where they're defined.
+        //
+        // Every `ShowWindow` return value below is the window's PREVIOUS
+        // visibility state (nonzero if it was already visible before this
+        // call), not success/failure — nothing meaningful to check or warn
+        // on.
         unsafe {
             match state {
                 CrossWindowState::Normal => {
                     if self.is_fullscreen() {
                         self.set_fullscreen(false);
                     }
-                    if let Err(error) = ShowWindow(self.hwnd, SW_RESTORE).ok() {
-                        tracing::warn!(hwnd = ?self.hwnd, ?error, "ShowWindow(SW_RESTORE) failed in set_state(Normal)");
-                    }
+                    let _ = ShowWindow(self.hwnd, SW_RESTORE);
                 }
                 CrossWindowState::Minimized => {
-                    if let Err(error) = ShowWindow(self.hwnd, SW_MINIMIZE).ok() {
-                        tracing::warn!(hwnd = ?self.hwnd, ?error, "ShowWindow(SW_MINIMIZE) failed in set_state(Minimized)");
-                    }
+                    let _ = ShowWindow(self.hwnd, SW_MINIMIZE);
                 }
                 CrossWindowState::Maximized => {
                     if self.is_fullscreen() {
                         self.set_fullscreen(false);
                     }
-                    if let Err(error) = ShowWindow(self.hwnd, SW_MAXIMIZE).ok() {
-                        tracing::warn!(hwnd = ?self.hwnd, ?error, "ShowWindow(SW_MAXIMIZE) failed in set_state(Maximized)");
-                    }
+                    let _ = ShowWindow(self.hwnd, SW_MAXIMIZE);
                 }
                 CrossWindowState::Fullscreen => {
                     self.set_fullscreen(true);
@@ -1268,12 +1268,13 @@ impl WindowTrait for WindowsWindow {
 
     fn set_visible(&mut self, visible: bool) {
         // SAFETY: `ShowWindow` takes `self.hwnd` and a command constant by
-        // value, no pointer arguments.
+        // value, no pointer arguments. Return value is the window's
+        // PREVIOUS visibility state (nonzero if it was already visible
+        // before this call), not success/failure — nothing meaningful to
+        // check or warn on.
         unsafe {
             let cmd = if visible { SW_SHOW } else { SW_HIDE };
-            if let Err(error) = ShowWindow(self.hwnd, cmd).ok() {
-                tracing::warn!(hwnd = ?self.hwnd, ?error, visible, "ShowWindow failed in set_visible");
-            }
+            let _ = ShowWindow(self.hwnd, cmd);
             self.state.lock().visible = visible;
         }
     }
@@ -1790,8 +1791,14 @@ impl WindowsWindowExtTrait for WindowsWindow {
 
     fn dpi(&self) -> u32 {
         // SAFETY: `GetDpiForWindow` takes `self.hwnd` by value, no pointer
-        // arguments; an invalid `hwnd` yields a documented fallback DPI, not
-        // UB.
+        // arguments — a stale or invalid `hwnd` cannot cause UB here, it is
+        // just an ordinary FFI call either way. NOT a "safe fallback",
+        // though: per its documented contract, an invalid `hwnd` makes this
+        // return a literal `0`, not some usable default DPI — a caller that
+        // divides by this result (e.g. computing a scale factor) would get
+        // infinity or NaN, not graceful degradation. No current caller in
+        // this crate divides by `dpi()`'s result, but a future one should
+        // not assume `0` means "use 96 instead".
         unsafe { GetDpiForWindow(self.hwnd) }
     }
 
