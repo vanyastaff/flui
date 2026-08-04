@@ -71,7 +71,7 @@ fn main() {
             render_view_to_layers(vertical_slice_demo::DemoApp, width, height)
         }
         "gallery" => render_view_to_layers(widgets_gallery::Gallery, width, height),
-        "animated-box" => render_view_to_layers(animated_box_app::App, width, height),
+        "animated-box" => render_view_to_layers(animated_box_app::App::new(), width, height),
         "colored-box" => render_view_to_layers(colored_box_app::App, width, height),
         "text" => render_view_to_layers(text_app::App, width, height),
         other => {

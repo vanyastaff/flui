@@ -5,12 +5,13 @@
 //! runner/window host and raster/surface ownership remains in
 //! `flui_engine::RasterOwner`.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::{Arc, Weak};
 
 use flui_foundation::PresentationId;
 use flui_interaction::{FocusManager, GestureBinding, TextInputHandle, TextInputOwner};
+use flui_layer::{Layer, LayerTree, PerformanceOverlayLayer, PerformanceStats};
 #[cfg(test)]
 use flui_platform::traits::PlatformTextInput;
 use flui_platform::{
@@ -19,6 +20,7 @@ use flui_platform::{
 };
 use flui_rendering::pipeline::PipelineOwner;
 use flui_semantics::{SemanticsActionError, SemanticsActionRequest};
+use flui_types::HapticFeedback;
 #[cfg(feature = "hot-reload")]
 use flui_view::WidgetsBinding;
 use parking_lot::RwLock;
@@ -113,17 +115,29 @@ pub(crate) struct PresentationState {
     gestures: GestureBinding,
     focus: Rc<FocusManager>,
     text_input: Rc<TextInputOwner>,
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "read only through semantics_host(), itself unreached \
-                      outside tests until a production caller wires \
-                      semantics enablement/announce/event delivery through a \
-                      presentation"
-        )
-    )]
+    /// This presentation's semantics enablement gate and platform
+    /// accessibility delivery. `close()` clears its announce/event
+    /// callbacks unconditionally (production write); `UiRealm::construct`
+    /// reads `platform_semantics_enabled_handle()` to wire the realm's
+    /// renderer fan-out (production read) — announce/event delivery itself
+    /// still has no production caller (see [`Self::semantics_host`]'s doc).
     semantics: SemanticsHost,
+    /// Total frames rendered successfully for this presentation. Moved here
+    /// from the retired `AppBinding`: per-window frame accounting, beside
+    /// its consumer [`Self::performance_overlay`].
+    /// `Cell`, not `AtomicU64`: `PresentationState` is owner-thread-confined
+    /// (`!Send` transitively, via `Rc`-backed fields), so an atomic buys
+    /// nothing here that `Cell`'s cheaper interior mutability does not
+    /// already give `&self` callers.
+    frames_rendered: Cell<u64>,
+    /// Frames dropped due to surface errors. See [`Self::frames_rendered`].
+    frames_dropped: Cell<u64>,
+    /// Performance-overlay state. `Some` IS the enable flag: the rolling
+    /// frame-time window only exists while the overlay is on, so "enabled
+    /// but no stats" is unrepresentable and a disabled overlay costs one
+    /// `RefCell` borrow and a `None` check per frame. Moved here from the
+    /// retired `AppBinding` — per-window stats, not a process-wide concern.
+    performance_overlay: RefCell<Option<PerformanceStats>>,
 }
 
 impl PresentationState {
@@ -178,6 +192,9 @@ impl PresentationState {
             focus: FocusManager::new(),
             text_input: TextInputOwner::new(platform_text_input),
             semantics: SemanticsHost::new(),
+            frames_rendered: Cell::new(0),
+            frames_dropped: Cell::new(0),
+            performance_overlay: RefCell::new(None),
         };
         state.attach_surface();
         state
@@ -233,19 +250,133 @@ impl PresentationState {
     /// This presentation's semantics enablement gate and platform
     /// accessibility delivery — the per-window home the retired
     /// `SemanticsBinding` singleton's enablement/announce/event state moved
-    /// into.
+    /// into. `UiRealm::construct` reads this to wire the realm's renderer
+    /// semantics-enabled fan-out; announce/event delivery itself still has
+    /// no production caller (future platform-embedder wiring).
     #[must_use]
+    pub(crate) fn semantics_host(&self) -> &SemanticsHost {
+        &self.semantics
+    }
+
+    // ========================================================================
+    // Window access, haptics (moved from the retired `AppBinding`)
+    // ========================================================================
+
+    /// Access the presentation's window, if it is still live.
+    ///
+    /// `window` is `Weak`: the platform owns the strong `Arc`, and this
+    /// presentation must not keep it alive past the platform's own teardown.
+    /// Returns `None` once the window has been dropped — the same
+    /// degradation the retired `AppBinding::with_window` used before any
+    /// window was installed; here it is "the window this presentation was
+    /// built with is gone" instead of "no window installed yet", since a
+    /// presentation always has one from construction.
     #[cfg_attr(
         not(test),
         expect(
             dead_code,
-            reason = "no production caller yet -- semantics enablement/\
-                      announce/event delivery through a presentation is \
-                      future wiring"
+            reason = "read only by perform_haptic_feedback, itself unreached \
+                      outside tests until a production caller wires haptics \
+                      through a presentation"
         )
     )]
-    pub(crate) fn semantics_host(&self) -> &SemanticsHost {
-        &self.semantics
+    pub(crate) fn with_window<R>(&self, f: impl FnOnce(&dyn PlatformWindow) -> R) -> Option<R> {
+        self.window.upgrade().map(|window| f(window.as_ref()))
+    }
+
+    /// Perform haptic feedback on this presentation's window, via
+    /// [`PlatformWindow::haptics`].
+    ///
+    /// Silent no-op — no panic, no error — when the window is gone, or the
+    /// window's backend has no [`PlatformHaptics`](flui_platform::traits::PlatformHaptics)
+    /// capability (desktop winit targets, for instance). Mirrors Flutter's own `HapticFeedback`
+    /// degradation contract: every call is fire-and-forget best-effort, with
+    /// no availability-discovery API to check first.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "no production caller yet -- haptics through a \
+                      presentation is future wiring, forwarded today only by \
+                      UiRealm::perform_haptic_feedback (also uncalled in \
+                      production)"
+        )
+    )]
+    pub(crate) fn perform_haptic_feedback(&self, feedback: HapticFeedback) {
+        let haptics = self.with_window(|window| window.haptics()).flatten();
+        if let Some(haptics) = haptics {
+            haptics.perform(feedback);
+        }
+    }
+
+    // ========================================================================
+    // Frame accounting and the performance overlay (moved from the retired
+    // `AppBinding`)
+    // ========================================================================
+
+    /// Total frames rendered successfully.
+    pub(crate) fn frames_rendered(&self) -> u64 {
+        self.frames_rendered.get()
+    }
+
+    /// Frames dropped due to surface errors.
+    #[expect(
+        dead_code,
+        reason = "no production caller yet, and no test reads it back -- \
+                  forwarded only by UiRealm::frames_dropped (also uncalled); \
+                  record_frame_dropped is the production write side"
+    )]
+    pub(crate) fn frames_dropped(&self) -> u64 {
+        self.frames_dropped.get()
+    }
+
+    /// Record a successfully presented frame.
+    pub(crate) fn record_frame_rendered(&self) {
+        self.frames_rendered.set(self.frames_rendered.get() + 1);
+    }
+
+    /// Record a frame dropped due to a surface error.
+    pub(crate) fn record_frame_dropped(&self) {
+        self.frames_dropped.set(self.frames_dropped.get() + 1);
+    }
+
+    /// Turn the performance overlay on or off. Enabling starts a fresh
+    /// rolling window, so toggling it at runtime does not report frame times
+    /// from before the toggle.
+    pub(crate) fn set_performance_overlay(&self, enabled: bool) {
+        *self.performance_overlay.borrow_mut() = enabled.then(PerformanceStats::default);
+    }
+
+    /// Record this frame and append the overlay layer to `layer_tree`.
+    ///
+    /// No-op when the overlay is off, or when the tree has no root to parent
+    /// the overlay under (a frame that painted nothing). The overlay is
+    /// added as the root's LAST child so it composites above the
+    /// presentation's own content.
+    pub(crate) fn attach_performance_overlay(&self, layer_tree: &mut LayerTree) {
+        let mut slot = self.performance_overlay.borrow_mut();
+        let Some(stats) = slot.as_mut() else {
+            return;
+        };
+        let Some(root) = layer_tree.root() else {
+            return;
+        };
+
+        stats.record_frame();
+
+        let mut overlay =
+            PerformanceOverlayLayer::all_stats(PerformanceOverlayLayer::default_bounds());
+        overlay.update_stats(stats);
+
+        let overlay_id = layer_tree.insert(Layer::PerformanceOverlay(Box::new(overlay)));
+        // `insert` does not link the node — parent and child sides are set
+        // explicitly, same as every other layer-tree insertion.
+        if let Some(node) = layer_tree.get_mut(overlay_id) {
+            node.set_parent(Some(root));
+        }
+        if let Some(root_node) = layer_tree.get_mut(root) {
+            root_node.add_child(overlay_id);
+        }
     }
 
     fn attach_surface(&self) {
@@ -337,6 +468,12 @@ impl PresentationState {
 
         self.gestures.cancel_all_pointer_sequences();
         self.gestures.mouse_tracker().clear_cursor_change_callback();
+        // A stray announce/event racing this teardown must not reach a
+        // platform accessibility bridge that is itself about to go away —
+        // see `SemanticsHost::clear_announce_callback`'s doc for the
+        // announce-after-close decision this pins.
+        self.semantics.clear_announce_callback();
+        self.semantics.clear_event_callback();
         if let Some(window) = self.window.upgrade()
             && let Err(error) = window.set_cursor(CursorIcon::Default)
             && !matches!(error, CursorError::Unsupported)
@@ -488,5 +625,239 @@ mod tests {
         assert_eq!(*window.cursor.lock(), CursorIcon::Pointer);
         presentation.close();
         assert_eq!(*window.cursor.lock(), CursorIcon::Default);
+    }
+
+    // ========================================================================
+    // Haptics — migrated from the retired `AppBinding`'s test module
+    // (`binding.rs`, deleted alongside it).
+    // ========================================================================
+    mod haptics_capability {
+        use super::*;
+
+        fn headless_window_with_haptics() -> (
+            Arc<dyn PlatformWindow>,
+            Arc<dyn flui_platform::traits::PlatformHaptics>,
+        ) {
+            let platform = flui_platform::headless_platform();
+            let window = platform
+                .open_window(flui_platform::traits::WindowOptions::default())
+                .expect("headless platform always opens a window");
+            let haptics = window
+                .haptics()
+                .expect("headless backend supports PlatformHaptics");
+            (window, haptics)
+        }
+
+        fn fake_haptics(
+            haptics: &Arc<dyn flui_platform::traits::PlatformHaptics>,
+        ) -> &flui_platform::FakeHaptics {
+            haptics
+                .as_any()
+                .downcast_ref::<flui_platform::FakeHaptics>()
+                .expect("the headless backend's PlatformHaptics is a FakeHaptics")
+        }
+
+        /// A minimal `PlatformWindow` implementing only the trait's
+        /// non-default methods, so `haptics()` falls through to the trait
+        /// default (`None`).
+        struct BareWindow;
+
+        impl PlatformWindow for BareWindow {
+            fn id(&self) -> flui_platform::traits::WindowId {
+                flui_platform::traits::WindowId(1)
+            }
+
+            fn physical_size(
+                &self,
+            ) -> flui_types::geometry::Size<flui_types::geometry::DevicePixels> {
+                flui_types::geometry::Size::default()
+            }
+
+            fn logical_size(&self) -> flui_types::geometry::Size<flui_types::Pixels> {
+                flui_types::geometry::Size::default()
+            }
+
+            fn scale_factor(&self) -> f64 {
+                1.0
+            }
+
+            fn request_redraw(&self) {}
+
+            fn is_focused(&self) -> bool {
+                false
+            }
+
+            fn is_visible(&self) -> bool {
+                true
+            }
+
+            fn set_cursor(
+                &self,
+                _cursor: flui_platform::CursorIcon,
+            ) -> Result<(), flui_platform::CursorError> {
+                Ok(())
+            }
+        }
+
+        /// Real-path proof: `perform_haptic_feedback` reads the
+        /// presentation's window and calls through to its `PlatformHaptics`.
+        #[test]
+        fn perform_haptic_feedback_reaches_the_active_windows_platform_capability() {
+            let (window, haptics) = headless_window_with_haptics();
+            let fake = fake_haptics(&haptics);
+
+            // `PresentationState.window` is a `Weak` (the platform owns the
+            // strong `Arc` in production); this test's own `window` binding
+            // is what keeps it alive here, so pass a clone rather than
+            // moving the only strong reference in.
+            let presentation = PresentationState::new(
+                PresentationId::new_gen(0, NonZeroU32::MIN),
+                Arc::new(RwLock::new(PipelineOwner::new())),
+                Arc::clone(&window),
+            );
+
+            presentation.perform_haptic_feedback(HapticFeedback::SelectionClick);
+
+            assert_eq!(
+                fake.calls(),
+                vec![HapticFeedback::SelectionClick],
+                "perform_haptic_feedback must call through to the window's \
+                 PlatformHaptics::perform"
+            );
+        }
+
+        /// The presentation's window has been dropped (the platform side let
+        /// go of its strong `Arc`) — a silent no-op, no panic. This is the
+        /// per-presentation equivalent of the retired
+        /// `AppBinding::perform_haptic_feedback_with_no_active_window_is_a_silent_no_op`:
+        /// a presentation always has SOME window from construction, so "no
+        /// window" here means "the window this presentation was built with
+        /// is gone", not "never installed".
+        #[test]
+        fn perform_haptic_feedback_with_no_active_window_is_a_silent_no_op() {
+            let window: Arc<dyn PlatformWindow> = Arc::new(BareWindow);
+            let presentation = PresentationState::new(
+                PresentationId::new_gen(0, NonZeroU32::MIN),
+                Arc::new(RwLock::new(PipelineOwner::new())),
+                Arc::clone(&window),
+            );
+            drop(window);
+
+            presentation.perform_haptic_feedback(HapticFeedback::Vibrate);
+        }
+
+        /// A window whose backend has no `PlatformHaptics` capability
+        /// (desktop winit's shape, reproduced here without a real display)
+        /// is also a silent no-op.
+        #[test]
+        fn perform_haptic_feedback_on_a_window_without_haptics_is_a_silent_no_op() {
+            let presentation = PresentationState::new(
+                PresentationId::new_gen(0, NonZeroU32::MIN),
+                Arc::new(RwLock::new(PipelineOwner::new())),
+                Arc::new(BareWindow),
+            );
+
+            presentation.perform_haptic_feedback(HapticFeedback::MediumImpact);
+        }
+    }
+
+    // ========================================================================
+    // Performance overlay — migrated from the retired `AppBinding`'s test
+    // module.
+    // ========================================================================
+    mod performance_overlay_wiring {
+        use flui_layer::CanvasLayer;
+
+        use super::*;
+
+        fn tree_with_root() -> (LayerTree, flui_layer::LayerId) {
+            let mut tree = LayerTree::new();
+            let root = tree.insert(Layer::Canvas(Box::new(CanvasLayer::new())));
+            tree.set_root(Some(root));
+            (tree, root)
+        }
+
+        #[test]
+        fn overlay_off_leaves_the_layer_tree_untouched() {
+            let presentation = presentation();
+            let (mut tree, root) = tree_with_root();
+
+            presentation.attach_performance_overlay(&mut tree);
+
+            assert_eq!(tree.len(), 1, "no layer may be added while overlay is off");
+            assert!(
+                tree.get(root).expect("root node").children().is_empty(),
+                "root must keep no children while overlay is off"
+            );
+        }
+
+        #[test]
+        fn overlay_on_appends_a_linked_overlay_layer_to_the_root() {
+            let presentation = presentation();
+            presentation.set_performance_overlay(true);
+            let (mut tree, root) = tree_with_root();
+
+            presentation.attach_performance_overlay(&mut tree);
+
+            assert_eq!(tree.len(), 2, "exactly one overlay layer is added");
+            let children = tree.get(root).expect("root node").children();
+            let overlay_id = *children.last().expect("overlay is the root's last child");
+            assert!(
+                tree.get_layer(overlay_id)
+                    .expect("overlay layer")
+                    .is_performance_overlay(),
+                "the appended layer is the performance overlay"
+            );
+            assert_eq!(
+                tree.get(overlay_id).expect("overlay node").parent(),
+                Some(root),
+                "the overlay's parent side must be linked too, not just the root's child list"
+            );
+        }
+
+        #[test]
+        fn overlay_on_a_rootless_tree_is_a_no_op() {
+            let presentation = presentation();
+            presentation.set_performance_overlay(true);
+            let mut tree = LayerTree::new();
+
+            presentation.attach_performance_overlay(&mut tree);
+
+            assert_eq!(tree.len(), 0, "nothing to parent the overlay under");
+        }
+
+        #[test]
+        fn disabling_the_overlay_stops_appending_and_resets_the_window() {
+            let presentation = presentation();
+            presentation.set_performance_overlay(true);
+            let (mut tree, _root) = tree_with_root();
+            presentation.attach_performance_overlay(&mut tree);
+            presentation.attach_performance_overlay(&mut tree);
+            assert_eq!(tree.len(), 3, "two frames, two overlay layers");
+
+            presentation.set_performance_overlay(false);
+            let (mut fresh, _) = tree_with_root();
+            presentation.attach_performance_overlay(&mut fresh);
+            assert_eq!(fresh.len(), 1, "disabled overlay adds nothing");
+
+            presentation.set_performance_overlay(true);
+            let (mut again, _) = tree_with_root();
+            presentation.attach_performance_overlay(&mut again);
+            let overlay_id = *tree_root_children(&again).last().expect("overlay present");
+            let overlay = again.get_layer(overlay_id).expect("overlay layer");
+            let stats = overlay
+                .as_performance_overlay()
+                .expect("performance overlay variant");
+            assert_eq!(
+                stats.total_frames(),
+                1,
+                "re-enabling starts a fresh window rather than resuming the old count"
+            );
+        }
+
+        fn tree_root_children(tree: &LayerTree) -> Vec<flui_layer::LayerId> {
+            let root = tree.root().expect("root");
+            tree.get(root).expect("root node").children().to_vec()
+        }
     }
 }

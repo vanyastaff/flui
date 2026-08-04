@@ -22,11 +22,12 @@
 //!          WidgetsBinding { }
 //! ```
 //!
-//! FLUI does not compose a matching struct. `flui_app::WidgetsFlutterBinding`
-//! is a type alias for [`AppBinding`](crate::AppBinding) — the transitional
-//! process-scoped service host that owns the frame loop, render pipeline, and
-//! input dispatch directly. The element/build side lives in `UiRealm`
-//! (owner-affine, one per window), not as a field on this module's bindings.
+//! FLUI does not compose a matching struct. The frame loop, render pipeline,
+//! and input dispatch live directly on `UiRealm` (`crate::app::ui_realm`,
+//! owner-affine, one per window) — there is no separate process-scoped
+//! service host; the retired `AppBinding`/`WidgetsFlutterBinding` type alias
+//! dissolved into `UiRealm` and the loop-scoped `AppRuntime`
+//! (`crate::app::runtime`).
 
 mod renderer_binding;
 

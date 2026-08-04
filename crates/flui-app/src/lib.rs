@@ -10,8 +10,9 @@
 //! ```text
 //! flui_app
 //!   ├── app/
-//!   │   ├── binding.rs      - transitional process service host (AppBinding)
-//!   │   ├── ui_realm.rs     - owner-affine widget and gesture runtime
+//!   │   ├── runtime.rs      - AppRuntime: the loop-scoped composition root
+//!   │   ├── ui_realm.rs     - owner-affine widget, render, and gesture runtime
+//!   │   ├── presentation.rs - per-presentation window/haptics/frame-accounting state
 //!   │   ├── config.rs       - AppConfig
 //!   │   ├── direct.rs       - direct rendering mode (bypasses the widget tree)
 //!   │   └── runner.rs       - platform bootstrap (desktop/android/web run loops)
@@ -42,10 +43,9 @@ pub mod bindings;
 pub mod embedder; // PORT-CHECK-OK-SP4: embedder API surface; binding entry for app integrators
 
 // Primary exports - Flutter naming
-// Legacy alias
 pub use app::{
-    AppBinding, AppConfig, DiagnosticsProfile, RootRenderElement, RootRenderView,
-    WidgetsFlutterBinding, run_app, run_app_with_config, run_direct,
+    AppConfig, DiagnosticsProfile, RootRenderElement, RootRenderView, run_app, run_app_with_config,
+    run_direct,
 };
 // Android-specific entry points
 #[cfg(target_os = "android")]
@@ -81,7 +81,7 @@ pub mod prelude {
     // FLUI crate emits from. Nothing in the prelude installs a subscriber.
     pub use tracing::{debug, error, info, trace, warn};
 
-    pub use crate::{AppConfig, WidgetsFlutterBinding, run_app, run_app_with_config, run_direct};
+    pub use crate::{AppConfig, run_app, run_app_with_config, run_direct};
     // Bindings
     pub use crate::{
         GestureBinding, PaintingBinding, PipelineOwner, RenderingFlutterBinding, Scheduler,

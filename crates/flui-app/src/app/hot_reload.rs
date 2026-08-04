@@ -95,7 +95,6 @@ mod enabled {
     ))]
     use crate::app::{
         AppConfig,
-        binding::AppBinding,
         ui_realm::{UiCommandSender, UiRealm},
     };
 
@@ -180,7 +179,7 @@ mod enabled {
             if let Some(ref mut driver) = *self.driver.lock()
                 && matches!(driver.poll(), WorkerPollOutcome::Reloaded { .. })
             {
-                AppBinding::instance().perform_hot_reload_entered(realm, HotReloadTier::HotReload);
+                realm.perform_hot_reload_entered(HotReloadTier::HotReload);
             }
         }
     }

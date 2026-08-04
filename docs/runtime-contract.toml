@@ -88,7 +88,7 @@ declarations = [
     "pub mod app;",
     "pub mod bindings;",
     "pub mod embedder;",
-    "pub use app::{ AppBinding, AppConfig, DiagnosticsProfile, RootRenderElement, RootRenderView, WidgetsFlutterBinding, run_app, run_app_with_config, run_direct, };",
+    "pub use app::{ AppConfig, DiagnosticsProfile, RootRenderElement, RootRenderView, run_app, run_app_with_config, run_direct, };",
     "pub use app::{run_app_android, run_app_android_with_config};",
     "pub use bindings::{ GestureBinding, PaintingBinding, PipelineOwner, RenderingFlutterBinding, Scheduler, WidgetsBinding, };",
     "pub use flui_log::{AppIdentity, AppleBundleId};",
@@ -101,12 +101,10 @@ file = "crates/flui-app/src/app/mod.rs"
 declarations = [
     "pub mod direct;",
     "pub mod runner;",
-    "pub use binding::AppBinding;",
     "pub use config::{AppConfig, DiagnosticsProfile};",
     "pub use direct::run_direct;",
     "pub use runner::{run_app_android, run_app_android_with_config};",
     "pub use runner::{run_app_impl as run_app, run_app_with_config_impl as run_app_with_config};",
-    "pub type WidgetsFlutterBinding = AppBinding;",
     "pub use flui_view::{RootRenderElement, RootRenderView};",
 ]
 
@@ -275,14 +273,18 @@ evidence = [
 key = "app-runtime-composition-host"
 statement = """
 `AppRuntime`, a loop-scoped composition root, now exists: it owns platform \
-event-loop demux, the single realm slot, and `SharedEngineServices` \
-(painting/semantics/scheduler), resolved once, when a realm is actually \
-installed. It is not yet the target statement in full: it is one TLS-scoped \
-instance per owner thread (`APP_RUNTIME` in `runner.rs`), not one per process; it \
-still coexists with `AppBinding` as the transitional process-service host \
-(retiring `AppBinding` is separate follow-up work); and its realm storage is \
-a single slot behind a `RealmId`-keyed accessor, not real 1..N hosting -- \
-that needs the element forest to let a realm host multiple presentations.\
+event-loop demux, the single realm slot, `SharedEngineServices` \
+(painting/semantics/scheduler), the loop-scoped frame-wake mechanism, and \
+the platform clipboard, resolved/installed once, when a realm is actually \
+installed. The transitional process-service host (`AppBinding`) it used to \
+coexist with is retired: its fields dissolved into `AppRuntime` \
+(loop-scoped: wake, clipboard) and `UiRealm`/`PresentationState` \
+(realm/presentation-scoped: renderer, vsync, frame accounting, haptics). It \
+is not yet the target statement in full: it is one TLS-scoped instance per \
+owner thread (`APP_RUNTIME` in `runner.rs`), not one per process; and its \
+realm storage is a single slot behind a `RealmId`-keyed accessor, not real \
+1..N hosting -- that needs the element forest to let a realm host multiple \
+presentations.\
 """
 state = "partial"
 domain = "application"
@@ -789,8 +791,8 @@ mechanical = false
 evidence = [
     { kind = "symbol", file = "crates/flui-app/src/app/presentation.rs", contains = "enum PresentationLifecycle" },
     { kind = "test", file = "crates/flui-app/src/app/presentation.rs", contains = "fn lifecycle_transitions_are_typed_and_close_is_idempotent" },
-    { kind = "test", file = "crates/flui-app/src/app/binding.rs", contains = "fn pointer_input_is_dropped_while_suspended_but_keyboard_flows" },
-    { kind = "test", file = "crates/flui-app/src/app/binding.rs", contains = "fn all_input_dropped_after_close" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn pointer_input_is_dropped_while_suspended_but_keyboard_flows" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn all_input_dropped_after_close" },
     { kind = "test", file = "crates/flui-app/src/app/presentation.rs", contains = "fn semantics_action_after_close_is_refused" },
 ]
 
@@ -941,7 +943,7 @@ mechanism = "gate tests pinned here"
 evidence = [
     { kind = "symbol", file = "crates/flui-app/src/app/runner.rs", contains = "fn keeps_frame_gate_open" },
     { kind = "test", file = "crates/flui-app/src/app/runner.rs", contains = "fn idle_wake_with_no_dirty_work_and_no_scheduled_frame_skips" },
-    { kind = "test", file = "crates/flui-app/src/app/binding.rs", contains = "fn vsync_continuation_keeps_gate_open_while_running_and_closes_on_settle" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn vsync_continuation_keeps_gate_open_while_running_and_closes_on_settle" },
 ]
 
 [[contract]]
@@ -1211,32 +1213,6 @@ consumers = ["examples/android_demo (via its own bootstrap)"]
 owner_issue = 551
 
 [[surface]]
-path = "flui_app::AppBinding"
-crate = "flui-app"
-kind = "type"
-declared_in = "crates/flui-app/src/app/binding.rs"
-contains = "pub struct AppBinding"
-classification = "transitional"
-thread_affinity = "owner-thread only; thread-local instance(); structurally !Send + !Sync via PhantomData marker"
-owner = "transitional process-service host — dissolves into AppRuntime + realm construction"
-failure_semantics = "instance() lazily constructs per thread; wrong-thread use creates a second windowless binding rather than erroring"
-consumers = ["runner", "hot reload", "flui facade via app module"]
-owner_issue = 553
-
-[[surface]]
-path = "flui_app::WidgetsFlutterBinding"
-crate = "flui-app"
-kind = "type-alias"
-declared_in = "crates/flui-app/src/app/mod.rs"
-contains = "pub type WidgetsFlutterBinding = AppBinding"
-classification = "removal-target"
-thread_affinity = "same as AppBinding"
-owner = "legacy alias for the transitional host"
-failure_semantics = "same as AppBinding"
-consumers = ["prelude re-export only"]
-owner_issue = 553
-
-[[surface]]
 path = "flui_app::AppConfig"
 crate = "flui-app"
 kind = "type"
@@ -1481,7 +1457,7 @@ classification = "transitional"
 thread_affinity = "thread-local HasInstance singleton; cross-thread wake via Send + Sync callbacks"
 owner = "process-global (per-thread) scheduling authority — splits into realm UpdateScheduler + presentation FrameClock"
 failure_semantics = "singleton accessor constructs lazily; phase machine asserts on misuse"
-consumers = ["AppBinding", "UiRealm", "flui-animation tickers", "flui-view"]
+consumers = ["AppRuntime", "UiRealm", "flui-animation tickers", "flui-view"]
 owner_issue = 556
 
 [[surface]]
@@ -1560,9 +1536,9 @@ classification = "removal-target"
 thread_affinity = "thread-local singleton storage per implementor"
 owner = "the ambient singleton pattern itself — deleted from runtime paths under the owning issue"
 failure_semantics = "lazily constructs a per-thread instance; cannot fail, which is the problem"
-consumers = ["Scheduler", "AppBinding (manual)"]
+consumers = ["Scheduler"]
 owner_issue = 553
-notes = "PaintingBinding no longer implements HasInstance -- its singleton-macro invocation is deleted; the type is now a plain owned value (SharedEngineServices.painting on AppRuntime). RenderingFlutterBinding no longer implements HasInstance either -- its impl_binding_singleton! invocation and instance()/ensure_initialized() are deleted; construction stays explicit (new()/new_with_pipeline()). SemanticsBinding is gone entirely -- deleted, not slimmed; see the bindings re-export bundle surface entry for where its state re-homed."
+notes = "PaintingBinding no longer implements HasInstance -- its singleton-macro invocation is deleted; the type is now a plain owned value (SharedEngineServices.painting on AppRuntime). RenderingFlutterBinding no longer implements HasInstance either -- its impl_binding_singleton! invocation and instance()/ensure_initialized() are deleted; construction stays explicit (new()/new_with_pipeline()). SemanticsBinding is gone entirely -- deleted, not slimmed. AppBinding is likewise gone entirely: it never implemented HasInstance itself (a hand-rolled thread_local! + Box::leak, not the macro), but its manual instance()/Box::leak TLS initializer is deleted along with the type; see the bindings re-export bundle surface entry for where both retired types' state re-homed."
 
 [[surface]]
 path = "flui_engine::wgpu::Renderer"
@@ -1651,7 +1627,7 @@ kind = "re-export"
 declared_in = "src/lib.rs"
 contains = "pub use flui_app as app"
 classification = "transitional"
-thread_affinity = "mixed — re-exposes AppBinding and the singleton graph from the facade"
+thread_affinity = "mixed — re-exposes UiRealm/AppRuntime and the remaining singleton graph from the facade"
 owner = "facade"
 failure_semantics = "same as the underlying flui-app items"
 consumers = ["applications reaching transitional types through the facade"]
@@ -1673,7 +1649,7 @@ contains = "pub vsync: bool"
 status = "unwired"
 classification = "transitional"
 owner_issue = 556
-notes = "Dropped by From<&AppConfig> for WindowOptions; select_present_mode always chooses Fifo. AppBinding::vsync()/VsyncScope is an unrelated animation registry."
+notes = "Dropped by From<&AppConfig> for WindowOptions; select_present_mode always chooses Fifo. UiRealm::vsync()/VsyncScope is an unrelated animation registry."
 
 [[config_field]]
 name = "target_fps"
@@ -1726,12 +1702,6 @@ notes = "Overlay renders, but the renderer ignores the frame counter and the Per
 # the definition, doc examples, and cfg(test) invocations.)
 
 [[singleton_exemption]]
-symbol = "AppBinding::instance (manual thread-local singleton)"
-file = "crates/flui-app/src/app/binding.rs"
-contains = "pub fn instance() -> &'static Self"
-owner_issue = 553
-
-[[singleton_exemption]]
 symbol = "impl_binding_singleton!(Scheduler)"
 file = "crates/flui-scheduler/src/scheduler.rs"
 contains = "impl_binding_singleton!(Scheduler)"
@@ -1764,18 +1734,6 @@ owner_issue = 553
 # either fixed or explicitly registered here.
 
 [[ambient_reach]]
-file = "crates/flui-app/src/app/binding.rs"
-grammar = "instance-call"
-owner_issue = 553
-note = "AppBinding's own AppBinding::instance()/Scheduler::instance() reaches; retired when AppBinding itself is dissolved"
-
-[[ambient_reach]]
-file = "crates/flui-app/src/app/hot_reload.rs"
-grammar = "instance-call"
-owner_issue = 553
-note = "single AppBinding::instance() reach; re-routed through the runtime once AppBinding is dissolved"
-
-[[ambient_reach]]
 file = "crates/flui-app/src/app/runtime.rs"
 grammar = "instance-call"
 owner_issue = 553
@@ -1785,7 +1743,7 @@ note = "the deliberate resolution seam this file creates: Scheduler::instance() 
 file = "crates/flui-app/src/app/runner.rs"
 grammar = "instance-call"
 owner_issue = 553
-note = "AppBinding::instance()/Scheduler::instance() in the platform dispatch/lifecycle-ladder machinery; the AppRuntime skeleton moves ownership (APP_RUNTIME), not these ambient reaches -- retiring AppBinding and the Scheduler singleton retires them"
+note = "Scheduler::instance() in the platform dispatch/lifecycle-ladder machinery. AppBinding itself is now fully dissolved -- its fields moved to AppRuntime (loop-scoped: wake, clipboard) and UiRealm/PresentationState (realm/presentation-scoped: renderer, vsync, frame accounting, haptics), and every runner.rs call site that used to resolve AppBinding::instance() now takes the entered UiRealm or the loop-scoped APP_RUNTIME thread-local directly, not a HasInstance singleton. This entry shrinks to empty once the Scheduler singleton itself is retired (#556)"
 
 [[ambient_reach]]
 file = "crates/flui-scheduler/src/config.rs"
@@ -1820,16 +1778,6 @@ note = "shared_font_system()/FONT_SYSTEM: SharedEngineServices::resolve() (invok
 # grammar); every file containing one must be listed here with an owning
 # issue. This sees exactly what the SP-6 marker sees — a lock-shaped public
 # surface that trigger #12's grammar misses is invisible to both gates.
-
-[[lock_exemption]]
-file = "crates/flui-app/src/app/binding.rs"
-reason = "AppBinding renderer/renderer_mut guards and render_pipeline_arc accessor"
-owner_issue = 553
-markers = [
-    "PORT-CHECK-OK-SP6: AppBinding renderer accessor",
-    "PORT-CHECK-OK-SP6: AppBinding renderer_mut accessor",
-    "PORT-CHECK-OK-SP6: AppBinding render_pipeline_arc accessor",
-]
 
 [[lock_exemption]]
 file = "crates/flui-scheduler/src/scheduler.rs"
@@ -2038,16 +1986,18 @@ bare WindowId, so runner.rs and friends never name the type). Proxy-gate \
 disclaimer: `let id = window.id();` with an inferred local type defeats a \
 substring scan on its own -- the manual backstop is that no flui-app \
 routing API outside window_registry.rs accepts or returns WindowId. \
-binding.rs and presentation.rs are allow-listed only for their test-only \
+runtime.rs and presentation.rs are allow-listed only for their test-only \
 PlatformWindow mock implementations, which must restate the trait's \
 required `fn id(&self) -> WindowId` signature to implement it at all; \
 that is a structural trait-conformance fact, not a routing-logic \
 exception, and neither file's production code may accept or return the \
-type.\
+type. The retired `AppBinding`'s equivalent test mock (`binding.rs`) moved \
+to `runtime.rs`'s `wake_and_clipboard_tests` alongside the wake mechanism \
+it exercises.\
 """
 allow_files = [
     "crates/flui-app/src/app/window_registry.rs",
-    "crates/flui-app/src/app/binding.rs",
+    "crates/flui-app/src/app/runtime.rs",
     "crates/flui-app/src/app/presentation.rs",
 ]
 
