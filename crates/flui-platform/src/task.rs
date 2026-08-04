@@ -111,34 +111,22 @@ impl<T> Task<T> {
     }
 }
 
-impl<T: Send + 'static> Future for Task<T> {
+impl<T: Send + Unpin + 'static> Future for Task<T> {
     type Output = T;
 
-    // `unsafe` here is Pin-projection boilerplate (see the two `// SAFETY:`
-    // comments below), not FFI — item-level rather than a module- or
-    // crate-level allow, since this is the only unsafe in the file.
-    #[allow(unsafe_code)]
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         // `TaskState::Spawned` — the only arm that consults the waker — does not
         // exist on wasm32, where every Task is already `Ready`.
         #[cfg(target_arch = "wasm32")]
         let _ = cx;
 
-        // SAFETY: `get_unchecked_mut` requires that moving the pointee after
-        // this call cannot violate a pinning invariant `Task<T>` depends on.
-        // `Task<T>` never establishes one: it has no `PhantomPinned` field,
-        // does not pin-project any field (no `pin_project`/manual projection
-        // anywhere in this type), and neither `TaskState` variant is
-        // self-referential — `TaskState::Ready` holds a plain `Option<T>`
-        // that this function freely moves out of via `.take()` below, and
-        // `TaskState::Spawned` holds a `tokio::task::JoinHandle<T>`, which
-        // has an unconditional `Unpin` impl (true regardless of `T`: the
-        // handle is a plain index into the runtime, not a borrow into this
-        // struct or into `T`). `Pin<&mut Self>` is only present here because
-        // it is `Future::poll`'s mandated signature, not because `Task<T>`
-        // itself needs any address to stay fixed — so unwrapping it via
-        // `get_unchecked_mut` gives up nothing this type was relying on.
-        let this = unsafe { self.get_unchecked_mut() };
+        // No unsafe pin-projection needed: `Task<T>` never establishes a
+        // pinning invariant (no `PhantomPinned`, no self-referential field,
+        // nothing here treats an address as fixed) — the `T: Unpin` bound
+        // above just makes that already-true fact provable to the compiler,
+        // so `Pin::get_mut` (safe) replaces what used to be a justified
+        // `get_unchecked_mut`.
+        let this = self.get_mut();
         match &mut this.0 {
             TaskState::Ready(val) => {
                 let val = val.take().expect("Task::Ready polled after completion");
@@ -146,13 +134,13 @@ impl<T: Send + 'static> Future for Task<T> {
             }
             #[cfg(not(target_arch = "wasm32"))]
             TaskState::Spawned(handle) => {
-                // SAFETY: `tokio::task::JoinHandle<T>` implements `Unpin`
-                // unconditionally (it holds no self-referential data — just
-                // a handle into the runtime), so pinning it via
-                // `new_unchecked` imposes no obligation this code must
-                // uphold; an `Unpin` type can be soundly pinned and unpinned
-                // at will.
-                let handle = unsafe { Pin::new_unchecked(handle) };
+                // `tokio::task::JoinHandle<T>` carries an unconditional
+                // `impl<T> Unpin for JoinHandle<T> {}` (tokio 1.53.0,
+                // src/runtime/task/join.rs) — true regardless of `T`, since
+                // the handle holds a `RawTask` plus `PhantomData<T>`, never
+                // a borrow into `T` itself. `Pin::new` (safe) replaces what
+                // used to be a justified `Pin::new_unchecked`.
+                let handle = Pin::new(handle);
                 match handle.poll(cx) {
                     Poll::Ready(Ok(val)) => Poll::Ready(val),
                     Poll::Ready(Err(join_error)) => {
